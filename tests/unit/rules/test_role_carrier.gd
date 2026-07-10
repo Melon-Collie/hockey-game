@@ -133,6 +133,43 @@ func test_neutral_zone_hits_the_ahead_man_with_a_clearer_path() -> void:
 	assert_eq(c.pass_target_peer_id, 2)
 
 
+func test_lightly_impeded_carrier_moves_it_to_the_open_man() -> void:
+	# A defender sits in the carrier's forward path — not on the puck, but between it
+	# and the zone, so advancing means beating him. With a genuinely open teammate
+	# available, a pressured carrier should move the puck rather than grind forward,
+	# even conceding a little real estate (the forward-pressure discount). The SAME
+	# defender moved OFF to the side leaves the lane clear and the carry stands — the
+	# discount is directional, not a blanket pass-always.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var carrier := Vector3(0.0, 0.0, 2.0)
+	var mate := Vector3(3.0, 0.0, -3.0)                  # open, reasonable spot
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = net.z + 1.3
+
+	# Defender 7 m ahead, squarely in the path to the zone.
+	var ahead: Array = [
+			[1, TEAM_ID, carrier], [2, TEAM_ID, mate], [11, 1, Vector3(0.0, 0.0, -5.0)]]
+	var ac := _make_ctx(carrier, ahead)
+	ac.snapshot.goalie_states[1 - TEAM_ID] = g
+	var a := AIRoleCarrier.new()
+	a.decide(ac)
+	assert_eq(a.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a carrier impeded on its path forward moves it to the open man")
+
+	# The discount is DIRECTIONAL: the same defender moved off to the side leaves the
+	# forward lane clear, so the carry keeps far more of its value than when the
+	# defender blocks the path ahead.
+	var beside: Array = [
+			[1, TEAM_ID, carrier], [2, TEAM_ID, mate], [11, 1, Vector3(7.0, 0.0, -2.0)]]
+	var bc := _make_ctx(carrier, beside)
+	bc.snapshot.goalie_states[1 - TEAM_ID] = g
+	var b := AIRoleCarrier.new()
+	b.decide(bc)
+	assert_gt(b.debug_carry_score, a.debug_carry_score * 1.3,
+			"a side defender leaves the carry worth much more than a forward one blocking the path")
+
+
 func test_ahead_man_on_a_blocked_path_is_not_credited_a_deep_drive() -> void:
 	# The drive-in reach is the REACHABLE extent, not a free deep credit: a teammate
 	# ahead but with a defender squarely in their forward path can't skate it in, so

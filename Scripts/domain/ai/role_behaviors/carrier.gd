@@ -72,6 +72,21 @@ const PASS_LEAD_MAX_S: float = 0.6
 const RECEIVER_DRIVE_MAX_M: float = 12.0
 const RECEIVER_DRIVE_MIN_NET_DIST_M: float = 3.0
 
+# Forward-pressure discount on the CARRY (see _carrier_forward_clearance). The model
+# prices the IMMEDIATE strip (a defender right on the puck) but not the IMPENDING
+# contest — a defender sitting in the carrier's path to the objective it will have to
+# beat to advance. So a lightly-pressured carrier reads its own (sidestep) carry as
+# clean and grinds forward instead of moving the puck to an unimpeded teammate. This
+# discounts the carry by how contested the path AHEAD is, so an impeded carrier
+# prefers a clean outlet even at the cost of some real estate — the pass-first read.
+# HORIZON is how far ahead the contest is felt; MIN_SCALE is the most a fully-blocked
+# path discounts the carry (never to zero — a pressured carrier with no outlet still
+# carries). Feel tunables (how pass-first / risk-averse), not an evaluation curve —
+# the clearance itself is the grounded reachable-set read. Applied ONLY to the
+# fire-vs-carry compete, never to the honest raw carry the dump is judged against.
+const FORWARD_PRESSURE_HORIZON_M: float = 9.0
+const FORWARD_PRESSURE_MIN_SCALE: float = 0.55
+
 # (Blade reach cone + facing turn rate now come from the bot's real caps —
 # RoleContext.self_reach_cone_half_angle / self_facing_turn_rate — so an aim
 # anywhere inside the true ±157° reach cone fires with no body turn, and only the
@@ -376,6 +391,11 @@ func _pick_action(ctx: RoleContext) -> void:
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 	var raw_carry_score: float = carry_result[2]
+	# Pass-first under pressure: discount the carry by how contested the path AHEAD is,
+	# so a lightly-impeded carrier moves the puck to an unimpeded teammate rather than
+	# grinding forward (even giving up some real estate). Only the fire-vs-carry
+	# compete sees this — the dump still judges against the honest raw carry.
+	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, _carrier_forward_clearance(ctx))
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
 	# close-scoring fire options during pre-aim. Proportional (×(1 +
@@ -1199,6 +1219,31 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	var advanced: float = _score_at(ctx, reached, ctx.self_pos,
 			_scratch_opponents_pass, goalie, receiver_shot_speed, 0.0)
 	return advanced * keep * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, t)
+
+
+# How clear the carrier's OWN path toward the attacking objective is — the reachable
+# safety of carrying straight at the net over FORWARD_PRESSURE_HORIZON_M. 1.0 when the
+# lane ahead is open, dropping toward 0 as a defender sits in it. Feeds the carry's
+# pass-first discount (see FORWARD_PRESSURE_*): the model already prices a defender
+# ON the puck, but not one the carrier must still beat to advance — this reads that
+# impending contest with the same reachable-set model the carry candidates use, so a
+# defender only counts when it's genuinely in the forward lane (one off to the side
+# leaves the path clear and the carry undiscounted).
+func _carrier_forward_clearance(ctx: RoleContext) -> float:
+	var to_net_x: float = ctx.attacking_goal_pos.x - ctx.self_pos.x
+	var to_net_z: float = ctx.attacking_goal_pos.z - ctx.self_pos.z
+	var d: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
+	if d < 0.5:
+		return 1.0
+	var reach: float = minf(FORWARD_PRESSURE_HORIZON_M, d)
+	var inv: float = 1.0 / d
+	var target := Vector3(
+			ctx.self_pos.x + to_net_x * inv * reach, 0.0,
+			ctx.self_pos.z + to_net_z * inv * reach)
+	var t: float = reach / maxf(ctx.self_max_speed, 1.0)
+	return AIActionScoring.clearance_to_safety(
+			AIActionScoring.carry_clearance(ctx.self_pos, target, t,
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still
