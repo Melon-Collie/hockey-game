@@ -242,7 +242,7 @@ func test_step_toward_first_call_snaps_and_caches() -> void:
 	assert_eq(r, Vector3(3, 0, 4), "no noise → output equals mouse pos")
 	assert_true(sm._has_cached_aim_target)
 	assert_eq(sm._cached_aim_target, Vector3(3, 0, 4))
-	assert_false(sm._cached_aim_uses_arc, "_step_mouse_toward is the no-arc path")
+	assert_eq(sm._cached_aim_mode, Agent._STEP_DIRECT, "_step_mouse_toward is the direct path")
 
 
 func test_step_toward_caps_travel_per_tick() -> void:
@@ -268,31 +268,46 @@ func test_step_aim_projects_target_onto_ring() -> void:
 	sm._step_mouse_aim(Vector3(10, 0, 0))  # far east; arced onto the 2 m ring
 	assert_almost_eq(Vector2(sm._mouse_pos.x, sm._mouse_pos.z).length(),
 			Agent.CARRY_BLADE_AIM_FORWARD_M, 1e-4)
-	assert_true(sm._cached_aim_uses_arc, "_step_mouse_aim is the arc path")
+	assert_eq(sm._cached_aim_mode, Agent._STEP_ARC, "_step_mouse_aim is the arc path")
 
 
-func test_body_face_aim_is_decoupled_from_a_low_blade_slew() -> void:
-	# Off-puck body facing must NOT be gated by the bot's Hands blade slew — the
-	# body turns at facing_drag_speed (Agility), and any implied blade motion is
-	# clamped downstream. Apply a low-Hands blade slew and confirm _step_mouse_face
-	# still arcs at the fast facing rate while _step_mouse_aim honours the low one.
+func test_body_face_snaps_cursor_straight_at_an_in_cone_target() -> void:
+	# Off-puck body facing must NOT be gated by the bot's Hands blade slew. Like a
+	# human flicking the mouse, _step_mouse_face places the cursor DIRECTLY at the
+	# in-cone target and snaps to it in a single tick (no per-tick slew) — the body
+	# then turns toward it at facing_drag_speed downstream. Even with a very low
+	# Hands blade slew applied, the FACE cursor still snaps straight to the target.
 	var slow := AISkaterCaps.new()
-	slow.blade_speed = 5.0            # low Hands → slow blade slew
+	slow.blade_speed = 5.0            # low Hands → slow blade slew (must not matter)
 	sm.apply_capabilities(slow)
 	sm._current_self_pos = Vector3.ZERO
 	sm._current_self_state = _self_state(Vector2(0, 1))
-	# Blade aim caches the (low) blade rates.
-	sm._step_mouse_aim(Vector3(10, 0, 0))
-	assert_almost_eq(sm._cached_aim_max_speed, 5.0, 1e-5,
-			"blade aim slews at the low Hands blade speed")
-	assert_lt(sm._cached_aim_arc_rate, Agent.MOUSE_ARC_RATE_RAD_S,
-			"a slow blade lowers the blade-aim arc rate below the ceiling")
-	# Body facing ignores it and arcs at the fast ceiling regardless.
-	sm._step_mouse_face(Vector3(10, 0, 0))
-	assert_almost_eq(sm._cached_aim_max_speed, Agent.MOUSE_MAX_SPEED_M_S, 1e-5,
-			"body facing is not capped by the blade slew")
-	assert_almost_eq(sm._cached_aim_arc_rate, Agent.MOUSE_ARC_RATE_RAD_S, 1e-5,
-			"body facing arcs at the fast facing rate (facing_drag_speed is the real limit)")
+	var target := Vector3(4, 0, 3)    # ~53° off +Z, well inside the reach cone
+	# A prior cursor parked elsewhere — the snap must ignore it (no slew from it).
+	sm._mouse_pos = Vector3(-2, 0, 0)
+	sm._mouse_pos_initialized = true
+	var r: Vector3 = sm._step_mouse_face(target)
+	assert_eq(sm._cached_aim_mode, Agent._STEP_FACE)
+	assert_almost_eq(Vector2(r.x, r.z).length(), Agent.CARRY_BLADE_AIM_FORWARD_M, 1e-4,
+			"cursor sits on the body ring in one tick, ignoring the low blade slew")
+	assert_almost_eq(Vector2(r.x, r.z).angle(), Vector2(4, 3).angle(), 1e-4,
+			"…pointing straight at the in-cone target, no slew")
+
+
+func test_body_face_clamps_a_behind_target_to_the_reach_cone() -> void:
+	# A target in the back wedge (directly behind) would freeze the pose IK gate if
+	# the cursor snapped there. Instead it's clamped to the cone edge on one side,
+	# so facing can rotate toward it and walk around. Facing +Z, target behind (−Z).
+	sm._current_self_pos = Vector3.ZERO
+	sm._current_self_state = _self_state(Vector2(0, 1))
+	sm._mouse_pos_initialized = false
+	var r: Vector3 = sm._step_mouse_face(Vector3(0, 0, -5))
+	var off_angle: float = absf(Vector2(0, 1).angle_to(Vector2(r.x, r.z)))
+	assert_lt(off_angle, sm._self_reach_cone_half_angle + 1e-4,
+			"clamped inside the reachable cone — the gate never freezes")
+	assert_almost_eq(off_angle,
+			sm._self_reach_cone_half_angle - Agent.FACE_GATE_MARGIN_RAD, 1e-4,
+			"…parked right at the cone edge, so the body turns as far as it can")
 
 
 # ── Slice 3: shot wind-up geometry ───────────────────────────────────────────
@@ -385,7 +400,7 @@ func test_dispatch_throttled_tick_reuses_cached_decision() -> void:
 	sm._cached_sprint_held = true
 	sm._has_cached_aim_target = true
 	sm._cached_aim_target = Vector3(1, 0, 2)
-	sm._cached_aim_uses_arc = false
+	sm._cached_aim_mode = Agent._STEP_DIRECT
 	var input := InputState.new()
 	sm.dispatch(input, s)
 	assert_eq(input.move_vector, Vector2(0.3, -0.4), "throttled tick reuses cached move")
