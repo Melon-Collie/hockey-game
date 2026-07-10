@@ -2619,10 +2619,12 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# locked in at intent commit (what the controller will actually fire at).
 	var pass_speed: float = _pass_target_speed
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
-	# Intercept-aware lead, shared with the carrier's pass scoring so the
-	# fired aim matches the scored one (AIPassLead).
+	# Intercept-aware lead, shared with the carrier's pass scoring so the fired aim
+	# matches the scored one (AIPassLead) — including the receiver's real build, so
+	# the release leads exactly where the score assumed.
+	var receiver_caps: AISkaterCaps = _caps_by_peer.get(_pass_target_peer_id)
 	return AIPassLead.lead_point(
-			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S)
+			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S, receiver_caps)
 
 
 # `arrive` opts into the arrival brake (AISteering.should_arrival_brake):

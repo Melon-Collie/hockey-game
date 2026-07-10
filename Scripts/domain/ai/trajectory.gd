@@ -28,7 +28,8 @@ static func predict(pos: Vector3, vel: Vector3,
 		steps: int, dt: float,
 		decel_m_s2: float = 0.0,
 		bounce_factor: float = 0.0,
-		accel: Vector3 = Vector3.ZERO) -> Array[Vector3]:
+		accel: Vector3 = Vector3.ZERO,
+		max_speed_m_s: float = 0.0) -> Array[Vector3]:
 	var out: Array[Vector3] = []
 	var p: Vector3 = pos
 	var v: Vector3 = vel
@@ -40,6 +41,16 @@ static func predict(pos: Vector3, vel: Vector3,
 		# where this is used (≤0.6 s for passes, ≤1.5 s for chase).
 		if accel != Vector3.ZERO:
 			v += accel * dt
+		# Top-speed cap (a skater can't be accelerated past its own max_speed).
+		# 0 = uncapped (default, all non-pass callers). Only ever REDUCES an over-
+		# cap speed, so passing a cap ≥ the body's current speed never slows a
+		# body already moving faster (e.g. sprinting) — see AIPassLead.
+		if max_speed_m_s > 0.0:
+			var v_cap_mag: float = sqrt(v.x * v.x + v.z * v.z)
+			if v_cap_mag > max_speed_m_s:
+				var cap_scale: float = max_speed_m_s / v_cap_mag
+				v.x *= cap_scale
+				v.z *= cap_scale
 		p += v * dt
 
 		# Board interaction. With a bounce factor, REFLECT velocity off the boards
@@ -90,11 +101,12 @@ static func predict(pos: Vector3, vel: Vector3,
 # Constant velocity + optional constant acceleration, no friction,
 # no bounce. Use `predict_puck_at` for puck-specific physics.
 static func predict_at(pos: Vector3, vel: Vector3, lead_time_s: float,
-		steps: int = 6, accel: Vector3 = Vector3.ZERO) -> Vector3:
+		steps: int = 6, accel: Vector3 = Vector3.ZERO,
+		max_speed_m_s: float = 0.0) -> Vector3:
 	if lead_time_s <= 0.0 or steps <= 0:
 		return pos
 	var dt: float = lead_time_s / float(steps)
-	var traj: Array[Vector3] = predict(pos, vel, steps, dt, 0.0, 0.0, accel)
+	var traj: Array[Vector3] = predict(pos, vel, steps, dt, 0.0, 0.0, accel, max_speed_m_s)
 	return traj[traj.size() - 1]
 
 
@@ -110,13 +122,14 @@ static func predict_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 # diverge. Returns 0 for a non-positive projectile speed.
 static func intercept_time(shooter_pos: Vector3, target_pos: Vector3,
 		target_vel: Vector3, accel: Vector3,
-		proj_speed: float, max_lead_s: float, steps: int = 6) -> float:
+		proj_speed: float, max_lead_s: float, steps: int = 6,
+		max_speed_m_s: float = 0.0) -> float:
 	if proj_speed <= 0.0:
 		return 0.0
 	var t: float = clampf(
 			shooter_pos.distance_to(target_pos) / proj_speed, 0.0, max_lead_s)
 	for _i: int in range(2):
-		var pred: Vector3 = predict_at(target_pos, target_vel, t, steps, accel)
+		var pred: Vector3 = predict_at(target_pos, target_vel, t, steps, accel, max_speed_m_s)
 		t = clampf(shooter_pos.distance_to(pred) / proj_speed, 0.0, max_lead_s)
 	return t
 

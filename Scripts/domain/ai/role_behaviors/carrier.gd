@@ -613,9 +613,11 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# Intercept-aware lead, shared with the state machine's firing aim.
 		# flight_t is the SOLVED time (refined against the predicted
 		# intercept), used downstream for opponent/goalie projection and
-		# the time-decay term.
+		# the time-decay term. The receiver's real build (Speed/Agility) bounds
+		# how far it can actually get to — a fast, agile receiver is led further.
+		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
 		var lead: Array = AIPassLead.lead(
-				self_pos, receiver_state, receiver_accel, pass_speed, PASS_LEAD_MAX_S)
+				self_pos, receiver_state, receiver_accel, pass_speed, PASS_LEAD_MAX_S, receiver_caps)
 		var receiver: Vector3 = lead[0]
 		var flight_t: float = lead[1]
 		if own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
@@ -634,7 +636,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var rotation_time: float = _facing_rotation_time(
 				self_facing_xz, self_pos, receiver)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
-				receiver_release_t, flight_t + rotation_time, our_goalie)
+				receiver_release_t, flight_t + rotation_time, our_goalie, receiver_caps)
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
@@ -692,7 +694,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
-		our_goalie: Vector3) -> float:
+		our_goalie: Vector3, receiver_caps: AISkaterCaps = null) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
 	# slot crossing (intercepted = goal-against).
@@ -711,9 +713,13 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			ctx, receiver_release_t, receiver_spot)
 	var receiver_unsettled: float = _goalie_unsettled_at(
 			ctx, receiver_release_t, receiver_spot)
+	# Score the receiver's shot at ITS real release speed (Shot) — a high-Shot
+	# teammate one-times harder, beating the goalie more, so it's a better feed.
+	var receiver_shot_speed: float = receiver_caps.wrister_shot_speed if receiver_caps != null \
+			else AIActionScoring.WRISTER_SHOT_SPEED_M_S
 	var receiver_value: float = _score_at(ctx, receiver_spot, self_pos,
 			_scratch_opponents_pass, receiver_goalie,
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, receiver_unsettled)
+			receiver_shot_speed, receiver_unsettled)
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
@@ -1154,7 +1160,7 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 					pass_speed, feed_unsettled)
 		elif slot == AIRoleSlots.Slot.BREAKOUT_STRONG \
 				or slot == AIRoleSlots.Slot.OUTLET:
-			feed = _developing_outlet_feed(ctx, tm, our_goalie, self_facing)
+			feed = _developing_outlet_feed(ctx, tm, our_goalie, self_facing, ctx.caps_by_peer.get(pid))
 		if feed > best:
 			best = feed
 	return best
@@ -1176,7 +1182,8 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 # hold exists to avoid forcing. The valve is an escape hatch the live
 # pass scoring prices on its own.
 func _developing_outlet_feed(ctx: RoleContext, tm: SkaterNetworkState,
-		our_goalie: Vector3, self_facing_xz: Vector2) -> float:
+		our_goalie: Vector3, self_facing_xz: Vector2,
+		receiver_caps: AISkaterCaps = null) -> float:
 	if tm.is_ghost:
 		return 0.0
 	var vel: Vector3 = tm.velocity
@@ -1198,7 +1205,7 @@ func _developing_outlet_feed(ctx: RoleContext, tm: SkaterNetworkState,
 	var release_t: float = flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 	var rotation_time: float = _facing_rotation_time(self_facing_xz, ctx.self_pos, spot)
 	return _pass_ev(ctx, spot, pass_speed, flight_t, release_t,
-			flight_t + rotation_time, our_goalie)
+			flight_t + rotation_time, our_goalie, receiver_caps)
 
 
 # Approximate puck-rest position when the carrier is at `body_pos`.
