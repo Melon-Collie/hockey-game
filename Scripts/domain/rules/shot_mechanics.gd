@@ -16,10 +16,14 @@ class ShotResult:
 # ── Loft levels ───────────────────────────────────────────────────────────────
 # Elevation is a player-selected LOFT LEVEL (scroll wheel), not a computed arc:
 #   0 = FLAT  — puck stays on the ice
-#   1 = LOW   — a saucer flip (~0.25 m apex): clears stick blades, lands and slides
-#   2 = HIGH  — a rising shot (~1.22 m apex): apex sits at the crossbar, so it
-#               only clears the bar while still rising (miss high only on a soft
-#               floaty loft from range, not an easy sail-over from the slot)
+#   1 = LOW   — a saucer flip (~0.26 m apex): clears stick blades, lands and slides
+#   2 = HIGH  — a rising shot (~1.12 m apex, puck top ~1.14 m): the peak sits a
+#               clean ~5 cm UNDER the crossbar's inner edge (1.19 m), so a HIGH
+#               shot snipes the top of the net but its disc never reaches the bar
+#               to sail over it. Apex height is a FIXED ceiling (v_y is power-
+#               independent), so raising shot power can't put a shot over the net —
+#               it only pushes the apex DISTANCE out (see v_y default on
+#               SkaterController.loft_vertical_speed_high for the tuning history).
 # Each level maps to a FIXED VERTICAL LAUNCH SPEED (m/s), independent of shot
 # power and shot direction. Where the puck sits on its arc when it reaches the
 # net is therefore emergent from loft × power × distance — range and charge
@@ -36,7 +40,7 @@ const ELEVATION_HIGH: int = 2
 # Cap on the pre-normalization Y/XZ ratio of a lofted direction: 1.0 = 45°.
 # This is a degenerate-input guard, not a feel lever — it stops y from running
 # toward vertical as power approaches the level's launch speed. At 45° it
-# binds only below ~6.9 m/s at HIGH loft. Since the wrister floor dropped to
+# binds only below ~6.6 m/s at HIGH loft (v_y·√2). Since the wrister floor dropped to
 # 10 m/s (soft touch passes), the very softest release — a min-power backhand
 # from a low-Hands skater, ~6.4 m/s — can now reach the cap, flattening that
 # flip to 45° instead of running vertical: exactly the intended behavior (a
