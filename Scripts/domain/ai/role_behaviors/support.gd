@@ -69,7 +69,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
-	var min_opp_time_home: float = _min_opp_time_home(opp_states, our_net)
+	var min_opp_time_home: float = _min_opp_time_home(opp_states, ctx.scratch_opp_caps, our_net)
 
 	# Search around the carrier. Polar samples cover the cycle space;
 	# anti-crowd filter rejects the carrier-overlap candidate.
@@ -94,7 +94,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				carrier_pos, c, ctx.attacking_goal_pos,
 				goalie_pos, GameRules.NET_HALF_WIDTH,
 				opp_positions, pass_speed)
-		var exposure: float = _exposure(c, our_net, min_opp_time_home)
+		var exposure: float = _exposure(c, our_net, min_opp_time_home, ctx.self_max_speed)
 		var score: float = pass_value * (1.0 - exposure)
 		if score > best_score:
 			best_score = score
@@ -138,10 +138,19 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 # Min over opponents of momentum-aware ETA back to our net. INF
 # when there are no opponents (no recovery threat).
 static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
-		our_net: Vector3) -> float:
+		opp_caps: Array, our_net: Vector3) -> float:
+	var has_caps: bool = opp_caps.size() == opp_states.size()
 	var best: float = INF
-	for s: SkaterNetworkState in opp_states:
-		var t: float = AIActionScoring.time_to_arrive(s.position, our_net, s.velocity)
+	for i: int in opp_states.size():
+		var s: SkaterNetworkState = opp_states[i]
+		# Each opponent races home at ITS real top speed (Speed) — a fast opponent
+		# recovers sooner, so SUPPORT correctly reads it as harder to beat back.
+		var ref_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opp_caps[i]
+			if caps != null:
+				ref_speed = caps.max_speed
+		var t: float = AIActionScoring.time_to_arrive(s.position, our_net, s.velocity, ref_speed)
 		if t < best:
 			best = t
 	return best
@@ -157,8 +166,10 @@ static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
 # candidate). Clamp pushes all-exposed-equally candidates to score 0
 # so the loop falls back to self_pos.
 static func _exposure(candidate: Vector3, our_net: Vector3,
-		min_opp_time_home: float) -> float:
+		min_opp_time_home: float, self_max_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S) -> float:
 	var safe_time: float = maxf(min_opp_time_home, 0.001)
 	var dist: float = candidate.distance_to(our_net)
-	var my_time: float = dist / AIActionScoring.SKATER_REF_SPEED_M_S
+	# My own foot-race home at MY real top speed (Speed) — a fast defender is less
+	# exposed from the same spot.
+	var my_time: float = dist / maxf(self_max_speed, 0.001)
 	return clampf(my_time / safe_time - 1.0, 0.0, 1.0)

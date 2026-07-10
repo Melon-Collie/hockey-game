@@ -107,5 +107,9 @@ var dispatch_period_ticks: int = 1
 # retained array references, so the buffers are free to be overwritten next call.
 var scratch_opp_positions: Array[Vector3] = []
 var scratch_opp_states: Array[SkaterNetworkState] = []
+# AISkaterCaps index-matched to scratch_opp_positions/_states (entries may be
+# null), filled by collect_opponents so defensive ETAs read each opponent's real
+# top speed. A null entry / short buffer means the league default.
+var scratch_opp_caps: Array[AISkaterCaps] = []
 var scratch_teammates: Array[Vector3] = []
 var scratch_opp_receivers: Array[Vector3] = []

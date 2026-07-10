@@ -965,8 +965,10 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 		var nearest_our: float = INF
 		for c: Vector3 in _scratch_our_chasers:
 			nearest_our = minf(nearest_our, c.distance_to(target))
+		# Dump-and-CHASE: we race the dumped puck at our own top speed (Speed) —
+		# a faster chaser reaches it sooner, so the decay bites less.
 		var chase_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
-				nearest_our / AIActionScoring.SKATER_REF_SPEED_M_S)
+				nearest_our / maxf(ctx.self_max_speed, 0.001))
 		var value: float = AIActionScoring.position_potential(
 				target, attacking_goal, _scratch_opponents)
 		gain = recovery * value * chase_decay
