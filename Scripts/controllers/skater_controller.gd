@@ -435,17 +435,21 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 # Loft-level vertical launch speeds (m/s), shared by quick shots, wristers, and
 # slappers in every direction — one elevation mechanic for shots AND passes
-# (see ShotMechanics loft-level doc). Apex above the blade is v_y²/2g:
-#   LOW  2.2 → ~0.25 m — the saucer: clears stick blades, lands and slides.
-#   HIGH 4.9 → ~1.22 m — apex sits right at the crossbar (1.22 m). A HIGH shot
-#   only clears the bar while it's still rising, so from the slot (apex is
-#   reached in close) it stays in the net rather than floating over; you can
-#   still sail one high on a soft/floaty loft from range, but the easy
-#   over-the-net miss from the slot is gone. Never leaves the rink (glass).
+# (see ShotMechanics loft-level doc). Apex above the launch point (ice_height
+# 0.0175 m) is v_y²/2g; the crossbar pipe runs 1.19–1.25 m (centerline 1.22 m):
+#   LOW  2.2  → apex ~0.26 m — the saucer: clears stick blades, lands and slides.
+#   HIGH 4.65 → apex ~1.12 m (puck top ~1.14 m) — the peak sits a clean ~5 cm
+#   UNDER the crossbar's inner edge (1.19 m), so a HIGH shot can snipe the top of
+#   the net but its disc never reaches the bar to tip over it. Apex height is a
+#   FIXED ceiling (v_y is power-independent), so raising shot power can't sail a
+#   shot over — it only moves the apex DISTANCE out. This is deliberately below
+#   #340's apex-at-crossbar (v_y 4.9): once #363 raised shot power (wrister 24→33,
+#   slapper 34→40 m/s) the apex distance moved into common point/slot range, so
+#   the marginal over-the-bar condition started landing on ordinary shots.
 # Where the arc sits at the net is emergent from distance + power — that read
 # is the skill (the old ballistic solve auto-arrived at a target height).
 @export var loft_vertical_speed_low: float = 2.2
-@export var loft_vertical_speed_high: float = 4.9
+@export var loft_vertical_speed_high: float = 4.65
 
 # ── Head Tracking Tuning ─────────────────────────────────────────────────────
 @export var head_track_speed: float = 12.0
