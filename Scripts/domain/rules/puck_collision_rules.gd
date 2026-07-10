@@ -31,6 +31,14 @@ static func can_poke_check(carrier_team_id: int, checker_team_id: int) -> bool:
 # a squared blade smothers a slapper into a bobble instead of caroming it.
 # normal_restitution_min < 0 disables the falloff (flat e). tangential_retain is
 # flat: a glance keeps its pace regardless of speed (that IS the redirect).
+#
+# Deliberately WORLD-frame / blade-static — do NOT fold blade velocity into the
+# bounce (blade-frame decomposition, sweep-adds-pace). The blade IK-chases the
+# cursor every frame, so its instantaneous velocity at contact is aim noise, not
+# intent: identical-looking tips would come off at different paces depending on
+# where the cursor was mid-flick. Same reason reception has no cushion term.
+# (Reception's relative frame uses the SKATER's velocity, which is smooth and
+# deliberate — that's the distinction.)
 static func deflect_velocity(
 		incoming_velocity: Vector3,
 		contact_normal: Vector3,
