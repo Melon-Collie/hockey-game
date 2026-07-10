@@ -55,6 +55,25 @@ static func incremental_stamina_drain(prev_stagger_timer: float, impulse_mag: fl
 	return ((add - prev_stagger_timer) / cfg.max_stagger_seconds) * cfg.max_stamina_drain
 
 
+# The transfer-impulse magnitude a body check actually lands on its victim: closing
+# speed along the hit normal × mass ratio × the victim's brace-adjusted transfer.
+# This single magnitude is the shared "how hard did it land" number every downstream
+# effect keys off — the victim's knockback (Skater._resolve_player_collisions), the
+# stagger it inflicts, the puck strip (reconstructed from impact_force by
+# puck_strip_impulse below), and the attacker's own drive-through rebound
+# (attacker_restitution). Folding the brace in HERE is what makes a committed hit on
+# a braced/immovable victim peel off in a battle instead of the attacker gluing to
+# them: the brace cuts the delivered impulse, which raises the rebound.
+static func delivered_transfer_impulse(
+		approach: float,
+		weight_ratio: float,
+		attacker_transfer: float,
+		victim_brace_resistance: float,
+		victim_braced: bool) -> float:
+	var effective_transfer: float = attacker_transfer * (victim_brace_resistance if victim_braced else 1.0)
+	return approach * weight_ratio * effective_transfer
+
+
 # Attacker rebound (restitution) for a hit, scaled DOWN as the delivered impulse
 # rises: a glancing shoulder bounces the attacker back at base_restitution, a
 # squared-up monster hit falls toward floor_restitution (~0) so the attacker
