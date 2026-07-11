@@ -101,7 +101,7 @@ func _build_menu() -> void:
 	panel.add_child(vbox)
 
 	var resume_btn := MenuStyle.popup_button("Resume")
-	resume_btn.theme_type_variation = &"ButtonPrimary"
+	MenuStyle.apply_primary_cta(resume_btn)
 	resume_btn.pressed.connect(close)
 	vbox.add_child(resume_btn)
 
@@ -158,8 +158,7 @@ func _build_slot_grid_overlay() -> void:
 	var title := Label.new()
 	title.text = "Change Position"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 24)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	MenuStyle.apply_heading(title, 26)
 	vbox.add_child(title)
 
 	_slot_grid = SlotGridPanel.new()
@@ -226,8 +225,7 @@ func _build_leave_overlay() -> void:
 	var title := Label.new()
 	title.text = "Leave Game"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
 	# "Return to Lobby" only exists for an online host — it pulls the whole

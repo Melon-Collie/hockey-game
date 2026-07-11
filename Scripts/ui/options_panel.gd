@@ -120,8 +120,7 @@ func _ready() -> void:
 	var title := Label.new()
 	title.text = "Options"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	MenuStyle.apply_heading(title)
 	add_child(title)
 
 	add_child(_build_tab_switcher())
@@ -139,7 +138,7 @@ func _ready() -> void:
 	btn_row.add_child(reset_btn)
 
 	_apply_btn = _make_small_button("Apply")
-	_apply_btn.theme_type_variation = &"ButtonPrimary"
+	MenuStyle.apply_primary_cta(_apply_btn)
 	_apply_btn.pressed.connect(_on_apply_pressed)
 	_apply_btn.disabled = true
 	btn_row.add_child(_apply_btn)

@@ -69,8 +69,7 @@ func _build() -> void:
 	var heading := Label.new()
 	heading.text = "Attributes"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.add_theme_font_size_override("font_size", 20)
-	heading.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	MenuStyle.apply_heading(heading, 22)
 	add_child(heading)
 
 	_build_preset_row()

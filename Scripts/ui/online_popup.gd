@@ -55,8 +55,7 @@ func _build() -> void:
 	var title := Label.new()
 	title.text = "Online"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
 	# At-a-glance Steam init check: green "connected as <name>" or a red hint.

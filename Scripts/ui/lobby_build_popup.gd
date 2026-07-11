@@ -54,8 +54,7 @@ func _build() -> void:
 	var title := Label.new()
 	title.text = "Edit Build"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
 	_panel = AttributePickerPanel.new()
@@ -69,9 +68,8 @@ func _build() -> void:
 
 	_apply_btn = Button.new()
 	_apply_btn.text = "Apply"
-	_apply_btn.theme_type_variation = &"ButtonPrimary"
+	MenuStyle.apply_primary_cta(_apply_btn, 18)
 	_apply_btn.custom_minimum_size = Vector2(140, 44)
-	_apply_btn.add_theme_font_size_override("font_size", 18)
 	_apply_btn.pressed.connect(_apply)
 	SoundManager.wire_button(_apply_btn)
 	action_row.add_child(_apply_btn)
