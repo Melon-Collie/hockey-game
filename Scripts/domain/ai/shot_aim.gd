@@ -92,4 +92,11 @@ static func compute_open_net_aim(
 		# Right arc: midpoint is between shadow_right and +net_half_width.
 		var midpoint: float = (shadow_right + net_half_width) * 0.5
 		aim_x = lerpf(midpoint, net_half_width, corner_bias)
-	return Vector3(aim_x, 0.0, net_z)
+	# Post clearance: never aim outside the line the puck's CENTER can cross
+	# without clipping the pipe (post radius + puck radius inside the post
+	# centerline — GameRules.NET_ENTRY_HALF_WIDTH's derivation). A degenerate
+	# arc lerps the aim onto the post itself, and with zero aim noise the bot
+	# rides that exact line into the iron every time.
+	var entry_max: float = net_half_width \
+			- GameRules.NET_POST_RADIUS - GameRules.PUCK_COLLISION_RADIUS
+	return Vector3(clampf(aim_x, -entry_max, entry_max), 0.0, net_z)

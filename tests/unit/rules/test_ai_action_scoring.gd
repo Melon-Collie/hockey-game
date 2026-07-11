@@ -1252,3 +1252,135 @@ func test_pass_miss_cost_self_localizes_by_rink_end() -> void:
 			opp_end_loss, AIActionScoring.PASS_MISS_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
 	assert_gt(own_end_cost, opp_end_cost * 4.0,
 			"a missed pass in our own end costs multiples of the same miss in theirs")
+
+
+# ─── goalie_stale_square_ref (the goalie squares to a delayed read) ───────
+
+func test_stale_square_ref_matches_release_for_static_shooter() -> void:
+	# No motion → the stale ref IS the shooter: the squared-goalie read (and the
+	# wide-angle over-fire fix built on it) is untouched.
+	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			Vector3(2, 0, -20), Vector3.ZERO, 0.25)
+	assert_almost_eq(ref.x, 2.0, 0.001)
+	assert_almost_eq(ref.z, -20.0, 0.001)
+
+
+func test_stale_square_ref_trails_a_moving_shooter_by_the_reaction_delay() -> void:
+	# The ref leads by (release − reaction delay), i.e. it trails the release-time
+	# position by exactly delay × velocity — the goalie covers a stale angle.
+	var lookahead: float = 0.25
+	var vel := Vector3(6, 0, 0)
+	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			Vector3.ZERO, vel, lookahead)
+	var release_x: float = vel.x * lookahead
+	var lag: float = release_x - ref.x
+	assert_almost_eq(lag, vel.x * AIActionScoring.GOALIE_REACTION_DELAY_S, 0.001,
+			"the cover trails the release angle by reaction delay × speed")
+
+
+func test_doorstep_drive_beats_the_stale_square_but_not_the_set_wall() -> void:
+	# Shooter 2.6 m out, driving laterally at 7 m/s; goalie challenging (1.75).
+	# Squared to the RELEASE (flat-footed read) the net is walled off; squared to
+	# the τ-stale ray (the real read) the drive side is open — the doorstep shot
+	# off the move is a genuine chance.
+	var goal := Vector3(0, 0, -26.65)
+	var lookahead: float = 0.25
+	var vel := Vector3(7, 0, 0)
+	var shooter := Vector3(0, 0, -24.05)
+	var release := shooter + vel * lookahead
+	var none: Array[Vector3] = []
+	var set_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, -24.9), goal, release)
+	var walled: float = AIActionScoring.score_shoot(
+			release, goal, set_goalie, GameRules.NET_HALF_WIDTH, none, 33.0)
+	var stale_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			shooter, vel, lookahead)
+	var stale_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, -24.9), goal, stale_ref)
+	var off_the_move: float = AIActionScoring.score_shoot(
+			release, goal, stale_goalie, GameRules.NET_HALF_WIDTH, none, 33.0)
+	assert_almost_eq(walled, 0.0, 0.02,
+			"flat-footed at the doorstep the challenge walls it off")
+	assert_gt(off_the_move, 0.25,
+			"the same shot off a lateral drive is a real chance; got %f" % off_the_move)
+
+
+# ─── Stance-aware five-hole (measured slot from the replicated pose) ──────
+
+func test_standing_five_hole_scores_in_tight() -> void:
+	# Head-on shooter 3 m out; goalie STANDING at his challenge depth walls off
+	# the corners (legacy read: 0). The measured ~0.20 m slot scores: flight
+	# (~0.09 s) is under his legs reaction delay, so the drop can't seal it.
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(0, 0, -23.65)
+	var goalie := Vector3(0, 0, -24.9)  # 1.75 challenge depth
+	var none: Array[Vector3] = []
+	var legacy: float = AIActionScoring.score_shoot(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, none, 33.0)
+	var gap: float = GoalieBehaviorRules.five_hole_gap_m(false, 0.02)
+	var measured: float = AIActionScoring.score_shoot(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, none, 33.0,
+			0.0, [], gap, false)
+	assert_almost_eq(legacy, 0.0, 0.001,
+			"sanity: the legacy set-goalie read scores zero from in tight")
+	assert_gt(measured, 0.15,
+			"the measured standing slot makes the in-tight shot real; got %f" % measured)
+
+
+func test_standing_five_hole_sealed_from_range() -> void:
+	# Same slot from 12 m: flight ~0.36 s ≫ legs delay + pads-to-floor — the
+	# goalie reads the release and drops; the slot is gone when the puck arrives.
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(0, 0, -14.65)
+	var goalie := Vector3(0, 0, -24.9)
+	var gap: float = GoalieBehaviorRules.five_hole_gap_m(false, 0.02)
+	var angle: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0, gap, false)
+	# From range the corners re-open (long flight buys arm reach... inverse) —
+	# assert specifically that the FIVE hole contributes nothing: compare with
+	# gap 0 (five disabled) — identical means the slot was sealed.
+	var no_five: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0, 0.0, false)
+	assert_almost_eq(angle, no_five, 0.001,
+			"from range the drop seals the slot before the puck arrives")
+
+
+func test_down_goalie_five_hole_is_the_slide_leak() -> void:
+	# A goalie mid-slide (down, openness 0.18) leaks the measured 0.36 m gap —
+	# and being down there is no further drop to seal it with. In tight (4 m,
+	# goalie challenging) the leak out-scores the walled-off corners, so the
+	# best-hole read rises above the no-leak baseline.
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(0, 0, -22.65)
+	var goalie := Vector3(0, 0, -24.9)
+	var gap: float = GoalieBehaviorRules.five_hole_gap_m(true, 0.18)
+	var with_leak: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0, gap, true)
+	var sealed: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0, 0.0, true)
+	assert_gt(with_leak, sealed,
+			"a mid-slide leak is a real five-hole in tight")
+
+
+func test_five_hole_gap_rule_mirrors_pad_geometry() -> void:
+	# Standing at resting openness (0.02): 2×(0.22+0.02) − 0.28 = 0.20.
+	assert_almost_eq(GoalieBehaviorRules.five_hole_gap_m(false, 0.02), 0.20, 0.001)
+	# Down and set (openness ~0): sealed.
+	assert_almost_eq(GoalieBehaviorRules.five_hole_gap_m(true, 0.0), 0.0, 0.001)
+	# Down mid-slide (0.18): the leak is twice the openness.
+	assert_almost_eq(GoalieBehaviorRules.five_hole_gap_m(true, 0.18), 0.36, 0.001)
+
+
+# ─── Post-clearance aim clamp ─────────────────────────────────────────────
+
+func test_hole_aim_never_targets_the_post_band() -> void:
+	# Goalie shades hard to one side leaving a sliver at the far post — the aim
+	# must stay inside the puck-entry line (post radius + puck radius inside the
+	# post centerline), never on the pipe itself.
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(0, 0, -20.65)
+	var goalie := Vector3(0.8, 0, -25.3)  # shaded far to +X
+	var aim: Vector3 = AIActionScoring.best_shot_aim(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0)
+	assert_lte(absf(aim.x), GameRules.NET_ENTRY_HALF_WIDTH + 0.0001,
+			"aim stays inside the clean-entry line; got x=%f" % aim.x)
