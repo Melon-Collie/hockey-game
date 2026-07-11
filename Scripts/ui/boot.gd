@@ -34,14 +34,23 @@ func _build_ui() -> void:
 	# Cascade Manrope to every Label under the title card.
 	theme = MenuStyle.ui_theme()
 
-	# Flat dark navy background — same value as the side menu / scorebug,
-	# so the title card lives in the same visual world the rest of the
-	# UI does. The old ice photo washed out the "Press any key" prompt.
-	var bg := ColorRect.new()
-	bg.color = MenuStyle.PANEL_BG
+	# Scratched-ice texture (same asset as the lobby) under a heavy navy tint.
+	# The tint is what makes this work: an earlier full-brightness ice photo
+	# washed out the menu text, so the texture sits behind PANEL_BG at high
+	# alpha — subtle surface interest, same dark world as the rest of the UI.
+	var bg := TextureRect.new()
+	bg.texture = load("res://Assets/Mitts_ice_background.png")
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
+
+	var tint := ColorRect.new()
+	tint.color = Color(MenuStyle.PANEL_BG.r, MenuStyle.PANEL_BG.g, MenuStyle.PANEL_BG.b, 0.86)
+	tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(tint)
 
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -91,15 +100,16 @@ func _build_ui() -> void:
 	_button_column.add_theme_constant_override("separation", 12)
 	vbox.add_child(_button_column)
 
-	var play_btn := MenuStyle.popup_button("Play")
+	var play_btn := _title_button("Play")
+	MenuStyle.apply_primary_cta(play_btn, 26)
 	play_btn.pressed.connect(_on_play_pressed)
 	_button_column.add_child(play_btn)
 
-	var options_btn := MenuStyle.popup_button("Options")
+	var options_btn := _title_button("Options")
 	options_btn.pressed.connect(_on_settings_pressed)
 	_button_column.add_child(options_btn)
 
-	var exit_btn := MenuStyle.popup_button("Exit")
+	var exit_btn := _title_button("Exit")
 	exit_btn.pressed.connect(_on_exit_pressed)
 	_button_column.add_child(exit_btn)
 
@@ -135,6 +145,22 @@ func _build_ui() -> void:
 
 	# Settings overlay sits on top of everything; hidden until Options is hit.
 	_build_settings_overlay()
+
+
+# Title-card menu button. Fixed width (SHRINK_CENTER keeps it from stretching
+# to the 820px logo column) with the display font in caps — the title screen
+# is the brand moment, so the buttons match the logo's athletic wordmark
+# instead of reading as body-font form controls.
+func _title_button(label: String) -> Button:
+	var btn := Button.new()
+	btn.text = label.to_upper()
+	btn.custom_minimum_size = Vector2(340, 56)
+	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	btn.add_theme_font_override("font", MenuStyle.display_font_spaced())
+	btn.add_theme_font_size_override("font_size", 26)
+	MenuStyle.wire_hover_scale(btn)
+	SoundManager.wire_button(btn)
+	return btn
 
 
 func _build_settings_overlay() -> void:

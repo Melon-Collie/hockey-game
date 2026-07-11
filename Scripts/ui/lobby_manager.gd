@@ -159,14 +159,14 @@ func _build_ui() -> void:
 
 	if NetworkManager.is_host:
 		_start_btn = _btn("Start Game")
-		_start_btn.theme_type_variation = &"ButtonPrimary"
+		MenuStyle.apply_primary_cta(_start_btn)
 		_start_btn.pressed.connect(_on_start_pressed)
 		_start_btn.disabled = true
 		_start_btn.modulate = Color(1, 1, 1, 0.5)
 		btn_box.add_child(_start_btn)
 	else:
 		_ready_btn = _btn("Ready")
-		_ready_btn.theme_type_variation = &"ButtonPrimary"
+		MenuStyle.apply_primary_cta(_ready_btn)
 		_ready_btn.pressed.connect(_on_ready_pressed)
 		btn_box.add_child(_ready_btn)
 
@@ -577,7 +577,9 @@ func _update_ready_btn() -> void:
 			local_is_spectator = true
 			break
 	_ready_btn.visible = not local_is_spectator
-	_ready_btn.text = "Unready" if _local_is_ready else "Ready"
+	# Uppercase to match apply_primary_cta's display-caps treatment — dynamic
+	# text assignments bypass the one-time uppercasing done at build time.
+	_ready_btn.text = "UNREADY" if _local_is_ready else "READY"
 
 # ── Signal handlers ───────────────────────────────────────────────────────────
 

@@ -227,6 +227,42 @@ static func pulse(node: CanvasItem) -> Tween:
 	return t
 
 
+# Big Shoulders is tightly condensed; uppercase UI text at menu sizes needs a
+# touch of air between glyphs to stay legible. Built once and shared — every
+# heading / CTA / menu row references the same FontVariation.
+static var _display_font_spaced: FontVariation = null
+
+
+static func display_font_spaced() -> FontVariation:
+	if _display_font_spaced == null:
+		_display_font_spaced = FontVariation.new()
+		_display_font_spaced.base_font = DISPLAY_FONT
+		_display_font_spaced.set_spacing(TextServer.SPACING_GLYPH, 1)
+	return _display_font_spaced
+
+
+# Heading treatment for popup/dialog titles — the condensed display font in
+# all caps, matching the scorebug and lobby slot cards, so every menu surface
+# carries the same sports identity instead of quiet body-font titles.
+static func apply_heading(label: Label, font_size: int = 30) -> void:
+	label.uppercase = true
+	label.add_theme_font_override("font", display_font_spaced())
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", TEXT_TITLE)
+
+
+# Primary CTA treatment — the ButtonPrimary teal fill plus the display font
+# in caps, so the one loud button per screen reads athletic rather than
+# form-like. Uppercases the button's current text: call AFTER setting
+# btn.text, and any later dynamic text change must supply an uppercase
+# string itself (Button has no uppercase property).
+static func apply_primary_cta(btn: Button, font_size: int = 20) -> void:
+	btn.theme_type_variation = &"ButtonPrimary"
+	btn.text = btn.text.to_upper()
+	btn.add_theme_font_override("font", display_font_spaced())
+	btn.add_theme_font_size_override("font_size", font_size)
+
+
 # Standard popup-row button: 220×48, font 20, hover-scale tween, click sound.
 static func popup_button(label: String) -> Button:
 	var btn := Button.new()

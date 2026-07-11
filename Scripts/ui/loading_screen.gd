@@ -39,8 +39,7 @@ func _build_ui() -> void:
 	var title := Label.new()
 	title.text = "Mitts"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 64)
-	title.add_theme_color_override("font_color", Color.WHITE)
+	MenuStyle.apply_heading(title, 64)
 	vbox.add_child(title)
 
 	_subtitle_label = Label.new()

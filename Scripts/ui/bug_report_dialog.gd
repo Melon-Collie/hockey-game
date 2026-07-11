@@ -30,8 +30,7 @@ func _ready() -> void:
 
 	var title := Label.new()
 	title.text = "Report a Bug"
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
+	MenuStyle.apply_heading(title, 18)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 
