@@ -38,12 +38,19 @@ extends Node
 @export var zone_aggressive_z: float = 8.0
 @export var zone_base_z: float = 12.0
 @export var zone_conservative_z: float = 20.0
-# How fast `_current_depth` lerps toward the depth-chart target. Higher =
-# faster retreat when the skater closes. At 2.0 the lerp couldn't catch a
-# fast-closing skater inside 2m (depth chart's retreat zone); bumped to
-# 4.0 so a 0.25s approach (8 m/s closing 2m) converges ~63% — goalie
-# meaningfully retreats before contact instead of being stuck out front.
+# How fast `_current_depth` lerps toward the depth-chart target — the
+# exponential settle that shapes ARRIVAL near the target. Big moves are
+# rate-capped by `depth_max_speed` below, and fast retreats under a genuine
+# rush are owned by the rate-matched rush backflow (which this lerp used to
+# stand in for — the old 4.0 was chosen to catch a fast-closing skater).
 @export var depth_speed: float = 4.0
+# Physical ceiling (m/s) on in/out crease movement. Uncapped, the exponential
+# lerp opens a 1.3 m challenge→crease change at ~5 m/s — roughly double a real
+# goalie's telescoping push / backward C-cut (~2–2.5 m/s), which read as the
+# goalie teleporting in and out of the crease. The rush backflow's rate-matched
+# retreat deliberately bypasses this cap (it matches the attacker's closing
+# speed, the real constraint on a backflow).
+@export var depth_max_speed: float = 2.2
 
 @export var shuffle_speed: float = 2.0
 @export var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
@@ -2704,7 +2711,7 @@ func _update_depth(delta: float) -> void:
 		return
 	if _sm.current == State.RECOVERING:
 		# Gentle fade back toward defensive crease while standing up.
-		_current_depth = lerpf(_current_depth, depth_defensive, depth_speed * delta)
+		_approach_depth(depth_defensive, delta)
 		return
 	# STANDING / READY: depth chart drives radius. Slapper tell pulls deeper.
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
@@ -2758,7 +2765,16 @@ func _update_depth(delta: float) -> void:
 	if rush_rate > 0.0 and target_radius < _current_depth:
 		_current_depth = move_toward(_current_depth, target_radius, rush_rate * delta)
 	else:
-		_current_depth = lerpf(_current_depth, target_radius, depth_speed * delta)
+		_approach_depth(target_radius, delta)
+
+
+# Move `_current_depth` toward `target` with the exponential settle shaped by
+# `depth_speed`, rate-capped at `depth_max_speed` — skating speed in and out
+# of the crease is a physical quantity, not a lerp artifact.
+func _approach_depth(target: float, delta: float) -> void:
+	var next: float = lerpf(_current_depth, target, depth_speed * delta)
+	var max_step: float = depth_max_speed * delta
+	_current_depth += clampf(next - _current_depth, -max_step, max_step)
 
 # Most restrictive backdoor depth cap across the opposing off-puck skaters, or
 # INF when nothing binds. Only meaningful against an opposing carrier — a
