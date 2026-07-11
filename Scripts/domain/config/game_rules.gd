@@ -212,6 +212,19 @@ const NET_STUCK_GRACE_DURATION: float = 1.0
 const NET_STUCK_MAX_SPEED: float = 0.6       # m/s — below this the puck counts as settled
 const NET_STUCK_PLAYABLE_HEIGHT: float = 0.30  # m above ice; at/under → drop to ice, over → whistle
 
+# Backstop for a puck settled motionless in mid-air anywhere OTHER than the net
+# footprint: resting on the goalie's pads/body after a deadened save, or left
+# hovering in place after Jolt slept it and its support moved away (a sleeping
+# body skips integration, so gravity never brings it down). The goalie's own
+# knock-loose sweep (GoalieController clear_rest_max_speed) normally clears the
+# on-the-pads case within its ~0.35 s dwell; this grace is deliberately longer
+# so the diegetic fix gets first crack, and it fires only when the sweep can't
+# (goalie mid-reaction / RVH, puck out of stick reach, no goalie nearby).
+# Resolution is always a drop to the ice — unlike the net crown, nothing
+# structural holds the puck up, so settling it keeps play moving without a
+# whistle. Reuses NET_STUCK_MAX_SPEED as the settled threshold.
+const AIRBORNE_STUCK_GRACE_DURATION: float = 1.2
+
 # ── Infractions ───────────────────────────────────────────────────────────────
 const ICING_GHOST_DURATION: float = 3.0  # seconds team stays ghosted after icing (ARCADE/legacy path)
 # Crease protection — ARCADE-only anti-camp mechanic, not a real NHL rule. A

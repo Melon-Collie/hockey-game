@@ -395,6 +395,12 @@ extends Node
 @export var clear_reach: float = 1.4            # m — goalie-to-puck distance the stick can sweep
 @export var clear_max_puck_speed: float = 4.0   # m/s — above this it's a live shot/rebound, leave it
 @export var clear_max_height: float = 0.12      # m — puck must be on the ice; airborne pucks aren't swept
+# m/s — an airborne puck moving slower than this has SETTLED on the goalie
+# (pads/body) rather than being in flight: free fall alone exceeds this within
+# ~50 ms, so nothing genuinely airborne can stay under it for the clear_dwell
+# window. Such a puck is unplayable (Jolt soon sleeps it, freezing it mid-air)
+# — the clear treats it as sweepable and knocks it loose.
+@export var clear_rest_max_speed: float = 0.5
 @export var clear_dwell: float = 0.35           # s — the puck must sit clearable this long before the sweep
 @export var clear_speed: float = 7.0            # m/s imparted to the swept puck
 @export var clear_lateral_weight: float = 1.0   # corner-ward bias (lateral vs forward)
@@ -1650,7 +1656,8 @@ func _try_clear_loose_puck(delta: float) -> void:
 	_sweep_anim_timer = sweep_anim_duration
 
 
-# True when a loose puck is sitting on the ice in front of the goalie, slow and
+# True when a loose puck is sitting on the ice in front of the goalie (or has
+# settled ON the goalie's pads — see the airborne exception below), slow and
 # close enough to sweep to the corner with the stick. Drives both the actual clear
 # (_try_clear_loose_puck) and the standing / paddle sweep pose so the reach
 # reads visually. Loose pucks only — carried pucks go through the poke check.
@@ -1671,7 +1678,16 @@ func _is_loose_puck_clearable() -> bool:
 		return false
 	# On the ice only — a puck in the air is a live shot/deflection, not a loose
 	# puck to sweep. Without this the goalie bats airborne pucks out of the air.
-	if puck.global_position.y > clear_max_height:
+	# EXCEPTION: a near-motionless airborne puck has SETTLED on the goalie's own
+	# pads/body (a deadened save can leave it perched there; Jolt then puts it
+	# to sleep and it soft-locks — no skater can reach a puck resting on the
+	# goalie). Only a supported puck can hold a speed under clear_rest_max_speed
+	# through the dwell window — free fall blows past it in ~50 ms — so this
+	# never fires on anything actually in flight. The sweep wakes the puck
+	# (apply_goalie_sweep clears `sleeping`) and knocks it off the pads; gravity
+	# brings it down as it travels to the corner.
+	if puck.global_position.y > clear_max_height \
+			and puck.linear_velocity.length() > clear_rest_max_speed:
 		return false
 	if puck.linear_velocity.length() > clear_max_puck_speed:
 		return false

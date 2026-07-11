@@ -512,11 +512,13 @@ func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 func is_airborne() -> bool:
 	return position.y > ice_height + 0.05
 
-# Drops a puck that settled on low net geometry (the back/skirt frame) straight
-# down to the ice so it becomes playable again — it was only a few cm up but
-# never touched the ice, so it read as airborne forever. Host-authoritative; the
+# Drops a puck that settled airborne — on low net geometry (the back/skirt
+# frame) or perched mid-air on/over a body (GameManager's airborne-stuck
+# backstop) — straight down to the ice so it becomes playable again: it never
+# touched the ice, so it read as airborne forever. Host-authoritative; the
 # new position replicates through the normal state buffer.
 func settle_to_ice() -> void:
+	sleeping = false  # a settled puck has usually been slept by Jolt; wake it so it resumes simulating at the new position
 	global_position.y = ice_height
 	linear_velocity.y = 0.0
 	angular_velocity = Vector3.ZERO

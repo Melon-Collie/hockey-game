@@ -95,6 +95,7 @@ var _positions_scratch: Dictionary = {}
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
 var _puck_net_stuck_timer: float = 0.0
+var _puck_air_stuck_timer: float = 0.0
 # Swept goal detection (host): the puck's center last physics tick, so the goals
 # can test the segment prev -> curr for a full goal-line crossing. Invalid until
 # the first loose-puck tick of a live period (see _check_goal_crossing).
@@ -416,6 +417,7 @@ func _physics_process(delta: float) -> void:
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
 	_check_puck_stuck_on_net(delta)
+	_check_puck_stuck_airborne(delta)
 	_apply_ghost_state(delta)
 	_shot_tracker.tick(delta)
 	_hit_tracker.tick(delta)
@@ -493,6 +495,37 @@ func _check_puck_stuck_on_net(delta: float) -> void:
 	puck_out_of_play.emit()
 	NetworkManager.notify_puck_out_of_play_to_all()
 	_whistle_and_faceoff(dot)
+
+
+# Host-only backstop: a puck settled motionless in MID-AIR anywhere else —
+# typically resting on the goalie's pads after a deadened save, or left hovering
+# where the pads were after Jolt slept it and the goalie moved away (a sleeping
+# body skips integration, so gravity never brings it down). The goalie's
+# knock-loose sweep (GoalieController clear_rest_max_speed) normally clears the
+# on-the-pads case first — this grace is longer than that sweep's dwell on
+# purpose — so this fires only when no sweep can reach it. The net footprint is
+# excluded: that perch is structural and owned by _check_puck_stuck_on_net,
+# which may whistle instead of dropping. Resolution is always settle_to_ice —
+# nothing structural holds the puck up out here, so dropping it makes it
+# playable again without a stoppage.
+func _check_puck_stuck_airborne(delta: float) -> void:
+	if _state_machine.current_phase != GamePhase.Phase.PLAYING:
+		_puck_air_stuck_timer = 0.0
+		return
+	if NetworkManager.is_drill_mode() or puck.carrier != null:
+		_puck_air_stuck_timer = 0.0
+		return
+	var pos: Vector3 = puck.global_position
+	var settled: bool = puck.linear_velocity.length() < GameRules.NET_STUCK_MAX_SPEED
+	if not (puck.is_airborne() and settled) \
+			or GameRules.is_over_net_footprint(Vector2(pos.x, pos.z)):
+		_puck_air_stuck_timer = 0.0
+		return
+	_puck_air_stuck_timer += delta
+	if _puck_air_stuck_timer < GameRules.AIRBORNE_STUCK_GRACE_DURATION:
+		return
+	_puck_air_stuck_timer = 0.0
+	puck.settle_to_ice()
 
 
 # Plays the whistle, transitions the state machine to FACEOFF_PREP at the
