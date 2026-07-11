@@ -60,10 +60,19 @@ func begin_follow_through() -> void:
 # slapper_wind_up_height during the wind-up charge.
 func apply_slapper_blade_position() -> void:
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
-	var wind_up_t: float = clampf(_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
-	# Front-loaded ease so the coil snaps into place and the back half of the
-	# wind-up is a held loaded pose — matches the torso coil in SkaterPoseCoordinator.
+	var wind_up_t: float = _controller.slapper_wind_up_t()
+	# Front-loaded ease so the coil snaps into motion — matches the torso coil
+	# in SkaterPoseCoordinator. Spans the full charge time: the pose is the
+	# charge gauge, apex == max charge.
 	var wind_up_eased: float = sqrt(wind_up_t)
+	# Full-charge tell: a small quiver at the apex (see slapper_full_quiver_m).
+	# Phase runs off the charge timer past max — deterministic through reconcile
+	# replay; remotes see it through the replicated hand/blade wire state like
+	# the rest of the pose.
+	var quiver: float = 0.0
+	if wind_up_t >= 1.0:
+		quiver = sin(_controller.slapper_overcharge_seconds()
+				* TAU * _controller.slapper_full_quiver_hz) * _controller.slapper_full_quiver_m
 	# Lerp blade XZ from the "ready" position out to the side to the "loaded"
 	# position pulled in and back, so the stick wraps over the back shoulder
 	# once the torso coil completes.
@@ -74,7 +83,7 @@ func apply_slapper_blade_position() -> void:
 	var current_blade_y: float = lerpf(
 			_ik.blade_y_lean_corrected(blade_x, blade_z),
 			_controller.slapper_wind_up_height,
-			wind_up_t)
+			wind_up_t) + quiver
 	var pos := Vector3(blade_x, current_blade_y, blade_z)
 	pos = _skater.clamp_blade_to_walls(pos)
 	var blade_world: Vector3 = _skater.upper_body_to_global(pos)
@@ -89,7 +98,7 @@ func apply_slapper_blade_position() -> void:
 	# since they fight the coil direction.
 	var hand_pos := Vector3(
 			_skater.shoulder.position.x - blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
-			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased,
+			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased + quiver * 0.5,
 			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased - _controller.slapper_wind_up_hand_forward * wind_up_eased)
 	var hand_world: Vector3 = _skater.upper_body_to_global(hand_pos)
 	var shaft: Vector3 = clamped_heel - hand_world
@@ -286,9 +295,10 @@ func apply_slapper_follow_through() -> void:
 		var u: float = t / cf
 		u *= u
 		# Where the wind-up actually was at release (mirrors
-		# apply_slapper_blade_position: eased XZ/hand, raw-t height).
-		var wind_up_t: float = clampf(
-				_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
+		# apply_slapper_blade_position: eased XZ/hand, raw-t height; the
+		# apex quiver is skipped — a ±2 cm start offset is invisible in
+		# the downswing).
+		var wind_up_t: float = _controller.slapper_wind_up_t()
 		var wind_up_eased: float = sqrt(wind_up_t)
 		var start_x: float = _skater.shoulder.position.x + blade_side_sign * lerpf(
 				_controller.slapper_blade_x, _controller.slapper_wind_up_blade_x, wind_up_eased)

@@ -105,8 +105,8 @@ const HUD_LINE_THICK := 0.045              # heavier stroke for symbols (arrow, 
 # same regardless of which jersey each side wears. Blue-vs-red is
 # colorblind-safe; self is green — a third primary that stays clearly apart from
 # both the team blue and enemy red (the old cyan sat adjacent to team blue and
-# was easy to confuse mid-rush) and avoids the warm yellow→orange→red
-# charge-ring palette. These are only the DEFAULTS now: each is fully
+# was easy to confuse mid-rush) and stays apart from the amber/red the stamina
+# ring uses for its low/locked states. These are only the DEFAULTS now: each is fully
 # user-pickable (Options → Game → Ring Colors), and PlayerPrefs.ring_color_*
 # holds the live values that SkaterHUDCoordinator reads. The self color also
 # drives the overhead self-beacon so the on-ice ring and the floating marker
@@ -115,14 +115,6 @@ const HUD_LINE_THICK := 0.045              # heavier stroke for symbols (arrow, 
 const HUD_RING_SELF  := Color(0.20, 0.95, 0.40, 1.00)   # green — your own skater
 const HUD_RING_TEAM  := Color(0.25, 0.55, 1.00, 1.00)   # blue — teammates
 const HUD_RING_ENEMY := Color(0.95, 0.25, 0.25, 1.00)   # red  — opponents
-
-# Charge-ring fill colors. Lerps from CHARGE_LOW → CHARGE_HIGH across the fill;
-# CHARGE_FULL pulses at 100%; CHARGE_LOST flashes briefly when charge is
-# cancelled without firing (e.g. puck stripped during wrister aim).
-const CHARGE_LOW    := Color(1.00, 0.85, 0.20, 1.00)   # yellow
-const CHARGE_HIGH   := Color(1.00, 0.50, 0.10, 1.00)   # orange
-const CHARGE_FULL   := Color(1.00, 0.20, 0.20, 1.00)   # red pulse at full
-const CHARGE_LOST   := Color(1.00, 0.20, 0.20, 1.00)   # red flash on cancel
 
 
 # ── Factories ─────────────────────────────────────────────────────────────────

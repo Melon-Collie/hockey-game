@@ -263,8 +263,7 @@ func apply_upper_body(delta: float) -> void:
 			var locked_angle := atan2(local_dir.x, -local_dir.z)
 			var max_twist := deg_to_rad(_controller.upper_body_max_twist_deg)
 			var aim_target: float = clampf(-locked_angle * _controller.upper_body_twist_ratio, -max_twist, max_twist)
-			var wind_up_t: float = clampf(_aiming.slapper_charge_timer / _controller.slapper_wind_up_time, 0.0, 1.0)
-			var wind_up_eased: float = sqrt(wind_up_t)
+			var wind_up_eased: float = sqrt(_controller.slapper_wind_up_t())
 			var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 			var coil: float = -blade_side_sign * deg_to_rad(_controller.slapper_wind_up_twist_deg) * wind_up_eased
 			upper_body_angle = lerp_angle(upper_body_angle, aim_target + coil, _controller.slapper_wind_up_lerp_speed * delta)

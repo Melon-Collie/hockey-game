@@ -168,7 +168,7 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	# physics processing entirely; apply_replay_state covers all visual
 	# updates (position, blade, IK) on its own.
 	skater.set_physics_process(false)
-	# Latch off the flat-on-ice slot rings, name labels, charge rings, and
+	# Latch off the flat-on-ice slot rings, name labels, stamina rings, and
 	# slapper indicators — they're designed for the top-down gameplay camera
 	# and look wrong from any of the broadcast / chase / free camera angles
 	# the replay viewer uses. set_physics_process(false) above also means
