@@ -504,6 +504,18 @@ extends Node
 @export var cover_secure_radius: float = 0.55   # m — puck must still be this close when the glove lands
 @export var cover_hold_s: float = 0.85          # s — ARCADE hold before the live release
 @export var cover_cooldown_s: float = 7.0       # s — between covers (success or failed gamble)
+# A puck at rest ON the goalie's body — a deadened save settling on top of the
+# butterfly pads. The goalie is the only body that can support a puck off the
+# ice (the puck mask excludes skaters), and a pad-shelf puck is unplayable
+# through every normal path (grounded blades can't reach an "airborne" puck;
+# the crease sweep refuses pucks above `clear_max_height`) — in real hockey
+# it's a covered puck anyway, so it triggers the same smother, bypassing the
+# cover cooldown (there is no other resolution). Detection is the pure
+# GoalieBehaviorRules.puck_resting_on_goalie window held for a dwell.
+@export var cover_body_rest_dwell_s: float = 0.3      # s — must SIT there, not bounce through
+@export var cover_body_rest_max_height: float = 0.6   # m — pad/lap shelf envelope the glove can pin
+@export var cover_body_radius: float = 0.7            # m — butterfly's horizontal span
+@export var cover_escape_height: float = 0.9          # m — above the collapsed torso = out of the smother
 
 # ── Catch-and-hold (glove) ────────────────────────────────────────────────────
 # A controlled GLOVE save is a CATCH: the puck pins into the glove (squeeze-
@@ -916,6 +928,7 @@ var _cover_secured: bool = false
 var _cover_reach_timer: float = 0.0
 var _cover_hold_timer: float = 0.0
 var _cover_cooldown_timer: float = 0.0
+var _body_rest_dwell_timer: float = 0.0
 # Reused scratch of opposing skater positions for the sweep-lane check (same
 # no-allocation idiom as _screen_positions).
 var _lane_opponents: PackedVector3Array = PackedVector3Array()
@@ -1320,6 +1333,7 @@ func reset_to_crease() -> void:
 	_cover_reach_timer = 0.0
 	_cover_hold_timer = 0.0
 	_cover_cooldown_timer = 0.0
+	_body_rest_dwell_timer = 0.0
 	_sweep_windup_timer = 0.0
 	_pending_sweep_cover_release = false
 	_pp_phase = _PP_OUT
@@ -1954,7 +1968,11 @@ func _update_goalie_poke(delta: float) -> void:
 			goalie.set_stick_collision_enabled(true)
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
-		# No carrier to strip — instead sweep a loose puck out of the crease.
+		# A puck at rest ON the body outranks the sweep (the sweep can't reach
+		# it — it reads as airborne); otherwise sweep a loose puck out of the
+		# crease.
+		if _maybe_cover_body_rested_puck(delta):
+			return
 		_try_clear_loose_puck(delta)
 		return
 	# Phase lock — same gate the skater path's _check_interactions respects.
@@ -2123,6 +2141,34 @@ func _gather_opposing_positions() -> void:
 
 
 # ── Cover / smother lifecycle ─────────────────────────────────────────────────
+# A loose puck at rest ON the goalie's body (see the cover_body_rest exports).
+# Runs every host tick from the no-carrier poke path; returns true when it
+# committed the smother. States with their own puck lifecycle (COVERING,
+# PLAYING_PUCK, the catches) and an in-flight sweep windup keep priority.
+# Deliberately ignores `cover_cooldown_s`: unlike the lane-read smother, where
+# the desperation sweep is the fallback, a body-rested puck has no other
+# resolution — every normal play path is height-gated off it.
+func _maybe_cover_body_rested_puck(delta: float) -> bool:
+	if _sm.current == State.COVERING or _sm.current == State.PLAYING_PUCK \
+			or _sm.is_catching():
+		return false
+	if _sweep_windup_timer > 0.0 or puck.pickup_locked:
+		return false
+	if not GoalieBehaviorRules.puck_resting_on_goalie(
+			puck.global_position, puck.linear_velocity.length(),
+			goalie.global_position, clear_max_height,
+			cover_body_rest_max_height, cover_body_radius,
+			clear_max_puck_speed):
+		_body_rest_dwell_timer = 0.0
+		return false
+	_body_rest_dwell_timer += delta
+	if _body_rest_dwell_timer < cover_body_rest_dwell_s:
+		return false
+	_body_rest_dwell_timer = 0.0
+	_enter_cover()
+	return true
+
+
 # Enter the smother: collapse over the puck and start the reach race. The
 # glove takes `cover_reach_time` to land; until then the puck is still live.
 func _enter_cover() -> void:
@@ -2149,9 +2195,13 @@ func _tick_cover(delta: float) -> void:
 		return
 	if not _cover_secured:
 		var dist: float = goalie.global_position.distance_to(puck.global_position)
+		# Height escape is the collapsed-body window (`cover_escape_height`),
+		# NOT the sweep's on-ice ceiling — a body-rested cover starts with the
+		# puck already at pad-top height and must not insta-abort. A real whack
+		# that pops the puck out also gives it speed; the velocity gate reads it.
 		var escaped: bool = dist > cover_secure_radius + 0.3 \
 				or puck.linear_velocity.length() > clear_max_puck_speed \
-				or puck.global_position.y > clear_max_height
+				or puck.global_position.y > cover_escape_height
 		if escaped:
 			_abort_cover()
 			return

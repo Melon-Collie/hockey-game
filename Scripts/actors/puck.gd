@@ -750,3 +750,12 @@ func _physics_process(delta: float) -> void:
 		# Max-speed clamp already runs every physics substep in _integrate_forces.
 		linear_velocity.y = 0.0
 		position.y = ice_height
+	elif sleeping and not freeze:
+		# A loose airborne puck can only be supported by the goalie's body (the
+		# puck mask excludes skater bodies) — e.g. a deadened save settling on
+		# top of the butterfly pads. Jolt sleeping it there is a trap: the pads
+		# are animated bodies, and kinematic support moving away never wakes a
+		# slept body, so the puck would hang frozen in mid-air (a sleeping body
+		# skips _integrate_forces, so even gravity stops). Keep a loose airborne
+		# puck awake; the frozen case (goalie catch pin) is exempt by design.
+		sleeping = false

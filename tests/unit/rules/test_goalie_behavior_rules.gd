@@ -1004,3 +1004,41 @@ func test_cannot_beat_the_rim_means_no_go() -> void:
 	# 4 m out at 10 m/s (0.4 s) vs a 0.5 s skate + 0.15 s set → no-go.
 	assert_false(GoalieBehaviorRules.can_beat_puck_to_stop(0.5, 4.0, 10.0, 0.15))
 	assert_true(GoalieBehaviorRules.can_beat_puck_to_stop(0.5, 8.0, 10.0, 0.15))
+
+
+# ── Puck at rest ON the goalie (the pad-shelf smother) ────────────────────────
+# Window: off the sweepable ice (min_height) but inside the pad/lap shelf
+# envelope (max_height), within the butterfly's horizontal span, not clearly
+# live. Args: puck_pos, puck_speed, goalie_pos, min_height, max_height,
+# body_radius, max_speed — the controller passes clear_max_height 0.12,
+# 0.6, 0.7, clear_max_puck_speed 4.0.
+
+func test_puck_on_pad_shelf_reads_as_resting() -> void:
+	# The observed bug case: a deadened save sitting on a butterfly pad top
+	# (~0.3 m up, ~0.3 m off-center), dead still.
+	assert_true(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.3, 0.3, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_puck_on_the_ice_is_the_sweeps_job() -> void:
+	# On-ice pucks stay with the crease sweep — below min_height is not a rest.
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.3, 0.0175, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_puck_above_the_shelf_envelope_is_not_pinnable() -> void:
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.0, 0.8, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_puck_outside_the_body_footprint_is_not_supported() -> void:
+	# Off the ice but a meter to the side — nothing there to rest on; this is
+	# a flying puck, not a supported one.
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(1.0, 0.3, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_live_puck_crossing_the_body_is_not_resting() -> void:
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.0, 0.3, 24.0), 6.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))

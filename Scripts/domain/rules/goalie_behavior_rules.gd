@@ -489,6 +489,38 @@ static func sweep_lane_blocked(
 	return false
 
 
+# ── Puck at rest ON the goalie (the pad-shelf smother) ───────────────────────
+# The puck's collision mask excludes skater bodies, so the goalie is the ONLY
+# body in the game that can support a puck off the ice: a loose puck that is
+# off the ice, essentially motionless, and inside the goalie's horizontal body
+# footprint must be sitting ON him (classically: a deadened save settling on
+# top of the butterfly pads). That puck is unplayable through every normal
+# path — grounded blades can't reach an "airborne" puck and the crease sweep
+# refuses pucks above the ice — and in real hockey it's a covered puck anyway,
+# so the caller answers it with the smother. All inputs are physical
+# measurements: `min_height` is the sweepable-ice ceiling (below it the sweep
+# owns the puck), `max_height` the pad/lap shelf envelope the glove can
+# actually pin, `body_radius` the butterfly's horizontal span. Near-rest is
+# enforced by the caller's dwell (a puck must HOLD this window, not cross it),
+# so `max_speed` only excludes clearly-live pucks.
+static func puck_resting_on_goalie(
+		puck_position: Vector3,
+		puck_speed: float,
+		goalie_position: Vector3,
+		min_height: float,
+		max_height: float,
+		body_radius: float,
+		max_speed: float) -> bool:
+	if puck_speed > max_speed:
+		return false
+	var height: float = puck_position.y - goalie_position.y
+	if height < min_height or height > max_height:
+		return false
+	var dx: float = puck_position.x - goalie_position.x
+	var dz: float = puck_position.z - goalie_position.z
+	return dx * dx + dz * dz <= body_radius * body_radius
+
+
 # ── Net-front jam (seal the ice) ─────────────────────────────────────────────
 # Should the goalie drop to butterfly to SEAL a net-front scramble? A doorstep
 # jam — a loose puck with an opponent on it, or a SLOW opposing carrier jammed in
