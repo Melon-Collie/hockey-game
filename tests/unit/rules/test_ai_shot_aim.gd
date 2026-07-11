@@ -122,3 +122,15 @@ func test_corner_bias_zero_matches_arc_midpoint() -> void:
 	var midpoint: float = (shadow_right + NET_HW) * 0.5
 	assert_almost_eq(aim.x, midpoint, 0.001,
 			"corner_bias=0 lands aim at the arc midpoint exactly")
+
+
+func test_degenerate_arc_aim_clamps_off_the_post() -> void:
+	# Goalie shadow covering essentially the whole net — the arc lerp would land
+	# the aim on the post centerline; the clamp pulls it inside the puck-entry
+	# line (post radius + puck radius in from the post).
+	var shooter := Vector3(0.0, 0.0, 24.0)
+	var goalie := Vector3(0.0, 0.0, 25.5)   # close goalie, huge shadow
+	var aim: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, 1.2)
+	assert_lte(absf(aim.x), GameRules.NET_ENTRY_HALF_WIDTH + 0.0001,
+			"degenerate arc aim stays inside the entry line; got x=%f" % aim.x)

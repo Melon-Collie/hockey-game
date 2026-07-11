@@ -1121,3 +1121,25 @@ func test_wider_cone_frees_a_lateral_aim() -> void:
 	var narrow: float = _rot_time(0.0, 120.0, deg_to_rad(90.0), 6.0)
 	assert_eq(wide, 0.0, "wide cone frees the lateral aim")
 	assert_gt(narrow, 0.0, "the old narrow cone would have penalized it")
+
+
+# ─── Shot measured from the puck, not the body ──────────────────────────────
+
+func test_shot_is_measured_from_the_puck_not_the_body() -> void:
+	# The carried puck rides the blade, up to a stick's reach from the body — the
+	# shot's view of the net is from the PUCK. Same body position, puck extended
+	# toward the net → the release ref moves with it → wider real angles → higher
+	# shoot score. (The fixture default puts the puck AT the body, so every other
+	# scenario in this file is unchanged.)
+	var self_pos := Vector3(0, 0, -17.65)   # 9 m out
+	var ctx_body: RoleContext = _make_ctx(self_pos)
+	var c1 := AIRoleCarrier.new()
+	c1.decide(ctx_body)
+	var body_score: float = c1.debug_shoot_score
+
+	var ctx_blade: RoleContext = _make_ctx(self_pos)
+	ctx_blade.snapshot.puck_state.position = self_pos + Vector3(0, 0, -1.1)
+	var c2 := AIRoleCarrier.new()
+	c2.decide(ctx_blade)
+	assert_gt(c2.debug_shoot_score, body_score,
+			"a puck extended toward the net measures a wider view than the chest")

@@ -348,22 +348,55 @@ func _pick_action(ctx: RoleContext) -> void:
 	# that's us as the carrier). This is where the goalie actually is, used to
 	# clamp the wrister release, since the goalie is a body the release can't cross.
 	var goalie_now: Vector3 = _goalie_now(ctx)
+	# The shot originates where the PUCK is — the carried puck rides the blade, up
+	# to a stick's reach from the body — so the release ref is the puck's current
+	# spot led by our body velocity, not the body center. At range the offset is
+	# noise; in tight it's the difference between measuring the net from your
+	# chest and from the puck (closer, and shifted to the forehand side — a real
+	# angle change around the goalie). The goalie, by contrast, TRACKS THE BODY
+	# (threat tracking is body-weighted — the anti-5-hole-exploit read), so the
+	# stale-square ref below stays on self_pos: shot-from-the-puck against
+	# square-to-the-body is a physical asymmetry the model should see.
+	var puck_now: Vector3 = self_pos
+	if ctx.snapshot.puck_state != null:
+		puck_now = Vector3(
+				ctx.snapshot.puck_state.position.x, 0.0,
+				ctx.snapshot.puck_state.position.z)
 	var wrister_release_pos: Vector3 = AIActionScoring.release_ahead_of_goalie(
-			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
+			puck_now + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
 			attacking_goal, goalie_now)
 
 	# Goalie SQUARED to the release position — the keeper has tracked us (the current
 	# puck-holder) the whole way, so a shot from where we already are does NOT catch
-	# him moving. This is the SAME model the carry candidates use (goalie_squared_pos)
-	# and for the same reason: the caught-moving credit is a puck-RELOCATION effect (a
-	# pass / one-timer that outruns his tracking — see _compute_best_pass's unsettled
-	# arg), never a shot the goalie reads the whole way. The react-then-slide
-	# predict_goalie_pos here left the keeper a step behind the shooter's angle, which
-	# read as an open near side and drove the bot to fire from wide angles and long
-	# range the keeper is actually square to. Unsettled is 0 for the same reason.
+	# him moving by relocation. This is the SAME model the carry candidates use
+	# (goalie_squared_pos): the caught-moving credit for puck RELOCATION belongs to
+	# passes / one-timers (see _compute_best_pass's unsettled arg). The react-then-
+	# slide predict_goalie_pos here left the keeper a step behind the shooter's angle,
+	# which read as an open near side and drove wide-angle/long-range over-fires.
+	# …but "square" means square to what he has READ: he tracks our angle with his
+	# real reaction delay, so his cover is aligned to where we WERE a delay before
+	# release (goalie_stale_square_ref), not to the release itself. Static or slow,
+	# the two coincide and this is exactly the old squared read (the wide-angle
+	# over-fire fix stands). Driving laterally in tight, the stale ray leaves his
+	# cover trailing the release angle — the side we are driving toward is
+	# genuinely open, which is what makes a doorstep shot off the move a real
+	# chance while the same shot flat-footed stays walled off. Unsettled stays 0:
+	# the lag IS the caught-moving effect, expressed positionally.
+	var goalie_square_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			self_pos, horizontal_velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)
 	var wrister_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			goalie_now, attacking_goal, wrister_release_pos)
+			goalie_now, attacking_goal, goalie_square_ref)
 	var wrister_unsettled: float = 0.0
+	# The five-hole as it physically exists RIGHT NOW, from the replicated pose:
+	# standing = the real ~0.20 m slot between the pads (sealable by dropping —
+	# the model gates on flight vs the drop), down = the residual slide leak.
+	var wrister_five_hole: float = -1.0
+	var wrister_goalie_down: bool = false
+	var opp_goalie_state: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
+	if opp_goalie_state != null:
+		wrister_goalie_down = opp_goalie_state.is_down()
+		wrister_five_hole = GoalieBehaviorRules.five_hole_gap_m(
+				wrister_goalie_down, opp_goalie_state.five_hole_openness)
 
 	# Top-level SHOOT. _scratch_opponent_caps is index-matched to _scratch_opponents
 	# (and thus to _scratch_opponents_shoot, built in the same order), so a lane
@@ -371,7 +404,8 @@ func _pick_action(ctx: RoleContext) -> void:
 	var shoot_score: float = AIActionScoring.score_shoot(
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
-			ctx.self_wrister_shot_speed, wrister_unsettled, _scratch_opponent_caps)
+			ctx.self_wrister_shot_speed, wrister_unsettled, _scratch_opponent_caps,
+			wrister_five_hole, wrister_goalie_down)
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -529,11 +563,11 @@ func _pick_action(ctx: RoleContext) -> void:
 			shot_loft_level = AIActionScoring.best_shot_loft(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
-					wrister_unsettled)
+					wrister_unsettled, wrister_five_hole, wrister_goalie_down)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
-					wrister_unsettled)
+					wrister_unsettled, wrister_five_hole, wrister_goalie_down)
 	elif dump_score > raw_carry_score and not staggered:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
 		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.

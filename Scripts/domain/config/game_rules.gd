@@ -147,6 +147,12 @@ const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
 # disc. Keep in sync with Puck.tscn.
 const PUCK_COLLISION_RADIUS: float = 0.065
 const PUCK_COLLISION_HALF_HEIGHT: float = 0.0175
+# Widest |x| a puck's CENTER can cross the goal line at without clipping the
+# post: post centerline (NET_HALF_WIDTH) minus the pipe radius minus the puck's
+# own radius. Pure physical derivation — any aim beyond this line is a
+# guaranteed post ricochet, so shot-aim clamps to it.
+const NET_ENTRY_HALF_WIDTH: float = (
+		NET_HALF_WIDTH - NET_POST_RADIUS - PUCK_COLLISION_RADIUS)
 # Puck-on-ice kinetic friction coefficient (realistic μ ~0.05–0.10). SINGLE
 # SOURCE OF TRUTH: HockeyRink._add_ice() builds the live ice PhysicsMaterial
 # directly from this constant, and the AI/client-prediction model below reads it

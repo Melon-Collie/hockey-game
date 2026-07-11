@@ -1524,11 +1524,10 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 				target = _angle_intercept_inside(target, carrier_state.position)
 		_apply_steering(input, snapshot, self_pos, target)
 
-		# No "soft-hands" slow-down here: the catch is decided purely by blade
-		# squareness + the puck's absolute speed (PuckReceptionRules — there is no
-		# give-with-the-puck term, a moving blade catches exactly like a static one),
-		# so easing the approach doesn't help the pickup and only surrenders time on a
-		# race. Getting to the puck fast and on a good blade angle is what matters.
+		# No "soft-hands" slow-down here: the catch is decided by blade squareness +
+		# the puck's speed in OUR frame (PuckReceptionRules, #373), so easing the
+		# approach doesn't help the pickup and only surrenders time on a race.
+		# Getting to the puck fast and on a good blade angle is what matters.
 		var puck_velocity: Vector3 = snapshot.puck_state.velocity
 		var puck_speed_xz: float = sqrt(puck_velocity.x * puck_velocity.x
 				+ puck_velocity.z * puck_velocity.z)
@@ -1539,17 +1538,19 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		# back to us. Once the puck is inside our blade reach, snap the aim
 		# to the puck's ACTUAL position — leading at this range puts the
 		# blade past a puck that's already on our stick. For fast loose
-		# pucks (incoming passes), aim at the puck's CURRENT position even
-		# from far out — the blade tracks the puck along its flight line so
-		# it's always on the path the puck is travelling, instead of pointing
-		# at the destination point and snapping onto the puck only at the
-		# end of the approach.
+		# pucks (incoming passes), PARK the blade at the GATE — the earliest
+		# point on the puck's travel line our blade can touch — and let the
+		# puck come to it. Aiming at the puck's current position instead
+		# means the cursor (capped at Hands blade speed, ~10 m/s) chases a
+		# ~20 m/s puck it can never catch: the blade trails the puck through
+		# our reach and the pass transits untouched.
 		if _engagement_cooldown > 0:
 			input.mouse_world_pos = _step_mouse_toward(Vector3(self_pos.x, 0.0, self_pos.z))
 		elif self_pos.distance_to(puck_pos) <= _blade_reach:
 			input.mouse_world_pos = _step_mouse_toward(puck_pos)
 		elif carrier_pid == -1 and puck_speed_xz > LOOSE_PUCK_TRACK_SPEED_M_S:
-			input.mouse_world_pos = _step_mouse_toward(puck_pos)
+			input.mouse_world_pos = _step_mouse_toward(
+					_blade_gate_on_puck_line(self_pos, puck_pos, puck_velocity))
 		else:
 			input.mouse_world_pos = _step_mouse_toward(target)
 	# Sprint to win the race to a loose / contested puck. Gap is measured to
@@ -1647,15 +1648,56 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	# collects a harder one. (Actively giving WITH the puck to cushion one above the
 	# squared ceiling is a skating read we don't yet use — see LOOSE_PUCK_TRACK.)
 	_apply_steering(input, snapshot, self_pos, body_anchor, true)
-	# Aim: blade target tracks the puck along its flight line, one
-	# tick ahead to compensate for IK convergence lag. As the puck
-	# approaches perp_foot, the mouse follows it; body sits offset
-	# perpendicular, so the stick stays roughly perpendicular to the
-	# puck's velocity throughout the approach.
-	var blade_target: Vector3 = puck_pos + puck_vel * MOUSE_TICK_DELTA
-	blade_target.y = 0.0
-	input.mouse_world_pos = _step_mouse_toward(blade_target)
+	# Aim: PARK the blade at the gate — the point where the puck's line meets our
+	# reach — and let the puck arrive into it. Tracking the puck's position (the
+	# old aim) failed two ways: the cursor (capped at Hands blade speed ~10 m/s)
+	# can't keep up with a ~20 m/s puck near the crossing, and pointing at a far
+	# puck lays the stick SHAFT along the line, so the face is square to the
+	# approach only in the last few ticks of a rate-limited swing. Parked at the
+	# gate the shaft spans perpendicular and the face is square the whole way in.
+	input.mouse_world_pos = _step_mouse_toward(
+			_blade_gate_on_puck_line(self_pos, puck_pos, puck_vel))
 	return true
+
+
+# The GATE: where the blade waits for an incoming loose puck — the earliest point
+# on the puck's travel line the blade can touch (where the line enters a
+# comfortable-extension circle around the body). Parking there beats tracking the
+# puck's position: the cursor slews at Hands blade speed (~10 m/s baseline) while
+# a pass sweeps past at ~20 m/s, so a blade CHASING the puck lags behind it
+# through the reach envelope and the pass transits untouched. The gate itself
+# moves at body speed (recomputed from self_pos each tick), which the cursor
+# holds trivially — the puck arrives INTO the waiting blade. Falls back to the
+# puck's own position when the puck has already passed our level (chase from
+# behind) or is (near-)stationary.
+func _blade_gate_on_puck_line(
+		self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
+	var speed_sq: float = puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z
+	if speed_sq < 0.0001:
+		return puck_pos
+	var speed: float = sqrt(speed_sq)
+	var dir := Vector3(puck_vel.x / speed, 0.0, puck_vel.z / speed)
+	var to_self := Vector3(self_pos.x - puck_pos.x, 0.0, self_pos.z - puck_pos.z)
+	var t: float = to_self.dot(dir)
+	if t <= 0.0:
+		return puck_pos
+	var foot := Vector3(puck_pos.x + dir.x * t, 0.0, puck_pos.z + dir.z * t)
+	var perp_dx: float = self_pos.x - foot.x
+	var perp_dz: float = self_pos.z - foot.z
+	var perp_sq: float = perp_dx * perp_dx + perp_dz * perp_dz
+	# Comfortable extension: blade span minus the same inset the side-stand
+	# reception uses, so the parked blade isn't pinned at the IK ROM clamp
+	# (_blade_reach carries the outward pickup-check buffer — strip it back off).
+	var reach: float = maxf(
+			_blade_reach - BLADE_REACH_BUFFER_M - RECEIVE_BODY_INSET_M, 0.4)
+	var reach_sq: float = reach * reach
+	if perp_sq >= reach_sq:
+		# Line still outside comfortable reach — hold the blade toward its nearest
+		# point while the body keeps closing; the entry point exists once inside.
+		return foot
+	# Entry point: the front edge of the reach circle along the puck's travel —
+	# the earliest touchable spot, leaving the rest of the reach as margin.
+	return foot - dir * sqrt(reach_sq - perp_sq)
 
 
 # Anticipation: is a fast loose puck (a pass) heading toward us right now? Same
@@ -1664,7 +1706,7 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 # pass is released our way, instead of waiting to become the closest teammate to the
 # puck as it arrives. At magnet pace that wait leaves no time to step square — the
 # intended receiver reacts late and clatters the catch. Getting into CHASE early lets
-# _pass_receive_aim_and_steer set up the squared, soft-handed reception in time.
+# _pass_receive_aim_and_steer set up the squared reception in time.
 func _incoming_pass_to_me(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	if snapshot == null or snapshot.puck_state == null \
 			or snapshot.puck_state.carrier_peer_id != -1:
@@ -1786,16 +1828,18 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_set_state(State.ONE_TIMER_PRESSED)
 		return _RECV_ONE_TIME
 	# Mode B: catch in a net-ward posture. Steer to the net-forward anchor so the
-	# puck arrives between us and the net, then track the puck itself for clean
-	# contact — because the anchor puts the puck net-forward of the body, aiming
-	# at it still keeps facing net-ward (no turn-to-grab). No soft-hands brake —
-	# keep momentum to drive in (which also cushions a straight feed). On contact
-	# the bot enters CARRY already net-facing, so the follow-up shot needs no
-	# reorientation; near the net the carrier scorer takes the quick shot.
+	# puck arrives between us and the net, and PARK the blade at the gate — the
+	# earliest point of the puck's line the blade can touch (see
+	# _blade_gate_on_puck_line; tracking the puck's position loses the race to a
+	# ~20 m/s feed). The gate sits on the puck's line net-ward of the anchored
+	# body, so aiming at it still keeps facing net-ward (no turn-to-grab). No
+	# brake — keep momentum to drive in (which also cushions a straight feed,
+	# #373's relative frame). On contact the bot enters CARRY already net-facing,
+	# so the follow-up shot needs no reorientation; near the net the carrier
+	# scorer takes the quick shot.
 	_apply_steering(input, snapshot, self_pos, anchor)
-	var blade_lead: Vector3 = puck_pos + puck_vel * MOUSE_TICK_DELTA
-	blade_lead.y = 0.0
-	input.mouse_world_pos = _step_mouse_toward(blade_lead)
+	input.mouse_world_pos = _step_mouse_toward(
+			_blade_gate_on_puck_line(self_pos, puck_pos, puck_vel))
 	return _RECV_CATCH_STRIDE
 
 

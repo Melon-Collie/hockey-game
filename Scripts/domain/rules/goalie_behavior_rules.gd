@@ -676,3 +676,25 @@ static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: Mo
 	if scrambling:
 		unset = maxf(unset, cfg.scramble_unset)
 	return unset * cfg.max_delay
+
+
+# ── Five-hole gap ─────────────────────────────────────────────────────────────
+# The physical width (m) of the slot between the goalie's pads, from the
+# replicated pose. Mirrors the live pad geometry (Goalie.tscn pad boxes 0.28
+# wide; GoalieBodyConfigBuilder standing pad centers x = ±(0.22 + openness),
+# butterfly pads rotated flat with their inner ends at ±openness):
+#   standing family — inner edges sit ±(0.08 + openness) → gap 0.16 + 2·openness
+#     (≈ 0.20 m at the 0.02 resting openness): a REAL slot, ice to pad-top,
+#     guarded only by the stick blade (0.07 m tall) at ice level.
+#   down family (butterfly / slide / RVH) — the rotated pads seal the ice; the
+#     residual gap is the openness alone (≈ 0 set, up to ~0.36 mid-slide).
+# `openness` is GoalieNetworkState.five_hole_openness; `is_down` is its
+# is_down() stance family.
+const PAD_BOX_WIDTH_M: float = 0.28
+const STANDING_PAD_CENTER_X_M: float = 0.22
+
+static func five_hole_gap_m(is_down: bool, openness: float) -> float:
+	var op: float = maxf(openness, 0.0)
+	if is_down:
+		return 2.0 * op
+	return 2.0 * (STANDING_PAD_CENTER_X_M + op) - PAD_BOX_WIDTH_M

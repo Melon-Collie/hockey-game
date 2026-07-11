@@ -1055,3 +1055,65 @@ func test_incoming_pass_to_me_defers_to_a_closer_teammate() -> void:
 	# Remove the closer teammate → now it's ours.
 	s.skater_states.erase(TEAMMATE_ID)
 	assert_true(sm._incoming_pass_to_me(s, Vector3(3, 0, 0)))
+
+
+# ── _blade_gate_on_puck_line ─────────────────────────────────────────────────
+# The gate: park the blade at the earliest point on an incoming puck's travel
+# line the blade can touch, instead of chasing the puck's position (which the
+# Hands-capped cursor can't keep up with — the pass transits reach untouched).
+
+func _gate_reach() -> float:
+	# Mirror of the helper's comfortable extension: pickup buffer stripped back
+	# off _blade_reach, then the side-stand inset.
+	return maxf(sm._blade_reach - Agent.BLADE_REACH_BUFFER_M
+			- Agent.RECEIVE_BODY_INSET_M, 0.4)
+
+
+func test_blade_gate_parks_on_the_line_at_the_entry_point() -> void:
+	# Puck at origin travelling +X at 20; bot 1 m off the line at x=10. The gate
+	# must sit ON the line (z = 0), BEFORE the perpendicular foot (x < 10) — the
+	# front edge of reach, so the puck is met at the earliest touchable point —
+	# and at the comfortable extension from the body.
+	var self_pos := Vector3(10, 0, 1)
+	var gate: Vector3 = sm._blade_gate_on_puck_line(
+			self_pos, Vector3.ZERO, Vector3(20, 0, 0))
+	assert_almost_eq(gate.z, 0.0, 0.001, "gate sits on the puck's travel line")
+	assert_lt(gate.x, 10.0, "gate sits ahead of the perpendicular foot (early contact)")
+	assert_almost_eq(self_pos.distance_to(gate), _gate_reach(), 0.001,
+			"gate sits at the blade's comfortable extension")
+
+
+func test_blade_gate_head_on_parks_in_front() -> void:
+	# Bot standing exactly on the line: the gate is a full comfortable reach IN
+	# FRONT of the body, toward the incoming puck — blade out to meet it.
+	var gate: Vector3 = sm._blade_gate_on_puck_line(
+			Vector3(10, 0, 0), Vector3.ZERO, Vector3(20, 0, 0))
+	assert_almost_eq(gate.z, 0.0, 0.001)
+	assert_almost_eq(gate.x, 10.0 - _gate_reach(), 0.001,
+			"head-on gate is one comfortable reach toward the puck")
+
+
+func test_blade_gate_reaches_toward_the_line_when_still_closing() -> void:
+	# Line runs 3 m to the side — outside reach. Best effort: the perpendicular
+	# foot (nearest point of the line), held while the body closes.
+	var gate: Vector3 = sm._blade_gate_on_puck_line(
+			Vector3(10, 0, 3), Vector3.ZERO, Vector3(20, 0, 0))
+	assert_almost_eq(gate.x, 10.0, 0.001)
+	assert_almost_eq(gate.z, 0.0, 0.001,
+			"out-of-reach line → aim at its nearest point while closing")
+
+
+func test_blade_gate_chases_a_puck_already_past() -> void:
+	# Puck at x=15 moving +X; bot at x=10 is BEHIND its travel — no gate exists
+	# ahead, so fall back to the puck itself (chase from behind).
+	var puck_pos := Vector3(15, 0, 0)
+	var gate: Vector3 = sm._blade_gate_on_puck_line(
+			Vector3(10, 0, 1), puck_pos, Vector3(20, 0, 0))
+	assert_eq(gate, puck_pos, "a puck already past our level is chased, not gated")
+
+
+func test_blade_gate_stationary_puck_is_the_puck() -> void:
+	var puck_pos := Vector3(5, 0, 5)
+	var gate: Vector3 = sm._blade_gate_on_puck_line(
+			Vector3(10, 0, 1), puck_pos, Vector3.ZERO)
+	assert_eq(gate, puck_pos, "no travel line without velocity — aim at the puck")
