@@ -1640,14 +1640,20 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 			self_pos, body_anchor, self_vel, _self_max_speed)
 	if bot_eta > puck_eta * RECEIVE_TIMING_MARGIN:
 		return false
-	# Commit. Steer to body_anchor with an arrival brake so we SETTLE on the line —
-	# square, off to the side — instead of overshooting it. Settling to ~zero
-	# velocity is what keeps the catch honest under the receiver-relative model
-	# (#373): with the bot stopped, the puck's closing speed in our frame ≈ its
-	# world speed, so a magnet-pace feed catches at any angle and squaring the blade
-	# collects a harder one. (Actively giving WITH the puck to cushion one above the
-	# squared ceiling is a skating read we don't yet use — see LOOSE_PUCK_TRACK.)
-	_apply_steering(input, snapshot, self_pos, body_anchor, true)
+	# Commit. Settle on the line only when there's TIME to settle: the arrival
+	# brake costs real seconds the timing gate above never priced, so a marginal
+	# commit that brakes arrives late and the "reachable" pass slides past the
+	# blade. If arriving AND stopping both fit before the puck gets here, settle
+	# square (calmest catch posture). Otherwise take the feed IN STRIDE — keep
+	# skating to the line at pace. The receiver-relative model (#373) makes that
+	# honest: running with or across a magnet-pace feed leaves the closing speed
+	# at or under the puck's own pace (a perpendicular crossing at full sprint
+	# adds ~2 m/s over it), still inside the catchable band, and reaching the
+	# line beats arriving composed-but-late every time.
+	var self_speed: float = sqrt(self_vel.x * self_vel.x + self_vel.z * self_vel.z)
+	var stop_time: float = self_speed / AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	_apply_steering(input, snapshot, self_pos, body_anchor,
+			bot_eta + stop_time < puck_eta)
 	# Aim: PARK the blade at the gate — the point where the puck's line meets our
 	# reach — and let the puck arrive into it. Tracking the puck's position (the
 	# old aim) failed two ways: the cursor (capped at Hands blade speed ~10 m/s)
@@ -2798,10 +2804,25 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
 	# Intercept-aware lead, shared with the carrier's pass scoring so the fired aim
 	# matches the scored one (AIPassLead) — including the receiver's real build, so
-	# the release leads exactly where the score assumed.
+	# the release leads exactly where the score assumed. Origin = the carried PUCK
+	# (the blade — the real release point), matching the carrier's scoring origin;
+	# leading from the body center systematically over-led close feeds.
 	var receiver_caps: AISkaterCaps = _caps_by_peer.get(_pass_target_peer_id)
-	return AIPassLead.lead_point(
-			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S, receiver_caps)
+	var origin: Vector3 = self_pos
+	if snapshot.puck_state != null and snapshot.puck_state.carrier_peer_id == _peer_id:
+		origin = Vector3(
+				snapshot.puck_state.position.x, 0.0, snapshot.puck_state.position.z)
+	var lead: Vector3 = AIPassLead.lead_point(
+			origin, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S, receiver_caps)
+	# Net guard on the FIRED lane: the scored lane was net-checked at commit, but
+	# the lead re-solves every tick and a receiver drifting near the net plane can
+	# walk it into the cage (the classic behind-the-net feed that rings off the
+	# outside of the frame). If the led lane crosses a net but the receiver's body
+	# line doesn't, fire at the body — a catch on the tape beats a clank.
+	if AIActionScoring.pass_lane_blocked_by_net(origin, lead) \
+			and not AIActionScoring.pass_lane_blocked_by_net(origin, receiver.position):
+		return Vector3(receiver.position.x, 0.0, receiver.position.z)
+	return lead
 
 
 # `arrive` opts into the arrival brake (AISteering.should_arrival_brake):

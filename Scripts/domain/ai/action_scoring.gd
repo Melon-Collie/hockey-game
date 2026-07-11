@@ -1347,15 +1347,33 @@ static func past_center_toward_attack(pos: Vector3, attacking_goal: Vector3) -> 
 	return pos.z * signf(attacking_goal.z) > 0.0
 
 
-# DZ clear target: the neutral-zone strong-side boards (the side the carrier is on),
-# at centre ice — hard rim to get the puck out of our end without crossing into a
-# middle-of-the-ice giveaway. Centre (z = 0) is the neutral zone from either end,
-# so the target keys only off the carrier's side.
-static func dump_clear_target(carrier_pos: Vector3) -> Vector3:
+# How far UP-ICE of the carrier the DZ clear aims along the strong-side wall when
+# that beats centre ice: one full neutral zone of depth (blue line to blue line).
+# An aim DIRECTION, not a settle point — the rim fires toward it and keeps
+# running the boards.
+const DUMP_CLEAR_AHEAD_M: float = 2.0 * GameRules.BLUE_LINE_Z
+
+
+# DZ clear target: the strong-side boards (the side the carrier is on), at
+# whichever is FARTHER up-ice of centre ice and one neutral zone ahead of the
+# carrier. From deep in our end that's the classic centre-ice rim (unchanged);
+# for a carrier just inside the blue line the fixed z=0 point degenerated — the
+# "clear" banged the wall basically sideways, gaining nothing — so the target
+# extends up-ice to keep the clear a genuine forward diagonal from anywhere.
+# `up_ice_dir` is the direction OUT of our end (-own_goal_dir).
+static func dump_clear_target(carrier_pos: Vector3, up_ice_dir: float) -> Vector3:
 	var side: float = signf(carrier_pos.x)
 	if side == 0.0:
 		side = 1.0
-	return Vector3(side * (GameRules.RINK_HALF_WIDTH - DUMP_RINK_INSET_M), 0.0, 0.0)
+	# Depth measured into OUR half (positive = our side of centre). Centre ice is
+	# 0; one NZ ahead of the carrier may land past centre (negative) — take the
+	# farther up-ice of the two.
+	var own_side_depth: float = -up_ice_dir * carrier_pos.z
+	var target_depth: float = minf(0.0, own_side_depth - DUMP_CLEAR_AHEAD_M)
+	return Vector3(
+			side * (GameRules.RINK_HALF_WIDTH - DUMP_RINK_INSET_M),
+			0.0,
+			-up_ice_dir * target_depth)
 
 
 # Dump-in target: the FAR offensive corner (opposite the carrier's side), near the
@@ -1735,27 +1753,32 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects
-# either net's footprint. Each net is the rectangle x ∈ ±NET_HALF_WIDTH,
-# z ∈ [GOAL_LINE_Z, GOAL_LINE_Z + NET_DEPTH] — the goal mouth out to
-# the back frame, mirrored for the other team. Used by score_pass to
-# treat the net as a hard pass-lane obstruction so corner-to-corner
-# OZ passes don't sail through the back of the cage and DZ passes
-# don't cross the goal mouth.
+# either net's PHYSICAL footprint. The blocking rectangle is the net at its
+# widest — the back-frame trapezoid half-width (NET_BACK_HALF_WIDTH, wider than
+# the goal mouth's post span) — inflated by the puck's own radius on every side,
+# since the puck is a disc whose EDGE clanks the frame, not a point. Matching
+# GameRules.is_over_net_footprint's widest-span reading. This was previously the
+# post half-width with no inflation, which is why feeds from below the goal line
+# aimed across the slot read "clear" and rang off the OUTSIDE of the cage: the
+# lane threaded the 0.915 post line but not the 1.02 (+ puck radius) back frame.
+# Used by score_pass / the carrier pass EV / the live fired aim to treat the net
+# as a hard pass-lane obstruction.
 static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
-	var goal_line_z: float = GameRules.GOAL_LINE_Z
-	var net_half_w: float = GameRules.NET_HALF_WIDTH
-	var net_depth: float = GameRules.NET_DEPTH
-	# Team 0's net (positive z) spans z ∈ [goal_line_z, goal_line_z + net_depth].
+	var goal_line_z: float = GameRules.GOAL_LINE_Z - GameRules.PUCK_COLLISION_RADIUS
+	var net_half_w: float = GameRules.NET_BACK_HALF_WIDTH + GameRules.PUCK_COLLISION_RADIUS
+	var net_back_z: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH \
+			+ GameRules.PUCK_COLLISION_RADIUS
+	# Team 0's net (positive z).
 	if _segment_crosses_aabb_xz(
 			from.x, from.z, to.x, to.z,
 			-net_half_w, net_half_w,
-			goal_line_z, goal_line_z + net_depth):
+			goal_line_z, net_back_z):
 		return true
-	# Team 1's net (negative z) spans z ∈ [-(goal_line_z + net_depth), -goal_line_z].
+	# Team 1's net (negative z), mirrored.
 	if _segment_crosses_aabb_xz(
 			from.x, from.z, to.x, to.z,
 			-net_half_w, net_half_w,
-			-(goal_line_z + net_depth), -goal_line_z):
+			-net_back_z, -goal_line_z):
 		return true
 	return false
 
