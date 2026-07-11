@@ -527,6 +527,137 @@ static func screen_occlusion_delay(
 	return worst
 
 
+# ── Standing push kinematics ─────────────────────────────────────────────────
+# Lateral distance a standing goalie covers in `t` seconds pushing from rest:
+# accelerate at `accel` up to `max_speed`, then hold. Mirrors the move_toward
+# ramp in GoalieController._move_along_arc, so race math built on this matches
+# what the live push can actually deliver (the from-rest ramp is a big share of
+# short races — omitting it flattered the goalie by ~v²/2a metres).
+static func reachable_lateral_distance(max_speed: float, accel: float, t: float) -> float:
+	if t <= 0.0 or max_speed <= 0.0:
+		return 0.0
+	if accel <= 0.0:
+		return max_speed * t
+	var t_ramp: float = max_speed / accel
+	if t <= t_ramp:
+		return 0.5 * accel * t * t
+	return max_speed * t - 0.5 * max_speed * t_ramp
+
+
+# ── Beaten-wide detection (drop-and-seal trigger) ────────────────────────────
+# A carrier driving laterally across the crease face beats a standing goalie to
+# the short side when the goalie physically can't stay square: the tuck point
+# is the post on the side the carrier is moving toward, and this is a straight
+# race to it. Carrier's time to the post is lateral (their x-progress is what
+# opens the tuck); the goalie's required travel is the true 2D distance from
+# their challenge position back to the post seal spot, less pad reach — being
+# out on the arc is exactly what makes the reach-around work, so the retreat
+# distance must count. When the race is lost, standing tracking is unwinnable
+# and the correct read is drop + butterfly-slide post seal (the caller's job).
+#
+# Deliberately NOT triggered by: slow lateral movement (min_lateral_speed —
+# stay up and force the release, per the doorstep/jam design), threats outside
+# max_threat_distance (a fast cut at the top of the slot has too many options
+# to commit against), or threats behind the goal line (RVH's job).
+class BeatenWideConfig:
+	var goalie_lateral_speed: float = 0.0  # m/s — standing T-push cap
+	var goalie_lateral_accel: float = 0.0  # m/s² — push-off ramp from rest
+	var reach_half_width: float = 0.0      # m — standing pad coverage half-extent
+	var min_lateral_speed: float = 0.0     # m/s — carrier must be genuinely driving
+	var max_threat_distance: float = 0.0   # m — Euclidean threat→goal in-tight gate
+
+static func is_beaten_wide(
+		threat_position: Vector3,
+		threat_velocity_x: float,
+		goalie_position: Vector3,
+		goal_line_z: float,
+		goal_center_x: float,
+		direction_sign: int,
+		net_half_width: float,
+		cfg: BeatenWideConfig) -> bool:
+	# In front of the goal line only — behind-net drives are RVH's job.
+	if (threat_position.z - goal_line_z) * direction_sign <= 0.0:
+		return false
+	if threat_distance_to_goal(threat_position, goal_line_z, goal_center_x) \
+			> cfg.max_threat_distance:
+		return false
+	if absf(threat_velocity_x) < cfg.min_lateral_speed:
+		return false
+	# Tuck point: the post on the side the carrier is driving toward.
+	var post_x: float = goal_center_x + signf(threat_velocity_x) * net_half_width
+	# Already past the post laterally (mid reach-around) → the race is NOW.
+	var t_arrive: float = maxf((post_x - threat_position.x) / threat_velocity_x, 0.0)
+	var dx: float = post_x - goalie_position.x
+	var dz: float = goal_line_z - goalie_position.z
+	var needed: float = sqrt(dx * dx + dz * dz) - cfg.reach_half_width
+	if needed <= 0.0:
+		return false  # pad already covers the tuck point
+	return needed > reachable_lateral_distance(
+			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, t_arrive)
+
+
+# ── Backdoor-aware depth cap ─────────────────────────────────────────────────
+# A goalie who sees a one-timer threat on the weak side doesn't challenge the
+# carrier as far out: depth trades shot-angle coverage against the time to
+# re-square across to the new shot line when the pass goes. Grounded race:
+#   time the play needs   = pass flight (puck→shooter / pass_speed)
+#                           + the receiver's release swing
+#   time the goalie loses = read delay before the push engages
+#   coverable distance    = reachable_lateral_distance over what's left
+# At challenge radius r along the goal→threat ray, the goalie sits r·sin(θ)
+# off the goal→shooter shot line (θ between the two rays), so the cap solves
+# r·sin(θ) <= coverable — the largest radius from which he still arrives.
+# θ→0 (shooter on the carrier's line) needs no re-square → INF, no cap;
+# an unwinnable race returns 0 (caller floors at its defensive depth). The
+# result only ever *repositions* — the actual cross-crease save still runs the
+# honest react/push race, so respecting the backdoor opens the carrier's
+# direct-shot angle instead of buffing the goalie into a wall.
+class BackdoorThreatConfig:
+	var pass_speed: float = 0.0            # m/s — assumed feed pace (puck flight)
+	var release_time: float = 0.0          # s — receiver's one-timer swing
+	var react_delay: float = 0.0           # s — goalie read before the push engages
+	var goalie_lateral_speed: float = 0.0  # m/s — standing T-push cap
+	var goalie_lateral_accel: float = 0.0  # m/s² — push-off ramp from rest
+	var max_shooter_distance: float = 0.0  # m — shooter→goal eligibility radius
+
+static func backdoor_depth_cap(
+		puck_position: Vector3,
+		threat_position: Vector3,
+		shooter_position: Vector3,
+		goal_line_z: float,
+		goal_center_x: float,
+		direction_sign: int,
+		cfg: BackdoorThreatConfig) -> float:
+	# Live one-timer option only: in front of the goal line (no shooting angle
+	# from behind it) and inside the scoring area.
+	if (shooter_position.z - goal_line_z) * direction_sign <= 0.0:
+		return INF
+	var sx: float = shooter_position.x - goal_center_x
+	var sz: float = shooter_position.z - goal_line_z
+	var shooter_dist: float = sqrt(sx * sx + sz * sz)
+	if shooter_dist > cfg.max_shooter_distance or shooter_dist < 0.001:
+		return INF
+	var tx: float = threat_position.x - goal_center_x
+	var tz: float = threat_position.z - goal_line_z
+	var threat_dist: float = sqrt(tx * tx + tz * tz)
+	if threat_dist < 0.001:
+		return INF
+	# sin(θ) between goal→threat and goal→shooter (2D cross product). Near-zero
+	# means the shooter sits on the carrier's shot line — challenging the
+	# carrier already covers him, no cap.
+	var sin_theta: float = absf((tx * sz - tz * sx) / (threat_dist * shooter_dist))
+	if sin_theta < 0.01:
+		return INF
+	var pdx: float = shooter_position.x - puck_position.x
+	var pdz: float = shooter_position.z - puck_position.z
+	var pass_dist: float = sqrt(pdx * pdx + pdz * pdz)
+	var move_time: float = pass_dist / maxf(cfg.pass_speed, 0.001) \
+			+ cfg.release_time - cfg.react_delay
+	var coverable: float = reachable_lateral_distance(
+			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, move_time)
+	return coverable / sin_theta
+
+
 # ── Movement read penalty ─────────────────────────────────────────────────────
 # A goalie is only sharp when set — square and stopped. Caught mid-push, sliding,
 # or standing back up, they read the shot late. Returns extra read latency in
