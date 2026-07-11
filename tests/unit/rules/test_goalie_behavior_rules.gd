@@ -669,3 +669,166 @@ func test_sealed_pad_ramps_within_range() -> void:
 func test_sealed_pad_disabled_range_keeps_toe_out() -> void:
 	# square_range 0 disables squaring entirely.
 	assert_almost_eq(GoalieBehaviorRules.sealed_pad_toe_out(0.0, 18.0, 0.0), 18.0, 0.0001)
+
+# ── reachable_lateral_distance ────────────────────────────────────────────────
+# Standing-push kinematics: accelerate from rest at `accel` to `max_speed`,
+# then hold. Mirrors _move_along_arc's move_toward ramp.
+
+func test_reachable_distance_zero_time_is_zero() -> void:
+	assert_almost_eq(GoalieBehaviorRules.reachable_lateral_distance(3.8, 14.0, 0.0), 0.0, 0.0001)
+
+func test_reachable_distance_ramp_phase() -> void:
+	# t=0.1s is inside the ramp (t_ramp = 3.8/14 ≈ 0.271): d = ½·14·0.1² = 0.07.
+	assert_almost_eq(GoalieBehaviorRules.reachable_lateral_distance(3.8, 14.0, 0.1), 0.07, 0.0001)
+
+func test_reachable_distance_past_ramp() -> void:
+	# t=0.5s: d = v·t − v²/(2a) = 1.9 − 0.5157 ≈ 1.3843.
+	assert_almost_eq(GoalieBehaviorRules.reachable_lateral_distance(3.8, 14.0, 0.5), 1.3843, 0.001)
+
+func test_reachable_distance_zero_accel_is_instant_speed() -> void:
+	# accel <= 0 → legacy instant-speed model (v·t).
+	assert_almost_eq(GoalieBehaviorRules.reachable_lateral_distance(3.8, 0.0, 0.5), 1.9, 0.0001)
+
+# ── is_beaten_wide ────────────────────────────────────────────────────────────
+# Race to the tuck point (the post on the side the carrier drives toward):
+# beaten when the goalie's pad can't reach the seal spot before the carrier's
+# lateral progress gets there. Goal at z=+26.6 → direction_sign −1.
+
+func _beaten_cfg() -> GoalieBehaviorRules.BeatenWideConfig:
+	var cfg := GoalieBehaviorRules.BeatenWideConfig.new()
+	cfg.goalie_lateral_speed = 3.8
+	cfg.goalie_lateral_accel = 14.0
+	cfg.reach_half_width = 0.42
+	cfg.min_lateral_speed = 1.5
+	cfg.max_threat_distance = 4.0
+	return cfg
+
+func test_beaten_by_fast_crease_cut() -> void:
+	# Carrier at (−1.5, 25.3) driving across at 6 m/s; goalie challenging at
+	# (0, 24.85) (radius 1.75). Carrier reaches the right post in 0.40s; the
+	# goalie needs 1.55m of travel but can only cover ~1.01m from rest.
+	assert_true(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(-1.5, 0, 25.3), 6.0, Vector3(0, 0, 24.85),
+			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_not_beaten_by_slow_cut() -> void:
+	# Same geometry at 2 m/s lateral: 1.21s to the post — goalie covers it.
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(-1.5, 0, 25.3), 2.0, Vector3(0, 0, 24.85),
+			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_not_beaten_when_already_sealing_post() -> void:
+	# Goalie already at the post shoulder — pad covers the tuck point.
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(-1.5, 0, 25.3), 6.0, Vector3(0.8, 0, 26.35),
+			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_beaten_by_reach_around_in_tight() -> void:
+	# Carrier at the doorstep (0.3, 25.6) sliding across at 3.5 m/s while the
+	# goalie is out challenging: 0.18s to the post, goalie still ramping (0.22m
+	# of coverage vs 1.55m needed) — the reach-around tuck.
+	assert_true(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(0.3, 0, 25.6), 3.5, Vector3(0, 0, 24.85),
+			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_stationary_dangle_does_not_drop_goalie() -> void:
+	# Lateral velocity below the anti-jitter floor — stay up, force the release.
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(0.3, 0, 25.6), 0.5, Vector3(0, 0, 24.85),
+			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_fast_cut_far_from_goal_is_not_beaten() -> void:
+	# A winger flying across the top of the slot (5.7m out) isn't a tuck threat.
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(-4.0, 0, 22.5), 8.0, Vector3(0, 0, 24.85),
+			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_behind_goal_line_is_rvh_not_beaten() -> void:
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(1.5, 0, 27.0), 6.0, Vector3(0, 0, 24.85),
+			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_beaten_symmetric_for_minus_z_goal() -> void:
+	# Mirror of the fast-cut case on the −Z goal (direction_sign +1).
+	assert_true(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(1.5, 0, -25.3), -6.0, Vector3(0, 0, -24.85),
+			-26.6, 0.0, 1, 0.915, _beaten_cfg()))
+
+# ── backdoor_depth_cap ────────────────────────────────────────────────────────
+# Anticipatory depth: with a one-timer threat on the weak side, cap the
+# challenge radius so the goalie can re-square to the new shot line within
+# pass flight + release − react time. INF = no cap.
+
+func _backdoor_cfg() -> GoalieBehaviorRules.BackdoorThreatConfig:
+	var cfg := GoalieBehaviorRules.BackdoorThreatConfig.new()
+	cfg.pass_speed = 14.0
+	cfg.release_time = 0.15
+	cfg.react_delay = 0.12
+	cfg.goalie_lateral_speed = 3.8
+	cfg.goalie_lateral_accel = 14.0
+	cfg.max_shooter_distance = 9.0
+	return cfg
+
+func test_backdoor_shooter_caps_challenge_depth() -> void:
+	# Carrier wide left (−4, 23), one-timer man at the right post (1.2, 25.2):
+	# 5.65m pass → 0.43s of goalie movement → ~1.13m coverable, nearly
+	# perpendicular lines → cap ≈ 1.13, well under the 1.75 aggressive chart.
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, _backdoor_cfg())
+	assert_almost_eq(cap, 1.131, 0.02)
+
+func test_no_cap_without_live_shooter_behind_goal_line() -> void:
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 27.2),
+			26.6, 0.0, -1, _backdoor_cfg())
+	assert_true(is_inf(cap), "shooter behind the goal line can't one-time — no cap")
+
+func test_no_cap_for_shooter_outside_scoring_area() -> void:
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(0, 0, 15.0),
+			26.6, 0.0, -1, _backdoor_cfg())
+	assert_true(is_inf(cap), "shooter 11.6m out is not a backdoor threat")
+
+func test_no_cap_for_shooter_on_same_shot_line() -> void:
+	# Shooter directly on the carrier's shot line (goal→(−2,24.8) is parallel
+	# to goal→(−4,23)): challenging the carrier already covers him.
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(-2, 0, 24.8),
+			26.6, 0.0, -1, _backdoor_cfg())
+	assert_true(is_inf(cap), "same-angle shooter needs no re-square — no cap")
+
+func test_doorstep_criss_cross_pins_goalie_deep() -> void:
+	# Royal-road pair at the doorstep: puck at (−1.5, 25.3), one-timer man at
+	# (1.2, 25.2). 2.7m pass → goalie still ramping → cap ≈ 0.35.
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-1.5, 0, 25.3), Vector3(-1.5, 0, 25.3), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, _backdoor_cfg())
+	assert_almost_eq(cap, 0.348, 0.02)
+
+func test_faster_assumed_pass_caps_deeper() -> void:
+	var slow_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, _backdoor_cfg())
+	var fast_cfg: GoalieBehaviorRules.BackdoorThreatConfig = _backdoor_cfg()
+	fast_cfg.pass_speed = 20.0
+	var fast_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, fast_cfg)
+	assert_lt(fast_cap, slow_cap)
+
+func test_unwinnable_race_caps_to_zero() -> void:
+	# React delay longer than the whole play → no movement time → cap 0
+	# (caller floors at depth_defensive).
+	var cfg: GoalieBehaviorRules.BackdoorThreatConfig = _backdoor_cfg()
+	cfg.react_delay = 0.5
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-1.5, 0, 25.3), Vector3(-1.5, 0, 25.3), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, cfg)
+	assert_almost_eq(cap, 0.0, 0.0001)
+
+func test_backdoor_cap_symmetric_for_minus_z_goal() -> void:
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, -23), Vector3(-4, 0, -23), Vector3(1.2, 0, -25.2),
+			-26.6, 0.0, 1, _backdoor_cfg())
+	assert_almost_eq(cap, 1.131, 0.02)

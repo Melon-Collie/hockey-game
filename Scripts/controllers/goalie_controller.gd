@@ -212,6 +212,38 @@ extends Node
 @export var lateral_pressure_depth_pull: float = 0.20  # m of retreat per m/s of deficit
 @export var lateral_pressure_max_pull: float = 0.50    # m max retreat from Buckley depth
 
+# ── Backdoor-aware depth (anticipatory) ──────────────────────────────────────
+# The lateral-pressure retreat above is REACTIVE — it reads puck velocity, i.e.
+# it fires after the pass releases, which against a one-timer is too late by
+# design. This is the anticipatory read a real goalie makes BEFORE the pass:
+# seeing a one-timer man on the weak side, he challenges the carrier less so he
+# can still re-square across when the feed goes. Pure race math in
+# GoalieBehaviorRules.backdoor_depth_cap (pass flight + release swing vs.
+# react delay + accel-ramped T-push); the goalie's speed/react inputs reuse
+# t_push_speed / lateral_accel / cross_crease_react_delay so the positioning
+# read stays consistent with the live push it's predicting — and the actual
+# cross-crease save still runs that honest race, so this repositions rather
+# than buffs. Sitting deeper opens the carrier's direct-shot angle: respecting
+# the back door is a genuine trade the shooter can exploit.
+@export var backdoor_release_time: float = 0.15         # s — receiver's one-timer swing
+@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+@export var backdoor_max_shooter_distance: float = 9.0  # m — shooter→goal eligibility
+
+# ── Beaten-wide post seal ────────────────────────────────────────────────────
+# A carrier driving laterally across the crease face beats standing tracking
+# when the T-push race to the tuck point (the post) is unwinnable — the
+# around-the-pad reach. When GoalieBehaviorRules.is_beaten_wide says the race
+# is lost, the goalie stops tracking upright and drops; the existing
+# _try_commit_slide pad-coverage check then seals the post (post_seal_depth +
+# sealed_pad_toe_out already handle the flush seal). The drop is itself a
+# commitment — butterfly can't reach RVH directly and eats a recovery window —
+# so baiting the drop and pulling back to the slot is the emergent counter.
+# min_lateral_speed keeps the stay-up-vs-a-controlled-dangler rule: only a
+# genuine lateral drive triggers, never a stationary stickhandle. The distance
+# gate is tactical feel: how far out a lateral cut reads as a tuck threat.
+@export var beaten_wide_min_lateral_speed: float = 1.5   # m/s — carrier must be driving
+@export var beaten_wide_max_threat_distance: float = 4.0 # m — in-tight gate (threat→goal)
+
 # Close-crease auto-butterfly. When an opposing carrier is at the doorstep
 # the goalie can't track laterally fast enough; better to commit butterfly
 # and slide-react. Different from the old `is_under_pressure` (2.5 m + 1 m/s)
@@ -642,6 +674,8 @@ var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 var _screen_cfg: GoalieBehaviorRules.ScreenConfig
 var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
 var _crease_jam_cfg: GoalieBehaviorRules.CreaseJamConfig
+var _beaten_wide_cfg: GoalieBehaviorRules.BeatenWideConfig
+var _backdoor_cfg: GoalieBehaviorRules.BackdoorThreatConfig
 # Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
 # array. PackedVector3Array.clear() keeps capacity across shots.
 var _screen_positions: PackedVector3Array = PackedVector3Array()
@@ -979,6 +1013,19 @@ func _build_rule_configs() -> void:
 	_depth_cfg.depth_base = depth_base
 	_depth_cfg.depth_conservative = depth_conservative
 	_depth_cfg.depth_defensive = depth_defensive
+	_beaten_wide_cfg = GoalieBehaviorRules.BeatenWideConfig.new()
+	_beaten_wide_cfg.goalie_lateral_speed = t_push_speed
+	_beaten_wide_cfg.goalie_lateral_accel = lateral_accel
+	_beaten_wide_cfg.reach_half_width = pad_local_offset
+	_beaten_wide_cfg.min_lateral_speed = beaten_wide_min_lateral_speed
+	_beaten_wide_cfg.max_threat_distance = beaten_wide_max_threat_distance
+	_backdoor_cfg = GoalieBehaviorRules.BackdoorThreatConfig.new()
+	_backdoor_cfg.pass_speed = backdoor_assumed_pass_speed
+	_backdoor_cfg.release_time = backdoor_release_time
+	_backdoor_cfg.react_delay = cross_crease_react_delay
+	_backdoor_cfg.goalie_lateral_speed = t_push_speed
+	_backdoor_cfg.goalie_lateral_accel = lateral_accel
+	_backdoor_cfg.max_shooter_distance = backdoor_max_shooter_distance
 
 func is_butterfly() -> bool:
 	return _sm.is_butterfly()
@@ -1263,6 +1310,13 @@ func _update_state(delta: float) -> void:
 				# through the STANDING 5-hole. Distinct from a controlled carrier
 				# attacking with space (handled by the stay-up default).
 				_enter_butterfly()
+			elif _is_beaten_wide() and not _reaction.reacting:
+				# Beaten wide: the carrier's lateral drive wins the race to the
+				# post — standing tracking is unwinnable, so drop now; the
+				# _try_commit_slide pad-coverage check seals the post from
+				# butterfly. Around-the-pad tucks die here; the counter is
+				# baiting the drop and pulling back up (recovery window).
+				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
 				var should_be_ready: bool = _is_ready_situation()
@@ -1350,6 +1404,23 @@ func _is_carrier_at_doorstep() -> bool:
 	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
+
+# True when an opposing carrier's lateral drive has beaten the standing
+# goalie to the tuck point (the around-the-pad reach). Race math in
+# GoalieBehaviorRules.is_beaten_wide; this gathers the scene inputs. Reads the
+# carrier's actual body + velocity, not the lerped tracked threat — the tuck
+# follows the chest, and the smoothed threat lags exactly when the drive is
+# fastest.
+func _is_beaten_wide() -> bool:
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null:
+		return false
+	if team_id != -1 and carrier.get_team_id() == team_id:
+		return false
+	return GoalieBehaviorRules.is_beaten_wide(
+			carrier.global_position, carrier.velocity.x,
+			goalie.global_position, _goal_line_z, _goal_center_x,
+			_direction_sign, net_half_width, _beaten_wide_cfg)
 
 # True when there's a net-front JAM the goalie should seal: a loose-puck
 # scramble in the crease (puck close, no carrier, an opposing skater on it) OR a
@@ -1785,7 +1856,39 @@ func _update_depth(delta: float) -> void:
 			lateral_pressure_max_pull)
 	if lateral_pull > 0.0:
 		target_radius = maxf(target_radius - lateral_pull, depth_defensive)
+	# Backdoor-aware cap (anticipatory): with a live one-timer man on the weak
+	# side, don't challenge farther out than the cross-crease re-square race
+	# allows. See the export block for the model; INF when no threat binds.
+	var backdoor_cap: float = _backdoor_depth_cap()
+	if backdoor_cap < target_radius:
+		target_radius = maxf(backdoor_cap, depth_defensive)
 	_current_depth = lerpf(_current_depth, target_radius, depth_speed * delta)
+
+# Most restrictive backdoor depth cap across the opposing off-puck skaters, or
+# INF when nothing binds. Only meaningful against an opposing carrier — a
+# backdoor one-timer needs a passer — so loose pucks and own-team possession
+# skip the scan entirely. Scalar loop over the registry snapshot, no per-tick
+# allocation (hot path: 120 Hz × goalies while standing).
+func _backdoor_depth_cap() -> float:
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null:
+		return INF
+	if team_id != -1 and carrier.get_team_id() == team_id:
+		return INF
+	if not _skater_getter.is_valid():
+		return INF
+	var skaters: Array = _skater_getter.call()
+	var cap: float = INF
+	for skater: Skater in skaters:
+		if skater == null or skater == carrier or skater.is_ghost:
+			continue
+		if team_id != -1 and skater.get_team_id() == team_id:
+			continue
+		cap = minf(cap, GoalieBehaviorRules.backdoor_depth_cap(
+				puck.global_position, _tracked_threat_position,
+				skater.global_position, _goal_line_z, _goal_center_x,
+				_direction_sign, _backdoor_cfg))
+	return cap
 
 # ── Position ──────────────────────────────────────────────────────────────────
 # STANDING uses true 2D arc tracing: target is (arc_x, arc_z) from the threat,
