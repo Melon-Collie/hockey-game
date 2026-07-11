@@ -1132,30 +1132,30 @@ func _receive_snap(puck_pos: Vector3, puck_vel: Vector3,
 	return s
 
 
-func test_receive_takes_the_feed_in_stride_when_the_window_is_tight() -> void:
-	# Puck closing at 20; bot 3 m off the line with the crossing ~0.7 s out,
-	# moving at 6 m/s. Arriving + stopping (0.6 s) doesn't fit before the puck —
-	# so the bot keeps its speed to the line (no arrival brake) instead of
-	# braking into a late arrival.
+func test_receive_takes_the_feed_in_stride_when_roughly_synced() -> void:
+	# Puck closing at 20 with the crossing ~0.7 s out; bot 4 m off the line at
+	# 6 m/s arrives inside its own blade window of the puck — running through
+	# the reception keeps the blade on the line when the puck gets there, so no
+	# brake: full speed through the catch (stride is the DEFAULT now).
 	var s := _receive_snap(Vector3.ZERO, Vector3(20, 0, 0),
-			Vector3(14, 0, 3), Vector3(0, 0, -6))
+			Vector3(14, 0, 4), Vector3(0, 0, -6))
 	var input := InputState.new()
-	assert_true(sm._pass_receive_aim_and_steer(input, s, Vector3(14, 0, 3)),
+	assert_true(sm._pass_receive_aim_and_steer(input, s, Vector3(14, 0, 4)),
 			"scenario commits the reception")
-	assert_false(input.brake, "tight window → take it in stride, no arrival brake")
+	assert_false(input.brake, "synced arrival → take it in stride, no arrival brake")
 
 
-func test_receive_settles_when_there_is_time_to_stop() -> void:
-	# Bot already at the anchor, closing on it at 4 m/s, puck still 0.7 s away:
-	# arrive + stop fits with room, so it settles square (arrival brake engages
-	# to kill the overshoot).
+func test_receive_settles_only_when_genuinely_early() -> void:
+	# Bot already sitting ON the anchor at 4 m/s with the puck still a full
+	# second away — far outside the blade window its motion covers, so waiting
+	# is forced and it brakes to hold the gate.
 	var self_pos := Vector3(14, 0, 1.4)
-	var s := _receive_snap(Vector3.ZERO, Vector3(20, 0, 0),
+	var s := _receive_snap(Vector3(-6, 0, 0), Vector3(20, 0, 0),
 			self_pos, Vector3(0, 0, -4))
 	var input := InputState.new()
 	assert_true(sm._pass_receive_aim_and_steer(input, s, self_pos),
 			"scenario commits the reception")
-	assert_true(input.brake, "time to spare → settle square on the line")
+	assert_true(input.brake, "genuinely early → brake and hold the gate")
 
 
 # ── Pass lead origin = the carried puck ──────────────────────────────────────

@@ -1640,20 +1640,24 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 			self_pos, body_anchor, self_vel, _self_max_speed)
 	if bot_eta > puck_eta * RECEIVE_TIMING_MARGIN:
 		return false
-	# Commit. Settle on the line only when there's TIME to settle: the arrival
-	# brake costs real seconds the timing gate above never priced, so a marginal
-	# commit that brakes arrives late and the "reachable" pass slides past the
-	# blade. If arriving AND stopping both fit before the puck gets here, settle
-	# square (calmest catch posture). Otherwise take the feed IN STRIDE — keep
-	# skating to the line at pace. The receiver-relative model (#373) makes that
-	# honest: running with or across a magnet-pace feed leaves the closing speed
-	# at or under the puck's own pace (a perpendicular crossing at full sprint
-	# adds ~2 m/s over it), still inside the catchable band, and reaching the
-	# line beats arriving composed-but-late every time.
+	# Commit. Receive IN STRIDE by default — brake only when waiting is
+	# geometrically unavoidable. Settling buys nothing for the catch itself
+	# (#373's relative frame: running with or across a magnet-pace feed keeps the
+	# closing speed inside the catchable band — a perpendicular crossing at full
+	# sprint adds ~2 m/s over the puck's own pace) and it kills the rush: a
+	# stopped receiver pays full re-acceleration after the catch. The one case
+	# that NEEDS the brake is arriving so early that continued motion carries the
+	# blade past the puck's line before the puck shows up. The blade's own reach
+	# buys a window around the line-crossing (~2 × gate reach / speed of covered
+	# time); only when the puck is later than that window is waiting forced — and
+	# then stopping square at the gate is the correct wait. A near-stationary bot
+	# has an effectively unbounded window (nothing carries it past the line).
 	var self_speed: float = sqrt(self_vel.x * self_vel.x + self_vel.z * self_vel.z)
-	var stop_time: float = self_speed / AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	var gate_reach: float = maxf(
+			_blade_reach - BLADE_REACH_BUFFER_M - RECEIVE_BODY_INSET_M, 0.4)
+	var blade_window: float = 2.0 * gate_reach / maxf(self_speed, 0.001)
 	_apply_steering(input, snapshot, self_pos, body_anchor,
-			bot_eta + stop_time < puck_eta)
+			puck_eta > bot_eta + blade_window)
 	# Aim: PARK the blade at the gate — the point where the puck's line meets our
 	# reach — and let the puck arrive into it. Tracking the puck's position (the
 	# old aim) failed two ways: the cursor (capped at Hands blade speed ~10 m/s)
