@@ -660,8 +660,12 @@ For calibration confidence, the behaviors that checked out against teaching/data
   when every lane is covered with an opponent on the puck the goalie smothers it (`COVERING`,
   a glove-race). Resolution is ruleset-split: NHL whistles a defensive-zone faceoff (reusing
   the icing dot machinery); ARCADE/OFF run a flow-preserving hold-and-release.
-- **No behind-net puck handling / dump stopping** — a large distinct real skill set; nothing in
-  the current model pretends to it.
+- **Behind-net puck handling: tier-1 implemented post-audit** — the conservative rim stop
+  ("stop it, leave it, get back"): paddle-down trap behind the cage, ultra-conservative
+  go/no-go race (`puck_play_race_clear` — full-sprint forechecker, whole-trip clock, fat
+  margin, net-front veto), per-tick abort hysteresis, HARD tier only. The misplay-prone
+  tiers (setting to a side, glass rims, outlet passes) remain deliberately absent — a pure
+  stop has no turnover mode.
 - **No desperation saves** (dives, paddle stacks, scorpions) — rare IRL, pure spectacle; noted
   as possible future polish, not a realism gap that changes outcomes.
 - **Client-side goalie is a pure interpolator** — networking choice, no realism interaction.

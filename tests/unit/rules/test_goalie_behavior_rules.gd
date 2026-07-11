@@ -967,3 +967,40 @@ func test_clear_unforced_keeps_natural_pick() -> void:
 	var v: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
 			Vector3(1.0, 0, 25), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0, 0.0)
 	assert_gt(v.x, 0.0)
+
+# ── Behind-net puck play (tier-1 conservative rim stop) ───────────────────────
+
+func test_travel_time_inverts_reachable_distance() -> void:
+	# travel_time_from_rest is the inverse of reachable_lateral_distance: the
+	# distance reachable in t takes exactly t to travel.
+	var t_mid: float = 0.2   # inside the accel ramp (ramp ends at 3.8/14 ≈ 0.27)
+	var d_mid: float = GoalieBehaviorRules.reachable_lateral_distance(3.8, 14.0, t_mid)
+	assert_almost_eq(GoalieBehaviorRules.travel_time_from_rest(d_mid, 3.8, 14.0), t_mid, 0.001)
+	var t_long: float = 1.5  # past the ramp, cruising
+	var d_long: float = GoalieBehaviorRules.reachable_lateral_distance(3.8, 14.0, t_long)
+	assert_almost_eq(GoalieBehaviorRules.travel_time_from_rest(d_long, 3.8, 14.0), t_long, 0.001)
+
+func test_puck_play_race_needs_full_trip_plus_margin() -> void:
+	# t_play = 1.0 out + 0.25 beat + 1.0 back = 2.25 s; margin 0.9 → the
+	# sprinting opponent must be > 3.15 s away (34.7 m at 11 m/s).
+	assert_true(GoalieBehaviorRules.puck_play_race_clear(
+			1.0, 1.0, 0.25, 40.0, 11.0, 0.9), "distant forecheck → safe to go")
+	assert_false(GoalieBehaviorRules.puck_play_race_clear(
+			1.0, 1.0, 0.25, 30.0, 11.0, 0.9), "forecheck inside the margin → stay home")
+
+func test_puck_play_abort_margin_is_a_real_hysteresis() -> void:
+	# A pressure distance that passes the smaller abort margin but fails the
+	# go margin: mid-trip the goalie continues, but he would never have LEFT
+	# for it — bail-early hysteresis in the safe direction.
+	var t_out: float = 1.0
+	var t_back: float = 1.0
+	assert_false(GoalieBehaviorRules.puck_play_race_clear(
+			t_out, t_back, 0.25, 31.0, 11.0, 0.9), "wouldn't GO at this pressure")
+	assert_true(GoalieBehaviorRules.puck_play_race_clear(
+			t_out, t_back, 0.25, 31.0, 11.0, 0.45), "…but mid-trip it isn't a bail yet")
+
+func test_cannot_beat_the_rim_means_no_go() -> void:
+	# The stop only works if the goalie arrives SET before the puck: a rim
+	# 4 m out at 10 m/s (0.4 s) vs a 0.5 s skate + 0.15 s set → no-go.
+	assert_false(GoalieBehaviorRules.can_beat_puck_to_stop(0.5, 4.0, 10.0, 0.15))
+	assert_true(GoalieBehaviorRules.can_beat_puck_to_stop(0.5, 8.0, 10.0, 0.15))

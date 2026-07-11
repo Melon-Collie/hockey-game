@@ -371,3 +371,34 @@ func test_clear_strike_has_a_windup_beat() -> void:
 	var gc: GoalieController = _gc()
 	assert_between(gc.sweep_windup_s, 0.08, 0.25,
 			"backswing beat — the stick, not telekinesis, clears the puck")
+
+
+# ── Behind-net puck play: conservative doctrine ───────────────────────────────
+
+func test_puck_play_is_ultra_conservative() -> void:
+	# "Stop it, leave it, get back" with a fat surplus: the go margin is a
+	# real safety buffer, the abort margin is strictly smaller (bail-early
+	# hysteresis), the assumed forechecker is at/above a skater's true sprint
+	# ceiling, and a net-front lurker vetoes the trip from well out. An AI
+	# goalie mistake behind the net is the most frustrating failure available,
+	# so every knob here errs toward staying home.
+	var gc: GoalieController = _gc()
+	assert_gt(gc.puck_play_go_margin, 0.6, "fat GO surplus")
+	assert_lt(gc.puck_play_abort_margin, gc.puck_play_go_margin,
+			"abort threshold strictly tighter than go — hysteresis bails early")
+	assert_true(gc.puck_play_opponent_speed >= GameRules.DEFAULT_SKATER_MAX_SPEED_M_S,
+			"pressure clock assumes a full-sprint forechecker")
+	assert_gt(gc.puck_play_net_front_exclusion, 2.0,
+			"a net-front lurker vetoes leaving the net outright")
+	assert_lt(gc.puck_play_skate_speed, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S,
+			"goalies skate slower than skaters — the race must reflect it")
+
+func test_only_the_top_tier_plays_the_puck() -> void:
+	# Timid puck play is a real weaker-goalie trait — and it means the feature
+	# carries zero risk on the tiers most players face. HARD's margin equals
+	# the authored default (the profile contract).
+	assert_true(is_inf(GoalieSkillProfile.easy().puck_play_go_margin_s))
+	assert_true(is_inf(GoalieSkillProfile.normal().puck_play_go_margin_s))
+	var gc: GoalieController = _gc()
+	assert_almost_eq(GoalieSkillProfile.hard().puck_play_go_margin_s,
+			gc.puck_play_go_margin, 0.0001)

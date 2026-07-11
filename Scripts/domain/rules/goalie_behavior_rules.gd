@@ -604,6 +604,59 @@ static func reachable_lateral_distance(max_speed: float, accel: float, t: float)
 	return max_speed * t - 0.5 * max_speed * t_ramp
 
 
+# ── Behind-net puck play (tier-1 conservative rim stop) ──────────────────────
+# The goalie leaves the net ONLY to stop a rim behind it — "stop it, leave it,
+# get back" — never to carry or pass (the misplay-prone tiers of real puck
+# handling are deliberately absent: an AI turnover behind the net is the most
+# frustrating failure a goalie AI can produce, and a pure stop has no turnover
+# mode; the only failure is a bad GO decision, which is what these races pin).
+# Everything is deliberately conservative:
+#   - the forechecker is modeled at FULL SPRINT from the first instant (no
+#     reaction delay, no acceleration ramp) — the fastest opponent physics
+#     allows, so the pressure clock always under-estimates the available time;
+#   - the goalie's clock counts the WHOLE trip — out, the stop beat, and the
+#     return to his post — before pressure arrives, not just the touch;
+#   - callers re-run the race mid-trip with a stricter margin (abort
+#     hysteresis): a conservative goalie visibly bails early rather than ever
+#     getting caught out.
+
+# Travel time from rest over `dist` with an accel ramp to `max_speed` — the
+# inverse of reachable_lateral_distance, for the skate out/back legs.
+static func travel_time_from_rest(dist: float, max_speed: float, accel: float) -> float:
+	if dist <= 0.0:
+		return 0.0
+	if max_speed <= 0.0:
+		return INF
+	if accel <= 0.0:
+		return dist / max_speed
+	var t_ramp: float = max_speed / accel
+	var d_ramp: float = 0.5 * accel * t_ramp * t_ramp
+	if dist <= d_ramp:
+		return sqrt(2.0 * dist / accel)
+	return t_ramp + (dist - d_ramp) / max_speed
+
+
+# Can the goalie be at the stop point, SET, before the rim arrives? A stop the
+# goalie reaches late is a deflection risk, not a stop — no-go.
+static func can_beat_puck_to_stop(
+		t_goalie_out: float, puck_dist_to_stop: float, puck_speed: float,
+		set_beat: float) -> bool:
+	return t_goalie_out + set_beat <= puck_dist_to_stop / maxf(puck_speed, 0.1)
+
+
+# The conservative go/no-go race: the nearest opponent — sprinting flat-out
+# from this instant — must not reach the stop point until the goalie's ENTIRE
+# trip (out + stop beat + return to post) plus `margin` has elapsed. Callers
+# pass a fat margin for the GO decision and a smaller one for the mid-trip
+# ABORT check (hysteresis in the safe direction).
+static func puck_play_race_clear(
+		t_goalie_out: float, t_return: float, stop_beat: float,
+		nearest_opp_dist_to_stop: float, opp_sprint_speed: float,
+		margin: float) -> bool:
+	var t_pressure: float = nearest_opp_dist_to_stop / maxf(opp_sprint_speed, 0.1)
+	return t_pressure > t_goalie_out + stop_beat + t_return + margin
+
+
 # ── Beaten-wide detection (drop-and-seal trigger) ────────────────────────────
 # A carrier driving laterally across the crease face beats a standing goalie to
 # the short side when the goalie physically can't stay square: the tuck point

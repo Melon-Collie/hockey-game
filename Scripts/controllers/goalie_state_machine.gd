@@ -18,9 +18,13 @@ extends RefCounted
 # crease when every sweep lane is covered — the real cover/freeze, resolved by
 # ruleset (NHL: whistle + defensive-zone faceoff; ARCADE: short hold, then a
 # live release). Appended last to preserve wire numbering.
+# PLAYING_PUCK is the tier-1 behind-net rim stop: skate out around the post,
+# paddle-down stop at the boards behind the net, skate back — "stop it, leave
+# it, get back", gated by an ultra-conservative go/no-go race. Appended last
+# to preserve wire numbering.
 enum State {
 	STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING, COILING,
-	VH_LEFT, VH_RIGHT, COVERING,
+	VH_LEFT, VH_RIGHT, COVERING, PLAYING_PUCK,
 }
 
 signal transitioned(prev: State, new: State)

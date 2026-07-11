@@ -204,6 +204,10 @@ class Inputs:
 	# lead" tracking (Head Trajectory). Applied uniformly at the end of
 	# build() in every state; 0 = look straight ahead (tutorial snap).
 	var head_yaw_deg: float = 0.0
+	# PLAYING_PUCK stop phase: the goalie is set at the boards behind the net
+	# with the paddle down to trap the rim (vs. the skating out/back phases,
+	# which use the mobile ready stance).
+	var puck_play_stopping: bool = false
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -261,6 +265,8 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			# while the glove still pins the puck, then the strike (which also
 			# stands the goalie up) sweeps through it.
 			_apply_sweep_anim(c, inputs)
+		GoalieStateMachine.State.PLAYING_PUCK:
+			_set_puck_play_pose(c, inputs)
 	# Head tracking applies in every state (eyes on the puck through freezes,
 	# around the post in RVH, while down). Only yaw — the per-state head
 	# position/pitch stays authored.
@@ -287,6 +293,7 @@ static func resting_body_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 0.85, 0.02)
 		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 0.85, 0.02)
 		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.48, -0.10)
+		GoalieStateMachine.State.PLAYING_PUCK:                    return Vector3(0.0,  1.06, -0.05)
 	return Vector3(0.0, 1.22, 0.0)
 
 static func resting_head_position_for_state(state: int) -> Vector3:
@@ -302,6 +309,7 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 1.45, 0.06)
 		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 1.45, 0.06)
 		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.92, -0.28)
+		GoalieStateMachine.State.PLAYING_PUCK:                    return Vector3(0.0,  1.62, -0.22)
 	return Vector3(0.0, 1.79, 0.12)
 
 
@@ -453,6 +461,23 @@ func _set_covering_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.glove_rot     = Vector3(-70.0, 0.0, 0.0)
 	c.blocker_pos   = Vector3( 0.46, 0.49, -0.18)
 	c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
+
+# Behind-net puck play. Skating out/back uses the mobile ready stance; the
+# STOP phase plants at the boards with the paddle down across the rim's path
+# (the real rim-stopping technique: stick blade/paddle flat against the ice
+# in front of the boards, body square to the incoming puck). First-pass
+# authored numbers — verify in-editor.
+func _set_puck_play_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	_set_ready_pose(c, inputs)
+	if not inputs.puck_play_stopping:
+		return
+	# Paddle-down trap: blocker drops low and forward, blade flat on the ice
+	# across the boards lane; glove low and ready beside it for a bouncing rim.
+	c.blocker_pos = Vector3(0.34, 0.32, -0.42)
+	c.blocker_rot = Vector3(STICK_TILT_BUTTERFLY, 0.0, -10.0)
+	c.glove_pos = Vector3(-0.38, 0.55, -0.30)
+	c.body_rot = Vector3(-18.0, 0.0, 0.0)
+
 
 func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	# RVH stick swings toward the post. Z rotation rolls the stick laterally
