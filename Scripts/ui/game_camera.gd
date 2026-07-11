@@ -37,6 +37,28 @@ const _ON_RINK_MARGIN: float = 5.0
 @export var carry_lookahead_distance: float = 4.0
 @export var carry_lookahead_full_speed: float = 12.0
 
+# ── Carrier Vision ────────────────────────────────────────────────────────────
+# Carrying collapses the player+puck fit set to a point, which pins the dynamic
+# zoom at min height — a close-up exactly when the carrier most needs to read
+# the ice (the ozone goal fit rescues the attacking zone; neutral and defensive
+# zones had nothing). Extend the fit extent with a vision point ahead of the
+# carrier: `carry_vision_min_distance` m up-ice (attacking direction) when
+# slow, easing toward `carry_vision_distance` m along the skating direction at
+# `carry_lookahead_full_speed`. The velocity lean never tilts behind the play —
+# a backward regroup keeps the probe up-ice, where the carrier's eyes are
+# (looking for the outlet), at full length. The zoom opens to fit it and the
+# zone bias spends the extra slack shifting the frame ahead — same pattern as
+# the ozone goal fit, so the neutral-zone carry reads like a smaller version
+# of the attacking-zone framing.
+@export var carry_vision_distance: float = 12.0
+@export var carry_vision_min_distance: float = 5.0
+
+# Minimum distance (m) the local skater is kept inside the frame edge. The
+# zone-bias shift and carrier lookahead are each individually bounded, but
+# their SUM can push the trailing player past the visible extent at full
+# speed — this clamp is the hard guarantee the player never leaves frame.
+@export var player_frame_margin: float = 2.0
+
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
 @export var max_height: float = 40.0
@@ -121,6 +143,32 @@ func _get_attacking_direction() -> int:
 	if attacking_goal == null:
 		return 0
 	return 1 if attacking_goal.defending_team_id == 0 else -1
+
+# The point ahead of the carrier the camera should keep in frame. Blends from
+# a fixed up-ice (attacking-direction) probe when slow toward a
+# skating-direction probe at `carry_lookahead_full_speed`, and clamps to the
+# rink so out-of-bounds space never drives the zoom. The probe never points
+# behind the play: the velocity lean is weighted down by how backward the
+# skate is, so a straight-backward regroup degrades to the pure up-ice probe
+# (net up-ice component stays >= 0 for any velocity). Falls back to the player
+# position (a framing no-op) when there's no direction at all — stationary or
+# retreating with no attack context.
+func _carrier_vision_point(player_pos: Vector3, attack_dir: int) -> Vector3:
+	var vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
+	var speed: float = vel_xz.length()
+	var t_speed: float = clampf(speed / carry_lookahead_full_speed, 0.0, 1.0)
+	var vision_dir: Vector3 = Vector3(0.0, 0.0, float(attack_dir))
+	if speed > 0.5:
+		var vel_dir: Vector3 = vel_xz / speed
+		var backness: float = clampf(-vel_dir.z * float(attack_dir), 0.0, 1.0)
+		vision_dir = vision_dir.lerp(vel_dir, t_speed * (1.0 - backness))
+	if vision_dir.length_squared() < 0.0001:
+		return player_pos
+	var vision_len: float = lerpf(carry_vision_min_distance, carry_vision_distance, t_speed)
+	var point: Vector3 = player_pos + vision_dir.normalized() * vision_len
+	point.x = clampf(point.x, -rink_half_width, rink_half_width)
+	point.z = clampf(point.z, -rink_half_length, rink_half_length)
+	return point
 
 func shake(trauma: float) -> void:
 	if not PlayerPrefs.screen_shake:
@@ -239,6 +287,14 @@ func _physics_process(delta: float) -> void:
 			var goal_z: float = float(attack_dir_now) * GameRules.GOAL_LINE_Z
 			fit_min_z = minf(fit_min_z, goal_z)
 			fit_max_z = maxf(fit_max_z, goal_z)
+		# Carrier vision: fit a probe point ahead of the carrier so the zoom
+		# opens up instead of sitting at min height on the collapsed
+		# player+puck span (see the Carrier Vision exports).
+		if fit_puck and puck.get_carrier() == skater:
+			var vision_point: Vector3 = _carrier_vision_point(player_pos, attack_dir_now)
+			half_span_x = maxf(half_span_x, absf(vision_point.x - base_center.x))
+			fit_min_z = minf(fit_min_z, vision_point.z)
+			fit_max_z = maxf(fit_max_z, vision_point.z)
 	var half_span_z: float = (fit_max_z - fit_min_z) * 0.5
 
 	var needed_x: float = (half_span_x + zoom_padding) / (tan_half_fov * aspect)
@@ -300,6 +356,18 @@ func _physics_process(delta: float) -> void:
 				var lookahead: Vector3 = (carrier_vel_xz / carrier_speed) * t_speed * carry_lookahead_distance
 				target_center.x += lookahead.x
 				target_center.z += lookahead.z
+
+		# ── Step 3c: Keep the local skater in frame ──────────────────────────
+		# The zone-bias shift and carrier lookahead are each bounded, but their
+		# sum can push the trailing player past the frame edge at full speed
+		# (the rink clamp masks this in the end zones; open ice doesn't).
+		# Hard-clamp the center so the player always stays visible with a
+		# margin. The puck needs no equivalent: off-puck it bounds the bias
+		# slack directly, on-puck it rides with the player.
+		var keep_x: float = maxf(visible_half_x - player_frame_margin, 0.0)
+		var keep_z: float = maxf(visible_half_z - player_frame_margin, 0.0)
+		target_center.x = clampf(target_center.x, player_pos.x - keep_x, player_pos.x + keep_x)
+		target_center.z = clampf(target_center.z, player_pos.z - keep_z, player_pos.z + keep_z)
 
 		# ── Step 4: Rink clamp ────────────────────────────────────────────────
 		# Keep the dynamic framing on valid ice. Locked mode deliberately skips
