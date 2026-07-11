@@ -44,10 +44,12 @@ const _ON_RINK_MARGIN: float = 5.0
 # zones had nothing). Extend the fit extent with a vision point ahead of the
 # carrier: `carry_vision_min_distance` m up-ice (attacking direction) when
 # slow, easing toward `carry_vision_distance` m along the skating direction at
-# `carry_lookahead_full_speed`. The zoom opens to fit it and the zone bias
-# spends the extra slack shifting the frame ahead — same pattern as the ozone
-# goal fit, so the neutral-zone carry reads like a smaller version of the
-# attacking-zone framing.
+# `carry_lookahead_full_speed`. The velocity lean never tilts behind the play —
+# a backward regroup keeps the probe up-ice, where the carrier's eyes are
+# (looking for the outlet), at full length. The zoom opens to fit it and the
+# zone bias spends the extra slack shifting the frame ahead — same pattern as
+# the ozone goal fit, so the neutral-zone carry reads like a smaller version
+# of the attacking-zone framing.
 @export var carry_vision_distance: float = 12.0
 @export var carry_vision_min_distance: float = 5.0
 
@@ -145,16 +147,21 @@ func _get_attacking_direction() -> int:
 # The point ahead of the carrier the camera should keep in frame. Blends from
 # a fixed up-ice (attacking-direction) probe when slow toward a
 # skating-direction probe at `carry_lookahead_full_speed`, and clamps to the
-# rink so out-of-bounds space never drives the zoom. Falls back to the player
-# position (a framing no-op) when there's no usable direction — stationary
-# with no attack context, or mid-blend cancellation while skating backward.
+# rink so out-of-bounds space never drives the zoom. The probe never points
+# behind the play: the velocity lean is weighted down by how backward the
+# skate is, so a straight-backward regroup degrades to the pure up-ice probe
+# (net up-ice component stays >= 0 for any velocity). Falls back to the player
+# position (a framing no-op) when there's no direction at all — stationary or
+# retreating with no attack context.
 func _carrier_vision_point(player_pos: Vector3, attack_dir: int) -> Vector3:
 	var vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 	var speed: float = vel_xz.length()
 	var t_speed: float = clampf(speed / carry_lookahead_full_speed, 0.0, 1.0)
 	var vision_dir: Vector3 = Vector3(0.0, 0.0, float(attack_dir))
 	if speed > 0.5:
-		vision_dir = vision_dir.lerp(vel_xz / speed, t_speed)
+		var vel_dir: Vector3 = vel_xz / speed
+		var backness: float = clampf(-vel_dir.z * float(attack_dir), 0.0, 1.0)
+		vision_dir = vision_dir.lerp(vel_dir, t_speed * (1.0 - backness))
 	if vision_dir.length_squared() < 0.0001:
 		return player_pos
 	var vision_len: float = lerpf(carry_vision_min_distance, carry_vision_distance, t_speed)
