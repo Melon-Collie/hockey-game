@@ -12,6 +12,15 @@ NHL shot-type conversion data). Sources are cited inline; the full link list is 
 accepted limitations* per the audit request — they are documented in §8 for completeness but are
 not findings. Everything else was fair game.
 
+**Implementation status (2026-07):** the five P1 findings are implemented — F1 (puck-squared
+tracking + quiet-eye smoothing via `tracking_speed_far`), F2 (0.20 s grounded butterfly drop,
+mirrored in `GOALIE_BUTTERFLY_DROP_S`, plus the pre-armed read `prearmed_reaction_delay` /
+`prearm_read_time` that restores anticipation for a set, sighted goalie reading a windup),
+F3 (`cross_crease_race_lost` fork: standing drive when the push can arrive set, drop-and-slide
+pads-first when the race is lost), F4 (blocking butterfly on fully-screened releases —
+`_maybe_arm_screen_block_drop`), F5 (speed-matched rush backflow — `rush_retreat_depth` /
+`rush_retreat_rate`). P2/P3 findings remain open.
+
 **Verdict legend:**
 - ✅ **Matches** — behavior aligns with real teaching/data
 - ⚠️ **Partial** — right idea, wrong number or missing a piece

@@ -63,7 +63,12 @@ func reset() -> void:
 # source — a screen blocking the sightline, or being caught moving / unset at
 # release. It pushes BOTH processing timers back: the goalie reads the leg drop
 # AND the arm reach late.
-func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: float, back_date_s: float = 0.0, read_delay_s: float = 0.0) -> void:
+# `arm_delay_cut_s` is the anticipation credit on the ARM read (the legs' credit
+# arrives via a reduced `delay`): a set goalie who has been reading a visible
+# windup has pre-programmed the response during the fixation (quiet-eye), so both
+# limbs start sooner. Never cuts below zero.
+func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: float,
+		back_date_s: float = 0.0, read_delay_s: float = 0.0, arm_delay_cut_s: float = 0.0) -> void:
 	# Cap back-date at 0.5s. Beyond that the connection is too rough for fair
 	# lag-comp and we'd be starting reactions already past the puck-impact
 	# moment, which looks like teleporting saves on the shooter's view.
@@ -76,7 +81,8 @@ func start(new_impact_x: float, new_impact_y: float, elevated: bool, delay: floa
 	age = back_date_s
 	clear_timer = -1.0
 	shot_timer = maxf(delay + read_delay_s - back_date_s, 0.0)
-	arm_timer = maxf(arm_reaction_delay + read_delay_s - back_date_s, 0.0)
+	arm_timer = maxf(arm_reaction_delay - maxf(arm_delay_cut_s, 0.0) \
+			+ read_delay_s - back_date_s, 0.0)
 	started.emit(impact_x, impact_y, is_elevated)
 
 # Tick the shot/arm processing delays. Both decrement toward zero (clamped).

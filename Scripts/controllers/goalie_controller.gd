@@ -77,6 +77,24 @@ extends Node
 # circles; slower pucks have to get correspondingly closer before it commits.
 @export var drop_max_time_to_impact: float = 0.45
 
+# ── Pre-armed read (quiet-eye anticipation) ──────────────────────────────────
+# A goalie who has been READING a visible windup — wrister drag or slapper charge
+# from a slot shooter (_is_reading_shot_threat) — for `prearm_read_time` has the
+# save response pre-programmed during the fixation, so on release both the leg
+# and arm reads start from `prearmed_reaction_delay` instead of the cold-read
+# baseline. GROUNDED (audit F2/F15): quiet-eye research (Panchuk & Vickers) has
+# the save prepared during a ~1 s fixation and executed ballistically in
+# <200 ms, and Clear Sight Analytics' set-and-sighted threshold is ~0.5 s of
+# clear read before release (~97% save when met). Screens and caught-moving
+# penalties still ADD on top, so only a set, sighted goalie collects the credit
+# — and quick-release snaps (no windup state, nothing to fixate) never prime,
+# which is exactly the real "quick release beats the read" edge. The prime
+# lingers `prearm_linger` past the read so the release event can't race the
+# flag off on the same tick the windup state clears.
+@export var prearmed_reaction_delay: float = 0.07
+@export var prearm_read_time: float = 0.40
+@export var prearm_linger: float = 0.25
+
 # Imminence gate on STARTING a release reaction at all. A release whose puck is
 # more than this many seconds from crossing the goal line doesn't begin a
 # reaction (no freeze, no arm read) — it's too far to be worth committing to.
@@ -149,6 +167,13 @@ extends Node
 @export var five_hole_t_push_max: float = 0.10
 
 @export var tracking_speed: float = 8.0
+# Far-range tracking lerp speed — the quiet-eye lag (realism audit F1). At range
+# a real goalie's angle corrections are smooth and slightly laggy; slowing the
+# tracking lerp low-passes stickhandle wiggle (±1.5 m at ~2 Hz attenuates to
+# roughly ±0.35 m of threat motion — ≈±0.06 m of goalie arc travel at B depth)
+# without moving the squaring target off the puck. Blended from `tracking_speed`
+# (in tight) toward this by the chest_track distance ramp.
+@export var tracking_speed_far: float = 3.0
 @export var part_lerp_speed: float = 6.0
 @export var reaction_lerp_speed: float = 18.0
 # Recovery rises body parts from butterfly pose → READY pose. Default tuned
@@ -158,23 +183,29 @@ extends Node
 @export var recovery_lerp_speed: float = 9.0
 
 # ── Threat tracking ───────────────────────────────────────────────────────────
-# "Play the chest, not the puck": carrier body is steady while the puck swings
-# ±1.5 m during stickhandling. Higher weights track the carrier; pure-puck
-# tracking causes the goalie to shuffle perfectly into 5-hole shots. With the
-# active blade / poke / sweep systems now disrupting close-range puck control,
-# we can afford to bias slightly more toward the puck — the goalie's stick
-# pressures the carrier into committing rather than the body chasing dangles.
-@export var shooter_weight_standing: float = 0.40
-@export var shooter_weight_butterfly: float = 0.60
-# Distance-scaled chest tracking. A real goalie plays the shooter's chest at
-# range and only tracks the puck itself in tight, so a stickhandle at the point
-# doesn't wobble the body. Between `chest_track_near_distance` (full puck
-# tracking) and `chest_track_far_distance` (play the chest) the effective
-# shooter_weight lerps toward `shooter_weight_far` and the jittery puck-velocity
-# lead fades to zero. Distances are Euclidean carrier→goal-center.
+# Square to the PUCK. Real doctrine is unanimous (realism audit F1): a goalie
+# sets his angle off the puck at every range — "chin lined up with the shooter's
+# body" is the canonical coached ERROR, and quiet-eye research puts elite gaze on
+# the puck and stick blade, not the torso. The shooter's body is an anticipation
+# CUE (pre-lean, slapper tell), never the squaring target. A small body weight
+# survives only in tight — where the puck-to-body offset subtends a huge angle
+# and a dash of body bias keeps committed-drive reads stable — and it fades OUT
+# with distance (the real error gradient: at range the offset angle is tiny, so
+# puck-tracking costs almost nothing in jitter and buys correct angles).
+# Stickhandle jitter is absorbed TEMPORALLY instead: the tracking lerp slows
+# with distance (`tracking_speed_far` — the quiet-eye lag), low-passing the
+# dangle wiggle without moving the goalie's set point off the puck.
+@export var shooter_weight_standing: float = 0.25
+@export var shooter_weight_butterfly: float = 0.30
+# Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
+# scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
+# effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
+# is puck-squared at range), the jittery puck-velocity lead fades to zero, and
+# the tracking lerp slows toward `tracking_speed_far`. Distances are Euclidean
+# carrier→goal-center.
 @export var chest_track_near_distance: float = 2.5
 @export var chest_track_far_distance: float = 7.0
-@export var shooter_weight_far: float = 0.90
+@export var shooter_weight_far: float = 0.10
 # Lead-the-target time. Threat position projects forward by
 # `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
 # toward where the carrier WILL be — the realistic answer to "skater is
@@ -211,6 +242,26 @@ extends Node
 # the goal line entirely.
 @export var lateral_pressure_depth_pull: float = 0.20  # m of retreat per m/s of deficit
 @export var lateral_pressure_max_pull: float = 0.50    # m max retreat from Buckley depth
+
+# ── Rush retreat (speed-matched backflow) ────────────────────────────────────
+# Against a CLOSING opposing carrier inside `rush_engage_distance`, depth follows
+# the taught backflow curve instead of the chart's flat aggressive zone: back at
+# crease-top depth by the hash marks (`rush_mid_distance` → depth_base), at
+# goal-line depth as the attacker reaches the crease (`rush_arrive_distance` →
+# depth_defensive), retreating at a rate MATCHED to the attacker's closing speed
+# (GoalieBehaviorRules.rush_retreat_rate) so the challenge gap is a modeled read
+# rather than lerp lag (realism audit F5 — the old chart held full aggressive
+# depth until 2 m and relied on the depth lerp to catch a rush, so the actual
+# gap on a fast rush was an artifact of smoothing convergence). A slow walk-in
+# below `rush_min_closing_speed` keeps the challenge (stay out, force the
+# release — the taught read against a controlled carrier); a rush that stalls
+# lets the chart re-challenge. The real counter-dynamics fall out: decelerating
+# strands the goalie out at challenge depth (more net to shoot at — the taught
+# breakaway trade), while a speed rush arrives on a goalie already at depth.
+@export var rush_engage_distance: float = 8.0
+@export var rush_mid_distance: float = 4.5
+@export var rush_arrive_distance: float = 1.5
+@export var rush_min_closing_speed: float = 1.5
 
 # ── Backdoor-aware depth (anticipatory) ──────────────────────────────────────
 # The lateral-pressure retreat above is REACTIVE — it reads puck velocity, i.e.
@@ -273,7 +324,16 @@ extends Node
 # stand up first (RECOVERING window).
 @export var butterfly_min_hold_time: float = 0.35   # s the goalie must stay down
 @export var recovery_duration: float = 0.35         # s spent standing back up
-@export var butterfly_drop_speed: float = 0.05      # s for pads to close to floor
+# Pads-to-floor time. GROUNDED (realism audit F2): motion capture of a pro
+# goalie measures butterfly drop velocity at 2.07 ± 0.09 m/s (Brock Univ.,
+# Sports 10(6):96) — over the ~0.4 m the pads/hips fall, the ice seal lands
+# ~0.2 s after commitment. The old 0.05 snap was ~5× faster than a real drop
+# and made the five-hole close near-instantly once the leg read elapsed. The
+# gap also closes CONTINUOUSLY through the drop (openness converges during
+# drop_progress), so the effective five-hole seal — gap narrower than the puck
+# — lands well before full completion. Mirrors AIActionScoring.GOALIE_
+# BUTTERFLY_DROP_S; change both together.
+@export var butterfly_drop_speed: float = 0.20      # s for pads to close to floor
 @export var butterfly_radius: float = 0.40          # arc radius from goal center while down
 
 # ── Butterfly slide (pivot-and-ride) ─────────────────────────────────────────
@@ -676,6 +736,7 @@ var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
 var _crease_jam_cfg: GoalieBehaviorRules.CreaseJamConfig
 var _beaten_wide_cfg: GoalieBehaviorRules.BeatenWideConfig
 var _backdoor_cfg: GoalieBehaviorRules.BackdoorThreatConfig
+var _rush_cfg: GoalieBehaviorRules.RushRetreatConfig
 # Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
 # array. PackedVector3Array.clear() keeps capacity across shots.
 var _screen_positions: PackedVector3Array = PackedVector3Array()
@@ -711,6 +772,19 @@ var _cross_crease_target_x: float = 0.0
 # from a slot shooter. While > 0 the cross-crease desperation push is suppressed
 # (the goalie committed to the shot and is late on the back door).
 var _shot_commit_timer: float = 0.0
+# Pre-armed read state (quiet-eye anticipation): `_shot_read_timer` accumulates
+# while the goalie is continuously reading a windup; once it crosses
+# `prearm_read_time`, `_prime_linger_timer` holds the primed flag briefly so the
+# release itself (which clears the windup state) can't race it off.
+var _shot_read_timer: float = 0.0
+var _prime_linger_timer: float = 0.0
+# Blocking-drop timer for fully-screened releases (audit F4): >= 0 counts down
+# from the base leg read; on expiry the goalie commits the blocking butterfly
+# without waiting to SEE the puck. -1 = inactive.
+var _screen_block_drop_timer: float = -1.0
+# Chest-blend ramp (0 in tight → 1 at range) from the last threat computation;
+# consumed by the tracking lerp to scale the quiet-eye lag with distance.
+var _chest_t: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
@@ -1026,6 +1100,13 @@ func _build_rule_configs() -> void:
 	_backdoor_cfg.goalie_lateral_speed = t_push_speed
 	_backdoor_cfg.goalie_lateral_accel = lateral_accel
 	_backdoor_cfg.max_shooter_distance = backdoor_max_shooter_distance
+	_rush_cfg = GoalieBehaviorRules.RushRetreatConfig.new()
+	_rush_cfg.engage_distance = rush_engage_distance
+	_rush_cfg.mid_distance = rush_mid_distance
+	_rush_cfg.arrive_distance = rush_arrive_distance
+	_rush_cfg.depth_engage = depth_aggressive
+	_rush_cfg.depth_mid = depth_base
+	_rush_cfg.depth_arrive = depth_defensive
 
 func is_butterfly() -> bool:
 	return _sm.is_butterfly()
@@ -1046,6 +1127,10 @@ func reset_to_crease() -> void:
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
 	_shot_commit_timer = 0.0
+	_shot_read_timer = 0.0
+	_prime_linger_timer = 0.0
+	_screen_block_drop_timer = -1.0
+	_chest_t = 0.0
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
 	_clear_cooldown_timer = 0.0
@@ -1106,7 +1191,12 @@ func _update_tracking(delta: float) -> void:
 	# from where it actually is.
 	var target_threat: Vector3 = _compute_threat_position()
 	if puck.get_carrier() != null and not _reaction.reacting:
-		_tracked_threat_position = _tracked_threat_position.lerp(target_threat, tracking_speed * delta)
+		# Quiet-eye smoothing: the tracking lerp slows with carrier distance so
+		# far-range stickhandle wiggle is low-passed instead of chased — the
+		# temporal replacement for the old chest-weighted squaring target
+		# (realism audit F1). `_chest_t` was just set by the threat computation.
+		var track_speed: float = lerpf(tracking_speed, tracking_speed_far, _chest_t)
+		_tracked_threat_position = _tracked_threat_position.lerp(target_threat, track_speed * delta)
 	else:
 		_tracked_threat_position = target_threat
 	if is_server:
@@ -1180,6 +1270,9 @@ func _compute_threat_position() -> Vector3:
 			carrier.global_position, _goal_line_z, _goal_center_x)
 	var chest_t: float = GoalieBehaviorRules.chest_tracking_factor(
 			carrier_dist, chest_track_near_distance, chest_track_far_distance)
+	_chest_t = chest_t
+	# Body bias fades OUT with distance (shooter_weight_far < base): the goalie
+	# squares to the puck at range and keeps only a small in-tight body dash.
 	var w: float = lerpf(base_w, shooter_weight_far, chest_t)
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
@@ -1202,6 +1295,19 @@ func _compute_threat_position() -> Vector3:
 # `GoalieBodyConfigBuilder._apply_elevated_shot_reaction`).
 func _update_shot_timer(delta: float) -> void:
 	_reaction.tick_processing_timers(delta)
+	# Blocking drop for fully-screened releases: counts down the base leg read,
+	# then seals regardless of the shot's height classification or imminence —
+	# the goalie is dropping because he can't see, not reacting to what he saw.
+	# Deactivates if the reaction resolves first (save / boards / pickup).
+	if _screen_block_drop_timer >= 0.0:
+		if not _reaction.reacting:
+			_screen_block_drop_timer = -1.0
+		else:
+			_screen_block_drop_timer -= delta
+			if _screen_block_drop_timer <= 0.0:
+				_screen_block_drop_timer = -1.0
+				if _sm.is_upright():
+					_enter_butterfly()
 	if not _reaction.low_drop_ready(_sm.is_upright()):
 		return
 	# Leg drop is reflexive once the shot's read, but only commit to butterfly
@@ -1862,7 +1968,30 @@ func _update_depth(delta: float) -> void:
 	var backdoor_cap: float = _backdoor_depth_cap()
 	if backdoor_cap < target_radius:
 		target_radius = maxf(backdoor_cap, depth_defensive)
-	_current_depth = lerpf(_current_depth, target_radius, depth_speed * delta)
+	# Rush backflow (audit F5): a CLOSING opposing carrier inside the engage
+	# range retreats the goalie along the taught curve at a rate matched to the
+	# closing speed — a real backward C-cut retreat instead of lerp lag. Only
+	# ever pulls the target IN (min with the chart/caps above), and only engages
+	# while genuinely closing; a stalled or lateral carrier falls back to the
+	# chart + smoothing below.
+	var rush_rate: float = 0.0
+	var rush_carrier: Skater = puck.get_carrier()
+	if rush_carrier != null and (team_id == -1 or rush_carrier.get_team_id() != team_id):
+		var cdx: float = rush_carrier.global_position.x - _goal_center_x
+		var cdz: float = rush_carrier.global_position.z - _goal_line_z
+		var cdist: float = sqrt(cdx * cdx + cdz * cdz)
+		if cdist < rush_engage_distance and cdist > 0.001:
+			var closing: float = -(rush_carrier.velocity.x * cdx \
+					+ rush_carrier.velocity.z * cdz) / cdist
+			if closing >= rush_min_closing_speed:
+				var rush_target: float = GoalieBehaviorRules.rush_retreat_depth(cdist, _rush_cfg)
+				if rush_target < target_radius:
+					target_radius = rush_target
+					rush_rate = GoalieBehaviorRules.rush_retreat_rate(cdist, closing, _rush_cfg)
+	if rush_rate > 0.0 and target_radius < _current_depth:
+		_current_depth = move_toward(_current_depth, target_radius, rush_rate * delta)
+	else:
+		_current_depth = lerpf(_current_depth, target_radius, depth_speed * delta)
 
 # Most restrictive backdoor depth cap across the opposing off-puck skaters, or
 # INF when nothing binds. Only meaningful against an opposing carrier — a
@@ -2052,7 +2181,6 @@ func _try_commit_slide() -> void:
 	if _is_puck_in_defensive_zone():
 		return
 	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
-	var slide_rot: float = deg_to_rad(slide_max_rotation_deg)
 	# Shooter-present gate: no point sealing the back door for a puck nobody
 	# can play. Either an opposing carrier or an opposing skater within
 	# slide_loose_puck_shooter_radius of a loose puck.
@@ -2067,13 +2195,13 @@ func _try_commit_slide() -> void:
 		return
 	# Pad-coverage check. The lateral reference differs by whether the puck is
 	# carried or loose:
-	#   Carried — use the chest-weighted, distance-damped tracked threat, NOT the
-	#     raw dangled puck. A stickhandle wiggle swings the puck past the pad edge
-	#     on every deke; keying the slide off it made the goalie re-commit little
-	#     slides and skate back and forth across the crease chasing jitter. The
-	#     tracked threat only crosses the pad edge when the carrier genuinely
-	#     moves the chest across (a real cross-crease drive), which is the slide
-	#     we actually want.
+	#   Carried — use the quiet-eye-smoothed tracked threat, NOT the raw dangled
+	#     puck. A stickhandle wiggle swings the puck past the pad edge on every
+	#     deke; keying the slide off it made the goalie re-commit little slides
+	#     and skate back and forth across the crease chasing jitter. The tracked
+	#     threat (temporally low-passed, small in-tight body dash) only crosses
+	#     the pad edge on a sustained drag or a genuine cross-crease drive, which
+	#     is the slide we actually want.
 	#   Loose — project the puck forward via its velocity so a cross-crease pass /
 	#     rebound in flight commits the slide early (the back-door seal).
 	var coverage_x: float
@@ -2084,7 +2212,17 @@ func _try_commit_slide() -> void:
 	var lateral_offset: float = coverage_x - _current_x
 	if absf(lateral_offset) <= pad_edge + slide_coverage_buffer:
 		return
-	var puck_side: float = signf(lateral_offset)
+	_commit_slide_toward(coverage_x)
+
+
+# Commit the pivot slide toward `coverage_x` (world X): puck-side post seal
+# target, coil endpoints captured, transition to COILING. Shared by the
+# butterfly pad-coverage trigger (_try_commit_slide) and the standing
+# cross-crease lost-race drop-and-slide (_commit_cross_crease_response).
+func _commit_slide_toward(coverage_x: float) -> void:
+	var pad_edge: float = pad_local_offset + butterfly_pad_half_width
+	var slide_rot: float = deg_to_rad(slide_max_rotation_deg)
+	var puck_side: float = signf(coverage_x - _current_x)
 	if puck_side == 0.0:
 		return
 	var seal_target: float = _post_edge_seal_x(puck_side, pad_edge, slide_rot)
@@ -2336,12 +2474,13 @@ func _set_prelean_inputs() -> void:
 func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	if _cross_crease_timer > 0.0:
 		_cross_crease_timer -= delta
-	# Tick the human read delay; when it expires the committed drive engages.
+	# Tick the human read delay; when it expires the committed response engages
+	# (standing drive, or a drop-and-slide when the race is already lost).
 	if _cross_crease_react_timer > 0.0:
 		_cross_crease_react_timer -= delta
 		if _cross_crease_react_timer <= 0.0:
 			_cross_crease_react_timer = 0.0
-			_cross_crease_timer = cross_crease_push_duration
+			_commit_cross_crease_response()
 	if carrier != null:
 		return
 	if _reaction.reacting or _sm.is_rvh():
@@ -2371,23 +2510,63 @@ func _update_cross_crease(delta: float, carrier: Skater) -> void:
 	var target_x: float = puck.global_position.x + cross_vx * cross_crease_lead_time
 	target_x = _slide.clamp_lateral_target(target_x, _goal_center_x, net_half_width, cross_crease_drive_edge)
 	_cross_crease_target_x = target_x
-	# Read the pass once, then commit a single delayed drive — don't restart the
-	# delay or re-arm while a read or drive is already in flight.
+	# Read the pass once, then commit a single delayed response — don't restart
+	# the delay or re-arm while a read or drive is already in flight.
 	if _cross_crease_timer <= 0.0 and _cross_crease_react_timer <= 0.0:
 		if cross_crease_react_delay > 0.0:
 			_cross_crease_react_timer = cross_crease_react_delay
 		else:
-			_cross_crease_timer = cross_crease_push_duration
+			_commit_cross_crease_response()
+
+
+# The cross-crease read delay has elapsed — commit the response. Save-selection
+# fork (realism audit F3): if the standing push can still arrive before the
+# one-timer (puck flight to the crossing + the receiver's release swing — the
+# read delay is already spent), drive on the feet and arrive SET, the strong
+# outcome. If the race is already lost, standing transit is the wrong posture —
+# a real goalie goes pads-first: drop and butterfly-slide toward the crossing,
+# arriving late but SEALED along the ice (takes away the low far-side finish
+# that beats a late upright T-push). The slide runs the normal pivot machinery
+# (coil → push) and the butterfly drop animates DURING the transit — drop-and-
+# slide is one motion, as taught. A clean, hard royal-road one-timer still
+# scores on either branch; the fork only changes what the near-misses look like.
+func _commit_cross_crease_response() -> void:
+	var race_lost: bool = _sm.is_upright() \
+			and _slide.event_lockout <= 0.0 \
+			and GoalieBehaviorRules.cross_crease_race_lost(
+					_cross_crease_target_x, puck.global_position.x,
+					_loose_puck_velocity().x, _current_x, pad_local_offset,
+					backdoor_release_time, t_push_speed, lateral_accel)
+	if race_lost:
+		# Fresh butterfly entry snaps `_current_depth` to true perpendicular
+		# depth (radius→perp unit fix-up in _on_sm_transitioned) before the
+		# slide commit captures its coil endpoints.
+		_enter_butterfly()
+		_commit_slide_toward(_cross_crease_target_x)
+		return
+	_cross_crease_timer = cross_crease_push_duration
 
 # Maintain the shot-commit window. The goalie is "committed" while it reads a
 # charging shot from an opposing slot shooter; the timer lingers
 # `prelean_commit_window` seconds after the read so a pass fired at the very end
 # of the windup still lands inside it. Consumed by _update_cross_crease.
+# Also accumulates the pre-armed read (quiet-eye): a continuous windup read of
+# `prearm_read_time` primes the shorter release delays, held through
+# `_prime_linger_timer` so the release (which clears the windup state, possibly
+# earlier in the same tick) can't race the prime off before _on_puck_released
+# consumes it.
 func _update_shot_commit(delta: float, carrier: Skater) -> void:
 	if _shot_commit_timer > 0.0:
 		_shot_commit_timer = maxf(_shot_commit_timer - delta, 0.0)
+	if _prime_linger_timer > 0.0:
+		_prime_linger_timer = maxf(_prime_linger_timer - delta, 0.0)
 	if _is_reading_shot_threat(carrier):
 		_shot_commit_timer = prelean_commit_window
+		_shot_read_timer += delta
+		if _shot_read_timer >= prearm_read_time:
+			_prime_linger_timer = prearm_linger
+	else:
+		_shot_read_timer = 0.0
 
 # True when an opposing carrier in the slot is winding up a shot (wrister drag or
 # slapshot charge) close enough that the goalie respects it. Drives both the
@@ -2436,17 +2615,34 @@ func _check_universal_reaction() -> void:
 				team_id, puck.global_position.x, puck.global_position.z,
 				puck.linear_velocity.length(), result.impact_x,
 				"ELEVATED" if result.is_elevated else "low"])
+	# No pre-arm on the universal path — a loose puck has no windup to have been
+	# reading. The screen/moving penalties apply the same as a release read, and
+	# a fully-screened trajectory takes the blocking drop the same way.
+	var screen_d: float = _screen_delay(vel)
+	var move_d: float = _movement_read_delay()
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
-			result.reaction_delay, 0.0, _read_extra_delay(vel))
+			result.reaction_delay, 0.0, screen_d + move_d)
+	_maybe_arm_screen_block_drop(screen_d, move_d, 0.0)
 
 
-# Total extra latency before the goalie picks up the shot: a screen hiding the
-# puck PLUS being caught moving / unset at the read. Both push the leg drop and
-# arm reach back. Computed once per shot (event-driven), off the hot path.
-# `shot_velocity` is the release velocity — the occlusion delay needs the shot's
-# speed and heading to know how long a screener hides the puck.
-func _read_extra_delay(shot_velocity: Vector3) -> float:
-	return _screen_delay(shot_velocity) + _movement_read_delay()
+# Fully-screened release → BLOCKING save selection (realism audit F4). When the
+# worst screener hides the puck for the whole capped window — the goalie
+# effectively never sees the release — real doctrine flips from reacting to
+# blocking: commit the butterfly on the release READ (base leg delay + the
+# caught-moving penalty, but NO screen wait — the goalie drops *because* he
+# can't see, he isn't waiting to see) and eat the top-corner exposure that
+# blocking concedes. The arm reach still pays the full screen delay (you can't
+# reach at what you can't see); only the leg seal goes early. The normal
+# `drop_max_time_to_impact` imminence gate is bypassed when the timer fires —
+# a screened point shot is exactly the far release that gate normally defers.
+func _maybe_arm_screen_block_drop(screen_d: float, move_d: float, back_date: float) -> void:
+	if screen_max_extra_delay <= 0.0:
+		return
+	if screen_d < screen_max_extra_delay - 0.001:
+		return
+	if not _sm.is_upright():
+		return
+	_screen_block_drop_timer = maxf(reaction_delay + move_d - back_date, 0.0)
 
 
 # Screen contribution: gather every body that could hide the puck from the goalie
@@ -2527,8 +2723,21 @@ func _on_puck_released() -> void:
 	# the upper net to reach. Both run in parallel; start() arms both, and
 	# `back_date` lag-comps client-initiated releases so the goalie gets the
 	# same effective reaction window the shooter perceived.
+	# The extra-read sources are split (not summed via a helper) because the
+	# screen part also drives the blocking-drop selection, and a pre-armed read
+	# (quiet-eye — the goalie was already fixated on this windup) replaces the
+	# cold-read baseline on both limbs.
+	var release_vel: Vector3 = puck.get_release_velocity()
+	var screen_d: float = _screen_delay(release_vel)
+	var move_d: float = _movement_read_delay()
+	var leg_delay: float = result.reaction_delay
+	var arm_cut: float = 0.0
+	if _prime_linger_timer > 0.0:
+		leg_delay = minf(leg_delay, prearmed_reaction_delay)
+		arm_cut = maxf(reaction_delay - prearmed_reaction_delay, 0.0)
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
-			result.reaction_delay, back_date, _read_extra_delay(puck.get_release_velocity()))
+			leg_delay, back_date, screen_d + move_d, arm_cut)
+	_maybe_arm_screen_block_drop(screen_d, move_d, back_date)
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
 # don't trigger spurious slides, starts the reaction clear delay, and drops

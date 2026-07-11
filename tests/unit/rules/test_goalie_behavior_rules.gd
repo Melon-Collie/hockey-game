@@ -832,3 +832,79 @@ func test_backdoor_cap_symmetric_for_minus_z_goal() -> void:
 			Vector3(-4, 0, -23), Vector3(-4, 0, -23), Vector3(1.2, 0, -25.2),
 			-26.6, 0.0, 1, _backdoor_cfg())
 	assert_almost_eq(cap, 1.131, 0.02)
+
+# ── rush_retreat (speed-matched backflow) ─────────────────────────────────────
+
+func _rush_cfg() -> GoalieBehaviorRules.RushRetreatConfig:
+	var cfg := GoalieBehaviorRules.RushRetreatConfig.new()
+	cfg.engage_distance = 8.0
+	cfg.mid_distance = 4.5
+	cfg.arrive_distance = 1.5
+	cfg.depth_engage = 1.75
+	cfg.depth_mid = 1.30
+	cfg.depth_arrive = 0.10
+	return cfg
+
+func test_rush_depth_holds_engage_depth_outside_range() -> void:
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(8.0, _rush_cfg()), 1.75, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(12.0, _rush_cfg()), 1.75, 0.0001)
+
+func test_rush_depth_hits_crease_top_at_hash_marks() -> void:
+	# Mid anchor: attacker at the hash marks → heels back at crease-top depth.
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(4.5, _rush_cfg()), 1.30, 0.0001)
+
+func test_rush_depth_reaches_arrive_depth_at_crease() -> void:
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(1.5, _rush_cfg()), 0.10, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(0.5, _rush_cfg()), 0.10, 0.0001)
+
+func test_rush_depth_interpolates_between_anchors() -> void:
+	# Halfway through each segment sits halfway between its anchor depths.
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(6.25, _rush_cfg()), 1.525, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(3.0, _rush_cfg()), 0.70, 0.0001)
+
+func test_rush_rate_is_slope_times_closing_speed() -> void:
+	# Far segment slope: (1.75-1.30)/3.5 per metre; at 8 m/s closing the
+	# retreat rate tracks the curve exactly.
+	var expected_far: float = (1.75 - 1.30) / 3.5 * 8.0
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(6.0, 8.0, _rush_cfg()), expected_far, 0.0001)
+	# Near segment is steeper: (1.30-0.10)/3.0 per metre.
+	var expected_near: float = (1.30 - 0.10) / 3.0 * 8.0
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(3.0, 8.0, _rush_cfg()), expected_near, 0.0001)
+
+func test_rush_rate_scales_with_closing_speed() -> void:
+	var slow: float = GoalieBehaviorRules.rush_retreat_rate(3.0, 2.0, _rush_cfg())
+	var fast: float = GoalieBehaviorRules.rush_retreat_rate(3.0, 8.0, _rush_cfg())
+	assert_almost_eq(fast, slow * 4.0, 0.0001)
+
+func test_rush_rate_zero_outside_curve_or_not_closing() -> void:
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(9.0, 8.0, _rush_cfg()), 0.0, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(1.0, 8.0, _rush_cfg()), 0.0, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(3.0, -1.0, _rush_cfg()), 0.0, 0.0001)
+
+# ── cross_crease_race_lost (drive vs drop-and-slide fork) ─────────────────────
+
+func test_cross_crease_race_won_when_already_covering() -> void:
+	# Crossing point inside standing pad coverage → nothing to race.
+	assert_false(GoalieBehaviorRules.cross_crease_race_lost(
+			0.3, -2.0, 12.0, 0.0, 0.42, 0.15, 3.8, 14.0))
+
+func test_cross_crease_race_lost_on_hard_royal_road_pass() -> void:
+	# Hard pass (16 m/s) crossing 3 m to the far post while the goalie sits a
+	# full net-width away: flight ~0.19 s + 0.15 s swing covers only ~0.77 m
+	# from rest against ~1.28 m of needed travel → pads-first slide.
+	assert_true(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, -2.1, 16.0, -0.8, 0.42, 0.15, 3.8, 14.0))
+
+func test_cross_crease_race_won_against_slow_telegraphed_feed() -> void:
+	# Same geometry but a soft 6 m/s feed: flight ~0.5 s + swing buys the
+	# standing push time to arrive set → stay on the feet.
+	assert_false(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, -2.1, 6.0, -0.8, 0.42, 0.15, 3.8, 14.0))
+
+func test_cross_crease_received_pass_races_on_release_swing_alone() -> void:
+	# Puck already at the crossing (received — vx decayed): only the release
+	# swing remains. A goalie across the crease loses; one on top of it wins.
+	assert_true(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, 0.9, 0.5, -0.8, 0.42, 0.15, 3.8, 14.0))
+	assert_false(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, 0.9, 0.5, 0.6, 0.42, 0.15, 3.8, 14.0))

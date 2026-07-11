@@ -596,6 +596,88 @@ static func is_beaten_wide(
 			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, t_arrive)
 
 
+# ── Rush retreat (speed-matched backflow) ────────────────────────────────────
+# Real breakaway/rush teaching: start at aggressive depth as the rush enters the
+# zone, then back in MATCHING THE SHOOTER'S SPEED — crease-top as the attacker
+# reaches the hash marks, goal-line depth as they reach the crease (USA Hockey /
+# Edge Ice Academy; audit F5). Two grounded pieces:
+#   rush_retreat_depth  — the depth the backflow curve wants at this attacker
+#                         distance (piecewise linear through the three anchors).
+#   rush_retreat_rate   — the retreat SPEED that tracks that curve exactly for a
+#                         given closing speed: |d(depth)/d(dist)| × closing. This
+#                         is what makes the retreat speed-matched instead of a
+#                         lerp-lag artifact — a fast rush produces a fast backflow,
+#                         a slow walk-in a slow one, and the goalie is never
+#                         stranded out at challenge depth by smoothing lag.
+class RushRetreatConfig:
+	var engage_distance: float = 8.0   # m — backflow begins (attacker inside this)
+	var mid_distance: float = 4.5      # m — "hash marks": be back at crease-top here
+	var arrive_distance: float = 1.5   # m — attacker at the crease: be at D depth
+	var depth_engage: float = 0.0      # anchor depths (callers pass the chart's A/B/D)
+	var depth_mid: float = 0.0
+	var depth_arrive: float = 0.0
+
+static func rush_retreat_depth(threat_dist: float, cfg: RushRetreatConfig) -> float:
+	if threat_dist >= cfg.engage_distance:
+		return cfg.depth_engage
+	if threat_dist >= cfg.mid_distance:
+		var t: float = (threat_dist - cfg.mid_distance) \
+				/ maxf(cfg.engage_distance - cfg.mid_distance, 0.001)
+		return lerpf(cfg.depth_mid, cfg.depth_engage, t)
+	if threat_dist >= cfg.arrive_distance:
+		var t2: float = (threat_dist - cfg.arrive_distance) \
+				/ maxf(cfg.mid_distance - cfg.arrive_distance, 0.001)
+		return lerpf(cfg.depth_arrive, cfg.depth_mid, t2)
+	return cfg.depth_arrive
+
+# Retreat rate (m/s of depth change) that keeps the goalie ON the backflow curve
+# while the attacker closes at `closing_speed`: the local curve slope × closing.
+# Returns 0 for a non-closing attacker or outside the curve's sloped segments.
+static func rush_retreat_rate(
+		threat_dist: float, closing_speed: float, cfg: RushRetreatConfig) -> float:
+	if closing_speed <= 0.0:
+		return 0.0
+	var slope: float
+	if threat_dist >= cfg.engage_distance or threat_dist < cfg.arrive_distance:
+		return 0.0
+	if threat_dist >= cfg.mid_distance:
+		slope = (cfg.depth_engage - cfg.depth_mid) \
+				/ maxf(cfg.engage_distance - cfg.mid_distance, 0.001)
+	else:
+		slope = (cfg.depth_mid - cfg.depth_arrive) \
+				/ maxf(cfg.mid_distance - cfg.arrive_distance, 0.001)
+	return absf(slope) * closing_speed
+
+
+# ── Cross-crease save-selection fork ─────────────────────────────────────────
+# Real save selection on a cross-crease pass is a time race (audit F3): stay on
+# your FEET when the push can arrive set before the one-timer; go PADS-FIRST
+# SLIDE (arrive-and-seal) when the pass has already won — a beaten goalie arrives
+# late but sealed along the ice, taking away the low far-side finish, instead of
+# arriving late upright mid-T-push with the bottom of the net open.
+#
+# Race: time available = puck flight to the crossing point + the receiver's
+# release swing (the read delay was already spent by the caller before asking).
+# Distance needed = lateral gap to the crossing minus standing pad coverage.
+# Lost when the accel-ramped standing push can't cover it in time.
+static func cross_crease_race_lost(
+		target_x: float,
+		puck_x: float,
+		puck_vx: float,
+		goalie_x: float,
+		reach_half_width: float,
+		release_time: float,
+		goalie_lateral_speed: float,
+		goalie_lateral_accel: float) -> bool:
+	var needed: float = absf(target_x - goalie_x) - reach_half_width
+	if needed <= 0.0:
+		return false  # already covering the crossing point
+	var t_pass: float = absf(target_x - puck_x) / maxf(absf(puck_vx), 0.001)
+	var t_avail: float = t_pass + release_time
+	return needed > reachable_lateral_distance(
+			goalie_lateral_speed, goalie_lateral_accel, t_avail)
+
+
 # ── Backdoor-aware depth cap ─────────────────────────────────────────────────
 # A goalie who sees a one-timer threat on the weak side doesn't challenge the
 # carrier as far out: depth trades shot-angle coverage against the time to
