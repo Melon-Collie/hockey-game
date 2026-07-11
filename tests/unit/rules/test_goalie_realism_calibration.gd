@@ -402,3 +402,35 @@ func test_only_the_top_tier_plays_the_puck() -> void:
 	var gc: GoalieController = _gc()
 	assert_almost_eq(GoalieSkillProfile.hard().puck_play_go_margin_s,
 			gc.puck_play_go_margin, 0.0001)
+
+
+# ── Catch-and-hold doctrine ───────────────────────────────────────────────────
+
+func test_catch_resolution_mirrors_the_real_freeze_incentive() -> void:
+	# Real rule structure: a goalie freezes a caught puck under pressure (a
+	# whistle in NHL terms), but freezing with nobody on you is delay of game —
+	# unpressured catches get set down and played. The quick drop must be a
+	# genuinely shorter beat than the pressured hold, and the pressure radius a
+	# real "someone is bearing down" range.
+	var gc: GoalieController = _gc()
+	assert_lt(gc.catch_quick_drop_s, gc.cover_hold_s,
+			"unpressured look-and-drop is quicker than the pressured hold")
+	assert_between(gc.catch_hold_pressure_radius, 1.5, 4.0,
+			"pressure = an opponent genuinely bearing down on the crease")
+
+func test_catching_state_families() -> void:
+	# The upright and down catch variants exist so clients' state-keyed
+	# body/head heights render the right silhouette; neither is upright (no
+	# drop-eligibility mid-squeeze) and only the down variant reads as a
+	# down-family pose on the wire.
+	var sm := GoalieStateMachine.new()
+	sm.current = GoalieStateMachine.State.CATCHING
+	assert_true(sm.is_catching())
+	assert_false(sm.is_upright())
+	assert_false(sm.is_down())
+	var up := GoalieNetworkState.new()
+	up.state_enum = GoalieStateMachine.State.CATCHING as int
+	assert_false(up.is_down(), "upright catch keeps the standing silhouette")
+	var down := GoalieNetworkState.new()
+	down.state_enum = GoalieStateMachine.State.CATCHING_DOWN as int
+	assert_true(down.is_down(), "butterfly catch keeps the sealed silhouette")

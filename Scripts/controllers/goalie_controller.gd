@@ -505,6 +505,19 @@ extends Node
 @export var cover_hold_s: float = 0.85          # s — ARCADE hold before the live release
 @export var cover_cooldown_s: float = 7.0       # s — between covers (success or failed gamble)
 
+# ── Catch-and-hold (glove) ────────────────────────────────────────────────────
+# A controlled GLOVE save is a CATCH: the puck pins into the glove (squeeze-
+# and-look) instead of dropping dead at the feet. Resolution mirrors the real
+# rule's incentive structure: held UNDER PRESSURE (opponent bearing down) it
+# freezes the play — same `puck_covered` rails as the smother (NHL whistles a
+# defensive-zone faceoff; ARCADE holds `cover_hold_s` then plays on) — while an
+# UNPRESSURED catch quick-drops after a beat and plays the puck (the real
+# delay-of-game incentive: you don't freeze it with nobody on you). The drop
+# places the puck at the goalie's feet, where the existing dwell → lane-aware
+# windup-strike clear takes over naturally.
+@export var catch_hold_pressure_radius: float = 2.5  # m — opponent inside this → hold/freeze
+@export var catch_quick_drop_s: float = 0.4           # s — unpressured look-and-drop beat
+
 # Clear-sweep animation. The sweep imparts the clearing velocity instantly; on
 # its own the puck just shoots to the corner with no stick motion, which reads
 # oddly. This is a short timed follow-through — the blocker/paddle swings across
@@ -915,6 +928,13 @@ var _pp_wait_timer: float = 0.0
 var _pp_cooldown_timer: float = 0.0
 var _pp_trapped: bool = false
 var _pp_past_waypoint: bool = false
+# Catch-and-hold state. `_catch_secured` flips once the pin (freeze + lock) is
+# applied on the first catching tick — physics writes are deferred out of the
+# contact callback the catch signal fires from. `_catch_pressured` picks the
+# hold length and whether the freeze resolution (puck_covered) fires.
+var _catch_secured: bool = false
+var _catch_pressured: bool = false
+var _catch_hold_timer: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
@@ -1031,6 +1051,7 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)
 		puck.puck_touched_goalie.connect(_on_puck_contact)
+		puck.puck_caught_by_goalie.connect(_on_puck_caught)
 		# Resolving events that end the reaction freeze. Each fires only on
 		# a loose puck (already gated inside Puck) and starts the clear timer.
 		puck.puck_hit_boards.connect(_on_reaction_resolved)
@@ -1292,6 +1313,14 @@ func reset_to_crease() -> void:
 	_pp_wait_timer = 0.0
 	_pp_cooldown_timer = 0.0
 	_pp_trapped = false
+	# A caught puck is FROZEN (RigidBody freeze, carry-style) — a mid-catch
+	# reset (whistle/faceoff/goal) must unfreeze it or it stays pinned in the
+	# air forever; the phase machinery owns pickup_locked through stoppages.
+	if _catch_secured and puck != null:
+		puck.freeze = false
+	_catch_secured = false
+	_catch_pressured = false
+	_catch_hold_timer = 0.0
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
 	_clear_cooldown_timer = 0.0
@@ -1669,6 +1698,8 @@ func _update_state(delta: float) -> void:
 			_tick_cover(delta)
 		State.PLAYING_PUCK:
 			_tick_puck_play(delta)
+		State.CATCHING, State.CATCHING_DOWN:
+			_tick_catch(delta)
 
 # True when the puck is in the goalie's defensive half AND not controlled by
 # the goalie's own team (loose or carried by an opponent). Drives the
@@ -2136,6 +2167,66 @@ func _tick_cover(delta: float) -> void:
 		_begin_sweep(planned, true)
 
 
+# ── Catch-and-hold lifecycle ─────────────────────────────────────────────────
+# A controlled glove save just landed (puck.puck_caught_by_goalie, emitted from
+# the host-authoritative rebound resolution inside a physics callback — so all
+# physics writes are deferred to the first _tick_catch). Enter the squeeze:
+# upright or down variant by the goalie's current stance; hold length and the
+# freeze resolution by pressure — held under pressure it rides the same
+# `puck_covered` rails as the smother, unpressured it look-and-drops and plays
+# on (the real delay-of-game incentive).
+func _on_puck_caught(contacted: Goalie) -> void:
+	if contacted != goalie or not is_server:
+		return
+	if _sm.is_catching() or _sm.current == State.COVERING \
+			or _sm.current == State.PLAYING_PUCK or _sm.is_post_integrated():
+		return
+	if puck.pickup_locked or puck.get_carrier() != null:
+		return
+	_catch_secured = false
+	_catch_pressured = _nearest_opposing_skater_dist_to_puck() <= catch_hold_pressure_radius
+	_catch_hold_timer = cover_hold_s if _catch_pressured else catch_quick_drop_s
+	_sm.transition_to(State.CATCHING_DOWN if _sm.is_down() else State.CATCHING)
+
+
+# Per-tick squeeze (host). First tick pins the puck into the glove — carry-
+# style RigidBody freeze plus pickup_locked (blade paths and bots treat it as
+# dead) — and fires the freeze resolution if the catch was pressured. Every
+# tick re-pins the puck to the glove's world position so it rides the squeeze
+# pose; when the hold expires the goalie sets it down at his feet and plays on
+# (the existing dwell → lane-aware clear takes over).
+func _tick_catch(delta: float) -> void:
+	if not is_server:
+		return
+	if not _catch_secured:
+		_catch_secured = true
+		puck.pickup_locked = true
+		puck.freeze = true
+		puck.set_puck_velocity(Vector3.ZERO)
+		if _catch_pressured:
+			puck_covered.emit(team_id)
+	puck.set_puck_position(goalie.get_glove_world_position())
+	_catch_hold_timer -= delta
+	if _catch_hold_timer <= 0.0:
+		_drop_caught_puck()
+
+
+# Set the caught puck down at the feet and rejoin play through the recovery
+# window. The dropped puck is an ordinary loose puck again — the crease-clear
+# machinery (dwell → lane-aware windup-strike, or another cover if the lanes
+# are jammed) handles what happens next.
+func _drop_caught_puck() -> void:
+	puck.freeze = false
+	puck.pickup_locked = false
+	_catch_secured = false
+	puck.set_puck_position(Vector3(
+			goalie.global_position.x, puck.ice_height,
+			goalie.global_position.z + float(_direction_sign) * 0.45))
+	puck.set_puck_velocity(Vector3.ZERO)
+	_sm.transition_to(State.RECOVERING)
+	_sm.recovery_timer = 0.0
+
+
 # ── Behind-net puck play lifecycle ───────────────────────────────────────────
 # GO decision for the rim stop. Fills the trip geometry (_pp_* points) as a
 # side effect when it returns true — _enter_puck_play just commits. Cheap
@@ -2533,6 +2624,9 @@ func _update_depth(delta: float) -> void:
 	if _sm.current == State.PLAYING_PUCK:
 		# Behind-net trip — position is driven by the waypoint path, not depth.
 		return
+	if _sm.is_catching():
+		# Squeezing the catch — planted, no depth motion.
+		return
 	if _sm.current == State.COILING:
 		# Depth is managed by `_slide.tick_coil` (lerps from coil_start_depth
 		# toward start_depth as the body rotates around the pivot foot).
@@ -2682,6 +2776,9 @@ func _update_position(delta: float) -> void:
 				_sm.transition_to(State.BUTTERFLY)
 		State.COVERING:
 			# Planted over the puck — no root motion while smothering / holding.
+			new_z = goalie.global_position.z
+		State.CATCHING, State.CATCHING_DOWN:
+			# Squeezing the catch — planted until the freeze or the drop.
 			new_z = goalie.global_position.z
 		State.PLAYING_PUCK:
 			# Free skate along the post-waypoint path (the only movement mode not
@@ -2938,9 +3035,10 @@ func _update_facing(delta: float) -> void:
 		return
 	if _reaction.shot_timer > 0.0:
 		return
-	if _sm.current == State.BUTTERFLY or _sm.current == State.COVERING:
-		# Idle butterfly / smother: hold whatever angle the drop or slide came
-		# in at. No animation — real goalies don't rotate the body once down,
+	if _sm.current == State.BUTTERFLY or _sm.current == State.COVERING \
+			or _sm.is_catching():
+		# Idle butterfly / smother / catch squeeze: hold whatever angle the drop
+		# or slide came in at. No animation — real goalies don't rotate the body once down,
 		# and the slow lerp toward centre we used to do quietly undid the
 		# slide's facing while the goalie was still down.
 		return
@@ -3033,6 +3131,9 @@ func _update_body_parts(delta: float) -> void:
 		# Smother collapse paced so the glove lands ~within cover_reach_time
 		# (lerp ≈95% at 3/x — matches the drop-snap idiom above).
 		lerp_t = (3.0 / maxf(cover_reach_time, 0.001)) * delta
+	elif _sm.is_catching():
+		# The squeeze snaps in — the puck is already in the glove.
+		lerp_t = reaction_lerp_speed * delta
 	elif _sm.current == State.RECOVERING:
 		lerp_t = recovery_lerp_speed * delta
 	else:

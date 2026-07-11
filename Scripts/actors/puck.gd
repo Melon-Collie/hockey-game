@@ -6,6 +6,10 @@ signal puck_stripped(ex_carrier: Skater)
 signal puck_touched_loose(skater: Skater)  # blade redirect (deflection, tip-in)
 signal puck_body_blocked(skater: Skater)   # puck absorbed by a player's body
 signal puck_touched_goalie(goalie: Goalie)  # puck contacted a goalie StaticBody3D part while uncarried
+# Controlled save landed on the GLOVE specifically — the catchable contact.
+# Host-only (emitted from the host-authoritative rebound resolution); the
+# goalie controller answers by pinning the puck in the glove (catch-and-hold).
+signal puck_caught_by_goalie(goalie: Goalie)
 signal puck_touched_post  # puck contacted any HockeyGoal geometry while uncarried
 signal puck_hit_boards     # uncarried puck struck rink boards at meaningful speed
 signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe goal geometry)
@@ -548,12 +552,15 @@ func _on_body_entered(body: Node3D) -> void:
 		return
 	var goalie: Goalie = _goalie_ancestor(body)
 	if goalie != null:
-		puck_touched_goalie.emit(goalie)
 		# Host-authoritative rebound control: deaden a controlled save so it
 		# doesn't carom into the slot. The deadened velocity replicates to clients
 		# through the normal puck sync / reconciliation, same as pokes and sweeps.
+		# Resolved BEFORE the generic contact signal so a glove CATCH transitions
+		# the goalie first — _on_puck_contact's rebound-butterfly then sees a
+		# non-upright catching state and skips, keeping an upright catch upright.
 		if _is_server:
 			_resolve_save_rebound(body)
+		puck_touched_goalie.emit(goalie)
 	elif body is HockeyGoal:
 		puck_touched_post.emit()
 	elif body.get_parent() is HockeyGoal:
@@ -622,6 +629,13 @@ func _resolve_save_rebound(part_body: Node3D) -> void:
 	var incoming: Vector3 = _pre_contact_velocity
 	if not GoalieSaveRules.is_controlled_save(incoming.length(), part, _deaden_cfg):
 		return
+	# A controlled GLOVE save is a CATCH: the deaden below still kills the puck
+	# this step (we're inside a physics callback — no freeze here), and the
+	# goalie controller pins it into the glove on its next tick.
+	if part == GoalieSaveRules.SavePart.GLOVE:
+		var catch_goalie: Goalie = _goalie_ancestor(part_body)
+		if catch_goalie != null:
+			puck_caught_by_goalie.emit(catch_goalie)
 	# Steered pad/blocker saves need the contact side (which side of the goalie
 	# the puck arrived at → which corner the toe-out fires it to) and the
 	# goalie's direction_sign (forward = out of the crease). Both derived from

@@ -654,7 +654,12 @@ For calibration confidence, the behaviors that checked out against teaching/data
 
 ## 8. Known limitations (out of scope, documented for completeness)
 
-- **No catch** (holding a caught puck in the glove) — still absent; glove contacts absorb dead.
+- **Catch-and-hold: implemented post-audit.** A controlled glove save pins the puck in the
+  glove (squeeze-and-look pose, upright and butterfly variants). A pressured catch freezes
+  the play through the smother's `puck_covered` rails (NHL whistle / ARCADE hold-and-release);
+  an unpressured catch look-and-drops after a short beat and plays on — mirroring the real
+  delay-of-game incentive. Glove saves now produce zero rebound, ever — the last piece of the
+  real rebound doctrine.
 - **Cover/freeze: implemented post-audit.** The real hierarchy from §6.3 now exists: the sweep
   is lane-aware (`sweep_lane_blocked` — exit corner picked by opponent reach-vs-flight), and
   when every lane is covered with an opponent on the puck the goalie smothers it (`COVERING`,

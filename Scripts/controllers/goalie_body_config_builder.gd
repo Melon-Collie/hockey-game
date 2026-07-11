@@ -267,6 +267,10 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			_apply_sweep_anim(c, inputs)
 		GoalieStateMachine.State.PLAYING_PUCK:
 			_set_puck_play_pose(c, inputs)
+		GoalieStateMachine.State.CATCHING:
+			_set_catching_pose(c, inputs, false)
+		GoalieStateMachine.State.CATCHING_DOWN:
+			_set_catching_pose(c, inputs, true)
 	# Head tracking applies in every state (eyes on the puck through freezes,
 	# around the post in RVH, while down). Only yaw — the per-state head
 	# position/pitch stays authored.
@@ -294,6 +298,8 @@ static func resting_body_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 0.85, 0.02)
 		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.48, -0.10)
 		GoalieStateMachine.State.PLAYING_PUCK:                    return Vector3(0.0,  1.06, -0.05)
+		GoalieStateMachine.State.CATCHING:                        return Vector3(0.0,  1.06, -0.05)
+		GoalieStateMachine.State.CATCHING_DOWN:                   return Vector3(0.0,  0.40,  0.0)
 	return Vector3(0.0, 1.22, 0.0)
 
 static func resting_head_position_for_state(state: int) -> Vector3:
@@ -310,6 +316,8 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 1.45, 0.06)
 		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.92, -0.28)
 		GoalieStateMachine.State.PLAYING_PUCK:                    return Vector3(0.0,  1.62, -0.22)
+		GoalieStateMachine.State.CATCHING:                        return Vector3(0.0,  1.62, -0.22)
+		GoalieStateMachine.State.CATCHING_DOWN:                   return Vector3(0.0,  0.97, -0.06)
 	return Vector3(0.0, 1.79, 0.12)
 
 
@@ -478,6 +486,25 @@ func _set_puck_play_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.glove_pos = Vector3(-0.38, 0.55, -0.30)
 	c.body_rot = Vector3(-18.0, 0.0, 0.0)
 
+
+# Catch-and-hold: squeeze-and-look. The glove pulls in toward the chest with
+# the caught puck pinned inside it (the controller pins the puck to the glove
+# world position each tick, so the puck rides this pose); the blocker tucks,
+# the head drops to look INTO the glove — the classic catch silhouette. Two
+# variants share the arms: upright keeps the ready lower body, `down` keeps
+# the butterfly seal (a glove save from the knees squeezes without standing).
+# First-pass authored numbers — verify in-editor.
+func _set_catching_pose(c: GoalieBodyConfig, inputs: Inputs, down: bool) -> void:
+	if down:
+		_set_butterfly_pose(c, inputs)
+		c.glove_pos = Vector3(-0.24, 0.72, -0.26)
+		c.head_pos = Vector3(-0.06, 0.95, -0.12)
+	else:
+		_set_ready_pose(c, inputs)
+		c.glove_pos = Vector3(-0.22, 0.98, -0.24)
+		c.head_pos = Vector3(-0.06, 1.58, -0.24)
+	c.glove_rot = Vector3(-40.0, 20.0, 0.0)
+	c.body_rot = Vector3(c.body_rot.x - 6.0, 0.0, 4.0)
 
 func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	# RVH stick swings toward the post. Z rotation rolls the stick laterally
