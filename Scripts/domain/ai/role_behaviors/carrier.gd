@@ -348,8 +348,22 @@ func _pick_action(ctx: RoleContext) -> void:
 	# that's us as the carrier). This is where the goalie actually is, used to
 	# clamp the wrister release, since the goalie is a body the release can't cross.
 	var goalie_now: Vector3 = _goalie_now(ctx)
+	# The shot originates where the PUCK is — the carried puck rides the blade, up
+	# to a stick's reach from the body — so the release ref is the puck's current
+	# spot led by our body velocity, not the body center. At range the offset is
+	# noise; in tight it's the difference between measuring the net from your
+	# chest and from the puck (closer, and shifted to the forehand side — a real
+	# angle change around the goalie). The goalie, by contrast, TRACKS THE BODY
+	# (threat tracking is body-weighted — the anti-5-hole-exploit read), so the
+	# stale-square ref below stays on self_pos: shot-from-the-puck against
+	# square-to-the-body is a physical asymmetry the model should see.
+	var puck_now: Vector3 = self_pos
+	if ctx.snapshot.puck_state != null:
+		puck_now = Vector3(
+				ctx.snapshot.puck_state.position.x, 0.0,
+				ctx.snapshot.puck_state.position.z)
 	var wrister_release_pos: Vector3 = AIActionScoring.release_ahead_of_goalie(
-			self_pos + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
+			puck_now + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
 			attacking_goal, goalie_now)
 
 	# Goalie SQUARED to the release position — the keeper has tracked us (the current
