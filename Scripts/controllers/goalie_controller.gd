@@ -2476,7 +2476,6 @@ func _tick_puck_play(delta: float) -> void:
 
 
 # The smother failed (puck whacked away / picked up before the glove landed)
-# The smother failed (puck whacked away / picked up before the glove landed)
 # or was interrupted — release any lock and eat the scramble recovery. The
 # full cover cooldown applies either way: a failed gamble is still the gamble.
 func _abort_cover() -> void:
