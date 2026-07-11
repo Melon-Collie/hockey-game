@@ -1640,14 +1640,24 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 			self_pos, body_anchor, self_vel, _self_max_speed)
 	if bot_eta > puck_eta * RECEIVE_TIMING_MARGIN:
 		return false
-	# Commit. Steer to body_anchor with an arrival brake so we SETTLE on the line —
-	# square, off to the side — instead of overshooting it. Settling to ~zero
-	# velocity is what keeps the catch honest under the receiver-relative model
-	# (#373): with the bot stopped, the puck's closing speed in our frame ≈ its
-	# world speed, so a magnet-pace feed catches at any angle and squaring the blade
-	# collects a harder one. (Actively giving WITH the puck to cushion one above the
-	# squared ceiling is a skating read we don't yet use — see LOOSE_PUCK_TRACK.)
-	_apply_steering(input, snapshot, self_pos, body_anchor, true)
+	# Commit. Receive IN STRIDE by default — brake only when waiting is
+	# geometrically unavoidable. Settling buys nothing for the catch itself
+	# (#373's relative frame: running with or across a magnet-pace feed keeps the
+	# closing speed inside the catchable band — a perpendicular crossing at full
+	# sprint adds ~2 m/s over the puck's own pace) and it kills the rush: a
+	# stopped receiver pays full re-acceleration after the catch. The one case
+	# that NEEDS the brake is arriving so early that continued motion carries the
+	# blade past the puck's line before the puck shows up. The blade's own reach
+	# buys a window around the line-crossing (~2 × gate reach / speed of covered
+	# time); only when the puck is later than that window is waiting forced — and
+	# then stopping square at the gate is the correct wait. A near-stationary bot
+	# has an effectively unbounded window (nothing carries it past the line).
+	var self_speed: float = sqrt(self_vel.x * self_vel.x + self_vel.z * self_vel.z)
+	var gate_reach: float = maxf(
+			_blade_reach - BLADE_REACH_BUFFER_M - RECEIVE_BODY_INSET_M, 0.4)
+	var blade_window: float = 2.0 * gate_reach / maxf(self_speed, 0.001)
+	_apply_steering(input, snapshot, self_pos, body_anchor,
+			puck_eta > bot_eta + blade_window)
 	# Aim: PARK the blade at the gate — the point where the puck's line meets our
 	# reach — and let the puck arrive into it. Tracking the puck's position (the
 	# old aim) failed two ways: the cursor (capped at Hands blade speed ~10 m/s)
@@ -2798,10 +2808,25 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
 	# Intercept-aware lead, shared with the carrier's pass scoring so the fired aim
 	# matches the scored one (AIPassLead) — including the receiver's real build, so
-	# the release leads exactly where the score assumed.
+	# the release leads exactly where the score assumed. Origin = the carried PUCK
+	# (the blade — the real release point), matching the carrier's scoring origin;
+	# leading from the body center systematically over-led close feeds.
 	var receiver_caps: AISkaterCaps = _caps_by_peer.get(_pass_target_peer_id)
-	return AIPassLead.lead_point(
-			self_pos, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S, receiver_caps)
+	var origin: Vector3 = self_pos
+	if snapshot.puck_state != null and snapshot.puck_state.carrier_peer_id == _peer_id:
+		origin = Vector3(
+				snapshot.puck_state.position.x, 0.0, snapshot.puck_state.position.z)
+	var lead: Vector3 = AIPassLead.lead_point(
+			origin, receiver, accel, pass_speed, AIRoleCarrier.PASS_LEAD_MAX_S, receiver_caps)
+	# Net guard on the FIRED lane: the scored lane was net-checked at commit, but
+	# the lead re-solves every tick and a receiver drifting near the net plane can
+	# walk it into the cage (the classic behind-the-net feed that rings off the
+	# outside of the frame). If the led lane crosses a net but the receiver's body
+	# line doesn't, fire at the body — a catch on the tape beats a clank.
+	if AIActionScoring.pass_lane_blocked_by_net(origin, lead) \
+			and not AIActionScoring.pass_lane_blocked_by_net(origin, receiver.position):
+		return Vector3(receiver.position.x, 0.0, receiver.position.z)
+	return lead
 
 
 # `arrive` opts into the arrival brake (AISteering.should_arrival_brake):

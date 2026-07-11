@@ -284,6 +284,24 @@ func test_net_blocker_low_to_high_pass_not_blocked() -> void:
 			"low-to-high OZ pass should not be blocked by the attacking net")
 
 
+func test_net_blocker_covers_the_outer_frame_not_just_the_posts() -> void:
+	# The physical net is WIDER than the goal mouth: the back-frame trapezoid
+	# spans NET_BACK_HALF_WIDTH (1.02) and the puck's own radius clanks the
+	# frame before its center reaches it. A behind-the-net feed threading just
+	# outside the 0.915 post line but inside the frame+puck envelope used to
+	# read "clear" and ring off the outside of the cage.
+	var graze_x: float = GameRules.NET_HALF_WIDTH + 0.05   # 0.965 — outside posts
+	var from := Vector3(graze_x, 0.0, 28.2)                # behind the net
+	var to := Vector3(graze_x, 0.0, 20.0)                  # up the slot, same x
+	assert_true(AIActionScoring.pass_lane_blocked_by_net(from, to),
+			"a lane through the outer frame band is blocked, not just the post span")
+	# Clearly wide of frame + puck radius stays clear.
+	var wide_x: float = GameRules.NET_BACK_HALF_WIDTH + GameRules.PUCK_COLLISION_RADIUS + 0.05
+	assert_false(AIActionScoring.pass_lane_blocked_by_net(
+			Vector3(wide_x, 0.0, 28.2), Vector3(wide_x, 0.0, 20.0)),
+			"a lane genuinely wide of the physical frame is clear")
+
+
 func test_score_pass_zero_when_segment_crosses_net() -> void:
 	var shooter := Vector3(5.0, 0.0, 27.0)
 	var receiver := Vector3(-5.0, 0.0, 27.0)
@@ -684,15 +702,30 @@ func test_past_center_toward_attack() -> void:
 	assert_false(AIActionScoring.past_center_toward_attack(Vector3(0, 0, 5.0), neg_goal))
 
 
-func test_dump_clear_target_is_nz_strong_side_boards() -> void:
-	# Carrier on the +x wall, deep in our end.
-	var t: Vector3 = AIActionScoring.dump_clear_target(Vector3(8, 0, -22))
+func test_dump_clear_target_is_up_ice_strong_side_boards() -> void:
+	# Carrier on the +x wall, deep in our end (defending -Z → up-ice is +Z).
+	# Target rides the strong-side boards one neutral zone UP-ICE of the carrier.
+	var t: Vector3 = AIActionScoring.dump_clear_target(Vector3(8, 0, -22), 1.0)
 	assert_almost_eq(t.x, GameRules.RINK_HALF_WIDTH - AIActionScoring.DUMP_RINK_INSET_M, 1e-4,
 			"clears up the strong-side (carrier-side) boards")
-	assert_almost_eq(t.z, 0.0, 1e-6, "out to centre ice — clearly out of our zone")
+	assert_almost_eq(t.z, 0.0, 1e-4,
+			"from deep, centre ice is already a full-forward rim — unchanged")
 	# Carrier on the -x wall → mirror.
-	var t2: Vector3 = AIActionScoring.dump_clear_target(Vector3(-8, 0, -22))
+	var t2: Vector3 = AIActionScoring.dump_clear_target(Vector3(-8, 0, -22), 1.0)
 	assert_lt(t2.x, 0.0, "strong side follows the carrier to the -x boards")
+
+
+func test_dump_clear_from_the_blue_line_still_gains_depth() -> void:
+	# The degenerate case the fixed z=0 target produced: a carrier just inside
+	# the blue line near centre-x fired basically SIDEWAYS at the wall. The
+	# carrier-relative target keeps the clear an up-ice diagonal: it must gain
+	# more depth than it gives up laterally.
+	var carrier := Vector3(1.0, 0.0, GameRules.BLUE_LINE_Z + 0.5)  # defending +Z
+	var t: Vector3 = AIActionScoring.dump_clear_target(carrier, -1.0)
+	var up_ice_gain: float = carrier.z - t.z
+	var lateral: float = absf(t.x - carrier.x)
+	assert_gt(up_ice_gain, lateral,
+			"the clear gains more depth than width — up-ice diagonal, not a side-wall bang")
 
 
 func test_dump_in_target_is_far_offensive_corner() -> void:

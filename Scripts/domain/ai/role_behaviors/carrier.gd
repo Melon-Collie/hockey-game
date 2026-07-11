@@ -542,11 +542,12 @@ func _pick_action(ctx: RoleContext) -> void:
 				# the magnet CLOSING speed in the receiver's frame (#373) — harder
 				# onto a streaking receiver, softer to one curling back — not a
 				# fixed world speed that arrives hot or soft depending on his motion.
-				var to_receiver: Vector3 = receiver.position - ctx.self_pos
+				# Distance and direction from the PUCK (the real release point).
+				var to_receiver: Vector3 = receiver.position - puck_now
 				to_receiver.y = 0.0
 				var pass_dir: Vector3 = to_receiver.normalized()
 				pass_target_speed = AIActionScoring.pass_launch_speed(
-						ctx.self_pos.distance_to(receiver.position),
+						puck_now.distance_to(receiver.position),
 						ctx.self_wrister_shot_speed, ctx.pass_speed_scale,
 						receiver.velocity, pass_dir)
 			else:
@@ -673,6 +674,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 	# One-way valve: a carrier already in the offensive zone won't pass the puck
 	# back out of it (mirrors the carry-side exclusion in _score_move_candidate).
 	var carrier_in_oz: bool = AIActionScoring.in_offensive_zone(self_pos, attacking_goal)
+	var pass_origin: Vector3 = _pass_origin(ctx)
 	for peer_id: int in teammate_ids:
 		var receiver_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		if receiver_state.is_ghost:
@@ -687,7 +689,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# scored at 14 m/s overestimates defender presence on the line and
 		# leads past the receiver, both of which depress long-pass scores
 		# below where they should be.
-		var dist: float = self_pos.distance_to(receiver_state.position)
+		var dist: float = pass_origin.distance_to(receiver_state.position)
 		var pass_speed: float = AIActionScoring.pass_launch_speed(
 				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
@@ -698,7 +700,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# how far it can actually get to — a fast, agile receiver is led further.
 		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
 		var lead: Array = AIPassLead.lead(
-				self_pos, receiver_state, receiver_accel, pass_speed, PASS_LEAD_MAX_S, receiver_caps)
+				pass_origin, receiver_state, receiver_accel, pass_speed, PASS_LEAD_MAX_S, receiver_caps)
 		var receiver: Vector3 = lead[0]
 		var flight_t: float = lead[1]
 		if own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
@@ -778,15 +780,21 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
 		our_goalie: Vector3, receiver_caps: AISkaterCaps = null) -> float:
 	var self_pos: Vector3 = ctx.self_pos
+	# The pass flies from the PUCK (the blade), not the body — judge the lane
+	# the puck actually travels. From behind the net the two differ by up to a
+	# stick's reach, which is exactly where "clear from the chest, clanks the
+	# frame from the blade" lived. (self_pos stays the carrier-body reference for
+	# the receiver scoring / loss-point terms below.)
+	var origin: Vector3 = _pass_origin(ctx)
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
 	# slot crossing (intercepted = goal-against).
-	if AIActionScoring.pass_lane_blocked_by_net(self_pos, receiver_spot):
+	if AIActionScoring.pass_lane_blocked_by_net(origin, receiver_spot):
 		return 0.0
 	if AIActionScoring.pass_crosses_own_slot(
-			self_pos, receiver_spot, ctx.own_goal_dir * GameRules.GOAL_LINE_Z):
+			origin, receiver_spot, ctx.own_goal_dir * GameRules.GOAL_LINE_Z):
 		return 0.0
 	var lane: float = AIActionScoring.lane_clear(
-			self_pos, receiver_spot, _scratch_opponents, pass_speed,
+			origin, receiver_spot, _scratch_opponents, pass_speed,
 			_scratch_opponent_vels, _scratch_opponent_caps)
 	if lane <= 0.0:
 		return 0.0
@@ -1031,7 +1039,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var target: Vector3
 	var is_soft: bool
 	if AIActionScoring.in_offensive_zone(self_pos, defending_goal):
-		target = AIActionScoring.dump_clear_target(self_pos)
+		target = AIActionScoring.dump_clear_target(self_pos, -ctx.own_goal_dir)
 		is_soft = false
 	elif AIActionScoring.past_center_toward_attack(self_pos, attacking_goal) \
 			and not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
@@ -1425,6 +1433,20 @@ func _slot_anchor(own_goal_dir: float) -> Vector3:
 # Returns the opposing goalie's CURRENT world position. Used as input
 # to AIActionScoring.predict_goalie_pos. Falls back to the attacking
 # goal when goalie state isn't buffered yet (first-frame edge case).
+# Where a pass physically leaves from: the carried puck (riding the blade, up
+# to a stick's reach from the body), falling back to the body center when the
+# snapshot has no puck. Mirrors the shot model's puck-origin release ref: the
+# lead solve, the friction-compensated launch speed, and the net/lane checks
+# all measure the real flight, not a flight from the passer's chest — on a
+# close feed the ~1 m origin error was a systematic over-lead.
+func _pass_origin(ctx: RoleContext) -> Vector3:
+	if ctx.snapshot.puck_state != null:
+		return Vector3(
+				ctx.snapshot.puck_state.position.x, 0.0,
+				ctx.snapshot.puck_state.position.z)
+	return ctx.self_pos
+
+
 func _goalie_now(ctx: RoleContext) -> Vector3:
 	var opp_goalie: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
 	if opp_goalie == null:

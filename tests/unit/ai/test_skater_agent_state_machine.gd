@@ -1117,3 +1117,72 @@ func test_blade_gate_stationary_puck_is_the_puck() -> void:
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
 			Vector3(10, 0, 1), puck_pos, Vector3.ZERO)
 	assert_eq(gate, puck_pos, "no travel line without velocity — aim at the puck")
+
+
+# ── Receive in stride vs settle ──────────────────────────────────────────────
+# The side-stand reception only settles (arrival brake) when arriving AND
+# stopping both fit before the puck; a tight window takes the feed in stride.
+
+func _receive_snap(puck_pos: Vector3, puck_vel: Vector3,
+		self_pos: Vector3, self_vel: Vector3) -> WorldSnapshot:
+	var s := _loose_puck_snap(puck_pos)
+	s.puck_state.velocity = puck_vel
+	_add_skater(s, SELF_ID, self_pos)
+	s.skater_states[SELF_ID].velocity = self_vel
+	return s
+
+
+func test_receive_takes_the_feed_in_stride_when_roughly_synced() -> void:
+	# Puck closing at 20 with the crossing ~0.7 s out; bot 4 m off the line at
+	# 6 m/s arrives inside its own blade window of the puck — running through
+	# the reception keeps the blade on the line when the puck gets there, so no
+	# brake: full speed through the catch (stride is the DEFAULT now).
+	var s := _receive_snap(Vector3.ZERO, Vector3(20, 0, 0),
+			Vector3(14, 0, 4), Vector3(0, 0, -6))
+	var input := InputState.new()
+	assert_true(sm._pass_receive_aim_and_steer(input, s, Vector3(14, 0, 4)),
+			"scenario commits the reception")
+	assert_false(input.brake, "synced arrival → take it in stride, no arrival brake")
+
+
+func test_receive_settles_only_when_genuinely_early() -> void:
+	# Bot already sitting ON the anchor at 4 m/s with the puck still a full
+	# second away — far outside the blade window its motion covers, so waiting
+	# is forced and it brakes to hold the gate.
+	var self_pos := Vector3(14, 0, 1.4)
+	var s := _receive_snap(Vector3(-6, 0, 0), Vector3(20, 0, 0),
+			self_pos, Vector3(0, 0, -4))
+	var input := InputState.new()
+	assert_true(sm._pass_receive_aim_and_steer(input, s, self_pos),
+			"scenario commits the reception")
+	assert_true(input.brake, "genuinely early → brake and hold the gate")
+
+
+# ── Pass lead origin = the carried puck ──────────────────────────────────────
+
+func test_pass_aim_leads_from_the_puck_not_the_body() -> void:
+	# Receiver cutting PERPENDICULAR to the pass line (so the intercept solve
+	# doesn't saturate the lead cap). The lead scales with flight time, and the
+	# flight starts at the PUCK — a puck carried out ahead of the body shortens
+	# the flight, so the led aim trails the body-origin lead by a real margin.
+	var receiver_pos := Vector3(8, 0, 0)
+	var receiver_vel := Vector3(0, 0, 4)
+
+	var make := func(puck_pos: Vector3) -> WorldSnapshot:
+		var s := WorldSnapshot.new()
+		s.puck_state = PuckNetworkState.new()
+		s.puck_state.carrier_peer_id = SELF_ID
+		s.puck_state.position = puck_pos
+		_add_skater(s, SELF_ID, Vector3.ZERO)
+		_add_skater(s, TEAMMATE_ID, receiver_pos)
+		s.skater_states[TEAMMATE_ID].velocity = receiver_vel
+		return s
+
+	sm._pass_target_peer_id = TEAMMATE_ID
+	sm._pass_target_speed = 20.0
+	var aim_body: Vector3 = sm._pass_aim_point(
+			make.call(Vector3.ZERO), Vector3.ZERO)
+	var aim_blade: Vector3 = sm._pass_aim_point(
+			make.call(Vector3(3, 0, 0)), Vector3.ZERO)
+	assert_lt(aim_blade.z, aim_body.z - 0.3,
+			"a puck 3 m out front shortens the flight and the lead follows")
