@@ -690,6 +690,13 @@ extends Node
 @export var puck_play_cooldown_s: float = 4.0       # s — between trips (no dithering at the post)
 @export var puck_play_boards_inset: float = 0.7     # m — stop point this far inside the end boards
 @export var puck_play_post_clearance: float = 0.55  # m — waypoint this far outside the post
+# Skating-stride cadence for the trip (rad of stride phase per METER traveled —
+# distance-driven so the feet never treadmill; a full two-push cycle every
+# ~2.6 m at 2.4). The stride itself is the skater gait's idiom reduced to the
+# pad rig (GoalieBodyConfigBuilder._apply_puck_play_stride) and only plays on
+# the behind-net skate — crease movement (shuffle / T-push) is correctly a
+# glide, which is why the goalie never strides in the crease.
+@export var puck_play_stride_cadence: float = 2.4
 
 # Recovery proximity: while in BUTTERFLY, the goalie holds whenever the puck
 # is within this Euclidean distance — covers genuine jam plays, post-save
@@ -935,6 +942,11 @@ var _pp_past_waypoint: bool = false
 var _catch_secured: bool = false
 var _catch_pressured: bool = false
 var _catch_hold_timer: float = 0.0
+# Behind-net skating stride: phase advances with distance traveled (never
+# treadmills), intensity eases with the trip speed and settles to zero at the
+# stop point / arrival.
+var _pp_stride_phase: float = 0.0
+var _pp_stride_intensity: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
@@ -1141,6 +1153,8 @@ func snap_to_standing_pose(open_five_hole: bool = false) -> void:
 	_pose_inputs.standing_sweep_active = false
 	_pose_inputs.head_yaw_deg = 0.0
 	_pose_inputs.puck_play_stopping = false
+	_pose_inputs.puck_play_stride_phase = 0.0
+	_pose_inputs.puck_play_stride_intensity = 0.0
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)
 	if open_five_hole:
 		# Lift the paddle up off the ice so it no longer guards the five-hole.
@@ -1313,6 +1327,8 @@ func reset_to_crease() -> void:
 	_pp_wait_timer = 0.0
 	_pp_cooldown_timer = 0.0
 	_pp_trapped = false
+	_pp_stride_phase = 0.0
+	_pp_stride_intensity = 0.0
 	# A caught puck is FROZEN (RigidBody freeze, carry-style) — a mid-catch
 	# reset (whistle/faceoff/goal) must unfreeze it or it stays pinned in the
 	# air forever; the phase machinery owns pickup_locked through stoppages.
@@ -2300,6 +2316,8 @@ func _enter_puck_play() -> void:
 	_pp_trapped = false
 	_pp_stop_timer = 0.0
 	_pp_wait_timer = 0.0
+	_pp_stride_phase = 0.0
+	_pp_stride_intensity = 0.0
 	_move_speed_current = 0.0
 	_sm.transition_to(State.PLAYING_PUCK)
 
@@ -2792,6 +2810,16 @@ func _update_position(delta: float) -> void:
 			var pp_d: float = pp_cur.distance_to(pp_target)
 			var pp_next: Vector2 = pp_target if pp_d <= pp_step \
 					else pp_cur + (pp_target - pp_cur) * (pp_step / maxf(pp_d, 0.0001))
+			# Stride phase rides the distance actually covered this tick; the
+			# intensity envelope eases with speed and dies at the stop point.
+			var pp_moved: float = pp_cur.distance_to(pp_next)
+			_pp_stride_phase = wrapf(
+					_pp_stride_phase + pp_moved * puck_play_stride_cadence, 0.0, TAU)
+			var stride_target: float = 0.0
+			if _pp_phase != _PP_STOP:
+				stride_target = clampf(
+						_move_speed_current / maxf(puck_play_skate_speed, 0.001), 0.0, 1.0)
+			_pp_stride_intensity = lerpf(_pp_stride_intensity, stride_target, 6.0 * delta)
 			_current_x = pp_next.x
 			new_z = pp_next.y
 		State.RVH_LEFT, State.VH_LEFT:
@@ -3111,6 +3139,8 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.head_yaw_deg = _desired_head_yaw_deg()
 	_pose_inputs.puck_play_stopping = _sm.current == State.PLAYING_PUCK \
 			and _pp_phase == _PP_STOP
+	_pose_inputs.puck_play_stride_phase = _pp_stride_phase
+	_pose_inputs.puck_play_stride_intensity = _pp_stride_intensity
 	_set_pad_toe_out_inputs()
 	_set_prelean_inputs()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)

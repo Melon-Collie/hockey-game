@@ -208,6 +208,15 @@ class Inputs:
 	# with the paddle down to trap the rim (vs. the skating out/back phases,
 	# which use the mobile ready stance).
 	var puck_play_stopping: bool = false
+	# Skating stride for the behind-net trip (the only time the goalie truly
+	# SKATES — crease movement is correctly a glide). Phase is advanced by the
+	# controller from DISTANCE TRAVELED (so the feet never slide), intensity is
+	# the speed-eased 0..1 envelope. Borrowed from the skater gait's idiom
+	# (SkaterSkatingCoordinator): asymmetric stroke warp, alternating swing,
+	# recovery lift, body bob, effort lean — reduced to what a pad-legged rig
+	# can express.
+	var puck_play_stride_phase: float = 0.0
+	var puck_play_stride_intensity: float = 0.0
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -470,14 +479,27 @@ func _set_covering_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.blocker_pos   = Vector3( 0.46, 0.49, -0.18)
 	c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
 
-# Behind-net puck play. Skating out/back uses the mobile ready stance; the
-# STOP phase plants at the boards with the paddle down across the rim's path
-# (the real rim-stopping technique: stick blade/paddle flat against the ice
-# in front of the boards, body square to the incoming puck). First-pass
-# authored numbers — verify in-editor.
+# Stride shape for the behind-net skate (pad-legged reduction of the skater
+# gait). The stroke skew is the skater idiom verbatim: warping the phase
+# before the sine gives each pad a slow reach and a fast push-back instead of
+# a metronome tick-tock. Magnitudes are modest — goalies skate short-strided
+# in their gear.
+const _STRIDE_SKEW: float = 0.45
+const _STRIDE_SWING_M: float = 0.15      # fore/aft pad travel at full intensity
+const _STRIDE_PITCH_DEG: float = 16.0    # pad pitch swing about the hip
+const _STRIDE_LIFT_M: float = 0.05       # recovering pad lifts off the ice
+const _STRIDE_BOB_M: float = 0.025       # body rides highest at full extension
+const _STRIDE_LEAN_DEG: float = 9.0      # shoulders drive forward while skating
+
+# Behind-net puck play. Skating out/back plays a real STRIDE on the mobile
+# ready stance; the STOP phase plants at the boards with the paddle down
+# across the rim's path (the real rim-stopping technique: stick blade/paddle
+# flat against the ice in front of the boards, body square to the incoming
+# puck). First-pass authored numbers — verify in-editor.
 func _set_puck_play_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	_set_ready_pose(c, inputs)
 	if not inputs.puck_play_stopping:
+		_apply_puck_play_stride(c, inputs)
 		return
 	# Paddle-down trap: blocker drops low and forward, blade flat on the ice
 	# across the boards lane; glove low and ready beside it for a bouncing rim.
@@ -505,6 +527,36 @@ func _set_catching_pose(c: GoalieBodyConfig, inputs: Inputs, down: bool) -> void
 		c.head_pos = Vector3(-0.06, 1.58, -0.24)
 	c.glove_rot = Vector3(-40.0, 20.0, 0.0)
 	c.body_rot = Vector3(c.body_rot.x - 6.0, 0.0, 4.0)
+
+# The stride itself: alternating fore/aft pad swing (translation + hip pitch,
+# half a cycle apart, sharing the skater's slow-load / fast-release warp — the
+# opposite pad samples phase+PI so BOTH get the identical stroke shape), a
+# small lift on the pad swinging forward (the recovery — the pushing pad stays
+# on the ice), a body bob riding the weight transfer, and the effort lean.
+# Everything scales by intensity, so the gait eases in from the first push and
+# settles cleanly when the goalie arrives (phase is distance-driven upstream —
+# a stopped goalie's stride freezes instead of treadmilling).
+func _apply_puck_play_stride(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	var k: float = clampf(inputs.puck_play_stride_intensity, 0.0, 1.0)
+	if k <= 0.001:
+		return
+	var phase: float = inputs.puck_play_stride_phase
+	var s: float = sin(phase - _STRIDE_SKEW * sin(phase))
+	var phase_opp: float = phase + PI
+	var s_opp: float = sin(phase_opp - _STRIDE_SKEW * sin(phase_opp))
+	# Fore/aft: local -Z is forward. Positive s swings the left pad forward.
+	c.left_pad_pos.z += -s * _STRIDE_SWING_M * k
+	c.right_pad_pos.z += -s_opp * _STRIDE_SWING_M * k
+	# Recovery lift: only the forward-swinging pad comes off the ice.
+	c.left_pad_pos.y += maxf(s, 0.0) * _STRIDE_LIFT_M * k
+	c.right_pad_pos.y += maxf(s_opp, 0.0) * _STRIDE_LIFT_M * k
+	# Hip pitch swing rides the same stroke (negative X pitches the pad forward).
+	c.left_pad_rot.x += -s * _STRIDE_PITCH_DEG * k
+	c.right_pad_rot.x += -s_opp * _STRIDE_PITCH_DEG * k
+	# Body bob (deepest mid-transfer, s = 0) + shoulders driving forward.
+	c.body_pos.y -= _STRIDE_BOB_M * (1.0 - s * s) * k
+	c.body_rot.x -= _STRIDE_LEAN_DEG * k
+
 
 func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	# RVH stick swings toward the post. Z rotation rolls the stick laterally
