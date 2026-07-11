@@ -171,10 +171,13 @@ func test_depth_inside_aggressive_zone_stays_aggressive() -> void:
 		_depth_cfg())
 	assert_almost_eq(d, _depth_cfg().depth_aggressive, 0.001)
 
-func test_depth_far_away_is_defensive() -> void:
+func test_depth_far_away_floors_at_conservative() -> void:
+	# A puck far away IN FRONT leaves the goalie resting at conservative depth
+	# (watching the play from the paint) — goal-line depth is for behind-net /
+	# post play only (audit F8; USA Hockey D-zone = behind-net tracking).
 	var d: float = GoalieBehaviorRules.target_depth_for_puck_distance(
 		100.0, _depth_cfg())
-	assert_almost_eq(d, _depth_cfg().depth_defensive, 0.001)
+	assert_almost_eq(d, _depth_cfg().depth_conservative, 0.001)
 
 func test_depth_at_origin_is_defensive() -> void:
 	# puck_z_dist = 0 → t = 0 → lerp(defensive, aggressive, 0) = defensive

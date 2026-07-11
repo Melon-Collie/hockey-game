@@ -181,6 +181,10 @@ class Inputs:
 	# tests that don't populate these).
 	var left_pad_toe_out: float = -1.0
 	var right_pad_toe_out: float = -1.0
+	# Head yaw (degrees, goalie-root-local) toward the raw puck — the "eyes
+	# lead" tracking (Head Trajectory). Applied uniformly at the end of
+	# build() in every state; 0 = look straight ahead (tutorial snap).
+	var head_yaw_deg: float = 0.0
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -228,6 +232,14 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			_set_rvh_left_pose(c)
 		GoalieStateMachine.State.RVH_RIGHT:
 			_set_rvh_right_pose(c)
+		GoalieStateMachine.State.VH_LEFT:
+			_set_vh_left_pose(c)
+		GoalieStateMachine.State.VH_RIGHT:
+			_set_vh_right_pose(c)
+	# Head tracking applies in every state (eyes on the puck through freezes,
+	# around the post in RVH, while down). Only yaw — the per-state head
+	# position/pitch stays authored.
+	c.head_rot = Vector3(c.head_rot.x, inputs.head_yaw_deg, c.head_rot.z)
 	if not catches_left:
 		_mirror_hands(c)
 	return c
@@ -247,6 +259,8 @@ static func resting_body_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.40,  0.0)
 		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 0.60, 0.05)
 		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 0.60, 0.05)
+		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 0.85, 0.02)
+		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 0.85, 0.02)
 	return Vector3(0.0, 1.22, 0.0)
 
 static func resting_head_position_for_state(state: int) -> Vector3:
@@ -259,6 +273,8 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.97, -0.06)
 		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 1.17, 0.08)
 		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 1.17, 0.08)
+		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 1.45, 0.06)
+		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 1.45, 0.06)
 	return Vector3(0.0, 1.79, 0.12)
 
 
@@ -397,6 +413,46 @@ func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	c.glove_rot     = Vector3.ZERO
 	c.blocker_pos   = Vector3( 0.40, 0.64, -0.18)
 	c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0, -25.0)
+
+# VH (post pad VERTICAL, back pad horizontal) — the post stance for a sharp-
+# angle SHOT threat still in FRONT of the goal line (realism audit F14; Allaire/
+# Giguère lineage). The body stays TALL on the short side — RVH's documented
+# weakness is short-side high, which is exactly what VH exists to close — while
+# the horizontal back pad seals the ice behind the vertical pad and the loaded
+# back leg powers the push if the play reverses or crosses. The post-side hand
+# rides high over the vertical pad (the over-the-shoulder seal). First-pass
+# authored numbers mirroring the RVH pose family — verify the look in-editor.
+func _set_vh_left_pose(c: GoalieBodyConfig) -> void:
+	# Post-side (left) pad vertical, tight beside the body, face square.
+	c.left_pad_pos  = Vector3(-0.28, 0.44, -0.02)
+	c.left_pad_rot  = Vector3(0.0, 0.0, -4.0)
+	# Back (right) pad flat along the ice behind it, toe loaded to push.
+	c.right_pad_pos = Vector3( 0.28, 0.14, -0.06)
+	c.right_pad_rot = Vector3(0.0, -12.0, 90.0)
+	c.body_pos      = Vector3(-0.05, 0.85,  0.02)
+	c.body_rot      = Vector3(-4.0, 0.0,  rvh_body_lean_deg)
+	c.head_pos      = Vector3(-0.05, 1.45,  0.06)
+	c.head_rot      = Vector3.ZERO
+	c.glove_pos     = Vector3(-0.30, 0.90, -0.14)
+	c.glove_rot     = Vector3.ZERO
+	c.blocker_pos   = Vector3( 0.36, 0.68, -0.16)
+	c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0, -25.0)
+
+func _set_vh_right_pose(c: GoalieBodyConfig) -> void:
+	c.right_pad_pos = Vector3( 0.28, 0.44, -0.02)
+	c.right_pad_rot = Vector3(0.0, 0.0,  4.0)
+	c.left_pad_pos  = Vector3(-0.28, 0.14, -0.06)
+	c.left_pad_rot  = Vector3(0.0, 12.0, -90.0)
+	c.body_pos      = Vector3( 0.05, 0.85,  0.02)
+	c.body_rot      = Vector3(-4.0, 0.0, -rvh_body_lean_deg)
+	c.head_pos      = Vector3( 0.05, 1.45,  0.06)
+	c.head_rot      = Vector3.ZERO
+	# Blocker side is the post side here: the paddle stays low along the post
+	# so the blade keeps the ice; the glove holds the far-side lane.
+	c.blocker_pos   = Vector3( 0.30, 0.72, -0.12)
+	c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0,  25.0)
+	c.glove_pos     = Vector3(-0.36, 0.68, -0.16)
+	c.glove_rot     = Vector3.ZERO
 
 func _set_rvh_right_pose(c: GoalieBodyConfig) -> void:
 	c.right_pad_pos = Vector3(-0.04, 0.14, 0.0)

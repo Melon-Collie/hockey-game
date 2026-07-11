@@ -45,18 +45,21 @@ var host_timestamp: float = 0.0  # host-only, not serialized
 
 
 # Stance family of the replicated pose: pads ON the ice (butterfly / slide /
-# RVH / coiling) vs standing-family (standing / ready / recovering — RECOVERING
-# counts as up because the rising legs re-open the standing five-hole slot).
-# state_enum is written as `GoalieStateMachine.State as int` (see
-# GoalieController.capture/apply) — this accessor is the one place that mapping
-# is interpreted off the wire, so readers (bot AI shot model, remote pose) never
-# hand-roll the enum split.
+# RVH / VH / coiling — VH's back pad + post-sealed vertical pad close the ice
+# slot like the other post stances) vs standing-family (standing / ready /
+# recovering — RECOVERING counts as up because the rising legs re-open the
+# standing five-hole slot). state_enum is written as `GoalieStateMachine.State
+# as int` (see GoalieController.capture/apply) — this accessor is the one place
+# that mapping is interpreted off the wire, so readers (bot AI shot model,
+# remote pose) never hand-roll the enum split.
 func is_down() -> bool:
 	return state_enum == GoalieStateMachine.State.BUTTERFLY as int \
 			or state_enum == GoalieStateMachine.State.SLIDING as int \
 			or state_enum == GoalieStateMachine.State.RVH_LEFT as int \
 			or state_enum == GoalieStateMachine.State.RVH_RIGHT as int \
-			or state_enum == GoalieStateMachine.State.COILING as int
+			or state_enum == GoalieStateMachine.State.COILING as int \
+			or state_enum == GoalieStateMachine.State.VH_LEFT as int \
+			or state_enum == GoalieStateMachine.State.VH_RIGHT as int
 
 
 func copy_from(s: GoalieNetworkState) -> void:

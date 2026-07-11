@@ -149,8 +149,13 @@ static func target_depth_for_puck_distance(puck_z_dist: float, cfg: DepthConfig)
 	if puck_z_dist <= cfg.zone_conservative_z:
 		t = (puck_z_dist - cfg.zone_base_z) / (cfg.zone_conservative_z - cfg.zone_base_z)
 		return lerpf(cfg.depth_base, cfg.depth_conservative, t)
-	t = clampf((puck_z_dist - cfg.zone_conservative_z) / cfg.zone_conservative_z, 0.0, 1.0)
-	return lerpf(cfg.depth_conservative, cfg.depth_defensive, t)
+	# Beyond the conservative zone the chart FLOORS at conservative depth
+	# (realism audit F8): a puck far away in FRONT of the net leaves a real
+	# goalie resting at/near the paint watching the play — D (goal-line) depth
+	# is for behind-net / post-integrated play, which the defensive-zone / RVH
+	# paths own. The old taper walked the goalie back to his goal line during
+	# neutral-zone play, which no goalie does.
+	return cfg.depth_conservative
 
 # Lateral X target using angle bisector: find the line from the puck that
 # bisects the shooting angle between the two posts, then intersect it with

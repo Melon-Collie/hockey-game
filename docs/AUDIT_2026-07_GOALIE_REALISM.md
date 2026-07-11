@@ -19,7 +19,19 @@ mirrored in `GOALIE_BUTTERFLY_DROP_S`, plus the pre-armed read `prearmed_reactio
 F3 (`cross_crease_race_lost` fork: standing drive when the push can arrive set, drop-and-slide
 pads-first when the race is lost), F4 (blocking butterfly on fully-screened releases —
 `_maybe_arm_screen_block_drop`), F5 (speed-matched rush backflow — `rush_retreat_depth` /
-`rush_retreat_rate`). P2/P3 findings remain open.
+`rush_retreat_rate`).
+
+The P2/P3 findings are also implemented: F6 (knee-shuffle down tier, `knee_shuffle_speed`),
+F7 (lateral-pressure retreat reads carrier velocity), F8 (long-range depth floors at
+conservative), F9 (head tracks the raw puck in every state, `head_track_max_yaw_deg`),
+F10 (directional recovery — rises moving at shuffle pace), F11 (lunge = fully-unset read
+while extended), F12 (controlled pad/blocker saves steer cornerward at pace —
+`GoalieSaveRules` steer model), F13 (slapper tell is set-and-square; the depth pull is
+removed), F14 (VH stance: RVH/VH family split at the goal line), F15 (base-read
+anticipation documented on `reaction_delay`). The model is pinned to the research by
+`tests/unit/rules/test_goalie_realism_calibration.gd` — each test cites the doctrine or
+measured number it guards (BPS anchors, Brock drop velocity, blocking-zone physics, CSA
+royal-road race, stay-down window, RVH discipline, rebound doctrine, five-hole geometry).
 
 **Verdict legend:**
 - ✅ **Matches** — behavior aligns with real teaching/data

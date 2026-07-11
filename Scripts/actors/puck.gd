@@ -105,11 +105,14 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # rebound control, correct under every ruleset — a whistle-on-cover would be a
 # separate, ruleset-gated layer on top. Tunable so feel can be dialed in-editor.
 @export var save_deaden_pad_max_speed: float = 28.0  # pad/blocker saves faster than this stay live (≈63 mph — above a solid wrister, below hard shots/slappers)
-@export var save_deaden_drop_speed: float = 1.2      # deadened exit-speed ceiling (m/s)
+@export var save_deaden_drop_speed: float = 1.2      # absorbed exit-speed ceiling (m/s, chest/glove)
 @export var save_deaden_glove_retain: float = 0.0    # glove catch — kill it dead
 @export var save_deaden_chest_retain: float = 0.12
-@export var save_deaden_pad_retain: float = 0.35
-@export var save_deaden_blocker_retain: float = 0.45
+# Controlled pad/blocker saves STEER cornerward instead of dying at the
+# goalie's feet — modern active-rebound doctrine (goalie realism audit F12).
+@export var save_steer_speed: float = 5.0            # m/s cornerward exit off a controlled pad save
+@export var save_steer_lateral_weight: float = 1.0   # cornerward bias (lateral vs forward)
+@export var save_steer_forward_weight: float = 0.35  # out-of-crease bias
 
 var carrier: Skater = null
 var pickup_locked: bool = false
@@ -587,8 +590,9 @@ func _build_deaden_cfg() -> void:
 	_deaden_cfg.drop_speed = save_deaden_drop_speed
 	_deaden_cfg.glove_retain = save_deaden_glove_retain
 	_deaden_cfg.chest_retain = save_deaden_chest_retain
-	_deaden_cfg.pad_retain = save_deaden_pad_retain
-	_deaden_cfg.blocker_retain = save_deaden_blocker_retain
+	_deaden_cfg.pad_steer_speed = save_steer_speed
+	_deaden_cfg.steer_lateral_weight = save_steer_lateral_weight
+	_deaden_cfg.steer_forward_weight = save_steer_forward_weight
 
 
 # Classify a save surface by its StaticBody3D node name (LeftPad / RightPad /
@@ -618,7 +622,18 @@ func _resolve_save_rebound(part_body: Node3D) -> void:
 	var incoming: Vector3 = _pre_contact_velocity
 	if not GoalieSaveRules.is_controlled_save(incoming.length(), part, _deaden_cfg):
 		return
-	_pending_save_deaden = GoalieSaveRules.deadened_velocity(incoming, part, _deaden_cfg)
+	# Steered pad/blocker saves need the contact side (which side of the goalie
+	# the puck arrived at → which corner the toe-out fires it to) and the
+	# goalie's direction_sign (forward = out of the crease). Both derived from
+	# the contacted goalie's transform, deterministic on host and client.
+	var save_goalie: Goalie = _goalie_ancestor(part_body)
+	var contact_side: float = 0.0
+	var goalie_dir_sign: int = 0
+	if save_goalie != null:
+		contact_side = signf(global_position.x - save_goalie.global_position.x)
+		goalie_dir_sign = int(signf(-save_goalie.global_position.z))
+	_pending_save_deaden = GoalieSaveRules.deadened_velocity(
+			incoming, part, contact_side, goalie_dir_sign, _deaden_cfg)
 	_pending_save_deaden_active = true
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
