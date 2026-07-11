@@ -957,8 +957,9 @@ func _setup_shooting_drill(start_z: float) -> void:
 # Minimum normalized charge (0..1 predicted release power) for the Wrist Shot
 # drill to count the shot as a real charged wrister rather than a soft flick.
 # Wrister power is the pure mouse-speed model — a genuine sweep reads as real
-# power on the charge ring — so the drill's "drag to aim and rip it" lesson
-# gates on the player having built meaningful power, not a drag distance.
+# power in shot_charge (the every-tick predicted release) — so the drill's
+# "drag to aim and rip it" lesson gates on the player having built meaningful
+# power, not a drag distance.
 const _WRIST_CHARGE_QUALIFY: float = 0.2
 
 # Records whether the just-released shot satisfies the active drill's required

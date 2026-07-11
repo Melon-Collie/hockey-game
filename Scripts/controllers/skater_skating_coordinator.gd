@@ -291,16 +291,14 @@ func apply(delta: float) -> void:
 	_wrister_load = lerpf(_wrister_load, wrister_target,
 			minf(_controller.wrister_load_blend_speed * delta, 1.0))
 	# Slapper wind-up engagement, re-derived from the replicated charge the way
-	# every machine can: shot_charge fills over max_slapper_charge_time while
-	# the wind-up pose fills over the (shorter) slapper_wind_up_time, so
-	# rescale, clamp, and sqrt-ease to match the torso coil's front-loaded snap
+	# every machine can: shot_charge and the wind-up pose both fill over
+	# max_slapper_charge_time (the pose is the charge gauge — see
+	# SkaterController.slapper_wind_up_t), so shot_charge IS the wind-up
+	# progress; sqrt-ease to match the torso coil's front-loaded snap
 	# (SkaterPoseCoordinator.apply_upper_body).
 	var slap_target: float = 0.0
 	if in_slap_charge:
-		slap_target = sqrt(clampf(
-				_skater.shot_charge * _controller.max_slapper_charge_time
-					/ maxf(_controller.slapper_wind_up_time, 0.001),
-				0.0, 1.0))
+		slap_target = sqrt(clampf(_skater.shot_charge, 0.0, 1.0))
 	_slap_load = lerpf(_slap_load, slap_target,
 			minf(_controller.wrister_load_blend_speed * delta, 1.0))
 	var kick_env: float = 0.0

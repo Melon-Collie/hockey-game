@@ -28,7 +28,7 @@ class Callbacks:
 	# Shot releases
 	var release_wrister: Callable                 # (input: InputState)
 	var fire_quick_shot: Callable                 # (input: InputState) — instant quick shot / pass
-	var release_slapper: Callable                 # (input: InputState, one_timer: bool)
+	var release_slapper: Callable                 # (input: InputState)
 	# puck distance check + ShotMechanics + signal.
 	# Returns { fired: bool, direction: Vector3, follow_through_duration: float }
 	var try_one_timer_release: Callable           # (input: InputState) -> Dictionary
@@ -141,7 +141,7 @@ func _state_slapper_charge_with_puck(_skater: Skater, input: InputState, delta: 
 			_cancel_slapper_internal()
 			return
 		if not input.slap_held:
-			_cb.release_slapper.call(input, true)
+			_cb.release_slapper.call(input)
 			return
 
 	_cb.update_slapper_charge.call(delta)
@@ -149,7 +149,7 @@ func _state_slapper_charge_with_puck(_skater: Skater, input: InputState, delta: 
 	_cb.apply_slapper_velocity_drag.call(delta)
 
 	if not input.slap_held:
-		_cb.release_slapper.call(input, false)
+		_cb.release_slapper.call(input)
 
 
 func _state_slapper_charge_without_puck(_skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:

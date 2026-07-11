@@ -124,9 +124,9 @@ func test_quick_shot_release_still_flicks() -> void:
 
 func test_slapper_wind_up_loads_back_leg() -> void:
 	var rest_body_y: float = _skater.upper_body.position.y
-	# A full wind-up: shot_charge fills over max_slapper_charge_time (0.7 s)
-	# while the wind-up completes in slapper_wind_up_time (0.3 s), so charge
-	# 1.0 is well past a complete wind-up.
+	# A full wind-up: the pose fills over the same max_slapper_charge_time as
+	# shot_charge (the wind-up IS the charge gauge), so charge 1.0 is a
+	# complete wind-up.
 	_skater.current_shot_state = State.SLAPPER_CHARGE_WITH_PUCK
 	_skater.shot_charge = 1.0
 	_tick(180)

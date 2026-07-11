@@ -457,7 +457,14 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 
 # ── Slapper Tuning ────────────────────────────────────────────────────────────
 @export var slapper_wind_up_height: float = 1.0
-@export var slapper_wind_up_time: float = 0.3
+# (No separate wind-up duration — the pose fills over max_slapper_charge_time,
+# see slapper_wind_up_t(), so the animation IS the charge readout.)
+# Full-charge tell: with no charge ring, the wind-up pose IS the gauge, so
+# "the coil is maxed" needs a live cue — a small quiver at the apex (the
+# shooter straining at the top). Amplitude in metres on the blade height,
+# half of it on the top hand.
+@export var slapper_full_quiver_m: float = 0.02
+@export var slapper_full_quiver_hz: float = 9.0
 @export var slapper_zone_radius: float = 0.5
 # Where the one-timer reception zone (and slap-with-puck pin) lives. Heavily
 # lateral with a small forward bias matches a real cross-ice one-timer stance:
@@ -474,8 +481,9 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Wind-up coil: layered on top of the aim-tracking torso angle. Rotates the
 # back shoulder away from the target (for RHS that's CW from above, i.e. left
 # shoulder points at the puck) while pulling the top hand up and across the
-# body toward the back shoulder. Eased with sqrt so most of the coil happens
-# early and the latter part of the wind-up is a held "loaded" pose.
+# body toward the back shoulder. The coil fills over the FULL charge time
+# (slapper_wind_up_t) — the pose is the charge gauge — sqrt-eased so it snaps
+# into motion early and creeps to its apex exactly at max charge.
 @export var slapper_wind_up_twist_deg: float = 80.0
 @export var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
 # Pushes the top hand forward in upper-body-local space (negative local Z).
@@ -500,8 +508,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var slapper_wind_up_blade_x: float = 0.4       # blade lateral offset at full charge (was slapper_blade_x=1.0)
 @export var slapper_wind_up_blade_z: float = -0.4      # blade depth at full charge — negative = forward in body-local
 # Snappier lerp during the slapshot coil — the default upper_body_return_speed
-# is tuned for gentle aim-tracking and only reaches ~85% of an 80° target
-# inside the 0.3s wind-up window, which reads as a half-finished coil.
+# is tuned for gentle aim-tracking and lags a fast coil, which reads as a
+# half-finished wind-up.
 @export var slapper_wind_up_lerp_speed: float = 18.0
 @export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
 @export var one_timer_leniency_time: float = 0.08   # seconds of puck travel added to zone radius as leniency
@@ -1317,9 +1325,9 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.shot_state = _sm.get_state() as int
 	# The normalized 0..1 charge (skater.shot_charge covers the wrister's
 	# predicted release power AND slapper wind-up), in the u8 codec range.
-	# Currently unconsumed on the receive side: the blade charge-glow VFX that
-	# read it was cut by design (see ARCHITECTURE.md — charge feedback is the
-	# local on-ice charge ring, no world-space glow).
+	# Consumed on the receive side by the cosmetic pose layers (stick flex,
+	# shot stance, wind-up engagement) — charge feedback is fully diegetic:
+	# the wind-up animation itself is the gauge, there is no charge ring.
 	state.shot_charge = skater.shot_charge
 	state.stamina = stamina
 	state.sprint_locked = _sprint_locked
@@ -1642,21 +1650,15 @@ func _cancel_active_charge() -> void:
 			and s != State.SLAPPER_CHARGE_WITHOUT_PUCK:
 		return
 	_aiming.reset_slapper()
-	_transition_to_skating(true)
+	_transition_to_skating()
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 func _apply_state(input: InputState, delta: float) -> void:
 	_sm.dispatch(skater, input, delta, has_puck, _game_state.is_movement_locked())
 
 # ── State Helpers ─────────────────────────────────────────────────────────────
-func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
-	# Lost-charge feedback: if we're leaving an active charge state without
-	# firing (i.e. not via FOLLOW_THROUGH), flash the charge ring red. The
-	# ring auto-clears via Skater._physics_process once the flash decays.
+func _transition_to_skating() -> void:
 	var prev_state: int = _sm.get_state()
-	var was_charging: bool = prev_state == State.WRISTER_AIM \
-			or prev_state == State.SLAPPER_CHARGE_WITH_PUCK \
-			or prev_state == State.SLAPPER_CHARGE_WITHOUT_PUCK
 	skater.shot_charge = 0.0
 	skater.slapper_aim_dir = Vector3.ZERO
 	if has_puck:
@@ -1681,8 +1683,6 @@ func _transition_to_skating(suppress_lost_flash: bool = false) -> void:
 	skater.set_slapper_zone(false)
 	skater.exit_slapshot_pinning()
 	_hide_slapshot_hud()
-	if show_one_timer_indicator and was_charging and not suppress_lost_flash:
-		skater.trigger_charge_lost_flash()
 
 # Aligns BOTH facing stores at spawn: the Skater node's root rotation and the
 # pose coordinator's smoothed facing. The spawn path used to set only the
@@ -1786,7 +1786,6 @@ func _enter_slapper_charge(input: InputState) -> void:
 		if show_one_timer_indicator:
 			skater.set_slapper_indicator(true, slapper_zone_offset_x, slapper_zone_offset_z, slapper_zone_radius)
 	if show_one_timer_indicator:
-		skater.set_charge_ring_visible(true)
 		skater.set_slapshot_arrow(true, slapper_zone_offset_x, slapper_zone_offset_z, slapper_zone_radius)
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 
@@ -1880,14 +1879,15 @@ func _fire_quick_shot(input: InputState) -> void:
 	_sm.follow_through_timer = quick_shot_follow_through_duration
 	_sm.follow_through_duration_total = quick_shot_follow_through_duration
 
-func _release_slapper(input: InputState, one_timer: bool = false) -> void:
+func _release_slapper(input: InputState) -> void:
 	if has_puck:
 		# Direction is locked at the moment slap was pressed — no mid-swing steering.
 		last_release_hand = ""
 		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 		var cfg: ShotMechanics.SlapperConfig = _slapper_config()
-		# One-timers always fire at max power regardless of actual charge built.
-		var charge: float = cfg.max_slapper_charge_time if one_timer else _aiming.slapper_charge_timer
+		# One-timers (puck arrived mid-charge) ride the same timer as a normal
+		# release — power is whatever wind-up was actually built.
+		var charge: float = _aiming.slapper_charge_timer
 		var result := ShotMechanics.release_slapper(
 				skater.upper_body_to_global(skater.get_blade_position()),
 				input.mouse_world_pos,
@@ -1915,7 +1915,6 @@ func _hide_slapshot_hud() -> void:
 		return
 	skater.set_slapper_indicator(false)
 	skater.set_slapshot_arrow(false)
-	skater.set_charge_ring_visible(false)
 
 func _update_wrister_charge(input: InputState) -> void:
 	if not has_puck:
@@ -1952,21 +1951,32 @@ func _update_wrister_charge(input: InputState) -> void:
 			_wrister_config(), _get_charge_direction(), false,
 			_wrister_sweep_speed(input))
 	skater.predicted_shot_velocity = pred.direction * pred.power
-	# The charge ring shows the release-now SPEED (normalized predicted power over
+	# shot_charge carries the release-now SPEED (normalized predicted power over
 	# the min→max band) — the pure mouse-speed model, so it always matches the
 	# shot that would come out this tick. This is the honest readout the goalie
-	# leans on and what the stick-flex pose keys off.
+	# leans on and what the stick-flex pose keys off (the flex is the only
+	# visual charge feedback — there is no charge ring).
 	var power_span: float = maxf(max_wrister_power - min_wrister_power, 0.001)
 	skater.shot_charge = clampf((pred.power - min_wrister_power) / power_span, 0.0, 1.0)
-	# Charge ring is local-only; gate on the same flag as the one-timer reticle.
-	if show_one_timer_indicator:
-		skater.set_charge_ring_visible(true)
 
 func _update_slapper_charge(delta: float) -> void:
 	_aiming.tick_slapper(delta)
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
+
+# Normalized wind-up progress (0..1) over the FULL charge time. With the charge
+# ring gone the wind-up pose is the charge gauge, so every pose consumer (blade
+# lift, torso coil, downswing start) must reach its apex exactly at max charge —
+# one definition keeps them agreeing. Deterministic through reconcile replay:
+# the charge timer is saved/restored with the aiming state.
+func slapper_wind_up_t() -> float:
+	return clampf(_aiming.slapper_charge_timer / maxf(max_slapper_charge_time, 0.001), 0.0, 1.0)
+
+# Seconds the charge timer has sat past full — drives the full-charge quiver
+# phase deterministically (no wall clock in pose math; replay-safe).
+func slapper_overcharge_seconds() -> float:
+	return maxf(_aiming.slapper_charge_timer - max_slapper_charge_time, 0.0)
 
 func _apply_slapper_velocity_drag(delta: float) -> void:
 	var slapper_vel := Vector2(skater.velocity.x, skater.velocity.z)
@@ -1995,7 +2005,7 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	var cfg: ShotMechanics.SlapperConfig = _slapper_config()
 	var result := ShotMechanics.release_slapper(
 			blade_world, input.mouse_world_pos,
-			_elevation_level, cfg.max_slapper_charge_time, cfg, locked_dir_3d)
+			_elevation_level, _aiming.slapper_charge_timer, cfg, locked_dir_3d)
 	result.power = ShotReleaseRules.one_timer_power(
 			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius)
 	if not is_replaying:

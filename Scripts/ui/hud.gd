@@ -64,8 +64,6 @@ var _spectator_wrapper: Control = null
 # Parent of all scalable HUD chrome — see _update_hud_scale. Popups/menus (own
 # CanvasLayers) and the off-screen indicators live outside it.
 var _scale_root: Control = null
-var _stamina_root: Control = null
-var _stamina_fill: ColorRect = null
 var _ghost_banner_root: Control = null
 var _ghost_reason_label: Label = null
 var _ghost_instr_label: Label = null
@@ -77,11 +75,7 @@ var _ghost_pulse_t: float = 0.0
 # zone, where no offside ever occurred.
 var _ghost_was_offside: bool = false
 
-const _STAMINA_W: float = 240.0
-const _STAMINA_H: float = 12.0
-const _STAMINA_NORMAL := MenuStyle.HUD_RING_SELF             # matches your own skater ring color
-const _STAMINA_LOW    := Color(0.95, 0.65, 0.20, 1.0)        # amber when running low
-const _STAMINA_LOCKED := MenuStyle.DANGER                    # red while exhausted
+const _WARN_AMBER := Color(0.95, 0.65, 0.20, 1.0)            # clock-warning toast tint
 
 const _DARK_BG    := MenuStyle.BROADCAST_BG
 const _WHITE      := MenuStyle.BROADCAST_CREAM
@@ -109,7 +103,6 @@ func _ready() -> void:
 	_build_clock_warning()
 	_build_top_goal_banner()
 	_build_version_tag()
-	_build_stamina_bar()
 	_build_ghost_banner()
 	_build_bug_icon()
 	_build_skip_replay_prompt()
@@ -711,62 +704,8 @@ func _build_version_tag() -> void:
 # The FPS readout lives in NetworkDebugOverlay's top-right diagnostics row
 # (next to the always-on network health dot) so the two can't overlap.
 
-# Sprint stamina bar — a thin gauge centred along the bottom edge. Only the
-# local player's stamina is shown; it's driven each frame from the local
-# controller in _update_stamina_bar(). Hidden for spectators (no controller).
-func _build_stamina_bar() -> void:
-	_stamina_root = Control.new()
-	_stamina_root.anchor_left = 0.5
-	_stamina_root.anchor_right = 0.5
-	_stamina_root.anchor_top = 1.0
-	_stamina_root.anchor_bottom = 1.0
-	_stamina_root.offset_left = -_STAMINA_W * 0.5
-	_stamina_root.offset_right = _STAMINA_W * 0.5
-	_stamina_root.offset_top = -44.0
-	_stamina_root.offset_bottom = -44.0 + _STAMINA_H
-	_stamina_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_stamina_root.visible = false
-
-	var bg := ColorRect.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(_DARK_BG.r, _DARK_BG.g, _DARK_BG.b, 0.72)
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_stamina_root.add_child(bg)
-
-	# Fill spans 0..stamina of the root width via anchor_right; a 1px inset keeps
-	# the dark background reading as a frame around it.
-	_stamina_fill = ColorRect.new()
-	_stamina_fill.anchor_left = 0.0
-	_stamina_fill.anchor_top = 0.0
-	_stamina_fill.anchor_right = 1.0
-	_stamina_fill.anchor_bottom = 1.0
-	_stamina_fill.offset_left = 1.0
-	_stamina_fill.offset_top = 1.0
-	_stamina_fill.offset_bottom = -1.0
-	_stamina_fill.color = _STAMINA_NORMAL
-	_stamina_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_stamina_root.add_child(_stamina_fill)
-
-	_scale_root.add_child(_stamina_root)
-
-func _update_stamina_bar() -> void:
-	if _stamina_root == null:
-		return
-	var record: PlayerRecord = GameManager.get_local_player()
-	var controller: SkaterController = record.controller if record != null else null
-	if controller == null:
-		_stamina_root.visible = false
-		return
-	_stamina_root.visible = true
-	var s: float = clampf(controller.stamina, 0.0, 1.0)
-	# Fill width: inset by 1px on the right so it never overhangs the frame.
-	_stamina_fill.offset_right = -1.0 - (1.0 - s) * (_STAMINA_W - 2.0)
-	if controller.is_sprint_exhausted():
-		_stamina_fill.color = _STAMINA_LOCKED
-	elif s < 0.3:
-		_stamina_fill.color = _STAMINA_LOW
-	else:
-		_stamina_fill.color = _STAMINA_NORMAL
+# (The old bottom-edge sprint stamina bar is gone — stamina now lives on the
+# ice as the ring inside the player's own circle; see SkaterHUDCoordinator.)
 
 # Local-player infraction banner. Shown whenever the local skater is ghosted
 # for a reason the player can clear themselves (offside or crease violation),
@@ -778,7 +717,7 @@ func _build_ghost_banner() -> void:
 	var root := Control.new()
 	root.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	# Sits below the scorebug, centred in the upper third — out of the way of the
-	# lower-third phase chyron and the bottom-edge stamina bar.
+	# lower-third phase chyron.
 	root.offset_top = 96.0
 	root.offset_bottom = 220.0
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -883,13 +822,12 @@ var _hud_scale_viewport: Vector2i = Vector2i.ZERO
 
 func _process(_delta: float) -> void:
 	_update_hud_scale()
-	_update_stamina_bar()
 	_update_shot_speed_toast_hook()
 	_update_ghost_banner()
 
 
 # Keeps puck_release_requested from the CURRENT local controller connected.
-# Polled per frame (same lifecycle dodge as the stamina bar) because the local
+# Polled per frame (re-fetching the record each time) because the local
 # controller changes across respawns, session changes, and spectator swaps —
 # the comparison is a no-op except on the frame it actually changes.
 func _update_shot_speed_toast_hook() -> void:
@@ -1292,7 +1230,7 @@ func _on_clock_updated(t: float) -> void:
 	if t <= 30.0 and t > 0.0 and not _warned_thirty:
 		_warned_thirty = true
 		if _toast_stack != null:
-			_toast_stack.push("30 SECONDS LEFT", _STAMINA_LOW)
+			_toast_stack.push("30 SECONDS LEFT", _WARN_AMBER)
 	# Final-10 hero countdown + per-second pulse on both the big number and the
 	# scorebug clock.
 	if t > 0.0 and t <= 10.0:

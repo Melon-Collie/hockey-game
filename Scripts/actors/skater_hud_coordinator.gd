@@ -2,16 +2,26 @@ class_name SkaterHUDCoordinator
 extends RefCounted
 
 # ── HUD geometry constants ────────────────────────────────────────────────────
-# Slot ring sits just inside RING_OUTER_R. Charge ring is concentric, just
-# outside, with a small gap. Chevron and player name sit below the rings on
-# the screen-down side.
+# Slot ring sits just inside RING_OUTER_R. The stamina ring is concentric,
+# just inside the slot ring's inner edge with a small gap. Chevron and player
+# name sit below the rings on the screen-down side.
 const RING_LINE_SCALE: float     = 2.0   # line-thickness bump for readability; visual only, never a hitbox
 const RING_OUTER_R: float        = 0.45
-const CHARGE_RING_GAP: float     = 0.02
-const CHARGE_RING_OUTER_R: float = 0.49
-const CHARGE_RING_INNER_R: float = CHARGE_RING_OUTER_R - 0.04 * RING_LINE_SCALE
-const _CHARGE_FULL_PULSE_HZ: float = 3.0
-const _CHARGE_LOST_FLASH_DURATION: float = 0.35
+
+# Stamina ring — BOTW-style sprint gauge nested inside the player's own color
+# ring (self-only). Hidden while the pool is full; while draining/refilling the
+# arc empties clockwise over a faint track, goes amber when low, and flashes
+# red while sprint is locked out by exhaustion. The mesh is top_level with its
+# fill origin re-aligned to camera screen-up, so the gauge doesn't spin with
+# the skater's facing. Slot ring occupies 0.39..0.45 (RING_OUTER_R minus the
+# scaled line thickness); the stamina arc tucks inside that with a visible gap.
+const STAMINA_RING_OUTER_R: float = 0.37
+const STAMINA_RING_INNER_R: float = 0.31
+const _STAMINA_SHOW_BELOW: float = 0.999  # hidden while (effectively) full
+const _STAMINA_LOW_FRACTION: float = 0.3
+const _STAMINA_LOCKED_FLASH_HZ: float = 2.5
+const _STAMINA_LOW_COLOR := Color(0.95, 0.65, 0.20, 1.0)  # amber when running low
+const _STAMINA_TRACK_COLOR := Color(0.06, 0.08, 0.11, 0.55)
 
 # Player-name placement — billboarded Label3D just outside the slot ring.
 const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
@@ -62,36 +72,28 @@ const _RETICLE_HALF_LENGTH: float      = 0.06
 const _RING_SEGMENTS: int              = 48
 const _SLAPPER_HUD_Y: float            = 0.05
 
-# Charge ring shader: angle-mask + tri-color blend. Fill goes clockwise from
-# 12 o'clock. UV.x of the procedural ring encodes 0..1 clockwise; fragment
-# discards above `fill`. Lost-flash overrides fill color.
-const _CHARGE_RING_SHADER_CODE := """
+# Stamina ring shader: angle-mask radial gauge. Fill goes clockwise from
+# 12 o'clock (UV.x of the procedural ring encodes 0..1 clockwise); the
+# depleted remainder renders as a faint track so the fraction stays readable.
+# Fill color is picked CPU-side (normal / low / lockout flash) — it changes
+# rarely, so the shader stays a dumb two-color mask.
+const _STAMINA_RING_SHADER_CODE := """
 shader_type spatial;
 render_mode unshaded, blend_mix, depth_draw_opaque, cull_disabled;
 
-uniform float fill : hint_range(0.0, 1.0) = 0.0;
-uniform float pulse : hint_range(0.0, 1.0) = 0.0;
-uniform float lost_flash : hint_range(0.0, 1.0) = 0.0;
-uniform vec4 color_low;
-uniform vec4 color_high;
-uniform vec4 color_full;
-uniform vec4 color_lost;
+uniform float fill : hint_range(0.0, 1.0) = 1.0;
+uniform vec4 fill_color;
+uniform vec4 track_color;
 uniform float opacity = 0.7;
 
 void fragment() {
-	float t = UV.x;
-	if (t > fill && lost_flash < 0.001) {
-		discard;
+	if (UV.x <= fill) {
+		ALBEDO = fill_color.rgb;
+		ALPHA = opacity * fill_color.a;
+	} else {
+		ALBEDO = track_color.rgb;
+		ALPHA = opacity * track_color.a;
 	}
-	vec3 base = mix(color_low.rgb, color_high.rgb, clamp(fill, 0.0, 1.0));
-	if (pulse > 0.001) {
-		base = mix(base, color_full.rgb, pulse);
-	}
-	if (lost_flash > 0.001) {
-		base = mix(base, color_lost.rgb, lost_flash);
-	}
-	ALBEDO = base;
-	ALPHA = opacity * (lost_flash > 0.001 ? lost_flash : 1.0);
 }
 """
 
@@ -103,8 +105,8 @@ enum RingRelation { UNKNOWN = -1, SELF = 0, TEAMMATE = 1, ENEMY = 2 }
 var _skater: Skater
 
 var _ring_mesh: MeshInstance3D
-var _charge_ring_mesh: MeshInstance3D
-var _charge_ring_mat: ShaderMaterial
+var _stamina_ring_mesh: MeshInstance3D
+var _stamina_ring_mat: ShaderMaterial
 var _chevron_mesh: MeshInstance3D
 # Second stacked chevron, visible only at HIGH loft (level 2).
 var _chevron_mesh2: MeshInstance3D
@@ -132,8 +134,6 @@ var _slapper_ring_mesh: MeshInstance3D
 
 var _slapper_zone_radius_cached: float = 0.5
 var _slapper_current_ring_scale: float = 1.0
-var _charge_ring_visible: bool = false
-var _charge_lost_flash_timer: float = 0.0
 # Force-hide all per-skater HUD chrome regardless of replay-mode state. Used
 # by the offline replay viewer and live spectator mode where the broadcast /
 # chase / free cameras frame the rink from angles the flat ring decals weren't
@@ -165,9 +165,8 @@ var _cached_cam_basis_y: Vector3 = Vector3.ZERO
 var _cached_screen_down: Vector2 = Vector2(0.0, 1.0)
 var _cached_arc_base_angle: float = 0.0
 var _cached_chevron_dir: Vector3 = Vector3(0.0, 0.0, 1.0)
-var _last_fill: float = -1.0
-var _last_pulse: float = -1.0
-var _last_lost_flash: float = -1.0
+var _last_stamina_fill: float = -1.0
+var _last_stamina_color: Color = Color(0, 0, 0, 0)  # unreachable sentinel
 
 # Slot-ring relationship tint. The resolver (installed by PlayerRegistry)
 # returns a RingRelation each refresh; recolor is re-evaluated on a coarse
@@ -197,13 +196,18 @@ func setup(skater: Skater) -> void:
 	_ring_mesh.material_override = _make_hud_ice_material()
 	_skater.add_child(_ring_mesh)
 
-	_charge_ring_mesh = MeshInstance3D.new()
-	_charge_ring_mesh.name = "ChargeRing"
-	_charge_ring_mesh.mesh = _create_ring_mesh_with_uv(CHARGE_RING_INNER_R, CHARGE_RING_OUTER_R, 64)
-	_charge_ring_mat = _make_charge_ring_material()
-	_charge_ring_mesh.material_override = _charge_ring_mat
-	_charge_ring_mesh.visible = false
-	_skater.add_child(_charge_ring_mesh)
+	# Stamina ring: top_level so its world transform is rewritten each tick —
+	# parented transform would spin the gauge's 12-o'clock fill origin with the
+	# skater's facing. Hidden until the local player's pool dips below full
+	# (see _update_stamina_ring).
+	_stamina_ring_mesh = MeshInstance3D.new()
+	_stamina_ring_mesh.name = "StaminaRing"
+	_stamina_ring_mesh.top_level = true
+	_stamina_ring_mesh.mesh = _create_ring_mesh_with_uv(STAMINA_RING_INNER_R, STAMINA_RING_OUTER_R, 64)
+	_stamina_ring_mat = _make_stamina_ring_material()
+	_stamina_ring_mesh.material_override = _stamina_ring_mat
+	_stamina_ring_mesh.visible = false
+	_skater.add_child(_stamina_ring_mesh)
 
 	_chevron_mesh = MeshInstance3D.new()
 	_chevron_mesh.name = "ElevatedChevron"
@@ -307,7 +311,7 @@ func update(delta: float) -> void:
 		if not _hidden_for_replay:
 			_hidden_for_replay = true
 			if _ring_mesh != null: _ring_mesh.visible = false
-			if _charge_ring_mesh != null: _charge_ring_mesh.visible = false
+			if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 			if _chevron_mesh != null: _chevron_mesh.visible = false
 			if _chevron_mesh2 != null: _chevron_mesh2.visible = false
 			if _name_label != null: _name_label.visible = false
@@ -317,10 +321,10 @@ func update(delta: float) -> void:
 		return
 	if _hidden_for_replay:
 		_hidden_for_replay = false
-		# Restore the always-visible nodes. _charge_ring_mesh, _chevron_mesh,
+		# Restore the always-visible nodes. _stamina_ring_mesh, _chevron_mesh,
 		# _slapper_indicator children, and _slapper_ring_mesh are gated by
-		# their own show logic (driven from skater state) and will re-enable
-		# themselves as needed.
+		# their own show logic (driven from skater / stamina state) and will
+		# re-enable themselves as needed.
 		if _ring_mesh != null: _ring_mesh.visible = true
 		if _name_label != null: _name_label.visible = true
 		if _slapper_indicator != null: _slapper_indicator.visible = true
@@ -376,27 +380,60 @@ func update(delta: float) -> void:
 					0.05,
 					_chevron_mesh.global_position.z - _cached_screen_down.y * _CHEVRON_STACK_GAP)
 
-	if _charge_ring_mesh != null and _charge_ring_mesh.visible:
-		var fill_val: float = clampf(_skater.shot_charge, 0.0, 1.0)
-		var pulse_amount: float = 0.0
-		if _skater.shot_charge >= 0.999:
-			pulse_amount = 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.001 * TAU * _CHARGE_FULL_PULSE_HZ)
-		var lost_t: float = 0.0
-		if _charge_lost_flash_timer > 0.0:
-			_charge_lost_flash_timer = maxf(_charge_lost_flash_timer - delta, 0.0)
-			lost_t = _charge_lost_flash_timer / _CHARGE_LOST_FLASH_DURATION
-		if not is_equal_approx(fill_val, _last_fill):
-			_last_fill = fill_val
-			_charge_ring_mat.set_shader_parameter("fill", fill_val)
-		if not is_equal_approx(pulse_amount, _last_pulse):
-			_last_pulse = pulse_amount
-			_charge_ring_mat.set_shader_parameter("pulse", pulse_amount)
-		if not is_equal_approx(lost_t, _last_lost_flash):
-			_last_lost_flash = lost_t
-			_charge_ring_mat.set_shader_parameter("lost_flash", lost_t)
-		# Auto-hide once the lost flash finishes and there's nothing to show.
-		if _skater.shot_charge <= 0.001 and lost_t <= 0.001 and not _charge_ring_visible:
-			_charge_ring_mesh.visible = false
+	_update_stamina_ring()
+
+
+# ── Stamina ring ──────────────────────────────────────────────────────────────
+# BOTW-style self-only sprint gauge. Gates on the ring-relation resolver's
+# SELF result, so only one skater in the scene ever runs the body of this.
+# Stamina lives on the LOCAL controller (it is never mirrored onto the Skater
+# node), so the controller is re-fetched per tick — the same lifecycle dodge
+# the old bottom-edge HUD bar used: the local controller changes across
+# respawns, session changes, and spectator swaps, and the fetch is a no-op
+# except on the frame it actually changes. Stays visible while ghosted —
+# sprinting back to tag up is exactly when the gauge matters.
+func _update_stamina_ring() -> void:
+	if _stamina_ring_mesh == null:
+		return
+	var controller: SkaterController = null
+	if _ring_relation_cached == RingRelation.SELF:
+		var record: PlayerRecord = GameManager.get_local_player()
+		controller = record.controller if record != null else null
+	if controller == null:
+		if _stamina_ring_mesh.visible:
+			_stamina_ring_mesh.visible = false
+		return
+	var s: float = clampf(controller.stamina, 0.0, 1.0)
+	var locked: bool = controller.is_sprint_exhausted()
+	# Hidden while full (the BOTW rule): the gauge only earns screen space
+	# while the pool is actually in play.
+	var show: bool = s < _STAMINA_SHOW_BELOW or locked
+	if _stamina_ring_mesh.visible != show:
+		_stamina_ring_mesh.visible = show
+	if not show:
+		return
+	# Follow the skater; re-align the fill's 12-o'clock origin to camera
+	# screen-up so the gauge reads the same regardless of body facing.
+	_stamina_ring_mesh.global_position = Vector3(
+			_skater.global_position.x, 0.05, _skater.global_position.z)
+	_stamina_ring_mesh.rotation = Vector3(0.0, _cached_arc_base_angle, 0.0)
+	if not is_equal_approx(s, _last_stamina_fill):
+		_last_stamina_fill = s
+		_stamina_ring_mat.set_shader_parameter("fill", s)
+	# Fill color: normal tracks the player's own picked ring color (the gauge
+	# reads as part of "you"); amber when low; flashing red while locked out.
+	var col: Color
+	if locked:
+		var flash_t: float = 0.5 + 0.5 * sin(
+				Time.get_ticks_msec() * 0.001 * TAU * _STAMINA_LOCKED_FLASH_HZ)
+		col = MenuStyle.DANGER.lerp(_STAMINA_TRACK_COLOR, flash_t * 0.6)
+	elif s < _STAMINA_LOW_FRACTION:
+		col = _STAMINA_LOW_COLOR
+	else:
+		col = PlayerPrefs.ring_color_self
+	if col != _last_stamina_color:
+		_last_stamina_color = col
+		_stamina_ring_mat.set_shader_parameter("fill_color", col)
 
 
 # Y-anchor write only when skater's vertical position changes. Skater Y is
@@ -410,8 +447,6 @@ func _refresh_height_anchors_if_skater_moved() -> void:
 	_last_skater_y = y
 	if _ring_mesh != null:
 		_ring_mesh.global_position.y = 0.05
-	if _charge_ring_mesh != null:
-		_charge_ring_mesh.global_position.y = 0.05
 	if _slapper_indicator != null:
 		_slapper_indicator.global_position.y = 0.0
 
@@ -565,25 +600,13 @@ func set_world_hud_hidden(hidden: bool) -> void:
 	if hidden:
 		_hidden_for_replay = true
 		if _ring_mesh != null: _ring_mesh.visible = false
-		if _charge_ring_mesh != null: _charge_ring_mesh.visible = false
+		if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 		if _chevron_mesh != null: _chevron_mesh.visible = false
 		if _chevron_mesh2 != null: _chevron_mesh2.visible = false
 		if _name_label != null: _name_label.visible = false
 		if _slapper_indicator != null: _slapper_indicator.visible = false
 		if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
 		if _self_beacon != null: _self_beacon.visible = false
-
-
-func set_charge_ring_visible(visible: bool) -> void:
-	_charge_ring_visible = visible
-	if _charge_ring_mesh != null:
-		_charge_ring_mesh.visible = visible or _charge_lost_flash_timer > 0.0
-
-
-func trigger_charge_lost_flash() -> void:
-	_charge_lost_flash_timer = _CHARGE_LOST_FLASH_DURATION
-	if _charge_ring_mesh != null:
-		_charge_ring_mesh.visible = true
 
 
 func update_slapper_indicator_convergence(ratio: float) -> void:
@@ -651,8 +674,8 @@ func apply_ghost(ghost: bool) -> void:
 		_ring_mesh.visible = not ghost and not hud_hidden
 	if _name_label != null:
 		_name_label.visible = not ghost and not hud_hidden
-	if _charge_ring_mesh != null and ghost:
-		_charge_ring_mesh.visible = false
+	# The stamina ring is left alone: like the beacon, it stays useful while
+	# ghosted (sprinting back to tag up), and its own show logic re-gates it.
 	if ghost:
 		if _slapper_arrow_mesh != null:
 			_slapper_arrow_mesh.visible = false
@@ -991,18 +1014,14 @@ func _make_hud_ice_material() -> StandardMaterial3D:
 	return mat
 
 
-func _make_charge_ring_material() -> ShaderMaterial:
+func _make_stamina_ring_material() -> ShaderMaterial:
 	var shader := Shader.new()
-	shader.code = _CHARGE_RING_SHADER_CODE
+	shader.code = _STAMINA_RING_SHADER_CODE
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
-	mat.set_shader_parameter("fill", 0.0)
-	mat.set_shader_parameter("pulse", 0.0)
-	mat.set_shader_parameter("lost_flash", 0.0)
-	mat.set_shader_parameter("color_low", MenuStyle.CHARGE_LOW)
-	mat.set_shader_parameter("color_high", MenuStyle.CHARGE_HIGH)
-	mat.set_shader_parameter("color_full", MenuStyle.CHARGE_FULL)
-	mat.set_shader_parameter("color_lost", MenuStyle.CHARGE_LOST)
+	mat.set_shader_parameter("fill", 1.0)
+	mat.set_shader_parameter("fill_color", MenuStyle.HUD_RING_SELF)
+	mat.set_shader_parameter("track_color", _STAMINA_TRACK_COLOR)
 	mat.set_shader_parameter("opacity", MenuStyle.HUD_OPACITY)
 	return mat
 
