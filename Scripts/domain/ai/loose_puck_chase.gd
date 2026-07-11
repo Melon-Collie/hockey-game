@@ -47,13 +47,23 @@ const MAX_LEAD_S: float = 0.5
 #   teammate_ids   — this team's peer_ids
 #   puck_pos/_vel  — loose puck world position and velocity (XZ used)
 #   prev_elected   — last frame's elected chaser for this team (-1 if none)
+#   puck_playable  — false for a DEAD loose puck (goalie smother / phase lock:
+#                    pickup_locked with no carrier). Nobody can play a dead
+#                    puck, so nobody is elected to chase it — every bot falls
+#                    back to its positional role, which is the real behavior
+#                    around a covered puck: attackers peel off the crease, the
+#                    defense resets for the release instead of hovering over a
+#                    puck they can't touch.
 static func elect(
 		skater_states: Dictionary,
 		teammate_ids: Array,
 		puck_pos: Vector3,
 		puck_vel: Vector3,
 		prev_elected: int,
-		caps_by_peer: Dictionary = {}) -> int:
+		caps_by_peer: Dictionary = {},
+		puck_playable: bool = true) -> int:
+	if not puck_playable:
+		return -1
 	var best_pid: int = -1
 	var best_t: float = INF
 	for pid: int in teammate_ids:

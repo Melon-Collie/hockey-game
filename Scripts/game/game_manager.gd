@@ -2146,6 +2146,13 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		return
 	var puck_pos: Vector3 = snap.puck_state.position
 	var puck_vel: Vector3 = snap.puck_state.velocity
+	# A locked loose puck is DEAD — a goalie smother (COVERING hold) or a phase
+	# lock (faceoff prep / celebration). Publishing a -1 election makes every
+	# bot exit/skip CHASE_PUCK and play its positional role instead of crowding
+	# a puck nothing can touch; the next enrichment after the release/unlock
+	# elects a fresh chaser immediately.
+	var puck_playable: bool = not (puck != null and puck.pickup_locked \
+			and puck.get_carrier() == null)
 	for team_id: int in snap.teammate_ids_by_team:
 		var ids: Array = snap.teammate_ids_by_team[team_id]
 		# Momentum-aware + hysteretic election (see AILoosePuckChase):
@@ -2154,7 +2161,8 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		# flickering frame-to-frame.
 		var best_pid: int = AILoosePuckChase.elect(
 				snap.skater_states, ids, puck_pos, puck_vel,
-				_prev_chase_by_team.get(team_id, -1), _registry.caps_by_peer)
+				_prev_chase_by_team.get(team_id, -1), _registry.caps_by_peer,
+				puck_playable)
 		_prev_chase_by_team[team_id] = best_pid
 		snap.closest_to_puck_by_team[team_id] = best_pid
 
