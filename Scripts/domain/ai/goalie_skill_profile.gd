@@ -88,6 +88,11 @@ var pad_toe_out_butterfly_deg: float
 # Lateral push ramp acceleration (m/s²) — NOT the top speed. Lower → slow to get
 # moving side-to-side.
 var lateral_accel_mps2: float
+# GO margin (s) for the behind-net rim stop — INF means the goalie never plays
+# the puck. Timid puck play is a real weaker-goalie trait, so only the top
+# tier leaves the net; it also means the feature carries zero risk on the
+# tiers most players face.
+var puck_play_go_margin_s: float
 
 
 func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
@@ -95,7 +100,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 		p_move_read_max_delay_s: float, p_depth_aggressive_m: float,
 		p_depth_base_m: float, p_glove_react_max_speed_mps: float,
 		p_blocker_react_max_speed_mps: float, p_pad_toe_out_butterfly_deg: float,
-		p_lateral_accel_mps2: float) -> void:
+		p_lateral_accel_mps2: float, p_puck_play_go_margin_s: float) -> void:
 	arm_reaction_delay_s = p_arm_reaction_delay_s
 	cross_crease_react_delay_s = p_cross_crease_react_delay_s
 	poke_radius_m = p_poke_radius_m
@@ -107,13 +112,14 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 	blocker_react_max_speed_mps = p_blocker_react_max_speed_mps
 	pad_toe_out_butterfly_deg = p_pad_toe_out_butterfly_deg
 	lateral_accel_mps2 = p_lateral_accel_mps2
+	puck_play_go_margin_s = p_puck_play_go_margin_s
 
 
 # Hard == the GoalieController @export defaults verbatim. Keep these in sync with
 # the controller so applying Hard is a true no-op (the ceiling we've tuned).
 static func hard() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
-			1.75, 1.30, 5.0, 5.0, 18.0, 14.0)
+			1.75, 1.30, 5.0, 5.0, 18.0, 14.0, 0.9)
 
 
 # Normal is the middle tier: it keeps Hard's read knobs eased AND takes
@@ -123,7 +129,7 @@ static func hard() -> GoalieSkillProfile:
 # deke.
 static func normal() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.28, 0.20, 0.16, 0.42, 0.20,
-			1.45, 1.05, 4.1, 4.1, 12.0, 11.0)
+			1.45, 1.05, 4.1, 4.1, 12.0, 11.0, INF)
 
 
 # Easy is the newcomer floor: positionally deep (gives up the net), slow arms
@@ -133,7 +139,7 @@ static func normal() -> GoalieSkillProfile:
 # a skilled human scores on any tier and can't feel this one by playing it.
 static func easy() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.36, 0.28, 0.11, 0.55, 0.28,
-			1.15, 0.80, 3.25, 3.25, 6.0, 8.0)
+			1.15, 0.80, 3.25, 3.25, 6.0, 8.0, INF)
 
 
 static func for_difficulty(difficulty: int) -> GoalieSkillProfile:

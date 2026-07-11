@@ -173,6 +173,58 @@ func test_advance_slide_finishes_below_min_speed() -> void:
 	assert_eq(sb.arc_t, 1.0)
 	assert_eq(sb.cooldown_timer, 0.0, "cooldown reset on finish")
 
+# Deep slide (committed from challenge depth): progress is normalized by the
+# FULL path length, so the metre-plus depth leg travels at the push speed
+# instead of riding the short lateral leg's schedule. Backward speed is
+# bounded by the push speed, and the trip takes real time.
+
+func test_deep_slide_depth_speed_bounded_by_push_speed() -> void:
+	# Challenge depth 1.3 → post seal: lateral leg 0.355, depth leg ~1.2.
+	# Pre-fix, depth completed on the lateral schedule — an effective
+	# ~15 m/s backward snap. Path-normalized, no tick may move depth
+	# faster than the push speed (4.5 m/s).
+	sb.commit_slide(0.0, 1.3, 0.355, 0.915, 0.0, 1.3)
+	sb.tick_coil(sb.coil_duration)
+	var dt: float = 1.0 / 120.0
+	var prev_depth: float = 1.3
+	var max_depth_rate: float = 0.0
+	for _i in range(120):
+		var pos: Vector2 = sb.advance_slide(dt, 0.0, 0.915)
+		max_depth_rate = maxf(max_depth_rate, absf(pos.y - prev_depth) / dt)
+		prev_depth = pos.y
+		if sb.is_slide_finished():
+			break
+	assert_lt(max_depth_rate, sb.slide_initial_speed + 0.5,
+			"depth never outruns the push speed (plus the pivot-bow ripple)")
+
+func test_deep_slide_takes_real_travel_time() -> void:
+	# Path ≈ 1.25 m at 4.5 m/s decaying 6 m/s² → ~0.32 s. The pre-fix
+	# lateral-normalized advance finished the same slide in ~0.08 s.
+	sb.commit_slide(0.0, 1.3, 0.355, 0.915, 0.0, 1.3)
+	sb.tick_coil(sb.coil_duration)
+	var dt: float = 1.0 / 120.0
+	var ticks: int = 0
+	while not sb.is_slide_finished() and ticks < 240:
+		sb.advance_slide(dt, 0.0, 0.915)
+		ticks += 1
+	assert_true(sb.is_slide_finished(), "friction budget still completes the deep path")
+	assert_gt(ticks * dt, 0.25, "a challenge-depth slide is a visible trip, not a snap")
+
+func test_deep_slide_path_is_the_committed_diagonal() -> void:
+	# Mid-slide the body sits on the straight start→end line (± the small
+	# pivot bow): depth progress tracks lateral progress 1:1 in arc terms.
+	sb.commit_slide(0.0, 1.3, 0.355, 0.915, 0.0, 1.3)
+	sb.tick_coil(sb.coil_duration)
+	var dt: float = 1.0 / 120.0
+	for _i in range(15):
+		sb.advance_slide(dt, 0.0, 0.915)
+	var pos: Vector2 = sb.advance_slide(dt, 0.0, 0.915)
+	var t_x: float = (pos.x - 0.0) / 0.355
+	var line_depth: float = lerpf(1.3, sb.end_depth, t_x)
+	assert_almost_eq(pos.y, line_depth, sb.slide_pivot_arc_depth + 0.001,
+			"depth stays on the straight committed line, within the pivot bow")
+
+
 # Position is clamped to the post line — slide arcing wider than the net is
 # pinned at ±net_half_width.
 func test_advance_slide_clamps_x_to_post() -> void:

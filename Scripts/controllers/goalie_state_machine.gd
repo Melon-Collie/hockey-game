@@ -8,7 +8,30 @@ extends RefCounted
 # rotating around the planted (pivot) foot before the push-off translates it.
 # READY is the half-down active stance when the puck is in the goalie's
 # defensive half — distinct from STANDING so animation can show engagement.
-enum State { STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING, COILING }
+# VH_LEFT / VH_RIGHT are the post-integrated stance for a sharp-angle SHOT
+# threat still in FRONT of the goal line (post pad vertical for short-side-high
+# coverage); RVH_* stays the at/below-goal-line seal (wraps, walkouts). New
+# values are APPENDED so existing numeric values — duplicated in
+# domain/ai/role_behaviors/carrier.gd and on the wire as state_enum (u8) —
+# are preserved.
+# COVERING is the smother: the goalie collapses over a loose puck in the
+# crease when every sweep lane is covered — the real cover/freeze, resolved by
+# ruleset (NHL: whistle + defensive-zone faceoff; ARCADE: short hold, then a
+# live release). Appended last to preserve wire numbering.
+# PLAYING_PUCK is the tier-1 behind-net rim stop: skate out around the post,
+# paddle-down stop at the boards behind the net, skate back — "stop it, leave
+# it, get back", gated by an ultra-conservative go/no-go race. Appended last
+# to preserve wire numbering.
+# CATCHING / CATCHING_DOWN are the glove catch-and-hold: the puck is pinned in
+# the glove (squeeze-and-look), split into upright and butterfly variants so
+# clients' state-keyed body/head heights render the right silhouette. Same
+# ruleset-split resolution as COVERING when held under pressure; an
+# unpressured catch quick-drops and plays on (the real delay-of-game
+# incentive). Appended last to preserve wire numbering.
+enum State {
+	STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING, COILING,
+	VH_LEFT, VH_RIGHT, COVERING, PLAYING_PUCK, CATCHING, CATCHING_DOWN,
+}
 
 signal transitioned(prev: State, new: State)
 
@@ -40,6 +63,18 @@ func is_upright() -> bool:
 
 func is_rvh() -> bool:
 	return current == State.RVH_LEFT or current == State.RVH_RIGHT
+
+func is_vh() -> bool:
+	return current == State.VH_LEFT or current == State.VH_RIGHT
+
+func is_catching() -> bool:
+	return current == State.CATCHING or current == State.CATCHING_DOWN
+
+# Post-integrated — hugging a post in either family (RVH at/below the goal
+# line, VH for the in-front sharp-angle shot threat). Use for code that gates
+# on "the goalie is committed to a post", regardless of which stance.
+func is_post_integrated() -> bool:
+	return is_rvh() or is_vh()
 
 # Sets the state and emits `transitioned(prev, new)`. Returns true if the
 # state actually changed (no-op when new_state == current).

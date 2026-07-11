@@ -172,3 +172,23 @@ func test_update_impact_replaces_coords() -> void:
 	sr.update_impact(0.8, 1.1)
 	assert_eq(sr.impact_x, 0.8)
 	assert_eq(sr.impact_y, 1.1)
+
+# ── arm_delay_cut (pre-armed / quiet-eye read) ────────────────────────────────
+
+func test_arm_delay_cut_shortens_arm_timer() -> void:
+	# A pre-armed read (goalie was fixated on the windup) credits the arm read;
+	# the legs' credit arrives via the reduced `delay` argument.
+	sr.start(0.5, 0.3, true, 0.07, 0.0, 0.0, 0.06)
+	assert_almost_eq(sr.shot_timer, 0.07, 0.001)
+	assert_almost_eq(sr.arm_timer, 0.12, 0.001)
+
+func test_arm_delay_cut_never_goes_negative() -> void:
+	sr.start(0.5, 0.3, true, 0.0, 0.0, 0.0, 5.0)
+	assert_almost_eq(sr.arm_timer, 0.0, 0.001)
+
+func test_read_delay_stacks_on_top_of_arm_cut() -> void:
+	# Screens / caught-moving still push the primed read back — the credit only
+	# offsets the baseline, not the situational penalties.
+	sr.start(0.5, 0.3, true, 0.07, 0.0, 0.10, 0.06)
+	assert_almost_eq(sr.shot_timer, 0.17, 0.001)
+	assert_almost_eq(sr.arm_timer, 0.22, 0.001)

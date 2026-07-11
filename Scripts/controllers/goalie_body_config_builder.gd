@@ -82,11 +82,17 @@ const STICK_TILT_RVH: float = 65.0
 # because the blocker pad is rigidly attached — swinging too far moves the
 # whole pad off the right side of the body.
 var active_blade_max_yaw_deg: float = 25.0
-# Forward depth fed into the yaw atan2. Treating the threat as if it's
-# `active_blade_lookahead` metres in front means a small lateral offset still
-# produces a readable rotation (rather than the blade hard-snapping to 90°
-# whenever the puck is even slightly off-centre).
-var active_blade_lookahead: float = 1.5
+# Blade offset from the BlockArm assembly origin, BlockArm-local (keep in sync
+# with Goalie.tscn: Stick at y −0.25, StickBladeCollider at (−0.15, −0.67, 0)
+# inside Stick → blade centre ≈ (−0.15, −0.92, 0) below the wrist). The
+# per-state X tilt swings that below-wrist offset FORWARD: at tilt φ the
+# blade's horizontal offset from the wrist is (BLADE_ASSEMBLY_X,
+# −BLADE_ASSEMBLY_DROP·sin(φ)). The blade-aim solve rotates this offset onto
+# the wrist→puck line, so the BLADE lands on the puck instead of the assembly
+# merely pointing puck-side (the old fixed-lookahead heuristic ignored both
+# the puck's depth and this geometry).
+const BLADE_ASSEMBLY_X: float = -0.15
+const BLADE_ASSEMBLY_DROP: float = 0.92
 # Lunge forward extension at peak. Pushes c.blocker_pos forward (in goalie-
 # local -Z, the slot direction). Sin-curved by the controller's
 # lunge_progress so it reads as a quick jab.
@@ -110,6 +116,14 @@ var paddle_sweep_x_extension: float = 0.10
 var sweep_anim_x_extension: float = 0.14
 var sweep_anim_z_extension: float = 0.18
 var sweep_anim_max_yaw_deg: float = 40.0
+# Windup (backswing) magnitudes — the blade cocks AWAY from the send corner
+# and slightly back toward the body before the strike, so the clear reads as
+# the stick sweeping THROUGH the puck (velocity applies at the strike moment,
+# not at the decision — see GoalieController._begin_sweep / _strike_pending_
+# sweep). Yaw sign is opposite the follow-through's.
+var sweep_windup_x_extension: float = 0.12
+var sweep_windup_z_pull: float = 0.06
+var sweep_windup_max_yaw_deg: float = 25.0
 
 # Per-tick input bundle. Controller scratches one instance and overwrites all
 # fields before each `build()` call.
@@ -160,6 +174,11 @@ class Inputs:
 	# reads as a stick shove instead of the puck teleporting to the corner.
 	var sweep_anim_progress: float = 0.0
 	var sweep_anim_dir: float = 0.0
+	# Windup (backswing) progress, 0 → 1 over the pre-strike window: the blade
+	# cocks away from the send corner, then the strike fires the puck and the
+	# follow-through above swings through it. Mutually exclusive in time with
+	# sweep_anim_progress (windup ends exactly when the follow-through starts).
+	var sweep_windup_progress: float = 0.0
 	# Pre-lean: the goalie reads a charging shot's windup and leans partway
 	# toward where it's currently aimed BEFORE release. `prelean_active` gates
 	# the whole thing; `prelean_directional` means a host-side predicted impact
@@ -181,6 +200,23 @@ class Inputs:
 	# tests that don't populate these).
 	var left_pad_toe_out: float = -1.0
 	var right_pad_toe_out: float = -1.0
+	# Head yaw (degrees, goalie-root-local) toward the raw puck — the "eyes
+	# lead" tracking (Head Trajectory). Applied uniformly at the end of
+	# build() in every state; 0 = look straight ahead (tutorial snap).
+	var head_yaw_deg: float = 0.0
+	# PLAYING_PUCK stop phase: the goalie is set at the boards behind the net
+	# with the paddle down to trap the rim (vs. the skating out/back phases,
+	# which use the mobile ready stance).
+	var puck_play_stopping: bool = false
+	# Skating stride for the behind-net trip (the only time the goalie truly
+	# SKATES — crease movement is correctly a glide). Phase is advanced by the
+	# controller from DISTANCE TRAVELED (so the feet never slide), intensity is
+	# the speed-eased 0..1 envelope. Borrowed from the skater gait's idiom
+	# (SkaterSkatingCoordinator): asymmetric stroke warp, alternating swing,
+	# recovery lift, body bob, effort lean — reduced to what a pad-legged rig
+	# can express.
+	var puck_play_stride_phase: float = 0.0
+	var puck_play_stride_intensity: float = 0.0
 
 # Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
 # one instance is safe and avoids per-tick allocation.
@@ -228,6 +264,26 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			_set_rvh_left_pose(c)
 		GoalieStateMachine.State.RVH_RIGHT:
 			_set_rvh_right_pose(c)
+		GoalieStateMachine.State.VH_LEFT:
+			_set_vh_left_pose(c)
+		GoalieStateMachine.State.VH_RIGHT:
+			_set_vh_right_pose(c)
+		GoalieStateMachine.State.COVERING:
+			_set_covering_pose(c, inputs)
+			# The hold-and-release windup plays FROM the smother: the blade cocks
+			# while the glove still pins the puck, then the strike (which also
+			# stands the goalie up) sweeps through it.
+			_apply_sweep_anim(c, inputs)
+		GoalieStateMachine.State.PLAYING_PUCK:
+			_set_puck_play_pose(c, inputs)
+		GoalieStateMachine.State.CATCHING:
+			_set_catching_pose(c, inputs, false)
+		GoalieStateMachine.State.CATCHING_DOWN:
+			_set_catching_pose(c, inputs, true)
+	# Head tracking applies in every state (eyes on the puck through freezes,
+	# around the post in RVH, while down). Only yaw — the per-state head
+	# position/pitch stays authored.
+	c.head_rot = Vector3(c.head_rot.x, inputs.head_yaw_deg, c.head_rot.z)
 	if not catches_left:
 		_mirror_hands(c)
 	return c
@@ -247,11 +303,17 @@ static func resting_body_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.40,  0.0)
 		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 0.60, 0.05)
 		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 0.60, 0.05)
+		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 0.85, 0.02)
+		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 0.85, 0.02)
+		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.48, -0.10)
+		GoalieStateMachine.State.PLAYING_PUCK:                    return Vector3(0.0,  1.06, -0.05)
+		GoalieStateMachine.State.CATCHING:                        return Vector3(0.0,  1.06, -0.05)
+		GoalieStateMachine.State.CATCHING_DOWN:                   return Vector3(0.0,  0.40,  0.0)
 	return Vector3(0.0, 1.22, 0.0)
 
 static func resting_head_position_for_state(state: int) -> Vector3:
 	match state:
-		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.79,  0.12)
+		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.79, -0.04)
 		GoalieStateMachine.State.READY:                           return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.RECOVERING:                      return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.BUTTERFLY:                       return Vector3(0.0,  0.97, -0.06)
@@ -259,7 +321,13 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.SLIDING:                         return Vector3(0.0,  0.97, -0.06)
 		GoalieStateMachine.State.RVH_LEFT:                        return Vector3(-0.02, 1.17, 0.08)
 		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 1.17, 0.08)
-	return Vector3(0.0, 1.79, 0.12)
+		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 1.45, 0.06)
+		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 1.45, 0.06)
+		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.92, -0.28)
+		GoalieStateMachine.State.PLAYING_PUCK:                    return Vector3(0.0,  1.62, -0.22)
+		GoalieStateMachine.State.CATCHING:                        return Vector3(0.0,  1.62, -0.22)
+		GoalieStateMachine.State.CATCHING_DOWN:                   return Vector3(0.0,  0.97, -0.06)
+	return Vector3(0.0, 1.79, -0.04)
 
 
 # Vertical anatomy (matches the 0.52 × 0.72 torso box and 0.26 head in
@@ -277,9 +345,11 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.right_pad_rot = Vector3(0.0, -pad_toe_out_standing,  12.0)
 	c.body_pos      = Vector3(0.0,  1.22,  0.0)
 	# Slight resting flex — a goalie never fully stacks the spine, even
-	# relaxed. The head nudges forward to sit over the leaning chest.
+	# relaxed. The head sits just forward of the spine, over the leaning
+	# chest (local -Z is forward; the old +0.12 was a sign slip that hung
+	# the head noticeably behind every other stance's head line).
 	c.body_rot      = Vector3(-4.0, 0.0, 0.0)
-	c.head_pos      = Vector3(0.0,  1.79,  0.12)
+	c.head_pos      = Vector3(0.0,  1.79, -0.04)
 	c.head_rot      = Vector3.ZERO
 	c.blocker_pos   = Vector3( 0.38, 0.85, -0.18)
 	c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, -20.0)
@@ -381,6 +451,115 @@ func _set_sliding_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 		c.right_pad_pos = Vector3( 0.42, 0.14 + push_lift, -0.20)
 		c.right_pad_rot = Vector3(0.0, -right_toe,  90.0 - push_rot)
 
+# Covering / smothering pose: butterfly base collapsed forward, glove reaching
+# to the puck's ground position (the smother), paddle flat beside. Glove target
+# hovers just ABOVE the puck (y 0.09 > puck top) so the glove's StaticBody
+# collider never physically shoves the puck it is covering — the host pins the
+# covered puck by zeroing its velocity, not by collider contact. Committed pose:
+# no blade intents / reaches compose with it.
+func _set_covering_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	var left_toe: float = _resolved_toe_out(inputs.left_pad_toe_out)
+	var right_toe: float = _resolved_toe_out(inputs.right_pad_toe_out)
+	c.left_pad_pos  = Vector3(-0.42, 0.14, -0.20)
+	c.left_pad_rot  = Vector3(0.0,  left_toe, -90.0)
+	c.right_pad_pos = Vector3( 0.42, 0.14, -0.20)
+	c.right_pad_rot = Vector3(0.0, -right_toe,  90.0)
+	# Torso folds over the puck; head drops low, eyes on the smother.
+	c.body_pos      = Vector3(0.0,  0.48, -0.10)
+	c.body_rot      = Vector3(-32.0, 0.0, 0.0)
+	c.head_pos      = Vector3(0.0,  0.92, -0.28)
+	c.head_rot      = Vector3.ZERO
+	# Glove to the puck (goalie-local; same frame convention as the reach math).
+	var puck_local_x: float = clampf(
+			(inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign,
+			glove_max_x_outward, absf(glove_max_x_outward))
+	var puck_local_z: float = clampf(
+			(inputs.puck_position.z - inputs.goalie_z) * -inputs.direction_sign,
+			-0.95, -0.10)
+	c.glove_pos     = Vector3(puck_local_x, 0.09, puck_local_z)
+	c.glove_rot     = Vector3(-70.0, 0.0, 0.0)
+	c.blocker_pos   = Vector3( 0.46, 0.49, -0.18)
+	c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
+
+# Stride shape for the behind-net skate (pad-legged reduction of the skater
+# gait). The stroke skew is the skater idiom verbatim: warping the phase
+# before the sine gives each pad a slow reach and a fast push-back instead of
+# a metronome tick-tock. Magnitudes are modest — goalies skate short-strided
+# in their gear.
+const _STRIDE_SKEW: float = 0.45
+const _STRIDE_SWING_M: float = 0.15      # fore/aft pad travel at full intensity
+const _STRIDE_PITCH_DEG: float = 16.0    # pad pitch swing about the hip
+const _STRIDE_LIFT_M: float = 0.05       # recovering pad lifts off the ice
+const _STRIDE_BOB_M: float = 0.025       # body rides highest at full extension
+const _STRIDE_LEAN_DEG: float = 9.0      # shoulders drive forward while skating
+
+# Behind-net puck play. Skating out/back plays a real STRIDE on the mobile
+# ready stance; the STOP phase plants at the boards with the paddle down
+# across the rim's path (the real rim-stopping technique: stick blade/paddle
+# flat against the ice in front of the boards, body square to the incoming
+# puck). First-pass authored numbers — verify in-editor.
+func _set_puck_play_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	_set_ready_pose(c, inputs)
+	if not inputs.puck_play_stopping:
+		_apply_puck_play_stride(c, inputs)
+		return
+	# Paddle-down trap: blocker drops low and forward, blade flat on the ice
+	# across the boards lane; glove low and ready beside it for a bouncing rim.
+	c.blocker_pos = Vector3(0.34, 0.32, -0.42)
+	c.blocker_rot = Vector3(STICK_TILT_BUTTERFLY, 0.0, -10.0)
+	c.glove_pos = Vector3(-0.38, 0.55, -0.30)
+	c.body_rot = Vector3(-18.0, 0.0, 0.0)
+
+
+# Catch-and-hold: squeeze-and-look. The glove pulls in toward the chest with
+# the caught puck pinned inside it (the controller pins the puck to the glove
+# world position each tick, so the puck rides this pose); the blocker tucks,
+# the head drops to look INTO the glove — the classic catch silhouette. Two
+# variants share the arms: upright keeps the ready lower body, `down` keeps
+# the butterfly seal (a glove save from the knees squeezes without standing).
+# First-pass authored numbers — verify in-editor.
+func _set_catching_pose(c: GoalieBodyConfig, inputs: Inputs, down: bool) -> void:
+	if down:
+		_set_butterfly_pose(c, inputs)
+		c.glove_pos = Vector3(-0.24, 0.72, -0.26)
+		c.head_pos = Vector3(-0.06, 0.95, -0.12)
+	else:
+		_set_ready_pose(c, inputs)
+		c.glove_pos = Vector3(-0.22, 0.98, -0.24)
+		c.head_pos = Vector3(-0.06, 1.58, -0.24)
+	c.glove_rot = Vector3(-40.0, 20.0, 0.0)
+	c.body_rot = Vector3(c.body_rot.x - 6.0, 0.0, 4.0)
+
+# The stride itself: alternating fore/aft pad swing (translation + hip pitch,
+# half a cycle apart, sharing the skater's slow-load / fast-release warp — the
+# opposite pad samples phase+PI so BOTH get the identical stroke shape), a
+# small lift on the pad swinging forward (the recovery — the pushing pad stays
+# on the ice), a body bob riding the weight transfer, and the effort lean.
+# Everything scales by intensity, so the gait eases in from the first push and
+# settles cleanly when the goalie arrives (phase is distance-driven upstream —
+# a stopped goalie's stride freezes instead of treadmilling).
+func _apply_puck_play_stride(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	var k: float = clampf(inputs.puck_play_stride_intensity, 0.0, 1.0)
+	if k <= 0.001:
+		return
+	var phase: float = inputs.puck_play_stride_phase
+	var s: float = sin(phase - _STRIDE_SKEW * sin(phase))
+	var phase_opp: float = phase + PI
+	var s_opp: float = sin(phase_opp - _STRIDE_SKEW * sin(phase_opp))
+	# Fore/aft: local -Z is forward. Positive s swings the left pad forward.
+	c.left_pad_pos.z += -s * _STRIDE_SWING_M * k
+	c.right_pad_pos.z += -s_opp * _STRIDE_SWING_M * k
+	# Recovery lift: only the forward-swinging pad comes off the ice.
+	c.left_pad_pos.y += maxf(s, 0.0) * _STRIDE_LIFT_M * k
+	c.right_pad_pos.y += maxf(s_opp, 0.0) * _STRIDE_LIFT_M * k
+	# Hip pitch swing rides the same stroke (negative X pitches the pad forward).
+	c.left_pad_rot.x += -s * _STRIDE_PITCH_DEG * k
+	c.right_pad_rot.x += -s_opp * _STRIDE_PITCH_DEG * k
+	# Body bob (deepest mid-transfer, s = 0) + shoulders driving forward.
+	c.body_pos.y -= _STRIDE_BOB_M * (1.0 - s * s) * k
+	c.body_rot.x -= _STRIDE_LEAN_DEG * k
+
+
 func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	# RVH stick swings toward the post. Z rotation rolls the stick laterally
 	# so the blade points along the goal line toward the post rather than
@@ -397,6 +576,46 @@ func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	c.glove_rot     = Vector3.ZERO
 	c.blocker_pos   = Vector3( 0.40, 0.64, -0.18)
 	c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0, -25.0)
+
+# VH (post pad VERTICAL, back pad horizontal) — the post stance for a sharp-
+# angle SHOT threat still in FRONT of the goal line (realism audit F14; Allaire/
+# Giguère lineage). The body stays TALL on the short side — RVH's documented
+# weakness is short-side high, which is exactly what VH exists to close — while
+# the horizontal back pad seals the ice behind the vertical pad and the loaded
+# back leg powers the push if the play reverses or crosses. The post-side hand
+# rides high over the vertical pad (the over-the-shoulder seal). First-pass
+# authored numbers mirroring the RVH pose family — verify the look in-editor.
+func _set_vh_left_pose(c: GoalieBodyConfig) -> void:
+	# Post-side (left) pad vertical, tight beside the body, face square.
+	c.left_pad_pos  = Vector3(-0.28, 0.44, -0.02)
+	c.left_pad_rot  = Vector3(0.0, 0.0, -4.0)
+	# Back (right) pad flat along the ice behind it, toe loaded to push.
+	c.right_pad_pos = Vector3( 0.28, 0.14, -0.06)
+	c.right_pad_rot = Vector3(0.0, -12.0, 90.0)
+	c.body_pos      = Vector3(-0.05, 0.85,  0.02)
+	c.body_rot      = Vector3(-4.0, 0.0,  rvh_body_lean_deg)
+	c.head_pos      = Vector3(-0.05, 1.45,  0.06)
+	c.head_rot      = Vector3.ZERO
+	c.glove_pos     = Vector3(-0.30, 0.90, -0.14)
+	c.glove_rot     = Vector3.ZERO
+	c.blocker_pos   = Vector3( 0.36, 0.68, -0.16)
+	c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0, -25.0)
+
+func _set_vh_right_pose(c: GoalieBodyConfig) -> void:
+	c.right_pad_pos = Vector3( 0.28, 0.44, -0.02)
+	c.right_pad_rot = Vector3(0.0, 0.0,  4.0)
+	c.left_pad_pos  = Vector3(-0.28, 0.14, -0.06)
+	c.left_pad_rot  = Vector3(0.0, 12.0, -90.0)
+	c.body_pos      = Vector3( 0.05, 0.85,  0.02)
+	c.body_rot      = Vector3(-4.0, 0.0, -rvh_body_lean_deg)
+	c.head_pos      = Vector3( 0.05, 1.45,  0.06)
+	c.head_rot      = Vector3.ZERO
+	# Blocker side is the post side here: the paddle stays low along the post
+	# so the blade keeps the ice; the glove holds the far-side lane.
+	c.blocker_pos   = Vector3( 0.30, 0.72, -0.12)
+	c.blocker_rot   = Vector3(STICK_TILT_RVH, 0.0,  25.0)
+	c.glove_pos     = Vector3(-0.36, 0.68, -0.16)
+	c.glove_rot     = Vector3.ZERO
 
 func _set_rvh_right_pose(c: GoalieBodyConfig) -> void:
 	c.right_pad_pos = Vector3(-0.04, 0.14, 0.0)
@@ -429,6 +648,32 @@ func _mirror_hands(c: GoalieBodyConfig) -> void:
 # forward of the goal line (~0.4-1.2 m) so the puck passes through the glove's
 # plane before reaching the goal. Falls back to the goal-line impact value
 # if the intercept can't be computed.
+# Closed-loop blade aim: the assembly yaw that lands the stick BLADE on the
+# wrist→puck line. The blade's horizontal offset from the wrist at forward
+# tilt φ is (BLADE_ASSEMBLY_X, −BLADE_ASSEMBLY_DROP·sin(φ)); Godot's YXZ Euler
+# order applies the Y yaw around that tilted offset, so solving
+# yaw = angle(wrist→puck) − angle(blade offset at yaw 0) points the blade at
+# the puck itself — honouring both the puck's actual depth and the stick
+# geometry, which the old atan2(puck_x, fixed_lookahead) heuristic ignored.
+# Angle convention matches the reach math: A(v) = atan2(−v.x, −v.z), positive
+# yaw carries local −Z toward −X. Caller clamps via `max_yaw_deg`.
+func _blade_yaw_to_puck(
+		c: GoalieBodyConfig, inputs: Inputs, max_yaw_deg: float) -> float:
+	var px: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
+	var pz: float = (inputs.puck_position.z - inputs.goalie_z) * -inputs.direction_sign
+	var tx: float = px - c.blocker_pos.x
+	var tz: float = pz - c.blocker_pos.z
+	if tx * tx + tz * tz < 0.0004:
+		return 0.0  # puck at the wrist — direction undefined, hold neutral
+	var bx: float = BLADE_ASSEMBLY_X
+	var bz: float = -BLADE_ASSEMBLY_DROP * sin(deg_to_rad(c.blocker_rot.x))
+	if bx * bx + bz * bz < 0.0004:
+		return 0.0  # blade directly under the wrist (no tilt) — yaw does nothing
+	var desired: float = atan2(-tx, -tz)
+	var base: float = atan2(-bx, -bz)
+	return clampf(rad_to_deg(angle_difference(base, desired)), -max_yaw_deg, max_yaw_deg)
+
+
 # Active blade intent: when an opposing shooter is close, yaw the blocker
 # assembly so the stick blade points toward the puck side. Bot skaters
 # stickhandle around exposed blades (see `_stickhandle_offset` in
@@ -444,18 +689,10 @@ func _apply_active_blade_intent(c: GoalieBodyConfig, inputs: Inputs) -> void:
 		return
 	if inputs.reacting_to_shot:
 		return
-	# Puck position in goalie-local X (matches the convention used by
-	# _apply_elevated_shot_reaction: the +Z-defending goalie is rotated PI in
-	# world so its local +X is global -X).
-	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
-	# Treat the puck as `active_blade_lookahead` metres in front of the
-	# goalie so the yaw scales with lateral offset (atan2 against a fixed
-	# depth) instead of hard-snapping. Same sign convention as the elevated
-	# reach's blocker_yaw calc.
-	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
+	# Closed-loop: solve the yaw that lands the BLADE on the puck's line.
 	c.blocker_rot = Vector3(
 			c.blocker_rot.x,
-			clampf(yaw_deg, -active_blade_max_yaw_deg, active_blade_max_yaw_deg),
+			_blade_yaw_to_puck(c, inputs, active_blade_max_yaw_deg),
 			c.blocker_rot.z)
 
 
@@ -494,15 +731,16 @@ func _apply_standing_sweep(c: GoalieBodyConfig, inputs: Inputs) -> void:
 		return
 	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
 	var side: float = signf(puck_local_x)
-	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
-	c.blocker_rot = Vector3(
-			c.blocker_rot.x,
-			clampf(yaw_deg, -standing_sweep_max_yaw_deg, standing_sweep_max_yaw_deg),
-			c.blocker_rot.z)
+	# Extend the wrist toward the puck side FIRST, then solve the blade yaw
+	# from the extended wrist — order matters, the solve reads blocker_pos.
 	c.blocker_pos = Vector3(
 			c.blocker_pos.x + side * standing_sweep_x_extension,
 			c.blocker_pos.y - standing_sweep_y_drop,
 			c.blocker_pos.z)
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			_blade_yaw_to_puck(c, inputs, standing_sweep_max_yaw_deg),
+			c.blocker_rot.z)
 
 
 # Paddle-down sweep: blocker hand drops toward the ice and the assembly
@@ -513,21 +751,18 @@ func _apply_standing_sweep(c: GoalieBodyConfig, inputs: Inputs) -> void:
 func _apply_paddle_sweep(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	if inputs.reacting_to_shot:
 		return
-	# Same goalie-local-X math as the elevated shot reach + active blade
-	# intent (+Z-defending goalie's local +X is global -X).
 	var puck_local_x: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
 	var side: float = signf(puck_local_x)
-	# Larger lookahead than the upright active intent so a small wiggle
-	# doesn't whip the swept paddle — sweeps should commit to a direction.
-	var yaw_deg: float = rad_to_deg(atan2(-puck_local_x, -active_blade_lookahead))
-	c.blocker_rot = Vector3(
-			c.blocker_rot.x,
-			clampf(yaw_deg, -paddle_sweep_max_yaw_deg, paddle_sweep_max_yaw_deg),
-			c.blocker_rot.z)
+	# Extend + drop the wrist first, then solve the blade yaw from the
+	# extended wrist (the solve reads blocker_pos).
 	c.blocker_pos = Vector3(
 			c.blocker_pos.x + side * paddle_sweep_x_extension,
 			c.blocker_pos.y - paddle_sweep_y_drop,
 			c.blocker_pos.z)
+	c.blocker_rot = Vector3(
+			c.blocker_rot.x,
+			_blade_yaw_to_puck(c, inputs, paddle_sweep_max_yaw_deg),
+			c.blocker_rot.z)
 
 
 # Lunge: push the blocker assembly forward (goalie-local -Z) by the
@@ -552,9 +787,23 @@ func _apply_lunge(c: GoalieBodyConfig, inputs: Inputs) -> void:
 # makes the stick visibly shove it. Skipped during a shot reaction (the reach owns
 # the blocker). Yaw sign matches the reach convention (local +X → negative yaw).
 func _apply_sweep_anim(c: GoalieBodyConfig, inputs: Inputs) -> void:
-	if inputs.sweep_anim_progress <= 0.0:
-		return
 	if inputs.reacting_to_shot:
+		return
+	# Windup phase: cock the blade AWAY from the send corner and slightly back
+	# toward the body (backswing), so the strike that follows visibly sweeps
+	# THROUGH the puck. Skips the follow-through below — the two phases are
+	# time-exclusive.
+	if inputs.sweep_windup_progress > 0.0:
+		var wp: float = inputs.sweep_windup_progress
+		var wdir: float = inputs.sweep_anim_dir
+		c.blocker_pos = Vector3(
+				c.blocker_pos.x - wdir * sweep_windup_x_extension * wp,
+				c.blocker_pos.y,
+				c.blocker_pos.z + sweep_windup_z_pull * wp)
+		var wyaw: float = c.blocker_rot.y + wdir * sweep_windup_max_yaw_deg * wp
+		c.blocker_rot = Vector3(c.blocker_rot.x, clampf(wyaw, -90.0, 90.0), c.blocker_rot.z)
+		return
+	if inputs.sweep_anim_progress <= 0.0:
 		return
 	var p: float = inputs.sweep_anim_progress
 	var dir: float = inputs.sweep_anim_dir

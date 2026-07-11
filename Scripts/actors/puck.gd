@@ -6,6 +6,10 @@ signal puck_stripped(ex_carrier: Skater)
 signal puck_touched_loose(skater: Skater)  # blade redirect (deflection, tip-in)
 signal puck_body_blocked(skater: Skater)   # puck absorbed by a player's body
 signal puck_touched_goalie(goalie: Goalie)  # puck contacted a goalie StaticBody3D part while uncarried
+# Controlled save landed on the GLOVE specifically — the catchable contact.
+# Host-only (emitted from the host-authoritative rebound resolution); the
+# goalie controller answers by pinning the puck in the glove (catch-and-hold).
+signal puck_caught_by_goalie(goalie: Goalie)
 signal puck_touched_post  # puck contacted any HockeyGoal geometry while uncarried
 signal puck_hit_boards     # uncarried puck struck rink boards at meaningful speed
 signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe goal geometry)
@@ -105,11 +109,14 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # rebound control, correct under every ruleset — a whistle-on-cover would be a
 # separate, ruleset-gated layer on top. Tunable so feel can be dialed in-editor.
 @export var save_deaden_pad_max_speed: float = 28.0  # pad/blocker saves faster than this stay live (≈63 mph — above a solid wrister, below hard shots/slappers)
-@export var save_deaden_drop_speed: float = 1.2      # deadened exit-speed ceiling (m/s)
+@export var save_deaden_drop_speed: float = 1.2      # absorbed exit-speed ceiling (m/s, chest/glove)
 @export var save_deaden_glove_retain: float = 0.0    # glove catch — kill it dead
 @export var save_deaden_chest_retain: float = 0.12
-@export var save_deaden_pad_retain: float = 0.35
-@export var save_deaden_blocker_retain: float = 0.45
+# Controlled pad/blocker saves STEER cornerward instead of dying at the
+# goalie's feet — modern active-rebound doctrine (goalie realism audit F12).
+@export var save_steer_speed: float = 5.0            # m/s cornerward exit off a controlled pad save
+@export var save_steer_lateral_weight: float = 1.0   # cornerward bias (lateral vs forward)
+@export var save_steer_forward_weight: float = 0.35  # out-of-crease bias
 
 var carrier: Skater = null
 var pickup_locked: bool = false
@@ -545,12 +552,15 @@ func _on_body_entered(body: Node3D) -> void:
 		return
 	var goalie: Goalie = _goalie_ancestor(body)
 	if goalie != null:
-		puck_touched_goalie.emit(goalie)
 		# Host-authoritative rebound control: deaden a controlled save so it
 		# doesn't carom into the slot. The deadened velocity replicates to clients
 		# through the normal puck sync / reconciliation, same as pokes and sweeps.
+		# Resolved BEFORE the generic contact signal so a glove CATCH transitions
+		# the goalie first — _on_puck_contact's rebound-butterfly then sees a
+		# non-upright catching state and skips, keeping an upright catch upright.
 		if _is_server:
 			_resolve_save_rebound(body)
+		puck_touched_goalie.emit(goalie)
 	elif body is HockeyGoal:
 		puck_touched_post.emit()
 	elif body.get_parent() is HockeyGoal:
@@ -587,8 +597,9 @@ func _build_deaden_cfg() -> void:
 	_deaden_cfg.drop_speed = save_deaden_drop_speed
 	_deaden_cfg.glove_retain = save_deaden_glove_retain
 	_deaden_cfg.chest_retain = save_deaden_chest_retain
-	_deaden_cfg.pad_retain = save_deaden_pad_retain
-	_deaden_cfg.blocker_retain = save_deaden_blocker_retain
+	_deaden_cfg.pad_steer_speed = save_steer_speed
+	_deaden_cfg.steer_lateral_weight = save_steer_lateral_weight
+	_deaden_cfg.steer_forward_weight = save_steer_forward_weight
 
 
 # Classify a save surface by its StaticBody3D node name (LeftPad / RightPad /
@@ -618,7 +629,25 @@ func _resolve_save_rebound(part_body: Node3D) -> void:
 	var incoming: Vector3 = _pre_contact_velocity
 	if not GoalieSaveRules.is_controlled_save(incoming.length(), part, _deaden_cfg):
 		return
-	_pending_save_deaden = GoalieSaveRules.deadened_velocity(incoming, part, _deaden_cfg)
+	# A controlled GLOVE save is a CATCH: the deaden below still kills the puck
+	# this step (we're inside a physics callback — no freeze here), and the
+	# goalie controller pins it into the glove on its next tick.
+	if part == GoalieSaveRules.SavePart.GLOVE:
+		var catch_goalie: Goalie = _goalie_ancestor(part_body)
+		if catch_goalie != null:
+			puck_caught_by_goalie.emit(catch_goalie)
+	# Steered pad/blocker saves need the contact side (which side of the goalie
+	# the puck arrived at → which corner the toe-out fires it to) and the
+	# goalie's direction_sign (forward = out of the crease). Both derived from
+	# the contacted goalie's transform, deterministic on host and client.
+	var save_goalie: Goalie = _goalie_ancestor(part_body)
+	var contact_side: float = 0.0
+	var goalie_dir_sign: int = 0
+	if save_goalie != null:
+		contact_side = signf(global_position.x - save_goalie.global_position.x)
+		goalie_dir_sign = int(signf(-save_goalie.global_position.z))
+	_pending_save_deaden = GoalieSaveRules.deadened_velocity(
+			incoming, part, contact_side, goalie_dir_sign, _deaden_cfg)
 	_pending_save_deaden_active = true
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
@@ -721,3 +750,12 @@ func _physics_process(delta: float) -> void:
 		# Max-speed clamp already runs every physics substep in _integrate_forces.
 		linear_velocity.y = 0.0
 		position.y = ice_height
+	elif sleeping and not freeze:
+		# A loose airborne puck can only be supported by the goalie's body (the
+		# puck mask excludes skater bodies) — e.g. a deadened save settling on
+		# top of the butterfly pads. Jolt sleeping it there is a trap: the pads
+		# are animated bodies, and kinematic support moving away never wakes a
+		# slept body, so the puck would hang frozen in mid-air (a sleeping body
+		# skips _integrate_forces, so even gravity stops). Keep a loose airborne
+		# puck awake; the frozen case (goalie catch pin) is exempt by design.
+		sleeping = false

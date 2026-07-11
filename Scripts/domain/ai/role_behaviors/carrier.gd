@@ -353,10 +353,12 @@ func _pick_action(ctx: RoleContext) -> void:
 	# spot led by our body velocity, not the body center. At range the offset is
 	# noise; in tight it's the difference between measuring the net from your
 	# chest and from the puck (closer, and shifted to the forehand side — a real
-	# angle change around the goalie). The goalie, by contrast, TRACKS THE BODY
-	# (threat tracking is body-weighted — the anti-5-hole-exploit read), so the
-	# stale-square ref below stays on self_pos: shot-from-the-puck against
-	# square-to-the-body is a physical asymmetry the model should see.
+	# angle change around the goalie). The goalie, by contrast, squares to the
+	# PUCK through distance-scaled smoothing (the quiet-eye tracking lag), which
+	# absorbs blade jitter — his square target rides the carrier's body line,
+	# not the dangle — so the stale-square ref below stays on self_pos:
+	# shot-from-the-puck against square-to-the-smoothed-track is a physical
+	# asymmetry the model should see.
 	var puck_now: Vector3 = self_pos
 	if ctx.snapshot.puck_state != null:
 		puck_now = Vector3(

@@ -146,6 +146,10 @@ func set_stick_collision_enabled(enabled: bool) -> void:
 func get_blocker_position() -> Vector3:
 	return _block_arm.position
 
+# Glove world position — the pin point for a caught puck (catch-and-hold).
+func get_glove_world_position() -> Vector3:
+	return _glove.global_position
+
 # Pose accessors used by goalie_controller.get_state() to fill the
 # authoritative socket transforms broadcast in the world snapshot. All values
 # returned in goalie-local space; rotations in radians.

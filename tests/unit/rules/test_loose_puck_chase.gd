@@ -146,3 +146,23 @@ func test_stale_incumbent_falls_back_to_election() -> void:
 	var pid: int = AILoosePuckChase.elect(
 			states, [100, 200], Vector3.ZERO, Vector3.ZERO, 999)
 	assert_eq(pid, 100, "stale incumbent gives no one the discount — nearest wins")
+
+
+func test_dead_puck_elects_nobody() -> void:
+	# A covered / phase-locked puck (pickup_locked, no carrier) can't be
+	# played, so nobody is elected to chase it — bots fall back to their
+	# positional roles instead of hovering over the goalie's smother. The
+	# next playable frame elects a fresh chaser as usual.
+	var states := {
+		100: _skater(Vector3(1, 0, 0)),
+		200: _skater(Vector3(6, 0, 0)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, false)
+	assert_eq(pid, -1, "dead puck → no chaser, even with eligible skaters")
+	var pid_incumbent: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, 100, {}, false)
+	assert_eq(pid_incumbent, -1, "incumbency doesn't survive a dead puck")
+	var pid_live: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, true)
+	assert_eq(pid_live, 100, "playable again → normal election resumes")

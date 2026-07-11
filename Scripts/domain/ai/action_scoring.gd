@@ -195,11 +195,12 @@ const GOALIE_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
 
 # Pads-to-floor time once the goalie commits the butterfly — mirrors
-# GoalieController.butterfly_drop_speed (0.05 s). With the legs reaction delay in
+# GoalieController.butterfly_drop_speed (0.20 s, grounded on the measured pro
+# drop velocity of 2.07 m/s — realism audit F2). With the legs reaction delay in
 # front of it, this is how fast a STANDING goalie seals the five-hole slot after
 # reading a release: flights shorter than the delay leave the slot fully open
 # (the in-tight window), flights past delay + drop arrive at closed pads.
-const GOALIE_BUTTERFLY_DROP_S: float = 0.05
+const GOALIE_BUTTERFLY_DROP_S: float = 0.20
 
 
 # The position the goalie is ACTUALLY square to when a moving shooter's shot

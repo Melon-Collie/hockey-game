@@ -149,8 +149,13 @@ static func target_depth_for_puck_distance(puck_z_dist: float, cfg: DepthConfig)
 	if puck_z_dist <= cfg.zone_conservative_z:
 		t = (puck_z_dist - cfg.zone_base_z) / (cfg.zone_conservative_z - cfg.zone_base_z)
 		return lerpf(cfg.depth_base, cfg.depth_conservative, t)
-	t = clampf((puck_z_dist - cfg.zone_conservative_z) / cfg.zone_conservative_z, 0.0, 1.0)
-	return lerpf(cfg.depth_conservative, cfg.depth_defensive, t)
+	# Beyond the conservative zone the chart FLOORS at conservative depth
+	# (realism audit F8): a puck far away in FRONT of the net leaves a real
+	# goalie resting at/near the paint watching the play — D (goal-line) depth
+	# is for behind-net / post-integrated play, which the defensive-zone / RVH
+	# paths own. The old taper walked the goalie back to his goal line during
+	# neutral-zone play, which no goalie does.
+	return cfg.depth_conservative
 
 # Lateral X target using angle bisector: find the line from the puck that
 # bisects the shooting angle between the two posts, then intersect it with
@@ -417,9 +422,17 @@ static func compute_clear_velocity(
 		forward_weight: float,
 		clear_speed: float,
 		center_deadband: float,
-		default_side: float) -> Vector3:
-	var offset_x: float = puck_position.x - goal_center_x
-	var side: float = signf(offset_x) if absf(offset_x) > center_deadband else signf(default_side)
+		default_side: float,
+		forced_side: float = 0.0) -> Vector3:
+	# `forced_side` (non-zero) overrides the natural side pick — used by the
+	# lane-aware sweep to try the OPPOSITE corner when the natural exit lane is
+	# covered by an opponent's stick.
+	var side: float
+	if forced_side != 0.0:
+		side = signf(forced_side)
+	else:
+		var offset_x: float = puck_position.x - goal_center_x
+		side = signf(offset_x) if absf(offset_x) > center_deadband else signf(default_side)
 	if side == 0.0:
 		side = 1.0
 	var dir := Vector3(side * lateral_weight, 0.0, float(direction_sign) * forward_weight)
@@ -427,6 +440,85 @@ static func compute_clear_velocity(
 	if dlen < 0.0001:
 		return Vector3.ZERO
 	return (dir / dlen) * clear_speed
+
+
+# ── Sweep-lane reachability ──────────────────────────────────────────────────
+# Can an opponent get a stick on the swept puck's exit path? Same grounded
+# reachability shape as the bot AI's lane model (AIActionScoring.lane_clear),
+# reduced to the goalie's short-range case: opponents treated as static over
+# the short flight, scalar loop over a caller-owned PackedVector3Array (no
+# allocation — this runs at the sweep/cover decision, which can persist for
+# ticks during a scramble). An opponent intercepts iff, when the puck passes
+# their closest-approach point, their blade reach plus the lateral distance
+# they can close in the remaining time covers the miss distance. All three
+# parameters are physical: a blade's reach, a competitive read delay, and the
+# lateral close pace (~half top skating speed — you slide into a lane, you
+# don't sprint at it). Real doctrine hook (audit follow-up): the sweep is only
+# the correct clear when the corner lane is OPEN; a covered lane is what makes
+# smothering the correct read.
+class SweepLaneConfig:
+	var stick_reach: float = 1.3       # m — lane defender blade reach
+	var reaction_delay: float = 0.08   # s — competitive read before closing starts
+	var close_speed: float = 4.5       # m/s — lateral close pace (~half top speed)
+	var max_flight_time: float = 1.0   # s — only the exit's first stretch matters
+
+static func sweep_lane_blocked(
+		puck_position: Vector3,
+		exit_velocity: Vector3,
+		opponent_positions: PackedVector3Array,
+		cfg: SweepLaneConfig) -> bool:
+	var speed: float = sqrt(exit_velocity.x * exit_velocity.x + exit_velocity.z * exit_velocity.z)
+	if speed < 0.001:
+		return false
+	var dirx: float = exit_velocity.x / speed
+	var dirz: float = exit_velocity.z / speed
+	for opp in opponent_positions:
+		var relx: float = opp.x - puck_position.x
+		var relz: float = opp.z - puck_position.z
+		var along: float = relx * dirx + relz * dirz
+		if along <= 0.0:
+			continue  # behind the exit — can't intercept
+		var t: float = along / speed
+		if t > cfg.max_flight_time:
+			continue  # too far downrange to matter
+		var miss: float = absf(relx * -dirz + relz * dirx)
+		var reach: float = cfg.stick_reach \
+				+ cfg.close_speed * maxf(t - cfg.reaction_delay, 0.0)
+		if miss < reach:
+			return true
+	return false
+
+
+# ── Puck at rest ON the goalie (the pad-shelf smother) ───────────────────────
+# The puck's collision mask excludes skater bodies, so the goalie is the ONLY
+# body in the game that can support a puck off the ice: a loose puck that is
+# off the ice, essentially motionless, and inside the goalie's horizontal body
+# footprint must be sitting ON him (classically: a deadened save settling on
+# top of the butterfly pads). That puck is unplayable through every normal
+# path — grounded blades can't reach an "airborne" puck and the crease sweep
+# refuses pucks above the ice — and in real hockey it's a covered puck anyway,
+# so the caller answers it with the smother. All inputs are physical
+# measurements: `min_height` is the sweepable-ice ceiling (below it the sweep
+# owns the puck), `max_height` the pad/lap shelf envelope the glove can
+# actually pin, `body_radius` the butterfly's horizontal span. Near-rest is
+# enforced by the caller's dwell (a puck must HOLD this window, not cross it),
+# so `max_speed` only excludes clearly-live pucks.
+static func puck_resting_on_goalie(
+		puck_position: Vector3,
+		puck_speed: float,
+		goalie_position: Vector3,
+		min_height: float,
+		max_height: float,
+		body_radius: float,
+		max_speed: float) -> bool:
+	if puck_speed > max_speed:
+		return false
+	var height: float = puck_position.y - goalie_position.y
+	if height < min_height or height > max_height:
+		return false
+	var dx: float = puck_position.x - goalie_position.x
+	var dz: float = puck_position.z - goalie_position.z
+	return dx * dx + dz * dz <= body_radius * body_radius
 
 
 # ── Net-front jam (seal the ice) ─────────────────────────────────────────────
@@ -544,6 +636,59 @@ static func reachable_lateral_distance(max_speed: float, accel: float, t: float)
 	return max_speed * t - 0.5 * max_speed * t_ramp
 
 
+# ── Behind-net puck play (tier-1 conservative rim stop) ──────────────────────
+# The goalie leaves the net ONLY to stop a rim behind it — "stop it, leave it,
+# get back" — never to carry or pass (the misplay-prone tiers of real puck
+# handling are deliberately absent: an AI turnover behind the net is the most
+# frustrating failure a goalie AI can produce, and a pure stop has no turnover
+# mode; the only failure is a bad GO decision, which is what these races pin).
+# Everything is deliberately conservative:
+#   - the forechecker is modeled at FULL SPRINT from the first instant (no
+#     reaction delay, no acceleration ramp) — the fastest opponent physics
+#     allows, so the pressure clock always under-estimates the available time;
+#   - the goalie's clock counts the WHOLE trip — out, the stop beat, and the
+#     return to his post — before pressure arrives, not just the touch;
+#   - callers re-run the race mid-trip with a stricter margin (abort
+#     hysteresis): a conservative goalie visibly bails early rather than ever
+#     getting caught out.
+
+# Travel time from rest over `dist` with an accel ramp to `max_speed` — the
+# inverse of reachable_lateral_distance, for the skate out/back legs.
+static func travel_time_from_rest(dist: float, max_speed: float, accel: float) -> float:
+	if dist <= 0.0:
+		return 0.0
+	if max_speed <= 0.0:
+		return INF
+	if accel <= 0.0:
+		return dist / max_speed
+	var t_ramp: float = max_speed / accel
+	var d_ramp: float = 0.5 * accel * t_ramp * t_ramp
+	if dist <= d_ramp:
+		return sqrt(2.0 * dist / accel)
+	return t_ramp + (dist - d_ramp) / max_speed
+
+
+# Can the goalie be at the stop point, SET, before the rim arrives? A stop the
+# goalie reaches late is a deflection risk, not a stop — no-go.
+static func can_beat_puck_to_stop(
+		t_goalie_out: float, puck_dist_to_stop: float, puck_speed: float,
+		set_beat: float) -> bool:
+	return t_goalie_out + set_beat <= puck_dist_to_stop / maxf(puck_speed, 0.1)
+
+
+# The conservative go/no-go race: the nearest opponent — sprinting flat-out
+# from this instant — must not reach the stop point until the goalie's ENTIRE
+# trip (out + stop beat + return to post) plus `margin` has elapsed. Callers
+# pass a fat margin for the GO decision and a smaller one for the mid-trip
+# ABORT check (hysteresis in the safe direction).
+static func puck_play_race_clear(
+		t_goalie_out: float, t_return: float, stop_beat: float,
+		nearest_opp_dist_to_stop: float, opp_sprint_speed: float,
+		margin: float) -> bool:
+	var t_pressure: float = nearest_opp_dist_to_stop / maxf(opp_sprint_speed, 0.1)
+	return t_pressure > t_goalie_out + stop_beat + t_return + margin
+
+
 # ── Beaten-wide detection (drop-and-seal trigger) ────────────────────────────
 # A carrier driving laterally across the crease face beats a standing goalie to
 # the short side when the goalie physically can't stay square: the tuck point
@@ -594,6 +739,88 @@ static func is_beaten_wide(
 		return false  # pad already covers the tuck point
 	return needed > reachable_lateral_distance(
 			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, t_arrive)
+
+
+# ── Rush retreat (speed-matched backflow) ────────────────────────────────────
+# Real breakaway/rush teaching: start at aggressive depth as the rush enters the
+# zone, then back in MATCHING THE SHOOTER'S SPEED — crease-top as the attacker
+# reaches the hash marks, goal-line depth as they reach the crease (USA Hockey /
+# Edge Ice Academy; audit F5). Two grounded pieces:
+#   rush_retreat_depth  — the depth the backflow curve wants at this attacker
+#                         distance (piecewise linear through the three anchors).
+#   rush_retreat_rate   — the retreat SPEED that tracks that curve exactly for a
+#                         given closing speed: |d(depth)/d(dist)| × closing. This
+#                         is what makes the retreat speed-matched instead of a
+#                         lerp-lag artifact — a fast rush produces a fast backflow,
+#                         a slow walk-in a slow one, and the goalie is never
+#                         stranded out at challenge depth by smoothing lag.
+class RushRetreatConfig:
+	var engage_distance: float = 8.0   # m — backflow begins (attacker inside this)
+	var mid_distance: float = 4.5      # m — "hash marks": be back at crease-top here
+	var arrive_distance: float = 1.5   # m — attacker at the crease: be at D depth
+	var depth_engage: float = 0.0      # anchor depths (callers pass the chart's A/B/D)
+	var depth_mid: float = 0.0
+	var depth_arrive: float = 0.0
+
+static func rush_retreat_depth(threat_dist: float, cfg: RushRetreatConfig) -> float:
+	if threat_dist >= cfg.engage_distance:
+		return cfg.depth_engage
+	if threat_dist >= cfg.mid_distance:
+		var t: float = (threat_dist - cfg.mid_distance) \
+				/ maxf(cfg.engage_distance - cfg.mid_distance, 0.001)
+		return lerpf(cfg.depth_mid, cfg.depth_engage, t)
+	if threat_dist >= cfg.arrive_distance:
+		var t2: float = (threat_dist - cfg.arrive_distance) \
+				/ maxf(cfg.mid_distance - cfg.arrive_distance, 0.001)
+		return lerpf(cfg.depth_arrive, cfg.depth_mid, t2)
+	return cfg.depth_arrive
+
+# Retreat rate (m/s of depth change) that keeps the goalie ON the backflow curve
+# while the attacker closes at `closing_speed`: the local curve slope × closing.
+# Returns 0 for a non-closing attacker or outside the curve's sloped segments.
+static func rush_retreat_rate(
+		threat_dist: float, closing_speed: float, cfg: RushRetreatConfig) -> float:
+	if closing_speed <= 0.0:
+		return 0.0
+	var slope: float
+	if threat_dist >= cfg.engage_distance or threat_dist < cfg.arrive_distance:
+		return 0.0
+	if threat_dist >= cfg.mid_distance:
+		slope = (cfg.depth_engage - cfg.depth_mid) \
+				/ maxf(cfg.engage_distance - cfg.mid_distance, 0.001)
+	else:
+		slope = (cfg.depth_mid - cfg.depth_arrive) \
+				/ maxf(cfg.mid_distance - cfg.arrive_distance, 0.001)
+	return absf(slope) * closing_speed
+
+
+# ── Cross-crease save-selection fork ─────────────────────────────────────────
+# Real save selection on a cross-crease pass is a time race (audit F3): stay on
+# your FEET when the push can arrive set before the one-timer; go PADS-FIRST
+# SLIDE (arrive-and-seal) when the pass has already won — a beaten goalie arrives
+# late but sealed along the ice, taking away the low far-side finish, instead of
+# arriving late upright mid-T-push with the bottom of the net open.
+#
+# Race: time available = puck flight to the crossing point + the receiver's
+# release swing (the read delay was already spent by the caller before asking).
+# Distance needed = lateral gap to the crossing minus standing pad coverage.
+# Lost when the accel-ramped standing push can't cover it in time.
+static func cross_crease_race_lost(
+		target_x: float,
+		puck_x: float,
+		puck_vx: float,
+		goalie_x: float,
+		reach_half_width: float,
+		release_time: float,
+		goalie_lateral_speed: float,
+		goalie_lateral_accel: float) -> bool:
+	var needed: float = absf(target_x - goalie_x) - reach_half_width
+	if needed <= 0.0:
+		return false  # already covering the crossing point
+	var t_pass: float = absf(target_x - puck_x) / maxf(absf(puck_vx), 0.001)
+	var t_avail: float = t_pass + release_time
+	return needed > reachable_lateral_distance(
+			goalie_lateral_speed, goalie_lateral_accel, t_avail)
 
 
 # ── Backdoor-aware depth cap ─────────────────────────────────────────────────

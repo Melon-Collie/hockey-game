@@ -171,10 +171,13 @@ func test_depth_inside_aggressive_zone_stays_aggressive() -> void:
 		_depth_cfg())
 	assert_almost_eq(d, _depth_cfg().depth_aggressive, 0.001)
 
-func test_depth_far_away_is_defensive() -> void:
+func test_depth_far_away_floors_at_conservative() -> void:
+	# A puck far away IN FRONT leaves the goalie resting at conservative depth
+	# (watching the play from the paint) — goal-line depth is for behind-net /
+	# post play only (audit F8; USA Hockey D-zone = behind-net tracking).
 	var d: float = GoalieBehaviorRules.target_depth_for_puck_distance(
 		100.0, _depth_cfg())
-	assert_almost_eq(d, _depth_cfg().depth_defensive, 0.001)
+	assert_almost_eq(d, _depth_cfg().depth_conservative, 0.001)
 
 func test_depth_at_origin_is_defensive() -> void:
 	# puck_z_dist = 0 → t = 0 → lerp(defensive, aggressive, 0) = defensive
@@ -832,3 +835,210 @@ func test_backdoor_cap_symmetric_for_minus_z_goal() -> void:
 			Vector3(-4, 0, -23), Vector3(-4, 0, -23), Vector3(1.2, 0, -25.2),
 			-26.6, 0.0, 1, _backdoor_cfg())
 	assert_almost_eq(cap, 1.131, 0.02)
+
+# ── rush_retreat (speed-matched backflow) ─────────────────────────────────────
+
+func _rush_cfg() -> GoalieBehaviorRules.RushRetreatConfig:
+	var cfg := GoalieBehaviorRules.RushRetreatConfig.new()
+	cfg.engage_distance = 8.0
+	cfg.mid_distance = 4.5
+	cfg.arrive_distance = 1.5
+	cfg.depth_engage = 1.75
+	cfg.depth_mid = 1.30
+	cfg.depth_arrive = 0.10
+	return cfg
+
+func test_rush_depth_holds_engage_depth_outside_range() -> void:
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(8.0, _rush_cfg()), 1.75, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(12.0, _rush_cfg()), 1.75, 0.0001)
+
+func test_rush_depth_hits_crease_top_at_hash_marks() -> void:
+	# Mid anchor: attacker at the hash marks → heels back at crease-top depth.
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(4.5, _rush_cfg()), 1.30, 0.0001)
+
+func test_rush_depth_reaches_arrive_depth_at_crease() -> void:
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(1.5, _rush_cfg()), 0.10, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(0.5, _rush_cfg()), 0.10, 0.0001)
+
+func test_rush_depth_interpolates_between_anchors() -> void:
+	# Halfway through each segment sits halfway between its anchor depths.
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(6.25, _rush_cfg()), 1.525, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_depth(3.0, _rush_cfg()), 0.70, 0.0001)
+
+func test_rush_rate_is_slope_times_closing_speed() -> void:
+	# Far segment slope: (1.75-1.30)/3.5 per metre; at 8 m/s closing the
+	# retreat rate tracks the curve exactly.
+	var expected_far: float = (1.75 - 1.30) / 3.5 * 8.0
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(6.0, 8.0, _rush_cfg()), expected_far, 0.0001)
+	# Near segment is steeper: (1.30-0.10)/3.0 per metre.
+	var expected_near: float = (1.30 - 0.10) / 3.0 * 8.0
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(3.0, 8.0, _rush_cfg()), expected_near, 0.0001)
+
+func test_rush_rate_scales_with_closing_speed() -> void:
+	var slow: float = GoalieBehaviorRules.rush_retreat_rate(3.0, 2.0, _rush_cfg())
+	var fast: float = GoalieBehaviorRules.rush_retreat_rate(3.0, 8.0, _rush_cfg())
+	assert_almost_eq(fast, slow * 4.0, 0.0001)
+
+func test_rush_rate_zero_outside_curve_or_not_closing() -> void:
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(9.0, 8.0, _rush_cfg()), 0.0, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(1.0, 8.0, _rush_cfg()), 0.0, 0.0001)
+	assert_almost_eq(GoalieBehaviorRules.rush_retreat_rate(3.0, -1.0, _rush_cfg()), 0.0, 0.0001)
+
+# ── cross_crease_race_lost (drive vs drop-and-slide fork) ─────────────────────
+
+func test_cross_crease_race_won_when_already_covering() -> void:
+	# Crossing point inside standing pad coverage → nothing to race.
+	assert_false(GoalieBehaviorRules.cross_crease_race_lost(
+			0.3, -2.0, 12.0, 0.0, 0.42, 0.15, 3.8, 14.0))
+
+func test_cross_crease_race_lost_on_hard_royal_road_pass() -> void:
+	# Hard pass (16 m/s) crossing 3 m to the far post while the goalie sits a
+	# full net-width away: flight ~0.19 s + 0.15 s swing covers only ~0.77 m
+	# from rest against ~1.28 m of needed travel → pads-first slide.
+	assert_true(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, -2.1, 16.0, -0.8, 0.42, 0.15, 3.8, 14.0))
+
+func test_cross_crease_race_won_against_slow_telegraphed_feed() -> void:
+	# Same geometry but a soft 6 m/s feed: flight ~0.5 s + swing buys the
+	# standing push time to arrive set → stay on the feet.
+	assert_false(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, -2.1, 6.0, -0.8, 0.42, 0.15, 3.8, 14.0))
+
+func test_cross_crease_received_pass_races_on_release_swing_alone() -> void:
+	# Puck already at the crossing (received — vx decayed): only the release
+	# swing remains. A goalie across the crease loses; one on top of it wins.
+	assert_true(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, 0.9, 0.5, -0.8, 0.42, 0.15, 3.8, 14.0))
+	assert_false(GoalieBehaviorRules.cross_crease_race_lost(
+			0.9, 0.9, 0.5, 0.6, 0.42, 0.15, 3.8, 14.0))
+
+# ── sweep_lane_blocked (lane-aware clear) ─────────────────────────────────────
+
+func _lane_cfg() -> GoalieBehaviorRules.SweepLaneConfig:
+	var cfg := GoalieBehaviorRules.SweepLaneConfig.new()
+	cfg.stick_reach = 1.3
+	cfg.reaction_delay = 0.08
+	cfg.close_speed = 4.5
+	cfg.max_flight_time = 1.0
+	return cfg
+
+func test_lane_clear_with_no_opponents() -> void:
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, -3.5), PackedVector3Array(), _lane_cfg()))
+
+func test_opponent_on_the_exit_lane_blocks() -> void:
+	# Body dead on the sweep line 2 m downrange — a stick gets on it easily.
+	var opps := PackedVector3Array([Vector3(2.0, 0, 25.0)])
+	assert_true(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), opps, _lane_cfg()))
+
+func test_opponent_behind_the_exit_cannot_block() -> void:
+	var opps := PackedVector3Array([Vector3(-2.0, 0, 25.0)])
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), opps, _lane_cfg()))
+
+func test_opponent_beside_the_lane_needs_time_to_close() -> void:
+	# 2.4 m off the line at 1 m downrange: the puck passes in ~0.14 s — reach
+	# 1.3 + 4.5·(0.14−0.08) ≈ 1.57 < 2.4 → clear. The same opponent at 6 m
+	# downrange has ~0.86 s to close (reach ≈ 4.8) → blocked.
+	var near_opp := PackedVector3Array([Vector3(1.0, 0, 27.4)])
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), near_opp, _lane_cfg()))
+	var far_opp := PackedVector3Array([Vector3(6.0, 0, 27.4)])
+	assert_true(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), far_opp, _lane_cfg()))
+
+func test_opponent_beyond_flight_window_ignored() -> void:
+	# 10 m downrange at 7 m/s ≈ 1.4 s > max_flight_time — out of the window.
+	var opps := PackedVector3Array([Vector3(10.0, 0, 25.0)])
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), opps, _lane_cfg()))
+
+# ── compute_clear_velocity forced_side ────────────────────────────────────────
+
+func test_clear_forced_side_overrides_natural_pick() -> void:
+	# Puck on +x would naturally sweep +x; forcing -1 flips the corner.
+	var v: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+			Vector3(1.0, 0, 25), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0, -1.0)
+	assert_lt(v.x, 0.0, "forced side wins over the puck-offset pick")
+	assert_almost_eq(v.length(), 7.0, 0.001)
+
+func test_clear_unforced_keeps_natural_pick() -> void:
+	var v: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+			Vector3(1.0, 0, 25), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0, 0.0)
+	assert_gt(v.x, 0.0)
+
+# ── Behind-net puck play (tier-1 conservative rim stop) ───────────────────────
+
+func test_travel_time_inverts_reachable_distance() -> void:
+	# travel_time_from_rest is the inverse of reachable_lateral_distance: the
+	# distance reachable in t takes exactly t to travel.
+	var t_mid: float = 0.2   # inside the accel ramp (ramp ends at 3.8/14 ≈ 0.27)
+	var d_mid: float = GoalieBehaviorRules.reachable_lateral_distance(3.8, 14.0, t_mid)
+	assert_almost_eq(GoalieBehaviorRules.travel_time_from_rest(d_mid, 3.8, 14.0), t_mid, 0.001)
+	var t_long: float = 1.5  # past the ramp, cruising
+	var d_long: float = GoalieBehaviorRules.reachable_lateral_distance(3.8, 14.0, t_long)
+	assert_almost_eq(GoalieBehaviorRules.travel_time_from_rest(d_long, 3.8, 14.0), t_long, 0.001)
+
+func test_puck_play_race_needs_full_trip_plus_margin() -> void:
+	# t_play = 1.0 out + 0.25 beat + 1.0 back = 2.25 s; margin 0.9 → the
+	# sprinting opponent must be > 3.15 s away (34.7 m at 11 m/s).
+	assert_true(GoalieBehaviorRules.puck_play_race_clear(
+			1.0, 1.0, 0.25, 40.0, 11.0, 0.9), "distant forecheck → safe to go")
+	assert_false(GoalieBehaviorRules.puck_play_race_clear(
+			1.0, 1.0, 0.25, 30.0, 11.0, 0.9), "forecheck inside the margin → stay home")
+
+func test_puck_play_abort_margin_is_a_real_hysteresis() -> void:
+	# A pressure distance that passes the smaller abort margin but fails the
+	# go margin: mid-trip the goalie continues, but he would never have LEFT
+	# for it — bail-early hysteresis in the safe direction.
+	var t_out: float = 1.0
+	var t_back: float = 1.0
+	assert_false(GoalieBehaviorRules.puck_play_race_clear(
+			t_out, t_back, 0.25, 31.0, 11.0, 0.9), "wouldn't GO at this pressure")
+	assert_true(GoalieBehaviorRules.puck_play_race_clear(
+			t_out, t_back, 0.25, 31.0, 11.0, 0.45), "…but mid-trip it isn't a bail yet")
+
+func test_cannot_beat_the_rim_means_no_go() -> void:
+	# The stop only works if the goalie arrives SET before the puck: a rim
+	# 4 m out at 10 m/s (0.4 s) vs a 0.5 s skate + 0.15 s set → no-go.
+	assert_false(GoalieBehaviorRules.can_beat_puck_to_stop(0.5, 4.0, 10.0, 0.15))
+	assert_true(GoalieBehaviorRules.can_beat_puck_to_stop(0.5, 8.0, 10.0, 0.15))
+
+
+# ── Puck at rest ON the goalie (the pad-shelf smother) ────────────────────────
+# Window: off the sweepable ice (min_height) but inside the pad/lap shelf
+# envelope (max_height), within the butterfly's horizontal span, not clearly
+# live. Args: puck_pos, puck_speed, goalie_pos, min_height, max_height,
+# body_radius, max_speed — the controller passes clear_max_height 0.12,
+# 0.6, 0.7, clear_max_puck_speed 4.0.
+
+func test_puck_on_pad_shelf_reads_as_resting() -> void:
+	# The observed bug case: a deadened save sitting on a butterfly pad top
+	# (~0.3 m up, ~0.3 m off-center), dead still.
+	assert_true(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.3, 0.3, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_puck_on_the_ice_is_the_sweeps_job() -> void:
+	# On-ice pucks stay with the crease sweep — below min_height is not a rest.
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.3, 0.0175, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_puck_above_the_shelf_envelope_is_not_pinnable() -> void:
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.0, 0.8, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_puck_outside_the_body_footprint_is_not_supported() -> void:
+	# Off the ice but a meter to the side — nothing there to rest on; this is
+	# a flying puck, not a supported one.
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(1.0, 0.3, 24.0), 0.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))
+
+func test_live_puck_crossing_the_body_is_not_resting() -> void:
+	assert_false(GoalieBehaviorRules.puck_resting_on_goalie(
+			Vector3(0.0, 0.3, 24.0), 6.0, Vector3(0.0, 0.0, 24.0),
+			0.12, 0.6, 0.7, 4.0))

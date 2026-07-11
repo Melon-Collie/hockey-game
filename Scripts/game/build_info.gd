@@ -81,7 +81,8 @@ const VERSION: String = "dev"
 # v20: request_join carries the joiner's Shot Power Sensitivity (trailing f32),
 #     so the host fires a remote human's pure-mouse wrister at the same power
 #     their own client predicted with its local sensitivity.
-const PROTOCOL_VERSION: int = 20
+# v21: notify_goalie_freeze_called RPC (NHL goalie cover whistle).
+const PROTOCOL_VERSION: int = 21
 
 
 func _ready() -> void:

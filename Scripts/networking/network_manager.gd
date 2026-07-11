@@ -72,6 +72,7 @@ signal ghost_state_received(peer_id: int, is_ghost: bool)
 signal goal_received(scoring_team_id: int, score0: int, score1: int, scorer_name: String, assist1_name: String, assist2_name: String)
 signal puck_out_of_play_received
 signal icing_called_received
+signal goalie_freeze_called_received
 signal offside_called_received
 signal faceoff_positions_received(positions: Array)
 signal game_reset_received(new_game_id: String)
@@ -1610,6 +1611,14 @@ func notify_icing_called_to_all() -> void:
 @rpc("authority", "reliable")
 func notify_icing_called() -> void:
 	NetworkSimManager.send(func() -> void: icing_called_received.emit(), [], true)
+
+func notify_goalie_freeze_called_to_all() -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_goalie_freeze_called.rpc_id(peer_id)
+
+@rpc("authority", "reliable")
+func notify_goalie_freeze_called() -> void:
+	NetworkSimManager.send(func() -> void: goalie_freeze_called_received.emit(), [], true)
 
 func notify_offside_called_to_all() -> void:
 	for peer_id: int in connected_peer_ids():

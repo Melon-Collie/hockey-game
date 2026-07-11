@@ -34,6 +34,8 @@ var butterfly_drop_speed: float = 0.08
 var butterfly_min_hold_time: float = 0.35
 
 # ── Runtime state ────────────────────────────────────────────────────────────
+# Push speed along the committed path, signed by `dir` (the name predates the
+# path-normalized advance; pose hooks read |velocity_x| as slide intensity).
 var velocity_x: float = 0.0
 # Committed arc endpoints, captured at slide-start; advance_slide interpolates
 # along these. Persist so animation hooks (pose builder) can read `dir` even
@@ -198,8 +200,9 @@ func is_coil_complete() -> bool:
 
 
 # Tick the translation phase of the slide. Returns the new (x, depth).
-# Velocity decays via friction and drives arc progress (0→1); position is
-# computed from arc progress rather than accumulated from velocity directly.
+# Velocity decays via friction and drives arc progress (0→1) along the full
+# 2D path (see the normalization note below); position is computed from arc
+# progress rather than accumulated from velocity directly.
 # Depth bows forward (sin(π·t)) at mid-arc, matching the "push out and settle"
 # shape of a real pivot. When velocity falls below `slide_min_speed` the slide
 # ends — caller should check `is_slide_finished()` after this call. Coil is
@@ -211,9 +214,20 @@ func advance_slide(delta: float, goal_center_x: float, net_half_width: float) ->
 		velocity_x = maxf(velocity_x - decay, 0.0)
 	else:
 		velocity_x = minf(velocity_x + decay, 0.0)
-	var x_span: float = absf(end_x - start_x)
-	if x_span > 0.001:
-		arc_t = clampf(arc_t + absf(velocity_x) * delta / x_span, 0.0, 1.0)
+	# Progress normalizes by the FULL committed path length (lateral + depth),
+	# not the lateral span alone. The seal targets clamp well inside the posts
+	# (±(net_half_width − pad_edge_extent) ≈ ±0.36 m), so a slide committed
+	# from challenge depth has a SHORT lateral leg and a metre-plus depth leg
+	# back to the post seal — normalized by x alone, the depth rode the lateral
+	# schedule and the body snapped backward at several times the push speed
+	# (the "pinned back to the net" read). Path-normalized, the body translates
+	# along the committed diagonal at the real push speed, so a deep slide is
+	# visibly a slower, longer trip than a goal-line one.
+	var span_x: float = end_x - start_x
+	var span_depth: float = end_depth - start_depth
+	var path_span: float = sqrt(span_x * span_x + span_depth * span_depth)
+	if path_span > 0.001:
+		arc_t = clampf(arc_t + absf(velocity_x) * delta / path_span, 0.0, 1.0)
 	else:
 		arc_t = 1.0
 	var new_x: float = lerpf(start_x, end_x, arc_t)
