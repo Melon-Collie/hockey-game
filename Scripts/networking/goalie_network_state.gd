@@ -59,7 +59,8 @@ func is_down() -> bool:
 			or state_enum == GoalieStateMachine.State.RVH_RIGHT as int \
 			or state_enum == GoalieStateMachine.State.COILING as int \
 			or state_enum == GoalieStateMachine.State.VH_LEFT as int \
-			or state_enum == GoalieStateMachine.State.VH_RIGHT as int
+			or state_enum == GoalieStateMachine.State.VH_RIGHT as int \
+			or state_enum == GoalieStateMachine.State.COVERING as int
 
 
 func copy_from(s: GoalieNetworkState) -> void:

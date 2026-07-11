@@ -422,9 +422,17 @@ static func compute_clear_velocity(
 		forward_weight: float,
 		clear_speed: float,
 		center_deadband: float,
-		default_side: float) -> Vector3:
-	var offset_x: float = puck_position.x - goal_center_x
-	var side: float = signf(offset_x) if absf(offset_x) > center_deadband else signf(default_side)
+		default_side: float,
+		forced_side: float = 0.0) -> Vector3:
+	# `forced_side` (non-zero) overrides the natural side pick — used by the
+	# lane-aware sweep to try the OPPOSITE corner when the natural exit lane is
+	# covered by an opponent's stick.
+	var side: float
+	if forced_side != 0.0:
+		side = signf(forced_side)
+	else:
+		var offset_x: float = puck_position.x - goal_center_x
+		side = signf(offset_x) if absf(offset_x) > center_deadband else signf(default_side)
 	if side == 0.0:
 		side = 1.0
 	var dir := Vector3(side * lateral_weight, 0.0, float(direction_sign) * forward_weight)
@@ -432,6 +440,53 @@ static func compute_clear_velocity(
 	if dlen < 0.0001:
 		return Vector3.ZERO
 	return (dir / dlen) * clear_speed
+
+
+# ── Sweep-lane reachability ──────────────────────────────────────────────────
+# Can an opponent get a stick on the swept puck's exit path? Same grounded
+# reachability shape as the bot AI's lane model (AIActionScoring.lane_clear),
+# reduced to the goalie's short-range case: opponents treated as static over
+# the short flight, scalar loop over a caller-owned PackedVector3Array (no
+# allocation — this runs at the sweep/cover decision, which can persist for
+# ticks during a scramble). An opponent intercepts iff, when the puck passes
+# their closest-approach point, their blade reach plus the lateral distance
+# they can close in the remaining time covers the miss distance. All three
+# parameters are physical: a blade's reach, a competitive read delay, and the
+# lateral close pace (~half top skating speed — you slide into a lane, you
+# don't sprint at it). Real doctrine hook (audit follow-up): the sweep is only
+# the correct clear when the corner lane is OPEN; a covered lane is what makes
+# smothering the correct read.
+class SweepLaneConfig:
+	var stick_reach: float = 1.3       # m — lane defender blade reach
+	var reaction_delay: float = 0.08   # s — competitive read before closing starts
+	var close_speed: float = 4.5       # m/s — lateral close pace (~half top speed)
+	var max_flight_time: float = 1.0   # s — only the exit's first stretch matters
+
+static func sweep_lane_blocked(
+		puck_position: Vector3,
+		exit_velocity: Vector3,
+		opponent_positions: PackedVector3Array,
+		cfg: SweepLaneConfig) -> bool:
+	var speed: float = sqrt(exit_velocity.x * exit_velocity.x + exit_velocity.z * exit_velocity.z)
+	if speed < 0.001:
+		return false
+	var dirx: float = exit_velocity.x / speed
+	var dirz: float = exit_velocity.z / speed
+	for opp in opponent_positions:
+		var relx: float = opp.x - puck_position.x
+		var relz: float = opp.z - puck_position.z
+		var along: float = relx * dirx + relz * dirz
+		if along <= 0.0:
+			continue  # behind the exit — can't intercept
+		var t: float = along / speed
+		if t > cfg.max_flight_time:
+			continue  # too far downrange to matter
+		var miss: float = absf(relx * -dirz + relz * dirx)
+		var reach: float = cfg.stick_reach \
+				+ cfg.close_speed * maxf(t - cfg.reaction_delay, 0.0)
+		if miss < reach:
+			return true
+	return false
 
 
 # ── Net-front jam (seal the ice) ─────────────────────────────────────────────

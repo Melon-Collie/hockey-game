@@ -14,9 +14,13 @@ extends RefCounted
 # values are APPENDED so existing numeric values — duplicated in
 # domain/ai/role_behaviors/carrier.gd and on the wire as state_enum (u8) —
 # are preserved.
+# COVERING is the smother: the goalie collapses over a loose puck in the
+# crease when every sweep lane is covered — the real cover/freeze, resolved by
+# ruleset (NHL: whistle + defensive-zone faceoff; ARCADE: short hold, then a
+# live release). Appended last to preserve wire numbering.
 enum State {
 	STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING, COILING,
-	VH_LEFT, VH_RIGHT,
+	VH_LEFT, VH_RIGHT, COVERING,
 }
 
 signal transitioned(prev: State, new: State)

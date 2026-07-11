@@ -166,6 +166,7 @@ func _ready() -> void:
 	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push_pair(n, "left", c))
 	GameManager.puck_out_of_play.connect(_on_puck_out_of_play)
 	GameManager.icing_called.connect(_on_icing_called)
+	GameManager.goalie_freeze_called.connect(_on_goalie_freeze_called)
 	GameManager.offside_called.connect(_on_offside_called)
 	GameManager.local_player_hit.connect(_on_local_player_hit)
 	# Arrives just before faceoff_prep_announced on the opening faceoff; the
@@ -1155,6 +1156,11 @@ func _on_puck_out_of_play() -> void:
 func _on_icing_called() -> void:
 	if _toast_stack != null:
 		_toast_stack.push("ICING", _WHITE)
+
+
+func _on_goalie_freeze_called() -> void:
+	if _toast_stack != null:
+		_toast_stack.push("GOALIE FREEZES IT", _WHITE)
 
 
 func _on_offside_called() -> void:

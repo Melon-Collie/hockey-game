@@ -486,6 +486,26 @@ extends Node
 @export var clear_forward_weight: float = 0.5   # out-of-crease bias
 @export var clear_center_deadband: float = 0.15 # m — |puck.x| under this picks the stick side
 @export var clear_cooldown: float = 0.45        # s between sweeps (anti-dribble)
+# ── Cover / freeze (smother) ──────────────────────────────────────────────────
+# The real loose-puck hierarchy is: cover under pressure, sweep when there's
+# time to play it, leave it only with clear teammate possession (USA Hockey
+# "Controlling Rebounds"). The sweep is only the correct clear when a corner
+# exit lane is OPEN — so the cover triggers exactly when the lane model says
+# every sweep would feed an opponent's stick AND an opponent is on the puck.
+# The smother is a race: the glove takes `cover_reach_time` to land, and until
+# it does the puck is still live (a whack that moves it aborts the cover into
+# a RECOVERING scramble — the gamble). Once secured the puck is dead
+# (pickup_locked); resolution is ruleset-split by GameManager via the
+# `puck_covered` signal: NHL whistles a defensive-zone faceoff; ARCADE (and
+# OFF / free play) runs the flow-preserving hold-and-release — the goalie
+# holds `cover_hold_s` (the scramble dies, the defense resets) then plays it
+# out himself through the same lane-aware sweep. `cover_cooldown_s` keeps the
+# smother a scramble-killer, not a spammable wall.
+@export var cover_reach_time: float = 0.35      # s — glove-to-puck smother race window
+@export var cover_secure_radius: float = 0.55   # m — puck must still be this close when the glove lands
+@export var cover_hold_s: float = 0.85          # s — ARCADE hold before the live release
+@export var cover_cooldown_s: float = 7.0       # s — between covers (success or failed gamble)
+
 # Clear-sweep animation. The sweep imparts the clearing velocity instantly; on
 # its own the puck just shoots to the corner with no stick motion, which reads
 # oddly. This is a short timed follow-through — the blocker/paddle swings across
@@ -742,6 +762,11 @@ extends Node
 # or shot-reaction signals/RPCs — the host's broadcast pose carries the butterfly
 # drop, glove/blocker reach, and recovery directly.
 
+# Host-side: the goalie has secured (smothered) a loose puck. GameManager
+# resolves it by ruleset — NHL whistles a defensive-zone faceoff; ARCADE / OFF
+# do nothing (the controller's own hold-and-release timer plays it out).
+signal puck_covered(covering_team_id: int)
+
 # ── References ────────────────────────────────────────────────────────────────
 var goalie: Goalie = null
 var puck: Puck = null
@@ -776,6 +801,7 @@ var _crease_jam_cfg: GoalieBehaviorRules.CreaseJamConfig
 var _beaten_wide_cfg: GoalieBehaviorRules.BeatenWideConfig
 var _backdoor_cfg: GoalieBehaviorRules.BackdoorThreatConfig
 var _rush_cfg: GoalieBehaviorRules.RushRetreatConfig
+var _sweep_lane_cfg: GoalieBehaviorRules.SweepLaneConfig
 # Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
 # array. PackedVector3Array.clear() keeps capacity across shots.
 var _screen_positions: PackedVector3Array = PackedVector3Array()
@@ -824,6 +850,16 @@ var _screen_block_drop_timer: float = -1.0
 # Chest-blend ramp (0 in tight → 1 at range) from the last threat computation;
 # consumed by the tracking lerp to scale the quiet-eye lag with distance.
 var _chest_t: float = 0.0
+# Cover / smother state. `_cover_secured` flips when the glove lands with the
+# puck still in the secure radius; the reach timer runs the smother race, the
+# hold timer runs the ARCADE hold-and-release, and the cooldown spaces covers.
+var _cover_secured: bool = false
+var _cover_reach_timer: float = 0.0
+var _cover_hold_timer: float = 0.0
+var _cover_cooldown_timer: float = 0.0
+# Reused scratch of opposing skater positions for the sweep-lane check (same
+# no-allocation idiom as _screen_positions).
+var _lane_opponents: PackedVector3Array = PackedVector3Array()
 # Lunge state: active timer counts down while the blocker is extended;
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
@@ -1140,6 +1176,12 @@ func _build_rule_configs() -> void:
 	_backdoor_cfg.goalie_lateral_speed = t_push_speed
 	_backdoor_cfg.goalie_lateral_accel = lateral_accel
 	_backdoor_cfg.max_shooter_distance = backdoor_max_shooter_distance
+	_sweep_lane_cfg = GoalieBehaviorRules.SweepLaneConfig.new()
+	# Physical lane parameters shared with the bot AI's lane model: blade reach,
+	# a competitive read delay, and lateral close pace at ~half top speed.
+	_sweep_lane_cfg.stick_reach = GameRules.DEFAULT_STICK_LENGTH_M
+	_sweep_lane_cfg.reaction_delay = 0.08
+	_sweep_lane_cfg.close_speed = 0.5 * GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 	_rush_cfg = GoalieBehaviorRules.RushRetreatConfig.new()
 	_rush_cfg.engage_distance = rush_engage_distance
 	_rush_cfg.mid_distance = rush_mid_distance
@@ -1171,6 +1213,13 @@ func reset_to_crease() -> void:
 	_prime_linger_timer = 0.0
 	_screen_block_drop_timer = -1.0
 	_chest_t = 0.0
+	# Cover state clears with the goalie; the puck's pickup_locked is owned by
+	# the phase machinery through stoppages (FACEOFF_PREP locks, PLAYING entry
+	# unlocks), so a reset mid-cover never needs to touch the lock here.
+	_cover_secured = false
+	_cover_reach_timer = 0.0
+	_cover_hold_timer = 0.0
+	_cover_cooldown_timer = 0.0
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
 	_clear_cooldown_timer = 0.0
@@ -1427,6 +1476,8 @@ func _update_state(delta: float) -> void:
 		_reaction.shot_timer = 0.0
 		_reaction.arm_timer = 0.0
 	_slide.tick_cooldown(delta)
+	if _cover_cooldown_timer > 0.0:
+		_cover_cooldown_timer = maxf(_cover_cooldown_timer - delta, 0.0)
 	# Convert puck global X into goalie local X. The -Z goal goalie is rotated PI
 	# so its local +X is global -X; multiplying by -_direction_sign corrects for that.
 	var puck_local_x: float = (_tracked_threat_position.x - _goal_center_x) * -_direction_sign
@@ -1529,6 +1580,8 @@ func _update_state(delta: float) -> void:
 				_sm.transition_to(State.RVH_RIGHT)
 			elif puck_local_x < -rvh_swap_deadband_m:
 				_sm.transition_to(State.VH_LEFT)
+		State.COVERING:
+			_tick_cover(delta)
 
 # True when the puck is in the goalie's defensive half AND not controlled by
 # the goalie's own team (loose or carried by an opponent). Drives the
@@ -1798,12 +1851,26 @@ func _try_clear_loose_puck(delta: float) -> void:
 	_clear_dwell_timer += delta
 	if _clear_dwell_timer < clear_dwell:
 		return
-	# Dead-centre pucks have no natural corner — sweep toward the stick side.
-	var default_side: float = 1.0 if catches_left else -1.0
-	var sweep_vel: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
-			puck.global_position, _goal_center_x, _direction_sign,
-			clear_lateral_weight, clear_forward_weight, clear_speed,
-			clear_center_deadband, default_side)
+	# Lane-aware clear: pick a corner whose exit lane no opponent can reach. If
+	# BOTH lanes are covered — the situation where a real sweep just feeds an
+	# opponent's stick — and someone is on the puck, this is the cover read:
+	# smother it (audit follow-up to F12/§6.3; USA Hockey's cover-vs-clear
+	# hierarchy). With cover on cooldown (or no real pressure) fall back to the
+	# natural-side sweep — a desperation clear beats standing still.
+	var sweep_vel: Vector3 = _pick_clear_velocity()
+	if sweep_vel == Vector3.ZERO:
+		if _cover_cooldown_timer <= 0.0 \
+				and _nearest_opposing_skater_dist_to_puck() <= jam_opponent_distance:
+			_enter_cover()
+			return
+		sweep_vel = _natural_clear_velocity(0.0)
+	_execute_sweep(sweep_vel)
+
+
+# Impart the clear velocity + run the shared sweep side effects (stick
+# collision window, cooldowns, follow-through animation). Shared by the plain
+# loose-puck clear and the cover release.
+func _execute_sweep(sweep_vel: Vector3) -> void:
 	# Disable the stick's own collision before imparting velocity: the puck
 	# has been dwelling right next to the blade (it actively tracks toward
 	# the puck's side while loose — see _apply_active_blade_intent /
@@ -1823,6 +1890,125 @@ func _try_clear_loose_puck(delta: float) -> void:
 	_sweep_anim_timer = sweep_anim_duration
 
 
+# Natural-side clear velocity (dead-centre pucks default to the stick side);
+# `forced_side` != 0 overrides toward that corner.
+func _natural_clear_velocity(forced_side: float) -> Vector3:
+	var default_side: float = 1.0 if catches_left else -1.0
+	return GoalieBehaviorRules.compute_clear_velocity(
+			puck.global_position, _goal_center_x, _direction_sign,
+			clear_lateral_weight, clear_forward_weight, clear_speed,
+			clear_center_deadband, default_side, forced_side)
+
+
+# Lane-aware corner pick: natural side if its exit lane is clear of opposing
+# reach, else the far corner, else ZERO (no safe sweep exists — the cover
+# read). Opponent gather is a scalar loop into a reused packed array.
+func _pick_clear_velocity() -> Vector3:
+	_gather_opposing_positions()
+	var natural: Vector3 = _natural_clear_velocity(0.0)
+	if not GoalieBehaviorRules.sweep_lane_blocked(
+			puck.global_position, natural, _lane_opponents, _sweep_lane_cfg):
+		return natural
+	var other: Vector3 = _natural_clear_velocity(-signf(natural.x))
+	if not GoalieBehaviorRules.sweep_lane_blocked(
+			puck.global_position, other, _lane_opponents, _sweep_lane_cfg):
+		return other
+	return Vector3.ZERO
+
+
+func _gather_opposing_positions() -> void:
+	_lane_opponents.clear()
+	if not _skater_getter.is_valid():
+		return
+	var skaters: Array = _skater_getter.call()
+	for skater: Skater in skaters:
+		if skater == null or skater.is_ghost:
+			continue
+		if team_id != -1 and skater.get_team_id() == team_id:
+			continue
+		_lane_opponents.append(skater.global_position)
+
+
+# ── Cover / smother lifecycle ─────────────────────────────────────────────────
+# Enter the smother: collapse over the puck and start the reach race. The
+# glove takes `cover_reach_time` to land; until then the puck is still live.
+func _enter_cover() -> void:
+	_cover_secured = false
+	_cover_reach_timer = cover_reach_time
+	_cover_hold_timer = 0.0
+	_move_speed_current = 0.0
+	_sm.transition_to(State.COVERING)
+
+
+# Per-tick COVERING logic (host). Reach phase: the smother race — a puck that
+# gets whacked out of the window before the glove lands aborts the cover into
+# a RECOVERING scramble (the gamble). Secured phase: the puck is dead under
+# the glove (velocity re-zeroed each tick so the goalie's own colliders can't
+# nudge it; skater bodies can't touch it — the puck mask excludes them and the
+# blade paths are pickup_locked-gated). NHL resolution arrives externally as a
+# whistle (GameManager) whose faceoff reset calls reset_to_crease; otherwise
+# the ARCADE hold expires here and the goalie plays it out himself.
+func _tick_cover(delta: float) -> void:
+	if not is_server:
+		return
+	if puck.get_carrier() != null:
+		_abort_cover()
+		return
+	if not _cover_secured:
+		var dist: float = goalie.global_position.distance_to(puck.global_position)
+		var escaped: bool = dist > cover_secure_radius + 0.3 \
+				or puck.linear_velocity.length() > clear_max_puck_speed \
+				or puck.global_position.y > clear_max_height
+		if escaped:
+			_abort_cover()
+			return
+		_cover_reach_timer -= delta
+		if _cover_reach_timer > 0.0:
+			return
+		if dist > cover_secure_radius:
+			_abort_cover()
+			return
+		# Glove is down with the puck still under it — secured.
+		_cover_secured = true
+		_cover_hold_timer = cover_hold_s
+		puck.pickup_locked = true
+		puck.set_puck_velocity(Vector3.ZERO)
+		puck_covered.emit(team_id)
+		return
+	# Secured: keep the puck dead and run the ARCADE hold-and-release timer.
+	puck.set_puck_velocity(Vector3.ZERO)
+	_cover_hold_timer -= delta
+	if _cover_hold_timer <= 0.0:
+		_release_cover()
+
+
+# ARCADE hold expired — play the puck out: unlock, lane-aware sweep (falling
+# back to the natural corner if the reset didn't open a lane; the hold already
+# did its job of killing the scramble), stand up through the recovery window.
+func _release_cover() -> void:
+	puck.pickup_locked = false
+	_cover_secured = false
+	var vel: Vector3 = _pick_clear_velocity()
+	if vel == Vector3.ZERO:
+		vel = _natural_clear_velocity(0.0)
+	_execute_sweep(vel)
+	_cover_cooldown_timer = cover_cooldown_s
+	_sm.transition_to(State.RECOVERING)
+	_sm.recovery_timer = 0.0
+
+
+# The smother failed (puck whacked away / picked up before the glove landed)
+# or was interrupted — release any lock and eat the scramble recovery. The
+# full cover cooldown applies either way: a failed gamble is still the gamble.
+func _abort_cover() -> void:
+	if _cover_secured:
+		puck.pickup_locked = false
+		_cover_secured = false
+	_cover_cooldown_timer = cover_cooldown_s
+	_sm.transition_to(State.RECOVERING)
+	_sm.recovery_timer = 0.0
+
+
 # True when a loose puck is sitting on the ice in front of the goalie, slow and
 # close enough to sweep to the corner with the stick. Drives both the actual clear
 # (_try_clear_loose_puck) and the standing / paddle sweep pose so the reach
@@ -1837,7 +2023,7 @@ func _is_loose_puck_clearable() -> bool:
 		return false
 	if puck.pickup_locked:
 		return false
-	if _reaction.reacting or _sm.is_post_integrated():
+	if _reaction.reacting or _sm.is_post_integrated() or _sm.current == State.COVERING:
 		return false
 	# In front of the goal line only — never sweep a puck behind the net.
 	if (puck.global_position.z - _goal_line_z) * _direction_sign <= 0.0:
@@ -2007,6 +2193,9 @@ func _update_depth(delta: float) -> void:
 	if _sm.current == State.BUTTERFLY:
 		# Idle butterfly: commit at the depth set on entry, hold it.
 		return
+	if _sm.current == State.COVERING:
+		# Smothering — planted over the puck, no depth motion.
+		return
 	if _sm.current == State.COILING:
 		# Depth is managed by `_slide.tick_coil` (lerps from coil_start_depth
 		# toward start_depth as the body rotates around the pivot foot).
@@ -2154,6 +2343,9 @@ func _update_position(delta: float) -> void:
 			new_z = _goal_line_z + _direction_sign * _current_depth
 			if _slide.is_slide_finished():
 				_sm.transition_to(State.BUTTERFLY)
+		State.COVERING:
+			# Planted over the puck — no root motion while smothering / holding.
+			new_z = goalie.global_position.z
 		State.RVH_LEFT, State.VH_LEFT:
 			# 0.38 = outer pad reach (0.88) - 0.50 body inset toward post.
 			# VH hugs the same post spot — the stance differs (vertical pad,
@@ -2386,11 +2578,11 @@ func _update_facing(delta: float) -> void:
 		return
 	if _reaction.shot_timer > 0.0:
 		return
-	if _sm.current == State.BUTTERFLY:
-		# Idle butterfly: hold whatever angle the slide ended at (or the drop
-		# came in at). No animation — real goalies don't rotate the body once
-		# down, and the slow lerp toward centre we used to do quietly undid
-		# the slide's facing while the goalie was still down.
+	if _sm.current == State.BUTTERFLY or _sm.current == State.COVERING:
+		# Idle butterfly / smother: hold whatever angle the drop or slide came
+		# in at. No animation — real goalies don't rotate the body once down,
+		# and the slow lerp toward centre we used to do quietly undid the
+		# slide's facing while the goalie was still down.
 		return
 	if _sm.current == State.RECOVERING:
 		# Standing back up — gentle return to square so the next read starts
@@ -2474,6 +2666,10 @@ func _update_body_parts(delta: float) -> void:
 		lerp_t = drop_lerp * delta if _slide.drop_progress < 1.0 else reaction_lerp_speed * delta
 	elif _reaction.reacting:
 		lerp_t = reaction_lerp_speed * delta
+	elif _sm.current == State.COVERING:
+		# Smother collapse paced so the glove lands ~within cover_reach_time
+		# (lerp ≈95% at 3/x — matches the drop-snap idiom above).
+		lerp_t = (3.0 / maxf(cover_reach_time, 0.001)) * delta
 	elif _sm.current == State.RECOVERING:
 		lerp_t = recovery_lerp_speed * delta
 	else:

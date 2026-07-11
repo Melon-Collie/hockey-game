@@ -77,6 +77,7 @@ signal puck_out_of_play()
 # puck_out_of_play but lets HUD differentiate the toast text. Hosts emit
 # inside _consume_pending_faceoff; clients emit from the RPC handler.
 signal icing_called()
+signal goalie_freeze_called()
 signal offside_called()
 
 # ── Domain state ──────────────────────────────────────────────────────────────
@@ -317,6 +318,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.goal_received.connect(_on_goal_received)
 	NetworkManager.puck_out_of_play_received.connect(_on_puck_out_of_play_received)
 	NetworkManager.icing_called_received.connect(_on_icing_called_received)
+	NetworkManager.goalie_freeze_called_received.connect(_on_goalie_freeze_called_received)
 	NetworkManager.offside_called_received.connect(_on_offside_called_received)
 	NetworkManager.faceoff_positions_received.connect(_on_faceoff_positions_received)
 	NetworkManager.game_reset_received.connect(on_game_reset)
@@ -507,6 +509,30 @@ func _whistle_and_faceoff(dot: Vector2) -> void:
 	_on_stoppage_flush_stat_trackers(GamePhase.Phase.FACEOFF_PREP)
 	_state_machine.begin_faceoff_prep(dot)
 	_phase_coord.handle_phase_entered()
+
+
+# Host-only: a goalie secured (smothered) a loose puck. NHL rules: whistle
+# the play dead and face off in the covering goalie's defensive zone (same
+# dot geometry as icing — offender's-zone dot picked by puck X). ARCADE / OFF:
+# no stoppage — the goalie's own hold-and-release timer plays the puck out.
+# Deferred: the signal fires mid-goalie-physics-tick, and the faceoff phase
+# entry teleports actors; the same-frame remainder of that tick shouldn't run
+# against a half-reset world.
+func _on_goalie_covered_puck(covering_team_id: int) -> void:
+	if not NetworkManager.is_host:
+		return
+	if _state_machine == null or _state_machine.rule_set != GameRules.RuleSet.NHL:
+		return
+	call_deferred("_whistle_goalie_freeze", covering_team_id)
+
+
+func _whistle_goalie_freeze(covering_team_id: int) -> void:
+	# Re-check phase — a goal / period horn in the same frame wins.
+	if _state_machine == null or _state_machine.current_phase != GamePhase.Phase.PLAYING:
+		return
+	goalie_freeze_called.emit()
+	NetworkManager.notify_goalie_freeze_called_to_all()
+	_whistle_and_faceoff(GameRules.icing_faceoff_dot(covering_team_id, puck.global_position.x))
 
 
 # Host: any transition out of live play (whistle prep, goal, period horn,
@@ -1124,6 +1150,11 @@ func _wire_subsystems() -> void:
 		return _registry.skaters() if _registry != null else []
 	for gc: GoalieController in goalie_controllers:
 		gc.set_skater_getter(goalie_skater_getter)
+		# Cover/freeze resolution is ruleset-split here: NHL whistles a
+		# defensive-zone faceoff; ARCADE/OFF let the controller's own
+		# hold-and-release play it out (no stoppage — same philosophy as the
+		# offside ghost standing in for the offside whistle).
+		gc.puck_covered.connect(_on_goalie_covered_puck)
 	_registry.player_joined.connect(player_joined.emit)
 	_registry.player_left.connect(player_left.emit)
 	_registry.player_added.connect(_on_registry_player_added)
@@ -2836,6 +2867,11 @@ func _on_puck_out_of_play_received() -> void:
 
 func _on_icing_called_received() -> void:
 	icing_called.emit()
+	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
+
+
+func _on_goalie_freeze_called_received() -> void:
+	goalie_freeze_called.emit()
 	SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 

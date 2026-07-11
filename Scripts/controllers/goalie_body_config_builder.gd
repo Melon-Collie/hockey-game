@@ -236,6 +236,8 @@ func build(inputs: Inputs) -> GoalieBodyConfig:
 			_set_vh_left_pose(c)
 		GoalieStateMachine.State.VH_RIGHT:
 			_set_vh_right_pose(c)
+		GoalieStateMachine.State.COVERING:
+			_set_covering_pose(c, inputs)
 	# Head tracking applies in every state (eyes on the puck through freezes,
 	# around the post in RVH, while down). Only yaw — the per-state head
 	# position/pitch stays authored.
@@ -261,6 +263,7 @@ static func resting_body_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 0.60, 0.05)
 		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 0.85, 0.02)
 		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 0.85, 0.02)
+		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.48, -0.10)
 	return Vector3(0.0, 1.22, 0.0)
 
 static func resting_head_position_for_state(state: int) -> Vector3:
@@ -275,6 +278,7 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.RVH_RIGHT:                       return Vector3( 0.02, 1.17, 0.08)
 		GoalieStateMachine.State.VH_LEFT:                         return Vector3(-0.05, 1.45, 0.06)
 		GoalieStateMachine.State.VH_RIGHT:                        return Vector3( 0.05, 1.45, 0.06)
+		GoalieStateMachine.State.COVERING:                        return Vector3(0.0,  0.92, -0.28)
 	return Vector3(0.0, 1.79, 0.12)
 
 
@@ -396,6 +400,36 @@ func _set_sliding_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 		c.left_pad_rot  = Vector3(0.0,  left_toe, -90.0)
 		c.right_pad_pos = Vector3( 0.42, 0.14 + push_lift, -0.20)
 		c.right_pad_rot = Vector3(0.0, -right_toe,  90.0 - push_rot)
+
+# Covering / smothering pose: butterfly base collapsed forward, glove reaching
+# to the puck's ground position (the smother), paddle flat beside. Glove target
+# hovers just ABOVE the puck (y 0.09 > puck top) so the glove's StaticBody
+# collider never physically shoves the puck it is covering — the host pins the
+# covered puck by zeroing its velocity, not by collider contact. Committed pose:
+# no blade intents / reaches compose with it.
+func _set_covering_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
+	var left_toe: float = _resolved_toe_out(inputs.left_pad_toe_out)
+	var right_toe: float = _resolved_toe_out(inputs.right_pad_toe_out)
+	c.left_pad_pos  = Vector3(-0.42, 0.14, -0.20)
+	c.left_pad_rot  = Vector3(0.0,  left_toe, -90.0)
+	c.right_pad_pos = Vector3( 0.42, 0.14, -0.20)
+	c.right_pad_rot = Vector3(0.0, -right_toe,  90.0)
+	# Torso folds over the puck; head drops low, eyes on the smother.
+	c.body_pos      = Vector3(0.0,  0.48, -0.10)
+	c.body_rot      = Vector3(-32.0, 0.0, 0.0)
+	c.head_pos      = Vector3(0.0,  0.92, -0.28)
+	c.head_rot      = Vector3.ZERO
+	# Glove to the puck (goalie-local; same frame convention as the reach math).
+	var puck_local_x: float = clampf(
+			(inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign,
+			glove_max_x_outward, absf(glove_max_x_outward))
+	var puck_local_z: float = clampf(
+			(inputs.puck_position.z - inputs.goalie_z) * -inputs.direction_sign,
+			-0.95, -0.10)
+	c.glove_pos     = Vector3(puck_local_x, 0.09, puck_local_z)
+	c.glove_rot     = Vector3(-70.0, 0.0, 0.0)
+	c.blocker_pos   = Vector3( 0.46, 0.49, -0.18)
+	c.blocker_rot   = Vector3(STICK_TILT_BUTTERFLY, 0.0, 0.0)
 
 func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 	# RVH stick swings toward the post. Z rotation rolls the stick laterally

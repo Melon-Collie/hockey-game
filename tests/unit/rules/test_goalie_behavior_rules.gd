@@ -911,3 +911,59 @@ func test_cross_crease_received_pass_races_on_release_swing_alone() -> void:
 			0.9, 0.9, 0.5, -0.8, 0.42, 0.15, 3.8, 14.0))
 	assert_false(GoalieBehaviorRules.cross_crease_race_lost(
 			0.9, 0.9, 0.5, 0.6, 0.42, 0.15, 3.8, 14.0))
+
+# ── sweep_lane_blocked (lane-aware clear) ─────────────────────────────────────
+
+func _lane_cfg() -> GoalieBehaviorRules.SweepLaneConfig:
+	var cfg := GoalieBehaviorRules.SweepLaneConfig.new()
+	cfg.stick_reach = 1.3
+	cfg.reaction_delay = 0.08
+	cfg.close_speed = 4.5
+	cfg.max_flight_time = 1.0
+	return cfg
+
+func test_lane_clear_with_no_opponents() -> void:
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, -3.5), PackedVector3Array(), _lane_cfg()))
+
+func test_opponent_on_the_exit_lane_blocks() -> void:
+	# Body dead on the sweep line 2 m downrange — a stick gets on it easily.
+	var opps := PackedVector3Array([Vector3(2.0, 0, 25.0)])
+	assert_true(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), opps, _lane_cfg()))
+
+func test_opponent_behind_the_exit_cannot_block() -> void:
+	var opps := PackedVector3Array([Vector3(-2.0, 0, 25.0)])
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), opps, _lane_cfg()))
+
+func test_opponent_beside_the_lane_needs_time_to_close() -> void:
+	# 2.4 m off the line at 1 m downrange: the puck passes in ~0.14 s — reach
+	# 1.3 + 4.5·(0.14−0.08) ≈ 1.57 < 2.4 → clear. The same opponent at 6 m
+	# downrange has ~0.86 s to close (reach ≈ 4.8) → blocked.
+	var near_opp := PackedVector3Array([Vector3(1.0, 0, 27.4)])
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), near_opp, _lane_cfg()))
+	var far_opp := PackedVector3Array([Vector3(6.0, 0, 27.4)])
+	assert_true(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), far_opp, _lane_cfg()))
+
+func test_opponent_beyond_flight_window_ignored() -> void:
+	# 10 m downrange at 7 m/s ≈ 1.4 s > max_flight_time — out of the window.
+	var opps := PackedVector3Array([Vector3(10.0, 0, 25.0)])
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), opps, _lane_cfg()))
+
+# ── compute_clear_velocity forced_side ────────────────────────────────────────
+
+func test_clear_forced_side_overrides_natural_pick() -> void:
+	# Puck on +x would naturally sweep +x; forcing -1 flips the corner.
+	var v: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+			Vector3(1.0, 0, 25), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0, -1.0)
+	assert_lt(v.x, 0.0, "forced side wins over the puck-offset pick")
+	assert_almost_eq(v.length(), 7.0, 0.001)
+
+func test_clear_unforced_keeps_natural_pick() -> void:
+	var v: Vector3 = GoalieBehaviorRules.compute_clear_velocity(
+			Vector3(1.0, 0, 25), 0.0, -1, 1.0, 0.5, 7.0, 0.15, 1.0, 0.0)
+	assert_gt(v.x, 0.0)

@@ -654,9 +654,12 @@ For calibration confidence, the behaviors that checked out against teaching/data
 
 ## 8. Known limitations (out of scope, documented for completeness)
 
-- **No catch/cover/freeze** — acknowledged in the audit request. Real hierarchy note for the
-  future: cover is the *default* under pressure; the sweep is the real fallback and is modeled
-  faithfully (§6.3). `is_crease_jam`'s inputs are the natural cover trigger when the mechanic exists.
+- **No catch** (holding a caught puck in the glove) — still absent; glove contacts absorb dead.
+- **Cover/freeze: implemented post-audit.** The real hierarchy from §6.3 now exists: the sweep
+  is lane-aware (`sweep_lane_blocked` — exit corner picked by opponent reach-vs-flight), and
+  when every lane is covered with an opponent on the puck the goalie smothers it (`COVERING`,
+  a glove-race). Resolution is ruleset-split: NHL whistles a defensive-zone faceoff (reusing
+  the icing dot machinery); ARCADE/OFF run a flow-preserving hold-and-release.
 - **No behind-net puck handling / dump stopping** — a large distinct real skill set; nothing in
   the current model pretends to it.
 - **No desperation saves** (dives, paddle stacks, scorpions) — rare IRL, pure spectacle; noted

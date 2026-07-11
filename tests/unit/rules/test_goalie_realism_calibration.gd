@@ -318,3 +318,45 @@ func test_five_hole_is_a_real_but_small_target() -> void:
 	assert_lt(standing_gap, 0.35, "…but only just — a timing target, not a lane")
 	assert_lt(GoalieBehaviorRules.five_hole_gap_m(true, 0.0), 0.02,
 			"a set butterfly seals it")
+
+
+# ── Cover / freeze doctrine (USA Hockey cover-vs-clear hierarchy) ─────────────
+
+func test_cover_parameters_match_doctrine_and_flow() -> void:
+	# The smother race window sits in a human collapse band; the ARCADE hold is
+	# long enough to kill a scramble but short enough to keep the no-stoppage
+	# flow promise; the cooldown makes cover a scramble-killer, not a wall.
+	var gc: GoalieController = _gc()
+	assert_between(gc.cover_reach_time, 0.2, 0.5,
+			"glove-to-ice smother takes a human beat — it's a race, not a snap")
+	assert_between(gc.cover_hold_s, 0.4, 1.2,
+			"ARCADE hold kills the scramble without reading as a stoppage")
+	assert_gt(gc.cover_cooldown_s, 4.0,
+			"covers are spaced — smothering every rebound would be a wall")
+
+func test_sweep_requires_an_open_lane() -> void:
+	# The clear is only the correct read when a corner exit lane is OPEN — an
+	# opponent's stick on the lane turns the sweep into a turnover, which is
+	# exactly when real goalies cover instead (USA Hockey: gather/cover vs
+	# "clear it into the corner" is a time-and-pressure decision).
+	var gc: GoalieController = _gc()
+	gc._build_rule_configs()
+	var lane_cfg: GoalieBehaviorRules.SweepLaneConfig = gc._sweep_lane_cfg
+	var on_lane := PackedVector3Array([Vector3(1.5, 0, 25.0)])
+	assert_true(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), on_lane, lane_cfg))
+	assert_false(GoalieBehaviorRules.sweep_lane_blocked(
+			Vector3(0, 0, 25), Vector3(7, 0, 0), PackedVector3Array(), lane_cfg))
+
+func test_covering_is_a_committed_down_state() -> void:
+	# On the wire the smother reads as a sealed (down-family) pose; in the
+	# state machine it is neither upright (no drop-eligibility) nor butterfly
+	# family (no slide machinery composes with a smother).
+	var sm := GoalieStateMachine.new()
+	sm.current = GoalieStateMachine.State.COVERING
+	assert_false(sm.is_upright())
+	assert_false(sm.is_down())
+	assert_false(sm.is_post_integrated())
+	var ns := GoalieNetworkState.new()
+	ns.state_enum = GoalieStateMachine.State.COVERING as int
+	assert_true(ns.is_down(), "replicated smother pose is down-family")
