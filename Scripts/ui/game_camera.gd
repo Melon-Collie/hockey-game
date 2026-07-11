@@ -98,7 +98,7 @@ const _SHAKE_MAG: float = 0.25
 # body and blade anchors.
 var _impact_kick: Vector3 = Vector3.ZERO      # current lurch offset (m), added to global_position
 var _impact_kick_vel: Vector3 = Vector3.ZERO  # spring velocity (m/s)
-const _KICK_IMPULSE_MAX: float = 8.0          # spring velocity injected at a full-intensity hit
+const _KICK_IMPULSE_MAX: float = 6.0          # spring velocity injected at a full-intensity hit
 const _KICK_STIFFNESS: float = 200.0          # spring pull toward rest (higher = snappier)
 const _KICK_DAMPING: float = 17.0             # < 2·sqrt(stiffness) ≈ 28.3 → one recoil overshoot
 
