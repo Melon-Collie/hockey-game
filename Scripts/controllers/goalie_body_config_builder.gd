@@ -313,7 +313,7 @@ static func resting_body_position_for_state(state: int) -> Vector3:
 
 static func resting_head_position_for_state(state: int) -> Vector3:
 	match state:
-		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.79,  0.12)
+		GoalieStateMachine.State.STANDING:                        return Vector3(0.0,  1.79, -0.04)
 		GoalieStateMachine.State.READY:                           return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.RECOVERING:                      return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.BUTTERFLY:                       return Vector3(0.0,  0.97, -0.06)
@@ -327,7 +327,7 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 		GoalieStateMachine.State.PLAYING_PUCK:                    return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.CATCHING:                        return Vector3(0.0,  1.62, -0.22)
 		GoalieStateMachine.State.CATCHING_DOWN:                   return Vector3(0.0,  0.97, -0.06)
-	return Vector3(0.0, 1.79, 0.12)
+	return Vector3(0.0, 1.79, -0.04)
 
 
 # Vertical anatomy (matches the 0.52 × 0.72 torso box and 0.26 head in
@@ -345,9 +345,11 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.right_pad_rot = Vector3(0.0, -pad_toe_out_standing,  12.0)
 	c.body_pos      = Vector3(0.0,  1.22,  0.0)
 	# Slight resting flex — a goalie never fully stacks the spine, even
-	# relaxed. The head nudges forward to sit over the leaning chest.
+	# relaxed. The head sits just forward of the spine, over the leaning
+	# chest (local -Z is forward; the old +0.12 was a sign slip that hung
+	# the head noticeably behind every other stance's head line).
 	c.body_rot      = Vector3(-4.0, 0.0, 0.0)
-	c.head_pos      = Vector3(0.0,  1.79,  0.12)
+	c.head_pos      = Vector3(0.0,  1.79, -0.04)
 	c.head_rot      = Vector3.ZERO
 	c.blocker_pos   = Vector3( 0.38, 0.85, -0.18)
 	c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, -20.0)
