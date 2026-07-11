@@ -360,3 +360,14 @@ func test_covering_is_a_committed_down_state() -> void:
 	var ns := GoalieNetworkState.new()
 	ns.state_enum = GoalieStateMachine.State.COVERING as int
 	assert_true(ns.is_down(), "replicated smother pose is down-family")
+
+
+func test_clear_strike_has_a_windup_beat() -> void:
+	# The clear is windup → strike → follow-through: the puck departs at the
+	# STRIKE (blade-through-puck moment), not at the decision — so the stick
+	# is visibly what clears it. The backswing sits in a human beat: long
+	# enough to read, short enough that a scramble can't fully turn over
+	# underneath it.
+	var gc: GoalieController = _gc()
+	assert_between(gc.sweep_windup_s, 0.08, 0.25,
+			"backswing beat — the stick, not telekinesis, clears the puck")
