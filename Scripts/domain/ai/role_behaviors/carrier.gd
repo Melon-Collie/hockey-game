@@ -1172,10 +1172,41 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# side, so the bot chased an ever-receding "one more cut catches him moving" shot
 	# into the crease instead of firing. The caught-moving credit is a puck-
 	# RELOCATION effect (a pass / one-timer that outruns the keeper's tracking — see
-	# score_pass's unsettled arg), never a carry the goalie reads the whole way. The
-	# real shot (shoot-now, scored above) still captures any genuine goalie lag.
+	# score_pass's unsettled arg), never a carry the goalie reads the whole way.
+	#
+	# …but "square" means square to what he has READ. The bot ARRIVES at the
+	# candidate still moving (it fires in stride — the shoot-now path projects its
+	# release the same way), and the keeper's continuous tracking carries the
+	# same reaction delay it always does, so his cover at puck-arrival trails the
+	# arrival motion by what the shot's flight leaves of his read delay
+	# (goalie_stale_square_ref — identical model to the shoot-now scoring). For
+	# any candidate whose future shot flies longer than his delay the ref
+	# coincides with the candidate — set-goalie reads at range are unchanged. In
+	# TIGHT, a candidate reached ACROSS the goal mouth leaves the drive side
+	# genuinely open — the real "make him move and shoot" window. This is what
+	# prices lateral playmaking: without it every carry assumed a keeper already
+	# square at arrival, so cutting across the slot could never out-score
+	# standing still, and the bots never moved the goalie before shooting.
+	var cand_flight: float = candidate.distance_to(ctx.attacking_goal_pos) \
+			/ maxf(ctx.self_wrister_shot_speed, 1.0)
+	var arrive_vel: Vector3 = Vector3.ZERO
+	var step_x: float = candidate.x - self_pos.x
+	var step_z: float = candidate.z - self_pos.z
+	var step_len: float = sqrt(step_x * step_x + step_z * step_z)
+	if step_len > 0.01 and local_time > 0.001:
+		# Arrival velocity: the route direction at the route's own average pace
+		# (dist / momentum-aware time) — the speed the bot actually crosses the
+		# candidate at, bounded by the same model that priced the travel.
+		var arrive_speed: float = minf(step_len / local_time, ctx.self_max_speed)
+		arrive_vel = Vector3(step_x / step_len * arrive_speed, 0.0,
+				step_z / step_len * arrive_speed)
+	# Lookahead 0: the candidate IS the scored release, so the ref sits exactly
+	# on it whenever the flight exceeds the keeper's read delay (set-goalie reads
+	# unchanged) and trails behind the arrival motion only in tight.
+	var cand_square_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			candidate, arrive_vel, 0.0, cand_flight)
 	var cand_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos, candidate)
+			_goalie_now(ctx), ctx.attacking_goal_pos, cand_square_ref)
 	var dest_score: float = _score_at(ctx, candidate, self_pos,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, 0.0)
