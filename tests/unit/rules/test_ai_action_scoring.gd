@@ -462,6 +462,27 @@ func test_shot_danger_challenged_goalie_kills_the_range_shot() -> void:
 	assert_lt(s_far, s_slot, "a challenged goalie makes the range shot worse than the slot")
 
 
+func test_aim_spread_demands_a_wider_window_in_the_score() -> void:
+	# Execution spread is part of shot SELECTION, not just execution: the same
+	# window scores lower for a noisier hand (its wobble budget eats the
+	# opening), and a big enough spread closes a thin window entirely — the
+	# score finally agrees with the aim clamp, which already insets by spread.
+	var shooter := Vector3(0.0, 0.0, 21.65)               # 5 m slot
+	var goalie := Vector3(0.0, 0.0, 25.05)
+	var clean: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+			0.0, [], -1.0, false, 0.0, false, 0.0)
+	var noisy: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+			0.0, [], -1.0, false, 0.0, false, 0.02)
+	var wild: float = AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [], AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+			0.0, [], -1.0, false, 0.0, false, 0.2)
+	assert_gt(clean, noisy, "a noisier hand rates the same window lower")
+	assert_gt(noisy, 0.0, "…a small wobble doesn't kill a real slot look")
+	assert_almost_eq(wild, 0.0, 0.001, "a wobble wider than the window closes it")
+
+
 func test_shot_danger_squared_challenged_goalie_zeroes_the_point_shot() -> void:
 	# The launch-it-from-above-the-circle bug: a squared goalie challenged out of
 	# his crease used to leave a few-cm "sliver" past his maximal reach open at
@@ -1394,8 +1415,10 @@ func test_doorstep_drive_beats_the_stale_square_but_not_the_set_wall() -> void:
 
 func test_standing_five_hole_scores_in_tight() -> void:
 	# Head-on shooter 3 m out; goalie STANDING at his challenge depth walls off
-	# the corners (legacy read: 0). The measured ~0.20 m slot scores: flight
-	# (~0.09 s) is under his legs reaction delay, so the drop can't seal it.
+	# the corners (legacy read: 0). The measured ~0.20 m slot scores — flight
+	# (~0.09 s) is under his legs reaction delay, so the drop can't seal it —
+	# but only its CLEARANCE past the 0.13 m puck: a real look, razor-thin, no
+	# longer rating like a corner window (that generosity was the puck-fit bug).
 	var goal := Vector3(0, 0, -26.65)
 	var shooter := Vector3(0, 0, -23.65)
 	var goalie := Vector3(0, 0, -24.9)  # 1.75 challenge depth
@@ -1408,8 +1431,33 @@ func test_standing_five_hole_scores_in_tight() -> void:
 			0.0, [], gap, false)
 	assert_almost_eq(legacy, 0.0, 0.001,
 			"sanity: the legacy set-goalie read scores zero from in tight")
-	assert_gt(measured, 0.15,
-			"the measured standing slot makes the in-tight shot real; got %f" % measured)
+	assert_gt(measured, 0.03,
+			"the measured standing slot keeps the in-tight shot alive; got %f" % measured)
+	assert_lt(measured, 0.15,
+			"…but a slot 3 cm wider than the puck is razor-thin, not a corner window")
+
+
+func test_five_hole_scores_only_the_clearance_past_the_puck() -> void:
+	# The five-hole pays the puck's own diameter, same honesty the corners pay
+	# via the clean-entry inset: a down-goalie slide leak WIDER than the puck is
+	# the live five-hole; a gap the puck can't fit through scores exactly 0.
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(0, 0, -22.65)
+	var goalie := Vector3(0, 0, -24.9)
+	var wide_leak: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0,
+			GoalieBehaviorRules.five_hole_gap_m(true, 0.18), true)   # 0.36 m
+	var thin_leak: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0,
+			GoalieBehaviorRules.five_hole_gap_m(true, 0.10), true)   # 0.20 m
+	var no_fit: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0,
+			2.0 * GameRules.PUCK_COLLISION_RADIUS - 0.01, true)      # narrower than the puck
+	var five_disabled: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0, 0.0, true)
+	assert_gt(wide_leak, thin_leak, "a wider slide leak is a bigger five-hole")
+	assert_almost_eq(no_fit, five_disabled, 0.001,
+			"a gap the puck cannot fit through contributes nothing (only corners remain)")
 
 
 func test_standing_five_hole_sealed_from_range() -> void:

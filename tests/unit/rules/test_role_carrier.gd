@@ -452,15 +452,17 @@ func test_carrier_entering_ozone_drives_the_slot_over_a_long_shot() -> void:
 # ─── O-zone shot selection: get the shot off before running the goalie over ──
 
 func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
-	# 1-on-1 drive at the net: as a bot carries straight in on a challenging goalie,
-	# there must be a distance at which it commits to the shot — and it must be clear
+	# 1-on-1 drive at the net: as a bot carries straight in on the goalie, there
+	# must be a distance at which it commits to the shot — and it must be clear
 	# of the goalie, out in the slot, not point-blank in the crease where it would
 	# just run the goalie over and get dispossessed. xG peaks around the slot and
 	# falls as the goalie's shadow eats the angle point-blank, so carrying closer
-	# stops paying and the bot fires. Sweep the drive inward and require a shot
-	# commit somewhere in real scoring range (every sample below is clear of the
-	# goalie, which challenges 2 m off the line).
-	var goalie_out: float = 2.0                          # goalie challenges 2 m off the line
+	# stops paying and the bot fires. The goalie sits 1 m out — the live keeper's
+	# rush BACKFLOW retreats him toward the crease at the carrier's pace, so this
+	# is the realistic 1-on-1 depth. (Parked dead-square 2 m out he genuinely
+	# walls off the straight fire — the honest read there is the lateral cut /
+	# doorstep window, covered by the stale-square tests, not a head-on shot.)
+	var goalie_out: float = 1.0                          # backflowed 1 m off the line
 	var goalie_z: float = -GameRules.GOAL_LINE_Z + goalie_out
 	var shot_distance: float = -1.0
 	for dist: float in [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0]:

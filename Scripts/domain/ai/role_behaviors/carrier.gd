@@ -425,7 +425,7 @@ func _pick_action(ctx: RoleContext) -> void:
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
 			ctx.self_wrister_shot_speed, wrister_unsettled, _scratch_opponent_caps,
 			wrister_five_hole, wrister_goalie_down,
-			wrister_seal_x, wrister_seal_tall)
+			wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -597,7 +597,7 @@ func _pick_action(ctx: RoleContext) -> void:
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
-					wrister_seal_x, wrister_seal_tall)
+					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
@@ -1041,7 +1041,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
 			_scratch_opponents, stand_goalie,
-			ctx.self_wrister_shot_speed, stand_unsettled)
+			ctx.self_wrister_shot_speed, stand_unsettled, ctx.self_aim_spread_rad)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var stand_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
@@ -1209,7 +1209,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			_goalie_now(ctx), ctx.attacking_goal_pos, cand_square_ref)
 	var dest_score: float = _score_at(ctx, candidate, self_pos,
 			_scratch_opponents_path, cand_goalie,
-			ctx.self_wrister_shot_speed, 0.0)
+			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
@@ -1269,16 +1269,22 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		opps: Array[Vector3],
 		predicted_goalie_pos: Vector3,
 		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-		goalie_unsettled_factor: float = 0.0) -> float:
+		goalie_unsettled_factor: float = 0.0,
+		aim_spread_rad: float = 0.0) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	# All the carrier's opponent arrays (path / pass / stand projections) are built
 	# in the same snapshot order as _scratch_opponent_caps, so the defenders in the
 	# shot lane are priced at their real Size/Speed reach. (lane_clear falls back to
 	# league defaults if a count ever mismatches, so this is safe regardless.)
+	# `aim_spread_rad` is the SHOOTER's execution wobble: self-evals (carry/stand)
+	# pass this bot's own spread so a noisy hand demands wider windows in shot
+	# selection; receiver evals leave 0 (cross-player boundary — a teammate may be
+	# a human whose hand we don't model, so we don't handicap the feed).
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
-			goalie_unsettled_factor, _scratch_opponent_caps)
+			goalie_unsettled_factor, _scratch_opponent_caps,
+			-1.0, false, 0.0, false, aim_spread_rad)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
