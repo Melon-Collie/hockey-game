@@ -62,6 +62,22 @@ const _ICE_Y:                float = 0.05
 #   waiting around, long enough that the puck visibly resets.
 const _PREFIRE_DELAY:   float = 2.5
 const _REATTEMPT_DELAY: float = 1.0
+# Failed-feed retirement (deflect / blade-lift / receive / shot-block /
+# one-timer feeds — see _feed_missed): a feed is decisively over once it goes
+# dead slow, gets behind the player, or is receding beyond recovery range —
+# restage then, rather than waiting for the puck to glide to rest at the
+# boards (at the ice's ~0.49 m/s² glide decel a deflection sent flying at pace
+# took ten-plus seconds to decay to the old 0.3 m/s rest threshold). The
+# flight cap is a safety net for anything pathological (a wild ricochet
+# orbiting the rink at pace, always "approaching" on some leg).
+const _FEED_DEAD_SPEED:    float = 1.0   # m/s below which a loose feed is dead
+const _FEED_PAST_PLAYER_M: float = 4.0   # up-lane (+Z) margin behind the player
+const _FEED_GONE_DISTANCE: float = 6.0   # m from the player, receding = gone
+const _FEED_MAX_FLIGHT_S:  float = 5.0   # hard cap; real feeds land in < 3 s
+# Stick lift: how far a stray-poked loose puck may squirt from the carrier
+# before it's clearly out of the contest and re-pins to his blade (paired with
+# the _FEED_DEAD_SPEED rest test — same rationale as feed retirement).
+const _REPIN_GONE_DISTANCE: float = 4.0
 
 # ── Stick Basics tuning ───────────────────────────────────────────────────────
 # Stickhandle: forehand↔backhand crossings required, and how far the blade
@@ -92,14 +108,29 @@ const _STAGE_PUCK_AHEAD: float = 1.2
 # Player and teammate staging for the pass drills (player faces -Z at the bot).
 const _PASS_PLAYER_POS: Vector3 = Vector3(0.0, 1.0, 2.0)
 const _PASS_PUPPET_POS: Vector3 = Vector3(0.0, 1.0, -7.0)
+# Saucer drill receiver sits DEEP. A LOW saucer at quick-shot pace is airborne
+# for ~6 m off the blade (hang time × pass speed), and an airborne puck sails
+# clean over a grounded blade (PuckReceptionRules.blade_can_interact) — on the
+# standard 9 m lane the saucer reached the receiver still in the air and flew
+# past him. The deep lane lets it land mid-flight and slide the rest of the way
+# in, grounded and catchable. Saucers are a stretch-pass tool — the bots' own
+# doctrine agrees (AIActionScoring.SAUCER_MIN_DISTANCE_M).
+const _SAUCER_PUPPET_POS: Vector3 = Vector3(0.0, 1.0, -12.0)
+# The saucer wall stands this far in front of the player's staging spot —
+# INSIDE the saucer's airborne span, but with enough runway that the saucer
+# has climbed past board height (~0.12 m by ~1 m out) even when the player
+# drifts a stride downlane before tapping the pass. (Midway down the deep
+# lane the saucer has already landed and would clank off the board just like
+# a flat pass.)
+const _SAUCER_WALL_AHEAD: float = 4.0
 # Touch pass: max normalized wrister charge that still reads as a soft touch
 # pass. Above this the drill takes the puck back — physics would often bounce
 # a hot feed off the receiver anyway, but the explicit gate keeps the lesson
 # deterministic instead of depending on the bot's blade angle.
 const _TOUCH_PASS_MAX_CHARGE: float = 0.55
-# Saucer drill wall: knee-high board across the passing lane, halfway to the
-# receiver. Low enough that a LOW saucer (0.26 m apex) clears it at any legal
-# pass pace; a flat pass clanks off.
+# Saucer drill wall: knee-high board across the passing lane, a few strides in
+# front of the passer (see _SAUCER_WALL_AHEAD). Low enough that a LOW saucer
+# (0.26 m apex) clears it at any legal pass pace; a flat pass clanks off.
 const _PASS_WALL_SIZE: Vector3 = Vector3(1.8, 0.12, 0.08)
 # Receiving: soft feeds catch at any blade angle (< the 22 m/s receiver-
 # relative deflect threshold); hot feeds sit between the 22 threshold and the
@@ -203,6 +234,11 @@ var _hud: TutorialHUD = null
 # helper for the active step when it reaches 0. Feed steps also reuse it as
 # the between-attempts beat.
 var _prefire_timer: float = -1.0
+
+# Seconds the current feed has been loose in flight — advanced by _feed_missed
+# while its step watches the feed, zeroed at each fire. Backs the
+# _FEED_MAX_FLIGHT_S safety cap.
+var _feed_flight_time: float = 0.0
 
 # Rep tracking for the multi-rep steps (_STEP_REPS). _rep_restage_timer counts
 # down the beat between a credited rep and the next spawn variation; the
@@ -547,6 +583,7 @@ func _begin_step(index: int) -> void:
 	_hint_timer             = 0.0
 	_complete_flash_timer   = 0.0
 	_prefire_timer          = -1.0
+	_feed_flight_time       = 0.0
 	_wrister_aim_start      = -1.0
 	_offside_ghost_seen     = false
 	_stamina_exhaust_seen   = false
@@ -591,7 +628,7 @@ func _begin_step(index: int) -> void:
 		STEP_DEFLECT, STEP_BLADE_LIFT:
 			# A teammate feeder holds the puck through the read delay (visible
 			# on his stick, so the camera frames the play instead of chasing an
-			# off-screen arrow), then fires it at the player's live position.
+			# off-screen arrow), then fires it at the player's live BLADE.
 			# Two reps: the second feed comes angled from the wing (_FEED_SPOTS).
 			# Completion comes from the puck-touch signal (a deliberate deflect
 			# for DEFLECT, a raised-blade touch for BLADE_LIFT).
@@ -734,12 +771,14 @@ func _begin_step(index: int) -> void:
 			_update_rep_objective()
 
 		STEP_SAUCER_PASS:
-			_setup_passing_drill(true)
-			# Knee-high board halfway down the passing lane — the reason the
-			# flat pass can't get there.
+			# Deep receiver — the saucer must have room to land and slide in
+			# grounded (see _SAUCER_PUPPET_POS).
+			_setup_passing_drill(true, _SAUCER_PUPPET_POS)
+			# Knee-high board in the passing lane — the reason the flat pass
+			# can't get there. Close to the passer, inside the airborne span.
 			_ensure_wall_node()
-			var mid_z: float = (_PASS_PLAYER_POS.z + _PASS_PUPPET_POS.z) * 0.5
-			_wall_node.show_wall(Vector3(0.0, 0.0, mid_z), _PASS_WALL_SIZE)
+			_wall_node.show_wall(Vector3(0.0, 0.0,
+					_PASS_PLAYER_POS.z - _SAUCER_WALL_AHEAD), _PASS_WALL_SIZE)
 
 		STEP_RECEIVE:
 			_setup_passing_drill(false)
@@ -912,12 +951,13 @@ func _process(delta: float) -> void:
 				STEP_SHOT_BLOCK:
 					_fire_feed_from_bot(_SHOT_BLOCK_PUCK_SPEED)
 				STEP_DEFLECT:
-					_fire_feed_from_bot(_DEFLECT_FEED_SPEED)
+					_fire_feed_from_bot(_DEFLECT_FEED_SPEED, 0.0, true)
 				STEP_BLADE_LIFT:
-					_fire_feed_from_bot(_LOB_FEED_SPEED_XZ, _LOB_FEED_VY)
+					_fire_feed_from_bot(_LOB_FEED_SPEED_XZ, _LOB_FEED_VY, true)
 				STEP_RECEIVE:
 					_fire_feed_from_bot(
-							_RECEIVE_SPEED_SOFT if _receive_wave == 0 else _RECEIVE_SPEED_HOT)
+							_RECEIVE_SPEED_SOFT if _receive_wave == 0 else _RECEIVE_SPEED_HOT,
+							0.0, true)
 				STEP_ONE_TIMER:
 					_one_timer_armed = true
 					_fire_feed_from_bot(_ONE_TIMER_CROSS_SPEED)
@@ -961,7 +1001,7 @@ func _process(delta: float) -> void:
 	# drill watches for catches and re-fires missed feeds.
 	if _passing_active:
 		if _current_step_id() == STEP_RECEIVE:
-			_receive_tick()
+			_receive_tick(delta)
 		else:
 			_passing_tick(delta)
 		return
@@ -1012,7 +1052,7 @@ func _process(delta: float) -> void:
 			_stickhandle_tick()
 
 		STEP_DEFLECT, STEP_BLADE_LIFT:
-			_feed_watch_tick()
+			_feed_watch_tick(delta)
 
 		STEP_DROP_PUCK:
 			# Complete once the dropped puck is gathered back up. The nudge sets
@@ -1022,35 +1062,38 @@ func _process(delta: float) -> void:
 				_complete_step()
 
 		STEP_STICK_LIFT:
-			# If the player knocked the puck loose without a lift (a stray poke),
-			# give it back to the puppet once it settles so they can try the lift
-			# again. A successful lift completes the step in the strip handler,
-			# after which _complete_flash_timer short-circuits _process.
+			# If the player knocked the puck loose without a lift (a stray
+			# poke), give it back to the puppet so they can try the lift again
+			# — as soon as it's dead or clearly out of the contest, not once it
+			# fully settles (a poked-away puck glides for many seconds). A
+			# successful lift completes the step in the strip handler, after
+			# which _complete_flash_timer short-circuits _process.
 			if _puck.carrier == null and _puppet_record != null \
-					and is_instance_valid(_puppet_record.skater) \
-					and _puck.get_puck_velocity().length() < 0.3:
-				GameManager.tutorial_give_puck(_puppet_record)
+					and is_instance_valid(_puppet_record.skater):
+				var puck_v: float = _puck.get_puck_velocity().length()
+				var puck_dist: float = _puck.get_puck_position().distance_to(
+						_puppet_record.skater.global_position)
+				if puck_v < _FEED_DEAD_SPEED or puck_dist > _REPIN_GONE_DISTANCE:
+					GameManager.tutorial_give_puck(_puppet_record)
 
 		STEP_SHOT_BLOCK:
-			# Re-fire if the puck passed the player, came to rest before
-			# reaching them (deflected into the boards), or got blocked into
-			# a corner. The puck reloads onto the shooter's stick for the
-			# standard between-attempts beat; the timer's own gate stops this
-			# branch retriggering during the wait. The block itself completes
-			# via the puck_body_blocked handler.
-			if _prefire_timer < 0.0 and _puck.carrier == null:
-				var puck_z: float = _puck.get_puck_position().z
-				var puck_v: float = _puck.get_puck_velocity().length()
-				if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
-					_restage_feed_on_bot()
+			# Re-fire if the shot is decisively over without a block — passed
+			# the player, died short, or got blocked/deflected away at pace.
+			# The puck reloads onto the shooter's stick for the standard
+			# between-attempts beat; the timer's own gate stops this branch
+			# retriggering during the wait. The block itself completes via
+			# the puck_body_blocked handler.
+			if _prefire_timer < 0.0 and _puck.carrier == null and _feed_missed(delta):
+				_restage_feed_on_bot()
 
 		STEP_ONE_TIMER:
-			# Re-fire if the cross-ice pass stopped (hit boards or missed the
-			# player). The puck reloads onto the far-dot teammate's stick for
-			# the standard beat. _one_timer_armed flips false on restage so
-			# this branch can't retrigger during the wait.
+			# Re-fire if the cross-ice pass is decisively over (hit boards,
+			# missed the player, got swatted away). The puck reloads onto the
+			# far-dot teammate's stick for the standard beat. _one_timer_armed
+			# flips false on restage so this branch can't retrigger during the
+			# wait.
 			if _one_timer_armed and _prefire_timer < 0.0 and _puck.carrier == null:
-				if _puck.get_puck_velocity().length() < 0.3:
+				if _feed_missed(delta):
 					_one_timer_armed = false
 					_restage_feed_on_bot()
 
@@ -1106,10 +1149,37 @@ func _update_stickhandle_objective() -> void:
 			_stickhandle_crossings, _STICKHANDLE_CROSSINGS, prompt])
 
 
-# Watch loop for the deflect / blade-lift feeds: re-fire when the feed got past
-# the player or died, and take back a puck the player caught by mistake (the
+# True when the loose feed in flight is decisively over: dead slow, got past
+# the player, or receding beyond recovery range — plus a hard flight cap as a
+# safety net. Shared by every bot-fed step (deflect / blade-lift / receive /
+# shot-block / one-timer) so a failed attempt — a deflection sent flying, a
+# blocked shot ricocheting into a corner — restages after the standard beat
+# instead of waiting for the puck to glide to rest somewhere at the boards.
+# Also advances the feed's flight clock, so call it at most once per frame,
+# and only while the feed is actually loose in flight (prefire elapsed, no
+# carrier) — every caller already gates on exactly that.
+func _feed_missed(delta: float) -> bool:
+	_feed_flight_time += delta
+	if _feed_flight_time >= _FEED_MAX_FLIGHT_S:
+		return true
+	var vel: Vector3 = _puck.get_puck_velocity()
+	if vel.length() < _FEED_DEAD_SPEED:
+		return true
+	var pos: Vector3 = _puck.get_puck_position()
+	# Every feed lane faces -Z, so up-lane past the player is a clean miss.
+	if pos.z > _skater.global_position.z + _FEED_PAST_PLAYER_M:
+		return true
+	# Receding out of range: an incoming feed always closes on the player, so
+	# a puck this far out and moving AWAY can only be a failed contact.
+	var to_puck := Vector3(pos.x - _skater.global_position.x, 0.0,
+			pos.z - _skater.global_position.z)
+	return to_puck.length() > _FEED_GONE_DISTANCE and vel.dot(to_puck) > 0.0
+
+
+# Watch loop for the deflect / blade-lift feeds: re-fire when the feed is
+# decisively missed, and take back a puck the player caught by mistake (the
 # corrective moment — these steps are about NOT receiving).
-func _feed_watch_tick() -> void:
+func _feed_watch_tick(delta: float) -> void:
 	if _puck.carrier == _skater:
 		# Caught it instead of deflecting. Take it back, explain, re-feed.
 		if _current_step_id() == STEP_DEFLECT:
@@ -1118,11 +1188,8 @@ func _feed_watch_tick() -> void:
 			_hud.set_alert(_fmt("It got under your blade. Keep loft on HIGH and {stick_lift} held — meet the lob in the air."))
 		_restage_feed_on_bot()
 		return
-	if _prefire_timer < 0.0 and _puck.carrier == null:
-		var puck_z: float = _puck.get_puck_position().z
-		var puck_v: float = _puck.get_puck_velocity().length()
-		if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
-			_restage_feed_on_bot()
+	if _prefire_timer < 0.0 and _puck.carrier == null and _feed_missed(delta):
+		_restage_feed_on_bot()
 
 
 # Completion handler for the deflect / blade-lift steps: the puck-touch signal
@@ -1180,8 +1247,14 @@ func _place_puck(pos: Vector3) -> void:
 # leaves from the bot's blade — visible the whole time, so the camera frames
 # the play — and aiming at the live position guarantees it heads straight at
 # the player even if they've drifted off the staged spot. A vy > 0 turns the
-# feed into an airborne lob (blade-lift step).
-func _fire_feed_from_bot(speed: float, vy: float = 0.0) -> void:
+# feed into an airborne lob (blade-lift step). `at_blade` feeds the player's
+# BLADE contact point instead of their body: the stick-play steps (deflect /
+# blade-lift / receive) meet the puck with the blade, and the blade rides a
+# stride out from the body wherever the cursor holds it — a body-aimed feed
+# arrives at the skates and makes the player guess the offset. The body-read
+# steps keep the body line (shot block: body in the lane; one-timer: puck
+# through the shooting zone).
+func _fire_feed_from_bot(speed: float, vy: float = 0.0, at_blade: bool = false) -> void:
 	if _puppet_record == null or not is_instance_valid(_puppet_record.skater):
 		return
 	if _puck.carrier == _puppet_record.skater:
@@ -1190,8 +1263,10 @@ func _fire_feed_from_bot(speed: float, vy: float = 0.0) -> void:
 	# can't instantly re-collect a slow one. Cleared by the next
 	# tutorial_give_puck (explicit grants bypass cooldowns) or teardown.
 	_puck.set_skater_cooldown(_puppet_record.skater, _PICKUP_LOCK_S)
+	_feed_flight_time = 0.0
 	var from: Vector3 = _puck.get_puck_position()
-	var to: Vector3 = _skater.global_position
+	var to: Vector3 = _skater.get_blade_contact_global() if at_blade \
+			else _skater.global_position
 	var dir := Vector3(to.x - from.x, 0.0, to.z - from.z)
 	if dir.length() < 0.01:
 		dir = Vector3.FORWARD * -1.0  # +Z fallback if player is right on top
@@ -1653,7 +1728,7 @@ func _teardown_shooting() -> void:
 # other down the -Z lane. Pass drills (give_puck) start with the puck on the
 # player's stick and listen for releases; the receiving drill starts empty-
 # handed and fires feeds from the teammate instead.
-func _setup_passing_drill(give_puck: bool) -> void:
+func _setup_passing_drill(give_puck: bool, puppet_pos: Vector3 = _PASS_PUPPET_POS) -> void:
 	_passing_active     = true
 	_pass_live          = false
 	_pass_qualifies     = false
@@ -1661,7 +1736,7 @@ func _setup_passing_drill(give_puck: bool) -> void:
 	_pass_restage_timer = -1.0
 	_wrist_peak_charge  = 0.0
 	_local_controller.teleport_to(_PASS_PLAYER_POS, Vector2(0.0, -1.0))
-	_ensure_puppet(_PASS_PUPPET_POS, 0)
+	_ensure_puppet(puppet_pos, 0)
 	if give_puck:
 		_stage_puck_for_player()
 		_on_passing_shot_callable = func(d: Vector3, p: float, s: bool) -> void:
@@ -1713,6 +1788,12 @@ func _passing_tick(delta: float) -> void:
 		_pass_restage_timer -= delta
 		if _pass_restage_timer <= 0.0:
 			_pass_restage_timer = -1.0
+			# The saucer drill's staging IS the lesson (the board must sit
+			# between passer and receiver, inside the airborne span) — re-square
+			# a player who chased their miss downlane, or the restaged puck can
+			# land beyond the board and a flat pass completes the step.
+			if _current_step_id() == STEP_SAUCER_PASS:
+				_local_controller.teleport_to(_PASS_PLAYER_POS, Vector2(0.0, -1.0))
 			_stage_puck_for_player()
 		return
 	if not _pass_live:
@@ -1740,7 +1821,15 @@ func _passing_tick(delta: float) -> void:
 	if _puppet_record != null and is_instance_valid(_puppet_record.skater):
 		past_receiver = _puck.carrier == null and _puck.get_puck_position().z \
 				< _puppet_record.skater.global_position.z - _PASS_MISS_BEYOND_M
-	if _puck.carrier == null and _puck.get_puck_velocity().length() <= _SHOT_REST_SPEED:
+	# "No longer progressing" covers more than dying at the boards: a flat pass
+	# that clanked off the saucer board, or a hot feed that bounced off the
+	# receiver's blade, comes back UP the lane at pace and used to glide for
+	# seconds before the rest-speed test tripped. The lane runs toward -Z, so
+	# any non-negative z-velocity on a loose pass is zero progress — start the
+	# stall clock immediately.
+	var pass_vel: Vector3 = _puck.get_puck_velocity()
+	if _puck.carrier == null \
+			and (pass_vel.length() <= _SHOT_REST_SPEED or pass_vel.z >= 0.0):
 		_pass_stall_time += delta
 	else:
 		_pass_stall_time = 0.0
@@ -1753,8 +1842,8 @@ func _passing_tick(delta: float) -> void:
 
 
 # Watch loop for the receiving drill: credit catches, advance to the hot wave,
-# re-fire feeds that got past the player or died.
-func _receive_tick() -> void:
+# re-fire feeds that got past the player, died, or deflected away at pace.
+func _receive_tick(delta: float) -> void:
 	if _puck.carrier == _skater:
 		_receive_catches += 1
 		_update_receive_objective()
@@ -1774,11 +1863,8 @@ func _receive_tick() -> void:
 		# this also takes the caught puck off the player's blade).
 		_restage_feed_on_bot()
 		return
-	if _prefire_timer < 0.0 and _puck.carrier == null:
-		var puck_z: float = _puck.get_puck_position().z
-		var puck_v: float = _puck.get_puck_velocity().length()
-		if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
-			_restage_feed_on_bot()
+	if _prefire_timer < 0.0 and _puck.carrier == null and _feed_missed(delta):
+		_restage_feed_on_bot()
 
 
 func _update_receive_objective() -> void:
