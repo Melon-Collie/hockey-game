@@ -315,8 +315,21 @@ extends Node
 # min_lateral_speed keeps the stay-up-vs-a-controlled-dangler rule: only a
 # genuine lateral drive triggers, never a stationary stickhandle. The distance
 # gate is tactical feel: how far out a lateral cut reads as a tuck threat.
-@export var beaten_wide_min_lateral_speed: float = 1.5   # m/s — carrier must be driving
+# The speed bar is a genuine DRIVE: brisk walking pace is ~1.5 m/s, and an
+# in-tight dangle routinely swings the body through it — reading that as
+# "beaten to the post" sold the goalie on the first move of every deke.
+@export var beaten_wide_min_lateral_speed: float = 2.5   # m/s — a drive, not a lateral shuffle
 @export var beaten_wide_max_threat_distance: float = 4.0 # m — in-tight gate (threat→goal)
+# Quiet-eye confirmation on CARRIER-driven lateral commits (the standing
+# beaten-wide drop and the butterfly pad-coverage slide): the verdict must
+# hold continuously this long before the goalie sells out. A genuine drive to
+# the post sustains it; a deke's transient lateral spike breaks it and the
+# timer resets — pulling the puck back visibly un-commits him. Grounded in
+# the quiet-eye fixation (~100–300 ms of trajectory confirmation before an
+# elite goalie commits; the audit's anticipation research). PASS-driven
+# commits stay instant by design — a puck in flight cannot cut back, so the
+# cross-crease one-timer seal keeps its zero-hesitation commit.
+@export var lateral_commit_confirm_s: float = 0.15
 
 # Close-crease auto-butterfly. When an opposing carrier is at the doorstep
 # the goalie can't track laterally fast enough; better to commit butterfly
@@ -938,6 +951,10 @@ var _cover_reach_timer: float = 0.0
 var _cover_hold_timer: float = 0.0
 var _cover_cooldown_timer: float = 0.0
 var _body_rest_dwell_timer: float = 0.0
+# Quiet-eye confirmation accumulators for the two carrier-driven lateral
+# commits (see lateral_commit_confirm_s). Reset whenever their read breaks.
+var _beaten_wide_confirm_timer: float = 0.0
+var _slide_coverage_confirm_timer: float = 0.0
 # Reused scratch of opposing skater positions for the sweep-lane check (same
 # no-allocation idiom as _screen_positions).
 var _lane_opponents: PackedVector3Array = PackedVector3Array()
@@ -1343,6 +1360,8 @@ func reset_to_crease() -> void:
 	_cover_hold_timer = 0.0
 	_cover_cooldown_timer = 0.0
 	_body_rest_dwell_timer = 0.0
+	_beaten_wide_confirm_timer = 0.0
+	_slide_coverage_confirm_timer = 0.0
 	_sweep_windup_timer = 0.0
 	_pending_sweep_cover_release = false
 	_pp_phase = _PP_OUT
@@ -1664,12 +1683,13 @@ func _update_state(delta: float) -> void:
 				# jams: a fast carrier and an uncontested 1v1 dangler both keep
 				# the goalie up (force the release / make them commit first).
 				_enter_butterfly()
-			elif _is_beaten_wide() and not _reaction.reacting:
-				# Beaten wide: the carrier's lateral drive wins the race to the
-				# post — standing tracking is unwinnable, so drop now; the
-				# _try_commit_slide pad-coverage check seals the post from
-				# butterfly. Around-the-pad tucks die here; the counter is
-				# baiting the drop and pulling back up (recovery window).
+			elif _confirmed_beaten_wide(delta) and not _reaction.reacting:
+				# Beaten wide (confirmed): the carrier's SUSTAINED lateral drive
+				# wins the race to the post — standing tracking is unwinnable,
+				# so drop now; the _try_commit_slide pad-coverage check seals
+				# the post from butterfly. Around-the-pad tucks die here; the
+				# counter is a fake committed long enough to pass the quiet-eye
+				# confirmation, then pulling back up (recovery window).
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -1788,6 +1808,19 @@ func _is_carrier_at_doorstep() -> bool:
 	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
+
+# Beaten-wide with the quiet-eye confirmation: the race verdict must hold
+# continuously for `lateral_commit_confirm_s` before the standing goalie
+# sells out pads-first. One tick of lateral body velocity is a deke's
+# opening move, not a drive — the reset on a broken verdict is what makes
+# the pull-back un-commit him.
+func _confirmed_beaten_wide(delta: float) -> bool:
+	if not _is_beaten_wide():
+		_beaten_wide_confirm_timer = 0.0
+		return false
+	_beaten_wide_confirm_timer += delta
+	return _beaten_wide_confirm_timer >= lateral_commit_confirm_s
+
 
 # True when an opposing carrier's lateral drive has beaten the standing
 # goalie to the tuck point (the around-the-pad reach). Race math in
@@ -2620,6 +2653,8 @@ func _compute_opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
 	return false
 
 func _enter_butterfly() -> void:
+	_beaten_wide_confirm_timer = 0.0
+	_slide_coverage_confirm_timer = 0.0
 	_sm.transition_to(State.BUTTERFLY)
 
 # Entry side-effects for state changes — host-only, since it fires off
@@ -2851,7 +2886,7 @@ func _update_position(delta: float) -> void:
 			new_z = pair.y
 		State.BUTTERFLY:
 			_update_butterfly_five_hole(delta)
-			_try_commit_slide()
+			_try_commit_slide(delta)
 			# Knee shuffle: if still idle butterfly after the slide check (drop
 			# complete, not frozen reading a shot), micro-scoot toward the arc
 			# target — the small down-movement tier real goalies use constantly
@@ -3025,7 +3060,7 @@ func _update_butterfly_five_hole(delta: float) -> void:
 
 # Evaluate slide trigger conditions during idle BUTTERFLY. Host-only (clients
 # receive the slide via position broadcast + state RPC).
-func _try_commit_slide() -> void:
+func _try_commit_slide(delta: float) -> void:
 	if not is_server:
 		return
 	if not _slide.can_commit_slide():
@@ -3058,13 +3093,26 @@ func _try_commit_slide() -> void:
 	#   Loose — project the puck forward via its velocity so a cross-crease pass /
 	#     rebound in flight commits the slide early (the back-door seal).
 	var coverage_x: float
-	if puck.get_carrier() != null:
+	var carried: bool = puck.get_carrier() != null
+	if carried:
 		coverage_x = _tracked_threat_position.x
 	else:
 		coverage_x = puck.global_position.x + _loose_puck_velocity().x * slide_anticipation_time
 	var lateral_offset: float = coverage_x - _current_x
 	if absf(lateral_offset) <= pad_edge + slide_coverage_buffer:
+		_slide_coverage_confirm_timer = 0.0
 		return
+	# Carried puck: the breach must SUSTAIN for the quiet-eye confirmation
+	# before the slide sells out — a forehand→backhand pull crosses the pad
+	# line for a few ticks and comes back, and committing on the first
+	# crossing is what let a deke send the goalie sliding away from the puck
+	# (mid-slide cannot correct, by design). A pass/rebound in flight commits
+	# instantly as before — it cannot cut back.
+	if carried:
+		_slide_coverage_confirm_timer += delta
+		if _slide_coverage_confirm_timer < lateral_commit_confirm_s:
+			return
+	_slide_coverage_confirm_timer = 0.0
 	_commit_slide_toward(coverage_x)
 
 

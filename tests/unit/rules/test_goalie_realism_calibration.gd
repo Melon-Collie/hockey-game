@@ -245,6 +245,18 @@ func test_jam_seal_only_for_contested_slow_carriers() -> void:
 			"fast carrier is ATTACKING → stay up, force the release")
 
 
+func test_lateral_commits_require_a_confirmed_read() -> void:
+	# "Don't bite on the first move": a goalie confirms a trajectory over a
+	# quiet-eye fixation (~100-300 ms) before selling out pads-first. One
+	# tick of lateral body velocity is a deke's opening move, not a drive —
+	# and the drive bar itself must be above dangle/shuffle pace (brisk
+	# walking is ~1.5 m/s; a genuine drive to the post is well past it).
+	var gc: GoalieController = _gc()
+	assert_between(gc.lateral_commit_confirm_s, 0.10, 0.30)
+	assert_gte(gc.beaten_wide_min_lateral_speed, 2.0,
+			"beaten-wide needs a genuine drive, not a lateral shuffle")
+
+
 # ── Post play: RVH discipline and the VH split ────────────────────────────────
 
 func test_rvh_reserved_for_dead_angles() -> void:
