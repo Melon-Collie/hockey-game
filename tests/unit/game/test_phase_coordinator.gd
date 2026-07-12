@@ -232,8 +232,8 @@ func test_prep_after_break_is_period_intro_with_extended_prep() -> void:
 	assert_eq(coord.last_prep_preroll, 0.0,
 			"period intro rides its own signal, not the skate-in pre-roll")
 	assert_almost_eq(sm.faceoff_prep_time_until_drop(),
-			GameRules.FACEOFF_PREP_DURATION + GameRules.PREGAME_INTRO_DURATION, 0.001,
-			"placement extends the prep window to the intro hold")
+			GameRules.FACEOFF_PREP_DURATION + GameRules.PERIOD_INTRO_DURATION, 0.001,
+			"placement extends the prep window to the period-intro hold")
 
 
 func test_prep_without_break_is_not_period_intro() -> void:

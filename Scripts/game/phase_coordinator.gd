@@ -224,7 +224,7 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 	elif period_intro:
 		# Period-start bench intro: hold the prep like the opening faceoff so
 		# the camera sweep + skate-on play out before the countdown.
-		_state_machine.set_faceoff_prep_extra(GameRules.PREGAME_INTRO_DURATION)
+		_state_machine.set_faceoff_prep_extra(GameRules.PERIOD_INTRO_DURATION)
 	last_prep_preroll = GameRules.FACEOFF_SKATE_PREP_EXTRA if skate_in else 0.0
 	last_prep_was_period_intro = period_intro
 	var positions: Array = []

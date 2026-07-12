@@ -912,6 +912,21 @@ func test_advance_period_increments_period_and_resets_clock() -> void:
 	assert_eq(sm.current_period, 2)
 	assert_eq(sm.time_remaining, GameRules.PERIOD_DURATION)
 
+func test_finish_period_break_advances_immediately() -> void:
+	# The intermission reel ends the break itself instead of waiting out the
+	# END_OF_PERIOD timer.
+	sm.tick(GameRules.PERIOD_DURATION + 0.01)
+	assert_eq(sm.current_phase, GamePhase.Phase.END_OF_PERIOD)
+	assert_true(sm.finish_period_break())
+	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP)
+	assert_eq(sm.current_period, 2)
+	assert_eq(sm.time_remaining, GameRules.PERIOD_DURATION)
+
+func test_finish_period_break_noop_outside_break() -> void:
+	assert_false(sm.finish_period_break())
+	assert_eq(sm.current_phase, GamePhase.Phase.PLAYING)
+	assert_eq(sm.current_period, 1)
+
 func test_game_over_locks_phase_permanently() -> void:
 	sm.current_period = GameRules.NUM_PERIODS
 	sm.on_goal_scored(1)  # make score 1-0 so it ends rather than going to OT

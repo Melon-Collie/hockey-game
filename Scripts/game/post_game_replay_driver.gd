@@ -1,7 +1,7 @@
 class_name PostGameReplayDriver
 extends Node
 
-# Loops every goal of the match behind the final-score screen. Companion to
+# Plays a playlist of goal clips behind a presentation screen. Companion to
 # GoalReplayDriver: both consume the same stateless ReplayPlaybackEngine and
 # drive the LIVE actors (skater / puck / goalie nodes) off recorded snapshots,
 # but where GoalReplayDriver plays one clip with cinematic camera cuts + slow-mo
@@ -9,16 +9,38 @@ extends Node
 # ("hard") cam with no audio — an ambient highlight reel, not a money shot.
 #
 # Source is GoalReplayStore, filled clip-by-clip during the game (the ~9 s
-# recorder ring can't hold a whole game). Runs on every peer independently off
-# its own captured store; the loop is cosmetic so no cross-peer sync is needed.
-# Enters replay mode LOCALLY (set_replay_mode_local, no RPC) so the host stops
-# fighting the frozen scene with live broadcasts and clients ignore stray frames.
+# recorder ring can't hold a whole game). Two configurations, one engine:
+#   - Post-game reel (defaults): loops the whole match's goals forever behind
+#     the final-score screen. Purely cosmetic, each peer loops its OWN store —
+#     replay mode is entered LOCALLY (set_replay_mode_local, no RPC) so the
+#     host stops fighting the frozen scene with live broadcasts and clients
+#     ignore stray frames.
+#   - Intermission reel (loop = false, use_shared_replay_mode = true): plays
+#     the ended period's goals ONCE behind the intermission band, then stops —
+#     reel_stopped is what ends the break on the host (GameStateMachine.
+#     finish_period_break). The shared replay mode mirrors the flag to clients
+#     (same notify_replay_mode RPC as the goal cinematic) so every peer's reel
+#     starts and tears down in lockstep, and supports the same unanimous
+#     vote-to-skip as the goal replay (register_skip_vote).
 #
-# Owned by GameManager. start(clips) / stop() called from there on game-over /
-# reset.
+# Owned by GameManager. start(clips) / stop() called from there.
 
 @export var playback_speed: float = 1.0
 @export var inter_clip_gap: float = 0.6  # seconds held on the final frame between clips
+# false = play the playlist once and stop (the intermission reel);
+# true = wrap around forever (the post-game reel).
+@export var loop: bool = true
+# true routes replay mode through start/stop_replay_mode (host mirrors the
+# flag to clients via the reliable notify_replay_mode RPC); false stays local.
+@export var use_shared_replay_mode: bool = false
+
+signal reel_started
+# Fired as each clip's playback begins, with the store's clip Dictionary —
+# meta fields (period, scorer_name, …) caption the intermission band.
+signal clip_started(clip: Dictionary)
+# Fired at the end of every stop(): natural playlist completion (loop = false),
+# skip-vote unanimity, and external teardown all funnel here.
+signal reel_stopped
 
 var _codec: WorldStateCodec = null
 var _registry: PlayerRegistry = null
@@ -45,6 +67,11 @@ var _cached_to_idx: int = -1
 var _cam: SpectatorCamera = null
 var _saved_goalie_processing: Array[bool] = []
 
+# Vote-to-skip tally for the reel (intermission only — the post-game loop has
+# no skip), keyed by peer_id. Cleared on every start(). Driven by
+# GameManager._register_skip_vote, same flow as GoalReplayDriver.
+var _skip_votes: Dictionary[int, bool] = {}
+
 
 func setup(codec: WorldStateCodec,
 		registry: PlayerRegistry,
@@ -66,6 +93,7 @@ func start(clips: Array[Dictionary]) -> void:
 
 	_clips = clips
 	_active = true
+	_skip_votes.clear()
 	_freeze_live_simulation()
 
 	# Single broadcast hard cam, following the puck along the rail. activate()
@@ -76,12 +104,18 @@ func start(clips: Array[Dictionary]) -> void:
 	_cam.setup(puck_pos_getter)
 	_cam.activate()
 
-	# Local-only replay mode: on the host this stops the live sim tick +
-	# broadcast (GameManager._physics_process bails while is_replay_mode); on a
-	# client it makes decode_world_state skip any stray frame.
-	NetworkManager.set_replay_mode_local(true, _clips[0].start_ts)
+	# Replay mode: either mirrored to clients (intermission — the host stops
+	# broadcasting and each client spins up its own reel off this edge) or
+	# local-only (post-game — see class doc). Both stop the host's live sim
+	# tick + broadcast (GameManager._physics_process bails while
+	# is_replay_mode) and make clients' decode_world_state skip stray frames.
+	if use_shared_replay_mode:
+		NetworkManager.start_replay_mode(_clips[0].start_ts)
+	else:
+		NetworkManager.set_replay_mode_local(true, _clips[0].start_ts)
 
 	_begin_clip(0)
+	reel_started.emit()
 
 
 func stop() -> void:
@@ -94,7 +128,10 @@ func stop() -> void:
 		_cam.queue_free()
 		_cam = null
 
-	NetworkManager.set_replay_mode_local(false)
+	if use_shared_replay_mode:
+		NetworkManager.stop_replay_mode()
+	else:
+		NetworkManager.set_replay_mode_local(false)
 	_unfreeze_live_simulation()
 
 	_clips = []
@@ -106,10 +143,30 @@ func stop() -> void:
 	_cached_from_idx = -1
 	_cached_to_idx = -1
 	_gap_elapsed = -1.0
+	_skip_votes.clear()
+	reel_stopped.emit()
 
 
 func is_active() -> bool:
 	return _active
+
+
+# Host-only (intermission reel): record a vote-to-skip. Same semantics as
+# GoalReplayDriver.register_skip_vote — one vote per peer per reel, and
+# unanimity stops the reel, which fires reel_stopped and (on the host) ends
+# the period break. Returns the new vote count (0 if the reel isn't active).
+func register_skip_vote(peer_id: int, total_voters: int) -> int:
+	if not _active:
+		return 0
+	_skip_votes[peer_id] = true
+	var count: int = _skip_votes.size()
+	if count >= total_voters and total_voters > 0:
+		stop()
+	return count
+
+
+func get_skip_vote_count() -> int:
+	return _skip_votes.size()
 
 
 func _begin_clip(idx: int) -> void:
@@ -127,10 +184,19 @@ func _begin_clip(idx: int) -> void:
 	# whip the broadcast framing across the ice.
 	if _cam != null:
 		_cam.snap_to_position()
+	clip_started.emit(clip)
 
 
+# End of one clip (after the inter-clip hold): wrap around when looping,
+# otherwise the playlist is done — stop, which announces reel_stopped.
 func _advance_clip() -> void:
-	_begin_clip((_clip_idx + 1) % _clips.size())
+	var next: int = _clip_idx + 1
+	if next >= _clips.size():
+		if not loop:
+			stop()
+			return
+		next = 0
+	_begin_clip(next)
 
 
 func _process(delta: float) -> void:

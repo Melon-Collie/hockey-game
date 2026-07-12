@@ -16,8 +16,13 @@ extends RefCounted
 const MAX_CLIPS: int = 24
 
 # Each entry: { frames: Array[PackedByteArray], timestamps: Array[float],
-#               start_ts: float, end_ts: float }. start_ts is the trimmed
-# clip start (the play that scored), not necessarily timestamps[0].
+#               start_ts: float, end_ts: float,
+#               period: int, scoring_team_id: int,
+#               scorer_name: String, assist1_name: String, assist2_name: String }.
+# start_ts is the trimmed clip start (the play that scored), not necessarily
+# timestamps[0]. The meta tail (period + goal credit) is stamped by
+# GameManager at capture time so the intermission reel can pick one period's
+# clips and caption each with its scorer.
 var _clips: Array[Dictionary] = []
 
 
@@ -35,6 +40,11 @@ func add(clip: Dictionary) -> void:
 		"timestamps": timestamps.duplicate(),
 		"start_ts": float(clip.get("start_ts", timestamps[0])),
 		"end_ts": float(clip.get("end_ts", timestamps[timestamps.size() - 1])),
+		"period": int(clip.get("period", 0)),
+		"scoring_team_id": int(clip.get("scoring_team_id", -1)),
+		"scorer_name": String(clip.get("scorer_name", "")),
+		"assist1_name": String(clip.get("assist1_name", "")),
+		"assist2_name": String(clip.get("assist2_name", "")),
 	})
 	if _clips.size() > MAX_CLIPS:
 		_clips.pop_front()
@@ -56,3 +66,13 @@ func is_empty() -> bool:
 # arrays (they're shared references), only read them for playback.
 func clips() -> Array[Dictionary]:
 	return _clips
+
+
+# The intermission reel's playlist: clips whose goal was scored in `period`,
+# in scoring order. Same read-only contract as clips().
+func clips_for_period(period: int) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for clip: Dictionary in _clips:
+		if int(clip.period) == period:
+			result.append(clip)
+	return result
