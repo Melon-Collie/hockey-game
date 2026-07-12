@@ -245,6 +245,31 @@ func test_jam_seal_only_for_contested_slow_carriers() -> void:
 			"fast carrier is ATTACKING → stay up, force the release")
 
 
+func test_pads_first_commit_keys_on_the_puck_not_the_body() -> void:
+	# The tuck is played by the puck. A body driving across the crease with
+	# the puck trailing on the far side (the forehand-drag drive) has not
+	# committed anything — the wrap/cut-back is free, and a goalie who sells
+	# out to the body is exactly what the move fishes for. Pads-first only
+	# once the puck itself is past the standing sealing reach (the point of
+	# no return: bringing it back costs the full trip around the body).
+	var cfg := GoalieBehaviorRules.BeatenWideConfig.new()
+	cfg.goalie_lateral_speed = 3.8
+	cfg.goalie_lateral_accel = 14.0
+	cfg.reach_half_width = 0.42
+	cfg.min_lateral_speed = 2.5
+	cfg.max_threat_distance = 4.0
+	var goalie := Vector3(0.0, 0.0, 24.85)
+	var body := Vector3(0.2, 0.0, 25.5)
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			body, Vector3(-0.8, 0.0, 25.6), 4.0, goalie,
+			26.6, 0.0, -1, 0.915, cfg),
+			"puck trailing the drive → stay up, shuffle across")
+	assert_true(GoalieBehaviorRules.is_beaten_wide(
+			body, Vector3(0.9, 0.0, 25.6), 4.0, goalie,
+			26.6, 0.0, -1, 0.915, cfg),
+			"puck past the sealing reach → the tuck is live, sell out")
+
+
 func test_lateral_commits_require_a_confirmed_read() -> void:
 	# "Don't bite on the first move": a goalie confirms a trajectory over a
 	# quiet-eye fixation (~100-300 ms) before selling out pads-first. One

@@ -701,17 +701,30 @@ static func puck_play_race_clear(
 # A carrier driving laterally across the crease face beats a standing goalie to
 # the short side when the goalie physically can't stay square: the tuck point
 # is the post on the side the carrier is moving toward, and this is a straight
-# race to it. Carrier's time to the post is lateral (their x-progress is what
-# opens the tuck); the goalie's required travel is the true 2D distance from
-# their challenge position back to the post seal spot, less pad reach — being
-# out on the arc is exactly what makes the reach-around work, so the retreat
-# distance must count. When the race is lost, standing tracking is unwinnable
-# and the correct read is drop + butterfly-slide post seal (the caller's job).
+# race to it. The goalie's required travel is the true 2D distance from their
+# challenge position back to the post seal spot, less pad reach — being out on
+# the arc is exactly what makes the reach-around work, so the retreat distance
+# must count. When the race is lost, standing tracking is unwinnable and the
+# correct read is drop + butterfly-slide post seal (the caller's job).
 #
-# Deliberately NOT triggered by: slow lateral movement (min_lateral_speed —
-# stay up and force the release, per the doorstep/jam design), threats outside
-# max_threat_distance (a fast cut at the top of the slot has too many options
-# to commit against), or threats behind the goal line (RVH's job).
+# THE TUCK IS PLAYED BY THE PUCK, NOT THE BODY — the point of no return. A
+# body driving toward a post with the puck still on the far side (the classic
+# forehand-drag drive: skate across, puck trailing, wrap to the backhand once
+# the goalie sells out) has committed NOTHING — the wrap/cut-back is free, and
+# a pads-first commit at that moment is exactly what the move is fishing for.
+# The commit gate is therefore positional on the PUCK: it must already be past
+# the goalie's standing sealing reach on the drive side. Beyond that line the
+# attacker has genuinely spent the play — bringing the puck back means the
+# full trip around the body from deep — so committing there is safe by
+# geometry, not by guessing intent. The race clock runs from the puck too
+# (its lateral distance to the post at the drive speed), since the puck's
+# arrival at the tuck point is what scores.
+#
+# Deliberately NOT triggered by: the puck trailing the drive (above), slow
+# lateral movement (min_lateral_speed — a drive, not a dangle's shuffle; stay
+# up and force the release), threats outside max_threat_distance (a fast cut
+# at the top of the slot has too many options to commit against), or threats
+# behind the goal line (RVH's job).
 class BeatenWideConfig:
 	var goalie_lateral_speed: float = 0.0  # m/s — standing T-push cap
 	var goalie_lateral_accel: float = 0.0  # m/s² — push-off ramp from rest
@@ -721,6 +734,7 @@ class BeatenWideConfig:
 
 static func is_beaten_wide(
 		threat_position: Vector3,
+		puck_position: Vector3,
 		threat_velocity_x: float,
 		goalie_position: Vector3,
 		goal_line_z: float,
@@ -736,10 +750,17 @@ static func is_beaten_wide(
 		return false
 	if absf(threat_velocity_x) < cfg.min_lateral_speed:
 		return false
-	# Tuck point: the post on the side the carrier is driving toward.
-	var post_x: float = goal_center_x + signf(threat_velocity_x) * net_half_width
-	# Already past the post laterally (mid reach-around) → the race is NOW.
-	var t_arrive: float = maxf((post_x - threat_position.x) / threat_velocity_x, 0.0)
+	var drive_sign: float = signf(threat_velocity_x)
+	# Point of no return: the PUCK must already be past the goalie's standing
+	# sealing reach on the drive side. Trailing puck → the cut-back is free →
+	# stay up and shuffle with the play (see the header).
+	var seal_edge_x: float = goalie_position.x + drive_sign * cfg.reach_half_width
+	if (puck_position.x - seal_edge_x) * drive_sign <= 0.0:
+		return false
+	# Tuck point: the post on the side the carrier is driving toward. The race
+	# clock runs from the PUCK — its arrival at the tuck point is what scores.
+	var post_x: float = goal_center_x + drive_sign * net_half_width
+	var t_arrive: float = maxf((post_x - puck_position.x) / threat_velocity_x, 0.0)
 	var dx: float = post_x - goalie_position.x
 	var dz: float = goal_line_z - goalie_position.z
 	var needed: float = sqrt(dx * dx + dz * dz) - cfg.reach_half_width
