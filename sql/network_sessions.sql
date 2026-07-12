@@ -25,11 +25,19 @@ create table if not exists public.network_sessions (
     net_sim_active boolean,      -- true = dev session w/ artificial lag; exclude from analysis
     duration_sec   integer,
     felt_lag_count integer,      -- subjective "I felt lag" presses this session
+    game_id        text,         -- cross-peer match UUID: joins the host row with its clients' rows (same id as career_stats)
+    end_reason     text,         -- 'completed' | 'quit' | 'host_lost' | 'host_ended' | 'kicked'
     metrics        jsonb         -- full aggregate blob from NetworkSessionSummary.to_dict()
 );
 
+-- Columns added after the original deploy — ADD COLUMN IF NOT EXISTS upgrades
+-- an existing table in place (CREATE TABLE IF NOT EXISTS alone won't).
+alter table public.network_sessions add column if not exists game_id    text;
+alter table public.network_sessions add column if not exists end_reason text;
+
 create index if not exists network_sessions_created_at_idx on public.network_sessions (created_at desc);
 create index if not exists network_sessions_version_idx    on public.network_sessions (game_version);
+create index if not exists network_sessions_game_id_idx    on public.network_sessions (game_id);
 
 -- RLS: the publishable (anon) key may INSERT only. Reads happen from the
 -- dashboard / a service-role key, which bypasses RLS — telemetry isn't
@@ -54,6 +62,8 @@ alter table public.network_sessions add constraint network_sessions_sane_sizes c
     (game_version   is null or length(game_version) <= 64) and
     (platform       is null or length(platform)     <= 64) and
     (role           is null or length(role)         <= 16) and
+    (game_id        is null or length(game_id)      <= 64) and
+    (end_reason     is null or length(end_reason)   <= 32) and
     pg_column_size(metrics) < 65536
 );
 
@@ -98,6 +108,66 @@ select
     (metrics->>'recon_vel_per_sec_avg')::float          as recon_vel_avg,
     (metrics->>'recon_ubody_per_sec_avg')::float        as recon_ubody_avg,
     (metrics->>'recon_pos_offset_ticks_avg')::float     as recon_pos_offset_ticks_avg,
-    (metrics->>'recon_post_replay_residual_m_avg')::float as recon_post_replay_residual_avg
+    (metrics->>'recon_post_replay_residual_m_avg')::float as recon_post_replay_residual_avg,
+    -- Match join key + how the session ended ('completed' vs the abnormal ends
+    -- the old game-over-only reporter never saw), then the rare-event tripwire
+    -- TOTALS (session sums — averaging smears 3 hard snaps to ~0/s) and the
+    -- buffer/broadcast health added to the fold. Trailing-append rule applies.
+    game_id,
+    end_reason,
+    (metrics->>'puck_hard_snaps_total')::float           as puck_hard_snaps_total,   -- client only; genuine host/client physics divergence
+    (metrics->>'blade_jumps_total')::float               as blade_jumps_total,       -- client only; reconcile-induced blade teleports
+    (metrics->>'buffer_depth_skater_min')::float         as buffer_skater_min,       -- client only; 0 = interp buffer ran dry
+    (metrics->>'buffer_depth_puck_min')::float           as buffer_puck_min,         -- client only
+    (metrics->>'broadcast_interval_p95_ms_max')::float   as broadcast_gap_p95_peak,  -- host only; snapshot send cadence sag
+    -- Link-quality disambiguation + clock health + objective anomaly markers.
+    (metrics->>'delay_spread_ms_avg')::float             as delay_spread_avg,        -- client only; read with jitter: jitter high + this low = clumping (benign)
+    (metrics->>'delay_spread_ms_max')::float             as delay_spread_peak,
+    (metrics->>'clock_correction_ms_max')::float         as clock_correction_peak,   -- client only; sustained large = clock sync unstable (poisons lag comp)
+    (metrics->>'worst_peer_rtt_ms_avg')::float           as worst_peer_rtt_avg,      -- host only; the host row's real link picture
+    (metrics->>'worst_peer_loss_pct_max')::float         as worst_peer_loss_peak,    -- host only
+    (metrics->>'auto_marker_count')::int                 as auto_marker_count        -- objective tripwire firings (markers themselves in metrics->'auto_markers')
 from public.network_sessions
 where net_sim_active is not true;
+
+-- ── Per-match view ───────────────────────────────────────────────────────────
+-- One row per MATCH: the host row joined with its clients' rows via game_id.
+-- This is the triage unit — netcode failure modes are asymmetric (a host
+-- stall shows as worst_stall on the host row but as reconcile/extrapolation
+-- spikes on every client row; client→host input loss shows as host-side
+-- starvation), so they only become legible with both sides in one record.
+-- "Worst client" aggregates deliberately take the worst value across the
+-- lobby: one bad experience is a bad match. Starting points:
+--   select * from match_health where abnormal_ends > 0 order by started_at desc;
+--   select * from match_health order by worst_client_hard_snaps desc nulls last limit 20;
+create or replace view public.match_health as
+select
+    game_id,
+    min(created_at)                                        as started_at,
+    max(game_version)                                      as game_version,
+    count(*) filter (where role = 'host')                  as host_rows,
+    count(*) filter (where role = 'client')                as client_rows,
+    max(duration_sec)                                      as duration_sec,
+    sum(felt_lag_count)                                    as felt_lag_total,
+    count(*) filter (where end_reason is distinct from 'completed') as abnormal_ends,
+    -- host frame / send health (null when the host row is missing)
+    min(sim_rate_min)           filter (where role = 'host') as host_sim_rate_min,
+    max(worst_stall_ms)         filter (where role = 'host') as host_worst_stall_ms,
+    max(starvations_peak)       filter (where role = 'host') as host_starvations_peak,
+    max(broadcast_gap_p95_peak) filter (where role = 'host') as host_broadcast_gap_p95,
+    -- worst client experience across the lobby
+    max(rtt_avg)                filter (where role = 'client') as worst_client_rtt_avg,
+    max(loss_avg)               filter (where role = 'client') as worst_client_loss_avg,
+    max(reconcile_avg)          filter (where role = 'client') as worst_client_reconcile_avg,
+    min(reconcile_match_min)    filter (where role = 'client') as worst_client_recon_match_min,
+    max(guessing_ahead_pct_avg) filter (where role = 'client') as worst_client_extrap_pct_avg,
+    max(puck_hard_snaps_total)  filter (where role = 'client') as worst_client_hard_snaps,
+    max(blade_jumps_total)      filter (where role = 'client') as worst_client_blade_jumps,
+    min(buffer_skater_min)      filter (where role = 'client') as worst_client_buffer_min,
+    -- Trailing-append rule applies here too (create or replace view).
+    sum(auto_marker_count)                                     as auto_marker_total,
+    max(delay_spread_peak)      filter (where role = 'client') as worst_client_delay_spread,
+    max(clock_correction_peak)  filter (where role = 'client') as worst_client_clock_correction
+from public.network_session_health
+where game_id is not null
+group by game_id;
