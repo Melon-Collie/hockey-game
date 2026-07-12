@@ -875,14 +875,17 @@ func test_developing_feed_counts_a_finisher_still_crossing_the_line() -> void:
 func test_developing_feed_values_the_spot_the_finisher_is_driving_to() -> void:
 	# A finisher high in the zone skating hard for the house is priced at the
 	# spot he's driving to (velocity projection, same primitive as the
-	# developing outlet) — worth more than the same man parked high.
+	# developing outlet) — worth more than the same man parked high. The drive
+	# heads for the net-front (that's what "driving to the house" is): a drive
+	# that stays high and wide reaches a spot the body-occlusion shot model
+	# honestly prices at ~0.
 	var fin_pos := Vector3(-5, 0, -15.0)
 	var parked := _ctx_with_finisher(fin_pos, false)
 	var c1 := AIRoleCarrier.new()
 	c1._scratch_teammate_ids = [2]
 	var feed_parked: float = c1._best_developing_feed(parked)
 	var driving := _ctx_with_finisher(fin_pos, false)
-	driving.snapshot.skater_states[2].velocity = Vector3(-0.5, 0, -6.5)
+	driving.snapshot.skater_states[2].velocity = Vector3(2.5, 0, -6.5)
 	var c2 := AIRoleCarrier.new()
 	c2._scratch_teammate_ids = [2]
 	assert_gt(c2._best_developing_feed(driving), feed_parked,
@@ -898,7 +901,7 @@ func test_fresh_entry_holds_for_the_driving_finisher_over_the_top_shot() -> void
 	var self_pos := Vector3(2, 0, -14.5)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
-			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(-1.0, 0, -6.5)],
+			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(2.0, 0, -7.5)],
 			[3, TEAM_ID, Vector3(6, 0, -6.3)],       # support high at the line
 			[11, 1, Vector3(-1.5, 0, -20.0)],        # set D box
 			[12, 1, Vector3(2.5, 0, -19.0)],
@@ -1283,9 +1286,12 @@ func test_sharp_angle_shot_into_a_vh_seal_is_never_worth_firing() -> void:
 	assert_lt(vh.debug_shoot_score, 0.10,
 			"the sealed sharp angle offers no real chance; got %f" % vh.debug_shoot_score)
 
-	# Same carrier, same replicated goalie placement, but STANDING: the model
-	# squares him and the bare body read leaves real slivers — the shot only
-	# collapses BECAUSE of the seal, not because sharp angles score zero.
+	# Same carrier, same replicated goalie placement, but STANDING: under the
+	# body-occlusion shot model the goalie's DEPTH walls the cross-net lane from
+	# a spot this sharp with or without the seal — the obscenely-tight-angle fire
+	# is never a real chance, which is exactly the read the seal used to be
+	# needed for. (The seal still matters where the angle leaves real lanes —
+	# see the VH/RVH hole tests in test_ai_action_scoring.)
 	var ctx_up := _make_ctx(self_pos)
 	var g_up := GoalieNetworkState.new()
 	g_up.position_x = 0.85
@@ -1294,5 +1300,5 @@ func test_sharp_angle_shot_into_a_vh_seal_is_never_worth_firing() -> void:
 	ctx_up.snapshot.goalie_states[1 - TEAM_ID] = g_up
 	var up := AIRoleCarrier.new()
 	up.decide(ctx_up)
-	assert_gt(up.debug_shoot_score, vh.debug_shoot_score,
-			"the collapse is the seal's doing — upright reads higher from the same spot")
+	assert_lt(up.debug_shoot_score, 0.10,
+			"upright from the same sharp spot is no chance either — body depth walls it")
