@@ -1404,6 +1404,83 @@ func test_five_hole_gap_rule_mirrors_pad_geometry() -> void:
 	assert_almost_eq(GoalieBehaviorRules.five_hole_gap_m(true, 0.18), 0.36, 0.001)
 
 
+# ─── Post-seal stances (VH / RVH) — the pose IS the coverage ───────────────
+
+func test_vh_seal_closes_short_side_high() -> void:
+	# Short-side HIGH vs a goalie a step off the post: his body-reach cover
+	# alone leaves a slice over the shoulder — the RVH weakness — and closing
+	# it is VH's whole reason to exist. Sealed-tall reads 0; RVH (not tall)
+	# keeps the same measured opening the bare read gives.
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(3.0, 0, -23.5)
+	var goalie := Vector3(0.4, 0, -26.2)
+	var flight: float = shooter.distance_to(goal) / 33.0
+	var high_near: int = 1   # HIGH band, +x side — the seal side for this shooter
+	var bare: float = AIActionScoring._hole_open_angle(
+			high_near, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
+			flight, 0.0, -1.0, true)
+	assert_gt(bare, 0.0, "sanity: body reach alone leaves short-side high open")
+	var vh: float = AIActionScoring._hole_open_angle(
+			high_near, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
+			flight, 0.0, -1.0, true, 1.0, true)
+	assert_eq(vh, 0.0, "VH walls the whole near column — no short-side high")
+	var rvh: float = AIActionScoring._hole_open_angle(
+			high_near, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
+			flight, 0.0, -1.0, true, 1.0, false)
+	assert_eq(rvh, bare, "RVH stays compressed — short-side high stays measured")
+
+
+func test_post_seal_closes_five_hole_and_near_low() -> void:
+	# Between-the-legs is closed in BOTH post-seal families (back pad + the
+	# post-sealed pad close the ice slot), and the near-post LOW column is
+	# gone in both too.
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(1.0, 0, -23.9)
+	var goalie := Vector3(0.6, 0, -26.3)
+	var flight: float = shooter.distance_to(goal) / 33.0
+	var gap: float = GoalieBehaviorRules.five_hole_gap_m(true, 0.18)  # slide leak
+	var five_bare: float = AIActionScoring._hole_open_angle(
+			4, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
+			flight, 0.0, gap, true)
+	assert_gt(five_bare, 0.0, "sanity: a mid-slide leak is a real five-hole read")
+	var five_rvh: float = AIActionScoring._hole_open_angle(
+			4, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
+			flight, 0.0, gap, true, 1.0, false)
+	assert_eq(five_rvh, 0.0, "the post-seal back pad closes the slot")
+	var low_vh: float = AIActionScoring._hole_open_angle(
+			3, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
+			flight, 0.0, -1.0, true, 1.0, true)
+	assert_eq(low_vh, 0.0, "near-post low is sealed")
+
+
+func test_vh_seal_aims_the_far_corner_not_the_wall() -> void:
+	# From the seal side the only surviving look is the thin cross-net window
+	# at the far post — the chosen aim must sit in the far half, never on the
+	# walled-off short side. ("Never fire into the VH wall.")
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(4.5, 0, -26.0)
+	var goalie := Vector3(0.85, 0, -26.55)   # parked at the +x post, VH
+	var aim: Vector3 = AIActionScoring.best_shot_aim(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0,
+			0.0, -1.0, true, 0.0, 1.0, true)
+	assert_lt(aim.x, 0.0, "the only look vs VH is across — aim sits in the far half")
+
+
+func test_post_seal_leaves_the_far_side_measured() -> void:
+	# The far post is read from the goalie's actual parked-at-the-post
+	# position — a committed VH concedes the cross-crease/walkout side, and
+	# the model must keep seeing it (that's the counter the carry/pass
+	# options should find instead of firing into the seal).
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(-2.0, 0, -22.65)   # opposite side of the seal
+	var goalie := Vector3(0.85, 0, -26.55)    # parked at the +x post
+	var sealed: float = AIActionScoring.open_net_danger(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0,
+			0.0, -1.0, true, 1.0, true)
+	assert_gt(sealed, 0.3,
+			"the abandoned far side is a real look; got %f" % sealed)
+
+
 # ─── Post-clearance aim clamp ─────────────────────────────────────────────
 
 func test_hole_aim_never_targets_the_post_band() -> void:

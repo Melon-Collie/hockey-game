@@ -852,6 +852,75 @@ func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:
 			"a finisher outside the OZ isn't a developing cross-seam")
 
 
+func test_developing_feed_counts_a_finisher_still_crossing_the_line() -> void:
+	# A finisher a stride OUTSIDE the blue line driving hard into the zone IS
+	# the developing cross-seam — the old current-position gate read exactly 0
+	# here, so a carrier fresh off the entry saw nothing worth waiting for and
+	# settled for the weak from-the-top shot. Parked at the same spot he still
+	# reads 0: the gate opens on where he's GETTING to, not a slot label.
+	var fin_pos := Vector3(-5, 0, -(GameRules.BLUE_LINE_Z - 1.0))
+	var parked := _ctx_with_finisher(fin_pos, false)
+	var c1 := AIRoleCarrier.new()
+	c1._scratch_teammate_ids = [2]
+	assert_eq(c1._best_developing_feed(parked), 0.0,
+			"parked outside the line: nothing developing")
+	var driving := _ctx_with_finisher(fin_pos, false)
+	driving.snapshot.skater_states[2].velocity = Vector3(-0.5, 0, -7.0)
+	var c2 := AIRoleCarrier.new()
+	c2._scratch_teammate_ids = [2]
+	assert_gt(c2._best_developing_feed(driving), 0.0,
+			"driving in: the entering finisher is a developing play")
+
+
+func test_developing_feed_values_the_spot_the_finisher_is_driving_to() -> void:
+	# A finisher high in the zone skating hard for the house is priced at the
+	# spot he's driving to (velocity projection, same primitive as the
+	# developing outlet) — worth more than the same man parked high.
+	var fin_pos := Vector3(-5, 0, -15.0)
+	var parked := _ctx_with_finisher(fin_pos, false)
+	var c1 := AIRoleCarrier.new()
+	c1._scratch_teammate_ids = [2]
+	var feed_parked: float = c1._best_developing_feed(parked)
+	var driving := _ctx_with_finisher(fin_pos, false)
+	driving.snapshot.skater_states[2].velocity = Vector3(-0.5, 0, -6.5)
+	var c2 := AIRoleCarrier.new()
+	c2._scratch_teammate_ids = [2]
+	assert_gt(c2._best_developing_feed(driving), feed_parked,
+			"the feed is valued at the spot the finisher is getting to")
+
+
+func test_fresh_entry_holds_for_the_driving_finisher_over_the_top_shot() -> void:
+	# The playtest read: seconds after a zone entry, box set, carry strangled —
+	# the carrier settled for a weak shot from above the circle because
+	# nothing else scored. The mate driving to the house IS the something
+	# else: the developing feed must out-value the marginal top shot so the
+	# hold (feed × keep × decay) wins the compete instead of the giveaway.
+	var self_pos := Vector3(2, 0, -14.5)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(-1.0, 0, -6.5)],
+			[3, TEAM_ID, Vector3(6, 0, -6.3)],       # support high at the line
+			[11, 1, Vector3(-1.5, 0, -20.0)],        # set D box
+			[12, 1, Vector3(2.5, 0, -19.0)],
+			[13, 1, Vector3(0.5, 0, -11.3)],         # high man choking the carry
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.45                              # tracking, not dead-set centre
+	g.position_z = -26.65 + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.FINISHER
+	brain.slot_assignments[3] = AIRoleSlots.Slot.SUPPORT
+	ctx.team_brain = brain
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"the marginal top shot is not taken while the play develops")
+	assert_gt(c._best_developing_feed(ctx), c.debug_shoot_score,
+			"the developing feed out-values the from-the-top shot")
+
+
 # ─── developing breakout outlet: hold instead of forcing the backpass ────────
 # A BREAKOUT_STRONG / OUTLET teammate skating its route is a developing
 # feed: _developing_outlet_feed projects it OUTLET_DEVELOP_WINDOW_S along
@@ -1171,3 +1240,59 @@ func test_blue_line_entry_carries_past_a_symmetric_set_defense() -> void:
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
 			"symmetric coverage at the line → the puck-carrier takes the entry")
+
+
+# ─── Post-seal stances: the carrier reads the VH wall ────────────────────────
+
+func test_post_seal_x_sign_decodes_the_wire_convention() -> void:
+	# Convention lock: the controller enters *_LEFT when puck_local_x =
+	# (puck.x − goal.x) · −sign(−goal_z) < 0 — i.e. the sealed post sits at
+	# world-x sign(−goal_z). Both nets, both stance families.
+	var g := GoalieNetworkState.new()
+	g.state_enum = GoalieStateMachine.State.VH_LEFT as int
+	assert_eq(g.post_seal_x_sign(-26.65), 1.0, "net at −z: LEFT seals the +x post")
+	assert_eq(g.post_seal_x_sign(26.65), -1.0, "net at +z: LEFT seals the −x post")
+	assert_true(g.is_post_seal_tall(), "VH is the tall seal")
+	g.state_enum = GoalieStateMachine.State.RVH_RIGHT as int
+	assert_eq(g.post_seal_x_sign(-26.65), -1.0, "net at −z: RIGHT seals the −x post")
+	assert_false(g.is_post_seal_tall(), "RVH is the compressed seal")
+	g.state_enum = GoalieStateMachine.State.READY as int
+	assert_eq(g.post_seal_x_sign(-26.65), 0.0, "no post stance, no seal")
+
+
+func test_sharp_angle_shot_into_a_vh_seal_is_never_worth_firing() -> void:
+	# The observed over-fire: from a sharp angle the arc-square model read a
+	# near-goal-line keeper as roughly centred (his deep arc-x sits near 0),
+	# conceding a phantom short side — while the real goalie is parked at the
+	# post in VH with the whole near column walled off. With the seal read
+	# from the replicated state, the shot from the seal side collapses below
+	# the fire floor: whatever the carrier does here, it is never "fire into
+	# the VH wall."
+	var self_pos := Vector3(4.5, 0, -26.0)   # sharp angle, seal side, in tight
+	var ctx_vh := _make_ctx(self_pos)
+	var g_vh := GoalieNetworkState.new()
+	g_vh.position_x = 0.85                    # parked at the +x post
+	g_vh.position_z = -26.55                  # post-seal depth ~0.10
+	g_vh.state_enum = GoalieStateMachine.State.VH_LEFT as int   # seals +x here
+	ctx_vh.snapshot.goalie_states[1 - TEAM_ID] = g_vh
+	var vh := AIRoleCarrier.new()
+	vh.decide(ctx_vh)
+	# Not exactly zero: the model honestly keeps the thin cross-net window at
+	# the FAR post (see the aim test in test_ai_action_scoring) — but the
+	# near column is walled off, so nothing here rates as a real chance.
+	assert_lt(vh.debug_shoot_score, 0.10,
+			"the sealed sharp angle offers no real chance; got %f" % vh.debug_shoot_score)
+
+	# Same carrier, same replicated goalie placement, but STANDING: the model
+	# squares him and the bare body read leaves real slivers — the shot only
+	# collapses BECAUSE of the seal, not because sharp angles score zero.
+	var ctx_up := _make_ctx(self_pos)
+	var g_up := GoalieNetworkState.new()
+	g_up.position_x = 0.85
+	g_up.position_z = -26.55
+	g_up.state_enum = GoalieStateMachine.State.STANDING as int
+	ctx_up.snapshot.goalie_states[1 - TEAM_ID] = g_up
+	var up := AIRoleCarrier.new()
+	up.decide(ctx_up)
+	assert_gt(up.debug_shoot_score, vh.debug_shoot_score,
+			"the collapse is the seal's doing — upright reads higher from the same spot")

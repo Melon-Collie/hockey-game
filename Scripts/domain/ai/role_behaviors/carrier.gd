@@ -397,11 +397,25 @@ func _pick_action(ctx: RoleContext) -> void:
 	# the model gates on flight vs the drop), down = the residual slide leak.
 	var wrister_five_hole: float = -1.0
 	var wrister_goalie_down: bool = false
+	var wrister_seal_x: float = 0.0
+	var wrister_seal_tall: bool = false
 	var opp_goalie_state: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
 	if opp_goalie_state != null:
 		wrister_goalie_down = opp_goalie_state.is_down()
 		wrister_five_hole = GoalieBehaviorRules.five_hole_gap_m(
 				wrister_goalie_down, opp_goalie_state.five_hole_openness)
+		# Post-seal stance (VH/RVH): the goalie is committed to a post and the
+		# pose IS the coverage — see the seal model in _hole_open_angle. A
+		# committed post stance also does not re-square: he holds the post
+		# while the sharp-angle threat lasts (the state we read is refreshed
+		# every tick), so score the shot against where he's actually parked,
+		# not a hypothetical arc-squared keeper — the squared model both
+		# invents coverage he'd need to leave the post to provide AND hides
+		# the far-side opening his commitment concedes.
+		wrister_seal_x = opp_goalie_state.post_seal_x_sign(attacking_goal.z)
+		wrister_seal_tall = opp_goalie_state.is_post_seal_tall()
+		if wrister_seal_x != 0.0:
+			wrister_goalie = goalie_now
 
 	# Top-level SHOOT. _scratch_opponent_caps is index-matched to _scratch_opponents
 	# (and thus to _scratch_opponents_shoot, built in the same order), so a lane
@@ -410,7 +424,8 @@ func _pick_action(ctx: RoleContext) -> void:
 			wrister_release_pos, attacking_goal, wrister_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
 			ctx.self_wrister_shot_speed, wrister_unsettled, _scratch_opponent_caps,
-			wrister_five_hole, wrister_goalie_down)
+			wrister_five_hole, wrister_goalie_down,
+			wrister_seal_x, wrister_seal_tall)
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -581,12 +596,14 @@ func _pick_action(ctx: RoleContext) -> void:
 			shot_loft_level = AIActionScoring.best_shot_loft(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
-					wrister_unsettled, wrister_five_hole, wrister_goalie_down)
+					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
+					wrister_seal_x, wrister_seal_tall)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
-					ctx.self_aim_spread_rad)
+					ctx.self_aim_spread_rad,
+					wrister_seal_x, wrister_seal_tall)
 	elif dump_score > raw_carry_score and not staggered:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
 		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.
@@ -1371,13 +1388,30 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 			# Ghosted (offside) finisher can't receive — the live pass
 			# scoring skips ghosts, so holding for one would be waiting
 			# for a feed we're never allowed to make. Already-flagged —
-			# the normal pass scoring feeds it; nothing to wait for. Must
-			# be staging an OZ cross-seam (slot_anchor returns ZERO for
-			# FINISHER, so we read the teammate's live position, not a
-			# brain anchor).
-			var spot: Vector3 = tm.position
+			# the normal pass scoring feeds it; nothing to wait for.
+			# (slot_anchor returns ZERO for FINISHER, so we read the
+			# teammate's live motion, not a brain anchor.)
+			#
+			# The play that WILL exist, not just the one that does: a
+			# finisher still skating to his staging spot is valued at the
+			# spot he's DRIVING TO — position projected along velocity, the
+			# same primitive as the developing outlet below — so a fresh
+			# zone entry holds for the mates still arriving instead of
+			# settling for the weak from-the-top shot the moment the carrier
+			# crosses the line. As he settles the projection converges to
+			# his position, the live pass scoring converges to this value,
+			# and fire wins the tie — the hold can't outlive the play it's
+			# waiting for (and _hold_elapsed_s decays a wait that never
+			# materialises). The OZ gate reads the projected spot for the
+			# same reason: a finisher a stride outside the line, driving in,
+			# IS the developing cross-seam.
+			var fin_vel: Vector3 = tm.velocity
+			var spot := Vector3(
+					tm.position.x + fin_vel.x * OUTLET_DEVELOP_WINDOW_S, 0.0,
+					tm.position.z + fin_vel.z * OUTLET_DEVELOP_WINDOW_S)
 			if tm.is_ghost or ctx.team_brain.is_one_timer_ready(pid) \
-					or -ctx.own_goal_dir * spot.z <= GameRules.BLUE_LINE_Z:
+					or -ctx.own_goal_dir * spot.z <= GameRules.BLUE_LINE_Z \
+					or not AIRoleHelpers.is_legal_position(spot):
 				continue
 			var dist: float = self_pos.distance_to(spot)
 			var pass_speed: float = AIActionScoring.pass_launch_speed(

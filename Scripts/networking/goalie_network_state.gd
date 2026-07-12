@@ -64,6 +64,33 @@ func is_down() -> bool:
 			or state_enum == GoalieStateMachine.State.CATCHING_DOWN as int
 
 
+# World-x sign (±1.0) of the post a post-seal stance (VH/RVH) is committed
+# to; 0.0 in any other state. LEFT/RIGHT in the state names are goalie-LOCAL:
+# the controller picks the side by puck_local_x = (world_x − goal_x) ·
+# −direction_sign with direction_sign = sign(−goal_z), so the goalie's local
+# LEFT sits at world-x sign(−goal_z). Callers pass the z of the goal this
+# goalie guards (the shooter's attacking_goal.z). Like is_down(), this is the
+# one place the state_enum ↔ world mapping is interpreted off the wire.
+func post_seal_x_sign(guarded_goal_z: float) -> float:
+	var left_sign: float = signf(-guarded_goal_z)
+	if state_enum == GoalieStateMachine.State.VH_LEFT as int \
+			or state_enum == GoalieStateMachine.State.RVH_LEFT as int:
+		return left_sign
+	if state_enum == GoalieStateMachine.State.VH_RIGHT as int \
+			or state_enum == GoalieStateMachine.State.RVH_RIGHT as int:
+		return -left_sign
+	return 0.0
+
+
+# TALL post seal = VH (post pad vertical, body upright at the post): the
+# whole near-post column is a wall, ice to over the shoulder. False for RVH,
+# whose compressed stance seals the ice at the post but leaves short-side
+# high — its documented weakness and exactly what VH exists to close.
+func is_post_seal_tall() -> bool:
+	return state_enum == GoalieStateMachine.State.VH_LEFT as int \
+			or state_enum == GoalieStateMachine.State.VH_RIGHT as int
+
+
 func copy_from(s: GoalieNetworkState) -> void:
 	position_x = s.position_x
 	position_z = s.position_z
