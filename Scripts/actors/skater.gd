@@ -151,9 +151,10 @@ var is_local_skater: bool = false
 # the hips). Raised to torso height so the PASSIVE sphere (body_block_radius)
 # clears a grounded puck (top ≈ ice_height + radius ≈ 0.12) — loose pucks on the
 # ice slip under/between the legs, enabling nutmegs. The WIDER explicit-block
-# sphere (block_body_radius, Ctrl) still reaches the ice from this height, so an
-# active shot-block remains the way to stop a low puck. Mirrors the grounded-vs-
-# airborne split the blade already uses.
+# sphere (block_body_radius, Ctrl) is what stops a low puck: set_block_stance
+# rebases it to seal from the ice up (the hip-height origin puts this local
+# offset at the torso, so without the rebase a flat shot slid under the crouch).
+# Mirrors the grounded-vs-airborne split the blade already uses.
 @export var body_block_height: float = 0.7
 
 # ── Node References ───────────────────────────────────────────────────────────
@@ -1475,6 +1476,16 @@ func set_ghost(ghost: bool) -> void:
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 func set_block_stance(active: bool) -> void:
 	_body_block_sphere.radius = block_body_radius if active else body_block_radius
+	if active:
+		# Seal the ice: the creation-time local offset (body_block_height above
+		# the hip-height origin) parks the sphere at the torso, where the active
+		# radius bottoms out well above a grounded puck — a flat shot slid clean
+		# under the crouch. Rebase the sphere so it spans the ice up to ~2·radius
+		# (same global-Y trick as set_slapper_zone); the small margin keeps a
+		# puck hugging the ice inside the sphere rather than tangent to it.
+		_body_block_area.global_position.y = block_body_radius - 0.05
+	else:
+		_body_block_area.position.y = body_block_height
 	_block_stance_active = active
 	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS

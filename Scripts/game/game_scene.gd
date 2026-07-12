@@ -4,7 +4,7 @@ func _ready() -> void:
 	PlayerPrefs.apply_video()
 	NetworkManager.on_game_scene_ready()
 	if NetworkManager.is_tutorial_mode:
-		var id: String = NetworkManager.tutorial_id if not NetworkManager.tutorial_id.is_empty() else TutorialRegistry.BASICS_ID
+		var id: String = NetworkManager.tutorial_id if not NetworkManager.tutorial_id.is_empty() else TutorialRegistry.MOVEMENT_ID
 		add_child(preload("res://Scripts/game/tutorial_manager.gd").new(id))
 	if NetworkManager.is_penalty_drill_mode:
 		add_child(preload("res://Scripts/game/penalty_drill_manager.gd").new())

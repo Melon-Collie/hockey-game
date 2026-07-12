@@ -20,3 +20,7 @@ func test_tutorial_hud_compiles() -> void:
 func test_tutorial_targets_compiles() -> void:
 	var script: GDScript = load("res://Scripts/ui/tutorial_targets.gd")
 	assert_not_null(script, "tutorial_targets.gd failed to compile")
+
+func test_tutorial_wall_compiles() -> void:
+	var script: GDScript = load("res://Scripts/ui/tutorial_wall.gd")
+	assert_not_null(script, "tutorial_wall.gd failed to compile")

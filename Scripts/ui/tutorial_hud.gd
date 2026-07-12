@@ -19,9 +19,10 @@ var _complete_panel: Control = null
 var _exit_confirm_panel: Control = null
 
 # Set by TutorialManager._ready() so the HUD knows which id to mark complete
-# when the player hits the "Exit Tutorial" button. Defaults to basics so older
-# callers (or if the setter is missed) still write a valid entry.
-var _tutorial_id: String = TutorialRegistry.BASICS_ID
+# when the player hits the "Exit Tutorial" button. Defaults to the first
+# course part so older callers (or if the setter is missed) still write a
+# valid entry.
+var _tutorial_id: String = TutorialRegistry.MOVEMENT_ID
 
 signal skip_pressed
 signal reset_pressed

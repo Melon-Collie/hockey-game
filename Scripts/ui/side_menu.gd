@@ -553,15 +553,15 @@ func _build_practice_overlay() -> void:
 
 # Rebuilds the row list. Called when the picker opens so the checkmark next to
 # each tutorial reflects the latest PlayerPrefs state (e.g. the player just
-# completed Basics in a previous session this run).
+# completed Movement in a previous session this run).
 func _refresh_practice_rows() -> void:
 	if _practice_rows_vbox == null:
 		return
 	for child: Node in _practice_rows_vbox.get_children():
 		child.queue_free()
 	for tutorial_id: String in TutorialRegistry.ALL_IDS:
-		# "Part 1 of 2 · Basics" framing so the picker reads as one ordered
-		# course rather than two standalone options.
+		# "Part 1 of 6 · Movement" framing so the picker reads as one ordered
+		# course rather than standalone options.
 		var seq: String = TutorialRegistry.get_sequence_label(tutorial_id)
 		var label_text: String = "%s · %s" % [seq, TutorialRegistry.get_display_name(tutorial_id)] \
 			if seq != "" else TutorialRegistry.get_display_name(tutorial_id)
@@ -642,8 +642,8 @@ func _on_start_game_pressed() -> void:
 
 
 func _on_practice_pressed() -> void:
-	# Opens the practice submenu: the tutorial course (Basics, Advanced, any
-	# future additions) plus drills like Penalty Shots. Selection routes
+	# Opens the practice submenu: the tutorial course (Movement, Stick
+	# Basics, and the rest) plus drills like Penalty Shots. Selection routes
 	# through _launch_tutorial(id) / _launch_penalty_drill.
 	if _practice_container == null:
 		return
