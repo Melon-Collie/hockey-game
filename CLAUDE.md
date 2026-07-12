@@ -20,6 +20,8 @@ Run the suite after touching domain code and report results. The **game itself**
 
 **If you spot a bug or code smell while working on something else, flag it.** Don't silently fix it (out of scope), don't silently ignore it (it'll rot), don't tack it onto the current commit (muddies the diff). Surface it in chat with a one-line description and let the user decide: fix now as a small follow-up, defer to a separate task, or capture as a Known Issue here. Latent bugs in adjacent code paths are especially worth flagging — they often pair with whatever you're touching.
 
+**Stale documentation is the exception: fix it on the spot.** When a doc or comment (this file, `ARCHITECTURE.md`, doc-blocks, constant tables) no longer matches the code, correct it as part of whatever you're doing — don't flag it as out of scope, don't ask. Keeping documentation and comments truthful is always in scope; a stale doc found while working nearby goes into the same commit.
+
 ## What This Is
 
 A 3v3 hockey game built in Godot 4.6.2 (GDScript, 3D). Online multiplayer — one player per machine, each with their own camera and local simulation. Prioritizes feel over realism: deep stickhandling, multiple shot types, satisfying puck physics.

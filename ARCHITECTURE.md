@@ -269,9 +269,10 @@ Player-first guarantee: weighted target is clamped so player never exceeds `play
 | Phase | Duration | Description |
 |-------|----------|-------------|
 | `PLAYING` | Until goal or clock expires | Normal gameplay; period clock counts down |
-| `GOAL_SCORED` | 2s (`GOAL_PAUSE_DURATION`) | Dead puck, celebration freeze |
-| `FACEOFF_PREP` | 0.5s (`FACEOFF_PREP_DURATION`) | Players teleport to dots, puck resets, goalies reset to crease |
-| `FACEOFF` | Until pickup or 10s timeout | Puck live at center dot, waiting for a player to pick it up |
+| `GOAL_CELEBRATION` | 1.5s (`GOAL_CELEBRATION_DURATION`) | Post-goal beat: movement allowed, puck pickup-locked; banner + VFX play |
+| `GOAL_SCORED` | Replay length (2s `GOAL_PAUSE_DURATION` fallback if the replay never starts) | Goal replay cinematic; dead puck |
+| `FACEOFF_PREP` | 2s (`FACEOFF_PREP_DURATION`) + skate-in extra / intro hold extensions | Skaters skate in to their dots (bench intro, staged post-goal, or from where play stopped), puck resets, goalies reset to crease |
+| `FACEOFF` | Until pickup/touch or 10s timeout | Puck live at the dot, waiting for a player to engage it |
 | `END_OF_PERIOD` | 6s (`END_OF_PERIOD_PAUSE`) | Period clock hit zero; skaters skate off to their benches under a wide camera hold |
 | `GAME_OVER` | Indefinite | All periods exhausted; movement locked until host resets |
 
