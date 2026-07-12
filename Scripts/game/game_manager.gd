@@ -3585,6 +3585,8 @@ func _on_game_over() -> void:
 	_report_net_session("completed")
 	if local == null or local.team == null:
 		return
+	_career_reporter.report(local, gf, ga, outcome,
+			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
 
 
 # One network-quality row per game, guarded so the game-over and scene-exit
@@ -3602,8 +3604,6 @@ func _report_net_session(end_reason: String) -> void:
 	var role: String = "host" if NetworkManager.is_host else "client"
 	_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled,
 			_game_id, end_reason)
-	_career_reporter.report(local, gf, ga, outcome,
-			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
 
 
 # True for a real match that should award achievements + Steam career stats: any
