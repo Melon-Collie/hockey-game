@@ -119,7 +119,14 @@ select
     (metrics->>'blade_jumps_total')::float               as blade_jumps_total,       -- client only; reconcile-induced blade teleports
     (metrics->>'buffer_depth_skater_min')::float         as buffer_skater_min,       -- client only; 0 = interp buffer ran dry
     (metrics->>'buffer_depth_puck_min')::float           as buffer_puck_min,         -- client only
-    (metrics->>'broadcast_interval_p95_ms_max')::float   as broadcast_gap_p95_peak   -- host only; snapshot send cadence sag
+    (metrics->>'broadcast_interval_p95_ms_max')::float   as broadcast_gap_p95_peak,  -- host only; snapshot send cadence sag
+    -- Link-quality disambiguation + clock health + objective anomaly markers.
+    (metrics->>'delay_spread_ms_avg')::float             as delay_spread_avg,        -- client only; read with jitter: jitter high + this low = clumping (benign)
+    (metrics->>'delay_spread_ms_max')::float             as delay_spread_peak,
+    (metrics->>'clock_correction_ms_max')::float         as clock_correction_peak,   -- client only; sustained large = clock sync unstable (poisons lag comp)
+    (metrics->>'worst_peer_rtt_ms_avg')::float           as worst_peer_rtt_avg,      -- host only; the host row's real link picture
+    (metrics->>'worst_peer_loss_pct_max')::float         as worst_peer_loss_peak,    -- host only
+    (metrics->>'auto_marker_count')::int                 as auto_marker_count        -- objective tripwire firings (markers themselves in metrics->'auto_markers')
 from public.network_sessions
 where net_sim_active is not true;
 
@@ -156,7 +163,11 @@ select
     max(guessing_ahead_pct_avg) filter (where role = 'client') as worst_client_extrap_pct_avg,
     max(puck_hard_snaps_total)  filter (where role = 'client') as worst_client_hard_snaps,
     max(blade_jumps_total)      filter (where role = 'client') as worst_client_blade_jumps,
-    min(buffer_skater_min)      filter (where role = 'client') as worst_client_buffer_min
+    min(buffer_skater_min)      filter (where role = 'client') as worst_client_buffer_min,
+    -- Trailing-append rule applies here too (create or replace view).
+    sum(auto_marker_count)                                     as auto_marker_total,
+    max(delay_spread_peak)      filter (where role = 'client') as worst_client_delay_spread,
+    max(clock_correction_peak)  filter (where role = 'client') as worst_client_clock_correction
 from public.network_session_health
 where game_id is not null
 group by game_id;

@@ -1455,6 +1455,13 @@ func get_clock_offset_ms() -> float:
 		return 0.0
 	return _clock_sync._offset * 1000.0
 
+# Magnitude of the last post-ready clock-offset correction (ms) — the clock
+# stability signal the session telemetry folds. ~0 when settled.
+func get_clock_correction_ms() -> float:
+	if _clock_sync == null:
+		return 0.0
+	return _clock_sync.last_correction_ms
+
 @rpc("any_peer", "unreliable")
 func report_ping(rtt_ms: int) -> void:
 	_peer_ping_ms[multiplayer.get_remote_sender_id()] = rtt_ms

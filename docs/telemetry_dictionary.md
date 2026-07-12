@@ -49,7 +49,10 @@ below.
 |---|---|---|---|
 | `rtt_ms` | ms | <80 great, 80–150 playable, >150 laggy | Client's round-trip to host. **Host rows fold 0** (the host has no RTT to itself). |
 | `packet_loss_pct` | % | <1 great, >5 rubber-banding | Dropped packets on the client's inbound world-state stream. Host rows fold 0. |
-| `jitter_p95_ms` | ms | <8 great, >20 rough | p95 deviation of raw packet arrival gaps (IPDV). Rises for genuine path jitter **and** for benign relay clumping — can't tell them apart on its own (the F3 Delay-spread line disambiguates live; not yet in the session fold). |
+| `jitter_p95_ms` | ms | <8 great, >20 rough | p95 deviation of raw packet arrival gaps (IPDV). Rises for genuine path jitter **and** for benign relay clumping — read with `delay_spread_ms` to tell them apart. |
+| `delay_spread_ms` | ms | <8 great, >20 rough | De-clumped path jitter (PDV — each packet timed against the synced host clock). **The clumping tell: `jitter_p95` high + this low ⇒ relay clumping (benign); both high ⇒ genuinely jittery path.** Also the term that sizes the interpolation cushion — `extrapolation_pct` climbing while this stays low means the cushion under-sizes. Client only. |
+| `clock_correction_ms` | ms | ~0–2 settled | Magnitude of the last clock-sync offset correction. Sustained large = the clock estimate is unstable (asymmetric path, drift), which silently poisons lag-comp rewind timestamps and the delay-spread read before anything visibly breaks. Client only. |
+| `worst_peer_rtt_ms` / `worst_peer_loss_pct` | ms / % | same bands as rtt/loss | Host rows only: the worst per-peer ping and input-echo loss across the lobby at each window — the host row's real link picture (its own rtt/loss fold 0). Cross-checks the client rows via `match_health`. |
 | `bytes_recv_per_sec` / `bytes_sent_per_sec` | B/s | client down ≈ host per-peer up; host up ≲ ~60 KB/s per peer | Payload bytes only (excludes Steam framing/relay overhead). Host `sent` sums across all peers. |
 | `peer_count` | count | — | Connected clients (host rows only; clients fold 0). |
 
@@ -92,15 +95,37 @@ below.
 | `input_lead_ms` | ms | ~0–10 | How late client inputs arrive vs schedule. |
 | `input_starvations_per_sec` | /s | <0.5 | Host ticks that had no client input and reused the last one. This is where **client→host** packet loss shows up (the client's own `packet_loss_pct` only sees the inbound direction). |
 
-## `felt_lag_markers`
+## Markers: `felt_lag_markers` and `auto_markers`
 
-Array of dicts (capped at 50; `felt_lag_count` keeps counting past the cap).
-Each is one F4 press: `at_sec` (in-session time) plus a live snapshot of the
-keys above at that instant, plus `buffer_depth_skater`, `buffer_depth_puck`,
-and `puck_mode` (`interp` = smoothed, `trajectory` = predicted flight,
-`carried` = on a stick). Note the press comes *after* the felt moment — the
-snapshot may already look recovered; trust the marker's timing more than its
-instantaneous values.
+**`felt_lag_markers`** (capped at 50; `felt_lag_count` keeps counting past the
+cap): one entry per F4 press — `at_sec` (in-session time) plus a live snapshot
+of the keys above at that instant, plus `buffer_depth_skater`,
+`buffer_depth_puck`, and `puck_mode` (`interp` = smoothed, `trajectory` =
+predicted flight, `carried` = on a stick).
+
+**`auto_markers`** (capped at 20 stored; `auto_marker_count` keeps counting):
+the same mechanism fired by objective tripwires, so rare bugs land with a
+timestamp even when nobody pressed F4. Each has a `trigger` naming the
+tripwire — `puck_hard_snaps` (≥2 in a window), `reconcile_storm` (≥5/s),
+`extrapolation` (≥60% of frames), `host_stall` (tick gap ≥66 ms),
+`input_starvation` (≥5/s) — thresholds mirror the F3 overlay's BAD bands. A
+per-trigger 30 s cooldown means a sustained failure records its *onset*, not
+one marker per second; a burst of `auto_marker_count` with few stored markers
+means the failure kept re-firing past the cooldowns.
+
+**`history`** (both kinds): the first 8 markers of a session carry a
+`history` array — the ~6 one-second samples (rounded, each with its own
+`at_sec`) leading up to the moment. This is the event trace: an F4 press (and
+even an auto trigger) lands *after* the bad moment, so trust the history run-up
+over the instantaneous snapshot. Later markers omit history to keep the row
+under the 64 KiB jsonb cap.
+
+## Getting the data without Supabase
+
+Every posted row is also mirrored locally to `user://net_sessions/` (last 10,
+JSON, same shape as the table row), so a tester can hand over their own
+session even if the POST failed. Live, the F3 panel's **C** key copies the
+current session digest (same payload) to the clipboard.
 
 ## `match_health` view (one row per game)
 

@@ -121,6 +121,65 @@ func test_felt_lag_markers_capped_but_count_keeps_climbing() -> void:
 	assert_eq(markers.size(), NetworkSessionSummary.MAX_FELT_LAG_MARKERS)
 	assert_eq(s.felt_lag_count, NetworkSessionSummary.MAX_FELT_LAG_MARKERS + 10)
 
+func test_auto_marker_recorded_with_trigger_and_timestamp() -> void:
+	var s := _make()
+	s.record_auto_marker(42.0, "puck_hard_snaps", {"puck_mode": "trajectory"})
+	assert_eq(s.auto_marker_count, 1)
+	var markers: Array = s.to_dict()["auto_markers"]
+	assert_eq(markers.size(), 1)
+	assert_eq(markers[0]["trigger"], "puck_hard_snaps")
+	assert_eq(markers[0]["at_sec"], 42.0)
+	assert_eq(markers[0]["puck_mode"], "trajectory")
+
+func test_auto_marker_per_trigger_cooldown() -> void:
+	# A sustained failure records its ONSET, not one marker per second; an
+	# independent trigger is not throttled by another's cooldown.
+	var s := _make()
+	s.record_auto_marker(10.0, "host_stall", {})
+	s.record_auto_marker(11.0, "host_stall", {})  # inside cooldown — dropped
+	s.record_auto_marker(12.0, "extrapolation", {})  # different trigger — fires
+	s.record_auto_marker(10.0 + NetworkSessionSummary.AUTO_MARKER_COOLDOWN_SEC, "host_stall", {})
+	assert_eq(s.auto_marker_count, 3)
+	assert_eq((s.to_dict()["auto_markers"] as Array).size(), 3)
+
+func test_auto_marker_count_climbs_past_storage_cap() -> void:
+	var s := _make()
+	var t: float = 0.0
+	for i in NetworkSessionSummary.MAX_AUTO_MARKERS + 5:
+		s.record_auto_marker(t, "host_stall", {})
+		t += NetworkSessionSummary.AUTO_MARKER_COOLDOWN_SEC
+	assert_eq((s.to_dict()["auto_markers"] as Array).size(), NetworkSessionSummary.MAX_AUTO_MARKERS)
+	assert_eq(s.auto_marker_count, NetworkSessionSummary.MAX_AUTO_MARKERS + 5)
+
+func test_history_attached_within_budget_only() -> void:
+	# History is the bulky part of a marker; only the first
+	# MAX_MARKERS_WITH_HISTORY markers (across both kinds) carry it, keeping
+	# the row under the table's jsonb size cap.
+	var s := _make()
+	var history: Array[Dictionary] = [{"at_sec": 1.0, "rtt_ms": 50.0}]
+	for i in NetworkSessionSummary.MAX_MARKERS_WITH_HISTORY:
+		s.record_felt_lag(float(i), {}, history)
+	s.record_felt_lag(99.0, {}, history)  # budget spent — lightweight marker
+	var markers: Array = s.to_dict()["felt_lag_markers"]
+	assert_true(markers[0].has("history"))
+	assert_eq((markers[0]["history"] as Array)[0]["rtt_ms"], 50.0)
+	assert_true(markers[NetworkSessionSummary.MAX_MARKERS_WITH_HISTORY - 1].has("history"))
+	assert_false(markers[NetworkSessionSummary.MAX_MARKERS_WITH_HISTORY].has("history"))
+
+func test_history_budget_shared_across_marker_kinds() -> void:
+	var s := _make()
+	var history: Array[Dictionary] = [{"at_sec": 1.0}]
+	for i in NetworkSessionSummary.MAX_MARKERS_WITH_HISTORY:
+		s.record_felt_lag(float(i), {}, history)
+	s.record_auto_marker(50.0, "host_stall", {}, history)
+	var auto: Array = s.to_dict()["auto_markers"]
+	assert_false(auto[0].has("history"))
+
+func test_felt_lag_without_history_stays_lightweight() -> void:
+	var s := _make()
+	s.record_felt_lag(1.0, {"rtt_ms": 10.0})
+	assert_false((s.to_dict()["felt_lag_markers"][0] as Dictionary).has("history"))
+
 func test_marker_snapshot_is_copied_not_aliased() -> void:
 	# record_felt_lag duplicates the snapshot; mutating the caller's dict after
 	# must not change the stored marker.

@@ -2996,11 +2996,23 @@ func _observe_telemetry() -> void:
 		extrapolating = extrapolating or puck_controller.is_extrapolating
 	_telemetry.observe_actors(skater_buf, puck_buf, goalie_buf, extrapolating)
 	# Connection facts the static record_* path doesn't carry — sampled by the
-	# session fold at window rollover. RTT is the client's round-trip to host;
-	# the host folds its peer count instead (its own RTT is 0).
+	# session fold at window rollover. Clients refresh their link-to-host reads;
+	# the host refreshes its per-peer view instead (its own RTT/loss are 0).
 	if not NetworkManager.is_offline_mode:
-		_telemetry.current_rtt_ms = NetworkManager.get_rtt_ms() if not NetworkManager.is_host else 0.0
-		_telemetry.current_peer_count = NetworkManager.connected_peer_ids().size() if NetworkManager.is_host else 0
+		if NetworkManager.is_host:
+			var peers: PackedInt32Array = NetworkManager.connected_peer_ids()
+			_telemetry.current_peer_count = peers.size()
+			var worst_rtt: float = 0.0
+			var worst_loss: float = 0.0
+			for pid: int in peers:
+				worst_rtt = maxf(worst_rtt, float(NetworkManager.get_peer_ping_ms(pid)))
+				worst_loss = maxf(worst_loss, NetworkManager.get_peer_loss_rate(pid))
+			_telemetry.current_worst_peer_rtt_ms = worst_rtt
+			_telemetry.current_worst_peer_loss_pct = worst_loss
+		else:
+			_telemetry.current_rtt_ms = NetworkManager.get_rtt_ms()
+			_telemetry.current_delay_spread_ms = NetworkManager.get_packet_delay_spread_ms()
+			_telemetry.current_clock_correction_ms = NetworkManager.get_clock_correction_ms()
 
 
 func _sync_stats_to_clients() -> void:
