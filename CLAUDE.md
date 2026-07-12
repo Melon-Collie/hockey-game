@@ -114,6 +114,7 @@ Before touching networking code (RPCs, reconcile, prediction, interpolation, lag
 | Submit bug report from UI | Instantiate `BugReportDialog`, `add_child` it, call `.open()` on button press |
 | New RPC | `NetworkManager` (define) → emit a signal → `GameManager._wire_network_signals()` (connect) |
 | New phase-entry side effect | `PhaseCoordinator` |
+| New practice drill | Append to `DrillRegistry` (id + display name + manager path) → manager node in `Scripts/game/` owning the drill loop (`DrillSession` for the score tally) → `DrillHUD` subclass for its strings. No NetworkManager/game_scene/SideMenu wiring needed |
 | New controller behavior | Method on `SkaterController`; `GameManager` calls it, never pokes internals directly |
 | New reconcile logic | `domain/rules/reconciliation_rules.gd` + GUT test |
 | New bot AI evaluator (shot/pass/carry/position value) | `domain/ai/action_scoring.gd` + GUT calibration test — build it as a grounded model, not a magic curve (see Code Conventions → *Grounded models*, `ARCHITECTURE.md` → **Bot AI**) |

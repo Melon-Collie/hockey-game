@@ -8,6 +8,11 @@ extends GutTest
 # test_tutorial_scripts_compile.)
 
 
+func test_drill_hud_base_compiles() -> void:
+	var script: GDScript = load("res://Scripts/ui/drill_hud.gd")
+	assert_not_null(script, "drill_hud.gd failed to compile")
+
+
 func test_penalty_drill_manager_compiles() -> void:
 	var script: GDScript = load("res://Scripts/game/penalty_drill_manager.gd")
 	assert_not_null(script, "penalty_drill_manager.gd failed to compile")

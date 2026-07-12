@@ -1,7 +1,8 @@
 extends Node
 
 # Offline shot-accuracy drill: "how many targets can you hit out of 10".
-# Spawned by game_scene.gd when NetworkManager.is_shot_accuracy_mode is set.
+# Spawned by game_scene.gd via DrillRegistry when NetworkManager.drill_id
+# selects it.
 # Each attempt stages the shooter in the slot with the puck a stride ahead and
 # lights ONE random bullseye from AccuracyDrillRules' pool — the four corners,
 # the five-hole, or the mid-side holes a LOW-loft saucer reaches. The released
@@ -123,7 +124,8 @@ func _begin_attempt() -> void:
 	_lit[0] = AccuracyDrillRules.TARGET_POSITIONS[_target_index]
 	_target_node.show_targets(_lit, _GOAL_PLANE_Z, _TARGET_FRONT_OFFSET)
 	_hud.set_progress(_session.current_attempt_number(), _session.total_attempts,
-			_session.makes, AccuracyDrillRules.TARGET_NAMES[_target_index])
+			_session.makes)
+	_hud.set_target(AccuracyDrillRules.TARGET_NAMES[_target_index])
 
 
 func _resolve_attempt(hit: bool) -> void:
@@ -234,7 +236,7 @@ func _on_retry() -> void:
 
 func _on_exit() -> void:
 	_stage = Stage.DONE
-	NetworkManager.is_shot_accuracy_mode = false
+	NetworkManager.drill_id = ""
 	GameManager.return_to_free_play()
 
 
