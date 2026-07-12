@@ -108,6 +108,49 @@ const _PASS_WALL_SIZE: Vector3 = Vector3(1.8, 0.12, 0.08)
 const _RECEIVE_SPEED_SOFT:      float = 12.0
 const _RECEIVE_SPEED_HOT:       float = 24.0
 const _RECEIVE_CATCHES_PER_WAVE: int  = 2
+# A missed pass that slides this far beyond the receiver is decisively missed —
+# retire it there rather than waiting for it to settle at the boards.
+const _PASS_MISS_BEYOND_M: float = 2.0
+
+# ── Reps & spawn variation ────────────────────────────────────────────────────
+# One-shot contact skills complete after several successful reps, restaged from
+# varied spots so the skill generalises (one strip can be a fluke; three from
+# different approaches is a skill). Steps absent from the table need one rep.
+# Timing skills that already re-fire until success (one-timer, shot block) and
+# the execution-gated passes (touch, saucer) stay single-rep.
+const _STEP_REPS: Dictionary = {
+	TutorialRegistry.STEP_STICKCHECK: 3,
+	TutorialRegistry.STEP_STICK_LIFT: 2,
+	TutorialRegistry.STEP_BODY_CHECK: 2,
+	TutorialRegistry.STEP_DEFLECT: 2,
+	TutorialRegistry.STEP_BLADE_LIFT: 2,
+	TutorialRegistry.STEP_QUICK_PASS: 2,
+}
+# (player spot, carrier spot) per stick-check rep — head-on, then two fresh
+# approach angles.
+const _STICKCHECK_SPOTS: Array = [
+	[Vector3(0.0, 1.0, 4.0), Vector3(0.0, 1.0, 0.0)],
+	[Vector3(-4.5, 1.0, -2.0), Vector3(-1.0, 1.0, -5.0)],
+	[Vector3(4.0, 1.0, -9.0), Vector3(1.5, 1.0, -5.5)],
+]
+# (player spot, target spot) per body-check rep — the straight lane, then a
+# diagonal so the second hit is lined up from a different angle.
+const _BODY_CHECK_SPOTS: Array = [
+	[Vector3(-4.0, 1.0, 0.0), Vector3(4.0, 1.0, 0.0)],
+	[Vector3(3.0, 1.0, 5.0), Vector3(-2.0, 1.0, -1.0)],
+]
+# Feeder spots per deflect / blade-lift rep — a straight-on feed, then an
+# angled feed from the wing (the player holds position at z = 5).
+const _FEED_SPOTS: Array = [
+	Vector3(0.0, 1.0, 5.0 - _FEED_DISTANCE),
+	Vector3(-4.5, 1.0, 6.5 - _FEED_DISTANCE),
+]
+# Teammate spots per quick-pass rep — the receiver relocates so the second
+# pass takes a fresh read and aim, not a repeat click.
+const _QUICK_PASS_SPOTS: Array = [
+	Vector3(0.0, 1.0, -7.0),
+	Vector3(-5.0, 1.0, -4.5),
+]
 
 # ── References ────────────────────────────────────────────────────────────────
 
@@ -160,6 +203,12 @@ var _hud: TutorialHUD = null
 # helper for the active step when it reaches 0. Feed steps also reuse it as
 # the between-attempts beat.
 var _prefire_timer: float = -1.0
+
+# Rep tracking for the multi-rep steps (_STEP_REPS). _rep_restage_timer counts
+# down the beat between a credited rep and the next spawn variation; the
+# step's own watch logic pauses while it runs.
+var _reps_done:         int   = 0
+var _rep_restage_timer: float = -1.0
 
 # ── Shooting module (drill-based) ─────────────────────────────────────────────
 # The net the tutorial player attacks (team 0 shoots toward -Z) and its lateral
@@ -507,6 +556,8 @@ func _begin_step(index: int) -> void:
 	_one_timer_armed        = false
 	_one_timer_restage_pending = false
 	_elev_alert_shown       = false
+	_reps_done              = 0
+	_rep_restage_timer      = -1.0
 
 	var step_id: int = _current_step_id()
 	var step: TutorialStep = _step_defs[index]
@@ -541,12 +592,14 @@ func _begin_step(index: int) -> void:
 			# A teammate feeder holds the puck through the read delay (visible
 			# on his stick, so the camera frames the play instead of chasing an
 			# off-screen arrow), then fires it at the player's live position.
+			# Two reps: the second feed comes angled from the wing (_FEED_SPOTS).
 			# Completion comes from the puck-touch signal (a deliberate deflect
 			# for DEFLECT, a raised-blade touch for BLADE_LIFT).
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0), Vector2(0.0, -1.0))
-			_ensure_puppet(Vector3(0.0, 1.0, 5.0 - _FEED_DISTANCE), 0)
+			_ensure_puppet(_FEED_SPOTS[0], 0)
 			GameManager.tutorial_give_puck(_puppet_record)
 			_prefire_timer = _PREFIRE_DELAY
+			_update_rep_objective()
 			_on_puck_touch_callable = func(toucher: Skater) -> void:
 				_on_feed_touched(toucher)
 			_puck.puck_touched_loose.connect(_on_puck_touch_callable)
@@ -606,53 +659,45 @@ func _begin_step(index: int) -> void:
 		STEP_STICK_LIFT:
 			# Same puppet-with-the-puck setup as the stick-check step, but the
 			# player strips by lifting the puppet's stick (blade up + under it)
-			# instead of poking. The player starts BESIDE the carrier (not in
-			# front) so their blade isn't already through the puck at spawn —
-			# approaching from the flank slides under the shaft rather than
-			# poking the carry. Completion only fires for a lift (see the
+			# instead of poking. Two reps, alternating flanks — the player
+			# starts BESIDE the carrier (not in front) so their blade isn't
+			# already through the puck at spawn. Positioning lives in
+			# _stage_rep; completion only fires for a lift (see the
 			# puck_stripped handler); a stray poke re-pins the puck (see _process).
-			_local_controller.teleport_to(Vector3(2.6, 1.0, 0.0), Vector2(-1.0, 0.0))
-			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
-			# The carrier plays down-ice rather than squaring to the learner, so
-			# the flank approach stays a flank approach.
-			_puppet_record.controller.set_spawn_facing(Vector2(0.0, -1.0))
-			var lift_ai: AIController = _puppet_record.controller as AIController
-			if lift_ai != null:
-				lift_ai.script_aim_at(
-						_puppet_record.skater.global_position + Vector3(0.0, 0.0, -3.0))
-			GameManager.tutorial_give_puck(_puppet_record)
+			_update_rep_objective()
+			_stage_rep()
 			_on_stick_lift_callable = func(_ex: Skater) -> void:
 				# A lifted blade can't poke (puck_controller skips the poke path
 				# when blade_up), so a strip while the player's blade is up is a
 				# stick lift. A no-blade poke falls through to the _process re-pin.
 				if _skater.blade_up:
-					_complete_step()
+					_complete_rep()
 			_puck.puck_stripped.connect(_on_stick_lift_callable)
 
 		STEP_STICKCHECK:
-			# Spawn far enough back that the player's blade can't already be
+			# Three strips from varied approaches (_STICKCHECK_SPOTS); the spots
+			# keep the player far enough back that their blade can't already be
 			# through the carrier's puck on frame 1 (2.5 m auto-completed the
-			# step at spawn — both reaches overlapped).
-			_local_controller.teleport_to(Vector3(0.0, 1.0, 4.0), Vector2(0.0, -1.0))
-			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
-			# Give the puppet the puck — PuckController pins it to the bot's blade
-			# each physics frame. The bot's team_id resolver (wired by spawn_bot)
-			# returns team 1, so apply_poke_check recognises the player as opposing
-			# and the strip fires when the player's blade sweeps through.
-			GameManager.tutorial_give_puck(_puppet_record)
+			# step at spawn — both reaches overlapped). PuckController pins the
+			# granted puck to the bot's blade each physics frame, and the bot's
+			# team-1 resolver makes apply_poke_check treat the player as
+			# opposing, so the strip fires when the blade sweeps through.
+			_update_rep_objective()
+			_stage_rep()
 			_on_stickcheck_callable = func(_ex: Skater) -> void:
-				_complete_step()
+				_complete_rep()
 			_puck.puck_stripped.connect(_on_stickcheck_callable)
 
 		STEP_BODY_CHECK:
-			_local_controller.teleport_to(Vector3(-4.0, 1.0, 0.0))
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
 			# Prevent race-condition re-pickup: drop() is sync but set_puck_position is
 			# deferred by Jolt; one physics tick sees the puck at the old position.
 			_puck.set_skater_cooldown(_skater, 0.5)
-			_ensure_puppet(Vector3(4.0, 1.0, 0.0))
+			# Two hits from different approach lines (_BODY_CHECK_SPOTS).
+			_update_rep_objective()
+			_stage_rep()
 			_on_body_check_callable = func(_victim: Skater, _force: float, _dir: Vector3) -> void:
-				_complete_step()
+				_complete_rep()
 			_skater.body_checked_player.connect(_on_body_check_callable)
 
 		STEP_OFFSIDES:
@@ -684,6 +729,9 @@ func _begin_step(index: int) -> void:
 
 		STEP_QUICK_PASS, STEP_TOUCH_PASS:
 			_setup_passing_drill(true)
+			# Quick pass runs two reps — the receiver relocates between them
+			# (_QUICK_PASS_SPOTS); touch pass is single-rep.
+			_update_rep_objective()
 
 		STEP_SAUCER_PASS:
 			_setup_passing_drill(true)
@@ -702,6 +750,84 @@ func _begin_step(index: int) -> void:
 			GameManager.tutorial_give_puck(_puppet_record)
 			_prefire_timer = _PREFIRE_DELAY
 			_update_receive_objective()
+
+
+func _reps_required() -> int:
+	return _STEP_REPS.get(_current_step_id(), 1)
+
+
+# Marks one successful repetition of the active step. Single-rep steps
+# complete outright; multi-rep steps tick the counter, play the target-hit
+# blip, and restage at the next spawn variation after the standard beat.
+func _complete_rep() -> void:
+	if _rep_restage_timer >= 0.0 or _complete_flash_timer > 0.0:
+		return  # this attempt is already credited (double-fire guard)
+	_reps_done += 1
+	if _reps_done >= _reps_required():
+		_complete_step()
+		return
+	SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
+	_update_rep_objective()
+	_hud.clear_alert()
+	_rep_restage_timer = _REATTEMPT_DELAY
+
+
+# Objective line for the multi-rep steps ("Strips — 1 / 3"). No-op for
+# single-rep steps so their objective line stays free for other uses.
+func _update_rep_objective() -> void:
+	if _reps_required() <= 1:
+		return
+	var noun: String
+	match _current_step_id():
+		STEP_STICKCHECK: noun = "Strips"
+		STEP_STICK_LIFT: noun = "Lifts"
+		STEP_BODY_CHECK: noun = "Hits"
+		STEP_DEFLECT: noun = "Tips"
+		STEP_BLADE_LIFT: noun = "Knock-downs"
+		STEP_QUICK_PASS: noun = "Passes"
+		_: noun = "Reps"
+	_hud.set_objective("%s — %d / %d" % [noun, _reps_done, _reps_required()])
+
+
+# (Re)stages the active step's positions for the CURRENT rep index — called at
+# step entry (rep 0) by the varied-spawn steps and again after each credited
+# rep, so the spot tables give every rep a fresh approach.
+func _stage_rep() -> void:
+	match _current_step_id():
+		STEP_STICKCHECK:
+			var spots: Array = _STICKCHECK_SPOTS[_reps_done % _STICKCHECK_SPOTS.size()]
+			var player_pos: Vector3 = spots[0]
+			var bot_pos: Vector3 = spots[1]
+			_local_controller.teleport_to(player_pos, Vector2(
+					bot_pos.x - player_pos.x, bot_pos.z - player_pos.z).normalized())
+			_ensure_puppet(bot_pos)
+			GameManager.tutorial_give_puck(_puppet_record)
+		STEP_STICK_LIFT:
+			# Alternate flanks so the second lift comes from the other side.
+			var side: float = 2.6 if (_reps_done % 2) == 0 else -2.6
+			_local_controller.teleport_to(Vector3(side, 1.0, 0.0), Vector2(-signf(side), 0.0))
+			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
+			# The carrier plays down-ice rather than squaring to the learner, so
+			# the flank approach stays a flank approach.
+			_puppet_record.controller.set_spawn_facing(Vector2(0.0, -1.0))
+			var lift_ai: AIController = _puppet_record.controller as AIController
+			if lift_ai != null:
+				lift_ai.script_aim_at(
+						_puppet_record.skater.global_position + Vector3(0.0, 0.0, -3.0))
+			GameManager.tutorial_give_puck(_puppet_record)
+		STEP_BODY_CHECK:
+			var spots: Array = _BODY_CHECK_SPOTS[_reps_done % _BODY_CHECK_SPOTS.size()]
+			var player_pos: Vector3 = spots[0]
+			var bot_pos: Vector3 = spots[1]
+			_local_controller.teleport_to(player_pos, Vector2(
+					bot_pos.x - player_pos.x, bot_pos.z - player_pos.z).normalized())
+			_ensure_puppet(bot_pos)
+		STEP_DEFLECT, STEP_BLADE_LIFT:
+			_ensure_puppet(_FEED_SPOTS[_reps_done % _FEED_SPOTS.size()], 0)
+			_restage_feed_on_bot()
+		STEP_QUICK_PASS:
+			_ensure_puppet(_QUICK_PASS_SPOTS[_reps_done % _QUICK_PASS_SPOTS.size()], 0)
+			_stage_puck_for_player()
 
 
 func _complete_step() -> void:
@@ -795,6 +921,16 @@ func _process(delta: float) -> void:
 				STEP_ONE_TIMER:
 					_one_timer_armed = true
 					_fire_feed_from_bot(_ONE_TIMER_CROSS_SPEED)
+
+	# Between-reps beat: a credited rep restages at the next spawn variation
+	# after the standard delay; the step's own watch logic pauses meanwhile so
+	# it can't double-credit or refire against half-staged positions.
+	if _rep_restage_timer >= 0.0:
+		_rep_restage_timer -= delta
+		if _rep_restage_timer <= 0.0:
+			_rep_restage_timer = -1.0
+			_stage_rep()
+		return
 
 	# Track WRISTER_AIM entry (quick vs wrist shot distinction) and the peak
 	# predicted release power while aiming (wrist-drill and touch-pass gates).
@@ -999,10 +1135,10 @@ func _on_feed_touched(toucher: Skater) -> void:
 	match _current_step_id():
 		STEP_DEFLECT:
 			if _skater.deflect_intent:
-				_complete_step()
+				_complete_rep()
 		STEP_BLADE_LIFT:
 			if _skater.blade_up:
-				_complete_step()
+				_complete_rep()
 
 
 # ── One-timer helpers ─────────────────────────────────────────────────────────
@@ -1585,7 +1721,8 @@ func _passing_tick(delta: float) -> void:
 			and _puck.carrier == _puppet_record.skater:
 		_pass_live = false
 		if _pass_qualifies and not _pass_hot:
-			_complete_step()  # pass stays on the teammate's blade through the flash
+			# Pass stays on the teammate's blade through the rep blip / flash.
+			_complete_rep()
 			return
 		if _pass_hot:
 			_hud.set_alert("Too hot — sweep slower for a touch pass.")
@@ -1596,12 +1733,19 @@ func _passing_tick(delta: float) -> void:
 		return
 	# A hot pass that bounced off the teammate's blade, a saucer that clanked
 	# off the board, or a pass that slid wide: retire it once it stops making
-	# meaningful progress (or after the safety cap).
+	# meaningful progress, once it's clearly slid PAST the receiver (waiting
+	# for a missed pass to settle at the boards read as a hang), or after the
+	# safety cap. The lane runs toward -Z, so past = beyond the bot's z.
+	var past_receiver: bool = false
+	if _puppet_record != null and is_instance_valid(_puppet_record.skater):
+		past_receiver = _puck.carrier == null and _puck.get_puck_position().z \
+				< _puppet_record.skater.global_position.z - _PASS_MISS_BEYOND_M
 	if _puck.carrier == null and _puck.get_puck_velocity().length() <= _SHOT_REST_SPEED:
 		_pass_stall_time += delta
 	else:
 		_pass_stall_time = 0.0
-	if _pass_stall_time >= _SHOT_STALL_GRACE or _pass_air_time >= 2.0 * _SHOT_MAX_TIME:
+	if past_receiver or _pass_stall_time >= _SHOT_STALL_GRACE \
+			or _pass_air_time >= 2.0 * _SHOT_MAX_TIME:
 		_pass_live = false
 		if _current_step_id() == STEP_TOUCH_PASS and _pass_hot:
 			_hud.set_alert("Too hot — it bounced off. Sweep slower.")
