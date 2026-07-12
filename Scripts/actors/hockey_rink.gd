@@ -14,7 +14,9 @@ extends StaticBody3D
 	set(v):
 		corner_radius = v
 		_rebuild()
-@export var wall_height: float = 1.07:
+# Default single-sourced from GameRules.BOARD_TOP_HEIGHT (the HUD's
+# puck-behind-boards check reads that constant); don't override in the scene.
+@export var wall_height: float = GameRules.BOARD_TOP_HEIGHT:
 	set(v):
 		wall_height = v
 		_rebuild()
@@ -283,11 +285,16 @@ func _rebuild() -> void:
 	_add_perimeter_band(stations, glass_half_thick, glass_half_thick,
 			glass_y_bot, glass_y_top, _make_glass_material())
 
-	# Single collision around the entire perimeter at the boards' inner
-	# radius. Replaces the BoxShape3D / ConcavePolygonShape3D pair that
-	# previously caught fast pucks at the straight↔corner seam. Collision uses
-	# its own (much higher) corner tessellation so rim-around contact loss stays
-	# under 1% per corner.
+	# Single collision around the entire perimeter. Replaces the BoxShape3D /
+	# ConcavePolygonShape3D pair that previously caught fast pucks at the
+	# straight↔corner seam. Collision uses its own (much higher) corner
+	# tessellation so rim-around contact loss stays under 1% per corner.
+	#
+	# The INNER face sits at the kickplate lip (kick_half_thick), the innermost
+	# visible surface, so the puck stops at what the player sees instead of
+	# sinking 1 cm into the kickplate against the boards' face. This is the same
+	# surface the blade clamp, AI trajectory reflection, and puck-OOB check use
+	# (GameRules.INNER_* / KICKPLATE_INWARD_LIP — keep them in sync).
 	#
 	# The collision extends ABOVE the visible glass (glass_y_top ≈ 2.90 m) up to
 	# COLLISION_OVERGLASS_TOP: the puck's vertical clamp (Puck.max_height + its
@@ -296,7 +303,7 @@ func _rebuild() -> void:
 	# and the clamp and escaped the rink. Collision-only — the visual glass stays
 	# at glass_y_top. Keep COLLISION_OVERGLASS_TOP comfortably above Puck.max_height.
 	var collision_stations: Array = _build_perimeter_stations(corner_collision_segments)
-	_add_perimeter_collision(collision_stations, board_half_thick, board_half_thick,
+	_add_perimeter_collision(collision_stations, kick_half_thick, board_half_thick,
 			0.0, maxf(glass_y_top, COLLISION_OVERGLASS_TOP))
 
 	# --- Painted stripes ---
@@ -923,8 +930,9 @@ func _add_perimeter_band(stations: Array,
 
 
 # Builds and adds a single ConcavePolygonShape3D wrapping the entire wall.
-# inner_offset / outer_offset match the boards' wall_thickness/2 so the
-# collision sits at the same radius as the visible inner board face.
+# inner_offset is the kickplate's half-thickness so the collision's inner face
+# sits at the kickplate lip (the innermost visible surface); outer_offset is
+# the boards' wall_thickness/2 (the outer board face).
 func _add_perimeter_collision(stations: Array,
 		inner_offset: float, outer_offset: float,
 		y_bot: float, y_top: float) -> void:
