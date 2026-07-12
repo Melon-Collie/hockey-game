@@ -40,6 +40,13 @@ signal event_emitted(event: Dictionary)
 signal roster_rebuild_requested(events_through_t: Array)
 signal game_state_changed(game_state: Dictionary)
 signal playback_ended
+# Fires right after a frame is applied whose world state jumped discontinuously
+# from the previously shown one: a seek, a recording-gap skip, or a faceoff
+# reset (dead-puck teleport to the dot). Tracking cameras should CUT to the new
+# action on this — smoothly panning across a teleport reads as the camera
+# drifting off the play (e.g. lingering on the goalie while the faceoff frame
+# is already up).
+signal playback_discontinuity
 
 var _codec: WorldStateCodec = null
 # peer_id → PlayerRecord; built by the viewer from the .mreplay header roster.
@@ -77,6 +84,15 @@ var _frame_idx_hint: int = 0
 # respawns every actor, so doing it per-pixel during a slider drag produces
 # a visible strobe. seek_drag() defers the rebuild until drag_ended.
 var _has_pending_rebuild: bool = false
+
+# Armed by seeks, gap skips, and the faceoff-reset bracket advance; consumed
+# (emitted as playback_discontinuity) at the end of the next successful
+# _apply_current_frame, so listeners always see the post-jump world state.
+var _pending_discontinuity: bool = false
+# Phase of the currently-applied bracket's FROM frame — detects the advance
+# onto a faceoff-reset keyframe (see _apply_current_frame). -1 until the
+# first bracket decodes.
+var _last_from_phase: int = -1
 
 
 func setup(codec: WorldStateCodec,
@@ -188,6 +204,7 @@ func _seek_internal(t: float, allow_rebuild: bool) -> void:
 	if was_backward:
 		_frame_idx_hint = 0  # backward seek invalidates forward scan hint
 		_has_pending_rebuild = true
+	_pending_discontinuity = true
 	_virtual_clock = t
 	_cached_from_idx = -1
 	_cached_to_idx = -1
@@ -281,6 +298,7 @@ func _skip_recording_gaps() -> void:
 	if _virtual_clock - _timestamps[idx] < _GAP_DWELL_S:
 		return
 	_virtual_clock = _timestamps[idx + 1]
+	_pending_discontinuity = true
 
 
 func _apply_current_frame(sim_delta: float) -> void:
@@ -298,13 +316,23 @@ func _apply_current_frame(sim_delta: float) -> void:
 		_cached_to_snap = _codec.decode_for_replay(_frames[idx_next])
 		_cached_from_idx = idx
 		_cached_to_idx = idx_next
+		# Advancing onto a FACEOFF_PREP keyframe is the moment the world
+		# teleports to the faceoff layout — a discontinuity even when the
+		# preceding bracket was short (whistle faceoffs: the reset frame
+		# arrives one normal ~33 ms bracket after the last live frame, so
+		# the gap-skip path above never sees it).
+		var from_phase: int = _snap_phase(_cached_from_snap)
+		if from_phase == GamePhase.Phase.FACEOFF_PREP \
+				and _last_from_phase != GamePhase.Phase.FACEOFF_PREP:
+			_pending_discontinuity = true
+		_last_from_phase = from_phase
 	if _cached_from_snap.is_empty():
 		return
 	var bracket_dt: float = _timestamps[idx_next] - _timestamps[idx]
 	var t: float
 	if bracket_dt > _GAP_THRESHOLD_S:
 		t = 0.0  # hold FROM across the gap; snap when clock reaches TO
-	elif bracket_dt > 0.0:
+	elif bracket_dt > 0.0 and not _is_faceoff_reset_bracket():
 		t = clampf((_virtual_clock - _timestamps[idx]) / bracket_dt, 0.0, 1.0)
 	else:
 		t = 0.0
@@ -318,6 +346,27 @@ func _apply_current_frame(sim_delta: float) -> void:
 	if not gs.is_empty() and gs != _last_emitted_game_state:
 		_last_emitted_game_state = gs
 		game_state_changed.emit(gs)
+	if _pending_discontinuity:
+		_pending_discontinuity = false
+		playback_discontinuity.emit()
+
+
+# A bracket whose TO frame enters FACEOFF_PREP spans the dead-puck reset (puck
+# teleported to the dot, skaters relocated to their approach starts). Tweening
+# across it would sweep every actor through the rink in one bracket — hold the
+# FROM frame instead and let the reset land as a clean cut when the clock
+# reaches the keyframe.
+func _is_faceoff_reset_bracket() -> bool:
+	var to_phase: int = _snap_phase(_cached_to_snap)
+	return to_phase == GamePhase.Phase.FACEOFF_PREP \
+			and _snap_phase(_cached_from_snap) != to_phase
+
+
+static func _snap_phase(snap: Dictionary) -> int:
+	var gs: Variant = snap.get("game_state")
+	if gs is Dictionary:
+		return int((gs as Dictionary).get("phase", -1))
+	return -1
 
 
 func _emit_due_events() -> void:

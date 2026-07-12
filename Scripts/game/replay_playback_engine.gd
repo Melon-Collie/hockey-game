@@ -13,7 +13,10 @@ extends RefCounted
 # Skaters: Hermite position (velocity as tangent), Hermite angle for facing
 # and upper_body_rotation, linear lerp for blade/hand (local-space, no
 # derivative). Puck: Hermite position with velocity zeroed so the frozen
-# RigidBody doesn't drift between render frames. Goalies: position / rotation
+# RigidBody doesn't drift between render frames — except while CARRIED, where
+# the puck pins to the carrier's just-applied blade (see _pin_carried_puck)
+# because independently-interpolated puck and blade paths visibly jitter
+# against each other. Goalies: position / rotation
 # / five_hole_openness lerp, state_enum is whichever bracket end is closer
 # (apply_replay_state sets those then calls _update_body_parts so pad / body
 # animations track the recorded pose rather than re-simulating from AI).
@@ -80,8 +83,9 @@ static func apply_interpolated_snapshot(
 	var fp: PuckNetworkState = from_snap.puck
 	var tp: PuckNetworkState = to_snap.puck
 	if puck != null and fp != null and tp != null:
-		puck.set_puck_position(BufferedStateInterpolator.hermite(
-				fp.position, fp.velocity, tp.position, tp.velocity, t, dt))
+		if not _pin_carried_puck(from_snap, to_snap, records, puck):
+			puck.set_puck_position(BufferedStateInterpolator.hermite(
+					fp.position, fp.velocity, tp.position, tp.velocity, t, dt))
 		puck.set_puck_velocity(Vector3.ZERO)
 
 	var from_goalies: Array = from_snap.goalies
@@ -118,3 +122,41 @@ static func apply_interpolated_snapshot(
 		interp.blocker_pitch = lerpf(fg.blocker_pitch, tg.blocker_pitch, t)
 		interp.head_yaw = lerpf(fg.head_yaw, tg.head_yaw, t)
 		goalie_controllers[i].apply_replay_state(interp, sim_delta)
+
+
+# While a skater carries the puck, interpolating the recorded puck positions
+# independently of the carrier makes the puck jitter on the blade: the blade
+# rides the interpolated skater pose while the puck rides its own Hermite
+# bracket (with near-zero recorded velocity — the carried RigidBody is pinned,
+# not simulated — so each bracket eases in/out instead of tracking the blade).
+# Live play solves this by pinning a remote carrier's puck to the interpolated
+# blade (PuckController._pin_puck_to_carrier); do the same here. Runs AFTER the
+# skater loop so the carrier's replay pose (position, blade, top hand) is
+# already applied for this frame.
+#
+# Skipped (returns false → caller interpolates the recorded positions) when:
+#   - there is no carrier, or the bracket ends disagree on who carries it
+#     (pickup / release brackets are discontinuous either way);
+#   - the carrier's actor isn't available in `records`;
+#   - the carrier is mid slapshot wind-up: the live puck pins to a stable ice
+#     offset (Skater.enter_slapshot_pinning) while the blade lifts overhead,
+#     and that pin state isn't replicated — the recorded puck positions ARE
+#     the stable pin, so following the elevated blade would be wrong.
+static func _pin_carried_puck(
+		from_snap: Dictionary,
+		to_snap: Dictionary,
+		records: Dictionary,
+		puck: Puck) -> bool:
+	var carrier_id: int = int(to_snap.carrier_peer_id)
+	if carrier_id == -1 or int(from_snap.carrier_peer_id) != carrier_id:
+		return false
+	var record: PlayerRecord = records.get(carrier_id)
+	if record == null or record.controller == null \
+			or record.skater == null or not is_instance_valid(record.skater):
+		return false
+	if record.skater.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
+		return false
+	var contact: Vector3 = record.skater.get_blade_contact_global()
+	contact.y = puck.ice_height
+	puck.set_puck_position(contact)
+	return true

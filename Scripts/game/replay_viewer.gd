@@ -247,6 +247,11 @@ func _start_playback(frames: Array) -> void:
 	# skater gait's faceoff ready-stance reads it through the game_state
 	# interface, so replayed faceoffs crouch at the dot like live ones.
 	_driver.game_state_changed.connect(_on_replay_game_state)
+	# Cut the tracking cameras on seeks / gap skips / faceoff resets, so the
+	# broadcast cam frames the faceoff the moment the reset frame is up
+	# instead of panning across the rink from wherever play stopped.
+	_driver.playback_discontinuity.connect(
+			func() -> void: _camera_director.on_playback_discontinuity())
 	_driver.play()
 
 
