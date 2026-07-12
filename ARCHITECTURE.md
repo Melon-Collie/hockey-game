@@ -269,13 +269,16 @@ Player-first guarantee: weighted target is clamped so player never exceeds `play
 | Phase | Duration | Description |
 |-------|----------|-------------|
 | `PLAYING` | Until goal or clock expires | Normal gameplay; period clock counts down |
-| `GOAL_SCORED` | 2s (`GOAL_PAUSE_DURATION`) | Dead puck, celebration freeze |
-| `FACEOFF_PREP` | 0.5s (`FACEOFF_PREP_DURATION`) | Players teleport to dots, puck resets, goalies reset to crease |
-| `FACEOFF` | Until pickup or 10s timeout | Puck live at center dot, waiting for a player to pick it up |
-| `END_OF_PERIOD` | 3s (`END_OF_PERIOD_PAUSE`) | Period clock hit zero; brief pause before next-period faceoff prep |
+| `GOAL_CELEBRATION` | 1.5s (`GOAL_CELEBRATION_DURATION`) | Post-goal beat: movement allowed, puck pickup-locked; banner + VFX play |
+| `GOAL_SCORED` | Replay length (2s `GOAL_PAUSE_DURATION` fallback if the replay never starts) | Goal replay cinematic; dead puck |
+| `FACEOFF_PREP` | 2s (`FACEOFF_PREP_DURATION`) + skate-in extra / intro hold extensions | Skaters skate in to their dots (bench intro, staged post-goal, or from where play stopped), puck resets, goalies reset to crease |
+| `FACEOFF` | Until pickup/touch or 10s timeout | Puck live at the dot, waiting for a player to engage it |
+| `END_OF_PERIOD` | 6s (`END_OF_PERIOD_PAUSE`) | Period clock hit zero; skaters skate off to their benches under a wide camera hold |
 | `GAME_OVER` | Indefinite | All periods exhausted; movement locked until host resets |
 
 Period clock (`GameRules.PERIOD_DURATION = 240s`, `NUM_PERIODS = 3`) ticks down only during `PLAYING`. When it expires: if periods remain → `END_OF_PERIOD` → `FACEOFF_PREP` (period increments, clock resets); if last period → `GAME_OVER`. `END_OF_PERIOD` and `GAME_OVER` are dead-puck phases.
+
+**Period break presentation.** `END_OF_PERIOD` runs a skate-off: `PhaseCoordinator.on_period_break_entered` (host from `handle_phase_entered`; clients from the WS phase byte via `GameManager._on_remote_phase_changed`, idempotence-guarded) drives every skater to its bench door with the same `begin_approach` glide the faceoff skate-in uses — `SkaterController.tick_faceoff_approach` accepts approaches during `END_OF_PERIOD` as well as `FACEOFF_PREP` for this. The break arms the next prep as a **period-start bench intro**: the placement consumes the flag (pregame intro overrides it), starts everyone from `bench_start_position`, and host-extends the prep by `PREGAME_INTRO_DURATION`, mirroring the opening faceoff. `GameManager.period_break_started` (camera rises to the wide intro framing and holds) and `period_intro_started(period, duration)` (camera crane-down, HUD "2ND PERIOD"/"OVERTIME" card, crowd buzz) are the presentation signals; the upcoming period number is stashed at break entry (`period_after_break`) because a client's replicated `current_period` may not have advanced when the faceoff RPC lands. Goalies stay in/near the crease through the break (reset at prep entry as always).
 
 ### Goal Detection
 

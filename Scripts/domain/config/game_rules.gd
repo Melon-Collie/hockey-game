@@ -11,8 +11,9 @@ const GOAL_PAUSE_DURATION: float        = 2.0  # fallback for GOAL_SCORED auto-a
 const GOAL_CELEBRATION_DURATION: float  = 1.5  # post-goal beat: movement allowed, puck pickup-locked,
 												# banner + VFX play; auto-advances to GOAL_SCORED (replay)
 const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdown before puck unlocks
-# Extra hold on the OPENING faceoff of a match (game start + rematch) so the
-# pre-game intro can play: camera sweep, matchup card, crowd buzz. The normal
+# Extra hold on a bench-intro faceoff — the OPENING faceoff of a match (game
+# start + rematch: camera sweep, matchup card, crowd buzz) and each PERIOD
+# START (same sweep + skate-on with the period card instead). The normal
 # countdown runs in the final FACEOFF_PREP_DURATION of the extended window.
 const PREGAME_INTRO_DURATION: float = 4.0
 # Skate-in glide durations (see SkaterController.begin_approach). Players skate
@@ -30,7 +31,7 @@ const INTRO_APPROACH_DURATION: float   = 3.6
 # long "skate back" is elided into the replay's dead time. See
 # PhaseCoordinator._approach_start_for / PlayerRules.faceoff_staging_position.
 const FACEOFF_STAGING_SETBACK: float   = 6.0
-# Period / stoppage faceoffs have no replay camera cut to hide a staging snap,
+# Stoppage faceoffs have no replay camera cut to hide a staging snap,
 # so players skate in honestly from where play stopped. The prep window is
 # extended by FACEOFF_SKATE_PREP_EXTRA (added before the "2 → 1 → DROP"
 # countdown) so a far player covers the distance at ~FACEOFF_SKATE_IN_SPEED
@@ -52,7 +53,14 @@ const FACEOFF_STAGGER_FRACTION: float  = 0.3
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
-const END_OF_PERIOD_PAUSE: float   = 3.0           # pause before next-period faceoff prep
+# Between-period break: END_OF_PERIOD runs the skate-off — every skater glides
+# from where play stopped to their bench door (PhaseCoordinator.
+# on_period_break_entered) under the wide period-break camera hold, then the
+# next prep runs the bench intro back onto the ice with the period card. The
+# pause is sized so the worst case (far corner → bench ≈ 44 m at
+# FACEOFF_SKATE_IN_SPEED ≈ 4.9 s) fits with PERIOD_BREAK_SETTLE to spare.
+const END_OF_PERIOD_PAUSE: float   = 6.0
+const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the bench before the next prep
 const OT_ENABLED: bool             = true
 const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
 

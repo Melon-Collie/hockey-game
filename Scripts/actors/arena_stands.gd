@@ -195,6 +195,12 @@ func _ready() -> void:
 		gm.body_check_broadcast.connect(_on_body_check_broadcast)
 	if gm.has_signal("pregame_intro_started"):
 		gm.pregame_intro_started.connect(_on_pregame_intro_started)
+	if gm.has_signal("period_intro_started"):
+		# Same anticipation buzz as the opening intro when a new period's
+		# skate-on begins.
+		gm.period_intro_started.connect(
+				func(_period: int, duration: float) -> void:
+					_on_pregame_intro_started(duration))
 
 
 # Called from GameManager.team_colors_ready once TeamColorRegistry resolves

@@ -117,6 +117,30 @@ func play_intro(duration: float) -> void:
 	_intro_duration = maxf(duration, 0.1)
 	_intro_time_left = _intro_duration
 	_intro_start_captured = false
+	# An intro sweep takes over from any period-break wide hold: it captures its
+	# start at the same wide framing the hold parked on, so the hand-off is a
+	# seamless hold → crane-down.
+	_wide_hold_left = 0.0
+	_wide_blend = 0.0
+
+# ── Period-break wide hold ────────────────────────────────────────────────────
+# Between periods the camera eases up to the intro's high wide framing and
+# holds there while the skaters skate off to their benches; the period-start
+# intro sweep (play_intro) then descends from that same framing, so the whole
+# break reads as one broadcast shot: rise → hold → crane down onto the faceoff.
+# Slack keeps the hold alive past the nominal window so the intro hand-off
+# never gaps on timing jitter; if no intro follows (edge: session reset), the
+# blend decays back to the live framing on its own.
+const _WIDE_RISE_TIME: float = 1.2
+const _WIDE_HOLD_SLACK: float = 2.0
+var _wide_hold_left: float = 0.0
+var _wide_blend: float = 0.0
+var _wide_hold_transform: Transform3D = Transform3D.IDENTITY
+var _wide_hold_captured: bool = false
+
+func hold_period_break_wide(duration: float) -> void:
+	_wide_hold_left = duration + _WIDE_HOLD_SLACK
+	_wide_hold_captured = false
 
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	_goal_0 = goal_0
@@ -178,6 +202,9 @@ func shake(trauma: float) -> void:
 func _ready() -> void:
 	make_current()
 	GameManager.pregame_intro_started.connect(play_intro)
+	GameManager.period_break_started.connect(hold_period_break_wide)
+	GameManager.period_intro_started.connect(
+			func(_period: int, duration: float) -> void: play_intro(duration))
 	GameManager.goal_scored.connect(func(_t, _n, _a1, _a2) -> void: shake(1.0))
 	GameManager.local_player_hit.connect(func(mag: float) -> void:
 		if mag >= 3.0:
@@ -420,6 +447,22 @@ func _physics_process(delta: float) -> void:
 	else:
 		_impact_kick = Vector3.ZERO
 		_impact_kick_vel = Vector3.ZERO
+
+	# ── Step 6c: Period-break wide hold ───────────────────────────────────────
+	# Ease from the live framing up to the captured wide transform and sit there
+	# while the skate-off plays out below. Mutually exclusive with the intro
+	# sweep in practice (play_intro clears the hold); the decay branch only runs
+	# if the hold expires without an intro taking over.
+	if _wide_hold_left > 0.0 or _wide_blend > 0.0:
+		if _wide_hold_left > 0.0 and not _wide_hold_captured:
+			_wide_hold_captured = true
+			_wide_hold_transform = global_transform
+			_wide_hold_transform.origin = Vector3(0.0, _INTRO_HEIGHT, global_position.z)
+		_wide_hold_left = maxf(_wide_hold_left - delta, 0.0)
+		var blend_dir: float = 1.0 if _wide_hold_left > 0.0 else -1.0
+		_wide_blend = clampf(_wide_blend + blend_dir * delta / _WIDE_RISE_TIME, 0.0, 1.0)
+		var eased_wide: float = _wide_blend * _wide_blend * (3.0 - 2.0 * _wide_blend)
+		global_transform = global_transform.interpolate_with(_wide_hold_transform, eased_wide)
 
 	# ── Step 7: Pre-game intro sweep ──────────────────────────────────────────
 	# Crane down from a high wide shot onto the live gameplay framing computed

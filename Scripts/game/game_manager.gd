@@ -58,6 +58,16 @@ signal pregame_intro_started(duration: float)
 # the real (extended) drop. 0-delay faceoffs (opening intro, post-goal) don't
 # fire this. Host and client both fire it, deriving `delay` locally.
 signal faceoff_skate_in_started(delay: float)
+# Fired on every peer when END_OF_PERIOD begins — the between-period break.
+# Skaters skate off to their bench doors over the window (PhaseCoordinator.
+# on_period_break_entered) while the camera rises to the wide intro framing.
+# `duration` is the break length (END_OF_PERIOD_PAUSE).
+signal period_break_started(duration: float)
+# Fired (before faceoff_prep_announced) on a period-start faceoff — the prep
+# right after a period break. Same treatment as the pregame intro (bench
+# skate-on, camera sweep, host-extended prep) with a "2ND PERIOD" card instead
+# of the matchup card. `period` is the period being started (> num_periods → OT).
+signal period_intro_started(period: int, duration: float)
 signal replay_started
 signal replay_stopped
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
@@ -1283,6 +1293,7 @@ func _wire_subsystems() -> void:
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
+	_phase_coord.period_break_started.connect(period_break_started.emit)
 	_phase_coord.replay_started.connect(replay_started.emit)
 	_phase_coord.replay_stopped.connect(replay_stopped.emit)
 	_phase_coord.period_synced.connect(period_synced.emit)
@@ -2936,6 +2947,11 @@ func _on_stats_received(data: Array) -> void:
 
 func _on_remote_phase_changed(new_phase: GamePhase.Phase) -> void:
 	_last_emitted_clock_secs = -1
+	# Clients mirror the host's period-break skate-off off the WS phase byte —
+	# there's no reliable RPC for END_OF_PERIOD, and the multi-second break makes
+	# the unreliable channel safe (idempotence guarded inside the coordinator).
+	if new_phase == GamePhase.Phase.END_OF_PERIOD and _phase_coord != null:
+		_phase_coord.on_period_break_entered()
 	phase_changed.emit(new_phase)
 	# Note: the client's goal-replay cinematic is NOT triggered here. The host
 	# enters GOAL_SCORED and replay mode in the same frame, gating off its own
@@ -3110,6 +3126,13 @@ func _on_faceoff_prep_announced_from_coord() -> void:
 	_seen_first_prep = true
 	if opening and _pregame_intro_eligible():
 		pregame_intro_started.emit(GameRules.PREGAME_INTRO_DURATION)
+	elif _phase_coord != null and _phase_coord.last_prep_was_period_intro:
+		# Period-start bench intro: camera sweep + period card over the extended
+		# prep, mirroring the opening intro's presentation path. The period comes
+		# from the coordinator's break-time stash, not the state machine — a
+		# client's replicated current_period may not have advanced yet.
+		period_intro_started.emit(
+				_phase_coord.period_after_break, GameRules.PREGAME_INTRO_DURATION)
 	elif _phase_coord != null and _phase_coord.last_prep_preroll > 0.0:
 		# Period / stoppage skate-in: hold the countdown for the skate window so
 		# it lands on the extended drop. Guarded by the intro branch above so the
@@ -3868,6 +3891,16 @@ func is_faceoff_prep() -> bool:
 	if _state_machine == null:
 		return false
 	return _state_machine.current_phase == GamePhase.Phase.FACEOFF_PREP
+
+
+# True during the between-period break (END_OF_PERIOD). Read by
+# SkaterController.tick_faceoff_approach (via the game_state interface) so the
+# period-break skate-off glide runs under the same movement lock that freezes
+# everything else — same replicated-phase determinism as is_faceoff_prep.
+func is_period_break() -> bool:
+	if _state_machine == null:
+		return false
+	return _state_machine.current_phase == GamePhase.Phase.END_OF_PERIOD
 
 
 # Seconds until the puck drops during FACEOFF_PREP (0 otherwise). Read by the AI

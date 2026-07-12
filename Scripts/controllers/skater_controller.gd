@@ -705,6 +705,7 @@ var stagger_recoil_dir: Vector2 = Vector2(0.0, 1.0)
 var sprint_active: bool = false
 
 var _game_state_has_faceoff_prep: bool = false
+var _game_state_has_period_break: bool = false
 # Cosmetic goal-celebration window (seconds remaining / total). Set by
 # GameManager on the machine that simulates the scorer; the raised-stick pose
 # rides the normal hand/blade wire state to everyone else.
@@ -787,6 +788,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	# Cached so the per-tick gait can ask about the faceoff phase without a
 	# has_method() call at 120 Hz (test stubs may not implement it).
 	_game_state_has_faceoff_prep = game_state.has_method("is_faceoff_prep")
+	_game_state_has_period_break = game_state.has_method("is_period_break")
 	process_physics_priority = -1  # Run before Skater.move_and_slide
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_check_received.connect(_on_body_check_received)
@@ -1558,17 +1560,21 @@ func clear_approach() -> void:
 	_approach_active = false
 
 
-# Runs one skate-in tick if an approach is active for the live faceoff prep.
-# Returns true while the skater is still gliding (caller skips its locked-phase
-# freeze); false when there's no approach or the skater has arrived / prep has
-# ended (caller runs its normal freeze / aim-only handling). Real frames only —
-# the skate-in is cosmetic and not part of the reconcile input-replay chain.
+# Runs one skate-in tick if an approach is active for the live faceoff prep or
+# the period-break skate-off (END_OF_PERIOD — see PhaseCoordinator.
+# on_period_break_entered). Returns true while the skater is still gliding
+# (caller skips its locked-phase freeze); false when there's no approach or the
+# skater has arrived / the phase has ended (caller runs its normal freeze /
+# aim-only handling). Real frames only — the skate-in is cosmetic and not part
+# of the reconcile input-replay chain.
 func tick_faceoff_approach(delta: float) -> bool:
 	if not _approach_active:
 		return false
-	if not (_game_state_has_faceoff_prep and _game_state.is_faceoff_prep()):
-		# Left FACEOFF_PREP (the drop, or an abandoned prep) with an approach
-		# still set — drop it so it can't leak into a later locked phase.
+	var in_prep: bool = _game_state_has_faceoff_prep and _game_state.is_faceoff_prep()
+	var in_break: bool = _game_state_has_period_break and _game_state.is_period_break()
+	if not (in_prep or in_break):
+		# Left the approach phase (the drop, or an abandoned prep) with an
+		# approach still set — drop it so it can't leak into a later locked phase.
 		clear_approach()
 		return false
 	return apply_approach(delta)
