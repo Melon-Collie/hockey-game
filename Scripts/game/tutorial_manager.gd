@@ -286,7 +286,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 			return TutorialStep.new(
 				"Wrist Shot",
 				"With the puck, hold the left mouse button and drag to aim, then release to fire a wrist shot into the net.",
-				"Hold and drag — a longer drag means more power, and the drag direction is your aim.")
+				"Hold and drag — the drag direction is your aim, and a faster drag means a harder shot.")
 		STEP_SLAPSHOT:
 			return TutorialStep.new(
 				"Slapshot",
@@ -325,8 +325,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_SHOOT_WRIST:
 			return TutorialStep.new(
 				"Wrist Shot",
-				"You've got the puck. Hold left-click, drag toward the net, and release. The way you drag is your aim — and the farther you drag, the harder the shot.",
-				"Don't just hold and sit still — drag the mouse toward the net before you let go.")
+				"You've got the puck. Hold left-click, drag toward the net, and release. The way you drag is your aim — and the faster you drag, the harder the shot.",
+				"A slow sweep is a soft pass — snap the drag toward the net to really rip it.")
 		STEP_SHOOT_TARGETS:
 			# Live copy is set per-wave by _show_targets_wave; this is the wave-1 default.
 			return TutorialStep.new(
@@ -751,7 +751,7 @@ func _on_shot_released(dir: Vector3, _power: float, is_slapper: bool) -> void:
 	var type_correct := false
 	match _current_step_id():
 		STEP_QUICK_SHOT:
-			# The quick shot (F) fires straight from carry without entering
+			# The quick shot (E) fires straight from carry without entering
 			# WRISTER_AIM, so a never-aimed non-slapper release is the quick shot.
 			if not is_slapper and _wrister_aim_start < 0.0:
 				type_correct = true
@@ -1176,7 +1176,7 @@ func _show_targets_wave(phase: int) -> void:
 		_hud.set_step(_step_index, _step_ids.size(),
 			"Pick Your Spot",
 			"Now two up high. Scroll the wheel UP TWICE for full loft — it's a mode, it stays on. Put both in the top corners.",
-			"Charge the shot too — from this close a soft lifted shot is still rising and sails over the net.")
+			"Loft buys the height, pace picks where the arc peaks — from here an easy shot crests right at the bar.")
 		_show_target_set(_HIGH_TARGETS)
 
 
