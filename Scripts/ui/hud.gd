@@ -1054,12 +1054,13 @@ func _skip_prompt_text() -> String:
 
 # ── Intermission (between-periods highlight reel) ────────────────────────────
 
-func _on_intermission_started(period: int) -> void:
+func _on_intermission_started(period: int, reel_seconds: float) -> void:
 	# The band replaces the END-OF-PERIOD chyron; the reel is already rolling
 	# behind it.
 	_phase_wrapper.visible = false
 	_intermission_overlay.present(_intermission_title(period),
-			_score_0, _score_1, _scorebug_stripe(0), _scorebug_stripe(1))
+			_score_0, _score_1, _scorebug_stripe(0), _scorebug_stripe(1),
+			reel_seconds)
 	_intermission_overlay.set_skip_text(_skip_prompt_text())
 
 func _on_intermission_clip_started(scoring_team_id: int, scorer_name: String,

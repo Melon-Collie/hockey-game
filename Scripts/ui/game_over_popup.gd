@@ -34,6 +34,9 @@ const _RANK_TAGS: Array[String] = ["1ST STAR", "2ND STAR", "3RD STAR"]
 const _RANK_NAME_SIZES: Array[int] = [38, 24, 24]
 const _RANK_LINE_SIZES: Array[int] = [16, 13, 13]
 const _RANK_STRIPE_HEIGHTS: Array[int] = [34, 22, 22]
+const _RANK_ROW_HEIGHTS: Array[int] = [50, 32, 32]
+# Gap between the center stripe column and the tag / name on either side.
+const _STRIPE_GUTTER: float = 16.0
 
 var _scrim: ColorRect = null
 var _top_block: VBoxContainer = null
@@ -124,17 +127,17 @@ func _build_score_row() -> Control:
 	return wrap
 
 
-# Three star rows, typography straight on the scrim. Row i is rank i+1; each
-# is a single line: rank tag, team stripe, name, stat line.
+# Three star rows, typography straight on the scrim. Every row is anchored
+# around the screen's horizontal center: the team stripe IS the center column,
+# rank tags right-align to it, names flow left-aligned from it — so all three
+# stripes (and both text spines) line up exactly regardless of name length.
 func _build_stars_block(root: Control) -> void:
-	var centering := CenterContainer.new()
-	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.add_child(centering)
-
 	_stars_block = VBoxContainer.new()
 	_stars_block.alignment = BoxContainer.ALIGNMENT_CENTER
 	_stars_block.add_theme_constant_override("separation", 14)
-	centering.add_child(_stars_block)
+	_stars_block.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_stars_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_stars_block)
 
 	_stars_tag = _lbl("★  STARS OF THE GAME  ★", 15, _GOLD)
 	_stars_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -145,31 +148,46 @@ func _build_stars_block(root: Control) -> void:
 
 
 func _build_star_row(rank: int) -> Control:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
+	var row := Control.new()
+	row.custom_minimum_size = Vector2(0, _RANK_ROW_HEIGHTS[rank])
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var first: bool = rank == 0
 	var tag := _lbl(_RANK_TAGS[rank], 14 if first else 12, _GOLD if first else _DIM)
-	tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	# Fixed tag width keeps the three names left-aligned to one spine even
-	# though the rows themselves are centered as a group.
-	tag.custom_minimum_size = Vector2(86, 0)
+	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	tag.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tag.anchor_right = 0.5
+	tag.offset_right = -_STRIPE_GUTTER
 	row.add_child(tag)
 
 	var stripe_style := _stripe_style()
 	_star_stripe_styles.append(stripe_style)
-	row.add_child(_stripe(stripe_style, _RANK_STRIPE_HEIGHTS[rank]))
+	var stripe := _stripe(stripe_style, _RANK_STRIPE_HEIGHTS[rank])
+	stripe.set_anchors_preset(Control.PRESET_CENTER)
+	stripe.offset_left = -3.0
+	stripe.offset_right = 3.0
+	stripe.offset_top = -_RANK_STRIPE_HEIGHTS[rank] / 2.0
+	stripe.offset_bottom = _RANK_STRIPE_HEIGHTS[rank] / 2.0
+	row.add_child(stripe)
+
+	var content := HBoxContainer.new()
+	content.add_theme_constant_override("separation", 12)
+	content.set_anchors_preset(Control.PRESET_FULL_RECT)
+	content.anchor_left = 0.5
+	content.offset_left = _STRIPE_GUTTER
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(content)
 
 	var name_label := _lbl("", _RANK_NAME_SIZES[rank], _WHITE)
 	name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_star_name_labels.append(name_label)
-	row.add_child(name_label)
+	content.add_child(name_label)
 
 	var line_label := _lbl("", _RANK_LINE_SIZES[rank], _DIM)
 	line_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_star_line_labels.append(line_label)
-	row.add_child(line_label)
+	content.add_child(line_label)
 
 	_star_rows.append(row)
 	return row

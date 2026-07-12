@@ -66,11 +66,11 @@ const NUM_PERIODS: int             = 3
 # pause is sized so the worst case (far corner → bench ≈ 44 m at
 # FACEOFF_SKATE_IN_SPEED ≈ 4.9 s) fits with PERIOD_BREAK_SETTLE to spare.
 # The 6 s timer is the whole break only for a goalless period: when the ended
-# period has goals, the intermission highlight reel takes over INTERMISSION_
-# SETTLE seconds in (GameManager._schedule_intermission_replay — replay mode
-# freezes the phase timer) and the break ends when the reel finishes, via
-# GameStateMachine.finish_period_break — so the break's real length scales
-# with the goals scored, and a unanimous skip vote ends it early.
+# period has goals, the break becomes a fixed INTERMISSION_DURATION — the
+# highlight reel takes over INTERMISSION_SETTLE seconds in (replay mode
+# freezes the phase timer) and loops the period's goals under a countdown
+# until the host's intermission timer ends the break via
+# GameStateMachine.finish_period_break. A unanimous skip vote ends it early.
 const END_OF_PERIOD_PAUSE: float   = 6.0
 const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the bench before the next prep
 # Live beat between the period horn and the intermission reel taking over:
@@ -78,6 +78,10 @@ const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the
 # client has received the END_OF_PERIOD phase byte (unreliable WS) before the
 # reliable replay-mode RPC branches on it.
 const INTERMISSION_SETTLE: float   = 2.0
+# Total break length when the ended period has goals (settle beat + reel
+# window). The reel loops the period's clips to fill it; the on-screen
+# countdown counts the reel window down.
+const INTERMISSION_DURATION: float = 20.0
 const OT_ENABLED: bool             = true
 const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
 

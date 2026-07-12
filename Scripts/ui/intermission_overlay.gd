@@ -30,9 +30,17 @@ var _caption_tag: Label = null
 var _caption_scorer: Label = null
 var _caption_assists: Label = null
 var _skip_label: Label = null
+var _countdown_label: Label = null
 var _present_tween: Tween = null
 var _caption_tween: Tween = null
 var _skip_pulse: Tween = null
+
+# Break time remaining, counted down locally (seeded from the shared
+# GameRules constants on every peer, so it tracks the host's end timer up to
+# clock skew — cosmetic). Label text only rebuilds when the displayed second
+# changes.
+var _countdown_left: float = 0.0
+var _last_countdown_secs: int = -1
 
 
 func _ready() -> void:
@@ -83,6 +91,16 @@ func _build_ui() -> void:
 	_skip_label.offset_top = -52.0
 	_skip_label.offset_bottom = -24.0
 	root.add_child(_skip_label)
+
+	# Break countdown, stacked just above the skip line.
+	_countdown_label = _lbl("", 22, _WHITE)
+	_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_countdown_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_countdown_label.offset_left = -324.0
+	_countdown_label.offset_right = -52.0
+	_countdown_label.offset_top = -84.0
+	_countdown_label.offset_bottom = -54.0
+	root.add_child(_countdown_label)
 
 
 # Compact version of the game-over score row: [stripe] HOME 2 — 1 AWAY [stripe].
@@ -135,13 +153,16 @@ func _build_caption(root: Control) -> void:
 
 
 func present(title: String, home_score: int, away_score: int,
-		home_stripe: Color, away_stripe: Color) -> void:
+		home_stripe: Color, away_stripe: Color, countdown_seconds: float) -> void:
 	_title_label.text = title
 	_home_score_label.text = str(home_score)
 	_away_score_label.text = str(away_score)
 	_home_stripe_style.bg_color = home_stripe
 	_away_stripe_style.bg_color = away_stripe
 	_caption_block.modulate.a = 0.0
+	_countdown_left = countdown_seconds
+	_last_countdown_secs = -1
+	_refresh_countdown()
 	visible = true
 	if _present_tween != null and _present_tween.is_running():
 		_present_tween.kill()
@@ -174,6 +195,21 @@ func set_goal_caption(team_color: Color, scorer_name: String, assist_text: Strin
 
 func set_skip_text(text: String) -> void:
 	_skip_label.text = text
+
+
+func _process(delta: float) -> void:
+	if not visible or _countdown_left <= 0.0:
+		return
+	_countdown_left = maxf(_countdown_left - delta, 0.0)
+	_refresh_countdown()
+
+
+func _refresh_countdown() -> void:
+	var secs: int = int(ceilf(_countdown_left))
+	if secs == _last_countdown_secs:
+		return
+	_last_countdown_secs = secs
+	_countdown_label.text = "%d:%02d" % [secs / 60, secs % 60]
 
 
 func hide_overlay() -> void:

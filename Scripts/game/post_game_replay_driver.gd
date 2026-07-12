@@ -15,13 +15,13 @@ extends Node
 #     replay mode is entered LOCALLY (set_replay_mode_local, no RPC) so the
 #     host stops fighting the frozen scene with live broadcasts and clients
 #     ignore stray frames.
-#   - Intermission reel (loop = false, use_shared_replay_mode = true): plays
-#     the ended period's goals ONCE behind the intermission band, then stops —
-#     reel_stopped is what ends the break on the host (GameStateMachine.
-#     finish_period_break). The shared replay mode mirrors the flag to clients
-#     (same notify_replay_mode RPC as the goal cinematic) so every peer's reel
-#     starts and tears down in lockstep, and supports the same unanimous
-#     vote-to-skip as the goal replay (register_skip_vote).
+#   - Intermission reel (use_shared_replay_mode = true): loops the ended
+#     period's goals behind the intermission band for the fixed break window —
+#     GameManager's INTERMISSION_DURATION end timer (or a unanimous skip vote,
+#     register_skip_vote) stops it, and reel_stopped is what ends the break on
+#     the host (GameStateMachine.finish_period_break). The shared replay mode
+#     mirrors the flag to clients (same notify_replay_mode RPC as the goal
+#     cinematic) so every peer's reel starts and tears down in lockstep.
 #
 # Owned by GameManager. start(clips) / stop() called from there.
 
