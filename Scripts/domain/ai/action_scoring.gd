@@ -6,7 +6,7 @@ class_name AIActionScoring
 # ── Design intent: geometric xG ──────────────────────────────────────────────
 # `score_shoot` approximates expected goals (xG) — the probability a shot beats
 # the goalie given its geometry and the defensive context. It is a GEOMETRIC
-# model, not a curve fit: it scores the best of the seven goalie holes (the net
+# model, not a curve fit: it scores the best of the five goalie holes (the net
 # each clears past the goalie's reaction-gated, height-appropriate cover — see
 # the hole-model block below), then multiplies by lane clearance and forward-cone
 # pressure. Distance, angle, and coverage all EMERGE from that geometry; there
@@ -107,8 +107,10 @@ const SLOT_RADIUS_M: float = 6.0
 # the two ways a real goalie's do — a wider always-covered CORE and a slower
 # REACTION — which is what makes the loft choice fall out of the same geometry:
 #   cover = CORE + EXT × reaction ;  reaction = clamp((flight − DELAY)/DEPLOY,0,1)
-#   openness = the net the hole clears past the goalie's cover, projected onto
-#              the net plane (shadow) so foreshortening at sharp angles is honest
+#   openness = the net bearing interval the hole clears past the cover's BODY-DISC
+#              tangent cone (he squares to the puck, so the cover half-width faces
+#              every sightline — sharp angles are walled by his depth), minus the
+#              puck's clean-entry fit inset and the shooter's execution spread
 # Aggressive angle-challenging (the goalie plays OUT for a longer shot) is not a
 # constant — it's just where the goalie actually is, fed in as goalie_pos.
 #
@@ -500,7 +502,7 @@ const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 
 
-# Geometric shot danger in [0, 1]: the best of the seven goalie holes, seen from
+# Geometric shot danger in [0, 1]: the best of the five goalie holes, seen from
 # the shooter's eye, with the goalie a body that occludes part of the net.
 # Distance, angle, squareness, and reaction all emerge from the geometry — no
 # curves. Each hole is scored by _hole_open_angle (its opening in radians); the
@@ -514,7 +516,8 @@ static func open_net_danger(
 		goalie_unsettled_factor: float = 0.0,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
-		goalie_post_seal_tall: bool = false) -> float:
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0) -> float:
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	# Best of the holes. Pure value-type math, no allocation — safe to run
 	# per carry candidate at tick rate (see _hole_open_angle).
@@ -523,7 +526,7 @@ static func open_net_danger(
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, flight, goalie_unsettled_factor,
 				goalie_five_hole_m, goalie_down,
-				goalie_post_seal_x, goalie_post_seal_tall)
+				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 		if a > best_angle:
 			best_angle = a
 	return clampf(best_angle * SHOT_DANGER_GAIN, 0.0, 1.0)
@@ -540,12 +543,13 @@ static func best_shot_loft(
 		goalie_unsettled_factor: float = 0.0,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
-		goalie_post_seal_tall: bool = false) -> int:
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0) -> int:
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, flight, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall)
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 	if hole < 0:
 		return ShotMechanics.ELEVATION_FLAT
 	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
@@ -568,7 +572,7 @@ static func best_shot_aim(
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, flight, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall)
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
@@ -586,12 +590,13 @@ static func _choose_shot_hole(
 		net_half_width: float, flight: float, unsettled: float,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
-		goalie_post_seal_tall: bool = false) -> int:
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0) -> int:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down,
-				goalie_post_seal_x, goalie_post_seal_tall)
+				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 		if a > best_angle:
 			best_angle = a
 	if best_angle <= 0.0:
@@ -603,7 +608,7 @@ static func _choose_shot_hole(
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down,
-				goalie_post_seal_x, goalie_post_seal_tall)
+				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 		if a < threshold:
 			continue
 		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
@@ -616,8 +621,9 @@ static func _choose_shot_hole(
 
 # The net-plane aim x for a chosen hole. Corners aim at the open segment's
 # midpoint biased toward the post (matching AIShotAim's tuned corner bias); the
-# five-hole aims at the goalie's centre (between the legs). Reuses the same shadow
-# projection and unsettled-fade as _hole_open_angle so aim and score agree.
+# five-hole aims at the goalie's centre (between the legs). Reuses the same
+# body-disc cover model and unsettled-fade as _hole_open_angle so aim and score
+# agree.
 static func _hole_aim_x(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, flight: float, unsettled: float,
@@ -645,7 +651,9 @@ static func _hole_aim_x(
 				entry_lo_x, entry_hi_x)
 
 	# Corner: aim at the open segment [post ↔ cover edge] on the hole's side,
-	# midpoint biased toward the post.
+	# midpoint biased toward the post. Cover edges come from the same disc-tangent
+	# body model _hole_open_angle scores with (see the doc there), projected back
+	# onto the net plane so the midpoint math stays in x.
 	var eff_unsettled: float = clampf(unsettled, 0.0, 1.0) \
 			* clampf(1.0 - flight / UNSETTLE_RECOVERY_S, 0.0, 1.0)
 	var band: int = HOLE_BAND[i]
@@ -653,24 +661,37 @@ static func _hole_aim_x(
 			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
 	reaction *= 1.0 - eff_unsettled
 	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
+	var u: float = goalie_pos.x - shooter.x
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var fwd: float = (shooter.z - attacking_goal.z) * net_normal_z
+	var dv: float = fwd - (goalie_pos.z - attacking_goal.z) * net_normal_z
+	var cov_lo_x: float = post_hi_x
+	var cov_hi_x: float = post_lo_x
+	if dv >= 0.001:
+		var d: float = sqrt(u * u + dv * dv)
+		if d <= cover:
+			# Smothered (scored 0 anyway) — degenerate; aim the near entry edge.
+			return entry_lo_x if side < 0 else entry_hi_x
+		var alpha: float = atan2(u, dv)
+		var beta: float = asin(clampf(cover / d, 0.0, 1.0))
+		var g_lo: float = alpha - beta
+		var g_hi: float = alpha + beta
+		cov_lo_x = post_lo_x if g_lo <= -PI * 0.5 + 0.001 \
+				else clampf(shooter.x + tan(g_lo) * fwd, post_lo_x, post_hi_x)
+		cov_hi_x = post_hi_x if g_hi >= PI * 0.5 - 0.001 \
+				else clampf(shooter.x + tan(g_hi) * fwd, post_lo_x, post_hi_x)
 	if side < 0:
-		var cov_lo_x: float = clampf(
-				_shadow_x(shooter, goalie_pos.x - cover, goalie_pos.z, net_z),
-				post_lo_x, post_hi_x)
 		var mid_lo: float = (post_lo_x + cov_lo_x) * 0.5
 		return maxf(lerpf(mid_lo, post_lo_x, AIShotAim.DEFAULT_CORNER_BIAS), entry_lo_x)
-	var cov_hi_x: float = clampf(
-			_shadow_x(shooter, goalie_pos.x + cover, goalie_pos.z, net_z),
-			post_lo_x, post_hi_x)
 	var mid_hi: float = (cov_hi_x + post_hi_x) * 0.5
 	return minf(lerpf(mid_hi, post_hi_x, AIShotAim.DEFAULT_CORNER_BIAS), entry_hi_x)
 
 
 # Projects a point (px at depth pz) onto the net plane (z = net_z) along the
-# sightline from the shooter — the point's "shadow" on the net. Working every
-# opening on the net plane in one frame is what keeps the geometry honest at
-# sharp angles: a wide-angle shooter foreshortens the net AND stretches the
-# goalie's shadow across it, both of which shrink the real opening.
+# sightline from the shooter — the point's "shadow" on the net. Only the
+# five-hole aim still uses this centre-point projection; the corner holes read
+# the goalie's cover as a body-disc tangent cone (see _hole_open_angle), which
+# is what keeps sharp angles honest.
 static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> float:
 	var dz: float = pz - shooter.z
 	if absf(dz) < 0.000001:
@@ -687,7 +708,8 @@ static func _hole_open_angle(
 		net_half_width: float, flight: float, unsettled: float,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
-		goalie_post_seal_tall: bool = false) -> float:
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
@@ -719,10 +741,17 @@ static func _hole_open_angle(
 
 	if kind == HOLE_KIND_FIVE:
 		# Between-the-legs gap, foreshortened with range (gap / distance); only a
-		# roughly head-on look can thread the legs (centrality).
+		# roughly head-on look can thread the legs (centrality). The puck has to
+		# FIT here too: what scores is the gap's CLEARANCE past the puck's own
+		# diameter (the same honesty the corners pay via the clean-entry inset).
+		# Without it, the standing ~0.16-0.20 m slot — barely wider than the
+		# 0.13 m puck — read as generous as a real corner window; with it, the
+		# standing five is the razor-thin look it actually is and the live
+		# five-hole is the DOWN goalie's slide leak, which genuinely opens.
 		var centrality: float = clampf(
 				1.0 - absf(shooter.x - goalie_pos.x) / FIVE_CENTER_REF_M, 0.0, 1.0)
 		var dist: float = shooter.distance_to(attacking_goal)
+		var puck_diameter: float = 2.0 * GameRules.PUCK_COLLISION_RADIUS
 		if goalie_five_hole_m >= 0.0:
 			# MEASURED slot from the replicated pose (GoalieBehaviorRules.
 			# five_hole_gap_m): standing it's a real ~0.20 m ice-to-pad-top slot
@@ -740,10 +769,11 @@ static func _hole_open_angle(
 							/ GOALIE_BUTTERFLY_DROP_S,
 						0.0, 1.0)
 				gap *= 1.0 - seal
-			return gap * centrality / maxf(dist, 0.5)
+			return maxf(0.0, gap - puck_diameter) * centrality / maxf(dist, 0.5)
 		# Legacy proxy (no replicated stance in scope — threat surfaces, tests):
 		# a set goalie seals it, a caught-moving one leaks it.
-		return FIVE_GAP_M * eff_unsettled * centrality / maxf(dist, 0.5)
+		return maxf(0.0, FIVE_GAP_M - puck_diameter) * eff_unsettled \
+				* centrality / maxf(dist, 0.5)
 
 	var band: int = HOLE_BAND[i]
 	var reaction: float = clampf(
@@ -751,24 +781,61 @@ static func _hole_open_angle(
 	reaction *= 1.0 - eff_unsettled
 	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
 
-	# Net posts and the goalie's cover edges, all as bearings on the net plane.
-	var net_z: float = attacking_goal.z
+	# Net posts and the goalie's cover, all as bearings from the shooter's eye.
 	var post_lo_x: float = attacking_goal.x - net_half_width
 	var post_hi_x: float = attacking_goal.x + net_half_width
 	var net_lo: float = atan2(post_lo_x - shooter.x, forward)
 	var net_hi: float = atan2(post_hi_x - shooter.x, forward)
-	var cov_lo_x: float = clampf(
-			_shadow_x(shooter, goalie_pos.x - cover, goalie_pos.z, net_z),
-			post_lo_x, post_hi_x)
-	var cov_hi_x: float = clampf(
-			_shadow_x(shooter, goalie_pos.x + cover, goalie_pos.z, net_z),
-			post_lo_x, post_hi_x)
-	var covb_lo: float = atan2(cov_lo_x - shooter.x, forward)
-	var covb_hi: float = atan2(cov_hi_x - shooter.x, forward)
+	# The goalie occludes as a BODY (a disc of the band's cover radius), not a
+	# paper cutout on the x-axis: he squares to the puck, so he presents the
+	# band's cover half-width perpendicular to the shooter's sightline from any
+	# bearing. The covered bearing interval is the disc's tangent cone. For a
+	# frontal shooter this reduces to the old net-plane point projection
+	# (tan β ≈ cover / depth), but from a sharp angle the body's DEPTH occludes
+	# the cross-crease lane — the old zero-depth model left the far post "open"
+	# from beside the net, which is where the hopeless bad-angle fires came from.
+	var covb_lo: float
+	var covb_hi: float
+	var u: float = goalie_pos.x - shooter.x
+	var dv: float = forward - (goalie_pos.z - attacking_goal.z) * net_normal_z
+	if dv < 0.001:
+		# Goalie at/behind the release plane — he covers nothing (upstream release
+		# clamps keep real shooters from exploiting this; it's a degenerate read).
+		covb_lo = net_hi
+		covb_hi = net_lo
+	else:
+		var d_sq: float = u * u + dv * dv
+		if d_sq <= cover * cover:
+			return 0.0  # release inside the goalie's body — smothered
+		var alpha: float = atan2(u, dv)
+		var beta: float = asin(clampf(cover / sqrt(d_sq), 0.0, 1.0))
+		covb_lo = clampf(alpha - beta, net_lo, net_hi)
+		covb_hi = clampf(alpha + beta, net_lo, net_hi)
 
+	var open_angle: float
 	if side < 0:
-		return maxf(0.0, minf(covb_lo, net_hi) - net_lo)     # left post → cover's left edge
-	return maxf(0.0, net_hi - maxf(covb_hi, net_lo))         # cover's right edge → right post
+		open_angle = maxf(0.0, minf(covb_lo, net_hi) - net_lo)   # left post → cover's left edge
+	else:
+		open_angle = maxf(0.0, net_hi - maxf(covb_hi, net_lo))   # cover's right edge → right post
+	if open_angle <= 0.0:
+		return 0.0
+	# The puck has to FIT: a corner only scores by what remains after the puck's
+	# clean-entry inset off the pipe — post radius + puck radius, the exact
+	# GameRules.NET_ENTRY_HALF_WIDTH inset _hole_aim_x buys the aim point — PLUS
+	# the shooter's own execution spread (aim_spread_rad), the same wobble budget
+	# the aim point reserves. A noisier hand needs a wider window for the same
+	# chance, so spread belongs in shot SELECTION, not just execution. (No extra
+	# margin on the cover side: `cover` is already the goalie's MAXIMAL deployed
+	# reach.) Without the inset, a fully-deployed goalie always left a few-cm
+	# "sliver" open past his reach at ANY range — an opening the aim clamp can't
+	# even target (it sits inside the entry inset) — and that un-hittable sliver
+	# out-scored working closer: the launch-it-from-the-point bug. The inset's
+	# angular size foreshortens with range like any target, so in tight it costs
+	# almost nothing.
+	var fit_angle: float = (GameRules.NET_POST_RADIUS + GameRules.PUCK_COLLISION_RADIUS) \
+			/ maxf(shooter.distance_to(attacking_goal), 0.5) \
+			+ aim_spread_rad
+	return maxf(0.0, open_angle - fit_angle)
 
 
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance
@@ -789,7 +856,16 @@ static func score_shoot(
 		goalie_five_hole_m: float = -1.0,
 		goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
-		goalie_post_seal_tall: bool = false) -> float:
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0) -> float:
+	# No shot from on/behind the goal line: the mouth faces the other way, so there
+	# is no straight line from a back-there release into the net. Checked BEFORE
+	# the release clamp below — clamping a behind-the-net release used to teleport
+	# it to a phantom point-blank spot in front of the goalie, which scored a
+	# behind-the-net carrier's "shot" as a doorstep open net (the wraparound is a
+	# CARRY around the post, never a direct fire from back there).
+	if (shooter.z - attacking_goal.z) * -signf(attacking_goal.z) < 0.001:
+		return 0.0
 	# The puck can't be shot from behind the goalie — clamp the shooter to the jam
 	# distance in front of him. Without this a hard drive's projected release, or a
 	# carry candidate placed in the crease, reads as a phantom open net (keeper
@@ -799,7 +875,7 @@ static func score_shoot(
 			shooter, attacking_goal, predicted_goalie_pos, net_half_width,
 			shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall)
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 	if shot_quality <= 0.0:
 		return 0.0
 	# Lane clear vs the aim point ShotAim picks (past the goalie's shadow) —
@@ -829,10 +905,17 @@ const GOALIE_JAM_DISTANCE_M: float = 0.4
 # release (or a carry candidate placed in the crease) overshoots the goalie's depth
 # and the shot scores as if the keeper were behind the shooter. Only the goalward
 # axis is clamped; lateral offset (a cut across the slot) is untouched.
+#
+# A release on/behind the GOAL LINE is returned unchanged: there is no shot from
+# back there at all (score_shoot hard-zeros it, and every hole's forward guard
+# reads 0 net). Clamping it used to invent a legal-looking point-blank release in
+# front of the keeper — the phantom that had bots firing from behind the net.
 static func release_ahead_of_goalie(
 		release: Vector3, attacking_goal: Vector3, goalie_pos: Vector3) -> Vector3:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var release_fwd: float = (release.z - attacking_goal.z) * net_normal_z
+	if release_fwd < 0.001:
+		return release
 	var goalie_fwd: float = (goalie_pos.z - attacking_goal.z) * net_normal_z
 	var min_fwd: float = goalie_fwd + GOALIE_JAM_DISTANCE_M
 	if release_fwd >= min_fwd:
