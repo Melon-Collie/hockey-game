@@ -33,8 +33,8 @@ var _replay_browser: ReplayBrowser = null
 var _options_container: Control = null
 var _career_row: Control = null
 var _exit_container: Control = null
-var _tutorial_container: Control = null
-var _tutorial_rows_vbox: VBoxContainer = null
+var _practice_container: Control = null
+var _practice_rows_vbox: VBoxContainer = null
 var _loading_screen: LoadingScreen = null
 
 
@@ -68,8 +68,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_options_container.visible = false
 	elif _exit_container != null and _exit_container.visible:
 		_exit_container.visible = false
-	elif _tutorial_container != null and _tutorial_container.visible:
-		_tutorial_container.visible = false
+	elif _practice_container != null and _practice_container.visible:
+		_practice_container.visible = false
 	elif _player_popup != null and _player_popup.visible:
 		# PlayerSettingsPopup handles its own ui_cancel — let it through.
 		return
@@ -117,8 +117,8 @@ func close() -> void:
 		_options_container.visible = false
 	if _exit_container != null:
 		_exit_container.visible = false
-	if _tutorial_container != null:
-		_tutorial_container.visible = false
+	if _practice_container != null:
+		_practice_container.visible = false
 	visible = false
 	closed.emit()
 
@@ -170,8 +170,7 @@ func _build_panel() -> void:
 
 	_add_row(vbox, "Play Online", false, _on_play_online_pressed)
 	_add_row(vbox, "Play vs Bots", false, _on_play_vs_bots_pressed)
-	_add_row(vbox, "Penalty Shots", false, _on_penalty_shots_pressed)
-	_add_row(vbox, "Tutorial", false, _on_tutorial_pressed)
+	_add_row(vbox, "Practice", false, _on_practice_pressed)
 	# Career reads only from uploaded stats, so it's disabled when the player has
 	# opted out of stat sharing (the disabled_check is evaluated live on hover/click).
 	_career_row = _add_row(vbox, "Career", false, _on_career_pressed,
@@ -428,7 +427,7 @@ func _build_popups() -> void:
 
 	_build_options_overlay()
 	_build_exit_overlay()
-	_build_tutorial_overlay()
+	_build_practice_overlay()
 
 	_loading_screen = LoadingScreen.new()
 	_loading_screen.cancel_pressed.connect(_on_join_cancelled)
@@ -535,18 +534,18 @@ func _build_exit_overlay() -> void:
 	add_child(_exit_container)
 
 
-# Tutorial picker modal. Iterates TutorialRegistry.ALL_IDS so adding a new
-# tutorial later (drills, advanced+, etc.) automatically grows the list with
-# no changes here. Row shows a checkmark when PlayerPrefs marks the tutorial
-# complete.
-func _build_tutorial_overlay() -> void:
+# Practice picker modal: the tutorial course plus drills (Penalty Shots today,
+# more later). Tutorials iterate TutorialRegistry.ALL_IDS so adding a new one
+# automatically grows the list with no changes here. Tutorial rows show a
+# checkmark when PlayerPrefs marks the tutorial complete.
+func _build_practice_overlay() -> void:
 	var overlay := ColorRect.new()
 	overlay.color = MenuStyle.SCRIM
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed:
-			_tutorial_container.visible = false)
+			_practice_container.visible = false)
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", MenuStyle.panel(6, 32))
@@ -564,38 +563,38 @@ func _build_tutorial_overlay() -> void:
 	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	close_row.add_child(close_spacer)
 	var close_btn := MenuStyle.close_button()
-	close_btn.pressed.connect(func() -> void: _tutorial_container.visible = false)
+	close_btn.pressed.connect(func() -> void: _practice_container.visible = false)
 	SoundManager.wire_button(close_btn)
 	close_row.add_child(close_btn)
 	vbox.add_child(close_row)
 
 	var heading := Label.new()
-	heading.text = "Tutorial"
+	heading.text = "Practice"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	MenuStyle.apply_heading(heading, 24)
 	vbox.add_child(heading)
 
-	_tutorial_rows_vbox = VBoxContainer.new()
-	_tutorial_rows_vbox.add_theme_constant_override("separation", 8)
-	vbox.add_child(_tutorial_rows_vbox)
+	_practice_rows_vbox = VBoxContainer.new()
+	_practice_rows_vbox.add_theme_constant_override("separation", 8)
+	vbox.add_child(_practice_rows_vbox)
 
-	_tutorial_container = Control.new()
-	_tutorial_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_tutorial_container.visible = false
-	_tutorial_container.add_child(overlay)
-	_tutorial_container.add_child(panel)
-	add_child(_tutorial_container)
+	_practice_container = Control.new()
+	_practice_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_practice_container.visible = false
+	_practice_container.add_child(overlay)
+	_practice_container.add_child(panel)
+	add_child(_practice_container)
 
-	_refresh_tutorial_rows()
+	_refresh_practice_rows()
 
 
 # Rebuilds the row list. Called when the picker opens so the checkmark next to
 # each tutorial reflects the latest PlayerPrefs state (e.g. the player just
 # completed Basics in a previous session this run).
-func _refresh_tutorial_rows() -> void:
-	if _tutorial_rows_vbox == null:
+func _refresh_practice_rows() -> void:
+	if _practice_rows_vbox == null:
 		return
-	for child: Node in _tutorial_rows_vbox.get_children():
+	for child: Node in _practice_rows_vbox.get_children():
 		child.queue_free()
 	for tutorial_id: String in TutorialRegistry.ALL_IDS:
 		# "Part 1 of 2 · Basics" framing so the picker reads as one ordered
@@ -609,10 +608,23 @@ func _refresh_tutorial_rows() -> void:
 		btn.custom_minimum_size = Vector2(280, 44)
 		var id_copy: String = tutorial_id
 		btn.pressed.connect(func() -> void:
-			_tutorial_container.visible = false
+			_practice_container.visible = false
 			_launch_tutorial(id_copy))
 		SoundManager.wire_button(btn)
-		_tutorial_rows_vbox.add_child(btn)
+		_practice_rows_vbox.add_child(btn)
+
+	# Drills sit below the tutorial course, separated so the ordered
+	# "Part 1 / Part 2" framing above stays readable as one unit.
+	var sep := HSeparator.new()
+	sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
+	_practice_rows_vbox.add_child(sep)
+	var drill_btn := MenuStyle.popup_button("Penalty Shots")
+	drill_btn.custom_minimum_size = Vector2(280, 44)
+	drill_btn.pressed.connect(func() -> void:
+		_practice_container.visible = false
+		_launch_penalty_drill())
+	SoundManager.wire_button(drill_btn)
+	_practice_rows_vbox.add_child(drill_btn)
 
 
 # ── Action handlers ──────────────────────────────────────────────────────────
@@ -664,24 +676,14 @@ func _on_play_vs_bots_pressed() -> void:
 	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
 
 
-func _on_penalty_shots_pressed() -> void:
-	# Offline "score X of 10" drill. Same teardown-then-launch shape as the
-	# tutorial; PenaltyDrillManager takes over once Hockey.tscn loads.
-	GameManager.on_scene_exit()
-	NetworkSimManager.clear_pending()
-	NetworkManager.reset()
-	NetworkManager.start_penalty_drill()
-	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
-
-
-func _on_tutorial_pressed() -> void:
-	# Opens the tutorial submenu so the player can pick between Basics,
-	# Advanced, and any future tutorials. Selection routes through
-	# _launch_tutorial(id) which mirrors the original direct-launch flow.
-	if _tutorial_container == null:
+func _on_practice_pressed() -> void:
+	# Opens the practice submenu: the tutorial course (Basics, Advanced, any
+	# future additions) plus drills like Penalty Shots. Selection routes
+	# through _launch_tutorial(id) / _launch_penalty_drill.
+	if _practice_container == null:
 		return
-	_refresh_tutorial_rows()
-	_tutorial_container.visible = true
+	_refresh_practice_rows()
+	_practice_container.visible = true
 
 
 func _launch_tutorial(id: String) -> void:
@@ -689,6 +691,16 @@ func _launch_tutorial(id: String) -> void:
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
 	NetworkManager.start_tutorial(id)
+	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
+
+
+func _launch_penalty_drill() -> void:
+	# Offline "score X of 10" drill. Same teardown-then-launch shape as the
+	# tutorial; PenaltyDrillManager takes over once Hockey.tscn loads.
+	GameManager.on_scene_exit()
+	NetworkSimManager.clear_pending()
+	NetworkManager.reset()
+	NetworkManager.start_penalty_drill()
 	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 
