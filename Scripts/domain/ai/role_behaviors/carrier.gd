@@ -39,9 +39,10 @@ const INTENT_DUMP: int = 5
 
 # Least fire value (shot/pass EV) worth giving up possession for — the noise floor
 # below which "firing" is really a giveaway, so the bot keeps the puck instead.
-# A tactical floor, not an evaluation curve: it exists because the geometric shot
-# model has no range cliff (a hopeless long shot leaves a tiny residual rather
-# than exactly 0). A real in-range shot scores far above it.
+# A tactical floor, not an evaluation curve: the fit insets zero most hopeless
+# looks outright now, but tiny residuals still survive some geometries (a deep
+# keeper at extreme range, an off-centre sliver, a thin five-hole leak) and none
+# of them are worth the puck. A real in-range shot scores far above it.
 const FIRE_MIN_VALUE: float = 0.02
 
 # ── Scoring constants ────────────────────────────────────────────────────────
@@ -425,7 +426,7 @@ func _pick_action(ctx: RoleContext) -> void:
 			GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
 			ctx.self_wrister_shot_speed, wrister_unsettled, _scratch_opponent_caps,
 			wrister_five_hole, wrister_goalie_down,
-			wrister_seal_x, wrister_seal_tall)
+			wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
 
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
@@ -520,9 +521,10 @@ func _pick_action(ctx: RoleContext) -> void:
 	# a near-worthless fire must not beat a collapsing hold — a carrier swarmed deep
 	# in its own zone (pass = 0 all lanes covered, carry collapsing toward 0) must
 	# skate clear, not fling a hopeless shot away. This used to be a hard `> 0`:
-	# score_shoot returned exactly 0 out of range. The geometric shot model has no
-	# range cliff — a 47 m shot leaves a ~0.002 residual — so the gate is now a
-	# small tactical floor (FIRE_MIN_VALUE), the least shot value worth giving up
+	# score_shoot returned exactly 0 out of range. The fit insets zero most
+	# hopeless looks now, but tiny residuals still survive some geometries (deep
+	# keeper at extreme range, off-centre slivers), so the gate stays a small
+	# tactical floor (FIRE_MIN_VALUE), the least shot value worth giving up
 	# possession for. A real in-range shot scores well above it and still wins ties.
 	#
 	# ALSO: don't START a fire while staggered. A body check knocks the
@@ -589,7 +591,7 @@ func _pick_action(ctx: RoleContext) -> void:
 			# for long passes — see _compute_best_pass).
 			pass_should_saucer = best_pass_saucer
 		elif new_intent == INTENT_SHOOT:
-			# Loft AND aim from the same seven-hole geometry score_shoot used — the
+			# Loft AND aim from the same goalie-hole geometry score_shoot used — the
 			# chosen hole's elevation and net-plane target, scored at the projected
 			# release. Roofs a set goalie (top-corner window), stays flat on a
 			# five-hole / low corner, and aims exactly at that hole.
@@ -597,7 +599,7 @@ func _pick_action(ctx: RoleContext) -> void:
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
-					wrister_seal_x, wrister_seal_tall)
+					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
@@ -685,10 +687,10 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 #   - Skip ghosted teammates (puck passes through them).
 #   - Skip receivers predicted past our own goal line (own-goal risk).
 #   - Carrier in OZ → receiver must also be in OZ (offside protection).
-#   - Skip blade-ROM-unreachable receivers (quick-shot can't fire
-#     backward; without this filter the bot would pick a behind-me
-#     pass and the blade would clamp to ROM edge — puck dribbles
-#     forward into nothing).
+#   - Behind-the-back receivers are NOT skipped: an aim inside the real
+#     ±157° reach cone fires with no body turn, and only the narrow back
+#     wedge pays — as rotation time priced into the EV's delay via
+#     _facing_rotation_time (the old hard ROM-skip predates that model).
 #   - Hard zero for net-blocker (segment crosses net body) and
 #     own-DZ slot crossing (intercepted = goal-against).
 func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
@@ -808,7 +810,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # Predicts the goalie at `receiver_release_t` (flight + the receiver's
 # wrister charge, or flight alone for one-timer-ready receivers — the
 # caller decides). A cross-seam feed leaves the goalie mid-slide, so the
-# receiver's shot is scored against that unsettled goalie (the seven-hole
+# receiver's shot is scored against that unsettled goalie (the goalie-hole
 # geometry opens up when he's caught moving). Receiver shot speed stays the
 # league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
@@ -1041,7 +1043,7 @@ func _best_carry(ctx: RoleContext) -> Array:
 			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
 	var stand_score: float = _score_at(ctx, self_pos, self_pos,
 			_scratch_opponents, stand_goalie,
-			ctx.self_wrister_shot_speed, stand_unsettled)
+			ctx.self_wrister_shot_speed, stand_unsettled, ctx.self_aim_spread_rad)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var stand_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
@@ -1172,13 +1174,44 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# side, so the bot chased an ever-receding "one more cut catches him moving" shot
 	# into the crease instead of firing. The caught-moving credit is a puck-
 	# RELOCATION effect (a pass / one-timer that outruns the keeper's tracking — see
-	# score_pass's unsettled arg), never a carry the goalie reads the whole way. The
-	# real shot (shoot-now, scored above) still captures any genuine goalie lag.
+	# score_pass's unsettled arg), never a carry the goalie reads the whole way.
+	#
+	# …but "square" means square to what he has READ. The bot ARRIVES at the
+	# candidate still moving (it fires in stride — the shoot-now path projects its
+	# release the same way), and the keeper's continuous tracking carries the
+	# same reaction delay it always does, so his cover at puck-arrival trails the
+	# arrival motion by what the shot's flight leaves of his read delay
+	# (goalie_stale_square_ref — identical model to the shoot-now scoring). For
+	# any candidate whose future shot flies longer than his delay the ref
+	# coincides with the candidate — set-goalie reads at range are unchanged. In
+	# TIGHT, a candidate reached ACROSS the goal mouth leaves the drive side
+	# genuinely open — the real "make him move and shoot" window. This is what
+	# prices lateral playmaking: without it every carry assumed a keeper already
+	# square at arrival, so cutting across the slot could never out-score
+	# standing still, and the bots never moved the goalie before shooting.
+	var cand_flight: float = candidate.distance_to(ctx.attacking_goal_pos) \
+			/ maxf(ctx.self_wrister_shot_speed, 1.0)
+	var arrive_vel: Vector3 = Vector3.ZERO
+	var step_x: float = candidate.x - self_pos.x
+	var step_z: float = candidate.z - self_pos.z
+	var step_len: float = sqrt(step_x * step_x + step_z * step_z)
+	if step_len > 0.01 and local_time > 0.001:
+		# Arrival velocity: the route direction at the route's own average pace
+		# (dist / momentum-aware time) — the speed the bot actually crosses the
+		# candidate at, bounded by the same model that priced the travel.
+		var arrive_speed: float = minf(step_len / local_time, ctx.self_max_speed)
+		arrive_vel = Vector3(step_x / step_len * arrive_speed, 0.0,
+				step_z / step_len * arrive_speed)
+	# Lookahead 0: the candidate IS the scored release, so the ref sits exactly
+	# on it whenever the flight exceeds the keeper's read delay (set-goalie reads
+	# unchanged) and trails behind the arrival motion only in tight.
+	var cand_square_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			candidate, arrive_vel, 0.0, cand_flight)
 	var cand_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos, candidate)
+			_goalie_now(ctx), ctx.attacking_goal_pos, cand_square_ref)
 	var dest_score: float = _score_at(ctx, candidate, self_pos,
 			_scratch_opponents_path, cand_goalie,
-			ctx.self_wrister_shot_speed, 0.0)
+			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
@@ -1238,16 +1271,22 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		opps: Array[Vector3],
 		predicted_goalie_pos: Vector3,
 		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-		goalie_unsettled_factor: float = 0.0) -> float:
+		goalie_unsettled_factor: float = 0.0,
+		aim_spread_rad: float = 0.0) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	# All the carrier's opponent arrays (path / pass / stand projections) are built
 	# in the same snapshot order as _scratch_opponent_caps, so the defenders in the
 	# shot lane are priced at their real Size/Speed reach. (lane_clear falls back to
 	# league defaults if a count ever mismatches, so this is safe regardless.)
+	# `aim_spread_rad` is the SHOOTER's execution wobble: self-evals (carry/stand)
+	# pass this bot's own spread so a noisy hand demands wider windows in shot
+	# selection; receiver evals leave 0 (cross-player boundary — a teammate may be
+	# a human whose hand we don't model, so we don't handicap the feed).
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
-			goalie_unsettled_factor, _scratch_opponent_caps)
+			goalie_unsettled_factor, _scratch_opponent_caps,
+			-1.0, false, 0.0, false, aim_spread_rad)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
@@ -1544,5 +1583,3 @@ func _goalie_unsettled_at(ctx: RoleContext, release_time_s: float,
 	return AIActionScoring.goalie_unsettled(
 			_goalie_now(ctx), ctx.attacking_goal_pos,
 			release_time_s, puck_pos_at_release)
-
-

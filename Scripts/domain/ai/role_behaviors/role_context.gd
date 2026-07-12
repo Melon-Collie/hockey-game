@@ -71,7 +71,10 @@ var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # This bot's own aim-execution spread (radians, worst-case): the output-cursor
 # noise over the blade aim arm. The shot-aim model reserves this much of the
 # net's entry width so a corner snipe's wobble spreads into net/miss, not into
-# the post band. 0 for a noiseless (test/raw) agent.
+# the post band, and the shot SCORE demands the same as extra window (the fit
+# inset in _hole_open_angle) — a noisier hand needs a wider opening for the
+# same chance, so spread shapes shot selection too. 0 for a noiseless
+# (test/raw) agent.
 var self_aim_spread_rad: float = 0.0
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # This bot's body-check delivery (Size + Physical) and current stagger, so the

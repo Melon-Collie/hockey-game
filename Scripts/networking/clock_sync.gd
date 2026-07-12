@@ -23,6 +23,12 @@ const INPUT_LEAD_SEC: float = BATCH_INTERVAL + BUFFER_TICKS * TICK_DURATION  # ~
 var is_ready: bool = false
 var rtt_ms: float = 0.0
 var latest_rtt_ms: float = 0.0
+# Magnitude of the last post-ready EMA correction to the offset (ms). The
+# clock-quality telemetry signal: a settled clock corrects by ~0 each pong;
+# sustained large corrections mean the offset estimate is unstable (asymmetric
+# path, drifting clock), which silently poisons lag-comp rewind timestamps and
+# the delay-spread measurement before anything visibly breaks.
+var last_correction_ms: float = 0.0
 
 var _offset: float = 0.0
 var _last_estimated_time: float = 0.0
@@ -73,4 +79,9 @@ func _recompute() -> void:
 		offset_sum += s.offset
 	rtt_ms = (rtt_sum / keep.size()) * 1000.0
 	var raw_offset := offset_sum / keep.size()
-	_offset = raw_offset if not is_ready else lerpf(_offset, raw_offset, OFFSET_EMA_ALPHA)
+	if is_ready:
+		var corrected := lerpf(_offset, raw_offset, OFFSET_EMA_ALPHA)
+		last_correction_ms = absf(corrected - _offset) * 1000.0
+		_offset = corrected
+	else:
+		_offset = raw_offset

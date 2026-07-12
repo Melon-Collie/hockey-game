@@ -3,23 +3,27 @@ extends GutTest
 # NetClampRules — the net treated as a solid object for the IK blade: five solid
 # faces, only the front mouth open. Non-carry calls (allow_front=false) get pure
 # exclusion; carry calls open the front so a blade whose PATH came through the
-# mouth carries the puck across, while side/back entry stays blocked regardless
-# of where the skater's body is.
+# mouth OPENING (between the post inner faces) carries the puck across, while
+# side/back entry — and a plane crossing at the posts / side-netting strip —
+# stays blocked regardless of where the skater's body is.
 #
-# Geometry (GameRules): goal line ±26.65, mouth half-width 0.915, buffer 0.10 (so
-# the box is 1.015 wide / 1.12 deep), crossbar 1.22.
+# Geometry (GameRules): goal line ±26.65, mouth half-width 0.915, post radius
+# 0.030 (opening |x| < 0.885), buffer 0.10 (so the box is 1.015 wide / 1.12
+# deep), crossbar 1.22.
 
 const GL: float = 26.65
 const HW: float = 0.915
+const POST_R: float = 0.030
 const BUF: float = 0.10
 const DEPTH: float = 1.02
 const NET_H: float = 1.22
 const EFF_HW: float = 1.015   # HW + BUF
+const MOUTH_HW: float = 0.885  # HW - POST_R (physical opening)
 const BACK_Z: float = 27.77   # GL + DEPTH + BUF
 
 
 func _clamp(point: Vector3, prev: Vector3, allow_front: bool) -> Vector3:
-	return NetClampRules.clamp_out_of_net(point, prev, GL, HW, BUF, DEPTH, NET_H, allow_front)
+	return NetClampRules.clamp_out_of_net(point, prev, GL, HW, POST_R, BUF, DEPTH, NET_H, allow_front)
 
 
 # ── Pure exclusion (non-carry, allow_front=false) ─────────────────────────────
@@ -107,6 +111,37 @@ func test_front_but_wide_of_the_mouth_blocked() -> void:
 	var prev := Vector3(1.20, 0.1, GL - 0.10)
 	var r := _clamp(p, prev, true)
 	assert_ne(r, p)
+
+
+func test_crossing_at_the_post_strip_is_not_a_front_entry() -> void:
+	# The wraparound own-goal bug: a blade sweeping across the goal-line plane
+	# right AT the post (|x| between the opening 0.885 and the box edge 1.015)
+	# used to register as a legal front entry — through the post / side-netting
+	# strip — and could then roam the whole box, dragging the pinned puck
+	# through the side mesh into the net. It must be clamped like any other
+	# solid-face contact.
+	var p := Vector3(0.95, 0.1, GL + 0.05)
+	var prev := Vector3(0.95, 0.1, GL - 0.05)
+	var r := _clamp(p, prev, true)
+	assert_ne(r, p, "plane crossing at the post strip must not ride in")
+
+
+func test_legal_occupant_confined_to_the_mouth_column() -> void:
+	# Entered legally through the opening, then drifted laterally toward the
+	# side netting while still inside the box: the side mesh holds it at the
+	# post line instead of letting it pass through into the box's side strip.
+	var p := Vector3(0.95, 0.1, GL + 0.20)
+	var prev := Vector3(0.60, 0.1, GL + 0.20)  # legally inside the column
+	var r := _clamp(p, prev, true)
+	assert_almost_eq(r.x, MOUTH_HW, 0.001, "held at the post line")
+	assert_almost_eq(r.z, p.z, 0.001, "depth untouched by the lateral confine")
+
+
+func test_front_entry_at_the_opening_edge_rides_in() -> void:
+	# Just inside the post inner face is still the opening.
+	var p := Vector3(0.87, 0.1, GL + 0.07)
+	var prev := Vector3(0.87, 0.1, GL - 0.10)
+	assert_eq(_clamp(p, prev, true), p)
 
 
 # ── Negative-Z net mirrors ────────────────────────────────────────────────────

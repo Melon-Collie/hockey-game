@@ -152,11 +152,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		_panel.visible = _showing
 	elif event.keycode == KEY_F4:
 		_log_felt_lag()
+	elif event.keycode == KEY_C and _showing:
+		# Only while the F3 panel is open, so a bare C keypress in gameplay
+		# never gets swallowed here.
+		_copy_session_digest()
 
 # A tester pressing F4 flags "this felt laggy right now." We snapshot the most
 # diagnostic LIVE values and append a marker to the session summary so the
 # subjective moment lands in the same Supabase row as the objective numbers —
 # the single best signal for "bad netcode experiences" that raw rates miss.
+# The pre-history ring rides along: the press comes AFTER the felt moment, so
+# the seconds leading up to it matter more than the instant of the press.
 func _log_felt_lag() -> void:
 	var t: NetworkTelemetry = NetworkTelemetry.instance
 	if t == null or NetworkManager.is_offline_mode:
@@ -176,8 +182,29 @@ func _log_felt_lag() -> void:
 		"buffer_depth_puck": t.buffer_depth_puck,
 		"puck_mode": t.puck_mode,
 	}
-	t.session.record_felt_lag(float(t.session.seconds), snapshot)
+	t.session.record_felt_lag(float(t.session.seconds), snapshot, t.recent_samples())
 	_toast.text = "✓ Lag report logged (#%d) — thanks!" % t.session.felt_lag_count
+	_toast.show()
+	_toast_timer = TOAST_SECONDS
+
+# Copy the whole session's aggregates + markers to the clipboard as JSON — the
+# self-serve paste unit for a bug report or an LLM diagnosis, no Supabase
+# round-trip needed. Same payload shape the reporter POSTs (and dumps locally),
+# so docs/telemetry_dictionary.md reads all three identically.
+func _copy_session_digest() -> void:
+	var t: NetworkTelemetry = NetworkTelemetry.instance
+	if t == null:
+		return
+	var digest: Dictionary = {
+		"game_version": BuildInfo.VERSION,
+		"platform": OS.get_name(),
+		"role": "host" if NetworkManager.is_host else "client",
+		"net_sim_active": NetworkSimManager.enabled,
+		"game_id": GameManager.get_game_id(),
+		"metrics": t.session.to_dict(),
+	}
+	DisplayServer.clipboard_set(JSON.stringify(digest, "\t"))
+	_toast.text = "✓ Session digest copied to clipboard"
 	_toast.show()
 	_toast_timer = TOAST_SECONDS
 
@@ -242,7 +269,7 @@ func _refresh() -> void:
 	var felt: String = ""
 	if t.session.felt_lag_count > 0:
 		felt = "   [color=#%s]%d lag report(s)[/color]" % [COL_WARN, t.session.felt_lag_count]
-	var header := "[b]Network Debug[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]%s   [color=#%s](F3 close · F4 report lag)[/color]" % [
+	var header := "[b]Network Debug[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]%s   [color=#%s](F3 close · F4 report lag · C copy digest)[/color]" % [
 		_col(_worst), verdict, COL_HEAD, role, felt, COL_DIM]
 	_rt.text = header + "\n" + "\n".join(_lines)
 

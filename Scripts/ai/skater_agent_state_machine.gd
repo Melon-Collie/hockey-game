@@ -406,7 +406,7 @@ var _blade_reach: float = BLADE_REACH_M
 # now correct, not a bug: at 125 ms the keeper's reaction (~0.13 s leg / 0.18 s
 # arm) has barely fired, so a set, squared goalie genuinely covers a straight-on
 # range shot (the bot shouldn't fire it) while lateral lag, point-blank arm-deploy
-# gaps, and the seven-hole geometry still open the shots it SHOULD take. 15 ticks
+# gaps, and the goalie-hole geometry still open the shots it SHOULD take. 15 ticks
 # still lets the charge tracker accumulate the forehand/backhand swing chirality.
 const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 8   # ~125 ms
 
@@ -520,7 +520,9 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 #     distribution when picking a corner. (±0.02 m on the output cursor,
 #     non-accumulating, ≈0.6° on the 2 m aim arm — calibrated so the
 #     spread at a typical shot range stays inside the entry-clamp inset
-#     the aim model reserves for it; see AIM_NOISE_STD_M / _hole_aim_x.)
+#     the aim model reserves for it, and the same spread is what the
+#     SCORE demands as extra window (RoleContext.self_aim_spread_rad →
+#     the fit inset in _hole_open_angle); see AIM_NOISE_STD_M / _hole_aim_x.)
 #
 # MOUSE_MAX_SPEED_M_S is now the perfect-bot DEFAULT / back-compat fallback;
 # the effective per-agent cap (_mouse_max_speed_m_s) is set from
@@ -562,11 +564,12 @@ const MOUSE_TICK_DELTA: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
 # ~110° of gate headroom.
 #
 # The EFFECTIVE arc rate is the lesser of this ceiling and the per-agent
-# blade-slew cap projected onto the carry ring (_mouse_max_speed_m_s /
-# CARRY_BLADE_AIM_FORWARD_M) — below that linear cap the arc target's
+# blade-slew cap projected onto the blade's real orbit radius (its stick+blade
+# span — see _apply_aim_slew; the 2 m cursor ring is virtual, so projecting
+# onto it under-rotated every carrier). Above that linear cap the arc target's
 # tangential speed would exceed the mouse's max step and `_step_mouse_toward`
-# would chord-cut corners instead of tracing the arc. apply_profile() derives
-# _mouse_arc_rate_rad_s from both; the const is the default / ceiling.
+# would chord-cut corners instead of tracing the arc. apply_capabilities()
+# derives _mouse_arc_rate_rad_s from both; the const is the default / ceiling.
 const MOUSE_ARC_RATE_RAD_S: float = 7.5
 var _mouse_arc_rate_rad_s: float = MOUSE_ARC_RATE_RAD_S
 
@@ -919,6 +922,7 @@ var _cached_aim_arc_rate: float = MOUSE_ARC_RATE_RAD_S
 # first dispatch; arc-step falls back to no-op then.
 var _current_self_pos: Vector3 = Vector3.ZERO
 var _current_self_state: SkaterNetworkState = null
+var _current_snapshot: WorldSnapshot = null
 
 # Last action the bot actually fired (e.g. "SHOOT" /
 # "PASS→Backdoor"). Set inside the press-state handlers at the
@@ -982,8 +986,11 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	# as fast as its hands are — no artificial per-difficulty slew. Difficulty comes
 	# from reaction delay / decision cadence / the bot's own build, not a
 	# hands-override. (The cursor tracking the blade keeps pre-aim convergence
-	# honest — "aimed" means the blade is actually there.)
-	_apply_aim_slew(caps.blade_speed)
+	# honest — "aimed" means the blade is actually there.) The arc rate projects
+	# that linear cap onto the BLADE's real orbit radius (its stick+blade span) —
+	# the 2 m cursor ring is virtual, so capping the swing at the ring radius
+	# under-rotated every carrier by the ring/span ratio.
+	_apply_aim_slew(caps.blade_speed, caps.blade_span)
 
 
 # This bot's target power fraction (0..1) for a charged pass at _pass_target_speed,
@@ -1053,13 +1060,20 @@ func apply_profile(profile: BotSkillProfile) -> void:
 
 # Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
 # `slew` m/s — the bot's real Hands blade speed, so the cursor tracks the blade.
-func _apply_aim_slew(slew: float) -> void:
+# `orbit_radius_m` is the blade's real orbit radius (stick + blade span): the
+# angular swing the linear Hands cap physically allows is slew / THAT radius,
+# not slew / the (virtual, wider) 2 m cursor ring — projecting onto the ring
+# under-rotated every carrier ~25-50% below what its hands can actually do,
+# which read as "bots turn around too slowly with the puck". Defaults to the
+# ring radius so unwired/test agents keep the old conservative rate.
+func _apply_aim_slew(slew: float,
+		orbit_radius_m: float = CARRY_BLADE_AIM_FORWARD_M) -> void:
 	_mouse_max_speed_m_s = slew
 	# Arc rate: lesser of the IK-gate ceiling and the linear slew cap projected
-	# onto the carry ring radius — above either, the arc-step chord-cuts the
+	# onto the blade's orbit radius — above either, the arc-step chord-cuts the
 	# back-pass swing or the body-facing lag trips the pose IK gate.
 	_mouse_arc_rate_rad_s = minf(MOUSE_ARC_RATE_RAD_S,
-			_mouse_max_speed_m_s / CARRY_BLADE_AIM_FORWARD_M)
+			_mouse_max_speed_m_s / maxf(orbit_radius_m, 0.1))
 	# Pre-aim convergence timeout: time for a worst-case 180° swing at the
 	# (possibly reduced) arc rate, plus a fixed margin — never below the perfect-bot
 	# default. Keeps a slow (low-Hands) blade from bailing pre-aim early on a
@@ -1218,9 +1232,11 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	var self_pos: Vector3 = self_state.position
 	# Cache for _step_mouse_toward's arc-step path. Refreshed every
 	# dispatch including skipped ticks so the arc walks the cached
-	# target around the body even between full re-evals.
+	# target around the body even between full re-evals. The snapshot ref feeds
+	# the protect-side turn read (opponent blades) inside the arc step.
 	_current_self_pos = self_pos
 	_current_self_state = self_state
+	_current_snapshot = snapshot
 	# Self-possession is instant (proprioception) — read the REAL carrier, not
 	# the reaction-delayed one on puck_state. Otherwise the bot would freeze
 	# holding the puck for the reaction window after receiving it. Everything
@@ -1591,7 +1607,14 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			input.mouse_world_pos = _step_mouse_toward(
 					_blade_gate_on_puck_line(self_pos, puck_pos, puck_velocity))
 		else:
-			input.mouse_world_pos = _step_mouse_toward(target)
+			# ARC-step the far chase aim around the body ring. A direct chord to
+			# an intercept behind us crosses self_pos, parks the cursor in the
+			# pose IK gate's back wedge, and FREEZES facing — the bot skates to
+			# the loose puck sideways/backwards, face locked the wrong way. The
+			# ring walk keeps the mouse-body angle trackable the whole swing.
+			# Close-range precision is unaffected: inside _blade_reach the
+			# branch above aims direct at the puck itself.
+			input.mouse_world_pos = _step_mouse_aim(target)
 	# Sprint to win the race to a loose / contested puck. Gap is measured to
 	# the puck itself — the arrival easing inside ~1.5 m slows a clean solo
 	# pickup — EXCEPT through a live contest, where the gap reads the drive-
@@ -2192,6 +2215,71 @@ func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 	return self_pos + to_aim.normalized() * CARRY_BLADE_AIM_FORWARD_M
 
 
+# ── Protect-side turn ────────────────────────────────────────────────────────
+# A carrier's turn-around sweeps the puck along the arc the mouse walks. The
+# SHORT way around may drag the puck straight through a defender's poke reach
+# while the LONG way keeps the body between the puck and the pressure — a real
+# carrier turns away from the checker even when it's the longer rotation. When
+# a big swing starts, both sweep sides are read at their midpoint (worst point
+# of the sweep, at the blade's own orbit radius) against the nearest opposing
+# blade; the long way is taken iff the short side is inside poke threat and the
+# long side is meaningfully clearer. The choice COMMITS (sign latched) until
+# the swing passes halfway (shortest direction agrees) or completes — an
+# uncommitted per-tick re-read would flip direction mid-sweep and shimmy.
+const PROTECT_TURN_MIN_SWING_RAD: float = deg_to_rad(100.0)
+# A stick's poke reach off the swept puck — inside this, the short sweep is a
+# strip waiting to happen (mirrors POKE_EVADE_TRIGGER_REACH_M's read).
+const PROTECT_TURN_THREAT_RADIUS_M: float = 2.5
+# The long way must beat the short way's clearance by this much — a marginal
+# gain isn't worth the extra rotation time.
+const PROTECT_TURN_MARGIN_M: float = 0.5
+# Committed long-way sweep sign; 0.0 = no commitment (shortest way).
+var _arc_protect_sign: float = 0.0
+
+
+# The sweep sign for a carry-arc swing of `diff` (wrapped desired−current):
+# signf(diff) (shortest way) unless the short sweep drags the puck into poke
+# threat and the long sweep is meaningfully clearer. Pure read, no state —
+# _arc_step_mouse_target owns the commitment.
+func _protect_turn_direction(self_pos: Vector3, current_angle: float,
+		diff: float, snapshot: WorldSnapshot) -> float:
+	var short_sign: float = signf(diff)
+	if snapshot == null:
+		return short_sign
+	var short_mid: float = current_angle + diff * 0.5
+	var short_puck := Vector3(
+			self_pos.x + sin(short_mid) * _blade_reach, 0.0,
+			self_pos.z + cos(short_mid) * _blade_reach)
+	var short_clear: float = _nearest_opponent_blade_dist(snapshot, short_puck)
+	if short_clear >= PROTECT_TURN_THREAT_RADIUS_M:
+		return short_sign
+	var long_mid: float = current_angle + (diff - short_sign * TAU) * 0.5
+	var long_puck := Vector3(
+			self_pos.x + sin(long_mid) * _blade_reach, 0.0,
+			self_pos.z + cos(long_mid) * _blade_reach)
+	var long_clear: float = _nearest_opponent_blade_dist(snapshot, long_puck)
+	if long_clear > short_clear + PROTECT_TURN_MARGIN_M:
+		return -short_sign
+	return short_sign
+
+
+# Distance from `point` to the nearest opposing blade (body position when the
+# blade telemetry isn't populated yet). Pure read over the roster; no allocation.
+func _nearest_opponent_blade_dist(snapshot: WorldSnapshot, point: Vector3) -> float:
+	var nearest: float = INF
+	for peer_id: int in _opponent_ids(snapshot):
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var threat_pos: Vector3 = opp_state.blade_contact_world
+		if threat_pos == Vector3.ZERO:
+			threat_pos = opp_state.position
+		var dx: float = threat_pos.x - point.x
+		var dz: float = threat_pos.z - point.z
+		var d: float = sqrt(dx * dx + dz * dz)
+		if d < nearest:
+			nearest = d
+	return nearest
+
+
 # Returns an intermediate mouse target on the 2 m circle around self_pos
 # that walks toward `final_target` at no more than MOUSE_ARC_RATE_RAD_S.
 # See MOUSE_ARC_RATE_RAD_S comment for why arcing is required — straight
@@ -2227,7 +2315,24 @@ func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
 	var desired_angle: float = atan2(desired_dir.x, desired_dir.z)
 	var diff: float = wrapf(desired_angle - current_angle, -PI, PI)
 	var max_step: float = arc_rate * MOUSE_TICK_DELTA
-	var stepped_angle: float = current_angle + clampf(diff, -max_step, max_step)
+	# Protect-side turn (carriers only — see PROTECT_TURN_*): pick which way a
+	# big swing sweeps the puck, latch it, and hold it until the shortest way
+	# agrees (swung past halfway) or the swing completes.
+	if _state != State.CARRY:
+		_arc_protect_sign = 0.0
+	elif _arc_protect_sign != 0.0:
+		if signf(diff) == _arc_protect_sign or absf(diff) <= max_step:
+			_arc_protect_sign = 0.0
+	elif absf(diff) >= PROTECT_TURN_MIN_SWING_RAD:
+		var protect_sign: float = _protect_turn_direction(
+				self_pos, current_angle, diff, _current_snapshot)
+		if protect_sign != signf(diff):
+			_arc_protect_sign = protect_sign
+	var stepped_angle: float
+	if _arc_protect_sign != 0.0:
+		stepped_angle = current_angle + _arc_protect_sign * max_step
+	else:
+		stepped_angle = current_angle + clampf(diff, -max_step, max_step)
 	return self_pos + Vector3(sin(stepped_angle), 0.0, cos(stepped_angle)) * CARRY_BLADE_AIM_FORWARD_M
 
 
@@ -3503,9 +3608,12 @@ var _mouse_pos_initialized: bool = false
 #   (wrister windup interpolates a specific blade path that
 #   arc-snapping would distort; facing is locked during press
 #   states anyway, so the gate trip can't strand it) and for the
-#   chase state (the target may be the actual puck position at
-#   close range, and projecting it onto a 2 m ring would put the
-#   mouse beyond the puck and break pickup).
+#   chase state's CLOSE-RANGE aims — the puck inside blade reach and
+#   the blade gate on a fast puck's line, where the exact point
+#   matters for the pickup and a 2 m ring projection would overshoot
+#   it. The chase's FAR intercept aim arcs (_step_mouse_aim): a
+#   direct chord to an intercept behind the bot crosses the body and
+#   freezes facing in the IK gate's back wedge.
 # Cursor-shaping modes for _step_mouse_internal:
 #   DIRECT — chord straight toward the target at the slew cap (chase / press).
 #   ARC    — walk the target around the body ring at the blade slew (CARRY / blade

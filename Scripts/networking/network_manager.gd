@@ -83,6 +83,7 @@ signal game_started(config: Dictionary)
 signal lobby_roster_synced(roster: Array)
 signal color_vote_changed(peer_id: int, color_slot: int)
 signal color_votes_synced(votes: Dictionary)
+signal team_colors_changed(home_slot: int, away_slot: int)
 signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
 signal return_to_lobby_received(roster: Array)
 signal player_ready_changed(peer_id: int, is_ready: bool)
@@ -318,6 +319,15 @@ var pending_error: String = ""
 # open. Deliberately NOT cleared by reset() (it must survive the
 # return_to_free_play teardown); SideMenu consumes and clears it on _ready.
 var pending_reconnect_lobby_id: int = 0
+# Why the online session is ending, for the network_sessions telemetry row.
+# Set by the abnormal-end handlers just before they trigger teardown
+# ("host_lost" / "host_ended" / "kicked"); consumed one-shot by
+# GameManager.on_scene_exit via take_session_end_reason(). Empty means the
+# local player left on their own (reported as "quit") or the game completed
+# (the game-over path reports "completed" first and wins the double-post
+# guard). Cleared by reset() so a reason from an aborted join can't leak
+# into the next session's row.
+var pending_session_end_reason: String = ""
 
 var _input_timer: float = 0.0
 # Broadcast cadence. Counter ticks here every physics frame (see
@@ -444,7 +454,7 @@ func apply_local_identity(p_name: String, p_number: int, p_is_left: bool) -> voi
 	local_identity_changed.emit(p_name, p_number, p_is_left)
 
 
-func start_tutorial(id: String = TutorialRegistry.BASICS_ID) -> void:
+func start_tutorial(id: String = TutorialRegistry.MOVEMENT_ID) -> void:
 	is_tutorial_mode = true
 	tutorial_id = id
 	# Pre-assign team 0, slot 0 so the player always spawns as the home team.
@@ -475,21 +485,41 @@ func is_drill_mode() -> bool:
 func local_time() -> float:
 	return (Time.get_ticks_msec() - _session_start_ms) / 1000.0
 
-# Host startup is now async: kick off Steam lobby creation and assign the
-# SteamMultiplayerPeer once the lobby_created callback lands. The menu waits on
-# host_lobby_ready before changing scene. Host is still peer id 1, so all
-# downstream RPC / slot / spawn code is unchanged.
-func start_host() -> void:
+# Lobby-phase transport attach: turns the running offline host session into an
+# online one. Every hosted session now starts via start_offline (the unified
+# Play flow) and goes online only when the lobby's visibility selector leaves
+# Offline — this kicks off async Steam lobby creation and installs the host
+# peer once the lobby_created callback lands. Callers wait on host_lobby_ready
+# / host_lobby_failed (the selector shows a busy state meanwhile). Only valid
+# from the lobby scene while no remote peers exist — there is no session state
+# to migrate then, the offline session already runs the full host simulation.
+# Host is still peer id 1, so all downstream RPC / slot / spawn code is
+# unchanged.
+func attach_online(public: bool) -> void:
 	_session_start_ms = Time.get_ticks_msec()
-	is_host = true
-	game_initiated = true
-	_peer_handedness[1] = local_is_left_handed
-	_peer_names[1] = local_player_name
-	_peer_numbers[1] = local_jersey_number
-	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	SteamManager.lobby_created.connect(_on_steam_lobby_created, CONNECT_ONE_SHOT)
 	SteamManager.lobby_create_failed.connect(_on_steam_lobby_create_failed, CONNECT_ONE_SHOT)
-	SteamManager.create_lobby(GameRules.MAX_CONNECTIONS, true)
+	SteamManager.create_lobby(GameRules.MAX_CONNECTIONS, public)
+
+
+# Inverse of attach_online, for the visibility selector's Offline position:
+# drop the host peer and the Steam lobby and return to a pure offline session.
+# The selector locks Offline out while human peers are connected, so there is
+# nobody to announce to — teardown is silent. Lobby state (slots, bots,
+# settings, votes) lives on the host and is untouched.
+func detach_online() -> void:
+	# A create still in flight (selector flipped back mid-spinner) must not
+	# land a stale SteamMultiplayerPeer into the now-offline session.
+	if SteamManager.lobby_created.is_connected(_on_steam_lobby_created):
+		SteamManager.lobby_created.disconnect(_on_steam_lobby_created)
+	if SteamManager.lobby_create_failed.is_connected(_on_steam_lobby_create_failed):
+		SteamManager.lobby_create_failed.disconnect(_on_steam_lobby_create_failed)
+	if multiplayer.multiplayer_peer != null and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
+		multiplayer.multiplayer_peer.close()
+	multiplayer.multiplayer_peer = null
+	SteamManager.leave_lobby()
+	is_offline_mode = true
+	_session_start_ms = 0
 
 func _on_steam_lobby_created(_lobby_id: int) -> void:
 	if SteamManager.lobby_create_failed.is_connected(_on_steam_lobby_create_failed):
@@ -504,6 +534,7 @@ func _on_steam_lobby_created(_lobby_id: int) -> void:
 		return
 	_disable_nagle(peer)
 	multiplayer.multiplayer_peer = peer
+	is_offline_mode = false
 	host_lobby_ready.emit()
 
 func _on_steam_lobby_create_failed(reason: String) -> void:
@@ -632,6 +663,10 @@ func _on_connection_failed() -> void:
 
 func _on_server_disconnected() -> void:
 	push_error("Server disconnected")
+	# Telemetry end-reason: an unexpected transport loss is "host_lost" unless a
+	# more specific handler (match ended, kicked) already claimed the session.
+	if pending_session_end_reason.is_empty():
+		pending_session_end_reason = "host_lost"
 	# Keep a more specific reason (host ended the match, kicked) if one
 	# arrived just before the transport closed.
 	if pending_error.is_empty():
@@ -703,6 +738,7 @@ func reset() -> void:
 	multiplayer.multiplayer_peer = null
 	is_host = false
 	game_initiated = false
+	pending_session_end_reason = ""
 	is_offline_mode = false
 	is_free_play_mode = false
 	is_tutorial_mode = false
@@ -1003,6 +1039,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 @rpc("authority", "reliable")
 func notify_join_rejected(reason: String) -> void:
 	pending_error = reason
+	pending_session_end_reason = "kicked"
 	join_rejected.emit(reason)
 
 
@@ -1036,6 +1073,7 @@ func announce_match_end() -> void:
 @rpc("authority", "reliable")
 func notify_match_ended() -> void:
 	pending_error = "Host ended the match."
+	pending_session_end_reason = "host_ended"
 	GameManager.return_to_free_play()
 
 func get_peer_handedness(peer_id: int) -> bool:
@@ -1054,6 +1092,14 @@ func get_peer_steam_id(peer_id: int) -> int:
 # during the peer_disconnected emit; gates the reconnect reservation.
 func was_peer_kicked(peer_id: int) -> bool:
 	return _kicked_peers.has(peer_id)
+
+# One-shot read of the abnormal-end reason for the telemetry row ("" if the
+# session is ending voluntarily — the caller maps that to "quit"). Clears on
+# read so a reason can never leak into a later session's report.
+func take_session_end_reason() -> String:
+	var reason: String = pending_session_end_reason
+	pending_session_end_reason = ""
+	return reason
 
 func get_peer_attributes(peer_id: int) -> PlayerAttributes:
 	var attrs: PlayerAttributes = _peer_attributes.get(peer_id, null)
@@ -1112,7 +1158,7 @@ func update_lobby_attributes(attrs: PlayerAttributes) -> void:
 # No match-in-progress gate: _peer_attributes is consulted only at spawn, so a
 # stray mid-match edit can't perturb a live simulation, and a mid-match
 # reconnect restores the original build via set_peer_attributes regardless.
-# (game_initiated is unusable as a gate here — it's set true at start_host /
+# (game_initiated is unusable as a gate here — it's set true at start_offline /
 # start_client_lobby, i.e. throughout the pre-match lobby, not just in-game.)
 @rpc("any_peer", "reliable")
 func request_update_attributes(attr_speed: int, attr_agility: int, attr_hands: int,
@@ -1430,6 +1476,13 @@ func get_clock_offset_ms() -> float:
 	if _clock_sync == null:
 		return 0.0
 	return _clock_sync._offset * 1000.0
+
+# Magnitude of the last post-ready clock-offset correction (ms) — the clock
+# stability signal the session telemetry folds. ~0 when settled.
+func get_clock_correction_ms() -> float:
+	if _clock_sync == null:
+		return 0.0
+	return _clock_sync.last_correction_ms
 
 @rpc("any_peer", "unreliable")
 func report_ping(rtt_ms: int) -> void:
@@ -1851,6 +1904,29 @@ func send_color_vote(color_slot: int) -> void:
 
 func send_color_votes_to(peer_id: int, votes: Dictionary) -> void:
 	sync_color_votes.rpc_id(peer_id, votes)
+
+# ── Host-picked team colors ──────────────────────────────────────────────────
+# The lobby's dynamic teams column lets the host set a team's palette directly
+# while no human occupies it (occupied teams resolve from votes instead).
+# Broadcast so clients' lobby previews track the host's pick; the colors that
+# actually ship are still resolved host-side into the game_start config.
+
+@rpc("authority", "reliable")
+func notify_team_colors(home_slot: int, away_slot: int) -> void:
+	pending_home_color_slot = home_slot
+	pending_away_color_slot = away_slot
+	team_colors_changed.emit(home_slot, away_slot)
+
+func send_team_colors(home_slot: int, away_slot: int) -> void:
+	if not is_host:
+		return
+	pending_home_color_slot = home_slot
+	pending_away_color_slot = away_slot
+	for remote_id: int in connected_peer_ids():
+		notify_team_colors.rpc_id(remote_id, home_slot, away_slot)
+
+func send_team_colors_to(peer_id: int, home_slot: int, away_slot: int) -> void:
+	notify_team_colors.rpc_id(peer_id, home_slot, away_slot)
 
 # ── Bot slot toggles ─────────────────────────────────────────────────────────
 # Phase 1 keeps authoring host-only: only the host UI calls send_bot_slot. The

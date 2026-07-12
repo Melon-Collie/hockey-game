@@ -361,6 +361,7 @@ func clamp_blade_from_net(point: Vector3) -> Vector3:
 			_skater.get_prev_blade_contact_global(),
 			GameRules.GOAL_LINE_Z,
 			GameRules.NET_HALF_WIDTH,
+			GameRules.NET_POST_RADIUS,
 			GameRules.NET_PUCK_BUFFER,
 			GameRules.NET_DEPTH,
 			GameRules.NET_HEIGHT,

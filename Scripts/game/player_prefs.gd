@@ -353,10 +353,14 @@ const REPLAY_KEEP_MIN: int = 1
 const REPLAY_KEEP_MAX: int = 100
 
 # Tutorial completion is stored as a single Dictionary keyed by tutorial id
-# ("basics", "advanced", future drill ids) so adding new tutorials never
+# ("movement", "shooting", future drill ids) so adding new tutorials never
 # requires a schema change. Value is currently a bool; can grow to a small
 # per-tutorial dict (timestamps, highest step reached) without migration —
 # _load() defensive-casts whatever ConfigFile returns.
+# TUTORIAL_COURSE_VERSION gates a completion wipe on load: bump it whenever the
+# course is restructured enough that everyone should replay it (v2 = the
+# six-part Movement→Rules course).
+const TUTORIAL_COURSE_VERSION: int = 2
 var tutorial_completion: Dictionary = {}
 
 func _get_save_path() -> String:
@@ -459,6 +463,7 @@ func save() -> void:
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
 	cfg.set_value("replay", "keep_count", replay_keep_count)
 	cfg.set_value("tutorials", "completion", tutorial_completion)
+	cfg.set_value("tutorials", "course_version", TUTORIAL_COURSE_VERSION)
 	for action: String in REBINDABLE_ACTIONS:
 		if not bindings.has(action):
 			continue
@@ -558,6 +563,25 @@ func _read_current_input_event(action: String) -> Dictionary:
 		elif ev is InputEventMouseButton:
 			return {"type": "mouse", "button_index": int((ev as InputEventMouseButton).button_index)}
 	return {}
+
+
+# Short display string for an action's current primary binding, read from the
+# live InputMap (which apply_bindings keeps in sync with the player's rebinds).
+# Used by tutorial copy — instructions always name the player's real keys, not
+# the project defaults.
+func action_display(action: String) -> String:
+	var b: Dictionary = _read_current_input_event(action)
+	if b.get("type") == "key":
+		return OS.get_keycode_string(int(b.physical_keycode) as Key)
+	if b.get("type") == "mouse":
+		match int(b.button_index):
+			MOUSE_BUTTON_LEFT: return "LMB"
+			MOUSE_BUTTON_RIGHT: return "RMB"
+			MOUSE_BUTTON_MIDDLE: return "MMB"
+			MOUSE_BUTTON_WHEEL_UP: return "Scroll Up"
+			MOUSE_BUTTON_WHEEL_DOWN: return "Scroll Down"
+			_: return "Mouse %d" % int(b.button_index)
+	return "?"
 
 func apply_audio() -> void:
 	var master_bus := AudioServer.get_bus_index("Master")
@@ -1030,6 +1054,12 @@ func _load() -> void:
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
 		var raw_completion: Variant = cfg.get_value("tutorials", "completion", {})
 		tutorial_completion = raw_completion if raw_completion is Dictionary else {}
+		# Course-version gate: when the tutorial course is restructured (new
+		# parts, new mechanics taught), bump TUTORIAL_COURSE_VERSION to wipe
+		# saved completion so every player is routed back through the new
+		# course on next boot (see boot.gd's first-incomplete routing).
+		if int(cfg.get_value("tutorials", "course_version", 1)) < TUTORIAL_COURSE_VERSION:
+			tutorial_completion = {}
 		for action: String in REBINDABLE_ACTIONS:
 			var t: String = cfg.get_value("bindings", action + "_type", "")
 			if t == "key":

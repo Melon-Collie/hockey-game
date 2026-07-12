@@ -16,6 +16,25 @@ var session := NetworkSessionSummary.new()
 # each frame so the session fold can sample them at window rollover.
 var current_rtt_ms: float = 0.0
 var current_peer_count: int = 0
+# Client-side: de-clumped path jitter (PDV) — read WITH jitter_p95: jitter high
+# but this low = benign relay clumping; both high = genuinely jittery path that
+# needs buffer depth. Also the term that sizes the interpolation cushion, so if
+# extrapolation_pct climbs while this stays low the cushion is under-sizing.
+var current_delay_spread_ms: float = 0.0
+# Client-side: last clock-sync offset correction magnitude (see ClockSync).
+var current_clock_correction_ms: float = 0.0
+# Host-side: worst per-peer link this instant, so the host row carries a real
+# link picture instead of degenerate zeros (its own RTT/loss are 0).
+var current_worst_peer_rtt_ms: float = 0.0
+var current_worst_peer_loss_pct: float = 0.0
+
+# Pre-history ring: the last RECENT_SAMPLE_WINDOW folded 1 s samples, attached
+# to felt-lag / auto markers so a marker carries the run-up to the bad moment
+# (an F4 press lands AFTER the moment — the instantaneous snapshot may already
+# look recovered). Values are rounded at build time: history rides inside the
+# row's jsonb, which the table caps at 64 KiB.
+const RECENT_SAMPLE_WINDOW: int = 6
+var _recent_samples: Array[Dictionary] = []
 
 # ── Window counters (reset each second) ──────────────────────────────────────
 var _world_state_count: int = 0
@@ -462,14 +481,19 @@ func tick(delta: float) -> void:
 # the column prefixes the network_sessions table expects (see
 # network_session_summary.gd). Role-degenerate metrics (e.g. loss/jitter on a
 # host, reconciles on a host) fold as their natural 0/100 — the row's `role`
-# disambiguates them at query time. sim_rate is the one exception: it's only
-# meaningful when ticks were sampled (host/solo), so a client's structural 0 is
-# omitted to keep its session-min honest.
+# disambiguates them at query time. sim_rate and broadcast interval are the
+# exceptions: they're only meaningful when their samples were recorded
+# (host/solo), so a client's structural 0 is omitted to keep the session
+# min/max honest.
 func _fold_session_sample() -> void:
 	var sample: Dictionary = {
 		"rtt_ms": current_rtt_ms,
 		"packet_loss_pct": packet_loss_pct,
 		"jitter_p95_ms": jitter_p95_ms,
+		"delay_spread_ms": current_delay_spread_ms,
+		"clock_correction_ms": current_clock_correction_ms,
+		"worst_peer_rtt_ms": current_worst_peer_rtt_ms,
+		"worst_peer_loss_pct": current_worst_peer_loss_pct,
 		"reconcile_per_sec": reconcile_per_sec,
 		"reconcile_mag_m": reconcile_magnitude_avg,
 		"reconcile_match_pct": reconcile_match_pct,
@@ -495,7 +519,74 @@ func _fold_session_sample() -> void:
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,
 		"peer_count": float(current_peer_count),
+		# Rare-event tripwires fold as this window's raw COUNTS — TOTAL_KEYS in
+		# the summary, so the row carries a session total instead of an average
+		# that smears 3 hard snaps in a 10-minute game to ~0.
+		"puck_hard_snaps": float(_puck_traj_hard_snap_count),
+		"blade_jumps": float(_blade_jump_count),
+		# Interp buffer depths (MIN_KEYS — running dry is the bad direction).
+		# Host rows fold structural 0s; `role` disambiguates at query time.
+		"buffer_depth_skater": float(buffer_depth_skater),
+		"buffer_depth_puck": float(buffer_depth_puck),
 	}
 	if host_effective_tick_hz > 0.0:
 		sample["sim_rate_hz"] = host_effective_tick_hz
+	if broadcast_interval_p95_ms > 0.0:
+		sample["broadcast_interval_p95_ms"] = broadcast_interval_p95_ms
 	session.observe(sample)
+	_push_recent_sample(sample)
+	_check_auto_markers()
+
+
+# Append this window's sample to the pre-history ring markers attach. Values
+# are rounded to 2 dp — full-precision floats triple the JSON size, and history
+# rides inside the jsonb the table caps at 64 KiB. `at_sec` is added here (it
+# must NOT be in the observed sample, where every key becomes an aggregate).
+func _push_recent_sample(sample: Dictionary) -> void:
+	var entry: Dictionary = {"at_sec": float(session.seconds)}
+	for key: String in sample:
+		entry[key] = snappedf(sample[key], 0.01)
+	_recent_samples.append(entry)
+	if _recent_samples.size() > RECENT_SAMPLE_WINDOW:
+		_recent_samples.pop_front()
+
+
+# Copy of the pre-history ring for a marker being recorded right now (the last
+# entry is the current window). Shallow-duplicated so later ring turnover can't
+# mutate a stored marker; the entries themselves are never edited after build.
+func recent_samples() -> Array[Dictionary]:
+	return _recent_samples.duplicate()
+
+
+# Objective anomaly markers — the same mechanism as a tester's F4 press, fired
+# automatically when a window crosses a tripwire, so rare bugs land with a
+# timestamp and a pre-history trace even when nobody reacted. Thresholds mirror
+# the F3 overlay's BAD bands (keep in sync with network_debug_overlay.gd and
+# docs/telemetry_dictionary.md); rarity is enforced by the summary's per-trigger
+# cooldown + session cap, so a broken session records the onset, not spam.
+func _check_auto_markers() -> void:
+	if _puck_traj_hard_snap_count >= 2:
+		_auto_marker("puck_hard_snaps")
+	if reconcile_per_sec >= 5.0:
+		_auto_marker("reconcile_storm")
+	if extrapolation_pct >= 60.0:
+		_auto_marker("extrapolation")
+	if host_physics_tick_max_ms >= 66.0:
+		_auto_marker("host_stall")
+	if input_starvations_per_sec >= 5.0:
+		_auto_marker("input_starvation")
+
+
+func _auto_marker(trigger: String) -> void:
+	# The pre-history's last entry IS the offending window, so the snapshot only
+	# carries what the numeric samples can't: the puck's replication mode.
+	session.record_auto_marker(float(session.seconds), trigger,
+			{"puck_mode": puck_mode}, recent_samples())
+
+
+# Fresh accumulator for a rematch: each game posts its own row keyed to its own
+# game_id, so the second game's aggregates must not include the first's.
+# Called from GameManager._apply_reset on every peer.
+func reset_session() -> void:
+	session = NetworkSessionSummary.new()
+	_recent_samples.clear()

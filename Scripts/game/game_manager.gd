@@ -134,6 +134,18 @@ var _puck_was_carried: bool = false
 # real crossing — the tracker reseeds and skips it. Far above any shot or blade
 # speed at 120 Hz (~2 m/tick = 240 m/s); a faceoff/OOB reset jumps much further.
 const _GOAL_MAX_TICK_TRAVEL: float = 2.0
+# Tighter bound for a puck that was PINNED on both ends of the segment. A
+# carried puck teleports to the carry target every tick, and that target can
+# jump discontinuously while play is continuous: a forehand/backhand flip
+# swings it around the body, and the blade's net clamp hands the contact
+# between box faces. Treating such a jump as a swept path let a carrier
+# dangling behind the net "score through the mesh" — pin beside the post one
+# tick, pin past the net the next, and the straight segment between them
+# pierced the goal-line plane inside the mouth (visually, the puck went
+# through the back of the net). Real carried motion is bounded by skate +
+# blade speed (~13 + 8 m/s -> ~0.18 m/tick); 0.5 gives ~3x headroom while the
+# flip artifacts it must reject span the net's width (~1 m and up).
+const _GOAL_MAX_CARRIED_TICK_TRAVEL: float = 0.5
 # True while the local goal cinematic OR intermission reel is playing. Gates
 # the skip_replay action so we don't fire stray vote RPCs outside a skippable
 # window.
@@ -261,6 +273,11 @@ var _intermission_timer: SceneTreeTimer = null
 var _intermission_end_timer: SceneTreeTimer = null
 var _career_reporter: CareerStatsReporter = null
 var _net_session_reporter: NetworkSessionReporter = null
+# Double-post guard for the network-quality row: the game-over path reports
+# "completed" and the scene-exit path reports abnormal ends ("quit",
+# "host_lost", …) — whichever fires first wins. Re-armed at world spawn and on
+# rematch reset (each game posts its own row).
+var _net_session_reported: bool = false
 var _achievements: AchievementService = null
 var _stat_recorder: SteamStatRecorder = null
 # Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
@@ -308,11 +325,21 @@ var _camera_director: CameraDirector = null
 
 # ── Game identity ─────────────────────────────────────────────────────────────
 # Minted by the host in LobbyManager._on_start_pressed and broadcast via
-# game_start. Used as the .mreplay filename and (planned for Feature C) stored
-# on career_stats rows so a single game can be reconstructed across players.
-# **Empty in offline / tutorial mode** — those sessions don't write replays
-# or career stats. Downstream consumers must treat empty as "skip recording".
+# game_start, so EVERY lobby match carries one — including offline Play vs
+# Bots, whose games therefore write local replays. Used as the .mreplay
+# filename and stored on career_stats rows so a single game can be
+# reconstructed across players. **Empty in free play / tutorial / drill
+# sessions** (no lobby, nothing minted) — those don't write replays or career
+# stats. Downstream consumers must treat empty as "skip recording".
 var _game_id: String = ""
+# True once this match has (ever) had two or more human players — the bar for
+# uploading ranked backend rows (career stats, network-session telemetry).
+# With the lobby's visibility toggle, an online-visible session can still be a
+# solo-vs-bots game, so is_offline_mode alone no longer implies "unranked".
+# Latched, not sampled: a human joining mid-match (spectator taking over a
+# bot) makes the game ranked from then on, but players leaving before the
+# horn don't un-rank it. Reset at world spawn and recomputed on rematch.
+var _ranked_match: bool = false
 
 # Sound wiring is split between persistent (NetworkManager autoload, GameManager
 # self-signals — wire once for the lifetime of the process) and per-game (puck /
@@ -679,17 +706,30 @@ func _check_goal_crossing() -> void:
 	# blade can get there; here we just watch the puck's path.
 	var curr: Vector3 = puck.global_position
 	var carried: bool = puck.carrier != null
-	# Reseed on a cold tracker or a loose<->carried transition (pickup snap /
-	# release move the puck discontinuously — spanning that jump could fabricate
-	# a crossing).
-	if not _has_prev_puck_pos or carried != _puck_was_carried:
+	# Reseed on a cold tracker or a loose->carried transition: the pickup snaps
+	# the puck to the blade discontinuously, and spanning that jump could
+	# fabricate a crossing. The carried->loose direction is NOT reseeded — a
+	# release repositions the puck by at most the carry offset plus one tick of
+	# shot travel, a real path. Reseeding it opened a one-tick blind window
+	# that swallowed point-blank crossings: a shot released within a tick's
+	# travel of the goal line finished crossing inside the skipped segment,
+	# and the puck then sat in the net permanently "already across" — a
+	# visible no-count goal. (The teleport guard below still catches resets.)
+	var was_carried: bool = _puck_was_carried
+	if not _has_prev_puck_pos or (carried and not was_carried):
 		_prev_puck_pos = curr
 		_has_prev_puck_pos = true
 		_puck_was_carried = carried
 		return
-	# Teleport guard: an implausible jump (loose-puck reset/reposition) is never a
-	# real crossing — reseed and skip.
-	if _prev_puck_pos.distance_to(curr) <= _GOAL_MAX_TICK_TRAVEL:
+	_puck_was_carried = carried
+	# Teleport guard: an implausible jump is never a real crossing — reseed and
+	# skip. Pinned-on-both-ends segments get the tight carried bound (see
+	# _GOAL_MAX_CARRIED_TICK_TRAVEL); the transition tick out of carry keeps the
+	# loose bound, since a released shot legitimately travels a tick of shot
+	# speed plus the release reposition.
+	var max_travel: float = _GOAL_MAX_CARRIED_TICK_TRAVEL \
+			if carried and was_carried else _GOAL_MAX_TICK_TRAVEL
+	if _prev_puck_pos.distance_to(curr) <= max_travel:
 		for goal: HockeyGoal in goals:
 			goal.check_goal_crossing(_prev_puck_pos, curr)
 	_prev_puck_pos = curr
@@ -1072,6 +1112,7 @@ func _spawn_world() -> void:
 	# scene transition) and pollutes the p95/p99 for the first second.
 	_last_phys_tick_us = 0
 	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
+	_ranked_match = false  # re-latches as players spawn (_on_registry_player_added)
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -1083,9 +1124,10 @@ func _spawn_world() -> void:
 		else:
 			push_warning("rejected game_id from config: %s" % cfg_id)
 		NetworkManager.pending_game_config = {}
-	# Offline / tutorial sessions intentionally leave _game_id empty — they
-	# don't broadcast (no other peer would see the id) and downstream consumers
+	# Free play / tutorial / drill sessions intentionally leave _game_id
+	# empty (their pending config carries none) and downstream consumers
 	# (ReplayFileWriter, CareerStatsReporter) treat empty as "don't record".
+	# Lobby matches — online AND offline vs bots — always carry one.
 	_spawner = ActorSpawner.new()
 	_spawner.setup(get_tree().current_scene)
 	_create_teams()
@@ -1354,6 +1396,7 @@ func _wire_subsystems() -> void:
 
 	_telemetry = NetworkTelemetry.new()
 	NetworkTelemetry.instance = _telemetry
+	_net_session_reported = false
 	_debug_overlay = NetworkDebugOverlay.new()
 	add_child(_debug_overlay)
 
@@ -2083,7 +2126,7 @@ func _open_replay_file_writer() -> void:
 	if _replay_file_writer != null:
 		return
 	if _game_id.is_empty():
-		return  # offline / tutorial — see _spawn_world
+		return  # free play / tutorial / drill — see _game_id doc
 	if not PlayerPrefs.replay_recording_enabled:
 		return
 	# Purge oldest first so the new file is never the one we delete next game.
@@ -2412,6 +2455,7 @@ func _on_registry_player_added(record: PlayerRecord) -> void:
 		_sync_stats_to_clients()
 	if _state_buffer_manager != null:
 		_state_buffer_manager.add_player(record.peer_id)
+	_refresh_ranked_match()
 
 
 # Populates per-frame AI caches on the live snapshot — a per-team peer-id
@@ -3267,11 +3311,23 @@ func _observe_telemetry() -> void:
 		extrapolating = extrapolating or puck_controller.is_extrapolating
 	_telemetry.observe_actors(skater_buf, puck_buf, goalie_buf, extrapolating)
 	# Connection facts the static record_* path doesn't carry — sampled by the
-	# session fold at window rollover. RTT is the client's round-trip to host;
-	# the host folds its peer count instead (its own RTT is 0).
+	# session fold at window rollover. Clients refresh their link-to-host reads;
+	# the host refreshes its per-peer view instead (its own RTT/loss are 0).
 	if not NetworkManager.is_offline_mode:
-		_telemetry.current_rtt_ms = NetworkManager.get_rtt_ms() if not NetworkManager.is_host else 0.0
-		_telemetry.current_peer_count = NetworkManager.connected_peer_ids().size() if NetworkManager.is_host else 0
+		if NetworkManager.is_host:
+			var peers: PackedInt32Array = NetworkManager.connected_peer_ids()
+			_telemetry.current_peer_count = peers.size()
+			var worst_rtt: float = 0.0
+			var worst_loss: float = 0.0
+			for pid: int in peers:
+				worst_rtt = maxf(worst_rtt, float(NetworkManager.get_peer_ping_ms(pid)))
+				worst_loss = maxf(worst_loss, NetworkManager.get_peer_loss_rate(pid))
+			_telemetry.current_worst_peer_rtt_ms = worst_rtt
+			_telemetry.current_worst_peer_loss_pct = worst_loss
+		else:
+			_telemetry.current_rtt_ms = NetworkManager.get_rtt_ms()
+			_telemetry.current_delay_spread_ms = NetworkManager.get_packet_delay_spread_ms()
+			_telemetry.current_clock_correction_ms = NetworkManager.get_clock_correction_ms()
 
 
 func _sync_stats_to_clients() -> void:
@@ -3505,9 +3561,16 @@ func _on_game_over() -> void:
 				if _achievements != null:
 					_achievements.evaluate_career(_stat_recorder.totals())
 	# Supabase career row + network telemetry: online, shared-stats games only.
-	# Offline (Play vs Bots + free play) and tutorial don't upload — no game_id,
-	# backend cost, and no cross-machine opponent pool worth ranking.
+	# Offline (Play vs Bots + free play) and tutorial don't upload — backend
+	# cost, and no cross-machine opponent pool worth ranking. (Bot-lobby games
+	# DO have a game_id and record local replays; they just stay off the
+	# backend.)
 	if NetworkManager.is_offline_mode:
+		return
+	# An online-VISIBLE lobby can still produce a solo-vs-bots match (nobody
+	# joined before the horn). Same no-real-opponent reasoning as above —
+	# ranked rows require the two-human latch.
+	if not _ranked_match:
 		return
 	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
 	# The Career screen's history reads from that backend data, so it stays empty by
@@ -3515,14 +3578,30 @@ func _on_game_over() -> void:
 	# Steam achievements/stats above are unaffected — they never touch the backend.
 	if not PlayerPrefs.share_gameplay_stats:
 		return
-	# Network-quality row: shares the offline + privacy gates above but not the
-	# career-specific team/score plumbing below, so report it here. Both roles
-	# are worth collecting (client = link quality, host = frame/input health).
-	if _telemetry != null and _net_session_reporter != null:
-		var role: String = "host" if NetworkManager.is_host else "client"
-		_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled)
+	# Network-quality row: shares the offline + privacy gates (re-checked inside
+	# the helper) but not the career-specific team/score plumbing below, so
+	# report it here. Both roles are worth collecting (client = link quality,
+	# host = frame/input health).
+	_report_net_session("completed")
 	if local == null or local.team == null:
 		return
+
+
+# One network-quality row per game, guarded so the game-over and scene-exit
+# paths can both call it without double-posting. `end_reason`: "completed"
+# (game over), "quit" (local player left mid-game), or a client-side abnormal
+# end from NetworkManager ("host_lost" / "host_ended" / "kicked"). Applies the
+# same offline + privacy gates as career stats; the reporter's own 30 s floor
+# still filters rage-quit warmups.
+func _report_net_session(end_reason: String) -> void:
+	if _net_session_reported or _telemetry == null or _net_session_reporter == null:
+		return
+	if NetworkManager.is_offline_mode or not PlayerPrefs.share_gameplay_stats:
+		return
+	_net_session_reported = true
+	var role: String = "host" if NetworkManager.is_host else "client"
+	_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled,
+			_game_id, end_reason)
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
 
@@ -3532,6 +3611,19 @@ func _on_game_over() -> void:
 # or tutorial / penalty-drill practice.
 func _achievements_active() -> bool:
 	return not NetworkManager.is_free_play_mode and not NetworkManager.is_drill_mode()
+
+
+# Latches _ranked_match (see its doc) once two humans share the match. Called
+# from _on_registry_player_added so both the initial roster population and a
+# mid-match join re-evaluate it; _apply_reset re-runs it for rematches.
+func _refresh_ranked_match() -> void:
+	if _ranked_match or _registry == null or NetworkManager.is_offline_mode:
+		return
+	var humans: int = 0
+	for record: PlayerRecord in _registry.all().values():
+		if not record.is_bot:
+			humans += 1
+	_ranked_match = humans >= 2
 
 
 # Window-close hook — closes the replay file cleanly when the user clicks
@@ -3612,6 +3704,13 @@ func on_scene_exit() -> void:
 	if _debug_overlay:
 		_debug_overlay.queue_free()
 		_debug_overlay = null
+	# Mid-game exits (quit to free play, host lost, host ended, kicked) still
+	# ship a network-quality row — the sessions that end badly are the most
+	# diagnostic ones, and the game-over-only path never saw them. No-op when
+	# the game already reported at game-over (the _net_session_reported guard).
+	# The take() runs unconditionally so a stale reason never survives teardown.
+	var abnormal_reason: String = NetworkManager.take_session_end_reason()
+	_report_net_session(abnormal_reason if not abnormal_reason.is_empty() else "quit")
 	_telemetry = null
 	NetworkTelemetry.instance = null
 	_last_emitted_clock_secs = -1
@@ -3663,6 +3762,12 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 
 func _apply_reset() -> void:
+	# A rematch is a fresh match: fresh telemetry session (its row keys to the
+	# new game_id minted by the rollover) and a re-armed reporter guard, so each
+	# game posts exactly one row that aggregates only its own play.
+	if _telemetry != null:
+		_telemetry.reset_session()
+	_net_session_reported = false
 	# End any highlight reel (post-game loop or a mid-break intermission cut
 	# short by the rematch) and drop the previous match's clips so a rematch's
 	# screens only reel their own goals.
@@ -3694,6 +3799,10 @@ func _apply_reset() -> void:
 	if _possession_tracker != null:
 		_possession_tracker.reset()
 	stats_updated.emit()
+	# A rematch is a fresh match for ranking purposes: re-derive the two-human
+	# latch from who's actually still here.
+	_ranked_match = false
+	_refresh_ranked_match()
 
 
 # ── Return to Lobby ──────────────────────────────────────────────────────────
@@ -4245,20 +4354,39 @@ func set_tutorial_offsides_active(active: bool) -> void:
 	_tutorial_offsides_active = active
 
 
-# Spawn an AI-controlled bot on the away team (team 1) in scripted/puppet
-# mode for tutorial demonstrations. The bot uses the same spawn path as
-# normal bots (so team_id resolver, jersey colors, etc. all wire up
-# correctly — this is what fixes the stickcheck/body-check unreliability
-# the static dummy suffered from), then is flipped into scripted_mode and
-# excluded from TeamBrain role assignment.
+# Tutorial-only: put the puck on a skater's stick through the same grant path
+# as a real pickup (PuckController bookkeeping + controller notify). A bare
+# Puck.set_carrier skips PuckController's carrier tracking, so the release
+# that follows never notifies the controller — has_puck leaks true and the
+# player can "shoot" a puck that isn't on their stick.
+func tutorial_give_puck(record: PlayerRecord) -> void:
+	if puck == null or puck_controller == null or record == null \
+			or not is_instance_valid(record.skater):
+		return
+	if puck.carrier == record.skater:
+		return
+	if puck.carrier != null:
+		puck.drop()
+	puck_controller.apply_lag_comp_pickup(record.skater)
+
+
+# Spawn an AI-controlled bot in scripted/puppet mode for tutorial
+# demonstrations — an opponent on team 1 (default) or a teammate on team 0
+# for the passing drills. The bot uses the same spawn path as normal bots
+# (so team_id resolver, jersey colors, etc. all wire up correctly — this is
+# what fixes the stickcheck/body-check unreliability the static dummy
+# suffered from), then is flipped into scripted_mode and excluded from
+# TeamBrain role assignment.
 #
 # Returns the PlayerRecord so the tutorial can hold a reference for
 # script_* commands and free it later via despawn_tutorial_bot.
-func spawn_tutorial_bot(position: Vector3, bot_id: int = 0) -> PlayerRecord:
+func spawn_tutorial_bot(position: Vector3, bot_id: int = 0, team_id: int = 1) -> PlayerRecord:
 	if _registry == null or teams.size() < 2:
 		return null
-	var team: Team = teams[1]
-	var team_slot: int = 0
+	var team: Team = teams[team_id]
+	# The tutorial player occupies team 0 slot 0, so a teammate puppet takes
+	# slot 1; opponent puppets keep slot 0 on team 1.
+	var team_slot: int = 1 if team_id == 0 else 0
 	var identity: Dictionary = {"name": "Tutorial", "number": 99, "is_left_handed": false}
 	var record: PlayerRecord = _registry.spawn_bot(bot_id, team_slot, team, identity)
 	if record == null:

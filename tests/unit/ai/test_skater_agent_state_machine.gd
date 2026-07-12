@@ -1214,3 +1214,87 @@ func test_aim_noise_off_raw_on_after_profile() -> void:
 	sm.apply_profile(BotSkillProfile.hard())
 	assert_almost_eq(sm._mouse_noise_std_m, Agent.AIM_NOISE_STD_M, 1e-9,
 			"profiled (live) agents carry the aim noise")
+
+
+# ── Protect-side turn (carry arc direction) ──────────────────────────────────
+# A carrier's turn-around picks which way the puck sweeps: shortest by default,
+# the long way when the short sweep drags the puck through a defender's poke
+# reach and the far side is clear. See PROTECT_TURN_* on the state machine.
+
+func _protect_snap(self_pos: Vector3, opp_pos: Vector3) -> WorldSnapshot:
+	var s := _loose_puck_snap(self_pos)
+	s.puck_state.carrier_peer_id = SELF_ID
+	_add_skater(s, SELF_ID, self_pos)
+	_add_skater(s, OPP_ID, opp_pos)
+	return s
+
+
+func test_protect_turn_shortest_in_open_ice() -> void:
+	var s := _protect_snap(Vector3.ZERO, Vector3(0, 0, -30))   # opponent far away
+	# Facing +z (angle 0), target ~172° around via the +x side.
+	assert_eq(sm._protect_turn_direction(Vector3.ZERO, 0.0, 3.0, s), 1.0,
+			"open ice → the shortest way around")
+
+
+func test_protect_turn_flips_away_from_short_side_defender() -> void:
+	# Defender's blade sits right where the short (+x) sweep would carry the
+	# puck; the long (−x) side is empty → sweep the long way.
+	var s := _protect_snap(Vector3.ZERO, Vector3(2.0, 0, 0.2))
+	assert_eq(sm._protect_turn_direction(Vector3.ZERO, 0.0, 3.0, s), -1.0,
+			"short sweep through a poke threat → turn the long way, puck shielded")
+
+
+func test_protect_turn_stays_short_when_both_sides_threatened() -> void:
+	var s := _protect_snap(Vector3.ZERO, Vector3(2.0, 0, 0.2))
+	_add_skater(s, 12, Vector3(-2.0, 0, 0.2))   # second defender mirrors the first
+	assert_eq(sm._protect_turn_direction(Vector3.ZERO, 0.0, 3.0, s), 1.0,
+			"nowhere safer to sweep → don't pay the long rotation for nothing")
+
+
+func test_arc_step_commits_to_the_protected_direction() -> void:
+	# Integration through _arc_step_mouse_target: with a defender on the short
+	# side, successive arc steps walk the mouse the LONG way and stay committed.
+	var self_pos := Vector3.ZERO
+	var s := _protect_snap(self_pos, Vector3(2.0, 0, 0.2))
+	sm._state = Agent.State.CARRY
+	sm._current_snapshot = s
+	sm._mouse_pos = Vector3(0, 0, 2.0)   # parked dead ahead (angle 0)
+	sm._mouse_pos_initialized = true
+	var target := self_pos + Vector3(sin(3.0), 0, cos(3.0)) * 5.0
+	var stepped: Vector3 = sm._arc_step_mouse_target(
+			self_pos, target, s.skater_states[SELF_ID], 5.0)
+	var ang: float = atan2(stepped.x - self_pos.x, stepped.z - self_pos.z)
+	assert_lt(ang, 0.0, "first step sweeps the long (−) way, away from the defender")
+	assert_eq(sm._arc_protect_sign, -1.0, "…and the direction is latched")
+	sm._mouse_pos = stepped
+	var stepped2: Vector3 = sm._arc_step_mouse_target(
+			self_pos, target, s.skater_states[SELF_ID], 5.0)
+	var ang2: float = atan2(stepped2.x - self_pos.x, stepped2.z - self_pos.z)
+	assert_lt(ang2, ang, "the commitment holds on the next step — no mid-sweep flip")
+
+
+func test_arc_step_shortest_way_in_open_ice() -> void:
+	var self_pos := Vector3.ZERO
+	var s := _protect_snap(self_pos, Vector3(0, 0, -30))
+	sm._state = Agent.State.CARRY
+	sm._current_snapshot = s
+	sm._mouse_pos = Vector3(0, 0, 2.0)
+	sm._mouse_pos_initialized = true
+	var target := self_pos + Vector3(sin(3.0), 0, cos(3.0)) * 5.0
+	var stepped: Vector3 = sm._arc_step_mouse_target(
+			self_pos, target, s.skater_states[SELF_ID], 5.0)
+	var ang: float = atan2(stepped.x - self_pos.x, stepped.z - self_pos.z)
+	assert_gt(ang, 0.0, "open ice keeps the shortest sweep")
+	assert_eq(sm._arc_protect_sign, 0.0, "no long-way commitment latched")
+
+
+# ── Aim slew arc rate projects onto the blade's real orbit radius ────────────
+
+func test_aim_slew_arc_rate_uses_blade_orbit_radius() -> void:
+	sm._apply_aim_slew(10.0, 1.6)
+	assert_almost_eq(sm._mouse_arc_rate_rad_s, 6.25, 1e-6,
+			"arc rate = blade speed / blade orbit span")
+	# The IK-gate ceiling still caps a fast-hands build.
+	sm._apply_aim_slew(40.0, 1.6)
+	assert_almost_eq(sm._mouse_arc_rate_rad_s, Agent.MOUSE_ARC_RATE_RAD_S, 1e-6,
+			"arc rate never exceeds the IK-gate ceiling")

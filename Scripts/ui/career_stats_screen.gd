@@ -1,8 +1,13 @@
 class_name CareerStatsScreen extends Control
 
-# Two-tab career screen: lifetime totals (existing) + per-game history with
-# replay-launch buttons (Feature C). Both tabs fetch concurrently on open()
-# and surface their own loading / empty states.
+# Three-tab career screen: lifetime totals + per-game online history
+# (both Supabase-backed, gated per-tab on share_gameplay_stats) + local
+# replays. The Replays tab lists the .mreplay files on THIS machine and is
+# deliberately NOT gated on stat sharing — watching a replay file you
+# already own is a local action; it has nothing to do with whether you
+# upload career stats. It also includes bot-lobby games, which never appear
+# in the Supabase-backed Recent Games history. All tabs refresh on open()
+# and surface their own loading / empty / gated states.
 
 var _reporter := CareerStatsReporter.new()
 
@@ -10,6 +15,8 @@ var _reporter := CareerStatsReporter.new()
 # native TabContainer which doesn't pick up our themed TabButton variations.
 var _tab_btns: Array[Button] = []
 var _tab_contents: Array[Control] = []
+
+const _TAB_REPLAYS: int = 2
 
 # Career Totals tab.
 var _totals_content: VBoxContainer = null
@@ -19,6 +26,10 @@ var _totals_status: Label = null
 # period breakdown, team-grouped player rows, and a Watch Replay button.
 var _recent_content: VBoxContainer = null
 var _recent_status: Label = null
+
+# Replays tab: local .mreplay files (ReplayFileIndex.list + read_meta).
+var _replays_content: VBoxContainer = null
+var _replays_status: Label = null
 
 
 func _ready() -> void:
@@ -84,11 +95,13 @@ func _build_tab_switcher() -> Control:
 
 	var totals_tab := _build_totals_tab()
 	var recent_tab := _build_recent_games_tab()
-	_tab_contents = [totals_tab, recent_tab]
+	var replays_tab := _build_replays_tab()
+	_tab_contents = [totals_tab, recent_tab, replays_tab]
 	content_margin.add_child(totals_tab)
 	content_margin.add_child(recent_tab)
+	content_margin.add_child(replays_tab)
 
-	var labels: Array[String] = ["Career Totals", "Recent Games"]
+	var labels: Array[String] = ["Career Totals", "Recent Games", "Replays"]
 	for i: int in labels.size():
 		var btn := Button.new()
 		btn.text = labels[i]
@@ -113,8 +126,12 @@ func _activate_tab(idx: int) -> void:
 
 func open() -> void:
 	show()
+	# With stat sharing off the Supabase tabs are just gate notices, so land
+	# on the one tab with content — the local replays.
+	_activate_tab(_TAB_REPLAYS if not PlayerPrefs.share_gameplay_stats else 0)
 	_refresh_totals()
 	_refresh_recent_games()
+	_refresh_replays()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -141,8 +158,16 @@ func _build_totals_tab() -> Control:
 	return tab
 
 
+const _STAT_SHARING_GATE_TEXT: String = \
+		"Career stats need stat sharing.\nEnable “Share Gameplay Stats” in Options → Game."
+
+
 func _refresh_totals() -> void:
 	_clear_totals_content()
+	if not PlayerPrefs.share_gameplay_stats:
+		_totals_status.text = _STAT_SHARING_GATE_TEXT
+		_totals_status.visible = true
+		return
 	if SteamManager.steam_id == 0:
 		_totals_status.text = "Sign in to Steam to view career stats."
 		_totals_status.visible = true
@@ -236,6 +261,10 @@ func _build_recent_games_tab() -> Control:
 
 func _refresh_recent_games() -> void:
 	_clear_recent_content()
+	if not PlayerPrefs.share_gameplay_stats:
+		_recent_status.text = _STAT_SHARING_GATE_TEXT
+		_recent_status.visible = true
+		return
 	if SteamManager.steam_id == 0:
 		_recent_status.text = "Sign in to Steam to view recent games."
 		_recent_status.visible = true
@@ -483,6 +512,155 @@ func _on_watch_pressed(path: String) -> void:
 	NetworkManager.pending_replay_path = path
 	GameManager.on_scene_exit()
 	get_tree().change_scene_to_file(Constants.SCENE_REPLAY_VIEWER)
+
+
+# ── Replays tab ──────────────────────────────────────────────────────────────
+# Local .mreplay files, read entirely off disk — no Supabase, no stat-sharing
+# gate. Includes bot-lobby games, which Recent Games (online history) never
+# lists. Oldest files are pruned past PlayerPrefs.replay_keep_count, so this
+# is "what you can watch right now", not a permanent record.
+
+func _build_replays_tab() -> Control:
+	var tab := VBoxContainer.new()
+	tab.add_theme_constant_override("separation", 6)
+	tab.custom_minimum_size = Vector2(0, 520)
+
+	_replays_status = Label.new()
+	_replays_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_replays_status.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	tab.add_child(_replays_status)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	tab.add_child(scroll)
+
+	_replays_content = VBoxContainer.new()
+	_replays_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_replays_content.add_theme_constant_override("separation", 10)
+	scroll.add_child(_replays_content)
+	return tab
+
+
+func _refresh_replays() -> void:
+	for child: Node in _replays_content.get_children():
+		child.queue_free()
+	var paths: Array[String] = ReplayFileIndex.list()
+	if paths.is_empty():
+		_replays_status.text = "No replays on this machine yet. Play a match (online or vs bots) to record one."
+		_replays_status.visible = true
+		return
+	_replays_status.visible = false
+	for path: String in paths:
+		var meta: Dictionary = ReplayFileReader.read_meta(path)
+		if not bool(meta.get("ok", false)):
+			continue  # unreadable / wrong-version file — skip silently
+		_replays_content.add_child(_build_replay_file_card(path, meta))
+
+
+# One card per replay file: date + score headline, per-team box score, Watch
+# button. Box-score columns differ from Recent Games because the .mreplay
+# footer records a different stat set (hits/blocks, no plus-minus).
+func _build_replay_file_card(path: String, meta: Dictionary) -> Control:
+	var header: Dictionary = meta.get("header", {})
+	var footer: Dictionary = meta.get("footer", {})
+	var truncated: bool = bool(meta.get("truncated", false))
+
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", MenuStyle.panel(4, 12))
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	card.add_child(vbox)
+
+	vbox.add_child(_build_replay_headline(header, footer, truncated))
+
+	# peer_id -> display name, from the header roster.
+	var names: Dictionary = {}
+	for r_var: Variant in (header.get("roster", []) as Array):
+		var r: Dictionary = r_var as Dictionary
+		names[_safe_int(r.get("peer_id", 0))] = str(r.get("player_name", "Player"))
+
+	var players: Array = footer.get("players", []) as Array
+	if not players.is_empty():
+		var sep := HSeparator.new()
+		sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
+		vbox.add_child(sep)
+		var home: Array = []
+		var away: Array = []
+		for p_var: Variant in players:
+			var p: Dictionary = p_var as Dictionary
+			if _safe_int(p.get("team_id", 0)) == 0:
+				home.append(p)
+			else:
+				away.append(p)
+		if not home.is_empty():
+			vbox.add_child(_build_replay_player_table(home, names, "HOME"))
+		if not away.is_empty():
+			vbox.add_child(_build_replay_player_table(away, names, "AWAY"))
+
+	var bottom := HBoxContainer.new()
+	bottom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom.add_child(spacer)
+	var watch := Button.new()
+	watch.text = "▶  Watch Replay"
+	watch.custom_minimum_size = Vector2(150, 32)
+	watch.pressed.connect(_on_watch_pressed.bind(path))
+	bottom.add_child(watch)
+	vbox.add_child(bottom)
+
+	return card
+
+
+func _build_replay_headline(header: Dictionary, footer: Dictionary, truncated: bool) -> Control:
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 12)
+
+	var when: int = _safe_int(footer.get("ended_at", header.get("started_at", 0)))
+	var date_label := Label.new()
+	date_label.text = "—" if when <= 0 else Time.get_datetime_string_from_unix_time(when, true).substr(0, 16)
+	date_label.add_theme_font_size_override("font_size", 12)
+	date_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	date_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(date_label)
+
+	var score := Label.new()
+	if truncated or not footer.has("final_score_home"):
+		score.text = "Unfinished"
+		score.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	else:
+		score.text = "%d — %d" % [_safe_int(footer.get("final_score_home", 0)),
+				_safe_int(footer.get("final_score_away", 0))]
+		score.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
+	score.add_theme_font_size_override("font_size", 18)
+	hbox.add_child(score)
+
+	return hbox
+
+
+func _build_replay_player_table(players: Array, names: Dictionary, side_label: String) -> Control:
+	var grid := GridContainer.new()
+	grid.columns = 6
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 2)
+
+	for h: String in PackedStringArray([side_label, "G", "A", "SOG", "Hits", "Blk"]):
+		grid.add_child(_table_cell(h, true))
+
+	for p_var: Variant in players:
+		var p: Dictionary = p_var as Dictionary
+		grid.add_child(_table_cell(str(names.get(_safe_int(p.get("peer_id", 0)), "Player"))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("goals", 0)))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("assists", 0)))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("shots_on_goal", 0)))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("hits", 0)))))
+		grid.add_child(_table_cell(str(_safe_int(p.get("shots_blocked", 0)))))
+
+	return grid
 
 
 # Supabase fields can come back as null (e.g. MAX() FILTER with no matching

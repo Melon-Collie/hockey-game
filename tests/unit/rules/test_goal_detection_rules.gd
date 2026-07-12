@@ -16,14 +16,17 @@ const NET_H: float = 1.220    # NET_HEIGHT (crossbar centerline)
 const POST_R: float = 0.030   # POST_RADIUS
 const R: float = 0.065        # GameRules.PUCK_COLLISION_RADIUS
 const HH: float = 0.0175      # GameRules.PUCK_COLLISION_HALF_HEIGHT
+const DEPTH: float = 1.016    # BASE_DEPTH (goal line to back frame)
 const ICE_Y: float = 0.0175
 # Effective whole-disc mouth after post + puck insets: |x| <= 0.820, y <= 1.1725.
+# Cavity fallback bounds (endpoint fully inside the net): |x| <= 0.850,
+# y <= 1.1725, depth in [0.065, 0.951].
 
 
 func _crossed(prev: Vector3, curr: Vector3, facing: float = 1.0) -> bool:
 	return GoalDetectionRules.crossed_into_net(
 			prev, curr, GOAL_Z * signf(facing), facing,
-			HALF_W, NET_H, POST_R, R, HH)
+			HALF_W, NET_H, POST_R, R, HH, DEPTH)
 
 
 # ── The good case ─────────────────────────────────────────────────────────────
@@ -65,14 +68,38 @@ func test_fast_shot_spanning_full_depth_in_one_tick() -> void:
 			Vector3(0.0, ICE_Y, GOAL_Z + 0.13)))
 
 
-# ── False positives the old sensor allowed ────────────────────────────────────
+# ── Bent-path entries (post-and-in / bar-down) ────────────────────────────────
 
-func test_post_graze_crossing_outside_mouth_is_no_goal() -> void:
-	# Puck rings the inside of the post: center crosses at x = 0.85 (> 0.82),
-	# so the whole disc isn't between the posts. The old sensor scored this.
+func test_post_and_in_counts_on_the_endpoint() -> void:
+	# The straight prev -> curr segment pierces the plane at x = 0.84 — in the
+	# pipe band, outside the tightened 0.82 mouth — but the puck finished fully
+	# INSIDE the cavity. A real puck can only reach that endpoint by deflecting
+	# in off the post (the panels are solid), so it's a goal. Rejecting it left
+	# the puck sitting visibly in the net with no goal (locked out forever by
+	# the freshness guard).
+	assert_true(_crossed(
+			Vector3(0.84, ICE_Y, GOAL_Z - 0.2),
+			Vector3(0.84, ICE_Y, GOAL_Z + 0.2)))
+
+
+func test_bar_down_counts_on_the_endpoint() -> void:
+	# Clips the crossbar's underside right at the line: the straight segment
+	# interpolates the crossing at y ~1.19 (above the 1.1725 bar clearance),
+	# but the bar deflected the puck DOWN and it ended inside the net.
+	assert_true(_crossed(
+			Vector3(0.0, 1.20, GOAL_Z - 0.02),
+			Vector3(0.0, 1.05, GOAL_Z + 0.30)))
+
+
+func test_post_clank_deflected_wide_is_no_goal() -> void:
+	# Rings the post band but caroms OUT beside the net: crossing point is in
+	# the pipe band and the endpoint is not inside the cavity — no goal.
 	assert_false(_crossed(
-			Vector3(0.85, ICE_Y, GOAL_Z - 0.2),
-			Vector3(0.85, ICE_Y, GOAL_Z + 0.2)))
+			Vector3(0.90, ICE_Y, GOAL_Z - 0.15),
+			Vector3(1.05, ICE_Y, GOAL_Z + 0.15)))
+
+
+# ── False positives the old sensor allowed ────────────────────────────────────
 
 
 func test_wide_of_the_post_is_no_goal() -> void:
@@ -91,10 +118,19 @@ func test_slide_along_the_side_of_the_net_is_no_goal() -> void:
 
 
 func test_over_the_crossbar_is_no_goal() -> void:
-	# Crosses at y = 1.25, above the 1.1725 effective bar.
+	# Crosses at y = 1.25, above the 1.1725 effective bar. The cavity fallback
+	# doesn't rescue it either — the endpoint is above the top netting.
 	assert_false(_crossed(
 			Vector3(0.0, 1.25, GOAL_Z - 0.2),
 			Vector3(0.0, 1.25, GOAL_Z + 0.2)))
+
+
+func test_endpoint_behind_the_net_is_no_goal() -> void:
+	# A segment that pierces the pipe band and ends BEHIND the back frame
+	# (deeper than DEPTH - R) is outside the cavity — never a goal.
+	assert_false(_crossed(
+			Vector3(0.85, ICE_Y, GOAL_Z - 0.1),
+			Vector3(0.85, ICE_Y, GOAL_Z + DEPTH + 0.1)))
 
 
 # ── Direction / freshness guards ──────────────────────────────────────────────
@@ -137,14 +173,18 @@ func test_approaching_but_short_of_the_line_is_no_goal() -> void:
 
 
 func test_crossing_at_the_x_clearance_boundary() -> void:
-	# Center exactly on the 0.82 boundary counts (<=); a hair outside does not.
+	# Center exactly on the 0.82 boundary counts (<=) via the clean-crossing
+	# test alone. Past it the pipe band begins: a straight-line crossing there
+	# is only a goal if the endpoint finished inside the cavity (see the
+	# post-and-in / deflected-wide tests); an endpoint outside the cavity's
+	# 0.85 x-bound stays a no-goal however the plane was pierced.
 	var on_edge: float = HALF_W - POST_R - R  # 0.820
 	assert_true(_crossed(
 			Vector3(on_edge, ICE_Y, GOAL_Z - 0.2),
 			Vector3(on_edge, ICE_Y, GOAL_Z + 0.2)))
 	assert_false(_crossed(
-			Vector3(on_edge + 0.01, ICE_Y, GOAL_Z - 0.2),
-			Vector3(on_edge + 0.01, ICE_Y, GOAL_Z + 0.2)))
+			Vector3(0.90, ICE_Y, GOAL_Z - 0.2),
+			Vector3(0.90, ICE_Y, GOAL_Z + 0.2)))
 
 
 # ── Shared mouth predicate (used by live, penalty, tutorial) ──────────────────

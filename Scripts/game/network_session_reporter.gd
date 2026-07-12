@@ -12,16 +12,30 @@ class_name NetworkSessionReporter extends RefCounted
 
 const MIN_DURATION_SEC: int = 30
 
+# Local mirror of every posted row, so a tester (or the dev) can grab their own
+# session data — Discord paste, bug report, LLM diagnosis — without a Supabase
+# round-trip, and so a failed POST still leaves the data on disk. Rolling
+# window; oldest dumps are purged.
+const DUMP_DIR: String = "user://net_sessions"
+const DUMP_KEEP: int = 10
+
 
 # `role` is "host" / "client"; `net_sim_active` flags dev sessions running
 # artificial lag (NetworkSimManager) so they can be excluded from analysis.
-func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool) -> void:
+# `game_id` is the cross-peer match UUID (GameManager mints it and ships it to
+# every peer — the same id career_stats rows carry), so the host row and its
+# clients' rows join into one per-match picture (`match_health` view).
+# `end_reason` is how the session ended: "completed" (game over), "quit"
+# (local player left mid-game), or a client-side abnormal end ("host_lost",
+# "host_ended", "kicked") — the sessions a game-over-only reporter would miss.
+func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool,
+		game_id: String, end_reason: String) -> void:
 	if summary == null or summary.seconds < MIN_DURATION_SEC:
 		return
 	# Identity / filter fields are top-level columns; the evolving metric set
-	# (every "<key>_max/_avg/_min" plus felt-lag markers) rides in one jsonb
-	# column so adding a metric never requires an ALTER TABLE. Mirrors how
-	# bug_reports stores its telemetry blob.
+	# (every "<key>_max/_avg/_min/_total" plus felt-lag markers) rides in one
+	# jsonb column so adding a metric never requires an ALTER TABLE. Mirrors
+	# how bug_reports stores its telemetry blob.
 	var body: Dictionary = {
 		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
@@ -31,9 +45,40 @@ func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool) 
 		"net_sim_active": net_sim_active,
 		"duration_sec": summary.seconds,
 		"felt_lag_count": summary.felt_lag_count,
+		"game_id": game_id if not game_id.is_empty() else null,
+		"end_reason": end_reason,
 		"metrics": summary.to_dict(),
 	}
+	_write_local_dump(body, role)
 	_post(SupabaseConfig.URL + "/rest/v1/network_sessions", body)
+
+
+# Best-effort local copy of the payload (fails silently, like the POST).
+# Filename sorts chronologically so the purge can drop the oldest.
+func _write_local_dump(body: Dictionary, role: String) -> void:
+	if DirAccess.make_dir_recursive_absolute(DUMP_DIR) != OK:
+		return
+	_purge_old_dumps()
+	var stamp: String = Time.get_datetime_string_from_system().replace(":", "-")
+	var path: String = "%s/%s_%s.json" % [DUMP_DIR, stamp, role]
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(body, "\t"))
+		f.close()
+
+
+func _purge_old_dumps() -> void:
+	var dir: DirAccess = DirAccess.open(DUMP_DIR)
+	if dir == null:
+		return
+	var files: Array[String] = []
+	for fname: String in dir.get_files():
+		if fname.ends_with(".json"):
+			files.append(fname)
+	files.sort()
+	# keep - 1 because we're about to add a new file.
+	while files.size() > DUMP_KEEP - 1:
+		dir.remove(files.pop_front())
 
 
 func _post(url: String, body: Dictionary) -> void:
