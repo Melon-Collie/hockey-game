@@ -31,7 +31,8 @@ class_name GoalDetectionRules
 # geometry (POST_HALF_WIDTH, NET_HEIGHT); `post_radius` and the puck extents
 # tighten them to the whole-disc clear opening inside `point_in_mouth`. The puck
 # is angular-locked flat, so its horizontal reach (puck_radius) differs from its
-# vertical reach (puck_half_height) — 0.065 vs 0.0175.
+# vertical reach (puck_half_height) — 0.065 vs 0.0175. `net_depth` is the
+# goal-line-to-back-frame depth (BASE_DEPTH), bounding the cavity fallback below.
 static func crossed_into_net(
 		prev_center: Vector3,
 		curr_center: Vector3,
@@ -41,7 +42,8 @@ static func crossed_into_net(
 		net_height: float,
 		post_radius: float,
 		puck_radius: float,
-		puck_half_height: float) -> bool:
+		puck_half_height: float,
+		net_depth: float) -> bool:
 	# Signed depth past the goal line, positive = deeper into the net.
 	var prev_depth: float = (prev_center.z - goal_z) * facing
 	var curr_depth: float = (curr_center.z - goal_z) * facing
@@ -64,8 +66,47 @@ static func crossed_into_net(
 		t = clampf((0.0 - prev_depth) / span, 0.0, 1.0)
 	var cross_x: float = prev_center.x + (curr_center.x - prev_center.x) * t
 	var cross_y: float = prev_center.y + (curr_center.y - prev_center.y) * t
-	return point_in_mouth(cross_x, cross_y, half_width, net_height,
-			post_radius, puck_radius, puck_half_height)
+	if point_in_mouth(cross_x, cross_y, half_width, net_height,
+			post_radius, puck_radius, puck_half_height):
+		return true
+	# Bent-path fallback: a post-and-in / bar-down entry is deflected by the
+	# pipe mid-flight, so the STRAIGHT prev -> curr segment can pierce the
+	# goal-line plane in the pipe band (outside the tightened mouth) even
+	# though the real, bent path went in through the opening. If the puck's
+	# center finished this tick fully inside the net CAVITY, the only
+	# continuous route there from in front of the line is through the mouth —
+	# the posts, bar, side/top netting and back mesh are all solid — so award
+	# the goal on the endpoint. Without this, a deflected entry was rejected
+	# once and then permanently locked out by the prev_depth freshness guard:
+	# the puck sat visibly in the net with no goal.
+	return _center_inside_cavity(curr_center, curr_depth, half_width,
+			net_height, post_radius, puck_radius, puck_half_height, net_depth)
+
+
+# Whether a puck CENTER (already known to be >= puck_radius past the line —
+# `depth` is the caller's signed depth) sits unambiguously INSIDE the net
+# cavity: clear of the side panels (which stand at the post centerline),
+# below the crossbar/top netting, and in front of the back mesh. The bounds
+# are deliberately conservative — a puck embedded in a panel or resting
+# beside / on top of / behind the net fails them all by a clear margin.
+static func _center_inside_cavity(
+		center: Vector3,
+		depth: float,
+		half_width: float,
+		net_height: float,
+		post_radius: float,
+		puck_radius: float,
+		puck_half_height: float,
+		net_depth: float) -> bool:
+	if depth > net_depth - puck_radius:
+		return false
+	if absf(center.x) > half_width - puck_radius:
+		return false
+	if center.y > net_height - post_radius - puck_half_height:
+		return false
+	if center.y < 0.0:
+		return false
+	return true
 
 
 # Whether a puck CENTER at (cross_x, cross_y) on the goal-line plane sits fully

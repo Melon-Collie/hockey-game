@@ -638,14 +638,21 @@ func _check_goal_crossing() -> void:
 	# blade can get there; here we just watch the puck's path.
 	var curr: Vector3 = puck.global_position
 	var carried: bool = puck.carrier != null
-	# Reseed on a cold tracker or a loose<->carried transition (pickup snap /
-	# release move the puck discontinuously — spanning that jump could fabricate
-	# a crossing).
-	if not _has_prev_puck_pos or carried != _puck_was_carried:
+	# Reseed on a cold tracker or a loose->carried transition: the pickup snaps
+	# the puck to the blade discontinuously, and spanning that jump could
+	# fabricate a crossing. The carried->loose direction is NOT reseeded — a
+	# release repositions the puck by at most the carry offset plus one tick of
+	# shot travel, a real path. Reseeding it opened a one-tick blind window
+	# that swallowed point-blank crossings: a shot released within a tick's
+	# travel of the goal line finished crossing inside the skipped segment,
+	# and the puck then sat in the net permanently "already across" — a
+	# visible no-count goal. (The teleport guard below still catches resets.)
+	if not _has_prev_puck_pos or (carried and not _puck_was_carried):
 		_prev_puck_pos = curr
 		_has_prev_puck_pos = true
 		_puck_was_carried = carried
 		return
+	_puck_was_carried = carried
 	# Teleport guard: an implausible jump (loose-puck reset/reposition) is never a
 	# real crossing — reseed and skip.
 	if _prev_puck_pos.distance_to(curr) <= _GOAL_MAX_TICK_TRAVEL:

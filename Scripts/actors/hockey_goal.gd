@@ -637,7 +637,8 @@ func check_goal_crossing(prev_center: Vector3, curr_center: Vector3) -> void:
 			NET_HEIGHT,       # crossbar centerline
 			POST_RADIUS,
 			GameRules.PUCK_COLLISION_RADIUS,
-			GameRules.PUCK_COLLISION_HALF_HEIGHT):
+			GameRules.PUCK_COLLISION_HALF_HEIGHT,
+			BASE_DEPTH):
 		goal_scored.emit()
 
 
