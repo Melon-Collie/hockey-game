@@ -454,3 +454,40 @@ static func race_home_radius(ctx: RoleContext,
 		return INF
 	var margin: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S 			/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 	return maxf(t_home - margin, 0.0) * maxf(ctx.self_max_speed, 1.0)
+
+
+# Is the race to a loose puck already LOST — an opponent reaches it a clear
+# contest-band ahead of me? Momentum-aware ETAs at each skater's real Speed
+# cap, with the same physical contest margin the dump-chase race uses
+# (CHASE_CONTEST_MARGIN_M, a stride's head-start): arriving inside that band
+# still creates a live 50/50 (worth racing, the drive-through commits it);
+# arriving clearly behind it means the collector has gathered and I'm just
+# skating myself out of the play. A chaser that reads LOST should transition
+# to defending the pickup instead of pushing (the missed-pass "third man keeps
+# chasing while the counter develops" failure). False when no opponent
+# threatens the puck.
+static func loose_puck_race_lost(
+		snapshot: WorldSnapshot, self_pos: Vector3, self_vel: Vector3,
+		self_max_speed: float, team_id: int, team_id_by_peer: Dictionary,
+		caps_by_peer: Dictionary) -> bool:
+	if snapshot == null or snapshot.puck_state == null:
+		return false
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var my_eta: float = AIActionScoring.time_to_arrive(
+			self_pos, puck_pos, self_vel, maxf(self_max_speed, 1.0))
+	var best_opp_eta: float = INF
+	for pid: int in snapshot.skater_states:
+		if team_id_by_peer.get(pid, -1) == team_id:
+			continue
+		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		var caps: AISkaterCaps = caps_by_peer.get(pid)
+		var speed: float = caps.max_speed if caps != null \
+				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var t: float = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)
+		if t < best_opp_eta:
+			best_opp_eta = t
+	if best_opp_eta == INF:
+		return false
+	var contest_window: float = AIActionScoring.CHASE_CONTEST_MARGIN_M \
+			/ maxf(self_max_speed, 1.0)
+	return my_eta > best_opp_eta + contest_window
