@@ -248,21 +248,24 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	if _transitioned:
 		return
 	_transitioned = true
-	# Players with unfinished course parts land in the first incomplete
-	# tutorial after the splash instead of dropping straight into free play —
-	# every part must be finished (or exited, which marks that part complete)
-	# before boots go straight to the rink. PlayerPrefs wipes completion when
-	# the course version bumps, so a restructured course routes everyone back
-	# through. An accepted Steam invite trumps the tutorial: the player
-	# clicked "Join Game", and the SideMenu consumes the stashed lobby id
-	# once free play is up.
-	var next_tutorial: String = ""
+	# Players who have never engaged the tutorial course land in its first
+	# part (Movement) after the splash instead of dropping straight into free
+	# play. ANY touch dismisses this for good: finishing a part and hitting
+	# Exit both mark that part complete, and one marked part means the player
+	# has seen the course — being routed back through every remaining part on
+	# each boot would nag; the Practice menu keeps the rest available.
+	# PlayerPrefs wipes completion when the course version bumps, so a
+	# restructured course puts everyone back through this gate once. An
+	# accepted Steam invite trumps the tutorial: the player clicked
+	# "Join Game", and the SideMenu consumes the stashed lobby id once free
+	# play is up.
+	var course_touched: bool = false
 	for id: String in TutorialRegistry.ALL_IDS:
-		if not PlayerPrefs.is_tutorial_complete(id):
-			next_tutorial = id
+		if PlayerPrefs.is_tutorial_complete(id):
+			course_touched = true
 			break
-	if next_tutorial != "" and SteamManager.pending_invite_lobby_id == 0:
-		NetworkManager.start_tutorial(next_tutorial)
+	if not course_touched and SteamManager.pending_invite_lobby_id == 0:
+		NetworkManager.start_tutorial(TutorialRegistry.MOVEMENT_ID)
 	else:
 		NetworkManager.start_free_play()
 	get_tree().change_scene_to_packed(scene)
