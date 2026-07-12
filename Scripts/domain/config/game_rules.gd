@@ -376,6 +376,12 @@ const DEFAULT_GOALIE_ARM_REACTION_DELAY_S: float = 0.18
 # mental-target lerp speed, not body movement) and NOT shuffle_speed
 # (that's small adjustments, not a recovery slide).
 const DEFAULT_GOALIE_T_PUSH_SPEED_M_S: float = 3.8
+# How fast a lateral push ramps toward t_push_speed — pushes accelerate onto
+# the edge, they are not instant. Mirrors the Hard/default GoalieController
+# .lateral_accel (the tiered GoalieSkillProfile values ease it downward; the
+# AI predicts against the top-tier keeper like every other goalie constant
+# here). The ramp is the window a hard lateral cut in tight genuinely beats.
+const DEFAULT_GOALIE_LATERAL_ACCEL_M_S2: float = 14.0
 
 # ── Players ───────────────────────────────────────────────────────────────────
 const MAX_PLAYERS: int = 6  # 3v3

@@ -461,7 +461,8 @@ func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
 	# rush BACKFLOW retreats him toward the crease at the carrier's pace, so this
 	# is the realistic 1-on-1 depth. (Parked dead-square 2 m out he genuinely
 	# walls off the straight fire — the honest read there is the lateral cut /
-	# doorstep window, covered by the stale-square tests, not a head-on shot.)
+	# doorstep window, covered by test_1v1_lateral_cut_beats_the_aggressive_goalie
+	# below, not a head-on shot.)
 	var goalie_out: float = 1.0                          # backflowed 1 m off the line
 	var goalie_z: float = -GameRules.GOAL_LINE_Z + goalie_out
 	var shot_distance: float = -1.0
@@ -484,6 +485,36 @@ func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
 	assert_gt(shot_distance, goalie_out + 1.0,
 			"a bot driving the net 1-on-1 gets its shot off clear of the goalie, "
 			+ "not by carrying into it")
+
+
+func test_1v1_lateral_cut_beats_the_aggressive_goalie() -> void:
+	# The penalty-shot guarantee: against a keeper challenging way out (2 m,
+	# squared), the straight-in fire is correctly walled off — the play is to go
+	# HORIZONTAL. A carrier cutting hard across in tight must read the drive-side
+	# window (the keeper's lateral push ACCELERATES onto the edge — it cannot
+	# snap sideways, so the sub-quarter-second release beats the arc race) and
+	# commit the shot. Flat-footed from the same spot there is no window, so the
+	# cut is what opens it — a 1v1 terminates in a lateral drive + shot, not a
+	# stalled carry into the crease.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
+	var cutting := _make_ctx(self_pos)
+	cutting.self_velocity = Vector3(6.0, 0.0, 0.0)
+	cutting.snapshot.skater_states[1].velocity = cutting.self_velocity
+	cutting.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 2.0)
+	var c := AIRoleCarrier.new()
+	c.decide(cutting)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"cutting hard across in tight, the 1v1 commits the shot")
+	assert_gt(c.debug_shoot_score, 0.3,
+			"…and it's a real chance, not a floor-scraper; got %f" % c.debug_shoot_score)
+
+	var flat := _make_ctx(self_pos)
+	flat.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 2.0)
+	var c2 := AIRoleCarrier.new()
+	c2.decide(flat)
+	assert_ne(c2.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"flat-footed into the set challenge there is no shot — the CUT opens it")
 
 
 func _squared_goalie(self_pos: Vector3, net: Vector3, depth: float) -> GoalieNetworkState:

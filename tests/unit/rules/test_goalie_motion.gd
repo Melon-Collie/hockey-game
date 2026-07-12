@@ -53,8 +53,10 @@ func test_goalie_resets_when_given_time() -> void:
 
 func test_unsettled_ramps_between_moving_and_set() -> void:
 	# A mid-length release should sit strictly between fully-moving and fully-set.
+	# 0.45 s: the push (react 0.13, then the lateral_accel ramp) covers the 0.36 m
+	# swing with a beat to spare, but less than the full settle window.
 	var goalie := _goalie_at(_arc_match_x(-2.0))
-	var u := AIActionScoring.goalie_unsettled(goalie, GOAL, 0.33, SHOOTER)
+	var u := AIActionScoring.goalie_unsettled(goalie, GOAL, 0.45, SHOOTER)
 	assert_gt(u, 0.0)
 	assert_lt(u, 1.0)
 

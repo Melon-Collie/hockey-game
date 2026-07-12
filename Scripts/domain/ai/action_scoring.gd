@@ -189,12 +189,42 @@ const UNSETTLE_RECOVERY_S: float = 0.35
 # one-timer lands ~0.7 and a gaping backdoor net saturates to 1.0.
 const SHOT_DANGER_GAIN: float = 3.0
 
-# Goalie position prediction. React-then-slide: react delay first, then move
-# toward the puck-at-release X at max lateral speed. GOALIE_REACTION_DELAY_S and
-# GOALIE_MAX_LATERAL_SPEED_MPS reference GameRules so the prediction stays in
-# lockstep with the live goalie (lateral speed = GoalieController.t_push_speed).
+# Goalie position prediction. React-then-push: react delay first, then move
+# toward the puck-at-release X — ACCELERATING onto the edge (the live keeper's
+# lateral_accel ramp) up to max push speed, never snapping to it. The ramp is
+# what a hard lateral cut in tight genuinely beats: over a sub-quarter-second
+# release window an accelerating keeper covers centimetres where a snap-to-speed
+# model covered half a metre and read every deke as tracked. All three constants
+# reference GameRules so the prediction stays in lockstep with the live goalie
+# (speed = GoalieController.t_push_speed, ramp = .lateral_accel).
 const GOALIE_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
+const GOALIE_LATERAL_ACCEL_M_S2: float = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2
+
+
+# Lateral distance a goalie push covers in `move_time` (post-reaction), on the
+# accelerate-then-cruise profile: ½·a·t² until the push reaches t_push speed,
+# linear after. The inverse of _goalie_lateral_time.
+static func _goalie_lateral_reach(move_time: float) -> float:
+	if move_time <= 0.0:
+		return 0.0
+	var t_ramp: float = GOALIE_MAX_LATERAL_SPEED_MPS / GOALIE_LATERAL_ACCEL_M_S2
+	if move_time <= t_ramp:
+		return 0.5 * GOALIE_LATERAL_ACCEL_M_S2 * move_time * move_time
+	return 0.5 * GOALIE_LATERAL_ACCEL_M_S2 * t_ramp * t_ramp \
+			+ GOALIE_MAX_LATERAL_SPEED_MPS * (move_time - t_ramp)
+
+
+# Time a goalie push needs to cover `dist` laterally (post-reaction) — the
+# inverse of _goalie_lateral_reach.
+static func _goalie_lateral_time(dist: float) -> float:
+	if dist <= 0.0:
+		return 0.0
+	var t_ramp: float = GOALIE_MAX_LATERAL_SPEED_MPS / GOALIE_LATERAL_ACCEL_M_S2
+	var ramp_dist: float = 0.5 * GOALIE_LATERAL_ACCEL_M_S2 * t_ramp * t_ramp
+	if dist <= ramp_dist:
+		return sqrt(2.0 * dist / GOALIE_LATERAL_ACCEL_M_S2)
+	return t_ramp + (dist - ramp_dist) / GOALIE_MAX_LATERAL_SPEED_MPS
 
 # Pads-to-floor time once the goalie commits the butterfly — mirrors
 # GoalieController.butterfly_drop_speed (0.20 s, grounded on the measured pro
@@ -204,36 +234,6 @@ const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEE
 # (the in-tight window), flights past delay + drop arrive at closed pads.
 const GOALIE_BUTTERFLY_DROP_S: float = 0.20
 
-
-# The position the goalie is ACTUALLY square to when a moving shooter's shot
-# arrives: where the shooter WAS one reaction delay before release, not where
-# they fire from. A goalie tracks the goal→shooter ray continuously but reads
-# it late (GOALIE_REACTION_DELAY_S), so his squared-x trails the live angle by
-# delay × the shooter's velocity. For a static or slow shooter the stale ref
-# coincides with the release (the squared-goalie over-fire fix stands
-# untouched); on a fast lateral drive in tight, the trailing cover leaves the
-# side the shooter is driving toward genuinely open — the real "shoot while you
-# make him move" window, and why a doorstep shot off the rush beats a keeper who
-# would wall off the same shot taken flat-footed.
-# `release_lookahead_s` is the caller's release horizon (charge time);
-# `flight_s` the shot's flight time to the goal. The ref is the shooter's
-# position at (release + flight − reaction delay), capped at the release: the
-# goalie KEEPS re-squaring while the shot flies (he can't know it released
-# until the same delay elapses), so at puck-arrival he is square to
-#   flight ≥ delay  → the release itself — fully caught up, no positional
-#                     opening; mid-range shots off the move aren't free.
-#   flight < delay  → a spot (delay − flight) of shooter-motion behind the
-#                     release — the genuine in-tight window where the puck
-#                     beats his read.
-static func goalie_stale_square_ref(
-		shooter_pos: Vector3, shooter_vel: Vector3,
-		release_lookahead_s: float, flight_s: float = 0.0) -> Vector3:
-	var lag_s: float = maxf(0.0, GOALIE_REACTION_DELAY_S - maxf(flight_s, 0.0))
-	var stale_t: float = release_lookahead_s - lag_s
-	return Vector3(
-			shooter_pos.x + shooter_vel.x * stale_t,
-			0.0,
-			shooter_pos.z + shooter_vel.z * stale_t)
 
 # Shadow half-width used by AIShotAim.compute_open_net_aim for the lane-check
 # aim point — picks a point past the goalie for the lane segment check.
@@ -968,8 +968,9 @@ static func goalie_squared_pos(
 
 
 # Predicts the goalie's position at a future moment (shot release).
-# React-then-slide model: a fixed reaction delay, then movement toward
-# the ARC-MATCHING x at max lateral speed.
+# React-then-push model: a fixed reaction delay, then movement toward
+# the ARC-MATCHING x on the accelerate-onto-the-edge push profile
+# (_goalie_lateral_reach — ramping at lateral_accel to t_push speed).
 #
 # Arc-matching: a properly squared goalie sits at the position whose
 # arc angle from the goal matches the shooter's. Since the goalie sits
@@ -994,7 +995,7 @@ static func predict_goalie_pos(
 		puck_pos_at_release: Vector3) -> Vector3:
 	var target_x: float = goalie_arc_match_x(goalie_now, attacking_goal, puck_pos_at_release)
 	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
-	var max_move: float = move_time * GOALIE_MAX_LATERAL_SPEED_MPS
+	var max_move: float = _goalie_lateral_reach(move_time)
 	var dx: float = target_x - goalie_now.x
 	var dist_to_target: float = absf(dx)
 	if dist_to_target < 0.001 or max_move <= 0.0:
@@ -1007,8 +1008,8 @@ static func predict_goalie_pos(
 # Companion to predict_goalie_pos: how UNSETTLED [0, 1] the goalie is AT release.
 #   0 = set and square (already at its arc-match target, no forced motion)
 #   1 = still sliding (positionally behind) or only just arrived — reading late
-# Same react-then-slide kinematics as predict_goalie_pos, so the predicted
-# position and this motion estimate agree. score_shoot cuts the goalie's
+# Same react-then-push kinematics as predict_goalie_pos (accel ramp included),
+# so the predicted position and this motion estimate agree. score_shoot cuts the goalie's
 # glove/blocker reaction by this fraction (a recovering goalie reads the shot
 # late). A fast cross-seam one-timer leaves the goalie mid-slide → near 1; a
 # static shot at a set goalie → 0.
@@ -1022,11 +1023,11 @@ static func goalie_unsettled(
 	if need < 0.001:
 		return 0.0  # already squared — no forced motion, fully set
 	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
-	var max_move: float = move_time * GOALIE_MAX_LATERAL_SPEED_MPS
+	var max_move: float = _goalie_lateral_reach(move_time)
 	if need >= max_move:
 		return 1.0  # still sliding at release (or hasn't even reacted) — caught moving
 	# Reached the target with time to spare; ramps back to 0 as it re-sets.
-	var slide_time: float = need / GOALIE_MAX_LATERAL_SPEED_MPS
+	var slide_time: float = _goalie_lateral_time(need)
 	var settled_for: float = move_time - slide_time
 	return clampf(1.0 - settled_for / GOALIE_SETTLE_REF_S, 0.0, 1.0)
 

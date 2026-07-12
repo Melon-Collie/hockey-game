@@ -1360,55 +1360,39 @@ func test_pass_miss_cost_self_localizes_by_rink_end() -> void:
 			"a missed pass in our own end costs multiples of the same miss in theirs")
 
 
-# ─── goalie_stale_square_ref (the goalie squares to a delayed read) ───────
+# ─── React-then-push doorstep window (the accel ramp is what a cut beats) ──
 
-func test_stale_square_ref_matches_release_for_static_shooter() -> void:
-	# No motion → the stale ref IS the shooter: the squared-goalie read (and the
-	# wide-angle over-fire fix built on it) is untouched.
-	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			Vector3(2, 0, -20), Vector3.ZERO, 0.25)
-	assert_almost_eq(ref.x, 2.0, 0.001)
-	assert_almost_eq(ref.z, -20.0, 0.001)
-
-
-func test_stale_square_ref_trails_a_moving_shooter_by_the_reaction_delay() -> void:
-	# The ref leads by (release − reaction delay), i.e. it trails the release-time
-	# position by exactly delay × velocity — the goalie covers a stale angle.
-	var lookahead: float = 0.25
-	var vel := Vector3(6, 0, 0)
-	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			Vector3.ZERO, vel, lookahead)
-	var release_x: float = vel.x * lookahead
-	var lag: float = release_x - ref.x
-	assert_almost_eq(lag, vel.x * AIActionScoring.GOALIE_REACTION_DELAY_S, 0.001,
-			"the cover trails the release angle by reaction delay × speed")
-
-
-func test_doorstep_drive_beats_the_stale_square_but_not_the_set_wall() -> void:
-	# Shooter 2.6 m out, driving laterally at 7 m/s; goalie challenging (1.75).
-	# Squared to the RELEASE (flat-footed read) the net is walled off; squared to
-	# the τ-stale ray (the real read) the drive side is open — the doorstep shot
-	# off the move is a genuine chance.
+func test_doorstep_drive_beats_the_push_but_not_the_set_wall() -> void:
+	# Shooter 2.6 m out, driving laterally at 7 m/s; goalie challenging (1.75 m),
+	# square to where the carrier IS right now. Squared instantly to the RELEASE
+	# (the old infinite-speed read) the net is walled off; under the real
+	# react-then-push kinematics his push cannot traverse the arc shift in the
+	# sub-quarter-second the release + flight give him — the doorstep shot off
+	# the lateral drive is a genuine chance. This is the carrier's exact
+	# shoot-now recipe (predict over lookahead + flight toward the release).
 	var goal := Vector3(0, 0, -26.65)
 	var lookahead: float = 0.25
 	var vel := Vector3(7, 0, 0)
 	var shooter := Vector3(0, 0, -24.05)
 	var release := shooter + vel * lookahead
 	var none: Array[Vector3] = []
+	var goalie_now := Vector3(0, 0, -24.9)   # challenging, square to the carrier now
 	var set_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			Vector3(0, 0, -24.9), goal, release)
+			goalie_now, goal, release)
 	var walled: float = AIActionScoring.score_shoot(
 			release, goal, set_goalie, GameRules.NET_HALF_WIDTH, none, 33.0)
-	var stale_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			shooter, vel, lookahead)
-	var stale_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			Vector3(0, 0, -24.9), goal, stale_ref)
+	var flight: float = release.distance_to(goal) / 33.0
+	var pushed: Vector3 = AIActionScoring.predict_goalie_pos(
+			goalie_now, goal, lookahead + flight, release)
 	var off_the_move: float = AIActionScoring.score_shoot(
-			release, goal, stale_goalie, GameRules.NET_HALF_WIDTH, none, 33.0)
+			release, goal, pushed, GameRules.NET_HALF_WIDTH, none, 33.0)
 	assert_almost_eq(walled, 0.0, 0.02,
-			"flat-footed at the doorstep the challenge walls it off")
+			"snapped square to the release the challenge walls the doorstep off")
 	assert_gt(off_the_move, 0.25,
-			"the same shot off a lateral drive is a real chance; got %f" % off_the_move)
+			"the real push can't make the arc in time — the drive is a chance; got %f"
+			% off_the_move)
+	assert_lt(pushed.x, set_goalie.x,
+			"…because the accel-limited push arrives short of the arc-match")
 
 
 # ─── Stance-aware five-hole (measured slot from the replicated pose) ──────
@@ -1617,30 +1601,6 @@ func test_arc_match_x_bounded_by_goalie_radius() -> void:
 
 
 # ─── Stale-square ref fades with flight ───────────────────────────────────
-
-func test_stale_ref_fully_caught_up_when_flight_exceeds_delay() -> void:
-	# Flight longer than the goalie's read delay → he re-squares to the release
-	# during flight; the ref equals the plain release projection.
-	var vel := Vector3(6, 0, 0)
-	var look: float = 0.25
-	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			Vector3.ZERO, vel, look, 0.4)
-	assert_almost_eq(ref.x, vel.x * look, 0.001,
-			"long flight → ref coincides with the release (no lag opening)")
-
-
-func test_stale_ref_keeps_residual_lag_in_tight() -> void:
-	# Flight under the delay → the residual (delay − flight) of motion stays
-	# unread; the ref trails the release by exactly that much.
-	var vel := Vector3(6, 0, 0)
-	var look: float = 0.25
-	var flight: float = 0.05
-	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			Vector3.ZERO, vel, look, flight)
-	var expected_lag: float = (AIActionScoring.GOALIE_REACTION_DELAY_S - flight) * vel.x
-	assert_almost_eq(vel.x * look - ref.x, expected_lag, 0.001,
-			"in tight the ref trails the release by the unread residual")
-
 
 # ─── Spread-aware entry inset ─────────────────────────────────────────────
 

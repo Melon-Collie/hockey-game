@@ -354,12 +354,10 @@ func _pick_action(ctx: RoleContext) -> void:
 	# spot led by our body velocity, not the body center. At range the offset is
 	# noise; in tight it's the difference between measuring the net from your
 	# chest and from the puck (closer, and shifted to the forehand side — a real
-	# angle change around the goalie). The goalie, by contrast, squares to the
-	# PUCK through distance-scaled smoothing (the quiet-eye tracking lag), which
-	# absorbs blade jitter — his square target rides the carrier's body line,
-	# not the dangle — so the stale-square ref below stays on self_pos:
-	# shot-from-the-puck against square-to-the-smoothed-track is a physical
-	# asymmetry the model should see.
+	# angle change around the goalie). Using the same release point as the
+	# keeper's tracking target below is slightly generous to HIM (his quiet-eye
+	# smoothing actually rides the body line, absorbing the dangle) — the safe
+	# side of that asymmetry.
 	var puck_now: Vector3 = self_pos
 	if ctx.snapshot.puck_state != null:
 		puck_now = Vector3(
@@ -369,29 +367,29 @@ func _pick_action(ctx: RoleContext) -> void:
 			puck_now + horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
 			attacking_goal, goalie_now)
 
-	# Goalie SQUARED to the release position — the keeper has tracked us (the current
-	# puck-holder) the whole way, so a shot from where we already are does NOT catch
-	# him moving by relocation. This is the SAME model the carry candidates use
-	# (goalie_squared_pos): the caught-moving credit for puck RELOCATION belongs to
-	# passes / one-timers (see _compute_best_pass's unsettled arg). The react-then-
-	# slide predict_goalie_pos here left the keeper a step behind the shooter's angle,
-	# which read as an open near side and drove wide-angle/long-range over-fires.
-	# …but "square" means square to what he has READ: he tracks our angle with his
-	# real reaction delay AND keeps re-squaring while the shot flies, so his cover
-	# at puck-arrival trails the release angle only by what the FLIGHT leaves of
-	# his delay (goalie_stale_square_ref). Static or slow, or any flight longer
-	# than his read delay, the ref coincides with the release — the wide-angle /
-	# mid-range over-fire fix stands, and driving at 8+ m out no longer reads as
-	# free. Driving laterally IN TIGHT (flight under his delay), the trailing
-	# cover leaves the drive side genuinely open — the real window. Unsettled
-	# stays 0: the lag IS the caught-moving effect, expressed positionally.
+	# Goalie at puck ARRIVAL: react-then-slide from where he ACTUALLY is toward
+	# the arc-square of the release, over everything the shot gives him — the
+	# charge lookahead plus the whole flight (he keeps re-squaring while the puck
+	# flies; predict_goalie_pos's own read delay comes off that budget). This is
+	# the same model the pass path uses, now with his real lateral SPEED bound:
+	#   - Static or slow shooters, or any real range: the budget covers the arc
+	#     shift with room to spare, so he arrives square — the wide-angle /
+	#     long-range over-fire fixes stand exactly as under the old
+	#     infinite-speed goalie_squared_pos read.
+	#   - A HARD LATERAL CUT IN TIGHT is a race his push can lose: the arc-x of
+	#     a fast cut at a wide-out keeper's radius moves faster than
+	#     t_push covers in the sub-quarter-second the shot leaves him — the
+	#     genuine "beat the aggressive goalie horizontally" window, which the
+	#     infinite-speed square could never see (it planted him square mid-cut,
+	#     so a 1v1 vs a challenging keeper never terminated in a shot).
+	# Unsettled stays 0: the shortfall IS the caught-moving effect, expressed
+	# positionally.
 	var wrister_flight_s: float = wrister_release_pos.distance_to(attacking_goal) \
 			/ maxf(ctx.self_wrister_shot_speed, 1.0)
-	var goalie_square_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			self_pos, horizontal_velocity,
-			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_flight_s)
-	var wrister_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			goalie_now, attacking_goal, goalie_square_ref)
+	var wrister_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+			goalie_now, attacking_goal,
+			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + wrister_flight_s,
+			wrister_release_pos)
 	var wrister_unsettled: float = 0.0
 	# The five-hole as it physically exists RIGHT NOW, from the replicated pose:
 	# standing = the real ~0.20 m slot between the pads (sealable by dropping —
@@ -1165,50 +1163,30 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			self_pos, candidate, _scratch_opponents_path)
 	if lane <= 0.0:
 		return -INF
-	# Score the candidate against a SQUARED goalie — arc-matched and set. The keeper
-	# tracks the puck continuously as the bot skates the candidate (a gradual move,
-	# not a relocation it reacts to from a standstill), so on arrival it is square:
-	# both the predicted position AND the "caught moving" unsettled bonus (0.0)
-	# reflect that. Using the react-then-slide predict_goalie_pos here under-tracked
-	# the keeper — it fell short of arc-matching a diagonal step and leaked the far
-	# side, so the bot chased an ever-receding "one more cut catches him moving" shot
-	# into the crease instead of firing. The caught-moving credit is a puck-
-	# RELOCATION effect (a pass / one-timer that outruns the keeper's tracking — see
-	# score_pass's unsettled arg), never a carry the goalie reads the whole way.
-	#
-	# …but "square" means square to what he has READ. The bot ARRIVES at the
-	# candidate still moving (it fires in stride — the shoot-now path projects its
-	# release the same way), and the keeper's continuous tracking carries the
-	# same reaction delay it always does, so his cover at puck-arrival trails the
-	# arrival motion by what the shot's flight leaves of his read delay
-	# (goalie_stale_square_ref — identical model to the shoot-now scoring). For
-	# any candidate whose future shot flies longer than his delay the ref
-	# coincides with the candidate — set-goalie reads at range are unchanged. In
-	# TIGHT, a candidate reached ACROSS the goal mouth leaves the drive side
-	# genuinely open — the real "make him move and shoot" window. This is what
-	# prices lateral playmaking: without it every carry assumed a keeper already
-	# square at arrival, so cutting across the slot could never out-score
-	# standing still, and the bots never moved the goalie before shooting.
+	# Goalie at the candidate-shot's puck arrival: react-then-slide from where he
+	# ACTUALLY is toward the candidate's arc-square, over everything the play
+	# gives him — the whole carry (he tracks the puck continuously), the charge
+	# lookahead, and the shot's flight. Same speed-bounded model as the shoot-now
+	# scoring above, so a carry candidate and the shot taken on arriving at it
+	# read the same keeper:
+	#   - Any normal-pace step or long route: the budget covers the arc shift
+	#     many times over, so he arrives square and set — identical to the old
+	#     infinite-speed goalie_squared_pos read (and the "ever-receding one
+	#     more cut" bug that read was built against stays dead: it came from
+	#     predicting over only the 0.135 s charge window, not the full route).
+	#   - A fast cut ACROSS a wide-out keeper in tight is an arc race his
+	#     t_push genuinely loses — the candidate prices the "make him move and
+	#     shoot" window, which is what makes a 1v1 against an aggressive
+	#     challenge terminate in a lateral drive + shot instead of a stalled
+	#     carry (the infinite-speed square planted him covered mid-cut, so no
+	#     cut could ever out-score standing still).
+	# Unsettled stays 0 — the shortfall is expressed positionally, as everywhere.
 	var cand_flight: float = candidate.distance_to(ctx.attacking_goal_pos) \
 			/ maxf(ctx.self_wrister_shot_speed, 1.0)
-	var arrive_vel: Vector3 = Vector3.ZERO
-	var step_x: float = candidate.x - self_pos.x
-	var step_z: float = candidate.z - self_pos.z
-	var step_len: float = sqrt(step_x * step_x + step_z * step_z)
-	if step_len > 0.01 and local_time > 0.001:
-		# Arrival velocity: the route direction at the route's own average pace
-		# (dist / momentum-aware time) — the speed the bot actually crosses the
-		# candidate at, bounded by the same model that priced the travel.
-		var arrive_speed: float = minf(step_len / local_time, ctx.self_max_speed)
-		arrive_vel = Vector3(step_x / step_len * arrive_speed, 0.0,
-				step_z / step_len * arrive_speed)
-	# Lookahead 0: the candidate IS the scored release, so the ref sits exactly
-	# on it whenever the flight exceeds the keeper's read delay (set-goalie reads
-	# unchanged) and trails behind the arrival motion only in tight.
-	var cand_square_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			candidate, arrive_vel, 0.0, cand_flight)
-	var cand_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos, cand_square_ref)
+	var cand_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+			_goalie_now(ctx), ctx.attacking_goal_pos,
+			local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight,
+			candidate)
 	var dest_score: float = _score_at(ctx, candidate, self_pos,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
