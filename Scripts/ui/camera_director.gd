@@ -93,6 +93,17 @@ func cycle_mode() -> void:
 	_set_mode(next)
 
 
+# Playback discontinuity (seek, recording-gap skip, faceoff reset): the world
+# just teleported, so the tracking cameras cut to the new action instead of
+# panning across the jump. Free cam is user-driven — leave it alone.
+func on_playback_discontinuity() -> void:
+	match _mode:
+		Mode.BROADCAST:
+			_broadcast.snap_to_position()
+		Mode.CHASE:
+			_chase.snap_to_target()
+
+
 func cycle_chase_target(direction: int) -> void:
 	if _mode != Mode.CHASE:
 		return
