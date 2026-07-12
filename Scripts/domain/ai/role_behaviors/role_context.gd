@@ -68,6 +68,11 @@ var caps_by_peer: Dictionary = {}
 # keep the prior behaviour. (Cross-player evaluation reads caps_by_peer above.)
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
+# This bot's own aim-execution spread (radians, worst-case): the output-cursor
+# noise over the blade aim arm. The shot-aim model reserves this much of the
+# net's entry width so a corner snipe's wobble spreads into net/miss, not into
+# the post band. 0 for a noiseless (test/raw) agent.
+var self_aim_spread_rad: float = 0.0
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # This bot's body-check delivery (Size + Physical) and current stagger, so the
 # on-puck defensive roles (PRESSURE / FORECHECK F1) can decide whether a check

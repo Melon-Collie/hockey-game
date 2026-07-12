@@ -1186,3 +1186,31 @@ func test_pass_aim_leads_from_the_puck_not_the_body() -> void:
 			make.call(Vector3(3, 0, 0)), Vector3.ZERO)
 	assert_lt(aim_blade.z, aim_body.z - 0.3,
 			"a puck 3 m out front shortens the flight and the lead follows")
+
+
+# ── Contest read + live-bot aim noise ────────────────────────────────────────
+
+func test_opponent_within_of_reads_contest_range() -> void:
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	_add_skater(s, SELF_ID, Vector3(3, 0, 0))
+	_add_skater(s, OPP_ID, Vector3(6.5, 0, 0))   # 1.5 m from the puck
+	assert_true(sm._opponent_within_of(s, Vector3(5, 0, 0), Agent.ENGAGEMENT_PROXIMITY_M),
+			"an opponent inside blade-on-puck range is a live contest")
+	s.skater_states[OPP_ID].position = Vector3(9, 0, 0)   # 4 m away
+	assert_false(sm._opponent_within_of(s, Vector3(5, 0, 0), Agent.ENGAGEMENT_PROXIMITY_M),
+			"an opponent out of reach is not a contest")
+	# Teammates never make a contest.
+	s.skater_states.erase(OPP_ID)
+	_add_skater(s, TEAMMATE_ID, Vector3(5.5, 0, 0))
+	assert_false(sm._opponent_within_of(s, Vector3(5, 0, 0), Agent.ENGAGEMENT_PROXIMITY_M),
+			"a teammate near the puck is not an opposing contest")
+
+
+func test_aim_noise_off_raw_on_after_profile() -> void:
+	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
+	# bot wired through apply_profile gets the execution noise.
+	assert_almost_eq(sm._mouse_noise_std_m, 0.0, 1e-9,
+			"raw agents stay noiseless")
+	sm.apply_profile(BotSkillProfile.hard())
+	assert_almost_eq(sm._mouse_noise_std_m, Agent.AIM_NOISE_STD_M, 1e-9,
+			"profiled (live) agents carry the aim noise")

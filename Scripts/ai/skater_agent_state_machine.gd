@@ -511,14 +511,16 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 #     5-20 m/s range (e.g. 15 lets a 6 m anchor flip resolve in
 #     0.4 s, slow enough that per-tick target oscillations average
 #     out); raising this here trades organic look for accuracy.
-#   MOUSE_NOISE_STD_M = 0 — zero noise. The previous 0.02 m std
-#     (uniform [-0.02, +0.02] on x and z, applied to OUTPUT only so
-#     it didn't accumulate) gave organic per-tick wiggle but
-#     translated to ~0.76° aim error on the 1.5 m blade arm — enough
-#     to miss net corners on sniped shots.
-# MOUSE_NOISE_STD_M stays pinned at 0 — it is the one RNG lever, and
-# difficulty here is deterministic by design (a missed-corner snipe comes
-# from the blade-slew cap trailing the goalie's slide, not from dice).
+#   MOUSE_NOISE_STD_M = 0 — the RAW default stays zero so a bare state
+#     machine (unit tests, replay tooling) is bit-deterministic. LIVE bots
+#     get AIM_NOISE_STD_M via apply_profile(): the hand isn't a rail, and
+#     deterministic corner snipes turned every slightly-off release line
+#     into the SAME post clank every time. With noise, the identical
+#     attempt spreads into goals, saves, and misses — the honest
+#     distribution when picking a corner. (±0.02 m on the output cursor,
+#     non-accumulating, ≈0.6° on the 2 m aim arm — calibrated so the
+#     spread at a typical shot range stays inside the entry-clamp inset
+#     the aim model reserves for it; see AIM_NOISE_STD_M / _hole_aim_x.)
 #
 # MOUSE_MAX_SPEED_M_S is now the perfect-bot DEFAULT / back-compat fallback;
 # the effective per-agent cap (_mouse_max_speed_m_s) is set from
@@ -526,6 +528,11 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 const MOUSE_MAX_SPEED_M_S: float = 100.0
 var _mouse_max_speed_m_s: float = MOUSE_MAX_SPEED_M_S
 const MOUSE_NOISE_STD_M: float = 0.0
+# Live-bot aim noise (m, uniform ± on the output cursor). Applied through
+# apply_profile so raw test-constructed agents stay deterministic. The one RNG
+# lever in the bot: execution wobble on the hands, not decision dice.
+const AIM_NOISE_STD_M: float = 0.02
+var _mouse_noise_std_m: float = MOUSE_NOISE_STD_M
 # Bots run at the host physics rate (120 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
@@ -659,6 +666,10 @@ var _last_carry_anchor: Vector3 = Vector3.ZERO
 # tracks last tick's puck.carrier_peer_id so we can detect the
 # transition into "loose".
 var _engagement_cooldown: int = 0
+# Per-tick sprint reference for CHASE (the puck normally; the drive-through
+# point during a live 50/50 contest so arrival easing doesn't bleed the
+# committed speed). Reset after each _state_chase_puck tick.
+var _chase_sprint_ref: Vector3 = Vector3.INF
 var _prev_carrier_peer_id: int = -1
 
 # Set when CARRY commits to SHOOT_PRESSED; consumed by _state_shoot_pressed
@@ -1034,6 +1045,10 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_pass_speed_scale = profile.pass_speed_scale
 	_check_aggression = profile.check_aggression
 	_defensive_anticipation_scale = profile.defensive_anticipation_scale
+	# Execution noise for LIVE bots (raw test agents stay deterministic).
+	# Flat across tiers for now; a per-difficulty knob can move it into the
+	# profile when the easier tiers return.
+	_mouse_noise_std_m = AIM_NOISE_STD_M
 
 
 # Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
@@ -1408,6 +1423,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
+	ctx.self_aim_spread_rad = _mouse_noise_std_m / CARRY_BLADE_AIM_FORWARD_M
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
 	ctx.self_handle_reach = _self_handle_reach
@@ -1492,6 +1508,7 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	var recv: int = _try_shot_reception(input, snapshot, self_pos)
 	if recv == _RECV_ONE_TIME:
 		return
+	_chase_sprint_ref = snapshot.puck_state.position
 	# Pass-receive setup: if a fast loose puck is heading near our
 	# trajectory, stand perpendicular to its path for an angle-optimal
 	# catch instead of chasing the puck position (default lead-intercept
@@ -1522,7 +1539,6 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier_pid)
 			if carrier_state != null:
 				target = _angle_intercept_inside(target, carrier_state.position)
-		_apply_steering(input, snapshot, self_pos, target)
 
 		# No "soft-hands" slow-down here: the catch is decided by blade squareness +
 		# the puck's speed in OUR frame (PuckReceptionRules, #373), so easing the
@@ -1531,6 +1547,29 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		var puck_velocity: Vector3 = snapshot.puck_state.velocity
 		var puck_speed_xz: float = sqrt(puck_velocity.x * puck_velocity.x
 				+ puck_velocity.z * puck_velocity.z)
+
+		# Contested 50/50: a slow loose puck an OPPONENT'S blade can also reach.
+		# Hovering blade-first here bred endless re-contest loops — both bots
+		# park at reach, the pinched squirt stays between them, engagement
+		# cooldowns re-arm, repeat, with nobody committed enough to separate the
+		# play. Commit the BODY through the contest instead: overshoot the puck
+		# along our approach line so our skating momentum (a) weights the
+		# contested squirt our way (PuckCollisionRules.contested_pickup_velocity
+		# blends blade momentum — the moving blade wins the seed-pinch) and (b)
+		# carries us THROUGH the 50/50 for real separation. Win or lose, the
+		# standoff geometry breaks every contest.
+		var contested: bool = carrier_pid == -1 \
+				and puck_speed_xz <= LOOSE_PUCK_TRACK_SPEED_M_S \
+				and _opponent_within_of(snapshot, puck_pos, ENGAGEMENT_PROXIMITY_M)
+		if contested:
+			var through: Vector3 = Vector3(
+					puck_pos.x - self_pos.x, 0.0, puck_pos.z - self_pos.z)
+			if through.length_squared() > 0.0001:
+				target = puck_pos + through.normalized() * ENGAGEMENT_PROXIMITY_M
+				# Sprint gate reads the overshoot too — the easing that slows a
+				# clean solo pickup must not bleed speed out of a contest.
+				_chase_sprint_ref = target
+		_apply_steering(input, snapshot, self_pos, target)
 
 		# Aim: normally blade-on-intercept, but during the engagement cooldown
 		# (just got stripped or just stick-checked someone) pull the blade
@@ -1554,11 +1593,13 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		else:
 			input.mouse_world_pos = _step_mouse_toward(target)
 	# Sprint to win the race to a loose / contested puck. Gap is measured to
-	# the puck itself — soft-hands closing (inside ~1.5 m) falls under the gap
-	# gate, so the bot eases off the throttle for a clean reception. Resolved
-	# after both steering paths above so the turn gate sees the final heading.
+	# the puck itself — the arrival easing inside ~1.5 m slows a clean solo
+	# pickup — EXCEPT through a live contest, where the gap reads the drive-
+	# through point instead so the bot arrives with its speed. Resolved after
+	# both steering paths above so the turn gate sees the final heading.
 	var chase_self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	_resolve_sprint(input, chase_self_state, self_pos, snapshot.puck_state.position, false, false)
+	_resolve_sprint(input, chase_self_state, self_pos, _chase_sprint_ref, false, false)
+	_chase_sprint_ref = Vector3.INF
 
 	# Transitions: chase ends as soon as someone has the puck, OR we're
 	# no longer the closest teammate (let the new closest take over).
@@ -3528,11 +3569,11 @@ func _step_mouse_internal(target: Vector3, mode: int,
 				_current_self_pos, target, _current_self_state)
 		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
-		if MOUSE_NOISE_STD_M == 0.0:
+		if _mouse_noise_std_m == 0.0:
 			return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 		return Vector3(
-				_mouse_pos.x + _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M, 0.0,
-				_mouse_pos.z + _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M)
+				_mouse_pos.x + _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m, 0.0,
+				_mouse_pos.z + _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m)
 	if not _mouse_pos_initialized:
 		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
@@ -3552,10 +3593,10 @@ func _step_mouse_internal(target: Vector3, mode: int,
 	# axis). Wiggle doesn't accumulate. Skip the two RNG advances entirely
 	# when noise is disabled (the current perfect-bot baseline) — this runs
 	# at tick rate for every bot, including throttle-skipped ticks.
-	if MOUSE_NOISE_STD_M == 0.0:
+	if _mouse_noise_std_m == 0.0:
 		return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
-	var nx: float = _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M
-	var nz: float = _rng.randf_range(-1.0, 1.0) * MOUSE_NOISE_STD_M
+	var nx: float = _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m
+	var nz: float = _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m
 	return Vector3(_mouse_pos.x + nx, 0.0, _mouse_pos.z + nz)
 
 
@@ -3851,6 +3892,20 @@ func _update_acceleration_cache(snapshot: WorldSnapshot, delta: float) -> void:
 # longer to reset; a near-stationary bot recovers fast. Two bots in the
 # same engagement almost never have identical speeds, so this also
 # breaks the lockstep that made bots re-engage in unison.
+# True when any OPPONENT skater is within `r` of `point` (XZ) — the "their
+# blade can reach this puck too" contest read (r = blade-on-puck range).
+func _opponent_within_of(snapshot: WorldSnapshot, point: Vector3, r: float) -> bool:
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id or _team_id_by_peer.get(pid, -1) == _team_id:
+			continue
+		var p: Vector3 = snapshot.skater_states[pid].position
+		var dx: float = p.x - point.x
+		var dz: float = p.z - point.z
+		if dx * dx + dz * dz < r * r:
+			return true
+	return false
+
+
 func _update_engagement_cooldown(snapshot: WorldSnapshot, self_state: SkaterNetworkState) -> void:
 	var carrier: int = snapshot.puck_state.carrier_peer_id
 	if _prev_carrier_peer_id != -1 and carrier == -1:

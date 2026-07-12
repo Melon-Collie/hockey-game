@@ -1417,3 +1417,72 @@ func test_hole_aim_never_targets_the_post_band() -> void:
 			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0)
 	assert_lte(absf(aim.x), GameRules.NET_ENTRY_HALF_WIDTH + 0.0001,
 			"aim stays inside the clean-entry line; got x=%f" % aim.x)
+
+
+# ─── Arc-radius clamp (no goalie off the cage) ────────────────────────────
+
+func test_arc_match_x_bounded_by_goalie_radius() -> void:
+	# A puck reference near the goal line at wide x used to explode the arc-x
+	# toward the corner boards. The goalie squares along his ARC: |x offset|
+	# can never exceed his radial distance from the goal.
+	var goal := Vector3(0, 0, -26.65)
+	var goalie := Vector3(0, 0, -24.9)   # 1.75 out
+	var x: float = AIActionScoring.goalie_arc_match_x(
+			goalie, goal, Vector3(4.0, 0, -26.4))   # wide, 0.25 m off the line
+	assert_lte(absf(x), 1.7501, "arc-x is bounded by the goalie's own radius")
+	# Moderate angles unchanged: well inside the radius, wider than the post.
+	var mid: float = AIActionScoring.goalie_arc_match_x(
+			goalie, goal, Vector3(1.75, 0, -24.05))
+	assert_almost_eq(mid, 1.75 * 1.75 / 2.6, 0.001,
+			"a moderate-angle arc-x is the raw arc match (unclamped)")
+
+
+# ─── Stale-square ref fades with flight ───────────────────────────────────
+
+func test_stale_ref_fully_caught_up_when_flight_exceeds_delay() -> void:
+	# Flight longer than the goalie's read delay → he re-squares to the release
+	# during flight; the ref equals the plain release projection.
+	var vel := Vector3(6, 0, 0)
+	var look: float = 0.25
+	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			Vector3.ZERO, vel, look, 0.4)
+	assert_almost_eq(ref.x, vel.x * look, 0.001,
+			"long flight → ref coincides with the release (no lag opening)")
+
+
+func test_stale_ref_keeps_residual_lag_in_tight() -> void:
+	# Flight under the delay → the residual (delay − flight) of motion stays
+	# unread; the ref trails the release by exactly that much.
+	var vel := Vector3(6, 0, 0)
+	var look: float = 0.25
+	var flight: float = 0.05
+	var ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
+			Vector3.ZERO, vel, look, flight)
+	var expected_lag: float = (AIActionScoring.GOALIE_REACTION_DELAY_S - flight) * vel.x
+	assert_almost_eq(vel.x * look - ref.x, expected_lag, 0.001,
+			"in tight the ref trails the release by the unread residual")
+
+
+# ─── Spread-aware entry inset ─────────────────────────────────────────────
+
+func test_aim_spread_pulls_a_degenerate_corner_aim_off_the_post() -> void:
+	# A noisy hand budgets its own wobble inside the entry line. Exercised on
+	# the hole-aim primitive directly: a goalie hugging the left post collapses
+	# the left corner's open segment onto the post itself; the physical entry
+	# clamp pulls the aim to the clean-entry line, and a nonzero spread pulls
+	# it a further spread × range inside so the wobble can't reach the iron.
+	# (Chosen corner aims normally sit well off the post via the corner bias —
+	# the clamp is the backstop for degenerate slivers.)
+	var goal := Vector3(0, 0, -26.65)
+	var shooter := Vector3(0, 0, -22.65)   # 4 m out, dead center
+	var goalie := Vector3(-0.8, 0, -25.6)  # hugging the left post
+	var flight: float = 4.0 / 33.0
+	var exact: float = AIActionScoring._hole_aim_x(
+			2, shooter, goal, goalie, GameRules.NET_HALF_WIDTH, flight, 0.0)
+	assert_almost_eq(exact, -GameRules.NET_ENTRY_HALF_WIDTH, 0.001,
+			"degenerate left-corner aim rides the physical entry clamp")
+	var spread: float = 0.01   # rad — ~0.02 m cursor noise on the 2 m aim arm
+	var noisy: float = AIActionScoring._hole_aim_x(
+			2, shooter, goal, goalie, GameRules.NET_HALF_WIDTH, flight, 0.0, spread)
+	assert_almost_eq(noisy, exact + spread * shooter.distance_to(goal), 0.01,
+			"spread inset pulls the clamped aim inside by spread × range")
