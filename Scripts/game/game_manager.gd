@@ -280,10 +280,12 @@ var _camera_director: CameraDirector = null
 
 # ── Game identity ─────────────────────────────────────────────────────────────
 # Minted by the host in LobbyManager._on_start_pressed and broadcast via
-# game_start. Used as the .mreplay filename and (planned for Feature C) stored
-# on career_stats rows so a single game can be reconstructed across players.
-# **Empty in offline / tutorial mode** — those sessions don't write replays
-# or career stats. Downstream consumers must treat empty as "skip recording".
+# game_start, so EVERY lobby match carries one — including offline Play vs
+# Bots, whose games therefore write local replays. Used as the .mreplay
+# filename and stored on career_stats rows so a single game can be
+# reconstructed across players. **Empty in free play / tutorial / drill
+# sessions** (no lobby, nothing minted) — those don't write replays or career
+# stats. Downstream consumers must treat empty as "skip recording".
 var _game_id: String = ""
 
 # Sound wiring is split between persistent (NetworkManager autoload, GameManager
@@ -1052,9 +1054,10 @@ func _spawn_world() -> void:
 		else:
 			push_warning("rejected game_id from config: %s" % cfg_id)
 		NetworkManager.pending_game_config = {}
-	# Offline / tutorial sessions intentionally leave _game_id empty — they
-	# don't broadcast (no other peer would see the id) and downstream consumers
+	# Free play / tutorial / drill sessions intentionally leave _game_id
+	# empty (their pending config carries none) and downstream consumers
 	# (ReplayFileWriter, CareerStatsReporter) treat empty as "don't record".
+	# Lobby matches — online AND offline vs bots — always carry one.
 	_spawner = ActorSpawner.new()
 	_spawner.setup(get_tree().current_scene)
 	_create_teams()
@@ -1806,7 +1809,7 @@ func _open_replay_file_writer() -> void:
 	if _replay_file_writer != null:
 		return
 	if _game_id.is_empty():
-		return  # offline / tutorial — see _spawn_world
+		return  # free play / tutorial / drill — see _game_id doc
 	if not PlayerPrefs.replay_recording_enabled:
 		return
 	# Purge oldest first so the new file is never the one we delete next game.
@@ -3227,8 +3230,10 @@ func _on_game_over() -> void:
 				if _achievements != null:
 					_achievements.evaluate_career(_stat_recorder.totals())
 	# Supabase career row + network telemetry: online, shared-stats games only.
-	# Offline (Play vs Bots + free play) and tutorial don't upload — no game_id,
-	# backend cost, and no cross-machine opponent pool worth ranking.
+	# Offline (Play vs Bots + free play) and tutorial don't upload — backend
+	# cost, and no cross-machine opponent pool worth ranking. (Bot-lobby games
+	# DO have a game_id and record local replays; they just stay off the
+	# backend.)
 	if NetworkManager.is_offline_mode:
 		return
 	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
