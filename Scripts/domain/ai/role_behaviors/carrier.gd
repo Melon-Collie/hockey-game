@@ -1388,13 +1388,30 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 			# Ghosted (offside) finisher can't receive — the live pass
 			# scoring skips ghosts, so holding for one would be waiting
 			# for a feed we're never allowed to make. Already-flagged —
-			# the normal pass scoring feeds it; nothing to wait for. Must
-			# be staging an OZ cross-seam (slot_anchor returns ZERO for
-			# FINISHER, so we read the teammate's live position, not a
-			# brain anchor).
-			var spot: Vector3 = tm.position
+			# the normal pass scoring feeds it; nothing to wait for.
+			# (slot_anchor returns ZERO for FINISHER, so we read the
+			# teammate's live motion, not a brain anchor.)
+			#
+			# The play that WILL exist, not just the one that does: a
+			# finisher still skating to his staging spot is valued at the
+			# spot he's DRIVING TO — position projected along velocity, the
+			# same primitive as the developing outlet below — so a fresh
+			# zone entry holds for the mates still arriving instead of
+			# settling for the weak from-the-top shot the moment the carrier
+			# crosses the line. As he settles the projection converges to
+			# his position, the live pass scoring converges to this value,
+			# and fire wins the tie — the hold can't outlive the play it's
+			# waiting for (and _hold_elapsed_s decays a wait that never
+			# materialises). The OZ gate reads the projected spot for the
+			# same reason: a finisher a stride outside the line, driving in,
+			# IS the developing cross-seam.
+			var fin_vel: Vector3 = tm.velocity
+			var spot := Vector3(
+					tm.position.x + fin_vel.x * OUTLET_DEVELOP_WINDOW_S, 0.0,
+					tm.position.z + fin_vel.z * OUTLET_DEVELOP_WINDOW_S)
 			if tm.is_ghost or ctx.team_brain.is_one_timer_ready(pid) \
-					or -ctx.own_goal_dir * spot.z <= GameRules.BLUE_LINE_Z:
+					or -ctx.own_goal_dir * spot.z <= GameRules.BLUE_LINE_Z \
+					or not AIRoleHelpers.is_legal_position(spot):
 				continue
 			var dist: float = self_pos.distance_to(spot)
 			var pass_speed: float = AIActionScoring.pass_launch_speed(

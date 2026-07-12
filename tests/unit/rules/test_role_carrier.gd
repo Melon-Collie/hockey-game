@@ -852,6 +852,75 @@ func test_developing_feed_zero_when_finisher_out_of_offensive_zone() -> void:
 			"a finisher outside the OZ isn't a developing cross-seam")
 
 
+func test_developing_feed_counts_a_finisher_still_crossing_the_line() -> void:
+	# A finisher a stride OUTSIDE the blue line driving hard into the zone IS
+	# the developing cross-seam — the old current-position gate read exactly 0
+	# here, so a carrier fresh off the entry saw nothing worth waiting for and
+	# settled for the weak from-the-top shot. Parked at the same spot he still
+	# reads 0: the gate opens on where he's GETTING to, not a slot label.
+	var fin_pos := Vector3(-5, 0, -(GameRules.BLUE_LINE_Z - 1.0))
+	var parked := _ctx_with_finisher(fin_pos, false)
+	var c1 := AIRoleCarrier.new()
+	c1._scratch_teammate_ids = [2]
+	assert_eq(c1._best_developing_feed(parked), 0.0,
+			"parked outside the line: nothing developing")
+	var driving := _ctx_with_finisher(fin_pos, false)
+	driving.snapshot.skater_states[2].velocity = Vector3(-0.5, 0, -7.0)
+	var c2 := AIRoleCarrier.new()
+	c2._scratch_teammate_ids = [2]
+	assert_gt(c2._best_developing_feed(driving), 0.0,
+			"driving in: the entering finisher is a developing play")
+
+
+func test_developing_feed_values_the_spot_the_finisher_is_driving_to() -> void:
+	# A finisher high in the zone skating hard for the house is priced at the
+	# spot he's driving to (velocity projection, same primitive as the
+	# developing outlet) — worth more than the same man parked high.
+	var fin_pos := Vector3(-5, 0, -15.0)
+	var parked := _ctx_with_finisher(fin_pos, false)
+	var c1 := AIRoleCarrier.new()
+	c1._scratch_teammate_ids = [2]
+	var feed_parked: float = c1._best_developing_feed(parked)
+	var driving := _ctx_with_finisher(fin_pos, false)
+	driving.snapshot.skater_states[2].velocity = Vector3(-0.5, 0, -6.5)
+	var c2 := AIRoleCarrier.new()
+	c2._scratch_teammate_ids = [2]
+	assert_gt(c2._best_developing_feed(driving), feed_parked,
+			"the feed is valued at the spot the finisher is getting to")
+
+
+func test_fresh_entry_holds_for_the_driving_finisher_over_the_top_shot() -> void:
+	# The playtest read: seconds after a zone entry, box set, carry strangled —
+	# the carrier settled for a weak shot from above the circle because
+	# nothing else scored. The mate driving to the house IS the something
+	# else: the developing feed must out-value the marginal top shot so the
+	# hold (feed × keep × decay) wins the compete instead of the giveaway.
+	var self_pos := Vector3(2, 0, -14.5)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(-1.0, 0, -6.5)],
+			[3, TEAM_ID, Vector3(6, 0, -6.3)],       # support high at the line
+			[11, 1, Vector3(-1.5, 0, -20.0)],        # set D box
+			[12, 1, Vector3(2.5, 0, -19.0)],
+			[13, 1, Vector3(0.5, 0, -11.3)],         # high man choking the carry
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.45                              # tracking, not dead-set centre
+	g.position_z = -26.65 + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.FINISHER
+	brain.slot_assignments[3] = AIRoleSlots.Slot.SUPPORT
+	ctx.team_brain = brain
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"the marginal top shot is not taken while the play develops")
+	assert_gt(c._best_developing_feed(ctx), c.debug_shoot_score,
+			"the developing feed out-values the from-the-top shot")
+
+
 # ─── developing breakout outlet: hold instead of forcing the backpass ────────
 # A BREAKOUT_STRONG / OUTLET teammate skating its route is a developing
 # feed: _developing_outlet_feed projects it OUTLET_DEVELOP_WINDOW_S along
