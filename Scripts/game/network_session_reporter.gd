@@ -15,13 +15,20 @@ const MIN_DURATION_SEC: int = 30
 
 # `role` is "host" / "client"; `net_sim_active` flags dev sessions running
 # artificial lag (NetworkSimManager) so they can be excluded from analysis.
-func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool) -> void:
+# `game_id` is the cross-peer match UUID (GameManager mints it and ships it to
+# every peer — the same id career_stats rows carry), so the host row and its
+# clients' rows join into one per-match picture (`match_health` view).
+# `end_reason` is how the session ended: "completed" (game over), "quit"
+# (local player left mid-game), or a client-side abnormal end ("host_lost",
+# "host_ended", "kicked") — the sessions a game-over-only reporter would miss.
+func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool,
+		game_id: String, end_reason: String) -> void:
 	if summary == null or summary.seconds < MIN_DURATION_SEC:
 		return
 	# Identity / filter fields are top-level columns; the evolving metric set
-	# (every "<key>_max/_avg/_min" plus felt-lag markers) rides in one jsonb
-	# column so adding a metric never requires an ALTER TABLE. Mirrors how
-	# bug_reports stores its telemetry blob.
+	# (every "<key>_max/_avg/_min/_total" plus felt-lag markers) rides in one
+	# jsonb column so adding a metric never requires an ALTER TABLE. Mirrors
+	# how bug_reports stores its telemetry blob.
 	var body: Dictionary = {
 		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
@@ -31,6 +38,8 @@ func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool) 
 		"net_sim_active": net_sim_active,
 		"duration_sec": summary.seconds,
 		"felt_lag_count": summary.felt_lag_count,
+		"game_id": game_id if not game_id.is_empty() else null,
+		"end_reason": end_reason,
 		"metrics": summary.to_dict(),
 	}
 	_post(SupabaseConfig.URL + "/rest/v1/network_sessions", body)

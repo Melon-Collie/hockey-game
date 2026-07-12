@@ -462,9 +462,10 @@ func tick(delta: float) -> void:
 # the column prefixes the network_sessions table expects (see
 # network_session_summary.gd). Role-degenerate metrics (e.g. loss/jitter on a
 # host, reconciles on a host) fold as their natural 0/100 — the row's `role`
-# disambiguates them at query time. sim_rate is the one exception: it's only
-# meaningful when ticks were sampled (host/solo), so a client's structural 0 is
-# omitted to keep its session-min honest.
+# disambiguates them at query time. sim_rate and broadcast interval are the
+# exceptions: they're only meaningful when their samples were recorded
+# (host/solo), so a client's structural 0 is omitted to keep the session
+# min/max honest.
 func _fold_session_sample() -> void:
 	var sample: Dictionary = {
 		"rtt_ms": current_rtt_ms,
@@ -495,7 +496,25 @@ func _fold_session_sample() -> void:
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,
 		"peer_count": float(current_peer_count),
+		# Rare-event tripwires fold as this window's raw COUNTS — TOTAL_KEYS in
+		# the summary, so the row carries a session total instead of an average
+		# that smears 3 hard snaps in a 10-minute game to ~0.
+		"puck_hard_snaps": float(_puck_traj_hard_snap_count),
+		"blade_jumps": float(_blade_jump_count),
+		# Interp buffer depths (MIN_KEYS — running dry is the bad direction).
+		# Host rows fold structural 0s; `role` disambiguates at query time.
+		"buffer_depth_skater": float(buffer_depth_skater),
+		"buffer_depth_puck": float(buffer_depth_puck),
 	}
 	if host_effective_tick_hz > 0.0:
 		sample["sim_rate_hz"] = host_effective_tick_hz
+	if broadcast_interval_p95_ms > 0.0:
+		sample["broadcast_interval_p95_ms"] = broadcast_interval_p95_ms
 	session.observe(sample)
+
+
+# Fresh accumulator for a rematch: each game posts its own row keyed to its own
+# game_id, so the second game's aggregates must not include the first's.
+# Called from GameManager._apply_reset on every peer.
+func reset_session() -> void:
+	session = NetworkSessionSummary.new()

@@ -57,6 +57,36 @@ func test_client_fps_is_a_min_key() -> void:
 	assert_eq(d["client_fps_min"], 58.0)
 	assert_eq(d["client_fps_max"], 144.0)
 
+func test_total_keys_emit_session_sum_only() -> void:
+	# Rare-event tripwires (hard snaps, blade jumps) observe per-window COUNTS
+	# and ship a single session total — no max/avg pair that would smear a
+	# handful of discrete events into a meaningless rate.
+	var s := _make()
+	s.observe({"puck_hard_snaps": 2.0})
+	s.observe({"puck_hard_snaps": 0.0})
+	s.observe({"puck_hard_snaps": 1.0})
+	var d := s.to_dict()
+	assert_eq(d["puck_hard_snaps_total"], 3.0)
+	assert_false(d.has("puck_hard_snaps_max"))
+	assert_false(d.has("puck_hard_snaps_avg"))
+	assert_false(d.has("puck_hard_snaps_min"))
+
+func test_blade_jumps_is_a_total_key() -> void:
+	var s := _make()
+	s.observe({"blade_jumps": 1.0})
+	s.observe({"blade_jumps": 4.0})
+	assert_eq(s.to_dict()["blade_jumps_total"], 5.0)
+
+func test_buffer_depths_are_min_keys() -> void:
+	# Interp buffers running dry (lower) is the bad direction — the session
+	# minimum is the diagnostic extreme.
+	var s := _make()
+	s.observe({"buffer_depth_skater": 3.0, "buffer_depth_puck": 4.0})
+	s.observe({"buffer_depth_skater": 0.0, "buffer_depth_puck": 2.0})
+	var d := s.to_dict()
+	assert_eq(d["buffer_depth_skater_min"], 0.0)
+	assert_eq(d["buffer_depth_puck_min"], 2.0)
+
 func test_duration_counts_observed_windows() -> void:
 	var s := _make()
 	for _i in 5:

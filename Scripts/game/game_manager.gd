@@ -233,6 +233,11 @@ var _post_game_replay_driver: PostGameReplayDriver = null
 var _post_game_replay_timer: SceneTreeTimer = null
 var _career_reporter: CareerStatsReporter = null
 var _net_session_reporter: NetworkSessionReporter = null
+# Double-post guard for the network-quality row: the game-over path reports
+# "completed" and the scene-exit path reports abnormal ends ("quit",
+# "host_lost", …) — whichever fires first wins. Re-armed at world spawn and on
+# rematch reset (each game posts its own row).
+var _net_session_reported: bool = false
 var _achievements: AchievementService = null
 var _stat_recorder: SteamStatRecorder = null
 # Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
@@ -1310,6 +1315,7 @@ func _wire_subsystems() -> void:
 
 	_telemetry = NetworkTelemetry.new()
 	NetworkTelemetry.instance = _telemetry
+	_net_session_reported = false
 	_debug_overlay = NetworkDebugOverlay.new()
 	add_child(_debug_overlay)
 
@@ -3237,14 +3243,30 @@ func _on_game_over() -> void:
 	# Steam achievements/stats above are unaffected — they never touch the backend.
 	if not PlayerPrefs.share_gameplay_stats:
 		return
-	# Network-quality row: shares the offline + privacy gates above but not the
-	# career-specific team/score plumbing below, so report it here. Both roles
-	# are worth collecting (client = link quality, host = frame/input health).
-	if _telemetry != null and _net_session_reporter != null:
-		var role: String = "host" if NetworkManager.is_host else "client"
-		_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled)
+	# Network-quality row: shares the offline + privacy gates (re-checked inside
+	# the helper) but not the career-specific team/score plumbing below, so
+	# report it here. Both roles are worth collecting (client = link quality,
+	# host = frame/input health).
+	_report_net_session("completed")
 	if local == null or local.team == null:
 		return
+
+
+# One network-quality row per game, guarded so the game-over and scene-exit
+# paths can both call it without double-posting. `end_reason`: "completed"
+# (game over), "quit" (local player left mid-game), or a client-side abnormal
+# end from NetworkManager ("host_lost" / "host_ended" / "kicked"). Applies the
+# same offline + privacy gates as career stats; the reporter's own 30 s floor
+# still filters rage-quit warmups.
+func _report_net_session(end_reason: String) -> void:
+	if _net_session_reported or _telemetry == null or _net_session_reporter == null:
+		return
+	if NetworkManager.is_offline_mode or not PlayerPrefs.share_gameplay_stats:
+		return
+	_net_session_reported = true
+	var role: String = "host" if NetworkManager.is_host else "client"
+	_net_session_reporter.report(_telemetry.session, role, NetworkSimManager.enabled,
+			_game_id, end_reason)
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
 
@@ -3330,6 +3352,13 @@ func on_scene_exit() -> void:
 	if _debug_overlay:
 		_debug_overlay.queue_free()
 		_debug_overlay = null
+	# Mid-game exits (quit to free play, host lost, host ended, kicked) still
+	# ship a network-quality row — the sessions that end badly are the most
+	# diagnostic ones, and the game-over-only path never saw them. No-op when
+	# the game already reported at game-over (the _net_session_reported guard).
+	# The take() runs unconditionally so a stale reason never survives teardown.
+	var abnormal_reason: String = NetworkManager.take_session_end_reason()
+	_report_net_session(abnormal_reason if not abnormal_reason.is_empty() else "quit")
 	_telemetry = null
 	NetworkTelemetry.instance = null
 	_last_emitted_clock_secs = -1
@@ -3381,6 +3410,12 @@ func on_game_reset(new_game_id: String = "") -> void:
 
 
 func _apply_reset() -> void:
+	# A rematch is a fresh match: fresh telemetry session (its row keys to the
+	# new game_id minted by the rollover) and a re-armed reporter guard, so each
+	# game posts exactly one row that aggregates only its own play.
+	if _telemetry != null:
+		_telemetry.reset_session()
+	_net_session_reported = false
 	# End any post-game highlight loop and drop the previous match's clips so a
 	# rematch's screen only reels its own goals.
 	_stop_post_game_replay()

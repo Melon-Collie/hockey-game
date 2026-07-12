@@ -12,9 +12,11 @@ class_name NetworkSessionSummary extends RefCounted
 #   • Generic accumulator, not a wall of explicit fields: each observed key
 #     tracks min / max / running mean. to_dict() emits "<key>_max" and
 #     "<key>_avg" for every key, plus "<key>_min" for the keys in MIN_KEYS
-#     (metrics where LOWER is worse — sim rate, reconcile-match %). The column
-#     set the SQL table expects is therefore derived mechanically from the
-#     sample keys + MIN_KEYS; keep the table in sync when either moves.
+#     (metrics where LOWER is worse — sim rate, reconcile-match %), while
+#     TOTAL_KEYS event counters emit only "<key>_total" (session sum). The
+#     column set the SQL views expect is therefore derived mechanically from
+#     the sample keys + MIN_KEYS/TOTAL_KEYS; keep the views (and
+#     docs/telemetry_dictionary.md) in sync when any of them move.
 #   • No health classification here — it ships raw aggregates and lets the
 #     analysis (SQL / overlay) own thresholds, so the band cutoffs aren't
 #     duplicated out of network_telemetry.gd / the F3 overlay.
@@ -24,7 +26,15 @@ class_name NetworkSessionSummary extends RefCounted
 
 # Metrics where a LOWER value is the bad direction, so the session minimum is
 # the diagnostic extreme worth keeping (everything else keeps the maximum).
-const MIN_KEYS: Array[String] = ["sim_rate_hz", "reconcile_match_pct", "client_fps"]
+const MIN_KEYS: Array[String] = ["sim_rate_hz", "reconcile_match_pct", "client_fps",
+		"buffer_depth_skater", "buffer_depth_puck"]
+
+# Metrics observed as PER-WINDOW EVENT COUNTS rather than rates/levels — the
+# rare discrete tripwires (puck hard-snaps, blade jumps). Averaging smears
+# them invisible (3 hard snaps in a 10-minute game ≈ 0.005/s), so to_dict()
+# emits a single "<key>_total" (the sum across the session) instead of the
+# max/avg pair.
+const TOTAL_KEYS: Array[String] = ["puck_hard_snaps", "blade_jumps"]
 
 # Cap on felt-lag markers per session — defense against a tester leaning on the
 # key. Beyond the cap we keep a count so the total is still visible.
@@ -71,7 +81,8 @@ func has_data() -> bool:
 
 
 # Flat dict for Supabase. Per metric: "<key>_max" + "<key>_avg" always, plus
-# "<key>_min" for MIN_KEYS metrics. Plus session-level fields.
+# "<key>_min" for MIN_KEYS metrics — except TOTAL_KEYS event counters, which
+# emit only "<key>_total". Plus session-level fields.
 func to_dict() -> Dictionary:
 	var out: Dictionary = {
 		"duration_sec": seconds,
@@ -79,6 +90,9 @@ func to_dict() -> Dictionary:
 		"felt_lag_markers": _markers,
 	}
 	for key: String in _sum:
+		if key in TOTAL_KEYS:
+			out[key + "_total"] = _sum[key]
+			continue
 		out[key + "_max"] = _max[key]
 		out[key + "_avg"] = _sum[key] / float(seconds)
 		if key in MIN_KEYS:
