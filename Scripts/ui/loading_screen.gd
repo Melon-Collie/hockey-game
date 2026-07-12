@@ -92,17 +92,6 @@ func _process(delta: float) -> void:
 		_dot_count = (_dot_count + 1) % 4
 		_status_label.text = _base_status + ".".repeat(_dot_count)
 
-# Host spinner while the Steam lobby is being created (no cancel — creation is
-# quick and there's nothing to back out of yet).
-func show_hosting() -> void:
-	_subtitle_label.text = "Hosting"
-	_cancel_btn.visible = false
-	_reconnect_btn.visible = false
-	_is_error = false
-	set_status("Creating lobby")
-	_shown_at = Time.get_ticks_msec() / 1000.0
-	visible = true
-
 # Client spinner during the Steam lobby-join + connection handshake.
 func show_joining_lobby() -> void:
 	_subtitle_label.text = "Joining game"

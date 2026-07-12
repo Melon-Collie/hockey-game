@@ -280,11 +280,21 @@ var _camera_director: CameraDirector = null
 
 # ── Game identity ─────────────────────────────────────────────────────────────
 # Minted by the host in LobbyManager._on_start_pressed and broadcast via
-# game_start. Used as the .mreplay filename and (planned for Feature C) stored
-# on career_stats rows so a single game can be reconstructed across players.
-# **Empty in offline / tutorial mode** — those sessions don't write replays
-# or career stats. Downstream consumers must treat empty as "skip recording".
+# game_start, so EVERY lobby match carries one — including offline Play vs
+# Bots, whose games therefore write local replays. Used as the .mreplay
+# filename and stored on career_stats rows so a single game can be
+# reconstructed across players. **Empty in free play / tutorial / drill
+# sessions** (no lobby, nothing minted) — those don't write replays or career
+# stats. Downstream consumers must treat empty as "skip recording".
 var _game_id: String = ""
+# True once this match has (ever) had two or more human players — the bar for
+# uploading ranked backend rows (career stats, network-session telemetry).
+# With the lobby's visibility toggle, an online-visible session can still be a
+# solo-vs-bots game, so is_offline_mode alone no longer implies "unranked".
+# Latched, not sampled: a human joining mid-match (spectator taking over a
+# bot) makes the game ranked from then on, but players leaving before the
+# horn don't un-rank it. Reset at world spawn and recomputed on rematch.
+var _ranked_match: bool = false
 
 # Sound wiring is split between persistent (NetworkManager autoload, GameManager
 # self-signals — wire once for the lifetime of the process) and per-game (puck /
@@ -1041,6 +1051,7 @@ func _spawn_world() -> void:
 	# scene transition) and pollutes the p95/p99 for the first second.
 	_last_phys_tick_us = 0
 	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
+	_ranked_match = false  # re-latches as players spawn (_on_registry_player_added)
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -1052,9 +1063,10 @@ func _spawn_world() -> void:
 		else:
 			push_warning("rejected game_id from config: %s" % cfg_id)
 		NetworkManager.pending_game_config = {}
-	# Offline / tutorial sessions intentionally leave _game_id empty — they
-	# don't broadcast (no other peer would see the id) and downstream consumers
+	# Free play / tutorial / drill sessions intentionally leave _game_id
+	# empty (their pending config carries none) and downstream consumers
 	# (ReplayFileWriter, CareerStatsReporter) treat empty as "don't record".
+	# Lobby matches — online AND offline vs bots — always carry one.
 	_spawner = ActorSpawner.new()
 	_spawner.setup(get_tree().current_scene)
 	_create_teams()
@@ -1806,7 +1818,7 @@ func _open_replay_file_writer() -> void:
 	if _replay_file_writer != null:
 		return
 	if _game_id.is_empty():
-		return  # offline / tutorial — see _spawn_world
+		return  # free play / tutorial / drill — see _game_id doc
 	if not PlayerPrefs.replay_recording_enabled:
 		return
 	# Purge oldest first so the new file is never the one we delete next game.
@@ -2135,6 +2147,7 @@ func _on_registry_player_added(record: PlayerRecord) -> void:
 		_sync_stats_to_clients()
 	if _state_buffer_manager != null:
 		_state_buffer_manager.add_player(record.peer_id)
+	_refresh_ranked_match()
 
 
 # Populates per-frame AI caches on the live snapshot — a per-team peer-id
@@ -3227,9 +3240,16 @@ func _on_game_over() -> void:
 				if _achievements != null:
 					_achievements.evaluate_career(_stat_recorder.totals())
 	# Supabase career row + network telemetry: online, shared-stats games only.
-	# Offline (Play vs Bots + free play) and tutorial don't upload — no game_id,
-	# backend cost, and no cross-machine opponent pool worth ranking.
+	# Offline (Play vs Bots + free play) and tutorial don't upload — backend
+	# cost, and no cross-machine opponent pool worth ranking. (Bot-lobby games
+	# DO have a game_id and record local replays; they just stay off the
+	# backend.)
 	if NetworkManager.is_offline_mode:
+		return
+	# An online-VISIBLE lobby can still produce a solo-vs-bots match (nobody
+	# joined before the horn). Same no-real-opponent reasoning as above —
+	# ranked rows require the two-human latch.
+	if not _ranked_match:
 		return
 	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
 	# The Career screen's history reads from that backend data, so it stays empty by
@@ -3254,6 +3274,19 @@ func _on_game_over() -> void:
 # or tutorial / penalty-drill practice.
 func _achievements_active() -> bool:
 	return not NetworkManager.is_free_play_mode and not NetworkManager.is_drill_mode()
+
+
+# Latches _ranked_match (see its doc) once two humans share the match. Called
+# from _on_registry_player_added so both the initial roster population and a
+# mid-match join re-evaluate it; _apply_reset re-runs it for rematches.
+func _refresh_ranked_match() -> void:
+	if _ranked_match or _registry == null or NetworkManager.is_offline_mode:
+		return
+	var humans: int = 0
+	for record: PlayerRecord in _registry.all().values():
+		if not record.is_bot:
+			humans += 1
+	_ranked_match = humans >= 2
 
 
 # Window-close hook — closes the replay file cleanly when the user clicks
@@ -3409,6 +3442,10 @@ func _apply_reset() -> void:
 	if _possession_tracker != null:
 		_possession_tracker.reset()
 	stats_updated.emit()
+	# A rematch is a fresh match for ranking purposes: re-derive the two-human
+	# latch from who's actually still here.
+	_ranked_match = false
+	_refresh_ranked_match()
 
 
 # ── Return to Lobby ──────────────────────────────────────────────────────────
