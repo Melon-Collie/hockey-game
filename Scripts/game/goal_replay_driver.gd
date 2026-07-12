@@ -83,11 +83,6 @@ var _defending_goal_z: float = 0.0
 var _shot_event_ts: float = -1.0
 var _shot_release_pos: Vector3 = Vector3.ZERO
 
-# Vote-to-skip tally for the current clip, keyed by peer_id. Cleared on every
-# start() so a previous goal's votes don't carry over. Driven by
-# GameManager.request_local_skip_vote / _on_remote_skip_replay_request.
-var _skip_votes: Dictionary[int, bool] = {}
-
 # Audio + body-check VFX events extracted from the recorder, ordered by
 # host_ts. We walk these in lockstep with the virtual clock so the cinematic
 # re-fires the sounds and burst VFX that played live — see
@@ -128,7 +123,6 @@ func start(recorder: ReplayRecorder,
 	_cached_from_idx = -1
 	_cached_to_idx = -1
 	_outro_elapsed = -1.0
-	_skip_votes.clear()
 	_active = true
 	# Pull recorded events for the clip window and reset the walker so the
 	# first _process tick fires anything queued at the start of the clip.
@@ -234,7 +228,6 @@ func stop() -> void:
 	_puck = null
 	_goalies = []
 	_goalie_controllers = []
-	_skip_votes.clear()
 	replay_stopped.emit()
 
 
@@ -253,24 +246,6 @@ func get_active_clip() -> Dictionary:
 		"start_ts": _clip_start_ts,
 		"end_ts": _clip_end_ts,
 	}
-
-
-# Host-only: record a vote-to-skip. Returns the new vote count (0 if rejected
-# because the replay isn't active). Each peer can only vote once per clip;
-# duplicate votes are no-ops. When the tally reaches total_voters, the driver
-# stops itself, which triggers the existing post-goal advance flow on the host.
-func register_skip_vote(peer_id: int, total_voters: int) -> int:
-	if not _active:
-		return 0
-	_skip_votes[peer_id] = true
-	var count: int = _skip_votes.size()
-	if count >= total_voters and total_voters > 0:
-		stop()
-	return count
-
-
-func get_skip_vote_count() -> int:
-	return _skip_votes.size()
 
 
 func _process(delta: float) -> void:

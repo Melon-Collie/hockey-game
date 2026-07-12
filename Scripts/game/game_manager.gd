@@ -1642,17 +1642,12 @@ func _stop_post_game_replay() -> void:
 # freezes the SM timer and the host's end timer (or a unanimous skip vote)
 # stops the reel, whose reel_stopped rolls the next period via
 # GameStateMachine.finish_period_break. A scoreless period holds just the
-# band over the wide rink and rides the SM's INTERMISSION_DURATION timer
-# (skip votes for that reel-less break tally in _break_skip_votes).
-
-# Host-only tally for skipping a reel-less (scoreless) break — the reel
-# drivers own their own tallies. Cleared at every break entry.
-var _break_skip_votes: Dictionary[int, bool] = {}
+# band over the wide rink and rides the SM's INTERMISSION_DURATION timer.
 
 func _on_period_break_for_intermission(_duration: float) -> void:
 	if _state_machine == null:
 		return
-	_break_skip_votes.clear()
+	_skip_votes.clear()  # the break is a fresh skippable window
 	_intermission_timer = get_tree().create_timer(GameRules.INTERMISSION_SETTLE)
 	_intermission_timer.timeout.connect(_on_intermission_settle_elapsed)
 
@@ -1968,16 +1963,23 @@ func _teardown_spectator_camera() -> void:
 		local_spectator_state_changed.emit(false)
 
 
-# ── Goal-replay vote-to-skip ──────────────────────────────────────────────────
-# Rocket-League-style unanimous skip. On the local skip_replay press, route the
-# vote to the host (or register it locally if we are the host / offline). The
-# host counts, broadcasts the tally, and the driver auto-stops on unanimity —
-# clients mirror by stopping their own driver when they receive (N, N). In
-# offline / free-play the local player is the only voter, so a single press
-# instantly resolves to (1, 1) → stop.
+# ── Vote-to-skip (goal replay + intermission) ────────────────────────────────
+# Rocket-League-style unanimous skip over one host-owned tally scoped to "the
+# current skippable window": the goal cinematic, or the between-period break
+# (reel or not). The window opening clears the tally; a vote adds the peer and
+# broadcasts the count; unanimity runs the window's end action
+# (_end_skip_window). Clients mirror by stopping their own driver when they
+# receive (N, N). In offline / free-play the local player is the only voter,
+# so a single press instantly resolves to (1, 1) → end.
+
+# Which peers have voted to skip the current window. Host-authoritative;
+# cleared at every window open (goal replay start, break entry).
+var _skip_votes: Dictionary[int, bool] = {}
 
 func _on_local_replay_started() -> void:
 	_in_replay_locally = true
+	# A goal cinematic (or intermission reel) is a fresh skippable window.
+	_skip_votes.clear()
 	# Reset HUD prompt immediately. On the host this is also the first
 	# authoritative broadcast of the voter total so clients see (0/N) right
 	# when their own driver starts.
@@ -2011,37 +2013,46 @@ func _on_remote_skip_replay_request(peer_id: int) -> void:
 	_register_skip_vote(peer_id)
 
 
-# Host-only: hands the vote to whichever skippable window is active — the
-# goal cinematic, the intermission reel, or a reel-less break (tallied here
-# directly, unanimity ends the break) — then broadcasts the new tally so
-# clients can update their prompt and (on unanimity) tear down their own
-# driver. Bots aren't in connected_peer_ids() so they never count toward the
-# total; spectators do (they have an ENet connection).
+# Host-only: add the vote to the window tally, broadcast it, and end the
+# window at unanimity. Late votes (window closed before the RPC landed) are
+# dropped silently — broadcasting (0, total) would reset client HUDs that are
+# already transitioning to FACEOFF. Bots aren't in connected_peer_ids() so
+# they never count toward the total; spectators do (they have an ENet
+# connection).
 func _register_skip_vote(peer_id: int) -> void:
-	if not NetworkManager.is_host:
+	if not NetworkManager.is_host or not _is_skip_window_open():
 		return
+	_skip_votes[peer_id] = true
+	var current: int = _skip_votes.size()
 	var total: int = _total_skip_voters()
-	var current: int = 0
-	if _goal_replay_driver != null and _goal_replay_driver.is_active():
-		_goal_replay_driver.register_skip_vote(peer_id, total)
-		current = _goal_replay_driver.get_skip_vote_count()
-	elif _intermission_replay_driver != null \
-			and _intermission_replay_driver.is_active():
-		_intermission_replay_driver.register_skip_vote(peer_id, total)
-		current = _intermission_replay_driver.get_skip_vote_count()
-	elif is_period_break():
-		_break_skip_votes[peer_id] = true
-		current = _break_skip_votes.size()
-		if current >= total and _state_machine.finish_period_break() \
-				and _phase_coord != null:
-			_phase_coord.handle_phase_entered()
-	else:
-		# Late votes (window closed before the RPC landed) are dropped
-		# silently — broadcasting (0, total) here would reset client HUDs
-		# that are already transitioning to FACEOFF.
-		return
 	NetworkManager.notify_skip_replay_vote_to_all(current, total)
 	skip_replay_vote_updated.emit(current, total)
+	if current >= total:
+		_end_skip_window()
+
+
+func _is_skip_window_open() -> bool:
+	if _goal_replay_driver != null and _goal_replay_driver.is_active():
+		return true
+	if _intermission_replay_driver != null and _intermission_replay_driver.is_active():
+		return true
+	return is_period_break()
+
+
+# The unanimity action for whichever window is open. Stopping a driver runs
+# its normal end flow (goal replay → post-goal advance via PhaseCoordinator;
+# intermission reel → finish_period_break via reel_stopped); a reel-less
+# break has no driver, so the break is finished directly.
+func _end_skip_window() -> void:
+	if _goal_replay_driver != null and _goal_replay_driver.is_active():
+		_goal_replay_driver.stop()
+		return
+	if _intermission_replay_driver != null and _intermission_replay_driver.is_active():
+		_intermission_replay_driver.stop()
+		return
+	if _state_machine != null and _state_machine.finish_period_break() \
+			and _phase_coord != null:
+		_phase_coord.handle_phase_entered()
 
 
 # Client-side handler for the host's tally broadcast. Forwards to HUD via the

@@ -17,11 +17,12 @@ extends Node
 #     ignore stray frames.
 #   - Intermission reel (use_shared_replay_mode = true): loops the ended
 #     period's goals behind the intermission band for the fixed break window —
-#     GameManager's INTERMISSION_DURATION end timer (or a unanimous skip vote,
-#     register_skip_vote) stops it, and reel_stopped is what ends the break on
-#     the host (GameStateMachine.finish_period_break). The shared replay mode
-#     mirrors the flag to clients (same notify_replay_mode RPC as the goal
-#     cinematic) so every peer's reel starts and tears down in lockstep.
+#     GameManager's INTERMISSION_DURATION end timer (or its unanimous skip
+#     vote, which stops this driver) ends it, and reel_stopped is what ends
+#     the break on the host (GameStateMachine.finish_period_break). The shared
+#     replay mode mirrors the flag to clients (same notify_replay_mode RPC as
+#     the goal cinematic) so every peer's reel starts and tears down in
+#     lockstep.
 #
 # Owned by GameManager. start(clips) / stop() called from there.
 
@@ -67,11 +68,6 @@ var _cached_to_idx: int = -1
 var _cam: SpectatorCamera = null
 var _saved_goalie_processing: Array[bool] = []
 
-# Vote-to-skip tally for the reel (intermission only — the post-game loop has
-# no skip), keyed by peer_id. Cleared on every start(). Driven by
-# GameManager._register_skip_vote, same flow as GoalReplayDriver.
-var _skip_votes: Dictionary[int, bool] = {}
-
 
 func setup(codec: WorldStateCodec,
 		registry: PlayerRegistry,
@@ -93,7 +89,6 @@ func start(clips: Array[Dictionary]) -> void:
 
 	_clips = clips
 	_active = true
-	_skip_votes.clear()
 	_freeze_live_simulation()
 
 	# Single broadcast hard cam, following the puck along the rail. activate()
@@ -143,30 +138,11 @@ func stop() -> void:
 	_cached_from_idx = -1
 	_cached_to_idx = -1
 	_gap_elapsed = -1.0
-	_skip_votes.clear()
 	reel_stopped.emit()
 
 
 func is_active() -> bool:
 	return _active
-
-
-# Host-only (intermission reel): record a vote-to-skip. Same semantics as
-# GoalReplayDriver.register_skip_vote — one vote per peer per reel, and
-# unanimity stops the reel, which fires reel_stopped and (on the host) ends
-# the period break. Returns the new vote count (0 if the reel isn't active).
-func register_skip_vote(peer_id: int, total_voters: int) -> int:
-	if not _active:
-		return 0
-	_skip_votes[peer_id] = true
-	var count: int = _skip_votes.size()
-	if count >= total_voters and total_voters > 0:
-		stop()
-	return count
-
-
-func get_skip_vote_count() -> int:
-	return _skip_votes.size()
 
 
 func _begin_clip(idx: int) -> void:
