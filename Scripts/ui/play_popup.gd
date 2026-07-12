@@ -1,7 +1,14 @@
-class_name OnlinePopup
+class_name PlayPopup
 extends Control
 
-signal host_pressed
+# The single entry point for playing a match: Start Game opens the unified
+# lobby (offline until the host flips its visibility selector to Friends /
+# Public), and the browser below joins someone else's open game. Start Game
+# never needs Steam — with Steam down, only browsing/joining is unavailable.
+
+# Start Game pressed — the menu tears down the current session and enters the
+# lobby scene as an offline host.
+signal start_pressed
 # Emitted with the Steam lobby id of the game the player chose to join.
 signal join_pressed(lobby_id: int)
 
@@ -53,7 +60,7 @@ func _build() -> void:
 	vbox.add_child(close_row)
 
 	var title := Label.new()
-	title.text = "Online"
+	title.text = "Play"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
@@ -64,11 +71,11 @@ func _build() -> void:
 	_steam_status_label.add_theme_font_size_override("font_size", 15)
 	vbox.add_child(_steam_status_label)
 
-	var host_btn := _menu_button("Host Game")
-	host_btn.pressed.connect(func() -> void:
+	var start_btn := _menu_button("Start Game")
+	start_btn.pressed.connect(func() -> void:
 		visible = false
-		host_pressed.emit())
-	vbox.add_child(host_btn)
+		start_pressed.emit())
+	vbox.add_child(start_btn)
 
 	# ── Public lobby browser ──────────────────────────────────────────────
 	var browse_row := HBoxContainer.new()
@@ -190,8 +197,10 @@ func open() -> void:
 	if SteamManager.is_available:
 		_refresh_lobbies()
 	else:
+		# Start Game still works (offline lobby vs bots) — only browsing and
+		# joining need Steam.
 		_clear_list()
-		_set_status("Steam isn't running.\nStart Steam and relaunch to play online.")
+		_set_status("Steam isn't running — joining online\ngames is unavailable. Start Game still works.")
 
 
 func _unhandled_input(event: InputEvent) -> void:

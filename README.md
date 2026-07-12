@@ -11,11 +11,9 @@ A 3v3 hockey game built in Godot 4.6.2 (Jolt Physics). Online multiplayer — ea
 1. Go to the [latest release](../../releases/tag/latest) and download the zip for your platform (Windows and Linux only — no macOS build yet)
    - **Windows:** `Windows Desktop.zip` → extract and run `mitts.exe`
    - **Linux:** `LinuxX11.zip` → extract, `chmod +x mitts.x86_64`, then run it
-2. The game launches straight onto the ice in free play (first launch runs a short tutorial). Press **Esc** for the menu — set your name and attributes under **Player**, start games under **Online**, replay the tutorial, or browse your career stats.
+2. The game launches straight onto the ice in free play (first launch runs a short tutorial). Press **Esc** for the menu — set your name and attributes on the player card, start or join games under **Play**, run the tutorials and drills under **Practice**, or browse your career stats and replays under **Career**.
 
-**Online play uses Steam** — Steam must be running on every machine (host and joiners). **Host Game** creates a lobby, **Join Game** opens a lobby browser, and Steam friend invites work too. No port forwarding needed.
-
-The title screen shows an **"Update available"** notice when your build is behind the latest release. It doesn't patch automatically — grab the new zip from the release page when you see it.
+**Online play uses Steam** — Steam must be running on every machine (host and joiners). **Start Game** opens your lobby (offline vs bots until you flip its visibility to Friends or Public), the **Play** popup lists open public games to join, and Steam friend invites work too. No port forwarding needed.
 
 ---
 
@@ -26,7 +24,7 @@ Use the in-game **Report Bug** button (bottom-right corner) — it attaches your
 - **Windows:** `%APPDATA%\Godot\app_userdata\Mitts\logs\godot.log`
 - **Linux:** `~/.local/share/godot/app_userdata/Mitts/logs/godot.log`
 
-**Alpha limitations to know about:** if the host leaves, the match ends for everyone (no host migration); there's no reconnect — if you disconnect you can rejoin from the lobby browser, but with a fresh slot and stats; no in-game chat; a team plays shorthanded if someone drops mid-match.
+**Alpha limitations to know about:** if the host leaves, the match ends for everyone (no host migration); if you disconnect mid-match you get a Reconnect prompt — rejoin within about a minute and your slot and stats are held, after that you come back fresh; no in-game chat; a team plays shorthanded if someone drops mid-match.
 
 ---
 

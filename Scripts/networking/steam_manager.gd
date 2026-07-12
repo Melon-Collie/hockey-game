@@ -30,6 +30,12 @@ var is_available: bool = false   # true iff Steam initialised successfully
 var steam_id: int = 0            # local user's SteamID64 (0 when unavailable)
 var persona_name: String = ""    # local user's Steam display name ("" when unavailable)
 var current_lobby_id: int = 0    # 0 when not in a lobby
+# Visibility of the lobby we own (create_lobby / set_lobby_visibility). Lets
+# the lobby screen's selector re-show the right state after a scene swap
+# (return-to-lobby) — Steam doesn't echo the type back. Meaningless for
+# lobbies we merely joined.
+var is_lobby_public: bool = false
+var _pending_public: bool = false  # requested type of an in-flight create
 # Lobby id from an accepted invite that no UI was alive to handle: cold launch
 # via `+connect_lobby` fires during autoload init (Boot title card — no
 # SideMenu exists yet), and overlay accepts can land in the Lobby scene. The
@@ -173,8 +179,21 @@ func create_lobby(max_members: int, public: bool = true) -> void:
 		return
 	_pending_op = 1
 	_op_timer = 0.0
+	_pending_public = public
 	var lobby_type: int = Steam.LOBBY_TYPE_PUBLIC if public else Steam.LOBBY_TYPE_FRIENDS_ONLY
 	Steam.createLobby(lobby_type, max_members)
+
+
+# Flip the live lobby between public (listed in the browser) and friends-only.
+# A pure metadata change on Steam's side — nobody disconnects, the lobby just
+# appears in / vanishes from the public list. Drives the lobby screen's
+# visibility selector; going fully offline is NetworkManager.detach_online.
+func set_lobby_visibility(public: bool) -> void:
+	if not is_available or current_lobby_id == 0:
+		return
+	var lobby_type: int = Steam.LOBBY_TYPE_PUBLIC if public else Steam.LOBBY_TYPE_FRIENDS_ONLY
+	Steam.setLobbyType(current_lobby_id, lobby_type as Steam.LobbyType)
+	is_lobby_public = public
 
 
 # The Steam BuildID of the running install — a per-build identity that changes
@@ -195,6 +214,7 @@ func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 		lobby_create_failed.emit("Steam refused to create the lobby (code %d)." % connect_result)
 		return
 	current_lobby_id = lobby_id
+	is_lobby_public = _pending_public
 	# Advertise the host name so the public browser has something to show.
 	Steam.setLobbyData(lobby_id, "name", "%s's game" % Steam.getPersonaName())
 	Steam.setLobbyData(lobby_id, "game", "mitts")
@@ -418,3 +438,4 @@ func leave_lobby() -> void:
 	if is_available and current_lobby_id != 0:
 		Steam.leaveLobby(current_lobby_id)
 	current_lobby_id = 0
+	is_lobby_public = false

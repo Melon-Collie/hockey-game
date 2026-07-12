@@ -16,10 +16,31 @@ var _build_popup: LobbyBuildPopup = null
 var _settings_panel: LobbySettingsPanel = null
 var _spectator_list_label: Label = null
 var _spectator_join_btn: Button = null
-# Team color palette widgets — populated by whichever variant of
-# _build_teams_column ran (offline gets both, online gets _my_color_dropdown only).
-var _offline_home_dropdown: PaletteDropdown = null
-var _offline_away_dropdown: PaletteDropdown = null
+# Dynamic teams column: every widget is built once, then _refresh_teams_column
+# toggles visibility per refresh. A team with at least one human resolves its
+# color from votes (the local player's vote dropdown shows while they're on a
+# team); a humanless (bots/empty) team instead shows a host-picked dropdown,
+# replicated to clients via notify_team_colors.
+var _vote_row: HBoxContainer = null
+var _my_color_dropdown: PaletteDropdown = null
+var _home_color_row: HBoxContainer = null
+var _away_color_row: HBoxContainer = null
+var _home_color_dropdown: PaletteDropdown = null
+var _away_color_dropdown: PaletteDropdown = null
+var _teams_hint: Label = null
+
+# Lobby visibility selector (host only). Offline = no Steam lobby / no peer —
+# the pre-unification "Play vs Bots" session. Friends / Public attach the
+# Steam transport (async) and differ only in Steam lobby type. Offline is
+# locked out while human peers are connected: the host kicks them via the
+# grid first, deliberately — never as a toggle side effect.
+const _VIS_OFFLINE: int = 0
+const _VIS_FRIENDS: int = 1
+const _VIS_PUBLIC: int = 2
+var _visibility: int = _VIS_OFFLINE
+var _visibility_target: int = _VIS_OFFLINE  # requested state while attach is in flight
+var _visibility_btn: OptionButton = null
+var _visibility_hint: Label = null
 
 # key = peer_id → bool; tracks non-host peers only (host uses Start instead)
 var _ready_states: Dictionary = {}
@@ -41,7 +62,6 @@ var _away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT
 # clients receive updates via NetworkManager.color_vote_changed.
 var _my_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT
 var _color_votes: Dictionary = {}  # peer_id → color_slot (int)
-var _my_color_dropdown: PaletteDropdown = null
 
 func _ready() -> void:
 	_home_color_slot = NetworkManager.pending_home_color_slot
@@ -52,6 +72,12 @@ func _ready() -> void:
 	_rule_set = NetworkManager.pending_rule_set
 	_my_color_slot = _initial_color_preference()
 	_color_votes = NetworkManager.pending_color_votes.duplicate()
+	# Re-entering the lobby (return-to-lobby after a match) restores whatever
+	# visibility the session already has; a fresh Play lobby starts Offline.
+	if NetworkManager.is_offline_mode:
+		_visibility = _VIS_OFFLINE
+	else:
+		_visibility = _VIS_PUBLIC if SteamManager.is_lobby_public else _VIS_FRIENDS
 	_build_ui()
 	_kick_confirm = ConfirmDialog.new()
 	_kick_confirm.confirmed.connect(_on_kick_confirmed)
@@ -65,17 +91,18 @@ func _ready() -> void:
 	NetworkManager.game_started.connect(_on_game_started)
 	NetworkManager.color_vote_changed.connect(_on_color_vote_changed)
 	NetworkManager.color_votes_synced.connect(_on_color_votes_synced)
+	NetworkManager.team_colors_changed.connect(_on_team_colors_changed)
 	NetworkManager.bot_slot_changed.connect(_on_bot_slot_changed)
 	NetworkManager.bot_slots_synced.connect(_on_bot_slots_synced)
 	NetworkManager.lobby_settings_synced.connect(_on_lobby_settings_synced)
 	NetworkManager.player_ready_changed.connect(_on_player_ready_changed)
 
 	# Submit our own vote into the shared map so the host (and other peers)
-	# count it. send_color_vote handles both host-local and client-RPC paths.
-	# Offline mode skips this — the color vote pool stays empty, the picks
-	# made in the main menu (pending_home/away_color_slot) are kept verbatim.
-	if not NetworkManager.is_offline_mode:
-		NetworkManager.send_color_vote(_my_color_slot)
+	# count it. send_color_vote handles both host-local and client-RPC paths
+	# and works offline too (no peers → local emit only): the host's vote is
+	# what colors their own team while the humanless team keeps the host's
+	# direct dropdown pick.
+	NetworkManager.send_color_vote(_my_color_slot)
 
 	if not NetworkManager.pending_lobby_roster.is_empty():
 		_on_lobby_roster_synced(NetworkManager.pending_lobby_roster)
@@ -212,54 +239,79 @@ func _column_header(text: String) -> Label:
 	return lbl
 
 
-# Teams column. Two variants depending on connection mode:
-#   - Offline / with bots: the local player is the host and owns both
-#     team palettes directly. Show two PaletteDropdowns (AWAY + HOME)
-#     plus a "Host selects teams" hint.
-#   - Online: every player votes for their own preferred palette and
-#     the host's resolution mixes those into the actual team colors.
-#     Show a single PaletteDropdown labelled "YOUR VOTE".
+# Teams column: one vote dropdown + one direct dropdown per team, all built
+# up front. _refresh_teams_column shows the right subset — your vote while
+# you're on a team, and a host-picked dropdown for each team with no human
+# on it (see the var-block doc).
 func _build_teams_column() -> VBoxContainer:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 8)
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.add_child(_column_header("TEAMS"))
 
-	if NetworkManager.is_offline_mode:
-		var away_row := _color_picker_row("AWAY", _away_color_slot)
-		_offline_away_dropdown = away_row.get_meta(&"dropdown") as PaletteDropdown
-		_offline_away_dropdown.selected.connect(_on_offline_away_color_selected)
-		col.add_child(away_row)
+	_vote_row = _color_picker_row("YOUR VOTE", _my_color_slot, true)
+	_my_color_dropdown = _vote_row.get_meta(&"dropdown") as PaletteDropdown
+	_my_color_dropdown.selected.connect(_on_my_color_vote_selected)
+	col.add_child(_vote_row)
 
-		var home_row := _color_picker_row("HOME", _home_color_slot)
-		_offline_home_dropdown = home_row.get_meta(&"dropdown") as PaletteDropdown
-		_offline_home_dropdown.selected.connect(_on_offline_home_color_selected)
-		col.add_child(home_row)
+	_away_color_row = _color_picker_row("AWAY", _away_color_slot, NetworkManager.is_host)
+	_away_color_dropdown = _away_color_row.get_meta(&"dropdown") as PaletteDropdown
+	if NetworkManager.is_host:
+		_away_color_dropdown.selected.connect(_on_away_color_selected)
+	col.add_child(_away_color_row)
 
-		var hint := Label.new()
-		hint.text = "Host selects teams"
-		hint.add_theme_font_size_override("font_size", 11)
-		hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
-		col.add_child(hint)
-	else:
-		var vote_row := _color_picker_row("YOUR VOTE", _my_color_slot)
-		_my_color_dropdown = vote_row.get_meta(&"dropdown") as PaletteDropdown
-		_my_color_dropdown.selected.connect(_on_my_color_vote_selected)
-		col.add_child(vote_row)
+	_home_color_row = _color_picker_row("HOME", _home_color_slot, NetworkManager.is_host)
+	_home_color_dropdown = _home_color_row.get_meta(&"dropdown") as PaletteDropdown
+	if NetworkManager.is_host:
+		_home_color_dropdown.selected.connect(_on_home_color_selected)
+	col.add_child(_home_color_row)
 
-		var hint := Label.new()
-		hint.text = "Most votes wins"
-		hint.add_theme_font_size_override("font_size", 11)
-		hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
-		col.add_child(hint)
+	_teams_hint = Label.new()
+	_teams_hint.add_theme_font_size_override("font_size", 11)
+	_teams_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+	col.add_child(_teams_hint)
 
+	_refresh_teams_column()
 	return col
+
+
+# Show/hide the teams-column rows for the current roster and sync the direct
+# dropdowns to the resolved slots. Called from _refresh_grid, so every slot
+# swap, vote, join, and leave re-evaluates which pickers apply.
+func _refresh_teams_column() -> void:
+	if _vote_row == null:
+		return
+	var home_has_human: bool = false
+	var away_has_human: bool = false
+	var local_on_team: bool = false
+	var local_peer: int = NetworkManager.local_peer_id()
+	for k: int in _lobby_slots:
+		if LobbySlotKey.is_spectator(k):
+			continue
+		if LobbySlotKey.team_id(k) == 0:
+			home_has_human = true
+		else:
+			away_has_human = true
+		if _lobby_slots[k].peer_id == local_peer:
+			local_on_team = true
+	_vote_row.visible = local_on_team
+	_home_color_row.visible = not home_has_human
+	_away_color_row.visible = not away_has_human
+	# Keep the direct dropdowns showing the live resolved slots — a manual pick
+	# can be re-rolled by the collision rule when the other team's votes land
+	# on the same palette.
+	_home_color_dropdown.set_selected(_home_color_slot)
+	_away_color_dropdown.set_selected(_away_color_slot)
+	if not home_has_human or not away_has_human:
+		_teams_hint.text = "Host picks open-team colors"
+	else:
+		_teams_hint.text = "Most votes wins"
 
 
 # Build one [LABEL] [PaletteDropdown] row. The dropdown's closed state shows
 # the selected slot's primary+stripe styling (lobby-card look), so no
 # separate swatch preview is needed alongside it.
-func _color_picker_row(label_text: String, initial_slot: int) -> HBoxContainer:
+func _color_picker_row(label_text: String, initial_slot: int, editable: bool) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -273,7 +325,7 @@ func _color_picker_row(label_text: String, initial_slot: int) -> HBoxContainer:
 	row.add_child(lbl)
 
 	var dropdown := PaletteDropdown.new(initial_slot, Vector2(_SETTING_CONTROL_WIDTH - 64, 32))
-	dropdown.set_disabled(NetworkManager.is_offline_mode and not NetworkManager.is_host)
+	dropdown.set_disabled(not editable)
 	row.add_child(dropdown)
 
 	row.set_meta(&"dropdown", dropdown)
@@ -286,11 +338,130 @@ func _build_match_column() -> VBoxContainer:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.add_child(_column_header("MATCH"))
 
+	# Visibility selector sits above the match rules — host only; clients
+	# joined through it, so there's nothing for them to set.
+	if NetworkManager.is_host:
+		col.add_child(_build_visibility_row())
+		_visibility_hint = Label.new()
+		_visibility_hint.add_theme_font_size_override("font_size", 11)
+		_visibility_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+		_visibility_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(_visibility_hint)
+		_update_visibility_row()
+
 	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host)
 	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
 	col.add_child(_settings_panel)
 
 	return col
+
+
+# "Lobby: [Offline | Friends | Public]" — mirrors LobbySettingsPanel's row
+# look. Selecting Friends/Public from Offline attaches the Steam transport
+# (async — the selector disables until host_lobby_ready / _failed lands);
+# Friends ↔ Public is a live Steam lobby-type flip; Offline detaches, and is
+# only selectable with no human peers connected.
+func _build_visibility_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.custom_minimum_size = Vector2(0, 28)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var lbl := Label.new()
+	lbl.text = "Lobby"
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+
+	_visibility_btn = OptionButton.new()
+	_visibility_btn.custom_minimum_size = Vector2(120, 28)
+	_visibility_btn.add_theme_font_size_override("font_size", 13)
+	_visibility_btn.add_item("Offline", _VIS_OFFLINE)
+	_visibility_btn.add_item("Friends", _VIS_FRIENDS)
+	_visibility_btn.add_item("Public", _VIS_PUBLIC)
+	_visibility_btn.select(_visibility)
+	SoundManager.wire_button(_visibility_btn)
+	_visibility_btn.item_selected.connect(_on_visibility_selected)
+	row.add_child(_visibility_btn)
+	return row
+
+
+func _on_visibility_selected(idx: int) -> void:
+	if idx == _visibility:
+		return
+	if idx == _VIS_OFFLINE:
+		# The item is disabled while human peers are connected; re-check anyway
+		# in case a join landed between the click and this handler.
+		if not NetworkManager.connected_peer_ids().is_empty():
+			_visibility_btn.select(_visibility)
+			_update_visibility_row()
+			return
+		NetworkManager.detach_online()
+		_visibility = _VIS_OFFLINE
+		_refresh_grid()
+		return
+	if _visibility == _VIS_OFFLINE:
+		# Going online: async Steam lobby create. Lock the selector until the
+		# result lands so a second flip can't race the in-flight create.
+		_visibility_target = idx
+		_visibility_btn.disabled = true
+		_set_visibility_hint("Creating Steam lobby…")
+		NetworkManager.host_lobby_ready.connect(_on_attach_online_ready, CONNECT_ONE_SHOT)
+		NetworkManager.host_lobby_failed.connect(_on_attach_online_failed, CONNECT_ONE_SHOT)
+		NetworkManager.attach_online(idx == _VIS_PUBLIC)
+		return
+	# Friends ↔ Public while already online: live lobby-type flip.
+	SteamManager.set_lobby_visibility(idx == _VIS_PUBLIC)
+	_visibility = idx
+	_update_visibility_row()
+
+
+func _on_attach_online_ready() -> void:
+	if NetworkManager.host_lobby_failed.is_connected(_on_attach_online_failed):
+		NetworkManager.host_lobby_failed.disconnect(_on_attach_online_failed)
+	_visibility = _visibility_target
+	_visibility_btn.disabled = false
+	_refresh_grid()
+
+
+func _on_attach_online_failed(reason: String) -> void:
+	if NetworkManager.host_lobby_ready.is_connected(_on_attach_online_ready):
+		NetworkManager.host_lobby_ready.disconnect(_on_attach_online_ready)
+	_visibility = _VIS_OFFLINE
+	_visibility_btn.disabled = false
+	_visibility_btn.select(_VIS_OFFLINE)
+	_update_visibility_row()
+	_set_visibility_hint(reason)
+
+
+# Re-derives which selector items are legal (Steam down pins the lobby to
+# Offline; connected human peers lock Offline out) and refreshes the hint.
+# Cheap — called from _refresh_grid so joins/leaves re-evaluate it.
+func _update_visibility_row() -> void:
+	if _visibility_btn == null:
+		return
+	var steam_ok: bool = SteamManager.is_available
+	var humans_connected: bool = not NetworkManager.connected_peer_ids().is_empty()
+	_visibility_btn.set_item_disabled(_VIS_FRIENDS, not steam_ok)
+	_visibility_btn.set_item_disabled(_VIS_PUBLIC, not steam_ok)
+	_visibility_btn.set_item_disabled(_VIS_OFFLINE, humans_connected)
+	if not steam_ok:
+		_set_visibility_hint("Steam isn't running — offline only.")
+	elif humans_connected:
+		_set_visibility_hint("Remove connected players to go offline.")
+	elif _visibility == _VIS_OFFLINE:
+		_set_visibility_hint("Just you and bots — open it up anytime.")
+	elif _visibility == _VIS_FRIENDS:
+		_set_visibility_hint("Steam friends can join.")
+	else:
+		_set_visibility_hint("Listed in the public game browser.")
+
+
+func _set_visibility_hint(text: String) -> void:
+	if _visibility_hint != null:
+		_visibility_hint.text = text
 
 
 func _build_spectators_column() -> VBoxContainer:
@@ -339,9 +510,7 @@ func _refresh_spectator_panel() -> void:
 		_spectator_join_btn.disabled = _find_open_spectator_slot() < 0
 	# Spectators don't belong to a team, so their color vote can't affect any
 	# team's resolution (`_recompute_resolved_colors` skips spectator entries).
-	# Disable the dropdown so the UI doesn't suggest it does anything.
-	if _my_color_dropdown != null:
-		_my_color_dropdown.set_disabled(local_is_spectator)
+	# _refresh_teams_column hides the vote row entirely while spectating.
 
 
 func _on_spectate_pressed() -> void:
@@ -353,9 +522,10 @@ func _on_spectate_pressed() -> void:
 
 # ── Color-picker change handlers ────────────────────────────────────────────
 
-# Online lobby: writes the player's vote into the shared pool. Host receives
-# the vote, updates pending_color_votes, recomputes resolved team colors,
-# and broadcasts. PlayerPrefs is updated so the next session remembers.
+# Writes the player's vote into the shared pool. Host receives the vote,
+# updates pending_color_votes, recomputes resolved team colors, and
+# broadcasts. PlayerPrefs is updated so the next session remembers. Works
+# offline too — the host is then the only voter on their own team.
 func _on_my_color_vote_selected(slot: int) -> void:
 	_my_color_slot = slot
 	PlayerPrefs.preferred_color_slot = slot
@@ -363,19 +533,25 @@ func _on_my_color_vote_selected(slot: int) -> void:
 	NetworkManager.send_color_vote(slot)
 
 
-# Offline / with-bots lobby: host writes both team colors directly into
-# NetworkManager.pending_*_color_slot. No vote pool to update; the lobby's
-# own _home_color_slot / _away_color_slot mirror the pending values and feed
-# the slot-grid preview.
-func _on_offline_away_color_selected(slot: int) -> void:
+# Host's direct pick for a humanless team. send_team_colors mirrors the pair
+# into NetworkManager.pending_*_color_slot and broadcasts so clients' lobby
+# previews follow (a no-op with no peers connected).
+func _on_away_color_selected(slot: int) -> void:
 	_away_color_slot = slot
-	NetworkManager.pending_away_color_slot = slot
+	NetworkManager.send_team_colors(_home_color_slot, _away_color_slot)
 	_refresh_grid()
 
 
-func _on_offline_home_color_selected(slot: int) -> void:
+func _on_home_color_selected(slot: int) -> void:
 	_home_color_slot = slot
-	NetworkManager.pending_home_color_slot = slot
+	NetworkManager.send_team_colors(_home_color_slot, _away_color_slot)
+	_refresh_grid()
+
+
+# Client side of the host's direct picks (notify_team_colors RPC).
+func _on_team_colors_changed(home_slot: int, away_slot: int) -> void:
+	_home_color_slot = home_slot
+	_away_color_slot = away_slot
 	_refresh_grid()
 
 
@@ -488,19 +664,18 @@ func _refresh_grid() -> void:
 	_slot_grid.refresh(_build_slot_grid_roster(), _get_team_colors(),
 			NetworkManager.pending_bot_slots, NetworkManager.is_host,
 			NetworkManager.pending_bot_identities, true, true)
+	_refresh_teams_column()
+	_update_visibility_row()
 	_refresh_spectator_panel()
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
 # onto their currently assigned team, then asks ColorVoteRules for the new
 # (home, away) pair — passing the previous winners as sticky hints so an
-# already-tied lead doesn't re-roll on every unrelated vote change.
+# already-tied lead doesn't re-roll on every unrelated vote change. A team
+# with no human voters has an empty pool, and its current slot rides through
+# as the fallback default — which is exactly how the host's direct pick for
+# a humanless team survives resolution.
 func _recompute_resolved_colors() -> void:
-	# Offline mode: no per-player vote pool to resolve. Keep
-	# _home_color_slot / _away_color_slot at their init values (seeded from
-	# NetworkManager.pending_home/away_color_slot, which the main menu
-	# "With Bots" popup wrote).
-	if NetworkManager.is_offline_mode:
-		return
 	var home_votes: Array[int] = []
 	var away_votes: Array[int] = []
 	for k: int in _lobby_slots:
@@ -521,8 +696,8 @@ func _recompute_resolved_colors() -> void:
 	var resolved: Array[int] = ColorVoteRules.resolve_team_colors(
 			home_votes, away_votes,
 			TeamColorRegistry.get_all_slots(),
-			TeamColorRegistry.DEFAULT_HOME_SLOT,
-			TeamColorRegistry.DEFAULT_AWAY_SLOT,
+			_home_color_slot,
+			_away_color_slot,
 			rng,
 			_home_color_slot,
 			_away_color_slot)
@@ -603,6 +778,7 @@ func _on_peer_joined(peer_id: int) -> void:
 	for existing_peer: int in NetworkManager.connected_peer_ids():
 		NetworkManager.send_lobby_roster(existing_peer, roster)
 	NetworkManager.send_color_votes_to(peer_id, _color_votes)
+	NetworkManager.send_team_colors_to(peer_id, _home_color_slot, _away_color_slot)
 	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set)
 	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots, NetworkManager.pending_bot_identities)
 	_broadcast_confirm(peer_id, target[0], target[1])

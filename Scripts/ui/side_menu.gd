@@ -3,7 +3,7 @@ extends CanvasLayer
 
 # Right-anchored activity menu shown when the player presses Escape during
 # free play. Replaces the old centered MainMenu. Composes the existing popups
-# (PlayerSettingsPopup, OnlinePopup, CareerStatsScreen, OptionsPanel,
+# (PlayerSettingsPopup, PlayPopup, CareerStatsScreen, OptionsPanel,
 # ConfirmDialog) — each opens as a centered overlay on top of the side panel.
 #
 # Visual style is "Variant B" — flat dark panel anchored to the right edge,
@@ -27,7 +27,7 @@ var _player_card_edit_icon: TextureRect = null
 var _player_card_callout: Label = null
 var _player_card_callout_tween: Tween = null
 var _player_popup: PlayerSettingsPopup = null
-var _online_popup: OnlinePopup = null
+var _play_popup: PlayPopup = null
 var _career_screen: CareerStatsScreen = null
 var _options_container: Control = null
 var _exit_container: Control = null
@@ -71,8 +71,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif _player_popup != null and _player_popup.visible:
 		# PlayerSettingsPopup handles its own ui_cancel — let it through.
 		return
-	elif _online_popup != null and _online_popup.visible:
-		# OnlinePopup handles its own ui_cancel — let it through.
+	elif _play_popup != null and _play_popup.visible:
+		# PlayPopup handles its own ui_cancel — let it through.
 		return
 	elif _career_screen != null and _career_screen.visible:
 		# CareerStatsScreen handles its own ui_cancel — let it through.
@@ -147,8 +147,7 @@ func _build_panel() -> void:
 	card_gap.custom_minimum_size = Vector2(0, 14)
 	vbox.add_child(card_gap)
 
-	_add_row(vbox, "Play Online", false, _on_play_online_pressed)
-	_add_row(vbox, "Play vs Bots", false, _on_play_vs_bots_pressed)
+	_add_row(vbox, "Play", false, _on_play_pressed)
 	_add_row(vbox, "Practice", false, _on_practice_pressed)
 	# Career hosts both the Supabase-backed stats tabs and the local Replays
 	# tab, so the row is never gated — the stats tabs surface their own
@@ -378,10 +377,10 @@ func _build_popups() -> void:
 	_player_popup.handedness_changed.connect(_on_player_handedness_changed)
 	add_child(_player_popup)
 
-	_online_popup = OnlinePopup.new()
-	_online_popup.host_pressed.connect(_on_host_pressed)
-	_online_popup.join_pressed.connect(_on_join_pressed)
-	add_child(_online_popup)
+	_play_popup = PlayPopup.new()
+	_play_popup.start_pressed.connect(_on_start_game_pressed)
+	_play_popup.join_pressed.connect(_on_join_pressed)
+	add_child(_play_popup)
 
 	# Steam overlay "Join Game" / accepted invite (and `+connect_lobby` launch)
 	# routes straight into the join flow.
@@ -625,14 +624,16 @@ func _on_player_handedness_changed(is_left: bool) -> void:
 		_player_card_hand.text = "Shoots %s" % ("L" if is_left else "R")
 
 
-func _on_play_online_pressed() -> void:
-	_online_popup.open()
+func _on_play_pressed() -> void:
+	_play_popup.open()
 
 
-func _on_play_vs_bots_pressed() -> void:
+func _on_start_game_pressed() -> void:
 	# Reset clears the free-play flag and the offline session so the lobby
 	# starts from a clean slate. Then start_offline re-arms host-side state
-	# and we hand off to Lobby, which owns the with-bots flow.
+	# and we hand off to Lobby. The lobby starts offline (instant, no Steam
+	# needed); its visibility selector attaches the Steam transport when the
+	# host opens the game to friends or the public.
 	GameManager.on_scene_exit()
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
@@ -680,35 +681,6 @@ func _on_exit_pressed() -> void:
 	_exit_container.visible = true
 
 
-func _on_host_pressed() -> void:
-	if not SteamManager.is_available:
-		_loading_screen.show_error("Steam isn't running.\nStart Steam and relaunch to play online.")
-		return
-	GameManager.on_scene_exit()
-	NetworkSimManager.clear_pending()
-	NetworkManager.reset()
-	# Steam lobby creation is async — wait for host_lobby_ready before changing
-	# scene (mirrors the client's existing one-shot wait pattern below).
-	_loading_screen.show_hosting()
-	NetworkManager.host_lobby_ready.connect(_on_host_lobby_ready, CONNECT_ONE_SHOT)
-	NetworkManager.host_lobby_failed.connect(_on_host_lobby_failed, CONNECT_ONE_SHOT)
-	NetworkManager.start_host()
-
-
-func _on_host_lobby_ready() -> void:
-	if NetworkManager.host_lobby_failed.is_connected(_on_host_lobby_failed):
-		NetworkManager.host_lobby_failed.disconnect(_on_host_lobby_failed)
-	_loading_screen.close_when_ready(func() -> void:
-		get_tree().change_scene_to_file(Constants.SCENE_LOBBY))
-
-
-func _on_host_lobby_failed(reason: String) -> void:
-	if NetworkManager.host_lobby_ready.is_connected(_on_host_lobby_ready):
-		NetworkManager.host_lobby_ready.disconnect(_on_host_lobby_ready)
-	NetworkManager.reset()
-	_loading_screen.show_error(reason)
-
-
 # `lobby_id` comes from the public lobby browser or a Steam friend invite.
 func _on_join_pressed(lobby_id: int) -> void:
 	if not SteamManager.is_available:
@@ -746,11 +718,11 @@ func _on_join_rejected(reason: String) -> void:
 
 
 func _on_join_cancelled() -> void:
-	# The host/join flow tears down the live world (GameManager.on_scene_exit
-	# in _on_host_pressed/_on_join_pressed) before the async lobby op, so the
-	# scene behind the loading screen is half-dead — no phase coordinator, no
-	# host-side puck logic. Rebuild free play instead of just hiding the
-	# spinner; the spinner-only version stranded the player in that world.
+	# The join flow tears down the live world (GameManager.on_scene_exit in
+	# _on_join_pressed) before the async lobby op, so the scene behind the
+	# loading screen is half-dead — no phase coordinator, no host-side puck
+	# logic. Rebuild free play instead of just hiding the spinner; the
+	# spinner-only version stranded the player in that world.
 	_disconnect_join_signals()
 	_loading_screen.visible = false
 	GameManager.return_to_free_play()

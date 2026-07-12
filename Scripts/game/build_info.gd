@@ -82,7 +82,9 @@ const VERSION: String = "dev"
 #     so the host fires a remote human's pure-mouse wrister at the same power
 #     their own client predicted with its local sensitivity.
 # v21: notify_goalie_freeze_called RPC (NHL goalie cover whistle).
-const PROTOCOL_VERSION: int = 21
+# v22: notify_team_colors RPC — the unified-Play lobby's host-picked palettes
+#     for humanless teams replicate to clients' lobby previews.
+const PROTOCOL_VERSION: int = 22
 
 
 func _ready() -> void:
