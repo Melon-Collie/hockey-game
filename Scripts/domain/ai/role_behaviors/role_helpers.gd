@@ -421,8 +421,9 @@ static func collect_opponents(ctx: RoleContext,
 
 # Min over opponents of momentum-aware ETA back to our net — the shared
 # race-home read behind every "am I recoverable?" question (SUPPORT's exposure,
-# the forecheck safety's pinch read). Each opponent races at ITS real top speed
-# (Speed cap); INF when there are no opponents (no recovery threat).
+# the forecheck safety's pinch read, CONTAIN's advance clamp). Each opponent
+# races at ITS real top speed (Speed cap); INF when there are no opponents (no
+# recovery threat).
 static func min_opp_time_home(opp_states: Array[SkaterNetworkState],
 		opp_caps: Array, our_net: Vector3) -> float:
 	var has_caps: bool = opp_caps.size() == opp_states.size()
@@ -438,3 +439,18 @@ static func min_opp_time_home(opp_states: Array[SkaterNetworkState],
 		if t < best:
 			best = t
 	return best
+
+
+# The farthest a defender may stand from OUR net and still win the race home
+# against the fastest opponent: (fastest opp ETA home − the set-up margin) ×
+# my top speed. The margin is braking from top speed (AISteering's brake
+# decel) — the last man must arrive SET, not flying past his own cage. INF
+# when there is no opponent to race. The single "how far can I safely be from
+# home?" primitive shared by the forecheck safety and CONTAIN.
+static func race_home_radius(ctx: RoleContext,
+		opp_states: Array[SkaterNetworkState], our_net: Vector3) -> float:
+	var t_home: float = min_opp_time_home(opp_states, ctx.scratch_opp_caps, our_net)
+	if t_home == INF:
+		return INF
+	var margin: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S 			/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	return maxf(t_home - margin, 0.0) * maxf(ctx.self_max_speed, 1.0)

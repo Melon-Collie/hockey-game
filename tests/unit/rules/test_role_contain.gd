@@ -175,3 +175,29 @@ func test_gap_cap_releases_once_the_zone_is_gained() -> void:
 			AIRoleContain.GAP_MIN_M, AIRoleContain.GAP_MAX_M)
 	assert_almost_eq(d.target_position.z, carrier.z + expected_gap, 0.3,
 			"inside the zone the normal gap ramp resumes")
+
+
+func test_never_advances_past_recovery_toward_a_distant_carrier() -> void:
+	# Turnover twin of the forecheck-F3 bug: carrier still deep in HIS end with
+	# a trailer streaking through center. The carrier-relative gap point sits
+	# ~35 m up-ice — chasing it would vacate the middle for the 2-on-1. CONTAIN
+	# instead waits at the edge of recoverability: its stand's distance from our
+	# net never exceeds the race-home radius against the fastest opponent.
+	var carrier := Vector3(0, 0, -20)                # deep in their end
+	var trailer := Vector3(2, 0, 2)                  # streaking through center
+	var ctx := _make_ctx(Vector3(0, 0, 5), [
+			[1, TEAM_ID, Vector3(0, 0, 5)],
+			[200, 1, carrier],
+			[210, 1, trailer, Vector3(0, 0, 7)],     # burning toward our net
+	], 200)
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	var opp_states: Array[SkaterNetworkState] = []
+	for pid: int in [200, 210]:
+		opp_states.append(ctx.snapshot.skater_states[pid])
+	var r: float = AIRoleHelpers.race_home_radius(
+			ctx, opp_states, Vector3(0, 0, OUR_NET_Z))
+	assert_lte(d.target_position.distance_to(Vector3(0, 0, OUR_NET_Z)), r + 0.3,
+			"CONTAIN holds inside the race-home radius instead of chasing the"
+			+ " distant gap point; got %s (r=%.1f)" % [d.target_position, r])
+	assert_gt(d.target_position.z, 0.0,
+			"…which keeps it on OUR side of center while the trailer streaks")

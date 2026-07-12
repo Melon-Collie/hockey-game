@@ -36,14 +36,6 @@ class_name AIRoleForecheck
 # off the wall so it can step to either breakout lane.
 const F3_WALL_INSET_M: float = 4.0
 
-# Time cushion F3's race-home read reserves on top of the raw sprint: the last
-# man must arrive SET (stopped, facing the play), not flying past his own net.
-# Physical: braking from top speed at the steering model's brake decel
-# (~8.5 / 10 ≈ 0.85 s). Not a tactical knob — it's the cost of turning a
-# full-speed retreat into a defensive stance.
-const F3_SET_UP_MARGIN_S: float = (
-		GameRules.DEFAULT_SKATER_MAX_SPEED_M_S / AISteering.ARRIVAL_BRAKE_DECEL_M_S2)
-
 # F2 search-center depth toward the opp net from the blue line — how far
 # into the zone the mid read sets up. Small: F2 is the high-zone
 # interceptor, not a second deep pressurer.
@@ -80,11 +72,9 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	var race_budget: float = AIRoleHelpers.min_opp_time_home(
-			opp_states, ctx.scratch_opp_caps, our_net) - F3_SET_UP_MARGIN_S
+	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
 	var hold_z: float = blue_z
-	if race_budget < INF:
-		var r: float = maxf(race_budget, 0.0) * maxf(ctx.self_max_speed, 1.0)
+	if r < INF:
 		var dx: float = wall_x - our_net.x
 		var lane_reach_sq: float = r * r - dx * dx
 		# Lane never reaches inside the circle (degenerate: the threat beats us

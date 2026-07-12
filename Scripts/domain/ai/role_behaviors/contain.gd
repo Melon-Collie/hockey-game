@@ -86,5 +86,29 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# Never project past the net — a gap wider than the carrier's own distance
 	# to the net would place the target behind the goal line.
 	gap = minf(gap, dist)
+	# NEVER ADVANCE PAST RECOVERY. The gap point is carrier-relative, so a
+	# carrier still deep in his own end pulls it far up-ice — and a center-ice
+	# CONTAIN would skate FORWARD 15 m to "establish the gap" on a rush that
+	# hasn't come yet, vacating the middle while a trailer makes it a 2-on-1
+	# behind him (the forecheck-F3 bug's TRANS_OD twin). Gap control means the
+	# rush comes to YOU: the stand's distance from our net is capped by the
+	# race-home radius against the OTHER opponents — the CARRIER is excluded
+	# because gap control already owns him (you cannot be beaten home by the
+	# man you retreat in front of; the trailer is who burns you). So CONTAIN
+	# gaps the carrier freely when no trailer threatens, and waits at the edge
+	# of recoverability when one does — the gap point meets him there as the
+	# play closes. (Filtered set loses the caps index alignment, so the race
+	# uses league-reference speed — the conservative side of that trade.)
+	var stand_from_net: float = dist - gap
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
+	opp_states.clear()
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id 			if ctx.snapshot.puck_state != null else -1
+	for pid: int in ctx.snapshot.skater_states:
+		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id or pid == carrier_pid:
+			continue
+		opp_states.append(ctx.snapshot.skater_states[pid])
+	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
+	if stand_from_net > r:
+		gap = dist - r
 	d.target_position = carrier_pos + (to_net / dist) * gap
 	return d
