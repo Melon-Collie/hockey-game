@@ -1230,7 +1230,8 @@ func _stop_faceoff_countdown() -> void:
 
 
 # Compose the opening matchup rosters from the live registry: one column per
-# team in slot order, jersey number + display name.
+# team in slot order. The overlay reads name / number / attribute build off
+# the records itself.
 func _show_matchup_overlay() -> void:
 	var home_records: Array[PlayerRecord] = []
 	var away_records: Array[PlayerRecord] = []
@@ -1243,17 +1244,7 @@ func _show_matchup_overlay() -> void:
 		return a.team_slot < b.team_slot
 	home_records.sort_custom(by_slot)
 	away_records.sort_custom(by_slot)
-	var home_names: Array[String] = []
-	var home_numbers: Array[int] = []
-	for record: PlayerRecord in home_records:
-		home_names.append(record.display_name())
-		home_numbers.append(record.jersey_number)
-	var away_names: Array[String] = []
-	var away_numbers: Array[int] = []
-	for record: PlayerRecord in away_records:
-		away_names.append(record.display_name())
-		away_numbers.append(record.jersey_number)
-	_matchup_overlay.present(home_names, home_numbers, away_names, away_numbers,
+	_matchup_overlay.present(home_records, away_records,
 			_scorebug_stripe(0), _scorebug_stripe(1))
 
 

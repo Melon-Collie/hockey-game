@@ -3,12 +3,13 @@ extends CanvasLayer
 
 # Opening-faceoff matchup screen, scrim-first: the pre-game camera sweep and
 # bench skate-on stay visible through a medium dim wash while the two rosters
-# read on top — team columns (color stripe + HOME/AWAY header, jersey number +
-# name per player) around a center VS. Pure presentation, no buttons; shown
-# for the front of the PREGAME_INTRO_DURATION hold and dismissed before the
-# faceoff countdown takes the banner.
+# read on top — team columns (color stripe + HOME/AWAY header, then per player
+# an attribute hex graph + jersey number + name) around a center VS with one
+# labeled legend hex naming the six axes for all of them. Pure presentation,
+# no buttons; shown for the front of the PREGAME_INTRO_DURATION hold and
+# dismissed before the faceoff countdown takes the banner.
 #
-# Owned by HUD, which composes the roster rows from GameManager.get_players().
+# Owned by HUD, which passes the slot-sorted PlayerRecords per team.
 
 const _WHITE := MenuStyle.BROADCAST_CREAM
 const _DIM := MenuStyle.BROADCAST_DIM
@@ -68,9 +69,22 @@ func _build_ui() -> void:
 	_home_rows = home_col.get_meta(&"rows") as VBoxContainer
 	columns.add_child(home_col)
 
+	# Center spine: VS over the legend hex that names the six attribute axes
+	# once, so the per-player hexes can stay small and unlabeled.
+	var spine := VBoxContainer.new()
+	spine.alignment = BoxContainer.ALIGNMENT_CENTER
+	spine.add_theme_constant_override("separation", 14)
+	spine.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	columns.add_child(spine)
+
 	var vs := _lbl("VS", 30, _DIM)
-	vs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	columns.add_child(vs)
+	vs.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	spine.add_child(vs)
+
+	var legend := AttributeHexGraph.new()
+	legend.show_labels = true
+	legend.custom_minimum_size = Vector2(128, 128)
+	spine.add_child(legend)
 
 	_away_stripe_style = _stripe_style()
 	var away_col := _build_team_column("AWAY", _away_stripe_style)
@@ -99,13 +113,12 @@ func _build_team_column(header: String, stripe_style: StyleBoxFlat) -> VBoxConta
 	return col
 
 
-func present(home_names: Array[String], home_numbers: Array[int],
-		away_names: Array[String], away_numbers: Array[int],
+func present(home_records: Array[PlayerRecord], away_records: Array[PlayerRecord],
 		home_stripe: Color, away_stripe: Color) -> void:
 	_home_stripe_style.bg_color = home_stripe
 	_away_stripe_style.bg_color = away_stripe
-	_fill_rows(_home_rows, home_names, home_numbers)
-	_fill_rows(_away_rows, away_names, away_numbers)
+	_fill_rows(_home_rows, home_records, home_stripe)
+	_fill_rows(_away_rows, away_records, away_stripe)
 	visible = true
 	if _present_tween != null and _present_tween.is_running():
 		_present_tween.kill()
@@ -130,19 +143,27 @@ func hide_overlay() -> void:
 	_present_tween.tween_callback(func() -> void: visible = false)
 
 
-# Roster rebuilt per present(): once per match, a handful of rows.
-func _fill_rows(rows: VBoxContainer, names: Array[String], numbers: Array[int]) -> void:
+# Roster rebuilt per present(): once per match, a handful of rows. Each row:
+# the player's build as a small team-colored hex graph, then number + name.
+func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
+		accent: Color) -> void:
 	for child: Node in rows.get_children():
 		child.queue_free()
-	for i: int in names.size():
+	for record: PlayerRecord in records:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 12)
-		var num := _lbl("%d" % numbers[i], 16, _DIM)
+		var hex := AttributeHexGraph.new()
+		hex.custom_minimum_size = Vector2(54, 54)
+		hex.set_build(record.attributes, accent)
+		row.add_child(hex)
+		var num := _lbl("%d" % record.jersey_number, 16, _DIM)
 		num.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		num.custom_minimum_size = Vector2(30, 0)
 		num.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(num)
-		row.add_child(_lbl(names[i], 22, _WHITE))
+		var name_label := _lbl(record.display_name(), 22, _WHITE)
+		name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(name_label)
 		rows.add_child(row)
 
 
