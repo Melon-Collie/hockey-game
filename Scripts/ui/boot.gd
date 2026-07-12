@@ -248,15 +248,21 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	if _transitioned:
 		return
 	_transitioned = true
-	# First-time players land in the Basics tutorial after the splash instead
-	# of dropping straight into free play. Once they finish — or hit Skip All
-	# in the HUD — PlayerPrefs.mark_tutorial_complete("basics") flips this so
-	# subsequent boots go straight to the rink. An accepted Steam invite
-	# trumps the tutorial: the player clicked "Join Game", and the SideMenu
-	# consumes the stashed lobby id once free play is up.
-	if not PlayerPrefs.is_tutorial_complete(TutorialRegistry.BASICS_ID) \
-			and SteamManager.pending_invite_lobby_id == 0:
-		NetworkManager.start_tutorial(TutorialRegistry.BASICS_ID)
+	# Players with unfinished course parts land in the first incomplete
+	# tutorial after the splash instead of dropping straight into free play —
+	# every part must be finished (or exited, which marks that part complete)
+	# before boots go straight to the rink. PlayerPrefs wipes completion when
+	# the course version bumps, so a restructured course routes everyone back
+	# through. An accepted Steam invite trumps the tutorial: the player
+	# clicked "Join Game", and the SideMenu consumes the stashed lobby id
+	# once free play is up.
+	var next_tutorial: String = ""
+	for id: String in TutorialRegistry.ALL_IDS:
+		if not PlayerPrefs.is_tutorial_complete(id):
+			next_tutorial = id
+			break
+	if next_tutorial != "" and SteamManager.pending_invite_lobby_id == 0:
+		NetworkManager.start_tutorial(next_tutorial)
 	else:
 		NetworkManager.start_free_play()
 	get_tree().change_scene_to_packed(scene)

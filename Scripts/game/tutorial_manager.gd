@@ -4,24 +4,27 @@ extends Node
 # Step IDs live in TutorialRegistry (to avoid a preload cycle); re-exported
 # here so the rest of this file reads like the original constant references.
 const STEP_SKATE:       int = TutorialRegistry.STEP_SKATE
-const STEP_BRAKE:       int = TutorialRegistry.STEP_BRAKE
-const STEP_QUICK_SHOT:  int = TutorialRegistry.STEP_QUICK_SHOT
-const STEP_WRIST_SHOT:  int = TutorialRegistry.STEP_WRIST_SHOT
-const STEP_SLAPSHOT:    int = TutorialRegistry.STEP_SLAPSHOT
-const STEP_ONE_TIMER:   int = TutorialRegistry.STEP_ONE_TIMER
-const STEP_SHOT_BLOCK:  int = TutorialRegistry.STEP_SHOT_BLOCK
-const STEP_STICKCHECK:  int = TutorialRegistry.STEP_STICKCHECK
-const STEP_BODY_CHECK:  int = TutorialRegistry.STEP_BODY_CHECK
-const STEP_ELEVATION:   int = TutorialRegistry.STEP_ELEVATION
-const STEP_OFFSIDES:    int = TutorialRegistry.STEP_OFFSIDES
 const STEP_SPRINT:      int = TutorialRegistry.STEP_SPRINT
+const STEP_STAMINA:     int = TutorialRegistry.STEP_STAMINA
+const STEP_BRAKE:       int = TutorialRegistry.STEP_BRAKE
+const STEP_STICKHANDLE: int = TutorialRegistry.STEP_STICKHANDLE
+const STEP_DEFLECT:     int = TutorialRegistry.STEP_DEFLECT
 const STEP_BLADE_LIFT:  int = TutorialRegistry.STEP_BLADE_LIFT
-const STEP_STICK_LIFT:  int = TutorialRegistry.STEP_STICK_LIFT
+const STEP_DROP_PUCK:   int = TutorialRegistry.STEP_DROP_PUCK
 const STEP_SHOOT_WRIST:   int = TutorialRegistry.STEP_SHOOT_WRIST
 const STEP_SHOOT_TARGETS: int = TutorialRegistry.STEP_SHOOT_TARGETS
 const STEP_SHOOT_SLAP:    int = TutorialRegistry.STEP_SHOOT_SLAP
-const STEP_SHOOT_GOALIE:  int = TutorialRegistry.STEP_SHOOT_GOALIE
+const STEP_ONE_TIMER:     int = TutorialRegistry.STEP_ONE_TIMER
 const STEP_SHOOT_FINISH:  int = TutorialRegistry.STEP_SHOOT_FINISH
+const STEP_QUICK_PASS:  int = TutorialRegistry.STEP_QUICK_PASS
+const STEP_TOUCH_PASS:  int = TutorialRegistry.STEP_TOUCH_PASS
+const STEP_SAUCER_PASS: int = TutorialRegistry.STEP_SAUCER_PASS
+const STEP_RECEIVE:     int = TutorialRegistry.STEP_RECEIVE
+const STEP_STICKCHECK:  int = TutorialRegistry.STEP_STICKCHECK
+const STEP_BODY_CHECK:  int = TutorialRegistry.STEP_BODY_CHECK
+const STEP_STICK_LIFT:  int = TutorialRegistry.STEP_STICK_LIFT
+const STEP_SHOT_BLOCK:  int = TutorialRegistry.STEP_SHOT_BLOCK
+const STEP_OFFSIDES:    int = TutorialRegistry.STEP_OFFSIDES
 
 
 # ── Step definition ───────────────────────────────────────────────────────────
@@ -41,11 +44,6 @@ class TutorialStep:
 const _SKATE_HOLD:           float = 1.5
 const _BRAKE_HOLD:           float = 1.0
 const _SPRINT_HOLD:          float = 1.0
-# Blade-lift step (raise your own stick with Q): hold the blade up briefly so a
-# stray tap doesn't auto-complete.
-const _BLADE_LIFT_HOLD:      float = 0.75
-const _BLOCK_HOLD:           float = 2.0
-const _SHOT_BLOCK_HOLD:      float = 1.0
 # Shot block: puck comes from the offensive zone toward the player's goal.
 # 14 m/s is a paced-down "wrister" feel — fast enough to feel like a shot,
 # slow enough that a learner has time to read it and crouch into the lane.
@@ -65,20 +63,62 @@ const _ICE_Y:                float = 0.05
 const _PREFIRE_DELAY:   float = 2.5
 const _REATTEMPT_DELAY: float = 1.0
 
+# ── Stick Basics tuning ───────────────────────────────────────────────────────
+# Stickhandle: forehand↔backhand crossings required, and how far the blade
+# must swing off-centre (in the skater's local X) before a side counts —
+# hysteresis so jitter around centre doesn't rack up crossings.
+const _STICKHANDLE_CROSSINGS: int   = 4
+const _STICKHANDLE_SIDE_X:    float = 0.3
+# Deflect: a grounded feed slow enough to read but quick enough to feel like a
+# shot worth tipping. Well under the natural-deflect threshold (22 receiver-
+# relative), so without Q held the blade would simply CATCH it — holding Q is
+# exactly what turns the catch into the tip, which is the lesson.
+const _DEFLECT_FEED_SPEED: float = 12.0
+# Blade lift: an airborne lob the raised blade bats down. Horizontal pace +
+# fixed vertical launch put the puck ~0.8 m off the ice as it reaches the
+# player (fired from _FEED_DISTANCE away).
+const _LOB_FEED_SPEED_XZ: float = 10.0
+const _LOB_FEED_VY:       float = 4.9
+# How far up-ice feeds are fired from (deflect / blade-lift steps).
+const _FEED_DISTANCE: float = 9.0
+
+# ── Passing module tuning ─────────────────────────────────────────────────────
+# Player and teammate staging for the pass drills (player faces -Z at the bot).
+const _PASS_PLAYER_POS: Vector3 = Vector3(0.0, 1.0, 2.0)
+const _PASS_PUPPET_POS: Vector3 = Vector3(0.0, 1.0, -7.0)
+# Touch pass: max normalized wrister charge that still reads as a soft touch
+# pass. Above this the drill takes the puck back — physics would often bounce
+# a hot feed off the receiver anyway, but the explicit gate keeps the lesson
+# deterministic instead of depending on the bot's blade angle.
+const _TOUCH_PASS_MAX_CHARGE: float = 0.55
+# Saucer drill wall: knee-high board across the passing lane, halfway to the
+# receiver. Low enough that a LOW saucer (0.26 m apex) clears it at any legal
+# pass pace; a flat pass clanks off.
+const _PASS_WALL_SIZE: Vector3 = Vector3(1.8, 0.12, 0.08)
+# Receiving: soft feeds catch at any blade angle (< the 22 m/s receiver-
+# relative deflect threshold); hot feeds sit between the 22 threshold and the
+# 30 squared-blade ceiling, so they stick only when the blade is squared to
+# the line (or the receiver gives ground to soften the relative speed).
+const _RECEIVE_SPEED_SOFT:      float = 12.0
+const _RECEIVE_SPEED_HOT:       float = 24.0
+const _RECEIVE_CATCHES_PER_WAVE: int  = 2
+
 # ── References ────────────────────────────────────────────────────────────────
 
-var tutorial_id: String = TutorialRegistry.BASICS_ID
+var tutorial_id: String = TutorialRegistry.MOVEMENT_ID
 
 var _local_record:     PlayerRecord    = null
 var _local_controller: LocalController = null
 var _skater:           Skater          = null
 var _puck:             Puck            = null
 # Puppeted bot used as a tutorial demo partner (stickcheck target, body-check
-# target, one-timer passer, shot-block shooter). Replaces the static dummy
-# skater the tutorial used to spawn — real bots get the team_id resolver wired
-# correctly so stickcheck (apply_poke_check) and body-check signal filtering
-# behave as they do in normal gameplay. See GameManager.spawn_tutorial_bot.
+# target, pass receiver/feeder, shot-block shooter). Real bots get the team_id
+# resolver wired correctly so stickcheck (apply_poke_check) and body-check
+# signal filtering behave as they do in normal gameplay. Passing drills spawn
+# it on team 0 (a teammate); defense drills on team 1 (an opponent).
+# See GameManager.spawn_tutorial_bot.
 var _puppet_record: PlayerRecord = null
+var _puppet_team:   int          = 1
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
@@ -93,6 +133,10 @@ var _complete_flash_timer: float = 0.0
 var _wrister_aim_start:  float = -1.0   # -1 when not in WRISTER_AIM
 var _cross_ice_dot_x:          float = 6.0   # set in _begin_step based on handedness
 var _offside_ghost_seen:       bool  = false
+var _stamina_exhaust_seen:     bool  = false
+var _stickhandle_crossings:    int   = 0
+var _stickhandle_side:         int   = 0     # -1 / +1 once the blade commits to a side
+var _drop_seen:                bool  = false # DROP_PUCK: nudge fired, waiting on re-pickup
 # True once the one-timer cross-ice pass is in flight. The re-fire branch
 # in _process gates on this so it can't trigger before the puck launches,
 # and the re-fire scheduler clears it during the wait to keep from
@@ -105,45 +149,34 @@ var _one_timer_restage_pending: bool = false
 
 var _hud: TutorialHUD = null
 
-# Restage timer: counts down after a failed shot; re-places puck when it hits 0.
-# Uses the standardised _REATTEMPT_DELAY so failed-shot retries match the
-# pacing of in-step re-fires on the shot-block and one-timer steps.
-var _restage_timer: float = -1.0
-
 # Prefire timer: counts down during a step's initial pause before launching
 # the puck. -1 = no fire pending. _process dispatches to the right fire
-# helper for the active step when it reaches 0.
+# helper for the active step when it reaches 0. Feed steps also reuse it as
+# the between-attempts beat.
 var _prefire_timer: float = -1.0
-
-# Shot-on-net watch state for basics QUICK/WRIST/SLAP steps. Set when the
-# player releases a shot of the right type; cleared either by the puck
-# crossing the open net (success → complete) or by the watch timer expiring
-# (restage and try again). Generous bounds — tutorial encourages "put the
-# puck on net" without demanding perfect aim.
-var _watch_for_on_net:  bool  = false
-var _shot_watch_timer:  float = 0.0
-const _SHOT_WATCH_DURATION: float = 4.0
-const _ON_NET_HALF_WIDTH:   float = 1.2  # slightly wider than the 1.83 m goal opening
 
 # ── Shooting module (drill-based) ─────────────────────────────────────────────
 # The net the tutorial player attacks (team 0 shoots toward -Z) and its lateral
 # bound for goal/target detection.
 const _GOAL_PLANE_Z:  float = -GameRules.GOAL_LINE_Z
 const _NET_HALF_WIDTH: float = GameRules.NET_HALF_WIDTH
-# Target sets, as (x = lateral, y = height) in the goal plane.
+# Target sets, as (x = lateral, y = height) in the goal plane. The stationary
+# goalie stands in the net for the whole Pick Your Spot drill, so the low set
+# reads as the holes he leaves: low corners beside the pads, and the centre
+# target is the five-hole (his stance is opened via snap_to_standing_pose).
 const _LOW_TARGETS: Array[Vector2] = [
-	Vector2(-0.62, 0.30), Vector2(0.0, 0.30), Vector2(0.62, 0.30)]
+	Vector2(-0.62, 0.30), Vector2(0.0, 0.24), Vector2(0.62, 0.30)]
 const _HIGH_TARGETS: Array[Vector2] = [
 	Vector2(-0.62, 0.95), Vector2(0.62, 0.95)]
-const _GOALIE_TARGETS: Array[Vector2] = [
-	Vector2(-0.62, 0.95), Vector2(0.62, 0.95), Vector2(0.0, 0.22)]
 # Hit tolerance (m) around a target's centre — matched to the bullseye's drawn
 # outer radius (TutorialTargets._BANDS), so hitting the target you SEE gives
-# credit. The change from the old drill is WHAT counts, not how big the target
-# is: credit lands when the puck reaches the net-plane on the bullseye, instead
-# of requiring it to cross cleanly through into the net.
+# credit. Credit lands when the puck reaches the net-plane on the bullseye,
+# instead of requiring it to cross cleanly through into the net.
 const _TARGET_RADIUS:       float = 0.34
 const _TARGET_FRONT_OFFSET: float = 0.10  # float the bullseyes just in front of the net
+# Saucer wave wall: across the shooting lane, this far in front of the shooter.
+const _TARGET_WALL_SIZE:  Vector3 = Vector3(2.0, 0.12, 0.08)
+const _TARGET_WALL_AHEAD: float   = 2.2
 
 # Team 0 attacks toward -Z; the shot-resolution helpers project puck travel onto
 # this axis (matches PenaltyShotRules' attack_dir convention).
@@ -182,23 +215,49 @@ var _shot_air_time:      float = 0.0
 var _targets:          Array[Vector2] = []
 var _target_hit:       Array[bool]    = []
 var _targets_remaining: int = 0
-var _targets_phase:     int = 0           # 0 = low wave, 1 = high wave, 2 = toggle-off beat
+var _targets_phase:     int = 0           # 0 flat wave, 1 saucer wave, 2 high wave, 3 toggle-off beat
 var _target_noun:       String = "Targets hit"
 var _target_node: TutorialTargets = null
+var _wall_node:   TutorialWall    = null
 var _on_shooting_shot_callable: Callable = Callable()
 
+# ── Passing module state ──────────────────────────────────────────────────────
+var _passing_active:     bool  = false
+var _pass_live:          bool  = false   # a pass attempt in flight toward the teammate
+var _pass_qualifies:     bool  = false   # last release matched the drill's required type
+var _pass_hot:           bool  = false   # TOUCH_PASS: released above the soft-pass ceiling
+var _pass_restage_timer: float = -1.0
+var _pass_stall_time:    float = 0.0
+var _pass_air_time:      float = 0.0
+var _receive_wave:       int   = 0
+var _receive_catches:    int   = 0
+var _on_passing_shot_callable: Callable = Callable()
+
+# Whether the elevation corrective alert is currently showing, so the per-frame
+# prompt update only clears an alert it set itself (and never stomps another
+# alert, e.g. the touch-pass "too hot" prompt).
+var _elev_alert_shown: bool = false
+
 # Connected callables stored for safe disconnection
-var _on_release_callable:          Callable = Callable()
 var _on_one_timer_callable:        Callable = Callable()
 var _on_body_check_callable:       Callable = Callable()
 var _on_regular_shot_in_one_timer: Callable = Callable()
 var _on_stickcheck_callable:       Callable = Callable()
 var _on_stick_lift_callable:       Callable = Callable()
+var _on_puck_touch_callable:       Callable = Callable()
+var _on_block_callable:            Callable = Callable()
+var _on_nudge_callable:            Callable = Callable()
+
+# Live keybinding names, substituted into step copy via String.format so the
+# instructions always show what the player actually has bound (see
+# PlayerPrefs.action_display). Built once in _ready — rebinding mid-tutorial
+# isn't a live path (the options popup isn't reachable inside the tutorial).
+var _key_tokens: Dictionary = {}
 
 
 # Constructor sets the tutorial id; game_scene.gd passes the id selected by
 # NetworkManager.tutorial_id when it instantiates the manager.
-func _init(id: String = TutorialRegistry.BASICS_ID) -> void:
+func _init(id: String = TutorialRegistry.MOVEMENT_ID) -> void:
 	tutorial_id = id
 
 
@@ -213,6 +272,7 @@ func _ready() -> void:
 	_skater = _local_record.skater
 	_puck = GameManager.get_puck()
 
+	_build_key_tokens()
 	_build_steps()
 	if _step_ids.is_empty():
 		push_error("TutorialManager: no steps for tutorial id '%s'" % tutorial_id)
@@ -231,12 +291,48 @@ func _exit_tree() -> void:
 	_disconnect_all_signals()
 	_free_puppet()
 	_teardown_shooting()
+	_teardown_passing()
 	# Do NOT clear NetworkManager.is_tutorial_mode here. The continuation path
 	# (Next: <tutorial> button → start_tutorial(next_id) → change_scene_to_file)
 	# sets is_tutorial_mode = true BEFORE the deferred scene change tears down
 	# this node — clearing it in _exit_tree would race with that and make the
 	# new game_scene._ready miss the tutorial spawn. Every legitimate exit path
 	# (HUD Exit / Free Play / SideMenu launchers) sets the right flag itself.
+
+
+# ── Keybinding tokens ─────────────────────────────────────────────────────────
+
+func _build_key_tokens() -> void:
+	_key_tokens = {
+		"move_keys": "%s, %s, %s, %s" % [
+			PlayerPrefs.action_display("move_up"),
+			PlayerPrefs.action_display("move_left"),
+			PlayerPrefs.action_display("move_down"),
+			PlayerPrefs.action_display("move_right")],
+		"sprint":         PlayerPrefs.action_display("sprint"),
+		"brake":          PlayerPrefs.action_display("brake"),
+		"shoot":          PlayerPrefs.action_display("shoot"),
+		"quick_shot":     PlayerPrefs.action_display("quick_shot"),
+		"slapshot":       PlayerPrefs.action_display("slapshot"),
+		"block":          PlayerPrefs.action_display("block"),
+		"stick_lift":     PlayerPrefs.action_display("stick_lift"),
+		"elevation_up":   PlayerPrefs.action_display("elevation_up"),
+		"elevation_down": PlayerPrefs.action_display("elevation_down"),
+	}
+
+
+func _fmt(text: String) -> String:
+	return text.format(_key_tokens)
+
+
+# TutorialStep factory that runs every string through the keybinding tokens.
+func _step(title: String, instruction: String, hint: String = "") -> TutorialStep:
+	return TutorialStep.new(_fmt(title), _fmt(instruction), _fmt(hint))
+
+
+# Mid-step copy swap (wave changes, two-beat steps), tokenised the same way.
+func _set_live_copy(title: String, instruction: String, hint: String) -> void:
+	_hud.set_step(_step_index, _step_ids.size(), _fmt(title), _fmt(instruction), _fmt(hint))
 
 
 # ── Step definitions ──────────────────────────────────────────────────────────
@@ -253,101 +349,117 @@ func _build_steps() -> void:
 func _step_def_for(step_id: int) -> TutorialStep:
 	match step_id:
 		STEP_SKATE:
-			return TutorialStep.new(
+			return _step(
 				"Skate",
-				"Press W, A, S, D to skate around the ice.",
+				"Press {move_keys} to skate around the ice.",
 				"Hold a direction to build up speed — you keep gliding when you let go.")
 		STEP_SPRINT:
-			return TutorialStep.new(
+			return _step(
 				"Sprint",
-				"Hold Shift while skating to sprint for a burst of speed.",
-				"Sprinting drains stamina and widens your turn radius — use it in straight-line bursts.")
+				"Hold {sprint} while skating to sprint for a burst of speed.",
+				"Sprinting widens your turn radius — use it in straight-line bursts.")
+		STEP_STAMINA:
+			return _step(
+				"Stamina",
+				"Sprint burns the stamina ring around your skater. Hold {sprint} and keep sprinting until it runs dry — go ahead, gas out.",
+				"The ring hides while it's full and turns amber when you're low. Carrying the puck drains it faster.")
 		STEP_BRAKE:
-			return TutorialStep.new(
+			return _step(
 				"Brake",
-				"Hold Space to brake hard and stop quickly.",
-				"Tap Space while moving to scrub off speed fast.")
+				"Hold {brake} to brake hard and stop quickly.",
+				"{brake} is also your brace — a braced skater is far harder to knock off the puck when a hit lands.")
+		STEP_STICKHANDLE:
+			return _step(
+				"Stickhandling",
+				"Your blade follows your cursor — every frame, no button. Pick up the puck and sweep the cursor side to side to dangle it across your body.",
+				"Big, smooth sweeps. The blade lifts slightly through centre, so the puck rides forehand to backhand.")
+		STEP_DEFLECT:
+			return _step(
+				"Deflect",
+				"Don't catch this one. Set your loft to LOW ({elevation_up} one notch), hold {stick_lift}, and angle the blade with your cursor to tip the incoming puck.",
+				"Holding {stick_lift} means redirect, don't receive. At LOW loft the tip flicks the puck UP — that's the deflection goal.")
 		STEP_BLADE_LIFT:
-			return TutorialStep.new(
+			return _step(
 				"Blade Lift",
-				"Scroll the mouse wheel up to HIGH, then hold Q to raise your blade off the ice.",
-				"Q is Deflect; at HIGH loft the blade lifts. Scroll up, hold Q, and it pops up. (You can't lift while carrying the puck.)")
-		STEP_STICK_LIFT:
-			return TutorialStep.new(
-				"Stick Lift",
-				"Scroll up to HIGH, get under the opponent's stick, and hold Q to lift it — that pops the puck off their blade.",
-				"Scroll to HIGH so your blade rides high, slide it beneath their stick, then hold Q to lift and knock the puck free.")
-		STEP_QUICK_SHOT:
-			return TutorialStep.new(
-				"Quick Shot",
-				"Skate over the puck to pick it up, then press E to snap a quick shot into the net. This is also your pass.",
-				"Tap E — the quick shot fires instantly toward your cursor. Aim at the open net ahead of you.")
-		STEP_WRIST_SHOT:
-			return TutorialStep.new(
+				"Now play the air. Set loft to HIGH ({elevation_up} again), hold {stick_lift} to raise your blade off the ice, and bat the incoming lob down.",
+				"The raised blade only plays airborne pucks — a grounded pass slides right under it. HIGH knocks the puck DOWN to the ice.")
+		STEP_DROP_PUCK:
+			return _step(
+				"Drop the Puck",
+				"With the puck, tap {stick_lift} to drop it — a soft push off the blade that keeps your momentum. Drop it, then skate onto it again.",
+				"Slip it through a defender's feet and collect it on the far side — the nutmeg.")
+		STEP_SHOOT_WRIST:
+			return _step(
 				"Wrist Shot",
-				"With the puck, hold the left mouse button and drag to aim, then release to fire a wrist shot into the net.",
-				"Hold and drag — the drag direction is your aim, and a faster drag means a harder shot.")
-		STEP_SLAPSHOT:
-			return TutorialStep.new(
+				"You've got the puck. Hold {shoot}, drag toward the net, and release. The way you drag is your aim — and the faster you drag, the harder the shot.",
+				"A slow sweep is a soft pass — snap the drag toward the net to really rip it.")
+		STEP_SHOOT_TARGETS:
+			# Live copy is set per-wave by _show_targets_wave; this is the wave-0 default.
+			return _step(
+				"Pick Your Spot",
+				"A goalie's in the net — but he's frozen stiff. Three targets mark the holes he leaves low. Stay flat and knock each one out — any order.",
+				"Aim is the direction you drag, not where the cursor sits.")
+		STEP_SHOOT_SLAP:
+			return _step(
 				"Slapshot",
-				"With the puck, hold the right mouse button to wind up, then release to blast a slapshot into the net.",
-				"Hold right-click to charge — the longer you hold, the harder the shot.")
+				"Hold {slapshot} to wind up a slapshot. It fires toward your mouse, and the shot's direction locks the moment you press — so aim with the cursor first. You'll keep gliding, but you can't steer or change the shot mid-wind-up.",
+				"Point the cursor where you want it before you press. The longer you hold, the harder it goes.")
 		STEP_ONE_TIMER:
-			return TutorialStep.new(
+			return _step(
 				"One-Timer",
-				"A pass is sliding toward you from the far dot. Hold the right mouse button to wind up before it arrives, then release the instant it reaches your stick.",
-				"Start charging right-click now — don't wait for the puck to get there.")
-		STEP_SHOT_BLOCK:
-			return TutorialStep.new(
-				"Shot Block",
-				"A shot is coming at you. Hold Ctrl to drop into a blocking stance and get in its path.",
-				"Hold Ctrl and line your body up with the puck.")
+				"A pass is sliding toward you from the far dot. Hold {slapshot} to wind up before it arrives, then release the instant it reaches your stick.",
+				"Start charging {slapshot} now — don't wait for the puck to get there.")
+		STEP_SHOOT_FINISH:
+			return _step(
+				"Finish",
+				"Last one. You've got the puck and a goalie ahead of you. Score however you like.",
+				"Everything you've practiced is fair game — pick a corner, go five-hole, walk him side to side.")
+		STEP_QUICK_PASS:
+			return _step(
+				"Quick Pass",
+				"That instant snap on {quick_shot} is your pass — flat, fixed pace, fired toward your cursor the moment you tap. Put one on your teammate's blade.",
+				"Lead with the cursor: point at their blade, tap {quick_shot}.")
+		STEP_TOUCH_PASS:
+			return _step(
+				"Touch Pass",
+				"Now with the wrister: hold {shoot} and sweep slowly toward your teammate. Sweep speed is pass weight — a hard flick at this range just bounces off their blade.",
+				"Feather it. The slow, deliberate sweep is a genuinely soft touch pass.")
+		STEP_SAUCER_PASS:
+			return _step(
+				"Saucer Pass",
+				"A board's in the passing lane — a flat pass can't get through. One notch of loft ({elevation_up}), then {quick_shot}: the saucer flips over it and lands flat.",
+				"Same quick pass, lofted. LOW clears blades and boards mid-flight, then sits down and slides to the target.")
+		STEP_RECEIVE:
+			# Live copy is swapped per-wave; this is the soft-feed default.
+			return _step(
+				"Receiving",
+				"Your teammate's feeding you passes. Meet each one with your blade to catch it.",
+				"A soft pass sticks to almost any blade angle — just get the blade on the line.")
 		STEP_STICKCHECK:
-			return TutorialStep.new(
+			return _step(
 				"Stick Check",
 				"Skate your stick into the opponent's puck to knock it loose — that's a stick check.",
 				"Get close and sweep your stick through the puck.")
 		STEP_BODY_CHECK:
-			return TutorialStep.new(
+			return _step(
 				"Body Check",
 				"Build up speed and skate straight into the opponent to knock them off the puck.",
 				"Get a running start and aim right at them.")
-		STEP_ELEVATION:
-			return TutorialStep.new(
-				"Lifting the Puck",
-				"With the puck, scroll the mouse wheel up to add loft — one notch for a low saucer, two for a high shot — then shoot.",
-				"Scroll up first, then left- or right-click to shoot. Scroll down to flatten back out.")
+		STEP_STICK_LIFT:
+			return _step(
+				"Stick Lift",
+				"Set loft to HIGH ({elevation_up}), get under the opponent's stick, and hold {stick_lift} to lift it — that pops the puck off their blade.",
+				"Same gesture as the blade lift: ride your blade high, slide it beneath their stick, and hold {stick_lift} to knock the puck free.")
+		STEP_SHOT_BLOCK:
+			return _step(
+				"Shot Block",
+				"A shot is coming at you. Hold {block} to drop into a blocking stance, get your body in its path, and eat it.",
+				"Line up with the puck — the crouch widens you. The step completes when a shot actually hits you.")
 		STEP_OFFSIDES:
-			return TutorialStep.new(
+			return _step(
 				"Offsides",
 				"The puck has to cross the blue line into the attacking zone before you do. You went in first, so you're offside — and now you're a ghost until you skate back out past the blue line.",
 				"Skate back toward your own end and cross the blue line to reset.")
-		STEP_SHOOT_WRIST:
-			return TutorialStep.new(
-				"Wrist Shot",
-				"You've got the puck. Hold left-click, drag toward the net, and release. The way you drag is your aim — and the faster you drag, the harder the shot.",
-				"A slow sweep is a soft pass — snap the drag toward the net to really rip it.")
-		STEP_SHOOT_TARGETS:
-			# Live copy is set per-wave by _show_targets_wave; this is the wave-1 default.
-			return TutorialStep.new(
-				"Pick Your Spot",
-				"Three targets are lit across the net. Drag each shot toward one to knock it out — any order.",
-				"Aim is the direction you drag, not where the cursor sits.")
-		STEP_SHOOT_SLAP:
-			return TutorialStep.new(
-				"Slapshot",
-				"Hold right-click to wind up a slapshot. It fires toward your mouse, and the shot's direction locks the moment you press — so aim with the cursor first. You'll keep gliding, but you can't steer or change the shot mid-wind-up.",
-				"Point the cursor where you want it before you press. The longer you hold, the harder it goes.")
-		STEP_SHOOT_GOALIE:
-			return TutorialStep.new(
-				"Beat the Goalie",
-				"A goalie's in the net now — but he's standing still. Pick him apart: top-left corner, top-right corner, and the five-hole between his pads.",
-				"Elevation gets it over his glove. The five-hole is the gap between his legs — keep that one low.")
-		STEP_SHOOT_FINISH:
-			return TutorialStep.new(
-				"Finish",
-				"Last one. You've got the puck and a goalie ahead of you. Score however you like.",
-				"Everything you've practiced is fair game — pick a corner, go five-hole, walk him side to side.")
 	push_error("TutorialManager: unknown step id %d" % step_id)
 	return TutorialStep.new("", "", "")
 
@@ -362,35 +474,39 @@ func _current_step_id() -> int:
 
 # ── Step sequencing ───────────────────────────────────────────────────────────
 
-# The puckless movement steps (the puck is stashed far off-rink) frame best on
-# the player-locked camera, which centers on the skater rather than zooming out
-# to chase the stashed puck.
+# The close-quarters steps (movement, stickhandling, the drop) frame best on
+# the player-locked camera, which centers on the skater rather than zooming
+# out to chase a stashed or nearby puck.
 func _step_uses_locked_camera(step_id: int) -> bool:
 	return step_id == STEP_SKATE or step_id == STEP_SPRINT \
-		or step_id == STEP_BRAKE or step_id == STEP_BLADE_LIFT
+		or step_id == STEP_STAMINA or step_id == STEP_BRAKE \
+		or step_id == STEP_STICKHANDLE or step_id == STEP_DROP_PUCK
 
 
 func _begin_step(index: int) -> void:
 	_disconnect_all_signals()
 	_teardown_shooting()
+	_teardown_passing()
 	_step_index             = index
 	_step_timer             = 0.0
 	_hint_timer             = 0.0
 	_complete_flash_timer   = 0.0
-	_restage_timer          = -1.0
 	_prefire_timer          = -1.0
 	_wrister_aim_start      = -1.0
 	_offside_ghost_seen     = false
+	_stamina_exhaust_seen   = false
+	_stickhandle_crossings  = 0
+	_stickhandle_side       = 0
+	_drop_seen              = false
 	_one_timer_armed        = false
 	_one_timer_restage_pending = false
-	_watch_for_on_net       = false
-	_shot_watch_timer       = 0.0
+	_elev_alert_shown       = false
 
 	var step_id: int = _current_step_id()
 	var step: TutorialStep = _step_defs[index]
 	_hud.set_step(index, _step_ids.size(), step.title, step.instruction, step.hint)
-	# Puckless movement steps stash the puck off-rink; force the player-locked
-	# camera so it sits centered on the skater instead of zooming out toward it.
+	# Close-quarters steps force the player-locked camera so it sits centered
+	# on the skater instead of zooming out toward a stashed puck.
 	_local_controller.set_camera_force_locked(_step_uses_locked_camera(step_id))
 	# Offsides detection runs only during the OFFSIDES step. Steps that put
 	# the player deep in the O-zone with the puck temporarily off-rink
@@ -399,45 +515,40 @@ func _begin_step(index: int) -> void:
 	GameManager.set_tutorial_offsides_active(step_id == STEP_OFFSIDES)
 
 	match step_id:
-		STEP_SKATE, STEP_SPRINT, STEP_BLADE_LIFT:
-			# Open ice, puck stashed out of the way. Sprint and blade-lift both
-			# need the player puck-free (sprint to read stamina cleanly, blade-lift
-			# because the voluntary Q raise is gated off while carrying).
+		STEP_SKATE, STEP_SPRINT, STEP_STAMINA:
+			# Open ice, puck stashed out of the way — sprint and stamina both
+			# read cleanest puck-free (carrying changes the drain rate).
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # out of the way
 
 		STEP_BRAKE:
-			pass  # player is already on the ice from the sprint/skate step
+			pass  # player is already on the ice from the stamina/sprint steps
 
-		STEP_STICK_LIFT:
-			# Same puppet-with-the-puck setup as the stick-check step, but the
-			# player strips by lifting the puppet's stick (blade up + under it)
-			# instead of poking. Completion only fires for a lift (see the
-			# puck_stripped handler); a stray poke re-pins the puck (see _process).
-			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
-			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
-			if _puck.carrier != null:
-				_puck.drop()
-			_puck.set_carrier(_puppet_record.skater)
-			_on_stick_lift_callable = func(_ex: Skater) -> void:
-				# A lifted blade can't poke (puck_controller skips the poke path
-				# when blade_up), so a strip while the player's blade is up is a
-				# stick lift. A no-blade poke falls through to the _process re-pin.
-				if _skater.blade_up:
-					_complete_step()
-			_puck.puck_stripped.connect(_on_stick_lift_callable)
+		STEP_STICKHANDLE:
+			# Puck dropped just ahead for a natural pickup; crossings are then
+			# counted from the blade's side-to-side travel while carrying.
+			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.0), Vector2(0.0, -1.0))
+			_place_puck(Vector3(0.0, _ICE_Y, 0.5))
+			_update_stickhandle_objective()
 
-		STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT, STEP_ELEVATION:
-			# Spawn in the slot — the prime scoring area right in front of the
-			# attacking net (team 0 attacks -Z) — so it reads as "shoot the puck
-			# into the net a few metres away" rather than from center ice.
-			var slot_z: float = -(GameRules.GOAL_LINE_Z - GameRules.SLOT_DIST_M)
-			_local_controller.teleport_to(Vector3(0.0, 1.0, slot_z))
-			# Puck 1.5 m ahead toward the net so the player skates onto it facing the goal.
-			_place_puck(Vector3(0.0, _ICE_Y, slot_z - 1.5))
-			_on_release_callable = func(dir: Vector3, power: float, is_slapper: bool) -> void:
-				_on_shot_released(dir, power, is_slapper)
-			_local_controller.puck_release_requested.connect(_on_release_callable)
+		STEP_DEFLECT, STEP_BLADE_LIFT:
+			# Feeds are fired at the player's live position after the read
+			# delay; completion comes from the puck-touch signal (a deliberate
+			# deflect for DEFLECT, a raised-blade touch for BLADE_LIFT).
+			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0), Vector2(0.0, -1.0))
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _PREFIRE_DELAY
+			_on_puck_touch_callable = func(toucher: Skater) -> void:
+				_on_feed_touched(toucher)
+			_puck.puck_touched_loose.connect(_on_puck_touch_callable)
+
+		STEP_DROP_PUCK:
+			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.0), Vector2(0.0, -1.0))
+			_place_puck(Vector3(0.0, _ICE_Y, 0.5))
+			_on_nudge_callable = func(_velocity: Vector3) -> void:
+				if _current_step_id() == STEP_DROP_PUCK:
+					_drop_seen = true
+			_local_controller.nudge_requested.connect(_on_nudge_callable)
 
 		STEP_ONE_TIMER:
 			# Left-handed players receive from right dot; right-handed from left dot
@@ -445,8 +556,8 @@ func _begin_step(index: int) -> void:
 			_cross_ice_dot_x = 6.0 if PlayerPrefs.is_left_handed else -6.0
 			_local_controller.teleport_to(Vector3(_cross_ice_dot_x, 1.0, -GameRules.ICING_FACEOFF_DOT_Z))
 			# Stash the puck off-rink while the prefire delay counts down so
-			# the player can read the instruction and ready RMB before the
-			# cross-ice pass actually launches. _process fires it when the
+			# the player can read the instruction and ready the wind-up before
+			# the cross-ice pass actually launches. _process fires it when the
 			# timer hits 0.
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
 			_prefire_timer = _PREFIRE_DELAY
@@ -469,10 +580,35 @@ func _begin_step(index: int) -> void:
 
 		STEP_SHOT_BLOCK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
-			# Stash + delay so the player can read "hold Ctrl" before the
+			# Stash + delay so the player can read "hold {block}" before the
 			# puck launches. _process fires when the prefire timer hits 0.
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
 			_prefire_timer = _PREFIRE_DELAY
+			# Completion is an ACTUAL block: the puck hitting the player's body
+			# while they're in the blocking stance — not just holding the pose.
+			_on_block_callable = func(blocker: Skater) -> void:
+				if blocker == _skater \
+						and _local_controller.get_shot_state() == SkaterStateMachine.State.SHOT_BLOCKING:
+					_complete_step()
+			_puck.puck_body_blocked.connect(_on_block_callable)
+
+		STEP_STICK_LIFT:
+			# Same puppet-with-the-puck setup as the stick-check step, but the
+			# player strips by lifting the puppet's stick (blade up + under it)
+			# instead of poking. Completion only fires for a lift (see the
+			# puck_stripped handler); a stray poke re-pins the puck (see _process).
+			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
+			_ensure_puppet(Vector3(0.0, 1.0, 0.0))
+			if _puck.carrier != null:
+				_puck.drop()
+			_puck.set_carrier(_puppet_record.skater)
+			_on_stick_lift_callable = func(_ex: Skater) -> void:
+				# A lifted blade can't poke (puck_controller skips the poke path
+				# when blade_up), so a strip while the player's blade is up is a
+				# stick lift. A no-blade poke falls through to the _process re-pin.
+				if _skater.blade_up:
+					_complete_step()
+			_puck.puck_stripped.connect(_on_stick_lift_callable)
 
 		STEP_STICKCHECK:
 			_local_controller.teleport_to(Vector3(0.0, 1.0, 2.5))
@@ -513,21 +649,37 @@ func _begin_step(index: int) -> void:
 
 		STEP_SHOOT_TARGETS:
 			_setup_shooting_drill(_slot_z())
-			_show_targets_wave(0)
-
-		STEP_SHOOT_GOALIE:
-			_setup_shooting_drill(_slot_z())
+			# The stationary goalie stands in for the whole drill — the target
+			# waves read as the holes he leaves open.
 			GameManager.spawn_tutorial_goalie()
-			_target_noun = "Beat him"
-			_show_target_set(_GOALIE_TARGETS)
+			_show_targets_wave(0)
 
 		STEP_SHOOT_FINISH:
 			# Deeper start so they skate in and finish however they like — against a
-			# live, beginner-tuned (Easy) goalie, not the static target from the
-			# previous drill (the step text already says "walk him side to side").
+			# live, beginner-tuned (Easy) goalie (the step text already says
+			# "walk him side to side").
 			_setup_shooting_drill(_FINISH_START_Z)
 			GameManager.spawn_tutorial_goalie(true)
 			_hud.set_objective("Score.")
+
+		STEP_QUICK_PASS, STEP_TOUCH_PASS:
+			_setup_passing_drill(true)
+
+		STEP_SAUCER_PASS:
+			_setup_passing_drill(true)
+			# Knee-high board halfway down the passing lane — the reason the
+			# flat pass can't get there.
+			_ensure_wall_node()
+			var mid_z: float = (_PASS_PLAYER_POS.z + _PASS_PUPPET_POS.z) * 0.5
+			_wall_node.show_wall(Vector3(0.0, 0.0, mid_z), _PASS_WALL_SIZE)
+
+		STEP_RECEIVE:
+			_setup_passing_drill(false)
+			_receive_wave = 0
+			_receive_catches = 0
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _PREFIRE_DELAY
+			_update_receive_objective()
 
 
 func _complete_step() -> void:
@@ -536,15 +688,23 @@ func _complete_step() -> void:
 	_hud.flash_complete()
 	# Drop any corrective prompt so it doesn't linger over the completion flash.
 	_hud.clear_alert()
+	_elev_alert_shown = false
 	# Tear the puppet down after any step that used it so it doesn't linger
-	# into a step that doesn't need it (e.g. body-check → elevation in the
-	# advanced flow).
-	var step_id: int = _current_step_id()
-	if step_id == STEP_BODY_CHECK or step_id == STEP_STICKCHECK or step_id == STEP_STICK_LIFT:
+	# into a step that doesn't need it.
+	if _step_uses_puppet(_current_step_id()):
 		_free_puppet()
-	# Shooting drills tear down their targets / stationary goalie on completion
-	# (the final Finish step has no _begin_step after it to do the cleanup).
+	# Drill modules tear down their targets / walls / stationary goalie on
+	# completion (the final steps have no _begin_step after them to do the
+	# cleanup).
 	_teardown_shooting()
+	_teardown_passing()
+
+
+func _step_uses_puppet(step_id: int) -> bool:
+	return step_id == STEP_BODY_CHECK or step_id == STEP_STICKCHECK \
+		or step_id == STEP_STICK_LIFT or step_id == STEP_QUICK_PASS \
+		or step_id == STEP_TOUCH_PASS or step_id == STEP_SAUCER_PASS \
+		or step_id == STEP_RECEIVE
 
 
 func _advance_step() -> void:
@@ -561,9 +721,10 @@ func _advance_step() -> void:
 
 func _on_skip() -> void:
 	var step_id: int = _current_step_id()
-	if step_id == STEP_SHOT_BLOCK:
+	if step_id == STEP_SHOT_BLOCK or step_id == STEP_DEFLECT \
+			or step_id == STEP_BLADE_LIFT or step_id == STEP_RECEIVE:
 		_place_puck(Vector3(100.0, _ICE_Y, 100.0))  # clear the in-flight puck
-	if step_id == STEP_STICKCHECK or step_id == STEP_BODY_CHECK or step_id == STEP_STICK_LIFT:
+	if _step_uses_puppet(step_id):
 		_free_puppet()
 	_complete_step()
 
@@ -588,14 +749,6 @@ func _process(delta: float) -> void:
 	if _hint_timer >= TutorialHUD._HINT_DELAY:
 		_hud.show_hint()
 
-	# Puck re-stage after a failed shot attempt
-	if _restage_timer >= 0.0:
-		_restage_timer -= delta
-		if _restage_timer <= 0.0:
-			_restage_timer = -1.0
-			_local_controller.teleport_to(Vector3(0.0, 1.0, 5.0))
-			_place_puck(Vector3(0.0, _ICE_Y, 3.5))
-
 	# Prefire delay — dispatches to the per-step fire helper once the
 	# read-the-text pause elapses. Steps schedule this in _begin_step by
 	# setting _prefire_timer; we map the active step id back to the right
@@ -606,48 +759,48 @@ func _process(delta: float) -> void:
 			_prefire_timer = -1.0
 			match _current_step_id():
 				STEP_SHOT_BLOCK:
-					_fire_puck_for_shot_block()
+					_fire_puck_at_player(_feed_origin(), _SHOT_BLOCK_PUCK_SPEED)
+				STEP_DEFLECT:
+					_fire_puck_at_player(_feed_origin(), _DEFLECT_FEED_SPEED)
+				STEP_BLADE_LIFT:
+					_fire_lob_at_player(_feed_origin())
+				STEP_RECEIVE:
+					_fire_receive_feed()
 				STEP_ONE_TIMER:
 					_fire_puck_cross_ice()
 
-	# Shot-on-net watch for basics QUICK/WRIST/SLAP. Player has released a
-	# matching shot type; we're waiting for the puck to reach the empty net.
-	# Team 0 attacks toward -Z, so "in the net" = puck.z past the negative
-	# goal line and within ±_ON_NET_HALF_WIDTH of x=0.
-	if _watch_for_on_net:
-		_shot_watch_timer -= delta
-		var p: Vector3 = _puck.get_puck_position()
-		if p.z < -GameRules.GOAL_LINE_Z and absf(p.x) < _ON_NET_HALF_WIDTH:
-			_watch_for_on_net = false
-			# Tidy: keep the puck from bouncing around in the net during the
-			# completion flash before the next step takes ownership of placement.
-			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
-			_complete_step()
-			return
-		if _shot_watch_timer <= 0.0:
-			_watch_for_on_net = false
-			_restage_timer = _REATTEMPT_DELAY
-
-	# Track WRISTER_AIM (state 2) entry for quick vs wrist shot distinction
+	# Track WRISTER_AIM entry (quick vs wrist shot distinction) and the peak
+	# predicted release power while aiming (wrist-drill and touch-pass gates).
 	var shot_state: int = _local_controller.get_shot_state()
-	if shot_state == 2:
+	if shot_state == SkaterStateMachine.State.WRISTER_AIM:
 		if _wrister_aim_start < 0.0:
 			_wrister_aim_start = Time.get_ticks_msec() / 1000.0
+		_wrist_peak_charge = maxf(_wrist_peak_charge, _skater.shot_charge)
 	else:
 		if _wrister_aim_start >= 0.0:
 			_wrister_aim_start = -1.0
+
+	# Loft corrective prompt — tracks the loft mode live on every step that
+	# expects a specific level (shot waves, deflects, the saucer pass).
+	_update_elevation_prompt()
 
 	# Shooting module: a self-contained watch/restage loop plus the targets
 	# drill's final scroll-down-to-go-flat beat. These steps don't use the
 	# match below, so handle them here and return.
 	if _shooting_active:
-		if shot_state == 2:
-			_wrist_peak_charge = maxf(_wrist_peak_charge, _skater.shot_charge)
 		_shooting_tick(delta)
-		_update_elevation_prompt()
-		if _current_step_id() == STEP_SHOOT_TARGETS and _targets_phase == 2 \
+		if _current_step_id() == STEP_SHOOT_TARGETS and _targets_phase == 3 \
 				and _skater.elevation_level == 0:
 			_complete_step()
+		return
+
+	# Passing module: pass drills watch the attempt in flight; the receiving
+	# drill watches for catches and re-fires missed feeds.
+	if _passing_active:
+		if _current_step_id() == STEP_RECEIVE:
+			_receive_tick()
+		else:
+			_passing_tick(delta)
 		return
 
 	match _current_step_id():
@@ -669,8 +822,22 @@ func _process(delta: float) -> void:
 			else:
 				_step_timer = 0.0
 
+		STEP_STAMINA:
+			# Two beats: gas out (the exhaustion lockout latches), then recover
+			# (the lockout releases once the pool refills past half).
+			if not _stamina_exhaust_seen:
+				if _local_controller.is_sprint_exhausted():
+					_stamina_exhaust_seen = true
+					_set_live_copy(
+						"Stamina",
+						"You're gassed — sprint is locked out while the ring flashes red. Keep skating: it unlocks once stamina refills past half.",
+						"Plain skating is free — stamina only drains while you sprint.")
+			else:
+				if not _local_controller.is_sprint_exhausted():
+					_complete_step()
+
 		STEP_BRAKE:
-			# is_braced is true whenever Space is held, with or without a direction
+			# is_braced is true whenever the brake is held, with or without a direction
 			if _skater.is_braced:
 				_step_timer += delta
 				if _step_timer >= _BRAKE_HOLD:
@@ -678,15 +845,18 @@ func _process(delta: float) -> void:
 			else:
 				_step_timer = 0.0
 
-		STEP_BLADE_LIFT:
-			# blade_up is the voluntary Q raise (gated off while carrying). Hold
-			# it briefly so a stray tap doesn't auto-complete.
-			if _skater.blade_up:
-				_step_timer += delta
-				if _step_timer >= _BLADE_LIFT_HOLD:
-					_complete_step()
-			else:
-				_step_timer = 0.0
+		STEP_STICKHANDLE:
+			_stickhandle_tick()
+
+		STEP_DEFLECT, STEP_BLADE_LIFT:
+			_feed_watch_tick()
+
+		STEP_DROP_PUCK:
+			# Complete once the dropped puck is gathered back up. The nudge sets
+			# a short pickup cooldown on the dropper, so the re-collect is a real
+			# chase onto the loose puck, not an instant re-attach.
+			if _drop_seen and _puck.carrier == _skater:
+				_complete_step()
 
 		STEP_STICK_LIFT:
 			# If the player knocked the puck loose without a lift (a stray poke),
@@ -699,18 +869,12 @@ func _process(delta: float) -> void:
 				_puck.set_carrier(_puppet_record.skater)
 
 		STEP_SHOT_BLOCK:
-			# Complete when player holds the block stance for long enough
-			if _local_controller.get_shot_state() == 6:  # SHOT_BLOCKING
-				_step_timer += delta
-				if _step_timer >= _SHOT_BLOCK_HOLD:
-					_complete_step()
-			else:
-				_step_timer = 0.0
 			# Re-fire if the puck passed the player, came to rest before
 			# reaching them (deflected into the boards), or got blocked into
 			# a corner. Stash + schedule via _prefire_timer so the standard
 			# 1s between-attempts beat applies and the timer's own gate
-			# stops this branch retriggering during the wait.
+			# stops this branch retriggering during the wait. The block itself
+			# completes via the puck_body_blocked handler.
 			if _prefire_timer < 0.0 and _puck.carrier == null:
 				var puck_z: float = _puck.get_puck_position().z
 				var puck_v: float = _puck.get_puck_velocity().length()
@@ -733,7 +897,7 @@ func _process(delta: float) -> void:
 			if not _offside_ghost_seen:
 				if _skater.is_ghost:
 					_offside_ghost_seen = true
-					_hud.set_step(_step_index, _step_ids.size(),
+					_set_live_copy(
 						"Offsides",
 						"Now you're a ghost — passes go right through you. Skate back out past the blue line to get back in the play.",
 						"Skate toward your own end and cross the blue line.")
@@ -742,52 +906,78 @@ func _process(delta: float) -> void:
 					_complete_step()
 
 
-# ── Shot signal handler ───────────────────────────────────────────────────────
+# ── Stick Basics helpers ──────────────────────────────────────────────────────
 
-func _on_shot_released(dir: Vector3, _power: float, is_slapper: bool) -> void:
-	# Two-stage completion: first match the shot TYPE the step is teaching,
-	# then (for basics steps) wait for the puck to actually reach the empty
-	# net. Wrong type → restage immediately so the player can try again.
-	var type_correct := false
-	match _current_step_id():
-		STEP_QUICK_SHOT:
-			# The quick shot (E) fires straight from carry without entering
-			# WRISTER_AIM, so a never-aimed non-slapper release is the quick shot.
-			if not is_slapper and _wrister_aim_start < 0.0:
-				type_correct = true
-		STEP_WRIST_SHOT:
-			# The wrist shot goes through WRISTER_AIM (LMB), so it has an aim start.
-			if not is_slapper and _wrister_aim_start >= 0.0:
-				type_correct = true
-		STEP_SLAPSHOT:
-			if is_slapper:
-				type_correct = true
-		STEP_ELEVATION:
-			# Any loft counts. The lowest legit lofted release (LOW at full
-			# slapper power) has a normalized y of ~0.065; flat shots are 0.
-			if dir.y > 0.05:
-				type_correct = true
-	if not type_correct:
-		_restage_timer = _REATTEMPT_DELAY
+# Counts forehand↔backhand crossings while the player carries the puck. The
+# blade's side is its X in the skater's local frame, with hysteresis so jitter
+# around centre doesn't count. Rendered-frame sampling is plenty — a human
+# sweep takes many frames to cross the body.
+func _stickhandle_tick() -> void:
+	if _puck.carrier != _skater:
 		return
-	if _requires_shot_on_net():
-		# Basics teaches shooting on an empty net — pass criterion is the
-		# puck reaching the goal. _process watches puck position.
-		_watch_for_on_net = true
-		_shot_watch_timer = _SHOT_WATCH_DURATION
-	else:
-		_complete_step()
+	var blade_world: Vector3 = _skater.upper_body_to_global(_skater.get_blade_position())
+	var blade_local: Vector3 = _skater.global_transform.affine_inverse() * blade_world
+	if absf(blade_local.x) < _STICKHANDLE_SIDE_X:
+		return
+	var side: int = 1 if blade_local.x > 0.0 else -1
+	if _stickhandle_side != 0 and side != _stickhandle_side:
+		_stickhandle_crossings += 1
+		_update_stickhandle_objective()
+		if _stickhandle_crossings >= _STICKHANDLE_CROSSINGS:
+			_stickhandle_side = side
+			_complete_step()
+			return
+	_stickhandle_side = side
 
 
-# Whether the active step requires a shot-on-net to complete, on top of
-# matching the correct shot type. Basics steps run with no goalie spawned
-# (see TutorialRegistry.wants_goalies), so we ask the player to actually
-# put the puck in the net. Advanced's elevation step has a goalie present
-# and is about the LIFT mechanic — type match alone completes that one.
-func _requires_shot_on_net() -> bool:
-	var sid: int = _current_step_id()
-	return sid == STEP_QUICK_SHOT or sid == STEP_WRIST_SHOT or sid == STEP_SLAPSHOT
+func _update_stickhandle_objective() -> void:
+	_hud.set_objective("Crossings — %d / %d" % [_stickhandle_crossings, _STICKHANDLE_CROSSINGS])
 
+
+# Where feeds are fired from for the at-player steps (deflect, blade lift,
+# shot block): straight up-ice from the player's staged spot.
+func _feed_origin() -> Vector3:
+	return Vector3(0.0, _ICE_Y, _skater.global_position.z - _FEED_DISTANCE)
+
+
+# Watch loop for the deflect / blade-lift feeds: re-fire when the feed got past
+# the player or died, and hand back a puck the player caught by mistake (the
+# corrective moment — these steps are about NOT receiving).
+func _feed_watch_tick() -> void:
+	if _puck.carrier == _skater:
+		# Caught it instead of deflecting. Take it back, explain, re-feed.
+		if _current_step_id() == STEP_DEFLECT:
+			_hud.set_alert(_fmt("You caught that one — hold {stick_lift} before it arrives to deflect instead."))
+		else:
+			_hud.set_alert(_fmt("It got under your blade. Keep loft on HIGH and {stick_lift} held — meet the lob in the air."))
+		_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+		_prefire_timer = _REATTEMPT_DELAY
+		return
+	if _prefire_timer < 0.0 and _puck.carrier == null:
+		var puck_z: float = _puck.get_puck_position().z
+		var puck_v: float = _puck.get_puck_velocity().length()
+		if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _REATTEMPT_DELAY
+
+
+# Completion handler for the deflect / blade-lift steps: the puck-touch signal
+# fires on any blade redirect; the gates pick out the deliberate gesture each
+# step teaches. (Natural deflects can't fire here — the feeds are far below
+# the natural-deflect threshold, so an un-held blade would receive instead.)
+func _on_feed_touched(toucher: Skater) -> void:
+	if toucher != _skater:
+		return
+	match _current_step_id():
+		STEP_DEFLECT:
+			if _skater.deflect_intent:
+				_complete_step()
+		STEP_BLADE_LIFT:
+			if _skater.blade_up:
+				_complete_step()
+
+
+# ── One-timer helpers ─────────────────────────────────────────────────────────
 
 # Deferred restage for STEP_ONE_TIMER when the player picks up the puck and
 # shoots normally. Waits two physics frames so the in-progress release-velocity
@@ -833,16 +1023,12 @@ func _fire_puck_cross_ice() -> void:
 	_one_timer_armed = true
 
 
-# Fires the puck from the offensive zone toward the player's CURRENT position
-# for the shot-block step. Player starts at z=5 (own half) and the puck comes
-# from z=-8; if the player has drifted off the center axis (or wandered out
-# of the lane between re-fires) the shot used to fly past at x=0 and miss
-# them entirely. Aiming at the live position guarantees the puck heads
-# straight at them every fire.
-func _fire_puck_for_shot_block() -> void:
+# Fires the puck from `from` toward the player's CURRENT position (shot block,
+# deflect feed). Aiming at the live position guarantees the puck heads straight
+# at them every fire, even if they've drifted off the staged spot.
+func _fire_puck_at_player(from: Vector3, speed: float) -> void:
 	if _puck.carrier != null:
 		_puck.drop()
-	var from := Vector3(0.0, _ICE_Y, -8.0)
 	_puck.set_puck_position(from)
 	var to: Vector3 = _skater.global_position
 	var dir := Vector3(to.x - from.x, 0.0, to.z - from.z)
@@ -851,20 +1037,38 @@ func _fire_puck_for_shot_block() -> void:
 	dir = dir.normalized()
 	# Tiny Y so velocity survives Jolt's first integration step (same trick as
 	# _fire_puck_cross_ice — without it the puck can settle inert on tick 0).
-	_puck.apply_release_velocity(dir * _SHOT_BLOCK_PUCK_SPEED + Vector3(0.0, 0.001, 0.0))
+	_puck.apply_release_velocity(dir * speed + Vector3(0.0, 0.001, 0.0))
 
 
-func _ensure_puppet(position: Vector3) -> void:
+# Fires an airborne lob at the player for the blade-lift step: flat pace toward
+# their live position plus a fixed vertical launch, arriving around raised-blade
+# height (~0.8 m) at the staged distance.
+func _fire_lob_at_player(from: Vector3) -> void:
+	if _puck.carrier != null:
+		_puck.drop()
+	_puck.set_puck_position(from)
+	var to: Vector3 = _skater.global_position
+	var dir := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	if dir.length() < 0.01:
+		dir = Vector3.FORWARD * -1.0
+	dir = dir.normalized()
+	_puck.apply_release_velocity(dir * _LOB_FEED_SPEED_XZ + Vector3(0.0, _LOB_FEED_VY, 0.0))
+
+
+func _ensure_puppet(position: Vector3, team_id: int = 1) -> void:
+	if _puppet_record != null and _puppet_team != team_id:
+		_free_puppet()
 	if _puppet_record == null or not is_instance_valid(_puppet_record.skater):
-		_puppet_record = GameManager.spawn_tutorial_bot(position, 0)
+		_puppet_record = GameManager.spawn_tutorial_bot(position, 0, team_id)
+		_puppet_team = team_id
 		if _puppet_record == null:
 			return
 	else:
 		_puppet_record.skater.global_position = position
 	# Face toward the player so the puppet reads as engaged with the learner.
-	# Facing is XZ in world space; team-1 bots default to (0, 1) which faces
-	# +Z, which is wrong when the player is off-axis (e.g. body-check step
-	# spawns the puppet at +X with the player at -X).
+	# Facing is XZ in world space; bots default to a fixed facing, which is
+	# wrong when the player is off-axis (e.g. body-check step spawns the
+	# puppet at +X with the player at -X).
 	var to_player := Vector2(
 			_skater.global_position.x - _puppet_record.skater.global_position.x,
 			_skater.global_position.z - _puppet_record.skater.global_position.z)
@@ -893,11 +1097,6 @@ func _disconnect_all_signals() -> void:
 	if _local_controller == null:
 		return
 
-	if _on_release_callable.is_valid():
-		if _local_controller.puck_release_requested.is_connected(_on_release_callable):
-			_local_controller.puck_release_requested.disconnect(_on_release_callable)
-		_on_release_callable = Callable()
-
 	if _on_one_timer_callable.is_valid():
 		if _local_controller.one_timer_release_requested.is_connected(_on_one_timer_callable):
 			_local_controller.one_timer_release_requested.disconnect(_on_one_timer_callable)
@@ -923,10 +1122,30 @@ func _disconnect_all_signals() -> void:
 			_puck.puck_stripped.disconnect(_on_stick_lift_callable)
 		_on_stick_lift_callable = Callable()
 
+	if _on_puck_touch_callable.is_valid() and _puck != null:
+		if _puck.puck_touched_loose.is_connected(_on_puck_touch_callable):
+			_puck.puck_touched_loose.disconnect(_on_puck_touch_callable)
+		_on_puck_touch_callable = Callable()
+
+	if _on_block_callable.is_valid() and _puck != null:
+		if _puck.puck_body_blocked.is_connected(_on_block_callable):
+			_puck.puck_body_blocked.disconnect(_on_block_callable)
+		_on_block_callable = Callable()
+
+	if _on_nudge_callable.is_valid():
+		if _local_controller.nudge_requested.is_connected(_on_nudge_callable):
+			_local_controller.nudge_requested.disconnect(_on_nudge_callable)
+		_on_nudge_callable = Callable()
+
 	if _on_shooting_shot_callable.is_valid():
 		if _local_controller.puck_release_requested.is_connected(_on_shooting_shot_callable):
 			_local_controller.puck_release_requested.disconnect(_on_shooting_shot_callable)
 		_on_shooting_shot_callable = Callable()
+
+	if _on_passing_shot_callable.is_valid():
+		if _local_controller.puck_release_requested.is_connected(_on_passing_shot_callable):
+			_local_controller.puck_release_requested.disconnect(_on_passing_shot_callable)
+		_on_passing_shot_callable = Callable()
 
 
 # ── Shooting module helpers ───────────────────────────────────────────────────
@@ -964,7 +1183,7 @@ const _WRIST_CHARGE_QUALIFY: float = 0.2
 
 # Records whether the just-released shot satisfies the active drill's required
 # type. Plain-goal drills (wrist, slap, finish) complete only when this is true;
-# the target/goalie drills clear via the target test, so they never complete on
+# the target drill clears via the target test, so it never completes on
 # a plain goal (qualifies stays false).
 func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 	match _current_step_id():
@@ -979,11 +1198,10 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 			_last_shot_qualifies = false
 	_wrist_peak_charge = 0.0
 	# Arm the in-flight watch and lock the puck from re-pickup until it resolves
-	# and restages. Without the lock, a shot that rebounds off the goalie (or is
-	# fired wide) slides back and the player just skates onto it / mashes the
-	# button to re-collect — "keep clicking and you always have the puck". The
-	# cooldown blocks the loose-puck proximity pickup (see PuckController); it's
-	# cleared in _give_puck_to_player / _teardown_shooting.
+	# and restages — so mashing the shoot button can't just re-collect a rebound
+	# and keep possession. The cooldown blocks the loose-puck proximity pickup
+	# (see PuckController); it's cleared in _give_puck_to_player /
+	# _teardown_shooting.
 	_shot_live          = true
 	_shot_start_z       = _skater.global_position.z
 	_shot_max_progress  = 0.0
@@ -993,11 +1211,9 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 	_puck.set_skater_cooldown(_skater, _PICKUP_LOCK_S)
 
 
-# Loft level the active drill expects, or _ELEV_ANY when it doesn't care
-# (the player picks per shot — e.g. the goalie drill, where the right answer
-# depends on which target they're going for). Drills that assume a flat shot
-# want level 0; the high-targets wave wants full loft (2). Drives a corrective
-# prompt (never an auto-fix — managing the loft mode is part of the lesson).
+# Loft level the active drill/step expects, or _ELEV_ANY when it doesn't care.
+# Drives a corrective prompt (never an auto-fix — managing the loft mode is
+# part of the lesson).
 const _ELEV_ANY: int = -1
 
 func _expected_elevation() -> int:
@@ -1005,26 +1221,36 @@ func _expected_elevation() -> int:
 		STEP_SHOOT_WRIST, STEP_SHOOT_SLAP:
 			return ShotMechanics.ELEVATION_FLAT
 		STEP_SHOOT_TARGETS:
-			# High wave needs full loft; the low wave and the scroll-down beat
-			# need it flat.
-			return ShotMechanics.ELEVATION_HIGH if _targets_phase == 1 \
-					else ShotMechanics.ELEVATION_FLAT
+			match _targets_phase:
+				1: return ShotMechanics.ELEVATION_LOW
+				2: return ShotMechanics.ELEVATION_HIGH
+				_: return ShotMechanics.ELEVATION_FLAT
+		STEP_DEFLECT, STEP_SAUCER_PASS:
+			return ShotMechanics.ELEVATION_LOW
+		STEP_BLADE_LIFT:
+			return ShotMechanics.ELEVATION_HIGH
 	return _ELEV_ANY
 
 
-# Shows / clears the amber elevation prompt for the active drill. Called every
-# frame from the shooting branch so it tracks the loft mode live.
+# Shows / clears the amber loft prompt. Called every frame so it tracks the
+# loft mode live; only ever clears an alert it set itself, so other correctives
+# (the touch-pass "too hot" prompt) aren't stomped.
 func _update_elevation_prompt() -> void:
 	var expected: int = _expected_elevation()
 	if expected == _ELEV_ANY:
-		_hud.clear_alert()
+		if _elev_alert_shown:
+			_hud.clear_alert()
+			_elev_alert_shown = false
 		return
 	if _skater.elevation_level < expected:
-		_hud.set_alert("Your shot is too flat — scroll the wheel up for more loft.")
+		_hud.set_alert(_fmt("Your loft is too low — {elevation_up} for more."))
+		_elev_alert_shown = true
 	elif _skater.elevation_level > expected:
-		_hud.set_alert("Your shot is set to lift — scroll the wheel down to go flat.")
-	else:
+		_hud.set_alert(_fmt("Your loft is too high — {elevation_down} to bring it down."))
+		_elev_alert_shown = true
+	elif _elev_alert_shown:
 		_hud.clear_alert()
+		_elev_alert_shown = false
 
 
 # Per-frame watch/restage loop for shooting drills. Waits out the re-stage beat,
@@ -1142,42 +1368,54 @@ func _begin_restage() -> void:
 func _on_targets_wave_cleared() -> bool:
 	match _current_step_id():
 		STEP_SHOOT_TARGETS:
-			if _targets_phase == 0:
-				_show_targets_wave(1)
+			if _targets_phase == 0 or _targets_phase == 1:
+				_show_targets_wave(_targets_phase + 1)
 				return false
 			# High wave cleared → the toggle-off beat. Completion happens in
 			# _process once the player scrolls elevation back off.
-			_targets_phase = 2
+			_targets_phase = 3
 			_targets = []
 			if _target_node != null and is_instance_valid(_target_node):
 				_target_node.clear()
-			_hud.set_step(_step_index, _step_ids.size(),
+			_set_live_copy(
 				"Pick Your Spot",
-				"Nice. Your loft is still on full, though — scroll the wheel DOWN twice to switch back to a flat shot, or your next one sails high too.",
-				"Loft is a mode you manage: scroll up for more, down for less.")
-			_hud.set_objective("Scroll down until the loft is off.")
+				"Nice. Your loft is still on full, though — {elevation_down} twice to flatten back out, or your next shot flies high too.",
+				"Loft is a mode you manage: up for more, down for less.")
+			_hud.set_objective("Take the loft back off.")
 			return false
-		STEP_SHOOT_GOALIE:
-			return true
 	return true
 
 
 # Sets the copy + target set for one wave of the Pick Your Spot drill.
+# Wave 0: flat shots at the low holes. Wave 1: same holes, but a board in the
+# lane forces the LOW saucer. Wave 2: full loft at the top corners.
 func _show_targets_wave(phase: int) -> void:
 	_targets_phase = phase
 	_target_noun = "Targets hit"
-	if phase == 0:
-		_hud.set_step(_step_index, _step_ids.size(),
-			"Pick Your Spot",
-			"Three targets are lit across the net. Drag each shot toward one to knock it out — any order.",
-			"Aim is the direction you drag, not where the cursor sits.")
-		_show_target_set(_LOW_TARGETS)
-	else:
-		_hud.set_step(_step_index, _step_ids.size(),
-			"Pick Your Spot",
-			"Now two up high. Scroll the wheel UP TWICE for full loft — it's a mode, it stays on. Put both in the top corners.",
-			"Loft buys the height, pace picks where the arc peaks — from here an easy shot crests right at the bar.")
-		_show_target_set(_HIGH_TARGETS)
+	match phase:
+		0:
+			_set_live_copy(
+				"Pick Your Spot",
+				"A goalie's in the net — but he's frozen stiff. Three targets mark the holes he leaves low. Stay flat and knock each one out — any order.",
+				"Aim is the direction you drag, not where the cursor sits.")
+			_clear_wall()
+			_show_target_set(_LOW_TARGETS)
+		1:
+			_set_live_copy(
+				"Pick Your Spot",
+				"Same low holes — but now a board's in the lane. Add one notch of loft ({elevation_up}): the saucer flips over the board and comes back down onto them.",
+				"LOW loft clears sticks and pads mid-flight, then lands and slides. It's a mode — it stays on until you change it.")
+			_ensure_wall_node()
+			_wall_node.show_wall(
+					Vector3(0.0, 0.0, _slot_z() - _TARGET_WALL_AHEAD), _TARGET_WALL_SIZE)
+			_show_target_set(_LOW_TARGETS)
+		2:
+			_set_live_copy(
+				"Pick Your Spot",
+				"Up top. One more notch ({elevation_up}) for full loft, and put both away in the top corners over his shoulders.",
+				"Loft buys the height, pace picks where the arc peaks — from here an easy shot crests right at the bar.")
+			_clear_wall()
+			_show_target_set(_HIGH_TARGETS)
 
 
 # Spawns a fresh set of ring targets and resets the hit bookkeeping.
@@ -1203,6 +1441,17 @@ func _ensure_target_node() -> void:
 		add_child(_target_node)
 
 
+func _ensure_wall_node() -> void:
+	if _wall_node == null or not is_instance_valid(_wall_node):
+		_wall_node = TutorialWall.new()
+		add_child(_wall_node)
+
+
+func _clear_wall() -> void:
+	if _wall_node != null and is_instance_valid(_wall_node):
+		_wall_node.clear()
+
+
 # Puts the puck back on the player's stick for another attempt.
 func _give_puck_to_player() -> void:
 	if _puck.carrier != null:
@@ -1211,21 +1460,22 @@ func _give_puck_to_player() -> void:
 	# carries and shoots normally.
 	_puck.remove_skater_cooldown(_skater)
 	_shot_live = false
+	_pass_live = false
 	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y, _skater.global_position.z))
 	_puck.linear_velocity = Vector3.ZERO
 	_puck.set_carrier(_skater)
 	# set_carrier only pins the puck to the blade; it does NOT tell the controller
 	# it now has the puck. Without this the controller's has_puck stays false, so
 	# _release_wrister / _release_slapper short-circuit and puck_release_requested
-	# never fires — the player physically can't shoot. The Basics shot steps avoid
-	# this by dropping the puck on the ice for a natural pickup (which routes
-	# through on_puck_picked_up_network); the shooting drill hands it over directly,
-	# so we replicate that notification here.
+	# never fires — the player physically can't shoot. The one-timer step avoids
+	# this by sliding the puck in for a natural pickup (which routes through
+	# on_puck_picked_up_network); the drills hand it over directly, so we
+	# replicate that notification here.
 	_local_controller.on_puck_picked_up_network()
 
 
-# Clears all shooting-drill state: targets, the stationary goalie, the watch
-# loop. Safe to call on any step (no-op when no shooting drill is active).
+# Clears all shooting-drill state: targets, the wall, the tutorial goalie, the
+# watch loop. Safe to call on any step (no-op when no shooting drill is active).
 func _teardown_shooting() -> void:
 	# Release the in-flight pickup lock if a shot was mid-resolution when the
 	# drill tore down (skip / reset / step advance).
@@ -1240,4 +1490,158 @@ func _teardown_shooting() -> void:
 	_targets_phase       = 0
 	if _target_node != null and is_instance_valid(_target_node):
 		_target_node.clear()
+	_clear_wall()
 	GameManager.despawn_tutorial_goalie()
+
+
+# ── Passing module helpers ────────────────────────────────────────────────────
+
+# Shared setup for the passing drills: player and teammate staged facing each
+# other down the -Z lane. Pass drills (give_puck) start with the puck on the
+# player's stick and listen for releases; the receiving drill starts empty-
+# handed and fires feeds from the teammate instead.
+func _setup_passing_drill(give_puck: bool) -> void:
+	_passing_active     = true
+	_pass_live          = false
+	_pass_qualifies     = false
+	_pass_hot           = false
+	_pass_restage_timer = -1.0
+	_wrist_peak_charge  = 0.0
+	_local_controller.teleport_to(_PASS_PLAYER_POS, Vector2(0.0, -1.0))
+	_ensure_puppet(_PASS_PUPPET_POS, 0)
+	if give_puck:
+		_give_puck_to_player()
+		_on_passing_shot_callable = func(d: Vector3, p: float, s: bool) -> void:
+			_on_passing_shot(d, p, s)
+		_local_controller.puck_release_requested.connect(_on_passing_shot_callable)
+	else:
+		# Receiving: make sure no stale pickup lock blocks the catch.
+		_puck.remove_skater_cooldown(_skater)
+
+
+# Records whether the just-released pass matches the drill's required type and
+# arms the in-flight watch. Same pickup lock as the shooting drills, so the
+# passer can't chase their own pass down and re-collect it.
+func _on_passing_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
+	var was_aimed: bool = _wrister_aim_start >= 0.0
+	match _current_step_id():
+		STEP_QUICK_PASS, STEP_SAUCER_PASS:
+			# The quick pass fires straight from carry without entering
+			# WRISTER_AIM, so a never-aimed non-slapper release qualifies.
+			_pass_qualifies = (not is_slapper) and not was_aimed
+			_pass_hot = false
+		STEP_TOUCH_PASS:
+			_pass_qualifies = (not is_slapper) and was_aimed
+			_pass_hot = _wrist_peak_charge > _TOUCH_PASS_MAX_CHARGE
+		_:
+			_pass_qualifies = false
+			_pass_hot = false
+	_wrist_peak_charge = 0.0
+	_pass_live       = true
+	_pass_stall_time = 0.0
+	_pass_air_time   = 0.0
+	_puck.set_skater_cooldown(_skater, _PICKUP_LOCK_S)
+
+
+# Watch loop for the pass drills. Success = the teammate ends up carrying a
+# qualifying pass; anything else (dead puck, wrong type, too hot) restages
+# after the standard beat.
+func _passing_tick(delta: float) -> void:
+	if _pass_restage_timer >= 0.0:
+		_pass_restage_timer -= delta
+		if _pass_restage_timer <= 0.0:
+			_pass_restage_timer = -1.0
+			_give_puck_to_player()
+		return
+	if not _pass_live:
+		return
+	if _puppet_record != null and is_instance_valid(_puppet_record.skater) \
+			and _puck.carrier == _puppet_record.skater:
+		_pass_live = false
+		if _pass_qualifies and not _pass_hot:
+			_complete_step()  # pass stays on the teammate's blade through the flash
+			return
+		if _pass_hot:
+			_hud.set_alert("Too hot — sweep slower for a touch pass.")
+		_pass_restage_timer = _REATTEMPT_DELAY
+		return
+	_pass_air_time += delta
+	if _pass_air_time < _SHOT_START_GRACE:
+		return
+	# A hot pass that bounced off the teammate's blade, a saucer that clanked
+	# off the board, or a pass that slid wide: retire it once it stops making
+	# meaningful progress (or after the safety cap).
+	if _puck.carrier == null and _puck.get_puck_velocity().length() <= _SHOT_REST_SPEED:
+		_pass_stall_time += delta
+	else:
+		_pass_stall_time = 0.0
+	if _pass_stall_time >= _SHOT_STALL_GRACE or _pass_air_time >= 2.0 * _SHOT_MAX_TIME:
+		_pass_live = false
+		if _current_step_id() == STEP_TOUCH_PASS and _pass_hot:
+			_hud.set_alert("Too hot — it bounced off. Sweep slower.")
+		_pass_restage_timer = _REATTEMPT_DELAY
+
+
+# Watch loop for the receiving drill: credit catches, advance to the hot wave,
+# re-fire feeds that got past the player or died.
+func _receive_tick() -> void:
+	if _puck.carrier == _skater:
+		_receive_catches += 1
+		_update_receive_objective()
+		_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+		if _receive_catches >= _RECEIVE_CATCHES_PER_WAVE:
+			if _receive_wave == 0:
+				_receive_wave = 1
+				_receive_catches = 0
+				_set_live_copy(
+					"Receiving",
+					"These are coming in hot. Square your blade to the incoming line — face the pass head-on — or soften it by skating backward as it arrives.",
+					"A hard pass off an angled blade deflects away. Squared up (or giving ground), it sticks.")
+				_update_receive_objective()
+			else:
+				_complete_step()
+				return
+		_prefire_timer = _REATTEMPT_DELAY
+		return
+	if _prefire_timer < 0.0 and _puck.carrier == null:
+		var puck_z: float = _puck.get_puck_position().z
+		var puck_v: float = _puck.get_puck_velocity().length()
+		if puck_z > _skater.global_position.z + 4.0 or puck_v < 0.3:
+			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
+			_prefire_timer = _REATTEMPT_DELAY
+
+
+func _update_receive_objective() -> void:
+	var wave_name: String = "Soft feeds" if _receive_wave == 0 else "Hot feeds"
+	_hud.set_objective("%s — %d / %d" % [wave_name, _receive_catches, _RECEIVE_CATCHES_PER_WAVE])
+
+
+# Fires a feed from the teammate's spot toward the player's live position at
+# the active wave's pace. The feeder is pickup-locked each fire so the puck
+# leaving right past his own blade can't be instantly re-collected.
+func _fire_receive_feed() -> void:
+	var speed: float = _RECEIVE_SPEED_SOFT if _receive_wave == 0 else _RECEIVE_SPEED_HOT
+	var from: Vector3 = _PASS_PUPPET_POS
+	if _puppet_record != null and is_instance_valid(_puppet_record.skater):
+		from = _puppet_record.skater.global_position
+		_puck.set_skater_cooldown(_puppet_record.skater, _PICKUP_LOCK_S)
+	from = Vector3(from.x, _ICE_Y, from.z + 0.8)  # off the blade, toward the player
+	_fire_puck_at_player(from, speed)
+
+
+# Clears all passing-drill state. Safe to call on any step.
+func _teardown_passing() -> void:
+	if _pass_live and is_instance_valid(_skater) and is_instance_valid(_puck):
+		_puck.remove_skater_cooldown(_skater)
+	# Lift the feeder's per-fire pickup lock (receiving drill).
+	if _puppet_record != null and is_instance_valid(_puppet_record.skater) \
+			and is_instance_valid(_puck):
+		_puck.remove_skater_cooldown(_puppet_record.skater)
+	_passing_active     = false
+	_pass_live          = false
+	_pass_qualifies     = false
+	_pass_hot           = false
+	_pass_restage_timer = -1.0
+	_receive_wave       = 0
+	_receive_catches    = 0
+	_clear_wall()

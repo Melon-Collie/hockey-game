@@ -10,65 +10,82 @@ class_name TutorialRegistry
 # registry would otherwise need to preload TutorialManager to read the IDs.
 
 # ── Step identifiers ──────────────────────────────────────────────────────────
-const STEP_SKATE:      int = 0
-const STEP_BRAKE:      int = 1
-const STEP_QUICK_SHOT: int = 2
-const STEP_WRIST_SHOT: int = 3
-const STEP_SLAPSHOT:   int = 4
-const STEP_ONE_TIMER:  int = 5
-const STEP_SHOT_BLOCK: int = 6
-const STEP_STICKCHECK: int = 7
-const STEP_BODY_CHECK: int = 8
-const STEP_ELEVATION:  int = 9
-const STEP_OFFSIDES:   int = 10
-const STEP_SPRINT:     int = 11
-const STEP_BLADE_LIFT: int = 12
-const STEP_STICK_LIFT: int = 13
-# Shooting module — deeper, drill-based shot teaching. Separate IDs from the
-# Basics wrist/slap steps because the behaviour differs (target waves, the
-# loft levels, a stationary goalie), so TutorialManager dispatches them
-# distinctly rather than overloading the Basics steps.
-const STEP_SHOOT_WRIST:   int = 14   # charged wrist shot into the open net
-const STEP_SHOOT_TARGETS: int = 15   # pick-your-spot: low wave, high wave, toggle off
-const STEP_SHOOT_SLAP:    int = 16   # slapshot into the open net
-const STEP_SHOOT_GOALIE:  int = 17   # stationary goalie: top corners + five-hole
-const STEP_SHOOT_FINISH:  int = 18   # free finish on a stationary goalie
+# Movement
+const STEP_SKATE:       int = 0
+const STEP_SPRINT:      int = 1
+const STEP_STAMINA:     int = 2
+const STEP_BRAKE:       int = 3
+# Stick Basics — the cursor-driven blade, the Q gestures (deflect intents at
+# the three loft levels), and the Q-tap drop. Taught before Shooting so loft
+# is already a familiar mode, and before Defense's stick lift (same button).
+const STEP_STICKHANDLE: int = 4
+const STEP_DEFLECT:     int = 5   # LOW-loft tip on a grounded feed
+const STEP_BLADE_LIFT:  int = 6   # HIGH-loft raise — bat an airborne lob down
+const STEP_DROP_PUCK:   int = 7   # Q-tap nudge off the blade (the nutmeg)
+# Shooting — drill-based: target waves, the stationary goalie, the live finish.
+const STEP_SHOOT_WRIST:   int = 8
+const STEP_SHOOT_TARGETS: int = 9    # pick-your-spot: flat, saucer-over-board, high, toggle off
+const STEP_SHOOT_SLAP:    int = 10
+const STEP_ONE_TIMER:     int = 11
+const STEP_SHOOT_FINISH:  int = 12   # free finish on a live Easy goalie
+# Passing — the quick pass, weighted wrister passes, the saucer, and reception.
+const STEP_QUICK_PASS:  int = 13
+const STEP_TOUCH_PASS:  int = 14
+const STEP_SAUCER_PASS: int = 15
+const STEP_RECEIVE:     int = 16
+# Defense
+const STEP_STICKCHECK:  int = 17
+const STEP_BODY_CHECK:  int = 18
+const STEP_STICK_LIFT:  int = 19
+const STEP_SHOT_BLOCK:  int = 20
+# Rules
+const STEP_OFFSIDES:    int = 21
 
 # ── Tutorial identifiers ──────────────────────────────────────────────────────
-const BASICS_ID: String = "basics"
+const MOVEMENT_ID: String = "movement"
+const STICK_ID:    String = "stick_basics"
 const SHOOTING_ID: String = "shooting"
-const ADVANCED_ID: String = "advanced"
+const PASSING_ID:  String = "passing"
+const DEFENSE_ID:  String = "defense"
+const RULES_ID:    String = "rules"
 
-# Display order — also drives the SideMenu submenu row order. Shooting slots
-# between Basics (movement + pickup) and Advanced (defence + rules).
-const ALL_IDS: Array[String] = [BASICS_ID, SHOOTING_ID, ADVANCED_ID]
+# Display order — also drives the SideMenu submenu row order and the
+# "Part N of M" course framing.
+const ALL_IDS: Array[String] = [
+	MOVEMENT_ID, STICK_ID, SHOOTING_ID, PASSING_ID, DEFENSE_ID, RULES_ID]
 
 
 static func get_step_ids(tutorial_id: String) -> Array[int]:
 	match tutorial_id:
-		BASICS_ID:
-			return [STEP_SKATE, STEP_SPRINT, STEP_BRAKE,
-					STEP_QUICK_SHOT, STEP_WRIST_SHOT, STEP_SLAPSHOT]
+		MOVEMENT_ID:
+			return [STEP_SKATE, STEP_SPRINT, STEP_STAMINA, STEP_BRAKE]
+		STICK_ID:
+			return [STEP_STICKHANDLE, STEP_DEFLECT, STEP_BLADE_LIFT, STEP_DROP_PUCK]
 		SHOOTING_ID:
 			return [STEP_SHOOT_WRIST, STEP_SHOOT_TARGETS, STEP_SHOOT_SLAP,
-					STEP_SHOOT_GOALIE, STEP_SHOOT_FINISH]
-		ADVANCED_ID:
-			return [STEP_ONE_TIMER, STEP_ELEVATION, STEP_SHOT_BLOCK,
-					STEP_BLADE_LIFT, STEP_STICK_LIFT, STEP_STICKCHECK,
-					STEP_BODY_CHECK, STEP_OFFSIDES]
+					STEP_ONE_TIMER, STEP_SHOOT_FINISH]
+		PASSING_ID:
+			return [STEP_QUICK_PASS, STEP_TOUCH_PASS, STEP_SAUCER_PASS, STEP_RECEIVE]
+		DEFENSE_ID:
+			return [STEP_STICKCHECK, STEP_BODY_CHECK, STEP_STICK_LIFT, STEP_SHOT_BLOCK]
+		RULES_ID:
+			return [STEP_OFFSIDES]
 	return []
 
 
 static func get_display_name(tutorial_id: String) -> String:
 	match tutorial_id:
-		BASICS_ID: return "Basics"
+		MOVEMENT_ID: return "Movement"
+		STICK_ID: return "Stick Basics"
 		SHOOTING_ID: return "Shooting"
-		ADVANCED_ID: return "Advanced"
+		PASSING_ID: return "Passing"
+		DEFENSE_ID: return "Defense"
+		RULES_ID: return "Rules"
 	return tutorial_id
 
 
-# "Part N of M" framing so the two tutorials read as one course the player is
-# partway through, not two optional extras. N is the 1-based position in
+# "Part N of M" framing so the tutorials read as one course the player is
+# partway through, not optional extras. N is the 1-based position in
 # ALL_IDS; returns "" for an unrecognised id.
 static func get_sequence_label(tutorial_id: String) -> String:
 	var i: int = ALL_IDS.find(tutorial_id)
@@ -78,11 +95,11 @@ static func get_sequence_label(tutorial_id: String) -> String:
 
 
 # Whether the tutorial should have the normal AI goalie PAIR auto-spawned by
-# GameManager. Basics teaches shot mechanics on an empty net; Shooting spawns
-# its own single STATIONARY goalie on demand for the goalie drills (so the
-# early shooting drills stay open-net), so only Advanced wants the live pair.
+# GameManager. Movement/Stick/Passing teach on open ice; Shooting spawns its
+# own single goalie on demand (stationary for the target drill, live Easy for
+# the finish), so only Defense and Rules want the live pair as rink dressing.
 static func wants_goalies(tutorial_id: String) -> bool:
-	return tutorial_id == ADVANCED_ID
+	return tutorial_id == DEFENSE_ID or tutorial_id == RULES_ID
 
 
 static func has(tutorial_id: String) -> bool:

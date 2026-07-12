@@ -444,7 +444,7 @@ func apply_local_identity(p_name: String, p_number: int, p_is_left: bool) -> voi
 	local_identity_changed.emit(p_name, p_number, p_is_left)
 
 
-func start_tutorial(id: String = TutorialRegistry.BASICS_ID) -> void:
+func start_tutorial(id: String = TutorialRegistry.MOVEMENT_ID) -> void:
 	is_tutorial_mode = true
 	tutorial_id = id
 	# Pre-assign team 0, slot 0 so the player always spawns as the home team.

@@ -33,26 +33,27 @@ func test_unknown_id_returns_empty_steps() -> void:
 			"unknown tutorial id should return empty step list")
 
 
-func test_basics_covers_movement_and_shot_types() -> void:
-	# Pin the Basics curriculum so a refactor can't accidentally drop the
-	# core skating/shooting teaching that first-launch players see.
-	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.BASICS_ID)
+func test_movement_covers_the_skating_fundamentals() -> void:
+	# Pin the Movement curriculum so a refactor can't accidentally drop the
+	# core skating teaching that first-launch players see.
+	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.MOVEMENT_ID)
 	assert_has(steps, TutorialRegistry.STEP_SKATE)
 	assert_has(steps, TutorialRegistry.STEP_SPRINT)
+	assert_has(steps, TutorialRegistry.STEP_STAMINA)
 	assert_has(steps, TutorialRegistry.STEP_BRAKE)
-	assert_has(steps, TutorialRegistry.STEP_QUICK_SHOT)
-	assert_has(steps, TutorialRegistry.STEP_WRIST_SHOT)
-	assert_has(steps, TutorialRegistry.STEP_SLAPSHOT)
 
 
-func test_advanced_covers_defense_and_rules() -> void:
-	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.ADVANCED_ID)
-	assert_has(steps, TutorialRegistry.STEP_ONE_TIMER)
+func test_stick_basics_covers_the_q_gestures() -> void:
+	# Stick Basics must run BEFORE Defense in ALL_IDS: the stick-lift step
+	# reuses the deflect button and blade-lift mechanic taught here.
+	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.STICK_ID)
+	assert_has(steps, TutorialRegistry.STEP_STICKHANDLE)
+	assert_has(steps, TutorialRegistry.STEP_DEFLECT)
 	assert_has(steps, TutorialRegistry.STEP_BLADE_LIFT)
-	assert_has(steps, TutorialRegistry.STEP_STICK_LIFT)
-	assert_has(steps, TutorialRegistry.STEP_STICKCHECK)
-	assert_has(steps, TutorialRegistry.STEP_BODY_CHECK)
-	assert_has(steps, TutorialRegistry.STEP_OFFSIDES)
+	assert_has(steps, TutorialRegistry.STEP_DROP_PUCK)
+	assert_true(TutorialRegistry.ALL_IDS.find(TutorialRegistry.STICK_ID)
+			< TutorialRegistry.ALL_IDS.find(TutorialRegistry.DEFENSE_ID),
+			"stick basics must precede defense (stick lift builds on blade lift)")
 
 
 func test_shooting_covers_the_drill_sequence() -> void:
@@ -61,19 +62,39 @@ func test_shooting_covers_the_drill_sequence() -> void:
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_WRIST)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_TARGETS)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_SLAP)
-	assert_has(steps, TutorialRegistry.STEP_SHOOT_GOALIE)
+	assert_has(steps, TutorialRegistry.STEP_ONE_TIMER)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_FINISH)
 
 
-func test_only_advanced_auto_spawns_the_goalie_pair() -> void:
-	# Basics teaches on an empty net; Shooting spawns its own stationary goalie
-	# on demand; only Advanced wants the normal live AI pair auto-spawned.
-	assert_false(TutorialRegistry.wants_goalies(TutorialRegistry.BASICS_ID),
-			"basics should run without goalies")
-	assert_false(TutorialRegistry.wants_goalies(TutorialRegistry.SHOOTING_ID),
-			"shooting manages its own stationary goalie, not the auto pair")
-	assert_true(TutorialRegistry.wants_goalies(TutorialRegistry.ADVANCED_ID),
-			"advanced should spawn goalies")
+func test_passing_covers_pass_types_and_reception() -> void:
+	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.PASSING_ID)
+	assert_has(steps, TutorialRegistry.STEP_QUICK_PASS)
+	assert_has(steps, TutorialRegistry.STEP_TOUCH_PASS)
+	assert_has(steps, TutorialRegistry.STEP_SAUCER_PASS)
+	assert_has(steps, TutorialRegistry.STEP_RECEIVE)
+
+
+func test_defense_covers_checks_and_blocks() -> void:
+	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.DEFENSE_ID)
+	assert_has(steps, TutorialRegistry.STEP_STICKCHECK)
+	assert_has(steps, TutorialRegistry.STEP_BODY_CHECK)
+	assert_has(steps, TutorialRegistry.STEP_STICK_LIFT)
+	assert_has(steps, TutorialRegistry.STEP_SHOT_BLOCK)
+
+
+func test_rules_covers_offsides() -> void:
+	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.RULES_ID)
+	assert_has(steps, TutorialRegistry.STEP_OFFSIDES)
+
+
+func test_only_defense_and_rules_auto_spawn_the_goalie_pair() -> void:
+	# Movement/Stick/Passing teach on open ice; Shooting spawns its own single
+	# goalie on demand; Defense and Rules want the normal live AI pair.
+	for id: String in TutorialRegistry.ALL_IDS:
+		var expect_pair: bool = (id == TutorialRegistry.DEFENSE_ID
+				or id == TutorialRegistry.RULES_ID)
+		assert_eq(TutorialRegistry.wants_goalies(id), expect_pair,
+				"wants_goalies('%s') should be %s" % [id, expect_pair])
 
 
 func test_step_lists_are_disjoint_across_modules() -> void:
