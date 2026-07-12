@@ -135,25 +135,12 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 
 # ── Role-specific scoring ────────────────────────────────────────────────────
 
-# Min over opponents of momentum-aware ETA back to our net. INF
-# when there are no opponents (no recovery threat).
+# Min over opponents of momentum-aware ETA back to our net. Shared race-home
+# primitive (AIRoleHelpers.min_opp_time_home) — also the forecheck safety's
+# pinch read.
 static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
 		opp_caps: Array, our_net: Vector3) -> float:
-	var has_caps: bool = opp_caps.size() == opp_states.size()
-	var best: float = INF
-	for i: int in opp_states.size():
-		var s: SkaterNetworkState = opp_states[i]
-		# Each opponent races home at ITS real top speed (Speed) — a fast opponent
-		# recovers sooner, so SUPPORT correctly reads it as harder to beat back.
-		var ref_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
-		if has_caps:
-			var caps: AISkaterCaps = opp_caps[i]
-			if caps != null:
-				ref_speed = caps.max_speed
-		var t: float = AIActionScoring.time_to_arrive(s.position, our_net, s.velocity, ref_speed)
-		if t < best:
-			best = t
-	return best
+	return AIRoleHelpers.min_opp_time_home(opp_states, opp_caps, our_net)
 
 
 # Foot-race-home exposure in [0, 1]. 0 when I beat every opp back

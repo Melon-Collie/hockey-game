@@ -417,3 +417,24 @@ static func collect_opponents(ctx: RoleContext,
 					if anticipate else s.position)
 			out_states.append(s)
 			ctx.scratch_opp_caps.append(ctx.caps_by_peer.get(pid))
+
+
+# Min over opponents of momentum-aware ETA back to our net — the shared
+# race-home read behind every "am I recoverable?" question (SUPPORT's exposure,
+# the forecheck safety's pinch read). Each opponent races at ITS real top speed
+# (Speed cap); INF when there are no opponents (no recovery threat).
+static func min_opp_time_home(opp_states: Array[SkaterNetworkState],
+		opp_caps: Array, our_net: Vector3) -> float:
+	var has_caps: bool = opp_caps.size() == opp_states.size()
+	var best: float = INF
+	for i: int in opp_states.size():
+		var s: SkaterNetworkState = opp_states[i]
+		var ref_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opp_caps[i]
+			if caps != null:
+				ref_speed = caps.max_speed
+		var t: float = AIActionScoring.time_to_arrive(s.position, our_net, s.velocity, ref_speed)
+		if t < best:
+			best = t
+	return best
