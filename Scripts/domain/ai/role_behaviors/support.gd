@@ -2,6 +2,10 @@ class_name AIRoleSupport
 
 # SUPPORT role behavior — OZONE + TRANS_DO. The off-puck teammate
 # whose job is "be a pass option AND be in a recoverable position."
+# In the OZ that means the THIRD MAN HIGH of the 3v3 F1-F2-1 shape:
+# stationed at the top of the zone (see HIGH_POST_INSET_M), a point
+# outlet who keeps squirting pucks in and is the first man back on a
+# turnover. In transition it trails the carrier (goal-side orbit).
 #
 # Algorithm: argmax over a candidate set of
 #
@@ -37,6 +41,16 @@ class_name AIRoleSupport
 # not a behavioral knob. The carrier itself is excluded by the
 # anti-crowding filter; samples at the rim of the circle remain.
 const SEARCH_RADIUS_M: float = 5.0
+
+# The third man's OZ station: this far inside the attacking blue line. Close
+# enough to the line to hold the zone (a squirting puck is kept in) and to be
+# the first man back the instant possession flips; inside enough to stay
+# comfortably onside and be a real point outlet. The 3v3 F1-F2-1 shape: puck
+# man, net man (FINISHER), third man HIGH. Sampling the third man around the
+# CARRIER instead (the old set) glued him to within SEARCH_RADIUS_M of the
+# play by construction — the "third man pinches" failure: no high candidate
+# ever existed to choose.
+const HIGH_POST_INSET_M: float = 3.0
 
 # Safety-valve constraint. SUPPORT is the conservative trailer: it stays
 # goal-side of (no further toward the opp net than) the carrier so the
@@ -116,15 +130,35 @@ static func _is_goal_side_of_carrier(c: Vector3, carrier_pos: Vector3,
 
 # ── Candidate generation (in-game-ref) ──────────────────────────────────────
 
-# 8 polar samples at SEARCH_RADIUS_M around the carrier, plus self
-# (stand-still) and the carrier's own position (which the anti-crowd
-# filter rejects but is included for symmetry with other roles).
-# No "search center" or "trail depth" formulas — the carrier is the
-# ref, and the score function picks the best direction.
+# Zone-dependent station:
+#   Carrier IN the offensive zone → sample around the HIGH POST (top of the
+#     zone, x shaded to the carrier's side — the same strong-side read F2 uses
+#     on the forecheck), plus the half-wall midpoint toward the carrier (the
+#     classic cycle bump spot) and self. The third man plays HIGH: point
+#     outlet, zone-keeper, first man back.
+#   Carrier still in transit (TRANS_DO / NZ) → the old carrier-orbit samples;
+#     the high post would be AHEAD of the play there and the goal-side filter
+#     would reject the whole set (SUPPORT is the trailer in transition).
+# The score function (pass value × recoverability) picks within the station.
 static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Array[Vector3]:
 	var result: Array[Vector3] = []
-	result.append(carrier_pos)
 	result.append(ctx.self_pos)
+	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
+		var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
+		var high_post := Vector3(
+				carrier_pos.x * 0.5,
+				0.0,
+				blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M)
+		for angle: float in AIRoleHelpers.POLAR_ANGLES:
+			result.append(Vector3(
+					high_post.x + SEARCH_RADIUS_M * cos(angle),
+					0.0,
+					high_post.z + SEARCH_RADIUS_M * sin(angle)))
+		result.append(high_post)
+		# Half-wall cycle option between the high post and the carrier.
+		result.append((high_post + carrier_pos) * 0.5)
+		return result
+	result.append(carrier_pos)
 	for angle: float in AIRoleHelpers.POLAR_ANGLES:
 		result.append(Vector3(
 				carrier_pos.x + SEARCH_RADIUS_M * cos(angle),
