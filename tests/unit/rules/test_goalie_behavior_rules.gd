@@ -708,68 +708,83 @@ func test_reachable_distance_zero_accel_is_instant_speed() -> void:
 
 # ── is_beaten_wide ────────────────────────────────────────────────────────────
 # Race to the tuck point (the post on the side the carrier drives toward):
-# beaten when the goalie's pad can't reach the seal spot before the carrier's
-# lateral progress gets there. Goal at z=+26.6 → direction_sign −1.
+# beaten when the goalie's pad can't reach the seal spot before the PUCK's
+# lateral progress gets there — and only once the puck is past the goalie's
+# standing sealing reach (the point of no return; a trailing puck commits
+# nothing). Goal at z=+26.6 → direction_sign −1.
 
 func _beaten_cfg() -> GoalieBehaviorRules.BeatenWideConfig:
 	var cfg := GoalieBehaviorRules.BeatenWideConfig.new()
 	cfg.goalie_lateral_speed = 3.8
 	cfg.goalie_lateral_accel = 14.0
 	cfg.reach_half_width = 0.42
-	cfg.min_lateral_speed = 1.5
+	cfg.min_lateral_speed = 2.5
 	cfg.max_threat_distance = 4.0
 	return cfg
 
-func test_beaten_by_fast_crease_cut() -> void:
-	# Carrier at (−1.5, 25.3) driving across at 6 m/s; goalie challenging at
-	# (0, 24.85) (radius 1.75). Carrier reaches the right post in 0.40s; the
-	# goalie needs 1.55m of travel but can only cover ~1.01m from rest.
+func test_beaten_by_fast_crease_cut_with_puck_leading() -> void:
+	# Carrier at (0, 25.3) driving across at 6 m/s with the puck LED out at
+	# (0.9, 25.5) — past the centred goalie's 0.42 seal edge, essentially at
+	# the post. The goalie needs ~1.55m of travel with no time left: the
+	# genuine reach-around tuck in progress → sell out pads-first.
 	assert_true(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(-1.5, 0, 25.3), 6.0, Vector3(0, 0, 24.85),
-			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+			Vector3(0.0, 0, 25.3), Vector3(0.9, 0, 25.5), 6.0,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
-func test_not_beaten_by_slow_cut() -> void:
-	# Same geometry at 2 m/s lateral: 1.21s to the post — goalie covers it.
+func test_puck_trailing_drive_is_not_beaten() -> void:
+	# THE forehand-drag drive (the playtest exploit): body cuts across at
+	# 4 m/s but the puck trails on the far side at (−0.8). The wrap/cut-back
+	# is still free — the goalie must stay up and shuffle across, not sell
+	# out to the body.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(-1.5, 0, 25.3), 2.0, Vector3(0, 0, 24.85),
-			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+			Vector3(0.2, 0, 25.5), Vector3(-0.8, 0, 25.6), 4.0,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_not_beaten_below_drive_speed() -> void:
+	# Puck past the seal edge but the body is only shuffling (2.0 < 2.5 m/s
+	# drive floor) — a wide carry, not a committed drive; stay up.
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(0.0, 0, 25.3), Vector3(0.9, 0, 25.5), 2.0,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_not_beaten_when_already_sealing_post() -> void:
-	# Goalie already at the post shoulder — pad covers the tuck point.
+	# Goalie already at the post shoulder — his seal edge sits outside any
+	# reachable puck line, and the pad covers the tuck point.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(-1.5, 0, 25.3), 6.0, Vector3(0.8, 0, 26.35),
-			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+			Vector3(-1.5, 0, 25.3), Vector3(-0.5, 0, 25.4), 6.0,
+			Vector3(0.8, 0, 26.35), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_beaten_by_reach_around_in_tight() -> void:
-	# Carrier at the doorstep (0.3, 25.6) sliding across at 3.5 m/s while the
-	# goalie is out challenging: 0.18s to the post, goalie still ramping (0.22m
-	# of coverage vs 1.55m needed) — the reach-around tuck.
+	# Doorstep carrier (0.3, 25.6) sliding across at 3.5 m/s, puck led to
+	# (0.8, 25.8): 0.03s of puck travel to the post while the out-challenging
+	# goalie is still ramping — the reach-around tuck.
 	assert_true(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(0.3, 0, 25.6), 3.5, Vector3(0, 0, 24.85),
-			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+			Vector3(0.3, 0, 25.6), Vector3(0.8, 0, 25.8), 3.5,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_stationary_dangle_does_not_drop_goalie() -> void:
-	# Lateral velocity below the anti-jitter floor — stay up, force the release.
+	# Lateral velocity below the drive floor — stay up, force the release,
+	# even with the puck dangled out wide.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(0.3, 0, 25.6), 0.5, Vector3(0, 0, 24.85),
-			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+			Vector3(0.3, 0, 25.6), Vector3(0.9, 0, 25.7), 0.5,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_fast_cut_far_from_goal_is_not_beaten() -> void:
 	# A winger flying across the top of the slot (5.7m out) isn't a tuck threat.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(-4.0, 0, 22.5), 8.0, Vector3(0, 0, 24.85),
-			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+			Vector3(-4.0, 0, 22.5), Vector3(-3.2, 0, 22.6), 8.0,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_behind_goal_line_is_rvh_not_beaten() -> void:
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(1.5, 0, 27.0), 6.0, Vector3(0, 0, 24.85),
-			26.6, 0.0, -1, 0.915, _beaten_cfg()))
+			Vector3(1.5, 0, 27.0), Vector3(1.0, 0, 27.1), 6.0,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_beaten_symmetric_for_minus_z_goal() -> void:
-	# Mirror of the fast-cut case on the −Z goal (direction_sign +1).
+	# Mirror of the puck-leading fast cut on the −Z goal (direction_sign +1).
 	assert_true(GoalieBehaviorRules.is_beaten_wide(
-			Vector3(1.5, 0, -25.3), -6.0, Vector3(0, 0, -24.85),
-			-26.6, 0.0, 1, 0.915, _beaten_cfg()))
+			Vector3(0.0, 0, -25.3), Vector3(-0.9, 0, -25.5), -6.0,
+			Vector3(0, 0, -24.85), -26.6, 0.0, 1, 0.915, _beaten_cfg()))
 
 # ── backdoor_depth_cap ────────────────────────────────────────────────────────
 # Anticipatory depth: with a one-timer threat on the weak side, cap the

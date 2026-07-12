@@ -1825,9 +1825,10 @@ func _confirmed_beaten_wide(delta: float) -> bool:
 # True when an opposing carrier's lateral drive has beaten the standing
 # goalie to the tuck point (the around-the-pad reach). Race math in
 # GoalieBehaviorRules.is_beaten_wide; this gathers the scene inputs. Reads the
-# carrier's actual body + velocity, not the lerped tracked threat — the tuck
-# follows the chest, and the smoothed threat lags exactly when the drive is
-# fastest.
+# carrier's actual body velocity AND the raw carried-puck position, not the
+# lerped tracked threat — the smoothed threat lags exactly when the drive is
+# fastest, and the puck term is the point-of-no-return gate (a forehand-drag
+# drive with the puck trailing commits nothing; see the rule header).
 func _is_beaten_wide() -> bool:
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
@@ -1835,7 +1836,7 @@ func _is_beaten_wide() -> bool:
 	if team_id != -1 and carrier.get_team_id() == team_id:
 		return false
 	return GoalieBehaviorRules.is_beaten_wide(
-			carrier.global_position, carrier.velocity.x,
+			carrier.global_position, puck.global_position, carrier.velocity.x,
 			goalie.global_position, _goal_line_z, _goal_center_x,
 			_direction_sign, net_half_width, _beaten_wide_cfg)
 
