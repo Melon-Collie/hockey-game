@@ -1143,3 +1143,31 @@ func test_shot_is_measured_from_the_puck_not_the_body() -> void:
 	c2.decide(ctx_blade)
 	assert_gt(c2.debug_shoot_score, body_score,
 			"a puck extended toward the net measures a wider view than the chest")
+
+
+# ─── Blue line: free entry over tiki-taka ────────────────────────────────────
+
+func test_blue_line_entry_carries_past_a_symmetric_set_defense() -> void:
+	# Carrier and a mate level at the blue line, defenders set INSIDE the zone at
+	# a normal contain gap — symmetric coverage. The receiver used to escape the
+	# forward-pressure discount the carrier paid, so each winger rated the other
+	# man's future above his own present and the puck ping-ponged along the line.
+	# With the symmetric discount, the man with the puck takes the entry.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(-4, 0, -(GameRules.BLUE_LINE_Z - 1.0))
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos, false, Vector3(0, 0, -6)],
+			[2, TEAM_ID, Vector3(4, 0, self_pos.z), false, Vector3(0, 0, -6)],
+			[11, 1, Vector3(-3.5, 0, -12.0)],
+			[12, 1, Vector3(3.5, 0, -12.0)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.self_velocity = Vector3(0, 0, -6)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = net.z + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"symmetric coverage at the line → the puck-carrier takes the entry")

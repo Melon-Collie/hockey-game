@@ -376,16 +376,19 @@ func _pick_action(ctx: RoleContext) -> void:
 	# slide predict_goalie_pos here left the keeper a step behind the shooter's angle,
 	# which read as an open near side and drove wide-angle/long-range over-fires.
 	# …but "square" means square to what he has READ: he tracks our angle with his
-	# real reaction delay, so his cover is aligned to where we WERE a delay before
-	# release (goalie_stale_square_ref), not to the release itself. Static or slow,
-	# the two coincide and this is exactly the old squared read (the wide-angle
-	# over-fire fix stands). Driving laterally in tight, the stale ray leaves his
-	# cover trailing the release angle — the side we are driving toward is
-	# genuinely open, which is what makes a doorstep shot off the move a real
-	# chance while the same shot flat-footed stays walled off. Unsettled stays 0:
-	# the lag IS the caught-moving effect, expressed positionally.
+	# real reaction delay AND keeps re-squaring while the shot flies, so his cover
+	# at puck-arrival trails the release angle only by what the FLIGHT leaves of
+	# his delay (goalie_stale_square_ref). Static or slow, or any flight longer
+	# than his read delay, the ref coincides with the release — the wide-angle /
+	# mid-range over-fire fix stands, and driving at 8+ m out no longer reads as
+	# free. Driving laterally IN TIGHT (flight under his delay), the trailing
+	# cover leaves the drive side genuinely open — the real window. Unsettled
+	# stays 0: the lag IS the caught-moving effect, expressed positionally.
+	var wrister_flight_s: float = wrister_release_pos.distance_to(attacking_goal) \
+			/ maxf(ctx.self_wrister_shot_speed, 1.0)
 	var goalie_square_ref: Vector3 = AIActionScoring.goalie_stale_square_ref(
-			self_pos, horizontal_velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)
+			self_pos, horizontal_velocity,
+			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, wrister_flight_s)
 	var wrister_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
 			goalie_now, attacking_goal, goalie_square_ref)
 	var wrister_unsettled: float = 0.0
@@ -432,6 +435,18 @@ func _pick_action(ctx: RoleContext) -> void:
 	# grinding forward (even giving up some real estate). Only the fire-vs-carry
 	# compete sees this — the dump still judges against the honest raw carry.
 	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, _carrier_forward_clearance(ctx))
+	# …but judge SELF by the same currency a pass receiver gets: _pass_ev credits
+	# a receiver with the best shot he can REACH by driving in (drive-in credit).
+	# Without the mirror, two equally-covered wingers at the blue line each rated
+	# the OTHER man's future above their own present — my carry paid the forward-
+	# pressure discount while his drive-in didn't — and the puck ping-ponged
+	# along the line (an offside factory) instead of ever entering the zone. The
+	# same formula on MY OWN spot floors the carry: a symmetric mate can never
+	# out-score me by proxy, so the pass only wins when he is GENUINELY more
+	# open, and a free entry gets taken by the man who already has the puck.
+	carry_score = maxf(carry_score, _receiver_drive_in_value(
+			ctx, self_pos, ctx.self_wrister_shot_speed,
+			ctx.caps_by_peer.get(ctx.peer_id)))
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
 	# close-scoring fire options during pre-aim. Proportional (×(1 +
@@ -570,7 +585,8 @@ func _pick_action(ctx: RoleContext) -> void:
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					wrister_release_pos, attacking_goal, wrister_goalie,
 					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
-					wrister_unsettled, wrister_five_hole, wrister_goalie_down)
+					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
+					ctx.self_aim_spread_rad)
 	elif dump_score > raw_carry_score and not staggered:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
 		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.
@@ -825,6 +841,17 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# _scratch_opponents_pass, now free — the instant value above already consumed it.)
 	receiver_value = maxf(receiver_value, _receiver_drive_in_value(
 			ctx, receiver_spot, receiver_shot_speed, receiver_caps))
+	# The receiver pays the SAME forward-pressure toll the carrier's own score
+	# does: his value is what he can do with the puck from HIS spot, and a mate
+	# whose netward path is just as clogged as ours is not an upgrade. Without
+	# the mirror, two equally-covered wingers at the blue line each rated the
+	# other man's future above their own discounted present, and the puck
+	# ping-ponged along the line (an offside factory) instead of entering the
+	# zone. Symmetric coverage → symmetric discount → the man ALREADY holding
+	# the puck keeps it; the pass wins only when the mate is genuinely clearer.
+	var receiver_speed: float = receiver_caps.max_speed if receiver_caps != null 			else AIActionScoring.SKATER_REF_SPEED_M_S
+	receiver_value *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0,
+			_forward_clearance_at(ctx, receiver_spot, receiver_speed))
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
 	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
@@ -1282,19 +1309,27 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 # defender only counts when it's genuinely in the forward lane (one off to the side
 # leaves the path clear and the carry undiscounted).
 func _carrier_forward_clearance(ctx: RoleContext) -> float:
-	var to_net_x: float = ctx.attacking_goal_pos.x - ctx.self_pos.x
-	var to_net_z: float = ctx.attacking_goal_pos.z - ctx.self_pos.z
+	return _forward_clearance_at(ctx, ctx.self_pos, ctx.self_max_speed)
+
+
+# Forward-pressure read for ANY spot: how clear the netward path out of `pos`
+# is over the pressure horizon. Shared by the carrier's own discount and the
+# pass receiver's (see _pass_ev) so both sides of a carry-vs-pass compete pay
+# the same toll for the same clogged ice.
+func _forward_clearance_at(ctx: RoleContext, pos: Vector3, speed: float) -> float:
+	var to_net_x: float = ctx.attacking_goal_pos.x - pos.x
+	var to_net_z: float = ctx.attacking_goal_pos.z - pos.z
 	var d: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
 	if d < 0.5:
 		return 1.0
 	var reach: float = minf(FORWARD_PRESSURE_HORIZON_M, d)
 	var inv: float = 1.0 / d
 	var target := Vector3(
-			ctx.self_pos.x + to_net_x * inv * reach, 0.0,
-			ctx.self_pos.z + to_net_z * inv * reach)
-	var t: float = reach / maxf(ctx.self_max_speed, 1.0)
+			pos.x + to_net_x * inv * reach, 0.0,
+			pos.z + to_net_z * inv * reach)
+	var t: float = reach / maxf(speed, 1.0)
 	return AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(ctx.self_pos, target, t,
+			AIActionScoring.carry_clearance(pos, target, t,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 
 

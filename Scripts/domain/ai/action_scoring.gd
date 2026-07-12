@@ -213,12 +213,21 @@ const GOALIE_BUTTERFLY_DROP_S: float = 0.20
 # side the shooter is driving toward genuinely open — the real "shoot while you
 # make him move" window, and why a doorstep shot off the rush beats a keeper who
 # would wall off the same shot taken flat-footed.
-# `release_lookahead_s` is the caller's release horizon (charge time); the ref
-# is the shooter's position at (release − reaction delay).
+# `release_lookahead_s` is the caller's release horizon (charge time);
+# `flight_s` the shot's flight time to the goal. The ref is the shooter's
+# position at (release + flight − reaction delay), capped at the release: the
+# goalie KEEPS re-squaring while the shot flies (he can't know it released
+# until the same delay elapses), so at puck-arrival he is square to
+#   flight ≥ delay  → the release itself — fully caught up, no positional
+#                     opening; mid-range shots off the move aren't free.
+#   flight < delay  → a spot (delay − flight) of shooter-motion behind the
+#                     release — the genuine in-tight window where the puck
+#                     beats his read.
 static func goalie_stale_square_ref(
 		shooter_pos: Vector3, shooter_vel: Vector3,
-		release_lookahead_s: float) -> Vector3:
-	var stale_t: float = release_lookahead_s - GOALIE_REACTION_DELAY_S
+		release_lookahead_s: float, flight_s: float = 0.0) -> Vector3:
+	var lag_s: float = maxf(0.0, GOALIE_REACTION_DELAY_S - maxf(flight_s, 0.0))
+	var stale_t: float = release_lookahead_s - lag_s
 	return Vector3(
 			shooter_pos.x + shooter_vel.x * stale_t,
 			0.0,
@@ -545,7 +554,8 @@ static func best_shot_aim(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
 		goalie_unsettled_factor: float = 0.0,
-		goalie_five_hole_m: float = -1.0, goalie_down: bool = false) -> Vector3:
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		aim_spread_rad: float = 0.0) -> Vector3:
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, flight, goalie_unsettled_factor,
@@ -553,7 +563,7 @@ static func best_shot_aim(
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
-			net_half_width, flight, goalie_unsettled_factor)
+			net_half_width, flight, goalie_unsettled_factor, aim_spread_rad)
 	return Vector3(aim_x, 0.0, attacking_goal.z)
 
 
@@ -597,21 +607,25 @@ static func _choose_shot_hole(
 # projection and unsettled-fade as _hole_open_angle so aim and score agree.
 static func _hole_aim_x(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
-		net_half_width: float, flight: float, unsettled: float) -> float:
+		net_half_width: float, flight: float, unsettled: float,
+		aim_spread_rad: float = 0.0) -> float:
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var net_z: float = attacking_goal.z
 	var post_lo_x: float = attacking_goal.x - net_half_width
 	var post_hi_x: float = attacking_goal.x + net_half_width
 	# Post clearance: the widest |x| the puck's CENTER can cross the line at
-	# without clipping the pipe (see GameRules.NET_ENTRY_HALF_WIDTH). Corner aims
-	# clamp to this — a degenerate opening otherwise lerps the aim onto the post
-	# itself, and with zero aim noise that exact line clanks off the iron every
-	# time.
-	var entry_lo_x: float = post_lo_x \
-			+ GameRules.NET_POST_RADIUS + GameRules.PUCK_COLLISION_RADIUS
-	var entry_hi_x: float = post_hi_x \
-			- GameRules.NET_POST_RADIUS - GameRules.PUCK_COLLISION_RADIUS
+	# without clipping the pipe (post + puck radius — see
+	# GameRules.NET_ENTRY_HALF_WIDTH), PLUS the shooter's own execution spread
+	# projected to the net plane (aim_spread_rad × range). The bare physical
+	# clamp put the puck's edge exactly TANGENT to the post edge — a knife-edge
+	# any wobble turns into iron — and a noisy hand needs its wobble budgeted
+	# inside the entry, so the spread lands as goals/saves/misses, not clanks.
+	var entry_inset: float = GameRules.NET_POST_RADIUS \
+			+ GameRules.PUCK_COLLISION_RADIUS \
+			+ aim_spread_rad * shooter.distance_to(attacking_goal)
+	var entry_lo_x: float = post_lo_x + entry_inset
+	var entry_hi_x: float = post_hi_x - entry_inset
 
 	if kind == HOLE_KIND_FIVE:
 		return clampf(_shadow_x(shooter, goalie_pos.x, goalie_pos.z, net_z),
@@ -799,10 +813,24 @@ static func goalie_arc_match_x(
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var puck_forward: float = (puck_pos.z - attacking_goal.z) * net_normal_z
 	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
+	# The goalie squares along his ARC — his lateral offset can never exceed his
+	# own radial distance from the goal (fully lateral = on the goal line at his
+	# radius). Off the arc there is no squaring, only a keeper who abandoned the
+	# cage. Unbounded, a near-goal-line puck reference exploded the arc-x toward
+	# the corner boards — a phantom far-side opening that had bots firing from
+	# beside the net while rounding it. Moderate angles are untouched (their
+	# arc-x sits well inside the radius, wider than the posts — which is real:
+	# an out-challenging goalie legitimately squares past the post line).
+	var radius: float = Vector3(
+			goalie_now.x - attacking_goal.x, 0.0,
+			goalie_now.z - attacking_goal.z).length()
 	if puck_forward < 0.001 or goalie_depth < 0.001:
-		# Degenerate: puck on/behind goal line, or goalie there. Best-effort: puck.x.
-		return puck_pos.x
-	return attacking_goal.x + goalie_depth * (puck_pos.x - attacking_goal.x) / puck_forward
+		# Degenerate: puck on/behind goal line, or goalie there. Best-effort: the
+		# puck's side, bounded to the arc.
+		return attacking_goal.x + clampf(
+				puck_pos.x - attacking_goal.x, -radius, radius)
+	var arc_x: float = goalie_depth * (puck_pos.x - attacking_goal.x) / puck_forward
+	return attacking_goal.x + clampf(arc_x, -radius, radius)
 
 
 # The goalie SQUARED to a puck at `puck_pos` — arc-matched and set, no forced
