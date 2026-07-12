@@ -181,6 +181,9 @@ var is_tutorial_mode: bool = false
 # single-local-player offline session whose flow is owned by a dedicated manager
 # (PenaltyDrillManager) rather than the normal match orchestration.
 var is_penalty_drill_mode: bool = false
+# Offline shot-accuracy drill ("hit X of 10 called targets"), same shape as the
+# penalty drill with ShotAccuracyManager owning the flow.
+var is_shot_accuracy_mode: bool = false
 # Which tutorial to run. game_scene.gd reads this when instantiating
 # TutorialManager. Empty when not in tutorial mode.
 var tutorial_id: String = ""
@@ -474,12 +477,23 @@ func start_penalty_drill() -> void:
 	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
 
 
+# Offline shot-accuracy drill. Mirrors start_penalty_drill: one local player on
+# team 0, ShotAccuracyManager (spawned by game_scene.gd) owns the target calls
+# and the hit-X-of-10 loop. Forces RuleSet.OFF so the crease-camping ghost
+# can't fire on a shooter staged in tight.
+func start_shot_accuracy() -> void:
+	is_shot_accuracy_mode = true
+	pending_lobby_slots[1] = {"team_id": 0, "team_slot": 0}
+	start_offline()
+	pending_game_config["rule_set"] = GameRules.RuleSet.OFF
+
+
 # True for the single-local-player scripted offline modes (tutorial, penalty
-# drill) where a dedicated manager owns puck placement and scoring, so the
-# normal match machinery — out-of-bounds whistles, goal celebrations — must
-# stand down.
+# drill, shot accuracy) where a dedicated manager owns puck placement and
+# scoring, so the normal match machinery — out-of-bounds whistles, goal
+# celebrations — must stand down.
 func is_drill_mode() -> bool:
-	return is_tutorial_mode or is_penalty_drill_mode
+	return is_tutorial_mode or is_penalty_drill_mode or is_shot_accuracy_mode
 
 
 func local_time() -> float:
@@ -743,6 +757,7 @@ func reset() -> void:
 	is_free_play_mode = false
 	is_tutorial_mode = false
 	is_penalty_drill_mode = false
+	is_shot_accuracy_mode = false
 	tutorial_id = ""
 	_input_batch_provider = Callable()
 	_pending_handshake.clear()

@@ -8,6 +8,8 @@ func _ready() -> void:
 		add_child(preload("res://Scripts/game/tutorial_manager.gd").new(id))
 	if NetworkManager.is_penalty_drill_mode:
 		add_child(preload("res://Scripts/game/penalty_drill_manager.gd").new())
+	if NetworkManager.is_shot_accuracy_mode:
+		add_child(preload("res://Scripts/game/shot_accuracy_manager.gd").new())
 	if not NetworkManager.is_host and not NetworkManager.pending_join_slot.is_empty():
 		var s: Dictionary = NetworkManager.pending_join_slot
 		NetworkManager.pending_join_slot = {}

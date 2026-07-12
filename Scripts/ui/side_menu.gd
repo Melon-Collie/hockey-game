@@ -588,6 +588,13 @@ func _refresh_practice_rows() -> void:
 		_launch_penalty_drill())
 	SoundManager.wire_button(drill_btn)
 	_practice_rows_vbox.add_child(drill_btn)
+	var accuracy_btn := MenuStyle.popup_button("Shot Accuracy")
+	accuracy_btn.custom_minimum_size = Vector2(280, 44)
+	accuracy_btn.pressed.connect(func() -> void:
+		_practice_container.visible = false
+		_launch_shot_accuracy())
+	SoundManager.wire_button(accuracy_btn)
+	_practice_rows_vbox.add_child(accuracy_btn)
 
 
 # ── Action handlers ──────────────────────────────────────────────────────────
@@ -666,6 +673,16 @@ func _launch_penalty_drill() -> void:
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
 	NetworkManager.start_penalty_drill()
+	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
+
+
+func _launch_shot_accuracy() -> void:
+	# Offline "hit X of 10 called targets" drill. Same shape as the penalty
+	# drill; ShotAccuracyManager takes over once Hockey.tscn loads.
+	GameManager.on_scene_exit()
+	NetworkSimManager.clear_pending()
+	NetworkManager.reset()
+	NetworkManager.start_shot_accuracy()
 	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 

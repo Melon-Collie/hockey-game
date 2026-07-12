@@ -36,7 +36,7 @@ var _skater: Skater = null
 var _puck: Puck = null
 var _hud: PenaltyDrillHUD = null
 
-var _session: PenaltyShotSession = null
+var _session: DrillSession = null
 var _cfg: PenaltyShotRules.Config = null
 
 var _stage: Stage = Stage.LIVE
@@ -60,7 +60,7 @@ func _ready() -> void:
 	_skater = _local_record.skater
 	_puck = GameManager.get_puck()
 
-	_session = PenaltyShotSession.new(_TOTAL_SHOTS)
+	_session = DrillSession.new(_TOTAL_SHOTS)
 	_cfg = PenaltyShotRules.Config.new()
 
 	GameManager.spawn_penalty_goalie()

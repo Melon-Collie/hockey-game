@@ -1,9 +1,9 @@
 extends GutTest
 
-# PenaltyShotSession — tallies makes across a fixed-length penalty-shot drill.
+# DrillSession — tallies makes across a fixed-length drill (penalty shots, shot accuracy).
 
 func test_starts_empty() -> void:
-	var s := PenaltyShotSession.new(10)
+	var s := DrillSession.new(10)
 	assert_eq(s.attempts_taken, 0)
 	assert_eq(s.makes, 0)
 	assert_eq(s.remaining(), 10)
@@ -12,7 +12,7 @@ func test_starts_empty() -> void:
 
 
 func test_record_counts_makes_and_misses() -> void:
-	var s := PenaltyShotSession.new(10)
+	var s := DrillSession.new(10)
 	s.record(true)
 	s.record(false)
 	s.record(true)
@@ -24,7 +24,7 @@ func test_record_counts_makes_and_misses() -> void:
 
 
 func test_completes_after_total_attempts() -> void:
-	var s := PenaltyShotSession.new(3)
+	var s := DrillSession.new(3)
 	s.record(true)
 	s.record(false)
 	assert_false(s.is_complete())
@@ -35,7 +35,7 @@ func test_completes_after_total_attempts() -> void:
 
 
 func test_current_attempt_number_clamps_at_total() -> void:
-	var s := PenaltyShotSession.new(2)
+	var s := DrillSession.new(2)
 	s.record(true)
 	s.record(true)
 	# After the last shot it shouldn't read as "attempt 3 of 2".
@@ -43,7 +43,7 @@ func test_current_attempt_number_clamps_at_total() -> void:
 
 
 func test_restart_clears_tally() -> void:
-	var s := PenaltyShotSession.new(5)
+	var s := DrillSession.new(5)
 	s.record(true)
 	s.record(true)
 	s.restart()
@@ -53,5 +53,5 @@ func test_restart_clears_tally() -> void:
 
 
 func test_total_is_floored_at_one() -> void:
-	var s := PenaltyShotSession.new(0)
+	var s := DrillSession.new(0)
 	assert_eq(s.total_attempts, 1)
