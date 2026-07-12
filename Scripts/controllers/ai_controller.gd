@@ -183,8 +183,11 @@ func _physics_process(delta: float) -> void:
 		# puck and bunch around the net. Skip agent input; physics friction
 		# coasts whatever velocity the bot had at the goal moment to a stop.
 		return
-	if _game_state.is_input_blocked():
-		return
+	# Deliberately NO is_input_blocked() gate here: that flag means the LOCAL
+	# human's menu is open, and bots run only on the host — gating on it froze
+	# every bot when the host paused while the puck, goalies, clock, and remote
+	# players kept going. Host pause matches a client's pause: only the pausing
+	# player's input goes neutral (LocalInputGatherer), the world plays on.
 	# Read the frame's shared snapshot. GameManager publishes it once per
 	# host physics frame after StateBufferManager.capture; reading it here
 	# avoids 6 bots × redundant interpolation passes per frame.
