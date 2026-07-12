@@ -512,7 +512,9 @@ static func open_net_danger(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
 		goalie_unsettled_factor: float = 0.0,
-		goalie_five_hole_m: float = -1.0, goalie_down: bool = false) -> float:
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false) -> float:
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	# Best of the holes. Pure value-type math, no allocation — safe to run
 	# per carry candidate at tick rate (see _hole_open_angle).
@@ -520,7 +522,8 @@ static func open_net_danger(
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, flight, goalie_unsettled_factor,
-				goalie_five_hole_m, goalie_down)
+				goalie_five_hole_m, goalie_down,
+				goalie_post_seal_x, goalie_post_seal_tall)
 		if a > best_angle:
 			best_angle = a
 	return clampf(best_angle * SHOT_DANGER_GAIN, 0.0, 1.0)
@@ -535,11 +538,14 @@ static func best_shot_loft(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
 		goalie_unsettled_factor: float = 0.0,
-		goalie_five_hole_m: float = -1.0, goalie_down: bool = false) -> int:
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false) -> int:
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, flight, goalie_unsettled_factor,
-			goalie_five_hole_m, goalie_down)
+			goalie_five_hole_m, goalie_down,
+			goalie_post_seal_x, goalie_post_seal_tall)
 	if hole < 0:
 		return ShotMechanics.ELEVATION_FLAT
 	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
@@ -555,11 +561,14 @@ static func best_shot_aim(
 		net_half_width: float, shot_speed_m_s: float,
 		goalie_unsettled_factor: float = 0.0,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
-		aim_spread_rad: float = 0.0) -> Vector3:
+		aim_spread_rad: float = 0.0,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false) -> Vector3:
 	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, flight, goalie_unsettled_factor,
-			goalie_five_hole_m, goalie_down)
+			goalie_five_hole_m, goalie_down,
+			goalie_post_seal_x, goalie_post_seal_tall)
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
@@ -575,11 +584,14 @@ static func best_shot_aim(
 static func _choose_shot_hole(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, flight: float, unsettled: float,
-		goalie_five_hole_m: float = -1.0, goalie_down: bool = false) -> int:
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false) -> int:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
-				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down)
+				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down,
+				goalie_post_seal_x, goalie_post_seal_tall)
 		if a > best_angle:
 			best_angle = a
 	if best_angle <= 0.0:
@@ -590,7 +602,8 @@ static func _choose_shot_hole(
 	var chosen_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
-				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down)
+				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down,
+				goalie_post_seal_x, goalie_post_seal_tall)
 		if a < threshold:
 			continue
 		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
@@ -672,13 +685,33 @@ static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> f
 static func _hole_open_angle(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, flight: float, unsettled: float,
-		goalie_five_hole_m: float = -1.0, goalie_down: bool = false) -> float:
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
 		return 0.0  # on/behind the goal line — no shot in
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
+
+	# A post-seal stance (VH/RVH, read off the replicated state — see
+	# GoalieNetworkState.post_seal_x_sign) is a DEPLOYED wall at the post: the
+	# coverage is the pose itself, already in place at release, so nothing on
+	# the sealed side is reaction-gated. The between-the-legs slot is closed in
+	# both families (back pad + post-sealed pad — no FIVE to thread). VH stands
+	# the vertical pad + tall torso in the whole near column, ice to over the
+	# shoulder: sealed-side LOW and HIGH are both gone. RVH stays compressed —
+	# sealed-side LOW is gone but short-side HIGH stays measured (its
+	# documented weakness). The FAR side is deliberately untouched: it's read
+	# from the goalie's actual parked-at-the-post position below, which is what
+	# keeps the walkout / cross-crease counter visible to the model.
+	if goalie_post_seal_x != 0.0:
+		if kind == HOLE_KIND_FIVE:
+			return 0.0
+		if float(side) == signf(goalie_post_seal_x) \
+				and (goalie_post_seal_tall or HOLE_BAND[i] == HOLE_BAND_LOW):
+			return 0.0
 	# The goalie re-settles during flight, so a caught-moving read decays over the
 	# shot's flight time (full point-blank, gone by the time a long shot arrives).
 	var eff_unsettled: float = clampf(unsettled, 0.0, 1.0) \
@@ -754,7 +787,9 @@ static func score_shoot(
 		goalie_unsettled_factor: float = 0.0,
 		opponent_caps: Array = [],
 		goalie_five_hole_m: float = -1.0,
-		goalie_down: bool = false) -> float:
+		goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false) -> float:
 	# The puck can't be shot from behind the goalie — clamp the shooter to the jam
 	# distance in front of him. Without this a hard drive's projected release, or a
 	# carry candidate placed in the crease, reads as a phantom open net (keeper
@@ -763,7 +798,8 @@ static func score_shoot(
 	var shot_quality: float = open_net_danger(
 			shooter, attacking_goal, predicted_goalie_pos, net_half_width,
 			shot_speed_m_s, goalie_unsettled_factor,
-			goalie_five_hole_m, goalie_down)
+			goalie_five_hole_m, goalie_down,
+			goalie_post_seal_x, goalie_post_seal_tall)
 	if shot_quality <= 0.0:
 		return 0.0
 	# Lane clear vs the aim point ShotAim picks (past the goalie's shadow) —
