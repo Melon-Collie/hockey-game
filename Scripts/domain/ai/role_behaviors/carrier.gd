@@ -1544,5 +1544,3 @@ func _goalie_unsettled_at(ctx: RoleContext, release_time_s: float,
 	return AIActionScoring.goalie_unsettled(
 			_goalie_now(ctx), ctx.attacking_goal_pos,
 			release_time_s, puck_pos_at_release)
-
-

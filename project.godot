@@ -13,10 +13,10 @@ config_version=5
 config/name="Mitts"
 run/main_scene="uid://dmfu1ghyuqn67"
 config/features=PackedStringArray("4.6", "Forward Plus")
-config/icon="uid://bjkpew4n5um13"
-run/pause_on_focus_loss=false
 boot_splash/bg_color=Color(0.067, 0.094, 0.141, 1)
 boot_splash/show_image=false
+config/icon="uid://bjkpew4n5um13"
+run/pause_on_focus_loss=false
 
 [autoload]
 
@@ -32,10 +32,10 @@ CrashWatch="*res://Scripts/game/crash_watch.gd"
 
 [debug]
 
-gdscript/warnings/integer_division=0
 file_logging/enable_file_logging=true
 file_logging/log_path="user://logs/mitts.log"
 file_logging/max_log_files=10
+gdscript/warnings/integer_division=0
 
 [display]
 
