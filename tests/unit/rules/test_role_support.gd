@@ -226,3 +226,45 @@ func test_exposure_lower_for_a_faster_defender() -> void:
 	var slow_me: float = AIRoleSupport._exposure(candidate, net, min_home, 6.0)
 	var fast_me: float = AIRoleSupport._exposure(candidate, net, min_home, 14.0)
 	assert_lt(fast_me, slow_me, "a faster defender is less exposed from the same spot")
+
+
+# ── Third man HIGH in the offensive zone ─────────────────────────────────────
+
+func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
+	# Carrier cycling deep in the OZ corner. The old candidate set orbited the
+	# carrier (5 m), structurally gluing the third man to the play — the
+	# "SUPPORT pinches too hard" failure that left nobody back on a turnover.
+	# The OZ station is now the HIGH POST: top of the zone, near the blue line.
+	var carrier_pos := Vector3(-9, 0, -23)     # deep left corner (attacking -Z)
+	var self_pos := Vector3(-5, 0, -18)        # currently pinched low
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],          # us (SUPPORT)
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],     # carrier in the corner
+		[200, 1, Vector3(-6, 0, -21), Vector3.ZERO],   # defenders collapsed low
+		[210, 1, Vector3(-2, 0, -23), Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	assert_gt(d.target_position.distance_to(carrier_pos), AIRoleSupport.SEARCH_RADIUS_M + 1.0,
+			"the third man is no longer glued to the carrier's orbit; got %s"
+			% str(d.target_position))
+	assert_lt(absf(d.target_position.z - (-GameRules.BLUE_LINE_Z)),
+			AIRoleSupport.HIGH_POST_INSET_M + AIRoleSupport.SEARCH_RADIUS_M + 0.5,
+			"…and holds the top of the zone (high post); got z=%f" % d.target_position.z)
+
+
+func test_transition_keeps_the_carrier_orbit_trail() -> void:
+	# Carrier still in the neutral zone (TRANS_DO): the high post would be
+	# ahead of the play, so SUPPORT keeps the old goal-side trail orbit.
+	var carrier_pos := Vector3(0, 0, -2)
+	var self_pos := Vector3(3, 0, 2)
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	assert_lt(d.target_position.distance_to(carrier_pos),
+			AIRoleSupport.SEARCH_RADIUS_M + 1.0,
+			"in transition SUPPORT trails within the carrier orbit; got %s"
+			% str(d.target_position))

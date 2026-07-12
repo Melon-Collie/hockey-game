@@ -11,10 +11,15 @@ class_name AIRoleForecheck
 #     search region biased toward the opp blue line (the breakout
 #     lanes). Stays IN the zone — that's the forecheck; sagging out
 #     would concede it.
-#   F3 (is_high = true)  — high safety at the opp blue line, strong
-#     side. The one conservative role: the designated first-man-back if
-#     the forecheck fails, so it holds the line rather than pressuring
-#     deep. Pure positional anchor.
+#   F3 (is_high = true)  — high safety, strong side. The one conservative
+#     role: the designated first-man-back if the forecheck fails. Holds the
+#     opp blue line ONLY while it can still win the race home — the real
+#     "can I pinch?" read a defenseman makes. A stretch opponent lurking
+#     behind the line, or any opponent whose momentum beats F3's
+#     standing-start sprint to our net, sags the hold point back down the
+#     wall until the race is winnable again (see _decide_high). A fixed
+#     blue-line anchor was a permanent pinch: one chip past it was a
+#     breakaway with only the goalie home.
 #
 # Nobody is offside during a forecheck. We turned the puck over after a
 # legal zone entry, so the whole team is onside as long as the puck
@@ -44,7 +49,7 @@ static func decide(ctx: RoleContext, is_high: bool) -> RoleDecision:
 	return _decide_mid(ctx)
 
 
-# ── F3: high safety at the opp blue line ─────────────────────────────────────
+# ── F3: high safety — hold the line only while the race home is winnable ─────
 static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 	# Opp blue line on the Z axis (attacking-zone boundary), strong side
@@ -52,7 +57,33 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	# opp blue line is at -own_goal_dir * BLUE_LINE_Z.
 	var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
 	var wall_x: float = ctx.strong_x * (GameRules.RINK_HALF_WIDTH - F3_WALL_INSET_M)
-	d.target_position = Vector3(wall_x, 0.0, blue_z)
+
+	# The pinch read: how much time does the FASTEST opponent (momentum-aware,
+	# real Speed caps) need to reach our net? F3 may stand anywhere it can
+	# still beat that race with a standing-start sprint PLUS the set-up margin
+	# (arrive stopped and facing the play, not blowing past the cage). That
+	# bounds the hold point to a circle of radius R around our net; the hold
+	# is the most FORWARD point of F3's wall lane inside it — the blue line
+	# when the race is comfortable (opponents bottled deep), sagging down the
+	# wall as a breakout threat develops or a stretch man lurks behind the
+	# line. Closed-form: on the lane x = wall_x, dist-to-net <= R means
+	# |z - net.z| <= sqrt(R^2 - (wall_x - net.x)^2).
+	var our_net: Vector3 = ctx.defending_goal_pos
+	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
+	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
+	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
+	var hold_z: float = blue_z
+	if r < INF:
+		var dx: float = wall_x - our_net.x
+		var lane_reach_sq: float = r * r - dx * dx
+		# Lane never reaches inside the circle (degenerate: the threat beats us
+		# home from anywhere) → stand at the lane point nearest our net.
+		var lane_reach: float = sqrt(lane_reach_sq) if lane_reach_sq > 0.0 else 0.0
+		# Most forward allowed z on the lane, then never forward of the blue line.
+		var allowed_fwd: float = ctx.own_goal_dir * our_net.z - lane_reach
+		hold_z = ctx.own_goal_dir * maxf(ctx.own_goal_dir * blue_z, allowed_fwd)
+	d.target_position = Vector3(wall_x, 0.0, hold_z)
 	return d
 
 

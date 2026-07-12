@@ -142,3 +142,62 @@ func test_never_retreats_behind_goal_line() -> void:
 	var d: RoleDecision = AIRoleContain.decide(_make_ctx(Vector3(0, 0, 24), skaters, 200))
 	assert_lt(d.target_position.z, OUR_NET_Z + 0.01,
 			"never projects behind our goal line; got z=%f" % d.target_position.z)
+
+
+func test_stands_up_at_the_blue_line_as_the_carrier_arrives() -> void:
+	# Carrier 3 m outside our blue line, driving in: the raw distance-fraction
+	# gap (~6 m) would put CONTAIN six metres BEHIND the line — a conceded
+	# entry. The line-stand cap plants it one stride inside the line instead,
+	# so the carrier meets a set defender at the entry moment.
+	var carrier := Vector3(0, 0, GameRules.BLUE_LINE_Z - 3.0)   # z ≈ 4.29, outside our +Z zone
+	var ctx := _make_ctx(Vector3(0, 0, 12), [
+			[1, TEAM_ID, Vector3(0, 0, 12)],
+			[200, 1, carrier],
+	], 200)
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	assert_almost_eq(d.target_position.z,
+			GameRules.BLUE_LINE_Z + AIRoleContain.LINE_STAND_INSIDE_M, 0.3,
+			"CONTAIN plants a stride inside the blue line for the entry;"
+			+ " got z=%f" % d.target_position.z)
+
+
+func test_gap_cap_releases_once_the_zone_is_gained() -> void:
+	# Same rush, carrier now 3 m INSIDE our zone: the line stand is over and
+	# the normal protect-the-net gap ramp resumes (well deeper than the line).
+	var carrier := Vector3(0, 0, GameRules.BLUE_LINE_Z + 3.0)
+	var ctx := _make_ctx(Vector3(0, 0, 16), [
+			[1, TEAM_ID, Vector3(0, 0, 16)],
+			[200, 1, carrier],
+	], 200)
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	var dist_to_net: float = carrier.distance_to(Vector3(0, 0, OUR_NET_Z))
+	var expected_gap: float = clampf(dist_to_net * AIRoleContain.GAP_FRACTION,
+			AIRoleContain.GAP_MIN_M, AIRoleContain.GAP_MAX_M)
+	assert_almost_eq(d.target_position.z, carrier.z + expected_gap, 0.3,
+			"inside the zone the normal gap ramp resumes")
+
+
+func test_never_advances_past_recovery_toward_a_distant_carrier() -> void:
+	# Turnover twin of the forecheck-F3 bug: carrier still deep in HIS end with
+	# a trailer streaking through center. The carrier-relative gap point sits
+	# ~35 m up-ice — chasing it would vacate the middle for the 2-on-1. CONTAIN
+	# instead waits at the edge of recoverability: its stand's distance from our
+	# net never exceeds the race-home radius against the fastest opponent.
+	var carrier := Vector3(0, 0, -20)                # deep in their end
+	var trailer := Vector3(2, 0, 2)                  # streaking through center
+	var ctx := _make_ctx(Vector3(0, 0, 5), [
+			[1, TEAM_ID, Vector3(0, 0, 5)],
+			[200, 1, carrier],
+			[210, 1, trailer, Vector3(0, 0, 7)],     # burning toward our net
+	], 200)
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	var opp_states: Array[SkaterNetworkState] = []
+	for pid: int in [200, 210]:
+		opp_states.append(ctx.snapshot.skater_states[pid])
+	var r: float = AIRoleHelpers.race_home_radius(
+			ctx, opp_states, Vector3(0, 0, OUR_NET_Z))
+	assert_lte(d.target_position.distance_to(Vector3(0, 0, OUR_NET_Z)), r + 0.3,
+			"CONTAIN holds inside the race-home radius instead of chasing the"
+			+ " distant gap point; got %s (r=%.1f)" % [d.target_position, r])
+	assert_gt(d.target_position.z, 0.0,
+			"…which keeps it on OUR side of center while the trailer streaks")

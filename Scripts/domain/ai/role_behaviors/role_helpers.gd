@@ -417,3 +417,77 @@ static func collect_opponents(ctx: RoleContext,
 					if anticipate else s.position)
 			out_states.append(s)
 			ctx.scratch_opp_caps.append(ctx.caps_by_peer.get(pid))
+
+
+# Min over opponents of momentum-aware ETA back to our net — the shared
+# race-home read behind every "am I recoverable?" question (SUPPORT's exposure,
+# the forecheck safety's pinch read, CONTAIN's advance clamp). Each opponent
+# races at ITS real top speed (Speed cap); INF when there are no opponents (no
+# recovery threat).
+static func min_opp_time_home(opp_states: Array[SkaterNetworkState],
+		opp_caps: Array, our_net: Vector3) -> float:
+	var has_caps: bool = opp_caps.size() == opp_states.size()
+	var best: float = INF
+	for i: int in opp_states.size():
+		var s: SkaterNetworkState = opp_states[i]
+		var ref_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opp_caps[i]
+			if caps != null:
+				ref_speed = caps.max_speed
+		var t: float = AIActionScoring.time_to_arrive(s.position, our_net, s.velocity, ref_speed)
+		if t < best:
+			best = t
+	return best
+
+
+# The farthest a defender may stand from OUR net and still win the race home
+# against the fastest opponent: (fastest opp ETA home − the set-up margin) ×
+# my top speed. The margin is braking from top speed (AISteering's brake
+# decel) — the last man must arrive SET, not flying past his own cage. INF
+# when there is no opponent to race. The single "how far can I safely be from
+# home?" primitive shared by the forecheck safety and CONTAIN.
+static func race_home_radius(ctx: RoleContext,
+		opp_states: Array[SkaterNetworkState], our_net: Vector3) -> float:
+	var t_home: float = min_opp_time_home(opp_states, ctx.scratch_opp_caps, our_net)
+	if t_home == INF:
+		return INF
+	var margin: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S 			/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	return maxf(t_home - margin, 0.0) * maxf(ctx.self_max_speed, 1.0)
+
+
+# Is the race to a loose puck already LOST — an opponent reaches it a clear
+# contest-band ahead of me? Momentum-aware ETAs at each skater's real Speed
+# cap, with the same physical contest margin the dump-chase race uses
+# (CHASE_CONTEST_MARGIN_M, a stride's head-start): arriving inside that band
+# still creates a live 50/50 (worth racing, the drive-through commits it);
+# arriving clearly behind it means the collector has gathered and I'm just
+# skating myself out of the play. A chaser that reads LOST should transition
+# to defending the pickup instead of pushing (the missed-pass "third man keeps
+# chasing while the counter develops" failure). False when no opponent
+# threatens the puck.
+static func loose_puck_race_lost(
+		snapshot: WorldSnapshot, self_pos: Vector3, self_vel: Vector3,
+		self_max_speed: float, team_id: int, team_id_by_peer: Dictionary,
+		caps_by_peer: Dictionary) -> bool:
+	if snapshot == null or snapshot.puck_state == null:
+		return false
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var my_eta: float = AIActionScoring.time_to_arrive(
+			self_pos, puck_pos, self_vel, maxf(self_max_speed, 1.0))
+	var best_opp_eta: float = INF
+	for pid: int in snapshot.skater_states:
+		if team_id_by_peer.get(pid, -1) == team_id:
+			continue
+		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		var caps: AISkaterCaps = caps_by_peer.get(pid)
+		var speed: float = caps.max_speed if caps != null \
+				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var t: float = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)
+		if t < best_opp_eta:
+			best_opp_eta = t
+	if best_opp_eta == INF:
+		return false
+	var contest_window: float = AIActionScoring.CHASE_CONTEST_MARGIN_M \
+			/ maxf(self_max_speed, 1.0)
+	return my_eta > best_opp_eta + contest_window

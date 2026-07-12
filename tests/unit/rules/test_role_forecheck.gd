@@ -62,6 +62,45 @@ func test_f3_holds_at_opp_blue_line() -> void:
 	assert_gt(d.target_position.x, 0.0, "F3 holds on the +X strong side")
 
 
+func test_f3_sags_off_the_line_for_a_stretch_threat() -> void:
+	# A cherry-picking opponent already at center ice with speed toward our
+	# net: F3 can no longer win the race home from the blue line, so the hold
+	# point sags down the wall until the race is winnable again. The fixed
+	# blue-line anchor gave this exact setup a breakaway.
+	var self_pos := Vector3(5, 0, -8)
+	var ctx := _make_ctx(self_pos, 200, [
+			[1, TEAM_ID, self_pos],
+			[200, 1, Vector3(0, 0, -22)],           # carrier deep (bottled)
+			[210, 1, Vector3(2, 0, 0)],             # stretch man at center
+	], 1.0)
+	ctx.snapshot.skater_states[210].velocity = Vector3(0, 0, 6)   # burning toward our net
+	var d: RoleDecision = AIRoleForecheck.decide(ctx, true)
+	assert_gt(d.target_position.z, -GameRules.BLUE_LINE_Z + 2.0,
+			"a stretch threat sags F3 well off the opp blue line; got z=%f"
+			% d.target_position.z)
+
+
+func test_f3_sag_deepens_with_the_threat() -> void:
+	# The faster/closer the recovery threat, the deeper the hold — the read is
+	# a race, not a switch.
+	var self_pos := Vector3(5, 0, -8)
+	var mild := _make_ctx(self_pos, 200, [
+			[1, TEAM_ID, self_pos],
+			[200, 1, Vector3(0, 0, -22)],
+			[210, 1, Vector3(2, 0, -5)],            # high but still zone-side
+	], 1.0)
+	var mild_z: float = AIRoleForecheck.decide(mild, true).target_position.z
+	var hot := _make_ctx(self_pos, 200, [
+			[1, TEAM_ID, self_pos],
+			[200, 1, Vector3(0, 0, -22)],
+			[210, 1, Vector3(2, 0, 4)],             # past center
+	], 1.0)
+	hot.snapshot.skater_states[210].velocity = Vector3(0, 0, 7)
+	var hot_z: float = AIRoleForecheck.decide(hot, true).target_position.z
+	assert_gt(hot_z, mild_z,
+			"a hotter recovery threat holds a deeper line; mild=%f hot=%f" % [mild_z, hot_z])
+
+
 func test_f3_follows_strong_x_flip() -> void:
 	var self_pos := Vector3(-5, 0, -10)
 	var ctx := _make_ctx(self_pos, 200, [

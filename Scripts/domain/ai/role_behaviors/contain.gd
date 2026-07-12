@@ -35,6 +35,12 @@ const GAP_FRACTION: float = 0.3
 const GAP_MIN_M: float = 1.6
 const GAP_MAX_M: float = 6.0
 
+# Where CONTAIN plants for the line stand: this far inside OUR blue line, so
+# the carrier meets a set defender exactly at the entry moment. One stride of
+# depth — enough to pivot with a wide cut, not so much that the line is
+# conceded before contact.
+const LINE_STAND_INSIDE_M: float = 1.0
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -63,8 +69,46 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		return d
 
 	var gap: float = clampf(dist * GAP_FRACTION, GAP_MIN_M, GAP_MAX_M)
+	# STAND UP AT THE BLUE LINE. The raw distance-fraction gap concedes the
+	# entry by construction: at the moment the carrier reaches our blue line the
+	# gap is ~maxed, so CONTAIN is six metres behind the line retreating at the
+	# carrier's pace and the zone is gained untouched every rush. The line is
+	# where the defence makes its stand — entry-with-possession is the thing to
+	# deny — so while the carrier is still OUTSIDE our zone, the gap is capped
+	# by the ice remaining to the line (+ the plant depth): the gap-surf lands
+	# CONTAIN set one stride inside the line exactly as the carrier arrives.
+	# Once the zone is gained the cap vanishes and the normal protect-the-net
+	# ramp resumes. The MARK pair is home behind, so losing the stand wide is
+	# the acceptable outcome — the free entry was not.
+	var ice_to_line: float = GameRules.BLUE_LINE_Z - ctx.own_goal_dir * carrier_pos.z
+	if ice_to_line > 0.0:
+		gap = maxf(minf(gap, ice_to_line + LINE_STAND_INSIDE_M), GAP_MIN_M)
 	# Never project past the net — a gap wider than the carrier's own distance
 	# to the net would place the target behind the goal line.
 	gap = minf(gap, dist)
+	# NEVER ADVANCE PAST RECOVERY. The gap point is carrier-relative, so a
+	# carrier still deep in his own end pulls it far up-ice — and a center-ice
+	# CONTAIN would skate FORWARD 15 m to "establish the gap" on a rush that
+	# hasn't come yet, vacating the middle while a trailer makes it a 2-on-1
+	# behind him (the forecheck-F3 bug's TRANS_OD twin). Gap control means the
+	# rush comes to YOU: the stand's distance from our net is capped by the
+	# race-home radius against the OTHER opponents — the CARRIER is excluded
+	# because gap control already owns him (you cannot be beaten home by the
+	# man you retreat in front of; the trailer is who burns you). So CONTAIN
+	# gaps the carrier freely when no trailer threatens, and waits at the edge
+	# of recoverability when one does — the gap point meets him there as the
+	# play closes. (Filtered set loses the caps index alignment, so the race
+	# uses league-reference speed — the conservative side of that trade.)
+	var stand_from_net: float = dist - gap
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
+	opp_states.clear()
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id 			if ctx.snapshot.puck_state != null else -1
+	for pid: int in ctx.snapshot.skater_states:
+		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id or pid == carrier_pid:
+			continue
+		opp_states.append(ctx.snapshot.skater_states[pid])
+	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
+	if stand_from_net > r:
+		gap = dist - r
 	d.target_position = carrier_pos + (to_net / dist) * gap
 	return d

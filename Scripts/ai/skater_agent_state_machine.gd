@@ -3815,7 +3815,17 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 		return false
 	if snapshot.puck_state.carrier_peer_id != -1:
 		return false  # someone has the puck
-	return _is_closest_teammate_to_puck_at(snapshot, self_pos)
+	if not _is_closest_teammate_to_puck_at(snapshot, self_pos):
+		return false
+	# A race an opponent has already won isn't worth running: pushing after a
+	# clearly-lost puck skates the chaser out of the play while the counter
+	# develops (the missed-pass failure). Declining CHASE drops the bot to its
+	# role positioning — where the NEUTRAL CHASE slot pre-contains the pickup.
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	var self_vel: Vector3 = self_state.velocity if self_state != null else Vector3.ZERO
+	return not AIRoleHelpers.loose_puck_race_lost(
+			snapshot, self_pos, self_vel, _self_max_speed,
+			_team_id, _team_id_by_peer, _caps_by_peer)
 
 
 # Returns true if this bot is the closest teammate to the current
