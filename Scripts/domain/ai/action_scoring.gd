@@ -6,7 +6,7 @@ class_name AIActionScoring
 # ── Design intent: geometric xG ──────────────────────────────────────────────
 # `score_shoot` approximates expected goals (xG) — the probability a shot beats
 # the goalie given its geometry and the defensive context. It is a GEOMETRIC
-# model, not a curve fit: it scores the best of the seven goalie holes (the net
+# model, not a curve fit: it scores the best of the five goalie holes (the net
 # each clears past the goalie's reaction-gated, height-appropriate cover — see
 # the hole-model block below), then multiplies by lane clearance and forward-cone
 # pressure. Distance, angle, and coverage all EMERGE from that geometry; there
@@ -107,8 +107,10 @@ const SLOT_RADIUS_M: float = 6.0
 # the two ways a real goalie's do — a wider always-covered CORE and a slower
 # REACTION — which is what makes the loft choice fall out of the same geometry:
 #   cover = CORE + EXT × reaction ;  reaction = clamp((flight − DELAY)/DEPLOY,0,1)
-#   openness = the net the hole clears past the goalie's cover, projected onto
-#              the net plane (shadow) so foreshortening at sharp angles is honest
+#   openness = the net bearing interval the hole clears past the cover's BODY-DISC
+#              tangent cone (he squares to the puck, so the cover half-width faces
+#              every sightline — sharp angles are walled by his depth), minus the
+#              puck's clean-entry fit inset and the shooter's execution spread
 # Aggressive angle-challenging (the goalie plays OUT for a longer shot) is not a
 # constant — it's just where the goalie actually is, fed in as goalie_pos.
 #
@@ -500,7 +502,7 @@ const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 
 
-# Geometric shot danger in [0, 1]: the best of the seven goalie holes, seen from
+# Geometric shot danger in [0, 1]: the best of the five goalie holes, seen from
 # the shooter's eye, with the goalie a body that occludes part of the net.
 # Distance, angle, squareness, and reaction all emerge from the geometry — no
 # curves. Each hole is scored by _hole_open_angle (its opening in radians); the
@@ -619,8 +621,9 @@ static func _choose_shot_hole(
 
 # The net-plane aim x for a chosen hole. Corners aim at the open segment's
 # midpoint biased toward the post (matching AIShotAim's tuned corner bias); the
-# five-hole aims at the goalie's centre (between the legs). Reuses the same shadow
-# projection and unsettled-fade as _hole_open_angle so aim and score agree.
+# five-hole aims at the goalie's centre (between the legs). Reuses the same
+# body-disc cover model and unsettled-fade as _hole_open_angle so aim and score
+# agree.
 static func _hole_aim_x(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, flight: float, unsettled: float,
@@ -685,10 +688,10 @@ static func _hole_aim_x(
 
 
 # Projects a point (px at depth pz) onto the net plane (z = net_z) along the
-# sightline from the shooter — the point's "shadow" on the net. Working every
-# opening on the net plane in one frame is what keeps the geometry honest at
-# sharp angles: a wide-angle shooter foreshortens the net AND stretches the
-# goalie's shadow across it, both of which shrink the real opening.
+# sightline from the shooter — the point's "shadow" on the net. Only the
+# five-hole aim still uses this centre-point projection; the corner holes read
+# the goalie's cover as a body-disc tangent cone (see _hole_open_angle), which
+# is what keeps sharp angles honest.
 static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> float:
 	var dz: float = pz - shooter.z
 	if absf(dz) < 0.000001:

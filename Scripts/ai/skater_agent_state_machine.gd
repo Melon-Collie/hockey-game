@@ -406,7 +406,7 @@ var _blade_reach: float = BLADE_REACH_M
 # now correct, not a bug: at 125 ms the keeper's reaction (~0.13 s leg / 0.18 s
 # arm) has barely fired, so a set, squared goalie genuinely covers a straight-on
 # range shot (the bot shouldn't fire it) while lateral lag, point-blank arm-deploy
-# gaps, and the seven-hole geometry still open the shots it SHOULD take. 15 ticks
+# gaps, and the goalie-hole geometry still open the shots it SHOULD take. 15 ticks
 # still lets the charge tracker accumulate the forehand/backhand swing chirality.
 const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 8   # ~125 ms
 
@@ -520,7 +520,9 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 #     distribution when picking a corner. (±0.02 m on the output cursor,
 #     non-accumulating, ≈0.6° on the 2 m aim arm — calibrated so the
 #     spread at a typical shot range stays inside the entry-clamp inset
-#     the aim model reserves for it; see AIM_NOISE_STD_M / _hole_aim_x.)
+#     the aim model reserves for it, and the same spread is what the
+#     SCORE demands as extra window (RoleContext.self_aim_spread_rad →
+#     the fit inset in _hole_open_angle); see AIM_NOISE_STD_M / _hole_aim_x.)
 #
 # MOUSE_MAX_SPEED_M_S is now the perfect-bot DEFAULT / back-compat fallback;
 # the effective per-agent cap (_mouse_max_speed_m_s) is set from
@@ -562,11 +564,12 @@ const MOUSE_TICK_DELTA: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
 # ~110° of gate headroom.
 #
 # The EFFECTIVE arc rate is the lesser of this ceiling and the per-agent
-# blade-slew cap projected onto the carry ring (_mouse_max_speed_m_s /
-# CARRY_BLADE_AIM_FORWARD_M) — below that linear cap the arc target's
+# blade-slew cap projected onto the blade's real orbit radius (its stick+blade
+# span — see _apply_aim_slew; the 2 m cursor ring is virtual, so projecting
+# onto it under-rotated every carrier). Above that linear cap the arc target's
 # tangential speed would exceed the mouse's max step and `_step_mouse_toward`
-# would chord-cut corners instead of tracing the arc. apply_profile() derives
-# _mouse_arc_rate_rad_s from both; the const is the default / ceiling.
+# would chord-cut corners instead of tracing the arc. apply_capabilities()
+# derives _mouse_arc_rate_rad_s from both; the const is the default / ceiling.
 const MOUSE_ARC_RATE_RAD_S: float = 7.5
 var _mouse_arc_rate_rad_s: float = MOUSE_ARC_RATE_RAD_S
 
@@ -3605,9 +3608,12 @@ var _mouse_pos_initialized: bool = false
 #   (wrister windup interpolates a specific blade path that
 #   arc-snapping would distort; facing is locked during press
 #   states anyway, so the gate trip can't strand it) and for the
-#   chase state (the target may be the actual puck position at
-#   close range, and projecting it onto a 2 m ring would put the
-#   mouse beyond the puck and break pickup).
+#   chase state's CLOSE-RANGE aims — the puck inside blade reach and
+#   the blade gate on a fast puck's line, where the exact point
+#   matters for the pickup and a 2 m ring projection would overshoot
+#   it. The chase's FAR intercept aim arcs (_step_mouse_aim): a
+#   direct chord to an intercept behind the bot crosses the body and
+#   freezes facing in the IK gate's back wedge.
 # Cursor-shaping modes for _step_mouse_internal:
 #   DIRECT — chord straight toward the target at the slew cap (chase / press).
 #   ARC    — walk the target around the body ring at the blade slew (CARRY / blade

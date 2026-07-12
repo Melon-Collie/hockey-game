@@ -39,9 +39,10 @@ const INTENT_DUMP: int = 5
 
 # Least fire value (shot/pass EV) worth giving up possession for — the noise floor
 # below which "firing" is really a giveaway, so the bot keeps the puck instead.
-# A tactical floor, not an evaluation curve: it exists because the geometric shot
-# model has no range cliff (a hopeless long shot leaves a tiny residual rather
-# than exactly 0). A real in-range shot scores far above it.
+# A tactical floor, not an evaluation curve: the fit insets zero most hopeless
+# looks outright now, but tiny residuals still survive some geometries (a deep
+# keeper at extreme range, an off-centre sliver, a thin five-hole leak) and none
+# of them are worth the puck. A real in-range shot scores far above it.
 const FIRE_MIN_VALUE: float = 0.02
 
 # ── Scoring constants ────────────────────────────────────────────────────────
@@ -520,9 +521,10 @@ func _pick_action(ctx: RoleContext) -> void:
 	# a near-worthless fire must not beat a collapsing hold — a carrier swarmed deep
 	# in its own zone (pass = 0 all lanes covered, carry collapsing toward 0) must
 	# skate clear, not fling a hopeless shot away. This used to be a hard `> 0`:
-	# score_shoot returned exactly 0 out of range. The geometric shot model has no
-	# range cliff — a 47 m shot leaves a ~0.002 residual — so the gate is now a
-	# small tactical floor (FIRE_MIN_VALUE), the least shot value worth giving up
+	# score_shoot returned exactly 0 out of range. The fit insets zero most
+	# hopeless looks now, but tiny residuals still survive some geometries (deep
+	# keeper at extreme range, off-centre slivers), so the gate stays a small
+	# tactical floor (FIRE_MIN_VALUE), the least shot value worth giving up
 	# possession for. A real in-range shot scores well above it and still wins ties.
 	#
 	# ALSO: don't START a fire while staggered. A body check knocks the
@@ -589,7 +591,7 @@ func _pick_action(ctx: RoleContext) -> void:
 			# for long passes — see _compute_best_pass).
 			pass_should_saucer = best_pass_saucer
 		elif new_intent == INTENT_SHOOT:
-			# Loft AND aim from the same seven-hole geometry score_shoot used — the
+			# Loft AND aim from the same goalie-hole geometry score_shoot used — the
 			# chosen hole's elevation and net-plane target, scored at the projected
 			# release. Roofs a set goalie (top-corner window), stays flat on a
 			# five-hole / low corner, and aims exactly at that hole.
@@ -685,10 +687,10 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 #   - Skip ghosted teammates (puck passes through them).
 #   - Skip receivers predicted past our own goal line (own-goal risk).
 #   - Carrier in OZ → receiver must also be in OZ (offside protection).
-#   - Skip blade-ROM-unreachable receivers (quick-shot can't fire
-#     backward; without this filter the bot would pick a behind-me
-#     pass and the blade would clamp to ROM edge — puck dribbles
-#     forward into nothing).
+#   - Behind-the-back receivers are NOT skipped: an aim inside the real
+#     ±157° reach cone fires with no body turn, and only the narrow back
+#     wedge pays — as rotation time priced into the EV's delay via
+#     _facing_rotation_time (the old hard ROM-skip predates that model).
 #   - Hard zero for net-blocker (segment crosses net body) and
 #     own-DZ slot crossing (intercepted = goal-against).
 func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
@@ -808,7 +810,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # Predicts the goalie at `receiver_release_t` (flight + the receiver's
 # wrister charge, or flight alone for one-timer-ready receivers — the
 # caller decides). A cross-seam feed leaves the goalie mid-slide, so the
-# receiver's shot is scored against that unsettled goalie (the seven-hole
+# receiver's shot is scored against that unsettled goalie (the goalie-hole
 # geometry opens up when he's caught moving). Receiver shot speed stays the
 # league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
