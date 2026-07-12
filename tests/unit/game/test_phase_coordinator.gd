@@ -211,7 +211,7 @@ func test_end_of_period_emits_period_break_and_stashes_next_period() -> void:
 	sm.current_phase = GamePhase.Phase.END_OF_PERIOD
 	coord.handle_phase_entered()
 	assert_signal_emitted_with_parameters(
-			coord, "period_break_started", [GameRules.END_OF_PERIOD_PAUSE])
+			coord, "period_break_started", [GameRules.INTERMISSION_DURATION])
 	assert_eq(coord.period_after_break, 2, "break leads into the next period")
 
 

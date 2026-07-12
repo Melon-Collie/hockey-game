@@ -61,7 +61,7 @@ signal faceoff_skate_in_started(delay: float)
 # Fired on every peer when END_OF_PERIOD begins — the between-period break.
 # Skaters skate off to their bench doors over the window (PhaseCoordinator.
 # on_period_break_entered) while the camera rises to the wide intro framing.
-# `duration` is the break length (END_OF_PERIOD_PAUSE).
+# `duration` is the break length (INTERMISSION_DURATION).
 signal period_break_started(duration: float)
 # Fired (before faceoff_prep_announced) on a period-start faceoff — the prep
 # right after a period break. Same treatment as the pregame intro (bench
@@ -70,13 +70,15 @@ signal period_break_started(duration: float)
 signal period_intro_started(period: int, duration: float)
 signal replay_started
 signal replay_stopped
-# Intermission highlight reel (the ended period's goals replayed during the
-# END_OF_PERIOD break). started/ended bracket the reel on every peer — HUD
-# shows/hides the intermission band off these; clip_started fires as each goal
-# clip begins so the band can caption it with the goal credit. `reel_seconds`
-# is the reel window (INTERMISSION_DURATION − INTERMISSION_SETTLE) for the
+# Between-period intermission presentation. started raises the band (score +
+# countdown) on every peer INTERMISSION_SETTLE into the break — with the
+# ended period's goals looping behind it when there are any; clip_started
+# fires as each goal clip begins so the band can caption it with the goal
+# credit; ended fires when a reel is torn down (a reel-less break's band is
+# dismissed by the next faceoff prep instead). `reel_seconds` is the
+# post-settle window (INTERMISSION_DURATION − INTERMISSION_SETTLE) for the
 # band's countdown — derived from shared constants, so clients match the
-# host's timer up to RTC skew, which is fine for a cosmetic count.
+# host's timer up to clock skew, which is fine for a cosmetic count.
 signal intermission_started(period: int, reel_seconds: float)
 signal intermission_clip_started(
 		scoring_team_id: int, scorer_name: String,
@@ -1232,7 +1234,6 @@ func _wire_subsystems() -> void:
 	_intermission_replay_driver = PostGameReplayDriver.new()
 	_intermission_replay_driver.use_shared_replay_mode = true
 	add_child(_intermission_replay_driver)
-	_intermission_replay_driver.reel_started.connect(_on_intermission_reel_started)
 	_intermission_replay_driver.reel_started.connect(_on_local_replay_started)
 	_intermission_replay_driver.clip_started.connect(_on_intermission_clip_started)
 	_intermission_replay_driver.reel_stopped.connect(_on_intermission_reel_stopped)
@@ -1632,42 +1633,56 @@ func _stop_post_game_replay() -> void:
 		_post_game_replay_driver.stop()
 
 
-# ── Intermission highlight reel ───────────────────────────────────────────────
-# The ended period's goals loop behind the intermission band for a fixed
-# INTERMISSION_DURATION break. The host starts the reel INTERMISSION_SETTLE
-# after the horn (the chyron + skate-off beat, and the window that guarantees
-# clients have the END_OF_PERIOD phase byte before the replay-mode RPC lands);
-# replay mode freezes the SM timer, so the break ends when the reel stops —
-# the host's end timer (or a unanimous skip vote) stops it, and
-# _on_intermission_reel_stopped → GameStateMachine.finish_period_break rolls
-# the next period. A goalless period never arms it and rides the plain 6 s
-# timer.
+# ── Intermission (between-period break presentation) ─────────────────────────
+# Every break is a fixed INTERMISSION_DURATION. INTERMISSION_SETTLE after the
+# horn (the chyron + skate-off beat, and the window that guarantees clients
+# have the END_OF_PERIOD phase byte before the replay-mode RPC lands) every
+# peer raises the intermission band + countdown; when the ended period has
+# goals the host also starts the looping reel behind it — replay mode then
+# freezes the SM timer and the host's end timer (or a unanimous skip vote)
+# stops the reel, whose reel_stopped rolls the next period via
+# GameStateMachine.finish_period_break. A scoreless period holds just the
+# band over the wide rink and rides the SM's INTERMISSION_DURATION timer
+# (skip votes for that reel-less break tally in _break_skip_votes).
+
+# Host-only tally for skipping a reel-less (scoreless) break — the reel
+# drivers own their own tallies. Cleared at every break entry.
+var _break_skip_votes: Dictionary[int, bool] = {}
 
 func _on_period_break_for_intermission(_duration: float) -> void:
-	if not NetworkManager.is_host:
-		return  # clients start their reel off the mirrored replay-mode edge
-	if _state_machine == null or _goal_replay_store == null:
+	if _state_machine == null:
 		return
-	if _goal_replay_store.clips_for_period(_state_machine.current_period).is_empty():
-		return
+	_break_skip_votes.clear()
 	_intermission_timer = get_tree().create_timer(GameRules.INTERMISSION_SETTLE)
-	_intermission_timer.timeout.connect(_start_intermission_replay)
+	_intermission_timer.timeout.connect(_on_intermission_settle_elapsed)
 
 
-func _start_intermission_replay() -> void:
+# The settle beat is over: raise the band everywhere; host starts the reel
+# (no-op for a scoreless period) and re-baselines the skip tally clients see.
+func _on_intermission_settle_elapsed() -> void:
 	_intermission_timer = null
 	# The break may have been cut short (reset / return-to-lobby) during the
 	# settle beat.
 	if _state_machine == null \
 			or _state_machine.current_phase != GamePhase.Phase.END_OF_PERIOD:
 		return
+	intermission_started.emit(_state_machine.current_period,
+			GameRules.INTERMISSION_DURATION - GameRules.INTERMISSION_SETTLE)
+	if NetworkManager.is_host:
+		var total: int = _total_skip_voters()
+		NetworkManager.notify_skip_replay_vote_to_all(0, total)
+		skip_replay_vote_updated.emit(0, total)
+		_start_intermission_replay()
+
+
+func _start_intermission_replay() -> void:
 	if _intermission_replay_driver == null or _goal_replay_store == null \
 			or _codec == null or puck == null or _registry == null:
 		return
 	var clips: Array[Dictionary] = _goal_replay_store.clips_for_period(
 			_state_machine.current_period)
 	if clips.is_empty():
-		return
+		return  # scoreless break — the band stands alone over the live rink
 	_show_all_skaters()
 	_intermission_replay_driver.setup(_codec, _registry, puck, goalie_controllers)
 	_intermission_replay_driver.start(clips)
@@ -1710,8 +1725,8 @@ var _suppress_intermission_advance: bool = false
 
 func _stop_intermission_replay() -> void:
 	if _intermission_timer != null:
-		if _intermission_timer.timeout.is_connected(_start_intermission_replay):
-			_intermission_timer.timeout.disconnect(_start_intermission_replay)
+		if _intermission_timer.timeout.is_connected(_on_intermission_settle_elapsed):
+			_intermission_timer.timeout.disconnect(_on_intermission_settle_elapsed)
 		_intermission_timer = null
 	if _intermission_end_timer != null:
 		if _intermission_end_timer.timeout.is_connected(_end_intermission_replay):
@@ -1721,12 +1736,6 @@ func _stop_intermission_replay() -> void:
 		_suppress_intermission_advance = true
 		_intermission_replay_driver.stop()
 		_suppress_intermission_advance = false
-
-
-func _on_intermission_reel_started() -> void:
-	intermission_started.emit(
-			_state_machine.current_period if _state_machine != null else 0,
-			GameRules.INTERMISSION_DURATION - GameRules.INTERMISSION_SETTLE)
 
 
 func _on_intermission_clip_started(clip: Dictionary) -> void:
@@ -1987,9 +1996,10 @@ func is_in_replay_locally() -> bool:
 
 
 # HUD entry point. Called from _unhandled_input when the player presses
-# skip_replay during the cinematic.
+# skip_replay during a skippable window: the goal cinematic, or any part of
+# the between-period break (whose band is up whether or not a reel plays).
 func request_local_skip_vote() -> void:
-	if not _in_replay_locally:
+	if not _in_replay_locally and not is_period_break():
 		return
 	if NetworkManager.is_host:
 		_register_skip_vote(NetworkManager.local_peer_id())
@@ -2001,8 +2011,9 @@ func _on_remote_skip_replay_request(peer_id: int) -> void:
 	_register_skip_vote(peer_id)
 
 
-# Host-only: hands the vote to whichever skippable driver is active (goal
-# cinematic or intermission reel — never both), broadcasts the new tally so
+# Host-only: hands the vote to whichever skippable window is active — the
+# goal cinematic, the intermission reel, or a reel-less break (tallied here
+# directly, unanimity ends the break) — then broadcasts the new tally so
 # clients can update their prompt and (on unanimity) tear down their own
 # driver. Bots aren't in connected_peer_ids() so they never count toward the
 # total; spectators do (they have an ENet connection).
@@ -2018,10 +2029,16 @@ func _register_skip_vote(peer_id: int) -> void:
 			and _intermission_replay_driver.is_active():
 		_intermission_replay_driver.register_skip_vote(peer_id, total)
 		current = _intermission_replay_driver.get_skip_vote_count()
+	elif is_period_break():
+		_break_skip_votes[peer_id] = true
+		current = _break_skip_votes.size()
+		if current >= total and _state_machine.finish_period_break() \
+				and _phase_coord != null:
+			_phase_coord.handle_phase_entered()
 	else:
-		# Late votes (driver stopped naturally before the RPC landed) are
-		# dropped silently — broadcasting (0, total) here would reset client
-		# HUDs that are already transitioning to FACEOFF.
+		# Late votes (window closed before the RPC landed) are dropped
+		# silently — broadcasting (0, total) here would reset client HUDs
+		# that are already transitioning to FACEOFF.
 		return
 	NetworkManager.notify_skip_replay_vote_to_all(current, total)
 	skip_replay_vote_updated.emit(current, total)

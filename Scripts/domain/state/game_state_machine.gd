@@ -774,7 +774,10 @@ func _tick_phase(delta: float) -> bool:
 				_set_phase(GamePhase.Phase.PLAYING)
 				return true
 		GamePhase.Phase.END_OF_PERIOD:
-			if _phase_timer >= GameRules.END_OF_PERIOD_PAUSE:
+			# Only completes for a scoreless period's break: a period with
+			# goals enters replay mode (which freezes tick) and ends via
+			# finish_period_break instead.
+			if _phase_timer >= GameRules.INTERMISSION_DURATION:
 				_advance_period()
 				return true
 	return false

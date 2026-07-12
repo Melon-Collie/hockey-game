@@ -1150,6 +1150,9 @@ func _on_phase_changed(new_phase: int) -> void:
 # pre-fix bug: client sees "FACEOFF IN 2" while their skater is still parked
 # at the post-goal position, then pops onto the dot mid-countdown).
 func _on_faceoff_prep_announced() -> void:
+	# A reel-less (scoreless) break's band has no intermission_ended to dismiss
+	# it — the next prep is its exit. Idempotent for reel breaks (already hidden).
+	_on_intermission_ended()
 	_clear_goal_template()
 	_phase_label.add_theme_color_override("font_color", _WHITE)
 	_phase_label.visible = true

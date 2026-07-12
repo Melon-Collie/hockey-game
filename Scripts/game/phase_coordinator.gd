@@ -298,13 +298,13 @@ func on_period_break_entered() -> void:
 		var dist: float = Vector2(start.x - target.x, start.z - target.z).length()
 		var duration: float = PlayerRules.skate_in_duration(
 				dist, GameRules.FACEOFF_APPROACH_DURATION,
-				GameRules.END_OF_PERIOD_PAUSE - GameRules.PERIOD_BREAK_SETTLE)
+				GameRules.INTERMISSION_DURATION - GameRules.PERIOD_BREAK_SETTLE)
 		# Settle facing +X: squared up to the bench boards, as if stepping off.
 		# Live velocity flows the glide out of end-of-period momentum, exactly
 		# like a stoppage skate-in.
 		record.controller.begin_approach(
 				start, target, Vector2(1.0, 0.0), duration, record.skater.velocity)
-	period_break_started.emit(GameRules.END_OF_PERIOD_PAUSE)
+	period_break_started.emit(GameRules.INTERMISSION_DURATION)
 
 
 func on_pickup(_peer_id: int) -> void:

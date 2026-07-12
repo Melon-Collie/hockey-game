@@ -868,7 +868,7 @@ func test_advance_post_goal_resets_dot_to_center() -> void:
 func test_period_advance_resets_dot_to_center() -> void:
 	sm.active_faceoff_dot = Vector2(-6.5, 22.1)
 	sm.tick(GameRules.PERIOD_DURATION + 0.01)        # → END_OF_PERIOD
-	sm.tick(GameRules.END_OF_PERIOD_PAUSE + 0.01)    # → FACEOFF_PREP
+	sm.tick(GameRules.INTERMISSION_DURATION + 0.01)  # → FACEOFF_PREP
 	assert_eq(sm.active_faceoff_dot, GameRules.CENTER_ICE_DOT)
 
 func test_get_faceoff_positions_uses_active_dot() -> void:
@@ -906,8 +906,8 @@ func test_advance_period_increments_period_and_resets_clock() -> void:
 	# Expire current period → END_OF_PERIOD
 	sm.tick(GameRules.PERIOD_DURATION + 0.01)
 	assert_eq(sm.current_phase, GamePhase.Phase.END_OF_PERIOD)
-	# Wait out the end-of-period pause → FACEOFF_PREP (period 2)
-	sm.tick(GameRules.END_OF_PERIOD_PAUSE + 0.01)
+	# Wait out the (scoreless) break → FACEOFF_PREP (period 2)
+	sm.tick(GameRules.INTERMISSION_DURATION + 0.01)
 	assert_eq(sm.current_phase, GamePhase.Phase.FACEOFF_PREP)
 	assert_eq(sm.current_period, 2)
 	assert_eq(sm.time_remaining, GameRules.PERIOD_DURATION)

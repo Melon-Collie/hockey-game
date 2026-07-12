@@ -61,26 +61,24 @@ const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
 # Between-period break: END_OF_PERIOD runs the skate-off — every skater glides
 # from where play stopped to their bench door (PhaseCoordinator.
-# on_period_break_entered) under the wide period-break camera hold, then the
-# next prep runs the bench intro back onto the ice with the period card. The
-# pause is sized so the worst case (far corner → bench ≈ 44 m at
-# FACEOFF_SKATE_IN_SPEED ≈ 4.9 s) fits with PERIOD_BREAK_SETTLE to spare.
-# The 6 s timer is the whole break only for a goalless period: when the ended
-# period has goals, the break becomes a fixed INTERMISSION_DURATION — the
-# highlight reel takes over INTERMISSION_SETTLE seconds in (replay mode
-# freezes the phase timer) and loops the period's goals under a countdown
-# until the host's intermission timer ends the break via
-# GameStateMachine.finish_period_break. A unanimous skip vote ends it early.
-const END_OF_PERIOD_PAUSE: float   = 6.0
-const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the bench before the next prep
-# Live beat between the period horn and the intermission reel taking over:
-# lets the END-OF-PERIOD chyron + skate-off read first, and guarantees every
-# client has received the END_OF_PERIOD phase byte (unreliable WS) before the
-# reliable replay-mode RPC branches on it.
+# on_period_break_entered, hiding through the door on arrival) under the wide
+# period-break camera hold, then the next prep runs the bench intro back onto
+# the ice with the period card. Every break is a fixed INTERMISSION_DURATION:
+# after the INTERMISSION_SETTLE beat the intermission band + countdown come
+# up, with the period's goals looping behind them when there are any (replay
+# mode freezes the phase timer; the host's intermission timer ends the break
+# via GameStateMachine.finish_period_break) — a scoreless period holds the
+# same band over the wide rink and rides the phase timer instead. A unanimous
+# skip vote ends either break early. The worst skate-off trip (far corner →
+# bench ≈ 44 m at FACEOFF_SKATE_IN_SPEED ≈ 4.9 s) fits well inside the break.
+const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the bench before the break ends
+# Live beat between the period horn and the intermission band / reel taking
+# over: lets the END-OF-PERIOD chyron + skate-off read first, and guarantees
+# every client has received the END_OF_PERIOD phase byte (unreliable WS)
+# before the reliable replay-mode RPC branches on it.
 const INTERMISSION_SETTLE: float   = 2.0
-# Total break length when the ended period has goals (settle beat + reel
-# window). The reel loops the period's clips to fill it; the on-screen
-# countdown counts the reel window down.
+# Total between-period break length (settle beat + band/reel window). The
+# on-screen countdown counts the post-settle window down.
 const INTERMISSION_DURATION: float = 20.0
 const OT_ENABLED: bool             = true
 const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
