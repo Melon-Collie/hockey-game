@@ -45,6 +45,17 @@ const INTENT_DUMP: int = 5
 # of them are worth the puck. A real in-range shot scores far above it.
 const FIRE_MIN_VALUE: float = 0.02
 
+# ── Smart-ping obedience ─────────────────────────────────────────────────────
+# EV multipliers a live human ping applies inside the normal compete — a
+# tactical ORDER (legitimately hand-set, like the blue-line valve), not an
+# evaluation curve. A bias rather than a hard force on purpose: the grounded
+# models still veto a hopeless order (a SHOOT ping never fires a zero-value
+# look from behind the net, PASS_TO_ME never threads a dead lane — the
+# FIRE_MIN_VALUE giveaway floor still applies), but any remotely reasonable
+# read now wins the compete, so the bot visibly obeys.
+const PING_SHOOT_EV_MULT: float = 3.0
+const PING_PASS_EV_MULT: float = 3.0
+
 # ── Scoring constants ────────────────────────────────────────────────────────
 # Re-evaluation cadence. CARRY runs every physics tick; without throttling the
 # scoring (10 carry candidates × per-teammate pass × opponent
@@ -442,6 +453,11 @@ func _pick_action(ctx: RoleContext) -> void:
 	# score_at(candidate, projected_opps) × path_clear × time_decay.
 	# Time uses momentum-aware effective speed so reverse candidates
 	# self-discount via longer arrival time.
+	# Smart-ping SHOOT: a teammate ordered this carrier to fire (see
+	# PING_SHOOT_EV_MULT — bias, not force; a zero shot stays zero).
+	if ctx.ping_shoot_active and shoot_score > 0.0:
+		shoot_score *= PING_SHOOT_EV_MULT
+
 	var carry_result: Array = _best_carry(ctx)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
@@ -758,6 +774,10 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 				ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
 		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
 				receiver_release_t, flight_t + rotation_time, our_goalie, receiver_caps)
+		# Smart-ping PASS_TO_ME / IM_OPEN: the pinger asked for the puck (see
+		# PING_PASS_EV_MULT — bias, not force; a dead lane still scores 0).
+		if peer_id == ctx.ping_pass_target_peer and s > 0.0:
+			s *= PING_PASS_EV_MULT
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id

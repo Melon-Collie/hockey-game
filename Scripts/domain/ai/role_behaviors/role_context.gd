@@ -109,6 +109,19 @@ var check_aggression: float = 1.0
 # man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
 var defensive_anticipation_scale: float = 1.0
 
+# ── Smart-ping directive (a human teammate's tactical order) ──────────────────
+# Populated per dispatch from TeamBrain.ping_* (AIPingDirectives). Defaults are
+# the no-op baseline so unwired contexts (unit tests) behave exactly as before.
+# GO_THERE steering override for THIS bot; Vector3.INF = none. The off-puck
+# state machine replaces RoleDecision.target_position with it.
+var ping_move_target: Vector3 = Vector3.INF
+# A live SHOOT ping on this bot while it carries — the carrier multiplies its
+# shoot EV by AIRoleCarrier.PING_SHOOT_EV_MULT.
+var ping_shoot_active: bool = false
+# The pinger of a live PASS_TO_ME / IM_OPEN ping (-1 none) — the carrier
+# multiplies that receiver's pass EV by AIRoleCarrier.PING_PASS_EV_MULT.
+var ping_pass_target_peer: int = -1
+
 # Physics ticks per AI dispatch (decide() call). 1 = the perfect-bot default /
 # every-physics-tick; higher at lower difficulty tiers. Roles that track real
 # time (e.g. the carrier's re-eval cadence + hold-decay clock) must scale their

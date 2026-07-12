@@ -207,6 +207,15 @@ func _ready() -> void:
 		_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed(&"smart_ping"):
+		# Context-sensitive team ping (chat bubble + bot directive). Resolution
+		# and all gating (spectator/replay/cooldown/no-op contexts) live in
+		# GameManager.try_send_smart_ping; the HUD only swallows the press when
+		# a menu owns the screen.
+		if not (_confirm_dialog.visible or _pause_menu.visible or _side_menu.visible):
+			GameManager.try_send_smart_ping()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed(&"skip_replay"):
 		# Gate on the skip-prompt visibility (goal cinematic — HUD's own label;
 		# intermission — the overlay's line) so the (Space-shared) brake key
