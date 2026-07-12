@@ -443,17 +443,20 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 	var pos2d := Vector2(pos.x, pos.z)
 	var clamped := GameRules.clamp_to_rink_inner(pos2d)
 	var xz_outside: float = pos2d.distance_to(clamped)
-	# Out of play if the puck is clearly outside the boundary (XZ), OR it is at/past
-	# the boundary while elevated above the boards — the latter catches a puck that
-	# went over the glass or perched on the boards, which the flat 0.2 m XZ check
-	# alone would miss (soft-lock). A legitimate high deflection is INSIDE the rink,
-	# so its xz_outside is ~0 and it doesn't trip the height branch.
-	var over_boards: bool = xz_outside > 0.01 \
-			and (pos.y - puck.ice_height) > GameRules.PUCK_OVER_BOARDS_HEIGHT
-	if xz_outside > 0.2 or over_boards:
+	# The puck's collision face IS the inner boundary (kickplate lip), so a loose
+	# puck's own radius keeps its center ≥6 cm inside it. Any center sustained
+	# past the boundary — at any height — means the puck escaped into or through
+	# the wall; the grace absorbs transient penetration spikes. See the tolerance
+	# doc in GameRules for why there's no separate height branch anymore.
+	if xz_outside > GameRules.PUCK_OOB_XZ_TOLERANCE:
 		_puck_oob_timer += delta
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
+			# Escape diagnostics — every whistle here means the puck got past
+			# collision that should have contained it. Rare event, so the log
+			# string build is fine; playtest logs pinpoint where/how it got out.
+			print("[puck-oob] whistle: pos=%.2v vel=%.1v height=%.2f xz_outside=%.3f" % [
+					pos, puck.linear_velocity, pos.y - puck.ice_height, xz_outside])
 			# Use the boundary projection — how far past the boards the puck
 			# travelled shouldn't sway dot selection.
 			var dot: Vector2 = GameRules.nearest_faceoff_dot(clamped)

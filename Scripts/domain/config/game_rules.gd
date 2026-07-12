@@ -86,7 +86,16 @@ const WALL_THICKNESS: float      = 0.3
 # to rink center than the boards' face. The blade-clamp uses this innermost
 # surface so the blade can't poke past the visible kickplate.
 const KICKPLATE_INWARD_LIP: float = 0.01
+# Top of the opaque board stack (kickplate + white board + cap rail); the
+# transparent glass starts here. Single-sourced: HockeyRink.wall_height reads
+# this as its export default (don't override it in the scene). Used by the
+# HUD's puck-behind-boards check — a camera sightline crossing the boundary
+# below this height is blocked by opaque boards; above it, only glass.
+const BOARD_TOP_HEIGHT: float = 1.07
 # Inner wall boundary — the innermost visible wall surface (kickplate lip).
+# This is also the puck's COLLISION surface (HockeyRink builds the perimeter
+# collision at the kickplate lip), so physics, blade clamp, AI trajectory
+# reflection, and the OOB check all share one boundary.
 const INNER_HALF_WIDTH: float    = RINK_HALF_WIDTH  - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 12.84
 const INNER_HALF_LENGTH: float   = RINK_HALF_LENGTH - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 29.84
 const INNER_CORNER_RADIUS: float = CORNER_RADIUS    - WALL_THICKNESS * 0.5 - KICKPLATE_INWARD_LIP  # 8.37
@@ -188,17 +197,19 @@ const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # and the puck's side is 0, so 0 + 0.4 = 0.4 regardless.)
 const PUCK_BOARD_BOUNCE: float = 0.4
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
-# the stoppage feels responsive, long enough that pucks bouncing back in off
-# the boards don't get false-flagged.
+# the stoppage feels responsive, long enough that a transient penetration spike
+# (a slapshot buried into the boards for a tick or two before Jolt's recovery
+# pushes it back) never false-flags — the timer resets the moment the puck
+# reads inside again.
 const PUCK_OOB_GRACE_DURATION: float = 1.0
-# Defense-in-depth height term for the OOB check: a puck this far above the ice
-# while at/beyond the rink boundary has gone over the glass or perched on the
-# boards — the flat XZ check tolerates 0.2 m and would miss it, soft-locking play.
-# Above the boards (~1.07 m) but below any legitimate in-rink deflection apex
-# (those are INSIDE, so their XZ distance-to-boundary is ~0 and they don't trip
-# this). The raised perimeter collision should prevent the escape outright; this
-# is the backstop if a puck gets outside some other way.
-const PUCK_OVER_BOARDS_HEIGHT: float = 1.2
+# XZ distance past the inner (kickplate-lip) boundary before the OOB timer
+# runs. The puck COLLIDES at that boundary, so a loose puck's own radius keeps
+# its center ≥6 cm inside — a center sustained even 1 cm past the lip means the
+# puck escaped into or through the wall (tunnelled at speed, squeezed through
+# by a board pin, or over the glass). The previous 0.2 m tolerance plus a
+# height branch left a dead zone: a puck trapped INSIDE the 0.3 m wall band at
+# ice level tripped neither and soft-locked play, invisible behind the boards.
+const PUCK_OOB_XZ_TOLERANCE: float = 0.01
 
 # Puck-stuck-on-net detection. A puck that settles motionless on the net frame
 # never touches the ice, so the normal on-ice/airborne logic leaves it

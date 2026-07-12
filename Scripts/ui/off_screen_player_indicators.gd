@@ -72,12 +72,19 @@ func _draw() -> void:
 
 	# Puck indicator: black-filled, white-outlined arrow distinct from the
 	# jersey-colored player arrows. Drawn after the players so it sits on top
-	# in the (rare) case of overlap at a screen corner.
+	# in the (rare) case of overlap at a screen corner. Two cases share the
+	# arrow style: puck off-screen (edge arrow pointing at it) and puck
+	# on-screen but hidden behind the opaque board stack (arrow hovering over
+	# the spot, pointing down at it — a rimming puck hugs the wall inside the
+	# ~30 cm occlusion shadow the boards cast at the default camera tilt).
 	var puck: Puck = GameManager.puck
 	if puck != null:
 		var puck_world_pos: Vector3 = puck.global_position
 		var puck_behind: bool = camera.is_position_behind(puck_world_pos)
 		var puck_raw: Vector2 = camera.unproject_position(puck_world_pos)
+		var puck_dist: float = local_pos.distance_to(puck_world_pos)
+		var puck_t: float = clampf(inverse_lerp(_NEAR_DISTANCE, _FAR_DISTANCE, puck_dist), 0.0, 1.0)
+		var puck_scale: float = lerpf(_ARROW_MAX_SCALE, _ARROW_MIN_SCALE, puck_t)
 		if puck_behind or not screen_rect.has_point(puck_raw):
 			var puck_dir: Vector2
 			if puck_behind:
@@ -86,10 +93,43 @@ func _draw() -> void:
 				puck_dir = (puck_raw - center).normalized()
 			if puck_dir != Vector2.ZERO and is_finite(puck_dir.x) and is_finite(puck_dir.y):
 				var puck_edge_pos: Vector2 = _intersect_rect_from_center(center, puck_dir, inner)
-				var puck_dist: float = local_pos.distance_to(puck_world_pos)
-				var puck_t: float = clampf(inverse_lerp(_NEAR_DISTANCE, _FAR_DISTANCE, puck_dist), 0.0, 1.0)
-				var puck_scale: float = lerpf(_ARROW_MAX_SCALE, _ARROW_MIN_SCALE, puck_t)
 				_draw_arrow(puck_edge_pos, puck_dir, puck_scale, _PUCK_FILL_COLOR, _PUCK_OUTLINE_COLOR)
+		elif _puck_hidden_by_boards(camera, puck_world_pos):
+			var hover_pos: Vector2 = puck_raw - Vector2(0.0, _ARROW_BASE_SIZE * puck_scale)
+			_draw_arrow(hover_pos, Vector2.DOWN, puck_scale, _PUCK_FILL_COLOR, _PUCK_OUTLINE_COLOR)
+
+# True when the camera→puck sightline passes through the opaque board stack
+# (kickplate + white board + cap rail — everything below GameRules.
+# BOARD_TOP_HEIGHT; above that is transparent glass). Pure math against the
+# same rounded-rect boundary the physics collide with, no raycast: the rink
+# interior is convex, so the sightline can only enter a wall if the camera's
+# ground (XZ) position is outside the boundary, and then the puck→camera
+# segment crosses the boundary exactly once. Bisect that crossing and compare
+# its height to the board top. An escaped puck (already outside the boundary
+# itself — the whistle-pending case) crosses at t=0, so it reads hidden
+# whenever it's below board-top height, which is exactly right.
+func _puck_hidden_by_boards(camera: Camera3D, puck_pos: Vector3) -> bool:
+	var cam_pos: Vector3 = camera.global_position
+	var cam_xz := Vector2(cam_pos.x, cam_pos.z)
+	if GameRules.clamp_to_rink_inner(cam_xz).distance_squared_to(cam_xz) < 1e-9:
+		return false  # camera XZ inside the (convex) rink — sightline never crosses a wall
+	var puck_xz := Vector2(puck_pos.x, puck_pos.z)
+	# t = 0 at the puck, t = 1 at the camera.
+	var t_cross: float = 0.0
+	if GameRules.clamp_to_rink_inner(puck_xz).distance_squared_to(puck_xz) < 1e-9:
+		var lo: float = 0.0  # inside end
+		var hi: float = 1.0  # outside end
+		for _i: int in range(20):
+			var mid: float = (lo + hi) * 0.5
+			var mid_xz: Vector2 = puck_xz.lerp(cam_xz, mid)
+			if GameRules.clamp_to_rink_inner(mid_xz).distance_squared_to(mid_xz) < 1e-9:
+				lo = mid
+			else:
+				hi = mid
+		t_cross = hi
+	var crossing_y: float = lerpf(puck_pos.y, cam_pos.y, t_cross)
+	return crossing_y < GameRules.BOARD_TOP_HEIGHT
+
 
 func _draw_arrow(pos: Vector2, dir: Vector2, arrow_scale: float, color: Color, outline_color: Color = _OUTLINE_COLOR) -> void:
 	var sz: float = _ARROW_BASE_SIZE * arrow_scale
