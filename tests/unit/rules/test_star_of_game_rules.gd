@@ -76,3 +76,40 @@ func test_human_tiebreak_does_not_demote_existing_human() -> void:
 	var scores: Array[float] = [4.0, 4.0]
 	var humans: Array[bool] = [true, false]
 	assert_eq(StarOfGameRules.pick_star(scores, humans), 0)
+
+
+# ── pick_stars ────────────────────────────────────────────────────────────────
+
+func test_stars_ranked_best_first() -> void:
+	var scores: Array[float] = [2.0, 7.5, 3.0, 1.0]
+	var humans: Array[bool] = [true, true, true, true]
+	assert_eq(StarOfGameRules.pick_stars(scores, humans), [1, 2, 0] as Array[int])
+
+func test_stars_skip_zero_stat_players() -> void:
+	# Only two players registered a stat — the third star seat stays empty.
+	var scores: Array[float] = [0.0, 5.0, 0.0, 2.0]
+	var humans: Array[bool] = [true, true, true, true]
+	assert_eq(StarOfGameRules.pick_stars(scores, humans), [1, 3] as Array[int])
+
+func test_stars_nothing_game_is_empty() -> void:
+	var scores: Array[float] = [0.0, 0.0]
+	var humans: Array[bool] = [true, true]
+	assert_eq(StarOfGameRules.pick_stars(scores, humans), [] as Array[int])
+
+func test_stars_tie_order_applies_at_every_rank() -> void:
+	# Ranks 2 and 3 are tied at 4.0: the human outranks the bot even though the
+	# bot has the earlier index.
+	var scores: Array[float] = [9.0, 4.0, 4.0]
+	var humans: Array[bool] = [false, false, true]
+	assert_eq(StarOfGameRules.pick_stars(scores, humans), [0, 2, 1] as Array[int])
+
+func test_stars_respects_max_count() -> void:
+	var scores: Array[float] = [5.0, 4.0, 3.0, 2.0]
+	var humans: Array[bool] = [true, true, true, true]
+	assert_eq(StarOfGameRules.pick_stars(scores, humans, 2), [0, 1] as Array[int])
+
+func test_pick_star_matches_first_of_pick_stars() -> void:
+	var scores: Array[float] = [2.0, 7.5, 3.0]
+	var humans: Array[bool] = [true, true, true]
+	assert_eq(StarOfGameRules.pick_star(scores, humans),
+			StarOfGameRules.pick_stars(scores, humans)[0])

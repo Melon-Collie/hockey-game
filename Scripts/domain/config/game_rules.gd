@@ -11,17 +11,23 @@ const GOAL_PAUSE_DURATION: float        = 2.0  # fallback for GOAL_SCORED auto-a
 const GOAL_CELEBRATION_DURATION: float  = 1.5  # post-goal beat: movement allowed, puck pickup-locked,
 												# banner + VFX play; auto-advances to GOAL_SCORED (replay)
 const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdown before puck unlocks
-# Extra hold on a bench-intro faceoff — the OPENING faceoff of a match (game
-# start + rematch: camera sweep, matchup card, crowd buzz) and each PERIOD
-# START (same sweep + skate-on with the period card instead). The normal
-# countdown runs in the final FACEOFF_PREP_DURATION of the extended window.
-const PREGAME_INTRO_DURATION: float = 4.0
+# Extra hold on the OPENING faceoff of a match (game start + rematch): camera
+# sweep, full-screen matchup rosters, crowd buzz. Longer than the period-start
+# hold because the matchup screen lists all six players and needs the read
+# time. The normal countdown runs in the final FACEOFF_PREP_DURATION of the
+# extended window.
+const PREGAME_INTRO_DURATION: float = 8.0
+# Extra hold on each PERIOD-START faceoff (same sweep + bench skate-on with
+# the "2ND PERIOD" card instead of the matchup rosters — a single line, so the
+# original shorter beat).
+const PERIOD_INTRO_DURATION: float = 4.0
 # Skate-in glide durations (see SkaterController.begin_approach). Players skate
 # from a start point to the faceoff dot instead of teleport-snapping. Each stays
 # comfortably shorter than its prep window so everyone is set on the dot before
 # the drop: a normal faceoff arrives with ~0.75 s of countdown to settle + aim;
-# the opening intro arrives just as the "2 → 1 → DROP" countdown begins (the
-# skate happens under the camera sweep during the PREGAME_INTRO_DURATION hold).
+# a period-start intro arrives just as the "2 → 1 → DROP" countdown begins, and
+# the opening intro's longer matchup hold leaves the skaters set at the dot for
+# its back half (the skate happens under the camera sweep + matchup screen).
 const FACEOFF_APPROACH_DURATION: float = 1.25
 const INTRO_APPROACH_DURATION: float   = 3.6
 # Post-goal faceoffs stage the skate-in from this far behind the dot (toward the
@@ -55,12 +61,25 @@ const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
 # Between-period break: END_OF_PERIOD runs the skate-off — every skater glides
 # from where play stopped to their bench door (PhaseCoordinator.
-# on_period_break_entered) under the wide period-break camera hold, then the
-# next prep runs the bench intro back onto the ice with the period card. The
-# pause is sized so the worst case (far corner → bench ≈ 44 m at
-# FACEOFF_SKATE_IN_SPEED ≈ 4.9 s) fits with PERIOD_BREAK_SETTLE to spare.
-const END_OF_PERIOD_PAUSE: float   = 6.0
-const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the bench before the next prep
+# on_period_break_entered, hiding through the door on arrival) under the wide
+# period-break camera hold, then the next prep runs the bench intro back onto
+# the ice with the period card. Every break is a fixed INTERMISSION_DURATION:
+# after the INTERMISSION_SETTLE beat the intermission band + countdown come
+# up, with the period's goals looping behind them when there are any (replay
+# mode freezes the phase timer; the host's intermission timer ends the break
+# via GameStateMachine.finish_period_break) — a scoreless period holds the
+# same band over the wide rink and rides the phase timer instead. A unanimous
+# skip vote ends either break early. The worst skate-off trip (far corner →
+# bench ≈ 44 m at FACEOFF_SKATE_IN_SPEED ≈ 4.9 s) fits well inside the break.
+const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the bench before the break ends
+# Live beat between the period horn and the intermission band / reel taking
+# over: lets the END-OF-PERIOD chyron + skate-off read first, and guarantees
+# every client has received the END_OF_PERIOD phase byte (unreliable WS)
+# before the reliable replay-mode RPC branches on it.
+const INTERMISSION_SETTLE: float   = 2.0
+# Total between-period break length (settle beat + band/reel window). The
+# on-screen countdown counts the post-settle window down.
+const INTERMISSION_DURATION: float = 20.0
 const OT_ENABLED: bool             = true
 const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
 

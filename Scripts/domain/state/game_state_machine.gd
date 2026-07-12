@@ -774,10 +774,26 @@ func _tick_phase(delta: float) -> bool:
 				_set_phase(GamePhase.Phase.PLAYING)
 				return true
 		GamePhase.Phase.END_OF_PERIOD:
-			if _phase_timer >= GameRules.END_OF_PERIOD_PAUSE:
+			# Only completes for a scoreless period's break: a period with
+			# goals enters replay mode (which freezes tick) and ends via
+			# finish_period_break instead.
+			if _phase_timer >= GameRules.INTERMISSION_DURATION:
 				_advance_period()
 				return true
 	return false
+
+# Ends the between-period break immediately (host). The intermission highlight
+# reel owns the break's real length — replay mode freezes tick() while it
+# plays, so the END_OF_PERIOD timer only drives the goalless quick break — and
+# the reel's completion (natural or skip-vote) calls this to roll the next
+# period. Returns true when the break was actually ended (caller then runs
+# phase-entry side effects); no-op outside END_OF_PERIOD.
+func finish_period_break() -> bool:
+	if current_phase != GamePhase.Phase.END_OF_PERIOD:
+		return false
+	_advance_period()
+	return true
+
 
 func _on_period_clock_expired() -> void:
 	if current_period >= num_periods:

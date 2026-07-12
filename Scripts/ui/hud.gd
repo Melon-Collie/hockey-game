@@ -30,6 +30,8 @@ var _assist_tag_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
+var _intermission_overlay: IntermissionOverlay = null
+var _matchup_overlay: MatchupIntroOverlay = null
 var _pause_menu: PauseMenu = null
 var _side_menu: SideMenu = null
 var _bug_dialog: BugReportDialog = null
@@ -114,6 +116,10 @@ func _ready() -> void:
 	_game_over_popup.free_play_pressed.connect(_on_game_over_free_play)
 	_game_over_popup.exit_pressed.connect(_on_game_over_exit)
 	add_child(_game_over_popup)
+	_intermission_overlay = IntermissionOverlay.new()
+	add_child(_intermission_overlay)
+	_matchup_overlay = MatchupIntroOverlay.new()
+	add_child(_matchup_overlay)
 	_pause_menu = PauseMenu.new()
 	_pause_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
 	_pause_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
@@ -186,6 +192,9 @@ func _ready() -> void:
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
+	GameManager.intermission_started.connect(_on_intermission_started)
+	GameManager.intermission_clip_started.connect(_on_intermission_clip_started)
+	GameManager.intermission_ended.connect(_on_intermission_ended)
 	GameManager.local_spectator_state_changed.connect(func(is_spec: bool) -> void:
 		_apply_spectator_chrome()
 		if is_spec and _toast_stack != null:
@@ -199,9 +208,12 @@ func _ready() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"skip_replay"):
-		# Gate on the skip-prompt visibility so the (Space-shared) brake key
-		# never accidentally fires a vote outside of the cinematic window.
-		if _skip_prompt_label != null and _skip_prompt_label.visible:
+		# Gate on the skip-prompt visibility (goal cinematic — HUD's own label;
+		# intermission — the overlay's line) so the (Space-shared) brake key
+		# never accidentally fires a vote outside of a skippable window.
+		var skippable: bool = (_skip_prompt_label != null and _skip_prompt_label.visible) \
+				or (_intermission_overlay != null and _intermission_overlay.visible)
+		if skippable:
 			GameManager.request_local_skip_vote()
 			get_viewport().set_input_as_handled()
 		return
@@ -1026,13 +1038,58 @@ func _on_skip_replay_vote_updated(current: int, total: int) -> void:
 	_refresh_skip_prompt_text()
 
 func _refresh_skip_prompt_text() -> void:
-	if _skip_prompt_label == null:
-		return
+	var text: String = _skip_prompt_text()
+	if _skip_prompt_label != null:
+		_skip_prompt_label.text = text
+	# The intermission overlay shows its own skip line (the HUD label would sit
+	# under its scrim); keep it fed with the same tally.
+	if _intermission_overlay != null and _intermission_overlay.visible:
+		_intermission_overlay.set_skip_text(text)
+
+func _skip_prompt_text() -> String:
 	if _skip_vote_total <= 1:
 		# Solo session — no tally, the single press just skips.
-		_skip_prompt_label.text = "[SPACE] TO SKIP"
-	else:
-		_skip_prompt_label.text = "[SPACE] TO SKIP  (%d/%d)" % [_skip_vote_current, _skip_vote_total]
+		return "[SPACE] TO SKIP"
+	return "[SPACE] TO SKIP  (%d/%d)" % [_skip_vote_current, _skip_vote_total]
+
+# ── Intermission (between-periods highlight reel) ────────────────────────────
+
+func _on_intermission_started(period: int, reel_seconds: float) -> void:
+	# The band replaces the END-OF-PERIOD chyron; the reel is already rolling
+	# behind it.
+	_phase_wrapper.visible = false
+	_intermission_overlay.present(_intermission_title(period),
+			_score_0, _score_1, _scorebug_stripe(0), _scorebug_stripe(1),
+			reel_seconds)
+	_intermission_overlay.set_skip_text(_skip_prompt_text())
+
+func _on_intermission_clip_started(scoring_team_id: int, scorer_name: String,
+		assist1_name: String, assist2_name: String) -> void:
+	var assists: PackedStringArray = PackedStringArray()
+	if not assist1_name.is_empty():
+		assists.append(assist1_name)
+	if not assist2_name.is_empty():
+		assists.append(assist2_name)
+	var tag_color: Color = _scorebug_stripe(scoring_team_id) \
+			if scoring_team_id >= 0 else _WHITE
+	_intermission_overlay.set_goal_caption(
+			tag_color, scorer_name, ", ".join(assists))
+
+func _on_intermission_ended() -> void:
+	_intermission_overlay.hide_overlay()
+	_skip_vote_current = 0
+	_skip_vote_total = 0
+
+# Band title for the break after period `p`: "END OF 1ST PERIOD", or
+# "END OF OVERTIME" when repeated OT ties keep the game going.
+func _intermission_title(p: int) -> String:
+	var n: int = GameManager.get_num_periods()
+	if p <= n:
+		return "END OF %s PERIOD" % _period_ordinal(p)
+	var ot: int = p - n
+	if ot <= 1:
+		return "END OF OVERTIME"
+	return "END OF OVERTIME %d" % ot
 
 func _on_phase_changed(new_phase: int) -> void:
 	match new_phase:
@@ -1093,6 +1150,9 @@ func _on_phase_changed(new_phase: int) -> void:
 # pre-fix bug: client sees "FACEOFF IN 2" while their skater is still parked
 # at the post-goal position, then pops onto the dot mid-countdown).
 func _on_faceoff_prep_announced() -> void:
+	# A reel-less (scoreless) break's band has no intermission_ended to dismiss
+	# it — the next prep is its exit. Idempotent for reel breaks (already hidden).
+	_on_intermission_ended()
 	_clear_goal_template()
 	_phase_label.add_theme_color_override("font_color", _WHITE)
 	_phase_label.visible = true
@@ -1105,8 +1165,8 @@ func _on_faceoff_prep_announced() -> void:
 # Pure cosmetic: the puck unlock is gated by the authoritative phase change to
 # FACEOFF, so a client running a frame or two behind still sees the right beat.
 # On the opening faceoff (pregame_intro_started arrived just before this), the
-# banner leads with a matchup card for the intro window — the camera sweep
-# plays over it — then hands off to the normal countdown.
+# full-screen matchup roster overlay leads for the intro window — the camera
+# sweep plays under it — then hands off to the normal banner countdown.
 var _pending_intro_secs: float = 0.0
 var _pending_skate_secs: float = 0.0
 var _pending_period_intro_secs: float = 0.0
@@ -1124,14 +1184,16 @@ func _start_faceoff_countdown() -> void:
 	var prep: float = GameRules.FACEOFF_PREP_DURATION
 	var t := create_tween()
 	if intro > 0.0:
-		_tagline_label.text = "TONIGHT'S MATCHUP"
-		_tagline_label.add_theme_color_override("font_color", _WHITE)
-		_tagline_label.visible = true
-		_phase_label.text = "HOME  vs  AWAY"
+		# Full-screen matchup rosters over the camera sweep; the banner stays
+		# down until the screen dismisses into the normal countdown.
+		_phase_wrapper.visible = false
+		_show_matchup_overlay()
 		t.tween_interval(intro)
 		t.tween_callback(func() -> void:
-			if _tagline_label != null:
-				_tagline_label.visible = false
+			if _matchup_overlay != null:
+				_matchup_overlay.hide_overlay()
+			if _phase_wrapper != null:
+				_phase_wrapper.visible = true
 			if _phase_label != null:
 				_phase_label.text = "FACEOFF IN 2")
 	elif period_card > 0.0:
@@ -1165,6 +1227,29 @@ func _stop_faceoff_countdown() -> void:
 	if _faceoff_countdown_tween != null and _faceoff_countdown_tween.is_valid():
 		_faceoff_countdown_tween.kill()
 	_faceoff_countdown_tween = null
+	# The matchup screen lives under this tween's watch (its dismissal is a
+	# tween callback), so an interrupted countdown must take it down too.
+	if _matchup_overlay != null:
+		_matchup_overlay.hide_overlay()
+
+
+# Compose the opening matchup rosters from the live registry: one column per
+# team in slot order. The overlay reads name / number / attribute build off
+# the records itself.
+func _show_matchup_overlay() -> void:
+	var home_records: Array[PlayerRecord] = []
+	var away_records: Array[PlayerRecord] = []
+	for record: PlayerRecord in GameManager.get_players().values():
+		if record.team.team_id == 0:
+			home_records.append(record)
+		else:
+			away_records.append(record)
+	var by_slot: Callable = func(a: PlayerRecord, b: PlayerRecord) -> bool:
+		return a.team_slot < b.team_slot
+	home_records.sort_custom(by_slot)
+	away_records.sort_custom(by_slot)
+	_matchup_overlay.present(home_records, away_records,
+			_scorebug_stripe(0), _scorebug_stripe(1))
 
 
 func _on_puck_out_of_play() -> void:
@@ -1323,22 +1408,21 @@ func _on_game_over() -> void:
 func _present_game_over_screen(result_text: String, result_color: Color) -> void:
 	# The screen carries the same FINAL info, so the chyron behind it retires.
 	_phase_wrapper.visible = false
-	# One star only — scarcity keeps it meaningful at 3v3; a nothing game with
-	# no counting stats has no star and the card stays hidden.
-	var star: PlayerRecord = GameManager.get_star_of_game()
-	var star_name: String = ""
-	var star_line: String = ""
-	var star_stripe: Color = _WHITE
-	if star != null:
-		star_name = star.display_name()
-		star_line = _star_stat_line(star.stats)
-		star_stripe = _scorebug_stripe(star.team.team_id)
+	# Up to three ranked stars; zero-stat players never star, so a quiet game
+	# shows fewer (or none — the whole stars block stays hidden).
+	var star_names: Array[String] = []
+	var star_lines: Array[String] = []
+	var star_stripes: Array[Color] = []
+	for star: PlayerRecord in GameManager.get_stars_of_game():
+		star_names.append(star.display_name())
+		star_lines.append(_star_stat_line(star.stats))
+		star_stripes.append(_scorebug_stripe(star.team.team_id))
 	_game_over_popup.present(_score_0, _score_1,
 			_scorebug_stripe(0), _scorebug_stripe(1),
 			result_text, result_color,
-			star_name, star_line, star_stripe)
+			star_names, star_lines, star_stripes)
 
-# Compact stat line for the star card. Scorers show goals/assists; a star who
+# Compact stat line for a star row. Scorers show goals/assists; a star who
 # earned it on volume/defense (a 0-point grinder game) shows those instead.
 func _star_stat_line(stats: PlayerStats) -> String:
 	var parts: PackedStringArray = PackedStringArray()
