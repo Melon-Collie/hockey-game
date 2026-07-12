@@ -177,6 +177,12 @@ func _ready() -> void:
 	# window (no matchup card) so "2 → 1 → DROP" lands on the extended drop.
 	GameManager.faceoff_skate_in_started.connect(
 			func(delay: float) -> void: _pending_skate_secs = delay)
+	# Period-start bench intro: same hold mechanic as the matchup card, with the
+	# upcoming period as the hero card ("2ND PERIOD" / "OVERTIME").
+	GameManager.period_intro_started.connect(
+			func(period: int, duration: float) -> void:
+				_pending_period_intro_num = period
+				_pending_period_intro_secs = duration)
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
@@ -1103,11 +1109,16 @@ func _on_faceoff_prep_announced() -> void:
 # plays over it — then hands off to the normal countdown.
 var _pending_intro_secs: float = 0.0
 var _pending_skate_secs: float = 0.0
+var _pending_period_intro_secs: float = 0.0
+var _pending_period_intro_num: int = 0
 
 func _start_faceoff_countdown() -> void:
 	_stop_faceoff_countdown()
 	var intro: float = _pending_intro_secs
 	_pending_intro_secs = 0.0
+	var period_card: float = _pending_period_intro_secs
+	_pending_period_intro_secs = 0.0
+	var period_num: int = _pending_period_intro_num
 	var skate: float = _pending_skate_secs
 	_pending_skate_secs = 0.0
 	var prep: float = GameRules.FACEOFF_PREP_DURATION
@@ -1121,6 +1132,14 @@ func _start_faceoff_countdown() -> void:
 		t.tween_callback(func() -> void:
 			if _tagline_label != null:
 				_tagline_label.visible = false
+			if _phase_label != null:
+				_phase_label.text = "FACEOFF IN 2")
+	elif period_card > 0.0:
+		# Period-start card over the camera sweep + bench skate-on, then the
+		# normal countdown lands on the extended drop.
+		_phase_label.text = _period_intro_title(period_num)
+		t.tween_interval(period_card)
+		t.tween_callback(func() -> void:
 			if _phase_label != null:
 				_phase_label.text = "FACEOFF IN 2")
 	elif skate > 0.0:
@@ -1491,6 +1510,17 @@ func _lbl(text: String, size: int, color: Color) -> Label:
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l
+
+# Hero text for the period-start intro card: "2ND PERIOD" for regulation,
+# "OVERTIME" for the first OT, numbered beyond (repeated ties keep cycling OT).
+func _period_intro_title(p: int) -> String:
+	var n: int = GameManager.get_num_periods()
+	if p <= n:
+		return "%s PERIOD" % _period_ordinal(p)
+	var ot: int = p - n
+	if ot <= 1:
+		return "OVERTIME"
+	return "OVERTIME %d" % ot
 
 func _period_ordinal(p: int) -> String:
 	var n: int = GameManager.get_num_periods()

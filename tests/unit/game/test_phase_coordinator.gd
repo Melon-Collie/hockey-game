@@ -202,3 +202,78 @@ func test_on_faceoff_positions_when_already_in_faceoff_only_announces() -> void:
 	coord.on_faceoff_positions([])
 	assert_signal_not_emitted(coord, "phase_changed")
 	assert_signal_emitted(coord, "faceoff_prep_announced")
+
+
+# ── Period break → period-start bench intro ──────────────────────────────────
+
+func test_end_of_period_emits_period_break_and_stashes_next_period() -> void:
+	sm.current_period = 1
+	sm.current_phase = GamePhase.Phase.END_OF_PERIOD
+	coord.handle_phase_entered()
+	assert_signal_emitted_with_parameters(
+			coord, "period_break_started", [GameRules.END_OF_PERIOD_PAUSE])
+	assert_eq(coord.period_after_break, 2, "break leads into the next period")
+
+
+func test_period_break_entry_is_idempotent() -> void:
+	sm.current_phase = GamePhase.Phase.END_OF_PERIOD
+	coord.on_period_break_entered()
+	coord.on_period_break_entered()
+	assert_signal_emit_count(coord, "period_break_started", 1,
+			"a duplicate phase echo must not restart the skate-off")
+
+
+func test_prep_after_break_is_period_intro_with_extended_prep() -> void:
+	sm.current_phase = GamePhase.Phase.END_OF_PERIOD
+	coord.handle_phase_entered()
+	sm.begin_faceoff_prep()  # _advance_period's prep entry (0 extra at entry)
+	coord.handle_phase_entered()
+	assert_true(coord.last_prep_was_period_intro)
+	assert_eq(coord.last_prep_preroll, 0.0,
+			"period intro rides its own signal, not the skate-in pre-roll")
+	assert_almost_eq(sm.faceoff_prep_time_until_drop(),
+			GameRules.FACEOFF_PREP_DURATION + GameRules.PREGAME_INTRO_DURATION, 0.001,
+			"placement extends the prep window to the intro hold")
+
+
+func test_prep_without_break_is_not_period_intro() -> void:
+	sm.begin_faceoff_prep()
+	coord.handle_phase_entered()
+	assert_false(coord.last_prep_was_period_intro)
+	assert_eq(coord.last_prep_preroll, GameRules.FACEOFF_SKATE_PREP_EXTRA,
+			"a plain stoppage faceoff keeps the skate-in pre-roll")
+
+
+func test_period_break_flag_is_consumed_by_one_prep() -> void:
+	coord.on_period_break_entered()
+	sm.begin_faceoff_prep()
+	coord.handle_phase_entered()
+	assert_true(coord.last_prep_was_period_intro)
+	coord.handle_phase_entered()
+	assert_false(coord.last_prep_was_period_intro,
+			"a second placement without a new break is a normal faceoff")
+
+
+func test_pregame_intro_overrides_period_break() -> void:
+	var intro_coord := PhaseCoordinator.new()
+	intro_coord.setup(
+			sm, registry, teams,
+			Callable(),
+			Callable(self, "_empty_goalies"),
+			tracker,
+			Callable(self, "_fake_drop"),
+			null, null, null,
+			null,
+			false,
+			Callable(),
+			Callable(self, "_intro_true"))
+	watch_signals(intro_coord)
+	intro_coord.on_period_break_entered()
+	sm.begin_faceoff_prep()
+	intro_coord.handle_phase_entered()
+	assert_false(intro_coord.last_prep_was_period_intro,
+			"a rematch reset mid-break runs the opening bench intro instead")
+
+
+func _intro_true() -> bool:
+	return true
