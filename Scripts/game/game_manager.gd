@@ -3997,6 +3997,22 @@ func set_tutorial_offsides_active(active: bool) -> void:
 	_tutorial_offsides_active = active
 
 
+# Tutorial-only: put the puck on a skater's stick through the same grant path
+# as a real pickup (PuckController bookkeeping + controller notify). A bare
+# Puck.set_carrier skips PuckController's carrier tracking, so the release
+# that follows never notifies the controller — has_puck leaks true and the
+# player can "shoot" a puck that isn't on their stick.
+func tutorial_give_puck(record: PlayerRecord) -> void:
+	if puck == null or puck_controller == null or record == null \
+			or not is_instance_valid(record.skater):
+		return
+	if puck.carrier == record.skater:
+		return
+	if puck.carrier != null:
+		puck.drop()
+	puck_controller.apply_lag_comp_pickup(record.skater)
+
+
 # Spawn an AI-controlled bot in scripted/puppet mode for tutorial
 # demonstrations — an opponent on team 1 (default) or a teammate on team 0
 # for the passing drills. The bot uses the same spawn path as normal bots
