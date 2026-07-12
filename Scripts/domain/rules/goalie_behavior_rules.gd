@@ -523,18 +523,25 @@ static func puck_resting_on_goalie(
 
 # ── Net-front jam (seal the ice) ─────────────────────────────────────────────
 # Should the goalie drop to butterfly to SEAL a net-front scramble? A doorstep
-# jam — a loose puck with an opponent on it, or a SLOW opposing carrier jammed in
-# tight — is sealed low so pucks don't go through the STANDING 5-hole during a
-# stick battle (Hockey Canada: a puck within ~2 stick lengths gets the blocking
-# butterfly). This is deliberately distinct from a controlled carrier ATTACKING
-# with space, where coaches teach staying up to force a release: a carrier above
-# `carrier_max_speed` is driving, not jamming, so it does NOT trigger the seal.
+# jam is a BATTLE — a loose puck with an opponent on it, or a slow opposing
+# carrier with a defender's stick in the fight — sealed low so pucks don't go
+# through the STANDING 5-hole during the chaos (Hockey Canada: a puck within
+# ~2 stick lengths in a battle gets the blocking butterfly). A jam always has
+# two parties; that's what separates it from the two controlled-possession
+# cases coaches teach staying up against: a carrier ATTACKING with speed
+# (above `carrier_max_speed` — force the release), and an UNCONTESTED slow
+# carrier in tight — the penalty-shot-style 1v1, where the goalie stays up,
+# stays patient, and makes the shooter commit first (the deke-breaks-wide
+# race and the release reaction own the commit; carrier speed alone can't
+# tell a dangler choosing to be slow from a carrier pinned in a scrum).
 #
-# `nearest_opponent_dist_to_puck` is only read for a loose puck (no carrier);
-# pass anything (e.g. INF) when `has_opposing_carrier` is true.
+# `nearest_contestant_dist_to_puck` is the other party of the would-be battle:
+# for a loose puck, the nearest OPPOSING skater (someone to whack it); for an
+# opposing carrier, the nearest DEFENDING skater (someone fighting him for
+# it). INF means nobody is contesting.
 class CreaseJamConfig:
 	var puck_distance: float = 2.0       # m — puck-to-goalie threshold
-	var opponent_distance: float = 1.5   # m — opposing-skater-to-loose-puck threshold
+	var opponent_distance: float = 1.5   # m — contestant-to-puck battle range
 	var carrier_max_speed: float = 3.0   # m/s — above this a carrier is attacking, not jamming
 
 static func is_crease_jam(
@@ -544,7 +551,7 @@ static func is_crease_jam(
 		direction_sign: int,
 		has_opposing_carrier: bool,
 		carrier_speed: float,
-		nearest_opponent_dist_to_puck: float,
+		nearest_contestant_dist_to_puck: float,
 		cfg: CreaseJamConfig) -> bool:
 	# In front of the goal line only — behind-net plays are RVH's job.
 	if (puck_position.z - goal_line_z) * direction_sign <= 0.0:
@@ -552,11 +559,12 @@ static func is_crease_jam(
 	if goalie_position.distance_to(puck_position) > cfg.puck_distance:
 		return false
 	if has_opposing_carrier:
-		# A slow carrier is jamming/battling at the doorstep → seal. A fast one
-		# is driving the net → stay up and force the release.
-		return carrier_speed <= cfg.carrier_max_speed
+		# A slow carrier is only a jam when a defender is IN the battle. Slow
+		# and uncontested is the 1v1 dangler → stay up, force the first move.
+		return carrier_speed <= cfg.carrier_max_speed \
+				and nearest_contestant_dist_to_puck <= cfg.opponent_distance
 	# Loose puck — needs an opponent close enough to whack it for it to be a jam.
-	return nearest_opponent_dist_to_puck <= cfg.opponent_distance
+	return nearest_contestant_dist_to_puck <= cfg.opponent_distance
 
 
 # ── Screen occlusion (grounded sightline model) ──────────────────────────────

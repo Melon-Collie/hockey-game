@@ -325,20 +325,22 @@ extends Node
 # crease where dropping is the correct read regardless of follow-up play.
 @export var close_crease_butterfly_distance: float = 1.5
 
-# Crease-jam butterfly. Loose puck or stationary-carrier puck inside the
-# jam zone with an opposing skater close enough to whack at it — drop and
-# seal even though nobody's "shooting" yet. Without this, bots that crowd
-# the crease and pivot-stickhandle keep the goalie upright indefinitely
-# because the carrier-at-doorstep check requires meaningful velocity and
-# loose pucks have no carrier at all.
+# Crease-jam butterfly. A net-front BATTLE in the goalie's lap — a loose puck
+# with an opponent on it, or a slow carrier with a defender's stick in the
+# fight — drops the goalie to seal the ice even though nobody's "shooting"
+# yet (a scrum bangs pucks through the standing 5-hole). A battle always has
+# two parties: an UNCONTESTED slow carrier in tight is the penalty-style 1v1
+# dangler and deliberately does NOT jam — dropping early is what the dangle
+# is fishing for, and the standing goalie has real answers now (active blade,
+# lunge, doorstep windup read, the beaten-wide race, the release reaction).
+# (This trigger's original rationale — "a crease dangler keeps the goalie
+# upright indefinitely" — predates those tools, when upright meant helpless.)
 @export var jam_puck_distance: float = 2.0    # m — puck-to-goalie threshold
-@export var jam_opponent_distance: float = 1.5 # m — opposing-skater-to-puck threshold
-# A net-front jam SEALS the ice (drops the goalie to butterfly) so a stick
-# battle can't be banged through the standing 5-hole. A loose-puck scramble
-# always qualifies; an opposing carrier qualifies only when jammed in tight and
-# moving slower than this — a faster carrier is driving the net (an attack), and
-# coaches teach staying up to force the release. Set to 0 to seal only on loose
-# pucks (never for a carried puck).
+@export var jam_opponent_distance: float = 1.5 # m — contestant-to-puck battle range
+# An opposing carrier can only jam when moving slower than this — a faster
+# carrier is driving the net (an attack), and coaches teach staying up to
+# force the release. Set to 0 to seal only on loose pucks (never for a
+# carried puck).
 @export var jam_carrier_max_speed: float = 3.0 # m/s — carrier above this is attacking, not jamming
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
@@ -1655,11 +1657,12 @@ func _update_state(delta: float) -> void:
 				# net-front JAM below is the separate scramble trigger.
 				_enter_butterfly()
 			elif _should_seal_crease_jam() and not _reaction.reacting:
-				# Net-front jam: a loose-puck scramble, a slow carrier jammed at
-				# the doorstep, or a teammate corralling a contested puck in the
-				# crease. Seal the ice low so a stick battle can't be banged
-				# through the STANDING 5-hole. Distinct from a controlled carrier
-				# attacking with space (handled by the stay-up default).
+				# Net-front jam: a loose-puck scramble, a slow carrier BATTLING a
+				# defender at the doorstep, or a teammate corralling a contested
+				# puck in the crease. Seal the ice low so a stick battle can't be
+				# banged through the STANDING 5-hole. Controlled possession never
+				# jams: a fast carrier and an uncontested 1v1 dangler both keep
+				# the goalie up (force the release / make them commit first).
 				_enter_butterfly()
 			elif _is_beaten_wide() and not _reaction.reacting:
 				# Beaten wide: the carrier's lateral drive wins the race to the
@@ -1803,30 +1806,35 @@ func _is_beaten_wide() -> bool:
 			goalie.global_position, _goal_line_z, _goal_center_x,
 			_direction_sign, net_half_width, _beaten_wide_cfg)
 
-# True when there's a net-front JAM the goalie should seal: a loose-puck
-# scramble in the crease (puck close, no carrier, an opposing skater on it) OR a
-# SLOW opposing carrier jammed at the doorstep. The slow-carrier gate is the
-# realism line — a fast carrier driving the net is an attack (stay up, force the
-# release), a slow one jamming in the paint is a battle (seal the ice). The pure
-# threshold decision lives in GoalieBehaviorRules.is_crease_jam; this method
-# gathers the scene inputs.
-#
-# A jam is any of: a loose-puck scramble in the crease, a SLOW opposing carrier
-# jammed at the doorstep, or a teammate corralling a CONTESTED puck on the
-# doorstep (opponent within poke range — one strip from a goal). Drives both the
-# proactive butterfly entry in _update_state and the recovery hold in
-# _is_threat_pressing, so the goalie seals a contested crease and stays sealed
-# rather than popping up into a poke-check-and-bang-it-in.
+# True when there's a net-front JAM the goalie should seal. A jam is a BATTLE —
+# it always has two parties: a loose-puck scramble in the crease (puck close,
+# no carrier, an opposing skater on it), a slow opposing carrier at the
+# doorstep WITH a defending teammate in the fight, or a teammate corralling a
+# CONTESTED puck on the doorstep (opponent within poke range — one strip from
+# a goal). The two controlled-possession cases stay OUT by design: a fast
+# carrier is attacking (stay up, force the release), and a slow UNCONTESTED
+# carrier is the penalty-style 1v1 dangler (stay up, stay patient — dropping
+# early is exactly what the dangle is fishing for). The pure threshold
+# decision lives in GoalieBehaviorRules.is_crease_jam; this method gathers the
+# scene inputs. Drives both the proactive butterfly entry in _update_state and
+# the recovery hold in _is_threat_pressing, so the goalie seals a contested
+# crease and stays sealed rather than popping up into a poke-check-and-bang-
+# it-in.
 func _should_seal_crease_jam() -> bool:
 	# Cheap reject before any skater scan — a jam only matters in the goalie's lap.
 	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
 		return false
 	var carrier: Skater = puck.get_carrier()
 	if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
-		# Opposing carrier → jam only if slow.
+		# Opposing carrier → jam only if slow AND contested (a defending
+		# teammate's stick in the battle). Slow-but-uncontested is the
+		# penalty-style 1v1 dangler: stay up, force the first move — the
+		# beaten-wide race, the doorstep windup read, and the release
+		# reaction own the commit from here.
 		return GoalieBehaviorRules.is_crease_jam(
 				puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
-				true, carrier.velocity.length(), INF, _crease_jam_cfg)
+				true, carrier.velocity.length(),
+				_nearest_defending_skater_dist_to_puck(), _crease_jam_cfg)
 	# Loose puck, or a teammate-controlled puck: a jam when an opponent is within
 	# poke range of the puck in the goalie's lap.
 	var nearest_opp: float = _nearest_opposing_skater_dist_to_puck()
@@ -1846,6 +1854,25 @@ func _nearest_opposing_skater_dist_to_puck() -> float:
 		if skater == null or skater.is_ghost:
 			continue
 		if team_id != -1 and skater.get_team_id() == team_id:
+			continue
+		nearest = minf(nearest, skater.global_position.distance_to(puck.global_position))
+	return nearest
+
+
+# Mirror of the above for the goalie's OWN team: distance from the nearest
+# non-ghost defending skater to the puck, or INF. This is the "is the carrier
+# contested?" read for the jam seal — a battle needs a defender in it. With no
+# team assigned (team_id == -1) there are no teammates, so a carrier is never
+# contested and the carrier-jam branch never fires — correct for teamless play.
+func _nearest_defending_skater_dist_to_puck() -> float:
+	if not _skater_getter.is_valid() or team_id == -1:
+		return INF
+	var skaters: Array = _skater_getter.call()
+	var nearest: float = INF
+	for skater: Skater in skaters:
+		if skater == null or skater.is_ghost:
+			continue
+		if skater.get_team_id() != team_id:
 			continue
 		nearest = minf(nearest, skater.global_position.distance_to(puck.global_position))
 	return nearest

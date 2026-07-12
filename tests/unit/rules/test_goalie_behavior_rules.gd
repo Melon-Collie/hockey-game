@@ -593,10 +593,12 @@ func _jam_cfg() -> GoalieBehaviorRules.CreaseJamConfig:
 	cfg.carrier_max_speed = 3.0
 	return cfg
 
-func _is_jam(puck: Vector3, goalie: Vector3, has_carrier: bool, carrier_speed: float, nearest_opp: float) -> bool:
+# `contestant` is the other party of the would-be battle: nearest opposing
+# skater to a loose puck, nearest DEFENDER to an opposing carrier.
+func _is_jam(puck: Vector3, goalie: Vector3, has_carrier: bool, carrier_speed: float, contestant: float) -> bool:
 	return GoalieBehaviorRules.is_crease_jam(
 		puck, goalie, _JAM_GOAL_LINE_Z, _JAM_DIR,
-		has_carrier, carrier_speed, nearest_opp, _jam_cfg())
+		has_carrier, carrier_speed, contestant, _jam_cfg())
 
 func test_jam_loose_puck_opponent_close_is_jam() -> void:
 	# Loose puck in the lap with an opponent right on it → seal.
@@ -614,13 +616,25 @@ func test_jam_puck_behind_goal_line_is_not_jam() -> void:
 	# Behind the goal line is RVH territory, never a seal.
 	assert_false(_is_jam(Vector3(0, 0, 27.5), Vector3(0, 0, 26.0), false, 0.0, 0.5))
 
-func test_jam_slow_carrier_in_tight_is_jam() -> void:
-	# Slow opposing carrier jammed at the doorstep → battle, seal the ice.
-	assert_true(_is_jam(Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), true, 1.5, INF))
+func test_jam_contested_slow_carrier_in_tight_is_jam() -> void:
+	# Slow opposing carrier at the doorstep WITH a defender in the battle →
+	# a real net-front scrum, seal the ice.
+	assert_true(_is_jam(Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), true, 1.5, 1.0))
+
+func test_jam_uncontested_slow_carrier_is_not_jam() -> void:
+	# Slow but UNCONTESTED carrier in tight — the penalty-style 1v1 dangler.
+	# No battle without a second party: stay up, make the shooter commit
+	# first (the deke-wide race and the release reaction own the drop).
+	assert_false(_is_jam(Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), true, 1.5, INF))
+
+func test_jam_carrier_with_defender_out_of_battle_range_is_not_jam() -> void:
+	# A defender hovering outside stick-battle range isn't in the fight yet.
+	assert_false(_is_jam(Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), true, 1.5, 2.0))
 
 func test_jam_fast_carrier_is_not_jam() -> void:
-	# Carrier driving the net is an attack — stay up, force the release.
-	assert_false(_is_jam(Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), true, 5.0, INF))
+	# Carrier driving the net is an attack — stay up, force the release,
+	# contested or not.
+	assert_false(_is_jam(Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), true, 5.0, 1.0))
 
 func test_jam_carrier_max_speed_zero_never_seals_for_carrier() -> void:
 	# With the carrier gate at 0, even a stationary carrier doesn't seal — only
@@ -629,7 +643,7 @@ func test_jam_carrier_max_speed_zero_never_seals_for_carrier() -> void:
 	cfg.carrier_max_speed = 0.0
 	assert_false(GoalieBehaviorRules.is_crease_jam(
 		Vector3(0, 0, 25.0), Vector3(0, 0, 26.0), _JAM_GOAL_LINE_Z, _JAM_DIR,
-		true, 0.1, INF, cfg))
+		true, 0.1, 1.0, cfg))
 
 # ── chest_tracking_factor ─────────────────────────────────────────────────────
 

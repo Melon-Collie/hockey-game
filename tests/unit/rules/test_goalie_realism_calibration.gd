@@ -222,9 +222,12 @@ func test_stay_down_window_is_about_two_stick_lengths() -> void:
 	assert_between(gc.recovery_proximity_threshold, 1.8, 3.2)
 
 
-func test_jam_seal_only_for_slow_carriers() -> void:
-	# Doctrine: seal the ice on a net-front battle, stay UP against a carrier
-	# driving the net (force the release).
+func test_jam_seal_only_for_contested_slow_carriers() -> void:
+	# Doctrine: seal the ice on a net-front BATTLE; stay up against controlled
+	# possession — a carrier driving the net (force the release) AND the
+	# uncontested 1v1 dangler in tight (breakaway/penalty-shot teaching: stay
+	# patient, make the shooter commit first; the goalie who drops early has
+	# already lost the read battle).
 	var cfg := GoalieBehaviorRules.CreaseJamConfig.new()
 	cfg.puck_distance = 2.0
 	cfg.opponent_distance = 1.5
@@ -232,10 +235,13 @@ func test_jam_seal_only_for_slow_carriers() -> void:
 	var puck := Vector3(0.0, 0.0, 25.5)
 	var goalie := Vector3(0.0, 0.0, 26.4)
 	assert_true(GoalieBehaviorRules.is_crease_jam(
-			puck, goalie, 26.65, -1, true, 1.0, INF, cfg),
-			"slow carrier jammed at the doorstep → seal")
+			puck, goalie, 26.65, -1, true, 1.0, 0.8, cfg),
+			"slow carrier BATTLING a defender at the doorstep → seal")
 	assert_false(GoalieBehaviorRules.is_crease_jam(
-			puck, goalie, 26.65, -1, true, 6.0, INF, cfg),
+			puck, goalie, 26.65, -1, true, 1.0, INF, cfg),
+			"uncontested slow carrier is the 1v1 dangler → stay up, be patient")
+	assert_false(GoalieBehaviorRules.is_crease_jam(
+			puck, goalie, 26.65, -1, true, 6.0, 0.8, cfg),
 			"fast carrier is ATTACKING → stay up, force the release")
 
 
