@@ -1970,6 +1970,24 @@ func _update_slapper_charge(delta: float) -> void:
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
+	# Net exclusion for the slapshot PIN. While charging with the puck, the puck
+	# is pinned to a body-relative ice offset (Skater.get_carry_target_global's
+	# slapshot branch) instead of the blade contact, so the blade-contact net
+	# clamp never sees it — a carrier winding up while skating behind or across
+	# a net would otherwise drag the pinned puck straight through the mesh (and
+	# across the goal line). Mirror the blade path's rule: the moment the pin
+	# would enter the net's exclusion box, the net knocks the puck loose.
+	# allow_front=false — a wind-up never tucks the puck into the mouth.
+	if has_puck and skater.is_slapshot_pinning():
+		var pin: Vector3 = skater.get_carry_target_global()
+		var clamped: Vector3 = NetClampRules.clamp_out_of_net(
+				pin, pin, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
+				GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
+				GameRules.NET_DEPTH, GameRules.NET_HEIGHT, false)
+		if clamped != pin:
+			var away: Vector3 = clamped - pin
+			if away.length() > 0.001:
+				_do_release(away.normalized(), goalie_strip_power)
 
 # Normalized wind-up progress (0..1) over the FULL charge time. With the charge
 # ring gone the wind-up pose is the charge gauge, so every pose consumer (blade

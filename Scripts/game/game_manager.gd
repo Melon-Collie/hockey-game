@@ -119,6 +119,18 @@ var _puck_was_carried: bool = false
 # real crossing — the tracker reseeds and skips it. Far above any shot or blade
 # speed at 120 Hz (~2 m/tick = 240 m/s); a faceoff/OOB reset jumps much further.
 const _GOAL_MAX_TICK_TRAVEL: float = 2.0
+# Tighter bound for a puck that was PINNED on both ends of the segment. A
+# carried puck teleports to the carry target every tick, and that target can
+# jump discontinuously while play is continuous: a forehand/backhand flip
+# swings it around the body, and the blade's net clamp hands the contact
+# between box faces. Treating such a jump as a swept path let a carrier
+# dangling behind the net "score through the mesh" — pin beside the post one
+# tick, pin past the net the next, and the straight segment between them
+# pierced the goal-line plane inside the mouth (visually, the puck went
+# through the back of the net). Real carried motion is bounded by skate +
+# blade speed (~13 + 8 m/s -> ~0.18 m/tick); 0.5 gives ~3x headroom while the
+# flip artifacts it must reject span the net's width (~1 m and up).
+const _GOAL_MAX_CARRIED_TICK_TRAVEL: float = 0.5
 # Mirrors the local GoalReplayDriver._active. Gates the skip_replay action so
 # we don't fire stray vote RPCs outside of the cinematic window.
 var _in_replay_locally: bool = false
@@ -658,17 +670,30 @@ func _check_goal_crossing() -> void:
 	# blade can get there; here we just watch the puck's path.
 	var curr: Vector3 = puck.global_position
 	var carried: bool = puck.carrier != null
-	# Reseed on a cold tracker or a loose<->carried transition (pickup snap /
-	# release move the puck discontinuously — spanning that jump could fabricate
-	# a crossing).
-	if not _has_prev_puck_pos or carried != _puck_was_carried:
+	# Reseed on a cold tracker or a loose->carried transition: the pickup snaps
+	# the puck to the blade discontinuously, and spanning that jump could
+	# fabricate a crossing. The carried->loose direction is NOT reseeded — a
+	# release repositions the puck by at most the carry offset plus one tick of
+	# shot travel, a real path. Reseeding it opened a one-tick blind window
+	# that swallowed point-blank crossings: a shot released within a tick's
+	# travel of the goal line finished crossing inside the skipped segment,
+	# and the puck then sat in the net permanently "already across" — a
+	# visible no-count goal. (The teleport guard below still catches resets.)
+	var was_carried: bool = _puck_was_carried
+	if not _has_prev_puck_pos or (carried and not was_carried):
 		_prev_puck_pos = curr
 		_has_prev_puck_pos = true
 		_puck_was_carried = carried
 		return
-	# Teleport guard: an implausible jump (loose-puck reset/reposition) is never a
-	# real crossing — reseed and skip.
-	if _prev_puck_pos.distance_to(curr) <= _GOAL_MAX_TICK_TRAVEL:
+	_puck_was_carried = carried
+	# Teleport guard: an implausible jump is never a real crossing — reseed and
+	# skip. Pinned-on-both-ends segments get the tight carried bound (see
+	# _GOAL_MAX_CARRIED_TICK_TRAVEL); the transition tick out of carry keeps the
+	# loose bound, since a released shot legitimately travels a tick of shot
+	# speed plus the release reposition.
+	var max_travel: float = _GOAL_MAX_CARRIED_TICK_TRAVEL \
+			if carried and was_carried else _GOAL_MAX_TICK_TRAVEL
+	if _prev_puck_pos.distance_to(curr) <= max_travel:
 		for goal: HockeyGoal in goals:
 			goal.check_goal_crossing(_prev_puck_pos, curr)
 	_prev_puck_pos = curr
