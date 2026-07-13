@@ -112,10 +112,19 @@ const SLOT_RADIUS_M: float = 6.0
 #
 # The goalie FREEZES on the shot (he can't slide into it), so the only thing
 # range buys him is REACTION time to extend the relevant body part to the
-# placement. Each hole reads its own height BAND, and the bands differ in exactly
-# the two ways a real goalie's do — a wider always-covered CORE and a slower
-# REACTION — which is what makes the loft choice fall out of the same geometry:
-#   cover = CORE + EXT × reaction ;  reaction = clamp((flight − DELAY)/DEPLOY,0,1)
+# placement. The reaction budget is the puck's travel time to the GOALIE'S
+# BODY (t_reach — the shooter→goalie gap at the band's pace), NOT the flight
+# to the goal line: the save happens where the puck crosses his reach
+# envelope, which a challenging keeper puts a large fraction of the flight
+# closer to the shooter. Budgeting on flight-to-net silently handed him the
+# whole flight to deploy — from 4 m a top-band arc that passes him at 0.14 s
+# (before his 0.18 s arm read even fires) was scored against a 0.25 s
+# flight-to-net and read as glove-covered; that error is what made a set
+# keeper an unbeatable wall from everywhere. Each hole reads its own height
+# BAND, and the bands differ in exactly the two ways a real goalie's do — a
+# wider always-covered CORE and a slower REACTION — which is what makes the
+# loft choice fall out of the same geometry:
+#   cover = CORE + EXT × reaction ;  reaction = clamp((t_reach − DELAY)/DEPLOY,0,1)
 #   openness = the net bearing interval the hole clears past the cover's BODY-DISC
 #              tangent cone (he squares to the puck, so the cover half-width faces
 #              every sightline — sharp angles are walled by his depth), minus the
@@ -124,8 +133,12 @@ const SLOT_RADIUS_M: float = 6.0
 # constant — it's just where the goalie actually is, fed in as goalie_pos.
 #
 # The band cores/reaches are grounded, not fitted:
-#  · LOW  — legs/pads, WIDEST core (a set butterfly seals low) + small push,
-#           fast LEG reaction. Low corners open only past the pad, or off a slide.
+#  · LOW  — legs/pads. STANDING, the instant core is only the pad column
+#           (LOW_CORE_STANDING_M, from the live stance anatomy); the 0.60
+#           butterfly core exists only after the leg read + pads-to-floor
+#           drop (GOALIE_BUTTERFLY_DROP_S — the same gate the five-hole seal
+#           runs), so an in-tight low shot beats the drop exactly as it does
+#           against the live keeper. A DOWN goalie is already sealed at 0.60.
 #  · HIGH — glove/blocker, NARROWEST core (held up they leave the top corners)
 #           but the longest reach (out to 0.85 m ≈ glove_max_x_outward) on a slow
 #           ARM reaction. In tight the glove can't extend → roof it; at range it
@@ -134,7 +147,14 @@ const SLOT_RADIUS_M: float = 6.0
 # (There is no MID/armpit band: the body-side seam only opens when the goalie
 # commits his arm elsewhere, a condition this model can't see, so a static seam
 # would be a phantom opening — dropped until a real arm-commitment model exists.)
-const HOLE_BAND_CORE: Array[float] = [0.60, 0.40]   # [LOW, HIGH] half-width, always covered
+const HOLE_BAND_CORE: Array[float] = [0.60, 0.40]   # [LOW, HIGH] half-width, fully deployed
+# Standing LOW core: the pad column a standing goalie covers with NO reaction —
+# stance pad center + half a pad box, mirrored from the live goalie's stance
+# anatomy (GoalieBehaviorRules). Everything between this and HOLE_BAND_CORE[LOW]
+# only exists once the butterfly drop lands.
+const LOW_CORE_STANDING_M: float = (
+		GoalieBehaviorRules.STANDING_PAD_CENTER_X_M
+		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5)
 const HOLE_BAND_EXT: Array[float] = [0.15, 0.45]    # reaction-gated extension to the placement
 const HOLE_BAND_DELAY: Array[float] = [                    # per-band reaction delay (legs fast, arms slow)
 		GameRules.DEFAULT_GOALIE_REACTION_DELAY_S,        # LOW  — legs, 0.13
@@ -197,16 +217,42 @@ static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float) -> f
 	return v_h
 
 
-# Flight time (s) of a shot at hole band `band` over `dist` — HIGH holes fly at
-# the arrival-honest solved pace (or -1.0 when the band is unreachable), FLAT
-# bands at the committed full pace. The five-hole rides the LOW band.
-static func _band_flight_s(band: int, dist: float, shot_speed_m_s: float) -> float:
+# Horizontal pace (m/s) of a shot at hole band `band` over `dist` to the net —
+# HIGH holes fly at the arrival-honest solved pace (or 0.0 when the band is
+# unreachable), FLAT bands at the committed full pace. The five-hole rides the
+# LOW band. Divides the shooter→goalie gap for the reach budget (t_reach).
+static func _band_pace(band: int, dist: float, shot_speed_m_s: float) -> float:
 	if band == HOLE_BAND_HIGH:
-		var v_h: float = _high_band_horizontal_speed(dist, shot_speed_m_s)
-		if v_h <= 0.0:
-			return -1.0
-		return dist / v_h
-	return dist / maxf(shot_speed_m_s, 1.0)
+		return _high_band_horizontal_speed(dist, shot_speed_m_s)
+	return maxf(shot_speed_m_s, 1.0)
+
+
+# The goalie's covered half-width (m) for a band, given the reach budget
+# `t_reach` (puck's travel time to HIS body). One implementation shared by
+# _hole_open_angle and _hole_aim_x so aim and score always read the same edge.
+#   HIGH: stance core + the reaction-gated arm extension; a DOWN goalie's glove
+#         starts at pad height, so the extension is conceded entirely (the
+#         butterfly's defining trade).
+#   LOW:  standing pad column, widened to the butterfly core by the drop gate
+#         (leg delay + pads-to-floor time — the same gate the five-hole seal
+#         runs), plus the small reaction-gated pad push. A DOWN goalie is
+#         already sealed at the butterfly core.
+static func _band_cover(
+		band: int, t_reach: float, eff_unsettled: float, goalie_down: bool) -> float:
+	var reaction: float = clampf(
+			(t_reach - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
+	reaction *= 1.0 - eff_unsettled
+	if band == HOLE_BAND_HIGH:
+		if goalie_down:
+			reaction = 0.0
+		return HOLE_BAND_CORE[HOLE_BAND_HIGH] + HOLE_BAND_EXT[HOLE_BAND_HIGH] * reaction
+	var core: float = HOLE_BAND_CORE[HOLE_BAND_LOW]
+	if not goalie_down:
+		var drop: float = clampf(
+				(t_reach - HOLE_BAND_DELAY[HOLE_BAND_LOW]) / GOALIE_BUTTERFLY_DROP_S,
+				0.0, 1.0)
+		core = lerpf(LOW_CORE_STANDING_M, HOLE_BAND_CORE[HOLE_BAND_LOW], drop)
+	return core + HOLE_BAND_EXT[HOLE_BAND_LOW] * reaction
 
 # Loft choice prefers the LOWEST-risk shot among comparable openings: a flat shot
 # is easier to execute than roofing it (you can sail a high shot over the bar). So
@@ -297,9 +343,11 @@ static func _goalie_lateral_time(dist: float) -> float:
 # Pads-to-floor time once the goalie commits the butterfly — mirrors
 # GoalieController.butterfly_drop_speed (0.20 s, grounded on the measured pro
 # drop velocity of 2.07 m/s — realism audit F2). With the legs reaction delay in
-# front of it, this is how fast a STANDING goalie seals the five-hole slot after
-# reading a release: flights shorter than the delay leave the slot fully open
-# (the in-tight window), flights past delay + drop arrive at closed pads.
+# front of it, this is how fast a STANDING goalie seals low after reading a
+# release — gating both the five-hole slot and the LOW band's widening from the
+# standing pad column to the butterfly core (_band_cover). Raced against the
+# puck reaching HIS body (t_reach): releases inside the delay leave low fully
+# open (the in-tight window), releases past delay + drop meet closed pads.
 const GOALIE_BUTTERFLY_DROP_S: float = 0.20
 
 
@@ -577,7 +625,9 @@ const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 # danger is the widest opening × SHOT_DANGER_GAIN. best_shot_loft returns the
 # same winner's elevation class so the shot's loft matches where it's aimed.
 # He FREEZES on the shot, so reaction is body-part REACH to the placement, not a
-# slide; a longer flight buys the reach, an unsettled goalie loses it.
+# slide; the reach is raced against the puck arriving at HIS body (t_reach), so
+# range buys it and a quick in-tight release beats it — an unsettled goalie
+# loses it either way.
 static func open_net_danger(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
@@ -587,9 +637,10 @@ static func open_net_danger(
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0) -> float:
 	# Best of the holes. Pure value-type math, no allocation — safe to run
-	# per carry candidate at tick rate (see _hole_open_angle). Flight time is
-	# per-band inside _hole_open_angle: HIGH holes fly at the arrival-honest
-	# solved pace, flat bands at the committed full pace.
+	# per carry candidate at tick rate (see _hole_open_angle). Pace is per-band
+	# inside _hole_open_angle: HIGH holes fly at the arrival-honest solved pace,
+	# flat bands at the committed full pace; the reach budget divides the
+	# shooter→goalie gap by it.
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
@@ -730,12 +781,14 @@ static func _hole_aim_x(
 		aim_spread_rad: float = 0.0, goalie_down: bool = false) -> float:
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
-	# Same per-band flight the opening was scored with (_hole_open_angle), so
+	var band: int = HOLE_BAND[i]
+	# Same per-band pace the opening was scored with (_hole_open_angle), so
 	# aim and score read the same reaction-gated cover. A chosen hole is never
-	# band-unreachable (its opening would have scored 0), so the -1 guard is
-	# belt-and-braces.
-	var flight: float = maxf(0.0, _band_flight_s(
-			HOLE_BAND[i], shooter.distance_to(attacking_goal), shot_speed_m_s))
+	# band-unreachable (its opening would have scored 0), so the fallback to
+	# full pace is belt-and-braces.
+	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s)
+	if pace <= 0.0:
+		pace = maxf(shot_speed_m_s, 1.0)
 	var net_z: float = attacking_goal.z
 	var post_lo_x: float = attacking_goal.x - net_half_width
 	var post_hi_x: float = attacking_goal.x + net_half_width
@@ -760,21 +813,16 @@ static func _hole_aim_x(
 	# midpoint biased toward the post. Cover edges come from the same disc-tangent
 	# body model _hole_open_angle scores with (see the doc there), projected back
 	# onto the net plane so the midpoint math stays in x.
-	var eff_unsettled: float = clampf(unsettled, 0.0, 1.0) \
-			* clampf(1.0 - flight / UNSETTLE_RECOVERY_S, 0.0, 1.0)
-	var band: int = HOLE_BAND[i]
-	var reaction: float = clampf(
-			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
-	reaction *= 1.0 - eff_unsettled
-	# Down goalie concedes the top band's arm extension — mirror of the same
-	# rule in _hole_open_angle so aim and score read the same cover edge.
-	if goalie_down and band == HOLE_BAND_HIGH:
-		reaction = 0.0
-	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
 	var u: float = goalie_pos.x - shooter.x
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var fwd: float = (shooter.z - attacking_goal.z) * net_normal_z
 	var dv: float = fwd - (goalie_pos.z - attacking_goal.z) * net_normal_z
+	# Same reach budget as _hole_open_angle: the puck reaches HIS body, not the
+	# goal line, and the cover is the shared _band_cover read at that moment.
+	var t_reach: float = sqrt(u * u + dv * dv) / pace
+	var eff_unsettled: float = clampf(unsettled, 0.0, 1.0) \
+			* clampf(1.0 - t_reach / UNSETTLE_RECOVERY_S, 0.0, 1.0)
+	var cover: float = _band_cover(band, t_reach, eff_unsettled, goalie_down)
 	var cov_lo_x: float = post_hi_x
 	var cov_hi_x: float = post_lo_x
 	if dv >= 0.001:
@@ -826,13 +874,20 @@ static func _hole_open_angle(
 		return 0.0  # on/behind the goal line — no shot in
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
-	# Per-band flight: HIGH holes fly at the arrival-honest solved pace (the arc
-	# must physically reach the top band — see _band_flight_s); -1 = no legal
+	var band: int = HOLE_BAND[i]
+	# Per-band pace: HIGH holes fly at the arrival-honest solved pace (the arc
+	# must physically reach the top band — see _band_pace); 0 = no legal
 	# power gets there, so the hole isn't a target at all.
-	var flight: float = _band_flight_s(
-			HOLE_BAND[i], shooter.distance_to(attacking_goal), shot_speed_m_s)
-	if flight < 0.0:
+	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s)
+	if pace <= 0.0:
 		return 0.0
+	# Reach budget: the puck crosses the goalie's reach envelope at HIS body —
+	# the shooter→goalie gap at the band's pace — not at the goal line. This is
+	# what range genuinely buys him; in tight it's a fraction of the flight, and
+	# it's why a quick release beats the same keeper a long shot can't.
+	var u: float = goalie_pos.x - shooter.x
+	var dv: float = forward - (goalie_pos.z - attacking_goal.z) * net_normal_z
+	var t_reach: float = sqrt(u * u + dv * dv) / pace
 
 	# A post-seal stance (VH/RVH, read off the replicated state — see
 	# GoalieNetworkState.post_seal_x_sign) is a DEPLOYED wall at the post: the
@@ -851,10 +906,11 @@ static func _hole_open_angle(
 		if float(side) == signf(goalie_post_seal_x) \
 				and (goalie_post_seal_tall or HOLE_BAND[i] == HOLE_BAND_LOW):
 			return 0.0
-	# The goalie re-settles during flight, so a caught-moving read decays over the
-	# shot's flight time (full point-blank, gone by the time a long shot arrives).
+	# The goalie re-settles while the puck travels, so a caught-moving read decays
+	# over the time he has before it reaches HIM (full point-blank, gone by the
+	# time a long shot arrives at his body).
 	var eff_unsettled: float = clampf(unsettled, 0.0, 1.0) \
-			* clampf(1.0 - flight / UNSETTLE_RECOVERY_S, 0.0, 1.0)
+			* clampf(1.0 - t_reach / UNSETTLE_RECOVERY_S, 0.0, 1.0)
 
 	if kind == HOLE_KIND_FIVE:
 		# Between-the-legs gap, foreshortened with range (gap / distance); only a
@@ -877,16 +933,17 @@ static func _hole_open_angle(
 			# MEASURED slot from the replicated pose (GoalieBehaviorRules.
 			# five_hole_gap_m): standing it's a real ~0.20 m ice-to-pad-top slot
 			# the goalie seals by DROPPING once he reads the release — legs
-			# reaction delay then pads-to-floor — so only an in-tight flight
-			# beats the drop (the shot the model used to score zero). Down, the
-			# residual gap (slide leak) is already the measurement and there is
-			# nothing left to drop. The stick blade parked in the slot is
-			# deliberately unmodeled: active-blade intent yaws it toward the
-			# puck, vacating the slot exactly when the shooter is off-center.
+			# reaction delay then pads-to-floor, raced against the puck reaching
+			# HIM (t_reach) — so only an in-tight release beats the drop (the
+			# shot the model used to score zero). Down, the residual gap (slide
+			# leak) is already the measurement and there is nothing left to
+			# drop. The stick blade parked in the slot is deliberately
+			# unmodeled: active-blade intent yaws it toward the puck, vacating
+			# the slot exactly when the shooter is off-center.
 			var gap: float = goalie_five_hole_m
 			if not goalie_down:
 				var seal: float = clampf(
-						(flight - HOLE_BAND_DELAY[HOLE_BAND_LOW])
+						(t_reach - HOLE_BAND_DELAY[HOLE_BAND_LOW])
 							/ GOALIE_BUTTERFLY_DROP_S,
 						0.0, 1.0)
 				gap *= 1.0 - seal
@@ -897,18 +954,11 @@ static func _hole_open_angle(
 		var proxy_angle: float = maxf(0.0, FIVE_GAP_M - puck_diameter) / maxf(dist, 0.5)
 		return maxf(0.0, proxy_angle - aim_spread_rad) * eff_unsettled * centrality
 
-	var band: int = HOLE_BAND[i]
-	var reaction: float = clampf(
-			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
-	reaction *= 1.0 - eff_unsettled
-	# The butterfly's defining trade: a DOWN goalie seals the ice and concedes
-	# the top band — his glove starts at pad height, so the reaction-gated arm
-	# EXTENSION that shuts the top corners on a standing goalie isn't there
-	# (the live goalie's blocking-drop doc: "drop on the read, eat the
-	# top-corner exposure"). Core body coverage still occludes.
-	if goalie_down and band == HOLE_BAND_HIGH:
-		reaction = 0.0
-	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
+	# Band cover raced against t_reach — standing pad column widened by the
+	# butterfly drop LOW, reaction-gated glove/blocker extension HIGH, with the
+	# butterfly's defining trade (a DOWN goalie seals the ice and concedes the
+	# top band's extension) — see _band_cover.
+	var cover: float = _band_cover(band, t_reach, eff_unsettled, goalie_down)
 
 	# Net posts and the goalie's cover, all as bearings from the shooter's eye.
 	var post_lo_x: float = attacking_goal.x - net_half_width
@@ -925,8 +975,6 @@ static func _hole_open_angle(
 	# from beside the net, which is where the hopeless bad-angle fires came from.
 	var covb_lo: float
 	var covb_hi: float
-	var u: float = goalie_pos.x - shooter.x
-	var dv: float = forward - (goalie_pos.z - attacking_goal.z) * net_normal_z
 	if dv < 0.001:
 		# Goalie at/behind the release plane — he covers nothing (upstream release
 		# clamps keep real shooters from exploiting this; it's a degenerate read).
@@ -970,7 +1018,7 @@ static func _hole_open_angle(
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance
 # × forward-cone pressure. `predicted_goalie_pos` is the goalie at shot release
 # (use `predict_goalie_pos`); the hole geometry handles "too close" on its
-# own. `shot_speed_m_s` sets the flight time (goalie reaction) and the lane math;
+# own. `shot_speed_m_s` sets the puck's pace (goalie reach budget) and the lane math;
 # `goalie_unsettled_factor` cuts his reaction (a mid-slide goalie reads the shot
 # late).
 static func score_shoot(

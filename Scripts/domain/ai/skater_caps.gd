@@ -52,6 +52,13 @@ var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # override. Default mirrors the controller's 10.0.
 var blade_speed: float = 10.0
 
+# Backhand power coefficient (Hands, = SkaterController.backhand_power_coefficient
+# — hands_backhand_mult un-penalizes it toward 1.0). The release-offset sampler
+# prices a backhand-side release at this fraction of the wrister pace, so the
+# in-tight backhand finish is exactly as attractive as this build's hands make
+# it. Default mirrors the controller's 0.75.
+var backhand_power_coefficient: float = 0.75
+
 # Body-check delivery (Size + Physical): the attacker impulse coefficient. The
 # victim impulse is `approach × (attacker_weight / victim_weight) × transfer` (see
 # Skater._resolve_player_collisions) — a high-Size/Physical player predicts harder
