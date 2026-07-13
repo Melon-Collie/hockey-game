@@ -142,3 +142,76 @@ func test_strip_point_of_a_stand_is_the_spot_itself() -> void:
 	var vels: Array[Vector3] = [Vector3.ZERO]
 	var strip: Vector3 = AIActionScoring.carry_strip_point(spot, spot, 0.4, opps, vels)
 	assert_eq(strip, spot, "a stand's strip is where it stands")
+
+
+# ─── boards bound the seam search (the wall-pincer read) ─────────────────────
+
+func test_evade_seam_never_leaves_the_playing_surface() -> void:
+	# Carrier tight on the side wall, defender sealing from mid-ice: the naive
+	# "away from the threat" seam sits THROUGH the boards. The handling envelope
+	# is intersected with the rink, so the seam resolves along the wall instead.
+	var carrier := Vector3(GameRules.INNER_HALF_WIDTH - 0.4, 0, 0)
+	var opps: Array[Vector3] = [carrier + Vector3(-2.0, 0, 0)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var seam: Vector3 = AIActionScoring.best_evade_point(
+			carrier, Vector3.ZERO, opps, vels, HANDLE)
+	assert_lte(seam.x, GameRules.INNER_HALF_WIDTH, "seam stays on the playing surface")
+	assert_gt(absf(seam.z), 0.5, "with the wall at the back, the escape runs along the boards")
+
+
+func test_wall_alone_is_harmless_without_a_defender() -> void:
+	# Nobody to pin against: a carrier parked on the boards with no defender in
+	# the picture is fully safe (the n == 0 early return).
+	assert_eq(_evade(Vector3(GameRules.INNER_HALF_WIDTH - 0.3, 0, 0),
+			Vector3.ZERO, [], []), 1.0)
+
+
+func test_wall_pinned_carrier_reads_far_less_safe_than_open_ice() -> void:
+	# Same 1.5 m defender gap, two placements: pinned against the side wall (the
+	# outside half of the handling envelope is illegal — the classic wall pincer)
+	# vs mid-ice (a full envelope to evade into). The pre-boards model scored
+	# both alike by "evading" INTO the wall; the pinned read must now collapse.
+	var pinned_pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.4, 0, 0)
+	var opps_wall: Array[Vector3] = [pinned_pos + Vector3(-1.5, 0, 0)]
+	var opps_open: Array[Vector3] = [Vector3(-1.5, 0, 0)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var pinned: float = _evade(pinned_pos, Vector3.ZERO, opps_wall, vels)
+	var open: float = _evade(Vector3.ZERO, Vector3.ZERO, opps_open, vels)
+	assert_lt(pinned, 0.35, "pinned on the wall with a defender sealing is genuinely unsafe")
+	assert_gt(open, pinned + 0.3, "the identical defender gap in open ice leaves real room")
+
+
+# ─── best_handle_protect_point: shield the puck with the body ─────────────────
+
+func test_protect_point_pulls_the_puck_away_from_a_frontal_stick() -> void:
+	# Stick threat dead ahead of a stationary carrier: the safest holdable spot
+	# is on the FAR side of the body — pull the puck back, body becomes the
+	# shield. Offset is body-relative.
+	var opps: Array[Vector3] = [Vector3(0, 0, -1.2)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var offset: Vector3 = AIActionScoring.best_handle_protect_point(
+			Vector3.ZERO, Vector3.ZERO, opps, vels, HANDLE)
+	assert_gt(offset.z, 0.5, "puck pulls to the protected side, away from the threat")
+
+
+func test_protect_point_stays_inside_the_handling_envelope() -> void:
+	var opps: Array[Vector3] = [Vector3(0.9, 0, 0.7)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var offset: Vector3 = AIActionScoring.best_handle_protect_point(
+			Vector3.ZERO, Vector3.ZERO, opps, vels, HANDLE)
+	assert_lte(offset.length(), HANDLE + 0.001,
+			"the blade can only hold the puck within its handling reach")
+
+
+func test_protect_point_never_shields_into_the_wall() -> void:
+	# Carrier tight on the side wall, defender attacking from mid-ice: the naive
+	# "away from the threat" side is INTO the wall. The board cap makes the seam
+	# resolve along the wall instead — never outside the rink.
+	var carrier := Vector3(GameRules.INNER_HALF_WIDTH - 0.4, 0, 0)
+	var opps: Array[Vector3] = [carrier + Vector3(-1.2, 0, 0)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var offset: Vector3 = AIActionScoring.best_handle_protect_point(
+			carrier, Vector3.ZERO, opps, vels, HANDLE)
+	assert_lte(carrier.x + offset.x, GameRules.INNER_HALF_WIDTH,
+			"the protected spot stays on the playing surface")
+	assert_gt(absf(offset.z), 0.3, "with the wall behind, the escape runs ALONG the boards")

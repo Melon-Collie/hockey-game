@@ -1948,6 +1948,15 @@ static func pass_miss_loss_point(from: Vector3, receiver: Vector3) -> Vector3:
 # on you (real containment); a stick on the puck stays a strip threat. The carrier
 # evades by placing the puck in his own handling envelope at a point outside every
 # defender disk — the SEAM (best_evade_point), which doubles as a carry candidate.
+#
+# The BOARDS bound the seam search, not the clearance itself: a wall doesn't
+# strip the puck (a carrier 0.3 m off the boards with no defender in reach is
+# perfectly safe), it removes ESCAPE OPTIONS — the puck can't be handled through
+# it. So the seam samplers intersect the handling envelope with the playing
+# surface (off-surface samples are rejected), and the wall-pincer humans
+# actually use emerges: pinned against the boards, half the envelope is illegal,
+# the best legal seam runs along the wall, and its clearance from the sealing
+# defender is honestly small.
 const MANEUVER_ACCEL_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 const EVADE_HORIZON_S: float = 0.40    # a deke/cut's length — the evasion look-ahead
 const EVADE_REACTION_S: float = 0.15   # a defender reads a cut before he can redirect to it
@@ -1959,6 +1968,16 @@ const EVADE_SAFE_MARGIN_M: float = EVADE_STICK_REACH_M
 # seam is a broad region, not a point.
 const EVADE_SAMPLE_RINGS: Array[float] = [0.4, 0.8, 1.0]
 const EVADE_SAMPLE_ANGLES: int = 12
+
+
+# Gap (metres) from a puck point to the nearest board. Negative outside the
+# playing surface — the seam samplers reject those samples (the handling
+# envelope intersected with the rink; see the boards note above). Uses the
+# INNER extents (the surface the puck actually lives on, inside kickplate lip
+# + wall half-thickness).
+static func board_gap_m(point: Vector3) -> float:
+	return minf(GameRules.INNER_HALF_WIDTH - absf(point.x),
+			GameRules.INNER_HALF_LENGTH - absf(point.z))
 
 
 # Clearance (metres) of a puck point from every defender's reachable stick at
@@ -2054,10 +2073,44 @@ static func best_evade_point(
 		carrier_pos: Vector3, carrier_vel: Vector3,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
 		handle_reach: float, opponent_caps: Array = []) -> Vector3:
-	var proj_x: float = carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S
-	var proj_z: float = carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S
 	var env: float = 0.5 * MANEUVER_ACCEL_M_S2 * EVADE_HORIZON_S * EVADE_HORIZON_S \
 			+ handle_reach
+	return _best_clear_point(
+			carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S,
+			carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S,
+			env, opponents, opponent_vels, opponent_caps)
+
+
+# WHERE ON THE BLADE to hold the puck under pressure: the point in the carrier's
+# handling envelope ALONE (no body-maneuver term — the body keeps doing whatever
+# steering wants; this is pure stick work) with the most clearance from every
+# defender's momentum-reach. Returned as an OFFSET from the body (y = 0), so the
+# consumer re-applies it to the live body position every tick — pull the puck back
+# to the protected hip when the presented forward spot is covered, and the body
+# becomes the shield. The envelope is intersected with the playing surface, so
+# the protected side is never through a wall (the escape runs along the boards).
+static func best_handle_protect_point(
+		carrier_pos: Vector3, carrier_vel: Vector3,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		handle_reach: float, opponent_caps: Array = []) -> Vector3:
+	var proj_x: float = carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S
+	var proj_z: float = carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S
+	var best: Vector3 = _best_clear_point(
+			proj_x, proj_z, handle_reach, opponents, opponent_vels, opponent_caps)
+	return Vector3(best.x - proj_x, 0.0, best.z - proj_z)
+
+
+# Shared seam sampler: the max-clearance point over the disk of radius `env`
+# around the (already projected) center, evaluated at the evasion horizon.
+# Coarse rings × angles are fine — the seam is a broad region, not a point.
+# The disk is intersected with the playing surface (off-surface samples are
+# rejected — the puck can't be handled through a wall), which is what makes a
+# wall-pinned carrier's best seam run ALONG the boards and read honestly tight;
+# the projected center stays as the fallback even off-surface (the containment
+# backstop owns that degenerate case, not the seam search).
+static func _best_clear_point(proj_x: float, proj_z: float, env: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = []) -> Vector3:
 	var best: Vector3 = Vector3(proj_x, 0.0, proj_z)
 	var best_clear: float = reach_clearance(best, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
 	for ring: float in EVADE_SAMPLE_RINGS:
@@ -2065,6 +2118,8 @@ static func best_evade_point(
 		for k: int in EVADE_SAMPLE_ANGLES:
 			var ang: float = TAU * float(k) / float(EVADE_SAMPLE_ANGLES)
 			var p := Vector3(proj_x + cos(ang) * radius, 0.0, proj_z + sin(ang) * radius)
+			if board_gap_m(p) < 0.0:
+				continue
 			var c: float = reach_clearance(p, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
 			if c > best_clear:
 				best_clear = c

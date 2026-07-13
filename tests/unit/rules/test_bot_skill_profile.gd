@@ -129,18 +129,23 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 
 
 func test_cognition_gates_close_down_the_tiers() -> void:
-	# Hard has the full hockey IQ. Normal loses ONLY the goalie-motion read —
-	# the scoring cut through cognition rather than wobble. Easy loses all
-	# three: motion-blind, plays only what exists, straight-line chase.
+	# Hard and Normal are the SAME PLAYER separated only by continuous tuning:
+	# every cognition gate matches between them (a tier gap that reads as
+	# "sharper", never "knows moves the other doesn't"). Easy is the behaviour
+	# floor where the gates close.
 	var hard: BotSkillProfile = BotSkillProfile.hard()
-	assert_true(hard.reads_goalie_motion, "Hard shoots across the grain")
-	assert_true(hard.holds_for_developing_feeds, "Hard holds for developing plays")
-	assert_true(hard.angles_the_chase, "Hard angles its chase to the inside")
 	var normal: BotSkillProfile = BotSkillProfile.normal()
-	assert_false(normal.reads_goalie_motion, "Normal is goalie-motion blind")
-	assert_true(normal.holds_for_developing_feeds,
-			"Normal still holds for developing plays")
-	assert_true(normal.angles_the_chase, "Normal still angles its chase")
+	assert_eq(normal.reads_goalie_motion, hard.reads_goalie_motion,
+			"Normal reads the moving goalie exactly as Hard does")
+	assert_eq(normal.holds_for_developing_feeds, hard.holds_for_developing_feeds,
+			"Normal holds for developing plays exactly as Hard does")
+	assert_eq(normal.angles_the_chase, hard.angles_the_chase,
+			"Normal angles its chase exactly as Hard does")
+	assert_eq(normal.plays_rush_pass_lanes, hard.plays_rush_pass_lanes,
+			"Normal plays odd-man pass lanes exactly as Hard does")
+	assert_eq(normal.protects_the_puck, hard.protects_the_puck,
+			"Normal shields the puck exactly as Hard does")
+	assert_true(hard.reads_goalie_motion, "the shared ceiling is the full hockey IQ")
 	var easy: BotSkillProfile = BotSkillProfile.easy()
 	assert_false(easy.reads_goalie_motion, "Easy is goalie-motion blind")
 	assert_false(easy.holds_for_developing_feeds, "Easy plays only what exists now")
@@ -160,6 +165,18 @@ func test_dispatch_period_is_at_least_one_tick() -> void:
 	# A zero/negative cadence would stall the throttle (dispatch_period - 1).
 	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
 		assert_gte(profile.dispatch_period_ticks, 1)
+
+
+func test_puck_protection_is_tiered() -> void:
+	# Shielding the puck with the body is a taught fundamental: Hard and Normal
+	# protect (blade to the seam under pressure, seam-directed deke); Easy
+	# carries naively presented in front so a newcomer's poke-check works.
+	assert_true(BotSkillProfile.hard().protects_the_puck,
+			"Hard shields the puck with its body")
+	assert_true(BotSkillProfile.normal().protects_the_puck,
+			"Normal shields the puck — a youth-hockey fundamental")
+	assert_false(BotSkillProfile.easy().protects_the_puck,
+			"Easy concedes the pickpocket by design")
 
 
 func test_rush_pass_lane_read_is_tiered() -> void:

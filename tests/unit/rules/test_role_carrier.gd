@@ -1798,3 +1798,48 @@ func test_committed_saucer_pass_caps_launch_at_the_receivability_bound() -> void
 	assert_gt(c.pass_target_speed,
 			GameRules.DEFAULT_WRISTER_POWER_MIN_M_S - 0.01,
 			"committed saucer launch stays at/above the soft-touch floor")
+
+
+# ─── puck-protect mirror (blade shielding read by the state machine) ─────────
+
+func test_open_ice_carrier_feels_no_protect_pressure() -> void:
+	# Nobody near the presented forward carry spot: pressure 0, and the state
+	# machine keeps the plain forward carry aim.
+	var ctx := _make_ctx(Vector3(0, 0, 5))
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.protect_pressure, 0.0, "open ice leaves the forward carry uncovered")
+	assert_true(c.evade_seam_world.is_finite(),
+			"the evasion seam is published for the deke cut")
+
+
+func test_frontal_stick_threat_pulls_the_puck_behind_the_body() -> void:
+	# A defender's stick parked right on the forward carry spot (2 m toward the
+	# attacking net, -Z): full protect pressure, and the protect offset pulls
+	# the puck to the far side of the body (+Z — back hip, body as the shield).
+	var self_pos := Vector3(0, 0, 5)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, self_pos + Vector3(0, 0, -2.2)],   # stick on the presented puck
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_gt(c.protect_pressure, 0.9, "a stick on the presented spot is full pressure")
+	assert_gt(c.protect_offset.z, 0.5, "the puck pulls to the protected side of the body")
+
+
+func test_protect_read_is_gated_by_the_cognition_tier() -> void:
+	# Same frontal threat, protects_the_puck false (the Easy tier): the mirror
+	# stays zeroed — the naive forward carry, poke-checks work by design.
+	var self_pos := Vector3(0, 0, 5)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, self_pos + Vector3(0, 0, -2.2)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.protects_the_puck = false
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.protect_pressure, 0.0, "the beginner tier never shields")
+	assert_eq(c.protect_offset, Vector3.ZERO, "no protect offset on the beginner tier")

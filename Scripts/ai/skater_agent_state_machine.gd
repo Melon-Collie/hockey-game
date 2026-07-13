@@ -336,6 +336,10 @@ const POKE_EVADE_ACTIVE_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 20   #
 # into a constant cut — the cooldown forces us to commit back to
 # normal steering between cuts.
 const POKE_EVADE_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~500 ms
+# Least distance to the carrier's evasion seam that still defines a usable
+# deke direction — under that the seam is basically underfoot and the
+# perpendicular fallback cut reads better than a near-zero vector.
+const POKE_EVADE_SEAM_MIN_DIST_M: float = 0.75
 
 # ── Defensive poke jab (active stick-check to strip the carrier) ──────────────
 # The host auto-strips the carrier whenever a defender's blade SWEEPS
@@ -884,6 +888,12 @@ var _carry_tracking_fire: bool = false
 # kicks in and blocks retrigger. Both reset on CARRY entry.
 var _poke_evade_active_ticks: int = 0
 var _poke_evade_cooldown_ticks: int = 0
+# Deke direction LATCHED at trigger (a cut commits — re-reading it per tick
+# would spiral the direction as our own velocity rotates mid-cut). Points at
+# the carrier's evasion seam when the protects_the_puck tier has one (a real
+# cut into open ice, cutback included); ZERO = no usable seam at trigger, the
+# active window falls back to the per-tick perpendicular-away cut.
+var _poke_evade_dir: Vector2 = Vector2.ZERO
 
 # Defensive poke-jab bookkeeping (see POKE_JAB_* constants). While
 # _active > 0 the bot aims its blade at the carrier's puck so the host
@@ -977,6 +987,11 @@ var _holds_for_developing_feeds: bool = true
 var _angles_the_chase: bool = true
 # _plays_rush_pass_lanes rides RoleContext into CONTAIN's odd-man lane fan.
 var _plays_rush_pass_lanes: bool = true
+# _protects_the_puck gates the carrier's blade-level puck shielding (the carry
+# mouse blends toward the carrier's protect seam under pressure) and the
+# seam-directed poke-evade deke. False = naive forward carry — the puck stays
+# presented ahead of the body, so a straight poke-check works (the beginner tier).
+var _protects_the_puck: bool = true
 # Sprint is decided alongside move_vector on full-dispatch ticks; skipped
 # throttle ticks reuse this cached value so sprint_held doesn't flicker off at
 # 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
@@ -1135,6 +1150,7 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_holds_for_developing_feeds = profile.holds_for_developing_feeds
 	_angles_the_chase = profile.angles_the_chase
 	_plays_rush_pass_lanes = profile.plays_rush_pass_lanes
+	_protects_the_puck = profile.protects_the_puck
 	# Execution error for LIVE bots (raw test agents stay deterministic):
 	# per-tier, split shot-vs-pass — the shot error is the tier's scoring
 	# dial, the pass error stays small so passes keep connecting. Timing
@@ -1572,6 +1588,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.reads_goalie_motion = _reads_goalie_motion
 	ctx.holds_for_developing_feeds = _holds_for_developing_feeds
 	ctx.plays_rush_pass_lanes = _plays_rush_pass_lanes
+	ctx.protects_the_puck = _protects_the_puck
 	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
 	# is only called on dispatch ticks — hand it the span so it can compensate.
 	ctx.dispatch_period_ticks = _dispatch_period_ticks
@@ -3449,22 +3466,41 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	else:
 		forward_dir = Vector3(0.0, 0.0, attacking_z)
 	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
-	# Clamp the carry mouse so it stays on the rink side of the
-	# attacking goal line — the blade IK chases the mouse, and a mouse
-	# target past the goal line punches the blade through the net.
-	var goal_line_z: float = _attacking_goal_pos.z
-	var max_forward_z: float = goal_line_z + AIRoleHelpers.GOAL_LINE_BUFFER_M * _own_goal_dir
-	if (base.z - max_forward_z) * _own_goal_dir < 0.0:
-		base.z = max_forward_z
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
 	# motion smoothing across ticks. When two defenders converge from
 	# opposite sides and the raw target alternates per tick, the
 	# motion model averages them out (mouse oscillates within a small
 	# range bounded by the per-tick step). The natural sway rides
 	# underneath the threat response — a resting dangle rhythm, not a
-	# reaction (see the CARRY_SWAY_* block).
-	return base + _stickhandle_offset(snapshot, self_pos, forward_dir) \
+	# reaction (see the CARRY_SWAY_* block) — and is folded in BEFORE the
+	# protect blend below, so shielding pressure attenuates the dangle
+	# along with everything else: a blade pinned to the protect seam
+	# doesn't sway the puck back into the checker's reach.
+	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir) \
 			+ _carry_sway_offset(forward_dir)
+	# Puck protection (protects_the_puck tiers): as the presented-forward carry
+	# spot's reachable clearance collapses (carrier protect_pressure → 1), swing
+	# the blade toward the protected seam of the handling envelope — typically
+	# the hip away from the checker, putting the body between puck and stick.
+	# The seam offset is re-based on the LIVE body position (the carrier mirror
+	# refreshes at ~30 Hz) and projected out to the carry aim ring: the arc-step
+	# in `_step_mouse_aim` reads direction only, so a short raw offset would
+	# under-weight the protect side in a positional lerp.
+	if _protects_the_puck and _carrier.protect_pressure > 0.0:
+		var protect_dir: Vector3 = _carrier.protect_offset
+		protect_dir.y = 0.0
+		if protect_dir.length_squared() > 0.0025:
+			var protect_target: Vector3 = self_pos \
+					+ protect_dir.normalized() * CARRY_BLADE_AIM_FORWARD_M
+			target = target.lerp(protect_target, _carrier.protect_pressure)
+	# Clamp the carry mouse so it stays on the rink side of the
+	# attacking goal line — the blade IK chases the mouse, and a mouse
+	# target past the goal line punches the blade through the net.
+	var goal_line_z: float = _attacking_goal_pos.z
+	var max_forward_z: float = goal_line_z + AIRoleHelpers.GOAL_LINE_BUFFER_M * _own_goal_dir
+	if (target.z - max_forward_z) * _own_goal_dir < 0.0:
+		target.z = max_forward_z
+	return target
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
@@ -3558,13 +3594,16 @@ func _carry_sway_offset(forward_dir: Vector3) -> Vector3:
 	return right_axis * (sin(_sway_phase) * _sway_amp_frac * _carry_sway_m)
 
 
-# Poke-evade lateral cut. Overrides input.move_vector with a brief
-# perpendicular thrust away from an imminent poke threat. Continuous
-# defender avoidance (opponent repel in body steering + stickhandle
-# offset on the blade) handles the baseline; this is the discrete
-# "deke moment" when a defender's blade is close enough that a poke
-# is imminent — full lateral thrust for POKE_EVADE_ACTIVE_TICKS
-# breaks the defender's projected interception line.
+# Poke-evade cut. Overrides input.move_vector with a brief committed
+# thrust when a poke is imminent: toward the carrier's evasion seam on
+# the protects_the_puck tiers (a real deke into open ice — the direction
+# is latched at trigger, see _seam_cut_direction), else a perpendicular
+# thrust away from the threat. Continuous defender avoidance (opponent
+# repel in body steering + stickhandle offset on the blade) handles the
+# baseline; this is the discrete "deke moment" when a defender's blade
+# is close enough that a poke is imminent — full thrust for
+# POKE_EVADE_ACTIVE_TICKS breaks the defender's projected interception
+# line.
 #
 # Lifecycle (counters live on the state machine, both reset on
 # CARRY entry):
@@ -3585,7 +3624,7 @@ func _carry_sway_offset(forward_dir: Vector3) -> Vector3:
 #     the deke (only a defender neither approaching nor being approached is skipped).
 func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	if _poke_evade_active_ticks > 0:
-		_apply_poke_evade_cut(input, snapshot, self_pos)
+		_drive_poke_evade_cut(input, snapshot, self_pos)
 		# Decrement by the dispatch span (this runs once per dispatch, but the
 		# window is sized in physics ticks) so the cut lasts its intended wall time
 		# instead of dispatch_period× longer at Normal/Easy.
@@ -3650,6 +3689,35 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 	if trigger_threat == null:
 		return
 	_poke_evade_active_ticks = POKE_EVADE_ACTIVE_TICKS
+	_poke_evade_dir = _seam_cut_direction(self_pos)
+	_drive_poke_evade_cut(input, snapshot, self_pos)
+
+
+# The latched deke direction: toward the carrier's evasion seam — the
+# reachable-set escape from the last carrier re-eval (≤ ~33 ms stale, re-based
+# on the live body position). The seam already reads every defender's momentum,
+# so a committed charger's cut resolves BEHIND him (the cutback that lets him
+# overshoot) and a jockeying defender's resolves lateral — instead of the blind
+# perpendicular the fallback cut uses. ZERO when this tier doesn't protect the
+# puck, no seam is computed yet, or the seam is underfoot.
+func _seam_cut_direction(self_pos: Vector3) -> Vector2:
+	if not _protects_the_puck:
+		return Vector2.ZERO
+	var seam: Vector3 = _carrier.evade_seam_world
+	if not seam.is_finite():
+		return Vector2.ZERO
+	var to_seam := Vector2(seam.x - self_pos.x, seam.z - self_pos.z)
+	if to_seam.length() < POKE_EVADE_SEAM_MIN_DIST_M:
+		return Vector2.ZERO
+	return to_seam.normalized()
+
+
+# One active-window tick of the committed cut: the latched seam direction when
+# one was available at trigger, else the per-tick perpendicular fallback.
+func _drive_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	if _poke_evade_dir != Vector2.ZERO:
+		input.move_vector = _poke_evade_dir
+		return
 	_apply_poke_evade_cut(input, snapshot, self_pos)
 
 
@@ -4389,6 +4457,7 @@ func _set_state(s: State) -> void:
 			_carry_tracking_fire = false
 			_poke_evade_active_ticks = 0
 			_poke_evade_cooldown_ticks = 0
+			_poke_evade_dir = Vector2.ZERO
 			_poke_jab_active_ticks = 0
 			_poke_jab_cooldown_ticks = 0
 			_carrier.clear_intent()
