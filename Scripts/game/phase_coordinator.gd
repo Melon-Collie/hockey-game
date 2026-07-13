@@ -123,6 +123,13 @@ var last_prep_preroll: float = 0.0
 # period card + camera sweep) instead of the skate-in countdown hold.
 var last_prep_was_period_intro: bool = false
 
+# Host-only scoring log, one entry per goal in scoring order: x = scoring
+# team id, y = credited scorer peer id (-1 when nobody could be credited).
+# Feeds the game-winning-goal stamp at the final horn; cleared on rematch via
+# reset_goal_log(). Stays empty on clients (their goals arrive via
+# on_goal_received) — they read the GWG through the replicated stats instead.
+var _goal_log: Array[Vector2i] = []
+
 
 func setup(
 		state_machine: GameStateMachine,
@@ -194,6 +201,7 @@ func handle_phase_entered() -> void:
 			if puck != null:
 				puck.pickup_locked = true
 			clock_updated.emit(0.0)
+			_stamp_game_winning_goal()
 			game_over.emit()
 	phase_changed.emit(_state_machine.current_phase)
 
@@ -352,6 +360,7 @@ func on_goal_scored_into(defending_team: Team) -> void:
 			if not is_own_goal:
 				_shot_tracker.on_goal_confirmed(scorer_id)
 			scorer_name = record.display_name()
+	_goal_log.append(Vector2i(scoring_team_id, scorer_id))
 	_shot_tracker.clear_pending()
 	stats_need_sync.emit()
 
@@ -369,6 +378,38 @@ func on_goal_scored_into(defending_team: Team) -> void:
 			scoring_team_id, _state_machine.scores[0], _state_machine.scores[1],
 			scorer_name, assist1_name, assist2_name)
 	_capture_goal_moment_frame()
+
+
+# Host, final horn: stamp game_winning_goals on the scorer of the goal that
+# put the winner past the loser's final total (the NHL GWG definition). It
+# rides the ordinary stats broadcast (stats_need_sync) so every peer's Three
+# Stars math reads the same counters. A draw stamps nobody, and so does an
+# uncredited goal (own goal with no attributable scorer) at the pivotal slot.
+func _stamp_game_winning_goal() -> void:
+	var score0: int = _state_machine.scores[0]
+	var score1: int = _state_machine.scores[1]
+	if score0 == score1:
+		return
+	var winning_team: int = 0 if score0 > score1 else 1
+	var gwg_idx: int = StarOfGameRules.game_winning_goal_index(
+			maxi(score0, score1), mini(score0, score1))
+	var seen: int = 0
+	for goal: Vector2i in _goal_log:
+		if goal.x != winning_team:
+			continue
+		if seen == gwg_idx:
+			var record: PlayerRecord = _registry.get_record(goal.y)
+			if record != null:
+				record.stats.game_winning_goals = 1
+				stats_need_sync.emit()
+			return
+		seen += 1
+
+
+# Rematch reset: a fresh match must not inherit the previous game's scoring
+# log (the stat counters themselves reset via PlayerRegistry.reset_all_stats).
+func reset_goal_log() -> void:
+	_goal_log.clear()
 
 
 func _is_own_goal(raw_scorer_id: int, defending_team_id: int) -> bool:

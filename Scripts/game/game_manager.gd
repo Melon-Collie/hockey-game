@@ -133,6 +133,12 @@ var _puck_was_carried: bool = false
 # Any single-tick puck travel beyond this (metres) is a reset/reposition, not a
 # real crossing — the tracker reseeds and skips it. Far above any shot or blade
 # speed at 120 Hz (~2 m/tick = 240 m/s); a faceoff/OOB reset jumps much further.
+# The AI goalies' fixed identities, indexed by team_id — spawned onto the
+# jerseys and reused by the Three Stars podium when a goalie stars. Same on
+# every machine, so a goalie star candidate needs no wire traffic.
+const GOALIE_NAMES: Array[String] = ["WALL", "WARD"]
+const GOALIE_NUMBERS: Array[int] = [31, 35]
+
 const _GOAL_MAX_TICK_TRAVEL: float = 2.0
 # Tighter bound for a puck that was PINNED on both ends of the segment. A
 # carried puck teleports to the carry target every tick, and that target can
@@ -1217,7 +1223,7 @@ func _spawn_goalies() -> void:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		goalie.apply_uniform(colors)
-		goalie.apply_jersey_info("WALL" if team_id == 0 else "WARD", 31 if team_id == 0 else 35)
+		goalie.apply_jersey_info(GOALIE_NAMES[team_id], GOALIE_NUMBERS[team_id])
 
 
 func _wire_subsystems() -> void:
@@ -3515,27 +3521,72 @@ func _pregame_intro_eligible() -> bool:
 
 
 # Three Stars of the Game, ranked best first, computed locally from the
-# replicated stat counters. Every machine sees the same counters and the same
-# sorted-peer-id candidate order, and StarOfGameRules breaks ties explicitly,
-# so selection is deterministic without an RPC. Can return fewer than three
-# entries (empty when nobody registered a counting stat).
+# replicated stat counters. Every machine sees the same counters (including
+# the host-stamped game-winning-goal flag) and the same sorted-peer-id
+# candidate order, and StarOfGameRules breaks ties explicitly, so selection
+# is deterministic without an RPC. The GWG bonus scales with the final margin
+# (a one-goal winner is the story of the night, a blowout GWG is trivia),
+# losing-team stat lines are discounted at selection, and the first star
+# always comes from the winning team; humans and bots compete on equal
+# footing. The two AI goalies are candidates too (after the skaters in the
+# stable order), rated on goals saved above the Mitts-average expectation —
+# team shots and scores are replicated, so their scores are as deterministic
+# as the skaters'. Can return fewer than three entries (empty when nobody
+# registered a counting stat).
 func get_stars_of_game() -> Array[PlayerRecord]:
 	var result: Array[PlayerRecord] = []
 	if _registry == null:
 		return result
+	var goal_margin: int = 0
+	var winning_team: int = -1
+	if _state_machine != null:
+		goal_margin = absi(_state_machine.scores[0] - _state_machine.scores[1])
+		if goal_margin > 0:
+			winning_team = 0 if _state_machine.scores[0] > _state_machine.scores[1] else 1
 	var peer_ids: Array[int] = []
 	for pid: int in _registry.all().keys():
 		peer_ids.append(pid)
 	peer_ids.sort()
 	var scores: Array[float] = []
-	var is_human: Array[bool] = []
+	var on_losing_team: Array[bool] = []
 	for pid: int in peer_ids:
 		var rec: PlayerRecord = _registry.get_record(pid)
-		scores.append(StarOfGameRules.score(rec.stats))
-		is_human.append(not rec.is_bot)
-	for star_idx: int in StarOfGameRules.pick_stars(scores, is_human):
-		result.append(_registry.get_record(peer_ids[star_idx]))
+		scores.append(StarOfGameRules.score(rec.stats, goal_margin))
+		on_losing_team.append(winning_team != -1 and rec.team != null
+				and rec.team.team_id != winning_team)
+	var goalie_candidates: bool = _state_machine != null and teams.size() == 2
+	if goalie_candidates:
+		for team_id: int in 2:
+			scores.append(StarOfGameRules.goalie_score(
+					_state_machine.team_shots[1 - team_id],
+					_state_machine.scores[1 - team_id]))
+			on_losing_team.append(winning_team != -1 and team_id != winning_team)
+	for star_idx: int in StarOfGameRules.pick_stars(scores, on_losing_team):
+		if star_idx < peer_ids.size():
+			result.append(_registry.get_record(peer_ids[star_idx]))
+		else:
+			result.append(_goalie_star_record(star_idx - peer_ids.size()))
 	return result
+
+
+# A starred goalie has no roster record, so the podium gets a synthesized
+# one carrying just what the HUD reads (name, number, team, is_goalie). The
+# negative peer id is a sentinel — this record never enters the registry.
+func _goalie_star_record(team_id: int) -> PlayerRecord:
+	var rec := PlayerRecord.new(-(team_id + 1), 0, false, teams[team_id])
+	rec.player_name = GOALIE_NAMES[team_id]
+	rec.jersey_number = GOALIE_NUMBERS[team_id]
+	rec.is_bot = true
+	rec.is_goalie = true
+	return rec
+
+
+# Replicated team shots-on-goal (NHL convention: goals count as shots). The
+# HUD reads this at podium time to caption a starred goalie's saves line.
+func get_team_shots(team_id: int) -> int:
+	if _state_machine == null:
+		return 0
+	return _state_machine.team_shots[team_id]
 
 
 # ── Scene exit & reset ───────────────────────────────────────────────────────
@@ -3805,6 +3856,8 @@ func _apply_reset() -> void:
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
+	if _phase_coord != null:
+		_phase_coord.reset_goal_log()
 	if _turnover_tracker != null:
 		_turnover_tracker.reset()
 	if _possession_tracker != null:
