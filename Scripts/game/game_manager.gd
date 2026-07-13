@@ -797,6 +797,9 @@ func on_host_started() -> void:
 	var goalie_diff: int = PlayerPrefs.freeplay_goalie_difficulty \
 			if NetworkManager.is_free_play_mode else PlayerPrefs.goalie_difficulty
 	goalie_skill_profile = GoalieSkillProfile.for_difficulty(goalie_diff)
+	# Sync the bots' shot model to the tier — otherwise they score their shots
+	# against a Hard goalie's reads and pass up looks that beat a weaker one.
+	AIActionScoring.set_goalie_profile(goalie_skill_profile)
 	_perceived_carrier_peer_id = -1
 	_real_carrier_last = -1
 	_carrier_reaction_timer = 0.0
@@ -4043,6 +4046,7 @@ func refresh_freeplay_goalie_difficulty() -> void:
 	if not NetworkManager.is_free_play_mode:
 		return
 	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.freeplay_goalie_difficulty)
+	AIActionScoring.set_goalie_profile(goalie_skill_profile)
 	for gc: GoalieController in goalie_controllers:
 		gc.apply_skill_profile(goalie_skill_profile)
 
