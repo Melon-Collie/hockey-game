@@ -85,10 +85,11 @@ func test_game_winning_goal_index_absent_without_a_win() -> void:
 # ── goalie_score ──────────────────────────────────────────────────────────────
 
 func test_goalie_average_night_scores_zero() -> void:
-	# GA exactly at the baseline expectation nets nothing — by construction an
-	# average Mitts goalie night never stars.
+	# GA at (or a fraction above — ceili absorbs both float error and a
+	# non-integral expectation under any future baseline) the baseline
+	# expectation nets nothing — an average Mitts goalie night never stars.
 	var shots: int = 10
-	var expected_ga: int = int(shots * (1.0 - StarOfGameRules.BASELINE_SAVE_PCT))
+	var expected_ga: int = ceili(shots * (1.0 - StarOfGameRules.BASELINE_SAVE_PCT))
 	assert_almost_eq(StarOfGameRules.goalie_score(shots, expected_ga), 0.0, 0.0001)
 
 func test_goalie_score_is_gsaa_in_goal_currency() -> void:

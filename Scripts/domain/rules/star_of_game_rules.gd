@@ -41,11 +41,13 @@ const GWG_CLOSE_BONUS: float = 2.0
 # losing-team stars in one game naturally rare rather than hard-capped.
 const LOSING_TEAM_MULT: float = 0.6
 # Goalie rating baseline: the save rate an AVERAGE Mitts goalie night runs.
-# This is a measurement, not a shape parameter — Mitts is deliberately far
-# more scorable than the NHL's ~.905, so the expectation a star night must
-# beat sits much lower. Calibrate from playtest telemetry (team shots +
-# scores per game); an average night scores exactly zero by construction.
-const BASELINE_SAVE_PCT: float = 0.70
+# This is a measurement, not a shape parameter — an average night scores
+# exactly zero by construction, so this constant alone decides how often a
+# goalie stars. Deliberately set STRICT (real data pending — the goalie and
+# bot models are both still moving): .800 is likely above the true Mitts
+# average, so only a truly absurd night cracks the podium. Recalibrate from
+# playtest box scores (team shots + goals) once the models settle.
+const BASELINE_SAVE_PCT: float = 0.80
 # Narrative bonus for a shutout — but only a real one: blanking a team that
 # barely shot the puck is scheduling, not goaltending.
 const SHUTOUT_BONUS: float = 2.0
