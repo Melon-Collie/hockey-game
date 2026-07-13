@@ -190,6 +190,10 @@ func test_never_advances_past_recovery_toward_a_distant_carrier() -> void:
 			[200, 1, carrier],
 			[210, 1, trailer, Vector3(0, 0, 7)],     # burning toward our net
 	], 200)
+	# Gate off the pass-lane fan: this test pins the race-home DEPTH clamp in
+	# isolation (the fan may legitimately trade the pure race radius for lane
+	# ownership — covered by the odd-man tests below).
+	ctx.plays_rush_pass_lanes = false
 	var d: RoleDecision = AIRoleContain.decide(ctx)
 	var opp_states: Array[SkaterNetworkState] = []
 	for pid: int in [200, 210]:
@@ -201,3 +205,107 @@ func test_never_advances_past_recovery_toward_a_distant_carrier() -> void:
 			+ " distant gap point; got %s (r=%.1f)" % [d.target_position, r])
 	assert_gt(d.target_position.z, 0.0,
 			"…which keeps it on OUR side of center while the trailer streaks")
+
+
+func test_trailer_race_reads_the_trailer_real_speed_cap() -> void:
+	# The recovery clamp races each trailer at ITS real Speed cap: a slow
+	# build's trailer takes longer to get home, so CONTAIN may stand
+	# meaningfully farther out before the race is at risk. (The hand-filled
+	# trailer list used to size-mismatch the caps scratch buffer, silently
+	# demoting every trailer to league-reference speed — a plodder forced
+	# the same deep sag a burner did.)
+	var carrier := Vector3(0, 0, -20)
+	var trailer := Vector3(2, 0, 2)
+	var skaters: Array = [
+			[1, TEAM_ID, Vector3(0, 0, 5)],
+			[200, 1, carrier],
+			[210, 1, trailer, Vector3(0, 0, 7)],
+	]
+	var our_net := Vector3(0, 0, OUR_NET_Z)
+
+	# Gate off the pass-lane fan — this test pins the race clamp's caps read
+	# in isolation (see the note in the recovery test above).
+	var ctx_default: RoleContext = _make_ctx(Vector3(0, 0, 5), skaters, 200)
+	ctx_default.plays_rush_pass_lanes = false
+	var default_stand: float = AIRoleContain.decide(
+			ctx_default).target_position.distance_to(our_net)
+
+	var slow_caps := AISkaterCaps.new()
+	slow_caps.max_speed = 4.0
+	var ctx_slow: RoleContext = _make_ctx(Vector3(0, 0, 5), skaters, 200)
+	ctx_slow.plays_rush_pass_lanes = false
+	ctx_slow.caps_by_peer = {210: slow_caps}
+	var slow_stand: float = AIRoleContain.decide(
+			ctx_slow).target_position.distance_to(our_net)
+
+	assert_gt(slow_stand, default_stand + 2.0,
+			"a slow trailer lets CONTAIN stand farther from home;"
+			+ " slow=%.1f default=%.1f" % [slow_stand, default_stand])
+
+
+# ── Odd-man pass-lane read ("play the pass") ────────────────────────────────
+
+# In-zone 2-on-1: opp carrier drives the middle, partner streaks abreast on
+# +X, our markers hopelessly caught up-ice, our goalie challenged out on the
+# carrier's line (what the live goalie AI does on a rush — which is exactly
+# what leaves the far side open to the one-timer). The lane fan should rotate
+# the stand off the carrier→net line toward the open feed lane.
+func _two_on_one_ctx() -> RoleContext:
+	var skaters: Array = [
+			[1, TEAM_ID, Vector3(0, 0, 20)],
+			[2, TEAM_ID, Vector3(0, 0, -12)],    # markers caught up-ice
+			[3, TEAM_ID, Vector3(4, 0, -15)],
+			[200, 1, Vector3(0, 0, 14)],         # opp carrier, in our zone
+			[210, 1, Vector3(8, 0, 16)],         # 2-on-1 partner, wide +X
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 20), skaters, 200)
+	var goalie := GoalieNetworkState.new()
+	goalie.position_x = 0.0
+	goalie.position_z = 24.6   # challenged toward the carrier
+	ctx.snapshot.goalie_states[TEAM_ID] = goalie
+	return ctx
+
+
+func test_two_on_one_splits_toward_the_open_feed_lane() -> void:
+	var d: RoleDecision = AIRoleContain.decide(_two_on_one_ctx())
+	assert_gt(d.target_position.x, 1.0,
+			"an uncovered 2-on-1 partner pulls the stand toward his feed lane;"
+			+ " got %s" % d.target_position)
+	# Depth discipline is preserved: the fan rotates AT the gap distance —
+	# CONTAIN neither lunges at the carrier nor abandons the retreat.
+	var gap_dist: float = d.target_position.distance_to(Vector3(0, 0, 14))
+	assert_between(gap_dist, 4.0, 9.5,
+			"lane candidates keep the gap depth; got %.2f m off the carrier" % gap_dist)
+
+
+func test_two_on_one_lane_yields_when_receiver_is_covered() -> void:
+	# Same rush, but a marker is already home on the partner: his pass threat
+	# is suppressed through the shared surfaces (coverage is continuous, not a
+	# boolean), so the classic carrier-line retreat wins again.
+	var skaters: Array = [
+			[1, TEAM_ID, Vector3(0, 0, 20)],
+			[2, TEAM_ID, Vector3(7.5, 0, 17.5)],  # marker home, sealing the partner
+			[3, TEAM_ID, Vector3(4, 0, -15)],
+			[200, 1, Vector3(0, 0, 14)],
+			[210, 1, Vector3(8, 0, 16)],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 20), skaters, 200)
+	var goalie := GoalieNetworkState.new()
+	goalie.position_x = 0.0
+	goalie.position_z = 24.6
+	ctx.snapshot.goalie_states[TEAM_ID] = goalie
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	assert_lt(absf(d.target_position.x), 1.0,
+			"a covered partner puts CONTAIN back on the carrier line;"
+			+ " got %s" % d.target_position)
+
+
+func test_two_on_one_gate_keeps_lower_tiers_on_the_carrier_line() -> void:
+	# plays_rush_pass_lanes=false (Easy): CONTAIN sees only the carrier and
+	# retreats on the exact carrier→net line — the newcomer's cross-crease
+	# feed stays open by design.
+	var ctx: RoleContext = _two_on_one_ctx()
+	ctx.plays_rush_pass_lanes = false
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	assert_almost_eq(d.target_position.x, 0.0, 0.001,
+			"gated tiers hold the pure retreat line")

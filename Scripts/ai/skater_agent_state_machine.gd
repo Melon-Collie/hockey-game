@@ -115,31 +115,39 @@ const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
 # below where needed.
 
 # Cap on lead lookahead so a barely-moving puck doesn't project an
-# intercept point a million seconds away.
-const CHASE_MAX_LOOKAHEAD_S: float = 1.5
+# intercept point a million seconds away. 3 s covers a full cross-ice
+# race: with the speed-capped reachability model below, a long chase now
+# resolves to a true far intercept instead of tail-aiming at the window's
+# edge and re-aiming every dispatch (a pursuit curve that trails the play).
+const CHASE_MAX_LOOKAHEAD_S: float = 3.0
 # Steps per chase trajectory walk. Granular enough that the rink clamp
 # catches a sliding puck hitting the boards mid-flight (so we don't aim
-# at a point inside the wall), cheap enough at 6 Hz brain tick.
-const CHASE_TRAJECTORY_STEPS: int = 12
-# Angling: when chasing an opposing CARRIER (not a loose puck), shift
-# the intercept point this far toward center-ice so the bot approaches
-# from the inside and forces the carrier toward the boards. Real
-# defenders don't chase straight-line at the puck — that lets the
-# carrier cut to the middle. Skipped when the carrier is already near
-# center (no inside to take away). The bias is capped at the carrier's
-# own X magnitude so we never overshoot to the wrong side.
-const CHASE_ANGLE_BIAS_M: float = 1.5
+# at a point inside the wall), cheap enough at the dispatch cadence
+# (same 0.125 s step as the original 1.5 s / 12-step walk).
+const CHASE_TRAJECTORY_STEPS: int = 24
+# Angling: when chasing an opposing CARRIER (not a loose puck), the
+# intercept point is shaded one stick-reach toward OUR net
+# (_shade_intercept_goal_side) so the approach comes in on the inside
+# lane and forces the carrier outside. Real defenders don't chase
+# straight-line at the puck — that lets the carrier cut to the middle.
+# The shade distance is BLADE_REACH_M — the same real quantity
+# PRESSURE's cut-off line uses — so the angling geometry scales with
+# our actual poke range at every chase distance. (Replaced a flat
+# 1.5 m center-ice X-shift that was invisible from range and ignored
+# where the net actually was.)
 
 # Kinematic chase intercept. At each step T of the puck trajectory walk,
 # the bot is reachable iff the constant acceleration required to land at
 # `puck_traj(T)` at time T (starting from current pos & velocity) has
-# magnitude ≤ _chase_max_accel. Set to this bot's own thrust (Agility) via
-# apply_capabilities so the model reflects what the bot can actually pull off;
-# the default below mirrors SkaterController.thrust's 12.0 default. The previous
-# heuristic (effective_speed × T ≥ distance) ignored starting velocity direction
-# except as a small ±50% bias, so a bot moving sideways relative to the puck
-# would still be modelled as reaching the intercept by skating-from-rest at
-# REF_SPEED — produced bad angles that the new kinematic check rejects.
+# magnitude ≤ _chase_max_accel AND the resulting arrival speed stays within
+# _self_max_speed (see _lead_intercept). Set to this bot's own thrust
+# (Agility) via apply_capabilities so the model reflects what the bot can
+# actually pull off; the default below mirrors SkaterController.thrust's
+# 12.0 default. The previous heuristic (effective_speed × T ≥ distance)
+# ignored starting velocity direction except as a small ±50% bias, so a bot
+# moving sideways relative to the puck would still be modelled as reaching
+# the intercept by skating-from-rest at REF_SPEED — produced bad angles
+# that the kinematic check rejects.
 var _chase_max_accel: float = 12.0
 
 # Per-peer velocity-history smoothing for acceleration estimation.
@@ -630,6 +638,12 @@ var _scratch_opp_ids: Array[int] = []
 # instance is safe; the role decide() consumes everything before the next build.
 var _role_ctx := RoleContext.new()
 
+# The slot + target this bot's role chose on the previous role dispatch —
+# feeds RoleContext.prev_role_target for argmax switch-hysteresis (INF is
+# stamped across a slot change so no role inherits another role's target).
+var _prev_role_slot: int = AIRoleSlots.Slot.NONE
+var _prev_role_target: Vector3 = Vector3.INF
+
 # Per-peer velocity history for acceleration estimation. Each bot
 # maintains its own cache because dispatch runs per-bot — the
 # duplicated work across the 3 bots on a team is a few subtractions
@@ -922,6 +936,8 @@ var _carry_settle_delay_s: float = 0.0
 var _reads_goalie_motion: bool = true
 var _holds_for_developing_feeds: bool = true
 var _angles_the_chase: bool = true
+# _plays_rush_pass_lanes rides RoleContext into CONTAIN's odd-man lane fan.
+var _plays_rush_pass_lanes: bool = true
 # Sprint is decided alongside move_vector on full-dispatch ticks; skipped
 # throttle ticks reuse this cached value so sprint_held doesn't flicker off at
 # 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
@@ -1094,6 +1110,7 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_reads_goalie_motion = profile.reads_goalie_motion
 	_holds_for_developing_feeds = profile.holds_for_developing_feeds
 	_angles_the_chase = profile.angles_the_chase
+	_plays_rush_pass_lanes = profile.plays_rush_pass_lanes
 	# Execution noise for LIVE bots (raw test agents stay deterministic):
 	# per-tier, split shot-vs-pass — the shot noise is the tier's scoring
 	# dial, the pass noise stays small so passes keep connecting.
@@ -1518,6 +1535,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.carry_settle_delay_s = _carry_settle_delay_s
 	ctx.reads_goalie_motion = _reads_goalie_motion
 	ctx.holds_for_developing_feeds = _holds_for_developing_feeds
+	ctx.plays_rush_pass_lanes = _plays_rush_pass_lanes
 	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
 	# is only called on dispatch ticks — hand it the span so it can compensate.
 	ctx.dispatch_period_ticks = _dispatch_period_ticks
@@ -1556,40 +1574,48 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 # slotted CARRIER but we don't have the puck.
 func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null else AIRoleSlots.Slot.NONE
+	# Target switch-hysteresis input: the target this bot's role chose last
+	# dispatch — INF across a slot change so no role inherits another's
+	# target (see RoleContext.prev_role_target).
+	ctx.prev_role_target = _prev_role_target if slot == _prev_role_slot else Vector3.INF
+	var decision: RoleDecision
 	match slot:
 		AIRoleSlots.Slot.FINISHER:
-			return AIRoleFinisher.decide(ctx)
+			decision = AIRoleFinisher.decide(ctx)
 		AIRoleSlots.Slot.SUPPORT:
-			return AIRoleSupport.decide(ctx)
+			decision = AIRoleSupport.decide(ctx)
 		AIRoleSlots.Slot.OUTLET:
-			return AIRoleOutlet.decide(ctx)
+			decision = AIRoleOutlet.decide(ctx)
 		AIRoleSlots.Slot.BREAKOUT_STRONG:
-			return AIRoleBreakout.decide(ctx, true)
+			decision = AIRoleBreakout.decide(ctx, true)
 		AIRoleSlots.Slot.BREAKOUT_WEAK:
-			return AIRoleBreakout.decide(ctx, false)
+			decision = AIRoleBreakout.decide(ctx, false)
 		AIRoleSlots.Slot.F1_PRESSURE:
 			# F1 reuses PRESSURE — goal-side cutoff of the carrier, already
 			# loose-puck-safe; follows the puck out and accepts the tag-up
 			# risk if the opp breaks out.
-			return AIRolePressure.decide(ctx)
+			decision = AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.F2_MID:
-			return AIRoleForecheck.decide(ctx, false)
+			decision = AIRoleForecheck.decide(ctx, false)
 		AIRoleSlots.Slot.F3_HIGH:
-			return AIRoleForecheck.decide(ctx, true)
+			decision = AIRoleForecheck.decide(ctx, true)
 		AIRoleSlots.Slot.PRESSURE:
-			return AIRolePressure.decide(ctx)
+			decision = AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.MARK:
-			return AIRoleMark.decide(ctx)
+			decision = AIRoleMark.decide(ctx)
 		AIRoleSlots.Slot.CONTAIN:
-			return AIRoleContain.decide(ctx)
+			decision = AIRoleContain.decide(ctx)
 		AIRoleSlots.Slot.CHASE:
-			return AIRoleChase.decide(ctx)
+			decision = AIRoleChase.decide(ctx)
 		AIRoleSlots.Slot.FLANK_L:
-			return AIRoleFlank.decide(ctx, -1.0)
+			decision = AIRoleFlank.decide(ctx, -1.0)
 		AIRoleSlots.Slot.FLANK_R:
-			return AIRoleFlank.decide(ctx, 1.0)
+			decision = AIRoleFlank.decide(ctx, 1.0)
 		_:
-			return AIRoleAnchorFollow.decide(ctx)
+			decision = AIRoleAnchorFollow.decide(ctx)
+	_prev_role_slot = slot
+	_prev_role_target = decision.target_position
+	return decision
 
 
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -1621,9 +1647,9 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		if self_state2 != null:
 			self_vel_3d = self_state2.velocity
 		var target: Vector3 = _lead_intercept(self_pos, self_vel_3d, puck_pos, snapshot.puck_state.velocity)
-		# Angling: when an OPPONENT carries the puck, shift the intercept
-		# toward center-ice so we approach from the inside and force them to
-		# the boards. Loose pucks get the raw intercept — there's no carrier
+		# Angling: when an OPPONENT carries the puck, shade the intercept
+		# toward OUR net so we approach on the inside lane and force them
+		# outside. Loose pucks get the raw intercept — there's no carrier
 		# to angle off of. Teammate-carried case is filtered upstream by the
 		# F1→OFF_PUCK transition, so by the time we reach here a non-(-1)
 		# carrier is necessarily an opponent. Cognition gate: a tier without
@@ -1632,9 +1658,8 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		# cutback to the middle works.
 		var carrier_pid: int = snapshot.puck_state.carrier_peer_id
 		if _angles_the_chase and carrier_pid != -1 and carrier_pid != _peer_id:
-			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier_pid)
-			if carrier_state != null:
-				target = _angle_intercept_inside(target, carrier_state.position)
+			var our_net := Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
+			target = _shade_intercept_goal_side(target, our_net)
 
 		# No "soft-hands" slow-down here: the catch is decided by blade squareness +
 		# the puck's speed in OUR frame (PuckReceptionRules, #373), so easing the
@@ -3963,18 +3988,25 @@ func _clamp_anchor(p: Vector3) -> Vector3:
 	return Vector3(x, 0.0, z)
 
 
-# Shifts an intercept point toward the center-ice X axis by
-# CHASE_ANGLE_BIAS_M relative to the carrier's CURRENT X. The shift
-# magnitude is capped at the carrier's |X| so we never overshoot to
-# the opposite side of center — that would put the bot on the carrier's
-# OUTSIDE and open the middle, the exact pattern we're trying to avoid.
-# Carriers within CHASE_ANGLE_BIAS_M of center are left alone (no
-# inside to take away). Static + private so it's unit-testable.
-static func _angle_intercept_inside(target: Vector3, carrier_pos: Vector3) -> Vector3:
-	if absf(carrier_pos.x) <= CHASE_ANGLE_BIAS_M:
+# Shades a carrier-chase intercept point one stick-reach along the
+# intercept→our-net line, so the chaser's approach arrives on the
+# DEFENSIVE side of the contact — the inside lane — and the carrier's
+# only escape is outside, toward the boards. Same construction as
+# PRESSURE's cut-off line (search center shifted BLADE_REACH_M toward
+# our net): the shade is exactly the distance our stick can poke, so
+# the blade still reaches the puck at the shaded body position, and the
+# geometry holds at every chase range (a flat lateral offset was
+# negligible from distance and arbitrary in tight). Shade is clamped to
+# the available ice so an intercept at the doorstep never projects the
+# chaser past his own goal line. Static + private so it's unit-testable.
+static func _shade_intercept_goal_side(target: Vector3, our_net: Vector3) -> Vector3:
+	var to_net: Vector3 = our_net - target
+	var dist: float = Vector2(to_net.x, to_net.z).length()
+	if dist < 0.001:
 		return target
-	var bias: float = -signf(carrier_pos.x) * CHASE_ANGLE_BIAS_M
-	return Vector3(target.x + bias, target.y, target.z)
+	var shade: float = minf(BLADE_REACH_M, dist)
+	var inv: float = shade / dist
+	return Vector3(target.x + to_net.x * inv, target.y, target.z + to_net.z * inv)
 
 
 func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
@@ -3991,25 +4023,30 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 	#     traj[i] = self_pos + self_vel·T + ½·a·T²
 	#  ⇒  a = 2·(traj[i] − self_pos − self_vel·T) / T²
 	#
-	# The bot is reachable iff |a| ≤ _chase_max_accel. Compare in
-	# squared form to skip the sqrt and the per-step T² divisions:
+	# The bot is reachable iff BOTH necessary conditions hold:
+	#   1. |a| ≤ _chase_max_accel — the thrust to bend the current velocity
+	#      onto the target exists (this is what charges a bot moving the
+	#      WRONG way for its turn). Compared in squared form to skip the
+	#      sqrt and per-step T² divisions:
+	#          |a|² ≤ A_max²  ⇔  A_max²·T⁴ − 4·|residual|² ≥ 0
+	#   2. The top-speed cap: the distance to traj[i] must fit inside what
+	#      an accelerate-then-cruise sprint covers in T — accelerate along
+	#      the target line from the CURRENT velocity component v₀ at A_max
+	#      until _self_max_speed, then cruise (see _cruise_distance).
+	#      Constraint 1 alone claimed ½·A·T² of travel from rest (13.5 m in
+	#      1.5 s at A=12 — ~40% beyond what a speed-capped skater covers),
+	#      so the bot picked intercept points EARLIER on the puck's path
+	#      than its body could make, arrived after the puck had passed, and
+	#      trailed the whole race — the "bad chase angle".
+	#   Both are necessary, neither sufficient alone; their conjunction can
+	#   still be a touch optimistic vs. true optimal control (the cruise
+	#   bound doesn't charge for shedding perpendicular velocity), and the
+	#   per-dispatch re-evaluation absorbs that residual error.
 	#
-	#     |a|² ≤ A_max²
-	#  ⇔  4·|residual|² ≤ A_max² · T⁴
-	#  ⇔  A_max² · T⁴ − 4·|residual|² ≥ 0    (reachability surplus)
-	#
-	# First step where surplus ≥ 0 is the intercept. When the bracket
-	# spans two steps (prev < 0 ≤ curr), linear-interp T inside the
-	# step instead of always returning traj[i] (over-runs by up to dt).
-	#
-	# Implicit assumption: bang-bang acceleration with no max-speed
-	# clamp. For chase windows ≤1.5 s with bot speeds already near
-	# DEFAULT_SKATER_MAX_SPEED_M_S in roughly the right direction,
-	# the speed cap rarely binds before A_max does; if it ever
-	# becomes the dominant constraint, the model picks a slightly
-	# more aggressive intercept than the bot can actually reach and
-	# the soft-hands logic later in CHASE_PUCK still catches the
-	# closing-velocity case correctly.
+	# First step where both hold is the intercept. When the accel bracket
+	# spans two steps (prev < 0 ≤ curr), linear-interp T inside the step
+	# instead of always returning traj[i] (over-runs by up to dt); a
+	# speed-cap flip takes traj[i] directly (no comparable surplus units).
 	var a_max_sq: float = _chase_max_accel * _chase_max_accel
 	var prev_surplus: float = -INF
 	var prev_pos: Vector3 = self_pos
@@ -4021,16 +4058,37 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 		var residual_z: float = traj[i].z - self_pos.z - self_vel.z * t_step
 		var residual_sq: float = residual_x * residual_x + residual_z * residual_z
 		var surplus: float = a_max_sq * t_4 - 4.0 * residual_sq
-		if surplus >= 0.0:
+		var dist_x: float = traj[i].x - self_pos.x
+		var dist_z: float = traj[i].z - self_pos.z
+		var dist: float = sqrt(dist_x * dist_x + dist_z * dist_z)
+		var speed_ok: bool = true
+		if dist > 0.001:
+			var v0_along: float = (self_vel.x * dist_x + self_vel.z * dist_z) / dist
+			speed_ok = _cruise_distance(v0_along, t_step) >= dist
+		if surplus >= 0.0 and speed_ok:
 			if prev_surplus > -INF and prev_surplus < 0.0:
 				var frac: float = -prev_surplus / (surplus - prev_surplus)
 				return prev_pos.lerp(traj[i], frac)
 			return traj[i]
-		prev_surplus = surplus
+		prev_surplus = surplus if speed_ok else -INF
 		prev_pos = traj[i]
 	# Puck unreachable inside the lookahead window — aim at the last
 	# projected position so we at least head in the right direction.
 	return traj[traj.size() - 1] if traj.size() > 0 else puck_pos
+
+
+# Distance a sprint covers along one axis in `t` seconds: accelerate from
+# `v0` (the current velocity component along the target line — negative when
+# moving away, so the turn-around is charged) at _chase_max_accel until
+# _self_max_speed, then cruise at the cap. The 1D leg of _lead_intercept's
+# reachability check (constraint 2 above).
+func _cruise_distance(v0: float, t: float) -> float:
+	var v_start: float = minf(v0, _self_max_speed)
+	var t_acc: float = (_self_max_speed - v_start) / maxf(_chase_max_accel, 0.001)
+	if t <= t_acc:
+		return v_start * t + 0.5 * _chase_max_accel * t * t
+	return v_start * t_acc + 0.5 * _chase_max_accel * t_acc * t_acc \
+			+ _self_max_speed * (t - t_acc)
 
 
 # True iff a TEAMMATE (not me, not opp) currently has the puck. Used to

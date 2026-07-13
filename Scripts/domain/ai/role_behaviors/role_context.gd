@@ -132,6 +132,11 @@ var reads_goalie_motion: bool = true
 # yet (carrier._best_developing_feed returns 0) — no protecting the puck for a
 # staging finisher or an opening outlet. True = the perfect-bot / Hard read.
 var holds_for_developing_feeds: bool = true
+# COGNITION gate: false = the rush gap defender (CONTAIN) sees only the
+# carrier and retreats on the carrier→net line; true = it reads the carrier's
+# passing options and splits toward an uncovered receiver's feed lane — the
+# 2-on-1 "play the pass" doctrine (AIRoleContain's lane fan).
+var plays_rush_pass_lanes: bool = true
 
 # ── Smart-ping directive (a human teammate's tactical order) ──────────────────
 # Populated per dispatch from TeamBrain.ping_* (AIPingDirectives). Defaults are
@@ -151,6 +156,16 @@ var ping_pass_target_peer: int = -1
 # time (e.g. the carrier's re-eval cadence + hold-decay clock) must scale their
 # per-call tick math by this so wall-clock durations don't stretch with the tier.
 var dispatch_period_ticks: int = 1
+
+# The target_position this bot's role chose on its PREVIOUS dispatch, or
+# Vector3.INF when there is none (first dispatch, or the slot changed since —
+# the state machine stamps INF across a slot change so no role inherits
+# another role's target). Roles that pick their target by candidate argmax
+# use it for switch-hysteresis: keep the standing target unless a fresh
+# candidate beats it by a real margin, so two near-tied candidates can't
+# trade places every dispatch and oscillate the bot between them (see
+# AIRolePressure.TARGET_SWITCH_MARGIN).
+var prev_role_target: Vector3 = Vector3.INF
 
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the

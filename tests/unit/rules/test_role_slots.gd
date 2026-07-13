@@ -1,8 +1,10 @@
 extends GutTest
 
 # AIRoleSlots is pure-function. Tests cover slot lists per state and
-# assignment via state-specific semantic queries (closest-to-puck,
-# closest-to-net, goal-side gap defender).
+# assignment via state-specific semantic queries (soonest-to-puck,
+# soonest-to-net, goal-side gap defender). Elections are momentum-aware
+# (time_to_arrive at each peer's Speed cap); stationary peers with
+# default caps reduce to distance ordering, which most tests use.
 
 const OUR_NET_Z: float = 26.65
 const TEAM_ID: int = 0
@@ -10,11 +12,14 @@ const TEAM_ID: int = 0
 
 func _make_snapshot(skaters: Array, carrier_pid: int = -1, puck_z: float = 0.0,
 		puck_x: float = 0.0) -> WorldSnapshot:
-	# skaters: Array of [peer_id, team_id, position]
+	# skaters: Array of [peer_id, team_id, position] or
+	# [peer_id, team_id, position, velocity]
 	var snap := WorldSnapshot.new()
 	for entry: Array in skaters:
 		var s := SkaterNetworkState.new()
 		s.position = entry[2]
+		if entry.size() > 3:
+			s.velocity = entry[3]
 		snap.skater_states[entry[0]] = s
 	var puck := PuckNetworkState.new()
 	puck.carrier_peer_id = carrier_pid
@@ -269,11 +274,11 @@ func test_assign_trans_od_gap_falls_back_to_deepest_when_none_goal_side() -> voi
 
 
 func test_assign_hysteresis_keeps_prev_when_close() -> void:
-	# Semantic assignment: PRESSURE = closest to puck, with
-	# HYSTERESIS_PENALTY_M (1.0 m) added to a contender's effective
-	# distance. Setup: peer 110 is 0.5 m closer to puck than 100,
-	# but 100 currently has PRESSURE — hysteresis (1.0 m penalty
-	# on 110) keeps 100 in the slot.
+	# Semantic assignment: PRESSURE = soonest to puck, with
+	# HYSTERESIS_PENALTY_S added to a contender's effective arrival
+	# time. Setup: peer 110 is 0.5 m closer to puck than 100, but 100
+	# currently has PRESSURE — the time penalty on 110 keeps 100 in
+	# the slot.
 	var skaters: Array = [
 			[100, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m from puck
 			[110, 0, Vector3(4.5, 0.0, 22.0)],   # 0.5 m from puck (raw closer)
@@ -289,19 +294,18 @@ func test_assign_hysteresis_keeps_prev_when_close() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), prev)
-	# Effective distance: 100 = 1.0 (no penalty, was PRESSURE),
-	# 110 = 0.5 + 1.0 = 1.5 (penalty for not having PRESSURE).
-	# 100 wins.
+	# Effective ETA at league speed 9: 100 = 1.0/9 ≈ 0.111 s (no
+	# penalty, was PRESSURE); 110 = 0.5/9 + 0.12 ≈ 0.176 s. 100 wins.
 	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE,
 			"peer 100 keeps PRESSURE despite peer 110 being 0.5 m closer to puck")
 
 
-func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
-	# Same setup but contender is now 1.5 m closer than the holder —
-	# enough to overcome the 1.0 m hysteresis margin. Roles flip.
+func test_assign_hysteresis_swaps_when_contender_meaningfully_sooner() -> void:
+	# The contender's arrival advantage now exceeds the hysteresis
+	# margin — the slot flips to the genuinely better-placed peer.
 	var skaters: Array = [
-			[100, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m from puck
-			[110, 0, Vector3(4.7, 0.0, 22.0)],   # ~0.3 m from puck (1.5 m advantage on raw vs hysteresis penalty)
+			[100, 0, Vector3(2.0, 0.0, 22.0)],   # 3.0 m from puck → 0.333 s
+			[110, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m → 0.111 + 0.12 = 0.231 s
 			[120, 0, Vector3(-2.0, 0.0, 25.0)],
 			[200, 1, Vector3(5.0, 0.0, 22.0)],
 	]
@@ -314,11 +318,47 @@ func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), prev)
-	# 100.d = 1.0; 110.d = 0.3 + 1.0 = 1.3. 100 still wins (penalty
-	# margin not yet overcome).
-	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE,
-			"hysteresis blocks the swap when contender's raw advantage"
-			+ " is less than the penalty")
+	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
+			"a contender arriving clearly sooner takes the slot through hysteresis")
+
+
+func test_assign_momentum_beats_raw_distance() -> void:
+	# The election is momentum-aware: a nearer peer coasting AWAY from the
+	# puck loses PRESSURE to a farther peer already skating at it. This is
+	# the raw-distance failure the ETA election replaces (the old metric
+	# handed the slot to the wrong body, which then brake-pivoted).
+	var skaters: Array = [
+			[100, 0, Vector3(3.0, 0.0, 22.0), Vector3(-8.0, 0.0, 0.0)],  # 2 m away, fleeing → ETA 2/(9−8) = 2 s
+			[110, 0, Vector3(9.0, 0.0, 22.0), Vector3(-8.0, 0.0, 0.0)],  # 4 m away, closing → ETA 4/17 ≈ 0.24 s
+			[120, 0, Vector3(-2.0, 0.0, 25.0)],
+			[200, 1, Vector3(5.0, 0.0, 22.0)],
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
+			_resolver(skaters), {})
+	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
+			"the peer skating AT the puck wins over a nearer peer coasting away")
+	assert_eq(assignments[100], AIRoleSlots.Slot.MARK)
+
+
+func test_assign_speed_cap_feeds_election() -> void:
+	# Each peer races at its real Speed cap: a faster build farther out
+	# arrives sooner and takes the slot.
+	var skaters: Array = [
+			[100, 0, Vector3(1.0, 0.0, 22.0)],   # 4 m from puck at ref 9 → 0.444 s
+			[110, 0, Vector3(-1.0, 0.0, 22.0)],  # 6 m from puck at cap 20 → 0.3 s
+			[120, 0, Vector3(-2.0, 0.0, 25.0)],
+			[200, 1, Vector3(5.0, 0.0, 22.0)],
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var fast_caps := AISkaterCaps.new()
+	fast_caps.max_speed = 20.0
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
+			_resolver(skaters), {}, 1.0, {110: fast_caps})
+	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
+			"a faster Speed build farther out wins the arrival race")
 
 
 # ─── NEUTRAL assignment ─────────────────────────────────────────────────────

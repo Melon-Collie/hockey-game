@@ -42,7 +42,7 @@ var ping_directives := AIPingDirectives.new()
 var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Slot
 # Central man-on-threat partition: backline defender peer_id -> the opponent
 # (carrier's receiver) it should cover. Computed per tick in defensive states
-# so ANCHOR / COVER each focus on a DISTINCT man instead of all collapsing on
+# so the MARK defenders each focus on a DISTINCT man instead of all collapsing on
 # the single most dangerous opponent. Empty in offensive / neutral states.
 var threat_assignments: Dictionary[int, int] = {}    # defender peer -> opp peer
 
@@ -142,13 +142,14 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		elif _strong_x < 0.0 and puck_x > STRONG_SIDE_HYSTERESIS_M:
 			_strong_x = 1.0
 
-	# 3. Slot assignment by current geometry. CARRIER is fixed to the
-	#    puck holder; everything else falls out of the permutation
-	#    enumeration with hysteresis. No locking needed.
+	# 3. Slot assignment by current kinematics (momentum-aware soonest-to-
+	#    arrive elections at each peer's real Speed cap). CARRIER is fixed
+	#    to the puck holder; everything else falls out of the per-state
+	#    elections with hysteresis. No locking needed.
 	var prev_assignments: Dictionary = slot_assignments
 	slot_assignments = AIRoleSlots.assign(
 			snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
-			prev_assignments, _strong_x)
+			prev_assignments, _strong_x, _caps_by_peer)
 	# Drop excluded peers (puppeted tutorial bots) so neither they nor any
 	# downstream consumer of get_slot / get_anchor pulls them toward a slot
 	# anchor. AIRoleSlots.assign already may have given them a slot — erase
@@ -176,7 +177,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 # states only (DZONE + TRANS_OD); every other state returns {} so no defender
 # carries a stale assignment.
 #
-# Backline = our peers slotted ANCHOR / COVER (DZONE) or BACKCHECK (TRANS_OD).
+# Backline = our peers slotted MARK (DZONE and TRANS_OD).
 # The carrier is owned separately — PRESSURE in DZONE, the CONTAIN gap defender
 # in TRANS_OD — so it's excluded; the men are the opposing carrier's potential
 # receivers (every opponent except the carrier). Each man's value is the raw
@@ -273,7 +274,7 @@ func get_slot(peer_id: int) -> int:
 
 # The opponent a given backline defender is assigned to cover, or -1 if it has
 # no man-coverage assignment this tick (offensive/neutral state, or the peer
-# isn't a backline defender). Read by ANCHOR / COVER via RoleContext.
+# isn't a backline defender). Read by MARK via RoleContext.
 func assigned_threat(peer_id: int) -> int:
 	return threat_assignments.get(peer_id, -1)
 

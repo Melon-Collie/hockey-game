@@ -51,8 +51,14 @@ static func generate_candidates(ctx: RoleContext) -> Array[Vector3]:
 # around `center` at SEARCH_STEP_M. Use this when a role wants to
 # pick its own search center from in-game references rather than
 # inheriting whatever ctx.anchor happens to be.
+#
+# `with_inner_ring` appends 8 more polar samples at half step so the
+# argmax can express small corrections instead of jumping in 3 m
+# quanta — used by PRESSURE, whose chosen cut-off point is consumed
+# directly as a steering target every dispatch (a coarser role that
+# re-centers each brain tick doesn't need the resolution).
 static func generate_candidates_around(self_pos: Vector3,
-		center: Vector3) -> Array[Vector3]:
+		center: Vector3, with_inner_ring: bool = false) -> Array[Vector3]:
 	var result: Array[Vector3] = []
 	result.append(center)
 	result.append(self_pos)
@@ -61,6 +67,13 @@ static func generate_candidates_around(self_pos: Vector3,
 				center.x + SEARCH_STEP_M * cos(angle),
 				0.0,
 				center.z + SEARCH_STEP_M * sin(angle)))
+	if with_inner_ring:
+		var inner: float = SEARCH_STEP_M * 0.5
+		for angle: float in POLAR_ANGLES:
+			result.append(Vector3(
+					center.x + inner * cos(angle),
+					0.0,
+					center.z + inner * sin(angle)))
 	return result
 
 
@@ -123,9 +136,15 @@ static func lead_threat(pos: Vector3, vel: Vector3, scale: float = 1.0) -> Vecto
 # ── Man-on-threat coverage ───────────────────────────────────────────────────
 
 # Slack on cover_man_target's goal-side filter: candidates may sit up to
-# this far up-ice of the man (roughly even with him) but no further.
-# Tight coverage must never trade the defensive side for lane denial — a
-# defender ahead of his man is one burst from being beaten to the net.
+# this far toward the play from the man (roughly even with him) but no
+# further. Tight coverage must never trade the defensive side for lane
+# denial — a defender ahead of his man is one burst from being beaten to
+# the net. Goal-side is measured along the man→our-net LINE (the same
+# projection the cover anchor and the threat partition use), not the Z
+# axis: for a man wide of the net or near the goal-line-extended, "behind
+# him in Z" and "between him and the net" point different ways, and the
+# Z reading let the marker legally park BESIDE his man, off the sealing
+# lane.
 const COVER_GOAL_SIDE_TOLERANCE_M: float = 0.5
 
 # Shared "cover this assigned man" target for the backline defenders
@@ -160,6 +179,18 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	var search_center: Vector3 = AIThreatAssignment.cover_anchor(man_pos, our_net)
 	var candidates: Array[Vector3] = generate_candidates_around(ctx.self_pos, search_center)
 
+	# Goal-side axis: the man→our-net direction. A candidate is goal-side
+	# when its projection onto this line from the man is positive (with the
+	# tolerance slack) — i.e. it sits between the man and the net he
+	# threatens, wherever on the ice that lane points.
+	var to_net_x: float = our_net.x - man_pos.x
+	var to_net_z: float = our_net.z - man_pos.z
+	var to_net_len: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
+	var has_lane: bool = to_net_len > 0.001
+	if has_lane:
+		to_net_x /= to_net_len
+		to_net_z /= to_net_len
+
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	# Fallback across candidates that failed ONLY the goal-side filter —
@@ -181,11 +212,12 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 				carrier_pos, man_pos, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, defenders)
 		var score: float = -threat
-		# Stay on the defensive side of the man (see
-		# COVER_GOAL_SIDE_TOLERANCE_M). own_goal_dir * z grows toward our
-		# net, so goal-side is the LARGER value.
-		if ctx.own_goal_dir * c.z \
-				>= ctx.own_goal_dir * man_pos.z - COVER_GOAL_SIDE_TOLERANCE_M:
+		# Stay on the defensive side of the man: positive projection onto
+		# the man→our-net line (see COVER_GOAL_SIDE_TOLERANCE_M). A man on
+		# the net (no lane) disables the filter — any spot is "in front".
+		var proj: float = (c.x - man_pos.x) * to_net_x + (c.z - man_pos.z) * to_net_z \
+				if has_lane else 0.0
+		if not has_lane or proj >= -COVER_GOAL_SIDE_TOLERANCE_M:
 			if score > best_score:
 				best_score = score
 				best_pos = c
@@ -195,6 +227,99 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	if best_score == -INF and fallback_score > -INF:
 		return fallback_pos
 	return best_pos
+
+
+# ── Carrier-best-option (inverse scoring) ────────────────────────────────────
+
+# Computes the opposing carrier's best option — shoot at our net, or pass to
+# any of `opp_teammates` — with our hypothetical defender position `candidate`
+# appended to the carrier's view of the defenders. The on-puck / rush
+# defensive roles (PRESSURE's cut-off argmax, CONTAIN's odd-man lane fan)
+# argmax the NEGATION of this over their candidate sets: the spot that most
+# deflates the carrier's best option wins.
+#
+# Uses the threat-surface helpers so the gradient survives when score_shoot /
+# score_pass collapse to 0 (carrier far from net or all receivers far from
+# net). The position_potential floor pulls the defender tight to the carrier
+# in TRANS_OD scenarios where there's no immediate scoring threat to defend —
+# without it the score is flat across goal-side candidates and the argmax
+# picks arbitrarily.
+#
+# Coverage is CONTINUOUS by construction: `our_team_excluding_self` rides
+# into both surfaces, so a teammate already on a receiver suppresses that
+# pass threat and an uncovered receiver's threat stands — "who is really
+# open" needs no separate boolean read.
+static func carrier_best_option(
+		candidate: Vector3,
+		carrier_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		our_team_excluding_self: Array[Vector3],
+		opp_teammates: Array[Vector3]) -> float:
+	# Build the carrier's view of defenders: our team + me at the candidate.
+	var carrier_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
+	carrier_view_defenders.append(candidate)
+
+	# Carrier's best shot at our net (with positional fallback floor).
+	var shoot_value: float = AIActionScoring.threat_surface_shoot(
+			carrier_pos, our_net, our_goalie_pos,
+			GameRules.NET_HALF_WIDTH, carrier_view_defenders)
+
+	# Carrier's best pass to any teammate (with positional fallback).
+	# `our_net` is the attacking goal from the carrier's perspective, so the
+	# receiver's threat is evaluated against our goalie.
+	var pass_value: float = 0.0
+	for opp_pos: Vector3 in opp_teammates:
+		var pass_score: float = AIActionScoring.threat_surface_pass(
+				carrier_pos, opp_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, carrier_view_defenders)
+		if pass_score > pass_value:
+			pass_value = pass_score
+
+	return maxf(shoot_value, pass_value)
+
+
+# Rush variant of carrier_best_option, for CONTAIN's odd-man lane fan: RAW xG
+# threats (no position_potential floor) with each pass modeled as a ONE-TIMER
+# feed — the goalie must traverse to the receiver's line over the pass flight
+# and reads the release late (predict_goalie_pos + goalie_unsettled), which is
+# exactly what makes the cross-crease feed the threat the 2-on-1 doctrine
+# plays ("the goalie takes the shooter, I take the pass"). The carrier's
+# direct shot is scored against the goalie where he IS — squared to the known
+# shooter, the doctrine's other half.
+#
+# Why not the surfaced variant above: its position_potential floor exists to
+# give PRESSURE close-in gradients, but across CONTAIN's gap-distance fan the
+# floor flattens (every candidate sits outside the pressure cone) and masks
+# the reducible-threat comparison entirely; and a set-goalie pass read scores
+# the one-timer feed near zero, hiding the very threat the fan exists to
+# take away. Raw xG also ties at ~0 far from the net, so the fan's hold
+# margin keeps the classic retreat line out there — the correct far-out read.
+static func carrier_live_option(
+		candidate: Vector3,
+		carrier_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		our_team_excluding_self: Array[Vector3],
+		opp_teammates: Array[Vector3]) -> float:
+	var defenders: Array[Vector3] = our_team_excluding_self.duplicate()
+	defenders.append(candidate)
+	var best: float = AIActionScoring.score_shoot(
+			carrier_pos, our_net, our_goalie_pos,
+			GameRules.NET_HALF_WIDTH, defenders)
+	for receiver: Vector3 in opp_teammates:
+		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, receiver)
+		var flight_s: float = carrier_pos.distance_to(receiver) / maxf(pass_speed, 1.0)
+		var pred_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+				our_goalie_pos, our_net, flight_s, receiver)
+		var unsettled: float = AIActionScoring.goalie_unsettled(
+				our_goalie_pos, our_net, flight_s, receiver)
+		var pass_value: float = AIActionScoring.score_pass(
+				carrier_pos, receiver, our_net, pred_goalie,
+				GameRules.NET_HALF_WIDTH, defenders, pass_speed, unsettled)
+		if pass_value > best:
+			best = pass_value
+	return best
 
 
 # ── Body check ───────────────────────────────────────────────────────────────
