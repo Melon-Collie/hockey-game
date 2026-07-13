@@ -448,8 +448,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 #   the marginal over-the-bar condition started landing on ordinary shots.
 # Where the arc sits at the net is emergent from distance + power — that read
 # is the skill (the old ballistic solve auto-arrived at a target height).
-@export var loft_vertical_speed_low: float = 2.2
-@export var loft_vertical_speed_high: float = 4.65
+@export var loft_vertical_speed_low: float = GameRules.DEFAULT_LOFT_VY_LOW_M_S
+@export var loft_vertical_speed_high: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
 
 # ── Head Tracking Tuning ─────────────────────────────────────────────────────
 @export var head_track_speed: float = 12.0

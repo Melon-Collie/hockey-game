@@ -2,9 +2,9 @@ extends GutTest
 
 # BotSprintRules.should_sprint is a pure gate — these tests cover each gate in
 # isolation (lockout, carry/breakaway, stamina floor, gap band + hysteresis,
-# turn alignment) plus the happy path. Args, in order:
+# turn alignment, facing alignment) plus the happy path. Args, in order:
 #   was_sprinting, gap, velocity_xz, desired_move, stamina, locked,
-#   carrying, breakaway
+#   carrying, breakaway, facing_xz (optional; ZERO skips the facing gate)
 
 const FAR: float = 10.0          # gap well past GAP_ENGAGE_M
 const NEAR: float = 1.0          # gap well inside GAP_SUSTAIN_M
@@ -87,3 +87,28 @@ func test_reversal_blocks_sprint() -> void:
 	assert_false(
 			BotSprintRules.should_sprint(false, FAR, FAST, Vector2(0, -1), 1.0, false, false, false),
 			"180° reversal never sprints")
+
+
+func test_facing_off_heading_blocks_sprint() -> void:
+	# Velocity already swung onto the new heading but the BODY still faces the
+	# old one: sprint would halve the facing turn rate and pay the crossover
+	# thrust penalty — burst only once pointed.
+	assert_false(
+			BotSprintRules.should_sprint(false, FAR, FAST, STRAIGHT, 1.0, false, false, false,
+					Vector2(0, -1)),
+			"body still rotating to the heading suppresses sprint")
+
+
+func test_facing_aligned_sprints() -> void:
+	assert_true(
+			BotSprintRules.should_sprint(false, FAR, FAST, STRAIGHT, 1.0, false, false, false,
+					Vector2(0.2, 0.98)),
+			"body pointed within the alignment cone sprints")
+
+
+func test_facing_zero_skips_the_gate() -> void:
+	# Unwired callers (no facing in scope) keep the pre-gate behaviour.
+	assert_true(
+			BotSprintRules.should_sprint(false, FAR, FAST, STRAIGHT, 1.0, false, false, false,
+					Vector2.ZERO),
+			"ZERO facing skips the facing gate")

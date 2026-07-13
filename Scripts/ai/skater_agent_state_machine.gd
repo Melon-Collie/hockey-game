@@ -686,6 +686,12 @@ var _shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 # the continuous _shot_aim_point geometry.
 var _shot_aim_locked: Vector3 = Vector3.INF
 
+# Mirrored from `_carrier.shot_power_t` — the release power fraction of that same
+# hole. A roof (HIGH) commit carries the arrival-honest pace (the fastest release
+# whose arc still arrives in the top band at this range — a soft flip in tight, a
+# full rip from range); flat commits carry 1.0. Fed to input.bot_wrister_power_t.
+var _shot_power_committed: float = 1.0
+
 # Last-resort DUMP target, mirrored from `_carrier.dump_target` at commit and
 # frozen through pre-aim + release (like the shot aim/loft above). INF → not
 # dumping; a normal PASS aims at its receiver lead. The dump reuses the
@@ -1315,7 +1321,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		_apply_steering(input, snapshot, self_pos, tag_up)
 		# Race back to the blue line to clear the offside as fast as possible.
 		_resolve_sprint(input, self_state, self_pos, tag_up, false, false)
-		input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(self_pos, tag_up, snapshot))
+		input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(
+				self_pos, tag_up, snapshot, FACE_TRAVEL_TAG_UP_NEAR_M))
 		_set_one_timer_ready(false)
 	else:
 		# Role dispatch: each TeamBrain-assigned slot maps to a behavior
@@ -1376,11 +1383,19 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			_one_timer_preserve_ticks = 0
 		elif _is_one_timer_ready \
 				and snapshot.puck_state != null \
-				and snapshot.puck_state.carrier_peer_id == -1 \
+				and (snapshot.puck_state.carrier_peer_id == -1
+						or snapshot.real_puck_carrier_peer_id == -1) \
 				and _one_timer_preserve_ticks < ONE_TIMER_PRESERVE_MAX_TICKS:
 			# Preserve ready across the brief carrier gap of a pass/shot in flight,
 			# but only for a bounded window — a pass that dies or deflects must not
 			# leave the bot camped-and-ready forever, refusing to chase the puck.
+			# The REAL carrier check matters: for carrier_reaction_delay_s after
+			# the feed releases, the debounced carrier still reads as holding the
+			# puck while its velocity already reads as a live pass — without it,
+			# that window dropped ready on EVERY feed (the role decision goes
+			# reactive on the fast puck and returns not-ready, and this preserve
+			# refused to bridge a "held" puck), so the camped one-timer never
+			# survived to the zone-entry trigger.
 			_one_timer_preserve_ticks += _dispatch_period_ticks
 			would_be_ready = true
 		_set_one_timer_ready(would_be_ready)
@@ -1955,6 +1970,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		_pass_should_saucer = false
 		_shot_loft_level = ShotMechanics.ELEVATION_FLAT
 		_shot_aim_locked = Vector3.INF
+		_shot_power_committed = 1.0
 		_locked_pre_aim_point = Vector3.INF
 		_dump_target = Vector3.INF
 		_set_state(_post_puck_lost_state(snapshot))
@@ -1988,6 +2004,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	if _intended_action == State.CARRY:
 		_shot_loft_level = _carrier.shot_loft_level
 		_shot_aim_locked = _carrier.shot_aim_point
+		_shot_power_committed = _carrier.shot_power_t
 		# Freeze the dump target the same way — captured at commit, held through
 		# pre-aim and the release. (The always-fresh mirror above resets the pass
 		# fields every tick; the dump carries its aim in _dump_target instead, so
@@ -2521,7 +2538,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# self_pos so the endpoints float with the bot — both world positions
 		# move forward at the bot's locomotion speed, leaving the blade's
 		# rel-skater motion as pure aim_dir lerp at the target rate.
-		var shot_span: float = BOT_WRISTER_WIND_UP_SPAN_M * BOT_WRISTER_SHOT_CHARGE_FRACTION
+		var shot_span: float = BOT_WRISTER_WIND_UP_SPAN_M * _shot_power_committed
 		var endpoints: Dictionary = _wind_up_endpoint_offsets(aim_dir_init, aim_distance, shot_span, _shoot_side_sign)
 		_shoot_wind_up_start = endpoints.start
 		_shoot_aim_target = endpoints.target
@@ -2552,9 +2569,11 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# we just need consecutive ticks to differ by a consistent direction.
 	var sweep_dir_3d: Vector3 = (_shoot_aim_target - _shoot_wind_up_start).normalized()
 	input.mouse_screen_pos = Vector2(sweep_dir_3d.x, sweep_dir_3d.z) * float(_shoot_charge_tick)
-	# Shot power: full. The controller reads this (not the synthesized sweep
-	# speed) so the bot deterministically fires at the wrister ceiling.
-	input.bot_wrister_power_t = BOT_WRISTER_SHOT_CHARGE_FRACTION
+	# Shot power: the committed hole's pace (full for flat holes; the
+	# arrival-honest solved pace for a roof). The controller reads this (not the
+	# synthesized sweep speed) so the bot deterministically fires the shot the
+	# scorer actually evaluated.
+	input.bot_wrister_power_t = _shot_power_committed
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		# Still charging — keep shoot_held high.
@@ -2803,11 +2822,11 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 # blade contact happens. Once have_puck flips true, drop shoot_held
 # to fire.
 #
-# Charge accumulates from mouse_screen_pos motion only; mouse stays
-# locked on the goal aim point, so `update_wrister_charge` accrues
-# almost no charge or sweep speed → release fires at the wrister
-# floor (DEFAULT_WRISTER_POWER_MIN_M_S — the soft-touch speed, a bit
-# under the snap pass). The receiver one-time fires a soft redirect.
+# Release power rides input.bot_wrister_power_t like every bot wrister (the
+# controller converts it to the equivalent cursor speed) — set explicitly to
+# full each tick below. Without it the scratch InputState's field leaked
+# whatever the LAST press state committed (a soft pass fraction, or the type
+# default), so one-timer pace was whatever happened to be lying around.
 func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	# Moving one-timer (Mode A reception): skate to the net-forward anchor while
 	# holding the shot, so the puck arrives on the waiting blade. Once parked,
@@ -2823,6 +2842,10 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 	# this each tick.
 	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
 	input.mouse_world_pos = _step_mouse_toward(clean_aim)
+	# A one-timer is a committed full release — the whole point of the pre-set
+	# stance. Set every tick through the release (the scratch InputState field
+	# is not zeroed per tick, so an unset value here is a stale leak).
+	input.bot_wrister_power_t = BOT_WRISTER_SHOT_CHARGE_FRACTION
 
 	if _one_timer_press_tick == 0:
 		debug_last_decision = "ONE_TIMER"
@@ -2879,10 +2902,13 @@ func _set_one_timer_ready(ready: bool) -> void:
 func _puck_in_one_timer_zone(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	if snapshot.puck_state == null:
 		return false
-	if snapshot.puck_state.carrier_peer_id != -1:
-		# Puck is held — there's nothing to one-time. Carrier should
-		# pass it first; if that pass is in flight, carrier_peer_id is
-		# -1 again by the time the puck enters our zone.
+	if snapshot.real_puck_carrier_peer_id != -1:
+		# Puck is held — there's nothing to one-time. Read the REAL carrier,
+		# not the reaction-debounced one: the pre-armed FINISHER is WAITING on
+		# this exact feed (that's what the ready stance means), so recognizing
+		# "the puck left his stick toward me" isn't a reaction the difficulty
+		# delay should slow. Under the debounced read, a short feed spent its
+		# whole flight nominally "held" and the trigger never fired.
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
 	var puck_vel: Vector3 = snapshot.puck_state.velocity
@@ -3107,7 +3133,8 @@ func _resolve_sprint(input: InputState, self_state: SkaterNetworkState,
 	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
 	input.sprint_held = BotSprintRules.should_sprint(
 			_cached_sprint_held, gap, vel_xz, input.move_vector,
-			self_state.stamina, self_state.sprint_locked, carrying, breakaway)
+			self_state.stamina, self_state.sprint_locked, carrying, breakaway,
+			self_state.facing)
 
 
 # Opponent peer ids, read straight from the per-frame roster cache published by
@@ -3591,8 +3618,21 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3,
 #   - NEAR anchor: aim toward the defensive threat (man-to-man mark
 #     if assigned, else the puck). Real defenders watch the threat as
 #     they settle into coverage.
+#
+# The near threshold matches the sprint-engage gap (BotSprintRules.
+# GAP_ENGAGE_M): a move long enough to sprint is a committed skate —
+# face the travel direction for full thrust; anything shorter is
+# positioning, and positioning happens eyes-on-the-play (crossovers /
+# shuffles), like a real off-puck player. The old 2 m threshold meant
+# bots faced their travel direction almost always — role anchors move
+# continuously, so station-keeping bots were forever "far" from a
+# drifting anchor and visibly looked away from the play.
 const READY_STANCE_AIM_FORWARD_M: float = 2.0
-const FACE_THREAT_NEAR_ANCHOR_M: float = 2.0
+const FACE_THREAT_NEAR_ANCHOR_M: float = BotSprintRules.GAP_ENGAGE_M
+# Tag-up override: a ghosted bot racing back to the blue line faces its
+# travel direction until nearly there — the tag-up is a sprint, not
+# positioning, so it keeps the old tight face-travel threshold.
+const FACE_TRAVEL_TAG_UP_NEAR_M: float = 2.0
 
 # Persistent mouse position across all ticks. Every `input.mouse_world_pos`
 # assignment goes through `_step_mouse_toward(target)` which moves
@@ -3729,16 +3769,19 @@ func _step_mouse_internal(target: Vector3, mode: int,
 # anchor when far, threat when near. The actual mouse position is
 # stepped toward this target by `_step_mouse_toward` (the unified
 # motion model), which gives the smoothing for free.
-func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
-	var desired_dir: Vector3 = _compute_desired_aim_dir(self_pos, anchor, snapshot)
+func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot,
+		near_anchor_m: float = FACE_THREAT_NEAR_ANCHOR_M) -> Vector3:
+	var desired_dir: Vector3 = _compute_desired_aim_dir(
+			self_pos, anchor, snapshot, near_anchor_m)
 	return self_pos + desired_dir * READY_STANCE_AIM_FORWARD_M
 
 
 # Picks the desired raw aim direction: anchor direction when far,
 # threat direction when near anchor.
-func _compute_desired_aim_dir(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot) -> Vector3:
+func _compute_desired_aim_dir(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot,
+		near_anchor_m: float = FACE_THREAT_NEAR_ANCHOR_M) -> Vector3:
 	var to_anchor: Vector3 = anchor - self_pos
-	if to_anchor.length() > FACE_THREAT_NEAR_ANCHOR_M:
+	if to_anchor.length() > near_anchor_m:
 		return to_anchor.normalized()
 	return _face_threat_or_current(snapshot, self_pos)
 

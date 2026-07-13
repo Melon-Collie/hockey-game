@@ -177,8 +177,8 @@ var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 var pass_should_saucer: bool = false
 
 # Set when intent commits to SHOOT: the loft (ShotMechanics.ELEVATION_*) of the
-# best goalie hole the shot is aimed at — top corner → HIGH, armpit → LOW,
-# bottom corner / five-hole → FLAT (see AIActionScoring.best_shot_loft).
+# best goalie hole the shot is aimed at — top corner → HIGH, bottom corner /
+# five-hole → FLAT (see AIActionScoring.best_shot_loft).
 # Consumed by the state machine's press-state handlers to drive the release loft.
 var shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 
@@ -186,6 +186,12 @@ var shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 # the net plane), so the state machine aims the wrister exactly at the hole the
 # loft was chosen for. INF until a SHOOT commit picks one.
 var shot_aim_point: Vector3 = Vector3.INF
+
+# Set alongside shot_loft_level: the release power fraction (0..1 over this
+# bot's wrister band) of that same hole. A HIGH (roof) hole commits the
+# arrival-honest pace — the fastest release whose arc still arrives in the top
+# band at this range (AIActionScoring.best_shot_power_t); flat holes fire full.
+var shot_power_t: float = 1.0
 
 # Cached carry destination from the most recent re-eval. Read by the
 # state machine to drive steering during CARRY.
@@ -284,6 +290,7 @@ func reset() -> void:
 	pass_should_saucer = false
 	shot_loft_level = ShotMechanics.ELEVATION_FLAT
 	shot_aim_point = Vector3.INF
+	shot_power_t = 1.0
 	last_carry_anchor = Vector3.ZERO
 	dump_target = Vector3.INF
 	dump_is_soft = false
@@ -620,6 +627,11 @@ func _pick_action(ctx: RoleContext) -> void:
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					ctx.self_aim_spread_rad,
 					wrister_seal_x, wrister_seal_tall)
+			shot_power_t = AIActionScoring.best_shot_power_t(
+					wrister_release_pos, attacking_goal, wrister_goalie,
+					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
+					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
+					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
 	elif dump_score > raw_carry_score and not staggered:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
 		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.
@@ -1183,31 +1195,50 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			self_pos, candidate, _scratch_opponents_path)
 	if lane <= 0.0:
 		return -INF
-	# Goalie at the candidate-shot's puck arrival: react-then-slide from where he
-	# ACTUALLY is toward the candidate's arc-square, over everything the play
-	# gives him — the whole carry (he tracks the puck continuously), the charge
-	# lookahead, and the shot's flight. Same speed-bounded model as the shoot-now
-	# scoring above, so a carry candidate and the shot taken on arriving at it
-	# read the same keeper:
-	#   - Any normal-pace step or long route: the budget covers the arc shift
-	#     many times over, so he arrives square and set — identical to the old
-	#     infinite-speed goalie_squared_pos read (and the "ever-receding one
-	#     more cut" bug that read was built against stays dead: it came from
-	#     predicting over only the 0.135 s charge window, not the full route).
-	#   - A fast cut ACROSS a wide-out keeper in tight is an arc race his
-	#     t_push genuinely loses — the candidate prices the "make him move and
-	#     shoot" window, which is what makes a 1v1 against an aggressive
-	#     challenge terminate in a lateral drive + shot instead of a stalled
-	#     carry (the infinite-speed square planted him covered mid-cut, so no
-	#     cut could ever out-score standing still).
+	# The candidate's shot is taken ARRIVING AT PACE, not from a dead stop —
+	# carry steps are skated at speed (the arrival brake deliberately skips
+	# carry waypoints), so the shot on arrival is the same moving-release
+	# wrister the shoot-now eval prices, and the candidate must read the same
+	# physics. Two-phase keeper:
+	#   1. TRACK: he follows the whole carry — full budget toward the
+	#      candidate's arc-square (generous to him: assumes he never falls
+	#      behind en route).
+	#   2. FINAL RACE: from that square he races the wind-up + flight against
+	#      a release still sliding at the arrival speed — the identical final
+	#      race the top-level shoot-now scoring runs, which a hard lateral cut
+	#      in tight genuinely wins (his reaction + push ramp cover ~0.2 m in
+	#      the ~0.28 s the shot gives him).
+	# Phase 2 is what lets a STANDSTILL 1v1 price "skate the cut, then fire"
+	# as one candidate: under the old static-release read, every one-step spot
+	# against a set keeper honestly scored ~0 (he arrives square over any
+	# carry), so a flat-footed carrier had no gradient toward building the
+	# lateral speed that opens the window — it dithered instead of winding up
+	# the cut. The ever-receding-cut pathology stays dead: the keeper is
+	# assumed SQUARE at every candidate before the final race, so each further
+	# cut prices only the honest last-quarter-second window, which shrinks as
+	# the angle forecloses.
 	# Unsettled stays 0 — the shortfall is expressed positionally, as everywhere.
-	var cand_flight: float = candidate.distance_to(ctx.attacking_goal_pos) \
+	var to_cand: Vector3 = candidate - self_pos
+	to_cand.y = 0.0
+	var cand_dist: float = to_cand.length()
+	var arrive_vel: Vector3 = Vector3.ZERO
+	if cand_dist > 0.001 and local_time > 0.001:
+		# Arrival pace consistent with time_to_arrive's constant-effective-speed
+		# travel model, capped at this bot's real top end.
+		var arrive_speed: float = minf(cand_dist / local_time, ctx.self_max_speed)
+		arrive_vel = to_cand * (arrive_speed / cand_dist)
+	var tracked_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+			_goalie_now(ctx), ctx.attacking_goal_pos, local_time, candidate)
+	var cand_release: Vector3 = AIActionScoring.release_ahead_of_goalie(
+			candidate + arrive_vel * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
+			ctx.attacking_goal_pos, tracked_goalie)
+	var cand_flight: float = cand_release.distance_to(ctx.attacking_goal_pos) \
 			/ maxf(ctx.self_wrister_shot_speed, 1.0)
 	var cand_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos,
-			local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight,
-			candidate)
-	var dest_score: float = _score_at(ctx, candidate, self_pos,
+			tracked_goalie, ctx.attacking_goal_pos,
+			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight,
+			cand_release)
+	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)

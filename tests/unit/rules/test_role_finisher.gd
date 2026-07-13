@@ -322,9 +322,13 @@ func test_rush_stages_finisher_closer_to_the_net_than_set_cycle() -> void:
 	assert_lt(set_pos.x, 0.0, "the set cycle still stages weak-side")
 
 
-func test_reactive_overrides_positioning_when_shot_incoming() -> void:
-	# Even with a teammate carrier (positioning would normally run),
-	# a fast incoming shot should trigger reactive TIP instead.
+func test_reactive_fires_on_loose_shots_and_defers_while_the_puck_reads_held() -> void:
+	# A held puck is never an incoming shot — a carrier skating it fast must
+	# not flip the FINISHER into tip mode, and the carrier-reaction debounce
+	# window right after a release (a live feed still nominally reads held)
+	# must run positioning too: the reactive not-ready decision used to tear
+	# down one-timer readiness on every feed. Reactive TIP fires the tick the
+	# fast on-net puck reads loose.
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var teammate_pos := Vector3(4.0, 0.0, -15.0)
 	var ctx: RoleContext = _make_ctx(
@@ -334,12 +338,12 @@ func test_reactive_overrides_positioning_when_shot_incoming() -> void:
 				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
 				_make_skater(2, TEAM_ID, teammate_pos, false),
 			])
-	# Carrier is set on puck even though the puck is in flight (this
-	# is just to test the reactive priority — in practice the puck
-	# wouldn't have a carrier mid-shot).
 	ctx.snapshot.puck_state.carrier_peer_id = 2
-	var d: RoleDecision = AIRoleFinisher.decide(ctx)
-	# Reactive should fire: aim override toward opp net.
-	assert_true(d.has_aim_override,
-			"reactive TIP should win over positioning when shot is incoming")
-	assert_almost_eq(d.aim_world_pos.z, OPP_NET_Z, 0.001)
+	var held: RoleDecision = AIRoleFinisher.decide(ctx)
+	assert_false(held.has_aim_override,
+			"a held puck runs positioning, never tip mode")
+	ctx.snapshot.puck_state.carrier_peer_id = -1
+	var loose: RoleDecision = AIRoleFinisher.decide(ctx)
+	assert_true(loose.has_aim_override,
+			"reactive TIP fires once the fast on-net puck reads loose")
+	assert_almost_eq(loose.aim_world_pos.z, OPP_NET_Z, 0.001)
