@@ -117,6 +117,12 @@ extends RefCounted
 #     AIRoleContain's lane fan). False = CONTAIN sees only the carrier and
 #     retreats on the carrier→net line, so a human's odd-man cross-crease
 #     feed connects — the classic newcomer glory play.
+#   • protects_the_puck — shielding the puck with the body is taught skill: a
+#     pressured carrier pulls the puck off the presented forward spot to the
+#     protected side of the reachable-set seam (the back hip, body between puck
+#     and checker) and dekes INTO the seam instead of a blind sidestep. False =
+#     the puck stays presented ~2 m ahead of the body at all times, so a
+#     newcomer's straight-line poke-check genuinely works.
 #
 # The GOALIE is intentionally NOT represented here — it stays consistent across
 # difficulties (and the skater AI's goalie-slide prediction in AIActionScoring
@@ -217,6 +223,11 @@ var angles_the_chase: bool
 # line, conceding the odd-man cross-crease feed.
 var plays_rush_pass_lanes: bool
 
+# COGNITION: the carrier shields the puck — blade pulls it to the protected
+# side of the reachable-set seam under pressure, and the poke-evade deke cuts
+# toward the seam. False = naive forward carry, poke-checks work.
+var protects_the_puck: bool
+
 
 func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 		p_dispatch_period_ticks: int,
@@ -225,7 +236,8 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 		p_pursuit_standoff_m: float, p_pass_speed_scale: float,
 		p_check_aggression: float, p_defensive_anticipation_scale: float,
 		p_reads_goalie_motion: bool, p_holds_for_developing_feeds: bool,
-		p_angles_the_chase: bool, p_plays_rush_pass_lanes: bool) -> void:
+		p_angles_the_chase: bool, p_plays_rush_pass_lanes: bool,
+		p_protects_the_puck: bool) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
 	mouse_lerp_factor = p_mouse_lerp_factor
 	dispatch_period_ticks = p_dispatch_period_ticks
@@ -240,6 +252,7 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 	holds_for_developing_feeds = p_holds_for_developing_feeds
 	angles_the_chase = p_angles_the_chase
 	plays_rush_pass_lanes = p_plays_rush_pass_lanes
+	protects_the_puck = p_protects_the_puck
 
 
 # Hard ≈ today's bot, with a light humanising pass so it reads as a very strong
@@ -255,11 +268,11 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 # 1.0, check aggression 1.0, anticipation 1.0) — Hard keeps today's tight
 # forecheck, full puck pace, hit-hunting, and anticipating backline. All
 # cognition gates open: Hard reads the moving goalie, holds for developing
-# plays, angles its chase, and plays the pass on odd-man rushes — the full
-# hockey IQ.
+# plays, angles its chase, plays the pass on odd-man rushes, and shields the
+# puck with its body — the full hockey IQ.
 static func hard() -> BotSkillProfile:
 	return BotSkillProfile.new(0.05, 0.85, 2, 0.02, 0.02, 0.0, 0.0, 1.0, 1.0, 1.0,
-			true, true, true, true)
+			true, true, true, true, true)
 
 
 # Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
@@ -291,15 +304,16 @@ static func hard() -> BotSkillProfile:
 # pace knobs further (standoff UP, pass scale / anticipation / aggression DOWN)
 # before touching precision.
 #
-# Cognition: goalie-motion BLIND — Normal doesn't shoot across the grain or
-# time feeds to catch the keeper mid-slide, which cuts its scoring through
-# hockey IQ rather than more wobble (so it never looks drunk, just ordinary).
-# It still holds for developing plays, angles its chase, and plays the pass
-# on odd-man rushes (youth-hockey fundamentals) — a competent league player,
-# not a student of the game.
+# Cognition: ALL gates open, same as Hard — Normal and Hard are deliberately
+# the same PLAYER separated only by continuous tuning (reactions, wobble,
+# cadence, pace), never by which plays exist in the model, so the tier gap
+# reads as "sharper" rather than "knows moves the other doesn't". Normal's
+# goalie-motion read used to be the one closed gate; its scoring is now held
+# down by the tuning dials instead (shot wobble first — see the finish note
+# above). Easy is where the behaviour gates close.
 static func normal() -> BotSkillProfile:
 	return BotSkillProfile.new(0.22, 0.5, 6, 0.06, 0.03, 0.30, 1.5, 0.85, 0.65, 0.6,
-			false, true, true, true)
+			true, true, true, true, true)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
@@ -328,12 +342,13 @@ static func normal() -> BotSkillProfile:
 # Cognition: all gates closed — Easy shoots at where the goalie IS, plays
 # only what's in front of it (no holding for a staging finisher), chases the
 # carrier in a straight line (a newcomer's cutback to the middle genuinely
-# works), and retreats on the carrier line on odd-man rushes (the glory
-# cross-crease 2-on-1 feed connects). Beginner hockey IQ to match the
-# beginner hands.
+# works), retreats on the carrier line on odd-man rushes (the glory
+# cross-crease 2-on-1 feed connects), and carries the puck naively presented
+# in front (a newcomer's poke-check genuinely steals it). Beginner hockey IQ
+# to match the beginner hands.
 static func easy() -> BotSkillProfile:
 	return BotSkillProfile.new(0.34, 0.38, 9, 0.11, 0.045, 0.55, 3.0, 0.70, 0.0, 0.2,
-			false, false, false, false)
+			false, false, false, false, false)
 
 
 static func for_difficulty(difficulty: int) -> BotSkillProfile:

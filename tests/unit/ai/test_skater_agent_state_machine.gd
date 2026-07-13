@@ -1302,7 +1302,8 @@ func test_apply_profile_sets_cognition_gates() -> void:
 	assert_false(sm._holds_for_developing_feeds, "Easy plays only what exists now")
 	assert_false(sm._angles_the_chase, "Easy chases straight-line")
 	sm.apply_profile(BotSkillProfile.normal())
-	assert_false(sm._reads_goalie_motion, "Normal is goalie-motion blind too")
+	assert_true(sm._reads_goalie_motion,
+			"Normal keeps the goalie-motion read — Hard/Normal differ by tuning only")
 	assert_true(sm._holds_for_developing_feeds, "Normal keeps the developing-feed hold")
 	assert_true(sm._angles_the_chase, "Normal keeps the chase angling")
 
