@@ -42,8 +42,8 @@ class_name AIRolePressure
 # motion and our actual reach.
 #
 # No exposure factor — PRESSURE is by definition the bot pressuring
-# the puck; "getting caught up-ice" isn't applicable. ANCHOR / COVER
-# own defensive recovery for this team.
+# the puck; "getting caught up-ice" isn't applicable. The MARK
+# defenders own defensive recovery for this team.
 
 # Switch-hysteresis on the chosen cut-off point. The standing target
 # (ctx.prev_role_target) is re-scored against the live geometry each
@@ -75,7 +75,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	# Commit to a body check on the carrier when it's a real, reachable,
 	# separating hit (AIBodyCheck). PRESSURE always has support behind it —
-	# ANCHOR/COVER in DZONE, F2/F3 on the forecheck (F1 dispatches here) — so
+	# the MARK pair in DZONE, F2/F3 on the forecheck (F1 dispatches here) — so
 	# the commit risk is acceptable; the last-man gap defender (CONTAIN) never
 	# hunts hits. When committed, drive at the body intercept; the state machine
 	# forces sprint so the closing collision delivers the hit.

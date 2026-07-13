@@ -217,7 +217,7 @@ Blade placement goes through a custom top-hand inverse-kinematics solver (`TopHa
 
 ## Bot AI
 
-Bots run a per-tick **utility model**. The puck carrier scores every option — SHOOT, QUICK_SHOT, PASS (per teammate), CARRY (per candidate spot), HOLD — in one expected-goals-shaped currency and takes the best; off-puck teammates score candidate positions the same way. The scoring is domain-pure and unit-tested (`Scripts/domain/ai/`, chiefly `action_scoring.gd`), driven by per-bot state machines (`Scripts/ai/skater_agent_state_machine.gd`) and a ~6 Hz positional slot assignment (`team_brain.gd`). Role behaviors — carrier, finisher, support, outlet, anchor, cover, breakout, pressure, forecheck, backcheck — live in `domain/ai/role_behaviors/`. Goalies are separate (see the Goalies note in `CLAUDE.md`).
+Bots run a per-tick **utility model**. The puck carrier scores every option — SHOOT, QUICK_SHOT, PASS (per teammate), CARRY (per candidate spot), HOLD — in one expected-goals-shaped currency and takes the best; off-puck teammates score candidate positions the same way. The scoring is domain-pure and unit-tested (`Scripts/domain/ai/`, chiefly `action_scoring.gd`), driven by per-bot state machines (`Scripts/ai/skater_agent_state_machine.gd`) and a ~6 Hz positional slot assignment (`team_brain.gd`). Role behaviors — carrier, finisher, support, outlet, breakout, pressure, mark, contain, forecheck (F1–F3), chase, flank — live in `domain/ai/role_behaviors/`. Goalies are separate (see the Goalies note in `CLAUDE.md`).
 
 ### Scoring philosophy — perception, not curves
 
