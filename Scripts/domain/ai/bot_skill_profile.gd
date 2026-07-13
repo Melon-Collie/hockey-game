@@ -108,7 +108,7 @@ extends RefCounted
 #     (carrier._best_developing_feed). False = the bot plays only what's in
 #     front of it right now.
 #   • angles_the_chase — approaching an opposing carrier from the inside to
-#     force them to the boards (_angle_intercept_inside) is taught defensive
+#     force them to the boards (_shade_intercept_goal_side) is taught defensive
 #     skill. False = the bot chases straight at the puck, so a human's cutback
 #     to the middle actually works.
 #

@@ -161,23 +161,66 @@ func test_opponent_within_forward_degenerate_dir_is_omnidirectional() -> void:
 	assert_true(sm._opponent_within_forward(s, Vector3.ZERO, Vector3.ZERO, 10.0))
 
 
-# ── _angle_intercept_inside (static, pure geometry) ──────────────────────────
+# ── _shade_intercept_goal_side (static, pure geometry) ───────────────────────
+# Full coverage lives in test_ai_chase_angling.gd; this is the slice's smoke
+# check that the shade pulls the intercept toward the defended net by one
+# blade reach.
 
-func test_angle_intercept_passthrough_within_bias_band() -> void:
-	# |carrier.x| <= CHASE_ANGLE_BIAS_M → target returned unchanged.
+func test_shade_intercept_pulls_toward_our_net() -> void:
 	var target := Vector3(3, 0, -10)
-	assert_eq(Agent._angle_intercept_inside(target, Vector3(1.0, 0, 0)), target)
+	var our_net := Vector3(0, 0, GameRules.GOAL_LINE_Z)
+	var shaded: Vector3 = Agent._shade_intercept_goal_side(target, our_net)
+	assert_almost_eq(
+			Vector2(shaded.x - target.x, shaded.z - target.z).length(),
+			Agent.BLADE_REACH_M, 0.0001)
+	assert_gt(shaded.z, target.z, "shade moves the point toward the +Z net")
 
 
-func test_angle_intercept_biases_toward_center_when_wide() -> void:
-	var target := Vector3(3, 0, -10)
-	# carrier on +X side → bias target by -CHASE_ANGLE_BIAS_M (toward center).
-	var out_right: Vector3 = Agent._angle_intercept_inside(target, Vector3(5.0, 0, 0))
-	assert_almost_eq(out_right.x, target.x - Agent.CHASE_ANGLE_BIAS_M, 0.0001)
-	# carrier on -X side → bias the other way.
-	var out_left: Vector3 = Agent._angle_intercept_inside(target, Vector3(-5.0, 0, 0))
-	assert_almost_eq(out_left.x, target.x + Agent.CHASE_ANGLE_BIAS_M, 0.0001)
-	assert_eq(out_right.z, target.z, "only X is biased")
+# ── _lead_intercept (speed-capped kinematic reachability) ────────────────────
+
+func test_lead_intercept_stationary_puck_targets_puck() -> void:
+	# A stationary puck's trajectory never moves; the intercept must be the
+	# puck itself regardless of which constraint binds first.
+	var out: Vector3 = sm._lead_intercept(
+			Vector3.ZERO, Vector3.ZERO, Vector3(6, 0, 0), Vector3.ZERO)
+	assert_almost_eq(out.x, 6.0, 0.001)
+	assert_almost_eq(out.z, 0.0, 0.001)
+
+
+func test_lead_intercept_receding_fast_puck_respects_speed_cap() -> void:
+	# From rest, a puck receding at 8 m/s from 6 m ahead. The accel-only
+	# model (½·A·T² reach) claimed an intercept ~1.9 s out — arrival speed
+	# would be ~22 m/s, far past the cap — so the bot aimed at a point it
+	# physically could not make. With the cruise bound the chosen point
+	# must lie at or beyond what an accel-then-cruise sprint actually
+	# covers by the time the puck is there.
+	var puck_pos := Vector3(0, 0, 6)
+	var puck_vel := Vector3(0, 0, 8)
+	var out: Vector3 = sm._lead_intercept(Vector3.ZERO, Vector3.ZERO, puck_pos, puck_vel)
+	# Old model's pick sat near z≈21 (T≈1.87 s). The speed-honest model
+	# must aim meaningfully deeper (or at the window's end).
+	assert_gt(out.z, 22.0,
+			"speed cap rejects the accel-only phantom intercept at z≈21")
+
+
+func test_lead_intercept_moving_with_puck_picks_early_point() -> void:
+	# Already at top speed right behind a slower puck: the chase is nearly
+	# won and the intercept should resolve within the first few steps.
+	var out: Vector3 = sm._lead_intercept(
+			Vector3.ZERO, Vector3(0, 0, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S),
+			Vector3(0, 0, 2), Vector3(0, 0, 2))
+	assert_lt(out.z, 6.0, "closing chase resolves to a near intercept")
+
+
+func test_cruise_distance_matches_closed_form() -> void:
+	# From rest at A=12, V=9: t_acc = 0.75 s. At t=0.5 (accel phase):
+	# ½·12·0.25 = 1.5 m. At t=2.0: ½·12·0.5625 + 9·1.25 = 14.625 m.
+	sm._chase_max_accel = 12.0
+	sm._self_max_speed = 9.0
+	assert_almost_eq(sm._cruise_distance(0.0, 0.5), 1.5, 0.001)
+	assert_almost_eq(sm._cruise_distance(0.0, 2.0), 14.625, 0.001)
+	# Moving AWAY (v0 negative) covers strictly less ground.
+	assert_lt(sm._cruise_distance(-4.0, 2.0), sm._cruise_distance(0.0, 2.0))
 
 
 # ── Slice 2: mouse / aim motion geometry ─────────────────────────────────────

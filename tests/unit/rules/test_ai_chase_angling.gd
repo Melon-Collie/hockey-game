@@ -1,50 +1,66 @@
 extends GutTest
 
-# Pure-function test for SkaterAgentStateMachine._angle_intercept_inside,
-# the chase-angle bias that funnels an opposing carrier toward the
-# boards instead of letting them cut to center ice.
+# Pure-function test for SkaterAgentStateMachine._shade_intercept_goal_side,
+# the chase-angle shading that brings a carrier-chase approach in on the
+# inside (net-side) lane so the carrier is funneled toward the boards.
 
-const BIAS: float = SkaterAgentStateMachine.CHASE_ANGLE_BIAS_M
+const REACH: float = SkaterAgentStateMachine.BLADE_REACH_M
 
 
-func test_carrier_on_positive_x_biases_intercept_toward_center() -> void:
-	# Carrier on the +X side of the rink — bias must be -X so the bot
-	# meets them between the carrier and center ice.
+func test_shade_moves_intercept_toward_our_net() -> void:
+	# Intercept on the +X wall, our net straight down +Z: the shaded point
+	# must sit exactly one blade-reach along the intercept→net line.
+	var target := Vector3(8.0, 0.0, 0.0)
+	var our_net := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z)
+	var shaded: Vector3 = SkaterAgentStateMachine._shade_intercept_goal_side(target, our_net)
+	var expected: Vector3 = target + (our_net - target).normalized() * REACH
+	assert_almost_eq(shaded.x, expected.x, 0.001)
+	assert_almost_eq(shaded.z, expected.z, 0.001)
+
+
+func test_shade_distance_is_blade_reach_at_any_range() -> void:
+	# Grounded scaling: the shade magnitude is one blade reach whether the
+	# intercept is at the blue line or in tight — no distance falloff.
+	var our_net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	for target: Vector3 in [Vector3(6.0, 0.0, 12.0), Vector3(-3.0, 0.0, -14.0)]:
+		var shaded: Vector3 = SkaterAgentStateMachine._shade_intercept_goal_side(target, our_net)
+		assert_almost_eq(
+				Vector2(shaded.x - target.x, shaded.z - target.z).length(),
+				REACH, 0.001)
+
+
+func test_shade_points_at_the_defended_net_not_center_ice() -> void:
+	# The old flat bias shifted toward center-ice X regardless of which net
+	# was defended. The shade must follow the actual net: same intercept,
+	# opposite nets → opposite Z components.
 	var target := Vector3(5.0, 0.0, 0.0)
-	var carrier := Vector3(5.0, 0.0, 0.0)
-	var biased: Vector3 = SkaterAgentStateMachine._angle_intercept_inside(target, carrier)
-	assert_almost_eq(biased.x, target.x - BIAS, 0.001)
-	assert_eq(biased.z, target.z, "Z is unchanged by lateral angling")
+	var toward_pos: Vector3 = SkaterAgentStateMachine._shade_intercept_goal_side(
+			target, Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z))
+	var toward_neg: Vector3 = SkaterAgentStateMachine._shade_intercept_goal_side(
+			target, Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z))
+	assert_gt(toward_pos.z, target.z, "defending +Z shades the target toward +Z")
+	assert_lt(toward_neg.z, target.z, "defending -Z shades the target toward -Z")
 
 
-func test_carrier_on_negative_x_biases_toward_center() -> void:
-	var target := Vector3(-5.0, 0.0, 10.0)
-	var carrier := Vector3(-5.0, 0.0, 10.0)
-	var biased: Vector3 = SkaterAgentStateMachine._angle_intercept_inside(target, carrier)
-	assert_almost_eq(biased.x, target.x + BIAS, 0.001)
+func test_shade_clamps_at_the_net() -> void:
+	# Intercept closer to the net than one blade reach: the shade is clamped
+	# to the remaining ice so the chaser is never projected past his own
+	# goal line.
+	var our_net := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z)
+	var target: Vector3 = our_net + Vector3(0.0, 0.0, -0.5)  # 0.5 m in front
+	var shaded: Vector3 = SkaterAgentStateMachine._shade_intercept_goal_side(target, our_net)
+	assert_almost_eq(shaded.z, our_net.z, 0.001, "shade stops at the net")
 
 
-func test_carrier_near_center_skips_bias() -> void:
-	# When the carrier is within CHASE_ANGLE_BIAS_M of center, there's
-	# no inside to take away — applying the bias would overshoot to the
-	# wrong side and OPEN the middle, the opposite of what we want.
-	var target := Vector3(0.5, 0.0, 0.0)
-	var carrier := Vector3(0.5, 0.0, 0.0)  # |x| < BIAS = 1.5
-	var biased: Vector3 = SkaterAgentStateMachine._angle_intercept_inside(target, carrier)
-	assert_eq(biased, target, "centered carrier produces no bias")
+func test_shade_degenerate_target_on_net_is_unchanged() -> void:
+	var our_net := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z)
+	assert_eq(
+			SkaterAgentStateMachine._shade_intercept_goal_side(our_net, our_net),
+			our_net)
 
 
-func test_carrier_at_bias_boundary_skips_bias() -> void:
-	# Exactly at the boundary: <= guard means no bias.
-	var target := Vector3(BIAS, 0.0, 0.0)
-	var carrier := Vector3(BIAS, 0.0, 0.0)
-	var biased: Vector3 = SkaterAgentStateMachine._angle_intercept_inside(target, carrier)
-	assert_eq(biased, target)
-
-
-func test_bias_does_not_modify_y_or_z() -> void:
+func test_shade_does_not_modify_y() -> void:
 	var target := Vector3(8.0, 0.0, -5.0)
-	var carrier := Vector3(8.0, 0.0, -5.0)
-	var biased: Vector3 = SkaterAgentStateMachine._angle_intercept_inside(target, carrier)
-	assert_eq(biased.y, 0.0)
-	assert_eq(biased.z, -5.0)
+	var shaded: Vector3 = SkaterAgentStateMachine._shade_intercept_goal_side(
+			target, Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z))
+	assert_eq(shaded.y, 0.0)
