@@ -558,6 +558,33 @@ func test_1v1_lateral_cut_beats_the_aggressive_goalie() -> void:
 			"flat-footed into the set challenge there is no shot — the CUT opens it")
 
 
+func test_mid_cut_hold_never_out_prices_the_same_instants_fire() -> void:
+	# Stand-still's shot branch shares the shoot-now score (see _best_carry), so
+	# a mid-cut carrier can never conclude "holding here beats firing from
+	# here". Before the share, stand-still priced its shot at the CURRENT spot
+	# (pre-apex of the cut) while the fire priced the projected release (past
+	# the apex) — the hold read richer than the fire from the same instant and
+	# the bot carried through its own shooting window. If CARRY wins mid-cut it
+	# must be a genuine relocation, never the in-place hold.
+	for gx: float in [0.4, 0.7, 1.0]:
+		var pos := Vector3(2.4, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
+		var ctx := _make_ctx(pos)
+		ctx.self_velocity = Vector3(6.0, 0.0, 0.0)
+		ctx.snapshot.skater_states[1].velocity = ctx.self_velocity
+		var g := GoalieNetworkState.new()
+		g.position_x = gx
+		g.position_z = -GameRules.GOAL_LINE_Z + 2.0
+		ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+		var c := AIRoleCarrier.new()
+		c.decide(ctx)
+		assert_gt(c.debug_shoot_score, 0.3,
+				"the mid-cut window (goalie at x=%.1f) is a real chance" % gx)
+		if c.intended_action == AIRoleCarrier.INTENT_CARRY:
+			assert_gt(c.last_carry_anchor.distance_to(pos), 0.5,
+					"mid-cut CARRY (goalie at x=%.1f) must be a relocation, not the hold"
+					% gx)
+
+
 func test_standstill_1v1_winds_up_the_cut() -> void:
 	# The bootstrap: a flat-footed carrier alone with the keeper in tight has
 	# no direct shot (set keeper, honest arcs) — but the carry candidates

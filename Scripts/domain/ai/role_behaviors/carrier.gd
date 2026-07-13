@@ -8,8 +8,8 @@ const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 # slot anchor + own-half wall exits + stand-still) on equal footing every
 # PICK_ACTION_PERIOD_TICKS ticks. Hysteresis on the current intent
 # prevents flicker between close-scoring fire options during pre-aim;
-# CARRY does NOT get a hysteresis bonus (stand-still ties with the
-# best fire option from the same position by construction, and we
+# CARRY does NOT get a hysteresis bonus (stand-still's shot branch IS
+# the shoot-now score, so it ties with fire by construction, and we
 # want fire to win those ties).
 #
 # This module is stateful — it owns hysteresis state, scratch
@@ -460,10 +460,14 @@ func _pick_action(ctx: RoleContext) -> void:
 	# self-discount via longer arrival time.
 	# Smart-ping SHOOT: a teammate ordered this carrier to fire (see
 	# PING_SHOOT_EV_MULT — bias, not force; a zero shot stays zero).
+	# Stand-still's shot branch shares the raw shoot-now score (see _best_carry)
+	# — captured before the ping bias, which is a FIRE-compete thumb only (an
+	# ordered "shoot!" must not make holding look better too).
+	var raw_shoot_score: float = shoot_score
 	if ctx.ping_shoot_active and shoot_score > 0.0:
 		shoot_score *= PING_SHOOT_EV_MULT
 
-	var carry_result: Array = _best_carry(ctx)
+	var carry_result: Array = _best_carry(ctx, raw_shoot_score)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 	var raw_carry_score: float = carry_result[2]
@@ -490,12 +494,11 @@ func _pick_action(ctx: RoleContext) -> void:
 	# FRAC), positive scores only — see ACTION_HYSTERESIS_MARGIN_FRAC)
 	# so stickiness scales with the score's magnitude instead of
 	# swamping the small-score defensive-zone regime. CARRY does NOT
-	# get a hysteresis bonus: stand-still always ties with the best
-	# fire option from the same position by construction
-	# (score_at(self) >= score_shoot(self)), and we want fire to win
-	# those ties (see tiebreak below). A CARRY hysteresis bonus would
-	# push stand-still above fire on every re-eval and the bot would
-	# never fire.
+	# get a hysteresis bonus: stand-still's shot branch IS the raw
+	# shoot-now score (shared into _best_carry), so stand can never
+	# exceed fire, and we want fire to win those ties (see tiebreak
+	# below). A CARRY hysteresis bonus would push stand-still above
+	# fire on every re-eval and the bot would never fire.
 	if intended_action == INTENT_SHOOT and shoot_score > 0.0:
 		shoot_score *= 1.0 + AIActionScoring.ACTION_HYSTERESIS_MARGIN_FRAC
 	elif intended_action == INTENT_PASS and best_pass_score > 0.0:
@@ -519,10 +522,10 @@ func _pick_action(ctx: RoleContext) -> void:
 
 	# Best fire option. No noise-floor threshold against CARRY — a weak
 	# fire loses to any stronger carry candidate on its own (and
-	# stand-still bounds fire from below at score_at(self) >=
-	# score_shoot(self)). The one hard floor is the positive-value gate
-	# in the fire-vs-carry compete below: a ZERO fire can't win, so the
-	# puck is never given away for nothing.
+	# stand-still's shot branch is the shoot-now score itself, so the
+	# hold never under-prices the shot it protects). The one hard floor
+	# is the positive-value gate in the fire-vs-carry compete below: a
+	# ZERO fire can't win, so the puck is never given away for nothing.
 	var fire_score: float = best_shot_score
 	var fire_intent: int = best_shot_intent
 	if best_pass_score > fire_score:
@@ -530,9 +533,9 @@ func _pick_action(ctx: RoleContext) -> void:
 		fire_intent = INTENT_PASS
 
 	# Compete fire vs carry. FIRE WINS TIES — when a fire option scores
-	# the same as the best carry candidate (typically stand-still,
-	# which equals the best fire option by construction at the same
-	# position), we want to fire. The only case where carry should
+	# the same as the best carry candidate (typically stand-still, whose
+	# shot branch is the shoot-now score itself), we want to fire. The
+	# only case where carry should
 	# beat fire is when a movement candidate has a STRICTLY better
 	# future-action value, which means there's a real reason to keep
 	# moving instead of firing now.
@@ -957,7 +960,10 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 # Each movement candidate scored uniformly via _score_move_candidate;
 # time uses momentum-aware effective speed (backward candidates
 # self-discount via longer arrival).
-func _best_carry(ctx: RoleContext) -> Array:
+#
+# `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
+# stand-still's shot branch shares it verbatim — see the stand-still block.
+func _best_carry(ctx: RoleContext, shoot_now_score: float) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
@@ -985,11 +991,10 @@ func _best_carry(ctx: RoleContext) -> Array:
 	# Score the 8 polar cardinals + slot anchor first; stand-still is
 	# scored last and only wins if STRICTLY greater than the best
 	# movement candidate. By construction stand-still ties with the
-	# best fire option from the same position (score_at(self) is a
-	# max that includes shoot/carry-to-slot from self), and the slot
-	# anchor's score equals stand-still's carry-to-slot branch when
-	# that branch dominates — so stand-still ties with carry candidates
-	# almost as often as it ties with fire. Resolving carry ties toward
+	# best fire option from the same instant (its shot branch IS the
+	# shoot-now score, and outside the zone its potential branch prices
+	# holding ground) — so stand-still ties with fire whenever the shot
+	# is the hold's whole value. Resolving carry ties toward
 	# movement keeps the bot from dawdling when slot-drive is the play.
 	var best_pos: Vector3 = self_pos
 	var best_score: float = -INF
@@ -1056,24 +1061,32 @@ func _best_carry(ctx: RoleContext) -> Array:
 		best_pos = seam
 
 	# Stand-still last. Only wins on STRICTLY greater than the best
-	# movement candidate — patience must be earned. Score uses
-	# current opponents (time = 0 → no projection). Goalie predicted
-	# at the wrister window from current position. Same EV shape as the
-	# movement candidates: poke-safety discounts the benefit AND its
-	# complement is the strip probability feeding turnover_cost.
-	# Without the cost term stand-still was the only candidate that
-	# didn't price losing the puck, so under a converging forechecker
-	# every escape route went EV-negative while freezing stayed
+	# movement candidate — patience must be earned. Its SHOT branch is the
+	# top-level shoot-now score, shared verbatim: "hold and fire from here"
+	# and SHOOT are the same physical act (the wind-up runs either way, and
+	# momentum carries the release downstream over it), so pricing stand's
+	# shot separately at the CURRENT spot let a mid-cut hold read richer than
+	# the fire from the same instant — the projected release sits past the
+	# cut's apex while "here" still reads pre-apex — and the bot held at
+	# exactly the moment the window was open. Sharing the number restores the
+	# compete's fire-wins-ties construction by definition: stand_total =
+	# shoot_now × safety − cost ≤ shoot_now ≤ fire. Outside the zone the hold
+	# also prices its position potential, realization-discounted like every
+	# other candidate. Same EV shape as the movement candidates: poke-safety
+	# discounts the benefit AND its complement is the strip probability
+	# feeding turnover_cost. Without the cost term stand-still was the only
+	# candidate that didn't price losing the puck, so under a converging
+	# forechecker every escape route went EV-negative while freezing stayed
 	# positive — the bot planted itself at exactly the moment it
 	# should skate clear. Safety is the static reachable-clearance read (a closing
 	# defender still registers from its momentum over the reaction window).
-	var stand_goalie: Vector3 = _predict_goalie_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
-	var stand_unsettled: float = _goalie_unsettled_at(
-			ctx, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S, self_pos)
-	var stand_score: float = _score_at(ctx, self_pos, self_pos,
-			_scratch_opponents, stand_goalie,
-			ctx.self_wrister_shot_speed, stand_unsettled, ctx.self_aim_spread_rad)
+	var stand_score: float = shoot_now_score
+	if not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
+		var stand_potential: float = AIActionScoring.position_potential(
+				self_pos, attacking_goal, _scratch_opponents)
+		var stand_realization: float = AIActionScoring.potential_realization_discount(
+				self_pos, attacking_goal)
+		stand_score = maxf(stand_score, stand_potential * stand_realization)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var stand_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
