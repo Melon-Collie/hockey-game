@@ -1947,7 +1947,13 @@ static func pass_miss_loss_point(from: Vector3, receiver: Vector3) -> Vector3:
 # (beat him by letting him overshoot); a contained/jockeying defender's disk stays
 # on you (real containment); a stick on the puck stays a strip threat. The carrier
 # evades by placing the puck in his own handling envelope at a point outside every
-# defender disk — the SEAM (best_evade_point), which doubles as a carry candidate.
+# defender disk — the SEAM. Two seam reads share one sampler: the max-clearance
+# seam (best_evade_point) is the honest "can I keep the puck at all" safety read,
+# and the objective-DIRECTED seam (best_evade_point_toward) is the playmaking one
+# — the safe sample with the most progress toward the carry objective, so the
+# deke goes PAST the man toward the spot the carrier wants, and doubles as a
+# carry candidate. prefers_brake_check prices the third maneuver (stop dead, let
+# a committed checker's reach fly past) in the same clearance currency.
 #
 # The BOARDS bound the seam search, not the clearance itself: a wall doesn't
 # strip the puck (a carrier 0.3 m off the boards with no defender in reach is
@@ -1968,6 +1974,15 @@ const EVADE_SAFE_MARGIN_M: float = EVADE_STICK_REACH_M
 # seam is a broad region, not a point.
 const EVADE_SAMPLE_RINGS: Array[float] = [0.4, 0.8, 1.0]
 const EVADE_SAMPLE_ANGLES: int = 12
+# A strip needs the blade ON the puck, so a sample sitting exactly at the edge
+# of a defender's best-case reach (clearance 0) is escapable in the model's own
+# terms — but the model reacts only once (the reaction gate), while a real
+# defender re-reads continuously. One blade-length of air is the physical slop
+# that survives that re-read: the puck stays a blade off his best-case touch.
+# Samples at or above this clearance are treated as genuinely SAFE by the
+# objective-directed seam (progress may be preferred among them); below it,
+# clearance itself is the only currency.
+const EVADE_SAFE_CLEAR_MIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
 
 
 # Gap (metres) from a puck point to the nearest board. Negative outside the
@@ -2067,8 +2082,9 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 # can put/protect the puck over EVADE_HORIZON_S) with the most clearance from
 # every defender: the SEAM. `handle_reach` is how far he holds the puck off his
 # body (Hands-scaled), so a better handler threads a tighter seam. Returned as a
-# world point (y = 0); used both as the carrier's evadability read (reach_clearance
-# at this point) and as a carry candidate. Value-type math; allocation-free.
+# world point (y = 0); this max-clearance seam is the carrier's honest
+# evadability read (reach_clearance at this point = "can I keep the puck at
+# all"). Value-type math; allocation-free.
 static func best_evade_point(
 		carrier_pos: Vector3, carrier_vel: Vector3,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
@@ -2079,6 +2095,31 @@ static func best_evade_point(
 			carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S,
 			carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S,
 			env, opponents, opponent_vels, opponent_caps)
+
+
+# The OBJECTIVE-DIRECTED seam: where to put the puck to get PAST the pressure
+# toward the spot the carrier actually wants (`objective` — the live carry
+# anchor). The pure max-clearance seam above answers "where is the puck safest,"
+# which is survival, not playmaking — steered by it alone, a carrier is herded
+# wherever the ice happens to be emptiest (usually sideways or backwards) and
+# never tries to beat his man. This variant is lexicographic in the same
+# grounded currencies: among envelope samples that are genuinely SAFE (outside
+# every defender's momentum-reach by EVADE_SAFE_CLEAR_MIN_M — see that const),
+# take the one with the most PROGRESS toward the objective; only when no safe
+# sample exists does it fall back to pure max clearance (nothing to attack —
+# survive first). A defender overplaying one side thus gets beaten to the other
+# side ON THE WAY FORWARD, and a committed charger's vacated lane is taken as a
+# cut PAST him, not a retreat into open ice.
+static func best_evade_point_toward(
+		carrier_pos: Vector3, carrier_vel: Vector3, objective: Vector3,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		handle_reach: float, opponent_caps: Array = []) -> Vector3:
+	var env: float = 0.5 * MANEUVER_ACCEL_M_S2 * EVADE_HORIZON_S * EVADE_HORIZON_S \
+			+ handle_reach
+	return _best_clear_point(
+			carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S,
+			carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S,
+			env, opponents, opponent_vels, opponent_caps, objective)
 
 
 # WHERE ON THE BLADE to hold the puck under pressure: the point in the carrier's
@@ -2108,11 +2149,22 @@ static func best_handle_protect_point(
 # wall-pinned carrier's best seam run ALONG the boards and read honestly tight;
 # the projected center stays as the fallback even off-surface (the containment
 # backstop owns that degenerate case, not the seam search).
+#
+# With a finite `objective`, the sweep is objective-directed (see
+# best_evade_point_toward): among samples clearing EVADE_SAFE_CLEAR_MIN_M the
+# one closest to the objective wins; the max-clearance point remains the
+# fallback when no sample is safe.
 static func _best_clear_point(proj_x: float, proj_z: float, env: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> Vector3:
+		opponent_caps: Array = [], objective: Vector3 = Vector3.INF) -> Vector3:
+	var directed: bool = objective.is_finite()
 	var best: Vector3 = Vector3(proj_x, 0.0, proj_z)
 	var best_clear: float = reach_clearance(best, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
+	var best_safe: Vector3 = Vector3.INF
+	var best_safe_progress: float = INF   # distance to objective; smaller = more progress
+	if directed and best_clear >= EVADE_SAFE_CLEAR_MIN_M:
+		best_safe = best
+		best_safe_progress = Vector2(objective.x - best.x, objective.z - best.z).length()
 	for ring: float in EVADE_SAMPLE_RINGS:
 		var radius: float = env * ring
 		for k: int in EVADE_SAMPLE_ANGLES:
@@ -2124,7 +2176,73 @@ static func _best_clear_point(proj_x: float, proj_z: float, env: float,
 			if c > best_clear:
 				best_clear = c
 				best = p
+			if directed and c >= EVADE_SAFE_CLEAR_MIN_M:
+				var progress: float = Vector2(objective.x - p.x, objective.z - p.z).length()
+				if progress < best_safe_progress:
+					best_safe_progress = progress
+					best_safe = p
+	if directed and best_safe.is_finite():
+		return best_safe
 	return best
+
+
+# ── Brake check (the committed stop that lets the checker fly by) ────────────
+# A brake check is the third answer to pressure, next to the cut and the
+# shield: kill all speed so the defender's momentum carries his reach PAST the
+# puck, then re-accelerate into the lane he vacated. It is exactly the
+# reachable-set model run against a DIFFERENT own-body plan: braked, the puck
+# ends at the physical stop point instead of riding downrange to where his poke
+# is timed. Worth it only when that braked hold reads meaningfully clearer than
+# the cut (killing momentum is a real cost the cut doesn't pay), which is the
+# compare `prefers_brake_check` runs.
+
+# How hard the real brake key decelerates the body — same value as
+# AISteering.ARRIVAL_BRAKE_DECEL_M_S2 (kept as a local const so the dependency
+# between the two domain classes stays one-directional: steering reads the
+# evasion consts here, never the reverse).
+const BRAKE_DECEL_M_S2: float = 10.0
+
+# The braked-hold read must itself be genuinely safe — the same blade-of-air
+# standard the directed seam applies — AND beat the cut by a real margin.
+# The margin is tactical, not evaluated: braking surrenders all momentum
+# (re-acceleration to top speed takes ~a second), so a marginally clearer stop
+# isn't worth planting your feet for. Roughly one more blade of air.
+const BRAKE_CHECK_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
+
+
+# Where the puck comes to rest if the carrier slams the brake NOW: the current
+# spot plus the physical stopping distance v²/(2·decel) along the velocity.
+static func brake_stop_point(puck_pos: Vector3, carrier_vel: Vector3) -> Vector3:
+	var v_xz := Vector2(carrier_vel.x, carrier_vel.z)
+	var speed: float = v_xz.length()
+	if speed < 0.001:
+		return puck_pos
+	var stop_dist: float = speed * speed / (2.0 * BRAKE_DECEL_M_S2)
+	var inv: float = stop_dist / speed
+	return Vector3(puck_pos.x + v_xz.x * inv, 0.0, puck_pos.z + v_xz.y * inv)
+
+
+# Should the carrier answer this pressure with a brake check instead of the cut
+# toward `cut_seam`? Both maneuvers are priced by the same reachable
+# carry_clearance over the evasion horizon — the brake as the short braking
+# path to the physical stop point (a defender sweeping through it mid-stop is
+# caught by the mid-route sample), the cut as the carry to the seam. TRUE iff
+# the braked hold is genuinely safe (≥ the blade-of-air floor) and clears the
+# cut by BRAKE_CHECK_MARGIN_M. A jockeying defender pacing the carrier stays on
+# him through a brake (his projected reach never leaves), so this self-selects
+# for genuinely committed pressure — the only kind a brake check beats.
+static func prefers_brake_check(
+		puck_pos: Vector3, carrier_vel: Vector3, cut_seam: Vector3,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = []) -> bool:
+	var stop: Vector3 = brake_stop_point(puck_pos, carrier_vel)
+	var brake_clear: float = carry_clearance(
+			puck_pos, stop, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
+	if brake_clear < EVADE_SAFE_CLEAR_MIN_M:
+		return false
+	var cut_clear: float = carry_clearance(
+			puck_pos, cut_seam, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
+	return brake_clear > cut_clear + BRAKE_CHECK_MARGIN_M
 
 
 # Defender reach for the CARRY-path check below — stick-blade reach plus

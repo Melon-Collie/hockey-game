@@ -113,6 +113,71 @@ func test_ignores_teammates_outside_repel_radius() -> void:
 	assert_almost_eq(v_with.y, v_solo.y, 0.001)
 
 
+# ── Carrier threat-gated repel (velocities supplied) ─────────────────────────
+# With opponent velocities the carrier's avoidance reads defender MOMENTUM and
+# routes AROUND: a defender who can't get his swept reach on the carrier exerts
+# nothing, a threatening one bends the carry line but never reverses it, and a
+# charger sweeping through the carrier's spot produces a perpendicular sidestep.
+
+func _carrier_move(self_pos: Vector3, anchor: Vector3,
+		opponents: Array[Vector3], opp_vels: Array[Vector3]) -> Vector2:
+	return AISteering.compute_move_vector(
+			self_pos, anchor, NO_OPS, opponents, NO_LANE, NO_LANE, RINK_X, RINK_Z,
+			AISteering.OPPONENT_REPEL_WEIGHT_CARRY, opp_vels)
+
+
+func test_carrier_not_pushed_backwards_by_defender_on_the_line() -> void:
+	# Stationary defender parked dead on the carry line: his push is pure
+	# anti-anchor, which the route-around shaping strips — the carrier keeps
+	# driving at its spot (the deke layer owns beating him) instead of being
+	# corralled backwards. The plain proximity field (no velocities) shows the
+	# old herding for contrast.
+	var anchor := Vector3(0, 0, 8)
+	var opps: Array[Vector3] = [Vector3(0, 0, 3)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var gated := _carrier_move(Vector3.ZERO, anchor, opps, vels)
+	var old := AISteering.compute_move_vector(
+			Vector3.ZERO, anchor, NO_OPS, opps, NO_LANE, NO_LANE, RINK_X, RINK_Z,
+			AISteering.OPPONENT_REPEL_WEIGHT_CARRY)
+	assert_gt(gated.y, 0.95, "full drive at the anchor — pressure never reverses the line")
+	assert_lt(old.y, gated.y - 0.2, "the proximity field was pushed off the line (the corral)")
+
+
+func test_carrier_ignores_defender_outside_swept_reach() -> void:
+	# A defender well outside his momentum-reach (stationary, ~3.6 m off) is no
+	# threat to the puck this horizon — zero repel, pure anchor pull.
+	var anchor := Vector3(0, 0, 8)
+	var opps: Array[Vector3] = [Vector3(3.6, 0, 0)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var v := _carrier_move(Vector3.ZERO, anchor, opps, vels)
+	assert_almost_eq(v.x, 0.0, 0.01, "out of reach → no repel at all")
+	assert_gt(v.y, 0.95, "pure anchor pull remains")
+
+
+func test_carrier_sidesteps_a_charger_sweeping_through() -> void:
+	# A committed charger whose sweep passes straight through the carrier's
+	# spot: the puck-level seam handles the puck, but the BODY still needs to
+	# move — perpendicular off his line (the matador), while the anchor pull
+	# keeps the carrier advancing.
+	var anchor := Vector3(0, 0, 8)
+	var opps: Array[Vector3] = [Vector3(0, 0, 2.5)]
+	var vels: Array[Vector3] = [Vector3(0, 0, -8)]
+	var v := _carrier_move(Vector3.ZERO, anchor, opps, vels)
+	assert_gt(absf(v.x), 0.3, "sidestep perpendicular to the charge line")
+	assert_gt(v.y, 0.3, "still advancing toward the anchor through the sidestep")
+
+
+func test_carrier_bends_around_a_flanking_threat_without_retreating() -> void:
+	# Defender ahead-left within reach of the lane: the carrier bends right
+	# AROUND him while keeping its forward drive — never a net push backwards.
+	var anchor := Vector3(0, 0, 8)
+	var opps: Array[Vector3] = [Vector3(-0.6, 0, 2.5)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var v := _carrier_move(Vector3.ZERO, anchor, opps, vels)
+	assert_gt(v.x, 0.05, "bends to the open side of the threat")
+	assert_gt(v.y, 0.8, "forward drive survives the bend")
+
+
 # net detour tests — route a bot pinned behind a goal line out around
 # the post. The +Z net sits at +GOAL_LINE_Z; "behind" it is z > GOAL_LINE_Z.
 # A post-span bot (|x| < NET_HALF_WIDTH + margin) with an anchor on the

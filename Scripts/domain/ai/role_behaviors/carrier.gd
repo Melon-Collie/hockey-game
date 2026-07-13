@@ -306,9 +306,18 @@ var dump_is_soft: bool = false
 # absorbed by the body-relative offset and the mouse motion smoothing.
 var protect_offset: Vector3 = Vector3.ZERO
 var protect_pressure: float = 0.0
-# The body-scale evasion seam from the same re-eval (world point) — the open
-# ice the poke-evade deke cuts toward. Vector3.INF until first computed.
+# The body-scale evasion seam from the same re-eval (world point) — the
+# OBJECTIVE-DIRECTED seam (AIActionScoring.best_evade_point_toward): the safe
+# spot with the most progress toward the live carry anchor, so the poke-evade
+# deke cuts PAST the pressure toward where the carrier wants to go, falling
+# back to pure max clearance only when nothing safe exists. Vector3.INF until
+# first computed.
 var evade_seam_world: Vector3 = Vector3.INF
+# Whether a brake check (stop dead, let the committed checker's reach fly past)
+# currently beats the seam cut against the live pressure —
+# AIActionScoring.prefers_brake_check from the same re-eval. Latched by the
+# state machine's poke-evade trigger to pick the maneuver; protect-tier only.
+var brake_check_favored: bool = false
 
 # ── Throttle ─────────────────────────────────────────────────────────────────
 var _pick_action_cooldown: int = 0
@@ -413,6 +422,7 @@ func reset() -> void:
 	protect_offset = Vector3.ZERO
 	protect_pressure = 0.0
 	evade_seam_world = Vector3.INF
+	brake_check_favored = false
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
@@ -469,12 +479,36 @@ func _pick_action(ctx: RoleContext) -> void:
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 
+	# The DIRECTED seam — where to put the puck to get PAST the pressure toward
+	# the spot this carrier actually wants (the live carry anchor; the attacking
+	# goal until the first re-eval of a possession picks one). This is the deke
+	# direction the state machine latches and the seam candidate _best_carry
+	# scores; the max-clearance seam above stays the honest safety read only.
+	# The anchor is ≤ one re-eval stale as an objective, which is fine — the
+	# seam is a body-scale step, not a route.
+	var seam_objective: Vector3 = last_carry_anchor
+	if seam_objective == Vector3.ZERO:
+		seam_objective = attacking_goal
+	var directed_seam: Vector3 = AIActionScoring.best_evade_point_toward(
+			cur_puck_pos, ctx.self_velocity, seam_objective,
+			_scratch_opponents, _scratch_opponent_vels,
+			ctx.self_handle_reach, _scratch_opponent_caps)
+	evade_seam_world = directed_seam
+	# Brake-check read (AIActionScoring.prefers_brake_check): against this exact
+	# pressure, does planting the feet — letting the committed checker's reach
+	# fly past the physically-stopped puck — beat cutting to the seam? Mirrored
+	# for the state machine's poke-evade trigger to pick the maneuver. Gated
+	# with the other protect-tier reads: the brake check is taught puck skill.
+	brake_check_favored = ctx.protects_the_puck \
+			and AIActionScoring.prefers_brake_check(
+					cur_puck_pos, ctx.self_velocity, directed_seam,
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+
 	# Puck-protect read (see the mirror fields' doc): how covered the presented
 	# forward carry spot is over the evasion horizon, and where in the blade
 	# envelope alone the puck is safest. The state machine blends the carry
 	# mouse between the two by the pressure — pure stick work, steering and the
 	# carry destination are untouched.
-	evade_seam_world = evade_seam
 	if ctx.protects_the_puck:
 		var fwd_spot: Vector3 = _puck_pos_at(
 				self_pos + ctx.self_velocity * AIActionScoring.EVADE_HORIZON_S,
@@ -639,7 +673,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	if ctx.ping_shoot_active and shoot_score > 0.0:
 		shoot_score *= PING_SHOOT_EV_MULT
 
-	var carry_result: Array = _best_carry(ctx, raw_shoot_score)
+	var carry_result: Array = _best_carry(ctx, raw_shoot_score, directed_seam)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 	var raw_carry_score: float = carry_result[2]
@@ -761,8 +795,20 @@ func _pick_action(ctx: RoleContext) -> void:
 	debug_dump_score = dump_score
 
 	var new_intent: int
-	# Fire only if it beats BOTH carrying and holding for the developing play.
-	if fire_score >= carry_score and fire_score >= hold_value \
+	# Retention is HOPELESS when even the honest raw carry is worth less than
+	# conceding at the dump spot. In that regime the floored carry (the self
+	# drive-in mirror / the keep-the-puck floor) must not veto a fire — it just
+	# lost to the dump on the honest pricing, so the real choice is between the
+	# two ways of GIVING THE PUCK UP, and a qualified fire (a live teammate)
+	# beats flinging it to space whenever it out-values the dump. Without this
+	# the compete was intransitive: carry beat pass, dump beat (raw) carry,
+	# pass beat dump — and a pinned carrier dumped past a clean outlet.
+	var retention_hopeless: bool = dump_score > raw_carry_score
+	# Fire if it beats retention (carrying + holding for the developing play) —
+	# or, when retention is hopeless anyway, if it beats the dump about to
+	# happen (the hold gate drops there too: holding IS retention).
+	if ((fire_score >= carry_score and fire_score >= hold_value)
+			or (retention_hopeless and fire_score >= dump_score)) \
 			and fire_score > FIRE_MIN_VALUE and not staggered and not settling:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
@@ -841,9 +887,10 @@ func _pick_action(ctx: RoleContext) -> void:
 						(target_v / coef - min_v)
 							/ maxf(ctx.self_wrister_shot_speed - min_v, 0.001),
 						0.0, 1.0)
-	elif dump_score > raw_carry_score and not staggered and not settling:
+	elif retention_hopeless and not staggered and not settling:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
-		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.
+		# priced, below the safe giveaway), and no qualified fire out-valued the
+		# concession (checked above). Clear our zone, or dump-and-chase.
 		_hold_elapsed_s = 0.0
 		new_intent = INTENT_DUMP
 		dump_target = dump_result[1]
@@ -1249,7 +1296,8 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 #
 # `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
 # stand-still's shot branch shares it verbatim — see the stand-still block.
-func _best_carry(ctx: RoleContext, shoot_now_score: float) -> Array:
+func _best_carry(ctx: RoleContext, shoot_now_score: float,
+		directed_seam: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
@@ -1332,19 +1380,17 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float) -> Array:
 			best_score = exit_left_total
 			best_pos = exit_left
 
-	# Evasion seam — the reachable-set escape (best_evade_point): the spot in our
-	# handling envelope with the most clearance from the defenders' momentum-reach.
-	# Adding it as a carry candidate is what turns the safety model into PLAYMAKING
-	# — the bot cuts into the space a committed defender vacates instead of only
-	# surviving pressure. Scored like any candidate, so it only wins when the space
-	# it opens is actually worth carrying to.
-	var seam: Vector3 = AIActionScoring.best_evade_point(
-			self_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
-			ctx.self_handle_reach, _scratch_opponent_caps)
-	var seam_total: float = _score_move_candidate(ctx, seam, our_goalie)
+	# Evasion seam — the reachable-set escape, in its objective-DIRECTED form
+	# (best_evade_point_toward, computed once per re-eval in _pick_action): the
+	# safe spot in our handling envelope with the most progress toward the carry
+	# objective. Adding it as a carry candidate is what turns the safety model
+	# into PLAYMAKING — the bot cuts past a committed defender into the lane he
+	# vacates instead of only surviving pressure. Scored like any candidate, so
+	# it only wins when the space it opens is actually worth carrying to.
+	var seam_total: float = _score_move_candidate(ctx, directed_seam, our_goalie)
 	if seam_total > best_score:
 		best_score = seam_total
-		best_pos = seam
+		best_pos = directed_seam
 
 	# Stand-still last. Only wins on STRICTLY greater than the best
 	# movement candidate — patience must be earned. Its SHOT branch is the
@@ -1408,7 +1454,9 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float) -> Array:
 # It competes against the RAW carry — now honest, since carry candidates price their
 # strip at the tight point ON the route (carry_strip_point), so a doomed carry reads
 # honestly negative and an escapable one positive. The dump wins exactly when even
-# the best carry is worse than conceding at a safe spot: a last resort, no threshold.
+# the best carry is worse than conceding at a safe spot AND no qualified fire
+# out-values the concession (see the retention_hopeless compete in _pick_action):
+# a last resort, no threshold.
 func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
