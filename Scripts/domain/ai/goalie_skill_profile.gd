@@ -15,6 +15,18 @@ extends RefCounted
 # net and can't rob you). Two groups:
 #
 # Read-latency / stick group (Normal already eased these; Easy eases them more):
+#   • reaction_delay_s       — the reflexive leg-drop read latency, the goalie's
+#     CORE save mechanism (it gates the butterfly drop that seals the five-hole
+#     and the low corners). Higher → in-tight and quick-release low shots land
+#     before the pads ever start moving. The single strongest "reacts, but
+#     slower" lever.
+#   • prearmed_reaction_delay_s — the primed (quiet-eye) read after watching a
+#     visible windup. CRITICAL for the lower tiers: beginners telegraph every
+#     shot (slow deliberate wrister drags), which primes the goalie into its
+#     FASTEST read — an untiered prearm makes Easy sharpest against exactly the
+#     shots newcomers take. Higher → a telegraphed shot still beats him.
+#   • butterfly_drop_s       — pads-to-floor time once the drop commits. Higher
+#     → the five-hole and low ice stay open through a longer drop window.
 #   • arm_reaction_delay_s   — glove/blocker read latency. Higher → the arms
 #     start later, so top-corner and quick-release shots beat him more.
 #   • cross_crease_react_delay_s — back-door read latency. Higher → he loses the
@@ -40,23 +52,27 @@ extends RefCounted
 #     the slot instead of to the corner, so second chances appear.
 #   • lateral_accel_mps2 — how fast a lateral push ramps up (NOT the top speed).
 #     Lower → he's slow to get moving side-to-side, beaten across on quick plays.
+#   • five_hole_base_m — the standing pad gap (m of separation each side). Higher
+#     → a visibly leaky five-hole whenever the paddle is off-center (tracking,
+#     active blade); the drop still seals it, just later on the lower tiers.
 #
-# DELIBERATELY NOT HERE: reaction_delay (the leg-drop read) and t_push_speed (the
-# lateral slide TOP speed). AIActionScoring mirrors BOTH as compile-time constants
-# (GOALIE_REACTION_DELAY_S, GOALIE_MAX_LATERAL_SPEED_MPS = GameRules defaults) so
-# the bots' shot/pass scoring predicts the live goalie's position. Varying either
-# per-difficulty here WITHOUT threading the same value into AIActionScoring would
-# desync the bots' read (they'd rate the goalie as covering more than it does).
-# Every knob above is AI-safe: the positioning levers are read from the goalie's
-# LIVE position by the scorer (depth, lateral_accel ramp) or not modelled at all
-# (arm speed, rebound steering, the read latencies), so they vary freely. Slowing
-# the base leg-drop read / lateral top speed is a follow-up that must also
-# parameterise the AI scorer.
+# AI MIRROR: the bots' shot/pass scoring predicts the live goalie with the same
+# read model (leg/arm delays, drop time, lateral accel ramp, arm deploy). Those
+# used to be compile-time constants — which is why the leg-drop read could not
+# vary per tier — and are now static vars on AIActionScoring, synced from the
+# match's profile via AIActionScoring.set_goalie_profile(profile) wherever
+# GameManager selects goalie_skill_profile. Their defaults are the Hard/authored
+# baselines, so unwired contexts (unit tests) score exactly today's goalie.
+# STILL FIXED ACROSS TIERS: t_push_speed (the lateral slide TOP speed) — no tier
+# varies it, so the scorer keeps it as a const (GOALIE_MAX_LATERAL_SPEED_MPS).
+# Add it here only together with a set_goalie_profile field for it.
 #
 # To add a tier: add a Difficulty enum value, a factory, and a for_difficulty arm.
 # To add a knob: add a field + _init param, set it in all three factories, and
-# consume it in GoalieController._apply_skill_profile (confirm it is not an
-# AI-mirrored value first).
+# consume it in GoalieController._apply_skill_profile. If the bots' shot model
+# reads the same quantity (see AI MIRROR above), also sync it in
+# AIActionScoring.set_goalie_profile — otherwise the bots keep scoring against
+# the Hard goalie's version of it.
 
 enum Difficulty {
 	EASY = 0,     # the floor — positionally deep, slow arms, fat rebounds, laggy reads
@@ -93,6 +109,17 @@ var lateral_accel_mps2: float
 # tier leaves the net; it also means the feature carries zero risk on the
 # tiers most players face.
 var puck_play_go_margin_s: float
+# Reflexive leg-drop read latency (s) — gates the butterfly drop that seals the
+# five-hole and low ice. AI-mirrored (AIActionScoring.goalie_leg_delay_s).
+var reaction_delay_s: float
+# Primed (quiet-eye) read latency (s) after watching a visible windup — the
+# floor BOTH reads shortcut to when the goalie is pre-armed.
+var prearmed_reaction_delay_s: float
+# Pads-to-floor time (s) once the butterfly commits. AI-mirrored
+# (AIActionScoring.goalie_butterfly_drop_s).
+var butterfly_drop_s: float
+# Standing five-hole pad gap (m of separation each side of center).
+var five_hole_base_m: float
 
 
 func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
@@ -100,7 +127,9 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 		p_move_read_max_delay_s: float, p_depth_aggressive_m: float,
 		p_depth_base_m: float, p_glove_react_max_speed_mps: float,
 		p_blocker_react_max_speed_mps: float, p_pad_toe_out_butterfly_deg: float,
-		p_lateral_accel_mps2: float, p_puck_play_go_margin_s: float) -> void:
+		p_lateral_accel_mps2: float, p_puck_play_go_margin_s: float,
+		p_reaction_delay_s: float, p_prearmed_reaction_delay_s: float,
+		p_butterfly_drop_s: float, p_five_hole_base_m: float) -> void:
 	arm_reaction_delay_s = p_arm_reaction_delay_s
 	cross_crease_react_delay_s = p_cross_crease_react_delay_s
 	poke_radius_m = p_poke_radius_m
@@ -113,33 +142,44 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 	pad_toe_out_butterfly_deg = p_pad_toe_out_butterfly_deg
 	lateral_accel_mps2 = p_lateral_accel_mps2
 	puck_play_go_margin_s = p_puck_play_go_margin_s
+	reaction_delay_s = p_reaction_delay_s
+	prearmed_reaction_delay_s = p_prearmed_reaction_delay_s
+	butterfly_drop_s = p_butterfly_drop_s
+	five_hole_base_m = p_five_hole_base_m
 
 
 # Hard == the GoalieController @export defaults verbatim. Keep these in sync with
 # the controller so applying Hard is a true no-op (the ceiling we've tuned).
 static func hard() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
-			1.75, 1.30, 5.0, 5.0, 18.0, 14.0, 0.9)
+			1.75, 1.30, 5.0, 5.0, 18.0, 14.0, 0.9,
+			0.13, 0.07, 0.20, 0.02)
 
 
-# Normal is the middle tier: it keeps Hard's read knobs eased AND takes
-# half-strength positioning/arm/rebound levers, so Normal↔Hard is a real gap
-# rather than just reaction latency — a fair fight that's clearly softer than the
-# ceiling. First-pass numbers — tune against the bots on a 2-on-1 and an in-tight
-# deke.
+# Normal is the middle tier: enough goalie to punish a lazy shot, soft enough
+# that a well-picked corner, a quick release off the catch, or a cross-crease
+# play genuinely scores — the tier where shooting AND playmaking are both live
+# options. Sits roughly mid-ladder on every axis: reads a beat slower than Hard
+# (0.18 s legs ≈ the real elite cold-read floor, so the anticipation edge Hard
+# keeps is gone), a step deeper on the arc, and arms that get most — not all —
+# of the way to the corner.
 static func normal() -> GoalieSkillProfile:
-	return GoalieSkillProfile.new(0.28, 0.20, 0.16, 0.42, 0.20,
-			1.45, 1.05, 4.1, 4.1, 12.0, 11.0, INF)
+	return GoalieSkillProfile.new(0.28, 0.22, 0.16, 0.45, 0.20,
+			1.35, 0.95, 3.8, 3.8, 11.0, 10.0, INF,
+			0.18, 0.10, 0.25, 0.035)
 
 
-# Easy is the newcomer floor: positionally deep (gives up the net), slow arms
-# (can't rob the corners), fat rebounds (second chances), slow to push across,
-# and a clear beat late on every read. Still tracks, squares, and drops butterfly
-# — a real but weak goalie. First-pass numbers — tune against bot offense, since
-# a skilled human scores on any tier and can't feel this one by playing it.
+# Easy is the newcomer floor, tuned so ANY decently-aimed shot scores: he sits
+# nearly on his goal line (net open from everywhere), the leg-drop read + slow
+# butterfly leave the five-hole and low corners open from inside the slot, the
+# arms start late and crawl (top corners open), the primed read barely beats the
+# cold one (telegraphed beginner windups still score), and he's slow to get
+# moving across. Only a shot more or less AT him gets saved. Still tracks,
+# squares, and drops butterfly — a real but weak goalie, never a statue.
 static func easy() -> GoalieSkillProfile:
-	return GoalieSkillProfile.new(0.36, 0.28, 0.11, 0.55, 0.28,
-			1.15, 0.80, 3.25, 3.25, 6.0, 8.0, INF)
+	return GoalieSkillProfile.new(0.45, 0.40, 0.08, 0.70, 0.35,
+			0.90, 0.60, 2.4, 2.4, 5.0, 6.0, INF,
+			0.30, 0.16, 0.32, 0.06)
 
 
 static func for_difficulty(difficulty: int) -> GoalieSkillProfile:

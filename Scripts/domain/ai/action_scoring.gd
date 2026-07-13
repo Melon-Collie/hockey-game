@@ -156,18 +156,20 @@ const LOW_CORE_STANDING_M: float = (
 		GoalieBehaviorRules.STANDING_PAD_CENTER_X_M
 		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5)
 const HOLE_BAND_EXT: Array[float] = [0.15, 0.45]    # reaction-gated extension to the placement
-const HOLE_BAND_DELAY: Array[float] = [                    # per-band reaction delay (legs fast, arms slow)
-		GameRules.DEFAULT_GOALIE_REACTION_DELAY_S,        # LOW  — legs, 0.13
-		GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S,    # HIGH — glove/blocker, 0.18
-]
 const HOLE_BAND_LOFT: Array[int] = [                       # loft the band's hole is shot with
 		ShotMechanics.ELEVATION_FLAT,   # LOW  → flat
 		ShotMechanics.ELEVATION_HIGH,   # HIGH → roof it
 ]
 const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to extend to the placement.
-                                          # Mirrors the live goalie: HIGH-band EXT (0.45) / glove_react_
-                                          # max_speed (5.0) ≈ 0.09 s to cover the reaction-gated reach.
-                                          # Change with GoalieController.glove_react_max_speed.
+                                          # Hard baseline: HIGH-band EXT (0.45) / glove_react_max_speed
+                                          # (5.0) ≈ 0.09 s to cover the reaction-gated reach. The live
+                                          # value tracks the tier via set_goalie_profile.
+
+
+# Per-band reaction delay (legs fast, arms slow) — the difficulty-synced read
+# latencies (see set_goalie_profile below).
+static func _band_delay(band: int) -> float:
+	return goalie_arm_delay_s if band == HOLE_BAND_HIGH else goalie_leg_delay_s
 
 # ── HIGH-band arrival honesty ─────────────────────────────────────────────────
 # A HIGH hole is only a real target if the shot's arc physically ARRIVES above
@@ -240,7 +242,7 @@ static func _band_pace(band: int, dist: float, shot_speed_m_s: float) -> float:
 static func _band_cover(
 		band: int, t_reach: float, eff_unsettled: float, goalie_down: bool) -> float:
 	var reaction: float = clampf(
-			(t_reach - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
+			(t_reach - _band_delay(band)) / goalie_arm_deploy_s, 0.0, 1.0)
 	reaction *= 1.0 - eff_unsettled
 	if band == HOLE_BAND_HIGH:
 		if goalie_down:
@@ -249,7 +251,7 @@ static func _band_cover(
 	var core: float = HOLE_BAND_CORE[HOLE_BAND_LOW]
 	if not goalie_down:
 		var drop: float = clampf(
-				(t_reach - HOLE_BAND_DELAY[HOLE_BAND_LOW]) / GOALIE_BUTTERFLY_DROP_S,
+				(t_reach - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
 				0.0, 1.0)
 		core = lerpf(LOW_CORE_STANDING_M, HOLE_BAND_CORE[HOLE_BAND_LOW], drop)
 	return core + HOLE_BAND_EXT[HOLE_BAND_LOW] * reaction
@@ -308,12 +310,48 @@ const SHOT_DANGER_GAIN: float = 3.0
 # lateral_accel ramp) up to max push speed, never snapping to it. The ramp is
 # what a hard lateral cut in tight genuinely beats: over a sub-quarter-second
 # release window an accelerating keeper covers centimetres where a snap-to-speed
-# model covered half a metre and read every deke as tracked. All three constants
-# reference GameRules so the prediction stays in lockstep with the live goalie
-# (speed = GoalieController.t_push_speed, ramp = .lateral_accel).
-const GOALIE_REACTION_DELAY_S: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
+# model covered half a metre and read every deke as tracked. The reaction delay
+# and accel ramp are difficulty-synced (set_goalie_profile); the top speed is a
+# const because no tier varies GoalieController.t_push_speed.
 const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
-const GOALIE_LATERAL_ACCEL_M_S2: float = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2
+
+# Pads-to-floor time once the goalie commits the butterfly — the Hard baseline,
+# mirroring GoalieController.butterfly_drop_speed (0.20 s, grounded on the
+# measured pro drop velocity of 2.07 m/s — realism audit F2; the live value
+# tracks the tier via set_goalie_profile below). With the legs reaction delay in
+# front of it, this is how fast a STANDING goalie seals low after reading a
+# release — gating both the five-hole slot and the LOW band's widening from the
+# standing pad column to the butterfly core (_band_cover). Raced against the
+# puck reaching HIS body (t_reach): releases inside the delay leave low fully
+# open (the in-tight window), releases past delay + drop meet closed pads.
+const GOALIE_BUTTERFLY_DROP_S: float = 0.20
+
+# ── Difficulty-synced goalie read model ───────────────────────────────────────
+# The scorer predicts the LIVE goalie, and the live goalie's reads vary with the
+# match's GoalieSkillProfile — so the mirrored knobs are static vars, synced via
+# set_goalie_profile wherever GameManager selects goalie_skill_profile. Defaults
+# are the Hard/authored baselines, so unwired contexts (unit tests, threat
+# surfaces) score exactly the ceiling goalie. Without the sync the bots would
+# model a Hard goalie on every tier and pass up shots that genuinely beat a
+# weaker one. Statics (not per-call params) because the model threads ~every
+# scoring entry point; one goalie difficulty exists per match, set only at match
+# config / free-play picker time — never per tick.
+static var goalie_leg_delay_s: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
+static var goalie_arm_delay_s: float = GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S
+static var goalie_butterfly_drop_s: float = GOALIE_BUTTERFLY_DROP_S
+static var goalie_lateral_accel_m_s2: float = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2
+static var goalie_arm_deploy_s: float = GOALIE_ARM_DEPLOY_S
+
+
+# Sync the goalie read model to the match's difficulty tier. Call with
+# GoalieSkillProfile.hard() to restore the baseline (tests must restore).
+static func set_goalie_profile(profile: GoalieSkillProfile) -> void:
+	goalie_leg_delay_s = profile.reaction_delay_s
+	goalie_arm_delay_s = profile.arm_reaction_delay_s
+	goalie_butterfly_drop_s = profile.butterfly_drop_s
+	goalie_lateral_accel_m_s2 = profile.lateral_accel_mps2
+	# Deploy ramp = reaction-gated reach / arm speed (see GOALIE_ARM_DEPLOY_S).
+	goalie_arm_deploy_s = HOLE_BAND_EXT[HOLE_BAND_HIGH] / profile.glove_react_max_speed_mps
 
 
 # Lateral distance a goalie push covers in `move_time` (post-reaction), on the
@@ -322,10 +360,10 @@ const GOALIE_LATERAL_ACCEL_M_S2: float = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_
 static func _goalie_lateral_reach(move_time: float) -> float:
 	if move_time <= 0.0:
 		return 0.0
-	var t_ramp: float = GOALIE_MAX_LATERAL_SPEED_MPS / GOALIE_LATERAL_ACCEL_M_S2
+	var t_ramp: float = GOALIE_MAX_LATERAL_SPEED_MPS / goalie_lateral_accel_m_s2
 	if move_time <= t_ramp:
-		return 0.5 * GOALIE_LATERAL_ACCEL_M_S2 * move_time * move_time
-	return 0.5 * GOALIE_LATERAL_ACCEL_M_S2 * t_ramp * t_ramp \
+		return 0.5 * goalie_lateral_accel_m_s2 * move_time * move_time
+	return 0.5 * goalie_lateral_accel_m_s2 * t_ramp * t_ramp \
 			+ GOALIE_MAX_LATERAL_SPEED_MPS * (move_time - t_ramp)
 
 
@@ -334,22 +372,11 @@ static func _goalie_lateral_reach(move_time: float) -> float:
 static func _goalie_lateral_time(dist: float) -> float:
 	if dist <= 0.0:
 		return 0.0
-	var t_ramp: float = GOALIE_MAX_LATERAL_SPEED_MPS / GOALIE_LATERAL_ACCEL_M_S2
-	var ramp_dist: float = 0.5 * GOALIE_LATERAL_ACCEL_M_S2 * t_ramp * t_ramp
+	var t_ramp: float = GOALIE_MAX_LATERAL_SPEED_MPS / goalie_lateral_accel_m_s2
+	var ramp_dist: float = 0.5 * goalie_lateral_accel_m_s2 * t_ramp * t_ramp
 	if dist <= ramp_dist:
-		return sqrt(2.0 * dist / GOALIE_LATERAL_ACCEL_M_S2)
+		return sqrt(2.0 * dist / goalie_lateral_accel_m_s2)
 	return t_ramp + (dist - ramp_dist) / GOALIE_MAX_LATERAL_SPEED_MPS
-
-# Pads-to-floor time once the goalie commits the butterfly — mirrors
-# GoalieController.butterfly_drop_speed (0.20 s, grounded on the measured pro
-# drop velocity of 2.07 m/s — realism audit F2). With the legs reaction delay in
-# front of it, this is how fast a STANDING goalie seals low after reading a
-# release — gating both the five-hole slot and the LOW band's widening from the
-# standing pad column to the butterfly core (_band_cover). Raced against the
-# puck reaching HIS body (t_reach): releases inside the delay leave low fully
-# open (the in-tight window), releases past delay + drop meet closed pads.
-const GOALIE_BUTTERFLY_DROP_S: float = 0.20
-
 
 # Shadow half-width used by AIShotAim.compute_open_net_aim for the lane-check
 # aim point — picks a point past the goalie for the lane segment check.
@@ -975,8 +1002,8 @@ static func _hole_open_angle(
 			var gap: float = goalie_five_hole_m
 			if not goalie_down:
 				var seal: float = clampf(
-						(t_reach - HOLE_BAND_DELAY[HOLE_BAND_LOW])
-							/ GOALIE_BUTTERFLY_DROP_S,
+						(t_reach - _band_delay(HOLE_BAND_LOW))
+							/ goalie_butterfly_drop_s,
 						0.0, 1.0)
 				gap *= 1.0 - seal
 			var gap_angle: float = maxf(0.0, gap - puck_diameter) / maxf(dist, 0.5)
@@ -1203,7 +1230,7 @@ static func predict_goalie_pos(
 		release_time_s: float,
 		puck_pos_at_release: Vector3) -> Vector3:
 	var target_x: float = goalie_arc_match_x(goalie_now, attacking_goal, puck_pos_at_release)
-	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
+	var move_time: float = maxf(0.0, release_time_s - goalie_leg_delay_s)
 	var max_move: float = _goalie_lateral_reach(move_time)
 	var dx: float = target_x - goalie_now.x
 	var dist_to_target: float = absf(dx)
@@ -1231,7 +1258,7 @@ static func goalie_unsettled(
 	var need: float = absf(target_x - goalie_now.x)
 	if need < 0.001:
 		return 0.0  # already squared — no forced motion, fully set
-	var move_time: float = maxf(0.0, release_time_s - GOALIE_REACTION_DELAY_S)
+	var move_time: float = maxf(0.0, release_time_s - goalie_leg_delay_s)
 	var max_move: float = _goalie_lateral_reach(move_time)
 	if need >= max_move:
 		return 1.0  # still sliding at release (or hasn't even reacted) — caught moving

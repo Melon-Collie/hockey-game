@@ -80,8 +80,9 @@ extends Node
 # playability, and the honest version of that anticipation now exists as the
 # pre-armed read (prearmed_reaction_delay, quiet-eye primed). If a literal
 # model is ever wanted, raise this toward 0.18 and let the prearm carry the
-# fast reads; AIActionScoring.GOALIE_REACTION_DELAY_S mirrors this via
-# GameRules — change together.
+# fast reads. Difficulty-varied (GoalieSkillProfile.reaction_delay_s) and
+# AI-mirrored per tier via AIActionScoring.goalie_leg_delay_s — the default
+# and the scorer's default both read GameRules; change together.
 @export var reaction_delay: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 # Arms specifically take longer to react than legs. Legs are reflexive (drop
 # instantly when the brain reads "low shot"); arms require "where in the
@@ -370,8 +371,10 @@ extends Node
 # and made the five-hole close near-instantly once the leg read elapsed. The
 # gap also closes CONTINUOUSLY through the drop (openness converges during
 # drop_progress), so the effective five-hole seal — gap narrower than the puck
-# — lands well before full completion. Mirrors AIActionScoring.GOALIE_
-# BUTTERFLY_DROP_S; change both together.
+# — lands well before full completion. Difficulty-varied (GoalieSkillProfile.
+# butterfly_drop_s) and AI-mirrored per tier via AIActionScoring.goalie_
+# butterfly_drop_s; this default mirrors the scorer's GOALIE_BUTTERFLY_DROP_S
+# baseline — change both together.
 @export var butterfly_drop_speed: float = 0.20      # s for pads to close to floor
 @export var butterfly_radius: float = 0.40          # arc radius from goal center while down
 # Knee shuffle (realism audit F6) — the smallest down-movement tier. Real down
@@ -841,8 +844,9 @@ extends Node
 # to reach corners it should on mid/long shots. Close top-corner snipes still beat
 # the ARM DELAY (arm_reaction_delay 0.18 s > a slot shot's flight), so this only
 # shuts the range shots a real goalie gloves — it doesn't touch the in-tight window.
-# NOTE: AIActionScoring.GOALIE_ARM_DEPLOY_S mirrors this (= HIGH-band EXT / speed);
-# change both together.
+# NOTE: AIActionScoring mirrors this as the arm deploy ramp (goalie_arm_deploy_s
+# = HIGH-band EXT / speed; baseline const GOALIE_ARM_DEPLOY_S, re-derived per
+# tier in set_goalie_profile) — change the baselines together.
 @export var glove_react_max_speed: float = 5.0
 # Blocker (entire BlockArm assembly) reach speed cap, mirroring the glove.
 # Same magnitude — both arms have similar reach speed; if blocker should be
@@ -1112,9 +1116,11 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 
 # Overwrite the difficulty-varying @exports from a skill profile. Only the knobs
 # the profile carries are touched; everything else keeps its authored default.
-# Deliberately does NOT touch reaction_delay or t_push_speed — AIActionScoring
-# mirrors those to predict the goalie, so they stay consistent across tiers (see
-# GoalieSkillProfile). Called from setup() before the cached configs are built.
+# The AI-mirrored reads (leg delay, drop time, lateral accel, arm deploy) are
+# kept honest per tier by AIActionScoring.set_goalie_profile, called where
+# GameManager selects the match's goalie_skill_profile — t_push_speed is the one
+# read knob still fixed across tiers (see GoalieSkillProfile → AI MIRROR).
+# Called from setup() before the cached configs are built.
 func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
 	arm_reaction_delay = profile.arm_reaction_delay_s
 	cross_crease_react_delay = profile.cross_crease_react_delay_s
@@ -1128,6 +1134,10 @@ func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
 	pad_toe_out_butterfly_deg = profile.pad_toe_out_butterfly_deg
 	lateral_accel = profile.lateral_accel_mps2
 	puck_play_go_margin = profile.puck_play_go_margin_s
+	reaction_delay = profile.reaction_delay_s
+	prearmed_reaction_delay = profile.prearmed_reaction_delay_s
+	butterfly_drop_speed = profile.butterfly_drop_s
+	five_hole_base = profile.five_hole_base_m
 
 
 # Live re-apply of a difficulty profile onto a running goalie — used by free play,

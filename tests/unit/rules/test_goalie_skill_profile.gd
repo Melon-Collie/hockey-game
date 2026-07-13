@@ -40,6 +40,10 @@ func test_hard_matches_controller_defaults() -> void:
 	assert_eq(hard.blocker_react_max_speed_mps, 5.0)
 	assert_eq(hard.pad_toe_out_butterfly_deg, 18.0)
 	assert_eq(hard.lateral_accel_mps2, 14.0)
+	assert_eq(hard.reaction_delay_s, GameRules.DEFAULT_GOALIE_REACTION_DELAY_S)
+	assert_eq(hard.prearmed_reaction_delay_s, 0.07)
+	assert_eq(hard.butterfly_drop_s, 0.20)
+	assert_eq(hard.five_hole_base_m, 0.02)
 
 
 func test_normal_is_strictly_softer_than_hard_on_every_axis() -> void:
@@ -55,6 +59,14 @@ func test_easy_is_strictly_softer_than_normal_on_every_axis() -> void:
 func _assert_strictly_softer(softer: GoalieSkillProfile, tougher: GoalieSkillProfile,
 		soft_name: String, tough_name: String) -> void:
 	# Higher = laggier read = softer.
+	assert_gt(softer.reaction_delay_s, tougher.reaction_delay_s,
+			"%s's leg-drop read starts later than %s's" % [soft_name, tough_name])
+	assert_gt(softer.prearmed_reaction_delay_s, tougher.prearmed_reaction_delay_s,
+			"%s's primed read is slower than %s's" % [soft_name, tough_name])
+	assert_gt(softer.butterfly_drop_s, tougher.butterfly_drop_s,
+			"%s's pads take longer to seal the ice than %s's" % [soft_name, tough_name])
+	assert_gt(softer.five_hole_base_m, tougher.five_hole_base_m,
+			"%s's standing five-hole leaks wider than %s's" % [soft_name, tough_name])
 	assert_gt(softer.arm_reaction_delay_s, tougher.arm_reaction_delay_s,
 			"%s's arms start later than %s's" % [soft_name, tough_name])
 	assert_gt(softer.cross_crease_react_delay_s, tougher.cross_crease_react_delay_s,
@@ -80,6 +92,30 @@ func _assert_strictly_softer(softer: GoalieSkillProfile, tougher: GoalieSkillPro
 			"%s ramps into lateral pushes slower than %s" % [soft_name, tough_name])
 
 
+func test_set_goalie_profile_syncs_bot_shot_model() -> void:
+	# The bots' shot scoring predicts the live goalie's reads — the AI mirror
+	# must track the tier, or the bots score every shot against a Hard goalie.
+	# Restore Hard afterwards: the model is a static on AIActionScoring and
+	# other tests assume the baseline.
+	var easy: GoalieSkillProfile = GoalieSkillProfile.easy()
+	AIActionScoring.set_goalie_profile(easy)
+	assert_eq(AIActionScoring.goalie_leg_delay_s, easy.reaction_delay_s)
+	assert_eq(AIActionScoring.goalie_arm_delay_s, easy.arm_reaction_delay_s)
+	assert_eq(AIActionScoring.goalie_butterfly_drop_s, easy.butterfly_drop_s)
+	assert_eq(AIActionScoring.goalie_lateral_accel_m_s2, easy.lateral_accel_mps2)
+	assert_almost_eq(AIActionScoring.goalie_arm_deploy_s,
+			AIActionScoring.HOLE_BAND_EXT[AIActionScoring.HOLE_BAND_HIGH]
+				/ easy.glove_react_max_speed_mps, 0.0001)
+	AIActionScoring.set_goalie_profile(GoalieSkillProfile.hard())
+	# Hard restores the authored baselines exactly (the defaults the rest of
+	# the suite scores against).
+	assert_eq(AIActionScoring.goalie_leg_delay_s, GameRules.DEFAULT_GOALIE_REACTION_DELAY_S)
+	assert_eq(AIActionScoring.goalie_arm_delay_s, GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S)
+	assert_eq(AIActionScoring.goalie_butterfly_drop_s, AIActionScoring.GOALIE_BUTTERFLY_DROP_S)
+	assert_eq(AIActionScoring.goalie_lateral_accel_m_s2, GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2)
+	assert_almost_eq(AIActionScoring.goalie_arm_deploy_s, AIActionScoring.GOALIE_ARM_DEPLOY_S, 0.0001)
+
+
 func test_all_values_stay_physical() -> void:
 	# No negative / non-positive delays, radii, depths, speeds on any tier.
 	for profile: GoalieSkillProfile in [GoalieSkillProfile.easy(), GoalieSkillProfile.normal(), GoalieSkillProfile.hard()]:
@@ -94,3 +130,14 @@ func test_all_values_stay_physical() -> void:
 		assert_gt(profile.blocker_react_max_speed_mps, 0.0)
 		assert_gte(profile.pad_toe_out_butterfly_deg, 0.0)
 		assert_gt(profile.lateral_accel_mps2, 0.0)
+		assert_gt(profile.reaction_delay_s, 0.0)
+		assert_gt(profile.prearmed_reaction_delay_s, 0.0)
+		assert_gt(profile.butterfly_drop_s, 0.0)
+		assert_gte(profile.five_hole_base_m, 0.0)
+		# The primed read must stay a genuine shortcut below the cold read, and
+		# the reflexive legs must never be slower than the computed arm reach —
+		# the realism-audit orderings hold on every tier, not just the defaults.
+		assert_lt(profile.prearmed_reaction_delay_s, profile.reaction_delay_s,
+				"a primed read beats a cold read on every tier")
+		assert_true(profile.reaction_delay_s <= profile.arm_reaction_delay_s,
+				"arms never beat the reflexive legs on any tier")
