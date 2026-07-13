@@ -1551,3 +1551,154 @@ func test_sharp_angle_shot_into_a_vh_seal_is_never_worth_firing() -> void:
 	up.decide(ctx_up)
 	assert_lt(up.debug_shoot_score, 0.10,
 			"upright from the same sharp spot is no chance either — body depth walls it")
+
+
+# ─── attacking blue-line keep-out bands ──────────────────────────────────────
+# The offside puck-line is the TRUE blue line while the carrier reasons in
+# body positions: the pass windup swings the carried puck a stick's reach
+# behind the body, and reception plays the puck a reach around the receiver.
+# Both bands (OZ_RETREAT_LINE_BUFFER_M / OZ_RECEIVE_LINE_BUFFER_M) exist so
+# blue-line slop can't turn a completed play into a zone exit / offside.
+
+func test_oz_valve_prunes_carry_candidates_in_the_blue_line_band() -> void:
+	# Carrier established in the OZ (team 0 attacks -Z; OZ is z < -7.29).
+	# A retreat candidate INSIDE the keep-out band (on the zone side of the
+	# line but within windup reach of it) is pruned outright; a candidate
+	# past the band scores normally.
+	var self_pos := Vector3(0.0, 0.0, -12.0)
+	var ctx := _make_ctx(self_pos)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var in_band := Vector3(0.0, 0.0,
+			-(GameRules.BLUE_LINE_Z + AIRoleCarrier.OZ_RETREAT_LINE_BUFFER_M * 0.5))
+	var past_band := Vector3(0.0, 0.0,
+			-(GameRules.BLUE_LINE_Z + AIRoleCarrier.OZ_RETREAT_LINE_BUFFER_M + 1.0))
+	assert_eq(c._score_move_candidate(ctx, in_band, ctx.defending_goal_pos), -INF,
+			"a retreat to within windup reach of the blue line is pruned")
+	assert_gt(c._score_move_candidate(ctx, past_band, ctx.defending_goal_pos), -INF,
+			"a retreat that keeps the windup envelope inside the zone stays legal")
+
+
+func test_nz_carrier_may_target_entry_candidates_near_the_line() -> void:
+	# The valve (and its band) only binds a carrier ALREADY in the zone —
+	# an entry candidate just across the line must stay legal or the
+	# carrier could never enter at all.
+	var self_pos := Vector3(0.0, 0.0, -5.0)   # neutral zone
+	var ctx := _make_ctx(self_pos)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var just_inside := Vector3(0.0, 0.0, -(GameRules.BLUE_LINE_Z + 0.7))
+	assert_gt(c._score_move_candidate(ctx, just_inside, ctx.defending_goal_pos), -INF,
+			"an entry candidate in the band is not pruned from outside the zone")
+
+
+func test_oz_pass_skips_receiver_hugging_the_blue_line() -> void:
+	# Carrier in the OZ; the only teammate is wide open but his tape sits
+	# just inside the blue line — reception slop there takes the puck out
+	# of the zone, so he is excluded as a target entirely. The same open
+	# man past the keep-out band is a legal (positive) feed.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(6.0, 0.0, -20.0)
+	var at_line := Vector3(-2.5, 0.0, -(GameRules.BLUE_LINE_Z + 0.5))
+	var skaters_line: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, at_line],
+	]
+	var ctx_line := _make_ctx(self_pos, skaters_line)
+	ctx_line.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c_line := AIRoleCarrier.new()
+	c_line._build_action_opponents_lists(ctx_line)
+	var res_line: Array = c_line._compute_best_pass(ctx_line, Vector2(0.0, -1.0), [2])
+	assert_eq(res_line[1], 0.0,
+			"a receiver hugging the blue line is not a pass target from inside the zone")
+
+	# Same carrier, receiver now a genuinely valuable target well past the
+	# band (the far-post backdoor the squared goalie can't re-square onto —
+	# the same feed test_passes_to_the_open_backdoor_man… proves positive).
+	var deep := Vector3(-2.5, 0.0, -23.5)
+	var skaters_deep: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, deep],
+	]
+	var ctx_deep := _make_ctx(self_pos, skaters_deep)
+	ctx_deep.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c_deep := AIRoleCarrier.new()
+	c_deep._build_action_opponents_lists(ctx_deep)
+	var res_deep: Array = c_deep._compute_best_pass(ctx_deep, Vector2(0.0, -1.0), [2])
+	assert_gt(res_deep[1], 0.0,
+			"the same open man past the keep-out band is a legal feed")
+
+
+# ─── close-quarters saucer variant ───────────────────────────────────────────
+
+func test_close_quarters_pass_saucers_over_a_mid_lane_stick() -> void:
+	# An 8 m feed whose flat lane is contested by a stick-range mid-lane
+	# defender (off the line by more than a body radius). The old fixed
+	# 10 m saucer floor kept this grounded; under the kinematic model a
+	# SOFT flip (launch capped by the receivability bound) clears the
+	# stick and lands with runway — the saucer variant should win the
+	# per-receiver EV compete.
+	var self_pos := Vector3(0.0, 0.0, 10.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(0.0, 0.0, 2.0)],    # receiver 8 m up-ice
+			[3, 1, Vector3(0.7, 0.0, 6.5)],          # mid-lane stick, body off the line
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var res: Array = c._compute_best_pass(ctx, Vector2(0.0, -1.0), [2])
+	assert_gt(res[1], 0.0, "the lofted feed rates as a real pass")
+	assert_true(res[2], "close-quarters contested lane picks the saucer variant")
+
+
+func test_short_feed_below_saucer_floor_stays_grounded() -> void:
+	# Same shape at 5.5 m: even the softest legal flip (min wrister pace)
+	# can't land with runway that short, so no saucer variant exists and
+	# the pass stays flat whatever the lane looks like.
+	var self_pos := Vector3(0.0, 0.0, 10.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(0.0, 0.0, 4.5)],    # receiver 5.5 m up-ice
+			[3, 1, Vector3(0.7, 0.0, 7.5)],          # mid-lane stick
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var res: Array = c._compute_best_pass(ctx, Vector2(0.0, -1.0), [2])
+	assert_false(res[2], "below the physical saucer floor the feed stays grounded")
+
+
+func test_committed_saucer_pass_caps_launch_at_the_receivability_bound() -> void:
+	# Full decide(): a neutral-zone carrier with a 9 m ahead-man behind a
+	# mid-lane stick commits the saucer PASS, and the committed launch
+	# speed is capped at the receivability bound for the distance — the
+	# genuinely soft flip — never the crisp magnet pace that would arrive
+	# still airborne and sail over the receiver's blade. A PASS_TO_ME ping
+	# biases the compete toward the feed so the test pins the COMMIT path
+	# deterministically (the variant selection itself is covered by the
+	# _compute_best_pass tests above); the ping is a bias inside the same
+	# scoring, so the committed pass is still the winning saucer variant.
+	var self_pos := Vector3(3.0, 0.0, 5.0)
+	var receiver := Vector3(3.0, 0.0, -4.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, receiver],
+			[3, 1, Vector3(3.7, 0.0, 0.5)],          # mid-lane stick on the feed
+			[4, 1, Vector3(1.5, 0.0, 7.0)],          # forecheckers pressuring the carry
+			[5, 1, Vector3(4.5, 0.0, 6.5)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.ping_pass_target_peer = 2
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"pressured carrier feeds the outlet")
+	assert_true(c.pass_should_saucer, "the contested lane picks the saucer")
+	var bound: float = AIActionScoring.saucer_max_launch_speed(
+			self_pos.distance_to(receiver))
+	assert_lt(c.pass_target_speed, bound + 0.01,
+			"committed saucer launch is capped so the flip lands before the tape")
+	assert_gt(c.pass_target_speed,
+			GameRules.DEFAULT_WRISTER_POWER_MIN_M_S - 0.01,
+			"committed saucer launch stays at/above the soft-touch floor")

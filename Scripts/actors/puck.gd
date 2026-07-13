@@ -517,7 +517,7 @@ func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	puck_released.emit()
 
 func is_airborne() -> bool:
-	return position.y > ice_height + 0.05
+	return position.y > ice_height + GameRules.PUCK_AIRBORNE_HEIGHT_M
 
 # Drops a puck that settled on low net geometry (the back/skirt frame) straight
 # down to the ice so it becomes playable again — it was only a few cm up but

@@ -138,6 +138,32 @@ const RECEIVER_DRIVE_MIN_NET_DIST_M: float = 3.0
 const FORWARD_PRESSURE_HORIZON_M: float = 9.0
 const FORWARD_PRESSURE_MIN_SCALE: float = 0.55
 
+# ── Attacking blue-line keep-out bands ──────────────────────────────────────
+# Both are physical measurements of how far play around the carried puck
+# extends past the body, not shape parameters — they exist because the
+# offside puck-line is the TRUE blue line while these decisions are made in
+# body positions.
+#
+# RETREAT: how close to the line the OZ one-way valve lets a carry candidate
+# sit (see _score_move_candidate). The charged pass windup sweeps the blade —
+# and the carried puck — up to a stick's reach back from the body, and the
+# ~135 ms charge drifts a still-retreating body further (~7 m/s × 0.135 s).
+# A carrier parked closer than that windup envelope drags the puck back
+# across the line mid-pass — a zone exit, so the pass re-entering lands the
+# whole team offside. Retreating to the line for space stays legal; parking
+# ON it does not.
+const OZ_RETREAT_LINE_BUFFER_M: float = GameRules.DEFAULT_STICK_LENGTH_M + 1.0
+
+# RECEIVE: how far inside the line a pass target's intercept lead must sit
+# when the carrier is in the OZ (see _compute_best_pass). A tape at the line
+# is a fragile target — the catch itself plays the puck up to a stick's
+# reach around the body, and reception gives with the puck (~a stride) — so
+# routine reception slop on a line-hugging target takes the puck out of the
+# zone. Those blue-line feeds are also genuinely hard reads for a HUMAN
+# receiver (catch while braking to stay onside), so they're excluded as
+# targets, not just discounted.
+const OZ_RECEIVE_LINE_BUFFER_M: float = GameRules.DEFAULT_STICK_LENGTH_M + 0.7
+
 # (Blade reach cone + facing turn rate now come from the bot's real caps —
 # RoleContext.self_reach_cone_half_angle / self_facing_turn_rate — so an aim
 # anywhere inside the true ±157° reach cone fires with no body turn, and only the
@@ -209,10 +235,13 @@ var pass_should_charge: bool = false
 # up to, and leads the pass at this speed.
 var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 
-# Set alongside pass_target_peer_id when the chosen PASS is a long
-# feed whose lane is contested by a mid-lane defender that a saucer
-# (LOW-loft) pass would fly over. The state machine consumes this when
-# entering PASS_PRESSED to set the loft level for the release.
+# Set alongside pass_target_peer_id when the chosen PASS is the saucer
+# variant: a mid-lane defender contests the flat lane and the LOW-loft
+# flip clears more of it (see _pass_variant_ev) — at a launch speed
+# capped so the flip still lands with runway before the tape, which in
+# close quarters means a genuinely soft flip. The state machine consumes
+# this when entering PASS_PRESSED to set the loft level for the release;
+# pass_target_speed carries the (possibly reduced) launch pace.
 var pass_should_saucer: bool = false
 
 # Set when intent commits to SHOOT: the loft (ShotMechanics.ELEVATION_*) of the
@@ -680,9 +709,19 @@ func _pick_action(ctx: RoleContext) -> void:
 			else:
 				pass_target_speed = AIActionScoring.PASS_SPEED_M_S * ctx.pass_speed_scale
 			pass_should_charge = true
-			# Saucer it over a contested mid-lane defender (only ever true
-			# for long passes — see _compute_best_pass).
+			# Saucer it over a contested mid-lane defender (see
+			# _pass_variant_ev). The launch is capped at the receivability
+			# bound for the current distance — a flip that arrives still
+			# airborne flies over the receiver's grounded blade — so a
+			# close-quarters saucer commits as a genuinely soft flip even
+			# after the receiver-relative pace solve above.
 			pass_should_saucer = best_pass_saucer
+			if best_pass_saucer and receiver != null:
+				pass_target_speed = clampf(
+						AIActionScoring.saucer_max_launch_speed(
+								puck_now.distance_to(receiver.position)),
+						GameRules.DEFAULT_WRISTER_POWER_MIN_M_S,
+						pass_target_speed)
 		elif new_intent == INTENT_SHOOT:
 			# Loft AND aim from the same goalie-hole geometry score_shoot used —
 			# the chosen hole's elevation and net-plane target, scored at the
@@ -801,18 +840,28 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 # Filters:
 #   - Skip ghosted teammates (puck passes through them).
 #   - Skip receivers predicted past our own goal line (own-goal risk).
-#   - Carrier in OZ → receiver must also be in OZ (offside protection).
+#   - Carrier in OZ → receiver must also be in OZ (offside protection),
+#     and the intercept lead must sit OZ_RECEIVE_LINE_BUFFER_M inside the
+#     blue line — a tape at the line loses the zone on routine reception
+#     slop (see the constant's doc).
 #   - Behind-the-back receivers are NOT skipped: an aim inside the real
 #     ±157° reach cone fires with no body turn, and only the narrow back
 #     wedge pays — as rotation time priced into the EV's delay via
 #     _facing_rotation_time (the old hard ROM-skip predates that model).
 #   - Hard zero for net-blocker (segment crosses net body) and
 #     own-DZ slot crossing (intercepted = goal-against).
+#
+# Each receiver is scored as up to TWO variants competing on EV: the flat
+# feed at the magnet pace, and — when the flat lane is contested — a
+# saucer at min(magnet pace, the receivability bound
+# AIActionScoring.saucer_max_launch_speed), i.e. a soft flip in close
+# quarters, full pace on a stretch feed. The saucer pays
+# SAUCER_EXTRA_MISS_PROB for its fiddlier landing, so it wins exactly when
+# the sticks it flies over are worth more than the landing risk.
 func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		teammate_ids: Array[int]) -> Array:
 	var snapshot: WorldSnapshot = ctx.snapshot
 	var self_pos: Vector3 = ctx.self_pos
-	var own_goal_dir: float = ctx.own_goal_dir
 	var best_pass_peer: int = 0
 	var best_pass_score: float = 0.0
 	# Whether the winning pass should be lofted (saucer) over a contested
@@ -834,6 +883,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		if carrier_in_oz and not AIActionScoring.in_offensive_zone(
 				receiver_state.position, attacking_goal):
 			continue
+		var receiver_is_one_timer: bool = (ctx.team_brain != null
+				and ctx.team_brain.is_one_timer_ready(peer_id))
 		# Match the speed the state machine will actually fire at: the
 		# distance-adaptive launch speed (capped at this bot's own max
 		# wrister). Threading the actual speed here makes the lead and
@@ -845,34 +896,28 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var pass_speed: float = AIActionScoring.pass_launch_speed(
 				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
-		# Intercept-aware lead, shared with the state machine's firing aim.
-		# flight_t is the SOLVED time (refined against the predicted
-		# intercept), used downstream for opponent/goalie projection and
-		# the time-decay term. The receiver's real build (Speed/Agility) bounds
-		# how far it can actually get to — a fast, agile receiver is led further.
 		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
-		var lead: Array = AIPassLead.lead(
-				pass_origin, receiver_state, receiver_accel, pass_speed, PASS_LEAD_MAX_S, receiver_caps)
-		var receiver: Vector3 = lead[0]
-		var flight_t: float = lead[1]
-		if own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
-			continue
-		# One-timer-ready receivers fire on contact (no wrister windup),
-		# so the goalie can't slide during a charge. Pass `flight_t`
-		# alone for the release time → predicted goalie has only had
-		# the pass flight to react, not the additional wrister charge.
-		# Catching a still-set goalie via a back-door feed becomes a
-		# high-square open-net read.
-		var receiver_is_one_timer: bool = (ctx.team_brain != null
-				and ctx.team_brain.is_one_timer_ready(peer_id))
-		var receiver_release_t: float = flight_t
-		if not receiver_is_one_timer:
-			receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
-		var rotation_time: float = _facing_rotation_time(
-				self_facing_xz, self_pos, receiver,
-				ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
-		var s: float = _pass_ev(ctx, receiver, pass_speed, flight_t,
-				receiver_release_t, flight_t + rotation_time, our_goalie, receiver_caps)
+		# Flat feed at the magnet pace.
+		var s: float = _pass_variant_ev(
+				ctx, receiver_state, receiver_accel, receiver_caps,
+				pass_origin, pass_speed, false, receiver_is_one_timer,
+				self_facing_xz, our_goalie, carrier_in_oz)
+		var use_saucer: bool = false
+		# Saucer variant: the fastest RECEIVABLE flip — the magnet pace when
+		# the feed is long enough to land with runway, a genuinely soft flip
+		# in close quarters — competing on EV against the flat feed. Below
+		# the soft-touch wrister floor no legal saucer exists (the physical
+		# minimum saucer distance, ~6.5 m).
+		var saucer_speed: float = minf(
+				pass_speed, AIActionScoring.saucer_max_launch_speed(dist))
+		if saucer_speed >= GameRules.DEFAULT_WRISTER_POWER_MIN_M_S:
+			var s_saucer: float = _pass_variant_ev(
+					ctx, receiver_state, receiver_accel, receiver_caps,
+					pass_origin, saucer_speed, true, receiver_is_one_timer,
+					self_facing_xz, our_goalie, carrier_in_oz)
+			if s_saucer > s:
+				s = s_saucer
+				use_saucer = true
 		# Smart-ping PASS_TO_ME / IM_OPEN: the pinger asked for the puck (see
 		# PING_PASS_EV_MULT — bias, not force; a dead lane still scores 0).
 		if peer_id == ctx.ping_pass_target_peer and s > 0.0:
@@ -880,17 +925,84 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		if s > best_pass_score:
 			best_pass_score = s
 			best_pass_peer = peer_id
-			# Loft this feed only if it's a long pass (saucers are a
-			# stretch-pass tool) AND a mid-lane defender is in the way that
-			# the saucer flies over. Reuses the current-position opponents
-			# the grounded lane was scored against, so the two agree on the
-			# geometry.
-			best_pass_saucer = (
-					dist > AIActionScoring.SAUCER_MIN_DISTANCE_M
-					and AIActionScoring.prefers_saucer(
-							self_pos, receiver, _scratch_opponents, pass_speed,
-							_scratch_opponent_vels))
+			best_pass_saucer = use_saucer
 	return [best_pass_peer, best_pass_score, best_pass_saucer]
+
+
+# EV of ONE pass variant (flat, or saucer at a possibly-reduced launch
+# speed) to `receiver_state`. Solves the intercept lead at the variant's
+# actual speed, applies the per-variant filters, then prices it through
+# the shared _pass_ev. Returns 0.0 when the variant is filtered out
+# (illegal lead, unreceivable saucer, or a loft that clears nothing).
+#
+# Filters here (the receiver-independent ones live in the caller's loop):
+#   - Lead past our own goal line (own-goal risk).
+#   - Carrier in OZ → lead must sit OZ_RECEIVE_LINE_BUFFER_M inside the
+#     blue line (see the constant's doc — a tape at the line loses the
+#     zone on routine reception slop).
+#   - Saucer only: the lead must leave the flip landing runway
+#     (airborne carry + SAUCER_LANDING_RUN_M — a closing receiver can
+#     shrink the solved lead under what the current distance allowed),
+#     the flat lane must actually be contested
+#     (SAUCER_SKIP_WHEN_LANE_CLEAR), and the loft must clear MORE of the
+#     lane than staying flat — otherwise there is nothing to fly over.
+#
+# One-timer-ready receivers fire on contact (no wrister windup), so the
+# goalie only gets the pass flight to react — the caller resolves that
+# flag once per receiver and threads it here.
+func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
+		receiver_accel: Vector3, receiver_caps: AISkaterCaps,
+		pass_origin: Vector3, pass_speed: float, saucer: bool,
+		receiver_is_one_timer: bool, self_facing_xz: Vector2,
+		our_goalie: Vector3, carrier_in_oz: bool) -> float:
+	# Intercept-aware lead, shared with the state machine's firing aim.
+	# flight_t is the SOLVED time (refined against the predicted
+	# intercept), used downstream for opponent/goalie projection and
+	# the time-decay term. The receiver's real build (Speed/Agility) bounds
+	# how far it can actually get to — a fast, agile receiver is led further.
+	var lead: Array = AIPassLead.lead(
+			pass_origin, receiver_state, receiver_accel, pass_speed,
+			PASS_LEAD_MAX_S, receiver_caps)
+	var receiver: Vector3 = lead[0]
+	var flight_t: float = lead[1]
+	if ctx.own_goal_dir * receiver.z > GameRules.GOAL_LINE_Z:
+		return 0.0
+	if carrier_in_oz and not AIActionScoring.in_offensive_zone(
+			receiver, ctx.attacking_goal_pos, OZ_RECEIVE_LINE_BUFFER_M):
+		return 0.0
+	var lane: float
+	var miss_prob: float = AIActionScoring.PASS_MISS_PROB
+	if saucer:
+		# Small tolerance: a speed sitting exactly on the receivability
+		# bound round-trips through the kinematics to the exact distance.
+		if pass_origin.distance_to(receiver) \
+				< AIActionScoring.saucer_airborne_distance_m(pass_speed) \
+				+ AIActionScoring.SAUCER_LANDING_RUN_M - 0.01:
+			return 0.0
+		var lane_flat: float = AIActionScoring.lane_clear(
+				pass_origin, receiver, _scratch_opponents, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps)
+		if lane_flat >= AIActionScoring.SAUCER_SKIP_WHEN_LANE_CLEAR:
+			return 0.0
+		lane = AIActionScoring.lane_clear_saucer(
+				pass_origin, receiver, _scratch_opponents, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps)
+		if lane <= lane_flat:
+			return 0.0
+		miss_prob += AIActionScoring.SAUCER_EXTRA_MISS_PROB
+	else:
+		lane = AIActionScoring.lane_clear(
+				pass_origin, receiver, _scratch_opponents, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps)
+	var receiver_release_t: float = flight_t
+	if not receiver_is_one_timer:
+		receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+	var rotation_time: float = _facing_rotation_time(
+			self_facing_xz, ctx.self_pos, receiver,
+			ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
+	return _pass_ev(ctx, receiver, pass_speed, flight_t,
+			receiver_release_t, flight_t + rotation_time, our_goalie,
+			receiver_caps, lane, miss_prob)
 
 
 # Expected value of firing a pass from our current position to
@@ -925,6 +1037,10 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # evaluates it, so the carrier and its receivers agree on what's
 # actually threadable. Opponents are projected to flight time for the
 # receiver's inner score_at (lanes/pressure when the puck arrives).
+# `lane` may be precomputed by the caller (the variant scorer computes
+# flat vs saucer lanes itself); pass < 0 to have the grounded lane
+# computed here. `miss_prob` is the execution-miss probability for this
+# variant (a saucer adds its landing risk on top of the flat default).
 #
 # Predicts the goalie at `receiver_release_t` (flight + the receiver's
 # wrister charge, or flight alone for one-timer-ready receivers — the
@@ -934,7 +1050,9 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # league default (we don't carry teammates' attributes).
 func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
-		our_goalie: Vector3, receiver_caps: AISkaterCaps = null) -> float:
+		our_goalie: Vector3, receiver_caps: AISkaterCaps = null,
+		lane: float = -1.0,
+		miss_prob: float = AIActionScoring.PASS_MISS_PROB) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# The pass flies from the PUCK (the blade), not the body — judge the lane
 	# the puck actually travels. From behind the net the two differ by up to a
@@ -949,9 +1067,10 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	if AIActionScoring.pass_crosses_own_slot(
 			origin, receiver_spot, ctx.own_goal_dir * GameRules.GOAL_LINE_Z):
 		return 0.0
-	var lane: float = AIActionScoring.lane_clear(
-			origin, receiver_spot, _scratch_opponents, pass_speed,
-			_scratch_opponent_vels, _scratch_opponent_caps)
+	if lane < 0.0:
+		lane = AIActionScoring.lane_clear(
+				origin, receiver_spot, _scratch_opponents, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps)
 	if lane <= 0.0:
 		return 0.0
 	_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
@@ -992,7 +1111,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			_forward_clearance_at(ctx, receiver_spot, receiver_speed))
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
-	var completion: float = lane * (1.0 - AIActionScoring.PASS_MISS_PROB)
+	var completion: float = lane * (1.0 - miss_prob)
 	# Clean per-action EV: prob(complete) × value(teammate has puck at receiver)
 	# minus the turnover cost if it's intercepted or missed. The pressure the
 	# carrier is under is priced by the CARRY/HOLD alternatives' own strip cost
@@ -1007,7 +1126,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 	cost += AIActionScoring.turnover_cost(
 			AIActionScoring.pass_miss_loss_point(self_pos, receiver_spot),
-			lane * AIActionScoring.PASS_MISS_PROB, ctx.defending_goal_pos,
+			lane * miss_prob, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 	return benefit - cost
 
@@ -1281,11 +1400,18 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var self_pos: Vector3 = ctx.self_pos
 	# One-way valve: once the puck is in the offensive zone, don't carry it back
 	# out. Establishing the zone is worth keeping — a carry that surrenders it (a
-	# retreat past the blue line) is pruned so it can never win. Stand-still (self,
-	# in-zone) never trips this, so the candidate set is never empty. Mirrors the
-	# receiver-side exclusion in _compute_best_pass.
+	# retreat past the blue line) is pruned so it can never win. Buffered by
+	# OZ_RETREAT_LINE_BUFFER_M: a candidate ON the line is as good as out,
+	# because the pass windup sweeps the carried puck a stick's reach behind
+	# the body — retreating to the line and then passing dragged the puck
+	# across it mid-windup (a zone exit that landed the whole team offside on
+	# the pass). Stand-still (self, in-zone) never trips this, so the candidate
+	# set is never empty; a carrier already inside the band only keeps deeper
+	# candidates, easing it off the line. Mirrors the receiver-side exclusion
+	# in _compute_best_pass (OZ_RECEIVE_LINE_BUFFER_M).
 	if AIActionScoring.in_offensive_zone(self_pos, ctx.attacking_goal_pos) \
-			and not AIActionScoring.in_offensive_zone(candidate, ctx.attacking_goal_pos):
+			and not AIActionScoring.in_offensive_zone(
+					candidate, ctx.attacking_goal_pos, OZ_RETREAT_LINE_BUFFER_M):
 		return -INF
 	var local_time: float = AIActionScoring.time_to_arrive(
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed)
@@ -1571,13 +1697,17 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 			# waiting for (and _hold_elapsed_s decays a wait that never
 			# materialises). The OZ gate reads the projected spot for the
 			# same reason: a finisher a stride outside the line, driving in,
-			# IS the developing cross-seam.
+			# IS the developing cross-seam. Buffered by the same reception
+			# keep-out band the live pass filter enforces — holding for a
+			# feed to a spot the pass scoring will never be allowed to hit
+			# would be waiting forever.
 			var fin_vel: Vector3 = tm.velocity
 			var spot := Vector3(
 					tm.position.x + fin_vel.x * OUTLET_DEVELOP_WINDOW_S, 0.0,
 					tm.position.z + fin_vel.z * OUTLET_DEVELOP_WINDOW_S)
 			if tm.is_ghost or ctx.team_brain.is_one_timer_ready(pid) \
-					or -ctx.own_goal_dir * spot.z <= GameRules.BLUE_LINE_Z \
+					or not AIActionScoring.in_offensive_zone(
+							spot, ctx.attacking_goal_pos, OZ_RECEIVE_LINE_BUFFER_M) \
 					or not AIRoleHelpers.is_legal_position(spot):
 				continue
 			var dist: float = self_pos.distance_to(spot)

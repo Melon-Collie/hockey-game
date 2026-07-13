@@ -114,8 +114,9 @@ const _PASS_PUPPET_POS: Vector3 = Vector3(0.0, 1.0, -7.0)
 # clean over a grounded blade (PuckReceptionRules.blade_can_interact) — on the
 # standard 9 m lane the saucer reached the receiver still in the air and flew
 # past him. The deep lane lets it land mid-flight and slide the rest of the way
-# in, grounded and catchable. Saucers are a stretch-pass tool — the bots' own
-# doctrine agrees (AIActionScoring.SAUCER_MIN_DISTANCE_M).
+# in, grounded and catchable — the same landing-runway bound the bots' saucer
+# doctrine enforces (AIActionScoring.saucer_max_launch_speed): a shorter feed
+# needs a softer flip.
 const _SAUCER_PUPPET_POS: Vector3 = Vector3(0.0, 1.0, -12.0)
 # The saucer wall stands this far in front of the player's staging spot —
 # INSIDE the saucer's airborne span, but with enough runway that the saucer

@@ -1201,18 +1201,20 @@ func test_lane_clear_defender_drifting_away_blocks_less() -> void:
 	assert_gt(drifting, stationary, "a defender drifting off the lane blocks less")
 
 
-# ── lane_clear_saucer / prefers_saucer: a low flip over a near stick ─────────
-# A saucer is airborne only for a fixed distance off the blade
-# (SAUCER_AIRBORNE_DISTANCE_M, ~4 m): within it the puck flies over a
-# grounded STICK but not a BODY; past it the puck has landed and every
-# defender blocks with a stick. We can't know the live loft, so the model
-# is deliberately conservative — saucers only beat a stick that's close.
+# ── lane_clear_saucer: a low flip over a near stick ──────────────────────────
+# The saucer flight is pure kinematics of the LOW loft's fixed vertical
+# launch: the puck is above the blade plane for the over window
+# [t_over, t_down], during which only a BODY in the lane blocks it; before
+# (still on the blade) and after (landed) a stick intercepts normally.
+# Airborne carry = launch speed × hang time, so a softer flip lands sooner
+# — the close-quarters saucer — and a defender past the touch-down point
+# plays it like a flat pass.
 
 func test_lane_clear_saucer_clears_near_stick_range_defender() -> void:
-	# Defender within the airborne span (~3 m out) and off the line by more
-	# than a body radius (within stick + closing reach, so the grounded lane
-	# is contested). The saucer flies over their stick, body out of the
-	# way → clear.
+	# Defender mid-lane (~3 m out — well inside the over window at charge
+	# pace) and off the line by more than a body radius (within stick +
+	# closing reach, so the grounded lane is contested). The saucer flies
+	# over their stick, body out of the way → clear.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
 	var near_stick: Array[Vector3] = [Vector3(0.7, 0.0, 3.0)]
@@ -1223,7 +1225,7 @@ func test_lane_clear_saucer_clears_near_stick_range_defender() -> void:
 
 
 func test_lane_clear_saucer_blocked_by_body_in_lane() -> void:
-	# Defender standing dead in the lane within the airborne span (within a
+	# Defender standing dead in the lane inside the over window (within a
 	# body radius of the line): the saucer can't fly over a torso, blocks.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
@@ -1232,59 +1234,63 @@ func test_lane_clear_saucer_blocked_by_body_in_lane() -> void:
 	assert_lt(saucer, 0.1, "a body dead in the lane blocks a saucer")
 
 
-func test_lane_clear_saucer_blocked_past_airborne_span() -> void:
-	# Stick-range defender BEYOND the airborne distance (~8 m out): the puck
-	# has landed by then, so it blocks the saucer with a full stick just
-	# like a flat pass. This is the key conservatism — a saucer doesn't
+func test_lane_clear_saucer_stuffed_by_stick_on_the_release() -> void:
+	# Defender's closest approach is right off the blade (t < t_over — the
+	# puck hasn't climbed above the blade plane yet): full grounded stick
+	# reach applies, so a stick already on the puck stuffs the flip.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 14.0)
+	var on_release: Array[Vector3] = [Vector3(0.4, 0.0, 0.3)]
+	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, on_release, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	assert_lt(saucer, 0.5, "a stick on the puck at release still stuffs a saucer")
+
+
+func test_lane_clear_saucer_blocked_after_touch_down() -> void:
+	# Stick-range defender past the touch-down point (speed × hang time —
+	# ~9.7 m at charge pace): the puck has landed by then, so it blocks the
+	# saucer with a full stick just like a flat pass. A saucer doesn't
 	# clear a defender far down the lane.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 14.0)
-	var far_stick: Array[Vector3] = [Vector3(0.5, 0.0, 8.0)]
+	var landed_dist: float = AIActionScoring.saucer_airborne_distance_m(
+			AIActionScoring.PASS_CHARGE_SPEED_M_S) + 1.0
+	var far_stick: Array[Vector3] = [Vector3(0.5, 0.0, landed_dist)]
 	var saucer: float = AIActionScoring.lane_clear_saucer(from, to, far_stick, AIActionScoring.PASS_CHARGE_SPEED_M_S)
-	assert_lt(saucer, 1.0, "a defender past the airborne span still blocks a landed saucer")
+	assert_lt(saucer, 1.0, "a defender past the touch-down point still blocks a landed saucer")
 
 
-func test_prefers_saucer_true_for_near_stick_range() -> void:
-	# A stick-range defender within the airborne span: grounded is
-	# contested, the saucer clears their stick by more than the margin →
-	# prefer the saucer.
+func test_lane_clear_saucer_soft_flip_lands_earlier() -> void:
+	# The airborne carry scales with launch speed: a defender ~8.5 m out is
+	# still under the crisp flip (in the air at charge pace) but past the
+	# SOFT flip's touch-down — the soft flip has landed and gets blocked.
+	# This is the physical trade the close-quarters saucer makes: softer
+	# pace buys a receivable landing, at the cost of clearing less lane.
 	var from := Vector3(0.0, 0.0, 0.0)
-	var to := Vector3(0.0, 0.0, 14.0)
-	var near_stick: Array[Vector3] = [Vector3(0.7, 0.0, 3.0)]
-	assert_true(
-			AIActionScoring.prefers_saucer(from, to, near_stick, AIActionScoring.PASS_CHARGE_SPEED_M_S),
-			"a near stick-range defender should prompt a saucer")
+	var to := Vector3(0.0, 0.0, 12.0)
+	var mid_stick: Array[Vector3] = [Vector3(0.5, 0.0, 8.5)]
+	var crisp: float = AIActionScoring.lane_clear_saucer(from, to, mid_stick, AIActionScoring.PASS_CHARGE_SPEED_M_S)
+	var soft: float = AIActionScoring.lane_clear_saucer(from, to, mid_stick, 12.0)
+	assert_almost_eq(crisp, 1.0, 0.0001, "crisp flip is still airborne over the 8.5 m defender")
+	assert_lt(soft, crisp, "the soft flip has landed by 8.5 m — the defender blocks it")
 
 
-func test_prefers_saucer_false_when_body_blocks_lane() -> void:
-	# Defender standing dead in the lane: the saucer can't clear their body,
-	# so lofting buys nothing → don't prefer it.
-	var from := Vector3(0.0, 0.0, 0.0)
-	var to := Vector3(0.0, 0.0, 14.0)
-	var body_in_lane: Array[Vector3] = [Vector3(0.0, 0.0, 3.0)]
-	assert_false(
-			AIActionScoring.prefers_saucer(from, to, body_in_lane, AIActionScoring.PASS_CHARGE_SPEED_M_S),
-			"a body dead in the lane can't be saucered over")
-
-
-func test_prefers_saucer_false_when_lane_open() -> void:
-	# No defender in the lane: nothing to loft over, stay grounded.
-	var from := Vector3(0.0, 0.0, 0.0)
-	var to := Vector3(0.0, 0.0, 14.0)
-	assert_false(
-			AIActionScoring.prefers_saucer(from, to, [], AIActionScoring.PASS_CHARGE_SPEED_M_S),
-			"an open lane never wants a saucer")
-
-
-func test_prefers_saucer_false_when_blocker_past_span() -> void:
-	# The only defender is past the airborne span — the saucer has landed
-	# and can't clear them, so lofting doesn't help. Don't saucer.
-	var from := Vector3(0.0, 0.0, 0.0)
-	var to := Vector3(0.0, 0.0, 14.0)
-	var far_blocker: Array[Vector3] = [Vector3(0.0, 0.0, 8.0)]
-	assert_false(
-			AIActionScoring.prefers_saucer(from, to, far_blocker, AIActionScoring.PASS_CHARGE_SPEED_M_S),
-			"a saucer doesn't clear a defender past the airborne span, so don't loft")
+func test_saucer_max_launch_speed_bounds_receivable_flips() -> void:
+	# The receivability bound: launch × hang time + landing run must fit
+	# inside the pass distance. At the bound the flip lands exactly a
+	# landing-run short of the tape; below the soft-touch wrister floor
+	# (~6.5 m feeds and shorter) no legal saucer exists.
+	var bound: float = AIActionScoring.saucer_max_launch_speed(10.0)
+	assert_almost_eq(
+			AIActionScoring.saucer_airborne_distance_m(bound)
+					+ AIActionScoring.SAUCER_LANDING_RUN_M,
+			10.0, 0.0001,
+			"at the bound the flip lands exactly a landing-run before the tape")
+	assert_gt(AIActionScoring.saucer_max_launch_speed(7.0),
+			GameRules.DEFAULT_WRISTER_POWER_MIN_M_S,
+			"a 7 m feed still admits a soft saucer above the wrister floor")
+	assert_lt(AIActionScoring.saucer_max_launch_speed(6.0),
+			GameRules.DEFAULT_WRISTER_POWER_MIN_M_S,
+			"a 6 m feed can't be saucered — even the softest flip lands too late")
 
 
 # ── lane_loss_point: interceptor location for the turnover-cost term ──────────

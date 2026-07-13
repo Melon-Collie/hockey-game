@@ -778,7 +778,9 @@ var _pass_should_charge: bool = false
 var _pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 # Mirrored from _carrier.pass_should_saucer. When true, PASS_PRESSED
 # toggles elevation on for the release so the puck lofts over a
-# contested mid-lane defender (saucer pass). Only set for long passes.
+# contested mid-lane defender (saucer pass). _pass_target_speed carries
+# the matching launch pace — capped so the flip lands with runway before
+# the tape, i.e. a genuinely soft flip in close quarters.
 var _pass_should_saucer: bool = false
 var _pass_charge_tick: int = 0
 # Wind-up endpoint OFFSETS (relative to self_pos) for the charged pass —
