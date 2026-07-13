@@ -88,7 +88,10 @@ const VERSION: String = "dev"
 #     context-sensitive team message + bot-directive broadcast. New @rpc
 #     methods shift the name-sorted RPC indices (see v14), so a bump is
 #     required even though existing wire formats are unchanged.
-const PROTOCOL_VERSION: int = 23
+# v24: stats packet grew — PlayerStats.to_array() 10 -> 11 (game_winning_goals,
+#     host-stamped at the final horn for the Three Stars GWG bonus), so
+#     STATS_PLAYER_RECORD_SIZE 11 -> 12.
+const PROTOCOL_VERSION: int = 24
 
 
 func _ready() -> void:

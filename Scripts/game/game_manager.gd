@@ -3515,25 +3515,37 @@ func _pregame_intro_eligible() -> bool:
 
 
 # Three Stars of the Game, ranked best first, computed locally from the
-# replicated stat counters. Every machine sees the same counters and the same
-# sorted-peer-id candidate order, and StarOfGameRules breaks ties explicitly,
-# so selection is deterministic without an RPC. Can return fewer than three
-# entries (empty when nobody registered a counting stat).
+# replicated stat counters. Every machine sees the same counters (including
+# the host-stamped game-winning-goal flag) and the same sorted-peer-id
+# candidate order, and StarOfGameRules breaks ties explicitly, so selection
+# is deterministic without an RPC. The GWG bonus scales with the final margin
+# (a one-goal winner is the story of the night, a blowout GWG is trivia),
+# losing-team stat lines are discounted at selection, and the first star
+# always comes from the winning team; humans and bots compete on equal
+# footing. Can return fewer than three entries (empty when nobody registered
+# a counting stat).
 func get_stars_of_game() -> Array[PlayerRecord]:
 	var result: Array[PlayerRecord] = []
 	if _registry == null:
 		return result
+	var goal_margin: int = 0
+	var winning_team: int = -1
+	if _state_machine != null:
+		goal_margin = absi(_state_machine.scores[0] - _state_machine.scores[1])
+		if goal_margin > 0:
+			winning_team = 0 if _state_machine.scores[0] > _state_machine.scores[1] else 1
 	var peer_ids: Array[int] = []
 	for pid: int in _registry.all().keys():
 		peer_ids.append(pid)
 	peer_ids.sort()
 	var scores: Array[float] = []
-	var is_human: Array[bool] = []
+	var on_losing_team: Array[bool] = []
 	for pid: int in peer_ids:
 		var rec: PlayerRecord = _registry.get_record(pid)
-		scores.append(StarOfGameRules.score(rec.stats))
-		is_human.append(not rec.is_bot)
-	for star_idx: int in StarOfGameRules.pick_stars(scores, is_human):
+		scores.append(StarOfGameRules.score(rec.stats, goal_margin))
+		on_losing_team.append(winning_team != -1 and rec.team != null
+				and rec.team.team_id != winning_team)
+	for star_idx: int in StarOfGameRules.pick_stars(scores, on_losing_team):
 		result.append(_registry.get_record(peer_ids[star_idx]))
 	return result
 
@@ -3805,6 +3817,8 @@ func _apply_reset() -> void:
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
+	if _phase_coord != null:
+		_phase_coord.reset_goal_log()
 	if _turnover_tracker != null:
 		_turnover_tracker.reset()
 	if _possession_tracker != null:
