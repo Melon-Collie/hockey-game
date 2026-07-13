@@ -201,3 +201,35 @@ func test_never_advances_past_recovery_toward_a_distant_carrier() -> void:
 			+ " distant gap point; got %s (r=%.1f)" % [d.target_position, r])
 	assert_gt(d.target_position.z, 0.0,
 			"…which keeps it on OUR side of center while the trailer streaks")
+
+
+func test_trailer_race_reads_the_trailer_real_speed_cap() -> void:
+	# The recovery clamp races each trailer at ITS real Speed cap: a slow
+	# build's trailer takes longer to get home, so CONTAIN may stand
+	# meaningfully farther out before the race is at risk. (The hand-filled
+	# trailer list used to size-mismatch the caps scratch buffer, silently
+	# demoting every trailer to league-reference speed — a plodder forced
+	# the same deep sag a burner did.)
+	var carrier := Vector3(0, 0, -20)
+	var trailer := Vector3(2, 0, 2)
+	var skaters: Array = [
+			[1, TEAM_ID, Vector3(0, 0, 5)],
+			[200, 1, carrier],
+			[210, 1, trailer, Vector3(0, 0, 7)],
+	]
+	var our_net := Vector3(0, 0, OUR_NET_Z)
+
+	var ctx_default: RoleContext = _make_ctx(Vector3(0, 0, 5), skaters, 200)
+	var default_stand: float = AIRoleContain.decide(
+			ctx_default).target_position.distance_to(our_net)
+
+	var slow_caps := AISkaterCaps.new()
+	slow_caps.max_speed = 4.0
+	var ctx_slow: RoleContext = _make_ctx(Vector3(0, 0, 5), skaters, 200)
+	ctx_slow.caps_by_peer = {210: slow_caps}
+	var slow_stand: float = AIRoleContain.decide(
+			ctx_slow).target_position.distance_to(our_net)
+
+	assert_gt(slow_stand, default_stand + 2.0,
+			"a slow trailer lets CONTAIN stand farther from home;"
+			+ " slow=%.1f default=%.1f" % [slow_stand, default_stand])

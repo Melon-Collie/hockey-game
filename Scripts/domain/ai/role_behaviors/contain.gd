@@ -94,19 +94,23 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# rush comes to YOU: the stand's distance from our net is capped by the
 	# race-home radius against the OTHER opponents — the CARRIER is excluded
 	# because gap control already owns him (you cannot be beaten home by the
-	# man you retreat in front of; the trailer is who burns you). So CONTAIN
-	# gaps the carrier freely when no trailer threatens, and waits at the edge
-	# of recoverability when one does — the gap point meets him there as the
-	# play closes. (Filtered set loses the caps index alignment, so the race
-	# uses league-reference speed — the conservative side of that trade.)
+	# man you retreat in front of; the trailer is who burns you). Each trailer
+	# races at ITS real Speed cap — states and caps are filled together so the
+	# parallel arrays stay index-aligned (a hand-filled state list over a stale
+	# caps buffer used to size-mismatch and silently demote every trailer to
+	# league-reference speed, so a plodding trailer forced a deep sag and a
+	# burner was under-feared).
 	var stand_from_net: float = dist - gap
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
+	var opp_caps: Array[AISkaterCaps] = ctx.scratch_opp_caps
 	opp_states.clear()
+	opp_caps.clear()
 	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id 			if ctx.snapshot.puck_state != null else -1
 	for pid: int in ctx.snapshot.skater_states:
 		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id or pid == carrier_pid:
 			continue
 		opp_states.append(ctx.snapshot.skater_states[pid])
+		opp_caps.append(ctx.caps_by_peer.get(pid))
 	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
 	if stand_from_net > r:
 		gap = dist - r
