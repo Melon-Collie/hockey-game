@@ -60,10 +60,14 @@ func test_shooting_covers_the_drill_sequence() -> void:
 	# Pin the Shooting curriculum so a refactor can't drop a drill.
 	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.SHOOTING_ID)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_WRIST)
+	assert_has(steps, TutorialRegistry.STEP_SHOOT_BACKHAND)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_TARGETS)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_SLAP)
 	assert_has(steps, TutorialRegistry.STEP_ONE_TIMER)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_FINISH)
+	assert_true(steps.find(TutorialRegistry.STEP_SHOOT_BACKHAND)
+			> steps.find(TutorialRegistry.STEP_SHOOT_WRIST),
+			"the backhand drill builds on the wrister — it must come after it")
 
 
 func test_passing_covers_pass_types_and_reception() -> void:
