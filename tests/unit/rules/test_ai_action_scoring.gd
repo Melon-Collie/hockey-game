@@ -186,22 +186,22 @@ func test_shoot_score_low_at_extreme_angle() -> void:
 	assert_lt(s, 0.25, "shot from ~80° off-axis should score < 0.25")
 
 
-func test_shoot_score_zero_at_moderate_angle_vs_squared_goalie() -> void:
+func test_shoot_score_negligible_at_moderate_angle_vs_squared_goalie() -> void:
 	# Shooter at ~59° off-axis IN TIGHT vs a goalie SQUARED to each shooter (on
 	# the challenge arc toward them, 0.6 m out) — how a real goalie plays it.
 	# From the angle the net foreshortens and the squared body-depth covers the
-	# cross-net lane; under arrival-honest arcs the old "thin far-side window
-	# because the arms haven't deployed" sliver is gone too (reaching the top
-	# band takes ≥ ~0.25 s of arc at any range, which IS the glove's deploy).
-	# A deep-holding goalie still concedes a thin low look to the CENTER
-	# shooter — the keeper's depth, not the shooter's range, buys openings.
+	# cross-net lane. With the reach budget run to the goalie's BODY a thin
+	# residual sliver survives, but it stays under the carrier's fire floor
+	# (FIRE_MIN_VALUE 0.02) — still a shot no bot takes. A deep-holding goalie
+	# concedes a real low look to the CENTER shooter — the keeper's depth, not
+	# the shooter's range, buys openings.
 	var shooter := Vector3(5.0, 0.0, 23.65)
 	var goalie_angle := Vector3(0.86, 0.0, 26.34)   # squared to the 59° shooter
 	var center := Vector3(0.0, 0.0, 21.0)
 	var goalie_center := Vector3(0.0, 0.0, 26.05)   # squared to the center shooter
 	var s_angle: float = AIActionScoring.score_shoot(shooter, GOAL, goalie_angle, NET_HW, [])
 	var s_center: float = AIActionScoring.score_shoot(center, GOAL, goalie_center, NET_HW, [])
-	assert_almost_eq(s_angle, 0.0, 0.001, "the squared goalie walls the 59° look")
+	assert_lt(s_angle, 0.03, "the squared goalie holds the 59° look under the fire floor")
 	assert_gt(s_center, 0.0, "a deep-holding goalie concedes a thin low look straight on")
 	assert_lt(s_angle, s_center, "shot from 59° scores below the center look")
 
@@ -413,17 +413,18 @@ func test_shot_danger_cross_seam_beats_a_frozen_goalie() -> void:
 	assert_gt(s, 0.4, "cross-seam past a frozen goalie is a strong chance")
 
 
-func test_shot_danger_set_goalie_slot_is_shut() -> void:
-	# Clean slot, goalie SET and squared. With arrival-honest arcs there is no
-	# direct shot: reaching the top band takes ≥ ~0.25 s of arc no matter the
-	# range (softer = higher), which hands the set glove its full deploy; the
-	# pads wall the low corners; the standing five-hole is a sub-puck sliver.
-	# Firing into a set, squared goalie is a giveaway — the play is to MOVE
-	# him (pass / carry), which the compete's alternatives price.
+func test_shot_danger_set_goalie_slot_is_a_modest_look() -> void:
+	# Clean slot, goalie SET and squared. This is a REAL but modest chance, not
+	# a wall: the reach budget runs to the goalie's BODY, which a 5 m release
+	# reaches before his leg read + butterfly drop can widen the standing pad
+	# column — the low corners past the pads are live (exactly the shot the
+	# live keeper physically concedes: his legs don't move inside ~0.13 s).
+	# It must stay MODEST — a set goalie is never a great option; the great
+	# chances still come from MOVING him (displacement / down / cross-seam).
 	var shooter := Vector3(0.0, 0.0, 21.65)
 	var goalie := Vector3(0.0, 0.0, 25.05)
 	var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-	assert_lt(s, 0.03, "a set squared goalie leaves no direct shot from the slot")
+	assert_between(s, 0.05, 0.30, "the slot vs a set goalie is a real but modest look")
 
 
 func test_shot_danger_down_goalie_slot_is_roofed_at_an_honest_pace() -> void:
@@ -448,14 +449,16 @@ func test_shot_danger_down_goalie_slot_is_roofed_at_an_honest_pace() -> void:
 func test_shot_danger_point_blank_into_a_set_goalie_is_smothered() -> void:
 	# Shooting from right on top of a squared, set goalie: his body eclipses the
 	# whole net from that eye — no opening anywhere. You must move off-angle or
-	# deke, not fire into him. Backing out to the slot manufactures nothing
-	# either — a set goalie has to be MOVED, not out-ranged.
+	# deke, not fire into him. Backing out to the slot buys the modest
+	# quick-release look (the pad column can't widen in time) — range is worth
+	# something against a set goalie, the doorstep is worth nothing.
 	var pb := Vector3(0.0, 0.0, 24.65)                       # 0.5 m off the goalie
 	var slot := Vector3(0.0, 0.0, 21.65)                     # ~5 m
 	var s_pb: float = AIActionScoring.score_shoot(pb, GOAL, Vector3(0.0, 0.0, 25.15), NET_HW, [])
 	var s_slot: float = AIActionScoring.score_shoot(slot, GOAL, Vector3(0.0, 0.0, 25.05), NET_HW, [])
 	assert_lt(s_pb, 0.05, "point-blank into a set goalie is smothered")
-	assert_lt(s_slot, 0.05, "…and backing out doesn't manufacture a look either")
+	assert_gt(s_slot, s_pb, "…and the slot look beats jamming it into his pads")
+	assert_lt(s_slot, 0.30, "…while staying a modest chance, not an open net")
 
 
 func test_shot_danger_open_look_dwarfs_firing_into_a_set_goalie() -> void:
@@ -466,17 +469,24 @@ func test_shot_danger_open_look_dwarfs_firing_into_a_set_goalie() -> void:
 	assert_gt(open_s, set_s * 2.5, "an open net is worth far more than roofing a set goalie")
 
 
-func test_shot_danger_set_goalie_shuts_the_direct_shot_at_every_range() -> void:
-	# The general form of the set-goalie reads above (and the successor to the
-	# old challenged-goalie range test): against a SET, SQUARED keeper at a
-	# normal challenge depth there is no direct shot from ANY straight-on
-	# range — near smothers, mid walls, far forecloses (the arc has sagged
-	# back below the top band and the pads have the flight to deploy).
+func test_shot_danger_set_goalie_caps_the_direct_shot_at_every_range() -> void:
+	# The general form of the set-goalie reads above: against a SET, SQUARED
+	# keeper at a normal challenge depth the direct shot is never better than
+	# MODEST from any straight-on range — near smothers (his depth eclipses
+	# the net before the pads even matter), mid is the live quick-release
+	# window (the puck reaches his body before the drop / glove deploy), far
+	# forecloses entirely (the reach budget covers the deploy and the arc has
+	# sagged below the top band).
 	for dist: float in [3.0, 5.0, 8.0, 12.0, 16.0]:
 		var shooter := Vector3(0.0, 0.0, GOAL.z - dist)
 		var goalie := Vector3(0.0, 0.0, GOAL.z - 1.5)
 		var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
-		assert_lt(s, 0.03, "no direct shot on a set squared goalie from %.0f m" % dist)
+		assert_lt(s, 0.25, "a set squared goalie caps the %.0f m direct shot at modest" % dist)
+	for dist: float in [12.0, 16.0]:
+		var shooter := Vector3(0.0, 0.0, GOAL.z - dist)
+		var goalie := Vector3(0.0, 0.0, GOAL.z - 1.5)
+		var s: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [])
+		assert_lt(s, 0.03, "…and range forecloses the direct shot from %.0f m" % dist)
 
 
 func test_aim_spread_demands_a_wider_window_in_the_score() -> void:
@@ -484,8 +494,7 @@ func test_aim_spread_demands_a_wider_window_in_the_score() -> void:
 	# window scores lower for a noisier hand (its wobble budget eats the
 	# opening), and a big enough spread closes a thin window entirely — the
 	# score finally agrees with the aim clamp, which already insets by spread.
-	# Window: the cross-seam look past a frozen centred goalie (a real opening
-	# — a set-goalie slot look is shut for every hand under honest arcs).
+	# Window: the cross-seam look past a frozen centred goalie (a real opening).
 	var shooter := Vector3(3.0, 0.0, 22.0)
 	var goalie := Vector3(0.0, 0.0, 25.15)
 	var clean: float = AIActionScoring.score_shoot(
@@ -496,7 +505,7 @@ func test_aim_spread_demands_a_wider_window_in_the_score() -> void:
 			0.0, [], -1.0, false, 0.0, false, 0.02)
 	var wild: float = AIActionScoring.score_shoot(
 			shooter, GOAL, goalie, NET_HW, [], AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-			0.0, [], -1.0, false, 0.0, false, 0.2)
+			0.0, [], -1.0, false, 0.0, false, 0.4)
 	assert_gt(clean, noisy, "a noisier hand rates the same window lower")
 	assert_gt(noisy, 0.0, "…a small wobble doesn't kill a real open look")
 	assert_almost_eq(wild, 0.0, 0.001, "a wobble wider than the window closes it")
@@ -518,22 +527,29 @@ func test_shot_danger_squared_challenged_goalie_zeroes_the_point_shot() -> void:
 					depth, dist])
 
 
-func test_shot_danger_top_band_set_glove_shuts_it_down_goalie_concedes_it() -> void:
-	# Arrival honesty rewrote the top-corner read: reaching the top band takes
-	# ≥ ~0.25 s of arc regardless of range (softer = higher), which is past the
-	# set glove's deploy — so a SET goalie's top corners are shut even in tight
-	# (the old "in tight the glove can't move" read fired a full-power HIGH
-	# shot that physically arrived at belly height). A DOWN goalie concedes
-	# the arm extension (glove starts at the pads): the same look opens.
+func test_shot_danger_top_band_glove_race_in_tight_deploy_shuts_it_at_range() -> void:
+	# The over-the-shoulder read, with the reach budget run to the goalie's
+	# BODY: in tight the soft top-band arc still passes HIM around his 0.18 s
+	# arm delay — the glove has barely started, so the top corner is live (the
+	# real "in tight the glove can't extend → roof it" window, which the live
+	# keeper's own arm_reaction_delay doc promises). At RANGE the puck's trip
+	# to his body covers the whole deploy and the set glove shuts the band. A
+	# DOWN goalie concedes the arm extension entirely (glove starts at the
+	# pads), so his top corner reads at least as open as the set goalie's.
 	var shooter := Vector3(0.0, 0.0, 23.65)    # 3 m
 	var goalie := Vector3(0.0, 0.0, 25.9)
 	var set_high: float = AIActionScoring._hole_open_angle(
 			0, shooter, GOAL, goalie, NET_HW, 33.0, 0.0)
 	var down_high: float = AIActionScoring._hole_open_angle(
 			0, shooter, GOAL, goalie, NET_HW, 33.0, 0.0, -1.0, true)
-	assert_almost_eq(set_high, 0.0, 0.0001,
-			"a set glove has the whole soft-arc flight to deploy — top band shut")
-	assert_gt(down_high, 0.0, "a down goalie concedes the top corner")
+	assert_gt(set_high, 0.0, "in tight the glove can't extend — the top corner is live")
+	assert_gte(down_high, set_high, "a down goalie concedes at least the set goalie's window")
+	var far_shooter := Vector3(0.0, 0.0, 15.65)    # 11 m
+	var far_goalie := Vector3(0.0, 0.0, 25.15)     # 1.5 m challenge
+	var far_high: float = AIActionScoring._hole_open_angle(
+			0, far_shooter, GOAL, far_goalie, NET_HW, 33.0, 0.0)
+	assert_almost_eq(far_high, 0.0, 0.0001,
+			"at range the deploy beats the puck to his body — top band shut")
 
 
 func test_high_band_is_unreachable_at_point_blank() -> void:
