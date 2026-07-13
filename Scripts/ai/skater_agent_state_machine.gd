@@ -1848,6 +1848,27 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 				# Sprint gate reads the overshoot too — the easing that slows a
 				# clean solo pickup must not bleed speed out of a contest.
 				_chase_sprint_ref = target
+		elif carrier_pid == -1:
+			# BLADE-FIRST pickup route: steer the BODY to a point one carry
+			# cradle SHORT of the intercept along the approach line, so the bot
+			# arrives with the puck outstretched a blade-length ahead on its
+			# skating line — the blade (which makes the actual pickup; the
+			# close-range branch below snaps the aim onto the puck inside
+			# reach) finally shapes the route. The raw intercept delivered the
+			# CHEST onto the puck: the body overran the pickup point and the
+			# puck was fished off the hip or from behind — the "orient then
+			# skate" look. The pull-back also lands the puck exactly at the
+			# carry cradle spot (CARRY_BLADE_AIM_FORWARD_M), so a clean pickup
+			# flows into the first carrying stride with no gather. Inside one
+			# cradle of the intercept the raw target stands (nothing left to
+			# shape). Pursuit of a CARRIED puck keeps the raw intercept — body
+			# pressure on the man is the point there — and the contested
+			# overshoot above keeps its committed momentum drive.
+			var approach: Vector3 = Vector3(
+					target.x - self_pos.x, 0.0, target.z - self_pos.z)
+			var approach_len: float = approach.length()
+			if approach_len > CARRY_BLADE_AIM_FORWARD_M:
+				target -= approach * (CARRY_BLADE_AIM_FORWARD_M / approach_len)
 		_apply_steering(input, snapshot, self_pos, target)
 
 		# Aim: normally blade-on-intercept, but during the engagement cooldown
