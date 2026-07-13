@@ -304,15 +304,16 @@ static func hard() -> BotSkillProfile:
 # pace knobs further (standoff UP, pass scale / anticipation / aggression DOWN)
 # before touching precision.
 #
-# Cognition: goalie-motion BLIND — Normal doesn't shoot across the grain or
-# time feeds to catch the keeper mid-slide, which cuts its scoring through
-# hockey IQ rather than more wobble (so it never looks drunk, just ordinary).
-# It still holds for developing plays, angles its chase, plays the pass
-# on odd-man rushes, and shields the puck from a checker (youth-hockey
-# fundamentals) — a competent league player, not a student of the game.
+# Cognition: ALL gates open, same as Hard — Normal and Hard are deliberately
+# the same PLAYER separated only by continuous tuning (reactions, wobble,
+# cadence, pace), never by which plays exist in the model, so the tier gap
+# reads as "sharper" rather than "knows moves the other doesn't". Normal's
+# goalie-motion read used to be the one closed gate; its scoring is now held
+# down by the tuning dials instead (shot wobble first — see the finish note
+# above). Easy is where the behaviour gates close.
 static func normal() -> BotSkillProfile:
 	return BotSkillProfile.new(0.22, 0.5, 6, 0.06, 0.03, 0.30, 1.5, 0.85, 0.65, 0.6,
-			false, true, true, true, true)
+			true, true, true, true, true)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
