@@ -161,9 +161,9 @@ const HOLE_BAND_LOFT: Array[int] = [                       # loft the band's hol
 		ShotMechanics.ELEVATION_HIGH,   # HIGH → roof it
 ]
 const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to extend to the placement.
-                                          # Hard baseline: HIGH-band EXT (0.45) / glove_react_max_speed
-                                          # (5.0) ≈ 0.09 s to cover the reaction-gated reach. The live
-                                          # value tracks the tier via set_goalie_profile.
+										  # Hard baseline: HIGH-band EXT (0.45) / glove_react_max_speed
+										  # (5.0) ≈ 0.09 s to cover the reaction-gated reach. The live
+										  # value tracks the tier via set_goalie_profile.
 
 
 # Per-band reaction delay (legs fast, arms slow) — the difficulty-synced read

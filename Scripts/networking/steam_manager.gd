@@ -406,20 +406,20 @@ func reset_all_achievements() -> void:
 # Steam User Stats (integer). These are per-user career counters stored on
 # Steam's servers, synced across the player's machines — the mirror that backs
 # the career-threshold achievements without a reachable backend. SteamStatRecorder
-# owns the read-modify-write; this is the thin transport. Each `name` must be a
-# published INT stat in Steamworks, or get/set silently no-op.
-func get_stat_int(name: String) -> int:
-	if not is_available or name.is_empty():
+# owns the read-modify-write; this is the thin transport. Each `stat_name` must
+# be a published INT stat in Steamworks, or get/set silently no-op.
+func get_stat_int(stat_name: String) -> int:
+	if not is_available or stat_name.is_empty():
 		return 0
-	return Steam.getStatInt(name)
+	return Steam.getStatInt(stat_name)
 
 
 # Buffers a stat value locally; nothing persists until store_stats() flushes the
 # whole batch to Steam's servers.
-func set_stat_int(name: String, value: int) -> void:
-	if not is_available or name.is_empty():
+func set_stat_int(stat_name: String, value: int) -> void:
+	if not is_available or stat_name.is_empty():
 		return
-	Steam.setStatInt(name, value)
+	Steam.setStatInt(stat_name, value)
 
 
 # Flushes buffered stat/achievement writes to Steam. One call covers a batch of

@@ -4310,9 +4310,9 @@ func get_world_state() -> PackedByteArray:
 func _record_world_state_to_file(host_ts: float, data: PackedByteArray) -> void:
 	if _replay_file_writer == null or not _should_record_to_file():
 		return
-	var phase_changed: bool = _state_machine != null \
+	var phase_did_change: bool = _state_machine != null \
 			and _state_machine.current_phase != _last_recorded_phase
-	if not phase_changed \
+	if not phase_did_change \
 			and host_ts - _last_file_frame_ts < 1.0 / float(Constants.REPLAY_FILE_RATE):
 		return
 	_replay_file_writer.enqueue_frame(host_ts, data)

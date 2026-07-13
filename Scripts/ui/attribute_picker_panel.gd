@@ -417,6 +417,6 @@ func _default_preset_name() -> String:
 	return "Build %d" % (_working.size() + 1)
 
 
-func _display_name(name: String) -> String:
-	var trimmed: String = name.strip_edges()
+func _display_name(raw_name: String) -> String:
+	var trimmed: String = raw_name.strip_edges()
 	return trimmed if not trimmed.is_empty() else "(unnamed)"

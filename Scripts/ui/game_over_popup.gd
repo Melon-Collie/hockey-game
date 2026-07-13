@@ -105,26 +105,26 @@ func _build_top_block(root: Control) -> void:
 # [stripe] HOME  3   —   2  AWAY [stripe] — the scorebug's stripe language at
 # hero scale, so the final score reads in the same visual system as the game.
 func _build_score_row() -> Control:
-	var wrap := HBoxContainer.new()
-	wrap.alignment = BoxContainer.ALIGNMENT_CENTER
-	wrap.add_theme_constant_override("separation", 14)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
 
 	_home_stripe_style = _stripe_style()
-	wrap.add_child(_stripe(_home_stripe_style))
-	wrap.add_child(_lbl("HOME", 24, _WHITE))
+	row.add_child(_stripe(_home_stripe_style))
+	row.add_child(_lbl("HOME", 24, _WHITE))
 	_home_score_label = _lbl("0", 56, _WHITE)
-	wrap.add_child(_home_score_label)
+	row.add_child(_home_score_label)
 
 	var dash := _lbl("—", 30, _DIM)
 	dash.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	wrap.add_child(dash)
+	row.add_child(dash)
 
 	_away_score_label = _lbl("0", 56, _WHITE)
-	wrap.add_child(_away_score_label)
-	wrap.add_child(_lbl("AWAY", 24, _WHITE))
+	row.add_child(_away_score_label)
+	row.add_child(_lbl("AWAY", 24, _WHITE))
 	_away_stripe_style = _stripe_style()
-	wrap.add_child(_stripe(_away_stripe_style))
-	return wrap
+	row.add_child(_stripe(_away_stripe_style))
+	return row
 
 
 # Three star rows, typography straight on the scrim. Every row is anchored

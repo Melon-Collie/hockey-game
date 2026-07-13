@@ -37,7 +37,7 @@ class_name PuckReceptionRules
 static func should_receive(
 		puck_velocity: Vector3,
 		receiver_velocity: Vector3,
-		blade_face_normal: Vector3,
+		blade_normal: Vector3,
 		pickup_max_speed: float,
 		deflect_min_speed: float,
 		alignment_bonus: float) -> bool:
@@ -49,7 +49,7 @@ static func should_receive(
 	# from puck toward the blade; dot with the face normal = squareness. Negative
 	# (puck moving away from the face) clamps to 0, no bonus. relative_speed >
 	# pickup_max_speed here, so the normalize is safe.
-	var alignment: float = maxf(0.0, -relative_velocity.normalized().dot(blade_face_normal))
+	var alignment: float = maxf(0.0, -relative_velocity.normalized().dot(blade_normal))
 	var threshold: float = deflect_min_speed + alignment_bonus * alignment
 	return relative_speed < threshold
 

@@ -1135,23 +1135,23 @@ func set_active_preset(index: int) -> void:
 
 # Overwrite the build (and optionally the name) of an existing preset. If it is
 # the active preset the flat mirror is refreshed too.
-func save_preset(index: int, attrs: PlayerAttributes, name: String = "") -> void:
+func save_preset(index: int, attrs: PlayerAttributes, preset_name: String = "") -> void:
 	if attrs == null or index < 0 or index >= attr_presets.size():
 		return
 	attr_presets[index]["attrs"] = _copy_attrs(attrs)
-	if name != "":
-		attr_presets[index]["name"] = _sanitize_preset_name(name)
+	if preset_name != "":
+		attr_presets[index]["name"] = _sanitize_preset_name(preset_name)
 	if index == attr_active_preset:
 		_sync_flat_from_active()
 
 
 # Append a new preset (up to MAX_PRESETS). Defaults to a copy of the current
 # active build. Returns the new index, or -1 if the cap is reached.
-func add_preset(attrs: PlayerAttributes = null, name: String = "") -> int:
+func add_preset(attrs: PlayerAttributes = null, preset_name: String = "") -> int:
 	if attr_presets.size() >= MAX_PRESETS:
 		return -1
 	var a: PlayerAttributes = attrs if attrs != null else get_player_attributes()
-	var nm: String = name if name != "" else _default_preset_name()
+	var nm: String = preset_name if preset_name != "" else _default_preset_name()
 	attr_presets.append(_make_preset(nm, a))
 	return attr_presets.size() - 1
 
@@ -1223,8 +1223,8 @@ func _sync_flat_from_active() -> void:
 	attr_shot     = a.shot
 
 
-func _make_preset(name: String, attrs: PlayerAttributes) -> Dictionary:
-	return {"name": _sanitize_preset_name(name), "attrs": _copy_attrs(attrs)}
+func _make_preset(preset_name: String, attrs: PlayerAttributes) -> Dictionary:
+	return {"name": _sanitize_preset_name(preset_name), "attrs": _copy_attrs(attrs)}
 
 
 # Independent copy so a preset never shares a PlayerAttributes instance with a
@@ -1238,8 +1238,8 @@ func _default_preset_name() -> String:
 	return "Build %d" % (attr_presets.size() + 1)
 
 
-func _sanitize_preset_name(name: String) -> String:
-	var n: String = name.strip_edges()
+func _sanitize_preset_name(preset_name: String) -> String:
+	var n: String = preset_name.strip_edges()
 	if n.is_empty():
 		n = DEFAULT_PRESET_NAME
 	return n.substr(0, PRESET_NAME_MAX_LEN)
