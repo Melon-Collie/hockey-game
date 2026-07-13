@@ -295,6 +295,21 @@ var last_carry_anchor: Vector3 = Vector3.ZERO
 var dump_target: Vector3 = Vector3.INF
 var dump_is_soft: bool = false
 
+# ── Puck-protect mirror (read by the state machine's carry blade aim) ────────
+# Where in the blade's handling envelope the puck is safest right now, as an
+# OFFSET from the body (the state machine re-applies it to the live body
+# position each tick), and how covered the default presented-forward carry spot
+# is (0 = fully clear — keep the forward carry; 1 = covered — pull the puck
+# fully to the protected seam, body between puck and checker). Zeroed while
+# ctx.protects_the_puck is false (the naive-carry tier) and on possession loss.
+# Refreshed every _pick_action re-eval (~30 Hz); staleness between re-evals is
+# absorbed by the body-relative offset and the mouse motion smoothing.
+var protect_offset: Vector3 = Vector3.ZERO
+var protect_pressure: float = 0.0
+# The body-scale evasion seam from the same re-eval (world point) — the open
+# ice the poke-evade deke cuts toward. Vector3.INF until first computed.
+var evade_seam_world: Vector3 = Vector3.INF
+
 # ── Throttle ─────────────────────────────────────────────────────────────────
 var _pick_action_cooldown: int = 0
 # Physics ticks elapsed since the last _pick_action re-eval (accumulated per
@@ -395,6 +410,9 @@ func reset() -> void:
 	last_carry_anchor = Vector3.ZERO
 	dump_target = Vector3.INF
 	dump_is_soft = false
+	protect_offset = Vector3.ZERO
+	protect_pressure = 0.0
+	evade_seam_world = Vector3.INF
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
@@ -450,6 +468,26 @@ func _pick_action(ctx: RoleContext) -> void:
 			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
+
+	# Puck-protect read (see the mirror fields' doc): how covered the presented
+	# forward carry spot is over the evasion horizon, and where in the blade
+	# envelope alone the puck is safest. The state machine blends the carry
+	# mouse between the two by the pressure — pure stick work, steering and the
+	# carry destination are untouched.
+	evade_seam_world = evade_seam
+	if ctx.protects_the_puck:
+		var fwd_spot: Vector3 = _puck_pos_at(
+				self_pos + ctx.self_velocity * AIActionScoring.EVADE_HORIZON_S,
+				attacking_goal)
+		protect_pressure = 1.0 - AIActionScoring.clearance_to_safety(
+				AIActionScoring.reach_clearance(fwd_spot, AIActionScoring.EVADE_HORIZON_S,
+						_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+		protect_offset = AIActionScoring.best_handle_protect_point(
+				self_pos, ctx.self_velocity, _scratch_opponents,
+				_scratch_opponent_vels, ctx.self_handle_reach, _scratch_opponent_caps)
+	else:
+		protect_pressure = 0.0
+		protect_offset = Vector3.ZERO
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
 	# Reused scratch buffer; receivers only read from it.

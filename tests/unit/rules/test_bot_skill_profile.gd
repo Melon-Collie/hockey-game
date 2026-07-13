@@ -155,6 +155,18 @@ func test_dispatch_period_is_at_least_one_tick() -> void:
 		assert_gte(profile.dispatch_period_ticks, 1)
 
 
+func test_puck_protection_is_tiered() -> void:
+	# Shielding the puck with the body is a taught fundamental: Hard and Normal
+	# protect (blade to the seam under pressure, seam-directed deke); Easy
+	# carries naively presented in front so a newcomer's poke-check works.
+	assert_true(BotSkillProfile.hard().protects_the_puck,
+			"Hard shields the puck with its body")
+	assert_true(BotSkillProfile.normal().protects_the_puck,
+			"Normal shields the puck — a youth-hockey fundamental")
+	assert_false(BotSkillProfile.easy().protects_the_puck,
+			"Easy concedes the pickpocket by design")
+
+
 func test_rush_pass_lane_read_is_tiered() -> void:
 	# Playing the pass on an odd-man rush is youth-hockey fundamentals: Hard
 	# and Normal read it; Easy retreats on the carrier line so a newcomer's
