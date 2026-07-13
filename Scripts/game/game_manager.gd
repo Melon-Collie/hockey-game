@@ -1491,6 +1491,7 @@ func _wire_sound_signals() -> void:
 	NetworkManager.puck_strip_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_STRIP, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
 	NetworkManager.body_check_landed.connect(_on_body_check_landed)
+	NetworkManager.smart_ping_received.connect(_on_smart_ping_received)
 	NetworkManager.stick_lift_received.connect(
 		func(pos: Vector3) -> void:
 			SoundManager.play_world(SoundManager.Sound.STICK_LIFT, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06)
@@ -2500,6 +2501,14 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 				snap.skater_states, ids, puck_pos, puck_vel,
 				_prev_chase_by_team.get(team_id, -1), _registry.caps_by_peer,
 				puck_playable)
+		# Smart-ping GET_PUCK: a live retrieval order replaces the natural
+		# election for its duration — the ordered bot chases (the state
+		# machine's decline gates are bypassed for it too) and nobody else
+		# doubles up on the puck.
+		if puck_playable and team_id >= 0 and team_id < team_brains.size():
+			var pinged_chaser: int = team_brains[team_id].ping_chase_peer()
+			if pinged_chaser != -1 and ids.has(pinged_chaser):
+				best_pid = pinged_chaser
 		_prev_chase_by_team[team_id] = best_pid
 		snap.closest_to_puck_by_team[team_id] = best_pid
 
@@ -4535,6 +4544,99 @@ func get_players() -> Dictionary[int, PlayerRecord]:
 		var empty: Dictionary[int, PlayerRecord] = {}
 		return empty
 	return _registry.all()
+
+
+# ── Smart ping (context-sensitive team message) ──────────────────────────────
+# HUD input → try_send_smart_ping resolves the local cursor context
+# (PingRules.resolve on the pinger's rendered world) and hands the tiny
+# resolved payload to NetworkManager's vote-shaped relay. Every peer's
+# smart_ping_received then lands in _on_smart_ping_received: teammates see
+# the bubble / marker, and the host routes the bot directive into the
+# pinger's TeamBrain.
+
+func try_send_smart_ping() -> void:
+	if NetworkManager.is_replay_mode() or is_local_spectator():
+		return
+	var rec: PlayerRecord = get_local_player()
+	if rec == null or rec.skater == null:
+		return
+	var lc := rec.controller as LocalController
+	if lc == null:
+		return
+	var input: InputState = lc.get_current_input()
+	if input == null:
+		return
+	var my_team: int = _registry.team_id_by_peer.get(rec.peer_id, -1)
+	if my_team == -1:
+		return
+	var res: PingRules.Resolution = PingRules.resolve(
+			input.mouse_world_pos, rec.peer_id, my_team,
+			_collect_skater_positions(), _registry.team_id_by_peer,
+			puck_controller.get_carrier_peer_id() if puck_controller != null else -1,
+			puck.global_position if puck != null else Vector3.ZERO)
+	if res == null:
+		return
+	NetworkManager.send_smart_ping(res.type, res.target_peer, res.world_pos)
+
+
+func _on_smart_ping_received(sender_peer_id: int, ping_type: int,
+		target_peer_id: int, world_pos: Vector3) -> void:
+	if _registry == null or not PingRules.is_valid_type(ping_type):
+		return
+	var sender_team: int = _registry.team_id_by_peer.get(sender_peer_id, -1)
+	if sender_team == -1:
+		return  # unknown / spectator sender — nothing to show or obey
+
+	# Display is team-only: a ping is a team message, and hiding it from the
+	# opponents keeps "Pass to me!" from telegraphing the play.
+	var local_team: int = _registry.team_id_by_peer.get(NetworkManager.local_peer_id(), -1)
+	if local_team == sender_team and not NetworkManager.is_replay_mode():
+		if ping_type == PingRules.Type.GO_THERE:
+			_spawn_ping_marker(world_pos, PingRules.message_for(ping_type))
+		else:
+			var sender_rec: PlayerRecord = _registry.get_record(sender_peer_id)
+			if sender_rec != null and sender_rec.skater != null:
+				sender_rec.skater.show_ping_bubble(PingRules.message_for(ping_type))
+		SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
+
+	# Bot obedience is host-only (bots are host-simulated; offline free play
+	# runs the full host path, so this covers solo too).
+	if not NetworkManager.is_host or team_brains.is_empty():
+		return
+	if sender_team < 0 or sender_team >= team_brains.size():
+		return
+	var positions: Dictionary = _collect_skater_positions()
+	var bot_peers: Array = []
+	var players: Dictionary[int, PlayerRecord] = get_players()
+	for pid: int in players:
+		if players[pid].is_bot \
+				and _registry.team_id_by_peer.get(pid, -1) == sender_team:
+			bot_peers.append(pid)
+	var carrier_pid: int = puck_controller.get_carrier_peer_id() \
+			if puck_controller != null else -1
+	var obeyer: int = PingRules.choose_obeyer(
+			ping_type, target_peer_id, world_pos, sender_peer_id, carrier_pid,
+			puck.global_position if puck != null else Vector3.ZERO,
+			bot_peers, positions)
+	team_brains[sender_team].apply_ping(
+			ping_type, sender_peer_id, target_peer_id, obeyer, world_pos)
+
+
+func _collect_skater_positions() -> Dictionary:
+	var positions: Dictionary = {}
+	var players: Dictionary[int, PlayerRecord] = get_players()
+	for pid: int in players:
+		var r: PlayerRecord = players[pid]
+		if r.skater != null:
+			positions[pid] = r.skater.global_position
+	return positions
+
+
+func _spawn_ping_marker(pos: Vector3, text: String) -> void:
+	var scene_root: Node = get_tree().current_scene
+	if scene_root == null:
+		return
+	scene_root.add_child(PingMarker.create(pos, text))
 
 
 func get_period_duration() -> float:

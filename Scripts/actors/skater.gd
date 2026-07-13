@@ -1541,6 +1541,11 @@ func set_player_name(p_name: String) -> void:
 	_hud.set_player_name(p_name)
 
 
+# Smart-ping chat bubble above this skater's head (see SkaterHUDCoordinator).
+func show_ping_bubble(text: String) -> void:
+	_hud.show_ping_bubble(text)
+
+
 func set_ring_relation_resolver(resolver: Callable) -> void:
 	_hud.set_ring_relation_resolver(resolver)
 

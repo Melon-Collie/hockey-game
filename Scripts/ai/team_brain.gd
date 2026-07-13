@@ -34,6 +34,11 @@ const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
 var state: int = AIPossessionState.State.DZONE
+# Live smart-ping directives for this team's bots (host-only AI bookkeeping,
+# same shape as _one_timer_ready_by_peer). GameManager routes a validated
+# ping in via apply_ping; slot/threat overrides land in _compute_tick and the
+# per-bot queries are read through RoleContext every AI dispatch.
+var ping_directives := AIPingDirectives.new()
 var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Slot
 # Central man-on-threat partition: backline defender peer_id -> the opponent
 # (carrier's receiver) it should cover. Computed per tick in defensive states
@@ -77,6 +82,9 @@ func _init(t: int, team_id_by_peer: Dictionary, caps_by_peer: Dictionary = {}) -
 # unless `_force_tick_pending` was set by force_retick() — then this tick
 # computes regardless of the accumulator.
 func tick(delta: float, snapshot: WorldSnapshot) -> void:
+	# Ping directives age in real host time, not brain-tick time — advance
+	# before the rate-limit gate so expiry never stretches with the cadence.
+	ping_directives.advance(delta)
 	_accumulator += delta
 	if _accumulator < TICK_PERIOD and not _force_tick_pending:
 		return
@@ -154,6 +162,14 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#    fresh. Excluded peers are already absent from slot_assignments, so
 	#    they're never picked as defenders here.
 	threat_assignments = _compute_threat_assignments(snapshot, threat_assignments)
+
+	# 5. Smart-ping obedience: force-slot the obeying bots (COVER_HIM also
+	#    pins its man into the threat partition, the house-pin shape). Applied
+	#    last so a live human order wins over the geometric assignment.
+	var ping_carrier: int = -1
+	if snapshot != null and snapshot.puck_state != null:
+		ping_carrier = snapshot.puck_state.carrier_peer_id
+	ping_directives.apply_overrides(slot_assignments, threat_assignments, ping_carrier)
 
 
 # Builds the backline man-on-threat partition for the current tick. Defensive
@@ -292,6 +308,35 @@ func set_one_timer_ready(peer_id: int, ready: bool) -> void:
 
 func is_one_timer_ready(peer_id: int) -> bool:
 	return _one_timer_ready_by_peer.get(peer_id, false)
+
+
+# ── Smart-ping directives ───────────────────────────────────────────────────
+# GameManager (host) routes a validated smart ping here; the slot/threat
+# overrides apply on the next brain tick (force_retick makes that the next
+# physics frame) and the per-bot queries below are read every AI dispatch
+# via RoleContext, so obedience is frame-tight while the directive lives.
+
+func apply_ping(type: int, pinger_peer: int, target_peer: int,
+		obeyer_peer: int, world_pos: Vector3) -> void:
+	ping_directives.add(type, pinger_peer, target_peer, obeyer_peer,
+			world_pos, PingRules.directive_duration_s(type))
+	force_retick()
+
+
+func ping_move_target(peer_id: int) -> Vector3:
+	return ping_directives.move_target_for(peer_id)
+
+
+func ping_chase_peer() -> int:
+	return ping_directives.chase_peer()
+
+
+func ping_shoot(peer_id: int) -> bool:
+	return ping_directives.shoot_ping_for(peer_id)
+
+
+func ping_pass_target(peer_id: int) -> int:
+	return ping_directives.pass_target_for(peer_id)
 
 
 # Computes the world-space anchor for a given peer's current slot.

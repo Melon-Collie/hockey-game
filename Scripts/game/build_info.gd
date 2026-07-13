@@ -84,7 +84,11 @@ const VERSION: String = "dev"
 # v21: notify_goalie_freeze_called RPC (NHL goalie cover whistle).
 # v22: notify_team_colors RPC — the unified-Play lobby's host-picked palettes
 #     for humanless teams replicate to clients' lobby previews.
-const PROTOCOL_VERSION: int = 22
+# v23: smart-ping RPCs (request_smart_ping / notify_smart_ping) — the
+#     context-sensitive team message + bot-directive broadcast. New @rpc
+#     methods shift the name-sorted RPC indices (see v14), so a bump is
+#     required even though existing wire formats are unchanged.
+const PROTOCOL_VERSION: int = 23
 
 
 func _ready() -> void:

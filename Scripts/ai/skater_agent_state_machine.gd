@@ -1324,6 +1324,14 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# fallback (AIRoleAnchorFollow) just steers to the brain anchor.
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		var decision: RoleDecision = _dispatch_role_decision(ctx)
+		# Smart-ping GO_THERE override: a live location order from a human
+		# teammate replaces the role's move target for its duration. The role
+		# keeps supplying aim / lift / one-timer readiness — only the skating
+		# destination is commandeered (and a check commit is stood down; the
+		# order says go THERE, not through someone).
+		if ctx.ping_move_target.is_finite():
+			decision.target_position = _clamp_anchor(ctx.ping_move_target)
+			decision.commit_check = false
 		# Station-keeping: arrive AT the role destination (arrival brake)
 		# instead of overshooting a spot that stopped moving — EXCEPT on a
 		# body-check commit (wants maximum closing velocity through the
@@ -1458,12 +1466,21 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
 		ctx.strong_x = _team_brain.strong_x()
 		ctx.assigned_threat_peer = _team_brain.assigned_threat(_peer_id)
+		# Live smart-ping directives on this bot (see AIPingDirectives). The
+		# reused ctx instance must be re-stamped every build — a stale ping
+		# field would keep obeying an expired order.
+		ctx.ping_move_target = _team_brain.ping_move_target(_peer_id)
+		ctx.ping_shoot_active = _team_brain.ping_shoot(_peer_id)
+		ctx.ping_pass_target_peer = _team_brain.ping_pass_target(_peer_id)
 	else:
 		ctx.anchor = self_pos
 		# Match RoleContext.new()'s default when no brain is wired (tests),
 		# since the reused instance would otherwise carry a stale value.
 		ctx.strong_x = 1.0
 		ctx.assigned_threat_peer = -1
+		ctx.ping_move_target = Vector3.INF
+		ctx.ping_shoot_active = false
+		ctx.ping_pass_target_peer = -1
 	return ctx
 
 
@@ -3923,6 +3940,12 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 		return false
 	if snapshot.puck_state.carrier_peer_id != -1:
 		return false  # someone has the puck
+	# Smart-ping GET_PUCK: an ordered bot chases regardless of the natural
+	# election and the race-lost decline below — an order is an order (the
+	# election override in GameManager._enrich_snapshot_for_ai keeps a second
+	# natural chaser from doubling up).
+	if _team_brain != null and _team_brain.ping_chase_peer() == _peer_id:
+		return true
 	if not _is_closest_teammate_to_puck_at(snapshot, self_pos):
 		return false
 	# A race an opponent has already won isn't worth running: pushing after a

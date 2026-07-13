@@ -114,6 +114,11 @@ signal shot_sound_received(position: Vector3, is_slapper: bool)
 # relying on each client's non-authoritative local collision detection.
 # `force` is the VFX-scale impact force.
 signal body_check_landed(hitter_peer_id: int, victim_peer_id: int, force: float, hit_dir: Vector3)
+# Smart ping (context-sensitive team message). Fired on every peer (host
+# self-emits) with the sender's resolved ping; GameManager filters display to
+# the sender's team and — host-only — routes the bot directive. `ping_type`
+# is PingRules.Type; `target_peer_id` / `world_pos` meaning depends on it.
+signal smart_ping_received(sender_peer_id: int, ping_type: int, target_peer_id: int, world_pos: Vector3)
 signal input_batch_received(peer_id: int, inputs: Array[InputState])
 # Mid-game player → spectator transition. Host broadcasts to all peers; every
 # receiver despawns the demoted peer's skater locally (registry.remove handles
@@ -2255,3 +2260,61 @@ func send_spectator_demoted_to_all(peer_id: int) -> void:
 @rpc("authority", "reliable")
 func notify_spectator_demoted(peer_id: int) -> void:
 	spectator_demoted_received.emit(peer_id)
+
+# ── Smart ping (context-sensitive team message) ──────────────────────────────
+# Vote-shaped relay: a client sends its resolved ping to the host, the host
+# validates (type range + per-peer cooldown) and fans out to ALL peers
+# including the sender, then self-emits — so offline / free play degrades to
+# the local emit (connected_peer_ids() is empty) and bots still obey.
+# Reliable: a ping is a discrete message; a dropped one is a lost order.
+# Display filtering (team-only) and bot directives live in GameManager.
+
+var _last_smart_ping_ms: Dictionary = {}   # peer_id -> Time.get_ticks_msec()
+
+
+func send_smart_ping(ping_type: int, target_peer_id: int, world_pos: Vector3) -> void:
+	if is_host:
+		var pid: int = local_peer_id()
+		if not _smart_ping_allowed(pid) or not PingRules.is_valid_type(ping_type):
+			return
+		for remote_id: int in connected_peer_ids():
+			notify_smart_ping.rpc_id(remote_id, pid, ping_type, target_peer_id, world_pos)
+		smart_ping_received.emit(pid, ping_type, target_peer_id, world_pos)
+	else:
+		# Client-side cooldown mirror so a spammed key doesn't even hit the wire;
+		# the host re-checks against its own clock regardless.
+		if not _smart_ping_allowed(local_peer_id()):
+			return
+		request_smart_ping.rpc_id(1, ping_type, target_peer_id, world_pos)
+
+
+@rpc("any_peer", "reliable")
+func request_smart_ping(ping_type: int, target_peer_id: int, world_pos: Vector3) -> void:
+	if not is_host:
+		return
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not _smart_ping_allowed(peer_id) or not PingRules.is_valid_type(ping_type):
+		return
+	for remote_id: int in connected_peer_ids():
+		notify_smart_ping.rpc_id(remote_id, peer_id, ping_type, target_peer_id, world_pos)
+	smart_ping_received.emit(peer_id, ping_type, target_peer_id, world_pos)
+
+
+@rpc("authority", "reliable")
+func notify_smart_ping(sender_peer_id: int, ping_type: int,
+		target_peer_id: int, world_pos: Vector3) -> void:
+	NetworkSimManager.send(
+			func(pid: int, t: int, tgt: int, pos: Vector3) -> void:
+				smart_ping_received.emit(pid, t, tgt, pos),
+			[sender_peer_id, ping_type, target_peer_id, world_pos], true)
+
+
+# Per-peer anti-spam gate; passing records the attempt. Wall clock is fine
+# here — pings are cosmetic-plus-directive events, not simulation inputs.
+func _smart_ping_allowed(peer_id: int) -> bool:
+	var now_ms: int = Time.get_ticks_msec()
+	var last_ms: int = _last_smart_ping_ms.get(peer_id, -(1 << 30))
+	if now_ms - last_ms < int(PingRules.COOLDOWN_S * 1000.0):
+		return false
+	_last_smart_ping_ms[peer_id] = now_ms
+	return true

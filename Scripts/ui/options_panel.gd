@@ -102,6 +102,7 @@ const _REBINDABLE_ACTIONS: Array = [
 	{"action": "elevation_up",   "label": "Elevation Up"},
 	{"action": "elevation_down", "label": "Elevation Down"},
 	{"action": "stick_lift",     "label": "Deflect / Lift"},
+	{"action": "smart_ping",     "label": "Smart Ping"},
 ]
 
 func _ready() -> void:
