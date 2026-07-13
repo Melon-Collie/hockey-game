@@ -50,9 +50,9 @@ const RINK_Z_INSET: float = 1.0
 # ends up at whatever angle the mouse happened to be at.
 #
 # AIM_CONVERGED_DIST_M is the distance threshold treated as
-# "converged" — historically had to clear the per-tick step plus
-# MOUSE_NOISE_STD_M so the bot didn't oscillate just inside the
-# threshold. At perfect-bot settings (MAX_SPEED = 100, NOISE = 0)
+# "converged" — historically had to clear the per-tick step plus the
+# old per-tick cursor noise so the bot didn't oscillate just inside
+# the threshold. At perfect-bot settings (MAX_SPEED = 100, no noise)
 # convergence is near-instant; 0.15 stays as a small slop budget for
 # moving aim targets (receiver leads, goalie shadow drift).
 #
@@ -91,10 +91,12 @@ const AIM_COMMIT_CONE_MARGIN_RAD: float = deg_to_rad(25.0)
 # to converge before the bail fires regardless of difficulty.
 const INTENT_MAX_WAIT_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~500 ms
 var _intent_max_wait_ticks: int = INTENT_MAX_WAIT_TICKS
-# Aim wobble is per-tick output-cursor noise (see _active_aim_noise_m /
-# the MOUSE_NOISE_STD_M block below), split shot-vs-pass per difficulty
-# tier via BotSkillProfile.shot_aim_noise_m / pass_aim_noise_m. (An older
-# per-commit lateral-nudge wobble system was removed during tuning.)
+# Execution error is a PER-RELEASE sample (see _sample_aim_error_rad /
+# the aim-error block below), split shot-vs-pass per difficulty tier via
+# BotSkillProfile.shot_aim_error_m / pass_aim_error_m. (Two older systems —
+# per-tick output-cursor white noise, and a per-commit lateral-nudge wobble —
+# were removed: the noise read as stick jitter, especially at the wobblier
+# lower tiers.)
 # Goalie shadow half-width on the net plane lives on
 # AIActionScoring.GOALIE_SHADOW_HALF_M (single source).
 # After a puck-engagement event (we got stripped, or we just stripped
@@ -289,6 +291,23 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
 const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
 const STICKHANDLE_OFFSET_MAX_M: float = 0.8
+
+# Natural carry sway: a smooth lateral oscillation of the carry cursor —
+# the rhythmic side-to-side dangle a human carrier keeps going — layered
+# under the threat-driven stickhandle offset above. Amplitude is the
+# per-tier BotSkillProfile.carry_sway_m (0 for raw test agents, so they
+# stay bit-deterministic); rhythm and depth wander per cycle via the
+# per-bot RNG so no two bots (or two cycles) sway in sync. Feel-only:
+# lives in _carry_mouse_aim (CARRY deliberation), so the blade steadies
+# the moment the bot pre-aims a release — a readable "shot coming" tell,
+# like a real shooter settling the puck. Frequency band is a relaxed
+# human dangle cadence (~1 tap/s to ~1.6 taps/s).
+const CARRY_SWAY_FREQ_MIN_HZ: float = 0.9
+const CARRY_SWAY_FREQ_MAX_HZ: float = 1.6
+# Per-cycle amplitude wander floor (fraction of carry_sway_m) and how fast
+# the eased amplitude chases its resampled target (per second).
+const CARRY_SWAY_AMP_FRAC_MIN: float = 0.35
+const CARRY_SWAY_AMP_EASE_PER_S: float = 3.0
 
 # Poke-evade lateral cut. Layered on top of the continuous defender-
 # avoidance forces (carrier-weight opp repel in steering, sum-of-
@@ -506,13 +525,12 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 
 # ── Unified mouse motion ─────────────────────────────────────────────────────
 # Every state's `input.mouse_world_pos` goes through `_step_mouse_toward`,
-# which simulates a real player's mouse motion with a max speed and
-# small per-tick noise. This replaces a pile of per-state smoothing
-# (smoothed aim direction, ik_gate clamp, smoothed stickhandle
-# offset, etc.) with one consistent model:
+# which simulates a real player's mouse motion with a max speed. This
+# replaces a pile of per-state smoothing (smoothed aim direction, ik_gate
+# clamp, smoothed stickhandle offset, etc.) with one consistent model:
 #
 #   target → "where the mouse would be if you moved toward it for
-#             one frame, capped at MOUSE_MAX_SPEED_M_S, with noise"
+#             one frame, capped at MOUSE_MAX_SPEED_M_S"
 #
 # Pinned for the "perfect bot" baseline:
 #   MOUSE_MAX_SPEED_M_S = 100 — effectively uncapped; the mouse can
@@ -522,34 +540,54 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 #     5-20 m/s range (e.g. 15 lets a 6 m anchor flip resolve in
 #     0.4 s, slow enough that per-tick target oscillations average
 #     out); raising this here trades organic look for accuracy.
-#   MOUSE_NOISE_STD_M = 0 — the RAW default stays zero so a bare state
-#     machine (unit tests, replay tooling) is bit-deterministic. LIVE bots
-#     get the per-tier noise pair via apply_profile(): the hand isn't a rail,
-#     and deterministic corner snipes turned every slightly-off release line
-#     into the SAME post clank every time. With noise, the identical
-#     attempt spreads into goals, saves, and misses — the honest
-#     distribution when picking a corner. (Uniform ± metres on the output
-#     cursor, non-accumulating; 0.02 m ≈ 0.6° on the 2 m aim arm. The SHOT
-#     noise is calibrated with the entry-clamp inset the aim model reserves
-#     for it, and the same spread is what the SCORE demands as extra window
-#     (RoleContext.self_aim_spread_rad → the fit inset in _hole_open_angle);
-#     see _active_aim_noise_m / _hole_aim_x.)
 #
 # MOUSE_MAX_SPEED_M_S is now the perfect-bot DEFAULT / back-compat fallback;
 # the effective per-agent cap (_mouse_max_speed_m_s) is set from
 # BotSkillProfile in apply_profile().
 const MOUSE_MAX_SPEED_M_S: float = 100.0
 var _mouse_max_speed_m_s: float = MOUSE_MAX_SPEED_M_S
-const MOUSE_NOISE_STD_M: float = 0.0
-# Live-bot aim noise (m, uniform ± on the output cursor), split by release
-# type — SHOT releases wobble on their own (larger, per-difficulty) budget,
-# everything else (passes, carry deliberation, off-puck blade work) uses the
-# general hand noise. Values come from BotSkillProfile via apply_profile so
-# raw test-constructed agents stay deterministic (both default 0). The one
-# RNG lever in the bot: execution wobble on the hands, not decision dice.
-# Selection between the two is _active_aim_noise_m().
-var _shot_aim_noise_m: float = MOUSE_NOISE_STD_M
-var _pass_aim_noise_m: float = MOUSE_NOISE_STD_M
+# ── Per-release execution error ──────────────────────────────────────────────
+# Live-bot aim error (m on the 2 m aim arm, uniform ±), split by release type
+# — SHOT releases err on their own (larger, per-difficulty) budget, passes /
+# dumps on the smaller pass budget. ONE sample per release, drawn at press-
+# state entry (_set_state → _sample_aim_error_rad) and held constant through
+# the windup: the blade sweeps smoothly to a slightly-wrong spot — a human
+# who missed his spot, not a shaking hand. The release-tick error
+# distribution matches the old per-tick noise it replaced, so the SHOT error
+# is still calibrated with the entry-clamp inset the aim model reserves for
+# it, and the same spread is what the SCORE demands as extra window
+# (RoleContext.self_aim_spread_rad → the fit inset in _hole_open_angle).
+# Values come from BotSkillProfile via apply_profile so raw test-constructed
+# agents stay bit-deterministic (both default 0, and a zero budget never
+# advances the RNG). RNG on the hands, never decision dice.
+var _shot_aim_error_m: float = 0.0
+var _pass_aim_error_m: float = 0.0
+# The error sampled for the CURRENT committed release (radians on the aim
+# arm; + rotates the aim CCW around Y). Sampled on press-state entry, applied
+# to the press state's aim geometry, meaningless outside a press cycle.
+var _committed_aim_error_rad: float = 0.0
+# Motor timing variance on the SHOT release (max seconds late, from
+# BotSkillProfile.shot_timing_error_s). Each SHOOT_PRESSED entry samples a
+# hold in [0, max] ticks; the release fires that much after the charge
+# completes. The carrier's shot evals budget the EXPECTED lateness (max/2,
+# via RoleContext.shot_timing_error_s) into the goalie's tracking time, so
+# a shot is scored at its median release: windows around the hand's slop
+# are still attempted and the sampled delay decides them — an early draw
+# beats the push, a late one meets a square goalie. Deliberately NOT the
+# worst case, which would prune every thin window and read as the bot
+# swallowing the puck instead of going for the doorstep beat.
+var _shot_timing_error_s: float = 0.0
+var _shoot_release_hold_ticks: int = 0
+# Natural carry-sway amplitude (m, from BotSkillProfile.carry_sway_m; see the
+# CARRY_SWAY_* block) and its running oscillator state. Phase/rhythm advance
+# only while _carry_mouse_aim runs (CARRY deliberation); the tick stamp lets
+# the oscillator resume smoothly after any gap instead of jumping phase.
+var _carry_sway_m: float = 0.0
+var _sway_phase: float = 0.0
+var _sway_freq_hz: float = CARRY_SWAY_FREQ_MIN_HZ
+var _sway_amp_frac: float = 1.0
+var _sway_amp_target_frac: float = 1.0
+var _sway_prev_tick: int = 0
 # Bots run at the host physics rate (120 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
@@ -906,9 +944,10 @@ var _one_timer_press_tick: int = 0
 # press state (which computes its own fresh aim with wobble).
 var _locked_pre_aim_point: Vector3 = Vector3.INF
 
-# Per-bot RNG for mouse-motion noise. Seeded once in setup() from
-# peer_id and the host tick at spawn so each bot has its own
-# deterministic but distinct stream (replay-safe).
+# Per-bot RNG for hands-side execution sampling (per-release aim/timing
+# errors, carry-sway rhythm). Seeded once in setup() from peer_id and the
+# host tick at spawn so each bot has its own deterministic but distinct
+# stream (replay-safe).
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 # Decision-rate throttle. The full state-handler dispatch (role
@@ -1012,21 +1051,6 @@ var debug_carry_pos: Vector3 = Vector3.ZERO
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
-# True while the bot is aiming a committed SHOT (pre-aim or charge). In those
-# frames the cursor is already slew-smoothed by _step_mouse_aim; SkaterAgent's
-# second-stage exponential lerp on top makes the blade ring — a slow side-to-side
-# oscillation through the wind-up. The agent reads this to track the SM cursor
-# DIRECTLY during a shot (the SM slew still provides the humanizing lag), settling
-# the blade instead of wobbling. Passes keep the second-stage lerp (the back-pass
-# swing wants the extra softening). Convergence reads `_mouse_pos`, not the agent
-# output, so this never affects when a shot fires.
-func wants_direct_aim() -> bool:
-	if _state == State.SHOOT_PRESSED or _state == State.ONE_TIMER_PRESSED:
-		return true
-	# Pre-aiming a shot while still in CARRY (intent committed, not yet pressed).
-	return _intended_action == State.SHOOT_PRESSED
-
-
 # Apply this bot's attribute-scaled self-capabilities. Called by
 # AIController.apply_attributes (via SkaterAgent) on spawn and on every
 # free-play picker change, so the AI's model of its own reach / speed / shot
@@ -1127,11 +1151,20 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_angles_the_chase = profile.angles_the_chase
 	_plays_rush_pass_lanes = profile.plays_rush_pass_lanes
 	_protects_the_puck = profile.protects_the_puck
-	# Execution noise for LIVE bots (raw test agents stay deterministic):
-	# per-tier, split shot-vs-pass — the shot noise is the tier's scoring
-	# dial, the pass noise stays small so passes keep connecting.
-	_shot_aim_noise_m = profile.shot_aim_noise_m
-	_pass_aim_noise_m = profile.pass_aim_noise_m
+	# Execution error for LIVE bots (raw test agents stay deterministic):
+	# per-tier, split shot-vs-pass — the shot error is the tier's scoring
+	# dial, the pass error stays small so passes keep connecting. Timing
+	# error and carry sway are the other two hands-side humanisers.
+	_shot_aim_error_m = profile.shot_aim_error_m
+	_pass_aim_error_m = profile.pass_aim_error_m
+	_shot_timing_error_s = profile.shot_timing_error_s
+	_carry_sway_m = profile.carry_sway_m
+	if _carry_sway_m > 0.0:
+		# Desync the sway oscillator per bot (phase + first-cycle rhythm);
+		# gated so profile-less / zero-sway agents never advance the RNG.
+		_sway_phase = _rng.randf_range(0.0, TAU)
+		_sway_freq_hz = _rng.randf_range(CARRY_SWAY_FREQ_MIN_HZ, CARRY_SWAY_FREQ_MAX_HZ)
+		_sway_amp_target_frac = _rng.randf_range(CARRY_SWAY_AMP_FRAC_MIN, 1.0)
 
 
 # Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
@@ -1532,9 +1565,12 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
-	# The scoring/aim spread budgets the SHOT noise — that's the budget the
-	# release that matters (a scored shot) actually wobbles on.
-	ctx.self_aim_spread_rad = _shot_aim_noise_m / CARRY_BLADE_AIM_FORWARD_M
+	# The scoring/aim spread budgets the SHOT error — that's the budget the
+	# release that matters (a scored shot) is actually sampled on.
+	ctx.self_aim_spread_rad = _shot_aim_error_m / CARRY_BLADE_AIM_FORWARD_M
+	# The shot evals give the goalie this much extra tracking time — the
+	# release's own timing slop (see _shoot_release_hold_ticks).
+	ctx.shot_timing_error_s = _shot_timing_error_s
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
 	ctx.self_handle_reach = _self_handle_reach
@@ -1985,7 +2021,7 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 			perp_foot, _attacking_goal_pos, goalie_now,
 			GameRules.NET_HALF_WIDTH, _scratch_shot_opponents,
 			AIActionScoring.PASS_SPEED_M_S, 0.0, [], -1.0, false, 0.0, false,
-			_shot_aim_noise_m / CARRY_BLADE_AIM_FORWARD_M)
+			_shot_aim_error_m / CARRY_BLADE_AIM_FORWARD_M)
 	if shot_score < SHOT_RECEPTION_SCORE_GATE:
 		return _RECV_NONE
 	# Net-forward geometry. Anchor = the catch point pulled back one blade-reach
@@ -2598,6 +2634,11 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 				if _shot_aim_locked.is_finite()
 				else _shot_aim_point(snapshot, release_pos))
 		var aim_vec: Vector3 = Vector3(aim_point.x - release_pos.x, 0.0, aim_point.z - release_pos.z)
+		# This release's committed execution error (sampled at press entry):
+		# rotate the whole aim frame once, so the windup sweeps cleanly to a
+		# slightly-wrong spot and the release direction carries the error.
+		if _committed_aim_error_rad != 0.0:
+			aim_vec = aim_vec.rotated(Vector3.UP, _committed_aim_error_rad)
 		var aim_dir_init: Vector3 = aim_vec.normalized() if aim_vec.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
 		var aim_distance: float = aim_vec.length()
 		# aim_dir is captured once into the wind-up endpoint offsets below
@@ -2670,7 +2711,10 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# charge. The fields hold OFFSETS; world position = self_pos + lerp(offsets).
 	# Endpoints move with the bot, so charge accumulates at the intended
 	# per-tick rate regardless of locomotion speed during the wind-up.
-	var t: float = float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS)
+	# Clamped at 1: during the sampled late-release hold the blade sits at
+	# the aim target (a human hanging on the trigger a beat).
+	var t: float = minf(
+			float(_shoot_charge_tick) / float(BOT_WRISTER_CHARGE_TICKS), 1.0)
 	input.mouse_world_pos = _step_mouse_toward(self_pos + _shoot_wind_up_start.lerp(_shoot_aim_target, t))
 
 	# Synthesize mouse_screen_pos walking along the compensated aim direction
@@ -2687,8 +2731,13 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# scorer actually evaluated.
 	input.bot_wrister_power_t = _shot_power_committed
 
-	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS:
-		# Still charging — keep shoot_held high.
+	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS + _shoot_release_hold_ticks:
+		# Still charging (or hanging on the sampled late-release hold —
+		# the motor timing variance a human release carries). The shot
+		# was scored at the EXPECTED lateness, so a draw on the late half
+		# of the hold can genuinely lose the race it committed to — the
+		# goalie arrives square and robs him. That's the design: thin
+		# windows get attempted and convert only sometimes.
 		input.shoot_held = true
 		_shoot_charge_tick += 1
 	else:
@@ -2825,8 +2874,13 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
 	# Aim point is the receiver's lead — speed-aware via
 	# _pass_aim_point so a charged pass leads less than a quick-shot
-	# (puck arrives sooner, receiver covers less ground in flight).
-	var clean_pass_aim: Vector3 = _pass_aim_point(snapshot, self_pos)
+	# (puck arrives sooner, receiver covers less ground in flight) —
+	# rotated by this release's committed execution error (sampled at
+	# press entry on the pass budget; small enough that the magnet
+	# still corrals almost every feed, with the occasional honest one
+	# in the skates).
+	var clean_pass_aim: Vector3 = _apply_committed_aim_error(
+			self_pos, _pass_aim_point(snapshot, self_pos))
 
 	if not _pass_should_charge:
 		# ── Quick-shot pass: one-tick release ──
@@ -2951,8 +3005,11 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 		_apply_brake_steering(input, snapshot, self_pos)
 	# Mouse + facing stay locked on the open net for the entire
 	# wait — controller's apply_blade_from_mouse drives blade IK from
-	# this each tick.
-	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
+	# this each tick — rotated by this release's committed execution
+	# error (shot budget, sampled at press entry; constant through the
+	# wait so the blade holds one steady, slightly-wrong angle).
+	var clean_aim: Vector3 = _apply_committed_aim_error(
+			self_pos, _shot_aim_point(snapshot, self_pos, 0.0))
 	input.mouse_world_pos = _step_mouse_toward(clean_aim)
 	# A one-timer is a committed full release — the whole point of the pre-set
 	# stance. Set every tick through the release (the scratch InputState field
@@ -3413,8 +3470,14 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# motion smoothing across ticks. When two defenders converge from
 	# opposite sides and the raw target alternates per tick, the
 	# motion model averages them out (mouse oscillates within a small
-	# range bounded by the per-tick step).
-	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir)
+	# range bounded by the per-tick step). The natural sway rides
+	# underneath the threat response — a resting dangle rhythm, not a
+	# reaction (see the CARRY_SWAY_* block) — and is folded in BEFORE the
+	# protect blend below, so shielding pressure attenuates the dangle
+	# along with everything else: a blade pinned to the protect seam
+	# doesn't sway the puck back into the checker's reach.
+	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir) \
+			+ _carry_sway_offset(forward_dir)
 	# Puck protection (protects_the_puck tiers): as the presented-forward carry
 	# spot's reachable clearance collapses (carrier protect_pressure → 1), swing
 	# the blade toward the protected seam of the handling envelope — typically
@@ -3500,6 +3563,35 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 		lateral_force -= lateral_unit * ramp
 	var magnitude: float = clampf(lateral_force, -1.0, 1.0) * STICKHANDLE_OFFSET_MAX_M
 	return right_axis * magnitude
+
+
+# Natural carry sway: the smooth lateral dangle offset for this tick, perpendicular
+# to the carry forward axis. A slow sinusoid whose rhythm (frequency) and depth
+# (amplitude fraction) are resampled once per cycle from the per-bot RNG, with the
+# amplitude EASED toward its target — so the motion is a wandering human rhythm,
+# never a metronome and never a jitter. Advances by real elapsed ticks (the carry
+# handler only runs on full dispatches; skipped ticks are covered by the elapsed-
+# tick delta) and resumes phase-smoothly after any gap via the dt clamp. Zero
+# amplitude (raw test agents / unwired profiles) is a hard no-op: no RNG advance,
+# bit-deterministic baseline preserved. Runs at most once per carry dispatch —
+# trig on the stack, no allocation (hot-path safe).
+func _carry_sway_offset(forward_dir: Vector3) -> Vector3:
+	if _carry_sway_m == 0.0:
+		return Vector3.ZERO
+	var dt: float = clampf(
+			float(_agent_tick - _sway_prev_tick) * MOUSE_TICK_DELTA, 0.0, 0.1)
+	_sway_prev_tick = _agent_tick
+	_sway_phase += TAU * _sway_freq_hz * dt
+	if _sway_phase >= TAU:
+		_sway_phase = fmod(_sway_phase, TAU)
+		# New cycle, new rhythm: resample how fast and how wide this
+		# dangle cycle runs.
+		_sway_freq_hz = _rng.randf_range(CARRY_SWAY_FREQ_MIN_HZ, CARRY_SWAY_FREQ_MAX_HZ)
+		_sway_amp_target_frac = _rng.randf_range(CARRY_SWAY_AMP_FRAC_MIN, 1.0)
+	_sway_amp_frac = lerpf(_sway_amp_frac, _sway_amp_target_frac,
+			minf(CARRY_SWAY_AMP_EASE_PER_S * dt, 1.0))
+	var right_axis: Vector3 = Vector3(forward_dir.z, 0.0, -forward_dir.x)
+	return right_axis * (sin(_sway_phase) * _sway_amp_frac * _carry_sway_m)
 
 
 # Poke-evade cut. Overrides input.move_vector with a brief committed
@@ -3808,8 +3900,7 @@ var _mouse_pos_initialized: bool = false
 
 
 # Steps `_mouse_pos` toward `target` at MOUSE_MAX_SPEED_M_S, capped by
-# the tick budget. First call snaps to the target. Returns the result
-# with small per-tick noise for organic feel.
+# the tick budget. First call snaps to the target.
 #
 # Two entry points wrap the shared `_step_mouse_internal`:
 #
@@ -3873,17 +3964,41 @@ func _step_mouse_toward(target: Vector3) -> Vector3:
 	return _step_mouse_internal(target, _STEP_DIRECT, _mouse_max_speed_m_s, _mouse_arc_rate_rad_s)
 
 
-# The execution noise for THIS tick's output cursor: shot releases wobble on
-# the (larger, per-tier) shot budget, everything else on the general hand
-# noise. Selected by the press state first — the release tick samples this —
-# falling back to the committed intent so pre-aim converges under the same
-# budget it will release on. ONE_TIMER is a shot; PASS_PRESSED also fires the
-# DUMP (a location pass), which reads the pass budget by construction.
-func _active_aim_noise_m() -> float:
-	if _state == State.SHOOT_PRESSED or _state == State.ONE_TIMER_PRESSED \
-			or _intended_action == State.SHOOT_PRESSED:
-		return _shot_aim_noise_m
-	return _pass_aim_noise_m
+# Sample this release's execution error (radians on the aim arm) from the
+# given per-tier budget (m on the 2 m arm — same conversion the scoring
+# spread uses). Called once per press-state entry (_set_state); uniform ± so
+# the release-tick distribution matches the old per-tick noise the scoring
+# budget was calibrated against. Zero budget (raw test agents) returns 0
+# WITHOUT advancing the RNG, keeping the bare state machine bit-deterministic.
+func _sample_aim_error_rad(budget_m: float) -> float:
+	if budget_m == 0.0:
+		return 0.0
+	return _rng.randf_range(-1.0, 1.0) * budget_m / CARRY_BLADE_AIM_FORWARD_M
+
+
+# Sample this shot's late-release hold (ticks past the completed charge) from
+# the per-tier motor timing variance. Uniform in [0, max] — the eval budgeted
+# the MEAN (max/2) into the goalie's tracking time, so the score is the
+# median outcome and the two halves of this draw decide the thin windows:
+# below the mean beats the race the score priced, above it hands the goalie
+# more time than the score conceded and the shot can get robbed. Zero
+# variance (raw test agents / perfect baseline) returns 0 without advancing
+# the RNG.
+func _sample_release_hold_ticks() -> int:
+	if _shot_timing_error_s == 0.0:
+		return 0
+	return _rng.randi_range(
+			0, int(round(_shot_timing_error_s * _PhysicsConstants.PHYSICS_TICK)))
+
+
+# Rotate an aim point around `pivot` by the committed per-release error.
+# Applied to press-state aim geometry only — the error is a property of the
+# RELEASE gesture, not of tracking (which stays clean and smooth).
+func _apply_committed_aim_error(pivot: Vector3, aim_point: Vector3) -> Vector3:
+	if _committed_aim_error_rad == 0.0:
+		return aim_point
+	var offset: Vector3 = aim_point - pivot
+	return pivot + offset.rotated(Vector3.UP, _committed_aim_error_rad)
 
 
 func _step_mouse_internal(target: Vector3, mode: int,
@@ -3909,12 +4024,7 @@ func _step_mouse_internal(target: Vector3, mode: int,
 				_current_self_pos, target, _current_self_state)
 		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
-		var face_noise: float = _active_aim_noise_m()
-		if face_noise == 0.0:
-			return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
-		return Vector3(
-				_mouse_pos.x + _rng.randf_range(-1.0, 1.0) * face_noise, 0.0,
-				_mouse_pos.z + _rng.randf_range(-1.0, 1.0) * face_noise)
+		return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 	if not _mouse_pos_initialized:
 		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
@@ -3929,18 +4039,11 @@ func _step_mouse_internal(target: Vector3, mode: int,
 	else:
 		_mouse_pos.x = step_target.x
 		_mouse_pos.z = step_target.z
-	# Apply noise to OUTPUT only — _mouse_pos stays smooth, output
-	# adds organic per-tick wiggle (uniform [-NOISE, +NOISE] on each
-	# axis, budget selected shot-vs-pass by _active_aim_noise_m). Wiggle
-	# doesn't accumulate. Skip the two RNG advances entirely when noise is
-	# disabled (the raw test-agent baseline) — this runs at tick rate for
-	# every bot, including throttle-skipped ticks.
-	var noise: float = _active_aim_noise_m()
-	if noise == 0.0:
-		return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
-	var nx: float = _rng.randf_range(-1.0, 1.0) * noise
-	var nz: float = _rng.randf_range(-1.0, 1.0) * noise
-	return Vector3(_mouse_pos.x + nx, 0.0, _mouse_pos.z + nz)
+	# Output IS the smooth _mouse_pos — no per-tick noise. Execution
+	# imperfection lives in the per-release sampled aim error (press-state
+	# geometry) and the carry sway, both of which move the TARGET smoothly
+	# instead of shaking the cursor.
+	return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 
 
 # Returns a target position 2 m in front of the bot. Direction is
@@ -4326,12 +4429,22 @@ func _set_state(s: State) -> void:
 		# Wrister charge resets on every SHOOT_PRESSED entry — fresh
 		# sweep direction, fresh tick count. SkaterStateMachine seeds the
 		# charge tracker from the blade's current position at the entry edge.
+		# Every press entry also draws its execution samples HERE — one aim
+		# error per release (shot vs pass budget), plus the shot's
+		# late-release hold — so the whole windup commits to a single
+		# slightly-imperfect gesture instead of wobbling per tick.
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
+			_committed_aim_error_rad = _sample_aim_error_rad(_shot_aim_error_m)
+			_shoot_release_hold_ticks = _sample_release_hold_ticks()
 		if s == State.PASS_PRESSED:
 			_pass_charge_tick = 0
+			_committed_aim_error_rad = _sample_aim_error_rad(_pass_aim_error_m)
 		if s == State.ONE_TIMER_PRESSED:
 			_one_timer_press_tick = 0
+			# A one-timer is the worst-controlled release there is — it reads
+			# the SHOT budget (matching the reception gate's spread budget).
+			_committed_aim_error_rad = _sample_aim_error_rad(_shot_aim_error_m)
 		# Intent + wait counter reset on CARRY entry so a new puck
 		# pickup gets a fresh re-evaluation rather than inheriting
 		# stale state from a previous CARRY. _carrier.clear_intent()

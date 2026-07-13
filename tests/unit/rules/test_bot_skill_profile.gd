@@ -43,27 +43,33 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal reacts to possession changes later than Hard")
 	assert_gt(easy.carrier_reaction_delay_s, normal.carrier_reaction_delay_s,
 			"Easy reacts to possession changes later than Normal")
-	# (Aim slew is no longer a profile knob — it's the bot's real Hands blade speed.)
-	# Aim lerp: lower lags more.
-	assert_lt(normal.mouse_lerp_factor, hard.mouse_lerp_factor,
-			"Normal's aim lags more than Hard's")
-	assert_lt(easy.mouse_lerp_factor, normal.mouse_lerp_factor,
-			"Easy's aim lags more than Normal's")
+	# (Aim slew is no longer a profile knob — it's the bot's real Hands blade
+	# speed — and the old second-stage cursor lerp is gone entirely.)
 	# Dispatch cadence: more ticks re-decides less often.
 	assert_gt(normal.dispatch_period_ticks, hard.dispatch_period_ticks,
 			"Normal re-decides less often than Hard")
 	assert_gt(easy.dispatch_period_ticks, normal.dispatch_period_ticks,
 			"Easy re-decides less often than Normal")
-	# Shot wobble: bigger sprays the finish wider (the scoring dial).
-	assert_gt(normal.shot_aim_noise_m, hard.shot_aim_noise_m,
-			"Normal's shots wobble more than Hard's")
-	assert_gt(easy.shot_aim_noise_m, normal.shot_aim_noise_m,
-			"Easy's shots wobble more than Normal's")
-	# Pass wobble: softens too, but see the shot-vs-pass split test below.
-	assert_gt(normal.pass_aim_noise_m, hard.pass_aim_noise_m,
-			"Normal's hands wobble more than Hard's")
-	assert_gt(easy.pass_aim_noise_m, normal.pass_aim_noise_m,
-			"Easy's hands wobble more than Normal's")
+	# Shot aim error: bigger sprays the finish wider (the scoring dial).
+	assert_gt(normal.shot_aim_error_m, hard.shot_aim_error_m,
+			"Normal's shots miss their spot more than Hard's")
+	assert_gt(easy.shot_aim_error_m, normal.shot_aim_error_m,
+			"Easy's shots miss their spot more than Normal's")
+	# Pass aim error: softens too, but see the shot-vs-pass split test below.
+	assert_gt(normal.pass_aim_error_m, hard.pass_aim_error_m,
+			"Normal's passes err more than Hard's")
+	assert_gt(easy.pass_aim_error_m, normal.pass_aim_error_m,
+			"Easy's passes err more than Normal's")
+	# Release timing: a slower tier's hand is later off the intended tick.
+	assert_gt(normal.shot_timing_error_s, hard.shot_timing_error_s,
+			"Normal's release timing is sloppier than Hard's")
+	assert_gt(easy.shot_timing_error_s, normal.shot_timing_error_s,
+			"Easy's release timing is sloppier than Normal's")
+	# Carry sway: a lower tier's handle is visibly looser.
+	assert_gt(normal.carry_sway_m, hard.carry_sway_m,
+			"Normal's carry sways wider than Hard's")
+	assert_gt(easy.carry_sway_m, normal.carry_sway_m,
+			"Easy's carry sways wider than Normal's")
 	# Settle beat: longer holds the release later after a fresh possession.
 	assert_gt(normal.carry_settle_delay_s, hard.carry_settle_delay_s,
 			"Normal settles the puck before playing it, Hard doesn't")
@@ -74,11 +80,13 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal sags further off the carrier than Hard")
 	assert_gt(easy.pursuit_standoff_m, normal.pursuit_standoff_m,
 			"Easy sags further off the carrier than Normal")
-	# Pace — pass speed: lower moves the puck slower around the zone.
-	assert_lt(normal.pass_speed_scale, hard.pass_speed_scale,
-			"Normal moves the puck slower than Hard")
-	assert_lt(easy.pass_speed_scale, normal.pass_speed_scale,
-			"Easy moves the puck slower than Normal")
+	# Pace — pass speed: RETIRED at 1.0 for every tier. Scaling below 1.0
+	# under-delivered the solved receiver-relative arrival and passes died
+	# short of the tape (missed passes, not softer ones).
+	assert_eq(normal.pass_speed_scale, 1.0,
+			"Normal launches passes at the full solved pace")
+	assert_eq(easy.pass_speed_scale, 1.0,
+			"Easy launches passes at the full solved pace")
 	# Pace — check aggression: lower hunts fewer body checks.
 	assert_lt(normal.check_aggression, hard.check_aggression,
 			"Normal hunts fewer checks than Hard")
@@ -108,11 +116,16 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 	assert_eq(hard.pass_speed_scale, 1.0, "Hard moves the puck at full pace")
 	assert_eq(hard.check_aggression, 1.0, "Hard hunts checks as today")
 	assert_eq(hard.defensive_anticipation_scale, 1.0, "Hard anticipates as today")
-	# Same for the finish knobs: no settle beat and the pre-split flat wobble on
+	# Same for the finish knobs: no settle beat and the pre-split flat error on
 	# both release types, so Hard is byte-identical to the pre-knob bot.
 	assert_eq(hard.carry_settle_delay_s, 0.0, "Hard releases the tick the compete fires")
-	assert_eq(hard.shot_aim_noise_m, hard.pass_aim_noise_m,
-			"Hard keeps the pre-split flat wobble on both release types")
+	assert_eq(hard.shot_aim_error_m, hard.pass_aim_error_m,
+			"Hard keeps the pre-split flat error on both release types")
+	# Hard's humanisers are small but real — the whole point of the retune is
+	# that even the ceiling tier is no longer tick-and-corner perfect.
+	assert_gt(hard.shot_timing_error_s, 0.0,
+			"even Hard's release is not tick-perfect")
+	assert_gt(hard.carry_sway_m, 0.0, "even Hard's handle is alive")
 
 
 func test_cognition_gates_close_down_the_tiers() -> void:
@@ -139,19 +152,13 @@ func test_cognition_gates_close_down_the_tiers() -> void:
 	assert_false(easy.angles_the_chase, "Easy chases in a straight line")
 
 
-func test_pass_wobble_never_exceeds_shot_wobble() -> void:
+func test_pass_error_never_exceeds_shot_error() -> void:
 	# The split's whole point: completed passes are fun to play against, every
 	# shot going in is not — so a tier may never spray its passes harder than
 	# its shots.
 	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
-		assert_lte(profile.pass_aim_noise_m, profile.shot_aim_noise_m,
-				"pass wobble stays at or below shot wobble at every tier")
-
-
-func test_lerp_factors_stay_in_unit_range() -> void:
-	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
-		assert_gt(profile.mouse_lerp_factor, 0.0)
-		assert_lte(profile.mouse_lerp_factor, 1.0)
+		assert_lte(profile.pass_aim_error_m, profile.shot_aim_error_m,
+				"pass aim error stays at or below shot aim error at every tier")
 
 
 func test_dispatch_period_is_at_least_one_tick() -> void:
