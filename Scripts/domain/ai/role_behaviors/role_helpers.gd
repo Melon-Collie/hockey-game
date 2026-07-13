@@ -136,9 +136,15 @@ static func lead_threat(pos: Vector3, vel: Vector3, scale: float = 1.0) -> Vecto
 # ── Man-on-threat coverage ───────────────────────────────────────────────────
 
 # Slack on cover_man_target's goal-side filter: candidates may sit up to
-# this far up-ice of the man (roughly even with him) but no further.
-# Tight coverage must never trade the defensive side for lane denial — a
-# defender ahead of his man is one burst from being beaten to the net.
+# this far toward the play from the man (roughly even with him) but no
+# further. Tight coverage must never trade the defensive side for lane
+# denial — a defender ahead of his man is one burst from being beaten to
+# the net. Goal-side is measured along the man→our-net LINE (the same
+# projection the cover anchor and the threat partition use), not the Z
+# axis: for a man wide of the net or near the goal-line-extended, "behind
+# him in Z" and "between him and the net" point different ways, and the
+# Z reading let the marker legally park BESIDE his man, off the sealing
+# lane.
 const COVER_GOAL_SIDE_TOLERANCE_M: float = 0.5
 
 # Shared "cover this assigned man" target for the backline defenders
@@ -173,6 +179,18 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	var search_center: Vector3 = AIThreatAssignment.cover_anchor(man_pos, our_net)
 	var candidates: Array[Vector3] = generate_candidates_around(ctx.self_pos, search_center)
 
+	# Goal-side axis: the man→our-net direction. A candidate is goal-side
+	# when its projection onto this line from the man is positive (with the
+	# tolerance slack) — i.e. it sits between the man and the net he
+	# threatens, wherever on the ice that lane points.
+	var to_net_x: float = our_net.x - man_pos.x
+	var to_net_z: float = our_net.z - man_pos.z
+	var to_net_len: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
+	var has_lane: bool = to_net_len > 0.001
+	if has_lane:
+		to_net_x /= to_net_len
+		to_net_z /= to_net_len
+
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	# Fallback across candidates that failed ONLY the goal-side filter —
@@ -194,11 +212,12 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 				carrier_pos, man_pos, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, defenders)
 		var score: float = -threat
-		# Stay on the defensive side of the man (see
-		# COVER_GOAL_SIDE_TOLERANCE_M). own_goal_dir * z grows toward our
-		# net, so goal-side is the LARGER value.
-		if ctx.own_goal_dir * c.z \
-				>= ctx.own_goal_dir * man_pos.z - COVER_GOAL_SIDE_TOLERANCE_M:
+		# Stay on the defensive side of the man: positive projection onto
+		# the man→our-net line (see COVER_GOAL_SIDE_TOLERANCE_M). A man on
+		# the net (no lane) disables the filter — any spot is "in front".
+		var proj: float = (c.x - man_pos.x) * to_net_x + (c.z - man_pos.z) * to_net_z \
+				if has_lane else 0.0
+		if not has_lane or proj >= -COVER_GOAL_SIDE_TOLERANCE_M:
 			if score > best_score:
 				best_score = score
 				best_pos = c

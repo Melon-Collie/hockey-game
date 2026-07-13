@@ -166,6 +166,32 @@ func test_man_coverage_anticipates_a_moving_man() -> void:
 			"coverage leads the man's cut toward center; still=%f moved=%f" % [still_x, moved_x])
 
 
+func test_wide_man_coverage_stays_in_the_sealing_lane() -> void:
+	# Man wide near the goal-line-extended: "behind him in Z" and "between
+	# him and the net" point different ways. The old Z-axis goal-side test
+	# let the marker park BESIDE the man on the boards side (a spot that
+	# kills the cross-ice feed lane by standing past his tape, off the
+	# sealing lane) — one burst and he walks to the net. Goal-side is now
+	# the projection onto the man→our-net line, so wherever the argmax
+	# lands, it must be in front of him toward the net (tolerance slack
+	# aside), never past him toward the boards.
+	var carrier := Vector3(-6, 0, 18)
+	var man := Vector3(8, 0, 24)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(4, 0, 22), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier, Vector3.ZERO],
+		[210, 1 - TEAM_ID, man, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(4, 0, 22), skaters, 200)
+	ctx.assigned_threat_peer = 210
+	var target: Vector3 = AIRoleMark.decide(ctx).target_position
+	var to_net: Vector3 = (ctx.defending_goal_pos - man).normalized()
+	var proj: float = (target.x - man.x) * to_net.x + (target.z - man.z) * to_net.z
+	assert_gt(proj, -AIRoleHelpers.COVER_GOAL_SIDE_TOLERANCE_M - 0.01,
+			"coverage seals the man→net lane, not the space beside him;"
+			+ " got %s (lane projection %f)" % [target, proj])
+
+
 # ── Fallback: bail-out ─────────────────────────────────────────────────────
 
 func test_falls_back_to_self_pos_when_no_opps() -> void:
