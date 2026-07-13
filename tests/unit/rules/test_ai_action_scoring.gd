@@ -430,7 +430,7 @@ func test_shot_danger_down_goalie_slot_is_roofed_at_an_honest_pace() -> void:
 	# The butterfly's defining trade: DOWN, the goalie seals the ice and
 	# concedes the top band (his glove starts at pad height). The slot look
 	# roofs — and at the arrival-honest pace: soft enough that the arc
-	# genuinely arrives above the torso column, instead of the old full-power
+	# genuinely arrives above the pad-top seam, instead of the old full-power
 	# HIGH rip that crossed the line at belly height and smacked his chest.
 	var shooter := Vector3(0.0, 0.0, 21.65)
 	var goalie := Vector3(0.0, 0.0, 25.05)
@@ -537,7 +537,7 @@ func test_shot_danger_top_band_set_glove_shuts_it_down_goalie_concedes_it() -> v
 
 
 func test_high_band_is_unreachable_at_point_blank() -> void:
-	# The fixed-vy arc needs ~0.25 s to rise above the torso column; inside
+	# The fixed-vy arc needs ~0.25 s to rise above the pad-top seam; inside
 	# ~2.7 m even the min-power release arrives below it — no legal power
 	# roofs from the doorstep, so the loft never reads HIGH there (the old
 	# model happily "roofed" into the goalie's chest from 2 m).

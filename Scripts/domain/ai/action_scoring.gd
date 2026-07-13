@@ -100,7 +100,7 @@ const SLOT_RADIUS_M: float = 6.0
 # HIGH holes are ARRIVAL-HONEST: the loft is a fixed vertical launch speed, so
 # whether the arc physically reaches the top band at the net is a range × pace
 # fact. They're evaluated (and fired — best_shot_power_t) at the fastest pace
-# whose arc still arrives above the covered torso column, and zeroed where no
+# whose arc still arrives above the pad-top seam, and zeroed where no
 # legal power gets there — see the block at _high_band_horizontal_speed. A DOWN
 # goalie concedes the top band's arm extension (the butterfly's defining
 # trade); a standing set goalie's glove has the whole soft-arc flight to
@@ -151,7 +151,7 @@ const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to exte
 
 # ── HIGH-band arrival honesty ─────────────────────────────────────────────────
 # A HIGH hole is only a real target if the shot's arc physically ARRIVES above
-# the goalie's covered torso column. Loft is a FIXED vertical launch speed
+# the goalie's pad column. Loft is a FIXED vertical launch speed
 # (GameRules.DEFAULT_LOFT_VY_HIGH_M_S), so arrival height is pure kinematics of
 # range × pace: a full-power HIGH wrister from 5 m crosses the line at belly
 # height — a shot into the chest, not the top corner (exactly the "bots roof it
@@ -161,12 +161,12 @@ const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to exte
 # and zeroes them when no legal power reaches the band (point-blank, or so far
 # out the arc has sagged back below it). best_shot_power_t exposes the solved
 # pace so the bot fires the shot it actually scored.
+#
+# The band floor is the PAD-TOP SEAM (GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M
+# — the goalie's real 0.86 m pad/torso boundary, mirrored from his stance
+# anatomy): below it the shot is contested by the pad column the LOW band
+# models; above it by the torso + reaction-gated arms the HIGH band models.
 const GRAVITY_M_S2: float = 9.8   # engine default the airborne puck falls under
-# Band floor: the stance glove/shoulder line — the top of the always-covered
-# torso column (crouched goalie shoulders ≈ 0.85 m; crossbar 1.22, HIGH apex
-# ~1.10). A physical measurement, not a shape parameter: arrivals below it are
-# in the pad/torso zone the LOW/FIVE holes model, not "over the shoulder".
-const HIGH_BAND_ARRIVAL_MIN_HEIGHT_M: float = 0.85
 
 
 # The fastest HORIZONTAL pace whose HIGH-loft arc still arrives at/above the
@@ -176,7 +176,7 @@ const HIGH_BAND_ARRIVAL_MIN_HEIGHT_M: float = 0.85
 #   · at long range, every legal arc has fallen back below it.
 static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float) -> float:
 	var vy: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
-	var disc: float = vy * vy - 2.0 * GRAVITY_M_S2 * HIGH_BAND_ARRIVAL_MIN_HEIGHT_M
+	var disc: float = vy * vy - 2.0 * GRAVITY_M_S2 * GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M
 	if disc <= 0.0:
 		return 0.0  # the loft's apex sits below the band floor — no high shot exists
 	var root: float = sqrt(disc)

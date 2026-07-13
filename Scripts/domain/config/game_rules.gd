@@ -394,6 +394,14 @@ const DEFAULT_GOALIE_T_PUSH_SPEED_M_S: float = 3.8
 # AI predicts against the top-tier keeper like every other goalie constant
 # here). The ramp is the window a hard lateral cut in tight genuinely beats.
 const DEFAULT_GOALIE_LATERAL_ACCEL_M_S2: float = 14.0
+# The pad-top seam: the height where the goalie's coverage changes hands from
+# the leg pads to the torso + arms. Mirrors the stance anatomy in
+# GoalieBodyConfigBuilder (torso bottom "glued to the pad-top seam at 0.86" —
+# body centre 1.22 minus the 0.72 Goalie.tscn torso box's half-height; keep in
+# sync if that anatomy resizes). AIActionScoring's hole model uses it as the
+# HIGH band's arrival floor: a lofted shot is only an over-the-pads target if
+# its arc physically crosses the net line above this seam.
+const DEFAULT_GOALIE_PAD_TOP_SEAM_M: float = 0.86
 
 # ── Players ───────────────────────────────────────────────────────────────────
 const MAX_PLAYERS: int = 6  # 3v3
