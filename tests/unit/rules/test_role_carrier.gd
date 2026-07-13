@@ -1851,3 +1851,28 @@ func test_protect_read_is_gated_by_the_cognition_tier() -> void:
 	c.decide(ctx)
 	assert_eq(c.protect_pressure, 0.0, "the beginner tier never shields")
 	assert_eq(c.protect_offset, Vector3.ZERO, "no protect offset on the beginner tier")
+
+
+# ─── OZ possession retention: cycle out instead of crashing the net ──────────
+
+func test_covered_oz_carrier_cycles_out_instead_of_crashing() -> void:
+	# Sharp-angle corner carrier, goalie set and sealing the angle, a defender
+	# boxing out between him and the net: every shot in reach reads ~0. The
+	# possession-retention floor (OZ_POSSESSION_VALUE) makes safe ice the
+	# gradient — the carrier pulls up and out of the sealed corner with the
+	# puck instead of grinding a worthless drive into the crease, and never
+	# fires a giveaway.
+	var net := Vector3(0.0, 0.0, OPP_NET_Z)
+	var self_pos := Vector3(9.0, 0.0, -24.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(7.5, 0.0, -24.8)],   # boxing out the net-side path
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"nothing worth firing — keep possession")
+	assert_gt(c.last_carry_anchor.z, self_pos.z + 1.0,
+			"the carry pulls up out of the sealed corner (cycle), not into the crease")

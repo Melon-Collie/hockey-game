@@ -45,6 +45,21 @@ const INTENT_DUMP: int = 5
 # of them are worth the puck. A real in-range shot scores far above it.
 const FIRE_MIN_VALUE: float = 0.02
 
+# Standing value of KEEPING an established offensive-zone possession — what
+# cycling the puck is worth when no shot exists right now. The OZ regime
+# prices candidates by real shot danger alone (xG is the best read of a spot),
+# but a possession's value isn't only the shot available THIS instant: held
+# OZ possession keeps generating chances as the defense shifts (league xG per
+# sustained offensive-zone possession is a few hundredths — this is that
+# order, a statistical measurement, not a shape). Floored under the shot
+# branch for MOVEMENT candidates and receiver evals (never stand-still, so
+# ties keep resolving toward movement and fire — no corner camping): with
+# every shot covered, the compete's gradient becomes safety × delay-decay ×
+# turnover cost, so a pinned carrier CYCLES to safe ice or a safe teammate
+# instead of crashing a worthless drive into the crease, and any genuinely
+# open look (≫ this) still wins outright.
+const OZ_POSSESSION_VALUE: float = 0.025
+
 # ── Release-offset sampling (shoot-now eval) ─────────────────────────────────
 # The shot originates at the PUCK, and the carrier can put the puck anywhere in
 # its blade's handling envelope before releasing — so the shoot-now eval samples
@@ -1677,7 +1692,12 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 			goalie_unsettled_factor, _scratch_opponent_caps,
 			-1.0, false, 0.0, false, aim_spread_rad)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
-		return shoot_s
+		# Shot danger, floored by the standing value of the possession itself
+		# (see OZ_POSSESSION_VALUE): when the whole zone reads shot-dead (set
+		# goalie, collapsed box), the caller's safety / decay / turnover terms
+		# become the gradient and the carrier cycles instead of crashing the
+		# only microscopically-positive spot — the crease.
+		return maxf(shoot_s, OZ_POSSESSION_VALUE)
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
 	var realization: float = AIActionScoring.potential_realization_discount(

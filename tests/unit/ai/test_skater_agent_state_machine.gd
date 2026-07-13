@@ -1457,3 +1457,94 @@ func test_aim_slew_arc_rate_uses_blade_orbit_radius() -> void:
 	sm._apply_aim_slew(40.0, 1.6)
 	assert_almost_eq(sm._mouse_arc_rate_rad_s, Agent.MOUSE_ARC_RATE_RAD_S, 1e-6,
 			"arc rate never exceeds the IK-gate ceiling")
+
+
+# ── One-timer line settle: the anchor tracks the LIVE feed line ──────────────
+# The physical catch needs the blade contact within the pickup radius of the
+# puck's REAL path; the settle anchor is what puts the net-aimed blade there.
+
+func _feed_snap(puck_pos: Vector3, puck_vel: Vector3) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = puck_pos
+	s.puck_state.velocity = puck_vel
+	s.puck_state.carrier_peer_id = -1
+	return s
+
+
+func test_one_timer_line_anchor_sits_a_blade_reach_off_the_live_line() -> void:
+	# Team 0 attacks -Z (net straight down -Z from the origin). A hard feed
+	# crossing 1.5 m net-side of the bot along +X: perp foot (0, 0, -1.5),
+	# net_dir (0, 0, -1) → anchor pulled back to (0, 0, -1.5 + blade_reach).
+	var snap := _feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	var anchor: Vector3 = sm._one_timer_line_anchor(snap, Vector3.ZERO)
+	assert_true(anchor.is_finite(), "a live inbound feed defines a settle anchor")
+	assert_almost_eq(anchor.x, 0.0, 0.01)
+	assert_almost_eq(anchor.z, -1.5 + sm._blade_reach, 0.01,
+			"body backs off the line so the net-extended blade sits ON it")
+
+
+func test_one_timer_line_anchor_follows_a_shifted_feed() -> void:
+	# The same feed released one metre off the anticipated line: the anchor
+	# shifts with it — a live re-read, never a latched prediction.
+	var a1: Vector3 = sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0)), Vector3.ZERO)
+	var a2: Vector3 = sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -2.5), Vector3(16, 0, 0)), Vector3.ZERO)
+	assert_almost_eq(a2.z - a1.z, -1.0, 0.01,
+			"the settle anchor tracks the feed's actual line")
+
+
+func test_one_timer_line_anchor_ignores_non_feeds() -> void:
+	var held := _feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	held.real_puck_carrier_peer_id = 7
+	assert_false(sm._one_timer_line_anchor(held, Vector3.ZERO).is_finite(),
+			"a held puck is not a feed")
+	assert_false(sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -1.5), Vector3(5, 0, 0)), Vector3.ZERO).is_finite(),
+			"a drifting puck is not a feed to settle on")
+	assert_false(sm._one_timer_line_anchor(
+			_feed_snap(Vector3(8, 0, -1.5), Vector3(16, 0, 0)), Vector3.ZERO).is_finite(),
+			"already past our level — the chase owns it")
+	assert_false(sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -7.0), Vector3(16, 0, 0)), Vector3.ZERO).is_finite(),
+			"a feed crossing far away doesn't drag us off the spot")
+
+
+# ── Carry facing follows the route (face where you're going) ─────────────────
+
+func _carry_snap(self_pos: Vector3) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	var me := SkaterNetworkState.new()
+	me.position = self_pos
+	me.facing = Vector2(0, -1)
+	s.skater_states[SELF_ID] = me
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.carrier_peer_id = SELF_ID
+	s.puck_state.position = self_pos
+	return s
+
+
+func test_carry_aim_faces_the_route_when_driving_laterally() -> void:
+	# Anchor due +X (a wall exit / a seam it just cut to); attacking -Z. The
+	# cursor — and with it body facing — points down the ROUTE: the
+	# goal-facing default had the carrier crabbing the whole way in the slow
+	# crossover class, letting beaten defenders catch back up.
+	sm._last_carry_anchor = Vector3(8, 0, 0)
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
+	assert_gt(target.normalized().x, 0.9, "cursor points down the lateral route")
+
+
+func test_carry_aim_faces_the_play_when_retreating() -> void:
+	# A genuine regroup (route back toward our own +Z net): back out facing
+	# the attacking net — the real posture, at the honest backward-speed cost.
+	sm._last_carry_anchor = Vector3(0, 0, 8)
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
+	assert_lt(target.normalized().z, -0.9, "a regroup keeps the eyes up ice")
+
+
+func test_carry_aim_faces_the_play_when_anchor_is_underfoot() -> void:
+	# Settling on a spot: no meaningful travel direction — face the play.
+	sm._last_carry_anchor = Vector3(0.3, 0, 0.3)
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
+	assert_lt(target.normalized().z, -0.9, "underfoot anchor: face the play")

@@ -326,6 +326,17 @@ const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
 const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
 const STICKHANDLE_OFFSET_MAX_M: float = 0.33
 
+# Face-the-route gates (see the FACE THE ROUTE block in _carry_mouse_aim).
+# ROUTE_MIN_DIST: below this the anchor is underfoot — no meaningful travel
+# direction, face the play. RETREAT_ADVANCE: the route direction's advance
+# component along the attack axis below which the route is a genuine retreat
+# (face the play and back out); −0.3 keeps pure-lateral and shallow-back
+# routes faced (they're skated at speed), and only a route pointing clearly
+# back toward our own net keeps the eyes up ice. Feel/tactical posture
+# choices, hand-set.
+const CARRY_FACE_ROUTE_MIN_DIST_M: float = 1.0
+const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
+
 # Pressure floor for the puck-protect blend: below this, the carry cursor
 # stays on the quiet forward dangle; above it, the blend ramps 0→full over the
 # remaining band (full shield at pressure 1 is unchanged). Without the floor
@@ -1517,6 +1528,18 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		if ctx.ping_move_target.is_finite():
 			decision.target_position = _clamp_anchor(ctx.ping_move_target)
 			decision.commit_check = false
+		# One-timer line settle: a camped-ready shooter whose feed is already
+		# in flight stops station-keeping on the role spot and shuffles onto
+		# the pass's LIVE line (_one_timer_line_anchor — the same footwork the
+		# press state runs). The camp used to wait on the spot the pass was
+		# SUPPOSED to cross; a feed an arm's length off slid through the
+		# reachable ROM while the blade stayed net-aimed, and the zone-entry
+		# trigger never fired. _is_one_timer_ready is last tick's flag —
+		# fine: it's preserved across the whole pass flight (see below).
+		if _is_one_timer_ready:
+			var ot_line: Vector3 = _one_timer_line_anchor(snapshot, self_pos)
+			if ot_line.is_finite():
+				decision.target_position = ot_line
 		# Station-keeping: arrive AT the role destination (arrival brake)
 		# instead of overshooting a spot that stopped moving — EXCEPT on a
 		# body-check commit (wants maximum closing velocity through the
@@ -3074,9 +3097,21 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 	# holding the shot, so the puck arrives on the waiting blade. Once parked,
 	# brake/hold. The FINISHER fast path leaves _one_timer_anchor at INF and so
 	# always brakes in place (already positioned).
-	if _one_timer_anchor.is_finite() \
-			and self_pos.distance_to(_one_timer_anchor) > ONE_TIMER_ANCHOR_ARRIVE_M:
-		_apply_steering(input, snapshot, self_pos, _one_timer_anchor)
+	#
+	# SETTLE ON THE LIVE LINE: while the feed is actually in flight, the anchor
+	# is re-derived from the live puck line every tick (_one_timer_line_anchor)
+	# instead of the one latched at commit — the latched anchor was built on
+	# the line as READ back then, and a pass slightly off that read parked the
+	# body at a stale spot while the blade stayed net-aimed, letting the puck
+	# slide through the reachable ROM. The blade never leaves the net; the
+	# body's micro-shuffle onto the real line is what makes the contact happen
+	# — actual one-timer footwork. Pre-release (feed not yet live) the
+	# committed anchor stands.
+	var line_anchor: Vector3 = _one_timer_line_anchor(snapshot, self_pos)
+	var anchor: Vector3 = line_anchor if line_anchor.is_finite() else _one_timer_anchor
+	if anchor.is_finite() \
+			and self_pos.distance_to(anchor) > ONE_TIMER_ANCHOR_ARRIVE_M:
+		_apply_steering(input, snapshot, self_pos, anchor)
 	else:
 		_apply_brake_steering(input, snapshot, self_pos)
 	# Mouse + facing stay locked on the open net for the entire
@@ -3132,6 +3167,53 @@ func _set_one_timer_ready(ready: bool) -> void:
 	_is_one_timer_ready = ready
 	if _team_brain != null:
 		_team_brain.set_one_timer_ready(_peer_id, ready)
+
+
+# The LIVE-line body anchor for a one-timer reception: the perpendicular foot
+# of the bot on the incoming feed's live travel line, pulled one blade reach
+# back from the net so the net-aimed blade sits ON the line when the puck
+# crosses — the exact Mode A anchor geometry (see _try_shot_reception), but
+# re-derived from the live puck every call instead of latched at commit.
+# This is the real one-timer footwork: the shooter stays wound on the net and
+# micro-shuffles the BODY onto the pass's actual line as it reveals itself.
+# Without it, a feed an arm's length off the anticipated line parked the bot
+# at a stale anchor and the catchable puck slid through the reachable ROM
+# untouched (the physical catch needs the blade contact within the pickup
+# radius of the puck's real path — see PuckInteractionRules.check_pickup).
+#
+# Vector3.INF when there is no live inbound feed to settle on: puck held
+# (REAL carrier — the pre-armed shooter reads the release instantly, same
+# rationale as _puck_in_one_timer_zone), too slow to be a feed, already past
+# our level (the chase owns it), or crossing outside the reception band
+# (someone else's puck — don't get dragged off the spot). Same trigger
+# constants as the rest of the reception family, so "a feed worth settling
+# on" means the same thing everywhere.
+func _one_timer_line_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	if snapshot.puck_state == null or snapshot.real_puck_carrier_peer_id != -1:
+		return Vector3.INF
+	var pv: Vector3 = snapshot.puck_state.velocity
+	var speed_sq: float = pv.x * pv.x + pv.z * pv.z
+	if speed_sq < RECEIVE_TRIGGER_PUCK_SPEED_M_S * RECEIVE_TRIGGER_PUCK_SPEED_M_S:
+		return Vector3.INF
+	var speed: float = sqrt(speed_sq)
+	var dir := Vector3(pv.x / speed, 0.0, pv.z / speed)
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var to_self := Vector3(self_pos.x - puck_pos.x, 0.0, self_pos.z - puck_pos.z)
+	var t: float = to_self.dot(dir)
+	if t <= 0.0:
+		return Vector3.INF
+	var perp_foot := Vector3(puck_pos.x + dir.x * t, 0.0, puck_pos.z + dir.z * t)
+	var perp_dx: float = self_pos.x - perp_foot.x
+	var perp_dz: float = self_pos.z - perp_foot.z
+	if perp_dx * perp_dx + perp_dz * perp_dz \
+			> RECEIVE_TRIGGER_LATERAL_M * RECEIVE_TRIGGER_LATERAL_M:
+		return Vector3.INF
+	var to_net: Vector3 = _attacking_goal_pos - perp_foot
+	to_net.y = 0.0
+	var net_len: float = to_net.length()
+	if net_len < 0.001:
+		return Vector3.INF
+	return perp_foot - (to_net / net_len) * _blade_reach
 
 
 # Returns true when the puck (projected one tick forward by its
@@ -3454,10 +3536,12 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 			release_time_s, puck_pos_at_release)
 
 
-# CARRY-state mouse target: one ring radius forward in the attacking-goal
-# direction, plus a stickhandling offset perpendicular to that
+# CARRY-state mouse target: one ring radius forward along the carry ROUTE
+# (the live anchor's direction — face where you're going; the attacking-goal
+# direction when settling or genuinely retreating — see the FACE THE ROUTE
+# block), plus a stickhandling offset perpendicular to that
 # direction to evade the closest incoming defender. Body facing
-# tracks the forward axis (toward the goal); blade IK lands
+# tracks the forward axis; blade IK lands
 # comfortably in front of the body where small mouse shifts produce
 # real blade motion (instead of clamping to ROM extreme as it would
 # at goal-plane distance).
@@ -3548,6 +3632,27 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 		forward_dir = to_goal.normalized()
 	else:
 		forward_dir = Vector3(0.0, 0.0, attacking_z)
+	# FACE THE ROUTE: while actually driving somewhere, the carry cursor —
+	# and with it body facing — defaults to the live carry anchor's
+	# direction, not the goal's. Movement speed classes are facing-relative
+	# (forward > crossover > backward), so a goal-facing carrier thrusting
+	# toward a lateral anchor (a wall exit, the seam it just deked to) skated
+	# the whole route in the slow crossover class — beaten defenders caught
+	# back up, and the sideways posture also kept the far side of the ice
+	# out of the blade's reach cone. Facing the route gives the fast forward
+	# stride and centers the reach cone on the play. The GOAL-facing default
+	# above still owns two cases: a route too short to define a direction
+	# (settling on a spot — face the play), and a genuine RETREAT (advance
+	# component below CARRY_FACE_RETREAT_ADVANCE — a regroup backs out
+	# facing the play, the real posture, paying the honest backward-speed
+	# cost). Fire-tracking (_carry_aim_track_fire) overrides all of this
+	# with the shot aim whenever a live look exists.
+	var route: Vector3 = _last_carry_anchor - self_pos
+	route.y = 0.0
+	if route.length_squared() >= CARRY_FACE_ROUTE_MIN_DIST_M * CARRY_FACE_ROUTE_MIN_DIST_M:
+		var route_dir: Vector3 = route.normalized()
+		if route_dir.z * attacking_z >= CARRY_FACE_RETREAT_ADVANCE:
+			forward_dir = route_dir
 	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
 	# motion smoothing across ticks. When two defenders converge from
