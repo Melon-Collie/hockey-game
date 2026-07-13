@@ -253,6 +253,13 @@ const CARRY_RETREAT_STEP_M: float = CARRY_SEARCH_STEP_M * 2.0
 const _RETREAT_ANGLES: Array[float] = [
 		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
+# Evadability (current_safety) above which the retreat ring is skipped
+# entirely: the peel-out is an answer to CONTAINMENT, and with no defender
+# able to reach the puck the forward gradient owns the compete anyway —
+# pricing five extra 6 m candidates every re-eval in open ice was pure
+# hot-path waste (~0.5 ms/re-eval). Generously high so any real pressure
+# keeps the ring live; a hot-path gate, not a tactical choice.
+const CARRY_RETREAT_SAFETY_SKIP: float = 0.85
 
 # Haircut on the pass-OPTION value a carry candidate inherits (see
 # _candidate_pass_option): the option is a coarse read — receiver valued at
@@ -774,7 +781,8 @@ func _pick_action(ctx: RoleContext) -> void:
 	if ctx.ping_shoot_active and shoot_score > 0.0:
 		shoot_score *= PING_SHOOT_EV_MULT
 
-	var carry_result: Array = _best_carry(ctx, raw_shoot_score, directed_seam)
+	var carry_result: Array = _best_carry(
+			ctx, raw_shoot_score, directed_seam, current_safety)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 	var raw_carry_score: float = carry_result[2]
@@ -1404,7 +1412,7 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 # `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
 # stand-still's shot branch shares it verbatim — see the stand-still block.
 func _best_carry(ctx: RoleContext, shoot_now_score: float,
-		directed_seam: Vector3) -> Array:
+		directed_seam: Vector3, current_safety: float) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
@@ -1463,21 +1471,23 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# the back half at double the local step, the move that creates REAL
 	# separation from a containing defender. Same clamps and scoring as the
 	# cardinals; with the pass-option branch these win exactly when the space
-	# they buy reopens a lane worth using.
-	for angle: float in _RETREAT_ANGLES:
-		var rc: float = cos(angle)
-		var rs: float = sin(angle)
-		var retreat := Vector3(
-				self_pos.x + (fwd_x * rc - fwd_z * rs) * CARRY_RETREAT_STEP_M, 0.0,
-				self_pos.z + (fwd_x * rs + fwd_z * rc) * CARRY_RETREAT_STEP_M)
-		if absf(retreat.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
-			continue
-		if absf(retreat.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
-			continue
-		var retreat_total: float = _score_move_candidate(ctx, retreat, our_goalie)
-		if retreat_total > best_score:
-			best_score = retreat_total
-			best_pos = retreat
+	# they buy reopens a lane worth using. Priced only under real pressure
+	# (CARRY_RETREAT_SAFETY_SKIP — a hot-path gate; open ice never needs it).
+	if current_safety < CARRY_RETREAT_SAFETY_SKIP:
+		for angle: float in _RETREAT_ANGLES:
+			var rc: float = cos(angle)
+			var rs: float = sin(angle)
+			var retreat := Vector3(
+					self_pos.x + (fwd_x * rc - fwd_z * rs) * CARRY_RETREAT_STEP_M, 0.0,
+					self_pos.z + (fwd_x * rs + fwd_z * rc) * CARRY_RETREAT_STEP_M)
+			if absf(retreat.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
+				continue
+			if absf(retreat.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+				continue
+			var retreat_total: float = _score_move_candidate(ctx, retreat, our_goalie)
+			if retreat_total > best_score:
+				best_score = retreat_total
+				best_pos = retreat
 
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot

@@ -1816,15 +1816,33 @@ static func chase_recovery(
 # sitting flat at slot when no immediate shot threat exists.
 #
 # Used by MARK's recovery fallback for inverse shot-threat scoring across all opps.
+# How far from the net mouth the goalie still counts as HOME for the
+# threat-surface shot skip below — the crease depth plus a stride. Beyond it
+# (pulled, or out playing the puck) the direct-shot branch must be computed
+# from anywhere on the rink.
+const THREAT_GOALIE_HOME_M: float = 3.0
+
 static func threat_surface_shoot(
 		opp_pos: Vector3,
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		net_half_width: float,
 		defenders: Array[Vector3]) -> float:
+	var positional: float = position_potential(opp_pos, our_net, defenders)
+	# Hot-path skip, not a shaping choice: with the goalie HOME, a direct shot
+	# from outside the attacking zone is dead by score_shoot's own coverage
+	# math (the arrival-honest race hands any beyond-the-blue-line look to a
+	# keeper who is square long before the puck arrives), so the max() below
+	# is always the positional branch there — don't pay the hole geometry to
+	# find ~0. This runs per carry candidate (turnover pricing) and per marked
+	# opponent, at ~30 Hz; the skip covers most of the rink. A displaced /
+	# pulled goalie voids the proof (an empty net scores from centre ice), so
+	# it computes fully.
+	if not in_offensive_zone(opp_pos, our_net) \
+			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
+		return positional
 	var shoot: float = score_shoot(
 			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
-	var positional: float = position_potential(opp_pos, our_net, defenders)
 	return maxf(shoot, positional)
 
 
