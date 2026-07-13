@@ -326,6 +326,17 @@ const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
 const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
 const STICKHANDLE_OFFSET_MAX_M: float = 0.33
 
+# Face-the-route gates (see the FACE THE ROUTE block in _carry_mouse_aim).
+# ROUTE_MIN_DIST: below this the anchor is underfoot — no meaningful travel
+# direction, face the play. RETREAT_ADVANCE: the route direction's advance
+# component along the attack axis below which the route is a genuine retreat
+# (face the play and back out); −0.3 keeps pure-lateral and shallow-back
+# routes faced (they're skated at speed), and only a route pointing clearly
+# back toward our own net keeps the eyes up ice. Feel/tactical posture
+# choices, hand-set.
+const CARRY_FACE_ROUTE_MIN_DIST_M: float = 1.0
+const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
+
 # Pressure floor for the puck-protect blend: below this, the carry cursor
 # stays on the quiet forward dangle; above it, the blend ramps 0→full over the
 # remaining band (full shield at pressure 1 is unchanged). Without the floor
@@ -988,25 +999,37 @@ var _is_one_timer_ready: bool = false
 # the now-loose puck. Reset whenever the flag is genuinely (re-)confirmed ready.
 var _one_timer_preserve_ticks: int = 0
 
-# Moving-one-timer target. When finite, ONE_TIMER_PRESSED skates to this
-# net-forward anchor (set by the shot-aware reception, Mode A) while holding
-# the shot, instead of braking in place. INF = the FINISHER fast-path one-timer
-# (already in position → brake and wait). Reset to INF on leaving the state.
-var _one_timer_anchor: Vector3 = Vector3.INF
-# Arrival tolerance for the moving one-timer: inside this we stop seeking and
-# brake/hold so the puck settles onto the waiting blade.
+# Arrival tolerance for the one-timer's live-line settle anchor
+# (_one_timer_line_anchor): inside this we stop seeking and brake/hold so the
+# feed arrives into the armed slapper zone.
 const ONE_TIMER_ANCHOR_ARRIVE_M: float = 0.6
 # Opponent-position scratch for the shot-quality check in _try_shot_reception.
 # Separate from _scratch_opponents (owned by _apply_steering) so the reception
 # eval doesn't clobber steering's list mid-tick.
 var _scratch_shot_opponents: Array[Vector3] = []
 
-# Tick counter for ONE_TIMER_PRESSED — the bot holds shoot_held until
-# the puck contacts the blade (have_puck flips true), then drops
-# shoot_held to release. Safety bail uses INTENT_MAX_WAIT_TICKS so
-# the bot doesn't get stuck holding charge if the puck is intercepted
-# or the pass misses.
+# Tick counter for ONE_TIMER_PRESSED — the bot holds slap_held (the REAL
+# slapper one-timer charge) until the puck reaches the slapper zone / attaches
+# (the controller's window), then drops it to release. The dead-feed bail
+# (live line gone) usually exits long before the budget backstop below.
 var _one_timer_press_tick: int = 0
+
+# Budget backstop for ONE_TIMER_PRESSED, sized to outlast the longest scored
+# feed: entry happens at feed RELEASE now (the flight time is what builds the
+# visible wind-up), so the wait must cover a full pass flight (~PASS_LEAD_MAX_S
+# of lead solving, ~1 s of real flight on a long diagonal) plus settle slack.
+# The dead-feed bail handles every genuine failure earlier; this only catches
+# pathological stasis.
+const ONE_TIMER_PRESS_MAX_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 6 / 5   # ~1.2 s
+
+# The slapper one-timer pickup ZONE's offset in the skater's local frame
+# (local +X = blade side, negative local Z = in front) — mirrors of
+# SkaterController.slapper_zone_offset_x / slapper_zone_offset_z defaults, the
+# same way the BOT_WRISTER_* constants mirror the wind-up gesture geometry.
+# The wind-up blade is raised, so the ZONE (not the blade) makes the catch:
+# the one-timer settle must place THIS point on the feed's live line.
+const BOT_ONE_TIMER_ZONE_OFFSET_X_M: float = 1.0
+const BOT_ONE_TIMER_ZONE_OFFSET_Z_M: float = -0.4
 
 # Pre-aim target locked at the moment intent flips from CARRY to a
 # fire action. Without this, `_aim_target_for_intent` recomputes
@@ -1598,14 +1621,21 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif _is_one_timer_ready and _puck_in_one_timer_zone(snapshot, self_pos):
+	elif _is_one_timer_ready and (_one_timer_line_anchor(snapshot, self_pos).is_finite()
+			or _puck_in_one_timer_zone(snapshot, self_pos)):
+		# Commit the one-timer at feed RELEASE, not at contact: the press
+		# state's slap wind-up needs the flight time to build (the visible,
+		# diegetic charge), and its live-line settle needs the flight to walk
+		# the slapper zone onto the pass's actual path. The zone-entry check
+		# stays as the fallback trigger for feeds too soft/close to read as a
+		# live line (and rebounds squirting through the stance).
 		_set_state(State.ONE_TIMER_PRESSED)
 	elif _is_one_timer_ready:
 		# Stay camped + pre-aimed even if the brain says we're closest
 		# to a loose puck. Chasing would re-aim mouse toward the puck
 		# and the FINISHER would lose the goal-aim lock; staying in
 		# OFF_PUCK keeps facing + blade pointed at the net so the
-		# one-tick fire on zone entry releases cleanly. Risk: we
+		# press on feed release starts from a clean stance. Risk: we
 		# never pick up a loose puck that's drifting nearby. Acceptable
 		# tradeoff — that's another teammate's job and we're committed
 		# to being the trigger.
@@ -2131,9 +2161,9 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 			and net_len >= ONE_TIME_MIN_NET_DIST_M
 			and net_ward_speed <= ONE_TIME_MAX_DRIVE_SPEED_M_S)
 	if mode_a:
-		_one_timer_anchor = anchor
 		# One transitional tick of net-aimed steering before ONE_TIMER_PRESSED
-		# takes over next dispatch (it sets shoot_pressed on its tick 0).
+		# takes over next dispatch (it presses slap on its tick 0 and settles
+		# on the live line itself — no latched anchor to hand over).
 		_apply_steering(input, snapshot, self_pos, anchor)
 		input.mouse_world_pos = _step_mouse_toward(_shot_aim_point(snapshot, self_pos, 0.0))
 		_set_state(State.ONE_TIMER_PRESSED)
@@ -3070,55 +3100,77 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 # whatever the LAST press state committed (a soft pass fraction, or the type
 # default), so one-timer pace was whatever happened to be lying around.
 func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
-	# Moving one-timer (Mode A reception): skate to the net-forward anchor while
-	# holding the shot, so the puck arrives on the waiting blade. Once parked,
-	# brake/hold. The FINISHER fast path leaves _one_timer_anchor at INF and so
-	# always brakes in place (already positioned).
-	if _one_timer_anchor.is_finite() \
-			and self_pos.distance_to(_one_timer_anchor) > ONE_TIMER_ANCHOR_ARRIVE_M:
-		_apply_steering(input, snapshot, self_pos, _one_timer_anchor)
+	# THE REAL SLAPPER ONE-TIMER (SkaterStateMachine.SLAPPER_CHARGE_WITHOUT_PUCK):
+	# press slap on tick 0 and HOLD — the controller runs the diegetic wind-up
+	# (the pose fills over max_slapper_charge_time, the visible "shot coming"
+	# tell) and arms the slapper pickup zone; the feed's flight time is what
+	# builds the charge, exactly the human one-timer economy. Releasing
+	# (dropping slap_held) fires through the controller's own paths: puck
+	# attached mid-charge → the one-timer window → release_slapper with the
+	# centre-timing bonus; puck at the zone but not attached →
+	# try_one_timer_release's leniency buffer.
+	#
+	# The old wrister hold could never fire here: on_puck_picked_up_network
+	# forces SKATING_WITH_PUCK for every state EXCEPT the slapper charge, so
+	# the wrister release edge always landed in a state that ignored it — bots
+	# silently caught the feed and re-deliberated (through the settle beat)
+	# instead of one-timing it, with no wind-up ever visible.
+	#
+	# SETTLE ON THE LIVE LINE: the body target is re-derived from the live
+	# puck line every tick (_one_timer_line_anchor — the slapper ZONE, not the
+	# body, is what must sit on the line) instead of an arrival point latched
+	# at commit; a feed slightly off the anticipated line meets the zone
+	# because the body micro-shuffles onto the real line — one-timer footwork.
+	var line_anchor: Vector3 = _one_timer_line_anchor(snapshot, self_pos)
+	if line_anchor.is_finite() \
+			and self_pos.distance_to(line_anchor) > ONE_TIMER_ANCHOR_ARRIVE_M:
+		_apply_steering(input, snapshot, self_pos, line_anchor)
 	else:
 		_apply_brake_steering(input, snapshot, self_pos)
-	# Mouse + facing stay locked on the open net for the entire
-	# wait — controller's apply_blade_from_mouse drives blade IK from
-	# this each tick — rotated by this release's committed execution
-	# error (shot budget, sampled at press entry; constant through the
-	# wait so the blade holds one steady, slightly-wrong angle).
+	# Mouse + facing stay locked on the open net for the entire wait — the
+	# slapper aim locks from this at the tick-0 press, and the torso coil
+	# plays against it — rotated by this release's committed execution error
+	# (shot budget, sampled at press entry; constant through the wait).
 	var clean_aim: Vector3 = _apply_committed_aim_error(
 			self_pos, _shot_aim_point(snapshot, self_pos, 0.0))
 	input.mouse_world_pos = _step_mouse_toward(clean_aim)
-	# A one-timer is a committed full release — the whole point of the pre-set
-	# stance. Set every tick through the release (the scratch InputState field
-	# is not zeroed per tick, so an unset value here is a stale leak).
-	input.bot_wrister_power_t = BOT_WRISTER_SHOT_CHARGE_FRACTION
 
 	if _one_timer_press_tick == 0:
 		debug_last_decision = "ONE_TIMER"
-		input.shoot_pressed = true
+		input.slap_pressed = true
 
 	if have_puck:
-		# Puck arrived — drop shoot_held this tick. WRISTER_AIM sees
-		# the edge and calls release_wrister, which fires at the
-		# nearly-zero charge accumulated during the wait (quick-shot
-		# release). Bot transitions to CARRY for one tick of cleanup
-		# (the carrier scorer will re-pick CARRY/SHOOT/PASS as normal
-		# on the next decision cycle — likely "puck gone" since
-		# release fired immediately).
-		input.shoot_held = false
+		# Attached mid-charge — the controller opened the one-timer window
+		# (SLAPPER_CHARGE_WITH_PUCK). Drop the button inside it: release_slapper
+		# fires the full one-timer. CARRY is one tick of cleanup (the puck is
+		# gone next tick).
+		input.slap_held = false
 		_set_state(State.CARRY)
 		return
 
-	# Still waiting for puck contact — hold the charge.
-	input.shoot_held = true
+	if _puck_in_one_timer_zone(snapshot, self_pos):
+		# On the beat but not attached — drop the button and let the
+		# controller's release buffer sweep the leniency zone.
+		input.slap_held = false
+		_set_state(_post_puck_lost_state(snapshot))
+		return
+
+	if not line_anchor.is_finite():
+		# The feed died — picked off, deflected dead, or it crossed outside
+		# the zone. Drop the swing (an honest, visible whiff through the
+		# follow-through) and get back into the play.
+		input.slap_held = false
+		_set_state(_post_puck_lost_state(snapshot))
+		return
+
+	# Feed still inbound — keep the wind-up building.
+	input.slap_held = true
 	_one_timer_press_tick += 1
 
-	# Safety bail: if the puck never arrived within the press budget,
-	# release with no puck — controller goes to FOLLOW_THROUGH (no
-	# shot fires), then back to skating-without-puck for the next
-	# tick. Reusing INTENT_MAX_WAIT_TICKS keeps the timeout consistent
-	# with other "fire commits expire" budgets.
-	if _one_timer_press_tick >= _intent_max_wait_ticks:
-		input.shoot_held = false
+	# Budget backstop (see ONE_TIMER_PRESS_MAX_TICKS) — the dead-feed bail
+	# above handles every genuine failure earlier.
+	if _one_timer_press_tick >= ONE_TIMER_PRESS_MAX_TICKS:
+		input.slap_held = false
 		_set_state(_post_puck_lost_state(snapshot))
 
 
@@ -3132,6 +3184,69 @@ func _set_one_timer_ready(ready: bool) -> void:
 	_is_one_timer_ready = ready
 	if _team_brain != null:
 		_team_brain.set_one_timer_ready(_peer_id, ready)
+
+
+# The LIVE-line body anchor for a one-timer reception: place the slapper
+# pickup ZONE (the wind-up blade is raised — the zone, not the blade, makes
+# the catch) on the incoming feed's live travel line, re-derived from the
+# live puck every call instead of latched at commit. This is the real
+# one-timer footwork: the shooter stays wound on the net and micro-shuffles
+# the BODY onto the pass's actual line as it reveals itself. Without it, a
+# feed an arm's length off the anticipated line parked the bot at a stale
+# anchor and the catchable puck slid through the reachable ROM untouched.
+# Body = perp foot of self on the line, minus the zone's offset in the
+# net-facing frame (local +X = blade side, negative local Z = in front —
+# the BOT_ONE_TIMER_ZONE_OFFSET_* mirrors).
+#
+# Vector3.INF when there is no live inbound feed to settle on: puck held
+# (REAL carrier — the pre-armed shooter reads the release instantly, same
+# rationale as _puck_in_one_timer_zone), too slow to be a feed, already past
+# our level (the chase owns it), crossing outside the reception band, or a
+# TEAMMATE is better positioned for it (the _incoming_pass_to_me filter —
+# someone else's feed must not drag this shooter off its station). Same
+# trigger constants as the rest of the reception family, so "a feed worth
+# settling on" means the same thing everywhere.
+func _one_timer_line_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	if snapshot.puck_state == null or snapshot.real_puck_carrier_peer_id != -1:
+		return Vector3.INF
+	var pv: Vector3 = snapshot.puck_state.velocity
+	var speed_sq: float = pv.x * pv.x + pv.z * pv.z
+	if speed_sq < RECEIVE_TRIGGER_PUCK_SPEED_M_S * RECEIVE_TRIGGER_PUCK_SPEED_M_S:
+		return Vector3.INF
+	var speed: float = sqrt(speed_sq)
+	var dir := Vector3(pv.x / speed, 0.0, pv.z / speed)
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var to_self := Vector3(self_pos.x - puck_pos.x, 0.0, self_pos.z - puck_pos.z)
+	var t: float = to_self.dot(dir)
+	if t <= 0.0:
+		return Vector3.INF
+	var perp_foot := Vector3(puck_pos.x + dir.x * t, 0.0, puck_pos.z + dir.z * t)
+	var perp_dx: float = self_pos.x - perp_foot.x
+	var perp_dz: float = self_pos.z - perp_foot.z
+	var my_d2: float = perp_dx * perp_dx + perp_dz * perp_dz
+	if my_d2 > RECEIVE_TRIGGER_LATERAL_M * RECEIVE_TRIGGER_LATERAL_M:
+		return Vector3.INF
+	# Best-positioned-receiver filter (mirror of _incoming_pass_to_me): a feed
+	# crossing nearer a teammate is theirs.
+	for pid: int in snapshot.skater_states:
+		if pid == _peer_id or _team_id_by_peer.get(pid, -1) != _team_id:
+			continue
+		var tp: Vector3 = snapshot.skater_states[pid].position
+		var dx: float = tp.x - perp_foot.x
+		var dz: float = tp.z - perp_foot.z
+		if dx * dx + dz * dz < my_d2:
+			return Vector3.INF
+	var to_net: Vector3 = _attacking_goal_pos - perp_foot
+	to_net.y = 0.0
+	var net_len: float = to_net.length()
+	if net_len < 0.001:
+		return Vector3.INF
+	var f: Vector3 = to_net / net_len
+	var right := Vector3(-f.z, 0.0, f.x)
+	var side: float = -1.0 if _is_left_handed else 1.0
+	var zone_offset: Vector3 = right * (side * BOT_ONE_TIMER_ZONE_OFFSET_X_M) \
+			- f * BOT_ONE_TIMER_ZONE_OFFSET_Z_M
+	return perp_foot - zone_offset
 
 
 # Returns true when the puck (projected one tick forward by its
@@ -3454,10 +3569,12 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 			release_time_s, puck_pos_at_release)
 
 
-# CARRY-state mouse target: one ring radius forward in the attacking-goal
-# direction, plus a stickhandling offset perpendicular to that
+# CARRY-state mouse target: one ring radius forward along the carry ROUTE
+# (the live anchor's direction — face where you're going; the attacking-goal
+# direction when settling or genuinely retreating — see the FACE THE ROUTE
+# block), plus a stickhandling offset perpendicular to that
 # direction to evade the closest incoming defender. Body facing
-# tracks the forward axis (toward the goal); blade IK lands
+# tracks the forward axis; blade IK lands
 # comfortably in front of the body where small mouse shifts produce
 # real blade motion (instead of clamping to ROM extreme as it would
 # at goal-plane distance).
@@ -3548,6 +3665,27 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 		forward_dir = to_goal.normalized()
 	else:
 		forward_dir = Vector3(0.0, 0.0, attacking_z)
+	# FACE THE ROUTE: while actually driving somewhere, the carry cursor —
+	# and with it body facing — defaults to the live carry anchor's
+	# direction, not the goal's. Movement speed classes are facing-relative
+	# (forward > crossover > backward), so a goal-facing carrier thrusting
+	# toward a lateral anchor (a wall exit, the seam it just deked to) skated
+	# the whole route in the slow crossover class — beaten defenders caught
+	# back up, and the sideways posture also kept the far side of the ice
+	# out of the blade's reach cone. Facing the route gives the fast forward
+	# stride and centers the reach cone on the play. The GOAL-facing default
+	# above still owns two cases: a route too short to define a direction
+	# (settling on a spot — face the play), and a genuine RETREAT (advance
+	# component below CARRY_FACE_RETREAT_ADVANCE — a regroup backs out
+	# facing the play, the real posture, paying the honest backward-speed
+	# cost). Fire-tracking (_carry_aim_track_fire) overrides all of this
+	# with the shot aim whenever a live look exists.
+	var route: Vector3 = _last_carry_anchor - self_pos
+	route.y = 0.0
+	if route.length_squared() >= CARRY_FACE_ROUTE_MIN_DIST_M * CARRY_FACE_ROUTE_MIN_DIST_M:
+		var route_dir: Vector3 = route.normalized()
+		if route_dir.z * attacking_z >= CARRY_FACE_RETREAT_ADVANCE:
+			forward_dir = route_dir
 	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
 	# motion smoothing across ticks. When two defenders converge from
@@ -3598,7 +3736,13 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			Vector2(target.x, target.z), CARRY_BLADE_WALL_MARGIN_M)
 	target.x = on_ice.x
 	target.z = on_ice.y
-	return target
+	# ...and never THROUGH a net frame (the same standard, cage edition): a
+	# behind-the-net carrier's forward/route aim chords straight through the
+	# cage, the blade IK chases it into the mesh, and stick-on-net contact
+	# dislodges the carried puck — the behind-the-net giveaway. The chord is
+	# swung around the nearer post — the blade-level mirror of the body's
+	# AISteering._net_detour.
+	return AIActionScoring.net_safe_blade_target(self_pos, target)
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
@@ -4546,12 +4690,6 @@ func _set_state(s: State) -> void:
 			_poke_jab_active_ticks = 0
 			_poke_jab_cooldown_ticks = 0
 			_carrier.clear_intent()
-		# Moving-one-timer anchor only lives while in ONE_TIMER_PRESSED. Mode A
-		# sets it just before transitioning IN (s == ONE_TIMER_PRESSED, so this
-		# preserves it); any other transition clears it back to the FINISHER
-		# fast-path default (brake in place).
-		if s != State.ONE_TIMER_PRESSED:
-			_one_timer_anchor = Vector3.INF
 		_state = s
 		_ticks_in_state = 0
 		# Force the next dispatch to run the full state handler so the

@@ -1143,10 +1143,11 @@ func _on_body_block_hit(body: Node3D) -> void:
 # FLAT grounded redirect, LOW grounded tip up, HIGH knock an airborne puck down /
 # stick-lift (reach follows blade_can_interact; direction from Puck.apply_blade_deflect).
 # AIController
-# overrides this to always-false — bots don't deliberate-deflect; holding the
-# shoot button off-puck sets up their wrister one-timers instead. Moving deflect
-# off the shoot button (it used to be shoot_held off-puck) also unmasks the
-# human wrister one-timer, which the deflect intent previously suppressed.
+# overrides this to always-false — bots don't deliberate-deflect; their
+# one-timers hold the SLAP button off-puck (the real slapper charge + pickup
+# zone — the only one-timer path on_puck_picked_up_network supports: a held
+# wrister's state is force-reset to SKATING_WITH_PUCK on pickup, so a wrister
+# release edge can never fire on a caught feed).
 func _wants_deflect(input: InputState) -> bool:
 	return input.stick_lift_held and not has_puck
 
