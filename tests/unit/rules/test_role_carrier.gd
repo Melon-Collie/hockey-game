@@ -463,12 +463,15 @@ func test_bot_driving_the_net_gets_a_shot_off_before_the_goalie() -> void:
 	# walls off the straight fire — the honest read there is the lateral cut /
 	# doorstep window, covered by test_1v1_lateral_cut_beats_the_aggressive_goalie
 	# below, not a head-on shot.)
-	# Since carry candidates price ARRIVING AT PACE, the honest read against a
-	# retreating keeper is often the deke — a lateral cut whose moving-release
-	# window beats his final re-square — rather than a head-on pad shot. Both
-	# are committed finishes. What must NEVER happen on the drive is the
-	# failure this test exists for: carrying straight in and running the
-	# keeper over (a near-centre anchor at/inside his depth — the smother).
+	# This drive is DEAD-CENTRE at a square keeper — the zero-angle line no
+	# keeper at any depth concedes a corner from (the old model's head-on
+	# release here was the phantom in-tight roof window, i.e. the
+	# shot-into-the-chest bug). Since carry candidates price ARRIVING AT
+	# PACE, the honest finish is a small lateral redirection off his centre
+	# line, then fire — a committed finish either way. What must NEVER
+	# happen on the drive is the failure this test exists for: carrying
+	# straight in and running the keeper over (a near-centre anchor
+	# at/inside his depth — the smother).
 	var goalie_out: float = 1.0                          # backflowed 1 m off the line
 	var goalie_z: float = -GameRules.GOAL_LINE_Z + goalie_out
 	var finish_committed: bool = false
