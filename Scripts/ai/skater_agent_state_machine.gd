@@ -297,9 +297,29 @@ const CARRY_BLADE_WALL_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
 # standing still with stick extended is just as much a poke threat
 # as one skating in — the old gate left bots open to easy lifts
 # from a coasting defender.
+#
+# QUIET HANDS: the offset cap is sized so the dangle works the MIDDLE of the
+# blade's arc, not its edge. Body facing chases the carry cursor at every
+# angle inside the reach cone, so any sustained cursor offset becomes body
+# rotation — at the 2 m aim ring, 0.5 m is ~±14° of body wag when a defender
+# camps one side (the old 0.8 m was ~±22°, flipping to ~44° swings as threats
+# crossed the line — the twitchy, loud carry). A real carrier stickhandles in
+# front with small excursions and answers real pressure with a deliberate
+# move; those deliberate answers (the protect blend below, the seam deke, the
+# brake check) now own the big threats, so the baseline dangle stays quiet.
 const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
 const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
-const STICKHANDLE_OFFSET_MAX_M: float = 0.8
+const STICKHANDLE_OFFSET_MAX_M: float = 0.5
+
+# Pressure floor for the puck-protect blend: below this, the carry cursor
+# stays on the quiet forward dangle; above it, the blend ramps 0→full over the
+# remaining band (full shield at pressure 1 is unchanged). Without the floor
+# the blend engaged proportionally at ANY pressure > 0, so light incidental
+# traffic kept partially swinging the cursor toward the hip — a constant
+# low-grade body wag. Feel tunable (how much pressure earns the deliberate
+# shield turn), not an evaluation curve — the pressure itself stays the
+# grounded reachable-set read.
+const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.3
 
 # Natural carry sway: a smooth lateral oscillation of the carry cursor —
 # the rhythmic side-to-side dangle a human carrier keeps going — layered
@@ -3532,14 +3552,19 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# The seam offset is re-based on the LIVE body position (the carrier mirror
 	# refreshes at ~30 Hz) and projected out to the carry aim ring: the arc-step
 	# in `_step_mouse_aim` reads direction only, so a short raw offset would
-	# under-weight the protect side in a positional lerp.
-	if _protects_the_puck and _carrier.protect_pressure > 0.0:
+	# under-weight the protect side in a positional lerp. The blend engages
+	# above CARRY_PROTECT_PRESSURE_FLOOR (quiet hands — light incidental
+	# traffic doesn't earn the shield turn) and ramps to the unchanged full
+	# shield at pressure 1.
+	var protect_w: float = (_carrier.protect_pressure - CARRY_PROTECT_PRESSURE_FLOOR) \
+			/ (1.0 - CARRY_PROTECT_PRESSURE_FLOOR)
+	if _protects_the_puck and protect_w > 0.0:
 		var protect_dir: Vector3 = _carrier.protect_offset
 		protect_dir.y = 0.0
 		if protect_dir.length_squared() > 0.0025:
 			var protect_target: Vector3 = self_pos \
 					+ protect_dir.normalized() * CARRY_BLADE_AIM_FORWARD_M
-			target = target.lerp(protect_target, _carrier.protect_pressure)
+			target = target.lerp(protect_target, minf(protect_w, 1.0))
 	# Clamp the carry mouse so it stays on the rink side of the
 	# attacking goal line — the blade IK chases the mouse, and a mouse
 	# target past the goal line punches the blade through the net.
