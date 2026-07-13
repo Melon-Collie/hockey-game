@@ -550,12 +550,19 @@ func test_1v1_lateral_cut_beats_the_aggressive_goalie() -> void:
 	assert_gt(cb.debug_shoot_score, 0.3,
 			"…and it's a real chance, not a floor-scraper; got %f" % cb.debug_shoot_score)
 
+	# Flat-footed vs the same 2 m over-challenge: the keeper is only ~1 m off
+	# the puck, so a blade-reach relocation swings the arc faster than his push
+	# covers — the release-offset sampler prices the pull-around and the 1v1
+	# finishes BY HAND instead of needing to skate the cut first. The commit
+	# must carry the relocation: the straight fire into his chest is smothered.
 	var flat := _make_ctx(self_pos)
 	flat.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 2.0)
 	var c2 := AIRoleCarrier.new()
 	c2.decide(flat)
-	assert_ne(c2.intended_action, AIRoleCarrier.INTENT_SHOOT,
-			"flat-footed into the set challenge there is no shot — the CUT opens it")
+	assert_eq(c2.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"flat-footed vs an overcommitted challenge, the pull-around fires")
+	assert_gt(c2.shot_release_offset.length(), 0.3,
+			"…and it is the relocated release, never a straight fire into the smother")
 
 
 func test_mid_cut_hold_never_out_prices_the_same_instants_fire() -> void:
@@ -586,16 +593,18 @@ func test_mid_cut_hold_never_out_prices_the_same_instants_fire() -> void:
 
 
 func test_standstill_1v1_winds_up_the_cut() -> void:
-	# The bootstrap: a flat-footed carrier alone with the keeper in tight has
-	# no direct shot (set keeper, honest arcs) — but the carry candidates
-	# price ARRIVING AT PACE (the two-phase keeper in _score_move_candidate),
-	# so "skate the cut, then fire" reads as a real plan and the bot commits
+	# The bootstrap: a flat-footed carrier alone with a keeper at a NORMAL
+	# challenge depth (1.3 m — deep enough that a blade-reach relocation alone
+	# doesn't beat him; the 2 m over-challenge dies to the pull-around, test
+	# above) has no direct shot worth taking — but the carry candidates price
+	# ARRIVING AT PACE (the two-phase keeper in _score_move_candidate), so
+	# "skate the cut, then fire" reads as a real plan and the bot commits
 	# to a LATERAL wind-up instead of dithering over an all-zero candidate
 	# ring. Once moving, the mid-cut fire takes over (test above).
 	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
 	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
 	var ctx := _make_ctx(self_pos)
-	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 2.0)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
@@ -638,6 +647,88 @@ func _squared_goalie(self_pos: Vector3, net: Vector3, depth: float) -> GoalieNet
 	gs.position_x = g.x
 	gs.position_z = g.z
 	return gs
+
+
+# ─── release-offset sampling (see AIRoleCarrier.RELEASE_SAMPLE_FRACS) ────────
+
+func test_release_sampling_relocates_toward_the_open_side() -> void:
+	# Goalie displaced onto the carrier's BACKHAND side (RH default: forehand is
+	# +x when attacking -z; mirrored carrier at -1.2 with the goalie at -1.1):
+	# the full-reach FOREHAND relocation opens the far side wider than the
+	# simple release sees, at no pace penalty — the sampler should pick it.
+	var pos := Vector3(-1.2, 0.0, -22.65)
+	var ctx := _make_ctx(pos)
+	var g := GoalieNetworkState.new()
+	g.position_x = -1.1
+	g.position_z = -25.2
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_gt(c._shot_sample_offset.x, 0.3,
+			"the winning sample relocates the release toward the open (forehand) side")
+	assert_false(c._shot_sample_backhand, "…on the forehand, at full pace")
+	assert_gt(c.debug_shoot_score, 0.5,
+			"…and the relocated look is a genuine chance; got %f" % c.debug_shoot_score)
+
+	# Mirrored geometry (goalie on the FOREHAND side): the same relocation is
+	# now a BACKHAND-side move, so it pays the pace penalty and the blade-travel
+	# time — and the simple release already sees the opening the goalie's
+	# displacement concedes. The honesty terms keep the simple release on top.
+	var mpos := Vector3(1.2, 0.0, -22.65)
+	var mctx := _make_ctx(mpos)
+	var mg := GoalieNetworkState.new()
+	mg.position_x = 1.1
+	mg.position_z = -25.2
+	mctx.snapshot.goalie_states[1 - TEAM_ID] = mg
+	var mc := AIRoleCarrier.new()
+	mc.decide(mctx)
+	assert_almost_eq(mc._shot_sample_offset.length(), 0.0, 0.001,
+			"mirrored: the backhand relocation's pace/time cost keeps the simple release")
+	assert_gt(mc.debug_shoot_score, 0.5,
+			"…which already sees the conceded far side; got %f" % mc.debug_shoot_score)
+
+
+func test_release_sampling_finds_the_backhand_tuck_beside_the_net() -> void:
+	# Carrier tight beside the net at a dead-sharp angle, goalie holding the near
+	# post: the simple release has nothing, but relocating the puck a blade-reach
+	# toward the front of the crease — a BACKHAND-side move for this wing —
+	# opens the tuck. The classic wraparound-y finish, priced at backhand pace.
+	var pos := Vector3(2.4, 0.0, -25.6)
+	var ctx := _make_ctx(pos)
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.85
+	g.position_z = -26.1
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_true(c._shot_sample_backhand, "the tuck is a backhand-side relocation")
+	assert_gt(c._shot_sample_offset.z, 0.3,
+			"…moving the release out in front of the crease")
+	assert_lt(c._shot_sample_speed, ctx.self_wrister_shot_speed - 0.01,
+			"…priced at the backhand's penalized pace")
+	assert_gt(c.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE,
+			"…and it turns a nothing angle into a committable look; got %f"
+			% c.debug_shoot_score)
+
+
+func test_release_sampling_commit_carries_the_winning_offset() -> void:
+	# The mid-cut fire (same snapshot as the 1v1 beaten beat): whatever sample
+	# wins the sweep is exactly what the commit exposes to the state machine —
+	# offset, or ZERO for the simple release. The executed shot must be the
+	# scored one.
+	var pos := Vector3(1.8, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
+	var ctx := _make_ctx(pos)
+	ctx.self_velocity = Vector3(6.0, 0.0, 0.0)
+	ctx.snapshot.skater_states[1].velocity = ctx.self_velocity
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.7
+	g.position_z = -GameRules.GOAL_LINE_Z + 2.0
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT, "the mid-cut window fires")
+	assert_eq(c.shot_release_offset, c._shot_sample_offset,
+			"the commit exposes exactly the winning sample's offset")
 
 
 func test_wide_angle_shot_is_not_taken_against_a_squared_goalie() -> void:

@@ -93,6 +93,16 @@ var self_handle_reach: float = 0.9
 # unwired (unit tests) reproduce the prior scoring.
 var self_reach_cone_half_angle: float = deg_to_rad(157.0)
 var self_facing_turn_rate: float = 6.0
+# Release-offset sampling inputs (carrier shoot-now eval): the Hands-scaled blade
+# traverse speed (relocating the puck across the envelope costs offset/speed of
+# extra goalie-tracking time), the backhand power coefficient (a backhand-side
+# release fires at this fraction of the wrister pace), and the handedness
+# perpendicular sign orienting which lateral side IS the forehand (matches
+# SkaterAgentStateMachine._handedness_perp_sign: -1 right-handed, +1 left).
+# League/RH defaults when unwired.
+var self_blade_speed: float = 10.0
+var self_backhand_power_coefficient: float = 0.75
+var self_forehand_perp_sign: float = -1.0
 
 # ── Difficulty pace knobs (from BotSkillProfile, this bot only) ───────────────
 # Set by SkaterAgentStateMachine each tick from the applied skill profile.
