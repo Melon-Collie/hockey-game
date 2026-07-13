@@ -979,25 +979,60 @@ func test_poke_evade_fires_driving_at_a_stationary_defender() -> void:
 	# The deke's closing gate is RELATIVE: a carrier skating into a waiting / angled
 	# defender closes the gap, so the deke fires. The old defender-only closing left
 	# the bot skating straight into a static poke without cutting around it.
+	# A usable seam is required now (no blind fallback), so give the carrier one.
+	var snap := _poke_snap(Vector3(0, 0, -6), Vector3(0, 0, -3.5), Vector3.ZERO)
+	sm._carrier.evade_seam_world = Vector3(1.5, 0, -1.5)   # a real cut direction
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, Vector3.ZERO)
+	assert_gt(sm._poke_evade_active_ticks, 0,
+			"driving at a stationary defender within poke reach triggers the deke")
+	assert_ne(sm._poke_evade_dir, Vector2.ZERO, "the cut latches the seam direction")
+
+
+func test_poke_evade_never_triggers_without_a_usable_maneuver() -> void:
+	# No seam read (Easy's closed protect gate / seam not computed) and no brake
+	# read → the poke-evade must not trigger at all: there is no blind fallback
+	# cut, and the window + cooldown are only spent on a committed move.
+	var snap := _poke_snap(Vector3(0, 0, -6), Vector3(0, 0, -3.5), Vector3.ZERO)
+	# sm._carrier.evade_seam_world stays INF and brake_check_favored false.
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, Vector3.ZERO)
+	assert_eq(sm._poke_evade_active_ticks, 0, "no seam + no brake read → no evade")
+	assert_eq(sm._poke_evade_cooldown_ticks, 0, "no cooldown burned on a non-maneuver")
+
+
+func test_poke_evade_brake_check_triggers_without_a_seam() -> void:
+	# A brake read alone is a usable maneuver: the brake check needs no cut
+	# direction (it steers by the carry anchor on exit), so it triggers even
+	# when the seam is underfoot/unusable — and it presses the real brake key.
+	var snap := _poke_snap(Vector3(0, 0, -6), Vector3(0, 0, -3.5), Vector3.ZERO)
+	sm._carrier.brake_check_favored = true
+	sm._last_carry_anchor = Vector3(0, 0, -8)
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, Vector3.ZERO)
+	assert_gt(sm._poke_evade_active_ticks, 0, "brake read alone triggers the maneuver")
+	assert_true(input.brake, "the brake check presses the real brake key")
+
+
+# Builds the standard poke-trigger scene: self carrying at `self_vel`, one
+# opponent at `opp_pos` with `opp_vel`, counters cleared for a fresh trigger.
+func _poke_snap(self_vel: Vector3, opp_pos: Vector3, opp_vel: Vector3) -> WorldSnapshot:
 	var snap := WorldSnapshot.new()
 	var me := SkaterNetworkState.new()
 	me.position = Vector3(0, 0, 0)
-	me.velocity = Vector3(0, 0, -6)          # skating hard at the defender
+	me.velocity = self_vel
 	snap.skater_states[SELF_ID] = me
 	var opp := SkaterNetworkState.new()
-	opp.position = Vector3(0, 0, -3.5)       # ~1.5 m ahead of the puck (2 m forward)
-	opp.velocity = Vector3.ZERO              # stationary — NOT closing on its own
-	opp.blade_contact_world = Vector3(0, 0, -3.5)
+	opp.position = opp_pos
+	opp.velocity = opp_vel
+	opp.blade_contact_world = opp_pos
 	snap.skater_states[OPP_ID] = opp
 	snap.puck_state = PuckNetworkState.new()
 	snap.puck_state.carrier_peer_id = SELF_ID
 	snap.puck_state.position = me.position
 	sm._poke_evade_active_ticks = 0
 	sm._poke_evade_cooldown_ticks = 0
-	var input := InputState.new()
-	sm._poke_evade_modulate_steering(input, snap, me.position)
-	assert_gt(sm._poke_evade_active_ticks, 0,
-			"driving at a stationary defender within poke reach triggers the deke")
+	return snap
 
 
 func test_poke_evade_skips_a_defender_neither_side_is_closing_on() -> void:

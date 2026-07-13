@@ -351,8 +351,12 @@ const POKE_EVADE_ACTIVE_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 3 / 20   #
 # normal steering between cuts.
 const POKE_EVADE_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~500 ms
 # Least distance to the carrier's evasion seam that still defines a usable
-# deke direction — under that the seam is basically underfoot and the
-# perpendicular fallback cut reads better than a near-zero vector.
+# deke direction — under that the seam is basically underfoot: the model is
+# saying HOLD, not cut, so no evade triggers (the protect blade-work owns
+# that moment). There is deliberately no blind-perpendicular fallback: a cut
+# without a seam read isn't a play, and on the Easy tier (protect gate
+# closed, so never a seam) no deke at all is the intent — the naive carry a
+# newcomer's poke-check genuinely beats.
 const POKE_EVADE_SEAM_MIN_DIST_M: float = 0.75
 # BRAKE-CHECK variant of the evade window: hold the real brake key for the full
 # evasion horizon (AIActionScoring.EVADE_HORIZON_S — the read the maneuver was
@@ -920,9 +924,10 @@ var _poke_evade_active_ticks: int = 0
 var _poke_evade_cooldown_ticks: int = 0
 # Deke direction LATCHED at trigger (a cut commits — re-reading it per tick
 # would spiral the direction as our own velocity rotates mid-cut). Points at
-# the carrier's evasion seam when the protects_the_puck tier has one (a real
-# cut into open ice, cutback included); ZERO = no usable seam at trigger, the
-# active window falls back to the per-tick perpendicular-away cut.
+# the carrier's directed evasion seam (a real cut past the pressure, cutback
+# included). Non-zero whenever a CUT window is active — a directionless evade
+# never triggers (see the trigger gate); ZERO otherwise, or during a BRAKE
+# window (which steers by _last_carry_anchor instead).
 var _poke_evade_dir: Vector2 = Vector2.ZERO
 # Maneuver LATCHED at trigger: TRUE = this evade is a BRAKE CHECK (hold the
 # real brake key; the committed checker's reach flies past the stopped puck),
@@ -3679,7 +3684,7 @@ func _carry_sway_offset(forward_dir: Vector3) -> Vector3:
 #     the deke (only a defender neither approaching nor being approached is skipped).
 func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
 	if _poke_evade_active_ticks > 0:
-		_drive_poke_evade_cut(input, snapshot, self_pos)
+		_drive_poke_evade_cut(input, self_pos)
 		# Decrement by the dispatch span (this runs once per dispatch, but the
 		# window is sized in physics ticks) so the cut lasts its intended wall time
 		# instead of dispatch_period× longer at Normal/Easy.
@@ -3747,23 +3752,35 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 	# Maneuver pick, latched for the whole window: a BRAKE CHECK when the
 	# carrier's last re-eval read the braked hold as clearly beating the cut
 	# (AIRoleCarrier.brake_check_favored — protect-tier only, ≤ ~33 ms stale),
-	# else the committed lateral cut. Both answer the same imminent poke; the
-	# brake answers committed pressure (let his reach fly past the stopped
-	# puck), the cut answers everything else.
-	_poke_evade_braking = _carrier.brake_check_favored
-	_poke_evade_active_ticks = POKE_EVADE_BRAKE_TICKS if _poke_evade_braking \
+	# else the committed cut toward the directed seam. Both answer the same
+	# imminent poke; the brake answers committed pressure (let his reach fly
+	# past the stopped puck), the cut answers everything else. NO usable
+	# maneuver — no seam direction (Easy's closed protect gate, or a seam
+	# underfoot) and no brake read — means no trigger at all: the window and
+	# its cooldown are only ever spent on a committed move. Easy simply has no
+	# deke (its poke-evade never fires — the naive carry a poke-check beats,
+	# per the tier doc), and a protect-tier carrier whose seam is underfoot is
+	# being told to HOLD, which the protect blade-work already handles.
+	var cut_dir: Vector2 = _seam_cut_direction(self_pos)
+	var braking: bool = _carrier.brake_check_favored
+	if cut_dir == Vector2.ZERO and not braking:
+		return
+	_poke_evade_braking = braking
+	_poke_evade_dir = cut_dir
+	_poke_evade_active_ticks = POKE_EVADE_BRAKE_TICKS if braking \
 			else POKE_EVADE_ACTIVE_TICKS
-	_poke_evade_dir = _seam_cut_direction(self_pos)
-	_drive_poke_evade_cut(input, snapshot, self_pos)
+	_drive_poke_evade_cut(input, self_pos)
 
 
-# The latched deke direction: toward the carrier's evasion seam — the
-# reachable-set escape from the last carrier re-eval (≤ ~33 ms stale, re-based
-# on the live body position). The seam already reads every defender's momentum,
-# so a committed charger's cut resolves BEHIND him (the cutback that lets him
-# overshoot) and a jockeying defender's resolves lateral — instead of the blind
-# perpendicular the fallback cut uses. ZERO when this tier doesn't protect the
-# puck, no seam is computed yet, or the seam is underfoot.
+# The latched deke direction: toward the carrier's DIRECTED evasion seam — the
+# reachable-set escape with the most progress toward the carry objective, from
+# the last carrier re-eval (≤ ~33 ms stale, re-based on the live body
+# position). The seam already reads every defender's momentum, so a committed
+# charger's cut resolves BEHIND him (the cutback that lets him overshoot) and a
+# jockeying defender's resolves past his open side. ZERO when this tier doesn't
+# protect the puck, no seam is computed yet, or the seam is underfoot — all of
+# which mean "no usable deke", and (absent a brake read) the poke-evade then
+# doesn't trigger at all.
 func _seam_cut_direction(self_pos: Vector3) -> Vector2:
 	if not _protects_the_puck:
 		return Vector2.ZERO
@@ -3781,9 +3798,9 @@ func _seam_cut_direction(self_pos: Vector3) -> Vector2:
 # anchor) — the same input shape as the brake-pivot, so the physics gets the
 # heavy brake friction and thrust resumes toward the anchor the instant the
 # window releases; the beaten checker no longer registers in the threat-gated
-# repel, so the exit bursts straight past him. CUT: the latched seam direction
-# when one was available at trigger, else the per-tick perpendicular fallback.
-func _drive_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+# repel, so the exit bursts straight past him. CUT: the seam direction latched
+# at trigger (guaranteed non-zero — a directionless evade never triggers).
+func _drive_poke_evade_cut(input: InputState, self_pos: Vector3) -> void:
 	if _poke_evade_braking:
 		input.brake = true
 		var exit := Vector2(_last_carry_anchor.x - self_pos.x,
@@ -3791,58 +3808,7 @@ func _drive_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos:
 		if exit.length_squared() > 0.01:
 			input.move_vector = exit.normalized()
 		return
-	if _poke_evade_dir != Vector2.ZERO:
-		input.move_vector = _poke_evade_dir
-		return
-	_apply_poke_evade_cut(input, snapshot, self_pos)
-
-
-# Sets input.move_vector to a perpendicular thrust away from the
-# threat side. Picks the perpendicular relative to current velocity
-# (not facing) so the body redirects from where it's actually going.
-# Side selection: perpendicular pointing AWAY from the same threat
-# that triggered the evade. If the trigger threat has moved out of
-# range mid-evade, fall back to the nearest remaining opp; if none,
-# pick an arbitrary perpendicular so the cut still resolves rather
-# than collapsing to no input mid-window.
-func _apply_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state == null:
-		return
-	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
-	if vel_xz.length_squared() < 0.0001:
-		# Degenerate: bot has bled almost all forward speed. No
-		# meaningful "perpendicular." Leave move_vector untouched —
-		# default steering will reaccelerate, cut window will expire.
-		return
-	var forward: Vector2 = vel_xz.normalized()
-	# 90° CCW rotation in XZ → "left" of forward.
-	var perp := Vector2(-forward.y, forward.x)
-	# Pick the side OPPOSITE the nearest in-range opposing blade.
-	var carry_pos: Vector3 = self_pos + Vector3(forward.x, 0.0, forward.y) * CARRY_BLADE_AIM_FORWARD_M
-	var best_dist: float = INF
-	var threat_lateral: float = 0.0
-	for peer_id: int in snapshot.skater_states:
-		if peer_id == _peer_id:
-			continue
-		if _team_id_by_peer.get(peer_id, -1) == _team_id:
-			continue
-		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		var threat_pos: Vector3 = opp_state.blade_contact_world
-		if threat_pos == Vector3.ZERO:
-			threat_pos = opp_state.position
-		var blade_to_puck: Vector3 = threat_pos - carry_pos
-		blade_to_puck.y = 0.0
-		var d: float = blade_to_puck.length()
-		if d < best_dist:
-			best_dist = d
-			threat_lateral = perp.x * blade_to_puck.x + perp.y * blade_to_puck.z
-	# If threat is on the +perp side, cut to -perp (away). Sign 0
-	# (threat dead ahead) keeps default +perp — arbitrary but
-	# better than no cut.
-	if threat_lateral > 0.0:
-		perp = -perp
-	input.move_vector = perp
+	input.move_vector = _poke_evade_dir
 
 
 # Defensive poke jab. Returns the aim point (the carrier's puck

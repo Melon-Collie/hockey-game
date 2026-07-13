@@ -154,9 +154,11 @@ extends RefCounted
 #   • protects_the_puck — shielding the puck with the body is taught skill: a
 #     pressured carrier pulls the puck off the presented forward spot to the
 #     protected side of the reachable-set seam (the back hip, body between puck
-#     and checker) and dekes INTO the seam instead of a blind sidestep. False =
-#     the puck stays presented ~2 m ahead of the body at all times, so a
-#     newcomer's straight-line poke-check genuinely works.
+#     and checker), and the poke-evade moment commits a real maneuver — the cut
+#     toward the directed seam or the brake check. False = the puck stays
+#     presented ~2 m ahead of the body at all times and no deke exists at all
+#     (the poke-evade never triggers without a seam read), so a newcomer's
+#     straight-line poke-check genuinely works.
 #
 # The GOALIE is intentionally NOT represented here — it stays consistent across
 # difficulties (and the skater AI's goalie-slide prediction in AIActionScoring
@@ -266,8 +268,9 @@ var angles_the_chase: bool
 var plays_rush_pass_lanes: bool
 
 # COGNITION: the carrier shields the puck — blade pulls it to the protected
-# side of the reachable-set seam under pressure, and the poke-evade deke cuts
-# toward the seam. False = naive forward carry, poke-checks work.
+# side of the reachable-set seam under pressure, and the poke-evade moment
+# commits a seam cut or brake check. False = naive forward carry with no deke
+# at all, poke-checks work.
 var protects_the_puck: bool
 
 
