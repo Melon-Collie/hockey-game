@@ -1386,36 +1386,58 @@ func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
 
 # ─── dumping: last-resort relief in two specific spots ───────────────────────
 
-func test_pinned_dz_carrier_dumps_to_clear() -> void:
-	# Deep in our slot, genuinely pinned: a forechecker charging up the middle
-	# and both flanks sealed — no open skating lane, no pass outlet. The honest
-	# strip-point carry pricing reads every route as a turnover in front of our
-	# own net (raw carry below the safe-giveaway floor), so the DZ clear wins:
-	# fling it off the strong-side boards, out of the zone, and race for it —
-	# a hard flat clear, not a soft flip. This is the "would otherwise stand
-	# there and be stripped" moment the dump exists for.
+func test_swarmed_own_zone_carrier_squeezes_out_with_possession() -> void:
+	# Deep in our slot, swarmed on-puck: a forechecker charging up the middle
+	# and both flanks tight beside the carrier. The retreat ring finds the
+	# least-bad squeeze OUT (worst case: stripped at the boards, honestly
+	# priced at the strip point) rather than pacifying against the swarm or
+	# flinging a hopeless fire — a possession escape beats conceding whenever
+	# any route survives the strip pricing, so the clear is a true last
+	# resort. (The clear's GEOMETRY stays pinned by the direct _best_dump
+	# test below.)
 	var self_pos := Vector3(6, 0, 24)                      # deep slot, swarmed
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
-			[3, 1, Vector3(6, 0, 21), false, Vector3(0, 0, 5)],
-			[4, 1, Vector3(3, 0, 22.5)],
-			[5, 1, Vector3(9, 0, 22.5)],
+			[3, 1, Vector3(6, 0, 22.2), false, Vector3(0, 0, 5)],
+			[4, 1, Vector3(4.6, 0, 24.6)],
+			[5, 1, Vector3(7.4, 0, 24.6)],
 	]
 	var ctx: RoleContext = _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
-			"a pinned own-zone carrier clears the puck rather than eat the strip")
-	assert_false(c.dump_is_soft, "a DZ clear is a hard flat fling, not a soft flip")
-	assert_gt(c.dump_target.x, 0.0, "cleared off the strong-side boards (carrier's side)")
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a swarmed own-zone carrier fights for the escape, not a giveaway fire")
+	assert_gt(self_pos.distance_to(c.last_carry_anchor), 3.0,
+			"…and the escape is a committed route out of the swarm, not a shuffle")
+
+
+func test_best_dump_geometry_in_own_zone_is_a_hard_rim_out() -> void:
+	# Direct pin on the DZ clear's GEOMETRY (the compete around it is covered
+	# above): from our own zone the dump is a hard flat fling off the
+	# strong-side boards, out of the zone.
+	var self_pos := Vector3(6, 0, 24)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(6, 0, 22)],
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var dump: Array = c._best_dump(ctx, AIRoleHelpers.resolve_our_goalie_pos(ctx))
+	assert_false(dump[2], "a DZ clear is a hard flat fling, not a soft flip")
+	assert_gt(dump[1].x, 0.0, "cleared off the strong-side boards (carrier's side)")
 	assert_false(
-			AIActionScoring.in_offensive_zone(c.dump_target, ctx.defending_goal_pos),
+			AIActionScoring.in_offensive_zone(dump[1], ctx.defending_goal_pos),
 			"the clear takes the puck out of our defensive zone")
 
 
-func test_contained_past_center_with_no_outlet_dumps_in() -> void:
-	# Carrier past centre, walled off short of the blue line with no outlet. Can't
-	# carry in, nothing to pass — dump-and-chase into the far corner.
+func test_contained_past_center_with_open_backfield_regroups() -> void:
+	# Carrier past centre, walled off short of the blue line, nothing to pass —
+	# but the ice BEHIND is open. The retreat ring + honest pricing now prefer
+	# carrying back to regroup with possession over conceding a dump-and-chase:
+	# creating space is a real play, the dump is the last resort. (The dump-in
+	# still fires when the backfield is dead — see the direct _best_dump
+	# geometry test below.)
 	var self_pos := Vector3(2, 0, -4)                      # attacking half (attack -Z), pre-blue
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
@@ -1425,13 +1447,31 @@ func test_contained_past_center_with_no_outlet_dumps_in() -> void:
 	var ctx: RoleContext = _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
-			"dumps in when the zone entry is walled off")
-	assert_true(c.dump_is_soft, "a dump-in is a soft flip to the corner")
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"an open backfield beats conceding the puck")
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY, "regroups with possession")
+	assert_gt(c.last_carry_anchor.z, self_pos.z + 2.0,
+			"the regroup carries back toward centre, creating space")
+
+
+func test_best_dump_geometry_past_center_is_a_soft_flip_to_the_far_corner() -> void:
+	# Direct pin on the dump-in's GEOMETRY (the compete around it is covered
+	# by the pincer/regroup tests): past centre, the dump target is a soft
+	# flip into the far offensive corner, away from the carrier's side.
+	var self_pos := Vector3(2, 0, -4)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2, 0, -5)],
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var dump: Array = c._best_dump(ctx, AIRoleHelpers.resolve_our_goalie_pos(ctx))
+	assert_true(dump[2], "a dump-in is a soft flip to the corner")
 	assert_true(
-			AIActionScoring.in_offensive_zone(c.dump_target, ctx.attacking_goal_pos),
+			AIActionScoring.in_offensive_zone(dump[1], ctx.attacking_goal_pos),
 			"the dump target is in the offensive zone")
-	assert_lt(c.dump_target.x, 0.0, "the FAR corner, opposite the carrier's side")
+	assert_lt(dump[1].x, 0.0, "the FAR corner, opposite the carrier's side")
 
 
 func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
@@ -1909,3 +1949,47 @@ func test_dz_carrier_behind_own_net_walks_out_around_a_post() -> void:
 			"the anchor rounds a post")
 	assert_lt(c.last_carry_anchor.z, OUR_NET_Z,
 			"…out in front of our own goal line")
+
+
+# ─── space creation: retreat ring + pass optionality ─────────────────────────
+
+func test_pass_option_prefers_the_spot_that_reopens_the_lane() -> void:
+	# Pure option read: same cached receiver, two candidate spots — one whose
+	# lane to him is walled by a defender, one with a clear lane. The clear
+	# spot inherits (a discounted cut of) the receiver's value.
+	var ctx := _make_ctx(Vector3.ZERO)
+	var c := AIRoleCarrier.new()
+	c._scratch_option_receiver_pos.append(Vector3(-8.0, 0.0, 0.0))
+	c._scratch_option_receiver_val.append(0.12)
+	c._scratch_opponents.append(Vector3(-4.0, 0.0, 0.0))    # parked on the direct lane
+	c._scratch_opponent_vels.append(Vector3.ZERO)
+	c._scratch_opponent_caps.append(null)
+	var blocked: float = c._candidate_pass_option(ctx, Vector3.ZERO)
+	var open: float = c._candidate_pass_option(ctx, Vector3(0.0, 0.0, 8.0))
+	assert_gt(open, blocked + 0.02,
+			"the spot with the reopened lane inherits real receiver value")
+	assert_lt(open, 0.12, "the option is a discounted cut, never par with a live pass")
+
+
+func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
+	# Double-team pinch in the OZ: both forward diagonals closing, every
+	# netward spot covered, a teammate open wide whose lane the pinch cuts
+	# from HERE. The retreat ring + pass option make backing out the winning
+	# carry — the space it buys reopens the lane — instead of the old
+	# pacified grind against the pinch.
+	var self_pos := Vector3(0.0, 0.0, -18.0)               # OZ, attacking -Z
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],        # open man, lane cut from here
+			[3, 1, Vector3(-1.8, 0.0, -19.6)],              # set wall (a charging pinch
+			[4, 1, Vector3(1.8, 0.0, -19.6)],               # would vacate ice to cut into)
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
+			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"no fire through the pinch — keep the puck")
+	assert_gt(c.last_carry_anchor.z, self_pos.z + 2.0,
+			"peels OUT of the pinch (a real backing-out, not a 3 m shuffle)")
