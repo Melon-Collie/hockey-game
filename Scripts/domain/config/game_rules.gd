@@ -215,6 +215,13 @@ const GRAVITY_M_S2: float = 9.8
 # so AI trajectory prediction and client puck extrapolation decelerate the same
 # way Jolt does — derived from ICE_FRICTION, which the live ice is also built from.
 const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
+# Height above the ice at which a puck counts as AIRBORNE — the blade-plane
+# gate: a grounded blade only plays pucks below this plane, a lifted blade
+# only above it (Puck.is_airborne / PuckReceptionRules.blade_can_interact).
+# Single source so the AI's saucer flight model (when a lofted pass is over
+# a grounded stick, and where it must land to be receivable) agrees with
+# the live interaction gate.
+const PUCK_AIRBORNE_HEIGHT_M: float = 0.05
 # Board restitution coefficient. Mirrors Physics/boards.tres `bounce` so AI
 # prediction models post-bounce trajectories the way Jolt resolves them. Unlike
 # ICE_FRICTION this can't be single-sourced — boards.tres is a static resource a

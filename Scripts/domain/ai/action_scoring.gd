@@ -458,39 +458,71 @@ static func pass_launch_speed(distance: float, max_launch: float,
 	return clampf(launch, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch) * speed_scale
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
-# A saucer (elevated) pass lofts the puck off the ice so it flies over a
-# defender's grounded stick mid-lane and settles back down near the
-# receiver. The lane-interception model treats this as: defenders in the
-# MID-LANE airborne window can't pick the puck off (it's over their
-# blade), but defenders close to the passer (puck hasn't lofted yet) or
-# close to the receiver (puck has landed) still block normally.
+# A saucer (LOW-loft) pass lofts the puck off the ice so it flies over a
+# defender's grounded stick mid-lane and settles back down before the
+# receiver. The whole flight profile is pure kinematics of the LOW loft's
+# fixed vertical launch (GameRules.DEFAULT_LOFT_VY_LOW_M_S) under gravity —
+# no shape parameters:
 #
-# Airborne span as a fixed DISTANCE off the passer's blade, NOT a fraction
-# of the flight. A saucer is a low flip: it clears stick height for a short
-# stretch, lands, and slides the rest grounded — it does not stay aloft the
-# whole way. (LOW loft launches at a fixed vertical speed, so the true
-# airborne carry is hang time × pass speed ≈ 6 m at quick-shot power; this
-# constant sits deliberately under that.) So the puck is treated
-# as airborne — clears a grounded stick, only a body blocks — only within
-# this distance of the passer; past it the puck has landed and a stick
-# intercepts normally. Modelling it as a distance (not a fraction) keeps
-# the grounded zone honest: a defender 7 m out blocks a saucer whether the
-# pass is 12 m or 25 m. Deliberately conservative.
-const SAUCER_AIRBORNE_DISTANCE_M: float = 4.0
+#   hang time      T_hang = 2·vy / g                       (~0.45 s)
+#   over window    [t_over, t_down] where y(t) exceeds the blade plane
+#                  (GameRules.PUCK_AIRBORNE_HEIGHT_M — the same on-ice/
+#                  off-ice gate PuckReceptionRules.blade_can_interact uses,
+#                  so "over a grounded stick" here means exactly what the
+#                  live reception physics enforces)
+#   airborne carry = launch speed × T_hang (no ice friction in the air)
+#
+# Inside the over window a defender's reach collapses to their BODY radius
+# — you can't react a grounded blade up into a puck overhead, but you
+# can't fly a low flip through a torso either. Outside it (just off the
+# blade, or landed) a stick intercepts normally — a stick already on the
+# puck at release still stuffs the flip.
+#
+# Because the airborne carry scales with LAUNCH SPEED, a soft flip is the
+# close-quarters tool: fired at ~11 m/s an 8 m feed clears a mid-lane
+# stick and still lands with runway, while the same feed at the crisp
+# ~20 m/s magnet pace would arrive still airborne — and an airborne puck
+# flies OVER the receiver's grounded blade (blade_can_interact), so it
+# isn't a pass at all. saucer_max_launch_speed is that receivability
+# bound; the carrier picks min(normal pace, that bound) and lets the EV
+# compete decide if the softer, longer-hanging flip beats the flat lane.
 
-# Saucer only wins over a grounded pass when it clears the lane by at
-# least this much (lane_clear delta, 0..1). Below it the loft isn't worth
-# the extra flight time / reception fiddliness, so the bot stays grounded.
-const SAUCER_LANE_BENEFIT_MARGIN: float = 0.20
+# Grounded slide runway the saucer must land with before the receiver's
+# tape: the puck has to be back on the blade plane — landed and settled
+# out of its touch-down skip — for a grounded blade to play it.
+const SAUCER_LANDING_RUN_M: float = 2.0
 
-# If the grounded lane is already this clear, never bother with a saucer —
-# there's no defender worth lofting over.
+# If the grounded lane is already this clear, never bother scoring a
+# saucer variant — there's no defender worth lofting over (and the flip
+# carries extra execution risk for nothing).
 const SAUCER_SKIP_WHEN_LANE_CLEAR: float = 0.85
 
-# Minimum pass distance for a saucer. Saucers are a stretch-pass tool — lofting
-# over a mid-lane defender only makes sense when there's a real lane to clear;
-# short feeds stay grounded regardless of pace.
-const SAUCER_MIN_DISTANCE_M: float = 10.0
+# Extra execution-miss probability a saucer adds on top of PASS_MISS_PROB:
+# the flip-and-land is fiddlier than a flat feed — the touch-down can skip
+# or wobble off line. This is the natural margin in the grounded-vs-saucer
+# EV compete: the loft only wins when the lane it clears is worth more
+# than the added landing risk.
+const SAUCER_EXTRA_MISS_PROB: float = 0.05
+
+
+# Time a LOW-loft puck spends off the ice (launch to touch-down).
+static func saucer_hang_time_s() -> float:
+	return 2.0 * GameRules.DEFAULT_LOFT_VY_LOW_M_S / GRAVITY_M_S2
+
+
+# Horizontal distance a saucer launched at `launch_speed` covers before
+# touching back down. No ice friction while airborne, so it's linear.
+static func saucer_airborne_distance_m(launch_speed: float) -> float:
+	return launch_speed * saucer_hang_time_s()
+
+
+# The fastest launch that still LANDS with SAUCER_LANDING_RUN_M of grounded
+# slide before a receiver `distance` away — the receivability bound (an
+# airborne arrival flies over the tape). Negative/tiny for very short
+# feeds: below min wrister pace there is no legal saucer, the physical
+# floor on saucer distance (~6.5 m at the 10 m/s soft-touch minimum).
+static func saucer_max_launch_speed(distance: float) -> float:
+	return (distance - SAUCER_LANDING_RUN_M) / saucer_hang_time_s()
 
 
 # Returns the LAUNCH speed a pass from `shooter` to `receiver` will fire at — set
@@ -1395,14 +1427,22 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 	return clampf(1.0 - max_block, 0.0, 1.0)
 
 
-# Lane-clear for a SAUCER (elevated) pass. Same closest-approach model as
-# lane_clear, except within SAUCER_AIRBORNE_DISTANCE_M of the passer the
-# puck is airborne, so a defender's reach collapses to their BODY radius —
-# sticks fly under it, only a body in the lane stops it (see
-# LANE_DEFENDER_BODY_RADIUS_M). Past that distance the puck has landed and
-# every defender blocks with full grounded stick reach.
+# Lane-clear for a SAUCER (LOW-loft) pass fired at `puck_speed_m_s`. Same
+# closest-approach model as lane_clear, except while the puck is above the
+# blade plane — the kinematic over window [t_over, t_down] of the LOW
+# loft's fixed vertical launch (see the saucer doc-block) — a defender's
+# reach collapses to their BODY radius: sticks fly under it, only a body
+# in the lane stops it (LANE_DEFENDER_BODY_RADIUS_M). Before the window
+# (puck still rising off the blade) and after it (landed) a stick
+# intercepts with full grounded reach + closing, per-defender caps
+# included — so a stick already on the puck at release still stuffs the
+# flip, and a defender past the touch-down point plays it like any flat
+# pass. Because the window is TIME-fixed, a softer launch shortens the
+# airborne carry — the close-quarters soft flip falls out of the same
+# geometry.
 static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
-		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> float:
+		puck_speed_m_s: float, opponent_vels: Array[Vector3] = [],
+		opponent_caps: Array = []) -> float:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
 	var line_len_sq: float = dx * dx + dz * dz
@@ -1415,6 +1455,15 @@ static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vecto
 	var pvx: float = dx * inv_len * speed
 	var pvz: float = dz * inv_len * speed
 	var vel_count: int = opponent_vels.size()
+	var has_caps: bool = opponent_caps.size() == opponents.size()
+	# Over window: y(t) = vy·t − ½·g·t² above the blade plane between the
+	# two roots. vy (2.2) comfortably clears the ~5 cm plane, so the
+	# discriminant is always positive; the maxf is belt-and-suspenders.
+	var vy: float = GameRules.DEFAULT_LOFT_VY_LOW_M_S
+	var root: float = sqrt(maxf(0.0,
+			vy * vy - 2.0 * GRAVITY_M_S2 * GameRules.PUCK_AIRBORNE_HEIGHT_M))
+	var t_over: float = (vy - root) / GRAVITY_M_S2
+	var t_down: float = (vy + root) / GRAVITY_M_S2
 	var max_block: float = 0.0
 	for i: int in opponents.size():
 		var p: Vector3 = opponents[i]
@@ -1428,43 +1477,31 @@ static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vecto
 		if t_raw > seg_time:
 			continue  # trailing the play — never closest in flight
 		var t: float = maxf(t_raw, 0.0)
-		# Horizontal distance the puck has travelled off the blade at the
-		# defender's closest approach (puck rides the lane at `speed`).
-		var along_dist: float = speed * t
 		var block: float
-		if along_dist <= SAUCER_AIRBORNE_DISTANCE_M:
-			# Still airborne — the puck flies over a grounded stick, so only
-			# the defender's body can block it: reach = body radius, no
-			# stick, no closing.
+		if t >= t_over and t <= t_down:
+			# Puck is above the blade plane — flies over a grounded stick,
+			# so only the defender's body can block it: reach = body
+			# radius, no stick, no closing.
 			var miss: float = _lane_miss_at(
 					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
 			block = clampf(
 					(LANE_DEFENDER_BODY_RADIUS_M - miss) / LANE_DEFENDER_BODY_RADIUS_M,
 					0.0, 1.0)
 		else:
-			# Puck has landed past the airborne span — full stick reach + closing.
+			# On/near the ice (rising off the blade, or landed) — full
+			# stick reach + closing, at this defender's real caps.
+			var stick_reach: float = LANE_DEFENDER_REACH_M
+			var close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S
+			if has_caps:
+				var caps: AISkaterCaps = opponent_caps[i]
+				if caps != null:
+					stick_reach = caps.stick_reach
+					close_speed = LANE_LATERAL_FRACTION * caps.max_speed
 			block = _lane_block_at(
-					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
+					from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz, stick_reach, close_speed)
 		if block > max_block:
 			max_block = block
 	return clampf(1.0 - max_block, 0.0, 1.0)
-
-
-# Should a pass over this lane be lofted (saucer) rather than fired flat?
-# True when the grounded lane is contested but a saucer meaningfully
-# clears it — i.e. there's a mid-lane defender the loft flies over.
-# Returns false when the grounded lane is already open (nothing to loft
-# over) or when the saucer doesn't beat grounded by SAUCER_LANE_BENEFIT_MARGIN
-# (loft not worth the extra flight time / fiddlier reception). The caller
-# gates the DISTANCE (saucers are a long-pass tool); this judges only the
-# lane geometry.
-static func prefers_saucer(from: Vector3, to: Vector3, opponents: Array[Vector3],
-		puck_speed_m_s: float, opponent_vels: Array[Vector3] = []) -> bool:
-	var grounded: float = lane_clear(from, to, opponents, puck_speed_m_s, opponent_vels)
-	if grounded >= SAUCER_SKIP_WHEN_LANE_CLEAR:
-		return false
-	var saucer: float = lane_clear_saucer(from, to, opponents, puck_speed_m_s, opponent_vels)
-	return saucer > grounded + SAUCER_LANE_BENEFIT_MARGIN
 
 
 # Interceptor point for a fired-puck lane: where on the puck's path the
@@ -1537,8 +1574,12 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 # `_score_at` prices in-zone positions by shot danger and out-of-zone positions by
 # position_potential, and a carrier already in the zone won't carry or pass back
 # out of it. Sign-folded so it works for either attacking direction.
-static func in_offensive_zone(pos: Vector3, attacking_goal: Vector3) -> bool:
-	return pos.z * signf(attacking_goal.z) > GameRules.BLUE_LINE_Z
+# `buffer` demands the position sit that much DEEPER than the line — the
+# carrier's blue-line keep-out bands (retreat / reception) use it so "in the
+# zone" can mean "in the zone with margin for the stick's reach".
+static func in_offensive_zone(pos: Vector3, attacking_goal: Vector3,
+		buffer: float = 0.0) -> bool:
+	return pos.z * signf(attacking_goal.z) > GameRules.BLUE_LINE_Z + buffer
 
 
 static func position_potential(
