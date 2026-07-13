@@ -11,7 +11,8 @@ const STEP_STICKHANDLE: int = TutorialRegistry.STEP_STICKHANDLE
 const STEP_DEFLECT:     int = TutorialRegistry.STEP_DEFLECT
 const STEP_BLADE_LIFT:  int = TutorialRegistry.STEP_BLADE_LIFT
 const STEP_DROP_PUCK:   int = TutorialRegistry.STEP_DROP_PUCK
-const STEP_SHOOT_WRIST:   int = TutorialRegistry.STEP_SHOOT_WRIST
+const STEP_SHOOT_WRIST:    int = TutorialRegistry.STEP_SHOOT_WRIST
+const STEP_SHOOT_BACKHAND: int = TutorialRegistry.STEP_SHOOT_BACKHAND
 const STEP_SHOOT_TARGETS: int = TutorialRegistry.STEP_SHOOT_TARGETS
 const STEP_SHOOT_SLAP:    int = TutorialRegistry.STEP_SHOOT_SLAP
 const STEP_ONE_TIMER:     int = TutorialRegistry.STEP_ONE_TIMER
@@ -484,6 +485,11 @@ func _step_def_for(step_id: int) -> TutorialStep:
 				"Wrist Shot",
 				"You've got the puck. Hold {shoot}, drag toward the net, and release. The way you drag is your aim — and the faster you drag, the harder the shot.",
 				"A slow sweep is a soft pass — snap the drag toward the net to really rip it.")
+		STEP_SHOOT_BACKHAND:
+			return _step(
+				"Backhand",
+				"Same wrister, other face of the blade: hold {shoot} and curl the drag across your body, then release — that's the backhand. It comes off softer than your forehand, but in tight it's the release you already have.",
+				"A straight-line drag always reads as forehand — the backhand is the deliberate curl around your body. It won't beat anyone with pace, so pick your spot.")
 		STEP_SHOOT_TARGETS:
 			# Live copy is set per-wave by _show_targets_wave; this is the wave-0 default.
 			return _step(
@@ -748,6 +754,11 @@ func _begin_step(index: int) -> void:
 			# (dragged wrister / slapper) handled in _on_shooting_shot.
 			_setup_shooting_drill(_slot_z())
 			_hud.set_objective("Score on the open net.")
+
+		STEP_SHOOT_BACKHAND:
+			# Same open-net slot drill, hand-gated in _on_shooting_shot.
+			_setup_shooting_drill(_slot_z())
+			_hud.set_objective("Score off the backhand.")
 
 		STEP_SHOOT_TARGETS:
 			_setup_shooting_drill(_slot_z())
@@ -1421,6 +1432,17 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 		STEP_SHOOT_WRIST:
 			_last_shot_qualifies = (not is_slapper) and TutorialShotRules.is_dragged_wrister(
 					_wrist_peak_charge, _WRIST_CHARGE_QUALIFY)
+		STEP_SHOOT_BACKHAND:
+			# The release path classifies every wrister FH/BH from the sweep's
+			# chirality and stamps last_release_hand just before this signal
+			# fires ("" for quick shots / slappers — no backhand concept there).
+			_last_shot_qualifies = (not is_slapper) \
+					and _local_controller.last_release_hand == "BH"
+			if _last_shot_qualifies:
+				# Drop a lingering "off the forehand" prompt the moment a real
+				# backhand leaves the blade. Safe to clear broadly: the loft
+				# prompt re-asserts itself every frame if it still applies.
+				_hud.clear_alert()
 		STEP_SHOOT_SLAP:
 			_last_shot_qualifies = is_slapper
 		STEP_SHOOT_FINISH:
@@ -1449,7 +1471,7 @@ const _ELEV_ANY: int = -1
 
 func _expected_elevation() -> int:
 	match _current_step_id():
-		STEP_SHOOT_WRIST, STEP_SHOOT_SLAP:
+		STEP_SHOOT_WRIST, STEP_SHOOT_BACKHAND, STEP_SHOOT_SLAP:
 			return ShotMechanics.ELEVATION_FLAT
 		STEP_SHOOT_TARGETS:
 			match _targets_phase:
@@ -1542,6 +1564,11 @@ func _shooting_tick(delta: float) -> void:
 			if _last_shot_qualifies:
 				_complete_step()  # scored puck stays in the net through the flash
 			else:
+				# A goal off the wrong release restages after the standard beat.
+				# The backhand drill explains why the goal didn't count — a
+				# silent reset there reads as the drill eating a clean finish.
+				if _current_step_id() == STEP_SHOOT_BACKHAND:
+					_hud.set_alert("In — but off the forehand. Curl the drag around your body and let it go from the backhand.")
 				_begin_restage()
 			return
 

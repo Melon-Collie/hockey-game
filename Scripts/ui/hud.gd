@@ -1426,29 +1426,52 @@ func _present_game_over_screen(result_text: String, result_color: Color) -> void
 	var star_stripes: Array[Color] = []
 	for star: PlayerRecord in GameManager.get_stars_of_game():
 		star_names.append(star.display_name())
-		star_lines.append(_star_stat_line(star.stats))
+		if star.is_goalie:
+			var opp: int = 1 - star.team.team_id
+			star_lines.append(_goalie_star_line(GameManager.get_team_shots(opp),
+					_score_1 if opp == 1 else _score_0))
+		else:
+			star_lines.append(_star_stat_line(star.stats))
 		star_stripes.append(_scorebug_stripe(star.team.team_id))
 	_game_over_popup.present(_score_0, _score_1,
 			_scorebug_stripe(0), _scorebug_stripe(1),
 			result_text, result_color,
 			star_names, star_lines, star_stripes)
 
-# Compact stat line for a star row. Scorers show goals/assists; a star who
-# earned it on volume/defense (a 0-point grinder game) shows those instead.
+# Compact stat line for a star row. Scorers show goals/assists (plus the GWG
+# tag — the clutch credit the selection weighted); a star who earned it on
+# volume/defense (a 0-point grinder game) shows those instead.
 func _star_stat_line(stats: PlayerStats) -> String:
 	var parts: PackedStringArray = PackedStringArray()
 	if stats.goals > 0:
 		parts.append("%dG" % stats.goals)
 	if stats.assists > 0:
 		parts.append("%dA" % stats.assists)
+	if stats.game_winning_goals > 0:
+		parts.append("GWG")
 	if parts.is_empty():
 		if stats.shots_on_goal > 0:
 			parts.append("%d SOG" % stats.shots_on_goal)
 		if stats.shots_blocked > 0:
 			parts.append("%d BLK" % stats.shots_blocked)
+		if stats.takeaways > 0:
+			parts.append("%d TKA" % stats.takeaways)
 		if stats.hits > 0:
 			parts.append("%d HITS" % stats.hits)
 	return " · ".join(parts)
+
+
+# Saves line for a starred goalie: save count + save percentage in the
+# broadcast ".900" style, or the shutout tag when nothing got through. Shots
+# on goal include goals (NHL convention), so saves = shots faced − GA.
+func _goalie_star_line(shots_faced: int, goals_against: int) -> String:
+	var saves: int = maxi(0, shots_faced - goals_against)
+	if goals_against == 0:
+		return "%d SV · SO" % saves
+	if shots_faced <= 0:
+		return ""
+	var pct: String = ("%.3f" % (float(saves) / float(shots_faced))).trim_prefix("0")
+	return "%d SV · %s" % [saves, pct]
 
 func _on_game_reset() -> void:
 	if _game_over_present_tween != null and _game_over_present_tween.is_running():
