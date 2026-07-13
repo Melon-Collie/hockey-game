@@ -455,29 +455,6 @@ func test_dispatch_throttled_tick_reuses_cached_decision() -> void:
 	assert_almost_eq(input.mouse_world_pos.z, 2.0, 1e-6)
 
 
-# ── wants_direct_aim: skip the second-stage cursor lerp during committed shot ──
-
-func test_wants_direct_aim_true_in_shot_states() -> void:
-	sm._state = Agent.State.SHOOT_PRESSED
-	assert_true(sm.wants_direct_aim(), "charging a wrister tracks the cursor directly")
-	sm._state = Agent.State.ONE_TIMER_PRESSED
-	assert_true(sm.wants_direct_aim(), "one-timer tracks directly")
-
-
-func test_wants_direct_aim_true_when_pre_aiming_a_shot() -> void:
-	sm._state = Agent.State.CARRY
-	sm._intended_action = Agent.State.SHOOT_PRESSED
-	assert_true(sm.wants_direct_aim(), "shot pre-aim (still in CARRY) tracks directly")
-
-
-func test_wants_direct_aim_false_for_carry_and_pass() -> void:
-	sm._state = Agent.State.CARRY
-	sm._intended_action = Agent.State.CARRY
-	assert_false(sm.wants_direct_aim(), "plain carry keeps the second-stage lerp")
-	sm._intended_action = Agent.State.PASS_PRESSED
-	assert_false(sm.wants_direct_aim(), "pass pre-aim keeps the softening lerp")
-
-
 # ── Slice 5: press-state handlers + transitions ──────────────────────────────
 # The fire states (SHOOT_PRESSED / ONE_TIMER_PRESSED / PASS_PRESSED) are
 # entered by the carrier from CARRY, but once entered they run

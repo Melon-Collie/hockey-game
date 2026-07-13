@@ -43,12 +43,8 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal reacts to possession changes later than Hard")
 	assert_gt(easy.carrier_reaction_delay_s, normal.carrier_reaction_delay_s,
 			"Easy reacts to possession changes later than Normal")
-	# (Aim slew is no longer a profile knob — it's the bot's real Hands blade speed.)
-	# Aim lerp: lower lags more.
-	assert_lt(normal.mouse_lerp_factor, hard.mouse_lerp_factor,
-			"Normal's aim lags more than Hard's")
-	assert_lt(easy.mouse_lerp_factor, normal.mouse_lerp_factor,
-			"Easy's aim lags more than Normal's")
+	# (Aim slew is no longer a profile knob — it's the bot's real Hands blade
+	# speed — and the old second-stage cursor lerp is gone entirely.)
 	# Dispatch cadence: more ticks re-decides less often.
 	assert_gt(normal.dispatch_period_ticks, hard.dispatch_period_ticks,
 			"Normal re-decides less often than Hard")
@@ -158,12 +154,6 @@ func test_pass_error_never_exceeds_shot_error() -> void:
 	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
 		assert_lte(profile.pass_aim_error_m, profile.shot_aim_error_m,
 				"pass aim error stays at or below shot aim error at every tier")
-
-
-func test_lerp_factors_stay_in_unit_range() -> void:
-	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
-		assert_gt(profile.mouse_lerp_factor, 0.0)
-		assert_lte(profile.mouse_lerp_factor, 1.0)
 
 
 func test_dispatch_period_is_at_least_one_tick() -> void:

@@ -22,9 +22,12 @@ extends RefCounted
 #     and a lower-Hands build is naturally slower/less precise. This retired the
 #     old artificial mouse_max_speed slew, which capped every bot's blade at a flat
 #     per-difficulty rate regardless of Hands. Execution difficulty now rides the
-#     bot's attribute BUILD, not a hands-override.
-#   • mouse_lerp_factor — a mild second-stage tracking lag (see SkaterAgent), so
-#     aim transitions on passes/carries read as a swing, not a snap.
+#     bot's attribute BUILD, not a hands-override. (A second-stage per-tick
+#     exponential cursor lerp in SkaterAgent — mouse_lerp_factor — was likewise
+#     retired: it added only milliseconds of lag, and its straight-line world
+#     blending chord-cut the SM's shaped cursor paths across the body on big
+#     flips, tripping the pose IK gate's facing freeze. The natural swing feel
+#     it bought now comes from the Hands slew + carry sway instead.)
 #   • carrier_reaction_delay_s — how long the bot keeps acting on its PRIOR
 #     read of who controls the puck before recognising a possession change.
 #     This is the human "you can't react to a pass within a tick" lever. It is
@@ -155,21 +158,18 @@ extends RefCounted
 #
 # ── Tick-rate note (these knobs are tuned for PHYSICS_TICK = 120 Hz) ──────────
 # carrier_reaction_delay_s (seconds) is tick-independent — it converts to a
-# per-tick countdown against the real tick rate. dispatch_period_ticks and
-# mouse_lerp_factor are NOT: a tick count and a per-tick exponential lerp both
-# change meaning with the tick rate.
-# They are calibrated against the current 120 Hz sim. If the sim tick rate ever
-# changes, rescale them to preserve wall-clock feel: a dispatch period scales
-# linearly with the rate, and a lerp factor f maps so that (1 - f') ^ new_rate
-# == (1 - f) ^ old_rate (equal residual per second).
+# per-tick countdown against the real tick rate. dispatch_period_ticks is NOT:
+# a tick count changes meaning with the tick rate. It is calibrated against
+# the current 120 Hz sim; if the sim tick rate ever changes, rescale it
+# linearly with the rate to preserve wall-clock feel.
 #
 # To add a tier: add a Difficulty enum value, a factory, and a for_difficulty
 # arm. To add a knob: add a field + _init param, set it in ALL THREE factories,
-# and consume it where the relevant value is read (SkaterAgent for lerp,
-# SkaterAgentStateMachine for max_speed / dispatch / the execution errors +
-# sway / the pace + settle knobs it copies onto RoleContext, GameManager for
-# the carrier reaction delay, and the role behaviors — pressure.gd /
-# carrier.gd — for the pace + settle + timing knobs via RoleContext).
+# and consume it where the relevant value is read (SkaterAgentStateMachine for
+# dispatch / the execution errors + sway / the pace + settle knobs it copies
+# onto RoleContext, GameManager for the carrier reaction delay, and the role
+# behaviors — pressure.gd / carrier.gd — for the pace + settle + timing knobs
+# via RoleContext).
 
 enum Difficulty {
 	EASY = 0,     # the floor — well-late reads, swimmy blade, commits hard to stale reads
@@ -184,10 +184,6 @@ enum Difficulty {
 # Positions stay real-time and self-possession is instant; 0.0 = perfect
 # (frame-tick) reaction. Tick-independent (a seconds countdown).
 var carrier_reaction_delay_s: float
-
-# Mouse-world lerp factor passed to SkaterAgent. 1.0 = snap (no extra lag).
-# Per-tick exponential — tuned for 120 Hz (see tick-rate note above).
-var mouse_lerp_factor: float
 
 # Full-dispatch cadence: physics ticks between decision re-evaluations during
 # non-press states (press states always run full-rate). Higher = laggier reads.
@@ -264,7 +260,7 @@ var angles_the_chase: bool
 var plays_rush_pass_lanes: bool
 
 
-func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
+func _init(p_carrier_reaction_delay_s: float,
 		p_dispatch_period_ticks: int,
 		p_shot_aim_error_m: float, p_pass_aim_error_m: float,
 		p_shot_timing_error_s: float, p_carry_sway_m: float,
@@ -274,7 +270,6 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 		p_reads_goalie_motion: bool, p_holds_for_developing_feeds: bool,
 		p_angles_the_chase: bool, p_plays_rush_pass_lanes: bool) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
-	mouse_lerp_factor = p_mouse_lerp_factor
 	dispatch_period_ticks = p_dispatch_period_ticks
 	shot_aim_error_m = p_shot_aim_error_m
 	pass_aim_error_m = p_pass_aim_error_m
@@ -313,7 +308,7 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 # plays, angles its chase, and plays the pass on odd-man rushes — the full
 # hockey IQ.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 0.85, 2, 0.02, 0.02, 0.10, 0.08, 0.0,
+	return BotSkillProfile.new(0.05, 2, 0.02, 0.02, 0.10, 0.08, 0.0,
 			0.0, 1.0, 1.0, 1.0,
 			true, true, true, true)
 
@@ -321,9 +316,8 @@ static func hard() -> BotSkillProfile:
 # Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
 # reads consistently in play: a ~220 ms reaction to possession changes (human-
 # or-slower — it recognises a pass / turnover a clear beat late, no longer
-# matching one-timers), a mild second-stage aim lag (lerp 0.5) so pass/carry aim
-# reads as a swing, and a slower decision cadence (6 ticks = a third of Hard's
-# re-decide rate, ~50 ms). Tune carrier_reaction_delay DOWN toward 0.18 if it
+# matching one-timers) and a slower decision cadence (6 ticks = a third of
+# Hard's re-decide rate, ~50 ms). Tune carrier_reaction_delay DOWN toward 0.18 if it
 # feels a step slow rather than beatable. (Aim speed is the bot's real Hands
 # blade speed now — give Normal bots a lower-Hands build if their shots feel too
 # sharp, rather than an artificial slew.)
@@ -358,14 +352,14 @@ static func hard() -> BotSkillProfile:
 # on odd-man rushes (youth-hockey fundamentals) — a competent league player,
 # not a student of the game.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 0.5, 6, 0.06, 0.03, 0.16, 0.14, 0.30,
+	return BotSkillProfile.new(0.22, 6, 0.06, 0.03, 0.16, 0.14, 0.30,
 			1.5, 1.0, 0.65, 0.6,
 			false, true, true, true)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
-# reacts to a pass a beat and a half late — visibly human-slow), a swimmy
-# second-stage aim lag (lerp 0.38), and a slow decision cadence (9 ticks ≈ 75 ms)
+# reacts to a pass a beat and a half late — visibly human-slow) and a slow
+# decision cadence (9 ticks ≈ 75 ms)
 # so it commits hard to a stale read and can be dragged out of position. Still
 # plays positionally and shoots / passes — a real but soft opponent, not a
 # stationary one. First-pass numbers — tune carrier_reaction_delay against play,
@@ -396,7 +390,7 @@ static func normal() -> BotSkillProfile:
 # cross-crease 2-on-1 feed connects). Beginner hockey IQ to match the
 # beginner hands.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 0.38, 9, 0.11, 0.045, 0.24, 0.22, 0.55,
+	return BotSkillProfile.new(0.34, 9, 0.11, 0.045, 0.24, 0.22, 0.55,
 			3.0, 1.0, 0.0, 0.2,
 			false, false, false, false)
 
