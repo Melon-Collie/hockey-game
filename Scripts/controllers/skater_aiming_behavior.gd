@@ -29,6 +29,12 @@ var prev_blade_dir: Vector3 = Vector3.ZERO
 # speed): flick fast = hard, sweep slow = soft. Saved/restored across reconcile
 # like the rest of the charge state.
 var cursor_speed_ema: float = 0.0
+# Blade XZ path length (meters, player-relative) accumulated over the current
+# stroke by ChargeTracking — the world-space "did you actually sweep" signal
+# that gates the wrister power CEILING (ShotMechanics.wrister_travel_cap_t).
+# Resets with the stroke on a variance break; saved/restored across reconcile
+# like cursor_speed_ema.
+var stroke_travel: float = 0.0
 
 # ── Slapper charge state ──────────────────────────────────────────────────────
 var slapper_charge_timer: float = 0.0
@@ -39,6 +45,7 @@ var one_timer_window_timer: float = 0.0
 func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Vector3) -> void:
 	swing_rotation = 0.0
 	cursor_speed_ema = 0.0
+	stroke_travel = 0.0
 	prev_blade_dir = Vector3.ZERO
 	prev_intent_pos = initial_intent_pos
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
@@ -49,7 +56,8 @@ func tick_wrister_charge(
 		blade_pos_rel_skater: Vector3,
 		max_charge_direction_variance: float,
 		delta: float,
-		cursor_speed_smoothing: float) -> void:
+		cursor_speed_smoothing: float,
+		max_travel_step: float = INF) -> void:
 	# Raw screen-space cursor speed (px/s), EMA-smoothed — THE wrister power
 	# signal. Computed against the OLD prev_intent_pos before ChargeTracking's
 	# result overwrites it below.
@@ -59,13 +67,16 @@ func tick_wrister_charge(
 		var inst_speed: float = screen_delta.length() / delta
 		var a: float = clampf(cursor_speed_smoothing * delta, 0.0, 1.0)
 		cursor_speed_ema = lerpf(cursor_speed_ema, inst_speed, a)
-	# ChargeTracking now only tracks the swing chirality (forehand/backhand) and
-	# the variance-break reset — power is the cursor speed above, not distance.
+	# ChargeTracking tracks the swing chirality (forehand/backhand), the
+	# stroke's blade travel (the power-ceiling gate), and the variance-break
+	# reset — power itself is the cursor speed above.
 	var result: Dictionary = ChargeTracking.accumulate(
 			prev_intent_pos, intent_pos,
 			prev_blade_pos_rel_skater, blade_pos_rel_skater,
-			prev_blade_dir, max_charge_direction_variance, swing_rotation)
+			prev_blade_dir, max_charge_direction_variance, swing_rotation,
+			stroke_travel, max_travel_step)
 	swing_rotation = result.rotation
+	stroke_travel = result.travel
 	prev_blade_dir = result.direction
 	prev_intent_pos = intent_pos
 	prev_blade_pos_rel_skater = blade_pos_rel_skater

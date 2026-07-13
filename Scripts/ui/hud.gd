@@ -893,6 +893,12 @@ func _on_local_shot_released(_direction: Vector3, power: float, is_slapper: bool
 	# surface a stale hand from an earlier wrister.
 	if not is_slapper and _shot_toast_controller.last_release_hand != "":
 		text += " · " + _shot_toast_controller.last_release_hand
+		# Stroke travel behind the release (charged wristers only, -1 for the
+		# rest) — the calibration readout for wrister_full_stroke_travel: an
+		# honest sweep should land at/past it, a twitch far under.
+		var travel: float = _shot_toast_controller.last_release_stroke_travel
+		if travel >= 0.0 and is_finite(travel):
+			text += " · %.2fM" % travel
 	_toast_stack.push(text, _WHITE)
 
 
