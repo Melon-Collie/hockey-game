@@ -194,6 +194,71 @@ func test_argmax_shifts_toward_pass_lane_when_pass_dominates() -> void:
 			"adding +X pass option should not pull PRESSURE further -X; got pass=%s solo=%s" % [pass_target, solo_target])
 
 
+# ── Target switch-hysteresis ────────────────────────────────────────────────
+
+func test_standing_target_sticks_within_margin() -> void:
+	# A standing target whose re-scored value is within TARGET_SWITCH_MARGIN
+	# of the fresh argmax is kept — the anti-flicker guarantee. Solo carrier,
+	# straight shot: first decide picks a spot on the shot lane; a prev
+	# target nudged 0.3 m along the same lane blocks essentially the same
+	# shot, so decide must return the prev, not re-jump to the argmax.
+	var carrier_pos := Vector3(0, 0, 22)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(8, 0, 18), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier_pos, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(8, 0, 18), 200, skaters)
+	var first: Vector3 = AIRolePressure.decide(ctx).target_position
+	var prev: Vector3 = first + Vector3(0, 0, 0.3)  # a hair deeper on the lane
+	var ctx2: RoleContext = _make_ctx(Vector3(8, 0, 18), 200, skaters)
+	ctx2.prev_role_target = prev
+	var second: Vector3 = AIRolePressure.decide(ctx2).target_position
+	assert_eq(second, prev,
+			"a near-equal standing target is kept through hysteresis")
+
+
+func test_standing_target_dropped_when_clearly_beaten() -> void:
+	# A standing target well off the shot lane blocks nothing; the fresh
+	# argmax beats it past the margin and the pressurer re-anchors.
+	var carrier_pos := Vector3(0, 0, 22)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(8, 0, 18), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier_pos, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(8, 0, 18), 200, skaters)
+	ctx.prev_role_target = Vector3(9.0, 0, 23.5)  # goal-side but far off the lane
+	var target: Vector3 = AIRolePressure.decide(ctx).target_position
+	assert_ne(target, ctx.prev_role_target,
+			"a clearly-beaten standing target is abandoned")
+	assert_lt(absf(target.x), 3.5, "re-anchors onto the shot lane")
+
+
+func test_standing_target_ignored_when_wrong_side() -> void:
+	# A standing target that fails the goal-side filter (carrier skated past
+	# it) is dropped outright — hysteresis never holds a lost position.
+	var carrier_pos := Vector3(0, 0, 22)
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier_pos, Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 18), 200, skaters)
+	ctx.prev_role_target = Vector3(0, 0, 20.0)  # opp-net side of the carrier
+	var target: Vector3 = AIRolePressure.decide(ctx).target_position
+	assert_true(target.z >= carrier_pos.z - 0.01,
+			"wrong-side standing target is ignored, argmax runs fresh")
+
+
+func test_candidate_set_includes_inner_ring() -> void:
+	# PRESSURE samples at half step too (18 candidates: center + self +
+	# 8 outer + 8 inner) so the cut-off can correct in small moves.
+	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
+			Vector3.ZERO, Vector3(5, 0, 5), true)
+	assert_eq(candidates.size(), 18)
+	var default_set: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
+			Vector3.ZERO, Vector3(5, 0, 5))
+	assert_eq(default_set.size(), 10, "inner ring is opt-in")
+
+
 # ── Wrong-side filter ───────────────────────────────────────────────────────
 
 func test_wrong_side_candidates_are_filtered() -> void:

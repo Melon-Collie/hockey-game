@@ -152,6 +152,16 @@ var ping_pass_target_peer: int = -1
 # per-call tick math by this so wall-clock durations don't stretch with the tier.
 var dispatch_period_ticks: int = 1
 
+# The target_position this bot's role chose on its PREVIOUS dispatch, or
+# Vector3.INF when there is none (first dispatch, or the slot changed since —
+# the state machine stamps INF across a slot change so no role inherits
+# another role's target). Roles that pick their target by candidate argmax
+# use it for switch-hysteresis: keep the standing target unless a fresh
+# candidate beats it by a real margin, so two near-tied candidates can't
+# trade places every dispatch and oscillate the bot between them (see
+# AIRolePressure.TARGET_SWITCH_MARGIN).
+var prev_role_target: Vector3 = Vector3.INF
+
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the
 # collect_* helpers fill these buffers instead of allocating fresh arrays at AI

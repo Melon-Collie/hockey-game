@@ -45,6 +45,22 @@ class_name AIRolePressure
 # the puck; "getting caught up-ice" isn't applicable. ANCHOR / COVER
 # own defensive recovery for this team.
 
+# Switch-hysteresis on the chosen cut-off point. The standing target
+# (ctx.prev_role_target) is re-scored against the live geometry each
+# dispatch and kept unless a fresh candidate deflates the carrier's best
+# option by at least this much more (threat-surface units — the same 0..1
+# currency as score_shoot / score_pass). Without it, "block the shot" and
+# "block the best pass" trade places on near-equal scores every dispatch
+# and the pressurer oscillates between two spots metres apart, covering
+# neither — the same argmax flicker the slot / threat-partition /
+# strong-side seams already damp with their own margins. Because the
+# standing target is re-scored (not frozen), a carrier skating away decays
+# its score and the switch happens exactly when the geometry really moved.
+# Tuning: raise toward 0.08 if the pressurer still wobbles between lanes;
+# lower toward 0.02 if it visibly camps a stale cut-off.
+const TARGET_SWITCH_MARGIN: float = 0.04
+
+
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
@@ -111,10 +127,12 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		search_center += to_net.normalized() * (
 				SkaterAgentStateMachine.BLADE_REACH_M + ctx.pursuit_standoff_m)
 
-	# Search around the cut-off point; goal-side filter rejects the
-	# half-disc on the wrong side of the carrier (toward opp net).
+	# Search around the cut-off point (inner ring on: the chosen point is a
+	# per-dispatch steering target, so half-step samples let it correct in
+	# small moves); goal-side filter rejects the half-disc on the wrong
+	# side of the carrier (toward opp net).
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, search_center)
+			ctx.self_pos, search_center, true)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -134,6 +152,22 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		if pressure_score > best_score:
 			best_score = pressure_score
 			best_pos = c
+
+	# Switch-hysteresis: re-score the standing target under the live
+	# geometry and keep it unless the fresh argmax beats it by
+	# TARGET_SWITCH_MARGIN. The standing target must still pass every
+	# filter a candidate does — a now-illegal / wrong-side / crowding
+	# target is dropped outright.
+	var prev: Vector3 = ctx.prev_role_target
+	if prev.is_finite() \
+			and AIRoleHelpers.is_legal_position(prev) \
+			and _is_goal_side(prev, carrier_pos, our_net) \
+			and not AIRoleHelpers.too_close_to_teammate(prev, our_team_excluding_self):
+		var prev_score: float = -_carrier_best_option(
+				prev, carrier_pos, our_net, our_goalie_pos,
+				our_team_excluding_self, opp_teammates)
+		if best_score <= prev_score + TARGET_SWITCH_MARGIN:
+			best_pos = prev
 
 	d.target_position = best_pos
 	return d

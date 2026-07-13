@@ -51,8 +51,14 @@ static func generate_candidates(ctx: RoleContext) -> Array[Vector3]:
 # around `center` at SEARCH_STEP_M. Use this when a role wants to
 # pick its own search center from in-game references rather than
 # inheriting whatever ctx.anchor happens to be.
+#
+# `with_inner_ring` appends 8 more polar samples at half step so the
+# argmax can express small corrections instead of jumping in 3 m
+# quanta — used by PRESSURE, whose chosen cut-off point is consumed
+# directly as a steering target every dispatch (a coarser role that
+# re-centers each brain tick doesn't need the resolution).
 static func generate_candidates_around(self_pos: Vector3,
-		center: Vector3) -> Array[Vector3]:
+		center: Vector3, with_inner_ring: bool = false) -> Array[Vector3]:
 	var result: Array[Vector3] = []
 	result.append(center)
 	result.append(self_pos)
@@ -61,6 +67,13 @@ static func generate_candidates_around(self_pos: Vector3,
 				center.x + SEARCH_STEP_M * cos(angle),
 				0.0,
 				center.z + SEARCH_STEP_M * sin(angle)))
+	if with_inner_ring:
+		var inner: float = SEARCH_STEP_M * 0.5
+		for angle: float in POLAR_ANGLES:
+			result.append(Vector3(
+					center.x + inner * cos(angle),
+					0.0,
+					center.z + inner * sin(angle)))
 	return result
 
 

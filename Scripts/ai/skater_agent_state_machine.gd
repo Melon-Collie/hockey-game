@@ -638,6 +638,12 @@ var _scratch_opp_ids: Array[int] = []
 # instance is safe; the role decide() consumes everything before the next build.
 var _role_ctx := RoleContext.new()
 
+# The slot + target this bot's role chose on the previous role dispatch —
+# feeds RoleContext.prev_role_target for argmax switch-hysteresis (INF is
+# stamped across a slot change so no role inherits another role's target).
+var _prev_role_slot: int = AIRoleSlots.Slot.NONE
+var _prev_role_target: Vector3 = Vector3.INF
+
 # Per-peer velocity history for acceleration estimation. Each bot
 # maintains its own cache because dispatch runs per-bot — the
 # duplicated work across the 3 bots on a team is a few subtractions
@@ -1564,40 +1570,48 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 # slotted CARRIER but we don't have the puck.
 func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null else AIRoleSlots.Slot.NONE
+	# Target switch-hysteresis input: the target this bot's role chose last
+	# dispatch — INF across a slot change so no role inherits another's
+	# target (see RoleContext.prev_role_target).
+	ctx.prev_role_target = _prev_role_target if slot == _prev_role_slot else Vector3.INF
+	var decision: RoleDecision
 	match slot:
 		AIRoleSlots.Slot.FINISHER:
-			return AIRoleFinisher.decide(ctx)
+			decision = AIRoleFinisher.decide(ctx)
 		AIRoleSlots.Slot.SUPPORT:
-			return AIRoleSupport.decide(ctx)
+			decision = AIRoleSupport.decide(ctx)
 		AIRoleSlots.Slot.OUTLET:
-			return AIRoleOutlet.decide(ctx)
+			decision = AIRoleOutlet.decide(ctx)
 		AIRoleSlots.Slot.BREAKOUT_STRONG:
-			return AIRoleBreakout.decide(ctx, true)
+			decision = AIRoleBreakout.decide(ctx, true)
 		AIRoleSlots.Slot.BREAKOUT_WEAK:
-			return AIRoleBreakout.decide(ctx, false)
+			decision = AIRoleBreakout.decide(ctx, false)
 		AIRoleSlots.Slot.F1_PRESSURE:
 			# F1 reuses PRESSURE — goal-side cutoff of the carrier, already
 			# loose-puck-safe; follows the puck out and accepts the tag-up
 			# risk if the opp breaks out.
-			return AIRolePressure.decide(ctx)
+			decision = AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.F2_MID:
-			return AIRoleForecheck.decide(ctx, false)
+			decision = AIRoleForecheck.decide(ctx, false)
 		AIRoleSlots.Slot.F3_HIGH:
-			return AIRoleForecheck.decide(ctx, true)
+			decision = AIRoleForecheck.decide(ctx, true)
 		AIRoleSlots.Slot.PRESSURE:
-			return AIRolePressure.decide(ctx)
+			decision = AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.MARK:
-			return AIRoleMark.decide(ctx)
+			decision = AIRoleMark.decide(ctx)
 		AIRoleSlots.Slot.CONTAIN:
-			return AIRoleContain.decide(ctx)
+			decision = AIRoleContain.decide(ctx)
 		AIRoleSlots.Slot.CHASE:
-			return AIRoleChase.decide(ctx)
+			decision = AIRoleChase.decide(ctx)
 		AIRoleSlots.Slot.FLANK_L:
-			return AIRoleFlank.decide(ctx, -1.0)
+			decision = AIRoleFlank.decide(ctx, -1.0)
 		AIRoleSlots.Slot.FLANK_R:
-			return AIRoleFlank.decide(ctx, 1.0)
+			decision = AIRoleFlank.decide(ctx, 1.0)
 		_:
-			return AIRoleAnchorFollow.decide(ctx)
+			decision = AIRoleAnchorFollow.decide(ctx)
+	_prev_role_slot = slot
+	_prev_role_target = decision.target_position
+	return decision
 
 
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
