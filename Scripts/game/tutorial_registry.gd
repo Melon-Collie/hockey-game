@@ -1,8 +1,9 @@
 class_name TutorialRegistry
 
 # Central catalogue of tutorials and step identifiers. Each tutorial is an
-# ordered list of step constants. Adding a new tutorial (drills, etc.) means
-# appending here — no PlayerPrefs schema change, no SideMenu wiring change.
+# ordered list of step constants. Adding a new tutorial means appending here —
+# no PlayerPrefs schema change, no SideMenu wiring change. (Practice drills
+# have their own mirror catalogue, DrillRegistry.)
 # PlayerPrefs.tutorial_completion is keyed by the tutorial ids below.
 #
 # Step IDs live here (not in TutorialManager) to avoid a circular preload —

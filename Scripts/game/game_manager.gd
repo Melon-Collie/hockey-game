@@ -1200,9 +1200,11 @@ func _spawn_goalies() -> void:
 	if NetworkManager.is_tutorial_mode \
 			and not TutorialRegistry.wants_goalies(NetworkManager.tutorial_id):
 		return
-	# The penalty drill spawns its own single reactive goalie (spawn_penalty_goalie)
-	# at the attacked net; no full pair.
-	if NetworkManager.is_penalty_drill_mode:
+	# Drills that dress their own net (penalty spawns a lone reactive goalie,
+	# accuracy a lone frozen one) skip the pair; a future drill played against
+	# live nets can opt back in via the registry.
+	if not NetworkManager.drill_id.is_empty() \
+			and not DrillRegistry.wants_goalie_pair(NetworkManager.drill_id):
 		return
 	var result: Dictionary = _spawner.spawn_goalie_pair(puck, NetworkManager.is_host, goalie_skill_profile)
 	goalies = [result.top_goalie as Goalie, result.bottom_goalie as Goalie]

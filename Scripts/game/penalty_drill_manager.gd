@@ -1,8 +1,8 @@
 extends Node
 
 # Offline penalty-shot drill: "how many can you score out of 10". Spawned by
-# game_scene.gd when NetworkManager.is_penalty_drill_mode is set. Owns the whole
-# loop — stage the shooter at centre with the puck, let them skate in on a lone
+# game_scene.gd via DrillRegistry when NetworkManager.drill_id selects it. Owns
+# the whole loop — stage the shooter at centre with the puck, let them skate in on a lone
 # reactive goalie, classify the attempt with PenaltyShotRules (NHL Rule 24.2:
 # keep the puck moving toward the net, one shot, no rebounds), tally it, and
 # restage — finishing with a results card.
@@ -36,7 +36,7 @@ var _skater: Skater = null
 var _puck: Puck = null
 var _hud: PenaltyDrillHUD = null
 
-var _session: PenaltyShotSession = null
+var _session: DrillSession = null
 var _cfg: PenaltyShotRules.Config = null
 
 var _stage: Stage = Stage.LIVE
@@ -60,7 +60,7 @@ func _ready() -> void:
 	_skater = _local_record.skater
 	_puck = GameManager.get_puck()
 
-	_session = PenaltyShotSession.new(_TOTAL_SHOTS)
+	_session = DrillSession.new(_TOTAL_SHOTS)
 	_cfg = PenaltyShotRules.Config.new()
 
 	GameManager.spawn_penalty_goalie()
@@ -186,7 +186,7 @@ func _on_retry() -> void:
 
 func _on_exit() -> void:
 	_stage = Stage.DONE
-	NetworkManager.is_penalty_drill_mode = false
+	NetworkManager.drill_id = ""
 	GameManager.return_to_free_play()
 
 

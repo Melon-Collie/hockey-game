@@ -581,13 +581,15 @@ func _refresh_practice_rows() -> void:
 	var sep := HSeparator.new()
 	sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
 	_practice_rows_vbox.add_child(sep)
-	var drill_btn := MenuStyle.popup_button("Penalty Shots")
-	drill_btn.custom_minimum_size = Vector2(280, 44)
-	drill_btn.pressed.connect(func() -> void:
-		_practice_container.visible = false
-		_launch_penalty_drill())
-	SoundManager.wire_button(drill_btn)
-	_practice_rows_vbox.add_child(drill_btn)
+	for drill_id: String in DrillRegistry.ALL_IDS:
+		var drill_btn := MenuStyle.popup_button(DrillRegistry.get_display_name(drill_id))
+		drill_btn.custom_minimum_size = Vector2(280, 44)
+		var drill_id_copy: String = drill_id
+		drill_btn.pressed.connect(func() -> void:
+			_practice_container.visible = false
+			_launch_drill(drill_id_copy))
+		SoundManager.wire_button(drill_btn)
+		_practice_rows_vbox.add_child(drill_btn)
 
 
 # ── Action handlers ──────────────────────────────────────────────────────────
@@ -643,8 +645,8 @@ func _on_start_game_pressed() -> void:
 
 func _on_practice_pressed() -> void:
 	# Opens the practice submenu: the tutorial course (Movement, Stick
-	# Basics, and the rest) plus drills like Penalty Shots. Selection routes
-	# through _launch_tutorial(id) / _launch_penalty_drill.
+	# Basics, and the rest) plus the DrillRegistry drills. Selection routes
+	# through _launch_tutorial(id) / _launch_drill(id).
 	if _practice_container == null:
 		return
 	_refresh_practice_rows()
@@ -659,13 +661,14 @@ func _launch_tutorial(id: String) -> void:
 	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 
-func _launch_penalty_drill() -> void:
-	# Offline "score X of 10" drill. Same teardown-then-launch shape as the
-	# tutorial; PenaltyDrillManager takes over once Hockey.tscn loads.
+func _launch_drill(id: String) -> void:
+	# Offline "score X of N" practice drill (see DrillRegistry). Same
+	# teardown-then-launch shape as the tutorial; the drill's registered
+	# manager takes over once Hockey.tscn loads.
 	GameManager.on_scene_exit()
 	NetworkSimManager.clear_pending()
 	NetworkManager.reset()
-	NetworkManager.start_penalty_drill()
+	NetworkManager.start_drill(id)
 	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 

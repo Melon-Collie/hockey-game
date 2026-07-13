@@ -1,10 +1,11 @@
-class_name PenaltyShotSession
+class_name DrillSession
 extends RefCounted
 
-# Tracks progress through an offline penalty-shot drill: "how many can you score
+# Tracks progress through a fixed-length offline drill: "how many can you score
 # out of N". Pure and engine-free so the scoring/sequencing is unit-testable
-# headless; PenaltyDrillManager owns the puck/goalie staging and feeds results
-# in. One attempt is recorded per shot, success or miss.
+# headless; the drill managers (penalty shots, shot accuracy) own the puck/
+# goalie/target staging and feed results in. One attempt is recorded per shot,
+# success or miss.
 
 var total_attempts: int = 10
 var attempts_taken: int = 0
