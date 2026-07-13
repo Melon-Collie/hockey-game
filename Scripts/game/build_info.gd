@@ -88,7 +88,11 @@ const VERSION: String = "dev"
 #     context-sensitive team message + bot-directive broadcast. New @rpc
 #     methods shift the name-sorted RPC indices (see v14), so a bump is
 #     required even though existing wire formats are unchanged.
-const PROTOCOL_VERSION: int = 23
+# v24: rematch vote widened bool -> int (RematchVoteRules.Choice) so the
+#     end-of-game vote carries a flavor — REMATCH or return-to-LOBBY — through
+#     the same request/notify pair. A mixed-build vote would decode the wrong
+#     variant type, so the bump is required.
+const PROTOCOL_VERSION: int = 24
 
 
 func _ready() -> void:

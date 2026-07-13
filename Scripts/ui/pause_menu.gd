@@ -228,10 +228,10 @@ func _build_leave_overlay() -> void:
 	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
-	# "Return to Lobby" only exists for an online host — it pulls the whole
-	# group back to the shared lobby. Offline has no lobby, and clients can't
-	# drive everyone's scene, so neither sees this button. (Mirrors the
-	# game-over popup's leave buttons.)
+	# Mid-game "Return to Lobby" stays a host-only instant action — it yanks
+	# the whole group's scene, which only the session owner should do without
+	# a vote. (At game over everyone instead gets the lobby *vote* flavor of
+	# the play-again vote on the game-over popup; see RematchVoteRules.)
 	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
 		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
 
