@@ -181,6 +181,113 @@ func test_wall_pinned_carrier_reads_far_less_safe_than_open_ice() -> void:
 	assert_gt(open, pinned + 0.3, "the identical defender gap in open ice leaves real room")
 
 
+# ─── best_evade_point_toward: beat the man TOWARD the objective ──────────────
+
+func test_directed_seam_advances_past_an_overplaying_defender() -> void:
+	# Carrier driving +Z at the objective, defender overplaying the left side of
+	# the lane. The pure max-clearance seam retreats to wherever is emptiest
+	# (behind/lateral); the DIRECTED seam takes the safe sample on the OPEN side
+	# on the way forward — beating the man, not avoiding him.
+	var objective := Vector3(0, 0, 10)
+	var opps: Array[Vector3] = [Vector3(-1.2, 0, 3.0)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+			Vector3.ZERO, Vector3(0, 0, 4), objective, opps, vels, HANDLE)
+	var undirected: Vector3 = AIActionScoring.best_evade_point(
+			Vector3.ZERO, Vector3(0, 0, 4), opps, vels, HANDLE)
+	assert_gt(directed.x, 0.5, "cuts to the open (right) side of the overplayed lane")
+	assert_gt(directed.z, 1.6, "advances past the projected center, toward the objective")
+	assert_gt(directed.z, undirected.z + 0.5,
+			"the directed seam advances where the max-clearance seam gives ground")
+
+
+func test_directed_seam_is_genuinely_safe() -> void:
+	# The progress winner must clear every defender's reach by the blade-of-air
+	# floor — progress never buys back into a strip.
+	var objective := Vector3(0, 0, 10)
+	var opps: Array[Vector3] = [Vector3(-1.2, 0, 3.0)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+			Vector3.ZERO, Vector3(0, 0, 4), objective, opps, vels, HANDLE)
+	var clear: float = AIActionScoring.reach_clearance(
+			directed, AIActionScoring.EVADE_HORIZON_S, opps, vels)
+	assert_gte(clear, AIActionScoring.EVADE_SAFE_CLEAR_MIN_M,
+			"the directed seam keeps at least a blade of air off every reach")
+
+
+func test_directed_seam_falls_back_to_max_clearance_when_surrounded() -> void:
+	# Swarmed — no envelope sample clears the safe floor. Nothing to attack:
+	# the directed seam degrades to exactly the survival (max-clearance) read.
+	var objective := Vector3(0, 0, 10)
+	var opps: Array[Vector3] = [
+			Vector3(1.2, 0, 0), Vector3(-0.85, 0, 0.85), Vector3(-0.85, 0, -0.85)]
+	var vels: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+			Vector3.ZERO, Vector3.ZERO, objective, opps, vels, HANDLE)
+	var undirected: Vector3 = AIActionScoring.best_evade_point(
+			Vector3.ZERO, Vector3.ZERO, opps, vels, HANDLE)
+	assert_eq(directed, undirected, "no safe sample → survive first, pure max clearance")
+
+
+func test_directed_seam_leans_toward_objective_in_open_ice() -> void:
+	# Nobody around: every sample is safe, so the directed seam is simply the
+	# most-progress point of the envelope — it leans toward the objective.
+	var objective := Vector3(0, 0, 10)
+	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+			Vector3.ZERO, Vector3.ZERO, objective, [], [], HANDLE)
+	assert_gt(directed.z, 0.5, "open ice: the seam leans toward the objective")
+
+
+# ─── brake check: stop dead, let the committed checker fly by ─────────────────
+
+func test_brake_stop_point_is_the_physical_stopping_distance() -> void:
+	# v²/(2·decel) along the velocity: 6 m/s into a 10 m/s² brake = 1.8 m.
+	var stop: Vector3 = AIActionScoring.brake_stop_point(
+			Vector3.ZERO, Vector3(6, 0, 0))
+	assert_almost_eq(stop.x, 1.8, 0.01, "stop point is v²/(2·decel) downstream")
+	assert_almost_eq(stop.z, 0.0, 0.01)
+
+
+func test_brake_check_beats_a_charger_crossing_the_forward_lane() -> void:
+	# A committed checker sweeping across the carrier's forward lane, timed for
+	# where the carrier is GOING: cutting forward carries the puck into his
+	# sweep, braking parks it short of the crossing and his momentum takes his
+	# reach past. The cut seam here is the forward-directed one the carrier
+	# would otherwise take.
+	var carrier_vel := Vector3(5, 0, 0)
+	var forward_seam := Vector3(3.2, 0, 0.4)
+	var opps: Array[Vector3] = [Vector3(4.0, 0, 2.2)]
+	var vels: Array[Vector3] = [Vector3(0, 0, -8)]
+	assert_true(AIActionScoring.prefers_brake_check(
+			Vector3.ZERO, carrier_vel, forward_seam, opps, vels),
+			"stopping short of the crossing beats cutting into it")
+
+
+func test_brake_check_rejected_against_a_jockeying_pacer() -> void:
+	# A gap-control defender pacing alongside: braking doesn't shake him (his
+	# projected reach never leaves the carrier), while the cut away stays the
+	# clearer play — no brake check against containment.
+	var carrier_vel := Vector3(5, 0, 0)
+	var away_seam := Vector3(1.2, 0, -1.2)
+	var opps: Array[Vector3] = [Vector3(1.4, 0, 1.0)]
+	var vels: Array[Vector3] = [Vector3(5, 0, 0)]
+	assert_false(AIActionScoring.prefers_brake_check(
+			Vector3.ZERO, carrier_vel, away_seam, opps, vels),
+			"a pacer stays on the braked puck — the cut is the answer, not the stop")
+
+
+func test_brake_check_rejected_when_the_braked_hold_is_not_safe() -> void:
+	# Stick already at the puck: the braked hold is covered outright, so the
+	# brake check can never fire regardless of how bad the cut looks.
+	var carrier_vel := Vector3(5, 0, 0)
+	var seam := Vector3(1.0, 0, 1.5)
+	var opps: Array[Vector3] = [Vector3(1.0, 0, 0.3)]
+	var vels: Array[Vector3] = [Vector3(4.5, 0, 0)]
+	assert_false(AIActionScoring.prefers_brake_check(
+			Vector3.ZERO, carrier_vel, seam, opps, vels),
+			"an unsafe braked hold never prefers the brake")
+
+
 # ─── best_handle_protect_point: shield the puck with the body ─────────────────
 
 func test_protect_point_pulls_the_puck_away_from_a_frontal_stick() -> void:

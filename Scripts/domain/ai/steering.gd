@@ -36,6 +36,28 @@ const OPPONENT_REPEL_WEIGHT: float = 0.6
 # them on the way to the slot.
 const OPPONENT_REPEL_WEIGHT_CARRY: float = 1.2
 const OPPONENT_REPEL_RADIUS: float = 4.0
+# ── Carrier threat-gated avoidance ───────────────────────────────────────────
+# The CARRIER's opponent repel reads THREAT, not proximity, and routes AROUND,
+# not away. The plain proximity field below let any defender within 4 m herd
+# the carrier: the carry repel weight (1.2) out-muscles the anchor pull (1.0)
+# and points radially away, so a defender approaching from up-ice pushed the
+# carrier straight backwards off its own carry line — corralled by a hint of
+# pressure, never trying to beat the man. With opponent velocities supplied
+# (compute_move_vector's carrier path), each defender instead repels:
+#   - FROM his swept reach — the closest point to the carrier on his
+#     momentum-projected path over the evasion horizon; his stick can touch
+#     anywhere within reach of that line (the same bounded-accel read as
+#     AIActionScoring.reach_clearance, league-default reach). A beaten man
+#     whose momentum carries him away exerts nothing; a committed charger's
+#     sweep produces a perpendicular SIDESTEP off his line (the matador — his
+#     body is still a collision even when the puck is safe); a jockeying
+#     defender keeps his full push.
+#   - AROUND, never back — the summed repel's component opposing the anchor
+#     direction is removed, so pressure bends the carry line around a threat
+#     but can never reverse it. Retreating is the carry DELIBERATION's call
+#     (the anchor itself moves); it must not be a reflex. A defender parked
+#     dead on the line therefore repels ~nothing — driving at him and deking
+#     (the poke-evade owns that moment) is exactly the aggressive read.
 const BOARD_REPEL_WEIGHT: float = 0.5
 const BOARD_REPEL_DISTANCE: float = 2.0
 const SHOT_LANE_REPEL_WEIGHT: float = 0.3
@@ -144,6 +166,11 @@ const OFFSIDE_BRAKE_MARGIN_M: float = 0.35
 # off-puck bots want to stay out of. Pass `Vector3.ZERO` for both to
 # disable (e.g. when no own-team carrier exists). Carrier-side bots
 # pass zero too — they don't need to repel out of their own lane.
+#
+# `opponent_velocities` (index-matched to `opponent_positions`) switches the
+# opponent repel into the CARRIER threat-gated mode — see the block comment on
+# the constants above. Empty (the default) keeps the plain proximity field for
+# off-puck bots.
 static func compute_move_vector(
 		self_pos: Vector3,
 		anchor: Vector3,
@@ -153,7 +180,8 @@ static func compute_move_vector(
 		shot_lane_end: Vector3,
 		rink_half_x: float,
 		rink_half_z: float,
-		opponent_repel_weight: float = OPPONENT_REPEL_WEIGHT) -> Vector2:
+		opponent_repel_weight: float = OPPONENT_REPEL_WEIGHT,
+		opponent_velocities: Array[Vector3] = []) -> Vector2:
 	var force_x: float = 0.0
 	var force_z: float = 0.0
 
@@ -176,17 +204,27 @@ static func compute_move_vector(
 			force_x += dx * inv_d * falloff * TEAMMATE_REPEL_WEIGHT
 			force_z += dz * inv_d * falloff * TEAMMATE_REPEL_WEIGHT
 
-	# Repel from opponents within radius. Stronger weight + larger radius
-	# than teammate repel — bots actively maintain space against checkers.
-	for op: Vector3 in opponent_positions:
-		var dx: float = self_pos.x - op.x
-		var dz: float = self_pos.z - op.z
-		var d: float = sqrt(dx * dx + dz * dz)
-		if d > 0.001 and d < OPPONENT_REPEL_RADIUS:
-			var falloff: float = (OPPONENT_REPEL_RADIUS - d) / OPPONENT_REPEL_RADIUS
-			var inv_d: float = 1.0 / d
-			force_x += dx * inv_d * falloff * opponent_repel_weight
-			force_z += dz * inv_d * falloff * opponent_repel_weight
+	# Repel from opponents. Carrier mode (velocities supplied): threat-gated,
+	# route-around — see the carrier threat-gated avoidance doc. Otherwise the
+	# plain proximity field within OPPONENT_REPEL_RADIUS (off-puck bots
+	# maintaining formation space against checkers).
+	if not opponent_velocities.is_empty() \
+			and opponent_velocities.size() == opponent_positions.size():
+		var opp_force: Vector2 = _carrier_threat_repel(
+				self_pos, to_anchor, anchor_dist,
+				opponent_positions, opponent_velocities, opponent_repel_weight)
+		force_x += opp_force.x
+		force_z += opp_force.y
+	else:
+		for op: Vector3 in opponent_positions:
+			var dx: float = self_pos.x - op.x
+			var dz: float = self_pos.z - op.z
+			var d: float = sqrt(dx * dx + dz * dz)
+			if d > 0.001 and d < OPPONENT_REPEL_RADIUS:
+				var falloff: float = (OPPONENT_REPEL_RADIUS - d) / OPPONENT_REPEL_RADIUS
+				var inv_d: float = 1.0 / d
+				force_x += dx * inv_d * falloff * opponent_repel_weight
+				force_z += dz * inv_d * falloff * opponent_repel_weight
 
 	# Repel from boards: only kicks in within BOARD_REPEL_DISTANCE of a wall.
 	# Pushes inward proportionally to how close the bot is to the wall.
@@ -225,6 +263,68 @@ static func compute_move_vector(
 	if v.length() > 1.0:
 		v = v.normalized()
 	return v
+
+
+# The carrier's threat-gated opponent avoidance (see the doc on the constants
+# block). Per defender: project his body along his momentum over the evasion
+# horizon; his stick can touch anywhere within the league reach of that swept
+# segment, so the repel points away from the CLOSEST POINT of the sweep and its
+# strength is how deep inside that reach (plus a stick of margin) the carrier
+# sits. The summed force then loses any component opposing the anchor direction
+# — pressure bends the carry line, it never reverses it. Pure value math, no
+# allocation. `to_anchor` / `anchor_dist` are the already-computed anchor pull
+# inputs, passed through to avoid recomputing.
+static func _carrier_threat_repel(self_pos: Vector3, to_anchor: Vector3,
+		anchor_dist: float, opponent_positions: Array[Vector3],
+		opponent_velocities: Array[Vector3], repel_weight: float) -> Vector2:
+	# League-default reach off the momentum line — same double-integrator model
+	# as AIActionScoring.reach_clearance (reaction-gated maneuver + stick), the
+	# single source for those measurements. Steering doesn't carry per-peer
+	# caps; the league reach is the right fidelity for a soft field force.
+	var t_over: float = maxf(
+			0.0, AIActionScoring.EVADE_HORIZON_S - AIActionScoring.EVADE_REACTION_S)
+	var reach: float = 0.5 * t_over * t_over * AIActionScoring.MANEUVER_ACCEL_M_S2 \
+			+ AIActionScoring.EVADE_STICK_REACH_M
+	var force := Vector2.ZERO
+	for i: int in opponent_positions.size():
+		var op: Vector3 = opponent_positions[i]
+		var sweep_x: float = opponent_velocities[i].x * AIActionScoring.EVADE_HORIZON_S
+		var sweep_z: float = opponent_velocities[i].z * AIActionScoring.EVADE_HORIZON_S
+		# Closest point to the carrier on the swept segment [op, op + sweep].
+		var t: float = 0.0
+		var sweep_len_sq: float = sweep_x * sweep_x + sweep_z * sweep_z
+		if sweep_len_sq > 0.0001:
+			t = clampf(((self_pos.x - op.x) * sweep_x
+					+ (self_pos.z - op.z) * sweep_z) / sweep_len_sq, 0.0, 1.0)
+		var dx: float = self_pos.x - (op.x + sweep_x * t)
+		var dz: float = self_pos.z - (op.z + sweep_z * t)
+		var d: float = sqrt(dx * dx + dz * dz)
+		# Full push inside his reach, fading to zero a stick-length outside it —
+		# the same "a stick of clear room reads as safe" ramp as
+		# AIActionScoring.clearance_to_safety.
+		var threat: float = 1.0 - clampf(
+				(d - reach) / AIActionScoring.EVADE_SAFE_MARGIN_M, 0.0, 1.0)
+		if threat <= 0.0:
+			continue
+		if d > 0.001:
+			force += Vector2(dx / d, dz / d) * (threat * repel_weight)
+		elif sweep_len_sq > 0.0001:
+			# Standing ON his sweep line: sidestep perpendicular to his travel,
+			# on whichever side doesn't fight the anchor pull.
+			var inv_sweep: float = 1.0 / sqrt(sweep_len_sq)
+			var perp := Vector2(-sweep_z * inv_sweep, sweep_x * inv_sweep)
+			if perp.x * to_anchor.x + perp.y * to_anchor.z < 0.0:
+				perp = -perp
+			force += perp * (threat * repel_weight)
+	# Route AROUND: strip the component opposing the anchor direction so the
+	# summed pressure can bend the carry line but never push the carrier
+	# backwards off it.
+	if anchor_dist > ANCHOR_DEADBAND:
+		var a := Vector2(to_anchor.x / anchor_dist, to_anchor.z / anchor_dist)
+		var along: float = force.dot(a)
+		if along < 0.0:
+			force -= a * along
+	return force
 
 
 # Repel from a line segment. Only applies when the bot's projection onto

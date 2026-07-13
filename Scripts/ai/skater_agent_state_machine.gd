@@ -267,6 +267,15 @@ const _RECV_ONE_TIME: int = 2       # Mode A transitioned to ONE_TIMER_PRESSED; 
 # goal direction.
 const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
 
+# How far inside the boards the carry mouse target is clamped
+# (GameRules.clamp_to_rink_inner). The blade IK chases the mouse; a target at
+# or through the kickplate slams the stick into the wall and the impact knocks
+# the carried puck loose — the bots' chronic boards giveaway. One blade length
+# of standoff keeps the whole blade (the mouse steers its tip region) off the
+# wall while still letting a carrier work the puck tight along the boards.
+# Physical measurement, not a shape parameter.
+const CARRY_BLADE_WALL_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
+
 # Minimum rink-side margin for the carry mouse target relative to the
 # attacking goal line. Without this clamp, a carrier within 2 m of
 # the goal line gets a mouse target that sits PAST the goal line —
@@ -309,13 +318,18 @@ const CARRY_SWAY_FREQ_MAX_HZ: float = 1.6
 const CARRY_SWAY_AMP_FRAC_MIN: float = 0.35
 const CARRY_SWAY_AMP_EASE_PER_S: float = 3.0
 
-# Poke-evade lateral cut. Layered on top of the continuous defender-
-# avoidance forces (carrier-weight opp repel in steering, sum-of-
+# Poke-evade maneuver. Layered on top of the continuous defender-
+# avoidance forces (carrier threat-gated repel in steering, sum-of-
 # forces stickhandle on the blade). Where those handle baseline
 # elusiveness, this is the discrete "deke moment" — when an opponent's
-# blade reaches into immediate poke range from the front, override
-# move_vector with a brief full-thrust perpendicular cut. Defender's
-# poke timed for our current trajectory swings through empty ice.
+# blade reaches into immediate poke range from the front, commit to a
+# maneuver for a brief window: a full-thrust CUT toward the directed
+# seam (past the man, toward the carry objective), or — when the
+# carrier's re-eval read the braked hold as clearly better — a BRAKE
+# CHECK (stop dead, the committed checker's poke sweeps through where
+# we WOULD have been, then burst to the anchor through his vacated
+# lane). Either way the defender's poke, timed for our current
+# trajectory, swings through empty ice.
 #
 # Trigger band sized just outside the stickhandle DANGER_RADIUS
 # (2.1 m) so the cut fires AHEAD of the blade jitter response — we
@@ -340,6 +354,15 @@ const POKE_EVADE_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~5
 # deke direction — under that the seam is basically underfoot and the
 # perpendicular fallback cut reads better than a near-zero vector.
 const POKE_EVADE_SEAM_MIN_DIST_M: float = 0.75
+# BRAKE-CHECK variant of the evade window: hold the real brake key for the full
+# evasion horizon (AIActionScoring.EVADE_HORIZON_S — the read the maneuver was
+# priced over), so the committed checker's momentum genuinely carries his reach
+# past the stopped puck before steering resumes toward the anchor. The exit
+# (re-accelerate into the lane he vacated) needs no window of its own: a beaten
+# man no longer registers in the threat-gated repel, so normal anchor
+# attraction bursts straight past him the tick the brake releases.
+const POKE_EVADE_BRAKE_TICKS: int = int(
+		AIActionScoring.EVADE_HORIZON_S * _PhysicsConstants.PHYSICS_TICK)   # ~400 ms
 
 # ── Defensive poke jab (active stick-check to strip the carrier) ──────────────
 # The host auto-strips the carrier whenever a defender's blade SWEEPS
@@ -669,9 +692,16 @@ var _scratch_teammates: Array[Vector3] = []
 # top of _apply_steering. The CARRIER role behavior owns its own
 # scratch buffers for action scoring.
 var _scratch_opponents: Array[Vector3] = []
+# Opponent velocities index-matched to _scratch_opponents — steering's
+# carrier threat-gated repel reads defender MOMENTUM, not proximity
+# (AISteering._carrier_threat_repel). Filled alongside the positions.
+var _scratch_opponent_steer_vels: Array[Vector3] = []
 # Shared empty fallback so the per-tick cache reads don't allocate a `[]`
 # default literal (Dictionary.get evaluates its default eagerly). Never mutated.
 var _empty_ids: Array = []
+# Shared empty velocity list — passed to steering for off-puck bots (plain
+# proximity repel) so the per-tick call doesn't allocate a literal. Never mutated.
+var _empty_vels: Array[Vector3] = []
 # Reused fallback buffer for _opponent_ids when the per-frame team cache is
 # empty (unit tests). Production always hits the cache and never touches this.
 var _scratch_opp_ids: Array[int] = []
@@ -894,6 +924,11 @@ var _poke_evade_cooldown_ticks: int = 0
 # cut into open ice, cutback included); ZERO = no usable seam at trigger, the
 # active window falls back to the per-tick perpendicular-away cut.
 var _poke_evade_dir: Vector2 = Vector2.ZERO
+# Maneuver LATCHED at trigger: TRUE = this evade is a BRAKE CHECK (hold the
+# real brake key; the committed checker's reach flies past the stopped puck),
+# FALSE = the lateral cut. Chosen from the carrier's brake_check_favored mirror
+# (AIActionScoring.prefers_brake_check at the last ~30 Hz re-eval).
+var _poke_evade_braking: bool = false
 
 # Defensive poke-jab bookkeeping (see POKE_JAB_* constants). While
 # _active > 0 the bot aims its blade at the carrier's puck so the host
@@ -3200,6 +3235,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Fall back to a live partition when the cache is empty (unit tests).
 	_scratch_teammates.clear()
 	_scratch_opponents.clear()
+	_scratch_opponent_steer_vels.clear()
 	if not snapshot.teammate_ids_by_team.is_empty():
 		var team_ids: Array = snapshot.teammate_ids_by_team[_team_id] \
 				if snapshot.teammate_ids_by_team.has(_team_id) else _empty_ids
@@ -3213,6 +3249,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			var opp_ids: Array = snapshot.teammate_ids_by_team[other_team]
 			for peer_id: int in opp_ids:
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 	else:
 		for peer_id: int in snapshot.skater_states:
 			if peer_id == _peer_id:
@@ -3221,6 +3258,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				_scratch_teammates.append(snapshot.skater_states[peer_id].position)
 			else:
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
+				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 
 	# Shot-lane endpoints: only set when a teammate (not us, not opp) is
 	# the carrier — keeps off-puck bots out of the carrier's lane to the
@@ -3240,17 +3278,21 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 						SHOT_LANE_LEAD_TIME_S)
 				lane_end = _attacking_goal_pos
 
-	# Carrier-specific repel boost: when WE have the puck, weight defender
-	# proximity much more heavily so the body curves around poke threats
-	# instead of skating past them. Off-puck bots use the default.
+	# Carrier-specific repel: when WE have the puck, defender avoidance runs
+	# threat-gated and route-around (momentum-reach instead of raw proximity,
+	# never pushed backwards off the carry line — see
+	# AISteering._carrier_threat_repel), at the heavier carry weight. Off-puck
+	# bots keep the plain proximity field (velocities withheld).
 	var opp_repel: float = AISteering.OPPONENT_REPEL_WEIGHT
+	var steer_vels: Array[Vector3] = _empty_vels
 	if carrier == _peer_id:
 		opp_repel = AISteering.OPPONENT_REPEL_WEIGHT_CARRY
+		steer_vels = _scratch_opponent_steer_vels
 	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
-			opp_repel)
+			opp_repel, steer_vels)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), stopping hard beats carving a wide arc.
@@ -3500,6 +3542,16 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	var max_forward_z: float = goal_line_z + AIRoleHelpers.GOAL_LINE_BUFFER_M * _own_goal_dir
 	if (target.z - max_forward_z) * _own_goal_dir < 0.0:
 		target.z = max_forward_z
+	# ...and inside the boards by a blade of standoff (see
+	# CARRY_BLADE_WALL_MARGIN_M): the forward aim + stickhandle/sway/protect
+	# offsets have no wall awareness of their own, so a carrier maneuvering
+	# along the boards would otherwise drive its blade into the kickplate and
+	# knock its own puck loose. Clamped last so every offset above is covered;
+	# pinned tight, the target slides ALONG the wall instead of into it.
+	var on_ice: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(target.x, target.z), CARRY_BLADE_WALL_MARGIN_M)
+	target.x = on_ice.x
+	target.z = on_ice.y
 	return target
 
 
@@ -3594,15 +3646,18 @@ func _carry_sway_offset(forward_dir: Vector3) -> Vector3:
 	return right_axis * (sin(_sway_phase) * _sway_amp_frac * _carry_sway_m)
 
 
-# Poke-evade cut. Overrides input.move_vector with a brief committed
-# thrust when a poke is imminent: toward the carrier's evasion seam on
-# the protects_the_puck tiers (a real deke into open ice — the direction
-# is latched at trigger, see _seam_cut_direction), else a perpendicular
-# thrust away from the threat. Continuous defender avoidance (opponent
-# repel in body steering + stickhandle offset on the blade) handles the
-# baseline; this is the discrete "deke moment" when a defender's blade
-# is close enough that a poke is imminent — full thrust for
-# POKE_EVADE_ACTIVE_TICKS breaks the defender's projected interception
+# Poke-evade maneuver. Overrides the steering inputs for a brief committed
+# window when a poke is imminent: a CUT toward the carrier's directed
+# evasion seam on the protects_the_puck tiers (a real deke past the
+# pressure toward the carry objective — the direction is latched at
+# trigger, see _seam_cut_direction; perpendicular fallback otherwise), or
+# a BRAKE CHECK (real brake key held for POKE_EVADE_BRAKE_TICKS, exit
+# direction on the stick) when the carrier's re-eval read the braked hold
+# as clearly beating the cut (_carrier.brake_check_favored). Continuous
+# defender avoidance (threat-gated repel in body steering + stickhandle
+# offset on the blade) handles the baseline; this is the discrete "deke
+# moment" when a defender's blade is close enough that a poke is imminent
+# — the committed window breaks the defender's projected interception
 # line.
 #
 # Lifecycle (counters live on the state machine, both reset on
@@ -3632,6 +3687,7 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 		if _poke_evade_active_ticks <= 0:
 			_poke_evade_active_ticks = 0
 			_poke_evade_cooldown_ticks = POKE_EVADE_COOLDOWN_TICKS
+			_poke_evade_braking = false
 		return
 	if _poke_evade_cooldown_ticks > 0:
 		_poke_evade_cooldown_ticks = maxi(0, _poke_evade_cooldown_ticks - _dispatch_period_ticks)
@@ -3688,7 +3744,15 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 		break
 	if trigger_threat == null:
 		return
-	_poke_evade_active_ticks = POKE_EVADE_ACTIVE_TICKS
+	# Maneuver pick, latched for the whole window: a BRAKE CHECK when the
+	# carrier's last re-eval read the braked hold as clearly beating the cut
+	# (AIRoleCarrier.brake_check_favored — protect-tier only, ≤ ~33 ms stale),
+	# else the committed lateral cut. Both answer the same imminent poke; the
+	# brake answers committed pressure (let his reach fly past the stopped
+	# puck), the cut answers everything else.
+	_poke_evade_braking = _carrier.brake_check_favored
+	_poke_evade_active_ticks = POKE_EVADE_BRAKE_TICKS if _poke_evade_braking \
+			else POKE_EVADE_ACTIVE_TICKS
 	_poke_evade_dir = _seam_cut_direction(self_pos)
 	_drive_poke_evade_cut(input, snapshot, self_pos)
 
@@ -3712,9 +3776,21 @@ func _seam_cut_direction(self_pos: Vector3) -> Vector2:
 	return to_seam.normalized()
 
 
-# One active-window tick of the committed cut: the latched seam direction when
-# one was available at trigger, else the per-tick perpendicular fallback.
+# One active-window tick of the committed maneuver. BRAKE CHECK: the real
+# brake key with move_vector held on the exit direction (the live carry
+# anchor) — the same input shape as the brake-pivot, so the physics gets the
+# heavy brake friction and thrust resumes toward the anchor the instant the
+# window releases; the beaten checker no longer registers in the threat-gated
+# repel, so the exit bursts straight past him. CUT: the latched seam direction
+# when one was available at trigger, else the per-tick perpendicular fallback.
 func _drive_poke_evade_cut(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3) -> void:
+	if _poke_evade_braking:
+		input.brake = true
+		var exit := Vector2(_last_carry_anchor.x - self_pos.x,
+				_last_carry_anchor.z - self_pos.z)
+		if exit.length_squared() > 0.01:
+			input.move_vector = exit.normalized()
+		return
 	if _poke_evade_dir != Vector2.ZERO:
 		input.move_vector = _poke_evade_dir
 		return
@@ -4458,6 +4534,7 @@ func _set_state(s: State) -> void:
 			_poke_evade_active_ticks = 0
 			_poke_evade_cooldown_ticks = 0
 			_poke_evade_dir = Vector2.ZERO
+			_poke_evade_braking = false
 			_poke_jab_active_ticks = 0
 			_poke_jab_cooldown_ticks = 0
 			_carrier.clear_intent()
