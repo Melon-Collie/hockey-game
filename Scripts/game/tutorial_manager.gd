@@ -1772,22 +1772,55 @@ func _on_passing_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 
 
 # Watch loop for the pass drills. Success = the teammate ends up carrying a
-# qualifying pass; anything else (dead puck, wrong type, too hot) restages
-# after the standard beat.
+# qualifying pass — judged whenever he comes up with it, NOT only while the
+# in-flight watch still considers the attempt live. A rough-but-honest pass
+# can be retired by the flight watch (slid past him, bobbled off his blade
+# and stalled) and STILL be corralled on his second touch a beat later; the
+# player just watched their teammate retrieve the pass, so it counts. The
+# credit window closes when the restage actually takes the puck back.
+# Anything else (dead puck, wrong type, too hot) restages after the standard
+# beat, with an alert explaining a caught-but-wrong-type attempt.
 func _passing_tick(delta: float) -> void:
-	# The receiver plays his part: while a pass is in flight his blade chases
-	# the live puck (so a rough-but-honest pass still gets caught — the drill
-	# tests the pass, not pixel-perfect aim); otherwise he presents the blade
-	# to the passer as a target.
+	# The receiver plays his part: whenever the puck is loose his blade chases
+	# it (so a rough pass still gets caught — the drill tests the pass, not
+	# pixel-perfect aim — and a retired-but-recoverable one gets picked back
+	# up); otherwise he presents the blade to the passer as a target.
 	if _puppet_record != null and is_instance_valid(_puppet_record.skater):
 		var ai_ctrl: AIController = _puppet_record.controller as AIController
 		if ai_ctrl != null:
-			ai_ctrl.script_aim_at(_puck.get_puck_position() if _pass_live
+			ai_ctrl.script_aim_at(_puck.get_puck_position() if _puck.carrier == null
 					else _skater.global_position)
+	# Teammate has it: resolve the attempt — credit a qualifying pass, explain
+	# a disqualified one. Checked ahead of the restage countdown so a late
+	# retrieval during the beat still counts instead of being yanked away.
+	if _puppet_record != null and is_instance_valid(_puppet_record.skater) \
+			and _puck.carrier == _puppet_record.skater:
+		_pass_live = false
+		if _pass_qualifies and not _pass_hot:
+			_pass_restage_timer = -1.0  # cancel any pending restage — it counted
+			# Pass stays on the teammate's blade through the rep blip / flash.
+			_complete_rep()
+			return
+		if _pass_hot:
+			_hud.set_alert("Too hot — sweep slower for a touch pass.")
+		elif not _pass_qualifies:
+			# He caught it, but off the wrong release — say so, or the reset
+			# reads as the drill eating a good pass.
+			if _current_step_id() == STEP_TOUCH_PASS:
+				_hud.set_alert(_fmt("He got it — but that was the quick snap. Hold {shoot} and sweep it over slowly."))
+			else:
+				_hud.set_alert(_fmt("He got it — but off a sweep. Tap {quick_shot} for the snap pass instead."))
+		if _pass_restage_timer < 0.0:
+			_pass_restage_timer = _REATTEMPT_DELAY
+		# Fall through to the countdown below while he holds the dead attempt.
 	if _pass_restage_timer >= 0.0:
 		_pass_restage_timer -= delta
 		if _pass_restage_timer <= 0.0:
 			_pass_restage_timer = -1.0
+			# The attempt is spent — a stale qualify must never credit whatever
+			# the teammate corrals after the puck goes back to the player.
+			_pass_qualifies = false
+			_pass_hot = false
 			# The saucer drill's staging IS the lesson (the board must sit
 			# between passer and receiver, inside the airborne span) — re-square
 			# a player who chased their miss downlane, or the restaged puck can
@@ -1797,17 +1830,6 @@ func _passing_tick(delta: float) -> void:
 			_stage_puck_for_player()
 		return
 	if not _pass_live:
-		return
-	if _puppet_record != null and is_instance_valid(_puppet_record.skater) \
-			and _puck.carrier == _puppet_record.skater:
-		_pass_live = false
-		if _pass_qualifies and not _pass_hot:
-			# Pass stays on the teammate's blade through the rep blip / flash.
-			_complete_rep()
-			return
-		if _pass_hot:
-			_hud.set_alert("Too hot — sweep slower for a touch pass.")
-		_pass_restage_timer = _REATTEMPT_DELAY
 		return
 	_pass_air_time += delta
 	if _pass_air_time < _SHOT_START_GRACE:
