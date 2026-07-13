@@ -142,13 +142,14 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		elif _strong_x < 0.0 and puck_x > STRONG_SIDE_HYSTERESIS_M:
 			_strong_x = 1.0
 
-	# 3. Slot assignment by current geometry. CARRIER is fixed to the
-	#    puck holder; everything else falls out of the permutation
-	#    enumeration with hysteresis. No locking needed.
+	# 3. Slot assignment by current kinematics (momentum-aware soonest-to-
+	#    arrive elections at each peer's real Speed cap). CARRIER is fixed
+	#    to the puck holder; everything else falls out of the per-state
+	#    elections with hysteresis. No locking needed.
 	var prev_assignments: Dictionary = slot_assignments
 	slot_assignments = AIRoleSlots.assign(
 			snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
-			prev_assignments, _strong_x)
+			prev_assignments, _strong_x, _caps_by_peer)
 	# Drop excluded peers (puppeted tutorial bots) so neither they nor any
 	# downstream consumer of get_slot / get_anchor pulls them toward a slot
 	# anchor. AIRoleSlots.assign already may have given them a slot — erase
