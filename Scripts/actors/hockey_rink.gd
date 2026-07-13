@@ -40,9 +40,12 @@ extends StaticBody3D
 # (centripetal) load, so board FRICTION bleeds tangential speed capstan-style —
 # retained speed ≈ exp(-μ·π/2) per 90° corner, independent of N (tessellation
 # fixes only the restitution facet loss above). At the engine-default μ≈1.0 a
-# rim shed ~80% of its speed per corner; Physics/boards.tres now sets a realistic
-# puck-on-board friction (~0.3) so a hard rim keeps most of its speed. Tune the
-# rim feel there, not by raising segment count.
+# rim shed ~80% of its speed per corner, and even the first corrected value
+# (0.3) still shed ~38%. Physics/boards.tres now sets μ=0.15 — real dasher
+# facing is HDPE/UHMW sheet, chosen for exactly this slickness (rubber-on-
+# polyethylene kinetic μ ≈ 0.1–0.2) — so a hard rim keeps ~79% of its pace per
+# corner, the classic rim-around. Tune the rim feel there, not by raising
+# segment count.
 @export var corner_collision_segments: int = 256:
 	set(v):
 		corner_collision_segments = v
@@ -907,8 +910,14 @@ func _add_perimeter_collision(stations: Array,
 	var shape := ConcavePolygonShape3D.new()
 	shape.set_faces(tris)
 	# Backface collision so a puck that ends up on the wrong side of a
-	# triangle (CCD glance, reconcile nudge, numerical penetration) is
-	# pushed back inward instead of escaping outward.
+	# triangle (CCD glance, reconcile nudge, numerical penetration) still
+	# generates contacts instead of falling through the band unopposed. Note
+	# this is best-effort, not a guarantee: the triangles are zero-thickness
+	# surfaces, so once a sliding puck's center crosses a facet plane the
+	# nearest-side depenetration can just as well push it OUTWARD. The hard
+	# containment guarantee is analytic — Puck._integrate_forces clamps any
+	# escaped puck back inside GameRules.clamp_to_rink_inner (the same
+	# boundary this collider is built on) and reflects its outward velocity.
 	shape.backface_collision = true
 	var col := CollisionShape3D.new()
 	col.shape = shape

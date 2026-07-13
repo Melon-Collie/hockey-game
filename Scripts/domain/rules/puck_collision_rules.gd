@@ -65,6 +65,35 @@ static func deflect_velocity(
 		e = lerpf(normal_restitution, normal_restitution_min, hard)
 	return v_tangent * tangential_retain - v_normal * e
 
+# Analytic board-containment rescue: the velocity for a puck the engine let
+# slip past the inner board boundary (trimesh facet-seam escape — the wall
+# triangles are zero-thickness, so a center that crosses a facet plane can be
+# depenetrated OUTWARD; see HockeyRink._add_perimeter_collision). The caller
+# clamps the position back inside; this reflects the outward velocity
+# component with the boards' restitution — the exact reflection the boards
+# would have applied, and the exact model Trajectory.predict uses for
+# predicted board bounces, so a rescued rim is indistinguishable from a
+# normal carom. `outward_normal_xz` points from the boundary toward the
+# escaped position. Tangential and vertical components are untouched (the
+# engine owns friction on real contacts; a rescue shouldn't double-charge
+# it). Inward-moving velocity is returned unchanged — the engine already
+# resolved the bounce this step, only the position needed fixing.
+static func board_rescue_velocity(
+		velocity: Vector3,
+		outward_normal_xz: Vector2,
+		restitution: float) -> Vector3:
+	if outward_normal_xz.length_squared() < 0.000001:
+		return velocity
+	var n: Vector2 = outward_normal_xz.normalized()
+	var vn: float = velocity.x * n.x + velocity.z * n.y
+	if vn <= 0.0:
+		return velocity
+	return Vector3(
+			velocity.x - (1.0 + restitution) * vn * n.x,
+			velocity.y,
+			velocity.z - (1.0 + restitution) * vn * n.y)
+
+
 # Loose puck bouncing off a skater's body (passive body-block). Reflect +
 # dampen. If the reflection collapses to zero, fall back to the contact normal.
 static func body_block_velocity(

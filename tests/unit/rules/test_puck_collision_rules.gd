@@ -12,6 +12,52 @@ func test_opponents_can_poke() -> void:
 	assert_true(PuckCollisionRules.can_poke_check(0, 1))
 	assert_true(PuckCollisionRules.can_poke_check(1, 0))
 
+# ── board_rescue_velocity ────────────────────────────────────────────────────
+# Analytic containment rescue for a puck the boards' trimesh let slip out.
+# Args: (velocity, outward_normal_xz, restitution). outward_normal_xz points
+# from the rink boundary toward the escaped position.
+
+func test_rescue_reflects_outward_component_with_restitution() -> void:
+	# +X outward escape at 10 m/s with 5 m/s along the wall: the outward
+	# component reflects to −10·e, the tangential slide is untouched — the same
+	# reflection Trajectory.predict applies for a modeled board bounce.
+	var result: Vector3 = PuckCollisionRules.board_rescue_velocity(
+			Vector3(10, 0, 5), Vector2(1, 0), 0.4)
+	assert_almost_eq(result.x, -4.0, 0.001, "outward component reflects with restitution")
+	assert_almost_eq(result.z, 5.0, 0.001, "tangential (rim) component is kept")
+
+func test_rescue_leaves_inward_velocity_unchanged() -> void:
+	# Engine already resolved the bounce this step (velocity points back
+	# inside); only the position needed fixing — don't double-bounce.
+	var v := Vector3(-3.0, 0.0, 7.0)
+	assert_eq(PuckCollisionRules.board_rescue_velocity(v, Vector2(1, 0), 0.4), v)
+
+func test_rescue_preserves_vertical_velocity() -> void:
+	var result: Vector3 = PuckCollisionRules.board_rescue_velocity(
+			Vector3(10, 2.5, 0), Vector2(1, 0), 0.4)
+	assert_almost_eq(result.y, 2.5, 0.001, "boards are vertical — Y untouched")
+
+func test_rescue_never_gains_speed() -> void:
+	# Reflection with e ≤ 1 can only shed pace, whatever the escape angle.
+	var v := Vector3(12, 1.0, 9)
+	var n := Vector2(0.6, 0.8)
+	var result: Vector3 = PuckCollisionRules.board_rescue_velocity(v, n, 0.4)
+	assert_lt(result.length(), v.length(), "rescue bounce sheds pace like a real carom")
+
+func test_rescue_normalizes_the_outward_normal() -> void:
+	# A non-unit outward vector (caller passes raw boundary delta) must yield
+	# the same reflection as the unit normal.
+	var unit: Vector3 = PuckCollisionRules.board_rescue_velocity(
+			Vector3(10, 0, 5), Vector2(1, 0), 0.4)
+	var scaled: Vector3 = PuckCollisionRules.board_rescue_velocity(
+			Vector3(10, 0, 5), Vector2(0.02, 0), 0.4)
+	assert_almost_eq(unit.x, scaled.x, 0.001)
+	assert_almost_eq(unit.z, scaled.z, 0.001)
+
+func test_rescue_degenerate_normal_passes_through() -> void:
+	var v := Vector3(4, 0, 4)
+	assert_eq(PuckCollisionRules.board_rescue_velocity(v, Vector2.ZERO, 0.4), v)
+
 # ── deflect_velocity ─────────────────────────────────────────────────────────
 # Normal/tangential decomposition. Args: (incoming, contact_normal,
 # normal_restitution, normal_restitution_min=-1, tangential_retain=1, speed_ref=0).
