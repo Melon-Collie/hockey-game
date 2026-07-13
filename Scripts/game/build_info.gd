@@ -91,7 +91,12 @@ const VERSION: String = "dev"
 # v24: stats packet grew — PlayerStats.to_array() 10 -> 11 (game_winning_goals,
 #     host-stamped at the final horn for the Three Stars GWG bonus), so
 #     STATS_PLAYER_RECORD_SIZE 11 -> 12.
-const PROTOCOL_VERSION: int = 24
+# v25: rematch vote widened bool -> int (RematchVoteRules.Choice) so the
+#     end-of-game vote carries a flavor — REMATCH or return-to-LOBBY — through
+#     the same request/notify pair (a mixed-build vote would decode the wrong
+#     variant type), plus a new notify_rematch_voters RPC (host-broadcast voter
+#     total, the skip-vote pattern) shifting the name-sorted RPC indices.
+const PROTOCOL_VERSION: int = 25
 
 
 func _ready() -> void:

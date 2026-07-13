@@ -50,8 +50,15 @@ var _warned_thirty: bool = false
 var _last_warning_pulse_second: int = -1
 var _confirm_dialog: ConfirmDialog = null
 var _confirm_callback: Callable = Callable()
-var _rematch_votes: Dictionary[int, bool] = {}
-var _local_voted: bool = false
+# peer_id -> RematchVoteRules.Choice: the shared play-again vote pool
+# (REMATCH and LOBBY are flavors of the same unanimous vote).
+var _rematch_votes: Dictionary[int, int] = {}
+var _local_vote: int = RematchVoteRules.Choice.NONE
+# Authoritative voter-pool size (connected humans minus spectators). The host
+# computes and broadcasts it (skip-vote pattern: host counts, peers display) —
+# clients can't derive it locally because from-lobby spectators are only
+# tracked host-side. 0 = no broadcast landed yet (client fallback estimate).
+var _vote_total: int = 0
 var _phase_banner_root: Control = null
 var _phase_slide_tween: Tween = null
 var _faceoff_countdown_tween: Tween = null
@@ -112,7 +119,7 @@ func _ready() -> void:
 	add_child(_bug_dialog)
 	_game_over_popup = GameOverPopup.new()
 	_game_over_popup.rematch_toggled.connect(_on_rematch_vote_pressed)
-	_game_over_popup.host_action_pressed.connect(_on_game_over_host_action)
+	_game_over_popup.lobby_vote_toggled.connect(_on_lobby_vote_pressed)
 	_game_over_popup.free_play_pressed.connect(_on_game_over_free_play)
 	_game_over_popup.exit_pressed.connect(_on_game_over_exit)
 	add_child(_game_over_popup)
@@ -165,6 +172,7 @@ func _ready() -> void:
 	GameManager.game_over.connect(_on_game_over)
 	GameManager.game_reset.connect(_on_game_reset)
 	NetworkManager.rematch_vote_changed.connect(_on_rematch_vote_changed)
+	NetworkManager.rematch_voters_changed.connect(_on_rematch_voters_changed)
 	NetworkManager.peer_disconnected.connect(_on_rematch_peer_disconnected)
 	GameManager.shots_on_goal_changed.connect(_on_shots_on_goal_changed)
 	GameManager.stats_updated.connect(_on_stats_updated_for_feed)
@@ -1405,7 +1413,10 @@ func _on_game_over() -> void:
 	_phase_label.add_theme_color_override("font_color", result_color)
 	_show_phase_banner_at_rest()
 	_rematch_votes.clear()
-	_local_voted = false
+	_local_vote = RematchVoteRules.Choice.NONE
+	# Zeroing forces the host's refresh below to see a change and broadcast a
+	# fresh total (clients just zeroed their mirror and are waiting on it).
+	_vote_total = 0
 	_update_rematch_ui()
 	if _game_over_present_tween != null and _game_over_present_tween.is_running():
 		_game_over_present_tween.kill()
@@ -1481,11 +1492,20 @@ func _on_game_reset() -> void:
 	if _side_menu != null:
 		_side_menu.close()
 
+# The two vote buttons toggle their own flavor and steal from the other:
+# pressing the flavor you already voted withdraws (NONE); pressing the other
+# switches the vote in one click.
 func _on_rematch_vote_pressed() -> void:
-	_local_voted = not _local_voted
-	NetworkManager.send_rematch_vote(_local_voted)
+	_toggle_local_vote(RematchVoteRules.Choice.REMATCH)
 
-func _on_rematch_vote_changed(peer_id: int, vote: bool) -> void:
+func _on_lobby_vote_pressed() -> void:
+	_toggle_local_vote(RematchVoteRules.Choice.LOBBY)
+
+func _toggle_local_vote(choice: int) -> void:
+	_local_vote = RematchVoteRules.Choice.NONE if _local_vote == choice else choice
+	NetworkManager.send_rematch_vote(_local_vote)
+
+func _on_rematch_vote_changed(peer_id: int, vote: int) -> void:
 	_rematch_votes[peer_id] = vote
 	_update_rematch_ui()
 	if NetworkManager.is_host:
@@ -1497,14 +1517,32 @@ func _on_rematch_peer_disconnected(peer_id: int) -> void:
 	if NetworkManager.is_host:
 		_check_rematch_unanimous()
 
-func _update_rematch_ui() -> void:
-	var total: int = NetworkManager.connected_peer_ids().size() + 1
-	_game_over_popup.update_votes(_rematch_votes, total, _local_voted)
+func _on_rematch_voters_changed(total: int) -> void:
+	_vote_total = total
+	_update_rematch_ui()
 
-# Online-host-only button (offline/clients don't show it): pull the whole
-# group back to the shared lobby.
-func _on_game_over_host_action() -> void:
-	GameManager.return_to_lobby()
+# Host-side: recompute the voter pool and broadcast it when it moves. Spectators
+# don't have a vote button; spectator_peer_count already includes the host's
+# peer (1) if the host is itself a spectator, so a single subtraction yields
+# the actual pool. Re-run on every vote/disconnect funnel so a mid-screen
+# spectator demotion is picked up on the next vote event.
+func _refresh_voter_total() -> void:
+	if not NetworkManager.is_host:
+		return
+	var total: int = NetworkManager.connected_peer_ids().size() + 1 \
+			- GameManager.spectator_peer_count()
+	if total == _vote_total:
+		return
+	_vote_total = total
+	NetworkManager.send_rematch_voters_to_all(total)
+
+func _update_rematch_ui() -> void:
+	_refresh_voter_total()
+	# Client fallback until the host's total lands: everyone connected. It can
+	# overcount (unreplicated from-lobby spectators) for at most the RPC gap.
+	var total: int = _vote_total if _vote_total > 0 \
+			else NetworkManager.connected_peer_ids().size() + 1
+	_game_over_popup.update_votes(_rematch_votes, total, _local_vote)
 
 # Drop to solo free play. For an online host this tears down the server, so the
 # confirm spells out that it ends the match for everyone.
@@ -1523,18 +1561,14 @@ func _on_game_over_exit() -> void:
 		NetworkManager.reset()
 		get_tree().quit())
 
+# Host-side. Every caller runs _update_rematch_ui first, so _vote_total is
+# freshly recomputed by the time the pool is resolved.
 func _check_rematch_unanimous() -> void:
-	# Host-side: spectators don't have a vote button. spectator_peer_count
-	# already includes the host's peer (1) if the host is itself a spectator,
-	# so a single subtraction here yields the actual voter pool.
-	var total: int = NetworkManager.connected_peer_ids().size() + 1 \
-			- GameManager.spectator_peer_count()
-	var count: int = 0
-	for v: bool in _rematch_votes.values():
-		if v:
-			count += 1
-	if total > 0 and count >= total:
-		GameManager.reset_game()
+	match RematchVoteRules.resolve(_rematch_votes, _vote_total):
+		RematchVoteRules.Choice.REMATCH:
+			GameManager.reset_game()
+		RematchVoteRules.Choice.LOBBY:
+			GameManager.return_to_lobby()
 
 func _on_bug_report_pressed() -> void:
 	_bug_dialog.open()

@@ -91,7 +91,8 @@ signal player_ready_changed(peer_id: int, is_ready: bool)
 # Host authoritative; clients mirror. Phase 1 only emits on host-driven changes.
 signal bot_slot_changed(slot_key: int, is_bot: bool)
 signal bot_slots_synced(bot_slots: Dictionary)
-signal rematch_vote_changed(peer_id: int, vote: bool)
+signal rematch_vote_changed(peer_id: int, vote: int)
+signal rematch_voters_changed(total: int)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
@@ -1774,8 +1775,11 @@ func send_player_ready(is_ready: bool) -> void:
 	else:
 		request_player_ready.rpc_id(1, is_ready)
 
+# `vote` is a RematchVoteRules.Choice — NONE withdraws, REMATCH/LOBBY are the
+# two flavors of the shared end-of-game "play again" vote (HUD resolves the
+# pool via RematchVoteRules; the host acts on the outcome).
 @rpc("any_peer", "reliable")
-func request_rematch_vote(vote: bool) -> void:
+func request_rematch_vote(vote: int) -> void:
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
@@ -1784,10 +1788,10 @@ func request_rematch_vote(vote: bool) -> void:
 	rematch_vote_changed.emit(peer_id, vote)
 
 @rpc("authority", "reliable")
-func notify_rematch_vote(peer_id: int, vote: bool) -> void:
+func notify_rematch_vote(peer_id: int, vote: int) -> void:
 	rematch_vote_changed.emit(peer_id, vote)
 
-func send_rematch_vote(vote: bool) -> void:
+func send_rematch_vote(vote: int) -> void:
 	if is_host:
 		var peer_id: int = local_peer_id()
 		for remote_id: int in connected_peer_ids():
@@ -1795,6 +1799,19 @@ func send_rematch_vote(vote: bool) -> void:
 		rematch_vote_changed.emit(peer_id, vote)
 	else:
 		request_rematch_vote.rpc_id(1, vote)
+
+# Voter-pool size for the end-of-game vote, host-broadcast (the skip-replay
+# pattern: host counts, peers display). Clients can't compute it themselves —
+# from-lobby spectators are only ever tracked host-side, so a client-local
+# "peers minus spectators" undercounts the subtraction.
+@rpc("authority", "reliable")
+func notify_rematch_voters(total: int) -> void:
+	rematch_voters_changed.emit(total)
+
+func send_rematch_voters_to_all(total: int) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_rematch_voters.rpc_id(peer_id, total)
+	rematch_voters_changed.emit(total)
 
 signal join_in_progress(config: Dictionary)
 
