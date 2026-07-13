@@ -105,6 +105,16 @@ static func _try_reactive_decision(ctx: RoleContext) -> RoleDecision:
 	if puck_state == null:
 		return null
 
+	# Held pucks are not shots: a carrier skating the puck at speed must not
+	# flip the FINISHER into tip mode. This also covers the carrier-reaction
+	# debounce window right after a release, when a live feed still nominally
+	# reads as held — the tip reaction then starts a beat late, which is
+	# exactly what the reaction-delay difficulty knob means. (Before this
+	# gate, that window's fast-"held" puck produced a reactive not-ready
+	# decision that tore down one-timer readiness on every feed.)
+	if puck_state.carrier_peer_id != -1:
+		return null
+
 	var puck_pos: Vector3 = puck_state.position
 	var puck_vel: Vector3 = puck_state.velocity
 	var puck_speed: float = sqrt(puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z)

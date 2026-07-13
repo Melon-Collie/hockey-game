@@ -345,6 +345,18 @@ const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0
 
+# ── Loft vertical launch speeds (ShotMechanics loft levels) ───────────────────
+# Each loft level is a FIXED vertical launch speed independent of shot power
+# (see ShotMechanics.loft_y — charge buys pace, loft buys height). Shared
+# defaults between the SkaterController exports (loft_vertical_speed_low/high)
+# and the bot AI's shot model, which needs the real arc to know what height a
+# lofted shot physically ARRIVES at over a given range/power (a HIGH-loft
+# full-power wrister from 5 m tops out at belly height, not the top corner).
+#   LOW  2.2  → ~0.26 m apex (saucer: clears stick blades, lands and slides)
+#   HIGH 4.65 → ~1.10 m apex (puck top ~5 cm under the crossbar's inner edge)
+const DEFAULT_LOFT_VY_LOW_M_S: float = 2.2
+const DEFAULT_LOFT_VY_HIGH_M_S: float = 4.65
+
 # ── Wrister power-model default (ShotMechanics.wrister_power_t) ──────────────
 # Feel tunable — live editor tuning isn't the workflow, but it's an @export on
 # SkaterController; this is the shared default so the bot AI stays calibrated to

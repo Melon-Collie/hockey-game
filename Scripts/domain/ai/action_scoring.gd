@@ -97,6 +97,15 @@ const SLOT_RADIUS_M: float = 6.0
 #   3,4  bottom corners    → FLAT      (beside the pads)
 #   5    five-hole         → FLAT      (between the legs — opens when he's moving)
 #
+# HIGH holes are ARRIVAL-HONEST: the loft is a fixed vertical launch speed, so
+# whether the arc physically reaches the top band at the net is a range × pace
+# fact. They're evaluated (and fired — best_shot_power_t) at the fastest pace
+# whose arc still arrives above the covered torso column, and zeroed where no
+# legal power gets there — see the block at _high_band_horizontal_speed. A DOWN
+# goalie concedes the top band's arm extension (the butterfly's defining
+# trade); a standing set goalie's glove has the whole soft-arc flight to
+# deploy, which is what actually shuts the top shelf against a set keeper.
+#
 # (The armpit / body-side seam is deliberately absent — it only opens when the
 # goalie commits his arm elsewhere, a condition this model can't see, so a static
 # seam would be a phantom target. Re-add it only with a real arm-commitment model.)
@@ -139,6 +148,65 @@ const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to exte
                                           # Mirrors the live goalie: HIGH-band EXT (0.45) / glove_react_
                                           # max_speed (5.0) ≈ 0.09 s to cover the reaction-gated reach.
                                           # Change with GoalieController.glove_react_max_speed.
+
+# ── HIGH-band arrival honesty ─────────────────────────────────────────────────
+# A HIGH hole is only a real target if the shot's arc physically ARRIVES above
+# the goalie's covered torso column. Loft is a FIXED vertical launch speed
+# (GameRules.DEFAULT_LOFT_VY_HIGH_M_S), so arrival height is pure kinematics of
+# range × pace: a full-power HIGH wrister from 5 m crosses the line at belly
+# height — a shot into the chest, not the top corner (exactly the "bots roof it
+# into the goalie's chest" bug). The model therefore evaluates HIGH holes at
+# the fastest pace whose arc still arrives at/above the band floor
+# (_high_band_horizontal_speed) — the real range/charge trade a human plays —
+# and zeroes them when no legal power reaches the band (point-blank, or so far
+# out the arc has sagged back below it). best_shot_power_t exposes the solved
+# pace so the bot fires the shot it actually scored.
+const GRAVITY_M_S2: float = 9.8   # engine default the airborne puck falls under
+# Band floor: the stance glove/shoulder line — the top of the always-covered
+# torso column (crouched goalie shoulders ≈ 0.85 m; crossbar 1.22, HIGH apex
+# ~1.10). A physical measurement, not a shape parameter: arrivals below it are
+# in the pad/torso zone the LOW/FIVE holes model, not "over the shoulder".
+const HIGH_BAND_ARRIVAL_MIN_HEIGHT_M: float = 0.85
+
+
+# The fastest HORIZONTAL pace whose HIGH-loft arc still arrives at/above the
+# band floor at `dist` — i.e. the pace the bot should shoot a top-band look at.
+# Returns 0.0 when no legal wrister power puts the arrival in the band:
+#   · in tight, even the min-power arc hasn't risen to the floor yet;
+#   · at long range, every legal arc has fallen back below it.
+static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float) -> float:
+	var vy: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+	var disc: float = vy * vy - 2.0 * GRAVITY_M_S2 * HIGH_BAND_ARRIVAL_MIN_HEIGHT_M
+	if disc <= 0.0:
+		return 0.0  # the loft's apex sits below the band floor — no high shot exists
+	var root: float = sqrt(disc)
+	var t_first: float = (vy - root) / GRAVITY_M_S2   # arc rises through the floor
+	var t_last: float = (vy + root) / GRAVITY_M_S2    # arc falls back through it
+	if t_first <= 0.0001:
+		return 0.0
+	var v_h_ceiling: float = dist / t_first    # any faster arrives below the band
+	var v_h_floor_geom: float = dist / t_last  # any slower has already sagged back
+	var v_h_full: float = sqrt(maxf(shot_speed_m_s * shot_speed_m_s - vy * vy, 0.0))
+	var v_h_min_power: float = sqrt(maxf(
+			GameRules.DEFAULT_WRISTER_POWER_MIN_M_S * GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+					- vy * vy,
+			0.0))
+	var v_h: float = minf(v_h_full, v_h_ceiling)
+	if v_h < maxf(v_h_floor_geom, v_h_min_power):
+		return 0.0
+	return v_h
+
+
+# Flight time (s) of a shot at hole band `band` over `dist` — HIGH holes fly at
+# the arrival-honest solved pace (or -1.0 when the band is unreachable), FLAT
+# bands at the committed full pace. The five-hole rides the LOW band.
+static func _band_flight_s(band: int, dist: float, shot_speed_m_s: float) -> float:
+	if band == HOLE_BAND_HIGH:
+		var v_h: float = _high_band_horizontal_speed(dist, shot_speed_m_s)
+		if v_h <= 0.0:
+			return -1.0
+		return dist / v_h
+	return dist / maxf(shot_speed_m_s, 1.0)
 
 # Loft choice prefers the LOWEST-risk shot among comparable openings: a flat shot
 # is easier to execute than roofing it (you can sail a high shot over the bar). So
@@ -518,13 +586,14 @@ static func open_net_danger(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0) -> float:
-	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	# Best of the holes. Pure value-type math, no allocation — safe to run
-	# per carry candidate at tick rate (see _hole_open_angle).
+	# per carry candidate at tick rate (see _hole_open_angle). Flight time is
+	# per-band inside _hole_open_angle: HIGH holes fly at the arrival-honest
+	# solved pace, flat bands at the committed full pace.
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
-				net_half_width, flight, goalie_unsettled_factor,
+				net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 				goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 		if a > best_angle:
@@ -545,14 +614,45 @@ static func best_shot_loft(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0) -> int:
-	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
-			net_half_width, flight, goalie_unsettled_factor,
+			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 	if hole < 0:
 		return ShotMechanics.ELEVATION_FLAT
 	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
+
+
+# The release power fraction (0..1 over the bot's wrister band) for the CHOSEN
+# hole — the third leg of the loft/aim/power triple, all from one chooser. A
+# HIGH hole returns the arrival-honest pace (_high_band_horizontal_speed): the
+# fastest release whose arc still ARRIVES in the top band at this range — the
+# real range/charge trade behind a top-corner shot (soft flip in tight, full
+# rip from range). Flat-band holes (corners past the pads, five-hole) and the
+# no-hole fallback fire full power.
+static func best_shot_power_t(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0,
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0) -> float:
+	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
+			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
+			goalie_five_hole_m, goalie_down,
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+	if hole < 0 or HOLE_BAND[hole] != HOLE_BAND_HIGH:
+		return 1.0
+	var v_h: float = _high_band_horizontal_speed(
+			shooter.distance_to(attacking_goal), shot_speed_m_s)
+	if v_h <= 0.0:
+		return 1.0  # unreachable band can't be the chosen hole; defensive only
+	var vy: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+	var v: float = sqrt(v_h * v_h + vy * vy)
+	var band: float = maxf(
+			shot_speed_m_s - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, 0.001)
+	return clampf((v - GameRules.DEFAULT_WRISTER_POWER_MIN_M_S) / band, 0.0, 1.0)
 
 
 # The world aim POINT (on the net plane, y = 0) of the CHOSEN hole — the exact
@@ -568,15 +668,15 @@ static func best_shot_aim(
 		aim_spread_rad: float = 0.0,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false) -> Vector3:
-	var flight: float = shooter.distance_to(attacking_goal) / maxf(shot_speed_m_s, 1.0)
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
-			net_half_width, flight, goalie_unsettled_factor,
+			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
-			net_half_width, flight, goalie_unsettled_factor, aim_spread_rad)
+			net_half_width, shot_speed_m_s, goalie_unsettled_factor, aim_spread_rad,
+			goalie_down)
 	return Vector3(aim_x, 0.0, attacking_goal.z)
 
 
@@ -587,7 +687,7 @@ static func best_shot_aim(
 # chooser shared by best_shot_loft and best_shot_aim so they never disagree.
 static func _choose_shot_hole(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
-		net_half_width: float, flight: float, unsettled: float,
+		net_half_width: float, shot_speed_m_s: float, unsettled: float,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
@@ -595,7 +695,7 @@ static func _choose_shot_hole(
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
-				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down,
+				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 		if a > best_angle:
 			best_angle = a
@@ -607,7 +707,7 @@ static func _choose_shot_hole(
 	var chosen_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
-				net_half_width, flight, unsettled, goalie_five_hole_m, goalie_down,
+				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
 		if a < threshold:
 			continue
@@ -626,10 +726,16 @@ static func _choose_shot_hole(
 # agree.
 static func _hole_aim_x(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
-		net_half_width: float, flight: float, unsettled: float,
-		aim_spread_rad: float = 0.0) -> float:
+		net_half_width: float, shot_speed_m_s: float, unsettled: float,
+		aim_spread_rad: float = 0.0, goalie_down: bool = false) -> float:
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
+	# Same per-band flight the opening was scored with (_hole_open_angle), so
+	# aim and score read the same reaction-gated cover. A chosen hole is never
+	# band-unreachable (its opening would have scored 0), so the -1 guard is
+	# belt-and-braces.
+	var flight: float = maxf(0.0, _band_flight_s(
+			HOLE_BAND[i], shooter.distance_to(attacking_goal), shot_speed_m_s))
 	var net_z: float = attacking_goal.z
 	var post_lo_x: float = attacking_goal.x - net_half_width
 	var post_hi_x: float = attacking_goal.x + net_half_width
@@ -660,6 +766,10 @@ static func _hole_aim_x(
 	var reaction: float = clampf(
 			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
 	reaction *= 1.0 - eff_unsettled
+	# Down goalie concedes the top band's arm extension — mirror of the same
+	# rule in _hole_open_angle so aim and score read the same cover edge.
+	if goalie_down and band == HOLE_BAND_HIGH:
+		reaction = 0.0
 	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
 	var u: float = goalie_pos.x - shooter.x
 	var net_normal_z: float = -signf(attacking_goal.z)
@@ -705,7 +815,7 @@ static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> f
 # openings are computed on the net plane so foreshortening is automatic.
 static func _hole_open_angle(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
-		net_half_width: float, flight: float, unsettled: float,
+		net_half_width: float, shot_speed_m_s: float, unsettled: float,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
@@ -716,6 +826,13 @@ static func _hole_open_angle(
 		return 0.0  # on/behind the goal line — no shot in
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
+	# Per-band flight: HIGH holes fly at the arrival-honest solved pace (the arc
+	# must physically reach the top band — see _band_flight_s); -1 = no legal
+	# power gets there, so the hole isn't a target at all.
+	var flight: float = _band_flight_s(
+			HOLE_BAND[i], shooter.distance_to(attacking_goal), shot_speed_m_s)
+	if flight < 0.0:
+		return 0.0
 
 	# A post-seal stance (VH/RVH, read off the replicated state — see
 	# GoalieNetworkState.post_seal_x_sign) is a DEPLOYED wall at the post: the
@@ -752,6 +869,10 @@ static func _hole_open_angle(
 				1.0 - absf(shooter.x - goalie_pos.x) / FIVE_CENTER_REF_M, 0.0, 1.0)
 		var dist: float = shooter.distance_to(attacking_goal)
 		var puck_diameter: float = 2.0 * GameRules.PUCK_COLLISION_RADIUS
+		# The shooter's execution spread eats the slot exactly as it eats a
+		# corner window (the corners subtract it via fit_angle below): a
+		# razor-thin five-hole a noisy hand can't actually thread must not
+		# out-score a wider corner through the flat-loft tie-break.
 		if goalie_five_hole_m >= 0.0:
 			# MEASURED slot from the replicated pose (GoalieBehaviorRules.
 			# five_hole_gap_m): standing it's a real ~0.20 m ice-to-pad-top slot
@@ -769,16 +890,24 @@ static func _hole_open_angle(
 							/ GOALIE_BUTTERFLY_DROP_S,
 						0.0, 1.0)
 				gap *= 1.0 - seal
-			return maxf(0.0, gap - puck_diameter) * centrality / maxf(dist, 0.5)
+			var gap_angle: float = maxf(0.0, gap - puck_diameter) / maxf(dist, 0.5)
+			return maxf(0.0, gap_angle - aim_spread_rad) * centrality
 		# Legacy proxy (no replicated stance in scope — threat surfaces, tests):
 		# a set goalie seals it, a caught-moving one leaks it.
-		return maxf(0.0, FIVE_GAP_M - puck_diameter) * eff_unsettled \
-				* centrality / maxf(dist, 0.5)
+		var proxy_angle: float = maxf(0.0, FIVE_GAP_M - puck_diameter) / maxf(dist, 0.5)
+		return maxf(0.0, proxy_angle - aim_spread_rad) * eff_unsettled * centrality
 
 	var band: int = HOLE_BAND[i]
 	var reaction: float = clampf(
 			(flight - HOLE_BAND_DELAY[band]) / GOALIE_ARM_DEPLOY_S, 0.0, 1.0)
 	reaction *= 1.0 - eff_unsettled
+	# The butterfly's defining trade: a DOWN goalie seals the ice and concedes
+	# the top band — his glove starts at pad height, so the reaction-gated arm
+	# EXTENSION that shuts the top corners on a standing goalie isn't there
+	# (the live goalie's blocking-drop doc: "drop on the read, eat the
+	# top-corner exposure"). Core body coverage still occludes.
+	if goalie_down and band == HOLE_BAND_HIGH:
+		reaction = 0.0
 	var cover: float = HOLE_BAND_CORE[band] + HOLE_BAND_EXT[band] * reaction
 
 	# Net posts and the goalie's cover, all as bearings from the shooter's eye.

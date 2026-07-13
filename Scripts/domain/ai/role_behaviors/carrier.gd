@@ -177,8 +177,8 @@ var pass_target_speed: float = AIActionScoring.PASS_SPEED_M_S
 var pass_should_saucer: bool = false
 
 # Set when intent commits to SHOOT: the loft (ShotMechanics.ELEVATION_*) of the
-# best goalie hole the shot is aimed at — top corner → HIGH, armpit → LOW,
-# bottom corner / five-hole → FLAT (see AIActionScoring.best_shot_loft).
+# best goalie hole the shot is aimed at — top corner → HIGH, bottom corner /
+# five-hole → FLAT (see AIActionScoring.best_shot_loft).
 # Consumed by the state machine's press-state handlers to drive the release loft.
 var shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 
@@ -186,6 +186,12 @@ var shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 # the net plane), so the state machine aims the wrister exactly at the hole the
 # loft was chosen for. INF until a SHOOT commit picks one.
 var shot_aim_point: Vector3 = Vector3.INF
+
+# Set alongside shot_loft_level: the release power fraction (0..1 over this
+# bot's wrister band) of that same hole. A HIGH (roof) hole commits the
+# arrival-honest pace — the fastest release whose arc still arrives in the top
+# band at this range (AIActionScoring.best_shot_power_t); flat holes fire full.
+var shot_power_t: float = 1.0
 
 # Cached carry destination from the most recent re-eval. Read by the
 # state machine to drive steering during CARRY.
@@ -284,6 +290,7 @@ func reset() -> void:
 	pass_should_saucer = false
 	shot_loft_level = ShotMechanics.ELEVATION_FLAT
 	shot_aim_point = Vector3.INF
+	shot_power_t = 1.0
 	last_carry_anchor = Vector3.ZERO
 	dump_target = Vector3.INF
 	dump_is_soft = false
@@ -620,6 +627,11 @@ func _pick_action(ctx: RoleContext) -> void:
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					ctx.self_aim_spread_rad,
 					wrister_seal_x, wrister_seal_tall)
+			shot_power_t = AIActionScoring.best_shot_power_t(
+					wrister_release_pos, attacking_goal, wrister_goalie,
+					GameRules.NET_HALF_WIDTH, ctx.self_wrister_shot_speed,
+					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
+					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
 	elif dump_score > raw_carry_score and not staggered:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
 		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.

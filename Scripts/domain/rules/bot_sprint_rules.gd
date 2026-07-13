@@ -52,6 +52,8 @@ const TURN_GATE_SPEED_M_S: float = 3.0
 # be < 1 when softened). `carrying` + `breakaway` gate the puck carrier: a
 # carrier only sprints on a clear breakaway, because carrying drains stamina
 # ~1.6× faster and dangling through traffic needs the agility sprint sacrifices.
+# `facing_xz` is the bot's current body facing (world XZ packed as Vector2 like
+# SkaterNetworkState.facing); ZERO skips the facing gate (unwired callers/tests).
 static func should_sprint(
 		was_sprinting: bool,
 		gap_to_target: float,
@@ -60,7 +62,8 @@ static func should_sprint(
 		stamina: float,
 		sprint_locked: bool,
 		carrying: bool,
-		breakaway: bool) -> bool:
+		breakaway: bool,
+		facing_xz: Vector2 = Vector2.ZERO) -> bool:
 	# Hard gates first.
 	if sprint_locked:
 		return false
@@ -74,12 +77,25 @@ static func should_sprint(
 	var gap_threshold: float = GAP_SUSTAIN_M if was_sprinting else GAP_ENGAGE_M
 	if gap_to_target < gap_threshold:
 		return false
+	var desired_len: float = desired_move.length()
 	# Turn gate: only when actually moving. A sharp required turn means the
 	# wide sprint arc overshoots — let agility carve it at normal speed.
 	var speed: float = velocity_xz.length()
-	var desired_len: float = desired_move.length()
 	if speed > TURN_GATE_SPEED_M_S and desired_len > 0.01:
 		var alignment: float = velocity_xz.dot(desired_move) / (speed * desired_len)
 		if alignment < TURN_ALIGN_MIN_DOT:
+			return false
+	# Facing gate: sprint commits the body — you burst once you're pointed.
+	# While the body still faces well off the travel direction, thrust is
+	# crossover/backward-penalized (facing-alignment scale in
+	# SkaterMovementRules) AND sprint halves the facing turn rate
+	# (sprint_turn_multiplier), so sprinting mid-rotation both buys little
+	# speed and drags the turn out — the "bot pinned mid-turn, rotating in
+	# slow motion" read after every direction flip. Facing converges
+	# monotonically toward the aim, so this releases cleanly once aligned
+	# (no hysteresis needed).
+	if facing_xz.length_squared() > 0.0001 and desired_len > 0.01:
+		var face_alignment: float = facing_xz.normalized().dot(desired_move) / desired_len
+		if face_alignment < TURN_ALIGN_MIN_DOT:
 			return false
 	return true
