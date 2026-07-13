@@ -51,14 +51,14 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 	assert_gt(easy.dispatch_period_ticks, normal.dispatch_period_ticks,
 			"Easy re-decides less often than Normal")
 	# Shot aim error: bigger sprays the finish wider (the scoring dial).
-	assert_gt(normal.shot_aim_error_m, hard.shot_aim_error_m,
+	assert_gt(normal.shot_aim_error_rad, hard.shot_aim_error_rad,
 			"Normal's shots miss their spot more than Hard's")
-	assert_gt(easy.shot_aim_error_m, normal.shot_aim_error_m,
+	assert_gt(easy.shot_aim_error_rad, normal.shot_aim_error_rad,
 			"Easy's shots miss their spot more than Normal's")
 	# Pass aim error: softens too, but see the shot-vs-pass split test below.
-	assert_gt(normal.pass_aim_error_m, hard.pass_aim_error_m,
+	assert_gt(normal.pass_aim_error_rad, hard.pass_aim_error_rad,
 			"Normal's passes err more than Hard's")
-	assert_gt(easy.pass_aim_error_m, normal.pass_aim_error_m,
+	assert_gt(easy.pass_aim_error_rad, normal.pass_aim_error_rad,
 			"Easy's passes err more than Normal's")
 	# Release timing: a slower tier's hand is later off the intended tick.
 	assert_gt(normal.shot_timing_error_s, hard.shot_timing_error_s,
@@ -119,7 +119,7 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 	# Same for the finish knobs: no settle beat and the pre-split flat error on
 	# both release types, so Hard is byte-identical to the pre-knob bot.
 	assert_eq(hard.carry_settle_delay_s, 0.0, "Hard releases the tick the compete fires")
-	assert_eq(hard.shot_aim_error_m, hard.pass_aim_error_m,
+	assert_eq(hard.shot_aim_error_rad, hard.pass_aim_error_rad,
 			"Hard keeps the pre-split flat error on both release types")
 	# Hard's humanisers are small but real — the whole point of the retune is
 	# that even the ceiling tier is no longer tick-and-corner perfect.
@@ -157,7 +157,7 @@ func test_pass_error_never_exceeds_shot_error() -> void:
 	# shot going in is not — so a tier may never spray its passes harder than
 	# its shots.
 	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
-		assert_lte(profile.pass_aim_error_m, profile.shot_aim_error_m,
+		assert_lte(profile.pass_aim_error_rad, profile.shot_aim_error_rad,
 				"pass aim error stays at or below shot aim error at every tier")
 
 

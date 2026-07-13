@@ -1265,18 +1265,18 @@ func test_aim_error_off_raw_on_after_profile() -> void:
 	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
 	# bot wired through apply_profile gets the per-tier execution error pair
 	# plus the timing/sway humanisers.
-	assert_almost_eq(sm._shot_aim_error_m, 0.0, 1e-9,
+	assert_almost_eq(sm._shot_aim_error_rad, 0.0, 1e-9,
 			"raw agents stay error-free on shots")
-	assert_almost_eq(sm._pass_aim_error_m, 0.0, 1e-9,
+	assert_almost_eq(sm._pass_aim_error_rad, 0.0, 1e-9,
 			"raw agents stay error-free on passes")
 	assert_almost_eq(sm._shot_timing_error_s, 0.0, 1e-9,
 			"raw agents release tick-perfect")
 	assert_almost_eq(sm._carry_sway_m, 0.0, 1e-9,
 			"raw agents carry rail-steady")
 	sm.apply_profile(BotSkillProfile.hard())
-	assert_almost_eq(sm._shot_aim_error_m, BotSkillProfile.hard().shot_aim_error_m, 1e-9,
+	assert_almost_eq(sm._shot_aim_error_rad, BotSkillProfile.hard().shot_aim_error_rad, 1e-9,
 			"profiled (live) agents carry the shot aim error")
-	assert_almost_eq(sm._pass_aim_error_m, BotSkillProfile.hard().pass_aim_error_m, 1e-9,
+	assert_almost_eq(sm._pass_aim_error_rad, BotSkillProfile.hard().pass_aim_error_rad, 1e-9,
 			"profiled (live) agents carry the pass aim error")
 	assert_almost_eq(sm._shot_timing_error_s, BotSkillProfile.hard().shot_timing_error_s, 1e-9,
 			"profiled (live) agents carry the release timing variance")
@@ -1287,13 +1287,12 @@ func test_aim_error_off_raw_on_after_profile() -> void:
 func test_press_entry_samples_release_error_per_budget() -> void:
 	# Each press entry draws ONE aim error for the whole release: shots and
 	# one-timers on the (larger) shot budget, passes on the pass budget. The
-	# sample is uniform ± budget over the 2 m aim arm — bound it, and check a
-	# fresh entry re-samples rather than reusing the previous release's error.
+	# budget IS the radian bound (tier errors are angles, ring-independent) —
+	# bound it, and check a fresh entry re-samples rather than reusing the
+	# previous release's error.
 	sm.apply_profile(BotSkillProfile.easy())
-	var shot_bound: float = BotSkillProfile.easy().shot_aim_error_m \
-			/ Agent.CARRY_BLADE_AIM_FORWARD_M
-	var pass_bound: float = BotSkillProfile.easy().pass_aim_error_m \
-			/ Agent.CARRY_BLADE_AIM_FORWARD_M
+	var shot_bound: float = BotSkillProfile.easy().shot_aim_error_rad
+	var pass_bound: float = BotSkillProfile.easy().pass_aim_error_rad
 	var samples: Array[float] = []
 	for i: int in 16:
 		sm._set_state(Agent.State.SHOOT_PRESSED)

@@ -795,8 +795,20 @@ func _pick_action(ctx: RoleContext) -> void:
 	debug_dump_score = dump_score
 
 	var new_intent: int
-	# Fire only if it beats BOTH carrying and holding for the developing play.
-	if fire_score >= carry_score and fire_score >= hold_value \
+	# Retention is HOPELESS when even the honest raw carry is worth less than
+	# conceding at the dump spot. In that regime the floored carry (the self
+	# drive-in mirror / the keep-the-puck floor) must not veto a fire — it just
+	# lost to the dump on the honest pricing, so the real choice is between the
+	# two ways of GIVING THE PUCK UP, and a qualified fire (a live teammate)
+	# beats flinging it to space whenever it out-values the dump. Without this
+	# the compete was intransitive: carry beat pass, dump beat (raw) carry,
+	# pass beat dump — and a pinned carrier dumped past a clean outlet.
+	var retention_hopeless: bool = dump_score > raw_carry_score
+	# Fire if it beats retention (carrying + holding for the developing play) —
+	# or, when retention is hopeless anyway, if it beats the dump about to
+	# happen (the hold gate drops there too: holding IS retention).
+	if ((fire_score >= carry_score and fire_score >= hold_value)
+			or (retention_hopeless and fire_score >= dump_score)) \
 			and fire_score > FIRE_MIN_VALUE and not staggered and not settling:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
@@ -875,9 +887,10 @@ func _pick_action(ctx: RoleContext) -> void:
 						(target_v / coef - min_v)
 							/ maxf(ctx.self_wrister_shot_speed - min_v, 0.001),
 						0.0, 1.0)
-	elif dump_score > raw_carry_score and not staggered and not settling:
+	elif retention_hopeless and not staggered and not settling:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
-		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.
+		# priced, below the safe giveaway), and no qualified fire out-valued the
+		# concession (checked above). Clear our zone, or dump-and-chase.
 		_hold_elapsed_s = 0.0
 		new_intent = INTENT_DUMP
 		dump_target = dump_result[1]
@@ -1441,7 +1454,9 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 # It competes against the RAW carry — now honest, since carry candidates price their
 # strip at the tight point ON the route (carry_strip_point), so a doomed carry reads
 # honestly negative and an escapable one positive. The dump wins exactly when even
-# the best carry is worse than conceding at a safe spot: a last resort, no threshold.
+# the best carry is worse than conceding at a safe spot AND no qualified fire
+# out-values the concession (see the retention_hopeless compete in _pick_action):
+# a last resort, no threshold.
 func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos

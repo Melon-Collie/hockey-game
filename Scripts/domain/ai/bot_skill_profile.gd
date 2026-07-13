@@ -36,10 +36,12 @@ extends RefCounted
 #     a stale one), and it knows its OWN possession instantly. See GameManager.
 #   • dispatch_period_ticks — how often the full decision dispatch re-runs;
 #     a slower cadence makes the bot commit to a read longer before adjusting.
-#   • shot_aim_error_m / pass_aim_error_m — the execution-error levers (RNG on
-#     the hands, never decision dice). ONE error is sampled PER RELEASE at the
-#     press commit (uniform ±, on the 2 m aim arm) and held constant through
-#     the windup, so the blade sweeps smoothly to a slightly-wrong spot — a
+#   • shot_aim_error_rad / pass_aim_error_rad — the execution-error levers (RNG
+#     on the hands, never decision dice). ONE error is sampled PER RELEASE at
+#     the press commit (uniform ± ANGLE on the release direction — angles, not
+#     cursor metres, so the calibration is independent of how far out the carry
+#     aim ring sits) and held constant through the windup, so the blade sweeps
+#     smoothly to a slightly-wrong spot — a
 #     human who missed his spot, not a shaking hand. (This replaced per-tick
 #     white noise on the output cursor, which read as stick jitter at the
 #     lower tiers.) The release-tick error distribution is identical, so the
@@ -198,17 +200,18 @@ var carrier_reaction_delay_s: float
 # Tick-denominated — tuned for 120 Hz (see tick-rate note above).
 var dispatch_period_ticks: int
 
-# Execution error on SHOT releases (metres on the 2 m aim arm; ONE uniform ±
-# sample per release, held through the windup). ≈ error / 2 m aim arm in
-# radians; the same value feeds the shot-aim entry budget and the shot score's
+# Execution error on SHOT releases (RADIANS of release-direction error; ONE
+# uniform ± sample per release, held through the windup). An angle, not cursor
+# metres, so the tier calibration survives changes to the carry aim ring. The
+# same value feeds the shot-aim entry budget and the shot score's
 # required-window inset (RoleContext.self_aim_spread_rad), so a wobblier hand
 # also shoots more selectively. THE scoring dial per tier. Tick-independent.
-var shot_aim_error_m: float
+var shot_aim_error_rad: float
 
 # Execution error on PASS releases (and the dump), same per-release sampling.
 # Deliberately much smaller than shot error at the lower tiers: bots keep
 # completing passes, they just stop burying everything. Tick-independent.
-var pass_aim_error_m: float
+var pass_aim_error_rad: float
 
 # Motor timing variance on the SHOT release (seconds). Each shot samples a
 # late-release hold in [0, this]; HALF of it (the expected lateness) is
@@ -276,7 +279,7 @@ var protects_the_puck: bool
 
 func _init(p_carrier_reaction_delay_s: float,
 		p_dispatch_period_ticks: int,
-		p_shot_aim_error_m: float, p_pass_aim_error_m: float,
+		p_shot_aim_error_rad: float, p_pass_aim_error_rad: float,
 		p_shot_timing_error_s: float, p_carry_sway_m: float,
 		p_carry_settle_delay_s: float,
 		p_pursuit_standoff_m: float, p_pass_speed_scale: float,
@@ -286,8 +289,8 @@ func _init(p_carrier_reaction_delay_s: float,
 		p_protects_the_puck: bool) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
 	dispatch_period_ticks = p_dispatch_period_ticks
-	shot_aim_error_m = p_shot_aim_error_m
-	pass_aim_error_m = p_pass_aim_error_m
+	shot_aim_error_rad = p_shot_aim_error_rad
+	pass_aim_error_rad = p_pass_aim_error_rad
 	shot_timing_error_s = p_shot_timing_error_s
 	carry_sway_m = p_carry_sway_m
 	carry_settle_delay_s = p_carry_settle_delay_s
@@ -308,14 +311,15 @@ func _init(p_carrier_reaction_delay_s: float,
 # every bot now (no per-tier slew), so a Hard bot's precision rides its build.
 # Dispatch at PHYSICS_TICK/60 = 2 ticks matches the engine baseline cadence. Tune
 # carrier_reaction_delay UP if it matches passes too readily. Execution error is
-# the pre-split flat value on both releases (0.02 m ≈ ±0.6° per release —
+# the pre-split flat value on both releases (0.01 rad ≈ ±0.6° per release —
 # spreads the identical corner snipe into goals/saves/misses without ever
 # reading as a botched shot). Release timing slop 0.10 s — an elite hand, but
 # no longer tick-perfect: the doorstep lateral beat is still hunted (scored
 # at the median ~0.05 s-late release), but a window in the ~0.05–0.10 s band
 # is a coin flip decided by the sampled delay — the goalie robs the late
 # draws — and only genuinely fat windows still convert every time. A subtle
-# 0.08 m carry sway keeps the hands alive without costing control. No settle
+# 0.05 m carry sway (cursor metres at the carry aim ring — ~±2° of dangle)
+# keeps the hands alive without costing control. No settle
 # beat — Hard releases the tick the compete says fire. Pace knobs all at
 # their no-op baseline (standoff 0.0, pass scale 1.0,
 # check aggression 1.0, anticipation 1.0) — Hard keeps today's tight
@@ -324,7 +328,7 @@ func _init(p_carrier_reaction_delay_s: float,
 # plays, angles its chase, plays the pass on odd-man rushes, and shields the
 # puck with its body — the full hockey IQ.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 2, 0.02, 0.02, 0.10, 0.08, 0.0,
+	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.05, 0.0,
 			0.0, 1.0, 1.0, 1.0,
 			true, true, true, true, true)
 
@@ -338,12 +342,12 @@ static func hard() -> BotSkillProfile:
 # blade speed now — give Normal bots a lower-Hands build if their shots feel too
 # sharp, rather than an artificial slew.)
 #
-# Finish: shot error 0.06 m (≈ ±1.7° per release — ~±0.35 m of spread at the
+# Finish: shot error 0.03 rad (≈ ±1.7° per release — ~±0.35 m of spread at the
 # net from a 12 m look, so a well-picked corner becomes goals AND saves AND the
 # odd wide one, and the score's spread budget stops the from-range snipes
-# entirely); pass error stays near-Hard at 0.03 m so the passing game keeps
+# entirely); pass error stays near-Hard at 0.015 rad so the passing game keeps
 # connecting. Release timing slop 0.16 s — Normal still tries the tight
-# plays but a set goalie regularly wins the late draws. Carry sway 0.14 m: a visibly
+# plays but a set goalie regularly wins the late draws. Carry sway 0.09 m: a visibly
 # loose, human dangle. Settle beat 0.30 s — the puck visibly arrives on the
 # tape before the next play starts, and pressuring a fresh carrier is a real
 # play now. Tune shot error first when Normal's scoring is off: it's the dial
@@ -369,7 +373,7 @@ static func hard() -> BotSkillProfile:
 # down by the tuning dials instead (shot wobble first — see the finish note
 # above). Easy is where the behaviour gates close.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 6, 0.06, 0.03, 0.16, 0.14, 0.30,
+	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.09, 0.30,
 			1.5, 1.0, 0.65, 0.6,
 			true, true, true, true, true)
 
@@ -383,13 +387,13 @@ static func normal() -> BotSkillProfile:
 # or hand Easy bots a lower-Hands build for genuinely softer aim, if a newcomer
 # still can't string possessions together.
 #
-# Finish: shot error 0.11 m (≈ ±3.2° per release — ~±0.65 m of net-plane
+# Finish: shot error 0.055 rad (≈ ±3.2° per release — ~±0.65 m of net-plane
 # spread from 12 m, so even good looks routinely find the goalie or the glass;
 # the spread budget means Easy only pulls the trigger in tight or on a
-# genuinely gaping hole, and even those aren't automatic); pass error 0.045 m
+# genuinely gaping hole, and even those aren't automatic); pass error 0.0225 rad
 # keeps tape-to-tape mostly connecting with the occasional honest bobble.
 # Release timing slop 0.24 s — Easy telegraphs and fires a beat late. Carry
-# sway 0.22 m — the loose, swimmy handle a newcomer reads instantly. Settle
+# sway 0.14 m — the loose, swimmy handle a newcomer reads instantly. Settle
 # beat 0.55 s — a newcomer can watch an Easy bot receive, gather, and THEN
 # decide, and closing on a fresh carrier reliably forces the turnover.
 #
@@ -408,7 +412,7 @@ static func normal() -> BotSkillProfile:
 # in front (a newcomer's poke-check genuinely steals it). Beginner hockey IQ
 # to match the beginner hands.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 9, 0.11, 0.045, 0.24, 0.22, 0.55,
+	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.14, 0.55,
 			3.0, 1.0, 0.0, 0.2,
 			false, false, false, false, false)
 

@@ -53,8 +53,11 @@ const RINK_Z_INSET: float = 1.0
 # "converged" — historically had to clear the per-tick step plus the
 # old per-tick cursor noise so the bot didn't oscillate just inside
 # the threshold. At perfect-bot settings (MAX_SPEED = 100, no noise)
-# convergence is near-instant; 0.15 stays as a small slop budget for
-# moving aim targets (receiver leads, goalie shadow drift).
+# convergence is near-instant; this stays as a small slop budget for
+# moving aim targets (receiver leads, goalie shadow drift). It lives on
+# the CARRY_BLADE_AIM_FORWARD_M ring, so what it really gates is an
+# ANGLE — 0.10 at the 1.3 m ring is the same ~±4.4° the old 0.15
+# allowed at the 2 m ring.
 #
 # INTENT_MAX_WAIT_TICKS is a safety timeout against convergence
 # never landing (a receiver who keeps moving past the lead point,
@@ -68,7 +71,7 @@ const RINK_Z_INSET: float = 1.0
 # _step_mouse_aim is what guarantees the body-aim angle stays
 # inside the blade ROM during the swing, which removed the need
 # for the old facing-alignment gate.
-const AIM_CONVERGED_DIST_M: float = 0.15
+const AIM_CONVERGED_DIST_M: float = 0.10
 
 # Commit-then-aim safety margin (Aim-B2). The blade physically reaches anywhere
 # inside the reach cone (_self_reach_cone_half_angle, ROM + torso twist ≈ 157°)
@@ -93,7 +96,7 @@ const INTENT_MAX_WAIT_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~500 m
 var _intent_max_wait_ticks: int = INTENT_MAX_WAIT_TICKS
 # Execution error is a PER-RELEASE sample (see _sample_aim_error_rad /
 # the aim-error block below), split shot-vs-pass per difficulty tier via
-# BotSkillProfile.shot_aim_error_m / pass_aim_error_m. (Two older systems —
+# BotSkillProfile.shot_aim_error_rad / pass_aim_error_rad. (Two older systems —
 # per-tick output-cursor white noise, and a per-commit lateral-nudge wobble —
 # were removed: the noise read as stick jitter, especially at the wobblier
 # lower tiers.)
@@ -257,15 +260,25 @@ const _RECV_NONE: int = 0           # not a shot reception — run the normal ca
 const _RECV_CATCH_STRIDE: int = 1   # Mode B handled aim+steer; caller runs transitions
 const _RECV_ONE_TIME: int = 2       # Mode A transitioned to ONE_TIMER_PRESSED; caller returns
 
-# CARRY blade aim distance (m forward in goal direction). Mouse on the
-# goal plane (25+ m away) was useless for stickhandling: a 0.3 m
-# lateral blade shift would need a ~22 m mouse offset. Putting mouse
-# at 2 m forward keeps the blade IK at a comfortable position
-# (within ROM, not at the clamp extreme) where small mouse shifts
-# translate directly to blade movement. Body facing still tracks
-# toward the attacking goal because the forward direction IS the
-# goal direction.
-const CARRY_BLADE_AIM_FORWARD_M: float = 2.0
+# CARRY blade aim distance (m forward in goal direction) — the cursor ring the
+# carry dangle, the pre-aim targets, and the arc-step all live on. Mouse on the
+# goal plane (25+ m away) was useless for stickhandling: a 0.3 m lateral blade
+# shift would need a ~22 m mouse offset. 1.3 m is ~80% of the league blade
+# orbit (stick + blade = 1.6 m), INSIDE the blade's reach — so the blade
+# genuinely holds AT the cursor, mid-extension with slack in every direction,
+# instead of stretching to full extension toward the old beyond-reach 2 m
+# point. That also makes the model's assumed carried-puck position
+# (self + this × forward — see _puck_pos_at, the stickhandle threat point,
+# the poke-evade trigger) match the physical puck for the first time: at 2 m
+# those reads sat ~0.4 m beyond where the clamped blade could actually hold
+# it. Body facing still tracks toward the attacking goal because the forward
+# direction IS the goal direction.
+#
+# COUPLING: anything denominated in metres ON THIS RING is really an angle —
+# aim errors are stored as radians on BotSkillProfile precisely so they don't
+# move when this does; the stickhandle/sway offsets and AIM_CONVERGED_DIST_M
+# were rescaled with the 2.0 → 1.3 change to keep their angles identical.
+const CARRY_BLADE_AIM_FORWARD_M: float = 1.3
 
 # How far inside the boards the carry mouse target is clamped
 # (GameRules.clamp_to_rink_inner). The blade IK chases the mouse; a target at
@@ -301,15 +314,17 @@ const CARRY_BLADE_WALL_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
 # QUIET HANDS: the offset cap is sized so the dangle works the MIDDLE of the
 # blade's arc, not its edge. Body facing chases the carry cursor at every
 # angle inside the reach cone, so any sustained cursor offset becomes body
-# rotation — at the 2 m aim ring, 0.5 m is ~±14° of body wag when a defender
-# camps one side (the old 0.8 m was ~±22°, flipping to ~44° swings as threats
-# crossed the line — the twitchy, loud carry). A real carrier stickhandles in
-# front with small excursions and answers real pressure with a deliberate
-# move; those deliberate answers (the protect blend below, the seam deke, the
-# brake check) now own the big threats, so the baseline dangle stays quiet.
+# rotation — at the 1.3 m aim ring, 0.33 m is ~±14° of body wag when a
+# defender camps one side (the original 0.8 m at the old 2 m ring was ~±22°,
+# flipping to ~44° swings as threats crossed the line — the twitchy, loud
+# carry). A real carrier stickhandles in front with small excursions and
+# answers real pressure with a deliberate move; those deliberate answers (the
+# protect blend below, the seam deke, the brake check) now own the big
+# threats, so the baseline dangle stays quiet. Ring metres — rescale with
+# CARRY_BLADE_AIM_FORWARD_M to preserve the angle.
 const STICKHANDLE_THREAT_RADIUS_M: float = 3.0
 const STICKHANDLE_FULL_OFFSET_RADIUS_M: float = 1.5
-const STICKHANDLE_OFFSET_MAX_M: float = 0.5
+const STICKHANDLE_OFFSET_MAX_M: float = 0.33
 
 # Pressure floor for the puck-protect blend: below this, the carry cursor
 # stays on the quiet forward dangle; above it, the blend ramps 0→full over the
@@ -594,7 +609,7 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 const MOUSE_MAX_SPEED_M_S: float = 100.0
 var _mouse_max_speed_m_s: float = MOUSE_MAX_SPEED_M_S
 # ── Per-release execution error ──────────────────────────────────────────────
-# Live-bot aim error (m on the 2 m aim arm, uniform ±), split by release type
+# Live-bot aim error (radians on the release direction, uniform ±), split by release type
 # — SHOT releases err on their own (larger, per-difficulty) budget, passes /
 # dumps on the smaller pass budget. ONE sample per release, drawn at press-
 # state entry (_set_state → _sample_aim_error_rad) and held constant through
@@ -607,8 +622,8 @@ var _mouse_max_speed_m_s: float = MOUSE_MAX_SPEED_M_S
 # Values come from BotSkillProfile via apply_profile so raw test-constructed
 # agents stay bit-deterministic (both default 0, and a zero budget never
 # advances the RNG). RNG on the hands, never decision dice.
-var _shot_aim_error_m: float = 0.0
-var _pass_aim_error_m: float = 0.0
+var _shot_aim_error_rad: float = 0.0
+var _pass_aim_error_rad: float = 0.0
 # The error sampled for the CURRENT committed release (radians on the aim
 # arm; + rotates the aim CCW around Y). Sampled on press-state entry, applied
 # to the press state's aim geometry, meaningless outside a press cycle.
@@ -642,7 +657,7 @@ const MOUSE_TICK_DELTA: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
 
 # Cap on how fast the pre-aim mouse target sweeps around self_pos at the
 # CARRY_BLADE_AIM_FORWARD_M radius. The target is otherwise a fixed point
-# at `self_pos + 2 m * aim_dir`, and `_step_mouse_toward` lerps in a
+# at `self_pos + ring_radius * aim_dir`, and `_step_mouse_toward` lerps in a
 # straight line toward it. A near-180° aim swing (back-pass to a receiver
 # behind the bot) draws a chord through self_pos: as the mouse crosses,
 # (mouse_world − skater) flips discontinuously past
@@ -665,8 +680,8 @@ const MOUSE_TICK_DELTA: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
 #
 # The EFFECTIVE arc rate is the lesser of this ceiling and the per-agent
 # blade-slew cap projected onto the blade's real orbit radius (its stick+blade
-# span — see _apply_aim_slew; the 2 m cursor ring is virtual, so projecting
-# onto it under-rotated every carrier). Above that linear cap the arc target's
+# span — see _apply_aim_slew; the cursor ring is virtual — the physical
+# constraint is the blade's own orbit, so the cap projects onto the span). Above that linear cap the arc target's
 # tangential speed would exceed the mouse's max step and `_step_mouse_toward`
 # would chord-cut corners instead of tracing the arc. apply_capabilities()
 # derives _mouse_arc_rate_rad_s from both; the const is the default / ceiling.
@@ -1141,8 +1156,8 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	# hands-override. (The cursor tracking the blade keeps pre-aim convergence
 	# honest — "aimed" means the blade is actually there.) The arc rate projects
 	# that linear cap onto the BLADE's real orbit radius (its stick+blade span) —
-	# the 2 m cursor ring is virtual, so capping the swing at the ring radius
-	# under-rotated every carrier by the ring/span ratio.
+	# the cursor ring is virtual; the blade's own orbit is the physical
+	# constraint the swing cap has to respect.
 	_apply_aim_slew(caps.blade_speed, caps.blade_span)
 
 
@@ -1215,8 +1230,8 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	# per-tier, split shot-vs-pass — the shot error is the tier's scoring
 	# dial, the pass error stays small so passes keep connecting. Timing
 	# error and carry sway are the other two hands-side humanisers.
-	_shot_aim_error_m = profile.shot_aim_error_m
-	_pass_aim_error_m = profile.pass_aim_error_m
+	_shot_aim_error_rad = profile.shot_aim_error_rad
+	_pass_aim_error_rad = profile.pass_aim_error_rad
 	_shot_timing_error_s = profile.shot_timing_error_s
 	_carry_sway_m = profile.carry_sway_m
 	if _carry_sway_m > 0.0:
@@ -1231,10 +1246,10 @@ func apply_profile(profile: BotSkillProfile) -> void:
 # `slew` m/s — the bot's real Hands blade speed, so the cursor tracks the blade.
 # `orbit_radius_m` is the blade's real orbit radius (stick + blade span): the
 # angular swing the linear Hands cap physically allows is slew / THAT radius,
-# not slew / the (virtual, wider) 2 m cursor ring — projecting onto the ring
-# under-rotated every carrier ~25-50% below what its hands can actually do,
-# which read as "bots turn around too slowly with the puck". Defaults to the
-# ring radius so unwired/test agents keep the old conservative rate.
+# not slew / the virtual cursor ring (the old 2 m ring projection
+# under-rotated every carrier ~25-50% below what its hands could actually do,
+# which read as "bots turn around too slowly with the puck"). Defaults to the
+# ring radius; every live caller passes the real span.
 func _apply_aim_slew(slew: float,
 		orbit_radius_m: float = CARRY_BLADE_AIM_FORWARD_M) -> void:
 	_mouse_max_speed_m_s = slew
@@ -1627,7 +1642,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
 	# The scoring/aim spread budgets the SHOT error — that's the budget the
 	# release that matters (a scored shot) is actually sampled on.
-	ctx.self_aim_spread_rad = _shot_aim_error_m / CARRY_BLADE_AIM_FORWARD_M
+	ctx.self_aim_spread_rad = _shot_aim_error_rad
 	# The shot evals give the goalie this much extra tracking time — the
 	# release's own timing slop (see _shoot_release_hold_ticks).
 	ctx.shot_timing_error_s = _shot_timing_error_s
@@ -2081,7 +2096,7 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 			perp_foot, _attacking_goal_pos, goalie_now,
 			GameRules.NET_HALF_WIDTH, _scratch_shot_opponents,
 			AIActionScoring.PASS_SPEED_M_S, 0.0, [], -1.0, false, 0.0, false,
-			_shot_aim_error_m / CARRY_BLADE_AIM_FORWARD_M)
+			_shot_aim_error_rad)
 	if shot_score < SHOT_RECEPTION_SCORE_GATE:
 		return _RECV_NONE
 	# Net-forward geometry. Anchor = the catch point pulled back one blade-reach
@@ -2315,7 +2330,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# If pre-aiming, wait for mouse convergence (or timeout) before
 	# transitioning to the action state. Body facing is no longer
 	# gated: the arc-step in _step_mouse_toward keeps the mouse on
-	# a 2 m ring around the bot so the angle to facing stays inside
+	# the carry aim ring around the bot so the angle to facing stays inside
 	# the blade ROM regardless of body rotation lag, which is what
 	# the old facing-alignment gate was guarding against.
 	if _intended_action != State.CARRY:
@@ -2395,7 +2410,7 @@ func _state_from_carrier_intent(intent: int) -> State:
 
 
 # Returns the mouse target (in world XZ) the bot should be aiming at
-# while pre-aiming for `_intended_action`. Always 2 m forward in the
+# while pre-aiming for `_intended_action`. Always one ring radius out in the
 # action's aim direction — direction is what matters for shot fire,
 # not distance, so we keep the target close to the bot for fast
 # convergence under the motion-limited model.
@@ -2409,17 +2424,18 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 			var target: Vector3 = (_locked_pre_aim_point
 					if _locked_pre_aim_point.is_finite()
 					else _pass_aim_point(snapshot, self_pos))
-			return _aim_2m_toward(self_pos, target)
+			return _aim_ring_toward(self_pos, target)
 		State.SHOOT_PRESSED:
 			var target: Vector3 = (_locked_pre_aim_point
 					if _locked_pre_aim_point.is_finite()
 					else _shot_aim_point(snapshot, self_pos))
-			return _aim_2m_toward(self_pos, target)
+			return _aim_ring_toward(self_pos, target)
 		_:
 			return _carry_mouse_aim(snapshot, self_pos)
 
 
-# Returns a point 2 m from `self_pos` heading toward `aim_world`. Used
+# Returns a point on the carry aim ring (CARRY_BLADE_AIM_FORWARD_M) from
+# `self_pos` heading toward `aim_world`. Used
 # to put the mouse close to the bot in the correct DIRECTION for an
 # upcoming shot/pass, so it converges quickly under the motion model.
 # Distance to the actual aim point doesn't matter — the shot direction
@@ -2431,7 +2447,7 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 # fire, so it must be the final destination, not an intermediate
 # arc step. `_arc_step_mouse_target` is what threads the mouse target
 # around self_pos on the way here.
-func _aim_2m_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
+func _aim_ring_toward(self_pos: Vector3, aim_world: Vector3) -> Vector3:
 	var to_aim: Vector3 = aim_world - self_pos
 	to_aim.y = 0.0
 	if to_aim.length_squared() < 0.0001:
@@ -2506,7 +2522,7 @@ func _nearest_opponent_blade_dist(snapshot: WorldSnapshot, point: Vector3) -> fl
 	return nearest
 
 
-# Returns an intermediate mouse target on the 2 m circle around self_pos
+# Returns an intermediate mouse target on the carry aim ring around self_pos
 # that walks toward `final_target` at no more than MOUSE_ARC_RATE_RAD_S.
 # See MOUSE_ARC_RATE_RAD_S comment for why arcing is required — straight
 # chords across a 180° swing pass through self_pos and trip the IK gate.
@@ -2522,7 +2538,7 @@ func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
 
 	# Seed the current angle from the mouse's current offset from self_pos
 	# when it's far enough away to define a direction unambiguously (the
-	# typical case — the mouse is held ~2 m out by previous calls). Fall
+	# typical case — the mouse is held a ring radius out by previous calls). Fall
 	# back to facing when the mouse is parked on top of self_pos (e.g. the
 	# danger-zone cradle in `_carry_mouse_aim`); seeding from facing rather
 	# than snapping to desired_dir keeps the next-tick chord from crossing
@@ -2756,8 +2772,8 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_shoot_wind_up_start = endpoints.start + _shot_release_offset_locked
 		_shoot_aim_target = endpoints.target + _shot_release_offset_locked
 		# Snap the smoothed cursor straight to the wind-up start world pos.
-		# Without this, _step_mouse_toward needs ~6 ticks to bridge the 2m+
-		# gap from the pre-aim cursor (~2m ahead of bot) to the wind-up start
+		# Without this, _step_mouse_toward needs several ticks to bridge the
+		# gap from the pre-aim cursor (a ring radius ahead of the bot) to the wind-up start
 		# (~0.35m behind). During those ticks, intent_delta points -aim_dir
 		# (catch-up direction), which then flips +aim_dir once the cursor
 		# catches up — burning a direction-variance reset and leaking
@@ -3438,7 +3454,7 @@ func _predict_goalie_at(snapshot: WorldSnapshot, release_time_s: float,
 			release_time_s, puck_pos_at_release)
 
 
-# CARRY-state mouse target: 2 m forward in the attacking-goal
+# CARRY-state mouse target: one ring radius forward in the attacking-goal
 # direction, plus a stickhandling offset perpendicular to that
 # direction to evade the closest incoming defender. Body facing
 # tracks the forward axis (toward the goal); blade IK lands
@@ -3493,7 +3509,7 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	_carry_tracking_fire = should_track
 	if not should_track:
 		return _carry_mouse_aim(snapshot, self_pos)
-	return _aim_2m_toward(self_pos, _shot_aim_point(snapshot, self_pos))
+	return _aim_ring_toward(self_pos, _shot_aim_point(snapshot, self_pos))
 
 
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
@@ -3971,7 +3987,7 @@ var _mouse_pos_initialized: bool = false
 #
 # Two entry points wrap the shared `_step_mouse_internal`:
 #
-#   _step_mouse_aim — arcs the target around self_pos on a 2 m ring
+#   _step_mouse_aim — arcs the target around self_pos on the carry aim ring
 #   before stepping. Use for "body-aim" targets (CARRY, OFF_PUCK,
 #   tag-up). The arc keeps the mouse-body angle inside the pose
 #   coordinator's IK gate (~157°) so facing can always track the
@@ -3987,7 +4003,7 @@ var _mouse_pos_initialized: bool = false
 #   states anyway, so the gate trip can't strand it) and for the
 #   chase state's CLOSE-RANGE aims — the puck inside blade reach and
 #   the blade gate on a fast puck's line, where the exact point
-#   matters for the pickup and a 2 m ring projection would overshoot
+#   matters for the pickup and a ring projection would overshoot
 #   it. The chase's FAR intercept aim arcs (_step_mouse_aim): a
 #   direct chord to an intercept behind the bot crosses the body and
 #   freezes facing in the IK gate's back wedge.
@@ -4031,16 +4047,17 @@ func _step_mouse_toward(target: Vector3) -> Vector3:
 	return _step_mouse_internal(target, _STEP_DIRECT, _mouse_max_speed_m_s, _mouse_arc_rate_rad_s)
 
 
-# Sample this release's execution error (radians on the aim arm) from the
-# given per-tier budget (m on the 2 m arm — same conversion the scoring
-# spread uses). Called once per press-state entry (_set_state); uniform ± so
-# the release-tick distribution matches the old per-tick noise the scoring
+# Sample this release's execution error from the given per-tier budget —
+# both radians on the release direction, so no ring-radius conversion exists
+# to drift when the carry aim ring moves (the scoring spread reads the same
+# angle directly). Called once per press-state entry (_set_state); uniform ±
+# so the release-tick distribution matches the old per-tick noise the scoring
 # budget was calibrated against. Zero budget (raw test agents) returns 0
 # WITHOUT advancing the RNG, keeping the bare state machine bit-deterministic.
-func _sample_aim_error_rad(budget_m: float) -> float:
-	if budget_m == 0.0:
+func _sample_aim_error_rad(budget_rad: float) -> float:
+	if budget_rad == 0.0:
 		return 0.0
-	return _rng.randf_range(-1.0, 1.0) * budget_m / CARRY_BLADE_AIM_FORWARD_M
+	return _rng.randf_range(-1.0, 1.0) * budget_rad
 
 
 # Sample this shot's late-release hold (ticks past the completed charge) from
@@ -4502,16 +4519,16 @@ func _set_state(s: State) -> void:
 		# slightly-imperfect gesture instead of wobbling per tick.
 		if s == State.SHOOT_PRESSED:
 			_shoot_charge_tick = 0
-			_committed_aim_error_rad = _sample_aim_error_rad(_shot_aim_error_m)
+			_committed_aim_error_rad = _sample_aim_error_rad(_shot_aim_error_rad)
 			_shoot_release_hold_ticks = _sample_release_hold_ticks()
 		if s == State.PASS_PRESSED:
 			_pass_charge_tick = 0
-			_committed_aim_error_rad = _sample_aim_error_rad(_pass_aim_error_m)
+			_committed_aim_error_rad = _sample_aim_error_rad(_pass_aim_error_rad)
 		if s == State.ONE_TIMER_PRESSED:
 			_one_timer_press_tick = 0
 			# A one-timer is the worst-controlled release there is — it reads
 			# the SHOT budget (matching the reception gate's spread budget).
-			_committed_aim_error_rad = _sample_aim_error_rad(_shot_aim_error_m)
+			_committed_aim_error_rad = _sample_aim_error_rad(_shot_aim_error_rad)
 		# Intent + wait counter reset on CARRY entry so a new puck
 		# pickup gets a fresh re-evaluation rather than inheriting
 		# stale state from a previous CARRY. _carrier.clear_intent()

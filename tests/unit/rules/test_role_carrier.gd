@@ -1448,6 +1448,14 @@ func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
 	c.decide(_make_ctx(self_pos, skaters))
 	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
 			"a clean breakout outlet beats a dump")
+	# The compete must stay transitive here: when retention is hopeless (raw
+	# carry below the dump), the pass competes against the DUMP, not against
+	# the floored keep-the-puck carry that already lost — so the pinned
+	# carrier moves the puck to the live outlet instead of flinging it to
+	# space past him.
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"the pinned carrier hits the outlet rather than concede")
+	assert_eq(c.pass_target_peer_id, 2, "the outlet up the wall is the target")
 
 
 func test_no_dump_in_own_side_neutral_zone() -> void:
