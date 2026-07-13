@@ -11,6 +11,12 @@ var is_local: bool = false
 # Use this to gate per-peer RPC dispatch — peer_id sign is NOT a reliable
 # bot indicator and shouldn't be checked directly.
 var is_bot: bool = false
+# True only on the synthesized records GameManager.get_stars_of_game builds
+# for a starred AI goalie — goalies aren't roster records (no real peer id,
+# controller, skater, or stats). The HUD branches on this to caption the star
+# row with a saves line instead of a skater stat line. Never true in the
+# PlayerRegistry.
+var is_goalie: bool = false
 var team: Team = null
 # faceoff_position used to live here but it's pure-derived from team_id +
 # team_slot. Compute it via PlayerRules.faceoff_position(record.team.team_id,

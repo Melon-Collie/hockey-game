@@ -10,8 +10,10 @@ class_name StarOfGameRules
 # keeps a star meaning something at 3v3.
 #
 # Approximates how the real vote behaves:
-#   - Stat line first: goals over assists over the volume stats; hits and
-#     blocks keep a defensive grinder in the running in a low-scoring game.
+#   - Stat line first: goals over assists over the volume stats; hits, blocks,
+#     and takeaways keep a defensive grinder in the running in a low-scoring
+#     game, and giveaways dock a sloppy night (floored at zero — a bad game
+#     scores nothing, it doesn't go negative).
 #   - The game-winning goal is worth extra, and worth the most when the game
 #     was close — an OT/one-goal winner is the story of the night, a blowout
 #     GWG is trivia (gwg_bonus decays with the final margin).
@@ -19,11 +21,17 @@ class_name StarOfGameRules
 #     selection (LOSING_TEAM_MULT), so only a genuinely dominant performance
 #     in a loss cracks the podium — and even then never as the first star.
 #   - Humans and bots compete on equal footing; there is no human tie-break.
+#   - The AI goalies are candidates too (goalie_score): goals saved above the
+#     Mitts-average expectation, in the same "goals" currency as the skater
+#     weights — so only a genuinely outlier night in the net cracks a podium
+#     that is otherwise all skaters.
 const GOAL_WEIGHT: float = 3.0
 const ASSIST_WEIGHT: float = 2.0
 const SOG_WEIGHT: float = 0.5
 const BLOCK_WEIGHT: float = 0.5
 const HIT_WEIGHT: float = 0.25
+const TAKEAWAY_WEIGHT: float = 0.5
+const GIVEAWAY_WEIGHT: float = -0.25
 # Game-winning-goal bonus in a one-goal game; the effective bonus is
 # GWG_CLOSE_BONUS / margin, so it halves at two goals and fades in blowouts.
 const GWG_CLOSE_BONUS: float = 2.0
@@ -32,18 +40,46 @@ const GWG_CLOSE_BONUS: float = 2.0
 # a star seat off them, which is the "did really well" bar — and it makes two
 # losing-team stars in one game naturally rare rather than hard-capped.
 const LOSING_TEAM_MULT: float = 0.6
+# Goalie rating baseline: the save rate an AVERAGE Mitts goalie night runs.
+# This is a measurement, not a shape parameter — Mitts is deliberately far
+# more scorable than the NHL's ~.905, so the expectation a star night must
+# beat sits much lower. Calibrate from playtest telemetry (team shots +
+# scores per game); an average night scores exactly zero by construction.
+const BASELINE_SAVE_PCT: float = 0.70
+# Narrative bonus for a shutout — but only a real one: blanking a team that
+# barely shot the puck is scheduling, not goaltending.
+const SHUTOUT_BONUS: float = 2.0
+const SHUTOUT_MIN_SHOTS: int = 5
 # Scores within this margin count as tied (weights are clean fractions, so
 # genuine ties are exact — the epsilon just guards float summation order).
 const TIE_EPSILON: float = 0.001
 
 
 static func score(stats: PlayerStats, goal_margin: int = 0) -> float:
-	return stats.goals * GOAL_WEIGHT \
+	return maxf(0.0, stats.goals * GOAL_WEIGHT \
 			+ stats.assists * ASSIST_WEIGHT \
 			+ stats.shots_on_goal * SOG_WEIGHT \
 			+ stats.shots_blocked * BLOCK_WEIGHT \
 			+ stats.hits * HIT_WEIGHT \
-			+ stats.game_winning_goals * gwg_bonus(goal_margin)
+			+ stats.takeaways * TAKEAWAY_WEIGHT \
+			+ stats.giveaways * GIVEAWAY_WEIGHT \
+			+ stats.game_winning_goals * gwg_bonus(goal_margin))
+
+
+# Goalie star rating: goals saved above the Mitts-average expectation (GSAA),
+# converted into the skater scale via GOAL_WEIGHT — stopping three goals more
+# than an average netminder would have reads like a hat trick. Both inputs
+# are replicated (team shots + score), so every peer computes the same value.
+# Shots-on-goal include goals, NHL-style, so saves = shots_faced − GA. An
+# average-or-worse night scores zero and never stars.
+static func goalie_score(shots_faced: int, goals_against: int) -> float:
+	if shots_faced <= 0:
+		return 0.0
+	var expected_ga: float = shots_faced * (1.0 - BASELINE_SAVE_PCT)
+	var total: float = maxf(0.0, expected_ga - goals_against) * GOAL_WEIGHT
+	if goals_against == 0 and shots_faced >= SHUTOUT_MIN_SHOTS:
+		total += SHUTOUT_BONUS
+	return total
 
 
 # Extra credit for scoring the game-winner, scaled by how close the game

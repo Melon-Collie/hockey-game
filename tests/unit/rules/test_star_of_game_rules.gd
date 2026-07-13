@@ -8,7 +8,7 @@ extends GutTest
 
 
 func _stats(goals: int, assists: int, sog: int, hits: int, blocked: int,
-		gwg: int = 0) -> PlayerStats:
+		gwg: int = 0, takeaways: int = 0, giveaways: int = 0) -> PlayerStats:
 	var s := PlayerStats.new()
 	s.goals = goals
 	s.assists = assists
@@ -16,6 +16,8 @@ func _stats(goals: int, assists: int, sog: int, hits: int, blocked: int,
 	s.hits = hits
 	s.shots_blocked = blocked
 	s.game_winning_goals = gwg
+	s.takeaways = takeaways
+	s.giveaways = giveaways
 	return s
 
 
@@ -35,9 +37,20 @@ func test_score_weights() -> void:
 	assert_almost_eq(StarOfGameRules.score(_stats(0, 0, 0, 1, 0)), 0.25, 0.0001, "hit = 0.25")
 	assert_almost_eq(StarOfGameRules.score(_stats(0, 0, 0, 0, 1)), 0.5, 0.0001, "block = 0.5")
 
+func test_score_weights_turnovers() -> void:
+	assert_almost_eq(StarOfGameRules.score(_stats(0, 0, 0, 0, 0, 0, 1, 0)), 0.5, 0.0001,
+			"takeaway = 0.5")
+	assert_almost_eq(StarOfGameRules.score(_stats(1, 0, 0, 0, 0, 0, 0, 2)), 2.5, 0.0001,
+			"giveaways dock -0.25 each")
+
+func test_score_floors_at_zero() -> void:
+	# A turnover-riddled nothing game must read as zero (never stars), not
+	# negative — and must not distort ranking below the zero-stat cutoff.
+	assert_almost_eq(StarOfGameRules.score(_stats(0, 0, 0, 1, 0, 0, 0, 4)), 0.0, 0.0001)
+
 func test_score_composite() -> void:
-	# 2G 1A 4SOG 2H 1B = 6 + 2 + 2 + 0.5 + 0.5 = 11
-	assert_almost_eq(StarOfGameRules.score(_stats(2, 1, 4, 2, 1)), 11.0, 0.0001)
+	# 2G 1A 4SOG 2H 1B 1TKA 1GVA = 6 + 2 + 2 + 0.5 + 0.5 + 0.5 - 0.25 = 11.25
+	assert_almost_eq(StarOfGameRules.score(_stats(2, 1, 4, 2, 1, 0, 1, 1)), 11.25, 0.0001)
 
 func test_score_gwg_bonus_scales_with_margin() -> void:
 	var gwg_goal := _stats(1, 0, 0, 0, 0, 1)
@@ -67,6 +80,46 @@ func test_game_winning_goal_index_is_nhl_definition() -> void:
 func test_game_winning_goal_index_absent_without_a_win() -> void:
 	assert_eq(StarOfGameRules.game_winning_goal_index(2, 2), -1, "draw")
 	assert_eq(StarOfGameRules.game_winning_goal_index(1, 3), -1, "caller mixed up the order")
+
+
+# ── goalie_score ──────────────────────────────────────────────────────────────
+
+func test_goalie_average_night_scores_zero() -> void:
+	# GA exactly at the baseline expectation nets nothing — by construction an
+	# average Mitts goalie night never stars.
+	var shots: int = 10
+	var expected_ga: int = int(shots * (1.0 - StarOfGameRules.BASELINE_SAVE_PCT))
+	assert_almost_eq(StarOfGameRules.goalie_score(shots, expected_ga), 0.0, 0.0001)
+
+func test_goalie_score_is_gsaa_in_goal_currency() -> void:
+	# Goals saved above expectation convert at GOAL_WEIGHT — an outlier night
+	# reads like a scorer's night.
+	var shots: int = 20
+	var ga: int = 2
+	var gsaa: float = shots * (1.0 - StarOfGameRules.BASELINE_SAVE_PCT) - ga
+	assert_almost_eq(StarOfGameRules.goalie_score(shots, ga),
+			gsaa * StarOfGameRules.GOAL_WEIGHT, 0.0001)
+
+func test_goalie_bad_night_floors_at_zero() -> void:
+	assert_almost_eq(StarOfGameRules.goalie_score(10, 9), 0.0, 0.0001,
+			"worse than expected never goes negative")
+
+func test_goalie_no_shots_faced_scores_zero() -> void:
+	assert_almost_eq(StarOfGameRules.goalie_score(0, 0), 0.0, 0.0001,
+			"an untested goalie did no goaltending")
+
+func test_goalie_shutout_bonus_needs_real_work() -> void:
+	var shots: int = StarOfGameRules.SHUTOUT_MIN_SHOTS
+	var base: float = shots * (1.0 - StarOfGameRules.BASELINE_SAVE_PCT) \
+			* StarOfGameRules.GOAL_WEIGHT
+	assert_almost_eq(StarOfGameRules.goalie_score(shots, 0),
+			base + StarOfGameRules.SHUTOUT_BONUS, 0.0001,
+			"a worked shutout earns the narrative bonus")
+	var few: int = StarOfGameRules.SHUTOUT_MIN_SHOTS - 1
+	var few_base: float = few * (1.0 - StarOfGameRules.BASELINE_SAVE_PCT) \
+			* StarOfGameRules.GOAL_WEIGHT
+	assert_almost_eq(StarOfGameRules.goalie_score(few, 0), few_base, 0.0001,
+			"blanking a team that barely shot earns no bonus")
 
 
 # ── pick_star ─────────────────────────────────────────────────────────────────
