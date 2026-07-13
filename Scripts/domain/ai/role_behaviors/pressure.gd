@@ -146,7 +146,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 		# Score = -carrier_best_option(with me at c). Higher = better
 		# for us (lower for the carrier).
-		var pressure_score: float = -_carrier_best_option(
+		var pressure_score: float = -AIRoleHelpers.carrier_best_option(
 				c, carrier_pos, our_net, our_goalie_pos,
 				our_team_excluding_self, opp_teammates)
 		if pressure_score > best_score:
@@ -163,7 +163,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			and AIRoleHelpers.is_legal_position(prev) \
 			and _is_goal_side(prev, carrier_pos, our_net) \
 			and not AIRoleHelpers.too_close_to_teammate(prev, our_team_excluding_self):
-		var prev_score: float = -_carrier_best_option(
+		var prev_score: float = -AIRoleHelpers.carrier_best_option(
 				prev, carrier_pos, our_net, our_goalie_pos,
 				our_team_excluding_self, opp_teammates)
 		if best_score <= prev_score + TARGET_SWITCH_MARGIN:
@@ -171,46 +171,6 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	d.target_position = best_pos
 	return d
-
-
-# Computes the carrier's best option (shoot or pass to any teammate)
-# with our hypothetical defender position included. Returns the max
-# over all options — that's what PRESSURE wants to minimize.
-#
-# Uses the threat-surface helpers so the gradient survives when
-# score_shoot / score_pass collapse to 0 (carrier far from net or
-# all receivers far from net). The position_potential floor pulls
-# PRESSURE tight to the carrier in TRANS_OD scenarios where there's
-# no immediate scoring threat to defend — without it the score is
-# flat across goal-side candidates and PRESSURE picks arbitrarily.
-static func _carrier_best_option(
-		candidate: Vector3,
-		carrier_pos: Vector3,
-		our_net: Vector3,
-		our_goalie_pos: Vector3,
-		our_team_excluding_self: Array[Vector3],
-		opp_teammates: Array[Vector3]) -> float:
-	# Build the carrier's view of defenders: our team + me at c.
-	var carrier_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
-	carrier_view_defenders.append(candidate)
-
-	# Carrier's best shot at our net (with positional fallback floor).
-	var shoot_value: float = AIActionScoring.threat_surface_shoot(
-			carrier_pos, our_net, our_goalie_pos,
-			GameRules.NET_HALF_WIDTH, carrier_view_defenders)
-
-	# Carrier's best pass to any teammate (with positional fallback).
-	# Use our_net as `attacking_goal` — the carrier is shooting at OUR
-	# net, so the receiver's threat is evaluated against our goalie.
-	var pass_value: float = 0.0
-	for opp_pos: Vector3 in opp_teammates:
-		var pass_score: float = AIActionScoring.threat_surface_pass(
-				carrier_pos, opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, carrier_view_defenders)
-		if pass_score > pass_value:
-			pass_value = pass_score
-
-	return maxf(shoot_value, pass_value)
 
 
 # True if `c` is on the our-net side of the carrier — i.e., between

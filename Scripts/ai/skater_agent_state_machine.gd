@@ -936,6 +936,8 @@ var _carry_settle_delay_s: float = 0.0
 var _reads_goalie_motion: bool = true
 var _holds_for_developing_feeds: bool = true
 var _angles_the_chase: bool = true
+# _plays_rush_pass_lanes rides RoleContext into CONTAIN's odd-man lane fan.
+var _plays_rush_pass_lanes: bool = true
 # Sprint is decided alongside move_vector on full-dispatch ticks; skipped
 # throttle ticks reuse this cached value so sprint_held doesn't flicker off at
 # 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
@@ -1108,6 +1110,7 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_reads_goalie_motion = profile.reads_goalie_motion
 	_holds_for_developing_feeds = profile.holds_for_developing_feeds
 	_angles_the_chase = profile.angles_the_chase
+	_plays_rush_pass_lanes = profile.plays_rush_pass_lanes
 	# Execution noise for LIVE bots (raw test agents stay deterministic):
 	# per-tier, split shot-vs-pass — the shot noise is the tier's scoring
 	# dial, the pass noise stays small so passes keep connecting.
@@ -1532,6 +1535,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.carry_settle_delay_s = _carry_settle_delay_s
 	ctx.reads_goalie_motion = _reads_goalie_motion
 	ctx.holds_for_developing_feeds = _holds_for_developing_feeds
+	ctx.plays_rush_pass_lanes = _plays_rush_pass_lanes
 	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
 	# is only called on dispatch ticks — hand it the span so it can compensate.
 	ctx.dispatch_period_ticks = _dispatch_period_ticks

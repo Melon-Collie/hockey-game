@@ -153,3 +153,15 @@ func test_dispatch_period_is_at_least_one_tick() -> void:
 	# A zero/negative cadence would stall the throttle (dispatch_period - 1).
 	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
 		assert_gte(profile.dispatch_period_ticks, 1)
+
+
+func test_rush_pass_lane_read_is_tiered() -> void:
+	# Playing the pass on an odd-man rush is youth-hockey fundamentals: Hard
+	# and Normal read it; Easy retreats on the carrier line so a newcomer's
+	# cross-crease 2-on-1 feed connects.
+	assert_true(BotSkillProfile.hard().plays_rush_pass_lanes,
+			"Hard plays the pass on odd-man rushes")
+	assert_true(BotSkillProfile.normal().plays_rush_pass_lanes,
+			"Normal plays the pass on odd-man rushes")
+	assert_false(BotSkillProfile.easy().plays_rush_pass_lanes,
+			"Easy concedes the odd-man feed by design")

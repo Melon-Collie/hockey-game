@@ -132,6 +132,11 @@ var reads_goalie_motion: bool = true
 # yet (carrier._best_developing_feed returns 0) — no protecting the puck for a
 # staging finisher or an opening outlet. True = the perfect-bot / Hard read.
 var holds_for_developing_feeds: bool = true
+# COGNITION gate: false = the rush gap defender (CONTAIN) sees only the
+# carrier and retreats on the carrier→net line; true = it reads the carrier's
+# passing options and splits toward an uncovered receiver's feed lane — the
+# 2-on-1 "play the pass" doctrine (AIRoleContain's lane fan).
+var plays_rush_pass_lanes: bool = true
 
 # ── Smart-ping directive (a human teammate's tactical order) ──────────────────
 # Populated per dispatch from TeamBrain.ping_* (AIPingDirectives). Defaults are

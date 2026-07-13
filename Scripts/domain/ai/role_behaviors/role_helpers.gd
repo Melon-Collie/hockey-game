@@ -229,6 +229,99 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	return best_pos
 
 
+# ── Carrier-best-option (inverse scoring) ────────────────────────────────────
+
+# Computes the opposing carrier's best option — shoot at our net, or pass to
+# any of `opp_teammates` — with our hypothetical defender position `candidate`
+# appended to the carrier's view of the defenders. The on-puck / rush
+# defensive roles (PRESSURE's cut-off argmax, CONTAIN's odd-man lane fan)
+# argmax the NEGATION of this over their candidate sets: the spot that most
+# deflates the carrier's best option wins.
+#
+# Uses the threat-surface helpers so the gradient survives when score_shoot /
+# score_pass collapse to 0 (carrier far from net or all receivers far from
+# net). The position_potential floor pulls the defender tight to the carrier
+# in TRANS_OD scenarios where there's no immediate scoring threat to defend —
+# without it the score is flat across goal-side candidates and the argmax
+# picks arbitrarily.
+#
+# Coverage is CONTINUOUS by construction: `our_team_excluding_self` rides
+# into both surfaces, so a teammate already on a receiver suppresses that
+# pass threat and an uncovered receiver's threat stands — "who is really
+# open" needs no separate boolean read.
+static func carrier_best_option(
+		candidate: Vector3,
+		carrier_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		our_team_excluding_self: Array[Vector3],
+		opp_teammates: Array[Vector3]) -> float:
+	# Build the carrier's view of defenders: our team + me at the candidate.
+	var carrier_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
+	carrier_view_defenders.append(candidate)
+
+	# Carrier's best shot at our net (with positional fallback floor).
+	var shoot_value: float = AIActionScoring.threat_surface_shoot(
+			carrier_pos, our_net, our_goalie_pos,
+			GameRules.NET_HALF_WIDTH, carrier_view_defenders)
+
+	# Carrier's best pass to any teammate (with positional fallback).
+	# `our_net` is the attacking goal from the carrier's perspective, so the
+	# receiver's threat is evaluated against our goalie.
+	var pass_value: float = 0.0
+	for opp_pos: Vector3 in opp_teammates:
+		var pass_score: float = AIActionScoring.threat_surface_pass(
+				carrier_pos, opp_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, carrier_view_defenders)
+		if pass_score > pass_value:
+			pass_value = pass_score
+
+	return maxf(shoot_value, pass_value)
+
+
+# Rush variant of carrier_best_option, for CONTAIN's odd-man lane fan: RAW xG
+# threats (no position_potential floor) with each pass modeled as a ONE-TIMER
+# feed — the goalie must traverse to the receiver's line over the pass flight
+# and reads the release late (predict_goalie_pos + goalie_unsettled), which is
+# exactly what makes the cross-crease feed the threat the 2-on-1 doctrine
+# plays ("the goalie takes the shooter, I take the pass"). The carrier's
+# direct shot is scored against the goalie where he IS — squared to the known
+# shooter, the doctrine's other half.
+#
+# Why not the surfaced variant above: its position_potential floor exists to
+# give PRESSURE close-in gradients, but across CONTAIN's gap-distance fan the
+# floor flattens (every candidate sits outside the pressure cone) and masks
+# the reducible-threat comparison entirely; and a set-goalie pass read scores
+# the one-timer feed near zero, hiding the very threat the fan exists to
+# take away. Raw xG also ties at ~0 far from the net, so the fan's hold
+# margin keeps the classic retreat line out there — the correct far-out read.
+static func carrier_live_option(
+		candidate: Vector3,
+		carrier_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		our_team_excluding_self: Array[Vector3],
+		opp_teammates: Array[Vector3]) -> float:
+	var defenders: Array[Vector3] = our_team_excluding_self.duplicate()
+	defenders.append(candidate)
+	var best: float = AIActionScoring.score_shoot(
+			carrier_pos, our_net, our_goalie_pos,
+			GameRules.NET_HALF_WIDTH, defenders)
+	for receiver: Vector3 in opp_teammates:
+		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, receiver)
+		var flight_s: float = carrier_pos.distance_to(receiver) / maxf(pass_speed, 1.0)
+		var pred_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+				our_goalie_pos, our_net, flight_s, receiver)
+		var unsettled: float = AIActionScoring.goalie_unsettled(
+				our_goalie_pos, our_net, flight_s, receiver)
+		var pass_value: float = AIActionScoring.score_pass(
+				carrier_pos, receiver, our_net, pred_goalie,
+				GameRules.NET_HALF_WIDTH, defenders, pass_speed, unsettled)
+		if pass_value > best:
+			best = pass_value
+	return best
+
+
 # ── Body check ───────────────────────────────────────────────────────────────
 
 # Evaluates whether the on-puck pressurer should commit to a body check on the
