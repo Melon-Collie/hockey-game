@@ -1208,12 +1208,43 @@ func test_opponent_within_of_reads_contest_range() -> void:
 
 func test_aim_noise_off_raw_on_after_profile() -> void:
 	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
-	# bot wired through apply_profile gets the execution noise.
-	assert_almost_eq(sm._mouse_noise_std_m, 0.0, 1e-9,
-			"raw agents stay noiseless")
+	# bot wired through apply_profile gets the per-tier execution noise pair.
+	assert_almost_eq(sm._shot_aim_noise_m, 0.0, 1e-9,
+			"raw agents stay noiseless on shots")
+	assert_almost_eq(sm._pass_aim_noise_m, 0.0, 1e-9,
+			"raw agents stay noiseless on passes")
 	sm.apply_profile(BotSkillProfile.hard())
-	assert_almost_eq(sm._mouse_noise_std_m, Agent.AIM_NOISE_STD_M, 1e-9,
-			"profiled (live) agents carry the aim noise")
+	assert_almost_eq(sm._shot_aim_noise_m, BotSkillProfile.hard().shot_aim_noise_m, 1e-9,
+			"profiled (live) agents carry the shot aim noise")
+	assert_almost_eq(sm._pass_aim_noise_m, BotSkillProfile.hard().pass_aim_noise_m, 1e-9,
+			"profiled (live) agents carry the pass aim noise")
+
+
+func test_active_aim_noise_selects_shot_budget_in_shot_states() -> void:
+	# The noise applied to the output cursor is state-dependent: shot releases
+	# (SHOOT_PRESSED / ONE_TIMER_PRESSED / a committed shoot intent still
+	# pre-aiming in CARRY) wobble on the shot budget, everything else on the
+	# general/pass budget.
+	sm.apply_profile(BotSkillProfile.easy())
+	var shot_noise: float = BotSkillProfile.easy().shot_aim_noise_m
+	var pass_noise: float = BotSkillProfile.easy().pass_aim_noise_m
+	sm._state = Agent.State.SHOOT_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
+			"wrister charge wobbles on the shot budget")
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
+			"one-timer fires on the shot budget")
+	sm._state = Agent.State.CARRY
+	sm._intended_action = Agent.State.SHOOT_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
+			"shoot pre-aim converges under the budget it will release on")
+	sm._intended_action = Agent.State.CARRY
+	assert_almost_eq(sm._active_aim_noise_m(), pass_noise, 1e-9,
+			"plain carry deliberation uses the general hand noise")
+	sm._state = Agent.State.PASS_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), pass_noise, 1e-9,
+			"a pass release wobbles on the (smaller) pass budget")
+	sm._state = Agent.State.OFF_PUCK
 
 
 # ── Protect-side turn (carry arc direction) ──────────────────────────────────

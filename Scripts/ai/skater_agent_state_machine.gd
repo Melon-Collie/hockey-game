@@ -91,11 +91,10 @@ const AIM_COMMIT_CONE_MARGIN_RAD: float = deg_to_rad(25.0)
 # to converge before the bail fires regardless of difficulty.
 const INTENT_MAX_WAIT_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~500 ms
 var _intent_max_wait_ticks: int = INTENT_MAX_WAIT_TICKS
-# Aim wobble is disabled for now — bots fire perfectly past the
-# goalie shadow without it (robotic, every shot to the same spot),
-# but it was masking deeper issues during tuning. The wobble system
-# can be reintroduced later; it was a lateral perpendicular nudge
-# rolled once per shot/pass commit, scaling with distance × tan(angle).
+# Aim wobble is per-tick output-cursor noise (see _active_aim_noise_m /
+# the MOUSE_NOISE_STD_M block below), split shot-vs-pass per difficulty
+# tier via BotSkillProfile.shot_aim_noise_m / pass_aim_noise_m. (An older
+# per-commit lateral-nudge wobble system was removed during tuning.)
 # Goalie shadow half-width on the net plane lives on
 # AIActionScoring.GOALIE_SHADOW_HALF_M (single source).
 # After a puck-engagement event (we got stripped, or we just stripped
@@ -513,16 +512,16 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 #     out); raising this here trades organic look for accuracy.
 #   MOUSE_NOISE_STD_M = 0 — the RAW default stays zero so a bare state
 #     machine (unit tests, replay tooling) is bit-deterministic. LIVE bots
-#     get AIM_NOISE_STD_M via apply_profile(): the hand isn't a rail, and
-#     deterministic corner snipes turned every slightly-off release line
+#     get the per-tier noise pair via apply_profile(): the hand isn't a rail,
+#     and deterministic corner snipes turned every slightly-off release line
 #     into the SAME post clank every time. With noise, the identical
 #     attempt spreads into goals, saves, and misses — the honest
-#     distribution when picking a corner. (±0.02 m on the output cursor,
-#     non-accumulating, ≈0.6° on the 2 m aim arm — calibrated so the
-#     spread at a typical shot range stays inside the entry-clamp inset
-#     the aim model reserves for it, and the same spread is what the
-#     SCORE demands as extra window (RoleContext.self_aim_spread_rad →
-#     the fit inset in _hole_open_angle); see AIM_NOISE_STD_M / _hole_aim_x.)
+#     distribution when picking a corner. (Uniform ± metres on the output
+#     cursor, non-accumulating; 0.02 m ≈ 0.6° on the 2 m aim arm. The SHOT
+#     noise is calibrated with the entry-clamp inset the aim model reserves
+#     for it, and the same spread is what the SCORE demands as extra window
+#     (RoleContext.self_aim_spread_rad → the fit inset in _hole_open_angle);
+#     see _active_aim_noise_m / _hole_aim_x.)
 #
 # MOUSE_MAX_SPEED_M_S is now the perfect-bot DEFAULT / back-compat fallback;
 # the effective per-agent cap (_mouse_max_speed_m_s) is set from
@@ -530,11 +529,15 @@ const BOT_FOREHAND_LATERAL_THRESHOLD_M: float = 0.3
 const MOUSE_MAX_SPEED_M_S: float = 100.0
 var _mouse_max_speed_m_s: float = MOUSE_MAX_SPEED_M_S
 const MOUSE_NOISE_STD_M: float = 0.0
-# Live-bot aim noise (m, uniform ± on the output cursor). Applied through
-# apply_profile so raw test-constructed agents stay deterministic. The one RNG
-# lever in the bot: execution wobble on the hands, not decision dice.
-const AIM_NOISE_STD_M: float = 0.02
-var _mouse_noise_std_m: float = MOUSE_NOISE_STD_M
+# Live-bot aim noise (m, uniform ± on the output cursor), split by release
+# type — SHOT releases wobble on their own (larger, per-difficulty) budget,
+# everything else (passes, carry deliberation, off-puck blade work) uses the
+# general hand noise. Values come from BotSkillProfile via apply_profile so
+# raw test-constructed agents stay deterministic (both default 0). The one
+# RNG lever in the bot: execution wobble on the hands, not decision dice.
+# Selection between the two is _active_aim_noise_m().
+var _shot_aim_noise_m: float = MOUSE_NOISE_STD_M
+var _pass_aim_noise_m: float = MOUSE_NOISE_STD_M
 # Bots run at the host physics rate (120 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
@@ -907,6 +910,9 @@ var _pursuit_standoff_m: float = 0.0
 var _pass_speed_scale: float = 1.0
 var _check_aggression: float = 1.0
 var _defensive_anticipation_scale: float = 1.0
+# Post-possession settle beat (seconds) forwarded to the carrier via
+# RoleContext.carry_settle_delay_s. 0.0 = fire the tick the compete says so.
+var _carry_settle_delay_s: float = 0.0
 # Sprint is decided alongside move_vector on full-dispatch ticks; skipped
 # throttle ticks reuse this cached value so sprint_held doesn't flicker off at
 # 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
@@ -1075,10 +1081,12 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_pass_speed_scale = profile.pass_speed_scale
 	_check_aggression = profile.check_aggression
 	_defensive_anticipation_scale = profile.defensive_anticipation_scale
-	# Execution noise for LIVE bots (raw test agents stay deterministic).
-	# Flat across tiers for now; a per-difficulty knob can move it into the
-	# profile when the easier tiers return.
-	_mouse_noise_std_m = AIM_NOISE_STD_M
+	_carry_settle_delay_s = profile.carry_settle_delay_s
+	# Execution noise for LIVE bots (raw test agents stay deterministic):
+	# per-tier, split shot-vs-pass — the shot noise is the tier's scoring
+	# dial, the pass noise stays small so passes keep connecting.
+	_shot_aim_noise_m = profile.shot_aim_noise_m
+	_pass_aim_noise_m = profile.pass_aim_noise_m
 
 
 # Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
@@ -1479,7 +1487,9 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
-	ctx.self_aim_spread_rad = _mouse_noise_std_m / CARRY_BLADE_AIM_FORWARD_M
+	# The scoring/aim spread budgets the SHOT noise — that's the budget the
+	# release that matters (a scored shot) actually wobbles on.
+	ctx.self_aim_spread_rad = _shot_aim_noise_m / CARRY_BLADE_AIM_FORWARD_M
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
 	ctx.self_handle_reach = _self_handle_reach
@@ -1493,6 +1503,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.pass_speed_scale = _pass_speed_scale
 	ctx.check_aggression = _check_aggression
 	ctx.defensive_anticipation_scale = _defensive_anticipation_scale
+	ctx.carry_settle_delay_s = _carry_settle_delay_s
 	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
 	# is only called on dispatch ticks — hand it the span so it can compensate.
 	ctx.dispatch_period_ticks = _dispatch_period_ticks
@@ -1906,12 +1917,16 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# no slide time, so score it at his CURRENT position (goalie_now) and the soft
 	# redirect pace (PASS_SPEED_M_S). This one gate also encodes "in shooting range
 	# with a real look" (score_shoot folds in range / angle / lane / goalie).
+	# Budget this bot's own shot spread like every scored shot — a one-timer is
+	# the WORST-controlled release there is, so a wobbly-handed tier demands a
+	# wider opening before committing to fire-on-contact.
 	_gather_opponents(snapshot, _scratch_shot_opponents)
 	var goalie_now: Vector3 = _goalie_now(snapshot)
 	var shot_score: float = AIActionScoring.score_shoot(
 			perp_foot, _attacking_goal_pos, goalie_now,
 			GameRules.NET_HALF_WIDTH, _scratch_shot_opponents,
-			AIActionScoring.PASS_SPEED_M_S)
+			AIActionScoring.PASS_SPEED_M_S, 0.0, [], -1.0, false, 0.0, false,
+			_shot_aim_noise_m / CARRY_BLADE_AIM_FORWARD_M)
 	if shot_score < SHOT_RECEPTION_SCORE_GATE:
 		return _RECV_NONE
 	# Net-forward geometry. Anchor = the catch point pulled back one blade-reach
@@ -3749,6 +3764,19 @@ func _step_mouse_toward(target: Vector3) -> Vector3:
 	return _step_mouse_internal(target, _STEP_DIRECT, _mouse_max_speed_m_s, _mouse_arc_rate_rad_s)
 
 
+# The execution noise for THIS tick's output cursor: shot releases wobble on
+# the (larger, per-tier) shot budget, everything else on the general hand
+# noise. Selected by the press state first — the release tick samples this —
+# falling back to the committed intent so pre-aim converges under the same
+# budget it will release on. ONE_TIMER is a shot; PASS_PRESSED also fires the
+# DUMP (a location pass), which reads the pass budget by construction.
+func _active_aim_noise_m() -> float:
+	if _state == State.SHOOT_PRESSED or _state == State.ONE_TIMER_PRESSED \
+			or _intended_action == State.SHOOT_PRESSED:
+		return _shot_aim_noise_m
+	return _pass_aim_noise_m
+
+
 func _step_mouse_internal(target: Vector3, mode: int,
 		max_speed: float, arc_rate: float) -> Vector3:
 	# Cache the FINAL un-shaped target, mode, and rates so the skipped-tick path can
@@ -3772,11 +3800,12 @@ func _step_mouse_internal(target: Vector3, mode: int,
 				_current_self_pos, target, _current_self_state)
 		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
-		if _mouse_noise_std_m == 0.0:
+		var face_noise: float = _active_aim_noise_m()
+		if face_noise == 0.0:
 			return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 		return Vector3(
-				_mouse_pos.x + _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m, 0.0,
-				_mouse_pos.z + _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m)
+				_mouse_pos.x + _rng.randf_range(-1.0, 1.0) * face_noise, 0.0,
+				_mouse_pos.z + _rng.randf_range(-1.0, 1.0) * face_noise)
 	if not _mouse_pos_initialized:
 		_mouse_pos = Vector3(step_target.x, 0.0, step_target.z)
 		_mouse_pos_initialized = true
@@ -3793,13 +3822,15 @@ func _step_mouse_internal(target: Vector3, mode: int,
 		_mouse_pos.z = step_target.z
 	# Apply noise to OUTPUT only — _mouse_pos stays smooth, output
 	# adds organic per-tick wiggle (uniform [-NOISE, +NOISE] on each
-	# axis). Wiggle doesn't accumulate. Skip the two RNG advances entirely
-	# when noise is disabled (the current perfect-bot baseline) — this runs
-	# at tick rate for every bot, including throttle-skipped ticks.
-	if _mouse_noise_std_m == 0.0:
+	# axis, budget selected shot-vs-pass by _active_aim_noise_m). Wiggle
+	# doesn't accumulate. Skip the two RNG advances entirely when noise is
+	# disabled (the raw test-agent baseline) — this runs at tick rate for
+	# every bot, including throttle-skipped ticks.
+	var noise: float = _active_aim_noise_m()
+	if noise == 0.0:
 		return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
-	var nx: float = _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m
-	var nz: float = _rng.randf_range(-1.0, 1.0) * _mouse_noise_std_m
+	var nx: float = _rng.randf_range(-1.0, 1.0) * noise
+	var nz: float = _rng.randf_range(-1.0, 1.0) * noise
 	return Vector3(_mouse_pos.x + nx, 0.0, _mouse_pos.z + nz)
 
 

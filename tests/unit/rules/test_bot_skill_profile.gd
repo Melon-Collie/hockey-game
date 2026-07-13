@@ -54,6 +54,21 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal re-decides less often than Hard")
 	assert_gt(easy.dispatch_period_ticks, normal.dispatch_period_ticks,
 			"Easy re-decides less often than Normal")
+	# Shot wobble: bigger sprays the finish wider (the scoring dial).
+	assert_gt(normal.shot_aim_noise_m, hard.shot_aim_noise_m,
+			"Normal's shots wobble more than Hard's")
+	assert_gt(easy.shot_aim_noise_m, normal.shot_aim_noise_m,
+			"Easy's shots wobble more than Normal's")
+	# Pass wobble: softens too, but see the shot-vs-pass split test below.
+	assert_gt(normal.pass_aim_noise_m, hard.pass_aim_noise_m,
+			"Normal's hands wobble more than Hard's")
+	assert_gt(easy.pass_aim_noise_m, normal.pass_aim_noise_m,
+			"Easy's hands wobble more than Normal's")
+	# Settle beat: longer holds the release later after a fresh possession.
+	assert_gt(normal.carry_settle_delay_s, hard.carry_settle_delay_s,
+			"Normal settles the puck before playing it, Hard doesn't")
+	assert_gt(easy.carry_settle_delay_s, normal.carry_settle_delay_s,
+			"Easy settles the puck longer than Normal")
 	# Pace — pursuit standoff: bigger sags further off the carrier (more time).
 	assert_gt(normal.pursuit_standoff_m, hard.pursuit_standoff_m,
 			"Normal sags further off the carrier than Hard")
@@ -93,6 +108,20 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 	assert_eq(hard.pass_speed_scale, 1.0, "Hard moves the puck at full pace")
 	assert_eq(hard.check_aggression, 1.0, "Hard hunts checks as today")
 	assert_eq(hard.defensive_anticipation_scale, 1.0, "Hard anticipates as today")
+	# Same for the finish knobs: no settle beat and the pre-split flat wobble on
+	# both release types, so Hard is byte-identical to the pre-knob bot.
+	assert_eq(hard.carry_settle_delay_s, 0.0, "Hard releases the tick the compete fires")
+	assert_eq(hard.shot_aim_noise_m, hard.pass_aim_noise_m,
+			"Hard keeps the pre-split flat wobble on both release types")
+
+
+func test_pass_wobble_never_exceeds_shot_wobble() -> void:
+	# The split's whole point: completed passes are fun to play against, every
+	# shot going in is not — so a tier may never spray its passes harder than
+	# its shots.
+	for profile: BotSkillProfile in [BotSkillProfile.easy(), BotSkillProfile.normal(), BotSkillProfile.hard()]:
+		assert_lte(profile.pass_aim_noise_m, profile.shot_aim_noise_m,
+				"pass wobble stays at or below shot wobble at every tier")
 
 
 func test_lerp_factors_stay_in_unit_range() -> void:

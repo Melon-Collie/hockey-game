@@ -31,6 +31,27 @@ extends RefCounted
 #     a stale one), and it knows its OWN possession instantly. See GameManager.
 #   • dispatch_period_ticks — how often the full decision dispatch re-runs;
 #     a slower cadence makes the bot commit to a read longer before adjusting.
+#   • shot_aim_noise_m / pass_aim_noise_m — the ONE RNG lever (execution wobble
+#     on the output cursor, uniform ± per tick, non-accumulating; see
+#     SkaterAgentStateMachine._active_aim_noise_m). Split by release type
+#     because they buy opposite feels: SHOT noise is the scoring dial (a wobbled
+#     corner snipe spreads into goals/saves/misses instead of always finding
+#     twine — and because the shot SCORE budgets the same spread as extra
+#     required window, a noisy hand also stops taking low-percentage looks from
+#     range), while PASS noise stays small at every tier — completed passes are
+#     fun to play against, every shot going in is not. Pass noise doubles as the
+#     general hand noise outside shot releases (carry deliberation, off-puck
+#     blade work). The noise value is deterministic per tier; only the per-tick
+#     samples are RNG (per-bot seeded).
+#   • carry_settle_delay_s — how long after gaining possession the carrier may
+#     ONLY carry before a SHOOT / PASS / DUMP commit is allowed. This is the
+#     "human can't release the instant the puck touches the tape" lever: the
+#     hard bot's tick-zero touch pass reads as inhuman, and the settle beat is
+#     also a real defensive window (pressure a fresh Normal/Easy carrier and
+#     you arrive before the outlet fires). Consumed in AIRoleCarrier via
+#     RoleContext; reception one-timers are NOT gated here (the puck never
+#     settles on the tape) — they're already throttled by the reaction delay
+#     and by the shot-spread budget on the reception gate.
 #
 # ── Pace knobs (a SEPARATE axis from the precision knobs above) ───────────────
 # The four knobs above tune how SHARP the bot is — its hands, its shots, its
@@ -83,9 +104,10 @@ extends RefCounted
 # To add a tier: add a Difficulty enum value, a factory, and a for_difficulty
 # arm. To add a knob: add a field + _init param, set it in ALL THREE factories,
 # and consume it where the relevant value is read (SkaterAgent for lerp,
-# SkaterAgentStateMachine for max_speed / dispatch / the pace knobs it copies
-# onto RoleContext, GameManager for the carrier reaction delay, and the role
-# behaviors — pressure.gd / carrier.gd — for the pace knobs via RoleContext).
+# SkaterAgentStateMachine for max_speed / dispatch / the aim noises / the pace
+# + settle knobs it copies onto RoleContext, GameManager for the carrier
+# reaction delay, and the role behaviors — pressure.gd / carrier.gd — for the
+# pace + settle knobs via RoleContext).
 
 enum Difficulty {
 	EASY = 0,     # the floor — well-late reads, swimmy blade, commits hard to stale reads
@@ -110,6 +132,25 @@ var mouse_lerp_factor: float
 # Tick-denominated — tuned for 120 Hz (see tick-rate note above).
 var dispatch_period_ticks: int
 
+# Execution wobble on SHOT releases (metres, uniform ± on the output cursor per
+# tick). ≈ noise / 2 m aim arm in radians; the same value feeds the shot-aim
+# entry budget and the shot score's required-window inset
+# (RoleContext.self_aim_spread_rad), so a wobblier hand also shoots more
+# selectively. THE scoring dial per tier. Tick-independent.
+var shot_aim_noise_m: float
+
+# Execution wobble on everything that isn't a shot — passes first (a pass
+# release samples this), plus carry deliberation and off-puck blade work.
+# Deliberately much smaller than shot noise at the lower tiers: bots keep
+# completing passes, they just stop burying everything. Tick-independent.
+var pass_aim_noise_m: float
+
+# How long (seconds) after gaining possession the carrier may only CARRY
+# before any SHOOT / PASS / DUMP commit is allowed — the "settle the puck
+# before you can move it" beat. 0.0 = today's instant release. Consumed by
+# AIRoleCarrier via RoleContext.carry_settle_delay_s. Tick-independent.
+var carry_settle_delay_s: float
+
 # PACE: extra metres the on-puck PRESSURE defender drops its cut-off line back
 # toward its own net (beyond the one-stick-length baseline). 0.0 = today's tight
 # gap. Bigger = more time/space for the carrier. Distance, tick-independent.
@@ -130,11 +171,16 @@ var defensive_anticipation_scale: float
 
 func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 		p_dispatch_period_ticks: int,
+		p_shot_aim_noise_m: float, p_pass_aim_noise_m: float,
+		p_carry_settle_delay_s: float,
 		p_pursuit_standoff_m: float, p_pass_speed_scale: float,
 		p_check_aggression: float, p_defensive_anticipation_scale: float) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
 	mouse_lerp_factor = p_mouse_lerp_factor
 	dispatch_period_ticks = p_dispatch_period_ticks
+	shot_aim_noise_m = p_shot_aim_noise_m
+	pass_aim_noise_m = p_pass_aim_noise_m
+	carry_settle_delay_s = p_carry_settle_delay_s
 	pursuit_standoff_m = p_pursuit_standoff_m
 	pass_speed_scale = p_pass_speed_scale
 	check_aggression = p_check_aggression
@@ -146,12 +192,15 @@ func _init(p_carrier_reaction_delay_s: float, p_mouse_lerp_factor: float,
 # changes (elite-but-not-instant). Its blade aims at its real Hands speed like
 # every bot now (no per-tier slew), so a Hard bot's precision rides its build.
 # Dispatch at PHYSICS_TICK/60 = 2 ticks matches the engine baseline cadence. Tune
-# carrier_reaction_delay UP if it matches passes too readily. Pace knobs all at
-# their no-op baseline (standoff 0.0, pass scale 1.0, check aggression 1.0,
-# anticipation 1.0) — Hard keeps today's tight forecheck, full puck pace,
-# hit-hunting, and anticipating backline.
+# carrier_reaction_delay UP if it matches passes too readily. Execution wobble is
+# the pre-split flat value on both releases (0.02 m ≈ ±0.6° — spreads the
+# identical corner snipe into goals/saves/misses without ever reading as a
+# botched shot) and there's no settle beat — Hard releases the tick the compete
+# says fire. Pace knobs all at their no-op baseline (standoff 0.0, pass scale
+# 1.0, check aggression 1.0, anticipation 1.0) — Hard keeps today's tight
+# forecheck, full puck pace, hit-hunting, and anticipating backline.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 0.85, 2, 0.0, 1.0, 1.0, 1.0)
+	return BotSkillProfile.new(0.05, 0.85, 2, 0.02, 0.02, 0.0, 0.0, 1.0, 1.0, 1.0)
 
 
 # Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
@@ -164,6 +213,15 @@ static func hard() -> BotSkillProfile:
 # blade speed now — give Normal bots a lower-Hands build if their shots feel too
 # sharp, rather than an artificial slew.)
 #
+# Finish: shot wobble 0.06 m (≈ ±1.7° on the aim arm — ~±0.35 m of spread at the
+# net from a 12 m look, so a well-picked corner becomes goals AND saves AND the
+# odd wide one, and the score's spread budget stops the from-range snipes
+# entirely); pass wobble stays near-Hard at 0.03 m so the passing game keeps
+# connecting. Settle beat 0.30 s — the puck visibly arrives on the tape before
+# the next play starts, and pressuring a fresh carrier is a real play now. Tune
+# shot noise first when Normal's scoring is off: it's the dial that moves goals
+# without making the bots look drunk.
+#
 # Pace: defenders sag ~1.5 m off the cut-off line, lead the play ~60% as far,
 # the puck moves at 85% pace, and hit-hunting is dialed back (check_aggression
 # 0.65 → only the harder hits commit). A human gets a beat of time and the play
@@ -174,7 +232,7 @@ static func hard() -> BotSkillProfile:
 # pace knobs further (standoff UP, pass scale / anticipation / aggression DOWN)
 # before touching precision.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 0.5, 6, 1.5, 0.85, 0.65, 0.6)
+	return BotSkillProfile.new(0.22, 0.5, 6, 0.06, 0.03, 0.30, 1.5, 0.85, 0.65, 0.6)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
@@ -186,13 +244,21 @@ static func normal() -> BotSkillProfile:
 # or hand Easy bots a lower-Hands build for genuinely softer aim, if a newcomer
 # still can't string possessions together.
 #
+# Finish: shot wobble 0.11 m (≈ ±3.2° — ~±0.65 m of net-plane spread from 12 m,
+# so even good looks routinely find the goalie or the glass; the spread budget
+# means Easy only pulls the trigger in tight or on a genuinely gaping hole, and
+# even those aren't automatic); pass wobble 0.045 m keeps tape-to-tape mostly
+# connecting with the occasional honest bobble. Settle beat 0.55 s — a newcomer
+# can watch an Easy bot receive, gather, and THEN decide, and closing on a fresh
+# carrier reliably forces the turnover.
+#
 # Pace: defenders sag ~3 m off (lots of room to carry and look up), barely lead
 # the play (anticipation 0.2 → a step behind), the puck moves at 70% pace (slow,
 # readable, easy to pick off), and bots NEVER hunt body checks (check_aggression
 # 0.0 → pure containment, no getting lined up). Low-energy across the board,
 # which is most of what makes Easy feel easy.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 0.38, 9, 3.0, 0.70, 0.0, 0.2)
+	return BotSkillProfile.new(0.34, 0.38, 9, 0.11, 0.045, 0.55, 3.0, 0.70, 0.0, 0.2)
 
 
 static func for_difficulty(difficulty: int) -> BotSkillProfile:

@@ -846,6 +846,71 @@ func test_staggered_carrier_holds_instead_of_firing() -> void:
 			"staggered carrier holds instead of committing the fire")
 
 
+# ─── settle window: a fresh possession only carries until the beat drains ────
+
+func _settle_skaters(self_pos: Vector3) -> Array:
+	# The pressured-breakout setup that reliably fires a PASS on tick one.
+	return [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(11, 0, 11)],     # open outlet
+			[3, 1, Vector3(1.5, 0, 18.0)],        # forechecker
+			[4, 1, Vector3(3.0, 0, 17.5)],        # forechecker
+	]
+
+
+func test_settle_window_holds_the_fire_then_releases_it() -> void:
+	var self_pos := Vector3(3, 0, 20)
+	var ctx := _make_ctx(self_pos, _settle_skaters(self_pos))
+	ctx.carry_settle_delay_s = 0.2   # 24 ticks at 120 Hz
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a fresh possession may only carry inside the settle window")
+	assert_gt(c.debug_pass_score, 0.0,
+			"scores keep computing during the window — only the commit waits")
+	# Drain the window in real ticks (decide() steps ctx.dispatch_period_ticks
+	# = 1 tick per call); a re-eval lands within PICK_ACTION_PERIOD_TICKS of
+	# the drain, so 40 calls comfortably covers 0.2 s + one cadence.
+	for _i: int in range(40):
+		c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"the held-back breakout pass releases once the window drains")
+
+
+func test_settle_window_rearms_on_reset_but_not_on_clear_intent() -> void:
+	var self_pos := Vector3(3, 0, 20)
+	var ctx := _make_ctx(self_pos, _settle_skaters(self_pos))
+	ctx.carry_settle_delay_s = 0.2
+	var c := AIRoleCarrier.new()
+	for _i: int in range(41):
+		c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS, "sanity: window drained")
+
+	# clear_intent (press-state handoff / bail) is the SAME possession — the
+	# next decide may re-commit immediately, no fresh settle beat.
+	c.clear_intent()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a press bail back to CARRY re-fires without re-settling")
+
+	# reset (puck lost) marks the next decide as a NEW possession — the
+	# settle window re-arms and holds the fire again.
+	c.reset()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"regaining the puck starts a fresh settle beat")
+
+
+func test_zero_settle_delay_is_the_hard_baseline() -> void:
+	# ctx default (0.0) must reproduce the pre-knob behavior exactly: the
+	# pressured carrier fires on its first decide.
+	var self_pos := Vector3(3, 0, 20)
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, _settle_skaters(self_pos)))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"no settle delay → the tick-one fire is unchanged")
+
+
 # ─── reset() ──────────────────────────────────────────────────────────────
 
 func test_reset_clears_all_persistent_state() -> void:

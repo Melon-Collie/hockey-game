@@ -118,6 +118,10 @@ var check_aggression: float = 1.0
 # Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
 # man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
 var defensive_anticipation_scale: float = 1.0
+# Seconds after gaining possession during which the carrier may only CARRY —
+# no SHOOT / PASS / DUMP commit until the puck has "settled on the tape".
+# 0.0 = today's instant release. Consumed by AIRoleCarrier's settle window.
+var carry_settle_delay_s: float = 0.0
 
 # ── Smart-ping directive (a human teammate's tactical order) ──────────────────
 # Populated per dispatch from TeamBrain.ping_* (AIPingDirectives). Defaults are
