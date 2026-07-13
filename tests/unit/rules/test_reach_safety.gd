@@ -322,3 +322,66 @@ func test_protect_point_never_shields_into_the_wall() -> void:
 	assert_lte(carrier.x + offset.x, GameRules.INNER_HALF_WIDTH,
 			"the protected spot stays on the playing surface")
 	assert_gt(absf(offset.z), 0.3, "with the wall behind, the escape runs ALONG the boards")
+
+
+# ─── fake-then-cut deke: manufacturing the opening ────────────────────────────
+# GO iff the cut side is covered NOW but clear of everyone AFTER the fake
+# loads the defender with wrong-way momentum (his real accel, reaction-gated).
+
+func _deke_frame(puck: Vector3, d_pos: Vector3, d_vel: Vector3) -> Array:
+	# The caller-supplied axis frame, built exactly as the carrier builds it.
+	var d_proj: Vector3 = d_pos + d_vel * (AIActionScoring.DEKE_FAKE_S + AIActionScoring.DEKE_CUT_S)
+	var axis: Vector3 = (d_proj - puck).normalized()
+	return [axis, Vector3(axis.z, 0.0, -axis.x)]
+
+
+func test_deke_manufactures_an_opening_on_a_patient_container() -> void:
+	# Standstill duel: a league-agility defender parked 2.3 m ahead. No cut
+	# side is safe right now (his window reach covers both), but his bite on
+	# the fake carries his reach the wrong way — GO.
+	var opps: Array[Vector3] = [Vector3(0, 0, -2.3)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
+	var side: int = AIActionScoring.deke_cut_side(
+			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0, opps, vels)
+	assert_ne(side, 0, "the fake buys a safe cut that doesn't exist today")
+
+
+func test_deke_declines_an_already_beatable_defender() -> void:
+	# Defender well off the puck: the cut side is safe right now — nothing to
+	# manufacture, the plain seam owns it.
+	var opps: Array[Vector3] = [Vector3(0, 0, -4.5)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
+	assert_eq(AIActionScoring.deke_cut_side(
+			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0, opps, vels), 0,
+			"an opening that already exists needs no fake")
+
+
+func test_deke_cannot_fake_a_pylon() -> void:
+	# Same 2.3 m duel, but the defender's build barely accelerates: he can't
+	# BITE, so the fake manufactures nothing — while the identical geometry
+	# against a league-agility man is GO (the previous test). You deke the
+	# good defender; the slow one you simply beat.
+	var opps: Array[Vector3] = [Vector3(0, 0, -2.3)]
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var pylon := AISkaterCaps.new()
+	pylon.max_accel = 2.0
+	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
+	assert_eq(AIActionScoring.deke_cut_side(
+			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0,
+			opps, vels, [pylon]), 0,
+			"no bite, no manufactured opening")
+
+
+func test_deke_cuts_away_from_the_second_defender() -> void:
+	# A helper shades one cut lane: the manufactured cut must go the OTHER
+	# way (perp = (-1,0,0), so side -1 cuts world +X, away from the -X guard).
+	# The guard sits far enough that HIS side alone dies — a truly tight
+	# double-team correctly manufactures nothing at all.
+	var opps: Array[Vector3] = [Vector3(0, 0, -2.3), Vector3(-2.6, 0, -1.2)]
+	var vels: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
+	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
+	assert_eq(AIActionScoring.deke_cut_side(
+			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0, opps, vels), -1,
+			"the cut resolves to the unguarded side")

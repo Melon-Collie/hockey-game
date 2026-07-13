@@ -1579,3 +1579,46 @@ func test_carry_aim_faces_the_play_when_anchor_is_underfoot() -> void:
 	sm._last_carry_anchor = Vector3(0.3, 0, 0.3)
 	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
 	assert_lt(target.normalized().z, -0.9, "underfoot anchor: face the play")
+
+
+# ── Fake-then-cut deke lifecycle (containment trigger + phase split) ─────────
+
+func test_containment_deke_fakes_then_cuts() -> void:
+	# Standstill duel (below the lateral cut's speed floor): the carrier's
+	# deke read arms and the maneuver commits — thrust sells the fake side,
+	# then explodes across to the cut side, and the carry-cursor override
+	# sells it with the puck. Cooldown afterwards is the longer deke pace.
+	var s := _self_snap(Vector3.ZERO, true)
+	sm._carrier.deke_go = true
+	sm._carrier.deke_fake_dir = Vector2(1, 0)
+	sm._carrier.deke_cut_dir = Vector2(-0.7, -0.7)
+	var i := InputState.new()
+	sm._poke_evade_modulate_steering(i, s, Vector3.ZERO)
+	assert_true(sm._poke_evade_deking, "the containment stalemate commits the deke")
+	assert_almost_eq(i.move_vector.x, 1.0, 0.01, "fake phase thrusts the sell side")
+	var fake_mouse: Vector3 = sm._deke_mouse_target(Vector3.ZERO)
+	assert_gt(fake_mouse.x, 0.5, "the cursor sells the fake WITH the puck")
+	# Wind the window down to the cut phase.
+	sm._poke_evade_active_ticks = Agent.DEKE_CUT_TICKS
+	var i2 := InputState.new()
+	sm._poke_evade_modulate_steering(i2, s, Vector3.ZERO)
+	assert_lt(i2.move_vector.x, 0.0, "cut phase explodes across")
+	var cut_mouse: Vector3 = sm._deke_mouse_target(Vector3.ZERO)
+	assert_lt(cut_mouse.x, 0.0, "the cursor snaps across for the cut")
+	# Expire → the deliberate deke cooldown arms.
+	sm._poke_evade_active_ticks = 1
+	sm._poke_evade_modulate_steering(InputState.new(), s, Vector3.ZERO)
+	assert_false(sm._poke_evade_deking, "the maneuver ends with the window")
+	assert_eq(sm._poke_evade_cooldown_ticks, Agent.DEKE_COOLDOWN_TICKS,
+			"dekes pace at the longer cooldown")
+
+
+func test_no_deke_without_the_carrier_read() -> void:
+	# Standstill with no manufactured opening: nothing fires — the window and
+	# cooldown are only ever spent on a committed move.
+	var s := _self_snap(Vector3.ZERO, true)
+	sm._carrier.deke_go = false
+	var i := InputState.new()
+	sm._poke_evade_modulate_steering(i, s, Vector3.ZERO)
+	assert_false(sm._poke_evade_deking)
+	assert_eq(sm._poke_evade_active_ticks, 0)

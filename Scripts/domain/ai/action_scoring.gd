@@ -2263,6 +2263,115 @@ static func prefers_brake_check(
 	return brake_clear > cut_clear + BRAKE_CHECK_MARGIN_M
 
 
+# ── Fake-then-cut deke (manufacturing the opening) ───────────────────────────
+# The seam cut and the brake check only EXPLOIT commitment a defender makes on
+# his own — a patient jockey who never commits leaves no clearance to cut into
+# and the duel stalemates. A real deke MANUFACTURES the commitment: sell one
+# side, the defender must match it (gap control), and matching loads him with
+# lateral momentum + displacement his reaction then can't unwind before the
+# cut passes his plane on the other side.
+#
+# The whole read is the existing reachable-set model run against the
+# defender's POST-BITE state: during the fake he reads for EVADE_REACTION_S,
+# then accelerates toward the fake at his real max_accel (per-build caps); at
+# the cut his reach starts from that shifted, wrong-way-moving state and is
+# reaction-gated AGAIN before he can redirect. GO iff the cut-side point is
+# covered NOW (nothing to cut into — otherwise the plain seam owns it) but
+# clear of everyone AFTER the bite by the blade-of-air standard. Grounded and
+# self-calibrating: an agile defender bites harder — you CAN deke the good
+# defender — while a sluggish one barely moves (but him you simply beat).
+#
+# Durations are the shared contract between this eval and the state machine's
+# committed execution (gesture geometry, like the wind-up spans): the fake
+# must comfortably exceed the defender's read time or there is nothing to
+# bite on; the cut is a single explosive redirect.
+const DEKE_FAKE_S: float = 0.3
+const DEKE_CUT_S: float = 0.2
+
+
+# Which side to cut past `deked_idx` after faking the other way: +1 / -1 as
+# the sign on `perp` (caller supplies the axis frame: `axis` = unit puck →
+# defender-projected line, `perp` = its left-hand perpendicular — the caller
+# re-derives the fake/cut directions from the same frame, so eval and
+# execution agree by construction). 0 = no manufactured opening (already
+# beatable, or the bite doesn't buy enough). Pure float math, no allocation.
+static func deke_cut_side(
+		puck_pos: Vector3, carrier_vel: Vector3, handle_reach: float,
+		axis: Vector3, perp: Vector3, deked_idx: int,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = []) -> int:
+	var t_total: float = DEKE_FAKE_S + DEKE_CUT_S
+	# The deked man's real build (league defaults when caps are absent).
+	var d_pos: Vector3 = opponents[deked_idx]
+	var d_vel: Vector3 = opponent_vels[deked_idx]
+	var d_accel: float = MANEUVER_ACCEL_M_S2
+	var d_span: float = EVADE_STICK_REACH_M
+	if opponent_caps.size() == opponents.size():
+		var caps: AISkaterCaps = opponent_caps[deked_idx]
+		if caps != null:
+			d_accel = caps.max_accel
+			d_span = caps.blade_span
+	# Where the cut can put the puck: the ballistic ride plus the CUT phase's
+	# own handling envelope (the fake spends the earlier effort selling the
+	# other way, so only the cut leg's maneuver counts — conservative).
+	var cut_env: float = 0.5 * MANEUVER_ACCEL_M_S2 * DEKE_CUT_S * DEKE_CUT_S + handle_reach
+	var ride: Vector3 = carrier_vel * t_total
+	# Post-fake bite: he reads for EVADE_REACTION_S, then matches the fake.
+	var t_bite: float = maxf(0.0, DEKE_FAKE_S - EVADE_REACTION_S)
+	var bite_v: float = d_accel * t_bite
+	var bite_disp: float = 0.5 * d_accel * t_bite * t_bite
+	# His redirect budget during the cut, reaction-gated afresh (he must read
+	# the cut before unwinding the bite).
+	var cut_maneuver: float = 0.5 * d_accel \
+			* pow(maxf(0.0, DEKE_CUT_S - EVADE_REACTION_S), 2.0)
+	var best_side: int = 0
+	var best_post: float = -INF
+	for side_i: int in [-1, 1]:
+		var s: float = float(side_i)
+		var cut_dir: Vector3 = axis + perp * s
+		var cut_len: float = cut_dir.length()
+		if cut_len < 0.001:
+			continue
+		var p: Vector3 = puck_pos + ride + cut_dir * (cut_env / cut_len)
+		if board_gap_m(p) < 0.0:
+			continue
+		# NOW: everyone as-is over the whole window — is the cut side already
+		# takeable? Then there is nothing to manufacture (the seam owns it).
+		var clear_now: float = reach_clearance(
+				p, t_total, opponents, opponent_vels, opponent_caps)
+		if clear_now >= EVADE_SAFE_CLEAR_MIN_M:
+			continue
+		# POST-BITE: the deked man starts the cut displaced toward the fake
+		# (−perp·s) and moving that way; everyone else unchanged.
+		var fake_dir: Vector3 = perp * (-s)
+		var pos1: Vector3 = d_pos + d_vel * DEKE_FAKE_S + fake_dir * bite_disp
+		var vel1: Vector3 = d_vel + fake_dir * bite_v
+		var proj: Vector3 = pos1 + vel1 * DEKE_CUT_S
+		var clear_deked: float = Vector2(p.x - proj.x, p.z - proj.z).length() \
+				- (cut_maneuver + d_span)
+		var clear_post: float = clear_deked
+		# The rest of the defense still plays over the whole window.
+		for i: int in opponents.size():
+			if i == deked_idx:
+				continue
+			var other_pos: Vector3 = opponents[i]
+			var other_vel: Vector3 = opponent_vels[i]
+			var reach: float = 0.5 * MANEUVER_ACCEL_M_S2 \
+					* pow(maxf(0.0, t_total - EVADE_REACTION_S), 2.0) + EVADE_STICK_REACH_M
+			if opponent_caps.size() == opponents.size():
+				var ocaps: AISkaterCaps = opponent_caps[i]
+				if ocaps != null:
+					reach = 0.5 * ocaps.max_accel \
+							* pow(maxf(0.0, t_total - EVADE_REACTION_S), 2.0) + ocaps.blade_span
+			var ox: float = p.x - (other_pos.x + other_vel.x * t_total)
+			var oz: float = p.z - (other_pos.z + other_vel.z * t_total)
+			clear_post = minf(clear_post, sqrt(ox * ox + oz * oz) - reach)
+		if clear_post >= EVADE_SAFE_CLEAR_MIN_M and clear_post > best_post:
+			best_post = clear_post
+			best_side = side_i
+	return best_side
+
+
 # Defender reach for the CARRY-path check below — stick-blade reach plus
 # a margin for the defender stepping in as the bot skates past. Distinct
 # from the fired-puck lane model (which derives reach from closing time);

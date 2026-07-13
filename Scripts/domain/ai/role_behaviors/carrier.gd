@@ -253,6 +253,16 @@ const CARRY_RETREAT_STEP_M: float = CARRY_SEARCH_STEP_M * 2.0
 const _RETREAT_ANGLES: Array[float] = [
 		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
+# Deke engagement gates (the cheap pre-filters before the manufactured-opening
+# math runs — see AIActionScoring.deke_cut_side). ENGAGE_RANGE: the containing
+# defender must be close enough that the duel is live but the fake still has
+# room to develop — a step beyond the poke trigger's reach. MAX_CLOSING: the
+# deke answers PATIENT containment; above this relative closing speed the
+# pressure is committed and the brake check / seam cut own the moment. Both
+# are physical duel measurements.
+const DEKE_ENGAGE_RANGE_M: float = 3.5
+const DEKE_CONTAIN_MAX_CLOSING_M_S: float = 2.0
+
 # Evadability (current_safety) above which the retreat ring is skipped
 # entirely: the peel-out is an answer to CONTAINMENT, and with no defender
 # able to reach the puck the forward gradient owns the compete anyway —
@@ -384,6 +394,15 @@ var evade_seam_world: Vector3 = Vector3.INF
 # AIActionScoring.prefers_brake_check from the same re-eval. Latched by the
 # state machine's poke-evade trigger to pick the maneuver; protect-tier only.
 var brake_check_favored: bool = false
+# Fake-then-cut deke read (AIActionScoring.deke_cut_side): true when faking
+# one way manufactures a safe cut past the containing defender that doesn't
+# exist right now — the answer to PATIENT containment (the seam cut needs
+# clearance to already exist; the brake check needs the defender committed).
+# The dirs are world-XZ units for the two committed phases, latched by the
+# state machine's trigger. Protect-tier only; refreshed every re-eval.
+var deke_go: bool = false
+var deke_fake_dir: Vector2 = Vector2.ZERO
+var deke_cut_dir: Vector2 = Vector2.ZERO
 
 # ── Throttle ─────────────────────────────────────────────────────────────────
 var _pick_action_cooldown: int = 0
@@ -498,6 +517,9 @@ func reset() -> void:
 	protect_pressure = 0.0
 	evade_seam_world = Vector3.INF
 	brake_check_favored = false
+	deke_go = false
+	deke_fake_dir = Vector2.ZERO
+	deke_cut_dir = Vector2.ZERO
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
@@ -578,6 +600,58 @@ func _pick_action(ctx: RoleContext) -> void:
 			and AIActionScoring.prefers_brake_check(
 					cur_puck_pos, ctx.self_velocity, directed_seam,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+
+	# Fake-then-cut deke read (see the mirror fields' doc): find the PATIENT
+	# container — the nearest opponent inside the duel range, ahead on the
+	# objective line, with small relative closing (committed pressure belongs
+	# to the brake check / seam) — and ask the manufactured-opening math
+	# whether faking one way buys a safe cut past him that doesn't exist now.
+	# The axis frame (puck → his projected spot, plus its perpendicular) is
+	# built HERE and the returned side is converted with the same frame, so
+	# the eval and the executed gesture agree by construction.
+	deke_go = false
+	deke_fake_dir = Vector2.ZERO
+	deke_cut_dir = Vector2.ZERO
+	if ctx.protects_the_puck:
+		var obj_dir: Vector3 = seam_objective - cur_puck_pos
+		obj_dir.y = 0.0
+		if obj_dir.length_squared() > 0.0001:
+			obj_dir = obj_dir.normalized()
+			var deked_idx: int = -1
+			var deked_dist: float = DEKE_ENGAGE_RANGE_M
+			for i: int in _scratch_opponents.size():
+				var to_opp: Vector3 = _scratch_opponents[i] - cur_puck_pos
+				to_opp.y = 0.0
+				var d: float = to_opp.length()
+				if d >= deked_dist or d < 0.001:
+					continue
+				if to_opp.dot(obj_dir) <= 0.0:
+					continue   # behind the play — not the man to beat
+				var closing: float = (ctx.self_velocity - _scratch_opponent_vels[i]) \
+						.dot(to_opp / d)
+				if absf(closing) > DEKE_CONTAIN_MAX_CLOSING_M_S:
+					continue   # committed pressure — other maneuvers own it
+				deked_dist = d
+				deked_idx = i
+			if deked_idx != -1:
+				var d_proj: Vector3 = _scratch_opponents[deked_idx] \
+						+ _scratch_opponent_vels[deked_idx] \
+								* (AIActionScoring.DEKE_FAKE_S + AIActionScoring.DEKE_CUT_S)
+				var axis: Vector3 = d_proj - cur_puck_pos
+				axis.y = 0.0
+				if axis.length_squared() > 0.0001:
+					axis = axis.normalized()
+					var perp := Vector3(axis.z, 0.0, -axis.x)
+					var side: int = AIActionScoring.deke_cut_side(
+							cur_puck_pos, ctx.self_velocity, ctx.self_handle_reach,
+							axis, perp, deked_idx,
+							_scratch_opponents, _scratch_opponent_vels,
+							_scratch_opponent_caps)
+					if side != 0:
+						var cut3: Vector3 = (axis + perp * float(side)).normalized()
+						deke_go = true
+						deke_cut_dir = Vector2(cut3.x, cut3.z)
+						deke_fake_dir = Vector2(-perp.x * float(side), -perp.z * float(side))
 
 	# Puck-protect read (see the mirror fields' doc): how covered the presented
 	# forward carry spot is over the evasion horizon, and where in the blade

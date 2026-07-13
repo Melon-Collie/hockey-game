@@ -1993,3 +1993,39 @@ func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
 			"no fire through the pinch — keep the puck")
 	assert_gt(c.last_carry_anchor.z, self_pos.z + 2.0,
 			"peels OUT of the pinch (a real backing-out, not a 3 m shuffle)")
+
+
+# ─── fake-then-cut deke mirror ────────────────────────────────────────────────
+
+func test_patient_container_arms_the_deke_read() -> void:
+	# A league-agility defender parked in the duel range dead ahead on the
+	# objective line, nobody moving — the classic containment stalemate. The
+	# carrier's re-eval should arm the deke: fake one way, cut the other
+	# (the two committed directions oppose laterally by construction).
+	var self_pos := Vector3(0.0, 0.0, -14.0)             # OZ, attacking -Z
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0.0, 0.0, -17.6)],            # ~2.3 m off the carried puck
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.protects_the_puck = true
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_true(c.deke_go, "a patient container in range arms the manufactured-opening read")
+	assert_lt(c.deke_fake_dir.dot(c.deke_cut_dir), 0.0,
+			"the fake sells one side, the cut explodes the other")
+
+
+func test_no_deke_read_against_a_committed_charger() -> void:
+	# Same spot, but the defender is charging in hard — committed pressure is
+	# the brake check / seam's moment, not a fake's (he's already biting).
+	var self_pos := Vector3(0.0, 0.0, -14.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0.0, 0.0, -17.6), false, Vector3(0, 0, 7)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.protects_the_puck = true
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_false(c.deke_go, "committed pressure never reads as a fake target")
