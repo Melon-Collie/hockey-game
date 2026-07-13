@@ -219,6 +219,18 @@ var intended_action: int = INTENT_CARRY
 # self-extinguishes — the bot takes the available shot — with no fixed timeout.
 var _hold_elapsed_s: float = 0.0
 
+# Settle window (difficulty knob, ctx.carry_settle_delay_s): for this many
+# seconds after gaining possession the carrier may only CARRY — the fire and
+# dump commits in _pick_action are gated until it drains. Armed on the first
+# decide() after reset() (reset marks a genuine possession loss, so the next
+# decide IS a fresh possession — including the very first one after spawn).
+# clear_intent() deliberately does NOT re-arm it: a press-state bail back to
+# CARRY is the same possession, not a new touch. Scores still compute every
+# re-eval during the window (debug + carry anchor stay live), only the commit
+# is held — so the instant the window drains, the current best fire releases.
+var _settle_arm_pending: bool = true
+var _settle_remaining_s: float = 0.0
+
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
 var pass_target_peer_id: int = -1
@@ -340,6 +352,14 @@ func decide(ctx: RoleContext) -> RoleDecision:
 	# keeps the re-eval cadence ~PICK_ACTION_PERIOD_TICKS of wall time at every
 	# difficulty tier instead of stretching it by the dispatch period.
 	var step_ticks: int = maxi(1, ctx.dispatch_period_ticks)
+	# Settle window: arm from the difficulty knob on the first decide() of a
+	# fresh possession, then drain in real time. _pick_action reads
+	# _settle_remaining_s to hold fire/dump commits while it's positive.
+	if _settle_arm_pending:
+		_settle_arm_pending = false
+		_settle_remaining_s = ctx.carry_settle_delay_s
+	elif _settle_remaining_s > 0.0:
+		_settle_remaining_s -= float(step_ticks) / float(_PhysicsConstants.PHYSICS_TICK)
 	_ticks_since_pick += step_ticks
 	if _pick_action_cooldown <= 0:
 		_pick_action(ctx)  # reads _ticks_since_pick for the hold-clock advance
@@ -378,12 +398,17 @@ func reset() -> void:
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
+	# The puck is gone — the next decide() is a fresh possession, so re-arm the
+	# settle window (see _settle_arm_pending).
+	_settle_arm_pending = true
+	_settle_remaining_s = 0.0
 
 
 # Clear just the persistent intent (not last_carry_anchor / debug).
 # Called by the state machine when committing to a press state, so
 # the next CARRY entry starts with no stale intent and re-evaluates
-# from scratch.
+# from scratch. Does NOT re-arm the settle window — a press bail back to
+# CARRY is the same possession, not a new touch.
 func clear_intent() -> void:
 	intended_action = INTENT_CARRY
 	pass_target_peer_id = -1
@@ -654,7 +679,14 @@ func _pick_action(ctx: RoleContext) -> void:
 	# shot/pass through it flails the release. Hold the puck and protect
 	# it until the brief stagger decays — carry still computes normally,
 	# this only blocks fire from winning the compete.
+	#
+	# AND: don't fire (or dump) inside the settle window — the difficulty beat
+	# between the puck hitting the tape and the bot being ALLOWED to move it
+	# (ctx.carry_settle_delay_s; 0 at Hard / for humans of the perfect-bot
+	# baseline). Same shape as the stagger gate: everything still scores, the
+	# commit just waits, so the window draining releases the current best play.
 	var staggered: bool = ctx.self_stagger_timer > 0.0
+	var settling: bool = _settle_remaining_s > 0.0
 
 	# Opportunity cost of firing NOW: the value of keeping the puck for a
 	# developing cross-seam one-timer a teammate is staging. Same EV currency as
@@ -682,7 +714,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	var new_intent: int
 	# Fire only if it beats BOTH carrying and holding for the developing play.
 	if fire_score >= carry_score and fire_score >= hold_value \
-			and fire_score > FIRE_MIN_VALUE and not staggered:
+			and fire_score > FIRE_MIN_VALUE and not staggered and not settling:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
@@ -760,7 +792,7 @@ func _pick_action(ctx: RoleContext) -> void:
 						(target_v / coef - min_v)
 							/ maxf(ctx.self_wrister_shot_speed - min_v, 0.001),
 						0.0, 1.0)
-	elif dump_score > raw_carry_score and not staggered:
+	elif dump_score > raw_carry_score and not staggered and not settling:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
 		# priced, below the safe giveaway). Clear our zone, or dump-and-chase.
 		_hold_elapsed_s = 0.0
@@ -1663,7 +1695,12 @@ func _forward_clearance_at(ctx: RoleContext, pos: Vector3, speed: float) -> floa
 #     outlet is CREATING out-values everything available right now.
 #
 # Returns 0 if nothing is developing.
+# Cognition gate: a tier that doesn't hold for developing plays
+# (ctx.holds_for_developing_feeds false) sees nothing here by definition —
+# it plays only what exists right now.
 func _best_developing_feed(ctx: RoleContext) -> float:
+	if not ctx.holds_for_developing_feeds:
+		return 0.0
 	if ctx.team_brain == null:
 		return 0.0
 	var self_pos: Vector3 = ctx.self_pos
@@ -1836,8 +1873,14 @@ func _predict_goalie_at(ctx: RoleContext, release_time_s: float,
 # Companion to _predict_goalie_at: how unsettled [0,1] the goalie is at that same
 # release, threaded into score_shoot so a shot catching the goalie mid-slide
 # (cross-seam one-timer) rates higher than the same shot at a set goalie.
+# Cognition gate: a goalie-motion-blind tier (ctx.reads_goalie_motion false)
+# models the keeper as always set — the re-square race this term wins is
+# invisible to it, so it stops manufacturing cross-crease chaos on purpose.
+# The evaluator itself is untouched; the bot just loses the input.
 func _goalie_unsettled_at(ctx: RoleContext, release_time_s: float,
 		puck_pos_at_release: Vector3) -> float:
+	if not ctx.reads_goalie_motion:
+		return 0.0
 	return AIActionScoring.goalie_unsettled(
 			_goalie_now(ctx), ctx.attacking_goal_pos,
 			release_time_s, puck_pos_at_release)

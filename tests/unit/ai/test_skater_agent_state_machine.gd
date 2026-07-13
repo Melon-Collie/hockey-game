@@ -1208,12 +1208,86 @@ func test_opponent_within_of_reads_contest_range() -> void:
 
 func test_aim_noise_off_raw_on_after_profile() -> void:
 	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
-	# bot wired through apply_profile gets the execution noise.
-	assert_almost_eq(sm._mouse_noise_std_m, 0.0, 1e-9,
-			"raw agents stay noiseless")
+	# bot wired through apply_profile gets the per-tier execution noise pair.
+	assert_almost_eq(sm._shot_aim_noise_m, 0.0, 1e-9,
+			"raw agents stay noiseless on shots")
+	assert_almost_eq(sm._pass_aim_noise_m, 0.0, 1e-9,
+			"raw agents stay noiseless on passes")
 	sm.apply_profile(BotSkillProfile.hard())
-	assert_almost_eq(sm._mouse_noise_std_m, Agent.AIM_NOISE_STD_M, 1e-9,
-			"profiled (live) agents carry the aim noise")
+	assert_almost_eq(sm._shot_aim_noise_m, BotSkillProfile.hard().shot_aim_noise_m, 1e-9,
+			"profiled (live) agents carry the shot aim noise")
+	assert_almost_eq(sm._pass_aim_noise_m, BotSkillProfile.hard().pass_aim_noise_m, 1e-9,
+			"profiled (live) agents carry the pass aim noise")
+
+
+func test_active_aim_noise_selects_shot_budget_in_shot_states() -> void:
+	# The noise applied to the output cursor is state-dependent: shot releases
+	# (SHOOT_PRESSED / ONE_TIMER_PRESSED / a committed shoot intent still
+	# pre-aiming in CARRY) wobble on the shot budget, everything else on the
+	# general/pass budget.
+	sm.apply_profile(BotSkillProfile.easy())
+	var shot_noise: float = BotSkillProfile.easy().shot_aim_noise_m
+	var pass_noise: float = BotSkillProfile.easy().pass_aim_noise_m
+	sm._state = Agent.State.SHOOT_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
+			"wrister charge wobbles on the shot budget")
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
+			"one-timer fires on the shot budget")
+	sm._state = Agent.State.CARRY
+	sm._intended_action = Agent.State.SHOOT_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
+			"shoot pre-aim converges under the budget it will release on")
+	sm._intended_action = Agent.State.CARRY
+	assert_almost_eq(sm._active_aim_noise_m(), pass_noise, 1e-9,
+			"plain carry deliberation uses the general hand noise")
+	sm._state = Agent.State.PASS_PRESSED
+	assert_almost_eq(sm._active_aim_noise_m(), pass_noise, 1e-9,
+			"a pass release wobbles on the (smaller) pass budget")
+	sm._state = Agent.State.OFF_PUCK
+
+
+# ── Cognition gates (difficulty-tiered hockey IQ) ────────────────────────────
+
+func test_apply_profile_sets_cognition_gates() -> void:
+	# Raw agents keep the perfect-bot defaults (all reads on).
+	assert_true(sm._reads_goalie_motion, "raw agent reads goalie motion")
+	assert_true(sm._holds_for_developing_feeds, "raw agent holds for developing plays")
+	assert_true(sm._angles_the_chase, "raw agent angles its chase")
+	sm.apply_profile(BotSkillProfile.easy())
+	assert_false(sm._reads_goalie_motion, "Easy is goalie-motion blind")
+	assert_false(sm._holds_for_developing_feeds, "Easy plays only what exists now")
+	assert_false(sm._angles_the_chase, "Easy chases straight-line")
+	sm.apply_profile(BotSkillProfile.normal())
+	assert_false(sm._reads_goalie_motion, "Normal is goalie-motion blind too")
+	assert_true(sm._holds_for_developing_feeds, "Normal keeps the developing-feed hold")
+	assert_true(sm._angles_the_chase, "Normal keeps the chase angling")
+
+
+func test_motion_blind_aim_ignores_the_goalie_slide() -> void:
+	# Goalie on the shooter's arc but sliding hard +x: a motion-reading bot
+	# projects the shadow along the slide and aims into the recovery arc
+	# ("across the grain"); a motion-blind bot's aim is EXACTLY the aim
+	# against the same goalie standing still — it shoots at where he IS.
+	var s := WorldSnapshot.new()
+	var gs := GoalieNetworkState.new()
+	gs.position_x = 0.0
+	gs.position_z = -GameRules.GOAL_LINE_Z + 1.2   # out on the challenge arc
+	gs.velocity_x = 4.0                            # committed slide
+	s.goalie_states[1] = gs                        # opp team (self is team 0)
+	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 10.0)
+
+	var aim_reading: Vector3 = sm._shot_aim_point(s, self_pos)
+	sm._reads_goalie_motion = false
+	var aim_blind: Vector3 = sm._shot_aim_point(s, self_pos)
+	sm._reads_goalie_motion = true
+	gs.velocity_x = 0.0
+	var aim_still: Vector3 = sm._shot_aim_point(s, self_pos)
+
+	assert_almost_eq(aim_blind.x, aim_still.x, 1e-6,
+			"blind aim equals the still-goalie aim — where he IS, not where he'll be")
+	assert_gt(absf(aim_reading.x - aim_blind.x), 0.05,
+			"the motion read genuinely moves the aim into the recovery arc")
 
 
 # ── Protect-side turn (carry arc direction) ──────────────────────────────────

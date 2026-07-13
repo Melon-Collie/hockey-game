@@ -118,6 +118,20 @@ var check_aggression: float = 1.0
 # Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
 # man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
 var defensive_anticipation_scale: float = 1.0
+# Seconds after gaining possession during which the carrier may only CARRY —
+# no SHOOT / PASS / DUMP commit until the puck has "settled on the tape".
+# 0.0 = today's instant release. Consumed by AIRoleCarrier's settle window.
+var carry_settle_delay_s: float = 0.0
+# COGNITION gate: false = this bot models the goalie as always SET — the
+# unsettled re-square race is invisible to its pass / one-timer EV
+# (carrier._goalie_unsettled_at returns 0). The aim-side half of the same gate
+# (across-the-grain velocity projection) lives on the state machine, which owns
+# the aim. True = the perfect-bot / Hard read.
+var reads_goalie_motion: bool = true
+# COGNITION gate: false = the carrier never values a play that doesn't exist
+# yet (carrier._best_developing_feed returns 0) — no protecting the puck for a
+# staging finisher or an opening outlet. True = the perfect-bot / Hard read.
+var holds_for_developing_feeds: bool = true
 
 # ── Smart-ping directive (a human teammate's tactical order) ──────────────────
 # Populated per dispatch from TeamBrain.ping_* (AIPingDirectives). Defaults are
