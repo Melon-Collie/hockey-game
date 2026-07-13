@@ -215,14 +215,15 @@ func _build_bottom_block(root: Control) -> void:
 
 	# "Return to Lobby" is the second flavor of the same play-again vote (see
 	# RematchVoteRules): once the pool is unanimous, any lobby vote routes the
-	# whole group to the shared lobby instead of an instant rematch. Online
-	# only, matching the old host-only instant button's visibility; a host who
-	# wants to force the lobby without waiting on the vote still has the pause
-	# menu's instant Return to Lobby.
-	if not NetworkManager.is_offline_mode:
-		_lobby_btn = _action_button("Return to Lobby")
-		_lobby_btn.pressed.connect(func() -> void: lobby_vote_toggled.emit())
-		actions.add_child(_lobby_btn)
+	# whole group to the shared lobby instead of an instant rematch. Shown
+	# unconditionally — every real match starts from the unified lobby (offline
+	# included), and game over never fires in the lobby-less modes (free play,
+	# tutorial, drills). Offline the voter pool is just the host, so the vote
+	# resolves on the click; a host who wants to force the lobby without
+	# waiting on the vote still has the pause menu's instant Return to Lobby.
+	_lobby_btn = _action_button("Return to Lobby")
+	_lobby_btn.pressed.connect(func() -> void: lobby_vote_toggled.emit())
+	actions.add_child(_lobby_btn)
 
 	# Always available: drop to solo free play. Offline this is the only leave
 	# action; for an online client it disconnects just them; for an online host
@@ -312,8 +313,7 @@ func _append_star_reveal(rank: int) -> void:
 
 func set_spectator(is_spec: bool) -> void:
 	_rematch_btn.visible = not is_spec
-	if _lobby_btn != null:
-		_lobby_btn.visible = not is_spec
+	_lobby_btn.visible = not is_spec
 	_vote_label.visible = not is_spec
 
 
@@ -330,9 +330,8 @@ func hide_popup() -> void:
 func update_votes(votes: Dictionary[int, int], total_voters: int, local_vote: int) -> void:
 	_rematch_btn.text = "Unvote" \
 			if local_vote == RematchVoteRules.Choice.REMATCH else "Rematch"
-	if _lobby_btn != null:
-		_lobby_btn.text = "Unvote" \
-				if local_vote == RematchVoteRules.Choice.LOBBY else "Return to Lobby"
+	_lobby_btn.text = "Unvote" \
+			if local_vote == RematchVoteRules.Choice.LOBBY else "Return to Lobby"
 	var count: int = RematchVoteRules.count_voted(votes)
 	var tally: String = "%d / %d voted" % [count, total_voters]
 	if RematchVoteRules.has_lobby_vote(votes):

@@ -232,7 +232,10 @@ func _build_leave_overlay() -> void:
 	# the whole group's scene, which only the session owner should do without
 	# a vote. (At game over everyone instead gets the lobby *vote* flavor of
 	# the play-again vote on the game-over popup; see RematchVoteRules.)
-	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
+	# Offline matches have a lobby too (the unified Play flow starts there);
+	# only the lobby-less modes — free play, tutorial, drills — hide it.
+	if NetworkManager.is_host and not NetworkManager.is_free_play_mode \
+			and not NetworkManager.is_drill_mode():
 		_add_host_button(vbox, "Return to Lobby", func() -> void: GameManager.return_to_lobby())
 
 	# Always available: drop to solo free play. Offline this is the only leave

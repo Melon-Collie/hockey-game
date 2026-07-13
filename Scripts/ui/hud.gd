@@ -54,6 +54,11 @@ var _confirm_callback: Callable = Callable()
 # (REMATCH and LOBBY are flavors of the same unanimous vote).
 var _rematch_votes: Dictionary[int, int] = {}
 var _local_vote: int = RematchVoteRules.Choice.NONE
+# Authoritative voter-pool size (connected humans minus spectators). The host
+# computes and broadcasts it (skip-vote pattern: host counts, peers display) —
+# clients can't derive it locally because from-lobby spectators are only
+# tracked host-side. 0 = no broadcast landed yet (client fallback estimate).
+var _vote_total: int = 0
 var _phase_banner_root: Control = null
 var _phase_slide_tween: Tween = null
 var _faceoff_countdown_tween: Tween = null
@@ -167,6 +172,7 @@ func _ready() -> void:
 	GameManager.game_over.connect(_on_game_over)
 	GameManager.game_reset.connect(_on_game_reset)
 	NetworkManager.rematch_vote_changed.connect(_on_rematch_vote_changed)
+	NetworkManager.rematch_voters_changed.connect(_on_rematch_voters_changed)
 	NetworkManager.peer_disconnected.connect(_on_rematch_peer_disconnected)
 	GameManager.shots_on_goal_changed.connect(_on_shots_on_goal_changed)
 	GameManager.stats_updated.connect(_on_stats_updated_for_feed)
@@ -1408,6 +1414,9 @@ func _on_game_over() -> void:
 	_show_phase_banner_at_rest()
 	_rematch_votes.clear()
 	_local_vote = RematchVoteRules.Choice.NONE
+	# Zeroing forces the host's refresh below to see a change and broadcast a
+	# fresh total (clients just zeroed their mirror and are waiting on it).
+	_vote_total = 0
 	_update_rematch_ui()
 	if _game_over_present_tween != null and _game_over_present_tween.is_running():
 		_game_over_present_tween.kill()
@@ -1508,8 +1517,31 @@ func _on_rematch_peer_disconnected(peer_id: int) -> void:
 	if NetworkManager.is_host:
 		_check_rematch_unanimous()
 
+func _on_rematch_voters_changed(total: int) -> void:
+	_vote_total = total
+	_update_rematch_ui()
+
+# Host-side: recompute the voter pool and broadcast it when it moves. Spectators
+# don't have a vote button; spectator_peer_count already includes the host's
+# peer (1) if the host is itself a spectator, so a single subtraction yields
+# the actual pool. Re-run on every vote/disconnect funnel so a mid-screen
+# spectator demotion is picked up on the next vote event.
+func _refresh_voter_total() -> void:
+	if not NetworkManager.is_host:
+		return
+	var total: int = NetworkManager.connected_peer_ids().size() + 1 \
+			- GameManager.spectator_peer_count()
+	if total == _vote_total:
+		return
+	_vote_total = total
+	NetworkManager.send_rematch_voters_to_all(total)
+
 func _update_rematch_ui() -> void:
-	var total: int = NetworkManager.connected_peer_ids().size() + 1
+	_refresh_voter_total()
+	# Client fallback until the host's total lands: everyone connected. It can
+	# overcount (unreplicated from-lobby spectators) for at most the RPC gap.
+	var total: int = _vote_total if _vote_total > 0 \
+			else NetworkManager.connected_peer_ids().size() + 1
 	_game_over_popup.update_votes(_rematch_votes, total, _local_vote)
 
 # Drop to solo free play. For an online host this tears down the server, so the
@@ -1529,13 +1561,10 @@ func _on_game_over_exit() -> void:
 		NetworkManager.reset()
 		get_tree().quit())
 
+# Host-side. Every caller runs _update_rematch_ui first, so _vote_total is
+# freshly recomputed by the time the pool is resolved.
 func _check_rematch_unanimous() -> void:
-	# Host-side: spectators don't have a vote button. spectator_peer_count
-	# already includes the host's peer (1) if the host is itself a spectator,
-	# so a single subtraction here yields the actual voter pool.
-	var total: int = NetworkManager.connected_peer_ids().size() + 1 \
-			- GameManager.spectator_peer_count()
-	match RematchVoteRules.resolve(_rematch_votes, total):
+	match RematchVoteRules.resolve(_rematch_votes, _vote_total):
 		RematchVoteRules.Choice.REMATCH:
 			GameManager.reset_game()
 		RematchVoteRules.Choice.LOBBY:
