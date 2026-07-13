@@ -548,10 +548,16 @@ func _pick_action(ctx: RoleContext) -> void:
 				/ maxf(ctx.self_blade_speed, 0.1)
 		var flight_s: float = release.distance_to(attacking_goal) \
 				/ maxf(sample_speed, 1.0)
+		# The goalie's tracking budget includes this bot's own release-timing
+		# slop (ctx.shot_timing_error_s, worst-case): the hand can fire up to
+		# that late, so a window must survive it to be a window at all. This
+		# is what un-automates the razor lateral beats — the doorstep cut is
+		# only taken when it beats the push by more than the hand's jitter.
 		var sample_goalie: Vector3 = goalie_now if wrister_seal_x != 0.0 \
 				else AIActionScoring.predict_goalie_pos(
 						goalie_now, attacking_goal,
-						SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + shift_s + flight_s,
+						SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + shift_s
+								+ flight_s + ctx.shot_timing_error_s,
 						release)
 		var s: float = AIActionScoring.score_shoot(
 				release, attacking_goal, sample_goalie,
@@ -1491,9 +1497,13 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			ctx.attacking_goal_pos, tracked_goalie)
 	var cand_flight: float = cand_release.distance_to(ctx.attacking_goal_pos) \
 			/ maxf(ctx.self_wrister_shot_speed, 1.0)
+	# Same timing-slop budget as the shoot-now sweep: the final race must
+	# survive this bot's own late-release jitter (ctx.shot_timing_error_s)
+	# or the candidate's future shot is a window the hand can't hit.
 	var cand_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
 			tracked_goalie, ctx.attacking_goal_pos,
-			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight,
+			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight
+					+ ctx.shot_timing_error_s,
 			cand_release)
 	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,

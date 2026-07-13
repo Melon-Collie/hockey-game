@@ -38,11 +38,11 @@ class_name AIShotAim
 # 0 = legacy arc-midpoint behavior, 1 = aim at the post.
 #
 # 0.3 keeps the aim point away from the post (a third of the way from
-# arc midpoint toward the post). Combined with mouse noise, wind-up
-# offset compensation residual, and per-tick aim drift during the
-# 250 ms wrister charge, anything closer to the post (≥ 0.5) produced
-# shots that sailed wide of the net entirely. Bias under 0.3 sacrifices
-# corner placement without enough accuracy gain to justify.
+# arc midpoint toward the post). Combined with the per-release aim error,
+# wind-up offset compensation residual, and aim drift during the wrister
+# charge, anything closer to the post (≥ 0.5) produced shots that sailed
+# wide of the net entirely. Bias under 0.3 sacrifices corner placement
+# without enough accuracy gain to justify.
 const DEFAULT_CORNER_BIAS: float = 0.3
 
 # How far ahead to project the goalie's shadow when goalie_velocity_x
@@ -95,7 +95,7 @@ static func compute_open_net_aim(
 	# Post clearance: never aim outside the line the puck's CENTER can cross
 	# without clipping the pipe (post radius + puck radius inside the post
 	# centerline — GameRules.NET_ENTRY_HALF_WIDTH's derivation). A degenerate
-	# arc lerps the aim onto the post itself, and with zero aim noise the bot
+	# arc lerps the aim onto the post itself, and with zero aim error the bot
 	# rides that exact line into the iron every time.
 	var entry_max: float = net_half_width \
 			- GameRules.NET_POST_RADIUS - GameRules.PUCK_COLLISION_RADIUS

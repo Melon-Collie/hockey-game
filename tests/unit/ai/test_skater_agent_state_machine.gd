@@ -224,9 +224,9 @@ func test_cruise_distance_matches_closed_form() -> void:
 
 
 # ── Slice 2: mouse / aim motion geometry ─────────────────────────────────────
-# Pure motion model — no snapshot, no role state. The output carries no noise
-# (MOUSE_NOISE_STD_M == 0), so the returned point equals the smooth _mouse_pos
-# and exact assertions hold.
+# Pure motion model — no snapshot, no role state. The output is the smooth
+# _mouse_pos (per-tick cursor noise no longer exists; execution error is a
+# per-release sample that never touches raw agents), so exact assertions hold.
 
 func _self_state(facing: Vector2) -> SkaterNetworkState:
 	var st := SkaterNetworkState.new()
@@ -1231,7 +1231,7 @@ func test_pass_aim_leads_from_the_puck_not_the_body() -> void:
 			"a puck 3 m out front shortens the flight and the lead follows")
 
 
-# ── Contest read + live-bot aim noise ────────────────────────────────────────
+# ── Contest read + live-bot execution error ─────────────────────────────────
 
 func test_opponent_within_of_reads_contest_range() -> void:
 	var s := _loose_puck_snap(Vector3(5, 0, 0))
@@ -1249,45 +1249,75 @@ func test_opponent_within_of_reads_contest_range() -> void:
 			"a teammate near the puck is not an opposing contest")
 
 
-func test_aim_noise_off_raw_on_after_profile() -> void:
+func test_aim_error_off_raw_on_after_profile() -> void:
 	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
-	# bot wired through apply_profile gets the per-tier execution noise pair.
-	assert_almost_eq(sm._shot_aim_noise_m, 0.0, 1e-9,
-			"raw agents stay noiseless on shots")
-	assert_almost_eq(sm._pass_aim_noise_m, 0.0, 1e-9,
-			"raw agents stay noiseless on passes")
+	# bot wired through apply_profile gets the per-tier execution error pair
+	# plus the timing/sway humanisers.
+	assert_almost_eq(sm._shot_aim_error_m, 0.0, 1e-9,
+			"raw agents stay error-free on shots")
+	assert_almost_eq(sm._pass_aim_error_m, 0.0, 1e-9,
+			"raw agents stay error-free on passes")
+	assert_almost_eq(sm._shot_timing_error_s, 0.0, 1e-9,
+			"raw agents release tick-perfect")
+	assert_almost_eq(sm._carry_sway_m, 0.0, 1e-9,
+			"raw agents carry rail-steady")
 	sm.apply_profile(BotSkillProfile.hard())
-	assert_almost_eq(sm._shot_aim_noise_m, BotSkillProfile.hard().shot_aim_noise_m, 1e-9,
-			"profiled (live) agents carry the shot aim noise")
-	assert_almost_eq(sm._pass_aim_noise_m, BotSkillProfile.hard().pass_aim_noise_m, 1e-9,
-			"profiled (live) agents carry the pass aim noise")
+	assert_almost_eq(sm._shot_aim_error_m, BotSkillProfile.hard().shot_aim_error_m, 1e-9,
+			"profiled (live) agents carry the shot aim error")
+	assert_almost_eq(sm._pass_aim_error_m, BotSkillProfile.hard().pass_aim_error_m, 1e-9,
+			"profiled (live) agents carry the pass aim error")
+	assert_almost_eq(sm._shot_timing_error_s, BotSkillProfile.hard().shot_timing_error_s, 1e-9,
+			"profiled (live) agents carry the release timing variance")
+	assert_almost_eq(sm._carry_sway_m, BotSkillProfile.hard().carry_sway_m, 1e-9,
+			"profiled (live) agents carry the natural sway amplitude")
 
 
-func test_active_aim_noise_selects_shot_budget_in_shot_states() -> void:
-	# The noise applied to the output cursor is state-dependent: shot releases
-	# (SHOOT_PRESSED / ONE_TIMER_PRESSED / a committed shoot intent still
-	# pre-aiming in CARRY) wobble on the shot budget, everything else on the
-	# general/pass budget.
+func test_press_entry_samples_release_error_per_budget() -> void:
+	# Each press entry draws ONE aim error for the whole release: shots and
+	# one-timers on the (larger) shot budget, passes on the pass budget. The
+	# sample is uniform ± budget over the 2 m aim arm — bound it, and check a
+	# fresh entry re-samples rather than reusing the previous release's error.
 	sm.apply_profile(BotSkillProfile.easy())
-	var shot_noise: float = BotSkillProfile.easy().shot_aim_noise_m
-	var pass_noise: float = BotSkillProfile.easy().pass_aim_noise_m
-	sm._state = Agent.State.SHOOT_PRESSED
-	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
-			"wrister charge wobbles on the shot budget")
-	sm._state = Agent.State.ONE_TIMER_PRESSED
-	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
-			"one-timer fires on the shot budget")
-	sm._state = Agent.State.CARRY
-	sm._intended_action = Agent.State.SHOOT_PRESSED
-	assert_almost_eq(sm._active_aim_noise_m(), shot_noise, 1e-9,
-			"shoot pre-aim converges under the budget it will release on")
-	sm._intended_action = Agent.State.CARRY
-	assert_almost_eq(sm._active_aim_noise_m(), pass_noise, 1e-9,
-			"plain carry deliberation uses the general hand noise")
-	sm._state = Agent.State.PASS_PRESSED
-	assert_almost_eq(sm._active_aim_noise_m(), pass_noise, 1e-9,
-			"a pass release wobbles on the (smaller) pass budget")
-	sm._state = Agent.State.OFF_PUCK
+	var shot_bound: float = BotSkillProfile.easy().shot_aim_error_m \
+			/ Agent.CARRY_BLADE_AIM_FORWARD_M
+	var pass_bound: float = BotSkillProfile.easy().pass_aim_error_m \
+			/ Agent.CARRY_BLADE_AIM_FORWARD_M
+	var samples: Array[float] = []
+	for i: int in 16:
+		sm._set_state(Agent.State.SHOOT_PRESSED)
+		assert_lte(absf(sm._committed_aim_error_rad), shot_bound,
+				"shot error stays inside the shot budget")
+		samples.append(sm._committed_aim_error_rad)
+		sm._set_state(Agent.State.CARRY)
+	var all_equal: bool = true
+	for v: float in samples:
+		if absf(v - samples[0]) > 1e-12:
+			all_equal = false
+	assert_false(all_equal, "each release draws a fresh error sample")
+	sm._set_state(Agent.State.PASS_PRESSED)
+	assert_lte(absf(sm._committed_aim_error_rad), pass_bound,
+			"pass error stays inside the (smaller) pass budget")
+	sm._set_state(Agent.State.CARRY)
+	sm._set_state(Agent.State.ONE_TIMER_PRESSED)
+	assert_lte(absf(sm._committed_aim_error_rad), shot_bound,
+			"a one-timer samples on the shot budget")
+	sm._set_state(Agent.State.OFF_PUCK)
+
+
+func test_shot_entry_samples_release_hold_inside_timing_budget() -> void:
+	# The late-release hold is bounded by the tier's timing variance, and a
+	# raw (zero-variance) agent always releases on the intended tick.
+	assert_eq(sm._sample_release_hold_ticks(), 0,
+			"raw agents never hold the release")
+	sm.apply_profile(BotSkillProfile.normal())
+	var max_ticks: int = int(round(
+			BotSkillProfile.normal().shot_timing_error_s / Agent.MOUSE_TICK_DELTA))
+	for i: int in 16:
+		sm._set_state(Agent.State.SHOOT_PRESSED)
+		assert_between(sm._shoot_release_hold_ticks, 0, max_ticks,
+				"sampled hold stays inside the timing budget")
+		sm._set_state(Agent.State.CARRY)
+	sm._set_state(Agent.State.OFF_PUCK)
 
 
 # ── Cognition gates (difficulty-tiered hockey IQ) ────────────────────────────
