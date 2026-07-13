@@ -572,50 +572,70 @@ func test_shoot_pressed_ignores_rear_pressure() -> void:
 	assert_eq(sm.get_state(), Agent.State.SHOOT_PRESSED, "rear pressure does not cancel the charge")
 
 
-# ── ONE_TIMER_PRESSED (off-puck, fire on contact) ────────────────────────────
+# ── ONE_TIMER_PRESSED (the real slapper one-timer: wind up, settle, release) ─
 
-func test_one_timer_holds_until_puck_arrives() -> void:
+func _inbound_feed_snap(self_pos: Vector3, puck_pos: Vector3,
+		puck_vel: Vector3) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = puck_pos
+	s.puck_state.velocity = puck_vel
+	s.puck_state.carrier_peer_id = -1
+	_add_skater(s, SELF_ID, self_pos)
+	return s
+
+
+func test_one_timer_winds_up_the_slapper_through_the_flight() -> void:
+	# A live feed inbound: tick 0 presses SLAP (the real slapper one-timer —
+	# the diegetic wind-up the controller animates) and holds it while the
+	# feed flies. On attachment (the controller's one-timer window) the button
+	# drops and release_slapper fires.
 	sm._state = Agent.State.ONE_TIMER_PRESSED
-	var s := _self_snap(Vector3.ZERO, false)  # puck not here yet
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
 	var i0 := InputState.new()
 	sm.dispatch(i0, s)
-	assert_true(i0.shoot_pressed, "tick 0 fires the press edge")
-	assert_true(i0.shoot_held, "holds the charge while waiting for the puck")
+	assert_true(i0.slap_pressed, "tick 0 presses the slap charge")
+	assert_true(i0.slap_held, "the wind-up holds while the feed is in flight")
 	assert_eq(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "keeps waiting off-puck")
-	# Puck contacts the blade → release fires.
+	# Puck attaches mid-charge → the window opens → release.
 	s.real_puck_carrier_peer_id = SELF_ID
 	var i1 := InputState.new()
 	sm.dispatch(i1, s)
-	assert_false(i1.shoot_held, "release drops shoot_held on contact")
+	assert_false(i1.slap_held, "release drops slap_held inside the window")
 	assert_eq(sm.get_state(), Agent.State.CARRY)
 
 
-func test_one_timer_safety_bail_after_timeout() -> void:
-	# If the puck never arrives within the press budget, release with no puck
-	# (no shot fires) and drop to the puck-lost state.
+func test_one_timer_bails_when_the_feed_dies() -> void:
+	# No live inbound line and no puck at the zone (picked off / deflected
+	# dead): drop the swing (honest whiff) and get back into the play.
 	sm._state = Agent.State.ONE_TIMER_PRESSED
-	sm._intent_max_wait_ticks = 2
-	var s := _self_snap(Vector3.ZERO, false)
-	var bailed := false
-	for _n in range(5):
-		var i := InputState.new()
-		sm.dispatch(i, s)
-		if sm.get_state() != Agent.State.ONE_TIMER_PRESSED:
-			assert_false(i.shoot_held, "timeout releases without holding")
-			assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
-			bailed = true
-			break
-	assert_true(bailed, "the press times out and bails")
-
-
-func test_one_timer_seeks_moving_anchor() -> void:
-	# Mode-A reception sets a net-forward anchor; the bot skates to it while
-	# holding the shot (vs the FINISHER fast path, which brakes in place at INF).
-	sm._state = Agent.State.ONE_TIMER_PRESSED
-	sm._one_timer_anchor = Vector3(5, 0, 0)  # far to +X
+	var s := _self_snap(Vector3(4, 0, 4), false)   # stationary dead puck
 	var i := InputState.new()
-	sm.dispatch(i, _self_snap(Vector3.ZERO, false))
-	assert_gt(i.move_vector.x, 0.0, "seeks the moving one-timer anchor")
+	sm.dispatch(i, s)
+	assert_false(i.slap_held, "a dead feed releases the swing")
+	assert_eq(sm.get_state(), sm._post_puck_lost_state(s), "back into the play")
+
+
+func test_one_timer_budget_backstop_bails() -> void:
+	# Even with a (pathologically) ever-inbound feed, the press budget bails.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._one_timer_press_tick = Agent.ONE_TIMER_PRESS_MAX_TICKS - 1
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_false(i.slap_held, "budget backstop releases")
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "and exits the press")
+
+
+func test_one_timer_settles_onto_the_live_feed_line() -> void:
+	# The feed crosses 3 m net-side of the waiting shooter: the body seeks the
+	# live-line settle anchor (walking the slapper ZONE onto the pass's real
+	# path) rather than braking on the spot it anticipated.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -3.0), Vector3(16, 0, 0))
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_lt(i.move_vector.y, -0.3, "shuffles toward the actual crossing line")
 
 
 # ── PASS_PRESSED ─────────────────────────────────────────────────────────────
@@ -1472,16 +1492,27 @@ func _feed_snap(puck_pos: Vector3, puck_vel: Vector3) -> WorldSnapshot:
 	return s
 
 
-func test_one_timer_line_anchor_sits_a_blade_reach_off_the_live_line() -> void:
+func test_one_timer_line_anchor_puts_the_slapper_zone_on_the_live_line() -> void:
 	# Team 0 attacks -Z (net straight down -Z from the origin). A hard feed
 	# crossing 1.5 m net-side of the bot along +X: perp foot (0, 0, -1.5),
-	# net_dir (0, 0, -1) → anchor pulled back to (0, 0, -1.5 + blade_reach).
+	# net_dir (0, 0, -1), RH blade side +X → body = crossing point minus the
+	# slapper ZONE's offset (right·1.0 + net_dir·0.4) = (-1.0, 0, -1.1).
 	var snap := _feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
 	var anchor: Vector3 = sm._one_timer_line_anchor(snap, Vector3.ZERO)
 	assert_true(anchor.is_finite(), "a live inbound feed defines a settle anchor")
-	assert_almost_eq(anchor.x, 0.0, 0.01)
-	assert_almost_eq(anchor.z, -1.5 + sm._blade_reach, 0.01,
-			"body backs off the line so the net-extended blade sits ON it")
+	assert_almost_eq(anchor.x, -1.0, 0.01,
+			"body stands a zone-width off the line on the blade side")
+	assert_almost_eq(anchor.z, -1.1, 0.01,
+			"…so the armed slapper ZONE sits exactly ON the line")
+
+
+func test_one_timer_line_anchor_defers_to_a_better_positioned_teammate() -> void:
+	# The feed crosses nearer a teammate — it's theirs; don't get dragged off
+	# the station (mirror of _incoming_pass_to_me's filter).
+	var snap := _feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	_add_skater(snap, TEAMMATE_ID, Vector3(0.2, 0, -1.5))   # right at the crossing
+	assert_false(sm._one_timer_line_anchor(snap, Vector3.ZERO).is_finite(),
+			"a teammate nearer the crossing owns the feed")
 
 
 func test_one_timer_line_anchor_follows_a_shifted_feed() -> void:
