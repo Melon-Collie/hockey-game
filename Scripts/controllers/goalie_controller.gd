@@ -58,8 +58,9 @@ extends Node
 # instead of snapping to it — pushes read like real push-offs, and a quick play
 # can beat the goalie across before they reach speed (realism + a scoring window).
 # The cross-crease desperation push bypasses this (stays instant). Set very high
-# (e.g. 100) to restore the old snap-to-speed behaviour.
-@export var lateral_accel: float = 14.0
+# (e.g. 100) to restore the old snap-to-speed behaviour. Default sourced from
+# GameRules so AIActionScoring's slide prediction stays in lockstep.
+@export var lateral_accel: float = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2
 @export var lateral_threshold: float = 0.3
 @export var max_facing_angle: float = 70.0
 # Head tracking (realism audit F9): the head yaws toward the RAW puck in every
