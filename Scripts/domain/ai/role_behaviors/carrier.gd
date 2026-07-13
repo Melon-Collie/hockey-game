@@ -1195,31 +1195,50 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			self_pos, candidate, _scratch_opponents_path)
 	if lane <= 0.0:
 		return -INF
-	# Goalie at the candidate-shot's puck arrival: react-then-slide from where he
-	# ACTUALLY is toward the candidate's arc-square, over everything the play
-	# gives him — the whole carry (he tracks the puck continuously), the charge
-	# lookahead, and the shot's flight. Same speed-bounded model as the shoot-now
-	# scoring above, so a carry candidate and the shot taken on arriving at it
-	# read the same keeper:
-	#   - Any normal-pace step or long route: the budget covers the arc shift
-	#     many times over, so he arrives square and set — identical to the old
-	#     infinite-speed goalie_squared_pos read (and the "ever-receding one
-	#     more cut" bug that read was built against stays dead: it came from
-	#     predicting over only the 0.135 s charge window, not the full route).
-	#   - A fast cut ACROSS a wide-out keeper in tight is an arc race his
-	#     t_push genuinely loses — the candidate prices the "make him move and
-	#     shoot" window, which is what makes a 1v1 against an aggressive
-	#     challenge terminate in a lateral drive + shot instead of a stalled
-	#     carry (the infinite-speed square planted him covered mid-cut, so no
-	#     cut could ever out-score standing still).
+	# The candidate's shot is taken ARRIVING AT PACE, not from a dead stop —
+	# carry steps are skated at speed (the arrival brake deliberately skips
+	# carry waypoints), so the shot on arrival is the same moving-release
+	# wrister the shoot-now eval prices, and the candidate must read the same
+	# physics. Two-phase keeper:
+	#   1. TRACK: he follows the whole carry — full budget toward the
+	#      candidate's arc-square (generous to him: assumes he never falls
+	#      behind en route).
+	#   2. FINAL RACE: from that square he races the wind-up + flight against
+	#      a release still sliding at the arrival speed — the identical final
+	#      race the top-level shoot-now scoring runs, which a hard lateral cut
+	#      in tight genuinely wins (his reaction + push ramp cover ~0.2 m in
+	#      the ~0.28 s the shot gives him).
+	# Phase 2 is what lets a STANDSTILL 1v1 price "skate the cut, then fire"
+	# as one candidate: under the old static-release read, every one-step spot
+	# against a set keeper honestly scored ~0 (he arrives square over any
+	# carry), so a flat-footed carrier had no gradient toward building the
+	# lateral speed that opens the window — it dithered instead of winding up
+	# the cut. The ever-receding-cut pathology stays dead: the keeper is
+	# assumed SQUARE at every candidate before the final race, so each further
+	# cut prices only the honest last-quarter-second window, which shrinks as
+	# the angle forecloses.
 	# Unsettled stays 0 — the shortfall is expressed positionally, as everywhere.
-	var cand_flight: float = candidate.distance_to(ctx.attacking_goal_pos) \
+	var to_cand: Vector3 = candidate - self_pos
+	to_cand.y = 0.0
+	var cand_dist: float = to_cand.length()
+	var arrive_vel: Vector3 = Vector3.ZERO
+	if cand_dist > 0.001 and local_time > 0.001:
+		# Arrival pace consistent with time_to_arrive's constant-effective-speed
+		# travel model, capped at this bot's real top end.
+		var arrive_speed: float = minf(cand_dist / local_time, ctx.self_max_speed)
+		arrive_vel = to_cand * (arrive_speed / cand_dist)
+	var tracked_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+			_goalie_now(ctx), ctx.attacking_goal_pos, local_time, candidate)
+	var cand_release: Vector3 = AIActionScoring.release_ahead_of_goalie(
+			candidate + arrive_vel * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
+			ctx.attacking_goal_pos, tracked_goalie)
+	var cand_flight: float = cand_release.distance_to(ctx.attacking_goal_pos) \
 			/ maxf(ctx.self_wrister_shot_speed, 1.0)
 	var cand_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos,
-			local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight,
-			candidate)
-	var dest_score: float = _score_at(ctx, candidate, self_pos,
+			tracked_goalie, ctx.attacking_goal_pos,
+			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight,
+			cand_release)
+	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
