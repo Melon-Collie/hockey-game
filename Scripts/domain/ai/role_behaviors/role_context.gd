@@ -76,12 +76,14 @@ var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # wider opening for the same chance, so spread shapes shot selection too.
 # 0 for an error-free (test/raw) agent.
 var self_aim_spread_rad: float = 0.0
-# This bot's shot release-timing variance (max seconds LATE, worst-case —
-# BotSkillProfile.shot_timing_error_s). The carrier's own shot evals hand the
-# goalie this much extra react-then-push time, so a window that only exists
-# for less than the hand's own timing slop is never taken — the honest
-# counterpart of the aim spread, on the WHEN axis instead of the WHERE.
-# 0 for a tick-perfect (test/raw) agent.
+# This bot's shot release-timing variance (max seconds LATE —
+# BotSkillProfile.shot_timing_error_s; execution samples uniform [0, max]).
+# The carrier's own shot evals hand the goalie the EXPECTED lateness
+# (× 0.5, the mean of that draw), scoring each shot at its median release:
+# a window thinner than the median slop zeroes out through the hole
+# geometry, one around it is attempted and converts only when the sampled
+# delay lands early enough — the honest counterpart of the aim spread, on
+# the WHEN axis instead of the WHERE. 0 for a tick-perfect (test/raw) agent.
 var shot_timing_error_s: float = 0.0
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # This bot's body-check delivery (Size + Physical) and current stagger, so the

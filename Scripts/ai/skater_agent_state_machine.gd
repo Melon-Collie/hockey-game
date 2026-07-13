@@ -565,10 +565,13 @@ var _committed_aim_error_rad: float = 0.0
 # Motor timing variance on the SHOT release (max seconds late, from
 # BotSkillProfile.shot_timing_error_s). Each SHOOT_PRESSED entry samples a
 # hold in [0, max] ticks; the release fires that much after the charge
-# completes. The carrier's shot evals budget the same max into the goalie's
-# tracking time (RoleContext.shot_timing_error_s), so the bot never takes a
-# window thinner than its own slop — and the executed late release always
-# lands inside the budgeted window.
+# completes. The carrier's shot evals budget the EXPECTED lateness (max/2,
+# via RoleContext.shot_timing_error_s) into the goalie's tracking time, so
+# a shot is scored at its median release: windows around the hand's slop
+# are still attempted and the sampled delay decides them — an early draw
+# beats the push, a late one meets a square goalie. Deliberately NOT the
+# worst case, which would prune every thin window and read as the bot
+# swallowing the puck instead of going for the doorstep beat.
 var _shot_timing_error_s: float = 0.0
 var _shoot_release_hold_ticks: int = 0
 # Natural carry-sway amplitude (m, from BotSkillProfile.carry_sway_m; see the
@@ -2728,9 +2731,11 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS + _shoot_release_hold_ticks:
 		# Still charging (or hanging on the sampled late-release hold —
-		# the motor timing variance a human release carries; the shot
-		# evals budgeted the full variance into the goalie's tracking
-		# time, so a max-late release still fires inside its window).
+		# the motor timing variance a human release carries). The shot
+		# was scored at the EXPECTED lateness, so a draw on the late half
+		# of the hold can genuinely lose the race it committed to — the
+		# goalie arrives square and robs him. That's the design: thin
+		# windows get attempted and convert only sometimes.
 		input.shoot_held = true
 		_shoot_charge_tick += 1
 	else:
@@ -3920,9 +3925,12 @@ func _sample_aim_error_rad(budget_m: float) -> float:
 
 # Sample this shot's late-release hold (ticks past the completed charge) from
 # the per-tier motor timing variance. Uniform in [0, max] — the eval budgeted
-# the full max into the goalie's tracking time, so every sampled hold still
-# releases inside a window the score said survives it. Zero variance (raw
-# test agents / perfect baseline) returns 0 without advancing the RNG.
+# the MEAN (max/2) into the goalie's tracking time, so the score is the
+# median outcome and the two halves of this draw decide the thin windows:
+# below the mean beats the race the score priced, above it hands the goalie
+# more time than the score conceded and the shot can get robbed. Zero
+# variance (raw test agents / perfect baseline) returns 0 without advancing
+# the RNG.
 func _sample_release_hold_ticks() -> int:
 	if _shot_timing_error_s == 0.0:
 		return 0
