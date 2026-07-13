@@ -1876,3 +1876,36 @@ func test_covered_oz_carrier_cycles_out_instead_of_crashing() -> void:
 			"nothing worth firing — keep possession")
 	assert_gt(c.last_carry_anchor.z, self_pos.z + 1.0,
 			"the carry pulls up out of the sealed corner (cycle), not into the crease")
+
+
+# ─── behind-the-net: post walkouts ────────────────────────────────────────────
+
+func test_oz_carrier_behind_the_net_walks_out_around_a_post() -> void:
+	# Retrieval spot behind the attacking cage: every ordinary candidate's
+	# straight route crosses the frame (net-path prune), the possession floor
+	# is withheld behind the line, so the post WALKOUT is the play — carry it
+	# out front around a post instead of grinding on the mesh.
+	var self_pos := Vector3(0.4, 0.0, OPP_NET_Z - 1.9)   # behind the -Z cage
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"nothing to fire from behind the cage — carry it out")
+	assert_gt(absf(c.last_carry_anchor.x), GameRules.NET_HALF_WIDTH,
+			"the anchor rounds a post")
+	assert_gt(c.last_carry_anchor.z, OPP_NET_Z,
+			"…onto the rink side of the goal line")
+
+
+func test_dz_carrier_behind_own_net_walks_out_around_a_post() -> void:
+	# The DZ behind-the-net carry (the regroup they like taking): the way back
+	# into the play is the same post walkout — wall exits and the slot anchor
+	# all chord through the own cage and prune.
+	var self_pos := Vector3(0.4, 0.0, OUR_NET_Z + 1.9)   # behind our +Z cage
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"a clean regroup keeps the puck")
+	assert_gt(absf(c.last_carry_anchor.x), GameRules.NET_HALF_WIDTH,
+			"the anchor rounds a post")
+	assert_lt(c.last_carry_anchor.z, OUR_NET_Z,
+			"…out in front of our own goal line")

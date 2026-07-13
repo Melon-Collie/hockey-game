@@ -2350,6 +2350,85 @@ static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
 	return false
 
 
+# ── The net as a CARRY / BLADE obstacle ──────────────────────────────────────
+# The cage is a solid frame in the middle of the behind-the-net game, and the
+# carry model has to see it the same way the body steering already does
+# (AISteering._net_detour rounds the post). Two consumers:
+#   - carry_path_blocked_by_net — a carried traverse (body + puck) cannot pass
+#     through the cage, so a carry candidate whose straight route crosses it
+#     is unreachable as priced (the post-walkout candidates are the legal
+#     routes out from behind the line; see AIRoleCarrier._best_carry).
+#   - net_safe_blade_target — the carry cursor must never ask the blade IK to
+#     reach THROUGH the frame: stick-on-net contact dislodges the carried
+#     puck (the behind-the-net giveaway), so a crossing chord is swung to the
+#     tangent bearing around the nearer post — the blade-level mirror of the
+#     body's net detour.
+# Margins are physical half-widths of the thing traversing: a carried body +
+# puck for the path, a blade length of standoff for the cursor (same standard
+# as the boards clamp).
+const CARRY_NET_CLEAR_MARGIN_M: float = 0.5
+const BLADE_NET_CLEAR_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
+
+
+# True iff a carried traverse from → to would pass through either cage
+# (frame AABB inflated by the carry margin). From-inside counts as blocked —
+# the slab test's t_min = 0 is inside the box — which is correct: a body
+# standing against the mesh can't carry through it.
+static func carry_path_blocked_by_net(from: Vector3, to: Vector3) -> bool:
+	var hw: float = GameRules.NET_BACK_HALF_WIDTH + CARRY_NET_CLEAR_MARGIN_M
+	var z_front: float = GameRules.GOAL_LINE_Z - CARRY_NET_CLEAR_MARGIN_M
+	var z_back: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH + CARRY_NET_CLEAR_MARGIN_M
+	if _segment_crosses_aabb_xz(from.x, from.z, to.x, to.z, -hw, hw, z_front, z_back):
+		return true
+	return _segment_crosses_aabb_xz(from.x, from.z, to.x, to.z, -hw, hw, -z_back, -z_front)
+
+
+# Redirect a blade-aim target whose chord from `from` crosses a net frame:
+# rotate the aim to the frame's tangent bearing around the nearer post (the
+# occluded bearing interval is bounded by the inflated frame's corner
+# bearings; the chord crosses, so the original bearing lies inside it — clamp
+# to the nearer edge plus a small step of daylight). Distance from `from` is
+# preserved, y is flattened (blade targets live on the ice plane). A
+# non-crossing target returns unchanged. Degenerate case — `from` itself
+# inside the inflated frame region (pinned against the mesh): no tangent
+# exists, so slide the aim laterally toward the nearer post-side exit.
+static func net_safe_blade_target(from: Vector3, target: Vector3) -> Vector3:
+	var hw: float = GameRules.NET_BACK_HALF_WIDTH + BLADE_NET_CLEAR_MARGIN_M
+	var z_front: float = GameRules.GOAL_LINE_Z - BLADE_NET_CLEAR_MARGIN_M
+	var z_back: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH + BLADE_NET_CLEAR_MARGIN_M
+	var box_z0: float
+	var box_z1: float
+	if _segment_crosses_aabb_xz(from.x, from.z, target.x, target.z, -hw, hw, z_front, z_back):
+		box_z0 = z_front
+		box_z1 = z_back
+	elif _segment_crosses_aabb_xz(from.x, from.z, target.x, target.z, -hw, hw, -z_back, -z_front):
+		box_z0 = -z_back
+		box_z1 = -z_front
+	else:
+		return target
+	var to_target := Vector2(target.x - from.x, target.z - from.z)
+	var dist: float = to_target.length()
+	if dist < 0.001:
+		return target
+	if from.x > -hw and from.x < hw and from.z > box_z0 and from.z < box_z1:
+		var side: float = signf(from.x) if from.x != 0.0 else 1.0
+		return Vector3(from.x + side * dist, 0.0, from.z)
+	var target_ang: float = atan2(to_target.x, to_target.y)
+	var min_rel: float = INF
+	var max_rel: float = -INF
+	for corner_x: float in [-hw, hw]:
+		for corner_z: float in [box_z0, box_z1]:
+			var rel: float = wrapf(
+					atan2(corner_x - from.x, corner_z - from.z) - target_ang, -PI, PI)
+			min_rel = minf(min_rel, rel)
+			max_rel = maxf(max_rel, rel)
+	# The chord crosses, so 0 ∈ [min_rel, max_rel]. Swing to the nearer edge,
+	# plus a small step of daylight past the corner.
+	var swing: float = min_rel if -min_rel <= max_rel else max_rel
+	var out_ang: float = target_ang + swing + signf(swing) * 0.05
+	return Vector3(from.x + sin(out_ang) * dist, 0.0, from.z + cos(out_ang) * dist)
+
+
 # Own-DZ slot danger zone. True iff the pass segment crosses the
 # rectangle in front of OUR net — the high-danger area where a
 # deflected/intercepted pass becomes a goal against. Asymmetric to

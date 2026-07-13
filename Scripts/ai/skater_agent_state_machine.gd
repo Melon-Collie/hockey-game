@@ -3736,7 +3736,13 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 			Vector2(target.x, target.z), CARRY_BLADE_WALL_MARGIN_M)
 	target.x = on_ice.x
 	target.z = on_ice.y
-	return target
+	# ...and never THROUGH a net frame (the same standard, cage edition): a
+	# behind-the-net carrier's forward/route aim chords straight through the
+	# cage, the blade IK chases it into the mesh, and stick-on-net contact
+	# dislodges the carried puck — the behind-the-net giveaway. The chord is
+	# swung around the nearer post — the blade-level mirror of the body's
+	# AISteering._net_detour.
+	return AIActionScoring.net_safe_blade_target(self_pos, target)
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.

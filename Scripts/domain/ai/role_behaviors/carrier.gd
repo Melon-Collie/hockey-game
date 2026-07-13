@@ -57,7 +57,11 @@ const FIRE_MIN_VALUE: float = 0.02
 # every shot covered, the compete's gradient becomes safety × delay-decay ×
 # turnover cost, so a pinned carrier CYCLES to safe ice or a safe teammate
 # instead of crashing a worthless drive into the crease, and any genuinely
-# open look (≫ this) still wins outright.
+# open look (≫ this) still wins outright. RINK SIDE of the goal line only:
+# behind the cage a spot can't generate a chance without first coming out, so
+# the possession value there belongs to the POST WALKOUT (and the behind-net
+# feed, whose receiver is floored out front), not the spot — a flat floor
+# behind the line anchored carriers in the cage's shadow.
 const OZ_POSSESSION_VALUE: float = 0.025
 
 # ── Release-offset sampling (shoot-now eval) ─────────────────────────────────
@@ -190,6 +194,20 @@ const OZ_RECEIVE_LINE_BUFFER_M: float = GameRules.DEFAULT_STICK_LENGTH_M + 0.7
 const CARRY_SEARCH_STEP_M: float = 3.0
 # Carry candidates are clamped inside the goal-line buffer and the
 # rink-X inset — both defined on AIRoleHelpers (single source).
+
+# Post-walkout candidates — the two legal carries out from BEHIND a goal
+# line, one just outside each post, a step onto the rink side of the line.
+# Generated only while the carrier's body is behind either goal line: every
+# other candidate's straight route crosses the cage there (pruned by the
+# net-path check), so without these a behind-the-net carrier had no
+# representable way out and ground on the frame. Scored by the same EV
+# pipeline as everything else — in the OZ the possession floor gives the
+# walkout its value (behind the line every shot is honestly 0) and the two
+# sides compete on safety, which is also the natural wraparound setup (the
+# goalie's RVH/VH post seals are the counter). The lateral clearance is
+# physical: post half-span + a carried body's half-width + blade slop.
+const WALKOUT_POST_CLEARANCE_M: float = 0.9
+const WALKOUT_FRONT_M: float = 0.7
 
 # Zone-exit "wheel" routes — two extra long-range carry candidates up
 # each boards lane to just past our own blue line, generated only while
@@ -1304,10 +1322,14 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 #     = direction toward slot
 #   - The OZ slot anchor (long-range "drive at slot")
 #   - Two zone-exit wall routes when in our own half (see CARRY_EXIT_*)
+#   - Two post walkouts when behind either goal line (see WALKOUT_*)
+#   - The objective-directed evasion seam
 #
 # Each movement candidate scored uniformly via _score_move_candidate;
 # time uses momentum-aware effective speed (backward candidates
-# self-discount via longer arrival).
+# self-discount via longer arrival), and a candidate whose straight
+# route crosses a net frame prunes (the walkouts are the exempt,
+# around-the-post routes).
 #
 # `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
 # stand-still's shot branch shares it verbatim — see the stand-still block.
@@ -1394,6 +1416,21 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		if exit_left_total > best_score:
 			best_score = exit_left_total
 			best_pos = exit_left
+
+	# Post walkouts — see WALKOUT_* doc: the only representable carries out
+	# from behind a goal line (everything else's straight route crosses the
+	# cage and prunes). One candidate outside each post; EV picks the side.
+	if absf(self_pos.z) > GameRules.GOAL_LINE_Z:
+		var behind_sign: float = signf(self_pos.z)
+		var walk_z: float = behind_sign * (GameRules.GOAL_LINE_Z - WALKOUT_FRONT_M)
+		var walk_x: float = GameRules.NET_HALF_WIDTH + WALKOUT_POST_CLEARANCE_M
+		for side: float in [-1.0, 1.0]:
+			var walkout := Vector3(side * walk_x, 0.0, walk_z)
+			var walk_total: float = _score_move_candidate(
+					ctx, walkout, our_goalie, true)
+			if walk_total > best_score:
+				best_score = walk_total
+				best_pos = walkout
 
 	# Evasion seam — the reachable-set escape, in its objective-DIRECTED form
 	# (best_evade_point_toward, computed once per re-eval in _pick_action): the
@@ -1540,7 +1577,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 # slot's turnover cost. Cost self-localizes: ~0 driving into the OZ, large when the
 # route drags the puck through our own slot.
 func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
-		our_goalie: Vector3) -> float:
+		our_goalie: Vector3, is_post_walkout: bool = false) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# One-way valve: once the puck is in the offensive zone, don't carry it back
 	# out. Establishing the zone is worth keeping — a carry that surrenders it (a
@@ -1556,6 +1593,14 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	if AIActionScoring.in_offensive_zone(self_pos, ctx.attacking_goal_pos) \
 			and not AIActionScoring.in_offensive_zone(
 					candidate, ctx.attacking_goal_pos, OZ_RETREAT_LINE_BUFFER_M):
+		return -INF
+	# The cage is a wall: a candidate whose straight route runs through either
+	# net frame is unreachable as priced (the time/lane/safety math below all
+	# assume the straight traverse). The designated POST-WALKOUT candidates are
+	# exempt — they're constructed to be reached around the post (the steering
+	# net-detour walks the corner), which the straight-segment test can't see.
+	if not is_post_walkout \
+			and AIActionScoring.carry_path_blocked_by_net(self_pos, candidate):
 		return -INF
 	var local_time: float = AIActionScoring.time_to_arrive(
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed)
@@ -1696,8 +1741,12 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		# (see OZ_POSSESSION_VALUE): when the whole zone reads shot-dead (set
 		# goalie, collapsed box), the caller's safety / decay / turnover terms
 		# become the gradient and the carrier cycles instead of crashing the
-		# only microscopically-positive spot — the crease.
-		return maxf(shoot_s, OZ_POSSESSION_VALUE)
+		# only microscopically-positive spot — the crease. Behind the goal
+		# line the floor is withheld (see the const doc): the walkout and the
+		# behind-net feed carry the possession's value out front.
+		if absf(pos.z) < GameRules.GOAL_LINE_Z:
+			return maxf(shoot_s, OZ_POSSESSION_VALUE)
+		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
 	var realization: float = AIActionScoring.potential_realization_discount(
