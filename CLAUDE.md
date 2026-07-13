@@ -26,7 +26,7 @@ Run the suite after touching domain code and report results. The **game itself**
 
 A 3v3 hockey game built in Godot 4.6.2 (GDScript, 3D). Online multiplayer — one player per machine, each with their own camera and local simulation. Prioritizes feel over realism: deep stickhandling, multiple shot types, satisfying puck physics.
 
-**Puck RigidBody3D has Continuous CD enabled.** Do not suggest enabling CCD as a fix for puck tunnelling — it is already on. Puck escaping the rink is more likely a velocity/reflection compounding bug or a Jolt edge case.
+**Puck RigidBody3D has Continuous CD enabled.** Do not suggest enabling CCD as a fix for puck tunnelling — it is already on. The rink also has an analytic containment backstop (`Puck._integrate_forces` clamps any escaped center back inside `GameRules.clamp_to_rink_inner` and reflects the outward velocity via `PuckCollisionRules.board_rescue_velocity`), so a puck outside the rink means either a >2 m single-tick teleport or a bug in that backstop — check the `[puck-oob]` whistle diagnostics.
 
 ## How It Plays
 

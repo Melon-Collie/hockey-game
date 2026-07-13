@@ -100,6 +100,19 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # this, raise COLLISION_OVERGLASS_TOP to keep the margin.
 @export var max_height: float = 3.0
 
+# Analytic rink-containment backstop (see _integrate_forces). The boards'
+# trimesh + CCD contains the puck almost always, but a sustained wall slide can
+# still squeeze the center past a facet plane, and a zero-thickness triangle
+# then depenetrates it OUTWARD — the "puck leaves the arena" escape. Trigger:
+# center past the inner (kickplate-lip) boundary by more than float noise —
+# the disc is then embedded a full radius, provably beyond any contact slop.
+const CONTAINMENT_EPSILON: float = 0.001
+# An escape in progress is caught on its first tick, ≤ max_speed/120 ≈ 0.32 m
+# past the boundary. Anything further out in a single step is a deliberate
+# teleport (drill managers stash the puck at (100, 100) between attempts) and
+# must be left alone — the drill owns puck placement.
+const CONTAINMENT_TELEPORT_SKIP: float = 2.0
+
 # ── Save-rebound control (host-authoritative) ─────────────────────────────────
 # A real goalie controls rebounds instead of caroming every shot back into the
 # slot. On a controlled save (chest/glove catch at any speed, or an easy pad/
@@ -696,6 +709,34 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		state.transform.origin.y = ice_height + max_height
 		if state.linear_velocity.y > 0.0:
 			state.linear_velocity.y = 0.0
+	# Analytic rink-containment backstop. The rink boundary is exactly known
+	# (rounded rectangle — the same GameRules.clamp_to_rink_inner the boards'
+	# collider is built on and that holds skaters in), so a center past it is
+	# provably an escape the trimesh failed to stop: put the disc back flush
+	# against the boards and reflect any outward velocity with the boards'
+	# restitution (PuckCollisionRules.board_rescue_velocity — the same
+	# reflection the AI trajectory model predicts), so a rescued rim reads as
+	# a normal carom. Deliberate far teleports are skipped (see
+	# CONTAINMENT_TELEPORT_SKIP). Pure value-type math, no allocation on the
+	# per-tick path, and deterministic — client prediction and reconcile
+	# replay resolve a rescue identically to the host.
+	var xz := Vector2(state.transform.origin.x, state.transform.origin.z)
+	var boundary_xz: Vector2 = GameRules.clamp_to_rink_inner(xz)
+	var escape_depth: float = xz.distance_to(boundary_xz)
+	if escape_depth > CONTAINMENT_EPSILON and escape_depth < CONTAINMENT_TELEPORT_SKIP:
+		var inside_xz: Vector2 = GameRules.clamp_to_rink_inner(
+				xz, GameRules.PUCK_COLLISION_RADIUS)
+		state.transform.origin.x = inside_xz.x
+		state.transform.origin.z = inside_xz.y
+		var rescued: Vector3 = PuckCollisionRules.board_rescue_velocity(
+				state.linear_velocity, (xz - boundary_xz) / escape_depth,
+				GameRules.PUCK_BOARD_BOUNCE)
+		if rescued != state.linear_velocity:
+			state.linear_velocity = rescued
+			# Mirror the contact path's board-hit feedback so the rescue
+			# sounds/looks like the bounce it stands in for.
+			if carrier == null and rescued.length() >= 1.0:
+				puck_hit_boards.emit()
 	if _clamp_at_goal_line:
 		var z: float = state.transform.origin.z
 		var goal_z: float = GameRules.GOAL_LINE_Z

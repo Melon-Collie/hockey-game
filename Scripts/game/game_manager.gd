@@ -527,8 +527,11 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
 			# Escape diagnostics — every whistle here means the puck got past
-			# collision that should have contained it. Rare event, so the log
-			# string build is fine; playtest logs pinpoint where/how it got out.
+			# BOTH the boards' collision AND the analytic containment backstop
+			# in Puck._integrate_forces (which rescues any center < 2 m past
+			# the boundary), so it should now be near-unreachable outside a
+			# far teleport. Rare event, so the log string build is fine;
+			# playtest logs pinpoint where/how it got out.
 			print("[puck-oob] whistle: pos=%.2v vel=%.1v height=%.2f xz_outside=%.3f" % [
 					pos, puck.linear_velocity, pos.y - puck.ice_height, xz_outside])
 			# Use the boundary projection — how far past the boards the puck
