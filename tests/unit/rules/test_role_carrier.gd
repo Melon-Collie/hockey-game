@@ -1140,6 +1140,37 @@ func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
 			"a staging cross-seam finisher gives a positive developing feed")
 
 
+func test_developing_feed_invisible_without_the_cognition_gate() -> void:
+	# Same staging finisher the test above values positively — but a tier that
+	# doesn't hold for developing plays (Easy) sees nothing: it plays only what
+	# exists right now.
+	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	ctx.holds_for_developing_feeds = false
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_eq(carrier._best_developing_feed(ctx), 0.0,
+			"the developing play is invisible to a tier without the hold read")
+
+
+func test_goalie_motion_blind_reads_the_keeper_as_always_set() -> void:
+	# Goalie parked well off the shooter's arc with a short release window —
+	# the re-square race is live, so a motion-reading bot sees a positive
+	# unsettled window (the cross-seam one-timer value). A motion-blind tier
+	# models him as always set: the same read returns exactly 0.
+	var self_pos := Vector3(0.0, 0.0, -18.0)
+	var ctx := _make_ctx(self_pos)
+	var gs := GoalieNetworkState.new()
+	gs.position_x = -2.5                          # ~2.5 m off the square line
+	gs.position_z = OPP_NET_Z + 1.2
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = gs
+	var carrier := AIRoleCarrier.new()
+	assert_gt(carrier._goalie_unsettled_at(ctx, 0.2, self_pos), 0.0,
+			"an off-square keeper on a short release reads unsettled")
+	ctx.reads_goalie_motion = false
+	assert_eq(carrier._goalie_unsettled_at(ctx, 0.2, self_pos), 0.0,
+			"a motion-blind tier reads the same keeper as set")
+
+
 func test_developing_feed_zero_for_ghosted_finisher() -> void:
 	# An offside (ghosted) finisher can't legally receive — the live pass
 	# scoring skips ghosts, so the hold must too, or the carrier waits

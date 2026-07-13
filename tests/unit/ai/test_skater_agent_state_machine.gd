@@ -1247,6 +1247,49 @@ func test_active_aim_noise_selects_shot_budget_in_shot_states() -> void:
 	sm._state = Agent.State.OFF_PUCK
 
 
+# ── Cognition gates (difficulty-tiered hockey IQ) ────────────────────────────
+
+func test_apply_profile_sets_cognition_gates() -> void:
+	# Raw agents keep the perfect-bot defaults (all reads on).
+	assert_true(sm._reads_goalie_motion, "raw agent reads goalie motion")
+	assert_true(sm._holds_for_developing_feeds, "raw agent holds for developing plays")
+	assert_true(sm._angles_the_chase, "raw agent angles its chase")
+	sm.apply_profile(BotSkillProfile.easy())
+	assert_false(sm._reads_goalie_motion, "Easy is goalie-motion blind")
+	assert_false(sm._holds_for_developing_feeds, "Easy plays only what exists now")
+	assert_false(sm._angles_the_chase, "Easy chases straight-line")
+	sm.apply_profile(BotSkillProfile.normal())
+	assert_false(sm._reads_goalie_motion, "Normal is goalie-motion blind too")
+	assert_true(sm._holds_for_developing_feeds, "Normal keeps the developing-feed hold")
+	assert_true(sm._angles_the_chase, "Normal keeps the chase angling")
+
+
+func test_motion_blind_aim_ignores_the_goalie_slide() -> void:
+	# Goalie on the shooter's arc but sliding hard +x: a motion-reading bot
+	# projects the shadow along the slide and aims into the recovery arc
+	# ("across the grain"); a motion-blind bot's aim is EXACTLY the aim
+	# against the same goalie standing still — it shoots at where he IS.
+	var s := WorldSnapshot.new()
+	var gs := GoalieNetworkState.new()
+	gs.position_x = 0.0
+	gs.position_z = -GameRules.GOAL_LINE_Z + 1.2   # out on the challenge arc
+	gs.velocity_x = 4.0                            # committed slide
+	s.goalie_states[1] = gs                        # opp team (self is team 0)
+	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 10.0)
+
+	var aim_reading: Vector3 = sm._shot_aim_point(s, self_pos)
+	sm._reads_goalie_motion = false
+	var aim_blind: Vector3 = sm._shot_aim_point(s, self_pos)
+	sm._reads_goalie_motion = true
+	gs.velocity_x = 0.0
+	var aim_still: Vector3 = sm._shot_aim_point(s, self_pos)
+
+	assert_almost_eq(aim_blind.x, aim_still.x, 1e-6,
+			"blind aim equals the still-goalie aim — where he IS, not where he'll be")
+	assert_gt(absf(aim_reading.x - aim_blind.x), 0.05,
+			"the motion read genuinely moves the aim into the recovery arc")
+
+
 # ── Protect-side turn (carry arc direction) ──────────────────────────────────
 # A carrier's turn-around picks which way the puck sweeps: shortest by default,
 # the long way when the short sweep drags the puck through a defender's poke

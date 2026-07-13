@@ -115,6 +115,25 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 			"Hard keeps the pre-split flat wobble on both release types")
 
 
+func test_cognition_gates_close_down_the_tiers() -> void:
+	# Hard has the full hockey IQ. Normal loses ONLY the goalie-motion read —
+	# the scoring cut through cognition rather than wobble. Easy loses all
+	# three: motion-blind, plays only what exists, straight-line chase.
+	var hard: BotSkillProfile = BotSkillProfile.hard()
+	assert_true(hard.reads_goalie_motion, "Hard shoots across the grain")
+	assert_true(hard.holds_for_developing_feeds, "Hard holds for developing plays")
+	assert_true(hard.angles_the_chase, "Hard angles its chase to the inside")
+	var normal: BotSkillProfile = BotSkillProfile.normal()
+	assert_false(normal.reads_goalie_motion, "Normal is goalie-motion blind")
+	assert_true(normal.holds_for_developing_feeds,
+			"Normal still holds for developing plays")
+	assert_true(normal.angles_the_chase, "Normal still angles its chase")
+	var easy: BotSkillProfile = BotSkillProfile.easy()
+	assert_false(easy.reads_goalie_motion, "Easy is goalie-motion blind")
+	assert_false(easy.holds_for_developing_feeds, "Easy plays only what exists now")
+	assert_false(easy.angles_the_chase, "Easy chases in a straight line")
+
+
 func test_pass_wobble_never_exceeds_shot_wobble() -> void:
 	# The split's whole point: completed passes are fun to play against, every
 	# shot going in is not — so a tier may never spray its passes harder than

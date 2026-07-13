@@ -1695,7 +1695,12 @@ func _forward_clearance_at(ctx: RoleContext, pos: Vector3, speed: float) -> floa
 #     outlet is CREATING out-values everything available right now.
 #
 # Returns 0 if nothing is developing.
+# Cognition gate: a tier that doesn't hold for developing plays
+# (ctx.holds_for_developing_feeds false) sees nothing here by definition —
+# it plays only what exists right now.
 func _best_developing_feed(ctx: RoleContext) -> float:
+	if not ctx.holds_for_developing_feeds:
+		return 0.0
 	if ctx.team_brain == null:
 		return 0.0
 	var self_pos: Vector3 = ctx.self_pos
@@ -1868,8 +1873,14 @@ func _predict_goalie_at(ctx: RoleContext, release_time_s: float,
 # Companion to _predict_goalie_at: how unsettled [0,1] the goalie is at that same
 # release, threaded into score_shoot so a shot catching the goalie mid-slide
 # (cross-seam one-timer) rates higher than the same shot at a set goalie.
+# Cognition gate: a goalie-motion-blind tier (ctx.reads_goalie_motion false)
+# models the keeper as always set — the re-square race this term wins is
+# invisible to it, so it stops manufacturing cross-crease chaos on purpose.
+# The evaluator itself is untouched; the bot just loses the input.
 func _goalie_unsettled_at(ctx: RoleContext, release_time_s: float,
 		puck_pos_at_release: Vector3) -> float:
+	if not ctx.reads_goalie_motion:
+		return 0.0
 	return AIActionScoring.goalie_unsettled(
 			_goalie_now(ctx), ctx.attacking_goal_pos,
 			release_time_s, puck_pos_at_release)

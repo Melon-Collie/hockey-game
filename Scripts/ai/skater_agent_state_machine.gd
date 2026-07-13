@@ -913,6 +913,15 @@ var _defensive_anticipation_scale: float = 1.0
 # Post-possession settle beat (seconds) forwarded to the carrier via
 # RoleContext.carry_settle_delay_s. 0.0 = fire the tick the compete says so.
 var _carry_settle_delay_s: float = 0.0
+# Difficulty COGNITION gates (from BotSkillProfile via apply_profile). True =
+# the perfect-bot default. _reads_goalie_motion gates the across-the-grain
+# velocity projection in _shot_aim_point (and rides RoleContext into the
+# carrier's unsettled read); _holds_for_developing_feeds rides RoleContext into
+# the carrier's hold; _angles_the_chase gates the inside-lane intercept shift
+# in the chase state.
+var _reads_goalie_motion: bool = true
+var _holds_for_developing_feeds: bool = true
+var _angles_the_chase: bool = true
 # Sprint is decided alongside move_vector on full-dispatch ticks; skipped
 # throttle ticks reuse this cached value so sprint_held doesn't flicker off at
 # 60 Hz (which would halve the burst and strobe the facing turn-rate penalty).
@@ -1082,6 +1091,9 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_check_aggression = profile.check_aggression
 	_defensive_anticipation_scale = profile.defensive_anticipation_scale
 	_carry_settle_delay_s = profile.carry_settle_delay_s
+	_reads_goalie_motion = profile.reads_goalie_motion
+	_holds_for_developing_feeds = profile.holds_for_developing_feeds
+	_angles_the_chase = profile.angles_the_chase
 	# Execution noise for LIVE bots (raw test agents stay deterministic):
 	# per-tier, split shot-vs-pass — the shot noise is the tier's scoring
 	# dial, the pass noise stays small so passes keep connecting.
@@ -1504,6 +1516,8 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.check_aggression = _check_aggression
 	ctx.defensive_anticipation_scale = _defensive_anticipation_scale
 	ctx.carry_settle_delay_s = _carry_settle_delay_s
+	ctx.reads_goalie_motion = _reads_goalie_motion
+	ctx.holds_for_developing_feeds = _holds_for_developing_feeds
 	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
 	# is only called on dispatch ticks — hand it the span so it can compensate.
 	ctx.dispatch_period_ticks = _dispatch_period_ticks
@@ -1612,9 +1626,12 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		# the boards. Loose pucks get the raw intercept — there's no carrier
 		# to angle off of. Teammate-carried case is filtered upstream by the
 		# F1→OFF_PUCK transition, so by the time we reach here a non-(-1)
-		# carrier is necessarily an opponent.
+		# carrier is necessarily an opponent. Cognition gate: a tier without
+		# the angling read (_angles_the_chase false) chases straight at the
+		# puck — taught defensive skill Easy doesn't have, so a human's
+		# cutback to the middle works.
 		var carrier_pid: int = snapshot.puck_state.carrier_peer_id
-		if carrier_pid != -1 and carrier_pid != _peer_id:
+		if _angles_the_chase and carrier_pid != -1 and carrier_pid != _peer_id:
 			var carrier_state: SkaterNetworkState = snapshot.skater_states.get(carrier_pid)
 			if carrier_state != null:
 				target = _angle_intercept_inside(target, carrier_state.position)
@@ -3639,7 +3656,9 @@ func _carrier_puck_pos(snapshot: WorldSnapshot) -> Vector3:
 # the goalie's CURRENT lateral velocity into the aim — a goalie
 # sliding right will drift further right by the time the puck
 # arrives, so the aim biases LEFT (the recovery side). Captures the
-# "shoot back across the grain" pattern.
+# "shoot back across the grain" pattern — unless this tier is
+# goalie-motion blind (_reads_goalie_motion false: it shoots at where
+# the goalie IS, the cognition gate's aim-side half).
 func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3,
 		release_lookahead_s: float = BOT_WRISTER_LOOKAHEAD_S) -> Vector3:
 	var goalie: Vector3 = _predict_goalie_at(
@@ -3647,7 +3666,7 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3,
 	var goalie_vx: float = 0.0
 	var opp_team_id: int = 1 - _team_id
 	var opp_goalie_state: GoalieNetworkState = snapshot.goalie_states.get(opp_team_id)
-	if opp_goalie_state != null:
+	if opp_goalie_state != null and _reads_goalie_motion:
 		goalie_vx = opp_goalie_state.velocity_x
 	return AIShotAim.compute_open_net_aim(
 			self_pos, goalie,
