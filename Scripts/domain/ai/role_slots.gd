@@ -302,15 +302,40 @@ static func _pick_soonest_with_hysteresis(
 				else AIActionScoring.SKATER_REF_SPEED_M_S
 		var t: float = AIActionScoring.time_to_arrive(
 				s.position, target_pos, s.velocity, speed)
-		# Hysteresis: peers who didn't hold this slot last tick pay
+		# Hysteresis: peers who didn't hold this slot (or its cross-state
+		# continuity sibling — see _hysteresis_class) last tick pay
 		# HYSTERESIS_PENALTY_S to take it. Sticky peer keeps the
 		# slot unless another arrives meaningfully sooner.
-		if prev_assignments.get(pid, Slot.NONE) != slot:
+		if _hysteresis_class(prev_assignments.get(pid, Slot.NONE)) != _hysteresis_class(slot):
 			t += HYSTERESIS_PENALTY_S
 		if t < best_score or (t == best_score and (best_pid == -1 or pid < best_pid)):
 			best_score = t
 			best_pid = pid
 	return best_pid
+
+
+# Cross-state hysteresis continuity. The soonest-to-arrive elections give a
+# peer that HELD a slot last tick a stickiness bonus, keyed on the slot enum —
+# but a possession-state flip renames the slots, so BREAKOUT_STRONG becomes
+# OUTLET and BREAKOUT_WEAK becomes SUPPORT, and an exact-enum match sees NO
+# continuity across the flip. With zero stickiness the two non-carriers'
+# near-tied elections could reverse destinations at the handoff, sending them
+# on crossing paths into each other (the breakout→rush collision). Mapping
+# each slot to its continuity CLASS — the up-ice attacking option
+# (BREAKOUT_STRONG / OUTLET / FINISHER) and the trailing support
+# (BREAKOUT_WEAK / SUPPORT) — lets the peer that was the up-ice guy stay the
+# up-ice guy (and the trailer stay the trailer) through the rename. The bonus
+# is only HYSTERESIS_PENALTY_S (0.12 s), so a genuine kinematic advantage still
+# swaps them; it only settles the near-ties that used to flicker. Every other
+# slot maps to itself (exact-match, unchanged).
+static func _hysteresis_class(slot: int) -> int:
+	match slot:
+		Slot.BREAKOUT_STRONG, Slot.OUTLET, Slot.FINISHER:
+			return Slot.OUTLET       # up-ice attacking option
+		Slot.BREAKOUT_WEAK, Slot.SUPPORT:
+			return Slot.SUPPORT      # trailing support / reverse valve
+		_:
+			return slot
 
 
 # Assigns slot1 to soonest-to-target1 peer, slot2 to soonest-to-target2
@@ -400,7 +425,7 @@ static func _pick_gap_defender(
 				else AIActionScoring.SKATER_REF_SPEED_M_S
 		var t: float = AIActionScoring.time_to_arrive(
 				s.position, carrier_pos, s.velocity, speed)
-		if prev_assignments.get(pid, Slot.NONE) != Slot.CONTAIN:
+		if _hysteresis_class(prev_assignments.get(pid, Slot.NONE)) != _hysteresis_class(Slot.CONTAIN):
 			t += HYSTERESIS_PENALTY_S
 		if t < best_score or (t == best_score and (best_pid == -1 or pid < best_pid)):
 			best_score = t

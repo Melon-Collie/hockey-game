@@ -328,7 +328,7 @@ func _init(p_carrier_reaction_delay_s: float,
 # plays, angles its chase, plays the pass on odd-man rushes, and shields the
 # puck with its body — the full hockey IQ.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.05, 0.0,
+	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.03, 0.0,
 			0.0, 1.0, 1.0, 1.0,
 			true, true, true, true, true)
 
@@ -373,7 +373,7 @@ static func hard() -> BotSkillProfile:
 # down by the tuning dials instead (shot wobble first — see the finish note
 # above). Easy is where the behaviour gates close.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.09, 0.30,
+	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.055, 0.30,
 			1.5, 1.0, 0.65, 0.6,
 			true, true, true, true, true)
 
@@ -412,7 +412,7 @@ static func normal() -> BotSkillProfile:
 # in front (a newcomer's poke-check genuinely steals it). Beginner hockey IQ
 # to match the beginner hands.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.14, 0.55,
+	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.085, 0.55,
 			3.0, 1.0, 0.0, 0.2,
 			false, false, false, false, false)
 

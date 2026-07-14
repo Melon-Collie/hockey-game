@@ -337,6 +337,24 @@ const STICKHANDLE_OFFSET_MAX_M: float = 0.33
 const CARRY_FACE_ROUTE_MIN_DIST_M: float = 1.0
 const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 
+# "Man to beat" contest band (see _has_man_to_beat / the O-ZONE SQUARE block in
+# _carry_mouse_aim). A GOAL-SIDE opponent within this distance of the carrier is
+# close enough to poke/steal — a defender the carrier still has to beat. With NO
+# such man while the carrier is in the offensive zone, there is nobody to beat,
+# so the body points at the goalie (square to the net, all shot/pass options
+# open) rather than skating on along a lateral route into an awkward angle — the
+# reported "weird sideways shot" after a deke/protect move. A hair beyond the
+# stickhandle threat radius so it anticipates a closing checker. Physical
+# contest measurement, tier-agnostic (it needs no protect read, so the
+# naive-carry tiers get it too).
+const CARRY_MAN_TO_BEAT_RADIUS_M: float = 3.5
+# A defender the carrier has skated PAST — this far behind it toward our own
+# end along the netward line — is beaten and no longer a man to beat, so the
+# carrier squares up the instant it clears him even with him trailing close
+# behind (rather than waiting for the full contest radius to open). ~a body
+# length. Physical measurement.
+const CARRY_MAN_TO_BEAT_BEHIND_M: float = 0.75
+
 # Pressure floor for the puck-protect blend: below this, the carry cursor
 # stays on the quiet forward dangle; above it, the blend ramps 0→full over the
 # remaining band (full shield at pressure 1 is unchanged). Without the floor
@@ -372,10 +390,12 @@ const CARRY_PROTECT_MAX_TURN_DEG: float = 90.0
 # per-bot RNG so no two bots (or two cycles) sway in sync. Feel-only:
 # lives in _carry_mouse_aim (CARRY deliberation), so the blade steadies
 # the moment the bot pre-aims a release — a readable "shot coming" tell,
-# like a real shooter settling the puck. Frequency band is a relaxed
-# human dangle cadence (~1 tap/s to ~1.6 taps/s).
-const CARRY_SWAY_FREQ_MIN_HZ: float = 0.9
-const CARRY_SWAY_FREQ_MAX_HZ: float = 1.6
+# like a real shooter settling the puck. Frequency band is a relaxed human
+# dangle cadence — kept LOW because the carry cursor also drives body facing
+# (facing chases the cursor), so a quick sway wags the body and reads as jitter
+# rather than a resting dangle. ~1 slow sway every 1.5–2.5 s.
+const CARRY_SWAY_FREQ_MIN_HZ: float = 0.4
+const CARRY_SWAY_FREQ_MAX_HZ: float = 0.65
 # Per-cycle amplitude wander floor (fraction of carry_sway_m) and how fast
 # the eased amplitude chases its resampled target (per second).
 const CARRY_SWAY_AMP_FRAC_MIN: float = 0.35
@@ -774,6 +794,11 @@ var _scratch_opponents: Array[Vector3] = []
 # carrier threat-gated repel reads defender MOMENTUM, not proximity
 # (AISteering._carrier_threat_repel). Filled alongside the positions.
 var _scratch_opponent_steer_vels: Array[Vector3] = []
+# Teammate velocities index-matched to _scratch_teammates — steering's
+# teammate repel reads their SWEPT PATH (where they're skating into) so
+# crossing routes bend apart before the bodies meet. Filled alongside the
+# teammate positions in _apply_steering.
+var _scratch_teammate_steer_vels: Array[Vector3] = []
 # Shared empty fallback so the per-tick cache reads don't allocate a `[]`
 # default literal (Dictionary.get evaluates its default eagerly). Never mutated.
 var _empty_ids: Array = []
@@ -3609,6 +3634,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# instead of re-partitioning snapshot.skater_states every physics tick.
 	# Fall back to a live partition when the cache is empty (unit tests).
 	_scratch_teammates.clear()
+	_scratch_teammate_steer_vels.clear()
 	_scratch_opponents.clear()
 	_scratch_opponent_steer_vels.clear()
 	if not snapshot.teammate_ids_by_team.is_empty():
@@ -3618,6 +3644,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			if peer_id == _peer_id:
 				continue
 			_scratch_teammates.append(snapshot.skater_states[peer_id].position)
+			_scratch_teammate_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 		for other_team: int in snapshot.teammate_ids_by_team:
 			if other_team == _team_id:
 				continue
@@ -3631,6 +3658,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				continue
 			if _team_id_by_peer.get(peer_id, -1) == _team_id:
 				_scratch_teammates.append(snapshot.skater_states[peer_id].position)
+				_scratch_teammate_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 			else:
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
@@ -3667,7 +3695,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
-			opp_repel, steer_vels)
+			opp_repel, steer_vels, _scratch_teammate_steer_vels)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), stopping hard beats carving a wide arc.
@@ -3899,9 +3927,28 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# facing the play, the real posture, paying the honest backward-speed
 	# cost). Fire-tracking (_carry_aim_track_fire) overrides all of this
 	# with the shot aim whenever a live look exists.
+	# O-ZONE SQUARE: once the carrier is in the offensive zone with no man to
+	# beat, point the body straight at the GOALIE — square to the net, every
+	# shot/pass option open — instead of skating on along a lateral carry route
+	# into the awkward sideways angle (the "weird sideways shot" after a deke).
+	# This owns the facing outright in that case (skips FACE THE ROUTE): a slot
+	# repositioning with nobody to beat is walked facing the net, the real
+	# shooter's posture, not skated back-to-play. Outside the O-zone, and while a
+	# man still has to be beaten, FACE THE ROUTE below keeps the fast forward
+	# stride down a lateral escape / wall-exit route.
+	var squared_to_net: bool = false
+	if AIActionScoring.in_offensive_zone(self_pos, _attacking_goal_pos) \
+			and not _has_man_to_beat(snapshot, self_pos):
+		var goalie_square: Vector3 = _goalie_now(snapshot)
+		var to_goalie: Vector3 = goalie_square - self_pos
+		to_goalie.y = 0.0
+		if to_goalie.length_squared() > 0.0001:
+			forward_dir = to_goalie.normalized()
+			squared_to_net = true
 	var route: Vector3 = _last_carry_anchor - self_pos
 	route.y = 0.0
-	if route.length_squared() >= CARRY_FACE_ROUTE_MIN_DIST_M * CARRY_FACE_ROUTE_MIN_DIST_M:
+	if not squared_to_net \
+			and route.length_squared() >= CARRY_FACE_ROUTE_MIN_DIST_M * CARRY_FACE_ROUTE_MIN_DIST_M:
 		var route_dir: Vector3 = route.normalized()
 		if route_dir.z * attacking_z >= CARRY_FACE_RETREAT_ADVANCE:
 			forward_dir = route_dir
@@ -3973,6 +4020,35 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# swung around the nearer post — the blade-level mirror of the body's
 	# AISteering._net_detour.
 	return AIActionScoring.net_safe_blade_target(self_pos, target)
+
+
+# True when any GOAL-SIDE opponent is inside the contest band
+# (CARRY_MAN_TO_BEAT_RADIUS_M) of the carrier — a defender ahead toward the net,
+# close enough to poke/steal, i.e. a man the carrier still has to beat. A
+# defender the carrier has already skated past (behind it toward our own end by
+# more than CARRY_MAN_TO_BEAT_BEHIND_M along the netward line) is beaten and does
+# NOT count, so the carrier squares up the instant it clears him. With no such
+# man the carrier is unobstructed. Measured from the body so a checker on any
+# side ahead counts. Runs on the carrier only (~1 bot/team) and loops the small
+# opponent set, so it's hot-path cheap.
+func _has_man_to_beat(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var r2: float = CARRY_MAN_TO_BEAT_RADIUS_M * CARRY_MAN_TO_BEAT_RADIUS_M
+	var to_net: Vector3 = _attacking_goal_pos - self_pos
+	to_net.y = 0.0
+	var net_len: float = to_net.length()
+	var have_net: bool = net_len > 0.001
+	var nx: float = to_net.x / net_len if have_net else 0.0
+	var nz: float = to_net.z / net_len if have_net else 0.0
+	for peer_id: int in _opponent_ids(snapshot):
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var dx: float = opp_state.position.x - self_pos.x
+		var dz: float = opp_state.position.z - self_pos.z
+		if dx * dx + dz * dz >= r2:
+			continue
+		# Goal-side (ahead toward the net) beyond the beaten-behind slack.
+		if not have_net or dx * nx + dz * nz > -CARRY_MAN_TO_BEAT_BEHIND_M:
+			return true
+	return false
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.

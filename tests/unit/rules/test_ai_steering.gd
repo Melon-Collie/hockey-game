@@ -178,6 +178,57 @@ func test_carrier_bends_around_a_flanking_threat_without_retreating() -> void:
 	assert_gt(v.y, 0.8, "forward drive survives the bend")
 
 
+# ── Teammate swept-path repel (teammate velocities supplied) ─────────────────
+# With teammate velocities the spacing field repels from each teammate's
+# momentum-swept path, so bots anticipate a crossing route before the bodies
+# meet. Zero velocity collapses the sweep to the body point (unchanged field).
+
+func _move_tm_vel(self_pos: Vector3, anchor: Vector3,
+		teammates: Array[Vector3], tm_vels: Array[Vector3]) -> Vector2:
+	return AISteering.compute_move_vector(
+			self_pos, anchor, teammates, NO_OPS, NO_LANE, NO_LANE, RINK_X, RINK_Z,
+			AISteering.OPPONENT_REPEL_WEIGHT, NO_OPS, tm_vels)
+
+
+func test_teammate_swept_path_anticipates_a_teammate_closing_ahead() -> void:
+	# Teammate parked just OUTSIDE the point radius (no effect as a body) but
+	# skating straight at us: its swept path reaches into our space, so the
+	# field pushes back where the freeze-frame field felt nothing.
+	var anchor := Vector3(0, 0, 5)
+	var far := Vector3(0, 0, AISteering.TEAMMATE_REPEL_RADIUS + 0.5)
+	var tm: Array[Vector3] = [far]
+	var closing: Array[Vector3] = [Vector3(0, 0, -8)]  # sweeping toward us
+	var v_point := _move_tm_vel(Vector3.ZERO, anchor, tm, [Vector3.ZERO] as Array[Vector3])
+	var v_swept := _move_tm_vel(Vector3.ZERO, anchor, tm, closing)
+	assert_almost_eq(v_point.y, 1.0, 0.02, "body outside the radius exerts nothing")
+	assert_lt(v_swept.y, v_point.y - 0.1, "the swept path is felt and pushes back before contact")
+
+
+func test_teammate_swept_path_bends_off_a_crossing_route() -> void:
+	# Teammate parked outside the point radius on the +X side, cutting toward us
+	# along -X: its swept path stays on the +X side, so we bend to the OPEN -X
+	# side. The freeze-frame body (too far to matter) exerts nothing.
+	var anchor := Vector3(0, 0, 5)
+	var crosser := Vector3(5.0, 0, 0)
+	var tm: Array[Vector3] = [crosser]
+	var vel: Array[Vector3] = [Vector3(-8, 0, 0)]  # cutting toward -X into our space
+	var v_point := _move_tm_vel(Vector3.ZERO, anchor, tm, [Vector3.ZERO] as Array[Vector3])
+	var v := _move_tm_vel(Vector3.ZERO, anchor, tm, vel)
+	assert_almost_eq(v_point.x, 0.0, 0.02, "the far body alone exerts nothing")
+	assert_lt(v.x, -0.05, "bend to the open side, away from the teammate's crossing path")
+
+
+func test_teammate_zero_velocity_matches_point_repel() -> void:
+	# A stationary teammate with velocities supplied must repel exactly as the
+	# plain proximity field (sweep collapses to the body point).
+	var anchor := Vector3(0, 0, 5)
+	var tm: Array[Vector3] = [Vector3(0, 0, 1.5)]
+	var v_point := _move(Vector3.ZERO, anchor, tm)
+	var v_zero := _move_tm_vel(Vector3.ZERO, anchor, tm, [Vector3.ZERO] as Array[Vector3])
+	assert_almost_eq(v_zero.x, v_point.x, 0.001, "zero-velocity sweep = point repel (x)")
+	assert_almost_eq(v_zero.y, v_point.y, 0.001, "zero-velocity sweep = point repel (y)")
+
+
 # net detour tests — route a bot pinned behind a goal line out around
 # the post. The +Z net sits at +GOAL_LINE_Z; "behind" it is z > GOAL_LINE_Z.
 # A post-span bot (|x| < NET_HALF_WIDTH + margin) with an anchor on the

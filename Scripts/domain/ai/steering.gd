@@ -26,7 +26,19 @@ class_name AISteering
 # opponent value if bots still bunch; lower toward 0.4 if formation
 # spacing feels too loose (give-and-go support drifting wide).
 const TEAMMATE_REPEL_WEIGHT: float = 0.55
-const TEAMMATE_REPEL_RADIUS: float = 3.5
+const TEAMMATE_REPEL_RADIUS: float = 4.0
+# How far ahead (seconds) a teammate's momentum is projected when the
+# repel reads their SWEPT PATH instead of their freeze-frame body (see
+# the teammate-velocity branch in compute_move_vector). A short lead —
+# "where they're skating into over the next stride," not a route
+# prophecy — so two bots on crossing paths each feel the other's line
+# and bend apart BEFORE the bodies meet, rather than only reacting once
+# they're already point-blank (the too-late collision the freeze-frame
+# field allowed, worst at the breakout→rush handoff where two long
+# cross-ice vectors converge through center). Zero teammate velocity
+# collapses the swept segment to the body point, so a stationary
+# formation repels exactly as the old proximity field did.
+const TEAMMATE_REPEL_LEAD_S: float = 0.4
 const OPPONENT_REPEL_WEIGHT: float = 0.6
 # Carrier-specific opponent repel weight. Bots with the puck weight
 # defender proximity much more heavily than off-puck bots — a defender
@@ -181,7 +193,8 @@ static func compute_move_vector(
 		rink_half_x: float,
 		rink_half_z: float,
 		opponent_repel_weight: float = OPPONENT_REPEL_WEIGHT,
-		opponent_velocities: Array[Vector3] = []) -> Vector2:
+		opponent_velocities: Array[Vector3] = [],
+		teammate_velocities: Array[Vector3] = []) -> Vector2:
 	var force_x: float = 0.0
 	var force_z: float = 0.0
 
@@ -194,9 +207,29 @@ static func compute_move_vector(
 		force_z += to_anchor.z * inv
 
 	# Repel from teammates within radius. Linear falloff with distance.
-	for tp: Vector3 in teammate_positions:
-		var dx: float = self_pos.x - tp.x
-		var dz: float = self_pos.z - tp.z
+	# When teammate velocities are supplied (index-matched), each teammate
+	# repels from the CLOSEST POINT on its momentum-swept segment
+	# [tp, tp + vel × TEAMMATE_REPEL_LEAD_S] rather than its freeze-frame
+	# body — so a teammate skating ACROSS this bot's path is felt along the
+	# line it's cutting into, and the two bend apart before the bodies meet.
+	# A zero-velocity (or unsupplied) teammate collapses the sweep to the
+	# body point, reproducing the plain proximity field exactly.
+	var have_tm_vels: bool = teammate_velocities.size() == teammate_positions.size()
+	for i: int in teammate_positions.size():
+		var tp: Vector3 = teammate_positions[i]
+		var cx: float = tp.x
+		var cz: float = tp.z
+		if have_tm_vels:
+			var sweep_x: float = teammate_velocities[i].x * TEAMMATE_REPEL_LEAD_S
+			var sweep_z: float = teammate_velocities[i].z * TEAMMATE_REPEL_LEAD_S
+			var sweep_len_sq: float = sweep_x * sweep_x + sweep_z * sweep_z
+			if sweep_len_sq > 0.0001:
+				var t: float = clampf(((self_pos.x - tp.x) * sweep_x
+						+ (self_pos.z - tp.z) * sweep_z) / sweep_len_sq, 0.0, 1.0)
+				cx = tp.x + sweep_x * t
+				cz = tp.z + sweep_z * t
+		var dx: float = self_pos.x - cx
+		var dz: float = self_pos.z - cz
 		var d: float = sqrt(dx * dx + dz * dz)
 		if d > 0.001 and d < TEAMMATE_REPEL_RADIUS:
 			var falloff: float = (TEAMMATE_REPEL_RADIUS - d) / TEAMMATE_REPEL_RADIUS
