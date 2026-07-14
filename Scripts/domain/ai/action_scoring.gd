@@ -477,6 +477,20 @@ const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
 # whether the receiver is streaking onto a lead feed or curling back to it.
 const PASS_TARGET_CLOSING_M_S: float = 20.0
 
+# Hardest receiver-frame arrival we'll allow a pass to land at — the cap on how
+# much the receiver-motion solve below may SOFTEN the world launch. Grounded on
+# the reception ceilings (PuckReceptionRules: any-angle catch < deflect_min 22,
+# fully-squared < 30). A bot receiver sets up SQUARE to the incoming feed
+# (_pass_receive_aim_and_steer opens the blade face for the alignment bonus; the
+# gate-park holds it square the whole way in), so its real ceiling sits well above
+# the any-angle bar — 26 credits that squaring while leaving margin below 30 for
+# an imperfect setup. Without this cap, a receiver curling back toward the puck
+# drove the world launch down to the min-wrister floor (~10-12 m/s): a "super
+# soft" floater that doubled its own flight time and got picked off. Lower toward
+# 22 to assume no squaring (guaranteed any-angle catch, softer passes); raise
+# toward 30 for crisper feeds that lean harder on the receiver squaring up.
+const PASS_RECEIVE_CEILING_M_S: float = 26.0
+
 # Reference charged-pass speed (~mid-ramp). No longer a fixed release target —
 # pass speed is distance-adaptive via pass_launch_speed — but kept as a
 # representative pass speed for lane/threat tests and any caller that wants a
@@ -522,8 +536,24 @@ static func pass_launch_speed(distance: float, max_launch: float,
 	if pass_dir.length_squared() > 0.0001:
 		var along: float = pass_dir.dot(receiver_vel)
 		var perp_sq: float = maxf(0.0, receiver_vel.length_squared() - along * along)
-		var disc: float = PASS_TARGET_CLOSING_M_S * PASS_TARGET_CLOSING_M_S - perp_sq
-		world_arrival = along + sqrt(maxf(0.0, disc))
+		# Two receiver-frame launch bounds, both solving
+		# (world_arrival − along)² + perp² = target² for the world arrival speed:
+		#   soft  — lands at the IDEAL closing pace (PASS_TARGET_CLOSING, a
+		#           comfortable any-angle catch)
+		#   crisp — lands at the catch CEILING (PASS_RECEIVE_CEILING, the hardest
+		#           the squared-up receiver can still corral)
+		# Fire at the crisp WORLD pace we'd throw a stationary receiver
+		# (PASS_TARGET_CLOSING), clamped between them. Streaking onto a lead feed
+		# (along > 0) pushes the soft floor ABOVE that pace, so we fire HARDER to
+		# lead — the give-with-the-puck read is preserved. Curling back toward the
+		# passer (along < 0) pulls both bounds down, but the crisp ceiling caps how
+		# far: instead of collapsing to the min-wrister floor (the old "super soft"
+		# floater), the launch only softens to what the receiver can still catch.
+		var soft_arrival: float = along + sqrt(maxf(0.0,
+				PASS_TARGET_CLOSING_M_S * PASS_TARGET_CLOSING_M_S - perp_sq))
+		var crisp_arrival: float = along + sqrt(maxf(0.0,
+				PASS_RECEIVE_CEILING_M_S * PASS_RECEIVE_CEILING_M_S - perp_sq))
+		world_arrival = clampf(PASS_TARGET_CLOSING_M_S, soft_arrival, crisp_arrival)
 		# A receiver charging the passer harder than the target could drive this
 		# negative/tiny; floor at the soft-pass minimum so we still fire a real pass.
 		world_arrival = maxf(world_arrival, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
