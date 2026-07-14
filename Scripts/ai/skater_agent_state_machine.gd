@@ -2653,6 +2653,17 @@ func _nearest_opponent_blade_dist(snapshot: WorldSnapshot, point: Vector3) -> fl
 	return nearest
 
 
+# Is the desired blade direction in the body's BACK hemisphere (>90° off the
+# current facing)? Gates the long-way protect orbit to genuine turn-arounds. A
+# null/degenerate facing returns false — bias toward the short-way reach, never
+# an unprovoked spin.
+func _target_is_behind(desired_dir: Vector3, self_state: SkaterNetworkState) -> bool:
+	if self_state == null or self_state.facing.length_squared() < 0.0001:
+		return false
+	var facing: Vector2 = self_state.facing.normalized()
+	return desired_dir.x * facing.x + desired_dir.z * facing.y < 0.0
+
+
 # Returns an intermediate mouse target on the carry aim ring around self_pos
 # that walks toward `final_target` at no more than MOUSE_ARC_RATE_RAD_S.
 # See MOUSE_ARC_RATE_RAD_S comment for why arcing is required — straight
@@ -2696,7 +2707,15 @@ func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
 	elif _arc_protect_sign != 0.0:
 		if signf(diff) == _arc_protect_sign or absf(diff) <= max_step:
 			_arc_protect_sign = 0.0
-	elif absf(diff) >= PROTECT_TURN_MIN_SWING_RAD:
+	elif absf(diff) >= PROTECT_TURN_MIN_SWING_RAD and _target_is_behind(desired_dir, self_state):
+		# Long-way orbit only for a genuine TURN-AROUND — the desired blade spot is
+		# behind the body (a regroup, an anchor that flipped after a re-eval). There
+		# the big rotation is unavoidable, so sweep the puck the way that keeps the
+		# body shielding it. A FRONT-hemisphere target is a protect REACH, not a
+		# turn: take the short way and let the blade's ROM extend across the front,
+		# rather than spinning the long way around the back to reach a spot that's
+		# only off to the side. Reach, not orbit — keeps the carrier square to the
+		# play (see CARRY_PROTECT_MAX_TURN_DEG, which caps that reach at side-on).
 		var protect_sign: float = _protect_turn_direction(
 				self_pos, current_angle, diff, _current_snapshot)
 		if protect_sign != signf(diff):
