@@ -1219,6 +1219,96 @@ func test_lane_clear_defender_drifting_away_blocks_less() -> void:
 	assert_gt(drifting, stationary, "a defender drifting off the lane blocks less")
 
 
+func test_lane_clear_accurate_floors_the_ballistic_overshoot() -> void:
+	# The ballistic dead-reckon lets a defender crossing the lane fast enough COAST
+	# straight through and read as clear — a lane a forechecker is visibly skating
+	# through scores wide open. The `accurate` model's guided-interceptor floor has
+	# him plant and clog the crossing he'd otherwise sail past. So a defender ON the
+	# lane, at ANY closing speed, never reads clear — the overshoot tail is gone.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var d: Array[Vector3] = [Vector3(2.0, 0.0, 6.0)]          # 2 m off mid-lane
+	var fast: Array[Vector3] = [Vector3(-16.0, 0.0, 0.0)]     # skating hard through the lane
+	var ballistic: float = AIActionScoring.lane_clear(from, to, d, 18.0, fast)
+	var accurate: float = AIActionScoring.lane_clear(from, to, d, 18.0, fast, [], true)
+	assert_gt(ballistic, 0.9,
+			"ballistic overshoot: a defender skating through the lane reads nearly clear")
+	assert_lt(accurate, 0.7,
+			"accurate floors it — he plants and clogs the crossing")
+	# No re-opening at any closing speed: a defender sitting on the lane is never
+	# read as clear once the guided floor is in.
+	for vx: float in [0.0, -4.0, -10.0, -16.0, -22.0]:
+		var v: Array[Vector3] = [Vector3(vx, 0.0, 0.0)]
+		assert_lt(AIActionScoring.lane_clear(from, to, d, 18.0, v, [], true), 0.7,
+				"a defender on the lane never reads clear under `accurate` (vx=%.0f)" % vx)
+
+
+func test_lane_clear_accurate_compounds_two_separated_defenders() -> void:
+	# The legacy model takes 1 − max(block): two defenders threatening DIFFERENT
+	# segments of a long lane read only as open as the easier gap. The `accurate`
+	# survival product makes the puck beat BOTH — two separated half-blockers
+	# compound to a much less clear lane than either alone.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 16.0)
+	var one_a: Array[Vector3] = [Vector3(3.6, 0.0, 12.0)]     # contests the middle
+	var one_b: Array[Vector3] = [Vector3(-4.2, 0.0, 14.0)]    # contests the receiver end
+	var both: Array[Vector3] = [one_a[0], one_b[0]]
+	var speed: float = 18.0
+	var clear_a: float = AIActionScoring.lane_clear(from, to, one_a, speed, [], [], true)
+	var clear_b: float = AIActionScoring.lane_clear(from, to, one_b, speed, [], [], true)
+	var clear_both: float = AIActionScoring.lane_clear(from, to, both, speed, [], [], true)
+	# Each leaves a real gap alone (~0.6–0.7 clear); together the lane is much
+	# worse than either — the product compounds two independent, separated threats.
+	assert_gt(clear_a, 0.3)
+	assert_gt(clear_b, 0.3)
+	assert_lt(clear_both, minf(clear_a, clear_b) - 0.1,
+			"two separated defenders compound to much less clear than either alone")
+	# Legacy max prices it as just the single worst gap — no compounding.
+	var legacy_both: float = AIActionScoring.lane_clear(from, to, both, speed)
+	assert_lt(clear_both, legacy_both - 0.1,
+			"the survival product reads a two-defender lane far less clear than legacy max")
+
+
+func test_friction_traverse_time_exceeds_frictionless() -> void:
+	# Gap 3: the puck sheds ice friction, so it takes longer to cover the lane than
+	# dist/v0 — the far end gives lane defenders more time. Small (~a few %) but in
+	# the honest direction. Checks the closed-form arrival root against the
+	# frictionless baseline and the kinematic identity dist = v0·T − ½·a·T².
+	var dist: float = 18.0
+	var v0: float = 20.0
+	var t: float = AIActionScoring._friction_traverse_time(dist, v0)
+	assert_gt(t, dist / v0, "friction makes the traversal take longer than dist/v0")
+	var a: float = GameRules.PUCK_ICE_DECEL_M_S2
+	assert_almost_eq(v0 * t - 0.5 * a * t * t, dist, 0.001,
+			"traverse time satisfies dist = v0·T − ½·a·T²")
+
+
+func test_lane_clear_release_windup_projection_blocks_more() -> void:
+	# The carrier prices a PASS lane at RELEASE time, not decision time: every bot
+	# pass is a charged wrister that leaves the blade ~135 ms (BOT_WRISTER_LOOKAHEAD_S)
+	# after the intent commits, so the carrier feeds lane_clear the defenders
+	# ADVANCED by that windup (_scratch_opponents_release). This mirrors that step:
+	# the same closing defender, advanced by the windup before the flight
+	# dead-reckon, blocks strictly more than at his decision-time spot — which is
+	# exactly the "clear at decision, closed at release" breakout feed the model was
+	# shipping into a stick.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var charged_pass_speed: float = 20.0             # a real charged breakout pace
+	var vel := Vector3(-3.0, 0.0, 0.0)               # closing on the lane from the +X side
+	var at_decision: Array[Vector3] = [Vector3(3.0, 0.0, 6.0)]
+	var at_release: Array[Vector3] = [AITrajectory.predict_at(
+			at_decision[0], vel, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)]
+	var decision_lane: float = AIActionScoring.lane_clear(
+			from, to, at_decision, charged_pass_speed, [vel])
+	var release_lane: float = AIActionScoring.lane_clear(
+			from, to, at_release, charged_pass_speed, [vel])
+	assert_gt(decision_lane, 0.5,
+			"at decision time the closing defender still leaves a mostly-open lane")
+	assert_lt(release_lane, decision_lane,
+			"pricing the closing defender at his release-time spot reads the lane more blocked")
+
+
 # ── lane_clear_saucer: a low flip over a near stick ──────────────────────────
 # The saucer flight is pure kinematics of the LOW loft's fixed vertical
 # launch: the puck is above the blade plane for the over window

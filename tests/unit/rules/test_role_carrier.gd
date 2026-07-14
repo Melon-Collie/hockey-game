@@ -84,6 +84,51 @@ func test_pressured_carrier_in_own_zone_passes_to_open_outlet() -> void:
 			"pressured carrier passes out rather than carrying into the box")
 
 
+func test_forechecker_closing_the_breakout_lane_devalues_the_pass() -> void:
+	# The pass a bot fires is a charged wrister — it leaves the blade ~135 ms
+	# after the intent commits — so the lane it threads is the lane as it exists
+	# at RELEASE, not at decision time. A forechecker skating hard into a breakout
+	# lane has closed real ground (position AND the extra closing time) during that
+	# windup; scoring the lane at his CURRENT spot read those feeds as open and
+	# shipped the puck into the closing stick (own-zone turnover → goal against).
+	# The outlet pass is on with the defender standing clear; the SAME defender
+	# skating into the lane devalues it (the release-time projection prices the
+	# windup — see _scratch_opponents_release). (Whether the drop flips the whole
+	# decision depends on the alternatives; the release-time lane pricing itself is
+	# guarded at the primitive level in test_ai_action_scoring.)
+	var self_pos := Vector3(4.0, 0.0, 20.0)          # own zone, off-center (clear of our slot)
+	var outlet := Vector3(4.0, 0.0, 7.0)             # open outlet straight up the wall
+
+	# Stationary forechecker, 2.6 m off the lane — a full stick clear, so the
+	# outlet feed is on.
+	var still: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[11, 1, Vector3(6.6, 0.0, 13.5)],        # beside the lane, standing
+	]
+	var sc := _make_ctx(self_pos, still)
+	var s := AIRoleCarrier.new()
+	s.decide(sc)
+	assert_eq(s.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a defender standing clear of the lane leaves the outlet pass on")
+	assert_eq(s.pass_target_peer_id, 2)
+	assert_gt(s.debug_pass_score, 0.0)
+
+	# Same start spot, now skating toward the lane (-X). The release-time
+	# projection puts him ~1 m closer before the puck even leaves the blade, and
+	# he keeps closing over the flight — the feed is worth materially less.
+	var closing: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[11, 1, Vector3(6.6, 0.0, 13.5), false, Vector3(-8.0, 0.0, 0.0)],
+	]
+	var cc := _make_ctx(self_pos, closing)
+	var c := AIRoleCarrier.new()
+	c.decide(cc)
+	assert_lt(c.debug_pass_score, s.debug_pass_score * 0.9,
+			"a forechecker skating into the lane during the windup materially drops the pass value")
+
+
 func test_passes_to_the_open_backdoor_man_over_forcing_a_carry() -> void:
 	# The carrier is at a poor wide angle with a wide-open teammate at the far-
 	# post backdoor — a feed the goalie's re-square genuinely cannot beat (the
