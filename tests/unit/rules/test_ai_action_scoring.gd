@@ -1219,6 +1219,32 @@ func test_lane_clear_defender_drifting_away_blocks_less() -> void:
 	assert_gt(drifting, stationary, "a defender drifting off the lane blocks less")
 
 
+func test_lane_clear_release_windup_projection_blocks_more() -> void:
+	# The carrier prices a PASS lane at RELEASE time, not decision time: every bot
+	# pass is a charged wrister that leaves the blade ~135 ms (BOT_WRISTER_LOOKAHEAD_S)
+	# after the intent commits, so the carrier feeds lane_clear the defenders
+	# ADVANCED by that windup (_scratch_opponents_release). This mirrors that step:
+	# the same closing defender, advanced by the windup before the flight
+	# dead-reckon, blocks strictly more than at his decision-time spot — which is
+	# exactly the "clear at decision, closed at release" breakout feed the model was
+	# shipping into a stick.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var charged_pass_speed: float = 20.0             # a real charged breakout pace
+	var vel := Vector3(-3.0, 0.0, 0.0)               # closing on the lane from the +X side
+	var at_decision: Array[Vector3] = [Vector3(3.0, 0.0, 6.0)]
+	var at_release: Array[Vector3] = [AITrajectory.predict_at(
+			at_decision[0], vel, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S)]
+	var decision_lane: float = AIActionScoring.lane_clear(
+			from, to, at_decision, charged_pass_speed, [vel])
+	var release_lane: float = AIActionScoring.lane_clear(
+			from, to, at_release, charged_pass_speed, [vel])
+	assert_gt(decision_lane, 0.5,
+			"at decision time the closing defender still leaves a mostly-open lane")
+	assert_lt(release_lane, decision_lane,
+			"pricing the closing defender at his release-time spot reads the lane more blocked")
+
+
 # ── lane_clear_saucer: a low flip over a near stick ──────────────────────────
 # The saucer flight is pure kinematics of the LOW loft's fixed vertical
 # launch: the puck is above the blade plane for the over window
