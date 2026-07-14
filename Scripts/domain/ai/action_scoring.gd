@@ -2159,7 +2159,14 @@ static func reach_clearance(
 
 
 # Map clearance (metres) to a [0, 1] possession safety: 0 inside a defender's
-# reach, ramping to 1 at a full stick of clear room.
+# reach, ramping to 1 at a full stick of clear room. Deliberately LINEAR: it is
+# the pessimistic half of a compensating pair with reach_clearance's optimistic
+# BEST-CASE defender reach — a logistic CDF (grounded as reach uncertainty) was
+# tried and broke 8 tests, all toward over-confidence under pressure (tight spots
+# reading safe, forced drives, no cycling), confirming the linearity isn't
+# independently miscalibrated. A truly honest version would make reach_clearance
+# nominal (not best-case) AND use the CDF as a pair; that's a broad recalibration
+# of the most-used AI primitive, not a map swap.
 static func clearance_to_safety(clearance: float) -> float:
 	return clampf(clearance / EVADE_SAFE_MARGIN_M, 0.0, 1.0)
 
