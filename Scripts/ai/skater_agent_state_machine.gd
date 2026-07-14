@@ -864,20 +864,8 @@ var _shot_release_offset_locked: Vector3 = Vector3.ZERO
 var _dump_target: Vector3 = Vector3.INF
 var _dump_is_soft: bool = false
 
-# Debug: print one line at SHOOT commit and one line at wrister
-# release so the user can compare what the projection promised vs.
-# where the puck actually fired from. Toggle off for shipping.
-const SHOW_COMMIT_DEBUG: bool = false
-var _commit_pos: Vector3 = Vector3.ZERO
-var _commit_vel: Vector3 = Vector3.ZERO
-var _commit_projected_release: Vector3 = Vector3.ZERO
-var _commit_shoot_score: float = 0.0
-var _commit_carry_score: float = 0.0
-# Tick stamp to compute pre-aim duration (commit -> SHOOT_PRESSED entry).
-var _commit_tick_stamp: int = 0
-var _pre_aim_ticks_observed: int = 0
 # Increments every physics tick the agent runs; doesn't have to be a
-# perfect clock — only used for relative deltas in the debug print.
+# perfect clock — only used for relative deltas (mouse-sway timing).
 var _agent_tick: int = 0
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
@@ -2323,24 +2311,6 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 							else _shot_aim_point(snapshot, self_pos))
 				State.PASS_PRESSED:
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
-			# Debug: capture commit snapshot for SHOOT to compare against
-			# actual release pos later.
-			if SHOW_COMMIT_DEBUG and new_intent == State.SHOOT_PRESSED:
-				var hv: Vector3 = Vector3.ZERO
-				if self_state != null:
-					hv = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
-				_commit_pos = self_pos
-				_commit_vel = hv
-				_commit_projected_release = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
-				_commit_shoot_score = _carrier.debug_shoot_score
-				_commit_carry_score = _carrier.debug_carry_score
-				_commit_tick_stamp = _agent_tick
-				_pre_aim_ticks_observed = 0
-				print("[bot %d] SHOOT COMMIT pos=(%.2f, %.2f) vel=(%.2f, %.2f) speed=%.2f projected_release=(%.2f, %.2f) shoot=%.3f carry=%.3f" % [
-						_peer_id, _commit_pos.x, _commit_pos.z,
-						_commit_vel.x, _commit_vel.z, hv.length(),
-						_commit_projected_release.x, _commit_projected_release.z,
-						_commit_shoot_score, _commit_carry_score])
 		_intended_action = new_intent
 
 	# Steering depends on which action is locked.
@@ -2429,9 +2399,6 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 				Vector2(mouse_target.x - self_pos.x, mouse_target.z - self_pos.z))
 		if aim_converged or aim_reachable_no_turn \
 				or _intent_wait_ticks >= _intent_max_wait_ticks:
-			# Capture pre-aim duration for the upcoming wrister release log.
-			if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED:
-				_pre_aim_ticks_observed = _agent_tick - _commit_tick_stamp
 			_set_state(_intended_action)
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
@@ -2677,15 +2644,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# Lost the puck mid-charge — bail. SkaterStateMachine's release path
 	# is a no-op without the puck, so we don't need to force a release.
 	if not have_puck:
-		if SHOW_COMMIT_DEBUG:
-			var actual_travel: Vector3 = self_pos - _commit_pos
-			var total_ticks: int = _agent_tick - _commit_tick_stamp
-			print("[bot %d] WRISTER LOST PUCK at=(%.2f, %.2f) projected=(%.2f, %.2f) traveled=%.2fm pre_aim_ticks=%d charge_ticks=%d total=%d" % [
-					_peer_id,
-					self_pos.x, self_pos.z,
-					_commit_projected_release.x, _commit_projected_release.z,
-					actual_travel.length(),
-					_pre_aim_ticks_observed, _shoot_charge_tick, total_ticks])
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
@@ -2893,20 +2851,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# _state_wrister_aim sees not shoot_held → release_wrister fires
 		# with the committed power and sweep direction.
 		input.shoot_held = false
-		# Debug: print release vs projection so we can see if the puck
-		# fired from where the projection promised.
-		if SHOW_COMMIT_DEBUG:
-			var drift: Vector3 = self_pos - _commit_projected_release
-			var actual_travel: Vector3 = self_pos - _commit_pos
-			var total_ticks: int = _agent_tick - _commit_tick_stamp
-			print("[bot %d] WRISTER RELEASE actual=(%.2f, %.2f) projected=(%.2f, %.2f) drift=(%+.2f, %+.2f) traveled=%.2fm of projected=%.2fm pre_aim_ticks=%d charge_ticks=%d total=%d" % [
-					_peer_id,
-					self_pos.x, self_pos.z,
-					_commit_projected_release.x, _commit_projected_release.z,
-					drift.x, drift.z,
-					actual_travel.length(),
-					(_commit_projected_release - _commit_pos).length(),
-					_pre_aim_ticks_observed, _shoot_charge_tick, total_ticks])
 		_set_state(State.CARRY)
 
 
