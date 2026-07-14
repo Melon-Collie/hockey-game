@@ -998,7 +998,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# _pick_action — the hold only holds its value while we can actually keep it.
 	var keep_prob: float = current_safety
 	var hold_value: float = (_best_developing_feed(ctx)
-			* keep_prob * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, _hold_elapsed_s))
+			* keep_prob * AIActionScoring.delay_discount(_hold_elapsed_s))
 
 	# Last-resort DUMP (zone-gated; -INF where none applies). It competes against the
 	# RAW (honest, strip-point-priced) carry — see _best_dump.
@@ -1470,8 +1470,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	var receiver_speed: float = receiver_caps.max_speed if receiver_caps != null 			else AIActionScoring.SKATER_REF_SPEED_M_S
 	receiver_value *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0,
 			_forward_clearance_at(ctx, receiver_spot, receiver_speed))
-	var time_decay: float = pow(
-			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
+	var time_decay: float = AIActionScoring.delay_discount(delay_s)
 	# Reception pressure — "how pressured is the receiver," from the same
 	# reachable-set model the carrier reads on ITSELF (current_safety). A defender
 	# draped on the receiver's back is invisible to the two existing loss modes:
@@ -1790,7 +1789,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 			nearest_our = minf(nearest_our, c.distance_to(target))
 		# Dump-and-CHASE: we race the dumped puck at our own top speed (Speed) —
 		# a faster chaser reaches it sooner, so the decay bites less.
-		var chase_decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+		var chase_decay: float = AIActionScoring.delay_discount(
 				nearest_our / maxf(ctx.self_max_speed, 0.001))
 		var value: float = AIActionScoring.position_potential(
 				target, attacking_goal, _scratch_opponents)
@@ -1920,7 +1919,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# cashable option is never a reason to keep carrying.
 	dest_score = maxf(dest_score, maxf(
 			0.0, _candidate_pass_option(ctx, candidate) - _pass_option_at_self))
-	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
+	var decay: float = AIActionScoring.delay_discount(local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
 	var safety: float = AIActionScoring.clearance_to_safety(
@@ -2067,8 +2066,7 @@ func _candidate_pass_option(ctx: RoleContext, candidate: Vector3) -> float:
 		var option: float = _scratch_option_receiver_val[i] \
 				* lane * (1.0 - AIActionScoring.pass_miss_prob(
 						dist, ctx.self_pass_aim_error_rad)) \
-				* pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
-						dist / maxf(pass_speed, 1.0)) \
+				* AIActionScoring.delay_discount(dist / maxf(pass_speed, 1.0)) \
 				* PASS_OPTION_DISCOUNT
 		if option > best:
 			best = option
@@ -2145,7 +2143,7 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 			_scratch_opponents_cont, goalie2,
 			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
 	return shot2 * lane2 * safety2 \
-			* pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, t2) \
+			* AIActionScoring.delay_discount(t2) \
 			* CONTINUATION_DISCOUNT
 
 
@@ -2206,7 +2204,7 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	# credited for continuing the rush exactly as the carrier would credit itself.
 	var advanced: float = _score_at(ctx, reached, ctx.self_pos,
 			_scratch_opponents_pass, goalie, receiver_shot_speed, 0.0)
-	return advanced * keep * pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, t)
+	return advanced * keep * AIActionScoring.delay_discount(t)
 
 
 # How clear the carrier's OWN path toward the attacking objective is — the reachable

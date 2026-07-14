@@ -645,16 +645,34 @@ const MIN_TRAVEL_SPEED_M_S: float = 1.0
 # PICK_ACTION_PERIOD_TICKS physics ticks and treats
 # CARRY as a fourth competing option scored as
 #
-#   carry_score = score_at(destination) × discount(time_to_destination)
+#   carry_score = score_at(destination) × delay_discount(time_to_destination)
 #
-# CARRY_DELAY_DISCOUNT_PER_SEC — per-second decay applied to a future
-# action's value. 0.7 / sec gives a ~2-second half-life. Reflects
-# compounding uncertainty over time: the further out an action, the
-# less sure we are it'll unfold as scored, so its expected value
-# decays. Applies uniformly to carry travel time and pass flight
-# time. Raise toward 0.85 to make bots more patient on long-horizon
-# plans; lower toward 0.55 to prioritise immediate actions over
-# distant ones more aggressively.
+# ── The delay discount (see delay_discount / READ_VALIDITY_TAU_S below) ────────
+# A future action (a carry that arrives in `t` s, a pass in flight, a spot whose
+# shot must still be skated to) is worth less than the same value NOW, because the
+# tactical read it was scored against decays over time: a defender commits, a lane
+# closes, the puck situation turns. This is the survival function of a
+# CONSTANT-HAZARD process — at each instant a fixed probability the read stops
+# holding — so it is exactly geometric, exp(-t / τ). It is NOT a shaped curve; the
+# ONLY free parameter is the hazard timescale τ = READ_VALIDITY_TAU_S, the mean
+# time a read stays roughly valid. (The old per-second form pow(0.7, t) was the
+# same model written the opaque way — 0.7/s is exp(-1/2.8 s), i.e. τ ≈ 2.8 s.)
+#
+# τ is an honest AGGREGATE, not a derived quantity: plausible physical
+# decorrelation times span ~0.4 s (a defender closing a stick-width) to a
+# rush-scale several seconds, so there is no single number to derive it from — it
+# is the one "how much do I trust the near future" feel dial, now stated as the
+# physical quantity it represents rather than a bare rate. Raise it for more
+# patient play (more developing feeds / cross-ice / hold-for-the-backdoor), lower
+# it for more direct, take-what's-there play. Applied uniformly to every future
+# action so an on-route step trades travel time for realization decay one-for-one.
+#
+# Calibration caveat (from the value sweep): the unit suite guards the IMPATIENT
+# edge (breakouts / developing feeds / walkouts start failing below ~0.7/s ↔
+# τ ≈ 2.8 s). The PATIENT edge is pinned at the parameter level by
+# test_delay_discount_bounds_patience (patience can't be cranked to "the future
+# is free") — but whether a longer τ PLAYS better is a feel judgment, a playtest
+# call the suite can't settle.
 #
 # ACTION_HYSTERESIS_MARGIN_FRAC — once a fire intent is set, that
 # intent's (positive) score is scaled by (1 + this) when re-scored: a
@@ -673,8 +691,20 @@ const MIN_TRAVEL_SPEED_M_S: float = 1.0
 # free to switch to fire as soon as fire scores higher. Raise toward
 # 0.30 if intent flickers visibly; lower toward 0.05 if intent feels
 # too sticky.
-const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
+# Mean seconds a tactical read stays roughly valid (the hazard timescale above).
+# τ ≈ 4.5 s ↔ a ~0.80 per-second discount — raised from the prior τ ≈ 2.8 s
+# (0.70/s) toward more patient, developing-play-friendly carrying. See the sweep
+# caveat above: this is the patient side, judged by feel, not by the suite.
+const READ_VALIDITY_TAU_S: float = 4.5
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
+
+
+# Value multiplier for a play `delay_s` seconds in the future — constant-hazard
+# survival, exp(-delay_s / READ_VALIDITY_TAU_S). One chokepoint for the delay
+# discount (see the block above): every future-action scorer routes through here
+# so the entropy model lives in exactly one place. Allocation-free.
+static func delay_discount(delay_s: float) -> float:
+	return exp(-maxf(delay_s, 0.0) / READ_VALIDITY_TAU_S)
 
 
 # Geometric shot danger in [0, 1]: the best of the five goalie holes, seen from
@@ -1729,9 +1759,8 @@ static func position_potential(
 # Realization discount for position_potential when it prices a CARRY /
 # receiver destination in the carrier's expected-value compete: potential
 # is FUTURE value — its promise (a real shot) is only cashed by skating
-# from `pos` to the slot — so it must pay the same per-second delay
-# discount (CARRY_DELAY_DISCOUNT_PER_SEC) that every other future action
-# in the model pays, over that remaining travel time.
+# from `pos` to the slot — so it must pay the same delay_discount that
+# every other future action in the model pays, over that remaining travel time.
 #
 # Without this, the carrier's stand-still candidate held its potential
 # UNDECAYED while every movement candidate paid decay over its travel
@@ -1749,7 +1778,7 @@ static func position_potential(
 static func potential_realization_discount(pos: Vector3,
 		attacking_goal: Vector3) -> float:
 	var travel_dist: float = maxf(0.0, pos.distance_to(attacking_goal) - SLOT_RADIUS_M)
-	return pow(CARRY_DELAY_DISCOUNT_PER_SEC, travel_dist / SKATER_REF_SPEED_M_S)
+	return delay_discount(travel_dist / SKATER_REF_SPEED_M_S)
 
 
 # ── Dumping ───────────────────────────────────────────────────────────────────

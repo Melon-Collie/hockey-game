@@ -815,13 +815,31 @@ func test_realization_discount_decays_with_distance() -> void:
 	assert_lt(far_d, near_d, "deeper positions pay a deeper discount")
 
 
+func test_delay_discount_bounds_patience() -> void:
+	# The delay discount is constant-hazard survival, exp(-t / READ_VALIDITY_TAU_S):
+	# 1 at t=0, strictly decreasing. The UPPER-BOUND guard the value sweep was
+	# missing — patience must stay bounded, so a multi-second play is meaningfully
+	# discounted and τ can't be cranked toward "the future is free" (dithering).
+	assert_almost_eq(AIActionScoring.delay_discount(0.0), 1.0, 0.0001,
+			"no delay, no discount")
+	assert_lt(AIActionScoring.delay_discount(1.0), 1.0, "a future play is worth less")
+	assert_lt(AIActionScoring.delay_discount(2.0), AIActionScoring.delay_discount(1.0),
+			"further out is worth strictly less")
+	assert_lt(AIActionScoring.delay_discount(3.0), 0.62,
+			"a 3 s-out play is substantially discounted — patience stays bounded")
+	# Sanity: the geometric identity the per-second reading rests on — the
+	# discount over 2 s equals the 1 s discount squared.
+	assert_almost_eq(AIActionScoring.delay_discount(2.0),
+			AIActionScoring.delay_discount(1.0) * AIActionScoring.delay_discount(1.0),
+			0.0001, "constant-hazard: memoryless, so it compounds geometrically")
+
+
 func test_realization_discount_matches_delay_discount_currency() -> void:
-	# The discount IS the standard per-second delay discount over the
-	# remaining travel time at reference speed — same currency as every
-	# other future action in the carrier's EV model.
+	# The discount IS the standard delay discount over the remaining travel time
+	# at reference speed — same currency (delay_discount) as every other future
+	# action in the carrier's EV model.
 	var pos := Vector3(0.0, 0.0, 8.65)  # 18 m from goal → 12 m past slot edge
-	var expected: float = pow(
-			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+	var expected: float = AIActionScoring.delay_discount(
 			12.0 / AIActionScoring.SKATER_REF_SPEED_M_S)
 	assert_almost_eq(
 			AIActionScoring.potential_realization_discount(pos, GOAL),

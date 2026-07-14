@@ -1172,6 +1172,24 @@ func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
 			"a staging cross-seam finisher gives a positive developing feed")
 
 
+func test_developing_hold_self_extinguishes_as_it_is_held() -> void:
+	# Upper-bound guard for READ_VALIDITY_TAU_S: the reason to HOLD for a developing
+	# feed decays as the hold drags on (delay_discount(_hold_elapsed_s)), so a wait
+	# that never pays off self-terminates rather than dithering forever. A longer
+	# hold is worth strictly less than a fresh one against the SAME developing feed.
+	# (The parameter-level patient-edge guard is
+	# test_delay_discount_bounds_patience in test_ai_action_scoring.)
+	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	var feed: float = carrier._best_developing_feed(ctx)
+	assert_gt(feed, 0.0, "sanity: there is a developing feed to hold for")
+	var fresh_hold: float = feed * AIActionScoring.delay_discount(0.0)
+	var stale_hold: float = feed * AIActionScoring.delay_discount(1.5)
+	assert_lt(stale_hold, fresh_hold,
+			"holding longer is worth less — the wait self-extinguishes, no dithering")
+
+
 func test_developing_feed_invisible_without_the_cognition_gate() -> void:
 	# Same staging finisher the test above values positively — but a tier that
 	# doesn't hold for developing plays (Easy) sees nothing: it plays only what
