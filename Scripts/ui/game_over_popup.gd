@@ -28,7 +28,9 @@ const _STAR_REVEAL_DELAY: float = 0.55
 const _STAR_REVEAL_GAP: float = 0.55
 
 const _MAX_STARS: int = 3
-const _RANK_TAGS: Array[String] = ["1ST STAR", "2ND STAR", "3RD STAR"]
+# Translation keys, tr()'d at the display seam (see _build_star_row); localized
+# copy lives in locale/translations.csv.
+const _RANK_TAG_KEYS: Array[String] = ["STAR_FIRST", "STAR_SECOND", "STAR_THIRD"]
 # First star reads bigger than the runners-up — rank is carried by scale and
 # color, not by borders.
 const _RANK_NAME_SIZES: Array[int] = [38, 24, 24]
@@ -139,7 +141,7 @@ func _build_stars_block(root: Control) -> void:
 	_stars_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_stars_block)
 
-	_stars_tag = _lbl("★  STARS OF THE GAME  ★", 15, _GOLD)
+	_stars_tag = _lbl(tr("STARS_OF_THE_GAME"), 15, _GOLD)
 	_stars_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_stars_block.add_child(_stars_tag)
 
@@ -153,7 +155,7 @@ func _build_star_row(rank: int) -> Control:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var first: bool = rank == 0
-	var tag := _lbl(_RANK_TAGS[rank], 14 if first else 12, _GOLD if first else _DIM)
+	var tag := _lbl(tr(_RANK_TAG_KEYS[rank]), 14 if first else 12, _GOLD if first else _DIM)
 	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	tag.set_anchors_preset(Control.PRESET_FULL_RECT)

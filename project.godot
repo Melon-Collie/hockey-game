@@ -54,6 +54,11 @@ enabled=PackedStringArray("res://addons/gut/plugin.cfg")
 
 theme/custom="uid://cgj3potxxfee7"
 
+[internationalization]
+
+locale/translations=PackedStringArray("res://locale/translations.en.translation", "res://locale/translations.es.translation")
+locale/fallback="en"
+
 [input]
 
 shoot={

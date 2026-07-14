@@ -17,11 +17,14 @@ const PASSING_ID: String = "passing"
 const ALL_IDS: Array[String] = [PENALTY_SHOTS_ID, SHOT_ACCURACY_ID, PASSING_ID]
 
 
-static func get_display_name(drill_id: String) -> String:
+# Translation key for the drill's display name; the raw id for an unknown drill.
+# The domain stays engine-free — the UI tr()s this key. Localized copy lives in
+# locale/translations.csv.
+static func display_name_key(drill_id: String) -> String:
 	match drill_id:
-		PENALTY_SHOTS_ID: return "Penalty Shots"
-		SHOT_ACCURACY_ID: return "Shot Accuracy"
-		PASSING_ID: return "Passing"
+		PENALTY_SHOTS_ID: return "DRILL_PENALTY_SHOTS"
+		SHOT_ACCURACY_ID: return "DRILL_SHOT_ACCURACY"
+		PASSING_ID: return "DRILL_PASSING"
 	return drill_id
 
 

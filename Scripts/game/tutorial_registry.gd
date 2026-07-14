@@ -76,25 +76,27 @@ static func get_step_ids(tutorial_id: String) -> Array[int]:
 	return []
 
 
-static func get_display_name(tutorial_id: String) -> String:
+# Translation key for the tutorial's display name; the raw id for an unknown
+# tutorial (so nothing crashes on a bad id). The domain stays engine-free — the
+# UI tr()s this key. Localized copy lives in locale/translations.csv.
+static func display_name_key(tutorial_id: String) -> String:
 	match tutorial_id:
-		MOVEMENT_ID: return "Movement"
-		STICK_ID: return "Stick Basics"
-		SHOOTING_ID: return "Shooting"
-		PASSING_ID: return "Passing"
-		DEFENSE_ID: return "Defense"
-		RULES_ID: return "Rules"
+		MOVEMENT_ID: return "TUTORIAL_MOVEMENT"
+		STICK_ID: return "TUTORIAL_STICK_BASICS"
+		SHOOTING_ID: return "TUTORIAL_SHOOTING"
+		PASSING_ID: return "TUTORIAL_PASSING"
+		DEFENSE_ID: return "TUTORIAL_DEFENSE"
+		RULES_ID: return "TUTORIAL_RULES"
 	return tutorial_id
 
 
-# "Part N of M" framing so the tutorials read as one course the player is
-# partway through, not optional extras. N is the 1-based position in
-# ALL_IDS; returns "" for an unrecognised id.
-static func get_sequence_label(tutorial_id: String) -> String:
+# 1-based position in ALL_IDS (0 for an unrecognised id), for the "Part N of M"
+# framing that makes the tutorials read as one ordered course. The UI formats
+# it via the TUTORIAL_PART_N_OF_M translation (so word order can differ per
+# language); total count is ALL_IDS.size().
+static func sequence_position(tutorial_id: String) -> int:
 	var i: int = ALL_IDS.find(tutorial_id)
-	if i < 0:
-		return ""
-	return "Part %d of %d" % [i + 1, ALL_IDS.size()]
+	return i + 1 if i >= 0 else 0
 
 
 # Whether the tutorial should have the normal AI goalie PAIR auto-spawned by

@@ -4667,11 +4667,11 @@ func _on_smart_ping_received(sender_peer_id: int, ping_type: int,
 	var local_team: int = _registry.team_id_by_peer.get(NetworkManager.local_peer_id(), -1)
 	if local_team == sender_team and not NetworkManager.is_replay_mode():
 		if ping_type == PingRules.Type.GO_THERE:
-			_spawn_ping_marker(world_pos, PingRules.message_for(ping_type))
+			_spawn_ping_marker(world_pos, tr(PingRules.message_key_for(ping_type)))
 		else:
 			var sender_rec: PlayerRecord = _registry.get_record(sender_peer_id)
 			if sender_rec != null and sender_rec.skater != null:
-				sender_rec.skater.show_ping_bubble(PingRules.message_for(ping_type))
+				sender_rec.skater.show_ping_bubble(tr(PingRules.message_key_for(ping_type)))
 		SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
 
 	# Bot obedience is host-only (bots are host-simulated; offline free play

@@ -343,6 +343,13 @@ var default_bindings: Dictionary = {}
 # Options → Game → Data Sharing.
 var share_gameplay_stats: bool = true
 
+# UI language. Empty string means "follow the OS language" (resolved to a
+# shipped locale, else English); a non-empty code ("en", "es") forces that
+# language. Applied through LocaleManager into Godot's TranslationServer, which
+# every UI tr() reads. Shipped languages + resolution live in LocaleManager;
+# the string catalogue is locale/translations.csv.
+var locale: String = ""
+
 # Replay recording. Recording fires on every peer (host + clients) for every
 # multiplayer game; offline / tutorial sessions never record. ReplayFileIndex
 # purges oldest replays in user://replays/ down to keep_count at writer-open
@@ -460,6 +467,7 @@ func save() -> void:
 	cfg.set_value("game", "goalie_difficulty_scale_version", 1)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
+	cfg.set_value("game", "locale", locale)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
 	cfg.set_value("replay", "keep_count", replay_keep_count)
 	cfg.set_value("tutorials", "completion", tutorial_completion)
@@ -538,6 +546,10 @@ func _sync_from_cloud() -> void:
 	f.store_buffer(cloud_bytes)
 	f = null
 	_load()
+
+func apply_locale() -> void:
+	LocaleManager.apply(locale)
+
 
 func apply_bindings() -> void:
 	for action: String in bindings:
@@ -1050,6 +1062,8 @@ func _load() -> void:
 		freeplay_goalie_difficulty = clampi(int(cfg.get_value("game", "freeplay_goalie_difficulty", GoalieSkillProfile.Difficulty.EASY)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
+		var raw_locale: Variant = cfg.get_value("game", "locale", "")
+		locale = raw_locale if raw_locale is String else ""
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
 		var raw_completion: Variant = cfg.get_value("tutorials", "completion", {})
@@ -1076,6 +1090,7 @@ func _load() -> void:
 	# above entirely), so there is always at least one preset and the flat build
 	# matches the active one.
 	_finalize_presets()
+	apply_locale()
 	apply_audio()
 	apply_bindings()
 	call_deferred(&"apply_input")
