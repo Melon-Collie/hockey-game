@@ -155,7 +155,7 @@ var holds_for_developing_feeds: bool = true
 var plays_rush_pass_lanes: bool = true
 # COGNITION gate: true = the carrier shields the puck with its body — under
 # pressure the blade pulls the puck to the protected side of the reachable-set
-# seam (carrier protect_offset/protect_pressure, consumed by the state machine's
+# seam (carrier protect_offset/protect_gain, consumed by the state machine's
 # carry mouse aim) and the poke-evade deke cuts toward the seam instead of a
 # blind perpendicular. False = today's naive forward carry (the puck stays
 # presented ahead of the body — the easy pickpocket a newcomer needs).

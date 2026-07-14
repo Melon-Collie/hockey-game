@@ -308,6 +308,22 @@ const CONTINUATION_MIN_DIST_M: float = 1.5
 # reach safety, lane, decay) are all inside the continuation itself.
 const CONTINUATION_DISCOUNT: float = 0.6
 
+# ── Puck-protect directionality (see the protect block in _pick_action) ──────
+# A carrier driving at the net already screens the forward-held puck from a
+# defender BEHIND it with its own body — no shield turn is needed to keep it
+# away from a trailing stick. So the body-interposition protect read counts
+# only defenders that are NOT already beaten: a defender projected (at the
+# evasion horizon, so a fast back-checker who'll pull even by then still counts)
+# more than this far behind the carrier along the netward line is screened for
+# free and excluded. Without this, a beaten checker trailing the rush kept the
+# shield engaged and the carrier stayed turned side-on instead of squaring to
+# the net the instant it cleared its man — the reported "protecting the puck
+# after they've already beaten the guy pressuring them." A body-scale slack, the
+# same band the state machine's man-to-beat test uses (CARRY_MAN_TO_BEAT_BEHIND_M):
+# a defender even/beside the carrier still earns the shield; only one clearly
+# skated past drops out. Physical screen measurement, not a shape knob.
+const PROTECT_SCREEN_BEHIND_M: float = 0.75
+
 
 # ── Persistent decision state ────────────────────────────────────────────────
 # What the carrier currently wants to do. CARRY = no fire intent;
@@ -399,14 +415,19 @@ var dump_is_soft: bool = false
 # ── Puck-protect mirror (read by the state machine's carry blade aim) ────────
 # Where in the blade's handling envelope the puck is safest right now, as an
 # OFFSET from the body (the state machine re-applies it to the live body
-# position each tick), and how covered the default presented-forward carry spot
-# is (0 = fully clear — keep the forward carry; 1 = covered — pull the puck
-# fully to the protected seam, body between puck and checker). Zeroed while
+# position each tick), and the shield WEIGHT — how far the blade should swing
+# from the presented-forward carry toward that protected seam (0 = keep the
+# forward carry; 1 = pull the puck fully to the seam, body between puck and
+# checker). The weight is the SAFETY THE SHIELD BUYS: the seam's reachable
+# clearance less the forward spot's, so it rises only when the forward puck is
+# genuinely covered AND a safer seam exists to pull it to (necessity AND
+# ability), and falls to 0 the instant either is missing — no pressure floor,
+# the shield engages exactly to the degree it helps. Zeroed while
 # ctx.protects_the_puck is false (the naive-carry tier) and on possession loss.
 # Refreshed every _pick_action re-eval (~30 Hz); staleness between re-evals is
 # absorbed by the body-relative offset and the mouse motion smoothing.
 var protect_offset: Vector3 = Vector3.ZERO
-var protect_pressure: float = 0.0
+var protect_gain: float = 0.0
 # The body-scale evasion seam from the same re-eval (world point) — the
 # OBJECTIVE-DIRECTED seam (AIActionScoring.best_evade_point_toward): the safe
 # spot with the most progress toward the live carry anchor, so the poke-evade
@@ -467,6 +488,15 @@ var _scratch_our_defenders: Array[Vector3] = []
 # Our chasers for a dump race: our defenders plus ourselves (we dump and chase).
 # Rebuilt inside _best_dump.
 var _scratch_our_chasers: Array[Vector3] = []
+# Directional-filtered opponents for the puck-protect read (see the protect
+# block in _pick_action): the full opponent set minus defenders the carrier's
+# body already screens (beaten / behind, per PROTECT_SCREEN_BEHIND_M). Kept
+# separate from _scratch_opponents so the shot / pass / carry lanes still see
+# every defender. Index-matched triple, refilled every re-eval by
+# _fill_protect_opponents.
+var _scratch_protect_opponents: Array[Vector3] = []
+var _scratch_protect_vels: Array[Vector3] = []
+var _scratch_protect_caps: Array[AISkaterCaps] = []
 # Pass-OPTION cache (see _candidate_pass_option): each legal receiver's
 # position and spot value at its CURRENT location, computed once per
 # _pick_action re-eval so the per-candidate option read only prices the LANE
@@ -550,7 +580,7 @@ func reset() -> void:
 	dump_target = Vector3.INF
 	dump_is_soft = false
 	protect_offset = Vector3.ZERO
-	protect_pressure = 0.0
+	protect_gain = 0.0
 	evade_seam_world = Vector3.INF
 	brake_check_favored = false
 	deke_go = false
@@ -689,23 +719,47 @@ func _pick_action(ctx: RoleContext) -> void:
 						deke_cut_dir = Vector2(cut3.x, cut3.z)
 						deke_fake_dir = Vector2(-perp.x * float(side), -perp.z * float(side))
 
-	# Puck-protect read (see the mirror fields' doc): how covered the presented
-	# forward carry spot is over the evasion horizon, and where in the blade
-	# envelope alone the puck is safest. The state machine blends the carry
-	# mouse between the two by the pressure — pure stick work, steering and the
+	# Puck-protect read (see the mirror fields' doc): where in the blade envelope
+	# alone the puck is safest, and the shield gain — how much safety pulling it
+	# there buys over the presented-forward spot. The state machine blends the
+	# carry mouse between the two by that gain — pure stick work, steering and the
 	# carry destination are untouched.
 	if ctx.protects_the_puck:
+		# Directional screen filter (see PROTECT_SCREEN_BEHIND_M): a carrier
+		# driving at the net already shields the forward-held puck from a defender
+		# BEHIND it with its own body, so a beaten checker trailing the rush must
+		# not keep the shield on and hold the body side-on. Drop those defenders
+		# before the pressure / seam read so it answers only genuine side/front
+		# pressure and the carrier squares to the net the instant its man is
+		# beaten. The shot / pass / carry lanes above still see every defender.
+		_fill_protect_opponents(ctx)
+		var horizon: float = AIActionScoring.EVADE_HORIZON_S
 		var fwd_spot: Vector3 = _puck_pos_at(
-				self_pos + ctx.self_velocity * AIActionScoring.EVADE_HORIZON_S,
-				attacking_goal)
-		protect_pressure = 1.0 - AIActionScoring.clearance_to_safety(
-				AIActionScoring.reach_clearance(fwd_spot, AIActionScoring.EVADE_HORIZON_S,
-						_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+				self_pos + ctx.self_velocity * horizon, attacking_goal)
+		var fwd_safety: float = AIActionScoring.clearance_to_safety(
+				AIActionScoring.reach_clearance(fwd_spot, horizon,
+						_scratch_protect_opponents, _scratch_protect_vels,
+						_scratch_protect_caps))
 		protect_offset = AIActionScoring.best_handle_protect_point(
-				self_pos, ctx.self_velocity, _scratch_opponents,
-				_scratch_opponent_vels, ctx.self_handle_reach, _scratch_opponent_caps)
+				self_pos, ctx.self_velocity, _scratch_protect_opponents,
+				_scratch_protect_vels, ctx.self_handle_reach, _scratch_protect_caps)
+		# Shield WEIGHT = the safety the shield actually buys. best_handle_protect_point
+		# projects the body to the same horizon, so proj + offset is the seam world
+		# point; its clearance less the forward spot's is how much safer shielding
+		# makes the puck. Positive only under genuine coverage (necessity: the
+		# forward puck is inside a stick's reach) AND with somewhere safer to hide it
+		# (ability: the seam clears more), zero the instant either is missing — the
+		# grounded replacement for the old pressure floor, which gated a raw coverage
+		# read by a hand-picked number and so shielded pre-emptively against near
+		# defenders who weren't actually threatening the puck.
+		var seam_world: Vector3 = self_pos + ctx.self_velocity * horizon + protect_offset
+		var seam_safety: float = AIActionScoring.clearance_to_safety(
+				AIActionScoring.reach_clearance(seam_world, horizon,
+						_scratch_protect_opponents, _scratch_protect_vels,
+						_scratch_protect_caps))
+		protect_gain = clampf(seam_safety - fwd_safety, 0.0, 1.0)
 	else:
-		protect_pressure = 0.0
+		protect_gain = 0.0
 		protect_offset = Vector3.ZERO
 
 	# Teammate ids — used by every score_at evaluation (top + inner).
@@ -1156,6 +1210,46 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 		else:
 			# Our teammate — a defender for the turnover-cost term.
 			_scratch_our_defenders.append(s.position)
+
+
+# Refills the directional protect-opponent triple (see the protect block in
+# _pick_action) from the full opponent lists, dropping every defender the
+# carrier's body already screens: projected to the evasion horizon, a defender
+# more than PROTECT_SCREEN_BEHIND_M behind the carrier along the netward line is
+# beaten and excluded. Both bodies are projected to the SAME instant so a fast
+# back-checker who'll pull even by then still counts as pressure. The netward
+# direction runs from the body to the attacking goal; when that is degenerate
+# (carrier on the goal), no defender is dropped. Reuses member scratch arrays —
+# carrier-only (~1 bot/team) at the ~30 Hz re-eval, no per-call allocation.
+func _fill_protect_opponents(ctx: RoleContext) -> void:
+	_scratch_protect_opponents.clear()
+	_scratch_protect_vels.clear()
+	_scratch_protect_caps.clear()
+	var horizon: float = AIActionScoring.EVADE_HORIZON_S
+	var to_goal: Vector3 = ctx.attacking_goal_pos - ctx.self_pos
+	var len_sq: float = to_goal.x * to_goal.x + to_goal.z * to_goal.z
+	var have_dir: bool = len_sq > 0.0001
+	var nx: float = 0.0
+	var nz: float = 0.0
+	if have_dir:
+		var inv: float = 1.0 / sqrt(len_sq)
+		nx = to_goal.x * inv
+		nz = to_goal.z * inv
+	var self_proj_x: float = ctx.self_pos.x + ctx.self_velocity.x * horizon
+	var self_proj_z: float = ctx.self_pos.z + ctx.self_velocity.z * horizon
+	for i: int in _scratch_opponents.size():
+		if have_dir:
+			var opp_proj_x: float = _scratch_opponents[i].x \
+					+ _scratch_opponent_vels[i].x * horizon
+			var opp_proj_z: float = _scratch_opponents[i].z \
+					+ _scratch_opponent_vels[i].z * horizon
+			var ahead: float = (opp_proj_x - self_proj_x) * nx \
+					+ (opp_proj_z - self_proj_z) * nz
+			if ahead < -PROTECT_SCREEN_BEHIND_M:
+				continue   # beaten — the body screens the forward puck for free
+		_scratch_protect_opponents.append(_scratch_opponents[i])
+		_scratch_protect_vels.append(_scratch_opponent_vels[i])
+		_scratch_protect_caps.append(_scratch_opponent_caps[i])
 
 
 # Refills `out_buf` with each opponent's position projected forward

@@ -1945,13 +1945,13 @@ func test_committed_saucer_pass_caps_launch_at_the_receivability_bound() -> void
 
 # ─── puck-protect mirror (blade shielding read by the state machine) ─────────
 
-func test_open_ice_carrier_feels_no_protect_pressure() -> void:
-	# Nobody near the presented forward carry spot: pressure 0, and the state
-	# machine keeps the plain forward carry aim.
+func test_open_ice_carrier_feels_no_protect_gain() -> void:
+	# Nobody near the presented forward carry spot: shielding buys nothing, so the
+	# gain is 0 and the state machine keeps the plain forward carry aim.
 	var ctx := _make_ctx(Vector3(0, 0, 5))
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	assert_eq(c.protect_pressure, 0.0, "open ice leaves the forward carry uncovered")
+	assert_eq(c.protect_gain, 0.0, "open ice: the forward carry is already safe")
 	assert_true(c.evade_seam_world.is_finite(),
 			"the evasion seam is published for the deke cut")
 
@@ -1968,7 +1968,8 @@ func test_frontal_stick_threat_pulls_the_puck_behind_the_body() -> void:
 	var ctx := _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	assert_gt(c.protect_pressure, 0.9, "a stick on the presented spot is full pressure")
+	assert_gt(c.protect_gain, 0.5,
+			"a stick on the presented spot, with a safe hip to hide it, is a strong shield")
 	assert_gt(c.protect_offset.z, 0.5, "the puck pulls to the protected side of the body")
 
 
@@ -1984,8 +1985,59 @@ func test_protect_read_is_gated_by_the_cognition_tier() -> void:
 	ctx.protects_the_puck = false
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	assert_eq(c.protect_pressure, 0.0, "the beginner tier never shields")
+	assert_eq(c.protect_gain, 0.0, "the beginner tier never shields")
 	assert_eq(c.protect_offset, Vector3.ZERO, "no protect offset on the beginner tier")
+
+
+func test_beaten_defender_behind_does_not_hold_the_shield() -> void:
+	# The reported bug: a carrier keeps protecting the puck (body turned side-on)
+	# AFTER it has beaten the man pressuring it. A defender trailing directly
+	# behind is within stick-reach of the presented forward puck, so the
+	# undirected reach read scored it as full pressure and the shield stayed on —
+	# even though the carrier's own body already screens the forward puck from a
+	# man behind it. The directional filter drops a beaten/behind defender, so the
+	# shield disengages and the carrier is free to square to the net.
+	var self_pos := Vector3(0, 0, -15)   # in the offensive zone, driving at -Z net
+	var behind: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0, 0, -14.0)],   # 1 m behind (toward our end) — beaten
+	]
+	var cb := AIRoleCarrier.new()
+	cb.decide(_make_ctx(self_pos, behind))
+	assert_eq(cb.protect_gain, 0.0,
+			"a beaten defender behind the carrier is screened for free — no shield")
+
+	# Sanity: a stick in FRONT (goal-side) covering the presented puck is a genuine
+	# threat and still shields hard, so the filter cuts by direction, not by
+	# turning shielding off. 2.2 m ahead — the forward puck is inside his reach,
+	# with a safe hip to hide it to.
+	var front: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(0, 0, -17.2)],   # 2.2 m ahead, reach over the presented puck
+	]
+	var cf := AIRoleCarrier.new()
+	cf.decide(_make_ctx(self_pos, front))
+	assert_gt(cf.protect_gain, 0.5,
+			"a stick on the forward puck still earns a strong shield; got %f"
+			% cf.protect_gain)
+
+
+func test_beaten_side_defender_still_shields() -> void:
+	# The filter must not fire too early: a defender even/beside the carrier (not
+	# yet skated past) is still a live stick and must keep earning the shield —
+	# only a man clearly behind is screened for free. Defender abreast with a
+	# stick-reach to the side: the forward puck is covered and the far hip is
+	# safer, so shielding buys real safety and the gain stays positive.
+	var self_pos := Vector3(0, 0, -15)
+	var beside: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2.2, 0, -15.0)],   # abreast, off the strong-side hip
+	]
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx(self_pos, beside))
+	assert_gt(c.protect_gain, 0.15,
+			"a defender abreast is not beaten — the shield still engages; got %f"
+			% c.protect_gain)
 
 
 # ─── OZ possession retention: cycle out instead of crashing the net ──────────

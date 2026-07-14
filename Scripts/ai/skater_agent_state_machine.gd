@@ -355,18 +355,6 @@ const CARRY_MAN_TO_BEAT_RADIUS_M: float = 3.5
 # length. Physical measurement.
 const CARRY_MAN_TO_BEAT_BEHIND_M: float = 0.75
 
-# Pressure floor for the puck-protect blend: below this, the carry cursor
-# stays on the quiet forward dangle; above it, the blend ramps 0→full over the
-# remaining band (full shield at pressure 1 is unchanged). Without the floor
-# the blend engaged proportionally at ANY pressure > 0, so light incidental
-# traffic kept partially swinging the cursor toward the hip — a constant
-# low-grade body wag. Feel tunable (how much pressure earns the deliberate
-# shield turn), not an evaluation curve — the pressure itself stays the
-# grounded reachable-set read. Raised 0.3 → 0.45 on playtest feedback: the
-# shield turn still read as spinny against defenders who were near but not
-# genuinely on the puck.
-const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.45
-
 # How far off the play line the protect aim is allowed to swing the body. The
 # domain seam (best_handle_protect_point) is the MAX-CLEARANCE point in the
 # handling envelope, which for a checker on the hip sits ~directly away from
@@ -3979,19 +3967,19 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# everything else: a blade pinned to the protect seam doesn't get
 	# pulled back into the checker's reach.
 	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir)
-	# Puck protection (protects_the_puck tiers): as the presented-forward carry
-	# spot's reachable clearance collapses (carrier protect_pressure → 1), swing
-	# the blade toward the protected seam of the handling envelope — typically
-	# the hip away from the checker, putting the body between puck and stick.
-	# The seam offset is re-based on the LIVE body position (the carrier mirror
-	# refreshes at ~30 Hz) and projected out to the carry aim ring: the arc-step
-	# in `_step_mouse_aim` reads direction only, so a short raw offset would
-	# under-weight the protect side in a positional lerp. The blend engages
-	# above CARRY_PROTECT_PRESSURE_FLOOR (quiet hands — light incidental
-	# traffic doesn't earn the shield turn) and ramps to the unchanged full
-	# shield at pressure 1.
-	var protect_w: float = (_carrier.protect_pressure - CARRY_PROTECT_PRESSURE_FLOOR) \
-			/ (1.0 - CARRY_PROTECT_PRESSURE_FLOOR)
+	# Puck protection (protects_the_puck tiers): swing the blade from the
+	# presented-forward carry toward the protected seam of the handling envelope
+	# — typically the hip away from the checker, putting the body between puck and
+	# stick. The blend weight is the carrier's protect_gain: the SAFETY the shield
+	# buys (seam clearance − forward clearance), so it engages exactly to the
+	# degree shielding actually helps and stays at 0 when the forward puck is
+	# already safe or no safer seam exists — necessity AND ability, with no
+	# pressure floor (see AIRoleCarrier's protect mirror). The seam offset is
+	# re-based on the LIVE body position (the carrier mirror refreshes at ~30 Hz)
+	# and projected out to the carry aim ring: the arc-step in `_step_mouse_aim`
+	# reads direction only, so a short raw offset would under-weight the protect
+	# side in a positional lerp.
+	var protect_w: float = _carrier.protect_gain
 	if _protects_the_puck and protect_w > 0.0:
 		var protect_dir: Vector3 = _carrier.protect_offset
 		protect_dir.y = 0.0
