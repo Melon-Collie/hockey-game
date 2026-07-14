@@ -1191,6 +1191,12 @@ var _cached_aim_arc_rate: float = MOUSE_ARC_RATE_RAD_S
 var _off_puck_aim_live: bool = false
 var _off_puck_aim_anchor: Vector3 = Vector3.ZERO
 var _off_puck_aim_near_m: float = 0.0
+# Set when the dispatch tick resolved to an ACTIVE poke-jab (aiming through an
+# opposing carrier's puck). On skipped ticks the aim then re-tracks the moving
+# puck live so the stab sweeps smoothly onto it — check_poke is a swept blade-vs-
+# puck segment test, so a staircased stab can skip a contact a live one catches.
+# The jab's active/cooldown counters still advance on the dispatch cadence only.
+var _off_puck_jab_live: bool = false
 # Latched side of the far/near aim flip (see _compute_desired_aim_dir). True =
 # NEAR (aiming the threat/puck), false = FAR (aiming the anchor). Debounced by
 # FACE_NEAR_ANCHOR_HYSTERESIS_M so boundary-camping doesn't chatter the blade.
@@ -1569,14 +1575,16 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			if live_recv_aim.is_finite():
 				input.mouse_world_pos = _step_mouse_toward(live_recv_aim)
 				return
-		elif _state == State.OFF_PUCK and _off_puck_aim_live:
-			# Re-derive the ready-stance blade target from CURRENT perception so it
-			# tracks the moving puck/threat continuously between dispatches. Same
-			# _step_mouse_face path as the dispatch tick — the snap-to-clamped
-			# facing is smooth precisely because the target now moves every tick.
-			input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(
-					self_pos, _off_puck_aim_anchor, snapshot, _off_puck_aim_near_m))
-			return
+		elif _state == State.OFF_PUCK:
+			# Re-derive the off-puck blade target from CURRENT perception so it
+			# tracks the moving puck/threat continuously between dispatches (the
+			# ready-stance hold AND the active poke-jab reach). Same _step_mouse_face
+			# path as the dispatch tick — the snap-to-clamped facing is smooth
+			# precisely because the target now moves every tick.
+			var live_off_aim: Vector3 = _off_puck_live_aim(snapshot, self_pos)
+			if live_off_aim.is_finite():
+				input.mouse_world_pos = _step_mouse_face(live_off_aim)
+				return
 		if _has_cached_aim_target:
 			input.mouse_world_pos = _step_mouse_internal(
 					_cached_aim_target, _cached_aim_mode,
@@ -1611,10 +1619,12 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 
-	# Default: no live ready-stance refresh on skipped ticks. The two plain
-	# ready-stance branches below re-arm it; jab / one-timer / aim-override
-	# leave it off so those keep the throttled cached-target path.
+	# Default: no live aim refresh on skipped ticks. The branches below re-arm
+	# the one they hit — plain ready-stance (_off_puck_aim_live) or an active
+	# poke-jab (_off_puck_jab_live). One-timer pre-aim / explicit aim override
+	# leave both off so they keep the throttled cached-target path.
 	_off_puck_aim_live = false
+	_off_puck_jab_live = false
 
 	# Tag-up override: when ghosted (offside), bot must clear back across
 	# the blue line before doing anything else. Highest-priority override
@@ -1739,6 +1749,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		if not would_be_ready:
 			jab_aim = _poke_jab_aim(snapshot, self_pos)
 		if jab_aim.is_finite():
+			_off_puck_jab_live = true
 			input.mouse_world_pos = _step_mouse_face(jab_aim)
 		elif would_be_ready:
 			input.mouse_world_pos = _step_mouse_face(_shot_aim_point(snapshot, self_pos, 0.0))
@@ -4662,6 +4673,20 @@ func _arm_off_puck_live_aim(anchor: Vector3, near_anchor_m: float) -> void:
 	_off_puck_aim_live = true
 	_off_puck_aim_anchor = anchor
 	_off_puck_aim_near_m = near_anchor_m
+
+
+# The off-puck blade target the dispatch tick's aim resolution would produce
+# from CURRENT perception, for the throttle's skipped-tick re-derive. INF when
+# the resolved branch isn't one we refresh live (one-timer pre-aim / explicit
+# override — those keep the throttled cached path). The DECISION stays throttled;
+# only the blade TARGET re-derives every physics tick.
+func _off_puck_live_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	if _off_puck_jab_live:
+		return _carrier_puck_pos(snapshot)
+	if _off_puck_aim_live:
+		return _ready_stance_aim(
+				self_pos, _off_puck_aim_anchor, snapshot, _off_puck_aim_near_m)
+	return Vector3.INF
 
 
 # Returns a target position 2 m in front of the bot. Direction is
