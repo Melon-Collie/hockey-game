@@ -802,6 +802,11 @@ var _prev_role_target: Vector3 = Vector3.INF
 # Vector3 (last tick's velocity or smoothed accel).
 var _prev_velocity_by_peer: Dictionary = {}
 var _accel_by_peer: Dictionary = {}
+# The accel source consumed this tick: the host's shared per-frame cache
+# (snapshot.accel_by_peer) when present, else the local _accel_by_peer built by
+# _update_acceleration_cache (unit tests hand-build snapshots without the shared
+# cache). Set every dispatch — accel is read in ctx build and in PASS_PRESSED aim.
+var _accel_ref: Dictionary = _accel_by_peer
 
 # Carrier-role decision behavior. Owns _pick_action's scoring +
 # hysteresis + cooldown + scratch buffers. Lives for the full
@@ -1507,10 +1512,17 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	_ticks_in_state += 1
 	_agent_tick += 1
 	_update_engagement_cooldown(snapshot, self_state)
-	# Updated every dispatch (including skipped-throttle ticks) so the
-	# accel signal stays usable on the next full re-eval. The accel
-	# dict feeds receiver lead in pass scoring + PASS_PRESSED aim.
-	_update_acceleration_cache(snapshot, input.delta)
+	# Per-skater acceleration feeds receiver lead in pass scoring + PASS_PRESSED
+	# aim. Prefer the host's shared per-frame cache (computed once for all bots
+	# in GameManager); fall back to a local compute only when the snapshot lacks
+	# it (unit tests hand-build snapshots without the shared cache). Resolved
+	# every dispatch — including skipped-throttle ticks — since press states read
+	# it too.
+	if not snapshot.accel_by_peer.is_empty():
+		_accel_ref = snapshot.accel_by_peer
+	else:
+		_update_acceleration_cache(snapshot, input.delta)
+		_accel_ref = _accel_by_peer
 
 	# When we're ghosted (offside, can't interact with the puck), chase
 	# behavior is degenerate — we'd skate at a puck we can't pick up. Drop
@@ -1718,7 +1730,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.own_goal_dir = _own_goal_dir
 	ctx.team_brain = _team_brain
 	ctx.team_id_by_peer = _team_id_by_peer
-	ctx.acceleration_by_peer = _accel_by_peer
+	ctx.acceleration_by_peer = _accel_ref
 	ctx.caps_by_peer = _caps_by_peer
 	# This bot's own attribute-scaled speeds, so the carrier scores ITS shots /
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
@@ -3514,7 +3526,7 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# and the puck would sail past. Use the distance-adaptive launch speed
 	# locked in at intent commit (what the controller will actually fire at).
 	var pass_speed: float = _pass_target_speed
-	var accel: Vector3 = _accel_by_peer.get(_pass_target_peer_id, Vector3.ZERO)
+	var accel: Vector3 = _accel_ref.get(_pass_target_peer_id, Vector3.ZERO)
 	# Intercept-aware lead, shared with the carrier's pass scoring so the fired aim
 	# matches the scored one (AIPassLead) — including the receiver's real build, so
 	# the release leads exactly where the score assumed. Origin = the carried PUCK
