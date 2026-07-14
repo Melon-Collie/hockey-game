@@ -714,6 +714,57 @@ func test_one_timer_feed_time_reads_the_remaining_flight() -> void:
 	assert_almost_eq(sm._one_timer_feed_time_s(dead, Vector3.ZERO), 0.0, 0.001)
 
 
+# ── incoming-feed reception: give with the puck ──────────────────────────────
+
+func test_receiver_gives_with_a_hot_incoming_feed() -> void:
+	# A feed inbound at pace with the receiver skating INTO it: the catch gate
+	# judges the puck in the RECEIVER'S frame, so the bot's own closing stacks
+	# onto the puck's — over the receivable ceiling it brakes (sheds its own
+	# closing) and never sprints at the feed.
+	# Staged in OUR half so _try_shot_reception's catch-and-shoot posture
+	# (Mode B) never engages — this pins the plain reception path.
+	sm._state = Agent.State.CHASE_PUCK
+	var s := _loose_puck_snap(Vector3(-10, 0, 15))
+	s.puck_state.velocity = Vector3(18, 0, 0)
+	_add_skater(s, SELF_ID, Vector3(0, 0, 15))
+	s.skater_states[SELF_ID].velocity = Vector3(-4, 0, 0)   # charging the feed
+	s.skater_states[SELF_ID].facing = Vector2(-1, 0)
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_true(i.brake, "over the receiver-frame ceiling — give with the puck")
+	assert_false(i.sprint_held, "never sprint at an inbound feed")
+
+
+func test_receiver_in_stride_keeps_skating_on_a_soft_feed() -> void:
+	# The same inbound geometry at a catchable relative pace: reception stays
+	# IN STRIDE — no brake, the blade gate does the catching.
+	sm._state = Agent.State.CHASE_PUCK
+	var s := _loose_puck_snap(Vector3(-10, 0, 15))
+	s.puck_state.velocity = Vector3(15, 0, 0)
+	_add_skater(s, SELF_ID, Vector3(0, 0, 15))
+	s.skater_states[SELF_ID].velocity = Vector3(-1, 0, 0)   # settled at the gate
+	s.skater_states[SELF_ID].facing = Vector2(-1, 0)
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_false(i.brake, "a catchable relative pace keeps the in-stride reception")
+
+
+func test_far_chase_faces_its_route() -> void:
+	# The far-chase cursor is FACE-aimed (snapped pointing intent), so the bot
+	# looks down its chase line immediately instead of arc-swinging the cursor
+	# for seconds while skating sideways.
+	sm._state = Agent.State.CHASE_PUCK
+	var s := _loose_puck_snap(Vector3(10, 0, -10))
+	_add_skater(s, SELF_ID, Vector3.ZERO)
+	s.skater_states[SELF_ID].facing = Vector2(0, -1)
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	var mouse_dir := Vector2(i.mouse_world_pos.x, i.mouse_world_pos.z).normalized()
+	var to_puck := Vector2(10, -10).normalized()
+	assert_gt(mouse_dir.dot(to_puck), 0.85,
+			"the chase cursor points down the pursuit line on the first tick")
+
+
 # ── PASS_PRESSED ─────────────────────────────────────────────────────────────
 
 func test_pass_pressed_quick_fires_and_clears_target() -> void:

@@ -344,8 +344,10 @@ const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 # traffic kept partially swinging the cursor toward the hip — a constant
 # low-grade body wag. Feel tunable (how much pressure earns the deliberate
 # shield turn), not an evaluation curve — the pressure itself stays the
-# grounded reachable-set read.
-const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.3
+# grounded reachable-set read. Raised 0.3 → 0.45 on playtest feedback: the
+# shield turn still read as spinny against defenders who were near but not
+# genuinely on the puck.
+const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.45
 
 # Natural carry sway: a smooth lateral oscillation of the carry cursor —
 # the rhythmic side-to-side dangle a human carrier keeps going — layered
@@ -1009,6 +1011,19 @@ var _one_timer_preserve_ticks: int = 0
 # (_one_timer_line_anchor): inside this we stop seeking and brake/hold so the
 # feed arrives into the armed slapper zone.
 const ONE_TIMER_ANCHOR_ARRIVE_M: float = 0.6
+
+# "Give with the puck" ceiling on an incoming feed's RECEIVER-FRAME speed:
+# the catch gate (PuckReceptionRules) judges the puck's pace relative to the
+# receiver — the any-angle deflect threshold is Puck.deflect_min_speed
+# (22 m/s relative) — so a receiver skating INTO a feed stacks its own
+# closing on top and knocks down a tape pass. Above this the chase brakes to
+# shed its own closing (the skating half of soft hands) and never sprints at
+# the feed. Sits BETWEEN the magnet solve and the deflect threshold: bot
+# passes are launched to arrive at exactly PASS_TARGET_CLOSING (20) in the
+# receiver's frame, so a ceiling at-or-under 20 would brake the receiver on
+# every clean feed — only genuinely hot arrivals trip the give (a charging
+# receiver, a rebound, an un-solved human feed).
+const RECEIVE_GIVE_CEILING_M_S: float = 21.5
 # Opponent-position scratch for the shot-quality check in _try_shot_reception.
 # Separate from _scratch_opponents (owned by _apply_steering) so the reception
 # eval doesn't clobber steering's list mid-tick.
@@ -1810,6 +1825,33 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	if recv == _RECV_ONE_TIME:
 		return
 	_chase_sprint_ref = snapshot.puck_state.position
+	# An INBOUND fast loose puck (a feed coming AT us) is a reception, not a
+	# race: the catch gate judges the puck's speed in OUR frame
+	# (PuckReceptionRules, #373), so our own closing speed stacks onto the
+	# puck's pace — sprinting at the feed (or skating hard into it) turns a
+	# tape pass into a knock-down. Read the geometry once: the sprint gate
+	# and the give-brake below both use it.
+	var give_brake: bool = false
+	if snapshot.puck_state.carrier_peer_id == -1:
+		var pv: Vector3 = snapshot.puck_state.velocity
+		var pv_speed_sq: float = pv.x * pv.x + pv.z * pv.z
+		if pv_speed_sq > LOOSE_PUCK_TRACK_SPEED_M_S * LOOSE_PUCK_TRACK_SPEED_M_S:
+			var pp: Vector3 = snapshot.puck_state.position
+			var inbound: bool = pv.x * (self_pos.x - pp.x) \
+					+ pv.z * (self_pos.z - pp.z) > 0.0
+			if inbound:
+				_chase_sprint_ref = self_pos   # gap 0 — sprint stays off
+				var sv: Vector3 = Vector3.ZERO
+				var give_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+				if give_state != null:
+					sv = give_state.velocity
+				# GIVE WITH THE PUCK: above the receivable ceiling in our
+				# frame, the only lever we hold is shedding our own closing —
+				# brake and let the feed come to the parked blade.
+				var rel_x: float = pv.x - sv.x
+				var rel_z: float = pv.z - sv.z
+				give_brake = rel_x * rel_x + rel_z * rel_z \
+						> RECEIVE_GIVE_CEILING_M_S * RECEIVE_GIVE_CEILING_M_S
 	# Pass-receive setup: if a fast loose puck is heading near our
 	# trajectory, stand perpendicular to its path for an angle-optimal
 	# catch instead of chasing the puck position (default lead-intercept
@@ -1894,6 +1936,8 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			if approach_len > CARRY_BLADE_AIM_FORWARD_M:
 				target -= approach * (CARRY_BLADE_AIM_FORWARD_M / approach_len)
 		_apply_steering(input, snapshot, self_pos, target)
+		if give_brake:
+			input.brake = true   # give with the puck — shed our own closing
 
 		# Aim: normally blade-on-intercept, but during the engagement cooldown
 		# (just got stripped or just stick-checked someone) pull the blade
@@ -1915,14 +1959,18 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			input.mouse_world_pos = _step_mouse_toward(
 					_blade_gate_on_puck_line(self_pos, puck_pos, puck_velocity))
 		else:
-			# ARC-step the far chase aim around the body ring. A direct chord to
-			# an intercept behind us crosses self_pos, parks the cursor in the
-			# pose IK gate's back wedge, and FREEZES facing — the bot skates to
-			# the loose puck sideways/backwards, face locked the wrong way. The
-			# ring walk keeps the mouse-body angle trackable the whole swing.
+			# FACE-aim the far chase at the intercept: the cursor is pure
+			# pointing intent off-puck (nothing to dangle), so it snaps to the
+			# cone-clamped target and the body turns at full facing_drag — the
+			# bot LOOKS down its chase line (≈ the puck line) the whole run.
+			# The old ARC walk swung the cursor at the blade slew rate, which
+			# left seconds-long windows of skating one way while facing
+			# another after a chase-entry flip. A target in the back wedge
+			# clamps to the cone edge and the body walks around to it — the
+			# same freeze-proofing the arc bought, without the slow swing.
 			# Close-range precision is unaffected: inside _blade_reach the
 			# branch above aims direct at the puck itself.
-			input.mouse_world_pos = _step_mouse_aim(target)
+			input.mouse_world_pos = _step_mouse_face(target)
 	# Sprint to win the race to a loose / contested puck. Gap is measured to
 	# the puck itself — the arrival easing inside ~1.5 m slows a clean solo
 	# pickup — EXCEPT through a live contest, where the gap reads the drive-
@@ -2030,6 +2078,14 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	var blade_window: float = 2.0 * gate_reach / maxf(self_speed, 0.001)
 	_apply_steering(input, snapshot, self_pos, body_anchor,
 			puck_eta > bot_eta + blade_window)
+	# GIVE WITH THE PUCK: the catch gate judges the puck in OUR frame, and a
+	# receiver with real closing speed INTO the feed stacks it on top of the
+	# puck's pace — over the receivable ceiling, force the brake and shed our
+	# own closing (a perpendicular crossing barely registers here; only
+	# genuine into-the-feed motion trips it).
+	if Vector2(puck_vel.x - self_vel.x, puck_vel.z - self_vel.z) \
+			.length_squared() > RECEIVE_GIVE_CEILING_M_S * RECEIVE_GIVE_CEILING_M_S:
+		input.brake = true
 	# Aim: PARK the blade at the gate — the point where the puck's line meets our
 	# reach — and let the puck arrive into it. Tracking the puck's position (the
 	# old aim) failed two ways: the cursor (capped at Hands blade speed ~10 m/s)
