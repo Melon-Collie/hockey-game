@@ -2029,3 +2029,71 @@ func test_no_deke_read_against_a_committed_charger() -> void:
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
 	assert_false(c.deke_go, "committed pressure never reads as a fake target")
+
+
+# ─── carry continuation credit (the two-ply read) ─────────────────────────────
+# A candidate is worth the best thing it lets the carrier DO next
+# (_carry_continuation_value — the pass option's skating twin). Probe data
+# behind these pins: one step deep, against a set goalie, the cut-in and the
+# lateral escape both read ≈ the possession floor and safety alone picked the
+# perimeter orbit; the slot drive FROM the cut-in read ~3× the one from the
+# lateral spot — the transient opening a beaten man concedes only prices in
+# on the step after the cut.
+
+
+func test_spun_off_carrier_attacks_the_opening() -> void:
+	# The moment after beating a man: carrier on the wing moving ACROSS the
+	# zone, the beaten defender dead in the water behind. The continuation
+	# credit turns that transient step into a committed route TOWARD the net
+	# instead of a safety orbit around the perimeter.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(6.0, 0.0, -15.0)
+	var vel := Vector3(5.0, 0.0, 1.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos, false, vel],
+			[3, 1, Vector3(4.5, 0.0, -14.0), false, Vector3.ZERO],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.self_velocity = vel
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"no direct shot from the wing vs a set keeper — the play is the route")
+	assert_gt(self_pos.distance_to(net) - c.last_carry_anchor.distance_to(net), 1.0,
+			"the committed anchor cuts IN toward the net, not around the perimeter")
+	# The decisive ordering: the cut-in behind the beaten man out-scores the
+	# lateral escape that used to win on safety alone.
+	var our_goalie := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z)
+	var cut_in: Vector3 = self_pos + (net - self_pos).normalized() * 3.0
+	var lateral := Vector3(8.2, 0.0, -17.0)
+	var cut_score: float = c._score_move_candidate(ctx, cut_in, our_goalie)
+	assert_gt(cut_score, c._score_move_candidate(ctx, lateral, our_goalie),
+			"the cut-in's continuation beats the lateral escape's marginal safety")
+	assert_gt(cut_score, 0.08,
+			"…and it is a real plan, not argmax-over-noise; got %f" % cut_score)
+
+
+func test_continuation_credit_respects_live_containment() -> void:
+	# Same wing spot, but the defender is LIVE on the inside hip — matched
+	# speed, holding the cut lane. The continuation collapses through the
+	# second leg's reach safety (no phantom aggression), so the compete keeps
+	# cycling to space exactly as before the credit existed.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(6.0, 0.0, -15.0)
+	var vel := Vector3(5.0, 0.0, 1.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos, false, vel],
+			[3, 1, Vector3(4.0, 0.0, -15.3), false, Vector3(4.5, 0.0, 0.5)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.self_velocity = vel
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	var our_goalie := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z)
+	var cut_in: Vector3 = self_pos + (net - self_pos).normalized() * 3.0
+	var lateral := Vector3(8.2, 0.0, -17.0)
+	assert_gt(c._score_move_candidate(ctx, lateral, our_goalie),
+			c._score_move_candidate(ctx, cut_in, our_goalie),
+			"a live inside-hip defender still owns the cut lane — cycle, don't force")
