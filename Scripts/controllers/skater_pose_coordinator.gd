@@ -162,8 +162,6 @@ func snap_lean_to_state() -> void:
 # follows the forward pitch only fractionally, so the legs stay planted under
 # the hips while the trunk folds forward over them.
 func _apply_lean() -> void:
-	var stride_pitch: float = _skating.trunk_pitch_add if _skating != null else 0.0
-	var stride_roll: float = _skating.trunk_roll_add if _skating != null else 0.0
 	# Body-check recoil: while staggered, the torso reels the way the hit shoved
 	# it, easing out as the timer decays (same directional pitch/roll decomposition
 	# as the reach lean). Runs on every path — local, bot, and remote (which reels
@@ -178,9 +176,16 @@ func _apply_lean() -> void:
 		var d: Vector2 = _controller.stagger_recoil_dir
 		recoil_pitch = mag * d.y
 		recoil_roll = -mag * d.x
+	# The gait's per-stride trunk texture is deliberately NOT folded in here: the
+	# blade markers hang under upper_body, so anything added to its rotation moves
+	# the blade's WORLD position (pickup / poke geometry, which must match across
+	# machines for reconcile). The gait runs at render rate now, so letting its
+	# stride pitch reach this frame would make the blade world depend on frame
+	# rate. Reach + velocity lean stay (both physics-rate, deterministic); the
+	# stride texture is a render-only leg concern. See Skater.render_pose_update.
 	_skater.set_upper_body_lean(
-			upper_body_lean + velocity_lean_x + stride_pitch + recoil_pitch,
-			upper_body_lean_roll + velocity_lean_z + stride_roll + recoil_roll)
+			upper_body_lean + velocity_lean_x + recoil_pitch,
+			upper_body_lean_roll + velocity_lean_z + recoil_roll)
 	_skater.set_lower_body_lean(
 			velocity_lean_x * _controller.lower_body_pitch_follow, velocity_lean_z)
 
@@ -378,7 +383,13 @@ func apply_upper_body(delta: float) -> void:
 	_apply_lean()
 
 func apply_head_tracking(input: InputState, delta: float) -> void:
-	var mouse_local: Vector3 = _skater.upper_body_to_local(input.mouse_world_pos)
+	apply_head_tracking_aim(input.mouse_world_pos, delta)
+
+# Head tracking from a raw aim point rather than an InputState — used by the
+# render-rate cosmetic pass (Skater.render_pose_update), which has no input
+# frame, off the controller's last-seen aim world position.
+func apply_head_tracking_aim(aim_world: Vector3, delta: float) -> void:
+	var mouse_local: Vector3 = _skater.upper_body_to_local(aim_world)
 	mouse_local.y = 0.0
 	var target_angle: float = 0.0
 	if mouse_local.length() > 0.01:

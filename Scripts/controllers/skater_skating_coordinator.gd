@@ -329,10 +329,11 @@ func apply(delta: float) -> void:
 	# either way the body reacts).
 	_lift_blend = lerpf(_lift_blend, 1.0 if _skater.blade_up else 0.0,
 			minf(_controller.stick_lift_blend_speed * delta, 1.0))
-	# Celebration window: this pass runs on EVERY path (local sim, host-driven
-	# remote, wire-fed remote, replay), so it owns aging the controller's timer
-	# — see SkaterController.tick_celebration.
-	_controller.tick_celebration(delta)
+	# Celebration window: the gait now runs at RENDER rate (Skater._process) and
+	# is visibility-gated, so it can no longer own aging the timer — the callers
+	# age it at physics rate (SkaterController._process_input / RemoteController.
+	# _physics_process) so it stays deterministic and never freezes off-screen.
+	# This pass only READS the progress, to suppress the stride during the raise.
 	var celebr_p: float = _controller.celebration_progress()
 	# Combined engagement, for the stride suppression below — shooting is a
 	# glide (the feet set through the load and drive through the release), and

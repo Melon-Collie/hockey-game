@@ -84,19 +84,31 @@ func _physics_process(delta: float) -> void:
 		if _knockback_lead_elapsed >= 0.0:
 			_knockback_lead_elapsed += delta
 		_interpolate(delta)
-		# Cosmetic leg gait, derived from the interpolated velocity — no extra
-		# network state. (Host-driven remotes animate via _process_input above.
-		# Stick/arm meshes update once per rendered frame in Skater._process.)
-		_skating.apply(delta)
-		# Lower-body yaw channels the gait publishes (hockey-stop skid,
-		# hip-to-travel alignment, wrist-shot hip coil). On the simulating
-		# machine the pose coordinator writes these in apply_facing, which never
-		# runs for a client-rendered remote — without this mirror the channels
-		# were computed and dropped, so a remote's hockey stop never turned
-		# their legs on this machine. (lower_body_lag itself is a facing-turn
-		# artifact that doesn't exist on this path.)
+		# Cosmetic leg gait + lower-body yaw moved to render rate (_render_pose_
+		# update below, invoked from Skater._process). Age the goal-celebration
+		# timer here at physics rate, though — it used to ride the gait pass, and
+		# the render gait is visibility-gated so it can't own the timer any more
+		# (a wire-fed remote still needs its celebration leg bounce to end).
+		tick_celebration(delta)
+
+# Render-rate cosmetic pose for a remote body (overrides SkaterController).
+# Two sub-cases:
+#  - Host-simulating this client's real inputs (_is_host): it has a live cursor
+#    aim and apply_facing already wrote the leg-yaw, so head-track like a local.
+#  - Client-rendering an interpolated remote: no cursor aim (skip head), and
+#    apply_facing never ran, so mirror the gait's leg-yaw channels here.
+func _render_pose_update(delta: float) -> void:
+	if skater == null or _self_posing:
+		return
+	_skating.apply(delta)
+	if _is_host:
+		_pose.apply_head_tracking_aim(_current_aim_world, delta)
+	else:
 		skater.set_lower_body_lag(
 				_skating.stop_yaw_offset + _skating.travel_align_yaw + _skating.shot_hip_yaw)
+	if _celebration_timer <= 0.0:
+		_ik.update_bottom_hand()
+
 
 func receive_input_batch(batch: Array[InputState]) -> void:
 	# Reject inputs whose timestamps fall outside a plausible window around the
@@ -369,7 +381,6 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# remotes — so a checked opponent stumbled on the host and stood rock-
 	# steady on everyone else's screen.
 	stagger_timer = state.stagger_timer
-	# Bottom hand is purely reactive to top_hand + blade (both already set
-	# above) and needs no network state of its own. Arm/stick meshes derive
-	# from the markers once per rendered frame in Skater._process.
-	_ik.update_bottom_hand()
+	# Bottom hand is purely reactive to top_hand + blade and needs no network
+	# state of its own; it's posed once per rendered frame in _render_pose_update
+	# (Skater._process) along with the gait, not here.
