@@ -15,6 +15,12 @@ var goalie_states: Dictionary[int, GoalieNetworkState] = {}  # team_id -> state
 # shouldn't consume rewind snapshots anyway. Read via `.get(team_id, ...)`.
 var teammate_ids_by_team: Dictionary[int, Array] = {}     # team_id -> Array[int] (peer_ids)
 var closest_to_puck_by_team: Dictionary[int, int] = {}    # team_id -> peer_id (-1 if team empty)
+# Per-skater smoothed acceleration (XZ, m/s²), a GLOBAL dead-reckoning read
+# shared by every bot instead of each bot recomputing the identical velocity
+# diff every tick. Populated by reference from the host's AIAccelerationTracker
+# on `current_snapshot` only (empty on rewind snapshots). Read via `.get(pid,
+# Vector3.ZERO)`. Feeds receiver-lead in pass scoring / PASS_PRESSED aim.
+var accel_by_peer: Dictionary[int, Vector3] = {}          # peer_id -> smoothed accel
 
 # Bot reaction-delay support. `puck_state.carrier_peer_id` on the AI snapshot
 # carries the DEBOUNCED (delayed) carrier so all AI consumers react to

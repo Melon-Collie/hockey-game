@@ -116,15 +116,18 @@ static func _max_shot_threat(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3]) -> float:
-	# Build the opp's view of defenders: our team + me at c.
-	var opp_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
-	opp_view_defenders.append(candidate)
+	# Opp's view of defenders = our team + me at c. Append-and-restore the
+	# caller's array in place instead of duplicating it per candidate (10×/decide
+	# in the unassigned-marker fallback); the array is left exactly as passed and
+	# keeps its capacity across the push/pop, so steady-state calls don't alloc.
+	our_team_excluding_self.push_back(candidate)
 
 	var max_threat: float = 0.0
 	for opp_pos: Vector3 in opp_positions:
 		var threat: float = AIActionScoring.threat_surface_shoot(
 				opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, opp_view_defenders)
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 		if threat > max_threat:
 			max_threat = threat
+	our_team_excluding_self.pop_back()
 	return max_threat

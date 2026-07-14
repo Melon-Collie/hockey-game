@@ -190,6 +190,11 @@ var team_brains: Array[TeamBrain] = []
 # read from here instead of each fetching their own — saves redundant
 # interpolation work and per-tick allocations.
 var current_snapshot: WorldSnapshot = null
+# Global per-skater acceleration read for the bots. Each skater's smoothed
+# accel is identical for every bot, so it is computed once per host frame here
+# and shared onto current_snapshot.accel_by_peer instead of all 6 bots
+# recomputing the same velocity diff every tick (see AIAccelerationTracker).
+var _accel_tracker: AIAccelerationTracker = AIAccelerationTracker.new()
 # Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
 # (on_host_started). Drives the carrier reaction delay applied to current_
 # snapshot below, and is read by PlayerRegistry.spawn_bot to wire each agent's
@@ -484,6 +489,10 @@ func _physics_process(delta: float) -> void:
 		current_snapshot = get_state_delayed(0.0)
 		if current_snapshot != null:
 			_enrich_snapshot_for_ai(current_snapshot)
+			# Shared dead-reckoning: advance the global accel estimate once and
+			# hand it to every bot by reference (was recomputed per bot per tick).
+			_accel_tracker.update(current_snapshot.skater_states, delta)
+			current_snapshot.accel_by_peer = _accel_tracker.accel_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
 	if not team_brains.is_empty() and current_snapshot != null:
 		for brain: TeamBrain in team_brains:
