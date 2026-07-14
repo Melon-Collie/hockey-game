@@ -2452,14 +2452,30 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 				else _carry_aim_track_fire(snapshot, self_pos)
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
-	# Arc the per-tick mouse target around self_pos toward the final
-	# aim point. Without this, a straight chord across a 180° swing
-	# (e.g. back-pass) passes through self_pos and trips the pose
-	# coordinator's IK gate — see MOUSE_ARC_RATE_RAD_S. Convergence
-	# check below uses the un-arced FINAL `mouse_target` (cached
-	# inside _step_mouse_aim) so the bot fires only when the body has
-	# reached the real aim direction, not an intermediate arc point.
-	input.mouse_world_pos = _step_mouse_aim(mouse_target)
+	# Cursor motion model. A pure CARRY reach to a FRONT-hemisphere spot moves the
+	# cursor DIRECTLY — a straight chord at the blade's real slew — so the blade
+	# leads to the spot while body facing lags behind at its own Agility-limited
+	# turn rate (facing_drag_speed in the pose coordinator). Facing is then NOT
+	# locked one-to-one to the cursor: the hands work the puck and the body
+	# follows, the way a human carrier reads, instead of the body pivoting in
+	# lockstep with a cursor that's paced to it. The chord also cuts INSIDE the
+	# aim ring, so the puck pulls in and extends across the front (a reach) rather
+	# than orbiting the ring at full extension. The ARC model is kept for the two
+	# cases that need it: a genuine turn-around (target BEHIND the body — a
+	# straight chord there crosses self_pos and trips the pose IK gate, see
+	# MOUSE_ARC_RATE_RAD_S), and every pre-aim swing (the convergence/commit logic
+	# below reads the arc; the cached FINAL mouse_target drives the convergence
+	# check so the bot fires only when the body has reached the real aim).
+	var to_target := Vector3(mouse_target.x - self_pos.x, 0.0, mouse_target.z - self_pos.z)
+	var direct_reach: bool = _intended_action == State.CARRY \
+			and not _target_is_behind(to_target, self_state)
+	if direct_reach:
+		# No arc walk on a front reach — clear any long-way orbit latched by a
+		# prior turn-around so the next ARC swing re-evaluates from scratch.
+		_arc_protect_sign = 0.0
+		input.mouse_world_pos = _step_mouse_toward(mouse_target)
+	else:
+		input.mouse_world_pos = _step_mouse_aim(mouse_target)
 
 	# If pre-aiming, wait for mouse convergence (or timeout) before
 	# transitioning to the action state. Body facing is no longer
