@@ -204,13 +204,17 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 			continue
 		if too_close_to_teammate(c, teammates):
 			continue
-		# Carrier's view of defenders: our team + us hypothetically at c.
-		var defenders: Array[Vector3] = teammates.duplicate()
-		defenders.append(c)
+		# Carrier's view of defenders: our team + us hypothetically at c. Append
+		# c to the shared teammates scratch in place and pop it after scoring —
+		# a duplicate() per candidate (10×/decide) was pure hot-path churn. The
+		# array is restored exactly, and too_close_to_teammate above already read
+		# it candidate-free this iteration.
+		teammates.push_back(c)
 		# Minimize the carrier's threat of feeding THIS man (lane × his shot).
 		var threat: float = AIActionScoring.threat_surface_pass(
 				carrier_pos, man_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, defenders)
+				GameRules.NET_HALF_WIDTH, teammates)
+		teammates.pop_back()
 		var score: float = -threat
 		# Stay on the defensive side of the man: positive projection onto
 		# the man→our-net line (see COVER_GOAL_SIDE_TOLERANCE_M). A man on
@@ -256,14 +260,18 @@ static func carrier_best_option(
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
 		opp_teammates: Array[Vector3]) -> float:
-	# Build the carrier's view of defenders: our team + me at the candidate.
-	var carrier_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
-	carrier_view_defenders.append(candidate)
+	# Carrier's view of defenders = our team + me at the candidate. This helper
+	# is called once per candidate in PRESSURE's argmax (up to ~19×/decide), so
+	# duplicating the array every call was pure hot-path churn. Append the
+	# candidate to the caller's array in place and pop it before returning — the
+	# array is left exactly as passed, and after the first call the backing
+	# store keeps its capacity so the push/pop allocates nothing.
+	our_team_excluding_self.push_back(candidate)
 
 	# Carrier's best shot at our net (with positional fallback floor).
 	var shoot_value: float = AIActionScoring.threat_surface_shoot(
 			carrier_pos, our_net, our_goalie_pos,
-			GameRules.NET_HALF_WIDTH, carrier_view_defenders)
+			GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 
 	# Carrier's best pass to any teammate (with positional fallback).
 	# `our_net` is the attacking goal from the carrier's perspective, so the
@@ -272,10 +280,11 @@ static func carrier_best_option(
 	for opp_pos: Vector3 in opp_teammates:
 		var pass_score: float = AIActionScoring.threat_surface_pass(
 				carrier_pos, opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, carrier_view_defenders)
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 		if pass_score > pass_value:
 			pass_value = pass_score
 
+	our_team_excluding_self.pop_back()
 	return maxf(shoot_value, pass_value)
 
 
@@ -302,11 +311,15 @@ static func carrier_live_option(
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
 		opp_teammates: Array[Vector3]) -> float:
-	var defenders: Array[Vector3] = our_team_excluding_self.duplicate()
-	defenders.append(candidate)
+	# Defenders = our team + me at the candidate. Append-and-restore the caller's
+	# array in place instead of duplicating it — called once per candidate in
+	# CONTAIN's lane fan (up to ~13×/decide), so a fresh Array per call was pure
+	# churn. The array is left exactly as passed; capacity is retained across the
+	# push/pop so steady-state calls allocate nothing.
+	our_team_excluding_self.push_back(candidate)
 	var best: float = AIActionScoring.score_shoot(
 			carrier_pos, our_net, our_goalie_pos,
-			GameRules.NET_HALF_WIDTH, defenders)
+			GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 	for receiver: Vector3 in opp_teammates:
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, receiver)
 		var flight_s: float = carrier_pos.distance_to(receiver) / maxf(pass_speed, 1.0)
@@ -316,9 +329,10 @@ static func carrier_live_option(
 				our_goalie_pos, our_net, flight_s, receiver)
 		var pass_value: float = AIActionScoring.score_pass(
 				carrier_pos, receiver, our_net, pred_goalie,
-				GameRules.NET_HALF_WIDTH, defenders, pass_speed, unsettled)
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self, pass_speed, unsettled)
 		if pass_value > best:
 			best = pass_value
+	our_team_excluding_self.pop_back()
 	return best
 
 

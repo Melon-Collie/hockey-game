@@ -129,3 +129,23 @@ func test_predict_puck_bounces_off_rounded_corner() -> void:
 			"corner carom leaves the puck on/inside the rounded boards (x)")
 	assert_almost_eq(reclamped.y, lead.z, 0.02,
 			"corner carom leaves the puck on/inside the rounded boards (z); got (%f, %f)" % [lead.x, lead.z])
+
+
+func test_predict_final_matches_predict_endpoint() -> void:
+	# predict_final() must return exactly predict()'s last sample — they share
+	# the _step integrator, so this locks the scratch-free path to the array
+	# path across every branch of the model (accel, cap, friction, bounce).
+	var cases: Array = [
+		# pos, vel, steps, dt, decel, bounce, accel, max_speed
+		[Vector3(0, 0, 0), Vector3(3, 0, -2), 6, 0.1, 0.0, 0.0, Vector3.ZERO, 0.0],
+		[Vector3(1, 0, 1), Vector3(5, 0, 4), 6, 0.1, 0.0, 0.0, Vector3(2, 0, -1), 6.0],
+		[Vector3(GameRules.INNER_HALF_WIDTH - 0.5, 0, 0), Vector3(20, 0, 3), 6, 1.0 / 12.0,
+			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE, Vector3.ZERO, 0.0],
+	]
+	for c: Array in cases:
+		var traj: Array[Vector3] = AITrajectory.predict(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7])
+		var final_pos: Vector3 = AITrajectory.predict_final(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7])
+		var endpoint: Vector3 = traj[traj.size() - 1]
+		assert_almost_eq(final_pos.x, endpoint.x, 0.0001, "predict_final x matches endpoint")
+		assert_almost_eq(final_pos.y, endpoint.y, 0.0001, "predict_final y matches endpoint")
+		assert_almost_eq(final_pos.z, endpoint.z, 0.0001, "predict_final z matches endpoint")
