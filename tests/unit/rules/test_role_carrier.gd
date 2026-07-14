@@ -2004,17 +2004,20 @@ func test_pass_option_prefers_the_spot_that_reopens_the_lane() -> void:
 
 
 func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
-	# Double-team pinch in the OZ: both forward diagonals closing, every
-	# netward spot covered, a teammate open wide whose lane the pinch cuts
-	# from HERE. The retreat ring + pass option make backing out the winning
-	# carry — the space it buys reopens the lane — instead of the old
-	# pacified grind against the pinch.
+	# Double-team pinch in the OZ: a GENUINE wall dead ahead (the two defenders
+	# tight together, no splittable seam to the slot), every netward spot covered,
+	# a teammate open wide whose lane the pinch cuts from HERE. The retreat ring +
+	# pass option make backing out the winning carry — the space it buys reopens
+	# the lane — instead of the old pacified grind against the pinch. (A wall with
+	# a real 3.6 m gap up the middle is now correctly SPLIT to the slot instead —
+	# see test_carrier_splits_a_beatable_gap_to_the_slot — so the peel-out case
+	# has to be an unsplittable wall.)
 	var self_pos := Vector3(0.0, 0.0, -18.0)               # OZ, attacking -Z
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],        # open man, lane cut from here
-			[3, 1, Vector3(-1.8, 0.0, -19.6)],              # set wall (a charging pinch
-			[4, 1, Vector3(1.8, 0.0, -19.6)],               # would vacate ice to cut into)
+			[3, 1, Vector3(-0.9, 0.0, -19.6)],              # tight wall dead center —
+			[4, 1, Vector3(0.9, 0.0, -19.6)],               # no seam to split to the slot
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
@@ -2025,6 +2028,56 @@ func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
 			"no fire through the pinch — keep the puck")
 	assert_gt(c.last_carry_anchor.z, self_pos.z + 2.0,
 			"peels OUT of the pinch (a real backing-out, not a 3 m shuffle)")
+
+
+func test_carrier_splits_a_beatable_gap_to_the_slot() -> void:
+	# Same OZ setup as the pinch above, but the two defenders leave a real gap up
+	# the middle (a splittable seam). With the OZ possession floor riding
+	# slot_progress, the slot-ward drive out-scores backing out — the carrier
+	# attacks the seam toward the net instead of pacifying. This is the behaviour
+	# the goal-line-drift feedback asked for.
+	var self_pos := Vector3(0.0, 0.0, -18.0)               # OZ, attacking -Z
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],
+			[3, 1, Vector3(-1.8, 0.0, -19.6)],              # 3.6 m gap up the middle
+			[4, 1, Vector3(1.8, 0.0, -19.6)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
+			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c.last_carry_anchor.z, self_pos.z - 1.0,
+			"drives the seam toward the net rather than backing out of it")
+
+
+func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
+	# The reported bug: enter the zone down the wing with a defender on the inside,
+	# and the carrier drifts down the boards to the dead-angle goal-line corner and
+	# does nothing (under a FLAT possession floor the corner is as good as the slot,
+	# and it's the safest ice away from the defender). With the floor riding
+	# slot_progress, the corner reads ~0 (bad angle) while the slot reads high, so
+	# the carrier's chosen carry keeps a live shooting angle instead of dying in the
+	# corner. Asserted on the winning candidate's slot_progress vs the corner it
+	# used to drift to.
+	var self_pos := Vector3(8.0, 0.0, -18.0)               # wing entry, OZ
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(3.0, 0.0, -20.0)],              # defender on the inside lane
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
+			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	var corner := Vector3(8.0, 0.0, -25.0)                  # the old dead-angle drift spot
+	var anchor_progress: float = AIActionScoring.slot_progress(
+			c.last_carry_anchor, ctx.attacking_goal_pos)
+	var corner_progress: float = AIActionScoring.slot_progress(
+			corner, ctx.attacking_goal_pos)
+	assert_gt(anchor_progress, corner_progress + 0.1,
+			"the carry keeps a live scoring angle instead of drifting to the dead corner")
 
 
 # ─── fake-then-cut deke mirror ────────────────────────────────────────────────

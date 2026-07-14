@@ -795,6 +795,40 @@ func test_potential_drops_with_pressure() -> void:
 	assert_lt(pressured, clean, "forward-cone defender drops position potential")
 
 
+# ── slot_progress ─────────────────────────────────────────────────────────────
+# The pure geometric progress (closeness × angle) that position_potential rides,
+# and that the carrier's OZ possession floor now rides too — so a shot-dead
+# carrier works the puck toward the slot instead of parking at the dead-angle
+# goal line. No opponent term: it's the spot's intrinsic chance-generation shape.
+
+func test_slot_progress_peaks_at_slot_over_dead_angle_corner() -> void:
+	# The whole point of the OZ-floor change: the slot reads far higher than the
+	# dead-angle goal-line corner the carrier used to drift to.
+	var slot := Vector3(0.0, 0.0, GOAL.z - 6.0)             # dead slot, 6 m head-on
+	var corner := Vector3(8.0, 0.0, GOAL.z - 1.6)           # goal-line corner, bad angle
+	assert_gt(AIActionScoring.slot_progress(slot, GOAL),
+			AIActionScoring.slot_progress(corner, GOAL) + 0.3,
+			"the slot is worth far more than the dead-angle corner")
+
+
+func test_slot_progress_zero_behind_and_along_the_goal_line() -> void:
+	assert_eq(AIActionScoring.slot_progress(Vector3(0.0, 0.0, GOAL.z + 1.0), GOAL), 0.0,
+			"behind the net has no scoring progress")
+	assert_almost_eq(AIActionScoring.slot_progress(Vector3(8.0, 0.0, GOAL.z), GOAL), 0.0,
+			0.01, "square along the goal line foreshortens to zero")
+
+
+func test_slot_progress_ignores_opponents() -> void:
+	# Unlike position_potential, slot_progress has no openness term — it's the
+	# spot's intrinsic value, so a nearby defender doesn't change it (the floor's
+	# defender-awareness lives in the carrier's safety/turnover terms instead).
+	var pos := Vector3(0.0, 0.0, GOAL.z - 6.0)
+	var bare: float = AIActionScoring.slot_progress(pos, GOAL)
+	# position_potential with no opponents is slot_progress × 1.0 — they agree.
+	assert_almost_eq(AIActionScoring.position_potential(pos, GOAL, []), bare, 0.001,
+			"position_potential with no pressure equals slot_progress")
+
+
 # ── potential_realization_discount ───────────────────────────────────────────
 # Potential is future value — it still has to be skated to the slot — so
 # the carrier's compete discounts it over that remaining travel time.

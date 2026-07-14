@@ -51,13 +51,20 @@ const FIRE_MIN_VALUE: float = 0.02
 # but a possession's value isn't only the shot available THIS instant: held
 # OZ possession keeps generating chances as the defense shifts (league xG per
 # sustained offensive-zone possession is a few hundredths — this is that
-# order, a statistical measurement, not a shape). Floored under the shot
+# order, a statistical measurement, not a shape). This is the PEAK value (at
+# the slot); the live floor scales it by AIActionScoring.slot_progress
+# (closeness × angle), so it climbs toward the slot and decays to the dead-angle
+# goal line — an established possession is worth more the closer it is worked to
+# the net. Floored under the shot
 # branch for MOVEMENT candidates and receiver evals (never stand-still, so
 # ties keep resolving toward movement and fire — no corner camping): with
-# every shot covered, the compete's gradient becomes safety × delay-decay ×
-# turnover cost, so a pinned carrier CYCLES to safe ice or a safe teammate
-# instead of crashing a worthless drive into the crease, and any genuinely
-# open look (≫ this) still wins outright. RINK SIDE of the goal line only:
+# every shot covered, the compete's gradient becomes slot_progress × safety ×
+# delay-decay × turnover cost, so a pinned carrier WORKS TOWARD THE SLOT (the
+# man in the path gets attacked) where the path is beatable, and only cycles to
+# safe ice / a safe teammate when it is genuinely swarmed — no crashing a
+# worthless drive into a wall, and no more drifting to the goal line and parking
+# when a lone defender is beatable. Any genuinely open look (≫ this) still wins
+# outright. RINK SIDE of the goal line only:
 # behind the cage a spot can't generate a chance without first coming out, so
 # the possession value there belongs to the POST WALKOUT (and the behind-net
 # feed, whose receiver is floored out front), not the spot — a flat floor
@@ -1990,12 +1997,18 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		# Shot danger, floored by the standing value of the possession itself
 		# (see OZ_POSSESSION_VALUE): when the whole zone reads shot-dead (set
 		# goalie, collapsed box), the caller's safety / decay / turnover terms
-		# become the gradient and the carrier cycles instead of crashing the
+		# becomes the gradient. NOT flat: it rides slot_progress (closeness x angle),
+			# so a pinned carrier WORKS the puck toward the slot (attacking the man
+			# in its path; the deke/directed seam aim at the winning candidate)
+			# instead of drifting to the safest dead ice at the goal line. Safety /
+			# turnover still veto a swarmed drive, so it cycles instead of crashing the
 		# only microscopically-positive spot — the crease. Behind the goal
 		# line the floor is withheld (see the const doc): the walkout and the
 		# behind-net feed carry the possession's value out front.
 		if absf(pos.z) < GameRules.GOAL_LINE_Z:
-			return maxf(shoot_s, OZ_POSSESSION_VALUE)
+			return maxf(shoot_s,
+					OZ_POSSESSION_VALUE * AIActionScoring.slot_progress(
+							pos, attacking_goal))
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
