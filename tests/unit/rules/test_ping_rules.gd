@@ -169,9 +169,9 @@ func test_go_there_never_conscripts_the_carrier() -> void:
 
 # ── Lookup tables ────────────────────────────────────────────────────────────
 
-func test_every_type_has_a_message_and_duration() -> void:
+func test_every_type_has_a_message_key_and_duration() -> void:
 	for t: int in PingRules.Type.values():
-		assert_true(PingRules.message_for(t).length() > 0)
+		assert_true(PingRules.message_key_for(t).length() > 0)
 		assert_gt(PingRules.directive_duration_s(t), 0.0)
 
 

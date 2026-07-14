@@ -588,9 +588,12 @@ func _refresh_tutorial_rows() -> void:
 	for tutorial_id: String in TutorialRegistry.ALL_IDS:
 		# "Part 1 of 6 · Movement" framing so the picker reads as one ordered
 		# course rather than standalone options.
-		var seq: String = TutorialRegistry.get_sequence_label(tutorial_id)
-		var label_text: String = "%s · %s" % [seq, TutorialRegistry.get_display_name(tutorial_id)] \
-			if seq != "" else TutorialRegistry.get_display_name(tutorial_id)
+		var name_text: String = tr(TutorialRegistry.display_name_key(tutorial_id))
+		var pos: int = TutorialRegistry.sequence_position(tutorial_id)
+		var label_text: String = name_text
+		if pos > 0:
+			var seq: String = tr("TUTORIAL_PART_N_OF_M") % [pos, TutorialRegistry.ALL_IDS.size()]
+			label_text = "%s · %s" % [seq, name_text]
 		if PlayerPrefs.is_tutorial_complete(tutorial_id):
 			label_text += "    ✓"
 		var btn := MenuStyle.popup_button(label_text)
@@ -610,7 +613,7 @@ func _refresh_drills_rows() -> void:
 	for child: Node in _drills_rows_vbox.get_children():
 		child.queue_free()
 	for drill_id: String in DrillRegistry.ALL_IDS:
-		var drill_btn := MenuStyle.popup_button(DrillRegistry.get_display_name(drill_id))
+		var drill_btn := MenuStyle.popup_button(tr(DrillRegistry.display_name_key(drill_id)))
 		drill_btn.custom_minimum_size = Vector2(280, 44)
 		var drill_id_copy: String = drill_id
 		drill_btn.pressed.connect(func() -> void:

@@ -14,10 +14,13 @@ func test_all_ids_are_unique() -> void:
 		seen[id] = true
 
 
-func test_each_registered_id_has_display_name() -> void:
+func test_each_registered_id_has_display_name_key() -> void:
+	# Every registered id must map to a real translation key (not fall through
+	# to the raw id), so the UI's tr() lands on a catalogued string.
 	for id: String in DrillRegistry.ALL_IDS:
-		assert_ne(DrillRegistry.get_display_name(id), "",
-				"drill '%s' has no display name" % id)
+		var key: String = DrillRegistry.display_name_key(id)
+		assert_ne(key, "", "drill '%s' has no display-name key" % id)
+		assert_ne(key, id, "drill '%s' fell through to the raw id" % id)
 
 
 # The manager path must point at a script that actually compiles — this is

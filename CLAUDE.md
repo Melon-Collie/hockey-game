@@ -116,11 +116,12 @@ Before touching networking code (RPCs, reconcile, prediction, interpolation, lag
 | Submit bug report from UI | Instantiate `BugReportDialog`, `add_child` it, call `.open()` on button press |
 | New RPC | `NetworkManager` (define) → emit a signal → `GameManager._wire_network_signals()` (connect) |
 | New phase-entry side effect | `PhaseCoordinator` |
-| New practice drill | Append to `DrillRegistry` (id + display name + manager path) → manager node in `Scripts/game/` owning the drill loop (`DrillSession` for the score tally) → `DrillHUD` subclass for its strings. No NetworkManager/game_scene/SideMenu wiring needed |
+| New practice drill | Append to `DrillRegistry` (id + `display_name_key` + manager path; add the matching `DRILL_*` row to `locale/translations.csv`) → manager node in `Scripts/game/` owning the drill loop (`DrillSession` for the score tally) → `DrillHUD` subclass for its strings. No NetworkManager/game_scene/SideMenu wiring needed |
 | New controller behavior | Method on `SkaterController`; `GameManager` calls it, never pokes internals directly |
 | New reconcile logic | `domain/rules/reconciliation_rules.gd` + GUT test |
 | New bot AI evaluator (shot/pass/carry/position value) | `domain/ai/action_scoring.gd` + GUT calibration test — build it as a grounded model, not a magic curve (see Code Conventions → *Grounded models*, `ARCHITECTURE.md` → **Bot AI**) |
 | New "attribute X scales Y" rule | `PlayerAttributes` (add `_FOO_MULTS` const + `foo_mult()` accessor) → multiply a captured base value in `SkaterController.apply_attributes` or `SkaterAppearanceCoordinator.apply` |
+| New user-facing UI string | Add a `KEY,en,es` row to `locale/translations.csv`, then `tr("KEY")` at the display seam. Domain layer must stay engine-free — return the key from `domain/` (see `PingRules.message_key_for`) and `tr()` it in the UI/controller, never call `tr()` in `domain/`. New language: add a column to the CSV + a `LocaleManager.SUPPORTED` entry (non-Latin scripts also need a fallback font). Locale is a `PlayerPrefs.locale` pref applied via `LocaleManager`; catalogue compiles from the CSV (re-run `godot --headless --import`) and is registered in `project.godot → [internationalization]` |
 
 ## Code Conventions
 

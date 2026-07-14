@@ -24,18 +24,21 @@ enum Type {
 	GO_THERE,          # ping bare ice: "Over there!" (location marker)
 }
 
-# Chat-bubble text, indexed by Type. Display-side lookup so the wire carries
-# only the enum int.
-const _MESSAGES: Array[String] = [
-	"Pass to me!",
-	"I'm open!",
-	"Shoot!",
-	"Get the puck!",
-	"Get open!",
-	"Pick him up!",
-	"Get him!",
-	"Cover him!",
-	"Over there!",
+# Translation keys for the chat-bubble text, indexed by Type. The domain stays
+# engine-free (no tr() here — that's an engine call): it hands back a stable
+# key and the display seam localizes it (tr() in GameManager's ping handler),
+# which also keeps the wire carrying only the enum int. English/Spanish copy
+# lives in locale/translations.csv.
+const _MESSAGE_KEYS: Array[String] = [
+	"PING_PASS_TO_ME",
+	"PING_IM_OPEN",
+	"PING_SHOOT",
+	"PING_GET_PUCK",
+	"PING_GET_OPEN",
+	"PING_PICK_HIM_UP",
+	"PING_GET_HIM",
+	"PING_COVER_HIM",
+	"PING_OVER_THERE",
 ]
 
 # How long each ping's bot directive stays live (seconds). Tactical feel
@@ -168,10 +171,12 @@ static func choose_obeyer(type: int, target_peer: int, world_pos: Vector3,
 	return -1
 
 
-static func message_for(type: int) -> String:
-	if type < 0 or type >= _MESSAGES.size():
+# The translation key for a ping type's bubble text; "" for an out-of-range
+# type. Callers tr() the result at the display seam.
+static func message_key_for(type: int) -> String:
+	if type < 0 or type >= _MESSAGE_KEYS.size():
 		return ""
-	return _MESSAGES[type]
+	return _MESSAGE_KEYS[type]
 
 
 static func directive_duration_s(type: int) -> float:
@@ -181,7 +186,7 @@ static func directive_duration_s(type: int) -> float:
 
 
 static func is_valid_type(type: int) -> bool:
-	return type >= 0 and type < _MESSAGES.size()
+	return type >= 0 and type < _MESSAGE_KEYS.size()
 
 
 static func _make(type: int, target_peer: int, world_pos: Vector3) -> Resolution:

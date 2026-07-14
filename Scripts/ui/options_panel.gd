@@ -50,6 +50,7 @@ var _hud_scale_label: Label = null
 var _share_stats_check: CheckButton = null
 var _self_beacon_mode_btn: OptionButton = null
 var _freeplay_goalie_btn: OptionButton = null
+var _locale_btn: OptionButton = null
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
 var _camera_mode_btn: OptionButton = null
@@ -183,6 +184,7 @@ func _snapshot() -> Dictionary:
 		"ring_color_enemy": PlayerPrefs.ring_color_enemy,
 		"self_beacon_mode": PlayerPrefs.self_beacon_mode,
 		"freeplay_goalie_difficulty": PlayerPrefs.freeplay_goalie_difficulty,
+		"locale": PlayerPrefs.locale,
 		"screen_flash": PlayerPrefs.screen_flash,
 		"screen_shake": PlayerPrefs.screen_shake,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
@@ -229,6 +231,7 @@ func _read_controls() -> Dictionary:
 		"ring_color_enemy": _ring_enemy_color_btn.color,
 		"self_beacon_mode": _self_beacon_mode_btn.selected,
 		"freeplay_goalie_difficulty": _freeplay_goalie_btn.selected,
+		"locale": _selected_locale(),
 		"screen_flash": _screen_flash_check.button_pressed,
 		"screen_shake": _screen_shake_check.button_pressed,
 		"camera_tilt_deg": _tilt_slider.value,
@@ -615,6 +618,22 @@ func _build_game_tab() -> Control:
 
 	box.add_child(_section_header("Gameplay"))
 
+	# UI language. Index 0 is "System default" (empty stored code → follow the
+	# OS language); items 1.. are the shipped locales, each named in itself.
+	# Takes effect on Apply; freshly-built UI (menus, HUD) picks it up on next
+	# open — see LocaleManager / PlayerPrefs.apply_locale.
+	_locale_btn = OptionButton.new()
+	_locale_btn.custom_minimum_size = Vector2(160, 40)
+	_locale_btn.add_theme_font_size_override("font_size", 15)
+	_locale_btn.add_item("System default")
+	for entry: Dictionary in LocaleManager.SUPPORTED:
+		_locale_btn.add_item(entry["native_name"])
+	_locale_btn.selected = 0 if PlayerPrefs.locale == "" \
+		else LocaleManager.index_of(PlayerPrefs.locale) + 1
+	SoundManager.wire_button(_locale_btn)
+	_locale_btn.item_selected.connect(_on_locale_selected)
+	box.add_child(_field_row("Language", _locale_btn))
+
 	_attack_up_check = CheckButton.new()
 	_attack_up_check.set_pressed_no_signal(PlayerPrefs.attack_up)
 	SoundManager.wire_button(_attack_up_check)
@@ -969,6 +988,18 @@ func _on_attack_up_toggled(_pressed: bool) -> void:
 func _on_freeplay_goalie_selected(_idx: int) -> void:
 	_update_apply_state()
 
+
+func _on_locale_selected(_idx: int) -> void:
+	_update_apply_state()
+
+
+# Stored-code form of the language dropdown: "" for "System default" (index 0),
+# else the shipped locale's code.
+func _selected_locale() -> String:
+	if _locale_btn.selected <= 0:
+		return ""
+	return LocaleManager.SUPPORTED[_locale_btn.selected - 1]["code"]
+
 func _on_ring_color_changed(_color: Color) -> void:
 	# A manual tweak (not a preset write) means the palette is no longer one of
 	# the curated sets — reflect that as "Custom".
@@ -1240,6 +1271,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.ring_color_enemy = c.ring_color_enemy
 	PlayerPrefs.self_beacon_mode = c.self_beacon_mode
 	PlayerPrefs.freeplay_goalie_difficulty = c.freeplay_goalie_difficulty
+	PlayerPrefs.locale = c.locale
 	PlayerPrefs.screen_flash = c.screen_flash
 	PlayerPrefs.screen_shake = c.screen_shake
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
@@ -1254,6 +1286,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.apply_input()
 	PlayerPrefs.apply_cursor()
 	PlayerPrefs.apply_bindings()
+	PlayerPrefs.apply_locale()
 	PlayerPrefs.save()
 	# Live-apply the free-play goalie tier to the running goalies — free play has
 	# no match reload, so this is how the dropdown takes effect (no-op elsewhere).
