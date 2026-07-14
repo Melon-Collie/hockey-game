@@ -1354,7 +1354,8 @@ static func score_pass(
 		net_half_width: float,
 		opponents: Array[Vector3],
 		pass_speed_m_s: float = PASS_SPEED_M_S,
-		goalie_unsettled_factor: float = 0.0) -> float:
+		goalie_unsettled_factor: float = 0.0,
+		precomputed_lane: float = -1.0) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
@@ -1363,8 +1364,11 @@ static func score_pass(
 	# passing the actual fire speed matters: a charged pass at ~19 m/s
 	# gives defenders 36% less reaction time than the quick-shot
 	# default. Caller picks via expected_pass_speed(shooter, receiver)
-	# when the distance gate is appropriate.
-	var lane: float = lane_clear(shooter, receiver, opponents, pass_speed_m_s)
+	# when the distance gate is appropriate. `precomputed_lane` (>= 0)
+	# lets a caller that already ran the identical lane_clear (see
+	# threat_surface_pass) hand it in instead of paying for it twice.
+	var lane: float = precomputed_lane if precomputed_lane >= 0.0 \
+			else lane_clear(shooter, receiver, opponents, pass_speed_m_s)
 	if lane <= 0.0:
 		return 0.0
 	# Receiver's value as a shooter from where they are. Caller is
@@ -2050,10 +2054,14 @@ static func threat_surface_pass(
 	# default would overestimate defender reaction time on long
 	# opponent passes and underestimate the threat.
 	var pass_speed: float = expected_pass_speed(carrier_pos, receiver_pos)
+	# Compute the lane once and share it: score_pass would otherwise run the
+	# identical lane_clear internally, and it's the same call feeding the
+	# positional floor below — a doubled, now-heavier (#427 survival/friction
+	# model) lane solve on a per-candidate defensive read.
+	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
 	var pass_score: float = score_pass(
 			carrier_pos, receiver_pos, our_net, our_goalie_pos,
-			net_half_width, defenders, pass_speed)
-	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
+			net_half_width, defenders, pass_speed, 0.0, lane)
 	var positional: float = position_potential(receiver_pos, our_net, defenders)
 	return maxf(pass_score, lane * positional)
 

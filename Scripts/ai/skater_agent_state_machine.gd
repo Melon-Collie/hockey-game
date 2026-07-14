@@ -1123,6 +1123,27 @@ var _dispatch_period_ticks: int = DISPATCH_PERIOD_TICKS
 var _dispatch_skip_counter: int = 0
 var _cached_move_vector: Vector2 = Vector2.ZERO
 
+# Off-puck role-decision throttle. The role behaviors' positioning argmax
+# (finisher/support/contain/mark/pressure/... each score ~10-18 candidates via
+# score_pass/threat_surface) is the dominant AI cost — 4-5 bots run it every
+# full dispatch. It's a slow-moving positional read, so re-evaluate it on the
+# same ~30 Hz cadence the CARRIER already uses (AIRoleCarrier.PICK_ACTION_
+# PERIOD_TICKS) and reuse the cached RoleDecision between re-evals; steering,
+# aim, and all state transitions still run every full dispatch toward the cached
+# target, so only the expensive scoring is throttled. Drained by the dispatch
+# span so the wall-clock cadence holds across difficulty tiers, exactly like the
+# carrier. Timing-critical reads bypass the throttle (see _state_off_puck): the
+# FINISHER (one-timer trigger), a live one-timer-ready / body-check commit, a
+# location ping, and a slot change all force an immediate re-eval.
+const ROLE_DECISION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30  # ~30 Hz
+var _role_decision_cooldown: int = 0
+var _cached_role_decision: RoleDecision = null
+# True when the cached decision was built on a tick with a live location ping —
+# the ping override mutates the cached decision's target_position in place, so
+# the first tick after the ping expires must recompute a clean decision rather
+# than reuse the stale ping target.
+var _role_decision_pinged: bool = false
+
 # Difficulty PACE knobs (from BotSkillProfile via apply_profile). Copied onto the
 # RoleContext each tick so the role behaviors read them. No-op baselines (0.0 /
 # 1.0) keep the perfect-bot default when no profile is applied.
@@ -1597,7 +1618,33 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# optional aim override + optional fire intents). The default
 		# fallback (AIRoleAnchorFollow) just steers to the brain anchor.
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
-		var decision: RoleDecision = _dispatch_role_decision(ctx)
+		# Throttle the expensive positioning argmax to ~30 Hz (ROLE_DECISION_
+		# PERIOD_TICKS), reusing the cached decision between re-evals — the same
+		# cadence the carrier uses. Bypass the throttle for timing-critical reads
+		# so they stay full-rate: the FINISHER (its ready flag arms one-timers),
+		# a live one-timer-ready or body-check commit already in the cache, a
+		# location ping (its steering override mutates the decision each tick, so
+		# a stale cache would strand the bot), and a slot change (a cached target
+		# from the old role must not carry over). ctx (ping/aim reads) is rebuilt
+		# every tick regardless — only _dispatch_role_decision is throttled.
+		var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null \
+				else AIRoleSlots.Slot.NONE
+		var must_recompute: bool = _cached_role_decision == null \
+				or slot != _prev_role_slot \
+				or slot == AIRoleSlots.Slot.FINISHER \
+				or ctx.ping_move_target.is_finite() \
+				or _role_decision_pinged \
+				or _cached_role_decision.is_one_timer_ready \
+				or _cached_role_decision.commit_check
+		var decision: RoleDecision
+		if must_recompute or _role_decision_cooldown <= 0:
+			decision = _dispatch_role_decision(ctx)
+			_cached_role_decision = decision
+			_role_decision_cooldown = ROLE_DECISION_PERIOD_TICKS
+			_role_decision_pinged = ctx.ping_move_target.is_finite()
+		else:
+			_role_decision_cooldown -= _dispatch_period_ticks
+			decision = _cached_role_decision
 		# Smart-ping GO_THERE override: a live location order from a human
 		# teammate replaces the role's move target for its duration. The role
 		# keeps supplying aim / lift / one-timer readiness — only the skating
@@ -4965,6 +5012,10 @@ func _set_state(s: State) -> void:
 		# new state starts from a fresh decision rather than reusing the
 		# previous state's cached move_vector / aim target.
 		_dispatch_skip_counter = 0
+		# Force a fresh off-puck role decision on the first tick of the new
+		# state (cooldown <= 0 recomputes), so a re-entry into OFF_PUCK never
+		# steers on a RoleDecision cached from a previous stint.
+		_role_decision_cooldown = 0
 
 
 func _reset_to_off_puck() -> void:
