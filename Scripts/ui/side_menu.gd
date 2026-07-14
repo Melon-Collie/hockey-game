@@ -31,8 +31,10 @@ var _play_popup: PlayPopup = null
 var _career_screen: CareerStatsScreen = null
 var _options_container: Control = null
 var _exit_container: Control = null
-var _practice_container: Control = null
-var _practice_rows_vbox: VBoxContainer = null
+var _tutorial_container: Control = null
+var _tutorial_rows_vbox: VBoxContainer = null
+var _drills_container: Control = null
+var _drills_rows_vbox: VBoxContainer = null
 var _loading_screen: LoadingScreen = null
 
 
@@ -66,8 +68,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_options_container.visible = false
 	elif _exit_container != null and _exit_container.visible:
 		_exit_container.visible = false
-	elif _practice_container != null and _practice_container.visible:
-		_practice_container.visible = false
+	elif _tutorial_container != null and _tutorial_container.visible:
+		_tutorial_container.visible = false
+	elif _drills_container != null and _drills_container.visible:
+		_drills_container.visible = false
 	elif _player_popup != null and _player_popup.visible:
 		# PlayerSettingsPopup handles its own ui_cancel — let it through.
 		return
@@ -96,8 +100,10 @@ func close() -> void:
 		_options_container.visible = false
 	if _exit_container != null:
 		_exit_container.visible = false
-	if _practice_container != null:
-		_practice_container.visible = false
+	if _tutorial_container != null:
+		_tutorial_container.visible = false
+	if _drills_container != null:
+		_drills_container.visible = false
 	visible = false
 	closed.emit()
 
@@ -148,7 +154,8 @@ func _build_panel() -> void:
 	vbox.add_child(card_gap)
 
 	_add_row(vbox, "Play", false, _on_play_pressed)
-	_add_row(vbox, "Practice", false, _on_practice_pressed)
+	_add_row(vbox, "Tutorial", false, _on_tutorial_pressed)
+	_add_row(vbox, "Drills", false, _on_drills_pressed)
 	# Career hosts both the Supabase-backed stats tabs and the local Replays
 	# tab, so the row is never gated — the stats tabs surface their own
 	# stat-sharing notice, while replays always work.
@@ -391,7 +398,8 @@ func _build_popups() -> void:
 
 	_build_options_overlay()
 	_build_exit_overlay()
-	_build_practice_overlay()
+	_build_tutorial_overlay()
+	_build_drills_overlay()
 
 	_loading_screen = LoadingScreen.new()
 	_loading_screen.cancel_pressed.connect(_on_join_cancelled)
@@ -497,18 +505,22 @@ func _build_exit_overlay() -> void:
 	add_child(_exit_container)
 
 
-# Practice picker modal: the tutorial course plus drills (Penalty Shots today,
-# more later). Tutorials iterate TutorialRegistry.ALL_IDS so adding a new one
-# automatically grows the list with no changes here. Tutorial rows show a
-# checkmark when PlayerPrefs marks the tutorial complete.
-func _build_practice_overlay() -> void:
+# Builds an empty centered picker modal (scrim + panel + close button +
+# heading + a rows VBox the caller populates) and adds it to the tree hidden.
+# Shared by the Tutorial and Drills pickers so the two modals stay identical in
+# look and dismissal. Returns { "container": Control, "rows": VBoxContainer }.
+func _build_picker_overlay(heading_text: String) -> Dictionary:
+	var container := Control.new()
+	container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	container.visible = false
+
 	var overlay := ColorRect.new()
 	overlay.color = MenuStyle.SCRIM
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed:
-			_practice_container.visible = false)
+			container.visible = false)
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", MenuStyle.panel(6, 32))
@@ -526,38 +538,52 @@ func _build_practice_overlay() -> void:
 	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	close_row.add_child(close_spacer)
 	var close_btn := MenuStyle.close_button()
-	close_btn.pressed.connect(func() -> void: _practice_container.visible = false)
+	close_btn.pressed.connect(func() -> void: container.visible = false)
 	SoundManager.wire_button(close_btn)
 	close_row.add_child(close_btn)
 	vbox.add_child(close_row)
 
 	var heading := Label.new()
-	heading.text = "Practice"
+	heading.text = heading_text
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	MenuStyle.apply_heading(heading, 24)
 	vbox.add_child(heading)
 
-	_practice_rows_vbox = VBoxContainer.new()
-	_practice_rows_vbox.add_theme_constant_override("separation", 8)
-	vbox.add_child(_practice_rows_vbox)
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 8)
+	vbox.add_child(rows)
 
-	_practice_container = Control.new()
-	_practice_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_practice_container.visible = false
-	_practice_container.add_child(overlay)
-	_practice_container.add_child(panel)
-	add_child(_practice_container)
-
-	_refresh_practice_rows()
+	container.add_child(overlay)
+	container.add_child(panel)
+	add_child(container)
+	return {"container": container, "rows": rows}
 
 
-# Rebuilds the row list. Called when the picker opens so the checkmark next to
-# each tutorial reflects the latest PlayerPrefs state (e.g. the player just
-# completed Movement in a previous session this run).
-func _refresh_practice_rows() -> void:
-	if _practice_rows_vbox == null:
+# Tutorial picker modal: the ordered tutorial course (TutorialRegistry.ALL_IDS).
+# Adding a new tutorial automatically grows the list with no changes here; rows
+# show a checkmark when PlayerPrefs marks the tutorial complete.
+func _build_tutorial_overlay() -> void:
+	var built: Dictionary = _build_picker_overlay("Tutorial")
+	_tutorial_container = built["container"] as Control
+	_tutorial_rows_vbox = built["rows"] as VBoxContainer
+	_refresh_tutorial_rows()
+
+
+# Drills picker modal: the offline "score X of N" drills (DrillRegistry.ALL_IDS).
+func _build_drills_overlay() -> void:
+	var built: Dictionary = _build_picker_overlay("Drills")
+	_drills_container = built["container"] as Control
+	_drills_rows_vbox = built["rows"] as VBoxContainer
+	_refresh_drills_rows()
+
+
+# Rebuilds the tutorial row list. Called when the picker opens so the checkmark
+# next to each tutorial reflects the latest PlayerPrefs state (e.g. the player
+# just completed Movement in a previous session this run).
+func _refresh_tutorial_rows() -> void:
+	if _tutorial_rows_vbox == null:
 		return
-	for child: Node in _practice_rows_vbox.get_children():
+	for child: Node in _tutorial_rows_vbox.get_children():
 		child.queue_free()
 	for tutorial_id: String in TutorialRegistry.ALL_IDS:
 		# "Part 1 of 6 · Movement" framing so the picker reads as one ordered
@@ -571,25 +597,27 @@ func _refresh_practice_rows() -> void:
 		btn.custom_minimum_size = Vector2(280, 44)
 		var id_copy: String = tutorial_id
 		btn.pressed.connect(func() -> void:
-			_practice_container.visible = false
+			_tutorial_container.visible = false
 			_launch_tutorial(id_copy))
 		SoundManager.wire_button(btn)
-		_practice_rows_vbox.add_child(btn)
+		_tutorial_rows_vbox.add_child(btn)
 
-	# Drills sit below the tutorial course, separated so the ordered
-	# "Part 1 / Part 2" framing above stays readable as one unit.
-	var sep := HSeparator.new()
-	sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
-	_practice_rows_vbox.add_child(sep)
+
+# Rebuilds the drills row list (one row per DrillRegistry drill).
+func _refresh_drills_rows() -> void:
+	if _drills_rows_vbox == null:
+		return
+	for child: Node in _drills_rows_vbox.get_children():
+		child.queue_free()
 	for drill_id: String in DrillRegistry.ALL_IDS:
 		var drill_btn := MenuStyle.popup_button(DrillRegistry.get_display_name(drill_id))
 		drill_btn.custom_minimum_size = Vector2(280, 44)
 		var drill_id_copy: String = drill_id
 		drill_btn.pressed.connect(func() -> void:
-			_practice_container.visible = false
+			_drills_container.visible = false
 			_launch_drill(drill_id_copy))
 		SoundManager.wire_button(drill_btn)
-		_practice_rows_vbox.add_child(drill_btn)
+		_drills_rows_vbox.add_child(drill_btn)
 
 
 # ── Action handlers ──────────────────────────────────────────────────────────
@@ -643,14 +671,22 @@ func _on_start_game_pressed() -> void:
 	get_tree().change_scene_to_file(Constants.SCENE_LOBBY)
 
 
-func _on_practice_pressed() -> void:
-	# Opens the practice submenu: the tutorial course (Movement, Stick
-	# Basics, and the rest) plus the DrillRegistry drills. Selection routes
-	# through _launch_tutorial(id) / _launch_drill(id).
-	if _practice_container == null:
+func _on_tutorial_pressed() -> void:
+	# Opens the tutorial course picker (Movement, Stick Basics, and the rest).
+	# Selection routes through _launch_tutorial(id).
+	if _tutorial_container == null:
 		return
-	_refresh_practice_rows()
-	_practice_container.visible = true
+	_refresh_tutorial_rows()
+	_tutorial_container.visible = true
+
+
+func _on_drills_pressed() -> void:
+	# Opens the drills picker (the DrillRegistry "score X of N" drills).
+	# Selection routes through _launch_drill(id).
+	if _drills_container == null:
+		return
+	_refresh_drills_rows()
+	_drills_container.visible = true
 
 
 func _launch_tutorial(id: String) -> void:

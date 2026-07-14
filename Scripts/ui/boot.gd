@@ -253,7 +253,7 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	# play. ANY touch dismisses this for good: finishing a part and hitting
 	# Exit both mark that part complete, and one marked part means the player
 	# has seen the course — being routed back through every remaining part on
-	# each boot would nag; the Practice menu keeps the rest available.
+	# each boot would nag; the Tutorial menu keeps the rest available.
 	# PlayerPrefs wipes completion when the course version bumps, so a
 	# restructured course puts everyone back through this gate once. An
 	# accepted Steam invite trumps the tutorial: the player clicked

@@ -5,15 +5,15 @@ class_name DrillRegistry
 # session whose whole flow — staging, scoring, HUD — is owned by one dedicated
 # manager node. Adding a new drill means appending here plus writing that
 # manager (and usually a DrillHUD subclass for its strings): no NetworkManager
-# flag, no game_scene branch, no SideMenu wiring change — the Practice menu
-# builds its drill rows from ALL_IDS, and game_scene instantiates the
-# registered manager for NetworkManager.drill_id.
+# flag, no game_scene branch, no SideMenu wiring change — the Drills menu
+# builds its rows from ALL_IDS, and game_scene instantiates the registered
+# manager for NetworkManager.drill_id.
 
 const PENALTY_SHOTS_ID: String = "penalty_shots"
 const SHOT_ACCURACY_ID: String = "shot_accuracy"
 const PASSING_ID: String = "passing"
 
-# Display order — also drives the Practice submenu's drill row order.
+# Display order — also drives the Drills submenu's row order.
 const ALL_IDS: Array[String] = [PENALTY_SHOTS_ID, SHOT_ACCURACY_ID, PASSING_ID]
 
 
