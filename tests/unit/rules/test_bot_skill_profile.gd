@@ -65,11 +65,6 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal's release timing is sloppier than Hard's")
 	assert_gt(easy.shot_timing_error_s, normal.shot_timing_error_s,
 			"Easy's release timing is sloppier than Normal's")
-	# Carry sway: a lower tier's handle is visibly looser.
-	assert_gt(normal.carry_sway_m, hard.carry_sway_m,
-			"Normal's carry sways wider than Hard's")
-	assert_gt(easy.carry_sway_m, normal.carry_sway_m,
-			"Easy's carry sways wider than Normal's")
 	# Settle beat: longer holds the release later after a fresh possession.
 	assert_gt(normal.carry_settle_delay_s, hard.carry_settle_delay_s,
 			"Normal settles the puck before playing it, Hard doesn't")
@@ -125,7 +120,6 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 	# that even the ceiling tier is no longer tick-and-corner perfect.
 	assert_gt(hard.shot_timing_error_s, 0.0,
 			"even Hard's release is not tick-perfect")
-	assert_gt(hard.carry_sway_m, 0.0, "even Hard's handle is alive")
 
 
 func test_cognition_gates_close_down_the_tiers() -> void:

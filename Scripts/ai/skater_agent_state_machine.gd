@@ -276,7 +276,7 @@ const _RECV_ONE_TIME: int = 2       # Mode A transitioned to ONE_TIMER_PRESSED; 
 #
 # COUPLING: anything denominated in metres ON THIS RING is really an angle —
 # aim errors are stored as radians on BotSkillProfile precisely so they don't
-# move when this does; the stickhandle/sway offsets and AIM_CONVERGED_DIST_M
+# move when this does; the stickhandle offset and AIM_CONVERGED_DIST_M
 # were rescaled with the 2.0 → 1.3 change to keep their angles identical.
 const CARRY_BLADE_AIM_FORWARD_M: float = 1.3
 
@@ -337,6 +337,24 @@ const STICKHANDLE_OFFSET_MAX_M: float = 0.33
 const CARRY_FACE_ROUTE_MIN_DIST_M: float = 1.0
 const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 
+# "Man to beat" contest band (see _has_man_to_beat / the O-ZONE SQUARE block in
+# _carry_mouse_aim). A GOAL-SIDE opponent within this distance of the carrier is
+# close enough to poke/steal — a defender the carrier still has to beat. With NO
+# such man while the carrier is in the offensive zone, there is nobody to beat,
+# so the body points at the goalie (square to the net, all shot/pass options
+# open) rather than skating on along a lateral route into an awkward angle — the
+# reported "weird sideways shot" after a deke/protect move. A hair beyond the
+# stickhandle threat radius so it anticipates a closing checker. Physical
+# contest measurement, tier-agnostic (it needs no protect read, so the
+# naive-carry tiers get it too).
+const CARRY_MAN_TO_BEAT_RADIUS_M: float = 3.5
+# A defender the carrier has skated PAST — this far behind it toward our own
+# end along the netward line — is beaten and no longer a man to beat, so the
+# carrier squares up the instant it clears him even with him trailing close
+# behind (rather than waiting for the full contest radius to open). ~a body
+# length. Physical measurement.
+const CARRY_MAN_TO_BEAT_BEHIND_M: float = 0.75
+
 # Pressure floor for the puck-protect blend: below this, the carry cursor
 # stays on the quiet forward dangle; above it, the blend ramps 0→full over the
 # remaining band (full shield at pressure 1 is unchanged). Without the floor
@@ -363,23 +381,6 @@ const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.45
 # much a shield is allowed to turn you), not an evaluation curve — the seam
 # itself stays the grounded reachable-set read.
 const CARRY_PROTECT_MAX_TURN_DEG: float = 90.0
-
-# Natural carry sway: a smooth lateral oscillation of the carry cursor —
-# the rhythmic side-to-side dangle a human carrier keeps going — layered
-# under the threat-driven stickhandle offset above. Amplitude is the
-# per-tier BotSkillProfile.carry_sway_m (0 for raw test agents, so they
-# stay bit-deterministic); rhythm and depth wander per cycle via the
-# per-bot RNG so no two bots (or two cycles) sway in sync. Feel-only:
-# lives in _carry_mouse_aim (CARRY deliberation), so the blade steadies
-# the moment the bot pre-aims a release — a readable "shot coming" tell,
-# like a real shooter settling the puck. Frequency band is a relaxed
-# human dangle cadence (~1 tap/s to ~1.6 taps/s).
-const CARRY_SWAY_FREQ_MIN_HZ: float = 0.9
-const CARRY_SWAY_FREQ_MAX_HZ: float = 1.6
-# Per-cycle amplitude wander floor (fraction of carry_sway_m) and how fast
-# the eased amplitude chases its resampled target (per second).
-const CARRY_SWAY_AMP_FRAC_MIN: float = 0.35
-const CARRY_SWAY_AMP_EASE_PER_S: float = 3.0
 
 # Poke-evade maneuver. Layered on top of the continuous defender-
 # avoidance forces (carrier threat-gated repel in steering, sum-of-
@@ -679,16 +680,6 @@ var _committed_aim_error_rad: float = 0.0
 # swallowing the puck instead of going for the doorstep beat.
 var _shot_timing_error_s: float = 0.0
 var _shoot_release_hold_ticks: int = 0
-# Natural carry-sway amplitude (m, from BotSkillProfile.carry_sway_m; see the
-# CARRY_SWAY_* block) and its running oscillator state. Phase/rhythm advance
-# only while _carry_mouse_aim runs (CARRY deliberation); the tick stamp lets
-# the oscillator resume smoothly after any gap instead of jumping phase.
-var _carry_sway_m: float = 0.0
-var _sway_phase: float = 0.0
-var _sway_freq_hz: float = CARRY_SWAY_FREQ_MIN_HZ
-var _sway_amp_frac: float = 1.0
-var _sway_amp_target_frac: float = 1.0
-var _sway_prev_tick: int = 0
 # Bots run at the host physics rate (120 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
@@ -774,6 +765,11 @@ var _scratch_opponents: Array[Vector3] = []
 # carrier threat-gated repel reads defender MOMENTUM, not proximity
 # (AISteering._carrier_threat_repel). Filled alongside the positions.
 var _scratch_opponent_steer_vels: Array[Vector3] = []
+# Teammate velocities index-matched to _scratch_teammates — steering's
+# teammate repel reads their SWEPT PATH (where they're skating into) so
+# crossing routes bend apart before the bodies meet. Filled alongside the
+# teammate positions in _apply_steering.
+var _scratch_teammate_steer_vels: Array[Vector3] = []
 # Shared empty fallback so the per-tick cache reads don't allocate a `[]`
 # default literal (Dictionary.get evaluates its default eagerly). Never mutated.
 var _empty_ids: Array = []
@@ -885,10 +881,6 @@ var _shot_release_offset_locked: Vector3 = Vector3.ZERO
 # that gets stripped mid-swing, and the moderate fixed pace stays short of icing.
 var _dump_target: Vector3 = Vector3.INF
 var _dump_is_soft: bool = false
-
-# Increments every physics tick the agent runs; doesn't have to be a
-# perfect clock — only used for relative deltas (mouse-sway timing).
-var _agent_tick: int = 0
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
 # one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
@@ -1102,7 +1094,7 @@ const BOT_ONE_TIMER_ZONE_OFFSET_Z_M: float = -0.4
 var _locked_pre_aim_point: Vector3 = Vector3.INF
 
 # Per-bot RNG for hands-side execution sampling (per-release aim/timing
-# errors, carry-sway rhythm). Seeded once in setup() from peer_id and the
+# errors). Seeded once in setup() from peer_id and the
 # host tick at spawn so each bot has its own deterministic but distinct
 # stream (replay-safe).
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -1332,17 +1324,10 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	# Execution error for LIVE bots (raw test agents stay deterministic):
 	# per-tier, split shot-vs-pass — the shot error is the tier's scoring
 	# dial, the pass error stays small so passes keep connecting. Timing
-	# error and carry sway are the other two hands-side humanisers.
+	# error is the other hands-side humaniser.
 	_shot_aim_error_rad = profile.shot_aim_error_rad
 	_pass_aim_error_rad = profile.pass_aim_error_rad
 	_shot_timing_error_s = profile.shot_timing_error_s
-	_carry_sway_m = profile.carry_sway_m
-	if _carry_sway_m > 0.0:
-		# Desync the sway oscillator per bot (phase + first-cycle rhythm);
-		# gated so profile-less / zero-sway agents never advance the RNG.
-		_sway_phase = _rng.randf_range(0.0, TAU)
-		_sway_freq_hz = _rng.randf_range(CARRY_SWAY_FREQ_MIN_HZ, CARRY_SWAY_FREQ_MAX_HZ)
-		_sway_amp_target_frac = _rng.randf_range(CARRY_SWAY_AMP_FRAC_MIN, 1.0)
 
 
 # Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
@@ -1531,7 +1516,6 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# reacts to OTHERS' possession changes a beat late.
 	var have_puck: bool = (snapshot.real_puck_carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
-	_agent_tick += 1
 	_update_engagement_cooldown(snapshot, self_state)
 	# Per-skater acceleration feeds receiver lead in pass scoring + PASS_PRESSED
 	# aim. Prefer the host's shared per-frame cache (computed once for all bots
@@ -2478,7 +2462,13 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	#
 	# PASS_PRESSED: brake. Pass leads aim from a held spot.
 	if _intended_action == State.CARRY:
-		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+		# Velocity-matched seek (match speed = our top speed): the carry anchor
+		# pull cancels cross-momentum instead of pure-seeking, so a carrier
+		# drifting cross-ice redirects onto a central carry point rather than
+		# orbiting past it (see AISteering velocity-matched seek). Skated through
+		# at pace — no deceleration.
+		_apply_steering(input, snapshot, self_pos, _last_carry_anchor,
+				false, _self_max_speed)
 		# Discrete "deke moment" on top of continuous body steering:
 		# brief perpendicular cut away from an imminent poke threat.
 		# Pre-aim states (SHOOT/PASS pending) skip this — they have
@@ -3603,12 +3593,13 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # callers (carry steps, puck chase, check commits, tag-up) leave it false —
 # they either re-pick the anchor continuously or WANT to arrive at speed.
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
-		anchor: Vector3, arrive: bool = false) -> void:
+		anchor: Vector3, arrive: bool = false, velocity_match_speed: float = 0.0) -> void:
 	# Standard potential-field steering with brake-pivot.
 	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
 	# instead of re-partitioning snapshot.skater_states every physics tick.
 	# Fall back to a live partition when the cache is empty (unit tests).
 	_scratch_teammates.clear()
+	_scratch_teammate_steer_vels.clear()
 	_scratch_opponents.clear()
 	_scratch_opponent_steer_vels.clear()
 	if not snapshot.teammate_ids_by_team.is_empty():
@@ -3618,6 +3609,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			if peer_id == _peer_id:
 				continue
 			_scratch_teammates.append(snapshot.skater_states[peer_id].position)
+			_scratch_teammate_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 		for other_team: int in snapshot.teammate_ids_by_team:
 			if other_team == _team_id:
 				continue
@@ -3631,6 +3623,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				continue
 			if _team_id_by_peer.get(peer_id, -1) == _team_id:
 				_scratch_teammates.append(snapshot.skater_states[peer_id].position)
+				_scratch_teammate_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 			else:
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
@@ -3663,11 +3656,21 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if carrier == _peer_id:
 		opp_repel = AISteering.OPPONENT_REPEL_WEIGHT_CARRY
 		steer_vels = _scratch_opponent_steer_vels
+	# Velocity-matched seek to the anchor when the caller opts in
+	# (velocity_match_speed > 0 — the carrier path): the anchor pull cancels
+	# cross-momentum so the bot redirects onto the line instead of orbiting past
+	# it. Read our own velocity from the snapshot for the match.
+	var match_self_vel: Vector3 = Vector3.ZERO
+	if velocity_match_speed > 0.0:
+		var self_st: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+		if self_st != null:
+			match_self_vel = self_st.velocity
 	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
-			opp_repel, steer_vels)
+			opp_repel, steer_vels, _scratch_teammate_steer_vels,
+			match_self_vel, velocity_match_speed)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), stopping hard beats carving a wide arc.
@@ -3899,9 +3902,28 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# facing the play, the real posture, paying the honest backward-speed
 	# cost). Fire-tracking (_carry_aim_track_fire) overrides all of this
 	# with the shot aim whenever a live look exists.
+	# O-ZONE SQUARE: once the carrier is in the offensive zone with no man to
+	# beat, point the body straight at the GOALIE — square to the net, every
+	# shot/pass option open — instead of skating on along a lateral carry route
+	# into the awkward sideways angle (the "weird sideways shot" after a deke).
+	# This owns the facing outright in that case (skips FACE THE ROUTE): a slot
+	# repositioning with nobody to beat is walked facing the net, the real
+	# shooter's posture, not skated back-to-play. Outside the O-zone, and while a
+	# man still has to be beaten, FACE THE ROUTE below keeps the fast forward
+	# stride down a lateral escape / wall-exit route.
+	var squared_to_net: bool = false
+	if AIActionScoring.in_offensive_zone(self_pos, _attacking_goal_pos) \
+			and not _has_man_to_beat(snapshot, self_pos):
+		var goalie_square: Vector3 = _goalie_now(snapshot)
+		var to_goalie: Vector3 = goalie_square - self_pos
+		to_goalie.y = 0.0
+		if to_goalie.length_squared() > 0.0001:
+			forward_dir = to_goalie.normalized()
+			squared_to_net = true
 	var route: Vector3 = _last_carry_anchor - self_pos
 	route.y = 0.0
-	if route.length_squared() >= CARRY_FACE_ROUTE_MIN_DIST_M * CARRY_FACE_ROUTE_MIN_DIST_M:
+	if not squared_to_net \
+			and route.length_squared() >= CARRY_FACE_ROUTE_MIN_DIST_M * CARRY_FACE_ROUTE_MIN_DIST_M:
 		var route_dir: Vector3 = route.normalized()
 		if route_dir.z * attacking_z >= CARRY_FACE_RETREAT_ADVANCE:
 			forward_dir = route_dir
@@ -3910,14 +3932,11 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# motion smoothing across ticks. When two defenders converge from
 	# opposite sides and the raw target alternates per tick, the
 	# motion model averages them out (mouse oscillates within a small
-	# range bounded by the per-tick step). The natural sway rides
-	# underneath the threat response — a resting dangle rhythm, not a
-	# reaction (see the CARRY_SWAY_* block) — and is folded in BEFORE the
-	# protect blend below, so shielding pressure attenuates the dangle
-	# along with everything else: a blade pinned to the protect seam
-	# doesn't sway the puck back into the checker's reach.
-	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir) \
-			+ _carry_sway_offset(forward_dir)
+	# range bounded by the per-tick step). Folded in BEFORE the protect
+	# blend below, so shielding pressure attenuates it along with
+	# everything else: a blade pinned to the protect seam doesn't get
+	# pulled back into the checker's reach.
+	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir)
 	# Puck protection (protects_the_puck tiers): as the presented-forward carry
 	# spot's reachable clearance collapses (carrier protect_pressure → 1), swing
 	# the blade toward the protected seam of the handling envelope — typically
@@ -3957,7 +3976,7 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	if (target.z - max_forward_z) * _own_goal_dir < 0.0:
 		target.z = max_forward_z
 	# ...and inside the boards by a blade of standoff (see
-	# CARRY_BLADE_WALL_MARGIN_M): the forward aim + stickhandle/sway/protect
+	# CARRY_BLADE_WALL_MARGIN_M): the forward aim + stickhandle/protect
 	# offsets have no wall awareness of their own, so a carrier maneuvering
 	# along the boards would otherwise drive its blade into the kickplate and
 	# knock its own puck loose. Clamped last so every offset above is covered;
@@ -3973,6 +3992,35 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# swung around the nearer post — the blade-level mirror of the body's
 	# AISteering._net_detour.
 	return AIActionScoring.net_safe_blade_target(self_pos, target)
+
+
+# True when any GOAL-SIDE opponent is inside the contest band
+# (CARRY_MAN_TO_BEAT_RADIUS_M) of the carrier — a defender ahead toward the net,
+# close enough to poke/steal, i.e. a man the carrier still has to beat. A
+# defender the carrier has already skated past (behind it toward our own end by
+# more than CARRY_MAN_TO_BEAT_BEHIND_M along the netward line) is beaten and does
+# NOT count, so the carrier squares up the instant it clears him. With no such
+# man the carrier is unobstructed. Measured from the body so a checker on any
+# side ahead counts. Runs on the carrier only (~1 bot/team) and loops the small
+# opponent set, so it's hot-path cheap.
+func _has_man_to_beat(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	var r2: float = CARRY_MAN_TO_BEAT_RADIUS_M * CARRY_MAN_TO_BEAT_RADIUS_M
+	var to_net: Vector3 = _attacking_goal_pos - self_pos
+	to_net.y = 0.0
+	var net_len: float = to_net.length()
+	var have_net: bool = net_len > 0.001
+	var nx: float = to_net.x / net_len if have_net else 0.0
+	var nz: float = to_net.z / net_len if have_net else 0.0
+	for peer_id: int in _opponent_ids(snapshot):
+		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
+		var dx: float = opp_state.position.x - self_pos.x
+		var dz: float = opp_state.position.z - self_pos.z
+		if dx * dx + dz * dz >= r2:
+			continue
+		# Goal-side (ahead toward the net) beyond the beaten-behind slack.
+		if not have_net or dx * nx + dz * nz > -CARRY_MAN_TO_BEAT_BEHIND_M:
+			return true
+	return false
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
@@ -4036,34 +4084,6 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	var magnitude: float = clampf(lateral_force, -1.0, 1.0) * STICKHANDLE_OFFSET_MAX_M
 	return right_axis * magnitude
 
-
-# Natural carry sway: the smooth lateral dangle offset for this tick, perpendicular
-# to the carry forward axis. A slow sinusoid whose rhythm (frequency) and depth
-# (amplitude fraction) are resampled once per cycle from the per-bot RNG, with the
-# amplitude EASED toward its target — so the motion is a wandering human rhythm,
-# never a metronome and never a jitter. Advances by real elapsed ticks (the carry
-# handler only runs on full dispatches; skipped ticks are covered by the elapsed-
-# tick delta) and resumes phase-smoothly after any gap via the dt clamp. Zero
-# amplitude (raw test agents / unwired profiles) is a hard no-op: no RNG advance,
-# bit-deterministic baseline preserved. Runs at most once per carry dispatch —
-# trig on the stack, no allocation (hot-path safe).
-func _carry_sway_offset(forward_dir: Vector3) -> Vector3:
-	if _carry_sway_m == 0.0:
-		return Vector3.ZERO
-	var dt: float = clampf(
-			float(_agent_tick - _sway_prev_tick) * MOUSE_TICK_DELTA, 0.0, 0.1)
-	_sway_prev_tick = _agent_tick
-	_sway_phase += TAU * _sway_freq_hz * dt
-	if _sway_phase >= TAU:
-		_sway_phase = fmod(_sway_phase, TAU)
-		# New cycle, new rhythm: resample how fast and how wide this
-		# dangle cycle runs.
-		_sway_freq_hz = _rng.randf_range(CARRY_SWAY_FREQ_MIN_HZ, CARRY_SWAY_FREQ_MAX_HZ)
-		_sway_amp_target_frac = _rng.randf_range(CARRY_SWAY_AMP_FRAC_MIN, 1.0)
-	_sway_amp_frac = lerpf(_sway_amp_frac, _sway_amp_target_frac,
-			minf(CARRY_SWAY_AMP_EASE_PER_S * dt, 1.0))
-	var right_axis: Vector3 = Vector3(forward_dir.z, 0.0, -forward_dir.x)
-	return right_axis * (sin(_sway_phase) * _sway_amp_frac * _carry_sway_m)
 
 
 # Poke-evade maneuver. Overrides the steering inputs for a brief committed
@@ -4560,8 +4580,7 @@ func _step_mouse_internal(target: Vector3, mode: int,
 		_mouse_pos.z = step_target.z
 	# Output IS the smooth _mouse_pos — no per-tick noise. Execution
 	# imperfection lives in the per-release sampled aim error (press-state
-	# geometry) and the carry sway, both of which move the TARGET smoothly
-	# instead of shaking the cursor.
+	# geometry), which moves the TARGET smoothly instead of shaking the cursor.
 	return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 
 

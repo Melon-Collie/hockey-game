@@ -1411,15 +1411,13 @@ func test_opponent_within_of_reads_contest_range() -> void:
 func test_aim_error_off_raw_on_after_profile() -> void:
 	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
 	# bot wired through apply_profile gets the per-tier execution error pair
-	# plus the timing/sway humanisers.
+	# plus the timing humaniser.
 	assert_almost_eq(sm._shot_aim_error_rad, 0.0, 1e-9,
 			"raw agents stay error-free on shots")
 	assert_almost_eq(sm._pass_aim_error_rad, 0.0, 1e-9,
 			"raw agents stay error-free on passes")
 	assert_almost_eq(sm._shot_timing_error_s, 0.0, 1e-9,
 			"raw agents release tick-perfect")
-	assert_almost_eq(sm._carry_sway_m, 0.0, 1e-9,
-			"raw agents carry rail-steady")
 	sm.apply_profile(BotSkillProfile.hard())
 	assert_almost_eq(sm._shot_aim_error_rad, BotSkillProfile.hard().shot_aim_error_rad, 1e-9,
 			"profiled (live) agents carry the shot aim error")
@@ -1427,8 +1425,6 @@ func test_aim_error_off_raw_on_after_profile() -> void:
 			"profiled (live) agents carry the pass aim error")
 	assert_almost_eq(sm._shot_timing_error_s, BotSkillProfile.hard().shot_timing_error_s, 1e-9,
 			"profiled (live) agents carry the release timing variance")
-	assert_almost_eq(sm._carry_sway_m, BotSkillProfile.hard().carry_sway_m, 1e-9,
-			"profiled (live) agents carry the natural sway amplitude")
 
 
 func test_press_entry_samples_release_error_per_budget() -> void:
@@ -1731,6 +1727,48 @@ func test_carry_aim_faces_the_play_when_anchor_is_underfoot() -> void:
 	sm._last_carry_anchor = Vector3(0.3, 0, 0.3)
 	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
 	assert_lt(target.normalized().z, -0.9, "underfoot anchor: face the play")
+
+
+# ── O-zone square-up: point at the goalie when there's no man to beat ────────
+# Team 0 attacks -Z; the O-zone is z < -BLUE_LINE_Z. Facing is measured as the
+# cursor direction relative to the body (target - self), since self isn't at
+# the origin here.
+
+func test_carry_aim_squares_to_goalie_in_ozone_with_no_man_to_beat() -> void:
+	# Deep in the O-zone with a LATERAL carry anchor and nobody to beat: face
+	# the net (the goalie, at the attacking goal with no goalie state) rather
+	# than skating on down the sideways route into an awkward-angle shot.
+	var oz_pos := Vector3(0, 0, -15)   # z < -BLUE_LINE_Z → offensive zone
+	sm._last_carry_anchor = Vector3(8, 0, -15)   # due +X, a lateral route
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(oz_pos), oz_pos)
+	var facing: Vector3 = (target - oz_pos).normalized()
+	assert_lt(facing.z, -0.9, "no man to beat in the O-zone: squared to the goalie")
+
+
+func test_carry_aim_keeps_the_route_in_ozone_when_a_man_must_be_beaten() -> void:
+	# Same lateral O-zone carry, but a goal-side defender is inside the contest
+	# band — a man still to beat, so FACE THE ROUTE keeps the fast forward
+	# stride down the escape instead of squaring up early.
+	var oz_pos := Vector3(0, 0, -15)
+	sm._last_carry_anchor = Vector3(8, 0, -15)
+	var s := _carry_snap(oz_pos)
+	_add_skater(s, OPP_ID, Vector3(2, 0, -16))   # goal-side, ~2.2 m away
+	var target: Vector3 = sm._carry_mouse_aim(s, oz_pos)
+	var facing: Vector3 = (target - oz_pos).normalized()
+	assert_gt(facing.x, 0.9, "a man to beat keeps the carrier facing its route")
+
+
+func test_carry_aim_ignores_a_beaten_man_behind_in_the_ozone() -> void:
+	# A defender the carrier has already skated PAST (behind it toward our own
+	# end) is beaten and doesn't count, so the carrier squares up to the goalie
+	# even with him trailing close behind.
+	var oz_pos := Vector3(0, 0, -15)
+	sm._last_carry_anchor = Vector3(8, 0, -15)
+	var s := _carry_snap(oz_pos)
+	_add_skater(s, OPP_ID, Vector3(0, 0, -12))   # 3 m behind toward our +Z end
+	var target: Vector3 = sm._carry_mouse_aim(s, oz_pos)
+	var facing: Vector3 = (target - oz_pos).normalized()
+	assert_lt(facing.z, -0.9, "a beaten man behind doesn't stop the square-up")
 
 
 # ── Fake-then-cut deke lifecycle (containment trigger + phase split) ─────────

@@ -160,6 +160,32 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 	assert_eq(assignments[120], AIRoleSlots.Slot.SUPPORT, "deep bot becomes SUPPORT")
 
 
+func test_breakout_strong_keeps_the_outlet_role_across_the_handoff() -> void:
+	# BREAKOUT→TRANS_DO renames BREAKOUT_STRONG→OUTLET; the peer that was the
+	# up-ice strong-side outlet should STAY the up-ice OUTLET across the flip
+	# (hysteresis continuity class), not swap destinations with the trailer.
+	# Two peers tied on ETA to the opp net: the pid tiebreak alone would hand
+	# OUTLET to the lower pid (110), but 120 held BREAKOUT_STRONG last tick, so
+	# the continuity bonus keeps OUTLET on 120.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, 0.0)],    # carrier at NZ
+			[110, 0, Vector3(-3.0, 0.0, -10.0)], # tied ETA to opp net
+			[120, 0, Vector3(3.0, 0.0, -10.0)],  # tied ETA to opp net
+	]
+	var snap := _make_snapshot(skaters, 100)
+	var prev: Dictionary = {
+			120: AIRoleSlots.Slot.BREAKOUT_STRONG,
+			110: AIRoleSlots.Slot.BREAKOUT_WEAK,
+	}
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DO,
+			_resolver(skaters), prev)
+	assert_eq(assignments[120], AIRoleSlots.Slot.OUTLET,
+			"the ex-BREAKOUT_STRONG peer stays the up-ice OUTLET")
+	assert_eq(assignments[110], AIRoleSlots.Slot.SUPPORT,
+			"the ex-BREAKOUT_WEAK peer stays the trailer")
+
+
 func test_assign_breakout_strong_goes_to_strong_side_peer() -> void:
 	# Carrier deep in our own zone. Strong side is +X (default
 	# _strong_x = +1), so the +X non-carrier takes BREAKOUT_STRONG and

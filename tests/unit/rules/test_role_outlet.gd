@@ -105,6 +105,35 @@ func test_returns_legal_position_with_teammate_carrier() -> void:
 			"z within goal-line bounds")
 
 
+# ── Side consistency (strong_x, not the carrier's live x) ────────────────────
+
+func test_outlet_side_follows_strong_x_not_the_carrier_wobble() -> void:
+	# The stretch spot mirrors to the WEAK side of the brain's hysteretic
+	# strong_x, not a raw -carrier.x. So a carrier wheeling just across center
+	# (puck crossing the middle while strong_x is held) must NOT flip the
+	# OUTLET's staging side — the raw mirror did, sending the OUTLET across the
+	# SUPPORT trailer's path on the breakout→rush handoff. With no opponents
+	# the pick is potential-driven and independent of the carrier's position,
+	# so identical strong_x + equal |carrier.x| must give the same target.
+	var self_pos := Vector3(-4, 0, -6)
+	var sk_plus: Array = [
+			[1, TEAM_ID, self_pos, Vector3.ZERO],
+			[100, TEAM_ID, Vector3(1, 0, 0), Vector3.ZERO],   # carrier +X of center
+	]
+	var ctx_plus: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, sk_plus)
+	ctx_plus.strong_x = 1.0
+	var d_plus: RoleDecision = AIRoleOutlet.decide(ctx_plus)
+	var sk_minus: Array = [
+			[1, TEAM_ID, self_pos, Vector3.ZERO],
+			[100, TEAM_ID, Vector3(-1, 0, 0), Vector3.ZERO],  # carrier wheeled to -X
+	]
+	var ctx_minus: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, sk_minus)
+	ctx_minus.strong_x = 1.0
+	var d_minus: RoleDecision = AIRoleOutlet.decide(ctx_minus)
+	assert_almost_eq(d_minus.target_position.x, d_plus.target_position.x, 0.01,
+			"the carrier's cross-center wobble doesn't flip the OUTLET's side")
+
+
 # ── Offside filter ──────────────────────────────────────────────────────────
 
 func test_offside_filter_rejects_oz_candidates() -> void:

@@ -120,7 +120,15 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# lead-the-carrier by rush (continuous, so it eases in). It's both the
 	# search-center Z and, on a rush, a hard pace cap in the loop below.
 	var paced_z: float = _paced_depth_z(ctx, carrier_pos, rush)
-	var weak_x: float = clampf(-carrier_pos.x,
+	# Weak side comes from the brain's HYSTERETIC strong side, not a raw mirror
+	# of the carrier's live x. The magnitude still mirrors how wide the carrier
+	# is (|carrier.x|), but the SIDE holds through a carrier wheeling across
+	# center — a raw -carrier.x flips the stretch spot to the other side the
+	# instant the puck crosses the middle, which on the BREAKOUT→TRANS_DO
+	# handoff sent this bot cutting across the SUPPORT trailer's path through
+	# center ice. strong_x matches the side the BREAKOUT outlets and SUPPORT
+	# already use, so the whole rotation agrees on which side is weak.
+	var weak_x: float = clampf(-ctx.strong_x * absf(carrier_pos.x),
 			-GameRules.RINK_HALF_WIDTH + WEAK_SIDE_INSET_M,
 			GameRules.RINK_HALF_WIDTH - WEAK_SIDE_INSET_M)
 	var search_center := Vector3(weak_x, 0.0, paced_z)
