@@ -81,7 +81,7 @@ const RUSH_LANE_FAN_FRACTIONS: Array[float] = [0.25, 0.5, 0.75, 1.0]
 # (threat-surface units, same 0..1 currency as score_shoot / score_pass)
 # before CONTAIN leaves the classic line — a stateless bias toward the
 # textbook gap that also damps flicker between the line and a marginal lane.
-# Same magnitude rationale as AIRolePressure.TARGET_SWITCH_MARGIN.
+# Same magnitude rationale as AIRoleHelpers.TARGET_SWITCH_MARGIN.
 const LINE_HOLD_MARGIN: float = 0.04
 
 

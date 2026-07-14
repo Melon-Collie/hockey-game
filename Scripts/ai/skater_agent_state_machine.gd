@@ -1178,11 +1178,6 @@ var _cached_stick_lift_held: bool = false
 # full dispatch sets a real target.
 var _cached_aim_target: Vector3 = Vector3.ZERO
 var _has_cached_aim_target: bool = false
-# Slew-limited OFF_PUCK ready-stance aim direction (unit XZ). Rotated toward the
-# raw desired aim at most READY_AIM_TURN_RATE_RAD_S per dispatch so a per-tick
-# argmax hop doesn't whip the blade. ZERO until the first ready-stance aim seeds
-# it (snaps to the raw direction that frame).
-var _ready_aim_dir: Vector3 = Vector3.ZERO
 # The cursor-shaping mode that produced the cached target (_STEP_DIRECT / _ARC /
 # _FACE), read by the skipped-tick re-step so it re-shapes the same way every
 # physics frame — the arc keeps walking the body ring, the face clamp keeps
@@ -4437,21 +4432,6 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3,
 # drifting anchor and visibly looked away from the play.
 const READY_STANCE_AIM_FORWARD_M: float = 2.0
 const FACE_THREAT_NEAR_ANCHOR_M: float = BotSprintRules.GAP_ENGAGE_M
-
-# Max slew rate (rad/s) of the OFF_PUCK ready-stance aim direction. The raw
-# desired aim can flip per dispatch — the role's positional target is a
-# candidate-set argmax, and near-tied candidates (or a cross of the
-# near-anchor threshold) hop it between spots tick-to-tick. The FACE aim snaps
-# the cursor straight to that raw point (facing_drag only smooths the BODY, not
-# the blade IK that chases the cursor), so the hop whips the blade — the "blade
-# jitter while just moving around". A real blade can't teleport: bounding how
-# fast the ready-stance aim can rotate filters the oscillation (the blade
-# averages the flip-flop instead of chasing it) while still tracking a genuine
-# aim shift in a couple hundred ms. Feel/posture tunable, hand-set — the
-# steering already absorbs the same target hop through momentum, so this only
-# gives the cosmetic blade the same inertia. Only the ready stance is limited;
-# the poke jab / one-timer / ping-override aims stay instant.
-const READY_AIM_TURN_RATE_RAD_S: float = 5.0
 # Tag-up override: a ghosted bot racing back to the blue line faces its
 # travel direction until nearly there — the tag-up is a sprint, not
 # positioning, so it keeps the old tight face-travel threshold.
@@ -4623,27 +4603,7 @@ func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapsh
 		near_anchor_m: float = FACE_THREAT_NEAR_ANCHOR_M) -> Vector3:
 	var desired_dir: Vector3 = _compute_desired_aim_dir(
 			self_pos, anchor, snapshot, near_anchor_m)
-	# Slew-limit the aim so a per-dispatch flip of the raw direction (argmax
-	# near-ties / near-anchor threshold cross) can't whip the blade — see
-	# READY_AIM_TURN_RATE_RAD_S. Seeds on first use; degenerate raw dir holds
-	# the last aim.
-	if desired_dir.length_squared() < 0.0001:
-		if _ready_aim_dir.length_squared() < 0.0001:
-			return self_pos + Vector3(0.0, 0.0, -_own_goal_dir) * READY_STANCE_AIM_FORWARD_M
-	elif _ready_aim_dir.length_squared() < 0.0001:
-		_ready_aim_dir = desired_dir
-	else:
-		var cur := Vector2(_ready_aim_dir.x, _ready_aim_dir.z)
-		var tgt := Vector2(desired_dir.x, desired_dir.z)
-		var ang: float = cur.angle_to(tgt)
-		var max_step: float = READY_AIM_TURN_RATE_RAD_S \
-				* float(maxi(1, _dispatch_period_ticks)) * MOUSE_TICK_DELTA
-		if absf(ang) <= max_step:
-			cur = tgt
-		else:
-			cur = cur.rotated(signf(ang) * max_step)
-		_ready_aim_dir = Vector3(cur.x, 0.0, cur.y)
-	return self_pos + _ready_aim_dir * READY_STANCE_AIM_FORWARD_M
+	return self_pos + desired_dir * READY_STANCE_AIM_FORWARD_M
 
 
 # Picks the desired raw aim direction: anchor direction when far,

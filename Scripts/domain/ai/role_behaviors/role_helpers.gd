@@ -103,6 +103,62 @@ static func too_close_to_teammate(c: Vector3,
 	return false
 
 
+# ── Target switch-hysteresis ─────────────────────────────────────────────────
+#
+# Every off-puck positional role picks its spot by a candidate-set argmax. Along
+# the argmax's tie ridge two spots trade the lead dispatch-to-dispatch on
+# noise-level score differences, so the chosen target HOPS between them — and
+# because the off-puck ready-stance cursor SNAPS to the role target (the FACE aim
+# turns the body under facing_drag, but the blade IK chases the cursor with no
+# slew), a per-dispatch hop whips the cosmetic blade ("blade jitter while just
+# skating around").
+#
+# The fix is to steady the INTENT, not filter the symptom: give the incumbent
+# spot (ctx.prev_role_target — last dispatch's chosen target, INF'd across a slot
+# change so no role inherits another's) a stickiness bonus in the argmax, so a
+# bot HOLDS its chosen spot and only switches when a fresh candidate is
+# meaningfully — not marginally — better. That's how a real player commits to
+# where they've decided to be. With a stable target the ready-stance cursor snaps
+# to a fixed point and the downstream max_blade_speed clamp is the only smoother
+# the blade needs.
+#
+# Mechanically the incumbent is injected as one extra candidate (append_incumbent)
+# and scored by the role's OWN scoring — no separate re-score path — with
+# incumbent_bonus() added to its score. It runs through the role's same legality
+# / anti-crowd / role-specific filters, so a now-illegal or now-crowded incumbent
+# is dropped outright rather than camped, and because it's re-scored live its edge
+# decays as the play moves: the switch fires exactly when the geometry really
+# changed, not on argmax noise.
+#
+# TARGET_SWITCH_MARGIN is in threat-surface units — the shared 0..1 currency of
+# score_shoot / score_pass and the threat surfaces every off-puck role argmaxes
+# over. Tuned on PRESSURE first; raise toward 0.08 if a role still wobbles
+# between spots, lower toward 0.02 if it visibly camps a stale one. Feel tunable,
+# hand-set.
+const TARGET_SWITCH_MARGIN: float = 0.04
+
+
+# Injects the incumbent role target (ctx.prev_role_target) into `candidates` so
+# the role's argmax scores it alongside the fresh set. No-op when there's no
+# incumbent (first dispatch, or a slot change INF'd it). Pair with incumbent_bonus
+# in the scoring loop — see the switch-hysteresis note above.
+static func append_incumbent(ctx: RoleContext, candidates: Array[Vector3]) -> void:
+	if ctx.prev_role_target.is_finite():
+		candidates.append(ctx.prev_role_target)
+
+
+# The stickiness bonus a candidate earns for BEING the incumbent role target:
+# TARGET_SWITCH_MARGIN when `c` is ctx.prev_role_target, else 0. Add it to the
+# role's own score inside its argmax so the held spot only yields to a clearly-
+# better fresh candidate. Exact-equality is safe: the incumbent is the same
+# Vector3 append_incumbent injected (a coincidental fresh-candidate match just
+# earns the same benefit-of-the-doubt at that identical spot).
+static func incumbent_bonus(ctx: RoleContext, c: Vector3) -> float:
+	if ctx.prev_role_target.is_finite() and c == ctx.prev_role_target:
+		return TARGET_SWITCH_MARGIN
+	return 0.0
+
+
 # ── Defensive anticipation ───────────────────────────────────────────────────
 
 # How far ahead (seconds) defensive roles lead an opponent's position when
@@ -178,6 +234,9 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 
 	var search_center: Vector3 = AIThreatAssignment.cover_anchor(man_pos, our_net)
 	var candidates: Array[Vector3] = generate_candidates_around(ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the covering spot unless a fresh one deflates the
+	# feed clearly more (see TARGET_SWITCH_MARGIN).
+	append_incumbent(ctx, candidates)
 
 	# Goal-side axis: the man→our-net direction. A candidate is goal-side
 	# when its projection onto this line from the man is positive (with the
@@ -215,7 +274,7 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 				carrier_pos, man_pos, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, teammates)
 		teammates.pop_back()
-		var score: float = -threat
+		var score: float = -threat + incumbent_bonus(ctx, c)
 		# Stay on the defensive side of the man: positive projection onto
 		# the man→our-net line (see COVER_GOAL_SIDE_TOLERANCE_M). A man on
 		# the net (no lane) disables the filter — any spot is "in front".

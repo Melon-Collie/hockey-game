@@ -134,6 +134,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var search_center := Vector3(weak_x, 0.0, paced_z)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the stretch spot unless a fresh one is clearly
+	# better, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -160,7 +163,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				carrier_pos, c, opp_positions, pass_speed)
 		var potential: float = AIActionScoring.position_potential(
 				c, ctx.attacking_goal_pos, opp_positions)
-		var score: float = maxf(lane, BLOCKED_LANE_FLOOR) * potential
+		var score: float = maxf(lane, BLOCKED_LANE_FLOOR) * potential \
+				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c

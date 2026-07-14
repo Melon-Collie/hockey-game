@@ -121,6 +121,9 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	var search_center: Vector3 = _mid_search_center(ctx, carrier_pos)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the forecheck spot unless a fresh one deflates the
+	# feed clearly more, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = search_center
 	var best_score: float = -INF
@@ -141,7 +144,7 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 		var threat: float = _max_pass_threat(
 				c, carrier_pos, opp_teammates, our_net, our_goalie_pos,
 				our_team_excluding_self)
-		var score: float = -threat
+		var score: float = -threat + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c

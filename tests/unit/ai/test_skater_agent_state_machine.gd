@@ -1794,24 +1794,6 @@ func test_off_puck_arrival_redirects_cross_momentum() -> void:
 			"off-puck arrival redirects onto the line to the spot")
 
 
-func test_ready_stance_aim_slews_instead_of_whipping() -> void:
-	# The off-puck ready-stance aim is slew-rate-limited, so a per-dispatch flip
-	# of the raw desired direction (an argmax hop) can't whip the blade around.
-	var s := WorldSnapshot.new()
-	var me := SkaterNetworkState.new()
-	me.position = Vector3.ZERO
-	me.facing = Vector2(1, 0)
-	s.skater_states[SELF_ID] = me
-	s.puck_state = PuckNetworkState.new()
-	s.puck_state.carrier_peer_id = -1
-	# Far anchors on opposite sides → raw desired_dir flips +X vs -X.
-	var d0: Vector3 = sm._ready_stance_aim(Vector3.ZERO, Vector3(20, 0, 0), s).normalized()
-	assert_gt(d0.x, 0.9, "first use seeds straight to the raw direction (+X)")
-	# Flip the target to -X: one dispatch may only nudge the aim, never whip it.
-	var d1: Vector3 = sm._ready_stance_aim(Vector3.ZERO, Vector3(-20, 0, 0), s).normalized()
-	assert_gt(d1.x, 0.9, "slew-limited: a 180-degree target flip barely moves the aim")
-
-
 # ── Fake-then-cut deke lifecycle (containment trigger + phase split) ─────────
 
 func test_containment_deke_fakes_then_cuts() -> void:

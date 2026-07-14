@@ -83,6 +83,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				our_net.z - ctx.own_goal_dir * GameRules.SLOT_DIST_M)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the recovery spot unless a fresh one covers clearly
+	# more dangerous ice, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -94,7 +97,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 		var mark_score: float = -_max_shot_threat(
 				c, opp_positions, our_net, our_goalie_pos,
-				our_team_excluding_self)
+				our_team_excluding_self) + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if mark_score > best_score:
 			best_score = mark_score
 			best_pos = c
