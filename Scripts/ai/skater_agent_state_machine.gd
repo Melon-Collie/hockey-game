@@ -349,6 +349,21 @@ const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 # genuinely on the puck.
 const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.45
 
+# How far off the play line the protect aim is allowed to swing the body. The
+# domain seam (best_handle_protect_point) is the MAX-CLEARANCE point in the
+# handling envelope, which for a checker on the hip sits ~directly away from
+# him; aiming the blade there turns the body most of the way around (facing
+# chases the carry cursor — see the QUIET HANDS block), the spun-out, edge-to-
+# the-play posture that also strands the carrier skating sideways/backward out
+# of the play. Cap the turn at side-on: the body rotates just enough to
+# interpose, and the blade's ROM (the ~157° reach cone the pose coordinator's
+# IK gate allows) extends to the seam from there — protection becomes REACH,
+# not a spin. Less rotation keeps the carrier square to the play and on the
+# fast forward stride while still shielding the puck. Feel/posture tunable (how
+# much a shield is allowed to turn you), not an evaluation curve — the seam
+# itself stays the grounded reachable-set read.
+const CARRY_PROTECT_MAX_TURN_DEG: float = 90.0
+
 # Natural carry sway: a smooth lateral oscillation of the carry cursor —
 # the rhythmic side-to-side dangle a human carrier keeps going — layered
 # under the threat-driven stickhandle offset above. Amplitude is the
@@ -3826,8 +3841,19 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 		var protect_dir: Vector3 = _carrier.protect_offset
 		protect_dir.y = 0.0
 		if protect_dir.length_squared() > 0.0025:
+			# Shield with REACH, not a spin: clamp how far the protect aim swings off
+			# the play line (CARRY_PROTECT_MAX_TURN_DEG). The body turns only to
+			# side-on to interpose; the blade ROM covers the rest of the seam.
+			var prot2 := Vector2(protect_dir.x, protect_dir.z).normalized()
+			var fwd2 := Vector2(forward_dir.x, forward_dir.z)
+			if fwd2.length_squared() > 0.0001:
+				fwd2 = fwd2.normalized()
+				var turn: float = fwd2.angle_to(prot2)
+				var max_turn: float = deg_to_rad(CARRY_PROTECT_MAX_TURN_DEG)
+				if absf(turn) > max_turn:
+					prot2 = fwd2.rotated(signf(turn) * max_turn)
 			var protect_target: Vector3 = self_pos \
-					+ protect_dir.normalized() * CARRY_BLADE_AIM_FORWARD_M
+					+ Vector3(prot2.x, 0.0, prot2.y) * CARRY_BLADE_AIM_FORWARD_M
 			target = target.lerp(protect_target, minf(protect_w, 1.0))
 	# Clamp the carry mouse so it stays on the rink side of the
 	# attacking goal line — the blade IK chases the mouse, and a mouse
