@@ -1225,8 +1225,21 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# leads past the receiver, both of which depress long-pass scores
 		# below where they should be.
 		var dist: float = pass_origin.distance_to(receiver_state.position)
+		# Receiver-relative, matching the FIRE site exactly (the _pick_action
+		# INTENT_PASS block): the launch is solved so the puck lands at the
+		# magnet pace in the RECEIVER'S frame — harder onto a streaker, softer
+		# to one curling back. Scoring at the static pace while firing the
+		# relative one over-credited every feed to a receiver curling toward
+		# the play: the lane was priced at ~20 m/s but the real puck left
+		# soft, handing defenders the longer flight to close (picked off) and
+		# beating the saucer variant with a flat EV the flat feed never had.
+		var to_recv: Vector3 = receiver_state.position - pass_origin
+		to_recv.y = 0.0
+		var scored_pass_dir: Vector3 = to_recv.normalized() \
+				if to_recv.length_squared() > 0.0001 else Vector3.ZERO
 		var pass_speed: float = AIActionScoring.pass_launch_speed(
-				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
+				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale,
+				receiver_state.velocity, scored_pass_dir)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
 		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
 		# Flat feed at the magnet pace.
