@@ -2055,12 +2055,10 @@ func test_carrier_splits_a_beatable_gap_to_the_slot() -> void:
 func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
 	# The reported bug: enter the zone down the wing with a defender on the inside,
 	# and the carrier drifts down the boards to the dead-angle goal-line corner and
-	# does nothing (under a FLAT possession floor the corner is as good as the slot,
-	# and it's the safest ice away from the defender). With the floor riding
-	# slot_progress, the corner reads ~0 (bad angle) while the slot reads high, so
-	# the carrier's chosen carry keeps a live shooting angle instead of dying in the
-	# corner. Asserted on the winning candidate's slot_progress vs the corner it
-	# used to drift to.
+	# does nothing — because the old, higher flat possession floor made the safe
+	# corner read as good as the slot. With the floor dropped to a noise epsilon,
+	# pure xG drives: the slot reads high and the dead-angle corner reads ~0, so the
+	# carrier works toward the net instead of parking at the goal line.
 	var self_pos := Vector3(8.0, 0.0, -18.0)               # wing entry, OZ
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
@@ -2071,13 +2069,12 @@ func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
 			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	var corner := Vector3(8.0, 0.0, -25.0)                  # the old dead-angle drift spot
-	var anchor_progress: float = AIActionScoring.slot_progress(
-			c.last_carry_anchor, ctx.attacking_goal_pos)
-	var corner_progress: float = AIActionScoring.slot_progress(
-			corner, ctx.attacking_goal_pos)
-	assert_gt(anchor_progress, corner_progress + 0.1,
-			"the carry keeps a live scoring angle instead of drifting to the dead corner")
+	# Not parked down at the goal line: the winning carry keeps a real shooting
+	# angle, well up off the dead corner the flat floor used to lure it to.
+	assert_lt(absf(c.last_carry_anchor.z), GameRules.GOAL_LINE_Z - 3.0,
+			"the carry stays off the goal line instead of drifting to the dead corner")
+	assert_lte(absf(c.last_carry_anchor.x), self_pos.x + 0.01,
+			"and works toward the middle, not further into the boards")
 
 
 # ─── fake-then-cut deke mirror ────────────────────────────────────────────────

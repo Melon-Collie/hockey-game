@@ -45,31 +45,32 @@ const INTENT_DUMP: int = 5
 # of them are worth the puck. A real in-range shot scores far above it.
 const FIRE_MIN_VALUE: float = 0.02
 
-# Standing value of KEEPING an established offensive-zone possession — what
-# cycling the puck is worth when no shot exists right now. The OZ regime
-# prices candidates by real shot danger alone (xG is the best read of a spot),
-# but a possession's value isn't only the shot available THIS instant: held
-# OZ possession keeps generating chances as the defense shifts (league xG per
-# sustained offensive-zone possession is a few hundredths — this is that
-# order, a statistical measurement, not a shape). This is the PEAK value (at
-# the slot); the live floor scales it by AIActionScoring.slot_progress
-# (closeness × angle), so it climbs toward the slot and decays to the dead-angle
-# goal line — an established possession is worth more the closer it is worked to
-# the net. Floored under the shot
-# branch for MOVEMENT candidates and receiver evals (never stand-still, so
-# ties keep resolving toward movement and fire — no corner camping): with
-# every shot covered, the compete's gradient becomes slot_progress × safety ×
-# delay-decay × turnover cost, so a pinned carrier WORKS TOWARD THE SLOT (the
-# man in the path gets attacked) where the path is beatable, and only cycles to
-# safe ice / a safe teammate when it is genuinely swarmed — no crashing a
-# worthless drive into a wall, and no more drifting to the goal line and parking
-# when a lone defender is beatable. Any genuinely open look (≫ this) still wins
-# outright. RINK SIDE of the goal line only:
-# behind the cage a spot can't generate a chance without first coming out, so
-# the possession value there belongs to the POST WALKOUT (and the behind-net
-# feed, whose receiver is floored out front), not the spot — a flat floor
-# behind the line anchored carriers in the cage's shadow.
-const OZ_POSSESSION_VALUE: float = 0.025
+# Small ANTI-NOISE floor under the offensive-zone shot value — NOT a position
+# map. The O-zone prices candidates by real shot danger alone (score_shoot — xG
+# is the best read of a spot; position_potential is deliberately absent in the
+# zone), and that gradient already climbs strongly toward the slot on its own
+# (in-tight ≫ mid ≫ top/dead-angle), so a pinned carrier is pulled to the slot by
+# xG itself — no positional proxy needed.
+#
+# This floor exists only to stop the carrier chasing the MICROSCOPIC residual xG
+# (a thin five-hole leak, a deep-angle sliver — hundredths or less) into the
+# crease when the zone is genuinely shot-dead: with every real shot covered,
+# flooring those noise values to one flat number makes the spots read equal, so
+# the caller's safety / decay / turnover terms decide (the carrier CYCLES) rather
+# than crawling toward whichever noise spot scored 0.001 higher. It is set BELOW
+# real shot xG (the slot reads ~0.15–0.20 against a set goalie) so it never
+# flattens that gradient. The earlier, higher flat value did exactly that — it
+# floored the safe dead-angle ice up near the mid-slot value, so a pinned carrier
+# saw the safest deep ice as no worse than working the slot and drifted to the
+# goal line to park; dropping it to a noise epsilon fixed that with pure xG.
+#
+# Floored under the shot branch for MOVEMENT candidates and receiver evals (never
+# stand-still, so ties keep resolving toward movement and fire — no corner
+# camping). RINK SIDE of the goal line only: behind the cage a spot can't
+# generate a chance without first coming out, so the possession value there
+# belongs to the POST WALKOUT (and the behind-net feed, whose receiver is floored
+# out front), not the spot.
+const OZ_POSSESSION_VALUE: float = 0.01
 
 # ── Release-offset sampling (shoot-now eval) ─────────────────────────────────
 # The shot originates at the PUCK, and the carrier can put the puck anywhere in
@@ -2002,21 +2003,24 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 			goalie_unsettled_factor, _scratch_opponent_caps,
 			-1.0, false, 0.0, false, aim_spread_rad)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
-		# Shot danger, floored by the standing value of the possession itself
-		# (see OZ_POSSESSION_VALUE): when the whole zone reads shot-dead (set
-		# goalie, collapsed box), the caller's safety / decay / turnover terms
-		# becomes the gradient. NOT flat: it rides slot_progress (closeness x angle),
-			# so a pinned carrier WORKS the puck toward the slot (attacking the man
-			# in its path; the deke/directed seam aim at the winning candidate)
-			# instead of drifting to the safest dead ice at the goal line. Safety /
-			# turnover still veto a swarmed drive, so it cycles instead of crashing the
-		# only microscopically-positive spot — the crease. Behind the goal
-		# line the floor is withheld (see the const doc): the walkout and the
-		# behind-net feed carry the possession's value out front.
+		# PURE xG in the offensive zone — position_potential (the progression
+		# value map) is deliberately NOT used here; the O-zone is xG's domain, a
+		# strictly better read of a spot than any positional proxy. The only
+		# non-xG term is OZ_POSSESSION_VALUE, a small ANTI-NOISE floor (see its
+		# doc): score_shoot's real gradient already climbs strongly toward the
+		# slot (in-tight ≫ mid ≫ top/dead-angle), so a pinned carrier is pulled to
+		# the slot by that gradient alone — the floor only keeps the microscopic
+		# five-hole/deep-angle xG NOISE from reading as a gradient and luring the
+		# carrier into the crease when the zone is genuinely dead (all spots ~
+		# equal → the safety / decay / turnover terms decide, i.e. cycle). It must
+		# stay BELOW real shot xG so it never flattens that gradient — the old
+		# higher flat floor did exactly that (flooring the safe dead-angle ice up
+		# to the mid-slot value), which is what let a pinned carrier drift to the
+		# goal line and park. Behind the goal line the floor is withheld (see the
+		# const doc): the walkout and the behind-net feed carry the possession's
+		# value out front.
 		if absf(pos.z) < GameRules.GOAL_LINE_Z:
-			return maxf(shoot_s,
-					OZ_POSSESSION_VALUE * AIActionScoring.slot_progress(
-							pos, attacking_goal))
+			return maxf(shoot_s, OZ_POSSESSION_VALUE)
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)

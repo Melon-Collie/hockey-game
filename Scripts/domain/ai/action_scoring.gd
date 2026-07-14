@@ -1657,25 +1657,19 @@ static func in_offensive_zone(pos: Vector3, attacking_goal: Vector3,
 	return pos.z * signf(attacking_goal.z) > GameRules.BLUE_LINE_Z + buffer
 
 
-# Pure GEOMETRIC progress toward a scoring chance at `pos` — no opponents. The
-# two spatial factors of position_potential (closeness × angle_factor), pulled
-# out so the carrier's in-zone possession floor can ride the SAME shape without
-# the opponent-pressure term (openness): 1 in the slot straight-on, → 0 along
-# the goal line (dead angle) and at the blue line (far), 0 behind the net.
-#
-#   closeness    = 1 at the slot ring, ramps to 0 at the goal mouth (inside)
-#                  and to 0 at the goal-to-goal distance (outside). Far-norm
-#                  from rink geometry so deep spots still carry a forward signal.
-#   angle_factor = the goal mouth's PROJECTED width from this bearing (cos of
-#                  the angle off the goal normal = forward/horiz_dist) — real
-#                  foreshortening, the same projection the hole-based shot model
-#                  reasons in, not a hand-picked taper.
-static func slot_progress(pos: Vector3, attacking_goal: Vector3) -> float:
+static func position_potential(
+		pos: Vector3,
+		attacking_goal: Vector3,
+		opponents: Array[Vector3]) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (pos.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
 		return 0.0
 	var dist: float = pos.distance_to(attacking_goal)
+	# Closeness: 0 at goal, 1 at slot, 0 at goal-to-goal distance.
+	# Far-norm derived from rink geometry — the gradient covers the
+	# whole rink so deep-zone positions still have a forward-progress
+	# signal.
 	var rink_length: float = absf(GameRules.GOAL_LINE_Z) * 2.0
 	var closeness: float
 	if dist <= SLOT_RADIUS_M:
@@ -1684,21 +1678,16 @@ static func slot_progress(pos: Vector3, attacking_goal: Vector3) -> float:
 		closeness = clampf(
 				1.0 - (dist - SLOT_RADIUS_M) / (rink_length - SLOT_RADIUS_M),
 				0.0, 1.0)
+	# Angle quality = the goal mouth's PROJECTED width from this bearing. A goal
+	# viewed off its face-normal presents cos(θ) of its width (a door seen at an
+	# angle), and cos(θ) = forward / horizontal_distance — the real foreshortening,
+	# not a hand-picked taper. 1 head-on, → 0 along the goal line. Same projection
+	# geometry the hole-based shot model reasons in.
 	var lateral: float = pos.x - attacking_goal.x
 	var horiz_dist: float = sqrt(forward * forward + lateral * lateral)
 	var angle_factor: float = forward / horiz_dist
-	return closeness * angle_factor
-
-
-static func position_potential(
-		pos: Vector3,
-		attacking_goal: Vector3,
-		opponents: Array[Vector3]) -> float:
-	var progress: float = slot_progress(pos, attacking_goal)
-	if progress <= 0.0:
-		return 0.0
 	var openness: float = 1.0 - _pressure(pos, opponents, attacking_goal - pos)
-	return progress * openness
+	return closeness * angle_factor * openness
 
 
 # Realization discount for position_potential when it prices a CARRY /
