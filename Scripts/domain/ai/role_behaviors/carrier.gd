@@ -1323,7 +1323,14 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 			receiver, ctx.attacking_goal_pos, OZ_RECEIVE_LINE_BUFFER_M):
 		return 0.0
 	var lane: float
-	var miss_prob: float = AIActionScoring.PASS_MISS_PROB
+	# Derived execution-miss (see AIActionScoring.pass_miss_prob): this bot's own
+	# release-direction error projected to the receiver over the pass distance, vs
+	# the receiver's catch envelope (its Hands handle reach) — so a long feed or a
+	# wobblier-handed bot misses more, over the irreducible base floor.
+	var catch_radius: float = receiver_caps.handle_reach if receiver_caps != null \
+			else AIActionScoring.EVADE_CARRY_HANDLE_M
+	var miss_prob: float = AIActionScoring.pass_miss_prob(
+			pass_origin.distance_to(receiver), ctx.self_pass_aim_error_rad, catch_radius)
 	if saucer:
 		# Small tolerance: a speed sitting exactly on the receivability
 		# bound round-trips through the kinematics to the exact distance.
@@ -1365,16 +1372,17 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 # self-terminates the instant the real pass matches it (fire wins ties).
 #
 # Benefit = P(complete) × value of us having it at the receiver, decayed
-# by `delay_s` (flight + any facing rotation). P(complete) folds BOTH
-# loss modes: lane interception (lane_clear) and residual execution
-# miss (AIActionScoring.PASS_MISS_PROB — overled / fumbled reception on
-# an otherwise clear lane).
+# by `delay_s` (flight + any facing rotation). P(complete) folds THREE
+# loss modes: lane interception (lane_clear), residual execution miss
+# (AIActionScoring.pass_miss_prob — overled / fumbled on an otherwise clear
+# lane, derived from this bot's hand + the pass length), and a reception
+# strip (a defender on the catch — see reception_safety below).
 #
 # Cost = the value the OPPONENT gains from each loss mode's location:
 #   - intercepted in flight → the interceptor's spot on the lane
 #     (lane_loss_point), probability 1 − lane.
 #   - execution miss → the puck dies past the receiver
-#     (pass_miss_loss_point), probability lane × PASS_MISS_PROB.
+#     (pass_miss_loss_point), probability lane × miss_prob.
 # Same threat surface both ways, so the exchange rate is 1 (no aversion
 # knob) and both costs self-localize — ~0 for offensive-zone losses,
 # large for own-zone ones. This is what makes a low-upside backpass deep
@@ -1404,7 +1412,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		flight_t: float, receiver_release_t: float, delay_s: float,
 		our_goalie: Vector3, receiver_caps: AISkaterCaps = null,
 		lane: float = -1.0,
-		miss_prob: float = AIActionScoring.PASS_MISS_PROB) -> float:
+		miss_prob: float = AIActionScoring.PASS_MISS_BASE_PROB) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# The pass flies from the PUCK (the blade), not the body — judge the lane
 	# the puck actually travels. From behind the net the two differ by up to a
@@ -2045,7 +2053,8 @@ func _candidate_pass_option(ctx: RoleContext, candidate: Vector3) -> float:
 		if lane <= 0.0:
 			continue
 		var option: float = _scratch_option_receiver_val[i] \
-				* lane * (1.0 - AIActionScoring.PASS_MISS_PROB) \
+				* lane * (1.0 - AIActionScoring.pass_miss_prob(
+						dist, ctx.self_pass_aim_error_rad)) \
 				* pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
 						dist / maxf(pass_speed, 1.0)) \
 				* PASS_OPTION_DISCOUNT

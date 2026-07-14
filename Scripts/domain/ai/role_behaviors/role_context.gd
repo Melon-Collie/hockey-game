@@ -76,6 +76,13 @@ var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # wider opening for the same chance, so spread shapes shot selection too.
 # 0 for an error-free (test/raw) agent.
 var self_aim_spread_rad: float = 0.0
+# This bot's own PASS release-direction error (radians): the pass counterpart of
+# self_aim_spread_rad, from BotSkillProfile.pass_aim_error_rad. Drives the
+# derived pass-miss probability (AIActionScoring.pass_miss_prob) — projected to
+# the tape over the pass distance, it sets how often a clear-lane feed still
+# fumbles, so a wobblier-handed bot's long feeds carry more risk. 0 for an
+# error-free (test/raw) agent — the pass miss then collapses to the base floor.
+var self_pass_aim_error_rad: float = 0.0
 # This bot's shot release-timing variance (max seconds LATE —
 # BotSkillProfile.shot_timing_error_s; execution samples uniform [0, max]).
 # The carrier's own shot evals hand the goalie the EXPECTED lateness

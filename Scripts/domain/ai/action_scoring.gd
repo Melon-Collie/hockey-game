@@ -1942,12 +1942,46 @@ static func turnover_cost(
 # chance in front of our net. No zone flag, no backpass heuristic — the
 # geometry does it.
 #
-# Tuning: PROB up → bots demand more upside before passing anywhere the
-# loss would hurt (fewer own-zone touch-passes); down → closer to the old
-# interception-only model (0.0 = identical). OVERSHOOT is the physical
-# "how far past the receiver does a missed pass die" scale, not a knob.
-const PASS_MISS_PROB: float = 0.1
+# NOT a flat rate — pass_miss_prob() DERIVES it (the flat constant was a magic
+# number in an evaluator, exactly what the shot window model avoids). Two
+# grounded parts:
+#   · The bot solves its LAUNCH so the puck ARRIVES catchable (at
+#     PASS_TARGET_CLOSING_M_S, under the any-angle reception ceiling), so
+#     reception DIFFICULTY (closing speed vs blade angle) is designed OUT of its
+#     own passes — it never fires a feed that arrives as a knock-down. The
+#     residual is therefore hand + luck, not the catch.
+#   · PASS_MISS_BASE_PROB — an irreducible floor (a bounce, a skate, ice
+#     chatter; no pass is 100%), plus HAND execution: the release-direction error
+#     (BotSkillProfile.pass_aim_error_rad) projected to the tape over the pass
+#     distance, which misses when that lateral spread exceeds the receiver's
+#     catch envelope (its Hands handle reach). Same uniform-error model the shot
+#     window uses.
+# So miss now scales with the passer's Hands-tier AND the pass length — a Hard
+# bot's short feed sits at the base, an Easy bot's cross-ice stretch is genuinely
+# risky — instead of one flat rate for every pass at every tier, and the
+# backpass suppression survives via the base floor (even a perfect short feed
+# keeps a small DZ miss cost). OVERSHOOT is the physical "how far past the
+# receiver does a missed pass die" scale, not a knob.
+const PASS_MISS_BASE_PROB: float = 0.04
 const PASS_MISS_OVERSHOOT_M: float = 3.0
+
+
+# Per-pass execution-miss probability (see the block above). `aim_error_rad` is
+# the passer's release-direction error — 0 for the perfect baseline and the
+# cross-player threat model (we don't know another player's hand), collapsing to
+# the base floor. `catch_radius` is how far off the tape the receiver can still
+# corral the feed (its Hands handle reach). Uniform-error model: the base floor
+# compounded with the fraction of the ±(aim_error × distance) lateral spread that
+# lands outside the catch envelope.
+static func pass_miss_prob(distance: float, aim_error_rad: float,
+		catch_radius: float = EVADE_CARRY_HANDLE_M) -> float:
+	var spread: float = maxf(aim_error_rad, 0.0) * maxf(distance, 0.0)
+	var execution: float = 0.0
+	if spread > 0.0001:
+		execution = clampf(
+				(spread - catch_radius) / spread, 0.0, 1.0)
+	return clampf(
+			1.0 - (1.0 - PASS_MISS_BASE_PROB) * (1.0 - execution), 0.0, 1.0)
 
 
 # Loss point for the execution-miss mode of a pass: the puck sails past

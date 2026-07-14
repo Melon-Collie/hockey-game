@@ -1433,9 +1433,45 @@ func test_turnover_cost_self_localizes_by_geometry() -> void:
 			"own-zone turnover costs more than a neutral-ice one at equal probability")
 
 
+# ── pass_miss_prob: derived execution-miss probability ────────────────────────
+# The miss chance is no longer a flat constant: it's the irreducible base floor
+# compounded with the passer's hand error projected to the tape over the pass
+# distance, vs the receiver's catch envelope.
+
+func test_pass_miss_prob_is_the_base_floor_for_a_perfect_hand() -> void:
+	# Zero aim error (the perfect baseline / cross-player threat model) → only the
+	# irreducible base survives, at any distance.
+	assert_almost_eq(AIActionScoring.pass_miss_prob(4.0, 0.0),
+			AIActionScoring.PASS_MISS_BASE_PROB, 0.0001, "no hand error → base floor")
+	assert_almost_eq(AIActionScoring.pass_miss_prob(25.0, 0.0),
+			AIActionScoring.PASS_MISS_BASE_PROB, 0.0001, "distance alone doesn't miss")
+
+
+func test_pass_miss_prob_grows_once_the_spread_outruns_the_catch_envelope() -> void:
+	# A reachable off-target feed is adjusted to (spread ≤ catch envelope) and
+	# stays at the base — realistic: clean-lane passes to a reachable spot complete
+	# almost always. Only when the spread OUTRUNS the catch reach (a long and/or
+	# wobbly feed) does execution risk climb.
+	var reachable: float = AIActionScoring.pass_miss_prob(15.0, 0.04)   # spread 0.6 < 0.9
+	var long_feed: float = AIActionScoring.pass_miss_prob(30.0, 0.04)   # spread 1.2 > 0.9
+	var wobbly_feed: float = AIActionScoring.pass_miss_prob(30.0, 0.055)
+	assert_almost_eq(reachable, AIActionScoring.PASS_MISS_BASE_PROB, 0.0001,
+			"a reachable feed is adjusted to → base only")
+	assert_gt(long_feed, reachable, "a stretch feed spreads the error past the reach → misses more")
+	assert_gt(wobbly_feed, long_feed, "a wobblier hand at the same range misses more")
+
+
+func test_pass_miss_prob_tighter_catch_envelope_misses_more() -> void:
+	# A receiver with less reach (lower Hands handle) corrals fewer off-target
+	# feeds, so the same long pass misses more.
+	var wide: float = AIActionScoring.pass_miss_prob(30.0, 0.04, 1.2)
+	var tight: float = AIActionScoring.pass_miss_prob(30.0, 0.04, 0.6)
+	assert_gt(tight, wide, "a shorter catch envelope corrals fewer off-target feeds")
+
+
 # ── pass_miss_loss_point: execution-miss loss location ────────────────────────
-# A lane-clear pass can still miss on execution (PASS_MISS_PROB); the
-# puck dies PASS_MISS_OVERSHOOT_M past the receiver on the pass line.
+# A lane-clear pass can still miss on execution; the puck dies
+# PASS_MISS_OVERSHOOT_M past the receiver on the pass line.
 
 func test_pass_miss_loss_point_overshoots_past_receiver() -> void:
 	var from := Vector3(0.0, 0.0, 20.0)
@@ -1463,9 +1499,9 @@ func test_pass_miss_cost_self_localizes_by_rink_end() -> void:
 	var opp_end_loss: Vector3 = AIActionScoring.pass_miss_loss_point(
 			Vector3(2.0, 0.0, -20.0), Vector3(-2.0, 0.0, -23.0))
 	var own_end_cost: float = AIActionScoring.turnover_cost(
-			own_end_loss, AIActionScoring.PASS_MISS_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
+			own_end_loss, AIActionScoring.PASS_MISS_BASE_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
 	var opp_end_cost: float = AIActionScoring.turnover_cost(
-			opp_end_loss, AIActionScoring.PASS_MISS_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
+			opp_end_loss, AIActionScoring.PASS_MISS_BASE_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
 	assert_gt(own_end_cost, opp_end_cost * 4.0,
 			"a missed pass in our own end costs multiples of the same miss in theirs")
 

@@ -329,7 +329,7 @@ func test_light_pressure_keeps_the_puck_over_a_covered_backpass() -> void:
 func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:
 	# Carrier deep in our own zone with a forechecker charging at it. The
 	# only pass option is a teammate even DEEPER — a low-upside backpass
-	# whose execution-miss mode (PASS_MISS_PROB, loss point past the
+	# whose execution-miss mode (pass_miss_prob, loss point past the
 	# receiver, right in front of our net) makes its EV worse than just
 	# keeping the puck and skating. Before the miss-risk term this
 	# backpass scored as risk-free (clear lane → zero cost) and won the
