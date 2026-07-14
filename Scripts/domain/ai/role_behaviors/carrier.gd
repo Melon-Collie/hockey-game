@@ -445,7 +445,14 @@ var _scratch_opponent_vels: Array[Vector3] = []
 # reachable-set model reads each defender's real Agility/Size reach. Filled
 # alongside the positions in _build_action_opponents_lists.
 var _scratch_opponent_caps: Array[AISkaterCaps] = []
-var _scratch_opponents_shoot: Array[Vector3] = []
+# Opponent positions advanced to the RELEASE instant — current pos + velocity ×
+# the commit→release windup (BOT_WRISTER_LOOKAHEAD_S). Both the wrister SHOOT
+# lane and the charged PASS lane/reception fire ~135 ms after the intent commits,
+# so they read the puck out of a lane as it exists at release, not at decision
+# time — a forechecker skating into a breakout lane has closed real ground during
+# the windup. Index-matched to _scratch_opponent_vels / _scratch_opponent_caps
+# (same fill order in _build_action_opponents_lists).
+var _scratch_opponents_release: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
 # Continuation-leg projections (see _carry_continuation_value): filled at the
@@ -810,7 +817,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	# lateral relocation on top of the skating cut. Unsettled stays 0: the
 	# shortfall IS the caught-moving effect, expressed positionally.
 	# _scratch_opponent_caps is index-matched to _scratch_opponents (and thus to
-	# _scratch_opponents_shoot, built in the same order), so a lane defender's
+	# _scratch_opponents_release, built in the same order), so a lane defender's
 	# real Size/Speed reach prices the shot lane.
 	var shot_dir: Vector3 = attacking_goal - wrister_base_release
 	shot_dir.y = 0.0
@@ -849,7 +856,7 @@ func _pick_action(ctx: RoleContext) -> void:
 						release)
 		var s: float = AIActionScoring.score_shoot(
 				release, attacking_goal, sample_goalie,
-				GameRules.NET_HALF_WIDTH, _scratch_opponents_shoot,
+				GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
 				sample_speed, wrister_unsettled, _scratch_opponent_caps,
 				wrister_five_hole, wrister_goalie_down,
 				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
@@ -1121,9 +1128,12 @@ func _pick_action(ctx: RoleContext) -> void:
 
 
 # Populates the scratch lists used by _pick_action's scoring:
-# - _scratch_opponents: current opponent positions, for dump scoring.
-# - _scratch_opponents_shoot: positions predicted forward by the
-#   wrister-charge window, for wrister scoring.
+# - _scratch_opponents: current opponent positions, for dump scoring / the
+#   evasion + protect reads (all present-time).
+# - _scratch_opponents_release: positions predicted forward by the commit→
+#   release windup (BOT_WRISTER_LOOKAHEAD_S), for the FIRED-puck lanes — the
+#   wrister shot AND the charged pass both leave the blade ~135 ms after intent
+#   commits, so the lane they thread is priced at release-time defender spots.
 # Pass scoring uses a third per-receiver list (_scratch_opponents_pass)
 # rebuilt inside `_compute_best_pass` because the lookahead varies per
 # teammate.
@@ -1131,7 +1141,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponent_vels.clear()
 	_scratch_opponent_caps.clear()
-	_scratch_opponents_shoot.clear()
+	_scratch_opponents_release.clear()
 	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
 		if peer_id == ctx.peer_id:
@@ -1141,7 +1151,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 			_scratch_opponents.append(s.position)
 			_scratch_opponent_vels.append(s.velocity)
 			_scratch_opponent_caps.append(ctx.caps_by_peer.get(peer_id))
-			_scratch_opponents_shoot.append(AITrajectory.predict_at(
+			_scratch_opponents_release.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
 		else:
 			# Our teammate — a defender for the turnover-cost term.
@@ -1340,20 +1350,20 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 				+ AIActionScoring.SAUCER_LANDING_RUN_M - 0.01:
 			return 0.0
 		var lane_flat: float = AIActionScoring.lane_clear(
-				pass_origin, receiver, _scratch_opponents, pass_speed,
-				_scratch_opponent_vels, _scratch_opponent_caps)
+				pass_origin, receiver, _scratch_opponents_release, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
 		if lane_flat >= AIActionScoring.SAUCER_SKIP_WHEN_LANE_CLEAR:
 			return 0.0
 		lane = AIActionScoring.lane_clear_saucer(
-				pass_origin, receiver, _scratch_opponents, pass_speed,
+				pass_origin, receiver, _scratch_opponents_release, pass_speed,
 				_scratch_opponent_vels, _scratch_opponent_caps)
 		if lane <= lane_flat:
 			return 0.0
 		miss_prob += AIActionScoring.SAUCER_EXTRA_MISS_PROB
 	else:
 		lane = AIActionScoring.lane_clear(
-				pass_origin, receiver, _scratch_opponents, pass_speed,
-				_scratch_opponent_vels, _scratch_opponent_caps)
+				pass_origin, receiver, _scratch_opponents_release, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
 	var receiver_release_t: float = flight_t
 	if not receiver_is_one_timer:
 		receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
@@ -1391,13 +1401,16 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 # its miss mode surrenders the ice in front of our net.
 #
 # Lane interception uses the reaction-window PASS model (lane_clear) on
-# CURRENT defender positions, not the geometric carry-path check — a
-# pass is a fired puck, so a defender near the lane reads the release
-# and steps in, scaled by flight time and the actual pass speed. This
-# matches how score_pass (the off-puck roles' view of the same lane)
-# evaluates it, so the carrier and its receivers agree on what's
-# actually threadable. Opponents are projected to flight time for the
-# receiver's inner score_at (lanes/pressure when the puck arrives).
+# RELEASE-TIME defender positions (_scratch_opponents_release — current pos
+# advanced by the commit→release windup), not the geometric carry-path check.
+# A pass is a fired puck that leaves the blade ~135 ms after the intent commits
+# (every bot pass is a charged wrister), so a forechecker actively skating into
+# the lane has closed real ground before the puck is even released; pricing the
+# lane at present-time spots read those breakout feeds as open and shipped them
+# straight into the closing stick. lane_clear then models the further closing
+# over the flight from that release-time start, scaled by the actual pass speed.
+# Opponents are projected to flight time for the receiver's inner score_at
+# (lanes/pressure when the puck arrives).
 # `lane` may be precomputed by the caller (the variant scorer computes
 # flat vs saucer lanes itself); pass < 0 to have the grounded lane
 # computed here. `miss_prob` is the execution-miss probability for this
@@ -1430,8 +1443,8 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		return 0.0
 	if lane < 0.0:
 		lane = AIActionScoring.lane_clear(
-				origin, receiver_spot, _scratch_opponents, pass_speed,
-				_scratch_opponent_vels, _scratch_opponent_caps)
+				origin, receiver_spot, _scratch_opponents_release, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
 	if lane <= 0.0:
 		return 0.0
 	_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
@@ -1478,12 +1491,15 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# forward-to-net cone (the receiver's own shot pressure_factor misses him),
 	# yet he strips the catch the instant it arrives. This prices exactly that:
 	# the clearance at the reception spot when the puck gets there — defenders'
-	# bodies momentum-projected over the whole flight, sticks maneuvering over the
-	# short reception window (EVADE_HORIZON_S — see reach_clearance). A feed to a
-	# blanketed man now reads as the giveaway it is.
+	# bodies momentum-projected from their RELEASE-TIME spots
+	# (_scratch_opponents_release, already advanced by the windup) over the
+	# flight, sticks maneuvering over the short reception window (EVADE_HORIZON_S
+	# — see reach_clearance). A feed to a blanketed man now reads as the giveaway
+	# it is, and one to a man a defender is skating onto during the windup no
+	# longer reads clear.
 	var reception_safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.reach_clearance(receiver_spot, flight_t,
-					_scratch_opponents, _scratch_opponent_vels,
+					_scratch_opponents_release, _scratch_opponent_vels,
 					_scratch_opponent_caps, AIActionScoring.EVADE_HORIZON_S))
 	# Three completion loss modes now, mutually exclusive and summing to 1 with the
 	# retained case: lane interception (1 − lane), execution miss (lane × miss),
@@ -1497,7 +1513,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# no separate "escape" bonus (that double-counted the pressure).
 	var benefit: float = receiver_value * completion * time_decay
 	var loss_point: Vector3 = AIActionScoring.lane_loss_point(
-			self_pos, receiver_spot, _scratch_opponents, pass_speed,
+			self_pos, receiver_spot, _scratch_opponents_release, pass_speed,
 			_scratch_opponent_vels)
 	var cost: float = AIActionScoring.turnover_cost(
 			loss_point, 1.0 - lane, ctx.defending_goal_pos, our_goalie,
