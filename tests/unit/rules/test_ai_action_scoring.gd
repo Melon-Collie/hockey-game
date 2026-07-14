@@ -1219,33 +1219,68 @@ func test_lane_clear_defender_drifting_away_blocks_less() -> void:
 	assert_gt(drifting, stationary, "a defender drifting off the lane blocks less")
 
 
-func test_lane_clear_brake_clog_floors_the_ballistic_overshoot() -> void:
-	# The ballistic dead-reckon lets a defender crossing the lane fast enough
-	# COAST straight through and read as clear — a lane a forechecker is visibly
-	# skating through scores wide open. brake_clog adds the guided-interceptor
-	# floor (he plants and clogs the crossing he'd otherwise sail past), fixing
-	# that tail. Crucially it only ever ADDS block — the flag never reads a lane
-	# CLEARER than the ballistic model, so it can't weaken a lane already blocked.
+func test_lane_clear_accurate_floors_the_ballistic_overshoot() -> void:
+	# The ballistic dead-reckon lets a defender crossing the lane fast enough COAST
+	# straight through and read as clear — a lane a forechecker is visibly skating
+	# through scores wide open. The `accurate` model's guided-interceptor floor has
+	# him plant and clog the crossing he'd otherwise sail past. So a defender ON the
+	# lane, at ANY closing speed, never reads clear — the overshoot tail is gone.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var to := Vector3(0.0, 0.0, 12.0)
 	var d: Array[Vector3] = [Vector3(2.0, 0.0, 6.0)]          # 2 m off mid-lane
 	var fast: Array[Vector3] = [Vector3(-16.0, 0.0, 0.0)]     # skating hard through the lane
 	var ballistic: float = AIActionScoring.lane_clear(from, to, d, 18.0, fast)
-	var braked: float = AIActionScoring.lane_clear(from, to, d, 18.0, fast, [], true)
+	var accurate: float = AIActionScoring.lane_clear(from, to, d, 18.0, fast, [], true)
 	assert_gt(ballistic, 0.9,
 			"ballistic overshoot: a defender skating through the lane reads nearly clear")
-	assert_lt(braked, 0.7,
-			"brake_clog floors it — he plants and clogs the crossing")
-	# Monotonicity guard: across the whole closing sweep the flag never reads a
-	# lane clearer than ballistic (adds block only), and never re-opens to clear.
+	assert_lt(accurate, 0.7,
+			"accurate floors it — he plants and clogs the crossing")
+	# No re-opening at any closing speed: a defender sitting on the lane is never
+	# read as clear once the guided floor is in.
 	for vx: float in [0.0, -4.0, -10.0, -16.0, -22.0]:
 		var v: Array[Vector3] = [Vector3(vx, 0.0, 0.0)]
-		var base: float = AIActionScoring.lane_clear(from, to, d, 18.0, v)
-		var brk: float = AIActionScoring.lane_clear(from, to, d, 18.0, v, [], true)
-		assert_true(brk <= base + 0.0001,
-				"brake_clog never reads clearer than ballistic (vx=%.0f)" % vx)
-		assert_lt(brk, 0.7,
-				"a defender on the lane never reads clear under brake_clog (vx=%.0f)" % vx)
+		assert_lt(AIActionScoring.lane_clear(from, to, d, 18.0, v, [], true), 0.7,
+				"a defender on the lane never reads clear under `accurate` (vx=%.0f)" % vx)
+
+
+func test_lane_clear_accurate_compounds_two_separated_defenders() -> void:
+	# The legacy model takes 1 − max(block): two defenders threatening DIFFERENT
+	# segments of a long lane read only as open as the easier gap. The `accurate`
+	# survival product makes the puck beat BOTH — two separated half-blockers
+	# compound to a much less clear lane than either alone.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 16.0)
+	var one_a: Array[Vector3] = [Vector3(3.6, 0.0, 12.0)]     # contests the middle
+	var one_b: Array[Vector3] = [Vector3(-4.2, 0.0, 14.0)]    # contests the receiver end
+	var both: Array[Vector3] = [one_a[0], one_b[0]]
+	var speed: float = 18.0
+	var clear_a: float = AIActionScoring.lane_clear(from, to, one_a, speed, [], [], true)
+	var clear_b: float = AIActionScoring.lane_clear(from, to, one_b, speed, [], [], true)
+	var clear_both: float = AIActionScoring.lane_clear(from, to, both, speed, [], [], true)
+	# Each leaves a real gap alone (~0.6–0.7 clear); together the lane is much
+	# worse than either — the product compounds two independent, separated threats.
+	assert_gt(clear_a, 0.3)
+	assert_gt(clear_b, 0.3)
+	assert_lt(clear_both, minf(clear_a, clear_b) - 0.1,
+			"two separated defenders compound to much less clear than either alone")
+	# Legacy max prices it as just the single worst gap — no compounding.
+	var legacy_both: float = AIActionScoring.lane_clear(from, to, both, speed)
+	assert_lt(clear_both, legacy_both - 0.1,
+			"the survival product reads a two-defender lane far less clear than legacy max")
+
+
+func test_friction_traverse_time_exceeds_frictionless() -> void:
+	# Gap 3: the puck sheds ice friction, so it takes longer to cover the lane than
+	# dist/v0 — the far end gives lane defenders more time. Small (~a few %) but in
+	# the honest direction. Checks the closed-form arrival root against the
+	# frictionless baseline and the kinematic identity dist = v0·T − ½·a·T².
+	var dist: float = 18.0
+	var v0: float = 20.0
+	var t: float = AIActionScoring._friction_traverse_time(dist, v0)
+	assert_gt(t, dist / v0, "friction makes the traversal take longer than dist/v0")
+	var a: float = GameRules.PUCK_ICE_DECEL_M_S2
+	assert_almost_eq(v0 * t - 0.5 * a * t * t, dist, 0.001,
+			"traverse time satisfies dist = v0·T − ½·a·T²")
 
 
 func test_lane_clear_release_windup_projection_blocks_more() -> void:
