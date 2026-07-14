@@ -240,6 +240,49 @@ const _POLAR_ANGLES: Array[float] = [
 		PI, -PI * 0.75, -PI * 0.5, -PI * 0.25,
 ]
 
+# RETREAT ring — a second, deeper candidate arc across the back half (lateral
+# through dead-back), at double the local step. Creating real separation from
+# a containing defender is a committed peel-out, not a 3 m shuffle: the local
+# cardinals only reposition inside his re-close radius, the seam is body-scale
+# and the wall exits are own-half-only, so a contained carrier had no
+# representable "back out and open the ice" move — it ground on the defender
+# instead (pacified). These are valued like every other candidate; with the
+# pass-OPTION branch (see _candidate_pass_option) they win exactly when the
+# space they buy reopens a lane worth using.
+const CARRY_RETREAT_STEP_M: float = CARRY_SEARCH_STEP_M * 2.0
+const _RETREAT_ANGLES: Array[float] = [
+		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
+]
+# Deke engagement gates (the cheap pre-filters before the manufactured-opening
+# math runs — see AIActionScoring.deke_cut_side). ENGAGE_RANGE: the containing
+# defender must be close enough that the duel is live but the fake still has
+# room to develop — a step beyond the poke trigger's reach. MAX_CLOSING: the
+# deke answers PATIENT containment; above this relative closing speed the
+# pressure is committed and the brake check / seam cut own the moment. Both
+# are physical duel measurements.
+const DEKE_ENGAGE_RANGE_M: float = 3.5
+const DEKE_CONTAIN_MAX_CLOSING_M_S: float = 2.0
+
+# Evadability (current_safety) above which the retreat ring is skipped
+# entirely: the peel-out is an answer to CONTAINMENT, and with no defender
+# able to reach the puck the forward gradient owns the compete anyway —
+# pricing five extra 6 m candidates every re-eval in open ice was pure
+# hot-path waste (~0.5 ms/re-eval). Generously high so any real pressure
+# keeps the ring live; a hot-path gate, not a tactical choice.
+const CARRY_RETREAT_SAFETY_SKIP: float = 0.85
+
+# Haircut on the pass-OPTION value a carry candidate inherits (see
+# _candidate_pass_option): the option is a coarse read — receiver valued at
+# his CURRENT spot, lane judged against CURRENT defenders — and it still has
+# to survive until the carrier actually arrives and releases. Tactical
+# haircut, not an evaluation curve — the grounded terms (receiver value,
+# lane, flight decay) are all inside the option itself. Candidates credit
+# only the option's IMPROVEMENT over the same read at the current spot (see
+# the subtraction in _score_move_candidate): a lane that is already open from
+# here is the live pass's to take — fire wins ties — so repositioning earns
+# option value only where it genuinely reopens something.
+const PASS_OPTION_DISCOUNT: float = 0.8
+
 
 # ── Persistent decision state ────────────────────────────────────────────────
 # What the carrier currently wants to do. CARRY = no fire intent;
@@ -351,6 +394,15 @@ var evade_seam_world: Vector3 = Vector3.INF
 # AIActionScoring.prefers_brake_check from the same re-eval. Latched by the
 # state machine's poke-evade trigger to pick the maneuver; protect-tier only.
 var brake_check_favored: bool = false
+# Fake-then-cut deke read (AIActionScoring.deke_cut_side): true when faking
+# one way manufactures a safe cut past the containing defender that doesn't
+# exist right now — the answer to PATIENT containment (the seam cut needs
+# clearance to already exist; the brake check needs the defender committed).
+# The dirs are world-XZ units for the two committed phases, latched by the
+# state machine's trigger. Protect-tier only; refreshed every re-eval.
+var deke_go: bool = false
+var deke_fake_dir: Vector2 = Vector2.ZERO
+var deke_cut_dir: Vector2 = Vector2.ZERO
 
 # ── Throttle ─────────────────────────────────────────────────────────────────
 var _pick_action_cooldown: int = 0
@@ -379,6 +431,15 @@ var _scratch_our_defenders: Array[Vector3] = []
 # Our chasers for a dump race: our defenders plus ourselves (we dump and chase).
 # Rebuilt inside _best_dump.
 var _scratch_our_chasers: Array[Vector3] = []
+# Pass-OPTION cache (see _candidate_pass_option): each legal receiver's
+# position and spot value at its CURRENT location, computed once per
+# _pick_action re-eval so the per-candidate option read only prices the LANE
+# from the candidate. Index-matched pair; refilled every re-eval.
+var _scratch_option_receiver_pos: Array[Vector3] = []
+var _scratch_option_receiver_val: Array[float] = []
+# The pass-option read at the current puck spot — candidates credit only their
+# improvement over this (recomputed every re-eval in _pick_action).
+var _pass_option_at_self: float = 0.0
 
 # ── Debug readout ────────────────────────────────────────────────────────────
 # Populated every re-eval; the state machine forwards these to its
@@ -456,6 +517,9 @@ func reset() -> void:
 	protect_pressure = 0.0
 	evade_seam_world = Vector3.INF
 	brake_check_favored = false
+	deke_go = false
+	deke_fake_dir = Vector2.ZERO
+	deke_cut_dir = Vector2.ZERO
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
@@ -537,6 +601,58 @@ func _pick_action(ctx: RoleContext) -> void:
 					cur_puck_pos, ctx.self_velocity, directed_seam,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 
+	# Fake-then-cut deke read (see the mirror fields' doc): find the PATIENT
+	# container — the nearest opponent inside the duel range, ahead on the
+	# objective line, with small relative closing (committed pressure belongs
+	# to the brake check / seam) — and ask the manufactured-opening math
+	# whether faking one way buys a safe cut past him that doesn't exist now.
+	# The axis frame (puck → his projected spot, plus its perpendicular) is
+	# built HERE and the returned side is converted with the same frame, so
+	# the eval and the executed gesture agree by construction.
+	deke_go = false
+	deke_fake_dir = Vector2.ZERO
+	deke_cut_dir = Vector2.ZERO
+	if ctx.protects_the_puck:
+		var obj_dir: Vector3 = seam_objective - cur_puck_pos
+		obj_dir.y = 0.0
+		if obj_dir.length_squared() > 0.0001:
+			obj_dir = obj_dir.normalized()
+			var deked_idx: int = -1
+			var deked_dist: float = DEKE_ENGAGE_RANGE_M
+			for i: int in _scratch_opponents.size():
+				var to_opp: Vector3 = _scratch_opponents[i] - cur_puck_pos
+				to_opp.y = 0.0
+				var d: float = to_opp.length()
+				if d >= deked_dist or d < 0.001:
+					continue
+				if to_opp.dot(obj_dir) <= 0.0:
+					continue   # behind the play — not the man to beat
+				var closing: float = (ctx.self_velocity - _scratch_opponent_vels[i]) \
+						.dot(to_opp / d)
+				if absf(closing) > DEKE_CONTAIN_MAX_CLOSING_M_S:
+					continue   # committed pressure — other maneuvers own it
+				deked_dist = d
+				deked_idx = i
+			if deked_idx != -1:
+				var d_proj: Vector3 = _scratch_opponents[deked_idx] \
+						+ _scratch_opponent_vels[deked_idx] \
+								* (AIActionScoring.DEKE_FAKE_S + AIActionScoring.DEKE_CUT_S)
+				var axis: Vector3 = d_proj - cur_puck_pos
+				axis.y = 0.0
+				if axis.length_squared() > 0.0001:
+					axis = axis.normalized()
+					var perp := Vector3(axis.z, 0.0, -axis.x)
+					var side: int = AIActionScoring.deke_cut_side(
+							cur_puck_pos, ctx.self_velocity, ctx.self_handle_reach,
+							axis, perp, deked_idx,
+							_scratch_opponents, _scratch_opponent_vels,
+							_scratch_opponent_caps)
+					if side != 0:
+						var cut3: Vector3 = (axis + perp * float(side)).normalized()
+						deke_go = true
+						deke_cut_dir = Vector2(cut3.x, cut3.z)
+						deke_fake_dir = Vector2(-perp.x * float(side), -perp.z * float(side))
+
 	# Puck-protect read (see the mirror fields' doc): how covered the presented
 	# forward carry spot is over the evasion horizon, and where in the blade
 	# envelope alone the puck is safest. The state machine blends the carry
@@ -564,6 +680,39 @@ func _pick_action(ctx: RoleContext) -> void:
 			continue
 		if ctx.team_id_by_peer.get(peer_id, -1) == ctx.team_id:
 			_scratch_teammate_ids.append(peer_id)
+
+	# Pass-OPTION cache: each legal receiver's spot value at its CURRENT
+	# position (goalie arc-squared to it), computed once per re-eval so the
+	# per-candidate option read (_candidate_pass_option) only prices the LANE
+	# from the candidate — the thing repositioning actually changes. Legality
+	# mirrors _compute_best_pass: no ghosts, and an OZ carrier only counts
+	# receivers safely inside the zone.
+	_scratch_option_receiver_pos.clear()
+	_scratch_option_receiver_val.clear()
+	var in_oz_now: bool = AIActionScoring.in_offensive_zone(self_pos, attacking_goal)
+	for pid: int in _scratch_teammate_ids:
+		var tm: SkaterNetworkState = snapshot.skater_states[pid]
+		if tm.is_ghost:
+			continue
+		if in_oz_now and not AIActionScoring.in_offensive_zone(
+				tm.position, attacking_goal, OZ_RECEIVE_LINE_BUFFER_M):
+			continue
+		var tm_caps: AISkaterCaps = ctx.caps_by_peer.get(pid)
+		var tm_shot_speed: float = tm_caps.wrister_shot_speed if tm_caps != null \
+				else AIActionScoring.WRISTER_SHOT_SPEED_M_S
+		var tm_goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+				_goalie_now(ctx), attacking_goal, tm.position)
+		_scratch_option_receiver_pos.append(tm.position)
+		_scratch_option_receiver_val.append(_score_at(
+				ctx, tm.position, self_pos, _scratch_opponents, tm_goalie,
+				tm_shot_speed, 0.0))
+	# The same option read at the CURRENT puck spot — the baseline candidates'
+	# option credit is measured against (see _score_move_candidate): an option
+	# already available from here belongs to the live pass in the fire
+	# compete, so only the IMPROVEMENT motivates a carry. Subtracting the
+	# at-self read also cancels the coarse option model's bias against the
+	# fully-priced pass common-mode.
+	_pass_option_at_self = _candidate_pass_option(ctx, cur_puck_pos)
 
 	# Projected RELEASE position for SHOOT scoring. The wrister charge
 	# window means the puck actually leaves the blade ~0.25s after
@@ -706,7 +855,8 @@ func _pick_action(ctx: RoleContext) -> void:
 	if ctx.ping_shoot_active and shoot_score > 0.0:
 		shoot_score *= PING_SHOOT_EV_MULT
 
-	var carry_result: Array = _best_carry(ctx, raw_shoot_score, directed_seam)
+	var carry_result: Array = _best_carry(
+			ctx, raw_shoot_score, directed_seam, current_safety)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 	var raw_carry_score: float = carry_result[2]
@@ -1320,6 +1470,8 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 #   - Stand-still (current position, encodes patience)
 #   - 8 polar cardinals at CARRY_SEARCH_STEP_M, oriented so "forward"
 #     = direction toward slot
+#   - 5 retreat-ring candidates across the back arc at 2× the step
+#     (see CARRY_RETREAT_* — the committed peel-out)
 #   - The OZ slot anchor (long-range "drive at slot")
 #   - Two zone-exit wall routes when in our own half (see CARRY_EXIT_*)
 #   - Two post walkouts when behind either goal line (see WALKOUT_*)
@@ -1334,7 +1486,7 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 # `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
 # stand-still's shot branch shares it verbatim — see the stand-still block.
 func _best_carry(ctx: RoleContext, shoot_now_score: float,
-		directed_seam: Vector3) -> Array:
+		directed_seam: Vector3, current_safety: float) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
@@ -1388,6 +1540,28 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
+
+	# RETREAT ring — see CARRY_RETREAT_* doc: the committed peel-out arc across
+	# the back half at double the local step, the move that creates REAL
+	# separation from a containing defender. Same clamps and scoring as the
+	# cardinals; with the pass-option branch these win exactly when the space
+	# they buy reopens a lane worth using. Priced only under real pressure
+	# (CARRY_RETREAT_SAFETY_SKIP — a hot-path gate; open ice never needs it).
+	if current_safety < CARRY_RETREAT_SAFETY_SKIP:
+		for angle: float in _RETREAT_ANGLES:
+			var rc: float = cos(angle)
+			var rs: float = sin(angle)
+			var retreat := Vector3(
+					self_pos.x + (fwd_x * rc - fwd_z * rs) * CARRY_RETREAT_STEP_M, 0.0,
+					self_pos.z + (fwd_x * rs + fwd_z * rc) * CARRY_RETREAT_STEP_M)
+			if absf(retreat.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
+				continue
+			if absf(retreat.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+				continue
+			var retreat_total: float = _score_move_candidate(ctx, retreat, our_goalie)
+			if retreat_total > best_score:
+				best_score = retreat_total
+				best_pos = retreat
 
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
@@ -1661,6 +1835,17 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
+	# ...plus the pass OPTION the spot opens (see _candidate_pass_option): what
+	# the carrier can DO from a candidate includes moving the puck, not just
+	# shooting from it — the missing half of "back off to create space". A
+	# retreat that reopens a lane to a valuable teammate inherits (a discounted
+	# cut of) that value, which is what finally lets a contained carrier peel
+	# out instead of grinding on the defender in front of a dead shot. Credited
+	# as the IMPROVEMENT over the same read at the current spot: a lane already
+	# open from here is the live pass's to take (fire wins ties), so holding a
+	# cashable option is never a reason to keep carrying.
+	dest_score = maxf(dest_score, maxf(
+			0.0, _candidate_pass_option(ctx, candidate) - _pass_option_at_self))
 	var decay: float = pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
@@ -1752,6 +1937,43 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var realization: float = AIActionScoring.potential_realization_discount(
 			pos, attacking_goal)
 	return maxf(shoot_s, potential_s * realization)
+
+
+# The pass OPTION a carry candidate opens: the best cached receiver value
+# reachable through a CLEAR lane from the candidate spot. Backing off a
+# containing defender is valuable precisely because separation reopens
+# passing lanes — but the candidate eval priced only the spot's own
+# shot/potential, so a contained carrier's retreat earned nothing and it
+# pacified against the man instead. Coarse by design: receivers valued at
+# their CURRENT spots (cached once per re-eval in _pick_action), lanes judged
+# against CURRENT defenders — this only has to rank SPOTS; the fired pass is
+# still fully solved at fire time. Priced as a future action: lane ×
+# completion odds × the pass's own flight decay × PASS_OPTION_DISCOUNT.
+func _candidate_pass_option(ctx: RoleContext, candidate: Vector3) -> float:
+	var best: float = 0.0
+	for i: int in _scratch_option_receiver_pos.size():
+		var rpos: Vector3 = _scratch_option_receiver_pos[i]
+		if AIActionScoring.pass_lane_blocked_by_net(candidate, rpos):
+			continue
+		if AIActionScoring.pass_crosses_own_slot(
+				candidate, rpos, ctx.own_goal_dir * GameRules.GOAL_LINE_Z):
+			continue
+		var dist: float = candidate.distance_to(rpos)
+		var pass_speed: float = AIActionScoring.pass_launch_speed(
+				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
+		var lane: float = AIActionScoring.lane_clear(
+				candidate, rpos, _scratch_opponents, pass_speed,
+				_scratch_opponent_vels, _scratch_opponent_caps)
+		if lane <= 0.0:
+			continue
+		var option: float = _scratch_option_receiver_val[i] \
+				* lane * (1.0 - AIActionScoring.PASS_MISS_PROB) \
+				* pow(AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+						dist / maxf(pass_speed, 1.0)) \
+				* PASS_OPTION_DISCOUNT
+		if option > best:
+			best = option
+	return best
 
 
 # The value of an open pass receiver DRIVING IN: the best value they can reach by

@@ -414,6 +414,17 @@ const POKE_EVADE_SEAM_MIN_DIST_M: float = 0.75
 const POKE_EVADE_BRAKE_TICKS: int = int(
 		AIActionScoring.EVADE_HORIZON_S * _PhysicsConstants.PHYSICS_TICK)   # ~400 ms
 
+# FAKE-THEN-CUT deke windows — tick mirrors of AIActionScoring.DEKE_FAKE_S /
+# DEKE_CUT_S (the shared eval/execution contract: the manufactured-opening
+# math prices exactly the gesture these ticks perform). The cooldown is
+# longer than the plain cut's so dekes read as deliberate, occasional moves
+# — and a fake the defender didn't buy can't machine-gun.
+const DEKE_FAKE_TICKS: int = int(
+		AIActionScoring.DEKE_FAKE_S * _PhysicsConstants.PHYSICS_TICK)
+const DEKE_CUT_TICKS: int = int(
+		AIActionScoring.DEKE_CUT_S * _PhysicsConstants.PHYSICS_TICK)
+const DEKE_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK   # ~1 s
+
 # ── Defensive poke jab (active stick-check to strip the carrier) ──────────────
 # The host auto-strips the carrier whenever a defender's blade SWEEPS
 # THROUGH the puck (PuckController._check_interactions → check_poke).
@@ -853,20 +864,8 @@ var _shot_release_offset_locked: Vector3 = Vector3.ZERO
 var _dump_target: Vector3 = Vector3.INF
 var _dump_is_soft: bool = false
 
-# Debug: print one line at SHOOT commit and one line at wrister
-# release so the user can compare what the projection promised vs.
-# where the puck actually fired from. Toggle off for shipping.
-const SHOW_COMMIT_DEBUG: bool = false
-var _commit_pos: Vector3 = Vector3.ZERO
-var _commit_vel: Vector3 = Vector3.ZERO
-var _commit_projected_release: Vector3 = Vector3.ZERO
-var _commit_shoot_score: float = 0.0
-var _commit_carry_score: float = 0.0
-# Tick stamp to compute pre-aim duration (commit -> SHOOT_PRESSED entry).
-var _commit_tick_stamp: int = 0
-var _pre_aim_ticks_observed: int = 0
 # Increments every physics tick the agent runs; doesn't have to be a
-# perfect clock — only used for relative deltas in the debug print.
+# perfect clock — only used for relative deltas (mouse-sway timing).
 var _agent_tick: int = 0
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
@@ -980,6 +979,13 @@ var _poke_evade_dir: Vector2 = Vector2.ZERO
 # FALSE = the lateral cut. Chosen from the carrier's brake_check_favored mirror
 # (AIActionScoring.prefers_brake_check at the last ~30 Hz re-eval).
 var _poke_evade_braking: bool = false
+# Maneuver LATCHED at trigger: the FAKE-THEN-CUT deke. Phase splits on the
+# remaining active ticks (fake while > DEKE_CUT_TICKS, then the cut); both
+# directions latched from the carrier's manufactured-opening read at trigger
+# (a deke re-read mid-gesture would un-sell the fake).
+var _poke_evade_deking: bool = false
+var _deke_fake_dir: Vector2 = Vector2.ZERO
+var _deke_cut_dir: Vector2 = Vector2.ZERO
 
 # Defensive poke-jab bookkeeping (see POKE_JAB_* constants). While
 # _active > 0 the bot aims its blade at the carrier's puck so the host
@@ -1848,6 +1854,27 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 				# Sprint gate reads the overshoot too — the easing that slows a
 				# clean solo pickup must not bleed speed out of a contest.
 				_chase_sprint_ref = target
+		elif carrier_pid == -1:
+			# BLADE-FIRST pickup route: steer the BODY to a point one carry
+			# cradle SHORT of the intercept along the approach line, so the bot
+			# arrives with the puck outstretched a blade-length ahead on its
+			# skating line — the blade (which makes the actual pickup; the
+			# close-range branch below snaps the aim onto the puck inside
+			# reach) finally shapes the route. The raw intercept delivered the
+			# CHEST onto the puck: the body overran the pickup point and the
+			# puck was fished off the hip or from behind — the "orient then
+			# skate" look. The pull-back also lands the puck exactly at the
+			# carry cradle spot (CARRY_BLADE_AIM_FORWARD_M), so a clean pickup
+			# flows into the first carrying stride with no gather. Inside one
+			# cradle of the intercept the raw target stands (nothing left to
+			# shape). Pursuit of a CARRIED puck keeps the raw intercept — body
+			# pressure on the man is the point there — and the contested
+			# overshoot above keeps its committed momentum drive.
+			var approach: Vector3 = Vector3(
+					target.x - self_pos.x, 0.0, target.z - self_pos.z)
+			var approach_len: float = approach.length()
+			if approach_len > CARRY_BLADE_AIM_FORWARD_M:
+				target -= approach * (CARRY_BLADE_AIM_FORWARD_M / approach_len)
 		_apply_steering(input, snapshot, self_pos, target)
 
 		# Aim: normally blade-on-intercept, but during the engagement cooldown
@@ -2284,24 +2311,6 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 							else _shot_aim_point(snapshot, self_pos))
 				State.PASS_PRESSED:
 					_locked_pre_aim_point = _pass_aim_point(snapshot, self_pos)
-			# Debug: capture commit snapshot for SHOOT to compare against
-			# actual release pos later.
-			if SHOW_COMMIT_DEBUG and new_intent == State.SHOOT_PRESSED:
-				var hv: Vector3 = Vector3.ZERO
-				if self_state != null:
-					hv = Vector3(self_state.velocity.x, 0.0, self_state.velocity.z)
-				_commit_pos = self_pos
-				_commit_vel = hv
-				_commit_projected_release = self_pos + hv * BOT_WRISTER_LOOKAHEAD_S
-				_commit_shoot_score = _carrier.debug_shoot_score
-				_commit_carry_score = _carrier.debug_carry_score
-				_commit_tick_stamp = _agent_tick
-				_pre_aim_ticks_observed = 0
-				print("[bot %d] SHOOT COMMIT pos=(%.2f, %.2f) vel=(%.2f, %.2f) speed=%.2f projected_release=(%.2f, %.2f) shoot=%.3f carry=%.3f" % [
-						_peer_id, _commit_pos.x, _commit_pos.z,
-						_commit_vel.x, _commit_vel.z, hv.length(),
-						_commit_projected_release.x, _commit_projected_release.z,
-						_commit_shoot_score, _commit_carry_score])
 		_intended_action = new_intent
 
 	# Steering depends on which action is locked.
@@ -2341,11 +2350,14 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	else:
 		_apply_brake_steering(input, snapshot, self_pos)
 
-	# Mouse target depends on intent: carry uses normal goal-aim, fire
+	# Mouse target depends on intent: carry uses normal goal-aim (or the
+	# deke's committed sell-and-snap while that maneuver is live), fire
 	# states pre-aim toward action direction.
 	var mouse_target: Vector3
 	if _intended_action == State.CARRY:
-		mouse_target = _carry_aim_track_fire(snapshot, self_pos)
+		var deke_mouse: Vector3 = _deke_mouse_target(self_pos)
+		mouse_target = deke_mouse if deke_mouse.is_finite() \
+				else _carry_aim_track_fire(snapshot, self_pos)
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
 	# Arc the per-tick mouse target around self_pos toward the final
@@ -2387,9 +2399,6 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 				Vector2(mouse_target.x - self_pos.x, mouse_target.z - self_pos.z))
 		if aim_converged or aim_reachable_no_turn \
 				or _intent_wait_ticks >= _intent_max_wait_ticks:
-			# Capture pre-aim duration for the upcoming wrister release log.
-			if SHOW_COMMIT_DEBUG and _intended_action == State.SHOOT_PRESSED:
-				_pre_aim_ticks_observed = _agent_tick - _commit_tick_stamp
 			_set_state(_intended_action)
 			_intended_action = State.CARRY
 			_intent_wait_ticks = 0
@@ -2635,15 +2644,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# Lost the puck mid-charge — bail. SkaterStateMachine's release path
 	# is a no-op without the puck, so we don't need to force a release.
 	if not have_puck:
-		if SHOW_COMMIT_DEBUG:
-			var actual_travel: Vector3 = self_pos - _commit_pos
-			var total_ticks: int = _agent_tick - _commit_tick_stamp
-			print("[bot %d] WRISTER LOST PUCK at=(%.2f, %.2f) projected=(%.2f, %.2f) traveled=%.2fm pre_aim_ticks=%d charge_ticks=%d total=%d" % [
-					_peer_id,
-					self_pos.x, self_pos.z,
-					_commit_projected_release.x, _commit_projected_release.z,
-					actual_travel.length(),
-					_pre_aim_ticks_observed, _shoot_charge_tick, total_ticks])
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
@@ -2851,20 +2851,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# _state_wrister_aim sees not shoot_held → release_wrister fires
 		# with the committed power and sweep direction.
 		input.shoot_held = false
-		# Debug: print release vs projection so we can see if the puck
-		# fired from where the projection promised.
-		if SHOW_COMMIT_DEBUG:
-			var drift: Vector3 = self_pos - _commit_projected_release
-			var actual_travel: Vector3 = self_pos - _commit_pos
-			var total_ticks: int = _agent_tick - _commit_tick_stamp
-			print("[bot %d] WRISTER RELEASE actual=(%.2f, %.2f) projected=(%.2f, %.2f) drift=(%+.2f, %+.2f) traveled=%.2fm of projected=%.2fm pre_aim_ticks=%d charge_ticks=%d total=%d" % [
-					_peer_id,
-					self_pos.x, self_pos.z,
-					_commit_projected_release.x, _commit_projected_release.z,
-					drift.x, drift.z,
-					actual_travel.length(),
-					(_commit_projected_release - _commit_pos).length(),
-					_pre_aim_ticks_observed, _shoot_charge_tick, total_ticks])
 		_set_state(State.CARRY)
 
 
@@ -3876,8 +3862,10 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 		_poke_evade_active_ticks -= _dispatch_period_ticks
 		if _poke_evade_active_ticks <= 0:
 			_poke_evade_active_ticks = 0
-			_poke_evade_cooldown_ticks = POKE_EVADE_COOLDOWN_TICKS
+			_poke_evade_cooldown_ticks = DEKE_COOLDOWN_TICKS \
+					if _poke_evade_deking else POKE_EVADE_COOLDOWN_TICKS
 			_poke_evade_braking = false
+			_poke_evade_deking = false
 		return
 	if _poke_evade_cooldown_ticks > 0:
 		_poke_evade_cooldown_ticks = maxi(0, _poke_evade_cooldown_ticks - _dispatch_period_ticks)
@@ -3888,6 +3876,12 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 	var vel_xz := Vector2(self_state.velocity.x, self_state.velocity.z)
 	var speed: float = vel_xz.length()
 	if speed < POKE_EVADE_MIN_SELF_SPEED_M_S:
+		# Too slow for the lateral cut (it would read as a wiggle) — but the
+		# STANDSTILL duel is exactly the fake-then-cut deke's home: a patient
+		# container parked in front, nobody moving. Commit the deke when the
+		# carrier's re-eval says the fake manufactures an opening.
+		if _carrier.deke_go:
+			_start_deke(input, self_pos)
 		return
 	var forward: Vector2 = vel_xz / speed
 	# Puck pos approximation — same carry-arm offset the stickhandle
@@ -3933,21 +3927,32 @@ func _poke_evade_modulate_steering(input: InputState, snapshot: WorldSnapshot, s
 		trigger_threat = opp_state
 		break
 	if trigger_threat == null:
+		# CONTAINMENT trigger — the stalemate the poke scan can't see: a
+		# patient container never closes fast enough to register as an
+		# imminent poke, so nothing ever fired and the duel stood still.
+		# When the carrier's re-eval says a fake would MANUFACTURE an
+		# opening that doesn't exist (deke_go), commit the deke here.
+		if _carrier.deke_go:
+			_start_deke(input, self_pos)
 		return
-	# Maneuver pick, latched for the whole window: a BRAKE CHECK when the
-	# carrier's last re-eval read the braked hold as clearly beating the cut
-	# (AIRoleCarrier.brake_check_favored — protect-tier only, ≤ ~33 ms stale),
-	# else the committed cut toward the directed seam. Both answer the same
-	# imminent poke; the brake answers committed pressure (let his reach fly
-	# past the stopped puck), the cut answers everything else. NO usable
+	# Maneuver pick, latched for the whole window — priority by what each
+	# answers: a BRAKE CHECK when the carrier's last re-eval read the braked
+	# hold as clearly beating the cut (committed pressure — let his reach fly
+	# past the stopped puck); else the FAKE-THEN-CUT deke when a fake
+	# manufactures the opening (patient pressure); else the committed cut
+	# toward the directed seam (clearance that already exists). NO usable
 	# maneuver — no seam direction (Easy's closed protect gate, or a seam
-	# underfoot) and no brake read — means no trigger at all: the window and
-	# its cooldown are only ever spent on a committed move. Easy simply has no
-	# deke (its poke-evade never fires — the naive carry a poke-check beats,
-	# per the tier doc), and a protect-tier carrier whose seam is underfoot is
-	# being told to HOLD, which the protect blade-work already handles.
-	var cut_dir: Vector2 = _seam_cut_direction(self_pos)
+	# underfoot), no brake read, no deke read — means no trigger at all: the
+	# window and its cooldown are only ever spent on a committed move. Easy
+	# simply has no deke (its poke-evade never fires — the naive carry a
+	# poke-check beats, per the tier doc), and a protect-tier carrier whose
+	# seam is underfoot is being told to HOLD, which the protect blade-work
+	# already handles.
 	var braking: bool = _carrier.brake_check_favored
+	if not braking and _carrier.deke_go:
+		_start_deke(input, self_pos)
+		return
+	var cut_dir: Vector2 = _seam_cut_direction(self_pos)
 	if cut_dir == Vector2.ZERO and not braking:
 		return
 	_poke_evade_braking = braking
@@ -3978,14 +3983,34 @@ func _seam_cut_direction(self_pos: Vector3) -> Vector2:
 	return to_seam.normalized()
 
 
-# One active-window tick of the committed maneuver. BRAKE CHECK: the real
-# brake key with move_vector held on the exit direction (the live carry
-# anchor) — the same input shape as the brake-pivot, so the physics gets the
-# heavy brake friction and thrust resumes toward the anchor the instant the
-# window releases; the beaten checker no longer registers in the threat-gated
-# repel, so the exit bursts straight past him. CUT: the seam direction latched
-# at trigger (guaranteed non-zero — a directionless evade never triggers).
+# Latch and start the FAKE-THEN-CUT deke: one committed window covering both
+# phases; the drive below splits them on the remaining ticks. Directions come
+# from the carrier's manufactured-opening read (same axis frame as the eval,
+# so the gesture performed is the gesture priced).
+func _start_deke(input: InputState, self_pos: Vector3) -> void:
+	_poke_evade_deking = true
+	_deke_fake_dir = _carrier.deke_fake_dir
+	_deke_cut_dir = _carrier.deke_cut_dir
+	_poke_evade_dir = Vector2.ZERO
+	_poke_evade_active_ticks = DEKE_FAKE_TICKS + DEKE_CUT_TICKS
+	_drive_poke_evade_cut(input, self_pos)
+
+
+# One active-window tick of the committed maneuver. DEKE: thrust the fake
+# side while the fake phase lasts, then explode across to the cut side (the
+# carry cursor sells and snaps with it — see _deke_mouse_target). BRAKE
+# CHECK: the real brake key with move_vector held on the exit direction (the
+# live carry anchor) — the same input shape as the brake-pivot, so the
+# physics gets the heavy brake friction and thrust resumes toward the anchor
+# the instant the window releases; the beaten checker no longer registers in
+# the threat-gated repel, so the exit bursts straight past him. CUT: the seam
+# direction latched at trigger (guaranteed non-zero — a directionless evade
+# never triggers).
 func _drive_poke_evade_cut(input: InputState, self_pos: Vector3) -> void:
+	if _poke_evade_deking:
+		input.move_vector = _deke_fake_dir \
+				if _poke_evade_active_ticks > DEKE_CUT_TICKS else _deke_cut_dir
+		return
 	if _poke_evade_braking:
 		input.brake = true
 		var exit := Vector2(_last_carry_anchor.x - self_pos.x,
@@ -3994,6 +4019,28 @@ func _drive_poke_evade_cut(input: InputState, self_pos: Vector3) -> void:
 			input.move_vector = exit.normalized()
 		return
 	input.move_vector = _poke_evade_dir
+
+
+# The deke's carry-cursor override: sell the fake WITH THE PUCK — the
+# defender's read tracks the puck, not the chest — then snap it across for
+# the cut; the pull through the wide ROM is the visible toe-drag. INF when no
+# deke is active (the normal carry aim runs). Board + net clamps keep the
+# blade legal against the walls and the cage.
+func _deke_mouse_target(self_pos: Vector3) -> Vector3:
+	if not _poke_evade_deking or _poke_evade_active_ticks <= 0:
+		return Vector3.INF
+	var dir: Vector2 = _deke_fake_dir \
+			if _poke_evade_active_ticks > DEKE_CUT_TICKS else _deke_cut_dir
+	if dir == Vector2.ZERO:
+		return Vector3.INF
+	var target := Vector3(
+			self_pos.x + dir.x * CARRY_BLADE_AIM_FORWARD_M, 0.0,
+			self_pos.z + dir.y * CARRY_BLADE_AIM_FORWARD_M)
+	var on_ice: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(target.x, target.z), CARRY_BLADE_WALL_MARGIN_M)
+	target.x = on_ice.x
+	target.z = on_ice.y
+	return AIActionScoring.net_safe_blade_target(self_pos, target)
 
 
 # Defensive poke jab. Returns the aim point (the carrier's puck
@@ -4687,6 +4734,9 @@ func _set_state(s: State) -> void:
 			_poke_evade_cooldown_ticks = 0
 			_poke_evade_dir = Vector2.ZERO
 			_poke_evade_braking = false
+			_poke_evade_deking = false
+			_deke_fake_dir = Vector2.ZERO
+			_deke_cut_dir = Vector2.ZERO
 			_poke_jab_active_ticks = 0
 			_poke_jab_cooldown_ticks = 0
 			_carrier.clear_intent()
