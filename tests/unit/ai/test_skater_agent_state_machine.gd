@@ -638,6 +638,82 @@ func test_one_timer_settles_onto_the_live_feed_line() -> void:
 	assert_lt(i.move_vector.y, -0.3, "shuffles toward the actual crossing line")
 
 
+func test_one_timer_press_waits_for_the_aim_to_settle() -> void:
+	# The controller locks the slapper direction from the mouse AT THE PRESS,
+	# so a bot that enters the press state still looking away from the net
+	# (late-ready commit, zone-fallback trigger) must NOT press yet — pressing
+	# immediately locked a watching-the-play aim and the one-timer fired
+	# wherever the bot had been looking. Facing dead away from the net (the
+	# net beyond the reach cone) defers the press; squared up, it fires.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)   # facing OUR end — net at back
+	var i0 := InputState.new()
+	sm.dispatch(i0, s)
+	assert_false(i0.slap_pressed, "no press while the net aim is in the back wedge")
+	assert_false(i0.slap_held, "…and nothing to hold yet")
+	assert_eq(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "still waiting on the feed")
+	s.skater_states[SELF_ID].facing = Vector2(0, -1)   # squared to the net
+	var i1 := InputState.new()
+	sm.dispatch(i1, s)
+	assert_true(i1.slap_pressed, "squared up — the press fires with a real net aim")
+	assert_true(i1.slap_held, "…and the wind-up holds")
+
+
+func test_one_timer_press_backstop_fires_unsquared() -> void:
+	# Unreadable/never-converging facing must not starve the whole wind-up:
+	# past the aim-wait backstop the press fires anyway.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._one_timer_press_tick = Agent.ONE_TIMER_AIM_WAIT_MAX_TICKS
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_true(i.slap_pressed, "the backstop presses rather than eat the flight un-wound")
+
+
+func test_oz_receiver_stance_opens_hips_between_puck_and_net() -> void:
+	# A teammate has the puck and we're camped in the OZ — we're a candidate
+	# receiver, so the near-anchor ready stance splits between the play and
+	# the net (the puck-net bisector) instead of staring straight at the
+	# puck: the catch lands with the shot already loaded.
+	var self_pos := Vector3(0, 0, -15)
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = Vector3(8, 0, -15)
+	s.puck_state.carrier_peer_id = TEAMMATE_ID
+	_add_skater(s, SELF_ID, self_pos)
+	_add_skater(s, TEAMMATE_ID, Vector3(8, 0, -15))
+	var dir: Vector3 = sm._compute_desired_aim_dir(self_pos, self_pos, s)
+	assert_gt(dir.x, 0.4, "the play stays in front of the stance")
+	assert_lt(dir.z, -0.4, "…and the hips open toward the net")
+
+
+func test_defensive_watching_still_faces_the_puck() -> void:
+	# An OPPONENT carrier in the same geometry: eyes stay on the threat —
+	# the open-hips split is a receiver's stance, not a defender's.
+	var self_pos := Vector3(0, 0, -15)
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = Vector3(8, 0, -15)
+	s.puck_state.carrier_peer_id = OPP_ID
+	_add_skater(s, SELF_ID, self_pos)
+	_add_skater(s, OPP_ID, Vector3(8, 0, -15))
+	var dir: Vector3 = sm._compute_desired_aim_dir(self_pos, self_pos, s)
+	assert_gt(dir.x, 0.9, "faces the carrier square")
+	assert_gt(dir.z, -0.1, "no net bias while defending")
+
+
+func test_one_timer_feed_time_reads_the_remaining_flight() -> void:
+	# Puck 8 m up-line at 16 m/s → my perpendicular foot in 0.5 s: the aim
+	# reads the goalie at feed ARRIVAL, not where he stands mid-re-square.
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	assert_almost_eq(sm._one_timer_feed_time_s(s, Vector3.ZERO), 0.5, 0.01)
+	# A dead/held puck reads as arriving now.
+	var dead := _self_snap(Vector3.ZERO, false)
+	assert_almost_eq(sm._one_timer_feed_time_s(dead, Vector3.ZERO), 0.0, 0.001)
+
+
 # ── PASS_PRESSED ─────────────────────────────────────────────────────────────
 
 func test_pass_pressed_quick_fires_and_clears_target() -> void:
