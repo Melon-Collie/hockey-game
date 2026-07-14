@@ -10,7 +10,7 @@ func _title() -> String:
 
 
 func _hint() -> String:
-	return "Skate in and beat the goalie."
+	return "Grab the puck, skate in, and beat the goalie."
 
 
 func _success_flash() -> String:
