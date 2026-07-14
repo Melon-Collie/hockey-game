@@ -1351,7 +1351,7 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 			return 0.0
 		var lane_flat: float = AIActionScoring.lane_clear(
 				pass_origin, receiver, _scratch_opponents_release, pass_speed,
-				_scratch_opponent_vels, _scratch_opponent_caps)
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
 		if lane_flat >= AIActionScoring.SAUCER_SKIP_WHEN_LANE_CLEAR:
 			return 0.0
 		lane = AIActionScoring.lane_clear_saucer(
@@ -1363,7 +1363,7 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 	else:
 		lane = AIActionScoring.lane_clear(
 				pass_origin, receiver, _scratch_opponents_release, pass_speed,
-				_scratch_opponent_vels, _scratch_opponent_caps)
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
 	var receiver_release_t: float = flight_t
 	if not receiver_is_one_timer:
 		receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
@@ -1444,7 +1444,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	if lane < 0.0:
 		lane = AIActionScoring.lane_clear(
 				origin, receiver_spot, _scratch_opponents_release, pass_speed,
-				_scratch_opponent_vels, _scratch_opponent_caps)
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
 	if lane <= 0.0:
 		return 0.0
 	_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)

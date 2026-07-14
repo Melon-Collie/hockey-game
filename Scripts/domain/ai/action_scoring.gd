@@ -1510,6 +1510,55 @@ static func _lane_block_at(
 	return clampf((reach - miss) / stick_reach, 0.0, 1.0)
 
 
+# Brake-and-clog reachability block [0, 1] for one defender: the best lane point
+# he can skate to and STOP on before the puck crosses it. The ballistic closest-
+# approach term (_lane_block_at) lets a fast defender COAST straight through the
+# lane and out the far side — past ~10 m/s of perpendicular closing he reads as
+# clear, because the dead-reckon never lets him brake. But a real defender about
+# to overshoot a lane he's trying to defend plants and occupies it. This asks the
+# guided-interceptor question instead: given his read delay and lateral pace, can
+# he reach the crossing point in time and stay? He can, so this only ever ADDS
+# block — it floors the coasting term's overshoot tail without weakening any lane
+# the coasting model already blocks (lane_clear takes the max of the two).
+#
+# Closed form: maximise block(u) = (stick + close·(u/speed − reaction) − |X(u)−D|)
+# over the lane arc-coord u, where X(u) is the point u metres along the lane and
+# the puck reaches it at u/speed. With a = the defender's along-lane coord and
+# b = his perpendicular distance, |X(u)−D| = √((u−a)²+b²); setting d/du = 0 gives
+# the interior optimum (u−a) = k·b/√(1−k²), k = close/speed. Evaluated there and
+# at the perpendicular foot (u = a, robust to the reaction-delay kink), best wins.
+# Pure float math, allocation-free.
+static func _lane_brake_block(
+		fx: float, fz: float, dirx: float, dirz: float, seg_len: float,
+		speed: float, px: float, pz: float,
+		stick_reach: float, close_speed: float) -> float:
+	var rx: float = px - fx
+	var rz: float = pz - fz
+	var a: float = rx * dirx + rz * dirz             # along-lane coord of the defender
+	var perp_x: float = rx - a * dirx
+	var perp_z: float = rz - a * dirz
+	var b: float = sqrt(perp_x * perp_x + perp_z * perp_z)   # perpendicular distance
+	var k: float = close_speed / speed
+	var u_opt: float = seg_len if k >= 1.0 else a + k * b / sqrt(1.0 - k * k)
+	var blk_opt: float = _brake_block_at(
+			clampf(u_opt, 0.0, seg_len), a, b, speed, stick_reach, close_speed)
+	var blk_foot: float = _brake_block_at(
+			clampf(a, 0.0, seg_len), a, b, speed, stick_reach, close_speed)
+	return maxf(blk_opt, blk_foot)
+
+
+# Block strength if the defender aims to occupy lane arc-coord `u` — reach at the
+# puck's arrival time there, minus the distance he must cover to it. Shared by the
+# two candidate points _lane_brake_block evaluates.
+static func _brake_block_at(u: float, a: float, b: float, speed: float,
+		stick_reach: float, close_speed: float) -> float:
+	var t_x: float = u / speed
+	var reach: float = stick_reach + close_speed * maxf(0.0, t_x - LANE_REACTION_DELAY_S)
+	var du: float = u - a
+	var gap: float = sqrt(du * du + b * b)
+	return clampf((reach - gap) / stick_reach, 0.0, 1.0)
+
+
 # Lane-clear factor in [0, 1] for a FIRED puck (shot or pass) — the
 # closest-approach reachability model (see the doc-block above the lane
 # constants). Public because the carrier's pass scoring uses it directly:
@@ -1529,9 +1578,17 @@ static func _lane_block_at(
 # defenders are read as stationary — every position-only caller keeps
 # working; the carrier's pass scoring passes real velocities so a
 # defender bearing down on the lane is priced as the threat they are.
+#
+# `brake_clog` adds the guided-interceptor reachability term (_lane_brake_block)
+# max'd into each defender's block, fixing the ballistic overshoot: without it a
+# defender crossing the lane faster than ~10 m/s coasts through and reads as clear
+# (harmful on the slower PASS puck, where that speed is reachable). Off by default
+# so every existing caller — the fast SHOT lane, the off-puck/threat score_pass —
+# keeps the pure ballistic behaviour; the carrier's own pass EV opts in, since a
+# forechecker jumping a breakout lane is exactly the overshoot case.
 static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		puck_speed_m_s: float, opponent_vels: Array[Vector3] = [],
-		opponent_caps: Array = []) -> float:
+		opponent_caps: Array = [], brake_clog: bool = false) -> float:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
 	var line_len_sq: float = dx * dx + dz * dz
@@ -1543,6 +1600,8 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 	var inv_len: float = 1.0 / line_len
 	var pvx: float = dx * inv_len * speed
 	var pvz: float = dz * inv_len * speed
+	var dirx: float = dx * inv_len
+	var dirz: float = dz * inv_len
 	var vel_count: int = opponent_vels.size()
 	var has_caps: bool = opponent_caps.size() == opponents.size()
 	var max_block: float = 0.0
@@ -1553,11 +1612,6 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		if i < vel_count:
 			vx = opponent_vels[i].x
 			vz = opponent_vels[i].z
-		var t_raw: float = _lane_closest_approach_t(
-				from.x, from.z, pvx, pvz, p.x, p.z, vx, vz)
-		if t_raw > seg_time:
-			continue  # trailing the play — never closest in flight
-		var t: float = maxf(t_raw, 0.0)
 		# This defender's real stick reach (Size) and lateral close speed (Speed).
 		var stick_reach: float = LANE_DEFENDER_REACH_M
 		var close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S
@@ -1566,8 +1620,22 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 			if caps != null:
 				stick_reach = caps.stick_reach
 				close_speed = LANE_LATERAL_FRACTION * caps.max_speed
-		var block: float = _lane_block_at(
-				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz, stick_reach, close_speed)
+		# Ballistic (coasting) block — 0 for a defender whose closest approach is
+		# only AFTER the puck reaches the receiver (trailing the play).
+		var block: float = 0.0
+		var t_raw: float = _lane_closest_approach_t(
+				from.x, from.z, pvx, pvz, p.x, p.z, vx, vz)
+		if t_raw <= seg_time:
+			block = _lane_block_at(from.x, from.z, pvx, pvz, maxf(t_raw, 0.0),
+					p.x, p.z, vx, vz, stick_reach, close_speed)
+		# Guided-interceptor floor: he can brake and clog a reachable crossing
+		# instead of coasting through it (only ADDS block; see _lane_brake_block).
+		if brake_clog:
+			var brake_block: float = _lane_brake_block(
+					from.x, from.z, dirx, dirz, line_len, speed,
+					p.x, p.z, stick_reach, close_speed)
+			if brake_block > block:
+				block = brake_block
 		if block > max_block:
 			max_block = block
 			if max_block >= 1.0:

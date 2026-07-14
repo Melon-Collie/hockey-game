@@ -1219,6 +1219,35 @@ func test_lane_clear_defender_drifting_away_blocks_less() -> void:
 	assert_gt(drifting, stationary, "a defender drifting off the lane blocks less")
 
 
+func test_lane_clear_brake_clog_floors_the_ballistic_overshoot() -> void:
+	# The ballistic dead-reckon lets a defender crossing the lane fast enough
+	# COAST straight through and read as clear — a lane a forechecker is visibly
+	# skating through scores wide open. brake_clog adds the guided-interceptor
+	# floor (he plants and clogs the crossing he'd otherwise sail past), fixing
+	# that tail. Crucially it only ever ADDS block — the flag never reads a lane
+	# CLEARER than the ballistic model, so it can't weaken a lane already blocked.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 12.0)
+	var d: Array[Vector3] = [Vector3(2.0, 0.0, 6.0)]          # 2 m off mid-lane
+	var fast: Array[Vector3] = [Vector3(-16.0, 0.0, 0.0)]     # skating hard through the lane
+	var ballistic: float = AIActionScoring.lane_clear(from, to, d, 18.0, fast)
+	var braked: float = AIActionScoring.lane_clear(from, to, d, 18.0, fast, [], true)
+	assert_gt(ballistic, 0.9,
+			"ballistic overshoot: a defender skating through the lane reads nearly clear")
+	assert_lt(braked, 0.7,
+			"brake_clog floors it — he plants and clogs the crossing")
+	# Monotonicity guard: across the whole closing sweep the flag never reads a
+	# lane clearer than ballistic (adds block only), and never re-opens to clear.
+	for vx: float in [0.0, -4.0, -10.0, -16.0, -22.0]:
+		var v: Array[Vector3] = [Vector3(vx, 0.0, 0.0)]
+		var base: float = AIActionScoring.lane_clear(from, to, d, 18.0, v)
+		var brk: float = AIActionScoring.lane_clear(from, to, d, 18.0, v, [], true)
+		assert_true(brk <= base + 0.0001,
+				"brake_clog never reads clearer than ballistic (vx=%.0f)" % vx)
+		assert_lt(brk, 0.7,
+				"a defender on the lane never reads clear under brake_clog (vx=%.0f)" % vx)
+
+
 func test_lane_clear_release_windup_projection_blocks_more() -> void:
 	# The carrier prices a PASS lane at RELEASE time, not decision time: every bot
 	# pass is a charged wrister that leaves the blade ~135 ms (BOT_WRISTER_LOOKAHEAD_S)
