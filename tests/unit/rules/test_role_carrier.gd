@@ -193,6 +193,38 @@ func test_ahead_man_on_a_blocked_path_is_not_credited_a_deep_drive() -> void:
 			"a man whose path forward is blocked isn't worth a pass over keeping the puck")
 
 
+func test_pass_is_devalued_when_the_receiver_is_blanketed() -> void:
+	# A teammate with a clean passing LANE but a defender skating stride-for-stride
+	# beside him — off the lane (lane_clear never sees it) and off his forward-to-
+	# net cone (his own shot pressure never sees it), yet close enough to strip the
+	# catch the instant it arrives. The reception-pressure term must price that:
+	# the feed to the blanketed man scores strictly LOWER than the identical feed
+	# to the same spot with no one draped on him.
+	var self_pos := Vector3(0.0, 0.0, 8.0)
+	var receiver := Vector3(0.0, 0.0, -4.0)
+
+	var clean: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, receiver],
+	]
+	var c_clean := AIRoleCarrier.new()
+	c_clean.decide(_make_ctx(self_pos, clean))
+	var clean_score: float = c_clean.debug_pass_score
+
+	var blanketed: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, receiver],
+			[9, 1, receiver + Vector3(1.8, 0.0, 0.0)],   # defender draped beside him
+	]
+	var c_cov := AIRoleCarrier.new()
+	c_cov.decide(_make_ctx(self_pos, blanketed))
+	var covered_score: float = c_cov.debug_pass_score
+
+	assert_gt(clean_score, 0.0, "the open feed has real value")
+	assert_lt(covered_score, clean_score,
+			"a blanketed receiver's feed is worth less — reception pressure is priced in")
+
+
 func test_open_receiver_in_a_poor_spot_is_not_over_credited() -> void:
 	# The drive-in credit must not turn EVERY open teammate into a must-pass: a man
 	# open but in a genuinely poor spot (wide, no drive that improves the look) stays
@@ -297,7 +329,7 @@ func test_light_pressure_keeps_the_puck_over_a_covered_backpass() -> void:
 func test_risky_backpass_deep_in_own_zone_loses_to_keeping_the_puck() -> void:
 	# Carrier deep in our own zone with a forechecker charging at it. The
 	# only pass option is a teammate even DEEPER — a low-upside backpass
-	# whose execution-miss mode (PASS_MISS_PROB, loss point past the
+	# whose execution-miss mode (pass_miss_prob, loss point past the
 	# receiver, right in front of our net) makes its EV worse than just
 	# keeping the puck and skating. Before the miss-risk term this
 	# backpass scored as risk-free (clear lane → zero cost) and won the
@@ -1140,6 +1172,24 @@ func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
 			"a staging cross-seam finisher gives a positive developing feed")
 
 
+func test_developing_hold_self_extinguishes_as_it_is_held() -> void:
+	# Upper-bound guard for READ_VALIDITY_TAU_S: the reason to HOLD for a developing
+	# feed decays as the hold drags on (delay_discount(_hold_elapsed_s)), so a wait
+	# that never pays off self-terminates rather than dithering forever. A longer
+	# hold is worth strictly less than a fresh one against the SAME developing feed.
+	# (The parameter-level patient-edge guard is
+	# test_delay_discount_bounds_patience in test_ai_action_scoring.)
+	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	var feed: float = carrier._best_developing_feed(ctx)
+	assert_gt(feed, 0.0, "sanity: there is a developing feed to hold for")
+	var fresh_hold: float = feed * AIActionScoring.delay_discount(0.0)
+	var stale_hold: float = feed * AIActionScoring.delay_discount(1.5)
+	assert_lt(stale_hold, fresh_hold,
+			"holding longer is worth less — the wait self-extinguishes, no dithering")
+
+
 func test_developing_feed_invisible_without_the_cognition_gate() -> void:
 	# Same staging finisher the test above values positively — but a tier that
 	# doesn't hold for developing plays (Easy) sees nothing: it plays only what
@@ -1972,17 +2022,20 @@ func test_pass_option_prefers_the_spot_that_reopens_the_lane() -> void:
 
 
 func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
-	# Double-team pinch in the OZ: both forward diagonals closing, every
-	# netward spot covered, a teammate open wide whose lane the pinch cuts
-	# from HERE. The retreat ring + pass option make backing out the winning
-	# carry — the space it buys reopens the lane — instead of the old
-	# pacified grind against the pinch.
+	# Double-team pinch in the OZ: a GENUINE wall dead ahead (the two defenders
+	# tight together, no splittable seam to the slot), every netward spot covered,
+	# a teammate open wide whose lane the pinch cuts from HERE. The retreat ring +
+	# pass option make backing out the winning carry — the space it buys reopens
+	# the lane — instead of the old pacified grind against the pinch. (A wall with
+	# a real 3.6 m gap up the middle is now correctly SPLIT to the slot instead —
+	# see test_carrier_splits_a_beatable_gap_to_the_slot — so the peel-out case
+	# has to be an unsplittable wall.)
 	var self_pos := Vector3(0.0, 0.0, -18.0)               # OZ, attacking -Z
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],        # open man, lane cut from here
-			[3, 1, Vector3(-1.8, 0.0, -19.6)],              # set wall (a charging pinch
-			[4, 1, Vector3(1.8, 0.0, -19.6)],               # would vacate ice to cut into)
+			[3, 1, Vector3(-0.9, 0.0, -19.6)],              # tight wall dead center —
+			[4, 1, Vector3(0.9, 0.0, -19.6)],               # no seam to split to the slot
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
@@ -1993,6 +2046,53 @@ func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
 			"no fire through the pinch — keep the puck")
 	assert_gt(c.last_carry_anchor.z, self_pos.z + 2.0,
 			"peels OUT of the pinch (a real backing-out, not a 3 m shuffle)")
+
+
+func test_carrier_splits_a_beatable_gap_to_the_slot() -> void:
+	# Same OZ setup as the pinch above, but the two defenders leave a real gap up
+	# the middle (a splittable seam). With the OZ possession floor riding
+	# slot_progress, the slot-ward drive out-scores backing out — the carrier
+	# attacks the seam toward the net instead of pacifying. This is the behaviour
+	# the goal-line-drift feedback asked for.
+	var self_pos := Vector3(0.0, 0.0, -18.0)               # OZ, attacking -Z
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],
+			[3, 1, Vector3(-1.8, 0.0, -19.6)],              # 3.6 m gap up the middle
+			[4, 1, Vector3(1.8, 0.0, -19.6)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
+			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c.last_carry_anchor.z, self_pos.z - 1.0,
+			"drives the seam toward the net rather than backing out of it")
+
+
+func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
+	# The reported bug: enter the zone down the wing with a defender on the inside,
+	# and the carrier drifts down the boards to the dead-angle goal-line corner and
+	# does nothing — because the old, higher flat possession floor made the safe
+	# corner read as good as the slot. With the floor dropped to a noise epsilon,
+	# pure xG drives: the slot reads high and the dead-angle corner reads ~0, so the
+	# carrier works toward the net instead of parking at the goal line.
+	var self_pos := Vector3(8.0, 0.0, -18.0)               # wing entry, OZ
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(3.0, 0.0, -20.0)],              # defender on the inside lane
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
+			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	# Not parked down at the goal line: the winning carry keeps a real shooting
+	# angle, well up off the dead corner the flat floor used to lure it to.
+	assert_lt(absf(c.last_carry_anchor.z), GameRules.GOAL_LINE_Z - 3.0,
+			"the carry stays off the goal line instead of drifting to the dead corner")
+	assert_lte(absf(c.last_carry_anchor.x), self_pos.x + 0.01,
+			"and works toward the middle, not further into the boards")
 
 
 # ─── fake-then-cut deke mirror ────────────────────────────────────────────────

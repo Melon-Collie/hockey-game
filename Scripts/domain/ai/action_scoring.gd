@@ -645,16 +645,34 @@ const MIN_TRAVEL_SPEED_M_S: float = 1.0
 # PICK_ACTION_PERIOD_TICKS physics ticks and treats
 # CARRY as a fourth competing option scored as
 #
-#   carry_score = score_at(destination) × discount(time_to_destination)
+#   carry_score = score_at(destination) × delay_discount(time_to_destination)
 #
-# CARRY_DELAY_DISCOUNT_PER_SEC — per-second decay applied to a future
-# action's value. 0.7 / sec gives a ~2-second half-life. Reflects
-# compounding uncertainty over time: the further out an action, the
-# less sure we are it'll unfold as scored, so its expected value
-# decays. Applies uniformly to carry travel time and pass flight
-# time. Raise toward 0.85 to make bots more patient on long-horizon
-# plans; lower toward 0.55 to prioritise immediate actions over
-# distant ones more aggressively.
+# ── The delay discount (see delay_discount / READ_VALIDITY_TAU_S below) ────────
+# A future action (a carry that arrives in `t` s, a pass in flight, a spot whose
+# shot must still be skated to) is worth less than the same value NOW, because the
+# tactical read it was scored against decays over time: a defender commits, a lane
+# closes, the puck situation turns. This is the survival function of a
+# CONSTANT-HAZARD process — at each instant a fixed probability the read stops
+# holding — so it is exactly geometric, exp(-t / τ). It is NOT a shaped curve; the
+# ONLY free parameter is the hazard timescale τ = READ_VALIDITY_TAU_S, the mean
+# time a read stays roughly valid. (The old per-second form pow(0.7, t) was the
+# same model written the opaque way — 0.7/s is exp(-1/2.8 s), i.e. τ ≈ 2.8 s.)
+#
+# τ is an honest AGGREGATE, not a derived quantity: plausible physical
+# decorrelation times span ~0.4 s (a defender closing a stick-width) to a
+# rush-scale several seconds, so there is no single number to derive it from — it
+# is the one "how much do I trust the near future" feel dial, now stated as the
+# physical quantity it represents rather than a bare rate. Raise it for more
+# patient play (more developing feeds / cross-ice / hold-for-the-backdoor), lower
+# it for more direct, take-what's-there play. Applied uniformly to every future
+# action so an on-route step trades travel time for realization decay one-for-one.
+#
+# Calibration caveat (from the value sweep): the unit suite guards the IMPATIENT
+# edge (breakouts / developing feeds / walkouts start failing below ~0.7/s ↔
+# τ ≈ 2.8 s). The PATIENT edge is pinned at the parameter level by
+# test_delay_discount_bounds_patience (patience can't be cranked to "the future
+# is free") — but whether a longer τ PLAYS better is a feel judgment, a playtest
+# call the suite can't settle.
 #
 # ACTION_HYSTERESIS_MARGIN_FRAC — once a fire intent is set, that
 # intent's (positive) score is scaled by (1 + this) when re-scored: a
@@ -673,8 +691,20 @@ const MIN_TRAVEL_SPEED_M_S: float = 1.0
 # free to switch to fire as soon as fire scores higher. Raise toward
 # 0.30 if intent flickers visibly; lower toward 0.05 if intent feels
 # too sticky.
-const CARRY_DELAY_DISCOUNT_PER_SEC: float = 0.7
+# Mean seconds a tactical read stays roughly valid (the hazard timescale above).
+# τ ≈ 4.5 s ↔ a ~0.80 per-second discount — raised from the prior τ ≈ 2.8 s
+# (0.70/s) toward more patient, developing-play-friendly carrying. See the sweep
+# caveat above: this is the patient side, judged by feel, not by the suite.
+const READ_VALIDITY_TAU_S: float = 4.5
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
+
+
+# Value multiplier for a play `delay_s` seconds in the future — constant-hazard
+# survival, exp(-delay_s / READ_VALIDITY_TAU_S). One chokepoint for the delay
+# discount (see the block above): every future-action scorer routes through here
+# so the entropy model lives in exactly one place. Allocation-free.
+static func delay_discount(delay_s: float) -> float:
+	return exp(-maxf(delay_s, 0.0) / READ_VALIDITY_TAU_S)
 
 
 # Geometric shot danger in [0, 1]: the best of the five goalie holes, seen from
@@ -1126,6 +1156,42 @@ static func score_shoot(
 	return shot_quality * lane * pressure_factor
 
 
+# ── Predicted post-seal (RVH/VH) — the ONE xG model, consistent inputs ─────────
+# score_shoot is the single xG model. The only reason it gave two answers for the
+# same spot was its INPUTS: the shoot-now eval reads the LIVE goalie's seal state
+# (GoalieNetworkState.post_seal_x_sign) and threads it, while predictive callers
+# (carry candidates, pass receivers) left the seal at its unsealed default — so a
+# shot origin down at a sharp angle scored a PHANTOM far-side open net, and the
+# bot would carry to that "shot" only to meet a live keeper already walled at the
+# post (the "carries there, never shoots" bug). This predicts the seal a
+# competent keeper WILL adopt at a spot, from the SAME geometric trigger the live
+# goalie uses (GoalieBehaviorRules.is_puck_in_defensive_zone), so the predictive
+# paths feed the model the same coverage the shoot-now path reads live.
+#
+# Mirrors GoalieController.zone_post_z / rvh_early_angle (the RVH/VH trigger):
+# within this depth of the goal line AND past this bearing off the goal normal,
+# the keeper is post-sealed. Deliberately narrow (2 m, 80°) — it touches only the
+# wraparound/extreme-corner region, never a normal slot or mid look.
+const GOALIE_SEAL_ZONE_POST_Z_M: float = 2.0
+const GOALIE_SEAL_ANGLE_RAD: float = deg_to_rad(80.0)
+
+
+# Predicted post-seal x-sign for a shot from `shooter`: the side (relative to goal
+# center) a keeper would seal, or 0.0 for the common in-front look where no seal
+# applies. Only the IN-FRONT sharp angle is sealed here (VH — tall); a release
+# behind the goal line is already zeroed by score_shoot's forward guard, so it
+# needs no seal. Pure float, allocation-free — safe on the per-candidate path.
+static func derive_post_seal_x_sign(shooter: Vector3, attacking_goal: Vector3) -> float:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
+	if forward < 0.001 or forward > GOALIE_SEAL_ZONE_POST_Z_M:
+		return 0.0
+	var lateral: float = absf(shooter.x - attacking_goal.x)
+	if atan2(lateral, maxf(forward, 0.01)) < GOALIE_SEAL_ANGLE_RAD:
+		return 0.0
+	return signf(shooter.x - attacking_goal.x)
+
+
 # Point-blank jam distance: the closest the puck realistically gets to a set goalie
 # before his body/pads stop it. A physical measurement (skate + pad depth), not a
 # tuning knob — it just keeps the shooter strictly in FRONT of the keeper so the
@@ -1309,9 +1375,16 @@ static func score_pass(
 	# off-puck staging roles pass it so they prize the back-door spot. Default
 	# 0.0 keeps the position-only behaviour for callers that don't (SUPPORT).
 	# Receiver shot speed stays the league default (cross-player; no teammate caps).
+	# Predicted post-seal for the receiver's spot (derive_post_seal_x_sign): a feed
+	# to a sharp near-goal-line angle faces the RVH/VH wall a competent keeper
+	# adopts, so this leaf reads the same sealed coverage the carrier's own
+	# _score_at does — no phantom dead-angle receiver value, whether score_pass is
+	# a defensive threat read or an offensive developing-feed one.
+	var seal_x: float = derive_post_seal_x_sign(receiver, attacking_goal)
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
+			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor, [], -1.0, false,
+			seal_x, seal_x != 0.0)
 	return lane * receiver_shot
 
 
@@ -1693,9 +1766,8 @@ static func position_potential(
 # Realization discount for position_potential when it prices a CARRY /
 # receiver destination in the carrier's expected-value compete: potential
 # is FUTURE value — its promise (a real shot) is only cashed by skating
-# from `pos` to the slot — so it must pay the same per-second delay
-# discount (CARRY_DELAY_DISCOUNT_PER_SEC) that every other future action
-# in the model pays, over that remaining travel time.
+# from `pos` to the slot — so it must pay the same delay_discount that
+# every other future action in the model pays, over that remaining travel time.
 #
 # Without this, the carrier's stand-still candidate held its potential
 # UNDECAYED while every movement candidate paid decay over its travel
@@ -1713,7 +1785,7 @@ static func position_potential(
 static func potential_realization_discount(pos: Vector3,
 		attacking_goal: Vector3) -> float:
 	var travel_dist: float = maxf(0.0, pos.distance_to(attacking_goal) - SLOT_RADIUS_M)
-	return pow(CARRY_DELAY_DISCOUNT_PER_SEC, travel_dist / SKATER_REF_SPEED_M_S)
+	return delay_discount(travel_dist / SKATER_REF_SPEED_M_S)
 
 
 # ── Dumping ───────────────────────────────────────────────────────────────────
@@ -1841,8 +1913,14 @@ static func threat_surface_shoot(
 	if not in_offensive_zone(opp_pos, our_net) \
 			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
 		return positional
+	# Predicted post-seal for the opponent's spot: a dead-angle look at OUR net is
+	# walled by our keeper's RVH/VH the same way the offensive read models it, so
+	# the defensive threat matches the real coverage (no phantom sharp-angle threat
+	# our defenders would over-respect).
+	var seal_x: float = derive_post_seal_x_sign(opp_pos, our_net)
 	var shoot: float = score_shoot(
-			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
+			WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal_x, seal_x != 0.0)
 	return maxf(shoot, positional)
 
 
@@ -1931,12 +2009,46 @@ static func turnover_cost(
 # chance in front of our net. No zone flag, no backpass heuristic — the
 # geometry does it.
 #
-# Tuning: PROB up → bots demand more upside before passing anywhere the
-# loss would hurt (fewer own-zone touch-passes); down → closer to the old
-# interception-only model (0.0 = identical). OVERSHOOT is the physical
-# "how far past the receiver does a missed pass die" scale, not a knob.
-const PASS_MISS_PROB: float = 0.1
+# NOT a flat rate — pass_miss_prob() DERIVES it (the flat constant was a magic
+# number in an evaluator, exactly what the shot window model avoids). Two
+# grounded parts:
+#   · The bot solves its LAUNCH so the puck ARRIVES catchable (at
+#     PASS_TARGET_CLOSING_M_S, under the any-angle reception ceiling), so
+#     reception DIFFICULTY (closing speed vs blade angle) is designed OUT of its
+#     own passes — it never fires a feed that arrives as a knock-down. The
+#     residual is therefore hand + luck, not the catch.
+#   · PASS_MISS_BASE_PROB — an irreducible floor (a bounce, a skate, ice
+#     chatter; no pass is 100%), plus HAND execution: the release-direction error
+#     (BotSkillProfile.pass_aim_error_rad) projected to the tape over the pass
+#     distance, which misses when that lateral spread exceeds the receiver's
+#     catch envelope (its Hands handle reach). Same uniform-error model the shot
+#     window uses.
+# So miss now scales with the passer's Hands-tier AND the pass length — a Hard
+# bot's short feed sits at the base, an Easy bot's cross-ice stretch is genuinely
+# risky — instead of one flat rate for every pass at every tier, and the
+# backpass suppression survives via the base floor (even a perfect short feed
+# keeps a small DZ miss cost). OVERSHOOT is the physical "how far past the
+# receiver does a missed pass die" scale, not a knob.
+const PASS_MISS_BASE_PROB: float = 0.04
 const PASS_MISS_OVERSHOOT_M: float = 3.0
+
+
+# Per-pass execution-miss probability (see the block above). `aim_error_rad` is
+# the passer's release-direction error — 0 for the perfect baseline and the
+# cross-player threat model (we don't know another player's hand), collapsing to
+# the base floor. `catch_radius` is how far off the tape the receiver can still
+# corral the feed (its Hands handle reach). Uniform-error model: the base floor
+# compounded with the fraction of the ±(aim_error × distance) lateral spread that
+# lands outside the catch envelope.
+static func pass_miss_prob(distance: float, aim_error_rad: float,
+		catch_radius: float = EVADE_CARRY_HANDLE_M) -> float:
+	var spread: float = maxf(aim_error_rad, 0.0) * maxf(distance, 0.0)
+	var execution: float = 0.0
+	if spread > 0.0001:
+		execution = clampf(
+				(spread - catch_radius) / spread, 0.0, 1.0)
+	return clampf(
+			1.0 - (1.0 - PASS_MISS_BASE_PROB) * (1.0 - execution), 0.0, 1.0)
 
 
 # Loss point for the execution-miss mode of a pass: the puck sails past
@@ -2020,16 +2132,26 @@ static func board_gap_m(point: Vector3) -> float:
 static func reach_clearance(
 		puck_point: Vector3, time: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> float:
+		opponent_caps: Array = [], maneuver_time: float = -1.0) -> float:
 	var n: int = opponents.size()
 	if n == 0 or opponent_vels.size() != n:
 		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
+	# The body rides its momentum over `time` (proj below); the STICK additionally
+	# maneuvers off that line over `maneuver_time`, reaction-gated. They default to
+	# equal (the carry/hold reads) and differ only for the PASS-RECEPTION read: a
+	# defender's body converges over the whole pass flight (`time`), but his final
+	# stick adjustment onto the catch is the short reception window
+	# (EVADE_HORIZON_S). Using the full flight for the maneuver term too would
+	# balloon the reach far past a real stick lunge and double-count the in-flight
+	# interception the lane model already prices.
+	if maneuver_time < 0.0:
+		maneuver_time = time
 	# maneuver = t_factor × accel: how far a defender redirects its stick off its
-	# momentum line by `time`, reaction-gated. Per-opponent when caps are supplied —
+	# momentum line, reaction-gated. Per-opponent when caps are supplied —
 	# a defender's Agility (max_accel) sets how far it can lunge, its Size
 	# (blade_span) how far its stick touches. Empty caps → league constants for all
 	# (every non-attribute caller), reproducing the prior single-reach behaviour.
-	var t_factor: float = 0.5 * pow(maxf(0.0, time - EVADE_REACTION_S), 2.0)
+	var t_factor: float = 0.5 * pow(maxf(0.0, maneuver_time - EVADE_REACTION_S), 2.0)
 	var has_caps: bool = opponent_caps.size() == n
 	var default_reach: float = t_factor * MANEUVER_ACCEL_M_S2 + EVADE_STICK_REACH_M
 	var worst: float = INF
@@ -2050,7 +2172,14 @@ static func reach_clearance(
 
 
 # Map clearance (metres) to a [0, 1] possession safety: 0 inside a defender's
-# reach, ramping to 1 at a full stick of clear room.
+# reach, ramping to 1 at a full stick of clear room. Deliberately LINEAR: it is
+# the pessimistic half of a compensating pair with reach_clearance's optimistic
+# BEST-CASE defender reach — a logistic CDF (grounded as reach uncertainty) was
+# tried and broke 8 tests, all toward over-confidence under pressure (tight spots
+# reading safe, forced drives, no cycling), confirming the linearity isn't
+# independently miscalibrated. A truly honest version would make reach_clearance
+# nominal (not best-case) AND use the CDF as a pair; that's a broad recalibration
+# of the most-used AI primitive, not a map swap.
 static func clearance_to_safety(clearance: float) -> float:
 	return clampf(clearance / EVADE_SAFE_MARGIN_M, 0.0, 1.0)
 

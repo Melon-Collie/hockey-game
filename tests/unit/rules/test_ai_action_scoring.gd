@@ -815,13 +815,31 @@ func test_realization_discount_decays_with_distance() -> void:
 	assert_lt(far_d, near_d, "deeper positions pay a deeper discount")
 
 
+func test_delay_discount_bounds_patience() -> void:
+	# The delay discount is constant-hazard survival, exp(-t / READ_VALIDITY_TAU_S):
+	# 1 at t=0, strictly decreasing. The UPPER-BOUND guard the value sweep was
+	# missing — patience must stay bounded, so a multi-second play is meaningfully
+	# discounted and τ can't be cranked toward "the future is free" (dithering).
+	assert_almost_eq(AIActionScoring.delay_discount(0.0), 1.0, 0.0001,
+			"no delay, no discount")
+	assert_lt(AIActionScoring.delay_discount(1.0), 1.0, "a future play is worth less")
+	assert_lt(AIActionScoring.delay_discount(2.0), AIActionScoring.delay_discount(1.0),
+			"further out is worth strictly less")
+	assert_lt(AIActionScoring.delay_discount(3.0), 0.62,
+			"a 3 s-out play is substantially discounted — patience stays bounded")
+	# Sanity: the geometric identity the per-second reading rests on — the
+	# discount over 2 s equals the 1 s discount squared.
+	assert_almost_eq(AIActionScoring.delay_discount(2.0),
+			AIActionScoring.delay_discount(1.0) * AIActionScoring.delay_discount(1.0),
+			0.0001, "constant-hazard: memoryless, so it compounds geometrically")
+
+
 func test_realization_discount_matches_delay_discount_currency() -> void:
-	# The discount IS the standard per-second delay discount over the
-	# remaining travel time at reference speed — same currency as every
-	# other future action in the carrier's EV model.
+	# The discount IS the standard delay discount over the remaining travel time
+	# at reference speed — same currency (delay_discount) as every other future
+	# action in the carrier's EV model.
 	var pos := Vector3(0.0, 0.0, 8.65)  # 18 m from goal → 12 m past slot edge
-	var expected: float = pow(
-			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC,
+	var expected: float = AIActionScoring.delay_discount(
 			12.0 / AIActionScoring.SKATER_REF_SPEED_M_S)
 	assert_almost_eq(
 			AIActionScoring.potential_realization_discount(pos, GOAL),
@@ -1399,9 +1417,45 @@ func test_turnover_cost_self_localizes_by_geometry() -> void:
 			"own-zone turnover costs more than a neutral-ice one at equal probability")
 
 
+# ── pass_miss_prob: derived execution-miss probability ────────────────────────
+# The miss chance is no longer a flat constant: it's the irreducible base floor
+# compounded with the passer's hand error projected to the tape over the pass
+# distance, vs the receiver's catch envelope.
+
+func test_pass_miss_prob_is_the_base_floor_for_a_perfect_hand() -> void:
+	# Zero aim error (the perfect baseline / cross-player threat model) → only the
+	# irreducible base survives, at any distance.
+	assert_almost_eq(AIActionScoring.pass_miss_prob(4.0, 0.0),
+			AIActionScoring.PASS_MISS_BASE_PROB, 0.0001, "no hand error → base floor")
+	assert_almost_eq(AIActionScoring.pass_miss_prob(25.0, 0.0),
+			AIActionScoring.PASS_MISS_BASE_PROB, 0.0001, "distance alone doesn't miss")
+
+
+func test_pass_miss_prob_grows_once_the_spread_outruns_the_catch_envelope() -> void:
+	# A reachable off-target feed is adjusted to (spread ≤ catch envelope) and
+	# stays at the base — realistic: clean-lane passes to a reachable spot complete
+	# almost always. Only when the spread OUTRUNS the catch reach (a long and/or
+	# wobbly feed) does execution risk climb.
+	var reachable: float = AIActionScoring.pass_miss_prob(15.0, 0.04)   # spread 0.6 < 0.9
+	var long_feed: float = AIActionScoring.pass_miss_prob(30.0, 0.04)   # spread 1.2 > 0.9
+	var wobbly_feed: float = AIActionScoring.pass_miss_prob(30.0, 0.055)
+	assert_almost_eq(reachable, AIActionScoring.PASS_MISS_BASE_PROB, 0.0001,
+			"a reachable feed is adjusted to → base only")
+	assert_gt(long_feed, reachable, "a stretch feed spreads the error past the reach → misses more")
+	assert_gt(wobbly_feed, long_feed, "a wobblier hand at the same range misses more")
+
+
+func test_pass_miss_prob_tighter_catch_envelope_misses_more() -> void:
+	# A receiver with less reach (lower Hands handle) corrals fewer off-target
+	# feeds, so the same long pass misses more.
+	var wide: float = AIActionScoring.pass_miss_prob(30.0, 0.04, 1.2)
+	var tight: float = AIActionScoring.pass_miss_prob(30.0, 0.04, 0.6)
+	assert_gt(tight, wide, "a shorter catch envelope corrals fewer off-target feeds")
+
+
 # ── pass_miss_loss_point: execution-miss loss location ────────────────────────
-# A lane-clear pass can still miss on execution (PASS_MISS_PROB); the
-# puck dies PASS_MISS_OVERSHOOT_M past the receiver on the pass line.
+# A lane-clear pass can still miss on execution; the puck dies
+# PASS_MISS_OVERSHOOT_M past the receiver on the pass line.
 
 func test_pass_miss_loss_point_overshoots_past_receiver() -> void:
 	var from := Vector3(0.0, 0.0, 20.0)
@@ -1429,9 +1483,9 @@ func test_pass_miss_cost_self_localizes_by_rink_end() -> void:
 	var opp_end_loss: Vector3 = AIActionScoring.pass_miss_loss_point(
 			Vector3(2.0, 0.0, -20.0), Vector3(-2.0, 0.0, -23.0))
 	var own_end_cost: float = AIActionScoring.turnover_cost(
-			own_end_loss, AIActionScoring.PASS_MISS_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
+			own_end_loss, AIActionScoring.PASS_MISS_BASE_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
 	var opp_end_cost: float = AIActionScoring.turnover_cost(
-			opp_end_loss, AIActionScoring.PASS_MISS_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
+			opp_end_loss, AIActionScoring.PASS_MISS_BASE_PROB, OUR_NET, OUR_GOALIE, NET_HW, [])
 	assert_gt(own_end_cost, opp_end_cost * 4.0,
 			"a missed pass in our own end costs multiples of the same miss in theirs")
 
@@ -1585,6 +1639,88 @@ func test_five_hole_gap_rule_mirrors_pad_geometry() -> void:
 	assert_almost_eq(GoalieBehaviorRules.five_hole_gap_m(true, 0.0), 0.0, 0.001)
 	# Down mid-slide (0.18): the leak is twice the openness.
 	assert_almost_eq(GoalieBehaviorRules.five_hole_gap_m(true, 0.18), 0.36, 0.001)
+
+
+# ─── Predicted post-seal (the "one model, consistent inputs" fix) ──────────────
+
+func test_derive_post_seal_only_fires_in_the_sharp_near_line_zone() -> void:
+	# The predictor matches the live goalie's RVH/VH trigger: within ~2 m of the
+	# goal line AND past ~80° off the goal normal. A dead-angle corner seals; a
+	# normal slot / mid look does not; a sharp-but-in-tight shot still short of the
+	# extreme angle does not.
+	var goal := Vector3(0, 0, -26.65)
+	assert_ne(AIActionScoring.derive_post_seal_x_sign(Vector3(8, 0, -25.5), goal), 0.0,
+			"dead-angle corner (1.15 m out, ~82°) is sealed")
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(0, 0, -20.65), goal), 0.0,
+			"the slot is never sealed")
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(7, 0, -18.0), goal), 0.0,
+			"an off-angle mid look (8.6 m out) is not sealed")
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(4, 0, -24.0), goal), 0.0,
+			"a sharp but in-tight look (2.65 m out, ~56°) is a real shot, not a seal")
+	# The seal side is the shooter's side of the goal center.
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(-8, 0, -25.5), goal), -1.0,
+			"seals the side the shooter is on")
+
+
+func test_predicted_seal_kills_the_phantom_dead_angle_shot() -> void:
+	# The bug: a carry candidate / receiver at the dead-angle corner scored a
+	# phantom far-side open net (the predictive path fed score_shoot an unsealed
+	# keeper), so a bot would carry there and never shoot. With the predicted seal
+	# threaded, the same model reads the wall the live keeper actually adopts.
+	var goal := Vector3(0, 0, -26.65)
+	var corner := Vector3(8, 0, -25.5)
+	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, goal.z + 1.3), goal, corner)
+	var seal: float = AIActionScoring.derive_post_seal_x_sign(corner, goal)
+	var unsealed: float = AIActionScoring.score_shoot(
+			corner, goal, goalie, GameRules.NET_HALF_WIDTH, [] as Array[Vector3])
+	var sealed: float = AIActionScoring.score_shoot(
+			corner, goal, goalie, GameRules.NET_HALF_WIDTH, [] as Array[Vector3],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal, seal != 0.0)
+	assert_gt(unsealed, 0.05, "sanity: the unsealed read is the phantom the bug scored")
+	assert_almost_eq(sealed, 0.0, 0.001, "the predicted seal walls the dead-angle look")
+
+
+func test_score_pass_walls_a_dead_angle_receiver() -> void:
+	# The seal predictor now lives inside score_pass too, so every predictive pass
+	# read (defensive threat surfaces, off-puck staging, developing feeds) walls a
+	# feed to the dead-angle wraparound instead of crediting the phantom open net.
+	# A slot receiver on an equally clear lane stays a real feed.
+	var shooter := Vector3(6, 0, 20.0)
+	var corner := Vector3(8, 0, 25.5)      # dead angle, in the seal zone
+	var slot := Vector3(0, 0, 20.65)       # a real look
+	var g_corner: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, GOAL.z - 1.3), GOAL, corner)
+	var g_slot: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, GOAL.z - 1.3), GOAL, slot)
+	var no_opps: Array[Vector3] = []
+	assert_almost_eq(AIActionScoring.score_pass(
+			shooter, corner, GOAL, g_corner, GameRules.NET_HALF_WIDTH, no_opps),
+			0.0, 0.001, "the dead-angle feed is walled by the seal")
+	assert_gt(AIActionScoring.score_pass(
+			shooter, slot, GOAL, g_slot, GameRules.NET_HALF_WIDTH, no_opps),
+			0.05, "the slot feed on an equally clear lane is a real threat")
+
+
+func test_threat_surface_shoot_seals_a_dead_angle_opponent() -> void:
+	# Defensive symmetry: an opponent at the dead-angle wraparound of OUR net is
+	# walled by our keeper, so the threat surface reads the seal too. At this spot
+	# the unsealed phantom shot (~0.29) dominates the positional read (~0.14) — so
+	# without the seal our defenders would over-respect a shot the keeper has
+	# already sealed. Sealed, only the positional fallback remains.
+	var opp := Vector3(5, 0, 25.8)         # in the seal zone, phantom-dominant
+	var g: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, GOAL.z - 1.3), GOAL, opp)
+	var no_opps: Array[Vector3] = []
+	var unsealed_shot: float = AIActionScoring.score_shoot(
+			opp, GOAL, g, GameRules.NET_HALF_WIDTH, no_opps)
+	var positional: float = AIActionScoring.position_potential(opp, GOAL, no_opps)
+	var surface: float = AIActionScoring.threat_surface_shoot(
+			opp, GOAL, g, GameRules.NET_HALF_WIDTH, no_opps)
+	assert_gt(unsealed_shot, positional,
+			"sanity: unsealed, the phantom shot dominates the positional read here")
+	assert_almost_eq(surface, positional, 0.001,
+			"sealed → the phantom shot is gone, only the positional fallback remains")
 
 
 # ─── Post-seal stances (VH / RVH) — the pose IS the coverage ───────────────

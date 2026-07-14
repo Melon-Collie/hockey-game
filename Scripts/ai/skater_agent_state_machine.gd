@@ -1712,6 +1712,9 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# The scoring/aim spread budgets the SHOT error — that's the budget the
 	# release that matters (a scored shot) is actually sampled on.
 	ctx.self_aim_spread_rad = _shot_aim_error_rad
+	# The pass counterpart: this bot's release-direction error on PASSES, which
+	# the derived pass-miss probability projects to the tape over the pass length.
+	ctx.self_pass_aim_error_rad = _pass_aim_error_rad
 	# The shot evals give the goalie this much extra tracking time — the
 	# release's own timing slop (see _shoot_release_hold_ticks).
 	ctx.shot_timing_error_s = _shot_timing_error_s
