@@ -2462,7 +2462,13 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	#
 	# PASS_PRESSED: brake. Pass leads aim from a held spot.
 	if _intended_action == State.CARRY:
-		_apply_steering(input, snapshot, self_pos, _last_carry_anchor)
+		# Velocity-matched seek (match speed = our top speed): the carry anchor
+		# pull cancels cross-momentum instead of pure-seeking, so a carrier
+		# drifting cross-ice redirects onto a central carry point rather than
+		# orbiting past it (see AISteering velocity-matched seek). Skated through
+		# at pace — no deceleration.
+		_apply_steering(input, snapshot, self_pos, _last_carry_anchor,
+				false, _self_max_speed)
 		# Discrete "deke moment" on top of continuous body steering:
 		# brief perpendicular cut away from an imminent poke threat.
 		# Pre-aim states (SHOOT/PASS pending) skip this — they have
@@ -3587,7 +3593,7 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # callers (carry steps, puck chase, check commits, tag-up) leave it false —
 # they either re-pick the anchor continuously or WANT to arrive at speed.
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
-		anchor: Vector3, arrive: bool = false) -> void:
+		anchor: Vector3, arrive: bool = false, velocity_match_speed: float = 0.0) -> void:
 	# Standard potential-field steering with brake-pivot.
 	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
 	# instead of re-partitioning snapshot.skater_states every physics tick.
@@ -3650,11 +3656,21 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	if carrier == _peer_id:
 		opp_repel = AISteering.OPPONENT_REPEL_WEIGHT_CARRY
 		steer_vels = _scratch_opponent_steer_vels
+	# Velocity-matched seek to the anchor when the caller opts in
+	# (velocity_match_speed > 0 — the carrier path): the anchor pull cancels
+	# cross-momentum so the bot redirects onto the line instead of orbiting past
+	# it. Read our own velocity from the snapshot for the match.
+	var match_self_vel: Vector3 = Vector3.ZERO
+	if velocity_match_speed > 0.0:
+		var self_st: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+		if self_st != null:
+			match_self_vel = self_st.velocity
 	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
-			opp_repel, steer_vels, _scratch_teammate_steer_vels)
+			opp_repel, steer_vels, _scratch_teammate_steer_vels,
+			match_self_vel, velocity_match_speed)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), stopping hard beats carving a wide arc.

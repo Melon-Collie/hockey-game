@@ -229,6 +229,53 @@ func test_teammate_zero_velocity_matches_point_repel() -> void:
 	assert_almost_eq(v_zero.y, v_point.y, 0.001, "zero-velocity sweep = point repel (y)")
 
 
+# ── Velocity-matched seek ────────────────────────────────────────────────────
+# With velocity_match_speed supplied the anchor pull cancels cross-momentum so
+# the bot redirects ONTO the line to the anchor instead of pure-seeking (which
+# orbits/overshoots). No deceleration ramp — carry waypoints are driven at pace.
+
+const MATCH_SPEED: float = 9.0
+
+
+func _match_move(self_pos: Vector3, anchor: Vector3, self_vel: Vector3) -> Vector2:
+	return AISteering.compute_move_vector(
+			self_pos, anchor, NO_OPS, NO_OPS, NO_LANE, NO_LANE, RINK_X, RINK_Z,
+			AISteering.OPPONENT_REPEL_WEIGHT, NO_OPS, NO_OPS, self_vel, MATCH_SPEED)
+
+
+func test_velocity_match_redirects_cross_momentum_toward_the_spot() -> void:
+	# Anchor dead ahead (+Z), but the carrier is drifting hard cross-ice (+X).
+	# A pure seek points straight +Z and ignores the drift; the velocity-matched
+	# steer adds a -X component to CANCEL the cross-momentum and get onto the line.
+	var anchor := Vector3(0, 0, 8)
+	var drift := Vector3(8, 0, 0)
+	var seek := _move(Vector3.ZERO, anchor)                     # pure seek
+	var matched := _match_move(Vector3.ZERO, anchor, drift)     # velocity-matched
+	assert_almost_eq(seek.x, 0.0, 0.02, "pure seek ignores the cross-drift")
+	assert_lt(matched.x, -0.2, "velocity match steers against the drift onto the line")
+	assert_gt(matched.y, 0.0, "still advancing toward the anchor")
+
+
+func test_velocity_match_does_not_decelerate_into_a_near_waypoint() -> void:
+	# Closing straight at a NEAR anchor (2 m) below top speed: with no slowing
+	# ramp the steer keeps driving forward (waypoints are skated through), where
+	# a decelerating arrival would brake into it.
+	var anchor := Vector3(0, 0, 2)
+	var closing := Vector3(0, 0, 6)   # toward the anchor, under MATCH_SPEED
+	var matched := _match_move(Vector3.ZERO, anchor, closing)
+	assert_gt(matched.y, 0.1, "drives through the waypoint — no deceleration ramp")
+
+
+func test_velocity_match_matches_seek_on_a_straight_approach() -> void:
+	# Velocity already pointing at the anchor below top speed: nothing to cancel,
+	# so the steer is the same +Z direction a pure seek gives.
+	var anchor := Vector3(0, 0, 8)
+	var on_line := Vector3(0, 0, 4)   # toward the anchor, under MATCH_SPEED
+	var matched := _match_move(Vector3.ZERO, anchor, on_line)
+	assert_almost_eq(matched.x, 0.0, 0.02, "no lateral correction on a straight approach")
+	assert_gt(matched.y, 0.5, "still driving toward the anchor")
+
+
 # net detour tests — route a bot pinned behind a goal line out around
 # the post. The +Z net sits at +GOAL_LINE_Z; "behind" it is z > GOAL_LINE_Z.
 # A post-span bot (|x| < NET_HALF_WIDTH + margin) with an anchor on the

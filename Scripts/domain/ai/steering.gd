@@ -111,6 +111,30 @@ const NET_DETOUR_FRONT_MARGIN: float = 0.3
 # the bot — prevents jittering across the anchor at high speed.
 const ANCHOR_DEADBAND: float = 0.5
 
+# ── Velocity-matched seek ────────────────────────────────────────────────────
+# The plain anchor pull above is a pure SEEK — it points thrust straight at the
+# anchor and ignores the bot's own momentum. A carrier drifting cross-ice
+# ("downhill") toward a central carry spot therefore ORBITS it: full thrust at
+# the spot, momentum carries the body wide, and it arcs past instead of getting
+# onto the line — the "wanted the middle, momentum won" failure. When
+# `velocity_match_speed` is supplied (the carrier's own path), the anchor term
+# instead keeps FULL thrust along the line to the anchor but subtracts the
+# PERPENDICULAR (cross-drift) component of the bot's own velocity: it drives at
+# the spot AND cancels the sideways momentum carrying the body off the line —
+# the foresight a human carrier uses (redirect the feet onto the line early
+# rather than arc around).
+#
+# Only the CROSS component is cancelled — never the along-line speed — for two
+# reasons. (1) Carry anchors are 3 m WAYPOINTS re-picked every re-eval and skated
+# THROUGH at pace (the arrival brake skips carry waypoints for the same reason);
+# bleeding forward speed just pacified the carrier so it never drove a duel.
+# (2) Subtracting the full velocity (cross AND along) weakens thrust as the bot
+# nears top speed, so friction drags it below max — the carry visibly slows. So
+# the along-line drive stays a full unit; only the sideways drift is trimmed.
+# With no cross-drift the term reduces to the plain seek (straight-line
+# approaches unchanged). The result is renormalised to unit weight, blending with
+# the repels like the seek term it replaces.
+
 # Brake-pivot thresholds. When the bot wants to head one direction but is
 # carrying meaningful speed in roughly the opposite direction (angle
 # between velocity and desired direction exceeds BRAKE_PIVOT_ANGLE_DEG),
@@ -194,17 +218,40 @@ static func compute_move_vector(
 		rink_half_z: float,
 		opponent_repel_weight: float = OPPONENT_REPEL_WEIGHT,
 		opponent_velocities: Array[Vector3] = [],
-		teammate_velocities: Array[Vector3] = []) -> Vector2:
+		teammate_velocities: Array[Vector3] = [],
+		self_velocity: Vector3 = Vector3.ZERO,
+		velocity_match_speed: float = 0.0) -> Vector2:
 	var force_x: float = 0.0
 	var force_z: float = 0.0
 
-	# Attract to anchor (unit-magnitude direction, deadband near anchor).
+	# Attract to anchor. Plain SEEK (unit direction) by default; velocity-matched
+	# seek when velocity_match_speed is supplied (see the block above). Deadband
+	# near the anchor lets friction settle the bot either way.
 	var to_anchor: Vector3 = anchor - self_pos
 	var anchor_dist: float = Vector2(to_anchor.x, to_anchor.z).length()
 	if anchor_dist > ANCHOR_DEADBAND:
 		var inv: float = 1.0 / anchor_dist
-		force_x += to_anchor.x * inv
-		force_z += to_anchor.z * inv
+		if velocity_match_speed > 0.0:
+			# Full thrust along the line to the anchor, minus only the
+			# PERPENDICULAR (cross-drift) component of our velocity — so we drive
+			# at the spot at pace while cancelling the sideways momentum that
+			# carries the body off the line. Renormalised to unit weight.
+			var dir_x: float = to_anchor.x * inv
+			var dir_z: float = to_anchor.z * inv
+			var v_along: float = self_velocity.x * dir_x + self_velocity.z * dir_z
+			var vp_x: float = self_velocity.x - dir_x * v_along
+			var vp_z: float = self_velocity.z - dir_z * v_along
+			var sx: float = dir_x - vp_x / velocity_match_speed
+			var sz: float = dir_z - vp_z / velocity_match_speed
+			var slen: float = sqrt(sx * sx + sz * sz)
+			if slen > 1.0:
+				sx /= slen
+				sz /= slen
+			force_x += sx
+			force_z += sz
+		else:
+			force_x += to_anchor.x * inv
+			force_z += to_anchor.z * inv
 
 	# Repel from teammates within radius. Linear falloff with distance.
 	# When teammate velocities are supplied (index-matched), each teammate
