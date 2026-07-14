@@ -704,6 +704,38 @@ func test_defensive_watching_still_faces_the_puck() -> void:
 	assert_gt(dir.z, -0.1, "no net bias while defending")
 
 
+func test_aim_flip_is_debounced_at_the_near_anchor_boundary() -> void:
+	# A bot orbiting right at FACE_THREAT_NEAR_ANCHOR_M used to swing the aim
+	# between the anchor (far) and the puck/threat (near) every dispatch. The
+	# hysteresis band latches the mode: crossing the raw threshold is not enough,
+	# the distance must clear a full band past it before the direction flips.
+	# self at origin, anchor down -z, a loose puck (threat) out +x — anchor-dir
+	# and threat-dir are ~90° apart, so a flip is unambiguous in the output.
+	var self_pos := Vector3.ZERO
+	var s := _loose_puck_snap(Vector3(10, 0, 0))   # threat_dir ≈ +x
+	var near_m: float = Agent.FACE_THREAT_NEAR_ANCHOR_M   # 6.0
+	var band: float = Agent.FACE_NEAR_ANCHOR_HYSTERESIS_M # 0.75
+
+	# Start clearly FAR → aims the anchor (−z).
+	var far_anchor := Vector3(0, 0, -(near_m + band + 2.0))
+	assert_lt(sm._compute_desired_aim_dir(self_pos, far_anchor, s).z, -0.9,
+			"clearly far: aims the anchor")
+	# Ease inside the RAW threshold but still within the band — latch holds far.
+	var boundary_anchor := Vector3(0, 0, -(near_m - 0.25))
+	assert_lt(sm._compute_desired_aim_dir(self_pos, boundary_anchor, s).z, -0.9,
+			"just inside the threshold but within the band: still aims the anchor")
+	# Clear the band on the near side → flips to the threat (+x).
+	var near_anchor := Vector3(0, 0, -(near_m - band - 1.0))
+	assert_gt(sm._compute_desired_aim_dir(self_pos, near_anchor, s).x, 0.9,
+			"past the band: flips to the threat")
+	# Drift back inside the raw threshold from below — latch holds near.
+	assert_gt(sm._compute_desired_aim_dir(self_pos, boundary_anchor, s).x, 0.9,
+			"back within the band from the near side: still aims the threat")
+	# Clear the band on the far side → flips back to the anchor.
+	assert_lt(sm._compute_desired_aim_dir(self_pos, far_anchor, s).z, -0.9,
+			"past the far edge of the band: flips back to the anchor")
+
+
 func test_one_timer_feed_time_reads_the_remaining_flight() -> void:
 	# Puck 8 m up-line at 16 m/s → my perpendicular foot in 0.5 s: the aim
 	# reads the goalie at feed ARRIVAL, not where he stands mid-re-square.

@@ -1177,6 +1177,25 @@ var _cached_aim_mode: int = _STEP_DIRECT
 var _cached_aim_max_speed: float = MOUSE_MAX_SPEED_M_S
 var _cached_aim_arc_rate: float = MOUSE_ARC_RATE_RAD_S
 
+# Off-puck ready-stance aim, re-derived live on the throttle's skipped ticks
+# (the OFF_PUCK analogue of _chase_reception_aim_target — see the dispatch
+# skipped-tick block). The DECISION stays throttled, but the ready-stance blade
+# target is a pure function of current perception (self_pos + threat/anchor
+# direction), so refreshing it every physics tick keeps the blade tracking the
+# moving puck smoothly instead of staircasing at the ~13-20 Hz dispatch rate.
+# `_off_puck_aim_live` gates it on: true only when the dispatch tick resolved to
+# the plain ready-stance branch (NOT a poke-jab, one-timer pre-aim, or explicit
+# aim override — those keep the throttled cached-target path so their lifecycles
+# aren't accelerated). Anchor + near threshold are captured so the skipped-tick
+# recompute matches the dispatch tick's _ready_stance_aim call exactly.
+var _off_puck_aim_live: bool = false
+var _off_puck_aim_anchor: Vector3 = Vector3.ZERO
+var _off_puck_aim_near_m: float = 0.0
+# Latched side of the far/near aim flip (see _compute_desired_aim_dir). True =
+# NEAR (aiming the threat/puck), false = FAR (aiming the anchor). Debounced by
+# FACE_NEAR_ANCHOR_HYSTERESIS_M so boundary-camping doesn't chatter the blade.
+var _aim_near_anchor: bool = false
+
 # Captured at the top of each dispatch() so _step_mouse_toward can
 # arc the per-tick mouse target around self_pos without re-threading
 # self_pos / self_state through every call site. The arc keeps the
@@ -1545,12 +1564,20 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 		# (steering stays on the cached move_vector). This is what stops a slow,
 		# catchable feed from transiting an idle blade that only re-aimed on
 		# dispatch ticks. Every other state / the far chase slews the cached aim.
-		var live_recv_aim: Vector3 = Vector3.INF
 		if _state == State.CHASE_PUCK:
-			live_recv_aim = _chase_reception_aim_target(snapshot, self_pos)
-		if live_recv_aim.is_finite():
-			input.mouse_world_pos = _step_mouse_toward(live_recv_aim)
-		elif _has_cached_aim_target:
+			var live_recv_aim: Vector3 = _chase_reception_aim_target(snapshot, self_pos)
+			if live_recv_aim.is_finite():
+				input.mouse_world_pos = _step_mouse_toward(live_recv_aim)
+				return
+		elif _state == State.OFF_PUCK and _off_puck_aim_live:
+			# Re-derive the ready-stance blade target from CURRENT perception so it
+			# tracks the moving puck/threat continuously between dispatches. Same
+			# _step_mouse_face path as the dispatch tick — the snap-to-clamped
+			# facing is smooth precisely because the target now moves every tick.
+			input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(
+					self_pos, _off_puck_aim_anchor, snapshot, _off_puck_aim_near_m))
+			return
+		if _has_cached_aim_target:
 			input.mouse_world_pos = _step_mouse_internal(
 					_cached_aim_target, _cached_aim_mode,
 					_cached_aim_max_speed, _cached_aim_arc_rate)
@@ -1584,6 +1611,11 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 
+	# Default: no live ready-stance refresh on skipped ticks. The two plain
+	# ready-stance branches below re-arm it; jab / one-timer / aim-override
+	# leave it off so those keep the throttled cached-target path.
+	_off_puck_aim_live = false
+
 	# Tag-up override: when ghosted (offside), bot must clear back across
 	# the blue line before doing anything else. Highest-priority override
 	# above all slot logic — bypasses role dispatch entirely.
@@ -1592,6 +1624,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		_apply_steering(input, snapshot, self_pos, tag_up)
 		# Race back to the blue line to clear the offside as fast as possible.
 		_resolve_sprint(input, self_state, self_pos, tag_up, false, false)
+		_arm_off_puck_live_aim(tag_up, FACE_TRAVEL_TAG_UP_NEAR_M)
 		input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(
 				self_pos, tag_up, snapshot, FACE_TRAVEL_TAG_UP_NEAR_M))
 		_set_one_timer_ready(false)
@@ -1712,6 +1745,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		elif decision.has_aim_override:
 			input.mouse_world_pos = _step_mouse_face(decision.aim_world_pos)
 		else:
+			_arm_off_puck_live_aim(decision.target_position, FACE_THREAT_NEAR_ANCHOR_M)
 			input.mouse_world_pos = _step_mouse_face(_ready_stance_aim(self_pos, decision.target_position, snapshot))
 
 	# Transitions
@@ -4451,6 +4485,11 @@ func _shot_aim_point(snapshot: WorldSnapshot, self_pos: Vector3,
 # drifting anchor and visibly looked away from the play.
 const READY_STANCE_AIM_FORWARD_M: float = 2.0
 const FACE_THREAT_NEAR_ANCHOR_M: float = BotSprintRules.GAP_ENGAGE_M
+# Debounce band around FACE_THREAT_NEAR_ANCHOR_M for the far→anchor / near→threat
+# aim flip (see _compute_desired_aim_dir). A bot must cross this far past the
+# threshold before the aim direction switches, so orbiting at the boundary
+# doesn't swing the blade between the anchor and the puck every tick.
+const FACE_NEAR_ANCHOR_HYSTERESIS_M: float = 0.75
 # Tag-up override: a ghosted bot racing back to the blue line faces its
 # travel direction until nearly there — the tag-up is a sprint, not
 # positioning, so it keeps the old tight face-travel threshold.
@@ -4614,6 +4653,17 @@ func _step_mouse_internal(target: Vector3, mode: int,
 	return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 
 
+# Record the ready-stance anchor + threshold so the dispatch throttle's
+# skipped-tick path can re-derive the same _ready_stance_aim target live every
+# physics tick (see the dispatch skipped-tick block). Only the plain
+# ready-stance branches call this — jab / one-timer / aim-override leave
+# _off_puck_aim_live false so their throttled cadence is preserved.
+func _arm_off_puck_live_aim(anchor: Vector3, near_anchor_m: float) -> void:
+	_off_puck_aim_live = true
+	_off_puck_aim_anchor = anchor
+	_off_puck_aim_near_m = near_anchor_m
+
+
 # Returns a target position 2 m in front of the bot. Direction is
 # anchor when far, threat when near. The actual mouse position is
 # stepped toward this target by `_step_mouse_toward` (the unified
@@ -4636,7 +4686,22 @@ func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapsh
 func _compute_desired_aim_dir(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot,
 		near_anchor_m: float = FACE_THREAT_NEAR_ANCHOR_M) -> Vector3:
 	var to_anchor: Vector3 = anchor - self_pos
-	if to_anchor.length() > near_anchor_m:
+	# Hysteresis on the far→anchor / near→threat flip: a bot orbiting right at
+	# near_anchor_m used to toggle the whole aim direction (anchor vs puck — often
+	# far apart) every dispatch, swinging the blade back and forth. Latch the mode
+	# and require the distance to cross a full band past the threshold before
+	# flipping, so boundary-camping holds one direction. Now that the aim also
+	# refreshes every physics tick (skipped-tick path), an un-debounced boundary
+	# would chatter at the tick rate — the band is what keeps that smooth.
+	var dist: float = to_anchor.length()
+	if _aim_near_anchor:
+		if dist > near_anchor_m + FACE_NEAR_ANCHOR_HYSTERESIS_M:
+			_aim_near_anchor = false
+	elif dist < near_anchor_m - FACE_NEAR_ANCHOR_HYSTERESIS_M:
+		_aim_near_anchor = true
+	if not _aim_near_anchor:
+		if dist < 0.0001:
+			return _face_threat_or_current(snapshot, self_pos)
 		return to_anchor.normalized()
 	var threat_dir: Vector3 = _face_threat_or_current(snapshot, self_pos)
 	if snapshot.puck_state == null:
