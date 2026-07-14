@@ -1560,8 +1560,12 @@ func test_protect_turn_stays_short_when_both_sides_threatened() -> void:
 func test_arc_step_commits_to_the_protected_direction() -> void:
 	# Integration through _arc_step_mouse_target: with a defender on the short
 	# side, successive arc steps walk the mouse the LONG way and stay committed.
+	# The target sits ~172° around — genuinely BEHIND the body — so this is a
+	# turn-around, the only case the long-way orbit still fires (see
+	# _target_is_behind); a front-hemisphere protect reach takes the short way.
 	var self_pos := Vector3.ZERO
 	var s := _protect_snap(self_pos, Vector3(2.0, 0, 0.2))
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)   # facing +z; target is behind
 	sm._state = Agent.State.CARRY
 	sm._current_snapshot = s
 	sm._mouse_pos = Vector3(0, 0, 2.0)   # parked dead ahead (angle 0)
@@ -1577,6 +1581,27 @@ func test_arc_step_commits_to_the_protected_direction() -> void:
 			self_pos, target, s.skater_states[SELF_ID], 5.0)
 	var ang2: float = atan2(stepped2.x - self_pos.x, stepped2.z - self_pos.z)
 	assert_lt(ang2, ang, "the commitment holds on the next step — no mid-sweep flip")
+
+
+func test_arc_step_front_reach_takes_short_way_despite_short_side_threat() -> void:
+	# A protect REACH to a spot in the FRONT hemisphere never orbits the long way
+	# around the back, even with a defender on the short-sweep side — the blade's
+	# ROM extends across the front instead of the body spinning around. Only a
+	# genuine turn-around (target behind) earns the long-way shield (see
+	# _target_is_behind). Target ~86° to the +x side; mouse parked dead ahead.
+	var self_pos := Vector3.ZERO
+	var s := _protect_snap(self_pos, Vector3(1.4, 0, 1.0))   # defender on the +x short side
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)          # facing +z; target is to the side, in front
+	sm._state = Agent.State.CARRY
+	sm._current_snapshot = s
+	sm._mouse_pos = Vector3(0, 0, 2.0)
+	sm._mouse_pos_initialized = true
+	var target := self_pos + Vector3(sin(1.5), 0, cos(1.5)) * 5.0   # ~86° off forward
+	var stepped: Vector3 = sm._arc_step_mouse_target(
+			self_pos, target, s.skater_states[SELF_ID], 5.0)
+	var ang: float = atan2(stepped.x - self_pos.x, stepped.z - self_pos.z)
+	assert_gt(ang, 0.0, "front-hemisphere reach sweeps the short (+) way, no back-orbit spin")
+	assert_eq(sm._arc_protect_sign, 0.0, "no long-way commitment latched for a front reach")
 
 
 func test_arc_step_shortest_way_in_open_ice() -> void:

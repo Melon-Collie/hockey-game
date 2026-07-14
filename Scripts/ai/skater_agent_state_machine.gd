@@ -349,6 +349,21 @@ const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 # genuinely on the puck.
 const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.45
 
+# How far off the play line the protect aim is allowed to swing the body. The
+# domain seam (best_handle_protect_point) is the MAX-CLEARANCE point in the
+# handling envelope, which for a checker on the hip sits ~directly away from
+# him; aiming the blade there turns the body most of the way around (facing
+# chases the carry cursor — see the QUIET HANDS block), the spun-out, edge-to-
+# the-play posture that also strands the carrier skating sideways/backward out
+# of the play. Cap the turn at side-on: the body rotates just enough to
+# interpose, and the blade's ROM (the ~157° reach cone the pose coordinator's
+# IK gate allows) extends to the seam from there — protection becomes REACH,
+# not a spin. Less rotation keeps the carrier square to the play and on the
+# fast forward stride while still shielding the puck. Feel/posture tunable (how
+# much a shield is allowed to turn you), not an evaluation curve — the seam
+# itself stays the grounded reachable-set read.
+const CARRY_PROTECT_MAX_TURN_DEG: float = 90.0
+
 # Natural carry sway: a smooth lateral oscillation of the carry cursor —
 # the rhythmic side-to-side dangle a human carrier keeps going — layered
 # under the threat-driven stickhandle offset above. Amplitude is the
@@ -2437,14 +2452,30 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 				else _carry_aim_track_fire(snapshot, self_pos)
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
-	# Arc the per-tick mouse target around self_pos toward the final
-	# aim point. Without this, a straight chord across a 180° swing
-	# (e.g. back-pass) passes through self_pos and trips the pose
-	# coordinator's IK gate — see MOUSE_ARC_RATE_RAD_S. Convergence
-	# check below uses the un-arced FINAL `mouse_target` (cached
-	# inside _step_mouse_aim) so the bot fires only when the body has
-	# reached the real aim direction, not an intermediate arc point.
-	input.mouse_world_pos = _step_mouse_aim(mouse_target)
+	# Cursor motion model. A pure CARRY reach to a FRONT-hemisphere spot moves the
+	# cursor DIRECTLY — a straight chord at the blade's real slew — so the blade
+	# leads to the spot while body facing lags behind at its own Agility-limited
+	# turn rate (facing_drag_speed in the pose coordinator). Facing is then NOT
+	# locked one-to-one to the cursor: the hands work the puck and the body
+	# follows, the way a human carrier reads, instead of the body pivoting in
+	# lockstep with a cursor that's paced to it. The chord also cuts INSIDE the
+	# aim ring, so the puck pulls in and extends across the front (a reach) rather
+	# than orbiting the ring at full extension. The ARC model is kept for the two
+	# cases that need it: a genuine turn-around (target BEHIND the body — a
+	# straight chord there crosses self_pos and trips the pose IK gate, see
+	# MOUSE_ARC_RATE_RAD_S), and every pre-aim swing (the convergence/commit logic
+	# below reads the arc; the cached FINAL mouse_target drives the convergence
+	# check so the bot fires only when the body has reached the real aim).
+	var to_target := Vector3(mouse_target.x - self_pos.x, 0.0, mouse_target.z - self_pos.z)
+	var direct_reach: bool = _intended_action == State.CARRY \
+			and not _target_is_behind(to_target, self_state)
+	if direct_reach:
+		# No arc walk on a front reach — clear any long-way orbit latched by a
+		# prior turn-around so the next ARC swing re-evaluates from scratch.
+		_arc_protect_sign = 0.0
+		input.mouse_world_pos = _step_mouse_toward(mouse_target)
+	else:
+		input.mouse_world_pos = _step_mouse_aim(mouse_target)
 
 	# If pre-aiming, wait for mouse convergence (or timeout) before
 	# transitioning to the action state. Body facing is no longer
@@ -2638,6 +2669,17 @@ func _nearest_opponent_blade_dist(snapshot: WorldSnapshot, point: Vector3) -> fl
 	return nearest
 
 
+# Is the desired blade direction in the body's BACK hemisphere (>90° off the
+# current facing)? Gates the long-way protect orbit to genuine turn-arounds. A
+# null/degenerate facing returns false — bias toward the short-way reach, never
+# an unprovoked spin.
+func _target_is_behind(desired_dir: Vector3, self_state: SkaterNetworkState) -> bool:
+	if self_state == null or self_state.facing.length_squared() < 0.0001:
+		return false
+	var facing: Vector2 = self_state.facing.normalized()
+	return desired_dir.x * facing.x + desired_dir.z * facing.y < 0.0
+
+
 # Returns an intermediate mouse target on the carry aim ring around self_pos
 # that walks toward `final_target` at no more than MOUSE_ARC_RATE_RAD_S.
 # See MOUSE_ARC_RATE_RAD_S comment for why arcing is required — straight
@@ -2681,7 +2723,15 @@ func _arc_step_mouse_target(self_pos: Vector3, final_target: Vector3,
 	elif _arc_protect_sign != 0.0:
 		if signf(diff) == _arc_protect_sign or absf(diff) <= max_step:
 			_arc_protect_sign = 0.0
-	elif absf(diff) >= PROTECT_TURN_MIN_SWING_RAD:
+	elif absf(diff) >= PROTECT_TURN_MIN_SWING_RAD and _target_is_behind(desired_dir, self_state):
+		# Long-way orbit only for a genuine TURN-AROUND — the desired blade spot is
+		# behind the body (a regroup, an anchor that flipped after a re-eval). There
+		# the big rotation is unavoidable, so sweep the puck the way that keeps the
+		# body shielding it. A FRONT-hemisphere target is a protect REACH, not a
+		# turn: take the short way and let the blade's ROM extend across the front,
+		# rather than spinning the long way around the back to reach a spot that's
+		# only off to the side. Reach, not orbit — keeps the carrier square to the
+		# play (see CARRY_PROTECT_MAX_TURN_DEG, which caps that reach at side-on).
 		var protect_sign: float = _protect_turn_direction(
 				self_pos, current_angle, diff, _current_snapshot)
 		if protect_sign != signf(diff):
@@ -3826,8 +3876,19 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 		var protect_dir: Vector3 = _carrier.protect_offset
 		protect_dir.y = 0.0
 		if protect_dir.length_squared() > 0.0025:
+			# Shield with REACH, not a spin: clamp how far the protect aim swings off
+			# the play line (CARRY_PROTECT_MAX_TURN_DEG). The body turns only to
+			# side-on to interpose; the blade ROM covers the rest of the seam.
+			var prot2 := Vector2(protect_dir.x, protect_dir.z).normalized()
+			var fwd2 := Vector2(forward_dir.x, forward_dir.z)
+			if fwd2.length_squared() > 0.0001:
+				fwd2 = fwd2.normalized()
+				var turn: float = fwd2.angle_to(prot2)
+				var max_turn: float = deg_to_rad(CARRY_PROTECT_MAX_TURN_DEG)
+				if absf(turn) > max_turn:
+					prot2 = fwd2.rotated(signf(turn) * max_turn)
 			var protect_target: Vector3 = self_pos \
-					+ protect_dir.normalized() * CARRY_BLADE_AIM_FORWARD_M
+					+ Vector3(prot2.x, 0.0, prot2.y) * CARRY_BLADE_AIM_FORWARD_M
 			target = target.lerp(protect_target, minf(protect_w, 1.0))
 	# Clamp the carry mouse so it stays on the rink side of the
 	# attacking goal line — the blade IK chases the mouse, and a mouse
