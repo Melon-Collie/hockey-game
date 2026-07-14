@@ -7,8 +7,10 @@ class ShotResult:
 	var direction: Vector3   # normalized, includes Y if elevated
 	var power: float         # final shot power after backhand penalty / charge curve
 
-	static func make(d: Vector3, p: float) -> ShotResult:
-		var r := ShotResult.new()
+	# Fills `out` when provided (a caller-owned scratch for hot paths that re-solve
+	# every tick), else allocates a fresh instance.
+	static func make(d: Vector3, p: float, out: ShotResult = null) -> ShotResult:
+		var r: ShotResult = out if out != null else ShotResult.new()
 		r.direction = d
 		r.power = p
 		return r
@@ -157,7 +159,8 @@ static func release_wrister(
 		cfg: WristerConfig,
 		charge_direction: Vector3 = Vector3.ZERO,
 		is_quick_shot: bool = false,
-		sweep_speed: float = 0.0) -> ShotResult:
+		sweep_speed: float = 0.0,
+		out: ShotResult = null) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
 
@@ -173,7 +176,7 @@ static func release_wrister(
 				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 		return ShotResult.make(
 				Vector3(tap_dir.x, tap_y, tap_dir.z).normalized(),
-				cfg.quick_shot_power)
+				cfg.quick_shot_power, out)
 
 	# WRISTER — aim along the drag, power from the pure mouse-speed model
 	# (wrister_power_t). Falls back to player→mouse only when no drag direction
@@ -191,7 +194,7 @@ static func release_wrister(
 	var y: float = loft_y(power, _loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 	return ShotResult.make(
 			Vector3(wrister_dir.x, y, wrister_dir.z).normalized(),
-			power)
+			power, out)
 
 # Slapper release — power scales linearly with charge time.
 #

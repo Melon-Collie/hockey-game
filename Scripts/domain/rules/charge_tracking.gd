@@ -35,23 +35,34 @@ class_name ChargeTracking
 # prev_direction, rotation). Each tick it calls accumulate() with the current
 # positions and stores back the returned values.
 #
-# Returns { "direction": Vector3, "reset": bool, "rotation": float }.
+# Reusable output of accumulate_into (below) — a caller-owned scratch so the
+# per-tick wrister-charge path allocates nothing (see SkaterAimingBehavior).
 #   - direction: the most recent meaningful cursor-motion unit vector.
 #     Caller passes this as prev_direction next tick. Vector3.ZERO means
-#     "no direction yet recorded" (first frame or negligible cursor
-#     motion).
+#     "no direction yet recorded" (first frame or negligible cursor motion).
 #   - reset: true when the direction-variance break fired this tick — a NEW
 #     swing started.
 #   - rotation: accumulated signed angular sweep (radians); classify FH/BH by
 #     its sign at release (ShotMechanics.is_backhand_from_swing).
-static func accumulate(
+class Result:
+	var direction: Vector3 = Vector3.ZERO
+	var reset: bool = false
+	var rotation: float = 0.0
+
+
+# Core accumulation — fills the caller-owned `out` instead of returning a fresh
+# Dictionary, so the 120 Hz wrister-charge path (and its reconcile-replay re-runs)
+# don't churn the heap. `accumulate` below wraps this for the tests / any caller
+# that wants a plain Dictionary.
+static func accumulate_into(
+		out: Result,
 		prev_intent_pos: Vector3,
 		current_intent_pos: Vector3,
 		prev_blade_pos: Vector3,
 		current_blade_pos: Vector3,
 		prev_direction: Vector3,
 		max_direction_variance_deg: float,
-		current_rotation: float = 0.0) -> Dictionary:
+		current_rotation: float = 0.0) -> void:
 	var intent_delta := current_intent_pos - prev_intent_pos
 	intent_delta.y = 0.0
 	var intent_dist: float = intent_delta.length()
@@ -60,8 +71,10 @@ static func accumulate(
 		# rotation unchanged regardless of what the blade did (e.g.,
 		# locomotion-induced blade motion doesn't swing the stroke without
 		# intent).
-		return {"direction": prev_direction, "reset": false,
-				"rotation": current_rotation}
+		out.direction = prev_direction
+		out.reset = false
+		out.rotation = current_rotation
+		return
 
 	var current_dir: Vector3 = intent_delta.normalized()
 	var new_rotation: float = current_rotation
@@ -77,8 +90,27 @@ static func accumulate(
 	# bearing (blade over the player — never happens in practice) is guarded.
 	new_rotation += swing_step(prev_blade_pos, current_blade_pos)
 
-	return {"direction": current_dir, "reset": was_reset,
-			"rotation": new_rotation}
+	out.direction = current_dir
+	out.reset = was_reset
+	out.rotation = new_rotation
+
+
+# Dictionary-returning wrapper over accumulate_into. Kept for tests and any
+# caller that doesn't hold a Result scratch. Returns { "direction", "reset",
+# "rotation" }.
+static func accumulate(
+		prev_intent_pos: Vector3,
+		current_intent_pos: Vector3,
+		prev_blade_pos: Vector3,
+		current_blade_pos: Vector3,
+		prev_direction: Vector3,
+		max_direction_variance_deg: float,
+		current_rotation: float = 0.0) -> Dictionary:
+	var r := Result.new()
+	accumulate_into(r, prev_intent_pos, current_intent_pos,
+			prev_blade_pos, current_blade_pos, prev_direction,
+			max_direction_variance_deg, current_rotation)
+	return {"direction": r.direction, "reset": r.reset, "rotation": r.rotation}
 
 
 # Signed angle (radians, +/-) swept from bearing `prev_rel` to `curr_rel`

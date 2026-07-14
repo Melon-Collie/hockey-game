@@ -4,8 +4,9 @@ extends GutTest
 # check-delivery drive (hitter finishing through a landed hit, armed by the
 # host-authoritative broadcast via start_check_drive), the stick-lift working
 # posture (keyed off the replicated blade_up), and the goal-celebration knee
-# bounce (reading the controller's celebration timer, which the gait also
-# ages so wire-fed remotes count it down too).
+# bounce (reading the controller's celebration timer, which the controllers age
+# at physics rate via tick_celebration — the gait itself only reads the progress
+# now that it runs at render rate).
 
 const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 const DT: float = 1.0 / 120.0
@@ -34,6 +35,10 @@ func before_each() -> void:
 
 func _tick(count: int) -> void:
 	for _i: int in count:
+		# The controllers age the celebration timer at physics rate now; the gait
+		# (render rate) only reads its progress. Mirror both here so the coordinator
+		# sees the countdown advance.
+		_controller.tick_celebration(DT)
 		_coord.apply(DT)
 
 
@@ -75,11 +80,12 @@ func test_stick_lift_pops_chest_and_releases() -> void:
 	assert_almost_eq(_coord.trunk_pitch_add, 0.0, 0.01, "the lift read should release")
 
 
-func test_celebration_bounces_knees_and_gait_ages_timer() -> void:
+func test_celebration_bounces_knees_and_timer_ages() -> void:
 	_controller.start_celebration(1.5)
 	var min_shin: float = INF
 	var max_shin_late: float = -INF
 	for i: int in 180:  # the full 1.5 s window
+		_controller.tick_celebration(DT)  # physics-rate aging (was owned by the gait)
 		_coord.apply(DT)
 		min_shin = minf(min_shin, _shin_l.rotation.x)
 		if i > 36:  # past the ramp — the pump should return near straight between hops
@@ -88,8 +94,8 @@ func test_celebration_bounces_knees_and_gait_ages_timer() -> void:
 			"the celebration should pump the knees (deepest %.3f rad)" % min_shin)
 	assert_gt(max_shin_late, -0.1,
 			"the pump should release between hops, not hold a squat")
-	# The gait owns aging the timer now (tick_celebration), so wire-fed remotes
-	# — which never run _process_input — still count the window down. A few
-	# grace ticks absorb the 180 × (1/120) float-summation residue.
+	# The controllers age the timer at physics rate now (tick_celebration), on
+	# every path including wire-fed remotes. A few grace ticks absorb the
+	# 180 × (1/120) float-summation residue.
 	_tick(6)
-	assert_false(_controller.is_celebrating(), "the gait should have aged the timer out")
+	assert_false(_controller.is_celebrating(), "the timer should have aged out")

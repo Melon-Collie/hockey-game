@@ -669,6 +669,11 @@ var _blade_relative_angle: float = 0.0
 # so it stays deterministic. Only read by the FOLLOW_THROUGH pose branches, which
 # never run on the faceoff/skate-in cosmetic paths, so a stale value is harmless.
 var _current_aim_world: Vector3 = Vector3.ZERO
+# Reused ShotResult for the per-tick "where would this charge go if released now"
+# prediction in _update_wrister_charge — a caller-owned scratch so that hot path
+# (120 Hz while charging, re-run per replayed input on reconcile) doesn't churn
+# the heap. Pure output, overwritten each solve.
+var _wrister_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
 # Per-tick mirror of input.elevation_level (0 flat / 1 low / 2 high) — NOT
 # sticky state: overwritten from the frame every tick, so reconcile replay
 # re-derives it from the replayed inputs with nothing to snap.
@@ -681,6 +686,13 @@ var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
 var is_replaying: bool = false
+# True on frames where a special locked-phase path posed the body itself this
+# tick — faceoff-prep blade aim, the faceoff skate-in approach, and replay
+# playback. Those paths run their own gait / head / off-hand (they're brief and
+# not the 120 Hz × N hot path), so the render-rate cosmetic hook yields to them
+# to avoid a double gait pass. The main live path (_process_input) clears it and
+# delegates cosmetics to the render hook.
+var _self_posing: bool = false
 # Sprint stamina (0..1) and the exhaustion lockout latch. Updated deterministically
 # each tick in _apply_movement; the local player's reconcile snaps both to the
 # host's authoritative value before replay (see LocalController.reconcile) and
@@ -815,6 +827,11 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_sm.setup(_cb, _aiming)
 	_pose.setup(skater, _sm, _aiming, self, _skating)
 	_skating.setup(skater, _sm, self)
+	# Cosmetic pose (leg gait / head / off-hand IK) now runs at render rate in
+	# Skater._process instead of every physics tick — it feeds only meshes, not
+	# the blade world frame. RemoteController overrides _render_pose_update to
+	# drop head tracking (a wire-fed body has no cursor aim).
+	skater.render_pose_update = _render_pose_update
 
 # Reach ROM is derived from arm length, not an independent tunable. The
 # forehand side is shoulder-joint-limited (about 56% of arm length — the top
@@ -1162,6 +1179,7 @@ func _process_input(input: InputState, delta: float) -> void:
 	# small residual vectors at rest (potential-field repels never fully
 	# cancel) that would otherwise read as a perpetual dig-in chop, and the
 	# wire octant would inflate them to unit length on remote clients.
+	_self_posing = false  # main live path delegates cosmetics to the render hook
 	skater.move_intent = input.move_vector \
 			if input.move_vector.length() > move_deadzone else Vector2.ZERO
 	skater.brake_intent = input.brake
@@ -1235,33 +1253,50 @@ func _process_input(input: InputState, delta: float) -> void:
 		blade_world_pre = skater.upper_body_to_global(skater.get_blade_position())
 		hand_world_pre = skater.upper_body_to_global(skater.get_top_hand_position())
 	_pose.apply_upper_body(delta)
-	_pose.apply_head_tracking(input, delta)
 	if not is_slapper_charge:
 		skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 		skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
-	_ik.update_bottom_hand()
-	# Stick/arm mesh updates moved to Skater._process — they're write-only
-	# visuals recomputed from the markers this tick just placed, so one pass
-	# per rendered frame (after all physics ticks) replaces the per-tick (and
-	# per-reconcile-replayed-input) passes that used to run here.
+	# Head tracking, off-hand IK, and the leg gait moved to render rate
+	# (Skater.render_pose_update / _render_pose_update) — they feed only meshes,
+	# not the blade world frame, so they don't belong in the 120 Hz + reconcile-
+	# replay path. Stick/arm mesh rebuild already lives in Skater._process too.
 	if not is_replaying:
 		_pose.update_angular_velocities(delta)
-		# Cosmetic leg gait — derived from velocity, so it's skipped during replay
-		# (reconcile re-simulates many ticks per frame and would over-spin the phase).
-		_skating.apply(delta)
+		# Age the goal-celebration timer at physics rate. It used to ride the gait
+		# pass, but the gait is render-rate + visibility-gated now, so the timer
+		# owns its own physics tick here (real ticks only — it must not re-decrement
+		# through reconcile replay) so it stays deterministic and never freezes for
+		# an off-screen scorer.
+		tick_celebration(delta)
 		# Goal celebration: the scorer raises the stick. Overrides the hand/
 		# blade pose the tick just placed — cosmetic-only (pickup is locked
-		# through GOAL_CELEBRATION), real ticks only (the timer must not
-		# re-decrement through reconcile replay), and gated to plain skating
-		# so a whiffed shot's follow-through isn't fought over. The timer
-		# itself is aged in tick_celebration (called by the gait pass above,
-		# which runs on every path — wire-fed remotes included, since their
-		# timers now start too for the celebration leg bounce).
+		# through GOAL_CELEBRATION), real ticks only, and gated to plain skating
+		# so a whiffed shot's follow-through isn't fought over. The render off-hand
+		# IK yields while this is active (see _render_pose_update) so the fist pump
+		# isn't clobbered a frame later.
 		if _celebration_timer > 0.0:
 			var cel_state: SkaterStateMachine.State = _sm.get_state()
 			if cel_state == SkaterStateMachine.State.SKATING_WITH_PUCK \
 					or cel_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:
 				_shot_pose.apply_celebration_pose(1.0 - _celebration_timer / _celebration_total)
+
+
+# Render-rate cosmetic pose pass, registered on the skater and invoked once per
+# rendered frame from Skater._process (visibility-gated). Runs the purely-cosmetic
+# passes that used to sit in the 120 Hz physics tick: the leg gait, head tracking
+# (off the last-seen aim), and the off-hand grip IK. None feed the blade world
+# frame, so running them at render rate can't affect pickup or reconcile. Local
+# and AI controllers use this base; RemoteController overrides it to drop head
+# tracking (a wire-fed body has no cursor aim).
+func _render_pose_update(delta: float) -> void:
+	if skater == null or _self_posing:
+		return
+	_skating.apply(delta)
+	_pose.apply_head_tracking_aim(_current_aim_world, delta)
+	# During a goal celebration the physics tick places the off-hand fist pump
+	# (apply_celebration_pose); yield so the base grip IK doesn't clobber it.
+	if _celebration_timer <= 0.0:
+		_ik.update_bottom_hand()
 
 
 # Aim-only blade update for FACEOFF_PREP: drives the blade target from the
@@ -1288,11 +1323,9 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	_pose.apply_head_tracking(input, delta)
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
-	# The gait normally ticks at the end of _process_input, which this path
-	# replaces — run it here too so the faceoff ready-stance (crouch + foot
-	# stagger) engages during the countdown. At a locked standstill the
-	# stride terms are inert (intensity is speed-driven), so this is purely
-	# the stance layer. Callers are real-frame only (no reconcile replay).
+	# This locked-phase path poses its own gait ready-stance + off-hand (a brief
+	# countdown, not the hot path); the render hook yields to it (see _self_posing).
+	_self_posing = true
 	_skating.apply(delta)
 	_ik.update_bottom_hand()
 
@@ -1360,6 +1393,9 @@ func get_queue_depth() -> int:
 func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	if skater == null:
 		return
+	# This path poses the gait + off-hand itself (below), so the render-rate
+	# cosmetic hook yields to it while a replay is driving this skater.
+	_self_posing = true
 	skater.global_position = state.position
 	skater.visual_offset = Vector3.ZERO
 	skater.velocity = state.velocity
@@ -1641,6 +1677,9 @@ func _render_approach_pose(facing: Vector2, delta: float) -> void:
 	_pose.apply_head_tracking(_approach_input, delta)
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
+	# This intro-skate path poses its own gait + off-hand (a brief locked phase,
+	# not the hot path); the render hook yields to it (see _self_posing).
+	_self_posing = true
 	_skating.apply(delta)
 	# Publish the gait's lower-body yaw (hip-to-travel alignment) — normally
 	# written inside _pose.apply_facing, which this path replaces.
@@ -1953,11 +1992,13 @@ func _update_wrister_charge(input: InputState) -> void:
 	# remote carriers don't run this path, so their predicted velocity stays ZERO
 	# and the goalie falls back to a non-directional readiness tell.
 	var is_backhand: bool = _classify_backhand()
+	# Re-solves every tick while charging (+ per replayed input on reconcile), so
+	# fill a reused scratch instead of allocating a ShotResult each time.
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level,
 			_wrister_config(), _get_charge_direction(), false,
-			_wrister_sweep_speed(input))
+			_wrister_sweep_speed(input), _wrister_pred_scratch)
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# shot_charge carries the release-now SPEED (normalized predicted power over
 	# the min→max band) — the pure mouse-speed model, so it always matches the

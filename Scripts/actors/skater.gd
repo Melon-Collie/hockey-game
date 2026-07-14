@@ -272,6 +272,14 @@ var _rig_last_blade: Vector3 = Vector3(NAN, NAN, NAN)
 var _rig_last_shoulder: Vector3 = Vector3(NAN, NAN, NAN)
 var _rig_last_bottom_shoulder: Vector3 = Vector3(NAN, NAN, NAN)
 var _rig_last_bottom_hand: Vector3 = Vector3(NAN, NAN, NAN)
+# Render-rate cosmetic pose hook. The controller registers a Callable(delta)
+# that runs the purely-cosmetic pose passes — the leg gait, head tracking, and
+# off-hand IK — which used to run in the physics tick (120 Hz × every skater,
+# plus once per replayed input during reconcile). None of them feed the blade's
+# world frame (the gait's stride texture was decoupled from it), so they're pure
+# render concerns: run once per rendered frame here, visibility-gated, like the
+# stick/arm mesh rebuild below. Empty Callable = no hook (safe default).
+var render_pose_update: Callable = Callable()
 # Resolves the skater's current team_id by deferring to the registry. Set by
 # PlayerRegistry on spawn so the goalie / VFX / other Skater-holding code can
 # query team affiliation without growing a cached field that has to be
@@ -535,10 +543,17 @@ func _process(delta: float) -> void:
 	# Stick flex is time/state-driven — it runs every frame regardless (it has
 	# its own shader-write guard) so a mid-shot whip never freezes on an
 	# otherwise-static pose.
-	if is_visible_in_tree() and _rig_pose_changed():
-		update_stick_mesh()
-		update_arm_mesh()
-		update_bottom_arm_mesh()
+	if is_visible_in_tree():
+		# Cosmetic pose (leg gait / head / off-hand IK) at render rate, before the
+		# marker-driven mesh rebuild that consumes it. Skipped entirely when hidden
+		# — an off-screen skater needs no animated pose. Gameplay-relevant pose
+		# (facing, upper-body twist, blade IK) already ran in the physics tick.
+		if render_pose_update.is_valid():
+			render_pose_update.call(delta)
+		if _rig_pose_changed():
+			update_stick_mesh()
+			update_arm_mesh()
+			update_bottom_arm_mesh()
 	_update_stick_flex(delta)
 
 
