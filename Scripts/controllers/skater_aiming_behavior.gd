@@ -29,6 +29,10 @@ var prev_blade_dir: Vector3 = Vector3.ZERO
 # speed): flick fast = hard, sweep slow = soft. Saved/restored across reconcile
 # like the rest of the charge state.
 var cursor_speed_ema: float = 0.0
+# Reused output for ChargeTracking.accumulate_into — a per-controller scratch so
+# the per-tick charge update never allocates. Pure output (fully overwritten each
+# call), so it needs no reconcile save/restore.
+var _charge_result: ChargeTracking.Result = ChargeTracking.Result.new()
 
 # ── Slapper charge state ──────────────────────────────────────────────────────
 var slapper_charge_timer: float = 0.0
@@ -61,12 +65,16 @@ func tick_wrister_charge(
 		cursor_speed_ema = lerpf(cursor_speed_ema, inst_speed, a)
 	# ChargeTracking now only tracks the swing chirality (forehand/backhand) and
 	# the variance-break reset — power is the cursor speed above, not distance.
-	var result: Dictionary = ChargeTracking.accumulate(
+	# Fill a reused Result scratch instead of allocating a Dictionary every tick
+	# (this runs at 120 Hz while charging, and re-runs per replayed input during
+	# reconcile).
+	ChargeTracking.accumulate_into(
+			_charge_result,
 			prev_intent_pos, intent_pos,
 			prev_blade_pos_rel_skater, blade_pos_rel_skater,
 			prev_blade_dir, max_charge_direction_variance, swing_rotation)
-	swing_rotation = result.rotation
-	prev_blade_dir = result.direction
+	swing_rotation = _charge_result.rotation
+	prev_blade_dir = _charge_result.direction
 	prev_intent_pos = intent_pos
 	prev_blade_pos_rel_skater = blade_pos_rel_skater
 

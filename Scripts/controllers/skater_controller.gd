@@ -669,6 +669,11 @@ var _blade_relative_angle: float = 0.0
 # so it stays deterministic. Only read by the FOLLOW_THROUGH pose branches, which
 # never run on the faceoff/skate-in cosmetic paths, so a stale value is harmless.
 var _current_aim_world: Vector3 = Vector3.ZERO
+# Reused ShotResult for the per-tick "where would this charge go if released now"
+# prediction in _update_wrister_charge — a caller-owned scratch so that hot path
+# (120 Hz while charging, re-run per replayed input on reconcile) doesn't churn
+# the heap. Pure output, overwritten each solve.
+var _wrister_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
 # Per-tick mirror of input.elevation_level (0 flat / 1 low / 2 high) — NOT
 # sticky state: overwritten from the frame every tick, so reconcile replay
 # re-derives it from the replayed inputs with nothing to snap.
@@ -1987,11 +1992,13 @@ func _update_wrister_charge(input: InputState) -> void:
 	# remote carriers don't run this path, so their predicted velocity stays ZERO
 	# and the goalie falls back to a non-directional readiness tell.
 	var is_backhand: bool = _classify_backhand()
+	# Re-solves every tick while charging (+ per replayed input on reconcile), so
+	# fill a reused scratch instead of allocating a ShotResult each time.
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level,
 			_wrister_config(), _get_charge_direction(), false,
-			_wrister_sweep_speed(input))
+			_wrister_sweep_speed(input), _wrister_pred_scratch)
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# shot_charge carries the release-now SPEED (normalized predicted power over
 	# the min→max band) — the pure mouse-speed model, so it always matches the
