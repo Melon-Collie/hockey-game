@@ -193,6 +193,38 @@ func test_ahead_man_on_a_blocked_path_is_not_credited_a_deep_drive() -> void:
 			"a man whose path forward is blocked isn't worth a pass over keeping the puck")
 
 
+func test_pass_is_devalued_when_the_receiver_is_blanketed() -> void:
+	# A teammate with a clean passing LANE but a defender skating stride-for-stride
+	# beside him — off the lane (lane_clear never sees it) and off his forward-to-
+	# net cone (his own shot pressure never sees it), yet close enough to strip the
+	# catch the instant it arrives. The reception-pressure term must price that:
+	# the feed to the blanketed man scores strictly LOWER than the identical feed
+	# to the same spot with no one draped on him.
+	var self_pos := Vector3(0.0, 0.0, 8.0)
+	var receiver := Vector3(0.0, 0.0, -4.0)
+
+	var clean: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, receiver],
+	]
+	var c_clean := AIRoleCarrier.new()
+	c_clean.decide(_make_ctx(self_pos, clean))
+	var clean_score: float = c_clean.debug_pass_score
+
+	var blanketed: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, receiver],
+			[9, 1, receiver + Vector3(1.8, 0.0, 0.0)],   # defender draped beside him
+	]
+	var c_cov := AIRoleCarrier.new()
+	c_cov.decide(_make_ctx(self_pos, blanketed))
+	var covered_score: float = c_cov.debug_pass_score
+
+	assert_gt(clean_score, 0.0, "the open feed has real value")
+	assert_lt(covered_score, clean_score,
+			"a blanketed receiver's feed is worth less — reception pressure is priced in")
+
+
 func test_open_receiver_in_a_poor_spot_is_not_over_credited() -> void:
 	# The drive-in credit must not turn EVERY open teammate into a must-pass: a man
 	# open but in a genuinely poor spot (wide, no drive that improves the look) stays

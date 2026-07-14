@@ -1456,9 +1456,27 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			_forward_clearance_at(ctx, receiver_spot, receiver_speed))
 	var time_decay: float = pow(
 			AIActionScoring.CARRY_DELAY_DISCOUNT_PER_SEC, delay_s)
-	var completion: float = lane * (1.0 - miss_prob)
+	# Reception pressure — "how pressured is the receiver," from the same
+	# reachable-set model the carrier reads on ITSELF (current_safety). A defender
+	# draped on the receiver's back is invisible to the two existing loss modes:
+	# he is off the passing lane (lane_clear misses him) and off the receiver's
+	# forward-to-net cone (the receiver's own shot pressure_factor misses him),
+	# yet he strips the catch the instant it arrives. This prices exactly that:
+	# the clearance at the reception spot when the puck gets there — defenders'
+	# bodies momentum-projected over the whole flight, sticks maneuvering over the
+	# short reception window (EVADE_HORIZON_S — see reach_clearance). A feed to a
+	# blanketed man now reads as the giveaway it is.
+	var reception_safety: float = AIActionScoring.clearance_to_safety(
+			AIActionScoring.reach_clearance(receiver_spot, flight_t,
+					_scratch_opponents, _scratch_opponent_vels,
+					_scratch_opponent_caps, AIActionScoring.EVADE_HORIZON_S))
+	# Three completion loss modes now, mutually exclusive and summing to 1 with the
+	# retained case: lane interception (1 − lane), execution miss (lane × miss),
+	# and a strip on reception (clean lane, no miss, but a stick on the catch).
+	var clean_lane: float = lane * (1.0 - miss_prob)   # reaches the tape, in flight
+	var completion: float = clean_lane * reception_safety
 	# Clean per-action EV: prob(complete) × value(teammate has puck at receiver)
-	# minus the turnover cost if it's intercepted or missed. The pressure the
+	# minus the turnover cost of each loss mode. The pressure the
 	# carrier is under is priced by the CARRY/HOLD alternatives' own strip cost
 	# (they lose value under pressure) — the pass wins when it out-EVs them, with
 	# no separate "escape" bonus (that double-counted the pressure).
@@ -1473,6 +1491,12 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			AIActionScoring.pass_miss_loss_point(self_pos, receiver_spot),
 			lane * miss_prob, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	# Reception strip: the puck dies AT the receiver, in whatever traffic he was
+	# about to catch it in.
+	cost += AIActionScoring.turnover_cost(
+			receiver_spot, clean_lane * (1.0 - reception_safety),
+			ctx.defending_goal_pos, our_goalie,
+			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 	return benefit - cost
 
 

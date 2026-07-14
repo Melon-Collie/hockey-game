@@ -2020,16 +2020,26 @@ static func board_gap_m(point: Vector3) -> float:
 static func reach_clearance(
 		puck_point: Vector3, time: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> float:
+		opponent_caps: Array = [], maneuver_time: float = -1.0) -> float:
 	var n: int = opponents.size()
 	if n == 0 or opponent_vels.size() != n:
 		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
+	# The body rides its momentum over `time` (proj below); the STICK additionally
+	# maneuvers off that line over `maneuver_time`, reaction-gated. They default to
+	# equal (the carry/hold reads) and differ only for the PASS-RECEPTION read: a
+	# defender's body converges over the whole pass flight (`time`), but his final
+	# stick adjustment onto the catch is the short reception window
+	# (EVADE_HORIZON_S). Using the full flight for the maneuver term too would
+	# balloon the reach far past a real stick lunge and double-count the in-flight
+	# interception the lane model already prices.
+	if maneuver_time < 0.0:
+		maneuver_time = time
 	# maneuver = t_factor × accel: how far a defender redirects its stick off its
-	# momentum line by `time`, reaction-gated. Per-opponent when caps are supplied —
+	# momentum line, reaction-gated. Per-opponent when caps are supplied —
 	# a defender's Agility (max_accel) sets how far it can lunge, its Size
 	# (blade_span) how far its stick touches. Empty caps → league constants for all
 	# (every non-attribute caller), reproducing the prior single-reach behaviour.
-	var t_factor: float = 0.5 * pow(maxf(0.0, time - EVADE_REACTION_S), 2.0)
+	var t_factor: float = 0.5 * pow(maxf(0.0, maneuver_time - EVADE_REACTION_S), 2.0)
 	var has_caps: bool = opponent_caps.size() == n
 	var default_reach: float = t_factor * MANEUVER_ACCEL_M_S2 + EVADE_STICK_REACH_M
 	var worst: float = INF
