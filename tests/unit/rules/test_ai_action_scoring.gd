@@ -1038,19 +1038,28 @@ func test_pass_speed_scale_slows_the_puck_below_the_magnet_pace() -> void:
 func test_pass_launch_speed_fires_harder_onto_a_streaking_receiver() -> void:
 	# Receiver-relative launch (#373): a receiver skating ALONG the pass (onto a
 	# lead feed) closes slower on the puck, so the passer fires harder to keep the
-	# closing pace; one curling BACK toward the passer closes faster, so softer.
+	# closing pace. One curling BACK toward the passer closes faster — but the
+	# softening is CAPPED at the reception ceiling (PASS_RECEIVE_CEILING): a mild
+	# curl-back stays crisp, and only a hard close softens, and only down to what a
+	# squared receiver can still catch — never the old min-wrister floater.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 	var dist: float = 15.0
 	var pass_dir := Vector3(1, 0, 0)
 	var static_launch: float = AIActionScoring.pass_launch_speed(dist, maxw)
 	var streaking: float = AIActionScoring.pass_launch_speed(
 			dist, maxw, 1.0, Vector3(6, 0, 0), pass_dir)
-	var curling_back: float = AIActionScoring.pass_launch_speed(
+	var mild_curl: float = AIActionScoring.pass_launch_speed(
 			dist, maxw, 1.0, Vector3(-6, 0, 0), pass_dir)
+	var hard_curl: float = AIActionScoring.pass_launch_speed(
+			dist, maxw, 1.0, Vector3(-9, 0, 0), pass_dir)
 	assert_gt(streaking, static_launch,
 			"fire harder onto a receiver skating away along the pass")
-	assert_lt(curling_back, static_launch,
-			"softer to a receiver curling back toward the passer")
+	assert_almost_eq(mild_curl, static_launch, 0.01,
+			"a mild curl-back stays crisp — softening is capped at the catch ceiling")
+	assert_lt(hard_curl, static_launch,
+			"a hard curl-back still softens to stay catchable")
+	assert_gt(hard_curl, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S + 5.0,
+			"but only to the reception ceiling, not collapsed to the soft floater")
 
 
 func test_pass_launch_speed_lands_at_target_closing_in_receiver_frame() -> void:

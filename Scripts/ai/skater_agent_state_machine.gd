@@ -1551,7 +1551,18 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 		input.move_vector = _cached_move_vector
 		input.sprint_held = _cached_sprint_held
 		input.stick_lift_held = _cached_stick_lift_held
-		if _has_cached_aim_target:
+		# Aim runs at the physics rate even though the DECISION is throttled:
+		# while chasing, re-derive the reception blade target from current
+		# perception every tick so the blade tracks a puck crossing into reach
+		# (steering stays on the cached move_vector). This is what stops a slow,
+		# catchable feed from transiting an idle blade that only re-aimed on
+		# dispatch ticks. Every other state / the far chase slews the cached aim.
+		var live_recv_aim: Vector3 = Vector3.INF
+		if _state == State.CHASE_PUCK:
+			live_recv_aim = _chase_reception_aim_target(snapshot, self_pos)
+		if live_recv_aim.is_finite():
+			input.mouse_world_pos = _step_mouse_toward(live_recv_aim)
+		elif _has_cached_aim_target:
 			input.mouse_world_pos = _step_mouse_internal(
 					_cached_aim_target, _cached_aim_mode,
 					_cached_aim_max_speed, _cached_aim_arc_rate)
@@ -1876,6 +1887,35 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	return decision
 
 
+# Reception blade-aim target for CHASE — the engagement pull-back, in-reach snap,
+# and gate-park branches of the chase aim, factored out because each is a pure
+# function of current perception (puck + self position/velocity) and cheap. The
+# decision throttle re-runs the full chase handler only every dispatch_period_ticks,
+# but this is called EVERY physics tick (including throttle-skipped ticks) so the
+# blade tracks a puck crossing into reach at the physics rate instead of the
+# dispatch rate — a slow, catchable feed used to transit an idle blade parked on a
+# stale target. Returns Vector3.INF when no reception branch applies (far chase, or
+# a carried / slow puck still out of reach) — the caller keeps its cached FACE aim
+# at the intercept there.
+func _chase_reception_aim_target(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
+	# Just got stripped / stick-checked: pull the blade back to the body so the
+	# loose puck can settle without auto-magnetting straight back onto the stick.
+	if _engagement_cooldown > 0:
+		return Vector3(self_pos.x, 0.0, self_pos.z)
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	# Inside reach: aim at the puck's ACTUAL position (leading here would put the
+	# blade past a puck already on the stick).
+	if self_pos.distance_to(puck_pos) <= _blade_reach:
+		return puck_pos
+	# Fast loose puck (an incoming feed): PARK at the gate — the earliest point on
+	# the puck's travel line the blade can touch — and let the puck arrive into it.
+	if snapshot.puck_state.carrier_peer_id == -1:
+		var pv: Vector3 = snapshot.puck_state.velocity
+		if pv.x * pv.x + pv.z * pv.z > LOOSE_PUCK_TRACK_SPEED_M_S * LOOSE_PUCK_TRACK_SPEED_M_S:
+			return _blade_gate_on_puck_line(self_pos, puck_pos, pv)
+	return Vector3.INF
+
+
 func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
 	# Shot-aware reception first: if a pass is incoming and a shot from the
 	# reception area is on, one-time it (Mode A → ONE_TIMER_PRESSED) or catch it
@@ -2012,13 +2052,15 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		# means the cursor (capped at Hands blade speed, ~10 m/s) chases a
 		# ~20 m/s puck it can never catch: the blade trails the puck through
 		# our reach and the pass transits untouched.
-		if _engagement_cooldown > 0:
-			input.mouse_world_pos = _step_mouse_toward(Vector3(self_pos.x, 0.0, self_pos.z))
-		elif self_pos.distance_to(puck_pos) <= _blade_reach:
-			input.mouse_world_pos = _step_mouse_toward(puck_pos)
-		elif carrier_pid == -1 and puck_speed_xz > LOOSE_PUCK_TRACK_SPEED_M_S:
-			input.mouse_world_pos = _step_mouse_toward(
-					_blade_gate_on_puck_line(self_pos, puck_pos, puck_velocity))
+		# Reception aim — engagement pull-back / in-reach snap / gate-park — is a
+		# pure function of current perception, factored into
+		# _chase_reception_aim_target so the throttle's skipped-tick path can
+		# refresh it live every physics tick (a slow catchable feed used to transit
+		# an idle blade because this only re-aimed on dispatch ticks). INF = no
+		# reception branch → FACE-aim the far chase.
+		var recv_aim: Vector3 = _chase_reception_aim_target(snapshot, self_pos)
+		if recv_aim.is_finite():
+			input.mouse_world_pos = _step_mouse_toward(recv_aim)
 		else:
 			# FACE-aim the far chase at the intercept: the cursor is pure
 			# pointing intent off-puck (nothing to dangle), so it snaps to the
@@ -2030,7 +2072,7 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			# clamps to the cone edge and the body walks around to it — the
 			# same freeze-proofing the arc bought, without the slow swing.
 			# Close-range precision is unaffected: inside _blade_reach the
-			# branch above aims direct at the puck itself.
+			# reception helper aims direct at the puck itself.
 			input.mouse_world_pos = _step_mouse_face(target)
 	# Sprint to win the race to a loose / contested puck. Gap is measured to
 	# the puck itself — the arrival easing inside ~1.5 m slows a clean solo
