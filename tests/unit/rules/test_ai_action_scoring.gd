@@ -1681,6 +1681,48 @@ func test_predicted_seal_kills_the_phantom_dead_angle_shot() -> void:
 	assert_almost_eq(sealed, 0.0, 0.001, "the predicted seal walls the dead-angle look")
 
 
+func test_score_pass_walls_a_dead_angle_receiver() -> void:
+	# The seal predictor now lives inside score_pass too, so every predictive pass
+	# read (defensive threat surfaces, off-puck staging, developing feeds) walls a
+	# feed to the dead-angle wraparound instead of crediting the phantom open net.
+	# A slot receiver on an equally clear lane stays a real feed.
+	var shooter := Vector3(6, 0, 20.0)
+	var corner := Vector3(8, 0, 25.5)      # dead angle, in the seal zone
+	var slot := Vector3(0, 0, 20.65)       # a real look
+	var g_corner: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, GOAL.z - 1.3), GOAL, corner)
+	var g_slot: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, GOAL.z - 1.3), GOAL, slot)
+	var no_opps: Array[Vector3] = []
+	assert_almost_eq(AIActionScoring.score_pass(
+			shooter, corner, GOAL, g_corner, GameRules.NET_HALF_WIDTH, no_opps),
+			0.0, 0.001, "the dead-angle feed is walled by the seal")
+	assert_gt(AIActionScoring.score_pass(
+			shooter, slot, GOAL, g_slot, GameRules.NET_HALF_WIDTH, no_opps),
+			0.05, "the slot feed on an equally clear lane is a real threat")
+
+
+func test_threat_surface_shoot_seals_a_dead_angle_opponent() -> void:
+	# Defensive symmetry: an opponent at the dead-angle wraparound of OUR net is
+	# walled by our keeper, so the threat surface reads the seal too. At this spot
+	# the unsealed phantom shot (~0.29) dominates the positional read (~0.14) — so
+	# without the seal our defenders would over-respect a shot the keeper has
+	# already sealed. Sealed, only the positional fallback remains.
+	var opp := Vector3(5, 0, 25.8)         # in the seal zone, phantom-dominant
+	var g: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, GOAL.z - 1.3), GOAL, opp)
+	var no_opps: Array[Vector3] = []
+	var unsealed_shot: float = AIActionScoring.score_shoot(
+			opp, GOAL, g, GameRules.NET_HALF_WIDTH, no_opps)
+	var positional: float = AIActionScoring.position_potential(opp, GOAL, no_opps)
+	var surface: float = AIActionScoring.threat_surface_shoot(
+			opp, GOAL, g, GameRules.NET_HALF_WIDTH, no_opps)
+	assert_gt(unsealed_shot, positional,
+			"sanity: unsealed, the phantom shot dominates the positional read here")
+	assert_almost_eq(surface, positional, 0.001,
+			"sealed → the phantom shot is gone, only the positional fallback remains")
+
+
 # ─── Post-seal stances (VH / RVH) — the pose IS the coverage ───────────────
 
 func test_vh_seal_closes_short_side_high() -> void:

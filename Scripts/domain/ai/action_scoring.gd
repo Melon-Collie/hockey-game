@@ -1375,9 +1375,16 @@ static func score_pass(
 	# off-puck staging roles pass it so they prize the back-door spot. Default
 	# 0.0 keeps the position-only behaviour for callers that don't (SUPPORT).
 	# Receiver shot speed stays the league default (cross-player; no teammate caps).
+	# Predicted post-seal for the receiver's spot (derive_post_seal_x_sign): a feed
+	# to a sharp near-goal-line angle faces the RVH/VH wall a competent keeper
+	# adopts, so this leaf reads the same sealed coverage the carrier's own
+	# _score_at does — no phantom dead-angle receiver value, whether score_pass is
+	# a defensive threat read or an offensive developing-feed one.
+	var seal_x: float = derive_post_seal_x_sign(receiver, attacking_goal)
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor)
+			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor, [], -1.0, false,
+			seal_x, seal_x != 0.0)
 	return lane * receiver_shot
 
 
@@ -1906,8 +1913,14 @@ static func threat_surface_shoot(
 	if not in_offensive_zone(opp_pos, our_net) \
 			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
 		return positional
+	# Predicted post-seal for the opponent's spot: a dead-angle look at OUR net is
+	# walled by our keeper's RVH/VH the same way the offensive read models it, so
+	# the defensive threat matches the real coverage (no phantom sharp-angle threat
+	# our defenders would over-respect).
+	var seal_x: float = derive_post_seal_x_sign(opp_pos, our_net)
 	var shoot: float = score_shoot(
-			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
+			WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal_x, seal_x != 0.0)
 	return maxf(shoot, positional)
 
 
