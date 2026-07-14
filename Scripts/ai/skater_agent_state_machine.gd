@@ -276,7 +276,7 @@ const _RECV_ONE_TIME: int = 2       # Mode A transitioned to ONE_TIMER_PRESSED; 
 #
 # COUPLING: anything denominated in metres ON THIS RING is really an angle —
 # aim errors are stored as radians on BotSkillProfile precisely so they don't
-# move when this does; the stickhandle/sway offsets and AIM_CONVERGED_DIST_M
+# move when this does; the stickhandle offset and AIM_CONVERGED_DIST_M
 # were rescaled with the 2.0 → 1.3 change to keep their angles identical.
 const CARRY_BLADE_AIM_FORWARD_M: float = 1.3
 
@@ -381,25 +381,6 @@ const CARRY_PROTECT_PRESSURE_FLOOR: float = 0.45
 # much a shield is allowed to turn you), not an evaluation curve — the seam
 # itself stays the grounded reachable-set read.
 const CARRY_PROTECT_MAX_TURN_DEG: float = 90.0
-
-# Natural carry sway: a smooth lateral oscillation of the carry cursor —
-# the rhythmic side-to-side dangle a human carrier keeps going — layered
-# under the threat-driven stickhandle offset above. Amplitude is the
-# per-tier BotSkillProfile.carry_sway_m (0 for raw test agents, so they
-# stay bit-deterministic); rhythm and depth wander per cycle via the
-# per-bot RNG so no two bots (or two cycles) sway in sync. Feel-only:
-# lives in _carry_mouse_aim (CARRY deliberation), so the blade steadies
-# the moment the bot pre-aims a release — a readable "shot coming" tell,
-# like a real shooter settling the puck. Frequency band is a relaxed human
-# dangle cadence — kept LOW because the carry cursor also drives body facing
-# (facing chases the cursor), so a quick sway wags the body and reads as jitter
-# rather than a resting dangle. ~1 slow sway every 1.5–2.5 s.
-const CARRY_SWAY_FREQ_MIN_HZ: float = 0.4
-const CARRY_SWAY_FREQ_MAX_HZ: float = 0.65
-# Per-cycle amplitude wander floor (fraction of carry_sway_m) and how fast
-# the eased amplitude chases its resampled target (per second).
-const CARRY_SWAY_AMP_FRAC_MIN: float = 0.35
-const CARRY_SWAY_AMP_EASE_PER_S: float = 3.0
 
 # Poke-evade maneuver. Layered on top of the continuous defender-
 # avoidance forces (carrier threat-gated repel in steering, sum-of-
@@ -699,16 +680,6 @@ var _committed_aim_error_rad: float = 0.0
 # swallowing the puck instead of going for the doorstep beat.
 var _shot_timing_error_s: float = 0.0
 var _shoot_release_hold_ticks: int = 0
-# Natural carry-sway amplitude (m, from BotSkillProfile.carry_sway_m; see the
-# CARRY_SWAY_* block) and its running oscillator state. Phase/rhythm advance
-# only while _carry_mouse_aim runs (CARRY deliberation); the tick stamp lets
-# the oscillator resume smoothly after any gap instead of jumping phase.
-var _carry_sway_m: float = 0.0
-var _sway_phase: float = 0.0
-var _sway_freq_hz: float = CARRY_SWAY_FREQ_MIN_HZ
-var _sway_amp_frac: float = 1.0
-var _sway_amp_target_frac: float = 1.0
-var _sway_prev_tick: int = 0
 # Bots run at the host physics rate (120 Hz) so we can use a fixed
 # delta. Using a constant keeps the mouse motion deterministic and
 # avoids threading delta through every state handler call.
@@ -910,10 +881,6 @@ var _shot_release_offset_locked: Vector3 = Vector3.ZERO
 # that gets stripped mid-swing, and the moderate fixed pace stays short of icing.
 var _dump_target: Vector3 = Vector3.INF
 var _dump_is_soft: bool = false
-
-# Increments every physics tick the agent runs; doesn't have to be a
-# perfect clock — only used for relative deltas (mouse-sway timing).
-var _agent_tick: int = 0
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
 # one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
@@ -1127,7 +1094,7 @@ const BOT_ONE_TIMER_ZONE_OFFSET_Z_M: float = -0.4
 var _locked_pre_aim_point: Vector3 = Vector3.INF
 
 # Per-bot RNG for hands-side execution sampling (per-release aim/timing
-# errors, carry-sway rhythm). Seeded once in setup() from peer_id and the
+# errors). Seeded once in setup() from peer_id and the
 # host tick at spawn so each bot has its own deterministic but distinct
 # stream (replay-safe).
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -1357,17 +1324,10 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	# Execution error for LIVE bots (raw test agents stay deterministic):
 	# per-tier, split shot-vs-pass — the shot error is the tier's scoring
 	# dial, the pass error stays small so passes keep connecting. Timing
-	# error and carry sway are the other two hands-side humanisers.
+	# error is the other hands-side humaniser.
 	_shot_aim_error_rad = profile.shot_aim_error_rad
 	_pass_aim_error_rad = profile.pass_aim_error_rad
 	_shot_timing_error_s = profile.shot_timing_error_s
-	_carry_sway_m = profile.carry_sway_m
-	if _carry_sway_m > 0.0:
-		# Desync the sway oscillator per bot (phase + first-cycle rhythm);
-		# gated so profile-less / zero-sway agents never advance the RNG.
-		_sway_phase = _rng.randf_range(0.0, TAU)
-		_sway_freq_hz = _rng.randf_range(CARRY_SWAY_FREQ_MIN_HZ, CARRY_SWAY_FREQ_MAX_HZ)
-		_sway_amp_target_frac = _rng.randf_range(CARRY_SWAY_AMP_FRAC_MIN, 1.0)
 
 
 # Set the aim-cursor slew (and the arc rate + pre-aim timeout derived from it) to
@@ -1556,7 +1516,6 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# reacts to OTHERS' possession changes a beat late.
 	var have_puck: bool = (snapshot.real_puck_carrier_peer_id == _peer_id)
 	_ticks_in_state += 1
-	_agent_tick += 1
 	_update_engagement_cooldown(snapshot, self_state)
 	# Per-skater acceleration feeds receiver lead in pass scoring + PASS_PRESSED
 	# aim. Prefer the host's shared per-frame cache (computed once for all bots
@@ -3957,14 +3916,11 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# motion smoothing across ticks. When two defenders converge from
 	# opposite sides and the raw target alternates per tick, the
 	# motion model averages them out (mouse oscillates within a small
-	# range bounded by the per-tick step). The natural sway rides
-	# underneath the threat response — a resting dangle rhythm, not a
-	# reaction (see the CARRY_SWAY_* block) — and is folded in BEFORE the
-	# protect blend below, so shielding pressure attenuates the dangle
-	# along with everything else: a blade pinned to the protect seam
-	# doesn't sway the puck back into the checker's reach.
-	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir) \
-			+ _carry_sway_offset(forward_dir)
+	# range bounded by the per-tick step). Folded in BEFORE the protect
+	# blend below, so shielding pressure attenuates it along with
+	# everything else: a blade pinned to the protect seam doesn't get
+	# pulled back into the checker's reach.
+	var target: Vector3 = base + _stickhandle_offset(snapshot, self_pos, forward_dir)
 	# Puck protection (protects_the_puck tiers): as the presented-forward carry
 	# spot's reachable clearance collapses (carrier protect_pressure → 1), swing
 	# the blade toward the protected seam of the handling envelope — typically
@@ -4004,7 +3960,7 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	if (target.z - max_forward_z) * _own_goal_dir < 0.0:
 		target.z = max_forward_z
 	# ...and inside the boards by a blade of standoff (see
-	# CARRY_BLADE_WALL_MARGIN_M): the forward aim + stickhandle/sway/protect
+	# CARRY_BLADE_WALL_MARGIN_M): the forward aim + stickhandle/protect
 	# offsets have no wall awareness of their own, so a carrier maneuvering
 	# along the boards would otherwise drive its blade into the kickplate and
 	# knock its own puck loose. Clamped last so every offset above is covered;
@@ -4112,34 +4068,6 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	var magnitude: float = clampf(lateral_force, -1.0, 1.0) * STICKHANDLE_OFFSET_MAX_M
 	return right_axis * magnitude
 
-
-# Natural carry sway: the smooth lateral dangle offset for this tick, perpendicular
-# to the carry forward axis. A slow sinusoid whose rhythm (frequency) and depth
-# (amplitude fraction) are resampled once per cycle from the per-bot RNG, with the
-# amplitude EASED toward its target — so the motion is a wandering human rhythm,
-# never a metronome and never a jitter. Advances by real elapsed ticks (the carry
-# handler only runs on full dispatches; skipped ticks are covered by the elapsed-
-# tick delta) and resumes phase-smoothly after any gap via the dt clamp. Zero
-# amplitude (raw test agents / unwired profiles) is a hard no-op: no RNG advance,
-# bit-deterministic baseline preserved. Runs at most once per carry dispatch —
-# trig on the stack, no allocation (hot-path safe).
-func _carry_sway_offset(forward_dir: Vector3) -> Vector3:
-	if _carry_sway_m == 0.0:
-		return Vector3.ZERO
-	var dt: float = clampf(
-			float(_agent_tick - _sway_prev_tick) * MOUSE_TICK_DELTA, 0.0, 0.1)
-	_sway_prev_tick = _agent_tick
-	_sway_phase += TAU * _sway_freq_hz * dt
-	if _sway_phase >= TAU:
-		_sway_phase = fmod(_sway_phase, TAU)
-		# New cycle, new rhythm: resample how fast and how wide this
-		# dangle cycle runs.
-		_sway_freq_hz = _rng.randf_range(CARRY_SWAY_FREQ_MIN_HZ, CARRY_SWAY_FREQ_MAX_HZ)
-		_sway_amp_target_frac = _rng.randf_range(CARRY_SWAY_AMP_FRAC_MIN, 1.0)
-	_sway_amp_frac = lerpf(_sway_amp_frac, _sway_amp_target_frac,
-			minf(CARRY_SWAY_AMP_EASE_PER_S * dt, 1.0))
-	var right_axis: Vector3 = Vector3(forward_dir.z, 0.0, -forward_dir.x)
-	return right_axis * (sin(_sway_phase) * _sway_amp_frac * _carry_sway_m)
 
 
 # Poke-evade maneuver. Overrides the steering inputs for a brief committed
@@ -4636,8 +4564,7 @@ func _step_mouse_internal(target: Vector3, mode: int,
 		_mouse_pos.z = step_target.z
 	# Output IS the smooth _mouse_pos — no per-tick noise. Execution
 	# imperfection lives in the per-release sampled aim error (press-state
-	# geometry) and the carry sway, both of which move the TARGET smoothly
-	# instead of shaking the cursor.
+	# geometry), which moves the TARGET smoothly instead of shaking the cursor.
 	return Vector3(_mouse_pos.x, 0.0, _mouse_pos.z)
 
 

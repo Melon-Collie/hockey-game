@@ -1411,15 +1411,13 @@ func test_opponent_within_of_reads_contest_range() -> void:
 func test_aim_error_off_raw_on_after_profile() -> void:
 	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
 	# bot wired through apply_profile gets the per-tier execution error pair
-	# plus the timing/sway humanisers.
+	# plus the timing humaniser.
 	assert_almost_eq(sm._shot_aim_error_rad, 0.0, 1e-9,
 			"raw agents stay error-free on shots")
 	assert_almost_eq(sm._pass_aim_error_rad, 0.0, 1e-9,
 			"raw agents stay error-free on passes")
 	assert_almost_eq(sm._shot_timing_error_s, 0.0, 1e-9,
 			"raw agents release tick-perfect")
-	assert_almost_eq(sm._carry_sway_m, 0.0, 1e-9,
-			"raw agents carry rail-steady")
 	sm.apply_profile(BotSkillProfile.hard())
 	assert_almost_eq(sm._shot_aim_error_rad, BotSkillProfile.hard().shot_aim_error_rad, 1e-9,
 			"profiled (live) agents carry the shot aim error")
@@ -1427,8 +1425,6 @@ func test_aim_error_off_raw_on_after_profile() -> void:
 			"profiled (live) agents carry the pass aim error")
 	assert_almost_eq(sm._shot_timing_error_s, BotSkillProfile.hard().shot_timing_error_s, 1e-9,
 			"profiled (live) agents carry the release timing variance")
-	assert_almost_eq(sm._carry_sway_m, BotSkillProfile.hard().carry_sway_m, 1e-9,
-			"profiled (live) agents carry the natural sway amplitude")
 
 
 func test_press_entry_samples_release_error_per_budget() -> void:

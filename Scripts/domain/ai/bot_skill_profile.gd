@@ -27,7 +27,7 @@ extends RefCounted
 #     retired: it added only milliseconds of lag, and its straight-line world
 #     blending chord-cut the SM's shaped cursor paths across the body on big
 #     flips, tripping the pose IK gate's facing freeze. The natural swing feel
-#     it bought now comes from the Hands slew + carry sway instead.)
+#     it bought now comes from the Hands slew instead.)
 #   • carrier_reaction_delay_s — how long the bot keeps acting on its PRIOR
 #     read of who controls the puck before recognising a possession change.
 #     This is the human "you can't react to a pass within a tick" lever. It is
@@ -68,13 +68,6 @@ extends RefCounted
 #     push, the late half meets a square goalie. Conversion scales with how
 #     fat the window really is instead of being 100%. Grounded as a physical
 #     measurement (human release-timing variance), not a shape parameter.
-#   • carry_sway_m — natural stickhandling sway: a smooth low-frequency
-#     lateral oscillation of the carry cursor (per-bot RNG phase, amplitude
-#     and rhythm wander) so a carrying bot dangles the puck like a human hand
-#     instead of holding a rail. Purely organic feel — it lives only in CARRY
-#     deliberation; the blade steadies the moment the bot lines up a release
-#     (which doubles as a readable tell, like a real shooter settling). This,
-#     not cursor noise, is the "hands are alive" texture now.
 #   • carry_settle_delay_s — how long after gaining possession the carrier may
 #     ONLY carry before a SHOOT / PASS / DUMP commit is allowed. This is the
 #     "human can't release the instant the puck touches the tape" lever: the
@@ -176,7 +169,7 @@ extends RefCounted
 # To add a tier: add a Difficulty enum value, a factory, and a for_difficulty
 # arm. To add a knob: add a field + _init param, set it in ALL THREE factories,
 # and consume it where the relevant value is read (SkaterAgentStateMachine for
-# dispatch / the execution errors + sway / the pace + settle knobs it copies
+# dispatch / the execution errors / the pace + settle knobs it copies
 # onto RoleContext, GameManager for the carrier reaction delay, and the role
 # behaviors — pressure.gd / carrier.gd — for the pace + settle + timing knobs
 # via RoleContext).
@@ -221,12 +214,6 @@ var pass_aim_error_rad: float
 # tick-perfect release. The "lateral doorstep beats stop being automatic
 # (but stay attempted)" lever. Tick-independent.
 var shot_timing_error_s: float
-
-# Natural stickhandling sway amplitude (metres, lateral on the carry cursor).
-# A smooth ~1–1.5 Hz oscillation with per-bot RNG rhythm/amplitude wander —
-# the organic dangle texture while carrying. Feel-only (CARRY deliberation;
-# never active during a windup or release). 0.0 = rail-steady carry.
-var carry_sway_m: float
 
 # How long (seconds) after gaining possession the carrier may only CARRY
 # before any SHOOT / PASS / DUMP commit is allowed — the "settle the puck
@@ -280,7 +267,7 @@ var protects_the_puck: bool
 func _init(p_carrier_reaction_delay_s: float,
 		p_dispatch_period_ticks: int,
 		p_shot_aim_error_rad: float, p_pass_aim_error_rad: float,
-		p_shot_timing_error_s: float, p_carry_sway_m: float,
+		p_shot_timing_error_s: float,
 		p_carry_settle_delay_s: float,
 		p_pursuit_standoff_m: float, p_pass_speed_scale: float,
 		p_check_aggression: float, p_defensive_anticipation_scale: float,
@@ -292,7 +279,6 @@ func _init(p_carrier_reaction_delay_s: float,
 	shot_aim_error_rad = p_shot_aim_error_rad
 	pass_aim_error_rad = p_pass_aim_error_rad
 	shot_timing_error_s = p_shot_timing_error_s
-	carry_sway_m = p_carry_sway_m
 	carry_settle_delay_s = p_carry_settle_delay_s
 	pursuit_standoff_m = p_pursuit_standoff_m
 	pass_speed_scale = p_pass_speed_scale
@@ -317,9 +303,7 @@ func _init(p_carrier_reaction_delay_s: float,
 # no longer tick-perfect: the doorstep lateral beat is still hunted (scored
 # at the median ~0.05 s-late release), but a window in the ~0.05–0.10 s band
 # is a coin flip decided by the sampled delay — the goalie robs the late
-# draws — and only genuinely fat windows still convert every time. A subtle
-# 0.05 m carry sway (cursor metres at the carry aim ring — ~±2° of dangle)
-# keeps the hands alive without costing control. No settle
+# draws — and only genuinely fat windows still convert every time. No settle
 # beat — Hard releases the tick the compete says fire. Pace knobs all at
 # their no-op baseline (standoff 0.0, pass scale 1.0,
 # check aggression 1.0, anticipation 1.0) — Hard keeps today's tight
@@ -328,7 +312,7 @@ func _init(p_carrier_reaction_delay_s: float,
 # plays, angles its chase, plays the pass on odd-man rushes, and shields the
 # puck with its body — the full hockey IQ.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.03, 0.0,
+	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.0,
 			0.0, 1.0, 1.0, 1.0,
 			true, true, true, true, true)
 
@@ -347,8 +331,8 @@ static func hard() -> BotSkillProfile:
 # odd wide one, and the score's spread budget stops the from-range snipes
 # entirely); pass error stays near-Hard at 0.015 rad so the passing game keeps
 # connecting. Release timing slop 0.16 s — Normal still tries the tight
-# plays but a set goalie regularly wins the late draws. Carry sway 0.09 m: a visibly
-# loose, human dangle. Settle beat 0.30 s — the puck visibly arrives on the
+# plays but a set goalie regularly wins the late draws. Settle beat 0.30 s —
+# the puck visibly arrives on the
 # tape before the next play starts, and pressuring a fresh carrier is a real
 # play now. Tune shot error first when Normal's scoring is off: it's the dial
 # that moves goals without making the bots look drunk.
@@ -373,7 +357,7 @@ static func hard() -> BotSkillProfile:
 # down by the tuning dials instead (shot wobble first — see the finish note
 # above). Easy is where the behaviour gates close.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.055, 0.30,
+	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.30,
 			1.5, 1.0, 0.65, 0.6,
 			true, true, true, true, true)
 
@@ -392,8 +376,7 @@ static func normal() -> BotSkillProfile:
 # the spread budget means Easy only pulls the trigger in tight or on a
 # genuinely gaping hole, and even those aren't automatic); pass error 0.0225 rad
 # keeps tape-to-tape mostly connecting with the occasional honest bobble.
-# Release timing slop 0.24 s — Easy telegraphs and fires a beat late. Carry
-# sway 0.14 m — the loose, swimmy handle a newcomer reads instantly. Settle
+# Release timing slop 0.24 s — Easy telegraphs and fires a beat late. Settle
 # beat 0.55 s — a newcomer can watch an Easy bot receive, gather, and THEN
 # decide, and closing on a fresh carrier reliably forces the turnover.
 #
@@ -412,7 +395,7 @@ static func normal() -> BotSkillProfile:
 # in front (a newcomer's poke-check genuinely steals it). Beginner hockey IQ
 # to match the beginner hands.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.085, 0.55,
+	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.55,
 			3.0, 1.0, 0.0, 0.2,
 			false, false, false, false, false)
 
