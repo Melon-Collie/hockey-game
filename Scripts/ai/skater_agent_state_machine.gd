@@ -1020,6 +1020,24 @@ var _scratch_shot_opponents: Array[Vector3] = []
 # (live line gone) usually exits long before the budget backstop below.
 var _one_timer_press_tick: int = 0
 
+# Whether ONE_TIMER_PRESSED has fired its slap press yet. The controller
+# LOCKS the slapper direction from the mouse at the press tick
+# (_enter_slapper_charge), so pressing while the cursor is still parked on
+# the previous state's target locked a watching-the-play aim and the
+# one-timer fired wherever the bot had been LOOKING — the press waits for
+# the aim to settle into the reach cone first (see the press gate in
+# _state_one_timer_pressed).
+var _one_timer_slap_down: bool = false
+
+# Backstop on that aim-settle wait: facing_drag covers the worst beyond-cone
+# overshoot (~30°) well inside this, so hitting it means unreadable facing
+# geometry — press anyway rather than eat the whole feed flight un-wound.
+const ONE_TIMER_AIM_WAIT_MAX_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 5   # ~0.2 s
+
+# Cap on the feed-arrival lookahead the one-timer aim reads the goalie at —
+# past this the feed is a long cross-ice saucer and the prediction is noise.
+const ONE_TIMER_FEED_LOOKAHEAD_MAX_S: float = 1.2
+
 # Budget backstop for ONE_TIMER_PRESSED, sized to outlast the longest scored
 # feed: entry happens at feed RELEASE now (the flight time is what builds the
 # visible wind-up), so the wait must cover a full pass flight (~PASS_LEAD_MAX_S
@@ -3113,17 +3131,31 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 		_apply_steering(input, snapshot, self_pos, line_anchor)
 	else:
 		_apply_brake_steering(input, snapshot, self_pos)
-	# Mouse + facing stay locked on the open net for the entire wait — the
-	# slapper aim locks from this at the tick-0 press, and the torso coil
-	# plays against it — rotated by this release's committed execution error
-	# (shot budget, sampled at press entry; constant through the wait).
+	# Mouse + facing stay on the open net for the entire wait — FACE-aimed
+	# (this is pre-aim: the cursor is pure pointing intent, cone-clamped;
+	# facing_drag is the real rotation limit) at the hole read AGAINST THE
+	# FEED'S ARRIVAL: the goalie is mid-re-square while the pass flies, so
+	# the aim targets the hole he concedes at contact, not the one he is
+	# currently vacating. Rotated by this release's committed execution
+	# error (shot budget, sampled at press entry; constant through the wait).
 	var clean_aim: Vector3 = _apply_committed_aim_error(
-			self_pos, _shot_aim_point(snapshot, self_pos, 0.0))
-	input.mouse_world_pos = _step_mouse_toward(clean_aim)
+			self_pos, _shot_aim_point(snapshot, self_pos,
+					_one_timer_feed_time_s(snapshot, self_pos)))
+	input.mouse_world_pos = _step_mouse_face(clean_aim)
 
-	if _one_timer_press_tick == 0:
+	# The controller LOCKS the slapper direction from the mouse at the press
+	# tick, so the press waits until the aim has actually settled into the
+	# reach cone (a late-ready commit or a zone-fallback trigger can enter
+	# this state still looking at the play — pressing then locked a
+	# watching-the-play aim and the one-timer fired wherever the bot had
+	# been LOOKING). The backstop presses anyway rather than eat the whole
+	# flight un-wound on unreadable facing geometry.
+	if not _one_timer_slap_down and (
+			_one_timer_aim_settled(snapshot, self_pos, clean_aim)
+			or _one_timer_press_tick >= ONE_TIMER_AIM_WAIT_MAX_TICKS):
 		debug_last_decision = "ONE_TIMER"
 		input.slap_pressed = true
+		_one_timer_slap_down = true
 
 	if have_puck:
 		# Attached mid-charge — the controller opened the one-timer window
@@ -3149,8 +3181,8 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
-	# Feed still inbound — keep the wind-up building.
-	input.slap_held = true
+	# Feed still inbound — keep the wind-up building (once pressed).
+	input.slap_held = _one_timer_slap_down
 	_one_timer_press_tick += 1
 
 	# Budget backstop (see ONE_TIMER_PRESS_MAX_TICKS) — the dead-feed bail
@@ -3158,6 +3190,39 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 	if _one_timer_press_tick >= ONE_TIMER_PRESS_MAX_TICKS:
 		input.slap_held = false
 		_set_state(_post_puck_lost_state(snapshot))
+
+
+# True when the one-timer's committed aim can fire from the current stance —
+# inside the blade reach cone (with the commit margin), so the press-tick
+# lock captures a real at-the-net direction. Unreadable facing (degenerate
+# state) never blocks: missing data must not starve the wind-up.
+func _one_timer_aim_settled(snapshot: WorldSnapshot, self_pos: Vector3,
+		aim: Vector3) -> bool:
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null or self_state.facing.length_squared() < 0.0001:
+		return true
+	return _aim_needs_no_rotation(self_state.facing,
+			Vector2(aim.x - self_pos.x, aim.z - self_pos.z))
+
+
+# Remaining feed-flight time: the distance along the puck's live line to my
+# perpendicular foot, over its current speed (the same geometry as
+# _one_timer_line_anchor). 0 when there's no readable live feed — a dead or
+# held puck reads as "arriving now", so the aim falls back to the goalie as
+# he stands.
+func _one_timer_feed_time_s(snapshot: WorldSnapshot, self_pos: Vector3) -> float:
+	if snapshot.puck_state == null:
+		return 0.0
+	var pv: Vector3 = snapshot.puck_state.velocity
+	var speed_sq: float = pv.x * pv.x + pv.z * pv.z
+	if speed_sq < RECEIVE_TRIGGER_PUCK_SPEED_M_S * RECEIVE_TRIGGER_PUCK_SPEED_M_S:
+		return 0.0
+	var speed: float = sqrt(speed_sq)
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var along: float = Vector3(
+			self_pos.x - puck_pos.x, 0.0, self_pos.z - puck_pos.z) \
+			.dot(Vector3(pv.x / speed, 0.0, pv.z / speed))
+	return clampf(along / speed, 0.0, ONE_TIMER_FEED_LOOKAHEAD_MAX_S)
 
 
 # Helper: writes one-timer-ready to TeamBrain. Off-puck role decision
@@ -4333,13 +4398,34 @@ func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapsh
 
 
 # Picks the desired raw aim direction: anchor direction when far,
-# threat direction when near anchor.
+# threat direction when near anchor — except the OPEN-HIPS catch stance: a
+# TEAMMATE has the puck and we're in the offensive zone, so we're a candidate
+# receiver, and the stance splits between the play and the net (the puck-net
+# bisector — both stay comfortably inside the blade cone). The catch then
+# lands with the shot already loaded instead of needing a full post-catch
+# rotation toward a net that was at our back. Defensive watching (loose puck
+# or an opponent carrier) keeps eyes-on-the-threat.
 func _compute_desired_aim_dir(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapshot,
 		near_anchor_m: float = FACE_THREAT_NEAR_ANCHOR_M) -> Vector3:
 	var to_anchor: Vector3 = anchor - self_pos
 	if to_anchor.length() > near_anchor_m:
 		return to_anchor.normalized()
-	return _face_threat_or_current(snapshot, self_pos)
+	var threat_dir: Vector3 = _face_threat_or_current(snapshot, self_pos)
+	if snapshot.puck_state == null:
+		return threat_dir
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier == -1 or carrier == _peer_id \
+			or _team_id_by_peer.get(carrier, -1) != _team_id \
+			or not AIActionScoring.in_offensive_zone(self_pos, _attacking_goal_pos):
+		return threat_dir
+	var to_net: Vector3 = _attacking_goal_pos - self_pos
+	to_net.y = 0.0
+	if to_net.length_squared() < 0.01:
+		return threat_dir
+	var open_hips: Vector3 = threat_dir + to_net.normalized()
+	if open_hips.length_squared() < 0.01:
+		return threat_dir   # puck and net dead-opposite — degenerate bisector
+	return open_hips.normalized()
 
 
 # Reads the bot's facing as a unit XZ Vector3, with safe fallback.
@@ -4717,6 +4803,7 @@ func _set_state(s: State) -> void:
 			_committed_aim_error_rad = _sample_aim_error_rad(_pass_aim_error_rad)
 		if s == State.ONE_TIMER_PRESSED:
 			_one_timer_press_tick = 0
+			_one_timer_slap_down = false
 			# A one-timer is the worst-controlled release there is — it reads
 			# the SHOT budget (matching the reception gate's spread budget).
 			_committed_aim_error_rad = _sample_aim_error_rad(_shot_aim_error_rad)
