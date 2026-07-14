@@ -1623,6 +1623,46 @@ func test_five_hole_gap_rule_mirrors_pad_geometry() -> void:
 	assert_almost_eq(GoalieBehaviorRules.five_hole_gap_m(true, 0.18), 0.36, 0.001)
 
 
+# ─── Predicted post-seal (the "one model, consistent inputs" fix) ──────────────
+
+func test_derive_post_seal_only_fires_in_the_sharp_near_line_zone() -> void:
+	# The predictor matches the live goalie's RVH/VH trigger: within ~2 m of the
+	# goal line AND past ~80° off the goal normal. A dead-angle corner seals; a
+	# normal slot / mid look does not; a sharp-but-in-tight shot still short of the
+	# extreme angle does not.
+	var goal := Vector3(0, 0, -26.65)
+	assert_ne(AIActionScoring.derive_post_seal_x_sign(Vector3(8, 0, -25.5), goal), 0.0,
+			"dead-angle corner (1.15 m out, ~82°) is sealed")
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(0, 0, -20.65), goal), 0.0,
+			"the slot is never sealed")
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(7, 0, -18.0), goal), 0.0,
+			"an off-angle mid look (8.6 m out) is not sealed")
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(4, 0, -24.0), goal), 0.0,
+			"a sharp but in-tight look (2.65 m out, ~56°) is a real shot, not a seal")
+	# The seal side is the shooter's side of the goal center.
+	assert_eq(AIActionScoring.derive_post_seal_x_sign(Vector3(-8, 0, -25.5), goal), -1.0,
+			"seals the side the shooter is on")
+
+
+func test_predicted_seal_kills_the_phantom_dead_angle_shot() -> void:
+	# The bug: a carry candidate / receiver at the dead-angle corner scored a
+	# phantom far-side open net (the predictive path fed score_shoot an unsealed
+	# keeper), so a bot would carry there and never shoot. With the predicted seal
+	# threaded, the same model reads the wall the live keeper actually adopts.
+	var goal := Vector3(0, 0, -26.65)
+	var corner := Vector3(8, 0, -25.5)
+	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
+			Vector3(0, 0, goal.z + 1.3), goal, corner)
+	var seal: float = AIActionScoring.derive_post_seal_x_sign(corner, goal)
+	var unsealed: float = AIActionScoring.score_shoot(
+			corner, goal, goalie, GameRules.NET_HALF_WIDTH, [] as Array[Vector3])
+	var sealed: float = AIActionScoring.score_shoot(
+			corner, goal, goalie, GameRules.NET_HALF_WIDTH, [] as Array[Vector3],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal, seal != 0.0)
+	assert_gt(unsealed, 0.05, "sanity: the unsealed read is the phantom the bug scored")
+	assert_almost_eq(sealed, 0.0, 0.001, "the predicted seal walls the dead-angle look")
+
+
 # ─── Post-seal stances (VH / RVH) — the pose IS the coverage ───────────────
 
 func test_vh_seal_closes_short_side_high() -> void:

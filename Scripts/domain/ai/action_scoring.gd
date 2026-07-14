@@ -1126,6 +1126,42 @@ static func score_shoot(
 	return shot_quality * lane * pressure_factor
 
 
+# ── Predicted post-seal (RVH/VH) — the ONE xG model, consistent inputs ─────────
+# score_shoot is the single xG model. The only reason it gave two answers for the
+# same spot was its INPUTS: the shoot-now eval reads the LIVE goalie's seal state
+# (GoalieNetworkState.post_seal_x_sign) and threads it, while predictive callers
+# (carry candidates, pass receivers) left the seal at its unsealed default — so a
+# shot origin down at a sharp angle scored a PHANTOM far-side open net, and the
+# bot would carry to that "shot" only to meet a live keeper already walled at the
+# post (the "carries there, never shoots" bug). This predicts the seal a
+# competent keeper WILL adopt at a spot, from the SAME geometric trigger the live
+# goalie uses (GoalieBehaviorRules.is_puck_in_defensive_zone), so the predictive
+# paths feed the model the same coverage the shoot-now path reads live.
+#
+# Mirrors GoalieController.zone_post_z / rvh_early_angle (the RVH/VH trigger):
+# within this depth of the goal line AND past this bearing off the goal normal,
+# the keeper is post-sealed. Deliberately narrow (2 m, 80°) — it touches only the
+# wraparound/extreme-corner region, never a normal slot or mid look.
+const GOALIE_SEAL_ZONE_POST_Z_M: float = 2.0
+const GOALIE_SEAL_ANGLE_RAD: float = deg_to_rad(80.0)
+
+
+# Predicted post-seal x-sign for a shot from `shooter`: the side (relative to goal
+# center) a keeper would seal, or 0.0 for the common in-front look where no seal
+# applies. Only the IN-FRONT sharp angle is sealed here (VH — tall); a release
+# behind the goal line is already zeroed by score_shoot's forward guard, so it
+# needs no seal. Pure float, allocation-free — safe on the per-candidate path.
+static func derive_post_seal_x_sign(shooter: Vector3, attacking_goal: Vector3) -> float:
+	var net_normal_z: float = -signf(attacking_goal.z)
+	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
+	if forward < 0.001 or forward > GOALIE_SEAL_ZONE_POST_Z_M:
+		return 0.0
+	var lateral: float = absf(shooter.x - attacking_goal.x)
+	if atan2(lateral, maxf(forward, 0.01)) < GOALIE_SEAL_ANGLE_RAD:
+		return 0.0
+	return signf(shooter.x - attacking_goal.x)
+
+
 # Point-blank jam distance: the closest the puck realistically gets to a set goalie
 # before his body/pads stop it. A physical measurement (skate + pad depth), not a
 # tuning knob — it just keeps the shooter strictly in FRONT of the keeper so the

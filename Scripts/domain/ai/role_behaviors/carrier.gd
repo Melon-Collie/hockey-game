@@ -1997,11 +1997,19 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	# pass this bot's own spread so a noisy hand demands wider windows in shot
 	# selection; receiver evals leave 0 (cross-player boundary — a teammate may be
 	# a human whose hand we don't model, so we don't handicap the feed).
+	# Predicted post-seal for THIS spot — the same RVH/VH wall the live goalie
+	# adopts at a sharp near-goal-line angle (AIActionScoring.derive_post_seal_x_sign).
+	# Threading it here is what makes the predictive paths (carry candidates, pass
+	# receivers) score the sharp-angle look against the SAME sealed keeper the
+	# shoot-now eval reads live — no phantom far-side open net a bot would carry to
+	# but never shoot. 0.0 (no seal) for every normal in-front look, so slot/mid
+	# scoring is untouched.
+	var seal_x: float = AIActionScoring.derive_post_seal_x_sign(pos, attacking_goal)
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
 			goalie_unsettled_factor, _scratch_opponent_caps,
-			-1.0, false, 0.0, false, aim_spread_rad)
+			-1.0, false, seal_x, seal_x != 0.0, aim_spread_rad)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		# PURE xG in the offensive zone — position_potential (the progression
 		# value map) is deliberately NOT used here; the O-zone is xG's domain, a
