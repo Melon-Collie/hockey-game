@@ -141,6 +141,14 @@ var _wide_hold_captured: bool = false
 func hold_period_break_wide(duration: float) -> void:
 	_wide_hold_left = duration + _WIDE_HOLD_SLACK
 	_wide_hold_captured = false
+	# Snap the live-framing state that the crane-down blends into once the wide
+	# hold ends, so a period that ends on an extreme dynamic zoom / zone bias
+	# (e.g. a rush at the buzzer) doesn't carry that framing into the next
+	# period even if the intermission is skipped before it would otherwise
+	# decay on its own.
+	_current_height = min_height * PlayerPrefs.camera_distance
+	_smoothed_attack_dir = 0.0
+	_smoothed_direction_factor = 1.0
 
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	_goal_0 = goal_0

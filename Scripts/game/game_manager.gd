@@ -3900,6 +3900,12 @@ func return_to_lobby() -> void:
 				"name":           r.player_name,
 				"number":         r.jersey_number,
 				"is_left_handed": r.is_left_handed,
+				"speed":          r.attributes.speed,
+				"agility":        r.attributes.agility,
+				"hands":          r.attributes.hands,
+				"size":           r.attributes.size,
+				"physical":       r.attributes.physical,
+				"shot":           r.attributes.shot,
 			}
 	NetworkManager.pending_bot_slots = bot_slots
 	NetworkManager.pending_bot_identities = bot_identities
