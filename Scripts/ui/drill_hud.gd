@@ -16,6 +16,7 @@ signal exit_pressed
 var _shot_label: Label = null
 var _score_label: Label = null
 var _flash_label: Label = null
+var _flash_card: Control = null
 var _results_panel: Control = null
 var _results_heading: Label = null
 var _results_sub: Label = null
@@ -127,13 +128,45 @@ func _build_tracker() -> void:
 
 
 func _build_flash() -> void:
+	# A broadcast-style verdict card in the same visual language as the faceoff
+	# "2 → 1 → DROP!" countdown chyron: a BROADCAST_BG panel with 4px rounded
+	# corners, sat in the lower-centre so it doesn't cover the net. Replaces the
+	# old bare floating word so a result reads as HUD chrome, not stray text.
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.BROADCAST_BG
+	style.set_corner_radius_all(4)
+	style.anti_aliasing = false
+	style.set_content_margin(SIDE_LEFT, 40)
+	style.set_content_margin(SIDE_RIGHT, 40)
+	style.set_content_margin(SIDE_TOP, 16)
+	style.set_content_margin(SIDE_BOTTOM, 16)
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", style)
+
 	_flash_label = Label.new()
-	_flash_label.add_theme_font_size_override("font_size", 72)
-	_flash_label.set_anchors_preset(Control.PRESET_CENTER)
+	_flash_label.add_theme_font_size_override("font_size", 60)
 	_flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_flash_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_flash_label.visible = false
-	add_child(_flash_label)
+	_flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	panel.add_child(_flash_label)
+
+	# Bottom-centre band, mirroring the faceoff banner's placement (clear of the
+	# top-right tracker and the goal mouth).
+	var root := Control.new()
+	root.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	root.offset_top = -260.0
+	root.offset_bottom = -100.0
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var centering := CenterContainer.new()
+	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
+	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	centering.add_child(MenuStyle.wrap_drop_shadow(panel, Vector2(5, 5)))
+	root.add_child(centering)
+
+	_flash_card = root
+	_flash_card.visible = false
+	add_child(_flash_card)
 
 
 func _build_results_panel() -> void:
@@ -194,7 +227,7 @@ func _build_results_panel() -> void:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 func set_progress(attempt_number: int, total: int, makes: int) -> void:
-	_flash_label.visible = false
+	_flash_card.visible = false
 	_shot_label.text = "Shot %d / %d" % [attempt_number, total]
 	_score_label.text = "%s: %d" % [_score_noun(), makes]
 
@@ -202,12 +235,12 @@ func set_progress(attempt_number: int, total: int, makes: int) -> void:
 func flash_result(made: bool, makes: int, attempts_taken: int) -> void:
 	_flash_label.text = _success_flash() if made else _fail_flash()
 	_flash_label.add_theme_color_override("font_color", _GREEN if made else _RED)
-	_flash_label.visible = true
+	_flash_card.visible = true
 	_score_label.text = "%s: %d / %d" % [_score_noun(), makes, attempts_taken]
 
 
 func show_results(makes: int, total: int) -> void:
-	_flash_label.visible = false
+	_flash_card.visible = false
 	_results_heading.text = "%d / %d" % [makes, total]
 	_results_sub.text = _verdict(makes, total)
 	_results_panel.visible = true

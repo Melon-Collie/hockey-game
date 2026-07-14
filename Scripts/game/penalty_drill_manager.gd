@@ -2,10 +2,13 @@ extends Node
 
 # Offline penalty-shot drill: "how many can you score out of 10". Spawned by
 # game_scene.gd via DrillRegistry when NetworkManager.drill_id selects it. Owns
-# the whole loop — stage the shooter at centre with the puck, let them skate in on a lone
-# reactive goalie, classify the attempt with PenaltyShotRules (NHL Rule 24.2:
-# keep the puck moving toward the net, one shot, no rebounds), tally it, and
-# restage — finishing with a results card.
+# the whole loop — stage the shooter at centre with the puck a stride ahead to
+# skate onto, let them pick it up and drive in on a lone reactive goalie, classify
+# the attempt with PenaltyShotRules (NHL Rule 24.2: keep the puck moving toward
+# the net, one shot, no rebounds), tally it, and restage — finishing with a
+# results card. The keep-it-moving rules don't arm until the shooter actually
+# picks up the puck, so a loose puck waiting at centre never reads as a stalled
+# shot.
 #
 # Modelled on TutorialManager's lifecycle (single local player + puck, a manager
 # that owns staging and a code-built HUD), minus the multi-step machinery.
@@ -18,9 +21,12 @@ const _NET_HALF_WIDTH: float = GameRules.NET_HALF_WIDTH
 const _ICE_Y: float = 0.05
 const _TOTAL_SHOTS: int = 10
 
-# Centre-ice staging spot for the shooter (and the puck on their stick).
+# Centre-ice staging spot for the shooter. The puck is staged a stride ahead
+# (toward the net) so the shooter skates onto it — the normal proximity-pickup
+# path — rather than starting glued to the blade.
 const _START: Vector3 = Vector3(0.0, 1.0, 0.0)
 const _FACE_NET: Vector2 = Vector2(0.0, -1.0)
+const _STAGE_PUCK_AHEAD: float = 1.2
 
 # How long the GOAL! / NO GOAL flash holds before the next shot is staged.
 const _RESULT_HOLD: float = 1.4
@@ -49,6 +55,11 @@ var _max_progress: float = 0.0
 var _started: bool = false
 var _stall_time: float = 0.0
 var _attempt_time: float = 0.0
+# Latches true the first tick the shooter carries the staged puck. The keep-it-
+# moving failure rules are suppressed until then (and the rush is measured from
+# the pickup point), so a loose puck sitting at centre pre-pickup can't be scored
+# as a stalled/backward shot.
+var _has_possessed: bool = false
 
 
 func _ready() -> void:
@@ -90,13 +101,16 @@ func _begin_attempt() -> void:
 	_started = false
 	_stall_time = 0.0
 	_attempt_time = 0.0
+	_has_possessed = false
 
-	# Stand the shooter at centre facing the net with the puck on their stick,
-	# and reset the goalie into its crease.
+	# Stand the shooter at centre facing the net with the puck staged a stride
+	# ahead to skate onto, and reset the goalie into its crease.
 	_local_controller.teleport_to(_START, _FACE_NET)
-	_give_puck_to_player()
+	_stage_puck_for_player()
 	GameManager.reset_penalty_goalie()
 
+	# Provisional baseline; re-based to the pickup point once the shooter actually
+	# collects the puck (see _tick_live), so forward progress measures the rush.
 	_start_z = _puck.get_puck_position().z
 	_hud.set_progress(_session.current_attempt_number(), _session.total_attempts, _session.makes)
 
@@ -141,6 +155,18 @@ func _physics_process(delta: float) -> void:
 
 
 func _tick_live(delta: float) -> void:
+	# Hold all failure detection until the shooter picks up the puck. Before that
+	# the loose puck is just sitting at centre — measuring "keep it moving" against
+	# it would fail the attempt before the shot even begins. On pickup, re-base the
+	# rush to the pickup point so forward progress starts from zero there.
+	if not _has_possessed:
+		if _puck.carrier == _skater:
+			_has_possessed = true
+			_start_z = _puck.get_puck_position().z
+			_last_progress = 0.0
+			_max_progress = 0.0
+		return
+
 	var pos: Vector3 = _puck.get_puck_position()
 	var progress: float = PenaltyShotRules.forward_progress(pos.z, _start_z, _ATTACK_DIR_Z)
 	# Forward speed from the change in progress, NOT the rigidbody velocity — a
@@ -192,16 +218,13 @@ func _on_exit() -> void:
 
 # ── Staging helpers ───────────────────────────────────────────────────────────
 
-# Puts the puck on the player's stick at centre and tells the controller it now
-# carries the puck (set_carrier only pins it to the blade — without the notify,
-# has_puck stays false and the player physically can't shoot). Mirrors
-# TutorialManager._give_puck_to_player.
-func _give_puck_to_player() -> void:
-	if _puck.carrier != null:
-		_puck.drop()
-	# Clear any pickup lock left from the previous attempt's result hold.
+# Stages the puck a stride ahead of the freshly-teleported shooter (toward the
+# net) so collecting it runs the NORMAL proximity-pickup path — a bare set_carrier
+# bypasses PuckController's bookkeeping (see the passing/accuracy drills). stage_at
+# fully parks it (position + linear AND angular velocity), so a rebound left
+# spinning from the previous attempt can't carry momentum into this one. The
+# per-attempt pickup lock from the result hold is lifted so it can be collected.
+func _stage_puck_for_player() -> void:
 	_puck.remove_skater_cooldown(_skater)
-	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y, _skater.global_position.z))
-	_puck.linear_velocity = Vector3.ZERO
-	_puck.set_carrier(_skater)
-	_local_controller.on_puck_picked_up_network()
+	_puck.stage_at(Vector3(_skater.global_position.x, _ICE_Y,
+			_skater.global_position.z - _STAGE_PUCK_AHEAD))

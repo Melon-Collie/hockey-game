@@ -343,8 +343,8 @@ func _clear_wall() -> void:
 # bare set_carrier bypasses PuckController's bookkeeping — see the tutorial).
 func _stage_puck_for_player() -> void:
 	_puck.remove_skater_cooldown(_skater)
-	if _puck.carrier != null:
-		_puck.drop()
-	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y,
+	# stage_at fully parks the puck (position + linear AND angular velocity + any
+	# queued elevation), so a missed pass left spinning/sliding can't carry its
+	# momentum into the next rep.
+	_puck.stage_at(Vector3(_skater.global_position.x, _ICE_Y,
 			_skater.global_position.z - _STAGE_PUCK_AHEAD))
-	_puck.linear_velocity = Vector3.ZERO

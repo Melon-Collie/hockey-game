@@ -234,6 +234,25 @@ func set_puck_position(pos: Vector3) -> void:
 func set_puck_velocity(vel: Vector3) -> void:
 	linear_velocity = vel
 
+# Immediately parks a LOOSE puck at rest at `pos` — used to restage the puck
+# between offline-drill attempts. Unlike reset() the position lands THIS frame
+# (no deferred _pending_reset) and no puck_released signal fires; unlike a bare
+# set_puck_position + linear=0 it also zeroes ANGULAR velocity and any queued
+# release/elevation velocity, so a fast, spinning missed puck can't keep rolling
+# or carry momentum into the next rep (the "velocity carries over" annoyance). A
+# loose puck is never frozen, so Jolt's unfreeze-zeroing doesn't apply here — the
+# spin has to be cleared explicitly. Wakes the body so a settled puck honors the
+# teleport.
+func stage_at(pos: Vector3) -> void:
+	if carrier != null:
+		drop()
+	sleeping = false
+	global_position = pos
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	_pending_elevation_vel = Vector3.ZERO
+	_pending_elevation = false
+
 # Used by client-side prediction release (notify_local_release). Applies the
 # same _pending_elevation_vel treatment as release() so Jolt's first dynamic
 # integration step gets the full XYZ vector instead of starting at zero.
