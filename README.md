@@ -11,7 +11,7 @@ A 3v3 hockey game built in Godot 4.6.2 (Jolt Physics). Online multiplayer — ea
 1. Go to the [latest release](../../releases/tag/latest) and download the zip for your platform (Windows and Linux only — no macOS build yet)
    - **Windows:** `Windows Desktop.zip` → extract and run `mitts.exe`
    - **Linux:** `LinuxX11.zip` → extract, `chmod +x mitts.x86_64`, then run it
-2. The game launches straight onto the ice in free play (first launch runs a short tutorial). Press **Esc** for the menu — set your name and attributes on the player card, start or join games under **Play**, run the tutorials and drills under **Practice**, or browse your career stats and replays under **Career**.
+2. The game launches straight onto the ice in free play (first launch runs a short tutorial). Press **Esc** for the menu — set your name and attributes on the player card, start or join games under **Play**, run the tutorial course under **Tutorial** or the score-X-of-N drills under **Drills**, or browse your career stats and replays under **Career**.
 
 **Online play uses Steam** — Steam must be running on every machine (host and joiners). **Start Game** opens your lobby (offline vs bots until you flip its visibility to Friends or Public), the **Play** popup lists open public games to join, and Steam friend invites work too. No port forwarding needed.
 

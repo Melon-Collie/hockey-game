@@ -1,6 +1,7 @@
 extends GutTest
 
-# Compile guard for the offline drill scripts (penalty shots, shot accuracy).
+# Compile guard for the offline drill scripts (penalty shots, shot accuracy,
+# passing).
 # The drill managers have no class_name and are only loaded by game_scene at
 # runtime, so a parse error there (a bad type, a renamed method) would never
 # surface in tests. Preloading forces GDScript to compile each one in project
@@ -31,3 +32,13 @@ func test_shot_accuracy_manager_compiles() -> void:
 func test_shot_accuracy_hud_compiles() -> void:
 	var script: GDScript = load("res://Scripts/ui/shot_accuracy_hud.gd")
 	assert_not_null(script, "shot_accuracy_hud.gd failed to compile")
+
+
+func test_passing_drill_manager_compiles() -> void:
+	var script: GDScript = load("res://Scripts/game/passing_drill_manager.gd")
+	assert_not_null(script, "passing_drill_manager.gd failed to compile")
+
+
+func test_passing_drill_hud_compiles() -> void:
+	var script: GDScript = load("res://Scripts/ui/passing_drill_hud.gd")
+	assert_not_null(script, "passing_drill_hud.gd failed to compile")
