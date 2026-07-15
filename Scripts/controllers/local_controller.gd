@@ -528,13 +528,18 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	is_replaying = true
 	for input in _input_history:
 		_process_input(input, input.delta)
+		skater.global_position += skater.velocity * input.delta
 		# Re-resolve skater-vs-skater body checks against where the host actually had
 		# the other skaters at this input's timestamp (from their interpolation
-		# buffers), applied to velocity BEFORE integration — the same slot the old
-		# recorded impulse used. Replaces the recorded-impulse bridge, so the replayed
-		# trajectory tracks host authority instead of a stale live-position impulse.
+		# buffers). Runs AFTER integration to mirror the host exactly: the live resolver
+		# runs after move_and_slide, so it (a) evaluates contact geometry at the
+		# POST-integration self position — the same instant host_ts=T samples the others
+		# at and the authoritative snapshot captures — and (b) applies dvel after the
+		# move, landing it on the next tick. Running before integration (the old
+		# recorded-impulse slot) offset the geometry ~one tick of travel and mis-phased
+		# dvel; a fixed recorded vector didn't care, but position-based re-resolution
+		# does. sep still lands before the clamps below. Replaces the impulse bridge.
 		_replay_resolve_body_checks(input.host_timestamp, input.hit_held, input.brake)
-		skater.global_position += skater.velocity * input.delta
 		# Clamp to the rink boundary after every replay step — the same analytic
 		# projection the live tick applies (boards are off the skater's physics
 		# mask). Without this, a board interaction that differed by even one frame
@@ -656,9 +661,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 # per-tick residual = self's inverse-mass share of the overlap for reconcile to
 # snap out — worst on LOW-TRANSFER glancing contact, where dvel is small and sep
 # does the positional work (exactly the "glance off, don't dead-stop" case).
-# Placement is fine before the integration line: position adds commute, and both
-# land before the rink/net clamps, matching the live "sep after move_and_slide"
-# ordering. Runs the SAME inelastic model + aggressor gate as the live resolver, so
+# Called AFTER this tick's integration (see the replay loop) so the geometry is
+# evaluated at the post-integration self position — matching the host's resolve
+# instant and the host_ts=T sample instant — and dvel lands on the next tick.
+# Runs the SAME inelastic model + aggressor gate as the live resolver, so
 # aggressor → decel/drive-through, victim → incoming knockback. Deterministic from
 # replicated data + the replayed input (local hit-commit / brace from the input
 # frame). The remote attacker's hit-commit isn't on the wire, so it stays passive
