@@ -46,6 +46,21 @@ func on_local_hit(impulse: float) -> void:
 		unlock(Achievements.event_id("big_hit"))
 
 
+# Live hook: the player just finished the whole tutorial course (every
+# TutorialRegistry entry complete — GameManager checks that before calling).
+# A meta-progression event, so it intentionally bypasses the game-over sweep and
+# its free-play/drill gate: the course is played in tutorial mode.
+func on_tutorials_complete() -> void:
+	unlock(Achievements.event_id("tutorials_done"))
+
+
+# Live hook: the player applied a custom build in the free-play picker
+# (NetworkManager.local_attributes_changed). Also outside the game-over sweep —
+# build edits happen in free play, where the achievement gate is closed.
+func on_build_edited() -> void:
+	unlock(Achievements.event_id("build_edited"))
+
+
 # Issue an unlock, skipping work for anything already earned this session or in a
 # prior session (Steam remembers across launches).
 func unlock(id: String) -> void:

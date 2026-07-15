@@ -415,6 +415,8 @@ func _on_exit_confirmed() -> void:
 	# Sticky: marking complete here means the player won't be auto-routed back
 	# into this tutorial on next launch. They can still re-enter from the menu.
 	PlayerPrefs.mark_tutorial_complete(_tutorial_id)
+	# Course-complete achievement check (no-op until every tutorial is done).
+	GameManager.notify_tutorial_completed()
 	_exit_to_free_play()
 
 

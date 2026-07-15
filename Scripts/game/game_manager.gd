@@ -2939,7 +2939,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	# a moving puck without possessing it) so goal attribution and assist credit
 	# work — without this, get_last_toucher() returns the passer at goal time.
 	_shot_tracker.on_deflection(pid)
-	_shot_tracker.on_shot_started(pid)
+	_shot_tracker.on_shot_started(pid, true)  # one-timer tag → One-Timer achievement
 	# Lag-comp the goalie reaction trigger (see _fire_remote_shot for the
 	# full rationale). One-timers go through the same RPC-back-date flow.
 	# clamp_back_date also zeroes the host's own path (host_timestamp = 0 →
@@ -3691,6 +3691,20 @@ func _achievements_active() -> bool:
 	return not NetworkManager.is_free_play_mode and not NetworkManager.is_drill_mode()
 
 
+# Called from the tutorial-completion paths (TutorialManager / TutorialHUD) each
+# time a tutorial is marked complete. Fires the "Student of the Game" achievement
+# once the whole course is done. Deliberately outside _achievements_active — the
+# course runs in tutorial mode, where that gate is closed, so the meta hook is
+# called directly. Idempotent downstream (AchievementService de-dupes).
+func notify_tutorial_completed() -> void:
+	if _achievements == null:
+		return
+	for id: String in TutorialRegistry.ALL_IDS:
+		if not PlayerPrefs.is_tutorial_complete(id):
+			return
+	_achievements.on_tutorials_complete()
+
+
 # Latches _ranked_match (see its doc) once two humans share the match. Called
 # from _on_registry_player_added so both the initial roster population and a
 # mid-match join re-evaluate it; _apply_reset re-runs it for rematches.
@@ -3961,6 +3975,10 @@ func _on_local_attributes_changed(attrs: PlayerAttributes) -> void:
 	if record == null:
 		return
 	record.attributes = attrs
+	# Customized your build — a meta achievement, fired directly (this signal only
+	# fires from the free-play picker Apply, where the game-over sweep never runs).
+	if _achievements != null:
+		_achievements.on_build_edited()
 	if NetworkManager.is_in_online_match():
 		return
 	if record.controller != null:

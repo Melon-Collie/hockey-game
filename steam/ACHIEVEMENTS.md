@@ -41,25 +41,33 @@ for that checklist.
 `when` = how it's evaluated (see the registry header for the `cond` kinds):
 - **game** — a single game's stat reached the bar (any mode, incl. vs bots).
 - **special** — a compound game-over condition.
-- **event** — fired live, the moment it happens, during a match.
+- **event** — fired live the moment it happens (a big hit mid-match), or from a
+  meta-progression moment outside a match (finishing the tutorial course,
+  editing your build) — those bypass the game-over sweep and its mode gate.
 - **career** — a lifetime total backed by **Steam User Stats** (online games;
   NOT gated on stat-sharing, and no Supabase dependency). The mirrored stats must
   be defined too — see STATS.md.
 
-| API Name (`id`)     | Name         | When    | Unlocks when…                                  |
-|---------------------|--------------|---------|------------------------------------------------|
-| `ACH_HAT_TRICK`     | Hat Trick    | game    | 3 goals in a single game                       |
-| `ACH_PLAYMAKER`     | Playmaker    | game    | 3 assists in a single game                     |
-| `ACH_BIG_NIGHT`     | Big Night    | game    | 5 points (G+A) in a single game                |
-| `ACH_BRICK_WALL`    | Brick Wall   | game    | 5 blocked shots in a single game               |
-| `ACH_FIRST_GOAL`    | Lamp Lighter | game    | score your first goal (any mode)               |
-| `ACH_SHUTOUT`       | Shutout      | special | win a game conceding 0 goals                   |
-| `ACH_FIRST_WIN`     | W            | special | win your first game (any mode)                 |
-| `ACH_FREIGHT_TRAIN` | Freight Train| event   | land a body check above the big-hit threshold  |
-| `ACH_SNIPER`        | Sniper       | career  | 50 career goals                                |
-| `ACH_SETUP_ARTIST`  | Setup Artist | career  | 50 career assists                              |
-| `ACH_ENFORCER`      | Enforcer     | career  | 100 career hits                                |
-| `ACH_VETERAN`       | Veteran      | career  | 25 career games                                |
+| API Name (`id`)     | Name              | When    | Unlocks when…                                  |
+|---------------------|-------------------|---------|------------------------------------------------|
+| `ACH_HAT_TRICK`     | Hat Trick         | game    | 3 goals in a single game                       |
+| `ACH_PLAYMAKER`     | Playmaker         | game    | 3 assists in a single game                     |
+| `ACH_BIG_NIGHT`     | Big Night         | game    | 5 points (G+A) in a single game                |
+| `ACH_BRICK_WALL`    | Brick Wall        | game    | 3 blocked shots in a single game               |
+| `ACH_FIRST_GOAL`    | Lamp Lighter      | game    | score your first goal (any mode)               |
+| `ACH_ONE_TIMER`     | One-Timer         | game    | score off a one-timer                          |
+| `ACH_TIP_IN`        | Redirect          | game    | tip a teammate's shot into the net             |
+| `ACH_FACEOFF_BOSS`  | Faceoff Boss      | game    | win 5 faceoffs in a single game                |
+| `ACH_PICKPOCKET`    | Pickpocket        | game    | 5 takeaways in a single game                   |
+| `ACH_SHUTOUT`       | Shutout           | special | win a game conceding 0 goals                   |
+| `ACH_FIRST_WIN`     | W                 | special | win your first game (any mode)                 |
+| `ACH_FREIGHT_TRAIN` | Freight Train     | event   | land a body check above the big-hit threshold  |
+| `ACH_STUDENT`       | Student of the Game| event  | complete every tutorial                        |
+| `ACH_CUSTOM_BUILD`  | Make It Yours     | event   | edit your player's build                       |
+| `ACH_SNIPER`        | Sniper            | career  | 50 career goals                                |
+| `ACH_SETUP_ARTIST`  | Setup Artist      | career  | 50 career assists                              |
+| `ACH_ENFORCER`      | Enforcer          | career  | 100 career hits                                |
+| `ACH_VETERAN`       | Veteran           | career  | 25 career games                                |
 
 ---
 

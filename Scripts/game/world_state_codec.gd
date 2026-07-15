@@ -66,7 +66,7 @@ const SKATER_BLOCK_SIZE: int = SKATER_STATE_BYTES + 5  # + u32 peer_id + u8 queu
 const PUCK_BLOCK_SIZE: int = 13    # 12B pos+vel + 1B carrier_idx
 const GOALIE_BLOCK_SIZE: int = 43  # 12 root + 31 pose (glove/blocker offsets are s16-wide)
 const GAME_STATE_BLOCK_SIZE: int = 6  # 4×u8 + u16 time_remaining
-const STATS_PLAYER_RECORD_SIZE: int = 12  # peer_id + PlayerStats.to_array() (11)
+const STATS_PLAYER_RECORD_SIZE: int = 14  # peer_id + PlayerStats.to_array() (13)
 
 var _ws_sequence: int = 0
 var _last_period: int = -1

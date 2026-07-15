@@ -354,6 +354,9 @@ func on_goal_scored_into(defending_team: Team) -> void:
 		var record: PlayerRecord = _registry.get_record(scorer_id)
 		if record != null:
 			record.stats.goals += 1
+			# Tag one-timer / tip goal flavor BEFORE clear_pending() below wipes
+			# the shot-tracker state these reads depend on.
+			_tag_goal_flavor(record, scorer_id, carrier_peer_id, is_own_goal)
 			var assist_names: Array[String] = _shot_tracker.credit_assists(scorer_id)
 			assist1_name = assist_names[0] if assist_names.size() > 0 else ""
 			assist2_name = assist_names[1] if assist_names.size() > 1 else ""
@@ -378,6 +381,37 @@ func on_goal_scored_into(defending_team: Team) -> void:
 			scoring_team_id, _state_machine.scores[0], _state_machine.scores[1],
 			scorer_name, assist1_name, assist2_name)
 	_capture_goal_moment_frame()
+
+
+# Host: stamp the scoring goal's "flavor" counters (one_timer_goals / tip_goals)
+# on the scorer. These are broadcast like the other stat counters (via the
+# stats_need_sync above), so a client scorer's own copy carries them into the
+# game-over achievement sweep. Own goals carry no flavor. Reads the shot-tracker
+# state, so the caller MUST invoke this before clear_pending().
+#   one-timer — the scorer released the shot themselves as a one-timer.
+#   tip-in    — the scorer was the last, deflecting toucher of a teammate's
+#               in-flight shot (nobody carried it in).
+func _tag_goal_flavor(scorer: PlayerRecord, scorer_id: int,
+		carrier_peer_id: int, is_own_goal: bool) -> void:
+	if is_own_goal or scorer == null or scorer.team == null:
+		return
+	if not _shot_tracker.has_pending_shot():
+		return
+	var shooter_id: int = _shot_tracker.get_shooter_peer_id()
+	if shooter_id == scorer_id:
+		if _shot_tracker.pending_is_one_timer():
+			scorer.stats.one_timer_goals += 1
+		return
+	# Shooter differs from the scorer → a redirect. A tip-in requires the puck to
+	# have gone in off the deflection (no carrier drove it in) and the shooter to
+	# be a teammate feeding it — an opposing shot deflected in is an own goal path.
+	if carrier_peer_id != -1:
+		return
+	var shooter: PlayerRecord = _registry.get_record(shooter_id)
+	if shooter == null or shooter.team == null:
+		return
+	if shooter.team.team_id == scorer.team.team_id:
+		scorer.stats.tip_goals += 1
 
 
 # Host, final horn: stamp game_winning_goals on the scorer of the goal that

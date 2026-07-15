@@ -44,10 +44,18 @@ const BRICK_WALL := "ACH_BRICK_WALL"
 const SHUTOUT := "ACH_SHUTOUT"
 const FREIGHT_TRAIN := "ACH_FREIGHT_TRAIN"
 const FIRST_WIN := "ACH_FIRST_WIN"
+const ONE_TIMER := "ACH_ONE_TIMER"
+const TIP_IN := "ACH_TIP_IN"
+const FACEOFF_BOSS := "ACH_FACEOFF_BOSS"
+const PICKPOCKET := "ACH_PICKPOCKET"
 const SNIPER := "ACH_SNIPER"
 const SETUP_ARTIST := "ACH_SETUP_ARTIST"
 const ENFORCER := "ACH_ENFORCER"
 const VETERAN := "ACH_VETERAN"
+# Meta-progression (outside a match — bypass the game-over sweep, fired directly
+# from the tutorial / free-play build paths; see AchievementService).
+const STUDENT := "ACH_STUDENT"
+const CUSTOM_BUILD := "ACH_CUSTOM_BUILD"
 
 # The full registry. See the header for `cond` semantics.
 const ALL: Array[Dictionary] = [
@@ -68,9 +76,12 @@ const ALL: Array[Dictionary] = [
 		"cond": {"kind": "game", "field": "points", "min": 5},
 	},
 	{
+		# 3, not 5: shot-blocking is genuinely hard in Mitts (Ctrl crouch, a live
+		# puck, no auto-block), so 5 in one game is a grind. 3 is a real "I threw
+		# my body around tonight" bar without being punishing.
 		"id": BRICK_WALL, "name": "Brick Wall", "hidden": false,
-		"desc": "Block 5 shots in a single game.",
-		"cond": {"kind": "game", "field": "shots_blocked", "min": 5},
+		"desc": "Block 3 shots in a single game.",
+		"cond": {"kind": "game", "field": "shots_blocked", "min": 3},
 	},
 	{
 		# Onboarding: pops the first game you score in, any mode (incl. vs bots) —
@@ -79,6 +90,35 @@ const ALL: Array[Dictionary] = [
 		"id": FIRST_GOAL, "name": "Lamp Lighter", "hidden": false,
 		"desc": "Score your first goal.",
 		"cond": {"kind": "game", "field": "goals", "min": 1},
+	},
+	{
+		# Score off a one-timer — a shot released from the shooting zone without
+		# ever possessing the puck (the wind-up-off-puck slapper). Host tags the
+		# goal via ShotOnGoalTracker.pending_is_one_timer(); one_timer_goals is a
+		# broadcast stat so a client scorer earns it too.
+		"id": ONE_TIMER, "name": "One-Timer", "hidden": false,
+		"desc": "Score off a one-timer.",
+		"cond": {"kind": "game", "field": "one_timer_goals", "min": 1},
+	},
+	{
+		# Redirect a teammate's shot into the net — a genuine tip-in (the scorer
+		# was the last, deflecting toucher of an in-flight shot, not its shooter).
+		# tip_goals is host-tagged in PhaseCoordinator and broadcast like above.
+		"id": TIP_IN, "name": "Redirect", "hidden": false,
+		"desc": "Tip a teammate's shot into the net.",
+		"cond": {"kind": "game", "field": "tip_goals", "min": 1},
+	},
+	{
+		# faceoff_wins is already a broadcast game stat — no plumbing, just a bar.
+		"id": FACEOFF_BOSS, "name": "Faceoff Boss", "hidden": false,
+		"desc": "Win 5 faceoffs in a single game.",
+		"cond": {"kind": "game", "field": "faceoff_wins", "min": 5},
+	},
+	{
+		# takeaways is already a broadcast game stat — rewards defensive stickwork.
+		"id": PICKPOCKET, "name": "Pickpocket", "hidden": false,
+		"desc": "Record 5 takeaways in a single game.",
+		"cond": {"kind": "game", "field": "takeaways", "min": 5},
 	},
 	# ── Compound game-over conditions ────────────────────────────────────────
 	{
@@ -104,6 +144,25 @@ const ALL: Array[Dictionary] = [
 		# check but not an everyday bump. Verify the feel in play and nudge if it
 		# fires too freely / never (dev: SteamManager.reset_all_achievements).
 		"cond": {"kind": "event", "key": "big_hit", "min": 11.0},
+	},
+	# ── Meta-progression events (fire OUTSIDE a match) ───────────────────────
+	# These deliberately bypass the game-over sweep AND its free-play/drill gate
+	# (_achievements_active) — they happen in tutorial / free-play, where that
+	# gate is closed. AchievementService exposes a direct hook for each that
+	# unlocks by event_id alone (no threshold — these have no `min`).
+	{
+		# Beat the whole tutorial course. Fired from the tutorial-completion path
+		# once every TutorialRegistry.ALL_IDS entry is marked complete.
+		"id": STUDENT, "name": "Student of the Game", "hidden": false,
+		"desc": "Complete every tutorial.",
+		"cond": {"kind": "event", "key": "tutorials_done"},
+	},
+	{
+		# Customize your player. Fired the first time a free-play build edit is
+		# applied (NetworkManager.local_attributes_changed).
+		"id": CUSTOM_BUILD, "name": "Make It Yours", "hidden": false,
+		"desc": "Edit your player's build.",
+		"cond": {"kind": "event", "key": "build_edited"},
 	},
 	# ── Career milestones (competitive games only — see game_manager gate) ────
 	{

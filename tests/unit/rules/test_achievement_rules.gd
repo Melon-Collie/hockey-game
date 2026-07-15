@@ -61,10 +61,16 @@ func test_big_night_from_mixed_line_without_hat_trick() -> void:
 	assert_does_not_have(ids, Achievements.HAT_TRICK)
 
 
-func test_brick_wall_unlocks_at_five_blocks() -> void:
+func test_brick_wall_unlocks_at_three_blocks() -> void:
 	var ids := AchievementRules.earned_game(
-			AchievementRules.game_dict(_stats(0, 0, 0, 0, 5)), _ctx("loss", 1, 3))
+			AchievementRules.game_dict(_stats(0, 0, 0, 0, 3)), _ctx("loss", 1, 3))
 	assert_has(ids, Achievements.BRICK_WALL)
+
+
+func test_two_blocks_is_no_brick_wall() -> void:
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(0, 0, 0, 0, 2)), _ctx("loss", 1, 3))
+	assert_does_not_have(ids, Achievements.BRICK_WALL)
 
 
 func test_first_goal_unlocks_on_scoring_any_game() -> void:
@@ -78,6 +84,54 @@ func test_first_goal_not_awarded_without_a_goal() -> void:
 	var ids := AchievementRules.earned_game(
 			AchievementRules.game_dict(_stats(0, 2, 3, 1, 1)), _ctx("loss", 0, 2))
 	assert_does_not_have(ids, Achievements.FIRST_GOAL)
+
+
+# ── goal-flavor + defensive game stats ───────────────────────────────────────
+func test_one_timer_goal_unlocks_on_a_one_timer_marker() -> void:
+	var s := _stats(1, 0, 2, 0, 0)
+	s.one_timer_goals = 1
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(s), _ctx("win", 2, 1))
+	assert_has(ids, Achievements.ONE_TIMER)
+
+
+func test_plain_goal_is_no_one_timer() -> void:
+	# A goal with no one_timer_goals marker must not grant the One-Timer.
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(2, 0, 3, 0, 0)), _ctx("win", 2, 1))
+	assert_does_not_have(ids, Achievements.ONE_TIMER)
+
+
+func test_tip_in_goal_unlocks_on_a_tip_marker() -> void:
+	var s := _stats(1, 0, 1, 0, 0)
+	s.tip_goals = 1
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(s), _ctx("win", 2, 0))
+	assert_has(ids, Achievements.TIP_IN)
+
+
+func test_faceoff_boss_unlocks_at_five_wins() -> void:
+	var s := _stats(0, 0, 0, 0, 0)
+	s.faceoff_wins = 5
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(s), _ctx("win", 1, 0))
+	assert_has(ids, Achievements.FACEOFF_BOSS)
+
+
+func test_four_faceoff_wins_is_no_boss() -> void:
+	var s := _stats(0, 0, 0, 0, 0)
+	s.faceoff_wins = 4
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(s), _ctx("win", 1, 0))
+	assert_does_not_have(ids, Achievements.FACEOFF_BOSS)
+
+
+func test_pickpocket_unlocks_at_five_takeaways() -> void:
+	var s := _stats(0, 0, 0, 0, 0)
+	s.takeaways = 5
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(s), _ctx("draw", 2, 2))
+	assert_has(ids, Achievements.PICKPOCKET)
 
 
 # ── compound (special) ───────────────────────────────────────────────────────
@@ -162,6 +216,13 @@ func test_event_threshold_and_id_for_big_hit() -> void:
 func test_unknown_event_fails_closed() -> void:
 	assert_eq(Achievements.event_id("nope"), "")
 	assert_eq(Achievements.event_threshold("nope"), -1.0)
+
+
+func test_meta_event_ids_resolve() -> void:
+	# Meta-progression events have no `min`; event_id still resolves the id the
+	# AchievementService hooks unlock by.
+	assert_eq(Achievements.event_id("tutorials_done"), Achievements.STUDENT)
+	assert_eq(Achievements.event_id("build_edited"), Achievements.CUSTOM_BUILD)
 
 
 func test_all_ids_are_unique() -> void:
