@@ -1113,6 +1113,13 @@ const ONE_TIMER_PRESS_MAX_TICKS: int = _PhysicsConstants.PHYSICS_TICK * 6 / 5   
 const BOT_ONE_TIMER_ZONE_OFFSET_X_M: float = 1.0
 const BOT_ONE_TIMER_ZONE_OFFSET_Z_M: float = -0.4
 
+# Release radius (m) around the slapper zone centre for the wound-up one-timer's
+# "on the centre beat" release. Kept INSIDE the controller's slapper pickup
+# radius (slapper_zone_radius, 0.5) so a clean feed attaches first and fires the
+# with-puck release (earning the centred bonus); this radius only catches a puck
+# that slips through the zone without attaching. See _puck_at_slapper_zone.
+const ONE_TIMER_RELEASE_RADIUS_M: float = 0.4
+
 # Pre-aim target locked at the moment intent flips from CARRY to a
 # fire action. Without this, `_aim_target_for_intent` recomputes
 # `compute_open_net_aim` every tick — and when the goalie is roughly
@@ -3483,9 +3490,13 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 		_set_state(State.CARRY)
 		return
 
-	if _puck_in_one_timer_zone(snapshot, self_pos):
-		# On the beat but not attached — drop the button and let the
-		# controller's release buffer sweep the leniency zone.
+	if _puck_at_slapper_zone(snapshot, self_pos):
+		# On the CENTRE beat but not attached (a puck slipping through the zone) —
+		# drop the button and let the controller's release buffer sweep the
+		# leniency zone. Clean feeds attach a hair earlier (the have_puck branch
+		# above) and fire the with-puck release instead; both earn the same graded
+		# centre-timing bonus. Releasing here on the centre beat (not at blade
+		# reach, ~1.5 m early) is what stops the old −10%/whiff on the salvage.
 		input.slap_held = false
 		_set_state(_post_puck_lost_state(snapshot))
 		return
@@ -3615,6 +3626,44 @@ func _one_timer_line_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 	var zone_offset: Vector3 = right * (side * BOT_ONE_TIMER_ZONE_OFFSET_X_M) \
 			- f * BOT_ONE_TIMER_ZONE_OFFSET_Z_M
 	return perp_foot - zone_offset
+
+
+# The bot's slapper pickup-zone CENTRE in world space — self plus the zone offset
+# in the net-facing frame (the mirror of the body anchor in _one_timer_line_anchor:
+# body = perp_foot − zone_offset, so zone centre = self + zone_offset). The
+# centre-timing bonus is graded by how close the puck is to THIS point at release.
+func _slapper_zone_center(self_pos: Vector3) -> Vector3:
+	var to_net: Vector3 = _attacking_goal_pos - self_pos
+	to_net.y = 0.0
+	var net_len: float = to_net.length()
+	if net_len < 0.001:
+		return self_pos
+	var f: Vector3 = to_net / net_len
+	var right := Vector3(-f.z, 0.0, f.x)
+	var side: float = -1.0 if _is_left_handed else 1.0
+	var zone_offset: Vector3 = right * (side * BOT_ONE_TIMER_ZONE_OFFSET_X_M) \
+			- f * BOT_ONE_TIMER_ZONE_OFFSET_Z_M
+	return self_pos + zone_offset
+
+
+# Release trigger for a wound-up one-timer: is the puck (projected one tick) right
+# AT the slapper zone centre? This fires the release on the CENTRE beat — a human
+# releases "on the beat" and the leniency buffer covers the swing. The old
+# trigger released the instant the puck entered blade reach (~2 m out, ~1.5 m
+# from the zone centre): far too early, which scored the −10% end of the
+# centre-timing bonus and whiffed slower feeds outright. Sized INSIDE the pickup
+# radius so a clean feed ATTACHES first (→ the with-puck release, which earns the
+# centred bonus); this only fires as a salvage for a puck that slips through the
+# zone without attaching.
+func _puck_at_slapper_zone(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	if snapshot.puck_state == null or snapshot.real_puck_carrier_peer_id != -1:
+		return false
+	var zone_center: Vector3 = _slapper_zone_center(self_pos)
+	var pv: Vector3 = snapshot.puck_state.velocity
+	var pp: Vector3 = snapshot.puck_state.position
+	var dx: float = (pp.x + pv.x * MOUSE_TICK_DELTA) - zone_center.x
+	var dz: float = (pp.z + pv.z * MOUSE_TICK_DELTA) - zone_center.z
+	return dx * dx + dz * dz <= ONE_TIMER_RELEASE_RADIUS_M * ONE_TIMER_RELEASE_RADIUS_M
 
 
 # A one-timer is a scoring-area mechanic: the shooter must be inside the

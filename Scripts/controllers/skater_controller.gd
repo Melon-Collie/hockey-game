@@ -474,11 +474,6 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var slapper_zone_offset_z: float = -0.4  # forward offset (negative = in front of player)
 @export var min_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S
 @export var max_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
-# One-timer momentum transfer: fraction of the incoming feed speed added to a
-# one-timer's power, capped at one_timer_max_power (the absolute rip ceiling,
-# above the standing max). See ShotMechanics.release_slapper / GameRules.
-@export var one_timer_feed_transfer: float = GameRules.DEFAULT_ONE_TIMER_FEED_TRANSFER
-@export var one_timer_max_power: float = GameRules.DEFAULT_ONE_TIMER_POWER_MAX_M_S
 @export var max_slapper_charge_time: float = 0.7
 @export var slapper_blade_x: float = 1.0
 @export var slapper_blade_z: float = -0.5
@@ -869,7 +864,6 @@ var _base_max_wrister_power:            float = 0.0
 var _base_quick_shot_power:             float = 0.0
 var _base_min_slapper_power:            float = 0.0
 var _base_max_slapper_power:            float = 0.0
-var _base_one_timer_max_power:          float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
 var _base_max_blade_speed:              float = 0.0
 var _base_puck_carry_speed_multiplier:  float = 0.0
@@ -981,10 +975,6 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	quick_shot_power  = _base_quick_shot_power               # baseline — also the pass speed
 	min_slapper_power = _base_min_slapper_power * m_shot_ceil
 	max_slapper_power = _base_max_slapper_power * m_shot_ceil
-	# The one-timer ceiling scales with Shot like the slapper pools — an elite
-	# shooter harnesses the most from a redirected feed. The transfer fraction is
-	# flat (momentum, not shot skill), so it's not re-derived here.
-	one_timer_max_power = _base_one_timer_max_power * m_shot_ceil
 	# Slapper wind-up time keeps the gentler shot_charge curve. (Wrister power is
 	# pure mouse speed — no charge distance — so Shot only scales its ceiling.)
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
@@ -1086,7 +1076,6 @@ func _capture_attribute_bases() -> void:
 	_base_quick_shot_power             = quick_shot_power
 	_base_min_slapper_power            = min_slapper_power
 	_base_max_slapper_power            = max_slapper_power
-	_base_one_timer_max_power          = one_timer_max_power
 	_base_max_slapper_charge_time      = max_slapper_charge_time
 	_base_max_blade_speed              = max_blade_speed
 	_base_backhand_power_coefficient   = backhand_power_coefficient
@@ -1946,31 +1935,26 @@ func _release_slapper(input: InputState) -> void:
 		# One-timers (puck arrived mid-charge) ride the same timer as a normal
 		# release — power is whatever wind-up was actually built.
 		var charge: float = _aiming.slapper_charge_timer
-		# A genuine one-timer (puck arrived mid-charge, so the window is armed)
-		# redirects the incoming feed's momentum: its captured speed feeds the
-		# transfer/ceiling model inside release_slapper (bots always attach
-		# mid-charge and fire through here, never _try_one_timer_release). A
-		# normal carried slapshot has no window armed → incoming 0, untouched.
-		var is_one_timer: bool = _aiming.one_timer_window_timer > 0.0
-		var incoming_speed: float = _aiming.incoming_feed_speed if is_one_timer else 0.0
 		var result := ShotMechanics.release_slapper(
 				skater.upper_body_to_global(skater.get_blade_position()),
 				input.mouse_world_pos,
 				_elevation_level,
 				charge,
 				cfg,
-				locked_dir_3d,
-				incoming_speed)
-		if is_one_timer:
-			# Same centre-timing bonus the human leniency-release path applies —
-			# without it a bot's one-timer read systematically weaker than a
-			# hand-timed one. Re-clamp so the ±10% never pushes past the ceiling.
+				locked_dir_3d)
+		# One-timer (puck arrived mid-charge → window armed): apply the SAME graded
+		# centre-timing bonus the leniency-release path uses, so the ±10% is one
+		# mechanic on both release paths — reachable however the shot fires, graded
+		# by how centred the puck is. A one-timer that attaches on the pinned zone
+		# spot is a clean, well-timed catch and earns it; a normal carried slapshot
+		# has no window armed and is untouched.
+		if _aiming.one_timer_window_timer > 0.0:
 			var zone_world: Vector3 = skater.get_slapper_zone_global_position()
 			var zone_xz := Vector2(zone_world.x, zone_world.z)
 			var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
-			result.power = minf(ShotReleaseRules.one_timer_power(
+			result.power = ShotReleaseRules.one_timer_power(
 					result.power, one_timer_center_power_bonus,
-					zone_xz, puck_xz, slapper_zone_radius), one_timer_max_power)
+					zone_xz, puck_xz, slapper_zone_radius)
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
@@ -2040,12 +2024,6 @@ func _update_wrister_charge(input: InputState) -> void:
 func _update_slapper_charge(delta: float) -> void:
 	_aiming.tick_slapper(delta)
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
-	# Off-puck wind-up (one-timer): latch the loose feed's live speed each tick, so
-	# the value at the tick the puck attaches is the incoming momentum the shot
-	# redirects. Skipped once carrying — an attached puck rides ~zero velocity, and
-	# a normal carried slapshot has no feed to transfer.
-	if not has_puck and puck != null:
-		_aiming.incoming_feed_speed = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 	# Net exclusion for the slapshot PIN. While charging with the puck, the puck
@@ -2105,15 +2083,11 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
 	var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 	var cfg: ShotMechanics.SlapperConfig = _slapper_config()
-	# Puck hasn't attached yet on this path, so its live velocity IS the incoming
-	# feed the one-timer redirects — feed it straight to the momentum model.
-	var incoming_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
 	var result := ShotMechanics.release_slapper(
 			blade_world, input.mouse_world_pos,
-			_elevation_level, _aiming.slapper_charge_timer, cfg, locked_dir_3d, incoming_speed)
-	result.power = minf(ShotReleaseRules.one_timer_power(
-			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius),
-			one_timer_max_power)
+			_elevation_level, _aiming.slapper_charge_timer, cfg, locked_dir_3d)
+	result.power = ShotReleaseRules.one_timer_power(
+			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius)
 	if not is_replaying:
 		one_timer_release_requested.emit(result.direction, result.power)
 	# Same as _release_slapper — hide the HUD as soon as the shot fires so it
@@ -2297,6 +2271,4 @@ func _slapper_config() -> ShotMechanics.SlapperConfig:
 	cfg.max_slapper_charge_time = max_slapper_charge_time
 	cfg.loft_vy_low = loft_vertical_speed_low
 	cfg.loft_vy_high = loft_vertical_speed_high
-	cfg.one_timer_feed_transfer = one_timer_feed_transfer
-	cfg.one_timer_max_power = one_timer_max_power
 	return cfg

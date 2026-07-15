@@ -75,9 +75,6 @@ class SlapperConfig:
 	var max_slapper_charge_time: float = 0.0
 	var loft_vy_low: float = 0.0
 	var loft_vy_high: float = 0.0
-	# One-timer momentum transfer (0 disables → a standing slapshot is untouched).
-	var one_timer_feed_transfer: float = 0.0
-	var one_timer_max_power: float = 0.0
 
 # ── Wrister power model (pure mouse speed) ────────────────────────────────────
 # Normalized 0..1 charged-wrister power from a single signal: CURSOR SPEED —
@@ -203,24 +200,13 @@ static func release_wrister(
 #
 # shot_direction: when non-zero, used as the shot direction directly (locked
 # at press time); falls back to blade→mouse when zero (backwards compat).
-#
-# incoming_speed: the loose feed's speed at contact for a ONE-TIMER (0 for a
-# standing slapshot). A one-timer redirects the feed's own momentum, so a
-# fraction of it (one_timer_feed_transfer) is added to the wind-up power and the
-# whole thing is capped at one_timer_max_power — a ceiling ABOVE the standing
-# max, so the hardest shot in the game is a hard feed one-timed by a wound-up
-# shooter. Applied HERE, before loft_y, so the fixed-apex loft geometry is
-# computed against the final power (a raised power must not sail the puck over
-# the net). Raw incoming magnitude (not net-ward projection) — a hard cross-seam
-# feed should reward the classic one-timer just as much as a straight feed.
 static func release_slapper(
 		blade_world_pos: Vector3,
 		mouse_world_pos: Vector3,
 		elevation_level: int,
 		charge_time: float,
 		cfg: SlapperConfig,
-		shot_direction: Vector3 = Vector3.ZERO,
-		incoming_speed: float = 0.0) -> ShotResult:
+		shot_direction: Vector3 = Vector3.ZERO) -> ShotResult:
 	var shot_dir: Vector3
 	if shot_direction.length_squared() > 0.0001:
 		shot_dir = Vector3(shot_direction.x, 0.0, shot_direction.z).normalized()
@@ -230,9 +216,6 @@ static func release_slapper(
 		shot_dir = (target - blade_xz).normalized()
 	var charge_t: float = clampf(charge_time / cfg.max_slapper_charge_time, 0.0, 1.0)
 	var power: float = lerpf(cfg.min_slapper_power, cfg.max_slapper_power, charge_t)
-	if incoming_speed > 0.0 and cfg.one_timer_feed_transfer > 0.0:
-		power = minf(power + cfg.one_timer_feed_transfer * incoming_speed,
-				cfg.one_timer_max_power)
 
 	var y: float = loft_y(power, _loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 	return ShotResult.make(

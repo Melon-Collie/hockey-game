@@ -37,10 +37,6 @@ var _charge_result: ChargeTracking.Result = ChargeTracking.Result.new()
 # ── Slapper charge state ──────────────────────────────────────────────────────
 var slapper_charge_timer: float = 0.0
 var one_timer_window_timer: float = 0.0
-# Loose feed's speed sampled during an off-puck slapper charge, latched at the
-# tick the puck attaches — the incoming momentum a one-timer redirects (see
-# ShotMechanics.release_slapper). 0 for a standing slapshot.
-var incoming_feed_speed: float = 0.0
 
 # ── Wrister ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +85,6 @@ func tick_wrister_charge(
 func reset_slapper() -> void:
 	slapper_charge_timer = 0.0
 	one_timer_window_timer = 0.0
-	incoming_feed_speed = 0.0
 
 
 func tick_slapper(delta: float) -> void:
