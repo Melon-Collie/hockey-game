@@ -136,6 +136,17 @@ extends RefCounted
 #     protecting the puck until it does is elite anticipation
 #     (carrier._best_developing_feed). False = the bot plays only what's in
 #     front of it right now.
+#   • reads_receiver_commitment — reading whether a RECEIVER is committed to a
+#     direction before feeding them is a real passing read: a teammate mid-cut
+#     is hard to lead, so an elite passer waits for them to come out of the turn
+#     and hits them in stride. The pass EV prices the receiver's smoothed
+#     heading turn rate (WorldSnapshot.heading_omega_by_peer) as catch-point
+#     uncertainty (AIActionScoring.receiver_heading_uncertainty_m). False = the
+#     bot is blind to it and chucks feeds at turning players — the classic
+#     newcomer giveaway — because a hard-cutting receiver prices identically to
+#     one skating a straight line. A settled receiver reads ~0 either way, so
+#     this never slows a clean quick feed; it only suppresses the low-percentage
+#     pass into a pivot.
 #   • angles_the_chase — approaching an opposing carrier from the inside to
 #     force them to the boards (_shade_intercept_goal_side) is taught defensive
 #     skill. False = the bot chases straight at the puck, so a human's cutback
@@ -247,6 +258,11 @@ var reads_goalie_motion: bool
 # hold the puck for it. False = plays only what exists right now.
 var holds_for_developing_feeds: bool
 
+# COGNITION: read whether a receiver is committed to a direction before feeding
+# them — a turning teammate is priced as a riskier feed (waits for the settle).
+# False = blind to it, chucks passes at turning players. See the doc block.
+var reads_receiver_commitment: bool
+
 # COGNITION: angle the carrier-chase intercept to the inside lane, forcing the
 # carrier to the boards. False = straight-line chase, cutbacks work.
 var angles_the_chase: bool
@@ -273,7 +289,8 @@ func _init(p_carrier_reaction_delay_s: float,
 		p_check_aggression: float, p_defensive_anticipation_scale: float,
 		p_reads_goalie_motion: bool, p_holds_for_developing_feeds: bool,
 		p_angles_the_chase: bool, p_plays_rush_pass_lanes: bool,
-		p_protects_the_puck: bool) -> void:
+		p_protects_the_puck: bool,
+		p_reads_receiver_commitment: bool) -> void:
 	carrier_reaction_delay_s = p_carrier_reaction_delay_s
 	dispatch_period_ticks = p_dispatch_period_ticks
 	shot_aim_error_rad = p_shot_aim_error_rad
@@ -286,6 +303,7 @@ func _init(p_carrier_reaction_delay_s: float,
 	defensive_anticipation_scale = p_defensive_anticipation_scale
 	reads_goalie_motion = p_reads_goalie_motion
 	holds_for_developing_feeds = p_holds_for_developing_feeds
+	reads_receiver_commitment = p_reads_receiver_commitment
 	angles_the_chase = p_angles_the_chase
 	plays_rush_pass_lanes = p_plays_rush_pass_lanes
 	protects_the_puck = p_protects_the_puck
@@ -314,7 +332,7 @@ func _init(p_carrier_reaction_delay_s: float,
 static func hard() -> BotSkillProfile:
 	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.0,
 			0.0, 1.0, 1.0, 1.0,
-			true, true, true, true, true)
+			true, true, true, true, true, true)
 
 
 # Normal is the beatable tier, pushed firmly off the Hard ceiling so the gap
@@ -359,7 +377,7 @@ static func hard() -> BotSkillProfile:
 static func normal() -> BotSkillProfile:
 	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.30,
 			1.5, 1.0, 0.65, 0.6,
-			true, true, true, true, true)
+			true, true, true, true, true, true)
 
 
 # Easy is the newcomer floor: a ~340 ms reaction to possession changes (it
@@ -391,13 +409,14 @@ static func normal() -> BotSkillProfile:
 # only what's in front of it (no holding for a staging finisher), chases the
 # carrier in a straight line (a newcomer's cutback to the middle genuinely
 # works), retreats on the carrier line on odd-man rushes (the glory
-# cross-crease 2-on-1 feed connects), and carries the puck naively presented
-# in front (a newcomer's poke-check genuinely steals it). Beginner hockey IQ
-# to match the beginner hands.
+# cross-crease 2-on-1 feed connects), carries the puck naively presented
+# in front (a newcomer's poke-check genuinely steals it), and chucks feeds at
+# turning teammates without waiting for the settle (no receiver-commitment
+# read). Beginner hockey IQ to match the beginner hands.
 static func easy() -> BotSkillProfile:
 	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.55,
 			3.0, 1.0, 0.0, 0.2,
-			false, false, false, false, false)
+			false, false, false, false, false, false)
 
 
 static func for_difficulty(difficulty: int) -> BotSkillProfile:

@@ -139,11 +139,17 @@ func test_cognition_gates_close_down_the_tiers() -> void:
 			"Normal plays odd-man pass lanes exactly as Hard does")
 	assert_eq(normal.protects_the_puck, hard.protects_the_puck,
 			"Normal shields the puck exactly as Hard does")
+	assert_eq(normal.reads_receiver_commitment, hard.reads_receiver_commitment,
+			"Normal reads receiver commitment exactly as Hard does")
 	assert_true(hard.reads_goalie_motion, "the shared ceiling is the full hockey IQ")
+	assert_true(hard.reads_receiver_commitment,
+			"the shared ceiling reads receiver commitment")
 	var easy: BotSkillProfile = BotSkillProfile.easy()
 	assert_false(easy.reads_goalie_motion, "Easy is goalie-motion blind")
 	assert_false(easy.holds_for_developing_feeds, "Easy plays only what exists now")
 	assert_false(easy.angles_the_chase, "Easy chases in a straight line")
+	assert_false(easy.reads_receiver_commitment,
+			"Easy is commitment-blind — it chucks feeds at turning players")
 
 
 func test_pass_error_never_exceeds_shot_error() -> void:

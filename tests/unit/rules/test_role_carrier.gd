@@ -129,6 +129,46 @@ func test_forechecker_closing_the_breakout_lane_devalues_the_pass() -> void:
 			"a forechecker skating into the lane during the windup materially drops the pass value")
 
 
+func test_turning_receiver_devalues_the_pass_and_the_blind_tier_ignores_it() -> void:
+	# Receiver-commitment read: a moving teammate mid-cut curves off the
+	# straight-line lead, so the feed to one is priced as riskier. A
+	# commitment-blind tier (Easy) is deaf to it and prices the turning receiver
+	# exactly like a settled one — it chucks the feed.
+	var self_pos := Vector3(3, 0, 20)
+	var outlet := Vector3(11, 0, 11)
+	var recv_vel := Vector3(0, 0, -6)   # streaking up-ice at 6 m/s
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet, false, recv_vel],
+			[3, 1, Vector3(1.5, 0, 18.0)],
+			[4, 1, Vector3(3.0, 0, 17.5)],
+	]
+	# Settled receiver (no heading rotation injected → omega 0).
+	var settled_ctx := _make_ctx(self_pos, skaters)
+	var cs := AIRoleCarrier.new()
+	cs.decide(settled_ctx)
+	var settled_score: float = cs.debug_pass_score
+	assert_eq(cs.debug_pass_peer_id, 2, "the only teammate is the feed target")
+	assert_gt(settled_score, 0.0, "the feed to a settled streaker is on")
+
+	# Same play, receiver now mid-cut (hard heading rotation).
+	var turning_ctx := _make_ctx(self_pos, skaters)
+	turning_ctx.heading_omega_by_peer = {2: 4.0}
+	var ct := AIRoleCarrier.new()
+	ct.decide(turning_ctx)
+	assert_lt(ct.debug_pass_score, settled_score,
+			"a turning receiver is priced as a riskier feed")
+
+	# Commitment-blind tier: same turn, ignored — priced like the settled feed.
+	var blind_ctx := _make_ctx(self_pos, skaters)
+	blind_ctx.heading_omega_by_peer = {2: 4.0}
+	blind_ctx.reads_receiver_commitment = false
+	var cb := AIRoleCarrier.new()
+	cb.decide(blind_ctx)
+	assert_almost_eq(cb.debug_pass_score, settled_score, 0.0001,
+			"a commitment-blind bot chucks it — same price as the settled feed")
+
+
 func test_passes_to_the_open_backdoor_man_over_forcing_a_carry() -> void:
 	# The carrier is at a poor wide angle with a wide-open teammate at the far-
 	# post backdoor — a feed the goalie's re-square genuinely cannot beat (the

@@ -1353,10 +1353,15 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 				dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale,
 				receiver_state.velocity, scored_pass_dir)
 		var receiver_accel: Vector3 = ctx.acceleration_by_peer.get(peer_id, Vector3.ZERO)
+		# Receiver's heading turn rate — the commitment read. A commitment-blind
+		# tier (Easy) reads 0, so it prices a turning receiver like a straight one
+		# and chucks the feed; Normal/Hard price the turn (see _pass_variant_ev).
+		var receiver_omega: float = ctx.heading_omega_by_peer.get(peer_id, 0.0) \
+				if ctx.reads_receiver_commitment else 0.0
 		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
 		# Flat feed at the magnet pace.
 		var s: float = _pass_variant_ev(
-				ctx, receiver_state, receiver_accel, receiver_caps,
+				ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 				pass_origin, pass_speed, false, receiver_is_one_timer,
 				self_facing_xz, our_goalie, carrier_in_oz)
 		var use_saucer: bool = false
@@ -1369,7 +1374,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 				pass_speed, AIActionScoring.saucer_max_launch_speed(dist))
 		if saucer_speed >= GameRules.DEFAULT_WRISTER_POWER_MIN_M_S:
 			var s_saucer: float = _pass_variant_ev(
-					ctx, receiver_state, receiver_accel, receiver_caps,
+					ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 					pass_origin, saucer_speed, true, receiver_is_one_timer,
 					self_facing_xz, our_goalie, carrier_in_oz)
 			if s_saucer > s:
@@ -1408,7 +1413,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 # goalie only gets the pass flight to react — the caller resolves that
 # flag once per receiver and threads it here.
 func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
-		receiver_accel: Vector3, receiver_caps: AISkaterCaps,
+		receiver_accel: Vector3, receiver_omega: float, receiver_caps: AISkaterCaps,
 		pass_origin: Vector3, pass_speed: float, saucer: bool,
 		receiver_is_one_timer: bool, self_facing_xz: Vector2,
 		our_goalie: Vector3, carrier_in_oz: bool) -> float:
@@ -1434,8 +1439,18 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 	# wobblier-handed bot misses more, over the irreducible base floor.
 	var catch_radius: float = receiver_caps.handle_reach if receiver_caps != null \
 			else AIActionScoring.EVADE_CARRY_HANDLE_M
+	# Receiver-commitment term: a receiver mid-cut curves off the straight-line
+	# lead, adding catch-point uncertainty the passer's hand can't lead out. Zero
+	# for a settled receiver (or a commitment-blind tier — the caller passes
+	# receiver_omega 0), so a clean quick feed is unaffected.
+	var receiver_speed: float = sqrt(
+			receiver_state.velocity.x * receiver_state.velocity.x
+			+ receiver_state.velocity.z * receiver_state.velocity.z)
+	var turn_uncertainty: float = AIActionScoring.receiver_heading_uncertainty_m(
+			receiver_speed, receiver_omega, flight_t)
 	var miss_prob: float = AIActionScoring.pass_miss_prob(
-			pass_origin.distance_to(receiver), ctx.self_pass_aim_error_rad, catch_radius)
+			pass_origin.distance_to(receiver), ctx.self_pass_aim_error_rad,
+			catch_radius, turn_uncertainty)
 	if saucer:
 		# Small tolerance: a speed sitting exactly on the receivability
 		# bound round-trips through the kinematics to the exact distance.

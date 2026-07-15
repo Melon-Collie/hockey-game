@@ -2182,14 +2182,46 @@ const PASS_MISS_OVERSHOOT_M: float = 3.0
 # compounded with the fraction of the ±(aim_error × distance) lateral spread that
 # lands outside the catch envelope.
 static func pass_miss_prob(distance: float, aim_error_rad: float,
-		catch_radius: float = EVADE_CARRY_HANDLE_M) -> float:
-	var spread: float = maxf(aim_error_rad, 0.0) * maxf(distance, 0.0)
+		catch_radius: float = EVADE_CARRY_HANDLE_M,
+		receiver_uncertainty_m: float = 0.0) -> float:
+	# Two lateral catch-point offsets, both in metres, both measured against the
+	# receiver's catch envelope: the passer's own aim spread (hand error over the
+	# pass distance) and the receiver's heading uncertainty (a turning receiver
+	# curves off the straight-line lead — receiver_heading_uncertainty_m). They
+	# add: either one alone can push the catch point out of reach, and the
+	# worst case is they align. A settled receiver contributes 0, so a clean feed
+	# is unchanged.
+	var spread: float = maxf(aim_error_rad, 0.0) * maxf(distance, 0.0) \
+			+ maxf(receiver_uncertainty_m, 0.0)
 	var execution: float = 0.0
 	if spread > 0.0001:
 		execution = clampf(
 				(spread - catch_radius) / spread, 0.0, 1.0)
 	return clampf(
 			1.0 - (1.0 - PASS_MISS_BASE_PROB) * (1.0 - execution), 0.0, 1.0)
+
+
+# Catch-point positional uncertainty (metres) a TURNING receiver adds to a pass,
+# from the receiver's own commitment — NOT the passer's hand. The lead aims down
+# the receiver's current heading (AIPassLead strips the centripetal component and
+# extrapolates the straight-line continuation), but a receiver rotating its
+# heading at `omega` rad/s curves off that tangent line over the flight. The exact
+# lateral deviation of a constant-radius arc from its launch tangent is
+# R·(1 − cos θ), where R = v/ω is the turn radius and θ = ω·t is the angle swept
+# over flight time `t`. That is the metres by which the receiver misses the spot
+# the pass was led to — precisely "how much can't I trust this lead." Grounded
+# geometry, self-bounding (1 − cos saturates), and it collapses to ~0 for a
+# receiver holding a line (ω → 0) so clean feeds pay nothing. The swept angle is
+# capped at π (beyond a half-turn the tangent-deviation model no longer grows
+# monotonically, and such a receiver is uncatchable regardless).
+static func receiver_heading_uncertainty_m(
+		receiver_speed: float, omega: float, flight_t: float) -> float:
+	var w: float = absf(omega)
+	if w < 0.0001 or receiver_speed <= 0.0 or flight_t <= 0.0:
+		return 0.0
+	var theta: float = minf(w * flight_t, PI)
+	var radius: float = receiver_speed / w
+	return radius * (1.0 - cos(theta))
 
 
 # Loss point for the execution-miss mode of a pass: the puck sails past

@@ -21,6 +21,12 @@ var closest_to_puck_by_team: Dictionary[int, int] = {}    # team_id -> peer_id (
 # on `current_snapshot` only (empty on rewind snapshots). Read via `.get(pid,
 # Vector3.ZERO)`. Feeds receiver-lead in pass scoring / PASS_PRESSED aim.
 var accel_by_peer: Dictionary[int, Vector3] = {}          # peer_id -> smoothed accel
+# Per-skater smoothed HEADING turn rate (rad/s, signed), the same global
+# dead-reckoning shared once from AIAccelerationTracker.heading_omega_by_peer.
+# The passer's "how committed is this receiver to a direction" read — a turning
+# receiver is hard to lead, so a feed to one is priced as riskier in the pass EV
+# (see AIActionScoring.receiver_heading_uncertainty_m). Read via `.get(pid, 0.0)`.
+var heading_omega_by_peer: Dictionary[int, float] = {}    # peer_id -> smoothed turn rate
 
 # Bot reaction-delay support. `puck_state.carrier_peer_id` on the AI snapshot
 # carries the DEBOUNCED (delayed) carrier so all AI consumers react to

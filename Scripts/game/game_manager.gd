@@ -493,6 +493,7 @@ func _physics_process(delta: float) -> void:
 			# hand it to every bot by reference (was recomputed per bot per tick).
 			_accel_tracker.update(current_snapshot.skater_states, delta)
 			current_snapshot.accel_by_peer = _accel_tracker.accel_by_peer
+			current_snapshot.heading_omega_by_peer = _accel_tracker.heading_omega_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
 	if not team_brains.is_empty() and current_snapshot != null:
 		for brain: TeamBrain in team_brains:

@@ -51,6 +51,14 @@ var team_id_by_peer: Dictionary = {}
 # adjustment) — same behaviour as before this field existed.
 var acceleration_by_peer: Dictionary = {}
 
+# Smoothed per-peer HEADING turn rate (rad/s, signed), keyed by peer_id — how
+# fast each skater's travel direction is rotating. The passer's receiver-
+# commitment read: a receiver mid-cut is hard to lead, so a feed to one is
+# priced as riskier in the pass EV (see _pass_variant_ev → pass_miss_prob). A
+# running estimate, so confidence builds over time. Missing entries default to
+# 0.0 (settled / no penalty) — same behaviour as before this field existed.
+var heading_omega_by_peer: Dictionary = {}
+
 # Per-peer attribute-scaled capabilities (AISkaterCaps), keyed by peer_id — every
 # player's REAL build (top speed, accel, reach, shot speed, weight/brace), so a
 # bot can model a specific teammate or opponent with what they can actually do
@@ -148,6 +156,12 @@ var reads_goalie_motion: bool = true
 # yet (carrier._best_developing_feed returns 0) — no protecting the puck for a
 # staging finisher or an opening outlet. True = the perfect-bot / Hard read.
 var holds_for_developing_feeds: bool = true
+# COGNITION gate: false = this bot is blind to receiver commitment — it prices
+# a feed to a hard-cutting receiver identically to one skating a straight line
+# (heading_omega read as 0 in the pass EV), so it chucks passes at turning
+# players (a newcomer-beatable flaw). True = it reads the receiver's turn and
+# waits for the settle before feeding (the Normal / Hard read).
+var reads_receiver_commitment: bool = true
 # COGNITION gate: false = the rush gap defender (CONTAIN) sees only the
 # carrier and retreats on the carrier→net line; true = it reads the carrier's
 # passing options and splits toward an uncovered receiver's feed lane — the
