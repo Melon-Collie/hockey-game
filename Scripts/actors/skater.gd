@@ -380,6 +380,10 @@ var _blade_lift_blend: float = 0.0
 # resolved blade_up off the wire).
 var _forced_lift_timer: float = 0.0
 var is_ghost: bool = false
+# True while this skater is knocked down by a hard body check (knockdown_timer > 0
+# on its controller). Set by SkaterController each tick; read by the puck pickup
+# election so a downed player can't magnet the puck, the same way is_ghost gates it.
+var is_knocked_down: bool = false
 var is_braking: bool = false
 var is_braced: bool = false
 var shot_charge: float = 0.0

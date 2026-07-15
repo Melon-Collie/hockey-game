@@ -507,6 +507,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# exactly like stamina: snap to the server value, then the replay loop's
 	# per-tick decay (in _apply_movement) re-derives it forward.
 	stagger_timer = server_state.stagger_timer
+	# Knockdown rides the same rail — snap to the host value, replay re-derives the
+	# per-tick decay + lock. is_knocked_down follows so the replay's _apply_movement
+	# gates correctly from the first replayed tick.
+	knockdown_timer = server_state.knockdown_timer
+	skater.is_knocked_down = knockdown_timer > 0.0
 	# Snap facing for replay accuracy — facing drives move_and_slide direction,
 	# so the replay must start from the server's facing to reproduce the trajectory.
 	_pose.facing = server_state.facing

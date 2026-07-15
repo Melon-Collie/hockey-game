@@ -75,6 +75,20 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # (stagger_recoil_dir); remotes recoil generically backward (they get the timer
 # off the wire, not the direction). Applied in SkaterPoseCoordinator._apply_lean.
 @export var stagger_recoil_deg: float = 13.0  # peak torso recoil lean at full stagger
+# ── Knockdown Tuning ──────────────────────────────────────────────────────────
+# The top of the stagger continuum: a hit whose victim impulse exceeds
+# knockdown_impulse KNOCKS THE VICTIM DOWN — movement locked, no puck interaction,
+# the body slides from the hit and bleeds speed via knockdown_friction — for a
+# recovery window scaling with the hit (see BodyCheckRules.knockdown_seconds_from_
+# impulse). knockdown_timer rides the SAME replicated / snapped / decayed rail as
+# stagger_timer. NOTE: on the OLD magnitude scale — wants a downward re-tune with
+# the stagger thresholds once the Slice B inelastic feel is dialed. Set
+# knockdown_impulse very high (or 0) to effectively disable knockdowns.
+@export var knockdown_impulse: float = 11.0        # m/s victim impulse above which a hit knocks down
+@export var knockdown_ref_impulse: float = 16.0    # m/s impulse of a maximal (longest) knockdown
+@export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
+@export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
+@export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -720,6 +734,11 @@ var _sprint_locked: bool = false
 # decayed each tick in _apply_movement, and replicated so the local player's
 # reconcile snaps it to the host baseline before replay (same as stamina).
 var stagger_timer: float = 0.0
+# Body-check knockdown: seconds of full movement lockout remaining. Set host-
+# authoritatively (and predicted on the local victim) when a hit exceeds the
+# knockdown threshold; while > 0 the skater is down (no input, sliding, no puck).
+# Replicated / snapped / decayed exactly like stagger_timer.
+var knockdown_timer: float = 0.0
 # Body-frame direction the last check shoved this skater (x = right, y = forward
 # in the (x, z) plane). Drives the recoil lean in SkaterPoseCoordinator; set on
 # the local victim / host from the transfer impulse, left at the default (0, 1 =
@@ -1152,12 +1171,18 @@ func _on_body_check_received(impulse: Vector3) -> void:
 	var recoil_xz: Vector2 = Vector2(local_impulse.x, local_impulse.z)
 	if recoil_xz.length() > 0.001:
 		stagger_recoil_dir = recoil_xz.normalized()
+	var cfg: BodyCheckRules.Config = _body_check_config()
+	# Knockdown rides the same "extend, never shorten" rule as stagger and is set on
+	# both the host and the local victim's prediction — so a downed local player goes
+	# down immediately, and reconcile snaps knockdown_timer to the host value.
+	var knockdown_add: float = BodyCheckRules.knockdown_seconds_from_impulse(impulse_magnitude, cfg)
 	if not _is_host:
 		if skater.is_local_skater:
 			stagger_timer = maxf(stagger_timer,
-					BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, _body_check_config()))
+					BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg))
+			knockdown_timer = maxf(knockdown_timer, knockdown_add)
 		return
-	var cfg: BodyCheckRules.Config = _body_check_config()
+	knockdown_timer = maxf(knockdown_timer, knockdown_add)
 	var add: float = BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg)
 	# Only extend (never shorten) the stagger window, and only bite stamina when
 	# this hit is harder than the residual — incremental_stamina_drain handles the
@@ -1398,6 +1423,7 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.stamina = stamina
 	state.sprint_locked = _sprint_locked
 	state.stagger_timer = stagger_timer
+	state.knockdown_timer = knockdown_timer
 	state.move_intent = skater.move_intent
 	state.brake_intent = skater.brake_intent
 	state.sprint_active = sprint_active
@@ -1453,6 +1479,8 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# bit so replayed sprints stride like live ones.
 	sprint_active = state.sprint_active
 	stagger_timer = state.stagger_timer
+	knockdown_timer = state.knockdown_timer
+	skater.is_knocked_down = knockdown_timer > 0.0
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
@@ -1609,6 +1637,8 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	hit_active = false
 	skater.hit_committed = false
 	stagger_timer = 0.0
+	knockdown_timer = 0.0
+	skater.is_knocked_down = false
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
 	# respawn and the player drops into the faceoff already charged.
@@ -2198,6 +2228,25 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	skater.is_braking = input.brake
 	skater.is_braced = input.brake
 
+	# Knockdown: the top of the stagger continuum. Decays every tick like stagger.
+	# While down, input is ignored entirely — the body keeps its momentum from the
+	# hit and bleeds it via heavy friction (slides, then stops), stamina regenerates,
+	# and stagger still decays, so the player recovers on all clocks while grounded.
+	# All deterministic → reconcile replay reproduces the down window; the flag gates
+	# puck pickup (Skater.is_knocked_down).
+	knockdown_timer = maxf(knockdown_timer - delta, 0.0)
+	skater.is_knocked_down = knockdown_timer > 0.0
+	if skater.is_knocked_down:
+		sprint_active = false
+		hit_active = false
+		skater.hit_committed = false
+		stagger_timer = maxf(stagger_timer - delta, 0.0)
+		var kd_cfg: StaminaRules.StaminaConfig = _stamina_config()
+		stamina = StaminaRules.next_stamina(stamina, false, has_puck, delta, kd_cfg, false)
+		_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, false, kd_cfg, false)
+		skater.velocity = skater.velocity.move_toward(Vector3.ZERO, knockdown_friction * delta)
+		return
+
 	var move_state: SkaterStateMachine.State = _sm.get_state()
 	# Locomotion is suppressed during a planted slap windup / block stance, but
 	# stamina still ticks (you can't sprint, so it regenerates). Computing it
@@ -2301,6 +2350,10 @@ func _body_check_config() -> BodyCheckRules.Config:
 		_cached_body_check_cfg.max_stagger_seconds = stagger_max_seconds
 		_cached_body_check_cfg.max_stamina_drain = stagger_max_stamina_drain
 		_cached_body_check_cfg.max_thrust_penalty = stagger_max_thrust_penalty
+		_cached_body_check_cfg.knockdown_impulse = knockdown_impulse
+		_cached_body_check_cfg.knockdown_ref_impulse = knockdown_ref_impulse
+		_cached_body_check_cfg.min_knockdown_seconds = knockdown_min_seconds
+		_cached_body_check_cfg.max_knockdown_seconds = knockdown_max_seconds
 	return _cached_body_check_cfg
 
 # Cached — _update_wrister_charge reads it every aim tick (120 Hz, replayed

@@ -285,6 +285,7 @@ func _interpolate(delta: float) -> void:
 		interpolated.shot_state = newest.shot_state
 		interpolated.shot_charge = newest.shot_charge
 		interpolated.stagger_timer = newest.stagger_timer
+		interpolated.knockdown_timer = newest.knockdown_timer
 		interpolated.move_intent = newest.move_intent
 		interpolated.brake_intent = newest.brake_intent
 		interpolated.sprint_active = newest.sprint_active
@@ -319,6 +320,7 @@ func _interpolate(delta: float) -> void:
 		# grows smoothly through the drag instead of stepping per broadcast.
 		interpolated.shot_charge = lerpf(from_state.shot_charge, to_state.shot_charge, t)
 		interpolated.stagger_timer = lerpf(from_state.stagger_timer, to_state.stagger_timer, t)
+		interpolated.knockdown_timer = lerpf(from_state.knockdown_timer, to_state.knockdown_timer, t)
 		interpolated.move_intent = to_state.move_intent
 		interpolated.brake_intent = to_state.brake_intent
 		interpolated.sprint_active = to_state.sprint_active
@@ -420,6 +422,11 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# remotes — so a checked opponent stumbled on the host and stood rock-
 	# steady on everyone else's screen.
 	stagger_timer = state.stagger_timer
+	# Knockdown mirrors stagger onto client-rendered remotes: the controller value
+	# and the skater flag so the down pose (later) and any is_knocked_down read
+	# reflect a checked opponent on every machine, not just the host.
+	knockdown_timer = state.knockdown_timer
+	skater.is_knocked_down = knockdown_timer > 0.0
 	# Bottom hand is purely reactive to top_hand + blade and needs no network
 	# state of its own; it's posed once per rendered frame in _render_pose_update
 	# (Skater._process) along with the gait, not here.

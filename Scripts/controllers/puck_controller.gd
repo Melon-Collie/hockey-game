@@ -196,7 +196,8 @@ func _physics_process(delta: float) -> void:
 	# dead (whistle/goal — host is about to reset it) or we got ghosted (offside —
 	# can't hold the puck). Timeout/grant/steal are handled below and in the RPCs.
 	if _provisional_carrier_skater != null and (puck.pickup_locked \
-			or not is_instance_valid(_provisional_carrier_skater) or _provisional_carrier_skater.is_ghost):
+			or not is_instance_valid(_provisional_carrier_skater) \
+			or _provisional_carrier_skater.is_ghost or _provisional_carrier_skater.is_knocked_down):
 		_clear_provisional()
 	if _local_carrier_skater != null:
 		is_extrapolating = false
@@ -375,7 +376,7 @@ func _contest_blade_velocity(skater: Skater, raw_blade_vel: Vector3) -> Vector3:
 # to be granted, so it adds no per-tick cost on the common no-pickup path.
 func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3, puck_airborne: bool) -> Skater:
 	for skater: Skater in skaters:
-		if skater == first or skater.is_ghost or puck.is_on_cooldown(skater):
+		if skater == first or skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
 			continue
 		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 				or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
@@ -414,7 +415,7 @@ func _check_interactions() -> void:
 			var carrier_team: int = _team_id_by_skater.get(puck.carrier, -1)
 			var carrier_skater: Skater = puck.carrier
 			for skater: Skater in skaters:
-				if skater == puck.carrier or skater.is_ghost:
+				if skater == puck.carrier or skater.is_ghost or skater.is_knocked_down:
 					continue
 				var checker_team: int = _team_id_by_skater.get(skater, -1)
 				if not PuckCollisionRules.can_poke_check(carrier_team, checker_team):
@@ -446,7 +447,7 @@ func _check_interactions() -> void:
 			# On-ice/off-ice gate is invariant across skaters this tick.
 			var puck_airborne: bool = puck.is_airborne()
 			for skater: Skater in skaters:
-				if skater.is_ghost or puck.is_on_cooldown(skater):
+				if skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
 					continue
 				# A crouched shot-blocker can't corral the puck with their stick —
 				# the blade is committed to the block. Same for a shooter mid
@@ -648,6 +649,9 @@ func try_provisional_pickup(local_skater: Skater) -> void:
 	# gate) — don't pin a puck the host is guaranteed not to grant.
 	if local_skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 		return
+	# Knocked down — can't corral the puck (mirrors the host's is_knocked_down gate).
+	if local_skater.is_knocked_down:
+		return
 	if _is_pickup_contested(local_skater):
 		return
 	_provisional_carrier_skater = local_skater
@@ -664,7 +668,7 @@ func _is_pickup_contested(local_skater: Skater) -> bool:
 		return true  # can't tell who's around → assume contested (conservative)
 	var puck_pos: Vector3 = puck.get_puck_position()
 	for s: Skater in _skater_getter.call():
-		if s == local_skater or not is_instance_valid(s) or s.is_ghost:
+		if s == local_skater or not is_instance_valid(s) or s.is_ghost or s.is_knocked_down:
 			continue
 		# Any other skater (either team) racing the same loose puck is a contest —
 		# only one can be granted it. Their blade is interpolated, hence the

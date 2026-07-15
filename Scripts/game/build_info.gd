@@ -101,7 +101,11 @@ const VERSION: String = "dev"
 #     unchanged, but the wire semantics differ (a mixed-build host would read a
 #     new client's hit intent as noise), so a bump is required. Not yet consumed
 #     by any behavior — wired ahead of the hit-system redesign.
-const PROTOCOL_VERSION: int = 26
+# v27: skater world-state block 40 -> 41 B — adds knockdown_timer (u8 @0.01s) after
+#     stagger_timer, so a hard body check that knocks the victim down replicates and
+#     the local victim's predicted knockdown survives reconcile (same rail/reason as
+#     stagger's v10 add).
+const PROTOCOL_VERSION: int = 27
 
 
 func _ready() -> void:

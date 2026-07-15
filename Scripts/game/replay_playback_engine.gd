@@ -78,6 +78,7 @@ static func apply_interpolated_snapshot(
 		interp.shot_charge = lerpf(fs.shot_charge, ts.shot_charge, t)
 		interp.stamina = lerpf(fs.stamina, ts.stamina, t)
 		interp.stagger_timer = lerpf(fs.stagger_timer, ts.stagger_timer, t)
+		interp.knockdown_timer = lerpf(fs.knockdown_timer, ts.knockdown_timer, t)
 		record.controller.apply_replay_state(interp, sim_delta)
 
 	var fp: PuckNetworkState = from_snap.puck

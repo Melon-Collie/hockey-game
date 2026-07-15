@@ -33,6 +33,10 @@ var sprint_locked: bool = false
 # (see BodyCheckRules / SkaterController._apply_movement). Host-authoritative: only
 # the host sets it on a hit; clients receive the resolved value off the wire.
 var stagger_timer: float = 0.0
+# Body-check knockdown: seconds of full movement lockout remaining. Replicated for
+# the same reason as stagger_timer — the local victim's reconcile snaps it to the
+# host baseline and it decays deterministically forward. Host-authoritative.
+var knockdown_timer: float = 0.0
 # Movement INTENT: the raw WASD vector (world frame, 8-way quantized on the
 # wire) and the brake hold. Cosmetic-only — the gait reads what the player is
 # TRYING to do (crossover intent, deliberate hockey stop, no-keys glide) a
@@ -75,6 +79,7 @@ func to_array() -> Array:
 		move_intent,
 		brake_intent,
 		sprint_active,
+		knockdown_timer,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -95,6 +100,7 @@ func copy_from(s: SkaterNetworkState) -> void:
 	stamina = s.stamina
 	sprint_locked = s.sprint_locked
 	stagger_timer = s.stagger_timer
+	knockdown_timer = s.knockdown_timer
 	move_intent = s.move_intent
 	brake_intent = s.brake_intent
 	sprint_active = s.sprint_active
@@ -130,4 +136,6 @@ static func from_array(data: Array) -> SkaterNetworkState:
 		state.brake_intent = data[18]
 	if data.size() > 19:
 		state.sprint_active = data[19]
+	if data.size() > 20:
+		state.knockdown_timer = data[20]
 	return state
