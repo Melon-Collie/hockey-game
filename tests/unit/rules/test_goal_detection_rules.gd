@@ -99,6 +99,52 @@ func test_post_clank_deflected_wide_is_no_goal() -> void:
 			Vector3(1.05, ICE_Y, GOAL_Z + 0.15)))
 
 
+# ── Endpoint-in-cavity but the straight segment came from OUTSIDE a solid face.
+# The cavity fallback trusts "only route in is the mouth"; the straight segment
+# we sample can straddle a solid side/back panel. These are the phantom
+# "in from the back/side" goals — usually on a bot's exact angle — that the
+# pipe-band crossing gate must reject. ────────────────────────────────────────
+
+func test_slid_in_from_beside_the_net_is_no_goal() -> void:
+	# Prev sits BESIDE the net at the goal line (x = 1.3, well outside the 0.915
+	# post — over the side netting), curr ends inside the cavity. The straight
+	# segment pierces the plane at x ~1.19, far outside the pipe band: the puck
+	# never touched the frame, so a real disc would be stopped by the solid side
+	# mesh. No goal.
+	assert_false(_crossed(
+			Vector3(1.3, ICE_Y, GOAL_Z - 0.05),
+			Vector3(0.5, ICE_Y, GOAL_Z + 0.30)))
+
+
+func test_sharp_angle_feed_from_behind_the_goal_line_is_no_goal() -> void:
+	# A steep cross-crease feed threaded from a wide starting point at the line:
+	# crosses the plane at x ~1.16 (outside the 1.01 pipe band) though the
+	# endpoint lands in the cavity. Came from beyond a solid face — no goal.
+	assert_false(_crossed(
+			Vector3(1.2, ICE_Y, GOAL_Z - 0.02),
+			Vector3(0.6, ICE_Y, GOAL_Z + 0.25)))
+
+
+func test_pin_curled_past_the_post_into_cavity_is_no_goal() -> void:
+	# A carried/pinned puck (teleported, not collision-constrained) curled from
+	# outside the post into the cavity: crossing at x ~1.08, outside the band.
+	# The blade net-clamp is meant to stop this, but detection must not award it
+	# on the endpoint even if a pin slips through.
+	assert_false(_crossed(
+			Vector3(1.10, ICE_Y, GOAL_Z - 0.01),
+			Vector3(0.70, ICE_Y, GOAL_Z + 0.20)))
+
+
+func test_diagonal_post_and_in_grazing_the_pipe_still_counts() -> void:
+	# A genuine bank-in: the puck angles in touching the post (crossing at
+	# x ~0.99, inside the 1.01 pipe band — its center overlaps the pipe) and
+	# ends inside the cavity. This is exactly what the cavity fallback exists
+	# for, so the pipe-band gate must still let it through.
+	assert_true(_crossed(
+			Vector3(1.0, ICE_Y, GOAL_Z - 0.02),
+			Vector3(0.7, ICE_Y, GOAL_Z + 0.40)))
+
+
 # ── False positives the old sensor allowed ────────────────────────────────────
 
 

@@ -79,6 +79,24 @@ static func crossed_into_net(
 	# the goal on the endpoint. Without this, a deflected entry was rejected
 	# once and then permanently locked out by the prev_depth freshness guard:
 	# the puck sat visibly in the net with no goal.
+	#
+	# But this endpoint-only test trusts that "the only route into the cavity is
+	# through the mouth" — true for a free puck against solid panels, but the
+	# STRAIGHT segment we sample can straddle those panels: a puck slid in from
+	# BESIDE the net (a side-netting scramble), a sharp-angle feed threaded from
+	# behind the goal line, or a bot's pin/carry curled past a post can pierce
+	# the plane far outside the frame yet land its endpoint inside the cavity —
+	# a phantom "in from the back/side" goal (usually on a bot, whose angles are
+	# exact). A genuine post-and-in / bar-down, by contrast, is in CONTACT with
+	# the pipe as it crosses, so its crossing point sits within the pipe band —
+	# no farther out than the post/bar outer face plus the puck's own reach.
+	# Gate the fallback on that: a crossing beyond the band never touched the
+	# frame, so it came from outside a solid face and is not a goal.
+	var pipe_x_limit: float = half_width + post_radius + puck_radius
+	var pipe_y_top: float = net_height + post_radius + puck_half_height
+	var pipe_y_bottom: float = -(post_radius + puck_half_height)
+	if absf(cross_x) > pipe_x_limit or cross_y > pipe_y_top or cross_y < pipe_y_bottom:
+		return false
 	return _center_inside_cavity(curr_center, curr_depth, half_width,
 			net_height, post_radius, puck_radius, puck_half_height, net_depth)
 
