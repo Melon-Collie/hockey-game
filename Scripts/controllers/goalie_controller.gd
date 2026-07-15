@@ -51,6 +51,20 @@ extends Node
 # retreat deliberately bypasses this cap (it matches the attacker's closing
 # speed, the real constraint on a backflow).
 @export var depth_max_speed: float = 2.2
+# Minimum perpendicular depth (m in front of the goal line) the goalie CENTER
+# holds while squared to a shot in front of the net (STANDING / READY /
+# RECOVERING / idle BUTTERFLY). The pads are the low-ice blockers, but they and
+# the torso have real Z thickness and swing with the goalie's facing, so a
+# center parked right on the line (the old depth_defensive=0.10 floor, and the
+# arc's near-zero perpendicular depth at sharp angles) let the rear of the body
+# straddle BEHIND the line — a puck could finish crossing the goal-line plane
+# (goal at line + PUCK_COLLISION_RADIUS) before the pad face ever presented.
+# This floor keeps the whole body — pad face included — in front of that plane
+# across facing rotations. It is deliberately NOT applied to the post-integrated
+# (RVH/VH), committed-slide (COILING/SLIDING post seal), behind-net
+# (PLAYING_PUCK), or planted (COVERING/CATCHING) states, where sitting at/behind
+# the line is the correct play (wraps, walkouts, dead-angle post seals).
+@export var min_challenge_depth: float = 0.20
 
 @export var shuffle_speed: float = 2.0
 @export var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
@@ -2895,8 +2909,18 @@ func _update_position(delta: float) -> void:
 		State.STANDING, State.READY, State.RECOVERING:
 			var pair: Vector2 = _move_along_arc(delta)
 			_current_x = pair.x
-			new_z = pair.y
+			# The arc's perpendicular depth collapses toward the goal line at
+			# sharp angles (goalie_z = goal_line + uz * radius, uz -> 0 wide);
+			# floor it so the pads stay in front of the line. `_current_depth`
+			# (the arc RADIUS) is intentionally not touched — only the realised
+			# Z position is clamped, so the next tick keeps tracing the arc.
+			new_z = _front_of_line_z(pair.y)
 		State.BUTTERFLY:
+			# Idle butterfly is a shot-facing stance: never sit so deep the pads
+			# straddle behind the goal line. Floor the committed depth itself (not
+			# just the final Z) so the slide-commit start depth stays consistent
+			# with the rendered position.
+			_current_depth = maxf(_current_depth, min_challenge_depth)
 			_update_butterfly_five_hole(delta)
 			_try_commit_slide(delta)
 			# Knee shuffle: if still idle butterfly after the slide check (drop
@@ -2976,6 +3000,17 @@ func _update_position(delta: float) -> void:
 		_velocity_x = (_current_x - prev_x) / delta
 		_velocity_z = (new_z - prev_z) / delta
 	goalie.set_goalie_position(_current_x, new_z)
+
+# Clamp a candidate goalie Z so its perpendicular depth in front of the goal
+# line is at least `min_challenge_depth` — keeps the pad face ahead of the
+# goal-line plane in the shot-facing states. Only the states where sitting on
+# the line is wrong call this; post-integrated / slide-seal / behind-net play
+# never does (see the export doc-block).
+func _front_of_line_z(z: float) -> float:
+	var perp: float = (z - _goal_line_z) * _direction_sign
+	if perp < min_challenge_depth:
+		return _goal_line_z + _direction_sign * min_challenge_depth
+	return z
 
 # 2D arc tracing for STANDING/RECOVERING. Target is the arc point at the
 # current radius; choose lateral speed by 2D distance so X and Z move at the
