@@ -139,11 +139,12 @@ func _init() -> void:
 
 
 func add_skater(peer_id: int, team_id: int, pos: Vector3,
-		profile: BotSkillProfile = null) -> void:
+		profile: BotSkillProfile = null, vel: Vector3 = Vector3.ZERO) -> void:
 	var s := SimSkater.new()
 	s.peer_id = peer_id
 	s.team_id = team_id
 	s.pos = pos
+	s.vel = vel
 	s.blade = pos
 	s.prev_blade = pos
 	s.profile = profile
