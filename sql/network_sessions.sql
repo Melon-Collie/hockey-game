@@ -126,7 +126,14 @@ select
     (metrics->>'clock_correction_ms_max')::float         as clock_correction_peak,   -- client only; sustained large = clock sync unstable (poisons lag comp)
     (metrics->>'worst_peer_rtt_ms_avg')::float           as worst_peer_rtt_avg,      -- host only; the host row's real link picture
     (metrics->>'worst_peer_loss_pct_max')::float         as worst_peer_loss_peak,    -- host only
-    (metrics->>'auto_marker_count')::int                 as auto_marker_count        -- objective tripwire firings (markers themselves in metrics->'auto_markers')
+    (metrics->>'auto_marker_count')::int                 as auto_marker_count,       -- objective tripwire firings (markers themselves in metrics->'auto_markers')
+    -- Lag-comp pickup-claim health (host only; the host processes every client's
+    -- claim). misses/claims ≈ rewind accuracy: near-zero = the rewound blade/puck
+    -- reproduce what the client saw; a high fraction = the rewind is off (the
+    -- "reached for it, didn't get it" symptom). deflects = reached but not catchable.
+    (metrics->>'pickup_claims_total')::float             as pickup_claims_total,
+    (metrics->>'pickup_claim_misses_total')::float       as pickup_claim_misses_total,
+    (metrics->>'pickup_claim_deflects_total')::float     as pickup_claim_deflects_total
 from public.network_sessions
 where net_sim_active is not true;
 
@@ -167,7 +174,13 @@ select
     -- Trailing-append rule applies here too (create or replace view).
     sum(auto_marker_count)                                     as auto_marker_total,
     max(delay_spread_peak)      filter (where role = 'client') as worst_client_delay_spread,
-    max(clock_correction_peak)  filter (where role = 'client') as worst_client_clock_correction
+    max(clock_correction_peak)  filter (where role = 'client') as worst_client_clock_correction,
+    -- Host-side lag-comp pickup-claim health for the match (one host per game).
+    -- Read misses relative to claims: high misses/claims flags a rewind that
+    -- isn't reproducing what clients saw when they reached for a loose puck.
+    max(pickup_claims_total)         filter (where role = 'host') as host_pickup_claims,
+    max(pickup_claim_misses_total)   filter (where role = 'host') as host_pickup_claim_misses,
+    max(pickup_claim_deflects_total) filter (where role = 'host') as host_pickup_claim_deflects
 from public.network_session_health
 where game_id is not null
 group by game_id;

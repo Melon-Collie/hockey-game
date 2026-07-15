@@ -1605,9 +1605,13 @@ func notify_puck_stolen(event_seq: int, was_stick_lift: bool) -> void:
 		[event_seq, was_stick_lift], true)
 
 func send_one_timer_release(direction: Vector3, power: float, origin: Vector3) -> void:
+	# Adapted interp delay (get_interpolation_delay), the value that actually
+	# positioned the rendered puck — the host rewinds to it (remote_view_time) for
+	# the "did I connect with the puck I saw" range gate. Matches the pickup / poke /
+	# stick-lift / hit claim sends; target would lead it mid-jitter.
 	release_puck_one_timer.rpc_id(1, direction, power,
 			estimated_host_time(), get_latest_rtt_ms(),
-			get_target_interpolation_delay() * 1000.0, origin)
+			get_interpolation_delay() * 1000.0, origin)
 
 @rpc("any_peer", "reliable")
 func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
@@ -2074,9 +2078,11 @@ func get_packet_delay_floor_ms() -> float:
 
 func get_target_interpolation_delay() -> float:
 	# Cached once per physics frame: get_jitter_p95() duplicates + sorts the sample
-	# buffer, and this is read by the per-packet shared-delay advance plus every
-	# claim-send. The target drifts slowly (adapt clamps ±1.5/+10 ms per packet),
-	# so a frame of staleness is irrelevant.
+	# buffer, and this is read by the per-packet shared-delay advance and the F3
+	# overlay. (Claim-sends report the ADAPTED get_interpolation_delay instead —
+	# the value that actually positioned the rendered entity — so the host's
+	# remote-view rewind matches what the client saw.) The target drifts slowly
+	# (adapt clamps ±1.5/+10 ms per packet), so a frame of staleness is irrelevant.
 	var frame: int = Engine.get_physics_frames()
 	if frame != _target_interp_frame:
 		_target_interp_frame = frame

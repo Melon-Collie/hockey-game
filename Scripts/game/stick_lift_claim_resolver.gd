@@ -58,8 +58,12 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
-	if record == null or record.skater == null or record.skater.is_ghost:
+	if record == null or record.skater == null:
 		return
+	# is_ghost is judged from the rewound attacker snapshot below, not present-time
+	# — matching PickupClaimResolver / PokeClaimResolver: an attacker legal at their
+	# view-time but ghosted (offside) in the last RTT/2 isn't wrongly denied, and one
+	# who just tagged up isn't wrongly granted a lift that was illegal then.
 	# Defense in depth — client-side gate already excludes these, but a
 	# malformed RPC shouldn't be able to bypass the rules.
 	if record.skater == puck.carrier:
@@ -88,6 +92,8 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	var blade_snap: WorldSnapshot = _state_buffer.get_state_at(blade_rewind_time)
 	var attacker_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
 	if attacker_snap == null:
+		return
+	if attacker_snap.is_ghost:
 		return
 	if not PuckInteractionRules.check_blade_under_stick(
 			attacker_snap.blade_contact_world,

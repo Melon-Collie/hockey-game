@@ -35,9 +35,10 @@ Each per-second metric `<key>` appears as:
   read it with `_avg` for context.
 - `<key>_min` — only for metrics where **lower is worse** (`sim_rate_hz`,
   `reconcile_match_pct`, `client_fps`, `buffer_depth_*`).
-- `<key>_total` — only for **rare-event counters** (`puck_hard_snaps`,
-  `blade_jumps`): the session sum. These are events-per-game, not rates —
-  3 hard snaps in a 10-minute game matters and would average to ~0/s.
+- `<key>_total` — only for **rare-event / event counters** (`puck_hard_snaps`,
+  `blade_jumps`, and the host-side `pickup_claims` / `pickup_claim_misses` /
+  `pickup_claim_deflects`): the session sum. These are events-per-game, not
+  rates — 3 hard snaps in a 10-minute game matters and would average to ~0/s.
 
 ## Connection facts (link quality — context, not necessarily a bug)
 
@@ -83,6 +84,19 @@ below.
 |---|---|
 | `puck_hard_snaps_total` | Puck trajectory-prediction corrections in the hard-snap zone (>1.5 m divergence). Expected only on genuine host/client physics divergence (a bounce that differed). Firing on every shot = trajectory math bug. Client only. |
 | `blade_jumps_total` | Reconcile-induced blade teleports >5 cm (normal fast stickhandling is excluded). Client only. |
+
+## Lag-comp pickup health (host rows only)
+
+The host processes every client's pickup claim, so its row summarizes whether
+the lag-comp rewind reproduces what clients saw when they reached for a loose
+puck. Read the miss/deflect totals **relative to `pickup_claims_total`** — the
+raw counts scale with how much loose-puck play a game had.
+
+| Key | Meaning |
+|---|---|
+| `pickup_claims_total` | Client pickup claims that reached the rewound geometry test (all eligibility gates — fresh, loose, not ghost/cooldown/shot-blocking — passed). The denominator. |
+| `pickup_claim_misses_total` | Of those, how many failed the geometry test: the rewound blade and puck didn't overlap even though the client's view said in-range. **`misses / claims` is the headline sanity number — near-zero means the rewind reproduces the client's view; a high fraction means the rewind is off (the "reached for it, didn't get it" symptom).** |
+| `pickup_claim_deflects_total` | Reached the puck but the rewound speed/angle said tip-not-catch (a deflect, not a catch). Separates "missed the puck" from "touched it but it wasn't catchable". |
 
 ## Host frame / input health (host rows only; clients omit or fold 0)
 
@@ -136,4 +150,6 @@ same game (host-side cause); one client bad while siblings are clean ⇒ that
 client's link. `host_starvations_peak` is the host-side echo of a client's
 upstream loss. `worst_client_*` columns take the worst value across the lobby
 — one bad experience is a bad match. `abnormal_ends > 0` flags games someone
-didn't finish.
+didn't finish. `host_pickup_claim_misses` read against `host_pickup_claims` is
+the per-match lag-comp pickup sanity check (high miss fraction ⇒ the rewind
+isn't reproducing what clients saw).

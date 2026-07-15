@@ -92,7 +92,13 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 	# present-time, so a player who became ghost in the last RTT/2 isn't
 	# wrongly denied a claim that was legal at send time, and a player who
 	# just cleared ghost isn't wrongly granted one that was illegal then.
-	if puck.is_on_cooldown(record.skater):
+	#
+	# Cooldown is judged at the claimant's SELF-view time for the same reason:
+	# present-time is up to one-way latency later, so a reattach cooldown that
+	# expired in that window would grant a claim the claimant couldn't have made
+	# at send time. self_view_time is the claimant's own body timeline (matching
+	# the blade rewind below); the expiry store shares its local_time base.
+	if puck.is_on_cooldown_at(record.skater, LagCompRewind.self_view_time(host_timestamp)):
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
@@ -125,7 +131,15 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 		return
 	var blade_curr: Vector3 = skater_snap.blade_contact_world
 	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world
+	# Sanity telemetry (host-only, no-op off the host): this claim reached the
+	# rewound geometry test — the client's view said in-range and every
+	# eligibility gate passed. A check_pickup fail below means the host's rewind
+	# put the blade/puck out of overlap: the lag-comp "reached for it, didn't get
+	# it" signal. Tracked as network_sessions totals so a high miss FRACTION on
+	# the host row flags a rewind that isn't reproducing what the client saw.
+	NetworkTelemetry.record_pickup_claim()
 	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
+		NetworkTelemetry.record_pickup_claim_miss()
 		return
 	# Catch vs deflect — run the SAME decision the present-time path uses
 	# (PuckController._check_interactions → PuckReceptionRules.should_receive),
@@ -146,7 +160,10 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 			puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
 		# Deflect verdict: redirect the puck instead of granting possession. Not a
 		# contested action (no carrier change), so it fires immediately rather than
-		# arming the contest window.
+		# arming the contest window. Counts as a claim outcome (geometry hit, but the
+		# rewound speed/angle said tip-not-catch) so the host row separates "missed
+		# the puck" from "reached it but it wasn't catchable".
+		NetworkTelemetry.record_pickup_claim_deflect()
 		pc.apply_lag_comp_deflect(record.skater)
 		return
 	if _pending_peer_id != -1:
@@ -162,7 +179,21 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 			# or demoted in the contest window, treat the new claim as uncontested.
 			var prior_record: PlayerRecord = _registry.get_record(_pending_peer_id)
 			if prior_record != null and prior_record.skater != null:
-				pc.apply_contested_pickup(record.skater, prior_record.skater)
+				# Resolve the squirt from the REWOUND blade of BOTH claimants — the
+				# kinematics each saw at their own view-time — not present-time (a
+				# contest window + RTT later). The new claimant's rewound blade is
+				# already in hand (blade_curr/blade_prev at blade_rewind_time); the
+				# prior claimant is re-rewound at its own claim's view-time. If its
+				# snapshot is gone, fall back to its live blade rather than skip.
+				var new_vel: Vector3 = (blade_curr - blade_prev) * float(Constants.PHYSICS_TICK)
+				var prior_pos: Vector3 = prior_record.skater.get_blade_contact_global()
+				var prior_vel: Vector3 = prior_record.skater.blade_world_velocity
+				var prior_kin: Array = _rewound_blade_kinematics(_pending_peer_id, _pending_host_timestamp)
+				if not prior_kin.is_empty():
+					prior_pos = prior_kin[0]
+					prior_vel = prior_kin[1]
+				pc.apply_contested_pickup(record.skater, prior_record.skater,
+						new_vel, prior_vel, blade_curr, prior_pos)
 				_pending_peer_id = -1
 				_pending_timer = 0.0
 				_pending_host_timestamp = 0.0
@@ -187,3 +218,22 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 		_pending_timer = 0.0
 		_pending_peer_id = peer_id
 		_pending_host_timestamp = host_timestamp
+
+
+# Rewound blade kinematics for a contestant, from their claim's SELF-view time —
+# so a contested pickup resolves from the blade the claimant actually saw, not a
+# present-time sample. Returns [pos: Vector3, vel: Vector3], or [] if the rewound
+# snapshot is missing (caller falls back to the live skater). Velocity is the same
+# per-tick finite difference the live blade_world_velocity uses (Δpos / one tick),
+# measured on the same blade_contact_world point the position term reports.
+func _rewound_blade_kinematics(peer_id: int, claim_host_timestamp: float) -> Array:
+	var t: float = LagCompRewind.self_view_time(claim_host_timestamp)
+	var snap: WorldSnapshot = _state_buffer.get_state_at(t)
+	var s: SkaterNetworkState = snap.get_skater_state(peer_id)
+	if s == null:
+		return []
+	var prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(t))
+	var s_prev: SkaterNetworkState = prev_snap.get_skater_state(peer_id)
+	var pos: Vector3 = s.blade_contact_world
+	var prev_pos: Vector3 = s_prev.blade_contact_world if s_prev != null else pos
+	return [pos, (pos - prev_pos) * float(Constants.PHYSICS_TICK)]
