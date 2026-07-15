@@ -132,6 +132,20 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 @export var body_check_drive_ref_impulse: float = 11.0   # delivered impulse of a full plow-through hit
 @export var body_check_transfer: float = 0.45
 @export var body_check_brace_resistance: float = 0.4
+# Fraction of body_check_transfer that lands WITHOUT the hit button committed.
+# The hit button (Ctrl / input.hit_held) is the intent gate: a committed check
+# delivers the full transfer, an incidental bump only this fraction — so skating
+# into someone uncommitted jostles but rarely staggers and never knocks down.
+# Set by the controller each tick via hit_committed below (re-derived from
+# input.hit_held, so it survives reconcile with no wire cost).
+@export var hit_passive_transfer_mult: float = 0.3
+# True this tick when the attacker is committing a check (hit button held +
+# stamina available). Written by SkaterController._apply_movement from the
+# replicated input.hit_held; read in _resolve_player_collisions to pick between
+# full and passive transfer. Not itself on the wire — the aggressor is always the
+# locally-simulated body wherever the resolver reads it (host sims all, a client
+# its own), and replay re-derives it from input.hit_held.
+var hit_committed: bool = false
 
 # Machine-authority flags, injected once at spawn by GameManager._on_player_spawned
 # (collaborator pattern — the actor stays autoload-free). They gate the victim-side
@@ -308,6 +322,31 @@ func get_team_id() -> int:
 	if not _team_id_resolver.is_valid():
 		return -1
 	return _team_id_resolver.call() as int
+
+
+# Returns the live (cached) list of ALL skaters, set by PlayerRegistry on spawn.
+# _resolve_player_collisions iterates it (skipping self) to resolve skater-vs-
+# skater contact analytically now that skaters are off each other's move_and_slide
+# mask. Empty Callable (tutorial dummy / test) → no skater-vs-skater resolution.
+var _skater_collision_provider: Callable = Callable()
+# Stable, machine-consistent id (the owning peer_id) set by PlayerRegistry on
+# spawn. Used ONLY to break exact head-on ties in the aggressor gate — it must be
+# identical on every machine (get_instance_id() is per-process and would let host
+# and client resolve the same pair from opposite sides, desyncing reconcile).
+var collision_tiebreak_id: int = 0
+# Reused across pairs each tick — no per-pair heap allocation in the 120 Hz
+# resolver (the hot-path "build once, fill scratch" pattern).
+var _collision_result: SkaterCollisionRules.Result = SkaterCollisionRules.Result.new()
+
+
+func set_skater_collision_provider(provider: Callable) -> void:
+	_skater_collision_provider = provider
+
+
+# The disc radius used for analytic skater-vs-skater contact — the (Size-scaled)
+# physics cylinder radius, so the hitbox and the contact geometry stay identical.
+func collision_radius() -> float:
+	return _collision_cyl.radius if _collision_cyl != null else 0.5
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _facing: Vector2 = Vector2.DOWN
 # Loft mode (0 flat / 1 low saucer / 2 high). Set each tick by the controller
@@ -341,6 +380,10 @@ var _blade_lift_blend: float = 0.0
 # resolved blade_up off the wire).
 var _forced_lift_timer: float = 0.0
 var is_ghost: bool = false
+# True while this skater is knocked down by a hard body check (knockdown_timer > 0
+# on its controller). Set by SkaterController each tick; read by the puck pickup
+# election so a downed player can't magnet the puck, the same way is_ghost gates it.
+var is_knocked_down: bool = false
 var is_braking: bool = false
 var is_braced: bool = false
 var shot_charge: float = 0.0
@@ -604,14 +647,18 @@ func _physics_process(delta: float) -> void:
 	# value there is a hard, uncatchable native crash. This should never fire;
 	# when it does it logs the offending state so the upstream source is findable.
 	_sanitize_physics_state()
-	var vel_before: Vector3 = velocity
 	# Y is axis-locked (see _ready): move_and_slide leaves global_position.y
 	# untouched, so live prediction, reconcile replay, and host authority all
-	# agree on Y without a post-move override. Horizontal wall/skater collision
-	# is unaffected.
+	# agree on Y without a post-move override. move_and_slide now handles only
+	# walls (ice + goalie bodies) — skaters are off each other's mask; skater-vs-
+	# skater contact is resolved analytically in _resolve_player_collisions below.
 	move_and_slide()
+	# Capture velocity AFTER the wall slide but BEFORE the analytic skater-vs-skater
+	# resolution, so the delta below isolates the body-check impulse (the resolver's
+	# self velocity change) for the reconcile replay recording — same as when this
+	# delta came from the old Jolt-driven _resolve_player_collisions.
 	var vel_after_slide: Vector3 = velocity
-	_resolve_player_collisions(vel_before)
+	_resolve_player_collisions()
 	var body_check_delta: Vector3 = velocity - vel_after_slide
 	if body_check_delta.length_squared() > 0.0001:
 		body_check_impulse_applied.emit(body_check_delta)
@@ -656,66 +703,80 @@ func _sanitize_physics_state() -> void:
 		velocity = Vector3.ZERO
 
 
-func _resolve_player_collisions(vel_before: Vector3) -> void:
-	for i: int in get_slide_collision_count():
-		var col := get_slide_collision(i)
-		if not col.get_collider() is Skater:
+func _resolve_player_collisions() -> void:
+	# Skaters are off each other's move_and_slide mask (see Constants.MASK_SKATER):
+	# skater-vs-skater contact is resolved analytically here via SkaterCollisionRules
+	# (inelastic disc model, no restitution bounce) instead of Jolt's cylinder
+	# separation + the old attacker_restitution curve. Iterates the registry's
+	# cached skater list rather than get_slide_collision(). No provider (tutorial
+	# dummy / unit test) → no skater-vs-skater resolution.
+	if not _skater_collision_provider.is_valid():
+		return
+	var others: Array = _skater_collision_provider.call()
+	if others == null:
+		return
+	var my_radius: float = collision_radius()
+	for other: Skater in others:
+		if other == null or other == self:
 			continue
-		var other := col.get_collider() as Skater
-		# Use horizontal normal only — skater collisions are on the XZ plane.
-		var raw_normal: Vector3 = col.get_normal()
-		var normal := Vector3(raw_normal.x, 0.0, raw_normal.z)
-		if normal.length() < 0.001:
+		# Center-to-center axis on XZ, n pointing self -> other (the hit direction).
+		# Fallback for coincident centers matches SkaterCollisionRules so the emit
+		# direction and the resolved geometry agree.
+		var d: Vector3 = other.global_position - global_position
+		d.y = 0.0
+		var dist: float = d.length()
+		var n: Vector3 = Vector3(1.0, 0.0, 0.0) if dist < 0.0001 else d / dist
+		# Aggressor gate — resolve each pair EXACTLY once, from the side moving toward
+		# the other more (replicating move_and_slide's old "only the moving body
+		# reports a slide collision"). agg_metric = (v_self + v_other)·n: > 0 → self is
+		# the aggressor and resolves this pair; < 0 → the other side does; ~0 (head-on
+		# or both still) → the lower instance id resolves. Deterministic across
+		# machines (velocities + ids replicate), so prediction and reconcile agree.
+		var agg_metric: float = (velocity + other.velocity).dot(n)
+		if agg_metric < -0.0001:
 			continue
-		normal = normal.normalized()
-		var vel_horiz := Vector3(vel_before.x, 0.0, vel_before.z)
-		# Use relative closing velocity along the contact normal so perpendicular
-		# victim motion doesn't subtract from impact and head-on hits register harder.
-		var other_vel_horiz := Vector3(other.velocity.x, 0.0, other.velocity.z)
-		var approach: float = (vel_horiz - other_vel_horiz).dot(-normal)
-		if approach <= 0.0:
+		if absf(agg_metric) <= 0.0001 and collision_tiebreak_id > other.collision_tiebreak_id:
 			continue
-		# The impulse the victim ACTUALLY absorbs — closing speed × mass ratio ×
-		# brace-adjusted transfer — is the shared "how hard did it land" magnitude the
-		# victim knockback, stagger, and puck strip all key off. The brace is read from
-		# the REPLICATED brake_intent (not is_braced, which the controller only maintains
-		# for locally-simulated skaters), so this evaluates identically on every machine.
-		var weight_ratio: float = weight / maxf(other.weight, 0.001)
-		var delivered_impulse: float = BodyCheckRules.delivered_transfer_impulse(
-				approach, weight_ratio, body_check_transfer,
-				other.body_check_brace_resistance, other.brake_intent)
-		# Attacker rebound scales DOWN as that delivered impulse rises: a victim you send
-		# flying drops it toward body_check_restitution_floor so you drive THROUGH onto the
-		# loose puck; a victim who braces and holds their ground (brace cuts the delivered
-		# impulse) keeps the rebound near body_check_restitution, so you peel off in a
-		# battle instead of gluing to them. Keying off the delivered impulse — not the
-		# attacker's brace-independent commitment — is what ties the follow-through to the
-		# hit that actually landed. Deterministic across machines (brake_intent, masses,
-		# transfer all replicated/local), so prediction/reconcile stay consistent.
-		var restitution: float = BodyCheckRules.attacker_restitution(
-				delivered_impulse, body_check_restitution, body_check_restitution_floor,
-				body_check_drive_min_impulse, body_check_drive_ref_impulse)
-		velocity += normal * approach * restitution
-		# Victim-side transfer + emits only when `other` is authoritative on this
-		# machine (host owns all; a client owns only its local skater). Skipping it
-		# for remote-vs-remote contact on a client removes non-authoritative churn
-		# the host snapshot would overwrite anyway. The local victim's predicted
-		# push is preserved here (other.is_local_skater), and reconcile snaps it.
+		# Transfer (0..1) = attacker (self) delivery × hit-button commit gate × victim
+		# brace. The hit gate is the "without the hit button, hits shouldn't be that
+		# powerful" rule (full when committing, hit_passive_transfer_mult otherwise);
+		# the brace reads the REPLICATED brake_intent (not is_braced) so it evaluates
+		# identically on every machine.
+		var atk_transfer: float = body_check_transfer \
+				* (1.0 if hit_committed else hit_passive_transfer_mult)
+		var brace: float = other.body_check_brace_resistance if other.brake_intent else 1.0
+		SkaterCollisionRules.resolve(_collision_result,
+				global_position, velocity, weight, my_radius,
+				other.global_position, other.velocity, other.weight, other.collision_radius(),
+				atk_transfer * brace)
+		if not _collision_result.overlapping:
+			continue
+		# Self (attacker): separation + inelastic decel / drive-through, applied
+		# unconditionally (this machine simulates self wherever the resolver runs).
+		# Recorded for reconcile replay via the body_check_delta capture in
+		# _physics_process (velocity - vel_after_slide).
+		global_position += _collision_result.sep_a
+		velocity += _collision_result.dvel_a
+		# Victim side only when this machine authoritatively owns `other` (host owns
+		# all; a client owns only its local predicted skater) — same gate as the old
+		# resolver, skipping churn the next host snapshot overwrites. The emit records
+		# the victim's incoming impulse for ITS reconcile replay and drives the stagger
+		# (body_check_received). The knockback magnitude (|dvel_b|) is now the inelastic
+		# reduced-mass impulse, not the old weight-ratio delivered_transfer_impulse.
 		if is_host_machine or other.is_local_skater:
+			other.global_position += _collision_result.sep_b
 			var other_vel_before: Vector3 = other.velocity
-			# Same delivered_impulse magnitude computed above (approach × weight_ratio ×
-			# effective_transfer) — the victim's knockback. Also drives the puck strip,
-			# reconstructed from impact_force in BodyCheckRules.puck_strip_impulse; keep
-			# the two in sync if this changes.
-			other.velocity -= normal * delivered_impulse
+			other.velocity += _collision_result.dvel_b
 			var other_delta: Vector3 = other.velocity - other_vel_before
 			if other_delta.length_squared() > 0.0001:
 				other.body_check_impulse_applied.emit(other_delta)
 				other.body_check_received.emit(other_delta)
-		# body_checked_player drives the host's credit/claim path and is NOT gated:
-		# it must fire on the attacker's own machine (local skater) and on the host
-		# so the hit can be lag-comp validated and broadcast (Lever A).
-		body_checked_player.emit(other, weight * approach, -normal)
+		# Credit / claim path — only on a real (closing) hit, NOT gated by authority
+		# (must fire on the attacker's own machine and the host for lag-comp
+		# validation, Lever A). impact_force keeps the weight × closing convention
+		# BodyCheckRules.puck_strip_impulse reconstructs the strip magnitude from.
+		if _collision_result.impulse_applied:
+			body_checked_player.emit(other, weight * _collision_result.closing_speed, n)
 
 
 # Holds the body inside the rink by projecting its XZ onto the inner board

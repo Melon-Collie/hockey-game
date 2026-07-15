@@ -39,7 +39,14 @@ const LAYER_NET: int            = 64
 # stick is kept off LAYER_WALLS so skaters (whose mask omits LAYER_GOALIE_STICK)
 # skate straight through it instead of snagging on the hooked shaft/paddle/blade.
 const MASK_PUCK: int   = LAYER_WALLS | LAYER_BOARDS | LAYER_GOALIE_STICK | LAYER_NET  # bounces off boards + goalie bodies/ice + net + stick
-const MASK_SKATER: int = LAYER_WALLS | LAYER_SKATER_BODIES   # goalie bodies/ice + other skaters; boards + net handled analytically
+# Skater move_and_slide collides only with LAYER_WALLS (ice + goalie bodies);
+# boards + net are held analytically (see above), and skater-vs-skater contact is
+# now resolved analytically too — SkaterCollisionRules in Skater._resolve_player_
+# collisions, replacing move_and_slide's rigid cylinder separation + the old
+# restitution bounce (the pinball) with an inelastic disc model. Skaters keep their
+# LAYER_SKATER_BODIES layer (harmless; nothing masks it now) so any future physics
+# query against skater bodies still has a layer to target.
+const MASK_SKATER: int = LAYER_WALLS   # goalie bodies/ice only; boards, net, and other skaters handled analytically
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
 const PORT: int = 7777

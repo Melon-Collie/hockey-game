@@ -439,6 +439,16 @@ func test_skater_stagger_round_trips() -> void:
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.stagger_timer, v, 0.01, "stagger %f round-trips within u8 @0.01s" % v)
 
+func test_skater_knockdown_round_trips() -> void:
+	# v27: knockdown_timer joins the wire on the same rail as stagger, so the local
+	# victim's predicted knockdown survives reconcile. u8 @0.01s.
+	for v: float in [0.0, 0.7, 1.5, 2.5]:
+		var s := SkaterNetworkState.new()
+		s.knockdown_timer = v
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		assert_almost_eq(dec.knockdown_timer, v, 0.01, "knockdown %f round-trips within u8 @0.01s" % v)
+
 func test_goalie_glove_above_crossbar_not_clipped() -> void:
 	# Regression: glove/blocker Y reach (react_hand_y_max 1.55) exceeded the old s8
 	# ±1.27 m range and clipped ~28 cm low. The s16-wide encoding preserves it.

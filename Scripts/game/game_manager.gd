@@ -2416,6 +2416,10 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			# Kicks in above a firm 5.0; the camera aims along the shove.
 			local_player_impact.emit(impulse, clampf((impulse.length() - 5.0) / 6.0, 0.0, 1.0)))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
+		# Historical positions of the OTHER skaters for the reconcile replay's
+		# body-check re-resolution (Slice C) — sampled from each remote's
+		# interpolation buffer at the replayed input's host timestamp.
+		local_ctrl.set_historical_others_provider(_sample_historical_others)
 	# AI bots release shots through the same signal as humans, but they live
 	# only on the host (record.is_local is false). Without this connection
 	# the wrister state machine transitions to FOLLOW_THROUGH but the puck
@@ -4225,6 +4229,36 @@ func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 		return null
 	var ts: float = NetworkManager.local_time() - delay_seconds
 	return _state_buffer_manager.get_state_at(ts)
+
+
+# Historical {skater, position, velocity, brake} for every skater EXCEPT
+# `exclude_skater` at `host_ts`, sampled from each remote's interpolation buffer.
+# Wired to the local player's LocalController as the reconcile replay's
+# body-check re-resolution source (Slice C) — it re-derives contact against where
+# the host actually had the others, replacing the old recorded-impulse bridge.
+# NOTE: allocates an Array + per-other Dictionary per call (once per replayed
+# input during a reconcile). Correct but not yet optimized — a scratch-fill pass
+# is the "make it look good" follow-up.
+func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
+	var out: Array = []
+	if _registry == null:
+		return out
+	for rec: PlayerRecord in _registry.all().values():
+		if rec.skater == null or rec.skater == exclude_skater:
+			continue
+		var remote: RemoteController = rec.controller as RemoteController
+		if remote == null:
+			continue
+		var state: SkaterNetworkState = remote.sample_state_at(host_ts)
+		if state == null:
+			continue
+		out.append({
+			"skater": rec.skater,
+			"position": state.position,
+			"velocity": state.velocity,
+			"brake": state.brake_intent,
+		})
+	return out
 
 
 # Bots' discrete-event reaction delay. Positions/velocities on `snap` stay

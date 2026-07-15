@@ -220,6 +220,11 @@ func apply_facing(input: InputState, delta: float) -> void:
 				# earlier this tick, so it's deterministic across reconcile replay.
 				if _controller.sprint_active:
 					drag *= _controller.sprint_turn_multiplier
+				# Committing a check widens the turn the same way sprint does — the
+				# agility cost of loading up a hit. Stacks with sprint (both held =
+				# very committed straight line). Deterministic across replay.
+				if _controller.hit_active:
+					drag *= _controller.hit_turn_multiplier
 				facing = facing.lerp(to_mouse.normalized(), drag * delta).normalized()
 		_skater.set_facing(facing)
 		var turn_delta: float = angle_difference(prev_angle, _skater.rotation.y)

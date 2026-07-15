@@ -171,7 +171,7 @@ const AA_LABELS: Array[String] = [
 
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "sprint", "brake",
-	"shoot", "quick_shot", "slapshot", "block", "elevation_up", "elevation_down",
+	"shoot", "quick_shot", "slapshot", "hit", "block", "elevation_up", "elevation_down",
 	"stick_lift",
 ]
 
@@ -482,6 +482,10 @@ func save() -> void:
 			cfg.set_value("bindings", action + "_code", b.get("physical_keycode", 0))
 		elif t == "mouse":
 			cfg.set_value("bindings", action + "_code", b.get("button_index", 0))
+	# Marks the Hit/Block control-scheme swap applied (see _load's migration), so
+	# a returning config is remapped exactly once and never re-forces Block off a
+	# key the player has since chosen for it.
+	cfg.set_value("bindings", "scheme_version", 1)
 	cfg.save(_get_save_path())
 	_push_to_cloud()
 
@@ -1080,6 +1084,19 @@ func _load() -> void:
 				bindings[action] = {"type": "key", "physical_keycode": cfg.get_value("bindings", action + "_code", 0)}
 			elif t == "mouse":
 				bindings[action] = {"type": "mouse", "button_index": cfg.get_value("bindings", action + "_code", 0)}
+		# Control-scheme swap (scheme_version 1): Hit takes Ctrl, Block moves to C.
+		# Block was moved off Ctrl to free it for the new Hit button. A config
+		# predating the swap that still has Block on its old Ctrl default is
+		# remapped to C so the new layout takes effect; a player who deliberately
+		# rebound Block elsewhere is left alone. Hit is new — erased here so the
+		# default-fill below seeds it from the fresh project default (Ctrl). Runs
+		# once, gated like the difficulty-scale remaps above.
+		if int(cfg.get_value("bindings", "scheme_version", 0)) < 1:
+			var old_block: Dictionary = bindings.get("block", {})
+			if old_block.get("type") == "key" \
+					and int(old_block.get("physical_keycode", 0)) == KEY_CTRL:
+				bindings["block"] = {"type": "key", "physical_keycode": KEY_C}
+			bindings.erase("hit")
 	# Fill in InputMap defaults for any action not in the saved config
 	for action: String in REBINDABLE_ACTIONS:
 		if not bindings.has(action):

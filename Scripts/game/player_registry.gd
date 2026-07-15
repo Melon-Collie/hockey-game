@@ -138,6 +138,11 @@ func spawn(
 	# record.team — the goalie's `carrier.get_team_id()` reads the live value
 	# from the registry rather than a cached field that drifts.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
+	# Analytic skater-vs-skater contact iterates the cached skater list (skaters are
+	# off each other's move_and_slide mask now — see Skater._resolve_player_collisions).
+	# peer_id is the machine-stable tiebreak for the aggressor gate's head-on case.
+	spawned.skater.set_skater_collision_provider(skaters)
+	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(player_name)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(player_name, jersey_number)
@@ -228,6 +233,9 @@ func spawn_bot(
 	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, team_id_by_peer, record.is_left_handed, GameManager.bot_skill_profile, caps_by_peer)
 	# Same resolver-based team lookup as spawn() — see comment there.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
+	# See spawn() — analytic skater-vs-skater contact iterates the cached skater list.
+	spawned.skater.set_skater_collision_provider(skaters)
+	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number)

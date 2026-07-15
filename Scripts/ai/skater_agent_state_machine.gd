@@ -588,8 +588,9 @@ const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
 # needs far less ROM than the old power-by-drag gesture did.
 const BOT_WRISTER_WIND_UP_SPAN_M: float = 0.4
 # Mid-charge bail radius. If an opponent gets inside this distance
-# while we're charging, cancel via block_held — getting blasted in the
-# slot mid-windup is worse than not shooting. The carry state can re-
+# while we're charging, cancel via slap_pressed (the other shot button) —
+# getting blasted in the slot mid-windup is worse than not shooting. The
+# carry state can re-
 # evaluate next tick (probably picks PASS or stays in CARRY).
 const BOT_WRISTER_BAIL_RADIUS_M: float = 2.0
 # Committed speed (m/s) at charge start below which the wind-up PLANTS (brakes
@@ -3015,13 +3016,13 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	var charge_self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if _shoot_charge_tick > 0 and charge_self_state != null \
 			and charge_self_state.stagger_timer > 0.0:
-		input.block_held = true
+		input.slap_pressed = true
 		_set_state(State.CARRY)
 		return
 
-	# Mid-charge bail: opponent closing in from the front. block_held
-	# cancels WRISTER_AIM back to SKATING_WITH_PUCK without a release.
-	# Skipped on tick 0 — we just made the decision, give it at least
+	# Mid-charge bail: opponent closing in from the front. slap_pressed (the
+	# other shot button) cancels WRISTER_AIM back to SKATING_WITH_PUCK without a
+	# release. Skipped on tick 0 — we just made the decision, give it at least
 	# one frame to commit. Forward-only check: a defender behind the
 	# shooter (between us and our own net) can't realistically disrupt a
 	# wrister windup, and bailing on them was throwing away clean shots
@@ -3030,7 +3031,7 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	if _shoot_charge_tick > 0 and _opponent_within_forward(
 			snapshot, self_pos, _attacking_goal_pos - self_pos,
 			BOT_WRISTER_BAIL_RADIUS_M):
-		input.block_held = true
+		input.slap_pressed = true
 		_set_state(State.CARRY)
 		return
 
@@ -3365,7 +3366,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		if receiver_state != null:
 			var forward: Vector3 = receiver_state.position - self_pos
 			if _opponent_within_forward(snapshot, self_pos, forward, BOT_WRISTER_BAIL_RADIUS_M):
-				input.block_held = true
+				input.slap_pressed = true
 				_pass_target_peer_id = -1
 				_pass_should_charge = false
 				_pass_should_saucer = false

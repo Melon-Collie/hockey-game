@@ -15,6 +15,37 @@ func before_each() -> void:
 	_cfg.max_stagger_seconds = 1.0
 	_cfg.max_stamina_drain = 0.35
 	_cfg.max_thrust_penalty = 0.5
+	_cfg.knockdown_impulse = 11.0
+	_cfg.knockdown_ref_impulse = 16.0
+	_cfg.min_knockdown_seconds = 0.7
+	_cfg.max_knockdown_seconds = 1.5
+
+
+# ── knockdown_seconds_from_impulse ────────────────────────────────────────────
+
+func test_no_knockdown_below_threshold() -> void:
+	assert_almost_eq(BodyCheckRules.knockdown_seconds_from_impulse(9.0, _cfg), 0.0, 0.0001,
+			"a hit that staggers but is below knockdown_impulse does not knock down")
+	assert_almost_eq(BodyCheckRules.knockdown_seconds_from_impulse(10.99, _cfg), 0.0, 0.0001,
+			"just below the threshold → no knockdown")
+
+func test_knockdown_at_threshold_is_min_seconds() -> void:
+	assert_almost_eq(BodyCheckRules.knockdown_seconds_from_impulse(11.0, _cfg), 0.7, 0.0001,
+			"at the threshold → the minimum down time")
+
+func test_knockdown_scales_to_max() -> void:
+	assert_almost_eq(BodyCheckRules.knockdown_seconds_from_impulse(16.0, _cfg), 1.5, 0.0001,
+			"at the reference impulse → the maximum down time")
+	assert_almost_eq(BodyCheckRules.knockdown_seconds_from_impulse(30.0, _cfg), 1.5, 0.0001,
+			"above the reference clamps to max")
+	# Midpoint (13.5) → halfway between 0.7 and 1.5 = 1.1
+	assert_almost_eq(BodyCheckRules.knockdown_seconds_from_impulse(13.5, _cfg), 1.1, 0.0001,
+			"scales linearly between threshold and reference")
+
+func test_knockdown_disabled_when_threshold_zero() -> void:
+	_cfg.knockdown_impulse = 0.0
+	assert_almost_eq(BodyCheckRules.knockdown_seconds_from_impulse(50.0, _cfg), 0.0, 0.0001,
+			"knockdown_impulse 0 disables knockdowns entirely")
 
 
 # ── intensity ─────────────────────────────────────────────────────────────────
