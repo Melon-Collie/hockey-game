@@ -68,12 +68,15 @@ F3 is a *live, local* diagnostic — only the player at that machine sees it, wh
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `LAYER_WALLS` | 1 | Boards, ice surface, goalie body parts |
+| `LAYER_WALLS` | 1 | Ice surface + goalie body parts |
 | `LAYER_BLADE_AREAS` | 2 | Skater blade `Area3D`s |
+| `LAYER_GOALIE_STICK` | 4 | Goalie stick (puck bounces off it; skaters pass through) |
 | `LAYER_PUCK` | 8 | Puck `RigidBody3D` |
 | `LAYER_SKATER_BODIES` | 16 | Skater `CharacterBody3D` bodies |
+| `LAYER_BOARDS` | 32 | Perimeter boards (puck only; skaters clamped analytically) |
+| `LAYER_NET` | 64 | Goal-net frame + panels (puck only; skaters clamped analytically) |
 
-Composed masks: `MASK_PUCK = 1` (walls + goalie only, not skater bodies), `MASK_SKATER = 17` (walls + other skater bodies).
+Composed masks: `MASK_PUCK = LAYER_WALLS | LAYER_BOARDS | LAYER_GOALIE_STICK | LAYER_NET` (ice + goalie + boards + net + stick, not skater bodies), `MASK_SKATER = LAYER_WALLS | LAYER_SKATER_BODIES` (ice + goalie bodies + other skaters; boards **and** the net are off the skater mask — a `CharacterBody` cylinder wedges in those concave meshes, so both are held clear analytically: boards via `GameRules.clamp_to_rink_inner` / `Skater.clamp_body_to_rink`, the net via `GameRules.push_out_of_net` / `Skater.clamp_body_to_net`).
 
 The puck's pickup zone `Area3D` sits on `LAYER_WALLS | LAYER_BLADE_AREAS` (3) with `collision_mask = LAYER_BLADE_AREAS` (2) so it detects blade `Area3D`s via `area_entered`.
 

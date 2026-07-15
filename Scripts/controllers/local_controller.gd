@@ -543,6 +543,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# between client and host compounds into a divergence feedback loop that
 		# triggers repeated reconciles.
 		skater.clamp_body_to_rink()
+		# Same for the goal net (also off the skater physics mask) — keep the replay
+		# in lockstep with the live tick so a net brush can't compound into a reconcile
+		# loop.
+		skater.clamp_body_to_net()
 	is_replaying = false
 	# Restore shot-state fields that replay must not transition past.
 	_sm.set_state(pre_state)

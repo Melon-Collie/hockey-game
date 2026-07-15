@@ -619,8 +619,11 @@ func _physics_process(delta: float) -> void:
 	# the concave corner mesh), so hold the body inside the rink analytically.
 	# Runs AFTER the body-check delta is captured so a board slide never reads as
 	# a hit, and after move_and_slide so the ice/skater/goalie collisions resolve
-	# first. The reconcile replay calls the same method (see LocalController).
+	# first. The reconcile replay calls the same methods (see LocalController).
 	clamp_body_to_rink()
+	# Net is off the skater's physics mask too (a cylinder wedges in the concave
+	# pocket like the boards) — hold the body clear of the goal-net box analytically.
+	clamp_body_to_net()
 	_update_blade_elevation(delta)
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
@@ -744,6 +747,35 @@ func clamp_body_to_rink() -> void:
 		velocity.z = vel_xz.y
 	global_position.x = clamped.x
 	global_position.z = clamped.y
+
+
+# Holds the body out of the goal-net pocket analytically. The net is off the
+# skater physics mask (LAYER_NET, puck-only) because a CharacterBody cylinder
+# shoved into the concave back corner wedges and freezes — most reliably when the
+# goalie bulldozes a skater across the goal line before the crease-dwell ghost
+# fires. Mirrors clamp_body_to_rink: project the XZ clear of the net box via
+# GameRules.push_out_of_net (radius-inset so the body EDGE stops at the panels)
+# and strip any velocity pointing into the net, so the skater slides free instead
+# of being re-seated by the shove next tick. Pure value-type math — no allocation,
+# hot-path safe at 120 Hz × actors. Called live after move_and_slide (and after
+# clamp_body_to_rink) and re-used by LocalController's reconcile replay.
+func clamp_body_to_net() -> void:
+	var radius: float = _collision_cyl.radius if _collision_cyl != null else 0.0
+	var xz := Vector2(global_position.x, global_position.z)
+	var pushed: Vector2 = GameRules.push_out_of_net(xz, radius)
+	if xz.distance_squared_to(pushed) <= 1e-6:
+		return
+	var out_dir: Vector2 = (pushed - xz).normalized()
+	var vel_xz := Vector2(velocity.x, velocity.z)
+	var into_net: float = vel_xz.dot(out_dir)
+	if into_net < 0.0:
+		# Velocity points into the net — strip that component, keep the tangential
+		# slide so the skater brushes along the post/panel instead of sticking.
+		vel_xz -= into_net * out_dir
+		velocity.x = vel_xz.x
+		velocity.z = vel_xz.y
+	global_position.x = pushed.x
+	global_position.z = pushed.y
 
 
 # Re-positions the four hand/shoulder Marker3Ds based on the current

@@ -102,6 +102,10 @@ func _ready() -> void:
 	# _rebuild() only frees children, never touches self's material, so setting
 	# it once here survives every rebuild.
 	physics_material_override = PIPE_MATERIAL
+	# Frame shares the net's layer so skaters don't physics-collide with the posts
+	# either (they're kept clear of the whole net footprint analytically); the puck
+	# still pings off the pipe. See _net_body / GameRules.push_out_of_net.
+	collision_layer = Constants.LAYER_NET
 	_rebuild()
 
 func _rebuild() -> void:
@@ -120,7 +124,11 @@ func _rebuild() -> void:
 		child.queue_free()
 
 	_net_body = StaticBody3D.new()
-	_net_body.collision_layer = Constants.LAYER_WALLS  # puck must still bounce off net panels
+	# LAYER_NET (not LAYER_WALLS): the puck still bounces off the panels (MASK_PUCK
+	# includes it) but skaters DON'T physics-collide — a CharacterBody cylinder
+	# wedges in the concave net pocket. Skaters are held clear analytically via
+	# GameRules.push_out_of_net (see Skater.clamp_body_to_net).
+	_net_body.collision_layer = Constants.LAYER_NET
 	_net_body.physics_material_override = NET_MATERIAL  # twine absorbs; puck drops instead of pinging
 	add_child(_net_body)
 
