@@ -300,6 +300,39 @@ func test_two_on_one_lane_yields_when_receiver_is_covered() -> void:
 			+ " got %s" % d.target_position)
 
 
+func test_low_danger_receiver_does_not_pull_contain_off_the_shooter() -> void:
+	# Same rush shape as the 2-on-1, but the uncovered partner is jammed wide on
+	# a near-goal-line sharp angle — an open lane, but NO real finish if fed
+	# (his score_shoot is below LANE_PLAY_DANGER_BAR). CONTAIN must stay on the
+	# carrier (the immediate shooter) instead of sliding off to shade a harmless
+	# feed — the "only play the pass in a genuine 2v1" discipline. The one-timer
+	# pass model would otherwise over-value even this feed (traversing goalie).
+	var partner := Vector3(13, 0, 20)   # wide + deep = brutal shooting angle
+	# Sanity-check the premise: this receiver really is below the danger bar.
+	var recv_danger: float = AIActionScoring.score_shoot(
+			partner, Vector3(0, 0, OUR_NET_Z), Vector3(0, 0, 24.6),
+			GameRules.NET_HALF_WIDTH, [] as Array[Vector3])
+	assert_lt(recv_danger, AIRoleContain.LANE_PLAY_DANGER_BAR,
+			"premise: the wide sharp-angle partner is not an immediate finish"
+			+ " threat; got danger=%f" % recv_danger)
+	var skaters: Array = [
+			[1, TEAM_ID, Vector3(0, 0, 22)],
+			[2, TEAM_ID, Vector3(0, 0, -12)],   # markers caught up-ice
+			[3, TEAM_ID, Vector3(4, 0, -15)],
+			[200, 1, Vector3(0, 0, 14)],        # opp carrier, in our zone
+			[210, 1, partner],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 22), skaters, 200)
+	var goalie := GoalieNetworkState.new()
+	goalie.position_x = 0.0
+	goalie.position_z = 24.6
+	ctx.snapshot.goalie_states[TEAM_ID] = goalie
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	assert_lt(absf(d.target_position.x), 1.0,
+			"a non-threat receiver leaves CONTAIN on the carrier line; got %s"
+			% d.target_position)
+
+
 func test_two_on_one_gate_keeps_lower_tiers_on_the_carrier_line() -> void:
 	# plays_rush_pass_lanes=false (Easy): CONTAIN sees only the carrier and
 	# retreats on the exact carrier→net line — the newcomer's cross-crease

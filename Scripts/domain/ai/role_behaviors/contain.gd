@@ -85,6 +85,25 @@ const RUSH_LANE_FAN_FRACTIONS: Array[float] = [0.25, 0.5, 0.75, 1.0]
 # Same magnitude rationale as AIRoleHelpers.TARGET_SWITCH_MARGIN.
 const LINE_HOLD_MARGIN: float = 0.04
 
+# Finish-danger floor a receiver must clear before CONTAIN will leave the
+# carrier (the immediate shooter) to shade that receiver's feed lane. The lane
+# fan scores each feed as a one-timer with a traversing, unsettled goalie
+# (carrier_live_option), which prices EVERY cross-ice feed high — so without a
+# gate an ordinary trailing winger reads as a lethal one-timer and CONTAIN
+# abandons the shooter for a harmless pass lane. The bar is the receiver's
+# finish-if-fed (score_shoot from his spot with the goalie where it currently
+# is, no field defenders) — a real measurement, an ~xG on a direct look — so
+# CONTAIN only plays the pass when the receiver is a genuine immediate 2v1
+# threat, not merely a body in a lane.
+#
+# Calibrated (score_shoot, goalie challenged out on the carrier): a canonical
+# 2-on-1 backdoor partner near the net reads ~0.27 (PLAY it), while a wide
+# sharp-angle or distant trailing receiver reads ~0.15 (HOLD the carrier). The
+# bar sits between. This is deliberately LOWER than the net-front house pin
+# (AIThreatAssignment.NET_FRONT_DANGER_BAR = 0.45): pinning a man to the house
+# demands a lethal tap-in; shading a rush pass lane only demands a real chance.
+const LANE_PLAY_DANGER_BAR: float = 0.20
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -219,8 +238,23 @@ static func _lane_fan_target(
 	var brake_margin_s: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S \
 			/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 
+	# Empty defender list for the receiver's finish-if-fed read (goalie only,
+	# no field defenders). One typed array reused across the receiver loop.
+	var no_defenders: Array[Vector3] = []
 	var a_net: float = atan2(dir_net.z, dir_net.x)
 	for i: int in receivers.size():
+		# Only leave the carrier for a receiver who's a genuine immediate threat:
+		# his finish-if-fed must clear the danger bar (goalie where it is now, no
+		# field defenders — an ~xG on a direct look). A
+		# trailing, low-danger receiver doesn't pull CONTAIN off the shooter, no
+		# matter how open his lane; that's the "only play the pass in a real 2v1"
+		# discipline. The on-line retreat point (scored above against ALL receivers)
+		# stays the baseline, so a conceded low-danger feed is still priced there.
+		var recv_danger: float = AIActionScoring.score_shoot(
+				receivers[i], our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH,
+				no_defenders)
+		if recv_danger < LANE_PLAY_DANGER_BAR:
+			continue
 		var lane_x: float = receivers[i].x - carrier_pos.x
 		var lane_z: float = receivers[i].z - carrier_pos.z
 		if lane_x * lane_x + lane_z * lane_z < 0.25:
