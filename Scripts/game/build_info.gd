@@ -96,7 +96,12 @@ const VERSION: String = "dev"
 #     the same request/notify pair (a mixed-build vote would decode the wrong
 #     variant type), plus a new notify_rematch_voters RPC (host-broadcast voter
 #     total, the skip-vote pattern) shifting the name-sorted RPC indices.
-const PROTOCOL_VERSION: int = 25
+# v26: input flags gain bit [12] — hit_held (the body-check / hit button, C).
+#     Reuses a previously-zero bit in the existing u16 flags, so BYTES_SIZE is
+#     unchanged, but the wire semantics differ (a mixed-build host would read a
+#     new client's hit intent as noise), so a bump is required. Not yet consumed
+#     by any behavior — wired ahead of the hit-system redesign.
+const PROTOCOL_VERSION: int = 26
 
 
 func _ready() -> void:
