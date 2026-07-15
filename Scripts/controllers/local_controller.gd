@@ -67,15 +67,16 @@ var _pickup_claim_floor: float = 0.0
 var _was_in_poke_range: bool = false
 var _poke_cooldown: float = 0.0
 var _poke_claim_floor: float = 0.0
-# Body check impulses captured between reconciles. Each entry is
-# {timestamp: float, impulse: Vector3}. Multiple impulses can land within a
-# single reconcile window (rapid consecutive checks, simultaneous hits from
-# two opponents) — replay must apply all of them, in timestamp order, each
-# at the first replay input whose host_timestamp catches up to it.
-# Cap prevents unbounded growth if something goes wrong; 16 covers any
-# realistic scenario at the physics rate with RTT < 2s.
-var _body_check_impulses: Array[Dictionary] = []
-const _BODY_CHECK_IMPULSE_CAP: int = 16
+# Body checks are no longer recorded-and-replayed as cached impulses. Reconcile
+# replay instead RE-RESOLVES skater-vs-skater contact each replayed tick against
+# where the host actually had the other skaters (sampled from their interpolation
+# buffers via this provider) — so the replayed trajectory matches host authority
+# rather than a stale impulse captured against the live (interpolated) positions.
+# Provider: func(exclude_skater: Skater, host_ts: float) -> Array of
+# {skater, position, velocity, brake}. Set by GameManager (_sample_historical_others).
+var _historical_others_provider: Callable = Callable()
+# Reused across pairs during replay re-resolution — no per-pair allocation.
+var _replay_collision_result: SkaterCollisionRules.Result = SkaterCollisionRules.Result.new()
 const _BLADE_JUMP_THRESHOLD: float = 0.05
 const _CLAIM_COOLDOWN_S: float = 0.3  # sustained re-fire gap while a claim target stays in range
 const _PICKUP_CLAIM_FLOOR_S: float = 0.05  # min gap between pickup claims; caps rising-edge jitter spam
@@ -92,14 +93,11 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	camera.skater = assigned_skater
 	camera.puck = assigned_puck
 	camera.local_controller = self
+	# Drives the camera shake / impact feedback. No longer records the impulse for
+	# replay — reconcile re-resolves contact from buffered history instead (see
+	# _historical_others_provider), so live prediction stays uncoupled from replay.
 	skater.body_check_impulse_applied.connect(
 		func(impulse: Vector3) -> void:
-			_body_check_impulses.append({
-				"timestamp": _current_input.host_timestamp,
-				"impulse": impulse,
-			})
-			if _body_check_impulses.size() > _BODY_CHECK_IMPULSE_CAP:
-				_body_check_impulses.pop_front()
 			hit_received.emit(impulse))
 	# Capture the reconcile prediction snapshot AFTER the body has integrated this
 	# tick (move_and_slide + collisions + clamp), matching the post-move sub-step
@@ -118,6 +116,10 @@ func set_local_team_id(team_id: int) -> void:
 	_team_id = team_id
 	camera.set_local_team_id(team_id)
 	_gatherer.set_local_team_id(team_id)
+
+
+func set_historical_others_provider(provider: Callable) -> void:
+	_historical_others_provider = provider
 
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
@@ -160,7 +162,6 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	_input_history.clear()
 	_prediction_history.clear()
 	_last_reconcile_ack_ts = 0.0
-	_body_check_impulses.clear()
 	if skater != null:
 		skater.visual_offset = Vector3.ZERO
 
@@ -413,10 +414,6 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var trim_ts: float = ack_ts + PredictedState.TS_MATCH_EPSILON
 	while not _input_history.is_empty() and _input_history[0].host_timestamp <= trim_ts:
 		_input_history.pop_front()
-	# Drop captured body check impulses the server has already processed past:
-	# future reconciles only need impulses strictly later than the ack.
-	while not _body_check_impulses.is_empty() and _body_check_impulses[0]["timestamp"] <= trim_ts:
-		_body_check_impulses.pop_front()
 	# Trajectory-based threshold check: compare what we predicted for the input
 	# at last_processed_host_timestamp against what the server says happened at
 	# that same instant. Falls back to the live position when no match is found
@@ -529,20 +526,14 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# would otherwise bias the replay's first tick.
 	_ik.reset_blade_smoothing()
 	is_replaying = true
-	# Per-impulse "applied" flags, indexed by position in _body_check_impulses.
-	# Each impulse fires once, on the first replay input whose host_timestamp
-	# catches up to the impulse's capture timestamp. Indexing by position keeps
-	# multiple simultaneous-timestamp impulses distinct (two attackers at once).
-	var applied_impulse_indices: Dictionary[int, bool] = {}
 	for input in _input_history:
 		_process_input(input, input.delta)
-		for i in range(_body_check_impulses.size()):
-			if applied_impulse_indices.has(i):
-				continue
-			var record: Dictionary = _body_check_impulses[i]
-			if input.host_timestamp >= record["timestamp"]:
-				skater.velocity += record["impulse"] as Vector3
-				applied_impulse_indices[i] = true
+		# Re-resolve skater-vs-skater body checks against where the host actually had
+		# the other skaters at this input's timestamp (from their interpolation
+		# buffers), applied to velocity BEFORE integration — the same slot the old
+		# recorded impulse used. Replaces the recorded-impulse bridge, so the replayed
+		# trajectory tracks host authority instead of a stale live-position impulse.
+		_replay_resolve_body_checks(input.host_timestamp, input.hit_held, input.brake)
 		skater.global_position += skater.velocity * input.delta
 		# Clamp to the rink boundary after every replay step — the same analytic
 		# projection the live tick applies (boards are off the skater's physics
@@ -654,6 +645,63 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if OS.is_debug_build() and skater.visual_offset.length() > 0.05:
 		push_warning("Reconcile: %.3fm snap applied (inputs replayed: %d)" \
 				% [skater.visual_offset.length(), _input_history.size()])
+
+
+# Re-resolve the local skater's body-check contact for one replayed tick against
+# the OTHER skaters' host-authoritative positions at `host_ts` (Slice C). Applies
+# only to the local skater's velocity — the historical others are read-only. Runs
+# the SAME inelastic model + aggressor gate as the live Skater._resolve_player_
+# collisions, so the replayed contact matches what the host resolved: if the local
+# player was the aggressor it re-derives the decel/drive-through; if the other was,
+# it re-derives the incoming knockback. Deterministic from replicated data + the
+# replayed input (local hit-commit / brace come from the input frame). The remote
+# attacker's hit-commit isn't on the wire, so it stays passive here exactly as the
+# live client prediction assumed — the host's real value reconciles on the next ack.
+func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_brake: bool) -> void:
+	if not _historical_others_provider.is_valid():
+		return
+	var others: Array = _historical_others_provider.call(skater, host_ts)
+	for rec: Dictionary in others:
+		var other: Skater = rec["skater"]
+		if other == null:
+			continue
+		var opos: Vector3 = rec["position"]
+		var ovel: Vector3 = rec["velocity"]
+		var obrake: bool = rec["brake"]
+		var d: Vector3 = opos - skater.global_position
+		d.y = 0.0
+		var dist: float = d.length()
+		var n: Vector3 = Vector3(1.0, 0.0, 0.0) if dist < 0.0001 else d / dist
+		# Aggressor gate from the local player's perspective — identical rule to the
+		# live resolver (sum of velocities along the axis, tie-broken by the stable id).
+		var agg: float = (skater.velocity + ovel).dot(n)
+		var local_is_aggressor: bool
+		if agg > 0.0001:
+			local_is_aggressor = true
+		elif agg < -0.0001:
+			local_is_aggressor = false
+		else:
+			local_is_aggressor = skater.collision_tiebreak_id < other.collision_tiebreak_id
+		if local_is_aggressor:
+			var transfer: float = skater.body_check_transfer \
+					* (1.0 if local_hit_held else skater.hit_passive_transfer_mult) \
+					* (other.body_check_brace_resistance if obrake else 1.0)
+			SkaterCollisionRules.resolve(_replay_collision_result,
+					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(),
+					opos, ovel, other.weight, other.collision_radius(), transfer)
+			skater.velocity += _replay_collision_result.dvel_a
+		else:
+			# Other is the aggressor, local is the victim. Its hit-commit is unknown
+			# (not replicated) → passive, matching the live prediction; local brace
+			# comes from the replayed input.
+			var transfer: float = other.body_check_transfer \
+					* other.hit_passive_transfer_mult \
+					* (skater.body_check_brace_resistance if local_brake else 1.0)
+			SkaterCollisionRules.resolve(_replay_collision_result,
+					opos, ovel, other.weight, other.collision_radius(),
+					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(), transfer)
+			skater.velocity += _replay_collision_result.dvel_b
+
 
 func on_puck_picked_up_network() -> void:
 	super.on_puck_picked_up_network()

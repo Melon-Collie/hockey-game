@@ -206,6 +206,40 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 	if _state_buffer.size() > 30:
 		_state_buffer.pop_front()
 
+
+# Where the HOST had this skater at host_time, from the interpolation buffer. The
+# local player's reconcile replay samples every OTHER skater here to re-resolve
+# body checks against the host's authoritative positions (Slice C) instead of
+# replaying a stale recorded impulse — so replay matches host authority. Returns a
+# shared scratch (read it before the next call) with position / velocity /
+# brake_intent, or null when the buffer can't bracket the time (warmup / gap), in
+# which case the caller skips the pair. Separate bracket scratch from _interpolate
+# so a reconcile-time sample can't clobber the live render bracket.
+var _sample_bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.BracketResult.new()
+var _sample_scratch: SkaterNetworkState = SkaterNetworkState.new()
+
+func sample_state_at(host_time: float) -> SkaterNetworkState:
+	if _state_buffer.is_empty():
+		return null
+	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
+			_state_buffer, host_time, _sample_bracket)
+	if bracket == null:
+		return null
+	if bracket.is_extrapolating:
+		var newest: SkaterNetworkState = bracket.to_state
+		_sample_scratch.position = newest.position
+		_sample_scratch.velocity = newest.velocity
+		_sample_scratch.brake_intent = newest.brake_intent
+	else:
+		var f: SkaterNetworkState = bracket.from_state
+		var to: SkaterNetworkState = bracket.to_state
+		_sample_scratch.position = BufferedStateInterpolator.hermite(
+				f.position, f.velocity, to.position, to.velocity, bracket.t, bracket.bracket_dt)
+		_sample_scratch.velocity = f.velocity.lerp(to.velocity, bracket.t)
+		# Brace at/before host_time — a discrete flag, so take the earlier sample.
+		_sample_scratch.brake_intent = f.brake_intent
+	return _sample_scratch
+
 func _interpolate(delta: float) -> void:
 	# Shared delay (NetworkManager) keeps the puck and other remotes on the same
 	# timeline; the per-skater lead below shifts this body toward host-present.
