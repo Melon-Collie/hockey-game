@@ -7,16 +7,20 @@ extends GutTest
 # scenes, ticks via _physics_process, and CHALLENGES (settles at 1.75 m aggressive
 # depth, squared on a slot threat). No physics/contact needed for positioning.
 #
-# And it let us find the actual "no shot in close / going by" root cause — which
-# was NOT the goalie depth: even fed the real challenging goalie, the carrier
-# still doesn't shoot (carry 0.957 vs shoot 0.30), because the winning CARRY
-# candidate is a spot off to the SIDE where the centred goalie leaves the near
-# angle open. On a lateral flyby there's always such a candidate, so the bot
-# keeps deferring the shot for a marginally-better angle and crosses without
-# firing. The lever is the carry-vs-shot balance (the side-angle carry candidate
-# out-valuing an immediate point-blank shot), not the dispatch lag or goalie
-# depth. Next step: investigate that over-valuation in _score_move_candidate /
-# the carry continuation.
+# It also let us RULE OUT a false lead. On a scripted lateral flyby the carrier
+# never shoots (carry 0.957 vs shoot 0.30) because the winning carry candidate is
+# a spot off to the SIDE. That LOOKS like an over-valued side-angle phantom — but
+# it is NOT: at ~0.34 s arrival the keeper (after his 0.13 s reaction) can push
+# only ~0.31 m of the ~0.91 m needed to re-square, so a fast diagonal cut leaves a
+# GENUINE window that predict_goalie_pos prices correctly (a squared keeper would
+# be ~0.04; the partially-squared one the carrier actually beats is ~0.9). Forcing
+# the keeper fully square there (goalie_squared_pos) kills that real window and
+# regresses the doorstep-cut behaviour (test_role_carrier's standstill wind-up) —
+# so the model is right and the SCRIPTED LATERAL PATH is the artifact: the bot
+# correctly wants to cut IN for a better look, and the script won't let it, so it
+# "never shoots." A faithful repro of the in-game "no shot going by" needs the
+# bot's REAL steering (real movement) + the real goalie in one temporal loop —
+# neither scripted-path probe can capture the cut-in that's central to it.
 
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z   # goalie defends the -Z net
 
@@ -129,8 +133,9 @@ func test_carrier_shoots_more_against_a_challenging_goalie() -> void:
 	gut.p("REAL challenging goalie at z=%.2f (%.2fm deep) → shots=%d shoot=%.3f carry=%.3f  carry→(%.1f,%.1f) %.1fm-net" % [
 			goalie_at.z, absf(goalie_at.z - GOAL_Z), shots, peak_shoot, peak_carry,
 			carry_dest.x, carry_dest.z, carry_dest.distance_to(Vector3(0, 0, GOAL_Z))])
-	# Documents the finding: a challenging goalie alone does NOT flip it — the
-	# carry (a side-angle candidate) still out-values the immediate shot. The
-	# fix lives in the carry-vs-shot balance, not the goalie or the dispatch lag.
+	# Documents the (correct) behaviour: the winning carry is a real fast-cut
+	# window the bot wants to drive to, so it out-values a flat-footed far shot —
+	# NOT a bug. The "no shot" here is the scripted lateral path denying the cut-in
+	# (see the header); the model prices the cut honestly.
 	assert_gt(peak_carry, peak_shoot,
-			"even vs the real challenging goalie, the side-angle carry out-values the shot")
+			"the bot correctly values cutting in over a flat-footed far shot")
