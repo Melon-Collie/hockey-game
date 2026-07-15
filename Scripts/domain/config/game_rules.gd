@@ -343,11 +343,23 @@ const POKE_RADIUS_M: float = 0.5
 # receiver-relative needs a squared blade), so most of the wrister band is
 # catch-with-care territory.
 # The slapper min is a hurried, barely-wound release — still a heavy shot
-# (~45 mph); one-timers always fire at max regardless of charge.
+# (~45 mph). A one-timer fires at whatever wind-up was actually built, PLUS a
+# momentum-transfer bonus from the incoming feed (see the one-timer constants
+# below), so a hard feed one-timed by a wound-up shooter is the fastest shot in
+# the game.
 const DEFAULT_WRISTER_POWER_MIN_M_S: float = 10.0
 const DEFAULT_WRISTER_POWER_MAX_M_S: float = 33.0
 const DEFAULT_SLAPPER_POWER_MIN_M_S: float = 20.0
 const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
+# One-timer momentum transfer. A redirected feed carries a fraction of the
+# incoming puck's pace into the shot (FEED_TRANSFER × incoming speed, added to
+# the wind-up power), capped at the one-timer ceiling — which sits ABOVE the
+# standing-slapper max (40) so one-timers are the hardest shots in the game.
+# The ceiling is Shot-scaled (an elite shooter harnesses the most, ~61 m/s at
+# Shot L5); the transfer fraction is flat (it's the puck's momentum, not shot
+# skill). Both are @export tunables on SkaterController — feel knobs.
+const DEFAULT_ONE_TIMER_FEED_TRANSFER: float = 0.35
+const DEFAULT_ONE_TIMER_POWER_MAX_M_S: float = 52.0
 # Quick-shot is the no-charge release — also used by AI as the typical
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0

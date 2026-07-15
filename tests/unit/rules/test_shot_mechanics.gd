@@ -302,6 +302,51 @@ func test_slapper_loft() -> void:
 	assert_almost_eq(flat.direction.y, 0.0, 0.001)
 	assert_gt(high.direction.y, 0.0)
 
+# ── One-timer momentum transfer ──────────────────────────────────────────────
+
+func _one_timer_cfg() -> ShotMechanics.SlapperConfig:
+	var cfg := _slapper_cfg()
+	cfg.one_timer_feed_transfer = 0.35
+	cfg.one_timer_max_power = 52.0
+	return cfg
+
+func test_one_timer_feed_transfer_adds_incoming_momentum() -> void:
+	var cfg := _one_timer_cfg()
+	# Same half charge; a live feed adds a fraction of its speed on top.
+	var standing: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3.ZERO, Vector3(10, 0, 0), 0, 0.5, cfg, Vector3.ZERO, 0.0)
+	var one_timed: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3.ZERO, Vector3(10, 0, 0), 0, 0.5, cfg, Vector3.ZERO, 24.0)
+	assert_almost_eq(one_timed.power, standing.power + 0.35 * 24.0, 0.01,
+			"one-timer power = wind-up + feed_transfer × incoming speed")
+
+func test_one_timer_power_caps_at_the_rip_ceiling() -> void:
+	var cfg := _one_timer_cfg()
+	# Full charge (40) + a bomb feed would blow past the ceiling — it clamps.
+	var rip: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3.ZERO, Vector3(10, 0, 0), 0, 1.0, cfg, Vector3.ZERO, 100.0)
+	assert_almost_eq(rip.power, cfg.one_timer_max_power, 0.01,
+			"the absolute rip is capped at one_timer_max_power")
+	assert_gt(rip.power, cfg.max_slapper_power,
+			"a one-timer's ceiling sits ABOVE the standing-slapper max")
+
+func test_zero_incoming_is_a_plain_slapshot() -> void:
+	var cfg := _one_timer_cfg()
+	var standing: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3.ZERO, Vector3(10, 0, 0), 0, 1.0, cfg, Vector3.ZERO, 0.0)
+	assert_almost_eq(standing.power, cfg.max_slapper_power, 0.01,
+			"incoming 0 → the momentum model is a no-op (standing slapshot)")
+
+func test_one_timer_transfer_preserves_fixed_loft_apex() -> void:
+	# The correctness trap: power feeds the loft geometry, so a feed-boosted
+	# one-timer must still launch at the level's FIXED vertical speed (apex), not
+	# a higher one — else a hard one-timer sails over the net. v_y = dir.y × power.
+	var cfg := _one_timer_cfg()
+	var high_ot: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3.ZERO, Vector3(10, 0, 0), 2, 1.0, cfg, Vector3.ZERO, 40.0)
+	assert_almost_eq(high_ot.direction.y * high_ot.power, cfg.loft_vy_high, 0.05,
+			"feed transfer lifts pace, not apex — v_y stays the HIGH launch speed")
+
 # ── Loft physics: fixed vertical launch speed ────────────────────────────────
 
 # The defining property of the loft system: a level's vertical launch speed is
