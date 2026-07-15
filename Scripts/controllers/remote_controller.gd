@@ -226,6 +226,11 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 	if bracket == null:
 		return null
 	if bracket.is_extrapolating:
+		# Freeze at the newest sample rather than projecting newest.position +
+		# velocity*dt like _interpolate does: this feeds contact geometry, and a
+		# projected lead at the buffer's leading edge could fabricate a false
+		# overlap the host never resolved. Holding the last KNOWN position is the
+		# conservative choice (a bounded lag, not an invented contact).
 		var newest: SkaterNetworkState = bracket.to_state
 		_sample_scratch.position = newest.position
 		_sample_scratch.velocity = newest.velocity

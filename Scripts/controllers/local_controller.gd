@@ -649,14 +649,21 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 
 # Re-resolve the local skater's body-check contact for one replayed tick against
 # the OTHER skaters' host-authoritative positions at `host_ts` (Slice C). Applies
-# only to the local skater's velocity — the historical others are read-only. Runs
-# the SAME inelastic model + aggressor gate as the live Skater._resolve_player_
-# collisions, so the replayed contact matches what the host resolved: if the local
-# player was the aggressor it re-derives the decel/drive-through; if the other was,
-# it re-derives the incoming knockback. Deterministic from replicated data + the
-# replayed input (local hit-commit / brace come from the input frame). The remote
-# attacker's hit-commit isn't on the wire, so it stays passive here exactly as the
-# live client prediction assumed — the host's real value reconciles on the next ack.
+# BOTH the velocity impulse AND the positional push-out (sep) to the local skater
+# only — the historical others are read-only. Both are required to match the host:
+# the live resolver applies sep every tick (Skater._resolve_player_collisions), so
+# the host's authoritative position includes it. Omitting sep here would leave a
+# per-tick residual = self's inverse-mass share of the overlap for reconcile to
+# snap out — worst on LOW-TRANSFER glancing contact, where dvel is small and sep
+# does the positional work (exactly the "glance off, don't dead-stop" case).
+# Placement is fine before the integration line: position adds commute, and both
+# land before the rink/net clamps, matching the live "sep after move_and_slide"
+# ordering. Runs the SAME inelastic model + aggressor gate as the live resolver, so
+# aggressor → decel/drive-through, victim → incoming knockback. Deterministic from
+# replicated data + the replayed input (local hit-commit / brace from the input
+# frame). The remote attacker's hit-commit isn't on the wire, so it stays passive
+# here exactly as the live client prediction assumed — the host's real value
+# reconciles on the next ack.
 func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_brake: bool) -> void:
 	if not _historical_others_provider.is_valid():
 		return
@@ -690,6 +697,7 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_bra
 					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(),
 					opos, ovel, other.weight, other.collision_radius(), transfer)
 			skater.velocity += _replay_collision_result.dvel_a
+			skater.global_position += _replay_collision_result.sep_a
 		else:
 			# Other is the aggressor, local is the victim. Its hit-commit is unknown
 			# (not replicated) → passive, matching the live prediction; local brace
@@ -701,6 +709,7 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_bra
 					opos, ovel, other.weight, other.collision_radius(),
 					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(), transfer)
 			skater.velocity += _replay_collision_result.dvel_b
+			skater.global_position += _replay_collision_result.sep_b
 
 
 func on_puck_picked_up_network() -> void:
