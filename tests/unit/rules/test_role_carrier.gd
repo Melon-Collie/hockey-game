@@ -2214,12 +2214,17 @@ func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
 	# corner read as good as the slot. With the floor dropped to a noise epsilon,
 	# pure xG drives: the slot reads high and the dead-angle corner reads ~0, so the
 	# carrier works toward the net instead of parking at the goal line.
+	# A wing ENTRY carries net-ward momentum (not a standstill): the momentum-aware
+	# ETA then reads the middle-ward cut as cheaply reachable and the boards drift as
+	# a needless reversal, so it drives the puck to a real angle instead of drifting.
 	var self_pos := Vector3(8.0, 0.0, -18.0)               # wing entry, OZ
+	var vel := Vector3(-1.0, 0.0, -3.0)                    # driving in off the wing
 	var skaters: Array = [
-			[1, TEAM_ID, self_pos],
+			[1, TEAM_ID, self_pos, false, vel],
 			[3, 1, Vector3(3.0, 0.0, -20.0)],              # defender on the inside lane
 	]
 	var ctx := _make_ctx(self_pos, skaters)
+	ctx.self_velocity = vel
 	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
 			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
 	var c := AIRoleCarrier.new()
@@ -2279,13 +2284,19 @@ func test_no_deke_read_against_a_committed_charger() -> void:
 
 
 func test_spun_off_carrier_attacks_the_opening() -> void:
-	# The moment after beating a man: carrier on the wing moving ACROSS the
-	# zone, the beaten defender dead in the water behind. The continuation
-	# credit turns that transient step into a committed route TOWARD the net
-	# instead of a safety orbit around the perimeter.
+	# The moment after beating a man: carrier driving toward the net (momentum
+	# net-ward, cutting off the wing to the middle), the beaten defender dead in
+	# the water behind. The continuation credit turns that drive into a committed
+	# route TOWARD the net instead of a safety orbit around the perimeter.
+	# (Momentum matters: time_to_arrive charges the cost of shedding sideways
+	# speed, so this is a carrier whose momentum already POINTS at the cut — a
+	# carrier moving laterally AWAY couldn't reach the same cut without first
+	# reversing, and the beaten man would recover into it; see the momentum-aware
+	# ETA. That honest read is what test_continuation_credit_respects_live_
+	# containment leans on below.)
 	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
 	var self_pos := Vector3(6.0, 0.0, -15.0)
-	var vel := Vector3(5.0, 0.0, 1.0)
+	var vel := Vector3(-2.0, 0.0, -4.0)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos, false, vel],
 			[3, 1, Vector3(4.5, 0.0, -14.0), false, Vector3.ZERO],
@@ -2312,16 +2323,16 @@ func test_spun_off_carrier_attacks_the_opening() -> void:
 
 
 func test_continuation_credit_respects_live_containment() -> void:
-	# Same wing spot, but the defender is LIVE on the inside hip — matched
-	# speed, holding the cut lane. The continuation collapses through the
-	# second leg's reach safety (no phantom aggression), so the compete keeps
-	# cycling to space exactly as before the credit existed.
+	# Same net-ward drive, but the defender is LIVE in the cut lane — ahead on the
+	# inside, skating with the carrier to hold it. The continuation collapses
+	# through the second leg's reach safety (no phantom aggression): the cut reads
+	# contested and the compete keeps cycling to space instead of forcing it.
 	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
 	var self_pos := Vector3(6.0, 0.0, -15.0)
-	var vel := Vector3(5.0, 0.0, 1.0)
+	var vel := Vector3(-2.0, 0.0, -4.0)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos, false, vel],
-			[3, 1, Vector3(4.0, 0.0, -15.3), false, Vector3(4.5, 0.0, 0.5)],
+			[3, 1, Vector3(3.5, 0.0, -18.0), false, Vector3(-1.5, 0.0, -1.5)],
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.self_velocity = vel
@@ -2333,4 +2344,4 @@ func test_continuation_credit_respects_live_containment() -> void:
 	var lateral := Vector3(8.2, 0.0, -17.0)
 	assert_gt(c._score_move_candidate(ctx, lateral, our_goalie),
 			c._score_move_candidate(ctx, cut_in, our_goalie),
-			"a live inside-hip defender still owns the cut lane — cycle, don't force")
+			"a live defender in the cut lane still owns it — cycle, don't force")

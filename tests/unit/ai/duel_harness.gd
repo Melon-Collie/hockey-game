@@ -124,6 +124,13 @@ var releases: Array[Dictionary] = []
 # Ticks each peer spent as the carrier.
 var carry_ticks: Dictionary = {}
 
+# Optional real-goalie hook (default off → static keepers, existing scenarios
+# unchanged). When set, called once per team per tick as
+# `goalie_provider.call(team_id: int, puck_pos: Vector3) -> Variant`; a Vector3
+# return overwrites that net's keeper position in the snapshot (a real
+# GoalieController the test owns and ticks), anything else keeps the static one.
+var goalie_provider: Callable = Callable()
+
 
 func _init() -> void:
 	move_cfg = SkaterMovementRules.MovementConfig.new()
@@ -360,5 +367,12 @@ func _build_snapshot() -> WorldSnapshot:
 		var g := GoalieNetworkState.new()
 		g.position_x = 0.0
 		g.position_z = (1.0 if tid == 0 else -1.0) * (GameRules.GOAL_LINE_Z - 0.8)
+		# Real-goalie override (see goalie_provider): a Vector3 replaces the static
+		# keeper for this net with the live controller's tracked position.
+		if goalie_provider.is_valid():
+			var real: Variant = goalie_provider.call(tid, puck_pos)
+			if real is Vector3:
+				g.position_x = real.x
+				g.position_z = real.z
 		snap.goalie_states[tid] = g
 	return snap

@@ -671,6 +671,13 @@ const SKATER_BRAKE_TIME_S: float = 0.3
 # eventually."
 const MIN_TRAVEL_SPEED_M_S: float = 1.0
 
+# League-default all-direction thrust (Agility-scaled per skater) — the redirect
+# authority a caps-less time_to_arrive caller assumes for the cross-momentum shed.
+# Per-bot callers pass the skater's REAL max_accel (AISkaterCaps.max_accel) instead,
+# so a nimble build sheds sideways momentum faster than a heavy one. Mirrors
+# SkaterController.thrust; a physical acceleration, not an evaluation shape knob.
+const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+
 # Utility-AI knobs. AIRoleCarrier._pick_action re-runs every
 # PICK_ACTION_PERIOD_TICKS physics ticks and treats
 # CARRY as a fourth competing option scored as
@@ -2748,25 +2755,34 @@ static func path_clearance(from: Vector3, to: Vector3,
 
 
 # Momentum-aware time to arrive at `dest` from `from_pos` carrying
-# `from_velocity`. effective_speed = SKATER_REF_SPEED + component of
-# velocity along (from→dest); a skater already moving toward dest gets
-# there faster, a skater moving away takes longer. Clamped at
-# MIN_TRAVEL_SPEED_M_S so reverse-direction candidates have finite
-# arrival time (slower, but not infinite).
+# `from_velocity`. Two components:
+#   1. TRAVEL: dist / (SKATER_REF_SPEED + component of velocity along from→dest) —
+#      a skater already moving toward dest closes faster, one moving away slower.
+#      Clamped at MIN_TRAVEL_SPEED_M_S so reverse candidates stay finite.
+#   2. CROSS-MOMENTUM SHED: |v_perp| / accel — the velocity NOT pointed at dest is
+#      wasted speed the skater must first shed (re-accelerate back into line)
+#      before it truly closes. Controls are facing-agnostic (no turn arc; the
+#      crossover/backward thrust penalties are small), so this is a straight
+#      re-acceleration against the thrust budget, not a curve. Without it the old
+#      1-D projection priced a lateral fly-by's cut as a fast arrival it can't
+#      actually settle into — the phantom that let a carrier orbit the slot
+#      instead of shooting (see MOMENTUM_SHED / test_real_rush_sim).
 #
-# Used by AIRoleCarrier._best_carry to discount candidates the bot is
-# currently moving away from, by AIController chase-intercept lookahead
-# for opponent ETA estimation, and by off-puck role behaviors that
-# need a momentum-aware ETA without inventing their own constants
-# (e.g., SUPPORT's foot-race-home exposure check uses this for the
-# threat opp's ETA back to our net).
+# Used by AIRoleCarrier._best_carry to price carry candidates (a cut against the
+# grain of momentum costs real time, so the goalie reads square and the honest shot
+# wins), by AIController chase-intercept lookahead for opponent ETA, and by off-puck
+# role behaviors needing a momentum-aware ETA without inventing constants (e.g.,
+# SUPPORT's foot-race-home exposure check uses this for the threat opp's ETA home).
 #
-# `ref_speed_m_s` is the actor's flat skating speed; it defaults to the league
-# reference so cross-player callers (opponent / teammate ETA, the loose-puck
-# election that must stay consistent across all bots) keep the shared baseline.
-# A bot estimating ITS OWN arrival passes its attribute-scaled top speed.
+# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
+# thrust (Agility-scaled) — both default to league references so cross-player
+# callers (opponent / teammate ETA, the loose-puck election that must stay
+# consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
+# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build sheds
+# sideways momentum faster, so it reaches an off-axis cut sooner).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
-		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S) -> float:
+		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
+		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
 	var dx: float = dest.x - from_pos.x
 	var dz: float = dest.z - from_pos.z
 	var dist: float = sqrt(dx * dx + dz * dz)
@@ -2776,7 +2792,23 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
 	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
 			ref_speed_m_s + speed_along)
-	return dist / effective
+	# Cross-momentum cost. `speed_along` credits velocity pointed AT the target, but
+	# the perpendicular component — sqrt(|v|² − along²) — is wasted speed the skater
+	# must shed before it truly closes. Controls are facing-agnostic (no turn arc;
+	# crossover/backward thrust penalties are small), so a redirect is a straight
+	# re-acceleration: nulling the sideways component takes at least |v_perp| /
+	# accel seconds against the skater's real all-direction thrust (`accel_m_s2`).
+	# The old 1-D projection treated this as free, so a carrier flying laterally
+	# priced a cut it can't actually settle into as a fast arrival. Two-phase: shed
+	# the cross-momentum, then close `dist` at the along-aided cruise. Zero when
+	# already pointed at the target (v_perp = 0) — direct drives, standing starts,
+	# and pure reverse (handled by the floor above) are unchanged; only genuinely
+	# off-axis momentum pays, and a nimbler build (higher accel) pays less.
+	var v_len_sq: float = from_velocity.x * from_velocity.x \
+			+ from_velocity.z * from_velocity.z
+	var perp_sq: float = maxf(0.0, v_len_sq - speed_along * speed_along)
+	var t_shed: float = sqrt(perp_sq) / maxf(accel_m_s2, 0.001)
+	return dist / effective + t_shed
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects
