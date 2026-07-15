@@ -19,8 +19,8 @@ class_name BodyCheckRules
 # scale together off a single replicated value and ease back as it decays.
 
 class Config:
-	var min_impulse: float = 3.0          # m/s victim velocity delta below which no debuff lands
-	var ref_impulse: float = 9.0          # m/s delta treated as a full-strength check
+	var min_impulse: float = 1.0          # m/s victim velocity delta below which no debuff lands
+	var ref_impulse: float = 2.5          # m/s delta treated as a full-strength check
 	var max_stagger_seconds: float = 1.0  # recovery window of a full-strength check
 	var max_stamina_drain: float = 0.35   # pool fraction (0..1) a full-strength check bites
 	var max_thrust_penalty: float = 0.5   # peak thrust reduction (fraction) at full stagger
@@ -32,8 +32,8 @@ class Config:
 	# knockdown_ref_impulse. NOTE: these (and min/ref_impulse above) are placeholders
 	# on the OLD magnitude scale — the Slice B inelastic model delivers ~half the old
 	# impulse, so the whole ladder wants a downward re-tune once the feel is dialed.
-	var knockdown_impulse: float = 11.0        # m/s victim impulse above which a hit knocks down (0 disables)
-	var knockdown_ref_impulse: float = 16.0    # m/s impulse of a maximal (longest) knockdown
+	var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down (0 disables)
+	var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
 	var min_knockdown_seconds: float = 0.7     # down time of a just-barely knockdown
 	var max_knockdown_seconds: float = 1.5     # down time of a maximal hit
 
