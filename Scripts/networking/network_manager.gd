@@ -655,7 +655,13 @@ func _on_connected_to_server() -> void:
 	_clock_sync = _ClockSyncScript.new()
 	_clock_sync.init_session(_session_start_ms)
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
-	_peer_attributes[1] = local_attrs
+	# Stamp the local peer's OWN entry, not [1] (which is the host from a
+	# client's view). on_slot_assigned spawns the local skater via
+	# get_peer_attributes(local_peer_id()); keying at 1 here made that lookup
+	# miss and fall back to all-medium, so the client's own matchup card and
+	# local-prediction build showed defaults while every host-sourced view was
+	# correct. Valid here — the unique id is assigned before connected_to_server.
+	_peer_attributes[local_peer_id()] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.speed, local_attrs.agility, local_attrs.hands,
 			local_attrs.size, local_attrs.physical, local_attrs.shot,
