@@ -29,11 +29,6 @@ const CROWN_HALF_WIDTH: float   = POST_HALF_WIDTH - MOUTH_CORNER_RADIUS  # 0.815
 const BEND_SEGMENTS: int        = 6       # curve tessellation per quarter bend
 const PIPE_RADIAL_SEGMENTS: int = 8
 
-# Collision-wall depth for the thin side-net panels (see _wall_thicken_x). The
-# visual panels are thin quads; their COLLISION is grown to this so a fast puck
-# can't tunnel the side netting into the cavity when CCD misses a grazing sweep.
-const NET_COLLISION_WALL_THICKNESS: float = 0.15
-
 # Net mesh texture: seamless diamond grid. Place the PNG at this path in your project.
 # Each tile of the texture covers NET_TEXTURE_TILE_SIZE x NET_TEXTURE_TILE_SIZE metres
 # of world space. The texture is 4 diamonds wide per tile, so each diamond is
@@ -508,48 +503,10 @@ func _basis_from_up(up_dir: Vector3) -> Basis:
 	return Basis(x_axis, up, z_axis)
 
 
-# Turn a panel's AABB (box_size / box_center as value copies) into a SOLID WALL
-# and return [size, center]. The visual net panels are thin quads, but their
-# collision must actually contain a 120 Hz puck. The old code padded each thin
-# axis to POST_RADIUS (3 cm); at shot speed the puck clears far more than that
-# per tick, so containment leaned entirely on the puck's CCD — and thin static
-# geometry is exactly where a swept collision test misses (a grazing sweep, a
-# direction change off a post). A puck that slips through ends up inside the net
-# having entered through a SOLID face, so no mouth crossing ever fired: it sits
-# in the net with no goal, the worst failure.
-#
-# So thicken the thin VERTICAL-plane axis — x, the side netting, which is the
-# real "in from the back/side" tunnelling vector — into a wall grown OUTWARD,
-# away from the cavity. The cavity-side face stays exactly on the panel plane
-# (x = ±POST_HALF_WIDTH), so nothing inside the net changes: mouth entries, tight
-# post-and-ins, and a scored puck's rest position are all untouched; only the
-# net's OUTER surface moves out. An inbound puck from behind/beside now meets the
-# wall sooner, and a shallow CCD-miss penetration lands inside a fat box that
-# depenetrates it back OUT rather than through.
-#
-# The thin HORIZONTAL top panel keeps the old thin pad on y: growing it upward
-# would wrongly block a puck clearing the crossbar (over-the-net is a miss, not a
-# save), and a puck leaving the cavity upward has already scored on entry. The
-# back panel is thick on every axis and is left unchanged.
-func _wall_thicken_x(box_size: Vector3, box_center: Vector3) -> Array:
-	if box_size.x < POST_RADIUS:
-		var outward: float = signf(box_center.x)
-		if outward == 0.0:
-			outward = 1.0
-		var inner_face_x: float = box_center.x - outward * box_size.x * 0.5
-		box_size.x = NET_COLLISION_WALL_THICKNESS
-		box_center.x = inner_face_x + outward * NET_COLLISION_WALL_THICKNESS * 0.5
-	if box_size.y < POST_RADIUS:
-		box_size.y = POST_RADIUS
-	if box_size.z < POST_RADIUS:
-		box_size.z = POST_RADIUS
-	return [box_size, box_center]
-
-
 # Build a triangular net panel (3 corners in world space). For small gap-filler
 # panels where a quad would degenerate. Same flat visual as _add_net_quad.
-# Collision uses the AABB of the three corners, thin axes grown to a solid wall
-# (see _wall_thicken_x).
+# Collision uses the AABB of the three corners padded to POST_RADIUS on the
+# thin axis.
 func _add_net_tri(a: Vector3, b: Vector3, c: Vector3) -> void:
 	var verts := PackedVector3Array([a, b, c])
 	var normal: Vector3 = (b - a).cross(c - a).normalized()
@@ -586,13 +543,16 @@ func _add_net_tri(a: Vector3, b: Vector3, c: Vector3) -> void:
 		max(max(a.y, b.y), c.y),
 		max(max(a.z, b.z), c.z)
 	)
+	var box_size: Vector3 = max_p - min_p
+	if box_size.x < POST_RADIUS: box_size.x = POST_RADIUS
+	if box_size.y < POST_RADIUS: box_size.y = POST_RADIUS
+	if box_size.z < POST_RADIUS: box_size.z = POST_RADIUS
 	var box_center: Vector3 = (min_p + max_p) / 2.0
-	var wall: Array = _wall_thicken_x(max_p - min_p, box_center)
 	var shape := BoxShape3D.new()
-	shape.size = wall[0]
+	shape.size = box_size
 	var col := CollisionShape3D.new()
 	col.shape = shape
-	col.position = wall[1]
+	col.position = box_center
 	_net_body.add_child(col)
 
 
@@ -646,15 +606,17 @@ func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 		max(max(a.y, b.y), max(c.y, d.y)),
 		max(max(a.z, b.z), max(c.z, d.z))
 	)
-	# Grow the panel's thin side-net axis into a solid containment wall (outward,
-	# so the cavity is unchanged); thin top/seam axes keep a POST_RADIUS pad.
+	var box_size: Vector3 = max_p - min_p
+	# Give the thin axis a non-zero thickness (POST_RADIUS)
+	if box_size.x < POST_RADIUS: box_size.x = POST_RADIUS
+	if box_size.y < POST_RADIUS: box_size.y = POST_RADIUS
+	if box_size.z < POST_RADIUS: box_size.z = POST_RADIUS
 	var box_center: Vector3 = (min_p + max_p) / 2.0
-	var wall: Array = _wall_thicken_x(max_p - min_p, box_center)
 	var shape := BoxShape3D.new()
-	shape.size = wall[0]
+	shape.size = box_size
 	var col := CollisionShape3D.new()
 	col.shape = shape
-	col.position = wall[1]
+	col.position = box_center
 	_net_body.add_child(col)
 
 
