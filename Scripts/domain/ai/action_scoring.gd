@@ -2761,6 +2761,15 @@ static func deke_cut_side(
 # a carry is a slow physical traverse, so it uses a flat poke radius.
 const CARRY_PATH_CLEAR_RADIUS_M: float = 1.8
 
+# carry_lane_clearance's "beaten trailer" gate. A defender is dropped from the lane
+# only if it's BEHIND the carrier along the drive by more than LANE_BEATEN_BEHIND_M
+# AND slower along it by more than LANE_BEATEN_PACE_M_S — i.e. the carrier is
+# genuinely pulling away. Both are physical slacks (a body's depth behind; a real
+# pace edge), not shape knobs: a man even/ahead or matching pace is never shed, so
+# only a beaten trailer is dropped.
+const LANE_BEATEN_BEHIND_M: float = 0.1
+const LANE_BEATEN_PACE_M_S: float = 0.5
+
 # Public lane-clearance check for CARRY candidates — the bot is
 # physically traveling along this segment, not firing a puck through
 # it, so the reaction-window math from `lane_clear` doesn't apply.
@@ -2795,6 +2804,54 @@ static func path_clearance(from: Vector3, to: Vector3,
 		return 1.0
 	var perp: float = sqrt(min_perp_sq)
 	return clampf(perp / CARRY_PATH_CLEAR_RADIUS_M, 0.0, 1.0)
+
+static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		max_speed: float = 0.0) -> float:
+	var dx: float = to.x - from.x
+	var dz: float = to.z - from.z
+	var seg_sq: float = dx * dx + dz * dz
+	if seg_sq < 0.01 or arrival_time <= 0.0:
+		return 1.0
+	var dist: float = sqrt(seg_sq)
+	var drive_speed: float = dist / arrival_time
+	if max_speed > 0.0:
+		drive_speed = minf(drive_speed, max_speed)
+	var dir_x: float = dx / dist
+	var dir_z: float = dz / dist
+	# Same proximity read as path_clearance (project each defender to arrival and
+	# take the tightest perp to the straight segment) — EXCEPT we first drop a
+	# defender the carrier has genuinely BEATEN: one currently behind the carrier
+	# along the drive AND slower along it, so the carrier is pulling away and it
+	# can't strip a puck driving off. A man AHEAD (a wall, a head-on rush) or one
+	# MATCHING the drive pace is never dropped, so path_clearance's coverage of real
+	# obstacles — the container duel — is untouched; only the beaten trailer is shed.
+	var min_perp_sq: float = INF
+	var n: int = opponents.size()
+	var has_vels: bool = opponent_vels.size() == n
+	for i: int in n:
+		var op: Vector3 = opponents[i]
+		var ovx: float = opponent_vels[i].x if has_vels else 0.0
+		var ovz: float = opponent_vels[i].z if has_vels else 0.0
+		var along_now: float = (op.x - from.x) * dir_x + (op.z - from.z) * dir_z
+		var opp_drive_speed: float = ovx * dir_x + ovz * dir_z
+		if along_now < -LANE_BEATEN_BEHIND_M and drive_speed > opp_drive_speed + LANE_BEATEN_PACE_M_S:
+			continue   # behind and out-skated — beaten, shed
+		var px: float = op.x + ovx * arrival_time
+		var pz: float = op.z + ovz * arrival_time
+		var pdx: float = px - from.x
+		var pdz: float = pz - from.z
+		var t: float = (pdx * dir_x + pdz * dir_z) / dist
+		if t <= 0.0 or t >= 1.0:
+			continue
+		var perp_x: float = px - (from.x + dir_x * t * dist)
+		var perp_z: float = pz - (from.z + dir_z * t * dist)
+		var perp_sq: float = perp_x * perp_x + perp_z * perp_z
+		if perp_sq < min_perp_sq:
+			min_perp_sq = perp_sq
+	if min_perp_sq == INF:
+		return 1.0
+	return clampf(sqrt(min_perp_sq) / CARRY_PATH_CLEAR_RADIUS_M, 0.0, 1.0)
 
 
 # Momentum-aware time to arrive at `dest` from `from_pos` carrying

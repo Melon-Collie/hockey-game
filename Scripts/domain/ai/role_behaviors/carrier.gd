@@ -1978,8 +1978,9 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed,
 			ctx.self_max_accel)
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
-	var lane: float = AIActionScoring.path_clearance(
-			self_pos, candidate, _scratch_opponents_path)
+	var lane: float = AIActionScoring.carry_lane_clearance(
+			self_pos, candidate, local_time, _scratch_opponents, _scratch_opponent_vels,
+			ctx.self_max_speed)
 	if lane <= 0.0:
 		return -INF
 	# The candidate's shot is taken ARRIVING AT PACE, not from a dead stop —
@@ -2382,13 +2383,13 @@ func _forward_clearance_at(ctx: RoleContext, pos: Vector3, speed: float) -> floa
 			pos.x + to_net_x * inv * reach, 0.0,
 			pos.z + to_net_z * inv * reach)
 	var t: float = reach / maxf(speed, 1.0)
-	# apply_escape: same "if I keep driving I've beaten him" read as the carry
-	# candidates — a defender the carrier out-skates toward the net exerts no
-	# forward pressure (see carry_clearance / reach_clearance escape gate).
-	return AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(pos, target, t,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
-					true))
+	# Same time-consistent read the carry candidates use (carry_lane_clearance): a
+	# defender the carrier has beaten and is out-skating exerts no forward pressure,
+	# so the pass-first discount and the carry candidates it competes against price
+	# the same ice the same way — a carrier who's won his 1-on-1 isn't pushed to
+	# pass. A man ahead / matching pace still reads as pressure (never shed).
+	return AIActionScoring.carry_lane_clearance(pos, target, t,
+			_scratch_opponents, _scratch_opponent_vels, speed)
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still
