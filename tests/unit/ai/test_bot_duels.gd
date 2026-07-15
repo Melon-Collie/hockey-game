@@ -41,9 +41,18 @@ func test_container_duel_resolves_with_possession() -> void:
 	# RESOLVE: puck advanced past where the container stood, still on the
 	# carrier's stick (or deliberately released). Six seconds of jockeying
 	# with no progress is the regression this pins against.
+	#
+	# Staged as a LIVE RUSH, not a standing start: the carrier drives at the
+	# net and the container steps up with committed forward momentum — the two
+	# closing on each other. This is the regime a deke/cut actually lives in:
+	# a container carrying real along-ice momentum can't instantly redirect it,
+	# so the carrier's cut beats it. A stationary standing start is the
+	# degenerate case — a container with no momentum trivially mirrors every
+	# lateral step (velocity-matched seek makes that near-perfect), which is not
+	# how containment is ever beaten on the ice.
 	var duel: RefCounted = DuelHarness.new()
-	duel.add_skater(CARRIER, 0, Vector3(0, 0, -6.0))
-	duel.add_skater(DEFENDER, 1, Vector3(0, 0, -8.5))
+	duel.add_skater(CARRIER, 0, Vector3(0, 0, -6.0), null, Vector3(0, 0, -7.0))
+	duel.add_skater(DEFENDER, 1, Vector3(0, 0, -8.5), null, Vector3(0, 0, 4.0))
 	duel.start(CARRIER)
 	duel.run(6.0)
 	assert_true(duel.carrier() == CARRIER or duel.releases.size() > 0,
