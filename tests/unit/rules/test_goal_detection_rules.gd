@@ -29,6 +29,12 @@ func _crossed(prev: Vector3, curr: Vector3, facing: float = 1.0) -> bool:
 			HALF_W, NET_H, POST_R, R, HH, DEPTH)
 
 
+func _crossed_carried(prev: Vector3, curr: Vector3, facing: float = 1.0) -> bool:
+	return GoalDetectionRules.crossed_into_net(
+			prev, curr, GOAL_Z * signf(facing), facing,
+			HALF_W, NET_H, POST_R, R, HH, DEPTH, true)
+
+
 # ── The good case ─────────────────────────────────────────────────────────────
 
 func test_clean_center_goal() -> void:
@@ -143,6 +149,52 @@ func test_diagonal_post_and_in_grazing_the_pipe_still_counts() -> void:
 	assert_true(_crossed(
 			Vector3(1.0, ICE_Y, GOAL_Z - 0.02),
 			Vector3(0.7, ICE_Y, GOAL_Z + 0.40)))
+
+
+# ── Carried (pinned) puck: only a real mouth crossing counts ──────────────────
+# A carried puck is teleported to the blade each tick, not collision-constrained,
+# so the "panels are solid → only route is the mouth" assumption behind the
+# cavity fallback does not hold. A carried puck must cross the actual mouth
+# opening (point_in_mouth); the endpoint-in-cavity fallback is disabled for it.
+
+func test_carried_clean_mouth_tuck_still_counts() -> void:
+	# A legit wraparound / jam: the pinned puck's center crosses the goal-line
+	# plane inside the mouth. Still a goal — point_in_mouth catches it.
+	assert_true(_crossed_carried(
+			Vector3(0.0, ICE_Y, GOAL_Z - 0.05),
+			Vector3(0.0, ICE_Y, GOAL_Z + 0.10)))
+
+
+func test_carried_tight_post_tuck_still_counts() -> void:
+	# Tucked in tight to the post but still through the opening (center x = 0.80,
+	# inside the 0.82 mouth clearance).
+	assert_true(_crossed_carried(
+			Vector3(0.80, ICE_Y, GOAL_Z - 0.05),
+			Vector3(0.80, ICE_Y, GOAL_Z + 0.10)))
+
+
+func test_carried_curled_into_cavity_from_the_side_is_no_goal() -> void:
+	# The bot case: the pinned puck is dragged from beside the post into the
+	# cavity, crossing the plane at x ~0.95 (outside the 0.82 mouth) but ending
+	# its center inside the cavity. As a FREE puck this passes the cavity
+	# fallback (a plausible post-and-in); as a CARRIED puck the pin was placed
+	# there, not deflected, so it must not score.
+	assert_false(_crossed_carried(
+			Vector3(1.0, ICE_Y, GOAL_Z - 0.02),
+			Vector3(0.7, ICE_Y, GOAL_Z + 0.40)))
+	# Same segment, FREE puck: still a goal (post-and-in), so the two paths
+	# genuinely diverge and the carried flag is what gates it.
+	assert_true(_crossed(
+			Vector3(1.0, ICE_Y, GOAL_Z - 0.02),
+			Vector3(0.7, ICE_Y, GOAL_Z + 0.40)))
+
+
+func test_carried_behind_the_net_endpoint_in_cavity_is_no_goal() -> void:
+	# Pinned puck swung from behind-the-goal-line beside the post into the
+	# cavity: post-and-in-shaped endpoint, but carried, so no goal.
+	assert_false(_crossed_carried(
+			Vector3(0.84, ICE_Y, GOAL_Z - 0.10),
+			Vector3(0.84, ICE_Y, GOAL_Z + 0.20)))
 
 
 # ── False positives the old sensor allowed ────────────────────────────────────

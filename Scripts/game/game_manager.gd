@@ -750,7 +750,7 @@ func _check_goal_crossing() -> void:
 			if carried and was_carried else _GOAL_MAX_TICK_TRAVEL
 	if _prev_puck_pos.distance_to(curr) <= max_travel:
 		for goal: HockeyGoal in goals:
-			goal.check_goal_crossing(_prev_puck_pos, curr)
+			goal.check_goal_crossing(_prev_puck_pos, curr, carried)
 	_prev_puck_pos = curr
 
 
