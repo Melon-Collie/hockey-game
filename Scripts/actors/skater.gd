@@ -225,6 +225,18 @@ signal body_check_impulse_applied(impulse: Vector3)
 # SkaterController._on_body_check_received.
 signal body_check_received(impulse: Vector3)
 signal body_block_hit(body: Node3D)
+# Fired at the END of _physics_process, AFTER move_and_slide + collision
+# resolution + rink clamp have settled this tick's position and velocity. The
+# local player's controller uses it to capture its reconcile prediction snapshot
+# at the same post-integration sub-step the host samples for its world-state
+# broadcast (StateBufferManager.capture → fill_network_state, which reads the
+# post-move skater.global_position). Capturing the snapshot pre-move (in the
+# controller's priority -1 pass) left the client's prediction for host_timestamp
+# T one integration step (~one tick of travel) behind the host's authoritative
+# state for the same T — a benign phase offset that, at skating speed, exceeded
+# reconcile_position_threshold on nearly every moving tick and drove a reconcile
+# storm. Emitted for every skater; only the local controller connects.
+signal post_move_integrated()
 # Mirrors SkaterStateMachine.State for the current carrier. Updated each tick
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
@@ -613,6 +625,13 @@ func _physics_process(delta: float) -> void:
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
 	_hud.update(delta)
+	# Position + velocity are now fully settled for this tick (move_and_slide,
+	# body-check collision resolution, and the rink clamp above have all run).
+	# The local controller captures its reconcile prediction snapshot here so it
+	# reads the same post-integration state the host broadcasts (see the signal
+	# doc-comment). Blade elevation/lift above is cosmetic and doesn't touch the
+	# body position/velocity/upper-body fields the snapshot records.
+	post_move_integrated.emit()
 
 
 # Sanitizes the body's velocity/position to finite values right before the Jolt
