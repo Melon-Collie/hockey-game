@@ -535,9 +535,10 @@ func test_shoot_pressed_lost_puck_bails() -> void:
 	assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
 
 
-func test_shoot_pressed_stagger_cancels_via_block() -> void:
+func test_shoot_pressed_stagger_cancels_via_slap() -> void:
 	# A body check mid-charge (stagger_timer set) cancels the wrister rather
-	# than flailing it through the hit. Cancel is via block_held, not a release.
+	# than flailing it through the hit. Cancel routes through slap_pressed (the
+	# other shot button), not a release — block no longer cancels shots.
 	sm._state = Agent.State.SHOOT_PRESSED
 	var s := _self_snap(Vector3.ZERO, true)
 	sm.dispatch(InputState.new(), s)  # tick 0 (bail only fires once charge_tick > 0)
@@ -545,10 +546,10 @@ func test_shoot_pressed_stagger_cancels_via_block() -> void:
 	var i := InputState.new()
 	sm.dispatch(i, s)
 	assert_eq(sm.get_state(), Agent.State.CARRY, "a check mid-charge cancels the wrister")
-	assert_true(i.block_held, "cancel routes through block_held, not a shot release")
+	assert_true(i.slap_pressed, "cancel routes through slap_pressed, not a shot release")
 
 
-func test_shoot_pressed_front_pressure_cancels_via_block() -> void:
+func test_shoot_pressed_front_pressure_cancels_via_slap() -> void:
 	# An opponent closing from the front (toward the attacking goal) within the
 	# bail radius cancels the windup. Team 0 attacks −Z.
 	sm._state = Agent.State.SHOOT_PRESSED
@@ -558,7 +559,7 @@ func test_shoot_pressed_front_pressure_cancels_via_block() -> void:
 	var i := InputState.new()
 	sm.dispatch(i, s)
 	assert_eq(sm.get_state(), Agent.State.CARRY, "front pressure cancels the windup")
-	assert_true(i.block_held)
+	assert_true(i.slap_pressed)
 
 
 func test_shoot_pressed_ignores_rear_pressure() -> void:

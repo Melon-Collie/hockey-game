@@ -118,7 +118,11 @@ func _state_skating_with_puck(skater: Skater, input: InputState, delta: float, _
 
 
 func _state_wrister_aim(_skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:
-	if input.block_held:
+	# The OTHER shot button cancels: tap the slapper (RMB) to bail a wrister
+	# charge back to carry without firing. Block no longer cancels shots — it is
+	# purely the shot-block stance now. The slap_pressed edge is consumed here, so
+	# returning to carry this tick can't stack into a slapper charge next tick.
+	if input.slap_pressed:
 		_cb.transition_to_skating.call()
 		return
 	_cb.apply_blade_from_mouse.call(input, delta)
@@ -128,7 +132,9 @@ func _state_wrister_aim(_skater: Skater, input: InputState, delta: float, _has_p
 
 
 func _state_slapper_charge_with_puck(_skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:
-	if input.block_held:
+	# The OTHER shot button cancels: tap the wrister (LMB) to bail the slapper
+	# wind-up back to carry. (Was block_held; block is now the shot-block stance.)
+	if input.shoot_pressed:
 		_cancel_slapper_internal()
 		return
 
@@ -153,7 +159,9 @@ func _state_slapper_charge_with_puck(_skater: Skater, input: InputState, delta: 
 
 
 func _state_slapper_charge_without_puck(_skater: Skater, input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:
-	if input.block_held:
+	# The OTHER shot button cancels: tap the wrister (LMB) to bail a one-timer
+	# wind-up back to carry. (Was block_held; block is now the shot-block stance.)
+	if input.shoot_pressed:
 		_cancel_slapper_internal()
 		return
 
