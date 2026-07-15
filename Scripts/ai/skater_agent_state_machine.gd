@@ -354,6 +354,12 @@ const CARRY_MAN_TO_BEAT_RADIUS_M: float = 3.5
 # behind (rather than waiting for the full contest radius to open). ~a body
 # length. Physical measurement.
 const CARRY_MAN_TO_BEAT_BEHIND_M: float = 0.75
+# Hysteresis band on the man-to-beat contest (see _has_man_to_beat). Once a man
+# is being beaten the radius AND the behind-slack both widen by this, so a
+# defender riding the contest boundary doesn't flip the "square to the net"
+# decision — and with it the whole carry-aim forward direction — every re-eval.
+# Feel/debounce tunable, not an evaluation curve.
+const CARRY_MAN_TO_BEAT_HYSTERESIS_M: float = 0.75
 
 # How far off the play line the protect aim is allowed to swing the body. The
 # domain seam (best_handle_protect_point) is the MAX-CLEARANCE point in the
@@ -369,6 +375,12 @@ const CARRY_MAN_TO_BEAT_BEHIND_M: float = 0.75
 # much a shield is allowed to turn you), not an evaluation curve — the seam
 # itself stays the grounded reachable-set read.
 const CARRY_PROTECT_MAX_TURN_DEG: float = 90.0
+# Rate (1/s) the carry blade's shield blend eases toward the carrier mirror's raw
+# protect_gain / protect_offset (see _carry_mouse_aim). ~125 ms time constant: a
+# low-pass on the shield so a defender crossing the directional screen filter (a
+# hard on/off in the raw read) ramps the blade to/from the protect seam instead
+# of snapping it. Feel tunable (how fast a shield engages), not an eval curve.
+const CARRY_PROTECT_SMOOTH_RATE: float = 8.0
 
 # Poke-evade maneuver. Layered on top of the continuous defender-
 # avoidance forces (carrier threat-gated repel in steering, sum-of-
@@ -963,6 +975,21 @@ var _self_backhand_coefficient: float = 0.75
 # Reset on CARRY entry via _set_state.
 var _carry_tracking_fire: bool = false
 
+# Temporally smoothed puck-protect shield, low-passed toward the carrier
+# mirror's raw protect_gain / protect_offset every carry-aim tick (see
+# _carry_mouse_aim). The raw read steps discontinuously when a defender crosses
+# the directional screen filter (PROTECT_SCREEN_BEHIND_M) or the ~30 Hz mirror
+# re-evaluates — a hard on/off that swung the carry blade between the play line
+# and the protect seam. Smoothing eases the shield in/out instead. Reset to zero
+# on CARRY entry (via _set_state) so a fresh pickup doesn't inherit a phantom
+# shield from a previous carry.
+var _carry_protect_gain_smooth: float = 0.0
+var _carry_protect_offset_smooth: Vector3 = Vector3.ZERO
+# Latched side of the man-to-beat contest (see _has_man_to_beat), debounced by
+# CARRY_MAN_TO_BEAT_HYSTERESIS_M so a defender riding the boundary doesn't chatter
+# the square-to-net facing. Reset on CARRY entry for a fresh contest read.
+var _carry_has_man: bool = false
+
 # Poke-evade lateral cut bookkeeping. While _active > 0, the
 # modulator overrides move_vector with a perpendicular thrust away
 # from the threat side; when it counts down to 0 the cooldown
@@ -1201,6 +1228,10 @@ var _off_puck_jab_live: bool = false
 # NEAR (aiming the threat/puck), false = FAR (aiming the anchor). Debounced by
 # FACE_NEAR_ANCHOR_HYSTERESIS_M so boundary-camping doesn't chatter the blade.
 var _aim_near_anchor: bool = false
+# Latched puck-too-close state for _face_threat_or_current, debounced by
+# FACE_THREAT_MIN_DIST_HYSTERESIS_M. True = hold facing (puck within the geometry
+# floor), false = aim at the puck.
+var _threat_too_close: bool = false
 
 # Captured at the top of each dispatch() so _step_mouse_toward can
 # arc the per-tick mouse target around self_pos without re-threading
@@ -1212,6 +1243,10 @@ var _aim_near_anchor: bool = false
 var _current_self_pos: Vector3 = Vector3.ZERO
 var _current_self_state: SkaterNetworkState = null
 var _current_snapshot: WorldSnapshot = null
+# The real frame delta captured at the top of each dispatch (including skipped
+# ticks), so per-tick temporal smoothing (the carry protect blend) advances at
+# the physics/read rate and stays frame-rate independent under host time dilation.
+var _current_delta: float = 0.0
 
 # Last action the bot actually fired (e.g. "SHOOT" /
 # "PASS→Backdoor"). Set inside the press-state handlers at the
@@ -1522,6 +1557,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	_current_self_pos = self_pos
 	_current_self_state = self_state
 	_current_snapshot = snapshot
+	_current_delta = input.delta
 	# Self-possession is instant (proprioception) — read the REAL carrier, not
 	# the reaction-delayed one on puck_state. Otherwise the bot would freeze
 	# holding the puck for the reaction window after receiving it. Everything
@@ -1585,6 +1621,12 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 			if live_off_aim.is_finite():
 				input.mouse_world_pos = _step_mouse_face(live_off_aim)
 				return
+		elif _state == State.CARRY and _intended_action == State.CARRY:
+			# Re-derive the carry blade target live between dispatches. Only while
+			# actually carrying — a pre-aim (SHOOT/PASS pending) keeps the throttled
+			# cached re-step so its convergence gate isn't advanced off-dispatch.
+			_step_carry_cursor(input, snapshot, self_pos, self_state)
+			return
 		if _has_cached_aim_target:
 			input.mouse_world_pos = _step_mouse_internal(
 					_cached_aim_target, _cached_aim_mode,
@@ -2571,34 +2613,17 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 	# states pre-aim toward action direction.
 	var mouse_target: Vector3
 	if _intended_action == State.CARRY:
-		var deke_mouse: Vector3 = _deke_mouse_target(self_pos)
-		mouse_target = deke_mouse if deke_mouse.is_finite() \
-				else _carry_aim_track_fire(snapshot, self_pos)
+		# Pure carry: cursor factored into _step_carry_cursor so the throttle's
+		# skipped-tick path re-derives it every physics tick (the carry blade then
+		# tracks the protect seam / stickhandle offset / square-up continuously
+		# instead of staircasing at the ~20 Hz dispatch rate).
+		_step_carry_cursor(input, snapshot, self_pos, self_state)
 	else:
 		mouse_target = _aim_target_for_intent(snapshot, self_pos)
-	# Cursor motion model. A pure CARRY reach to a FRONT-hemisphere spot moves the
-	# cursor DIRECTLY — a straight chord at the blade's real slew — so the blade
-	# leads to the spot while body facing lags behind at its own Agility-limited
-	# turn rate (facing_drag_speed in the pose coordinator). Facing is then NOT
-	# locked one-to-one to the cursor: the hands work the puck and the body
-	# follows, the way a human carrier reads, instead of the body pivoting in
-	# lockstep with a cursor that's paced to it. The chord also cuts INSIDE the
-	# aim ring, so the puck pulls in and extends across the front (a reach) rather
-	# than orbiting the ring at full extension. The ARC model is kept for the two
-	# cases that need it: a genuine turn-around (target BEHIND the body — a
-	# straight chord there crosses self_pos and trips the pose IK gate, see
-	# MOUSE_ARC_RATE_RAD_S), and every pre-aim swing (the convergence/commit logic
-	# below reads the arc; the cached FINAL mouse_target drives the convergence
-	# check so the bot fires only when the body has reached the real aim).
-	var to_target := Vector3(mouse_target.x - self_pos.x, 0.0, mouse_target.z - self_pos.z)
-	var direct_reach: bool = _intended_action == State.CARRY \
-			and not _target_is_behind(to_target, self_state)
-	if direct_reach:
-		# No arc walk on a front reach — clear any long-way orbit latched by a
-		# prior turn-around so the next ARC swing re-evaluates from scratch.
-		_arc_protect_sign = 0.0
-		input.mouse_world_pos = _step_mouse_toward(mouse_target)
-	else:
+		# ARC pre-aim swing: the convergence/commit logic below reads the arc; the
+		# cached FINAL mouse_target drives the convergence check so the bot fires
+		# only when the body has reached the real aim. (A pure CARRY front reach
+		# steps DIRECT instead — see _step_carry_cursor.)
 		input.mouse_world_pos = _step_mouse_aim(mouse_target)
 
 	# If pre-aiming, wait for mouse convergence (or timeout) before
@@ -3926,6 +3951,30 @@ func _carry_aim_track_fire(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector
 	return _aim_ring_toward(self_pos, _shot_aim_point(snapshot, self_pos))
 
 
+# Computes and steps the CARRY-intent mouse cursor: the deke sell-and-snap while
+# a deke is live, else the carry-or-fire track aim. A FRONT-hemisphere reach
+# steps DIRECT (a straight chord at the blade slew — the blade leads and body
+# facing lags at its own turn rate, the hands-lead-body carry read); a
+# turn-around (target BEHIND the body) steps ARC so the chord doesn't cross
+# self_pos and trip the pose IK gate. Its callees only READ dispatch-throttled
+# state (cached shot/pass scores in _carry_aim_track_fire, latched deke dirs in
+# _deke_mouse_target), so the skipped-tick path calls it every physics tick to
+# keep the carry blade tracking continuously between dispatches.
+func _step_carry_cursor(input: InputState, snapshot: WorldSnapshot,
+		self_pos: Vector3, self_state: SkaterNetworkState) -> void:
+	var deke_mouse: Vector3 = _deke_mouse_target(self_pos)
+	var mouse_target: Vector3 = deke_mouse if deke_mouse.is_finite() \
+			else _carry_aim_track_fire(snapshot, self_pos)
+	var to_target := Vector3(mouse_target.x - self_pos.x, 0.0, mouse_target.z - self_pos.z)
+	if not _target_is_behind(to_target, self_state):
+		# No arc walk on a front reach — clear any long-way orbit latched by a
+		# prior turn-around so the next ARC swing re-evaluates from scratch.
+		_arc_protect_sign = 0.0
+		input.mouse_world_pos = _step_mouse_toward(mouse_target)
+	else:
+		input.mouse_world_pos = _step_mouse_aim(mouse_target)
+
+
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# Danger zone: when the bot's body is within _blade_reach of the
 	# goalie, the default forward aim drives the blade through the
@@ -4024,9 +4073,21 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# and projected out to the carry aim ring: the arc-step in `_step_mouse_aim`
 	# reads direction only, so a short raw offset would under-weight the protect
 	# side in a positional lerp.
-	var protect_w: float = _carrier.protect_gain
+	# Low-pass the shield toward the carrier mirror's raw read so the blend eases
+	# in/out instead of stepping when the raw value flips — a defender crossing the
+	# directional screen filter (PROTECT_SCREEN_BEHIND_M) or the ~30 Hz mirror
+	# re-eval used to snap protect_gain, swinging the blade between the play line
+	# and the seam. Runs every carry-aim tick (including when the raw read is zero,
+	# so a disengaging shield decays smoothly); reset to zero on CARRY entry so a
+	# pickup starts unshielded. Non-protect tiers hold the raw read at zero.
+	var raw_gain: float = _carrier.protect_gain if _protects_the_puck else 0.0
+	var raw_offset: Vector3 = _carrier.protect_offset if _protects_the_puck else Vector3.ZERO
+	var smooth_t: float = clampf(CARRY_PROTECT_SMOOTH_RATE * _current_delta, 0.0, 1.0)
+	_carry_protect_gain_smooth = lerpf(_carry_protect_gain_smooth, raw_gain, smooth_t)
+	_carry_protect_offset_smooth = _carry_protect_offset_smooth.lerp(raw_offset, smooth_t)
+	var protect_w: float = _carry_protect_gain_smooth
 	if _protects_the_puck and protect_w > 0.0:
-		var protect_dir: Vector3 = _carrier.protect_offset
+		var protect_dir: Vector3 = _carry_protect_offset_smooth
 		protect_dir.y = 0.0
 		if protect_dir.length_squared() > 0.0025:
 			# Shield with REACH, not a spin: clamp how far the protect aim swings off
@@ -4079,13 +4140,22 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # side ahead counts. Runs on the carrier only (~1 bot/team) and loops the small
 # opponent set, so it's hot-path cheap.
 func _has_man_to_beat(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
-	var r2: float = CARRY_MAN_TO_BEAT_RADIUS_M * CARRY_MAN_TO_BEAT_RADIUS_M
+	# Sticky contest (see CARRY_MAN_TO_BEAT_HYSTERESIS_M): while a man is already
+	# being beaten, widen the radius AND the behind-slack so a defender riding the
+	# boundary keeps the same answer rather than flipping the square-to-net facing.
+	var radius: float = CARRY_MAN_TO_BEAT_RADIUS_M
+	var behind: float = CARRY_MAN_TO_BEAT_BEHIND_M
+	if _carry_has_man:
+		radius += CARRY_MAN_TO_BEAT_HYSTERESIS_M
+		behind += CARRY_MAN_TO_BEAT_HYSTERESIS_M
+	var r2: float = radius * radius
 	var to_net: Vector3 = _attacking_goal_pos - self_pos
 	to_net.y = 0.0
 	var net_len: float = to_net.length()
 	var have_net: bool = net_len > 0.001
 	var nx: float = to_net.x / net_len if have_net else 0.0
 	var nz: float = to_net.z / net_len if have_net else 0.0
+	var found: bool = false
 	for peer_id: int in _opponent_ids(snapshot):
 		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
 		var dx: float = opp_state.position.x - self_pos.x
@@ -4093,9 +4163,11 @@ func _has_man_to_beat(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 		if dx * dx + dz * dz >= r2:
 			continue
 		# Goal-side (ahead toward the net) beyond the beaten-behind slack.
-		if not have_net or dx * nx + dz * nz > -CARRY_MAN_TO_BEAT_BEHIND_M:
-			return true
-	return false
+		if not have_net or dx * nx + dz * nz > -behind:
+			found = true
+			break
+	_carry_has_man = found
+	return found
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.
@@ -4501,6 +4573,13 @@ const FACE_THREAT_NEAR_ANCHOR_M: float = BotSprintRules.GAP_ENGAGE_M
 # threshold before the aim direction switches, so orbiting at the boundary
 # doesn't swing the blade between the anchor and the puck every tick.
 const FACE_NEAR_ANCHOR_HYSTERESIS_M: float = 0.75
+# Below this puck→self distance the direction is too short to aim by, so the
+# threat read holds current facing instead (see _face_threat_or_current). A
+# geometry floor, debounced by FACE_THREAT_MIN_DIST_HYSTERESIS_M so a puck
+# dancing across it doesn't flip the ready-stance aim (now that off-puck aim
+# refreshes live, a bare threshold would chatter at the tick rate).
+const FACE_THREAT_MIN_DIST_M: float = 0.3
+const FACE_THREAT_MIN_DIST_HYSTERESIS_M: float = 0.15
 # Tag-up override: a ghosted bot racing back to the blue line faces its
 # travel direction until nearly there — the tag-up is a sprint, not
 # positioning, so it keeps the old tight face-travel threshold.
@@ -4762,9 +4841,18 @@ func _face_threat_or_current(snapshot: WorldSnapshot, self_pos: Vector3) -> Vect
 	# v2: no man-to-man marks, so threat is just the puck. Falls back
 	# to current facing when puck is essentially on top of us.
 	var to_puck: Vector3 = snapshot.puck_state.position - self_pos
-	if to_puck.length() > 0.3:
-		return to_puck.normalized()
-	return _read_facing_3d(snapshot)
+	var dist: float = to_puck.length()
+	# Debounced geometry floor (see FACE_THREAT_MIN_DIST_HYSTERESIS_M): once inside
+	# the floor hold facing until the puck clears it by a full band, and vice
+	# versa, so a puck hovering at the boundary doesn't flip the aim per tick.
+	if _threat_too_close:
+		if dist > FACE_THREAT_MIN_DIST_M + FACE_THREAT_MIN_DIST_HYSTERESIS_M:
+			_threat_too_close = false
+	elif dist < FACE_THREAT_MIN_DIST_M - FACE_THREAT_MIN_DIST_HYSTERESIS_M:
+		_threat_too_close = true
+	if _threat_too_close or dist < 0.0001:
+		return _read_facing_3d(snapshot)
+	return to_puck / dist
 
 
 
@@ -5135,6 +5223,9 @@ func _set_state(s: State) -> void:
 			_intent_wait_ticks = 0
 			_one_timer_preserve_ticks = 0
 			_carry_tracking_fire = false
+			_carry_protect_gain_smooth = 0.0
+			_carry_protect_offset_smooth = Vector3.ZERO
+			_carry_has_man = false
 			_poke_evade_active_ticks = 0
 			_poke_evade_cooldown_ticks = 0
 			_poke_evade_dir = Vector2.ZERO
