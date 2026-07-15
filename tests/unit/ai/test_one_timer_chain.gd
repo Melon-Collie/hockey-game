@@ -178,6 +178,63 @@ func test_feed_fires_the_one_timer_at_every_debounce_tier() -> void:
 				"…at the committed full one-timer pace, not a stale leak")
 
 
+func test_no_one_timer_in_the_defensive_zone() -> void:
+	# The reported "shouldn't be possible" bug: readiness preserved across a
+	# turnover must NOT survive the bot leaving the attacking zone. Camp the
+	# finisher until ready publishes, then relocate it to its OWN end with a
+	# loose feed crossing — the zone guard drops readiness, no wind-up fires.
+	var finisher_pos := Vector3(-4.0, 0.0, -21.65)
+	var s: WorldSnapshot = _cycle_snap(finisher_pos)
+	_brain.tick(1.0, s)
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	var probe_ctx: RoleContext = sm._build_role_context(
+			s, finisher_pos, s.skater_states[FINISHER_ID])
+	var probe: RoleDecision = AIRoleFinisher.decide(probe_ctx)
+	finisher_pos = probe.target_position
+	s.skater_states[FINISHER_ID].position = finisher_pos
+	var input := InputState.new()
+	for i: int in 12:
+		sm.dispatch(input, s)
+	assert_true(_brain.is_one_timer_ready(FINISHER_ID),
+			"camped finisher is one-timer ready in the attacking zone")
+	# Relocate to team 0's own defensive zone (defends +Z) with a loose feed.
+	s.skater_states[FINISHER_ID].position = Vector3(-4.0, 0.0, 21.65)
+	s.puck_state.position = Vector3(-2.6, 0.0, 20.9)
+	s.puck_state.velocity = Vector3(-18.0, 0.0, -6.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	sm.dispatch(input, s)
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
+			"a bot in its own defensive zone never winds up a one-timer")
+	assert_false(_brain.is_one_timer_ready(FINISHER_ID),
+			"readiness drops the moment the bot is out of the attacking zone")
+
+
+func test_cross_seam_not_one_timed_when_not_squared_up() -> void:
+	# The wonky-aim guard: a chasing bot still facing up-ice can't rotate square
+	# to the net inside the reception window, so the redirect would lock a
+	# "wherever I was looking" direction. It must CATCH (Mode B) instead of
+	# converting to a bad one-timer. Same feed as the Mode A test below, but
+	# facing away from the net.
+	var finisher_pos := Vector3(-4.0, 0.0, -21.65)
+	var s: WorldSnapshot = _cycle_snap(finisher_pos)
+	s.skater_states[OPP_MARK].position = Vector3(-2.5, 0.0, -20.5)
+	s.puck_state.position = Vector3(4.0, 0.0, -19.5)
+	s.puck_state.velocity = Vector3(-19.0, 0.0, -4.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	# Facing back up-ice, away from the attacking net (beyond the square-up cone).
+	s.skater_states[FINISHER_ID].facing = Vector2(0.0, 1.0)
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.CHASE_PUCK
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
+			"a bot not squared to the net catches the feed instead of firing wonky")
+
+
 func test_cross_seam_reception_one_times_off_the_displaced_goalie() -> void:
 	# Mode A (shot-aware reception): a lateral feed across the slot with the
 	# goalie still parked on the passer's side — the chasing bot commits to

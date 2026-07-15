@@ -255,6 +255,16 @@ const ONE_TIME_MIN_NET_DIST_M: float = 6.0
 # Net-ward closing speed above which we're committed to driving in (Mode B)
 # rather than stopping to redirect (Mode A).
 const ONE_TIME_MAX_DRIVE_SPEED_M_S: float = 4.0
+# Squared-up cone for committing a Mode A redirect. The one-time press locks the
+# slapper direction from the cursor almost immediately (see the controller's
+# locked_slapper_dir at slap-press), so the body must ALREADY be facing near the
+# net line to lock a clean shot. A chasing bot still facing the puck it was
+# tracking can't rotate square inside the brief reception window — pressing then
+# would lock a "wherever I was looking" direction (the wonky one-timer). Beyond
+# this cone we fall through to Mode B and CATCH the feed instead of firing a bad
+# redirect. Sized generously (a cross-seam catch is naturally ~net-ward already)
+# so genuine one-timer looks still convert.
+const ONE_TIME_MAX_SQUARE_UP_RAD: float = 0.960     # deg_to_rad(55)
 # Reception-decision return codes (see _try_shot_reception).
 const _RECV_NONE: int = 0           # not a shot reception — run the normal catch
 const _RECV_CATCH_STRIDE: int = 1   # Mode B handled aim+steer; caller runs transitions
@@ -1788,6 +1798,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# Genuinely (re-)confirmed ready — reset the preserve budget.
 			_one_timer_preserve_ticks = 0
 		elif _is_one_timer_ready \
+				and _in_attacking_zone(self_pos) \
+				and slot == AIRoleSlots.Slot.FINISHER \
 				and snapshot.puck_state != null \
 				and (snapshot.puck_state.carrier_peer_id == -1
 						or snapshot.real_puck_carrier_peer_id == -1) \
@@ -1802,6 +1814,15 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# reactive on the fast puck and returns not-ready, and this preserve
 			# refused to bridge a "held" puck), so the camped one-timer never
 			# survived to the zone-entry trigger.
+			#
+			# Gated to an OFFENSIVE context so it bridges only OUR feed, never a
+			# turnover: the shooter must still be in the attacking zone AND still
+			# hold the FINISHER slot. A pass/shot in flight keeps possession
+			# sticky-OZONE and the camped bot nearest the net keeps FINISHER, so
+			# the legit bridge survives; the moment an opponent gains the puck the
+			# slot flips off FINISHER (and a retreating bot leaves the zone), so
+			# readiness can't leak into a defensive-zone one-timer. Rebound-safe:
+			# a puck loose off the goalie stays OZONE/FINISHER.
 			_one_timer_preserve_ticks += _dispatch_period_ticks
 			would_be_ready = true
 		_set_one_timer_ready(would_be_ready)
@@ -1828,7 +1849,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# Transitions
 	if have_puck:
 		_set_state(State.CARRY)
-	elif _is_one_timer_ready and (_one_timer_line_anchor(snapshot, self_pos).is_finite()
+	elif _is_one_timer_ready and _in_attacking_zone(self_pos) \
+			and (_one_timer_line_anchor(snapshot, self_pos).is_finite()
 			or _puck_in_one_timer_zone(snapshot, self_pos)):
 		# Commit the one-timer at feed RELEASE, not at contact: the press
 		# state's slap wind-up needs the flight time to build (the visible,
@@ -2190,7 +2212,8 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 	# puck enters our zone while chasing, fire instead of picking up.
 	if have_puck:
 		_set_state(State.CARRY)
-	elif _is_one_timer_ready and _puck_in_one_timer_zone(snapshot, self_pos):
+	elif _is_one_timer_ready and _in_attacking_zone(self_pos) \
+			and _puck_in_one_timer_zone(snapshot, self_pos):
 		_set_state(State.ONE_TIMER_PRESSED)
 	elif not _should_chase_loose_puck(snapshot, self_pos) \
 			and not _incoming_pass_to_me(snapshot, self_pos):
@@ -2460,11 +2483,21 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	if self_state != null:
 		self_vel = self_state.velocity
 	var net_ward_speed: float = self_vel.dot(net_dir)
+	# Squared-up gate: the redirect locks its direction at the press tick, so the
+	# body must already be facing near the shot line or it fires wonky. When we
+	# can't square up in time, Mode A is off and the caller catches it (Mode B).
+	var squared_up: bool = true
+	if self_state != null and self_state.facing.length_squared() > 0.0001:
+		var net_aim: Vector3 = _shot_aim_point(snapshot, self_pos, 0.0)
+		var aim_dir := Vector2(net_aim.x - self_pos.x, net_aim.z - self_pos.z)
+		if aim_dir.length_squared() > 0.0001:
+			squared_up = absf(self_state.facing.angle_to(aim_dir)) <= ONE_TIME_MAX_SQUARE_UP_RAD
 	var mode_a: bool = (redirect_angle >= ONE_TIME_MIN_REDIRECT_RAD
 			and redirect_angle <= ONE_TIME_MAX_REDIRECT_RAD
 			and from_forehand
 			and net_len >= ONE_TIME_MIN_NET_DIST_M
-			and net_ward_speed <= ONE_TIME_MAX_DRIVE_SPEED_M_S)
+			and net_ward_speed <= ONE_TIME_MAX_DRIVE_SPEED_M_S
+			and squared_up)
 	if mode_a:
 		# One transitional tick of net-aimed steering before ONE_TIMER_PRESSED
 		# takes over next dispatch (it presses slap on its tick 0 and settles
@@ -3582,6 +3615,18 @@ func _one_timer_line_anchor(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 	var zone_offset: Vector3 = right * (side * BOT_ONE_TIMER_ZONE_OFFSET_X_M) \
 			- f * BOT_ONE_TIMER_ZONE_OFFSET_Z_M
 	return perp_foot - zone_offset
+
+
+# A one-timer is a scoring-area mechanic: the shooter must be inside the
+# attacking zone (past the far blue line). This is the guard that makes a
+# defensive-zone one-timer impossible — readiness preserved across a possession
+# flip can't survive the bot retreating out of the offensive zone, and the fire
+# triggers themselves refuse from our own end. `-_own_goal_dir * z` is the
+# distance into attacking territory (same frame the possession-state zone test
+# uses); > BLUE_LINE_Z means fully in the attacking zone. The FINISHER stages
+# ~SLOT_DIST_M off the net, deep inside this, so no legit one-timer is affected.
+func _in_attacking_zone(self_pos: Vector3) -> bool:
+	return -_own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z
 
 
 # Returns true when the puck (projected one tick forward by its

@@ -1942,6 +1942,19 @@ func _release_slapper(input: InputState) -> void:
 				charge,
 				cfg,
 				locked_dir_3d)
+		# A genuine one-timer (puck arrived mid-charge, so the window is armed)
+		# earns the same centre-timing power bonus the human leniency-release path
+		# applies — without it, a bot (which always attaches mid-charge and fires
+		# through here, never through _try_one_timer_release) never got the bonus,
+		# so its one-timers read systematically weaker than a hand-timed release.
+		# A normal carried slapshot has no window armed and is untouched.
+		if _aiming.one_timer_window_timer > 0.0:
+			var zone_world: Vector3 = skater.get_slapper_zone_global_position()
+			var zone_xz := Vector2(zone_world.x, zone_world.z)
+			var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
+			result.power = ShotReleaseRules.one_timer_power(
+					result.power, one_timer_center_power_bonus,
+					zone_xz, puck_xz, slapper_zone_radius)
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
