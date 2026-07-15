@@ -3,7 +3,8 @@ class_name AIRoleContain
 # CONTAIN role behavior — TRANS_OD only. The last man back: gap control on
 # the puck carrier as a rush develops toward our net.
 #
-# CONTAIN is assigned to the DEEPEST defender (closest to our net). Its one job
+# CONTAIN is assigned to the LAST MAN BACK — the peer soonest to our own net
+# (momentum-aware), the deepest line of defense. Its one job
 # is to stay between the carrier and our net at a CONTROLLED GAP — close enough
 # to challenge, far enough not to get beaten wide — and let the rush come to it,
 # rather than lunging up-ice at the carrier (the old "engage forward" behavior,

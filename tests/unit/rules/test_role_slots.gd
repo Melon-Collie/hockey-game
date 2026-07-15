@@ -250,27 +250,30 @@ func test_assign_forecheck_f1_pressures_puck_f3_is_high() -> void:
 	assert_eq(assignments[120], AIRoleSlots.Slot.F2_MID, "leftover bot reads the mid lane")
 
 
-func test_assign_trans_od_gap_is_closest_goal_side_to_carrier() -> void:
-	# TRANS_OD: CONTAIN goes to the closest GOAL-SIDE peer (between carrier and
-	# our +Z net), not the deepest. Carrier at z=0; peer 110 (z=5) is goal-side
-	# and nearest the carrier, so it gaps; the deep peer (120) and the
-	# caught-up-ice peer (100, not goal-side) backcheck to a man each.
+func test_assign_trans_od_contain_is_last_man_back() -> void:
+	# TRANS_OD: CONTAIN goes to the LAST MAN BACK — the peer soonest to our
+	# OWN +Z net (momentum-aware), i.e. the deepest line of defense that's
+	# genuinely in front of the rush. Carrier at z=0; peer 120 (z=20) is deepest
+	# and nearest our net, so it contains, while the up-ice peers (100, 110) mark
+	# a man each. This is the fix for the "last man leaves to mark a receiver,
+	# nobody picks up the carrier" failure: the man in front of the rush stays on
+	# the rush, and the peers further up the ice pick up the receivers.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -8.0)],  # up-ice, NOT goal-side → MARK
-			[110, 0, Vector3(0.0, 0.0, 5.0)],   # goal-side, closest to carrier → CONTAIN
-			[120, 0, Vector3(0.0, 0.0, 20.0)],  # goal-side but deep → MARK
+			[100, 0, Vector3(0.0, 0.0, -8.0)],  # up-ice → MARK
+			[110, 0, Vector3(0.0, 0.0, 5.0)],   # mid, closest to carrier → MARK
+			[120, 0, Vector3(0.0, 0.0, 20.0)],  # deepest / last man back → CONTAIN
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[110], AIRoleSlots.Slot.CONTAIN,
-			"closest goal-side peer gaps the carrier as CONTAIN")
+	assert_eq(assignments[120], AIRoleSlots.Slot.CONTAIN,
+			"the last man back (soonest to our net) contains the carrier")
 	assert_eq(assignments[100], AIRoleSlots.Slot.MARK,
-			"caught-up-ice peer marks home to a man")
-	assert_eq(assignments[120], AIRoleSlots.Slot.MARK,
-			"deep peer marks (it's not the closest to the carrier)")
+			"up-ice peer marks home to a man")
+	assert_eq(assignments[110], AIRoleSlots.Slot.MARK,
+			"the peer nearer the carrier marks (it is NOT the last man back)")
 	# Exactly one engager — no double-team.
 	var contain_count: int = 0
 	for pid: int in [100, 110, 120]:
@@ -279,12 +282,33 @@ func test_assign_trans_od_gap_is_closest_goal_side_to_carrier() -> void:
 	assert_eq(contain_count, 1, "exactly one CONTAIN")
 
 
-func test_assign_trans_od_gap_falls_back_to_deepest_when_none_goal_side() -> void:
-	# The whole team caught up-ice on the turnover — nobody is goal-side of the
-	# carrier (all on the -Z side of it). CONTAIN falls back to the deepest peer
-	# (closest to our +Z net), who recovers into the gap fastest.
+func test_assign_trans_od_contain_is_momentum_aware() -> void:
+	# "Soonest to our net" folds in momentum, not just raw depth: a peer a touch
+	# further from the net but already skating hard toward it beats a marginally
+	# deeper peer drifting up-ice. Peer 110 is 2 m further from our net than 120
+	# but barrelling home; 120 is nearer but coasting the wrong way.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -5.0)],  # deepest of the caught peers → CONTAIN
+			[100, 0, Vector3(0.0, 0.0, -6.0)],                       # up-ice → MARK
+			[110, 0, Vector3(0.0, 0.0, 16.0), Vector3(0.0, 0.0, 12.0)], # closing home fast → CONTAIN
+			[120, 0, Vector3(0.0, 0.0, 18.0), Vector3(0.0, 0.0, -12.0)],# nearer but fleeing up-ice
+			[200, 1, Vector3(0.0, 0.0, 0.0)],                        # opp carrier
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
+			_resolver(skaters), {})
+	assert_eq(assignments[110], AIRoleSlots.Slot.CONTAIN,
+			"the peer genuinely arriving home soonest (momentum) contains, not the nearer coaster")
+
+
+func test_assign_trans_od_contain_when_whole_team_caught_up_ice() -> void:
+	# The whole team is beaten up the ice on the turnover — every peer is on the
+	# -Z (up-ice) side of the carrier. The race-home election still resolves
+	# cleanly: the peer nearest our +Z net recovers into the gap fastest and
+	# contains, the rest MARK. (No special goal-side fallback needed — "soonest
+	# home" subsumes it.)
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, -5.0)],  # nearest our net of the caught peers → CONTAIN
 			[110, 0, Vector3(0.0, 0.0, -10.0)],
 			[120, 0, Vector3(0.0, 0.0, -8.0)],
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier; all peers are up-ice of it
@@ -294,7 +318,7 @@ func test_assign_trans_od_gap_falls_back_to_deepest_when_none_goal_side() -> voi
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.CONTAIN,
-			"no goal-side peer → deepest (nearest our net) recovers as the gapper")
+			"peer nearest our net recovers as the last man back")
 	assert_eq(assignments[110], AIRoleSlots.Slot.MARK)
 	assert_eq(assignments[120], AIRoleSlots.Slot.MARK)
 
