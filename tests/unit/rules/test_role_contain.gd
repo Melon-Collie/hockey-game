@@ -144,14 +144,16 @@ func test_never_retreats_behind_goal_line() -> void:
 			"never projects behind our goal line; got z=%f" % d.target_position.z)
 
 
-func test_stands_up_at_the_blue_line_as_the_carrier_arrives() -> void:
-	# Carrier 3 m outside our blue line, driving in: the raw distance-fraction
-	# gap (~6 m) would put CONTAIN six metres BEHIND the line — a conceded
-	# entry. The line-stand cap plants it one stride inside the line instead,
-	# so the carrier meets a set defender at the entry moment.
+func test_stands_up_at_the_blue_line_with_support_behind() -> void:
+	# Carrier 3 m outside our blue line, driving in, with a teammate home BEHIND
+	# CONTAIN (deeper, near our net): the raw distance-fraction gap (~6 m) would
+	# put CONTAIN six metres BEHIND the line — a conceded entry. Backed by the
+	# safety layer, the line-stand cap plants it one stride inside the line
+	# instead, so the carrier meets a set defender at the entry moment.
 	var carrier := Vector3(0, 0, GameRules.BLUE_LINE_Z - 3.0)   # z ≈ 4.29, outside our +Z zone
 	var ctx := _make_ctx(Vector3(0, 0, 12), [
 			[1, TEAM_ID, Vector3(0, 0, 12)],
+			[2, TEAM_ID, Vector3(0, 0, 20)],   # safety home behind CONTAIN
 			[200, 1, carrier],
 	], 200)
 	var d: RoleDecision = AIRoleContain.decide(ctx)
@@ -159,6 +161,30 @@ func test_stands_up_at_the_blue_line_as_the_carrier_arrives() -> void:
 			GameRules.BLUE_LINE_Z + AIRoleContain.LINE_STAND_INSIDE_M, 0.3,
 			"CONTAIN plants a stride inside the blue line for the entry;"
 			+ " got z=%f" % d.target_position.z)
+
+
+func test_last_man_contains_instead_of_standing_up() -> void:
+	# Same entry, but CONTAIN is the genuine LAST man back — no teammate deeper
+	# than it. Stepping up to the line trades a denied entry for a possible
+	# breakaway, so CONTAIN holds the deeper contain gap and skates the rush in
+	# rather than challenging at the line. Its stand sits meaningfully deeper
+	# (larger +Z) than the with-support line plant.
+	var carrier := Vector3(0, 0, GameRules.BLUE_LINE_Z - 3.0)   # z ≈ 4.29
+	var supported := _make_ctx(Vector3(0, 0, 12), [
+			[1, TEAM_ID, Vector3(0, 0, 12)],
+			[2, TEAM_ID, Vector3(0, 0, 20)],   # safety home behind → stand up
+			[200, 1, carrier],
+	], 200)
+	var last_man := _make_ctx(Vector3(0, 0, 12), [
+			[1, TEAM_ID, Vector3(0, 0, 12)],
+			[2, TEAM_ID, Vector3(0, 0, -10)],  # partner caught up-ice → last man
+			[200, 1, carrier],
+	], 200)
+	var supported_z: float = AIRoleContain.decide(supported).target_position.z
+	var last_man_z: float = AIRoleContain.decide(last_man).target_position.z
+	assert_gt(last_man_z, supported_z + 1.0,
+			"the last man contains deeper instead of stepping up to the line;"
+			+ " last_man z=%f supported z=%f" % [last_man_z, supported_z])
 
 
 func test_gap_cap_releases_once_the_zone_is_gained() -> void:
@@ -298,6 +324,39 @@ func test_two_on_one_lane_yields_when_receiver_is_covered() -> void:
 	assert_lt(absf(d.target_position.x), 1.0,
 			"a covered partner puts CONTAIN back on the carrier line;"
 			+ " got %s" % d.target_position)
+
+
+func test_low_danger_receiver_does_not_pull_contain_off_the_shooter() -> void:
+	# Same rush shape as the 2-on-1, but the uncovered partner is jammed wide on
+	# a near-goal-line sharp angle — an open lane, but NO real finish if fed
+	# (his score_shoot is below LANE_PLAY_DANGER_BAR). CONTAIN must stay on the
+	# carrier (the immediate shooter) instead of sliding off to shade a harmless
+	# feed — the "only play the pass in a genuine 2v1" discipline. The one-timer
+	# pass model would otherwise over-value even this feed (traversing goalie).
+	var partner := Vector3(13, 0, 20)   # wide + deep = brutal shooting angle
+	# Sanity-check the premise: this receiver really is below the danger bar.
+	var recv_danger: float = AIActionScoring.score_shoot(
+			partner, Vector3(0, 0, OUR_NET_Z), Vector3(0, 0, 24.6),
+			GameRules.NET_HALF_WIDTH, [] as Array[Vector3])
+	assert_lt(recv_danger, AIRoleContain.LANE_PLAY_DANGER_BAR,
+			"premise: the wide sharp-angle partner is not an immediate finish"
+			+ " threat; got danger=%f" % recv_danger)
+	var skaters: Array = [
+			[1, TEAM_ID, Vector3(0, 0, 22)],
+			[2, TEAM_ID, Vector3(0, 0, -12)],   # markers caught up-ice
+			[3, TEAM_ID, Vector3(4, 0, -15)],
+			[200, 1, Vector3(0, 0, 14)],        # opp carrier, in our zone
+			[210, 1, partner],
+	]
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 22), skaters, 200)
+	var goalie := GoalieNetworkState.new()
+	goalie.position_x = 0.0
+	goalie.position_z = 24.6
+	ctx.snapshot.goalie_states[TEAM_ID] = goalie
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	assert_lt(absf(d.target_position.x), 1.0,
+			"a non-threat receiver leaves CONTAIN on the carrier line; got %s"
+			% d.target_position)
 
 
 func test_two_on_one_gate_keeps_lower_tiers_on_the_carrier_line() -> void:

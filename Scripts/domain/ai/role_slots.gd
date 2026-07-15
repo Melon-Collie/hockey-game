@@ -20,10 +20,10 @@ class_name AIRoleSlots
 #
 # TRANS_OD uses {CONTAIN, MARK×2}: defending a rush, CONTAIN plays
 # gap control on the carrier (stay goal-side, hold a controlled gap,
-# don't lunge) and goes to the peer best placed to step up — the one
-# CLOSEST to the carrier that's already goal-side (deepest peer as a
-# caught-up-ice fallback). The other two MARK home to pick up the
-# carrier's receivers (a distinct man each, same threat partition). This
+# don't lunge) and goes to the LAST MAN BACK — the peer soonest to our
+# OWN NET (momentum-aware), i.e. the deepest line of defense. The other
+# two MARK home to pick up the carrier's receivers (a distinct man each,
+# same threat partition). This
 # is the 3v3 "one contains, two mark through" structure: exactly ONE
 # peer engages the carrier. Replaces the old PRESSURE+BACKCHECK+CONTAIN
 # triad, where TWO peers engaged the carrier forward (overcommit / bad
@@ -146,16 +146,16 @@ static func slot_anchor(slot: Slot, carrier_pos: Vector3) -> Vector3:
 #   DZONE     PRESSURE = soonest to puck;  MARK = remaining two (a man each)
 #   OZONE     CARRIER fixed;  FINISHER = soonest to opp net;  SUPPORT = remaining
 #   TRANS_DO  CARRIER fixed;  OUTLET = soonest to opp net;  SUPPORT = remaining
-#   TRANS_OD  CONTAIN = soonest-to-carrier goal-side peer (deepest fallback);
+#   TRANS_OD  CONTAIN = last man back (peer soonest to OUR net, momentum-aware);
 #             MARK = the remaining two (sprint home, cover a man each)
 #   NEUTRAL   CHASE = soonest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
 # TRANS_OD encodes the 3v3 "one contains, two mark through"
-# read: CONTAIN goes to the peer best placed to gap the carrier — the
-# soonest-arriving one that's goal-side (between carrier and our net) —
-# and the other two MARK home to pick up the carrier's receivers (a
-# distinct man each, via TeamBrain's threat partition). Exactly one peer
-# engages the carrier — no double-team.
+# read: CONTAIN goes to the last man back — the peer soonest to our own
+# net (momentum-aware), the deepest line of defense — and the other two
+# MARK home to pick up the carrier's receivers (a distinct man each, via
+# TeamBrain's threat partition). Exactly one peer engages the carrier —
+# no double-team.
 #
 # Hysteresis: each soonest-to-X query adds HYSTERESIS_PENALTY_S to the
 # effective arrival time for peers who didn't hold the slot last tick,
@@ -212,16 +212,17 @@ static func assign(
 
 		AIPossessionState.State.TRANS_OD:
 			# Defending a rush: CONTAIN gap-controls the carrier — stay
-			# goal-side, hold a controlled gap, never lunge. It goes to the peer
-			# best placed to step up: the SOONEST-ARRIVING at the carrier that's
-			# already goal-side (between the carrier and our net), with a
-			# fallback to the deepest peer when everyone's caught up-ice (they
-			# recover into the gap fastest). The other two MARK: they sprint
-			# home and pick up the carrier's receivers (a distinct man each, via
-			# TeamBrain's threat partition). Replaces the old
-			# PRESSURE+BACKCHECK+CONTAIN triad, where TWO peers engaged the
-			# carrier forward (overcommit / bad angle / breakaways) and the
-			# backchecker raced to an empty slot point instead of a man.
+			# goal-side, hold a controlled gap, never lunge. It goes to the
+			# last man back: the peer soonest to our OWN net (momentum-aware ETA
+			# at its real Speed cap), i.e. the deepest line of defense already in
+			# front of the rush. The other two MARK: they sprint home and pick up
+			# the carrier's receivers (a distinct man each, via TeamBrain's threat
+			# partition). Electing by race-home (not race-to-carrier) keeps the man
+			# genuinely in front of the rush ON the rush, instead of handing CONTAIN
+			# to a shallower peer nearer the carrier and yanking the true last man
+			# up-ice onto a receiver. Replaces the old PRESSURE+BACKCHECK+CONTAIN
+			# triad, where TWO peers engaged the carrier forward (overcommit / bad
+			# angle / breakaways) and the backchecker raced to an empty slot point.
 			_assign_gap_then_mark(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
 					puck_pos, our_net, caps_by_peer)
@@ -392,47 +393,30 @@ static func _assign_gap_then_mark(
 			result[pid] = Slot.MARK
 
 
-# Picks the gap-control defender for TRANS_OD: the goal-side peer (between the
-# carrier and our net) that would ARRIVE at the carrier soonest (momentum-aware
-# ETA at its real Speed cap), so the bot already stepping into the carrier's
-# path takes the gap rather than a nearer body coasting the wrong way.
-# Hysteresis keeps a sticky gapper. When NO peer is goal-side (the whole team
-# caught up-ice on a turnover), falls back to the peer soonest home (to our
-# net) — they recover into the gap fastest while the others chase.
+# Picks the gap-control defender for TRANS_OD: the LAST MAN BACK — the peer that
+# would ARRIVE at OUR NET soonest (momentum-aware ETA at its real Speed cap),
+# with hysteresis. This is the "who's the last line of defense?" read, not a
+# race to the carrier: the deepest peer (already goal-side, between the rush and
+# our cage) recovers into the gap fastest and stays home to contain, while the
+# peers further up-ice fall to MARK and pick up the carrier's receivers.
+#
+# The old metric — soonest to arrive at the CARRIER'S body among goal-side peers
+# — was a chase read that mis-elected on a rush: a shallower peer nearer the
+# carrier beat the truly-deepest peer on ETA-to-carrier, so CONTAIN went to
+# someone who could never actually seal the net and the real last man back got
+# yanked up-ice onto a receiver by the threat partition (the "last man leaves,
+# nobody picks up the carrier" failure). Racing home instead keeps the man who's
+# genuinely in front of the rush on the rush, and subsumes the old
+# caught-up-ice fallback for free (when everyone's beaten up the ice, the peer
+# nearest home still wins and recovers into the gap).
 static func _pick_gap_defender(
 		snapshot: WorldSnapshot,
 		teammates: Array,
 		fixed_peers: Dictionary,
 		prev_assignments: Dictionary,
-		carrier_pos: Vector3,
+		_carrier_pos: Vector3,
 		our_net: Vector3,
 		caps_by_peer: Dictionary) -> int:
-	var to_net_x: float = our_net.x - carrier_pos.x
-	var to_net_z: float = our_net.z - carrier_pos.z
-	var best_pid: int = -1
-	var best_score: float = INF
-	for pid: int in teammates:
-		if fixed_peers.has(pid):
-			continue
-		var s: SkaterNetworkState = snapshot.skater_states[pid]
-		var rel_x: float = s.position.x - carrier_pos.x
-		var rel_z: float = s.position.z - carrier_pos.z
-		# Goal-side: positive projection onto the carrier→our-net direction.
-		if rel_x * to_net_x + rel_z * to_net_z <= 0.0:
-			continue
-		var caps: AISkaterCaps = caps_by_peer.get(pid)
-		var speed: float = caps.max_speed if caps != null \
-				else AIActionScoring.SKATER_REF_SPEED_M_S
-		var t: float = AIActionScoring.time_to_arrive(
-				s.position, carrier_pos, s.velocity, speed)
-		if _hysteresis_class(prev_assignments.get(pid, Slot.NONE)) != _hysteresis_class(Slot.CONTAIN):
-			t += HYSTERESIS_PENALTY_S
-		if t < best_score or (t == best_score and (best_pid == -1 or pid < best_pid)):
-			best_score = t
-			best_pid = pid
-	if best_pid != -1:
-		return best_pid
-	# Caught: nobody goal-side. The peer soonest home recovers to the gap fastest.
 	return _pick_soonest_with_hysteresis(
 			snapshot, teammates, fixed_peers, prev_assignments, our_net,
 			Slot.CONTAIN, caps_by_peer)

@@ -253,6 +253,32 @@ func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 			"…and holds the top of the zone (high post); got z=%f" % d.target_position.z)
 
 
+func test_deep_trailer_tracks_the_rush_past_a_beaten_forechecker() -> void:
+	# Transition D→O: our carrier has broken out to the NZ and is rushing, but a
+	# beaten forechecker sits deep in OUR zone (near our net → tiny time-home).
+	# The old saturating exposure zeroed every up-ice candidate, stranding the
+	# deep trailer back in the D-zone ("the furthest player never joins the
+	# transition"). Capped exposure keeps a floor of pass value on the up-ice
+	# option, so the trailer follows the rush up behind the carrier (staying
+	# goal-side of it) instead of sitting deep.
+	var carrier_pos := Vector3(0, 0, 0)        # rushed out to the NZ
+	var self_pos := Vector3(0, 0, 20)          # trailer still buried deep
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],              # us (SUPPORT), deep
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],         # carrier at NZ
+		[200, 1, Vector3(0, 0, OUR_NET_Z - 4), Vector3.ZERO],  # beaten forechecker, deep in our zone
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	assert_lt(d.target_position.z, self_pos.z - 8.0,
+			"the deep trailer advances up toward the rush instead of stranding"
+			+ " deep; got z=%f (self z=%f)" % [d.target_position.z, self_pos.z])
+	# Still the safety valve — goal-side of (not ahead of) the carrier.
+	assert_gte(ctx.own_goal_dir * d.target_position.z,
+			ctx.own_goal_dir * carrier_pos.z - AIRoleSupport.GOAL_SIDE_TOLERANCE_M - 0.01,
+			"…while staying goal-side of the carrier; got z=%f" % d.target_position.z)
+
+
 func test_transition_keeps_the_carrier_orbit_trail() -> void:
 	# Carrier still in the neutral zone (TRANS_DO): the high post would be
 	# ahead of the play, so SUPPORT keeps the old goal-side trail orbit.

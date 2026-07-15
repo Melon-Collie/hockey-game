@@ -3,7 +3,8 @@ class_name AIRoleContain
 # CONTAIN role behavior — TRANS_OD only. The last man back: gap control on
 # the puck carrier as a rush develops toward our net.
 #
-# CONTAIN is assigned to the DEEPEST defender (closest to our net). Its one job
+# CONTAIN is assigned to the LAST MAN BACK — the peer soonest to our own net
+# (momentum-aware), the deepest line of defense. Its one job
 # is to stay between the carrier and our net at a CONTROLLED GAP — close enough
 # to challenge, far enough not to get beaten wide — and let the rush come to it,
 # rather than lunging up-ice at the carrier (the old "engage forward" behavior,
@@ -84,6 +85,25 @@ const RUSH_LANE_FAN_FRACTIONS: Array[float] = [0.25, 0.5, 0.75, 1.0]
 # Same magnitude rationale as AIRoleHelpers.TARGET_SWITCH_MARGIN.
 const LINE_HOLD_MARGIN: float = 0.04
 
+# Finish-danger floor a receiver must clear before CONTAIN will leave the
+# carrier (the immediate shooter) to shade that receiver's feed lane. The lane
+# fan scores each feed as a one-timer with a traversing, unsettled goalie
+# (carrier_live_option), which prices EVERY cross-ice feed high — so without a
+# gate an ordinary trailing winger reads as a lethal one-timer and CONTAIN
+# abandons the shooter for a harmless pass lane. The bar is the receiver's
+# finish-if-fed (score_shoot from his spot with the goalie where it currently
+# is, no field defenders) — a real measurement, an ~xG on a direct look — so
+# CONTAIN only plays the pass when the receiver is a genuine immediate 2v1
+# threat, not merely a body in a lane.
+#
+# Calibrated (score_shoot, goalie challenged out on the carrier): a canonical
+# 2-on-1 backdoor partner near the net reads ~0.27 (PLAY it), while a wide
+# sharp-angle or distant trailing receiver reads ~0.15 (HOLD the carrier). The
+# bar sits between. This is deliberately LOWER than the net-front house pin
+# (AIThreatAssignment.NET_FRONT_DANGER_BAR = 0.45): pinning a man to the house
+# demands a lethal tap-in; shading a rush pass lane only demands a real chance.
+const LANE_PLAY_DANGER_BAR: float = 0.20
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -112,19 +132,27 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		return d
 
 	var gap: float = clampf(dist * GAP_FRACTION, GAP_MIN_M, GAP_MAX_M)
-	# STAND UP AT THE BLUE LINE. The raw distance-fraction gap concedes the
-	# entry by construction: at the moment the carrier reaches our blue line the
-	# gap is ~maxed, so CONTAIN is six metres behind the line retreating at the
-	# carrier's pace and the zone is gained untouched every rush. The line is
-	# where the defence makes its stand — entry-with-possession is the thing to
-	# deny — so while the carrier is still OUTSIDE our zone, the gap is capped
-	# by the ice remaining to the line (+ the plant depth): the gap-surf lands
-	# CONTAIN set one stride inside the line exactly as the carrier arrives.
-	# Once the zone is gained the cap vanishes and the normal protect-the-net
-	# ramp resumes. The MARK pair is home behind, so losing the stand wide is
-	# the acceptable outcome — the free entry was not.
+	# STAND UP AT THE BLUE LINE — but only with a safety layer home behind us.
+	# The raw distance-fraction gap concedes the entry by construction: at the
+	# moment the carrier reaches our blue line the gap is ~maxed, so CONTAIN is
+	# six metres behind the line retreating at the carrier's pace and the zone is
+	# gained untouched every rush. The line is where the defence makes its stand —
+	# entry-with-possession is the thing to deny — so while the carrier is still
+	# OUTSIDE our zone, the gap is capped by the ice remaining to the line (+ the
+	# plant depth): the gap-surf lands CONTAIN set one stride inside the line
+	# exactly as the carrier arrives. Once the zone is gained the cap vanishes and
+	# the normal protect-the-net ramp resumes.
+	#
+	# The stand is only safe when there IS a safety layer home behind us: its own
+	# rationale is "losing the stand wide is acceptable because a teammate is home."
+	# When CONTAIN is genuinely the LAST man back (nobody deeper), stepping up to
+	# the line trades a denied entry for a possible breakaway — a bad trade. So
+	# gate the stand on defensive support behind; as the true last man, skip it and
+	# hold the deeper contain gap instead (contain, don't challenge). The MARK pair
+	# recovering from up-ice flips this on the instant one gets home behind the
+	# stand, so the aggressive line stand returns exactly when it's backed.
 	var ice_to_line: float = GameRules.BLUE_LINE_Z - ctx.own_goal_dir * carrier_pos.z
-	if ice_to_line > 0.0:
+	if ice_to_line > 0.0 and _has_support_behind(ctx):
 		gap = maxf(minf(gap, ice_to_line + LINE_STAND_INSIDE_M), GAP_MIN_M)
 	# Never project past the net — a gap wider than the carrier's own distance
 	# to the net would place the target behind the goal line.
@@ -181,6 +209,26 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
+# True when a teammate is home BEHIND CONTAIN — deeper toward our net (larger
+# own_goal_dir * z) than we are — i.e. there's a safety layer that can pick up
+# the carrier if our blue-line stand gets beaten wide. When false, CONTAIN is
+# the genuine last man back and must contain rather than challenge the entry.
+# Depth-axis read (not a race): the stand's risk is specifically "beaten wide,
+# nobody home," which is a positional question. Excludes self.
+static func _has_support_behind(ctx: RoleContext) -> bool:
+	if ctx.snapshot == null:
+		return false
+	var my_depth: float = ctx.own_goal_dir * ctx.self_pos.z
+	for pid: int in ctx.snapshot.skater_states:
+		if pid == ctx.peer_id:
+			continue
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+			continue
+		if ctx.own_goal_dir * ctx.snapshot.skater_states[pid].position.z > my_depth:
+			return true
+	return false
+
+
 # Argmax over the retreat-line point plus fan candidates toward each
 # receiver's feed lane, all at `gap` distance from the (led) carrier so the
 # gap machinery's depth discipline is preserved. Scored with the shared
@@ -218,8 +266,23 @@ static func _lane_fan_target(
 	var brake_margin_s: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S \
 			/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 
+	# Empty defender list for the receiver's finish-if-fed read (goalie only,
+	# no field defenders). One typed array reused across the receiver loop.
+	var no_defenders: Array[Vector3] = []
 	var a_net: float = atan2(dir_net.z, dir_net.x)
 	for i: int in receivers.size():
+		# Only leave the carrier for a receiver who's a genuine immediate threat:
+		# his finish-if-fed must clear the danger bar (goalie where it is now, no
+		# field defenders — an ~xG on a direct look). A
+		# trailing, low-danger receiver doesn't pull CONTAIN off the shooter, no
+		# matter how open his lane; that's the "only play the pass in a real 2v1"
+		# discipline. The on-line retreat point (scored above against ALL receivers)
+		# stays the baseline, so a conceded low-danger feed is still priced there.
+		var recv_danger: float = AIActionScoring.score_shoot(
+				receivers[i], our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH,
+				no_defenders)
+		if recv_danger < LANE_PLAY_DANGER_BAR:
+			continue
 		var lane_x: float = receivers[i].x - carrier_pos.x
 		var lane_z: float = receivers[i].z - carrier_pos.z
 		if lane_x * lane_x + lane_z * lane_z < 0.25:
