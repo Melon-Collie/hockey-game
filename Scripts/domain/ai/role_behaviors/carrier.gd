@@ -1978,8 +1978,9 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed,
 			ctx.self_max_accel)
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
-	var lane: float = AIActionScoring.path_clearance(
-			self_pos, candidate, _scratch_opponents_path)
+	var lane: float = AIActionScoring.carry_lane_clearance(
+			self_pos, candidate, local_time, _scratch_opponents, _scratch_opponent_vels,
+			ctx.self_max_speed)
 	if lane <= 0.0:
 		return -INF
 	# The candidate's shot is taken ARRIVING AT PACE, not from a dead stop —
@@ -2048,9 +2049,13 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var decay: float = AIActionScoring.delay_discount(local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
+	# apply_escape: a defender the carrier out-skates on this drive is being beaten
+	# and can't sustain the strip — so driving PAST a man reads as winnable, not as a
+	# wall (the "if I keep going I've beaten him" read).
 	var safety: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(cur_puck_pos, cand_puck_pos, local_time,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+					true))
 	# ...and the carry CONTINUATION it opens (see _carry_continuation_value —
 	# the pass option's skating twin): the two-ply read that lets a spot be
 	# worth what it enables NEXT. Skipped when the first leg already dies
@@ -2066,7 +2071,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# not the destination's. This is what keeps a doomed carry honestly negative.
 	var strip_point: Vector3 = AIActionScoring.carry_strip_point(
 			cur_puck_pos, cand_puck_pos, local_time,
-			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps, true)
 	var cost: float = AIActionScoring.turnover_cost(
 			strip_point, 1.0 - keep_prob, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -2312,14 +2317,18 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	# reach model the carrier's carry uses (carry_clearance/strip project the defenders
 	# in by their velocity + closing reach). A clear lane keeps ~1 and reaches `target`;
 	# a defender in the way drops keep and pulls the reached spot back to the strip.
+	# apply_escape: driving in past a man you out-skate is winnable, not a wall —
+	# the same read the carrier's own carry candidates use (the drive-in credit that
+	# floors the carry is exactly "the shot I skate into by beating my man").
 	var keep: float = AIActionScoring.clearance_to_safety(
 			AIActionScoring.carry_clearance(receiver_spot, target, reach_time,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+					true))
 	if keep <= 0.0:
 		return 0.0
 	var reached: Vector3 = AIActionScoring.carry_strip_point(
 			receiver_spot, target, reach_time,
-			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps, true)
 	var t: float = receiver_spot.distance_to(reached) / maxf(recv_speed, 1.0)
 	_project_opponents_to(ctx, t, _scratch_opponents_pass)
 	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
@@ -2349,6 +2358,19 @@ func _carrier_forward_clearance(ctx: RoleContext) -> float:
 # is over the pressure horizon. Shared by the carrier's own discount and the
 # pass receiver's (see _pass_ev) so both sides of a carry-vs-pass compete pay
 # the same toll for the same clogged ice.
+#
+# Same two-sample reachable-set read as carry_clearance (the carrier drives the
+# path at `speed`, defenders ride their momentum, tightest of mid/end wins) with
+# ONE addition: an ESCAPE-SPEED gate on each defender's lunge. A defender's body
+# rides its own velocity (a man the carrier out-skates falls behind on his own),
+# but its STICK only lunges with the acceleration it has left AFTER trying to
+# match the carrier's net-ward drive: a chaser near the carrier's pace is
+# committed to keeping up and can't also reach across (surplus → 0); a stationary
+# gap-controller or a man set AHEAD in the lane isn't chasing (surplus = 1, full
+# lunge) so a genuine wall is unchanged. This is the "if I keep driving I've
+# beaten him" read the plain reach model lacked — without it, the momentary
+# proximity of driving PAST a man read as a permanent wall and pushed a carrier
+# who was winning the 1-on-1 to pass out instead of finishing the beat.
 func _forward_clearance_at(ctx: RoleContext, pos: Vector3, speed: float) -> float:
 	var to_net_x: float = ctx.attacking_goal_pos.x - pos.x
 	var to_net_z: float = ctx.attacking_goal_pos.z - pos.z
@@ -2361,9 +2383,13 @@ func _forward_clearance_at(ctx: RoleContext, pos: Vector3, speed: float) -> floa
 			pos.x + to_net_x * inv * reach, 0.0,
 			pos.z + to_net_z * inv * reach)
 	var t: float = reach / maxf(speed, 1.0)
-	return AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(pos, target, t,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+	# Same time-consistent read the carry candidates use (carry_lane_clearance): a
+	# defender the carrier has beaten and is out-skating exerts no forward pressure,
+	# so the pass-first discount and the carry candidates it competes against price
+	# the same ice the same way — a carrier who's won his 1-on-1 isn't pushed to
+	# pass. A man ahead / matching pace still reads as pressure (never shed).
+	return AIActionScoring.carry_lane_clearance(pos, target, t,
+			_scratch_opponents, _scratch_opponent_vels, speed)
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still
