@@ -158,6 +158,10 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 	puck = assigned_puck
 	is_server = assigned_is_server
 	puck.set_server_mode(is_server)
+	# Cooldown expiry timestamps share the host's local_time base (the same clock
+	# StateBufferManager stamps rewind snapshots with) so is_on_cooldown_at can be
+	# queried at a claimant's view-time. Injected here to keep the actor clock-agnostic.
+	puck.set_time_provider(NetworkManager.local_time)
 	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)

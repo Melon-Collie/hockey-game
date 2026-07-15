@@ -92,7 +92,13 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 	# present-time, so a player who became ghost in the last RTT/2 isn't
 	# wrongly denied a claim that was legal at send time, and a player who
 	# just cleared ghost isn't wrongly granted one that was illegal then.
-	if puck.is_on_cooldown(record.skater):
+	#
+	# Cooldown is judged at the claimant's SELF-view time for the same reason:
+	# present-time is up to one-way latency later, so a reattach cooldown that
+	# expired in that window would grant a claim the claimant couldn't have made
+	# at send time. self_view_time is the claimant's own body timeline (matching
+	# the blade rewind below); the expiry store shares its local_time base.
+	if puck.is_on_cooldown_at(record.skater, LagCompRewind.self_view_time(host_timestamp)):
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
