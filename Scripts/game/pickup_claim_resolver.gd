@@ -131,7 +131,15 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 		return
 	var blade_curr: Vector3 = skater_snap.blade_contact_world
 	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world
+	# Sanity telemetry (host-only, no-op off the host): this claim reached the
+	# rewound geometry test — the client's view said in-range and every
+	# eligibility gate passed. A check_pickup fail below means the host's rewind
+	# put the blade/puck out of overlap: the lag-comp "reached for it, didn't get
+	# it" signal. Tracked as network_sessions totals so a high miss FRACTION on
+	# the host row flags a rewind that isn't reproducing what the client saw.
+	NetworkTelemetry.record_pickup_claim()
 	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
+		NetworkTelemetry.record_pickup_claim_miss()
 		return
 	# Catch vs deflect — run the SAME decision the present-time path uses
 	# (PuckController._check_interactions → PuckReceptionRules.should_receive),
@@ -152,7 +160,10 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 			puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
 		# Deflect verdict: redirect the puck instead of granting possession. Not a
 		# contested action (no carrier change), so it fires immediately rather than
-		# arming the contest window.
+		# arming the contest window. Counts as a claim outcome (geometry hit, but the
+		# rewound speed/angle said tip-not-catch) so the host row separates "missed
+		# the puck" from "reached it but it wasn't catchable".
+		NetworkTelemetry.record_pickup_claim_deflect()
 		pc.apply_lag_comp_deflect(record.skater)
 		return
 	if _pending_peer_id != -1:

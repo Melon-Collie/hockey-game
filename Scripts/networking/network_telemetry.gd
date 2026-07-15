@@ -69,6 +69,17 @@ var _ooo_drop_count: int = 0
 var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
+# Host-side lag-comp pickup-claim outcomes (the host processes every client's
+# claim, so its row summarizes rewind health for the whole lobby). A claim that
+# reaches the rewound geometry test counts in _pickup_claim_count; if the rewound
+# blade/puck don't overlap it's a _pickup_claim_miss (client's view said in-range
+# but the host's rewind disagreed — the "reached for it, didn't get it" symptom),
+# and a geometry-hit-but-not-catchable verdict is a _pickup_claim_deflect. A high
+# miss FRACTION means the rewind isn't reproducing the client's view; near-zero
+# means the lag-comp pickup path is working. Folded as session totals (TOTAL_KEYS).
+var _pickup_claim_count: int = 0
+var _pickup_claim_miss_count: int = 0
+var _pickup_claim_deflect_count: int = 0
 # Bandwidth: bytes seen this window. Counted at the NetworkManager boundary so
 # the value reflects payload bytes only (excludes the Steam transport + UDP/IP
 # framing, and SDR relay overhead when not directly connected — none of which is
@@ -340,6 +351,19 @@ static func record_input_lead(lead_sec: float) -> void:
 static func record_input_starvation() -> void:
 	if instance: instance._starvation_count += 1
 
+# Host-side lag-comp pickup-claim outcomes (see the window-counter comment).
+# record_pickup_claim() is the denominator — a claim that reached the rewound
+# geometry test; miss / deflect are the two non-grant verdicts. Host-only in
+# practice (clients never run the claim resolver); no-op outside a session.
+static func record_pickup_claim() -> void:
+	if instance: instance._pickup_claim_count += 1
+
+static func record_pickup_claim_miss() -> void:
+	if instance: instance._pickup_claim_miss_count += 1
+
+static func record_pickup_claim_deflect() -> void:
+	if instance: instance._pickup_claim_deflect_count += 1
+
 # Wall-clock microseconds between consecutive host physics ticks. Steady state
 # ≈ 4170us; a stall produces one large sample followed by near-zero catch-up
 # samples. Host-only.
@@ -475,6 +499,9 @@ func tick(delta: float) -> void:
 	_input_lead_sum = 0.0
 	_input_lead_n = 0
 	_starvation_count = 0
+	_pickup_claim_count = 0
+	_pickup_claim_miss_count = 0
+	_pickup_claim_deflect_count = 0
 	_window_timer = 0.0
 
 # Fold this window's published metrics into the session summary. Keys here are
@@ -524,6 +551,12 @@ func _fold_session_sample() -> void:
 		# that smears 3 hard snaps in a 10-minute game to ~0.
 		"puck_hard_snaps": float(_puck_traj_hard_snap_count),
 		"blade_jumps": float(_blade_jump_count),
+		# Host-side lag-comp pickup-claim outcomes (also TOTAL_KEYS session sums).
+		# On the host row, misses/claims ≈ rewind health (near-zero = working);
+		# deflects are the reached-but-not-catchable verdicts. Clients fold 0s.
+		"pickup_claims": float(_pickup_claim_count),
+		"pickup_claim_misses": float(_pickup_claim_miss_count),
+		"pickup_claim_deflects": float(_pickup_claim_deflect_count),
 		# Interp buffer depths (MIN_KEYS — running dry is the bad direction).
 		# Host rows fold structural 0s; `role` disambiguates at query time.
 		"buffer_depth_skater": float(buffer_depth_skater),
