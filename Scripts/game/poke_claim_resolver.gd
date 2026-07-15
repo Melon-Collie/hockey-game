@@ -53,8 +53,12 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
-	if record == null or record.skater == null or record.skater.is_ghost:
+	if record == null or record.skater == null:
 		return
+	# is_ghost is judged from the rewound snapshot below (skater_snap), not
+	# present-time — matching PickupClaimResolver: a checker legal at their
+	# view-time but ghosted (offside) in the last RTT/2 isn't wrongly denied, and
+	# one who just tagged up isn't wrongly granted a poke that was illegal then.
 	# Defense in depth — client-side gate already excludes these, but a
 	# malformed RPC shouldn't be able to bypass the rules.
 	if record.skater == puck.carrier:
@@ -87,6 +91,8 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	var skater_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
 	var skater_prev_snap: SkaterNetworkState = blade_prev_snap.get_skater_state(peer_id)
 	if skater_snap == null or skater_prev_snap == null:
+		return
+	if skater_snap.is_ghost:
 		return
 	var blade_curr: Vector3 = skater_snap.blade_contact_world
 	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world

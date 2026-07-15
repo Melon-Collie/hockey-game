@@ -1605,9 +1605,13 @@ func notify_puck_stolen(event_seq: int, was_stick_lift: bool) -> void:
 		[event_seq, was_stick_lift], true)
 
 func send_one_timer_release(direction: Vector3, power: float, origin: Vector3) -> void:
+	# Adapted interp delay (get_interpolation_delay), the value that actually
+	# positioned the rendered puck — the host rewinds to it (remote_view_time) for
+	# the "did I connect with the puck I saw" range gate. Matches the pickup / poke /
+	# stick-lift / hit claim sends; target would lead it mid-jitter.
 	release_puck_one_timer.rpc_id(1, direction, power,
 			estimated_host_time(), get_latest_rtt_ms(),
-			get_target_interpolation_delay() * 1000.0, origin)
+			get_interpolation_delay() * 1000.0, origin)
 
 @rpc("any_peer", "reliable")
 func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
