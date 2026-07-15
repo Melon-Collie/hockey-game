@@ -704,6 +704,129 @@ func test_defensive_watching_still_faces_the_puck() -> void:
 	assert_gt(dir.z, -0.1, "no net bias while defending")
 
 
+func test_aim_flip_is_debounced_at_the_near_anchor_boundary() -> void:
+	# A bot orbiting right at FACE_THREAT_NEAR_ANCHOR_M used to swing the aim
+	# between the anchor (far) and the puck/threat (near) every dispatch. The
+	# hysteresis band latches the mode: crossing the raw threshold is not enough,
+	# the distance must clear a full band past it before the direction flips.
+	# self at origin, anchor down -z, a loose puck (threat) out +x — anchor-dir
+	# and threat-dir are ~90° apart, so a flip is unambiguous in the output.
+	var self_pos := Vector3.ZERO
+	var s := _loose_puck_snap(Vector3(10, 0, 0))   # threat_dir ≈ +x
+	var near_m: float = Agent.FACE_THREAT_NEAR_ANCHOR_M   # 6.0
+	var band: float = Agent.FACE_NEAR_ANCHOR_HYSTERESIS_M # 0.75
+
+	# Start clearly FAR → aims the anchor (−z).
+	var far_anchor := Vector3(0, 0, -(near_m + band + 2.0))
+	assert_lt(sm._compute_desired_aim_dir(self_pos, far_anchor, s).z, -0.9,
+			"clearly far: aims the anchor")
+	# Ease inside the RAW threshold but still within the band — latch holds far.
+	var boundary_anchor := Vector3(0, 0, -(near_m - 0.25))
+	assert_lt(sm._compute_desired_aim_dir(self_pos, boundary_anchor, s).z, -0.9,
+			"just inside the threshold but within the band: still aims the anchor")
+	# Clear the band on the near side → flips to the threat (+x).
+	var near_anchor := Vector3(0, 0, -(near_m - band - 1.0))
+	assert_gt(sm._compute_desired_aim_dir(self_pos, near_anchor, s).x, 0.9,
+			"past the band: flips to the threat")
+	# Drift back inside the raw threshold from below — latch holds near.
+	assert_gt(sm._compute_desired_aim_dir(self_pos, boundary_anchor, s).x, 0.9,
+			"back within the band from the near side: still aims the threat")
+	# Clear the band on the far side → flips back to the anchor.
+	assert_lt(sm._compute_desired_aim_dir(self_pos, far_anchor, s).z, -0.9,
+			"past the far edge of the band: flips back to the anchor")
+
+
+func test_live_off_puck_aim_tracks_the_carrier_puck_during_a_jab() -> void:
+	# On skipped throttle ticks an ACTIVE poke-jab re-derives its aim from the
+	# CURRENT carrier puck position (the counters advance on dispatch, but the
+	# stab tracks live so the swept blade actually sweeps THROUGH the moving
+	# puck). The helper returns the live puck point while _off_puck_jab_live.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = Vector3(1.4, 0, 0)
+	s.puck_state.carrier_peer_id = OPP_ID
+	_add_skater(s, OPP_ID, Vector3(1.6, 0, 0))
+	sm._off_puck_jab_live = true
+	var aim: Vector3 = sm._off_puck_live_aim(s, self_pos)
+	assert_almost_eq(aim.x, 1.4, 0.001, "jab aim tracks the live carrier puck")
+	# Puck slides; the live re-derive follows it (a staircased stab would lag).
+	s.puck_state.position = Vector3(1.1, 0, 0.5)
+	aim = sm._off_puck_live_aim(s, self_pos)
+	assert_almost_eq(aim.x, 1.1, 0.001, "…and keeps following as it moves")
+	assert_almost_eq(aim.z, 0.5, 0.001, "…on both axes")
+	# Carrier releases (loose puck) → no carrier to jab → INF, fall to cached.
+	s.puck_state.carrier_peer_id = -1
+	assert_false(sm._off_puck_live_aim(s, self_pos).is_finite(),
+			"no opposing carrier → no live jab target")
+
+
+func test_man_to_beat_is_sticky_across_the_contest_boundary() -> void:
+	# The square-to-net facing hinges on _has_man_to_beat. A bare radius let a
+	# defender riding the boundary flip the whole carry-aim forward direction; the
+	# hysteresis band latches it. Team 0 attacks −z, so a goal-side defender is
+	# down −z from the carrier.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	_add_skater(s, SELF_ID, self_pos)
+	# Just OUTSIDE the base contest radius (3.5 m): no man to beat.
+	_add_skater(s, OPP_ID, Vector3(0, 0, -3.6))
+	assert_false(sm._has_man_to_beat(s, self_pos), "outside the base radius: no man")
+	# Inside the base radius: engages.
+	s.skater_states[OPP_ID].position = Vector3(0, 0, -3.4)
+	assert_true(sm._has_man_to_beat(s, self_pos), "inside the base radius: man to beat")
+	# Back outside the base radius but within the widened sustain band (3.5 +
+	# 0.75): the prior answer STICKS instead of flipping.
+	s.skater_states[OPP_ID].position = Vector3(0, 0, -3.6)
+	assert_true(sm._has_man_to_beat(s, self_pos),
+			"riding the boundary holds the prior answer (sticky)")
+	# Clear the widened band (> 4.25 m): the man is finally beaten.
+	s.skater_states[OPP_ID].position = Vector3(0, 0, -4.3)
+	assert_false(sm._has_man_to_beat(s, self_pos), "past the widened band: man beaten")
+
+
+func test_threat_facing_fallback_is_debounced() -> void:
+	# _face_threat_or_current holds facing when the puck is inside a geometry
+	# floor (too close to aim by). A bare threshold flipped the ready-stance aim
+	# between the puck and frozen facing per tick; the band latches it.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	_add_skater(s, SELF_ID, self_pos)
+	s.skater_states[SELF_ID].facing = Vector2(1, 0)   # facing +x
+	# Puck clearly beyond the floor (+z) → aims at the puck.
+	s.puck_state.position = Vector3(0, 0, 1.0)
+	assert_gt(sm._face_threat_or_current(s, self_pos).z, 0.9, "far puck: aims at it")
+	# Eases inside the raw floor (0.3) but within the band → still aims the puck.
+	s.puck_state.position = Vector3(0, 0, 0.25)
+	assert_gt(sm._face_threat_or_current(s, self_pos).z, 0.9,
+			"inside the floor but within the band: still aims the puck")
+	# Clear the band on the near side (< 0.15) → holds facing (+x).
+	s.puck_state.position = Vector3(0, 0, 0.1)
+	assert_gt(sm._face_threat_or_current(s, self_pos).x, 0.9, "past the near band: holds facing")
+	# Drift back inside the floor from below → latched close, still holds facing.
+	s.puck_state.position = Vector3(0, 0, 0.25)
+	assert_gt(sm._face_threat_or_current(s, self_pos).x, 0.9,
+			"back within the band from close: still holds facing")
+	# Clear the band on the far side (> 0.45) → re-aims the puck.
+	s.puck_state.position = Vector3(0, 0, 0.5)
+	assert_gt(sm._face_threat_or_current(s, self_pos).z, 0.9, "past the far band: re-aims the puck")
+
+
+func test_carry_entry_resets_the_smoothed_shield() -> void:
+	# A fresh pickup must not inherit a phantom shield (or a stale man-to-beat
+	# latch) from a previous carry — _set_state zeroes them on CARRY entry so the
+	# shield eases in from nothing.
+	sm._state = Agent.State.OFF_PUCK
+	sm._carry_protect_gain_smooth = 0.8
+	sm._carry_protect_offset_smooth = Vector3(1, 0, 0)
+	sm._carry_has_man = true
+	sm._set_state(Agent.State.CARRY)
+	assert_eq(sm._carry_protect_gain_smooth, 0.0, "shield gain resets on carry entry")
+	assert_eq(sm._carry_protect_offset_smooth, Vector3.ZERO, "shield offset resets on carry entry")
+	assert_false(sm._carry_has_man, "man-to-beat latch resets on carry entry")
+
+
 func test_one_timer_feed_time_reads_the_remaining_flight() -> void:
 	# Puck 8 m up-line at 16 m/s → my perpendicular foot in 0.5 s: the aim
 	# reads the goalie at feed ARRIVAL, not where he stands mid-re-square.
