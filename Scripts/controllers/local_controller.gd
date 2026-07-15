@@ -47,6 +47,13 @@ const _PREDICTION_HISTORY_CAP: int = _PhysicsConstants.PHYSICS_TICK * 2  # ~2 s,
 # a genuine desync is still caught on the next *advanced* ack. Reset wherever
 # _prediction_history is cleared (teleport / dead-puck lock).
 var _last_reconcile_ack_ts: float = 0.0
+# Set true in _physics_process on any tick that processed an input (normal play
+# or FACEOFF_PREP), cleared on ticks that didn't (early-outs, dead-puck drain).
+# The actual prediction snapshot is deferred to skater.post_move_integrated so it
+# captures the post-move position — the same sub-step the host broadcasts — which
+# removes the ~1-tick client-behind phase offset that drove the reconcile storm.
+# The flag preserves the exact per-tick gating the inline snapshot calls had.
+var _snapshot_pending: bool = false
 var _team_id: int = -1  # set at setup; needed for client-side offside prediction
 var last_reconcile_error: float = 0.0
 var _claim_cooldown: float = 0.0
@@ -94,6 +101,15 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 			if _body_check_impulses.size() > _BODY_CHECK_IMPULSE_CAP:
 				_body_check_impulses.pop_front()
 			hit_received.emit(impulse))
+	# Capture the reconcile prediction snapshot AFTER the body has integrated this
+	# tick (move_and_slide + collisions + clamp), matching the post-move sub-step
+	# the host samples for its broadcast. _snapshot_pending gates it to exactly the
+	# ticks the old inline calls fired on. Fires at Skater priority 0, after this
+	# controller's priority -1 pass has already set _current_input and the flag.
+	skater.post_move_integrated.connect(func() -> void:
+		if _snapshot_pending:
+			_snapshot_pending = false
+			_append_prediction_snapshot())
 
 # Called after setup() to provide the local player's team — needed for
 # client-side offside prediction. Separate from setup() because GDScript
@@ -151,6 +167,9 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 func _physics_process(delta: float) -> void:
 	if skater == null or puck == null or _gatherer == null:
 		return
+	# Cleared every tick; set true below only on ticks that process an input, so
+	# the deferred post-move snapshot fires iff the old inline call would have.
+	_snapshot_pending = false
 	if NetworkManager.is_replay_mode():
 		return
 	if not skater.visual_offset.is_zero_approx():
@@ -201,7 +220,9 @@ func _physics_process(delta: float) -> void:
 			# Snapshot the frozen prep frame too, so a broadcast that acks a
 			# prep-phase input after the lock lifts matches in find_at instead of
 			# falling back to the live position (a spurious post-faceoff reconcile).
-			_append_prediction_snapshot()
+			# Deferred to post-move like the live path (position is frozen here, so
+			# pre/post-move are identical, but the flag keeps one capture site).
+			_snapshot_pending = true
 		else:
 			# Dead-puck phase with sticks frozen too — drain history so reconcile
 			# can't replay stale inputs once the phase lifts.
@@ -231,7 +252,9 @@ func _physics_process(delta: float) -> void:
 	if _input_history.size() > rtt_cap:
 		_input_history.pop_front()
 	_process_input(_current_input, _current_input.delta)
-	_append_prediction_snapshot()
+	# Snapshot is deferred to skater.post_move_integrated (post move_and_slide) so
+	# it captures the same post-integration position the host broadcasts.
+	_snapshot_pending = true
 	skater.current_shot_state = _sm.get_state() as int
 	_update_one_timer_indicator()
 	_claim_cooldown = maxf(_claim_cooldown - delta, 0.0)
