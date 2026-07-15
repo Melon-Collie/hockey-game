@@ -41,6 +41,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # SkaterPoseCoordinator.apply_facing. Deterministic from sprint_active, so it
 # re-derives identically through reconcile replay (no new wire state).
 @export var sprint_turn_multiplier: float = 0.55
+# ── Hit-Button (Body-Check Commit) Tuning ─────────────────────────────────────
+# The hit button (Ctrl / input.hit_held) commits a check: it delivers the full
+# body-check transfer (see Skater.hit_passive_transfer_mult for the uncommitted
+# floor), and pays for it the way sprint does — a stamina drain on the shared pool
+# plus a wider turn radius. So a big hit is a committed read (line them up, spend
+# stamina, sacrifice agility), not a free bump. Both costs are deterministic from
+# the replicated input.hit_held, so they re-derive through reconcile replay.
+@export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
+@export var hit_turn_multiplier: float = 0.6          # turn-rate scale while committing (< 1.0 = wider turns)
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
 # stamina bite, both scaled by how hard the hit landed (the m/s transfer impulse).
@@ -722,6 +731,12 @@ var stagger_recoil_dir: Vector2 = Vector2(0.0, 1.0)
 # coordinator to apply the turn-rate penalty. Public so the pose collaborator
 # can read it without a getter.
 var sprint_active: bool = false
+# Resolved hit-commit (body-check button) state for this tick. Written in
+# _apply_movement alongside sprint_active and read by the pose coordinator for the
+# turn-rate penalty; also mirrored to skater.hit_committed so the collision
+# resolver picks full-vs-passive transfer. Deterministic from input.hit_held +
+# stamina, so it re-derives through reconcile replay with no wire state.
+var hit_active: bool = false
 
 var _game_state_has_faceoff_prep: bool = false
 var _game_state_has_period_break: bool = false
@@ -1591,6 +1606,8 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	stamina = 1.0
 	_sprint_locked = false
 	sprint_active = false
+	hit_active = false
+	skater.hit_committed = false
 	stagger_timer = 0.0
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
@@ -2190,9 +2207,18 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	var is_moving: bool = not input.brake and input.move_vector.length() > move_deadzone
 	sprint_active = not locomotion_suppressed and StaminaRules.sprint_active(
 			stamina, input.sprint_held, is_moving, _sprint_locked)
+	# Hit commit shares the sprint stamina pool and lockout but needs no movement
+	# (you can hold the check-ready stance stationary to line someone up). Resolved
+	# before the stamina update so this tick's drain reflects the commit, and
+	# mirrored to the skater so the collision resolver reads full-vs-passive
+	# transfer. Deterministic (input.hit_held + snapped stamina), so reconcile
+	# replay reproduces it.
+	hit_active = not locomotion_suppressed and StaminaRules.hit_active(
+			stamina, input.hit_held, _sprint_locked)
+	skater.hit_committed = hit_active
 	var stamina_cfg: StaminaRules.StaminaConfig = _stamina_config()
-	stamina = StaminaRules.next_stamina(stamina, sprint_active, has_puck, delta, stamina_cfg)
-	_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, sprint_active, stamina_cfg)
+	stamina = StaminaRules.next_stamina(stamina, sprint_active, has_puck, delta, stamina_cfg, hit_active)
+	_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, sprint_active, stamina_cfg, hit_active)
 	# Body-check stagger decays deterministically every tick (including during a
 	# planted charge/block and through reconcile replay), so the thrust penalty
 	# eases back on its own. Decayed before the suppression early-out so a player
@@ -2258,6 +2284,7 @@ func _stamina_config() -> StaminaRules.StaminaConfig:
 		_cached_stamina_cfg.carry_drain_multiplier = sprint_carry_drain_multiplier
 		_cached_stamina_cfg.regen_per_sec = stamina_regen_per_sec
 		_cached_stamina_cfg.unlock_fraction = sprint_unlock_fraction
+		_cached_stamina_cfg.hit_drain_per_sec = hit_stamina_drain_per_sec
 	return _cached_stamina_cfg
 
 # Body-check stagger config is flat (not attribute-scaled), so a single lazily-built

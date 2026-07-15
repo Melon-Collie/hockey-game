@@ -132,6 +132,20 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 @export var body_check_drive_ref_impulse: float = 11.0   # delivered impulse of a full plow-through hit
 @export var body_check_transfer: float = 0.45
 @export var body_check_brace_resistance: float = 0.4
+# Fraction of body_check_transfer that lands WITHOUT the hit button committed.
+# The hit button (Ctrl / input.hit_held) is the intent gate: a committed check
+# delivers the full transfer, an incidental bump only this fraction — so skating
+# into someone uncommitted jostles but rarely staggers and never knocks down.
+# Set by the controller each tick via hit_committed below (re-derived from
+# input.hit_held, so it survives reconcile with no wire cost).
+@export var hit_passive_transfer_mult: float = 0.3
+# True this tick when the attacker is committing a check (hit button held +
+# stamina available). Written by SkaterController._apply_movement from the
+# replicated input.hit_held; read in _resolve_player_collisions to pick between
+# full and passive transfer. Not itself on the wire — the aggressor is always the
+# locally-simulated body wherever the resolver reads it (host sims all, a client
+# its own), and replay re-derives it from input.hit_held.
+var hit_committed: bool = false
 
 # Machine-authority flags, injected once at spawn by GameManager._on_player_spawned
 # (collaborator pattern — the actor stays autoload-free). They gate the victim-side
@@ -681,8 +695,14 @@ func _resolve_player_collisions(vel_before: Vector3) -> void:
 		# the REPLICATED brake_intent (not is_braced, which the controller only maintains
 		# for locally-simulated skaters), so this evaluates identically on every machine.
 		var weight_ratio: float = weight / maxf(other.weight, 0.001)
+		# Hit-button intent gate: full body_check_transfer when this attacker is
+		# committing a check, only hit_passive_transfer_mult of it otherwise. This
+		# is the "without the hit button, hits shouldn't be that powerful" rule —
+		# an uncommitted bump barely jars, a committed check lands full force.
+		var atk_transfer: float = body_check_transfer \
+				* (1.0 if hit_committed else hit_passive_transfer_mult)
 		var delivered_impulse: float = BodyCheckRules.delivered_transfer_impulse(
-				approach, weight_ratio, body_check_transfer,
+				approach, weight_ratio, atk_transfer,
 				other.body_check_brace_resistance, other.brake_intent)
 		# Attacker rebound scales DOWN as that delivered impulse rises: a victim you send
 		# flying drops it toward body_check_restitution_floor so you drive THROUGH onto the
