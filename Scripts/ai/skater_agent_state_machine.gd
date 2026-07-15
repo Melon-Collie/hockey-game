@@ -1120,6 +1120,7 @@ const BOT_ONE_TIMER_ZONE_OFFSET_Z_M: float = -0.4
 # that slips through the zone without attaching. See _puck_at_slapper_zone.
 const ONE_TIMER_RELEASE_RADIUS_M: float = 0.4
 
+
 # Pre-aim target locked at the moment intent flips from CARRY to a
 # fire action. Without this, `_aim_target_for_intent` recomputes
 # `compute_open_net_aim` every tick — and when the goalie is roughly
@@ -3468,18 +3469,26 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 	input.mouse_world_pos = _step_mouse_face(clean_aim)
 
 	# The controller LOCKS the slapper direction from the mouse at the press
-	# tick, so the press waits until the aim has actually settled into the
-	# reach cone (a late-ready commit or a zone-fallback trigger can enter
-	# this state still looking at the play — pressing then locked a
-	# watching-the-play aim and the one-timer fired wherever the bot had
-	# been LOOKING). The backstop presses anyway rather than eat the whole
-	# flight un-wound on unreadable facing geometry.
-	if not _one_timer_slap_down and (
-			_one_timer_aim_settled(snapshot, self_pos, clean_aim)
-			or _one_timer_press_tick >= ONE_TIMER_AIM_WAIT_MAX_TICKS):
-		debug_last_decision = "ONE_TIMER"
-		input.slap_pressed = true
-		_one_timer_slap_down = true
+	# tick, so the press waits until the aim has actually settled into the reach
+	# cone — otherwise the shot fires wherever the bot happened to be LOOKING
+	# (a late-ready commit / zone-fallback trigger enters still watching the
+	# play). If it NEVER squares up within the wind-up (the net aim stays beyond
+	# the reach cone), the locked line would sail WIDE of the net: don't fire it
+	# into the corner — abort and catch the feed instead (the "worried about
+	# missing the net" guard). Degenerate facing reads as settled (nothing to
+	# rotate), so it presses cleanly rather than false-aborting.
+	if not _one_timer_slap_down:
+		if _one_timer_aim_settled(snapshot, self_pos, clean_aim):
+			debug_last_decision = "ONE_TIMER"
+			input.slap_pressed = true
+			_one_timer_slap_down = true
+		elif _one_timer_press_tick >= ONE_TIMER_AIM_WAIT_MAX_TICKS:
+			# Can't square to the net inside the wind-up → the shot misses. Nothing
+			# was pressed yet, so there's no slapper charge to cancel — just leave
+			# the one-timer and receive.
+			debug_last_decision = "ONE_TIMER_ABORT_WIDE"
+			_set_state(_post_puck_lost_state(snapshot))
+			return
 
 	if have_puck:
 		# Attached mid-charge — the controller opened the one-timer window

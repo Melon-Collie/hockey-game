@@ -235,6 +235,29 @@ func test_cross_seam_not_one_timed_when_not_squared_up() -> void:
 			"a bot not squared to the net catches the feed instead of firing wonky")
 
 
+func test_one_timer_aborts_when_it_cannot_square_to_the_net() -> void:
+	# The "worried about missing the net" guard: a wind-up that can't square to
+	# the net (net aim beyond the reach cone) must NOT fire wide — past the
+	# aim-wait backstop it bails to catch instead. Camp the finisher on a live
+	# feed but facing back up-ice so the net stays in the back wedge.
+	var finisher_pos := Vector3(-4.0, 0.0, -21.65)
+	var s: WorldSnapshot = _cycle_snap(finisher_pos)
+	s.puck_state.position = Vector3(2.0, 0.0, -20.0)
+	s.puck_state.velocity = Vector3(-18.0, 0.0, -6.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	s.skater_states[FINISHER_ID].facing = Vector2(0.0, 1.0)  # net dead behind
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._one_timer_press_tick = Agent.ONE_TIMER_AIM_WAIT_MAX_TICKS
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_false(input.slap_pressed, "an unsquarable one-timer is not fired wide")
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
+			"it aborts the wind-up and drops to catch the feed")
+
+
 func test_cross_seam_reception_one_times_off_the_displaced_goalie() -> void:
 	# Mode A (shot-aware reception): a lateral feed across the slot with the
 	# goalie still parked on the passer's side — the chasing bot commits to
