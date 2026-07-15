@@ -686,6 +686,13 @@ var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
 var is_replaying: bool = false
+# Previous-tick puck PIN (get_carry_target_global), the swept `prev` the carried-
+# puck net clamp feeds NetClampRules so it can tell a legit front-mouth occupant
+# (rides in / out) from a side/back intrusion (pushed out). Always a clamped
+# (legal) position, per NetClampRules' inductive front-entry contract. Reset when
+# the puck comes loose. See _clamp_carry_pin_from_net.
+var _prev_carry_pin: Vector3 = Vector3.ZERO
+var _has_prev_carry_pin: bool = false
 # True on frames where a special locked-phase path posed the body itself this
 # tick — faceoff-prep blade aim, the faceoff skate-in approach, and replay
 # playback. Those paths run their own gait / head / off-hand (they're brief and
@@ -1226,6 +1233,13 @@ func _process_input(input: InputState, delta: float) -> void:
 	_pose.apply_velocity_lean(delta)
 	_pose.apply_facing(input, delta)
 	_apply_state(input, delta)
+	# Keep the PUCK ITSELF out of the net. The blade net-clamp (in apply_blade_
+	# from_mouse) keeps the BLADE out, but a carried puck pins to a carry offset
+	# OFF the blade (Skater.get_carry_target_global), a separate point the blade
+	# clamp never validated — so a stick reaching from behind/beside could drag
+	# the pinned puck into the net even with the blade reading legal. Runs after
+	# _apply_state so it sees this tick's final blade pose.
+	_clamp_carry_pin_from_net()
 	# Mirror the state machine into the replicated field on every simulated
 	# tick, AFTER _apply_state so same-tick transitions are visible to the
 	# cosmetic consumers below (gait shot stance) and to Skater._process (stick
@@ -1463,6 +1477,51 @@ func _do_release(direction: Vector3, power: float) -> void:
 		return
 	var slapper: bool = _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK
 	puck_release_requested.emit(direction, power, slapper)
+
+
+# Net exclusion for the CARRIED PUCK. The blade net-clamp keeps the blade out of
+# the net, but the puck pins to a carry offset off the blade (get_carry_target_
+# global) — a separate point. This clamps that pin the same way, so a carried
+# puck can only be inside the net box via a legit FRONT-mouth path (a wraparound
+# tuck rides in; a reach from behind/beside is pushed out and the puck knocked
+# loose). It is the physical invariant the goal check can then simply trust:
+# a puck in the net got there legally. Mirrors the slapshot-pin clamp, which
+# already guards its own pin — this covers the plain-carry and wrister-aim states
+# (SLAPPER_CHARGE_WITH_PUCK still uses its stricter allow_front=false clamp in
+# _update_slapper_charge, so skip it here to avoid fighting it).
+func _clamp_carry_pin_from_net() -> void:
+	if not has_puck or _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK:
+		_has_prev_carry_pin = false
+		return
+	var pin: Vector3 = skater.get_carry_target_global()
+	# First carry tick: no legal prior pin to induct from. Seed from the pin so a
+	# genuine front entry next tick is judged against a real position; a puck
+	# picked up already inside the net is a post-goal artifact (pickup is locked
+	# through the goal phase), so seeding it is benign.
+	var prev: Vector3 = _prev_carry_pin if _has_prev_carry_pin else pin
+	var clamped: Vector3 = NetClampRules.clamp_out_of_net(
+			pin, prev, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
+			GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
+			GameRules.NET_DEPTH, GameRules.NET_HEIGHT, true)
+	if clamped != pin:
+		# The pin sat in the net off a non-front path — knock the puck loose,
+		# pushed out along the clamp offset (out of the net), like any net contact.
+		_has_prev_carry_pin = false
+		var away: Vector3 = clamped - pin
+		# Diagnostic: log every ejection so an in-game session can confirm the
+		# guard is firing on the bot-behind-the-net plays (and that it's the PUCK
+		# being ejected, not the blade passing through the mesh — a different bug).
+		# Real ticks only; a temporary probe, safe to remove once verified.
+		if not is_replaying:
+			var depth_past: float = absf(pin.z) - GameRules.GOAL_LINE_Z
+			var face: String = "side" if absf(away.x) >= absf(away.z) else "back/front"
+			print("[net-pin-clamp] ejected carried puck: name=%s pin=(%.2f,%.2f,%.2f) depth_past_line=%.3f face=%s push=%.2f" % [
+					skater.name, pin.x, pin.y, pin.z, depth_past, face, away.length()])
+		if away.length() > 0.001:
+			_do_release(away.normalized(), goalie_strip_power)
+		return
+	_prev_carry_pin = pin
+	_has_prev_carry_pin = true
 
 # Nudge: the carrier taps the puck off the blade as a soft self-pass. The
 # released velocity is the skater's horizontal momentum plus a small push along
