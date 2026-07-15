@@ -2074,9 +2074,11 @@ func get_packet_delay_floor_ms() -> float:
 
 func get_target_interpolation_delay() -> float:
 	# Cached once per physics frame: get_jitter_p95() duplicates + sorts the sample
-	# buffer, and this is read by the per-packet shared-delay advance plus every
-	# claim-send. The target drifts slowly (adapt clamps ±1.5/+10 ms per packet),
-	# so a frame of staleness is irrelevant.
+	# buffer, and this is read by the per-packet shared-delay advance and the F3
+	# overlay. (Claim-sends report the ADAPTED get_interpolation_delay instead —
+	# the value that actually positioned the rendered entity — so the host's
+	# remote-view rewind matches what the client saw.) The target drifts slowly
+	# (adapt clamps ±1.5/+10 ms per packet), so a frame of staleness is irrelevant.
 	var frame: int = Engine.get_physics_frames()
 	if frame != _target_interp_frame:
 		_target_interp_frame = frame

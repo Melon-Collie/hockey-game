@@ -282,9 +282,16 @@ func _physics_process(delta: float) -> void:
 			if in_range and not skater.deflect_intent and _pickup_claim_floor <= 0.0 and (rising_edge or _claim_cooldown <= 0.0):
 				_pickup_claim_floor = _PICKUP_CLAIM_FLOOR_S
 				_claim_cooldown = _CLAIM_COOLDOWN_S
+				# Report the ADAPTED interp delay (get_interpolation_delay) — the value
+				# that actually positioned the rendered puck this frame — not the target.
+				# remote_view_time on the host subtracts exactly this to reproduce the
+				# puck we reached for; target can lead adapted by tens of ms mid-jitter
+				# (adapt clamps +10/-1.5 ms per packet), which is exactly when a
+				# stale-view rewind makes a legit grab miss. Poke / stick-lift / hit
+				# claims report the same adapted delay for the same reason.
 				NetworkManager.send_pickup_claim(
 					NetworkManager.estimated_host_time(),
-					NetworkManager.get_target_interpolation_delay() * 1000.0)
+					NetworkManager.get_interpolation_delay() * 1000.0)
 				# Optimistic visual-only attach for uncontested pickups: pins the
 				# puck to our blade immediately so the grab feels instant, rolling
 				# back if the host doesn't confirm. Idempotent + self-gating, so
@@ -327,12 +334,12 @@ func _physics_process(delta: float) -> void:
 				if is_lift:
 					NetworkManager.send_stick_lift_claim(
 						NetworkManager.estimated_host_time(),
-						NetworkManager.get_target_interpolation_delay() * 1000.0,
+						NetworkManager.get_interpolation_delay() * 1000.0,
 						carrier_pid)
 				else:
 					NetworkManager.send_poke_claim(
 						NetworkManager.estimated_host_time(),
-						NetworkManager.get_target_interpolation_delay() * 1000.0,
+						NetworkManager.get_interpolation_delay() * 1000.0,
 						carrier_pid)
 			_was_in_poke_range = in_poke_range
 		else:
