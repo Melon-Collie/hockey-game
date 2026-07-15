@@ -1508,6 +1508,15 @@ func _clamp_carry_pin_from_net() -> void:
 		# pushed out along the clamp offset (out of the net), like any net contact.
 		_has_prev_carry_pin = false
 		var away: Vector3 = clamped - pin
+		# Diagnostic: log every ejection so an in-game session can confirm the
+		# guard is firing on the bot-behind-the-net plays (and that it's the PUCK
+		# being ejected, not the blade passing through the mesh — a different bug).
+		# Real ticks only; a temporary probe, safe to remove once verified.
+		if not is_replaying:
+			var depth_past: float = absf(pin.z) - GameRules.GOAL_LINE_Z
+			var face: String = "side" if absf(away.x) >= absf(away.z) else "back/front"
+			print("[net-pin-clamp] ejected carried puck: name=%s pin=(%.2f,%.2f,%.2f) depth_past_line=%.3f face=%s push=%.2f" % [
+					skater.name, pin.x, pin.y, pin.z, depth_past, face, away.length()])
 		if away.length() > 0.001:
 			_do_release(away.normalized(), goalie_strip_power)
 		return
