@@ -132,19 +132,27 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		return d
 
 	var gap: float = clampf(dist * GAP_FRACTION, GAP_MIN_M, GAP_MAX_M)
-	# STAND UP AT THE BLUE LINE. The raw distance-fraction gap concedes the
-	# entry by construction: at the moment the carrier reaches our blue line the
-	# gap is ~maxed, so CONTAIN is six metres behind the line retreating at the
-	# carrier's pace and the zone is gained untouched every rush. The line is
-	# where the defence makes its stand — entry-with-possession is the thing to
-	# deny — so while the carrier is still OUTSIDE our zone, the gap is capped
-	# by the ice remaining to the line (+ the plant depth): the gap-surf lands
-	# CONTAIN set one stride inside the line exactly as the carrier arrives.
-	# Once the zone is gained the cap vanishes and the normal protect-the-net
-	# ramp resumes. The MARK pair is home behind, so losing the stand wide is
-	# the acceptable outcome — the free entry was not.
+	# STAND UP AT THE BLUE LINE — but only with a safety layer home behind us.
+	# The raw distance-fraction gap concedes the entry by construction: at the
+	# moment the carrier reaches our blue line the gap is ~maxed, so CONTAIN is
+	# six metres behind the line retreating at the carrier's pace and the zone is
+	# gained untouched every rush. The line is where the defence makes its stand —
+	# entry-with-possession is the thing to deny — so while the carrier is still
+	# OUTSIDE our zone, the gap is capped by the ice remaining to the line (+ the
+	# plant depth): the gap-surf lands CONTAIN set one stride inside the line
+	# exactly as the carrier arrives. Once the zone is gained the cap vanishes and
+	# the normal protect-the-net ramp resumes.
+	#
+	# The stand is only safe when there IS a safety layer home behind us: its own
+	# rationale is "losing the stand wide is acceptable because a teammate is home."
+	# When CONTAIN is genuinely the LAST man back (nobody deeper), stepping up to
+	# the line trades a denied entry for a possible breakaway — a bad trade. So
+	# gate the stand on defensive support behind; as the true last man, skip it and
+	# hold the deeper contain gap instead (contain, don't challenge). The MARK pair
+	# recovering from up-ice flips this on the instant one gets home behind the
+	# stand, so the aggressive line stand returns exactly when it's backed.
 	var ice_to_line: float = GameRules.BLUE_LINE_Z - ctx.own_goal_dir * carrier_pos.z
-	if ice_to_line > 0.0:
+	if ice_to_line > 0.0 and _has_support_behind(ctx):
 		gap = maxf(minf(gap, ice_to_line + LINE_STAND_INSIDE_M), GAP_MIN_M)
 	# Never project past the net — a gap wider than the carrier's own distance
 	# to the net would place the target behind the goal line.
@@ -199,6 +207,26 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				ctx, carrier_pos, our_net, dir_net, gap,
 				receivers, opp_states, opp_caps)
 	return d
+
+
+# True when a teammate is home BEHIND CONTAIN — deeper toward our net (larger
+# own_goal_dir * z) than we are — i.e. there's a safety layer that can pick up
+# the carrier if our blue-line stand gets beaten wide. When false, CONTAIN is
+# the genuine last man back and must contain rather than challenge the entry.
+# Depth-axis read (not a race): the stand's risk is specifically "beaten wide,
+# nobody home," which is a positional question. Excludes self.
+static func _has_support_behind(ctx: RoleContext) -> bool:
+	if ctx.snapshot == null:
+		return false
+	var my_depth: float = ctx.own_goal_dir * ctx.self_pos.z
+	for pid: int in ctx.snapshot.skater_states:
+		if pid == ctx.peer_id:
+			continue
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+			continue
+		if ctx.own_goal_dir * ctx.snapshot.skater_states[pid].position.z > my_depth:
+			return true
+	return false
 
 
 # Argmax over the retreat-line point plus fan candidates toward each
