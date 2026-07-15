@@ -77,6 +77,8 @@ func _run_flyby(start: Vector3, vel: Vector3, ticks: int,
 	var peak_carry: float = 0.0
 	var peak_pass: float = 0.0
 	var states: Dictionary = {}
+	var carry_dest: Vector3 = Vector3.ZERO
+	var carry_from: Vector3 = Vector3.ZERO
 	for t: int in ticks:
 		pos += vel * DT
 		var facing: Vector2
@@ -107,13 +109,16 @@ func _run_flyby(start: Vector3, vel: Vector3, ticks: int,
 		if pos.distance_to(_goal) < 9.0:
 			in_slot_window += 1
 			peak_shoot = maxf(peak_shoot, agent.debug_shoot_score)
-			peak_carry = maxf(peak_carry, agent.debug_carry_score)
+			if agent.debug_carry_score > peak_carry:
+				peak_carry = agent.debug_carry_score
+				carry_dest = agent.debug_carry_pos
+				carry_from = pos
 			peak_pass = maxf(peak_pass, agent.debug_pass_score)
 			var sname: int = agent._state
 			states[sname] = int(states.get(sname, 0)) + 1
 	return {"shots": shots, "first": first, "slot_ticks": in_slot_window,
 			"peak_shoot": peak_shoot, "peak_carry": peak_carry, "peak_pass": peak_pass,
-			"states": states}
+			"states": states, "carry_dest": carry_dest, "carry_from": carry_from}
 
 
 func test_flyby_shot_by_tier_and_facing() -> void:
@@ -133,9 +138,11 @@ func test_flyby_shot_by_tier_and_facing() -> void:
 						else BotSkillProfile.normal() if name == "NORMAL"
 						else BotSkillProfile.easy())
 				var r: Dictionary = _run_flyby(start, vel, ticks, p, facing_net, pressure)
-				gut.p("    %s%-7s shots %d  first %d  peakEV shoot=%.3f carry=%.3f pass=%.3f" % [
-						tag, name, r["shots"], r["first"],
-						r["peak_shoot"], r["peak_carry"], r["peak_pass"]])
+				var cd: Vector3 = r["carry_dest"]
+				var cf: Vector3 = r["carry_from"]
+				gut.p("    %s%-7s shots %d  shoot=%.3f carry=%.3f  carry→(%.1f,%.1f) %.1fm-from-net (from %.1fm)" % [
+						tag, name, r["shots"], r["peak_shoot"], r["peak_carry"],
+						cd.x, cd.z, cd.distance_to(_goal), cf.distance_to(_goal)])
 	# What the probe establishes (see the file header):
 	var free: Dictionary = _run_flyby(start, vel, ticks, BotSkillProfile.hard(), true, 0.0)
 	var pressed: Dictionary = _run_flyby(start, vel, ticks, BotSkillProfile.hard(), true, 1.6)
