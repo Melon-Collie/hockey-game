@@ -314,16 +314,14 @@ func _init(p_carrier_reaction_delay_s: float,
 # changes (elite-but-not-instant). Its blade aims at its real Hands speed like
 # every bot now (no per-tier slew), so a Hard bot's precision rides its build.
 # Dispatch at PHYSICS_TICK/60 = 2 ticks matches the engine baseline cadence. Tune
-# carrier_reaction_delay UP if it matches passes too readily. SHOT execution
-# error 0.016 rad (≈ ±0.9° per release, ~±0.19 m at 12 m) — up from the old 0.01:
-# with the make-probability shot model (AIActionScoring._soft_make_angle) and the
-# centred aim (DEFAULT_CORNER_BIAS 0), a Hard snipe now goes ON NET far more than
-# it clanks iron or sails wide, so a touch more scatter is what keeps the GOALIE
-# in the play against Hard — robbing its tight-window looks — and trims an
-# otherwise near-automatic elite finish. PASS error stays tight at 0.01 so the
-# passing game is untouched (the two are now split). This is the tier's scoring
-# dial: raise it if Hard still buries too much, lower it toward 0.01 if the
-# goalie robs looks a real elite shooter would bury. Release timing slop 0.10 s — an elite hand, but
+# carrier_reaction_delay UP if it matches passes too readily. Execution error is
+# the pre-split flat value on both releases (0.01 rad ≈ ±0.6° per release —
+# spreads the identical corner snipe into goals/saves/misses without ever
+# reading as a botched shot). NB: do NOT bump the shot error to "trim" Hard's
+# scoring — the shot-outcome sim (tests/unit/ai/test_shot_sim.gd) showed scatter
+# is a SELECTIVITY dial under the make-probability model, not a save dial: a
+# wider spread demands a wider window, so the bot shoots LESS and buries a HIGHER
+# fraction. Trim Hard's finish elsewhere. Release timing slop 0.10 s — an elite hand, but
 # no longer tick-perfect: the doorstep lateral beat is still hunted (scored
 # at the median ~0.05 s-late release), but a window in the ~0.05–0.10 s band
 # is a coin flip decided by the sampled delay — the goalie robs the late
@@ -336,7 +334,7 @@ func _init(p_carrier_reaction_delay_s: float,
 # plays, angles its chase, plays the pass on odd-man rushes, and shields the
 # puck with its body — the full hockey IQ.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 2, 0.016, 0.01, 0.10, 0.0,
+	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.0,
 			0.0, 1.0, 1.0, 1.0,
 			true, true, true, true, true, true)
 

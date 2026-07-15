@@ -137,21 +137,19 @@ static func _launch_speed(power_t: float) -> float:
 	return WRISTER_MIN + clampf(power_t, 0.0, 1.0) * (WRISTER_MAX - WRISTER_MIN)
 
 
-# Classify ONE sampled shot. `err_rad` is this release's sampled aim error;
-# `unsettled` (0 set … 1 caught mid-slide) delays the goalie's read.
-static func classify_shot(shooter: Vector3, goal: Vector3, goalie: Vector3,
-		aim: Vector3, loft_level: int, power_t: float, err_rad: float,
-		unsettled: float) -> int:
-	# Horizontal release direction (shooter → aim), rotated by the sampled error.
+# Solve where a sampled shot crosses the net plane. Returns
+# Vector3(cross_x, cross_y, flight_t); flight_t < 0 signals a degenerate release
+# (no crossing). Shared by the static classifier and the rush harness.
+static func flight(shooter: Vector3, goal: Vector3, aim: Vector3,
+		loft_level: int, power_t: float, err_rad: float) -> Vector3:
 	var to_aim := Vector2(aim.x - shooter.x, aim.z - shooter.z)
 	if to_aim.length() < 0.001:
-		return WIDE
+		return Vector3(0.0, 0.0, -1.0)
 	var ang: float = to_aim.angle() + err_rad
 	var hdir := Vector2(cos(ang), sin(ang))          # unit XZ heading
-	# Solve the crossing of the net plane z = goal.z.
 	var dz: float = goal.z - shooter.z
 	if absf(hdir.y) < 0.0001 or signf(hdir.y) != signf(dz):
-		return WIDE
+		return Vector3(0.0, 0.0, -1.0)
 	var travel: float = dz / hdir.y                  # horizontal distance to the plane
 	var cross_x: float = shooter.x + hdir.x * travel
 	# Loft parabola: split the launch pace into horizontal + vertical (loft_vy).
@@ -161,11 +159,33 @@ static func classify_shot(shooter: Vector3, goal: Vector3, goalie: Vector3,
 	var v_h: float = sqrt(maxf(speed * speed - loft_vy * loft_vy, 1.0))
 	var flight_t: float = absf(travel) / v_h
 	var cross_y: float = maxf(0.0, loft_vy * flight_t - 0.5 * GRAVITY * flight_t * flight_t)
-	# Off the net → wide (or a post ring if it just clips the pipe band).
+	return Vector3(cross_x, cross_y, flight_t)
+
+
+# On/off-net verdict for a crossing point: POST, WIDE, or -1 (on net, undecided —
+# the caller resolves the reach). Shared with the rush harness.
+static func net_verdict(cross_x: float, cross_y: float) -> int:
 	if absf(cross_x) > NET_HW - PUCK_R or cross_y > CROSSBAR - PUCK_R:
 		if absf(cross_x) <= NET_HW + POST_R + PUCK_R and cross_y <= CROSSBAR + POST_R:
 			return POST
 		return WIDE
+	return -1
+
+
+# Classify ONE sampled shot against a SET goalie. `err_rad` is this release's
+# sampled aim error; `unsettled` (0 set … 1 caught mid-slide) delays his read.
+static func classify_shot(shooter: Vector3, goal: Vector3, goalie: Vector3,
+		aim: Vector3, loft_level: int, power_t: float, err_rad: float,
+		unsettled: float) -> int:
+	var f: Vector3 = flight(shooter, goal, aim, loft_level, power_t, err_rad)
+	if f.z < 0.0:
+		return WIDE
+	var cross_x: float = f.x
+	var cross_y: float = f.y
+	var flight_t: float = f.z
+	var nv: int = net_verdict(cross_x, cross_y)
+	if nv != -1:
+		return nv
 	# On net: does the goalie's positioned reach get there in time?
 	var lateral_off: float = absf(cross_x - goalie.x)
 	var seal_delay: float = clampf(unsettled, 0.0, 1.0) * UNSETTLE_REACT_PENALTY_S
