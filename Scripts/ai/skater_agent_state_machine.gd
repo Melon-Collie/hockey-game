@@ -290,6 +290,23 @@ const _RECV_ONE_TIME: int = 2       # Mode A transitioned to ONE_TIMER_PRESSED; 
 # were rescaled with the 2.0 → 1.3 change to keep their angles identical.
 const CARRY_BLADE_AIM_FORWARD_M: float = 1.3
 
+# Behind-the-net cradle. A full CARRY_BLADE_AIM_FORWARD_M reach worked from behind
+# the attacking cage chords the blade (and the offset puck riding on it) into the
+# mesh; stick-on-net contact strips the carried puck — the behind-the-net
+# giveaway. Bots live back there far more than a human, so they trip it far more.
+# Shorten the forward reach toward CARRY_BEHIND_NET_CRADLE_M as the body enters
+# the net's work zone (within the frame's lateral span plus a margin, ramping in
+# over CARRY_BEHIND_NET_BAND_M as it crosses the goal line) so the puck rides in a
+# tight cradle the body walks around the post with — the "carry it close and take
+# it out clean" read. This is the SOFT layer: it keeps the blade away from the
+# cage in the first place. NetClampRules on the puck pin (SkaterController) is the
+# HARD backstop if the reach still grazes. Feel constants (hand-tuned), not an
+# evaluator. Fire-tracking (a live shot/pass look) overrides carry aim, so this
+# never blunts a real net-front shot — it only tames the behind-the-net cycle.
+const CARRY_BEHIND_NET_CRADLE_M: float = 0.6
+const CARRY_BEHIND_NET_BAND_M: float = 0.6      # ramp band around the goal line
+const CARRY_BEHIND_NET_LATERAL_M: float = 1.0   # lateral reach past the frame side still cradled
+
 # How far inside the boards the carry mouse target is clamped
 # (GameRules.clamp_to_rink_inner). The blade IK chases the mouse; a target at
 # or through the kickplate slams the stick into the wall and the impact knocks
@@ -4105,6 +4122,25 @@ func _step_carry_cursor(input: InputState, snapshot: WorldSnapshot,
 		input.mouse_world_pos = _step_mouse_aim(mouse_target)
 
 
+# Forward carry reach, cradled tight when the body is behind/beside the attacking
+# net (see CARRY_BEHIND_NET_CRADLE_M). Returns the full reach everywhere else.
+func _carry_reach_behind_net(self_pos: Vector3) -> float:
+	# Wide of the cage laterally — carrying up the wall / in the corner, not net-
+	# working — keep the full reach (the wall margin + net_safe_blade_target own
+	# that side).
+	if absf(self_pos.x) > GameRules.NET_BACK_HALF_WIDTH + CARRY_BEHIND_NET_LATERAL_M:
+		return CARRY_BLADE_AIM_FORWARD_M
+	# Signed distance PAST the attacking goal line toward the end boards (>0 is
+	# behind the net). attacking_z = -_own_goal_dir.
+	var past: float = (self_pos.z - _attacking_goal_pos.z) * (-_own_goal_dir)
+	# Ramp: full reach until a band's width in front of the line, tight cradle once
+	# at/behind it. In FRONT of the net a genuine scoring drive is fire-tracked
+	# (overrides this), so cradling only the last stride before the line — and
+	# everything behind — never blunts a shot.
+	var t: float = clampf((past + CARRY_BEHIND_NET_BAND_M) / CARRY_BEHIND_NET_BAND_M, 0.0, 1.0)
+	return lerpf(CARRY_BLADE_AIM_FORWARD_M, CARRY_BEHIND_NET_CRADLE_M, t)
+
+
 func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# Danger zone: when the bot's body is within _blade_reach of the
 	# goalie, the default forward aim drives the blade through the
@@ -4181,7 +4217,11 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 		var route_dir: Vector3 = route.normalized()
 		if route_dir.z * attacking_z >= CARRY_FACE_RETREAT_ADVANCE:
 			forward_dir = route_dir
-	var base: Vector3 = self_pos + forward_dir * CARRY_BLADE_AIM_FORWARD_M
+	# Cradle the puck tight to the body when working behind/beside the net so the
+	# blade (and the offset puck on it) stays out of the cage — see
+	# _carry_reach_behind_net. Full reach everywhere else.
+	var reach: float = _carry_reach_behind_net(self_pos)
+	var base: Vector3 = self_pos + forward_dir * reach
 	# Stickhandling offset is raw — `_step_mouse_toward` provides the
 	# motion smoothing across ticks. When two defenders converge from
 	# opposite sides and the raw target alternates per tick, the
@@ -4232,7 +4272,7 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 				if absf(turn) > max_turn:
 					prot2 = fwd2.rotated(signf(turn) * max_turn)
 			var protect_target: Vector3 = self_pos \
-					+ Vector3(prot2.x, 0.0, prot2.y) * CARRY_BLADE_AIM_FORWARD_M
+					+ Vector3(prot2.x, 0.0, prot2.y) * reach
 			target = target.lerp(protect_target, minf(protect_w, 1.0))
 	# Clamp the carry mouse so it stays on the rink side of the
 	# attacking goal line — the blade IK chases the mouse, and a mouse
