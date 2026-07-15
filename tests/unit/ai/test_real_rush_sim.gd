@@ -149,14 +149,13 @@ func test_pressured_1v1_with_backchecker_still_shoots() -> void:
 					tier, deg, r["shots"], r["legit"], r["crease"], r["first_dist"]])
 			if r["shots"] <= 0:
 				missed.append("%s@%+.0f" % [tier, deg])
-	# KNOWN BUG (the target of this branch): under backchecker pressure the bot
-	# fails to get a shot off at sharp/off-centre angles and skates past — the
-	# in-game report, reproduced. Marked pending (not a hard failure) until the
-	# model is fixed; flip to assert_eq(...,0) once every pressured angle shoots.
-	if missed.size() > 0:
-		pending("pressured off-angle 1v1s skate past without a shot: %s" % str(missed))
-	else:
-		assert_eq(missed.size(), 0, "every pressured angle produces a shot attempt")
+	# The fixed bug (this branch): under backchecker pressure the bot used to fail
+	# to get a shot off at sharp/off-centre angles and skate past. The momentum-
+	# aware time_to_arrive (a lateral cut it can't settle into no longer prices as a
+	# fast arrival, so the goalie reads square and the honest shot wins) makes it
+	# release from range instead — every pressured angle now produces a shot.
+	assert_eq(missed.size(), 0,
+			"every pressured angle produces a shot attempt; missed: %s" % str(missed))
 
 
 func test_going_by_the_net_still_produces_a_shot() -> void:

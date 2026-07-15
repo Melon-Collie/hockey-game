@@ -1877,6 +1877,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# This bot's own attribute-scaled speeds, so the carrier scores ITS shots /
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed
+	ctx.self_max_accel = _chase_max_accel
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
 	# The scoring/aim spread budgets the SHOT error — that's the budget the
 	# release that matters (a scored shot) is actually sampled on.

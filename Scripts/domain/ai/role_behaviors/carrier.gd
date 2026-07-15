@@ -1975,7 +1975,8 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			and AIActionScoring.carry_path_blocked_by_net(self_pos, candidate):
 		return -INF
 	var local_time: float = AIActionScoring.time_to_arrive(
-			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed)
+			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed,
+			ctx.self_max_accel)
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
 	var lane: float = AIActionScoring.path_clearance(
 			self_pos, candidate, _scratch_opponents_path)
@@ -2229,7 +2230,7 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 	# the slot pays the turn in honest time (and thus decay) — the rotation
 	# cost of a spot that faces the wrong way enters here.
 	var t2: float = AIActionScoring.time_to_arrive(
-			candidate, slot, arrive_vel, ctx.self_max_speed)
+			candidate, slot, arrive_vel, ctx.self_max_speed, ctx.self_max_accel)
 	# Second-leg reach safety: defenders start the leg where the first leg's
 	# time has taken them, then sweep their reach over t2.
 	_project_opponents_to(ctx, first_leg_s, _scratch_opponents_cont)
