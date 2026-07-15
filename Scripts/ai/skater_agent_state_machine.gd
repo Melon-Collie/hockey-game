@@ -798,11 +798,17 @@ var _prev_role_target: Vector3 = Vector3.INF
 # Vector3 (last tick's velocity or smoothed accel).
 var _prev_velocity_by_peer: Dictionary = {}
 var _accel_by_peer: Dictionary = {}
+# Local per-peer heading turn rate (rad/s), the receiver-commitment fallback
+# built alongside _accel_by_peer when the shared snapshot cache is absent.
+var _heading_omega_by_peer: Dictionary = {}
 # The accel source consumed this tick: the host's shared per-frame cache
 # (snapshot.accel_by_peer) when present, else the local _accel_by_peer built by
 # _update_acceleration_cache (unit tests hand-build snapshots without the shared
 # cache). Set every dispatch — accel is read in ctx build and in PASS_PRESSED aim.
 var _accel_ref: Dictionary = _accel_by_peer
+# Heading-turn-rate source consumed this tick, resolved in lockstep with
+# _accel_ref (shared snapshot cache when present, else the local fallback).
+var _omega_ref: Dictionary = _heading_omega_by_peer
 
 # Carrier-role decision behavior. Owns _pick_action's scoring +
 # hysteresis + cooldown + scratch buffers. Lives for the full
@@ -1169,6 +1175,10 @@ var _carry_settle_delay_s: float = 0.0
 # in the chase state.
 var _reads_goalie_motion: bool = true
 var _holds_for_developing_feeds: bool = true
+# _reads_receiver_commitment rides RoleContext into the carrier's pass EV — a
+# turning receiver is priced as a riskier feed. False = blind, chucks passes at
+# turning players.
+var _reads_receiver_commitment: bool = true
 var _angles_the_chase: bool = true
 # _plays_rush_pass_lanes rides RoleContext into CONTAIN's odd-man lane fan.
 var _plays_rush_pass_lanes: bool = true
@@ -1366,6 +1376,7 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_carry_settle_delay_s = profile.carry_settle_delay_s
 	_reads_goalie_motion = profile.reads_goalie_motion
 	_holds_for_developing_feeds = profile.holds_for_developing_feeds
+	_reads_receiver_commitment = profile.reads_receiver_commitment
 	_angles_the_chase = profile.angles_the_chase
 	_plays_rush_pass_lanes = profile.plays_rush_pass_lanes
 	_protects_the_puck = profile.protects_the_puck
@@ -1574,9 +1585,11 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# it too.
 	if not snapshot.accel_by_peer.is_empty():
 		_accel_ref = snapshot.accel_by_peer
+		_omega_ref = snapshot.heading_omega_by_peer
 	else:
 		_update_acceleration_cache(snapshot, input.delta)
 		_accel_ref = _accel_by_peer
+		_omega_ref = _heading_omega_by_peer
 
 	# When we're ghosted (offside, can't interact with the puck), chase
 	# behavior is degenerate — we'd skate at a puck we can't pick up. Drop
@@ -1859,6 +1872,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.team_brain = _team_brain
 	ctx.team_id_by_peer = _team_id_by_peer
 	ctx.acceleration_by_peer = _accel_ref
+	ctx.heading_omega_by_peer = _omega_ref
 	ctx.caps_by_peer = _caps_by_peer
 	# This bot's own attribute-scaled speeds, so the carrier scores ITS shots /
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
@@ -1889,6 +1903,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.carry_settle_delay_s = _carry_settle_delay_s
 	ctx.reads_goalie_motion = _reads_goalie_motion
 	ctx.holds_for_developing_feeds = _holds_for_developing_feeds
+	ctx.reads_receiver_commitment = _reads_receiver_commitment
 	ctx.plays_rush_pass_lanes = _plays_rush_pass_lanes
 	ctx.protects_the_puck = _protects_the_puck
 	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
@@ -5145,6 +5160,22 @@ func _update_acceleration_cache(snapshot: WorldSnapshot, delta: float) -> void:
 			smoothed.x *= scale
 			smoothed.z *= scale
 		_accel_by_peer[peer_id] = smoothed
+		# Heading turn rate fallback — mirrors AIAccelerationTracker exactly so a
+		# unit-test snapshot (no shared cache) reads the same receiver-commitment
+		# signal the host serves.
+		var raw_omega: float = 0.0
+		var prev_speed: float = sqrt(prev_v.x * prev_v.x + prev_v.z * prev_v.z)
+		var curr_speed: float = sqrt(curr_v.x * curr_v.x + curr_v.z * curr_v.z)
+		if prev_speed > AIAccelerationTracker.OMEGA_MIN_SPEED_M_S \
+				and curr_speed > AIAccelerationTracker.OMEGA_MIN_SPEED_M_S:
+			var dot: float = prev_v.x * curr_v.x + prev_v.z * curr_v.z
+			var cross: float = prev_v.x * curr_v.z - prev_v.z * curr_v.x
+			raw_omega = atan2(cross, dot) * inv_delta
+		var omega: float = lerpf(_heading_omega_by_peer.get(peer_id, 0.0),
+				raw_omega, AIAccelerationTracker.OMEGA_SMOOTH_ALPHA)
+		omega = clampf(omega, -AIAccelerationTracker.OMEGA_CLAMP_RAD_S,
+				AIAccelerationTracker.OMEGA_CLAMP_RAD_S)
+		_heading_omega_by_peer[peer_id] = omega
 	# Prune peers that left the snapshot (rare — swap / disconnect)
 	# so the dicts don't grow over a long match. Iterate a copy of
 	# the key list because `erase` during dict iteration is unsafe.
@@ -5153,6 +5184,7 @@ func _update_acceleration_cache(snapshot: WorldSnapshot, delta: float) -> void:
 		if not seen.has(peer_id):
 			_prev_velocity_by_peer.erase(peer_id)
 			_accel_by_peer.erase(peer_id)
+			_heading_omega_by_peer.erase(peer_id)
 
 
 # Detects "puck just became loose" and arms the engagement cooldown if

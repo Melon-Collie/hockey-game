@@ -1552,6 +1552,51 @@ func test_pass_miss_prob_tighter_catch_envelope_misses_more() -> void:
 	assert_gt(tight, wide, "a shorter catch envelope corrals fewer off-target feeds")
 
 
+func test_pass_miss_prob_receiver_uncertainty_adds_to_the_spread() -> void:
+	# The receiver's own heading uncertainty (a turning receiver curving off the
+	# lead) adds to the passer's hand spread — a settled receiver (0) is unchanged,
+	# and turn uncertainty can push a reachable feed past the catch envelope.
+	var settled: float = AIActionScoring.pass_miss_prob(15.0, 0.04, 0.9, 0.0)
+	assert_almost_eq(settled, AIActionScoring.pass_miss_prob(15.0, 0.04, 0.9),
+			0.0001, "a settled receiver (0 uncertainty) is priced like a clean feed")
+	# hand spread 0.6 < 0.9 catch → base; add 0.6 m of turn uncertainty → 1.2 > 0.9.
+	var turning: float = AIActionScoring.pass_miss_prob(15.0, 0.04, 0.9, 0.6)
+	assert_gt(turning, settled,
+			"a turning receiver's catch-point uncertainty raises the miss chance")
+
+
+# ── receiver_heading_uncertainty_m: turning-receiver catch-point uncertainty ───
+# The lateral deviation R·(1−cos θ) of a constant-radius arc from its launch
+# tangent — the metres a turning receiver misses the straight-line lead by.
+
+func test_receiver_heading_uncertainty_zero_for_a_committed_receiver() -> void:
+	# No turn, no speed, or no flight → nothing to be uncertain about.
+	assert_almost_eq(AIActionScoring.receiver_heading_uncertainty_m(6.0, 0.0, 0.55),
+			0.0, 0.0001, "a straight-line receiver has zero heading uncertainty")
+	assert_almost_eq(AIActionScoring.receiver_heading_uncertainty_m(0.0, 3.0, 0.55),
+			0.0, 0.0001, "a stationary receiver has no heading to miss")
+	assert_almost_eq(AIActionScoring.receiver_heading_uncertainty_m(6.0, 3.0, 0.0),
+			0.0, 0.0001, "an instantaneous pass has no flight to curve over")
+
+
+func test_receiver_heading_uncertainty_matches_arc_geometry() -> void:
+	# v=6, ω=2, t=0.55 → θ=1.1 rad, R=3 m, dev = 3·(1−cos 1.1) ≈ 1.64 m.
+	var dev: float = AIActionScoring.receiver_heading_uncertainty_m(6.0, 2.0, 0.55)
+	assert_almost_eq(dev, 3.0 * (1.0 - cos(1.1)), 0.001,
+			"exact tangent-deviation of the arc")
+
+
+func test_receiver_heading_uncertainty_grows_with_turn_and_saturates() -> void:
+	# A harder cut curves further off the lead...
+	var soft: float = AIActionScoring.receiver_heading_uncertainty_m(6.0, 1.0, 0.5)
+	var hard: float = AIActionScoring.receiver_heading_uncertainty_m(6.0, 3.0, 0.5)
+	assert_gt(hard, soft, "a harder turn adds more catch-point uncertainty")
+	# ...but the swept angle caps at π, so it never exceeds the arc's 2R diameter.
+	var spun: float = AIActionScoring.receiver_heading_uncertainty_m(6.0, 100.0, 1.0)
+	assert_lte(spun, 2.0 * (6.0 / 100.0) + 0.0001,
+			"the swept-angle cap keeps the deviation at ≤ 2R (no runaway)")
+
+
 # ── pass_miss_loss_point: execution-miss loss location ────────────────────────
 # A lane-clear pass can still miss on execution; the puck dies
 # PASS_MISS_OVERSHOOT_M past the receiver on the pass line.

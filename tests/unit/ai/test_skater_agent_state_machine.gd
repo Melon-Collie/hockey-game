@@ -1604,15 +1604,19 @@ func test_apply_profile_sets_cognition_gates() -> void:
 	assert_true(sm._reads_goalie_motion, "raw agent reads goalie motion")
 	assert_true(sm._holds_for_developing_feeds, "raw agent holds for developing plays")
 	assert_true(sm._angles_the_chase, "raw agent angles its chase")
+	assert_true(sm._reads_receiver_commitment, "raw agent reads receiver commitment")
 	sm.apply_profile(BotSkillProfile.easy())
 	assert_false(sm._reads_goalie_motion, "Easy is goalie-motion blind")
 	assert_false(sm._holds_for_developing_feeds, "Easy plays only what exists now")
 	assert_false(sm._angles_the_chase, "Easy chases straight-line")
+	assert_false(sm._reads_receiver_commitment,
+			"Easy is commitment-blind — chucks feeds at turning players")
 	sm.apply_profile(BotSkillProfile.normal())
 	assert_true(sm._reads_goalie_motion,
 			"Normal keeps the goalie-motion read — Hard/Normal differ by tuning only")
 	assert_true(sm._holds_for_developing_feeds, "Normal keeps the developing-feed hold")
 	assert_true(sm._angles_the_chase, "Normal keeps the chase angling")
+	assert_true(sm._reads_receiver_commitment, "Normal keeps the receiver-commitment read")
 
 
 func test_motion_blind_aim_ignores_the_goalie_slide() -> void:
