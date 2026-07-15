@@ -1673,7 +1673,9 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	# above all slot logic — bypasses role dispatch entirely.
 	if self_state != null and self_state.is_ghost:
 		var tag_up: Vector3 = _tag_up_anchor(self_pos)
-		_apply_steering(input, snapshot, self_pos, tag_up)
+		# Velocity-matched seek: redirect cross-drift onto the line back to the
+		# tag-up point rather than orbiting it (same as the role stations).
+		_apply_steering(input, snapshot, self_pos, tag_up, false, _self_max_speed)
 		# Race back to the blue line to clear the offside as fast as possible.
 		_resolve_sprint(input, self_state, self_pos, tag_up, false, false)
 		_arm_off_puck_live_aim(tag_up, FACE_TRAVEL_TAG_UP_NEAR_M)
@@ -1727,8 +1729,17 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# target) or when the role is pacing a MOVING waypoint and asks to
 		# arrive at speed (OUTLET timing its rush entry — braking to a stop
 		# at the advancing target would park it short of the line).
+		#
+		# Velocity-matched seek (match speed = our top speed) so an off-puck
+		# bot drifting cross-ice redirects ONTO the line to its role spot
+		# instead of orbiting past it — the same foresight the carrier uses.
+		# It only cancels the cross-drift (never the along-line speed), so it
+		# composes with the arrival brake (which still stops the station) and
+		# with the commit/at-speed drives (which keep their momentum straight
+		# at the target). See AISteering velocity-matched seek.
 		_apply_steering(input, snapshot, self_pos, decision.target_position,
-				not decision.commit_check and not decision.arrive_at_speed)
+				not decision.commit_check and not decision.arrive_at_speed,
+				_self_max_speed)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would

@@ -235,6 +235,9 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 			ctx.attacking_goal_pos.z + ctx.own_goal_dir * stage_dist)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the staging spot unless a fresh one scores clearly
+	# better, so the pre-aim cursor doesn't hop between near-tied slots.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -263,7 +266,8 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		var score: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				cand_goalie, GameRules.NET_HALF_WIDTH,
-				opp_positions, pass_speed, cand_unsettled)
+				opp_positions, pass_speed, cand_unsettled) \
+				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c

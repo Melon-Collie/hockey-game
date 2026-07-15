@@ -1894,6 +1894,29 @@ func test_carry_aim_ignores_a_beaten_man_behind_in_the_ozone() -> void:
 	assert_lt(facing.z, -0.9, "a beaten man behind doesn't stop the square-up")
 
 
+# ── Off-puck arrival: velocity-matched seek to the role spot ─────────────────
+
+func test_off_puck_arrival_redirects_cross_momentum() -> void:
+	# Off-puck steering opts into the velocity-matched seek: a bot drifting
+	# cross-ice toward its role spot steers back ONTO the line to it, where a
+	# plain seek would ignore the drift and orbit past.
+	var s := WorldSnapshot.new()
+	var me := SkaterNetworkState.new()
+	me.position = Vector3.ZERO
+	me.velocity = Vector3(4, 0, 0)   # drifting +X across the approach
+	s.skater_states[SELF_ID] = me
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.carrier_peer_id = -1
+	var anchor := Vector3(0, 0, -8)  # role spot straight ahead (-Z)
+	var seek_in := InputState.new()
+	sm._apply_steering(seek_in, s, Vector3.ZERO, anchor)                  # plain seek
+	var match_in := InputState.new()
+	sm._apply_steering(match_in, s, Vector3.ZERO, anchor, true, sm._self_max_speed)
+	assert_almost_eq(seek_in.move_vector.x, 0.0, 0.02, "plain seek ignores the cross-drift")
+	assert_lt(match_in.move_vector.x, -0.1,
+			"off-puck arrival redirects onto the line to the spot")
+
+
 # ── Fake-then-cut deke lifecycle (containment trigger + phase split) ─────────
 
 func test_containment_deke_fakes_then_cuts() -> void:

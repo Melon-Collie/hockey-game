@@ -45,20 +45,13 @@ class_name AIRolePressure
 # the puck; "getting caught up-ice" isn't applicable. The MARK
 # defenders own defensive recovery for this team.
 
-# Switch-hysteresis on the chosen cut-off point. The standing target
-# (ctx.prev_role_target) is re-scored against the live geometry each
-# dispatch and kept unless a fresh candidate deflates the carrier's best
-# option by at least this much more (threat-surface units — the same 0..1
-# currency as score_shoot / score_pass). Without it, "block the shot" and
-# "block the best pass" trade places on near-equal scores every dispatch
-# and the pressurer oscillates between two spots metres apart, covering
-# neither — the same argmax flicker the slot / threat-partition /
-# strong-side seams already damp with their own margins. Because the
-# standing target is re-scored (not frozen), a carrier skating away decays
-# its score and the switch happens exactly when the geometry really moved.
-# Tuning: raise toward 0.08 if the pressurer still wobbles between lanes;
-# lower toward 0.02 if it visibly camps a stale cut-off.
-const TARGET_SWITCH_MARGIN: float = 0.04
+# Switch-hysteresis on the chosen cut-off point is the shared off-puck mechanism
+# (AIRoleHelpers.append_incumbent / incumbent_bonus / TARGET_SWITCH_MARGIN): the
+# standing target is injected into the candidate set and given a stickiness bonus,
+# so it's re-scored live and kept unless a fresh candidate deflates the carrier's
+# best option by at least the margin more. Without it, "block the shot" and
+# "block the best pass" trade places on near-equal scores every dispatch and the
+# pressurer oscillates between two spots metres apart, covering neither.
 
 
 static func decide(ctx: RoleContext) -> RoleDecision:
@@ -133,6 +126,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# side of the carrier (toward opp net).
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center, true)
+	# Switch-hysteresis: inject the standing cut-off point so it's re-scored live
+	# and held (via incumbent_bonus) unless a fresh candidate is clearly better.
+	# It runs the same legality / goal-side / anti-crowd filters below, so a
+	# now-illegal or wrong-side incumbent is dropped outright.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -148,26 +146,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# for us (lower for the carrier).
 		var pressure_score: float = -AIRoleHelpers.carrier_best_option(
 				c, carrier_pos, our_net, our_goalie_pos,
-				our_team_excluding_self, opp_teammates)
+				our_team_excluding_self, opp_teammates) \
+				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if pressure_score > best_score:
 			best_score = pressure_score
 			best_pos = c
-
-	# Switch-hysteresis: re-score the standing target under the live
-	# geometry and keep it unless the fresh argmax beats it by
-	# TARGET_SWITCH_MARGIN. The standing target must still pass every
-	# filter a candidate does — a now-illegal / wrong-side / crowding
-	# target is dropped outright.
-	var prev: Vector3 = ctx.prev_role_target
-	if prev.is_finite() \
-			and AIRoleHelpers.is_legal_position(prev) \
-			and _is_goal_side(prev, carrier_pos, our_net) \
-			and not AIRoleHelpers.too_close_to_teammate(prev, our_team_excluding_self):
-		var prev_score: float = -AIRoleHelpers.carrier_best_option(
-				prev, carrier_pos, our_net, our_goalie_pos,
-				our_team_excluding_self, opp_teammates)
-		if best_score <= prev_score + TARGET_SWITCH_MARGIN:
-			best_pos = prev
 
 	d.target_position = best_pos
 	return d

@@ -88,6 +88,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# Search around the carrier. Polar samples cover the cycle space;
 	# anti-crowd filter rejects the carrier-overlap candidate.
 	var candidates: Array[Vector3] = _generate_candidates(ctx, carrier_pos)
+	# Switch-hysteresis: hold the chosen station unless a fresh spot is clearly
+	# better, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -109,7 +112,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				goalie_pos, GameRules.NET_HALF_WIDTH,
 				opp_positions, pass_speed)
 		var exposure: float = _exposure(c, our_net, min_opp_time_home, ctx.self_max_speed)
-		var score: float = pass_value * (1.0 - exposure)
+		var score: float = pass_value * (1.0 - exposure) + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c
