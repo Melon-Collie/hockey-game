@@ -284,6 +284,22 @@ func _rebuild_shoulder_texture() -> void:
 	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
+# Arm-vs-sock stripe scale. A stripe's `width` is a fraction of the cylinder's
+# own side length (see _make_h_stripes_texture), and jerseys author arms and
+# socks with the SAME fractions (data/team_colors.json — Dragonfruit/Blueberry
+# use identical arrays). But the arm bones render longer than the socks: the
+# forearm/upper-arm design length is 0.35 m (Skater.forearm_length /
+# upper_arm_length) against the sock cylinder's 0.30 m height (SockL/R in
+# Skater.tscn). Both scale together with Size (m_height), so the ratio is fixed.
+# Without correction the identical fraction paints a physically taller band on
+# the thinner arm — the "arm stripes are too big" mismatch. Shrink the arm
+# pattern about its center by the length ratio so an authored width renders at
+# the same physical band height on arms as on socks.
+const _FOREARM_DESIGN_LEN: float = 0.35   # Skater.forearm_length / upper_arm_length default
+const _SOCK_DESIGN_LEN: float = 0.30      # SockL/R CylinderMesh height (Skater.tscn)
+const _ARM_STRIPE_SCALE: float = _SOCK_DESIGN_LEN / _FOREARM_DESIGN_LEN
+
+
 # Paints a bone cylinder (upper or lower arm) with horizontal stripes.
 # If the segment has no stripes, uses a solid material instead of building
 # a single-color texture — slightly cheaper, and keeps the simple case
@@ -295,8 +311,24 @@ func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
 	if segment.stripes.is_empty():
 		visual.material_override = _make_solid_mat(segment.base)
 		return
-	var tex: ImageTexture = _make_h_stripes_texture(segment.base, segment.stripes)
+	var scaled: Array[Dictionary] = _scale_stripes_about_center(segment.stripes, _ARM_STRIPE_SCALE)
+	var tex: ImageTexture = _make_h_stripes_texture(segment.base, scaled)
 	visual.material_override = _make_texture_material(tex)
+
+
+# Returns a copy of `stripes` with each band's width and its offset from the
+# region center (0.5) multiplied by `scale`, shrinking the whole pattern about
+# its center while keeping it centered. Runs on uniform apply, not per tick, so
+# the fresh array is not a hot-path concern.
+func _scale_stripes_about_center(stripes: Array[Dictionary], scale: float) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for s: Dictionary in stripes:
+		out.append({
+			"pos": 0.5 + (float(s.pos) - 0.5) * scale,
+			"width": float(s.width) * scale,
+			"color": s.color,
+		})
+	return out
 
 
 # Paints a single thigh cylinder with vertical side-column stripes. Per-side
