@@ -53,13 +53,15 @@ func test_shooter_at_goalie_z_falls_back_to_center() -> void:
 	assert_almost_eq(aim.z, NET_Z, 0.001)
 
 
-func test_corner_bias_pulls_aim_toward_post() -> void:
-	# Goalie shifted -X — right arc is wider, aim goes right. With
-	# default corner_bias = 0.7, aim should sit closer to the right
-	# post than to the open arc midpoint.
+func test_default_aims_at_midpoint_and_positive_bias_pulls_to_post() -> void:
+	# Goalie shifted -X — right arc is wider, aim goes right. The DEFAULT bias is
+	# now 0.0 (see DEFAULT_CORNER_BIAS): aim at the honest arc MIDPOINT (max
+	# clearance), so the execution wobble splits misses into saves AND posts
+	# symmetrically instead of throwing the tail onto the iron. A POSITIVE bias
+	# parameter is the old post-snipe — it pulls the aim past the midpoint toward
+	# the open post.
 	var shooter := Vector3(0.0, 0.0, 20.0)
 	var goalie := Vector3(-0.4, 0.0, 26.0)
-	var aim: Vector3 = AIShotAim.compute_open_net_aim(shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
 	# Compute the arc midpoint manually for comparison.
 	var dz: float = goalie.z - shooter.z
 	var to_net_z: float = NET_Z - shooter.z
@@ -67,8 +69,15 @@ func test_corner_bias_pulls_aim_toward_post() -> void:
 	var shadow_x: float = shooter.x + t * (goalie.x - shooter.x)
 	var shadow_right: float = clampf(shadow_x + SHADOW_HW, -NET_HW, NET_HW)
 	var midpoint: float = (shadow_right + NET_HW) * 0.5
-	assert_gt(aim.x, midpoint, "default corner_bias should pull aim past the arc midpoint toward the post")
-	assert_lte(aim.x, NET_HW, "aim still inside the net")
+	var default_aim: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, SHADOW_HW)
+	assert_almost_eq(default_aim.x, midpoint, 0.001,
+			"the default aims at the honest arc midpoint (max clearance)")
+	var post_biased: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, goalie, NET_Z, NET_HW, SHADOW_HW, 0.3)
+	assert_gt(post_biased.x, midpoint,
+			"a positive bias pulls aim past the arc midpoint toward the post")
+	assert_lte(post_biased.x, NET_HW, "aim still inside the net")
 
 
 func test_goalie_velocity_biases_aim_to_recovery_side() -> void:

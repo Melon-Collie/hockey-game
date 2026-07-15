@@ -111,11 +111,13 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 	assert_eq(hard.pass_speed_scale, 1.0, "Hard moves the puck at full pace")
 	assert_eq(hard.check_aggression, 1.0, "Hard hunts checks as today")
 	assert_eq(hard.defensive_anticipation_scale, 1.0, "Hard anticipates as today")
-	# Same for the finish knobs: no settle beat and the pre-split flat error on
-	# both release types, so Hard is byte-identical to the pre-knob bot.
+	# Finish knobs: no settle beat, and the SHOT error runs a touch above the pass
+	# error — with the make-probability shot model + centred aim, Hard's snipes go
+	# on-net more, so a wider shot scatter keeps the goalie robbing its tight
+	# looks and trims the elite finish, while the pass error stays tight.
 	assert_eq(hard.carry_settle_delay_s, 0.0, "Hard releases the tick the compete fires")
-	assert_eq(hard.shot_aim_error_rad, hard.pass_aim_error_rad,
-			"Hard keeps the pre-split flat error on both release types")
+	assert_gt(hard.shot_aim_error_rad, hard.pass_aim_error_rad,
+			"Hard's shot error runs above its pass error (goalie-active trim)")
 	# Hard's humanisers are small but real — the whole point of the retune is
 	# that even the ceiling tier is no longer tick-and-corner perfect.
 	assert_gt(hard.shot_timing_error_s, 0.0,
