@@ -168,7 +168,21 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 			# or demoted in the contest window, treat the new claim as uncontested.
 			var prior_record: PlayerRecord = _registry.get_record(_pending_peer_id)
 			if prior_record != null and prior_record.skater != null:
-				pc.apply_contested_pickup(record.skater, prior_record.skater)
+				# Resolve the squirt from the REWOUND blade of BOTH claimants — the
+				# kinematics each saw at their own view-time — not present-time (a
+				# contest window + RTT later). The new claimant's rewound blade is
+				# already in hand (blade_curr/blade_prev at blade_rewind_time); the
+				# prior claimant is re-rewound at its own claim's view-time. If its
+				# snapshot is gone, fall back to its live blade rather than skip.
+				var new_vel: Vector3 = (blade_curr - blade_prev) * float(Constants.PHYSICS_TICK)
+				var prior_pos: Vector3 = prior_record.skater.get_blade_contact_global()
+				var prior_vel: Vector3 = prior_record.skater.blade_world_velocity
+				var prior_kin: Array = _rewound_blade_kinematics(_pending_peer_id, _pending_host_timestamp)
+				if not prior_kin.is_empty():
+					prior_pos = prior_kin[0]
+					prior_vel = prior_kin[1]
+				pc.apply_contested_pickup(record.skater, prior_record.skater,
+						new_vel, prior_vel, blade_curr, prior_pos)
 				_pending_peer_id = -1
 				_pending_timer = 0.0
 				_pending_host_timestamp = 0.0
@@ -193,3 +207,22 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 		_pending_timer = 0.0
 		_pending_peer_id = peer_id
 		_pending_host_timestamp = host_timestamp
+
+
+# Rewound blade kinematics for a contestant, from their claim's SELF-view time —
+# so a contested pickup resolves from the blade the claimant actually saw, not a
+# present-time sample. Returns [pos: Vector3, vel: Vector3], or [] if the rewound
+# snapshot is missing (caller falls back to the live skater). Velocity is the same
+# per-tick finite difference the live blade_world_velocity uses (Δpos / one tick),
+# measured on the same blade_contact_world point the position term reports.
+func _rewound_blade_kinematics(peer_id: int, claim_host_timestamp: float) -> Array:
+	var t: float = LagCompRewind.self_view_time(claim_host_timestamp)
+	var snap: WorldSnapshot = _state_buffer.get_state_at(t)
+	var s: SkaterNetworkState = snap.get_skater_state(peer_id)
+	if s == null:
+		return []
+	var prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(t))
+	var s_prev: SkaterNetworkState = prev_snap.get_skater_state(peer_id)
+	var pos: Vector3 = s.blade_contact_world
+	var prev_pos: Vector3 = s_prev.blade_contact_world if s_prev != null else pos
+	return [pos, (pos - prev_pos) * float(Constants.PHYSICS_TICK)]

@@ -316,14 +316,27 @@ func is_processing_stick_lift() -> bool:
 # momentum; a true 50/50 pops out sideways like a pinched seed. All the math is in
 # PuckCollisionRules.contested_pickup_velocity; the randomness (deadlock side +
 # degenerate fallback) is supplied here so the rule stays deterministic/testable.
-func apply_contested_pickup(skater_a: Skater, skater_b: Skater) -> void:
+#
+# Blade kinematics (raw per-tick velocity + world contact point) for BOTH
+# contestants are passed in rather than read off the live skaters, so the claim
+# path can supply each claimant's REWOUND blade — the kinematics they actually
+# saw at their view-time — instead of present-time values sampled up to a contest
+# window + RTT later. The host present-time path passes the live values, so the
+# two scrambles resolve from the same shared rule on matching inputs. (Draw-crest
+# substitution still reads the live skater — the retained faceoff peak isn't in
+# the snapshot; see _contest_blade_velocity.)
+func apply_contested_pickup(
+		skater_a: Skater, skater_b: Skater,
+		blade_vel_a: Vector3, blade_vel_b: Vector3,
+		blade_pos_a: Vector3, blade_pos_b: Vector3) -> void:
 	if not is_instance_valid(skater_a) or not is_instance_valid(skater_b):
 		return
 	var perp_sign: float = 1.0 if randf() > 0.5 else -1.0
 	var fallback := Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
 	puck.set_puck_velocity(PuckCollisionRules.contested_pickup_velocity(
-			_contest_blade_velocity(skater_a), _contest_blade_velocity(skater_b),
-			skater_a.get_blade_contact_global(), skater_b.get_blade_contact_global(),
+			_contest_blade_velocity(skater_a, blade_vel_a),
+			_contest_blade_velocity(skater_b, blade_vel_b),
+			blade_pos_a, blade_pos_b,
 			contest_min_speed, contest_max_speed,
 			contest_deadlock_speed, contest_deadlock_threshold,
 			perp_sign, fallback))
@@ -339,10 +352,14 @@ func apply_contested_pickup(skater_a: Skater, skater_b: Skater) -> void:
 # center is draw-tracking, so we use its retained swipe crest scaled by how well the
 # crest landed on the drop (a well-timed sweep wins decisively; a late stab is
 # discounted). Anywhere else — a board scramble — nobody is tracking, so it's the
-# raw per-tick blade velocity, unchanged.
-func _contest_blade_velocity(skater: Skater) -> Vector3:
+# `raw_blade_vel` the caller supplies: the live per-tick blade velocity on the host
+# present-time path, or the claimant's rewound view-time blade velocity on the
+# claim path. (The retained draw crest is host-live state, not snapshotted, so a
+# faceoff contest reads it live even on the claim path — acceptable since it's a
+# retained peak, not an instantaneous value.)
+func _contest_blade_velocity(skater: Skater, raw_blade_vel: Vector3) -> Vector3:
 	if not skater.is_draw_tracking():
-		return skater.blade_world_velocity
+		return raw_blade_vel
 	var weight: float = FaceoffDrawRules.timing_weight(
 			skater.draw_since_drop(), contest_draw_timing_miss_window,
 			contest_draw_timing_bonus, contest_draw_timing_min_weight)
@@ -480,7 +497,11 @@ func _check_interactions() -> void:
 					# only runs at the rare moment a pickup would actually happen.
 					var contender: Skater = _find_contesting_corraller(skater, skaters, puck_curr, puck_airborne)
 					if contender != null:
-						apply_contested_pickup(skater, contender)
+						# Present-time contest — both blades are host-live this tick, so
+						# feed their live kinematics (the claim path feeds rewound ones).
+						apply_contested_pickup(skater, contender,
+								skater.blade_world_velocity, contender.blade_world_velocity,
+								skater.get_blade_contact_global(), contender.get_blade_contact_global())
 					else:
 						puck.set_carrier(skater)
 						_on_puck_picked_up(skater)
