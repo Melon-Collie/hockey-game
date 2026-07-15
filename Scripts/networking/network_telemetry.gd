@@ -51,6 +51,16 @@ var _reconcile_mag_sum: float = 0.0
 var _reconcile_mag_n: int = 0
 var _reconcile_lookup_count: int = 0
 var _reconcile_match_count: int = 0
+# Reconcile-match MISS attribution (ReconciliationRules.MatchMiss buckets). A miss
+# forces the prediction-lead fallback that trips a spurious position snap, so a
+# high miss rate drives residual reconcile churn; these say WHERE the ack fell so
+# we can tell a benign post-clear transient (EMPTY/OLDER) from a real history hole
+# (GAP). Session totals; gap_ms tracks the worst ack-vs-history-bound distance.
+var _reconcile_miss_empty: int = 0
+var _reconcile_miss_older: int = 0
+var _reconcile_miss_newer: int = 0
+var _reconcile_miss_gap: int = 0
+var _reconcile_miss_gap_ms_max: float = 0.0
 var _recon_pos_trips: int = 0
 var _recon_vel_trips: int = 0
 var _recon_ubody_trips: int = 0
@@ -96,6 +106,14 @@ var _bytes_received_window: int = 0
 var _puck_traj_soft_count: int = 0
 var _puck_traj_vel_only_count: int = 0
 var _puck_traj_hard_snap_count: int = 0
+# Shot-launch divergence: on the first host-confirmed broadcast after a LOCAL
+# shot release, the gap between the client-predicted puck and the host-authoritative
+# launch. Both run identical Jolt from the same client-sent origin, so this should
+# be tiny — a spike means real launch divergence, and it attributes the shot-launch
+# share of puck_hard_snaps. Window MAX (peak) + a session shot count (TOTAL). Client only.
+var _shot_launch_pos_div_max: float = 0.0
+var _shot_launch_vel_div_max: float = 0.0
+var _shot_launch_count: int = 0
 var _window_timer: float = 0.0
 
 # ── Published metrics (read by overlay) ──────────────────────────────────────
@@ -296,6 +314,19 @@ static func record_reconcile_match(matched: bool) -> void:
 	if matched:
 		instance._reconcile_match_count += 1
 
+# A find_at miss, bucketed by ReconciliationRules.classify_match_miss. gap_ms is
+# how far the ack sat past the nearest history bound (0 for EMPTY/GAP).
+static func record_reconcile_miss(reason: int, gap_ms: float) -> void:
+	if instance == null:
+		return
+	match reason:
+		ReconciliationRules.MatchMiss.EMPTY: instance._reconcile_miss_empty += 1
+		ReconciliationRules.MatchMiss.OLDER: instance._reconcile_miss_older += 1
+		ReconciliationRules.MatchMiss.NEWER: instance._reconcile_miss_newer += 1
+		ReconciliationRules.MatchMiss.GAP: instance._reconcile_miss_gap += 1
+	if gap_ms > instance._reconcile_miss_gap_ms_max:
+		instance._reconcile_miss_gap_ms_max = gap_ms
+
 # Which reconcile channel(s) tripped the snap this time (diagnostic attribution).
 static func record_reconcile_cause(pos: bool, vel: bool, ubody: bool) -> void:
 	if instance == null:
@@ -336,6 +367,18 @@ static func record_puck_trajectory_zone(zone: int) -> void:
 		0: instance._puck_traj_soft_count += 1
 		1: instance._puck_traj_vel_only_count += 1
 		2: instance._puck_traj_hard_snap_count += 1
+
+# Divergence between the client's predicted puck and the host's authoritative
+# launch at the first host-confirmed broadcast after a local release (see
+# PuckController). Keeps the window peak of each; count is the shot denominator.
+static func record_shot_launch_divergence(pos_div_m: float, vel_div: float) -> void:
+	if instance == null:
+		return
+	instance._shot_launch_count += 1
+	if pos_div_m > instance._shot_launch_pos_div_max:
+		instance._shot_launch_pos_div_max = pos_div_m
+	if vel_div > instance._shot_launch_vel_div_max:
+		instance._shot_launch_vel_div_max = vel_div
 
 # input_lead: estimated_host_time() - input.host_timestamp at the moment an
 # input is popped from the host queue. Near-zero means inputs are processed
@@ -476,6 +519,11 @@ func tick(delta: float) -> void:
 	_reconcile_mag_n = 0
 	_reconcile_lookup_count = 0
 	_reconcile_match_count = 0
+	_reconcile_miss_empty = 0
+	_reconcile_miss_older = 0
+	_reconcile_miss_newer = 0
+	_reconcile_miss_gap = 0
+	_reconcile_miss_gap_ms_max = 0.0
 	_recon_pos_trips = 0
 	_recon_vel_trips = 0
 	_recon_ubody_trips = 0
@@ -496,6 +544,9 @@ func tick(delta: float) -> void:
 	_puck_traj_soft_count = 0
 	_puck_traj_vel_only_count = 0
 	_puck_traj_hard_snap_count = 0
+	_shot_launch_pos_div_max = 0.0
+	_shot_launch_vel_div_max = 0.0
+	_shot_launch_count = 0
 	_input_lead_sum = 0.0
 	_input_lead_n = 0
 	_starvation_count = 0
@@ -551,6 +602,19 @@ func _fold_session_sample() -> void:
 		# that smears 3 hard snaps in a 10-minute game to ~0.
 		"puck_hard_snaps": float(_puck_traj_hard_snap_count),
 		"blade_jumps": float(_blade_jump_count),
+		# Reconcile-match miss attribution (TOTAL_KEYS). A miss → prediction-lead
+		# fallback → spurious position snap, so these split the residual reconcile
+		# churn by cause. gap_ms is a regular key (the view takes its _max).
+		"reconcile_miss_empty": float(_reconcile_miss_empty),
+		"reconcile_miss_older": float(_reconcile_miss_older),
+		"reconcile_miss_newer": float(_reconcile_miss_newer),
+		"reconcile_miss_gap": float(_reconcile_miss_gap),
+		"reconcile_miss_gap_ms": _reconcile_miss_gap_ms_max,
+		# Shot-launch divergence (client only): window-peak client-vs-host launch gap
+		# (regular keys → view takes _max), plus the session shot count (TOTAL).
+		"shot_launch_div_m": _shot_launch_pos_div_max,
+		"shot_launch_vel_div": _shot_launch_vel_div_max,
+		"shot_launches": float(_shot_launch_count),
 		# Host-side lag-comp pickup-claim outcomes (also TOTAL_KEYS session sums).
 		# On the host row, misses/claims ≈ rewind health (near-zero = working);
 		# deflects are the reached-but-not-catchable verdicts. Clients fold 0s.
