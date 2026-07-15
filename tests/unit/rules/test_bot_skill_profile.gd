@@ -112,7 +112,8 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 	assert_eq(hard.check_aggression, 1.0, "Hard hunts checks as today")
 	assert_eq(hard.defensive_anticipation_scale, 1.0, "Hard anticipates as today")
 	# Same for the finish knobs: no settle beat and the pre-split flat error on
-	# both release types, so Hard is byte-identical to the pre-knob bot.
+	# both release types (scatter is a selectivity dial, not a save dial — see the
+	# factory doc; it isn't the trim lever).
 	assert_eq(hard.carry_settle_delay_s, 0.0, "Hard releases the tick the compete fires")
 	assert_eq(hard.shot_aim_error_rad, hard.pass_aim_error_rad,
 			"Hard keeps the pre-split flat error on both release types")

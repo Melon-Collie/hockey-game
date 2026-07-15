@@ -976,6 +976,36 @@ static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> f
 	return shooter.x + (net_z - shooter.z) / dz * (px - shooter.x)
 
 
+# Soft make-margin against the shooter's release scatter. The physical `window`
+# is the net still open past the puck's clean-entry fit and the goalie's cover;
+# `spread` is the bot's per-release aim error (aim_spread_rad). The OLD model
+# subtracted the full spread as a HARD margin (max(0, window − spread)) and
+# returned only the CERTAIN-make core — so the bot declined every shot the goalie
+# could reach into, and the keeper never had to make a save on a bot (its misses
+# were all posts/wides, the wobble aimed away from him). This prices the PARTIAL
+# make instead: a shot whose window is comparable to its scatter still goes in
+# some of the time. window·window/(window + spread):
+#   · window ≫ spread → ≈ window − spread   (certain make — clean shots and the
+#                                             whole aim_spread=0 calibration
+#                                             baseline are unchanged)
+#   · window == spread → 0.5·spread          (was 0 — the partial make the bot now
+#                                             takes, and gets saved on ~half of)
+#   · window → 0       → 0                    (fully covered — no phantom value)
+#   · spread == 0      → window               (perfect hand / test agent: exact
+#                                             geometry, identical to the old cut)
+# The bot aims these at the window CENTRE (DEFAULT_CORNER_BIAS = 0), so its
+# existing execution wobble splits a taken shot into goals / goalie saves / posts
+# — a shooter who picks the corner and sometimes gets robbed. Grounded (a make
+# probability, not a magic curve), monotonic, and allocation/branch-cheap for the
+# 120 Hz hole scan.
+static func _soft_make_angle(window: float, spread: float) -> float:
+	if window <= 0.0:
+		return 0.0
+	if spread <= 0.0:
+		return window
+	return window * window / (window + spread)
+
+
 # Open angle (radians, from the shooter's eye) of hole `i` — 0 if the goalie
 # covers it. Corners measure the net cleared past the reaction-gated cover edge;
 # the five-hole is a central gap that opens with the goalie's unsettle. All
@@ -1067,11 +1097,11 @@ static func _hole_open_angle(
 						0.0, 1.0)
 				gap *= 1.0 - seal
 			var gap_angle: float = maxf(0.0, gap - puck_diameter) / maxf(dist, 0.5)
-			return maxf(0.0, gap_angle - aim_spread_rad) * centrality
+			return _soft_make_angle(gap_angle, aim_spread_rad) * centrality
 		# Legacy proxy (no replicated stance in scope — threat surfaces, tests):
 		# a set goalie seals it, a caught-moving one leaks it.
 		var proxy_angle: float = maxf(0.0, FIVE_GAP_M - puck_diameter) / maxf(dist, 0.5)
-		return maxf(0.0, proxy_angle - aim_spread_rad) * eff_unsettled * centrality
+		return _soft_make_angle(proxy_angle, aim_spread_rad) * eff_unsettled * centrality
 
 	# Band cover raced against t_reach — standing pad column widened by the
 	# butterfly drop LOW, reaction-gated glove/blocker extension HIGH, with the
@@ -1117,21 +1147,22 @@ static func _hole_open_angle(
 		return 0.0
 	# The puck has to FIT: a corner only scores by what remains after the puck's
 	# clean-entry inset off the pipe — post radius + puck radius, the exact
-	# GameRules.NET_ENTRY_HALF_WIDTH inset _hole_aim_x buys the aim point — PLUS
-	# the shooter's own execution spread (aim_spread_rad), the same wobble budget
-	# the aim point reserves. A noisier hand needs a wider window for the same
-	# chance, so spread belongs in shot SELECTION, not just execution. (No extra
-	# margin on the cover side: `cover` is already the goalie's MAXIMAL deployed
-	# reach.) Without the inset, a fully-deployed goalie always left a few-cm
-	# "sliver" open past his reach at ANY range — an opening the aim clamp can't
-	# even target (it sits inside the entry inset) — and that un-hittable sliver
-	# out-scored working closer: the launch-it-from-the-point bug. The inset's
-	# angular size foreshortens with range like any target, so in tight it costs
-	# almost nothing.
-	var fit_angle: float = (GameRules.NET_POST_RADIUS + GameRules.PUCK_COLLISION_RADIUS) \
-			/ maxf(shooter.distance_to(attacking_goal), 0.5) \
-			+ aim_spread_rad
-	return maxf(0.0, open_angle - fit_angle)
+	# GameRules.NET_ENTRY_HALF_WIDTH inset _hole_aim_x buys the aim point. This is a
+	# HARD geometric requirement (the puck physically clips the iron short of it),
+	# so it's subtracted outright. (No extra margin on the cover side: `cover` is
+	# already the goalie's MAXIMAL deployed reach.) Without the inset, a
+	# fully-deployed goalie always left a few-cm "sliver" open past his reach at ANY
+	# range — an opening the aim clamp can't even target (it sits inside the entry
+	# inset) — and that un-hittable sliver out-scored working closer: the
+	# launch-it-from-the-point bug. The inset's angular size foreshortens with range
+	# like any target, so in tight it costs almost nothing.
+	var pipe_clearance: float = (GameRules.NET_POST_RADIUS + GameRules.PUCK_COLLISION_RADIUS) \
+			/ maxf(shooter.distance_to(attacking_goal), 0.5)
+	# The shooter's execution spread is NOT a hard cut — it softens the window via
+	# a partial-make (see _soft_make_angle): a window comparable to the wobble
+	# still scores (the bot takes it and gets saved on ~half), instead of the old
+	# certain-make-only cut that declined every shot the goalie could reach.
+	return _soft_make_angle(open_angle - pipe_clearance, aim_spread_rad)
 
 
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance

@@ -489,12 +489,14 @@ func test_shot_danger_set_goalie_caps_the_direct_shot_at_every_range() -> void:
 		assert_lt(s, 0.03, "…and range forecloses the direct shot from %.0f m" % dist)
 
 
-func test_aim_spread_demands_a_wider_window_in_the_score() -> void:
-	# Execution spread is part of shot SELECTION, not just execution: the same
-	# window scores lower for a noisier hand (its wobble budget eats the
-	# opening), and a big enough spread closes a thin window entirely — the
-	# score finally agrees with the aim clamp, which already insets by spread.
-	# Window: the cross-seam look past a frozen centred goalie (a real opening).
+func test_aim_spread_softens_the_window_to_a_partial_make() -> void:
+	# Execution spread is part of shot SELECTION: the same window scores LOWER for
+	# a noisier hand (its wobble eats the opening — monotonically with spread). But
+	# a wobble comparable to or wider than the window no longer CLOSES it: the shot
+	# is priced as a PARTIAL make (_soft_make_angle), so the bot still takes it and
+	# gets saved on the shots that miss — instead of the old certain-make-only cut
+	# that declined every shot the goalie could reach (and left the keeper without
+	# a save to make). Window: the cross-seam look past a frozen centred goalie.
 	var shooter := Vector3(3.0, 0.0, 22.0)
 	var goalie := Vector3(0.0, 0.0, 25.15)
 	var clean: float = AIActionScoring.score_shoot(
@@ -507,8 +509,37 @@ func test_aim_spread_demands_a_wider_window_in_the_score() -> void:
 			shooter, GOAL, goalie, NET_HW, [], AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 			0.0, [], -1.0, false, 0.0, false, 0.4)
 	assert_gt(clean, noisy, "a noisier hand rates the same window lower")
-	assert_gt(noisy, 0.0, "…a small wobble doesn't kill a real open look")
-	assert_almost_eq(wild, 0.0, 0.001, "a wobble wider than the window closes it")
+	assert_gt(noisy, wild, "…and a wild hand lower still (monotonic in spread)")
+	assert_gt(wild, 0.0,
+			"a wobble wider than the window is a PARTIAL make, not a hard cut")
+	assert_lt(wild, clean * 0.6,
+			"…rated well below the clean look — a low-percentage shot, not a gimme")
+
+
+func test_soft_make_angle_partial_make_curve() -> void:
+	# window·window/(window + spread): the smooth partial-make that replaced the
+	# old hard "certain-make only" cut (max(0, window − spread)).
+	# spread = 0 → exact geometry (the old cut's floor, and the calibration
+	# baseline every aim_spread=0 test relies on).
+	assert_almost_eq(AIActionScoring._soft_make_angle(0.3, 0.0), 0.3, 1e-6,
+			"perfect hand → the full geometric window")
+	# window ≤ 0 → nothing (fully covered, no phantom value).
+	assert_eq(AIActionScoring._soft_make_angle(0.0, 0.05), 0.0,
+			"no open window → zero regardless of spread")
+	assert_eq(AIActionScoring._soft_make_angle(-0.1, 0.05), 0.0,
+			"a negative window is clamped to zero")
+	# window == spread → half the spread (the old cut gave 0 here — the whole point).
+	assert_almost_eq(AIActionScoring._soft_make_angle(0.05, 0.05), 0.025, 1e-6,
+			"a window equal to the wobble is a ~half partial make (was 0)")
+	# window ≫ spread → ≈ window − spread (asymptotes to the old certain make).
+	var wide: float = AIActionScoring._soft_make_angle(1.0, 0.02)
+	assert_almost_eq(wide, 1.0 - 0.02, 0.001,
+			"a window far wider than the wobble ≈ the old certain-make (window − spread)")
+	# Monotonic: grows with window, shrinks with spread.
+	assert_gt(AIActionScoring._soft_make_angle(0.2, 0.05),
+			AIActionScoring._soft_make_angle(0.1, 0.05), "more window → more make")
+	assert_gt(AIActionScoring._soft_make_angle(0.1, 0.02),
+			AIActionScoring._soft_make_angle(0.1, 0.08), "more wobble → less make")
 
 
 func test_shot_danger_squared_challenged_goalie_zeroes_the_point_shot() -> void:
@@ -1720,9 +1751,10 @@ func test_five_hole_scores_only_the_clearance_past_the_puck() -> void:
 
 func test_five_hole_pays_the_execution_spread() -> void:
 	# The five-hole pays the shooter's execution spread exactly as the corners
-	# do (their fit inset): a razor slot a noisy hand can't actually thread
-	# must not out-score a wider corner via the flat-loft tie-break — the
-	# "five-hole happy" bug.
+	# do (via _soft_make_angle): a razor slot a noisy hand can barely thread
+	# scores LOWER (so it can't out-score a wider corner via the flat-loft
+	# tie-break — the "five-hole happy" bug), and a wobble wider than the slot
+	# softens it to a low-percentage partial make rather than a hard zero.
 	var goal := Vector3(0, 0, -26.65)
 	var shooter := Vector3(0, 0, -23.65)
 	var goalie := Vector3(0, 0, -24.9)
@@ -1737,8 +1769,9 @@ func test_five_hole_pays_the_execution_spread() -> void:
 	var wild: float = AIActionScoring.open_net_danger(
 			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0,
 			gap, false, 0.0, false, 0.2)
-	assert_almost_eq(wild, 0.0, 0.001,
-			"a wobble wider than the slot closes it entirely")
+	assert_gt(noisy, wild, "a wilder hand rates the razor slot lower still")
+	assert_lt(wild, clean * 0.5,
+			"a wobble wider than the slot leaves only a low-percentage partial make")
 
 
 func test_standing_five_hole_sealed_from_range() -> void:
