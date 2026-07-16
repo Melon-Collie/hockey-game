@@ -1573,8 +1573,17 @@ func _compute_threat_position() -> Vector3:
 	# tight where it keeps the goalie in front of a walkout deke, gone at range
 	# where it only chased stickhandling wiggle. Y is zeroed because skaters
 	# don't move vertically — leading height noise would drift the threat off ice.
+	#
+	# Slapshot windup is the exception: the puck is pinned to the body and moves
+	# WITH it, so `_puck_velocity_est` IS the carrier velocity — the two leads then
+	# double-count the same body motion (~1.67× lead in tight) and OVER-lead a
+	# lateral coast, over-committing the goalie ahead of the pinned puck and opening
+	# the against-the-grain side. There's no independent dangle to catch (the pin
+	# holds the offset fixed), so drop the puck lead during the windup and let the
+	# honest carrier lead alone keep the goalie square to a coasting slapper.
+	var puck_lead_scale: float = 0.0 if _reading_slapper_tell else (1.0 - chest_t)
 	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time \
-			+ _puck_velocity_est * puck_velocity_lead_time * (1.0 - chest_t)
+			+ _puck_velocity_est * puck_velocity_lead_time * puck_lead_scale
 	lead.y = 0.0
 	return blended + lead
 
