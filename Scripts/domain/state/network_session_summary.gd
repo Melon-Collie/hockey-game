@@ -41,7 +41,9 @@ const MIN_KEYS: Array[String] = ["sim_rate_hz", "reconcile_match_pct", "client_f
 # emits a single "<key>_total" (the sum across the session) instead of the
 # max/avg pair.
 const TOTAL_KEYS: Array[String] = ["puck_hard_snaps", "blade_jumps",
-		"pickup_claims", "pickup_claim_misses", "pickup_claim_deflects"]
+		"pickup_claims", "pickup_claim_misses", "pickup_claim_deflects",
+		"reconcile_miss_empty", "reconcile_miss_older", "reconcile_miss_newer",
+		"reconcile_miss_gap", "shot_launches"]
 
 # Cap on felt-lag markers per session — defense against a tester leaning on the
 # key. Beyond the cap we keep a count so the total is still visible.

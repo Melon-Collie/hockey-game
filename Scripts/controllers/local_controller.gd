@@ -420,6 +420,21 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# (history capped, post-teleport, dead-puck gap, session warmup).
 	var predicted: PredictedState = PredictedState.find_at(_prediction_history, ack_ts)
 	NetworkTelemetry.record_reconcile_match(predicted != null)
+	# On a miss, attribute WHERE the ack fell relative to the kept history — a miss
+	# forces the prediction-lead fallback below (divergence_position = live), which
+	# trips a spurious position snap, so the miss cause is the residual-churn signal.
+	if predicted == null:
+		var reason: int = ReconciliationRules.classify_match_miss(
+				_prediction_history.is_empty(),
+				_prediction_history[0].host_timestamp if not _prediction_history.is_empty() else 0.0,
+				_prediction_history[-1].host_timestamp if not _prediction_history.is_empty() else 0.0,
+				ack_ts, PredictedState.TS_MATCH_EPSILON)
+		var gap_ms: float = 0.0
+		if reason == ReconciliationRules.MatchMiss.OLDER:
+			gap_ms = (_prediction_history[0].host_timestamp - ack_ts) * 1000.0
+		elif reason == ReconciliationRules.MatchMiss.NEWER:
+			gap_ms = (ack_ts - _prediction_history[-1].host_timestamp) * 1000.0
+		NetworkTelemetry.record_reconcile_miss(reason, gap_ms)
 	var divergence_position: Vector3 = predicted.position if predicted != null else skater.global_position
 	var divergence_velocity: Vector3 = predicted.velocity if predicted != null else skater.velocity
 	var divergence_upper_body: float = predicted.upper_body_rotation_y if predicted != null else _pose.upper_body_angle
