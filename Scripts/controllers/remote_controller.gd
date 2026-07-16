@@ -81,6 +81,15 @@ func _physics_process(delta: float) -> void:
 	if _is_host:
 		_drive_from_input(delta)
 	else:
+		# Live interpolation owns this body's cosmetics, so the render-rate gait
+		# hook must run. Clear _self_posing here: a replay driving this same skater
+		# via apply_replay_state raises the flag (that path poses its own gait), and
+		# nothing else lowers it on a client-rendered remote — _process_input, the
+		# only other reset, never runs on this path — so without this the flag stuck
+		# true after the first goal/intermission replay and the render hook yielded
+		# forever, freezing every remote's legs for the rest of the match. Guarded by
+		# the is_replay_mode() early-return above, so this only fires in live play.
+		_self_posing = false
 		if _knockback_lead_elapsed >= 0.0:
 			_knockback_lead_elapsed += delta
 		_interpolate(delta)
@@ -235,6 +244,7 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 		_sample_scratch.position = newest.position
 		_sample_scratch.velocity = newest.velocity
 		_sample_scratch.brake_intent = newest.brake_intent
+		_sample_scratch.hit_committed = newest.hit_committed
 	else:
 		var f: SkaterNetworkState = bracket.from_state
 		var to: SkaterNetworkState = bracket.to_state
@@ -243,6 +253,7 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 		_sample_scratch.velocity = f.velocity.lerp(to.velocity, bracket.t)
 		# Brace at/before host_time — a discrete flag, so take the earlier sample.
 		_sample_scratch.brake_intent = f.brake_intent
+		_sample_scratch.hit_committed = f.hit_committed
 	return _sample_scratch
 
 func _interpolate(delta: float) -> void:
@@ -288,6 +299,7 @@ func _interpolate(delta: float) -> void:
 		interpolated.knockdown_timer = newest.knockdown_timer
 		interpolated.move_intent = newest.move_intent
 		interpolated.brake_intent = newest.brake_intent
+		interpolated.hit_committed = newest.hit_committed
 		interpolated.sprint_active = newest.sprint_active
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
@@ -323,6 +335,7 @@ func _interpolate(delta: float) -> void:
 		interpolated.knockdown_timer = lerpf(from_state.knockdown_timer, to_state.knockdown_timer, t)
 		interpolated.move_intent = to_state.move_intent
 		interpolated.brake_intent = to_state.brake_intent
+		interpolated.hit_committed = to_state.hit_committed
 		interpolated.sprint_active = to_state.sprint_active
 		# render_time is led toward present by extrapolation_lead_fraction, so the
 		# hermite result already sits close to the host's live pose (or, past the
@@ -407,6 +420,9 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# equivalent of the per-tick stamp in SkaterController._process_input.
 	skater.move_intent = state.move_intent
 	skater.brake_intent = state.brake_intent
+	# Replicated hit-commit so the body-check resolver reads this remote's brace /
+	# full-vs-passive delivery on this machine (the brace moved onto the Hit button).
+	skater.hit_committed = state.hit_committed
 	# The skid VFX (SkaterVFX trail marks + spray) keys off skater.is_braking,
 	# which only _process_input stamps — mirror it from the replicated brake
 	# bit so another player's hockey stop actually sprays on this machine.

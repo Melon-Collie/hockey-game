@@ -49,6 +49,12 @@ var brake_intent: bool = false
 # client-rendered remotes, which never resolve sprint themselves. Bit 5 of
 # the intent byte (v16).
 var sprint_active: bool = false
+# Resolved hit-commit (the Hit button held + stamina available), from
+# SkaterController.hit_committed on the simulating machine. Replicated so the body-
+# check resolver reads a REMOTE victim's brace and a remote attacker's full-vs-
+# passive delivery correctly on a client (host knows all locally) — the brace moved
+# off brake onto the hit button. Bit 6 of the intent byte (no block growth).
+var hit_committed: bool = false
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 # World-space top-hand (grip) point. host-only, not serialized — paired with
@@ -80,6 +86,7 @@ func to_array() -> Array:
 		brake_intent,
 		sprint_active,
 		knockdown_timer,
+		hit_committed,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -104,6 +111,7 @@ func copy_from(s: SkaterNetworkState) -> void:
 	move_intent = s.move_intent
 	brake_intent = s.brake_intent
 	sprint_active = s.sprint_active
+	hit_committed = s.hit_committed
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 	top_hand_world = s.top_hand_world
@@ -138,4 +146,6 @@ static func from_array(data: Array) -> SkaterNetworkState:
 		state.sprint_active = data[19]
 	if data.size() > 20:
 		state.knockdown_timer = data[20]
+	if data.size() > 21:
+		state.hit_committed = data[21]
 	return state

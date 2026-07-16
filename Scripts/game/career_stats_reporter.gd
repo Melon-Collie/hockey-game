@@ -44,9 +44,9 @@ func _fire(url: String, method: HTTPClient.Method, body: Dictionary) -> void:
 	var root: Window = (Engine.get_main_loop() as SceneTree).root
 	var req := HTTPRequest.new()
 	root.add_child(req)
-	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, resp: PackedByteArray) -> void:
 		if code < 200 or code >= 300:
-			push_warning("CareerStatsReporter: HTTP %d on %s" % [code, url])
+			push_warning("CareerStatsReporter: HTTP %d on %s%s" % [code, url, _body_detail(resp)])
 		req.queue_free()
 	)
 	var err: Error = req.request(url, _write_headers(), method, JSON.stringify(body))
@@ -70,7 +70,7 @@ func _call_rpc(name: String, body: Dictionary, callback: Callable) -> void:
 			else:
 				callback.call([])
 		else:
-			push_warning("CareerStatsReporter: RPC %s returned HTTP %d" % [name, code])
+			push_warning("CareerStatsReporter: RPC %s returned HTTP %d%s" % [name, code, _body_detail(body_bytes)])
 			callback.call([])
 		req.queue_free()
 	)
@@ -93,7 +93,7 @@ func _fetch(url: String, callback: Callable) -> void:
 			else:
 				callback.call({})
 		else:
-			push_warning("CareerStatsReporter: GET returned HTTP %d" % code)
+			push_warning("CareerStatsReporter: GET returned HTTP %d%s" % [code, _body_detail(body_bytes)])
 			callback.call({})
 		req.queue_free()
 	)
@@ -102,6 +102,19 @@ func _fetch(url: String, callback: Callable) -> void:
 		push_warning("CareerStatsReporter: GET failed: %s" % error_string(err))
 		req.queue_free()
 		callback.call({})
+
+
+# Truncated, log-safe rendering of an error response body. PostgREST names the
+# offending column / constraint there (e.g. PGRST204 "column ... not found"),
+# so a bare HTTP code alone can't distinguish schema drift from a size-cap
+# rejection. Returns " — <detail>" (leading separator) or "" when empty.
+func _body_detail(bytes: PackedByteArray) -> String:
+	var detail: String = bytes.get_string_from_utf8().strip_edges()
+	if detail.is_empty():
+		return ""
+	if detail.length() > 500:
+		detail = detail.substr(0, 500) + "…"
+	return " — " + detail
 
 
 func _write_headers() -> PackedStringArray:
