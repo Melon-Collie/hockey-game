@@ -161,6 +161,9 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 20)
 	panel.add_child(vbox)
 
+	# Header row: screen title + (host only) the lobby-visibility selector.
+	vbox.add_child(_build_header_row())
+
 	_slot_grid = SlotGridPanel.new()
 	_slot_grid.set_active_team_size(_team_size)
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -169,10 +172,9 @@ func _build_ui() -> void:
 	_slot_grid.kick_requested.connect(_on_kick_requested)
 	vbox.add_child(_slot_grid)
 
-	# Three-column section below the slot grid: TEAMS / MATCH / SPECTATORS.
-	# Columns line up with the slot columns above thanks to the same 56px
-	# left offset that SlotGridPanel uses for its AWAY/HOME labels.
-	vbox.add_child(_build_columns_row())
+	# Recessed settings tray below the slot grid: TEAMS / MATCH / SPECTATORS
+	# side by side in one full-width strip.
+	vbox.add_child(_build_settings_tray())
 
 	var btn_box := HBoxContainer.new()
 	btn_box.add_theme_constant_override("separation", 12)
@@ -212,23 +214,82 @@ func _on_edit_build_pressed() -> void:
 		_build_popup.open()
 
 
-# Lay out the bottom of the lobby as three vertical columns aligned with the
-# slot-grid columns above. Left offset of 56px matches SlotGridPanel's
-# AWAY/HOME team-label column so the headers below line up under LW/C/RW.
-func _build_columns_row() -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+# Header row above the slot grid: heading on the left and, for the host, the
+# lobby-visibility selector (with its status hint) on the right. Visibility is
+# a session-level state — who can get in at all — not a match rule, so it
+# lives up here rather than in the MATCH settings stack. Clients joined
+# through a visibility they can't change, so their header is just the title.
+func _build_header_row() -> HBoxContainer:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	var left_offset := Control.new()
-	left_offset.custom_minimum_size = Vector2(56, 0)
-	row.add_child(left_offset)
+	var title := Label.new()
+	title.text = "Lobby"
+	MenuStyle.apply_heading(title, 30)
+	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(title)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+
+	if NetworkManager.is_host:
+		var vis_box := VBoxContainer.new()
+		vis_box.add_theme_constant_override("separation", 2)
+		vis_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		vis_box.custom_minimum_size = Vector2(280, 0)
+		vis_box.add_child(_build_visibility_row())
+		_visibility_hint = Label.new()
+		_visibility_hint.add_theme_font_size_override("font_size", 11)
+		_visibility_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+		_visibility_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_visibility_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vis_box.add_child(_visibility_hint)
+		header.add_child(vis_box)
+		_update_visibility_row()
+
+	return header
+
+
+# One recessed full-width strip holding the three option sections side by
+# side, split by hairlines: TEAMS | MATCH | SPECTATORS. MATCH gets roughly
+# double width — LobbySettingsPanel lays its rows out in two columns — so all
+# three sections land at a similar height instead of one tall middle tower.
+# The tray is darker than the lobby panel (SURFACE_INPUT) so the option
+# cluster recedes and the slot cards above stay the visual centerpiece.
+func _build_settings_tray() -> PanelContainer:
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.SURFACE_INPUT
+	style.set_corner_radius_all(6)
+	style.set_content_margin_all(16)
+
+	var tray := PanelContainer.new()
+	tray.add_theme_stylebox_override("panel", style)
+	tray.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tray.add_child(row)
 
 	row.add_child(_build_teams_column())
-	row.add_child(_build_match_column())
+	row.add_child(_tray_separator())
+	var match_col := _build_match_column()
+	match_col.size_flags_stretch_ratio = 2.2
+	row.add_child(match_col)
+	row.add_child(_tray_separator())
 	row.add_child(_build_spectators_column())
 
-	return row
+	return tray
+
+
+# 1px vertical hairline between tray sections.
+func _tray_separator() -> ColorRect:
+	var sep := ColorRect.new()
+	sep.color = MenuStyle.TEXT_SEP
+	sep.custom_minimum_size = Vector2(1, 0)
+	return sep
 
 
 # Small uppercase tracking-y header used at the top of each column to
@@ -341,17 +402,6 @@ func _build_match_column() -> VBoxContainer:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.add_child(_column_header("MATCH"))
 
-	# Visibility selector sits above the match rules — host only; clients
-	# joined through it, so there's nothing for them to set.
-	if NetworkManager.is_host:
-		col.add_child(_build_visibility_row())
-		_visibility_hint = Label.new()
-		_visibility_hint.add_theme_font_size_override("font_size", 11)
-		_visibility_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
-		_visibility_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		col.add_child(_visibility_hint)
-		_update_visibility_row()
-
 	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host, _team_size)
 	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
 	col.add_child(_settings_panel)
@@ -359,8 +409,8 @@ func _build_match_column() -> VBoxContainer:
 	return col
 
 
-# "Lobby: [Offline | Friends | Public]" — mirrors LobbySettingsPanel's row
-# look. Selecting Friends/Public from Offline attaches the Steam transport
+# "Visibility: [Offline | Friends | Public]" — the header-row selector.
+# Selecting Friends/Public from Offline attaches the Steam transport
 # (async — the selector disables until host_lobby_ready / _failed lands);
 # Friends ↔ Public is a live Steam lobby-type flip; Offline detaches, and is
 # only selectable with no human peers connected.
@@ -371,7 +421,7 @@ func _build_visibility_row() -> HBoxContainer:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var lbl := Label.new()
-	lbl.text = "Lobby"
+	lbl.text = "Visibility"
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
