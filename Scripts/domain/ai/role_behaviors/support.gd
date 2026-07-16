@@ -199,12 +199,33 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 
 # ── Role-specific scoring ────────────────────────────────────────────────────
 
-# Min over opponents of momentum-aware ETA back to our net. Shared race-home
-# primitive (AIRoleHelpers.min_opp_time_home) — also the forecheck safety's
-# pinch read.
+# SUPPORT-private conservative time-home: min over opponents of their BODY's
+# momentum-aware ETA to our net, no puck-gain leg. Deliberately NOT the shared
+# puck-path intercept read (AIRoleHelpers.fill_counter_channels): with the
+# honest gain leg, a lurker deep in our end makes every up-ice spot read
+# "exposed" while the deep spot reads perfectly safe — and the ramp below then
+# pays SUPPORT to hide at home instead of joining the rush, when the right
+# play is to trail up and leave the crease-lurker to the goalie until a
+# 40 m outlet actually connects. The honest fix is a covering-set /
+# shot-quality exposure (counter_rush_cost's shape) instead of a time ramp —
+# tracked in ARCHITECTURE → Known Issues; until then the old conservative
+# body-ETA keeps the shipped trade-off intact.
 static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
 		opp_caps: Array, our_net: Vector3) -> float:
-	return AIRoleHelpers.min_opp_time_home(opp_states, opp_caps, our_net)
+	var has_caps: bool = opp_caps.size() == opp_states.size()
+	var best: float = INF
+	for i: int in opp_states.size():
+		var s: SkaterNetworkState = opp_states[i]
+		var ref_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opp_caps[i]
+			if caps != null:
+				ref_speed = caps.max_speed
+		var t: float = AIActionScoring.time_to_arrive(
+				s.position, our_net, s.velocity, ref_speed)
+		if t < best:
+			best = t
+	return best
 
 
 # Foot-race-home exposure in [0, cap]. 0 when I beat every opp back to our net;

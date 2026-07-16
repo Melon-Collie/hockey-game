@@ -86,32 +86,19 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
 	var wall_x: float = ctx.strong_x * (GameRules.RINK_HALF_WIDTH - F3_WALL_INSET_M)
 
-	# The pinch read: how much time does the FASTEST opponent (momentum-aware,
-	# real Speed caps) need to reach our net? F3 may stand anywhere it can
-	# still beat that race with a standing-start sprint PLUS the set-up margin
-	# (arrive stopped and facing the play, not blowing past the cage). That
-	# bounds the hold point to a circle of radius R around our net; the hold
-	# is the most FORWARD point of F3's wall lane inside it — the blue line
-	# when the race is comfortable (opponents bottled deep), sagging down the
-	# wall as a breakout threat develops or a stretch man lurks behind the
-	# line. Closed-form: on the lane x = wall_x, dist-to-net <= R means
-	# |z - net.z| <= sqrt(R^2 - (wall_x - net.x)^2).
+	# The pinch read: hold the blue-line stand while it contains every
+	# counter path (fill_counter_channels — outlet flight + carry, raced to
+	# the first path station F3 can reach set). Opponents bottled deep keep
+	# the line; a breakout threat or a stretch man lurking behind it sags
+	# the hold down the retreat line toward home — sag-to-even, exactly as
+	# far as the developing counter demands.
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
-	var hold_z: float = blue_z
-	if r < INF:
-		var dx: float = wall_x - our_net.x
-		var lane_reach_sq: float = r * r - dx * dx
-		# Lane never reaches inside the circle (degenerate: the threat beats us
-		# home from anywhere) → stand at the lane point nearest our net.
-		var lane_reach: float = sqrt(lane_reach_sq) if lane_reach_sq > 0.0 else 0.0
-		# Most forward allowed z on the lane, then never forward of the blue line.
-		var allowed_fwd: float = ctx.own_goal_dir * our_net.z - lane_reach
-		hold_z = ctx.own_goal_dir * maxf(ctx.own_goal_dir * blue_z, allowed_fwd)
-	d.target_position = Vector3(wall_x, 0.0, hold_z)
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	d.target_position = AIRoleHelpers.most_forward_feasible(
+			Vector3(wall_x, 0.0, blue_z), ctx.self_max_speed, ctx.self_max_accel)
 	return d
 
 

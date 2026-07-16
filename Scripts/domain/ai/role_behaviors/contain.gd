@@ -162,16 +162,16 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# CONTAIN would skate FORWARD 15 m to "establish the gap" on a rush that
 	# hasn't come yet, vacating the middle while a trailer makes it a 2-on-1
 	# behind him (the forecheck-F3 bug's TRANS_OD twin). Gap control means the
-	# rush comes to YOU: the stand's distance from our net is capped by the
-	# race-home radius against the OTHER opponents — the CARRIER is excluded
-	# because gap control already owns him (you cannot be beaten home by the
-	# man you retreat in front of; the trailer is who burns you). Each trailer
-	# races at ITS real Speed cap — states and caps are filled together so the
+	# rush comes to YOU: the stand must contain the TRAILERS' counter paths
+	# (fill_counter_channels — feed flight + carry, raced to the first path
+	# station CONTAIN can reach set) — the CARRIER is excluded because gap
+	# control already owns him (you cannot be beaten home by the man you
+	# retreat in front of; the trailer is who burns you). Each trailer races
+	# at ITS real Speed cap — states and caps are filled together so the
 	# parallel arrays stay index-aligned (a hand-filled state list over a stale
 	# caps buffer used to size-mismatch and silently demote every trailer to
 	# league-reference speed, so a plodding trailer forced a deep sag and a
 	# burner was under-feared).
-	var stand_from_net: float = dist - gap
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	var opp_caps: Array[AISkaterCaps] = ctx.scratch_opp_caps
 	var receivers: Array[Vector3] = ctx.scratch_opp_receivers
@@ -189,11 +189,14 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# velocity-led so the fan guards where each feed is going.
 		receivers.append(AIRoleHelpers.lead_threat(
 				s.position, s.velocity, ctx.defensive_anticipation_scale))
-	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
-	if stand_from_net > r:
-		gap = dist - r
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	var dir_net: Vector3 = to_net / dist
-	d.target_position = carrier_pos + dir_net * gap
+	var stand: Vector3 = AIRoleHelpers.most_forward_feasible(
+			carrier_pos + dir_net * gap, ctx.self_max_speed, ctx.self_max_accel)
+	# The stand stays on the carrier→net line (net, stand, and the gap point
+	# are collinear), so the lane fan's gap distance updates with it.
+	gap = carrier_pos.distance_to(stand)
+	d.target_position = stand
 
 	# Odd-man pass-lane fan (see the header doc): rotate the stand off the
 	# retreat line toward an uncovered receiver's feed lane when that deflates
