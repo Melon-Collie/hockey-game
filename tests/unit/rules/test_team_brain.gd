@@ -162,3 +162,63 @@ func test_threat_partition_cleared_when_we_possess() -> void:
 # a manual deep compare via string repr (sufficient for small dicts).
 func assert_eq_deep(a: Dictionary, b: Dictionary, msg: String = "") -> void:
 	assert_eq(str(a), str(b), msg)
+
+
+# ── team_size branch (5v5) ───────────────────────────────────────────────────
+
+func _make_5v5_snapshot(carrier_pid: int) -> WorldSnapshot:
+	var snap := WorldSnapshot.new()
+	for entry: Array in [
+			[100, 0, Vector3(0.0, 0.0, 14.0)],
+			[110, 0, Vector3(-6.0, 0.0, 15.0)],
+			[120, 0, Vector3(6.0, 0.0, 15.0)],
+			[130, 0, Vector3(-3.0, 0.0, 22.0)],
+			[140, 0, Vector3(3.0, 0.0, 22.0)],
+			[200, 1, Vector3(9.0, 0.0, 23.0)]]:
+		var s := SkaterNetworkState.new()
+		s.position = entry[2]
+		snap.skater_states[entry[0]] = s
+	var puck := PuckNetworkState.new()
+	puck.carrier_peer_id = carrier_pid
+	puck.position = Vector3(9.0, 0.0, 23.0)
+	snap.puck_state = puck
+	return snap
+
+
+func test_brain_routes_to_5v5_slots_when_latched_at_5() -> void:
+	# Opp carrier deep in our zone with a full 5v5 lineup (130/140 = D):
+	# a team_size-5 brain must produce zone-coverage slots, not the 3v3 set.
+	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 130: 0, 140: 0, 200: 1}
+	var positions: Dictionary = {100: 0, 110: 1, 120: 2, 130: 3, 140: 4}
+	var brain := TeamBrain.new(TEAM_ID, team_map, {}, 5, positions)
+	brain.tick(1.0, _make_5v5_snapshot(200))
+	assert_eq(brain.slot_assignments.size(), 5)
+	var d_slots: Array[int] = [brain.get_slot(130), brain.get_slot(140)]
+	d_slots.sort()
+	assert_eq(d_slots, [AIRoleSlots.Slot.ZONE_D_STRONG,
+			AIRoleSlots.Slot.ZONE_D_WEAK] as Array[int],
+			"the lobby D pair owns the low zone")
+
+
+func test_brain_keeps_legacy_slots_at_3() -> void:
+	var brain: TeamBrain = _make_brain()
+	brain.tick(1.0, _make_snapshot(200, Vector3(0.0, 0.0, 22.0)))
+	for pid: int in brain.slot_assignments:
+		var slot: int = brain.slot_assignments[pid]
+		assert_true(slot == AIRoleSlots.Slot.PRESSURE or slot == AIRoleSlots.Slot.MARK,
+				"3v3 DZONE stays {PRESSURE, MARK}, got %d" % slot)
+
+
+func test_5v5_anchor_comes_from_the_5v5_geometry() -> void:
+	# The net-front box D's anchor must sit at the crease edge — the
+	# AIRoleSlots5.slot_anchor path, not the 3v3 slot_anchor (which returns
+	# ZERO for non-carrier slots).
+	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 130: 0, 140: 0, 200: 1}
+	var positions: Dictionary = {100: 0, 110: 1, 120: 2, 130: 3, 140: 4}
+	var brain := TeamBrain.new(TEAM_ID, team_map, {}, 5, positions)
+	var snap: WorldSnapshot = _make_5v5_snapshot(200)
+	brain.tick(1.0, snap)
+	var weak_d: int = 130 if brain.get_slot(130) == AIRoleSlots.Slot.ZONE_D_WEAK else 140
+	var anchor: Vector3 = brain.get_anchor(weak_d, snap)
+	assert_ne(anchor, Vector3.ZERO)
+	assert_between(anchor.z, 22.0, 26.65, "net-front anchor sits at the crease edge")
