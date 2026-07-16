@@ -106,6 +106,8 @@ func _ready() -> void:
 	add_child(_hud)
 	_hud.retry_pressed.connect(_on_retry)
 	_hud.exit_pressed.connect(_on_exit)
+	_hud.skip_pressed.connect(_on_skip)
+	_hud.enable_skip()
 
 	# Any release from carry is the pass — the drill is about the read and the
 	# lead, so quick snap, wrister, or saucer all count as the attempt.
@@ -197,6 +199,15 @@ func _tick_live(delta: float) -> void:
 	_drive_puppet()
 
 	if not _pass_live:
+		# The only way this rep can wedge before a pass is the teammate coming up
+		# with the puck — you drove into him and got stripped, or a deflected
+		# pickup squirted onto his blade — and then holding it, since he never
+		# gives it back on his own. Auto-fail that instead of softlocking. A puck
+		# merely knocked loose (or a voluntary nutmeg) stays reachable, so it isn't
+		# a fail; a caught pass runs with _pass_live true, so it never lands here.
+		if _puppet_record != null and is_instance_valid(_puppet_record.skater) \
+				and _puck.carrier == _puppet_record.skater:
+			_resolve_attempt(false)
 		return
 
 	# Teammate came up with it — a completed pass, however he corralled it.
@@ -278,6 +289,24 @@ func _on_retry() -> void:
 	_session.restart()
 	_hud.hide_results()
 	_begin_attempt()
+
+
+# Abandon the current rep and move on — the in-play escape hatch. Counts as an
+# attempt taken (keeps the "out of 10" denominator honest) and force-clears any
+# puck state so a rep that got wedged — a fumble the player can't reach, a puck
+# stuck on the teammate's blade — always unsticks. _advance shows the results
+# card if that was the last rep, otherwise stages the next scenario fresh.
+func _on_skip() -> void:
+	if _stage != Stage.LIVE:
+		return
+	_pass_live = false
+	_puck.remove_skater_cooldown(_skater)
+	if _puppet_record != null and is_instance_valid(_puppet_record.skater):
+		_puck.remove_skater_cooldown(_puppet_record.skater)
+	if _puck.carrier != null:
+		_puck.drop()
+	_session.record(false)
+	_advance()
 
 
 func _on_exit() -> void:
