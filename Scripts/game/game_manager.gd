@@ -358,6 +358,18 @@ var _ranked_match: bool = false
 # guard prevents duplicate connections to the persistent set on rematch.
 var _persistent_sound_signals_wired: bool = false
 
+# Echo-suppression for the two broadcast save cues (post / goalie). The shooter
+# client simulates its own shot in flight, so its predicted puck fires the
+# post/goalie contact LOCALLY the instant it happens (the live cue) and then
+# hears the host's broadcast ~RTT later — the same event twice. Non-shooter peers
+# never predict the loose puck, so the live cue never fires for them and the
+# broadcast is their only play. We stamp the local play time here and skip an
+# incoming broadcast that lands within the echo window. Keyed on a real local
+# play (not on "am I the shooter"), so a peer that did NOT predict the contact
+# still hears the broadcast — no silence hole. See _save_cue_is_echo.
+var _local_post_cue_at: float = -1000.0
+var _local_goalie_cue_at: float = -1000.0
+
 
 func _ready() -> void:
 	randomize()
@@ -1476,6 +1488,7 @@ func _wire_sound_signals() -> void:
 		func(_g: Goalie) -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05)
+			_local_goalie_cue_at = NetworkManager.local_time()
 			if NetworkManager.is_host:
 				NetworkManager.send_goalie_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_goalie", puck.get_puck_position(), spd))
@@ -1484,6 +1497,7 @@ func _wire_sound_signals() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
 			puck.fire_post_ping_vfx(spd)
+			_local_post_cue_at = NetworkManager.local_time()
 			if NetworkManager.is_host:
 				NetworkManager.send_post_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
@@ -1508,12 +1522,17 @@ func _wire_sound_signals() -> void:
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
 	NetworkManager.post_hit_received.connect(
 		func(pos: Vector3) -> void:
+			if _save_cue_is_echo(_local_post_cue_at):
+				return  # already played locally off this peer's predicted contact
 			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
 			SoundManager.play_world(SoundManager.Sound.PUCK_POST, pos, _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
 			if puck != null:
 				puck.fire_post_ping_vfx(spd))
 	NetworkManager.goalie_hit_received.connect(
-		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05))
+		func(pos: Vector3) -> void:
+			if _save_cue_is_echo(_local_goalie_cue_at):
+				return  # already played locally off this peer's predicted contact
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05))
 	NetworkManager.deflection_received.connect(
 		func(pos: Vector3) -> void:
 			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
@@ -4114,6 +4133,19 @@ const _PAD_SAVE_VOLUME_BUMP_DB: float = 2.0
 # Kept in sync with ReplayEventReplayer._post_pitch.
 func _post_pitch(speed: float) -> float:
 	return lerpf(0.9, 1.12, clampf((speed - 5.0) / 25.0, 0.0, 1.0))
+
+
+# True if a broadcast save cue arriving now is the echo of a local (predicted)
+# play this peer already made — see the _local_*_cue_at doc-block. The window is
+# the expected echo delay: the local play leads the host's broadcast by ~one RTT
+# (the client's prediction runs ahead, the host echoes back a round-trip later),
+# the same RTT-based hand-off the puck predictor uses at _on_client_puck_hit_post.
+# Clamped so a normal RTT can't under-cover the echo and a lag spike can't gate a
+# genuinely separate second save. `local_cue_at` starts far in the past, so a peer
+# that never played locally (never predicted the contact) is never suppressed.
+func _save_cue_is_echo(local_cue_at: float) -> bool:
+	var window: float = clampf(NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.05, 0.08, 0.5)
+	return NetworkManager.local_time() - local_cue_at < window
 
 
 # Pitch for a blade deflection cue. A low-speed result is a bobble (the blade
