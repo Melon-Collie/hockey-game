@@ -42,6 +42,8 @@ const MIN_KEYS: Array[String] = ["sim_rate_hz", "reconcile_match_pct", "client_f
 # max/avg pair.
 const TOTAL_KEYS: Array[String] = ["puck_hard_snaps", "blade_jumps",
 		"pickup_claims", "pickup_claim_misses", "pickup_claim_deflects",
+		"poke_claims", "poke_claim_misses",
+		"stick_lift_claims", "stick_lift_claim_misses",
 		"provisional_pins", "provisional_confirmed", "provisional_timeouts",
 		"provisional_stolen"]
 

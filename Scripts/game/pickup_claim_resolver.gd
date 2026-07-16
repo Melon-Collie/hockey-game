@@ -5,12 +5,21 @@ extends RefCounted
 # Pulled out of GameManager so the validation flow (age check, blade/puck
 # rewind, contest-window arbitration) lives in one testable place.
 #
+# The claimant's blade is CLIENT-AUTHORITATIVE (the client's precise "aim", sent
+# in the claim), exactly as AAA FPS lag-comp takes the shooter's aim from the
+# usercmd rather than re-deriving it. The host reconstructing the blade from its
+# lossy self-view snapshot was the grab-then-lose bug. The host still owns the
+# BODY: the puck is rewound as remote-view, the claimant's body position is read
+# from the self-view snapshot, and the client blade is reach-clamped to that body
+# (LagCompRewind.clamp_client_blade) so a modified client can't teleport its blade.
+#
 # Flow:
-#   receive_claim(peer_id, host_ts, interp_delay)
+#   receive_claim(peer_id, host_ts, interp_delay, client_blade_curr/prev, top_hand)
 #     → reject if puck locked, claim stale, skater missing/ghost, on cooldown
-#     → rewind blade to LagCompRewind.self_view_time(host_ts) and puck to
-#       LagCompRewind.remote_view_time(host_ts, interp_delay) — never rtt/2
-#     → reject if PuckInteractionRules.check_pickup fails
+#     → rewind puck to LagCompRewind.remote_view_time(host_ts, interp_delay) and
+#       the claimant's body to self_view_time(host_ts); reach-clamp the client
+#       blade to that body — never rtt/2
+#     → reject if PuckInteractionRules.check_pickup fails against the client blade
 #     → if a prior claim is pending and |Δhost_ts| < CONTEST_WINDOW_S, contest;
 #       otherwise the earlier claim_timestamp wins outright
 #     → otherwise arm pending and wait CONTEST_WINDOW_S for a contender
@@ -33,6 +42,12 @@ var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 var _pending_peer_id: int = -1
 var _pending_timer: float = 0.0
 var _pending_host_timestamp: float = 0.0
+# The pending claimant's client-sent blade geometry (already reach-clamped), kept
+# so a subsequent contest resolves the prior claimant's squirt from the blade IT
+# actually reported — client-authoritative for BOTH contestants, not a host-side
+# reconstruction of one of them.
+var _pending_blade_curr: Vector3 = Vector3.ZERO
+var _pending_blade_prev: Vector3 = Vector3.ZERO
 
 
 func setup(
@@ -59,17 +74,20 @@ func tick(delta: float) -> void:
 		var pc: PuckController = _puck_controller_getter.call() as PuckController
 		if pc != null:
 			pc.apply_lag_comp_pickup(record.skater)
-	_pending_peer_id = -1
-	_pending_timer = 0.0
+	clear()
 
 
 func clear() -> void:
 	_pending_peer_id = -1
 	_pending_timer = 0.0
 	_pending_host_timestamp = 0.0
+	_pending_blade_curr = Vector3.ZERO
+	_pending_blade_prev = Vector3.ZERO
 
 
-func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
+func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
+		client_blade_curr: Vector3, client_blade_prev: Vector3,
+		client_top_hand: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
 	var puck: Puck = _puck_getter.call() as Puck
@@ -129,8 +147,19 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 	if skater_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 			or skater_snap.shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 		return
-	var blade_curr: Vector3 = skater_snap.blade_contact_world
-	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world
+	# Client-authoritative blade ("aim"): the claim carries the blade geometry the
+	# client actually reached with, instead of the host reconstructing it from its
+	# lossy self-view snapshot (the reconstruction diverged from what the client
+	# saw — the grab-then-lose bug). The host still owns the BODY: each client point
+	# is pinned to within the claimant's physical reach of the server-authoritative
+	# body (skater_snap.position) so a modified client can't teleport its blade.
+	var max_reach: float = _peer_max_reach(peer_id)
+	var blade_curr: Vector3 = LagCompRewind.clamp_client_blade(
+			client_blade_curr, skater_snap.position, max_reach)
+	var blade_prev: Vector3 = LagCompRewind.clamp_client_blade(
+			client_blade_prev, skater_prev_snap.position, max_reach)
+	var top_hand: Vector3 = LagCompRewind.clamp_client_blade(
+			client_top_hand, skater_snap.position, max_reach)
 	# Sanity telemetry (host-only, no-op off the host): this claim reached the
 	# rewound geometry test — the client's view said in-range and every
 	# eligibility gate passed. A check_pickup fail below means the host's rewind
@@ -146,14 +175,15 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 	# but against the rewound snapshot. Without it the claim path granted a
 	# pickup on blade overlap ALONE, so a remote player reaching for a too-fast /
 	# poorly-angled puck caught it magnetically where a local player would have
-	# deflected it. Puck velocity is stored on the snapshot; the receiver's
-	# velocity (for the relative-frame decision) and the blade/hand world points
-	# (for the face normal) come from the rewound skater snapshot, so the verdict
-	# judges the same closing speed the claimant saw at send time.
+	# deflected it. Puck velocity is stored on the snapshot; the receiver's velocity
+	# (for the relative-frame decision) is the server-authoritative body kinematics
+	# from the rewound skater snapshot, while the blade/hand world points (for the
+	# face normal) are the client-sent, reach-clamped aim above — so the verdict
+	# judges the same closing speed and stick angle the claimant saw at send time.
 	var puck_vel: Vector3 = puck_snap.puck_state.velocity
 	var relative_vel: Vector3 = puck_vel - skater_snap.velocity
 	var face_normal: Vector3 = PuckReceptionRules.blade_face_normal(
-			blade_curr, skater_snap.top_hand_world, relative_vel,
+			blade_curr, top_hand, relative_vel,
 			Vector3(skater_snap.facing.x, 0.0, skater_snap.facing.y))
 	if not PuckReceptionRules.should_receive(
 			puck_vel, skater_snap.velocity, face_normal,
@@ -179,28 +209,23 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 			# or demoted in the contest window, treat the new claim as uncontested.
 			var prior_record: PlayerRecord = _registry.get_record(_pending_peer_id)
 			if prior_record != null and prior_record.skater != null:
-				# Resolve the squirt from the REWOUND blade of BOTH claimants — the
-				# kinematics each saw at their own view-time — not present-time (a
-				# contest window + RTT later). The new claimant's rewound blade is
-				# already in hand (blade_curr/blade_prev at blade_rewind_time); the
-				# prior claimant is re-rewound at its own claim's view-time. If its
-				# snapshot is gone, fall back to its live blade rather than skip.
+				# Resolve the squirt from the CLIENT-REPORTED blade of BOTH claimants
+				# — the aim each was authoritative over at its own view-time — not
+				# present-time (a contest window + RTT later). The new claimant's
+				# blade is in hand (client_blade_curr/prev, reach-clamped above); the
+				# prior claimant's was stored (reach-clamped) when its claim armed
+				# pending. If somehow absent, fall back to its live blade.
 				var new_vel: Vector3 = (blade_curr - blade_prev) * float(Constants.PHYSICS_TICK)
 				var prior_pos: Vector3 = prior_record.skater.get_blade_contact_global()
 				var prior_vel: Vector3 = prior_record.skater.blade_world_velocity
-				var prior_kin: Array = _rewound_blade_kinematics(_pending_peer_id, _pending_host_timestamp)
-				if not prior_kin.is_empty():
-					prior_pos = prior_kin[0]
-					prior_vel = prior_kin[1]
+				if _pending_blade_curr != Vector3.ZERO:
+					prior_pos = _pending_blade_curr
+					prior_vel = (_pending_blade_curr - _pending_blade_prev) * float(Constants.PHYSICS_TICK)
 				pc.apply_contested_pickup(record.skater, prior_record.skater,
 						new_vel, prior_vel, blade_curr, prior_pos)
-				_pending_peer_id = -1
-				_pending_timer = 0.0
-				_pending_host_timestamp = 0.0
+				clear()
 			else:
-				_pending_peer_id = peer_id
-				_pending_host_timestamp = host_timestamp
-				_pending_timer = 0.0
+				_arm_pending(peer_id, host_timestamp, blade_curr, blade_prev)
 		else:
 			# Not contested in client-time. Whichever was stamped earlier wins
 			# outright; the later one would have found the puck already taken on
@@ -210,30 +235,28 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float) 
 			if host_timestamp < _pending_host_timestamp:
 				# New claim is actually earlier — apply it now and drop pending.
 				pc.apply_lag_comp_pickup(record.skater)
-				_pending_peer_id = -1
-				_pending_timer = 0.0
-				_pending_host_timestamp = 0.0
+				clear()
 			# else: new claim is later, drop it and let pending resolve via tick().
 	else:
-		_pending_timer = 0.0
-		_pending_peer_id = peer_id
-		_pending_host_timestamp = host_timestamp
+		_arm_pending(peer_id, host_timestamp, blade_curr, blade_prev)
 
 
-# Rewound blade kinematics for a contestant, from their claim's SELF-view time —
-# so a contested pickup resolves from the blade the claimant actually saw, not a
-# present-time sample. Returns [pos: Vector3, vel: Vector3], or [] if the rewound
-# snapshot is missing (caller falls back to the live skater). Velocity is the same
-# per-tick finite difference the live blade_world_velocity uses (Δpos / one tick),
-# measured on the same blade_contact_world point the position term reports.
-func _rewound_blade_kinematics(peer_id: int, claim_host_timestamp: float) -> Array:
-	var t: float = LagCompRewind.self_view_time(claim_host_timestamp)
-	var snap: WorldSnapshot = _state_buffer.get_state_at(t)
-	var s: SkaterNetworkState = snap.get_skater_state(peer_id)
-	if s == null:
-		return []
-	var prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(t))
-	var s_prev: SkaterNetworkState = prev_snap.get_skater_state(peer_id)
-	var pos: Vector3 = s.blade_contact_world
-	var prev_pos: Vector3 = s_prev.blade_contact_world if s_prev != null else pos
-	return [pos, (pos - prev_pos) * float(Constants.PHYSICS_TICK)]
+# Arm the contest window for a claimant, stashing the (reach-clamped) client blade
+# so a later contender resolves this claimant's squirt from the aim it reported.
+func _arm_pending(peer_id: int, host_timestamp: float,
+		blade_curr: Vector3, blade_prev: Vector3) -> void:
+	_pending_peer_id = peer_id
+	_pending_host_timestamp = host_timestamp
+	_pending_timer = 0.0
+	_pending_blade_curr = blade_curr
+	_pending_blade_prev = blade_prev
+
+
+# The claimant's fully-extended physical reach (AISkaterCaps.max_blade_reach),
+# used to bound the client-sent blade against the server body. 0.0 when the peer
+# has no caps entry (can't-happen for a spawned claimant) — the clamp then no-ops.
+func _peer_max_reach(peer_id: int) -> float:
+	if _registry == null:
+		return 0.0
+	var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
+	return caps.max_blade_reach if caps != null else 0.0

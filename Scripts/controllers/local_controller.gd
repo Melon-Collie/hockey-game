@@ -290,9 +290,16 @@ func _physics_process(delta: float) -> void:
 				# (adapt clamps +10/-1.5 ms per packet), which is exactly when a
 				# stale-view rewind makes a legit grab miss. Poke / stick-lift / hit
 				# claims report the same adapted delay for the same reason.
+				# Send the blade geometry WE reached with (client-authoritative aim):
+				# curr + one-tick-prior blade for the host's swept test, plus the
+				# top-hand grip for the reception face-normal. The host reach-clamps
+				# them to our server-authoritative body. blade_pos_for_claim is this
+				# frame's blade contact; get_prev_blade_contact_global is last tick's.
 				NetworkManager.send_pickup_claim(
 					NetworkManager.estimated_host_time(),
-					NetworkManager.get_interpolation_delay() * 1000.0)
+					NetworkManager.get_interpolation_delay() * 1000.0,
+					blade_pos_for_claim, skater.get_prev_blade_contact_global(),
+					skater.upper_body_to_global(skater.get_top_hand_position()))
 				# Optimistic visual-only attach for uncontested pickups: pins the
 				# puck to our blade immediately so the grab feels instant, rolling
 				# back if the host doesn't confirm. Idempotent + self-gating, so
@@ -333,15 +340,18 @@ func _physics_process(delta: float) -> void:
 				_poke_claim_floor = _POKE_CLAIM_FLOOR_S
 				_poke_cooldown = _CLAIM_COOLDOWN_S
 				if is_lift:
+					# Stick-lift is an instantaneous point test — only the current blade
+					# (client aim); the victim's shaft stays host-reconstructed.
 					NetworkManager.send_stick_lift_claim(
 						NetworkManager.estimated_host_time(),
 						NetworkManager.get_interpolation_delay() * 1000.0,
-						carrier_pid)
+						carrier_pid, blade_pos_for_claim)
 				else:
+					# Poke is a swept test — curr + one-tick-prior blade (client aim).
 					NetworkManager.send_poke_claim(
 						NetworkManager.estimated_host_time(),
 						NetworkManager.get_interpolation_delay() * 1000.0,
-						carrier_pid)
+						carrier_pid, blade_pos_for_claim, skater.get_prev_blade_contact_global())
 			_was_in_poke_range = in_poke_range
 		else:
 			# We carry the puck — reset both edges so a future loose / contest

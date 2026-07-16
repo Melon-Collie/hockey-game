@@ -71,3 +71,26 @@ static func remote_view_time(host_timestamp: float, interp_delay_ms: float) -> f
 # endpoint in swept-segment pickup/poke tests. Works for either perspective.
 static func prev_tick(view_time: float) -> float:
 	return view_time - 1.0 / float(Constants.PHYSICS_TICK)
+
+
+# Structural anti-cheat for client-authoritative blade claims. A pickup / poke /
+# stick-lift claim now carries the client's OWN blade geometry (its "aim" — the
+# precise thing the client is authoritative over, exactly as AAA FPS lag-comp
+# takes the shooter's aim from the usercmd), instead of the host reconstructing
+# the claimant's blade from its lossy self-view snapshot. The host trusts that
+# aim but pins it to within the claimant's physical reach of the
+# SERVER-authoritative body, so a modified client can't teleport its blade onto a
+# distant puck. `max_reach` is the skater's fully-extended arm+stick+blade span
+# (AISkaterCaps.max_blade_reach) — a real measurement, not a tuned margin. Points
+# already within reach pass through untouched; only an impossible reach is pulled
+# back to the reach sphere along the aim line (graceful — never rejects a legal
+# claim over body-position residual, which the reach ceiling comfortably absorbs).
+# max_reach <= 0 (no caps entry for the peer) skips the clamp.
+static func clamp_client_blade(point: Vector3, body: Vector3, max_reach: float) -> Vector3:
+	if max_reach <= 0.0:
+		return point
+	var offset: Vector3 = point - body
+	var d: float = offset.length()
+	if d <= max_reach:
+		return point
+	return body + offset * (max_reach / d)

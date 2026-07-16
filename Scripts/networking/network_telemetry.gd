@@ -80,6 +80,16 @@ var _starvation_count: int = 0
 var _pickup_claim_count: int = 0
 var _pickup_claim_miss_count: int = 0
 var _pickup_claim_deflect_count: int = 0
+# Poke / stick-lift lag-comp claim outcomes — the same rewind-health signal as the
+# pickup claim counters, for the other two client-authoritative blade actions. A
+# claim that reaches the rewound geometry test counts in _*_claim_count; a
+# geometry fail (rewound blade/target don't overlap) is a _*_claim_miss — the
+# "reached for it, didn't get it" symptom. A high miss FRACTION on the host row
+# flags a rewind not reproducing the client's view. Folded as session totals.
+var _poke_claim_count: int = 0
+var _poke_claim_miss_count: int = 0
+var _stick_lift_claim_count: int = 0
+var _stick_lift_claim_miss_count: int = 0
 # CLIENT-side optimistic-pickup outcomes (the felt "grab, then lose it"). A pin
 # is the visual attach; it resolves as confirmed (host granted), timeout (host
 # silently declined → rolled back = the felt bug), or stolen (a different carrier
@@ -373,6 +383,21 @@ static func record_pickup_claim_miss() -> void:
 static func record_pickup_claim_deflect() -> void:
 	if instance: instance._pickup_claim_deflect_count += 1
 
+# Poke / stick-lift lag-comp claim outcomes (see the counter comment). record_*_claim
+# is the denominator (reached the rewound geometry test); record_*_claim_miss is the
+# geometry-fail verdict. Host-only in practice; no-op outside a session.
+static func record_poke_claim() -> void:
+	if instance: instance._poke_claim_count += 1
+
+static func record_poke_claim_miss() -> void:
+	if instance: instance._poke_claim_miss_count += 1
+
+static func record_stick_lift_claim() -> void:
+	if instance: instance._stick_lift_claim_count += 1
+
+static func record_stick_lift_claim_miss() -> void:
+	if instance: instance._stick_lift_claim_miss_count += 1
+
 # Client-side optimistic-pickup outcomes (see the counter comment). pin is the
 # denominator; timeout is the felt "grab, then lose it".
 static func record_provisional_pin() -> void:
@@ -525,6 +550,10 @@ func tick(delta: float) -> void:
 	_pickup_claim_count = 0
 	_pickup_claim_miss_count = 0
 	_pickup_claim_deflect_count = 0
+	_poke_claim_count = 0
+	_poke_claim_miss_count = 0
+	_stick_lift_claim_count = 0
+	_stick_lift_claim_miss_count = 0
 	_provisional_pin_count = 0
 	_provisional_confirmed_count = 0
 	_provisional_timeout_count = 0
@@ -584,6 +613,13 @@ func _fold_session_sample() -> void:
 		"pickup_claims": float(_pickup_claim_count),
 		"pickup_claim_misses": float(_pickup_claim_miss_count),
 		"pickup_claim_deflects": float(_pickup_claim_deflect_count),
+		# Poke / stick-lift claim outcomes (also TOTAL_KEYS session sums). Same
+		# rewind-health read as pickup: misses/claims ≈ how often the host's rewind
+		# disagreed with the client's in-range view. Clients fold 0s.
+		"poke_claims": float(_poke_claim_count),
+		"poke_claim_misses": float(_poke_claim_miss_count),
+		"stick_lift_claims": float(_stick_lift_claim_count),
+		"stick_lift_claim_misses": float(_stick_lift_claim_miss_count),
 		# Client-side optimistic-pickup outcomes (TOTAL_KEYS). timeouts/pins is the
 		# felt grab-then-lose rate; the pin predicate gate should drive it to ~0.
 		"provisional_pins": float(_provisional_pin_count),

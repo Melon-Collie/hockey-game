@@ -104,3 +104,33 @@ func test_stamp_no_ping_sample_only_future_bound_applies() -> void:
 
 func test_stamp_nan_rejected() -> void:
 	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, NAN, 80.0))
+
+
+# ── clamp_client_blade ────────────────────────────────────────────────────────
+# The client-authoritative blade is trusted as aim but pinned to within the
+# claimant's physical reach of the server body, so a modified client can't
+# teleport its blade onto a distant puck.
+
+func test_clamp_blade_within_reach_passes_through() -> void:
+	# A blade 1m from the body with a 2m reach is legal — returned untouched.
+	var body := Vector3(5.0, 0.0, 5.0)
+	var blade := Vector3(6.0, 0.0, 5.0)
+	assert_eq(LagCompRewind.clamp_client_blade(blade, body, 2.0), blade)
+
+
+func test_clamp_blade_beyond_reach_pinned_to_sphere() -> void:
+	# A blade 4m from the body with a 2m reach is impossible — pulled back to the
+	# reach sphere surface ALONG the aim line (direction preserved, distance clipped).
+	var body := Vector3.ZERO
+	var blade := Vector3(4.0, 0.0, 0.0)
+	var clamped: Vector3 = LagCompRewind.clamp_client_blade(blade, body, 2.0)
+	assert_almost_eq(clamped.x, 2.0, EPSILON)
+	assert_almost_eq(body.distance_to(clamped), 2.0, EPSILON)
+
+
+func test_clamp_blade_zero_reach_no_ops() -> void:
+	# max_reach <= 0 (no caps entry for the peer) skips the clamp — the blade is
+	# returned as-is rather than collapsed onto the body.
+	var body := Vector3.ZERO
+	var blade := Vector3(9.0, 0.0, 0.0)
+	assert_eq(LagCompRewind.clamp_client_blade(blade, body, 0.0), blade)

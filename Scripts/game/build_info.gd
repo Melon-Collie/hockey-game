@@ -105,7 +105,15 @@ const VERSION: String = "dev"
 #     stagger_timer, so a hard body check that knocks the victim down replicates and
 #     the local victim's predicted knockdown survives reconcile (same rail/reason as
 #     stagger's v10 add).
-const PROTOCOL_VERSION: int = 27
+# v28: pickup / poke / stick-lift claim RPCs carry the client's own blade geometry
+#     (client-authoritative "aim"): pickup adds blade_curr + blade_prev + top_hand,
+#     poke adds blade_curr + blade_prev, stick-lift adds blade_curr. The host now
+#     validates against the client-sent blade (reach-clamped to the server body)
+#     instead of reconstructing it from its self-view snapshot, so a legit grab the
+#     host's reconstruction was rejecting (the grab-then-lose bug) now confirms. A
+#     mixed-build host would read the extra Vector3 args as garbage, so a bump is
+#     required.
+const PROTOCOL_VERSION: int = 28
 
 
 func _ready() -> void:

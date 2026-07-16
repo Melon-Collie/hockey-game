@@ -937,6 +937,11 @@ func build_ai_caps() -> AISkaterCaps:
 	caps.max_accel = thrust
 	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
 	caps.stick_reach = stick_length
+	# Fully-extended body→blade reach (arm ROM displacement + stick + blade). Read
+	# off the same scaled geometry the body uses, so the host's client-blade
+	# anti-cheat clamp bounds against this build's real reach, not the league
+	# default. See AISkaterCaps.max_blade_reach / the claim resolvers.
+	caps.max_blade_reach = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M + rom_backhand_reach_max
 	caps.wrister_shot_speed = max_wrister_power
 	caps.blade_speed = max_blade_speed
 	caps.backhand_power_coefficient = backhand_power_coefficient
