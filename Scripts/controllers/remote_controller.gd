@@ -81,6 +81,15 @@ func _physics_process(delta: float) -> void:
 	if _is_host:
 		_drive_from_input(delta)
 	else:
+		# Live interpolation owns this body's cosmetics, so the render-rate gait
+		# hook must run. Clear _self_posing here: a replay driving this same skater
+		# via apply_replay_state raises the flag (that path poses its own gait), and
+		# nothing else lowers it on a client-rendered remote — _process_input, the
+		# only other reset, never runs on this path — so without this the flag stuck
+		# true after the first goal/intermission replay and the render hook yielded
+		# forever, freezing every remote's legs for the rest of the match. Guarded by
+		# the is_replay_mode() early-return above, so this only fires in live play.
+		_self_posing = false
 		if _knockback_lead_elapsed >= 0.0:
 			_knockback_lead_elapsed += delta
 		_interpolate(delta)
