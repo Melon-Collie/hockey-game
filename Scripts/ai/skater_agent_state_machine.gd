@@ -1795,6 +1795,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# otherwise ease off near contact, softening the hit. Respect the
 			# hard exhaustion lockout.
 			input.sprint_held = self_state != null and not self_state.sprint_locked
+			# Commit to the check with the Hit button too — this is what delivers the
+			# FULL transfer AIBodyCheck's predicted_impulse assumed (an uncommitted
+			# drive lands only the passive fraction), and braces the checker against
+			# the collision. Stamina-gated in the controller like sprint, so setting it
+			# while gassed is a harmless no-op there.
+			input.hit_held = true
 		else:
 			# Sprint to close a long gap to the role's destination — backcheck
 			# racing home, forecheck closing from depth, breakout up-ice. The gap
