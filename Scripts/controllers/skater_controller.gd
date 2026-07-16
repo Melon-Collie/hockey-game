@@ -50,6 +50,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the replicated input.hit_held, so they re-derive through reconcile replay.
 @export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
 @export var hit_turn_multiplier: float = 0.6          # turn-rate scale while committing (< 1.0 = wider turns)
+# Commit stance (cosmetic): while the Hit button is held the skater visibly loads
+# up for the check — leans into it, drops the leading shoulder, and sinks into a
+# crouch. A render-rate blend (SkaterSkatingCoordinator) off the replicated
+# skater.hit_committed, so it reads on every machine and never touches the physics-
+# rate blade anchor (no reconcile geometry impact). Eases in/out as Ctrl is held.
+@export var hit_commit_lean_deg: float = 16.0         # forward trunk lean into the check
+@export var hit_commit_shoulder_deg: float = 12.0     # leading-shoulder drop (roll)
+@export var hit_commit_crouch_m: float = 0.07         # sink into the checking stance
+@export var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
 # stamina bite, both scaled by how hard the hit landed (the m/s transfer impulse).
