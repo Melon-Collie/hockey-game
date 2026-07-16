@@ -39,6 +39,17 @@ var blade_span: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLA
 # full stick+blade span) for a defender's blade in a pass/shot lane.
 var stick_reach: float = GameRules.DEFAULT_STICK_LENGTH_M
 
+# Maximum distance from the body origin to a legal blade-contact point — the
+# fully-extended arm + stick + blade span (arm ROM displacement + stick + blade).
+# NOT a bot-planning input: the host uses it as the structural anti-cheat ceiling
+# for client-authoritative blade claims (pickup / poke / stick-lift). A claim
+# carries the client's own blade geometry (its "aim"), and the host pins that
+# geometry to within this reach of the SERVER-authoritative body so a modified
+# client can't teleport its blade onto a distant puck. A real measurement built
+# from the same scaled geometry the body uses (SkaterController.build_ai_caps),
+# not a tuned margin. Default = league stick + blade + baseline backhand ROM reach.
+var max_blade_reach: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M + 0.46
+
 # Charged wrister release speed (Shot). Feeds shot-quality eval (score_shoot) — a
 # high-Shot player's shot reaches the net faster, leaving defenders less reaction
 # time. Also the upper clamp on the player's distance-adaptive pass launch speed

@@ -134,6 +134,21 @@ select
     (metrics->>'pickup_claims_total')::float             as pickup_claims_total,
     (metrics->>'pickup_claim_misses_total')::float       as pickup_claim_misses_total,
     (metrics->>'pickup_claim_deflects_total')::float     as pickup_claim_deflects_total,
+    -- Client-side optimistic-pickup outcomes (the felt "grab, then lose it"). A pin
+    -- is the visual attach; timeouts = the host silently declined and it rolled back
+    -- (the felt bug), stolen = a different carrier legitimately won it. Watch
+    -- timeouts / pins: the pin-predicate gate should drive it toward 0. Client only.
+    (metrics->>'provisional_pins_total')::float          as provisional_pins_total,
+    (metrics->>'provisional_confirmed_total')::float     as provisional_confirmed_total,
+    (metrics->>'provisional_timeouts_total')::float      as provisional_timeouts_total,
+    (metrics->>'provisional_stolen_total')::float        as provisional_stolen_total,
+    -- Lag-comp poke / stick-lift claim health (host only), same read as the pickup
+    -- claim columns: misses/claims ≈ how often the host's rewind disagreed with the
+    -- client's in-range view for a stick-on-stick check. Trailing-append (see below).
+    (metrics->>'poke_claims_total')::float               as poke_claims_total,
+    (metrics->>'poke_claim_misses_total')::float         as poke_claim_misses_total,
+    (metrics->>'stick_lift_claims_total')::float         as stick_lift_claims_total,
+    (metrics->>'stick_lift_claim_misses_total')::float   as stick_lift_claim_misses_total,
     -- Reconcile-match health. A find_at miss falls back to the (prediction-lead)
     -- live position and trips a spurious position snap, so a low match AVG (vs the
     -- MIN, which one post-faceoff window can own) is the residual-churn driver. The
@@ -200,7 +215,14 @@ select
     -- isn't reproducing what clients saw when they reached for a loose puck.
     max(pickup_claims_total)         filter (where role = 'host') as host_pickup_claims,
     max(pickup_claim_misses_total)   filter (where role = 'host') as host_pickup_claim_misses,
-    max(pickup_claim_deflects_total) filter (where role = 'host') as host_pickup_claim_deflects
+    max(pickup_claim_deflects_total) filter (where role = 'host') as host_pickup_claim_deflects,
+    -- Poke / stick-lift claim health for the match (one host per game). Same read
+    -- as the pickup columns: high misses/claims flags a rewind not reproducing what
+    -- clients saw when they poked / hooked a carrier's stick.
+    max(poke_claims_total)             filter (where role = 'host') as host_poke_claims,
+    max(poke_claim_misses_total)       filter (where role = 'host') as host_poke_claim_misses,
+    max(stick_lift_claims_total)       filter (where role = 'host') as host_stick_lift_claims,
+    max(stick_lift_claim_misses_total) filter (where role = 'host') as host_stick_lift_claim_misses
 from public.network_session_health
 where game_id is not null
 group by game_id;

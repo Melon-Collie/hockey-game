@@ -8,14 +8,16 @@ extends RefCounted
 # wins, the carrier loses the puck either way.
 #
 # Flow:
-#   receive_claim(peer_id, host_ts, interp_delay, expected_carrier_peer_id)
+#   receive_claim(peer_id, host_ts, interp_delay, expected_carrier_peer_id,
+#                 client_blade_curr)
 #     → reject if puck locked, no carrier, carrier changed, claim stale,
 #       skater missing/ghost, attempting to lift self or a teammate
-#     → rewind the attacker's blade to LagCompRewind.self_view_time(host_ts)
-#       and the carrier's stick shaft to remote_view_time(host_ts, interp_delay)
-#       — never rtt/2 (see LagCompRewind / Networking Invariants)
-#     → reject if PuckInteractionRules.check_blade_under_stick fails against the
-#       rewound geometry (attacker's blade within radius of the shaft AND below it)
+#     → rewind the carrier's stick shaft to remote_view_time(host_ts, interp_delay)
+#       and the attacker's body to self_view_time(host_ts); reach-clamp the
+#       CLIENT-sent attacker blade to that body — never rtt/2 (the blade is
+#       client-authoritative aim, like PickupClaimResolver; see LagCompRewind)
+#     → reject if PuckInteractionRules.check_blade_under_stick fails against that
+#       geometry (attacker's blade within radius of the shaft AND below it)
 #     → apply_lag_comp_stick_lift (idempotent — re-checks carrier on apply so a
 #       concurrent host-side detection that already stripped doesn't double-apply).
 #
@@ -43,7 +45,8 @@ func setup(
 
 
 func receive_claim(peer_id: int, host_timestamp: float,
-		interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+		interp_delay_ms: float, expected_carrier_peer_id: int,
+		client_blade_curr: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
 	var puck: Puck = _puck_getter.call() as Puck
@@ -95,10 +98,27 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	if attacker_snap.is_ghost:
 		return
+	# Client-authoritative attacker blade ("aim") — the claim carries the blade the
+	# client hooked under the shaft with, reach-clamped to the attacker's
+	# server-authoritative body so a modified client can't teleport it. The victim's
+	# shaft stays REMOTE-view (host-reconstructed, as before). See
+	# PickupClaimResolver / LagCompRewind.clamp_client_blade.
+	var max_reach: float = 0.0
+	if _registry != null:
+		var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
+		if caps != null:
+			max_reach = caps.max_blade_reach
+	var attacker_blade: Vector3 = LagCompRewind.clamp_client_blade(
+			client_blade_curr, attacker_snap.position, max_reach)
+	# Host-only claim-outcome telemetry (no-op off the host): the claim reached the
+	# rewound geometry test; a check_blade_under_stick fail is the lag-comp
+	# "reached for it, didn't get it" signal. See NetworkTelemetry / network_sessions.
+	NetworkTelemetry.record_stick_lift_claim()
 	if not PuckInteractionRules.check_blade_under_stick(
-			attacker_snap.blade_contact_world,
+			attacker_blade,
 			victim_snap.top_hand_world, victim_snap.blade_contact_world,
 			PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN):
+		NetworkTelemetry.record_stick_lift_claim_miss()
 		return
 	# Pass the intended victim through so apply guards against the carrier having
 	# changed (X → Z) between claim send and apply.

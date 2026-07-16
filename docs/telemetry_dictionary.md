@@ -36,8 +36,10 @@ Each per-second metric `<key>` appears as:
 - `<key>_min` — only for metrics where **lower is worse** (`sim_rate_hz`,
   `reconcile_match_pct`, `client_fps`, `buffer_depth_*`).
 - `<key>_total` — only for **rare-event / event counters** (`puck_hard_snaps`,
-  `blade_jumps`, and the host-side `pickup_claims` / `pickup_claim_misses` /
-  `pickup_claim_deflects`): the session sum. These are events-per-game, not
+  `blade_jumps`, the host-side lag-comp claim counters `pickup_claims` /
+  `pickup_claim_misses` / `pickup_claim_deflects` / `poke_claims` /
+  `poke_claim_misses` / `stick_lift_claims` / `stick_lift_claim_misses`, and the
+  client-side `provisional_*`): the session sum. These are events-per-game, not
   rates — 3 hard snaps in a 10-minute game matters and would average to ~0/s.
 
 ## Connection facts (link quality — context, not necessarily a bug)
@@ -90,18 +92,49 @@ below.
 | `shot_launch_div_peak` / `shot_launch_vel_div_peak` | Worst client-predicted-vs-host-authoritative gap (m / m·s⁻¹) at the first host-confirmed broadcast after a **local shot release**. Client and host run identical Jolt from the same client-sent origin, so this should be tiny (RTT jitter) — a large peak is genuine shot-launch divergence, and it's the shot-launch slice of `puck_hard_snaps` (>1.5 m here would hard-snap). Client only. |
 | `shot_launches_total` | Shots measured — the denominator for the two peaks above (a big peak over 2 shots ≠ a big peak over 40). Client only. |
 
-## Lag-comp pickup health (host rows only)
+## Lag-comp claim health (host rows only)
 
-The host processes every client's pickup claim, so its row summarizes whether
-the lag-comp rewind reproduces what clients saw when they reached for a loose
-puck. Read the miss/deflect totals **relative to `pickup_claims_total`** — the
-raw counts scale with how much loose-puck play a game had.
+The host processes every client's pickup / poke / stick-lift claim, so its row
+summarizes whether the lag-comp rewind reproduces what clients saw when they
+reached for a puck or an opponent's stick. Read the miss/deflect totals
+**relative to the matching `*_claims_total`** — the raw counts scale with how
+much loose-puck / stick-battle play a game had.
+
+Since **v28** each claim carries the client's own blade geometry (its
+"aim" — the precise thing the client is authoritative over, matching AAA FPS
+lag-comp, which takes the shooter's aim from the usercmd) instead of the host
+reconstructing the claimant's blade from its lossy self-view snapshot. The host
+still owns the body: it reach-clamps the client blade to the server-authoritative
+body before the geometry test. So a *miss* here now means the client-sent blade
+(within physical reach) still didn't overlap the rewound target — a genuinely
+stale rewind, no longer the reconstruction divergence that drove the pre-v28
+grab-then-lose bug. A miss fraction that stays high after v28 points at the
+**puck/target** rewind (remote-view interp delay), not the blade.
 
 | Key | Meaning |
 |---|---|
 | `pickup_claims_total` | Client pickup claims that reached the rewound geometry test (all eligibility gates — fresh, loose, not ghost/cooldown/shot-blocking — passed). The denominator. |
-| `pickup_claim_misses_total` | Of those, how many failed the geometry test: the rewound blade and puck didn't overlap even though the client's view said in-range. **`misses / claims` is the headline sanity number — near-zero means the rewind reproduces the client's view; a high fraction means the rewind is off (the "reached for it, didn't get it" symptom).** |
+| `pickup_claim_misses_total` | Of those, how many failed the geometry test: the (reach-clamped) client blade and rewound puck didn't overlap even though the client's view said in-range. **`misses / claims` is the headline sanity number — near-zero means the rewind reproduces the client's view; a high fraction means the puck rewind is off (the "reached for it, didn't get it" symptom).** |
 | `pickup_claim_deflects_total` | Reached the puck but the rewound speed/angle said tip-not-catch (a deflect, not a catch). Separates "missed the puck" from "touched it but it wasn't catchable". |
+| `poke_claims_total` | Client poke claims that reached the rewound swept-geometry test (opponent carrier, not ghost, pokeable). The denominator for pokes. |
+| `poke_claim_misses_total` | Of those, how many failed the swept `check_poke` against the rewound carried puck. Read as `poke_claim_misses / poke_claims`. |
+| `stick_lift_claims_total` | Client stick-lift claims that reached the rewound geometry test (blade hooked under an opposing carrier's shaft). The denominator for lifts. |
+| `stick_lift_claim_misses_total` | Of those, how many failed `check_blade_under_stick` against the rewound shaft. Read as `stick_lift_claim_misses / stick_lift_claims`. |
+
+## Optimistic-pickup outcomes (client rows only)
+
+The **felt** side of the same story: when a client's blade reaches a loose puck it
+optimistically **pins** the puck to the blade (instant-feeling grab) before the host
+confirms. The host-side `pickup_claim_misses` above counts every rejected *claim*
+(inflated by throttle re-fires); these count the *visual pin* — the thing the player
+actually sees attach and, when it rolls back, feels as **"grab, then lose it."**
+
+| Key | Meaning |
+|---|---|
+| `provisional_pins_total` | Optimistic pins that attached (passed the eligibility gates *and* the host's swept `check_pickup` predicate run on the client's own view). The denominator. |
+| `provisional_timeouts_total` | Pins that rolled back because no host grant arrived — the host silently declined the claim. **This is the felt "grab, then lose it." `timeouts / pins` is the headline; it should sit near zero.** The dominant pre-v28 cause was blade-prediction divergence (the host reconstructed the claimant's blade and it disagreed with what the client saw); v28 sends the client's own blade in the claim, so a residual floor now points at the **puck** rewind (remote-view interp delay) or a genuine lost 50/50, not the blade. |
+| `provisional_confirmed_total` | Pins the host granted (promoted seamlessly to a real carry). |
+| `provisional_stolen_total` | Pins rolled back because a *different* carrier legitimately won the puck — a lost 50/50, **not** the felt bug. |
 
 ## Host frame / input health (host rows only; clients omit or fold 0)
 
@@ -157,4 +190,6 @@ upstream loss. `worst_client_*` columns take the worst value across the lobby
 — one bad experience is a bad match. `abnormal_ends > 0` flags games someone
 didn't finish. `host_pickup_claim_misses` read against `host_pickup_claims` is
 the per-match lag-comp pickup sanity check (high miss fraction ⇒ the rewind
-isn't reproducing what clients saw).
+isn't reproducing what clients saw); `host_poke_claim_misses` /
+`host_poke_claims` and `host_stick_lift_claim_misses` / `host_stick_lift_claims`
+are the same check for the two stick-battle actions.
