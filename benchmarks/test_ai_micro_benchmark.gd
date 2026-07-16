@@ -128,6 +128,23 @@ func test_evaluator_costs() -> void:
 	_bench("CARRIER compete (full)", func() -> void:
 		carrier._pick_action_cooldown = 0  # defeat the ~30 Hz throttle: time the real compete
 		carrier.decide(c_ctx))
+	# Open-ice carry (the sustained-rush case): carrier mid-NZ with the
+	# defense backed off — the common "bot skates it up" frame cost.
+	var open_ctx: RoleContext = _make_ctx(Vector3(2.0, 0.0, 0.0), 1)
+	for pid: int in [100, 101, 102, 103, 104]:
+		var opp_st: SkaterNetworkState = open_ctx.snapshot.skater_states[pid]
+		opp_st.position = Vector3(opp_st.position.x * 0.5, 0.0, -14.0 + opp_st.position.x)
+	var open_carrier := AIRoleCarrier.new()
+	_bench("CARRIER compete (open ice)", func() -> void:
+		open_carrier._pick_action_cooldown = 0
+		open_carrier.decide(open_ctx))
+	open_carrier._build_action_opponents_lists(open_ctx)
+	_bench("open ice: best pass (receivers)", func() -> void:
+		open_carrier._compute_best_pass(open_ctx, Vector2(0, -1),
+				open_carrier._scratch_teammate_ids))
+	_bench("open ice: best carry (candidates)", func() -> void:
+		open_carrier._best_carry(open_ctx, 0.1, open_ctx.self_pos, 0.9))
+
 	# Exposure-term share: same compete with the 5v5 gate closed.
 	var carrier3 := AIRoleCarrier.new()
 	_bench("CARRIER compete (no exposure)", func() -> void:
@@ -135,6 +152,71 @@ func test_evaluator_costs() -> void:
 		carrier3._pick_action_cooldown = 0
 		carrier3.decide(c_ctx)
 		c_ctx.team_size = 5)
+
+	# Carrier compete internals — staged timing through the real sub-calls
+	# so the 2+ ms compete attributes to its blocks. Stages share state in
+	# call order (pass fills the option cache carry reads).
+	var cx: RoleContext = _make_ctx(Vector3(8.0, 0.0, -22.0), 1)
+	var cinst := AIRoleCarrier.new()
+	cinst._pick_action_cooldown = 0
+	cinst.decide(cx)  # warm: settle windows, scratch growth, option cache
+	var t_build: int = 0
+	var t_pass: int = 0
+	var t_carry: int = 0
+	var t_feed: int = 0
+	var self_facing := Vector2(0.0, -1.0)
+	for _i: int in REPS:
+		var t0: int = Time.get_ticks_usec()
+		cinst._build_action_opponents_lists(cx)
+		var t1: int = Time.get_ticks_usec()
+		cinst._compute_best_pass(cx, self_facing, cinst._scratch_teammate_ids)
+		var t2: int = Time.get_ticks_usec()
+		cinst._best_carry(cx, 0.1, cx.self_pos, 0.7)
+		var t3: int = Time.get_ticks_usec()
+		cinst._best_developing_feed(cx)
+		var t4: int = Time.get_ticks_usec()
+		t_build += t1 - t0
+		t_pass += t2 - t1
+		t_carry += t3 - t2
+		t_feed += t4 - t3
+	_results.append({"label": "carrier: build opponent lists", "us": float(t_build) / REPS})
+	_results.append({"label": "carrier: best pass (receivers)", "us": float(t_pass) / REPS})
+	_results.append({"label": "carrier: best carry (candidates)", "us": float(t_carry) / REPS})
+	_results.append({"label": "carrier: developing-feed hold read", "us": float(t_feed) / REPS})
+	# One carry candidate, and its two-ply continuation read, in isolation.
+	var one_cand: Vector3 = cx.self_pos + Vector3(2.0, 0.0, 2.0)
+	var goalie_pos := Vector3(0.0, 0.0, -(GameRules.GOAL_LINE_Z - 0.8))
+	_bench("carrier: one carry candidate", func() -> void:
+		cinst._score_move_candidate(cx, one_cand, goalie_pos))
+	_bench("carrier: one continuation read", func() -> void:
+		cinst._carry_continuation_value(cx, one_cand, Vector3(0, 0, -3.0), 0.6,
+				goalie_pos))
+	_bench("carrier: one pass-option read", func() -> void:
+		cinst._candidate_pass_option(cx, one_cand))
+
+	# The per-dispatch baseline every off-puck bot pays at 60 Hz regardless
+	# of the 30 Hz argmax: ctx build + predicates + steering on cached-
+	# decision ticks vs the full role re-eval tick.
+	var agent := SkaterAgentStateMachine.new()
+	var base_ctx: RoleContext = _make_ctx(Vector3(1.5, 0.0, 21.0))
+	var brain := TeamBrain.new(TEAM_ID, base_ctx.team_id_by_peer, {}, 5,
+			{1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 100: 0, 101: 1, 102: 2, 103: 3, 104: 4})
+	agent.setup(1, TEAM_ID, brain, base_ctx.team_id_by_peer, false)
+	brain.tick(1.0, base_ctx.snapshot)
+	var inp := InputState.new()
+	agent.dispatch(inp, base_ctx.snapshot)  # warm + prime caches
+	_bench("off-puck dispatch (cached tick)", func() -> void:
+		agent._role_decision_cooldown = 999
+		agent._dispatch_skip_counter = 0
+		agent.dispatch(inp, base_ctx.snapshot))
+	_bench("off-puck dispatch (argmax tick)", func() -> void:
+		agent._role_decision_cooldown = 0
+		agent._dispatch_skip_counter = 0
+		agent._cached_role_decision = null
+		agent.dispatch(inp, base_ctx.snapshot))
+	_bench("off-puck dispatch (skipped tick)", func() -> void:
+		agent._dispatch_skip_counter = 5
+		agent.dispatch(inp, base_ctx.snapshot))
 
 	# Primitives (costs inside the decides above).
 	var opps: Array[Vector3] = [

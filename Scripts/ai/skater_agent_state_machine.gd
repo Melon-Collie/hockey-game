@@ -1191,6 +1191,24 @@ const ROLE_DECISION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30  # ~
 var _role_decision_cooldown: int = 0
 
 
+# True for slots whose positioning read tracks something that moves at play
+# speed — the carrier (pressure/contain), an assigned or soft-locked man, a
+# race, or a live one-timer camp. These keep the full ~30 Hz argmax cadence;
+# everything else is a shape-holding post (points, lanes, valves, flanks,
+# breathing zone anchors) that re-evals at ~20 Hz (see the throttle above).
+func _is_reactive_slot(slot: int) -> bool:
+	match slot:
+		AIRoleSlots.Slot.PRESSURE, AIRoleSlots.Slot.F1_PRESSURE, \
+		AIRoleSlots.Slot.CONTAIN, AIRoleSlots.Slot.MARK, \
+		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
+		AIRoleSlots.Slot.FINISHER, AIRoleSlots.Slot.NET_FRONT:
+			return true
+	# A zone defender with a live soft-lock is covering a mover — reactive
+	# while the lock holds, a breathing post once it releases.
+	return _cached_role_decision != null \
+			and _cached_role_decision.locked_man_pid != -1
+
+
 # Seed the dispatch / role-argmax counters with a per-bot phase (see the
 # setup() pacing comment). Multiplying by a prime before the modulo spreads
 # consecutive bot ids (10000, 10001, …) across the role period instead of
@@ -1837,7 +1855,14 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		if must_recompute or _role_decision_cooldown <= 0:
 			decision = _dispatch_role_decision(ctx)
 			_cached_role_decision = decision
-			_role_decision_cooldown = ROLE_DECISION_PERIOD_TICKS
+			# Reactive roles (on the puck / on a man / arming a one-timer)
+			# re-eval at the full ~30 Hz; pure shape-holding roles re-eval at
+			# ~20 Hz — their targets are slow-moving formation posts behind
+			# multi-second hysteresis, where 17 ms of extra staleness is
+			# invisible but the argmax is the whole off-puck AI bill.
+			_role_decision_cooldown = ROLE_DECISION_PERIOD_TICKS \
+					if _is_reactive_slot(slot) \
+					else ROLE_DECISION_PERIOD_TICKS * 3 / 2
 			_role_decision_pinged = ctx.ping_move_target.is_finite()
 		else:
 			_role_decision_cooldown -= _dispatch_period_ticks
