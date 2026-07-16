@@ -32,6 +32,11 @@ const _PUCK_SPEED_VOL_MAX_DB: float = 0.0
 const _PUCK_SPEED_MIN: float = 1.0
 const _PUCK_SPEED_RANGE: float = 20.0
 
+# Save-cue base bumps and post pitch, mirrored from GameManager so replayed
+# saves sound like the live ones. Kept in sync if the live values change.
+const _POST_SAVE_VOLUME_BUMP_DB: float = 4.0
+const _PAD_SAVE_VOLUME_BUMP_DB: float = 2.0
+
 
 static func dispatch(event: Dictionary, registry: PlayerRegistry) -> void:
 	dispatch_with_records(event, _registry_to_records(registry))
@@ -63,9 +68,9 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 			# sound at a soft fixed volume matches live play (a nudge is a quiet tap).
 			SoundManager.play_world(SoundManager.Sound.SHOT_WRISTER, pos, -6.0, 0.04)
 		"puck_goalie":
-			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, volume_db, 0.05)
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, volume_db + _PAD_SAVE_VOLUME_BUMP_DB, 0.05)
 		"puck_post":
-			SoundManager.play_world(SoundManager.Sound.PUCK_POST, pos, volume_db, 0.04)
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, pos, volume_db + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(speed))
 		"puck_pickup":
 			SoundManager.play_world(SoundManager.Sound.PUCK_PICKUP, pos, 0.0, 0.05)
 		"shot":
@@ -127,3 +132,8 @@ static func _pos_from_array(arr: Variant) -> Vector3:
 static func _puck_speed_volume(speed: float) -> float:
 	var t: float = clampf((speed - _PUCK_SPEED_MIN) / _PUCK_SPEED_RANGE, 0.0, 1.0)
 	return lerpf(_PUCK_SPEED_VOL_MIN_DB, _PUCK_SPEED_VOL_MAX_DB, t)
+
+
+# Mirrors GameManager._post_pitch so a replayed post rings like the live one.
+static func _post_pitch(speed: float) -> float:
+	return lerpf(0.9, 1.12, clampf((speed - 5.0) / 25.0, 0.0, 1.0))

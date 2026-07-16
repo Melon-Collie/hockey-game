@@ -1475,13 +1475,13 @@ func _wire_sound_signals() -> void:
 	puck.puck_touched_goalie.connect(
 		func(_g: Goalie) -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd), 0.05)
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05)
 			if NetworkManager.is_host:
 				_record_replay_audio_event("puck_goalie", puck.get_puck_position(), spd))
 	puck.puck_touched_post.connect(
 		func() -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd), 0.04)
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
 			puck.fire_post_ping_vfx(spd)
 			if NetworkManager.is_host:
 				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
@@ -4087,6 +4087,23 @@ func return_to_free_play() -> void:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 func _puck_speed_volume(speed: float) -> float:
 	return lerpf(-10.0, 0.0, clampf((speed - 1.0) / 20.0, 0.0, 1.0))
+
+
+# Base loudness bumps layered on top of the speed curve for the two save cues.
+# `_puck_speed_volume` ceilings at 0 dB (it only attenuates), so a hard clang off
+# the iron or a fat pad save was never louder than the stream baseline; the bump
+# lets a save carry the way it should. Post rings brighter/louder than the
+# damped pad thump. Kept in sync with ReplayEventReplayer's mirrored constants.
+const _POST_SAVE_VOLUME_BUMP_DB: float = 4.0
+const _PAD_SAVE_VOLUME_BUMP_DB: float = 2.0
+
+
+# Pitch for a puck-off-the-post cue. A hard shot rings the iron bright and
+# sharp; a slow puck clunks dull. Speed-driven off the same replicated puck
+# velocity the volume uses, so host and remote peers ring a given post alike.
+# Kept in sync with ReplayEventReplayer._post_pitch.
+func _post_pitch(speed: float) -> float:
+	return lerpf(0.9, 1.12, clampf((speed - 5.0) / 25.0, 0.0, 1.0))
 
 
 # Pitch for a blade deflection cue. A low-speed result is a bobble (the blade
