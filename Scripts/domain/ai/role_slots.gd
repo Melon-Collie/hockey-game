@@ -70,6 +70,35 @@ enum Slot {
 	CHASE,      # closest peer races to the puck for retrieval.
 	FLANK_L,    # left flank, defensive support behind puck.
 	FLANK_R,    # right flank, defensive support behind puck.
+	# ── 5v5-only slots (assigned by AIRoleSlots5; never in the 3v3 sets) ─────
+	# OZONE: 3 F low / 2 D at the points.
+	NET_FRONT,      # F: crease-edge screen / backdoor man (finisher job).
+	HIGH_SLOT,      # F: F3 — the soft ice between the dots, above the puck.
+	POINT_STRONG,   # D: strong-side point, sinks down his wall with the cycle.
+	POINT_WEAK,     # D: weak-side point, holds the line shaded central.
+	# FORECHECK: the 1-2-2 (F1 reuses F1_PRESSURE).
+	F2_STRONG,      # F: strong-side wall lane — kills the half-wall outlet.
+	F2_WEAK,        # F: middle lane, circle-tops-to-blue-line height.
+	DP_STRONG,      # D: offensive blue line, strong side, inside the dots.
+	DP_WEAK,        # D: offensive blue line, weak side.
+	# DZONE: hybrid zone with soft-lock (see zone_coverage.gd).
+	ZONE_D_STRONG,  # D: puck-side low — the corner/boards battle.
+	ZONE_D_WEAK,    # D: net-front box.
+	ZONE_C,         # F: the slot — low support + seam insurance.
+	ZONE_W_STRONG,  # F: strong wall/point coverage high.
+	ZONE_W_WEAK,    # F: weak-side high-slot sag.
+	# BREAKOUT extras (CARRIER + BREAKOUT_STRONG shared with 3v3).
+	BREAKOUT_D2,      # D: net-front/opposite post — the D-to-D "over" valve.
+	BREAKOUT_C,       # F: center's low swing — the second outlet.
+	BREAKOUT_STRETCH, # F: weak-side winger — mid-ice cross / stretch option.
+	# TRANS_DO rush shape (CARRIER fixed; MARK reused in TRANS_OD).
+	WIDE_L,         # F: left wide lane, paced to the carrier.
+	WIDE_R,         # F: right wide lane.
+	TRAILER,        # ANY: high-slot trailer (the activating fourth man).
+	DVALVE,         # D: safety valve trailing the rush.
+	# NEUTRAL back shape (CHASE/FLANK reused).
+	DBACK_L,        # D: left goal-side hold inside the dots.
+	DBACK_R,        # D: right goal-side hold.
 }
 
 # Hysteresis for the soonest-to-arrive elections: a peer that didn't

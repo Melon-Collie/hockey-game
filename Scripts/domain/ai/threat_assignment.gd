@@ -38,8 +38,9 @@ class_name AIThreatAssignment
 # rewards are close — the same oscillation we're fixing, just faster. Mirrors
 # the strong-side / slot-assignment hysteresis already in the brain.
 #
-# Brute-forced over permutations: the backline is ≤ 3 skaters, so the matching
-# is tiny (≤ 3! leaves). Runs at the 6 Hz brain tick, never the 120 Hz path.
+# Brute-forced over permutations: the backline is ≤ 4 skaters (5v5's TRANS_OD
+# MARK crew), so the matching is tiny (≤ 4! orderings). Runs at the 6 Hz brain
+# tick, never the 120 Hz path.
 
 # How far goal-side of the man the cover anchor sits (m). Roughly a stick into
 # the man→net lane: close enough to deny the one-timer, not on top of the body.

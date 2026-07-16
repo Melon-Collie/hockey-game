@@ -173,3 +173,52 @@ func test_stagger01_varies_by_player() -> void:
 func test_stagger01_varies_by_goal_count() -> void:
 	# Same player, different faceoff (goal count) → generally a different stagger.
 	assert_ne(PlayerRules.stagger01(1, 0), PlayerRules.stagger01(1, 1))
+
+# ── 5v5 slots: positions, D faceoff placement, clamps ────────────────────────
+
+func test_position_names_cover_the_full_lineup() -> void:
+	assert_eq(PlayerRules.position_name(0), "C")
+	assert_eq(PlayerRules.position_name(1), "LW")
+	assert_eq(PlayerRules.position_name(2), "RW")
+	assert_eq(PlayerRules.position_name(3), "LD")
+	assert_eq(PlayerRules.position_name(4), "RD")
+	assert_eq(PlayerRules.position_name(5), "", "out-of-range slot has no position")
+
+func test_defense_slots_are_3_and_4() -> void:
+	for slot: int in [0, 1, 2]:
+		assert_false(PlayerRules.is_defense_slot(slot), "slot %d is a forward" % slot)
+	for slot: int in [3, 4]:
+		assert_true(PlayerRules.is_defense_slot(slot), "slot %d is a defenseman" % slot)
+
+func test_defensemen_stand_behind_the_wingers() -> void:
+	# Center-ice draw: the D pair (slots 3/4) sets up deeper toward its own
+	# end than the wingers (slots 1/2), mirrored per team.
+	for team_id: int in [0, 1]:
+		var own_dir: float = 1.0 if team_id == 0 else -1.0
+		var winger_depth: float = own_dir * PlayerRules.faceoff_position(team_id, 1).z
+		for d_slot: int in [3, 4]:
+			var d_depth: float = own_dir * PlayerRules.faceoff_position(team_id, d_slot).z
+			assert_gt(d_depth, winger_depth,
+					"team %d slot %d must be behind the wingers" % [team_id, d_slot])
+
+func test_defensive_zone_draw_keeps_defensemen_in_front_of_goal_line() -> void:
+	# Team 0 defends +Z; at its own end-zone dot the D slots' raw offsets
+	# (+7 m) would land behind the goal line — the depth cap pulls them
+	# net-side instead.
+	var dot: Vector2 = GameRules.END_ZONE_FACEOFF_DOTS[0]  # team 0 DZ, left
+	for d_slot: int in [3, 4]:
+		var p: Vector3 = PlayerRules.faceoff_position(0, d_slot, dot)
+		assert_lt(absf(p.z), GameRules.GOAL_LINE_Z,
+				"slot %d must spawn in front of the goal line" % d_slot)
+
+func test_staging_position_stays_on_the_ice_for_deep_slots() -> void:
+	# Post-goal staging pushes radially outward from the dot; for a D already
+	# clamped near the goal line that raw push lands outside the boards.
+	var dot: Vector2 = GameRules.END_ZONE_FACEOFF_DOTS[1]  # team 0 DZ, right
+	for d_slot: int in [3, 4]:
+		var target: Vector3 = PlayerRules.faceoff_position(0, d_slot, dot)
+		var staged: Vector3 = PlayerRules.faceoff_staging_position(target, dot, 0)
+		assert_lt(absf(staged.z), GameRules.INNER_HALF_LENGTH,
+				"slot %d staging must stay inside the end boards" % d_slot)
+		assert_lt(absf(staged.x), GameRules.INNER_HALF_WIDTH,
+				"slot %d staging must stay inside the side boards" % d_slot)

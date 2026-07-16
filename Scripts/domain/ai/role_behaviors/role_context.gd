@@ -208,6 +208,21 @@ var dispatch_period_ticks: int = 1
 # shared AIRoleHelpers.append_incumbent / incumbent_bonus / TARGET_SWITCH_MARGIN).
 var prev_role_target: Vector3 = Vector3.INF
 
+# The man this bot's zone role locked last dispatch (RoleDecision.
+# locked_man_pid round-tripped by the state machine; -1 = none / role
+# changed). The soft-lock's area-boundary hysteresis keys on it.
+var prev_locked_man: int = -1
+
+# ── 5v5 position identity ────────────────────────────────────────────────────
+# Latched match team size (TeamBrain.team_size). Gates the 5v5-only reads
+# (transition exposure) — 3v3 behavior is untouched at 3.
+var team_size: int = GameRules.DEFAULT_TEAM_SIZE
+# Whether this bot's lobby position is a defenseman (LD/RD), and its home
+# side sign (-1 = left, +1 = right, 0 = center). Feed the defensive-
+# responsibility anchor (AIZoneCoverage.defensive_anchor).
+var self_is_defense: bool = false
+var self_home_side: float = 0.0
+
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the
 # collect_* helpers fill these buffers instead of allocating fresh arrays at AI

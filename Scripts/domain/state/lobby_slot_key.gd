@@ -2,7 +2,10 @@ class_name LobbySlotKey
 
 # Encodes a (team_id, slot) pair into a single int key for the lobby's
 # slot dictionary. Players use keys 0..(MAX_PER_TEAM*2 - 1) where
-# team_id = key / 3 and slot = key % 3. Spectators use keys
+# team_id = key / MAX_PER_TEAM and slot = key % MAX_PER_TEAM. The stride is
+# the fixed CAPACITY (5), never the live team size — the lobby exists before
+# the size latches at puck drop, and keys must stay stable across a 3v3 ↔ 5v5
+# flip (in 3v3 the slot-3/4 keys simply go unused). Spectators use keys
 # SPECTATOR_KEY_BASE..(SPECTATOR_KEY_BASE + MAX_SPECTATORS - 1) so they
 # never collide with the player range.
 

@@ -1,14 +1,14 @@
 class_name LobbySettingsPanel
 extends VBoxContainer
 
-# Compact match-settings column for the lobby. Renders six rows
-# (Periods, Period Length, Overtime, Rules, Bot Difficulty, Goalie), each with a
-# label on the left and the control on the right. Hosts get editable
-# controls; clients see them dimmed and disabled. The "MATCH" column header
-# above this panel is rendered by LobbyManager so the same widget can drop
-# into either the lobby grid or a hypothetical pause-menu surface later.
+# Compact match-settings column for the lobby. Renders seven rows
+# (Mode, Periods, Period Length, Overtime, Rules, Bot Difficulty, Goalie),
+# each with a label on the left and the control on the right. Hosts get
+# editable controls; clients see them dimmed and disabled. The "MATCH" column
+# header above this panel is rendered by LobbyManager so the same widget can
+# drop into either the lobby grid or a hypothetical pause-menu surface later.
 #
-# The first four rows are NETWORK-SYNCED match rules — they emit
+# The first five rows are NETWORK-SYNCED match rules — they emit
 # settings_changed and LobbyManager owns broadcasting them to clients. Bot
 # Difficulty and Goalie are different: they're host-LOCAL persisted preferences
 # (bots and both goalies are host-spawned AI, so clients never need them), so
@@ -16,7 +16,8 @@ extends VBoxContainer
 # settings_changed. GameManager reads PlayerPrefs.bot_difficulty and
 # PlayerPrefs.goalie_difficulty at match start.
 
-signal settings_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
+signal settings_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int)
 
 const _ROW_HEIGHT: int = 28
 const _PERIODS_MIN: int = 1
@@ -28,12 +29,14 @@ var _num_periods: int
 var _period_duration: float
 var _ot_enabled: bool
 var _rule_set: int
+var _team_size: int
 var _is_host: bool
 
 var _periods_value_label: Label = null
 var _dur_value_label: Label = null
 var _ot_check: CheckButton = null
 var _rules_btn: OptionButton = null
+var _mode_btn: OptionButton = null
 var _bot_difficulty_btn: OptionButton = null
 var _goalie_difficulty_btn: OptionButton = null
 var _periods_minus: Button = null
@@ -42,31 +45,54 @@ var _dur_minus: Button = null
 var _dur_plus: Button = null
 
 
-func _init(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int, is_host: bool) -> void:
+func _init(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int, is_host: bool,
+		team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
+	_team_size = team_size
 	_is_host = is_host
 	add_theme_constant_override("separation", 10)
 	_build()
 
 
-func apply_settings(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+func apply_settings(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
+	_team_size = team_size
 	_periods_value_label.text = str(_num_periods)
 	_dur_value_label.text = "%d min" % int(_period_duration / 60.0)
 	_ot_check.set_pressed_no_signal(_ot_enabled)
 	_rules_btn.select(_rule_set)
+	_mode_btn.select(maxi(GameRules.TEAM_SIZE_OPTIONS.find(_team_size), 0))
 	_update_stepper_enabled()
 
 
 # ── Build helpers ────────────────────────────────────────────────────────────
 
 func _build() -> void:
+	# Row 0: Mode (team size — 3v3 / 5v5). Network-synced match rule like
+	# Rules; latched at puck drop into GameStateMachine.team_size.
+	var m_row := _row("Mode")
+	_mode_btn = OptionButton.new()
+	_mode_btn.custom_minimum_size = Vector2(120, 28)
+	_mode_btn.add_theme_font_size_override("font_size", 13)
+	for i: int in range(GameRules.TEAM_SIZE_NAMES.size()):
+		_mode_btn.add_item(GameRules.TEAM_SIZE_NAMES[i], i)
+	_mode_btn.select(maxi(GameRules.TEAM_SIZE_OPTIONS.find(_team_size), 0))
+	SoundManager.wire_button(_mode_btn)
+	_mode_btn.disabled = not _is_host
+	if _is_host:
+		_mode_btn.item_selected.connect(_on_mode_selected)
+	else:
+		_mode_btn.modulate = Color(1, 1, 1, 0.5)
+	m_row.add_child(_mode_btn)
+	add_child(m_row)
+
 	# Row 1: Periods
 	var p_row := _row("Periods")
 	_periods_minus = _stepper_btn("-")
@@ -228,14 +254,14 @@ func _on_periods_minus() -> void:
 	_num_periods = clampi(_num_periods - 1, _PERIODS_MIN, _PERIODS_MAX)
 	_periods_value_label.text = str(_num_periods)
 	_update_stepper_enabled()
-	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set)
+	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
 
 
 func _on_periods_plus() -> void:
 	_num_periods = clampi(_num_periods + 1, _PERIODS_MIN, _PERIODS_MAX)
 	_periods_value_label.text = str(_num_periods)
 	_update_stepper_enabled()
-	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set)
+	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
 
 
 func _on_dur_minus() -> void:
@@ -243,7 +269,7 @@ func _on_dur_minus() -> void:
 	_period_duration = dur_min * 60.0
 	_dur_value_label.text = "%d min" % dur_min
 	_update_stepper_enabled()
-	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set)
+	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
 
 
 func _on_dur_plus() -> void:
@@ -251,17 +277,22 @@ func _on_dur_plus() -> void:
 	_period_duration = dur_min * 60.0
 	_dur_value_label.text = "%d min" % dur_min
 	_update_stepper_enabled()
-	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set)
+	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
 
 
 func _on_ot_toggled(pressed: bool) -> void:
 	_ot_enabled = pressed
-	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set)
+	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
 
 
 func _on_rule_set_selected(idx: int) -> void:
 	_rule_set = idx
-	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set)
+	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
+
+
+func _on_mode_selected(idx: int) -> void:
+	_team_size = GameRules.TEAM_SIZE_OPTIONS[clampi(idx, 0, GameRules.TEAM_SIZE_OPTIONS.size() - 1)]
+	settings_changed.emit(_num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
 
 
 # Host-local preference, persisted immediately. Not part of settings_changed

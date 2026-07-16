@@ -51,6 +51,7 @@ var _num_periods: int = GameRules.NUM_PERIODS
 var _period_duration: float = GameRules.PERIOD_DURATION
 var _ot_enabled: bool = GameRules.OT_ENABLED
 var _rule_set: int = GameRules.DEFAULT_RULE_SET
+var _team_size: int = GameRules.DEFAULT_TEAM_SIZE
 
 # Team color presets used as placeholders in the lobby slot-grid preview.
 # Real per-team colors are resolved from votes at game start.
@@ -70,6 +71,7 @@ func _ready() -> void:
 	_period_duration = NetworkManager.pending_period_duration
 	_ot_enabled = NetworkManager.pending_ot_enabled
 	_rule_set = NetworkManager.pending_rule_set
+	_team_size = NetworkManager.pending_team_size
 	_my_color_slot = _initial_color_preference()
 	_color_votes = NetworkManager.pending_color_votes.duplicate()
 	# Re-entering the lobby (return-to-lobby after a match) restores whatever
@@ -160,6 +162,7 @@ func _build_ui() -> void:
 	panel.add_child(vbox)
 
 	_slot_grid = SlotGridPanel.new()
+	_slot_grid.set_active_team_size(_team_size)
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
 	_slot_grid.bot_toggled.connect(_on_bot_toggled)
@@ -349,7 +352,7 @@ func _build_match_column() -> VBoxContainer:
 		col.add_child(_visibility_hint)
 		_update_visibility_row()
 
-	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host)
+	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host, _team_size)
 	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
 	col.add_child(_settings_panel)
 
@@ -582,7 +585,7 @@ func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is
 	# respawn the moment the player moved away. send_bot_slot is host-only;
 	# clients pick up the change via the broadcast RPC.
 	if team_id != GameRules.SPECTATOR_TEAM_ID:
-		var bot_key: int = team_id * 3 + slot
+		var bot_key: int = LobbySlotKey.encode(team_id, slot)
 		if NetworkManager.pending_bot_slots.get(bot_key, false):
 			NetworkManager.send_bot_slot(bot_key, false)
 
@@ -596,7 +599,7 @@ func _find_balanced_slot(_peer_id: int) -> Array:
 		else: team1 += 1
 	var preferred_team: int = 0 if team0 <= team1 else 1
 	for attempt_team: int in [preferred_team, 1 - preferred_team]:
-		for s: int in PlayerRules.MAX_PER_TEAM:
+		for s: int in _team_size:
 			if not _lobby_slots.has(LobbySlotKey.encode(attempt_team, s)):
 				return [attempt_team, s]
 	return []
@@ -779,7 +782,7 @@ func _on_peer_joined(peer_id: int) -> void:
 		NetworkManager.send_lobby_roster(existing_peer, roster)
 	NetworkManager.send_color_votes_to(peer_id, _color_votes)
 	NetworkManager.send_team_colors_to(peer_id, _home_color_slot, _away_color_slot)
-	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set)
+	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
 	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots, NetworkManager.pending_bot_identities)
 	_broadcast_confirm(peer_id, target[0], target[1])
 	_update_start_btn()
@@ -824,7 +827,7 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 				continue
 			if LobbySlotKey.team_id(k) == new_team_id:
 				count += 1
-		if count >= PlayerRules.MAX_PER_TEAM:
+		if count >= _team_size:
 			return
 	var identity: Dictionary = _find_peer_identity(peer_id)
 	_assign_slot(peer_id, new_team_id, new_slot,
@@ -909,7 +912,7 @@ func _on_bot_toggled(team_id: int, slot: int, is_bot: bool) -> void:
 	# this only fires from the host. send_bot_slot is a no-op on clients.
 	if not NetworkManager.is_host:
 		return
-	NetworkManager.send_bot_slot(team_id * 3 + slot, is_bot)
+	NetworkManager.send_bot_slot(LobbySlotKey.encode(team_id, slot), is_bot)
 
 func _on_bot_slot_changed(_key: int, _is_bot: bool) -> void:
 	_refresh_grid()
@@ -917,20 +920,59 @@ func _on_bot_slot_changed(_key: int, _is_bot: bool) -> void:
 func _on_bot_slots_synced(_bot_slots: Dictionary) -> void:
 	_refresh_grid()
 
-func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
+	_apply_team_size(team_size)
 	if _settings_panel != null:
-		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set)
+		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set, team_size)
 
-func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
-	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set)
+	_apply_team_size(team_size)
+	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set, team_size)
+
+# Applies a mode (team size) change to the live lobby: resizes the visible
+# grid and — host only — evicts anything seated in a slot the new size no
+# longer fields (a 5v5 → 3v3 flip with players/bots on LD/RD). Bots retire;
+# humans re-seat into the first open slot (spectator gallery as the overflow
+# valve so nobody is ever silently dropped).
+func _apply_team_size(team_size: int) -> void:
+	var changed: bool = team_size != _team_size
+	_team_size = team_size
+	if _slot_grid != null:
+		_slot_grid.set_active_team_size(team_size)
+	if not changed or not NetworkManager.is_host:
+		_refresh_grid()
+		return
+	# Retire bots parked beyond the new size.
+	for bot_key: int in NetworkManager.pending_bot_slots.keys():
+		if NetworkManager.pending_bot_slots[bot_key] \
+				and not LobbySlotKey.is_spectator(bot_key) \
+				and LobbySlotKey.slot(bot_key) >= team_size:
+			NetworkManager.send_bot_slot(bot_key, false)
+	# Re-seat humans stranded on now-invalid slots.
+	for k: int in _lobby_slots.keys():
+		if LobbySlotKey.is_spectator(k) or LobbySlotKey.slot(k) < team_size:
+			continue
+		var entry: Dictionary = _lobby_slots[k]
+		var seat: Array = _find_balanced_slot(entry.peer_id)
+		if seat.is_empty():
+			var spec_slot: int = _find_open_spectator_slot()
+			if spec_slot == -1:
+				continue  # nowhere to go; grid will still render the row
+			seat = [GameRules.SPECTATOR_TEAM_ID, spec_slot]
+		_assign_slot(entry.peer_id, seat[0], seat[1],
+				entry.player_name, entry.is_left_handed, entry.jersey_number)
+		_broadcast_confirm(entry.peer_id, seat[0], seat[1])
+	_refresh_grid()
 
 func _on_game_started(config: Dictionary) -> void:
 	NetworkManager.pending_game_config = config
@@ -969,6 +1011,7 @@ func _on_start_pressed() -> void:
 		"home_color_slot": _home_color_slot,
 		"away_color_slot": _away_color_slot,
 		"rule_set": _rule_set,
+		"team_size": _team_size,
 		# Minted on the host and broadcast via game_start so every peer shares
 		# the same id. Used as the .mreplay filename and (Feature C) stored on
 		# career_stats rows so a game can be reconstructed across players.

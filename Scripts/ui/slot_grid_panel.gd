@@ -1,8 +1,9 @@
 class_name SlotGridPanel
 extends VBoxContainer
 
-# Lobby slot grid. Six cards in a 2x3 layout (AWAY/HOME rows × LW/C/RW
-# columns), each card showing:
+# Lobby slot grid. One 3-across forward row per team (AWAY/HOME × LW/C/RW
+# columns); in 5v5 each team adds a centered two-card D row behind its
+# forwards (above the away row, below the home row). Each card shows:
 #
 #   ┌──────────────────────────────────┐
 #   │ ▶  88  PLAYERNAME              L │   ← action icon (X / +) top-left;
@@ -36,15 +37,24 @@ signal slot_selected(team_id: int, slot: int)
 signal bot_toggled(team_id: int, slot: int, is_bot: bool)
 signal kick_requested(peer_id: int, player_name: String)
 
-# Column display order: Left Wing (slot 1), Center (slot 0), Right Wing (slot 2).
-# Both team rows share this physical column layout so the grid reads like a
-# faceoff lineup (wingers facing each other across the dot) — but since the
-# away team attacks the opposite direction, its slot 1/2 are its own RW/LW,
-# the mirror image of home's LW/RW in the same columns. The _AWAY label sets
-# reflect that; the slot→column layout itself (_DISPLAY_ORDER) does not change.
+# Column display order: Left Wing (slot 1), Center (slot 0), Right Wing
+# (slot 2) — the familiar 3-across forward row in both modes. 5v5 adds a
+# second, centered row of two D cards (slots 3/4) BEHIND each team's
+# forwards — above the away row, below the home row, so the whole grid
+# reads like a faceoff lineup with each pair backing its own end (3v3
+# hides the D rows — see set_active_team_size). Both team rows share the
+# physical column layout, but since the away team attacks the opposite
+# direction its L/R slots are its own R/L, the mirror image of home's in
+# the same columns. The _AWAY label sets reflect that; the slot→column
+# layout itself does not change.
 const _DISPLAY_ORDER  := [1, 0, 2]
-const _POSITION_LABEL      := ["C", "L", "R"]              # indexed by slot, home
-const _POSITION_LABEL_AWAY := ["C", "R", "L"]               # indexed by slot, away
+const _D_DISPLAY_ORDER := [3, 4]
+const _POSITION_LABEL      := ["C", "L", "R", "LD", "RD"]   # indexed by slot, home
+const _POSITION_LABEL_AWAY := ["C", "R", "L", "RD", "LD"]   # indexed by slot, away
+# 5v5 badge variants: with LD/RD on the board the wingers spell out LW/RW
+# too (3v3 keeps the classic single letters).
+const _POSITION_LABEL_5V5      := ["C", "LW", "RW", "LD", "RD"]
+const _POSITION_LABEL_AWAY_5V5 := ["C", "RW", "LW", "RD", "LD"]
 const _POSITION_HEADER      := ["LEFT WING", "CENTER", "RIGHT WING"]   # indexed by col, home
 const _POSITION_HEADER_AWAY := ["RIGHT WING", "CENTER", "LEFT WING"]   # indexed by col, away
 
@@ -96,9 +106,49 @@ var _is_local_host: bool = false
 var _bot_editing: bool = true
 var _show_ready: bool = false
 
+# Live lobby mode: how many of the capacity slots are fielded. The grid is
+# always built at full capacity; 3v3 hides the two D rows.
+var _active_team_size: int = GameRules.DEFAULT_TEAM_SIZE
+var _d_rows: Array = [null, null]   # [team_id] — the D-pair HBox, hidden in 3v3
+# The LW/C/RW column-header HBoxes, hidden in 5v5 — with four rows of cards
+# on screen the headers just wedge awkward gaps between the team blocks,
+# and every card already wears its position badge.
+var _header_rows: Array = [null, null]
+
 
 func _init() -> void:
 	_build_grid()
+	_apply_mode_visibility()
+
+
+# Show/hide the D rows to match the lobby's selected mode. Called by
+# LobbyManager on build and whenever the host flips the Mode row.
+func set_active_team_size(team_size: int) -> void:
+	_active_team_size = clampi(team_size, 1, PlayerRules.MAX_PER_TEAM)
+	_apply_mode_visibility()
+
+
+func _apply_mode_visibility() -> void:
+	var show_d: bool = _active_team_size > PlayerRules.FIRST_DEFENSE_SLOT
+	for team_id: int in 2:
+		if _d_rows[team_id] != null:
+			(_d_rows[team_id] as HBoxContainer).visible = show_d
+		if _header_rows[team_id] != null:
+			(_header_rows[team_id] as HBoxContainer).visible = not show_d
+		# Re-stamp the badges — the L/R ↔ LW/RW wording is mode-dependent.
+		for slot: int in _pos_labels[team_id].size():
+			if _pos_labels[team_id][slot] != null:
+				(_pos_labels[team_id][slot] as Label).text = _position_badge(team_id, slot)
+
+
+# The card's position badge for the current mode: 3v3 keeps the classic
+# single letters (C/L/R); 5v5 spells the wingers out (LW/RW) so they read
+# consistently next to LD/RD. Away rows mirror L/R as usual.
+func _position_badge(team_id: int, slot: int) -> String:
+	var is_5v5: bool = _active_team_size > PlayerRules.FIRST_DEFENSE_SLOT
+	if team_id == 1:
+		return _POSITION_LABEL_AWAY_5V5[slot] if is_5v5 else _POSITION_LABEL_AWAY[slot]
+	return _POSITION_LABEL_5V5[slot] if is_5v5 else _POSITION_LABEL[slot]
 
 
 func _ready() -> void:
@@ -115,26 +165,13 @@ func _build_grid() -> void:
 	add_theme_constant_override("separation", 8)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	# Away on top (team 1), Home on bottom (team 0) — matches rink perspective.
-	# Each row gets its own column header (LW/C/RW vs. the away-mirrored
+	# Away on top (team 1), Home on bottom (team 0) — matches rink perspective,
+	# and each team's D pair sits BEHIND its forwards (above for away, below
+	# for home), so 5v5 reads like a faceoff lineup backing toward each net.
+	# Each team gets its own column header (LW/C/RW vs. the away-mirrored
 	# RW/C/LW) since the two teams' true wing labels are swapped in the same
 	# physical columns — see the _DISPLAY_ORDER comment above.
 	for team_id: int in [1, 0]:
-		_build_header(team_id)
-
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		add_child(row)
-
-		var team_label := Label.new()
-		team_label.text = "AWAY" if team_id == 1 else "HOME"
-		team_label.add_theme_font_size_override("font_size", 13)
-		team_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-		team_label.custom_minimum_size = Vector2(56, 0)
-		team_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		row.add_child(team_label)
-
 		_cards[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_stylebox[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_stripe[team_id].resize(PlayerRules.MAX_PER_TEAM)
@@ -152,9 +189,64 @@ func _build_grid() -> void:
 		_peer_ids[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_peer_ids[team_id].fill(-1)
 
-		for col: int in _DISPLAY_ORDER.size():
-			var s: int = _DISPLAY_ORDER[col]
-			row.add_child(_build_card(team_id, s))
+		if team_id == 1:
+			_d_rows[team_id] = _build_d_row(team_id)
+			add_child(_d_rows[team_id])
+			_build_header(team_id)
+			add_child(_build_forward_row(team_id))
+		else:
+			_build_header(team_id)
+			add_child(_build_forward_row(team_id))
+			_d_rows[team_id] = _build_d_row(team_id)
+			add_child(_d_rows[team_id])
+
+
+# The familiar 3-across forward row (LW / C / RW), with the AWAY/HOME team
+# label on its left edge.
+func _build_forward_row(team_id: int) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var team_label := Label.new()
+	team_label.text = "AWAY" if team_id == 1 else "HOME"
+	team_label.add_theme_font_size_override("font_size", 13)
+	team_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	team_label.custom_minimum_size = Vector2(56, 0)
+	team_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(team_label)
+
+	for col: int in _DISPLAY_ORDER.size():
+		var s: int = _DISPLAY_ORDER[col]
+		row.add_child(_build_card(team_id, s))
+	return row
+
+
+# The 5v5 D pair: two cards centered under (home) / over (away) the forward
+# row, sized to match the forward cards. Half-weight stretch spacers on each
+# side make every card exactly one column wide (0.5 + 1 + 1 + 0.5 = the same
+# 3 flex units the forward row spans), so LD sits under the LW–C seam and RD
+# under the C–RW seam — the lineup "behind them" read.
+func _build_d_row(team_id: int) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var label_spacer := Control.new()
+	label_spacer.custom_minimum_size = Vector2(56, 0)
+	row.add_child(label_spacer)
+
+	var lead := Control.new()
+	lead.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lead.size_flags_stretch_ratio = 0.5
+	row.add_child(lead)
+	for s: int in _D_DISPLAY_ORDER:
+		row.add_child(_build_card(team_id, s))
+	var tail := Control.new()
+	tail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tail.size_flags_stretch_ratio = 0.5
+	row.add_child(tail)
+	return row
 
 
 # Column header row for one team: AWAY/HOME spacer + LW / C / RW labels (or
@@ -164,6 +256,7 @@ func _build_header(team_id: int) -> void:
 	header.add_theme_constant_override("separation", 12)
 	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_child(header)
+	_header_rows[team_id] = header
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(56, 0)
@@ -296,7 +389,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_right_cols[team_id][slot] = right_col
 
 	var pos_lbl := Label.new()
-	pos_lbl.text = _POSITION_LABEL_AWAY[slot] if team_id == 1 else _POSITION_LABEL[slot]
+	pos_lbl.text = _position_badge(team_id, slot)
 	pos_lbl.add_theme_font_size_override("font_size", 13)
 	pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	pos_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -407,11 +500,11 @@ func refresh(roster: Array[Dictionary], team_colors: Array[Dictionary] = [],
 
 	var by_slot: Dictionary = {}
 	for entry: Dictionary in roster:
-		by_slot[entry.team_id * 3 + entry.slot] = entry
+		by_slot[LobbySlotKey.encode(entry.team_id, entry.slot)] = entry
 
 	for team_id: int in 2:
 		for s: int in PlayerRules.MAX_PER_TEAM:
-			var key: int = team_id * 3 + s
+			var key: int = LobbySlotKey.encode(team_id, s)
 			var entry = by_slot.get(key, null)
 			_update_card(team_id, s, entry)
 
@@ -438,7 +531,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		stripe_c = tc.get("ui_stripe", stripe_c)
 		text_c   = tc.get("ui_text", text_c)
 
-	var slot_key: int = team_id * 3 + slot
+	var slot_key: int = LobbySlotKey.encode(team_id, slot)
 	var is_bot_slot: bool = entry == null and _bot_slots.get(slot_key, false)
 
 	if entry == null and not is_bot_slot:
@@ -652,6 +745,6 @@ func _on_action_pressed(team_id: int, slot: int) -> void:
 			kick_requested.emit(peer_id, name_lbl.text)
 		return
 	# is_bot=true when slot was empty (+ icon → add), false when bot (X icon → remove).
-	var slot_key: int = team_id * 3 + slot
+	var slot_key: int = LobbySlotKey.encode(team_id, slot)
 	var was_bot: bool = _bot_slots.get(slot_key, false)
 	bot_toggled.emit(team_id, slot, not was_bot)

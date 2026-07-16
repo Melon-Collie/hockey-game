@@ -126,7 +126,10 @@ const VERSION: String = "dev"
 #     host's reconstruction was rejecting (the grab-then-lose bug) now confirms. A
 #     mixed-build host would read the extra Vector3 args as garbage, so a bump is
 #     required.
-const PROTOCOL_VERSION: int = 31
+# v32: 5v5 mode — notify_lobby_settings / notify_game_start /
+#      notify_join_in_progress each grew a positional team_size arg, and
+#      team_slot's range widened to 0..4 (LD/RD lobby positions).
+const PROTOCOL_VERSION: int = 32
 
 
 func _ready() -> void:

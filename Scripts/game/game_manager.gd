@@ -917,6 +917,7 @@ func on_player_connected(peer_id: int) -> void:
 		"home_color_slot": NetworkManager.pending_home_color_slot,
 		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"rule_set": _state_machine.rule_set,
+		"team_size": _state_machine.team_size,
 	}
 	# Reconnect branch: a peer whose Steam ID matches a live reservation reclaims
 	# its held team/slot/stats instead of going through fresh auto-balance.
@@ -936,13 +937,13 @@ func on_player_connected(peer_id: int) -> void:
 				Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
 		NetworkManager.send_sync_existing_players(peer_id, _collect_existing_player_data())
 		return
-	# Roster gate: when both teams are at MAX_PER_TEAM, a mid-game joiner comes
-	# in as a spectator instead of overflowing the roster — the state machine
-	# would otherwise hand out team_slot == MAX_PER_TEAM, and the next faceoff
-	# indexes FACEOFF_OFFSETS out of bounds (host-side script error). If the
-	# spectator gallery is also full, kick with a reason instead.
-	if _state_machine.count_players_on_team(0) >= PlayerRules.MAX_PER_TEAM \
-			and _state_machine.count_players_on_team(1) >= PlayerRules.MAX_PER_TEAM:
+	# Roster gate: when both teams are at the latched team size, a mid-game
+	# joiner comes in as a spectator instead of overflowing the roster — the
+	# state machine would otherwise hand out team_slot == team_size, and the
+	# next faceoff indexes FACEOFF_OFFSETS out of bounds in 5v5 (host-side
+	# script error). If the spectator gallery is also full, kick with a reason.
+	if _state_machine.count_players_on_team(0) >= _state_machine.team_size \
+			and _state_machine.count_players_on_team(1) >= _state_machine.team_size:
 		if _spectator_peers.size() >= GameRules.MAX_SPECTATORS:
 			NetworkManager.kick_peer(peer_id, "Match is full.")
 			return
@@ -1151,7 +1152,8 @@ func _spawn_world() -> void:
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
 		_state_machine.apply_config(cfg.num_periods, cfg.period_duration, cfg.ot_enabled, cfg.ot_duration,
-				cfg.get("rule_set", GameRules.DEFAULT_RULE_SET))
+				cfg.get("rule_set", GameRules.DEFAULT_RULE_SET),
+				cfg.get("team_size", GameRules.DEFAULT_TEAM_SIZE))
 		var cfg_id: String = cfg.get("game_id", "")
 		if cfg_id.is_empty() or _is_valid_game_id(cfg_id):
 			_game_id = cfg_id
@@ -1172,8 +1174,10 @@ func _spawn_world() -> void:
 	_wire_subsystems()
 	if NetworkManager.is_host:
 		team_brains = [
-				TeamBrain.new(0, _registry.team_id_by_peer, _registry.caps_by_peer),
-				TeamBrain.new(1, _registry.team_id_by_peer, _registry.caps_by_peer),
+				TeamBrain.new(0, _registry.team_id_by_peer, _registry.caps_by_peer,
+						_state_machine.team_size, _registry.position_by_peer),
+				TeamBrain.new(1, _registry.team_id_by_peer, _registry.caps_by_peer,
+						_state_machine.team_size, _registry.position_by_peer),
 		]
 		_connect_goal_signals()
 
@@ -2022,7 +2026,7 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 		return
 	if new_team_id < 0 or new_team_id > 1:
 		return
-	if new_slot < 0 or new_slot >= PlayerRules.MAX_PER_TEAM:
+	if new_slot < 0 or new_slot >= _state_machine.team_size:
 		return
 	# Liveness guard: a swap-request RPC can still be in flight when the requesting
 	# spectator disconnects. Without this the host would spawn + broadcast a skater
@@ -2036,7 +2040,7 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 	# Don't promote into a slot held for a reconnecting player (see try_swap_slot).
 	if _state_machine.is_slot_reserved(new_team_id, new_slot):
 		return
-	if _state_machine.count_players_on_team(new_team_id) >= PlayerRules.MAX_PER_TEAM:
+	if _state_machine.count_players_on_team(new_team_id) >= _state_machine.team_size:
 		return
 	_spectator_peers.erase(peer_id)
 	var is_local: bool = peer_id == NetworkManager.local_peer_id()
@@ -2268,6 +2272,7 @@ func _build_replay_header() -> Dictionary:
 		"period_duration": _state_machine.period_duration if _state_machine != null else GameRules.PERIOD_DURATION,
 		"ot_enabled": _state_machine.ot_enabled if _state_machine != null else GameRules.OT_ENABLED,
 		"rule_set": _state_machine.rule_set if _state_machine != null else GameRules.DEFAULT_RULE_SET,
+		"team_size": _state_machine.team_size if _state_machine != null else GameRules.DEFAULT_TEAM_SIZE,
 		"home_color_slot": NetworkManager.pending_home_color_slot,
 		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"recorded_by_peer_id": NetworkManager.local_peer_id(),
@@ -3961,7 +3966,7 @@ func return_to_lobby() -> void:
 			var r: PlayerRecord = _registry.get_record(peer_id)
 			if r == null or not r.is_bot or r.team == null:
 				continue
-			var slot_key: int = r.team.team_id * 3 + r.team_slot
+			var slot_key: int = LobbySlotKey.encode(r.team.team_id, r.team_slot)
 			bot_slots[slot_key] = true
 			bot_identities[slot_key] = {
 				"name":           r.player_name,
@@ -4267,12 +4272,17 @@ func _spawn_bots_from_lobby() -> void:
 	for slot_key: int in NetworkManager.pending_bot_slots:
 		if not NetworkManager.pending_bot_slots[slot_key]:
 			continue
-		# Slot keys for non-spectator slots: team*3+slot. Spectator keys are
-		# >= 100 and bots can't occupy them; skip defensively.
-		if slot_key < 0 or slot_key >= 6:
+		# Slot keys for non-spectator slots: team*MAX_PER_TEAM+slot (the fixed
+		# capacity stride — see LobbySlotKey). Spectator keys are >= 100 and
+		# bots can't occupy them; skip defensively.
+		if slot_key < 0 or slot_key >= PlayerRules.MAX_PER_TEAM * 2:
 			continue
-		var team_id: int = 0 if slot_key < 3 else 1
-		var team_slot: int = slot_key % 3
+		var team_id: int = LobbySlotKey.team_id(slot_key)
+		var team_slot: int = LobbySlotKey.slot(slot_key)
+		# 3v3 never fields the D slots even if a stale bot toggle survives a
+		# mode flip — the latched size is the roster authority.
+		if team_slot >= _state_machine.team_size:
+			continue
 		# Refuse to overwrite a slot that a human already claimed.
 		if _slot_already_taken(team_id, team_slot):
 			continue
@@ -4846,6 +4856,10 @@ func get_num_periods() -> int:
 
 func get_rule_set() -> int:
 	return _state_machine.rule_set if _state_machine != null else GameRules.DEFAULT_RULE_SET
+
+
+func get_team_size() -> int:
+	return _state_machine.team_size if _state_machine != null else GameRules.DEFAULT_TEAM_SIZE
 
 
 func get_period_scores() -> Array:
