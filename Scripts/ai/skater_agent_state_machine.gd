@@ -817,6 +817,9 @@ var _role_ctx := RoleContext.new()
 # stamped across a slot change so no role inherits another role's target).
 var _prev_role_slot: int = AIRoleSlots.Slot.NONE
 var _prev_role_target: Vector3 = Vector3.INF
+# Zone soft-lock incumbent from the last dispatch (RoleDecision.
+# locked_man_pid) — feeds RoleContext.prev_locked_man, reset on slot change.
+var _prev_locked_man_pid: int = -1
 
 # Per-peer velocity history for acceleration estimation. Each bot
 # maintains its own cache because dispatch runs per-bot — the
@@ -2013,6 +2016,12 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
 		ctx.strong_x = _team_brain.strong_x()
 		ctx.assigned_threat_peer = _team_brain.assigned_threat(_peer_id)
+		# 5v5 position identity (plan §1/§6). Re-stamped every build — the
+		# reused ctx must never carry another match's team size.
+		ctx.team_size = _team_brain.team_size
+		var lobby_slot: int = _team_brain.position_of(_peer_id)
+		ctx.self_is_defense = PlayerRules.is_defense_slot(lobby_slot)
+		ctx.self_home_side = _home_side_of(lobby_slot)
 		# Live smart-ping directives on this bot (see AIPingDirectives). The
 		# reused ctx instance must be re-stamped every build — a stale ping
 		# field would keep obeying an expired order.
@@ -2028,7 +2037,22 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.ping_move_target = Vector3.INF
 		ctx.ping_shoot_active = false
 		ctx.ping_pass_target_peer = -1
+		ctx.team_size = GameRules.DEFAULT_TEAM_SIZE
+		ctx.self_is_defense = false
+		ctx.self_home_side = 0.0
 	return ctx
+
+
+# Home side sign of a lobby position: LW/LD rest on -X, RW/RD on +X, C
+# center. World X is side-stable for both teams (see AIRoleSlots5).
+func _home_side_of(lobby_slot: int) -> float:
+	match lobby_slot:
+		1, 3:
+			return -1.0
+		2, 4:
+			return 1.0
+		_:
+			return 0.0
 
 
 # Routes the bot's current slot to its role-behavior module. Returns a
@@ -2047,6 +2071,8 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	# dispatch — INF across a slot change so no role inherits another's
 	# target (see RoleContext.prev_role_target).
 	ctx.prev_role_target = _prev_role_target if slot == _prev_role_slot else Vector3.INF
+	# Zone soft-lock incumbent, same reset-across-slot-change contract.
+	ctx.prev_locked_man = _prev_locked_man_pid if slot == _prev_role_slot else -1
 	var decision: RoleDecision
 	match slot:
 		AIRoleSlots.Slot.FINISHER:
@@ -2080,39 +2106,46 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			decision = AIRoleFlank.decide(ctx, -1.0)
 		AIRoleSlots.Slot.FLANK_R:
 			decision = AIRoleFlank.decide(ctx, 1.0)
-		# ── 5v5 slots (AIRoleSlots5). Mappings marked "skeleton" ride
-		# AnchorFollow to their researched posts (AIRoleSlots5.slot_anchor)
-		# until their real behavior modules land (plan §9 Phase 3).
+		# ── 5v5 slots (AIRoleSlots5) — plan §2–§5.
 		AIRoleSlots.Slot.NET_FRONT:
 			# The crease-edge screen/backdoor man — FINISHER's argmax already
 			# owns that ice (one-timer camp + tip logic included).
 			decision = AIRoleFinisher.decide(ctx)
 		AIRoleSlots.Slot.HIGH_SLOT:
-			# F3's high float — SUPPORT's goal-side trail read (skeleton).
-			decision = AIRoleSupport.decide(ctx)
-		AIRoleSlots.Slot.ZONE_D_STRONG:
-			# Puck-side low battle: pressure the carrier.
-			decision = AIRolePressure.decide(ctx)
+			decision = AIRoleHighSlot.decide(ctx)
+		AIRoleSlots.Slot.POINT_STRONG, AIRoleSlots.Slot.POINT_WEAK, \
+		AIRoleSlots.Slot.DP_STRONG, AIRoleSlots.Slot.DP_WEAK, \
+		AIRoleSlots.Slot.DVALVE, \
+		AIRoleSlots.Slot.DBACK_L, AIRoleSlots.Slot.DBACK_R:
+			decision = AIRoleDefenseman.decide(ctx, slot)
+		AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.ZONE_D_WEAK, \
+		AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.ZONE_W_STRONG, \
+		AIRoleSlots.Slot.ZONE_W_WEAK:
+			decision = AIRoleZoneDefense.decide(ctx, slot)
 		AIRoleSlots.Slot.F2_STRONG:
-			# Strong-side wall lane: the mid-lane breakout-pass read shades
-			# to the carrier's side already (skeleton for the lane split).
-			decision = AIRoleForecheck.decide(ctx, false)
+			decision = AIRoleForecheck.decide_f2(ctx, true)
+		AIRoleSlots.Slot.F2_WEAK:
+			decision = AIRoleForecheck.decide_f2(ctx, false)
 		AIRoleSlots.Slot.BREAKOUT_D2:
 			# Net-front reverse valve — the weak-side breakout outlet's job.
 			decision = AIRoleBreakout.decide(ctx, false)
 		AIRoleSlots.Slot.BREAKOUT_STRETCH:
 			# Weak winger's stretch: OUTLET paces the far blue line legally.
 			decision = AIRoleOutlet.decide(ctx)
-		AIRoleSlots.Slot.BREAKOUT_C, AIRoleSlots.Slot.TRAILER:
-			# Low swing / high-slot trailer — SUPPORT's trail read (skeleton).
+		AIRoleSlots.Slot.BREAKOUT_C:
+			decision = AIRoleBreakoutCenter.decide(ctx)
+		AIRoleSlots.Slot.WIDE_L:
+			decision = AIRoleWideLane.decide(ctx, -1.0)
+		AIRoleSlots.Slot.WIDE_R:
+			decision = AIRoleWideLane.decide(ctx, 1.0)
+		AIRoleSlots.Slot.TRAILER:
+			# High-slot trailer — SUPPORT's goal-side trail read.
 			decision = AIRoleSupport.decide(ctx)
 		_:
-			# POINT_* / DP_* / F2_WEAK / ZONE_* (non-strong) / WIDE_* /
-			# DVALVE / DBACK_* skate to their researched anchors (skeleton),
-			# plus the usual no-slot fallback.
 			decision = AIRoleAnchorFollow.decide(ctx)
 	_prev_role_slot = slot
 	_prev_role_target = decision.target_position
+	_prev_locked_man_pid = decision.locked_man_pid
 	return decision
 
 
@@ -4747,7 +4780,7 @@ func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	if _poke_jab_cooldown_ticks > 0:
 		_poke_jab_cooldown_ticks = maxi(0, _poke_jab_cooldown_ticks - _dispatch_period_ticks)
 		return Vector3.INF
-	if not _is_puck_pressurer_slot():
+	if not _is_puck_pressurer_slot(snapshot):
 		return Vector3.INF
 	if snapshot.puck_state == null:
 		return Vector3.INF
@@ -4766,15 +4799,28 @@ func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 # True if our current brain slot is an on-puck defensive pressurer —
 # the only roles that actively jab. (PRESSURE is DZONE; F1_PRESSURE is
-# FORECHECK; CONTAIN is the TRANS_OD gap defender on the carrier.)
-func _is_puck_pressurer_slot() -> bool:
+# FORECHECK; CONTAIN is the TRANS_OD gap defender on the carrier. In 5v5's
+# zone DZONE, the pressurer is whichever area role currently OWNS the puck —
+# AIZoneCoverage.pressure_owner — so exactly one zone defender ever jabs.)
+func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
 	if _team_brain == null:
 		return false
 	var slot: int = _team_brain.get_slot(_peer_id)
-	return (slot == AIRoleSlots.Slot.PRESSURE
-			or slot == AIRoleSlots.Slot.F1_PRESSURE
-			or slot == AIRoleSlots.Slot.CONTAIN
-			or slot == AIRoleSlots.Slot.ZONE_D_STRONG)
+	if slot == AIRoleSlots.Slot.PRESSURE \
+			or slot == AIRoleSlots.Slot.F1_PRESSURE \
+			or slot == AIRoleSlots.Slot.CONTAIN:
+		return true
+	match slot:
+		AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.ZONE_D_WEAK, \
+		AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.ZONE_W_STRONG, \
+		AIRoleSlots.Slot.ZONE_W_WEAK:
+			if snapshot == null or snapshot.puck_state == null:
+				return false
+			return AIZoneCoverage.pressure_owner(
+					_team_brain.strong_x(),
+					_own_goal_dir * GameRules.GOAL_LINE_Z,
+					snapshot.puck_state.position) == slot
+	return false
 
 
 # The opposing carrier's puck position, or Vector3.INF if no carrier.

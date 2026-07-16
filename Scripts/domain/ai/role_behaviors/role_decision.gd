@@ -49,6 +49,11 @@ var is_one_timer_ready: bool = false
 var commit_check: bool = false
 var check_target: Vector3 = Vector3.ZERO
 
+# The opponent this decision soft-locked onto (5v5 zone defense), or -1.
+# The state machine round-trips it into RoleContext.prev_locked_man on the
+# next dispatch so the lock is sticky without per-role state.
+var locked_man_pid: int = -1
+
 # Arrive AT SPEED instead of braking to a stop at `target_position`. Off-puck
 # roles normally opt into the arrival brake (station-keeping: stop on the
 # spot). A role that is pacing a MOVING waypoint sets this so the state

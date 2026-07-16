@@ -306,6 +306,12 @@ func strong_x() -> float:
 	return _strong_x
 
 
+# This peer's lobby position (team_slot 0–4; see PlayerRules.POSITION_NAMES).
+# 0 (C) when unknown — tests / 3v3, where nothing reads it.
+func position_of(peer_id: int) -> int:
+	return _position_by_peer.get(peer_id, 0)
+
+
 # ── One-timer readiness signaling ───────────────────────────────────────────
 # Off-puck bots in the FINISHER role publish "I'm camped + pre-aimed,
 # fire me a pass and I'll one-time it" via set_one_timer_ready(true).

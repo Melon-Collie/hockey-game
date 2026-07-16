@@ -49,6 +49,34 @@ static func decide(ctx: RoleContext, is_high: bool) -> RoleDecision:
 	return _decide_mid(ctx)
 
 
+# 5v5's 1-2-2 second layer (plan §2): the same inverse-pass-threat argmax
+# as the 3v3 F2, run around a LANE-specific search center — the strong-side
+# man works the wall at half-wall height (kill the first outlet: the
+# half-wall winger), the weak-side man locks the middle lane at
+# circle-tops-to-line height (kill the center outlet + cross-ice reverse).
+# The pair re-sorts automatically when the puck crosses (strong_x flip
+# re-elects the slots).
+const F2_STRONG_WALL_INSET_M: float = 4.0
+const F2_STRONG_DEPTH_OFF_GOAL_M: float = 12.0
+
+
+static func decide_f2(ctx: RoleContext, is_strong: bool) -> RoleDecision:
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
+	if not carrier_pos.is_finite():
+		var d := RoleDecision.new()
+		d.target_position = ctx.self_pos
+		return d
+	var center: Vector3
+	if is_strong:
+		center = Vector3(
+				ctx.strong_x * (GameRules.RINK_HALF_WIDTH - F2_STRONG_WALL_INSET_M),
+				0.0,
+				-ctx.own_goal_dir * (GameRules.GOAL_LINE_Z - F2_STRONG_DEPTH_OFF_GOAL_M))
+	else:
+		center = _mid_search_center(ctx, carrier_pos)
+	return _decide_mid_at(ctx, carrier_pos, center)
+
+
 # ── F3: high safety — hold the line only while the race home is winnable ─────
 static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -89,15 +117,22 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 
 # ── F2: mid-lane breakout-pass read ──────────────────────────────────────────
 static func _decide_mid(ctx: RoleContext) -> RoleDecision:
-	var d := RoleDecision.new()
-
 	# Read off the carrier; fall back to the puck when it's loose (a
 	# loose puck deep in their zone is a prime forecheck moment). Stand
 	# still only if there's no puck at all.
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
+		var d := RoleDecision.new()
 		d.target_position = ctx.self_pos
 		return d
+	return _decide_mid_at(ctx, carrier_pos, _mid_search_center(ctx, carrier_pos))
+
+
+# The F2 argmax body, parameterized on the search center so the 3v3 mid read
+# and the 5v5 lane pair share one implementation.
+static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
+		search_center: Vector3) -> RoleDecision:
+	var d := RoleDecision.new()
 
 	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
 	# Anticipate: lead the breakout-pass receivers to where they're cutting.
@@ -105,7 +140,7 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	if opp_teammates.is_empty():
 		# No outlet receivers to deny — sit at the high-zone read spot so
 		# F2 still pressures the breakout lane rather than freezing.
-		d.target_position = _mid_search_center(ctx, carrier_pos)
+		d.target_position = search_center
 		return d
 
 	# We're defending OUR net, but F2's job is to deny the opp's BREAKOUT
@@ -118,7 +153,6 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
-	var search_center: Vector3 = _mid_search_center(ctx, carrier_pos)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
 	# Switch-hysteresis: hold the forecheck spot unless a fresh one deflates the

@@ -457,6 +457,16 @@ var _pick_action_cooldown: int = 0
 # real time regardless of the AI dispatch cadence. Reset when _pick_action runs.
 var _ticks_since_pick: int = 0
 
+# ── Transition-exposure appetite (5v5 only — plan §6) ────────────────────────
+# The per-position risk-aversion FEEL scalar on the counter-rush cost (the
+# legitimate hand-set knob: the model does the seeing, this sets the
+# appetite). Defensemen price the counter at face value; forwards discount
+# it — the F3-high rotation is expected to absorb a forward caught deep, so
+# an activist forward isn't scared out of the cycle. 3v3 pays zero (gated
+# on ctx.team_size — protects shipping 3v3 tuning).
+const EXPOSURE_APPETITE_DEFENSE: float = 1.0
+const EXPOSURE_APPETITE_FORWARD: float = 0.7
+
 # ── Scratch buffers (reused across ticks, refilled per call) ────────────────
 var _scratch_opponents: Array[Vector3] = []
 # Velocities index-matched to _scratch_opponents, so the fired-puck lane
@@ -1637,7 +1647,33 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			receiver_spot, clean_lane * (1.0 - reception_safety),
 			ctx.defending_goal_pos, our_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	# Transition exposure (5v5): each loss mode also prices the COUNTER-RUSH
+	# it hands over — the carrier stays at self_pos through a pass, so his
+	# own recovery race starts from here (plan §6).
+	cost += _counter_exposure_cost(ctx, loss_point, 1.0 - lane,
+			self_pos, our_goalie)
+	cost += _counter_exposure_cost(ctx, receiver_spot,
+			clean_lane * (1.0 - reception_safety), self_pos, our_goalie)
 	return benefit - cost
+
+
+# Transition-exposure cost of losing the puck at `loss_point` with
+# probability `loss_prob`, while this carrier would be recovering from
+# `recover_from` — the additive counter-rush half of the turnover price
+# (AIActionScoring.counter_rush_cost; design in plan §6). 5v5-gated: 3v3
+# pays zero, protecting its shipped tuning. The per-position appetite is
+# the hand-set feel scalar (see EXPOSURE_APPETITE_*).
+func _counter_exposure_cost(ctx: RoleContext, loss_point: Vector3,
+		loss_prob: float, recover_from: Vector3, our_goalie: Vector3) -> float:
+	if ctx.team_size < 5 or loss_prob <= 0.0:
+		return 0.0
+	var appetite: float = EXPOSURE_APPETITE_DEFENSE if ctx.self_is_defense \
+			else EXPOSURE_APPETITE_FORWARD
+	return appetite * AIActionScoring.counter_rush_cost(
+			loss_point, loss_prob, ctx.defending_goal_pos, our_goalie,
+			GameRules.NET_HALF_WIDTH, _scratch_our_defenders,
+			recover_from, ctx.self_max_speed,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 
 
 # Rotation time: how long the bot needs to rotate facing to point at
@@ -1851,6 +1887,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	var stand_cost: float = AIActionScoring.turnover_cost(
 			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	stand_cost += _counter_exposure_cost(ctx, stand_puck_pos,
+			1.0 - stand_safety, self_pos, our_goalie)
 	var stand_total: float = stand_score * stand_safety - stand_cost
 	if stand_total > best_score:
 		best_score = stand_total
@@ -1907,6 +1945,8 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var concede: float = AIActionScoring.turnover_cost(
 			target, 1.0 - recovery, defending_goal, our_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	concede += _counter_exposure_cost(ctx, target, 1.0 - recovery,
+			ctx.self_pos, our_goalie)
 	var gain: float = 0.0
 	if is_soft:
 		var nearest_our: float = INF
@@ -2075,6 +2115,11 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var cost: float = AIActionScoring.turnover_cost(
 			strip_point, 1.0 - keep_prob, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	# Transition exposure (5v5): a strip on this route also hands over the
+	# counter-rush. The carrier's recovery race starts from the CANDIDATE —
+	# the spot this carry commits him to (plan §6: the one-up-one-back read).
+	cost += _counter_exposure_cost(ctx, strip_point, 1.0 - keep_prob,
+			candidate, our_goalie)
 	return benefit - cost
 
 

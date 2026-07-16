@@ -354,23 +354,31 @@ For each candidate (carry destination / pass), alongside the existing local
 `turnover_cost`, price the developing counter:
 
 ```
-counter_cost = loss_prob × appetite × threat_surface_shoot(
+counter_cost = loss_prob × appetite × score_shoot(
         counter_point,            # where the counter-rush shoots from: our slot
         our_net, our_goalie,
         covering_defenders)       # ONLY the teammates who can beat the counter home
+      × delay_discount(t_counter) # a future threat, decayed over its development
 ```
+
+(`score_shoot` directly, not the `threat_surface_shoot` wrapper: the counter
+point is a real shot location — squarely xG's domain — and the wrapper's
+positional fallback holds its value regardless of the covering set, which
+would dilute the covered-vs-open signal this term exists to read.)
 
 - `counter_point` — the attacking slot in front of **our** net (the researched rush
   destination), a fixed physical landmark.
 - `t_counter` — time for the opponent nearest the loss point to reach it and carry to
   `counter_point` at his real speed cap (momentum-aware `time_to_arrive`, the same
   primitive every race read uses).
-- `covering_defenders` — each teammate (and the carrier himself!) is included at his
-  **defensive-responsibility anchor** (§5) iff his `time_to_arrive(anchor) ≤ t_counter`
-  — i.e. only bodies that genuinely beat the rush home count as defense. A point D
-  covering behind the play qualifies from the point; a winger cycling the corner does
-  not. `threat_surface_shoot` then does what it always does: defenders in front of the
-  net crush the threat, an empty slot reads near-breakaway.
+- `covering_defenders` — each teammate (and the carrier himself!) is included iff he
+  reaches the counter point before the rush **with time to set** (the same
+  brake-to-arrive margin `race_home_radius` charges — a defender racing
+  stride-for-stride beside the rush is chasing, not covering). Covering bodies stand
+  at the goal-side cover anchor (the threat partition's stick-in-the-lane point). A
+  point D covering behind the play qualifies; a winger cycling the corner does not.
+  `score_shoot` then does what it always does: a defender in the lane crushes the
+  threat, an empty slot reads near-breakaway.
 - `appetite` — the **small per-position risk-aversion feel scalar** (legitimate
   hand-set knob, the "feel/tactical tunables" carve-out): how twitchy a D is vs. an
   activist-D coaching philosophy. The model does the *seeing*; the scalar sets the

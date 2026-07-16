@@ -2172,6 +2172,110 @@ static func turnover_cost(
 			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
 
 
+# ── Transition-exposure: the counter-rush cost (5v5-gated at the caller) ─────
+# turnover_cost above prices the threat AT the loss point — which is exactly
+# why it can't see a defenseman caught deep: a loss in the O-zone reads ~0
+# there, while the true cost is the COUNTER-RUSH that develops into the ice
+# the carrier vacated. This is the additive second half (plan §6): the value
+# of the rush the opponent builds from the loss, priced with only the
+# defenders who genuinely beat that rush home.
+#
+#   counter_point  = the slot in front of OUR net (where a rush shoots from —
+#                    a physical landmark, not a shape parameter).
+#   t_counter      = the fastest opponent's time to collect the loss and
+#                    carry to the counter_point (momentum-aware first leg at
+#                    his real Speed cap, straight carry second leg).
+#   covering set   = every teammate — and the carrier himself, recovering
+#                    from the candidate spot — who can reach the counter
+#                    point by t_counter. Bodies that can't beat the rush
+#                    home simply don't exist to this read; that is the whole
+#                    "who's behind the play?" perception. Covering bodies
+#                    stand at the goal-side cover anchor (the same
+#                    stick-in-the-lane point the threat partition uses).
+#   cost           = loss_prob × threat_surface_shoot(counter_point | covering
+#                    set) × delay_discount(t_counter)   — a future threat,
+#                    decayed over the time the rush needs to develop.
+#
+# One-up-one-back falls out with no pairing rule: a partner holding the
+# point beats any counter home → the covering set is non-empty → the threat
+# collapses → the other D is free to attack. Both D deep → nobody covers →
+# near-breakaway threat → the deep carry prices itself out. A fast carrier
+# covers himself (his own recovery race) — Speed buys activation freedom.
+# Teammates race at the league reference speed (their positions are in the
+# defender scratch, their caps are not — a perception simplification, not a
+# tuning knob).
+
+# Scratch for the covering-defender positions (caller-owned pattern; this
+# is per-candidate hot-ish path at the AI dispatch cadence).
+static var _scratch_counter_cover: Array[Vector3] = []
+
+
+static func counter_rush_cost(
+		loss_point: Vector3,
+		loss_prob: float,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		teammates: Array[Vector3],
+		self_recover_pos: Vector3,
+		self_max_speed: float,
+		opponents: Array[Vector3],
+		opponent_vels: Array[Vector3],
+		opponent_caps: Array) -> float:
+	if not loss_point.is_finite() or loss_prob <= 0.0 or opponents.is_empty():
+		return 0.0
+	var own_dir: float = signf(our_net.z)
+	var counter_point := Vector3(
+			0.0, 0.0, our_net.z - own_dir * GameRules.SLOT_DIST_M)
+
+	# Fastest opponent: collect the loss, then carry to the counter point.
+	var carry_dist: float = loss_point.distance_to(counter_point)
+	var t_counter: float = INF
+	var has_vels: bool = opponent_vels.size() == opponents.size()
+	var has_caps: bool = opponent_caps.size() == opponents.size()
+	for i: int in opponents.size():
+		var speed: float = SKATER_REF_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opponent_caps[i]
+			if caps != null:
+				speed = caps.max_speed
+		var vel: Vector3 = opponent_vels[i] if has_vels else Vector3.ZERO
+		var t: float = time_to_arrive(opponents[i], loss_point, vel, speed) \
+				+ carry_dist / maxf(speed, 0.001)
+		if t < t_counter:
+			t_counter = t
+	if t_counter == INF:
+		return 0.0
+
+	# Covering set: bodies that beat the counter home WITH TIME TO SET —
+	# the same brake-to-arrive margin race_home_radius charges (a defender
+	# racing stride-for-stride beside the rush is chasing, not covering).
+	# Standing-start straight-line races (positions only — see header).
+	var setup_margin: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S \
+			/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	var cover_anchor: Vector3 = AIThreatAssignment.cover_anchor(
+			counter_point, our_net)
+	_scratch_counter_cover.clear()
+	for tm: Vector3 in teammates:
+		if tm.distance_to(counter_point) / SKATER_REF_SPEED_M_S \
+				+ setup_margin <= t_counter:
+			_scratch_counter_cover.append(cover_anchor)
+	if self_recover_pos.is_finite() \
+			and self_recover_pos.distance_to(counter_point) \
+					/ maxf(self_max_speed, 0.001) + setup_margin <= t_counter:
+		_scratch_counter_cover.append(cover_anchor)
+
+	# score_shoot directly, not threat_surface_shoot: the counter point IS a
+	# shot location (the slot), squarely in score_shoot's domain — the
+	# positional fallback would hold its value regardless of the covering
+	# set (closeness × angle ignore defenders' block) and dilute the whole
+	# covered-vs-open signal this term exists to read.
+	var threat: float = score_shoot(
+			counter_point, our_net, our_goalie_pos, net_half_width,
+			_scratch_counter_cover)
+	return loss_prob * threat * delay_discount(t_counter)
+
+
 # ── Pass execution risk ──────────────────────────────────────────────────────
 # Even a clear-lane pass isn't a sure thing: leads run long, receptions
 # fumble off an unsquared blade, a bouncing puck skips the tape. The lane
