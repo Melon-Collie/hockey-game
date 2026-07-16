@@ -1477,6 +1477,7 @@ func _wire_sound_signals() -> void:
 			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05)
 			if NetworkManager.is_host:
+				NetworkManager.send_goalie_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_goalie", puck.get_puck_position(), spd))
 	puck.puck_touched_post.connect(
 		func() -> void:
@@ -1484,6 +1485,7 @@ func _wire_sound_signals() -> void:
 			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
 			puck.fire_post_ping_vfx(spd)
 			if NetworkManager.is_host:
+				NetworkManager.send_post_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
 
 	# Persistent connections: NetworkManager autoload + GameManager self-signals
@@ -1504,6 +1506,14 @@ func _wire_sound_signals() -> void:
 				puck.fire_board_impact_vfx(spd))
 	NetworkManager.goal_body_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+	NetworkManager.post_hit_received.connect(
+		func(pos: Vector3) -> void:
+			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, pos, _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
+			if puck != null:
+				puck.fire_post_ping_vfx(spd))
+	NetworkManager.goalie_hit_received.connect(
+		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05))
 	NetworkManager.deflection_received.connect(
 		func(pos: Vector3) -> void:
 			var spd: float = puck.linear_velocity.length() if puck != null else 0.0

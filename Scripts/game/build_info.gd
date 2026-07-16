@@ -105,7 +105,12 @@ const VERSION: String = "dev"
 #     stagger_timer, so a hard body check that knocks the victim down replicates and
 #     the local victim's predicted knockdown survives reconcile (same rail/reason as
 #     stagger's v10 add).
-const PROTOCOL_VERSION: int = 27
+# v28: two new host-broadcast cue RPCs (notify_post_hit / notify_goalie_hit) so a
+#     puck off the post or a pad/goalie save is heard by every peer, not only those
+#     whose local puck prediction registered the contact (matching the existing
+#     deflection / board / body-block broadcasts). New RPC methods shift the
+#     name-sorted RPC indices, so a mixed-build pair would call the wrong method.
+const PROTOCOL_VERSION: int = 28
 
 
 func _ready() -> void:
