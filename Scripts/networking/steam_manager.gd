@@ -196,6 +196,20 @@ func set_lobby_visibility(public: bool) -> void:
 	is_lobby_public = public
 
 
+# Publish Rich Presence so this member shows as *joinable* in friends' Steam
+# lists — the green "Join Game" entry and the launch/overlay join path both key
+# off the "connect" string, NOT off lobby visibility. A friends-only lobby is
+# never listed in the public browser (that's the point), so without this a
+# friend has no way in even though the lobby type permits them: nothing to
+# click in the friends list, and cold launch has no `+connect_lobby` to pass.
+# Steam hands the "connect" value back verbatim — as command-line args when it
+# has to launch the game (parsed by _check_launch_invite), or via the
+# join_requested callback when the game is already running (_on_join_requested).
+# Set for members we join too, so a joiner's own friends can chain in.
+func _advertise_joinable(lobby_id: int) -> void:
+	Steam.setRichPresence("connect", "+connect_lobby %d" % lobby_id)
+
+
 # The Steam BuildID of the running install — a per-build identity that changes
 # on every upload, so it gates simulation parity (physics/tuning) the way
 # PROTOCOL_VERSION gates wire format. Returns 0 for dev / non-Steam builds, in
@@ -215,6 +229,7 @@ func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 		return
 	current_lobby_id = lobby_id
 	is_lobby_public = _pending_public
+	_advertise_joinable(lobby_id)
 	# Advertise the host name so the public browser has something to show.
 	Steam.setLobbyData(lobby_id, "name", "%s's game" % Steam.getPersonaName())
 	Steam.setLobbyData(lobby_id, "game", "mitts")
@@ -251,6 +266,7 @@ func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response:
 		lobby_join_failed.emit("Could not join the lobby (response %d)." % response)
 		return
 	current_lobby_id = lobby_id
+	_advertise_joinable(lobby_id)
 	var lobby_owner: int = Steam.getLobbyOwner(lobby_id)
 	lobby_joined.emit(lobby_id, lobby_owner)
 
@@ -295,6 +311,21 @@ func _on_join_requested(lobby_id: int, _friend_id: int) -> void:
 func open_invite_overlay() -> void:
 	if is_available and current_lobby_id != 0:
 		Steam.activateGameOverlayInviteDialog(current_lobby_id)
+
+
+# SteamID64s of every member currently in our lobby (including the local user).
+# Empty when Steam is unavailable or we're not in a lobby — so offline / free
+# play / headless CI simply report no roster. Used by the roster achievements
+# ("play a game with X"), which every machine can evaluate locally since the
+# lobby membership is visible to all members.
+func lobby_member_steam_ids() -> Array[int]:
+	var ids: Array[int] = []
+	if not is_available or current_lobby_id == 0:
+		return ids
+	var count: int = Steam.getNumLobbyMembers(current_lobby_id)
+	for i: int in count:
+		ids.append(Steam.getLobbyMemberByIndex(current_lobby_id, i))
+	return ids
 
 
 # ── Steam Cloud (Remote Storage) ─────────────────────────────────────────────
@@ -437,5 +468,8 @@ func leave_lobby() -> void:
 	_clear_op()
 	if is_available and current_lobby_id != 0:
 		Steam.leaveLobby(current_lobby_id)
+		# Stop advertising as joinable — a stale "connect" string would leave
+		# friends a dead "Join Game" entry pointing at a lobby we've left.
+		Steam.clearRichPresence()
 	current_lobby_id = 0
 	is_lobby_public = false

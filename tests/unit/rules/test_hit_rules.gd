@@ -23,6 +23,27 @@ func test_attacker_carrying_puck_rejected() -> void:
 	assert_eq(HitRules.classify_contact(IMPULSE_OK, true, false, 0.0),
 			HitRules.Verdict.REJECT)
 
+# ── Commit gate ──────────────────────────────────────────────────────────────
+
+func test_uncommitted_attacker_rejected() -> void:
+	# The Hit button wasn't held — incidental contact, not a body check, even on a
+	# carrier with plenty of impulse. This is the "bump after a stick check" case.
+	assert_eq(HitRules.classify_contact(IMPULSE_OK, false, true, INF, false),
+			HitRules.Verdict.REJECT)
+
+func test_uncommitted_within_grace_still_rejected() -> void:
+	# The grace path (just-released victim) would normally CREDIT, but without a
+	# commit it's still just a bump drifting in right after the poke.
+	assert_eq(HitRules.classify_contact(
+			IMPULSE_OK, false, false, HitRules.JUST_RELEASED_GRACE_S - 0.01, false),
+			HitRules.Verdict.REJECT)
+
+func test_committed_default_preserves_existing_behavior() -> void:
+	# attacker_committed defaults true, so the un-passed calls above (and the
+	# existing host/claim call sites during migration) classify unchanged.
+	assert_eq(HitRules.classify_contact(IMPULSE_OK, false, true, INF, true),
+			HitRules.Verdict.CREDIT_PENDING)
+
 # ── Possession gates ─────────────────────────────────────────────────────────
 
 func test_contact_on_carrier_is_pending() -> void:

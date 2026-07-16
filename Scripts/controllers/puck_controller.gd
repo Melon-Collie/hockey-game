@@ -824,9 +824,11 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 				_state_buffer.pop_front()
 			return
 		else:
+			var release_confirmed: bool = false
 			if _pending_local_release:
 				_pending_local_release = false
 				_pending_local_release_deadline = -1.0
+				release_confirmed = true
 			var rtt_s: float = _shot_rtt_ms / 1000.0
 			# Apply ice friction to the latency-corrected target so it matches
 			# Jolt's deceleration over the RTT projection window (same shape as
@@ -844,6 +846,14 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 			# Only hard-snap on genuine physics divergence (wall/goalie bounce
 			# that differed between client and host).
 			var dist: float = puck.get_puck_position().distance_to(latency_corrected.position)
+			# Shot-launch divergence probe: the first host-confirmed broadcast after a
+			# local release measures client-predicted vs host-authoritative launch. Both
+			# run identical Jolt from the same client-sent origin, so this should be tiny
+			# (RTT jitter); a spike is genuine launch divergence, and it separates
+			# shot-launch causes from bounce/contact within the puck_hard_snaps total.
+			if release_confirmed:
+				NetworkTelemetry.record_shot_launch_divergence(
+						dist, puck.get_puck_velocity().distance_to(latency_corrected.velocity))
 			if dist > trajectory_hard_snap_threshold:
 				# Large divergence (wall/goalie bounce that differed): hard snap both.
 				puck.set_puck_position(latency_corrected.position)

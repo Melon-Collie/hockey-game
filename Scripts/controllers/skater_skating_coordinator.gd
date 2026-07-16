@@ -49,6 +49,9 @@ var stride_phase: float = 0.0
 # holds steady through reconcile replay like the rest of the gait.
 var trunk_pitch_add: float = 0.0
 var trunk_roll_add: float = 0.0
+# Eased 0..1 "committing a check" stance factor, tracked toward skater.hit_committed
+# at render rate. Drives the load-up lean / shoulder drop / crouch below.
+var _hit_commit_blend: float = 0.0
 # Smoothed [0,1] stride intensity so the legs ease in/out of motion at the
 # start/end of a stride instead of snapping to full amplitude.
 var _intensity: float = 0.0
@@ -1009,13 +1012,48 @@ func apply(delta: float) -> void:
 	# tracks the time left, so the wobble eases out with the recovery window;
 	# the two axes run at incommensurate frequencies so it reads as a stumble,
 	# not a metronome.
+	# Knockdown pose factor: holds full while more than knockdown_getup_seconds
+	# remains on the timer, then eases to 0 over that tail (the get-up). Derived FROM
+	# the replicated knockdown_timer, so it renders identically everywhere and through
+	# reconcile — same discipline as the stagger stumble below.
+	var kd_t: float = clampf(
+			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
+
 	var stagger_t: float = clampf(
 			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
 	if stagger_t > 0.0:
-		var wobble_amp: float = deg_to_rad(_controller.stagger_wobble_deg) * stagger_t
+		# Knockdown supersedes the stumble — fade the wobble out as the player goes down.
+		var wobble_amp: float = deg_to_rad(_controller.stagger_wobble_deg) * stagger_t * (1.0 - kd_t)
 		var wobble_phase: float = _controller.stagger_timer * TAU * _controller.stagger_wobble_hz
 		trunk_pitch_add += wobble_amp * sin(wobble_phase)
 		trunk_roll_add += wobble_amp * 0.7 * sin(wobble_phase * 1.31)
+
+	# Knockdown crumple: sink the body toward the ice and let the stride swing go
+	# limp, blended by kd_t so a downed body doesn't keep pumping strides while it
+	# slides. The torso fold is layered in SkaterPoseCoordinator._apply_lean (the
+	# recoil channel); here it's the drop + limp legs. Both ease back over the get-up.
+	if kd_t > 0.0:
+		drop = lerpf(drop, _controller.knockdown_pose_drop_m, kd_t)
+		l_pitch = lerpf(l_pitch, 0.0, kd_t)
+		r_pitch = lerpf(r_pitch, 0.0, kd_t)
+		l_roll = lerpf(l_roll, 0.0, kd_t)
+		r_roll = lerpf(r_roll, 0.0, kd_t)
+		l_knee = lerpf(l_knee, 0.0, kd_t)
+		r_knee = lerpf(r_knee, 0.0, kd_t)
+
+	# Commit stance: holding the Hit button loads the skater up for the check — lean
+	# forward into it, drop the leading shoulder toward travel, and sink a touch. Off
+	# the replicated skater.hit_committed (renders on remotes), eased at render rate.
+	# Suppressed while going down (kd_t) so it can't fight the crumple.
+	_hit_commit_blend = move_toward(_hit_commit_blend,
+			1.0 if _skater.hit_committed else 0.0, _controller.hit_commit_pose_speed * delta)
+	var commit_t: float = _hit_commit_blend * (1.0 - kd_t)
+	if commit_t > 0.001:
+		trunk_pitch_add += -deg_to_rad(_controller.hit_commit_lean_deg) * commit_t
+		# Drop the shoulder toward lateral travel; straight-ahead → lean + crouch only.
+		var vel_local: Vector3 = _skater.global_transform.basis.inverse() * _skater.velocity
+		trunk_roll_add += deg_to_rad(_controller.hit_commit_shoulder_deg) * commit_t * signf(vel_local.x)
+		drop += _controller.hit_commit_crouch_m * commit_t
 
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
 	_skater.set_skating_crouch_drop(drop)

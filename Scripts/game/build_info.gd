@@ -105,7 +105,20 @@ const VERSION: String = "dev"
 #     stagger_timer, so a hard body check that knocks the victim down replicates and
 #     the local victim's predicted knockdown survives reconcile (same rail/reason as
 #     stagger's v10 add).
-# v28: pickup / poke / stick-lift claim RPCs carry the client's own blade geometry
+# v28: intent byte gains bit [6] — hit_committed (the body-check brace/delivery
+#     signal, moved off brake onto the Hit button). No block-size change (spare bit),
+#     but a client now reads a remote victim's brace and a remote attacker's
+#     full-vs-passive delivery from it, so a bump is required.
+# v29: two new host-broadcast cue RPCs (notify_post_hit / notify_goalie_hit) so a
+#     puck off the post or a pad/goalie save is heard by every peer, not only those
+#     whose local puck prediction registered the contact (matching the existing
+#     deflection / board / body-block broadcasts). New RPC methods shift the
+#     name-sorted RPC indices, so a mixed-build pair would call the wrong method.
+# v30: stats packet grew — PlayerStats.to_array() 11 -> 14 (one_timer_goals,
+#      tip_goals, ot_goals: host-tagged goal-flavor / overtime-winner counters
+#      driving the One-Timer / Redirect / Overtime Hero achievements), so
+#      STATS_PLAYER_RECORD_SIZE 12 -> 15.
+# v31: pickup / poke / stick-lift claim RPCs carry the client's own blade geometry
 #     (client-authoritative "aim"): pickup adds blade_curr + blade_prev + top_hand,
 #     poke adds blade_curr + blade_prev, stick-lift adds blade_curr. The host now
 #     validates against the client-sent blade (reach-clamped to the server body)
@@ -113,7 +126,7 @@ const VERSION: String = "dev"
 #     host's reconstruction was rejecting (the grab-then-lose bug) now confirms. A
 #     mixed-build host would read the extra Vector3 args as garbage, so a bump is
 #     required.
-const PROTOCOL_VERSION: int = 28
+const PROTOCOL_VERSION: int = 31
 
 
 func _ready() -> void:

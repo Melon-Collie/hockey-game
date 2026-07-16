@@ -12,6 +12,11 @@ extends CanvasLayer
 
 signal retry_pressed
 signal exit_pressed
+# The in-play "Skip" control: abandon the current attempt and move on. Opt-in
+# (hidden until enable_skip()) so drills that want an escape hatch — e.g. the
+# passing drill, where a fumbled rep can leave the puck out of reach — surface
+# one without forcing it on every drill.
+signal skip_pressed
 
 var _shot_label: Label = null
 var _score_label: Label = null
@@ -20,6 +25,8 @@ var _flash_card: Control = null
 var _results_panel: Control = null
 var _results_heading: Label = null
 var _results_sub: Label = null
+var _skip_btn: Button = null
+var _skip_enabled: bool = false
 
 const _GREEN: Color = Color(0.3, 1.0, 0.45, 0.9)
 const _RED: Color = Color(1.0, 0.42, 0.4, 0.9)
@@ -126,6 +133,18 @@ func _build_tracker() -> void:
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		vbox.add_child(hint)
 
+	# In-play escape hatch, hidden until enable_skip(). Sits under the tracker so
+	# it's reachable during play but out of the way; toggled off while the
+	# results card is up (that card owns its own buttons).
+	_skip_btn = Button.new()
+	_skip_btn.text = "Skip ▸"
+	_skip_btn.add_theme_font_size_override("font_size", 12)
+	_skip_btn.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	_skip_btn.visible = false
+	_skip_btn.pressed.connect(func() -> void: skip_pressed.emit())
+	SoundManager.wire_button(_skip_btn)
+	vbox.add_child(_skip_btn)
+
 
 func _build_flash() -> void:
 	# A broadcast-style verdict card in the same visual language as the faceoff
@@ -226,10 +245,19 @@ func _build_results_panel() -> void:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+# Reveal the in-play Skip button (opt-in per drill). Idempotent.
+func enable_skip() -> void:
+	_skip_enabled = true
+	if _skip_btn != null:
+		_skip_btn.visible = true
+
+
 func set_progress(attempt_number: int, total: int, makes: int) -> void:
 	_flash_card.visible = false
 	_shot_label.text = "Shot %d / %d" % [attempt_number, total]
 	_score_label.text = "%s: %d" % [_score_noun(), makes]
+	if _skip_btn != null:
+		_skip_btn.visible = _skip_enabled
 
 
 func flash_result(made: bool, makes: int, attempts_taken: int) -> void:
@@ -244,10 +272,15 @@ func show_results(makes: int, total: int) -> void:
 	_results_heading.text = "%d / %d" % [makes, total]
 	_results_sub.text = _verdict(makes, total)
 	_results_panel.visible = true
+	# The results card owns Try Again / Exit; the in-play Skip would just clutter.
+	if _skip_btn != null:
+		_skip_btn.visible = false
 
 
 func hide_results() -> void:
 	_results_panel.visible = false
+	if _skip_btn != null:
+		_skip_btn.visible = _skip_enabled
 
 
 func _unhandled_input(event: InputEvent) -> void:

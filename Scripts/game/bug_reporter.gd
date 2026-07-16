@@ -93,10 +93,19 @@ func _post(url: String, body: Dictionary) -> void:
 	var root: Window = (Engine.get_main_loop() as SceneTree).root
 	var req := HTTPRequest.new()
 	root.add_child(req)
-	req.request_completed.connect(func(_result: int, code: int, _response_headers: PackedStringArray, _body: PackedByteArray) -> void:
+	req.request_completed.connect(func(_result: int, code: int, _response_headers: PackedStringArray, resp: PackedByteArray) -> void:
 		var ok: bool = code >= 200 and code < 300
 		if not ok:
-			push_warning("BugReporter: HTTP %d" % code)
+			# Include the response body: PostgREST names the offending column /
+			# constraint there, so a bare code can't distinguish schema drift
+			# from a size-cap rejection.
+			var detail: String = resp.get_string_from_utf8().strip_edges()
+			if detail.length() > 500:
+				detail = detail.substr(0, 500) + "…"
+			if detail.is_empty():
+				push_warning("BugReporter: HTTP %d" % code)
+			else:
+				push_warning("BugReporter: HTTP %d — %s" % [code, detail])
 		submit_completed.emit(Result.SUCCESS if ok else Result.FAILED, code)
 		req.queue_free()
 	)

@@ -45,7 +45,9 @@ const TOTAL_KEYS: Array[String] = ["puck_hard_snaps", "blade_jumps",
 		"poke_claims", "poke_claim_misses",
 		"stick_lift_claims", "stick_lift_claim_misses",
 		"provisional_pins", "provisional_confirmed", "provisional_timeouts",
-		"provisional_stolen"]
+		"provisional_stolen",
+		"reconcile_miss_empty", "reconcile_miss_older", "reconcile_miss_newer",
+		"reconcile_miss_gap", "shot_launches"]
 
 # Cap on felt-lag markers per session — defense against a tester leaning on the
 # key. Beyond the cap we keep a count so the total is still visible.

@@ -65,7 +65,7 @@ below.
 |---|---|---|---|
 | `reconcile_per_sec` | /s | <1 | How often the server snapped the local skater's prediction. Sustained higher = real non-determinism in input replay, or a divergence channel the threshold check can't see. |
 | `reconcile_mag_m` | m | <0.05 | Average snap distance. Large + frequent = corrections the player feels as rubber-banding. |
-| `reconcile_match_pct` | % | ~100 | Share of reconcile lookups that found the client's own prediction for the server's ack timestamp. <100% = the client reconciles against *lag*, not real error — the single most diagnostic number for "why am I reconciling on a clean link." |
+| `reconcile_match_pct` | % | ~100 | Share of reconcile lookups that found the client's own prediction for the server's ack timestamp. <100% = the client reconciles against *lag*, not real error — a miss falls back to the (prediction-lead-ahead) live position and trips a spurious position snap, so a low match rate is the dominant residual-churn driver. **Read `_avg` and `_min` together**: `_min` (one post-faceoff window can own it) flags transients; a low `_avg` means the shortfall is *sustained*. The `reconcile_miss_*` totals below say why. |
 | `recon_pos_per_sec` / `recon_vel_per_sec` / `recon_ubody_per_sec` | /s | ~0 | Which channel tripped the snap: position vs velocity vs upper-body pose. Isolates *what* is diverging. |
 | `recon_pos_offset_ticks` | ticks | ≈ ±1 benign | Same-timestamp position offset in ticks-of-travel, signed lead(+)/lag(−). A clean ±1 = one-tick capture/integration phase offset; noisy/large = real non-determinism. |
 | `recon_post_replay_residual_m` | m | ≈ 0 | Distance from server *after* snap+replay. Persistent value = the replay never converges, so the error rebuilds every cycle. |
@@ -86,6 +86,11 @@ below.
 |---|---|
 | `puck_hard_snaps_total` | Puck trajectory-prediction corrections in the hard-snap zone (>1.5 m divergence). Expected only on genuine host/client physics divergence (a bounce that differed). Firing on every shot = trajectory math bug. Client only. |
 | `blade_jumps_total` | Reconcile-induced blade teleports >5 cm (normal fast stickhandling is excluded). Client only. |
+| `reconcile_miss_empty_total` / `reconcile_miss_older_total` | Match-miss attribution (client only). `EMPTY` = prediction history was empty, `OLDER` = ack preceded the oldest kept prediction. Both are the **benign post-clear transient** — a teleport / dead-puck freeze wipes the history and resets the ack, so the next ~RTT of broadcasts ack pre-clear inputs. Expected in small numbers around every faceoff/goal. |
+| `reconcile_miss_newer_total` / `reconcile_miss_gap_total` | The **bug** buckets. `NEWER` = ack ran past the newest prediction (shouldn't happen in steady play). `GAP` = ack fell *between* two kept predictions by >1 ms — a real hole in the history (an input that never got a snapshot, or over-aggressive trimming). A large `GAP` total is the thing to chase when `reconcile_match_avg` is low. Client only. |
+| `reconcile_miss_gap_ms_peak` | Worst ack-vs-nearest-history-bound distance on a miss (ms). Large ⇒ clear-related (ack far behind history); near the 1 ms epsilon ⇒ an off-by-one / quantization edge. Client only. |
+| `shot_launch_div_peak` / `shot_launch_vel_div_peak` | Worst client-predicted-vs-host-authoritative gap (m / m·s⁻¹) at the first host-confirmed broadcast after a **local shot release**. Client and host run identical Jolt from the same client-sent origin, so this should be tiny (RTT jitter) — a large peak is genuine shot-launch divergence, and it's the shot-launch slice of `puck_hard_snaps` (>1.5 m here would hard-snap). Client only. |
+| `shot_launches_total` | Shots measured — the denominator for the two peaks above (a big peak over 2 shots ≠ a big peak over 40). Client only. |
 
 ## Lag-comp claim health (host rows only)
 

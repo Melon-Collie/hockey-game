@@ -358,6 +358,18 @@ var _ranked_match: bool = false
 # guard prevents duplicate connections to the persistent set on rematch.
 var _persistent_sound_signals_wired: bool = false
 
+# Echo-suppression for the two broadcast save cues (post / goalie). The shooter
+# client simulates its own shot in flight, so its predicted puck fires the
+# post/goalie contact LOCALLY the instant it happens (the live cue) and then
+# hears the host's broadcast ~RTT later — the same event twice. Non-shooter peers
+# never predict the loose puck, so the live cue never fires for them and the
+# broadcast is their only play. We stamp the local play time here and skip an
+# incoming broadcast that lands within the echo window. Keyed on a real local
+# play (not on "am I the shooter"), so a peer that did NOT predict the contact
+# still hears the broadcast — no silence hole. See _save_cue_is_echo.
+var _local_post_cue_at: float = -1000.0
+var _local_goalie_cue_at: float = -1000.0
+
 
 func _ready() -> void:
 	randomize()
@@ -1475,15 +1487,19 @@ func _wire_sound_signals() -> void:
 	puck.puck_touched_goalie.connect(
 		func(_g: Goalie) -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd), 0.05)
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05)
+			_local_goalie_cue_at = NetworkManager.local_time()
 			if NetworkManager.is_host:
+				NetworkManager.send_goalie_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_goalie", puck.get_puck_position(), spd))
 	puck.puck_touched_post.connect(
 		func() -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd), 0.04)
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
 			puck.fire_post_ping_vfx(spd)
+			_local_post_cue_at = NetworkManager.local_time()
 			if NetworkManager.is_host:
+				NetworkManager.send_post_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
 
 	# Persistent connections: NetworkManager autoload + GameManager self-signals
@@ -1504,6 +1520,19 @@ func _wire_sound_signals() -> void:
 				puck.fire_board_impact_vfx(spd))
 	NetworkManager.goal_body_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+	NetworkManager.post_hit_received.connect(
+		func(pos: Vector3) -> void:
+			if _save_cue_is_echo(_local_post_cue_at):
+				return  # already played locally off this peer's predicted contact
+			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, pos, _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
+			if puck != null:
+				puck.fire_post_ping_vfx(spd))
+	NetworkManager.goalie_hit_received.connect(
+		func(pos: Vector3) -> void:
+			if _save_cue_is_echo(_local_goalie_cue_at):
+				return  # already played locally off this peer's predicted contact
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05))
 	NetworkManager.deflection_received.connect(
 		func(pos: Vector3) -> void:
 			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
@@ -2949,7 +2978,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	# a moving puck without possessing it) so goal attribution and assist credit
 	# work — without this, get_last_toucher() returns the passer at goal time.
 	_shot_tracker.on_deflection(pid)
-	_shot_tracker.on_shot_started(pid)
+	_shot_tracker.on_shot_started(pid, true)  # one-timer tag → One-Timer achievement
 	# Lag-comp the goalie reaction trigger (see _fire_remote_shot for the
 	# full rationale). One-timers go through the same RPC-back-date flow.
 	# clamp_back_date also zeroes the host's own path (host_timestamp = 0 →
@@ -3644,6 +3673,10 @@ func _on_game_over() -> void:
 		if _achievements_active():
 			if _achievements != null:
 				_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
+				# Roster achievements — read the live Steam lobby membership so any
+				# machine (host or client) can award "played a game with X".
+				_achievements.evaluate_roster(
+						SteamManager.lobby_member_steam_ids(), SteamManager.steam_id)
 			if _stat_recorder != null:
 				_stat_recorder.record_game(local.stats, outcome)
 				if _achievements != null:
@@ -3699,6 +3732,20 @@ func _report_net_session(end_reason: String) -> void:
 # or tutorial / penalty-drill practice.
 func _achievements_active() -> bool:
 	return not NetworkManager.is_free_play_mode and not NetworkManager.is_drill_mode()
+
+
+# Called from the tutorial-completion paths (TutorialManager / TutorialHUD) each
+# time a tutorial is marked complete. Fires the "Student of the Game" achievement
+# once the whole course is done. Deliberately outside _achievements_active — the
+# course runs in tutorial mode, where that gate is closed, so the meta hook is
+# called directly. Idempotent downstream (AchievementService de-dupes).
+func notify_tutorial_completed() -> void:
+	if _achievements == null:
+		return
+	for id: String in TutorialRegistry.ALL_IDS:
+		if not PlayerPrefs.is_tutorial_complete(id):
+			return
+	_achievements.on_tutorials_complete()
 
 
 # Latches _ranked_match (see its doc) once two humans share the match. Called
@@ -3971,6 +4018,10 @@ func _on_local_attributes_changed(attrs: PlayerAttributes) -> void:
 	if record == null:
 		return
 	record.attributes = attrs
+	# Customized your build — a meta achievement, fired directly (this signal only
+	# fires from the free-play picker Apply, where the game-over sweep never runs).
+	if _achievements != null:
+		_achievements.on_build_edited()
 	if NetworkManager.is_in_online_match():
 		return
 	if record.controller != null:
@@ -4093,6 +4144,36 @@ func return_to_free_play() -> void:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 func _puck_speed_volume(speed: float) -> float:
 	return lerpf(-10.0, 0.0, clampf((speed - 1.0) / 20.0, 0.0, 1.0))
+
+
+# Base loudness bumps layered on top of the speed curve for the two save cues.
+# `_puck_speed_volume` ceilings at 0 dB (it only attenuates), so a hard clang off
+# the iron or a fat pad save was never louder than the stream baseline; the bump
+# lets a save carry the way it should. Post rings brighter/louder than the
+# damped pad thump. Kept in sync with ReplayEventReplayer's mirrored constants.
+const _POST_SAVE_VOLUME_BUMP_DB: float = 4.0
+const _PAD_SAVE_VOLUME_BUMP_DB: float = 2.0
+
+
+# Pitch for a puck-off-the-post cue. A hard shot rings the iron bright and
+# sharp; a slow puck clunks dull. Speed-driven off the same replicated puck
+# velocity the volume uses, so host and remote peers ring a given post alike.
+# Kept in sync with ReplayEventReplayer._post_pitch.
+func _post_pitch(speed: float) -> float:
+	return lerpf(0.9, 1.12, clampf((speed - 5.0) / 25.0, 0.0, 1.0))
+
+
+# True if a broadcast save cue arriving now is the echo of a local (predicted)
+# play this peer already made — see the _local_*_cue_at doc-block. The window is
+# the expected echo delay: the local play leads the host's broadcast by ~one RTT
+# (the client's prediction runs ahead, the host echoes back a round-trip later),
+# the same RTT-based hand-off the puck predictor uses at _on_client_puck_hit_post.
+# Clamped so a normal RTT can't under-cover the echo and a lag spike can't gate a
+# genuinely separate second save. `local_cue_at` starts far in the past, so a peer
+# that never played locally (never predicted the contact) is never suppressed.
+func _save_cue_is_echo(local_cue_at: float) -> bool:
+	var window: float = clampf(NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.05, 0.08, 0.5)
+	return NetworkManager.local_time() - local_cue_at < window
 
 
 # Pitch for a blade deflection cue. A low-speed result is a bobble (the blade
@@ -4237,7 +4318,7 @@ func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 	return _state_buffer_manager.get_state_at(ts)
 
 
-# Historical {skater, position, velocity, brake} for every skater EXCEPT
+# Historical {skater, position, velocity, hit} for every skater EXCEPT
 # `exclude_skater` at `host_ts`, sampled from each remote's interpolation buffer.
 # Wired to the local player's LocalController as the reconcile replay's
 # body-check re-resolution source (Slice C) — it re-derives contact against where
@@ -4262,7 +4343,7 @@ func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
 			"skater": rec.skater,
 			"position": state.position,
 			"velocity": state.velocity,
-			"brake": state.brake_intent,
+			"hit": state.hit_committed,
 		})
 	return out
 

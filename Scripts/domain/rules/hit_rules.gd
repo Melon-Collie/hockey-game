@@ -35,7 +35,15 @@ static func classify_contact(
 		impulse_magnitude: float,
 		attacker_has_puck: bool,
 		victim_is_carrier: bool,
-		seconds_since_victim_lost_possession: float) -> Verdict:
+		seconds_since_victim_lost_possession: float,
+		attacker_committed: bool = true) -> Verdict:
+	# A "hit" now requires the attacker to have COMMITTED with the Hit button — an
+	# uncommitted bump (e.g. drifting into someone right after a stick check, while
+	# not holding Ctrl) is incidental contact, not a body check, and isn't credited.
+	# This also gates the impact burst/sound (HitTracker only fires those on a
+	# credited-or-pending verdict), so incidental contact stops reading as a hit.
+	if not attacker_committed:
+		return Verdict.REJECT
 	if impulse_magnitude < MIN_HIT_IMPULSE:
 		return Verdict.REJECT
 	if attacker_has_puck:

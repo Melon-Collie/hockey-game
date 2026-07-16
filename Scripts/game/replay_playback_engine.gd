@@ -71,6 +71,7 @@ static func apply_interpolated_snapshot(
 		# take the newest bracket end, like is_ghost; scalars lerp.
 		interp.move_intent = ts.move_intent
 		interp.brake_intent = ts.brake_intent
+		interp.hit_committed = ts.hit_committed
 		interp.blade_up = ts.blade_up
 		interp.shot_state = ts.shot_state
 		interp.elevation_level = ts.elevation_level

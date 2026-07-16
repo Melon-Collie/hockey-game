@@ -91,6 +91,28 @@ func test_shot_started_with_invalid_peer_is_noop() -> void:
 	assert_false(tracker.has_pending_shot())
 
 
+func test_normal_shot_is_not_flagged_one_timer() -> void:
+	_add_player(10, 0)
+	tracker.on_shot_started(10)
+	assert_false(tracker.pending_is_one_timer())
+
+
+func test_one_timer_flag_set_on_release() -> void:
+	_add_player(10, 0)
+	tracker.on_shot_started(10, true)
+	assert_true(tracker.pending_is_one_timer())
+
+
+func test_one_timer_flag_cleared_with_pending() -> void:
+	_add_player(10, 0)
+	tracker.on_shot_started(10, true)
+	tracker.clear_pending()
+	assert_false(tracker.pending_is_one_timer())
+	# A subsequent ordinary shot must not inherit the stale flag.
+	tracker.on_shot_started(10)
+	assert_false(tracker.pending_is_one_timer())
+
+
 # ── Goalie save / SOG ────────────────────────────────────────────────────────
 
 func test_goalie_touch_by_defending_team_confirms_sog() -> void:

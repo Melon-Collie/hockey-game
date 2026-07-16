@@ -276,3 +276,57 @@ func test_cross_seam_reception_one_times_off_the_displaced_goalie() -> void:
 	sm.dispatch(input, s)
 	assert_eq(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
 			"the cross-seam feed converts to a one-time redirect")
+
+
+# Where a ray from `origin` along `dir_xz` (unit XZ) crosses the net plane z.
+func _x_at_net_plane(origin: Vector3, dir_xz: Vector2, net_z: float) -> float:
+	var t: float = (net_z - origin.z) / dir_xz.y
+	return origin.x + dir_xz.x * t
+
+
+func test_one_timer_aim_is_locked_from_the_release_point_not_the_body() -> void:
+	# The reported "aim, then move, and it's off target" bug. The slapper
+	# direction locks at the press tick and never re-steers, but the bot enters
+	# ONE_TIMER_PRESSED up to RECEIVE_TRIGGER_LATERAL_M off the feed line and
+	# shuffles onto it before the puck arrives. The lock must be built from where
+	# the shot will FIRE (the settled slapper zone on the feed line), so the
+	# frozen line stays ON the net despite the body's still-to-travel offset —
+	# not from the current body, which would parallel-shift the shot wide.
+	var self_pos := Vector3(3.75, 0.0, -22.36)
+	var s: WorldSnapshot = _cycle_snap(self_pos)
+	# A live feed whose perpendicular foot (the spot the bot settles to shoot
+	# from) sits ~3 m off the body in +X — a real lateral shuffle, well inside
+	# the 5 m reception band.
+	s.puck_state.position = Vector3(2.0, 0.0, -14.0)
+	s.puck_state.velocity = Vector3(-2.0, 0.0, -15.0)  # >14 m/s reception trigger
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	# Squared to the net so the aim settles and the press fires this tick.
+	s.skater_states[FINISHER_ID].facing = Vector2(-0.197, -0.980)
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_true(input.slap_pressed, "the squared one-timer presses this tick")
+
+	# The direction the controller will lock: current blade→cursor ≈ self→cursor.
+	var dir := Vector2(
+			input.mouse_world_pos.x - self_pos.x,
+			input.mouse_world_pos.z - self_pos.z).normalized()
+	var release_point: Vector3 = sm._slapper_zone_center(
+			sm._one_timer_line_anchor(s, self_pos))
+	assert_true(release_point.is_finite(),
+			"the feed yields a settled release point on its line")
+	var net_z: float = -GameRules.GOAL_LINE_Z  # team 0 attacks -Z
+
+	# Fired from where it will ACTUALLY release: on the net.
+	var x_from_release: float = _x_at_net_plane(release_point, dir, net_z)
+	assert_lt(absf(x_from_release), GameRules.NET_HALF_WIDTH,
+			"the locked line crosses inside the posts from the release point")
+
+	# The same locked line fired from the CURRENT body (the old body-relative
+	# aim) misses wide — proving the compensation is real and load-bearing.
+	var x_from_body: float = _x_at_net_plane(self_pos, dir, net_z)
+	assert_gt(absf(x_from_body), GameRules.NET_HALF_WIDTH,
+			"a body-relative lock would parallel-shift the shot wide of the net")

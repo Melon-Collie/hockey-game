@@ -400,9 +400,17 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 	# raw attacker-weight × speed impact_force — so the same hit dislodges the puck
 	# for an enforcer but not for a low-Physical player. Matches the stagger's
 	# hardness measure; see BodyCheckRules.puck_strip_impulse.
+	#
+	# The attacker's transfer is commit-gated by the Hit button, the SAME way the
+	# knockback is (Skater._resolve_player_collisions): a committed check strips at
+	# full force, an uncommitted bump only at hit_passive_transfer_mult — so
+	# "without the hit button, hits shouldn't be that powerful" holds for the puck
+	# too, not just the knockback. The victim's brace (hit_committed) already cut it.
+	var checker_transfer: float = checker.body_check_transfer \
+			* (1.0 if checker.hit_committed else checker.hit_passive_transfer_mult)
 	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
-			impact_force, checker.body_check_transfer,
-			victim.weight, victim.body_check_brace_resistance, victim.brake_intent)
+			impact_force, checker_transfer,
+			victim.weight, victim.body_check_brace_resistance, victim.hit_committed)
 	if strip_impulse < hit_pickup_cooldown_threshold:
 		return
 	# Hard hits temporarily deny the victim a pickup, even if they weren't carrying.

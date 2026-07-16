@@ -1795,6 +1795,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# otherwise ease off near contact, softening the hit. Respect the
 			# hard exhaustion lockout.
 			input.sprint_held = self_state != null and not self_state.sprint_locked
+			# Commit to the check with the Hit button too — this is what delivers the
+			# FULL transfer AIBodyCheck's predicted_impulse assumed (an uncommitted
+			# drive lands only the passive fraction), and braces the checker against
+			# the collision. Stamina-gated in the controller like sprint, so setting it
+			# while gassed is a harmless no-op there.
+			input.hit_held = true
 		else:
 			# Sprint to close a long gap to the role's destination — backcheck
 			# racing home, forecheck closing from depth, breakout up-ice. The gap
@@ -3475,16 +3481,35 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 		_apply_steering(input, snapshot, self_pos, line_anchor)
 	else:
 		_apply_brake_steering(input, snapshot, self_pos)
+	# AIM FROM THE RELEASE POINT, NOT THE CURRENT BODY. The slapper direction
+	# locks at the press tick and NEVER re-steers (release_slapper fires the
+	# frozen locked_slapper_dir), yet the bot may enter this state up to
+	# RECEIVE_TRIGGER_LATERAL_M off the feed line and micro-shuffle onto it before
+	# the puck arrives. Aiming from self_pos bakes that still-to-travel lateral
+	# offset into the locked line as a PARALLEL MISS — the "aim, then move, and
+	# it's off target" bug. So build the aim from where the shot will actually
+	# fire from: the slapper zone centre once the body has SETTLED on the live
+	# feed line (perp foot of the pass), which is exactly the spot the release
+	# trigger fires at. Falls back to the current zone when there's no live line.
+	var release_point: Vector3 = _slapper_zone_center(
+			line_anchor if line_anchor.is_finite() else self_pos)
 	# Mouse + facing stay on the open net for the entire wait — FACE-aimed
 	# (this is pre-aim: the cursor is pure pointing intent, cone-clamped;
 	# facing_drag is the real rotation limit) at the hole read AGAINST THE
 	# FEED'S ARRIVAL: the goalie is mid-re-square while the pass flies, so
 	# the aim targets the hole he concedes at contact, not the one he is
-	# currently vacating. Rotated by this release's committed execution
-	# error (shot budget, sampled at press entry; constant through the wait).
-	var clean_aim: Vector3 = _apply_committed_aim_error(
-			self_pos, _shot_aim_point(snapshot, self_pos,
-					_one_timer_feed_time_s(snapshot, self_pos)))
+	# currently vacating — read from the RELEASE POINT so the goalie-shadow
+	# geometry matches the spot the puck leaves from.
+	var net_hole: Vector3 = _shot_aim_point(snapshot, release_point,
+			_one_timer_feed_time_s(snapshot, self_pos))
+	# The controller locks the direction from the current blade→mouse line, so
+	# translate the release-point shot vector back onto the body: a cursor at
+	# self_pos + (net_hole − release_point) locks the exact line the shot needs
+	# when it eventually fires from release_point, cancelling the parallel shift.
+	# Rotated by this release's committed execution error (shot budget, sampled at
+	# press entry; constant through the wait).
+	var shot_vec: Vector3 = net_hole - release_point
+	var clean_aim: Vector3 = _apply_committed_aim_error(self_pos, self_pos + shot_vec)
 	input.mouse_world_pos = _step_mouse_face(clean_aim)
 
 	# The controller LOCKS the slapper direction from the mouse at the press

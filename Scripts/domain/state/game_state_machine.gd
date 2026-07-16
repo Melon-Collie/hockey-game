@@ -805,6 +805,13 @@ func _on_period_clock_expired() -> void:
 		_set_phase(GamePhase.Phase.END_OF_PERIOD)
 
 func _is_ot_period() -> bool:
+	return is_overtime()
+
+
+# Public: whether play is in sudden-death overtime (any period past regulation).
+# Read at goal time for the Overtime Hero achievement — an OT goal is always the
+# game-winner.
+func is_overtime() -> bool:
 	return current_period > num_periods
 
 func _advance_period() -> void:

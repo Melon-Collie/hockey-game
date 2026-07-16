@@ -148,7 +148,27 @@ select
     (metrics->>'poke_claims_total')::float               as poke_claims_total,
     (metrics->>'poke_claim_misses_total')::float         as poke_claim_misses_total,
     (metrics->>'stick_lift_claims_total')::float         as stick_lift_claims_total,
-    (metrics->>'stick_lift_claim_misses_total')::float   as stick_lift_claim_misses_total
+    (metrics->>'stick_lift_claim_misses_total')::float   as stick_lift_claim_misses_total,
+    -- Reconcile-match health. A find_at miss falls back to the (prediction-lead)
+    -- live position and trips a spurious position snap, so a low match AVG (vs the
+    -- MIN, which one post-faceoff window can own) is the residual-churn driver. The
+    -- miss totals attribute it: EMPTY/OLDER = post-clear transient (benign), GAP =
+    -- a real hole in the prediction history (the bug to chase). gap_ms_peak is the
+    -- worst ack-vs-history-bound distance seen (large ⇒ clear-related, small ⇒ off-by-one).
+    (metrics->>'reconcile_match_pct_avg')::float         as reconcile_match_avg,     -- client only; pairs with reconcile_match_min
+    (metrics->>'reconcile_miss_empty_total')::float      as reconcile_miss_empty_total,
+    (metrics->>'reconcile_miss_older_total')::float      as reconcile_miss_older_total,
+    (metrics->>'reconcile_miss_newer_total')::float      as reconcile_miss_newer_total,
+    (metrics->>'reconcile_miss_gap_total')::float        as reconcile_miss_gap_total,
+    (metrics->>'reconcile_miss_gap_ms_max')::float       as reconcile_miss_gap_ms_peak,
+    -- Shot-launch divergence (client only): client-predicted vs host-authoritative
+    -- puck at the first host-confirmed broadcast after a local release. Both run
+    -- identical Jolt from the same client-sent origin, so the peak should be small
+    -- (RTT jitter); a large peak = real launch divergence, and it's the shot-launch
+    -- slice of puck_hard_snaps. Read the peaks against shot_launches_total (denominator).
+    (metrics->>'shot_launch_div_m_max')::float           as shot_launch_div_peak,     -- m; worst launch position gap
+    (metrics->>'shot_launch_vel_div_max')::float         as shot_launch_vel_div_peak,  -- m/s; worst launch velocity gap
+    (metrics->>'shot_launches_total')::float             as shot_launches_total        -- shots measured (denominator)
 from public.network_sessions
 where net_sim_active is not true;
 

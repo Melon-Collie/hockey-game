@@ -73,7 +73,7 @@ var _poke_claim_floor: float = 0.0
 # buffers via this provider) — so the replayed trajectory matches host authority
 # rather than a stale impulse captured against the live (interpolated) positions.
 # Provider: func(exclude_skater: Skater, host_ts: float) -> Array of
-# {skater, position, velocity, brake}. Set by GameManager (_sample_historical_others).
+# {skater, position, velocity, hit}. Set by GameManager (_sample_historical_others).
 var _historical_others_provider: Callable = Callable()
 # Reused across pairs during replay re-resolution — no per-pair allocation.
 var _replay_collision_result: SkaterCollisionRules.Result = SkaterCollisionRules.Result.new()
@@ -430,6 +430,21 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# (history capped, post-teleport, dead-puck gap, session warmup).
 	var predicted: PredictedState = PredictedState.find_at(_prediction_history, ack_ts)
 	NetworkTelemetry.record_reconcile_match(predicted != null)
+	# On a miss, attribute WHERE the ack fell relative to the kept history — a miss
+	# forces the prediction-lead fallback below (divergence_position = live), which
+	# trips a spurious position snap, so the miss cause is the residual-churn signal.
+	if predicted == null:
+		var reason: int = ReconciliationRules.classify_match_miss(
+				_prediction_history.is_empty(),
+				_prediction_history[0].host_timestamp if not _prediction_history.is_empty() else 0.0,
+				_prediction_history[-1].host_timestamp if not _prediction_history.is_empty() else 0.0,
+				ack_ts, PredictedState.TS_MATCH_EPSILON)
+		var gap_ms: float = 0.0
+		if reason == ReconciliationRules.MatchMiss.OLDER:
+			gap_ms = (_prediction_history[0].host_timestamp - ack_ts) * 1000.0
+		elif reason == ReconciliationRules.MatchMiss.NEWER:
+			gap_ms = (ack_ts - _prediction_history[-1].host_timestamp) * 1000.0
+		NetworkTelemetry.record_reconcile_miss(reason, gap_ms)
 	var divergence_position: Vector3 = predicted.position if predicted != null else skater.global_position
 	var divergence_velocity: Vector3 = predicted.velocity if predicted != null else skater.velocity
 	var divergence_upper_body: float = predicted.upper_body_rotation_y if predicted != null else _pose.upper_body_angle
@@ -554,7 +569,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# recorded-impulse slot) offset the geometry ~one tick of travel and mis-phased
 		# dvel; a fixed recorded vector didn't care, but position-based re-resolution
 		# does. sep still lands before the clamps below. Replaces the impulse bridge.
-		_replay_resolve_body_checks(input.host_timestamp, input.hit_held, input.brake)
+		_replay_resolve_body_checks(input.host_timestamp, input.hit_held)
 		# Clamp to the rink boundary after every replay step — the same analytic
 		# projection the live tick applies (boards are off the skater's physics
 		# mask). Without this, a board interaction that differed by even one frame
@@ -685,7 +700,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 # frame). The remote attacker's hit-commit isn't on the wire, so it stays passive
 # here exactly as the live client prediction assumed — the host's real value
 # reconciles on the next ack.
-func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_brake: bool) -> void:
+func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool) -> void:
 	if not _historical_others_provider.is_valid():
 		return
 	var others: Array = _historical_others_provider.call(skater, host_ts)
@@ -695,7 +710,7 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_bra
 			continue
 		var opos: Vector3 = rec["position"]
 		var ovel: Vector3 = rec["velocity"]
-		var obrake: bool = rec["brake"]
+		var ohit: bool = rec["hit"]   # the other's replicated hit-commit (brace / delivery)
 		var d: Vector3 = opos - skater.global_position
 		d.y = 0.0
 		var dist: float = d.length()
@@ -711,21 +726,23 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_bra
 		else:
 			local_is_aggressor = skater.collision_tiebreak_id < other.collision_tiebreak_id
 		if local_is_aggressor:
+			# local delivery (from the replayed input) × the victim's replicated brace.
 			var transfer: float = skater.body_check_transfer \
 					* (1.0 if local_hit_held else skater.hit_passive_transfer_mult) \
-					* (other.body_check_brace_resistance if obrake else 1.0)
+					* (other.body_check_brace_resistance if ohit else 1.0)
 			SkaterCollisionRules.resolve(_replay_collision_result,
 					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(),
 					opos, ovel, other.weight, other.collision_radius(), transfer)
 			skater.velocity += _replay_collision_result.dvel_a
 			skater.global_position += _replay_collision_result.sep_a
 		else:
-			# Other is the aggressor, local is the victim. Its hit-commit is unknown
-			# (not replicated) → passive, matching the live prediction; local brace
-			# comes from the replayed input.
+			# Other is the aggressor, local is the victim. Now that hit-commit is
+			# replicated, the attacker's full-vs-passive delivery is known (was assumed
+			# passive), and the local brace comes from the replayed input's hit_held —
+			# the brace moved onto the Hit button.
 			var transfer: float = other.body_check_transfer \
-					* other.hit_passive_transfer_mult \
-					* (skater.body_check_brace_resistance if local_brake else 1.0)
+					* (1.0 if ohit else other.hit_passive_transfer_mult) \
+					* (skater.body_check_brace_resistance if local_hit_held else 1.0)
 			SkaterCollisionRules.resolve(_replay_collision_result,
 					opos, ovel, other.weight, other.collision_radius(),
 					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(), transfer)
