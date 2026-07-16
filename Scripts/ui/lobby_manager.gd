@@ -8,6 +8,7 @@ const _SETTING_CONTROL_WIDTH: int = 220
 var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
+var _backdrop: LobbyArenaBackdrop = null
 # Host-only convenience: while on, every open player slot is kept filled with
 # a bot (on enable, peer leave, slot vacate, and 3v3→5v5 grow). Removing a
 # bot by hand switches it off — the host asked for a gap, so the fill must
@@ -142,16 +143,10 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(root)
 
-	# Same ice texture as the rest of the UI. Stretch covers any aspect ratio
-	# without warping. A future pass will replace this with a live hockey
-	# scene running the rink + bench in 3D behind the lobby panel.
-	var bg := TextureRect.new()
-	bg.texture = load("res://Assets/Mitts_ice_background.png")
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(bg)
+	# Live 3D arena behind the panel — the real rink + stands with a slow
+	# camera drift. Sits in the 3D world, so the CanvasLayer UI draws over it.
+	_backdrop = LobbyArenaBackdrop.new()
+	add_child(_backdrop)
 
 	var panel_style := MenuStyle.panel()
 
@@ -764,6 +759,8 @@ func _refresh_grid() -> void:
 	if _slot_grid == null:
 		return
 	_recompute_resolved_colors()
+	if _backdrop != null:
+		_backdrop.set_team_color_slots(_home_color_slot, _away_color_slot)
 	_slot_grid.refresh(_build_slot_grid_roster(), _get_team_colors(),
 			NetworkManager.pending_bot_slots, NetworkManager.is_host,
 			NetworkManager.pending_bot_identities, true, true)
