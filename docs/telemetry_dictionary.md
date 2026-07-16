@@ -98,6 +98,21 @@ raw counts scale with how much loose-puck play a game had.
 | `pickup_claim_misses_total` | Of those, how many failed the geometry test: the rewound blade and puck didn't overlap even though the client's view said in-range. **`misses / claims` is the headline sanity number — near-zero means the rewind reproduces the client's view; a high fraction means the rewind is off (the "reached for it, didn't get it" symptom).** |
 | `pickup_claim_deflects_total` | Reached the puck but the rewound speed/angle said tip-not-catch (a deflect, not a catch). Separates "missed the puck" from "touched it but it wasn't catchable". |
 
+## Optimistic-pickup outcomes (client rows only)
+
+The **felt** side of the same story: when a client's blade reaches a loose puck it
+optimistically **pins** the puck to the blade (instant-feeling grab) before the host
+confirms. The host-side `pickup_claim_misses` above counts every rejected *claim*
+(inflated by throttle re-fires); these count the *visual pin* — the thing the player
+actually sees attach and, when it rolls back, feels as **"grab, then lose it."**
+
+| Key | Meaning |
+|---|---|
+| `provisional_pins_total` | Optimistic pins that attached (passed the eligibility gates *and* the host's swept `check_pickup` predicate run on the client's own view). The denominator. |
+| `provisional_timeouts_total` | Pins that rolled back because no host grant arrived — the host silently declined the claim. **This is the felt "grab, then lose it." `timeouts / pins` is the headline; the pin-predicate gate should hold it near zero.** A non-zero floor that survives the gate is blade-prediction divergence (client-predicted vs host-reconstructed blade), not a criterion mismatch. |
+| `provisional_confirmed_total` | Pins the host granted (promoted seamlessly to a real carry). |
+| `provisional_stolen_total` | Pins rolled back because a *different* carrier legitimately won the puck — a lost 50/50, **not** the felt bug. |
+
 ## Host frame / input health (host rows only; clients omit or fold 0)
 
 | Key | Unit | Healthy | Meaning |

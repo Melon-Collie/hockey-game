@@ -208,8 +208,10 @@ func _physics_process(delta: float) -> void:
 		if not is_instance_valid(_provisional_carrier_skater) or NetworkManager.local_time() > _provisional_deadline:
 			# No host grant arrived in time (or the carrier despawned): roll back to
 			# interpolation. The buffer stayed warm during the pin, so the hand-off
-			# is seamless — and since we only pinned an uncontested catch, a denial
-			# this late is rare.
+			# is seamless. This is the felt "grab, then lose it" — the host silently
+			# declined the claim (no grant, no steal). The predicate gate above should
+			# drive this toward zero; the counter proves it session-over-session.
+			NetworkTelemetry.record_provisional_timeout()
 			_clear_provisional()
 			_interpolate(delta)
 			if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "interpolating"
@@ -518,6 +520,8 @@ func notify_local_pickup(local_skater: Skater) -> void:
 	# Host confirmed our pickup. If we were already provisionally pinned to this
 	# same blade, this promotes it seamlessly (no visible change); otherwise it
 	# attaches now.
+	if _provisional_carrier_skater != null:
+		NetworkTelemetry.record_provisional_confirmed()
 	_clear_provisional()
 	_predicting_trajectory = false
 	_post_contact_timer = -1.0
@@ -532,6 +536,8 @@ func notify_local_pickup(local_skater: Skater) -> void:
 func notify_remote_pickup(remote_skater: Skater) -> void:
 	_remote_carrier_skater = remote_skater
 	_local_carrier_skater = null
+	if _provisional_carrier_skater != null:
+		NetworkTelemetry.record_provisional_stolen()  # legit loss of a 50/50, not the felt bug
 	_clear_provisional()  # a different player won the puck — roll back our optimistic pin
 	_predicting_trajectory = false
 	_pending_local_release = false
@@ -655,6 +661,7 @@ func try_provisional_pickup(local_skater: Skater) -> void:
 	if _is_pickup_contested(local_skater):
 		return
 	_provisional_carrier_skater = local_skater
+	NetworkTelemetry.record_provisional_pin()
 	# Grant travels ~1 RTT (claim out, confirm back) plus host processing; scale
 	# the rollback deadline off RTT so a slow link doesn't pop the pin before the
 	# confirm arrives.

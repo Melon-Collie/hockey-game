@@ -133,7 +133,15 @@ select
     -- "reached for it, didn't get it" symptom). deflects = reached but not catchable.
     (metrics->>'pickup_claims_total')::float             as pickup_claims_total,
     (metrics->>'pickup_claim_misses_total')::float       as pickup_claim_misses_total,
-    (metrics->>'pickup_claim_deflects_total')::float     as pickup_claim_deflects_total
+    (metrics->>'pickup_claim_deflects_total')::float     as pickup_claim_deflects_total,
+    -- Client-side optimistic-pickup outcomes (the felt "grab, then lose it"). A pin
+    -- is the visual attach; timeouts = the host silently declined and it rolled back
+    -- (the felt bug), stolen = a different carrier legitimately won it. Watch
+    -- timeouts / pins: the pin-predicate gate should drive it toward 0. Client only.
+    (metrics->>'provisional_pins_total')::float          as provisional_pins_total,
+    (metrics->>'provisional_confirmed_total')::float     as provisional_confirmed_total,
+    (metrics->>'provisional_timeouts_total')::float      as provisional_timeouts_total,
+    (metrics->>'provisional_stolen_total')::float        as provisional_stolen_total
 from public.network_sessions
 where net_sim_active is not true;
 
