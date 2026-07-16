@@ -470,12 +470,12 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_DEFLECT:
 			return _step(
 				"Deflect",
-				"Your teammate's going to feed you — don't catch it. Set your loft to LOW ({elevation_up} one notch), hold {stick_lift}, and angle the blade with your cursor to tip the pass as it arrives.",
+				"Your teammate's going to feed you — don't catch it. Tap {elevation_up} to raise your loft to LOW, hold {stick_lift}, and angle the blade with your cursor to tip the pass as it arrives.",
 				"Holding {stick_lift} means redirect, don't receive. At LOW loft the tip flicks the puck UP — that's the deflection goal.")
 		STEP_BLADE_LIFT:
 			return _step(
 				"Blade Lift",
-				"Now play the air. Set loft to HIGH ({elevation_up} again), hold {stick_lift} to raise your blade off the ice, and bat your teammate's lob down out of the air.",
+				"Now play the air. Tap {elevation_up} again to raise your loft to HIGH, hold {stick_lift} to raise your blade off the ice, and bat your teammate's lob down out of the air.",
 				"The raised blade only plays airborne pucks — a grounded pass slides right under it. HIGH knocks the puck DOWN to the ice.")
 		STEP_DROP_PUCK:
 			return _step(
@@ -526,8 +526,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_SAUCER_PASS:
 			return _step(
 				"Saucer Pass",
-				"A board's in the passing lane — a flat pass can't get through. One notch of loft ({elevation_up}), then {quick_shot}: the saucer flips over it and lands flat.",
-				"Same quick pass, lofted. LOW clears blades and boards mid-flight, then sits down and slides to the target.")
+				"A board's in the passing lane — a flat pass can't get through. Tap {elevation_up} to loft the pass, then {quick_shot}: the saucer flips over the board and lands flat on the far side.",
+				"Same quick pass, lofted. A LOW saucer clears blades and boards mid-flight, then sits down and slides to the target.")
 		STEP_RECEIVE:
 			# Live copy is swapped per-wave; this is the soft-feed default.
 			return _step(
@@ -547,7 +547,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_STICK_LIFT:
 			return _step(
 				"Stick Lift",
-				"Set loft to HIGH ({elevation_up}), get under the opponent's stick, and hold {stick_lift} to lift it — that pops the puck off their blade.",
+				"Tap {elevation_up} to raise your loft to HIGH, get under the opponent's stick, and hold {stick_lift} to lift it — that pops the puck off their blade.",
 				"Same gesture as the blade lift: ride your blade high, slide it beneath their stick, and hold {stick_lift} to knock the puck free.")
 		STEP_SHOT_BLOCK:
 			return _step(
@@ -1484,7 +1484,11 @@ func _expected_elevation() -> int:
 				_: return ShotMechanics.ELEVATION_FLAT
 		STEP_DEFLECT, STEP_SAUCER_PASS:
 			return ShotMechanics.ELEVATION_LOW
-		STEP_BLADE_LIFT:
+		STEP_BLADE_LIFT, STEP_STICK_LIFT:
+			# The stick lift rides the same raised blade as the blade lift, which
+			# only comes up at HIGH loft (SkaterController: blade_up requires
+			# elevation >= HIGH). Without HIGH the hold-{stick_lift} does nothing
+			# and there's no other tell — so the step tracks loft like the others.
 			return ShotMechanics.ELEVATION_HIGH
 	return _ELEV_ANY
 
@@ -1500,10 +1504,16 @@ func _update_elevation_prompt() -> void:
 			_elev_alert_shown = false
 		return
 	if _skater.elevation_level < expected:
-		_hud.set_alert(_fmt("Your loft is too low — {elevation_up} for more."))
+		_hud.set_alert(_fmt("Your loft is too low — tap {elevation_up} for more."))
 		_elev_alert_shown = true
 	elif _skater.elevation_level > expected:
-		_hud.set_alert(_fmt("Your loft is too high — {elevation_down} to bring it down."))
+		_hud.set_alert(_fmt("Your loft is too high — tap {elevation_down} to bring it down."))
+		_elev_alert_shown = true
+	elif _current_step_id() == STEP_STICK_LIFT:
+		# Loft correct: unlike the shot steps (which have a visible arc as their
+		# own feedback), the stick lift's raised blade has no tell, so confirm the
+		# loft is set and point them at the gesture.
+		_hud.set_alert(_fmt("Loft's on HIGH — get under his stick and hold {stick_lift}."))
 		_elev_alert_shown = true
 	elif _elev_alert_shown:
 		_hud.clear_alert()
@@ -1641,7 +1651,7 @@ func _on_targets_wave_cleared() -> bool:
 				_target_node.clear()
 			_set_live_copy(
 				"Pick Your Spot",
-				"Nice. Your loft is still on full, though — {elevation_down} twice to flatten back out, or your next shot flies high too.",
+				"Nice. Your loft is still on full, though — tap {elevation_down} twice to flatten back out, or your next shot flies high too.",
 				"Loft is a mode you manage: up for more, down for less.")
 			_hud.set_objective("Take the loft back off.")
 			return false
@@ -1665,7 +1675,7 @@ func _show_targets_wave(phase: int) -> void:
 		1:
 			_set_live_copy(
 				"Pick Your Spot",
-				"Same low holes — but now a board's in the lane. Add one notch of loft ({elevation_up}): the saucer flips over the board and comes back down onto them.",
+				"Same low holes — but now a board's in the lane. Tap {elevation_up} to raise your loft one level: the saucer flips over the board and comes back down onto them.",
 				"LOW loft clears sticks and pads mid-flight, then lands and slides. It's a mode — it stays on until you change it.")
 			_ensure_wall_node()
 			_wall_node.show_wall(
@@ -1674,7 +1684,7 @@ func _show_targets_wave(phase: int) -> void:
 		2:
 			_set_live_copy(
 				"Pick Your Spot",
-				"Up top. One more notch ({elevation_up}) for full loft, and put both away in the top corners over his shoulders.",
+				"Up top. Tap {elevation_up} once more for full loft, and put both away in the top corners over his shoulders.",
 				"Loft buys the height, pace picks where the arc peaks — from here an easy shot crests right at the bar.")
 			_clear_wall()
 			_show_target_set(_HIGH_TARGETS)
