@@ -3,6 +3,12 @@ extends Node
 
 const _SETTING_CONTROL_WIDTH: int = 220
 
+# The lobby panel sits over the live arena backdrop, and its content carries
+# its own surfaces (slot cards, the recessed settings tray), so the shell can
+# be a tint rather than a wall — let the rink read through. Local to the
+# lobby: MenuStyle surfaces stay solid for every other popup by design.
+const _PANEL_BG_ALPHA: float = 0.75
+
 # key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
 # Players: team_id ∈ {0, 1}, slot ∈ {0,1,2}. Spectators: team_id = -1, slot = spectator_idx.
 var _lobby_slots: Dictionary = {}
@@ -149,6 +155,7 @@ func _build_ui() -> void:
 	add_child(_backdrop)
 
 	var panel_style := MenuStyle.panel()
+	panel_style.bg_color = Color(MenuStyle.PANEL_BG, _PANEL_BG_ALPHA)
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
