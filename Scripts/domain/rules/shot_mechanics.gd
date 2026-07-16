@@ -291,11 +291,15 @@ const WALL_PIN_MIN_ALONG_SPEED: float = 0.5
 # (an unnatural giveaway to the middle). `wall_normal` points INWARD (away from
 # the boards, the get_blade_wall_normal convention); the wall tangent is its 90°
 # rotation in XZ. Projects the carrier's horizontal velocity onto that tangent and
-# releases along it, signed by which way the carrier was travelling. Falls back to
-# the inward normal when the carrier is pinned with no along-wall momentum (so the
-# puck still comes free), and to the carrier's heading — else ZERO — when there is
-# no usable wall normal (callers keep their own degenerate fallback on ZERO).
-static func wall_pin_release_direction(wall_normal: Vector3, carrier_velocity: Vector3) -> Vector3:
+# releases along it, signed by which way the carrier was travelling. `inward_bias`
+# blends that fraction of the inward normal into the along-wall direction so the
+# puck peels a touch off the boards rather than hugging them (0 = pure slide).
+# Falls back to the inward normal when the carrier is pinned with no along-wall
+# momentum (so the puck still comes free), and to the carrier's heading — else
+# ZERO — when there is no usable wall normal (callers keep their own degenerate
+# fallback on ZERO).
+static func wall_pin_release_direction(
+		wall_normal: Vector3, carrier_velocity: Vector3, inward_bias: float = 0.0) -> Vector3:
 	var vel := Vector3(carrier_velocity.x, 0.0, carrier_velocity.z)
 	var n := Vector3(wall_normal.x, 0.0, wall_normal.z)
 	if n.length_squared() < 0.0001:
@@ -305,4 +309,7 @@ static func wall_pin_release_direction(wall_normal: Vector3, carrier_velocity: V
 	var along: float = vel.dot(tangent)
 	if absf(along) < WALL_PIN_MIN_ALONG_SPEED:
 		return n  # pinned dead — no along-wall direction; release inward so it frees
-	return (tangent * signf(along)).normalized()
+	var dir: Vector3 = tangent * signf(along)
+	if inward_bias > 0.0:
+		dir += n * inward_bias  # peel slightly off the boards so it doesn't hug them
+	return dir.normalized()

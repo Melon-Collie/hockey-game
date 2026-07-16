@@ -444,6 +444,22 @@ func test_wall_pin_release_fully_degenerate_returns_zero() -> void:
 	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(Vector3.ZERO, Vector3.ZERO)
 	assert_eq(dir, Vector3.ZERO, "no normal and no momentum → ZERO (caller fallback)")
 
+func test_wall_pin_release_inward_bias_peels_off_the_boards() -> void:
+	# Boards on +X (inward -X), carrier along +Z. A positive bias tips the release
+	# slightly inward (-X) while staying mostly along the boards (+Z).
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3(0, 0, 5.0), 0.25)
+	assert_almost_eq(dir.length(), 1.0, 0.001, "normalized")
+	assert_lt(dir.x, 0.0, "biased inward, away from the boards")
+	assert_gt(dir.z, 0.0, "still travelling along the boards")
+	assert_gt(dir.z, absf(dir.x), "along-wall component dominates a small bias")
+
+func test_wall_pin_release_bias_does_not_affect_dead_pin() -> void:
+	# No along-wall momentum still returns the pure inward normal regardless of bias.
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3.ZERO, 0.25)
+	assert_eq(dir, Vector3(-1, 0, 0), "dead pin frees along the inward normal, bias irrelevant")
+
 
 # ── Follow-through aim blend ──────────────────────────────────────────────────
 

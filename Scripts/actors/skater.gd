@@ -57,6 +57,12 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # mesh Z size in Scenes/Skater.tscn.
 @export var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
 @export var wall_squeeze_threshold: float = 0.3
+# When the puck is lost on the boards (blade squeezed past the threshold above),
+# it squirts ALONG the boards in the carrier's travel direction. This blends a
+# small fraction of the inward wall normal into that release so the puck peels a
+# touch off the boards rather than hugging them — reads as coming free. 0 = pure
+# along-wall slide; ~0.25 ≈ 14° off the boards.
+@export var wall_pin_inward_bias: float = 0.25
 # How far the blade mesh visually shifts perpendicular to the stick toward the
 # forehand or backhand face during carry. Player's cursor stays at the puck;
 # the visible blade renders just to one side of the puck on the appropriate

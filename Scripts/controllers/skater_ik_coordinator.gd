@@ -231,15 +231,24 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 		if ShotMechanics.should_release_on_wall_pin(squeeze, _skater.wall_squeeze_threshold):
 			# Lose it ALONG the boards in the carrier's travel direction, not straight
 			# out into the slot — the wall normal points inward, so releasing along it
-			# would fire the puck away from the wall (an unnatural giveaway).
+			# would fire the puck away from the wall (an unnatural giveaway). A small
+			# inward bias peels it a touch off the boards so it doesn't hug them.
 			var wall_normal: Vector3 = _skater.get_blade_wall_normal()
 			var release_dir: Vector3 = ShotMechanics.wall_pin_release_direction(
-					wall_normal, _skater.velocity)
+					wall_normal, _skater.velocity, _skater.wall_pin_inward_bias)
 			if release_dir.length() > 0.0:
 				_controller._do_release(release_dir, 3.0)
 			else:
-				var nudge: Vector3 = _skater.global_transform.basis * (-wall_clamped.normalized())
-				_controller._do_release(nudge.normalized(), 3.0)
+				# Fully degenerate: no wall normal and no along-wall momentum. A squeeze
+				# past the threshold implies a wall normal, so this is essentially
+				# unreachable — but keep a sane free by shoving the puck back toward the
+				# body (blade → body center), falling to facing if that's degenerate too.
+				var blade_world: Vector3 = _skater.upper_body_to_global(wall_clamped)
+				var back: Vector3 = _skater.global_position - blade_world
+				back.y = 0.0
+				if back.length_squared() < 0.0001:
+					back = -_skater.global_transform.basis.z
+				_controller._do_release(back.normalized(), 3.0)
 
 	# When the blade got pulled back by the wall clamp, slide the hand by the
 	# same horizontal offset so |hand − blade| stays at stick_horiz. Prevents
