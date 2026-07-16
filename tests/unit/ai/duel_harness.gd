@@ -94,6 +94,23 @@ class SimSkater:
 var skaters: Array[SimSkater] = []
 var team_map: Dictionary = {}
 var brains: Dictionary = {}
+# Match team size for the brains (3 = legacy path, 5 = position-aware) and
+# the peer_id → lobby-slot position map the 5v5 election reads. Set before
+# start(); defaults reproduce the original 3v3 harness behavior.
+var team_size: int = GameRules.DEFAULT_TEAM_SIZE
+var positions: Dictionary = {}
+
+# ── Perf instrumentation (benchmarks/) ───────────────────────────────────────
+# When collect_perf is on, step() accumulates wall-clock µs for the brain
+# ticks and each agent's dispatch, so the AI benchmark can attribute host
+# cost per subsystem/slot. Off by default — scenario tests pay one branch.
+var collect_perf: bool = false
+var perf_brain_us: int = 0
+var perf_dispatch_us: Dictionary = {}     # peer_id -> accumulated µs
+var perf_dispatch_calls: Dictionary = {}  # peer_id -> dispatch() call count
+# Per-tick AI cost distribution (brain + all dispatches on that tick), for
+# frame-pacing analysis: FPS is set by the WORST tick, not the average.
+var perf_tick_us: Array[int] = []
 var puck_pos: Vector3 = Vector3.ZERO
 var puck_vel: Vector3 = Vector3.ZERO
 var carrier_id: int = -1
@@ -173,7 +190,7 @@ func add_puppet_container(peer_id: int, team_id: int, pos: Vector3,
 # `loose_puck_pos`). Call once, after every add_skater.
 func start(carrier_peer: int, loose_puck_pos: Vector3 = Vector3.ZERO) -> void:
 	for tid: int in [0, 1]:
-		brains[tid] = TeamBrain.new(tid, team_map)
+		brains[tid] = TeamBrain.new(tid, team_map, {}, team_size, positions)
 	for s: SimSkater in skaters:
 		carry_ticks[s.peer_id] = 0
 		if s.puppet_hold_gap >= 0.0:
@@ -201,9 +218,15 @@ func step() -> void:
 	if _puck_history.size() > PUPPET_REACTION_TICKS + 2:
 		_puck_history.pop_front()
 	var snapshot: WorldSnapshot = _build_snapshot()
+	var tick_ai_us: int = 0
 	if ticks % BRAIN_PERIOD_TICKS == 1:
+		var brain_t0: int = Time.get_ticks_usec() if collect_perf else 0
 		for tid: int in brains:
 			brains[tid].tick(BRAIN_PERIOD_TICKS * DT, snapshot)
+		if collect_perf:
+			var brain_us: int = Time.get_ticks_usec() - brain_t0
+			perf_brain_us += brain_us
+			tick_ai_us += brain_us
 	# Decide.
 	for s: SimSkater in skaters:
 		if s.agent == null:
@@ -214,12 +237,22 @@ func step() -> void:
 		s.input.slap_pressed = false
 		s.input.quick_shot_pressed = false
 		s.input.stick_lift_pressed = false
-		s.agent.dispatch(s.input, snapshot)
+		if collect_perf:
+			var t0: int = Time.get_ticks_usec()
+			s.agent.dispatch(s.input, snapshot)
+			var us: int = Time.get_ticks_usec() - t0
+			perf_dispatch_us[s.peer_id] = int(perf_dispatch_us.get(s.peer_id, 0)) + us
+			perf_dispatch_calls[s.peer_id] = int(perf_dispatch_calls.get(s.peer_id, 0)) + 1
+			tick_ai_us += us
+		else:
+			s.agent.dispatch(s.input, snapshot)
 		if s.agent._poke_evade_deking:
 			deke_fired = true
 			dekes_by_peer[s.peer_id] = true
 		if s.agent._poke_evade_active_ticks > 0:
 			evades_by_peer[s.peer_id] = true
+	if collect_perf:
+		perf_tick_us.append(tick_ai_us)
 	# Releases (pass/shot fired by the carrier): quick-shot edge, or a held
 	# charge dropping. The puck leaves along the shooter's aim.
 	if carrier_id != -1:
