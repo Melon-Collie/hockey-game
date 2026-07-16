@@ -79,14 +79,21 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 			hit_dir = victim.global_position - hitter_rec.skater.global_position
 			hit_dir.y = 0.0
 			hit_dir = hit_dir.normalized()
+		var hitter_committed: bool = hitter_rec != null and hitter_rec.skater != null \
+				and hitter_rec.skater.hit_committed
 		_hit_tracker.on_contact(hitter_peer_id, victim_peer_id,
 				_registry.resolve_team_id(victim), impulse_magnitude, hit_dir,
-				puck_carrier == hitter_peer_id, puck_carrier == victim_peer_id)
+				puck_carrier == hitter_peer_id, puck_carrier == victim_peer_id,
+				hitter_committed)
 		return
-	# Client: pre-filter on impulse and local puck state so we don't spam the
-	# host with claims for trivial bumps or while the local player is carrying
-	# the puck. The host re-validates all gates from rewound snapshots.
+	# Client: pre-filter on impulse, commit, and local puck state so we don't spam
+	# the host with claims for trivial bumps, uncommitted contact, or while the
+	# local player is carrying. The host re-validates all gates from rewound
+	# snapshots (including the rewound hit_committed), so this is purely an RPC saver.
 	if impulse_magnitude < HitRules.MIN_HIT_IMPULSE:
+		return
+	var local_hitter: PlayerRecord = _registry.get_record(hitter_peer_id)
+	if local_hitter == null or local_hitter.skater == null or not local_hitter.skater.hit_committed:
 		return
 	if not _puck_controller_getter.is_valid():
 		return
@@ -159,7 +166,11 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# hosted ones. Weight spreads ±18% with Size. `normal` is the
 	# hitter → victim direction for the burst.
 	var hit_force: float = impulse * (hitter_rec.skater.weight if hitter_rec.skater != null else 1.0)
+	# Commit read from the hitter's own rewind snapshot (their predicted body at
+	# the instant they committed) — the same replicated hit_committed the live
+	# resolver gates the physics on, so the credit meets the same bar.
 	_hit_tracker.on_contact(hitter_peer_id, victim_peer_id, victim_rec.team.team_id,
 			hit_force, normal,
 			puck_snap.carrier_peer_id == hitter_peer_id,
-			puck_snap.carrier_peer_id == victim_peer_id)
+			puck_snap.carrier_peer_id == victim_peer_id,
+			hitter_snap.hit_committed)
