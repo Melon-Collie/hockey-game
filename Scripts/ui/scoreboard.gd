@@ -10,8 +10,8 @@ const _SEP     := MenuStyle.BROADCAST_SEP
 # Away's slot 1/2 are its own RW/LW — the mirror image of home's LW/RW in the
 # same slots, since the away team attacks the opposite direction. See
 # slot_grid_panel.gd's _DISPLAY_ORDER comment for the full explanation.
-const _POSITION_LABEL      := ["C", "L", "R"]   # indexed by team_slot, home
-const _POSITION_LABEL_AWAY := ["C", "R", "L"]   # indexed by team_slot, away
+const _POSITION_LABEL      := ["C", "L", "R", "LD", "RD"]   # indexed by team_slot, home
+const _POSITION_LABEL_AWAY := ["C", "R", "L", "RD", "LD"]   # indexed by team_slot, away
 
 var _rows_container: VBoxContainer = null
 var _period_score_labels: Array = []  # [team_id][period_index, then total]

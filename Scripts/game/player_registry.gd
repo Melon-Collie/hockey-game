@@ -187,7 +187,7 @@ func spawn_bot(
 		team_slot: int,
 		team: Team,
 		identity: Dictionary = {}) -> PlayerRecord:
-	assert(bot_id >= 0 and bot_id < 6, "bot_id must be 0..5 (one per team slot)")
+	assert(bot_id >= 0 and bot_id < 10, "bot_id must be 0..9 (one per team slot)")
 	var peer_id: int = NetworkManager.BOT_ID_BASE + bot_id
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
 	var record := PlayerRecord.new(peer_id, team_slot, false, team)

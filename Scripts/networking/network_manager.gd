@@ -8,7 +8,7 @@ extends Node
 # must use is_bot_peer / is_real_peer to gate routing — peer_id sign is
 # NOT a bot indicator and must not be assumed.
 const BOT_ID_BASE: int = 10_000
-const BOT_ID_MAX: int = BOT_ID_BASE + 5  # 6 bots max (3 per team)
+const BOT_ID_MAX: int = BOT_ID_BASE + 9  # 10 bots max (5 per team, 5v5 capacity)
 
 # Re-exported from ClockSync so lag-comp resolvers can reference it without
 # loading the script directly. Single source of truth lives in clock_sync.gd.
@@ -84,7 +84,7 @@ signal lobby_roster_synced(roster: Array)
 signal color_vote_changed(peer_id: int, color_slot: int)
 signal color_votes_synced(votes: Dictionary)
 signal team_colors_changed(home_slot: int, away_slot: int)
-signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
+signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int, team_size: int)
 signal return_to_lobby_received(roster: Array)
 signal player_ready_changed(peer_id: int, is_ready: bool)
 # Lobby per-slot bot toggle. Slot keys follow LobbyManager._slot_key (team*3+slot).
@@ -217,6 +217,7 @@ var pending_num_periods: int = GameRules.NUM_PERIODS
 var pending_period_duration: float = GameRules.PERIOD_DURATION
 var pending_ot_enabled: bool = GameRules.OT_ENABLED
 var pending_rule_set: int = GameRules.DEFAULT_RULE_SET
+var pending_team_size: int = GameRules.DEFAULT_TEAM_SIZE
 var pending_join_players: Array = []     # sync_existing_players data for join-in-progress
 
 # Client: true between learning that a Hockey-scene (re)load is coming
@@ -392,7 +393,8 @@ func start_offline() -> void:
 	_peer_numbers[1] = local_jersey_number
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
-			"rule_set": GameRules.DEFAULT_RULE_SET}
+			"rule_set": GameRules.DEFAULT_RULE_SET,
+			"team_size": GameRules.DEFAULT_TEAM_SIZE}
 
 
 # Entry point that wraps start_offline with the free-play-specific seeding:
@@ -786,6 +788,7 @@ func reset() -> void:
 	pending_period_duration = GameRules.PERIOD_DURATION
 	pending_ot_enabled = GameRules.OT_ENABLED
 	pending_rule_set = GameRules.DEFAULT_RULE_SET
+	pending_team_size = GameRules.DEFAULT_TEAM_SIZE
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -1833,10 +1836,12 @@ func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
 		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
-		p_game_id: String = "") -> void:
+		p_game_id: String = "",
+		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	pending_team_size = p_team_size
 	# The Hockey scene is about to be (re)loaded for this join — stash any
 	# slot/roster RPCs that land before the new scene's _ready.
 	scene_swap_pending = true
@@ -1849,6 +1854,7 @@ func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
+		"team_size": p_team_size,
 	})
 
 func send_join_in_progress(peer_id: int, config: Dictionary) -> void:
@@ -1856,9 +1862,10 @@ func send_join_in_progress(peer_id: int, config: Dictionary) -> void:
 	var aslot: int = int(config.get("away_color_slot", pending_away_color_slot))
 	var rs: int = config.get("rule_set", pending_rule_set)
 	var gid: String = config.get("game_id", "")
+	var ts: int = config.get("team_size", pending_team_size)
 	notify_join_in_progress.rpc_id(peer_id,
 		config.num_periods, config.period_duration,
-		config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
+		config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid, ts)
 
 @rpc("authority", "reliable")
 func notify_game_start(p_num_periods: int, p_period_duration: float,
@@ -1866,10 +1873,12 @@ func notify_game_start(p_num_periods: int, p_period_duration: float,
 		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
 		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
-		p_game_id: String = "") -> void:
+		p_game_id: String = "",
+		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	pending_team_size = p_team_size
 	# Lobby → Hockey transition incoming; same stash-forcing as join-in-progress.
 	scene_swap_pending = true
 	game_started.emit({
@@ -1881,6 +1890,7 @@ func notify_game_start(p_num_periods: int, p_period_duration: float,
 		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
+		"team_size": p_team_size,
 	})
 
 @rpc("authority", "reliable")
@@ -1893,13 +1903,15 @@ func send_game_start(config: Dictionary) -> void:
 	var aslot: int = int(config.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT))
 	var rs: int = config.get("rule_set", GameRules.DEFAULT_RULE_SET)
 	var gid: String = config.get("game_id", "")
+	var ts: int = config.get("team_size", GameRules.DEFAULT_TEAM_SIZE)
 	pending_home_color_slot = hslot
 	pending_away_color_slot = aslot
 	pending_rule_set = rs
+	pending_team_size = ts
 	for peer_id: int in connected_peer_ids():
 		notify_game_start.rpc_id(peer_id,
 			config.num_periods, config.period_duration,
-			config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
+			config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid, ts)
 	game_started.emit(config)
 
 func send_lobby_roster(peer_id: int, roster: Array) -> void:
@@ -2016,24 +2028,30 @@ func send_bot_slots_to(peer_id: int, bot_slots: Dictionary, identities: Dictiona
 
 @rpc("authority", "reliable")
 func notify_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool,
-		rule_set: int = GameRules.DEFAULT_RULE_SET) -> void:
+		rule_set: int = GameRules.DEFAULT_RULE_SET,
+		team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	pending_num_periods = num_periods
 	pending_period_duration = period_duration
 	pending_ot_enabled = ot_enabled
 	pending_rule_set = rule_set
-	lobby_settings_synced.emit(num_periods, period_duration, ot_enabled, rule_set)
+	pending_team_size = team_size
+	lobby_settings_synced.emit(num_periods, period_duration, ot_enabled, rule_set, team_size)
 
-func send_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+func send_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int) -> void:
 	pending_num_periods = num_periods
 	pending_period_duration = period_duration
 	pending_ot_enabled = ot_enabled
 	pending_rule_set = rule_set
+	pending_team_size = team_size
 	for peer_id: int in connected_peer_ids():
-		notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set)
+		notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set,
+				team_size)
 
 func send_lobby_settings_to(peer_id: int, num_periods: int, period_duration: float, ot_enabled: bool,
-		rule_set: int) -> void:
-	notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set)
+		rule_set: int, team_size: int) -> void:
+	notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set,
+			team_size)
 
 @rpc("authority", "reliable")
 func notify_return_to_lobby(roster: Array) -> void:

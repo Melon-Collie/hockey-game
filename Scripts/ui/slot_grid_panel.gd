@@ -36,17 +36,19 @@ signal slot_selected(team_id: int, slot: int)
 signal bot_toggled(team_id: int, slot: int, is_bot: bool)
 signal kick_requested(peer_id: int, player_name: String)
 
-# Column display order: Left Wing (slot 1), Center (slot 0), Right Wing (slot 2).
-# Both team rows share this physical column layout so the grid reads like a
-# faceoff lineup (wingers facing each other across the dot) — but since the
-# away team attacks the opposite direction, its slot 1/2 are its own RW/LW,
-# the mirror image of home's LW/RW in the same columns. The _AWAY label sets
-# reflect that; the slot→column layout itself (_DISPLAY_ORDER) does not change.
-const _DISPLAY_ORDER  := [1, 0, 2]
-const _POSITION_LABEL      := ["C", "L", "R"]              # indexed by slot, home
-const _POSITION_LABEL_AWAY := ["C", "R", "L"]               # indexed by slot, away
-const _POSITION_HEADER      := ["LEFT WING", "CENTER", "RIGHT WING"]   # indexed by col, home
-const _POSITION_HEADER_AWAY := ["RIGHT WING", "CENTER", "LEFT WING"]   # indexed by col, away
+# Column display order: LD (slot 3), LW (slot 1), C (slot 0), RW (slot 2),
+# RD (slot 4) — a full 5v5 lineup row; 3v3 hides the two D columns (see
+# set_active_team_size). Both team rows share this physical column layout so
+# the grid reads like a faceoff lineup (wingers facing each other across the
+# dot) — but since the away team attacks the opposite direction, its L/R
+# slots are its own R/L, the mirror image of home's in the same columns. The
+# _AWAY label sets reflect that; the slot→column layout itself
+# (_DISPLAY_ORDER) does not change.
+const _DISPLAY_ORDER  := [3, 1, 0, 2, 4]
+const _POSITION_LABEL      := ["C", "L", "R", "LD", "RD"]   # indexed by slot, home
+const _POSITION_LABEL_AWAY := ["C", "R", "L", "RD", "LD"]   # indexed by slot, away
+const _POSITION_HEADER      := ["LEFT D", "LEFT WING", "CENTER", "RIGHT WING", "RIGHT D"]  # by col, home
+const _POSITION_HEADER_AWAY := ["RIGHT D", "RIGHT WING", "CENTER", "LEFT WING", "LEFT D"]  # by col, away
 
 const _CARD_HEIGHT: int = 96
 const _STRIPE_WIDTH: int = 6
@@ -96,9 +98,33 @@ var _is_local_host: bool = false
 var _bot_editing: bool = true
 var _show_ready: bool = false
 
+# Live lobby mode: how many of the capacity columns are fielded. The grid is
+# always built 5-wide (capacity); 3v3 hides the two D columns.
+var _active_team_size: int = GameRules.DEFAULT_TEAM_SIZE
+var _header_labels: Array = [[], []]   # [team_id][col] — Label refs for hiding
+
 
 func _init() -> void:
 	_build_grid()
+	_apply_column_visibility()
+
+
+# Show/hide the D columns to match the lobby's selected mode. Called by
+# LobbyManager on build and whenever the host flips the Mode row.
+func set_active_team_size(team_size: int) -> void:
+	_active_team_size = clampi(team_size, 1, PlayerRules.MAX_PER_TEAM)
+	_apply_column_visibility()
+
+
+func _apply_column_visibility() -> void:
+	for team_id: int in 2:
+		for col: int in _DISPLAY_ORDER.size():
+			var s: int = _DISPLAY_ORDER[col]
+			var vis: bool = s < _active_team_size
+			if _cards[team_id].size() > s and _cards[team_id][s] != null:
+				(_cards[team_id][s] as PanelContainer).visible = vis
+			if _header_labels[team_id].size() > col and _header_labels[team_id][col] != null:
+				(_header_labels[team_id][col] as Label).visible = vis
 
 
 func _ready() -> void:
@@ -170,6 +196,7 @@ func _build_header(team_id: int) -> void:
 	header.add_child(spacer)
 
 	var labels: Array = _POSITION_HEADER_AWAY if team_id == 1 else _POSITION_HEADER
+	_header_labels[team_id].resize(_DISPLAY_ORDER.size())
 	for col: int in _DISPLAY_ORDER.size():
 		var lbl := Label.new()
 		lbl.text = labels[col]
@@ -178,6 +205,7 @@ func _build_header(team_id: int) -> void:
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		header.add_child(lbl)
+		_header_labels[team_id][col] = lbl
 
 
 # Build a single slot card. The card root is a PanelContainer whose stylebox
@@ -407,11 +435,11 @@ func refresh(roster: Array[Dictionary], team_colors: Array[Dictionary] = [],
 
 	var by_slot: Dictionary = {}
 	for entry: Dictionary in roster:
-		by_slot[entry.team_id * 3 + entry.slot] = entry
+		by_slot[LobbySlotKey.encode(entry.team_id, entry.slot)] = entry
 
 	for team_id: int in 2:
 		for s: int in PlayerRules.MAX_PER_TEAM:
-			var key: int = team_id * 3 + s
+			var key: int = LobbySlotKey.encode(team_id, s)
 			var entry = by_slot.get(key, null)
 			_update_card(team_id, s, entry)
 
@@ -438,7 +466,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		stripe_c = tc.get("ui_stripe", stripe_c)
 		text_c   = tc.get("ui_text", text_c)
 
-	var slot_key: int = team_id * 3 + slot
+	var slot_key: int = LobbySlotKey.encode(team_id, slot)
 	var is_bot_slot: bool = entry == null and _bot_slots.get(slot_key, false)
 
 	if entry == null and not is_bot_slot:
@@ -652,6 +680,6 @@ func _on_action_pressed(team_id: int, slot: int) -> void:
 			kick_requested.emit(peer_id, name_lbl.text)
 		return
 	# is_bot=true when slot was empty (+ icon → add), false when bot (X icon → remove).
-	var slot_key: int = team_id * 3 + slot
+	var slot_key: int = LobbySlotKey.encode(team_id, slot)
 	var was_bot: bool = _bot_slots.get(slot_key, false)
 	bot_toggled.emit(team_id, slot, not was_bot)

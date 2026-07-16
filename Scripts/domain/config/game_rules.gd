@@ -452,15 +452,24 @@ const DEFAULT_GOALIE_LATERAL_ACCEL_M_S2: float = 14.0
 const DEFAULT_GOALIE_PAD_TOP_SEAM_M: float = 0.86
 
 # ── Players ───────────────────────────────────────────────────────────────────
-const MAX_PLAYERS: int = 6  # 3v3
+# Team size is a per-match config latched at puck drop (GameStateMachine.
+# team_size, applied via apply_config — the exact rule_set rail). The lobby
+# picks it from TEAM_SIZE_OPTIONS; everything sized per-slot uses the CAPACITY
+# (PlayerRules.MAX_PER_TEAM = 5) so a live lobby can flip modes without
+# re-keying.
+const DEFAULT_TEAM_SIZE: int = 3
+const TEAM_SIZE_OPTIONS: Array[int] = [3, 5]
+const TEAM_SIZE_NAMES: Array[String] = ["3v3", "5v5"]
+
+const MAX_PLAYERS: int = 10  # capacity: 5v5 roster (3v3 uses 6 of these)
 const MAX_SPECTATORS: int = 4
 # Sentinel team_id for spectators; players use 0 (home) or 1 (away). The lobby
 # slot encoding, assign_player_slot RPC, and GameManager spectator branches all
 # compare against this. -1 because it falls cleanly outside the 0..1 player
 # team range and is naturally invalid for any team-indexed array.
 const SPECTATOR_TEAM_ID: int = -1
-# ENet connection cap = playable roster + spectator slots. Player count
-# (3v3 roster) is still gated separately by PlayerRules.MAX_PER_TEAM.
+# Connection cap = playable roster capacity + spectator slots. The live
+# roster is gated separately by the latched GameStateMachine.team_size.
 const MAX_CONNECTIONS: int = MAX_PLAYERS + MAX_SPECTATORS
 
 # ── Faceoff Positions ─────────────────────────────────────────────────────────
@@ -493,11 +502,21 @@ const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 # Indexed by [team_id][team_slot]. Center on the dot line (slot 0); wingers sit
 # on a ~4.9 m circle around the dot (±4.0 wide, 2.8 back) — tighter than the old
 # ±5.0/3.0 spread so the formation reads like a faceoff circle and the post-goal
-# radial skate-in converges cleanly instead of running in parallel.
+# radial skate-in converges cleanly instead of running in parallel. Slots 3/4
+# (LD/RD, 5v5 only) stand behind the wingers outside the circle — the real
+# alignment puts D behind the hash marks; near an end-zone dot the raw offset
+# can land past the goal line, which faceoff_position clamps back in.
 const FACEOFF_OFFSETS: Array = [
-	[Vector2( 0.0,  1.5), Vector2(-4.0,  2.8), Vector2( 4.0,  2.8)],  # team 0
-	[Vector2( 0.0, -1.5), Vector2(-4.0, -2.8), Vector2( 4.0, -2.8)],  # team 1
+	[Vector2( 0.0,  1.5), Vector2(-4.0,  2.8), Vector2( 4.0,  2.8),
+			Vector2(-2.4,  7.0), Vector2( 2.4,  7.0)],  # team 0
+	[Vector2( 0.0, -1.5), Vector2(-4.0, -2.8), Vector2( 4.0, -2.8),
+			Vector2(-2.4, -7.0), Vector2( 2.4, -7.0)],  # team 1
 ]
+# Depth cap for faceoff placements: no slot spawns closer to the end boards
+# than this far in front of the goal line, so a defensive-zone draw's D pair
+# (raw offset ~7 m behind an end-zone dot) stands net-side instead of inside
+# the netting.
+const FACEOFF_MAX_ABS_Z: float = GOAL_LINE_Z - 1.0
 
 # ── Bench-Door Start Points (pre-game intro skate-in) ─────────────────────────
 # Where each skater begins the opening/rematch intro before skating out to its
@@ -511,8 +530,9 @@ const FACEOFF_OFFSETS: Array = [
 const BENCH_DOOR_X: float          = 11.5
 const BENCH_DOOR_CENTER_Z: float   = 4.4   # mirrors arena_stands.gd _BENCH_CENTER_Z
 # Per-slot fan-out along the bench span (index = team_slot). Center leaves from
-# the middle of the bench; wingers from either side so the three don't stack.
-const BENCH_DOOR_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4]
+# the middle of the bench; wingers from either side, D from the outer edges,
+# so the five don't stack (3v3 uses the first three).
+const BENCH_DOOR_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4, 4.8, -4.8]
 
 # Returns the faceoff dot closest to the given XZ point — picks among centre
 # ice, the four end-zone dots, and the four neutral-zone dots. Used to pick

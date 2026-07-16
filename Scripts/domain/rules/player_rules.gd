@@ -5,7 +5,30 @@ class_name PlayerRules
 # members, etc.) and pass the numbers in. Color presets live in
 # TeamColorRegistry.
 
-const MAX_PER_TEAM: int = 3
+# CAPACITY, not the live roster size: the largest team either mode can field
+# (5v5). Sizes every per-slot structure (lobby grid, slot-key stride, faceoff
+# offsets) so a lobby can flip 3v3 ↔ 5v5 without re-keying. The ACTIVE size for
+# a match is GameStateMachine.team_size (latched at puck drop, like rule_set);
+# roster gates must read that, never this constant.
+const MAX_PER_TEAM: int = 5
+
+# team_slot IS the position: the lobby grid's slot index doubles as the
+# player's position identity (drives faceoff alignment, lobby/scoreboard
+# labels, bot identity casting, and — in 5v5 — the AI's F/D group split).
+# Slots 3/4 exist only when the latched team size is 5.
+const POSITION_NAMES: Array[String] = ["C", "LW", "RW", "LD", "RD"]
+# The F/D group split (5v5): defensemen are slots 3/4.
+const FIRST_DEFENSE_SLOT: int = 3
+
+
+static func position_name(team_slot: int) -> String:
+	if team_slot >= 0 and team_slot < POSITION_NAMES.size():
+		return POSITION_NAMES[team_slot]
+	return ""
+
+
+static func is_defense_slot(team_slot: int) -> bool:
+	return team_slot >= FIRST_DEFENSE_SLOT
 
 # Returns team_id (0 or 1). Balances by count; ties are broken randomly.
 static func assign_team(team0_count: int, team1_count: int) -> int:
@@ -32,7 +55,11 @@ static func faceoff_position(team_id: int, team_slot: int,
 	var off: Vector2 = GameRules.FACEOFF_OFFSETS[team_id][team_slot]
 	if team_slot == 0 and center_reach > 0.0:
 		off.y = signf(off.y) * center_reach
-	return Vector3(dot_xz.x + off.x, GameRules.FACEOFF_SPAWN_HEIGHT, dot_xz.y + off.y)
+	# Depth cap (FACEOFF_MAX_ABS_Z): a defensive-zone end-zone draw puts the D
+	# slots' raw offsets behind the goal line — clamp them net-side instead.
+	var z: float = clampf(dot_xz.y + off.y,
+			-GameRules.FACEOFF_MAX_ABS_Z, GameRules.FACEOFF_MAX_ABS_Z)
+	return Vector3(dot_xz.x + off.x, GameRules.FACEOFF_SPAWN_HEIGHT, z)
 
 
 # Facing each team should adopt on a faceoff teleport. Team 0 starts on the
@@ -73,16 +100,24 @@ static func bench_start_position(team_id: int, team_slot: int) -> Vector3:
 # to a straight push toward the team's own end (team 0 defends +Z, team 1 -Z).
 # Only used post-goal, whose replay camera cut hides the jump to this point.
 static func faceoff_staging_position(target: Vector3, dot_xz: Vector2, team_id: int) -> Vector3:
+	var staged: Vector3
 	var radial: Vector2 = Vector2(target.x - dot_xz.x, target.z - dot_xz.y)
 	if radial.length() < 0.01:
 		var own_side_sign: float = -1.0 if team_id == 1 else 1.0
-		return Vector3(target.x, target.y,
+		staged = Vector3(target.x, target.y,
 				target.z + own_side_sign * GameRules.FACEOFF_STAGING_SETBACK)
-	var dir: Vector2 = radial.normalized()
-	return Vector3(
-			target.x + dir.x * GameRules.FACEOFF_STAGING_SETBACK,
-			target.y,
-			target.z + dir.y * GameRules.FACEOFF_STAGING_SETBACK)
+	else:
+		var dir: Vector2 = radial.normalized()
+		staged = Vector3(
+				target.x + dir.x * GameRules.FACEOFF_STAGING_SETBACK,
+				target.y,
+				target.z + dir.y * GameRules.FACEOFF_STAGING_SETBACK)
+	# Keep the staging point on the ice: a slot already near the end boards
+	# (the 5v5 D pair on a defensive-zone draw) pushed radially outward would
+	# otherwise stage inside the boards.
+	var clamped: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(staged.x, staged.z), 0.6)
+	return Vector3(clamped.x, staged.y, clamped.y)
 
 
 # Glide time for a skater covering `distance` metres to its dot at the target

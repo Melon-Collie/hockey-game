@@ -118,7 +118,10 @@ const VERSION: String = "dev"
 #      tip_goals, ot_goals: host-tagged goal-flavor / overtime-winner counters
 #      driving the One-Timer / Redirect / Overtime Hero achievements), so
 #      STATS_PLAYER_RECORD_SIZE 12 -> 15.
-const PROTOCOL_VERSION: int = 30
+# v31: 5v5 mode — notify_lobby_settings / notify_game_start /
+#      notify_join_in_progress each grew a positional team_size arg, and
+#      team_slot's range widened to 0..4 (LD/RD lobby positions).
+const PROTOCOL_VERSION: int = 31
 
 
 func _ready() -> void:
