@@ -15,12 +15,11 @@ var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
 var _backdrop: LobbyArenaBackdrop = null
-# Host-only convenience: while on, every open player slot is kept filled with
-# a bot (on enable, peer leave, slot vacate, and 3v3→5v5 grow). Removing a
-# bot by hand switches it off — the host asked for a gap, so the fill must
-# never fight them. Session-local; defaults off each lobby.
-var _fill_bots_enabled: bool = false
-var _fill_bots_check: CheckButton = null
+# Host-only convenience: one press fills every open player slot with a bot.
+# Deliberately a one-shot button, not a persistent auto-fill — slots that
+# open later just leave the button pressable again, and it greys out when
+# there's nothing to fill.
+var _fill_bots_btn: Button = null
 var _kick_confirm: ConfirmDialog = null
 var _kick_pending_peer: int = -1
 var _start_btn: Button = null
@@ -230,31 +229,38 @@ func _on_edit_build_pressed() -> void:
 		_build_popup.open()
 
 
-# Host-only switch tucked under the slot grid (see _fill_bots_enabled doc).
+# Host-only one-shot button tucked under the slot grid (see _fill_bots_btn).
 func _build_fill_bots_row() -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
-	_fill_bots_check = CheckButton.new()
-	_fill_bots_check.text = "Fill open slots with bots"
-	_fill_bots_check.add_theme_font_size_override("font_size", 13)
-	_fill_bots_check.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	_fill_bots_check.button_pressed = _fill_bots_enabled
-	SoundManager.wire_button(_fill_bots_check)
-	_fill_bots_check.toggled.connect(_on_fill_bots_toggled)
-	row.add_child(_fill_bots_check)
+	_fill_bots_btn = Button.new()
+	_fill_bots_btn.text = "Fill with Bots"
+	_fill_bots_btn.add_theme_font_size_override("font_size", 13)
+	_fill_bots_btn.custom_minimum_size = Vector2(0, 28)
+	MenuStyle.wire_hover_scale(_fill_bots_btn)
+	SoundManager.wire_button(_fill_bots_btn)
+	_fill_bots_btn.pressed.connect(_fill_open_slots_with_bots)
+	row.add_child(_fill_bots_btn)
 	return row
 
 
-func _on_fill_bots_toggled(pressed: bool) -> void:
-	_fill_bots_enabled = pressed
-	if pressed:
-		_fill_open_slots_with_bots()
+# Grey the fill button out when every fielded slot is already taken.
+func _update_fill_bots_btn() -> void:
+	if _fill_bots_btn == null:
+		return
+	var open: int = 0
+	for team_id: int in 2:
+		for s: int in _team_size:
+			var key: int = LobbySlotKey.encode(team_id, s)
+			if not _lobby_slots.has(key) and not NetworkManager.pending_bot_slots.get(key, false):
+				open += 1
+	_fill_bots_btn.disabled = open == 0
 
 
 # Top up every open player slot with a bot. Each send_bot_slot broadcasts and
 # re-fires _refresh_grid via bot_slot_changed, so the cards land one by one.
 func _fill_open_slots_with_bots() -> void:
-	if not _fill_bots_enabled or not NetworkManager.is_host:
+	if not NetworkManager.is_host:
 		return
 	for team_id: int in 2:
 		for s: int in _team_size:
@@ -775,6 +781,7 @@ func _refresh_grid() -> void:
 			NetworkManager.pending_bot_identities, true, true)
 	_refresh_teams_column()
 	_update_visibility_row()
+	_update_fill_bots_btn()
 	_refresh_spectator_panel()
 
 # [home, away] occupied-slot counts (humans + bots) for the backdrop's bench
@@ -918,7 +925,6 @@ func _on_peer_disconnected(peer_id: int) -> void:
 			break
 	_ready_states.erase(peer_id)
 	_color_votes.erase(peer_id)
-	_fill_open_slots_with_bots()
 	_update_start_btn()
 	_refresh_grid()
 
@@ -957,8 +963,6 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 	_assign_slot(peer_id, new_team_id, new_slot,
 			identity.player_name, identity.is_left_handed, identity.jersey_number)
 	_broadcast_confirm(peer_id, new_team_id, new_slot)
-	# The mover's old slot just opened — top it back up if auto-fill is on.
-	_fill_open_slots_with_bots()
 	# Swapping to/from spectator changes who counts toward the ready check, so
 	# re-evaluate the start button — otherwise a sole client moving to spectate
 	# leaves the host's button stuck disabled.
@@ -1038,12 +1042,6 @@ func _on_bot_toggled(team_id: int, slot: int, is_bot: bool) -> void:
 	# this only fires from the host. send_bot_slot is a no-op on clients.
 	if not NetworkManager.is_host:
 		return
-	# Removing a bot by hand while auto-fill is on means the host wants this
-	# slot open — drop the fill toggle rather than refilling behind them.
-	if not is_bot and _fill_bots_enabled:
-		_fill_bots_enabled = false
-		if _fill_bots_check != null:
-			_fill_bots_check.set_pressed_no_signal(false)
 	NetworkManager.send_bot_slot(LobbySlotKey.encode(team_id, slot), is_bot)
 
 func _on_bot_slot_changed(_key: int, _is_bot: bool) -> void:
@@ -1104,8 +1102,6 @@ func _apply_team_size(team_size: int) -> void:
 		_assign_slot(entry.peer_id, seat[0], seat[1],
 				entry.player_name, entry.is_left_handed, entry.jersey_number)
 		_broadcast_confirm(entry.peer_id, seat[0], seat[1])
-	# A 3v3 → 5v5 grow adds open slots; top them up if auto-fill is on.
-	_fill_open_slots_with_bots()
 	_refresh_grid()
 
 func _on_game_started(config: Dictionary) -> void:
