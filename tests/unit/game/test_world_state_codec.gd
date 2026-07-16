@@ -250,12 +250,14 @@ func test_skater_move_intent_round_trips_all_octants() -> void:
 		s.move_intent = Vector2(sin(a), cos(a))
 		s.brake_intent = (oct % 2 == 0)
 		s.sprint_active = (oct % 3 == 0)
+		s.hit_committed = (oct % 2 == 1)  # v28 bit [6]; interleaved so it can't alias brake/sprint
 		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.move_intent.x, s.move_intent.x, 0.001, "octant %d x" % oct)
 		assert_almost_eq(dec.move_intent.y, s.move_intent.y, 0.001, "octant %d y" % oct)
 		assert_eq(dec.brake_intent, s.brake_intent, "octant %d brake" % oct)
 		assert_eq(dec.sprint_active, s.sprint_active, "octant %d sprint" % oct)
+		assert_eq(dec.hit_committed, s.hit_committed, "octant %d hit-commit" % oct)
 
 
 func test_skater_idle_intent_round_trips_zero() -> void:
