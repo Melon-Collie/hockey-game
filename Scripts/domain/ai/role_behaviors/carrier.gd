@@ -466,6 +466,9 @@ var _ticks_since_pick: int = 0
 # on ctx.team_size — protects shipping 3v3 tuning).
 const EXPOSURE_APPETITE_DEFENSE: float = 1.0
 const EXPOSURE_APPETITE_FORWARD: float = 0.7
+# Loss probabilities below this skip the counter read entirely (hot-path
+# floor, not a tuning knob: at 4% × a bounded threat the term is noise).
+const EXPOSURE_PROB_FLOOR: float = 0.04
 
 # ── Scratch buffers (reused across ticks, refilled per call) ────────────────
 var _scratch_opponents: Array[Vector3] = []
@@ -495,6 +498,15 @@ var _scratch_teammate_ids: Array[int] = []
 # opponent's threat in the turnover-cost term (the carrier just got
 # beat, so they don't count). Rebuilt once per _pick_action.
 var _scratch_our_defenders: Array[Vector3] = []
+# Teammate ETAs to the counter point (transition exposure, 5v5) — rebuilt
+# with _scratch_our_defenders, candidate-invariant across one compete.
+var _scratch_exposure_mate_etas: Array[float] = []
+# Lane of the last FLAT _pass_variant_ev (0.0 when the variant filtered out
+# before its lane solve). The saucer gate reads it — see _compute_best_pass.
+var _last_flat_variant_lane: float = 0.0
+# Counter-threat memo by covering-body count (see counter_rush_cost) —
+# -1-seeded alongside the ETAs each compete.
+var _scratch_exposure_threat_memo: Array[float] = []
 # Our chasers for a dump race: our defenders plus ourselves (we dump and chase).
 # Rebuilt inside _best_dump.
 var _scratch_our_chasers: Array[Vector3] = []
@@ -1220,6 +1232,15 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 		else:
 			# Our teammate — a defender for the turnover-cost term.
 			_scratch_our_defenders.append(s.position)
+	# Transition-exposure precompute (5v5): each teammate's ETA to the
+	# counter point is candidate-invariant, so race them once per re-eval
+	# instead of once per counter_rush_cost call (~25 calls/compete).
+	if ctx.team_size >= 5:
+		AIActionScoring.fill_counter_cover_etas(
+				ctx.defending_goal_pos, _scratch_our_defenders,
+				_scratch_exposure_mate_etas)
+		_scratch_exposure_threat_memo.resize(_scratch_our_defenders.size() + 2)
+		_scratch_exposure_threat_memo.fill(-1.0)
 
 
 # Refills the directional protect-opponent triple (see the protect block in
@@ -1370,6 +1391,7 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 				if ctx.reads_receiver_commitment else 0.0
 		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
 		# Flat feed at the magnet pace.
+		_last_flat_variant_lane = 0.0
 		var s: float = _pass_variant_ev(
 				ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 				pass_origin, pass_speed, false, receiver_is_one_timer,
@@ -1382,7 +1404,17 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# minimum saucer distance, ~6.5 m).
 		var saucer_speed: float = minf(
 				pass_speed, AIActionScoring.saucer_max_launch_speed(dist))
-		if saucer_speed >= GameRules.DEFAULT_WRISTER_POWER_MIN_M_S:
+		# Saucer competes only when the FLAT feed is contested — that is the
+		# variant's own first filter (SAUCER_SKIP_WHEN_LANE_CLEAR), read here
+		# off the flat variant's already-solved lane so a clear-lane receiver
+		# skips the whole second lead-solve + lane + EV. (The variant's
+		# internal check re-ran the flat lane at the saucer's slightly
+		# different lead; gating on the lane of the feed that would actually
+		# fire is the filter's intent.) A flat variant that filtered before
+		# its lane solve leaves 0.0 — "contested" — so the saucer still gets
+		# its own look at leads the flat pass couldn't take.
+		if saucer_speed >= GameRules.DEFAULT_WRISTER_POWER_MIN_M_S \
+				and _last_flat_variant_lane < AIActionScoring.SAUCER_SKIP_WHEN_LANE_CLEAR:
 			var s_saucer: float = _pass_variant_ev(
 					ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 					pass_origin, saucer_speed, true, receiver_is_one_timer,
@@ -1483,6 +1515,7 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 		lane = AIActionScoring.lane_clear(
 				pass_origin, receiver, _scratch_opponents_release, pass_speed,
 				_scratch_opponent_vels, _scratch_opponent_caps, true)
+		_last_flat_variant_lane = lane
 	var receiver_release_t: float = flight_t
 	if not receiver_is_one_timer:
 		receiver_release_t += SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
@@ -1665,7 +1698,10 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 # the hand-set feel scalar (see EXPOSURE_APPETITE_*).
 func _counter_exposure_cost(ctx: RoleContext, loss_point: Vector3,
 		loss_prob: float, recover_from: Vector3, our_goalie: Vector3) -> float:
-	if ctx.team_size < 5 or loss_prob <= 0.0:
+	# Probability floor: a candidate that barely risks the puck (open-ice
+	# carries, clean lanes) prices its counter at ~0 anyway — skip the
+	# score_shoot. Same spirit as PASS_MISS_BASE_PROB's magnitude.
+	if ctx.team_size < 5 or loss_prob <= EXPOSURE_PROB_FLOOR:
 		return 0.0
 	var appetite: float = EXPOSURE_APPETITE_DEFENSE if ctx.self_is_defense \
 			else EXPOSURE_APPETITE_FORWARD
@@ -1673,7 +1709,8 @@ func _counter_exposure_cost(ctx: RoleContext, loss_point: Vector3,
 			loss_point, loss_prob, ctx.defending_goal_pos, our_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders,
 			recover_from, ctx.self_max_speed,
-			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+			_scratch_exposure_mate_etas, _scratch_exposure_threat_memo)
 
 
 # Rotation time: how long the bot needs to rotate facing to point at
@@ -1756,6 +1793,33 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	var best_pos: Vector3 = self_pos
 	var best_score: float = -INF
 
+	# Stand-still is COMPUTED up front (its comparison stays last — see the
+	# tail comment for the strictly-greater tie rule) because it doubles as
+	# an exact continuation-pruning floor: stand always participates in this
+	# argmax, so every movement candidate whose ceiling can't strictly beat
+	# stand_total can't affect the outcome — _score_move_candidate skips its
+	# two-ply continuation read (~90% of a candidate's cost) against this
+	# bound from the very first candidate.
+	var stand_score: float = shoot_now_score
+	if not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
+		var stand_potential: float = AIActionScoring.position_potential(
+				self_pos, attacking_goal, _scratch_opponents)
+		var stand_realization: float = AIActionScoring.potential_realization_discount(
+				self_pos, attacking_goal)
+		stand_score = maxf(stand_score, stand_potential * stand_realization)
+	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
+	var stand_safety: float = AIActionScoring.clearance_to_safety(
+			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
+					AIActionScoring.EVADE_HORIZON_S,
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+	var stand_cost: float = AIActionScoring.turnover_cost(
+			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
+			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	stand_cost += _counter_exposure_cost(ctx, stand_puck_pos,
+			1.0 - stand_safety, self_pos, our_goalie)
+	var stand_total: float = stand_score * stand_safety - stand_cost
+	var cont_bound: float = stand_total
+
 	# 8 polar cardinals at CARRY_SEARCH_STEP_M. Forward = toward slot;
 	# rotate by 0°, 45°, ..., 315° to span all directions.
 	for angle: float in _POLAR_ANGLES:
@@ -1770,7 +1834,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 			continue
-		var s_total: float = _score_move_candidate(ctx, candidate, our_goalie)
+		var s_total: float = _score_move_candidate(ctx, candidate, our_goalie,
+				false, maxf(best_score, cont_bound))
 		if s_total > best_score:
 			best_score = s_total
 			best_pos = candidate
@@ -1792,7 +1857,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				continue
 			if absf(retreat.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 				continue
-			var retreat_total: float = _score_move_candidate(ctx, retreat, our_goalie)
+			var retreat_total: float = _score_move_candidate(ctx, retreat, our_goalie,
+					false, maxf(best_score, cont_bound))
 			if retreat_total > best_score:
 				best_score = retreat_total
 				best_pos = retreat
@@ -1800,7 +1866,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
 	# already cover it via local polar candidates.
-	var slot_total: float = _score_move_candidate(ctx, slot_pos, our_goalie)
+	var slot_total: float = _score_move_candidate(ctx, slot_pos, our_goalie,
+			false, maxf(best_score, cont_bound))
 	if slot_total > best_score:
 		best_score = slot_total
 		best_pos = slot_pos
@@ -1814,13 +1881,13 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		var exit_z: float = own_goal_dir * (GameRules.BLUE_LINE_Z - CARRY_EXIT_NZ_LEAD_M)
 		var exit_right := Vector3(exit_x, 0.0, exit_z)
 		var exit_right_total: float = _score_move_candidate(
-				ctx, exit_right, our_goalie)
+				ctx, exit_right, our_goalie, false, maxf(best_score, cont_bound))
 		if exit_right_total > best_score:
 			best_score = exit_right_total
 			best_pos = exit_right
 		var exit_left := Vector3(-exit_x, 0.0, exit_z)
 		var exit_left_total: float = _score_move_candidate(
-				ctx, exit_left, our_goalie)
+				ctx, exit_left, our_goalie, false, maxf(best_score, cont_bound))
 		if exit_left_total > best_score:
 			best_score = exit_left_total
 			best_pos = exit_left
@@ -1835,7 +1902,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		for side: float in [-1.0, 1.0]:
 			var walkout := Vector3(side * walk_x, 0.0, walk_z)
 			var walk_total: float = _score_move_candidate(
-					ctx, walkout, our_goalie, true)
+					ctx, walkout, our_goalie, true, maxf(best_score, cont_bound))
 			if walk_total > best_score:
 				best_score = walk_total
 				best_pos = walkout
@@ -1847,7 +1914,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# into PLAYMAKING — the bot cuts past a committed defender into the lane he
 	# vacates instead of only surviving pressure. Scored like any candidate, so
 	# it only wins when the space it opens is actually worth carrying to.
-	var seam_total: float = _score_move_candidate(ctx, directed_seam, our_goalie)
+	var seam_total: float = _score_move_candidate(ctx, directed_seam, our_goalie,
+			false, maxf(best_score, cont_bound))
 	if seam_total > best_score:
 		best_score = seam_total
 		best_pos = directed_seam
@@ -1872,24 +1940,6 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# positive — the bot planted itself at exactly the moment it
 	# should skate clear. Safety is the static reachable-clearance read (a closing
 	# defender still registers from its momentum over the reaction window).
-	var stand_score: float = shoot_now_score
-	if not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
-		var stand_potential: float = AIActionScoring.position_potential(
-				self_pos, attacking_goal, _scratch_opponents)
-		var stand_realization: float = AIActionScoring.potential_realization_discount(
-				self_pos, attacking_goal)
-		stand_score = maxf(stand_score, stand_potential * stand_realization)
-	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
-	var stand_safety: float = AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
-					AIActionScoring.EVADE_HORIZON_S,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
-	var stand_cost: float = AIActionScoring.turnover_cost(
-			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
-			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
-	stand_cost += _counter_exposure_cost(ctx, stand_puck_pos,
-			1.0 - stand_safety, self_pos, our_goalie)
-	var stand_total: float = stand_score * stand_safety - stand_cost
 	if stand_total > best_score:
 		best_score = stand_total
 		best_pos = self_pos
@@ -1989,7 +2039,8 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 # slot's turnover cost. Cost self-localizes: ~0 driving into the OZ, large when the
 # route drags the puck through our own slot.
 func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
-		our_goalie: Vector3, is_post_walkout: bool = false) -> float:
+		our_goalie: Vector3, is_post_walkout: bool = false,
+		best_so_far: float = -INF) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# One-way valve: once the puck is in the offensive zone, don't carry it back
 	# out. Establishing the zone is worth keeping — a carry that surrenders it (a
@@ -2099,8 +2150,17 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# ...and the carry CONTINUATION it opens (see _carry_continuation_value —
 	# the pass option's skating twin): the two-ply read that lets a spot be
 	# worth what it enables NEXT. Skipped when the first leg already dies
-	# (benefit zeroes regardless — hot-path prune).
-	if safety > 0.0:
+	# (benefit zeroes regardless — hot-path prune), and BOUND-PRUNED against
+	# the caller's running best: the read is by far the priciest piece of a
+	# candidate (~90% of its cost), it can only RAISE dest_score, and its
+	# value is capped at CONTINUATION_DISCOUNT (shot2/lane2/safety2/decay all
+	# ≤ 1) — so when even that ceiling times this candidate's lane/decay/
+	# safety can't beat the incumbent (cost only subtracts further), the
+	# argmax is already decided and the read is skipped. Exact by the same
+	# argument as the threat-surface bound pruning.
+	if safety > 0.0 and dest_score < CONTINUATION_DISCOUNT \
+			and maxf(dest_score, CONTINUATION_DISCOUNT) * lane * decay * safety \
+					> best_so_far:
 		dest_score = maxf(dest_score, _carry_continuation_value(
 				ctx, candidate, arrive_vel, local_time, tracked_goalie))
 	var benefit: float = dest_score * lane * decay * safety
@@ -2179,6 +2239,24 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	# shoot-now eval reads live — no phantom far-side open net a bot would carry to
 	# but never shoot. 0.0 (no seal) for every normal in-front look, so slot/mid
 	# scoring is untouched.
+	# Hot-path skip, mirrored from threat_surface_shoot (see its doc): with
+	# the keeper HOME, a direct shot from OUTSIDE the attacking zone is dead
+	# by score_shoot's own arrival-honest coverage math — the potential
+	# branch below always wins the max. Don't pay the hole geometry per
+	# carry candidate to find ~0; NZ/DZ carries hit this on every candidate.
+	# A displaced/pulled goalie voids the proof (breakaway into an open net
+	# reads on the way in), so it computes fully.
+	# (Settled keeper only — an unsettled factor voids the coverage proof the
+	# same way displacement does.)
+	var out_of_zone: bool = not AIActionScoring.in_offensive_zone(pos, attacking_goal)
+	if out_of_zone and goalie_unsettled_factor <= 0.0 \
+			and not AIActionScoring.in_offensive_zone(from_pos, attacking_goal) \
+			and predicted_goalie_pos.distance_to(attacking_goal) \
+					< AIActionScoring.THREAT_GOALIE_HOME_M:
+		var potential_nz: float = AIActionScoring.position_potential(
+				pos, attacking_goal, opps)
+		return potential_nz * AIActionScoring.potential_realization_discount(
+				pos, attacking_goal)
 	var seal_x: float = AIActionScoring.derive_post_seal_x_sign(pos, attacking_goal)
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,

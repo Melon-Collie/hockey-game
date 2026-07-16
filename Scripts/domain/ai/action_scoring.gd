@@ -2210,6 +2210,22 @@ static func turnover_cost(
 static var _scratch_counter_cover: Array[Vector3] = []
 
 
+# The counter point a rush shoots from, and each teammate's standing-start
+# ETA to it — candidate-invariant inputs the carrier precomputes once per
+# compete (fill_counter_cover_etas) instead of re-racing per candidate.
+static func counter_point_for(our_net: Vector3) -> Vector3:
+	var own_dir: float = signf(our_net.z)
+	return Vector3(0.0, 0.0, our_net.z - own_dir * GameRules.SLOT_DIST_M)
+
+
+static func fill_counter_cover_etas(our_net: Vector3,
+		teammates: Array[Vector3], out_etas: Array[float]) -> void:
+	var cp: Vector3 = counter_point_for(our_net)
+	out_etas.clear()
+	for tm: Vector3 in teammates:
+		out_etas.append(tm.distance_to(cp) / SKATER_REF_SPEED_M_S)
+
+
 static func counter_rush_cost(
 		loss_point: Vector3,
 		loss_prob: float,
@@ -2221,12 +2237,12 @@ static func counter_rush_cost(
 		self_max_speed: float,
 		opponents: Array[Vector3],
 		opponent_vels: Array[Vector3],
-		opponent_caps: Array) -> float:
+		opponent_caps: Array,
+		mate_etas: Array[float] = [],
+		threat_by_cover: Array[float] = []) -> float:
 	if not loss_point.is_finite() or loss_prob <= 0.0 or opponents.is_empty():
 		return 0.0
-	var own_dir: float = signf(our_net.z)
-	var counter_point := Vector3(
-			0.0, 0.0, our_net.z - own_dir * GameRules.SLOT_DIST_M)
+	var counter_point: Vector3 = counter_point_for(our_net)
 
 	# Fastest opponent: collect the loss, then carry to the counter point.
 	var carry_dist: float = loss_point.distance_to(counter_point)
@@ -2256,10 +2272,17 @@ static func counter_rush_cost(
 	var cover_anchor: Vector3 = AIThreatAssignment.cover_anchor(
 			counter_point, our_net)
 	_scratch_counter_cover.clear()
-	for tm: Vector3 in teammates:
-		if tm.distance_to(counter_point) / SKATER_REF_SPEED_M_S \
-				+ setup_margin <= t_counter:
-			_scratch_counter_cover.append(cover_anchor)
+	if mate_etas.size() == teammates.size():
+		# Precomputed teammate races (fill_counter_cover_etas) — the hot
+		# per-candidate path.
+		for eta: float in mate_etas:
+			if eta + setup_margin <= t_counter:
+				_scratch_counter_cover.append(cover_anchor)
+	else:
+		for tm: Vector3 in teammates:
+			if tm.distance_to(counter_point) / SKATER_REF_SPEED_M_S \
+					+ setup_margin <= t_counter:
+				_scratch_counter_cover.append(cover_anchor)
 	if self_recover_pos.is_finite() \
 			and self_recover_pos.distance_to(counter_point) \
 					/ maxf(self_max_speed, 0.001) + setup_margin <= t_counter:
@@ -2270,9 +2293,27 @@ static func counter_rush_cost(
 	# positional fallback would hold its value regardless of the covering
 	# set (closeness × angle ignore defenders' block) and dilute the whole
 	# covered-vs-open signal this term exists to read.
-	var threat: float = score_shoot(
-			counter_point, our_net, our_goalie_pos, net_half_width,
-			_scratch_counter_cover)
+	#
+	# Memo by cover count: within one carrier compete the counter point,
+	# goalie, and cover anchor are all candidate-INVARIANT — the only thing
+	# a candidate changes here is HOW MANY bodies stand at the anchor. So
+	# the shot geometry has just (roster+2) distinct values; the caller may
+	# pass a -1-seeded scratch (`threat_by_cover`, indexed by cover count,
+	# reset each compete) and the ~25 candidate calls collapse to ≤ a
+	# handful of real score_shoot evaluations.
+	var cover_count: int = _scratch_counter_cover.size()
+	var threat: float
+	if cover_count < threat_by_cover.size():
+		threat = threat_by_cover[cover_count]
+		if threat < 0.0:
+			threat = score_shoot(
+					counter_point, our_net, our_goalie_pos, net_half_width,
+					_scratch_counter_cover)
+			threat_by_cover[cover_count] = threat
+	else:
+		threat = score_shoot(
+				counter_point, our_net, our_goalie_pos, net_half_width,
+				_scratch_counter_cover)
 	return loss_prob * threat * delay_discount(t_counter)
 
 

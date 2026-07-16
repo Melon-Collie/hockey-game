@@ -1189,6 +1189,37 @@ var _cached_move_vector: Vector2 = Vector2.ZERO
 # location ping, and a slot change all force an immediate re-eval.
 const ROLE_DECISION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30  # ~30 Hz
 var _role_decision_cooldown: int = 0
+
+
+# True for slots whose positioning read tracks something that moves at play
+# speed — the carrier (pressure/contain), an assigned or soft-locked man, a
+# race, or a live one-timer camp. These keep the full ~30 Hz argmax cadence;
+# everything else is a shape-holding post (points, lanes, valves, flanks,
+# breathing zone anchors) that re-evals at ~20 Hz (see the throttle above).
+func _is_reactive_slot(slot: int) -> bool:
+	match slot:
+		AIRoleSlots.Slot.PRESSURE, AIRoleSlots.Slot.F1_PRESSURE, \
+		AIRoleSlots.Slot.CONTAIN, AIRoleSlots.Slot.MARK, \
+		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
+		AIRoleSlots.Slot.FINISHER, AIRoleSlots.Slot.NET_FRONT:
+			return true
+	# A zone defender with a live soft-lock is covering a mover — reactive
+	# while the lock holds, a breathing post once it releases.
+	return _cached_role_decision != null \
+			and _cached_role_decision.locked_man_pid != -1
+
+
+# Seed the dispatch / role-argmax counters with a per-bot phase (see the
+# setup() pacing comment). Multiplying by a prime before the modulo spreads
+# consecutive bot ids (10000, 10001, …) across the role period instead of
+# marching them through it in lockstep pairs. Gated to real bot peers: unit
+# tests and the duel scenarios drive agents with small synthetic ids and pin
+# tick-exact behavior off an immediate first dispatch — they keep phase 0.
+func _stagger_cadence_phases() -> void:
+	if _peer_id < NetworkManager.BOT_ID_BASE:
+		return
+	_dispatch_skip_counter = _peer_id % maxi(1, _dispatch_period_ticks)
+	_role_decision_cooldown = (_peer_id * 3) % ROLE_DECISION_PERIOD_TICKS
 var _cached_role_decision: RoleDecision = null
 # True when the cached decision was built on a tick with a live location ping —
 # the ping override mutates the cached decision's target_position in place, so
@@ -1380,6 +1411,14 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 	_team_id_by_peer = team_id_by_peer
 	_caps_by_peer = caps_by_peer
 	_is_left_handed = is_left_handed
+	# Frame pacing: stagger this bot's dispatch and role-argmax phases by
+	# peer id, so a full roster doesn't run every expensive re-eval on the
+	# SAME physics tick. Host FPS is set by the worst tick, not the average
+	# — with all counters starting equal, ten bots synchronized their full
+	# dispatches (and 30 Hz argmaxes) into periodic spike ticks that alone
+	# approached the 8.3 ms budget. Deterministic per bot (peer id), so
+	# behavior is a fixed sub-tick phase offset, nothing else.
+	_stagger_cadence_phases()
 	# Perpendicular sign derived from handedness — used by _wind_up_endpoint_offsets
 	# to put the wind-up on the bot's forehand side. Must match the codebase's
 	# forehand convention: the release classifier (skater_controller.gd) treats
@@ -1408,6 +1447,8 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	# Aim slew is NOT a difficulty knob anymore — it's the bot's real Hands blade
 	# speed, set in apply_capabilities. Difficulty here is reaction/cadence/pace.
 	_dispatch_period_ticks = maxi(1, profile.dispatch_period_ticks)
+	# Cadence changed — re-derive this bot's pacing phase for the new period.
+	_stagger_cadence_phases()
 	_pursuit_standoff_m = profile.pursuit_standoff_m
 	_pass_speed_scale = profile.pass_speed_scale
 	_check_aggression = profile.check_aggression
@@ -1787,17 +1828,25 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# Throttle the expensive positioning argmax to ~30 Hz (ROLE_DECISION_
 		# PERIOD_TICKS), reusing the cached decision between re-evals — the same
 		# cadence the carrier uses. Bypass the throttle for timing-critical reads
-		# so they stay full-rate: the FINISHER (its ready flag arms one-timers),
-		# a live one-timer-ready or body-check commit already in the cache, a
-		# location ping (its steering override mutates the decision each tick, so
-		# a stale cache would strand the bot), and a slot change (a cached target
-		# from the old role must not carry over). ctx (ping/aim reads) is rebuilt
+		# so they stay full-rate: a finisher-type slot (FINISHER / 5v5 NET_FRONT)
+		# WHILE THE PUCK IS IN FLIGHT (its reactive tip + one-timer arming race
+		# the puck; with a carrier on the puck, re-arming at the 30 Hz cadence
+		# costs ≤17 ms against ≥100 ms pass flights — the old unconditional
+		# FINISHER bypass burned a full-rate argmax all game for that), a live
+		# one-timer-ready or body-check commit already in the cache, a location
+		# ping (its steering override mutates the decision each tick, so a stale
+		# cache would strand the bot), and a slot change (a cached target from
+		# the old role must not carry over). ctx (ping/aim reads) is rebuilt
 		# every tick regardless — only _dispatch_role_decision is throttled.
 		var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null \
 				else AIRoleSlots.Slot.NONE
+		var is_finisher_slot: bool = slot == AIRoleSlots.Slot.FINISHER \
+				or slot == AIRoleSlots.Slot.NET_FRONT
+		var puck_in_flight: bool = snapshot.puck_state != null \
+				and snapshot.puck_state.carrier_peer_id == -1
 		var must_recompute: bool = _cached_role_decision == null \
 				or slot != _prev_role_slot \
-				or slot == AIRoleSlots.Slot.FINISHER \
+				or (is_finisher_slot and puck_in_flight) \
 				or ctx.ping_move_target.is_finite() \
 				or _role_decision_pinged \
 				or _cached_role_decision.is_one_timer_ready \
@@ -1806,7 +1855,14 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		if must_recompute or _role_decision_cooldown <= 0:
 			decision = _dispatch_role_decision(ctx)
 			_cached_role_decision = decision
-			_role_decision_cooldown = ROLE_DECISION_PERIOD_TICKS
+			# Reactive roles (on the puck / on a man / arming a one-timer)
+			# re-eval at the full ~30 Hz; pure shape-holding roles re-eval at
+			# ~20 Hz — their targets are slow-moving formation posts behind
+			# multi-second hysteresis, where 17 ms of extra staleness is
+			# invisible but the argmax is the whole off-puck AI bill.
+			_role_decision_cooldown = ROLE_DECISION_PERIOD_TICKS \
+					if _is_reactive_slot(slot) \
+					else ROLE_DECISION_PERIOD_TICKS * 3 / 2
 			_role_decision_pinged = ctx.ping_move_target.is_finite()
 		else:
 			_role_decision_cooldown -= _dispatch_period_ticks
@@ -1878,7 +1934,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			_one_timer_preserve_ticks = 0
 		elif _is_one_timer_ready \
 				and _in_attacking_zone(self_pos) \
-				and slot == AIRoleSlots.Slot.FINISHER \
+				and (slot == AIRoleSlots.Slot.FINISHER
+						or slot == AIRoleSlots.Slot.NET_FRONT) \
 				and snapshot.puck_state != null \
 				and (snapshot.puck_state.carrier_peer_id == -1
 						or snapshot.real_puck_carrier_peer_id == -1) \

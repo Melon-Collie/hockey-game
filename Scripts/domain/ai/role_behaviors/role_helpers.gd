@@ -312,13 +312,40 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 # into both surfaces, so a teammate already on a receiver suppresses that
 # pass threat and an uncovered receiver's threat stands — "who is really
 # open" needs no separate boolean read.
+# Per-decide upper bounds for carrier_best_option's early-out. Every threat
+# surface is monotone NON-INCREASING in the defender set (an extra body can
+# only block lanes, add pressure, shrink openness), so the option values with
+# the CURRENT defenders only — no hypothetical candidate appended — bound the
+# candidate-adjusted values from above. carrier_best_option evaluates terms
+# in descending-bound order and stops the moment the running max meets the
+# next bound: identical result, most pass surfaces never computed. Fill once
+# per decide (out_bases[0] = shoot, [1..] = opp_teammates in order) and pass
+# to every candidate's carrier_best_option call.
+static func carrier_option_bases(
+		carrier_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		our_team_excluding_self: Array[Vector3],
+		opp_teammates: Array[Vector3],
+		out_bases: Array[float]) -> void:
+	out_bases.clear()
+	out_bases.append(AIActionScoring.threat_surface_shoot(
+			carrier_pos, our_net, our_goalie_pos,
+			GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+	for opp_pos: Vector3 in opp_teammates:
+		out_bases.append(AIActionScoring.threat_surface_pass(
+				carrier_pos, opp_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+
+
 static func carrier_best_option(
 		candidate: Vector3,
 		carrier_pos: Vector3,
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
-		opp_teammates: Array[Vector3]) -> float:
+		opp_teammates: Array[Vector3],
+		bases: Array[float] = []) -> float:
 	# Carrier's view of defenders = our team + me at the candidate. This helper
 	# is called once per candidate in PRESSURE's argmax (up to ~19×/decide), so
 	# duplicating the array every call was pure hot-path churn. Append the
@@ -326,7 +353,38 @@ static func carrier_best_option(
 	# array is left exactly as passed, and after the first call the backing
 	# store keeps its capacity so the push/pop allocates nothing.
 	our_team_excluding_self.push_back(candidate)
+	var best: float = 0.0
 
+	if bases.size() == opp_teammates.size() + 1:
+		# Pruned path (see carrier_option_bases): evaluate terms in
+		# descending-bound order, stop when no remaining bound can beat the
+		# running max. Exact — a skipped term's value ≤ its bound ≤ best.
+		var used: int = 0
+		while true:
+			var bi: int = -1
+			var bound: float = -1.0
+			for i: int in bases.size():
+				if used & (1 << i) == 0 and bases[i] > bound:
+					bound = bases[i]
+					bi = i
+			if bi == -1 or bound <= best:
+				break
+			used |= 1 << bi
+			var v: float
+			if bi == 0:
+				v = AIActionScoring.threat_surface_shoot(
+						carrier_pos, our_net, our_goalie_pos,
+						GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+			else:
+				v = AIActionScoring.threat_surface_pass(
+						carrier_pos, opp_teammates[bi - 1], our_net, our_goalie_pos,
+						GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+			if v > best:
+				best = v
+		our_team_excluding_self.pop_back()
+		return best
+
+	# Exact/unpruned path (no bases supplied — one-shot callers).
 	# Carrier's best shot at our net (with positional fallback floor).
 	var shoot_value: float = AIActionScoring.threat_surface_shoot(
 			carrier_pos, our_net, our_goalie_pos,

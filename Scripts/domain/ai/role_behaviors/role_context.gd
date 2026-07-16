@@ -239,3 +239,6 @@ var scratch_opp_states: Array[SkaterNetworkState] = []
 var scratch_opp_caps: Array[AISkaterCaps] = []
 var scratch_teammates: Array[Vector3] = []
 var scratch_opp_receivers: Array[Vector3] = []
+# Per-decide option-value upper bounds for the pruned carrier_best_option
+# (see AIRoleHelpers.carrier_option_bases).
+var scratch_option_bases: Array[float] = []

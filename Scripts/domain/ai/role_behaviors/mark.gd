@@ -87,6 +87,16 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# more dangerous ice, so the cursor (which snaps to this target) stays steady.
 	AIRoleHelpers.append_incumbent(ctx, candidates)
 
+	# Per-opp threat upper bounds (no candidate appended) for the per-
+	# candidate max() early-out — same monotone-in-defenders argument as
+	# AIRoleHelpers.carrier_option_bases, same exact result.
+	var bases: Array[float] = ctx.scratch_option_bases
+	bases.clear()
+	for opp_pos: Vector3 in opp_positions:
+		bases.append(AIActionScoring.threat_surface_shoot(
+				opp_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	for c: Vector3 in candidates:
@@ -97,7 +107,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 		var mark_score: float = -_max_shot_threat(
 				c, opp_positions, our_net, our_goalie_pos,
-				our_team_excluding_self) + AIRoleHelpers.incumbent_bonus(ctx, c)
+				our_team_excluding_self, bases) + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if mark_score > best_score:
 			best_score = mark_score
 			best_pos = c
@@ -112,13 +122,17 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 # position_potential when score_shoot returns 0 — gives the fallback a non-zero
 # gradient across opp positions even when no opp is in immediate shooting range,
 # so an unassigned marker pulls into the dominant opp's pressure cone instead of
-# sitting flat at slot.
+# sitting flat at slot. `bases` (per-opp threats WITHOUT the candidate, in
+# opp_positions order) bound each term from above — adding a defender only
+# lowers a surface — so terms evaluate in descending-bound order and stop when
+# the running max meets the next bound: identical result, fewer surfaces.
 static func _max_shot_threat(
 		candidate: Vector3,
 		opp_positions: Array[Vector3],
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
-		our_team_excluding_self: Array[Vector3]) -> float:
+		our_team_excluding_self: Array[Vector3],
+		bases: Array[float]) -> float:
 	# Opp's view of defenders = our team + me at c. Append-and-restore the
 	# caller's array in place instead of duplicating it per candidate (10×/decide
 	# in the unassigned-marker fallback); the array is left exactly as passed and
@@ -126,9 +140,19 @@ static func _max_shot_threat(
 	our_team_excluding_self.push_back(candidate)
 
 	var max_threat: float = 0.0
-	for opp_pos: Vector3 in opp_positions:
+	var used: int = 0
+	while true:
+		var bi: int = -1
+		var bound: float = -1.0
+		for i: int in bases.size():
+			if used & (1 << i) == 0 and bases[i] > bound:
+				bound = bases[i]
+				bi = i
+		if bi == -1 or bound <= max_threat:
+			break
+		used |= 1 << bi
 		var threat: float = AIActionScoring.threat_surface_shoot(
-				opp_pos, our_net, our_goalie_pos,
+				opp_positions[bi], our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 		if threat > max_threat:
 			max_threat = threat

@@ -45,6 +45,12 @@ class_name AIRolePressure
 # the puck; "getting caught up-ice" isn't applicable. The MARK
 # defenders own defensive recovery for this team.
 
+# Inner-ring gate range: within ~1.5 outer search steps of the cut-off the
+# argmax samples the half-step ring too (fine corrections while engaged);
+# beyond it the coarse ring is plenty — steering is consuming the target at
+# full stride. Physical scale: the outer ring's own step distance.
+const PRESSURE_INNER_RING_RANGE_M: float = 4.5
+
 # Switch-hysteresis on the chosen cut-off point is the shared off-puck mechanism
 # (AIRoleHelpers.append_incumbent / incumbent_bonus / TARGET_SWITCH_MARGIN): the
 # standing target is injected into the candidate set and given a stickiness bonus,
@@ -120,17 +126,30 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		search_center += to_net.normalized() * (
 				SkaterAgentStateMachine.BLADE_REACH_M + ctx.pursuit_standoff_m)
 
-	# Search around the cut-off point (inner ring on: the chosen point is a
-	# per-dispatch steering target, so half-step samples let it correct in
-	# small moves); goal-side filter rejects the half-disc on the wrong
-	# side of the carrier (toward opp net).
+	# Search around the cut-off point. The half-step inner ring exists so a
+	# pressurer ALREADY AT the cut-off can express small corrections — a
+	# body still skating in consumes the target through steering at full
+	# stride, where half-step resolution is invisible. Gate the ring on
+	# proximity: ~19 → ~11 scored candidates while closing (the common
+	# case), full resolution once engaged.
+	var near_cutoff: bool = ctx.self_pos.distance_squared_to(search_center) \
+			< PRESSURE_INNER_RING_RANGE_M * PRESSURE_INNER_RING_RANGE_M
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, search_center, true)
+			ctx.self_pos, search_center, near_cutoff)
 	# Switch-hysteresis: inject the standing cut-off point so it's re-scored live
 	# and held (via incumbent_bonus) unless a fresh candidate is clearly better.
 	# It runs the same legality / goal-side / anti-crowd filters below, so a
 	# now-illegal or wrong-side incumbent is dropped outright.
 	AIRoleHelpers.append_incumbent(ctx, candidates)
+
+	# Upper bounds for the per-candidate max() early-out: the carrier's
+	# option values with the current defenders only. One extra surface pass
+	# here lets every candidate below skip the pass lanes that can't matter
+	# (identical argmax — see carrier_option_bases).
+	var bases: Array[float] = ctx.scratch_option_bases
+	AIRoleHelpers.carrier_option_bases(
+			carrier_pos, our_net, our_goalie_pos,
+			our_team_excluding_self, opp_teammates, bases)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -146,7 +165,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# for us (lower for the carrier).
 		var pressure_score: float = -AIRoleHelpers.carrier_best_option(
 				c, carrier_pos, our_net, our_goalie_pos,
-				our_team_excluding_self, opp_teammates) \
+				our_team_excluding_self, opp_teammates, bases) \
 				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if pressure_score > best_score:
 			best_score = pressure_score
