@@ -1,12 +1,18 @@
 class_name PenaltyShotRules
 
 # Pure outcome classification for a single penalty-shot attempt, modelled on the
-# NHL Rule 24.2 procedure: the puck starts at centre ice and the shooter skates
-# in alone on the goalie. Two rules decide when an attempt is over:
-#   1. The puck must be kept IN MOTION toward the opponent's goal line. If it
-#      comes to rest ("lost momentum") or moves back toward centre ("went
-#      backward"), the attempt is dead.
-#   2. Once the puck crosses the goal line the shot is complete — a goal if it's
+# NHL Rule 24.2 procedure: the shooter starts at centre ice and skates in alone
+# on the goalie. Two rules decide when an attempt is over:
+#   1. The SHOOTER must keep driving toward the opponent's goal line. If they stop
+#      advancing ("lost momentum") or skate back toward centre ("went backward"),
+#      the attempt is dead. This is keyed on the shooter's own forward progress,
+#      NOT the puck's: dangling or deking moves the puck laterally / pulls it back
+#      to the hip, and a shot fires it away independently — none of which should
+#      end the rush. (Rule 24.2 speaks of the puck, but here the puck is a real
+#      body frozen to the blade while carried and free once shot, so tying the
+#      keep-moving test to the skater's drive is the faithful gameplay reading —
+#      only the player backing off ends it.)
+#   2. Once the PUCK crosses the goal line the shot is complete — a goal if it's
 #      inside the posts and under the crossbar, otherwise a miss. There are no
 #      rebounds: because the caller resolves the attempt the instant it goes
 #      dead, a save that kicks the puck out is correctly a no-goal, while a
@@ -19,30 +25,31 @@ class_name PenaltyShotRules
 #
 # Geometry convention matches the rest of the domain: `attack_dir_z` is the sign
 # of the shooting team's direction along Z (team 0 attacks toward -Z, so -1).
-# "Forward progress" is the puck's displacement from its start projected onto
-# that attack direction — it grows as the shooter advances on the net.
+# "Forward progress" is the shooter's displacement from their start projected onto
+# that attack direction — it grows as they advance on the net.
 
 enum Outcome { LIVE, GOAL, MISS }
 
 
-# Tunables for the dead-puck detection. Defaults are deliberately forgiving so
-# ordinary stickhandling (which moves the puck laterally, not backward) doesn't
-# trip the "lost momentum" / "went backward" rules — only an actual stop or
-# retreat does.
+# Tunables for the keep-driving detection. Defaults are deliberately forgiving so
+# a shooter briefly gliding or weaving through their stride doesn't trip the "lost
+# momentum" / "went backward" rules — only actually stopping or backing off does.
+# (Because the rules track the shooter, not the puck, dangling or shooting the
+# puck never trips them regardless of these tunables.)
 class Config:
-	# Forward speed (m/s of progress toward the net) at or below which the puck
-	# counts as stopped.
+	# Forward speed (m/s of the shooter's progress toward the net) at or below
+	# which the shooter counts as stopped.
 	var rest_speed: float = 0.5
-	# How long (s) the puck must stay stopped before the attempt dies. A brief
-	# dip mid-dangle (or a stride reset while building speed) shouldn't end the
+	# How long (s) the shooter must stay stopped before the attempt dies. A brief
+	# dip mid-stride (or a stride reset while building speed) shouldn't end the
 	# rush.
 	var stall_grace: float = 0.5
-	# How far (m) the puck may retreat from its furthest point before "went
-	# backward" fires. A generous window so a deke that pulls the puck back to
-	# the hip before releasing reads as dangling, not a dead retreat.
+	# How far (m) the shooter may drift back from their furthest point before "went
+	# backward" fires. A generous window so squaring up or an edge-work wobble
+	# reads as part of the rush, not a dead retreat.
 	var backward_tolerance: float = 0.75
-	# Forward progress (m) the shooter must make before the dead-puck rules arm,
-	# so the puck sitting at centre at the very start isn't read as stalled.
+	# Forward progress (m) the shooter must make before the keep-driving rules arm,
+	# so the shooter standing at centre at the very start isn't read as stalled.
 	var start_progress: float = 0.4
 	# Running-start grace (s): once the shooter commits to the rush (`started`),
 	# suppress the dead-puck rules for this long so they can accelerate from a
@@ -55,11 +62,12 @@ class Config:
 	var crossbar_height: float = 1.22
 
 
-# Puck displacement from its start, projected onto the attack direction.
-# Positive as the shooter advances toward the net; negative if it slides back
+# Displacement from the start point, projected onto the attack direction. The
+# caller feeds the shooter's Z (the keep-driving rules track the player, not the
+# puck). Positive as they advance toward the net; negative if they slide back
 # toward centre.
-static func forward_progress(puck_z: float, start_z: float, attack_dir_z: float) -> float:
-	return (puck_z - start_z) * attack_dir_z
+static func forward_progress(pos_z: float, start_z: float, attack_dir_z: float) -> float:
+	return (pos_z - start_z) * attack_dir_z
 
 
 # Whether the puck has reached the goal-line depth, irrespective of width/height.
@@ -94,10 +102,10 @@ static func is_goal(
 
 # Classify one sampled frame of an attempt.
 #
-# `forward_speed` is the rate of forward progress (m/s) — the caller derives it
-# from the change in `forward_progress`, NOT from the puck's rigidbody velocity,
-# because a carried puck is frozen to the blade and reports ~0 velocity even as
-# the shooter skates it up the ice.
+# `forward_speed` is the shooter's rate of forward progress (m/s) — the caller
+# derives it from the change in the shooter's `forward_progress`. It tracks the
+# player, not the puck, so a dangled or shot puck moving independently doesn't end
+# the attempt; only the shooter stalling does.
 # `max_progress` is the running maximum of `current_progress`; `started` latches
 # true once the shooter has advanced `start_progress`; `stall_time` is how long
 # `forward_speed` has stayed at or below `rest_speed` since starting;

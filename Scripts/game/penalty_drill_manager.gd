@@ -4,11 +4,13 @@ extends Node
 # game_scene.gd via DrillRegistry when NetworkManager.drill_id selects it. Owns
 # the whole loop — stage the shooter at centre with the puck a stride ahead to
 # skate onto, let them pick it up and drive in on a lone reactive goalie, classify
-# the attempt with PenaltyShotRules (NHL Rule 24.2: keep the puck moving toward
-# the net, one shot, no rebounds), tally it, and restage — finishing with a
-# results card. The keep-it-moving rules don't arm until the shooter actually
-# picks up the puck, so a loose puck waiting at centre never reads as a stalled
-# shot.
+# the attempt with PenaltyShotRules (NHL Rule 24.2, read as a gameplay rule: the
+# SHOOTER must keep driving toward the net — one shot, no rebounds), tally it, and
+# restage — finishing with a results card. The keep-driving rules don't arm until
+# the shooter actually picks up the puck, so a loose puck waiting at centre never
+# reads as a stalled shot. Because those rules track the player's own forward
+# drive (not the puck), dangling or shooting the puck can't fail the attempt —
+# only the shooter stalling or backing off does.
 #
 # Modelled on TutorialManager's lifecycle (single local player + puck, a manager
 # that owns staging and a code-built HUD), minus the multi-step machinery.
@@ -109,9 +111,11 @@ func _begin_attempt() -> void:
 	_stage_puck_for_player()
 	GameManager.reset_penalty_goalie()
 
-	# Provisional baseline; re-based to the pickup point once the shooter actually
-	# collects the puck (see _tick_live), so forward progress measures the rush.
-	_start_z = _puck.get_puck_position().z
+	# Provisional baseline; re-based to the shooter's position once they actually
+	# collect the puck (see _tick_live), so forward progress measures the rush.
+	# Progress is the SHOOTER's, not the puck's — the keep-driving rules track the
+	# player skating in, so dangling/shooting the puck can't end the attempt.
+	_start_z = _skater.global_position.z
 	_hud.set_progress(_session.current_attempt_number(), _session.total_attempts, _session.makes)
 
 
@@ -162,16 +166,20 @@ func _tick_live(delta: float) -> void:
 	if not _has_possessed:
 		if _puck.carrier == _skater:
 			_has_possessed = true
-			_start_z = _puck.get_puck_position().z
+			_start_z = _skater.global_position.z
 			_last_progress = 0.0
 			_max_progress = 0.0
 		return
 
 	var pos: Vector3 = _puck.get_puck_position()
-	var progress: float = PenaltyShotRules.forward_progress(pos.z, _start_z, _ATTACK_DIR_Z)
-	# Forward speed from the change in progress, NOT the rigidbody velocity — a
-	# carried puck is frozen to the blade and reports ~0 velocity even while the
-	# shooter skates it up the ice.
+	# Failure detection tracks the SHOOTER's drive to the net, not the puck: the
+	# attempt only dies when the player stalls or skates backward, so dangling or
+	# shooting the puck (which moves it laterally, pulls it to the hip, or fires it
+	# away) never ends the rush. Goal / miss detection below still keys on the puck
+	# crossing the goal line.
+	var progress: float = PenaltyShotRules.forward_progress(
+			_skater.global_position.z, _start_z, _ATTACK_DIR_Z)
+	# Forward speed from the change in the shooter's progress this tick.
 	var fwd_speed: float = (progress - _last_progress) / delta if delta > 0.0 else 0.0
 	_last_progress = progress
 	_max_progress = maxf(_max_progress, progress)

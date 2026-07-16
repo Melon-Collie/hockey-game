@@ -114,7 +114,8 @@ func test_classify_miss_when_going_backward() -> void:
 
 
 func test_classify_live_for_small_dip_within_backward_tolerance() -> void:
-	# A 0.5 m dip (lateral dangle wobble) under the 0.75 m tolerance stays live.
+	# A 0.5 m dip (the shooter squaring up / edge-work wobble) under the 0.75 m
+	# tolerance stays live.
 	var o: PenaltyShotRules.Outcome = PenaltyShotRules.classify(
 			0.0, 0.05, -11.5, 4.0, 11.5, 12.0, true, 0.0, 5.0,
 			ATTACK_DIR, GOAL_LINE_Z, HALF_WIDTH, _cfg())
