@@ -45,12 +45,17 @@ func _add_goalie(s: WorldSnapshot, team_id: int, pos: Vector3) -> void:
 
 # Settled OZONE cycle: carrier (peer 2) on the right half-wall, FINISHER
 # (peer 1) camped weak-side, the MARK defender caught low at the net-front
-# (the cross-seam window), PRESSURE on the carrier.
+# and DRAWN TO THE PUCK SIDE — the genuinely open cross-seam window. (He
+# used to sit at (-1, -25), which shades the weak-side backdoor lane; the
+# release-contest pressure model reads that half-open seam honestly — the
+# feed EV lands within noise of a reposition carry — so the doctrine this
+# file pins, "open seam + ready man → feed", gets a fixture where the seam
+# is actually open.)
 func _cycle_snap(finisher_pos: Vector3) -> WorldSnapshot:
 	var s := WorldSnapshot.new()
 	_add_skater(s, FINISHER_ID, finisher_pos)
 	_add_skater(s, CARRIER_ID, Vector3(8.0, 0.0, -18.0))
-	_add_skater(s, OPP_MARK, Vector3(-1.0, 0.0, -25.0))
+	_add_skater(s, OPP_MARK, Vector3(3.0, 0.0, -24.0))
 	_add_skater(s, OPP_PRESSURE, Vector3(7.0, 0.0, -16.5))
 	_add_goalie(s, 1, Vector3(0.8, 0.0, -25.3))  # squared toward the carrier side
 	s.puck_state = PuckNetworkState.new()

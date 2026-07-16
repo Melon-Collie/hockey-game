@@ -29,13 +29,27 @@ func test_shoot_score_falls_off_with_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.0)
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
-	# Defender 2 m sideways AND 2 m forward (toward goal): inside the
-	# forward cone (≈45° offset, dot ≈ 0.71) and inside the pressure
-	# radius. Far enough off the shot lane that lane_clear stays at 1.0,
-	# so we're testing pressure in isolation.
-	var nearby_opp: Array[Vector3] = [Vector3(2.0, 0.0, 23.0)]
+	# Defender one stick from the RELEASE POINT (the puck a carry-handle
+	# toward the net): his blade genuinely contests the windup
+	# (release_contest_clean). Off the shot lane laterally so lane_clear
+	# stays ~1.0 — this tests release duress in isolation.
+	var nearby_opp: Array[Vector3] = [Vector3(1.2, 0.0, 22.4)]
 	var pressured: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,nearby_opp)
-	assert_lt(pressured, clear, "opponent in the forward pressure cone should reduce shoot score")
+	assert_lt(pressured, clear, "a blade within reach of the release contests the shot")
+
+
+func test_shoot_score_ignores_defender_beyond_blade_reach() -> void:
+	# The old density curve penalized any body within 4 m of the shooter's
+	# forward cone. Physically, a defender ~3 m away cannot touch a ~135 ms
+	# release — only a blade that can reach the puck during the windup
+	# contests it. He's also kept off the shot lane so lane_clear is 1.0.
+	var shooter := Vector3(0.0, 0.0, 21.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
+	var watcher: Array[Vector3] = [Vector3(2.8, 0.0, 22.5)]
+	var watched: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,watcher)
+	assert_almost_eq(watched, clear, 0.001,
+			"a body near-but-out-of-reach does not contest the release")
 
 
 func test_shoot_score_reduced_by_mid_lane_defender() -> void:
