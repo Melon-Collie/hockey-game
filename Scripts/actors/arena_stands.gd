@@ -144,6 +144,8 @@ const _BENCH_CENTER_Z: float = 4.4    # bench centers at ±this along the boards
 const _BENCH_HALF_LEN: float = 3.0    # half-length of each bench along Z
 const _BENCH_CLEAR_ROWS: int = 2      # spectator rows cleared behind the glass
 const _BENCH_CLEAR_MARGIN: float = 0.3
+const _BENCH_SEAT_X_OFFSET: float = 0.33  # seat center outward of the first tread's inner edge
+const _BENCH_SEAT_HEIGHT: float = 0.46
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
@@ -601,15 +603,18 @@ func _spectator_material() -> ShaderMaterial:
 	return _crowd_material
 
 
-# True when a spectator slot falls inside a player-bench cutout: the first
-# _BENCH_CLEAR_ROWS rows on the bench (+X) side, along each bench span.
+# True when a spectator slot falls inside the player-bench cutout: the first
+# _BENCH_CLEAR_ROWS rows on the bench (+X) side, along the full stretch from
+# one bench's far end to the other's — including the gap BETWEEN the bench
+# spans, which is the gate/staff area; fans seated at ice level in that
+# sliver read as people sitting between the two benches.
 # Sample points are (x, z) packed as Vector2(x, y).
 func _in_bench_zone(row: int, p: Vector2) -> bool:
 	if row >= _BENCH_CLEAR_ROWS:
 		return false
 	if p.x < 0.0:
 		return false
-	return absf(absf(p.y) - _BENCH_CENTER_Z) < _BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
+	return absf(p.y) < _BENCH_CENTER_Z + _BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
 
 
 # ── Player benches ───────────────────────────────────────────────────────────
@@ -628,13 +633,14 @@ func _build_benches() -> void:
 		var seat := MeshInstance3D.new()
 		seat.name = "BenchSeatHome" if side > 0.0 else "BenchSeatAway"
 		var seat_mesh := BoxMesh.new()
-		seat_mesh.size = Vector3(0.42, 0.46, _BENCH_HALF_LEN * 2.0)
+		seat_mesh.size = Vector3(0.42, _BENCH_SEAT_HEIGHT, _BENCH_HALF_LEN * 2.0)
 		var seat_mat := StandardMaterial3D.new()
 		seat_mat.albedo_color = team_color.darkened(0.25)
 		seat_mat.roughness = 0.8
 		seat_mesh.material = seat_mat
 		seat.mesh = seat_mesh
-		seat.position = Vector3(x_inner + 0.33, tread_y + 0.23, center_z)
+		seat.position = Vector3(x_inner + _BENCH_SEAT_X_OFFSET,
+				tread_y + _BENCH_SEAT_HEIGHT * 0.5, center_z)
 		add_child(seat)
 
 		var backrest := MeshInstance3D.new()
@@ -648,6 +654,15 @@ func _build_benches() -> void:
 		backrest.mesh = back_mesh
 		backrest.position = Vector3(x_inner + 0.57, tread_y + 0.55, center_z)
 		add_child(backrest)
+
+
+# Seat-surface center of a team's bench (top face of the seat block), in
+# ArenaStands-local space. Home (team 0) sits on the +Z half, matching
+# _build_benches. The lobby backdrop uses this to seat roster dummies.
+func bench_seat_center(team_id: int) -> Vector3:
+	var side: float = 1.0 if team_id == 0 else -1.0
+	return Vector3(rink_width / 2.0 + base_outward_offset + _BENCH_SEAT_X_OFFSET,
+			stands_base_y + _BENCH_SEAT_HEIGHT, side * _BENCH_CENTER_Z)
 
 
 # ── Crowd excitement ─────────────────────────────────────────────────────────

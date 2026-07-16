@@ -768,12 +768,31 @@ func _refresh_grid() -> void:
 	_recompute_resolved_colors()
 	if _backdrop != null:
 		_backdrop.set_team_color_slots(_home_color_slot, _away_color_slot)
+		var bench: Array[int] = _bench_occupancy()
+		_backdrop.set_bench_counts(bench[0], bench[1])
 	_slot_grid.refresh(_build_slot_grid_roster(), _get_team_colors(),
 			NetworkManager.pending_bot_slots, NetworkManager.is_host,
 			NetworkManager.pending_bot_identities, true, true)
 	_refresh_teams_column()
 	_update_visibility_row()
 	_refresh_spectator_panel()
+
+# [home, away] occupied-slot counts (humans + bots) for the backdrop's bench
+# dummies. Slots beyond the live team size don't count — they aren't fielded.
+func _bench_occupancy() -> Array[int]:
+	var counts: Array[int] = [0, 0]
+	for k: int in _lobby_slots:
+		if LobbySlotKey.is_spectator(k) or LobbySlotKey.slot(k) >= _team_size:
+			continue
+		counts[LobbySlotKey.team_id(k)] += 1
+	for bot_key: int in NetworkManager.pending_bot_slots:
+		if not NetworkManager.pending_bot_slots[bot_key]:
+			continue
+		if LobbySlotKey.is_spectator(bot_key) or LobbySlotKey.slot(bot_key) >= _team_size:
+			continue
+		counts[LobbySlotKey.team_id(bot_key)] += 1
+	return counts
+
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
 # onto their currently assigned team, then asks ColorVoteRules for the new
