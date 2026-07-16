@@ -499,17 +499,20 @@ const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 
 # Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
 # the +Z side of the dot, team 1 on -Z (preserves team 0 = +Z half convention).
-# Indexed by [team_id][team_slot]. Center on the dot line (slot 0); wingers sit
-# on a ~4.9 m circle around the dot (±4.0 wide, 2.8 back) — tighter than the old
-# ±5.0/3.0 spread so the formation reads like a faceoff circle and the post-goal
-# radial skate-in converges cleanly instead of running in parallel. Slots 3/4
-# (LD/RD, 5v5 only) stand behind the wingers outside the circle — the real
-# alignment puts D behind the hash marks; near an end-zone dot the raw offset
-# can land past the goal line, which faceoff_position clamps back in.
+# Indexed by [team_id][team_slot]. Center on the dot line (slot 0); wingers
+# stand ON THE CIRCLE'S EDGE at the hash marks, nearly level with the dot
+# (±4.7 wide, 0.9 back — just outside the 4.57 m circle), so opposing wingers
+# line up nose-to-nose ~1.8 m apart across the dot, the real alignment.
+# Slots 3/4 (LD/RD, 5v5 only) stand behind everyone outside the circle — the
+# real alignment puts D behind the hash marks; near an end-zone dot the raw
+# offset can land past the goal line, which faceoff_position clamps back in.
+# TODO(post-v1): true defensive-zone draw variants — the defending side
+# stacks its D goal-side (retriever directly behind the C) instead of using
+# this one dot-relative table (plan §10).
 const FACEOFF_OFFSETS: Array = [
-	[Vector2( 0.0,  1.5), Vector2(-4.0,  2.8), Vector2( 4.0,  2.8),
+	[Vector2( 0.0,  1.5), Vector2(-4.7,  0.9), Vector2( 4.7,  0.9),
 			Vector2(-2.4,  7.0), Vector2( 2.4,  7.0)],  # team 0
-	[Vector2( 0.0, -1.5), Vector2(-4.0, -2.8), Vector2( 4.0, -2.8),
+	[Vector2( 0.0, -1.5), Vector2(-4.7, -0.9), Vector2( 4.7, -0.9),
 			Vector2(-2.4, -7.0), Vector2( 2.4, -7.0)],  # team 1
 ]
 # Depth cap for faceoff placements: no slot spawns closer to the end boards
