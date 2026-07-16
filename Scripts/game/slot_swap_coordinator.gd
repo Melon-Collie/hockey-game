@@ -89,8 +89,10 @@ func apply_confirmed_swap(
 	record.team               = _teams[new_team_id]
 	record.team_slot          = new_slot
 	# Keep the hot-path team lookup tables in sync with the new
-	# assignment. AI dispatch + puck poke-check read from these.
+	# assignment. AI dispatch + puck poke-check read from these; the 5v5
+	# brain reads position_by_peer for the F/D group split.
 	_registry.team_id_by_peer[peer_id] = new_team_id
+	_registry.position_by_peer[peer_id] = new_slot
 	if record.skater != null:
 		_registry.team_id_by_skater[record.skater] = new_team_id
 	record.jersey_color        = jersey

@@ -1578,6 +1578,50 @@ func _slot_label(slot: int) -> String:
 			return "FlankL"
 		AIRoleSlots.Slot.FLANK_R:
 			return "FlankR"
+		AIRoleSlots.Slot.NET_FRONT:
+			return "NetFront"
+		AIRoleSlots.Slot.HIGH_SLOT:
+			return "HighSlot"
+		AIRoleSlots.Slot.POINT_STRONG:
+			return "PointS"
+		AIRoleSlots.Slot.POINT_WEAK:
+			return "PointW"
+		AIRoleSlots.Slot.F2_STRONG:
+			return "F2S"
+		AIRoleSlots.Slot.F2_WEAK:
+			return "F2W"
+		AIRoleSlots.Slot.DP_STRONG:
+			return "DPointS"
+		AIRoleSlots.Slot.DP_WEAK:
+			return "DPointW"
+		AIRoleSlots.Slot.ZONE_D_STRONG:
+			return "ZDS"
+		AIRoleSlots.Slot.ZONE_D_WEAK:
+			return "ZDW"
+		AIRoleSlots.Slot.ZONE_C:
+			return "ZC"
+		AIRoleSlots.Slot.ZONE_W_STRONG:
+			return "ZWS"
+		AIRoleSlots.Slot.ZONE_W_WEAK:
+			return "ZWW"
+		AIRoleSlots.Slot.BREAKOUT_D2:
+			return "BreakD2"
+		AIRoleSlots.Slot.BREAKOUT_C:
+			return "BreakC"
+		AIRoleSlots.Slot.BREAKOUT_STRETCH:
+			return "Stretch"
+		AIRoleSlots.Slot.WIDE_L:
+			return "WideL"
+		AIRoleSlots.Slot.WIDE_R:
+			return "WideR"
+		AIRoleSlots.Slot.TRAILER:
+			return "Trailer"
+		AIRoleSlots.Slot.DVALVE:
+			return "DValve"
+		AIRoleSlots.Slot.DBACK_L:
+			return "DBackL"
+		AIRoleSlots.Slot.DBACK_R:
+			return "DBackR"
 		_:
 			return "-"
 
@@ -2036,7 +2080,36 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			decision = AIRoleFlank.decide(ctx, -1.0)
 		AIRoleSlots.Slot.FLANK_R:
 			decision = AIRoleFlank.decide(ctx, 1.0)
+		# ── 5v5 slots (AIRoleSlots5). Mappings marked "skeleton" ride
+		# AnchorFollow to their researched posts (AIRoleSlots5.slot_anchor)
+		# until their real behavior modules land (plan §9 Phase 3).
+		AIRoleSlots.Slot.NET_FRONT:
+			# The crease-edge screen/backdoor man — FINISHER's argmax already
+			# owns that ice (one-timer camp + tip logic included).
+			decision = AIRoleFinisher.decide(ctx)
+		AIRoleSlots.Slot.HIGH_SLOT:
+			# F3's high float — SUPPORT's goal-side trail read (skeleton).
+			decision = AIRoleSupport.decide(ctx)
+		AIRoleSlots.Slot.ZONE_D_STRONG:
+			# Puck-side low battle: pressure the carrier.
+			decision = AIRolePressure.decide(ctx)
+		AIRoleSlots.Slot.F2_STRONG:
+			# Strong-side wall lane: the mid-lane breakout-pass read shades
+			# to the carrier's side already (skeleton for the lane split).
+			decision = AIRoleForecheck.decide(ctx, false)
+		AIRoleSlots.Slot.BREAKOUT_D2:
+			# Net-front reverse valve — the weak-side breakout outlet's job.
+			decision = AIRoleBreakout.decide(ctx, false)
+		AIRoleSlots.Slot.BREAKOUT_STRETCH:
+			# Weak winger's stretch: OUTLET paces the far blue line legally.
+			decision = AIRoleOutlet.decide(ctx)
+		AIRoleSlots.Slot.BREAKOUT_C, AIRoleSlots.Slot.TRAILER:
+			# Low swing / high-slot trailer — SUPPORT's trail read (skeleton).
+			decision = AIRoleSupport.decide(ctx)
 		_:
+			# POINT_* / DP_* / F2_WEAK / ZONE_* (non-strong) / WIDE_* /
+			# DVALVE / DBACK_* skate to their researched anchors (skeleton),
+			# plus the usual no-slot fallback.
 			decision = AIRoleAnchorFollow.decide(ctx)
 	_prev_role_slot = slot
 	_prev_role_target = decision.target_position
@@ -4700,7 +4773,8 @@ func _is_puck_pressurer_slot() -> bool:
 	var slot: int = _team_brain.get_slot(_peer_id)
 	return (slot == AIRoleSlots.Slot.PRESSURE
 			or slot == AIRoleSlots.Slot.F1_PRESSURE
-			or slot == AIRoleSlots.Slot.CONTAIN)
+			or slot == AIRoleSlots.Slot.CONTAIN
+			or slot == AIRoleSlots.Slot.ZONE_D_STRONG)
 
 
 # The opposing carrier's puck position, or Vector3.INF if no carrier.

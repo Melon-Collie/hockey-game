@@ -27,8 +27,8 @@ signal player_left(name: String, team_color: Color)
 var _players: Dictionary[int, PlayerRecord] = {}
 # Hot-path lookup tables that mirror `_players[peer_id]` fields,
 # maintained alongside `_players` on every spawn / remove / slot-swap
-# (slot swap mutates team_id_by_* only; peer_id_by_skater is stable
-# for the lifetime of the skater).
+# (slot swap mutates team_id_by_* and position_by_peer; peer_id_by_skater
+# is stable for the lifetime of the skater).
 # AI dispatch and PuckController.poke_check both iterate skaters and
 # need O(1) team lookups; the original Callable-resolver pattern paid
 # Callable.call overhead in tight loops. Read live by reference —
@@ -43,6 +43,11 @@ var peer_id_by_skater: Dictionary = {}    # Skater object -> peer_id
 # bot's decision layer looks up caps_by_peer[pid]; a missing entry means the
 # league default (unwired / mid-spawn), which reproduces the prior behaviour.
 var caps_by_peer: Dictionary[int, AISkaterCaps] = {}
+# Live peer_id → lobby team_slot (0–4). team_slot doubles as the position
+# identity (C/LW/RW/LD/RD — see PlayerRules.POSITION_NAMES); the 5v5
+# TeamBrain reads this by reference for the F/D group split and home-side
+# rest bias. Same maintenance contract as team_id_by_peer.
+var position_by_peer: Dictionary[int, int] = {}
 # Flat skater list for the per-tick scan loops (puck interactions, goalie
 # crease-jam checks). Rebuilt on spawn/remove; consumers read the live
 # reference through their skater-getter Callable and must not mutate it.
@@ -154,6 +159,7 @@ func spawn(
 	spawned.controller.set_spawn_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
+	position_by_peer[peer_id] = record.team_slot
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
 	refresh_caps(peer_id)
@@ -247,6 +253,7 @@ func spawn_bot(
 	spawned.controller.set_spawn_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
+	position_by_peer[peer_id] = record.team_slot
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
 	refresh_caps(peer_id)
@@ -273,6 +280,7 @@ func remove(peer_id: int) -> PlayerRecord:
 	_players.erase(peer_id)
 	team_id_by_peer.erase(peer_id)
 	caps_by_peer.erase(peer_id)
+	position_by_peer.erase(peer_id)
 	if record.skater != null:
 		team_id_by_skater.erase(record.skater)
 		peer_id_by_skater.erase(record.skater)
@@ -425,6 +433,7 @@ func get_slot_roster() -> Array[Dictionary]:
 func clear_state() -> void:
 	_players.clear()
 	team_id_by_peer.clear()
+	position_by_peer.clear()
 	team_id_by_skater.clear()
 	peer_id_by_skater.clear()
 	_skaters_cache.clear()
