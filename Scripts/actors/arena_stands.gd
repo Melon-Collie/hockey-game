@@ -122,8 +122,11 @@ extends Node3D
 		_request_rebuild()
 
 @export_group("")
+# Editor escape hatch: also drops the static layout cache, so geometry *code*
+# edits mid-session can't be masked by a stale cached bowl.
 @export var rebuild: bool = false:
 	set(_v):
+		_layout_cache.clear()
 		_request_rebuild()
 
 # Deterministic seed so the editor preview matches the runtime build.
@@ -175,13 +178,30 @@ var _head_palette: Array[Color] = [
 ]
 
 
-var _crowd_material: ShaderMaterial = null  # shared by both crowd MultiMeshes; survives rebuilds
+# Shared by both crowd MultiMeshes and — static — across arena instances:
+# the cached body/head meshes embed this material, so it must be the same
+# object for every ArenaStands the process ever builds, or excitement writes
+# from a fresh arena would land on a dead material.
+static var _crowd_material: ShaderMaterial = null
 var _excitement: float = 0.0
 var _excite_tween: Tween = null
+
+# geometry key → layout dict {terrace_mesh, body_mm, head_mm, paint_key}.
+# Everything in a layout is color-independent and deterministic (fixed
+# _SEED), so it's built once per geometry-param set and reused for the
+# process lifetime — a scene change's rebuild (free play → lobby → game)
+# becomes at most a crowd repaint, and a same-colors rebuild skips even
+# that. Bounded by clearing on editor param churn (steady state is one
+# entry per crowd-density level).
+static var _layout_cache: Dictionary = {}
 
 
 func _ready() -> void:
 	_rebuild()
+	# The crowd material is static (see its doc): a bowl mid-celebration when
+	# the scene changed would otherwise carry its excitement into the fresh
+	# arena. New bowls start at the idle murmur.
+	_set_excitement(0.0)
 	var gm: Node = get_node_or_null("/root/GameManager")
 	if gm == null:
 		return
@@ -225,14 +245,48 @@ func _rebuild() -> void:
 		return
 	for child: Node in get_children():
 		child.queue_free()
-	_build_terraces()
-	_build_spectators()
+	var layout: Dictionary = _get_or_build_layout()
+	_add_terraces(layout.terrace_mesh)
+	_add_spectators(layout)
 	_build_benches()
+
+
+# ── Layout cache ─────────────────────────────────────────────────────────────
+
+# Every param that moves geometry, transforms, or the AABB. Colors and fan
+# ratios are deliberately absent — they only repaint.
+func _geometry_key() -> String:
+	return str([rink_length, rink_width, corner_radius, stands_base_y,
+			num_terraces, tread_depth, riser_height, base_outward_offset,
+			corner_segments, spectator_spacing, spectator_inset_from_riser,
+			spectator_yaw_jitter_deg, spectator_y_jitter])
+
+
+# Everything the paint pass reads: the four team colors + the mix ratios.
+func _paint_key() -> String:
+	return str([home_color, home_color_secondary, away_color,
+			away_color_secondary, home_fan_ratio, away_fan_ratio,
+			secondary_color_ratio, team_cap_ratio])
+
+
+func _get_or_build_layout() -> Dictionary:
+	var key: String = _geometry_key()
+	if _layout_cache.has(key):
+		return _layout_cache[key]
+	if _layout_cache.size() >= 4:
+		_layout_cache.clear()
+	var layout: Dictionary = {
+		"terrace_mesh": _build_terrace_mesh(),
+		"paint_key": "",
+	}
+	_fill_spectator_layout(layout)
+	_layout_cache[key] = layout
+	return layout
 
 
 # ── Terrace geometry ─────────────────────────────────────────────────────────
 
-func _build_terraces() -> void:
+func _build_terrace_mesh() -> ArrayMesh:
 	# Compute step counts ONCE based on the base path (no offset). All rings
 	# share the same sample count so tread quads stay aligned between the
 	# inner and outer perimeter of each terrace.
@@ -249,7 +303,12 @@ func _build_terraces() -> void:
 		_emit_tread(st, inner_pts, outer_pts, y_top)
 		_emit_riser(st, inner_pts, y_bot, y_top)
 	st.generate_normals()
-	var mesh: ArrayMesh = st.commit()
+	return st.commit()
+
+
+# Concrete color lives on a per-instance material_override, not in the cached
+# mesh, so a concrete_color tweak repaints without invalidating the layout.
+func _add_terraces(mesh: ArrayMesh) -> void:
 	var mi: MeshInstance3D = MeshInstance3D.new()
 	mi.mesh = mesh
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
@@ -371,27 +430,26 @@ func _append_arc(pts: PackedVector2Array, center: Vector2, radius: float,
 
 # ── Spectator MultiMesh ──────────────────────────────────────────────────────
 
-func _build_spectators() -> void:
-	# Two MultiMesh instances share transforms: bodies tinted with the
-	# team-mix color, heads tinted from the skin/hat palette. One extra
-	# draw call vs. a combined mesh, but it lets the head pick a color
-	# independent of the body without a custom shader.
-	var body_mesh: ArrayMesh = _build_body_mesh()
-	var head_mesh: ArrayMesh = _build_head_mesh()
+# Build the color-independent half of the crowd into `layout`: the two
+# MultiMeshes with meshes, transforms, anim data, and AABB. Two MultiMesh
+# instances share transforms: bodies tinted with the team-mix color, heads
+# tinted from the skin/hat palette. One extra draw call vs. a combined mesh,
+# but it lets the head pick a color independent of the body without a custom
+# shader. Colors stay default until the first _paint_spectators pass (a fresh
+# layout's paint_key is "").
+func _fill_spectator_layout(layout: Dictionary) -> void:
 	var body_mm: MultiMesh = MultiMesh.new()
 	body_mm.transform_format = MultiMesh.TRANSFORM_3D
 	body_mm.use_colors = true
 	body_mm.use_custom_data = true
-	body_mm.mesh = body_mesh
+	body_mm.mesh = _build_body_mesh()
 	var head_mm: MultiMesh = MultiMesh.new()
 	head_mm.transform_format = MultiMesh.TRANSFORM_3D
 	head_mm.use_colors = true
 	head_mm.use_custom_data = true
-	head_mm.mesh = head_mesh
+	head_mm.mesh = _build_head_mesh()
 
 	var transforms: Array[Transform3D] = []
-	var body_colors: Array[Color] = []
-	var head_colors: Array[Color] = []
 	var anim_data: Array[Color] = []
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = _SEED
@@ -414,9 +472,6 @@ func _build_spectators() -> void:
 					+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
 			var spectator_basis: Basis = Basis(Vector3.UP, yaw)
 			transforms.append(Transform3D(spectator_basis, pos))
-			var picked: Array[Color] = _pick_spectator_colors(rng)
-			body_colors.append(picked[0])
-			head_colors.append(picked[1])
 			# Animation roll (crowd.gdshader INSTANCE_CUSTOM): phase de-sync,
 			# sway amplitude, hop amplitude. Same data on body and head so the
 			# two draw calls move as one person.
@@ -431,10 +486,8 @@ func _build_spectators() -> void:
 	head_mm.instance_count = n
 	for i: int in n:
 		body_mm.set_instance_transform(i, transforms[i])
-		body_mm.set_instance_color(i, body_colors[i])
 		body_mm.set_instance_custom_data(i, anim_data[i])
 		head_mm.set_instance_transform(i, transforms[i])
-		head_mm.set_instance_color(i, head_colors[i])
 		head_mm.set_instance_custom_data(i, anim_data[i])
 
 	# Godot's auto-AABB for MultiMesh is unreliable when transforms are pushed
@@ -445,9 +498,21 @@ func _build_spectators() -> void:
 	var bowl_aabb: AABB = _spectator_bowl_aabb()
 	body_mm.custom_aabb = bowl_aabb
 	head_mm.custom_aabb = bowl_aabb
+	layout["body_mm"] = body_mm
+	layout["head_mm"] = head_mm
+
+
+# Attach the cached MultiMeshes and repaint only if the colors/ratios moved
+# since the layout was last painted. A rebuild with unchanged colors (e.g.
+# re-entering a scene) reattaches without touching a single instance.
+func _add_spectators(layout: Dictionary) -> void:
+	var paint_key: String = _paint_key()
+	if layout.paint_key != paint_key:
+		_paint_spectators(layout.body_mm, layout.head_mm)
+		layout.paint_key = paint_key
 
 	var body_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-	body_mmi.multimesh = body_mm
+	body_mmi.multimesh = layout.body_mm
 	body_mmi.name = "SpectatorBodies"
 	# The crowd casts no shadows. Thousands of instances × the 8 shadow-casting
 	# ceiling spotlights (RinkArena.tscn) is the arena's biggest shadow-map cost,
@@ -457,10 +522,22 @@ func _build_spectators() -> void:
 	body_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(body_mmi)
 	var head_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-	head_mmi.multimesh = head_mm
+	head_mmi.multimesh = layout.head_mm
 	head_mmi.name = "SpectatorHeads"
 	head_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(head_mmi)
+
+
+# Roll body/head colors for every spectator. Own rng stream (same _SEED) so
+# the fan-mix assignment is deterministic and identical across repaints of
+# the same layout.
+func _paint_spectators(body_mm: MultiMesh, head_mm: MultiMesh) -> void:
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = _SEED
+	for i: int in body_mm.instance_count:
+		var picked: Array[Color] = _pick_spectator_colors(rng)
+		body_mm.set_instance_color(i, picked[0])
+		head_mm.set_instance_color(i, picked[1])
 
 
 # Conservative bounds around every spectator instance, in ArenaStands-local
