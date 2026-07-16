@@ -3634,6 +3634,10 @@ func _on_game_over() -> void:
 		if _achievements_active():
 			if _achievements != null:
 				_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
+				# Roster achievements — read the live Steam lobby membership so any
+				# machine (host or client) can award "played a game with X".
+				_achievements.evaluate_roster(
+						SteamManager.lobby_member_steam_ids(), SteamManager.steam_id)
 			if _stat_recorder != null:
 				_stat_recorder.record_game(local.stats, outcome)
 				if _achievements != null:

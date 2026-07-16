@@ -297,6 +297,21 @@ func open_invite_overlay() -> void:
 		Steam.activateGameOverlayInviteDialog(current_lobby_id)
 
 
+# SteamID64s of every member currently in our lobby (including the local user).
+# Empty when Steam is unavailable or we're not in a lobby — so offline / free
+# play / headless CI simply report no roster. Used by the roster achievements
+# ("play a game with X"), which every machine can evaluate locally since the
+# lobby membership is visible to all members.
+func lobby_member_steam_ids() -> Array[int]:
+	var ids: Array[int] = []
+	if not is_available or current_lobby_id == 0:
+		return ids
+	var count: int = Steam.getNumLobbyMembers(current_lobby_id)
+	for i: int in count:
+		ids.append(Steam.getLobbyMemberByIndex(current_lobby_id, i))
+	return ids
+
+
 # ── Steam Cloud (Remote Storage) ─────────────────────────────────────────────
 # Mitts mirrors one file to Steam Cloud — the player's preferences — so settings
 # follow the player across machines. All ISteamRemoteStorage access funnels

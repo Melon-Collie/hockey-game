@@ -354,6 +354,9 @@ func on_goal_scored_into(defending_team: Team) -> void:
 		var record: PlayerRecord = _registry.get_record(scorer_id)
 		if record != null:
 			record.stats.goals += 1
+			# Overtime winner: any non-own goal in sudden-death OT wins the game.
+			if not is_own_goal and _state_machine.is_overtime():
+				record.stats.ot_goals += 1
 			# Tag one-timer / tip goal flavor BEFORE clear_pending() below wipes
 			# the shot-tracker state these reads depend on.
 			_tag_goal_flavor(record, scorer_id, carrier_peer_id, is_own_goal)

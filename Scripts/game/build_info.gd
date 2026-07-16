@@ -99,7 +99,10 @@ const VERSION: String = "dev"
 # v26: stats packet grew — PlayerStats.to_array() 11 -> 13 (one_timer_goals,
 #      tip_goals: host-tagged goal-flavor counters driving the One-Timer /
 #      Redirect achievements), so STATS_PLAYER_RECORD_SIZE 12 -> 14.
-const PROTOCOL_VERSION: int = 26
+# v27: stats packet grew — PlayerStats.to_array() 13 -> 14 (ot_goals, host-tagged
+#      overtime-winner counter driving the Overtime Hero achievement), so
+#      STATS_PLAYER_RECORD_SIZE 14 -> 15.
+const PROTOCOL_VERSION: int = 27
 
 
 func _ready() -> void:

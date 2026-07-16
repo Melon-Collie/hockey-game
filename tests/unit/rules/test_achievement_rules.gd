@@ -134,6 +134,46 @@ func test_pickpocket_unlocks_at_five_takeaways() -> void:
 	assert_has(ids, Achievements.PICKPOCKET)
 
 
+func test_overtime_hero_unlocks_on_an_ot_goal() -> void:
+	var s := _stats(1, 0, 2, 0, 0)
+	s.ot_goals = 1
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(s), _ctx("win", 3, 2))
+	assert_has(ids, Achievements.OVERTIME_HERO)
+
+
+func test_regulation_goal_is_no_overtime_hero() -> void:
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(2, 0, 4, 0, 0)), _ctx("win", 2, 0))
+	assert_does_not_have(ids, Achievements.OVERTIME_HERO)
+
+
+# ── roster ("play with X") ───────────────────────────────────────────────────
+func test_play_with_buukie_unlocks_when_present() -> void:
+	# A non-Buukie local playing a game whose roster includes Buukie earns it.
+	var ids := AchievementRules.earned_roster(
+			[111, Achievements.BUUKIE_STEAM_ID, 222], 111)
+	assert_has(ids, Achievements.PLAY_WITH_BUUKIE)
+
+
+func test_buukie_cannot_earn_his_own_achievement() -> void:
+	# Local player IS Buukie — the roster includes him but he can't self-award it.
+	var ids := AchievementRules.earned_roster(
+			[Achievements.BUUKIE_STEAM_ID, 222], Achievements.BUUKIE_STEAM_ID)
+	assert_does_not_have(ids, Achievements.PLAY_WITH_BUUKIE)
+
+
+func test_no_buukie_in_lobby_earns_nothing() -> void:
+	var ids := AchievementRules.earned_roster([111, 222, 333], 111)
+	assert_does_not_have(ids, Achievements.PLAY_WITH_BUUKIE)
+
+
+func test_roster_with_no_local_steam_id_earns_nothing() -> void:
+	# Steam unavailable (local id 0) must not false-unlock even if X is "present".
+	var ids := AchievementRules.earned_roster([Achievements.BUUKIE_STEAM_ID], 0)
+	assert_eq(ids.size(), 0)
+
+
 # ── compound (special) ───────────────────────────────────────────────────────
 func test_shutout_requires_win_and_zero_against() -> void:
 	var ids := AchievementRules.earned_game(

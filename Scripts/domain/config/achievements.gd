@@ -32,6 +32,9 @@ class_name Achievements
 ##               `key` names the moment and `min` (optional) is its threshold;
 ##               AchievementService's live hooks read it. Listed here so the id,
 ##               docs, and threshold all live in one place.
+##   "roster"  — earned by playing a match whose roster includes `steam_id`, and
+##               NOT by that steam_id themselves (a "play WITH person X" award).
+##               Evaluated at game-over from the lobby members (any online mode).
 
 # ── API Names (Steamworks "API Name") ────────────────────────────────────────
 # Live-fired ids are referenced by these constants from AchievementService; the
@@ -46,8 +49,10 @@ const FREIGHT_TRAIN := "ACH_FREIGHT_TRAIN"
 const FIRST_WIN := "ACH_FIRST_WIN"
 const ONE_TIMER := "ACH_ONE_TIMER"
 const TIP_IN := "ACH_TIP_IN"
+const OVERTIME_HERO := "ACH_OVERTIME_HERO"
 const FACEOFF_BOSS := "ACH_FACEOFF_BOSS"
 const PICKPOCKET := "ACH_PICKPOCKET"
+const PLAY_WITH_BUUKIE := "ACH_PLAY_WITH_BUUKIE"
 const SNIPER := "ACH_SNIPER"
 const SETUP_ARTIST := "ACH_SETUP_ARTIST"
 const ENFORCER := "ACH_ENFORCER"
@@ -56,6 +61,10 @@ const VETERAN := "ACH_VETERAN"
 # from the tutorial / free-play build paths; see AchievementService).
 const STUDENT := "ACH_STUDENT"
 const CUSTOM_BUILD := "ACH_CUSTOM_BUILD"
+
+# The SteamID64 the "play with" roster achievement is keyed to. Kept as a named
+# constant so the one place it appears is self-documenting.
+const BUUKIE_STEAM_ID := 76561198027551159
 
 # The full registry. See the header for `cond` semantics.
 const ALL: Array[Dictionary] = [
@@ -107,6 +116,14 @@ const ALL: Array[Dictionary] = [
 		"id": TIP_IN, "name": "Redirect", "hidden": false,
 		"desc": "Tip a teammate's shot into the net.",
 		"cond": {"kind": "game", "field": "tip_goals", "min": 1},
+	},
+	{
+		# Score in sudden-death OT — always the game-winner. ot_goals is host-tagged
+		# in PhaseCoordinator (goal while GameStateMachine.is_overtime()) and
+		# broadcast like the counters above.
+		"id": OVERTIME_HERO, "name": "Overtime Hero", "hidden": false,
+		"desc": "Score the overtime winner.",
+		"cond": {"kind": "game", "field": "ot_goals", "min": 1},
 	},
 	{
 		# faceoff_wins is already a broadcast game stat — no plumbing, just a bar.
@@ -163,6 +180,15 @@ const ALL: Array[Dictionary] = [
 		"id": CUSTOM_BUILD, "name": "Make It Yours", "hidden": false,
 		"desc": "Edit your player's build.",
 		"cond": {"kind": "event", "key": "build_edited"},
+	},
+	# ── Roster (who you played with) ─────────────────────────────────────────
+	{
+		# Play an online game whose lobby includes Buukie. Can't be earned by
+		# Buukie himself (see AchievementRules.earned_roster). Evaluated at
+		# game-over from the Steam lobby members.
+		"id": PLAY_WITH_BUUKIE, "name": "Buukie's Buddy", "hidden": true,
+		"desc": "Play an online game with Buukie.",
+		"cond": {"kind": "roster", "steam_id": BUUKIE_STEAM_ID},
 	},
 	# ── Career milestones (competitive games only — see game_manager gate) ────
 	{

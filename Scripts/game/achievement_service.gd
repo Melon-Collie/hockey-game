@@ -27,6 +27,15 @@ func evaluate_single_game(stats: PlayerStats, outcome: String,
 		unlock(id)
 
 
+# Roster achievements — "play a game with person X". `present_steam_ids` is the
+# match's SteamID64 set (the Steam lobby members); `local_steam_id` is this
+# player. Evaluated at game-over in any online mode. Empty inputs (offline / no
+# Steam) earn nothing.
+func evaluate_roster(present_steam_ids: Array, local_steam_id: int) -> void:
+	for id in AchievementRules.earned_roster(present_steam_ids, local_steam_id):
+		unlock(id)
+
+
 # Career-threshold achievements, evaluated against current lifetime totals.
 # `career_totals` comes from Steam User Stats (SteamStatRecorder.totals), already
 # updated with this game — so crossing a threshold unlocks on the game you cross

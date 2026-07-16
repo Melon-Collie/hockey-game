@@ -37,8 +37,10 @@ var game_winning_goals: int = 0
 #                     ShotOnGoalTracker.pending_is_one_timer at goal time).
 #   tip_goals       — goals scored by redirecting a teammate's in-flight shot
 #                     (the scorer was the last, deflecting toucher, not the shooter).
+#   ot_goals        — goals scored in sudden-death overtime (always the winner).
 var one_timer_goals: int = 0
 var tip_goals: int = 0
+var ot_goals: int = 0
 # Tracked locally on every peer (game_manager._physics_process) rather than
 # host-authoritative + broadcast like the counters above. Each peer's own
 # value is what ships to Supabase, since report() runs per-peer at game-over.
@@ -52,7 +54,7 @@ var toi_seconds: float = 0.0
 func to_array() -> Array:
 	return [goals, assists, shots_on_goal, hits, shots_blocked,
 			hits_taken, takeaways, giveaways, faceoff_wins, faceoff_losses,
-			game_winning_goals, one_timer_goals, tip_goals]
+			game_winning_goals, one_timer_goals, tip_goals, ot_goals]
 
 static func from_array(a: Array) -> PlayerStats:
 	var s := PlayerStats.new()
@@ -78,6 +80,7 @@ func update_from_array(a: Array) -> void:
 	game_winning_goals = a[10]
 	one_timer_goals = a[11]
 	tip_goals = a[12]
+	ot_goals = a[13]
 
 func to_dict() -> Dictionary:
 	return {

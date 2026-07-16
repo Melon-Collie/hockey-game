@@ -22,6 +22,7 @@ static func game_dict(stats: PlayerStats) -> Dictionary:
 		"faceoff_wins": stats.faceoff_wins,
 		"one_timer_goals": stats.one_timer_goals,
 		"tip_goals": stats.tip_goals,
+		"ot_goals": stats.ot_goals,
 	}
 
 
@@ -52,6 +53,28 @@ static func earned_career(career: Dictionary) -> Array[String]:
 		if cond.get("kind", "") != "career":
 			continue
 		if int(career.get(cond["field"], 0)) >= int(cond["min"]):
+			out.append(String(entry["id"]))
+	return out
+
+
+# Ids earned from the match roster — a "roster" cond names a `steam_id` that must
+# be present among the players, and is NOT earned by that steam_id themselves (a
+# "play WITH person X" achievement can't be self-awarded). `present_steam_ids` is
+# the set of SteamID64s in the match (e.g. the lobby members); `local_steam_id`
+# is the evaluating player. An empty/zero local id (Steam unavailable) earns
+# nothing. Evaluated at game-over alongside the single-game sweep.
+static func earned_roster(present_steam_ids: Array, local_steam_id: int) -> Array[String]:
+	var out: Array[String] = []
+	if local_steam_id == 0:
+		return out
+	for entry in Achievements.ALL:
+		var cond: Dictionary = entry["cond"]
+		if cond.get("kind", "") != "roster":
+			continue
+		var target: int = int(cond.get("steam_id", 0))
+		if target == 0 or local_steam_id == target:
+			continue  # the named player can't earn their own "play with me"
+		if present_steam_ids.has(target):
 			out.append(String(entry["id"]))
 	return out
 
