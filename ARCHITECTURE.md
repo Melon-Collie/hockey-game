@@ -197,7 +197,7 @@ Blade placement goes through a custom top-hand inverse-kinematics solver (`TopHa
 
 **Upper body twist:** Rotates independently to express the angle between facing and blade direction (`upper_body_twist_ratio = 0.8`).
 
-**Wall clamping:** The solved blade is shortened by `RayCast3D` before being written. If squeeze exceeds `wall_squeeze_threshold`, the puck releases along the wall normal.
+**Wall clamping:** The solved blade is shortened by `RayCast3D` before being written. If squeeze exceeds `wall_squeeze_threshold`, the puck releases *along the boards* in the carrier's travel direction (`ShotMechanics.wall_pin_release_direction` — the wall tangent, signed by carrier momentum), not straight out along the inward wall normal, so a puck lost on the wall dribbles down the boards instead of squirting into the slot.
 
 **Network:** Both `blade_position` and `top_hand_position` are broadcast per world-state tick and interpolated on clients so remote players show a consistent stick pose.
 

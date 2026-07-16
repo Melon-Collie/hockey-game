@@ -407,6 +407,44 @@ func test_wall_pin_ignored_at_threshold() -> void:
 	assert_false(ShotMechanics.should_release_on_wall_pin(0.3, 0.3), "equal is not above")
 
 
+# ── Wall-pin release direction ───────────────────────────────────────────────
+# Convention: wall_normal points INWARD (away from the boards). A puck lost on
+# the wall should squirt ALONG the boards in the carrier's travel direction.
+
+func test_wall_pin_release_runs_along_boards_not_inward() -> void:
+	# Boards on +X (normal points inward toward -X), carrier skating in +Z.
+	var wall_normal := Vector3(-1, 0, 0)
+	var carrier_vel := Vector3(0.2, 0, 5.0)  # mostly along the wall (+Z)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, carrier_vel)
+	assert_almost_eq(dir.length(), 1.0, 0.001, "normalized")
+	assert_almost_eq(dir.z, 1.0, 0.001, "released along the boards (+Z)")
+	assert_almost_eq(dir.x, 0.0, 0.001, "no inward/outward component")
+
+func test_wall_pin_release_signs_by_carrier_direction() -> void:
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3(0, 0, -4.0))
+	assert_almost_eq(dir.z, -1.0, 0.001, "carrier going -Z loses it -Z along the boards")
+
+func test_wall_pin_release_ignores_into_wall_velocity() -> void:
+	# Velocity is purely into the wall (+X) — no along-wall component → inward normal.
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3(6.0, 0, 0))
+	assert_almost_eq(dir.x, -1.0, 0.001, "pinned dead into the wall frees along the inward normal")
+
+func test_wall_pin_release_no_along_momentum_falls_back_inward() -> void:
+	var wall_normal := Vector3(0, 0, -1)  # boards on +Z, inward toward -Z
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3.ZERO)
+	assert_eq(dir, Vector3(0, 0, -1), "no momentum → inward normal so the puck still frees")
+
+func test_wall_pin_release_no_wall_normal_uses_heading() -> void:
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(Vector3.ZERO, Vector3(3.0, 0, 0))
+	assert_almost_eq(dir.x, 1.0, 0.001, "degenerate normal → carrier heading")
+
+func test_wall_pin_release_fully_degenerate_returns_zero() -> void:
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(Vector3.ZERO, Vector3.ZERO)
+	assert_eq(dir, Vector3.ZERO, "no normal and no momentum → ZERO (caller fallback)")
+
+
 # ── Follow-through aim blend ──────────────────────────────────────────────────
 
 func test_follow_through_aim_holds_shot_line_before_tail() -> void:

@@ -229,9 +229,14 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	if _controller.has_puck:
 		var squeeze: float = _skater.get_wall_squeeze(intended_blade, wall_clamped)
 		if ShotMechanics.should_release_on_wall_pin(squeeze, _skater.wall_squeeze_threshold):
+			# Lose it ALONG the boards in the carrier's travel direction, not straight
+			# out into the slot — the wall normal points inward, so releasing along it
+			# would fire the puck away from the wall (an unnatural giveaway).
 			var wall_normal: Vector3 = _skater.get_blade_wall_normal()
-			if wall_normal.length() > 0.0:
-				_controller._do_release(wall_normal.normalized(), 3.0)
+			var release_dir: Vector3 = ShotMechanics.wall_pin_release_direction(
+					wall_normal, _skater.velocity)
+			if release_dir.length() > 0.0:
+				_controller._do_release(release_dir, 3.0)
 			else:
 				var nudge: Vector3 = _skater.global_transform.basis * (-wall_clamped.normalized())
 				_controller._do_release(nudge.normalized(), 3.0)
