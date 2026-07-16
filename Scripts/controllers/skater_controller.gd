@@ -58,8 +58,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # for every player in v1 (the hit strength already reflects the attacker's Size/
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
-@export var stagger_min_impulse: float = 3.0       # m/s transfer delta below which a hit doesn't stagger
-@export var stagger_ref_impulse: float = 11.0      # m/s transfer delta treated as a full-strength check
+# Grounded to the Slice B inelastic magnitudes: the delivered victim impulse is
+# closing_speed × transfer × m_a/(m_a+m_b), so a committed equal-mass hit at ~6–10
+# m/s closing lands ~1.4–2.3 m/s and an enforcer/fast hit ~3.5–5. The ladder is set
+# to that scale (was 3/11 on the old weight-ratio model, which never fired). Still
+# feel tunables — nudge from here once you've played it.
+@export var stagger_min_impulse: float = 1.0       # m/s transfer delta below which a hit doesn't stagger
+@export var stagger_ref_impulse: float = 2.5       # m/s transfer delta treated as a full-strength check
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
 @export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
 @export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
@@ -84,11 +89,20 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # stagger_timer. NOTE: on the OLD magnitude scale — wants a downward re-tune with
 # the stagger thresholds once the Slice B inelastic feel is dialed. Set
 # knockdown_impulse very high (or 0) to effectively disable knockdowns.
-@export var knockdown_impulse: float = 11.0        # m/s victim impulse above which a hit knocks down
-@export var knockdown_ref_impulse: float = 16.0    # m/s impulse of a maximal (longest) knockdown
+@export var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down
+@export var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
 @export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
 @export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
 @export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
+# Knockdown pose (cosmetic): a downed player crumples — the body drops toward the
+# ice, the legs go limp, and the torso reels hard in the hit direction (an
+# amplified stagger recoil). All driven off the replicated knockdown_timer, so it
+# renders identically on every machine and through reconcile, like the stagger
+# stumble. knockdown_getup_seconds is the tail window over which the pose eases back
+# up (the get-up) — the pose holds full while more than this much time remains.
+@export var knockdown_pose_drop_m: float = 0.85    # how far the body sinks while down
+@export var knockdown_fold_deg: float = 50.0       # peak torso reel (added onto the recoil) while down
+@export var knockdown_getup_seconds: float = 0.4   # tail over which the down pose eases back up
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
