@@ -109,7 +109,12 @@ const VERSION: String = "dev"
 #     signal, moved off brake onto the Hit button). No block-size change (spare bit),
 #     but a client now reads a remote victim's brace and a remote attacker's
 #     full-vs-passive delivery from it, so a bump is required.
-const PROTOCOL_VERSION: int = 28
+# v29: two new host-broadcast cue RPCs (notify_post_hit / notify_goalie_hit) so a
+#     puck off the post or a pad/goalie save is heard by every peer, not only those
+#     whose local puck prediction registered the contact (matching the existing
+#     deflection / board / body-block broadcasts). New RPC methods shift the
+#     name-sorted RPC indices, so a mixed-build pair would call the wrong method.
+const PROTOCOL_VERSION: int = 29
 
 
 func _ready() -> void:

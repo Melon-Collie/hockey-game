@@ -100,6 +100,8 @@ signal stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_del
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal board_hit_received(position: Vector3)
 signal goal_body_hit_received(position: Vector3)
+signal post_hit_received(position: Vector3)
+signal goalie_hit_received(position: Vector3)
 signal deflection_received(position: Vector3)
 signal body_block_received(position: Vector3)
 signal puck_strip_received(position: Vector3)
@@ -2202,6 +2204,22 @@ func send_goal_body_hit_to_all(position: Vector3) -> void:
 @rpc("authority", "unreliable")
 func notify_goal_body_hit(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: goal_body_hit_received.emit(pos), [position], false)
+
+func send_post_hit_to_all(position: Vector3) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_post_hit.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_post_hit(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: post_hit_received.emit(pos), [position], false)
+
+func send_goalie_hit_to_all(position: Vector3) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_goalie_hit.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_goalie_hit(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: goalie_hit_received.emit(pos), [position], false)
 
 func send_deflection_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
