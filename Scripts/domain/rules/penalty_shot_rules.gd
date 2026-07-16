@@ -111,6 +111,10 @@ static func is_goal(
 # `forward_speed` has stayed at or below `rest_speed` since starting;
 # `time_since_start` is how long the rush has been live (seconds since `started`
 # latched), used to hold the dead-puck rules off during the running-start grace.
+# `shot_released` latches once the puck has left the shooter's blade (shot away,
+# poked, or knocked loose): from then on the keep-driving rules retire entirely —
+# it's a shot in flight, resolved only by crossing the goal line (goal/miss) or
+# the caller's safety timeout, so the shooter is free to stop or peel off.
 static func classify(
 		puck_x: float,
 		puck_y: float,
@@ -119,6 +123,7 @@ static func classify(
 		current_progress: float,
 		max_progress: float,
 		started: bool,
+		shot_released: bool,
 		stall_time: float,
 		time_since_start: float,
 		attack_dir_z: float,
@@ -130,6 +135,10 @@ static func classify(
 	# Crossed the line but not a goal → wide or over the net: shot complete, miss.
 	if crossed_goal_plane(puck_z, goal_line_z, attack_dir_z):
 		return Outcome.MISS
+	# Puck has left the blade → shot in flight. The keep-driving rules no longer
+	# apply; only crossing the line (above) or the caller's timeout ends it.
+	if shot_released:
+		return Outcome.LIVE
 	# Dead-puck rules don't arm until the shooter has actually started the rush.
 	if not started:
 		return Outcome.LIVE
