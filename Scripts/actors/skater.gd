@@ -738,13 +738,14 @@ func _resolve_player_collisions() -> void:
 		if absf(agg_metric) <= 0.0001 and collision_tiebreak_id > other.collision_tiebreak_id:
 			continue
 		# Transfer (0..1) = attacker (self) delivery × hit-button commit gate × victim
-		# brace. The hit gate is the "without the hit button, hits shouldn't be that
-		# powerful" rule (full when committing, hit_passive_transfer_mult otherwise);
-		# the brace reads the REPLICATED brake_intent (not is_braced) so it evaluates
-		# identically on every machine.
+		# brace. The Hit button is BOTH sides of the physical battle: committing (self)
+		# delivers full transfer instead of hit_passive_transfer_mult ("deal more"), and
+		# committing (the victim) braces to cut the delivered impulse ("take less") —
+		# the brace moved off brake onto the same button. Both read the REPLICATED
+		# hit_committed so they evaluate identically on every machine.
 		var atk_transfer: float = body_check_transfer \
 				* (1.0 if hit_committed else hit_passive_transfer_mult)
-		var brace: float = other.body_check_brace_resistance if other.brake_intent else 1.0
+		var brace: float = other.body_check_brace_resistance if other.hit_committed else 1.0
 		SkaterCollisionRules.resolve(_collision_result,
 				global_position, velocity, weight, my_radius,
 				other.global_position, other.velocity, other.weight, other.collision_radius(),

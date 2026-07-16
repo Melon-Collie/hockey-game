@@ -105,7 +105,11 @@ const VERSION: String = "dev"
 #     stagger_timer, so a hard body check that knocks the victim down replicates and
 #     the local victim's predicted knockdown survives reconcile (same rail/reason as
 #     stagger's v10 add).
-const PROTOCOL_VERSION: int = 27
+# v28: intent byte gains bit [6] — hit_committed (the body-check brace/delivery
+#     signal, moved off brake onto the Hit button). No block-size change (spare bit),
+#     but a client now reads a remote victim's brace and a remote attacker's
+#     full-vs-passive delivery from it, so a bump is required.
+const PROTOCOL_VERSION: int = 28
 
 
 func _ready() -> void:

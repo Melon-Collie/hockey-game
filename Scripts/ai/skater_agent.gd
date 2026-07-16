@@ -123,6 +123,10 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	input.elevation_level = 0
 	input.block_held = false
 	input.stick_lift_held = false
+	# Hit commit defaults off every tick (reused scratch): only the body-check
+	# commit branch sets it, so a leaked true would keep a bot bracing / draining
+	# stamina after the check is over.
+	input.hit_held = false
 	# Fire-once edge: PASS_PRESSED's one-tick release path (the dump) sets it on its
 	# release tick and nothing else clears it, so a latched true would fire an
 	# instant quick shot on every subsequent carry tick.

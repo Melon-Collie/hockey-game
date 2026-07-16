@@ -73,7 +73,7 @@ var _poke_claim_floor: float = 0.0
 # buffers via this provider) — so the replayed trajectory matches host authority
 # rather than a stale impulse captured against the live (interpolated) positions.
 # Provider: func(exclude_skater: Skater, host_ts: float) -> Array of
-# {skater, position, velocity, brake}. Set by GameManager (_sample_historical_others).
+# {skater, position, velocity, hit}. Set by GameManager (_sample_historical_others).
 var _historical_others_provider: Callable = Callable()
 # Reused across pairs during replay re-resolution — no per-pair allocation.
 var _replay_collision_result: SkaterCollisionRules.Result = SkaterCollisionRules.Result.new()
@@ -559,7 +559,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# recorded-impulse slot) offset the geometry ~one tick of travel and mis-phased
 		# dvel; a fixed recorded vector didn't care, but position-based re-resolution
 		# does. sep still lands before the clamps below. Replaces the impulse bridge.
-		_replay_resolve_body_checks(input.host_timestamp, input.hit_held, input.brake)
+		_replay_resolve_body_checks(input.host_timestamp, input.hit_held)
 		# Clamp to the rink boundary after every replay step — the same analytic
 		# projection the live tick applies (boards are off the skater's physics
 		# mask). Without this, a board interaction that differed by even one frame
@@ -690,7 +690,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 # frame). The remote attacker's hit-commit isn't on the wire, so it stays passive
 # here exactly as the live client prediction assumed — the host's real value
 # reconciles on the next ack.
-func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_brake: bool) -> void:
+func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool) -> void:
 	if not _historical_others_provider.is_valid():
 		return
 	var others: Array = _historical_others_provider.call(skater, host_ts)
@@ -700,7 +700,7 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_bra
 			continue
 		var opos: Vector3 = rec["position"]
 		var ovel: Vector3 = rec["velocity"]
-		var obrake: bool = rec["brake"]
+		var ohit: bool = rec["hit"]   # the other's replicated hit-commit (brace / delivery)
 		var d: Vector3 = opos - skater.global_position
 		d.y = 0.0
 		var dist: float = d.length()
@@ -716,21 +716,23 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool, local_bra
 		else:
 			local_is_aggressor = skater.collision_tiebreak_id < other.collision_tiebreak_id
 		if local_is_aggressor:
+			# local delivery (from the replayed input) × the victim's replicated brace.
 			var transfer: float = skater.body_check_transfer \
 					* (1.0 if local_hit_held else skater.hit_passive_transfer_mult) \
-					* (other.body_check_brace_resistance if obrake else 1.0)
+					* (other.body_check_brace_resistance if ohit else 1.0)
 			SkaterCollisionRules.resolve(_replay_collision_result,
 					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(),
 					opos, ovel, other.weight, other.collision_radius(), transfer)
 			skater.velocity += _replay_collision_result.dvel_a
 			skater.global_position += _replay_collision_result.sep_a
 		else:
-			# Other is the aggressor, local is the victim. Its hit-commit is unknown
-			# (not replicated) → passive, matching the live prediction; local brace
-			# comes from the replayed input.
+			# Other is the aggressor, local is the victim. Now that hit-commit is
+			# replicated, the attacker's full-vs-passive delivery is known (was assumed
+			# passive), and the local brace comes from the replayed input's hit_held —
+			# the brace moved onto the Hit button.
 			var transfer: float = other.body_check_transfer \
-					* other.hit_passive_transfer_mult \
-					* (skater.body_check_brace_resistance if local_brake else 1.0)
+					* (1.0 if ohit else other.hit_passive_transfer_mult) \
+					* (skater.body_check_brace_resistance if local_hit_held else 1.0)
 			SkaterCollisionRules.resolve(_replay_collision_result,
 					opos, ovel, other.weight, other.collision_radius(),
 					skater.global_position, skater.velocity, skater.weight, skater.collision_radius(), transfer)
