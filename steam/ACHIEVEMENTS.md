@@ -60,7 +60,7 @@ for that checklist.
 | `ACH_ONE_TIMER`     | One-Timer         | game    | score off a one-timer                          |
 | `ACH_TIP_IN`        | Redirect          | game    | tip a teammate's shot into the net             |
 | `ACH_OVERTIME_HERO` | Overtime Hero     | game    | score the overtime winner                      |
-| `ACH_FACEOFF_BOSS`  | Faceoff Boss      | game    | win 5 faceoffs in a single game                |
+| `ACH_FACEOFF_BOSS`  | Master of the Dot | game    | win 5 faceoffs in a single game                |
 | `ACH_PICKPOCKET`    | Pickpocket        | game    | 5 takeaways in a single game                   |
 | `ACH_SHUTOUT`       | Shutout           | special | win a game conceding 0 goals                   |
 | `ACH_FIRST_WIN`     | W                 | special | win your first game (any mode)                 |

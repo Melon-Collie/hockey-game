@@ -127,7 +127,7 @@ const ALL: Array[Dictionary] = [
 	},
 	{
 		# faceoff_wins is already a broadcast game stat — no plumbing, just a bar.
-		"id": FACEOFF_BOSS, "name": "Faceoff Boss", "hidden": false,
+		"id": FACEOFF_BOSS, "name": "Master of the Dot", "hidden": false,
 		"desc": "Win 5 faceoffs in a single game.",
 		"cond": {"kind": "game", "field": "faceoff_wins", "min": 5},
 	},
