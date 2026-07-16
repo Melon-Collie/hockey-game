@@ -171,6 +171,47 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 	var az: float = absf(world_xz.y)
 	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
 
+# Projects a skater's XZ clear of the goal-net exclusion box so a CharacterBody
+# cylinder can never seat into the concave net pocket (back + side panels), the
+# same wedge-and-freeze failure the boards have. The net is off the skater physics
+# mask (LAYER_NET, puck-only); skaters are held clear analytically here, mirroring
+# clamp_to_rink_inner for the boards. Returns world_xz unchanged when the center is
+# already outside the box. Handles both net ends (|z|). Pure value-type math — no
+# allocation, hot-path safe at 120 Hz × actors.
+#
+# The box spans the net footprint: laterally |x| <= NET_BACK_HALF_WIDTH (the wider
+# trapezoid end), in depth |z| in [GOAL_LINE_Z, GOAL_LINE_Z + NET_DEPTH]. The back
+# and both side faces inset by `radius` so the body EDGE stops at the panel. The
+# FRONT face — the open goal mouth at the goal-line plane — is deliberately NOT
+# inset: a skater can still jam with their center right up to the goal line and
+# reach into the mouth, so crease / net-front play is untouched; they're only
+# stopped from putting their center past the line into the cage. Ejects along the
+# least-penetrated face.
+static func push_out_of_net(world_xz: Vector2, radius: float = 0.0) -> Vector2:
+	var az: float = absf(world_xz.y)
+	var min_z: float = GOAL_LINE_Z                       # front (open mouth) — no inset
+	var max_z: float = GOAL_LINE_Z + NET_DEPTH + radius  # back panel (body edge stops here)
+	if az <= min_z or az >= max_z:
+		return world_xz
+	var max_x: float = NET_BACK_HALF_WIDTH + radius
+	var x: float = world_xz.x
+	if absf(x) >= max_x:
+		return world_xz
+	# Center is inside the exclusion box — eject along the least-penetrated face.
+	var pen_front: float = az - min_z    # toward center ice (reduce |z|)
+	var pen_back: float = max_z - az     # behind the net (increase |z|)
+	var pen_left: float = x + max_x      # toward -x
+	var pen_right: float = max_x - x     # toward +x
+	var min_pen: float = minf(minf(pen_front, pen_back), minf(pen_left, pen_right))
+	var end_sign: float = signf(world_xz.y)
+	if min_pen == pen_front:
+		return Vector2(x, end_sign * min_z)
+	if min_pen == pen_back:
+		return Vector2(x, end_sign * max_z)
+	if min_pen == pen_left:
+		return Vector2(-max_x, world_xz.y)
+	return Vector2(max_x, world_xz.y)
+
 # ── Puck ──────────────────────────────────────────────────────────────────────
 # Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
 # so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with

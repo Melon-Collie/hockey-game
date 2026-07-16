@@ -317,7 +317,11 @@ func _init(p_carrier_reaction_delay_s: float,
 # carrier_reaction_delay UP if it matches passes too readily. Execution error is
 # the pre-split flat value on both releases (0.01 rad ≈ ±0.6° per release —
 # spreads the identical corner snipe into goals/saves/misses without ever
-# reading as a botched shot). Release timing slop 0.10 s — an elite hand, but
+# reading as a botched shot). NB: do NOT bump the shot error to "trim" Hard's
+# scoring — the shot-outcome sim (tests/unit/ai/test_shot_sim.gd) showed scatter
+# is a SELECTIVITY dial under the make-probability model, not a save dial: a
+# wider spread demands a wider window, so the bot shoots LESS and buries a HIGHER
+# fraction. Trim Hard's finish elsewhere. Release timing slop 0.10 s — an elite hand, but
 # no longer tick-perfect: the doorstep lateral beat is still hunted (scored
 # at the median ~0.05 s-late release), but a window in the ~0.05–0.10 s band
 # is a coin flip decided by the sampled delay — the goalie robs the late

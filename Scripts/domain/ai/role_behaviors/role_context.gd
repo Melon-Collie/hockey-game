@@ -75,6 +75,10 @@ var caps_by_peer: Dictionary = {}
 # league defaults. Defaults equal the baseline, so unwired contexts (unit tests)
 # keep the prior behaviour. (Cross-player evaluation reads caps_by_peer above.)
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+# This bot's real all-direction thrust (Agility-scaled max_accel). Feeds
+# time_to_arrive's cross-momentum shed cost, so a nimble build prices a redirect
+# (killing sideways momentum to reach a carry candidate) faster than a heavy one.
+var self_max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
 # This bot's own aim-execution spread (radians, worst-case): the per-release
 # sampled aim error over the blade aim arm. The shot-aim model reserves this

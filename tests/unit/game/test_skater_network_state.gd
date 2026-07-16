@@ -60,9 +60,10 @@ func test_array_length_sentinel() -> void:
 	# upper_body_rotation_y, facing, last_processed_host_timestamp,
 	# is_ghost, shot_state, shot_charge, facing_angular_velocity,
 	# upper_body_angular_velocity, elevation_level, blade_up, stamina, sprint_locked,
-	# stagger_timer, move_intent, brake_intent, sprint_active.
+	# stagger_timer, move_intent, brake_intent, sprint_active, knockdown_timer,
+	# hit_committed.
 	var s := SkaterNetworkState.new()
-	assert_eq(s.to_array().size(), 20)
+	assert_eq(s.to_array().size(), 22)
 
 
 func test_blade_up_back_compat_defaults_false() -> void:

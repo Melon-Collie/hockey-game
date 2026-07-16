@@ -19,11 +19,23 @@ class_name BodyCheckRules
 # scale together off a single replicated value and ease back as it decays.
 
 class Config:
-	var min_impulse: float = 3.0          # m/s victim velocity delta below which no debuff lands
-	var ref_impulse: float = 9.0          # m/s delta treated as a full-strength check
+	var min_impulse: float = 1.0          # m/s victim velocity delta below which no debuff lands
+	var ref_impulse: float = 2.5          # m/s delta treated as a full-strength check
 	var max_stagger_seconds: float = 1.0  # recovery window of a full-strength check
 	var max_stamina_drain: float = 0.35   # pool fraction (0..1) a full-strength check bites
 	var max_thrust_penalty: float = 0.5   # peak thrust reduction (fraction) at full stagger
+	# Knockdown: the top of the same intensity continuum. A hit whose victim impulse
+	# exceeds knockdown_impulse doesn't just stagger — it KNOCKS THE VICTIM DOWN
+	# (movement locked, slides + bleeds speed, can't touch the puck) for a recovery
+	# window that scales with how far past the threshold it landed, from
+	# min_knockdown_seconds at the threshold to max_knockdown_seconds at
+	# knockdown_ref_impulse. NOTE: these (and min/ref_impulse above) are placeholders
+	# on the OLD magnitude scale — the Slice B inelastic model delivers ~half the old
+	# impulse, so the whole ladder wants a downward re-tune once the feel is dialed.
+	var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down (0 disables)
+	var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
+	var min_knockdown_seconds: float = 0.7     # down time of a just-barely knockdown
+	var max_knockdown_seconds: float = 1.5     # down time of a maximal hit
 
 
 # 0..1 hit hardness from the victim impulse magnitude.
@@ -37,6 +49,18 @@ static func intensity(impulse_mag: float, cfg: Config) -> float:
 # with any in-flight timer so a weaker follow-up can't shorten an existing stagger.
 static func stagger_seconds_from_impulse(impulse_mag: float, cfg: Config) -> float:
 	return intensity(impulse_mag, cfg) * cfg.max_stagger_seconds
+
+
+# Seconds of KNOCKDOWN a fresh hit adds: 0 below knockdown_impulse, then ramps
+# from min_knockdown_seconds at the threshold to max_knockdown_seconds at
+# knockdown_ref_impulse (clamped). Like stagger, callers take the max with any
+# in-flight timer so a weaker follow-up can't shorten an existing knockdown.
+static func knockdown_seconds_from_impulse(impulse_mag: float, cfg: Config) -> float:
+	if cfg.knockdown_impulse <= 0.0 or impulse_mag < cfg.knockdown_impulse:
+		return 0.0
+	var span: float = maxf(cfg.knockdown_ref_impulse - cfg.knockdown_impulse, 0.001)
+	var t: float = clampf((impulse_mag - cfg.knockdown_impulse) / span, 0.0, 1.0)
+	return lerpf(cfg.min_knockdown_seconds, cfg.max_knockdown_seconds, t)
 
 
 # Stamina (pool fraction, 0..1) a hit drains, charged only for the stagger it adds

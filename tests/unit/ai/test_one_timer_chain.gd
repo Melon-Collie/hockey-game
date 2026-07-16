@@ -178,6 +178,86 @@ func test_feed_fires_the_one_timer_at_every_debounce_tier() -> void:
 				"…at the committed full one-timer pace, not a stale leak")
 
 
+func test_no_one_timer_in_the_defensive_zone() -> void:
+	# The reported "shouldn't be possible" bug: readiness preserved across a
+	# turnover must NOT survive the bot leaving the attacking zone. Camp the
+	# finisher until ready publishes, then relocate it to its OWN end with a
+	# loose feed crossing — the zone guard drops readiness, no wind-up fires.
+	var finisher_pos := Vector3(-4.0, 0.0, -21.65)
+	var s: WorldSnapshot = _cycle_snap(finisher_pos)
+	_brain.tick(1.0, s)
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	var probe_ctx: RoleContext = sm._build_role_context(
+			s, finisher_pos, s.skater_states[FINISHER_ID])
+	var probe: RoleDecision = AIRoleFinisher.decide(probe_ctx)
+	finisher_pos = probe.target_position
+	s.skater_states[FINISHER_ID].position = finisher_pos
+	var input := InputState.new()
+	for i: int in 12:
+		sm.dispatch(input, s)
+	assert_true(_brain.is_one_timer_ready(FINISHER_ID),
+			"camped finisher is one-timer ready in the attacking zone")
+	# Relocate to team 0's own defensive zone (defends +Z) with a loose feed.
+	s.skater_states[FINISHER_ID].position = Vector3(-4.0, 0.0, 21.65)
+	s.puck_state.position = Vector3(-2.6, 0.0, 20.9)
+	s.puck_state.velocity = Vector3(-18.0, 0.0, -6.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	sm.dispatch(input, s)
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
+			"a bot in its own defensive zone never winds up a one-timer")
+	assert_false(_brain.is_one_timer_ready(FINISHER_ID),
+			"readiness drops the moment the bot is out of the attacking zone")
+
+
+func test_cross_seam_not_one_timed_when_not_squared_up() -> void:
+	# The wonky-aim guard: a chasing bot still facing up-ice can't rotate square
+	# to the net inside the reception window, so the redirect would lock a
+	# "wherever I was looking" direction. It must CATCH (Mode B) instead of
+	# converting to a bad one-timer. Same feed as the Mode A test below, but
+	# facing away from the net.
+	var finisher_pos := Vector3(-4.0, 0.0, -21.65)
+	var s: WorldSnapshot = _cycle_snap(finisher_pos)
+	s.skater_states[OPP_MARK].position = Vector3(-2.5, 0.0, -20.5)
+	s.puck_state.position = Vector3(4.0, 0.0, -19.5)
+	s.puck_state.velocity = Vector3(-19.0, 0.0, -4.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	# Facing back up-ice, away from the attacking net (beyond the square-up cone).
+	s.skater_states[FINISHER_ID].facing = Vector2(0.0, 1.0)
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.CHASE_PUCK
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
+			"a bot not squared to the net catches the feed instead of firing wonky")
+
+
+func test_one_timer_aborts_when_it_cannot_square_to_the_net() -> void:
+	# The "worried about missing the net" guard: a wind-up that can't square to
+	# the net (net aim beyond the reach cone) must NOT fire wide — past the
+	# aim-wait backstop it bails to catch instead. Camp the finisher on a live
+	# feed but facing back up-ice so the net stays in the back wedge.
+	var finisher_pos := Vector3(-4.0, 0.0, -21.65)
+	var s: WorldSnapshot = _cycle_snap(finisher_pos)
+	s.puck_state.position = Vector3(2.0, 0.0, -20.0)
+	s.puck_state.velocity = Vector3(-18.0, 0.0, -6.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	s.skater_states[FINISHER_ID].facing = Vector2(0.0, 1.0)  # net dead behind
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._one_timer_press_tick = Agent.ONE_TIMER_AIM_WAIT_MAX_TICKS
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_false(input.slap_pressed, "an unsquarable one-timer is not fired wide")
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
+			"it aborts the wind-up and drops to catch the feed")
+
+
 func test_cross_seam_reception_one_times_off_the_displaced_goalie() -> void:
 	# Mode A (shot-aware reception): a lateral feed across the slot with the
 	# goalie still parked on the passer's side — the chasing bot commits to
@@ -196,3 +276,57 @@ func test_cross_seam_reception_one_times_off_the_displaced_goalie() -> void:
 	sm.dispatch(input, s)
 	assert_eq(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
 			"the cross-seam feed converts to a one-time redirect")
+
+
+# Where a ray from `origin` along `dir_xz` (unit XZ) crosses the net plane z.
+func _x_at_net_plane(origin: Vector3, dir_xz: Vector2, net_z: float) -> float:
+	var t: float = (net_z - origin.z) / dir_xz.y
+	return origin.x + dir_xz.x * t
+
+
+func test_one_timer_aim_is_locked_from_the_release_point_not_the_body() -> void:
+	# The reported "aim, then move, and it's off target" bug. The slapper
+	# direction locks at the press tick and never re-steers, but the bot enters
+	# ONE_TIMER_PRESSED up to RECEIVE_TRIGGER_LATERAL_M off the feed line and
+	# shuffles onto it before the puck arrives. The lock must be built from where
+	# the shot will FIRE (the settled slapper zone on the feed line), so the
+	# frozen line stays ON the net despite the body's still-to-travel offset —
+	# not from the current body, which would parallel-shift the shot wide.
+	var self_pos := Vector3(3.75, 0.0, -22.36)
+	var s: WorldSnapshot = _cycle_snap(self_pos)
+	# A live feed whose perpendicular foot (the spot the bot settles to shoot
+	# from) sits ~3 m off the body in +X — a real lateral shuffle, well inside
+	# the 5 m reception band.
+	s.puck_state.position = Vector3(2.0, 0.0, -14.0)
+	s.puck_state.velocity = Vector3(-2.0, 0.0, -15.0)  # >14 m/s reception trigger
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	# Squared to the net so the aim settles and the press fires this tick.
+	s.skater_states[FINISHER_ID].facing = Vector2(-0.197, -0.980)
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_true(input.slap_pressed, "the squared one-timer presses this tick")
+
+	# The direction the controller will lock: current blade→cursor ≈ self→cursor.
+	var dir := Vector2(
+			input.mouse_world_pos.x - self_pos.x,
+			input.mouse_world_pos.z - self_pos.z).normalized()
+	var release_point: Vector3 = sm._slapper_zone_center(
+			sm._one_timer_line_anchor(s, self_pos))
+	assert_true(release_point.is_finite(),
+			"the feed yields a settled release point on its line")
+	var net_z: float = -GameRules.GOAL_LINE_Z  # team 0 attacks -Z
+
+	# Fired from where it will ACTUALLY release: on the net.
+	var x_from_release: float = _x_at_net_plane(release_point, dir, net_z)
+	assert_lt(absf(x_from_release), GameRules.NET_HALF_WIDTH,
+			"the locked line crosses inside the posts from the release point")
+
+	# The same locked line fired from the CURRENT body (the old body-relative
+	# aim) misses wide — proving the compensation is real and load-bearing.
+	var x_from_body: float = _x_at_net_plane(self_pos, dir, net_z)
+	assert_gt(absf(x_from_body), GameRules.NET_HALF_WIDTH,
+			"a body-relative lock would parallel-shift the shot wide of the net")

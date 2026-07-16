@@ -158,6 +158,10 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 	puck = assigned_puck
 	is_server = assigned_is_server
 	puck.set_server_mode(is_server)
+	# Cooldown expiry timestamps share the host's local_time base (the same clock
+	# StateBufferManager stamps rewind snapshots with) so is_on_cooldown_at can be
+	# queried at a claimant's view-time. Injected here to keep the actor clock-agnostic.
+	puck.set_time_provider(NetworkManager.local_time)
 	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)
@@ -192,7 +196,8 @@ func _physics_process(delta: float) -> void:
 	# dead (whistle/goal — host is about to reset it) or we got ghosted (offside —
 	# can't hold the puck). Timeout/grant/steal are handled below and in the RPCs.
 	if _provisional_carrier_skater != null and (puck.pickup_locked \
-			or not is_instance_valid(_provisional_carrier_skater) or _provisional_carrier_skater.is_ghost):
+			or not is_instance_valid(_provisional_carrier_skater) \
+			or _provisional_carrier_skater.is_ghost or _provisional_carrier_skater.is_knocked_down):
 		_clear_provisional()
 	if _local_carrier_skater != null:
 		is_extrapolating = false
@@ -312,14 +317,27 @@ func is_processing_stick_lift() -> bool:
 # momentum; a true 50/50 pops out sideways like a pinched seed. All the math is in
 # PuckCollisionRules.contested_pickup_velocity; the randomness (deadlock side +
 # degenerate fallback) is supplied here so the rule stays deterministic/testable.
-func apply_contested_pickup(skater_a: Skater, skater_b: Skater) -> void:
+#
+# Blade kinematics (raw per-tick velocity + world contact point) for BOTH
+# contestants are passed in rather than read off the live skaters, so the claim
+# path can supply each claimant's REWOUND blade — the kinematics they actually
+# saw at their view-time — instead of present-time values sampled up to a contest
+# window + RTT later. The host present-time path passes the live values, so the
+# two scrambles resolve from the same shared rule on matching inputs. (Draw-crest
+# substitution still reads the live skater — the retained faceoff peak isn't in
+# the snapshot; see _contest_blade_velocity.)
+func apply_contested_pickup(
+		skater_a: Skater, skater_b: Skater,
+		blade_vel_a: Vector3, blade_vel_b: Vector3,
+		blade_pos_a: Vector3, blade_pos_b: Vector3) -> void:
 	if not is_instance_valid(skater_a) or not is_instance_valid(skater_b):
 		return
 	var perp_sign: float = 1.0 if randf() > 0.5 else -1.0
 	var fallback := Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
 	puck.set_puck_velocity(PuckCollisionRules.contested_pickup_velocity(
-			_contest_blade_velocity(skater_a), _contest_blade_velocity(skater_b),
-			skater_a.get_blade_contact_global(), skater_b.get_blade_contact_global(),
+			_contest_blade_velocity(skater_a, blade_vel_a),
+			_contest_blade_velocity(skater_b, blade_vel_b),
+			blade_pos_a, blade_pos_b,
 			contest_min_speed, contest_max_speed,
 			contest_deadlock_speed, contest_deadlock_threshold,
 			perp_sign, fallback))
@@ -335,10 +353,14 @@ func apply_contested_pickup(skater_a: Skater, skater_b: Skater) -> void:
 # center is draw-tracking, so we use its retained swipe crest scaled by how well the
 # crest landed on the drop (a well-timed sweep wins decisively; a late stab is
 # discounted). Anywhere else — a board scramble — nobody is tracking, so it's the
-# raw per-tick blade velocity, unchanged.
-func _contest_blade_velocity(skater: Skater) -> Vector3:
+# `raw_blade_vel` the caller supplies: the live per-tick blade velocity on the host
+# present-time path, or the claimant's rewound view-time blade velocity on the
+# claim path. (The retained draw crest is host-live state, not snapshotted, so a
+# faceoff contest reads it live even on the claim path — acceptable since it's a
+# retained peak, not an instantaneous value.)
+func _contest_blade_velocity(skater: Skater, raw_blade_vel: Vector3) -> Vector3:
 	if not skater.is_draw_tracking():
-		return skater.blade_world_velocity
+		return raw_blade_vel
 	var weight: float = FaceoffDrawRules.timing_weight(
 			skater.draw_since_drop(), contest_draw_timing_miss_window,
 			contest_draw_timing_bonus, contest_draw_timing_min_weight)
@@ -354,7 +376,7 @@ func _contest_blade_velocity(skater: Skater) -> Vector3:
 # to be granted, so it adds no per-tick cost on the common no-pickup path.
 func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3, puck_airborne: bool) -> Skater:
 	for skater: Skater in skaters:
-		if skater == first or skater.is_ghost or puck.is_on_cooldown(skater):
+		if skater == first or skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
 			continue
 		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 				or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
@@ -393,7 +415,7 @@ func _check_interactions() -> void:
 			var carrier_team: int = _team_id_by_skater.get(puck.carrier, -1)
 			var carrier_skater: Skater = puck.carrier
 			for skater: Skater in skaters:
-				if skater == puck.carrier or skater.is_ghost:
+				if skater == puck.carrier or skater.is_ghost or skater.is_knocked_down:
 					continue
 				var checker_team: int = _team_id_by_skater.get(skater, -1)
 				if not PuckCollisionRules.can_poke_check(carrier_team, checker_team):
@@ -425,7 +447,7 @@ func _check_interactions() -> void:
 			# On-ice/off-ice gate is invariant across skaters this tick.
 			var puck_airborne: bool = puck.is_airborne()
 			for skater: Skater in skaters:
-				if skater.is_ghost or puck.is_on_cooldown(skater):
+				if skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
 					continue
 				# A crouched shot-blocker can't corral the puck with their stick —
 				# the blade is committed to the block. Same for a shooter mid
@@ -476,7 +498,11 @@ func _check_interactions() -> void:
 					# only runs at the rare moment a pickup would actually happen.
 					var contender: Skater = _find_contesting_corraller(skater, skaters, puck_curr, puck_airborne)
 					if contender != null:
-						apply_contested_pickup(skater, contender)
+						# Present-time contest — both blades are host-live this tick, so
+						# feed their live kinematics (the claim path feeds rewound ones).
+						apply_contested_pickup(skater, contender,
+								skater.blade_world_velocity, contender.blade_world_velocity,
+								skater.get_blade_contact_global(), contender.get_blade_contact_global())
 					else:
 						puck.set_carrier(skater)
 						_on_puck_picked_up(skater)
@@ -623,6 +649,9 @@ func try_provisional_pickup(local_skater: Skater) -> void:
 	# gate) — don't pin a puck the host is guaranteed not to grant.
 	if local_skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 		return
+	# Knocked down — can't corral the puck (mirrors the host's is_knocked_down gate).
+	if local_skater.is_knocked_down:
+		return
 	if _is_pickup_contested(local_skater):
 		return
 	_provisional_carrier_skater = local_skater
@@ -639,7 +668,7 @@ func _is_pickup_contested(local_skater: Skater) -> bool:
 		return true  # can't tell who's around → assume contested (conservative)
 	var puck_pos: Vector3 = puck.get_puck_position()
 	for s: Skater in _skater_getter.call():
-		if s == local_skater or not is_instance_valid(s) or s.is_ghost:
+		if s == local_skater or not is_instance_valid(s) or s.is_ghost or s.is_knocked_down:
 			continue
 		# Any other skater (either team) racing the same loose puck is a contest —
 		# only one can be granted it. Their blade is interpolated, hence the
@@ -788,9 +817,11 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 				_state_buffer.pop_front()
 			return
 		else:
+			var release_confirmed: bool = false
 			if _pending_local_release:
 				_pending_local_release = false
 				_pending_local_release_deadline = -1.0
+				release_confirmed = true
 			var rtt_s: float = _shot_rtt_ms / 1000.0
 			# Apply ice friction to the latency-corrected target so it matches
 			# Jolt's deceleration over the RTT projection window (same shape as
@@ -808,6 +839,14 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 			# Only hard-snap on genuine physics divergence (wall/goalie bounce
 			# that differed between client and host).
 			var dist: float = puck.get_puck_position().distance_to(latency_corrected.position)
+			# Shot-launch divergence probe: the first host-confirmed broadcast after a
+			# local release measures client-predicted vs host-authoritative launch. Both
+			# run identical Jolt from the same client-sent origin, so this should be tiny
+			# (RTT jitter); a spike is genuine launch divergence, and it separates
+			# shot-launch causes from bounce/contact within the puck_hard_snaps total.
+			if release_confirmed:
+				NetworkTelemetry.record_shot_launch_divergence(
+						dist, puck.get_puck_velocity().distance_to(latency_corrected.velocity))
 			if dist > trajectory_hard_snap_threshold:
 				# Large divergence (wall/goalie bounce that differed): hard snap both.
 				puck.set_puck_position(latency_corrected.position)

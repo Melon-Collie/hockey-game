@@ -96,13 +96,29 @@ const VERSION: String = "dev"
 #     the same request/notify pair (a mixed-build vote would decode the wrong
 #     variant type), plus a new notify_rematch_voters RPC (host-broadcast voter
 #     total, the skip-vote pattern) shifting the name-sorted RPC indices.
-# v26: stats packet grew — PlayerStats.to_array() 11 -> 13 (one_timer_goals,
-#      tip_goals: host-tagged goal-flavor counters driving the One-Timer /
-#      Redirect achievements), so STATS_PLAYER_RECORD_SIZE 12 -> 14.
-# v27: stats packet grew — PlayerStats.to_array() 13 -> 14 (ot_goals, host-tagged
-#      overtime-winner counter driving the Overtime Hero achievement), so
-#      STATS_PLAYER_RECORD_SIZE 14 -> 15.
-const PROTOCOL_VERSION: int = 27
+# v26: input flags gain bit [12] — hit_held (the body-check / hit button, C).
+#     Reuses a previously-zero bit in the existing u16 flags, so BYTES_SIZE is
+#     unchanged, but the wire semantics differ (a mixed-build host would read a
+#     new client's hit intent as noise), so a bump is required. Not yet consumed
+#     by any behavior — wired ahead of the hit-system redesign.
+# v27: skater world-state block 40 -> 41 B — adds knockdown_timer (u8 @0.01s) after
+#     stagger_timer, so a hard body check that knocks the victim down replicates and
+#     the local victim's predicted knockdown survives reconcile (same rail/reason as
+#     stagger's v10 add).
+# v28: intent byte gains bit [6] — hit_committed (the body-check brace/delivery
+#     signal, moved off brake onto the Hit button). No block-size change (spare bit),
+#     but a client now reads a remote victim's brace and a remote attacker's
+#     full-vs-passive delivery from it, so a bump is required.
+# v29: two new host-broadcast cue RPCs (notify_post_hit / notify_goalie_hit) so a
+#     puck off the post or a pad/goalie save is heard by every peer, not only those
+#     whose local puck prediction registered the contact (matching the existing
+#     deflection / board / body-block broadcasts). New RPC methods shift the
+#     name-sorted RPC indices, so a mixed-build pair would call the wrong method.
+# v30: stats packet grew — PlayerStats.to_array() 11 -> 14 (one_timer_goals,
+#      tip_goals, ot_goals: host-tagged goal-flavor / overtime-winner counters
+#      driving the One-Timer / Redirect / Overtime Hero achievements), so
+#      STATS_PLAYER_RECORD_SIZE 12 -> 15.
+const PROTOCOL_VERSION: int = 30
 
 
 func _ready() -> void:

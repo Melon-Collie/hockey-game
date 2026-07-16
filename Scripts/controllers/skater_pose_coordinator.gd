@@ -171,8 +171,16 @@ func _apply_lean() -> void:
 	var recoil_roll: float = 0.0
 	var recoil_t: float = clampf(
 			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
-	if recoil_t > 0.0:
-		var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t
+	# Knockdown reels the torso far harder than a stagger — the fold that sells being
+	# floored. It rides the SAME recoil direction (fall the way you were hit) and the
+	# same deterministic/replicated timer, layered on top of the stagger recoil. kd_t
+	# holds full while more than knockdown_getup_seconds remains, then eases to 0 (the
+	# get-up). Remotes reel generically backward (default recoil dir), like stagger.
+	var kd_t: float = clampf(
+			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
+	var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t \
+			+ deg_to_rad(_controller.knockdown_fold_deg) * kd_t
+	if mag > 0.0:
 		var d: Vector2 = _controller.stagger_recoil_dir
 		recoil_pitch = mag * d.y
 		recoil_roll = -mag * d.x
@@ -220,6 +228,11 @@ func apply_facing(input: InputState, delta: float) -> void:
 				# earlier this tick, so it's deterministic across reconcile replay.
 				if _controller.sprint_active:
 					drag *= _controller.sprint_turn_multiplier
+				# Committing a check widens the turn the same way sprint does — the
+				# agility cost of loading up a hit. Stacks with sprint (both held =
+				# very committed straight line). Deterministic across replay.
+				if _controller.hit_active:
+					drag *= _controller.hit_turn_multiplier
 				facing = facing.lerp(to_mouse.normalized(), drag * delta).normalized()
 		_skater.set_facing(facing)
 		var turn_delta: float = angle_difference(prev_angle, _skater.rotation.y)

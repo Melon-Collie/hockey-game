@@ -171,6 +171,13 @@ func _interpolate_skater(peer_id: int, ts: float) -> SkaterNetworkState:
 			atan2(to_s.facing.x, to_s.facing.y), to_s.facing_angular_velocity, t, bracket_dt)
 	result.facing = Vector2(sin(lag_fa), cos(lag_fa))
 	result.is_ghost = to_s.is_ghost
+	# shot_state is a discrete enum, not a lerp-able quantity — take the newer
+	# endpoint like is_ghost. The pickup claim resolver reads it to reject a
+	# claimant who was shot-blocking / mid follow-through at their view-time
+	# (the self-rebound re-attach guard); without copying it here every
+	# interpolated rewind reported SKATING_WITHOUT_PUCK (0) and that gate was dead
+	# on any link where the blade rewind interpolates (one-way > INPUT_LEAD).
+	result.shot_state = to_s.shot_state
 	result.host_timestamp = ts
 	return result
 

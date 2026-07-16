@@ -52,3 +52,32 @@ static func puck_needs_hard_snap(
 		server_position: Vector3,
 		threshold: float) -> bool:
 	return client_position.distance_to(server_position) > threshold
+
+
+# Why a reconcile's find_at found no prediction for the server's ack timestamp.
+# A miss is not benign: reconcile then falls back to the (prediction-lead-ahead)
+# LIVE position, which trips the position threshold — so every miss manufactures a
+# spurious position snap. A high miss rate is therefore the dominant driver of
+# reconcile churn on a clean link, and this bucket says WHERE the ack landed
+# relative to the kept prediction history so the telemetry can attribute it.
+enum MatchMiss {
+	EMPTY = 0,  # history empty — post-clear (teleport / dead-puck drain) or warmup
+	OLDER = 1,  # ack precedes the oldest kept prediction — cleared, or trimmed before the ack arrived
+	NEWER = 2,  # ack follows the newest prediction — not stored yet (should not happen in steady play)
+	GAP = 3,    # ack falls between two kept predictions by > epsilon — a real hole in the history
+}
+
+# Classify a find_at miss by where `ack_ts` sits relative to the kept history's
+# bounds. Pure so it's GUT-testable without a live history. Only call on a genuine
+# miss (find_at returned null); the epsilon-band interior is a match find_at owns.
+static func classify_match_miss(
+		history_is_empty: bool,
+		oldest_ts: float, newest_ts: float,
+		ack_ts: float, epsilon: float) -> int:
+	if history_is_empty:
+		return MatchMiss.EMPTY
+	if ack_ts < oldest_ts - epsilon:
+		return MatchMiss.OLDER
+	if ack_ts > newest_ts + epsilon:
+		return MatchMiss.NEWER
+	return MatchMiss.GAP

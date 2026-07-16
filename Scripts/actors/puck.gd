@@ -139,7 +139,19 @@ var pickup_locked: bool = false
 # (e.g. tutorial puppet bot teardown) before the per-tick cleanup loop drops
 # its stale entry. Public API still takes a Skater; the int conversion is
 # internal.
+#
+# Values are ABSOLUTE expiry timestamps in the host's local_time() base — the
+# same base StateBufferManager stamps its rewind snapshots with. Storing expiry
+# (rather than a per-tick countdown) is what lets the lag-comp pickup resolver
+# ask "was this skater on cooldown at their view-time?" via is_on_cooldown_at,
+# consistent with how it rewinds is_ghost / shot_state. It also puts the cooldown
+# clock on the same wall-time as the snapshot buffer instead of fixed-delta sim
+# seconds (the two diverge under host dilation).
 var _cooldown_timers: Dictionary[int, float] = {}
+# Time source for cooldown expiry (host local_time). Injected by PuckController so
+# the actor stays engine-clock-agnostic; falls back to monotonic wall-time for
+# standalone use (tests that never run a lag-comp query).
+var _now_provider: Callable = Callable()
 # Reused scratch for the per-tick cooldown expiry sweep — cleared (capacity
 # retained) each tick instead of reallocated, since cooldowns are active through
 # most of live play (every touch arms a ~0.5s reattach window).
@@ -284,15 +296,30 @@ func clear_carrier() -> void:
 	freeze = false
 
 # ── Cooldown Helpers ──────────────────────────────────────────────────────────
+# Host local_time() (injected) so cooldown expiry shares the snapshot-buffer base.
+func set_time_provider(provider: Callable) -> void:
+	_now_provider = provider
+
+func _now() -> float:
+	return _now_provider.call() if _now_provider.is_valid() else Time.get_ticks_msec() / 1000.0
+
 func is_on_cooldown(skater: Skater) -> bool:
-	return _cooldown_timers.get(skater.get_instance_id(), 0.0) > 0.0
+	return is_on_cooldown_at(skater, _now())
+
+# Was the skater on cooldown at an arbitrary host-time `at`? Used by the lag-comp
+# pickup resolver to judge eligibility at the claimant's view-time rather than at
+# present time (up to one-way latency later), matching its rewound is_ghost /
+# shot_state checks. Present-time `is_on_cooldown` is `is_on_cooldown_at(_, now)`.
+func is_on_cooldown_at(skater: Skater, at: float) -> bool:
+	return _cooldown_timers.get(skater.get_instance_id(), -1.0) > at
 
 func _set_cooldown(skater: Skater, duration: float) -> void:
 	# Take the max with any existing entry so a shorter cooldown set immediately
 	# after a longer one (e.g. body_block_cooldown 0.1s right after reattach 0.5s)
-	# never shortens the in-flight cooldown.
+	# never shortens the in-flight cooldown. Values are absolute expiry times, so
+	# a lingering already-expired entry (expiry < now) is correctly superseded.
 	var id: int = skater.get_instance_id()
-	_cooldown_timers[id] = maxf(_cooldown_timers.get(id, 0.0), duration)
+	_cooldown_timers[id] = maxf(_cooldown_timers.get(id, -1.0), _now() + duration)
 
 func set_skater_cooldown(skater: Skater, duration: float) -> void:
 	_set_cooldown(skater, duration)
@@ -375,7 +402,7 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 	# hardness measure; see BodyCheckRules.puck_strip_impulse.
 	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
 			impact_force, checker.body_check_transfer,
-			victim.weight, victim.body_check_brace_resistance, victim.brake_intent)
+			victim.weight, victim.body_check_brace_resistance, victim.hit_committed)
 	if strip_impulse < hit_pickup_cooldown_threshold:
 		return
 	# Hard hits temporarily deny the victim a pickup, even if they weren't carrying.
@@ -769,7 +796,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	# response. Taken after all writes so it reflects a same-step release too.
 	_pre_contact_velocity = state.linear_velocity
 
-func _physics_process(delta: float) -> void:
+func _physics_process(_delta: float) -> void:
 	if not _is_server:
 		return
 
@@ -780,14 +807,16 @@ func _physics_process(delta: float) -> void:
 	# no-cooldowns case; the reused _expired_cooldowns scratch avoids a per-tick
 	# allocation while cooldowns are active (per-tick path).
 	if not _cooldown_timers.is_empty():
+		var now: float = _now()
 		_expired_cooldowns.clear()
 		for id: int in _cooldown_timers:
 			var skater: Skater = instance_from_id(id) as Skater
 			if not is_instance_valid(skater):
 				_expired_cooldowns.append(id)
 				continue
-			_cooldown_timers[id] -= delta
-			if _cooldown_timers[id] <= 0.0:
+			# Expiry timestamps (local_time base), so drop once we pass them —
+			# no per-tick decrement, and the sweep no longer depends on `delta`.
+			if _cooldown_timers[id] <= now:
 				_expired_cooldowns.append(id)
 		for id: int in _expired_cooldowns:
 			_cooldown_timers.erase(id)

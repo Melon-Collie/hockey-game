@@ -34,16 +34,23 @@ class_name AIShotAim
 #    less-covered post).
 
 
-# Default corner bias — caller can override per shot type if desired.
-# 0 = legacy arc-midpoint behavior, 1 = aim at the post.
+# Default corner bias — where in the open lane the bot aims. 0 = the arc
+# MIDPOINT (max clearance from both the post and the goalie's cover edge), +1 =
+# the open POST, −1 = the goalie's cover edge.
 #
-# 0.3 keeps the aim point away from the post (a third of the way from
-# arc midpoint toward the post). Combined with the per-release aim error,
-# wind-up offset compensation residual, and aim drift during the wrister
-# charge, anything closer to the post (≥ 0.5) produced shots that sailed
-# wide of the net entirely. Bias under 0.3 sacrifices corner placement
-# without enough accuracy gain to justify.
-const DEFAULT_CORNER_BIAS: float = 0.3
+# 0.0 (the honest best spot). The shot SCORE prices a shot by its partial make
+# probability with the aim assumed at the window CENTRE (AIActionScoring.
+# _soft_make_angle), so the aim must sit there too or score and release desync.
+# Centring it also makes the execution wobble symmetric: a taken shot's scatter
+# splits into goals AND goalie saves AND posts, instead of the old +0.3 post-bias
+# that threw the whole wobble tail onto the IRON (so the bot's misses were posts
+# and narrow-wide misses and the keeper almost never got a save — the shot was
+# aimed away from him). Aiming at max clearance is also simply optimal: it
+# maximises the makeable window the score is integrating over. Tune by feel:
+# POSITIVE re-introduces the old post-snipe (prettier corners, more clanks/wides,
+# fewer saves); NEGATIVE aims into the goalie (more saves, fewer goals) but
+# desyncs from the centred-aim score.
+const DEFAULT_CORNER_BIAS: float = 0.0
 
 # How far ahead to project the goalie's shadow when goalie_velocity_x
 # is supplied. Goalie t_push_speed ≈ 6 m/s; at 0.2 s the shadow can

@@ -56,9 +56,13 @@ static func scenarios() -> Array[PassScenario]:
 		# Length + receiver speed: a teammate streaking away down-ice — lead the stretch.
 		PassScenario.new("STRETCH — LEAD IT",
 				Vector2(0.0, 9.0), Vector2(3.0, 0.0), Vector2(3.0, -12.0)),
-		# Receiver speed across the grain: he skates the slot side to side.
+		# Receiver speed across the grain: he skates side to side, but DEEP down-ice
+		# — a shallow crossing route ran straight through the passer's give-and-go
+		# drive lane and set the player up to skate into the teammate (a real
+		# collision that strips the puck). Leading a deep crosser keeps the pass a
+		# lateral read without ever pointing the passer at the receiver.
 		PassScenario.new("GIVE & GO — ACROSS",
-				Vector2(0.0, 7.0), Vector2(-7.0, 1.0), Vector2(7.0, 1.0)),
+				Vector2(0.0, 7.0), Vector2(-7.0, -6.0), Vector2(7.0, -6.0)),
 		# Saucer: deep straight lane with a board in front of the passer.
 		PassScenario.new("SAUCER — OVER THE STICK",
 				Vector2(0.0, 8.0), Vector2(0.0, -8.0), Vector2(0.0, -8.0), true),

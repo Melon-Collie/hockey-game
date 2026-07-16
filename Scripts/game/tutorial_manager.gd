@@ -404,6 +404,7 @@ func _build_key_tokens() -> void:
 			PlayerPrefs.action_display("move_right")],
 		"sprint":         PlayerPrefs.action_display("sprint"),
 		"brake":          PlayerPrefs.action_display("brake"),
+		"hit":            PlayerPrefs.action_display("hit"),
 		"shoot":          PlayerPrefs.action_display("shoot"),
 		"quick_shot":     PlayerPrefs.action_display("quick_shot"),
 		"slapshot":       PlayerPrefs.action_display("slapshot"),
@@ -460,7 +461,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 			return _step(
 				"Brake",
 				"Hold {brake} to brake hard and stop quickly.",
-				"{brake} is also your brace — a braced skater is far harder to knock off the puck when a hit lands.")
+				"It kills your speed in any direction — stop on a dime to change lanes or hold your ground.")
 		STEP_STICKHANDLE:
 			return _step(
 				"Stickhandling",
@@ -541,8 +542,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_BODY_CHECK:
 			return _step(
 				"Body Check",
-				"Build up speed and skate straight into the opponent to knock them off the puck.",
-				"Get a running start and aim right at them.")
+				"Build up speed, hold {hit} to commit, and drive straight through the opponent to knock them off the puck.",
+				"Committing with {hit} throws your weight into the hit — you land it far harder AND shrug off the collision. An uncommitted bump barely moves them.")
 		STEP_STICK_LIFT:
 			return _step(
 				"Stick Lift",

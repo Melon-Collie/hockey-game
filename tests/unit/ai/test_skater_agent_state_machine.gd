@@ -535,9 +535,10 @@ func test_shoot_pressed_lost_puck_bails() -> void:
 	assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
 
 
-func test_shoot_pressed_stagger_cancels_via_block() -> void:
+func test_shoot_pressed_stagger_cancels_via_slap() -> void:
 	# A body check mid-charge (stagger_timer set) cancels the wrister rather
-	# than flailing it through the hit. Cancel is via block_held, not a release.
+	# than flailing it through the hit. Cancel routes through slap_pressed (the
+	# other shot button), not a release — block no longer cancels shots.
 	sm._state = Agent.State.SHOOT_PRESSED
 	var s := _self_snap(Vector3.ZERO, true)
 	sm.dispatch(InputState.new(), s)  # tick 0 (bail only fires once charge_tick > 0)
@@ -545,10 +546,10 @@ func test_shoot_pressed_stagger_cancels_via_block() -> void:
 	var i := InputState.new()
 	sm.dispatch(i, s)
 	assert_eq(sm.get_state(), Agent.State.CARRY, "a check mid-charge cancels the wrister")
-	assert_true(i.block_held, "cancel routes through block_held, not a shot release")
+	assert_true(i.slap_pressed, "cancel routes through slap_pressed, not a shot release")
 
 
-func test_shoot_pressed_front_pressure_cancels_via_block() -> void:
+func test_shoot_pressed_front_pressure_cancels_via_slap() -> void:
 	# An opponent closing from the front (toward the attacking goal) within the
 	# bail radius cancels the windup. Team 0 attacks −Z.
 	sm._state = Agent.State.SHOOT_PRESSED
@@ -558,7 +559,7 @@ func test_shoot_pressed_front_pressure_cancels_via_block() -> void:
 	var i := InputState.new()
 	sm.dispatch(i, s)
 	assert_eq(sm.get_state(), Agent.State.CARRY, "front pressure cancels the windup")
-	assert_true(i.block_held)
+	assert_true(i.slap_pressed)
 
 
 func test_shoot_pressed_ignores_rear_pressure() -> void:
@@ -660,16 +661,19 @@ func test_one_timer_press_waits_for_the_aim_to_settle() -> void:
 	assert_true(i1.slap_held, "…and the wind-up holds")
 
 
-func test_one_timer_press_backstop_fires_unsquared() -> void:
-	# Unreadable/never-converging facing must not starve the whole wind-up:
-	# past the aim-wait backstop the press fires anyway.
+func test_one_timer_backstop_aborts_when_it_never_squares() -> void:
+	# Never squaring to the net (the net aim stays beyond the reach cone) means
+	# the locked line would fire WIDE. Past the aim-wait backstop the wind-up is
+	# ABORTED — catch the feed instead of firing into the corner. Nothing was
+	# pressed, so no slapper charge to cancel.
 	sm._state = Agent.State.ONE_TIMER_PRESSED
 	sm._one_timer_press_tick = Agent.ONE_TIMER_AIM_WAIT_MAX_TICKS
 	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
-	s.skater_states[SELF_ID].facing = Vector2(0, 1)
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)   # facing our end — net at back
 	var i := InputState.new()
 	sm.dispatch(i, s)
-	assert_true(i.slap_pressed, "the backstop presses rather than eat the flight un-wound")
+	assert_false(i.slap_pressed, "an unsquared wind-up is not fired wide")
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "it bails to catch instead")
 
 
 func test_oz_receiver_stance_opens_hips_between_puck_and_net() -> void:

@@ -3,12 +3,15 @@ class_name AIBodyCheck
 # Pure decision: should an on-puck defensive bot COMMIT to a body check on the
 # carrier right now, and where's the body-intercept to drive at?
 #
-# Body checks are emergent — there is no hit button. A bot "delivers" one by
-# driving its body into an intercept on the carrier at speed; the collision in
-# Skater._resolve_player_collisions converts the closing velocity + attributes
-# into the transfer impulse, identical to a human hit. So this rule decides only
-# WHEN to commit and returns the intercept POINT to steer at; the state machine
-# points steering there and forces sprint (max closing velocity = harder hit).
+# Body checks are still emergent from the collision (there is no "throw a hit"
+# action). A bot "delivers" one by driving its body into an intercept on the
+# carrier at speed; Skater._resolve_player_collisions converts the closing
+# velocity + attributes into the transfer impulse, identical to a human hit. So
+# this rule decides only WHEN to commit and returns the intercept POINT to steer
+# at; the state machine points steering there, forces sprint (max closing velocity
+# = harder hit), AND holds the Hit button (input.hit_held) — committing delivers
+# the FULL transfer this rule's predicted_impulse assumes (an uncommitted drive
+# lands only the passive fraction) and braces the checker against the collision.
 #
 # Committing is a real risk — miss and you're out of the play — so the gate is
 # deliberately conservative and only fired by pressurers WITH support behind
@@ -33,8 +36,9 @@ class_name AIBodyCheck
 # Victim weight is the CARRIER's real mass (Size) when its build is known — a
 # light checker won't leave its feet for a hit it'd bounce off a heavy target
 # with. Defaults to the league baseline when unwired. (The victim's active BRACE
-# — Physical — only bites when the victim is shot-blocking, which a puck carrier
-# rarely is, so it's not modeled in this carrier-check gate.)
+# — Physical, now on the Hit button — only bites when the victim is committing a
+# check of their own, which a puck carrier rarely is, so it's not modeled in this
+# carrier-check gate.)
 
 # Only hunt a hit when the carrier is this close — beyond it, contain instead.
 const CHECK_RANGE_M: float = 6.0

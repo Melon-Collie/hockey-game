@@ -98,10 +98,14 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 	if _last_claim_sent.get(key, 0.0) + HitTracker.HIT_COOLDOWN_S > now:
 		return
 	_last_claim_sent[key] = now
+	# Adapted interp delay (get_interpolation_delay), the value that actually
+	# positioned the rendered victim this frame — matched by remote_view_time on
+	# the host. Not the target (which can lead it mid-jitter); see the pickup
+	# claim send in local_controller for the full rationale.
 	NetworkManager.send_hit_claim(
 			victim_peer_id,
 			NetworkManager.estimated_host_time(),
-			NetworkManager.get_target_interpolation_delay() * 1000.0)
+			NetworkManager.get_interpolation_delay() * 1000.0)
 
 
 func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:

@@ -250,12 +250,14 @@ func test_skater_move_intent_round_trips_all_octants() -> void:
 		s.move_intent = Vector2(sin(a), cos(a))
 		s.brake_intent = (oct % 2 == 0)
 		s.sprint_active = (oct % 3 == 0)
+		s.hit_committed = (oct % 2 == 1)  # v28 bit [6]; interleaved so it can't alias brake/sprint
 		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.move_intent.x, s.move_intent.x, 0.001, "octant %d x" % oct)
 		assert_almost_eq(dec.move_intent.y, s.move_intent.y, 0.001, "octant %d y" % oct)
 		assert_eq(dec.brake_intent, s.brake_intent, "octant %d brake" % oct)
 		assert_eq(dec.sprint_active, s.sprint_active, "octant %d sprint" % oct)
+		assert_eq(dec.hit_committed, s.hit_committed, "octant %d hit-commit" % oct)
 
 
 func test_skater_idle_intent_round_trips_zero() -> void:
@@ -438,6 +440,16 @@ func test_skater_stagger_round_trips() -> void:
 		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.stagger_timer, v, 0.01, "stagger %f round-trips within u8 @0.01s" % v)
+
+func test_skater_knockdown_round_trips() -> void:
+	# v27: knockdown_timer joins the wire on the same rail as stagger, so the local
+	# victim's predicted knockdown survives reconcile. u8 @0.01s.
+	for v: float in [0.0, 0.7, 1.5, 2.5]:
+		var s := SkaterNetworkState.new()
+		s.knockdown_timer = v
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		assert_almost_eq(dec.knockdown_timer, v, 0.01, "knockdown %f round-trips within u8 @0.01s" % v)
 
 func test_goalie_glove_above_crossbar_not_clipped() -> void:
 	# Regression: glove/blocker Y reach (react_hand_y_max 1.55) exceeded the old s8

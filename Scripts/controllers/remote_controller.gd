@@ -81,6 +81,15 @@ func _physics_process(delta: float) -> void:
 	if _is_host:
 		_drive_from_input(delta)
 	else:
+		# Live interpolation owns this body's cosmetics, so the render-rate gait
+		# hook must run. Clear _self_posing here: a replay driving this same skater
+		# via apply_replay_state raises the flag (that path poses its own gait), and
+		# nothing else lowers it on a client-rendered remote — _process_input, the
+		# only other reset, never runs on this path — so without this the flag stuck
+		# true after the first goal/intermission replay and the render hook yielded
+		# forever, freezing every remote's legs for the rest of the match. Guarded by
+		# the is_replay_mode() early-return above, so this only fires in live play.
+		_self_posing = false
 		if _knockback_lead_elapsed >= 0.0:
 			_knockback_lead_elapsed += delta
 		_interpolate(delta)
@@ -206,6 +215,47 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 	if _state_buffer.size() > 30:
 		_state_buffer.pop_front()
 
+
+# Where the HOST had this skater at host_time, from the interpolation buffer. The
+# local player's reconcile replay samples every OTHER skater here to re-resolve
+# body checks against the host's authoritative positions (Slice C) instead of
+# replaying a stale recorded impulse — so replay matches host authority. Returns a
+# shared scratch (read it before the next call) with position / velocity /
+# brake_intent, or null when the buffer can't bracket the time (warmup / gap), in
+# which case the caller skips the pair. Separate bracket scratch from _interpolate
+# so a reconcile-time sample can't clobber the live render bracket.
+var _sample_bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.BracketResult.new()
+var _sample_scratch: SkaterNetworkState = SkaterNetworkState.new()
+
+func sample_state_at(host_time: float) -> SkaterNetworkState:
+	if _state_buffer.is_empty():
+		return null
+	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
+			_state_buffer, host_time, _sample_bracket)
+	if bracket == null:
+		return null
+	if bracket.is_extrapolating:
+		# Freeze at the newest sample rather than projecting newest.position +
+		# velocity*dt like _interpolate does: this feeds contact geometry, and a
+		# projected lead at the buffer's leading edge could fabricate a false
+		# overlap the host never resolved. Holding the last KNOWN position is the
+		# conservative choice (a bounded lag, not an invented contact).
+		var newest: SkaterNetworkState = bracket.to_state
+		_sample_scratch.position = newest.position
+		_sample_scratch.velocity = newest.velocity
+		_sample_scratch.brake_intent = newest.brake_intent
+		_sample_scratch.hit_committed = newest.hit_committed
+	else:
+		var f: SkaterNetworkState = bracket.from_state
+		var to: SkaterNetworkState = bracket.to_state
+		_sample_scratch.position = BufferedStateInterpolator.hermite(
+				f.position, f.velocity, to.position, to.velocity, bracket.t, bracket.bracket_dt)
+		_sample_scratch.velocity = f.velocity.lerp(to.velocity, bracket.t)
+		# Brace at/before host_time — a discrete flag, so take the earlier sample.
+		_sample_scratch.brake_intent = f.brake_intent
+		_sample_scratch.hit_committed = f.hit_committed
+	return _sample_scratch
+
 func _interpolate(delta: float) -> void:
 	# Shared delay (NetworkManager) keeps the puck and other remotes on the same
 	# timeline; the per-skater lead below shifts this body toward host-present.
@@ -246,8 +296,10 @@ func _interpolate(delta: float) -> void:
 		interpolated.shot_state = newest.shot_state
 		interpolated.shot_charge = newest.shot_charge
 		interpolated.stagger_timer = newest.stagger_timer
+		interpolated.knockdown_timer = newest.knockdown_timer
 		interpolated.move_intent = newest.move_intent
 		interpolated.brake_intent = newest.brake_intent
+		interpolated.hit_committed = newest.hit_committed
 		interpolated.sprint_active = newest.sprint_active
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
@@ -280,8 +332,10 @@ func _interpolate(delta: float) -> void:
 		# grows smoothly through the drag instead of stepping per broadcast.
 		interpolated.shot_charge = lerpf(from_state.shot_charge, to_state.shot_charge, t)
 		interpolated.stagger_timer = lerpf(from_state.stagger_timer, to_state.stagger_timer, t)
+		interpolated.knockdown_timer = lerpf(from_state.knockdown_timer, to_state.knockdown_timer, t)
 		interpolated.move_intent = to_state.move_intent
 		interpolated.brake_intent = to_state.brake_intent
+		interpolated.hit_committed = to_state.hit_committed
 		interpolated.sprint_active = to_state.sprint_active
 		# render_time is led toward present by extrapolation_lead_fraction, so the
 		# hermite result already sits close to the host's live pose (or, past the
@@ -366,6 +420,9 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# equivalent of the per-tick stamp in SkaterController._process_input.
 	skater.move_intent = state.move_intent
 	skater.brake_intent = state.brake_intent
+	# Replicated hit-commit so the body-check resolver reads this remote's brace /
+	# full-vs-passive delivery on this machine (the brace moved onto the Hit button).
+	skater.hit_committed = state.hit_committed
 	# The skid VFX (SkaterVFX trail marks + spray) keys off skater.is_braking,
 	# which only _process_input stamps — mirror it from the replicated brake
 	# bit so another player's hockey stop actually sprays on this machine.
@@ -381,6 +438,11 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# remotes — so a checked opponent stumbled on the host and stood rock-
 	# steady on everyone else's screen.
 	stagger_timer = state.stagger_timer
+	# Knockdown mirrors stagger onto client-rendered remotes: the controller value
+	# and the skater flag so the down pose (later) and any is_knocked_down read
+	# reflect a checked opponent on every machine, not just the host.
+	knockdown_timer = state.knockdown_timer
+	skater.is_knocked_down = knockdown_timer > 0.0
 	# Bottom hand is purely reactive to top_hand + blade and needs no network
 	# state of its own; it's posed once per rendered frame in _render_pose_update
 	# (Skater._process) along with the gait, not here.

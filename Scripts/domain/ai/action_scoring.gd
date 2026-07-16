@@ -671,6 +671,13 @@ const SKATER_BRAKE_TIME_S: float = 0.3
 # eventually."
 const MIN_TRAVEL_SPEED_M_S: float = 1.0
 
+# League-default all-direction thrust (Agility-scaled per skater) — the redirect
+# authority a caps-less time_to_arrive caller assumes for the cross-momentum shed.
+# Per-bot callers pass the skater's REAL max_accel (AISkaterCaps.max_accel) instead,
+# so a nimble build sheds sideways momentum faster than a heavy one. Mirrors
+# SkaterController.thrust; a physical acceleration, not an evaluation shape knob.
+const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+
 # Utility-AI knobs. AIRoleCarrier._pick_action re-runs every
 # PICK_ACTION_PERIOD_TICKS physics ticks and treats
 # CARRY as a fourth competing option scored as
@@ -976,6 +983,36 @@ static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> f
 	return shooter.x + (net_z - shooter.z) / dz * (px - shooter.x)
 
 
+# Soft make-margin against the shooter's release scatter. The physical `window`
+# is the net still open past the puck's clean-entry fit and the goalie's cover;
+# `spread` is the bot's per-release aim error (aim_spread_rad). The OLD model
+# subtracted the full spread as a HARD margin (max(0, window − spread)) and
+# returned only the CERTAIN-make core — so the bot declined every shot the goalie
+# could reach into, and the keeper never had to make a save on a bot (its misses
+# were all posts/wides, the wobble aimed away from him). This prices the PARTIAL
+# make instead: a shot whose window is comparable to its scatter still goes in
+# some of the time. window·window/(window + spread):
+#   · window ≫ spread → ≈ window − spread   (certain make — clean shots and the
+#                                             whole aim_spread=0 calibration
+#                                             baseline are unchanged)
+#   · window == spread → 0.5·spread          (was 0 — the partial make the bot now
+#                                             takes, and gets saved on ~half of)
+#   · window → 0       → 0                    (fully covered — no phantom value)
+#   · spread == 0      → window               (perfect hand / test agent: exact
+#                                             geometry, identical to the old cut)
+# The bot aims these at the window CENTRE (DEFAULT_CORNER_BIAS = 0), so its
+# existing execution wobble splits a taken shot into goals / goalie saves / posts
+# — a shooter who picks the corner and sometimes gets robbed. Grounded (a make
+# probability, not a magic curve), monotonic, and allocation/branch-cheap for the
+# 120 Hz hole scan.
+static func _soft_make_angle(window: float, spread: float) -> float:
+	if window <= 0.0:
+		return 0.0
+	if spread <= 0.0:
+		return window
+	return window * window / (window + spread)
+
+
 # Open angle (radians, from the shooter's eye) of hole `i` — 0 if the goalie
 # covers it. Corners measure the net cleared past the reaction-gated cover edge;
 # the five-hole is a central gap that opens with the goalie's unsettle. All
@@ -1067,11 +1104,11 @@ static func _hole_open_angle(
 						0.0, 1.0)
 				gap *= 1.0 - seal
 			var gap_angle: float = maxf(0.0, gap - puck_diameter) / maxf(dist, 0.5)
-			return maxf(0.0, gap_angle - aim_spread_rad) * centrality
+			return _soft_make_angle(gap_angle, aim_spread_rad) * centrality
 		# Legacy proxy (no replicated stance in scope — threat surfaces, tests):
 		# a set goalie seals it, a caught-moving one leaks it.
 		var proxy_angle: float = maxf(0.0, FIVE_GAP_M - puck_diameter) / maxf(dist, 0.5)
-		return maxf(0.0, proxy_angle - aim_spread_rad) * eff_unsettled * centrality
+		return _soft_make_angle(proxy_angle, aim_spread_rad) * eff_unsettled * centrality
 
 	# Band cover raced against t_reach — standing pad column widened by the
 	# butterfly drop LOW, reaction-gated glove/blocker extension HIGH, with the
@@ -1117,21 +1154,22 @@ static func _hole_open_angle(
 		return 0.0
 	# The puck has to FIT: a corner only scores by what remains after the puck's
 	# clean-entry inset off the pipe — post radius + puck radius, the exact
-	# GameRules.NET_ENTRY_HALF_WIDTH inset _hole_aim_x buys the aim point — PLUS
-	# the shooter's own execution spread (aim_spread_rad), the same wobble budget
-	# the aim point reserves. A noisier hand needs a wider window for the same
-	# chance, so spread belongs in shot SELECTION, not just execution. (No extra
-	# margin on the cover side: `cover` is already the goalie's MAXIMAL deployed
-	# reach.) Without the inset, a fully-deployed goalie always left a few-cm
-	# "sliver" open past his reach at ANY range — an opening the aim clamp can't
-	# even target (it sits inside the entry inset) — and that un-hittable sliver
-	# out-scored working closer: the launch-it-from-the-point bug. The inset's
-	# angular size foreshortens with range like any target, so in tight it costs
-	# almost nothing.
-	var fit_angle: float = (GameRules.NET_POST_RADIUS + GameRules.PUCK_COLLISION_RADIUS) \
-			/ maxf(shooter.distance_to(attacking_goal), 0.5) \
-			+ aim_spread_rad
-	return maxf(0.0, open_angle - fit_angle)
+	# GameRules.NET_ENTRY_HALF_WIDTH inset _hole_aim_x buys the aim point. This is a
+	# HARD geometric requirement (the puck physically clips the iron short of it),
+	# so it's subtracted outright. (No extra margin on the cover side: `cover` is
+	# already the goalie's MAXIMAL deployed reach.) Without the inset, a
+	# fully-deployed goalie always left a few-cm "sliver" open past his reach at ANY
+	# range — an opening the aim clamp can't even target (it sits inside the entry
+	# inset) — and that un-hittable sliver out-scored working closer: the
+	# launch-it-from-the-point bug. The inset's angular size foreshortens with range
+	# like any target, so in tight it costs almost nothing.
+	var pipe_clearance: float = (GameRules.NET_POST_RADIUS + GameRules.PUCK_COLLISION_RADIUS) \
+			/ maxf(shooter.distance_to(attacking_goal), 0.5)
+	# The shooter's execution spread is NOT a hard cut — it softens the window via
+	# a partial-make (see _soft_make_angle): a window comparable to the wobble
+	# still scores (the bot takes it and gets saved on ~half), instead of the old
+	# certain-make-only cut that declined every shot the goalie could reach.
+	return _soft_make_angle(open_angle - pipe_clearance, aim_spread_rad)
 
 
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance
@@ -2305,7 +2343,8 @@ static func board_gap_m(point: Vector3) -> float:
 static func reach_clearance(
 		puck_point: Vector3, time: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = [], maneuver_time: float = -1.0) -> float:
+		opponent_caps: Array = [], maneuver_time: float = -1.0,
+		carry_dir: Vector2 = Vector2.ZERO, carry_speed: float = 0.0) -> float:
 	var n: int = opponents.size()
 	if n == 0 or opponent_vels.size() != n:
 		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
@@ -2324,21 +2363,36 @@ static func reach_clearance(
 	# a defender's Agility (max_accel) sets how far it can lunge, its Size
 	# (blade_span) how far its stick touches. Empty caps → league constants for all
 	# (every non-attribute caller), reproducing the prior single-reach behaviour.
+	# ESCAPE-SPEED gate (opt-in, `carry_speed > 0`): when the puck is being CARRIED
+	# along `carry_dir` at `carry_speed`, a defender's body still rides its momentum
+	# (proj below) but its lunge only uses the accel it has left AFTER matching the
+	# carrier's pace along the carry — a chaser near that pace is committed to
+	# keeping up and can't also reach across, one the carrier out-skates can't reach
+	# the receding puck, while a stationary/ahead man (not chasing) keeps his full
+	# lunge. Off (carry_speed = 0) → surplus 1 for all, identical to the prior model.
 	var t_factor: float = 0.5 * pow(maxf(0.0, maneuver_time - EVADE_REACTION_S), 2.0)
 	var has_caps: bool = opponent_caps.size() == n
-	var default_reach: float = t_factor * MANEUVER_ACCEL_M_S2 + EVADE_STICK_REACH_M
+	var gated: bool = carry_speed > 0.0
 	var worst: float = INF
 	for i: int in n:
 		var proj_x: float = opponents[i].x + opponent_vels[i].x * time
 		var proj_z: float = opponents[i].z + opponent_vels[i].z * time
-		var reach: float = default_reach
+		var maneuver: float = t_factor * MANEUVER_ACCEL_M_S2
+		var stick: float = EVADE_STICK_REACH_M
 		if has_caps:
 			var caps: AISkaterCaps = opponent_caps[i]
 			if caps != null:
-				reach = t_factor * caps.max_accel + caps.blade_span
+				maneuver = t_factor * caps.max_accel
+				stick = caps.blade_span
+		if gated:
+			# carry_dir is world XZ packed as Vector2(x, z); v_along is the defender's
+			# speed along the carry (net-ward chase).
+			var v_along: float = opponent_vels[i].x * carry_dir.x \
+					+ opponent_vels[i].z * carry_dir.y
+			maneuver *= clampf(1.0 - maxf(v_along, 0.0) / carry_speed, 0.0, 1.0)
 		var dx: float = puck_point.x - proj_x
 		var dz: float = puck_point.z - proj_z
-		var clear: float = sqrt(dx * dx + dz * dz) - reach
+		var clear: float = sqrt(dx * dx + dz * dz) - (maneuver + stick)
 		if clear < worst:
 			worst = clear
 	return worst
@@ -2368,12 +2422,28 @@ const EVADE_CARRY_HANDLE_M: float = 0.9
 # momentum-projected) and returns the tightest — so a carry that ends in a seam
 # but threads a defender mid-route is still penalised. from == to gives the
 # static hold read (is this spot clear over the window).
+# `apply_escape` turns on reach_clearance's escape-speed gate (see that doc): a
+# defender the carrier is out-skating along this carry can't sustain a strip. The
+# carry direction and pace come from (from, to, arrival_time) — the carrier drives
+# from→to at exactly that pace — so nothing else need be supplied. Default off
+# reproduces the prior model for every non-carry caller.
 static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> float:
+		opponent_caps: Array = [], apply_escape: bool = false) -> float:
+	var carry_dir := Vector2.ZERO
+	var carry_speed: float = 0.0
+	if apply_escape and arrival_time > 0.0:
+		var dx: float = to.x - from.x
+		var dz: float = to.z - from.z
+		var dist: float = sqrt(dx * dx + dz * dz)
+		if dist > 0.001:
+			carry_dir = Vector2(dx / dist, dz / dist)
+			carry_speed = dist / arrival_time
 	var c_mid: float = reach_clearance(
-			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels, opponent_caps)
-	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels, opponent_caps)
+			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
+			opponent_caps, -1.0, carry_dir, carry_speed)
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
+			opponent_caps, -1.0, carry_dir, carry_speed)
 	return minf(c_mid, c_end)
 
 
@@ -2386,12 +2456,23 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 # strip happens first. Mirrors lane_loss_point for passes; from == to is a stand.
 static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> Vector3:
+		opponent_caps: Array = [], apply_escape: bool = false) -> Vector3:
+	var carry_dir := Vector2.ZERO
+	var carry_speed: float = 0.0
+	if apply_escape and arrival_time > 0.0:
+		var ddx: float = to.x - from.x
+		var ddz: float = to.z - from.z
+		var ddist: float = sqrt(ddx * ddx + ddz * ddz)
+		if ddist > 0.001:
+			carry_dir = Vector2(ddx / ddist, ddz / ddist)
+			carry_speed = ddist / arrival_time
 	var mid: Vector3 = from.lerp(to, 0.5)
-	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents, opponent_vels, opponent_caps)
+	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents,
+			opponent_vels, opponent_caps, -1.0, carry_dir, carry_speed)
 	if c_mid < 0.0:
 		return mid   # covered mid-route — stripped there, before the destination
-	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels, opponent_caps)
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
+			opponent_caps, -1.0, carry_dir, carry_speed)
 	if c_end < 0.0:
 		return to    # clear mid-route, covered at the destination
 	# Neither covered (a low strip probability anyway): the tighter of the two.
@@ -2680,6 +2761,15 @@ static func deke_cut_side(
 # a carry is a slow physical traverse, so it uses a flat poke radius.
 const CARRY_PATH_CLEAR_RADIUS_M: float = 1.8
 
+# carry_lane_clearance's "beaten trailer" gate. A defender is dropped from the lane
+# only if it's BEHIND the carrier along the drive by more than LANE_BEATEN_BEHIND_M
+# AND slower along it by more than LANE_BEATEN_PACE_M_S — i.e. the carrier is
+# genuinely pulling away. Both are physical slacks (a body's depth behind; a real
+# pace edge), not shape knobs: a man even/ahead or matching pace is never shed, so
+# only a beaten trailer is dropped.
+const LANE_BEATEN_BEHIND_M: float = 0.1
+const LANE_BEATEN_PACE_M_S: float = 0.5
+
 # Public lane-clearance check for CARRY candidates — the bot is
 # physically traveling along this segment, not firing a puck through
 # it, so the reaction-window math from `lane_clear` doesn't apply.
@@ -2715,27 +2805,84 @@ static func path_clearance(from: Vector3, to: Vector3,
 	var perp: float = sqrt(min_perp_sq)
 	return clampf(perp / CARRY_PATH_CLEAR_RADIUS_M, 0.0, 1.0)
 
+static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		max_speed: float = 0.0) -> float:
+	var dx: float = to.x - from.x
+	var dz: float = to.z - from.z
+	var seg_sq: float = dx * dx + dz * dz
+	if seg_sq < 0.01 or arrival_time <= 0.0:
+		return 1.0
+	var dist: float = sqrt(seg_sq)
+	var drive_speed: float = dist / arrival_time
+	if max_speed > 0.0:
+		drive_speed = minf(drive_speed, max_speed)
+	var dir_x: float = dx / dist
+	var dir_z: float = dz / dist
+	# Same proximity read as path_clearance (project each defender to arrival and
+	# take the tightest perp to the straight segment) — EXCEPT we first drop a
+	# defender the carrier has genuinely BEATEN: one currently behind the carrier
+	# along the drive AND slower along it, so the carrier is pulling away and it
+	# can't strip a puck driving off. A man AHEAD (a wall, a head-on rush) or one
+	# MATCHING the drive pace is never dropped, so path_clearance's coverage of real
+	# obstacles — the container duel — is untouched; only the beaten trailer is shed.
+	var min_perp_sq: float = INF
+	var n: int = opponents.size()
+	var has_vels: bool = opponent_vels.size() == n
+	for i: int in n:
+		var op: Vector3 = opponents[i]
+		var ovx: float = opponent_vels[i].x if has_vels else 0.0
+		var ovz: float = opponent_vels[i].z if has_vels else 0.0
+		var along_now: float = (op.x - from.x) * dir_x + (op.z - from.z) * dir_z
+		var opp_drive_speed: float = ovx * dir_x + ovz * dir_z
+		if along_now < -LANE_BEATEN_BEHIND_M and drive_speed > opp_drive_speed + LANE_BEATEN_PACE_M_S:
+			continue   # behind and out-skated — beaten, shed
+		var px: float = op.x + ovx * arrival_time
+		var pz: float = op.z + ovz * arrival_time
+		var pdx: float = px - from.x
+		var pdz: float = pz - from.z
+		var t: float = (pdx * dir_x + pdz * dir_z) / dist
+		if t <= 0.0 or t >= 1.0:
+			continue
+		var perp_x: float = px - (from.x + dir_x * t * dist)
+		var perp_z: float = pz - (from.z + dir_z * t * dist)
+		var perp_sq: float = perp_x * perp_x + perp_z * perp_z
+		if perp_sq < min_perp_sq:
+			min_perp_sq = perp_sq
+	if min_perp_sq == INF:
+		return 1.0
+	return clampf(sqrt(min_perp_sq) / CARRY_PATH_CLEAR_RADIUS_M, 0.0, 1.0)
+
 
 # Momentum-aware time to arrive at `dest` from `from_pos` carrying
-# `from_velocity`. effective_speed = SKATER_REF_SPEED + component of
-# velocity along (from→dest); a skater already moving toward dest gets
-# there faster, a skater moving away takes longer. Clamped at
-# MIN_TRAVEL_SPEED_M_S so reverse-direction candidates have finite
-# arrival time (slower, but not infinite).
+# `from_velocity`. Two components:
+#   1. TRAVEL: dist / (SKATER_REF_SPEED + component of velocity along from→dest) —
+#      a skater already moving toward dest closes faster, one moving away slower.
+#      Clamped at MIN_TRAVEL_SPEED_M_S so reverse candidates stay finite.
+#   2. CROSS-MOMENTUM SHED: |v_perp| / accel — the velocity NOT pointed at dest is
+#      wasted speed the skater must first shed (re-accelerate back into line)
+#      before it truly closes. Controls are facing-agnostic (no turn arc; the
+#      crossover/backward thrust penalties are small), so this is a straight
+#      re-acceleration against the thrust budget, not a curve. Without it the old
+#      1-D projection priced a lateral fly-by's cut as a fast arrival it can't
+#      actually settle into — the phantom that let a carrier orbit the slot
+#      instead of shooting (see MOMENTUM_SHED / test_real_rush_sim).
 #
-# Used by AIRoleCarrier._best_carry to discount candidates the bot is
-# currently moving away from, by AIController chase-intercept lookahead
-# for opponent ETA estimation, and by off-puck role behaviors that
-# need a momentum-aware ETA without inventing their own constants
-# (e.g., SUPPORT's foot-race-home exposure check uses this for the
-# threat opp's ETA back to our net).
+# Used by AIRoleCarrier._best_carry to price carry candidates (a cut against the
+# grain of momentum costs real time, so the goalie reads square and the honest shot
+# wins), by AIController chase-intercept lookahead for opponent ETA, and by off-puck
+# role behaviors needing a momentum-aware ETA without inventing constants (e.g.,
+# SUPPORT's foot-race-home exposure check uses this for the threat opp's ETA home).
 #
-# `ref_speed_m_s` is the actor's flat skating speed; it defaults to the league
-# reference so cross-player callers (opponent / teammate ETA, the loose-puck
-# election that must stay consistent across all bots) keep the shared baseline.
-# A bot estimating ITS OWN arrival passes its attribute-scaled top speed.
+# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
+# thrust (Agility-scaled) — both default to league references so cross-player
+# callers (opponent / teammate ETA, the loose-puck election that must stay
+# consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
+# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build sheds
+# sideways momentum faster, so it reaches an off-axis cut sooner).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
-		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S) -> float:
+		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
+		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
 	var dx: float = dest.x - from_pos.x
 	var dz: float = dest.z - from_pos.z
 	var dist: float = sqrt(dx * dx + dz * dz)
@@ -2745,7 +2892,23 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
 	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
 			ref_speed_m_s + speed_along)
-	return dist / effective
+	# Cross-momentum cost. `speed_along` credits velocity pointed AT the target, but
+	# the perpendicular component — sqrt(|v|² − along²) — is wasted speed the skater
+	# must shed before it truly closes. Controls are facing-agnostic (no turn arc;
+	# crossover/backward thrust penalties are small), so a redirect is a straight
+	# re-acceleration: nulling the sideways component takes at least |v_perp| /
+	# accel seconds against the skater's real all-direction thrust (`accel_m_s2`).
+	# The old 1-D projection treated this as free, so a carrier flying laterally
+	# priced a cut it can't actually settle into as a fast arrival. Two-phase: shed
+	# the cross-momentum, then close `dist` at the along-aided cruise. Zero when
+	# already pointed at the target (v_perp = 0) — direct drives, standing starts,
+	# and pure reverse (handled by the floor above) are unchanged; only genuinely
+	# off-axis momentum pays, and a nimbler build (higher accel) pays less.
+	var v_len_sq: float = from_velocity.x * from_velocity.x \
+			+ from_velocity.z * from_velocity.z
+	var perp_sq: float = maxf(0.0, v_len_sq - speed_along * speed_along)
+	var t_shed: float = sqrt(perp_sq) / maxf(accel_m_s2, 0.001)
+	return dist / effective + t_shed
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects

@@ -28,7 +28,8 @@ extends RefCounted
 #                      last_processed_ts f32,
 #                      flags u8 (shot_state[2:0]+elevation_level[4:3]+ghost[5]+blade_up[6]+sprint_locked[7]),
 #                      shot_charge u8, stamina u8, stagger_timer u8@0.01s,
-#                      intent u8 (move octant[2:0]+moving[3]+brake[4] v15, sprint[5] v16)
+#                      knockdown_timer u8@0.01s,
+#                      intent u8 (move octant[2:0]+moving[3]+brake[4] v15, sprint[5] v16, hit_commit[6] v28)
 #      Puck    (13 B): pos s16/s16/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
 #      Goalie  (43 B): root (12 B) + pose (31 B). Root:
 #                      pos_x/z s16@1cm, rot_y s16@π/32767, state u8, fho u8,
@@ -60,8 +61,9 @@ signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal queue_depth_feedback(depth: int)
 
 const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + f32 host_capture_time (4) + u8 num_skaters (1)
-const SKATER_STATE_BYTES: int = 40  # inner skater state block (was hardcoded 39 at two
-                                    # decode sites and silently truncated on the v15 grow)
+const SKATER_STATE_BYTES: int = 41  # inner skater state block (was hardcoded 39 at two
+                                    # decode sites and silently truncated on the v15 grow;
+                                    # 40->41 adds knockdown_timer u8@0.01s)
 const SKATER_BLOCK_SIZE: int = SKATER_STATE_BYTES + 5  # + u32 peer_id + u8 queue_depth
 const PUCK_BLOCK_SIZE: int = 13    # 12B pos+vel + 1B carrier_idx
 const GOALIE_BLOCK_SIZE: int = 43  # 12 root + 31 pose (glove/blocker offsets are s16-wide)
@@ -381,13 +383,13 @@ func decode_stats(data: Array) -> void:
 
 # ── Quantization helpers ──────────────────────────────────────────────────────
 
-# Skater: SKATER_STATE_BYTES (40) bytes
+# Skater: SKATER_STATE_BYTES (41) bytes
 # Offsets: pos(0..4) vel(5..10) blade(11..16) top_hand(17..22)
 #          facing(23..24) ubrot(25..26) fav(27..28) ubav(29..30) lp_ts(31..34)
 #          flags(35) charge(36) stamina(37) stagger(38)
 static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	var b := PackedByteArray()
-	b.resize(40)
+	b.resize(SKATER_STATE_BYTES)
 	var o: int = 0
 	b.encode_s16(o, clampi(roundi(s.position.x * 100.0), -32768, 32767)); o += 2
 	b.encode_s8(o, clampi(roundi(s.position.y * 100.0), -128, 127)); o += 1
@@ -426,11 +428,15 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	# predicted stagger was wiped to 0 on the next reconcile — full-thrust replay
 	# vs the host's penalised sim → a reconcile storm for the whole stagger window.
 	b.encode_u8(o, clampi(roundi(s.stagger_timer * 100.0), 0, 255)); o += 1
+	# Body-check knockdown seconds remaining, u8 @ 0.01 s (0..2.55 s covers
+	# knockdown_max_seconds ~1.5 with headroom). Same rail/reason as stagger above:
+	# without it the local victim's predicted knockdown is wiped on the next reconcile.
+	b.encode_u8(o, clampi(roundi(s.knockdown_timer * 100.0), 0, 255)); o += 1
 	# Movement-intent byte (v15): bits [0..2] move-direction octant, bit [3]
-	# moving, bit [4] brake held, bit [5] sprint active (v16). WASD is 8-way,
-	# so the octant quantization is lossless; the gait reads intent (glide /
-	# crossover anticipation / brake-gated hockey stop / sprint stride) on
-	# client-rendered remotes from this.
+	# moving, bit [4] brake held, bit [5] sprint active (v16), bit [6] hit-commit
+	# (v28, the body-check brace/delivery signal). WASD is 8-way, so the octant
+	# quantization is lossless; the gait reads intent (glide / crossover anticipation
+	# / brake-gated hockey stop / sprint stride) on client-rendered remotes from this.
 	var intent: int = 0
 	if s.move_intent.length_squared() > 0.0025:
 		var oct: int = wrapi(roundi(atan2(s.move_intent.x, s.move_intent.y) / (PI / 4.0)), 0, 8)
@@ -439,12 +445,14 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 		intent |= 0x10
 	if s.sprint_active:
 		intent |= 0x20
+	if s.hit_committed:
+		intent |= 0x40
 	b.encode_u8(o, intent)
 	return b
 
 
 static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
-	if b.size() < 40:
+	if b.size() < SKATER_STATE_BYTES:
 		push_warning("WorldStateCodec: truncated skater block (%d bytes)" % b.size())
 		return SkaterNetworkState.new()
 	var s := SkaterNetworkState.new()
@@ -476,6 +484,7 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.shot_charge = b.decode_u8(o) / 255.0; o += 1
 	s.stamina = b.decode_u8(o) / 255.0; o += 1
 	s.stagger_timer = b.decode_u8(o) / 100.0; o += 1
+	s.knockdown_timer = b.decode_u8(o) / 100.0; o += 1
 	var intent: int = b.decode_u8(o)
 	if intent & 0x08:
 		var a: float = float(intent & 0x07) * (PI / 4.0)
@@ -484,6 +493,7 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 		s.move_intent = Vector2.ZERO
 	s.brake_intent = (intent & 0x10) != 0
 	s.sprint_active = (intent & 0x20) != 0
+	s.hit_committed = (intent & 0x40) != 0
 	return s
 
 
