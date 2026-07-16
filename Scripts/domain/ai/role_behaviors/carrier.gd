@@ -466,6 +466,9 @@ var _ticks_since_pick: int = 0
 # on ctx.team_size — protects shipping 3v3 tuning).
 const EXPOSURE_APPETITE_DEFENSE: float = 1.0
 const EXPOSURE_APPETITE_FORWARD: float = 0.7
+# Loss probabilities below this skip the counter read entirely (hot-path
+# floor, not a tuning knob: at 4% × a bounded threat the term is noise).
+const EXPOSURE_PROB_FLOOR: float = 0.04
 
 # ── Scratch buffers (reused across ticks, refilled per call) ────────────────
 var _scratch_opponents: Array[Vector3] = []
@@ -495,6 +498,12 @@ var _scratch_teammate_ids: Array[int] = []
 # opponent's threat in the turnover-cost term (the carrier just got
 # beat, so they don't count). Rebuilt once per _pick_action.
 var _scratch_our_defenders: Array[Vector3] = []
+# Teammate ETAs to the counter point (transition exposure, 5v5) — rebuilt
+# with _scratch_our_defenders, candidate-invariant across one compete.
+var _scratch_exposure_mate_etas: Array[float] = []
+# Counter-threat memo by covering-body count (see counter_rush_cost) —
+# -1-seeded alongside the ETAs each compete.
+var _scratch_exposure_threat_memo: Array[float] = []
 # Our chasers for a dump race: our defenders plus ourselves (we dump and chase).
 # Rebuilt inside _best_dump.
 var _scratch_our_chasers: Array[Vector3] = []
@@ -1220,6 +1229,15 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 		else:
 			# Our teammate — a defender for the turnover-cost term.
 			_scratch_our_defenders.append(s.position)
+	# Transition-exposure precompute (5v5): each teammate's ETA to the
+	# counter point is candidate-invariant, so race them once per re-eval
+	# instead of once per counter_rush_cost call (~25 calls/compete).
+	if ctx.team_size >= 5:
+		AIActionScoring.fill_counter_cover_etas(
+				ctx.defending_goal_pos, _scratch_our_defenders,
+				_scratch_exposure_mate_etas)
+		_scratch_exposure_threat_memo.resize(_scratch_our_defenders.size() + 2)
+		_scratch_exposure_threat_memo.fill(-1.0)
 
 
 # Refills the directional protect-opponent triple (see the protect block in
@@ -1665,7 +1683,10 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 # the hand-set feel scalar (see EXPOSURE_APPETITE_*).
 func _counter_exposure_cost(ctx: RoleContext, loss_point: Vector3,
 		loss_prob: float, recover_from: Vector3, our_goalie: Vector3) -> float:
-	if ctx.team_size < 5 or loss_prob <= 0.0:
+	# Probability floor: a candidate that barely risks the puck (open-ice
+	# carries, clean lanes) prices its counter at ~0 anyway — skip the
+	# score_shoot. Same spirit as PASS_MISS_BASE_PROB's magnitude.
+	if ctx.team_size < 5 or loss_prob <= EXPOSURE_PROB_FLOOR:
 		return 0.0
 	var appetite: float = EXPOSURE_APPETITE_DEFENSE if ctx.self_is_defense \
 			else EXPOSURE_APPETITE_FORWARD
@@ -1673,7 +1694,8 @@ func _counter_exposure_cost(ctx: RoleContext, loss_point: Vector3,
 			loss_point, loss_prob, ctx.defending_goal_pos, our_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders,
 			recover_from, ctx.self_max_speed,
-			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+			_scratch_exposure_mate_etas, _scratch_exposure_threat_memo)
 
 
 # Rotation time: how long the bot needs to rotate facing to point at

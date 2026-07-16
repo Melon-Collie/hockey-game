@@ -159,6 +159,16 @@ static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
 	# feed clearly more, so the cursor (which snaps to this target) stays steady.
 	AIRoleHelpers.append_incumbent(ctx, candidates)
 
+	# Per-receiver pass-threat upper bounds (no candidate appended) for the
+	# per-candidate max() early-out — same monotone-in-defenders argument as
+	# AIRoleHelpers.carrier_option_bases, same exact result.
+	var bases: Array[float] = ctx.scratch_option_bases
+	bases.clear()
+	for opp_pos: Vector3 in opp_teammates:
+		bases.append(AIActionScoring.threat_surface_pass(
+				carrier_pos, opp_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+
 	var best_pos: Vector3 = search_center
 	var best_score: float = -INF
 	for c: Vector3 in candidates:
@@ -177,7 +187,7 @@ static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
 			continue
 		var threat: float = _max_pass_threat(
 				c, carrier_pos, opp_teammates, our_net, our_goalie_pos,
-				our_team_excluding_self)
+				our_team_excluding_self, bases)
 		var score: float = -threat + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
@@ -204,14 +214,19 @@ static func _mid_search_center(ctx: RoleContext, carrier_pos: Vector3) -> Vector
 
 # Highest pass-threat surface the carrier could exploit to any teammate,
 # with our hypothetical defender at `candidate` added to the carrier's
-# "opponents" list. Same primitive PRESSURE uses.
+# "opponents" list. Same primitive PRESSURE uses. `bases` (per-receiver
+# threats WITHOUT the candidate, in opp_teammates order) bound each term
+# from above — adding a defender only lowers a surface — so terms evaluate
+# in descending-bound order and stop when the running max meets the next
+# bound: identical result, fewer surfaces.
 static func _max_pass_threat(
 		candidate: Vector3,
 		carrier_pos: Vector3,
 		opp_teammates: Array[Vector3],
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
-		our_team_excluding_self: Array[Vector3]) -> float:
+		our_team_excluding_self: Array[Vector3],
+		bases: Array[float]) -> float:
 	# Carrier's view of defenders = our team + me at c. Append-and-restore the
 	# caller's array in place instead of duplicating it per candidate (10×/decide
 	# in F2's positioning argmax); the array is left exactly as passed and keeps
@@ -219,9 +234,19 @@ static func _max_pass_threat(
 	our_team_excluding_self.push_back(candidate)
 
 	var max_threat: float = 0.0
-	for opp_pos: Vector3 in opp_teammates:
+	var used: int = 0
+	while true:
+		var bi: int = -1
+		var bound: float = -1.0
+		for i: int in bases.size():
+			if used & (1 << i) == 0 and bases[i] > bound:
+				bound = bases[i]
+				bi = i
+		if bi == -1 or bound <= max_threat:
+			break
+		used |= 1 << bi
 		var threat: float = AIActionScoring.threat_surface_pass(
-				carrier_pos, opp_pos, our_net, our_goalie_pos,
+				carrier_pos, opp_teammates[bi], our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 		if threat > max_threat:
 			max_threat = threat

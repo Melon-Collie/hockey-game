@@ -132,6 +132,15 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# now-illegal or wrong-side incumbent is dropped outright.
 	AIRoleHelpers.append_incumbent(ctx, candidates)
 
+	# Upper bounds for the per-candidate max() early-out: the carrier's
+	# option values with the current defenders only. One extra surface pass
+	# here lets every candidate below skip the pass lanes that can't matter
+	# (identical argmax — see carrier_option_bases).
+	var bases: Array[float] = ctx.scratch_option_bases
+	AIRoleHelpers.carrier_option_bases(
+			carrier_pos, our_net, our_goalie_pos,
+			our_team_excluding_self, opp_teammates, bases)
+
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	for c: Vector3 in candidates:
@@ -146,7 +155,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# for us (lower for the carrier).
 		var pressure_score: float = -AIRoleHelpers.carrier_best_option(
 				c, carrier_pos, our_net, our_goalie_pos,
-				our_team_excluding_self, opp_teammates) \
+				our_team_excluding_self, opp_teammates, bases) \
 				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if pressure_score > best_score:
 			best_score = pressure_score
