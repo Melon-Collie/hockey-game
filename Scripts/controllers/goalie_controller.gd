@@ -236,6 +236,17 @@ extends Node
 # dangle wiggle without moving the goalie's set point off the puck.
 @export var shooter_weight_standing: float = 0.25
 @export var shooter_weight_butterfly: float = 0.30
+# Slapshot windup override. While a carrier winds up a slapshot the puck is
+# PINNED at a fixed lateral offset to the blade side (Skater.enter_slapshot_pinning,
+# ~slapper_zone_offset_x = 1 m) and does NOT jitter — it sits rock-steady and IS
+# the honest shot origin the release fires from. The body-weight bias above only
+# exists to reject stickhandle jitter, which is absent here, so applying it squares
+# the goalie ~offset·(1-w) toward the shooter's chest — biased off the puck toward
+# center. That is exactly the "skate up square, rip a slapper past the goalie's
+# side" seam: the shot leaves from the pinned puck 1 m over, but the goalie set his
+# angle 0.25 m closer to center. Track the pinned puck itself (weight → 0) so the
+# goalie squares to where the shot actually comes from.
+@export var shooter_weight_slapper_windup: float = 0.0
 # Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
 # scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
 # effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
@@ -1548,7 +1559,11 @@ func _compute_threat_position() -> Vector3:
 	_chest_t = chest_t
 	# Body bias fades OUT with distance (shooter_weight_far < base): the goalie
 	# squares to the puck at range and keeps only a small in-tight body dash.
-	var w: float = lerpf(base_w, shooter_weight_far, chest_t)
+	# Slapshot windup is the exception: the puck is pinned (no jitter to reject)
+	# and IS the shot origin at every range, so square to it directly — no body
+	# bias, no distance blend. See shooter_weight_slapper_windup.
+	var w: float = shooter_weight_slapper_windup if _reading_slapper_tell \
+			else lerpf(base_w, shooter_weight_far, chest_t)
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
 	# Two leads: CARRIER velocity captures body motion (sustained skating) and is
