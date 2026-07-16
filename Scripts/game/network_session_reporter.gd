@@ -89,9 +89,18 @@ func _post(url: String, body: Dictionary) -> void:
 	var root: Window = (Engine.get_main_loop() as SceneTree).root
 	var req := HTTPRequest.new()
 	root.add_child(req)
-	req.request_completed.connect(func(_result: int, code: int, _hdrs: PackedStringArray, _body: PackedByteArray) -> void:
+	req.request_completed.connect(func(_result: int, code: int, _hdrs: PackedStringArray, resp: PackedByteArray) -> void:
 		if code < 200 or code >= 300:
-			push_warning("NetworkSessionReporter: HTTP %d" % code)
+			# Include the response body: PostgREST names the offending column /
+			# constraint there (e.g. PGRST204 "column ... not found"), and a bare
+			# code alone can't distinguish a schema-drift 400 from a size-cap one.
+			var detail: String = resp.get_string_from_utf8().strip_edges()
+			if detail.length() > 500:
+				detail = detail.substr(0, 500) + "…"
+			if detail.is_empty():
+				push_warning("NetworkSessionReporter: HTTP %d" % code)
+			else:
+				push_warning("NetworkSessionReporter: HTTP %d — %s" % [code, detail])
 		req.queue_free()
 	)
 	var err: Error = req.request(url, _headers(), HTTPClient.METHOD_POST, JSON.stringify(body))
