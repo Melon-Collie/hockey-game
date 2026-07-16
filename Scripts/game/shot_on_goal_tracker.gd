@@ -65,6 +65,11 @@ var _shot_on_goal_counted: bool = false
 # such a puck stopped by the goalie is a shot on goal). Armed true at release,
 # then kept current by note_trajectory / on_post_hit.
 var _pending_on_net: bool = false
+# Whether the pending shot was released as a one-timer (wind-up off the puck,
+# fired the instant it entered the shooting zone). Read at goal time for the
+# One-Timer achievement's goal-flavor tag. Set by on_shot_started, cleared with
+# the rest of the pending state.
+var _pending_one_timer: bool = false
 
 var _registry: PlayerRegistry = null
 var _state_machine: GameStateMachine = null
@@ -132,13 +137,16 @@ func _record_toucher(peer_id: int, possession: bool, is_poke: bool = false) -> v
 
 # Call when a carrier releases the puck as a normal shot. The carrier was
 # already recorded via on_pickup, so just arm the pending-shot window.
-func on_shot_started(shooter_peer_id: int) -> void:
+# `is_one_timer` tags a wind-up-off-puck slapper release so a goal off it can be
+# attributed to the One-Timer achievement (read via pending_is_one_timer).
+func on_shot_started(shooter_peer_id: int, is_one_timer: bool = false) -> void:
 	if shooter_peer_id == -1:
 		return
 	_shooter_peer_id = shooter_peer_id
 	_pending_remaining = SHOT_ON_GOAL_TIMEOUT
 	_block_window_remaining = BLOCK_WINDOW
 	_shot_on_goal_counted = false
+	_pending_one_timer = is_one_timer
 	# Assume on net until the caller's ballistic read (note_trajectory, run
 	# right after the authoritative release) says otherwise — a missed read
 	# should over-credit, not swallow saves.
@@ -293,6 +301,11 @@ func has_pending_shot() -> bool:
 	return _shooter_peer_id != -1
 
 
+# Whether the live pending shot was a one-timer. False without a pending shot.
+func pending_is_one_timer() -> bool:
+	return _shooter_peer_id != -1 and _pending_one_timer
+
+
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 func clear_pending() -> void:
@@ -301,6 +314,7 @@ func clear_pending() -> void:
 	_block_window_remaining = -1.0
 	_shot_on_goal_counted = false
 	_pending_on_net = false
+	_pending_one_timer = false
 
 
 # Called on full game reset. Clears carrier history plus pending state, and

@@ -916,6 +916,8 @@ func _advance_step() -> void:
 		# Mark this tutorial complete so first-launch routing skips it next time
 		# and the SideMenu shows a checkmark next to it.
 		PlayerPrefs.mark_tutorial_complete(tutorial_id)
+		# Course-complete achievement check (no-op until every tutorial is done).
+		GameManager.notify_tutorial_completed()
 		_hud.show_tutorial_complete()
 	else:
 		_begin_step(_step_index)

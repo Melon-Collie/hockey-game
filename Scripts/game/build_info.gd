@@ -114,7 +114,11 @@ const VERSION: String = "dev"
 #     whose local puck prediction registered the contact (matching the existing
 #     deflection / board / body-block broadcasts). New RPC methods shift the
 #     name-sorted RPC indices, so a mixed-build pair would call the wrong method.
-const PROTOCOL_VERSION: int = 29
+# v30: stats packet grew — PlayerStats.to_array() 11 -> 14 (one_timer_goals,
+#      tip_goals, ot_goals: host-tagged goal-flavor / overtime-winner counters
+#      driving the One-Timer / Redirect / Overtime Hero achievements), so
+#      STATS_PLAYER_RECORD_SIZE 12 -> 15.
+const PROTOCOL_VERSION: int = 30
 
 
 func _ready() -> void:

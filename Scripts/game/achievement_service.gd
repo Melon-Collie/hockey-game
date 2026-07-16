@@ -27,6 +27,15 @@ func evaluate_single_game(stats: PlayerStats, outcome: String,
 		unlock(id)
 
 
+# Roster achievements — "play a game with person X". `present_steam_ids` is the
+# match's SteamID64 set (the Steam lobby members); `local_steam_id` is this
+# player. Evaluated at game-over in any online mode. Empty inputs (offline / no
+# Steam) earn nothing.
+func evaluate_roster(present_steam_ids: Array, local_steam_id: int) -> void:
+	for id in AchievementRules.earned_roster(present_steam_ids, local_steam_id):
+		unlock(id)
+
+
 # Career-threshold achievements, evaluated against current lifetime totals.
 # `career_totals` comes from Steam User Stats (SteamStatRecorder.totals), already
 # updated with this game — so crossing a threshold unlocks on the game you cross
@@ -44,6 +53,21 @@ func on_local_hit(impulse: float) -> void:
 	var threshold: float = Achievements.event_threshold("big_hit")
 	if threshold >= 0.0 and impulse >= threshold:
 		unlock(Achievements.event_id("big_hit"))
+
+
+# Live hook: the player just finished the whole tutorial course (every
+# TutorialRegistry entry complete — GameManager checks that before calling).
+# A meta-progression event, so it intentionally bypasses the game-over sweep and
+# its free-play/drill gate: the course is played in tutorial mode.
+func on_tutorials_complete() -> void:
+	unlock(Achievements.event_id("tutorials_done"))
+
+
+# Live hook: the player applied a custom build in the free-play picker
+# (NetworkManager.local_attributes_changed). Also outside the game-over sweep —
+# build edits happen in free play, where the achievement gate is closed.
+func on_build_edited() -> void:
+	unlock(Achievements.event_id("build_edited"))
 
 
 # Issue an unlock, skipping work for anything already earned this session or in a
