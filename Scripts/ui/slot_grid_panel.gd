@@ -51,6 +51,10 @@ const _DISPLAY_ORDER  := [1, 0, 2]
 const _D_DISPLAY_ORDER := [3, 4]
 const _POSITION_LABEL      := ["C", "L", "R", "LD", "RD"]   # indexed by slot, home
 const _POSITION_LABEL_AWAY := ["C", "R", "L", "RD", "LD"]   # indexed by slot, away
+# 5v5 badge variants: with LD/RD on the board the wingers spell out LW/RW
+# too (3v3 keeps the classic single letters).
+const _POSITION_LABEL_5V5      := ["C", "LW", "RW", "LD", "RD"]
+const _POSITION_LABEL_AWAY_5V5 := ["C", "RW", "LW", "RD", "LD"]
 const _POSITION_HEADER      := ["LEFT WING", "CENTER", "RIGHT WING"]   # indexed by col, home
 const _POSITION_HEADER_AWAY := ["RIGHT WING", "CENTER", "LEFT WING"]   # indexed by col, away
 
@@ -106,6 +110,10 @@ var _show_ready: bool = false
 # always built at full capacity; 3v3 hides the two D rows.
 var _active_team_size: int = GameRules.DEFAULT_TEAM_SIZE
 var _d_rows: Array = [null, null]   # [team_id] — the D-pair HBox, hidden in 3v3
+# The LW/C/RW column-header HBoxes, hidden in 5v5 — with four rows of cards
+# on screen the headers just wedge awkward gaps between the team blocks,
+# and every card already wears its position badge.
+var _header_rows: Array = [null, null]
 
 
 func _init() -> void:
@@ -125,6 +133,22 @@ func _apply_mode_visibility() -> void:
 	for team_id: int in 2:
 		if _d_rows[team_id] != null:
 			(_d_rows[team_id] as HBoxContainer).visible = show_d
+		if _header_rows[team_id] != null:
+			(_header_rows[team_id] as HBoxContainer).visible = not show_d
+		# Re-stamp the badges — the L/R ↔ LW/RW wording is mode-dependent.
+		for slot: int in _pos_labels[team_id].size():
+			if _pos_labels[team_id][slot] != null:
+				(_pos_labels[team_id][slot] as Label).text = _position_badge(team_id, slot)
+
+
+# The card's position badge for the current mode: 3v3 keeps the classic
+# single letters (C/L/R); 5v5 spells the wingers out (LW/RW) so they read
+# consistently next to LD/RD. Away rows mirror L/R as usual.
+func _position_badge(team_id: int, slot: int) -> String:
+	var is_5v5: bool = _active_team_size > PlayerRules.FIRST_DEFENSE_SLOT
+	if team_id == 1:
+		return _POSITION_LABEL_AWAY_5V5[slot] if is_5v5 else _POSITION_LABEL_AWAY[slot]
+	return _POSITION_LABEL_5V5[slot] if is_5v5 else _POSITION_LABEL[slot]
 
 
 func _ready() -> void:
@@ -232,6 +256,7 @@ func _build_header(team_id: int) -> void:
 	header.add_theme_constant_override("separation", 12)
 	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_child(header)
+	_header_rows[team_id] = header
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(56, 0)
@@ -364,7 +389,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_right_cols[team_id][slot] = right_col
 
 	var pos_lbl := Label.new()
-	pos_lbl.text = _POSITION_LABEL_AWAY[slot] if team_id == 1 else _POSITION_LABEL[slot]
+	pos_lbl.text = _position_badge(team_id, slot)
 	pos_lbl.add_theme_font_size_override("font_size", 13)
 	pos_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	pos_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
