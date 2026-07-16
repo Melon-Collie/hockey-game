@@ -118,7 +118,15 @@ const VERSION: String = "dev"
 #      tip_goals, ot_goals: host-tagged goal-flavor / overtime-winner counters
 #      driving the One-Timer / Redirect / Overtime Hero achievements), so
 #      STATS_PLAYER_RECORD_SIZE 12 -> 15.
-const PROTOCOL_VERSION: int = 30
+# v31: pickup / poke / stick-lift claim RPCs carry the client's own blade geometry
+#     (client-authoritative "aim"): pickup adds blade_curr + blade_prev + top_hand,
+#     poke adds blade_curr + blade_prev, stick-lift adds blade_curr. The host now
+#     validates against the client-sent blade (reach-clamped to the server body)
+#     instead of reconstructing it from its self-view snapshot, so a legit grab the
+#     host's reconstruction was rejecting (the grab-then-lose bug) now confirms. A
+#     mixed-build host would read the extra Vector3 args as garbage, so a bump is
+#     required.
+const PROTOCOL_VERSION: int = 31
 
 
 func _ready() -> void:

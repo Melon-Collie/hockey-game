@@ -8,12 +8,15 @@ extends RefCounted
 # claim sees carrier == null from the first's apply_poke_check and skips.
 #
 # Flow:
-#   receive_claim(peer_id, host_ts, interp_delay, expected_carrier_peer_id)
+#   receive_claim(peer_id, host_ts, interp_delay, expected_carrier_peer_id,
+#                 client_blade_curr, client_blade_prev)
 #     → reject if puck locked, no carrier, carrier changed, claim stale,
 #       skater missing/ghost, attempting to poke self or teammate
-#     → rewind blade to LagCompRewind.self_view_time(host_ts) and puck to
-#       LagCompRewind.remote_view_time(host_ts, interp_delay) — never rtt/2
-#     → reject if PuckInteractionRules.check_poke fails against rewound state
+#     → rewind the carried puck to LagCompRewind.remote_view_time(host_ts,
+#       interp_delay) and the attacker's body to self_view_time(host_ts);
+#       reach-clamp the CLIENT-sent attacker blade to that body — never rtt/2
+#       (the blade is client-authoritative aim, like PickupClaimResolver)
+#     → reject if PuckInteractionRules.check_poke fails against that geometry
 #     → apply_lag_comp_poke (idempotent — re-checks carrier on apply path
 #       so a concurrent host-side _check_interactions detection that already
 #       cleared the carrier doesn't get double-applied).
@@ -38,7 +41,8 @@ func setup(
 
 
 func receive_claim(peer_id: int, host_timestamp: float,
-		interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+		interp_delay_ms: float, expected_carrier_peer_id: int,
+		client_blade_curr: Vector3, client_blade_prev: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
 	var puck: Puck = _puck_getter.call() as Puck
@@ -94,9 +98,26 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	if skater_snap.is_ghost:
 		return
-	var blade_curr: Vector3 = skater_snap.blade_contact_world
-	var blade_prev: Vector3 = skater_prev_snap.blade_contact_world
+	# Client-authoritative blade ("aim") — the attacker sends the blade geometry it
+	# actually poked with, reach-clamped to the server-authoritative body so a
+	# modified client can't teleport its blade onto the carrier. See
+	# PickupClaimResolver / LagCompRewind.clamp_client_blade.
+	var max_reach: float = 0.0
+	if _registry != null:
+		var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
+		if caps != null:
+			max_reach = caps.max_blade_reach
+	var blade_curr: Vector3 = LagCompRewind.clamp_client_blade(
+			client_blade_curr, skater_snap.position, max_reach)
+	var blade_prev: Vector3 = LagCompRewind.clamp_client_blade(
+			client_blade_prev, skater_prev_snap.position, max_reach)
+	# Host-only claim-outcome telemetry (no-op off the host): the claim reached the
+	# rewound geometry test. A check_poke fail is the "reached for it, didn't get it"
+	# signal — a high miss FRACTION on the host row flags a rewind not reproducing
+	# the client's view. See NetworkTelemetry / network_sessions.
+	NetworkTelemetry.record_poke_claim()
 	if not PuckInteractionRules.check_poke(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.POKE_RADIUS):
+		NetworkTelemetry.record_poke_claim_miss()
 		return
 	# Pass the intended victim through so apply guards against the carrier
 	# having changed (X → Z) between claim send and apply. Looked up from the

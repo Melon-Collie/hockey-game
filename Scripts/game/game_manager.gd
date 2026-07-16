@@ -2638,22 +2638,28 @@ func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
 	(record.controller as RemoteController).apply_ghost_rpc(is_ghost)
 
 
-func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
+func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
+		blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms)
+	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms,
+			blade_curr, blade_prev, top_hand)
 
 
-func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
+		expected_carrier_peer_id: int, blade_curr: Vector3, blade_prev: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id,
+			blade_curr, blade_prev)
 
 
-func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
+		expected_carrier_peer_id: int, blade_curr: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id,
+			blade_curr)
 
 
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
