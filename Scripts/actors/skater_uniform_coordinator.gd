@@ -312,7 +312,7 @@ func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
 		visual.material_override = _make_solid_mat(segment.base)
 		return
 	var scaled: Array[Dictionary] = _scale_stripes_about_center(segment.stripes, _ARM_STRIPE_SCALE)
-	var tex: ImageTexture = _make_h_stripes_texture(segment.base, scaled)
+	var tex: ImageTexture = make_h_stripes_texture(segment.base, scaled)
 	visual.material_override = _make_texture_material(tex)
 
 
@@ -349,7 +349,7 @@ func _paint_pants_thigh(thigh: MeshInstance3D, pants_block: Dictionary, u_offset
 func _socks_material(socks_block: Dictionary) -> StandardMaterial3D:
 	if socks_block.stripes.is_empty():
 		return _make_solid_mat(socks_block.base)
-	return _make_texture_material(_make_h_stripes_texture(socks_block.base, socks_block.stripes))
+	return _make_texture_material(make_h_stripes_texture(socks_block.base, socks_block.stripes))
 
 
 # Builds a (4 × height_px) image of horizontal stripe bands over the
@@ -361,7 +361,14 @@ const _CYLINDER_SIDE_V_FRACTION: float = 0.5
 const _STRIPE_TEX_HEIGHT_PX: int = 128
 const _STRIPE_TEX_WIDTH_PX: int = 4
 
-func _make_h_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTexture:
+# Public static so the lobby's bench dummies can dress in the same stripe
+# convention without duplicating the band math. `top_cap`, when a Color,
+# overpaints the cylinder's NATIVE top-cap UV region (U ∈ [0, 0.5] of the
+# caps' V half) — the dummies' stand-in for JerseyDecal's yoke, which paints
+# the equivalent region on the real torso (shifted by that material's
+# uv1_offset). Meshes whose caps are hidden (socks, arms) leave it null.
+static func make_h_stripes_texture(base: Color, stripes: Array[Dictionary],
+		top_cap: Variant = null) -> ImageTexture:
 	var img := Image.create(_STRIPE_TEX_WIDTH_PX, _STRIPE_TEX_HEIGHT_PX, false, Image.FORMAT_RGBA8)
 	img.fill(base)
 	var side_px: int = int(round(_CYLINDER_SIDE_V_FRACTION * float(_STRIPE_TEX_HEIGHT_PX)))
@@ -372,6 +379,9 @@ func _make_h_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTe
 		var y1: int = clampi(int(round(center_px + half_px)), 0, side_px)
 		if y1 > y0:
 			img.fill_rect(Rect2i(0, y0, _STRIPE_TEX_WIDTH_PX, y1 - y0), s.color)
+	if top_cap is Color:
+		img.fill_rect(Rect2i(0, side_px, _STRIPE_TEX_WIDTH_PX / 2,
+				_STRIPE_TEX_HEIGHT_PX - side_px), top_cap)
 	return ImageTexture.create_from_image(img)
 
 

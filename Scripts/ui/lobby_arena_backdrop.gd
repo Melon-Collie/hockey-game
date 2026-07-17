@@ -132,15 +132,15 @@ func _build_dummy(meshes: Dictionary, mats: Dictionary) -> Node3D:
 	var stick_lean := Basis(Vector3(0, 0, 1), deg_to_rad(-8.0))
 	_add_part(d, meshes.torso, mats.jersey, Vector3(-0.02, 0.32, 0.0))
 	_add_part(d, meshes.helmet, mats.helmet, Vector3(0.0, 0.68, 0.0))
-	_add_part(d, meshes.shoulder, mats.jersey, Vector3(0.0, 0.50, -0.20))
-	_add_part(d, meshes.shoulder, mats.jersey, Vector3(0.0, 0.50, 0.20))
+	_add_part(d, meshes.shoulder, mats.shoulder, Vector3(0.0, 0.50, -0.20))
+	_add_part(d, meshes.shoulder, mats.shoulder, Vector3(0.0, 0.50, 0.20))
 	_add_part(d, meshes.thigh, mats.pants, Vector3(-0.16, 0.10, -0.12), thigh_rot)
 	_add_part(d, meshes.thigh, mats.pants, Vector3(-0.16, 0.10, 0.12), thigh_rot)
 	_add_part(d, meshes.shin, mats.socks, Vector3(-0.33, -0.15, -0.12))
 	_add_part(d, meshes.shin, mats.socks, Vector3(-0.33, -0.15, 0.12))
-	_add_part(d, meshes.skate, mats.dark, Vector3(-0.36, -0.36, -0.12))
-	_add_part(d, meshes.skate, mats.dark, Vector3(-0.36, -0.36, 0.12))
-	_add_part(d, meshes.stick, mats.dark, Vector3(-0.38, 0.18, 0.04), stick_lean)
+	_add_part(d, meshes.skate, mats.skate, Vector3(-0.36, -0.36, -0.12))
+	_add_part(d, meshes.skate, mats.skate, Vector3(-0.36, -0.36, 0.12))
+	_add_part(d, meshes.stick, mats.stick, Vector3(-0.38, 0.18, 0.04), stick_lean)
 	return d
 
 
@@ -196,18 +196,46 @@ func _dummy_meshes() -> Dictionary:
 	}
 
 
+# Dress the dummy in the real kit (colors.uniform), not flat team colors:
+# striped jersey with the yoke on the torso's top cap, the shoulder pads'
+# own color, striped socks, solid pants base. Stripe textures come from
+# SkaterUniformCoordinator.make_h_stripes_texture so the bands land exactly
+# where the in-game skater's do. Pants keep the base color only — the
+# in-game vertical side stripe would ring the dummy's horizontally-rotated
+# thigh cylinder the wrong way. Roughness values mirror the coordinator's
+# surface finishes (cloth / helmet plastic / skate leather / stick).
 func _dummy_materials(colors: Dictionary) -> Dictionary:
+	var uniform: Dictionary = colors.uniform
+	var jersey_block: Dictionary = uniform.jersey
+	var socks_block: Dictionary = uniform.socks
+
+	var jersey_mat := StandardMaterial3D.new()
+	jersey_mat.albedo_texture = SkaterUniformCoordinator.make_h_stripes_texture(
+			jersey_block.base, jersey_block.stripes, jersey_block.yoke)
+	jersey_mat.roughness = 0.9
+
+	var socks_mat: StandardMaterial3D
+	if socks_block.stripes.is_empty():
+		socks_mat = _matte(socks_block.base)
+	else:
+		socks_mat = StandardMaterial3D.new()
+		socks_mat.albedo_texture = SkaterUniformCoordinator.make_h_stripes_texture(
+				socks_block.base, socks_block.stripes)
+		socks_mat.roughness = 0.9
+
 	return {
-		"jersey": _matte(colors.jersey),
-		"helmet": _matte(colors.helmet),
-		"pants":  _matte(colors.pants),
-		"socks":  _matte(colors.socks),
-		"dark":   _matte(Color(0.13, 0.13, 0.15)),
+		"jersey":   jersey_mat,
+		"shoulder": _matte(uniform.shoulders.color),
+		"helmet":   _matte(uniform.helmet, 0.28),
+		"pants":    _matte(uniform.pants.base),
+		"socks":    socks_mat,
+		"skate":    _matte(Color(0.08, 0.08, 0.08), 0.42),
+		"stick":    _matte(Color(0.06, 0.06, 0.07), 0.4),
 	}
 
 
-func _matte(c: Color) -> StandardMaterial3D:
+func _matte(c: Color, roughness: float = 0.9) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
-	m.roughness = 0.85
+	m.roughness = roughness
 	return m
