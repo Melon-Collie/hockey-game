@@ -31,8 +31,10 @@ var _spectator_join_btn: Button = null
 # Dynamic teams column: every widget is built once, then _refresh_teams_column
 # toggles visibility per refresh. A team with at least one human resolves its
 # color from votes (the local player's vote dropdown shows while they're on a
-# team); a humanless (bots/empty) team instead shows a host-picked dropdown,
-# replicated to clients via notify_team_colors.
+# team); a humanless (bots/empty) team instead gets a host-picked dropdown,
+# shown to the HOST ONLY — clients see the resulting colors on the slot cards
+# (replicated via notify_team_colors) plus the "Host picks" hint, not a dead
+# disabled picker.
 var _vote_row: HBoxContainer = null
 var _my_color_dropdown: PaletteDropdown = null
 var _home_color_row: HBoxContainer = null
@@ -58,12 +60,16 @@ var _visibility_hint: Label = null
 var _ready_states: Dictionary = {}
 var _local_is_ready: bool = false
 
-# Settings (host only editable; all players see them)
+# Settings (host only editable; all players see them). The two AI difficulty
+# values are the host's PlayerPrefs, synced to clients for display only —
+# clients never persist them (see LobbySettingsPanel's class doc).
 var _num_periods: int = GameRules.NUM_PERIODS
 var _period_duration: float = GameRules.PERIOD_DURATION
 var _ot_enabled: bool = GameRules.OT_ENABLED
 var _rule_set: int = GameRules.DEFAULT_RULE_SET
 var _team_size: int = GameRules.DEFAULT_TEAM_SIZE
+var _bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL
+var _goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL
 
 # Team color presets used as placeholders in the lobby slot-grid preview.
 # Real per-team colors are resolved from votes at game start.
@@ -84,6 +90,14 @@ func _ready() -> void:
 	_ot_enabled = NetworkManager.pending_ot_enabled
 	_rule_set = NetworkManager.pending_rule_set
 	_team_size = NetworkManager.pending_team_size
+	# Host: the difficulty dropdowns show (and edit) the host's own prefs.
+	# Client: show whatever the host last synced.
+	if NetworkManager.is_host:
+		_bot_difficulty = PlayerPrefs.bot_difficulty
+		_goalie_difficulty = PlayerPrefs.goalie_difficulty
+	else:
+		_bot_difficulty = NetworkManager.pending_bot_difficulty
+		_goalie_difficulty = NetworkManager.pending_goalie_difficulty
 	_my_color_slot = _initial_color_preference()
 	_color_votes = NetworkManager.pending_color_votes.duplicate()
 	# Re-entering the lobby (return-to-lobby after a match) restores whatever
@@ -417,8 +431,10 @@ func _refresh_teams_column() -> void:
 		if _lobby_slots[k].peer_id == local_peer:
 			local_on_team = true
 	_vote_row.visible = local_on_team
-	_home_color_row.visible = not home_has_human
-	_away_color_row.visible = not away_has_human
+	# Host-picked open-team dropdowns are host-only (see the var-block doc);
+	# clients read the pick off the slot cards and the hint below.
+	_home_color_row.visible = NetworkManager.is_host and not home_has_human
+	_away_color_row.visible = NetworkManager.is_host and not away_has_human
 	# Keep the direct dropdowns showing the live resolved slots — a manual pick
 	# can be re-rolled by the collision rule when the other team's votes land
 	# on the same palette.
@@ -460,7 +476,8 @@ func _build_match_column() -> VBoxContainer:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.add_child(_column_header("MATCH"))
 
-	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host, _team_size)
+	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set,
+			NetworkManager.is_host, _team_size, _bot_difficulty, _goalie_difficulty)
 	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
 	col.add_child(_settings_panel)
 
@@ -912,7 +929,8 @@ func _on_peer_joined(peer_id: int) -> void:
 		NetworkManager.send_lobby_roster(existing_peer, roster)
 	NetworkManager.send_color_votes_to(peer_id, _color_votes)
 	NetworkManager.send_team_colors_to(peer_id, _home_color_slot, _away_color_slot)
-	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set, _team_size)
+	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled,
+			_rule_set, _team_size, _bot_difficulty, _goalie_difficulty)
 	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots, NetworkManager.pending_bot_identities)
 	_broadcast_confirm(peer_id, target[0], target[1])
 	_update_start_btn()
@@ -1051,23 +1069,29 @@ func _on_bot_slots_synced(_bot_slots: Dictionary) -> void:
 	_refresh_grid()
 
 func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
-		team_size: int) -> void:
+		team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
+	_bot_difficulty = bot_difficulty
+	_goalie_difficulty = goalie_difficulty
 	_apply_team_size(team_size)
 	if _settings_panel != null:
-		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set, team_size)
+		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set, team_size,
+				bot_difficulty, goalie_difficulty)
 
 func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
-		team_size: int) -> void:
+		team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
+	_bot_difficulty = bot_difficulty
+	_goalie_difficulty = goalie_difficulty
 	_apply_team_size(team_size)
-	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set, team_size)
+	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set, team_size,
+			bot_difficulty, goalie_difficulty)
 
 # Applies a mode (team size) change to the live lobby: resizes the visible
 # grid and — host only — evicts anything seated in a slot the new size no
