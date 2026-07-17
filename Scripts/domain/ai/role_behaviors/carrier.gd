@@ -1880,10 +1880,9 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				self_pos, attacking_goal)
 		stand_score = maxf(stand_score, stand_potential * stand_realization)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
-	var stand_safety: float = AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(stand_puck_pos, stand_puck_pos,
-					AIActionScoring.EVADE_HORIZON_S,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+	var stand_safety: float = AIActionScoring.carry_safety(
+			stand_puck_pos, stand_puck_pos, AIActionScoring.EVADE_HORIZON_S,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 	var stand_cost: float = AIActionScoring.turnover_cost(
 			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -2256,10 +2255,10 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# apply_escape: a defender the carrier out-skates on this drive is being beaten
 	# and can't sustain the strip — so driving PAST a man reads as winnable, not as a
 	# wall (the "if I keep going I've beaten him" read).
-	var safety: float = AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(cur_puck_pos, cand_puck_pos, local_time,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
-					true))
+	var safety: float = AIActionScoring.carry_safety(
+			cur_puck_pos, cand_puck_pos, local_time,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+			true)
 	# ...and the carry CONTINUATION it opens (see _carry_continuation_value —
 	# the pass option's skating twin): the two-ply read that lets a spot be
 	# worth what it enables NEXT. Skipped when the first leg already dies
@@ -2475,12 +2474,11 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 	# Second-leg reach safety: defenders start the leg where the first leg's
 	# time has taken them, then sweep their reach over t2.
 	_project_opponents_to(ctx, first_leg_s, _scratch_opponents_cont)
-	var safety2: float = AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(
-					_puck_pos_at(candidate, ctx.attacking_goal_pos),
-					_puck_pos_at(slot, ctx.attacking_goal_pos), t2,
-					_scratch_opponents_cont, _scratch_opponent_vels,
-					_scratch_opponent_caps))
+	var safety2: float = AIActionScoring.carry_safety(
+			_puck_pos_at(candidate, ctx.attacking_goal_pos),
+			_puck_pos_at(slot, ctx.attacking_goal_pos), t2,
+			_scratch_opponents_cont, _scratch_opponent_vels,
+			_scratch_opponent_caps)
 	if safety2 <= 0.0:
 		return 0.0
 	# Shot on slot arrival AT PACE against the keeper tracked over both legs —
@@ -2556,10 +2554,10 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	# apply_escape: driving in past a man you out-skate is winnable, not a wall —
 	# the same read the carrier's own carry candidates use (the drive-in credit that
 	# floors the carry is exactly "the shot I skate into by beating my man").
-	var keep: float = AIActionScoring.clearance_to_safety(
-			AIActionScoring.carry_clearance(receiver_spot, target, reach_time,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
-					true))
+	var keep: float = AIActionScoring.carry_safety(
+			receiver_spot, target, reach_time,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+			true)
 	if keep <= 0.0:
 		return 0.0
 	var reached: Vector3 = AIActionScoring.carry_strip_point(

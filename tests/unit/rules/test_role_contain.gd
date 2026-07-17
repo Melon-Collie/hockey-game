@@ -332,14 +332,19 @@ func test_low_danger_receiver_does_not_pull_contain_off_the_shooter() -> void:
 	# Same rush shape as the 2-on-1, but the uncovered partner is jammed wide on
 	# a near-goal-line sharp angle — an open lane that the textbook says to
 	# concede (the goalie's post play walls the sharp-angle one-timer).
-	pending("Gated on sharp-angle goalie post-play in the planning model: the "
-			+ "make-probability recalibration exposed that the planning keeper "
-			+ "has no VH/pads-first post read outside the 2 m seal zone, so a "
-			+ "wide-but-deep receiver honestly measures ~1.0 finish-if-fed "
-			+ "against it (see LANE_PLAY_DANGER_BAR's KNOWN GAP note). Until "
-			+ "the planning goalie can wall that shot, CONTAIN respecting the "
-			+ "wide-deep lane is the model's honest read, not a bug to fit "
-			+ "around.")
+	# The dead-angle post-play extension (#28) seals a SET keeper's dead angle,
+	# but this is a FED, caught-moving keeper: the deployment-race gate (score_
+	# shoot) correctly declines the seal for a keeper who can't reach the post
+	# in the feed's flight, so a wide-deep cross-ice one-timer honestly stays a
+	# real finish threat — respecting it is the model's honest read, not a bug.
+	# Re-opening this needs the covering-set exposure model (a lane a support
+	# structure genuinely denies), the same follow-up SUPPORT's high-post pend
+	# cites — ARCHITECTURE Known Issues.
+	pending("Honest read under the make-probability currency + the #28 "
+			+ "deployment-race gate: a wide-deep feed to a caught-moving keeper "
+			+ "measures a real finish (the fed keeper can't reach the far post "
+			+ "in the flight), so CONTAIN respecting the lane is correct. The "
+			+ "covering-set exposure model is what should re-open this.")
 	return
 	var partner := Vector3(13, 0, 20)   # wide + deep = brutal shooting angle
 	# Sanity-check the premise: this receiver really is below the danger bar.

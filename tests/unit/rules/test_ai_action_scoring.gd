@@ -619,15 +619,18 @@ func test_high_band_power_is_full_only_when_range_lets_the_arc_rise() -> void:
 
 
 func test_shot_danger_sharp_angle_is_low() -> void:
-	# Wall shot: barely any net subtended → low.
-	pending("Gated on sharp-angle goalie post-play in the planning model "
-			+ "(same gap as the CONTAIN wide-deep pend): the ~70° shooter "
-			+ "sits just outside the 2 m VH/RVH seal zone, and against a "
-			+ "keeper with no post read the far-side window honestly "
-			+ "measures near-certain under the make-probability currency.")
-	return
+	# Wall shot: barely any net subtended → low. Un-pended by the dead-angle
+	# post-play extension (#28): derive_post_seal_x_sign now predicts the
+	# post erasure past the 2 m RVH/VH zone (net window narrower than a
+	# keeper standing on the near post), and every production consumer
+	# threads the derived seal — so the doctrine call does too.
+	var shooter := Vector3(7.0, 0.0, 24.0)
+	var seal: float = AIActionScoring.derive_post_seal_x_sign(shooter, GOAL)
+	assert_ne(seal, 0.0, "premise: the ~70° look is inside the predicted post seal")
 	var s: float = AIActionScoring.score_shoot(
-			Vector3(7.0, 0.0, 24.0), GOAL, Vector3(0.9, 0.0, 25.05), NET_HW, [])
+			shooter, GOAL, Vector3(0.9, 0.0, 25.05), NET_HW, [],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
+			seal, true)
 	assert_lt(s, 0.3, "a sharp-angle shot has little net to hit")
 
 

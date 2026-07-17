@@ -1083,7 +1083,21 @@ static func _hole_open_angle(
 	# documented weakness). The FAR side is deliberately untouched: it's read
 	# from the goalie's actual parked-at-the-post position below, which is what
 	# keeps the walkout / cross-crease counter visible to the model.
-	if goalie_post_seal_x != 0.0:
+	#
+	# DEPLOYMENT RACE: the wall only exists if the keeper is ACTUALLY at the
+	# seal post at release. His predicted position (goalie_pos) already bakes
+	# in the setup time — a slow carry to a dead angle hands him the whole trip
+	# to set at the post; a fast cross-crease feed to a caught-moving keeper
+	# leaves him stranded off it — so the check is purely positional: his body
+	# EDGE (his stance already spans LOW_CORE_STANDING_M, plus the lateral push
+	# he can still make over the shot flight t_read) must reach the seal post.
+	# A dead-angle wraparound seals (keeper set at the post); the point-blank
+	# back-door one-timer does NOT (keeper stranded) — the tap-in that beats
+	# real post play, kept visible to the finisher/feed models.
+	if goalie_post_seal_x != 0.0 \
+			and absf(attacking_goal.x + signf(goalie_post_seal_x)
+					* GameRules.NET_HALF_WIDTH - goalie_pos.x) \
+				<= LOW_CORE_STANDING_M + _goalie_lateral_reach(maxf(t_read, 0.0)):
 		if kind == HOLE_KIND_FIVE:
 			return 0.0
 		if float(side) == signf(goalie_post_seal_x) \
@@ -1546,15 +1560,47 @@ const GOALIE_SEAL_ANGLE_RAD: float = deg_to_rad(80.0)
 # applies. Only the IN-FRONT sharp angle is sealed here (VH — tall); a release
 # behind the goal line is already zeroed by score_shoot's forward guard, so it
 # needs no seal. Pure float, allocation-free — safe on the per-candidate path.
+#
+# Two triggers, both grounded in the live keeper:
+#  · The RVH/VH zone (2 m, 80°) — the live controller's own stance trigger.
+#  · DEAD-ANGLE ERASURE: outside that zone, a competent keeper still kills a
+#    sharp-angle look by post-integrated positioning — pad edge ON the near-
+#    post sightline, full stance span extending into the window. The shot dies
+#    when the net's whole angular window from the shooter is no wider than
+#    that body plus a puck diameter of fit (the puck's center must clear the
+#    body edge and the far pipe by its radius). Pure projection geometry
+#    (posts + the live stance span the band model already uses), so it scales
+#    with range by construction: the slot and any honest mid look stay far
+#    wider than a body and are untouched. Without this, a close sharp-angle
+#    release (~65°+, past the 2 m zone) scored a phantom far-side window and
+#    the carry surface drifted bots to the dead corner.
 static func derive_post_seal_x_sign(shooter: Vector3, attacking_goal: Vector3) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
-	if forward < 0.001 or forward > GOALIE_SEAL_ZONE_POST_Z_M:
+	if forward < 0.001:
 		return 0.0
 	var lateral: float = absf(shooter.x - attacking_goal.x)
-	if atan2(lateral, maxf(forward, 0.01)) < GOALIE_SEAL_ANGLE_RAD:
+	var side: float = signf(shooter.x - attacking_goal.x)
+	if forward <= GOALIE_SEAL_ZONE_POST_Z_M \
+			and atan2(lateral, maxf(forward, 0.01)) >= GOALIE_SEAL_ANGLE_RAD:
+		return side
+	if side == 0.0:
 		return 0.0
-	return signf(shooter.x - attacking_goal.x)
+	# Dead-angle erasure: net angular window vs the post-hugging keeper's
+	# stance span + puck fit, anchored at the near-post sightline.
+	var near_x: float = attacking_goal.x + side * GameRules.NET_HALF_WIDTH
+	var far_x: float = attacking_goal.x - side * GameRules.NET_HALF_WIDTH
+	var dz: float = attacking_goal.z - shooter.z
+	var a_near: float = atan2(near_x - shooter.x, dz)
+	var a_far: float = atan2(far_x - shooter.x, dz)
+	var window: float = absf(a_near - a_far)
+	var d_near: float = sqrt(
+			(near_x - shooter.x) * (near_x - shooter.x) + dz * dz)
+	var cover: float = atan((2.0 * LOW_CORE_STANDING_M
+			+ 2.0 * GameRules.PUCK_COLLISION_RADIUS) / maxf(d_near, 0.1))
+	if window <= cover:
+		return side
+	return 0.0
 
 
 # Point-blank jam distance: the closest the puck realistically gets to a set goalie
@@ -2802,9 +2848,21 @@ static func board_gap_m(point: Vector3) -> float:
 
 
 # Clearance (metres) of a puck point from every defender's reachable stick at
-# `time` — >0 means no defender can reach it (that much room), <0 means covered.
-# Pure float math, no allocation. Defenders are momentum-projected; the maneuver
-# term is reaction-gated (they must read the puck's move before redirecting).
+# `time` — >0 means no defender's stick TIP nominally reaches it (that much
+# room), <0 means covered. Pure float math, no allocation.
+#
+# NOMINAL, not best-case: the defender's coverage is the calibrated
+# time_to_arrive phase model in distance form — coast on momentum through the
+# reaction gate, shed excess cross-speed at the measured rate, brake out a
+# retreat (losing ground while braking), then a speed-capped pursuit ramp at
+# the measured net accel (RAMP_EFFICIENCY) — plus the stick span. Measured
+# against a committed defender under the real movement rules + rate-limited
+# blade (the #27 probe): crossing times track reality within ~0.05 s at rest
+# and toward-motion across 2–12 m, where the old best-case 0.5·a·t² lunge
+# over-reached by 3+ m at long windows (the pacified-carrier bug) while
+# UNDER-reaching close-in. Known optimistic spots, same as time_to_arrive's:
+# short perpendicular cuts at speed (the steering miss-loop). The safety maps
+# below carry the residual as a measured probability band.
 static func reach_clearance(
 		puck_point: Vector3, time: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
@@ -2813,67 +2871,130 @@ static func reach_clearance(
 	var n: int = opponents.size()
 	if n == 0 or opponent_vels.size() != n:
 		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
-	# The body rides its momentum over `time` (proj below); the STICK additionally
-	# maneuvers off that line over `maneuver_time`, reaction-gated. They default to
-	# equal (the carry/hold reads) and differ only for the PASS-RECEPTION read: a
-	# defender's body converges over the whole pass flight (`time`), but his final
-	# stick adjustment onto the catch is the short reception window
-	# (EVADE_HORIZON_S). Using the full flight for the maneuver term too would
-	# balloon the reach far past a real stick lunge and double-count the in-flight
-	# interception the lane model already prices.
-	if maneuver_time < 0.0:
-		maneuver_time = time
-	# maneuver = t_factor × accel: how far a defender redirects its stick off its
-	# momentum line, reaction-gated. Per-opponent when caps are supplied —
-	# a defender's Agility (max_accel) sets how far it can lunge, its Size
-	# (blade_span) how far its stick touches. Empty caps → league constants for all
-	# (every non-attribute caller), reproducing the prior single-reach behaviour.
-	# ESCAPE-SPEED gate (opt-in, `carry_speed > 0`): when the puck is being CARRIED
-	# along `carry_dir` at `carry_speed`, a defender's body still rides its momentum
-	# (proj below) but its lunge only uses the accel it has left AFTER matching the
-	# carrier's pace along the carry — a chaser near that pace is committed to
-	# keeping up and can't also reach across, one the carrier out-skates can't reach
-	# the receding puck, while a stationary/ahead man (not chasing) keeps his full
-	# lunge. Off (carry_speed = 0) → surplus 1 for all, identical to the prior model.
-	var t_factor: float = 0.5 * pow(maxf(0.0, maneuver_time - EVADE_REACTION_S), 2.0)
+	# `maneuver_time` is the defender's COMMIT window — how long he actively
+	# pursues the sample point; the body coasts on momentum for the remainder.
+	# Default (< 0) commits the whole window (the carry/hold reads). The
+	# PASS-RECEPTION and carry-END reads pass a short window (EVADE_HORIZON_S /
+	# CARRY_LUNGE_WINDOW_S): the defender isn't credited with committing to the
+	# catch spot for the whole flight — the in-flight interception is the lane
+	# model's ledger, and at a carry's arrival the carrier is established and
+	# protecting.
+	var w: float = time if maneuver_time < 0.0 else minf(time, maneuver_time)
 	var has_caps: bool = opponent_caps.size() == n
 	var gated: bool = carry_speed > 0.0
 	var worst: float = INF
 	for i: int in n:
-		var proj_x: float = opponents[i].x + opponent_vels[i].x * time
-		var proj_z: float = opponents[i].z + opponent_vels[i].z * time
-		var maneuver: float = t_factor * MANEUVER_ACCEL_M_S2
+		var accel: float = MANEUVER_ACCEL_M_S2
 		var stick: float = EVADE_STICK_REACH_M
+		var vmax: float = SKATER_REF_SPEED_M_S
 		if has_caps:
+			# Per-opponent build — Agility (max_accel) sets the ramp, Size
+			# (blade_span) the stick, Speed (max_speed) the cap. Empty caps →
+			# league constants for all (every non-attribute caller).
 			var caps: AISkaterCaps = opponent_caps[i]
 			if caps != null:
-				maneuver = t_factor * caps.max_accel
+				accel = caps.max_accel
 				stick = caps.blade_span
+				vmax = caps.max_speed
 		if gated:
-			# carry_dir is world XZ packed as Vector2(x, z); v_along is the defender's
-			# speed along the carry (net-ward chase).
-			var v_along: float = opponent_vels[i].x * carry_dir.x \
+			# ESCAPE-SPEED gate (opt-in, `carry_speed > 0`): a defender chasing
+			# near the carrier's pace along `carry_dir` (world XZ as Vector2(x,z))
+			# is committed to keeping up — only his surplus accel can redirect
+			# onto the puck. Momentum progress (v0 below) is untouched: a faster
+			# chaser still runs the carry down; a pace-matched one holds the gap.
+			var v_along_carry: float = opponent_vels[i].x * carry_dir.x \
 					+ opponent_vels[i].z * carry_dir.y
-			maneuver *= clampf(1.0 - maxf(v_along, 0.0) / carry_speed, 0.0, 1.0)
-		var dx: float = puck_point.x - proj_x
-		var dz: float = puck_point.z - proj_z
-		var clear: float = sqrt(dx * dx + dz * dz) - (maneuver + stick)
+			accel *= clampf(1.0 - maxf(v_along_carry, 0.0) / carry_speed, 0.0, 1.0)
+		var clear: float = _reach_clearance_one(
+				puck_point.x, puck_point.z, time, w,
+				opponents[i].x, opponents[i].z,
+				opponent_vels[i].x, opponent_vels[i].z, accel, stick, vmax)
 		if clear < worst:
 			worst = clear
 	return worst
 
 
-# Map clearance (metres) to a [0, 1] possession safety: 0 inside a defender's
-# reach, ramping to 1 at a full stick of clear room. Deliberately LINEAR: it is
-# the pessimistic half of a compensating pair with reach_clearance's optimistic
-# BEST-CASE defender reach — a logistic CDF (grounded as reach uncertainty) was
-# tried and broke 8 tests, all toward over-confidence under pressure (tight spots
-# reading safe, forced drives, no cycling), confirming the linearity isn't
-# independently miscalibrated. A truly honest version would make reach_clearance
-# nominal (not best-case) AND use the CDF as a pair; that's a broad recalibration
-# of the most-used AI primitive, not a map swap.
+# One defender's nominal reach clearance (see reach_clearance): coast on
+# momentum until the commit window `w` opens, react, then shed / brake / ramp
+# toward the point at the calibrated net kinematics. Factored out so the carry
+# reads can additionally sample each defender at its own closest-approach
+# moment on the path.
+static func _reach_clearance_one(point_x: float, point_z: float, time: float,
+		w: float, ox: float, oz: float, vx: float, vz: float,
+		accel: float, stick: float, vmax: float) -> float:
+	var tau: float = maxf(0.0, minf(time, w) - EVADE_REACTION_S)
+	var coast: float = time - tau
+	var px: float = ox + vx * coast
+	var pz: float = oz + vz * coast
+	var dx: float = point_x - px
+	var dz: float = point_z - pz
+	var dist: float = sqrt(dx * dx + dz * dz)
+	var d: float = 0.0
+	if tau > 0.0 and dist > 0.001:
+		var inv: float = 1.0 / dist
+		var v_along: float = (vx * dx + vz * dz) * inv
+		var v_perp: float = absf((vx * dz - vz * dx) * inv)
+		# Shed excess cross-speed (a pure delay, as calibrated), then brake
+		# out any retreat (losing ground), then the capped pursuit ramp.
+		var agility: float = maxf(accel, 0.001) / SHED_ACCEL_DEFAULT_M_S2
+		var tau_p: float = tau - maxf(0.0, v_perp - VM_FREE_SHED_M_S * agility) \
+				/ (VM_SHED_DECEL_M_S2 * agility)
+		if tau_p > 0.0:
+			var v0: float = v_along
+			if v0 < 0.0:
+				var t_b: float = minf(-v0 / REVERSAL_BRAKE_DECEL_M_S2, tau_p)
+				d = v0 * t_b + 0.5 * REVERSAL_BRAKE_DECEL_M_S2 * t_b * t_b
+				v0 += REVERSAL_BRAKE_DECEL_M_S2 * t_b
+				tau_p -= t_b
+			v0 = minf(v0, vmax)
+			var a_net: float = maxf(accel * RAMP_EFFICIENCY, 0.001)
+			var t_r: float = (vmax - v0) / a_net
+			if tau_p <= t_r:
+				d += v0 * tau_p + 0.5 * a_net * tau_p * tau_p
+			else:
+				d += (vmax * vmax - v0 * v0) / (2.0 * a_net) + vmax * (tau_p - t_r)
+	return dist - d - stick
+
+
+# ── The safety maps: measured strip probability over nominal clearance ────────
+# Production contact is a SWEEP standard, not a tip touch: a strip lands when
+# the blade segment passes within the puck-contact radius
+# (PuckController.PICKUP_RADIUS — mirrored by the duel harness), so nominal
+# tip-standard contact actually connects at +POKE_CONTACT_RADIUS_M of
+# clearance. The two maps below are the measured CDFs around that boundary for
+# the two regimes the #27 probe separated:
+#   DWELL (clearance_to_safety) — the puck holds still at the sample (a stand,
+#     a carry's arrival, a reception): contact is deterministic — the probe's
+#     committed defender ALWAYS strips a dwelling puck it nominally reaches —
+#     so the band is just the model's own measured crossing error, ± one blade
+#     length around the contact boundary.
+#   TRANSIT (transit_clearance_to_safety) — the puck is passing through the
+#     sample mid-carry: the defender must MEET a moving target on a
+#     reaction-delayed read, and the staged-carry ensemble shows a wide mixed
+#     band — every carry at or below TRANSIT_STRIP_CLEAR_M was stripped, none
+#     above TRANSIT_SAFE_CLEAR_M was, outcomes mixed between.
+const POKE_CONTACT_RADIUS_M: float = 0.5
+const DWELL_HALF_BAND_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
+const TRANSIT_STRIP_CLEAR_M: float = -0.4
+const TRANSIT_SAFE_CLEAR_M: float = 0.6
+
+
+# Dwelling-puck safety: 0 once the sweep standard is nominally met
+# (POKE_CONTACT_RADIUS_M − DWELL_HALF_BAND_M), 1 a blade past it. The map for
+# every hold/stand/arrival/reception read.
 static func clearance_to_safety(clearance: float) -> float:
-	return clampf(clearance / EVADE_SAFE_MARGIN_M, 0.0, 1.0)
+	return clampf(
+			(clearance - (POKE_CONTACT_RADIUS_M - DWELL_HALF_BAND_M))
+					/ (2.0 * DWELL_HALF_BAND_M),
+			0.0, 1.0)
+
+
+# Moving-puck safety: the measured mixed band for a puck traversing the sample
+# at stride (see the map doc above). Lenient relative to the dwell map by
+# construction — outrunning a reaction-delayed pursuit is real protection.
+static func transit_clearance_to_safety(clearance: float) -> float:
+	return clampf((clearance - TRANSIT_STRIP_CLEAR_M)
+			/ (TRANSIT_SAFE_CLEAR_M - TRANSIT_STRIP_CLEAR_M), 0.0, 1.0)
 
 
 # Lunge window for a defender's stick redirect onto a carried puck AT ITS
@@ -2928,6 +3049,35 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
 			carry_dir, carry_speed)
 	return minf(c_mid, c_end)
+
+
+# Possession safety [0, 1] of a carry — the regime-aware map application (see
+# the safety-map doc above reach_clearance): the MID sample is a moving puck
+# (transit band), the END sample a dwelling one (the carrier arrives there),
+# and a stand (from == to) dwells at both. Callers use this instead of
+# clearance_to_safety(carry_clearance(...)), which forced one map onto both
+# regimes.
+static func carry_safety(from: Vector3, to: Vector3, arrival_time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = [], apply_escape: bool = false) -> float:
+	var carry_dir := Vector2.ZERO
+	var carry_speed: float = 0.0
+	var dx: float = to.x - from.x
+	var dz: float = to.z - from.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	if apply_escape and arrival_time > 0.0 and dist > 0.001:
+		carry_dir = Vector2(dx / dist, dz / dist)
+		carry_speed = dist / arrival_time
+	var c_mid: float = reach_clearance(
+			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
+			opponent_caps, -1.0, carry_dir, carry_speed)
+	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
+			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
+			carry_dir, carry_speed)
+	if dist < 0.001:
+		# A stand: the puck dwells the whole window — both samples read dwell.
+		return minf(clearance_to_safety(c_mid), clearance_to_safety(c_end))
+	return minf(transit_clearance_to_safety(c_mid), clearance_to_safety(c_end))
 
 
 # WHERE a carry gets stripped, if it does: the EARLIEST covered point on the path.

@@ -177,7 +177,10 @@ func test_wall_pinned_carrier_reads_far_less_safe_than_open_ice() -> void:
 	var vels: Array[Vector3] = [Vector3.ZERO]
 	var pinned: float = _evade(pinned_pos, Vector3.ZERO, opps_wall, vels)
 	var open: float = _evade(Vector3.ZERO, Vector3.ZERO, opps_open, vels)
-	assert_lt(pinned, 0.35, "pinned on the wall with a defender sealing is genuinely unsafe")
+	# Bar re-anchored by the #27 pair recalibration: the best wall seam sits
+	# just inside the measured mixed band (more likely stripped than kept),
+	# not at the old map's hard zero — "genuinely unsafe" = below a coin flip.
+	assert_lt(pinned, 0.5, "pinned on the wall with a defender sealing is genuinely unsafe")
 	assert_gt(open, pinned + 0.3, "the identical defender gap in open ice leaves real room")
 
 

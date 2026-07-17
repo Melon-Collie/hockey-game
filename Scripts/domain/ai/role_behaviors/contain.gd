@@ -293,10 +293,16 @@ static func _lane_fan_target(
 				our_goalie_pos, our_net, feed_flight, receivers[i])
 		var recv_unsettled: float = AIActionScoring.goalie_unsettled(
 				our_goalie_pos, our_net, feed_flight, receivers[i])
+		# Predicted post-seal for the receiver's spot: a wide-but-deep receiver
+		# fires into the RVH/VH wall (or the dead-angle post erasure) a
+		# competent keeper adopts — without it every sharp-angle lane read as
+		# a near-certain finish and CONTAIN chased phantom back-door threats.
+		var recv_seal: float = AIActionScoring.derive_post_seal_x_sign(
+				receivers[i], our_net)
 		var recv_danger: float = AIActionScoring.score_shoot(
 				receivers[i], our_net, recv_goalie, GameRules.NET_HALF_WIDTH,
 				no_defenders, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-				recv_unsettled)
+				recv_unsettled, [], -1.0, false, recv_seal, recv_seal != 0.0)
 		if recv_danger < LANE_PLAY_DANGER_BAR:
 			continue
 		var lane_x: float = receivers[i].x - carrier_pos.x

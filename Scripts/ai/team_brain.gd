@@ -268,6 +268,10 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		# tap-in if it arrives).
 		var feed_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, mp)
 		var feed_flight: float = carrier_pos.distance_to(mp) / maxf(feed_speed, 1.0)
+		# Predicted post-seal for the man's spot (derive_post_seal_x_sign): a
+		# sharp-angle man fires into the wall a competent keeper adopts, so he
+		# is not a finish threat the assignment must chase.
+		var man_seal: float = AIActionScoring.derive_post_seal_x_sign(mp, our_net)
 		man_danger[pid] = AIActionScoring.score_shoot(
 				mp, our_net,
 				AIActionScoring.predict_goalie_pos(
@@ -275,7 +279,8 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 				GameRules.NET_HALF_WIDTH, no_defenders,
 				AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 				AIActionScoring.goalie_unsettled(
-						our_goalie_pos, our_net, feed_flight, mp))
+						our_goalie_pos, our_net, feed_flight, mp),
+				[], -1.0, false, man_seal, man_seal != 0.0)
 	if men.is_empty():
 		return empty
 
