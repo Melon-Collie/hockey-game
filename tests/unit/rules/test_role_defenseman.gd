@@ -136,14 +136,35 @@ func test_point_sags_when_the_race_home_is_lost() -> void:
 
 # ── FORECHECK line pair ──────────────────────────────────────────────────────
 
-func test_dp_holds_the_line_when_opponents_are_bottled() -> void:
-	# Opp carrier pinned deep in THEIR zone: the D pair stands at the line.
+func test_dp_pinches_on_a_bottled_forecheck() -> void:
+	# Opp carrier pinned deep in THEIR zone, nobody moving: every counter
+	# channel is slow, the whole lane is race-home feasible, and the D pair
+	# pinches to the top of the end-zone circles — real forecheck pressure
+	# instead of blue-line statuary (the "no pinching, glued to exactly the
+	# blue line" report).
 	var ctx: RoleContext = _make_ctx(Vector3(6.0, 0.0, -4.0),
 			[[10, 1, Vector3(4.0, 0.0, -24.0)]], 10)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DP_STRONG)
-	assert_almost_eq(d.target_position.z, -GameRules.BLUE_LINE_Z + 0.5, 0.6,
-			"line stand on the NZ side of the blue line")
+	assert_almost_eq(d.target_position.z,
+			-(GameRules.GOAL_LINE_Z - AIRoleDefenseman.DP_PINCH_DEPTH_M), 0.6,
+			"pinches to the circle tops when the play is bottled")
 	assert_almost_eq(d.target_position.x, 6.7, 0.1, "strong lane inside the dots")
+
+
+func test_dp_releases_the_pinch_as_the_breakout_forms() -> void:
+	# The gap-up seam: the carrier has controlled the puck and is gathering
+	# speed up-ice — still deep in HIS zone, the puck not yet out. The pinch
+	# must already be fully released (back at/behind the blue line, sliding
+	# down the NZ): the set-arrival margin collapses the mid-path stations
+	# while the breakout is FORMING, not after the carrier is at full flight
+	# past the line ("start backing off as the puck is exiting the O-zone").
+	var ctx: RoleContext = _make_ctx(Vector3(6.0, 0.0, -14.0), [
+			[10, 1, Vector3(2.0, 0.0, -14.0), Vector3(0.0, 0.0, 7.0)],
+	], 10)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DP_STRONG)
+	assert_gt(d.target_position.z, -GameRules.BLUE_LINE_Z - 0.01,
+			"the pinch is released to the NZ side while the puck is still exiting; got %s"
+			% d.target_position)
 
 
 func test_dp_sags_off_a_stretch_threat() -> void:

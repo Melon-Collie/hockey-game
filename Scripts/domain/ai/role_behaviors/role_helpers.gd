@@ -832,40 +832,55 @@ static func fill_counter_channels(ctx: RoleContext,
 # Precompute, for the calling defender's build, the squared containment
 # radius of every station: reach (blade span) + the run a standing start
 # covers in the time the puck needs to get there (same capped ramp the
-# calibrated time_to_arrive charges), minus the brake margin at the net
-# station (the last-resort stand arrives stopped). Exact inversion of the
-# per-station race race_home_feasible used to solve candidate-by-candidate.
+# calibrated time_to_arrive charges), minus the SET margin at every station.
+# Exact inversion of the per-station race race_home_feasible used to solve
+# candidate-by-candidate.
+#
+# SET ARRIVAL at every station — containment is not presence. A defender who
+# merely GETS to a mid-path station as the rush arrives is screaming through
+# it at full stride — beaten through it exactly like the "holds the blue
+# line, gets beat through the middle" failure. Playing the man at a station
+# means arriving with your closing speed already killed, whether the station
+# is the net mouth or mid-NZ. So the radius solves the SET-ARRIVAL profile
+# (not raw travel):
+#   short budget — triangular: accelerate then brake to zero inside `avail`;
+#     covered ground is ½·k·avail² with k = a·B/(a+B) (the effective accel of
+#     an accelerate-brake round trip; B = the arrival brake decel);
+#   long budget — trapezoidal: full ramp (d_ramp) + brake run (v²/2B, the
+#     braking DISTANCE the old net-only margin forgot to credit) + cruise for
+#     whatever time remains.
+# A station already under the blade needs no travel and stays contained at
+# any budget — the camped line stand still stuffs the man who skates into
+# it. Charging the set profile everywhere collapses feasibility while a
+# breakout is still FORMING (the carrier gathering speed deep in his zone),
+# which is what starts the back-off early enough to gap up, instead of after
+# the race is already lost. (Replaces the old net-station-only brake margin.)
 static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void:
 	if self_max_speed == _race_key_speed and self_max_accel == _race_key_accel:
 		return
 	_race_key_speed = self_max_speed
 	_race_key_accel = self_max_accel
 	var v_me: float = maxf(self_max_speed, 1.0)
-	var brake: float = v_me / AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	var brake_decel: float = AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
 	var a_net: float = maxf(
 			self_max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
-	var t_ramp: float = v_me / a_net
+	var k_set: float = a_net * brake_decel / (a_net + brake_decel)
+	var t_tri_max: float = v_me / a_net + v_me / brake_decel
 	var d_ramp: float = v_me * v_me / (2.0 * a_net)
+	var d_brake: float = v_me * v_me / (2.0 * brake_decel)
 	var n_fracs: int = RACE_PATH_FRACTIONS.size()
 	_race_reach_sq.clear()
 	var total: int = _race_channel_count * n_fracs
 	for idx: int in total:
 		var avail: float = _race_station_ts[idx]
-		if (idx % n_fracs) == n_fracs - 1:
-			avail -= brake
 		var r: float
 		if avail < 0.0:
-			# The brake margin outlasts the puck's arrival — the station is
-			# uncontainable from anywhere (matches the pre-inversion race:
-			# t_me ≥ 0 can never be ≤ a negative budget).
 			r = -1.0
-		elif avail <= t_ramp:
-			r = reach + 0.5 * a_net * avail * avail
+		elif avail <= t_tri_max:
+			r = reach + 0.5 * k_set * avail * avail
 		else:
-			r = reach + d_ramp + v_me * (avail - t_ramp)
-		# -1 = uncontainable station (even standing on it, the brake margin
-		# outlasts the puck) — the feasibility compare rejects it outright.
+			r = reach + d_ramp + d_brake + v_me * (avail - t_tri_max)
 		_race_reach_sq.append(r * r if r > 0.0 else -1.0)
 
 
