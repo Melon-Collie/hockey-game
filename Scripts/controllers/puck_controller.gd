@@ -263,15 +263,21 @@ func _physics_process(delta: float) -> void:
 	else:
 		is_extrapolating = false
 		_smooth_initialized = false
-		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "predicting"
+		if NetworkTelemetry.instance:
+			# "post_contact" = inside the RTT wait window after a goalie/post hit
+			# (goalie: frozen at the pad; post: still simulating the local bounce).
+			NetworkTelemetry.instance.puck_mode = "post_contact" \
+					if _post_contact_timer >= 0.0 else "predicting"
 		if _post_contact_timer >= 0.0:
 			_post_contact_timer -= delta
 			if _post_contact_timer < 0.0:
 				# Suppression window expired: buffer has post-bounce data. Hand back to
 				# interpolation; the next _interpolate reseeds the position smoother from
-				# the Jolt-simulated spot (fresh entry) AND seeds the render-time slew,
-				# so the timeline eases back to the interpolated past instead of the puck
-				# jumping backward along its flight (see PuckHandoffRules).
+				# the puck's held (goalie) or Jolt-simulated (post) spot and seeds the
+				# render-time slew, so the timeline eases back to the interpolated past
+				# instead of the puck jumping backward along its flight — off a goalie
+				# freeze the seeded lead is ~0 (stationary puck) and the cross-track
+				# smoother alone carries the puck out along the host's rebound line.
 				_predicting_trajectory = false
 				_handoff_slew_pending = true
 				puck.set_client_prediction_mode(false)
@@ -805,18 +811,37 @@ func _resolve_peer_id(skater: Skater) -> int:
 func _on_client_puck_hit_goalie(_goalie: Goalie) -> void:
 	if not _predicting_trajectory or _post_contact_timer >= 0.0:
 		return
-	# Hold prediction for RTT + one broadcast interval so the buffer fills with
-	# post-bounce server data before we switch to interpolation. Ending prediction
-	# immediately would blend toward pre-bounce buffer positions, making the puck
-	# appear to slide backward into the goalie. Jolt keeps simulating the bounce
-	# and server states are buffered (not reconciled) until the window expires.
+	# Freeze-and-wait: a locally simulated rebound off a goalie is essentially
+	# always wrong — the rendered goalie sits interp_delay + RTT/2 in the past,
+	# and the host's outcome isn't raw restitution anyway (GoalieSaveRules
+	# deadens chest contacts, holds glove catches, steers pad rebounds
+	# cornerward — controller logic this client doesn't run), so letting Jolt
+	# play our own bounce animates a rebound that's wrong in KIND, then has to
+	# be corrected. Instead the puck holds at the contact point ("stuck in the
+	# pads") while the window below waits out the round trip for the host's
+	# authoritative post-bounce data; the slewed handoff then carries it out
+	# along the true line — and if the host actually deadened/smothered it, the
+	# freeze already IS the correct visual. Window sizing: our predicted bounce
+	# leads the host's by ~RTT/2 and the first post-bounce snapshot takes
+	# another RTT/2 to arrive, so RTT + one broadcast of slack is the earliest
+	# the buffer can hold the truth. Ending prediction immediately instead
+	# would blend toward pre-bounce buffer positions — the puck would slide
+	# backward into the goalie and replay the save.
 	_pending_local_release = false
 	_pending_local_release_deadline = -1.0
 	_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
+	puck.set_client_prediction_mode(false)  # freeze at the pad; velocity zeroed
 
 func _on_client_puck_hit_post() -> void:
 	if not _predicting_trajectory or _post_contact_timer >= 0.0:
 		return
+	# Post bounces deliberately KEEP simulating through the window (unlike the
+	# goalie freeze above): the post is static geometry and both sims run
+	# identical Jolt from the same client-sent origin, so the local rebound
+	# usually IS the host's — freezing would add a pointless hold to a bounce
+	# we can predict. The window still suppresses reconcile so pre-bounce
+	# snapshots can't drag the puck back into the post; a razor-edge graze
+	# that genuinely diverged lands in the zone-2 slewed handoff instead.
 	_pending_local_release = false
 	_pending_local_release_deadline = -1.0
 	_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
