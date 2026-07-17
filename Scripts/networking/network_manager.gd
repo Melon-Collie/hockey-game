@@ -84,7 +84,7 @@ signal lobby_roster_synced(roster: Array)
 signal color_vote_changed(peer_id: int, color_slot: int)
 signal color_votes_synced(votes: Dictionary)
 signal team_colors_changed(home_slot: int, away_slot: int)
-signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int, team_size: int)
+signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int, team_size: int, bot_difficulty: int, goalie_difficulty: int)
 signal return_to_lobby_received(roster: Array)
 signal player_ready_changed(peer_id: int, is_ready: bool)
 # Lobby per-slot bot toggle. Slot keys follow LobbyManager._slot_key (team*3+slot).
@@ -218,6 +218,12 @@ var pending_period_duration: float = GameRules.PERIOD_DURATION
 var pending_ot_enabled: bool = GameRules.OT_ENABLED
 var pending_rule_set: int = GameRules.DEFAULT_RULE_SET
 var pending_team_size: int = GameRules.DEFAULT_TEAM_SIZE
+# Host's AI difficulty picks, mirrored to clients for lobby DISPLAY only —
+# the AI itself is host-simulated from the host's PlayerPrefs, so clients
+# never feed these back into gameplay (and never write them to their own
+# prefs).
+var pending_bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL
+var pending_goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL
 var pending_join_players: Array = []     # sync_existing_players data for join-in-progress
 
 # Client: true between learning that a Hockey-scene (re)load is coming
@@ -789,6 +795,8 @@ func reset() -> void:
 	pending_ot_enabled = GameRules.OT_ENABLED
 	pending_rule_set = GameRules.DEFAULT_RULE_SET
 	pending_team_size = GameRules.DEFAULT_TEAM_SIZE
+	pending_bot_difficulty = BotSkillProfile.Difficulty.NORMAL
+	pending_goalie_difficulty = GoalieSkillProfile.Difficulty.NORMAL
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -2041,29 +2049,36 @@ func send_bot_slots_to(peer_id: int, bot_slots: Dictionary, identities: Dictiona
 @rpc("authority", "reliable")
 func notify_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool,
 		rule_set: int = GameRules.DEFAULT_RULE_SET,
-		team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
+		team_size: int = GameRules.DEFAULT_TEAM_SIZE,
+		bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL,
+		goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL) -> void:
 	pending_num_periods = num_periods
 	pending_period_duration = period_duration
 	pending_ot_enabled = ot_enabled
 	pending_rule_set = rule_set
 	pending_team_size = team_size
-	lobby_settings_synced.emit(num_periods, period_duration, ot_enabled, rule_set, team_size)
+	pending_bot_difficulty = bot_difficulty
+	pending_goalie_difficulty = goalie_difficulty
+	lobby_settings_synced.emit(num_periods, period_duration, ot_enabled, rule_set, team_size,
+			bot_difficulty, goalie_difficulty)
 
 func send_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
-		team_size: int) -> void:
+		team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
 	pending_num_periods = num_periods
 	pending_period_duration = period_duration
 	pending_ot_enabled = ot_enabled
 	pending_rule_set = rule_set
 	pending_team_size = team_size
+	pending_bot_difficulty = bot_difficulty
+	pending_goalie_difficulty = goalie_difficulty
 	for peer_id: int in connected_peer_ids():
 		notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set,
-				team_size)
+				team_size, bot_difficulty, goalie_difficulty)
 
 func send_lobby_settings_to(peer_id: int, num_periods: int, period_duration: float, ot_enabled: bool,
-		rule_set: int, team_size: int) -> void:
+		rule_set: int, team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
 	notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set,
-			team_size)
+			team_size, bot_difficulty, goalie_difficulty)
 
 @rpc("authority", "reliable")
 func notify_return_to_lobby(roster: Array) -> void:

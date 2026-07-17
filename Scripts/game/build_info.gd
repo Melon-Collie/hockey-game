@@ -129,7 +129,10 @@ const VERSION: String = "dev"
 # v32: 5v5 mode — notify_lobby_settings / notify_game_start /
 #      notify_join_in_progress each grew a positional team_size arg, and
 #      team_slot's range widened to 0..4 (LD/RD lobby positions).
-const PROTOCOL_VERSION: int = 32
+# v33: notify_lobby_settings grew bot_difficulty + goalie_difficulty args so
+#      clients' dimmed lobby dropdowns mirror the host's AI difficulty picks
+#      (display only — the AI is host-simulated from the host's PlayerPrefs).
+const PROTOCOL_VERSION: int = 33
 
 
 func _ready() -> void:
