@@ -41,6 +41,18 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# contained (fill_counter_channels — the path-intercept race-home read).
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 
+	# Far from the band, skate at the CALCULATED float spot directly — the
+	# seam argmax refines a look that gets re-read from closer before arrival
+	# (see STATION_ARGMAX_LOD_M). The first-man-back race bound still applies
+	# to the direct spot (the channel fill above is memoized, so this is a
+	# handful of squared compares).
+	var band_center := Vector3(
+			0.0, 0.0, opp_net.z + own_dir * BAND_DEPTHS_M[1])
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, band_center):
+		d.target_position = AIRoleHelpers.most_forward_feasible(
+				band_center, ctx.self_max_speed, ctx.self_max_accel)
+		return d
+
 	var pass_speed_ref: float = AIActionScoring.expected_pass_speed(
 			carrier_pos, opp_net)
 	var best_pos: Vector3 = ctx.self_pos

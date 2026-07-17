@@ -111,6 +111,24 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var exposure_cap: float = 1.0 if AIActionScoring.in_offensive_zone(
 			carrier_pos, ctx.attacking_goal_pos) else EXPOSURE_MAX
 
+	# Far from the station, skate at the CALCULATED post directly — the
+	# openness argmax refines a read that will be re-taken from closer before
+	# arrival (see STATION_ARGMAX_LOD_M). In the OZ the station is the high
+	# post; in transit it's the goal-side trail a step behind the carrier
+	# (always passes the goal-side valve by construction).
+	var station: Vector3
+	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
+		station = Vector3(
+				carrier_pos.x * 0.5, 0.0,
+				-ctx.own_goal_dir * GameRules.BLUE_LINE_Z
+						- ctx.own_goal_dir * HIGH_POST_INSET_M)
+	else:
+		station = carrier_pos + Vector3(
+				0.0, 0.0, ctx.own_goal_dir * AIRoleHelpers.SEARCH_STEP_M)
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, station):
+		d.target_position = station
+		return d
+
 	# Search around the carrier. Polar samples cover the cycle space;
 	# anti-crowd filter rejects the carrier-overlap candidate.
 	var candidates: Array[Vector3] = _generate_candidates(ctx, carrier_pos)

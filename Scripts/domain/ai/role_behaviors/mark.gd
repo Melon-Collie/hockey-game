@@ -81,12 +81,6 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				0.0,
 				0.0,
 				our_net.z - ctx.own_goal_dir * GameRules.SLOT_DIST_M)
-	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, search_center)
-	# Switch-hysteresis: hold the recovery spot unless a fresh one covers clearly
-	# more dangerous ice, so the cursor (which snaps to this target) stays steady.
-	AIRoleHelpers.append_incumbent(ctx, candidates)
-
 	# Per-opp threat upper bounds (no candidate appended) for the per-
 	# candidate max() early-out — same monotone-in-defenders argument as
 	# AIRoleHelpers.carrier_option_bases, same exact result.
@@ -96,6 +90,26 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		bases.append(AIActionScoring.threat_surface_shoot(
 				opp_pos, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+
+	# Far from the recovery region, skate at the CALCULATED cover directly:
+	# the stick-in-the-lane point on the biggest base threat — the same
+	# cover geometry the assigned-man path uses — instead of refining a
+	# minimax between spots that get re-read from closer before arrival
+	# (see STATION_ARGMAX_LOD_M).
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, search_center):
+		var worst: int = 0
+		for i: int in bases.size():
+			if bases[i] > bases[worst]:
+				worst = i
+		d.target_position = AIThreatAssignment.cover_anchor(
+				opp_positions[worst], our_net)
+		return d
+
+	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
+			ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the recovery spot unless a fresh one covers clearly
+	# more dangerous ice, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF

@@ -233,6 +233,14 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 			-ctx.strong_x * weak_bias,
 			0.0,
 			ctx.attacking_goal_pos.z + ctx.own_goal_dir * stage_dist)
+	# Far from the station, skate at the CALCULATED center directly — the
+	# feed×shot argmax refines a seam read that will be re-taken from closer
+	# before arrival (see STATION_ARGMAX_LOD_M), and readiness needs half-step
+	# proximity anyway. The ten per-candidate goalie-predicted score_pass
+	# evals only run when their answer is consumable.
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, search_center):
+		d.target_position = search_center
+		return d
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
 	# Switch-hysteresis: hold the staging spot unless a fresh one scores clearly

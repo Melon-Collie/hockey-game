@@ -19,6 +19,23 @@ const SEARCH_STEP_M: float = 3.0
 # physical scale rather than an arbitrary "personal space" radius.
 const ANTI_CROWD_RADIUS_M: float = 1.8
 
+# Beyond this distance from a role's analytic station center, the candidate
+# argmax refines between spots the bot cannot differentiate en route: the
+# ring spans ±SEARCH_STEP_M, so from three ring-radii out the heading to
+# "center" vs "refined spot" differs by under ~20°, and the role re-evals
+# from closer long before arrival and re-refines there. Sampled roles
+# collapse to their CALCULATED station until the refinement is consumable —
+# the off-puck argmaxes are the whole off-puck AI bill, and most of the
+# time each bot is skating toward its station, not standing on it.
+const STATION_ARGMAX_LOD_M: float = SEARCH_STEP_M * 3.0
+
+
+# True when the bot is close enough to its station center that the
+# candidate argmax's refinement affects the path it actually skates.
+static func station_needs_refinement(self_pos: Vector3, center: Vector3) -> bool:
+	return self_pos.distance_squared_to(center) \
+			< STATION_ARGMAX_LOD_M * STATION_ARGMAX_LOD_M
+
 # Margin from the rink boards / goal lines that candidates are
 # clamped inside of. Sampling parameter.
 const RINK_INSET_M: float = 0.5
