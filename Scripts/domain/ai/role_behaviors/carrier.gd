@@ -2277,6 +2277,11 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 				ctx, candidate, arrive_vel, local_time, tracked_goalie))
 	var benefit: float = dest_score * lane * decay * safety
 	var keep_prob: float = safety
+	# A fully safe route pays no turnover cost at all — skip localizing a
+	# strip that cannot happen (the strip-point walk is a per-defender loop;
+	# this is the common open-ice case).
+	if keep_prob >= 1.0:
+		return benefit
 	# Price the loss where the strip actually happens — the earliest covered point on
 	# the route — not the (often safe) destination. A candidate that ends in open ice
 	# but threads a defender through our own slot must pay the slot's turnover cost,

@@ -3051,10 +3051,117 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 	return minf(c_mid, c_end)
 
 
+# ── Crossing sample: the meeting-strip band ──────────────────────────────────
+# The mid/end samples can straddle a defender the carry path MEETS between
+# them — a pinch wall just past `from`, a forechecker met in the first
+# quarter — and the strip lands at the meeting moment neither sample sees.
+# The staged-crossing ensemble (probe: committed seeker under the real
+# movement / blade / check_poke rules, sweeping pace 3–12.5 m/s relative ×
+# miss distance × closing geometry) measured the meeting outcome as a pure
+# DISTANCE band on the contact envelope's own radii, NOT a speed effect:
+# every naked crossing whose momentum-line miss distance penetrated the
+# stick circle by more than the poke contact radius was swept, at every
+# tested pace (the presented blade owns that core), while crossings grazing
+# the outer poke-slop ring escaped at pace (blade tracking lag misses the
+# fringe). A dwell-time gate was hypothesized and REJECTED by the
+# measurement — the naked band edges are simply:
+#   core = blade_span − POKE_CONTACT_RADIUS_M   → keep 0 (swept)
+#   edge = blade_span                            → keep 1 (grazed at pace)
+#
+# PROTECTION is the second measured half: re-running the ensemble with a
+# protecting carrier (puck ridden on the handle envelope away from the
+# threat) shifted the whole band by CROSSING_PROTECT_SHIFT_M — a lone
+# defender is beaten at almost any crossing geometry (only a tight head-on
+# meeting still strips), which is the duel harness's own emergent truth.
+# The shift is a SHARED, DIRECTIONAL budget: the puck line can displace one
+# way, so threats on one side get the full credit while an OPPOSED pair (the
+# pinch wall, the corralling pincer) split it to nothing — the optimal
+# lateral shift between the per-side worst crossings, bounded by the
+# measured displacement. That single mechanism is why lone containers are
+# beatable while walls are genuinely dangerous.
+#
+# Slow grazes ARE stripped in reality, but by pursuit, not the meeting —
+# and pursuit is exactly what the mid/end transit samples already price
+# (verified in the ensemble: every slow-graze strip cell reads dead at the
+# mid sample). Only the window INTERIOR is sampled here; the endpoints are
+# the mid/end samples' job.
+const CROSSING_PROTECT_SHIFT_M: float = 0.8
+
+
+static func carry_crossing_keep(from: Vector3, to: Vector3, arrival_time: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = []) -> float:
+	var n: int = opponents.size()
+	if n == 0 or opponent_vels.size() != n or arrival_time <= 0.0:
+		return 1.0
+	var dx: float = to.x - from.x
+	var dz: float = to.z - from.z
+	var seg: float = sqrt(dx * dx + dz * dz)
+	if seg < 0.001:
+		return 1.0
+	var dirx: float = dx / seg
+	var dirz: float = dz / seg
+	var inv_t: float = 1.0 / arrival_time
+	var pvx: float = dx * inv_t   # puck velocity along the carry
+	var pvz: float = dz * inv_t
+	var has_caps: bool = opponent_caps.size() == n
+	# Per-side worst crossing, in band units (d_min − span so different builds'
+	# spans compose): the shared protect shift then resolves between the sides.
+	var worst_l: float = INF
+	var worst_r: float = INF
+	for i: int in n:
+		var rvx: float = pvx - opponent_vels[i].x
+		var rvz: float = pvz - opponent_vels[i].z
+		var rv_sq: float = rvx * rvx + rvz * rvz
+		if rv_sq < 0.0001:
+			continue   # co-moving: no meeting — endpoints cover it
+		var r0x: float = from.x - opponents[i].x
+		var r0z: float = from.z - opponents[i].z
+		var t_star: float = -(r0x * rvx + r0z * rvz) / rv_sq
+		if t_star <= 0.0 or t_star >= arrival_time:
+			continue   # closest approach outside the window — endpoints cover it
+		var mx: float = r0x + rvx * t_star
+		var mz: float = r0z + rvz * t_star
+		var d_min: float = sqrt(mx * mx + mz * mz)
+		var span: float = EVADE_STICK_REACH_M
+		if has_caps:
+			var caps: AISkaterCaps = opponent_caps[i]
+			if caps != null:
+				span = caps.blade_span
+		# Which side of the carry line the defender crosses on (m is puck −
+		# defender at t*, so the defender sits at −m relative to the path).
+		var margin: float = d_min - span
+		if margin <= -(POKE_CONTACT_RADIUS_M + CROSSING_PROTECT_SHIFT_M):
+			# Deeper than the full protect credit can ever recover — swept
+			# regardless of the other side's slack.
+			return 0.0
+		if dirx * (-mz) - dirz * (-mx) >= 0.0:
+			if margin < worst_l:
+				worst_l = margin
+		else:
+			if margin < worst_r:
+				worst_r = margin
+	if worst_l == INF and worst_r == INF:
+		return 1.0
+	# Optimal shared lateral shift of the puck line between the two sides,
+	# bounded by the measured protect displacement (a shift toward the right
+	# widens every left-side gap and narrows every right-side one).
+	var eff: float
+	if worst_l < INF and worst_r < INF:
+		var x: float = clampf((worst_r - worst_l) * 0.5,
+				-CROSSING_PROTECT_SHIFT_M, CROSSING_PROTECT_SHIFT_M)
+		eff = minf(worst_l + x, worst_r - x)
+	else:
+		eff = (worst_l if worst_l < INF else worst_r) + CROSSING_PROTECT_SHIFT_M
+	return clampf((eff + POKE_CONTACT_RADIUS_M) / POKE_CONTACT_RADIUS_M, 0.0, 1.0)
+
+
 # Possession safety [0, 1] of a carry — the regime-aware map application (see
 # the safety-map doc above reach_clearance): the MID sample is a moving puck
 # (transit band), the END sample a dwelling one (the carrier arrives there),
-# and a stand (from == to) dwells at both. Callers use this instead of
+# a stand (from == to) dwells at both, and each defender the path MEETS
+# between the fixed samples contributes the measured crossing band
+# (carry_crossing_keep). Callers use this instead of
 # clearance_to_safety(carry_clearance(...)), which forced one map onto both
 # regimes.
 static func carry_safety(from: Vector3, to: Vector3, arrival_time: float,
@@ -3068,16 +3175,33 @@ static func carry_safety(from: Vector3, to: Vector3, arrival_time: float,
 	if apply_escape and arrival_time > 0.0 and dist > 0.001:
 		carry_dir = Vector2(dx / dist, dz / dist)
 		carry_speed = dist / arrival_time
-	var c_mid: float = reach_clearance(
-			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
-			opponent_caps, -1.0, carry_dir, carry_speed)
-	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
-			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
-			carry_dir, carry_speed)
 	if dist < 0.001:
 		# A stand: the puck dwells the whole window — both samples read dwell.
-		return minf(clearance_to_safety(c_mid), clearance_to_safety(c_end))
-	return minf(transit_clearance_to_safety(c_mid), clearance_to_safety(c_end))
+		var s_mid: float = clearance_to_safety(reach_clearance(
+				from, arrival_time * 0.5, opponents, opponent_vels,
+				opponent_caps))
+		if s_mid <= 0.0:
+			return 0.0
+		return minf(s_mid, clearance_to_safety(reach_clearance(
+				from, arrival_time, opponents, opponent_vels,
+				opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S))))
+	# Sequential early-outs — each factor can only lower the min, so any zero
+	# skips the remaining defender loops. In a scramble most candidates die at
+	# the first read; the hot-path cost of the three-sample honesty is paid
+	# only by candidates that are actually alive.
+	var crossing: float = carry_crossing_keep(
+			from, to, arrival_time, opponents, opponent_vels, opponent_caps)
+	if crossing <= 0.0:
+		return 0.0
+	var t_mid: float = transit_clearance_to_safety(reach_clearance(
+			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
+			opponent_caps, -1.0, carry_dir, carry_speed))
+	if t_mid <= 0.0:
+		return 0.0
+	return minf(crossing, minf(t_mid, clearance_to_safety(reach_clearance(
+			to, arrival_time, opponents, opponent_vels,
+			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
+			carry_dir, carry_speed))))
 
 
 # WHERE a carry gets stripped, if it does: the EARLIEST covered point on the path.
@@ -3099,14 +3223,98 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 		if ddist > 0.001:
 			carry_dir = Vector2(ddx / ddist, ddz / ddist)
 			carry_speed = ddist / arrival_time
-	# Sample windows must mirror carry_clearance exactly so the strip point
-	# and the safety read agree on which sample is covered (mid = full
-	# pursuit, end = arrival lunge).
+	# Sample windows must mirror carry_safety exactly so the strip point and
+	# the safety read agree on which sample is covered (crossing = the
+	# meeting-strip band's SHIFT-ADJUSTED core, mid = full pursuit, end =
+	# arrival lunge). The earliest core-hit crossing pre-empts the fixed
+	# samples when the meeting happens first — a pinch wall driven into
+	# strips at the wall.
+	var cross_t: float = INF
+	var cross_pt: Vector3 = to
+	var seg_x: float = to.x - from.x
+	var seg_z: float = to.z - from.z
+	var seg_len: float = sqrt(seg_x * seg_x + seg_z * seg_z)
+	if arrival_time > 0.0 and seg_len > 0.001 \
+			and opponent_vels.size() == opponents.size():
+		var dirx: float = seg_x / seg_len
+		var dirz: float = seg_z / seg_len
+		var inv_t: float = 1.0 / arrival_time
+		var pvx: float = seg_x * inv_t
+		var pvz: float = seg_z * inv_t
+		var has_caps: bool = opponent_caps.size() == opponents.size()
+		# Pass 1: per-side worst margins → the shared protect shift, exactly
+		# as carry_crossing_keep resolves it.
+		var worst_l: float = INF
+		var worst_r: float = INF
+		for i: int in opponents.size():
+			var rvx: float = pvx - opponent_vels[i].x
+			var rvz: float = pvz - opponent_vels[i].z
+			var rv_sq: float = rvx * rvx + rvz * rvz
+			if rv_sq < 0.0001:
+				continue
+			var r0x: float = from.x - opponents[i].x
+			var r0z: float = from.z - opponents[i].z
+			var t_star: float = -(r0x * rvx + r0z * rvz) / rv_sq
+			if t_star <= 0.0 or t_star >= arrival_time:
+				continue
+			var mx: float = r0x + rvx * t_star
+			var mz: float = r0z + rvz * t_star
+			var span: float = EVADE_STICK_REACH_M
+			if has_caps:
+				var caps: AISkaterCaps = opponent_caps[i]
+				if caps != null:
+					span = caps.blade_span
+			var margin: float = sqrt(mx * mx + mz * mz) - span
+			if dirx * (-mz) - dirz * (-mx) >= 0.0:
+				worst_l = minf(worst_l, margin)
+			else:
+				worst_r = minf(worst_r, margin)
+		var shift: float = CROSSING_PROTECT_SHIFT_M
+		var both: bool = worst_l < INF and worst_r < INF
+		if both:
+			shift = clampf((worst_r - worst_l) * 0.5,
+					-CROSSING_PROTECT_SHIFT_M, CROSSING_PROTECT_SHIFT_M)
+		# Pass 2 (earliest crossing whose shift-adjusted margin hits the core)
+		# runs only when some crossing could be swept even under the most
+		# favourable shift — the common open-ice case skips it entirely.
+		if minf(worst_l, worst_r) \
+				<= -POKE_CONTACT_RADIUS_M + CROSSING_PROTECT_SHIFT_M:
+			for i: int in opponents.size():
+				var rvx2: float = pvx - opponent_vels[i].x
+				var rvz2: float = pvz - opponent_vels[i].z
+				var rv_sq2: float = rvx2 * rvx2 + rvz2 * rvz2
+				if rv_sq2 < 0.0001:
+					continue
+				var r0x2: float = from.x - opponents[i].x
+				var r0z2: float = from.z - opponents[i].z
+				var t_star2: float = -(r0x2 * rvx2 + r0z2 * rvz2) / rv_sq2
+				if t_star2 <= 0.0 or t_star2 >= arrival_time or t_star2 >= cross_t:
+					continue
+				var mx2: float = r0x2 + rvx2 * t_star2
+				var mz2: float = r0z2 + rvz2 * t_star2
+				var span2: float = EVADE_STICK_REACH_M
+				if has_caps:
+					var caps2: AISkaterCaps = opponent_caps[i]
+					if caps2 != null:
+						span2 = caps2.blade_span
+				var margin2: float = sqrt(mx2 * mx2 + mz2 * mz2) - span2
+				var left: bool = dirx * (-mz2) - dirz * (-mx2) >= 0.0
+				var eff: float = margin2 + CROSSING_PROTECT_SHIFT_M
+				if both:
+					eff = margin2 + (shift if left else -shift)
+				if eff <= -POKE_CONTACT_RADIUS_M:
+					cross_t = t_star2
+					cross_pt = Vector3(
+							from.x + pvx * t_star2, 0.0, from.z + pvz * t_star2)
 	var mid: Vector3 = from.lerp(to, 0.5)
+	if cross_t < arrival_time * 0.5:
+		return cross_pt   # met and swept before the mid sample
 	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents,
 			opponent_vels, opponent_caps, -1.0, carry_dir, carry_speed)
 	if c_mid < 0.0:
 		return mid   # covered mid-route — stripped there, before the destination
+	if cross_t < arrival_time:
+		return cross_pt   # met and swept between the mid and end samples
 	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
 			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
 			carry_dir, carry_speed)

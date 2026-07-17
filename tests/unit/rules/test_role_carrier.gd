@@ -1562,28 +1562,37 @@ func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
 # ─── dumping: last-resort relief in two specific spots ───────────────────────
 
 func test_swarmed_own_zone_carrier_squeezes_out_with_possession() -> void:
-	# Deep in our slot, swarmed on-puck: a forechecker charging up the middle
-	# and both flanks tight beside the carrier. The retreat ring finds the
-	# least-bad squeeze OUT (worst case: stripped at the boards, honestly
-	# priced at the strip point) rather than pacifying against the swarm or
-	# flinging a hopeless fire — a possession escape beats conceding whenever
-	# any route survives the strip pricing, so the clear is a true last
-	# resort. (The clear's GEOMETRY stays pinned by the direct _best_dump
-	# test below.)
+	# Deep in our slot with the forecheck converging. Re-anchored by the
+	# measured meeting-strip band: at BLADE-CONTACT range (all three men
+	# ~1.5 m off the puck, flanks OPPOSED so the protect budget splits to
+	# nothing) every escape route honestly dies at its crossing — the duel
+	# physics strip a carrier at that range — so the clear fires as the true
+	# last resort. Loosen the same swarm a stride and a protected route
+	# survives, so the compete flips back to fighting for possession. The
+	# FLIP is the pin: the clear stays a last resort, never the default.
+	# (The clear's GEOMETRY stays pinned by the direct _best_dump test below.)
 	var self_pos := Vector3(6, 0, 24)                      # deep slot, swarmed
-	var skaters: Array = [
+	var tight: Array = [
 			[1, TEAM_ID, self_pos],
 			[3, 1, Vector3(6, 0, 22.2), false, Vector3(0, 0, 5)],
 			[4, 1, Vector3(4.6, 0, 24.6)],
 			[5, 1, Vector3(7.4, 0, 24.6)],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
-	c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"a swarmed own-zone carrier fights for the escape, not a giveaway fire")
-	assert_gt(self_pos.distance_to(c.last_carry_anchor), 3.0,
-			"…and the escape is a committed route out of the swarm, not a shuffle")
+	c.decide(_make_ctx(self_pos, tight))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"on-blade opposed swarm: no route survives the measured band — clear it")
+
+	var loose: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(6, 0, 20.0), false, Vector3(0, 0, 5)],
+			[4, 1, Vector3(3.2, 0, 24.6)],
+			[5, 1, Vector3(8.8, 0, 24.6)],
+	]
+	var c2 := AIRoleCarrier.new()
+	c2.decide(_make_ctx(self_pos, loose))
+	assert_ne(c2.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"a stride of air and the carrier fights for possession instead")
 
 
 func test_best_dump_geometry_in_own_zone_is_a_hard_rim_out() -> void:
@@ -1654,17 +1663,10 @@ func test_best_dump_geometry_past_center_is_a_soft_flip_to_the_far_corner() -> v
 
 
 func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
-	pending("Gated on the meeting-strip refinement to the #27 compete "
-			+ "restructure (ARCHITECTURE Known Issues): the nominal-reach + "
-			+ "measured-band core lands, but a defender the carry MEETS "
-			+ "mid-route (a slow converging forecheck, distinct from a fast "
-			+ "flyby the puck out-runs) needs a dwell-gated crossing sample — "
-			+ "relative crossing speed vs blade sweep — to price the strip. "
-			+ "Without it the pressured carry still out-scores the outlet here. "
-			+ "A position-only crossing sample was tried and reverted: it broke "
-			+ "the live duel (it over-covers the fast cut it can't tell from a "
-			+ "slow meeting).")
-	return
+	# Un-pended by the meeting-strip crossing band (measured, protection-
+	# aware): the head-on forecheck meeting prices as the strip it is even
+	# for a protecting carrier, so retention is honestly hopeless and the
+	# outlet wins the compete.
 	# Same pinned DZ spot, but now a teammate is wide open up the strong wall. A
 	# real breakout out-scores conceding — pass, don't dump.
 	var self_pos := Vector3(8, 0, 20)
@@ -2215,15 +2217,9 @@ func test_pass_option_prefers_the_spot_that_reopens_the_lane() -> void:
 
 
 func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
-	pending("Gated on the meeting-strip refinement to the #27 compete "
-			+ "restructure (ARCHITECTURE Known Issues): pricing a carry INTO "
-			+ "the pinch as the strip it is needs a dwell-gated crossing "
-			+ "sample (a defender the carry MEETS mid-route, told apart from a "
-			+ "fast cut by relative crossing speed vs blade sweep). The "
-			+ "position-only crossing that would fix this was reverted — it "
-			+ "broke the live duel's fast cut. Until the dwell gate lands the "
-			+ "grind into the wall is still under-priced here.")
-	return
+	# Un-pended by the meeting-strip crossing band (measured, protection-
+	# aware): the OPPOSED wall splits the protect budget to nothing, so the
+	# grind into the pinch prices as the strip it is.
 	# Double-team pinch in the OZ: a GENUINE wall dead ahead (the two defenders
 	# tight together, no splittable seam to the slot), a teammate open wide. The
 	# best RESOLUTION is moving the puck to the open man while the carry argmax
@@ -2278,11 +2274,14 @@ func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
 	# SAFE waypoint (the continuation value drives corner→slot), out-scoring the
 	# contested middle drive past the inside defender.
 	pending("The #28 erasure zeroes the dead-angle SHOT (see the wide-angle "
-			+ "test), but the carry still parks wide: the safe dead corner wins "
-			+ "the carry compete as a continuation waypoint over the contested "
-			+ "middle drive. Gated on the meeting-strip carry-safety refinement "
-			+ "(same follow-up the outlet/pinch pends cite) — ARCHITECTURE "
-			+ "Known Issues.")
+			+ "test), and the meeting-strip crossing band does not apply (the "
+			+ "inside defender sits ~2.5 m off both routes — no crossing). The "
+			+ "corner wins as a momentum-cheap CONTINUATION WAYPOINT: its own "
+			+ "value is ~0 but corner-then-slot inherits the slot's value at "
+			+ "less decay than the middle drive pays for its turn. Gated on the "
+			+ "waypoint/continuation compete taking the SECOND leg's contest "
+			+ "honestly (the walkout is a re-attack the defense re-sets "
+			+ "against, not a free continuation) — ARCHITECTURE Known Issues.")
 	return
 	# The reported bug: enter the zone down the wing with a defender on the inside,
 	# and the carrier drifts down the boards to the dead-angle goal-line corner and
