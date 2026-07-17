@@ -1876,22 +1876,26 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				best_pos = retreat
 
 	# COMMITTED-CUT ring (see _CUT_ANGLES): the curl candidates between the
-	# local cardinals and the far anchors.
-	for angle: float in _CUT_ANGLES:
-		var cc: float = cos(angle)
-		var cs: float = sin(angle)
-		var cut := Vector3(
-				self_pos.x + (fwd_x * cc - fwd_z * cs) * CARRY_RETREAT_STEP_M, 0.0,
-				self_pos.z + (fwd_x * cs + fwd_z * cc) * CARRY_RETREAT_STEP_M)
-		if absf(cut.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
-			continue
-		if absf(cut.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
-			continue
-		var cut_total: float = _score_move_candidate(ctx, cut, our_goalie,
-				false, maxf(best_score, cont_bound))
-		if cut_total > best_score:
-			best_score = cut_total
-			best_pos = cut
+	# local cardinals and the far anchors. Attacking half only — the curl is
+	# an attack shape (bend the approach while there's angle to use); in our
+	# half the exits, slot anchor, and retreat ring already span the moves,
+	# and the five extra scored candidates are pure hot-path cost there.
+	if ctx.own_goal_dir * self_pos.z < 1.0:
+		for angle: float in _CUT_ANGLES:
+			var cc: float = cos(angle)
+			var cs: float = sin(angle)
+			var cut := Vector3(
+					self_pos.x + (fwd_x * cc - fwd_z * cs) * CARRY_RETREAT_STEP_M, 0.0,
+					self_pos.z + (fwd_x * cs + fwd_z * cc) * CARRY_RETREAT_STEP_M)
+			if absf(cut.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
+				continue
+			if absf(cut.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+				continue
+			var cut_total: float = _score_move_candidate(ctx, cut, our_goalie,
+					false, maxf(best_score, cont_bound))
+			if cut_total > best_score:
+				best_score = cut_total
+				best_pos = cut
 
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot

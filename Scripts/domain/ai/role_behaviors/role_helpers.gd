@@ -716,8 +716,26 @@ const RACE_PATH_FRACTIONS: Array[float] = [0.2, 0.4, 0.6, 0.8, 1.0]
 # same pattern as AIActionScoring._scratch_counter_cover.
 static var _race_station_pts: Array[Vector3] = []
 static var _race_station_ts: Array[float] = []
+# Per-station squared containment radii for the CURRENT caller's build: a
+# stand at `c` contains station j iff dist²(c, station_j) ≤ _race_reach_sq[j].
+# Precomputed once per fill (see _prepare_reach) so the per-candidate
+# feasibility loop is a single multiply-compare per station — the loop runs
+# candidates × channels × stations at role-decide rate, which made the
+# sqrt-and-ramp-per-station version the hottest line of every 5v5 D decide.
+static var _race_reach_sq: Array[float] = []
 static var _race_channel_count: int = 0
 static var _race_net: Vector3 = Vector3.ZERO
+# Memo key: every full-opponent-list consumer of the same team on the same
+# snapshot builds IDENTICAL channels (points, high slot, valve, line holds all
+# fill right after collect_opponents) — one fill serves them all. CONTAIN's
+# filtered trailer list differs in COUNT, which the key catches. Speed/accel
+# key the reach radii (different bots re-derive only those, keeping the
+# stations).
+static var _race_key_snapshot_id: int = 0
+static var _race_key_net_z: float = 0.0
+static var _race_key_count: int = -1
+static var _race_key_speed: float = -1.0
+static var _race_key_accel: float = -1.0
 
 
 # Build the counter-attack channels for a turnover-now hypothesis and
@@ -725,9 +743,19 @@ static var _race_net: Vector3 = Vector3.ZERO
 # decide(), before any race_home_feasible / most_forward_feasible queries.
 # `opp_states` is the caller's threat list (CONTAIN legitimately excludes the
 # carrier it already gap-controls); caps are read from ctx.scratch_opp_caps,
-# index-aligned by collect_opponents.
+# index-aligned by collect_opponents. Memoized per (snapshot, net, list size):
+# repeat fills for the same team on the same tick reuse the station grid and
+# only re-derive the caller-build reach radii when the bot differs.
 static func fill_counter_channels(ctx: RoleContext,
 		opp_states: Array[SkaterNetworkState], our_net: Vector3) -> void:
+	var snap_id: int = ctx.snapshot.get_instance_id() if ctx.snapshot != null else 0
+	if snap_id == _race_key_snapshot_id and our_net.z == _race_key_net_z \
+			and opp_states.size() == _race_key_count and snap_id != 0:
+		_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
+		return
+	_race_key_snapshot_id = snap_id
+	_race_key_net_z = our_net.z
+	_race_key_count = opp_states.size()
 	_race_station_pts.clear()
 	_race_station_ts.clear()
 	_race_channel_count = 0
@@ -780,6 +808,48 @@ static func fill_counter_channels(ctx: RoleContext,
 			var t_ret: float = AIActionScoring.time_to_arrive(
 					s.position, puck_pos, vel, speed)
 			_append_channel(puck_pos, t_ret, Vector3.ZERO, speed, accel)
+	_race_key_speed = -1.0
+	_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
+
+
+# Precompute, for the calling defender's build, the squared containment
+# radius of every station: reach (blade span) + the run a standing start
+# covers in the time the puck needs to get there (same capped ramp the
+# calibrated time_to_arrive charges), minus the brake margin at the net
+# station (the last-resort stand arrives stopped). Exact inversion of the
+# per-station race race_home_feasible used to solve candidate-by-candidate.
+static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void:
+	if self_max_speed == _race_key_speed and self_max_accel == _race_key_accel:
+		return
+	_race_key_speed = self_max_speed
+	_race_key_accel = self_max_accel
+	var v_me: float = maxf(self_max_speed, 1.0)
+	var brake: float = v_me / AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
+	var a_net: float = maxf(
+			self_max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
+	var t_ramp: float = v_me / a_net
+	var d_ramp: float = v_me * v_me / (2.0 * a_net)
+	var n_fracs: int = RACE_PATH_FRACTIONS.size()
+	_race_reach_sq.clear()
+	var total: int = _race_channel_count * n_fracs
+	for idx: int in total:
+		var avail: float = _race_station_ts[idx]
+		if (idx % n_fracs) == n_fracs - 1:
+			avail -= brake
+		var r: float
+		if avail < 0.0:
+			# The brake margin outlasts the puck's arrival — the station is
+			# uncontainable from anywhere (matches the pre-inversion race:
+			# t_me ≥ 0 can never be ≤ a negative budget).
+			r = -1.0
+		elif avail <= t_ramp:
+			r = reach + 0.5 * a_net * avail * avail
+		else:
+			r = reach + d_ramp + v_me * (avail - t_ramp)
+		# -1 = uncontainable station (even standing on it, the brake margin
+		# outlasts the puck) — the feasibility compare rejects it outright.
+		_race_reach_sq.append(r * r if r > 0.0 else -1.0)
 
 
 static func _append_channel(gain_pt: Vector3, t_gain: float,
@@ -799,32 +869,24 @@ static func _append_channel(gain_pt: Vector3, t_gain: float,
 
 # Can a defender standing at `c` contain every filled counter channel — i.e.
 # for each channel, reach SOME post-gain path station (within blade reach),
-# set, before the puck gets there? Requires a prior fill_counter_channels.
+# set, before the puck gets there? Requires a prior fill_counter_channels
+# (which precomputes this build's per-station containment radii — the loop
+# here is one squared-distance compare per station).
 static func race_home_feasible(c: Vector3,
 		self_max_speed: float, self_max_accel: float) -> bool:
-	var v_me: float = maxf(self_max_speed, 1.0)
-	var brake: float = v_me / AISteering.ARRIVAL_BRAKE_DECEL_M_S2
-	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
-	# Standing-start run priced by the same calibrated ramp time_to_arrive
-	# uses (candidates are stands — hypothetical, at rest).
-	var a_net: float = maxf(
-			self_max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
-	var d_ramp: float = v_me * v_me / (2.0 * a_net)
+	_prepare_reach(self_max_speed, self_max_accel)
 	var n_fracs: int = RACE_PATH_FRACTIONS.size()
 	for k: int in _race_channel_count:
 		var contained: bool = false
 		for j: int in n_fracs:
 			var idx: int = k * n_fracs + j
 			var p: Vector3 = _race_station_pts[idx]
-			var run: float = maxf(0.0, _xz_distance(c, p) - reach)
-			var t_me: float
-			if run <= d_ramp:
-				t_me = sqrt(2.0 * run / a_net)
-			else:
-				t_me = v_me / a_net + (run - d_ramp) / v_me
-			if j == n_fracs - 1:
-				t_me += brake
-			if t_me <= _race_station_ts[idx]:
+			var r_sq: float = _race_reach_sq[idx]
+			if r_sq < 0.0:
+				continue
+			var dx: float = p.x - c.x
+			var dz: float = p.z - c.z
+			if dx * dx + dz * dz <= r_sq:
 				contained = true
 				break
 		if not contained:
