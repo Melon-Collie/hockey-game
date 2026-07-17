@@ -942,12 +942,16 @@ func _pick_action(ctx: RoleContext) -> void:
 						SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + shift_s
 								+ flight_s + ctx.shot_timing_error_s * 0.5,
 						release)
+		# Own traffic screens: the in-zone teammates (_scratch_option_receiver_pos,
+		# filled above) ride along as sightline bodies — the net-front man parked
+		# in the goalie's eyes is what makes the point blast a real chance.
 		var s: float = AIActionScoring.score_shoot(
 				release, attacking_goal, sample_goalie,
 				GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
 				sample_speed, wrister_unsettled, _scratch_opponent_caps,
 				wrister_five_hole, wrister_goalie_down,
-				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
+				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
+				_scratch_option_receiver_pos)
 		if s > shoot_score:
 			shoot_score = s
 			_shot_sample_release = release
@@ -1163,22 +1167,31 @@ func _pick_action(ctx: RoleContext) -> void:
 			# exactly the one that won the compete. Roofs a set goalie
 			# (top-corner window), stays flat on a five-hole / low corner, and
 			# aims exactly at that hole.
+			# Same screened read the score saw (score_shoot derives this
+			# internally from the same bodies) — so a shot taken BECAUSE the
+			# screen opens a hole is aimed at that hole, not at the narrower
+			# window a clean-look goalie would leave.
+			var shot_screen_dist: float = AIActionScoring.screen_along_m(
+					_shot_sample_release, _shot_sample_goalie,
+					_scratch_opponents_release, _scratch_option_receiver_pos)
 			shot_loft_level = AIActionScoring.best_shot_loft(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
-					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
+					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
+					shot_screen_dist)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					ctx.self_aim_spread_rad,
-					wrister_seal_x, wrister_seal_tall)
+					wrister_seal_x, wrister_seal_tall, shot_screen_dist)
 			shot_power_t = AIActionScoring.best_shot_power_t(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
-					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad)
+					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
+					shot_screen_dist)
 			shot_release_offset = _shot_sample_offset
 			if _shot_sample_backhand:
 				# The controller applies backhand_power_coefficient to the FINAL

@@ -223,9 +223,11 @@ static func _band_pace(band: int, dist: float, shot_speed_m_s: float) -> float:
 	return maxf(shot_speed_m_s, 1.0)
 
 
-# The goalie's covered half-width (m) for a band, given the reach budget
-# `t_reach` (puck's travel time to HIS body). One implementation shared by
-# _hole_open_angle and _hole_aim_x so aim and score always read the same edge.
+# The goalie's covered half-width (m) for a band, given the READ budget
+# `t_read` — the puck's travel time to HIS body minus any screen occlusion
+# (the read clock starts when he can SEE the release; see _hole_open_angle's
+# t_read). One implementation shared by _hole_open_angle and _hole_aim_x so
+# aim and score always read the same edge.
 #   HIGH: stance core + the reaction-gated arm extension; a DOWN goalie's glove
 #         starts at pad height, so the extension is conceded entirely (the
 #         butterfly's defining trade).
@@ -234,9 +236,9 @@ static func _band_pace(band: int, dist: float, shot_speed_m_s: float) -> float:
 #         runs), plus the small reaction-gated pad push. A DOWN goalie is
 #         already sealed at the butterfly core.
 static func _band_cover(
-		band: int, t_reach: float, eff_unsettled: float, goalie_down: bool) -> float:
+		band: int, t_read: float, eff_unsettled: float, goalie_down: bool) -> float:
 	var reaction: float = clampf(
-			(t_reach - _band_delay(band)) / goalie_arm_deploy_s, 0.0, 1.0)
+			(t_read - _band_delay(band)) / goalie_arm_deploy_s, 0.0, 1.0)
 	reaction *= 1.0 - eff_unsettled
 	if band == HOLE_BAND_HIGH:
 		if goalie_down:
@@ -245,7 +247,7 @@ static func _band_cover(
 	var core: float = HOLE_BAND_CORE[HOLE_BAND_LOW]
 	if not goalie_down:
 		var drop: float = clampf(
-				(t_reach - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
+				(t_read - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
 				0.0, 1.0)
 		core = lerpf(LOW_CORE_STANDING_M, HOLE_BAND_CORE[HOLE_BAND_LOW], drop)
 	return core + HOLE_BAND_EXT[HOLE_BAND_LOW] * reaction
@@ -755,7 +757,8 @@ static func open_net_danger(
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
-		aim_spread_rad: float = 0.0) -> float:
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0) -> float:
 	# Best of the holes. Pure value-type math, no allocation — safe to run
 	# per carry candidate at tick rate (see _hole_open_angle). Pace is per-band
 	# inside _hole_open_angle: HIGH holes fly at the arrival-honest solved pace,
@@ -766,7 +769,8 @@ static func open_net_danger(
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 				goalie_five_hole_m, goalie_down,
-				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+				screen_dist_m)
 		if a > best_angle:
 			best_angle = a
 	return clampf(best_angle * SHOT_DANGER_GAIN, 0.0, 1.0)
@@ -784,11 +788,13 @@ static func best_shot_loft(
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
-		aim_spread_rad: float = 0.0) -> int:
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0) -> int:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+			screen_dist_m)
 	if hole < 0:
 		return ShotMechanics.ELEVATION_FLAT
 	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
@@ -808,11 +814,13 @@ static func best_shot_power_t(
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
-		aim_spread_rad: float = 0.0) -> float:
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0) -> float:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+			screen_dist_m)
 	if hole < 0 or HOLE_BAND[hole] != HOLE_BAND_HIGH:
 		return 1.0
 	var v_h: float = _high_band_horizontal_speed(
@@ -838,16 +846,18 @@ static func best_shot_aim(
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		aim_spread_rad: float = 0.0,
 		goalie_post_seal_x: float = 0.0,
-		goalie_post_seal_tall: bool = false) -> Vector3:
+		goalie_post_seal_tall: bool = false,
+		screen_dist_m: float = 0.0) -> Vector3:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+			screen_dist_m)
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor, aim_spread_rad,
-			goalie_down)
+			goalie_down, screen_dist_m)
 	return Vector3(aim_x, 0.0, attacking_goal.z)
 
 
@@ -862,12 +872,14 @@ static func _choose_shot_hole(
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
-		aim_spread_rad: float = 0.0) -> int:
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0) -> int:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
-				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+				screen_dist_m)
 		if a > best_angle:
 			best_angle = a
 	if best_angle <= 0.0:
@@ -879,7 +891,8 @@ static func _choose_shot_hole(
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
-				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+				screen_dist_m)
 		if a < threshold:
 			continue
 		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
@@ -898,7 +911,8 @@ static func _choose_shot_hole(
 static func _hole_aim_x(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float, unsettled: float,
-		aim_spread_rad: float = 0.0, goalie_down: bool = false) -> float:
+		aim_spread_rad: float = 0.0, goalie_down: bool = false,
+		screen_dist_m: float = 0.0) -> float:
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
@@ -938,11 +952,14 @@ static func _hole_aim_x(
 	var fwd: float = (shooter.z - attacking_goal.z) * net_normal_z
 	var dv: float = fwd - (goalie_pos.z - attacking_goal.z) * net_normal_z
 	# Same reach budget as _hole_open_angle: the puck reaches HIS body, not the
-	# goal line, and the cover is the shared _band_cover read at that moment.
+	# goal line, and the cover is the shared _band_cover read at that moment —
+	# including the same screened-read shrink (t_read), so aim and score
+	# always describe the same edge.
 	var t_reach: float = sqrt(u * u + dv * dv) / pace
+	var t_read: float = t_reach - screen_dist_m / pace
 	var eff_unsettled: float = clampf(unsettled, 0.0, 1.0) \
 			* clampf(1.0 - t_reach / UNSETTLE_RECOVERY_S, 0.0, 1.0)
-	var cover: float = _band_cover(band, t_reach, eff_unsettled, goalie_down)
+	var cover: float = _band_cover(band, t_read, eff_unsettled, goalie_down)
 	var cov_lo_x: float = post_hi_x
 	var cov_hi_x: float = post_lo_x
 	if dv >= 0.001:
@@ -1017,7 +1034,8 @@ static func _hole_open_angle(
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
-		aim_spread_rad: float = 0.0) -> float:
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
@@ -1038,6 +1056,15 @@ static func _hole_open_angle(
 	var u: float = goalie_pos.x - shooter.x
 	var dv: float = forward - (goalie_pos.z - attacking_goal.z) * net_normal_z
 	var t_reach: float = sqrt(u * u + dv * dv) / pace
+	# Screened read: the goalie can't start reacting until the puck EMERGES
+	# past the worst screener — screen_dist_m / pace seconds into the flight
+	# (the same sightline occlusion the live goalie suffers; see
+	# screen_along_m). Only the READ budget shrinks: the body geometry and the
+	# physical race (t_reach, unsettle recovery) are untouched — a screened
+	# goalie still fills his ice, he just deploys late. Per-band pace makes
+	# the occlusion honest per hole (a lofted arc is hidden longer than a
+	# bullet along the same geometry).
+	var t_read: float = t_reach - screen_dist_m / pace
 
 	# A post-seal stance (VH/RVH, read off the replicated state — see
 	# GoalieNetworkState.post_seal_x_sign) is a DEPLOYED wall at the post: the
@@ -1093,7 +1120,7 @@ static func _hole_open_angle(
 			var gap: float = goalie_five_hole_m
 			if not goalie_down:
 				var seal: float = clampf(
-						(t_reach - _band_delay(HOLE_BAND_LOW))
+						(t_read - _band_delay(HOLE_BAND_LOW))
 							/ goalie_butterfly_drop_s,
 						0.0, 1.0)
 				gap *= 1.0 - seal
@@ -1104,11 +1131,12 @@ static func _hole_open_angle(
 		var proxy_angle: float = maxf(0.0, FIVE_GAP_M - puck_diameter) / maxf(dist, 0.5)
 		return _soft_make_angle(proxy_angle, aim_spread_rad) * eff_unsettled * centrality
 
-	# Band cover raced against t_reach — standing pad column widened by the
-	# butterfly drop LOW, reaction-gated glove/blocker extension HIGH, with the
-	# butterfly's defining trade (a DOWN goalie seals the ice and concedes the
-	# top band's extension) — see _band_cover.
-	var cover: float = _band_cover(band, t_reach, eff_unsettled, goalie_down)
+	# Band cover raced against the read budget (t_reach less any screen
+	# occlusion) — standing pad column widened by the butterfly drop LOW,
+	# reaction-gated glove/blocker extension HIGH, with the butterfly's
+	# defining trade (a DOWN goalie seals the ice and concedes the top band's
+	# extension) — see _band_cover.
+	var cover: float = _band_cover(band, t_read, eff_unsettled, goalie_down)
 
 	# Net posts and the goalie's cover, all as bearings from the shooter's eye.
 	var post_lo_x: float = attacking_goal.x - net_half_width
@@ -1166,12 +1194,71 @@ static func _hole_open_angle(
 	return _soft_make_angle(open_angle - pipe_clearance, aim_spread_rad)
 
 
+# ── Screen perception (sightline occlusion) ──────────────────────────────────
+# Planning mirror of the live goalie's screen model
+# (GoalieBehaviorRules.screen_occlusion_delay): a body between the release and
+# the goalie hides the puck, and his read clock only starts when the puck
+# EMERGES past the screener. Returns the worst screener's along-sightline
+# distance (m) from the release — 0.0 for a clean look. A DISTANCE, not a
+# time: each hole band divides by its own pace (_hole_open_angle's t_read), so
+# the slower lofted arc is hidden longer than the bullet on the same geometry.
+# A net-front body hides the puck almost the whole way in (the deadly screen);
+# a body up near the shooter is passed early and barely delays the read.
+#
+# Two body lists so callers hand over defenders + own teammates without
+# merging (hot-path: no combined array). BOTH sides screen — the parked
+# net-front teammate is the classic screen, and a boxing-out defender hides
+# the puck from his own goalie just the same. The block risk those same
+# defender bodies carry is priced separately by lane_clear; conditioned on
+# the shot getting through, the body still hid the release — that's the real
+# point-shot-through-traffic trade. Radius and shooter self-exclusion mirror
+# GoalieBehaviorRules.ScreenConfig.
+const SCREEN_BODY_HALF_WIDTH_M: float = 0.6
+const SCREEN_MIN_ALONG_M: float = 0.6
+
+
+static func screen_along_m(
+		shooter: Vector3, goalie_pos: Vector3,
+		bodies_a: Array[Vector3], bodies_b: Array[Vector3]) -> float:
+	var dx: float = goalie_pos.x - shooter.x
+	var dz: float = goalie_pos.z - shooter.z
+	var goalie_along: float = sqrt(dx * dx + dz * dz)
+	if goalie_along <= SCREEN_MIN_ALONG_M:
+		return 0.0
+	var hx: float = dx / goalie_along
+	var hz: float = dz / goalie_along
+	var worst: float = _worst_screener_along(
+			bodies_a, shooter, hx, hz, goalie_along, 0.0)
+	return _worst_screener_along(bodies_b, shooter, hx, hz, goalie_along, worst)
+
+
+# One body list's worst on-sightline screener (see screen_along_m). A screener
+# counts only ON the line (perp < body half-width), past the shooter's own
+# body, and NEARER than the goalie (a body level with or behind him can't
+# hide an incoming puck). Scalar loop, allocation-free.
+static func _worst_screener_along(
+		bodies: Array[Vector3], shooter: Vector3,
+		hx: float, hz: float, goalie_along: float, worst: float) -> float:
+	for s: Vector3 in bodies:
+		var relx: float = s.x - shooter.x
+		var relz: float = s.z - shooter.z
+		var along: float = relx * hx + relz * hz
+		if along <= SCREEN_MIN_ALONG_M or along >= goalie_along:
+			continue
+		if absf(relx * -hz + relz * hx) >= SCREEN_BODY_HALF_WIDTH_M:
+			continue
+		if along > worst:
+			worst = along
+	return worst
+
+
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance
 # × forward-cone pressure. `predicted_goalie_pos` is the goalie at shot release
 # (use `predict_goalie_pos`); the hole geometry handles "too close" on its
 # own. `shot_speed_m_s` sets the puck's pace (goalie reach budget) and the lane math;
 # `goalie_unsettled_factor` cuts his reaction (a mid-slide goalie reads the shot
-# late).
+# late). `screeners` are ADDITIONAL sightline bodies (the shooter's own
+# traffic — teammates); the defender bodies in `opponents` screen implicitly.
 static func score_shoot(
 		shooter: Vector3,
 		attacking_goal: Vector3,
@@ -1185,7 +1272,8 @@ static func score_shoot(
 		goalie_down: bool = false,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
-		aim_spread_rad: float = 0.0) -> float:
+		aim_spread_rad: float = 0.0,
+		screeners: Array[Vector3] = []) -> float:
 	# No shot from on/behind the goal line: the mouth faces the other way, so there
 	# is no straight line from a back-there release into the net. Checked BEFORE
 	# the release clamp below — clamping a behind-the-net release used to teleport
@@ -1199,11 +1287,18 @@ static func score_shoot(
 	# carry candidate placed in the crease, reads as a phantom open net (keeper
 	# modelled behind the shooter). No-op for any normal in-front shot.
 	shooter = release_ahead_of_goalie(shooter, attacking_goal, predicted_goalie_pos)
+	# Sightline traffic: the worst screener's along-distance (defender bodies
+	# AND the shooter's own net-front men) delays the goalie's read inside the
+	# hole geometry — the point-shot-through-traffic disadvantage the live
+	# goalie genuinely suffers.
+	var screen_dist: float = screen_along_m(
+			shooter, predicted_goalie_pos, opponents, screeners)
 	var shot_quality: float = open_net_danger(
 			shooter, attacking_goal, predicted_goalie_pos, net_half_width,
 			shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad)
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+			screen_dist)
 	if shot_quality <= 0.0:
 		return 0.0
 	# Lane clear vs the aim point ShotAim picks (past the goalie's shadow) —

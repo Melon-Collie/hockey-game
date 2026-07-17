@@ -2064,3 +2064,74 @@ func test_aim_spread_pulls_a_degenerate_corner_aim_off_the_post() -> void:
 			2, shooter, goal, goalie, GameRules.NET_HALF_WIDTH, 33.0, 0.0, spread)
 	assert_almost_eq(noisy, exact + spread * shooter.distance_to(goal), 0.01,
 			"spread inset pulls the clamped aim inside by spread × range")
+
+
+# ─── Screen perception (sightline occlusion) ──────────────────────────────
+
+# Shared fixture: a point-range shooter against a set, centred, challenged
+# goalie — the look that scores ~nothing clean. The screen tests move ONE
+# body around the sightline; they pass it through `screeners` (the shooter's
+# own traffic) so lane/pressure stay constant and the sightline effect is
+# isolated. Magnitudes probed on the calibrated model: clean ≈ 0.002,
+# net-front screened ≈ 0.078 (~real screened-point-shot xG), which straddles
+# the carrier's FIRE_MIN_VALUE (0.02) — exactly the behavior flip the model
+# exists to produce.
+func _screened_point_shot(screeners: Array[Vector3]) -> float:
+	var shooter := Vector3(0.0, 0.0, 10.0)   # 16.65 m out — the point
+	var goalie := Vector3(0.0, 0.0, 25.5)    # set, challenged ~1.15 m
+	return AIActionScoring.score_shoot(
+			shooter, GOAL, goalie, NET_HW, [],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
+			0.0, false, 0.0, screeners)
+
+
+func test_net_front_screen_turns_the_point_blast_into_a_real_chance() -> void:
+	# A body parked in the goalie's eyes at the top of the crease hides the
+	# release almost the whole flight: the read starts when the puck emerges
+	# (screen_along / pace), leaving no time for the butterfly drop or the
+	# glove extension — the massive disadvantage the live goalie genuinely
+	# suffers (GoalieBehaviorRules.screen_occlusion_delay), now priced by the
+	# planning model.
+	var clean: float = _screened_point_shot([])
+	var screened: float = _screened_point_shot([Vector3(0.0, 0.0, 24.0)])
+	assert_lt(clean, 0.02, "a clean point look stays below the fire bar")
+	assert_gt(screened, 0.05, "a screened point blast is a genuine chance")
+	assert_gt(screened, clean * 10.0,
+			"the screen is the whole difference, not a nudge")
+
+
+func test_screen_near_the_shooter_barely_delays_the_read() -> void:
+	# The puck clears a high screen early — the goalie still has the whole
+	# remaining flight to read it, so the drop and the glove both land. The
+	# delay is grounded in WHERE the body hides the puck, not in "a screen
+	# exists": net-front ≫ high, and any on-line body is at worst neutral.
+	var clean: float = _screened_point_shot([])
+	var high: float = _screened_point_shot([Vector3(0.0, 0.0, 12.5)])
+	var net_front: float = _screened_point_shot([Vector3(0.0, 0.0, 24.0)])
+	assert_almost_eq(high, clean, 0.005,
+			"a screen 2.5 m off the blade is passed too early to matter")
+	assert_gt(net_front, high * 5.0, "the net-front screen is the deadly one")
+
+
+func test_body_off_the_sightline_does_not_screen() -> void:
+	# Same depth as the deadly screen, 1.5 m off the shooter→goalie line: the
+	# goalie sees the release the whole way — identical score to the clean look.
+	var clean: float = _screened_point_shot([])
+	var off_line: float = _screened_point_shot([Vector3(1.5, 0.0, 24.0)])
+	assert_almost_eq(off_line, clean, 0.0000001,
+			"an off-line body changes nothing")
+
+
+func test_screened_point_blast_stays_along_the_ice() -> void:
+	# Execution consistency: with the read delayed, the LOW corners open at
+	# full pace and the loft chooser keeps the blast on the ice (the flattest
+	# hole within the tie fraction) — which is also the tippable feed the
+	# net-front man wants, not a floater over everyone's heads.
+	var shooter := Vector3(0.0, 0.0, 10.0)
+	var goalie := Vector3(0.0, 0.0, 25.5)
+	var loft: int = AIActionScoring.best_shot_loft(
+			shooter, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, -1.0, false,
+			0.0, false, 0.0, 14.0)
+	assert_eq(loft, ShotMechanics.ELEVATION_FLAT,
+			"through traffic the model rips it flat")
