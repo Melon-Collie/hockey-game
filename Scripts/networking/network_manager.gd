@@ -306,12 +306,15 @@ var _ws_drop_window: int = 0
 var _ws_recv_window: int = 0
 var _ws_loss_window_timer: float = 0.0
 var packet_loss_pct: float = 0.0
-# Host-side: per-peer loss via echoed sequence numbers in input batches.
-var _peer_last_echoed: Dictionary = {}
-var _peer_echo_drop_window: Dictionary = {}
-var _peer_echo_recv_window: Dictionary = {}
+# Host-side: per-peer downstream (host->client) loss %. The client measures its OWN
+# world-state loss from gaps in the seq numbers it received (the accurate signal —
+# _ws_drop_window below) and reports it in each input-batch header; the host stores
+# it here verbatim. This replaced an echo-gap estimator that re-derived loss from
+# the client's last-received seq: because the client echoed only its LATEST seq
+# once per batch while world state broadcasts at STATE_RATE, any WS packet the
+# client received-but-didn't-echo (Steam delivers clumpy) was miscounted as
+# dropped, inflating a clean link to ~50%. Read by get_peer_loss_rate.
 var _peer_loss_rates: Dictionary = {}
-var _peer_loss_timer: float = 0.0
 # Jitter measurement (client side)
 var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
@@ -645,12 +648,8 @@ func _on_peer_disconnected(id: int) -> void:
 	peer_disconnected.emit(id)
 	_peer_steam_ids.erase(id)
 	_kicked_peers.erase(id)
-	# Per-peer telemetry books, else the host's 1 Hz loss loop iterates a stale
-	# peer forever and its ping lingers on scoreboards.
+	# Per-peer telemetry books, else a stale peer's ping lingers on scoreboards.
 	_peer_ping_ms.erase(id)
-	_peer_last_echoed.erase(id)
-	_peer_echo_drop_window.erase(id)
-	_peer_echo_recv_window.erase(id)
 	_peer_loss_rates.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
@@ -723,11 +722,7 @@ func _close() -> void:
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()
 	_peer_ping_ms.clear()
-	_peer_last_echoed.clear()
-	_peer_echo_drop_window.clear()
-	_peer_echo_recv_window.clear()
 	_peer_loss_rates.clear()
-	_peer_loss_timer = 0.0
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -813,11 +808,7 @@ func reset() -> void:
 	_ws_loss_window_timer = 0.0
 	packet_loss_pct = 0.0
 	_peer_ping_ms.clear()
-	_peer_last_echoed.clear()
-	_peer_echo_drop_window.clear()
-	_peer_echo_recv_window.clear()
 	_peer_loss_rates.clear()
-	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
 	_pdv_floor = -1.0
@@ -914,8 +905,11 @@ func _process(delta: float) -> void:
 			var batch_frames: int = 24 if get_peer_loss_rate() > 10.0 else 12
 			var batch: Array[InputState] = _input_batch_provider.call(batch_frames)
 			var buf := PackedByteArray(); buf.resize(3)
-			# u16 echo (0xFFFF = no world state received yet), u8 count
-			buf.encode_u16(0, _last_ws_seq_received if _last_ws_seq_received >= 0 else 0xFFFF)
+			# u16 client-measured downstream loss in basis points (0..10000 = 0..100%),
+			# u8 count. The client's own WS-seq-gap loss is authoritative for the
+			# host->client link, so the host stores it directly instead of re-deriving
+			# loss from an undersampled seq echo (see _peer_loss_rates).
+			buf.encode_u16(0, clampi(roundi(packet_loss_pct * 100.0), 0, 65535))
 			buf.encode_u8(2, batch.size())
 			for s: InputState in batch:
 				buf.append_array(s.to_bytes())
@@ -934,21 +928,6 @@ func _process(delta: float) -> void:
 			_ws_drop_window = 0
 			_ws_recv_window = 0
 			_ws_loss_window_timer = 0.0
-
-	if is_host:
-		# Broadcast cadence lives in _physics_process so it stays well-paced
-		# across host main-thread stalls. The 1Hz peer-loss aggregation stays
-		# render-frame-paced — it's a slow per-second sample, not latency-critical.
-		_peer_loss_timer += capped_delta
-		if _peer_loss_timer >= 1.0:
-			for pid: int in _peer_echo_recv_window:
-				var recvd: int = _peer_echo_recv_window[pid]
-				var dropped: int = _peer_echo_drop_window.get(pid, 0)
-				var total: int = recvd + dropped
-				_peer_loss_rates[pid] = (float(dropped) / float(total) * 100.0) if total > 0 else 0.0
-				_peer_echo_drop_window[pid] = 0
-				_peer_echo_recv_window[pid] = 0
-			_peer_loss_timer = 0.0
 
 # Runtime broadcast-rate knob. No callers today — see the `_state_tick_divisor`
 # doc-comment for why the per-phase dead-puck downshift was removed — retained
@@ -1213,8 +1192,9 @@ func receive_input_batch(data: PackedByteArray) -> void:
 		func(d: PackedByteArray, sid: int) -> void:
 			if d.size() < 3:
 				return
-			var echo_raw: int = d.decode_u16(0)
-			_update_peer_echo(sid, -1 if echo_raw == 0xFFFF else echo_raw)
+			# Client-reported downstream loss (basis points) — stored verbatim as
+			# this peer's link loss (see _peer_loss_rates).
+			_peer_loss_rates[sid] = float(d.decode_u16(0)) / 100.0
 			var count: int = d.decode_u8(2)
 			if count > _MAX_INPUTS_PER_BATCH:
 				push_warning("oversized input batch from peer %d: count=%d" % [sid, count])
@@ -2210,22 +2190,6 @@ func _on_ws_sequence_received(seq: int) -> void:
 		_ws_drop_window += gap
 	_ws_recv_window += 1
 	_last_ws_seq_received = seq
-
-func _update_peer_echo(peer_id: int, echoed_seq: int) -> void:
-	if echoed_seq < 0:
-		return
-	if not _peer_last_echoed.has(peer_id):
-		_peer_last_echoed[peer_id] = echoed_seq
-		_peer_echo_drop_window[peer_id] = 0
-		_peer_echo_recv_window[peer_id] = 0
-		return
-	var prev: int = _peer_last_echoed[peer_id]
-	if echoed_seq == prev:
-		return  # duplicate echo between WS ticks
-	var gap: int = (echoed_seq - prev - 1 + 65536) % 65536
-	_peer_echo_drop_window[peer_id] += gap
-	_peer_echo_recv_window[peer_id] += 1
-	_peer_last_echoed[peer_id] = echoed_seq
 
 # ── Registration ──────────────────────────────────────────────────────────────
 func set_world_state_provider(provider: Callable) -> void:

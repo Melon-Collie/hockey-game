@@ -259,6 +259,9 @@ var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
 var _telemetry: NetworkTelemetry = null
+# Last phase pushed to telemetry.current_phase — dirty-checks the per-frame push so
+# the GamePhase.Phase.keys() name lookup only runs on an actual transition.
+var _last_telemetry_phase_id: int = -1
 var _debug_overlay: NetworkDebugOverlay = null
 var _state_buffer_manager: StateBufferManager = null
 # Per-team last-elected loose-puck chaser, fed back into
@@ -3387,6 +3390,13 @@ func _observe_telemetry() -> void:
 	if puck_controller != null:
 		extrapolating = extrapolating or puck_controller.is_extrapolating
 	_telemetry.observe_actors(skater_buf, puck_buf, goalie_buf, extrapolating)
+	# Host-stall attribution context (see NetworkTelemetry.current_phase). Phase
+	# name resolves only on a transition — GamePhase.Phase.keys() allocates, so the
+	# dirty check keeps it off the per-frame path. Actor count is a cached size.
+	if _state_machine != null and _state_machine.current_phase != _last_telemetry_phase_id:
+		_last_telemetry_phase_id = _state_machine.current_phase
+		_telemetry.current_phase = GamePhase.Phase.keys()[_state_machine.current_phase]
+	_telemetry.current_actor_count = (_registry.skaters().size() if _registry != null else 0) + goalie_controllers.size()
 	# Connection facts the static record_* path doesn't carry — sampled by the
 	# session fold at window rollover. Clients refresh their link-to-host reads;
 	# the host refreshes its per-peer view instead (its own RTT/loss are 0).

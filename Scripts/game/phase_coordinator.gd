@@ -203,6 +203,10 @@ func handle_phase_entered() -> void:
 			clock_updated.emit(0.0)
 			_stamp_game_winning_goal()
 			game_over.emit()
+	# Breadcrumb for host-stall attribution: this is the one host-side hook that
+	# fires on every phase transition (goal replay, faceoff, period, game over), so
+	# a hitch logged moments after can be traced to the entering phase's handler.
+	NetworkTelemetry.note_host_event(GamePhase.Phase.keys()[_state_machine.current_phase])
 	phase_changed.emit(_state_machine.current_phase)
 
 

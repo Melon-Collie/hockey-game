@@ -125,7 +125,7 @@ select
     (metrics->>'delay_spread_ms_max')::float             as delay_spread_peak,
     (metrics->>'clock_correction_ms_max')::float         as clock_correction_peak,   -- client only; sustained large = clock sync unstable (poisons lag comp)
     (metrics->>'worst_peer_rtt_ms_avg')::float           as worst_peer_rtt_avg,      -- host only; the host row's real link picture
-    (metrics->>'worst_peer_loss_pct_max')::float         as worst_peer_loss_peak,    -- host only
+    (metrics->>'worst_peer_loss_pct_max')::float         as worst_peer_loss_peak,    -- host only; now the CLIENT-reported downstream loss (accurate), not the old echo-gap estimate that inflated a clean link to ~50%
     (metrics->>'auto_marker_count')::int                 as auto_marker_count,       -- objective tripwire firings (markers themselves in metrics->'auto_markers')
     -- Lag-comp pickup-claim health (host only; the host processes every client's
     -- claim). misses/claims ≈ rewind accuracy: near-zero = the rewound blade/puck
@@ -168,7 +168,11 @@ select
     -- slice of puck_hard_snaps. Read the peaks against shot_launches_total (denominator).
     (metrics->>'shot_launch_div_m_max')::float           as shot_launch_div_peak,     -- m; worst launch position gap
     (metrics->>'shot_launch_vel_div_max')::float         as shot_launch_vel_div_peak,  -- m/s; worst launch velocity gap
-    (metrics->>'shot_launches_total')::float             as shot_launches_total        -- shots measured (denominator)
+    (metrics->>'shot_launches_total')::float             as shot_launches_total,       -- shots measured (denominator)
+    -- Host physics-tick hitches (gap > 33ms) this session. worst_stall_ms is the
+    -- single worst gap; this is HOW MANY. The auto_markers carry the phase / actor
+    -- count / last game-event breadcrumb to attribute them. Host only.
+    (metrics->>'host_stalls_total')::float               as host_stalls_total
 from public.network_sessions
 where net_sim_active is not true;
 

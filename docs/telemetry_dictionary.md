@@ -38,9 +38,10 @@ Each per-second metric `<key>` appears as:
 - `<key>_total` — only for **rare-event / event counters** (`puck_hard_snaps`,
   `blade_jumps`, the host-side lag-comp claim counters `pickup_claims` /
   `pickup_claim_misses` / `pickup_claim_deflects` / `poke_claims` /
-  `poke_claim_misses` / `stick_lift_claims` / `stick_lift_claim_misses`, and the
-  client-side `provisional_*`): the session sum. These are events-per-game, not
-  rates — 3 hard snaps in a 10-minute game matters and would average to ~0/s.
+  `poke_claim_misses` / `stick_lift_claims` / `stick_lift_claim_misses`, the
+  client-side `provisional_*`, and the host-side `host_stalls`): the session sum.
+  These are events-per-game, not rates — 3 hard snaps in a 10-minute game matters
+  and would average to ~0/s.
 
 ## Connection facts (link quality — context, not necessarily a bug)
 
@@ -55,7 +56,7 @@ below.
 | `jitter_p95_ms` | ms | <8 great, >20 rough | p95 deviation of raw packet arrival gaps (IPDV). Rises for genuine path jitter **and** for benign relay clumping — read with `delay_spread_ms` to tell them apart. |
 | `delay_spread_ms` | ms | <8 great, >20 rough | De-clumped path jitter (PDV — each packet timed against the synced host clock). **The clumping tell: `jitter_p95` high + this low ⇒ relay clumping (benign); both high ⇒ genuinely jittery path.** Also the term that sizes the interpolation cushion — `extrapolation_pct` climbing while this stays low means the cushion under-sizes. Client only. |
 | `clock_correction_ms` | ms | ~0–2 settled | Magnitude of the last clock-sync offset correction. Sustained large = the clock estimate is unstable (asymmetric path, drift), which silently poisons lag-comp rewind timestamps and the delay-spread read before anything visibly breaks. Client only. |
-| `worst_peer_rtt_ms` / `worst_peer_loss_pct` | ms / % | same bands as rtt/loss | Host rows only: the worst per-peer ping and input-echo loss across the lobby at each window — the host row's real link picture (its own rtt/loss fold 0). Cross-checks the client rows via `match_health`. |
+| `worst_peer_rtt_ms` / `worst_peer_loss_pct` | ms / % | same bands as rtt/loss | Host rows only: the worst per-peer ping and downstream loss across the lobby at each window — the host row's real link picture (its own rtt/loss fold 0). **`worst_peer_loss_pct` is now the client's OWN measured loss reported back in its input-batch header** — the same accurate WS-seq-gap number the client puts in its `packet_loss_pct`. (Before, the host re-derived it from an echoed seq it undersampled, which counted received-but-not-echoed packets as dropped and inflated a clean link to ~50%.) Cross-checks the client rows via `match_health`. |
 | `bytes_recv_per_sec` / `bytes_sent_per_sec` | B/s | client down ≈ host per-peer up; host up ≲ ~60 KB/s per peer | Payload bytes only (excludes Steam framing/relay overhead). Host `sent` sums across all peers. |
 | `peer_count` | count | — | Connected clients (host rows only; clients fold 0). |
 
@@ -141,11 +142,12 @@ actually sees attach and, when it rolls back, feels as **"grab, then lose it."**
 | Key | Unit | Healthy | Meaning |
 |---|---|---|---|
 | `sim_rate_hz` | Hz | ≥97% of 120 | Effective physics tick rate. Below target = host overloaded, the sim dilates and **every client's** update rate sags with it. `_min` is the worst window. Omitted (not 0) on client rows. |
-| `worst_stall_ms` | ms | <33 fine, >66 a hitch everyone felt | Longest gap between physics ticks in a window. |
+| `worst_stall_ms` | ms | <33 fine, >66 a hitch everyone felt | Longest gap between physics ticks in a window (the single worst hitch). |
+| `host_stalls_total` | count | 0 | Session sum of physics ticks whose gap exceeded 33 ms — how MANY noticeable hitches, vs `worst_stall_ms`'s single worst. Read with the `auto_markers` (below), whose `phase` / `actor_count` / `last_event` attribute them. Host only; TOTAL_KEY. |
 | `broadcast_interval_p95_ms` | ms | ≈ 8.3 (120 Hz target); >1.4× target = sagging | p95 gap between world-state broadcasts. Sustained high = host stalling or send path backed up. Omitted on client rows. |
 | `input_queue_depth` | frames | 1–3 | Client inputs buffered on the host. 0 = starving, high = backed up. |
 | `input_lead_ms` | ms | ~0–10 | How late client inputs arrive vs schedule. |
-| `input_starvations_per_sec` | /s | <0.5 | Host ticks that had no client input and reused the last one. This is where **client→host** packet loss shows up (the client's own `packet_loss_pct` only sees the inbound direction). |
+| `input_starvations_per_sec` | /s | <0.5 | Host ticks that had no fresh client input and reused the last one. Two causes: genuine **client→host** loss (the client's own `packet_loss_pct` can't see this outbound direction), and — more often — the **catch-up drain after a host stall** (a hitch, then a burst of physics ticks consumes the tiny input queue). A starvation spike sharing a window with a `host_stall`/`worst_stall_ms` spike is the latter; correlate before blaming the uplink. |
 
 ## Markers: `felt_lag_markers` and `auto_markers`
 
@@ -163,7 +165,15 @@ tripwire — `puck_hard_snaps` (≥2 in a window), `reconcile_storm` (≥5/s),
 `input_starvation` (≥5/s) — thresholds mirror the F3 overlay's BAD bands. A
 per-trigger 30 s cooldown means a sustained failure records its *onset*, not
 one marker per second; a burst of `auto_marker_count` with few stored markers
-means the failure kept re-firing past the cooldowns.
+means the failure kept re-firing past the cooldowns. Each marker snapshot also
+carries **attribution context**: `phase` (live game phase), `actor_count`, and —
+when a phase transition fired recently — `last_event` (the entering phase name)
+and `last_event_age_s`. For a `host_stall`, that pins *why*: a hitch in steady
+`PLAYING` points at per-tick cost; one in `GOAL_SCORED` / `FACEOFF_PREP`, or a
+small `last_event_age_s` after that transition, points at that phase's handler
+(goal-replay capture, faceoff reset). `input_starvation` markers usually sit in
+the same window as a `host_stall` — starvation is the catch-up-tick drain *after*
+a hitch, not independent client→host loss.
 
 **`history`** (both kinds): the first 8 markers of a session carry a
 `history` array — the ~6 one-second samples (rounded, each with its own

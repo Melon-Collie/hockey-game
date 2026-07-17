@@ -16,6 +16,22 @@ var session := NetworkSessionSummary.new()
 # each frame so the session fold can sample them at window rollover.
 var current_rtt_ms: float = 0.0
 var current_peer_count: int = 0
+# Host-stall attribution context, pushed by GameManager each frame: the live game
+# phase and actor count, plus a breadcrumb of the last notable game-event
+# transition (note_host_event) and when it fired. Captured into every auto-marker
+# so a host hitch says WHAT it coincided with — a stall in steady PLAYING points
+# at per-tick cost; one in GOAL_SCORED / FACEOFF_PREP (or moments after that
+# transition) points at that phase's handler (replay capture, faceoff reset).
+var current_phase: String = "—"
+var current_actor_count: int = 0
+var _last_host_event: String = ""
+var _last_host_event_sec: float = -1.0
+# Host physics ticks whose inter-tick wall gap exceeded _HOST_STALL_MS this window
+# — a session total of noticeable hitches (worst_stall_ms is the single worst gap;
+# this is HOW MANY). Threshold is a feel/diagnostic cutoff (~2 dropped 60 Hz
+# frames), not an evaluator constant. Host only. Folded as a TOTAL_KEY.
+const _HOST_STALL_MS: float = 33.0
+var _host_stall_count: int = 0
 # Client-side: de-clumped path jitter (PDV) — read WITH jitter_p95: jitter high
 # but this low = benign relay clumping; both high = genuinely jittery path that
 # needs buffer depth. Also the term that sizes the interpolation cushion, so if
@@ -464,6 +480,18 @@ static func record_host_physics_tick_us(us: int) -> void:
 	instance._phys_tick_samples_us.append(us)
 	if instance._phys_tick_samples_us.size() > PHYS_TICK_WINDOW:
 		instance._phys_tick_samples_us.pop_front()
+	if float(us) > _HOST_STALL_MS * 1000.0:
+		instance._host_stall_count += 1
+
+# Breadcrumb of the last notable host game-event transition, for stall
+# attribution — called from PhaseCoordinator.handle_phase_entered with the phase
+# name. Records the name and the session-second it fired so a marker can report
+# how long before the hitch it happened. No-op outside a session.
+static func note_host_event(name: String) -> void:
+	if instance == null:
+		return
+	instance._last_host_event = name
+	instance._last_host_event_sec = float(instance.session.seconds)
 
 # Wall-clock microseconds between consecutive `_broadcast_state()` calls on the
 # host. Should track the ~8.3ms (120Hz) physics-driven cadence.
@@ -598,6 +626,7 @@ func tick(delta: float) -> void:
 	_input_lead_sum = 0.0
 	_input_lead_n = 0
 	_starvation_count = 0
+	_host_stall_count = 0
 	_pickup_claim_count = 0
 	_pickup_claim_miss_count = 0
 	_pickup_claim_deflect_count = 0
@@ -652,6 +681,7 @@ func _fold_session_sample() -> void:
 		"input_queue_depth": float(input_queue_depth_median),
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,
+		"host_stalls": float(_host_stall_count),
 		"peer_count": float(current_peer_count),
 		# Rare-event tripwires fold as this window's raw COUNTS — TOTAL_KEYS in
 		# the summary, so the row carries a session total instead of an average
@@ -744,10 +774,19 @@ func _check_auto_markers() -> void:
 
 
 func _auto_marker(trigger: String) -> void:
-	# The pre-history's last entry IS the offending window, so the snapshot only
-	# carries what the numeric samples can't: the puck's replication mode.
-	session.record_auto_marker(float(session.seconds), trigger,
-			{"puck_mode": puck_mode}, recent_samples())
+	# The pre-history's last entry IS the offending window; the snapshot carries the
+	# context the numeric samples can't — the puck's replication mode, the live game
+	# phase + actor count, and the last game-event transition (with its age), so a
+	# host_stall can be pinned to a goal / faceoff / period handler vs steady play.
+	var snapshot: Dictionary = {
+		"puck_mode": puck_mode,
+		"phase": current_phase,
+		"actor_count": current_actor_count,
+	}
+	if not _last_host_event.is_empty():
+		snapshot["last_event"] = _last_host_event
+		snapshot["last_event_age_s"] = maxf(0.0, float(session.seconds) - _last_host_event_sec)
+	session.record_auto_marker(float(session.seconds), trigger, snapshot, recent_samples())
 
 
 # Fresh accumulator for a rematch: each game posts its own row keyed to its own
