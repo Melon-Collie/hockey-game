@@ -2205,3 +2205,60 @@ func test_boxed_out_tipper_loses_the_tip() -> void:
 	var contested: float = _tip_fixture(Vector3(0.0, 0.0, 24.0), 33.0, boxed)
 	assert_lt(contested, clean_tip * 0.2,
 			"a boxed-out tipper's deflection is priced away")
+
+
+# ─── Rebound second chance (a save is not terminal) ─────────────────────────
+
+func test_net_front_presence_adds_rebound_value() -> void:
+	# The 8.5 m gradient band: a real but sub-certain rip. A net-front man OFF
+	# the sightline (perp > the screen radius — pure rebound presence, no
+	# screen credit) makes the same rip worth more: the saved mass of a
+	# pad-beating shot becomes a crease scramble he wins, put back at a DOWN,
+	# just-saved keeper. This is the honest "get pucks to the net" credit.
+	var shooter := Vector3(0.0, 0.0, 18.15)
+	var goalie := Vector3(0.0, 0.0, 25.5)
+	var nobody: Array[Vector3] = []
+	var crash: Array[Vector3] = [Vector3(1.6, 0.0, 24.3)]   # backdoor post, off-line
+	var alone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
+			0.0, false, 0.0, nobody)
+	var crashed: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
+			0.0, false, 0.0, crash)
+	assert_gt(crashed, alone + 0.05,
+			"net-front presence adds real rebound value; %f vs %f" % [crashed, alone])
+	assert_lt(crashed, 1.0 + 0.0001, "…and the total stays a probability")
+
+
+func test_no_rebound_credit_on_a_controlled_save() -> void:
+	# At/below the pad threshold (GoalieSaveRules.pad_max_incoming_speed) the
+	# save is controlled — absorbed dead or steered cornerward out of the
+	# slot — so a soft shot earns NO second-chance credit however many bodies
+	# crash the net.
+	var shooter := Vector3(0.0, 0.0, 18.15)
+	var goalie := Vector3(0.0, 0.0, 25.5)
+	var crash: Array[Vector3] = [Vector3(1.6, 0.0, 24.3)]
+	var soft_alone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
+			24.0, 0.0, [], -1.0, false, 0.0, false, 0.0, [] as Array[Vector3])
+	var soft_crashed: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
+			24.0, 0.0, [], -1.0, false, 0.0, false, 0.0, crash)
+	assert_almost_eq(soft_crashed, soft_alone, 0.0001,
+			"a controlled save leaves nothing to scramble for")
+
+
+func test_box_out_defender_deflates_the_rebound() -> void:
+	# A defender owning the scramble spot: the proximity race swings his way
+	# and the second chance shrinks toward nothing — boxing out is the real
+	# counter to the crash, same as it is to the tip.
+	var shooter := Vector3(0.0, 0.0, 18.15)
+	var goalie := Vector3(0.0, 0.0, 25.5)
+	var crash: Array[Vector3] = [Vector3(1.6, 0.0, 24.3)]
+	var boxed: Array[Vector3] = [Vector3(1.2, 0.0, 23.8)]   # owning the kick zone
+	var free_crash: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
+			0.0, false, 0.0, crash)
+	var boxed_crash: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, boxed,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
+			0.0, false, 0.0, crash)
+	assert_lt(boxed_crash, free_crash,
+			"a box-out body deflates the second chance; %f vs %f" % [boxed_crash, free_crash])
