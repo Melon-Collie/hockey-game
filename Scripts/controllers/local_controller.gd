@@ -264,7 +264,66 @@ func _physics_process(delta: float) -> void:
 	_poke_claim_floor = maxf(_poke_claim_floor - delta, 0.0)
 	if not _is_host and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked and _sm.get_state() != State.SHOT_BLOCKING:
 		var blade_pos_for_claim: Vector3 = skater.get_blade_contact_global()
-		if puck.carrier == null:
+		# puck.carrier is host-only state (never set on clients), so a client reads
+		# its OWN carrier tracking to tell a loose puck from a carried one and to know
+		# who holds it. Without this the client treated an opponent-carried puck as
+		# loose: the poke / stick-lift branch was unreachable and every forecheck fell
+		# through to a (host-rejected) pickup claim, so a client never sent a single
+		# poke / stick-lift claim (surfaced by the poke_claims telemetry reading 0).
+		var pc: PuckController = GameManager.puck_controller
+		var remote_carrier: Skater = pc.get_remote_carrier() if pc != null else null
+		var local_carrier: Skater = pc.get_local_carrier() if pc != null else null
+		if remote_carrier != null:
+			# Another player is carrying — speculative poke OR stick-lift claim,
+			# edge-triggered on the same rationale as pickup: fire the instant the blade
+			# enters poke range / hooks under the shaft, so a fast sweep isn't missed
+			# between the 300ms throttle windows; re-fire on the throttle while it stays
+			# in range. Own timers (not the pickup cooldown) so the two actions don't
+			# block each other. Skip same-team carriers — the host would reject. Carrier
+			# peer_id comes from PuckController (mirrored from the carrier-changed RPC on
+			# clients), consistent with remote_carrier.
+			_was_in_pickup_range = false
+			var carrier_team: int = remote_carrier.get_team_id()
+			var carrier_pid: int = -1
+			var in_poke_range: bool = false
+			var is_lift: bool = false
+			if carrier_team != _team_id and carrier_team != -1:
+				carrier_pid = pc.get_carrier_peer_id() if pc != null else -1
+				if carrier_pid != -1:
+					if skater.blade_up:
+						# Lifted blade — hook under the carrier's shaft for a stick lift.
+						is_lift = true
+						var c_hand: Vector3 = remote_carrier.upper_body_to_global(remote_carrier.get_top_hand_position())
+						var c_blade: Vector3 = remote_carrier.get_blade_contact_global()
+						in_poke_range = PuckInteractionRules.check_blade_under_stick(
+							blade_pos_for_claim, c_hand, c_blade,
+							PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN)
+					else:
+						in_poke_range = puck.global_position.distance_to(blade_pos_for_claim) <= PuckController.POKE_RADIUS
+			var rising_poke_edge: bool = in_poke_range and not _was_in_poke_range
+			if in_poke_range and _poke_claim_floor <= 0.0 and (rising_poke_edge or _poke_cooldown <= 0.0):
+				_poke_claim_floor = _POKE_CLAIM_FLOOR_S
+				_poke_cooldown = _CLAIM_COOLDOWN_S
+				if is_lift:
+					# Stick-lift is an instantaneous point test — only the current blade
+					# (client aim); the victim's shaft stays host-reconstructed.
+					NetworkManager.send_stick_lift_claim(
+						NetworkManager.estimated_host_time(),
+						NetworkManager.get_interpolation_delay() * 1000.0,
+						carrier_pid, blade_pos_for_claim)
+				else:
+					# Poke is a swept test — curr + one-tick-prior blade (client aim).
+					NetworkManager.send_poke_claim(
+						NetworkManager.estimated_host_time(),
+						NetworkManager.get_interpolation_delay() * 1000.0,
+						carrier_pid, blade_pos_for_claim, skater.get_prev_blade_contact_global())
+			_was_in_poke_range = in_poke_range
+		elif local_carrier != null:
+			# We carry the puck — reset both edges so a future loose / contest contact
+			# registers as a clean rising edge.
+			_was_in_pickup_range = false
+			_was_in_poke_range = false
+		else:
 			# Loose puck — speculative pickup claim. Host validates with rewind.
 			# Edge-triggered: fire the instant the puck enters blade range so a fast
 			# or contested puck brushing the blade claims at the contact moment (the
@@ -304,59 +363,9 @@ func _physics_process(delta: float) -> void:
 				# puck to our blade immediately so the grab feels instant, rolling
 				# back if the host doesn't confirm. Idempotent + self-gating, so
 				# calling it on every claim (rising edge or throttle re-fire) is safe.
-				if GameManager.puck_controller != null:
-					GameManager.puck_controller.try_provisional_pickup(skater)
+				if pc != null:
+					pc.try_provisional_pickup(skater)
 			_was_in_pickup_range = in_range
-			_was_in_poke_range = false
-		elif puck.carrier != skater:
-			_was_in_pickup_range = false
-			# Opposing carrier — speculative poke OR stick-lift claim, edge-triggered
-			# on the same rationale as pickup: fire the instant the blade enters poke
-			# range / hooks under the shaft, so a fast sweep isn't missed between the
-			# 300ms throttle windows; re-fire on the throttle while it stays in range.
-			# Own timers (not the pickup cooldown) so the two actions don't block each
-			# other. Skip same-team carriers — the host would reject. Carrier peer_id
-			# comes from PuckController._carrier_peer_id (reliable-RPC-managed on
-			# clients, never world state), so it's safe for the expected-carrier check.
-			var carrier_team: int = puck.carrier.get_team_id()
-			var carrier_pid: int = -1
-			var in_poke_range: bool = false
-			var is_lift: bool = false
-			if carrier_team != _team_id and carrier_team != -1:
-				carrier_pid = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
-				if carrier_pid != -1:
-					if skater.blade_up:
-						# Lifted blade — hook under the carrier's shaft for a stick lift.
-						is_lift = true
-						var c_hand: Vector3 = puck.carrier.upper_body_to_global(puck.carrier.get_top_hand_position())
-						var c_blade: Vector3 = puck.carrier.get_blade_contact_global()
-						in_poke_range = PuckInteractionRules.check_blade_under_stick(
-								blade_pos_for_claim, c_hand, c_blade,
-								PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN)
-					else:
-						in_poke_range = puck.global_position.distance_to(blade_pos_for_claim) <= PuckController.POKE_RADIUS
-			var rising_poke_edge: bool = in_poke_range and not _was_in_poke_range
-			if in_poke_range and _poke_claim_floor <= 0.0 and (rising_poke_edge or _poke_cooldown <= 0.0):
-				_poke_claim_floor = _POKE_CLAIM_FLOOR_S
-				_poke_cooldown = _CLAIM_COOLDOWN_S
-				if is_lift:
-					# Stick-lift is an instantaneous point test — only the current blade
-					# (client aim); the victim's shaft stays host-reconstructed.
-					NetworkManager.send_stick_lift_claim(
-						NetworkManager.estimated_host_time(),
-						NetworkManager.get_interpolation_delay() * 1000.0,
-						carrier_pid, blade_pos_for_claim)
-				else:
-					# Poke is a swept test — curr + one-tick-prior blade (client aim).
-					NetworkManager.send_poke_claim(
-						NetworkManager.estimated_host_time(),
-						NetworkManager.get_interpolation_delay() * 1000.0,
-						carrier_pid, blade_pos_for_claim, skater.get_prev_blade_contact_global())
-			_was_in_poke_range = in_poke_range
-		else:
-			# We carry the puck — reset both edges so a future loose / contest
-			# contact registers as a clean rising edge.
-			_was_in_pickup_range = false
 			_was_in_poke_range = false
 
 func _append_prediction_snapshot() -> void:
@@ -387,7 +396,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if server_state.is_ghost:
 		skater.set_ghost(true)
 	elif skater.is_ghost:
-		var is_carrier: bool = puck != null and puck.carrier == skater
+		var is_carrier: bool = _is_local_carrier()
 		var puck_z: float = puck.global_position.z if puck != null else 0.0
 		if not InfractionRules.is_offside(skater.global_position.z, _team_id, puck_z, is_carrier):
 			skater.set_ghost(false)
@@ -778,6 +787,20 @@ func _update_one_timer_indicator() -> void:
 	else:
 		skater.set_slapper_indicator(false)
 
+# True when the local player is carrying the puck, as THIS machine sees it. On a
+# client puck.carrier is host-only state (always null — see the claim block), so
+# the client reads its own carry from PuckController.get_local_carrier(); the
+# puck.carrier check keeps it correct on the host, where the local player uses
+# this controller too. Used for the offside carrier exemption (a carrier can't be
+# offside to their own puck) — without the client path, a client carrying the puck
+# into the zone mispredicts itself offside until the host's ghost=false reconciles.
+func _is_local_carrier() -> bool:
+	if puck != null and puck.carrier == skater:
+		return true
+	var pc: PuckController = GameManager.puck_controller
+	return pc != null and pc.get_local_carrier() == skater
+
+
 func _predict_offside() -> void:
 	if _is_host:
 		return  # Host computes authoritatively in GameManager
@@ -786,7 +809,7 @@ func _predict_offside() -> void:
 	# prediction — the FACEOFF_PREP teleport is the visible feedback).
 	if GameManager.get_rule_set() != GameRules.RuleSet.ARCADE:
 		return
-	var is_carrier: bool = puck.carrier == skater
+	var is_carrier: bool = _is_local_carrier()
 	var offside: bool = InfractionRules.is_offside(
 		skater.global_position.z, _team_id, puck.global_position.z, is_carrier)
 	# Only predict offside → ghost. Icing ghost comes from server via reconcile.

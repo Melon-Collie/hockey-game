@@ -74,7 +74,15 @@ var puck: Puck = null
 var is_server: bool = false
 
 # ── State ─────────────────────────────────────────────────────────────────────
-var _carrier_peer_id: int = -1            # server-side authoritative carrier
+# Carrier peer id. On the HOST this is authoritative, maintained by the puck's
+# pickup/release signals (_on_puck_picked_up / _on_puck_released). On a CLIENT
+# those host signals never fire, so it's MIRRORED from the carrier-changed RPC
+# (set_client_carrier_peer_id, driven by GameManager._on_remote_carrier_changed).
+# Read by get_carrier_peer_id(), which the client's poke / stick-lift claim send
+# gate uses to know whose stick it's checking — before the client mirror was
+# wired it stayed -1 forever, silently disabling every client-initiated poke /
+# stick-lift lag-comp claim.
+var _carrier_peer_id: int = -1
 var _local_carrier_skater: Skater = null  # client-side: local skater while carrying
 # Client-side: the remote skater currently carrying, when it's NOT the local
 # player. While set, the puck is pinned to this skater's interpolated blade
@@ -133,8 +141,23 @@ func get_buffer_depth() -> int:
 func get_local_carrier() -> Skater:
 	return _local_carrier_skater
 
+# Client-side: the remote skater currently carrying (null when loose or when the
+# local player carries). This is how a client knows an OPPONENT holds the puck —
+# puck.carrier is host-only state and stays null on clients, so the poke /
+# stick-lift claim path reads this instead to tell a carried puck from a loose one.
+func get_remote_carrier() -> Skater:
+	return _remote_carrier_skater
+
 func get_carrier_peer_id() -> int:
 	return _carrier_peer_id
+
+# Client-side mirror of the authoritative carrier peer id (see the _carrier_peer_id
+# doc). Called from GameManager._on_remote_carrier_changed on every carrier change.
+# No-op on the host, whose _on_puck_picked_up / _on_puck_released own the field.
+func set_client_carrier_peer_id(peer_id: int) -> void:
+	if is_server:
+		return
+	_carrier_peer_id = peer_id
 
 # Callable (Skater) -> int peer_id, or -1 if not registered.
 var _peer_id_resolver: Callable = Callable()

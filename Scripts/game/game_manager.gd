@@ -3222,6 +3222,12 @@ func _on_host_puck_touched_post() -> void:
 func _on_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	if puck_controller == null:
 		return
+	# Mirror the authoritative carrier peer id onto the client (no-op on the host).
+	# This is the ONLY place a client learns the carrier's peer id; without it
+	# get_carrier_peer_id() stayed -1 and the client's poke / stick-lift claim send
+	# gate never fired. Set for every branch (including -1 / local) so it always
+	# tracks the real carrier.
+	puck_controller.set_client_carrier_peer_id(new_carrier_peer_id)
 	if new_carrier_peer_id == -1:
 		puck_controller.notify_remote_carrier_changed(-1)
 		return
