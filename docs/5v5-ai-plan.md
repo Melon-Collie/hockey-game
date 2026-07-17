@@ -477,9 +477,11 @@ Each phase is shippable/testable on its own; 3v3 is untouched throughout.
   pressure-vs-contain trigger; v1 ships the cover rotation (emergent) without the
   aggressive halves.
 - **3-on-3 OT for 5v5 matches** (post-v1): needs mid-game roster reduction machinery.
-- **Positional faceoff variants** (post-v1): real O-zone vs D-zone draw alignments
-  differ (net-side D behind the C on defensive draws); v1 uses one dot-relative offset
-  table like 3v3.
+- **Positional faceoff variants** — LANDED for the D pair: end-zone draws place the
+  defending D goal-side (strong-side retriever behind the C, weak-side net-front) and
+  the attacking D at the blue-line points (`GameRules.FACEOFF_END_*` +
+  `PlayerRules.faceoff_position`); C/wingers keep the dot-relative table everywhere
+  (the hash-mark line-up is the real alignment at every dot), so 3v3 is untouched.
 - **Globalize transition-exposure** (post-v1): apply the exposure term to 3v3 too, with
   a 3v3 bot-feel re-verification pass. Deferred to protect shipping 3v3.
 - **Positional inference for humans** (post-v1 polish): infer a human's position from

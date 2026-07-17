@@ -506,15 +506,34 @@ const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 # Slots 3/4 (LD/RD, 5v5 only) stand behind everyone outside the circle — the
 # real alignment puts D behind the hash marks; near an end-zone dot the raw
 # offset can land past the goal line, which faceoff_position clamps back in.
-# TODO(post-v1): true defensive-zone draw variants — the defending side
-# stacks its D goal-side (retriever directly behind the C) instead of using
-# this one dot-relative table (plan §10).
+# END-ZONE draws override this table for the D pair only (the FACEOFF_END_*
+# constants below + PlayerRules.faceoff_position): the one dot-relative shape
+# is the real alignment at center/neutral dots, but an end-zone draw's D jobs
+# are positional, not dot-relative (plan §10, landed).
 const FACEOFF_OFFSETS: Array = [
 	[Vector2( 0.0,  1.5), Vector2(-4.7,  0.9), Vector2( 4.7,  0.9),
 			Vector2(-2.4,  7.0), Vector2( 2.4,  7.0)],  # team 0
 	[Vector2( 0.0, -1.5), Vector2(-4.7, -0.9), Vector2( 4.7, -0.9),
 			Vector2(-2.4, -7.0), Vector2( 2.4, -7.0)],  # team 1
 ]
+
+# ── End-zone draw D alignment (5v5 D pair; see PlayerRules.faceoff_position) ──
+# The real positional jobs at an end-zone dot, replacing the dot-relative D
+# offsets above. DEFENDING side stacks goal-side: the strong-side D (the one
+# whose identity side matches the dot's side of the ice) is the RETRIEVER,
+# directly behind the C with a slight boards shade — he takes a won draw back
+# for the breakout and boxes out the middle on a loss; the weak-side D fronts
+# the NET (near post, dot side) — the cover the old dot-stacked shape left
+# naked (both D clamped ~4+ m wide of the posts with the net at x = 0).
+# ATTACKING side plays the points at the blue line: strong point directly
+# above the dot (the boards-side lane + draw-back target), weak point toward
+# the middle of the line (the middle-ice valve).
+const FACEOFF_END_RETRIEVER_BEHIND_M: float = 3.2   # behind the dot, goal-side
+const FACEOFF_END_RETRIEVER_SHADE_M: float = 0.6    # boards-side shade off the dot line
+const FACEOFF_END_NETFRONT_X_M: float = 1.1         # near post, dot side (net at x = 0)
+const FACEOFF_END_NETFRONT_OFF_LINE_M: float = 1.8  # in front of the goal line
+const FACEOFF_END_POINT_INSIDE_M: float = 1.0       # points: inside the blue line
+const FACEOFF_END_WEAK_POINT_X_M: float = 1.2       # weak point: past mid, off-dot side
 # Depth cap for faceoff placements: no slot spawns closer to the end boards
 # than this far in front of the goal line, so a defensive-zone draw's D pair
 # (raw offset ~7 m behind an end-zone dot) stands net-side instead of inside

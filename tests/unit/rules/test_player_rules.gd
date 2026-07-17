@@ -49,6 +49,74 @@ func test_faceoff_offsets_preserve_team_split_around_dot() -> void:
 		assert_gt(p0.z, dot.y, "team 0 slot %d should be on +Z side of dot" % slot)
 		assert_lt(p1.z, dot.y, "team 1 slot %d should be on -Z side of dot" % slot)
 
+# ── End-zone draw D alignment (5v5) ──────────────────────────────────────────
+# At an end-zone dot the D pair's jobs are positional, not dot-relative (the
+# FACEOFF_END_* doc in GameRules): defending — strong-side D retrieves behind
+# the C, weak-side D fronts the net (the cover the dot-stacked table left
+# naked); attacking — points at the blue line. C/wingers keep the table, and
+# 3v3 (no D slots) is untouched by construction.
+
+const _END_DOT_T0 := Vector2(
+		GameRules.END_ZONE_FACEOFF_DOT_X, GameRules.ICING_FACEOFF_DOT_Z)
+
+func test_defending_strong_d_retrieves_behind_the_center() -> void:
+	# Team 0 defends +Z; on the +x dot the RD (slot 4, identity +x) is strong.
+	var p: Vector3 = PlayerRules.faceoff_position(0, 4, _END_DOT_T0)
+	assert_almost_eq(p.x, _END_DOT_T0.x + GameRules.FACEOFF_END_RETRIEVER_SHADE_M, 0.001,
+			"retriever shades boards-side off the dot line")
+	assert_almost_eq(p.z, _END_DOT_T0.y + GameRules.FACEOFF_END_RETRIEVER_BEHIND_M, 0.001,
+			"retriever stands goal-side behind the C")
+
+func test_defending_weak_d_fronts_the_net() -> void:
+	# The LD (slot 3, identity -x) is weak on the +x dot: near post, dot side.
+	var p: Vector3 = PlayerRules.faceoff_position(0, 3, _END_DOT_T0)
+	assert_almost_eq(p.x, GameRules.FACEOFF_END_NETFRONT_X_M, 0.001,
+			"net-front D stands at the near post (net is at x = 0)")
+	assert_almost_eq(p.z, GameRules.GOAL_LINE_Z - GameRules.FACEOFF_END_NETFRONT_OFF_LINE_M, 0.001,
+			"net-front D stands just in front of the goal line")
+
+func test_attacking_points_hold_the_blue_line() -> void:
+	# Team 1 attacks +Z: at team 0's D-zone dot its D pair plays the points.
+	var strong: Vector3 = PlayerRules.faceoff_position(1, 4, _END_DOT_T0)
+	var weak: Vector3 = PlayerRules.faceoff_position(1, 3, _END_DOT_T0)
+	var line_z: float = GameRules.BLUE_LINE_Z + GameRules.FACEOFF_END_POINT_INSIDE_M
+	assert_almost_eq(strong.z, line_z, 0.001, "strong point just inside the blue line")
+	assert_almost_eq(weak.z, line_z, 0.001, "weak point on the same line")
+	assert_almost_eq(strong.x, _END_DOT_T0.x, 0.001, "strong point directly above the dot")
+	assert_almost_eq(weak.x, -GameRules.FACEOFF_END_WEAK_POINT_X_M, 0.001,
+			"weak point covers the middle of the line")
+
+func test_end_zone_alignment_mirrors_for_team_1() -> void:
+	# Team 1 defending at its own -x/-z dot: the LD (identity -x) is strong.
+	var dot := Vector2(-GameRules.END_ZONE_FACEOFF_DOT_X,
+			-GameRules.ICING_FACEOFF_DOT_Z)
+	var retriever: Vector3 = PlayerRules.faceoff_position(1, 3, dot)
+	var netfront: Vector3 = PlayerRules.faceoff_position(1, 4, dot)
+	assert_almost_eq(retriever.x, dot.x - GameRules.FACEOFF_END_RETRIEVER_SHADE_M, 0.001)
+	assert_almost_eq(retriever.z, dot.y - GameRules.FACEOFF_END_RETRIEVER_BEHIND_M, 0.001)
+	assert_almost_eq(netfront.x, -GameRules.FACEOFF_END_NETFRONT_X_M, 0.001)
+	assert_almost_eq(netfront.z,
+			-(GameRules.GOAL_LINE_Z - GameRules.FACEOFF_END_NETFRONT_OFF_LINE_M),
+			0.001)
+
+func test_center_and_neutral_dots_keep_the_legacy_d_offsets() -> void:
+	# The positional override is end-zone only: |dot z| inside the blue line
+	# keeps the one dot-relative table for the D pair.
+	var center: Vector3 = PlayerRules.faceoff_position(0, 3)
+	assert_almost_eq(center, Vector3(-2.4, GameRules.FACEOFF_SPAWN_HEIGHT, 7.0),
+			Vector3.ONE * 0.001)
+	var nz_dot: Vector2 = GameRules.NEUTRAL_ZONE_FACEOFF_DOTS[2]
+	var nz: Vector3 = PlayerRules.faceoff_position(0, 3, nz_dot)
+	assert_almost_eq(nz, Vector3(nz_dot.x - 2.4, GameRules.FACEOFF_SPAWN_HEIGHT,
+			nz_dot.y + 7.0), Vector3.ONE * 0.001)
+
+func test_wingers_keep_the_table_at_end_zone_dots() -> void:
+	# The hash-mark line-up is the real alignment at every dot — only the D
+	# pair repositions on end-zone draws.
+	var p: Vector3 = PlayerRules.faceoff_position(0, 1, _END_DOT_T0)
+	assert_almost_eq(p, Vector3(_END_DOT_T0.x - 4.7, GameRules.FACEOFF_SPAWN_HEIGHT,
+			_END_DOT_T0.y + 0.9), Vector3.ONE * 0.001)
+
 # ── faceoff_facing ───────────────────────────────────────────────────────────
 # Team 0 spawns on the +Z side and attacks -Z; team 1 mirrors. The teleport
 # helper relies on this so swapped/spawning players don't keep last frame's
