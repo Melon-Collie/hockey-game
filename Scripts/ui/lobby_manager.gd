@@ -652,12 +652,12 @@ func _on_spectate_pressed() -> void:
 
 # Writes the player's vote into the shared pool. Host receives the vote,
 # updates pending_color_votes, recomputes resolved team colors, and
-# broadcasts. PlayerPrefs is updated so the next session remembers. Works
-# offline too — the host is then the only voter on their own team.
+# broadcasts. Deliberately does NOT touch PlayerPrefs.preferred_color_slot —
+# the favorite color (set in the player settings popup) only seeds the
+# initial vote; a lobby vote is a per-session choice. Works offline too —
+# the host is then the only voter on their own team.
 func _on_my_color_vote_selected(slot: int) -> void:
 	_my_color_slot = slot
-	PlayerPrefs.preferred_color_slot = slot
-	PlayerPrefs.save()
 	NetworkManager.send_color_vote(slot)
 
 
