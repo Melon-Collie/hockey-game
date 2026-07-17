@@ -2135,3 +2135,58 @@ func test_screened_point_blast_stays_along_the_ice() -> void:
 			0.0, false, 0.0, 14.0)
 	assert_eq(loft, ShotMechanics.ELEVATION_FLAT,
 			"through traffic the model rips it flat")
+
+
+# ─── Shoot-for-tip EV (the deflection play) ────────────────────────────────
+
+func _tip_fixture(tip_man: Vector3, pace: float,
+		defenders: Array[Vector3]) -> float:
+	# Point release, set challenged goalie — the same look the screen tests
+	# use, now with a body to deflect off.
+	return AIActionScoring.tip_ev(
+			Vector3(0.0, 0.0, 10.0), tip_man, GOAL,
+			Vector3(0.0, 0.0, 25.5), NET_HW, defenders, pace)
+
+
+func test_tip_through_a_stationed_net_front_blade_beats_the_direct_look() -> void:
+	# A teammate camped on the shot line at the top of the crease: the rip
+	# through his blade re-releases the puck from crease-edge with the goalie
+	# given no read (t_reach inside the leg delay), scattered by the
+	# deflection's outgoing-line control (TIP_AIM_SPREAD_RAD). Worth an order
+	# of magnitude more than the clean direct blast the goalie reads all the
+	# way — the "blast from the point with the intent for a tipper" play.
+	var none: Array[Vector3] = []
+	var on_line: float = _tip_fixture(Vector3(0.0, 0.0, 24.0), 33.0, none)
+	var direct: float = AIActionScoring.score_shoot(
+			Vector3(0.0, 0.0, 10.0), GOAL, Vector3(0.0, 0.0, 25.5), NET_HW, [])
+	assert_gt(on_line, 0.02, "a stationed tip is a genuine chance")
+	assert_gt(on_line, direct * 8.0,
+			"the tip outcome dominates the read-all-the-way direct blast")
+
+
+func test_tip_needs_a_blade_the_shot_line_actually_crosses() -> void:
+	# A man 5 m off the line can't reach the flight in time (the same
+	# reach/reaction race a lane defender runs) — no tip outcome exists.
+	var none: Array[Vector3] = []
+	assert_eq(_tip_fixture(Vector3(5.0, 0.0, 24.0), 33.0, none), 0.0,
+			"an unreachable flight is not tippable")
+
+
+func test_tip_needs_deflect_pace() -> void:
+	# Below the deflect threshold (Puck.deflect_min_speed mirror) the puck
+	# lands on the tape as a catch — a pass, not a tip.
+	var none: Array[Vector3] = []
+	assert_eq(_tip_fixture(Vector3(0.0, 0.0, 24.0), 18.0, none), 0.0,
+			"a soft feed is a pass, not a tip")
+
+
+func test_boxed_out_tipper_loses_the_tip() -> void:
+	# A defender tied up with the tipper both clogs the last metres of the
+	# rip's lane and contests the redirect (score_shoot's release-contest
+	# term) — the box-out is the real counter to the net-front tip.
+	var boxed: Array[Vector3] = [Vector3(0.5, 0.0, 23.5)]
+	var none: Array[Vector3] = []
+	var clean_tip: float = _tip_fixture(Vector3(0.0, 0.0, 24.0), 33.0, none)
+	var contested: float = _tip_fixture(Vector3(0.0, 0.0, 24.0), 33.0, boxed)
+	assert_lt(contested, clean_tip * 0.2,
+			"a boxed-out tipper's deflection is priced away")

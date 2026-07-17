@@ -226,6 +226,22 @@ func test_positioning_picks_legal_position_when_carrier_present() -> void:
 	assert_false(d.has_aim_override)
 
 
+# A live opposing keeper challenging on the carrier's arc (~1.1 m off his
+# line). Without him the staging fixtures modeled a goalie parked dead-center
+# ON the goal line — and against THAT keeper a center-doorstep feed honestly
+# reads as the best look on the ice (it would be!), which swamps the
+# weak-side staging these tests lock. Realistic coverage → realistic staging.
+func _add_opp_goalie(ctx: RoleContext, carrier_pos: Vector3,
+		depth: float = 1.1) -> void:
+	var g := GoalieNetworkState.new()
+	var to_carrier: Vector3 = carrier_pos - Vector3(0.0, 0.0, OPP_NET_Z)
+	to_carrier.y = 0.0
+	var dir: Vector3 = to_carrier.normalized()
+	g.position_x = dir.x * depth
+	g.position_z = OPP_NET_Z + dir.z * depth
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+
+
 func _stage_x_for_strong_side(strong_x: float) -> float:
 	# Same carrier and skaters; only the strong-side sign differs, isolating the
 	# weak-side search bias.
@@ -239,6 +255,7 @@ func _stage_x_for_strong_side(strong_x: float) -> float:
 			])
 	ctx.snapshot.puck_state.carrier_peer_id = 100
 	ctx.strong_x = strong_x
+	_add_opp_goalie(ctx, carrier_pos)
 	return AIRoleFinisher.decide(ctx).target_position.x
 
 
@@ -281,6 +298,7 @@ func _cycle_ctx(skaters: Array) -> RoleContext:
 			Vector3(8.0, 0.0, -20.0), Vector3.ZERO, skaters)
 	ctx.snapshot.puck_state.carrier_peer_id = 2
 	ctx.strong_x = 1.0
+	_add_opp_goalie(ctx, Vector3(8.0, 0.0, -20.0))
 	return ctx
 
 
@@ -298,6 +316,39 @@ func test_finisher_stages_the_open_backdoor() -> void:
 			"stages beyond the far post, not mid-slot; got %s" % d.target_position)
 	assert_lt(d.target_position.z, -23.0,
 			"…deep at the backdoor, not the high slot; got %s" % d.target_position)
+
+
+func test_finisher_parks_the_tip_station_when_offices_die_and_goalie_sits_deep() -> void:
+	# Point carrier, a full box+1 manning every feed office, and the goalie
+	# pinned deep on his line (what a screened keeper does — buy time). Every
+	# one-timer feed is dead, so the staging argmax takes the TIP/SCREEN
+	# station: ON the carrier→net shot line at crease-edge depth, where the
+	# body screens the goalie and the blade tips the point blast (tip_ev).
+	# With the same crowd but a CHALLENGING goalie the tip through him is
+	# worthless and the finisher stays at a feed office — the station is a
+	# read, not a scripted post (see the challenged-goalie staging tests).
+	var carrier := Vector3(1.0, 0.0, -9.0)
+	var ctx: RoleContext = _make_ctx(
+			Vector3(-2.0, 0.0, -21.0), Vector3.ZERO,
+			carrier, Vector3.ZERO,
+			[
+				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -21.0)),
+				_make_skater(2, TEAM_ID, carrier),
+				_make_skater(10, 1, Vector3(-2.3, 0.0, -24.6)),   # backdoor cover
+				_make_skater(11, 1, Vector3(-1.2, 0.0, -21.2)),   # bumper cover
+				_make_skater(12, 1, Vector3(-2.9, 0.0, -18.0)),   # weak high lane
+				_make_skater(13, 1, Vector3(3.5, 0.0, -20.5)),    # strong low
+				_make_skater(14, 1, Vector3(2.2, 0.0, -13.0)),    # point pressure
+			])
+	ctx.snapshot.puck_state.carrier_peer_id = 2
+	ctx.strong_x = 1.0
+	_add_opp_goalie(ctx, carrier, 0.4)
+	var d: RoleDecision = AIRoleFinisher.decide(ctx)
+	var to_c: Vector3 = carrier - ctx.attacking_goal_pos
+	var station: Vector3 = ctx.attacking_goal_pos \
+			+ to_c * (AIRoleFinisher.TIP_STATION_DIST_M / to_c.length())
+	assert_lt(d.target_position.distance_to(station), 0.5,
+			"parks the shot-line tip post; got %s" % d.target_position)
 
 
 func test_finisher_stays_off_a_covered_feed_lane() -> void:
@@ -333,6 +384,7 @@ func _rush_ctx(carrier_vel: Vector3) -> RoleContext:
 	ctx.snapshot.puck_state.carrier_peer_id = 100
 	ctx.snapshot.skater_states[100].velocity = carrier_vel
 	ctx.strong_x = 1.0
+	_add_opp_goalie(ctx, carrier_pos)
 	return ctx
 
 

@@ -77,6 +77,13 @@ const RUSH_SPEED_HI_M_S: float = 6.5
 # unrealistically settled goalie. Mirrors the carrier's pass-lead horizon.
 const FEED_FLIGHT_MAX_S: float = 0.6
 
+# TIP/SCREEN STATION depth: how far off the goal mouth the shot-line post
+# sits, along the carrier→net line. Just outside the crease arc
+# (GameRules.CREASE_ARC_RADIUS ≈ 1.83 m) plus a body — the real net-front
+# office where the body screens the goalie AND the blade reaches the point
+# blast (screen and tip are the same real estate; see tip_ev).
+const TIP_STATION_DIST_M: float = 2.5
+
 # How far in front of the opp goal the positioning search center
 # sits. Sourced from GameRules.SLOT_DIST_M — the faceoff-hash slot,
 # the prime scoring area. Keeps every polar sample (radius
@@ -270,9 +277,35 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		# HIGH SLOT — the trailing seam at the top of the house.
 		Vector3(weak * 1.5, 0.0, goal_z + own_dir * 9.5),
 	]
+	# TIP/SCREEN STATION — the shot-line post: ON the carrier→net line at
+	# crease-edge depth, where the body screens the goalie and the blade tips
+	# the point blast (they're the same spot). Tracks the carrier, so a point
+	# man walking the line drags the station with him. Its value comes from
+	# the tip term below — score_pass correctly rates a body parked in the
+	# goalie's chest as a terrible pass target, which is exactly why the old
+	# argmax never stood there.
+	var to_carrier: Vector3 = carrier_pos - ctx.attacking_goal_pos
+	to_carrier.y = 0.0
+	var to_carrier_len: float = to_carrier.length()
+	if to_carrier_len > TIP_STATION_DIST_M + 0.5:
+		candidates.append(ctx.attacking_goal_pos
+				+ to_carrier * (TIP_STATION_DIST_M / to_carrier_len))
 	# Switch-hysteresis: hold the staging spot unless a fresh one scores clearly
 	# better, so the pre-aim cursor doesn't hop between near-tied slots.
 	AIRoleHelpers.append_incumbent(ctx, candidates)
+
+	# The carrier's rip, for the tip term: his real wrister pace, released a
+	# handle-length toward the net. Self caps drive the tip blade's reach.
+	var carrier_caps: AISkaterCaps = null
+	var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id \
+			if ctx.snapshot != null and ctx.snapshot.puck_state != null else -1
+	if carrier_pid != -1:
+		carrier_caps = ctx.caps_by_peer.get(carrier_pid)
+	var carrier_shot_speed: float = carrier_caps.wrister_shot_speed \
+			if carrier_caps != null else AIActionScoring.WRISTER_SHOT_SPEED_M_S
+	var carrier_release: Vector3 = AIActionScoring.release_point_toward(
+			carrier_pos, ctx.attacking_goal_pos)
+	var self_caps: AISkaterCaps = ctx.caps_by_peer.get(ctx.peer_id)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -298,11 +331,19 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 				goalie_pos, ctx.attacking_goal_pos, flight_t, c)
 		var cand_unsettled: float = AIActionScoring.goalie_unsettled(
 				goalie_pos, ctx.attacking_goal_pos, flight_t, c)
-		var score: float = AIActionScoring.score_pass(
+		# A staging spot is worth the better of its two payoffs: the one-timer
+		# feed (score_pass — being open for a pass-and-shoot) or the TIP of
+		# the carrier's direct rip through this spot (tip_ev — standing where
+		# the blast can be deflected). max(), not sum: one puck, one outcome.
+		var feed: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				cand_goalie, GameRules.NET_HALF_WIDTH,
-				opp_positions, pass_speed, cand_unsettled) \
-				+ AIRoleHelpers.incumbent_bonus(ctx, c)
+				opp_positions, pass_speed, cand_unsettled)
+		var tip: float = AIActionScoring.tip_ev(
+				carrier_release, c, ctx.attacking_goal_pos, goalie_pos,
+				GameRules.NET_HALF_WIDTH, opp_positions,
+				carrier_shot_speed, [], self_caps)
+		var score: float = maxf(feed, tip) + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c

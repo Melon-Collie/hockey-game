@@ -1252,6 +1252,104 @@ static func _worst_screener_along(
 	return worst
 
 
+# ── Shoot-for-tip EV ──────────────────────────────────────────────────────────
+# The value of ripping a shot AT THE NET through a net-front teammate's blade —
+# the deflection play. Physically: an incoming puck above the deflect threshold
+# redirects off an angled blade at near-full pace (PuckReceptionRules /
+# PuckCollisionRules.deflect_velocity — the finisher's reactive TIP mode angles
+# the blade at the net and steps onto the shot path), so the outcome is a NEW
+# release from the tip point that the goalie has almost no flight left to read.
+# Three independent physical events compose:
+#   P(rip reaches the tipper)   — lane_clear over release→tip vs the DEFENDERS
+#                                 (the tipper is the target, not a blocker)
+# × P(blade contacts the puck)  — the SAME per-body reach/reaction race a lane
+#                                 defender runs (_lane_block_at): a stationed
+#                                 tipper on the line is the near-certain
+#                                 contact it really is, a man metres off it
+#                                 contributes ~0, and the reactive tip's
+#                                 step-onto-the-path is the close-speed term
+# × score_shoot(tip point → net) — the redirect priced by the ONE xG model:
+#                                 t_reach from crease-edge at shot pace sits
+#                                 inside the goalie's leg delay (no drop, no
+#                                 extension), and defenders boxing out the
+#                                 tipper contest the redirect through
+#                                 score_shoot's own release-contest term.
+# max() against the direct read at the call site, never additive — the two are
+# different aims of the same rip (through the tipper vs at a corner).
+
+# Domain mirror of Puck.deflect_min_speed (the receiver-relative pace above
+# which a blade deflects instead of catching): a rip below it lands on the
+# tape as a pass — no tip outcome exists.
+const TIP_DEFLECT_MIN_SPEED_M_S: float = 22.0
+
+# Outgoing-line scatter of a deflection (radians), fed to score_shoot's
+# aim-spread term. A set net-front blade controls its FACE angle against a
+# 30+ m/s arrival to roughly ±7°, and the reflection doubles face error into
+# outgoing error — ~±14° (0.25 rad) of scatter on where the redirect actually
+# goes. This is the physical difference between a tip (get a piece, change
+# the line) and a swept one-timer (a genuinely aimed release): without it a
+# stationed tipper's redirect read as corner-picking sniper fire and
+# out-scored the open backdoor tap-in in a 2-on-0.
+const TIP_AIM_SPREAD_RAD: float = 0.25
+
+
+static func tip_ev(
+		release: Vector3,
+		tip_man: Vector3,
+		attacking_goal: Vector3,
+		goalie_pos: Vector3,
+		net_half_width: float,
+		opponents: Array[Vector3],
+		shot_speed_m_s: float,
+		opponent_caps: Array = [],
+		tip_caps: AISkaterCaps = null) -> float:
+	if shot_speed_m_s < TIP_DEFLECT_MIN_SPEED_M_S:
+		return 0.0
+	# Shot line: release → net centre (the reactive tip steps ONTO this line,
+	# so planning against it is self-consistent with the execution).
+	var dx: float = attacking_goal.x - release.x
+	var dz: float = attacking_goal.z - release.z
+	var line_len: float = sqrt(dx * dx + dz * dz)
+	if line_len < 0.001:
+		return 0.0
+	var hx: float = dx / line_len
+	var hz: float = dz / line_len
+	# Tip point: the tipper's foot on the line — where blade meets puck. Must
+	# be a real mid-flight contact: past the shooter's own handle, short of
+	# the goal mouth.
+	var relx: float = tip_man.x - release.x
+	var relz: float = tip_man.z - release.z
+	var along: float = relx * hx + relz * hz
+	if along <= SCREEN_MIN_ALONG_M or along >= line_len - 0.3:
+		return 0.0
+	var tip_pt := Vector3(release.x + hx * along, 0.0, release.z + hz * along)
+	# P(blade contacts): the tipper's real stick reach (Size) + lateral close.
+	var stick: float = LANE_DEFENDER_REACH_M
+	var close: float = LANE_DEFENDER_CLOSE_SPEED_M_S
+	if tip_caps != null:
+		stick = tip_caps.stick_reach
+		close = LANE_LATERAL_FRACTION * tip_caps.max_speed
+	var speed: float = maxf(shot_speed_m_s, 1.0)
+	var p_contact: float = _lane_block_at(
+			release.x, release.z, hx * speed, hz * speed, along / speed,
+			tip_man.x, tip_man.z, 0.0, 0.0, stick, close)
+	if p_contact <= 0.0:
+		return 0.0
+	# P(rip reaches him): the defenders' lane over the release→tip segment.
+	var lane: float = lane_clear(release, tip_pt, opponents, speed, [], opponent_caps)
+	if lane <= 0.0:
+		return 0.0
+	# The redirect: a new release at the tip point holding the incoming pace
+	# (a tip keeps the along-face glance), scattered by the deflection's
+	# outgoing-line control (TIP_AIM_SPREAD_RAD). No unsettle bonus — the
+	# collapsed read window IS the tip's edge, and it falls out of t_reach.
+	var redirect: float = score_shoot(
+			tip_pt, attacking_goal, goalie_pos, net_half_width, opponents,
+			speed, 0.0, opponent_caps, -1.0, false, 0.0, false,
+			TIP_AIM_SPREAD_RAD)
+	return p_contact * lane * redirect
+
+
 # Returns SHOOT score in [0, 1]: the geometric open-net danger × lane clearance
 # × forward-cone pressure. `predicted_goalie_pos` is the goalie at shot release
 # (use `predict_goalie_pos`); the hole geometry handles "too close" on its

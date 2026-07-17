@@ -99,6 +99,10 @@ var _shot_sample_goalie: Vector3 = Vector3.ZERO
 var _shot_sample_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 var _shot_sample_offset: Vector3 = Vector3.ZERO
 var _shot_sample_backhand: bool = false
+# True when the winning shoot read is the TIP rip (AIActionScoring.tip_ev):
+# fired flat at full pace THROUGH the net-front teammate's blade at the net
+# centre — the commit path aims it there instead of at a direct-model hole.
+var _shot_sample_is_tip: bool = false
 
 
 # Lateral envelope usable for a release offset: the handling reach less what the
@@ -960,6 +964,32 @@ func _pick_action(ctx: RoleContext) -> void:
 			_shot_sample_offset = offset
 			_shot_sample_backhand = frac < 0.0
 
+	# Shoot-for-tip: the same rip at the net can score by DEFLECTION off a
+	# stationed net-front teammate — the point-blast-plus-tipper play. An
+	# alternative AIM of the same fire action (through the tipper's blade vs
+	# at a direct-model hole), so it competes with the direct read by max(),
+	# never additively. Scored against the in-zone teammates already gathered
+	# for the pass options; goalie taken set at his current spot (conservative
+	# — the tip's whole edge is the collapsed post-contact read, which the
+	# hole geometry prices via t_reach).
+	_shot_sample_is_tip = false
+	if not _scratch_option_receiver_pos.is_empty():
+		var tip_release: Vector3 = AIActionScoring.release_ahead_of_goalie(
+				wrister_base_release, attacking_goal, goalie_now)
+		for tip_man: Vector3 in _scratch_option_receiver_pos:
+			var tip_s: float = AIActionScoring.tip_ev(
+					tip_release, tip_man, attacking_goal, goalie_now,
+					GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
+					ctx.self_wrister_shot_speed, _scratch_opponent_caps)
+			if tip_s > shoot_score:
+				shoot_score = tip_s
+				_shot_sample_release = tip_release
+				_shot_sample_goalie = goalie_now
+				_shot_sample_speed = ctx.self_wrister_shot_speed
+				_shot_sample_offset = Vector3.ZERO
+				_shot_sample_backhand = false
+				_shot_sample_is_tip = true
+
 	# Top-level PASS — per teammate, score_at(receiver_lead) × lane × time.
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
 	var best_pass: Array = _compute_best_pass(
@@ -1160,6 +1190,17 @@ func _pick_action(ctx: RoleContext) -> void:
 								puck_now.distance_to(receiver.position)),
 						GameRules.DEFAULT_WRISTER_POWER_MIN_M_S,
 						pass_target_speed)
+		elif new_intent == INTENT_SHOOT and _shot_sample_is_tip:
+			# TIP rip: flat and full pace THROUGH the net-front blade at the
+			# net centre — the line the tipper's reactive mode steps onto
+			# (AIRoleFinisher._try_reactive_decision). Flat keeps the puck on
+			# the blade plane; full pace keeps the arrival above the deflect
+			# threshold so contact redirects instead of catching.
+			shot_loft_level = ShotMechanics.ELEVATION_FLAT
+			shot_aim_point = Vector3(
+					attacking_goal.x, 0.0, attacking_goal.z)
+			shot_power_t = 1.0
+			shot_release_offset = Vector3.ZERO
 		elif new_intent == INTENT_SHOOT:
 			# Loft AND aim from the same goalie-hole geometry score_shoot used —
 			# the chosen hole's elevation and net-plane target, scored at the
