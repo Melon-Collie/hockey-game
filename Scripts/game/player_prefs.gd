@@ -60,11 +60,13 @@ const FPS_CAP_VALUES: Array[int] = [30, 60, 120, 144, 240, 0]
 # Camera tilt. The game uses a single tilted-perspective camera; the only
 # user-facing camera adjustment is a small tilt nudge around the default.
 # GameCamera reads camera_tilt_deg each tick to drive pitch and the off-axis
-# follow offset. Kept subtle by design — much steeper and the mouse-to-world
+# follow offset. Kept subtle by design — much shallower and the mouse-to-world
 # projection becomes nonlinear enough to break stickhandling, so the slider is
-# clamped to a tight band around the default.
+# clamped to a tight band around the default. The low end trades a little of
+# that projection linearity for forward view: at 70° the camera sits further
+# behind the play and shows noticeably more of the attacking zone.
 const CAMERA_TILT_DEFAULT: float = 75.0
-const CAMERA_TILT_MIN: float = 73.0
+const CAMERA_TILT_MIN: float = 70.0
 const CAMERA_TILT_MAX: float = 77.0
 
 # Camera framing mode. DYNAMIC is the broadcast-style cam that frames the
@@ -133,6 +135,11 @@ const CROWD_DENSITY_LABELS: Array[String] = [
 ]
 const CROWD_DENSITY_LOW_TERRACES: int = 5
 const CROWD_DENSITY_HIGH_TERRACES: int = 15
+# Upper-deck rows behind the concourse walkway (ArenaStands.upper_terraces).
+# LOW skips the second deck entirely — it roughly doubles the spectator
+# instance count — leaving the shell wall to close in behind the small bowl.
+const CROWD_DENSITY_LOW_UPPER_TERRACES: int = 0
+const CROWD_DENSITY_HIGH_UPPER_TERRACES: int = 10
 
 # 3D render scale. Lowers the internal rendertarget resolution and upscales
 # back to window size. Bilinear is cheap and blurry; FSR/FSR2 reconstruct
@@ -736,11 +743,13 @@ func apply_video() -> void:
 	var stands := scene.find_child("ArenaStands", true, false) as Node3D
 	if stands != null:
 		stands.visible = (crowd_density != CROWD_DENSITY_OFF)
-		if crowd_density != CROWD_DENSITY_OFF and "num_terraces" in stands:
-			var terraces: int = CROWD_DENSITY_HIGH_TERRACES \
-				if crowd_density == CROWD_DENSITY_HIGH \
-				else CROWD_DENSITY_LOW_TERRACES
-			stands.set("num_terraces", terraces)
+		if crowd_density != CROWD_DENSITY_OFF and stands.has_method("set_crowd_rows"):
+			if crowd_density == CROWD_DENSITY_HIGH:
+				stands.call("set_crowd_rows",
+						CROWD_DENSITY_HIGH_TERRACES, CROWD_DENSITY_HIGH_UPPER_TERRACES)
+			else:
+				stands.call("set_crowd_rows",
+						CROWD_DENSITY_LOW_TERRACES, CROWD_DENSITY_LOW_UPPER_TERRACES)
 	var scratch := scene.find_child("IceScratchMap", true, false)
 	if scratch != null and scratch.has_method("set_enabled"):
 		scratch.call("set_enabled", ice_scratches_enabled)

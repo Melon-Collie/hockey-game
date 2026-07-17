@@ -4,8 +4,12 @@ extends Node3D
 
 # Procedural terraced stands wrapping the rink, plus a MultiMeshInstance3D
 # spectator crowd. Pattern mirrors HockeyRink — single rebuild on @export
-# change, no runtime updates. Geometry is two draw calls: one ArrayMesh for
-# all terraces, one MultiMesh for all spectators.
+# change, no runtime updates. Geometry is four draw calls: one ArrayMesh for
+# all terraces (lower bowl + concourse walkway + upper deck), one for the
+# arena shell (upper-deck fascia + perimeter wall), and two MultiMeshes for
+# the spectators (bodies, heads). The walkway / upper deck / shell exist so
+# every camera sightline that clears the crowd lands on building rather than
+# the bare background color — the bowl used to just end in the void.
 
 @export var rink_length: float = 60.0:
 	set(v):
@@ -55,6 +59,49 @@ extends Node3D
 @export var concrete_color: Color = Color(0.42, 0.42, 0.45):
 	set(v):
 		concrete_color = v
+		_request_rebuild()
+
+@export_group("Upper Deck")
+# Concourse walkway between the lower bowl's top row and the upper deck — a
+# flat ring continuing the top tread's level outward. Also the shell wall's
+# standoff from the bowl when the upper deck is disabled.
+@export var walkway_depth: float = 2.2:
+	set(v):
+		walkway_depth = v
+		_request_rebuild()
+# Rows in the second tier. 0 disables the deck entirely (the shell wall then
+# closes in right behind the walkway) — PlayerPrefs.apply_video drops it to 0
+# on LOW crowd density, since the deck roughly doubles the spectator count.
+@export var upper_terraces: int = 10:
+	set(v):
+		upper_terraces = v
+		_request_rebuild()
+# Steeper rake than the lower bowl (same tread depth, taller risers), the way
+# a real second deck stacks over a concourse.
+@export var upper_riser_height: float = 0.55:
+	set(v):
+		upper_riser_height = v
+		_request_rebuild()
+# Balcony rise from the walkway up to the deck's first tread; the dark fascia
+# wall the lower bowl's back rows sit against spans exactly this height.
+@export var upper_deck_rise: float = 1.1:
+	set(v):
+		upper_deck_rise = v
+		_request_rebuild()
+
+@export_group("Shell")
+# Arena shell wall: rises this far above the top spectator row's tread, all
+# the way around. 8 m puts the wall top at ~20.5 m with the default decks —
+# high enough that the lobby backdrop's orbit camera and the replay chase cam
+# keep their frame on building. Colored near the environment background so
+# whatever sliver of void remains visible above it reads as dark rafters.
+@export var shell_height: float = 8.0:
+	set(v):
+		shell_height = v
+		_request_rebuild()
+@export var shell_color: Color = Color(0.14, 0.15, 0.2):
+	set(v):
+		shell_color = v
 		_request_rebuild()
 
 @export_group("Crowd")
@@ -187,6 +234,9 @@ var _head_palette: Array[Color] = [
 static var _crowd_material: ShaderMaterial = null
 var _excitement: float = 0.0
 var _excite_tween: Tween = null
+# Set while set_crowd_rows writes both row counts, so the two setters don't
+# each trigger a rebuild of their own.
+var _suspend_rebuild: bool = false
 
 # geometry key → layout dict {terrace_mesh, body_mm, head_mm, paint_key}.
 # Everything in a layout is color-independent and deterministic (fixed
@@ -238,8 +288,23 @@ func setup(home_primary: Color, home_secondary: Color,
 
 
 func _request_rebuild() -> void:
+	if _suspend_rebuild:
+		return
 	if is_inside_tree():
 		_rebuild()
+
+
+# One-shot crowd-density setter for PlayerPrefs.apply_video: both row counts
+# land in a single rebuild instead of one per setter (which would also litter
+# the layout cache with a never-again-used intermediate geometry).
+func set_crowd_rows(lower: int, upper: int) -> void:
+	if lower == num_terraces and upper == upper_terraces:
+		return
+	_suspend_rebuild = true
+	num_terraces = lower
+	upper_terraces = upper
+	_suspend_rebuild = false
+	_request_rebuild()
 
 
 func _rebuild() -> void:
@@ -249,6 +314,7 @@ func _rebuild() -> void:
 		child.queue_free()
 	var layout: Dictionary = _get_or_build_layout()
 	_add_terraces(layout.terrace_mesh)
+	_add_shell(layout.shell_mesh)
 	_add_spectators(layout)
 	_build_benches()
 
@@ -261,7 +327,9 @@ func _geometry_key() -> String:
 	return str([rink_length, rink_width, corner_radius, stands_base_y,
 			num_terraces, tread_depth, riser_height, base_outward_offset,
 			corner_segments, spectator_spacing, spectator_inset_from_riser,
-			spectator_yaw_jitter_deg, spectator_y_jitter])
+			spectator_yaw_jitter_deg, spectator_y_jitter,
+			walkway_depth, upper_terraces, upper_riser_height, upper_deck_rise,
+			shell_height])
 
 
 # Everything the paint pass reads: the four team colors + the mix ratios.
@@ -279,6 +347,7 @@ func _get_or_build_layout() -> Dictionary:
 		_layout_cache.clear()
 	var layout: Dictionary = {
 		"terrace_mesh": _build_terrace_mesh(),
+		"shell_mesh": _build_shell_mesh(),
 		"paint_key": "",
 	}
 	_fill_spectator_layout(layout)
@@ -304,8 +373,94 @@ func _build_terrace_mesh() -> ArrayMesh:
 		var outer_pts: PackedVector2Array = _sample_offset_path(outer_off, counts.x, counts.y)
 		_emit_tread(st, inner_pts, outer_pts, y_top)
 		_emit_riser(st, inner_pts, y_bot, y_top)
+	# Concourse walkway: the top tread's level continues outward as a flat ring
+	# to the upper-deck fascia (or the shell wall when the deck is disabled).
+	if walkway_depth > 0.0:
+		var walk_in: float = base_outward_offset + num_terraces * tread_depth
+		_emit_tread(st,
+				_sample_offset_path(walk_in, counts.x, counts.y),
+				_sample_offset_path(walk_in + walkway_depth, counts.x, counts.y),
+				_lower_top_tread_y())
+	# Upper deck. Row 0 emits no riser: the fascia (shell mesh) spans the whole
+	# walkway → first-tread rise at the same ring, and a duplicate co-planar
+	# wall would z-fight it.
+	for j: int in upper_terraces:
+		var inner_off: float = _upper_deck_inner_offset() + j * tread_depth
+		var outer_off: float = inner_off + tread_depth
+		var y_top: float = _upper_deck_base_y() + j * upper_riser_height
+		var inner_pts: PackedVector2Array = _sample_offset_path(inner_off, counts.x, counts.y)
+		var outer_pts: PackedVector2Array = _sample_offset_path(outer_off, counts.x, counts.y)
+		_emit_tread(st, inner_pts, outer_pts, y_top)
+		if j > 0:
+			_emit_riser(st, inner_pts, y_top - upper_riser_height, y_top)
 	st.generate_normals()
 	return st.commit()
+
+
+# ── Derived deck geometry ────────────────────────────────────────────────────
+
+# Tread height of the lower bowl's back row — also the walkway level.
+func _lower_top_tread_y() -> float:
+	return stands_base_y + (num_terraces - 1) * riser_height
+
+
+# Outward offset of the upper deck's first row (= the fascia ring).
+func _upper_deck_inner_offset() -> float:
+	return base_outward_offset + num_terraces * tread_depth + walkway_depth
+
+
+# Tread height of the upper deck's first row (= the fascia top).
+func _upper_deck_base_y() -> float:
+	return _lower_top_tread_y() + upper_deck_rise
+
+
+# Outward offset of the shell wall: behind the upper deck's back row, or
+# straight behind the walkway when the deck is disabled.
+func _shell_offset() -> float:
+	return _upper_deck_inner_offset() + upper_terraces * tread_depth
+
+
+# Tread height of the very back spectator row, whichever deck that is on.
+func _top_tread_y() -> float:
+	if upper_terraces > 0:
+		return _upper_deck_base_y() + (upper_terraces - 1) * upper_riser_height
+	return _lower_top_tread_y()
+
+
+# Fascia (upper-deck balcony front) + perimeter shell wall, one mesh with the
+# dark shell material. Split from the terrace mesh so the two can be colored
+# independently without vertex colors or a second surface.
+func _build_shell_mesh() -> ArrayMesh:
+	var counts: Vector2i = _path_step_counts()
+	var st: SurfaceTool = SurfaceTool.new()
+	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
+	if upper_terraces > 0:
+		var fascia_pts: PackedVector2Array = _sample_offset_path(
+				_upper_deck_inner_offset(), counts.x, counts.y)
+		_emit_riser(st, fascia_pts, _lower_top_tread_y(), _upper_deck_base_y())
+	if shell_height > 0.0:
+		var wall_pts: PackedVector2Array = _sample_offset_path(
+				_shell_offset(), counts.x, counts.y)
+		_emit_riser(st, wall_pts, _top_tread_y(), _top_tread_y() + shell_height)
+	st.generate_normals()
+	return st.commit()
+
+
+# Shell color lives on a per-instance material_override (same pattern as the
+# terraces' concrete) so a color tweak repaints without a layout rebuild.
+func _add_shell(mesh: ArrayMesh) -> void:
+	var mi: MeshInstance3D = MeshInstance3D.new()
+	mi.mesh = mesh
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.albedo_color = shell_color
+	mat.roughness = 1.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	# The wall is beyond every shadow-casting spotlight's range; skip it in the
+	# shadow maps like the crowd.
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.name = "Shell"
+	add_child(mi)
 
 
 # Concrete color lives on a per-instance material_override, not in the cached
@@ -456,32 +611,17 @@ func _fill_spectator_layout(layout: Dictionary) -> void:
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = _SEED
 	for i: int in num_terraces:
-		var inner_off: float = base_outward_offset + i * tread_depth
 		# Spectators sit on the tread, inset slightly outward from the inner
 		# (rink-facing) edge so their feet aren't on the riser corner.
-		var spectator_off: float = inner_off + spectator_inset_from_riser
-		var y: float = stands_base_y + i * riser_height
-		var samples: PackedVector2Array = _sample_offset_path(spectator_off)
-		var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
-		for p: Vector2 in resampled:
-			if _in_bench_zone(i, p):
-				continue
-			var pos: Vector3 = Vector3(p.x, y + rng.randf_range(-spectator_y_jitter, spectator_y_jitter), p.y)
-			# Face the rink: local forward (-Z) should point from p toward XZ
-			# origin. With Basis(Y, yaw), forward_world = (-sin yaw, 0, -cos yaw);
-			# solving for that to equal -p.normalized() yields yaw = atan2(p.x, p.z).
-			var yaw: float = atan2(p.x, p.y) \
-					+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
-			var spectator_basis: Basis = Basis(Vector3.UP, yaw)
-			transforms.append(Transform3D(spectator_basis, pos))
-			# Animation roll (crowd.gdshader INSTANCE_CUSTOM): phase de-sync,
-			# sway amplitude, hop amplitude. Same data on body and head so the
-			# two draw calls move as one person.
-			anim_data.append(Color(
-					rng.randf(),
-					rng.randf_range(0.6, 1.4),
-					rng.randf_range(0.2, 1.0),
-					0.0))
+		_append_spectator_row(transforms, anim_data, rng,
+				base_outward_offset + i * tread_depth + spectator_inset_from_riser,
+				stands_base_y + i * riser_height, i)
+	# Upper deck rows. bench_row -1: the bench cutout is an ice-level concern
+	# only — the deck hangs far above the benches.
+	for j: int in upper_terraces:
+		_append_spectator_row(transforms, anim_data, rng,
+				_upper_deck_inner_offset() + j * tread_depth + spectator_inset_from_riser,
+				_upper_deck_base_y() + j * upper_riser_height, -1)
 
 	var n: int = transforms.size()
 	body_mm.instance_count = n
@@ -502,6 +642,34 @@ func _fill_spectator_layout(layout: Dictionary) -> void:
 	head_mm.custom_aabb = bowl_aabb
 	layout["body_mm"] = body_mm
 	layout["head_mm"] = head_mm
+
+
+# One ring of spectators at `spectator_off` outward of the boards, feet at
+# `y`. bench_row is the lower-bowl row index for the bench cutout, or -1 for
+# rows the cutout can never apply to (the upper deck).
+func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Color],
+		rng: RandomNumberGenerator, spectator_off: float, y: float, bench_row: int) -> void:
+	var samples: PackedVector2Array = _sample_offset_path(spectator_off)
+	var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
+	for p: Vector2 in resampled:
+		if bench_row >= 0 and _in_bench_zone(bench_row, p):
+			continue
+		var pos: Vector3 = Vector3(p.x, y + rng.randf_range(-spectator_y_jitter, spectator_y_jitter), p.y)
+		# Face the rink: local forward (-Z) should point from p toward XZ
+		# origin. With Basis(Y, yaw), forward_world = (-sin yaw, 0, -cos yaw);
+		# solving for that to equal -p.normalized() yields yaw = atan2(p.x, p.z).
+		var yaw: float = atan2(p.x, p.y) \
+				+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
+		var spectator_basis: Basis = Basis(Vector3.UP, yaw)
+		transforms.append(Transform3D(spectator_basis, pos))
+		# Animation roll (crowd.gdshader INSTANCE_CUSTOM): phase de-sync,
+		# sway amplitude, hop amplitude. Same data on body and head so the
+		# two draw calls move as one person.
+		anim_data.append(Color(
+				rng.randf(),
+				rng.randf_range(0.6, 1.4),
+				rng.randf_range(0.2, 1.0),
+				0.0))
 
 
 # Attach the cached MultiMeshes and repaint only if the colors/ratios moved
@@ -549,12 +717,16 @@ func _spectator_bowl_aabb() -> AABB:
 	var outer_extent: float = base_outward_offset \
 			+ (num_terraces - 1) * tread_depth \
 			+ spectator_inset_from_riser
+	if upper_terraces > 0:
+		outer_extent = _upper_deck_inner_offset() \
+				+ (upper_terraces - 1) * tread_depth \
+				+ spectator_inset_from_riser
 	# Margins cover the shader animation (crowd.gdshader): up to ~0.18 m of
 	# celebration hop on top, ~0.1 m of sway sideways.
 	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.15
 	var half_x: float = rink_width * 0.5 + outer_extent + horizontal_margin
 	var half_z: float = rink_length * 0.5 + outer_extent + horizontal_margin
-	var top_y: float = stands_base_y + (num_terraces - 1) * riser_height \
+	var top_y: float = _top_tread_y() \
 			+ spectator_y_jitter + _BODY_SIZE.y + _HEAD_SIZE.y + 0.35
 	var bot_y: float = stands_base_y - spectator_y_jitter - 0.1
 	return AABB(
