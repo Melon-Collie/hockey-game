@@ -13,6 +13,15 @@ func _ready() -> void:
 		else:
 			var manager_script: GDScript = load(manager_path)
 			add_child(manager_script.new())
+	# Practice-only shot visualizer: post-shot flight trace in free play /
+	# tutorial / drills (never matches — offline lobby or online); the live
+	# predicted-arc ghost additionally in the Shooting tutorial, where
+	# learning the wrister IS the task.
+	if NetworkManager.is_free_play_mode or NetworkManager.is_drill_mode():
+		var shot_viz := ShotArcVisualizer.new()
+		shot_viz.show_live_ghost = NetworkManager.is_tutorial_mode \
+				and NetworkManager.tutorial_id == TutorialRegistry.SHOOTING_ID
+		add_child(shot_viz)
 	if not NetworkManager.is_host and not NetworkManager.pending_join_slot.is_empty():
 		var s: Dictionary = NetworkManager.pending_join_slot
 		NetworkManager.pending_join_slot = {}
