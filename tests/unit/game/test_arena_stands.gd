@@ -3,9 +3,10 @@ extends GutTest
 # ArenaStands procedural build — the invariants a display-less run can still
 # check: the rebuild's child inventory (terraces + shell + crowd + benches),
 # the upper deck actually adding spectators, set_crowd_rows collapsing to one
-# geometry, and the explicit crowd AABB enclosing every instance (a too-small
-# AABB re-introduces the whole-section culling bug the custom AABB exists to
-# prevent).
+# geometry, and the per-section crowd AABBs (sections must exist for frustum
+# culling to bite, stay strict slices of the bowl, and grow to cover the
+# upper deck — a too-small AABB re-introduces the mis-culling bug the custom
+# AABBs exist to prevent).
 #
 # Row counts are kept small — the invariants don't depend on bowl size and the
 # full 15+10 default builds a ~10k-instance crowd per test.
@@ -20,19 +21,42 @@ func _make_stands(lower: int, upper: int) -> ArenaStands:
 	return stands
 
 
+func _crowd_sections(stands: ArenaStands) -> Array[MultiMesh]:
+	var sections: Array[MultiMesh] = []
+	for child: Node in stands.get_children():
+		if child.name.begins_with("SpectatorBodies"):
+			sections.append((child as MultiMeshInstance3D).multimesh)
+	return sections
+
+
 func _crowd_count(stands: ArenaStands) -> int:
-	var bodies: MultiMeshInstance3D = stands.find_child("SpectatorBodies", false, false)
-	if bodies == null or bodies.multimesh == null:
-		return -1
-	return bodies.multimesh.instance_count
+	var total: int = 0
+	for mm: MultiMesh in _crowd_sections(stands):
+		total += mm.instance_count
+	return total
 
 
 func test_rebuild_child_inventory() -> void:
 	var stands: ArenaStands = _make_stands(3, 2)
-	for expected: String in ["Terraces", "Shell", "SpectatorBodies",
-			"SpectatorHeads", "BenchSeatHome", "BenchSeatAway"]:
+	for expected: String in ["Terraces", "Shell", "SpectatorBodies*",
+			"SpectatorHeads*", "BenchSeatHome", "BenchSeatAway"]:
 		assert_not_null(stands.find_child(expected, false, false),
 				"rebuild should produce a %s child" % expected)
+
+
+func test_crowd_splits_into_multiple_cullable_sections() -> void:
+	# The angular split exists so the renderer can frustum-cull off-screen
+	# crowd; one whole-bowl MultiMesh would defeat that. Every section's AABB
+	# must also be a strict slice of the union, not a copy of it.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var sections: Array[MultiMesh] = _crowd_sections(stands)
+	assert_gt(sections.size(), 1, "crowd should split into multiple sections")
+	var union: AABB = _crowd_aabb(stands)
+	var union_area: float = union.size.x * union.size.z
+	for mm: MultiMesh in sections:
+		var area: float = mm.custom_aabb.size.x * mm.custom_aabb.size.z
+		assert_lt(area, union_area,
+				"each section AABB should cover only a slice of the bowl")
 
 
 func test_shell_mesh_has_geometry_without_upper_deck() -> void:
@@ -67,9 +91,14 @@ func test_crowd_aabb_covers_upper_deck() -> void:
 			"deck rows should raise the crowd AABB past the balcony rise")
 
 
+# Union of the per-section custom AABBs — the whole crowd's bounds.
 func _crowd_aabb(stands: ArenaStands) -> AABB:
-	var bodies: MultiMeshInstance3D = stands.find_child("SpectatorBodies", false, false)
-	return bodies.multimesh.custom_aabb
+	var union: AABB = AABB()
+	var first: bool = true
+	for mm: MultiMesh in _crowd_sections(stands):
+		union = mm.custom_aabb if first else union.merge(mm.custom_aabb)
+		first = false
+	return union
 
 
 func test_set_crowd_rows_applies_both_counts() -> void:

@@ -2,14 +2,17 @@
 class_name ArenaStands
 extends Node3D
 
-# Procedural terraced stands wrapping the rink, plus a MultiMeshInstance3D
-# spectator crowd. Pattern mirrors HockeyRink — single rebuild on @export
-# change, no runtime updates. Geometry is four draw calls: one ArrayMesh for
-# all terraces (lower bowl + concourse walkway + upper deck), one for the
-# arena shell (upper-deck fascia + perimeter wall), and two MultiMeshes for
-# the spectators (bodies, heads). The walkway / upper deck / shell exist so
-# every camera sightline that clears the crowd lands on building rather than
-# the bare background color — the bowl used to just end in the void.
+# Procedural terraced stands wrapping the rink, plus a MultiMesh spectator
+# crowd. Pattern mirrors HockeyRink — single rebuild on @export change, no
+# runtime updates. Geometry is one ArrayMesh for all concrete (lower bowl +
+# concourse walkway + upper-deck fascia and terraces), one for the arena
+# shell wall, and the crowd as per-section MultiMesh pairs (bodies, heads):
+# the bowl is split into _CROWD_SECTIONS angular slices, each with its own
+# tight AABB, so the renderer frustum-culls off-screen crowd wholesale
+# instead of vertex-processing every spectator every frame. The walkway /
+# upper deck / shell exist so every camera sightline that clears the crowd
+# lands on building rather than the bare background color — the bowl used to
+# just end in the void.
 
 @export var rink_length: float = 60.0:
 	set(v):
@@ -82,8 +85,8 @@ extends Node3D
 	set(v):
 		upper_riser_height = v
 		_request_rebuild()
-# Balcony rise from the walkway up to the deck's first tread; the dark fascia
-# wall the lower bowl's back rows sit against spans exactly this height.
+# Balcony rise from the walkway up to the deck's first tread; the concrete
+# fascia wall the lower bowl's back rows sit against spans exactly this height.
 @export var upper_deck_rise: float = 1.1:
 	set(v):
 		upper_deck_rise = v
@@ -178,6 +181,10 @@ extends Node3D
 
 # Deterministic seed so the editor preview matches the runtime build.
 const _SEED: int = 31337
+# Angular crowd slices (see _fill_spectator_layout). 8 ≈ 45° per slice: tight
+# enough that gameplay zoom keeps only a few slices in frustum, few enough
+# that the extra draw calls (2 per slice) stay negligible.
+const _CROWD_SECTIONS: int = 8
 # Crowd animation (Shaders/crowd.gdshader): how long a burst of excitement
 # holds at peak and how long it takes to settle back to the idle murmur sway.
 const _CROWD_SHADER_PATH: String = "res://Shaders/crowd.gdshader"
@@ -381,9 +388,14 @@ func _build_terrace_mesh() -> ArrayMesh:
 				_sample_offset_path(walk_in, counts.x, counts.y),
 				_sample_offset_path(walk_in + walkway_depth, counts.x, counts.y),
 				_lower_top_tread_y())
-	# Upper deck. Row 0 emits no riser: the fascia (shell mesh) spans the whole
-	# walkway → first-tread rise at the same ring, and a duplicate co-planar
-	# wall would z-fight it.
+	# Upper-deck fascia (balcony front): one tall riser spanning the whole
+	# walkway → first-tread rise. Concrete like the terraces — it's the same
+	# poured structure. Row 0 below emits no riser of its own, since a
+	# duplicate co-planar wall here would z-fight this one.
+	if upper_terraces > 0:
+		_emit_riser(st,
+				_sample_offset_path(_upper_deck_inner_offset(), counts.x, counts.y),
+				_lower_top_tread_y(), _upper_deck_base_y())
 	for j: int in upper_terraces:
 		var inner_off: float = _upper_deck_inner_offset() + j * tread_depth
 		var outer_off: float = inner_off + tread_depth
@@ -427,17 +439,13 @@ func _top_tread_y() -> float:
 	return _lower_top_tread_y()
 
 
-# Fascia (upper-deck balcony front) + perimeter shell wall, one mesh with the
-# dark shell material. Split from the terrace mesh so the two can be colored
-# independently without vertex colors or a second surface.
+# Perimeter shell wall, its own mesh with the dark shell material. Split from
+# the terrace mesh so the two can be colored independently without vertex
+# colors or a second surface.
 func _build_shell_mesh() -> ArrayMesh:
 	var counts: Vector2i = _path_step_counts()
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
-	if upper_terraces > 0:
-		var fascia_pts: PackedVector2Array = _sample_offset_path(
-				_upper_deck_inner_offset(), counts.x, counts.y)
-		_emit_riser(st, fascia_pts, _lower_top_tread_y(), _upper_deck_base_y())
 	if shell_height > 0.0:
 		var wall_pts: PackedVector2Array = _sample_offset_path(
 				_shell_offset(), counts.x, counts.y)
@@ -454,7 +462,9 @@ func _add_shell(mesh: ArrayMesh) -> void:
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = shell_color
 	mat.roughness = 1.0
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Same winding contract as the terraces: the wall's front faces the bowl
+	# interior, so cull the never-visible outward side.
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mi.material_override = mat
 	# The wall is beyond every shadow-casting spotlight's range; skip it in the
 	# shadow maps like the crowd.
@@ -471,9 +481,12 @@ func _add_terraces(mesh: ArrayMesh) -> void:
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = concrete_color
 	mat.roughness = 0.95
-	# Stands are only ever viewed from the rink side; double-siding keeps
-	# the geometry visible if the user re-orients the scene during dev.
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Every face is wound front-toward-the-bowl-interior (treads up, risers /
+	# fascia rinkward), and the under-tread volumes are sealed by the riser
+	# below, so back-face culling drops only never-visible geometry. Caveat: a
+	# free-cam flight OUTSIDE the arena sees through the bowl's outer side —
+	# acceptable for a dev/spectator edge case.
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mi.material_override = mat
 	mi.name = "Terraces"
 	add_child(mi)
@@ -506,8 +519,9 @@ func _emit_riser(st: SurfaceTool, inner: PackedVector2Array, y_bot: float, y_top
 		var ta: Vector3 = Vector3(inner[i].x, y_top, inner[i].y)
 		var bb: Vector3 = Vector3(inner[j].x, y_bot, inner[j].y)
 		var tb: Vector3 = Vector3(inner[j].x, y_top, inner[j].y)
-		# Cull disabled on the material — winding here only affects normals,
-		# which generate_normals() resolves consistently across the strip.
+		# With the ring sampled CCW (viewed from above), this winding fronts
+		# the wall toward the rink — load-bearing now that the terrace/shell
+		# materials cull back faces.
 		st.add_vertex(ba)
 		st.add_vertex(tb)
 		st.add_vertex(bb)
@@ -587,25 +601,14 @@ func _append_arc(pts: PackedVector2Array, center: Vector2, radius: float,
 
 # ── Spectator MultiMesh ──────────────────────────────────────────────────────
 
-# Build the color-independent half of the crowd into `layout`: the two
-# MultiMeshes with meshes, transforms, anim data, and AABB. Two MultiMesh
-# instances share transforms: bodies tinted with the team-mix color, heads
-# tinted from the skin/hat palette. One extra draw call vs. a combined mesh,
-# but it lets the head pick a color independent of the body without a custom
-# shader. Colors stay default until the first _paint_spectators pass (a fresh
+# Build the color-independent half of the crowd into `layout`: per-section
+# MultiMesh pairs with meshes, transforms, anim data, and AABBs. Each section
+# is a pair because bodies tint with the team-mix color while heads tint from
+# the skin/hat palette — an extra draw call vs. a combined mesh, but it lets
+# the head pick a color independent of the body without a custom shader.
+# Colors stay default until the first _paint_spectators pass (a fresh
 # layout's paint_key is "").
 func _fill_spectator_layout(layout: Dictionary) -> void:
-	var body_mm: MultiMesh = MultiMesh.new()
-	body_mm.transform_format = MultiMesh.TRANSFORM_3D
-	body_mm.use_colors = true
-	body_mm.use_custom_data = true
-	body_mm.mesh = _build_body_mesh()
-	var head_mm: MultiMesh = MultiMesh.new()
-	head_mm.transform_format = MultiMesh.TRANSFORM_3D
-	head_mm.use_colors = true
-	head_mm.use_custom_data = true
-	head_mm.mesh = _build_head_mesh()
-
 	var transforms: Array[Transform3D] = []
 	var anim_data: Array[Color] = []
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -623,25 +626,76 @@ func _fill_spectator_layout(layout: Dictionary) -> void:
 				_upper_deck_inner_offset() + j * tread_depth + spectator_inset_from_riser,
 				_upper_deck_base_y() + j * upper_riser_height, -1)
 
-	var n: int = transforms.size()
-	body_mm.instance_count = n
-	head_mm.instance_count = n
-	for i: int in n:
-		body_mm.set_instance_transform(i, transforms[i])
-		body_mm.set_instance_custom_data(i, anim_data[i])
-		head_mm.set_instance_transform(i, transforms[i])
-		head_mm.set_instance_custom_data(i, anim_data[i])
+	# Partition the bowl into angular slices around center ice, one MultiMesh
+	# pair per slice with a tight custom AABB. A single whole-bowl MultiMesh
+	# would put every spectator through the vertex stage every frame (its AABB
+	# overlaps any conceivable frustum); per-section AABBs let the renderer
+	# frustum-cull the off-screen slices wholesale, which is most of the crowd
+	# at gameplay zoom. Section order is deterministic (angle bins over the
+	# deterministic transform list), so the paint pass stays reproducible.
+	var body_mesh: ArrayMesh = _build_body_mesh()
+	var head_mesh: ArrayMesh = _build_head_mesh()
+	var section_indices: Array[PackedInt32Array] = []
+	section_indices.resize(_CROWD_SECTIONS)
+	for k: int in _CROWD_SECTIONS:
+		section_indices[k] = PackedInt32Array()
+	for i: int in transforms.size():
+		var o: Vector3 = transforms[i].origin
+		var sector: int = int(floor((atan2(o.z, o.x) + PI) / TAU * _CROWD_SECTIONS))
+		section_indices[clampi(sector, 0, _CROWD_SECTIONS - 1)].append(i)
 
-	# Godot's auto-AABB for MultiMesh is unreliable when transforms are pushed
-	# via set_instance_transform individually (vs. a single `buffer` set), and
-	# especially when the source mesh AABB is offset from origin (the head box
-	# is centered at y~0.58). Without an explicit AABB the renderer culls
-	# entire sections of crowd from certain camera angles.
-	var bowl_aabb: AABB = _spectator_bowl_aabb()
-	body_mm.custom_aabb = bowl_aabb
-	head_mm.custom_aabb = bowl_aabb
-	layout["body_mm"] = body_mm
-	layout["head_mm"] = head_mm
+	var body_mms: Array[MultiMesh] = []
+	var head_mms: Array[MultiMesh] = []
+	for k: int in _CROWD_SECTIONS:
+		var idxs: PackedInt32Array = section_indices[k]
+		if idxs.is_empty():
+			continue
+		var body_mm: MultiMesh = _make_crowd_multimesh(body_mesh, idxs.size())
+		var head_mm: MultiMesh = _make_crowd_multimesh(head_mesh, idxs.size())
+		var seed_aabb: AABB = AABB(transforms[idxs[0]].origin, Vector3.ZERO)
+		for n_i: int in idxs.size():
+			var src: int = idxs[n_i]
+			body_mm.set_instance_transform(n_i, transforms[src])
+			body_mm.set_instance_custom_data(n_i, anim_data[src])
+			head_mm.set_instance_transform(n_i, transforms[src])
+			head_mm.set_instance_custom_data(n_i, anim_data[src])
+			seed_aabb = seed_aabb.expand(transforms[src].origin)
+		# Godot's auto-AABB for MultiMesh is unreliable when transforms are
+		# pushed via set_instance_transform individually (vs. a single `buffer`
+		# set), and especially when the source mesh AABB is offset from origin
+		# (the head box is centered at y~0.58). Without an explicit AABB the
+		# renderer mis-culls whole stretches of crowd from certain angles.
+		var section_aabb: AABB = _grow_section_aabb(seed_aabb)
+		body_mm.custom_aabb = section_aabb
+		head_mm.custom_aabb = section_aabb
+		body_mms.append(body_mm)
+		head_mms.append(head_mm)
+	layout["body_mms"] = body_mms
+	layout["head_mms"] = head_mms
+
+
+func _make_crowd_multimesh(mesh: ArrayMesh, count: int) -> MultiMesh:
+	var mm: MultiMesh = MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = true
+	mm.mesh = mesh
+	mm.instance_count = count
+	return mm
+
+
+# Grow a section's origin-fit AABB to cover the spectators' full standing
+# bodies plus the shader animation (crowd.gdshader): up to ~0.18 m of
+# celebration hop on top, ~0.1 m of sway sideways; rotated bodies can extend
+# by the box diagonal in any horizontal direction.
+func _grow_section_aabb(seed_aabb: AABB) -> AABB:
+	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.15
+	var pos: Vector3 = seed_aabb.position - Vector3(horizontal_margin, 0.1, horizontal_margin)
+	var end: Vector3 = seed_aabb.end + Vector3(
+			horizontal_margin,
+			_BODY_SIZE.y + _HEAD_SIZE.y + 0.35,
+			horizontal_margin)
+	return AABB(pos, end - pos)
 
 
 # One ring of spectators at `spectator_off` outward of the boards, feet at
@@ -677,61 +731,44 @@ func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Colo
 # re-entering a scene) reattaches without touching a single instance.
 func _add_spectators(layout: Dictionary) -> void:
 	var paint_key: String = _paint_key()
+	var body_mms: Array[MultiMesh] = layout.body_mms
+	var head_mms: Array[MultiMesh] = layout.head_mms
 	if layout.paint_key != paint_key:
-		_paint_spectators(layout.body_mm, layout.head_mm)
+		_paint_spectators(body_mms, head_mms)
 		layout.paint_key = paint_key
 
-	var body_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-	body_mmi.multimesh = layout.body_mm
-	body_mmi.name = "SpectatorBodies"
-	# The crowd casts no shadows. Thousands of instances × the 8 shadow-casting
-	# ceiling spotlights (RinkArena.tscn) is the arena's biggest shadow-map cost,
-	# and crowd-on-crowd shadows up in the stands are never visible from the
-	# rink-focused camera — a shimmer at best, given the sway/hop animation.
-	# (The goalie disables shadow casting on its own parts the same way.)
-	body_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(body_mmi)
-	var head_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
-	head_mmi.multimesh = layout.head_mm
-	head_mmi.name = "SpectatorHeads"
-	head_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(head_mmi)
+	for k: int in body_mms.size():
+		var body_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		body_mmi.multimesh = body_mms[k]
+		body_mmi.name = "SpectatorBodies%d" % k
+		# The crowd casts no shadows. Thousands of instances × the 8 shadow-
+		# casting ceiling spotlights (RinkArena.tscn) is the arena's biggest
+		# shadow-map cost, and crowd-on-crowd shadows up in the stands are never
+		# visible from the rink-focused camera — a shimmer at best, given the
+		# sway/hop animation. (The goalie disables shadow casting the same way.)
+		body_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(body_mmi)
+		var head_mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		head_mmi.multimesh = head_mms[k]
+		head_mmi.name = "SpectatorHeads%d" % k
+		head_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(head_mmi)
 
 
-# Roll body/head colors for every spectator. Own rng stream (same _SEED) so
-# the fan-mix assignment is deterministic and identical across repaints of
-# the same layout.
-func _paint_spectators(body_mm: MultiMesh, head_mm: MultiMesh) -> void:
+# Roll body/head colors for every spectator. Own rng stream (same _SEED),
+# consumed across the sections in their fixed build order, so the fan-mix
+# assignment is deterministic and identical across repaints of the same
+# layout.
+func _paint_spectators(body_mms: Array[MultiMesh], head_mms: Array[MultiMesh]) -> void:
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = _SEED
-	for i: int in body_mm.instance_count:
-		var picked: Array[Color] = _pick_spectator_colors(rng)
-		body_mm.set_instance_color(i, picked[0])
-		head_mm.set_instance_color(i, picked[1])
-
-
-# Conservative bounds around every spectator instance, in ArenaStands-local
-# space. Rotated bodies can extend by the box diagonal in any horizontal dir;
-# top of the head sits at body_h + head_h above the top tread.
-func _spectator_bowl_aabb() -> AABB:
-	var outer_extent: float = base_outward_offset \
-			+ (num_terraces - 1) * tread_depth \
-			+ spectator_inset_from_riser
-	if upper_terraces > 0:
-		outer_extent = _upper_deck_inner_offset() \
-				+ (upper_terraces - 1) * tread_depth \
-				+ spectator_inset_from_riser
-	# Margins cover the shader animation (crowd.gdshader): up to ~0.18 m of
-	# celebration hop on top, ~0.1 m of sway sideways.
-	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.15
-	var half_x: float = rink_width * 0.5 + outer_extent + horizontal_margin
-	var half_z: float = rink_length * 0.5 + outer_extent + horizontal_margin
-	var top_y: float = _top_tread_y() \
-			+ spectator_y_jitter + _BODY_SIZE.y + _HEAD_SIZE.y + 0.35
-	var bot_y: float = stands_base_y - spectator_y_jitter - 0.1
-	return AABB(
-			Vector3(-half_x, bot_y, -half_z),
-			Vector3(2.0 * half_x, top_y - bot_y, 2.0 * half_z))
+	for k: int in body_mms.size():
+		var body_mm: MultiMesh = body_mms[k]
+		var head_mm: MultiMesh = head_mms[k]
+		for i: int in body_mm.instance_count:
+			var picked: Array[Color] = _pick_spectator_colors(rng)
+			body_mm.set_instance_color(i, picked[0])
+			head_mm.set_instance_color(i, picked[1])
 
 
 # Body box, origin at the spectator's base. Lifted 2 mm off the tread so the
