@@ -2223,6 +2223,15 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			ctx.self_max_speed)
 	if lane <= 0.0:
 		return -INF
+	# CEILING PRUNE (exact): the candidate's score is dest_score × lane ×
+	# decay × safety − cost, with dest_score ≤ 1, safety ≤ 1, cost ≥ 0 — so
+	# lane × decay is a hard upper bound. When even that can't beat the
+	# caller's incumbent, the arrival-shot / safety / continuation / strip
+	# machinery (~300 µs) is already decided and skips wholesale. Candidates
+	# are ordered forward-first, so a strong early spot prunes the tail.
+	var decay: float = AIActionScoring.delay_discount(local_time)
+	if lane * decay <= best_so_far:
+		return -INF
 	# The candidate's shot is taken ARRIVING AT PACE, not from a dead stop —
 	# carry steps are skated at speed (the arrival brake deliberately skips
 	# carry waypoints), so the shot on arrival is the same moving-release
@@ -2305,7 +2314,6 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# cashable option is never a reason to keep carrying.
 	dest_score = maxf(dest_score, maxf(
 			0.0, _candidate_pass_option(ctx, candidate) - _pass_option_at_self))
-	var decay: float = AIActionScoring.delay_discount(local_time)
 	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
 	# apply_escape: a defender the carrier out-skates on this drive is being beaten
@@ -2328,9 +2336,21 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# argument as the threat-surface bound pruning.
 	if safety > 0.0 and dest_score < CONTINUATION_DISCOUNT \
 			and maxf(dest_score, CONTINUATION_DISCOUNT) * lane * decay * safety \
-					> best_so_far:
-		dest_score = maxf(dest_score, _carry_continuation_value(
-				ctx, candidate, arrive_vel, local_time, tracked_goalie))
+					> best_so_far \
+			and AIActionScoring.in_offensive_zone(self_pos, ctx.attacking_goal_pos):
+		# Tighten the ceiling with the SECOND leg's own decay before paying
+		# for the full read: t2 is one calibrated-ETA call (~1 µs) against a
+		# ~180 µs continuation, and a candidate arriving facing away from the
+		# slot carries a t2 decay that often decides the argmax by itself.
+		var slot_t2: float = AIActionScoring.time_to_arrive(
+				candidate, _slot_anchor(ctx.own_goal_dir), arrive_vel,
+				ctx.self_max_speed, ctx.self_max_accel)
+		var cont_ceiling: float = CONTINUATION_DISCOUNT \
+				* AIActionScoring.delay_discount(slot_t2)
+		if maxf(dest_score, cont_ceiling) * lane * decay * safety > best_so_far:
+			dest_score = maxf(dest_score, _carry_continuation_value(
+					ctx, candidate, arrive_vel, local_time, tracked_goalie,
+					slot_t2))
 	var benefit: float = dest_score * lane * decay * safety
 	var keep_prob: float = safety
 	# A fully safe route pays no turnover cost at all — skip localizing a
@@ -2515,7 +2535,7 @@ func _candidate_pass_option(ctx: RoleContext, candidate: Vector3) -> float:
 # whole-rink gradient already pulls net-ward.
 func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 		arrive_vel: Vector3, first_leg_s: float,
-		tracked_goalie: Vector3) -> float:
+		tracked_goalie: Vector3, t2_precomputed: float = -1.0) -> float:
 	if not AIActionScoring.in_offensive_zone(ctx.self_pos, ctx.attacking_goal_pos):
 		return 0.0
 	var slot: Vector3 = _slot_anchor(ctx.own_goal_dir)
@@ -2529,9 +2549,11 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 		return 0.0
 	# Momentum-aware second leg: arriving at the candidate moving AWAY from
 	# the slot pays the turn in honest time (and thus decay) — the rotation
-	# cost of a spot that faces the wrong way enters here.
-	var t2: float = AIActionScoring.time_to_arrive(
-			candidate, slot, arrive_vel, ctx.self_max_speed, ctx.self_max_accel)
+	# cost of a spot that faces the wrong way enters here. The caller's gate
+	# may have already solved it (t2_precomputed — the ceiling check).
+	var t2: float = t2_precomputed if t2_precomputed >= 0.0 \
+			else AIActionScoring.time_to_arrive(
+					candidate, slot, arrive_vel, ctx.self_max_speed, ctx.self_max_accel)
 	# Second-leg reach safety: defenders start the leg where the first leg's
 	# time has taken them — including the RE-SET (see
 	# _project_opponents_collapsing): the first leg's dwell is time the

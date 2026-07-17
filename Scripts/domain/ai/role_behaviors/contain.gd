@@ -331,8 +331,13 @@ static func _lane_fan_target(
 				continue
 			if c.distance_to(our_net) > r_lane + 0.01:
 				continue
+			# score = −option, so the incumbent best_score gives an exact
+			# abort ceiling: a candidate whose live option already exceeds
+			# −best_score cannot win the argmin — skip its remaining
+			# receiver evaluations (see carrier_live_option's abort_above).
 			var score: float = -AIRoleHelpers.carrier_live_option(
-					c, carrier_pos, our_net, our_goalie_pos, teammates, receivers)
+					c, carrier_pos, our_net, our_goalie_pos, teammates, receivers,
+					-best_score)
 			if score > best_score:
 				best_score = score
 				best_pos = c

@@ -438,13 +438,19 @@ static func carrier_best_option(
 # the one-timer feed near zero, hiding the very threat the fan exists to
 # take away. Raw xG also ties at ~0 far from the net, so the fan's hold
 # margin keeps the classic retreat line out there — the correct far-out read.
+# `abort_above`: exact argmin pruning for CONTAIN's lane fan — the caller
+# MINIMIZES this value across candidates, so once the running best exceeds the
+# incumbent's, the exact value cannot matter and the remaining (expensive,
+# score_pass-heavy) receiver evaluations are skipped. Default INF evaluates
+# everything.
 static func carrier_live_option(
 		candidate: Vector3,
 		carrier_pos: Vector3,
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
-		opp_teammates: Array[Vector3]) -> float:
+		opp_teammates: Array[Vector3],
+		abort_above: float = INF) -> float:
 	# Defenders = our team + me at the candidate. Append-and-restore the caller's
 	# array in place instead of duplicating it — called once per candidate in
 	# CONTAIN's lane fan (up to ~13×/decide), so a fresh Array per call was pure
@@ -455,6 +461,8 @@ static func carrier_live_option(
 			carrier_pos, our_net, our_goalie_pos,
 			GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 	for receiver: Vector3 in opp_teammates:
+		if best >= abort_above:
+			break
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, receiver)
 		var flight_s: float = carrier_pos.distance_to(receiver) / maxf(pass_speed, 1.0)
 		var pred_goalie: Vector3 = AIActionScoring.predict_goalie_pos(

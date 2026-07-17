@@ -2882,11 +2882,16 @@ static func board_gap_m(point: Vector3) -> float:
 # UNDER-reaching close-in. Known optimistic spots, same as time_to_arrive's:
 # short perpendicular cuts at speed (the steering miss-loop). The safety maps
 # below carry the residual as a measured probability band.
+# `abort_below`: exact argmax pruning for sample-scanning callers (the seam
+# search) — once the running worst drops below it, the exact value cannot
+# matter to the caller, so the defender loop stops early. Default −INF scans
+# every defender (every value-consuming caller).
 static func reach_clearance(
 		puck_point: Vector3, time: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
 		opponent_caps: Array = [], maneuver_time: float = -1.0,
-		carry_dir: Vector2 = Vector2.ZERO, carry_speed: float = 0.0) -> float:
+		carry_dir: Vector2 = Vector2.ZERO, carry_speed: float = 0.0,
+		abort_below: float = -INF) -> float:
 	var n: int = opponents.size()
 	if n == 0 or opponent_vels.size() != n:
 		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
@@ -2930,6 +2935,8 @@ static func reach_clearance(
 				opponent_vels[i].x, opponent_vels[i].z, accel, stick, vmax)
 		if clear < worst:
 			worst = clear
+			if worst < abort_below:
+				return worst
 	return worst
 
 
@@ -3437,15 +3444,31 @@ static func _best_clear_point(proj_x: float, proj_z: float, env: float,
 			var p := Vector3(proj_x + cos(ang) * radius, 0.0, proj_z + sin(ang) * radius)
 			if board_gap_m(p) < 0.0:
 				continue
-			var c: float = reach_clearance(p, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
+			# Exact argmax pruning, two layers. (1) Directed with a safe sample
+			# in hand: the fallback argmax is moot (the safe winner returns),
+			# so a sample that can't beat the best PROGRESS never needs its
+			# clearance at all — skip the defender scan wholesale. (2) A
+			# sample only matters if it beats the best clearance so far, or
+			# (directed) clears the safe floor — once its running worst drops
+			# below both, the exact value is irrelevant and the defender scan
+			# aborts early (abort_below).
+			var progress: float = 0.0
+			if directed:
+				progress = Vector2(objective.x - p.x, objective.z - p.z).length()
+				if best_safe.is_finite() and progress >= best_safe_progress:
+					continue
+			var abort: float = best_clear
+			if directed:
+				abort = minf(abort, EVADE_SAFE_CLEAR_MIN_M)
+			var c: float = reach_clearance(p, EVADE_HORIZON_S, opponents,
+					opponent_vels, opponent_caps, -1.0, Vector2.ZERO, 0.0, abort)
 			if c > best_clear:
 				best_clear = c
 				best = p
-			if directed and c >= EVADE_SAFE_CLEAR_MIN_M:
-				var progress: float = Vector2(objective.x - p.x, objective.z - p.z).length()
-				if progress < best_safe_progress:
-					best_safe_progress = progress
-					best_safe = p
+			if directed and c >= EVADE_SAFE_CLEAR_MIN_M \
+					and progress < best_safe_progress:
+				best_safe_progress = progress
+				best_safe = p
 	if directed and best_safe.is_finite():
 		return best_safe
 	return best
