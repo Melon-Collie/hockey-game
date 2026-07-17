@@ -25,11 +25,15 @@ extends RefCounted
 # and the post-engagement blade-reset cooldown scaling.
 var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
-# All-direction acceleration / thrust (Agility). The reachable-set tests ask
-# "how far off its momentum line can this skater pull a stick?" — that ceiling is
-# this value. Default mirrors SkaterController.thrust's league default (it read
-# 12.0 for a while after the thrust retune to 10.5 — a silently stale baseline
-# for every caps-less ETA).
+# Forward thrust (Speed-scaled since the engine/handling split — Speed owns
+# straight-line acceleration, Agility the off-axis crossover/backpedal thrust).
+# The reachable-set tests ask "how far off its momentum line can this skater
+# pull a stick?" — that ceiling is this value, which slightly flatters
+# low-Agility builds on lateral pulls (their real off-axis thrust sits below
+# this behind the crossover multiplier); an accepted approximation until the
+# caps model grows a cut-accel axis. Default mirrors SkaterController.thrust's
+# league default (it read 12.0 for a while after the thrust retune to 10.5 — a
+# silently stale baseline for every caps-less ETA).
 var max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 
 # Hand-to-toe blade span = stick + blade (Size, via stick length). The state

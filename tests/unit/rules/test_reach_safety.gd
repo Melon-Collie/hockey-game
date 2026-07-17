@@ -31,7 +31,7 @@ func _caps(max_accel: float, blade_span: float) -> AISkaterCaps:
 
 
 func test_bigger_more_agile_defender_covers_more() -> void:
-	# Same defender geometry, but its real build sets its reach: Agility (max_accel)
+	# Same defender geometry, but its real build sets its reach: thrust (max_accel)
 	# is how far it can lunge off its line, Size (blade_span) how far its stick
 	# touches. A big, agile defender reaches further → LESS clearance for the same
 	# puck point; a small, sluggish one reaches less → more room. Empty caps sits

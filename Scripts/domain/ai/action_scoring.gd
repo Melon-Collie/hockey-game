@@ -665,7 +665,7 @@ const SKATER_BRAKE_TIME_S: float = 0.3
 # eventually."
 const MIN_TRAVEL_SPEED_M_S: float = 1.0
 
-# League-default all-direction thrust (Agility-scaled per skater) — the redirect
+# League-default thrust (Speed-scaled per skater) — the redirect
 # authority a caps-less time_to_arrive caller assumes for the cross-momentum shed.
 # Per-bot callers pass the skater's REAL max_accel (AISkaterCaps.max_accel) instead,
 # so a nimble build sheds sideways momentum faster than a heavy one. Mirrors
@@ -2524,7 +2524,7 @@ static func reach_clearance(
 		maneuver_time = time
 	# maneuver = t_factor × accel: how far a defender redirects its stick off its
 	# momentum line, reaction-gated. Per-opponent when caps are supplied —
-	# a defender's Agility (max_accel) sets how far it can lunge, its Size
+	# a defender's thrust (Speed-scaled max_accel) sets how far it can lunge, its Size
 	# (blade_span) how far its stick touches. Empty caps → league constants for all
 	# (every non-attribute caller), reproducing the prior single-reach behaviour.
 	# ESCAPE-SPEED gate (opt-in, `carry_speed > 0`): when the puck is being CARRIED
@@ -2847,8 +2847,8 @@ static func prefers_brake_check(
 # reaction-gated AGAIN before he can redirect. GO iff the cut-side point is
 # covered NOW (nothing to cut into — otherwise the plain seam owns it) but
 # clear of everyone AFTER the bite by the blade-of-air standard. Grounded and
-# self-calibrating: an agile defender bites harder — you CAN deke the good
-# defender — while a sluggish one barely moves (but him you simply beat).
+# self-calibrating: a quick-accelerating defender bites harder — you CAN deke
+# the good defender — while a sluggish one barely moves (but him you simply beat).
 #
 # Durations are the shared contract between this eval and the state machine's
 # committed execution (gesture geometry, like the wind-up spans): the fake
@@ -3060,12 +3060,12 @@ static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float
 # role behaviors needing a momentum-aware ETA without inventing constants (e.g.,
 # SUPPORT's foot-race-home exposure check uses this for the threat opp's ETA home).
 #
-# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
-# thrust (Agility-scaled) — both default to league references so cross-player
+# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its thrust
+# (Speed-scaled) — both default to league references so cross-player
 # callers (opponent / teammate ETA, the loose-puck election that must stay
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
-# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build sheds
-# sideways momentum faster, so it reaches an off-axis cut sooner).
+# arrival passes its attribute-scaled top speed AND max_accel (a stronger engine
+# sheds sideways momentum faster, so it reaches an off-axis cut sooner).
 # ── Calibrated phase model ─────────────────────────────────────────────────────
 # The measured controller (SkaterMovementRules at 120 Hz driven by the real
 # steering — the velocity-matched seek plus the pivot brake, see
@@ -3108,11 +3108,11 @@ const REVERSAL_BRAKE_DECEL_M_S2: float = 10.5
 const RAMP_EFFICIENCY: float = 0.84
 
 
-# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
-# thrust (Agility-scaled) — both default to league references so cross-player
+# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its thrust
+# (Speed-scaled) — both default to league references so cross-player
 # callers (opponent / teammate ETA, the loose-puck election that must stay
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
-# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build
+# arrival passes its attribute-scaled top speed AND max_accel (a stronger engine
 # redirects and ramps faster, so it reaches an off-axis cut sooner).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,

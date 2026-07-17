@@ -72,6 +72,30 @@ func test_intermediate_steps_monotonic() -> void:
 		prev = a.speed_mult()
 
 
+func test_speed_accel_and_agility_cut_endpoints() -> void:
+	# Engine/handling split: Speed's second lever is forward thrust (±10% — the
+	# spread thrust carried back when Agility owned it); Agility's replacement is
+	# the off-axis (crossover/backpedal) cut acceleration, same ±10%.
+	var lo := _uniform(PlayerAttributes.LEVEL_MIN)
+	var med := PlayerAttributes.all_medium()
+	var hi := _uniform(PlayerAttributes.LEVEL_MAX)
+	assert_almost_eq(lo.speed_accel_mult(), 0.90, 0.0001)
+	assert_eq(med.speed_accel_mult(), 1.0)
+	assert_almost_eq(hi.speed_accel_mult(), 1.10, 0.0001)
+	assert_almost_eq(lo.agility_cut_mult(), 0.90, 0.0001)
+	assert_eq(med.agility_cut_mult(), 1.0)
+	assert_almost_eq(hi.agility_cut_mult(), 1.10, 0.0001)
+
+
+func test_speed_accel_keyed_on_speed_cut_keyed_on_agility() -> void:
+	# speed_accel reads the SPEED level, agility_cut the AGILITY level — the
+	# engine/handling split's wiring, not just its widths.
+	var jet := PlayerAttributes.new(
+			PlayerAttributes.LEVEL_MAX, PlayerAttributes.LEVEL_MIN, 3, 3, 3, 3)
+	assert_gt(jet.speed_accel_mult(), 1.0)
+	assert_lt(jet.agility_cut_mult(), 1.0)
+
+
 func test_min_multipliers_below_one() -> void:
 	var a := _uniform(PlayerAttributes.LEVEL_MIN)
 	assert_lt(a.multiplier_for(ATTR_SPEED),    1.0)

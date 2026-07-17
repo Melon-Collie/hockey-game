@@ -34,7 +34,7 @@ const MIN_SPEED_FOR_PROJECTION: float = 0.5
 # Lead a pass to a moving receiver. `launch_speed` is the puck's RELEASE speed;
 # the lead accounts for it bleeding off to ice friction in flight (see
 # effective_flight_speed). `receiver_caps` is the receiver's real attribute-scaled
-# build (AISkaterCaps) — its Agility (max_accel) caps how hard it can keep
+# build (AISkaterCaps) — its thrust (Speed-scaled max_accel) caps how hard it can keep
 # accelerating into the lead, and its Speed (max_speed) caps how far ahead it can
 # actually get. Null falls back to the league baseline (unwired / unit tests), so
 # the lead is unchanged until a real receiver build is passed. Returns
@@ -50,10 +50,10 @@ static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
 	if blade_world == Vector3.ZERO:
 		blade_world = receiver.position
 	var a: Vector3 = along_velocity_component(accel, receiver.velocity)
-	# A receiver can't out-accelerate its own thrust (Agility). Observed accel is
-	# low-passed and can spike above what the body can pull, which over-leads a
-	# low-Agility receiver into ice it can't reach. Cap the along-travel accel at
-	# the receiver's real max_accel.
+	# A receiver can't out-accelerate its own thrust (Speed-scaled). Observed
+	# accel is low-passed and can spike above what the body can pull, which
+	# over-leads a low-thrust receiver into ice it can't reach. Cap the
+	# along-travel accel at the receiver's real max_accel.
 	var max_accel: float = receiver_caps.max_accel if receiver_caps != null \
 			else GameRules.DEFAULT_SKATER_THRUST_M_S2
 	if a.length() > max_accel:

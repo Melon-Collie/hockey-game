@@ -101,3 +101,47 @@ func test_backward_thrust_scaled_down() -> void:
 		Vector3.ZERO, Vector2(0, 1), 0.0, false, false, 0.1, cfg)
 	# Forward thrust full; backward thrust scaled by backward_thrust_multiplier (0.7)
 	assert_gt(forward.length(), backward.length(), "backward thrust should be weaker than forward")
+
+# Mirror SkaterController.apply_attributes' engine/handling composition: thrust
+# scales with Speed (the forward engine); the off-axis multipliers scale with
+# Agility divided by Speed's thrust scaling, so cut acceleration reads ONLY
+# Agility. Base values arbitrary — the guarantee is scale-invariant.
+func _attr_cfg(attrs: PlayerAttributes) -> SkaterMovementRules.MovementConfig:
+	var cfg := _default_cfg()
+	cfg.thrust = 20.0 * attrs.speed_accel_mult()
+	var m_cut: float = attrs.agility_cut_mult() / attrs.speed_accel_mult()
+	cfg.crossover_thrust_multiplier = 0.85 * m_cut
+	cfg.backward_thrust_multiplier = 0.7 * m_cut
+	return cfg
+
+func test_cut_acceleration_reads_agility_never_speed() -> void:
+	# The engine/handling guarantee: a jet (Speed 5 / Agility 1) launches harder
+	# on the straight, but the agile skater (Speed 1 / Agility 5) out-accelerates
+	# it on the perpendicular cut — and cut acceleration is IDENTICAL across all
+	# Speed levels at fixed Agility (Speed's scaling divides back out), so a
+	# faster skater is never the more elusive one.
+	var jet := PlayerAttributes.new(5, 1, 3, 3, 3, 3)
+	var agile := PlayerAttributes.new(1, 5, 3, 3, 3, 3)
+	# Forward launch (input along facing, -Z at rotation 0): the jet wins.
+	var fwd_jet: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3.ZERO, Vector2(0, -1), 0.0, false, false, 0.1, _attr_cfg(jet))
+	var fwd_agile: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3.ZERO, Vector2(0, -1), 0.0, false, false, 0.1, _attr_cfg(agile))
+	assert_gt(fwd_jet.length(), fwd_agile.length(), "Speed owns the straight-line launch")
+	# Perpendicular cut (input at 90° to facing): the agile skater wins.
+	var cut_jet: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3.ZERO, Vector2(1, 0), 0.0, false, false, 0.1, _attr_cfg(jet))
+	var cut_agile: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3.ZERO, Vector2(1, 0), 0.0, false, false, 0.1, _attr_cfg(agile))
+	assert_gt(cut_agile.length(), cut_jet.length(), "Agility owns the cut")
+	# And Speed contributes NOTHING to the cut: any Speed level at the same
+	# Agility yields an identical perpendicular launch.
+	var reference: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3.ZERO, Vector2(1, 0), 0.0, false, false, 0.1,
+		_attr_cfg(PlayerAttributes.new(3, 4, 3, 3, 3, 3)))
+	for speed_level: int in range(PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX + 1):
+		var a := PlayerAttributes.new(speed_level, 4, 3, 3, 3, 3)
+		var cut: Vector3 = SkaterMovementRules.apply_movement(
+			Vector3.ZERO, Vector2(1, 0), 0.0, false, false, 0.1, _attr_cfg(a))
+		assert_almost_eq(cut.length(), reference.length(), 0.0001,
+			"cut acceleration must be independent of Speed (level %d)" % speed_level)

@@ -944,6 +944,8 @@ var _base_skater_collision_height:      float = 0.0
 var _base_backhand_power_coefficient:   float = 0.0
 var _base_sprint_drain_per_sec:         float = 0.0
 var _base_stamina_regen_per_sec:        float = 0.0
+var _base_crossover_thrust_multiplier:  float = 0.0
+var _base_backward_thrust_multiplier:   float = 0.0
 var _base_hand_rest_y:                  float = 0.0
 var _base_hand_y_max:                   float = 0.0
 
@@ -1005,22 +1007,31 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	var m_agility: float = attrs.agility_mult()
 	var m_size:    float = attrs.size_mult()
 	var m_height:  float = attrs.height_mult()
-	# Speed owns top-end velocity (and through it sprint payoff — sprint
-	# multiplies max_speed). Agility owns acceleration: thrust, plus the
-	# turn/brake/edge handling below. Splitting them makes Speed the
-	# straight-line stat and Agility the quickness/control stat.
+	# Speed owns the ENGINE: top-end velocity (and through it sprint payoff —
+	# sprint multiplies max_speed) plus forward thrust (straight-line
+	# acceleration). Agility owns the HANDLING: turn rate, brake, edge glide,
+	# and the off-axis thrust below. "Fast wins the race, agile wins the cut."
 	max_speed = _base_max_speed * m_speed
-	thrust    = _base_thrust    * m_agility
+	thrust    = _base_thrust    * attrs.speed_accel_mult()
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
 	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
 	# friction_drag is velocity-proportional drag — scaling it inversely
 	# with Agility gives agile players the "good edges" feel: less momentum
 	# leaks through the blades during a cut, so they carry more speed out
-	# of turns. Lateral / backward thrust multipliers are universal — every
-	# skater shares the same forward > lateral > backward shape; what makes
-	# Slick agile is how cleanly they transition between those directions.
+	# of turns.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
+	# Off-axis (crossover / backpedal) thrust is Agility's change-of-direction
+	# lever. The movement model composes it as thrust × multiplier, and thrust is
+	# now Speed-scaled — so divide Speed's scaling back out, leaving off-axis
+	# acceleration a PURE Agility quantity: a jet accelerates on the straight but
+	# cuts at its Agility, never at its Speed. (At the asymmetric extreme —
+	# Speed 1 / Agility 5 — the composed crossover multiplier tops 1.0: quicker
+	# side-to-side than in a straight line, the shifty small-engine archetype.
+	# Intentional.)
+	var m_cut: float = attrs.agility_cut_mult() / attrs.speed_accel_mult()
+	crossover_thrust_multiplier = _base_crossover_thrust_multiplier * m_cut
+	backward_thrust_multiplier  = _base_backward_thrust_multiplier  * m_cut
 	# Hands owns the puck game: blade speed (how fast the blade chases the cursor
 	# through the dangle arc and draws back to absorb fast passes), carry speed
 	# (how little the puck slows you), and the backhand finish below.
@@ -1136,6 +1147,8 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 func _capture_attribute_bases() -> void:
 	_base_thrust                       = thrust
 	_base_max_speed                    = max_speed
+	_base_crossover_thrust_multiplier  = crossover_thrust_multiplier
+	_base_backward_thrust_multiplier   = backward_thrust_multiplier
 	_base_facing_drag_speed            = facing_drag_speed
 	_base_facing_drag_speed_braking    = facing_drag_speed_braking
 	_base_brake_multiplier             = brake_multiplier

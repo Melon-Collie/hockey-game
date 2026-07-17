@@ -9,10 +9,13 @@ extends RefCounted
 # all-medium roster plays and looks identical to the shipped @export defaults.
 #
 # What each attribute drives (headline effects — see SkaterController.apply_attributes):
-#   - Speed    → max_speed (top end). Sprint multiplies max_speed, so a faster
-#                skater also gets a proportionally faster sprint for free.
-#   - Agility  → thrust (all-direction acceleration) + facing turn rate + brake
-#                + edge glide (friction_drag inverted).
+#   - Speed    → the ENGINE: max_speed (top end) + forward thrust (straight-line
+#                acceleration). Sprint multiplies max_speed, so a faster skater
+#                also gets a proportionally faster sprint for free.
+#   - Agility  → the HANDLING: facing turn rate + brake + edge glide
+#                (friction_drag inverted) + off-axis thrust (crossover/backpedal
+#                acceleration — the cut). A fast skater wins the race; an agile
+#                one wins the change of direction.
 #   - Hands    → max_blade_speed (the dangle/pass-absorb "hands" lever) +
 #                puck-carry speed (how little the puck slows you while carrying)
 #                + backhand shot power (un-penalizes the backhand — the in-tight
@@ -34,8 +37,8 @@ extends RefCounted
 #                pass speed, so Shot is "what a charge buys you and how fast you
 #                can charge it," not snap power. The sniper lever.
 #
-# Two pairs intentionally co-own one outcome on DIFFERENT axes, so they compose
-# rather than double-count:
+# Three pairs intentionally co-own one outcome on DIFFERENT axes, so they
+# compose rather than double-count:
 #   • Body checks: Size via mass (weight in the ratio), Physical via the
 #     transfer/brace coefficients. "Big = hard to move, strong = hard to put
 #     down." Scaling BOTH weight and transfer by one stat would double-count it;
@@ -43,6 +46,13 @@ extends RefCounted
 #   • Offense: Shot is raw power + release (the sniper), Hands is puck control +
 #     the backhand finish (the dangler). A backhand shot reads both — base power
 #     (Shot) × backhand coefficient (Hands).
+#   • Skating: Speed via the straight-line axis (top speed + forward thrust),
+#     Agility via the change-of-direction axis (off-axis thrust, turn rate,
+#     brake, glide). "Fast = wins the race, agile = wins the cut." Because the
+#     movement model composes off-axis acceleration as thrust × crossover/
+#     backward multiplier, SkaterController.apply_attributes divides Speed's
+#     forward scaling back OUT of those multipliers — elusiveness is PURELY
+#     Agility, so a jet is never shiftier than a skater with better edges.
 #
 # Scale: the 5-step tables keep the OLD 3-step endpoints (old level 3 == new
 # level 5, old level 1 == new level 1) and interpolate the two new in-between
@@ -90,9 +100,12 @@ const BUDGET: int = 18
 # All multipliers indexed by (level - LEVEL_MIN): [L1, L2, MEDIUM, L4, L5].
 
 # Canonical gameplay (one per attribute) — the "headline" effect each attribute
-# drives. (Hands' canonical headline is blade speed; Physical's is check force;
-# Shot's is the charged-shot power ceiling — the quick/uncharged snap stays
-# baseline because it doubles as pass speed.)
+# drives. (Speed's canonical headline is top speed — forward thrust rides the
+# specialized _SPEED_ACCEL_MULTS below; Agility's is turn rate + brake — its
+# thrust contribution moved to the off-axis _AGILITY_CUT_MULTS when Speed took
+# over the forward engine; Hands' canonical headline is blade speed; Physical's
+# is check force; Shot's is the charged-shot power ceiling — the quick/uncharged
+# snap stays baseline because it doubles as pass speed.)
 # PHYSICAL_CHECK is the WIDEST canonical spread (+/-36%) on purpose: Physical is
 # the dedicated "how hard you DELIVER a hit" lever, so it has to read clearly at
 # both ends. A maxed enforcer hits like a freight train (L5 1.36, and a
@@ -117,6 +130,16 @@ const _PHYSICAL_CHECK_MULTS: Array[float] = [0.64, 0.82,  1.00, 1.18,  1.36]
 const _SHOT_POWER_MULTS:     Array[float] = [0.83, 0.91,  1.00, 1.09,  1.18]
 
 # Specialized gameplay — extra effects layered on top of the canonical ones.
+# SPEED_ACCEL: forward thrust — the straight-line engine's second lever
+#   (canonical is top speed). Inherits the ±10% spread thrust carried back when
+#   Agility owned it, wider than the ±7% top-speed table because acceleration
+#   races converge to the cap — an accel edge decides the first strides, not the
+#   whole chase.
+# AGILITY_CUT: off-axis (crossover / backpedal) thrust — Agility's change-of-
+#   direction acceleration. Applied to the crossover/backward thrust multipliers
+#   with Speed's forward scaling divided back out (see SkaterController.
+#   apply_attributes), so cut quickness reads ONLY this table: a jet cuts at its
+#   Agility, never at its Speed.
 # HEIGHT: every "proportional to actual body height" measurement (arms, the
 #   mesh skeleton scaled about the ice plane — roots, leg pivot chain, part
 #   positions, mesh Y-scale — hand heights, and reach/ROM derived from arm
@@ -160,6 +183,8 @@ const _SHOT_POWER_MULTS:     Array[float] = [0.83, 0.91,  1.00, 1.09,  1.18]
 #   the 0.5 sprint-unlock) vs ~3 s at L5. High barely beats medium; the spread is
 #   all downside for neglecting the stat. Kept separate from DRAIN so recovery can
 #   be brutal without also shortening the sprint itself.
+const _SPEED_ACCEL_MULTS:     Array[float] = [0.90,  0.95,  1.00, 1.05,  1.10]
+const _AGILITY_CUT_MULTS:     Array[float] = [0.90,  0.95,  1.00, 1.05,  1.10]
 const _HEIGHT_MULTS:          Array[float] = [0.957, 1.000, 1.029, 1.071, 1.100]
 const _STICK_LEN_MULTS:       Array[float] = [0.972, 1.000, 1.019, 1.046, 1.065]
 const _SIZE_WEIGHT_MULTS:     Array[float] = [0.82,  0.91,  1.00, 1.09,  1.18]
@@ -310,6 +335,8 @@ func physical_check_mult() -> float: return _lookup(_PHYSICAL_CHECK_MULTS, physi
 func shot_power_mult()  -> float: return _lookup(_SHOT_POWER_MULTS,     shot)
 
 # Specialized gameplay
+func speed_accel_mult()    -> float: return _lookup(_SPEED_ACCEL_MULTS,    speed)
+func agility_cut_mult()    -> float: return _lookup(_AGILITY_CUT_MULTS,    agility)
 func height_mult()         -> float: return _lookup(_HEIGHT_MULTS,         size)
 func stick_len_mult()      -> float: return _lookup(_STICK_LEN_MULTS,      size)
 func size_weight_mult()    -> float: return _lookup(_SIZE_WEIGHT_MULTS,    size)
