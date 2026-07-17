@@ -215,6 +215,54 @@ func test_trans_od_contain_is_a_defenseman() -> void:
 	assert_eq(marks, 4, "the other four all mark a man")
 
 
+func test_trans_od_contain_cross_fills_when_both_d_are_caught() -> void:
+	# Forecheck turnover: both D are caught at the opponent blue line while
+	# the carrier breaks out through the NZ at full flight. Neither D can
+	# beat the carrier home (raw race + set margin), so the D-scoping must
+	# yield — CONTAIN cross-fills to the deepest backchecker (the C), and
+	# the caught D fall to MARK duty on the trailers. Regression for the
+	# "everyone marked a man but nobody picked up the carrier" bug: the
+	# threat partition excludes the carrier because CONTAIN owns him, so a
+	# hopeless CONTAIN means the rush walks in unopposed.
+	#
+	# Kinematics (calibrated time_to_arrive, league caps): carrier home in
+	# ~3.0 s → deadline ~2.1 s; the caught D need ~4.4 s (infeasible), the
+	# backchecking C ~2.9 s — soonest of anyone, so the cross-fill pass
+	# hands him the pickup.
+	var skaters: Array = [
+		[1, 0, Vector3(0, 0, 5)],        # C backchecking, deepest man back
+		[2, 0, Vector3(-6, 0, -10)],     # LW deep on the dead forecheck
+		[3, 0, Vector3(6, 0, -10)],      # RW deep
+		[4, 0, Vector3(-5, 0, -7.8)],    # LD caught at their blue line
+		[5, 0, Vector3(5, 0, -7.8)],     # RD caught at their blue line
+		[10, 1, Vector3(0, 0, 0), Vector3(0, 0, 8.0)],  # carrier at center, flying at our net
+	]
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
+	assert_eq(a[1], AIRoleSlots.Slot.CONTAIN,
+			"the feasible backchecker picks up the carrier, not a caught D")
+	assert_eq(a[4], AIRoleSlots.Slot.MARK, "caught LD backchecks a trailer")
+	assert_eq(a[5], AIRoleSlots.Slot.MARK, "caught RD backchecks a trailer")
+
+
+func test_trans_od_contain_stays_d_scoped_when_a_d_can_beat_the_rush_home() -> void:
+	# Same rush, but the valve D is home at center ice: he beats the carrier
+	# back with the set margin in hand, so the D group keeps the gap job even
+	# though the backchecking C is nearer our net. The deadline is a
+	# feasibility floor, not a proximity contest — position identity still
+	# decides whenever the D can physically do the job.
+	var skaters: Array = [
+		[1, 0, Vector3(0, 0, 14)],       # C even deeper than the valve D
+		[2, 0, Vector3(-6, 0, -10)],
+		[3, 0, Vector3(6, 0, -10)],
+		[4, 0, Vector3(-2, 0, 10)],      # LD home — feasible gap defender
+		[5, 0, Vector3(5, 0, -7.8)],     # RD caught at their line
+		[10, 1, Vector3(0, 0, -6), Vector3(0, 0, 7.0)],  # carrier entering the NZ
+	]
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
+	assert_eq(a[4], AIRoleSlots.Slot.CONTAIN,
+			"a feasible D keeps CONTAIN over a deeper forward")
+
+
 # ── NEUTRAL: global chase, D shape behind ────────────────────────────────────
 
 func test_neutral_chase_is_global_but_shape_is_grouped() -> void:

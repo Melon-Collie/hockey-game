@@ -74,6 +74,11 @@ class SlotSpec:
 	var target: Vector3     # soonest-to-arrive race target
 	var home_slot: int      # lobby team_slot whose holder gets POSITION_BIAS_S
 	                        # (-1 = no identity bias)
+	# Feasibility deadline (s): a pass-1 candidate whose RAW arrival time at
+	# the race target exceeds this is skipped, deferring the slot to the
+	# cross-fill pass. INF = no deadline (every other slot). Physical filter,
+	# so hysteresis/home-bias adjustments don't enter it.
+	var deadline_s: float = INF
 
 	static func make(p_slot: int, p_group: int, p_target: Vector3,
 			p_home_slot: int = -1) -> SlotSpec:
@@ -143,12 +148,12 @@ static func assign(
 		return result
 
 	var assigned: Dictionary = {}
+	var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
 
 	# Fixed CARRIER for the possession states, exactly like 3v3.
 	if state == AIPossessionState.State.OZONE \
 			or state == AIPossessionState.State.TRANS_DO \
 			or state == AIPossessionState.State.BREAKOUT:
-		var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
 		if carrier_pid != -1 and team_id_by_peer.get(carrier_pid, -1) == team_id:
 			result[carrier_pid] = AIRoleSlots.Slot.CARRIER
 			assigned[carrier_pid] = true
@@ -156,6 +161,33 @@ static func assign(
 	var puck_pos: Vector3 = snapshot.puck_state.position if snapshot.puck_state else Vector3.ZERO
 	var specs: Array[SlotSpec] = _specs_for_state(
 			state, own_goal_z, strong_x, puck_pos)
+
+	# TRANS_OD gap feasibility: CONTAIN's D-scoping only holds while a
+	# defenseman can actually do the job — beat the carrier home with enough
+	# time in hand to arrive SET (the brake margin: the seconds a skater at
+	# league top speed needs to shed it, the same set-arrival quantity the
+	# race-home primitives use). A D who is caught up-ice — pinched point,
+	# beaten forecheck line — can chase the rush forever without ever getting
+	# goal-side, and handing him CONTAIN anyway is how "everyone marked a man
+	# but nobody picked up the carrier" happened: the threat partition excludes
+	# the carrier because CONTAIN nominally owns him. With the deadline, an
+	# infeasible D group defers CONTAIN to the cross-fill pass, where the
+	# deepest feasible body — the classic backchecking third-man-high — picks
+	# the rush up instead, and the caught D fall to MARK duty on the trailers.
+	if state == AIPossessionState.State.TRANS_OD and carrier_pid != -1 \
+			and team_id_by_peer.get(carrier_pid, -1) != team_id \
+			and snapshot.skater_states.has(carrier_pid):
+		var cs: SkaterNetworkState = snapshot.skater_states[carrier_pid]
+		var c_caps: AISkaterCaps = caps_by_peer.get(carrier_pid)
+		var c_speed: float = c_caps.max_speed if c_caps != null \
+				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var t_carrier: float = AIActionScoring.time_to_arrive(
+				cs.position, Vector3(0.0, 0.0, own_goal_z), cs.velocity, c_speed)
+		var set_margin_s: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S \
+				/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+		for spec: SlotSpec in specs:
+			if spec.slot == AIRoleSlots.Slot.CONTAIN:
+				spec.deadline_s = maxf(t_carrier - set_margin_s, 0.0)
 
 	# Pass 1 — group-scoped elections in priority order. A slot whose group
 	# has no free peer left is deferred to the cross-fill pass.
@@ -441,6 +473,13 @@ static func _pick_soonest(
 				else AIActionScoring.SKATER_REF_SPEED_M_S
 		var t: float = AIActionScoring.time_to_arrive(
 				s.position, spec.target, s.velocity, speed)
+		# Feasibility deadline (pass 1 only): a candidate who can't make the
+		# race target in time is no candidate — defer to cross-fill rather
+		# than electing a body that can never do the job. Raw kinematic t;
+		# the stickiness/identity adjustments below are preferences, not
+		# physics, so they don't buy time against the deadline.
+		if group_scoped and t > spec.deadline_s:
+			continue
 		if _hysteresis_class(prev_assignments.get(pid, AIRoleSlots.Slot.NONE)) \
 				!= _hysteresis_class(spec.slot):
 			t += HYSTERESIS_PENALTY_S
