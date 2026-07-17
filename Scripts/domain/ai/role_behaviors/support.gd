@@ -192,19 +192,30 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 	var result: Array[Vector3] = []
 	result.append(ctx.self_pos)
 	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
+		# NAMED third-man-high stations — the OZ zone-keeper geography, not a
+		# blind ring around one center (same conversion as the finisher's
+		# one-timer stations). Each is a structural cycle spot; the scoring
+		# (pass value × recoverability) arbitrates per the live coverage:
 		var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
-		var high_post := Vector3(
-				carrier_pos.x * 0.5,
-				0.0,
-				blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M)
-		for angle: float in AIRoleHelpers.POLAR_ANGLES:
-			result.append(Vector3(
-					high_post.x + SEARCH_RADIUS_M * cos(angle),
-					0.0,
-					high_post.z + SEARCH_RADIUS_M * sin(angle)))
+		var post_z: float = blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M
+		var wall_sign: float = signf(carrier_pos.x) if absf(carrier_pos.x) > 0.1 \
+				else ctx.strong_x
+		# HIGH POST — top of the zone shaded to the carrier's side: the
+		# point outlet / zone keeper / first man back.
+		var high_post := Vector3(carrier_pos.x * 0.5, 0.0, post_z)
 		result.append(high_post)
-		# Half-wall cycle option between the high post and the carrier.
+		# HALF-WALL BUMP — the classic cycle bump spot between the high post
+		# and the carrier's wall.
 		result.append((high_post + carrier_pos) * 0.5)
+		# CENTER POINT — the middle of the line: the cross-ice outlet when
+		# the strong-side lane is walled off.
+		result.append(Vector3(0.0, 0.0, post_z))
+		# WEAK FLANK — the far dot lane at the top of the circles: the
+		# cross-seam outlet that flips the point of attack.
+		result.append(Vector3(
+				-wall_sign * GameRules.END_ZONE_FACEOFF_DOT_X, 0.0,
+				ctx.attacking_goal_pos.z + ctx.own_goal_dir
+						* (GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z + 3.0)))
 		return result
 	result.append(carrier_pos)
 	for angle: float in AIRoleHelpers.POLAR_ANGLES:

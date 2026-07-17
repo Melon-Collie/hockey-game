@@ -230,6 +230,36 @@ func test_exposure_lower_for_a_faster_defender() -> void:
 
 # ── Third man HIGH in the offensive zone ─────────────────────────────────────
 
+func test_swings_off_a_covered_high_post_to_a_live_outlet() -> void:
+	# A defender parked on the carrier→high-post feed lane: the high post is
+	# a dead outlet, so the third man stages an alternative station whose
+	# feed lane is genuinely live (the half-wall bump / center point / weak
+	# flank family) — value-arbitrated, not glued to one spot.
+	var carrier_pos := Vector3(-9, 0, -23)
+	var self_pos := Vector3(-5, 0, -14)
+	var high_post := Vector3(
+			carrier_pos.x * 0.5, 0.0,
+			-GameRules.BLUE_LINE_Z - AIRoleSupport.HIGH_POST_INSET_M)
+	var lane_blocker: Vector3 = (carrier_pos + high_post) * 0.5
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
+		[200, 1, lane_blocker, Vector3.ZERO],           # on the high-post lane
+		[210, 1, Vector3(-2, 0, -23), Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	var chosen_lane: float = AIActionScoring.lane_clear(
+			carrier_pos, d.target_position, [lane_blocker],
+			AIActionScoring.expected_pass_speed(carrier_pos, d.target_position))
+	var post_lane: float = AIActionScoring.lane_clear(
+			carrier_pos, high_post, [lane_blocker],
+			AIActionScoring.expected_pass_speed(carrier_pos, high_post))
+	assert_gt(chosen_lane, post_lane,
+			"the chosen station's feed lane beats the covered high post's;"
+			+ " got %s" % d.target_position)
+
+
 func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 	# Carrier cycling deep in the OZ corner. The old candidate set orbited the
 	# carrier (5 m), structurally gluing the third man to the play — the
