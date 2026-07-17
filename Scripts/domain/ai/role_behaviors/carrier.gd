@@ -1368,6 +1368,38 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 			out_buf.append(AITrajectory.predict_at(s.position, s.velocity, time_s))
 
 
+# The RE-SET projection for continuation pricing: each opponent gets the
+# BETTER of riding his momentum or redirecting toward the dangerous ice the
+# plan is headed for (`toward`, the slot anchor) at the calibrated pursuit
+# kinematics (reaction-gated capped ramp; league build — the collapse is a
+# team-shape prior, not a per-build duel). A ballistic projection lets a
+# static defender stand still forever, which priced a two-leg plan's dwell
+# as free — the continuation inherited the slot's value as if the coverage
+# never re-set onto it (the corner-waypoint park). Zone defenders granted
+# time converge on the house; this charges the plan for exactly the time
+# its first leg hands them.
+func _project_opponents_collapsing(ctx: RoleContext, time_s: float,
+		toward: Vector3, out_buf: Array[Vector3]) -> void:
+	out_buf.clear()
+	var d_max: float = AIActionScoring.pursuit_ramp_distance(
+			maxf(0.0, time_s - AIActionScoring.EVADE_REACTION_S))
+	for peer_id: int in ctx.snapshot.skater_states:
+		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
+			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
+			var ballistic: Vector3 = AITrajectory.predict_at(
+					s.position, s.velocity, time_s)
+			var to_t: Vector3 = toward - s.position
+			to_t.y = 0.0
+			var d: float = to_t.length()
+			if d > 0.001:
+				var collapsed: Vector3 = s.position + to_t * (minf(d_max, d) / d)
+				if collapsed.distance_squared_to(toward) \
+						< ballistic.distance_squared_to(toward):
+					out_buf.append(collapsed)
+					continue
+			out_buf.append(ballistic)
+
+
 # Loops every legal pass target and returns [best_pid, best_score]. A
 # pass takes 0.5–1.1 s of flight time, so the receiver and every
 # defender are projected forward by that flight time for the receiver's
@@ -2477,8 +2509,12 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 	var t2: float = AIActionScoring.time_to_arrive(
 			candidate, slot, arrive_vel, ctx.self_max_speed, ctx.self_max_accel)
 	# Second-leg reach safety: defenders start the leg where the first leg's
-	# time has taken them, then sweep their reach over t2.
-	_project_opponents_to(ctx, first_leg_s, _scratch_opponents_cont)
+	# time has taken them — including the RE-SET (see
+	# _project_opponents_collapsing): the first leg's dwell is time the
+	# defense spends collapsing onto the slot this plan is headed for, so a
+	# long ride to a dead waypoint pays for the coverage it hands them —
+	# then they sweep their reach over t2.
+	_project_opponents_collapsing(ctx, first_leg_s, slot, _scratch_opponents_cont)
 	var safety2: float = AIActionScoring.carry_safety(
 			_puck_pos_at(candidate, ctx.attacking_goal_pos),
 			_puck_pos_at(slot, ctx.attacking_goal_pos), t2,
@@ -2503,8 +2539,10 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + flight2
 					+ ctx.shot_timing_error_s * 0.5,
 			release2)
-	# Lane and arrival pressure read at slot arrival (both legs elapsed).
-	_project_opponents_to(ctx, first_leg_s + t2, _scratch_opponents_cont)
+	# Lane and arrival pressure read at slot arrival (both legs elapsed,
+	# defense re-setting onto the slot the whole way).
+	_project_opponents_collapsing(
+			ctx, first_leg_s + t2, slot, _scratch_opponents_cont)
 	var lane2: float = AIActionScoring.path_clearance(
 			candidate, slot, _scratch_opponents_cont)
 	if lane2 <= 0.0:

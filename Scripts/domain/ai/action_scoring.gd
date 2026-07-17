@@ -1580,6 +1580,12 @@ static func derive_post_seal_x_sign(shooter: Vector3, attacking_goal: Vector3) -
 	if forward < 0.001:
 		return 0.0
 	var lateral: float = absf(shooter.x - attacking_goal.x)
+	# Frontal early-out (hot path — this is on every arc-match): neither
+	# trigger can fire at or inside 45° off the normal. The RVH/VH zone needs
+	# 80°, and the erasure's window at 45° (≥ 1.83·cos 45° / d) is always
+	# wider than the post-body cover (≤ 0.80 / d) at any range.
+	if lateral <= forward:
+		return 0.0
 	var side: float = signf(shooter.x - attacking_goal.x)
 	if forward <= GOALIE_SEAL_ZONE_POST_Z_M \
 			and atan2(lateral, maxf(forward, 0.01)) >= GOALIE_SEAL_ANGLE_RAD:
@@ -1642,6 +1648,19 @@ static func release_ahead_of_goalie(
 # predict_goalie_pos / goalie_unsettled / goalie_squared_pos so all three agree.
 static func goalie_arc_match_x(
 		goalie_now: Vector3, attacking_goal: Vector3, puck_pos: Vector3) -> float:
+	# A POST-SEALED look (derive_post_seal_x_sign — the RVH/VH zone or the
+	# dead-angle erasure) has no arc to square on: there is nothing to defend
+	# wide of the post, so the competent keeper's square IS the post. Without
+	# this, the arc formula extrapolated past the net frame at sharp angles
+	# (a keeper "squared" ~0.7 m wide of the post), the seal's deployment
+	# race read him as stranded off the post he would really be sealing, and
+	# the arc-x's hypersensitivity out there saturated the unsettle credit —
+	# a carry to the dead corner scored a phantom certain goal. Post-clamping
+	# here keeps prediction, unsettle, and the seal race mutually consistent
+	# (all three share this function).
+	var seal: float = derive_post_seal_x_sign(puck_pos, attacking_goal)
+	if seal != 0.0:
+		return attacking_goal.x + seal * GameRules.NET_HALF_WIDTH
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var puck_forward: float = (puck_pos.z - attacking_goal.z) * net_normal_z
 	var goalie_depth: float = (goalie_now.z - attacking_goal.z) * net_normal_z
@@ -3765,6 +3784,23 @@ const REVERSAL_BRAKE_DECEL_M_S2: float = 10.5
 # velocity drag over a 0→top ramp. Measured (≈0.51 s ramp overhead at league
 # tuning).
 const RAMP_EFFICIENCY: float = 0.84
+
+
+# Distance a defender covers on a standing redirect over `tau` seconds
+# (post-reaction): the calibrated capped ramp — net accel after friction
+# losses up to top speed, cruise after. The ZONE-COLLAPSE prior for
+# continuation pricing: how far the defense re-sets toward the dangerous ice
+# while a multi-leg plan dwells on its first leg.
+static func pursuit_ramp_distance(tau: float,
+		vmax: float = SKATER_REF_SPEED_M_S,
+		accel: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
+	if tau <= 0.0:
+		return 0.0
+	var a_net: float = accel * RAMP_EFFICIENCY
+	var t_ramp: float = vmax / a_net
+	if tau <= t_ramp:
+		return 0.5 * a_net * tau * tau
+	return 0.5 * a_net * t_ramp * t_ramp + vmax * (tau - t_ramp)
 
 
 # `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction

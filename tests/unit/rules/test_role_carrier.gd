@@ -2273,16 +2273,10 @@ func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
 	# still wins the carry compete: with no shot of its own it is credited as a
 	# SAFE waypoint (the continuation value drives corner→slot), out-scoring the
 	# contested middle drive past the inside defender.
-	pending("The #28 erasure zeroes the dead-angle SHOT (see the wide-angle "
-			+ "test), and the meeting-strip crossing band does not apply (the "
-			+ "inside defender sits ~2.5 m off both routes — no crossing). The "
-			+ "corner wins as a momentum-cheap CONTINUATION WAYPOINT: its own "
-			+ "value is ~0 but corner-then-slot inherits the slot's value at "
-			+ "less decay than the middle drive pays for its turn. Gated on the "
-			+ "waypoint/continuation compete taking the SECOND leg's contest "
-			+ "honestly (the walkout is a re-attack the defense re-sets "
-			+ "against, not a free continuation) — ARCHITECTURE Known Issues.")
-	return
+	# Un-pended by the continuation RE-SET pricing: the second leg is read
+	# against a defense that collapses onto the slot during the first leg's
+	# dwell (_project_opponents_collapsing), so corner-then-slot no longer
+	# inherits the slot's value for free and the honest middle drive wins.
 	# The reported bug: enter the zone down the wing with a defender on the inside,
 	# and the carrier drifts down the boards to the dead-angle goal-line corner and
 	# does nothing — because the old, higher flat possession floor made the safe
