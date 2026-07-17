@@ -61,7 +61,12 @@ const _ON_RINK_MARGIN: float = 5.0
 
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
-@export var max_height: float = 40.0
+# Zoom ceiling. Sized to the arena, not the rink: the ozone fit (own blue line
+# → attacking goal line + padding) needs ~29.3 m at the default 50° FOV, and at
+# ~32 m the default framing still lands every frame edge on stands/shell rather
+# than the void past the bowl. Was 40 before the arena had an upper deck/shell
+# — the old ceiling zoomed out far enough to see the whole bowl end.
+@export var max_height: float = 32.0
 @export var zoom_speed: float = 3.0
 @export var zoom_padding: float = 4.0  # extra visible space beyond player+puck span
 
