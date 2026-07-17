@@ -966,12 +966,22 @@ func test_time_to_arrive_zero_at_destination() -> void:
 			0.0, 0.0001)
 
 
-func test_time_to_arrive_uses_ref_speed_when_stationary() -> void:
-	# Stationary skater 10 m from dest. effective_speed = SKATER_REF.
+func test_time_to_arrive_charges_the_standing_start_ramp() -> void:
+	# Stationary skater 10 m from dest: the calibrated phase model charges
+	# the real acceleration ramp (capped at a_net = accel × RAMP_EFFICIENCY)
+	# before the cruise — a standing start is genuinely slower than
+	# dist / top_speed (the old free-ramp read). Exact phase math:
+	# ramp to v_max, then cruise the remainder.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var dest := Vector3(10.0, 0.0, 0.0)
 	var t: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
-	assert_almost_eq(t, 10.0 / AIActionScoring.SKATER_REF_SPEED_M_S, 0.001)
+	var vmax: float = AIActionScoring.SKATER_REF_SPEED_M_S
+	var a_net: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2 \
+			* AIActionScoring.RAMP_EFFICIENCY
+	var d_ramp: float = vmax * vmax / (2.0 * a_net)
+	var expected: float = vmax / a_net + (10.0 - d_ramp) / vmax
+	assert_almost_eq(t, expected, 0.001)
+	assert_gt(t, 10.0 / vmax, "the ramp costs real time over the naive cruise")
 
 
 func test_time_to_arrive_faster_with_momentum_toward_dest() -> void:
@@ -994,15 +1004,21 @@ func test_time_to_arrive_slower_with_momentum_away() -> void:
 			"velocity component away from dest increases arrival time")
 
 
-func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
-	# Skater moving so fast away from dest that effective_speed would
-	# be non-positive without the floor. The clamp at MIN_TRAVEL_SPEED_M_S
-	# ensures finite (large) ETA — 10 m / 1 m/s = 10 s.
+func test_time_to_arrive_prices_the_full_reversal() -> void:
+	# Skater flying away from the destination: the phase model brakes the
+	# retreat out at the measured brake decel, gives back the ground lost
+	# while braking, then runs a standing-start pursuit. Finite, large, and
+	# monotone in how hard the retreat was.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var dest := Vector3(10.0, 0.0, 0.0)
-	var t: float = AIActionScoring.time_to_arrive(
+	var mild: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(-5.0, 0.0, 0.0))
+	var extreme: float = AIActionScoring.time_to_arrive(
 			from, dest, Vector3(-50.0, 0.0, 0.0))
-	assert_almost_eq(t, 10.0 / AIActionScoring.MIN_TRAVEL_SPEED_M_S, 0.001)
+	var rest: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	assert_gt(mild, rest, "a retreat costs more than a standing start")
+	assert_gt(extreme, mild, "a harder retreat costs more")
+	assert_lt(extreme, 60.0, "and stays finite")
 
 
 # ─── expected_pass_speed / pass_launch_speed (target-arrival model) ──────

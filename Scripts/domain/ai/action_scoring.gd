@@ -2575,6 +2575,20 @@ static func clearance_to_safety(clearance: float) -> float:
 	return clampf(clearance / EVADE_SAFE_MARGIN_M, 0.0, 1.0)
 
 
+# Lunge window for a defender's stick redirect onto a carried puck AT ITS
+# ARRIVAL SPOT — the maneuver-time bound the carry safety/strip reads apply
+# to their END sample only. At the destination the carrier is established and
+# protecting (the evade envelope owns that moment — same reasoning as the
+# pass-reception read's short window), so the defender gets his real lunge,
+# not a full-window t² repositioning that read every honest-length carry
+# destination as covered near any body (the pacified carrier). The MID
+# sample deliberately keeps the full-window pursuit read: en route the puck
+# traverses the defender's pursuit envelope at stride, where protection is
+# weakest — that asymmetry is what prices "thread the gauntlet" carries as
+# dangerous while leaving a peel-out to open ice safe. Same value as the
+# reception lunge (one poke moment).
+const CARRY_LUNGE_WINDOW_S: float = EVADE_HORIZON_S
+
 # Base puck-protect reach: how far a carrier holds the puck off his body while
 # handling. Hands scales it (a better handler protects it further out / threads a
 # tighter seam) — callers pass the scaled value; this is the league default.
@@ -2603,11 +2617,15 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 		if dist > 0.001:
 			carry_dir = Vector2(dx / dist, dz / dist)
 			carry_speed = dist / arrival_time
+	# MID sample: full-window pursuit (the en-route gauntlet — see
+	# CARRY_LUNGE_WINDOW_S). END sample: pursuit bounded to the arrival
+	# lunge — the carrier is established and protecting there.
 	var c_mid: float = reach_clearance(
 			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
 			opponent_caps, -1.0, carry_dir, carry_speed)
 	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
-			opponent_caps, -1.0, carry_dir, carry_speed)
+			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
+			carry_dir, carry_speed)
 	return minf(c_mid, c_end)
 
 
@@ -2630,13 +2648,17 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 		if ddist > 0.001:
 			carry_dir = Vector2(ddx / ddist, ddz / ddist)
 			carry_speed = ddist / arrival_time
+	# Sample windows must mirror carry_clearance exactly so the strip point
+	# and the safety read agree on which sample is covered (mid = full
+	# pursuit, end = arrival lunge).
 	var mid: Vector3 = from.lerp(to, 0.5)
 	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents,
 			opponent_vels, opponent_caps, -1.0, carry_dir, carry_speed)
 	if c_mid < 0.0:
 		return mid   # covered mid-route — stripped there, before the destination
 	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
-			opponent_caps, -1.0, carry_dir, carry_speed)
+			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
+			carry_dir, carry_speed)
 	if c_end < 0.0:
 		return to    # clear mid-route, covered at the destination
 	# Neither covered (a low strip probability anyway): the tighter of the two.
@@ -3044,6 +3066,54 @@ static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
 # arrival passes its attribute-scaled top speed AND max_accel (a nimbler build sheds
 # sideways momentum faster, so it reaches an off-axis cut sooner).
+# ── Calibrated phase model ─────────────────────────────────────────────────────
+# The measured controller (SkaterMovementRules at 120 Hz driven by the real
+# steering — the velocity-matched seek plus the pivot brake, see
+# tests/unit/ai/test_time_to_arrive_calibration.gd, which pins every constant
+# here against simulated arrivals) decomposes into:
+#
+#   REDIRECT — cross-momentum beyond what the seek sheds for free. The
+#     velocity-matched anchor pull cancels cross-drift out of the thrust's
+#     spare headroom, so moderate drift costs nothing; only the EXCESS above
+#     VM_FREE_SHED_M_S pays, at the measured net shed rate.
+#   REVERSAL — velocity pointed away brakes out at the brake key's real
+#     friction decel and gives back the ground lost while braking (both
+#     measured; the decel is brake_multiplier × (friction + drag·v) at game
+#     speeds).
+#   PURSUIT — a capped ramp at the NET accel the movement model delivers
+#     (thrust minus friction/drag losses — RAMP_EFFICIENCY) up to top speed,
+#     then cruise. A standing start genuinely pays ~0.5 s over the old
+#     dist/speed read; a full-speed head-on drive pays nothing.
+#
+# The old heuristic (effective = ref + v_along, shed-as-pure-delay) credited a
+# full-speed closer with up to DOUBLE top speed and gave standing starts top
+# speed for free — every race in the AI was distorted at the extremes. Errors
+# vs the measured table are within ~±20% on the clean families; the one known
+# soft spot is short diagonal cuts at high speed (the controller's lateral
+# miss-loop — it can overfly the catch window and circle once), where reality
+# runs up to ~2× the estimate. The calibration suite fails loudly if the
+# movement tuning drifts.
+
+# Cross speed the velocity-matched seek sheds inside the thrust headroom
+# (costs no time). Measured.
+const VM_FREE_SHED_M_S: float = 3.5
+# Net shed rate for cross speed beyond the free band. Measured.
+const VM_SHED_DECEL_M_S2: float = 6.5
+# Brake-key deceleration for reversals: brake_multiplier × (friction +
+# drag·v̄) at game speeds — physical, and confirmed by the reversal cells.
+const REVERSAL_BRAKE_DECEL_M_S2: float = 10.5
+# Fraction of commanded thrust the movement model nets after friction and
+# velocity drag over a 0→top ramp. Measured (≈0.51 s ramp overhead at league
+# tuning).
+const RAMP_EFFICIENCY: float = 0.84
+
+
+# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
+# thrust (Agility-scaled) — both default to league references so cross-player
+# callers (opponent / teammate ETA, the loose-puck election that must stay
+# consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
+# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build
+# redirects and ramps faster, so it reaches an off-axis cut sooner).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
 		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
@@ -3052,27 +3122,36 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 	var dist: float = sqrt(dx * dx + dz * dz)
 	if dist < 0.001:
 		return 0.0
+	var vmax: float = maxf(ref_speed_m_s, MIN_TRAVEL_SPEED_M_S)
 	var inv: float = 1.0 / dist
-	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
-	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
-			ref_speed_m_s + speed_along)
-	# Cross-momentum cost. `speed_along` credits velocity pointed AT the target, but
-	# the perpendicular component — sqrt(|v|² − along²) — is wasted speed the skater
-	# must shed before it truly closes. Controls are facing-agnostic (no turn arc;
-	# crossover/backward thrust penalties are small), so a redirect is a straight
-	# re-acceleration: nulling the sideways component takes at least |v_perp| /
-	# accel seconds against the skater's real all-direction thrust (`accel_m_s2`).
-	# The old 1-D projection treated this as free, so a carrier flying laterally
-	# priced a cut it can't actually settle into as a fast arrival. Two-phase: shed
-	# the cross-momentum, then close `dist` at the along-aided cruise. Zero when
-	# already pointed at the target (v_perp = 0) — direct drives, standing starts,
-	# and pure reverse (handled by the floor above) are unchanged; only genuinely
-	# off-axis momentum pays, and a nimbler build (higher accel) pays less.
+	var v_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
 	var v_len_sq: float = from_velocity.x * from_velocity.x \
 			+ from_velocity.z * from_velocity.z
-	var perp_sq: float = maxf(0.0, v_len_sq - speed_along * speed_along)
-	var t_shed: float = sqrt(perp_sq) / maxf(accel_m_s2, 0.001)
-	return dist / effective + t_shed
+	var v_perp: float = sqrt(maxf(0.0, v_len_sq - v_along * v_along))
+	# REDIRECT: only the cross momentum the seek can't shed for free pays,
+	# scaled by this build's thrust relative to league (a nimbler build has
+	# more headroom).
+	var agility: float = maxf(accel_m_s2, 0.001) / SHED_ACCEL_DEFAULT_M_S2
+	var t: float = maxf(0.0, v_perp - VM_FREE_SHED_M_S * agility) \
+			/ (VM_SHED_DECEL_M_S2 * agility)
+	var r: float = dist
+	var v0: float = v_along
+	if v0 < 0.0:
+		# Reversal: brake the retreat out, giving back the ground lost while
+		# braking; the pursuit then ramps from rest. (Brake friction is
+		# attribute-flat — the brake key, not thrust.)
+		t += -v0 / REVERSAL_BRAKE_DECEL_M_S2
+		r += v0 * v0 / (2.0 * REVERSAL_BRAKE_DECEL_M_S2)
+		v0 = 0.0
+	v0 = minf(v0, vmax)
+	# PURSUIT: capped ramp at the delivered net accel, then cruise.
+	var a_net: float = maxf(accel_m_s2 * RAMP_EFFICIENCY, 0.001)
+	var d_ramp: float = (vmax * vmax - v0 * v0) / (2.0 * a_net)
+	if r <= d_ramp:
+		t += (sqrt(v0 * v0 + 2.0 * a_net * r) - v0) / a_net
+	else:
+		t += (vmax - v0) / a_net + (r - d_ramp) / vmax
+	return t
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects

@@ -695,19 +695,15 @@ static func collect_opponents(ctx: RoleContext,
 #      only a threat that gets to a path point before he can be there, set,
 #      beats him.
 #
-# Race legs, all symmetric kinematics (no shape knobs):
-#   puck side:  t_gain + carry spin-up + momentum-aware carry to the station.
-#     The carry pays the acceleration ramp time_to_arrive's constant-speed
-#     model skips — (v_top − v_along)/(2·accel), the first-order ramp cost —
-#     so a standing receiver doesn't get top speed for free while the
-#     defender pays to set.
-#   defender:   sprint to the station minus blade reach (containment radius
-#     is body + stick — "even with him" is a physical span, not a point),
-#     plus the gap-control set cushion v/(2·accel): the time to spin up to
-#     the rush's pace before it closes, derived from the classic cushion
-#     race (defender at rest at the station, rush arriving at top speed).
-#     At the net station the cushion is braking instead — the last resort
-#     stand must arrive stopped, not flying past the cage.
+# Race legs, all symmetric kinematics (no shape knobs) — both sides priced by
+# the calibrated time_to_arrive (its capped ramp charges standing starts and
+# credits momentum honestly, so neither side gets top speed for free):
+#   puck side:  t_gain + momentum-aware carry to the station.
+#   defender:   standing-start run to the station minus blade reach
+#     (containment radius is body + stick — "even with him" is a physical
+#     span, not a point). At the net station he additionally pays the brake
+#     margin — the last-resort stand must arrive stopped, not flying past
+#     the cage.
 #
 # Stations sample the carry path STRICTLY AFTER the gain point: contesting
 # the reception itself is an opportunistic play owned by the chase/pressure
@@ -788,29 +784,16 @@ static func fill_counter_channels(ctx: RoleContext,
 
 static func _append_channel(gain_pt: Vector3, t_gain: float,
 		carry_vel: Vector3, speed: float, accel: float) -> void:
-	# Carry spin-up: the acceleration ramp from the gain to the rush's pace,
-	# credited for momentum already pointed down the path.
-	var path: Vector3 = _race_net - gain_pt
-	var path_len: float = sqrt(path.x * path.x + path.z * path.z)
-	var along_raw: float = 0.0
-	if path_len > 0.001:
-		along_raw = (carry_vel.x * path.x + carry_vel.z * path.z) / path_len
-	var along: float = clampf(along_raw, 0.0, speed)
-	var spin_up: float = (speed - along) / (2.0 * maxf(accel, 0.001))
-	# One momentum-aware ETA for the full carry; the path is straight and the
-	# cross-momentum shed is direction-only, so each station's time is the
-	# shed plus its fraction of the cruise leg.
+	# The calibrated time_to_arrive prices the whole carry (redirect + ramp +
+	# cruise). Stations along the straight path share its redirect cost and
+	# split the pursuit leg by the fraction of distance — a slight
+	# near-station optimism for the rush (the ramp is front-loaded in time),
+	# which errs conservative for the defender.
 	var t_full: float = AIActionScoring.time_to_arrive(
 			gain_pt, _race_net, carry_vel, speed, accel)
-	var perp_sq: float = maxf(0.0,
-			carry_vel.x * carry_vel.x + carry_vel.z * carry_vel.z
-			- along_raw * along_raw)
-	var t_shed: float = sqrt(perp_sq) / maxf(accel, 0.001)
-	var base: float = t_gain + spin_up + t_shed
-	var cruise: float = maxf(t_full - t_shed, 0.0)
 	for f: float in RACE_PATH_FRACTIONS:
 		_race_station_pts.append(gain_pt.lerp(_race_net, f))
-		_race_station_ts.append(base + f * cruise)
+		_race_station_ts.append(t_gain + f * t_full)
 	_race_channel_count += 1
 
 
@@ -820,18 +803,27 @@ static func _append_channel(gain_pt: Vector3, t_gain: float,
 static func race_home_feasible(c: Vector3,
 		self_max_speed: float, self_max_accel: float) -> bool:
 	var v_me: float = maxf(self_max_speed, 1.0)
-	var cushion: float = v_me / (2.0 * maxf(self_max_accel, 0.001))
 	var brake: float = v_me / AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
+	# Standing-start run priced by the same calibrated ramp time_to_arrive
+	# uses (candidates are stands — hypothetical, at rest).
+	var a_net: float = maxf(
+			self_max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
+	var d_ramp: float = v_me * v_me / (2.0 * a_net)
 	var n_fracs: int = RACE_PATH_FRACTIONS.size()
 	for k: int in _race_channel_count:
 		var contained: bool = false
 		for j: int in n_fracs:
 			var idx: int = k * n_fracs + j
 			var p: Vector3 = _race_station_pts[idx]
-			var margin: float = brake if j == n_fracs - 1 else cushion
-			var t_me: float = maxf(0.0, _xz_distance(c, p) - reach) / v_me \
-					+ margin
+			var run: float = maxf(0.0, _xz_distance(c, p) - reach)
+			var t_me: float
+			if run <= d_ramp:
+				t_me = sqrt(2.0 * run / a_net)
+			else:
+				t_me = v_me / a_net + (run - d_ramp) / v_me
+			if j == n_fracs - 1:
+				t_me += brake
 			if t_me <= _race_station_ts[idx]:
 				contained = true
 				break

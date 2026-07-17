@@ -23,12 +23,15 @@ class_name AILoosePuckChase
 
 # Incumbent keeps the chase unless a challenger's intercept time beats
 # it by more than this margin. Units are seconds so it composes with
-# time_to_arrive directly. ~0.12 s is enough to kill frame-to-frame
-# swapping between geometrically-similar bots without making the role
-# stale when a genuinely better-placed teammate appears. Tuning: raise
-# toward 0.25 if chasers still trade off mid-pursuit; lower toward 0.05
-# if a closer teammate takes too long to take over.
-const HYSTERESIS_S: float = 0.12
+# time_to_arrive directly. ≈ 1 m of positional difference at the
+# calibrated ETA's close-range standing-start rate (matches
+# AIRoleSlots.HYSTERESIS_PENALTY_S — re-derived with the phase-model
+# time_to_arrive). Enough to kill frame-to-frame swapping between
+# geometrically-similar bots without making the role stale when a
+# genuinely better-placed teammate appears. Tuning: raise toward 0.35
+# if chasers still trade off mid-pursuit; lower toward 0.1 if a closer
+# teammate takes too long to take over.
+const HYSTERESIS_S: float = 0.2
 
 # Single bounded round of puck lead so the election targets where the
 # puck WILL be, not where it sits now — the difference that decides who
