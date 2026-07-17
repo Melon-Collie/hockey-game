@@ -132,7 +132,13 @@ const VERSION: String = "dev"
 # v33: notify_lobby_settings grew bot_difficulty + goalie_difficulty args so
 #      clients' dimmed lobby dropdowns mirror the host's AI difficulty picks
 #      (display only — the AI is host-simulated from the host's PlayerPrefs).
-const PROTOCOL_VERSION: int = 33
+# v34: input-batch header u16 repurposed — was the client's last-received
+#      world-state seq (an echo the host diffed to estimate loss, which
+#      undersampled and inflated a clean link to ~50%); now carries the client's
+#      OWN measured downstream loss in basis points, stored verbatim as the peer
+#      loss. Same header size, but a mixed-build host would read the field as a
+#      seq and mis-estimate loss, so a bump is required.
+const PROTOCOL_VERSION: int = 34
 
 
 func _ready() -> void:
