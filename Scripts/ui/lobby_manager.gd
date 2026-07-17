@@ -3,11 +3,23 @@ extends Node
 
 const _SETTING_CONTROL_WIDTH: int = 220
 
+# The lobby panel sits over the live arena backdrop, and its content carries
+# its own surfaces (slot cards, the recessed settings tray), so the shell can
+# be a tint rather than a wall — let the rink read through. Local to the
+# lobby: MenuStyle surfaces stay solid for every other popup by design.
+const _PANEL_BG_ALPHA: float = 0.75
+
 # key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
 # Players: team_id ∈ {0, 1}, slot ∈ {0,1,2}. Spectators: team_id = -1, slot = spectator_idx.
 var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
+var _backdrop: LobbyArenaBackdrop = null
+# Host-only convenience: one press fills every open player slot with a bot.
+# Deliberately a one-shot button, not a persistent auto-fill — slots that
+# open later just leave the button pressable again, and it greys out when
+# there's nothing to fill.
+var _fill_bots_btn: Button = null
 var _kick_confirm: ConfirmDialog = null
 var _kick_pending_peer: int = -1
 var _start_btn: Button = null
@@ -136,18 +148,13 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(root)
 
-	# Same ice texture as the rest of the UI. Stretch covers any aspect ratio
-	# without warping. A future pass will replace this with a live hockey
-	# scene running the rink + bench in 3D behind the lobby panel.
-	var bg := TextureRect.new()
-	bg.texture = load("res://Assets/Mitts_ice_background.png")
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(bg)
+	# Live 3D arena behind the panel — the real rink + stands with a slow
+	# camera drift. Sits in the 3D world, so the CanvasLayer UI draws over it.
+	_backdrop = LobbyArenaBackdrop.new()
+	add_child(_backdrop)
 
 	var panel_style := MenuStyle.panel()
+	panel_style.bg_color = Color(MenuStyle.PANEL_BG, _PANEL_BG_ALPHA)
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
@@ -161,18 +168,28 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 20)
 	panel.add_child(vbox)
 
+	# Header row: screen title + (host only) the lobby-visibility selector.
+	vbox.add_child(_build_header_row())
+
 	_slot_grid = SlotGridPanel.new()
 	_slot_grid.set_active_team_size(_team_size)
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
 	_slot_grid.bot_toggled.connect(_on_bot_toggled)
 	_slot_grid.kick_requested.connect(_on_kick_requested)
-	vbox.add_child(_slot_grid)
+	# Tighter inner box so the host's fill-bots toggle reads as part of the
+	# grid rather than a separate section in the 20px-separated outer stack.
+	var grid_box := VBoxContainer.new()
+	grid_box.add_theme_constant_override("separation", 4)
+	grid_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid_box.add_child(_slot_grid)
+	if NetworkManager.is_host:
+		grid_box.add_child(_build_fill_bots_row())
+	vbox.add_child(grid_box)
 
-	# Three-column section below the slot grid: TEAMS / MATCH / SPECTATORS.
-	# Columns line up with the slot columns above thanks to the same 56px
-	# left offset that SlotGridPanel uses for its AWAY/HOME labels.
-	vbox.add_child(_build_columns_row())
+	# Recessed settings tray below the slot grid: TEAMS / MATCH / SPECTATORS
+	# side by side in one full-width strip.
+	vbox.add_child(_build_settings_tray())
 
 	var btn_box := HBoxContainer.new()
 	btn_box.add_theme_constant_override("separation", 12)
@@ -212,23 +229,125 @@ func _on_edit_build_pressed() -> void:
 		_build_popup.open()
 
 
-# Lay out the bottom of the lobby as three vertical columns aligned with the
-# slot-grid columns above. Left offset of 56px matches SlotGridPanel's
-# AWAY/HOME team-label column so the headers below line up under LW/C/RW.
-func _build_columns_row() -> HBoxContainer:
+# Host-only one-shot button tucked under the slot grid (see _fill_bots_btn).
+func _build_fill_bots_row() -> HBoxContainer:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.alignment = BoxContainer.ALIGNMENT_END
+	_fill_bots_btn = Button.new()
+	_fill_bots_btn.text = "Fill with Bots"
+	_fill_bots_btn.add_theme_font_size_override("font_size", 13)
+	_fill_bots_btn.custom_minimum_size = Vector2(0, 28)
+	MenuStyle.wire_hover_scale(_fill_bots_btn)
+	SoundManager.wire_button(_fill_bots_btn)
+	_fill_bots_btn.pressed.connect(_fill_open_slots_with_bots)
+	row.add_child(_fill_bots_btn)
+	return row
 
-	var left_offset := Control.new()
-	left_offset.custom_minimum_size = Vector2(56, 0)
-	row.add_child(left_offset)
+
+# Grey the fill button out when every fielded slot is already taken.
+func _update_fill_bots_btn() -> void:
+	if _fill_bots_btn == null:
+		return
+	var open: int = 0
+	for team_id: int in 2:
+		for s: int in _team_size:
+			var key: int = LobbySlotKey.encode(team_id, s)
+			if not _lobby_slots.has(key) and not NetworkManager.pending_bot_slots.get(key, false):
+				open += 1
+	_fill_bots_btn.disabled = open == 0
+
+
+# Top up every open player slot with a bot. Each send_bot_slot broadcasts and
+# re-fires _refresh_grid via bot_slot_changed, so the cards land one by one.
+func _fill_open_slots_with_bots() -> void:
+	if not NetworkManager.is_host:
+		return
+	for team_id: int in 2:
+		for s: int in _team_size:
+			var key: int = LobbySlotKey.encode(team_id, s)
+			if _lobby_slots.has(key):
+				continue
+			if NetworkManager.pending_bot_slots.get(key, false):
+				continue
+			NetworkManager.send_bot_slot(key, true)
+
+
+# Header row above the slot grid: heading on the left and, for the host, the
+# lobby-visibility selector (with its status hint) on the right. Visibility is
+# a session-level state — who can get in at all — not a match rule, so it
+# lives up here rather than in the MATCH settings stack. Clients joined
+# through a visibility they can't change, so their header is just the title.
+func _build_header_row() -> HBoxContainer:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var title := Label.new()
+	title.text = "Lobby"
+	MenuStyle.apply_heading(title, 30)
+	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(title)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+
+	if NetworkManager.is_host:
+		var vis_box := VBoxContainer.new()
+		vis_box.add_theme_constant_override("separation", 2)
+		vis_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		vis_box.custom_minimum_size = Vector2(280, 0)
+		vis_box.add_child(_build_visibility_row())
+		_visibility_hint = Label.new()
+		_visibility_hint.add_theme_font_size_override("font_size", 11)
+		_visibility_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+		_visibility_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_visibility_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vis_box.add_child(_visibility_hint)
+		header.add_child(vis_box)
+		_update_visibility_row()
+
+	return header
+
+
+# One recessed full-width strip holding the three option sections side by
+# side, split by hairlines: TEAMS | MATCH | SPECTATORS. MATCH gets roughly
+# double width — LobbySettingsPanel lays its rows out in two columns — so all
+# three sections land at a similar height instead of one tall middle tower.
+# The tray shares the empty slot cards' surface (SURFACE_ELEV) so the screen
+# reads as two tones — shell + raised surfaces — rather than a third dark.
+func _build_settings_tray() -> PanelContainer:
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.SURFACE_ELEV
+	style.set_corner_radius_all(6)
+	style.set_content_margin_all(16)
+
+	var tray := PanelContainer.new()
+	tray.add_theme_stylebox_override("panel", style)
+	tray.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tray.add_child(row)
 
 	row.add_child(_build_teams_column())
-	row.add_child(_build_match_column())
+	row.add_child(_tray_separator())
+	var match_col := _build_match_column()
+	match_col.size_flags_stretch_ratio = 2.2
+	row.add_child(match_col)
+	row.add_child(_tray_separator())
 	row.add_child(_build_spectators_column())
 
-	return row
+	return tray
+
+
+# 1px vertical hairline between tray sections.
+func _tray_separator() -> ColorRect:
+	var sep := ColorRect.new()
+	sep.color = MenuStyle.TEXT_SEP
+	sep.custom_minimum_size = Vector2(1, 0)
+	return sep
 
 
 # Small uppercase tracking-y header used at the top of each column to
@@ -341,17 +460,6 @@ func _build_match_column() -> VBoxContainer:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.add_child(_column_header("MATCH"))
 
-	# Visibility selector sits above the match rules — host only; clients
-	# joined through it, so there's nothing for them to set.
-	if NetworkManager.is_host:
-		col.add_child(_build_visibility_row())
-		_visibility_hint = Label.new()
-		_visibility_hint.add_theme_font_size_override("font_size", 11)
-		_visibility_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
-		_visibility_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		col.add_child(_visibility_hint)
-		_update_visibility_row()
-
 	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host, _team_size)
 	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
 	col.add_child(_settings_panel)
@@ -359,8 +467,8 @@ func _build_match_column() -> VBoxContainer:
 	return col
 
 
-# "Lobby: [Offline | Friends | Public]" — mirrors LobbySettingsPanel's row
-# look. Selecting Friends/Public from Offline attaches the Steam transport
+# "Visibility: [Offline | Friends | Public]" — the header-row selector.
+# Selecting Friends/Public from Offline attaches the Steam transport
 # (async — the selector disables until host_lobby_ready / _failed lands);
 # Friends ↔ Public is a live Steam lobby-type flip; Offline detaches, and is
 # only selectable with no human peers connected.
@@ -371,7 +479,7 @@ func _build_visibility_row() -> HBoxContainer:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var lbl := Label.new()
-	lbl.text = "Lobby"
+	lbl.text = "Visibility"
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -664,12 +772,34 @@ func _refresh_grid() -> void:
 	if _slot_grid == null:
 		return
 	_recompute_resolved_colors()
+	if _backdrop != null:
+		_backdrop.set_team_color_slots(_home_color_slot, _away_color_slot)
+		var bench: Array[int] = _bench_occupancy()
+		_backdrop.set_bench_counts(bench[0], bench[1])
 	_slot_grid.refresh(_build_slot_grid_roster(), _get_team_colors(),
 			NetworkManager.pending_bot_slots, NetworkManager.is_host,
 			NetworkManager.pending_bot_identities, true, true)
 	_refresh_teams_column()
 	_update_visibility_row()
+	_update_fill_bots_btn()
 	_refresh_spectator_panel()
+
+# [home, away] occupied-slot counts (humans + bots) for the backdrop's bench
+# dummies. Slots beyond the live team size don't count — they aren't fielded.
+func _bench_occupancy() -> Array[int]:
+	var counts: Array[int] = [0, 0]
+	for k: int in _lobby_slots:
+		if LobbySlotKey.is_spectator(k) or LobbySlotKey.slot(k) >= _team_size:
+			continue
+		counts[LobbySlotKey.team_id(k)] += 1
+	for bot_key: int in NetworkManager.pending_bot_slots:
+		if not NetworkManager.pending_bot_slots[bot_key]:
+			continue
+		if LobbySlotKey.is_spectator(bot_key) or LobbySlotKey.slot(bot_key) >= _team_size:
+			continue
+		counts[LobbySlotKey.team_id(bot_key)] += 1
+	return counts
+
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
 # onto their currently assigned team, then asks ColorVoteRules for the new

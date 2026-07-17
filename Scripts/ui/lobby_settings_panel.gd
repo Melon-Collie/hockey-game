@@ -1,12 +1,15 @@
 class_name LobbySettingsPanel
 extends VBoxContainer
 
-# Compact match-settings column for the lobby. Renders seven rows
+# Compact match-settings section for the lobby. Renders seven rows
 # (Mode, Periods, Period Length, Overtime, Rules, Bot Difficulty, Goalie),
-# each with a label on the left and the control on the right. Hosts get
-# editable controls; clients see them dimmed and disabled. The "MATCH" column
+# each with a label on the left and the control on the right, laid out as two
+# side-by-side row columns so the section stays shallow: the pace rules
+# (Mode / Periods / Period Length / Overtime) on the left, the OptionButton
+# trio (Rules + the two host-local AI difficulty prefs) on the right. Hosts
+# get editable controls; clients see them dimmed and disabled. The "MATCH"
 # header above this panel is rendered by LobbyManager so the same widget can
-# drop into either the lobby grid or a hypothetical pause-menu surface later.
+# drop into either the lobby tray or a hypothetical pause-menu surface later.
 #
 # The first five rows are NETWORK-SYNCED match rules — they emit
 # settings_changed and LobbyManager owns broadcasting them to clients. Bot
@@ -75,8 +78,19 @@ func apply_settings(num_periods: int, period_duration: float, ot_enabled: bool, 
 # ── Build helpers ────────────────────────────────────────────────────────────
 
 func _build() -> void:
-	# Row 0: Mode (team size — 3v3 / 5v5). Network-synced match rule like
-	# Rules; latched at puck drop into GameStateMachine.team_size.
+	# Two side-by-side row columns (see class doc). Rows below append to
+	# `left` or `right` instead of directly to self.
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 24)
+	cols.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_child(cols)
+	var left := _row_column()
+	cols.add_child(left)
+	var right := _row_column()
+	cols.add_child(right)
+
+	# Row 0 (left): Mode (team size — 3v3 / 5v5). Network-synced match rule
+	# like Rules; latched at puck drop into GameStateMachine.team_size.
 	var m_row := _row("Mode")
 	_mode_btn = OptionButton.new()
 	_mode_btn.custom_minimum_size = Vector2(120, 28)
@@ -91,9 +105,9 @@ func _build() -> void:
 	else:
 		_mode_btn.modulate = Color(1, 1, 1, 0.5)
 	m_row.add_child(_mode_btn)
-	add_child(m_row)
+	left.add_child(m_row)
 
-	# Row 1: Periods
+	# Row 1 (left): Periods
 	var p_row := _row("Periods")
 	_periods_minus = _stepper_btn("-")
 	_periods_value_label = _value_label(str(_num_periods))
@@ -104,9 +118,9 @@ func _build() -> void:
 	p_row.add_child(_periods_value_label)
 	p_row.add_child(_periods_minus)
 	p_row.add_child(_periods_plus)
-	add_child(p_row)
+	left.add_child(p_row)
 
-	# Row 2: Period Length
+	# Row 2 (left): Period Length
 	var d_row := _row("Period Length")
 	_dur_minus = _stepper_btn("-")
 	var dur_min: int = int(_period_duration / 60.0)
@@ -118,9 +132,9 @@ func _build() -> void:
 	d_row.add_child(_dur_value_label)
 	d_row.add_child(_dur_minus)
 	d_row.add_child(_dur_plus)
-	add_child(d_row)
+	left.add_child(d_row)
 
-	# Row 3: Overtime
+	# Row 3 (left): Overtime
 	var ot_row := _row("Overtime")
 	_ot_check = CheckButton.new()
 	_ot_check.set_pressed_no_signal(_ot_enabled)
@@ -132,9 +146,9 @@ func _build() -> void:
 	else:
 		_ot_check.modulate = Color(1, 1, 1, 0.5)
 	ot_row.add_child(_ot_check)
-	add_child(ot_row)
+	left.add_child(ot_row)
 
-	# Row 4: Rules
+	# Row 4 (right): Rules
 	var r_row := _row("Rules")
 	_rules_btn = OptionButton.new()
 	_rules_btn.custom_minimum_size = Vector2(120, 28)
@@ -149,10 +163,11 @@ func _build() -> void:
 	else:
 		_rules_btn.modulate = Color(1, 1, 1, 0.5)
 	r_row.add_child(_rules_btn)
-	add_child(r_row)
+	right.add_child(r_row)
 
-	# Row 5: Bot Difficulty. Host-local preference (see class doc) — writes
-	# PlayerPrefs directly, no settings_changed emit. Host-gated like Rules.
+	# Row 5 (right): Bot Difficulty. Host-local preference (see class doc) —
+	# writes PlayerPrefs directly, no settings_changed emit. Host-gated like
+	# Rules.
 	var b_row := _row("Bot Difficulty")
 	_bot_difficulty_btn = OptionButton.new()
 	_bot_difficulty_btn.custom_minimum_size = Vector2(120, 28)
@@ -167,11 +182,12 @@ func _build() -> void:
 	else:
 		_bot_difficulty_btn.modulate = Color(1, 1, 1, 0.5)
 	b_row.add_child(_bot_difficulty_btn)
-	add_child(b_row)
+	right.add_child(b_row)
 
-	# Row 6: Goalie Difficulty. Host-local preference like Bot Difficulty — the
-	# host runs both nets' AI, so clients never need it. Writes PlayerPrefs
-	# directly, no settings_changed emit. GameManager reads it at match start.
+	# Row 6 (right): Goalie Difficulty. Host-local preference like Bot
+	# Difficulty — the host runs both nets' AI, so clients never need it.
+	# Writes PlayerPrefs directly, no settings_changed emit. GameManager reads
+	# it at match start.
 	var g_row := _row("Goalie")
 	_goalie_difficulty_btn = OptionButton.new()
 	_goalie_difficulty_btn.custom_minimum_size = Vector2(120, 28)
@@ -186,9 +202,17 @@ func _build() -> void:
 	else:
 		_goalie_difficulty_btn.modulate = Color(1, 1, 1, 0.5)
 	g_row.add_child(_goalie_difficulty_btn)
-	add_child(g_row)
+	right.add_child(g_row)
 
 	_update_stepper_enabled()
+
+
+# One of the two row columns _build lays rows into.
+func _row_column() -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 10)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return col
 
 
 func _row(label_text: String) -> HBoxContainer:

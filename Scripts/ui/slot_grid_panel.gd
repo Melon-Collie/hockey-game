@@ -724,7 +724,7 @@ func _refresh_pings() -> void:
 			var dot: ColorRect = _ping_dot[team_id][s]
 			var text_c: Color = MenuStyle.TEXT_BODY
 			if _team_colors.size() > team_id:
-				text_c = _team_colors[team_id].get("text", text_c)
+				text_c = _team_colors[team_id].get("ui_text", text_c)
 			_apply_ping(ping_lbl, dot, peer_id, text_c)
 
 

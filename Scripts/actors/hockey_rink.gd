@@ -132,8 +132,11 @@ extends StaticBody3D
 		ice_roughness_grazing = v
 		_rebuild()
 @export_group("")
+# Editor escape hatch: also drops the static build cache, so geometry *code*
+# edits mid-session can't be masked by stale cached products.
 @export var rebuild: bool = false:
-	set(v):
+	set(_v):
+		_build_cache.clear()
 		_rebuild()
 
 # Board stack, bottom to top:
@@ -171,6 +174,16 @@ const KICKPLATE_ICE_OFFSET: float = 0.005
 
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
+
+# cache key → products dict {ice_tex, stripe_tex, band_* ArrayMeshes,
+# collision_shape}. Every product is a deterministic function of the exports
+# in _cache_key() — the ice albedo alone is a ~10M-pixel image painted
+# pixel-by-pixel in GDScript, the dominant rebuild cost — so they're built
+# once per param set and shared across rink instances for the process
+# lifetime (free play → lobby → game each instance a fresh rink). Materials,
+# the scratch map, and the decal viewport hold live per-rink state and stay
+# per-instance. Bounded by clearing on editor param churn.
+static var _build_cache: Dictionary = {}
 
 # Persistent skate-scratch overlay. Created at runtime only (not in editor)
 # and bound to the ice shader's scratch_tex.
@@ -239,75 +252,33 @@ func _rebuild() -> void:
 	var half_w: float = rink_width / 2.0
 	var r: float = corner_radius
 
+	var products: Dictionary = _get_or_build_products()
+
 	# --- Ice surface ---
-	_add_ice()
+	_add_ice(products.ice_tex)
 
 	# --- Walls (continuous mesh around the entire perimeter) ---
-	# Previously the four straight walls were BoxMesh / BoxShape3D and the four
-	# corners were separate ArrayMesh / ConcavePolygonShape3D rings. The seam
-	# between them produced both visual (flat-vs-smooth shading) and physical
-	# (contact-normal kink) artifacts. Merging into one continuous loop per
-	# band eliminates every seam.
-	var stations: Array = _build_perimeter_stations(corner_segments)
-
-	var board_top: float = wall_height - CAP_RAIL_HEIGHT
-	var rail_top: float = wall_height
-	var glass_y_bot: float = rail_top + GLASS_LIFT
-	var glass_y_top: float = glass_y_bot + glass_height
-
-	var board_half_thick: float = wall_thickness / 2.0
-	var kick_half_thick: float = board_half_thick + KICKPLATE_PROTRUSION
-	var cap_half_thick: float = board_half_thick + CAP_RAIL_PROTRUSION
-	var glass_half_thick: float = glass_thickness / 2.0
-
 	# Solid bands use cull_disabled — the ArrayMesh inner face is otherwise
 	# culled by Godot's renderer even though the world-space winding looks
 	# correct on paper. BoxMesh works because its vertex order compensates.
+	# Materials are per-instance (cheap; emission/color exports apply without
+	# invalidating the cached meshes).
 	var kp_mat: StandardMaterial3D = _make_solid_material(kickplate_color, kickplate_emission_energy)
 	kp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	var board_mat: StandardMaterial3D = _make_solid_material(wall_color, wall_emission_energy)
 	board_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	var cap_mat: StandardMaterial3D = _make_solid_material(cap_rail_color, cap_rail_emission_energy)
 	cap_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_add_band_instance(products.band_kickplate, kp_mat)
+	_add_band_instance(products.band_board, board_mat)
+	_add_band_instance(products.band_cap, cap_mat)
+	_add_band_instance(products.band_glass, _make_glass_material())
 
-	# Kickplate (yellow lip with full caps — top cap forms the inward and
-	# outward shelves, bottom cap closes the volume). Bottom recessed below
-	# the ice plane to avoid coplanar z-fight (see KICKPLATE_ICE_OFFSET).
-	_add_perimeter_band(stations, kick_half_thick, kick_half_thick,
-			-KICKPLATE_ICE_OFFSET, kickplate_height, kp_mat)
-	# White board — top and bottom faces are covered by the kickplate's top
-	# cap and the cap rail's bottom cap, so skip its caps to avoid coplanar
-	# z-fight with those lips.
-	_add_perimeter_band(stations, board_half_thick, board_half_thick,
-			kickplate_height, board_top, board_mat, false, false)
-	# Cap rail (blue lip).
-	_add_perimeter_band(stations, cap_half_thick, cap_half_thick,
-			board_top, rail_top, cap_mat)
-	# Glass — transparent, narrower than the boards, lifted by GLASS_LIFT so
-	# its bottom cap doesn't z-fight the cap rail's top.
-	_add_perimeter_band(stations, glass_half_thick, glass_half_thick,
-			glass_y_bot, glass_y_top, _make_glass_material())
-
-	# Single collision around the entire perimeter. Replaces the BoxShape3D /
-	# ConcavePolygonShape3D pair that previously caught fast pucks at the
-	# straight↔corner seam. Collision uses its own (much higher) corner
-	# tessellation so rim-around contact loss stays under 1% per corner.
-	#
-	# The INNER face sits at the kickplate lip (kick_half_thick), the innermost
-	# visible surface, so the puck stops at what the player sees instead of
-	# sinking 1 cm into the kickplate against the boards' face. This is the same
-	# surface the blade clamp, AI trajectory reflection, and puck-OOB check use
-	# (GameRules.INNER_* / KICKPLATE_INWARD_LIP — keep them in sync).
-	#
-	# The collision extends ABOVE the visible glass (glass_y_top ≈ 2.90 m) up to
-	# COLLISION_OVERGLASS_TOP: the puck's vertical clamp (Puck.max_height + its
-	# ice half-height ≈ 3.01 m) sits above the glass, so without this an elevated
-	# deflection that pegs the clamp cruised through the gap between the glass top
-	# and the clamp and escaped the rink. Collision-only — the visual glass stays
-	# at glass_y_top. Keep COLLISION_OVERGLASS_TOP comfortably above Puck.max_height.
-	var collision_stations: Array = _build_perimeter_stations(corner_collision_segments)
-	_add_perimeter_collision(collision_stations, kick_half_thick, board_half_thick,
-			0.0, maxf(glass_y_top, COLLISION_OVERGLASS_TOP))
+	# Single collision around the entire perimeter (shape built/cached in
+	# _get_or_build_products — see the doc there for the geometry rationale).
+	var perimeter_col := CollisionShape3D.new()
+	perimeter_col.shape = products.collision_shape
+	add_child(perimeter_col)
 
 	# --- Painted stripes ---
 	# Goal-line stripes on each corner's white-board zone, drawn where the line
@@ -328,10 +299,95 @@ func _rebuild() -> void:
 		for st in corner_stripes:
 			_add_corner_stripe(cs.center, cs.a0, cs.a1, st)
 
-	_add_side_board_stripes(half_w)
+	_add_side_board_stripes(products.stripe_tex)
 
 
-func _add_ice() -> void:
+# ── Build cache ──────────────────────────────────────────────────────────────
+
+# Every export that moves a cached product: dims/segments shape the meshes
+# and collision, the ice/line colors are baked into the two painted textures.
+# Colors that only feed per-instance materials (wall/kickplate/cap/glass,
+# emission, ice-shader params) are deliberately absent.
+func _cache_key() -> String:
+	return str([rink_length, rink_width, corner_radius, wall_height,
+			wall_thickness, corner_segments, corner_collision_segments,
+			kickplate_height, glass_height, glass_thickness, _px_per_meter,
+			ice_color, red_line_color, blue_line_color])
+
+
+func _get_or_build_products() -> Dictionary:
+	var key: String = _cache_key()
+	if _build_cache.has(key):
+		return _build_cache[key]
+	if _build_cache.size() >= 4:
+		_build_cache.clear()
+
+	# Perimeter geometry. Previously the four straight walls were BoxMesh /
+	# BoxShape3D and the four corners were separate ArrayMesh /
+	# ConcavePolygonShape3D rings. The seam between them produced both visual
+	# (flat-vs-smooth shading) and physical (contact-normal kink) artifacts.
+	# Merging into one continuous loop per band eliminates every seam.
+	var stations: Array = _build_perimeter_stations(corner_segments)
+	var board_top: float = wall_height - CAP_RAIL_HEIGHT
+	var rail_top: float = wall_height
+	var glass_y_bot: float = rail_top + GLASS_LIFT
+	var glass_y_top: float = glass_y_bot + glass_height
+	var board_half_thick: float = wall_thickness / 2.0
+	var kick_half_thick: float = board_half_thick + KICKPLATE_PROTRUSION
+	var cap_half_thick: float = board_half_thick + CAP_RAIL_PROTRUSION
+	var glass_half_thick: float = glass_thickness / 2.0
+
+	# Collision: single loop around the entire perimeter, replacing the old
+	# BoxShape3D / ConcavePolygonShape3D pair that caught fast pucks at the
+	# straight↔corner seam. Uses its own (much higher) corner tessellation so
+	# rim-around contact loss stays under 1% per corner.
+	#
+	# The INNER face sits at the kickplate lip (kick_half_thick), the innermost
+	# visible surface, so the puck stops at what the player sees instead of
+	# sinking 1 cm into the kickplate against the boards' face. This is the same
+	# surface the blade clamp, AI trajectory reflection, and puck-OOB check use
+	# (GameRules.INNER_* / KICKPLATE_INWARD_LIP — keep them in sync).
+	#
+	# The collision extends ABOVE the visible glass (glass_y_top ≈ 2.90 m) up to
+	# COLLISION_OVERGLASS_TOP: the puck's vertical clamp (Puck.max_height + its
+	# ice half-height ≈ 3.01 m) sits above the glass, so without this an elevated
+	# deflection that pegs the clamp cruised through the gap between the glass top
+	# and the clamp and escaped the rink. Collision-only — the visual glass stays
+	# at glass_y_top. Keep COLLISION_OVERGLASS_TOP comfortably above Puck.max_height.
+	var collision_stations: Array = _build_perimeter_stations(corner_collision_segments)
+
+	var products: Dictionary = {
+		"ice_tex": _build_ice_texture(),
+		"stripe_tex": _build_side_stripe_texture(),
+		# Kickplate (yellow lip with full caps — top cap forms the inward and
+		# outward shelves, bottom cap closes the volume). Bottom recessed below
+		# the ice plane to avoid coplanar z-fight (see KICKPLATE_ICE_OFFSET).
+		"band_kickplate": _perimeter_band_mesh(stations, kick_half_thick, kick_half_thick,
+				-KICKPLATE_ICE_OFFSET, kickplate_height),
+		# White board — top and bottom faces are covered by the kickplate's top
+		# cap and the cap rail's bottom cap, so skip its caps to avoid coplanar
+		# z-fight with those lips.
+		"band_board": _perimeter_band_mesh(stations, board_half_thick, board_half_thick,
+				kickplate_height, board_top, false, false),
+		# Cap rail (blue lip).
+		"band_cap": _perimeter_band_mesh(stations, cap_half_thick, cap_half_thick,
+				board_top, rail_top),
+		# Glass — transparent, narrower than the boards, lifted by GLASS_LIFT so
+		# its bottom cap doesn't z-fight the cap rail's top.
+		"band_glass": _perimeter_band_mesh(stations, glass_half_thick, glass_half_thick,
+				glass_y_bot, glass_y_top),
+		"collision_shape": _build_perimeter_collision_shape(collision_stations,
+				kick_half_thick, board_half_thick,
+				0.0, maxf(glass_y_top, COLLISION_OVERGLASS_TOP)),
+	}
+	_build_cache[key] = products
+	return products
+
+
+# Paint the full-rink albedo (lines, creases, faceoff markings) into an
+# ImageTexture. Pixel-by-pixel GDScript over a ~10M-pixel image — by far the
+# most expensive rebuild product, which is why it's cached.
+func _build_ice_texture() -> ImageTexture:
 	var img_w = int(rink_width * _px_per_meter)
 	var img_h = int(rink_length * _px_per_meter)
 
@@ -395,9 +451,10 @@ func _add_ice() -> void:
 		var py: float = img_h / 2.0 - dot.y * _px_per_meter
 		_draw_filled_circle(img, px, py, dot_r, red_line_color)
 
-	# Create texture
-	var tex = ImageTexture.create_from_image(img)
+	return ImageTexture.create_from_image(img)
 
+
+func _add_ice(tex: ImageTexture) -> void:
 	# Ice mesh
 	var mesh_instance = MeshInstance3D.new()
 	var plane = PlaneMesh.new()
@@ -600,13 +657,12 @@ func _draw_crease_arc(img: Image, cx: float, goal_y: float, toward_center: int, 
 			if alpha > 0.0:
 				img.set_pixel(px, py, img.get_pixel(px, py).lerp(color, alpha))
 
-func _add_side_board_stripes(half_w: float) -> void:
-	# Paint center red line and blue zone lines as a texture on the inner board face,
-	# identical to how rink ice lines are drawn — no physical depth, no z-fighting.
+# Paint center red line and blue zone lines as a texture for the inner board
+# face, identical to how rink ice lines are drawn — no physical depth, no
+# z-fighting. Cached alongside the ice albedo.
+func _build_side_stripe_texture() -> ImageTexture:
 	var wall_len: float = rink_length - 2.0 * corner_radius
-	var y_bot: float = kickplate_height
-	var y_top: float = wall_height - CAP_RAIL_HEIGHT
-	var band_h: float = y_top - y_bot
+	var band_h: float = (wall_height - CAP_RAIL_HEIGHT) - kickplate_height
 	var img_w: int = maxi(int(wall_len * _px_per_meter), 1)
 	var img_h: int = maxi(int(band_h * _px_per_meter), 1)
 
@@ -620,7 +676,14 @@ func _add_side_board_stripes(half_w: float) -> void:
 	_draw_v_line(img, cx + bx,   thick_px, blue_line_color)
 	_draw_v_line(img, cx - bx,   thick_px, blue_line_color)
 
-	var tex := ImageTexture.create_from_image(img)
+	return ImageTexture.create_from_image(img)
+
+
+func _add_side_board_stripes(tex: ImageTexture) -> void:
+	var half_w: float = rink_width / 2.0
+	var wall_len: float = rink_length - 2.0 * corner_radius
+	var y_bot: float = kickplate_height
+	var y_top: float = wall_height - CAP_RAIL_HEIGHT
 
 	for side: float in [1.0, -1.0]:
 		# Quad spans only the white-board band (between kickplate and cap-rail
@@ -869,11 +932,12 @@ func _emit_perimeter_band_arrays(stations: Array,
 	return {"verts": verts, "normals": normals, "uvs": uvs, "indices": indices}
 
 
-# Builds and adds one visual band wrapping the entire perimeter.
-func _add_perimeter_band(stations: Array,
+# Builds one visual band mesh wrapping the entire perimeter (cached; the
+# material is applied per-instance by _add_band_instance).
+func _perimeter_band_mesh(stations: Array,
 		inner_offset: float, outer_offset: float,
-		y_bot: float, y_top: float, material: Material,
-		with_top_cap: bool = true, with_bottom_cap: bool = true) -> void:
+		y_bot: float, y_top: float,
+		with_top_cap: bool = true, with_bottom_cap: bool = true) -> ArrayMesh:
 	var data: Dictionary = _emit_perimeter_band_arrays(
 			stations, inner_offset, outer_offset, y_bot, y_top,
 			with_top_cap, with_bottom_cap)
@@ -885,19 +949,23 @@ func _add_perimeter_band(stations: Array,
 	arrays[Mesh.ARRAY_INDEX] = data.indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _add_band_instance(mesh: ArrayMesh, material: Material) -> void:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = material
 	add_child(mi)
 
 
-# Builds and adds a single ConcavePolygonShape3D wrapping the entire wall.
+# Builds a single ConcavePolygonShape3D wrapping the entire wall (cached).
 # inner_offset is the kickplate's half-thickness so the collision's inner face
 # sits at the kickplate lip (the innermost visible surface); outer_offset is
 # the boards' wall_thickness/2 (the outer board face).
-func _add_perimeter_collision(stations: Array,
+func _build_perimeter_collision_shape(stations: Array,
 		inner_offset: float, outer_offset: float,
-		y_bot: float, y_top: float) -> void:
+		y_bot: float, y_top: float) -> ConcavePolygonShape3D:
 	var data: Dictionary = _emit_perimeter_band_arrays(
 			stations, inner_offset, outer_offset, y_bot, y_top, true, true)
 	var tris := PackedVector3Array()
@@ -919,9 +987,7 @@ func _add_perimeter_collision(stations: Array,
 	# escaped puck back inside GameRules.clamp_to_rink_inner (the same
 	# boundary this collider is built on) and reflects its outward velocity.
 	shape.backface_collision = true
-	var col := CollisionShape3D.new()
-	col.shape = shape
-	add_child(col)
+	return shape
 
 
 func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionary) -> void:
