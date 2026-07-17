@@ -132,6 +132,13 @@ const PING_PASS_EV_MULT: float = 3.0
 # projections) would fire every tick per bot. ~30 Hz is plenty — pre-aim
 # convergence gates the actual transition, and humans react in 250 ms+.
 const PICK_ACTION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30   # ~30 Hz re-eval
+# Open-ice LOD (see decide()): with no opponent inside this radius and the
+# committed answer CARRY, the compete re-arms at PERIOD × MULT (~10 Hz). The
+# radius is a closing-speed margin, not a tuning feel: two skaters closing
+# head-on cover ~18 m/s, so a threat first appearing here is ~0.36 s from a
+# stick on the puck — several extended periods away.
+const OPEN_ICE_LOD_RADIUS_M: float = 8.0
+const OPEN_ICE_LOD_PERIOD_MULT: int = 3
 # The hold-elapsed clock (see _pick_action) advances by the REAL physics ticks
 # that elapsed since the previous re-eval (`_ticks_since_pick`), not a fixed
 # per-call constant — decide() is called once per AI dispatch, so at lower
@@ -592,6 +599,25 @@ func decide(ctx: RoleContext) -> RoleDecision:
 	if _pick_action_cooldown <= 0:
 		_pick_action(ctx)  # reads _ticks_since_pick for the hold-clock advance
 		_pick_action_cooldown = PICK_ACTION_PERIOD_TICKS
+		# OPEN-ICE LOD: the full compete is at its most expensive exactly when
+		# its answer changes least — nobody within reach, committed to keep
+		# skating. With every opponent outside OPEN_ICE_LOD_RADIUS_M and the
+		# argmax answering CARRY, re-arm at a third of the rate. Grounded
+		# safety margin: worst-case closing is two skaters head-on (~18 m/s),
+		# so a threat appearing at the radius needs ~0.36 s to reach a stick
+		# on the puck — several extended periods; the next full eval sees him
+		# while he is still outside every reach model. Fire/pass intents keep
+		# the full cadence (their follow-through is timing-critical).
+		if intended_action == INTENT_CARRY:
+			var lod_sq: float = OPEN_ICE_LOD_RADIUS_M * OPEN_ICE_LOD_RADIUS_M
+			var open_ice: bool = true
+			for opp: Vector3 in _scratch_opponents:
+				if opp.distance_squared_to(ctx.self_pos) < lod_sq:
+					open_ice = false
+					break
+			if open_ice:
+				_pick_action_cooldown = PICK_ACTION_PERIOD_TICKS \
+						* OPEN_ICE_LOD_PERIOD_MULT
 		_ticks_since_pick = 0
 	else:
 		_pick_action_cooldown -= step_ticks

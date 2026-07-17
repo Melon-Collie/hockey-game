@@ -1879,9 +1879,20 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# ~20 Hz — their targets are slow-moving formation posts behind
 			# multi-second hysteresis, where 17 ms of extra staleness is
 			# invisible but the argmax is the whole off-puck AI bill.
-			_role_decision_cooldown = ROLE_DECISION_PERIOD_TICKS \
+			#
+			# Per-peer period skew (+0..2 ticks): any synchronizing event —
+			# a possession flip transitions many bots at once, and each
+			# transition zeroes its cooldown for the fresh decision — would
+			# otherwise leave them re-evaluating in LOCKSTEP forever, and the
+			# coincident argmax ticks are what set worst-tick frame pacing
+			# (host FPS is the worst tick, not the average). Slightly unequal
+			# periods drift the phases apart again within a few cycles. The
+			# cadence cost is ≤2 ticks (~17 ms), inside the tolerance the
+			# 20 Hz shape-holder tier already accepts.
+			_role_decision_cooldown = (_peer_id % 3) \
+					+ (ROLE_DECISION_PERIOD_TICKS \
 					if _is_reactive_slot(slot, snapshot) \
-					else ROLE_DECISION_PERIOD_TICKS * 3 / 2
+					else ROLE_DECISION_PERIOD_TICKS * 3 / 2)
 			_role_decision_pinged = ctx.ping_move_target.is_finite()
 		else:
 			_role_decision_cooldown -= _dispatch_period_ticks
