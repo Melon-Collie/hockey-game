@@ -2920,6 +2920,23 @@ static func reach_clearance(
 				accel = caps.max_accel
 				stick = caps.blade_span
 				vmax = caps.max_speed
+		# PRESCREEN (exact): the phase model's total ground toward the point is
+		# bounded by the whole window at the better of current pace or cap
+		# (coast ≤ |v|·coast, capped pursuit ≤ vmax·τ; shed/brake only lose
+		# ground) — so clearance ≥ dist − speed_ub·time − stick. When even that
+		# floor can't come under the running worst, this defender cannot move
+		# the min and the full model is skipped. L1 speed (≥ L2) keeps the
+		# bound conservative; squared compare avoids the sqrt. In a 5v5 scene
+		# this collapses the far bodies to a handful of flops each.
+		var speed_ub: float = maxf(vmax,
+				absf(opponent_vels[i].x) + absf(opponent_vels[i].z))
+		var need: float = worst + speed_ub * time + stick
+		if need <= 0.0:
+			continue
+		var sdx: float = puck_point.x - opponents[i].x
+		var sdz: float = puck_point.z - opponents[i].z
+		if sdx * sdx + sdz * sdz >= need * need:
+			continue
 		if gated:
 			# ESCAPE-SPEED gate (opt-in, `carry_speed > 0`): a defender chasing
 			# near the carrier's pace along `carry_dir` (world XZ as Vector2(x,z))
@@ -3130,30 +3147,44 @@ static func carry_crossing_keep(from: Vector3, to: Vector3, arrival_time: float,
 	var inv_t: float = 1.0 / arrival_time
 	var pvx: float = dx * inv_t   # puck velocity along the carry
 	var pvz: float = dz * inv_t
+	var pv_len: float = seg * inv_t
 	var has_caps: bool = opponent_caps.size() == n
 	# Per-side worst crossing, in band units (d_min − span so different builds'
 	# spans compose): the shared protect shift then resolves between the sides.
 	var worst_l: float = INF
 	var worst_r: float = INF
 	for i: int in n:
+		var span: float = EVADE_STICK_REACH_M
+		if has_caps:
+			var caps: AISkaterCaps = opponent_caps[i]
+			if caps != null:
+				span = caps.blade_span
+		var r0x: float = from.x - opponents[i].x
+		var r0z: float = from.z - opponents[i].z
+		# PRESCREEN (exact): the meeting can't come nearer than the current
+		# separation minus the whole window's relative travel (|rv| ≤ |pv| +
+		# |v|, L1-bounded), so margin ≥ |r0| − rv_ub·T − span. A margin at or
+		# above the full protect budget is RESULT-identical to absence: the
+		# side it would post ≥ SHIFT on either keeps its own worst (min) or,
+		# as a lone entry, resolves through the shift to the same clamped
+		# keep the single-sided formula gives (the two branches agree once
+		# one side's slack covers the whole budget). Squared compare, no sqrt.
+		var rv_ub: float = pv_len \
+				+ absf(opponent_vels[i].x) + absf(opponent_vels[i].z)
+		var far_need: float = span + CROSSING_PROTECT_SHIFT_M + rv_ub * arrival_time
+		if r0x * r0x + r0z * r0z >= far_need * far_need:
+			continue
 		var rvx: float = pvx - opponent_vels[i].x
 		var rvz: float = pvz - opponent_vels[i].z
 		var rv_sq: float = rvx * rvx + rvz * rvz
 		if rv_sq < 0.0001:
 			continue   # co-moving: no meeting — endpoints cover it
-		var r0x: float = from.x - opponents[i].x
-		var r0z: float = from.z - opponents[i].z
 		var t_star: float = -(r0x * rvx + r0z * rvz) / rv_sq
 		if t_star <= 0.0 or t_star >= arrival_time:
 			continue   # closest approach outside the window — endpoints cover it
 		var mx: float = r0x + rvx * t_star
 		var mz: float = r0z + rvz * t_star
 		var d_min: float = sqrt(mx * mx + mz * mz)
-		var span: float = EVADE_STICK_REACH_M
-		if has_caps:
-			var caps: AISkaterCaps = opponent_caps[i]
-			if caps != null:
-				span = caps.blade_span
 		# Which side of the carry line the defender crosses on (m is puck −
 		# defender at t*, so the defender sits at −m relative to the path).
 		var margin: float = d_min - span

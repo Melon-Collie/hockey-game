@@ -1195,6 +1195,15 @@ var _cached_move_vector: Vector2 = Vector2.ZERO
 # FINISHER (one-timer trigger), a live one-timer-ready / body-check commit, a
 # location ping, and a slot change all force an immediate re-eval.
 const ROLE_DECISION_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 30  # ~30 Hz
+# Far-from-play LOD radius (see the throttle site): beyond this distance from
+# the puck the argmax runs at half rate. Physical grounding: at the ~33 m/s max
+# shot speed the play needs ≥ 0.55 s to arrive from 18 m out, an order of
+# magnitude above the ≤ 50 ms of latency the halved cadence adds.
+const FAR_PLAY_LOD_RADIUS_M: float = 18.0
+# Finisher full-rate ring (see the must_recompute doc): a loose/in-flight puck
+# inside this radius can reach the blade within ~0.36 s at the max shot speed —
+# only then are the one-timer trigger and crash read tick-critical.
+const FINISHER_FLIGHT_NEAR_M: float = 12.0
 var _role_decision_cooldown: int = 0
 
 
@@ -1861,14 +1870,30 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				else AIRoleSlots.Slot.NONE
 		var is_finisher_slot: bool = slot == AIRoleSlots.Slot.FINISHER \
 				or slot == AIRoleSlots.Slot.NET_FRONT
-		var puck_in_flight: bool = snapshot.puck_state != null \
-				and snapshot.puck_state.carrier_peer_id == -1
+		# Tick-fresh finisher reads are only trigger-critical while a loose /
+		# in-flight puck is CONVERGING ON THIS BOT: inside the near ring a feed
+		# can reach the blade within ~0.36 s even at the ~33 m/s max shot
+		# speed, so the one-timer trigger and crash read get the full 120 Hz.
+		# A flight the ring hasn't admitted yet cannot arrive faster than it
+		# crosses the ring, so the throttled cadence (the reactive tier still
+		# runs ~30 Hz with the puck in the OZ) loses nothing — while an O-zone
+		# camper no longer re-argmaxes every tick of every rim, dump, and
+		# far-side cycle flight. The ready-armed bypass rides the same ring:
+		# arming is positional (set on arrival at the staging spot) and its
+		# consumers — the carrier's feed compete, the wind-up hold — all run
+		# at the ~30 Hz argmax anyway.
+		var finisher_puck_near: bool = is_finisher_slot \
+				and snapshot.puck_state != null \
+				and snapshot.puck_state.carrier_peer_id == -1 \
+				and snapshot.puck_state.position.distance_squared_to(self_pos) \
+						<= FINISHER_FLIGHT_NEAR_M * FINISHER_FLIGHT_NEAR_M
 		var must_recompute: bool = _cached_role_decision == null \
 				or slot != _prev_role_slot \
-				or (is_finisher_slot and puck_in_flight) \
+				or finisher_puck_near \
 				or ctx.ping_move_target.is_finite() \
 				or _role_decision_pinged \
-				or _cached_role_decision.is_one_timer_ready \
+				or (_cached_role_decision.is_one_timer_ready \
+						and (finisher_puck_near or not is_finisher_slot)) \
 				or _cached_role_decision.commit_check
 		var decision: RoleDecision
 		if must_recompute or _role_decision_cooldown <= 0:
@@ -1876,9 +1901,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			_cached_role_decision = decision
 			# Reactive roles (on the puck / on a man / arming a one-timer)
 			# re-eval at the full ~30 Hz; pure shape-holding roles re-eval at
-			# ~20 Hz — their targets are slow-moving formation posts behind
-			# multi-second hysteresis, where 17 ms of extra staleness is
-			# invisible but the argmax is the whole off-puck AI bill.
+			# ~15 Hz — their targets are slow-moving formation posts behind
+			# multi-second hysteresis, where tens of ms of extra staleness are
+			# invisible but the argmax is the whole off-puck AI bill (steering
+			# still runs every dispatch toward the cached target, and every
+			# discrete event — slot change, ping, one-timer, check commit —
+			# bypasses the throttle entirely).
 			#
 			# Per-peer period skew (+0..2 ticks): any synchronizing event —
 			# a possession flip transitions many bots at once, and each
@@ -1889,10 +1917,26 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# periods drift the phases apart again within a few cycles. The
 			# cadence cost is ≤2 ticks (~17 ms), inside the tolerance the
 			# 20 Hz shape-holder tier already accepts.
-			_role_decision_cooldown = (_peer_id % 3) \
-					+ (ROLE_DECISION_PERIOD_TICKS \
+			var period: int = ROLE_DECISION_PERIOD_TICKS \
 					if _is_reactive_slot(slot, snapshot) \
-					else ROLE_DECISION_PERIOD_TICKS * 3 / 2)
+					else ROLE_DECISION_PERIOD_TICKS * 2
+			# FAR-FROM-PLAY LOD: a bot beyond FAR_PLAY_LOD_RADIUS_M of the puck
+			# re-evals at half rate. Grounded on approach physics, not feel: the
+			# puck is the fastest thing on the ice (~33 m/s max shot), so the
+			# play needs ≥ ~0.55 s to even arrive at this bot's vicinity, while
+			# halving the period adds ≤ 50 ms of decision latency — under a
+			# tenth of that minimum window — and every timing-critical read
+			# still bypasses the throttle same-tick via must_recompute (slot
+			# change, one-timer, ping, live check commit). Steering runs every
+			# dispatch toward the cached target regardless, so only the argmax
+			# thins. This is what keeps the weak side from paying battle rates
+			# to conclude "hold my post".
+			if snapshot.puck_state != null \
+					and ctx.self_pos.distance_squared_to(
+							snapshot.puck_state.position) \
+					> FAR_PLAY_LOD_RADIUS_M * FAR_PLAY_LOD_RADIUS_M:
+				period *= 2
+			_role_decision_cooldown = (_peer_id % 3) + period
 			_role_decision_pinged = ctx.ping_move_target.is_finite()
 		else:
 			_role_decision_cooldown -= _dispatch_period_ticks

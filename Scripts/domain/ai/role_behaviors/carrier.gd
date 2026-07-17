@@ -557,6 +557,9 @@ var _scratch_option_receiver_val: Array[float] = []
 # The pass-option read at the current puck spot — candidates credit only their
 # improvement over this (recomputed every re-eval in _pick_action).
 var _pass_option_at_self: float = 0.0
+# Best cached receiver value × PASS_OPTION_DISCOUNT — the exact upper bound on
+# any candidate's option read (recomputed every re-eval in _pick_action).
+var _pass_option_ceiling: float = 0.0
 
 # ── Debug readout ────────────────────────────────────────────────────────────
 # Populated every re-eval; the state machine forwards these to its
@@ -873,6 +876,14 @@ func _pick_action(ctx: RoleContext) -> void:
 	# at-self read also cancels the coarse option model's bias against the
 	# fully-priced pass common-mode.
 	_pass_option_at_self = _candidate_pass_option(ctx, cur_puck_pos)
+	# Ceiling on ANY candidate's option (lane/miss/decay all ≤ 1): the best
+	# cached receiver value at full discount. When even that can't improve on
+	# the at-self read, no candidate's per-receiver lane loop can either — the
+	# whole option read skips per candidate (see _score_move_candidate). Exact.
+	_pass_option_ceiling = 0.0
+	for v: float in _scratch_option_receiver_val:
+		if v * PASS_OPTION_DISCOUNT > _pass_option_ceiling:
+			_pass_option_ceiling = v * PASS_OPTION_DISCOUNT
 
 	# Projected RELEASE position for SHOOT scoring. The wrister charge
 	# window means the puck actually leaves the blade ~0.25s after
@@ -2243,20 +2254,36 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var local_time: float = AIActionScoring.time_to_arrive(
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed,
 			ctx.self_max_accel)
+	# CEILING PRUNES (exact): the candidate's score is dest_score × lane ×
+	# decay × safety − cost, with dest_score ≤ 1, cost ≥ 0 — so each partial
+	# product of the ≤-1 factors is a hard upper bound, checked in cost
+	# order: decay alone (free) before the opponent projection, lane × decay
+	# before the safety read, lane × decay × safety before the arrival-shot /
+	# continuation / strip machinery. Candidates are ordered forward-first,
+	# so a strong early spot prunes the tail; under pressure SAFETY is the
+	# killer, and pruning on it before the goalie block is what keeps a
+	# swarmed carrier's compete from paying full price for doomed spots.
+	var decay: float = AIActionScoring.delay_discount(local_time)
+	if decay <= best_so_far:
+		return -INF
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
 	var lane: float = AIActionScoring.carry_lane_clearance(
 			self_pos, candidate, local_time, _scratch_opponents, _scratch_opponent_vels,
 			ctx.self_max_speed)
 	if lane <= 0.0:
 		return -INF
-	# CEILING PRUNE (exact): the candidate's score is dest_score × lane ×
-	# decay × safety − cost, with dest_score ≤ 1, safety ≤ 1, cost ≥ 0 — so
-	# lane × decay is a hard upper bound. When even that can't beat the
-	# caller's incumbent, the arrival-shot / safety / continuation / strip
-	# machinery (~300 µs) is already decided and skips wholesale. Candidates
-	# are ordered forward-first, so a strong early spot prunes the tail.
-	var decay: float = AIActionScoring.delay_discount(local_time)
 	if lane * decay <= best_so_far:
+		return -INF
+	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
+	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
+	# apply_escape: a defender the carrier out-skates on this drive is being beaten
+	# and can't sustain the strip — so driving PAST a man reads as winnable, not as a
+	# wall (the "if I keep going I've beaten him" read).
+	var safety: float = AIActionScoring.carry_safety(
+			cur_puck_pos, cand_puck_pos, local_time,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+			true)
+	if lane * decay * safety <= best_so_far:
 		return -INF
 	# The candidate's shot is taken ARRIVING AT PACE, not from a dead stop —
 	# carry steps are skated at speed (the arrival brake deliberately skips
@@ -2338,17 +2365,14 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# as the IMPROVEMENT over the same read at the current spot: a lane already
 	# open from here is the live pass's to take (fire wins ties), so holding a
 	# cashable option is never a reason to keep carrying.
-	dest_score = maxf(dest_score, maxf(
-			0.0, _candidate_pass_option(ctx, candidate) - _pass_option_at_self))
-	var cand_puck_pos: Vector3 = _puck_pos_at(candidate, ctx.attacking_goal_pos)
-	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
-	# apply_escape: a defender the carrier out-skates on this drive is being beaten
-	# and can't sustain the strip — so driving PAST a man reads as winnable, not as a
-	# wall (the "if I keep going I've beaten him" read).
-	var safety: float = AIActionScoring.carry_safety(
-			cur_puck_pos, cand_puck_pos, local_time,
-			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
-			true)
+	# CEILING PRUNE (exact): the option credit is maxf'd in and can't exceed
+	# _pass_option_ceiling − at_self, so when even that can't raise dest_score
+	# the per-receiver lane loop is already decided and skips wholesale — the
+	# common case whenever the carrier's own spot still reaches the best man.
+	if _pass_option_ceiling - _pass_option_at_self > dest_score:
+		dest_score = maxf(dest_score, maxf(
+				0.0, _candidate_pass_option(ctx, candidate,
+						dest_score + _pass_option_at_self) - _pass_option_at_self))
 	# ...and the carry CONTINUATION it opens (see _carry_continuation_value —
 	# the pass option's skating twin): the two-ply read that lets a spot be
 	# worth what it enables NEXT. Skipped when the first leg already dies
@@ -2519,9 +2543,16 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 # against CURRENT defenders — this only has to rank SPOTS; the fired pass is
 # still fully solved at fire time. Priced as a future action: lane ×
 # completion odds × the pass's own flight decay × PASS_OPTION_DISCOUNT.
-func _candidate_pass_option(ctx: RoleContext, candidate: Vector3) -> float:
+func _candidate_pass_option(ctx: RoleContext, candidate: Vector3,
+		useless_below: float = 0.0) -> float:
 	var best: float = 0.0
 	for i: int in _scratch_option_receiver_pos.size():
+		# Receiver ceiling (exact): lane/miss/decay all ≤ 1, so a receiver
+		# whose full-discount value can't beat the running best — or the
+		# caller's own uselessness floor — can't win the loop.
+		if _scratch_option_receiver_val[i] * PASS_OPTION_DISCOUNT \
+				<= maxf(best, useless_below):
+			continue
 		var rpos: Vector3 = _scratch_option_receiver_pos[i]
 		if AIActionScoring.pass_lane_blocked_by_net(candidate, rpos):
 			continue
