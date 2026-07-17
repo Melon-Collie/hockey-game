@@ -168,7 +168,8 @@ Per-state specs (behavior module in parentheses; **bold = new code**, others reu
   kills the center outlet and the cross-ice reverse; F2_STRONG/F2_WEAK re-sort when the
   puck changes sides (strong_x flip). DP_STRONG / DP_WEAK (`AIRoleDefenseman`): hold the
   offensive blue line **inside the dots** (|x| ≤ 6.7), tight gap, each bounded by the
-  same race-home read F3 uses today (`race_home_radius`) so a stretch threat sags them
+  same race-home read F3 uses today (the puck-path intercept read,
+  `AIRoleHelpers.fill_counter_channels` / `race_home_feasible`) so a stretch threat sags them
   out — the existing F3 pinch-safety logic generalized to a pair. No deliberate
   down-the-wall pinch in v1 (§ non-goals).
 
@@ -295,8 +296,8 @@ all the same player-type doing the same philosophy at different game moments:
   shaded central. "Walking the line" is a small lateral argmax (same
   candidate-set idiom every role uses) scoring: shooting-lane openness from the
   candidate (`lane_clear` toward the net) + pass-option value + **keep-in insurance**
-  (never so central/deep that a cleared puck up his wall beats him — a race read
-  against the nearest opponent, the same primitive as `race_home_radius`).
+  (never so central/deep that a cleared puck up his wall beats him — the shared
+  puck-path intercept race, `AIRoleHelpers.race_home_feasible`).
 - **FORECHECK line-hold** (DP_STRONG / DP_WEAK): hold the offensive blue line inside
   the dots; sag down the NZ when the race home is no longer winnable (F3's existing
   bounded-hold logic, applied per-side).
@@ -373,7 +374,7 @@ would dilute the covered-vs-open signal this term exists to read.)
   primitive every race read uses).
 - `covering_defenders` — each teammate (and the carrier himself!) is included iff he
   reaches the counter point before the rush **with time to set** (the same
-  brake-to-arrive margin `race_home_radius` charges — a defender racing
+  brake-to-arrive margin the race-home read charges at its net station — a defender racing
   stride-for-stride beside the rush is chasing, not covering). Covering bodies stand
   at the goal-side cover anchor (the threat partition's stick-in-the-lane point). A
   point D covering behind the play qualifies; a winger cycling the corner does not.

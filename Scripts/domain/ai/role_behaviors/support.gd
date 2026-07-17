@@ -111,6 +111,24 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var exposure_cap: float = 1.0 if AIActionScoring.in_offensive_zone(
 			carrier_pos, ctx.attacking_goal_pos) else EXPOSURE_MAX
 
+	# Far from the station, skate at the CALCULATED post directly — the
+	# openness argmax refines a read that will be re-taken from closer before
+	# arrival (see STATION_ARGMAX_LOD_M). In the OZ the station is the high
+	# post; in transit it's the goal-side trail a step behind the carrier
+	# (always passes the goal-side valve by construction).
+	var station: Vector3
+	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
+		station = Vector3(
+				carrier_pos.x * 0.5, 0.0,
+				-ctx.own_goal_dir * GameRules.BLUE_LINE_Z
+						- ctx.own_goal_dir * HIGH_POST_INSET_M)
+	else:
+		station = carrier_pos + Vector3(
+				0.0, 0.0, ctx.own_goal_dir * AIRoleHelpers.SEARCH_STEP_M)
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, station):
+		d.target_position = station
+		return d
+
 	# Search around the carrier. Polar samples cover the cycle space;
 	# anti-crowd filter rejects the carrier-overlap candidate.
 	var candidates: Array[Vector3] = _generate_candidates(ctx, carrier_pos)
@@ -174,19 +192,30 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 	var result: Array[Vector3] = []
 	result.append(ctx.self_pos)
 	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
+		# NAMED third-man-high stations — the OZ zone-keeper geography, not a
+		# blind ring around one center (same conversion as the finisher's
+		# one-timer stations). Each is a structural cycle spot; the scoring
+		# (pass value × recoverability) arbitrates per the live coverage:
 		var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
-		var high_post := Vector3(
-				carrier_pos.x * 0.5,
-				0.0,
-				blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M)
-		for angle: float in AIRoleHelpers.POLAR_ANGLES:
-			result.append(Vector3(
-					high_post.x + SEARCH_RADIUS_M * cos(angle),
-					0.0,
-					high_post.z + SEARCH_RADIUS_M * sin(angle)))
+		var post_z: float = blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M
+		var wall_sign: float = signf(carrier_pos.x) if absf(carrier_pos.x) > 0.1 \
+				else ctx.strong_x
+		# HIGH POST — top of the zone shaded to the carrier's side: the
+		# point outlet / zone keeper / first man back.
+		var high_post := Vector3(carrier_pos.x * 0.5, 0.0, post_z)
 		result.append(high_post)
-		# Half-wall cycle option between the high post and the carrier.
+		# HALF-WALL BUMP — the classic cycle bump spot between the high post
+		# and the carrier's wall.
 		result.append((high_post + carrier_pos) * 0.5)
+		# CENTER POINT — the middle of the line: the cross-ice outlet when
+		# the strong-side lane is walled off.
+		result.append(Vector3(0.0, 0.0, post_z))
+		# WEAK FLANK — the far dot lane at the top of the circles: the
+		# cross-seam outlet that flips the point of attack.
+		result.append(Vector3(
+				-wall_sign * GameRules.END_ZONE_FACEOFF_DOT_X, 0.0,
+				ctx.attacking_goal_pos.z + ctx.own_goal_dir
+						* (GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z + 3.0)))
 		return result
 	result.append(carrier_pos)
 	for angle: float in AIRoleHelpers.POLAR_ANGLES:
@@ -199,12 +228,54 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 
 # ── Role-specific scoring ────────────────────────────────────────────────────
 
-# Min over opponents of momentum-aware ETA back to our net. Shared race-home
-# primitive (AIRoleHelpers.min_opp_time_home) — also the forecheck safety's
-# pinch read.
+# SUPPORT-private conservative time-home: min over opponents of their BODY's
+# legacy effective-speed ETA to our net — no puck-gain leg, no ramp. FROZEN
+# deliberately, on two counts. (1) Not the shared puck-path intercept read
+# (AIRoleHelpers.fill_counter_channels): with the honest gain leg, a lurker
+# deep in our end makes every up-ice spot read "exposed" while the deep spot
+# reads perfectly safe — and the ratio ramp below then pays SUPPORT to hide
+# at home instead of joining the rush, when the right play is to trail up and
+# leave the crease-lurker to the goalie until a 40 m outlet actually
+# connects. (2) Not the calibrated time_to_arrive either: the ramp charge
+# shifts both sides of the my_time/safe_time ratio and re-tips the same
+# shipped trade-off toward stranding deep. The honest fix is a covering-set /
+# shot-quality exposure (counter_rush_cost's shape) instead of a time ramp —
+# tracked in ARCHITECTURE → Known Issues; until then this frozen legacy read
+# keeps the shipped balance intact and self-contained.
 static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
 		opp_caps: Array, our_net: Vector3) -> float:
-	return AIRoleHelpers.min_opp_time_home(opp_states, opp_caps, our_net)
+	var has_caps: bool = opp_caps.size() == opp_states.size()
+	var best: float = INF
+	for i: int in opp_states.size():
+		var s: SkaterNetworkState = opp_states[i]
+		var ref_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opp_caps[i]
+			if caps != null:
+				ref_speed = caps.max_speed
+		var t: float = _legacy_body_eta(s.position, our_net, s.velocity, ref_speed)
+		if t < best:
+			best = t
+	return best
+
+
+# The pre-phase-model effective-speed ETA (ref + v_along, cross momentum as
+# pure delay), kept ONLY for the exposure ramp above — see the freeze
+# rationale on _min_opp_time_home. Do not reuse elsewhere.
+static func _legacy_body_eta(from_pos: Vector3, dest: Vector3,
+		from_velocity: Vector3, ref_speed_m_s: float) -> float:
+	var dx: float = dest.x - from_pos.x
+	var dz: float = dest.z - from_pos.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	if dist < 0.001:
+		return 0.0
+	var inv: float = 1.0 / dist
+	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
+	var effective: float = maxf(1.0, ref_speed_m_s + speed_along)
+	var v_len_sq: float = from_velocity.x * from_velocity.x \
+			+ from_velocity.z * from_velocity.z
+	var perp_sq: float = maxf(0.0, v_len_sq - speed_along * speed_along)
+	return dist / effective + sqrt(perp_sq) / GameRules.DEFAULT_SKATER_THRUST_M_S2
 
 
 # Foot-race-home exposure in [0, cap]. 0 when I beat every opp back to our net;

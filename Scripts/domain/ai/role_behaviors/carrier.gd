@@ -261,6 +261,18 @@ const CARRY_RETREAT_STEP_M: float = CARRY_SEARCH_STEP_M * 2.0
 const _RETREAT_ANGLES: Array[float] = [
 		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
+# COMMITTED-CUT ring — the retreat ring's forward twin: five samples across
+# the FRONT arc at double the local step. The local 3 m cardinals are too
+# tight to change the attack angle (still inside the goalie's tracked-square
+# dead zone) and the far anchors (slot, exits) cross traffic — so the natural
+# curl endpoints, the arc a full-speed cut actually lands on (deep AND
+# across), fell between samples and a wing carrier had no representable
+# "curl to the net" move: it glided the wall to the goal line and turned at
+# 90° (the felt bug). Same clamps and uniform scoring as everything else;
+# bound-pruned, so open ice pays almost nothing for the extra five.
+const _CUT_ANGLES: Array[float] = [
+		-0.9, -0.45, 0.0, 0.45, 0.9,
+]
 # Deke engagement gates (the cheap pre-filters before the manufactured-opening
 # math runs — see AIActionScoring.deke_cut_side). ENGAGE_RANGE: the containing
 # defender must be close enough that the duel is live but the fake still has
@@ -1863,6 +1875,28 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				best_score = retreat_total
 				best_pos = retreat
 
+	# COMMITTED-CUT ring (see _CUT_ANGLES): the curl candidates between the
+	# local cardinals and the far anchors. Attacking half only — the curl is
+	# an attack shape (bend the approach while there's angle to use); in our
+	# half the exits, slot anchor, and retreat ring already span the moves,
+	# and the five extra scored candidates are pure hot-path cost there.
+	if ctx.own_goal_dir * self_pos.z < 1.0:
+		for angle: float in _CUT_ANGLES:
+			var cc: float = cos(angle)
+			var cs: float = sin(angle)
+			var cut := Vector3(
+					self_pos.x + (fwd_x * cc - fwd_z * cs) * CARRY_RETREAT_STEP_M, 0.0,
+					self_pos.z + (fwd_x * cs + fwd_z * cc) * CARRY_RETREAT_STEP_M)
+			if absf(cut.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
+				continue
+			if absf(cut.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+				continue
+			var cut_total: float = _score_move_candidate(ctx, cut, our_goalie,
+					false, maxf(best_score, cont_bound))
+			if cut_total > best_score:
+				best_score = cut_total
+				best_pos = cut
+
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
 	# already cover it via local polar candidates.
@@ -2096,7 +2130,19 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# assumed SQUARE at every candidate before the final race, so each further
 	# cut prices only the honest last-quarter-second window, which shrinks as
 	# the angle forecloses.
-	# Unsettled stays 0 — the shortfall is expressed positionally, as everywhere.
+	#
+	# The candidate's arrival UNSETTLE is credited honestly, from the TRACKED
+	# keeper over the FINAL window only (windup + flight): he follows the
+	# whole carry (phase 1 above), so the carry itself never catches him —
+	# only the re-square the RELEASE still demands can. That residual is the
+	# moving-release displacement: a candidate arrived at pace releases
+	# arrive_vel × windup past the square he tracked to, and at short range
+	# that lateral jump outruns his push — the hard cut in tight scores its
+	# real window. A slow straight drive leaves ~zero (he tracked it all the
+	# way in), so crease-smother drives earn nothing — measuring from the
+	# goalie's CURRENT position over the whole carry instead double-charges
+	# him for a swing his tracking already covers and turns every doorstep
+	# drive into a phantom caught-moving goalie.
 	var to_cand: Vector3 = candidate - self_pos
 	to_cand.y = 0.0
 	var cand_dist: float = to_cand.length()
@@ -2123,9 +2169,16 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight
 					+ ctx.shot_timing_error_s * 0.5,
 			cand_release)
+	var cand_unsettled: float = 0.0
+	if ctx.reads_goalie_motion:
+		cand_unsettled = AIActionScoring.goalie_unsettled(
+				tracked_goalie, ctx.attacking_goal_pos,
+				SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+						+ cand_flight + ctx.shot_timing_error_s * 0.5,
+				cand_release)
 	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,
-			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
+			ctx.self_wrister_shot_speed, cand_unsettled, ctx.self_aim_spread_rad)
 	# ...plus the pass OPTION the spot opens (see _candidate_pass_option): what
 	# the carrier can DO from a candidate includes moving the puck, not just
 	# shooting from it — the missing half of "back off to create space". A

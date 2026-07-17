@@ -27,8 +27,10 @@ var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # All-direction acceleration / thrust (Agility). The reachable-set tests ask
 # "how far off its momentum line can this skater pull a stick?" — that ceiling is
-# this value. Default mirrors SkaterController.thrust's 12.0 default.
-var max_accel: float = 12.0
+# this value. Default mirrors SkaterController.thrust's league default (it read
+# 12.0 for a while after the thrust retune to 10.5 — a silently stale baseline
+# for every caps-less ETA).
+var max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 
 # Hand-to-toe blade span = stick + blade (Size, via stick length). The state
 # machine derives its reach gates (blade reach, pass-reception offset, poke reach)

@@ -45,10 +45,12 @@ class_name AIRolePressure
 # the puck; "getting caught up-ice" isn't applicable. The MARK
 # defenders own defensive recovery for this team.
 
-# Inner-ring gate range: within ~1.5 outer search steps of the cut-off the
-# argmax samples the half-step ring too (fine corrections while engaged);
-# beyond it the coarse ring is plenty — steering is consuming the target at
-# full stride. Physical scale: the outer ring's own step distance.
+# Engaged/closing boundary: within ~1.5 search steps of the cut-off the
+# argmax runs the full polar ring incl. half-step samples (fine corrections
+# while engaged); beyond it the candidates are the CALCULATED closing stands
+# (shot cut-off / best-pass-lane cut-off / midpoint — see decide) — steering
+# is consuming the target at full stride, where ring resolution is
+# invisible. Physical scale: the outer ring's own step distance.
 const PRESSURE_INNER_RING_RANGE_M: float = 4.5
 
 # Switch-hysteresis on the chosen cut-off point is the shared off-puck mechanism
@@ -126,30 +128,53 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		search_center += to_net.normalized() * (
 				SkaterAgentStateMachine.BLADE_REACH_M + ctx.pursuit_standoff_m)
 
-	# Search around the cut-off point. The half-step inner ring exists so a
-	# pressurer ALREADY AT the cut-off can express small corrections — a
-	# body still skating in consumes the target through steering at full
-	# stride, where half-step resolution is invisible. Gate the ring on
-	# proximity: ~19 → ~11 scored candidates while closing (the common
-	# case), full resolution once engaged.
+	# Upper bounds for the per-candidate max() early-out: the carrier's
+	# option values with the current defenders only. One extra surface pass
+	# here lets every candidate below skip the pass lanes that can't matter
+	# (identical argmax — see carrier_option_bases). Also the data the
+	# CALCULATED closing stands below are built from.
+	var bases: Array[float] = ctx.scratch_option_bases
+	AIRoleHelpers.carrier_option_bases(
+			carrier_pos, our_net, our_goalie_pos,
+			our_team_excluding_self, opp_teammates, bases)
+
+	# Candidate set. ENGAGED (within the inner-ring range of the cut-off):
+	# the full polar ring incl. half-step samples — a pressurer standing at
+	# the cut-off expresses small live corrections. CLOSING (the common
+	# case): the ring's argmax reduces to a choice between COMPUTABLE
+	# stands — its own hysteresis note says the near-tied pair is "block
+	# the shot" vs "block the best pass" — so score exactly those directly:
+	# the shot-line cut-off (the search center), the same stick-length
+	# stand-off dropped onto the carrier's best pass lane (from the bases,
+	# already computed), and their midpoint (the split stand). Steering
+	# consumes the target at full stride while closing, so the ring's ±3 m
+	# refinements were indistinguishable en route.
 	var near_cutoff: bool = ctx.self_pos.distance_squared_to(search_center) \
 			< PRESSURE_INNER_RING_RANGE_M * PRESSURE_INNER_RING_RANGE_M
-	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, search_center, near_cutoff)
+	var candidates: Array[Vector3] = []
+	if near_cutoff:
+		candidates = AIRoleHelpers.generate_candidates_around(
+				ctx.self_pos, search_center, true)
+	else:
+		candidates.append(search_center)
+		var worst_pass: int = -1
+		for i: int in range(1, bases.size()):
+			if worst_pass == -1 or bases[i] > bases[worst_pass]:
+				worst_pass = i
+		if worst_pass != -1 and bases[worst_pass] > 0.0:
+			var lane: Vector3 = opp_teammates[worst_pass - 1] - lead
+			var lane_len: float = sqrt(lane.x * lane.x + lane.z * lane.z)
+			if lane_len > 0.001:
+				var pass_stand: Vector3 = lead + lane * (
+						(SkaterAgentStateMachine.BLADE_REACH_M
+								+ ctx.pursuit_standoff_m) / lane_len)
+				candidates.append(pass_stand)
+				candidates.append((search_center + pass_stand) * 0.5)
 	# Switch-hysteresis: inject the standing cut-off point so it's re-scored live
 	# and held (via incumbent_bonus) unless a fresh candidate is clearly better.
 	# It runs the same legality / goal-side / anti-crowd filters below, so a
 	# now-illegal or wrong-side incumbent is dropped outright.
 	AIRoleHelpers.append_incumbent(ctx, candidates)
-
-	# Upper bounds for the per-candidate max() early-out: the carrier's
-	# option values with the current defenders only. One extra surface pass
-	# here lets every candidate below skip the pass lanes that can't matter
-	# (identical argmax — see carrier_option_bases).
-	var bases: Array[float] = ctx.scratch_option_bases
-	AIRoleHelpers.carrier_option_bases(
-			carrier_pos, our_net, our_goalie_pos,
-			our_team_excluding_self, opp_teammates, bases)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF

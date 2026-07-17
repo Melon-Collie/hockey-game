@@ -221,16 +221,13 @@ func test_never_advances_past_recovery_toward_a_distant_carrier() -> void:
 	# ownership — covered by the odd-man tests below).
 	ctx.plays_rush_pass_lanes = false
 	var d: RoleDecision = AIRoleContain.decide(ctx)
-	var opp_states: Array[SkaterNetworkState] = []
-	for pid: int in [200, 210]:
-		opp_states.append(ctx.snapshot.skater_states[pid])
-	var r: float = AIRoleHelpers.race_home_radius(
-			ctx, opp_states, Vector3(0, 0, OUR_NET_Z))
-	assert_lte(d.target_position.distance_to(Vector3(0, 0, OUR_NET_Z)), r + 0.3,
-			"CONTAIN holds inside the race-home radius instead of chasing the"
-			+ " distant gap point; got %s (r=%.1f)" % [d.target_position, r])
 	assert_gt(d.target_position.z, 0.0,
-			"…which keeps it on OUR side of center while the trailer streaks")
+			"CONTAIN waits at the edge of recoverability — on OUR side of"
+			+ " center, not chasing the distant gap point; got %s"
+			% d.target_position)
+	assert_lt(d.target_position.z, trailer.z + 12.0,
+			"…and sags to even with the trailer, not into a full retreat to"
+			+ " the crease; got %s" % d.target_position)
 
 
 func test_trailer_race_reads_the_trailer_real_speed_cap() -> void:
@@ -298,9 +295,14 @@ func test_two_on_one_splits_toward_the_open_feed_lane() -> void:
 			"an uncovered 2-on-1 partner pulls the stand toward his feed lane;"
 			+ " got %s" % d.target_position)
 	# Depth discipline is preserved: the fan rotates AT the gap distance —
-	# CONTAIN neither lunges at the carrier nor abandons the retreat.
+	# CONTAIN neither lunges at the carrier nor abandons the retreat. The
+	# expected depth is the normal protect-the-net ramp (the trailer's
+	# counter path is contained from there, so no extra sag applies).
+	var ramp_gap: float = clampf(
+			Vector3(0, 0, 14).distance_to(Vector3(0, 0, OUR_NET_Z)) * AIRoleContain.GAP_FRACTION,
+			AIRoleContain.GAP_MIN_M, AIRoleContain.GAP_MAX_M)
 	var gap_dist: float = d.target_position.distance_to(Vector3(0, 0, 14))
-	assert_between(gap_dist, 4.0, 9.5,
+	assert_between(gap_dist, ramp_gap - 0.3, 9.5,
 			"lane candidates keep the gap depth; got %.2f m off the carrier" % gap_dist)
 
 

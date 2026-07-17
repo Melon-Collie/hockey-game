@@ -344,8 +344,8 @@ func test_assign_hysteresis_keeps_prev_when_close() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), prev)
-	# Effective ETA at league speed 9: 100 = 1.0/9 ≈ 0.111 s (no
-	# penalty, was PRESSURE); 110 = 0.5/9 + 0.12 ≈ 0.176 s. 100 wins.
+	# Calibrated standing-start ETAs: 100 ≈ 0.48 s (no penalty, was
+	# PRESSURE); 110 ≈ 0.34 + 0.2 hysteresis ≈ 0.54 s. 100 wins.
 	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE,
 			"peer 100 keeps PRESSURE despite peer 110 being 0.5 m closer to puck")
 
@@ -354,8 +354,8 @@ func test_assign_hysteresis_swaps_when_contender_meaningfully_sooner() -> void:
 	# The contender's arrival advantage now exceeds the hysteresis
 	# margin — the slot flips to the genuinely better-placed peer.
 	var skaters: Array = [
-			[100, 0, Vector3(2.0, 0.0, 22.0)],   # 3.0 m from puck → 0.333 s
-			[110, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m → 0.111 + 0.12 = 0.231 s
+			[100, 0, Vector3(2.0, 0.0, 22.0)],   # 3.0 m from puck → ≈0.83 s
+			[110, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m → ≈0.48 + 0.2 = 0.68 s
 			[120, 0, Vector3(-2.0, 0.0, 25.0)],
 			[200, 1, Vector3(5.0, 0.0, 22.0)],
 	]
@@ -394,11 +394,13 @@ func test_assign_momentum_beats_raw_distance() -> void:
 
 func test_assign_speed_cap_feeds_election() -> void:
 	# Each peer races at its real Speed cap: a faster build farther out
-	# arrives sooner and takes the slot.
+	# arrives sooner and takes the slot. Distances long enough for top
+	# speed to engage — the calibrated ETA charges both builds the same
+	# standing-start ramp, so the cap only pays past its ramp distance.
 	var skaters: Array = [
-			[100, 0, Vector3(1.0, 0.0, 22.0)],   # 4 m from puck at ref 9 → 0.444 s
-			[110, 0, Vector3(-1.0, 0.0, 22.0)],  # 6 m from puck at cap 20 → 0.3 s
-			[120, 0, Vector3(-2.0, 0.0, 25.0)],
+			[100, 0, Vector3(5.0, 0.0, 4.0)],    # 18 m from puck at ref 9
+			[110, 0, Vector3(5.0, 0.0, -4.0)],   # 26 m from puck at cap 20
+			[120, 0, Vector3(-10.0, 0.0, -18.0)],  # far — out of the race
 			[200, 1, Vector3(5.0, 0.0, 22.0)],
 	]
 	var snap := _make_snapshot(skaters, 200)

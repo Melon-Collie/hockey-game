@@ -29,13 +29,27 @@ func test_shoot_score_falls_off_with_pressure() -> void:
 	var shooter := Vector3(0.0, 0.0, 21.0)
 	var goalie := Vector3(0.5, 0.0, 26.0)
 	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
-	# Defender 2 m sideways AND 2 m forward (toward goal): inside the
-	# forward cone (≈45° offset, dot ≈ 0.71) and inside the pressure
-	# radius. Far enough off the shot lane that lane_clear stays at 1.0,
-	# so we're testing pressure in isolation.
-	var nearby_opp: Array[Vector3] = [Vector3(2.0, 0.0, 23.0)]
+	# Defender one stick from the RELEASE POINT (the puck a carry-handle
+	# toward the net): his blade genuinely contests the windup
+	# (release_contest_clean). Off the shot lane laterally so lane_clear
+	# stays ~1.0 — this tests release duress in isolation.
+	var nearby_opp: Array[Vector3] = [Vector3(1.2, 0.0, 22.4)]
 	var pressured: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,nearby_opp)
-	assert_lt(pressured, clear, "opponent in the forward pressure cone should reduce shoot score")
+	assert_lt(pressured, clear, "a blade within reach of the release contests the shot")
+
+
+func test_shoot_score_ignores_defender_beyond_blade_reach() -> void:
+	# The old density curve penalized any body within 4 m of the shooter's
+	# forward cone. Physically, a defender ~3 m away cannot touch a ~135 ms
+	# release — only a blade that can reach the puck during the windup
+	# contests it. He's also kept off the shot lane so lane_clear is 1.0.
+	var shooter := Vector3(0.0, 0.0, 21.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var clear: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,[])
+	var watcher: Array[Vector3] = [Vector3(2.8, 0.0, 22.5)]
+	var watched: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW,watcher)
+	assert_almost_eq(watched, clear, 0.001,
+			"a body near-but-out-of-reach does not contest the release")
 
 
 func test_shoot_score_reduced_by_mid_lane_defender() -> void:
@@ -952,12 +966,22 @@ func test_time_to_arrive_zero_at_destination() -> void:
 			0.0, 0.0001)
 
 
-func test_time_to_arrive_uses_ref_speed_when_stationary() -> void:
-	# Stationary skater 10 m from dest. effective_speed = SKATER_REF.
+func test_time_to_arrive_charges_the_standing_start_ramp() -> void:
+	# Stationary skater 10 m from dest: the calibrated phase model charges
+	# the real acceleration ramp (capped at a_net = accel × RAMP_EFFICIENCY)
+	# before the cruise — a standing start is genuinely slower than
+	# dist / top_speed (the old free-ramp read). Exact phase math:
+	# ramp to v_max, then cruise the remainder.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var dest := Vector3(10.0, 0.0, 0.0)
 	var t: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
-	assert_almost_eq(t, 10.0 / AIActionScoring.SKATER_REF_SPEED_M_S, 0.001)
+	var vmax: float = AIActionScoring.SKATER_REF_SPEED_M_S
+	var a_net: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2 \
+			* AIActionScoring.RAMP_EFFICIENCY
+	var d_ramp: float = vmax * vmax / (2.0 * a_net)
+	var expected: float = vmax / a_net + (10.0 - d_ramp) / vmax
+	assert_almost_eq(t, expected, 0.001)
+	assert_gt(t, 10.0 / vmax, "the ramp costs real time over the naive cruise")
 
 
 func test_time_to_arrive_faster_with_momentum_toward_dest() -> void:
@@ -980,15 +1004,21 @@ func test_time_to_arrive_slower_with_momentum_away() -> void:
 			"velocity component away from dest increases arrival time")
 
 
-func test_time_to_arrive_clamps_at_min_speed_for_extreme_reverse() -> void:
-	# Skater moving so fast away from dest that effective_speed would
-	# be non-positive without the floor. The clamp at MIN_TRAVEL_SPEED_M_S
-	# ensures finite (large) ETA — 10 m / 1 m/s = 10 s.
+func test_time_to_arrive_prices_the_full_reversal() -> void:
+	# Skater flying away from the destination: the phase model brakes the
+	# retreat out at the measured brake decel, gives back the ground lost
+	# while braking, then runs a standing-start pursuit. Finite, large, and
+	# monotone in how hard the retreat was.
 	var from := Vector3(0.0, 0.0, 0.0)
 	var dest := Vector3(10.0, 0.0, 0.0)
-	var t: float = AIActionScoring.time_to_arrive(
+	var mild: float = AIActionScoring.time_to_arrive(
+			from, dest, Vector3(-5.0, 0.0, 0.0))
+	var extreme: float = AIActionScoring.time_to_arrive(
 			from, dest, Vector3(-50.0, 0.0, 0.0))
-	assert_almost_eq(t, 10.0 / AIActionScoring.MIN_TRAVEL_SPEED_M_S, 0.001)
+	var rest: float = AIActionScoring.time_to_arrive(from, dest, Vector3.ZERO)
+	assert_gt(mild, rest, "a retreat costs more than a standing start")
+	assert_gt(extreme, mild, "a harder retreat costs more")
+	assert_lt(extreme, 60.0, "and stays finite")
 
 
 # ─── expected_pass_speed / pass_launch_speed (target-arrival model) ──────

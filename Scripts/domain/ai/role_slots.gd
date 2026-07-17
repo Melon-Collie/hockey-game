@@ -105,10 +105,12 @@ enum Slot {
 # have the slot last tick pays this many seconds of effective arrival
 # time to take it. Sticky enough to prevent flicker between
 # kinematically-similar peers, loose enough that natural play movement
-# triggers role swaps. Same margin as AILoosePuckChase.HYSTERESIS_S
-# (≈ the old 1.0 m distance penalty at league top speed), so the two
-# election seams stay consistent.
-const HYSTERESIS_PENALTY_S: float = 0.12
+# triggers role swaps. Same margin as AILoosePuckChase.HYSTERESIS_S,
+# so the two election seams stay consistent. ≈ 1 m of positional
+# difference at the calibrated ETA's close-range standing-start rate
+# (~2 m at cruise) — re-derived when time_to_arrive moved from the
+# free-ramp heuristic to the measured phase model.
+const HYSTERESIS_PENALTY_S: float = 0.2
 
 # Hysteresis for the NEUTRAL flank L/R split, which is an X-axis SIDE
 # choice rather than a race — a peer wobbling near center keeps its

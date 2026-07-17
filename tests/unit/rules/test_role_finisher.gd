@@ -270,6 +270,52 @@ func test_positioning_stages_weak_side_of_a_strong_side_carrier() -> void:
 			"FINISHER stages weak-side, opposite the carrier; got x=%f" % x)
 
 
+# ─── NAMED-STATION STAGING (the one-timer geography) ──────────────────────
+
+func _cycle_ctx(skaters: Array) -> RoleContext:
+	# Settled cycle: carrier (peer 2) holds the puck on the strong-side
+	# half-wall; the finisher (peer 1) reads its staging spot. Puck carried
+	# (not a shot), so positioning mode runs.
+	var ctx: RoleContext = _make_ctx(
+			Vector3(-3.0, 0.0, -20.0), Vector3.ZERO,
+			Vector3(8.0, 0.0, -20.0), Vector3.ZERO, skaters)
+	ctx.snapshot.puck_state.carrier_peer_id = 2
+	ctx.strong_x = 1.0
+	return ctx
+
+
+func test_finisher_stages_the_open_backdoor() -> void:
+	# Net-front cover parked on the bumper, cross-seam lane to the far post
+	# wide open: the staging argmax must take the backdoor — the far-post
+	# one-timer is the highest-value look the coverage concedes.
+	var ctx: RoleContext = _cycle_ctx([
+			_make_skater(1, TEAM_ID, Vector3(-3.0, 0.0, -20.0)),
+			_make_skater(2, TEAM_ID, Vector3(8.0, 0.0, -20.0)),   # carrier, wall
+			_make_skater(10, 1, Vector3(-0.8, 0.0, -21.5)),       # bumper cover
+	])
+	var d: RoleDecision = AIRoleFinisher.decide(ctx)
+	assert_lt(d.target_position.x, -1.5,
+			"stages beyond the far post, not mid-slot; got %s" % d.target_position)
+	assert_lt(d.target_position.z, -23.0,
+			"…deep at the backdoor, not the high slot; got %s" % d.target_position)
+
+
+func test_finisher_stays_off_a_covered_feed_lane() -> void:
+	# A defender camped on the backdoor lane (and near the spot): the feed
+	# there is dead, so the argmax stages a spot the carrier can actually
+	# reach — the chosen station's feed must out-value the covered backdoor.
+	var backdoor := Vector3(-2.3, 0.0, -25.15)
+	var ctx: RoleContext = _cycle_ctx([
+			_make_skater(1, TEAM_ID, Vector3(-3.0, 0.0, -20.0)),
+			_make_skater(2, TEAM_ID, Vector3(8.0, 0.0, -20.0)),
+			_make_skater(10, 1, Vector3(2.0, 0.0, -22.3)),        # on the seam lane
+			_make_skater(11, 1, backdoor + Vector3(0.3, 0.0, 0.5)),
+	])
+	var d: RoleDecision = AIRoleFinisher.decide(ctx)
+	assert_gt(d.target_position.distance_to(backdoor), 2.0,
+			"does not camp a dead backdoor; got %s" % d.target_position)
+
+
 # ─── RUSH-AWARE STAGING ───────────────────────────────────────────────────
 
 func _rush_ctx(carrier_vel: Vector3) -> RoleContext:
@@ -307,19 +353,24 @@ func test_rush_factor_one_for_fast_closing_carrier() -> void:
 			AIRoleFinisher._rush_factor(_rush_ctx(Vector3(0.0, 0.0, -8.0))), 1.0, 0.001)
 
 
-func test_rush_stages_finisher_closer_to_the_net_than_set_cycle() -> void:
+func test_rush_stages_finisher_at_a_net_crash() -> void:
 	# Same wide strong-side (+X) carrier; only its velocity differs. The rush
-	# blend pulls the staging DEPTH in (stage_dist: SLOT_DIST_M → RUSH_NET_DRIVE_
-	# DIST_M), so a rushing carrier stages the FINISHER closer to the attacking
-	# net — a second attacker crashing for the rebound/backdoor tap, rather than
-	# parked at the slot on a set cycle.
+	# blend pulls the generic station in (stage_dist: SLOT_DIST_M →
+	# RUSH_NET_DRIVE_DIST_M), so a rushing carrier stages the FINISHER as a
+	# genuine second attacker at the net — a rebound / backdoor-tap threat.
+	# (No strict rush-vs-cycle depth ordering any more: with the NAMED
+	# stations, an UNCONTESTED set cycle legitimately parks the backdoor —
+	# at the net — too; the invariant is that the rush never strands the
+	# finisher at the perimeter.)
 	var goal_z: float = OPP_NET_Z
 	var set_pos: Vector3 = AIRoleFinisher.decide(_rush_ctx(Vector3.ZERO)).target_position
 	var rush_pos: Vector3 = AIRoleFinisher.decide(
 			_rush_ctx(Vector3(0.0, 0.0, -8.0))).target_position
-	assert_lt(absf(rush_pos.z - goal_z), absf(set_pos.z - goal_z),
-			"a rushing carrier stages the FINISHER closer to the net (net-crash)")
+	assert_lt(absf(rush_pos.z - goal_z), 4.5,
+			"a rushing carrier stages the FINISHER crashing the net; got %s"
+			% rush_pos)
 	assert_lt(set_pos.x, 0.0, "the set cycle still stages weak-side")
+	assert_lt(rush_pos.x, 0.0, "…and the rush crash stays weak-side too")
 
 
 func test_reactive_fires_on_loose_shots_and_defers_while_the_puck_reads_held() -> void:

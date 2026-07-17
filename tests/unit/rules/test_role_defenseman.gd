@@ -79,6 +79,47 @@ func test_point_walks_off_a_covered_shot_lane() -> void:
 			"a blocked lane walks the point off the wall stand")
 
 
+func test_point_holds_the_line_against_high_zone_coverage() -> void:
+	# The reported oscillation bug. Own team cycling deep in the O-zone, a
+	# defending winger covering the point HIGH in his zone (the researched
+	# D-zone winger stand) — no puck on his blade. The old beat-him-to-our-net
+	# radius read that winger as an un-raceable counter threat (equal top
+	# speeds, similar distance home) and sagged the point to center ice, then
+	# skated back up when he drifted deeper: blue-line-to-blue-line pacing.
+	# The grounded read: a counter must move the PUCK (outlet flight, then a
+	# carry the point man stands directly in the path of), so the line holds.
+	var line_stand := Vector3(6.71, 0.0, -8.29)
+	var ctx: RoleContext = _make_ctx(line_stand, [
+			[2, TEAM_ID, Vector3(8.0, 0.0, -22.0)],   # our carrier, cycling low
+			[10, 1, Vector3(5.0, 0.0, -10.0)],        # winger covering the point
+			[11, 1, Vector3(-4.0, 0.0, -21.0)],       # rest of the coverage, low
+			[12, 1, Vector3(3.0, 0.0, -24.0)],
+	], 2)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.POINT_STRONG)
+	assert_lt(d.target_position.z, -GameRules.BLUE_LINE_Z + 0.01,
+			"puckless high coverage must not chase the point off the line; got %s"
+			% d.target_position)
+
+
+func test_point_does_not_pace_the_neutral_zone_as_coverage_jitters() -> void:
+	# Stability half of the oscillation regression: as the covering winger
+	# drifts up and down his wall with small velocity swings (a real cycle's
+	# coverage motion), the point's stand must stay in the zone every single
+	# read — the old radius model flipped between "hold the line" and "sag to
+	# center ice" whenever the winger's naive ETA-home crossed the knife edge.
+	for wz: float in [-14.0, -12.0, -10.0, -8.5, -10.0, -13.0]:
+		for wvz: float in [-1.5, 0.0, 1.5]:
+			var ctx: RoleContext = _make_ctx(Vector3(6.71, 0.0, -8.29), [
+					[2, TEAM_ID, Vector3(8.0, 0.0, -22.0)],
+					[10, 1, Vector3(5.0, 0.0, wz), Vector3(0.0, 0.0, wvz)],
+			], 2)
+			var d: RoleDecision = AIRoleDefenseman.decide(
+					ctx, AIRoleSlots.Slot.POINT_STRONG)
+			assert_lt(d.target_position.z, -GameRules.BLUE_LINE_Z + 2.0,
+					("coverage jitter (wz=%.1f wvz=%.1f) must not pull the point"
+					+ " out of the zone; got %s") % [wz, wvz, d.target_position])
+
+
 func test_point_sags_when_the_race_home_is_lost() -> void:
 	# A stretch opponent already behind our point pair, burning for our net:
 	# the keep-in bound must pull the stand out of the deep zone entirely.
@@ -136,12 +177,12 @@ func test_valve_never_loses_the_race_home() -> void:
 			[10, 1, Vector3(1.0, 0.0, 14.0), Vector3(0.0, 0.0, 7.0)],
 	], 2)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
-	var opp_eta_home: float = AIActionScoring.time_to_arrive(
-			Vector3(1.0, 0.0, 14.0), Vector3(0, 0, OUR_NET_Z),
-			Vector3(0.0, 0.0, 7.0), AIActionScoring.SKATER_REF_SPEED_M_S)
-	var my_dist: float = d.target_position.distance_to(Vector3(0, 0, OUR_NET_Z))
-	assert_lt(my_dist / GameRules.DEFAULT_SKATER_MAX_SPEED_M_S, opp_eta_home + 0.75,
-			"the valve stays within recovering distance of home")
+	# The un-threatened trail point would sit a zone behind the carrier
+	# (z ≈ -8); the burner already deep behind the valve must pull the stand
+	# well into our half, near even with him — never left playing catch-up.
+	assert_gt(d.target_position.z, 5.0,
+			"a deep burner pulls the valve home toward even; got %s"
+			% d.target_position)
 
 
 # ── NEUTRAL back pair ────────────────────────────────────────────────────────

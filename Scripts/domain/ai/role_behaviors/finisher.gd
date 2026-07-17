@@ -233,8 +233,43 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 			-ctx.strong_x * weak_bias,
 			0.0,
 			ctx.attacking_goal_pos.z + ctx.own_goal_dir * stage_dist)
-	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, search_center)
+	# Far from the station, skate at the CALCULATED center directly — the
+	# feed×shot argmax refines a seam read that will be re-taken from closer
+	# before arrival (see STATION_ARGMAX_LOD_M), and readiness needs half-step
+	# proximity anyway. The ten per-candidate goalie-predicted score_pass
+	# evals only run when their answer is consumable.
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, search_center):
+		d.target_position = search_center
+		return d
+	# NAMED-STATION candidate set — the one-timer geography, not a blind
+	# polar ring. The spots a finisher actually stages at are structural
+	# rink geography; the scoring (feed lane × shot value × forced goalie
+	# displacement) picks among them per the live coverage, and the
+	# incumbent keeps the hysteresis. Fewer evals than the old 8-ring AND
+	# wider coverage: a 3 m ring around one center could never span the
+	# backdoor and the high slot in the same read.
+	var weak: float = -ctx.strong_x
+	var goal_z: float = ctx.attacking_goal_pos.z
+	var own_dir: float = ctx.own_goal_dir
+	var candidates: Array[Vector3] = [
+		# The rush-blended generic station (net-crash on the rush, weak-side
+		# slot on the set cycle) and the current spot (stability).
+		search_center,
+		ctx.self_pos,
+		# BACKDOOR — the far-post tap-in / one-timer: a body-width outside
+		# the far post, just clear of the crease arc (1.83 m) and the
+		# goal-line buffer.
+		Vector3(weak * (GameRules.NET_HALF_WIDTH + 1.4), 0.0,
+				goal_z + own_dir * 1.5),
+		# BUMPER — the mid-slot one-timer at the top of the crease traffic.
+		Vector3(weak * 0.8, 0.0, goal_z + own_dir * GameRules.SLOT_DIST_M),
+		# WEAK DOT — the flank one-timer office at the end-zone faceoff dot.
+		Vector3(weak * GameRules.END_ZONE_FACEOFF_DOT_X, 0.0,
+				goal_z + own_dir
+						* (GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z)),
+		# HIGH SLOT — the trailing seam at the top of the house.
+		Vector3(weak * 1.5, 0.0, goal_z + own_dir * 9.5),
+	]
 	# Switch-hysteresis: hold the staging spot unless a fresh one scores clearly
 	# better, so the pre-aim cursor doesn't hop between near-tied slots.
 	AIRoleHelpers.append_incumbent(ctx, candidates)

@@ -1196,12 +1196,24 @@ var _role_decision_cooldown: int = 0
 # race, or a live one-timer camp. These keep the full ~30 Hz argmax cadence;
 # everything else is a shape-holding post (points, lanes, valves, flanks,
 # breathing zone anchors) that re-evals at ~20 Hz (see the throttle above).
-func _is_reactive_slot(slot: int) -> bool:
+func _is_reactive_slot(slot: int, snapshot: WorldSnapshot) -> bool:
 	match slot:
 		AIRoleSlots.Slot.PRESSURE, AIRoleSlots.Slot.F1_PRESSURE, \
 		AIRoleSlots.Slot.CONTAIN, AIRoleSlots.Slot.MARK, \
-		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
+		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG:
+			return true
 		AIRoleSlots.Slot.FINISHER, AIRoleSlots.Slot.NET_FRONT:
+			# The one-timer camp's fast cadence buys a live seam read — which
+			# only exists while the puck is IN the attacking zone. Elsewhere
+			# (a regroup, a loose-puck scramble in the NZ) the finisher is
+			# just staging a formation post, and its ten feed×shot candidate
+			# evals were the single most expensive shape-hold in the 5v5
+			# bill. The one-timer trigger itself always bypasses the throttle
+			# (must_recompute), so arming stays tick-accurate regardless.
+			if snapshot != null and snapshot.puck_state != null:
+				return AIActionScoring.in_offensive_zone(
+						snapshot.puck_state.position,
+						Vector3(0.0, 0.0, -_own_goal_dir * GameRules.GOAL_LINE_Z))
 			return true
 	# A zone defender with a live soft-lock is covering a mover — reactive
 	# while the lock holds, a breathing post once it releases.
@@ -1861,7 +1873,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# multi-second hysteresis, where 17 ms of extra staleness is
 			# invisible but the argmax is the whole off-puck AI bill.
 			_role_decision_cooldown = ROLE_DECISION_PERIOD_TICKS \
-					if _is_reactive_slot(slot) \
+					if _is_reactive_slot(slot, snapshot) \
 					else ROLE_DECISION_PERIOD_TICKS * 3 / 2
 			_role_decision_pinged = ctx.ping_move_target.is_finite()
 		else:

@@ -44,15 +44,9 @@ class_name AIActionScoring
 # receiver_pressure heuristics — the recursive score_at captures
 # "what could the receiver do" with their actual options.
 
-# An opponent within this distance counts toward "pressure" on a target.
-# Tuning: raise toward 5 if bots feel oblivious to nearby defenders;
-# lower toward 3 if pressure trips on too-distant marks.
-const PRESSURE_RADIUS_M: float = 4.0
-# How many opponents within radius == fully pressured (score multiplier 0).
-# Two dead-on forward-cone opponents at full weight saturate. Raise
-# toward 3 to make pressure harder to saturate (less trigger-happy);
-# lower toward 1 to pressure on a single defender.
-const PRESSURE_MAX_COUNT: int = 2
+# Pressure on a shooter/carrier is a physical contest, not a density curve —
+# see release_contest_clean: each opponent's blade races to the release point
+# over the real windup window, in the lane model's reach vocabulary.
 
 # Value-map regime boundary: the attacking BLUE LINE. `_score_at` prices positions
 # by real shot danger (score_shoot) once the CARRIER is in the offensive zone, and
@@ -1218,9 +1212,11 @@ static func score_shoot(
 			shooter, predicted_goalie_pos, attacking_goal.z,
 			net_half_width, GOALIE_SHADOW_HALF_M)
 	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s, [], opponent_caps)
-	# Forward-cone pressure: bodies between the shooter and the net screen/block
-	# the release (beside/behind don't).
-	var pressure_factor: float = 1.0 - _pressure(shooter, opponents, attacking_goal - shooter)
+	# Release duress: opponents whose blade can reach the puck during the
+	# windup contest the release (release_contest_clean — bodies merely
+	# NEAR the shooter don't; bodies on the shot line are the lane's job).
+	var pressure_factor: float = release_contest_clean(
+			release_point_toward(shooter, attacking_goal), opponents, opponent_caps)
 	return shot_quality * lane * pressure_factor
 
 
@@ -1471,65 +1467,83 @@ static func _is_past_goal_line(pos: Vector3, attacking_goal: Vector3) -> bool:
 	return (pos.z - attacking_goal.z) * signf(attacking_goal.z) > 0.0
 
 
-# Pressure score in [0, 1] for "do nearby opponents threaten this
-# target." Wraps _opponent_density with the standard PRESSURE_* radii.
-# All current callers (score_shoot, score_pass receiver) pass a
-# forward direction so the cube falloff applies; the Vector3.ZERO
-# default is kept as a safety fallback (omnidirectional, every
-# opponent in radius weighted 1.0) but isn't currently used.
-static func _pressure(target: Vector3, opponents: Array[Vector3],
-		forward: Vector3 = Vector3.ZERO) -> float:
-	return _opponent_density(target, opponents, forward, PRESSURE_RADIUS_M, PRESSURE_MAX_COUNT)
-
-
-# Generic weighted opponent density. Counts opponents within `radius`
-# of `target`, normalizing the count by `max_count` so the result
-# lives in [0, 1]. Per-opponent weight composes two factors:
+# ── Release contest: the pressure read, as a physical race ────────────────────
+# P(the release completes clean) in [0, 1] against every nearby opponent —
+# the factor score_shoot and position_potential multiply by. Replaces the
+# old _opponent_density curve (linear 1−d/K falloff × cube-of-cosine × a
+# count-of-2 normalizer) with the contest it was approximating: to disrupt
+# the action, an opponent's BLADE must reach the RELEASE POINT — the puck
+# held a carry-handle ahead of the body toward the target — while the puck
+# is still on the blade.
 #
-#   distance_factor = 1 - dist/radius   (linear falloff to 0 at radius)
-#   direction_factor = max(0, dot)^3    (cube falloff vs forward)
-#   weight = distance_factor × direction_factor
+# Per opponent, the lane model's own vocabulary (same reach convention,
+# read delay, and lateral close pace as _lane_block_at, so the two contest
+# reads agree on what a defender's stick can do):
 #
-# Distance falloff: defender at 0.5 m vs 3.5 m in the same direction
-# now contribute 0.88 vs 0.13 instead of equally. Stick reach is
-# ~1.5 m so the linear ramp is a reasonable physics proxy for "in
-# your face vs in the area."
+#   reach_i  = stick_i + close_speed_i × max(0, T_window − read delay)
+#              — his stick, plus what he closes after a competitive read,
+#              over the real windup window
+#   block_i  = clamp((reach_i − d_i) / stick_i, 0, 1)
+#              — one full stick inside reach ⇒ certain blade-on-puck
+#   p_i      = block_i × (T_window − read delay)⁺ / T_window
+#              — a blade can only disrupt the fraction of the release
+#              that remains after its read: arriving as the puck leaves
+#              does nothing, arriving at the start of the windup kills it
 #
-# Direction falloff (kept from prior): cube of cosine. Behind = 0,
-# perpendicular = 0, 45° forward ≈ 0.35, dead front = 1.0. Matches
-# the hockey intuition that defenders behind or beside the play
-# don't pressure the carrier.
+#   clean    = Π (1 − p_i)      — independent contests compose as a
+#              product; no count normalizer, no saturation constant
 #
-# The omnidirectional fallback (forward = ZERO) keeps distance
-# falloff but skips the direction term — used when forward direction
-# is degenerate (target sitting at the goal mouth, etc).
-static func _opponent_density(target: Vector3, opponents: Array[Vector3],
-		forward: Vector3, radius: float, max_count: int) -> float:
-	var directional: bool = forward.length_squared() > 0.0001
-	var fwd_x: float = 0.0
-	var fwd_z: float = 0.0
-	if directional:
-		var fl: float = sqrt(forward.x * forward.x + forward.z * forward.z)
-		if fl > 0.0001:
-			fwd_x = forward.x / fl
-			fwd_z = forward.z / fl
-		else:
-			directional = false
-	var weighted: float = 0.0
-	for p: Vector3 in opponents:
-		var dx: float = p.x - target.x
-		var dz: float = p.z - target.z
-		var d: float = sqrt(dx * dx + dz * dz)
-		if d >= radius:
+# T_window is the bot's real decision→puck-away time
+# (SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S — pre-aim + charge, the
+# same span score_shoot already projects the goalie across). Directionality
+# is emergent geometry: the release point sits a carry-handle toward the
+# target, so a man behind the shooter is a couple of metres farther from
+# the puck than one at the release — no cosine shaping. Even a blade
+# planted on the release point leaves the clean floor at
+# read_delay / T_window per opponent — contested shots still get off
+# sometimes, which is what lets a bot shoot through traffic when the
+# window is worth it (the old 2-count saturation zeroed those outright).
+static func release_contest_clean(release_pt: Vector3,
+		opponents: Array[Vector3], opponent_caps: Array = []) -> float:
+	var t_window: float = SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+	var contest_frac: float = maxf(0.0, t_window - LANE_REACTION_DELAY_S) \
+			/ t_window
+	var has_caps: bool = opponent_caps.size() == opponents.size()
+	var clean: float = 1.0
+	for i: int in opponents.size():
+		var p: Vector3 = opponents[i]
+		var stick_reach: float = LANE_DEFENDER_REACH_M
+		var close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opponent_caps[i]
+			if caps != null:
+				stick_reach = caps.stick_reach
+				close_speed = LANE_LATERAL_FRACTION * caps.max_speed
+		var reach: float = stick_reach \
+				+ close_speed * maxf(0.0, t_window - LANE_REACTION_DELAY_S)
+		var dx: float = p.x - release_pt.x
+		var dz: float = p.z - release_pt.z
+		var d_sq: float = dx * dx + dz * dz
+		if d_sq >= reach * reach:
 			continue
-		var dist_factor: float = 1.0 - d / radius
-		if directional:
-			var dot: float = 0.0 if d < 0.0001 else (dx * fwd_x + dz * fwd_z) / d
-			var clamped: float = maxf(0.0, dot)
-			weighted += dist_factor * clamped * clamped * clamped
-		else:
-			weighted += dist_factor
-	return clampf(weighted / float(max_count), 0.0, 1.0)
+		var block: float = clampf(
+				(reach - sqrt(d_sq)) / maxf(stick_reach, 0.001), 0.0, 1.0)
+		clean *= 1.0 - block * contest_frac
+	return clean
+
+
+# The release point the contest is raced to: the puck on the blade, one
+# carry-handle ahead of the body toward the target (the same handle
+# distance the evasion model uses for a carried puck). Falls back to the
+# body itself when the target direction is degenerate.
+static func release_point_toward(shooter: Vector3, target: Vector3) -> Vector3:
+	var dx: float = target.x - shooter.x
+	var dz: float = target.z - shooter.z
+	var len_sq: float = dx * dx + dz * dz
+	if len_sq < 0.0001:
+		return shooter
+	var inv: float = EVADE_CARRY_HANDLE_M / sqrt(len_sq)
+	return Vector3(shooter.x + dx * inv, 0.0, shooter.z + dz * inv)
 
 
 # Unclamped closest-approach time τ* that minimises the distance between
@@ -1883,7 +1897,8 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 #   angle_factor = the goal mouth's projected width from this bearing
 #                  (cos of the angle off the goal normal = forward/dist);
 #                  1 head-on, 0 along the goal line — real foreshortening.
-#   openness     = 1 - skater_pressure (forward-cone, distance-weighted)
+#   openness     = release_contest_clean (could a carrier act from here
+#                  before a nearby blade reaches the puck)
 #
 # Used by `_score_at` only when the evaluator is OUTSIDE shooting
 # range — inside the range, the bot uses score_shoot alone (committed
@@ -1934,7 +1949,11 @@ static func position_potential(
 	var lateral: float = pos.x - attacking_goal.x
 	var horiz_dist: float = sqrt(forward * forward + lateral * lateral)
 	var angle_factor: float = forward / horiz_dist
-	var openness: float = 1.0 - _pressure(pos, opponents, attacking_goal - pos)
+	# Openness: could a carrier get his action off from this spot — the same
+	# release-contest read score_shoot uses, raced to the puck a carry-handle
+	# ahead of the body toward the net.
+	var openness: float = release_contest_clean(
+			release_point_toward(pos, attacking_goal), opponents)
 	return closeness * angle_factor * openness
 
 
@@ -2556,6 +2575,20 @@ static func clearance_to_safety(clearance: float) -> float:
 	return clampf(clearance / EVADE_SAFE_MARGIN_M, 0.0, 1.0)
 
 
+# Lunge window for a defender's stick redirect onto a carried puck AT ITS
+# ARRIVAL SPOT — the maneuver-time bound the carry safety/strip reads apply
+# to their END sample only. At the destination the carrier is established and
+# protecting (the evade envelope owns that moment — same reasoning as the
+# pass-reception read's short window), so the defender gets his real lunge,
+# not a full-window t² repositioning that read every honest-length carry
+# destination as covered near any body (the pacified carrier). The MID
+# sample deliberately keeps the full-window pursuit read: en route the puck
+# traverses the defender's pursuit envelope at stride, where protection is
+# weakest — that asymmetry is what prices "thread the gauntlet" carries as
+# dangerous while leaving a peel-out to open ice safe. Same value as the
+# reception lunge (one poke moment).
+const CARRY_LUNGE_WINDOW_S: float = EVADE_HORIZON_S
+
 # Base puck-protect reach: how far a carrier holds the puck off his body while
 # handling. Hands scales it (a better handler protects it further out / threads a
 # tighter seam) — callers pass the scaled value; this is the league default.
@@ -2584,11 +2617,15 @@ static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
 		if dist > 0.001:
 			carry_dir = Vector2(dx / dist, dz / dist)
 			carry_speed = dist / arrival_time
+	# MID sample: full-window pursuit (the en-route gauntlet — see
+	# CARRY_LUNGE_WINDOW_S). END sample: pursuit bounded to the arrival
+	# lunge — the carrier is established and protecting there.
 	var c_mid: float = reach_clearance(
 			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
 			opponent_caps, -1.0, carry_dir, carry_speed)
 	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
-			opponent_caps, -1.0, carry_dir, carry_speed)
+			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
+			carry_dir, carry_speed)
 	return minf(c_mid, c_end)
 
 
@@ -2611,13 +2648,17 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 		if ddist > 0.001:
 			carry_dir = Vector2(ddx / ddist, ddz / ddist)
 			carry_speed = ddist / arrival_time
+	# Sample windows must mirror carry_clearance exactly so the strip point
+	# and the safety read agree on which sample is covered (mid = full
+	# pursuit, end = arrival lunge).
 	var mid: Vector3 = from.lerp(to, 0.5)
 	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents,
 			opponent_vels, opponent_caps, -1.0, carry_dir, carry_speed)
 	if c_mid < 0.0:
 		return mid   # covered mid-route — stripped there, before the destination
 	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
-			opponent_caps, -1.0, carry_dir, carry_speed)
+			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
+			carry_dir, carry_speed)
 	if c_end < 0.0:
 		return to    # clear mid-route, covered at the destination
 	# Neither covered (a low strip probability anyway): the tighter of the two.
@@ -3025,6 +3066,54 @@ static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
 # arrival passes its attribute-scaled top speed AND max_accel (a nimbler build sheds
 # sideways momentum faster, so it reaches an off-axis cut sooner).
+# ── Calibrated phase model ─────────────────────────────────────────────────────
+# The measured controller (SkaterMovementRules at 120 Hz driven by the real
+# steering — the velocity-matched seek plus the pivot brake, see
+# tests/unit/ai/test_time_to_arrive_calibration.gd, which pins every constant
+# here against simulated arrivals) decomposes into:
+#
+#   REDIRECT — cross-momentum beyond what the seek sheds for free. The
+#     velocity-matched anchor pull cancels cross-drift out of the thrust's
+#     spare headroom, so moderate drift costs nothing; only the EXCESS above
+#     VM_FREE_SHED_M_S pays, at the measured net shed rate.
+#   REVERSAL — velocity pointed away brakes out at the brake key's real
+#     friction decel and gives back the ground lost while braking (both
+#     measured; the decel is brake_multiplier × (friction + drag·v) at game
+#     speeds).
+#   PURSUIT — a capped ramp at the NET accel the movement model delivers
+#     (thrust minus friction/drag losses — RAMP_EFFICIENCY) up to top speed,
+#     then cruise. A standing start genuinely pays ~0.5 s over the old
+#     dist/speed read; a full-speed head-on drive pays nothing.
+#
+# The old heuristic (effective = ref + v_along, shed-as-pure-delay) credited a
+# full-speed closer with up to DOUBLE top speed and gave standing starts top
+# speed for free — every race in the AI was distorted at the extremes. Errors
+# vs the measured table are within ~±20% on the clean families; the one known
+# soft spot is short diagonal cuts at high speed (the controller's lateral
+# miss-loop — it can overfly the catch window and circle once), where reality
+# runs up to ~2× the estimate. The calibration suite fails loudly if the
+# movement tuning drifts.
+
+# Cross speed the velocity-matched seek sheds inside the thrust headroom
+# (costs no time). Measured.
+const VM_FREE_SHED_M_S: float = 3.5
+# Net shed rate for cross speed beyond the free band. Measured.
+const VM_SHED_DECEL_M_S2: float = 6.5
+# Brake-key deceleration for reversals: brake_multiplier × (friction +
+# drag·v̄) at game speeds — physical, and confirmed by the reversal cells.
+const REVERSAL_BRAKE_DECEL_M_S2: float = 10.5
+# Fraction of commanded thrust the movement model nets after friction and
+# velocity drag over a 0→top ramp. Measured (≈0.51 s ramp overhead at league
+# tuning).
+const RAMP_EFFICIENCY: float = 0.84
+
+
+# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
+# thrust (Agility-scaled) — both default to league references so cross-player
+# callers (opponent / teammate ETA, the loose-puck election that must stay
+# consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
+# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build
+# redirects and ramps faster, so it reaches an off-axis cut sooner).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
 		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
@@ -3033,27 +3122,36 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 	var dist: float = sqrt(dx * dx + dz * dz)
 	if dist < 0.001:
 		return 0.0
+	var vmax: float = maxf(ref_speed_m_s, MIN_TRAVEL_SPEED_M_S)
 	var inv: float = 1.0 / dist
-	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
-	var effective: float = maxf(MIN_TRAVEL_SPEED_M_S,
-			ref_speed_m_s + speed_along)
-	# Cross-momentum cost. `speed_along` credits velocity pointed AT the target, but
-	# the perpendicular component — sqrt(|v|² − along²) — is wasted speed the skater
-	# must shed before it truly closes. Controls are facing-agnostic (no turn arc;
-	# crossover/backward thrust penalties are small), so a redirect is a straight
-	# re-acceleration: nulling the sideways component takes at least |v_perp| /
-	# accel seconds against the skater's real all-direction thrust (`accel_m_s2`).
-	# The old 1-D projection treated this as free, so a carrier flying laterally
-	# priced a cut it can't actually settle into as a fast arrival. Two-phase: shed
-	# the cross-momentum, then close `dist` at the along-aided cruise. Zero when
-	# already pointed at the target (v_perp = 0) — direct drives, standing starts,
-	# and pure reverse (handled by the floor above) are unchanged; only genuinely
-	# off-axis momentum pays, and a nimbler build (higher accel) pays less.
+	var v_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
 	var v_len_sq: float = from_velocity.x * from_velocity.x \
 			+ from_velocity.z * from_velocity.z
-	var perp_sq: float = maxf(0.0, v_len_sq - speed_along * speed_along)
-	var t_shed: float = sqrt(perp_sq) / maxf(accel_m_s2, 0.001)
-	return dist / effective + t_shed
+	var v_perp: float = sqrt(maxf(0.0, v_len_sq - v_along * v_along))
+	# REDIRECT: only the cross momentum the seek can't shed for free pays,
+	# scaled by this build's thrust relative to league (a nimbler build has
+	# more headroom).
+	var agility: float = maxf(accel_m_s2, 0.001) / SHED_ACCEL_DEFAULT_M_S2
+	var t: float = maxf(0.0, v_perp - VM_FREE_SHED_M_S * agility) \
+			/ (VM_SHED_DECEL_M_S2 * agility)
+	var r: float = dist
+	var v0: float = v_along
+	if v0 < 0.0:
+		# Reversal: brake the retreat out, giving back the ground lost while
+		# braking; the pursuit then ramps from rest. (Brake friction is
+		# attribute-flat — the brake key, not thrust.)
+		t += -v0 / REVERSAL_BRAKE_DECEL_M_S2
+		r += v0 * v0 / (2.0 * REVERSAL_BRAKE_DECEL_M_S2)
+		v0 = 0.0
+	v0 = minf(v0, vmax)
+	# PURSUIT: capped ramp at the delivered net accel, then cruise.
+	var a_net: float = maxf(accel_m_s2 * RAMP_EFFICIENCY, 0.001)
+	var d_ramp: float = (vmax * vmax - v0 * v0) / (2.0 * a_net)
+	if r <= d_ramp:
+		t += (sqrt(v0 * v0 + 2.0 * a_net * r) - v0) / a_net
+	else:
+		t += (vmax - v0) / a_net + (r - d_ramp) / vmax
+	return t
 
 
 # True iff the segment from `from` to `to` (in world XZ) intersects

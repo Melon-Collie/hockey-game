@@ -82,11 +82,13 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	var teammates: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammates)
 	var our_net: Vector3 = ctx.defending_goal_pos
-	# Keep-in insurance: every stand must stay inside the race home against
-	# the fastest opponent — a pinned point that can't recover is the odd-man
-	# rush factory the exposure term prices for the carrier (§6); off-puck we
-	# simply refuse the spot.
-	var r_home: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
+	# Keep-in insurance: every stand must contain the counter-attack paths —
+	# a pinned point that can't recover is the odd-man rush factory the
+	# exposure term prices for the carrier (§6); off-puck we simply refuse
+	# the spot. Path-intercept read (see fill_counter_channels): puckless
+	# high coverage doesn't chase the point off the line, a genuine stretch
+	# threat still does.
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 
 	# The strong point sinks a row down his wall when the cycle is low —
 	# puck depth measured off the ATTACKED goal line (depth_of takes the
@@ -108,7 +110,8 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 			var c := Vector3(side * u, 0.0, z)
 			if not AIRoleHelpers.is_legal_position(c):
 				continue
-			if c.distance_to(our_net) > r_home:
+			if not AIRoleHelpers.race_home_feasible(
+					c, ctx.self_max_speed, ctx.self_max_accel):
 				continue
 			if AIRoleHelpers.too_close_to_teammate(c, teammates):
 				continue
@@ -123,13 +126,10 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 				best_pos = c
 	if best_score == -INF:
 		# Every stand failed the keep-in bound (a stretch threat lurking
-		# behind the line): sag home along the retreat line to the edge of
-		# the winnable-race circle instead of standing at an unrecoverable
-		# point.
-		var back: Vector3 = base_stand - our_net
-		var back_len: float = back.length()
-		if back_len > 0.001 and r_home < back_len:
-			best_pos = our_net + back * (maxf(r_home, 0.0) / back_len)
+		# behind the line): sag down the retreat line only as far as the
+		# counter paths demand — sag-to-even, not sag-to-center-ice.
+		best_pos = AIRoleHelpers.most_forward_feasible(
+				base_stand, ctx.self_max_speed, ctx.self_max_accel)
 	d.target_position = best_pos
 	return d
 
@@ -147,16 +147,12 @@ static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
-
-	var hold_z: float = line_z
-	if r < INF:
-		var dx: float = lane_x - our_net.x
-		var lane_reach_sq: float = r * r - dx * dx
-		var lane_reach: float = sqrt(lane_reach_sq) if lane_reach_sq > 0.0 else 0.0
-		var allowed_fwd: float = own_dir * our_net.z - lane_reach
-		hold_z = own_dir * maxf(own_dir * line_z, allowed_fwd)
-	d.target_position = Vector3(lane_x, 0.0, hold_z)
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	# Hold the lane stand while it contains the counter paths; a developing
+	# stretch threat sags it down the retreat line toward home (the retreat
+	# collapses toward the middle, which is where a sagging D belongs).
+	d.target_position = AIRoleHelpers.most_forward_feasible(
+			Vector3(lane_x, 0.0, line_z), ctx.self_max_speed, ctx.self_max_accel)
 	return d
 
 
@@ -172,17 +168,16 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 	var cap: float = GameRules.GOAL_LINE_Z - DVALVE_GOAL_LINE_PAD_M
 	var trail_z: float = clampf(play_ref.z + own_dir * DVALVE_TRAIL_M, -cap, cap)
 	var target := Vector3(0.0, 0.0, trail_z)
-	# Race-home cap: the valve's whole job is to never be beaten home.
+	# Race-home cap: the valve's whole job is to never be beaten home. A
+	# lurker already behind the trail point pulls the valve down its retreat
+	# line until the counter paths are contained again.
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
-	if r < INF and target.distance_to(our_net) > r:
-		var back: Vector3 = target - our_net
-		var dist: float = back.length()
-		if dist > 0.001:
-			target = our_net + back * (r / dist)
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	target = AIRoleHelpers.most_forward_feasible(
+			target, ctx.self_max_speed, ctx.self_max_accel)
 	d.target_position = target
 	# The rush advances every tick — pace the waypoint, don't brake at it.
 	d.arrive_at_speed = true
