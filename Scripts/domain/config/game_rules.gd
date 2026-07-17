@@ -517,23 +517,28 @@ const FACEOFF_OFFSETS: Array = [
 			Vector2(-2.4, -7.0), Vector2( 2.4, -7.0)],  # team 1
 ]
 
-# ── End-zone draw D alignment (5v5 D pair; see PlayerRules.faceoff_position) ──
-# The real positional jobs at an end-zone dot, replacing the dot-relative D
-# offsets above. DEFENDING side stacks goal-side: the strong-side D (the one
-# whose identity side matches the dot's side of the ice) is the RETRIEVER,
-# directly behind the C with a slight boards shade — he takes a won draw back
-# for the breakout and boxes out the middle on a loss; the weak-side D fronts
-# the NET (near post, dot side) — the cover the old dot-stacked shape left
-# naked (both D clamped ~4+ m wide of the posts with the net at x = 0).
+# ── End-zone draw alignment (5v5; see PlayerRules.faceoff_position) ──────────
+# The real positional jobs at an end-zone dot, replacing the dot-relative
+# offsets above for the players whose jobs there aren't dot-relative.
+# DEFENDING side plays the NHL wall-and-stack: the strong-side D (identity
+# side == the dot's side of the ice) holds the WALL — at the boards, level
+# with the dot (a hair on-side) — for the boards battle and the rim; the
+# weak-side D and the boards-side WINGER form the shoulder-to-shoulder STACK
+# on the goal-side arc of the circle (just outside it — the on-side rule) —
+# a won draw comes straight back to the stack for the breakout, and on a
+# loss the stack D boxes out to the net-front while the stack W releases up
+# to the strong point. The net-front itself is the goalie's at the drop —
+# the old near-post D spawn double-covered it while leaving the wall empty.
+# The inside winger keeps the table's hash-mark spot (the checking matchup).
 # ATTACKING side plays the points at the blue line: strong point directly
 # above the dot (the boards-side lane + draw-back target), weak point toward
 # the middle of the line (the middle-ice valve).
-const FACEOFF_END_RETRIEVER_BEHIND_M: float = 3.2   # behind the dot, goal-side
-const FACEOFF_END_RETRIEVER_SHADE_M: float = 0.6    # boards-side shade off the dot line
-const FACEOFF_END_NETFRONT_X_M: float = 1.1         # near post, dot side (net at x = 0)
-const FACEOFF_END_NETFRONT_OFF_LINE_M: float = 1.8  # in front of the goal line
-const FACEOFF_END_POINT_INSIDE_M: float = 1.0       # points: inside the blue line
-const FACEOFF_END_WEAK_POINT_X_M: float = 1.2       # weak point: past mid, off-dot side
+const FACEOFF_END_WALL_INSET_M: float = 1.2       # wall D: in from the boards
+const FACEOFF_END_WALL_ONSIDE_M: float = 0.3      # ...level with the dot, a hair on-side
+const FACEOFF_END_STACK_BEHIND_M: float = 4.8     # stack: goal-side, outside the 4.57 m circle
+const FACEOFF_END_STACK_HALF_SEP_M: float = 0.9   # shoulder-to-shoulder half split
+const FACEOFF_END_POINT_INSIDE_M: float = 1.0     # points: inside the blue line
+const FACEOFF_END_WEAK_POINT_X_M: float = 1.2     # weak point: past mid, off-dot side
 # Depth cap for faceoff placements: no slot spawns closer to the end boards
 # than this far in front of the goal line, so a defensive-zone draw's D pair
 # (raw offset ~7 m behind an end-zone dot) stands net-side instead of inside
