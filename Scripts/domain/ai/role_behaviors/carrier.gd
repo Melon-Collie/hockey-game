@@ -241,7 +241,13 @@ const CARRY_EXIT_NZ_LEAD_M: float = 3.0
 # the breakout pass they are CREATING (see _developing_outlet_feed).
 # Roughly one strong-side wall sample of travel at skating speed —
 # "the spot they're getting open at," not a long-horizon prophecy.
-const OUTLET_DEVELOP_WINDOW_S: float = 0.7
+# 1.2 s ≈ the drive a carrier genuinely holds for at a zone entry (the
+# finisher's next two strides), still inside the pass-lead horizon by
+# release time; the delay discount prices the wait. The old 0.7 s window
+# couldn't see past the calibrated surface's dead mid-band, so a fresh
+# entry read "nothing developing" while the house drive was one stride
+# from being the best play on the ice.
+const OUTLET_DEVELOP_WINDOW_S: float = 1.2
 # Below this speed the outlet isn't going anywhere — the spot it offers
 # is the spot it's at, and the live pass scoring already prices that.
 const OUTLET_DEVELOP_MIN_SPEED_M_S: float = 1.0

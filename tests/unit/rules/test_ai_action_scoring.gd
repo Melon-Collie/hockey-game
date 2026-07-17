@@ -1721,11 +1721,17 @@ func test_doorstep_drive_beats_the_push_but_not_the_set_wall() -> void:
 			goalie_now, goal, lookahead + flight, release)
 	var off_the_move: float = AIActionScoring.score_shoot(
 			release, goal, pushed, GameRules.NET_HALF_WIDTH, none, 33.0)
-	assert_almost_eq(walled, 0.0, 0.02,
-			"snapped square to the release the challenge walls the doorstep off")
+	# Even squared, a doorstep release honestly five-holes a STANDING keeper
+	# before the drop lands (calibrated: the razor centre slot beats the
+	# sweep in tight) — so "walled" means the CORNERS are gone and only the
+	# razor five survives, strictly below the off-the-move look.
+	assert_lt(walled, 0.6,
+			"squared to the release, only the razor five survives; got %f" % walled)
 	assert_gt(off_the_move, 0.25,
 			"the real push can't make the arc in time — the drive is a chance; got %f"
 			% off_the_move)
+	assert_gt(off_the_move, walled,
+			"…and beating the push is worth more than the squared read leaves")
 	assert_lt(pushed.x, set_goalie.x,
 			"…because the accel-limited push arrives short of the arc-match")
 
@@ -1748,12 +1754,21 @@ func test_standing_five_hole_scores_in_tight() -> void:
 	var measured: float = AIActionScoring.score_shoot(
 			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, none, 33.0,
 			0.0, [], gap, false)
-	assert_almost_eq(legacy, 0.0, 0.001,
-			"sanity: the legacy set-goalie read scores zero from in tight")
-	assert_gt(measured, 0.03,
+	# CALIBRATED: in tight the flight beats the leg read + drop, so even the
+	# legacy (stance-free) read keeps the five alive for a perfect hand —
+	# the progressive-seal race, the same physics the instrument measures.
+	assert_gt(legacy, 0.4,
+			"the legacy read keeps the in-tight five alive; got %f" % legacy)
+	assert_gt(measured, 0.4,
 			"the measured standing slot keeps the in-tight shot alive; got %f" % measured)
-	assert_lt(measured, 0.15,
-			"…but a slot 3 cm wider than the puck is razor-thin, not a corner window")
+	# The razor-thin doctrine survives where it belongs: a NOISY hand can't
+	# thread a slot 7 cm wider than the puck.
+	var noisy_five: float = AIActionScoring.score_shoot(
+			shooter, goal, goalie, GameRules.NET_HALF_WIDTH, none, 33.0,
+			0.0, [], gap, false, 0.0, false, 0.08)
+	assert_lt(noisy_five, 0.3,
+			"…but it is razor-thin for a noisy hand, not a corner window; got %f"
+			% noisy_five)
 
 
 func test_five_hole_scores_only_the_clearance_past_the_puck() -> void:

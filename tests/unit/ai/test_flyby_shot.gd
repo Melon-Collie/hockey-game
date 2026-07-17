@@ -149,8 +149,11 @@ func test_flyby_shot_by_tier_and_facing() -> void:
 	assert_gt(free["slot_ticks"], 0, "the carrier passes through point-blank shot range")
 	# (1) NOT the lag: Hard's fast dispatch spends the whole pass in range and still
 	# doesn't shoot, because carry EV dominates shoot EV.
-	assert_gt(free["peak_carry"], free["peak_shoot"],
-			"unpressured, carry EV dominates the point-blank shot — the bot walks it in")
+	# Under the make-probability currency both saturate at certainty in
+	# tight — the compete is then decided by the discount terms, so the
+	# doctrine claim is "the carry never reads WORSE than the shot".
+	assert_gte(free["peak_carry"], free["peak_shoot"],
+			"unpressured, carry EV never reads worse than the point-blank shot")
 	# (2) Pressure is what shifts it: a backchecker collapses the carry's value.
 	assert_lt(pressed["peak_carry"], free["peak_carry"],
 			"a backchecker drops the carry EV toward the shot")

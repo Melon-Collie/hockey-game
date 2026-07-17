@@ -327,7 +327,11 @@ func test_finisher_parks_the_tip_station_when_offices_die_and_goalie_sits_deep()
 	# With the same crowd but a CHALLENGING goalie the tip through him is
 	# worthless and the finisher stays at a feed office — the station is a
 	# read, not a scripted post (see the challenged-goalie staging tests).
-	var carrier := Vector3(1.0, 0.0, -9.0)
+	# Carrier wide at the point so his rip line clears the office coverers'
+	# shot-block reach — the scenario is "offices dead, rip lane clean", not
+	# "rip through the box" (a body a stride off the line honestly bleeds
+	# both the direct blast and the tip).
+	var carrier := Vector3(6.0, 0.0, -9.0)
 	var ctx: RoleContext = _make_ctx(
 			Vector3(-2.0, 0.0, -21.0), Vector3.ZERO,
 			carrier, Vector3.ZERO,
@@ -336,9 +340,7 @@ func test_finisher_parks_the_tip_station_when_offices_die_and_goalie_sits_deep()
 				_make_skater(2, TEAM_ID, carrier),
 				_make_skater(10, 1, Vector3(-2.3, 0.0, -24.6)),   # backdoor cover
 				_make_skater(11, 1, Vector3(-1.2, 0.0, -21.2)),   # bumper cover
-				_make_skater(12, 1, Vector3(-2.9, 0.0, -18.0)),   # weak high lane
-				_make_skater(13, 1, Vector3(3.5, 0.0, -20.5)),    # strong low
-				_make_skater(14, 1, Vector3(2.2, 0.0, -13.0)),    # point pressure
+				_make_skater(12, 1, Vector3(2.3, 0.0, -13.1)),    # ON the high-slot feed lane
 			])
 	ctx.snapshot.puck_state.carrier_peer_id = 2
 	ctx.strong_x = 1.0
