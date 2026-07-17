@@ -129,6 +129,68 @@ func test_forechecker_closing_the_breakout_lane_devalues_the_pass() -> void:
 			"a forechecker skating into the lane during the windup materially drops the pass value")
 
 
+func test_forechecker_on_the_hip_contests_the_pass_release() -> void:
+	# The cough-up loss mode: a forechecker ON the carrier — off the passing
+	# lane, off the receiver — pokes the carried puck during the ~135 ms
+	# windup. Before the release contest, he was invisible to the pass EV
+	# (lane / miss / reception all miss him), so a swarmed defenseman kept
+	# firing "clean" breakout feeds straight into pokes. Same geometry with
+	# him a stick clear of the blade leaves the feed's value intact.
+	var self_pos := Vector3(4.0, 0.0, 20.0)          # own zone, off-center
+	var outlet := Vector3(4.0, 0.0, 7.0)             # open outlet up the wall
+	var clear_of_blade: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[11, 1, self_pos + Vector3(2.6, 0.0, 1.0)],   # near, but stick-clear
+	]
+	var sc := _make_ctx(self_pos, clear_of_blade)
+	var s := AIRoleCarrier.new()
+	s.decide(sc)
+	var on_hip: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[11, 1, self_pos + Vector3(1.0, 0.0, 0.4)],   # on the carrier's hip
+	]
+	var hc := _make_ctx(self_pos, on_hip)
+	var h := AIRoleCarrier.new()
+	h.decide(hc)
+	assert_gt(s.debug_pass_score, 0.0, "the stick-clear feed is a real option")
+	assert_lt(h.debug_pass_score, s.debug_pass_score * 0.9,
+			"a stick on the carrier contests the release and the same feed "
+			+ "is worth materially less; hip=%f clear=%f"
+			% [h.debug_pass_score, s.debug_pass_score])
+
+
+func test_retreating_receiver_is_worth_less_than_a_streaking_one() -> void:
+	# Receiver momentum in the post-catch value: the drive-in credit now runs
+	# the calibrated arrival model from the receiver's REAL velocity, so a
+	# man retreating toward our net pays the full reversal (brake + ramp)
+	# before his catch turns into an attack, while the same man in stride
+	# toward the opponent net carries his pace into it. Before this, both
+	# priced identically (reach / max_speed) — the over-valued backpass to a
+	# back-pedalling teammate was exactly this blindness.
+	var self_pos := Vector3(3.0, 0.0, 4.0)           # NZ carrier (own net +Z)
+	var spot := Vector3(-4.0, 0.0, 6.0)              # teammate slightly behind us
+	var streaking: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, spot, false, Vector3(0.0, 0.0, -7.0)],   # in stride, up-ice
+	]
+	var st := _make_ctx(self_pos, streaking)
+	var a := AIRoleCarrier.new()
+	a.decide(st)
+	var retreating: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, spot, false, Vector3(0.0, 0.0, 7.0)],    # back-pedalling home
+	]
+	var rt := _make_ctx(self_pos, retreating)
+	var b := AIRoleCarrier.new()
+	b.decide(rt)
+	assert_gt(a.debug_pass_score, b.debug_pass_score + 0.01,
+			"the feed to the man in stride out-values the backpass to the "
+			+ "retreating one; streak=%f retreat=%f"
+			% [a.debug_pass_score, b.debug_pass_score])
+
+
 func test_turning_receiver_devalues_the_pass_and_the_blind_tier_ignores_it() -> void:
 	# Receiver-commitment read: a moving teammate mid-cut curves off the
 	# straight-line lead, so the feed to one is priced as riskier. A
