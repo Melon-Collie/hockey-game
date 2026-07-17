@@ -28,6 +28,7 @@ const _DUMMY_SEAT_SPACING: float = 1.05
 
 var _camera: Camera3D = null
 var _stands: ArenaStands = null
+var _jumbotron: Jumbotron = null
 var _orbit_angle: float = 0.0
 var _home_slot: int = -1
 var _away_slot: int = -1
@@ -46,6 +47,11 @@ func _ready() -> void:
 	var arena: Node3D = arena_scene.instantiate() as Node3D
 	add_child(arena)
 	_stands = arena.find_child("ArenaStands", false, false) as ArenaStands
+	# The backdrop's arena has no live match behind it: pin the jumbotron to
+	# its attract screen (wordmark + the lobby's team colors, re-tinted below).
+	_jumbotron = arena.find_child("Jumbotron", false, false) as Jumbotron
+	if _jumbotron != null:
+		_jumbotron.lock_attract()
 	_camera = Camera3D.new()
 	_camera.fov = _CAMERA_FOV
 	add_child(_camera)
@@ -83,6 +89,9 @@ func set_team_color_slots(home_slot: int, away_slot: int) -> void:
 	var home: Dictionary = TeamColorRegistry.get_colors(home_slot, 0)
 	var away: Dictionary = TeamColorRegistry.get_colors(away_slot, 1)
 	_stands.setup(home.primary, home.secondary, away.primary, away.secondary)
+	if _jumbotron != null:
+		_jumbotron.set_team_colors(
+				home.primary, home.secondary, away.primary, away.secondary)
 	_rebuild_dummies()
 
 
