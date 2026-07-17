@@ -91,18 +91,21 @@ const LINE_HOLD_MARGIN: float = 0.04
 # (carrier_live_option), which prices EVERY cross-ice feed high — so without a
 # gate an ordinary trailing winger reads as a lethal one-timer and CONTAIN
 # abandons the shooter for a harmless pass lane. The bar is the receiver's
-# finish-if-fed (score_shoot from his spot with the goalie where it currently
-# is, no field defenders) — a real measurement, an ~xG on a direct look — so
-# CONTAIN only plays the pass when the receiver is a genuine immediate 2v1
-# threat, not merely a body in a lane.
+# finish-if-fed with the keeper PREDICTED OVER THE FEED'S FLIGHT
+# (predict_goalie_pos + goalie_unsettled, no field defenders): a short-flight
+# backdoor feed arrives before he can traverse (near-certain finish), while a
+# long trailing feed hands him the whole flight to re-square (a dead look).
+# Under the make-probability currency this reads directly as P(goal | clean
+# feed): the canonical 2-on-1 backdoor partner measures ~1.0 (PLAY it), the
+# distant trailer ~0.0 (HOLD the carrier); the bar is "more likely than not".
 #
-# Calibrated (score_shoot, goalie challenged out on the carrier): a canonical
-# 2-on-1 backdoor partner near the net reads ~0.27 (PLAY it), while a wide
-# sharp-angle or distant trailing receiver reads ~0.15 (HOLD the carrier). The
-# bar sits between. This is deliberately LOWER than the net-front house pin
-# (AIThreatAssignment.NET_FRONT_DANGER_BAR = 0.45): pinning a man to the house
-# demands a lethal tap-in; shading a rush pass lane only demands a real chance.
-const LANE_PLAY_DANGER_BAR: float = 0.20
+# KNOWN GAP: a wide-but-DEEP receiver (sharp angle, several metres off the
+# goal line) also reads ~1.0, because the planning keeper has no sharp-angle
+# post-play outside the 2 m seal zone (the live goalie's VH/pads-first slide
+# would wall that shot). Until the planning model grows that read, CONTAIN
+# will respect wide-deep feed lanes more than the textbook says to — see the
+# pending() doctrine test in test_role_contain.
+const LANE_PLAY_DANGER_BAR: float = 0.5
 
 
 static func decide(ctx: RoleContext) -> RoleDecision:
@@ -275,15 +278,25 @@ static func _lane_fan_target(
 	var a_net: float = atan2(dir_net.z, dir_net.x)
 	for i: int in receivers.size():
 		# Only leave the carrier for a receiver who's a genuine immediate threat:
-		# his finish-if-fed must clear the danger bar (goalie where it is now, no
-		# field defenders — an ~xG on a direct look). A
-		# trailing, low-danger receiver doesn't pull CONTAIN off the shooter, no
-		# matter how open his lane; that's the "only play the pass in a real 2v1"
-		# discipline. The on-line retreat point (scored above against ALL receivers)
-		# stays the baseline, so a conceded low-danger feed is still priced there.
+		# his finish-if-fed must clear the danger bar — the keeper predicted
+		# over the FEED'S flight (see LANE_PLAY_DANGER_BAR), no field
+		# defenders. A trailing, low-danger receiver doesn't pull CONTAIN off
+		# the shooter, no matter how open his lane; that's the "only play the
+		# pass in a real 2v1" discipline. The on-line retreat point (scored
+		# above against ALL receivers) stays the baseline, so a conceded
+		# low-danger feed is still priced there.
+		var feed_speed: float = AIActionScoring.expected_pass_speed(
+				carrier_pos, receivers[i])
+		var feed_flight: float = carrier_pos.distance_to(receivers[i]) \
+				/ maxf(feed_speed, 1.0)
+		var recv_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+				our_goalie_pos, our_net, feed_flight, receivers[i])
+		var recv_unsettled: float = AIActionScoring.goalie_unsettled(
+				our_goalie_pos, our_net, feed_flight, receivers[i])
 		var recv_danger: float = AIActionScoring.score_shoot(
-				receivers[i], our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH,
-				no_defenders)
+				receivers[i], our_net, recv_goalie, GameRules.NET_HALF_WIDTH,
+				no_defenders, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+				recv_unsettled)
 		if recv_danger < LANE_PLAY_DANGER_BAR:
 			continue
 		var lane_x: float = receivers[i].x - carrier_pos.x

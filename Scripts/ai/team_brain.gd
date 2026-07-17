@@ -259,13 +259,23 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		man_value[pid] = AIActionScoring.threat_surface_pass(
 				carrier_pos, mp, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, no_defenders)
-		# Finish danger if fed: shot value from his spot with the goalie where
-		# he is NOW (tracking the carrier, not this off-puck man), no field
-		# defenders — an off-axis net-front man reads lethal because the net is
-		# open to his side. Feeds the net-front override (drops the lane factor
-		# man_value folds in: a contested feed still becomes a tap-in).
+		# Finish danger if fed: shot value from his spot with the goalie
+		# PREDICTED OVER THE FEED'S FLIGHT (he starts tracking the carrier;
+		# a short doorstep feed arrives before he traverses — lethal — while
+		# a long perimeter feed hands him the whole flight to re-square), no
+		# field defenders. Feeds the net-front override (drops the lane
+		# factor man_value folds in: a contested feed still becomes a
+		# tap-in if it arrives).
+		var feed_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, mp)
+		var feed_flight: float = carrier_pos.distance_to(mp) / maxf(feed_speed, 1.0)
 		man_danger[pid] = AIActionScoring.score_shoot(
-				mp, our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH, no_defenders)
+				mp, our_net,
+				AIActionScoring.predict_goalie_pos(
+						our_goalie_pos, our_net, feed_flight, mp),
+				GameRules.NET_HALF_WIDTH, no_defenders,
+				AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+				AIActionScoring.goalie_unsettled(
+						our_goalie_pos, our_net, feed_flight, mp))
 	if men.is_empty():
 		return empty
 

@@ -40,7 +40,7 @@ class_name AIShotAim
 #
 # 0.0 (the honest best spot). The shot SCORE prices a shot by its partial make
 # probability with the aim assumed at the window CENTRE (AIActionScoring.
-# _soft_make_angle), so the aim must sit there too or score and release desync.
+# the make-probability mapping), so the aim must sit there too or score and release desync.
 # Centring it also makes the execution wobble symmetric: a taken shot's scatter
 # splits into goals AND goalie saves AND posts, instead of the old +0.3 post-bias
 # that threw the whole wobble tail onto the IRON (so the bot's misses were posts
