@@ -22,10 +22,10 @@ class_name AIBodyCheck
 #      I actually get my body there before the carrier skates past? A carrier
 #      fleeing faster than me saturates the solve and is rejected.
 #   3. Real hit — the PREDICTED victim impulse clears COMMIT_IMPULSE_M_S.
-#      Impulse = approach × transfer × m_self / (m_self + m_victim) — EXACTLY
-#      the inelastic reduced-mass kick SkaterCollisionRules.resolve delivers
-#      (Δv_b = closing × reduced_mass × transfer / m_b): a soft bump that
-#      won't separate man from puck isn't worth leaving position for.
+#      Predicted via SkaterCollisionRules.victim_kick — the same delivery
+#      function the contact resolver itself applies, so the prediction and
+#      the physics are one formula by construction: a soft bump that won't
+#      separate man from puck isn't worth leaving position for.
 #
 # Attribute expression falls out of (3): a high-Size/Physical bot's predicted
 # impulse clears the bar at lower closing speeds, so it hunts hits; a
@@ -110,15 +110,15 @@ static func evaluate(
 		return r
 
 	# 3. Real hit. Predict the victim impulse from the closing velocity I'd
-	# bring driving at the intercept, through the SAME inelastic reduced-mass
-	# math the collision resolver runs (SkaterCollisionRules.resolve):
-	# Δv_victim = closing × transfer × m_self / (m_self + m_victim). The
-	# victim's REAL mass (Size) is in the denominator, so a heavy carrier
-	# moves less for the same hit and a light checker correctly predicts
-	# bouncing off — it won't leave its feet for it.
+	# bring driving at the intercept, through the resolver's OWN delivery
+	# function (SkaterCollisionRules.victim_kick — the same code path
+	# resolve() applies on contact, so this prediction can never drift from
+	# the physics again). The victim's REAL mass (Size) is in the reduced-mass
+	# denominator, so a heavy carrier moves less for the same hit and a light
+	# checker correctly predicts bouncing off — it won't leave its feet for it.
 	var approach: float = _predicted_approach(self_pos, self_max_speed, intercept, carrier_vel)
-	var predicted_impulse: float = approach * self_body_check_transfer \
-			* self_weight / maxf(self_weight + victim_weight, 0.001)
+	var predicted_impulse: float = SkaterCollisionRules.victim_kick(
+			approach, self_weight, victim_weight, self_body_check_transfer)
 	if predicted_impulse < commit_impulse_threshold:
 		return r
 

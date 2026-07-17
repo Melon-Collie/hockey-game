@@ -100,6 +100,24 @@ func test_heavy_attacker_drives_through_light_victim() -> void:
 	assert_almost_eq(out.dvel_a.x, -6.0 * 55.0 / 205.0, 0.01)
 
 
+func test_victim_kick_matches_what_resolve_delivers() -> void:
+	# victim_kick is the resolver's OWN delivery function, exposed so
+	# predictors (AIBodyCheck's commit gate) share the exact formula. Pin the
+	# consistency contract: for a live contact, resolve's applied |dvel_b|
+	# equals victim_kick at the same closing speed, masses, and transfer —
+	# if the delivery model ever changes, this and the AI's prediction move
+	# in the same edit or fail here.
+	var out := _res()
+	SkaterCollisionRules.resolve(out,
+		Vector3.ZERO, Vector3(7.0, 0.0, 0.0), 1.18, R,
+		Vector3(0.8, 0.0, 0.0), Vector3(-2.0, 0.0, 0.0), 0.9, R, 0.61)
+	assert_true(out.impulse_applied)
+	assert_almost_eq(out.dvel_b.length(),
+			SkaterCollisionRules.victim_kick(
+					out.closing_speed, 1.18, 0.9, 0.61),
+			0.0001)
+
+
 func test_transfer_scales_impulse_linearly() -> void:
 	var full := _res()
 	var half := _res()
