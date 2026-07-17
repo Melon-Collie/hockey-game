@@ -314,11 +314,11 @@ func _build_header_row() -> HBoxContainer:
 # side, split by hairlines: TEAMS | MATCH | SPECTATORS. MATCH gets roughly
 # double width — LobbySettingsPanel lays its rows out in two columns — so all
 # three sections land at a similar height instead of one tall middle tower.
-# The tray is darker than the lobby panel (SURFACE_INPUT) so the option
-# cluster recedes and the slot cards above stay the visual centerpiece.
+# The tray shares the empty slot cards' surface (SURFACE_ELEV) so the screen
+# reads as two tones — shell + raised surfaces — rather than a third dark.
 func _build_settings_tray() -> PanelContainer:
 	var style := StyleBoxFlat.new()
-	style.bg_color = MenuStyle.SURFACE_INPUT
+	style.bg_color = MenuStyle.SURFACE_ELEV
 	style.set_corner_radius_all(6)
 	style.set_content_margin_all(16)
 
