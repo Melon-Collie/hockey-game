@@ -1172,6 +1172,13 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 # BotSkillProfile in apply_profile().
 const DISPATCH_PERIOD_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 60   # ~60 Hz
 var _dispatch_period_ticks: int = DISPATCH_PERIOD_TICKS
+
+# The match's latched rule set (GameRules.RuleSet), stamped by AIController
+# from the game state each tick. Drives RoleContext.offsides_enforced — the
+# counter-channel blue-line clamp on offside-positioned opponents. Defaults
+# to the game's default (ARCADE: offsides on) so unwired contexts (tests)
+# model the standard game.
+var rule_set: int = GameRules.DEFAULT_RULE_SET
 var _dispatch_skip_counter: int = 0
 var _cached_move_vector: Vector2 = Vector2.ZERO
 
@@ -2080,6 +2087,11 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# The carrier runs its cooldown / hold-decay clock in real time, but decide()
 	# is only called on dispatch ticks — hand it the span so it can compensate.
 	ctx.dispatch_period_ticks = _dispatch_period_ticks
+	# Ruleset read for the counter channels: only the OFF ruleset plays an
+	# offside-positioned opponent as a live outlet (ARCADE/NHL both void him
+	# until he tags up at the blue line). Latched like the match's other
+	# rules; stamped every build since the ctx instance is reused.
+	ctx.offsides_enforced = rule_set != GameRules.RuleSet.OFF
 	if _team_brain != null:
 		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos

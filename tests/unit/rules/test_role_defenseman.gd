@@ -191,18 +191,50 @@ func test_valve_trails_the_rush_at_speed() -> void:
 
 
 func test_valve_never_loses_the_race_home() -> void:
-	# An opponent already deep behind the valve: the race-home cap must pull
-	# the trail point toward our net, whatever the carrier is doing.
+	# An ONSIDE burner (in the NZ, driving at our net) behind the valve: the
+	# race-home cap must pull the trail point toward our net, whatever the
+	# carrier is doing. (In the NZ he's a legal outlet — an opponent already
+	# INSIDE our zone is the offside cherry-picker the next test covers.)
+	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 6.0), [
+			[2, TEAM_ID, Vector3(2.0, 0.0, -18.0)],
+			[10, 1, Vector3(1.0, 0.0, 4.0), Vector3(0.0, 0.0, 7.0)],
+	], 2)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
+	# The un-threatened trail point would sit a zone behind the carrier
+	# (z ≈ -8); the burner already behind the valve must pull the stand
+	# well into our half, near even with him — never left playing catch-up.
+	assert_gt(d.target_position.z, 5.0,
+			"a deep burner pulls the valve home toward even; got %s"
+			% d.target_position)
+
+
+func test_offside_cherry_picker_does_not_drag_the_valve_home() -> void:
+	# The same lurker parked INSIDE our zone while we possess in the NZ: he
+	# is offside-positioned — no legal outlet exists to him where he stands
+	# (ARCADE ghosts him, NHL whistles the touch), so his counter channel
+	# routes through his blue-line tag-up and the valve keeps trailing the
+	# rush instead of babysitting a man who cannot be passed to.
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 6.0), [
 			[2, TEAM_ID, Vector3(2.0, 0.0, -18.0)],
 			[10, 1, Vector3(1.0, 0.0, 14.0), Vector3(0.0, 0.0, 7.0)],
 	], 2)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
-	# The un-threatened trail point would sit a zone behind the carrier
-	# (z ≈ -8); the burner already deep behind the valve must pull the stand
-	# well into our half, near even with him — never left playing catch-up.
+	assert_lt(d.target_position.z, 0.0,
+			"an illegal outlet does not drag the valve off the trail; got %s"
+			% d.target_position)
+
+
+func test_off_ruleset_plays_the_cherry_picker_as_live() -> void:
+	# Same fixture with offsides OFF: the cherry-picker is a genuine doorstep
+	# outlet and the valve must respect him again.
+	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 6.0), [
+			[2, TEAM_ID, Vector3(2.0, 0.0, -18.0)],
+			[10, 1, Vector3(1.0, 0.0, 14.0), Vector3(0.0, 0.0, 7.0)],
+	], 2)
+	ctx.offsides_enforced = false
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
 	assert_gt(d.target_position.z, 5.0,
-			"a deep burner pulls the valve home toward even; got %s"
+			"with no offside rule the lurker is real and pulls the valve home; got %s"
 			% d.target_position)
 
 

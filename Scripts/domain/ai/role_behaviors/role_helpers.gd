@@ -751,6 +751,10 @@ static var _race_net: Vector3 = Vector3.ZERO
 static var _race_key_snapshot_id: int = 0
 static var _race_key_net_z: float = 0.0
 static var _race_key_count: int = -1
+# The channel build reads ctx.offsides_enforced (blue-line gain clamps), so
+# the memo must key on it — match-global in play, but tests flip it between
+# calls on one snapshot.
+static var _race_key_offsides: int = -1
 static var _race_key_speed: float = -1.0
 static var _race_key_accel: float = -1.0
 
@@ -767,12 +771,14 @@ static func fill_counter_channels(ctx: RoleContext,
 		opp_states: Array[SkaterNetworkState], our_net: Vector3) -> void:
 	var snap_id: int = ctx.snapshot.get_instance_id() if ctx.snapshot != null else 0
 	if snap_id == _race_key_snapshot_id and our_net.z == _race_key_net_z \
-			and opp_states.size() == _race_key_count and snap_id != 0:
+			and opp_states.size() == _race_key_count \
+			and int(ctx.offsides_enforced) == _race_key_offsides and snap_id != 0:
 		_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
 		return
 	_race_key_snapshot_id = snap_id
 	_race_key_net_z = our_net.z
 	_race_key_count = opp_states.size()
+	_race_key_offsides = int(ctx.offsides_enforced)
 	_race_station_pts.clear()
 	_race_station_ts.clear()
 	_race_channel_count = 0
@@ -784,6 +790,15 @@ static func fill_counter_channels(ctx: RoleContext,
 		var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
 		opp_has_puck = carrier_pid != -1 \
 				and ctx.team_id_by_peer.get(carrier_pid, -1) != ctx.team_id
+	# Offside-aware outlets: an opponent already IN his attacking zone (our
+	# defensive zone) while the puck is NOT there cannot legally receive an
+	# outlet where he stands — ARCADE ghosts him, NHL whistles the touch;
+	# either way his earliest legal involvement is at the blue line, tagged
+	# up. His channels route through that point below. Only the OFF ruleset
+	# plays a cherry-picker as the live doorstep threat he'd otherwise be.
+	var own_dir: float = signf(our_net.z)
+	var offside_reads: bool = ctx.offsides_enforced and puck_pos.is_finite() \
+			and own_dir * puck_pos.z <= GameRules.BLUE_LINE_Z
 	var has_caps: bool = ctx.scratch_opp_caps.size() == opp_states.size()
 	for i: int in opp_states.size():
 		var s: SkaterNetworkState = opp_states[i]
@@ -817,13 +832,39 @@ static func fill_counter_channels(ctx: RoleContext,
 		var lead_xz: Vector2 = GameRules.clamp_to_rink_inner(
 				Vector2(lead.x, lead.z), 0.5)
 		var gain_pt := Vector3(lead_xz.x, 0.0, lead_xz.y)
-		_append_channel(gain_pt, _xz_distance(puck_pos, gain_pt) / v_pass,
-				vel, speed, accel)
+		# Offside-positioned (in his attacking zone before the puck): his
+		# gain clamps to the blue line — timed by BOTH clocks (the feed's
+		# flight there and his own skate back to tag), with the carry
+		# restarting from the tag rather than at his lurking momentum.
+		var offside_positioned: bool = offside_reads \
+				and own_dir * s.position.z > GameRules.BLUE_LINE_Z
+		if offside_positioned:
+			gain_pt = Vector3(lead_xz.x, 0.0, own_dir * GameRules.BLUE_LINE_Z)
+			var t_feed: float = _xz_distance(puck_pos, gain_pt) / v_pass
+			var t_tag: float = AIActionScoring.time_to_arrive(
+					s.position, gain_pt, vel, speed)
+			_append_channel(gain_pt, maxf(t_feed, t_tag),
+					Vector3.ZERO, speed, accel)
+		else:
+			_append_channel(gain_pt, _xz_distance(puck_pos, gain_pt) / v_pass,
+					vel, speed, accel)
 		# Retrieve: only when the puck is loose or on OUR team's blade — the
-		# opponent skates to it, gathers (carry restarts from rest).
+		# opponent skates to it, gathers (carry restarts from rest). An
+		# offside-positioned body must tag up before it may touch the puck
+		# (ARCADE can't interact; an NHL touch is a whistle, not a counter),
+		# so its retrieval routes through the blue line.
 		if not opp_has_puck:
-			var t_ret: float = AIActionScoring.time_to_arrive(
-					s.position, puck_pos, vel, speed)
+			var t_ret: float
+			if offside_positioned:
+				var tag_pt := Vector3(s.position.x, 0.0,
+						own_dir * GameRules.BLUE_LINE_Z)
+				t_ret = AIActionScoring.time_to_arrive(
+						s.position, tag_pt, vel, speed) \
+						+ AIActionScoring.time_to_arrive(
+								tag_pt, puck_pos, Vector3.ZERO, speed)
+			else:
+				t_ret = AIActionScoring.time_to_arrive(
+						s.position, puck_pos, vel, speed)
 			_append_channel(puck_pos, t_ret, Vector3.ZERO, speed, accel)
 	_race_key_speed = -1.0
 	_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)

@@ -192,6 +192,10 @@ func _physics_process(delta: float) -> void:
 	# host physics frame after StateBufferManager.capture; reading it here
 	# avoids 6 bots × redundant interpolation passes per frame.
 	perceived_snapshot = GameManager.current_snapshot
+	# Latched match rules for the AI's offside-aware reads (cheap int stamp;
+	# the rule set only changes at match config, but the agent must never
+	# carry a previous match's).
+	_agent.set_rule_set(GameManager.get_rule_set())
 	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
 	_process_input(input, delta)
 	skater.current_shot_state = _sm.get_state() as int
