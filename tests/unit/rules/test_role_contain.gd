@@ -330,16 +330,32 @@ func test_two_on_one_lane_yields_when_receiver_is_covered() -> void:
 
 func test_low_danger_receiver_does_not_pull_contain_off_the_shooter() -> void:
 	# Same rush shape as the 2-on-1, but the uncovered partner is jammed wide on
-	# a near-goal-line sharp angle — an open lane, but NO real finish if fed
-	# (his score_shoot is below LANE_PLAY_DANGER_BAR). CONTAIN must stay on the
-	# carrier (the immediate shooter) instead of sliding off to shade a harmless
-	# feed — the "only play the pass in a genuine 2v1" discipline. The one-timer
-	# pass model would otherwise over-value even this feed (traversing goalie).
+	# a near-goal-line sharp angle — an open lane that the textbook says to
+	# concede (the goalie's post play walls the sharp-angle one-timer).
+	# Un-pended by the post-clamped keeper prediction: a look inside the
+	# dead-angle seal region has no arc to square on, so the predicted keeper
+	# collapses TO THE POST over the feed's flight — the wide-deep one-timer
+	# fires into that wall and honestly measures below the bar. The premise
+	# check mirrors CONTAIN's own production read (predicted keeper + derived
+	# seal over the feed flight).
 	var partner := Vector3(13, 0, 20)   # wide + deep = brutal shooting angle
-	# Sanity-check the premise: this receiver really is below the danger bar.
+	var our_net := Vector3(0, 0, OUR_NET_Z)
+	var feed_speed: float = AIActionScoring.expected_pass_speed(
+			Vector3(0, 0, 14), partner)
+	var feed_flight: float = Vector3(0, 0, 14).distance_to(partner) / feed_speed
+	var recv_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
+			Vector3(0, 0, 24.6), our_net, feed_flight, partner)
+	var partner_seal: float = AIActionScoring.derive_post_seal_x_sign(
+			partner, our_net)
+	assert_ne(partner_seal, 0.0,
+			"premise: the wide-deep spot is inside the predicted post seal")
 	var recv_danger: float = AIActionScoring.score_shoot(
-			partner, Vector3(0, 0, OUR_NET_Z), Vector3(0, 0, 24.6),
-			GameRules.NET_HALF_WIDTH, [] as Array[Vector3])
+			partner, our_net, recv_goalie,
+			GameRules.NET_HALF_WIDTH, [] as Array[Vector3],
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+			AIActionScoring.goalie_unsettled(
+					Vector3(0, 0, 24.6), our_net, feed_flight, partner),
+			[], -1.0, false, partner_seal, true)
 	assert_lt(recv_danger, AIRoleContain.LANE_PLAY_DANGER_BAR,
 			"premise: the wide sharp-angle partner is not an immediate finish"
 			+ " threat; got danger=%f" % recv_danger)

@@ -136,14 +136,35 @@ func test_point_sags_when_the_race_home_is_lost() -> void:
 
 # ── FORECHECK line pair ──────────────────────────────────────────────────────
 
-func test_dp_holds_the_line_when_opponents_are_bottled() -> void:
-	# Opp carrier pinned deep in THEIR zone: the D pair stands at the line.
+func test_dp_pinches_on_a_bottled_forecheck() -> void:
+	# Opp carrier pinned deep in THEIR zone, nobody moving: every counter
+	# channel is slow, the whole lane is race-home feasible, and the D pair
+	# pinches to the top of the end-zone circles — real forecheck pressure
+	# instead of blue-line statuary (the "no pinching, glued to exactly the
+	# blue line" report).
 	var ctx: RoleContext = _make_ctx(Vector3(6.0, 0.0, -4.0),
 			[[10, 1, Vector3(4.0, 0.0, -24.0)]], 10)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DP_STRONG)
-	assert_almost_eq(d.target_position.z, -GameRules.BLUE_LINE_Z + 0.5, 0.6,
-			"line stand on the NZ side of the blue line")
+	assert_almost_eq(d.target_position.z,
+			-(GameRules.GOAL_LINE_Z - AIRoleDefenseman.DP_PINCH_DEPTH_M), 0.6,
+			"pinches to the circle tops when the play is bottled")
 	assert_almost_eq(d.target_position.x, 6.7, 0.1, "strong lane inside the dots")
+
+
+func test_dp_releases_the_pinch_as_the_breakout_forms() -> void:
+	# The gap-up seam: the carrier has controlled the puck and is gathering
+	# speed up-ice — still deep in HIS zone, the puck not yet out. The pinch
+	# must already be fully released (back at/behind the blue line, sliding
+	# down the NZ): the set-arrival margin collapses the mid-path stations
+	# while the breakout is FORMING, not after the carrier is at full flight
+	# past the line ("start backing off as the puck is exiting the O-zone").
+	var ctx: RoleContext = _make_ctx(Vector3(6.0, 0.0, -14.0), [
+			[10, 1, Vector3(2.0, 0.0, -14.0), Vector3(0.0, 0.0, 7.0)],
+	], 10)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DP_STRONG)
+	assert_gt(d.target_position.z, -GameRules.BLUE_LINE_Z - 0.01,
+			"the pinch is released to the NZ side while the puck is still exiting; got %s"
+			% d.target_position)
 
 
 func test_dp_sags_off_a_stretch_threat() -> void:
@@ -170,18 +191,50 @@ func test_valve_trails_the_rush_at_speed() -> void:
 
 
 func test_valve_never_loses_the_race_home() -> void:
-	# An opponent already deep behind the valve: the race-home cap must pull
-	# the trail point toward our net, whatever the carrier is doing.
+	# An ONSIDE burner (in the NZ, driving at our net) behind the valve: the
+	# race-home cap must pull the trail point toward our net, whatever the
+	# carrier is doing. (In the NZ he's a legal outlet — an opponent already
+	# INSIDE our zone is the offside cherry-picker the next test covers.)
+	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 6.0), [
+			[2, TEAM_ID, Vector3(2.0, 0.0, -18.0)],
+			[10, 1, Vector3(1.0, 0.0, 4.0), Vector3(0.0, 0.0, 7.0)],
+	], 2)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
+	# The un-threatened trail point would sit a zone behind the carrier
+	# (z ≈ -8); the burner already behind the valve must pull the stand
+	# well into our half, near even with him — never left playing catch-up.
+	assert_gt(d.target_position.z, 5.0,
+			"a deep burner pulls the valve home toward even; got %s"
+			% d.target_position)
+
+
+func test_offside_cherry_picker_does_not_drag_the_valve_home() -> void:
+	# The same lurker parked INSIDE our zone while we possess in the NZ: he
+	# is offside-positioned — no legal outlet exists to him where he stands
+	# (ARCADE ghosts him, NHL whistles the touch), so his counter channel
+	# routes through his blue-line tag-up and the valve keeps trailing the
+	# rush instead of babysitting a man who cannot be passed to.
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 6.0), [
 			[2, TEAM_ID, Vector3(2.0, 0.0, -18.0)],
 			[10, 1, Vector3(1.0, 0.0, 14.0), Vector3(0.0, 0.0, 7.0)],
 	], 2)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
-	# The un-threatened trail point would sit a zone behind the carrier
-	# (z ≈ -8); the burner already deep behind the valve must pull the stand
-	# well into our half, near even with him — never left playing catch-up.
+	assert_lt(d.target_position.z, 0.0,
+			"an illegal outlet does not drag the valve off the trail; got %s"
+			% d.target_position)
+
+
+func test_off_ruleset_plays_the_cherry_picker_as_live() -> void:
+	# Same fixture with offsides OFF: the cherry-picker is a genuine doorstep
+	# outlet and the valve must respect him again.
+	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 6.0), [
+			[2, TEAM_ID, Vector3(2.0, 0.0, -18.0)],
+			[10, 1, Vector3(1.0, 0.0, 14.0), Vector3(0.0, 0.0, 7.0)],
+	], 2)
+	ctx.offsides_enforced = false
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
 	assert_gt(d.target_position.z, 5.0,
-			"a deep burner pulls the valve home toward even; got %s"
+			"with no offside rule the lurker is real and pulls the valve home; got %s"
 			% d.target_position)
 
 

@@ -438,13 +438,19 @@ static func carrier_best_option(
 # the one-timer feed near zero, hiding the very threat the fan exists to
 # take away. Raw xG also ties at ~0 far from the net, so the fan's hold
 # margin keeps the classic retreat line out there — the correct far-out read.
+# `abort_above`: exact argmin pruning for CONTAIN's lane fan — the caller
+# MINIMIZES this value across candidates, so once the running best exceeds the
+# incumbent's, the exact value cannot matter and the remaining (expensive,
+# score_pass-heavy) receiver evaluations are skipped. Default INF evaluates
+# everything.
 static func carrier_live_option(
 		candidate: Vector3,
 		carrier_pos: Vector3,
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
-		opp_teammates: Array[Vector3]) -> float:
+		opp_teammates: Array[Vector3],
+		abort_above: float = INF) -> float:
 	# Defenders = our team + me at the candidate. Append-and-restore the caller's
 	# array in place instead of duplicating it — called once per candidate in
 	# CONTAIN's lane fan (up to ~13×/decide), so a fresh Array per call was pure
@@ -455,6 +461,8 @@ static func carrier_live_option(
 			carrier_pos, our_net, our_goalie_pos,
 			GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 	for receiver: Vector3 in opp_teammates:
+		if best >= abort_above:
+			break
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, receiver)
 		var flight_s: float = carrier_pos.distance_to(receiver) / maxf(pass_speed, 1.0)
 		var pred_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
@@ -751,6 +759,10 @@ static var _race_net: Vector3 = Vector3.ZERO
 static var _race_key_snapshot_id: int = 0
 static var _race_key_net_z: float = 0.0
 static var _race_key_count: int = -1
+# The channel build reads ctx.offsides_enforced (blue-line gain clamps), so
+# the memo must key on it — match-global in play, but tests flip it between
+# calls on one snapshot.
+static var _race_key_offsides: int = -1
 static var _race_key_speed: float = -1.0
 static var _race_key_accel: float = -1.0
 
@@ -767,12 +779,14 @@ static func fill_counter_channels(ctx: RoleContext,
 		opp_states: Array[SkaterNetworkState], our_net: Vector3) -> void:
 	var snap_id: int = ctx.snapshot.get_instance_id() if ctx.snapshot != null else 0
 	if snap_id == _race_key_snapshot_id and our_net.z == _race_key_net_z \
-			and opp_states.size() == _race_key_count and snap_id != 0:
+			and opp_states.size() == _race_key_count \
+			and int(ctx.offsides_enforced) == _race_key_offsides and snap_id != 0:
 		_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
 		return
 	_race_key_snapshot_id = snap_id
 	_race_key_net_z = our_net.z
 	_race_key_count = opp_states.size()
+	_race_key_offsides = int(ctx.offsides_enforced)
 	_race_station_pts.clear()
 	_race_station_ts.clear()
 	_race_channel_count = 0
@@ -784,6 +798,15 @@ static func fill_counter_channels(ctx: RoleContext,
 		var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
 		opp_has_puck = carrier_pid != -1 \
 				and ctx.team_id_by_peer.get(carrier_pid, -1) != ctx.team_id
+	# Offside-aware outlets: an opponent already IN his attacking zone (our
+	# defensive zone) while the puck is NOT there cannot legally receive an
+	# outlet where he stands — ARCADE ghosts him, NHL whistles the touch;
+	# either way his earliest legal involvement is at the blue line, tagged
+	# up. His channels route through that point below. Only the OFF ruleset
+	# plays a cherry-picker as the live doorstep threat he'd otherwise be.
+	var own_dir: float = signf(our_net.z)
+	var offside_reads: bool = ctx.offsides_enforced and puck_pos.is_finite() \
+			and own_dir * puck_pos.z <= GameRules.BLUE_LINE_Z
 	var has_caps: bool = ctx.scratch_opp_caps.size() == opp_states.size()
 	for i: int in opp_states.size():
 		var s: SkaterNetworkState = opp_states[i]
@@ -817,13 +840,39 @@ static func fill_counter_channels(ctx: RoleContext,
 		var lead_xz: Vector2 = GameRules.clamp_to_rink_inner(
 				Vector2(lead.x, lead.z), 0.5)
 		var gain_pt := Vector3(lead_xz.x, 0.0, lead_xz.y)
-		_append_channel(gain_pt, _xz_distance(puck_pos, gain_pt) / v_pass,
-				vel, speed, accel)
+		# Offside-positioned (in his attacking zone before the puck): his
+		# gain clamps to the blue line — timed by BOTH clocks (the feed's
+		# flight there and his own skate back to tag), with the carry
+		# restarting from the tag rather than at his lurking momentum.
+		var offside_positioned: bool = offside_reads \
+				and own_dir * s.position.z > GameRules.BLUE_LINE_Z
+		if offside_positioned:
+			gain_pt = Vector3(lead_xz.x, 0.0, own_dir * GameRules.BLUE_LINE_Z)
+			var t_feed: float = _xz_distance(puck_pos, gain_pt) / v_pass
+			var t_tag: float = AIActionScoring.time_to_arrive(
+					s.position, gain_pt, vel, speed)
+			_append_channel(gain_pt, maxf(t_feed, t_tag),
+					Vector3.ZERO, speed, accel)
+		else:
+			_append_channel(gain_pt, _xz_distance(puck_pos, gain_pt) / v_pass,
+					vel, speed, accel)
 		# Retrieve: only when the puck is loose or on OUR team's blade — the
-		# opponent skates to it, gathers (carry restarts from rest).
+		# opponent skates to it, gathers (carry restarts from rest). An
+		# offside-positioned body must tag up before it may touch the puck
+		# (ARCADE can't interact; an NHL touch is a whistle, not a counter),
+		# so its retrieval routes through the blue line.
 		if not opp_has_puck:
-			var t_ret: float = AIActionScoring.time_to_arrive(
-					s.position, puck_pos, vel, speed)
+			var t_ret: float
+			if offside_positioned:
+				var tag_pt := Vector3(s.position.x, 0.0,
+						own_dir * GameRules.BLUE_LINE_Z)
+				t_ret = AIActionScoring.time_to_arrive(
+						s.position, tag_pt, vel, speed) \
+						+ AIActionScoring.time_to_arrive(
+								tag_pt, puck_pos, Vector3.ZERO, speed)
+			else:
+				t_ret = AIActionScoring.time_to_arrive(
+						s.position, puck_pos, vel, speed)
 			_append_channel(puck_pos, t_ret, Vector3.ZERO, speed, accel)
 	_race_key_speed = -1.0
 	_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
@@ -832,40 +881,55 @@ static func fill_counter_channels(ctx: RoleContext,
 # Precompute, for the calling defender's build, the squared containment
 # radius of every station: reach (blade span) + the run a standing start
 # covers in the time the puck needs to get there (same capped ramp the
-# calibrated time_to_arrive charges), minus the brake margin at the net
-# station (the last-resort stand arrives stopped). Exact inversion of the
-# per-station race race_home_feasible used to solve candidate-by-candidate.
+# calibrated time_to_arrive charges), minus the SET margin at every station.
+# Exact inversion of the per-station race race_home_feasible used to solve
+# candidate-by-candidate.
+#
+# SET ARRIVAL at every station — containment is not presence. A defender who
+# merely GETS to a mid-path station as the rush arrives is screaming through
+# it at full stride — beaten through it exactly like the "holds the blue
+# line, gets beat through the middle" failure. Playing the man at a station
+# means arriving with your closing speed already killed, whether the station
+# is the net mouth or mid-NZ. So the radius solves the SET-ARRIVAL profile
+# (not raw travel):
+#   short budget — triangular: accelerate then brake to zero inside `avail`;
+#     covered ground is ½·k·avail² with k = a·B/(a+B) (the effective accel of
+#     an accelerate-brake round trip; B = the arrival brake decel);
+#   long budget — trapezoidal: full ramp (d_ramp) + brake run (v²/2B, the
+#     braking DISTANCE the old net-only margin forgot to credit) + cruise for
+#     whatever time remains.
+# A station already under the blade needs no travel and stays contained at
+# any budget — the camped line stand still stuffs the man who skates into
+# it. Charging the set profile everywhere collapses feasibility while a
+# breakout is still FORMING (the carrier gathering speed deep in his zone),
+# which is what starts the back-off early enough to gap up, instead of after
+# the race is already lost. (Replaces the old net-station-only brake margin.)
 static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void:
 	if self_max_speed == _race_key_speed and self_max_accel == _race_key_accel:
 		return
 	_race_key_speed = self_max_speed
 	_race_key_accel = self_max_accel
 	var v_me: float = maxf(self_max_speed, 1.0)
-	var brake: float = v_me / AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	var brake_decel: float = AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
 	var a_net: float = maxf(
 			self_max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
-	var t_ramp: float = v_me / a_net
+	var k_set: float = a_net * brake_decel / (a_net + brake_decel)
+	var t_tri_max: float = v_me / a_net + v_me / brake_decel
 	var d_ramp: float = v_me * v_me / (2.0 * a_net)
+	var d_brake: float = v_me * v_me / (2.0 * brake_decel)
 	var n_fracs: int = RACE_PATH_FRACTIONS.size()
 	_race_reach_sq.clear()
 	var total: int = _race_channel_count * n_fracs
 	for idx: int in total:
 		var avail: float = _race_station_ts[idx]
-		if (idx % n_fracs) == n_fracs - 1:
-			avail -= brake
 		var r: float
 		if avail < 0.0:
-			# The brake margin outlasts the puck's arrival — the station is
-			# uncontainable from anywhere (matches the pre-inversion race:
-			# t_me ≥ 0 can never be ≤ a negative budget).
 			r = -1.0
-		elif avail <= t_ramp:
-			r = reach + 0.5 * a_net * avail * avail
+		elif avail <= t_tri_max:
+			r = reach + 0.5 * k_set * avail * avail
 		else:
-			r = reach + d_ramp + v_me * (avail - t_ramp)
-		# -1 = uncontainable station (even standing on it, the brake margin
-		# outlasts the puck) — the feasibility compare rejects it outright.
+			r = reach + d_ramp + d_brake + v_me * (avail - t_tri_max)
 		_race_reach_sq.append(r * r if r > 0.0 else -1.0)
 
 

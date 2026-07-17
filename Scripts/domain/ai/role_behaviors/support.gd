@@ -9,25 +9,36 @@ class_name AIRoleSupport
 #
 # Algorithm: argmax over a candidate set of
 #
-#     score_pass(carrier, candidate) × (1 - exposure(candidate))
+#     score_pass(carrier, candidate) − counter_cost(candidate)
 #
 # `score_pass` (existing AIActionScoring primitive) handles
 # "available for a pass + good shot if I receive": it factors lane
 # clearance from carrier through projected opponents and recursively
 # evaluates the candidate's own future-action value via score_at.
 #
-# `exposure` is the foot-race-home consideration so SUPPORT doesn't
-# get caught past the play. Compares my sprint ETA to our net against
-# the fastest opp's momentum-aware ETA via time_to_arrive. It's a SOFT
-# depth bias (clamped to [0, EXPOSURE_MAX]), never a veto — the hard
-# goal-side-of-carrier constraint below is the real safety, so exposure
-# only shades SUPPORT toward the recoverable side of the band without
-# ever zeroing out the up-ice option and stranding it off the play.
+# `counter_cost` is the COVERING-SET exposure (AIActionScoring.
+# counter_rush_cost — the same grounded model the carrier's transition-
+# exposure term runs): IF possession flips at the carrier, the fastest
+# opponent collects the loss and drives the counter point, and the threat
+# he generates there survives only the bodies that beat him home with time
+# to set — teammates, and SUPPORT ITSELF racing back from the candidate
+# being priced. Standing somewhere recoverable literally erases the
+# counter (self joins the covering set → the counter shot is a blocked
+# look); standing somewhere deep leaves it live. The whole thing is
+# weighted by a REAL turnover probability: the CARRIER's live stand
+# safety (1 − carry_safety at his spot) — a pressured cycle carrier makes
+# recoverability worth paying for, an unpressured rush frees the trailer
+# to play offense. This replaced a frozen body-ETA time ramp
+# (my_time/safe_time − 1) whose canonical failure was the crease-lurker: a
+# beaten forechecker parked at our crease zeroed every up-ice spot, paying
+# SUPPORT to strand home — under the covering-set read that lurker must
+# skate all the way UP to collect a loss and all the way BACK, so the
+# covering set beats him trivially and the trailer joins the rush.
 #
 # Search center is derived from in-game references (the carrier's
 # position) rather than ctx.anchor. Polar samples around the carrier
-# feed the score function; exposure penalizes candidates the opp would
-# beat us back from, biasing toward recoverable depth.
+# feed the score function; the counter cost penalizes candidates that
+# leave the counter uncovered, biasing toward recoverable depth.
 #
 # On top of that soft bias, SUPPORT enforces a HARD goal-side
 # constraint (GOAL_SIDE_TOLERANCE_M): candidates up-ice of the carrier
@@ -64,19 +75,11 @@ const HIGH_POST_INSET_M: float = 3.0
 # knob to open up the offense. Raise OUTLET's role for the up-ice option.
 const GOAL_SIDE_TOLERANCE_M: float = 1.5
 
-# Ceiling on the exposure penalty in TRANSITION only (the OZ point keeps a full
-# 1.0 veto — see decide()). In transition the HARD goal-side-of-carrier
-# constraint already guarantees SUPPORT is the first man back: the carrier is
-# near the NZ, so "goal-side of the carrier" keeps SUPPORT recoverable by
-# construction. Letting exposure saturate to 1.0 there double-counts that safety,
-# and its only effect is to zero out EVERY up-ice candidate the moment any
-# opponent sits deep near our net (a beaten forechecker) — stranding the trailer
-# deep in our own zone instead of tracking the rush up behind the carrier (the
-# "furthest player never joins the transition" failure). Capping it keeps a floor
-# of pass value on the up-ice option so SUPPORT still follows the play, while the
-# residual penalty keeps biasing it to the deeper side of the goal-side band.
-# Feel-tunable; the hard constraint is the real safety.
-const EXPOSURE_MAX: float = 0.6
+# Scratch buffers for the covering-set exposure (caller-owned pattern —
+# refilled once per decide, no per-candidate allocation).
+static var _scratch_opp_vels: Array[Vector3] = []
+static var _scratch_mate_etas: Array[float] = []
+static var _scratch_threat_by_cover: Array[float] = []
 
 
 static func decide(ctx: RoleContext) -> RoleDecision:
@@ -99,17 +102,28 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
-	var min_opp_time_home: float = _min_opp_time_home(opp_states, ctx.scratch_opp_caps, our_net)
 
-	# Exposure is only a SOFT bias in TRANSITION, where the hard goal-side-of-
-	# carrier constraint (carrier near the NZ) already keeps SUPPORT recoverable,
-	# so a saturating penalty just strands the trailer deep off the rush (#2). In
-	# the OFFENSIVE ZONE the carrier is deep, so "goal-side of the carrier" still
-	# permits a deep, genuinely-exposed point position — there the recovery race
-	# is real, so exposure keeps its full veto to stop the point man pinching into
-	# a turnover (#3).
-	var exposure_cap: float = 1.0 if AIActionScoring.in_offensive_zone(
-			carrier_pos, ctx.attacking_goal_pos) else EXPOSURE_MAX
+	# Covering-set exposure inputs — all candidate-invariant, computed once
+	# (see the header): the turnover prior is the CARRIER's live stand
+	# safety, the counter collects at the carrier, and each teammate's race
+	# to the counter point is pre-solved. Only SUPPORT's own recovery race
+	# (self from the candidate) varies per candidate, inside
+	# counter_rush_cost. An unpressured carrier → prior 0 → the cost
+	# short-circuits and the argmax is pure pass value.
+	_scratch_opp_vels.clear()
+	for s: SkaterNetworkState in opp_states:
+		_scratch_opp_vels.append(s.velocity)
+	var turnover_prior: float = 0.0
+	if not opp_positions.is_empty():
+		turnover_prior = 1.0 - AIActionScoring.carry_safety(
+				carrier_pos, carrier_pos, AIActionScoring.EVADE_HORIZON_S,
+				opp_positions, _scratch_opp_vels, ctx.scratch_opp_caps)
+	AIActionScoring.fill_counter_cover_etas(
+			our_net, teammate_positions, _scratch_mate_etas)
+	_scratch_threat_by_cover.clear()
+	for _i: int in teammate_positions.size() + 2:
+		_scratch_threat_by_cover.append(-1.0)
+	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 
 	# Far from the station, skate at the CALCULATED post directly — the
 	# openness argmax refines a read that will be re-taken from closer before
@@ -155,9 +169,12 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				carrier_pos, c, ctx.attacking_goal_pos,
 				goalie_pos, GameRules.NET_HALF_WIDTH,
 				opp_positions, pass_speed)
-		var exposure: float = _exposure(
-				c, our_net, min_opp_time_home, ctx.self_max_speed, exposure_cap)
-		var score: float = pass_value * (1.0 - exposure) + AIRoleHelpers.incumbent_bonus(ctx, c)
+		var counter_cost: float = AIActionScoring.counter_rush_cost(
+				carrier_pos, turnover_prior, our_net, our_goalie,
+				GameRules.NET_HALF_WIDTH, teammate_positions, c,
+				ctx.self_max_speed, opp_positions, _scratch_opp_vels,
+				ctx.scratch_opp_caps, _scratch_mate_etas, _scratch_threat_by_cover)
+		var score: float = pass_value - counter_cost + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c
@@ -226,72 +243,3 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 	return result
 
 
-# ── Role-specific scoring ────────────────────────────────────────────────────
-
-# SUPPORT-private conservative time-home: min over opponents of their BODY's
-# legacy effective-speed ETA to our net — no puck-gain leg, no ramp. FROZEN
-# deliberately, on two counts. (1) Not the shared puck-path intercept read
-# (AIRoleHelpers.fill_counter_channels): with the honest gain leg, a lurker
-# deep in our end makes every up-ice spot read "exposed" while the deep spot
-# reads perfectly safe — and the ratio ramp below then pays SUPPORT to hide
-# at home instead of joining the rush, when the right play is to trail up and
-# leave the crease-lurker to the goalie until a 40 m outlet actually
-# connects. (2) Not the calibrated time_to_arrive either: the ramp charge
-# shifts both sides of the my_time/safe_time ratio and re-tips the same
-# shipped trade-off toward stranding deep. The honest fix is a covering-set /
-# shot-quality exposure (counter_rush_cost's shape) instead of a time ramp —
-# tracked in ARCHITECTURE → Known Issues; until then this frozen legacy read
-# keeps the shipped balance intact and self-contained.
-static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
-		opp_caps: Array, our_net: Vector3) -> float:
-	var has_caps: bool = opp_caps.size() == opp_states.size()
-	var best: float = INF
-	for i: int in opp_states.size():
-		var s: SkaterNetworkState = opp_states[i]
-		var ref_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
-		if has_caps:
-			var caps: AISkaterCaps = opp_caps[i]
-			if caps != null:
-				ref_speed = caps.max_speed
-		var t: float = _legacy_body_eta(s.position, our_net, s.velocity, ref_speed)
-		if t < best:
-			best = t
-	return best
-
-
-# The pre-phase-model effective-speed ETA (ref + v_along, cross momentum as
-# pure delay), kept ONLY for the exposure ramp above — see the freeze
-# rationale on _min_opp_time_home. Do not reuse elsewhere.
-static func _legacy_body_eta(from_pos: Vector3, dest: Vector3,
-		from_velocity: Vector3, ref_speed_m_s: float) -> float:
-	var dx: float = dest.x - from_pos.x
-	var dz: float = dest.z - from_pos.z
-	var dist: float = sqrt(dx * dx + dz * dz)
-	if dist < 0.001:
-		return 0.0
-	var inv: float = 1.0 / dist
-	var speed_along: float = from_velocity.x * dx * inv + from_velocity.z * dz * inv
-	var effective: float = maxf(1.0, ref_speed_m_s + speed_along)
-	var v_len_sq: float = from_velocity.x * from_velocity.x \
-			+ from_velocity.z * from_velocity.z
-	var perp_sq: float = maxf(0.0, v_len_sq - speed_along * speed_along)
-	return dist / effective + sqrt(perp_sq) / GameRules.DEFAULT_SKATER_THRUST_M_S2
-
-
-# Foot-race-home exposure in [0, cap]. 0 when I beat every opp back to our net;
-# ramps up as my ETA exceeds the fastest opp's. `cap` bounds the penalty: the
-# OZ point passes 1.0 (a full veto — the recovery race there is real), the
-# transition trailer passes EXPOSURE_MAX (a soft bias, since the hard goal-side
-# constraint already keeps it recoverable — see the decide() note). The lower
-# clamp at 0 keeps the factor non-negative so a deeply-exposed candidate can't
-# invert the argmax (small pass_value × large negative beating big pass_value ×
-# less-negative).
-static func _exposure(candidate: Vector3, our_net: Vector3,
-		min_opp_time_home: float, self_max_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S,
-		cap: float = 1.0) -> float:
-	var safe_time: float = maxf(min_opp_time_home, 0.001)
-	var dist: float = candidate.distance_to(our_net)
-	# My own foot-race home at MY real top speed (Speed) — a fast defender is less
-	# exposed from the same spot.
-	var my_time: float = dist / maxf(self_max_speed, 0.001)
-	return clampf(my_time / safe_time - 1.0, 0.0, cap)

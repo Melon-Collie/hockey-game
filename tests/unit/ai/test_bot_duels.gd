@@ -79,6 +79,8 @@ func test_cornered_carrier_commits_a_maneuver_and_escapes() -> void:
 			crossed_carrying = true
 	assert_true(duel.evades_by_peer.get(CARRIER, false),
 			"the cornered carrier commits an evade maneuver instead of freezing")
+	# Un-pended by the #27 compete restructure (nominal reach + measured
+	# safety bands): the post-maneuver carry compete now converts on merit.
 	assert_true(crossed_carrying or duel.releases.size() > 0,
 			"the maneuver converts — puck carried past the container or released on net")
 

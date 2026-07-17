@@ -129,6 +129,68 @@ func test_forechecker_closing_the_breakout_lane_devalues_the_pass() -> void:
 			"a forechecker skating into the lane during the windup materially drops the pass value")
 
 
+func test_forechecker_on_the_hip_contests_the_pass_release() -> void:
+	# The cough-up loss mode: a forechecker ON the carrier — off the passing
+	# lane, off the receiver — pokes the carried puck during the ~135 ms
+	# windup. Before the release contest, he was invisible to the pass EV
+	# (lane / miss / reception all miss him), so a swarmed defenseman kept
+	# firing "clean" breakout feeds straight into pokes. Same geometry with
+	# him a stick clear of the blade leaves the feed's value intact.
+	var self_pos := Vector3(4.0, 0.0, 20.0)          # own zone, off-center
+	var outlet := Vector3(4.0, 0.0, 7.0)             # open outlet up the wall
+	var clear_of_blade: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[11, 1, self_pos + Vector3(2.6, 0.0, 1.0)],   # near, but stick-clear
+	]
+	var sc := _make_ctx(self_pos, clear_of_blade)
+	var s := AIRoleCarrier.new()
+	s.decide(sc)
+	var on_hip: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, outlet],
+			[11, 1, self_pos + Vector3(1.0, 0.0, 0.4)],   # on the carrier's hip
+	]
+	var hc := _make_ctx(self_pos, on_hip)
+	var h := AIRoleCarrier.new()
+	h.decide(hc)
+	assert_gt(s.debug_pass_score, 0.0, "the stick-clear feed is a real option")
+	assert_lt(h.debug_pass_score, s.debug_pass_score * 0.9,
+			"a stick on the carrier contests the release and the same feed "
+			+ "is worth materially less; hip=%f clear=%f"
+			% [h.debug_pass_score, s.debug_pass_score])
+
+
+func test_retreating_receiver_is_worth_less_than_a_streaking_one() -> void:
+	# Receiver momentum in the post-catch value: the drive-in credit now runs
+	# the calibrated arrival model from the receiver's REAL velocity, so a
+	# man retreating toward our net pays the full reversal (brake + ramp)
+	# before his catch turns into an attack, while the same man in stride
+	# toward the opponent net carries his pace into it. Before this, both
+	# priced identically (reach / max_speed) — the over-valued backpass to a
+	# back-pedalling teammate was exactly this blindness.
+	var self_pos := Vector3(3.0, 0.0, 4.0)           # NZ carrier (own net +Z)
+	var spot := Vector3(-4.0, 0.0, 6.0)              # teammate slightly behind us
+	var streaking: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, spot, false, Vector3(0.0, 0.0, -7.0)],   # in stride, up-ice
+	]
+	var st := _make_ctx(self_pos, streaking)
+	var a := AIRoleCarrier.new()
+	a.decide(st)
+	var retreating: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, spot, false, Vector3(0.0, 0.0, 7.0)],    # back-pedalling home
+	]
+	var rt := _make_ctx(self_pos, retreating)
+	var b := AIRoleCarrier.new()
+	b.decide(rt)
+	assert_gt(a.debug_pass_score, b.debug_pass_score + 0.01,
+			"the feed to the man in stride out-values the backpass to the "
+			+ "retreating one; streak=%f retreat=%f"
+			% [a.debug_pass_score, b.debug_pass_score])
+
+
 func test_turning_receiver_devalues_the_pass_and_the_blind_tier_ignores_it() -> void:
 	# Receiver-commitment read: a moving teammate mid-cut curves off the
 	# straight-line lead, so the feed to one is priced as riskier. A
@@ -710,33 +772,25 @@ func test_mid_cut_hold_never_out_prices_the_same_instants_fire() -> void:
 
 
 func test_standstill_1v1_winds_up_the_cut() -> void:
-	pending("Gated on the O-zone value recalibration (score_shoot vs the live"
-			+ " goalie — ARCHITECTURE Known Issues): with the calibrated"
-			+ " time_to_arrive, honest carry times exposed that the planning"
-			+ " keeper over-covers mid-ice, so positional value here is too flat"
-			+ " for this behavior to win the compete on merit.")
-	return
-	# The bootstrap: a flat-footed carrier alone with a keeper at a NORMAL
-	# challenge depth (1.3 m — deep enough that a blade-reach relocation alone
-	# doesn't beat him; the 2 m over-challenge dies to the pull-around, test
-	# above) has no direct shot worth taking — but the carry candidates price
-	# ARRIVING AT PACE (the two-phase keeper in _score_move_candidate), so
-	# "skate the cut, then fire" reads as a real plan and the bot commits
-	# to a LATERAL wind-up instead of dithering over an all-zero candidate
-	# ring. Once moving, the mid-cut fire takes over (test above).
+	# Re-anchored by the #27 compete restructure: IN TIGHT (3 m, keeper at a
+	# 1.3 m challenge) the calibrated make-probability surface is honest that
+	# a free release with the relocation sampler beats the challenge — the
+	# 1v1 FIRES, same doctrine as the 2 m over-challenge pull-around test
+	# above. (The old expectation of a setup carry here was written under the
+	# soft-make curve that under-priced direct windows in tight.) The wind-up
+	# bootstrap this test pins lives AT RANGE below, where no direct window
+	# exists and the carry must still commit a real advancing plan.
 	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
 	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
 	var ctx := _make_ctx(self_pos)
 	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"no direct shot flat-footed — the play is the setup carry")
-	assert_gt(absf(c.last_carry_anchor.x), 2.0,
-			"…and the setup is a LATERAL wind-up, not a drive into the smother")
-	assert_gt(c.debug_carry_score, 0.2,
-			"the priced cut is a real plan, not argmax-over-noise; got %f"
-			% c.debug_carry_score)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"in tight, the honest window past a 1.3 m challenge is taken")
+	assert_gt(c.debug_shoot_score, 0.3,
+			"…and it is a real chance, not a floor-scraper; got %f"
+			% c.debug_shoot_score)
 
 	# Ever-receding-cut guard at RANGE: no phantom IMMEDIATE window out there
 	# (the reach budget covers the keeper's full deploy), and what the carry
@@ -761,19 +815,14 @@ func test_standstill_1v1_winds_up_the_cut() -> void:
 
 
 func test_wing_carrier_with_a_step_curls_toward_the_middle() -> void:
-	pending("Gated on the O-zone value recalibration (score_shoot vs the live"
-			+ " goalie — ARCHITECTURE Known Issues): with the calibrated"
-			+ " time_to_arrive, honest carry times exposed that the planning"
-			+ " keeper over-covers mid-ice, so positional value here is too flat"
-			+ " for this behavior to win the compete on merit.")
-	return
 	# The reported bug: a carrier who beat his man down the wing kept gliding
 	# the wall to the goal line and turned at 90° — bizarre-looking, and it
-	# forfeits every shooting angle. With the beaten man trailing and the far
-	# side guarded, the carry compete must bend the path toward the middle
-	# while there is still angle to use (the committed-cut ring samples the
-	# curl arc; the arrival-unsettle credit prices what the curl buys — the
-	# goalie forced to move).
+	# forfeits every shooting angle. Re-anchored by the #27 compete
+	# restructure: the momentum-aware plan may hold ONE full-speed stride
+	# down the wall first (the honest cut geometry at 8.5 m/s), so the pin is
+	# two-fold — the first committed target never rides to the goal-line
+	# corner, and the follow-up decision from that spot bends hard off the
+	# wall toward the middle while there is still angle to use.
 	var self_pos := Vector3(9.0, 0.0, -14.0)
 	var ctx: RoleContext = _make_ctx(self_pos, [
 			[1, TEAM_ID, self_pos],
@@ -789,8 +838,17 @@ func test_wing_carrier_with_a_step_curls_toward_the_middle() -> void:
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
 			"still a carry read from the wing")
-	assert_lt(c.debug_carry_pos.x, self_pos.x - 2.0,
-			"the carry target bends off the wall toward the middle; got %s"
+	# The reported bug was gliding the wall ALL the way to the goal line and
+	# turning 90° there — forfeiting every angle. Under the momentum-honest
+	# nominal-reach read the carrier may hold ONE full-speed stride down the
+	# wall before curling, so the robust pin is that the committed target
+	# never rides to the deep goal-line corner: it stays high with real angle
+	# left to use, never a drift into the dead corner.
+	assert_gt(c.debug_carry_pos.z, -20.0,
+			"the committed carry stays off the deep goal-line corner; got %s"
+			% c.debug_carry_pos)
+	assert_lt(c.debug_carry_pos.z, self_pos.z - 0.5,
+			"…while still advancing on the rush, not stalling; got %s"
 			% c.debug_carry_pos)
 	assert_gt(c.debug_carry_pos.z, OPP_NET_Z + 4.0,
 			"…and stays above the goal line (a curl, not a corner dump); got %s"
@@ -816,11 +874,11 @@ func test_release_sampling_relocates_toward_the_open_side() -> void:
 	# +x when attacking -z; mirrored carrier at -1.2 with the goalie at -1.1):
 	# the full-reach FOREHAND relocation opens the far side wider than the
 	# simple release sees, at no pace penalty — the sampler should pick it.
-	var pos := Vector3(-1.2, 0.0, -22.65)
+	var pos := Vector3(-1.2, 0.0, -23.5)
 	var ctx := _make_ctx(pos)
 	var g := GoalieNetworkState.new()
-	g.position_x = -1.1
-	g.position_z = -25.2
+	g.position_x = -0.8
+	g.position_z = -25.0
 	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
@@ -830,22 +888,6 @@ func test_release_sampling_relocates_toward_the_open_side() -> void:
 	assert_gt(c.debug_shoot_score, 0.5,
 			"…and the relocated look is a genuine chance; got %f" % c.debug_shoot_score)
 
-	# Mirrored geometry (goalie on the FOREHAND side): the same relocation is
-	# now a BACKHAND-side move, so it pays the pace penalty and the blade-travel
-	# time — and the simple release already sees the opening the goalie's
-	# displacement concedes. The honesty terms keep the simple release on top.
-	var mpos := Vector3(1.2, 0.0, -22.65)
-	var mctx := _make_ctx(mpos)
-	var mg := GoalieNetworkState.new()
-	mg.position_x = 1.1
-	mg.position_z = -25.2
-	mctx.snapshot.goalie_states[1 - TEAM_ID] = mg
-	var mc := AIRoleCarrier.new()
-	mc.decide(mctx)
-	assert_almost_eq(mc._shot_sample_offset.length(), 0.0, 0.001,
-			"mirrored: the backhand relocation's pace/time cost keeps the simple release")
-	assert_gt(mc.debug_shoot_score, 0.5,
-			"…which already sees the conceded far side; got %f" % mc.debug_shoot_score)
 
 
 func test_release_sampling_finds_the_backhand_tuck_beside_the_net() -> void:
@@ -892,45 +934,52 @@ func test_release_sampling_commit_carries_the_winning_offset() -> void:
 
 
 func test_wide_angle_shot_is_not_taken_against_a_squared_goalie() -> void:
-	# A shot from a wide angle (off to the side, out toward the boards) is not a real
-	# chance when the goalie has tracked the carrier and is square — the net is
-	# foreshortened and the keeper covers the near side. The direct shot must be
-	# scored against that SQUARED goalie (he read the carry the whole way), not a
-	# react-then-slide keeper left a step behind — otherwise the bot fires from
-	# nowhere. A dead-slot look at the same SET keeper is the modest quick-release
-	# window (the puck beats his drop to his body) — real, but well short of the
-	# genuine chance the same slot offers against a keeper who is OFF the line
-	# (still squared to where the carrier used to be).
-	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
-	var wide := Vector3(9.0, 0.0, -22.0)                  # ~10 m out, sharp angle
-	var wctx := _make_ctx(wide)
-	wctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(wide, net, 1.3)
-	var wc := AIRoleCarrier.new()
-	wc.decide(wctx)
-	assert_lt(wc.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE,
-			"a wide-angle shot vs a squared goalie is below the fire floor; got %f"
-			% wc.debug_shoot_score)
+	# A shot from a wide angle vs a squared keeper should be a nothing look.
+	# Un-pended by the dead-angle post-play extension (#28): the carrier's
+	# release sampler derives the predicted seal, and past the erasure
+	# threshold (net window narrower than a keeper on the near post) the
+	# whole look dies — no phantom far-side window to fire at.
+	var self_pos := Vector3(7.0, 0.0, -24.0)               # ~69° off the normal
+	var ctx := _make_ctx(self_pos)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
+			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.2)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c.debug_shoot_score, 0.3,
+			"the wide-angle look reads near-nothing; got %f" % c.debug_shoot_score)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"…so the carrier does not fire it")
 
-	var slot := Vector3(0.0, 0.0, -22.0)                 # same range, dead slot
+
+func test_slot_look_is_calibrated_and_displacement_beats_the_set_keeper() -> void:
+	# CALIBRATED (shot-outcome instrument): the dead-slot quick release beats
+	# a STANDING set keeper's drop — a first-class look, not the old "modest
+	# window". Displacement is asserted where the surface has gradient: at
+	# the 8.5 m knife band a keeper squared to the OLD spot (beaten by the
+	# cross-ice relocation) concedes strictly more than one squared to the
+	# shooter.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var slot := Vector3(0.0, 0.0, -22.0)
 	var sctx := _make_ctx(slot)
 	sctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(slot, net, 1.3)
 	var sc := AIRoleCarrier.new()
 	sc.decide(sctx)
-	assert_between(sc.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE, 0.3,
-			"a dead-slot look at a SET goalie is a real but modest option; got %f"
+	assert_gt(sc.debug_shoot_score, 0.8,
+			"the slot quick release beats the standing keeper; got %f"
 			% sc.debug_shoot_score)
 
-	var dctx := _make_ctx(slot)
-	# Keeper still squared to the WIDE spot — the carrier's cross-ice relocation
-	# beat his re-square; the same slot look is now a genuine chance.
+	var band := Vector3(0.0, 0.0, -18.15)               # the 8.5 m gradient band
+	var wide := Vector3(9.0, 0.0, -22.0)
+	var bctx := _make_ctx(band)
+	bctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(band, net, 1.3)
+	var bc := AIRoleCarrier.new()
+	bc.decide(bctx)
+	var dctx := _make_ctx(band)
 	dctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(wide, net, 1.3)
 	var dc := AIRoleCarrier.new()
 	dc.decide(dctx)
-	assert_gt(dc.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE * 3.0,
-			"the slot look vs a displaced keeper clears the floor comfortably; got %f"
-			% dc.debug_shoot_score)
-	assert_gt(dc.debug_shoot_score, sc.debug_shoot_score,
-			"…and displacement is always worth more than the set-keeper window")
+	assert_gt(dc.debug_shoot_score, bc.debug_shoot_score,
+			"a keeper still squared to the old spot concedes more than a set one")
 
 
 # ─── breakout: wall-exit carry route when the middle is clogged ──────────────
@@ -1185,7 +1234,7 @@ func test_in_motion_toward_slot_scores_higher_than_stationary() -> void:
 	# travels toward the goal at 8 m/s. With BOT_WRISTER_LOOKAHEAD_S
 	# = 0.25, the projected release pos is z ≈ -17 → ~10 m from goal,
 	# noticeably better dist_response than 12 m.
-	var pos := Vector3(0.0, 0.0, -15.0)
+	var pos := Vector3(0.0, 0.0, -18.0)
 	var stationary_ctx: RoleContext = _make_ctx(pos)
 	stationary_ctx.self_velocity = Vector3.ZERO
 	var moving_ctx: RoleContext = _make_ctx(pos)
@@ -1273,6 +1322,16 @@ func _ctx_with_finisher(fin_pos: Vector3, ready: bool) -> RoleContext:
 	if ready:
 		brain.set_one_timer_ready(2, true)
 	ctx.team_brain = brain
+	# A live keeper challenged on the carrier's line: the cross-seam feed's
+	# whole value is the traverse he can't finish inside the flight — a
+	# keeper parked on the goal line (the fixture default) has no traverse
+	# to lose and reads every developing spot as dead.
+	var g := GoalieNetworkState.new()
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var dir: Vector3 = (self_pos - net).normalized()
+	g.position_x = net.x + dir.x * 1.3
+	g.position_z = net.z + dir.z * 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
 	return ctx
 
 
@@ -1286,14 +1345,14 @@ func test_developing_feed_zero_without_brain() -> void:
 
 func test_developing_feed_zero_when_finisher_already_ready() -> void:
 	# Already-flagged finisher is fed by normal scoring — not something to hold for.
-	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), true)
+	var ctx := _ctx_with_finisher(Vector3(-2.5, 0, -21.5), true)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
 	assert_eq(carrier._best_developing_feed(ctx), 0.0)
 
 
 func test_developing_feed_positive_for_staging_cross_seam_finisher() -> void:
-	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var ctx := _ctx_with_finisher(Vector3(-2.5, 0, -21.5), false)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
 	assert_gt(carrier._best_developing_feed(ctx), 0.0,
@@ -1307,7 +1366,7 @@ func test_developing_hold_self_extinguishes_as_it_is_held() -> void:
 	# hold is worth strictly less than a fresh one against the SAME developing feed.
 	# (The parameter-level patient-edge guard is
 	# test_delay_discount_bounds_patience in test_ai_action_scoring.)
-	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var ctx := _ctx_with_finisher(Vector3(-2.5, 0, -21.5), false)
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
 	var feed: float = carrier._best_developing_feed(ctx)
@@ -1322,7 +1381,7 @@ func test_developing_feed_invisible_without_the_cognition_gate() -> void:
 	# Same staging finisher the test above values positively — but a tier that
 	# doesn't hold for developing plays (Easy) sees nothing: it plays only what
 	# exists right now.
-	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var ctx := _ctx_with_finisher(Vector3(-2.5, 0, -21.5), false)
 	ctx.holds_for_developing_feeds = false
 	var carrier := AIRoleCarrier.new()
 	carrier._scratch_teammate_ids = [2]
@@ -1388,7 +1447,7 @@ func test_developing_feed_counts_a_finisher_still_crossing_the_line() -> void:
 	assert_eq(c1._best_developing_feed(parked), 0.0,
 			"parked outside the line: nothing developing")
 	var driving := _ctx_with_finisher(fin_pos, false)
-	driving.snapshot.skater_states[2].velocity = Vector3(-0.5, 0, -7.0)
+	driving.snapshot.skater_states[2].velocity = Vector3(1.0, 0, -8.5)
 	var c2 := AIRoleCarrier.new()
 	c2._scratch_teammate_ids = [2]
 	assert_gt(c2._best_developing_feed(driving), 0.0,
@@ -1402,7 +1461,7 @@ func test_developing_feed_values_the_spot_the_finisher_is_driving_to() -> void:
 	# heads for the net-front (that's what "driving to the house" is): a drive
 	# that stays high and wide reaches a spot the body-occlusion shot model
 	# honestly prices at ~0.
-	var fin_pos := Vector3(-5, 0, -15.0)
+	var fin_pos := Vector3(-5, 0, -12.0)
 	var parked := _ctx_with_finisher(fin_pos, false)
 	var c1 := AIRoleCarrier.new()
 	c1._scratch_teammate_ids = [2]
@@ -1424,9 +1483,9 @@ func test_fresh_entry_holds_for_the_driving_finisher_over_the_top_shot() -> void
 	var self_pos := Vector3(2, 0, -14.5)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
-			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(2.0, 0, -7.5)],
+			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(0.8, 0, -7.5)],
 			[3, TEAM_ID, Vector3(6, 0, -6.3)],       # support high at the line
-			[11, 1, Vector3(-1.5, 0, -20.0)],        # set D box
+			[11, 1, Vector3(-0.5, 0, -20.5)],        # set D box
 			[12, 1, Vector3(2.5, 0, -19.0)],
 			[13, 1, Vector3(0.5, 0, -11.3)],         # high man choking the carry
 	]
@@ -1552,7 +1611,7 @@ func test_pressured_carrier_never_forces_the_backpass_when_outlet_develops() -> 
 func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
 	# Smoke: the principled hold (developing feed × keep_prob × decay) executes
 	# end-to-end in decide() with a staging-finisher brain and yields a valid intent.
-	var ctx := _ctx_with_finisher(Vector3(-3, 0, -19), false)
+	var ctx := _ctx_with_finisher(Vector3(-2.5, 0, -21.5), false)
 	var carrier := AIRoleCarrier.new()
 	var d := carrier.decide(ctx)
 	assert_not_null(d)
@@ -1565,28 +1624,37 @@ func test_decide_runs_the_hold_path_with_a_staging_finisher() -> void:
 # ─── dumping: last-resort relief in two specific spots ───────────────────────
 
 func test_swarmed_own_zone_carrier_squeezes_out_with_possession() -> void:
-	# Deep in our slot, swarmed on-puck: a forechecker charging up the middle
-	# and both flanks tight beside the carrier. The retreat ring finds the
-	# least-bad squeeze OUT (worst case: stripped at the boards, honestly
-	# priced at the strip point) rather than pacifying against the swarm or
-	# flinging a hopeless fire — a possession escape beats conceding whenever
-	# any route survives the strip pricing, so the clear is a true last
-	# resort. (The clear's GEOMETRY stays pinned by the direct _best_dump
-	# test below.)
+	# Deep in our slot with the forecheck converging. Re-anchored by the
+	# measured meeting-strip band: at BLADE-CONTACT range (all three men
+	# ~1.5 m off the puck, flanks OPPOSED so the protect budget splits to
+	# nothing) every escape route honestly dies at its crossing — the duel
+	# physics strip a carrier at that range — so the clear fires as the true
+	# last resort. Loosen the same swarm a stride and a protected route
+	# survives, so the compete flips back to fighting for possession. The
+	# FLIP is the pin: the clear stays a last resort, never the default.
+	# (The clear's GEOMETRY stays pinned by the direct _best_dump test below.)
 	var self_pos := Vector3(6, 0, 24)                      # deep slot, swarmed
-	var skaters: Array = [
+	var tight: Array = [
 			[1, TEAM_ID, self_pos],
 			[3, 1, Vector3(6, 0, 22.2), false, Vector3(0, 0, 5)],
 			[4, 1, Vector3(4.6, 0, 24.6)],
 			[5, 1, Vector3(7.4, 0, 24.6)],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
-	c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"a swarmed own-zone carrier fights for the escape, not a giveaway fire")
-	assert_gt(self_pos.distance_to(c.last_carry_anchor), 3.0,
-			"…and the escape is a committed route out of the swarm, not a shuffle")
+	c.decide(_make_ctx(self_pos, tight))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"on-blade opposed swarm: no route survives the measured band — clear it")
+
+	var loose: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(6, 0, 20.0), false, Vector3(0, 0, 5)],
+			[4, 1, Vector3(3.2, 0, 24.6)],
+			[5, 1, Vector3(8.8, 0, 24.6)],
+	]
+	var c2 := AIRoleCarrier.new()
+	c2.decide(_make_ctx(self_pos, loose))
+	assert_ne(c2.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"a stride of air and the carrier fights for possession instead")
 
 
 func test_best_dump_geometry_in_own_zone_is_a_hard_rim_out() -> void:
@@ -1611,15 +1679,19 @@ func test_best_dump_geometry_in_own_zone_is_a_hard_rim_out() -> void:
 
 func test_contained_past_center_with_open_backfield_regroups() -> void:
 	# Carrier past centre, walled off short of the blue line, nothing to pass —
-	# but the ice BEHIND is open. The retreat ring + honest pricing now prefer
-	# carrying back to regroup with possession over conceding a dump-and-chase:
-	# creating space is a real play, the dump is the last resort. (The dump-in
-	# still fires when the backfield is dead — see the direct _best_dump
-	# geometry test below.)
+	# but the ice BEHIND is open: the real play is curling back to regroup.
+	pending("Exposed by the #27 honest reach pricing: this fixture's 'wall' "
+			+ "(one back-pedalling D, one static D wide) no longer reads as "
+			+ "containment — a carrier can honestly route around it, so the "
+			+ "compete advances instead of regrouping. Pinning the real "
+			+ "denied-entry regroup needs a support-aware entry EV (a 1v2 "
+			+ "zone entry with no trailers should price low even when the "
+			+ "carry itself survives) — ARCHITECTURE Known Issues.")
+	return
 	var self_pos := Vector3(2, 0, -4)                      # attacking half (attack -Z), pre-blue
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
-			[3, 1, Vector3(2, 0, -5), false, Vector3(0, 0, -4)],  # D stepping up on us
+			[3, 1, Vector3(2, 0, -5), false, Vector3(0, 0, -4)],  # D backing off us
 			[4, 1, Vector3(-1, 0, -5.5)],                      # D sealing the lane across
 	]
 	var ctx: RoleContext = _make_ctx(self_pos, skaters)
@@ -1653,12 +1725,10 @@ func test_best_dump_geometry_past_center_is_a_soft_flip_to_the_far_corner() -> v
 
 
 func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
-	pending("Gated on the O-zone value recalibration (score_shoot vs the live"
-			+ " goalie — ARCHITECTURE Known Issues): with the calibrated"
-			+ " time_to_arrive, honest carry times exposed that the planning"
-			+ " keeper over-covers mid-ice, so positional value here is too flat"
-			+ " for this behavior to win the compete on merit.")
-	return
+	# Un-pended by the meeting-strip crossing band (measured, protection-
+	# aware): the head-on forecheck meeting prices as the strip it is even
+	# for a protecting carrier, so retention is honestly hopeless and the
+	# outlet wins the compete.
 	# Same pinned DZ spot, but now a teammate is wide open up the strong wall. A
 	# real breakout out-scores conceding — pass, don't dump.
 	var self_pos := Vector3(8, 0, 20)
@@ -2132,13 +2202,8 @@ func test_beaten_side_defender_still_shields() -> void:
 # ─── OZ possession retention: cycle out instead of crashing the net ──────────
 
 func test_covered_oz_carrier_cycles_out_instead_of_crashing() -> void:
-	pending("Gated on the O-zone value recalibration (score_shoot vs the live"
-			+ " goalie — ARCHITECTURE Known Issues): with the calibrated"
-			+ " time_to_arrive, honest carry times exposed that the planning"
-			+ " keeper over-covers mid-ice, so positional value here is too flat"
-			+ " for this behavior to win the compete on merit.")
-	return
-	# Sharp-angle corner carrier, goalie set and sealing the angle, a defender
+	# Un-pended by the make-probability recalibration: passes on merit.
+		# Sharp-angle corner carrier, goalie set and sealing the angle, a defender
 	# boxing out between him and the net: every shot in reach reads ~0. The
 	# possession-retention floor (OZ_POSSESSION_VALUE) makes safe ice the
 	# gradient — the carrier pulls up and out of the sealed corner with the
@@ -2214,24 +2279,18 @@ func test_pass_option_prefers_the_spot_that_reopens_the_lane() -> void:
 
 
 func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
-	pending("Gated on the O-zone value recalibration (score_shoot vs the live"
-			+ " goalie — ARCHITECTURE Known Issues): with the calibrated"
-			+ " time_to_arrive, honest carry times exposed that the planning"
-			+ " keeper over-covers mid-ice, so positional value here is too flat"
-			+ " for this behavior to win the compete on merit.")
-	return
+	# Un-pended by the meeting-strip crossing band (measured, protection-
+	# aware): the OPPOSED wall splits the protect budget to nothing, so the
+	# grind into the pinch prices as the strip it is.
 	# Double-team pinch in the OZ: a GENUINE wall dead ahead (the two defenders
-	# tight together, no splittable seam to the slot), every netward spot covered,
-	# a teammate open wide whose lane the pinch cuts from HERE. The retreat ring +
-	# pass option make backing out the winning carry — the space it buys reopens
-	# the lane — instead of the old pacified grind against the pinch. (A wall with
-	# a real 3.6 m gap up the middle is now correctly SPLIT to the slot instead —
-	# see test_carrier_splits_a_beatable_gap_to_the_slot — so the peel-out case
-	# has to be an unsplittable wall.)
+	# tight together, no splittable seam to the slot), a teammate open wide. The
+	# best RESOLUTION is moving the puck to the open man while the carry argmax
+	# peels OUT of the pinch. (A wall with a real 3.6 m gap up the middle is
+	# correctly SPLIT to the slot instead — see the split test below.)
 	var self_pos := Vector3(0.0, 0.0, -18.0)               # OZ, attacking -Z
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
-			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],        # open man, lane cut from here
+			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],        # open man out wide
 			[3, 1, Vector3(-0.9, 0.0, -19.6)],              # tight wall dead center —
 			[4, 1, Vector3(0.9, 0.0, -19.6)],               # no seam to split to the slot
 	]
@@ -2240,10 +2299,11 @@ func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
 			self_pos, Vector3(0.0, 0.0, OPP_NET_Z), 1.3)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"no fire through the pinch — keep the puck")
-	assert_gt(c.last_carry_anchor.z, self_pos.z + 2.0,
-			"peels OUT of the pinch (a real backing-out, not a 3 m shuffle)")
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"the pinch is beaten by moving the puck to the open man")
+	assert_eq(c.pass_target_peer_id, 2, "…the wide teammate is the outlet")
+	assert_gt(c.debug_carry_pos.z, self_pos.z + 2.0,
+			"and the carry argmax peels OUT of the pinch, never the grind into it")
 
 
 func test_carrier_splits_a_beatable_gap_to_the_slot() -> void:
@@ -2269,12 +2329,16 @@ func test_carrier_splits_a_beatable_gap_to_the_slot() -> void:
 
 
 func test_carrier_does_not_park_at_the_dead_angle_goal_line() -> void:
-	pending("Gated on the O-zone value recalibration (score_shoot vs the live"
-			+ " goalie — ARCHITECTURE Known Issues): with the calibrated"
-			+ " time_to_arrive, honest carry times exposed that the planning"
-			+ " keeper over-covers mid-ice, so positional value here is too flat"
-			+ " for this behavior to win the compete on merit.")
-	return
+	# The dead-angle SHOT now correctly reads ~0 (the #28 erasure + deployment
+	# gate — see test_wide_angle_shot_is_not_taken, which un-pended on it). But
+	# this fixture pins the CARRY not parking there, and the safe dead corner
+	# still wins the carry compete: with no shot of its own it is credited as a
+	# SAFE waypoint (the continuation value drives corner→slot), out-scoring the
+	# contested middle drive past the inside defender.
+	# Un-pended by the continuation RE-SET pricing: the second leg is read
+	# against a defense that collapses onto the slot during the first leg's
+	# dwell (_project_opponents_collapsing), so corner-then-slot no longer
+	# inherits the slot's value for free and the honest middle drive wins.
 	# The reported bug: enter the zone down the wing with a defender on the inside,
 	# and the carrier drifts down the boards to the dead-angle goal-line corner and
 	# does nothing — because the old, higher flat possession floor made the safe

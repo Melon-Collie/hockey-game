@@ -51,7 +51,23 @@ static func assign_team(team0_count: int, team1_count: int) -> int:
 # callers without a controller). Wingers are unaffected.
 static func faceoff_position(team_id: int, team_slot: int,
 		dot_xz: Vector2 = GameRules.CENTER_ICE_DOT,
-		center_reach: float = -1.0) -> Vector3:
+		center_reach: float = -1.0, team_size: int = 3) -> Vector3:
+	# End-zone draws break the one-table symmetry: the jobs there are
+	# positional (wall / goal-side stack / points — see the FACEOFF_END_*
+	# doc in GameRules), not dot-relative. The D pair (5v5-only slots)
+	# always repositions; the boards-side WINGER joins the defending stack
+	# only in 5v5 (`team_size` — 3v3's shipped alignment is untouched, and
+	# default-arg callers like spawn/swap all pass center ice anyway). The
+	# C and the inside winger keep the table everywhere (the dot line-up
+	# and the hash-mark checking matchup ARE the real alignment).
+	if absf(dot_xz.y) > GameRules.BLUE_LINE_Z:
+		if team_slot >= FIRST_DEFENSE_SLOT:
+			return _end_zone_d_position(team_id, team_slot, dot_xz)
+		if team_size >= 5 and (team_slot == 1 or team_slot == 2):
+			var stack: Vector3 = _end_zone_stack_winger_position(
+					team_id, team_slot, dot_xz)
+			if stack.is_finite():
+				return stack
 	var off: Vector2 = GameRules.FACEOFF_OFFSETS[team_id][team_slot]
 	if team_slot == 0 and center_reach > 0.0:
 		off.y = signf(off.y) * center_reach
@@ -60,6 +76,61 @@ static func faceoff_position(team_id: int, team_slot: int,
 	var z: float = clampf(dot_xz.y + off.y,
 			-GameRules.FACEOFF_MAX_ABS_Z, GameRules.FACEOFF_MAX_ABS_Z)
 	return Vector3(dot_xz.x + off.x, GameRules.FACEOFF_SPAWN_HEIGHT, z)
+
+
+# The D pair's end-zone draw placement (see the FACEOFF_END_* doc in
+# GameRules). "Strong" is the D whose identity side (the sign of his legacy
+# table offset — LD −x, RD +x, both teams) matches the dot's side of the ice,
+# so the pair never crosses over: DEFENDING, the strong D holds the WALL
+# (boards, level with the dot) and the weak D takes the inside spot of the
+# goal-side STACK; ATTACKING, the strong D points up directly above the dot
+# just inside the blue line and the weak D takes the middle of the line.
+static func _end_zone_d_position(team_id: int, team_slot: int,
+		dot_xz: Vector2) -> Vector3:
+	# Own-net direction: team 0 defends +Z, team 1 −Z (the team-side
+	# convention faceoff_facing documents).
+	var own_dir: float = 1.0 if team_id == 0 else -1.0
+	var boards: float = signf(dot_xz.x)
+	var identity: float = signf(GameRules.FACEOFF_OFFSETS[team_id][team_slot].x)
+	var strong: bool = identity == boards
+	if signf(dot_xz.y) == own_dir:
+		# Defensive-zone draw: wall-and-stack.
+		if strong:
+			return Vector3(
+					boards * (GameRules.INNER_HALF_WIDTH
+							- GameRules.FACEOFF_END_WALL_INSET_M),
+					GameRules.FACEOFF_SPAWN_HEIGHT,
+					dot_xz.y + own_dir * GameRules.FACEOFF_END_WALL_ONSIDE_M)
+		return Vector3(
+				dot_xz.x - boards * GameRules.FACEOFF_END_STACK_HALF_SEP_M,
+				GameRules.FACEOFF_SPAWN_HEIGHT,
+				dot_xz.y + own_dir * GameRules.FACEOFF_END_STACK_BEHIND_M)
+	# Offensive-zone draw: points at the blue line, inside the zone.
+	var z: float = signf(dot_xz.y) \
+			* (GameRules.BLUE_LINE_Z + GameRules.FACEOFF_END_POINT_INSIDE_M)
+	if strong:
+		return Vector3(dot_xz.x, GameRules.FACEOFF_SPAWN_HEIGHT, z)
+	return Vector3(-boards * GameRules.FACEOFF_END_WEAK_POINT_X_M,
+			GameRules.FACEOFF_SPAWN_HEIGHT, z)
+
+
+# The boards-side winger's spot in the defending goal-side stack (outside
+# shoulder — his release path up the wall to the strong point stays clean;
+# the stack D takes the inside shoulder and boxes out on a loss). Returns
+# Vector3.INF for every case that keeps the table: attacking draws (both
+# wingers hold the hash marks) and the inside winger.
+static func _end_zone_stack_winger_position(team_id: int, team_slot: int,
+		dot_xz: Vector2) -> Vector3:
+	var own_dir: float = 1.0 if team_id == 0 else -1.0
+	if signf(dot_xz.y) != own_dir:
+		return Vector3.INF
+	var boards: float = signf(dot_xz.x)
+	if signf(GameRules.FACEOFF_OFFSETS[team_id][team_slot].x) != boards:
+		return Vector3.INF
+	return Vector3(
+			dot_xz.x + boards * GameRules.FACEOFF_END_STACK_HALF_SEP_M,
+			GameRules.FACEOFF_SPAWN_HEIGHT,
+			dot_xz.y + own_dir * GameRules.FACEOFF_END_STACK_BEHIND_M)
 
 
 # Facing each team should adopt on a faceoff teleport. Team 0 starts on the

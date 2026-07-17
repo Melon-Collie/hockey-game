@@ -213,6 +213,14 @@ var prev_role_target: Vector3 = Vector3.INF
 # changed). The soft-lock's area-boundary hysteresis keys on it.
 var prev_locked_man: int = -1
 
+# Whether the match's ruleset enforces offsides (ARCADE ghost / NHL delayed —
+# both void an in-zone-early receiver until he tags up at the blue line; only
+# the OFF ruleset plays cherry-pickers as live threats). Read by the counter-
+# channel build: an offside-positioned opponent's outlet gain clamps to his
+# blue line (his earliest legal touch). Stamped per ctx build from the state
+# machine's latched rule_set.
+var offsides_enforced: bool = true
+
 # ── 5v5 position identity ────────────────────────────────────────────────────
 # Latched match team size (TeamBrain.team_size). Gates the 5v5-only reads
 # (transition exposure) — 3v3 behavior is untouched at 3.

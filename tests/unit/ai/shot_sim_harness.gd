@@ -62,7 +62,13 @@ const ARM_DEPLOY: float = 0.09                        # glove extension ramp (AI
 # Pose half-widths: standing pads at the ice, butterfly pad span (pad_local_offset
 # 0.42 + butterfly_pad_half_width 0.42 = 0.84 to each post-ward edge), the set
 # high half before the arm extends, and the arm's outward reach (glove_max_x_outward).
-const STANDING_LOW_HALF: float = 0.45
+# Standing pad column from the live stance anatomy (pad center + half a pad
+# box — GoalieBehaviorRules), same derivation the planning model uses. The
+# old hand-set 0.45 was 9 cm wider than the real stance and flipped in-tight
+# knife-edge corners from goals to saves.
+const STANDING_LOW_HALF: float = (
+		GoalieBehaviorRules.STANDING_PAD_CENTER_X_M
+		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5)
 const BUTTERFLY_LOW_HALF: float = 0.84
 const HIGH_SET_HALF: float = 0.33
 const ARM_REACH: float = 0.85
@@ -174,6 +180,14 @@ static func net_verdict(cross_x: float, cross_y: float) -> int:
 
 # Classify ONE sampled shot against a SET goalie. `err_rad` is this release's
 # sampled aim error; `unsettled` (0 set … 1 caught mid-slide) delays his read.
+#
+# The save race is evaluated at the GOALIE'S depth plane, not the net plane:
+# the glove meets the puck at his body, so both the puck's lateral offset and
+# his reach budget belong to the moment the puck crosses HIM. The old
+# net-plane read gave him the extra ~1.5 m of flight past his body (a free
+# ~0.05 s of deploy+push on every frontal save race) and, from off-angles,
+# measured the offset where converging rays had already closed on the post —
+# crediting saves on pucks that passed a full stride wide of his actual body.
 static func classify_shot(shooter: Vector3, goal: Vector3, goalie: Vector3,
 		aim: Vector3, loft_level: int, power_t: float, err_rad: float,
 		unsettled: float) -> int:
@@ -186,13 +200,32 @@ static func classify_shot(shooter: Vector3, goal: Vector3, goalie: Vector3,
 	var nv: int = net_verdict(cross_x, cross_y)
 	if nv != -1:
 		return nv
-	# On net: does the goalie's positioned reach get there in time?
-	var lateral_off: float = absf(cross_x - goalie.x)
+	# On net: does the goalie's positioned reach get there in time — AT HIS
+	# BODY? Interpolate the (straight in XZ) flight to his depth plane.
+	var dz_total: float = goal.z - shooter.z
+	var frac: float = clampf((goalie.z - shooter.z) / dz_total, 0.0, 1.0) \
+			if absf(dz_total) > 0.0001 else 1.0
+	var t_at_goalie: float = flight_t * frac
+	var x_at_goalie: float = shooter.x + (cross_x - shooter.x) * frac
+	var loft_vy: float = ShotMechanics._loft_vy(loft_level,
+			GameRules.DEFAULT_LOFT_VY_LOW_M_S, GameRules.DEFAULT_LOFT_VY_HIGH_M_S)
+	var y_at_goalie: float = maxf(0.0,
+			loft_vy * t_at_goalie - 0.5 * GRAVITY * t_at_goalie * t_at_goalie)
+	var lateral_off: float = absf(x_at_goalie - goalie.x)
 	var seal_delay: float = clampf(unsettled, 0.0, 1.0) * UNSETTLE_REACT_PENALTY_S
-	if cross_y <= PAD_TOP and lateral_off < FIVE_HALF \
-			and flight_t < LEG_DELAY + BUTTERFLY_DROP + seal_delay:
-		return GOAL   # dead-centre low slips the five-hole before the seal
-	if lateral_off <= _reach_half(cross_y, flight_t, unsettled):
+	# Five-hole: the dead-centre gap seals PROGRESSIVELY through the butterfly
+	# drop (the pads sweep closed, they don't teleport), and the puck must FIT
+	# the residual gap (its own radius) — the old binary all-open-until-sealed
+	# read let mid-range centre shots "score" 90% through a slot the live drop
+	# closes with half the flight to spare.
+	if y_at_goalie <= PAD_TOP:
+		var drop_prog: float = clampf(
+				(t_at_goalie - LEG_DELAY - seal_delay) / BUTTERFLY_DROP, 0.0, 1.0)
+		if lateral_off < FIVE_HALF * (1.0 - drop_prog) - PUCK_R:
+			return GOAL   # in tight, the razor centre slot beats the sweep
+	# The pad/glove edge clips a puck whose CENTER passes within a puck radius
+	# of it — the same edge-contact honesty the planning cover charges.
+	if lateral_off <= _reach_half(y_at_goalie, t_at_goalie, unsettled) + PUCK_R:
 		return SAVE
 	return GOAL
 

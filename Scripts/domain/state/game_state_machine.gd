@@ -735,7 +735,8 @@ func get_faceoff_positions() -> Dictionary:
 	var result: Dictionary = {}
 	for peer_id in players:
 		var p: Dictionary = players[peer_id]
-		result[peer_id] = PlayerRules.faceoff_position(p.team_id, p.team_slot, active_faceoff_dot)
+		result[peer_id] = PlayerRules.faceoff_position(
+				p.team_id, p.team_slot, active_faceoff_dot, -1.0, team_size)
 	return result
 
 

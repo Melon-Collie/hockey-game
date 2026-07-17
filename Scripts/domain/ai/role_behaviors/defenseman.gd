@@ -23,11 +23,19 @@ class_name AIRoleDefenseman
 #     inside the dots at our blue line, shading with the puck's lateral
 #     drift (the NZ 1-2-2's back wall).
 
-# Blue-line hold: how far inside the offensive zone the points stand.
-const POINT_INSET_M: float = 1.0
-# Strong point's extra sink row when the cycle is low (puck below the dots)
-# — toward the top of his circle, the researched wall slide.
+# Blue-line hold: how far inside the offensive zone the points stand — a
+# full puck-handling radius, so a catch's give or a backswing at the point
+# never drags the puck back across the line (the puck leaving the zone
+# un-onsides the entire attack; at the old 1 m inset a routine reception's
+# cushion did exactly that).
+const POINT_INSET_M: float = 2.0
+# Strong point's extra sink rows when the cycle is low (puck below the dots)
+# — down his wall toward the top of his circle, the researched wall slide.
+# Two rows: with the whole defense collapsed low, a point glued to the line
+# is no option for anything but a recycle; the keep-in feasibility below is
+# what bounds how deep the walk may follow the play.
 const POINT_SINK_M: float = 3.5
+const POINT_SINK_ROWS: int = 2
 const POINT_SINK_PUCK_DEPTH_M: float = 6.0
 # Lateral walk-the-line samples (strong-signed u = s·x), wall → middle.
 const POINT_STRONG_LANES_U: Array[float] = [9.5, 7.5, 5.5, 3.5, 1.5]
@@ -35,8 +43,12 @@ const POINT_WEAK_LANES_U: Array[float] = [6.0, 4.5, 3.0, 1.5, 0.0]
 # Forecheck line pair lanes (world-x magnitude, inside the dots).
 const DP_STRONG_LANE_X_M: float = 6.7
 const DP_WEAK_LANE_X_M: float = 5.0
-# NZ side of the line the pair stands on during the forecheck.
-const DP_STAND_BACK_M: float = 0.5
+# Deepest pinch of the forecheck line pair: the top of the end-zone circles
+# (dots 6.1 m off the goal line + the 4.57 m circle radius) — the standard
+# forecheck-D pinch depth. The line pair PLAYS between here and its own
+# blue-line/NZ sag; where on that lane it actually stands is decided by the
+# race-home feasibility each tick, never by this cap.
+const DP_PINCH_DEPTH_M: float = 10.7
 # DVALVE: how far behind the play the valve trails, and its goal-line cap.
 const DVALVE_TRAIL_M: float = 10.0
 const DVALVE_GOAL_LINE_PAD_M: float = 2.0
@@ -105,7 +117,7 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	var best_pos: Vector3 = base_stand
 	var best_score: float = -INF
 	for u: float in lanes:
-		for row: int in (2 if allow_sink else 1):
+		for row: int in (POINT_SINK_ROWS + 1 if allow_sink else 1):
 			var z: float = line_z - own_dir * (POINT_SINK_M * float(row))
 			var c := Vector3(side * u, 0.0, z)
 			if not AIRoleHelpers.is_legal_position(c):
@@ -134,25 +146,34 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	return d
 
 
-# ── FORECHECK: hold the offensive blue line while the race home holds ───────
-# The 3v3 forecheck-F3 bounded hold, applied per lane for the D pair: stand
-# at the line on your lane; as a breakout/stretch threat develops, the
-# race-home circle shrinks and the stand slides down the NZ toward home.
+# ── FORECHECK: play the lane between the pinch and the sag ──────────────────
+# The 3v3 forecheck-F3 bounded hold, applied per lane for the D pair — but
+# the stand is no longer glued to the blue line. The lane's FORWARD CAP is
+# the pinch depth (top of the end-zone circles); where the D actually stands
+# is the most forward race-home-feasible point on his lane, re-read every
+# tick:
+#   · opponents collapsed low with no breakout forming → their counter
+#     channels are slow → the whole lane is feasible → the D pinches to the
+#     circle top, real pressure instead of blue-line statuary;
+#   · a live wall battle → the channels bind mid-lane → the classic line
+#     stand emerges at the feasibility boundary;
+#   · a breakout FORMING (carrier gathering speed, still in his zone) → the
+#     set-arrival margin collapses the radii while the puck is still exiting
+#     → the stand sags down the NZ toward home — the early back-off that
+#     lets the pair gap up instead of holding the line until beaten (the
+#     retreat collapses toward the middle, where a sagging D belongs).
 static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var own_dir: float = ctx.own_goal_dir
-	var line_z: float = -own_dir * (GameRules.BLUE_LINE_Z - DP_STAND_BACK_M)
+	var pinch_z: float = -own_dir * (GameRules.GOAL_LINE_Z - DP_PINCH_DEPTH_M)
 
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var our_net: Vector3 = ctx.defending_goal_pos
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
-	# Hold the lane stand while it contains the counter paths; a developing
-	# stretch threat sags it down the retreat line toward home (the retreat
-	# collapses toward the middle, which is where a sagging D belongs).
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			Vector3(lane_x, 0.0, line_z), ctx.self_max_speed, ctx.self_max_accel)
+			Vector3(lane_x, 0.0, pinch_z), ctx.self_max_speed, ctx.self_max_accel)
 	return d
 
 

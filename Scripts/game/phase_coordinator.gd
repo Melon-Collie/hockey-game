@@ -255,7 +255,8 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 						record.controller.faceoff_draw_peak_decay,
 						record.controller.faceoff_draw_window)
 		var pos: Vector3 = PlayerRules.faceoff_position(
-				record.team.team_id, record.team_slot, dot, reach)
+				record.team.team_id, record.team_slot, dot, reach,
+				_state_machine.team_size)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
 		var start: Vector3 = _approach_start_for(record, pos, dot, from_bench, staged)
 		var duration: float = _faceoff_approach_duration(peer_id, start, pos, from_bench, skate_in, staged)

@@ -244,6 +244,20 @@ func test_evaluator_costs() -> void:
 		AIActionScoring.counter_rush_cost(from, 0.5, Vector3(0, 0, OUR_NET_Z),
 				Vector3(0, 0, OUR_NET_Z - 0.8), GameRules.NET_HALF_WIDTH,
 				mates, from, 8.0, opps, opp_vels, opp_caps))
+	_bench("reach_clearance (5 def)", func() -> void:
+		AIActionScoring.reach_clearance(from, 0.4, opps, opp_vels, opp_caps))
+	_bench("carry_safety (5 def)", func() -> void:
+		AIActionScoring.carry_safety(from, from + Vector3(-3, 0, -3), 0.8,
+				opps, opp_vels, opp_caps, true))
+	_bench("best_evade_point (5 def)", func() -> void:
+		AIActionScoring.best_evade_point(from, Vector3(2, 0, -4), opps, opp_vels, 0.9))
+	_bench("best_evade_point_toward (5 def)", func() -> void:
+		AIActionScoring.best_evade_point_toward(from, Vector3(2, 0, -4), net,
+				opps, opp_vels, 0.9))
+	_bench("release_contest_clean (5 def)", func() -> void:
+		AIActionScoring.release_contest_clean(from, opps, opp_caps))
+	_bench("time_to_arrive", func() -> void:
+		AIActionScoring.time_to_arrive(from, net, Vector3(2, 0, -4)))
 
 	gut.p("")
 	gut.p("=== Evaluator micro-benchmark (µs per call, %d reps) ===" % REPS)

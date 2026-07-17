@@ -33,6 +33,12 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	_sm.apply_capabilities(caps)
 
 
+# The match's latched rule set (GameRules.RuleSet) — drives the AI's
+# offside-aware reads. Stamped by AIController from the game state.
+func set_rule_set(rs: int) -> void:
+	_sm.rule_set = rs
+
+
 # Returns the InputState for this physics tick. Caller must not retain a
 # reference past the next tick — same scratch buffer is reused.
 # The SM's cursor goes out untouched: its slew (the bot's real Hands blade
