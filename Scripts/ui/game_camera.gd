@@ -214,6 +214,10 @@ func shake(trauma: float) -> void:
 
 func _ready() -> void:
 	make_current()
+	# The jumbotron hangs over center ice, directly between this top-down
+	# camera and the play — it is spectator/lobby set dressing only, never
+	# rendered in gameplay framing (see Jumbotron's class doc).
+	cull_mask &= ~Jumbotron.RENDER_LAYER_MASK
 	GameManager.pregame_intro_started.connect(play_intro)
 	GameManager.period_break_started.connect(hold_period_break_wide)
 	GameManager.period_intro_started.connect(
