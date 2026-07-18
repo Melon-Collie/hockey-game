@@ -162,7 +162,9 @@ the same mechanism fired by objective tripwires, so rare bugs land with a
 timestamp even when nobody pressed F4. Each has a `trigger` naming the
 tripwire — `puck_hard_snaps` (≥2 in a window), `reconcile_storm` (≥5/s),
 `extrapolation` (≥60% of frames), `host_stall` (tick gap ≥66 ms),
-`input_starvation` (≥5/s) — thresholds mirror the F3 overlay's BAD bands. A
+`input_starvation` (≥5/s), `broadcast_gap` (broadcast p95 ≥500 ms) and
+`input_backlog` (mean input lead ≥500 ms) — most thresholds mirror the F3
+overlay's BAD bands; the last two use a suspension-scale threshold instead. A
 per-trigger 30 s cooldown means a sustained failure records its *onset*, not
 one marker per second; a burst of `auto_marker_count` with few stored markers
 means the failure kept re-firing past the cooldowns. Each marker snapshot also
@@ -173,7 +175,13 @@ and `last_event_age_s`. For a `host_stall`, that pins *why*: a hitch in steady
 small `last_event_age_s` after that transition, points at that phase's handler
 (goal-replay capture, faceoff reset). `input_starvation` markers usually sit in
 the same window as a `host_stall` — starvation is the catch-up-tick drain *after*
-a hitch, not independent client→host loss.
+a hitch, not independent client→host loss. The freeze pair localizes which
+machine suspended: `broadcast_gap` + `input_backlog` together ⇒ **this host**
+froze (broadcasts halted and the input queue backed up, both draining on thaw);
+`input_backlog` alone, broadcasts on-time ⇒ the **client** froze (the host kept
+sending but is draining a burst of stale inputs). Neither shows up in
+`worst_stall_ms` — a suspended main loop isn't ticking to measure its own gap,
+which is exactly why these two exist.
 
 **`history`** (both kinds): the first 8 markers of a session carry a
 `history` array — the ~6 one-second samples (rounded, each with its own
