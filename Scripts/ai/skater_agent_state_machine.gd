@@ -918,6 +918,7 @@ var _shot_release_offset_locked: Vector3 = Vector3.ZERO
 # that gets stripped mid-swing, and the moderate fixed pace stays short of icing.
 var _dump_target: Vector3 = Vector3.INF
 var _dump_is_soft: bool = false
+var _dump_is_rim: bool = false
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
 # one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
@@ -2865,6 +2866,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		if _carrier.intended_action == AIRoleCarrier.INTENT_DUMP:
 			_dump_target = _carrier.dump_target
 			_dump_is_soft = _carrier.dump_is_soft
+			_dump_is_rim = _carrier.dump_is_rim
 		else:
 			_dump_target = Vector3.INF
 	debug_shoot_score = _carrier.debug_shoot_score
@@ -3561,8 +3563,15 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_pass_should_charge = false
 		_pass_should_saucer = false
 		_pass_target_peer_id = -1
-		input.elevation_level = (ShotMechanics.ELEVATION_LOW if _dump_is_soft
-				else ShotMechanics.ELEVATION_HIGH)
+		# Delivery kind: soft LOW flip (dump-in), FLAT rim along our wall (the
+		# bank-pass delivery the posted winger meets — breakout plan §B), or
+		# the HIGH chip clear over every stick.
+		if _dump_is_soft:
+			input.elevation_level = ShotMechanics.ELEVATION_LOW
+		elif _dump_is_rim:
+			input.elevation_level = ShotMechanics.ELEVATION_FLAT
+		else:
+			input.elevation_level = ShotMechanics.ELEVATION_HIGH
 
 	_apply_brake_steering(input, snapshot, self_pos)
 	# Saucer: LOW loft so the pass flies over a contested mid-lane defender's
@@ -3595,7 +3604,8 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# produces noisy cursor deltas, which the charge tracker reads as
 		# bizarre release directions on long charged passes.
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
-		debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft else "↝out")) \
+		debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft
+				else ("↝rim" if _dump_is_rim else "↝out"))) \
 				if is_dump else "PASS→%s" % target_slot_label
 		# Instant quick shot via the dedicated button flag — fires this tick from
 		# carry (player→blade snap at the fixed pass power), same semantics the

@@ -2476,3 +2476,119 @@ func test_continuation_credit_respects_live_containment() -> void:
 	assert_gt(c._score_move_candidate(ctx, lateral, our_goalie),
 			c._score_move_candidate(ctx, cut_in, our_goalie),
 			"a live defender in the cut lane still owns it — cycle, don't force")
+
+
+# ─── Phase B (docs/breakout-plan.md): wheel, rim family, the Over ────────────
+
+func test_behind_net_carrier_wheels_to_the_far_wall_in_5v5() -> void:
+	# Retriever behind our own net with a committed chaser closing from the
+	# +x side and the strong-side front covered — the wheel around the cage
+	# to the far half-wall is the researched out, and only the two-leg apex
+	# candidate can represent it (every straight far-side route crosses the
+	# cage and prunes).
+	# The wheel's real trigger: the retriever is already moving with a step
+	# on his chaser, who trails in his wake (committed to the same line —
+	# the escape gate reads him as beaten). The strong-side front is
+	# covered, so turning up the near side means the wall battle.
+	var self_pos := Vector3(2.0, 0, 27.6)
+	var self_vel := Vector3(-4.0, 0, 0.4)
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, false, self_vel],
+		[3, 1, Vector3(4.6, 0, 27.4), false, Vector3(-4.2, 0, 0)],
+		[4, 1, Vector3(4.5, 0, 22.0)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.self_velocity = self_vel
+	ctx.team_size = 5
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"the wheel is a carry, not a panic release")
+	assert_lt(c.last_carry_anchor.x, -5.0,
+			"the carry exits on the FAR side of the cage")
+	assert_lt(c.last_carry_anchor.z, 22.0,
+			"...up the far wall, not a near-post step")
+
+
+func test_wheel_is_5v5_exclusive() -> void:
+	# The identical situation in 3v3 has no wheel candidate (plan §5:
+	# possession-first 3v3 keeps its shipped option set).
+	var self_pos := Vector3(2.0, 0, 27.6)
+	var self_vel := Vector3(-4.0, 0, 0.4)
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, false, self_vel],
+		[3, 1, Vector3(4.6, 0, 27.4), false, Vector3(-4.2, 0, 0)],
+		[4, 1, Vector3(4.5, 0, 22.0)],
+	]
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.self_velocity = self_vel
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_false(c.last_carry_anchor.x < -5.0 and c.last_carry_anchor.z < 22.0,
+			"no far-wall wheel exit exists in 3v3")
+
+
+func _rim_ctx(team_size: int, wall_lane_blocked: bool) -> RoleContext:
+	# Carrier pinned on our own wall by two forecheckers; the wall winger is
+	# posted up the boards on the rim's path; the rest of the ice is deep.
+	# The forecheck pins from the INSIDE shoulder (angling the carrier to
+	# the wall — the real geometry), which is exactly what leaves the wall
+	# lane itself as the one protected out.
+	var self_pos := Vector3(10.5, 0, 24.0)
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos],
+		[2, TEAM_ID, Vector3(10.5, 0, 14.0)],
+		[3, 1, Vector3(8.8, 0, 23.0)],
+		[4, 1, Vector3(9.0, 0, 25.8)],
+		[5, 1, Vector3(0.0, 0, 15.0)],
+	]
+	if wall_lane_blocked:
+		skaters.append([6, 1, Vector3(11.7, 0, 12.0)])
+	var ctx := _make_ctx(self_pos, skaters)
+	ctx.team_size = team_size
+	return ctx
+
+
+func test_own_zone_clear_is_a_flat_rim_when_the_wall_lane_is_open() -> void:
+	var ctx := _rim_ctx(5, false)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
+	assert_true(r[3], "open wall lane + posted winger → the clear is the FLAT rim")
+	# The delivery out-prices the shipped zero-gain concession (3v3 shape).
+	var ctx3 := _rim_ctx(3, false)
+	var c3 := AIRoleCarrier.new()
+	c3._build_action_opponents_lists(ctx3)
+	var r3: Array = c3._best_dump(ctx3, ctx3.defending_goal_pos)
+	assert_gt(r[0], r3[0],
+			"a manned wall post makes the clear worth more than a giveaway")
+	assert_false(r3[3], "3v3 keeps the shipped chip — no rim delivery")
+
+
+func test_rim_falls_back_to_the_chip_over_a_camped_wall_lane() -> void:
+	var ctx := _rim_ctx(5, true)
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
+	assert_false(r[3],
+			"a stick camped on the wall lane kills the rim — chip over everything")
+
+
+func test_developing_feed_watches_the_over_valve_in_5v5() -> void:
+	# The OVER: the partner D swinging across the TOP of our zone (the legal
+	# D-to-D lane over the slot box's upper edge) is a developing feed worth
+	# a beat of protection — same primitive as the wall outlet, now watched
+	# for BREAKOUT_D2 (5v5-inherent: the slot only exists there). The
+	# behind-net Over remains unrepresentable by the own-goal-risk zeros
+	# (lead-past-our-line + net-blocker) — pended in the plan doc.
+	var self_pos := Vector3(10.0, 0, 20.5)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-4.0, 0, 20.2), false, Vector3(-2.0, 0, 0.6)]])
+	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
+	brain.slot_assignments[2] = AIRoleSlots.Slot.BREAKOUT_D2
+	ctx.team_brain = brain
+	var carrier := AIRoleCarrier.new()
+	carrier._scratch_teammate_ids = [2]
+	assert_gt(carrier._best_developing_feed(ctx), 0.0,
+			"a partner skating to the net-back valve is a developing Over")

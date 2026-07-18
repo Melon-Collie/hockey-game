@@ -158,7 +158,7 @@ read carved out of the loose-in-our-DZ override:
 - Perf: the read is a per-brain-tick (6 Hz) ETA comparison over ≤10 skaters
   using existing primitives — negligible.
 
-### Phase B — The carrier's missing escape candidates (GAP 2)
+### Phase B — The carrier's missing escape candidates (GAP 2) — landed
 
 All three added as *candidates* priced by the existing compete — no new
 decision layer:
@@ -190,11 +190,17 @@ decision layer:
    The panic clear (`gain = 0` chip) survives as the true last resort;
    the rim-to-the-winger out-prices it whenever the wall post is manned —
    which Phase A guarantees it is.
-3. **Over as a developing feed.** Extend `_developing_outlet_feed` to watch
-   `BREAKOUT_D2`'s route to the net-back valve, so a pressured carrier can
-   pay a protected half-second for the D-to-D the same way he already can
-   for a developing wall outlet. The hold self-terminates the instant the
-   live pass matches it (existing contract).
+3. **Over as a developing feed.** `_developing_outlet_feed` watches
+   `BREAKOUT_D2`'s route, so a pressured carrier can pay a protected beat
+   for the D-to-D the same way he already can for a developing wall outlet.
+   The hold self-terminates the instant the live pass matches it (existing
+   contract). **Scope note (pended):** the representable Over is the
+   IN-FRONT lane — across the top of the zone over the slot box's upper
+   edge, or wide of it. The BEHIND-NET Over stays unrepresentable: the
+   pass model's own-goal-risk zeros (lead past our goal line +
+   net-blocker + slot-crossing) forbid it, and relaxing them honestly
+   needs an own-goal-risk model (a missed behind-net bank near our own
+   cage) — a follow-up, not a drive-by.
 
 ### Phase C — Wall play, both sides (GAP 3 + the rim's defensive complement)
 
