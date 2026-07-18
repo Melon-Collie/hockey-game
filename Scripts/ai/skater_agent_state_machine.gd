@@ -4295,6 +4295,19 @@ func _goalie_now(snapshot: WorldSnapshot) -> Vector3:
 	return Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
 
 
+# Our OWN goalie's current world position, or Vector3.INF when its state isn't
+# buffered yet. Used by the carry-cursor blade cradle: the same stick-through-
+# goalie feedback loop that dislodges the puck at the ATTACKING net is an
+# OWN-GOAL when it happens at our own cage (a defender carrying across its own
+# crease waves the blade through its own goalie, the puck pops free in the
+# slot). The blade must cradle off our goalie exactly like it does off theirs.
+func _own_goalie_now(snapshot: WorldSnapshot) -> Vector3:
+	var own_goalie: GoalieNetworkState = snapshot.goalie_states.get(_team_id)
+	if own_goalie == null:
+		return Vector3.INF
+	return Vector3(own_goalie.position_x, 0.0, own_goalie.position_z)
+
+
 # Wraps AIActionScoring.predict_goalie_pos for the common case where
 # the puck-at-release is the position we're scoring a shot from.
 # `release_time_s` is the time from now until the bot fires (e.g.,
@@ -4428,8 +4441,16 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# _best_carry wants — including skating backward toward the carry
 	# anchor via brake-pivot. The hockey-real "back out facing the
 	# play" behavior emerges from facing being held rather than reset.
+	#
+	# BOTH goalies gate this, not just theirs: waving the blade through
+	# OUR goalie in OUR crease pops the puck loose in our own slot — an
+	# own goal, the worst version of the same feedback loop. A defender
+	# carrying across its own doorstep must cradle exactly the same way.
 	var goalie_pos: Vector3 = _goalie_now(snapshot)
 	if self_pos.distance_to(goalie_pos) < _blade_reach:
+		return self_pos
+	var own_goalie_pos: Vector3 = _own_goalie_now(snapshot)
+	if own_goalie_pos.is_finite() and self_pos.distance_to(own_goalie_pos) < _blade_reach:
 		return self_pos
 
 	var to_goal: Vector3 = _attacking_goal_pos - self_pos
