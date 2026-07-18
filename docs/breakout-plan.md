@@ -52,17 +52,24 @@ Diagnosed root causes, in code:
     protect and wait a beat*, so the carrier never buys the half-second the
     Over needs.
 
-- **GAP 2b — the rim exists only as a zero-gain concession, so it never
-  fires (playtest-confirmed: bots don't rim the puck).** `_best_dump`'s
-  own-zone branch generates the hard rim (`dump_clear_target` — same-side
-  boards, centre-ice-or-better), but its `gain` is hardcoded 0: only the
-  soft dump-and-chase earns recovery value. Priced as pure loss
-  (`−concede`), the rim can only win when retention is HOPELESS (dump >
-  honest raw carry) *and* no pass beats it — and some option almost always
-  scrapes above a pure giveaway, so the window never opens. The model is
-  missing what a rim actually is in a real breakout: a **bank pass with a
-  receiver** — the half-wall winger racing to the wall touch. A corollary:
-  the wall W never receives rim touches today because rims never happen.
+- **GAP 2b — no rim exists anywhere in the model (playtest-confirmed:
+  "the dump does fire sometimes, but it's not a rim").** Two halves:
+  - *Pricing*: `_best_dump`'s own-zone clear has `gain` hardcoded 0 — only
+    the soft dump-and-chase earns recovery value. Priced as pure loss
+    (`−concede`), it can only win when retention is HOPELESS (dump >
+    honest raw carry) *and* no pass beats it — a window that rarely opens,
+    and when it does, what fires is a giveaway, not a delivery. The model
+    is missing what a rim actually is: a **bank pass with a receiver** —
+    the half-wall winger racing to the wall touch.
+  - *Execution*: even the dump that does fire is a straight lofted flight
+    to a spot (the HIGH chip at the fixed quick pace — see the
+    `_dump_target` doc in the state machine). Nothing ever aims ALONG the
+    boards and lets the corner reflections carry the puck around — the
+    signature rim flight. The physics supports it (real board restitution;
+    `AITrajectory` can predict the wrap); no release ever produces it.
+  A corollary: the wall W never receives rim touches today because rims
+  never happen — and the O-zone POINT roles have never needed a rim read
+  (see Phase C.3), which becomes a hole the moment rims are real.
 
 - **GAP 3 — the half-wall winger is a lane-chaser, not a wall post.**
   `AIRoleBreakout` STRONG samples two columns (wall + mid-seam) by
@@ -170,14 +177,17 @@ decision layer:
    - Receiver: the wall player up the rim's path (the half-wall W on the
      forward rim; the trailing partner / wall mate on the REVERSE rim back
      the way the play came).
-   - Flight: `AITrajectory`'s existing board-bounce prediction (the bank
-     is real physics the model can already simulate).
+   - Flight: aimed ALONG the boards — flat, hard, hugging the wall — with
+     the wrap emerging from the real board reflections; predicted with
+     `AITrajectory`'s bounce simulation, and executed as a new release aim
+     mode (the current dump chip's straight lofted flight cannot produce
+     a rim — the aim geometry is the missing execution half).
    - Completion: the wall-touch race at the receiver's meet point — the
      same contested-pickup / chase-race primitives the dump already prices,
      now with OUR wall post as the favourite instead of nobody.
    - Value: the receiver's spot value at the meet point (the wall W's
      second-touch options are what make it worth more than a giveaway).
-   The panic clear (`gain = 0` hard rim) survives as the true last resort;
+   The panic clear (`gain = 0` chip) survives as the true last resort;
    the rim-to-the-winger out-prices it whenever the wall post is manned —
    which Phase A guarantees it is.
 3. **Over as a developing feed.** Extend `_developing_outlet_feed` to watch
@@ -186,19 +196,33 @@ decision layer:
    for a developing wall outlet. The hold self-terminates the instant the
    live pass matches it (existing contract).
 
-### Phase C — Wall-post winger + the second touch (GAP 3)
+### Phase C — Wall play, both sides (GAP 3 + the rim's defensive complement)
 
 1. `AIRoleBreakout` STRONG becomes a **post-holder**: the primary station is
    the strong half-wall at the hash marks (boards inset, facing up-ice);
    the lane × potential argmax only *adjusts along the wall* (low ↔ high)
    rather than swinging into the mid-seam by default. The mid-seam column
    survives as the explicit "wall is the carrier's own wheel route" case.
+   And the receiving half of the rim contract: when a rim commits toward
+   his wall, the W attacks the meet point along the boards
+   (arrive-at-speed, blade to the wall line) instead of holding the post.
 2. **Second touch**: when the wall W receives under a pinch, his own carrier
-   compete must generate the glass-out — the existing hard-rim DUMP aimed
-   up the wall past the pinching D. Verify the dump candidate generation
-   covers "on the wall, pinch incoming" (it prices clearing our zone
-   already; the gap, if any, is the aim geometry hugging the boards). The
-   chip-to-C is already representable (a soft short pass — no work).
+   compete must generate the glass-out — the Phase B rim aimed up the wall
+   past the pinching D. The chip-to-C is already representable (a soft
+   short pass — no work).
+3. **O-zone point rim coverage (keep-ins).** The defensive complement —
+   without it, real rims are free zone clears, because the POINT stations
+   hold the line OFF the wall and a board-hugging clear sails past them.
+   When a rim/clear is travelling up the strong wall (a live read off the
+   puck's board-hugging flight — position near the boards + velocity along
+   them, the same classification the W's meet-the-rim read uses), the
+   strong-side point steps to the boards to hold the line: body/blade on
+   the wall lane at the blue line, priced as the intercept race (rim
+   flight time to the line vs the D's step) with the researched pinch
+   support gate (#23's DP valve — the weak D slides to cover the middle;
+   if the rim beats the step, bail up-ice rather than get sealed). This is
+   the real keep-in point skill, and it rides the existing pinch/valve
+   machinery rather than new structure.
 
 ### Phase D — Measure, calibrate, pin
 
@@ -208,7 +232,9 @@ Same methodology as the duel harness (#27):
   forecheck (dump-in corner retrieval, rimmed puck, D-to-D under 1-2-2 and
   2-1-2 pressure shapes, in both modes). Metrics per scenario: clean-exit %
   (controlled possession crosses our blue line), cough-up % (turnover in
-  our zone within N seconds of retrieval), time-to-exit distribution.
+  our zone within N seconds of retrieval), time-to-exit distribution — and,
+  once Phase C.3 lands, the mirrored O-zone metric: keep-in % (rims/clears
+  up the wall the point D holds at the line vs escapes).
 - Baseline BEFORE Phase A lands, re-measure after each phase — the same
   before/after discipline as the perf work, so each phase's contribution is
   measured, not assumed.
