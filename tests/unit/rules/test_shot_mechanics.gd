@@ -284,6 +284,19 @@ func test_slapper_falls_back_to_blade_mouse_when_no_direction() -> void:
 		_slapper_cfg(), Vector3.ZERO)
 	assert_gt(result.direction.x, 0.9, "falls back to blade→mouse (+X)")
 
+func test_slapper_fills_and_reuses_out_scratch() -> void:
+	# The goalie pre-lean re-solves the release every windup tick to publish
+	# predicted_shot_velocity (SkaterController._update_slapper_charge). That hot
+	# path passes a caller-owned scratch so it doesn't churn the heap — assert the
+	# out instance is filled and returned (not a fresh allocation), mirroring the
+	# wrister's out contract.
+	var scratch := ShotMechanics.ShotResult.new()
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3(0.5, 0, 0), Vector3(10, 0, 0), 0, 1.0,
+		_slapper_cfg(), Vector3(0, 0, -1), scratch)
+	assert_eq(result, scratch, "release_slapper writes into the provided scratch")
+	assert_almost_eq(scratch.direction.z, -1.0, 0.05, "scratch carries the locked heading")
+
 func test_slapper_power_scales_with_charge_time() -> void:
 	var cfg := _slapper_cfg()
 	var short_result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(

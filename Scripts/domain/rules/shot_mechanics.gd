@@ -206,7 +206,8 @@ static func release_slapper(
 		elevation_level: int,
 		charge_time: float,
 		cfg: SlapperConfig,
-		shot_direction: Vector3 = Vector3.ZERO) -> ShotResult:
+		shot_direction: Vector3 = Vector3.ZERO,
+		out: ShotResult = null) -> ShotResult:
 	var shot_dir: Vector3
 	if shot_direction.length_squared() > 0.0001:
 		shot_dir = Vector3(shot_direction.x, 0.0, shot_direction.z).normalized()
@@ -220,7 +221,7 @@ static func release_slapper(
 	var y: float = loft_y(power, _loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 	return ShotResult.make(
 			Vector3(shot_dir.x, y, shot_dir.z).normalized(),
-			power)
+			power, out)
 
 # Vertical launch speed (m/s) for a loft level. Levels above HIGH clamp to
 # high — the input decode already bounds the wire value, this is belt-and-braces.

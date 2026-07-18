@@ -720,6 +720,9 @@ var _current_aim_world: Vector3 = Vector3.ZERO
 # (120 Hz while charging, re-run per replayed input on reconcile) doesn't churn
 # the heap. Pure output, overwritten each solve.
 var _wrister_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
+# Same scratch for the slapper windup's release-now prediction (_update_slapper_
+# charge) — the goalie pre-leans off it toward a charging slapshot's aimed corner.
+var _slapper_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
 # Per-tick mirror of input.elevation_level (0 flat / 1 low / 2 high) — NOT
 # sticky state: overwritten from the frame every tick, so reconcile replay
 # re-derives it from the replayed inputs with nothing to snap.
@@ -1130,6 +1133,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	_cached_block_move_cfg = null
 	_cached_stamina_cfg = null
 	_cached_wrister_cfg = null
+	_cached_slapper_cfg = null
 	skater.apply_appearance(attrs)
 
 
@@ -2137,9 +2141,14 @@ func _update_wrister_charge(input: InputState) -> void:
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
 	# a player who drags one way then flicks the other at release moves the real
-	# impact off the goalie's lean (a tricky release beats the read). Host-only:
-	# remote carriers don't run this path, so their predicted velocity stays ZERO
-	# and the goalie falls back to a non-directional readiness tell.
+	# impact off the goalie's lean (a tricky release beats the read). Works for
+	# REMOTE shooters too: the host simulates their carry from replicated input
+	# (RemoteController._drive_from_input → this path), and both signals ride the
+	# wire — mouse_world_pos, plus mouse_screen_pos pre-aligned to world XZ by the
+	# gatherer's attack-direction negation (the drag direction _get_charge_direction
+	# reads) — with the remote's Shot Power Sensitivity from the join payload feeding
+	# _wrister_sweep_speed. Host-only in that it runs on the authoritative sim, not in
+	# that it's limited to host-controlled shooters.
 	var is_backhand: bool = _classify_backhand()
 	# Re-solves every tick while charging (+ per replayed input on reconcile), so
 	# fill a reused scratch instead of allocating a ShotResult each time.
@@ -2160,6 +2169,27 @@ func _update_wrister_charge(input: InputState) -> void:
 func _update_slapper_charge(delta: float) -> void:
 	_aiming.tick_slapper(delta)
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
+	# Publish where this slapshot would go if released NOW, so the host-side goalie
+	# AI can pre-lean toward the aimed corner — the directional anticipation the
+	# wrister already gets (_update_wrister_charge). This was the "skate up and rip a
+	# slapper from the slot" cheese: the slapper path never published this, for ANY
+	# shooter (host player and bots included, not just remotes), so the goalie squared
+	# to the pinned puck but its glove rested centred and had to travel the full way
+	# to a corner on reaction. The distinguishing axis was slapper-vs-wrister, not
+	# local-vs-remote — the wrister already worked everywhere. Like the wrister, this
+	# runs on the host for remotes too (RemoteController._drive_from_input simulates
+	# their carry); the slapper direction is LOCKED at press (_sm.locked_slapper_dir,
+	# built in _enter_slapper_charge from the replicated mouse_world_pos), so no
+	# screen-space signal is even needed. Gated to the WITH-PUCK windup: a one-timer
+	# wind-up has no puck to lean toward, and the goalie reads only SLAPPER_CHARGE_WITH_PUCK.
+	if has_puck:
+		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
+		if locked_dir_3d.length_squared() > 0.0001:
+			var pred := ShotMechanics.release_slapper(
+					skater.global_position, skater.global_position,
+					_elevation_level, _aiming.slapper_charge_timer,
+					_slapper_config(), locked_dir_3d, _slapper_pred_scratch)
+			skater.predicted_shot_velocity = pred.direction * pred.power
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 	# Net exclusion for the slapshot PIN. While charging with the puck, the puck
@@ -2433,11 +2463,18 @@ func _wrister_sweep_speed(input: InputState) -> float:
 		return ShotMechanics.wrister_speed_for_power_t(input.bot_wrister_power_t, _wrister_config())
 	return _aiming.cursor_speed_ema * shot_power_sensitivity()
 
+# Cached like the wrister config: _update_slapper_charge now re-solves the release
+# every windup tick (120 Hz × actors, replayed on reconcile) to publish
+# predicted_shot_velocity, so a fresh SlapperConfig per call would be per-tick heap
+# churn. Rebuilt lazily; invalidated in apply_attributes when the source exports change.
+var _cached_slapper_cfg: ShotMechanics.SlapperConfig = null
+
 func _slapper_config() -> ShotMechanics.SlapperConfig:
-	var cfg := ShotMechanics.SlapperConfig.new()
-	cfg.min_slapper_power = min_slapper_power
-	cfg.max_slapper_power = max_slapper_power
-	cfg.max_slapper_charge_time = max_slapper_charge_time
-	cfg.loft_vy_low = loft_vertical_speed_low
-	cfg.loft_vy_high = loft_vertical_speed_high
-	return cfg
+	if _cached_slapper_cfg == null:
+		_cached_slapper_cfg = ShotMechanics.SlapperConfig.new()
+		_cached_slapper_cfg.min_slapper_power = min_slapper_power
+		_cached_slapper_cfg.max_slapper_power = max_slapper_power
+		_cached_slapper_cfg.max_slapper_charge_time = max_slapper_charge_time
+		_cached_slapper_cfg.loft_vy_low = loft_vertical_speed_low
+		_cached_slapper_cfg.loft_vy_high = loft_vertical_speed_high
+	return _cached_slapper_cfg

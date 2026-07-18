@@ -709,10 +709,13 @@ extends Node
 # counter-read, not a flat buff). The lean is PARTIAL (`prelean_strength` of the
 # way to the predicted reach) and never adds save speed — it only changes the
 # resting hand position, so the arm-delay / glove-speed caps on the actual
-# reaction still hold. Directional pre-lean needs the shooter's aim, which is
-# only host-side for host-controlled shooters (host player + bots); remote
-# shooters fall back to a non-directional "hands up, ready" tell. Host-only like
-# all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
+# reaction still hold. Directional pre-lean needs the shooter's live predicted
+# velocity, which SkaterController publishes every charge tick for BOTH shot types
+# and EVERY shooter — host player, bot, and remote (the host simulates a remote's
+# carry from replicated input, and both the aim and the wrister's world-aligned drag
+# ride the wire). The non-directional "hands up, ready" tell is the fallback only
+# when the current aim isn't at the net, not a remote-shooter limitation. Host-only
+# like all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
 @export var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
 @export var prelean_max_distance: float = 9.0       # m — goalie→shooter range the read fires within
 @export var prelean_ready_lift: float = 0.06        # m — non-directional hands-up lift (remote shooters)
@@ -3443,10 +3446,10 @@ func _set_pad_toe_out_inputs() -> void:
 
 # Populate the pose builder's pre-lean fields. The goalie leans toward a charging
 # shot's predicted impact while reading the windup (see _is_reading_shot_threat).
-# Directional lean needs the shooter's live predicted velocity, which is only
-# published host-side for host-controlled shooters (host player + bots); remote
-# shooters leave it ZERO and get the non-directional readiness tell. Re-solved
-# every tick off the LIVE aim, so a late release moves the impact off the lean.
+# Directional lean needs the shooter's live predicted velocity, which SkaterController
+# publishes for both shot types and every shooter including remotes (the host
+# simulates a remote's carry from replicated input). Re-solved every tick off the
+# LIVE aim, so a late release moves the impact off the lean.
 func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = false
 	_pose_inputs.prelean_directional = false
@@ -3460,7 +3463,7 @@ func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = true
 	var vel: Vector3 = carrier.predicted_shot_velocity
 	if vel.length_squared() < 0.01:
-		return  # remote shooter (no aim on the wire) — non-directional tell only
+		return  # not yet published this charge (freshness guard) — non-directional tell
 	var res: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, vel, _goal_line_z, _goal_center_x,
 			_shot_cfg, _scratch_prelean_shot)
