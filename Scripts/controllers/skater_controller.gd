@@ -49,7 +49,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # stamina, sacrifice agility), not a free bump. Both costs are deterministic from
 # the replicated input.hit_held, so they re-derive through reconcile replay.
 @export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
-@export var hit_turn_multiplier: float = 0.6          # turn-rate scale while committing (< 1.0 = wider turns)
+# Turn-rate scale while committing (< 1.0 = wider turns). Eased up from the
+# original 0.6 — committing still costs some agility (you're loading up, not
+# pivoting on a dime), but 0.6 fought you too hard when tracking a target you're
+# actively lining up. The commitment cost now lives mostly in stamina + the
+# sprint turn radius, not in a heavy hit-button steering penalty.
+@export var hit_turn_multiplier: float = 0.8
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
 # up for the check — leans into it, drops the leading shoulder, and sinks into a
 # crouch. A render-rate blend (SkaterSkatingCoordinator) off the replicated
@@ -67,13 +72,21 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # for every player in v1 (the hit strength already reflects the attacker's Size/
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
-# Grounded to the Slice B inelastic magnitudes: the delivered victim impulse is
-# closing_speed × transfer × m_a/(m_a+m_b), so a committed equal-mass hit at ~6–10
-# m/s closing lands ~1.4–2.3 m/s and an enforcer/fast hit ~3.5–5. The ladder is set
-# to that scale (was 3/11 on the old weight-ratio model, which never fired). Still
-# feel tunables — nudge from here once you've played it.
-@export var stagger_min_impulse: float = 1.0       # m/s transfer delta below which a hit doesn't stagger
-@export var stagger_ref_impulse: float = 2.5       # m/s transfer delta treated as a full-strength check
+# Grounded to the inelastic magnitudes: the delivered victim impulse is
+# closing_speed × transfer × m_a/(m_a+m_b), so at a MEDIUM build (transfer 0.45,
+# equal mass → ×0.5) it's ~0.225 × closing, and an enforcer (transfer ~0.61, a
+# touch heavier) is ~0.33 × closing. The ref point is deliberately the SAME as the
+# puck-strip threshold (Puck.body_check_strip_threshold, 1.35): a hit hard enough
+# to count as a full check is exactly a hit hard enough to knock the puck loose.
+# That lands a full check at ~6 m/s closing for a medium build and ~4 m/s for an
+# enforcer — "square them up and skate into them with some pace," NOT a sprint-only
+# collision. (Was 1.0/2.5, which needed ~11 m/s closing at a medium build — full
+# force was effectively gated behind a sprint, the degenerate coupling this fixes.)
+# Speed still buys MORE than a full check: closing past the ref keeps scaling the
+# impulse linearly into the knockdown band below, so a sprint / head-on collision
+# is a bigger hit — a ceiling, not a requirement. Still feel tunables.
+@export var stagger_min_impulse: float = 0.6       # m/s transfer delta below which a hit doesn't stagger
+@export var stagger_ref_impulse: float = 1.35      # m/s transfer delta treated as a full-strength check (== puck-strip threshold)
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
 @export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
 @export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
@@ -95,8 +108,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the body slides from the hit and bleeds speed via knockdown_friction — for a
 # recovery window scaling with the hit (see BodyCheckRules.knockdown_seconds_from_
 # impulse). knockdown_timer rides the SAME replicated / snapped / decayed rail as
-# stagger_timer. NOTE: on the OLD magnitude scale — wants a downward re-tune with
-# the stagger thresholds once the Slice B inelastic feel is dialed. Set
+# stagger_timer. Deliberately left ABOVE the retuned full-check point (stagger_ref
+# 1.35): a full check staggers + strips; a KNOCKDOWN is reserved for a genuinely
+# big hit — an enforcer at pace (~9 m/s closing) or a fast/head-on collision
+# (~13 m/s at a medium build). It's the speed/Size ceiling, not the default outcome
+# of a check, and it sits above the AI's commit bar (AIBodyCheck.COMMIT_IMPULSE_M_S
+# 2.5) so a bot leaving position lands a solid check without auto-flattening. Set
 # knockdown_impulse very high (or 0) to effectively disable knockdowns.
 @export var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down
 @export var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
