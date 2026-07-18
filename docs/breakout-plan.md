@@ -134,7 +134,7 @@ adds the missing candidates so Up/Over/Wheel/Reverse/Rim all *exist* as
 things the compete can price. The plays then emerge from honest EV exactly
 like the duel behaviors did — and the same harness methodology verifies it.
 
-### Phase A — Retrieval posture (RETRIEVAL state)
+### Phase A — Retrieval posture (RETRIEVAL state) — landed
 
 The structural fix for GAP 1. `AIPossessionState` gains a **RETRIEVAL**
 read carved out of the loose-in-our-DZ override:
@@ -253,13 +253,17 @@ Same methodology as the duel harness (#27):
 - **No forecheck nerfs.** The forecheck is praised; the breakout earns its
   exits honestly or the scenario metrics say we're not done.
 
-## 5. Open questions (decide before/during implementation)
+## 5. Decisions (settled with the developer)
 
-1. **3v3 scope**: RETRIEVAL + reverse/wheel candidates for 3v3 too from day
-   one, or 5v5-first behind the team-size seam and port after playtest?
-2. **Retrieval margin**: how "clearly" must we win the race — one
-   reaction-time (~0.25 s) of ETA margin is the grounded starting guess;
-   calibrate against the harness cough-up metric.
+1. **5v5-exclusive.** All of it — RETRIEVAL, the rim family, wheel, wall
+   post, point keep-ins — gates on the team-size seam. Rationale: rims and
+   dump-ins are genuinely uncommon in real 3v3, where possession is the
+   whole game — the honest 3v3 read is to keep the puck, and 3v3's shipped
+   tuning stays untouched by construction. Port later only if playtest
+   asks for it.
+2. **Retrieval margin**: start at one reaction time (~0.25 s) of ETA
+   advantage to enter RETRIEVAL; calibrate against the harness cough-up
+   metric.
 3. ~~Rim receiver expectations~~ — **answered by playtest**: the W never
    gets rim touches because rims never fire at all (GAP 2b). With
    rim-as-a-pass landing in Phase B, Phase C's wall post gains a "meet the

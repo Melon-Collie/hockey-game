@@ -90,6 +90,33 @@ static func elect(
 	return best_pid
 
 
+# Raw best intercept time (seconds) among `ids` to the loose puck — the
+# race-read half of the election, with no hysteresis and no winner identity.
+# Used by the TeamBrain's RETRIEVAL upgrade (docs/breakout-plan.md Phase A)
+# to compare OUR best against THEIRS with the same intercept model the
+# chase election runs, so "who wins the race" and "who is elected to run
+# it" can never disagree. INF when no eligible skater.
+static func best_intercept_time(
+		skater_states: Dictionary,
+		ids: Array,
+		puck_pos: Vector3,
+		puck_vel: Vector3,
+		caps_by_peer: Dictionary = {}) -> float:
+	var best_t: float = INF
+	for pid: int in ids:
+		var s: SkaterNetworkState = skater_states.get(pid)
+		if s == null:
+			continue
+		var caps: AISkaterCaps = caps_by_peer.get(pid)
+		var max_speed: float = caps.max_speed if caps != null \
+				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var t: float = _intercept_time(
+				s.position, s.velocity, puck_pos, puck_vel, max_speed)
+		if t < best_t:
+			best_t = t
+	return best_t
+
+
 # Momentum-aware intercept time: lead the puck a coarse, bounded amount
 # (its straight-line distance at ref skating speed, capped), then return
 # the bot's momentum-aware time to that predicted point.

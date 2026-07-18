@@ -345,3 +345,54 @@ func test_missing_positions_default_to_forward_group() -> void:
 			_make_snapshot(skaters, -1, -12.0), TEAM_ID, OUR_NET_Z,
 			AIPossessionState.State.FORECHECK, _resolver(skaters), {}, 1.0, {}, {})
 	assert_eq(a.size(), 5, "all five slotted even with no position data")
+
+
+# ── RETRIEVAL (docs/breakout-plan.md Phase A) ────────────────────────────────
+# Loose puck in our DZ that we clearly win: the race winner chases, everyone
+# else takes the breakout posts NOW — the same posts as BREAKOUT, so the
+# pickup's state flip renames the retriever to CARRIER and moves nobody.
+
+func test_retrieval_race_winner_chases_and_posts_fill() -> void:
+	# Puck loose in our right corner; the RD is closest and still — he wins
+	# the chase election; the LD takes the D2 valve; the forwards take the
+	# wall / swing / stretch posts on their home sides (strong_x = +1).
+	var skaters: Array = [
+		[1, 0, Vector3(0.0, 0.0, 18.0)],    # C
+		[2, 0, Vector3(-4.0, 0.0, 16.0)],   # LW
+		[3, 0, Vector3(4.0, 0.0, 16.0)],    # RW
+		[4, 0, Vector3(-3.0, 0.0, 23.0)],   # LD
+		[5, 0, Vector3(5.0, 0.0, 23.0)],    # RD — nearest the corner puck
+	]
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.RETRIEVAL,
+			-1, 24.0, 8.0)
+	assert_eq(_slot_of(a, AIRoleSlots.Slot.CHASE), 5,
+			"the RD nearest the loose puck wins the retriever seat")
+	assert_eq(_slot_of(a, AIRoleSlots.Slot.BREAKOUT_D2), 4,
+			"the other D takes the D-to-D valve")
+	assert_eq(_slot_of(a, AIRoleSlots.Slot.BREAKOUT_STRONG), 3,
+			"RW takes the strong (right) half-wall post")
+	assert_eq(_slot_of(a, AIRoleSlots.Slot.BREAKOUT_C), 1,
+			"C takes the low swing")
+	assert_eq(_slot_of(a, AIRoleSlots.Slot.BREAKOUT_STRETCH), 2,
+			"LW takes the weak-side stretch")
+
+
+func test_retrieval_forward_retriever_cross_fills_the_posts() -> void:
+	# The C is the body closest to a puck dying in the slot — he retrieves;
+	# both D still split CHASE-free jobs (one takes D2), and the leftover
+	# posts cross-fill from whoever remains.
+	var skaters: Array = [
+		[1, 0, Vector3(1.0, 0.0, 21.0)],    # C — on top of the puck
+		[2, 0, Vector3(-4.0, 0.0, 12.0)],   # LW
+		[3, 0, Vector3(4.0, 0.0, 12.0)],    # RW
+		[4, 0, Vector3(-3.0, 0.0, 24.0)],   # LD
+		[5, 0, Vector3(3.0, 0.0, 24.0)],    # RD
+	]
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.RETRIEVAL,
+			-1, 21.0, 1.0)
+	assert_eq(_slot_of(a, AIRoleSlots.Slot.CHASE), 1,
+			"the closest body retrieves regardless of group")
+	assert_true(_slot_of(a, AIRoleSlots.Slot.BREAKOUT_D2) in [4, 5],
+			"a real D takes the valve")
+	# All five slots filled — nobody left standing in the old zone shape.
+	assert_eq(a.size(), 5)

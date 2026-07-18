@@ -109,6 +109,10 @@ static func slots_for_state(state: int) -> Array[int]:
 			return [AIRoleSlots.Slot.CARRIER, AIRoleSlots.Slot.BREAKOUT_D2,
 					AIRoleSlots.Slot.BREAKOUT_STRONG, AIRoleSlots.Slot.BREAKOUT_C,
 					AIRoleSlots.Slot.BREAKOUT_STRETCH]
+		AIPossessionState.State.RETRIEVAL:
+			return [AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.BREAKOUT_D2,
+					AIRoleSlots.Slot.BREAKOUT_STRONG, AIRoleSlots.Slot.BREAKOUT_C,
+					AIRoleSlots.Slot.BREAKOUT_STRETCH]
 		AIPossessionState.State.FORECHECK:
 			return [AIRoleSlots.Slot.F1_PRESSURE, AIRoleSlots.Slot.DP_STRONG,
 					AIRoleSlots.Slot.DP_WEAK, AIRoleSlots.Slot.F2_STRONG,
@@ -296,19 +300,22 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 			]
 
 		AIPossessionState.State.BREAKOUT:
-			return [
-				SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_D2, Group.D,
-						Vector3(0.0, 0.0, own_goal_z - own_dir * 1.0)),
-				SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_STRONG, Group.F,
-						Vector3(strong_x * (half_w - 2.0), 0.0, our_blue_z),
-						_side_home_f(strong_x)),
-				SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_C, Group.F,
-						Vector3(0.0, 0.0, own_goal_z - own_dir * _BREAKOUT_SWING_DEPTH_M),
-						0),
-				SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_STRETCH, Group.F,
-						Vector3(-strong_x * (half_w - _STRETCH_WALL_INSET_M), 0.0, 0.0),
-						_side_home_f(-strong_x)),
+			return _breakout_post_specs(own_goal_z, own_dir, strong_x,
+					half_w, our_blue_z)
+
+		AIPossessionState.State.RETRIEVAL:
+			# The retrieval posture (docs/breakout-plan.md Phase A): the race
+			# winner chases the loose puck (CHASE first — the soonest-to-
+			# arrive election IS the race read, same as NEUTRAL's); the other
+			# four take the breakout posts NOW, so the outlets exist by the
+			# time the retriever touches the puck. Same posts as BREAKOUT,
+			# so the pickup's state flip renames nothing — nobody moves.
+			var specs: Array[SlotSpec] = [
+				SlotSpec.make(AIRoleSlots.Slot.CHASE, Group.ANY, puck_pos),
 			]
+			specs.append_array(_breakout_post_specs(own_goal_z, own_dir,
+					strong_x, half_w, our_blue_z))
+			return specs
 
 		AIPossessionState.State.TRANS_OD:
 			return [
@@ -349,6 +356,26 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 
 	var empty: Array[SlotSpec] = []
 	return empty
+
+
+# The four breakout post specs — shared verbatim by BREAKOUT (carrier fixed)
+# and RETRIEVAL (race winner chasing), so the pickup's state flip renames the
+# retriever to CARRIER and moves nobody else (docs/breakout-plan.md Phase A).
+static func _breakout_post_specs(own_goal_z: float, own_dir: float,
+		strong_x: float, half_w: float, our_blue_z: float) -> Array[SlotSpec]:
+	return [
+		SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_D2, Group.D,
+				Vector3(0.0, 0.0, own_goal_z - own_dir * 1.0)),
+		SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_STRONG, Group.F,
+				Vector3(strong_x * (half_w - 2.0), 0.0, our_blue_z),
+				_side_home_f(strong_x)),
+		SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_C, Group.F,
+				Vector3(0.0, 0.0, own_goal_z - own_dir * _BREAKOUT_SWING_DEPTH_M),
+				0),
+		SlotSpec.make(AIRoleSlots.Slot.BREAKOUT_STRETCH, Group.F,
+				Vector3(-strong_x * (half_w - _STRETCH_WALL_INSET_M), 0.0, 0.0),
+				_side_home_f(-strong_x)),
+	]
 
 
 # Home identity for a side-signed D slot: LD (lobby slot 3) rests on the -X
