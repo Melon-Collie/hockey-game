@@ -82,12 +82,14 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var poke_checker_cooldown: float = 0.1
 # Delivered victim-impulse (BodyCheckRules.puck_strip_impulse — the REAL applied
 # knockback |Δv|, via SkaterCollisionRules.victim_kick) needed to knock the puck
-# off the carrier. The ladder sits on the same inelastic scale as the stagger
-# exports (SkaterController's 1.0 min / 2.5 full-strength): 1.35 keeps the
-# equal-mass baseline strip point (~6 m/s closing, medium build — the old 2.7 bar
-# on the pre-inelastic reconstruction, which read ~2× the real kick) while
+# off the carrier. Deliberately EQUAL to the full-check point on the stagger ladder
+# (SkaterController.stagger_ref_impulse, 1.35): a hit hard enough to count as a
+# full-strength check is exactly a hit hard enough to strip the puck. The
+# equal-mass baseline lands there at ~6 m/s closing (medium build) while
 # Physical/mass move it honestly: an enforcer strips at lower closing speed, a
-# low-Physical hit needs much more.
+# low-Physical hit needs much more. Below it (down to stagger_min 0.6) a hit still
+# staggers the carrier but leaves the puck on his stick — a jarring bump, not a
+# turnover.
 @export var body_check_strip_threshold: float = 1.35
 @export var body_check_puck_speed: float = 3.0           # soft-strip trickle pace along the hit line
 @export var body_check_loose_speed: float = 0.8          # forward carry a full-strength hit leaves (puck drops loose at contact)
