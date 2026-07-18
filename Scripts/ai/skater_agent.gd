@@ -10,22 +10,6 @@ extends RefCounted
 var _scratch_input: InputState = InputState.new()
 var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
 
-# Mouse-world lerp factor — closes this fraction of the gap toward the
-# SM's desired mouse_world_pos each tick. 1.0 = snap (no smoothing).
-# Lower values add tracking lag: the blade lags slightly behind its target,
-# dekes don't immediately get matched, and aim transitions read as a smooth
-# swing rather than a snap. A second-stage softener on top of the state
-# machine's aim-cursor slew — which now tracks the bot's REAL Hands blade speed
-# (AISkaterCaps.blade_speed), not an artificial per-tier cap; this is the
-# exponential polish on pass/carry aim.
-#
-# DEFAULT is the perfect-bot baseline (1.0 = snap); the real per-tier value is
-# set from BotSkillProfile in apply_profile(). Difficulty tuning has landed.
-const MOUSE_LERP_FACTOR_DEFAULT: float = 1.0
-var _mouse_lerp_factor: float = MOUSE_LERP_FACTOR_DEFAULT
-var _prev_mouse_world_pos: Vector3 = Vector3.ZERO
-var _has_prev_mouse: bool = false
-
 
 func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictionary,
 		is_left_handed: bool, caps_by_peer: Dictionary = {}) -> void:
@@ -39,7 +23,6 @@ func setup(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: Dictio
 func apply_profile(profile: BotSkillProfile) -> void:
 	if profile == null:
 		return
-	_mouse_lerp_factor = profile.mouse_lerp_factor
 	_sm.apply_profile(profile)
 
 
@@ -50,24 +33,23 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	_sm.apply_capabilities(caps)
 
 
+# The match's latched rule set (GameRules.RuleSet) — drives the AI's
+# offside-aware reads. Stamped by AIController from the game state.
+func set_rule_set(rs: int) -> void:
+	_sm.rule_set = rs
+
+
 # Returns the InputState for this physics tick. Caller must not retain a
 # reference past the next tick — same scratch buffer is reused.
+# The SM's cursor goes out untouched: its slew (the bot's real Hands blade
+# speed) is the one motion limit, exactly the limit a human's blade plays
+# under. An old second-stage exponential lerp here was removed — it added
+# only milliseconds of lag but its straight-line world blending chord-cut
+# the SM's carefully shaped cursor paths (arc / reach-cone clamp) across the
+# body on big flips, which could trip the pose IK gate's facing freeze.
 func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> InputState:
 	_zero_input(_scratch_input, delta, host_timestamp)
 	_sm.dispatch(_scratch_input, snapshot)
-	# Lerp the SM's desired mouse_world_pos so the blade always lags a
-	# bit behind. Skipped on the first ever tick (no prev to lerp from)
-	# and after any tick where the SM left mouse at ZERO (state didn't
-	# explicitly aim — don't drag a stale lag value into a subsequent
-	# real aim). Also skipped while aiming a committed shot: the SM cursor
-	# is already slew-smoothed there, and the second-stage lerp on top
-	# makes the blade ring through the wind-up (see wants_direct_aim).
-	if _has_prev_mouse and _scratch_input.mouse_world_pos != Vector3.ZERO \
-			and not _sm.wants_direct_aim():
-		_scratch_input.mouse_world_pos = _prev_mouse_world_pos.lerp(
-				_scratch_input.mouse_world_pos, _mouse_lerp_factor)
-	_prev_mouse_world_pos = _scratch_input.mouse_world_pos
-	_has_prev_mouse = _scratch_input.mouse_world_pos != Vector3.ZERO
 	return _scratch_input
 
 
@@ -147,6 +129,10 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	input.elevation_level = 0
 	input.block_held = false
 	input.stick_lift_held = false
+	# Hit commit defaults off every tick (reused scratch): only the body-check
+	# commit branch sets it, so a leaked true would keep a bot bracing / draining
+	# stamina after the check is over.
+	input.hit_held = false
 	# Fire-once edge: PASS_PRESSED's one-tick release path (the dump) sets it on its
 	# release tick and nothing else clears it, so a latched true would fire an
 	# instant quick shot on every subsequent carry tick.

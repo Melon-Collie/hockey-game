@@ -46,16 +46,35 @@ func test_read_json_roundtrip_and_missing() -> void:
 
 func test_find_previous_log_needs_two_files() -> void:
 	DirAccess.make_dir_recursive_absolute("user://logs")
-	# Zero/one file → no distinguishable previous run.
-	assert_eq(_cw._find_previous_log(), "", "no logs → empty")
-	var one: FileAccess = FileAccess.open("user://logs/only.log", FileAccess.WRITE)
-	one.store_string("solo\n"); one.close()
-	assert_eq(_cw._find_previous_log(), "", "single log (this run) → empty")
-	# Two files → the previous run's log is identified.
-	var two: FileAccess = FileAccess.open("user://logs/prev.log", FileAccess.WRITE)
-	two.store_string("line1\nERROR boom\n"); two.close()
+	# The engine's live file logger already holds one open log locally (and can't
+	# be removed while open), while a clean CI/cloud run starts with none — so
+	# drive the >=2 threshold relative to whatever baseline exists rather than
+	# assuming an empty dir.
+	var baseline: int = _count_logs()
+	# Fewer than two logs → no distinguishable previous run.
+	if baseline < 2:
+		assert_eq(_cw._find_previous_log(), "", "<2 logs → empty (baseline %d)" % baseline)
+	# Top up to at least two logs; the previous run's log is then identified.
+	while _count_logs() < 2:
+		var idx: int = _count_logs()
+		var pad: FileAccess = FileAccess.open("user://logs/gut_pad_%d.log" % idx, FileAccess.WRITE)
+		pad.store_string("pad %d\n" % idx); pad.close()
 	var prev: String = _cw._find_previous_log()
-	assert_true(prev.ends_with(".log"), "two logs → a .log path is returned (%s)" % prev)
+	assert_true(prev.ends_with(".log"), "two+ logs → a .log path is returned (%s)" % prev)
+
+func _count_logs() -> int:
+	var dir: DirAccess = DirAccess.open("user://logs")
+	if dir == null:
+		return 0
+	var n: int = 0
+	dir.list_dir_begin()
+	var fname: String = dir.get_next()
+	while fname != "":
+		if not dir.current_is_dir() and fname.ends_with(".log"):
+			n += 1
+		fname = dir.get_next()
+	dir.list_dir_end()
+	return n
 
 func test_read_log_tail() -> void:
 	DirAccess.make_dir_recursive_absolute("user://logs")

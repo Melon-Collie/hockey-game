@@ -162,8 +162,6 @@ func snap_lean_to_state() -> void:
 # follows the forward pitch only fractionally, so the legs stay planted under
 # the hips while the trunk folds forward over them.
 func _apply_lean() -> void:
-	var stride_pitch: float = _skating.trunk_pitch_add if _skating != null else 0.0
-	var stride_roll: float = _skating.trunk_roll_add if _skating != null else 0.0
 	# Body-check recoil: while staggered, the torso reels the way the hit shoved
 	# it, easing out as the timer decays (same directional pitch/roll decomposition
 	# as the reach lean). Runs on every path — local, bot, and remote (which reels
@@ -173,14 +171,29 @@ func _apply_lean() -> void:
 	var recoil_roll: float = 0.0
 	var recoil_t: float = clampf(
 			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
-	if recoil_t > 0.0:
-		var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t
+	# Knockdown reels the torso far harder than a stagger — the fold that sells being
+	# floored. It rides the SAME recoil direction (fall the way you were hit) and the
+	# same deterministic/replicated timer, layered on top of the stagger recoil. kd_t
+	# holds full while more than knockdown_getup_seconds remains, then eases to 0 (the
+	# get-up). Remotes reel generically backward (default recoil dir), like stagger.
+	var kd_t: float = clampf(
+			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
+	var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t \
+			+ deg_to_rad(_controller.knockdown_fold_deg) * kd_t
+	if mag > 0.0:
 		var d: Vector2 = _controller.stagger_recoil_dir
 		recoil_pitch = mag * d.y
 		recoil_roll = -mag * d.x
+	# The gait's per-stride trunk texture is deliberately NOT folded in here: the
+	# blade markers hang under upper_body, so anything added to its rotation moves
+	# the blade's WORLD position (pickup / poke geometry, which must match across
+	# machines for reconcile). The gait runs at render rate now, so letting its
+	# stride pitch reach this frame would make the blade world depend on frame
+	# rate. Reach + velocity lean stay (both physics-rate, deterministic); the
+	# stride texture is a render-only leg concern. See Skater.render_pose_update.
 	_skater.set_upper_body_lean(
-			upper_body_lean + velocity_lean_x + stride_pitch + recoil_pitch,
-			upper_body_lean_roll + velocity_lean_z + stride_roll + recoil_roll)
+			upper_body_lean + velocity_lean_x + recoil_pitch,
+			upper_body_lean_roll + velocity_lean_z + recoil_roll)
 	_skater.set_lower_body_lean(
 			velocity_lean_x * _controller.lower_body_pitch_follow, velocity_lean_z)
 
@@ -215,6 +228,11 @@ func apply_facing(input: InputState, delta: float) -> void:
 				# earlier this tick, so it's deterministic across reconcile replay.
 				if _controller.sprint_active:
 					drag *= _controller.sprint_turn_multiplier
+				# Committing a check widens the turn the same way sprint does — the
+				# agility cost of loading up a hit. Stacks with sprint (both held =
+				# very committed straight line). Deterministic across replay.
+				if _controller.hit_active:
+					drag *= _controller.hit_turn_multiplier
 				facing = facing.lerp(to_mouse.normalized(), drag * delta).normalized()
 		_skater.set_facing(facing)
 		var turn_delta: float = angle_difference(prev_angle, _skater.rotation.y)
@@ -378,7 +396,13 @@ func apply_upper_body(delta: float) -> void:
 	_apply_lean()
 
 func apply_head_tracking(input: InputState, delta: float) -> void:
-	var mouse_local: Vector3 = _skater.upper_body_to_local(input.mouse_world_pos)
+	apply_head_tracking_aim(input.mouse_world_pos, delta)
+
+# Head tracking from a raw aim point rather than an InputState — used by the
+# render-rate cosmetic pass (Skater.render_pose_update), which has no input
+# frame, off the controller's last-seen aim world position.
+func apply_head_tracking_aim(aim_world: Vector3, delta: float) -> void:
+	var mouse_local: Vector3 = _skater.upper_body_to_local(aim_world)
 	mouse_local.y = 0.0
 	var target_angle: float = 0.0
 	if mouse_local.length() > 0.01:

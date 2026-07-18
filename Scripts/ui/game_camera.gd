@@ -61,7 +61,12 @@ const _ON_RINK_MARGIN: float = 5.0
 
 # ── Zoom Tuning ───────────────────────────────────────────────────────────────
 @export var min_height: float = 10.0
-@export var max_height: float = 40.0
+# Zoom ceiling. Sized to the arena, not the rink: the ozone fit (own blue line
+# → attacking goal line + padding) needs ~29.3 m at the default 50° FOV, and at
+# ~32 m the default framing still lands every frame edge on stands/shell rather
+# than the void past the bowl. Was 40 before the arena had an upper deck/shell
+# — the old ceiling zoomed out far enough to see the whole bowl end.
+@export var max_height: float = 32.0
 @export var zoom_speed: float = 3.0
 @export var zoom_padding: float = 4.0  # extra visible space beyond player+puck span
 
@@ -141,6 +146,14 @@ var _wide_hold_captured: bool = false
 func hold_period_break_wide(duration: float) -> void:
 	_wide_hold_left = duration + _WIDE_HOLD_SLACK
 	_wide_hold_captured = false
+	# Snap the live-framing state that the crane-down blends into once the wide
+	# hold ends, so a period that ends on an extreme dynamic zoom / zone bias
+	# (e.g. a rush at the buzzer) doesn't carry that framing into the next
+	# period even if the intermission is skipped before it would otherwise
+	# decay on its own.
+	_current_height = min_height * PlayerPrefs.camera_distance
+	_smoothed_attack_dir = 0.0
+	_smoothed_direction_factor = 1.0
 
 func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
 	_goal_0 = goal_0
@@ -201,6 +214,10 @@ func shake(trauma: float) -> void:
 
 func _ready() -> void:
 	make_current()
+	# The jumbotron hangs over center ice, directly between this top-down
+	# camera and the play — it is spectator/lobby set dressing only, never
+	# rendered in gameplay framing (see Jumbotron's class doc).
+	cull_mask &= ~Jumbotron.RENDER_LAYER_MASK
 	GameManager.pregame_intro_started.connect(play_intro)
 	GameManager.period_break_started.connect(hold_period_break_wide)
 	GameManager.period_intro_started.connect(

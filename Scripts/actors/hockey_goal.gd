@@ -102,6 +102,10 @@ func _ready() -> void:
 	# _rebuild() only frees children, never touches self's material, so setting
 	# it once here survives every rebuild.
 	physics_material_override = PIPE_MATERIAL
+	# Frame shares the net's layer so skaters don't physics-collide with the posts
+	# either (they're kept clear of the whole net footprint analytically); the puck
+	# still pings off the pipe. See _net_body / GameRules.push_out_of_net.
+	collision_layer = Constants.LAYER_NET
 	_rebuild()
 
 func _rebuild() -> void:
@@ -120,7 +124,11 @@ func _rebuild() -> void:
 		child.queue_free()
 
 	_net_body = StaticBody3D.new()
-	_net_body.collision_layer = Constants.LAYER_WALLS  # puck must still bounce off net panels
+	# LAYER_NET (not LAYER_WALLS): the puck still bounces off the panels (MASK_PUCK
+	# includes it) but skaters DON'T physics-collide — a CharacterBody cylinder
+	# wedges in the concave net pocket. Skaters are held clear analytically via
+	# GameRules.push_out_of_net (see Skater.clamp_body_to_net).
+	_net_body.collision_layer = Constants.LAYER_NET
 	_net_body.physics_material_override = NET_MATERIAL  # twine absorbs; puck drops instead of pinging
 	add_child(_net_body)
 
@@ -627,7 +635,7 @@ func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 # face and never accounted for the puck's radius, so post grazes and side-net
 # entries scored. The center-based swept crossing here (see GoalDetectionRules)
 # rejects both and reliably catches fast shots the sensor could tunnel through.
-func check_goal_crossing(prev_center: Vector3, curr_center: Vector3) -> void:
+func check_goal_crossing(prev_center: Vector3, curr_center: Vector3, carried: bool = false) -> void:
 	if GoalDetectionRules.crossed_into_net(
 			prev_center,
 			curr_center,
@@ -638,7 +646,8 @@ func check_goal_crossing(prev_center: Vector3, curr_center: Vector3) -> void:
 			POST_RADIUS,
 			GameRules.PUCK_COLLISION_RADIUS,
 			GameRules.PUCK_COLLISION_HALF_HEIGHT,
-			BASE_DEPTH):
+			BASE_DEPTH,
+			carried):  # a carried (pinned) puck must cross the actual mouth, not just land in the cavity
 		goal_scored.emit()
 
 

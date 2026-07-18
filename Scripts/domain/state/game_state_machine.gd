@@ -38,6 +38,10 @@ var period_duration: float = GameRules.PERIOD_DURATION
 var ot_enabled: bool       = GameRules.OT_ENABLED
 var ot_duration: float     = GameRules.OT_DURATION
 var rule_set: int          = GameRules.DEFAULT_RULE_SET
+# Live roster size per team (3 or 5), latched at puck drop like rule_set.
+# Every active-roster gate (slot allocation, join/promote caps, swap
+# validation) reads this; PlayerRules.MAX_PER_TEAM is only the capacity.
+var team_size: int         = GameRules.DEFAULT_TEAM_SIZE
 
 # ── Scores ───────────────────────────────────────────────────────────────────
 var scores: Array[int] = [0, 0]
@@ -480,7 +484,7 @@ func _first_available_slot(team_id: int) -> int:
 	for r: Dictionary in reserved_slots:
 		if r.team_id == team_id:
 			occupied.append(r.team_slot)
-	for s: int in range(PlayerRules.MAX_PER_TEAM):
+	for s: int in range(team_size):
 		if s not in occupied:
 			return s
 	return occupied.size()
@@ -567,7 +571,7 @@ func get_slot_roster() -> Array[Dictionary]:
 func try_swap_slot(peer_id: int, new_team_id: int, new_slot: int) -> Dictionary:
 	if not players.has(peer_id):
 		return {}
-	if new_team_id < 0 or new_team_id > 1 or new_slot < 0 or new_slot >= PlayerRules.MAX_PER_TEAM:
+	if new_team_id < 0 or new_team_id > 1 or new_slot < 0 or new_slot >= team_size:
 		return {}
 	var current: Dictionary = players[peer_id]
 	if current.team_id == new_team_id and current.team_slot == new_slot:
@@ -615,13 +619,15 @@ func reset_all() -> void:
 	reserved_slots.clear()
 
 func apply_config(p_num_periods: int, p_period_duration: float, p_ot_enabled: bool, p_ot_duration: float,
-		p_rule_set: int = GameRules.DEFAULT_RULE_SET) -> void:
+		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
+		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	infinite_time    = (p_period_duration <= 0.0)
 	num_periods      = p_num_periods
 	period_duration  = p_period_duration
 	ot_enabled       = p_ot_enabled
 	ot_duration      = p_ot_duration
 	rule_set         = p_rule_set
+	team_size        = p_team_size
 	time_remaining   = 0.0 if infinite_time else p_period_duration
 	period_scores    = _make_period_scores(num_periods)
 
@@ -729,7 +735,8 @@ func get_faceoff_positions() -> Dictionary:
 	var result: Dictionary = {}
 	for peer_id in players:
 		var p: Dictionary = players[peer_id]
-		result[peer_id] = PlayerRules.faceoff_position(p.team_id, p.team_slot, active_faceoff_dot)
+		result[peer_id] = PlayerRules.faceoff_position(
+				p.team_id, p.team_slot, active_faceoff_dot, -1.0, team_size)
 	return result
 
 
@@ -805,6 +812,13 @@ func _on_period_clock_expired() -> void:
 		_set_phase(GamePhase.Phase.END_OF_PERIOD)
 
 func _is_ot_period() -> bool:
+	return is_overtime()
+
+
+# Public: whether play is in sudden-death overtime (any period past regulation).
+# Read at goal time for the Overtime Hero achievement — an OT goal is always the
+# game-winner.
+func is_overtime() -> bool:
 	return current_period > num_periods
 
 func _advance_period() -> void:

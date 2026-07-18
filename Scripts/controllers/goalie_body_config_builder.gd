@@ -333,7 +333,9 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 # Vertical anatomy (matches the 0.52 × 0.72 torso box and 0.26 head in
 # Goalie.tscn — keep in sync if those resize): standing, the torso bottom
 # stays glued to the pad-top seam at 0.86 and the mask tops out at ~1.92 — a
-# 6'3"-class frame on the same scale as the skaters. In the save stances
+# 6'3"-class frame on the same scale as the skaters. The pad-top seam is
+# mirrored to the bot shot model as GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M
+# (the HIGH band's arrival floor) — keep that in sync with this anatomy too. In the save stances
 # (butterfly / slide / RVH) the torso and head TOPS are pinned to their
 # pre-resize values instead: the taller trunk grows DOWN into the pad
 # overlap, so sub-crossbar save coverage stays exactly as tuned (beatable

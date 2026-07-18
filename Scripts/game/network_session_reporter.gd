@@ -36,6 +36,10 @@ func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool,
 	# (every "<key>_max/_avg/_min/_total" plus felt-lag markers) rides in one
 	# jsonb column so adding a metric never requires an ALTER TABLE. Mirrors
 	# how bug_reports stores its telemetry blob.
+	# JSON-null for an absent game_id (a String/null ternary isn't type-compatible).
+	var game_id_value: Variant = null
+	if not game_id.is_empty():
+		game_id_value = game_id
 	var body: Dictionary = {
 		"steam_id": SteamManager.steam_id,
 		"player_name": PlayerPrefs.player_name,
@@ -45,7 +49,7 @@ func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool,
 		"net_sim_active": net_sim_active,
 		"duration_sec": summary.seconds,
 		"felt_lag_count": summary.felt_lag_count,
-		"game_id": game_id if not game_id.is_empty() else null,
+		"game_id": game_id_value,
 		"end_reason": end_reason,
 		"metrics": summary.to_dict(),
 	}
@@ -85,9 +89,18 @@ func _post(url: String, body: Dictionary) -> void:
 	var root: Window = (Engine.get_main_loop() as SceneTree).root
 	var req := HTTPRequest.new()
 	root.add_child(req)
-	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	req.request_completed.connect(func(_result: int, code: int, _hdrs: PackedStringArray, resp: PackedByteArray) -> void:
 		if code < 200 or code >= 300:
-			push_warning("NetworkSessionReporter: HTTP %d" % code)
+			# Include the response body: PostgREST names the offending column /
+			# constraint there (e.g. PGRST204 "column ... not found"), and a bare
+			# code alone can't distinguish a schema-drift 400 from a size-cap one.
+			var detail: String = resp.get_string_from_utf8().strip_edges()
+			if detail.length() > 500:
+				detail = detail.substr(0, 500) + "…"
+			if detail.is_empty():
+				push_warning("NetworkSessionReporter: HTTP %d" % code)
+			else:
+				push_warning("NetworkSessionReporter: HTTP %d — %s" % [code, detail])
 		req.queue_free()
 	)
 	var err: Error = req.request(url, _headers(), HTTPClient.METHOD_POST, JSON.stringify(body))

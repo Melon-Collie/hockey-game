@@ -11,7 +11,8 @@ const STEP_STICKHANDLE: int = TutorialRegistry.STEP_STICKHANDLE
 const STEP_DEFLECT:     int = TutorialRegistry.STEP_DEFLECT
 const STEP_BLADE_LIFT:  int = TutorialRegistry.STEP_BLADE_LIFT
 const STEP_DROP_PUCK:   int = TutorialRegistry.STEP_DROP_PUCK
-const STEP_SHOOT_WRIST:   int = TutorialRegistry.STEP_SHOOT_WRIST
+const STEP_SHOOT_WRIST:    int = TutorialRegistry.STEP_SHOOT_WRIST
+const STEP_SHOOT_BACKHAND: int = TutorialRegistry.STEP_SHOOT_BACKHAND
 const STEP_SHOOT_TARGETS: int = TutorialRegistry.STEP_SHOOT_TARGETS
 const STEP_SHOOT_SLAP:    int = TutorialRegistry.STEP_SHOOT_SLAP
 const STEP_ONE_TIMER:     int = TutorialRegistry.STEP_ONE_TIMER
@@ -113,8 +114,9 @@ const _PASS_PUPPET_POS: Vector3 = Vector3(0.0, 1.0, -7.0)
 # clean over a grounded blade (PuckReceptionRules.blade_can_interact) — on the
 # standard 9 m lane the saucer reached the receiver still in the air and flew
 # past him. The deep lane lets it land mid-flight and slide the rest of the way
-# in, grounded and catchable. Saucers are a stretch-pass tool — the bots' own
-# doctrine agrees (AIActionScoring.SAUCER_MIN_DISTANCE_M).
+# in, grounded and catchable — the same landing-runway bound the bots' saucer
+# doctrine enforces (AIActionScoring.saucer_max_launch_speed): a shorter feed
+# needs a softer flip.
 const _SAUCER_PUPPET_POS: Vector3 = Vector3(0.0, 1.0, -12.0)
 # The saucer wall stands this far in front of the player's staging spot —
 # INSIDE the saucer's airborne span, but with enough runway that the saucer
@@ -402,6 +404,7 @@ func _build_key_tokens() -> void:
 			PlayerPrefs.action_display("move_right")],
 		"sprint":         PlayerPrefs.action_display("sprint"),
 		"brake":          PlayerPrefs.action_display("brake"),
+		"hit":            PlayerPrefs.action_display("hit"),
 		"shoot":          PlayerPrefs.action_display("shoot"),
 		"quick_shot":     PlayerPrefs.action_display("quick_shot"),
 		"slapshot":       PlayerPrefs.action_display("slapshot"),
@@ -458,7 +461,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 			return _step(
 				"Brake",
 				"Hold {brake} to brake hard and stop quickly.",
-				"{brake} is also your brace — a braced skater is far harder to knock off the puck when a hit lands.")
+				"It kills your speed in any direction — stop on a dime to change lanes or hold your ground.")
 		STEP_STICKHANDLE:
 			return _step(
 				"Stickhandling",
@@ -467,12 +470,12 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_DEFLECT:
 			return _step(
 				"Deflect",
-				"Your teammate's going to feed you — don't catch it. Set your loft to LOW ({elevation_up} one notch), hold {stick_lift}, and angle the blade with your cursor to tip the pass as it arrives.",
+				"Your teammate's going to feed you — don't catch it. Tap {elevation_up} to raise your loft to LOW, hold {stick_lift}, and angle the blade with your cursor to tip the pass as it arrives.",
 				"Holding {stick_lift} means redirect, don't receive. At LOW loft the tip flicks the puck UP — that's the deflection goal.")
 		STEP_BLADE_LIFT:
 			return _step(
 				"Blade Lift",
-				"Now play the air. Set loft to HIGH ({elevation_up} again), hold {stick_lift} to raise your blade off the ice, and bat your teammate's lob down out of the air.",
+				"Now play the air. Tap {elevation_up} again to raise your loft to HIGH, hold {stick_lift} to raise your blade off the ice, and bat your teammate's lob down out of the air.",
 				"The raised blade only plays airborne pucks — a grounded pass slides right under it. HIGH knocks the puck DOWN to the ice.")
 		STEP_DROP_PUCK:
 			return _step(
@@ -484,6 +487,11 @@ func _step_def_for(step_id: int) -> TutorialStep:
 				"Wrist Shot",
 				"You've got the puck. Hold {shoot}, drag toward the net, and release. The way you drag is your aim — and the faster you drag, the harder the shot.",
 				"A slow sweep is a soft pass — snap the drag toward the net to really rip it.")
+		STEP_SHOOT_BACKHAND:
+			return _step(
+				"Backhand",
+				"Same wrister, other face of the blade: hold {shoot} and curl the drag across your body, then release — that's the backhand. It comes off softer than your forehand, but in tight it's the release you already have.",
+				"A straight-line drag always reads as forehand — the backhand is the deliberate curl around your body. It won't beat anyone with pace, so pick your spot.")
 		STEP_SHOOT_TARGETS:
 			# Live copy is set per-wave by _show_targets_wave; this is the wave-0 default.
 			return _step(
@@ -518,8 +526,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_SAUCER_PASS:
 			return _step(
 				"Saucer Pass",
-				"A board's in the passing lane — a flat pass can't get through. One notch of loft ({elevation_up}), then {quick_shot}: the saucer flips over it and lands flat.",
-				"Same quick pass, lofted. LOW clears blades and boards mid-flight, then sits down and slides to the target.")
+				"A board's in the passing lane — a flat pass can't get through. Tap {elevation_up} to loft the pass, then {quick_shot}: the saucer flips over the board and lands flat on the far side.",
+				"Same quick pass, lofted. A LOW saucer clears blades and boards mid-flight, then sits down and slides to the target.")
 		STEP_RECEIVE:
 			# Live copy is swapped per-wave; this is the soft-feed default.
 			return _step(
@@ -534,12 +542,12 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_BODY_CHECK:
 			return _step(
 				"Body Check",
-				"Build up speed and skate straight into the opponent to knock them off the puck.",
-				"Get a running start and aim right at them.")
+				"Build up speed, hold {hit} to commit, and drive straight through the opponent to knock them off the puck.",
+				"Committing with {hit} throws your weight into the hit — you land it far harder AND shrug off the collision. An uncommitted bump barely moves them.")
 		STEP_STICK_LIFT:
 			return _step(
 				"Stick Lift",
-				"Set loft to HIGH ({elevation_up}), get under the opponent's stick, and hold {stick_lift} to lift it — that pops the puck off their blade.",
+				"Tap {elevation_up} to raise your loft to HIGH, get under the opponent's stick, and hold {stick_lift} to lift it — that pops the puck off their blade.",
 				"Same gesture as the blade lift: ride your blade high, slide it beneath their stick, and hold {stick_lift} to knock the puck free.")
 		STEP_SHOT_BLOCK:
 			return _step(
@@ -749,6 +757,11 @@ func _begin_step(index: int) -> void:
 			_setup_shooting_drill(_slot_z())
 			_hud.set_objective("Score on the open net.")
 
+		STEP_SHOOT_BACKHAND:
+			# Same open-net slot drill, hand-gated in _on_shooting_shot.
+			_setup_shooting_drill(_slot_z())
+			_hud.set_objective("Score off the backhand.")
+
 		STEP_SHOOT_TARGETS:
 			_setup_shooting_drill(_slot_z())
 			# The stationary goalie stands in for the whole drill — the target
@@ -903,6 +916,8 @@ func _advance_step() -> void:
 		# Mark this tutorial complete so first-launch routing skips it next time
 		# and the SideMenu shows a checkmark next to it.
 		PlayerPrefs.mark_tutorial_complete(tutorial_id)
+		# Course-complete achievement check (no-op until every tutorial is done).
+		GameManager.notify_tutorial_completed()
 		_hud.show_tutorial_complete()
 	else:
 		_begin_step(_step_index)
@@ -1421,6 +1436,17 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 		STEP_SHOOT_WRIST:
 			_last_shot_qualifies = (not is_slapper) and TutorialShotRules.is_dragged_wrister(
 					_wrist_peak_charge, _WRIST_CHARGE_QUALIFY)
+		STEP_SHOOT_BACKHAND:
+			# The release path classifies every wrister FH/BH from the sweep's
+			# chirality and stamps last_release_hand just before this signal
+			# fires ("" for quick shots / slappers — no backhand concept there).
+			_last_shot_qualifies = (not is_slapper) \
+					and _local_controller.last_release_hand == "BH"
+			if _last_shot_qualifies:
+				# Drop a lingering "off the forehand" prompt the moment a real
+				# backhand leaves the blade. Safe to clear broadly: the loft
+				# prompt re-asserts itself every frame if it still applies.
+				_hud.clear_alert()
 		STEP_SHOOT_SLAP:
 			_last_shot_qualifies = is_slapper
 		STEP_SHOOT_FINISH:
@@ -1449,7 +1475,7 @@ const _ELEV_ANY: int = -1
 
 func _expected_elevation() -> int:
 	match _current_step_id():
-		STEP_SHOOT_WRIST, STEP_SHOOT_SLAP:
+		STEP_SHOOT_WRIST, STEP_SHOOT_BACKHAND, STEP_SHOOT_SLAP:
 			return ShotMechanics.ELEVATION_FLAT
 		STEP_SHOOT_TARGETS:
 			match _targets_phase:
@@ -1458,7 +1484,11 @@ func _expected_elevation() -> int:
 				_: return ShotMechanics.ELEVATION_FLAT
 		STEP_DEFLECT, STEP_SAUCER_PASS:
 			return ShotMechanics.ELEVATION_LOW
-		STEP_BLADE_LIFT:
+		STEP_BLADE_LIFT, STEP_STICK_LIFT:
+			# The stick lift rides the same raised blade as the blade lift, which
+			# only comes up at HIGH loft (SkaterController: blade_up requires
+			# elevation >= HIGH). Without HIGH the hold-{stick_lift} does nothing
+			# and there's no other tell — so the step tracks loft like the others.
 			return ShotMechanics.ELEVATION_HIGH
 	return _ELEV_ANY
 
@@ -1474,10 +1504,16 @@ func _update_elevation_prompt() -> void:
 			_elev_alert_shown = false
 		return
 	if _skater.elevation_level < expected:
-		_hud.set_alert(_fmt("Your loft is too low — {elevation_up} for more."))
+		_hud.set_alert(_fmt("Your loft is too low — tap {elevation_up} for more."))
 		_elev_alert_shown = true
 	elif _skater.elevation_level > expected:
-		_hud.set_alert(_fmt("Your loft is too high — {elevation_down} to bring it down."))
+		_hud.set_alert(_fmt("Your loft is too high — tap {elevation_down} to bring it down."))
+		_elev_alert_shown = true
+	elif _current_step_id() == STEP_STICK_LIFT:
+		# Loft correct: unlike the shot steps (which have a visible arc as their
+		# own feedback), the stick lift's raised blade has no tell, so confirm the
+		# loft is set and point them at the gesture.
+		_hud.set_alert(_fmt("Loft's on HIGH — get under his stick and hold {stick_lift}."))
 		_elev_alert_shown = true
 	elif _elev_alert_shown:
 		_hud.clear_alert()
@@ -1542,6 +1578,11 @@ func _shooting_tick(delta: float) -> void:
 			if _last_shot_qualifies:
 				_complete_step()  # scored puck stays in the net through the flash
 			else:
+				# A goal off the wrong release restages after the standard beat.
+				# The backhand drill explains why the goal didn't count — a
+				# silent reset there reads as the drill eating a clean finish.
+				if _current_step_id() == STEP_SHOOT_BACKHAND:
+					_hud.set_alert("In — but off the forehand. Curl the drag around your body and let it go from the backhand.")
 				_begin_restage()
 			return
 
@@ -1610,7 +1651,7 @@ func _on_targets_wave_cleared() -> bool:
 				_target_node.clear()
 			_set_live_copy(
 				"Pick Your Spot",
-				"Nice. Your loft is still on full, though — {elevation_down} twice to flatten back out, or your next shot flies high too.",
+				"Nice. Your loft is still on full, though — tap {elevation_down} twice to flatten back out, or your next shot flies high too.",
 				"Loft is a mode you manage: up for more, down for less.")
 			_hud.set_objective("Take the loft back off.")
 			return false
@@ -1634,7 +1675,7 @@ func _show_targets_wave(phase: int) -> void:
 		1:
 			_set_live_copy(
 				"Pick Your Spot",
-				"Same low holes — but now a board's in the lane. Add one notch of loft ({elevation_up}): the saucer flips over the board and comes back down onto them.",
+				"Same low holes — but now a board's in the lane. Tap {elevation_up} to raise your loft one level: the saucer flips over the board and comes back down onto them.",
 				"LOW loft clears sticks and pads mid-flight, then lands and slides. It's a mode — it stays on until you change it.")
 			_ensure_wall_node()
 			_wall_node.show_wall(
@@ -1643,7 +1684,7 @@ func _show_targets_wave(phase: int) -> void:
 		2:
 			_set_live_copy(
 				"Pick Your Spot",
-				"Up top. One more notch ({elevation_up}) for full loft, and put both away in the top corners over his shoulders.",
+				"Up top. Tap {elevation_up} once more for full loft, and put both away in the top corners over his shoulders.",
 				"Loft buys the height, pace picks where the arc peaks — from here an easy shot crests right at the bar.")
 			_clear_wall()
 			_show_target_set(_HIGH_TARGETS)

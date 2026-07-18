@@ -105,26 +105,26 @@ func _build_ui() -> void:
 
 # Compact version of the game-over score row: [stripe] HOME 2 — 1 AWAY [stripe].
 func _build_score_row() -> Control:
-	var wrap := HBoxContainer.new()
-	wrap.alignment = BoxContainer.ALIGNMENT_CENTER
-	wrap.add_theme_constant_override("separation", 12)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
 
 	_home_stripe_style = _stripe_style()
-	wrap.add_child(_stripe(_home_stripe_style))
-	wrap.add_child(_lbl("HOME", 18, _WHITE))
+	row.add_child(_stripe(_home_stripe_style))
+	row.add_child(_lbl("HOME", 18, _WHITE))
 	_home_score_label = _lbl("0", 40, _WHITE)
-	wrap.add_child(_home_score_label)
+	row.add_child(_home_score_label)
 
 	var dash := _lbl("—", 22, _DIM)
 	dash.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	wrap.add_child(dash)
+	row.add_child(dash)
 
 	_away_score_label = _lbl("0", 40, _WHITE)
-	wrap.add_child(_away_score_label)
-	wrap.add_child(_lbl("AWAY", 18, _WHITE))
+	row.add_child(_away_score_label)
+	row.add_child(_lbl("AWAY", 18, _WHITE))
 	_away_stripe_style = _stripe_style()
-	wrap.add_child(_stripe(_away_stripe_style))
-	return wrap
+	row.add_child(_stripe(_away_stripe_style))
+	return row
 
 
 # Lower-third goal credit for the clip currently replaying.

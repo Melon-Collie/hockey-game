@@ -6,6 +6,7 @@ const BYTES_SIZE: int = 23
 #         u16 flags(21)  flags: shoot_pressed[0] shoot_held[1] slap_pressed[2]
 #         slap_held[3] sprint_held[4] brake[5] elevation_level[6..7]
 #         block_held[8] stick_lift_held[9] stick_lift_pressed[10] quick_shot_pressed[11]
+#         hit_held[12]
 
 # Highest legal loft level (ShotMechanics.ELEVATION_HIGH). Decode clamps the
 # 2-bit wire field to this so a forged 3 can't reach the shot math.
@@ -38,6 +39,12 @@ var sprint_held: bool = false
 # wrister aim — LMB is now always a charged wrister, so the quick shot lives on
 # its own button to remove the tap-vs-hold ambiguity.
 var quick_shot_pressed: bool = false
+# Held THIS tick: the body-check / hit button (C). A committed "line someone up"
+# stance rather than an instantaneous impact — held so the future body-check
+# logic can read intent over a window. Networked (reconcile replays it), so it
+# lives here rather than as a loose local key read. Not yet consumed by any
+# behavior — the button is wired ahead of the hit-system redesign.
+var hit_held: bool = false
 # BOT-ONLY, runtime, NOT serialized (bots are host-simulated, never sent over
 # the wire). Target wrister power fraction (0..1) a bot commits to at its shot/
 # pass windup; the controller converts it to the equivalent cursor speed
@@ -68,6 +75,7 @@ func to_array() -> Array:
 		sprint_held,
 		stick_lift_pressed,
 		quick_shot_pressed,
+		hit_held,
 	]
 
 func to_bytes() -> PackedByteArray:
@@ -96,7 +104,8 @@ func to_bytes() -> PackedByteArray:
 		(0x010 if sprint_held    else 0) | (0x020 if brake          else 0) |
 		((clampi(elevation_level, 0, MAX_ELEVATION_LEVEL) & 0x3) << 6) |
 		(0x100 if block_held     else 0) | (0x200 if stick_lift_held else 0) |
-		(0x400 if stick_lift_pressed else 0) | (0x800 if quick_shot_pressed else 0))
+		(0x400 if stick_lift_pressed else 0) | (0x800 if quick_shot_pressed else 0) |
+		(0x1000 if hit_held else 0))
 	b.encode_u16(21, flags)
 	return b
 
@@ -129,6 +138,7 @@ static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:
 	s.stick_lift_held    = (flags & 0x200) != 0
 	s.stick_lift_pressed = (flags & 0x400) != 0
 	s.quick_shot_pressed = (flags & 0x800) != 0
+	s.hit_held           = (flags & 0x1000) != 0
 	return s
 
 
@@ -154,4 +164,6 @@ static func from_array(data: Array) -> InputState:
 		state.stick_lift_pressed = data[18]
 	if data.size() > 19:
 		state.quick_shot_pressed = data[19]
+	if data.size() > 20:
+		state.hit_held = data[20]
 	return state

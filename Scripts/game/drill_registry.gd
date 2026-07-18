@@ -5,21 +5,26 @@ class_name DrillRegistry
 # session whose whole flow — staging, scoring, HUD — is owned by one dedicated
 # manager node. Adding a new drill means appending here plus writing that
 # manager (and usually a DrillHUD subclass for its strings): no NetworkManager
-# flag, no game_scene branch, no SideMenu wiring change — the Practice menu
-# builds its drill rows from ALL_IDS, and game_scene instantiates the
-# registered manager for NetworkManager.drill_id.
+# flag, no game_scene branch, no SideMenu wiring change — the Drills menu
+# builds its rows from ALL_IDS, and game_scene instantiates the registered
+# manager for NetworkManager.drill_id.
 
 const PENALTY_SHOTS_ID: String = "penalty_shots"
 const SHOT_ACCURACY_ID: String = "shot_accuracy"
+const PASSING_ID: String = "passing"
 
-# Display order — also drives the Practice submenu's drill row order.
-const ALL_IDS: Array[String] = [PENALTY_SHOTS_ID, SHOT_ACCURACY_ID]
+# Display order — also drives the Drills submenu's row order.
+const ALL_IDS: Array[String] = [PENALTY_SHOTS_ID, SHOT_ACCURACY_ID, PASSING_ID]
 
 
-static func get_display_name(drill_id: String) -> String:
+# Translation key for the drill's display name; the raw id for an unknown drill.
+# The domain stays engine-free — the UI tr()s this key. Localized copy lives in
+# locale/translations.csv.
+static func display_name_key(drill_id: String) -> String:
 	match drill_id:
-		PENALTY_SHOTS_ID: return "Penalty Shots"
-		SHOT_ACCURACY_ID: return "Shot Accuracy"
+		PENALTY_SHOTS_ID: return "DRILL_PENALTY_SHOTS"
+		SHOT_ACCURACY_ID: return "DRILL_SHOT_ACCURACY"
+		PASSING_ID: return "DRILL_PASSING"
 	return drill_id
 
 
@@ -29,13 +34,14 @@ static func get_manager_path(drill_id: String) -> String:
 	match drill_id:
 		PENALTY_SHOTS_ID: return "res://Scripts/game/penalty_drill_manager.gd"
 		SHOT_ACCURACY_ID: return "res://Scripts/game/shot_accuracy_manager.gd"
+		PASSING_ID: return "res://Scripts/game/passing_drill_manager.gd"
 	return ""
 
 
 # Whether the drill should have the normal AI goalie PAIR auto-spawned by
-# GameManager (same contract as TutorialRegistry.wants_goalies). Both current
-# drills dress their own net — penalty spawns a lone reactive goalie, accuracy
-# a lone frozen one — so nobody wants the pair yet; a future drill played
+# GameManager (same contract as TutorialRegistry.wants_goalies). None of the
+# current drills want it — penalty spawns a lone reactive goalie, accuracy a
+# lone frozen one, and passing plays on open ice — so a future drill played
 # against live nets can opt in here.
 static func wants_goalie_pair(_drill_id: String) -> bool:
 	return false

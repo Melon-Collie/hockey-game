@@ -51,6 +51,20 @@ extends Node
 # retreat deliberately bypasses this cap (it matches the attacker's closing
 # speed, the real constraint on a backflow).
 @export var depth_max_speed: float = 2.2
+# Minimum perpendicular depth (m in front of the goal line) the goalie CENTER
+# holds while squared to a shot in front of the net (STANDING / READY /
+# RECOVERING / idle BUTTERFLY). The pads are the low-ice blockers, but they and
+# the torso have real Z thickness and swing with the goalie's facing, so a
+# center parked right on the line (the old depth_defensive=0.10 floor, and the
+# arc's near-zero perpendicular depth at sharp angles) let the rear of the body
+# straddle BEHIND the line — a puck could finish crossing the goal-line plane
+# (goal at line + PUCK_COLLISION_RADIUS) before the pad face ever presented.
+# This floor keeps the whole body — pad face included — in front of that plane
+# across facing rotations. It is deliberately NOT applied to the post-integrated
+# (RVH/VH), committed-slide (COILING/SLIDING post seal), behind-net
+# (PLAYING_PUCK), or planted (COVERING/CATCHING) states, where sitting at/behind
+# the line is the correct play (wraps, walkouts, dead-angle post seals).
+@export var min_challenge_depth: float = 0.20
 
 @export var shuffle_speed: float = 2.0
 @export var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
@@ -80,8 +94,9 @@ extends Node
 # playability, and the honest version of that anticipation now exists as the
 # pre-armed read (prearmed_reaction_delay, quiet-eye primed). If a literal
 # model is ever wanted, raise this toward 0.18 and let the prearm carry the
-# fast reads; AIActionScoring.GOALIE_REACTION_DELAY_S mirrors this via
-# GameRules — change together.
+# fast reads. Difficulty-varied (GoalieSkillProfile.reaction_delay_s) and
+# AI-mirrored per tier via AIActionScoring.goalie_leg_delay_s — the default
+# and the scorer's default both read GameRules; change together.
 @export var reaction_delay: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 # Arms specifically take longer to react than legs. Legs are reflexive (drop
 # instantly when the brain reads "low shot"); arms require "where in the
@@ -221,6 +236,17 @@ extends Node
 # dangle wiggle without moving the goalie's set point off the puck.
 @export var shooter_weight_standing: float = 0.25
 @export var shooter_weight_butterfly: float = 0.30
+# Slapshot windup override. While a carrier winds up a slapshot the puck is
+# PINNED at a fixed lateral offset to the blade side (Skater.enter_slapshot_pinning,
+# ~slapper_zone_offset_x = 1 m) and does NOT jitter — it sits rock-steady and IS
+# the honest shot origin the release fires from. The body-weight bias above only
+# exists to reject stickhandle jitter, which is absent here, so applying it squares
+# the goalie ~offset·(1-w) toward the shooter's chest — biased off the puck toward
+# center. That is exactly the "skate up square, rip a slapper past the goalie's
+# side" seam: the shot leaves from the pinned puck 1 m over, but the goalie set his
+# angle 0.25 m closer to center. Track the pinned puck itself (weight → 0) so the
+# goalie squares to where the shot actually comes from.
+@export var shooter_weight_slapper_windup: float = 0.0
 # Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
 # scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
 # effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
@@ -370,8 +396,10 @@ extends Node
 # and made the five-hole close near-instantly once the leg read elapsed. The
 # gap also closes CONTINUOUSLY through the drop (openness converges during
 # drop_progress), so the effective five-hole seal — gap narrower than the puck
-# — lands well before full completion. Mirrors AIActionScoring.GOALIE_
-# BUTTERFLY_DROP_S; change both together.
+# — lands well before full completion. Difficulty-varied (GoalieSkillProfile.
+# butterfly_drop_s) and AI-mirrored per tier via AIActionScoring.goalie_
+# butterfly_drop_s; this default mirrors the scorer's GOALIE_BUTTERFLY_DROP_S
+# baseline — change both together.
 @export var butterfly_drop_speed: float = 0.20      # s for pads to close to floor
 @export var butterfly_radius: float = 0.40          # arc radius from goal center while down
 # Knee shuffle (realism audit F6) — the smallest down-movement tier. Real down
@@ -681,10 +709,13 @@ extends Node
 # counter-read, not a flat buff). The lean is PARTIAL (`prelean_strength` of the
 # way to the predicted reach) and never adds save speed — it only changes the
 # resting hand position, so the arm-delay / glove-speed caps on the actual
-# reaction still hold. Directional pre-lean needs the shooter's aim, which is
-# only host-side for host-controlled shooters (host player + bots); remote
-# shooters fall back to a non-directional "hands up, ready" tell. Host-only like
-# all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
+# reaction still hold. Directional pre-lean needs the shooter's live predicted
+# velocity, which SkaterController publishes every charge tick for BOTH shot types
+# and EVERY shooter — host player, bot, and remote (the host simulates a remote's
+# carry from replicated input, and both the aim and the wrister's world-aligned drag
+# ride the wire). The non-directional "hands up, ready" tell is the fallback only
+# when the current aim isn't at the net, not a remote-shooter limitation. Host-only
+# like all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
 @export var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
 @export var prelean_max_distance: float = 9.0       # m — goalie→shooter range the read fires within
 @export var prelean_ready_lift: float = 0.06        # m — non-directional hands-up lift (remote shooters)
@@ -841,8 +872,9 @@ extends Node
 # to reach corners it should on mid/long shots. Close top-corner snipes still beat
 # the ARM DELAY (arm_reaction_delay 0.18 s > a slot shot's flight), so this only
 # shuts the range shots a real goalie gloves — it doesn't touch the in-tight window.
-# NOTE: AIActionScoring.GOALIE_ARM_DEPLOY_S mirrors this (= HIGH-band EXT / speed);
-# change both together.
+# NOTE: AIActionScoring mirrors this as the arm deploy ramp (goalie_arm_deploy_s
+# = HIGH-band EXT / speed; baseline const GOALIE_ARM_DEPLOY_S, re-derived per
+# tier in set_goalie_profile) — change the baselines together.
 @export var glove_react_max_speed: float = 5.0
 # Blocker (entire BlockArm assembly) reach speed cap, mirroring the glove.
 # Same magnitude — both arms have similar reach speed; if blocker should be
@@ -1112,9 +1144,11 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 
 # Overwrite the difficulty-varying @exports from a skill profile. Only the knobs
 # the profile carries are touched; everything else keeps its authored default.
-# Deliberately does NOT touch reaction_delay or t_push_speed — AIActionScoring
-# mirrors those to predict the goalie, so they stay consistent across tiers (see
-# GoalieSkillProfile). Called from setup() before the cached configs are built.
+# The AI-mirrored reads (leg delay, drop time, lateral accel, arm deploy) are
+# kept honest per tier by AIActionScoring.set_goalie_profile, called where
+# GameManager selects the match's goalie_skill_profile — t_push_speed is the one
+# read knob still fixed across tiers (see GoalieSkillProfile → AI MIRROR).
+# Called from setup() before the cached configs are built.
 func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
 	arm_reaction_delay = profile.arm_reaction_delay_s
 	cross_crease_react_delay = profile.cross_crease_react_delay_s
@@ -1128,6 +1162,10 @@ func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
 	pad_toe_out_butterfly_deg = profile.pad_toe_out_butterfly_deg
 	lateral_accel = profile.lateral_accel_mps2
 	puck_play_go_margin = profile.puck_play_go_margin_s
+	reaction_delay = profile.reaction_delay_s
+	prearmed_reaction_delay = profile.prearmed_reaction_delay_s
+	butterfly_drop_speed = profile.butterfly_drop_s
+	five_hole_base = profile.five_hole_base_m
 
 
 # Live re-apply of a difficulty profile onto a running goalie — used by free play,
@@ -1524,7 +1562,11 @@ func _compute_threat_position() -> Vector3:
 	_chest_t = chest_t
 	# Body bias fades OUT with distance (shooter_weight_far < base): the goalie
 	# squares to the puck at range and keeps only a small in-tight body dash.
-	var w: float = lerpf(base_w, shooter_weight_far, chest_t)
+	# Slapshot windup is the exception: the puck is pinned (no jitter to reject)
+	# and IS the shot origin at every range, so square to it directly — no body
+	# bias, no distance blend. See shooter_weight_slapper_windup.
+	var w: float = shooter_weight_slapper_windup if _reading_slapper_tell \
+			else lerpf(base_w, shooter_weight_far, chest_t)
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
 	# Two leads: CARRIER velocity captures body motion (sustained skating) and is
@@ -1534,8 +1576,17 @@ func _compute_threat_position() -> Vector3:
 	# tight where it keeps the goalie in front of a walkout deke, gone at range
 	# where it only chased stickhandling wiggle. Y is zeroed because skaters
 	# don't move vertically — leading height noise would drift the threat off ice.
+	#
+	# Slapshot windup is the exception: the puck is pinned to the body and moves
+	# WITH it, so `_puck_velocity_est` IS the carrier velocity — the two leads then
+	# double-count the same body motion (~1.67× lead in tight) and OVER-lead a
+	# lateral coast, over-committing the goalie ahead of the pinned puck and opening
+	# the against-the-grain side. There's no independent dangle to catch (the pin
+	# holds the offset fixed), so drop the puck lead during the windup and let the
+	# honest carrier lead alone keep the goalie square to a coasting slapper.
+	var puck_lead_scale: float = 0.0 if _reading_slapper_tell else (1.0 - chest_t)
 	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time \
-			+ _puck_velocity_est * puck_velocity_lead_time * (1.0 - chest_t)
+			+ _puck_velocity_est * puck_velocity_lead_time * puck_lead_scale
 	lead.y = 0.0
 	return blended + lead
 
@@ -2885,8 +2936,18 @@ func _update_position(delta: float) -> void:
 		State.STANDING, State.READY, State.RECOVERING:
 			var pair: Vector2 = _move_along_arc(delta)
 			_current_x = pair.x
-			new_z = pair.y
+			# The arc's perpendicular depth collapses toward the goal line at
+			# sharp angles (goalie_z = goal_line + uz * radius, uz -> 0 wide);
+			# floor it so the pads stay in front of the line. `_current_depth`
+			# (the arc RADIUS) is intentionally not touched — only the realised
+			# Z position is clamped, so the next tick keeps tracing the arc.
+			new_z = _front_of_line_z(pair.y)
 		State.BUTTERFLY:
+			# Idle butterfly is a shot-facing stance: never sit so deep the pads
+			# straddle behind the goal line. Floor the committed depth itself (not
+			# just the final Z) so the slide-commit start depth stays consistent
+			# with the rendered position.
+			_current_depth = maxf(_current_depth, min_challenge_depth)
 			_update_butterfly_five_hole(delta)
 			_try_commit_slide(delta)
 			# Knee shuffle: if still idle butterfly after the slide check (drop
@@ -2966,6 +3027,17 @@ func _update_position(delta: float) -> void:
 		_velocity_x = (_current_x - prev_x) / delta
 		_velocity_z = (new_z - prev_z) / delta
 	goalie.set_goalie_position(_current_x, new_z)
+
+# Clamp a candidate goalie Z so its perpendicular depth in front of the goal
+# line is at least `min_challenge_depth` — keeps the pad face ahead of the
+# goal-line plane in the shot-facing states. Only the states where sitting on
+# the line is wrong call this; post-integrated / slide-seal / behind-net play
+# never does (see the export doc-block).
+func _front_of_line_z(z: float) -> float:
+	var perp: float = (z - _goal_line_z) * _direction_sign
+	if perp < min_challenge_depth:
+		return _goal_line_z + _direction_sign * min_challenge_depth
+	return z
 
 # 2D arc tracing for STANDING/RECOVERING. Target is the arc point at the
 # current radius; choose lateral speed by 2D distance so X and Z move at the
@@ -3374,10 +3446,10 @@ func _set_pad_toe_out_inputs() -> void:
 
 # Populate the pose builder's pre-lean fields. The goalie leans toward a charging
 # shot's predicted impact while reading the windup (see _is_reading_shot_threat).
-# Directional lean needs the shooter's live predicted velocity, which is only
-# published host-side for host-controlled shooters (host player + bots); remote
-# shooters leave it ZERO and get the non-directional readiness tell. Re-solved
-# every tick off the LIVE aim, so a late release moves the impact off the lean.
+# Directional lean needs the shooter's live predicted velocity, which SkaterController
+# publishes for both shot types and every shooter including remotes (the host
+# simulates a remote's carry from replicated input). Re-solved every tick off the
+# LIVE aim, so a late release moves the impact off the lean.
 func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = false
 	_pose_inputs.prelean_directional = false
@@ -3391,7 +3463,7 @@ func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = true
 	var vel: Vector3 = carrier.predicted_shot_velocity
 	if vel.length_squared() < 0.01:
-		return  # remote shooter (no aim on the wire) — non-directional tell only
+		return  # not yet published this charge (freshness guard) — non-directional tell
 	var res: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, vel, _goal_line_z, _goal_center_x,
 			_shot_cfg, _scratch_prelean_shot)

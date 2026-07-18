@@ -51,6 +51,14 @@ var team_id_by_peer: Dictionary = {}
 # adjustment) — same behaviour as before this field existed.
 var acceleration_by_peer: Dictionary = {}
 
+# Smoothed per-peer HEADING turn rate (rad/s, signed), keyed by peer_id — how
+# fast each skater's travel direction is rotating. The passer's receiver-
+# commitment read: a receiver mid-cut is hard to lead, so a feed to one is
+# priced as riskier in the pass EV (see _pass_variant_ev → pass_miss_prob). A
+# running estimate, so confidence builds over time. Missing entries default to
+# 0.0 (settled / no penalty) — same behaviour as before this field existed.
+var heading_omega_by_peer: Dictionary = {}
+
 # Per-peer attribute-scaled capabilities (AISkaterCaps), keyed by peer_id — every
 # player's REAL build (top speed, accel, reach, shot speed, weight/brace), so a
 # bot can model a specific teammate or opponent with what they can actually do
@@ -67,15 +75,35 @@ var caps_by_peer: Dictionary = {}
 # league defaults. Defaults equal the baseline, so unwired contexts (unit tests)
 # keep the prior behaviour. (Cross-player evaluation reads caps_by_peer above.)
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+# This bot's real all-direction thrust (Agility-scaled max_accel). Feeds
+# time_to_arrive's cross-momentum shed cost, so a nimble build prices a redirect
+# (killing sideways momentum to reach a carry candidate) faster than a heavy one.
+var self_max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
-# This bot's own aim-execution spread (radians, worst-case): the output-cursor
-# noise over the blade aim arm. The shot-aim model reserves this much of the
-# net's entry width so a corner snipe's wobble spreads into net/miss, not into
-# the post band, and the shot SCORE demands the same as extra window (the fit
-# inset in _hole_open_angle) — a noisier hand needs a wider opening for the
-# same chance, so spread shapes shot selection too. 0 for a noiseless
-# (test/raw) agent.
+# This bot's own aim-execution spread (radians, worst-case): the per-release
+# sampled aim error over the blade aim arm. The shot-aim model reserves this
+# much of the net's entry width so a corner snipe's error spreads into
+# net/miss, not into the post band, and the shot SCORE demands the same as
+# extra window (the fit inset in _hole_open_angle) — a wobblier hand needs a
+# wider opening for the same chance, so spread shapes shot selection too.
+# 0 for an error-free (test/raw) agent.
 var self_aim_spread_rad: float = 0.0
+# This bot's own PASS release-direction error (radians): the pass counterpart of
+# self_aim_spread_rad, from BotSkillProfile.pass_aim_error_rad. Drives the
+# derived pass-miss probability (AIActionScoring.pass_miss_prob) — projected to
+# the tape over the pass distance, it sets how often a clear-lane feed still
+# fumbles, so a wobblier-handed bot's long feeds carry more risk. 0 for an
+# error-free (test/raw) agent — the pass miss then collapses to the base floor.
+var self_pass_aim_error_rad: float = 0.0
+# This bot's shot release-timing variance (max seconds LATE —
+# BotSkillProfile.shot_timing_error_s; execution samples uniform [0, max]).
+# The carrier's own shot evals hand the goalie the EXPECTED lateness
+# (× 0.5, the mean of that draw), scoring each shot at its median release:
+# a window thinner than the median slop zeroes out through the hole
+# geometry, one around it is attempted and converts only when the sampled
+# delay lands early enough — the honest counterpart of the aim spread, on
+# the WHEN axis instead of the WHERE. 0 for a tick-perfect (test/raw) agent.
+var shot_timing_error_s: float = 0.0
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # This bot's body-check delivery (Size + Physical) and current stagger, so the
 # on-puck defensive roles (PRESSURE / FORECHECK F1) can decide whether a check
@@ -93,6 +121,16 @@ var self_handle_reach: float = 0.9
 # unwired (unit tests) reproduce the prior scoring.
 var self_reach_cone_half_angle: float = deg_to_rad(157.0)
 var self_facing_turn_rate: float = 6.0
+# Release-offset sampling inputs (carrier shoot-now eval): the Hands-scaled blade
+# traverse speed (relocating the puck across the envelope costs offset/speed of
+# extra goalie-tracking time), the backhand power coefficient (a backhand-side
+# release fires at this fraction of the wrister pace), and the handedness
+# perpendicular sign orienting which lateral side IS the forehand (matches
+# SkaterAgentStateMachine._handedness_perp_sign: -1 right-handed, +1 left).
+# League/RH defaults when unwired.
+var self_blade_speed: float = 10.0
+var self_backhand_power_coefficient: float = 0.75
+var self_forehand_perp_sign: float = -1.0
 
 # ── Difficulty pace knobs (from BotSkillProfile, this bot only) ───────────────
 # Set by SkaterAgentStateMachine each tick from the applied skill profile.
@@ -108,6 +146,38 @@ var check_aggression: float = 1.0
 # Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
 # man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
 var defensive_anticipation_scale: float = 1.0
+# Seconds after gaining possession during which the carrier may only CARRY —
+# no SHOOT / PASS / DUMP commit until the puck has "settled on the tape".
+# 0.0 = today's instant release. Consumed by AIRoleCarrier's settle window.
+var carry_settle_delay_s: float = 0.0
+# COGNITION gate: false = this bot models the goalie as always SET — the
+# unsettled re-square race is invisible to its pass / one-timer EV
+# (carrier._goalie_unsettled_at returns 0). The aim-side half of the same gate
+# (across-the-grain velocity projection) lives on the state machine, which owns
+# the aim. True = the perfect-bot / Hard read.
+var reads_goalie_motion: bool = true
+# COGNITION gate: false = the carrier never values a play that doesn't exist
+# yet (carrier._best_developing_feed returns 0) — no protecting the puck for a
+# staging finisher or an opening outlet. True = the perfect-bot / Hard read.
+var holds_for_developing_feeds: bool = true
+# COGNITION gate: false = this bot is blind to receiver commitment — it prices
+# a feed to a hard-cutting receiver identically to one skating a straight line
+# (heading_omega read as 0 in the pass EV), so it chucks passes at turning
+# players (a newcomer-beatable flaw). True = it reads the receiver's turn and
+# waits for the settle before feeding (the Normal / Hard read).
+var reads_receiver_commitment: bool = true
+# COGNITION gate: false = the rush gap defender (CONTAIN) sees only the
+# carrier and retreats on the carrier→net line; true = it reads the carrier's
+# passing options and splits toward an uncovered receiver's feed lane — the
+# 2-on-1 "play the pass" doctrine (AIRoleContain's lane fan).
+var plays_rush_pass_lanes: bool = true
+# COGNITION gate: true = the carrier shields the puck with its body — under
+# pressure the blade pulls the puck to the protected side of the reachable-set
+# seam (carrier protect_offset/protect_gain, consumed by the state machine's
+# carry mouse aim) and the poke-evade deke cuts toward the seam instead of a
+# blind perpendicular. False = today's naive forward carry (the puck stays
+# presented ahead of the body — the easy pickpocket a newcomer needs).
+var protects_the_puck: bool = true
 
 # ── Smart-ping directive (a human teammate's tactical order) ──────────────────
 # Populated per dispatch from TeamBrain.ping_* (AIPingDirectives). Defaults are
@@ -128,6 +198,39 @@ var ping_pass_target_peer: int = -1
 # per-call tick math by this so wall-clock durations don't stretch with the tier.
 var dispatch_period_ticks: int = 1
 
+# The target_position this bot's role chose on its PREVIOUS dispatch, or
+# Vector3.INF when there is none (first dispatch, or the slot changed since —
+# the state machine stamps INF across a slot change so no role inherits
+# another role's target). Roles that pick their target by candidate argmax
+# use it for switch-hysteresis: keep the standing target unless a fresh
+# candidate beats it by a real margin, so two near-tied candidates can't
+# trade places every dispatch and oscillate the bot between them (see the
+# shared AIRoleHelpers.append_incumbent / incumbent_bonus / TARGET_SWITCH_MARGIN).
+var prev_role_target: Vector3 = Vector3.INF
+
+# The man this bot's zone role locked last dispatch (RoleDecision.
+# locked_man_pid round-tripped by the state machine; -1 = none / role
+# changed). The soft-lock's area-boundary hysteresis keys on it.
+var prev_locked_man: int = -1
+
+# Whether the match's ruleset enforces offsides (ARCADE ghost / NHL delayed —
+# both void an in-zone-early receiver until he tags up at the blue line; only
+# the OFF ruleset plays cherry-pickers as live threats). Read by the counter-
+# channel build: an offside-positioned opponent's outlet gain clamps to his
+# blue line (his earliest legal touch). Stamped per ctx build from the state
+# machine's latched rule_set.
+var offsides_enforced: bool = true
+
+# ── 5v5 position identity ────────────────────────────────────────────────────
+# Latched match team size (TeamBrain.team_size). Gates the 5v5-only reads
+# (transition exposure) — 3v3 behavior is untouched at 3.
+var team_size: int = GameRules.DEFAULT_TEAM_SIZE
+# Whether this bot's lobby position is a defenseman (LD/RD), and its home
+# side sign (-1 = left, +1 = right, 0 = center). Feed the defensive-
+# responsibility anchor (AIZoneCoverage.defensive_anchor).
+var self_is_defense: bool = false
+var self_home_side: float = 0.0
+
 # ── Reusable scratch buffers (not inputs) ────────────────────────────────────
 # The SkaterAgentStateMachine reuses one RoleContext across dispatches, so the
 # collect_* helpers fill these buffers instead of allocating fresh arrays at AI
@@ -144,3 +247,6 @@ var scratch_opp_states: Array[SkaterNetworkState] = []
 var scratch_opp_caps: Array[AISkaterCaps] = []
 var scratch_teammates: Array[Vector3] = []
 var scratch_opp_receivers: Array[Vector3] = []
+# Per-decide option-value upper bounds for the pruned carrier_best_option
+# (see AIRoleHelpers.carrier_option_bases).
+var scratch_option_bases: Array[float] = []

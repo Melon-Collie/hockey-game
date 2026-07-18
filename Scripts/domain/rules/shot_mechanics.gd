@@ -7,8 +7,10 @@ class ShotResult:
 	var direction: Vector3   # normalized, includes Y if elevated
 	var power: float         # final shot power after backhand penalty / charge curve
 
-	static func make(d: Vector3, p: float) -> ShotResult:
-		var r := ShotResult.new()
+	# Fills `out` when provided (a caller-owned scratch for hot paths that re-solve
+	# every tick), else allocates a fresh instance.
+	static func make(d: Vector3, p: float, out: ShotResult = null) -> ShotResult:
+		var r: ShotResult = out if out != null else ShotResult.new()
 		r.direction = d
 		r.power = p
 		return r
@@ -194,7 +196,8 @@ static func release_wrister(
 		charge_direction: Vector3 = Vector3.ZERO,
 		is_quick_shot: bool = false,
 		sweep_speed: float = 0.0,
-		stroke_travel: float = INF) -> ShotResult:
+		stroke_travel: float = INF,
+		out: ShotResult = null) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
 
@@ -210,7 +213,7 @@ static func release_wrister(
 				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 		return ShotResult.make(
 				Vector3(tap_dir.x, tap_y, tap_dir.z).normalized(),
-				cfg.quick_shot_power)
+				cfg.quick_shot_power, out)
 
 	# WRISTER — aim along the drag, power from the pure mouse-speed model with
 	# the travel-gated ceiling (wrister_power_t). Falls back to player→mouse
@@ -228,7 +231,7 @@ static func release_wrister(
 	var y: float = loft_y(power, _loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 	return ShotResult.make(
 			Vector3(wrister_dir.x, y, wrister_dir.z).normalized(),
-			power)
+			power, out)
 
 # Slapper release — power scales linearly with charge time.
 #
@@ -240,7 +243,8 @@ static func release_slapper(
 		elevation_level: int,
 		charge_time: float,
 		cfg: SlapperConfig,
-		shot_direction: Vector3 = Vector3.ZERO) -> ShotResult:
+		shot_direction: Vector3 = Vector3.ZERO,
+		out: ShotResult = null) -> ShotResult:
 	var shot_dir: Vector3
 	if shot_direction.length_squared() > 0.0001:
 		shot_dir = Vector3(shot_direction.x, 0.0, shot_direction.z).normalized()
@@ -254,7 +258,7 @@ static func release_slapper(
 	var y: float = loft_y(power, _loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 	return ShotResult.make(
 			Vector3(shot_dir.x, y, shot_dir.z).normalized(),
-			power)
+			power, out)
 
 # Vertical launch speed (m/s) for a loft level. Levels above HIGH clamp to
 # high — the input decode already bounds the wire value, this is belt-and-braces.
@@ -313,3 +317,37 @@ static func follow_through_aim(
 # Should a blade-in-wall squeeze auto-release the puck? Pure threshold check.
 static func should_release_on_wall_pin(squeeze: float, threshold: float) -> bool:
 	return squeeze > threshold
+
+# Below this along-wall carrier speed (m/s) a wall-pin release has no natural
+# direction (pinned dead against the boards), so it falls back to the inward
+# normal rather than picking an arbitrary side.
+const WALL_PIN_MIN_ALONG_SPEED: float = 0.5
+
+# Direction to squirt a carried puck when the blade is squeezed into the boards
+# past the release threshold. A real puck lost on the wall dribbles ALONG the
+# boards in the direction the carrier was moving — not straight out into the slot
+# (an unnatural giveaway to the middle). `wall_normal` points INWARD (away from
+# the boards, the get_blade_wall_normal convention); the wall tangent is its 90°
+# rotation in XZ. Projects the carrier's horizontal velocity onto that tangent and
+# releases along it, signed by which way the carrier was travelling. `inward_bias`
+# blends that fraction of the inward normal into the along-wall direction so the
+# puck peels a touch off the boards rather than hugging them (0 = pure slide).
+# Falls back to the inward normal when the carrier is pinned with no along-wall
+# momentum (so the puck still comes free), and to the carrier's heading — else
+# ZERO — when there is no usable wall normal (callers keep their own degenerate
+# fallback on ZERO).
+static func wall_pin_release_direction(
+		wall_normal: Vector3, carrier_velocity: Vector3, inward_bias: float = 0.0) -> Vector3:
+	var vel := Vector3(carrier_velocity.x, 0.0, carrier_velocity.z)
+	var n := Vector3(wall_normal.x, 0.0, wall_normal.z)
+	if n.length_squared() < 0.0001:
+		return vel.normalized() if vel.length_squared() > 0.0001 else Vector3.ZERO
+	n = n.normalized()
+	var tangent := Vector3(-n.z, 0.0, n.x)  # along the boards
+	var along: float = vel.dot(tangent)
+	if absf(along) < WALL_PIN_MIN_ALONG_SPEED:
+		return n  # pinned dead — no along-wall direction; release inward so it frees
+	var dir: Vector3 = tangent * signf(along)
+	if inward_bias > 0.0:
+		dir += n * inward_bias  # peel slightly off the boards so it doesn't hug them
+	return dir.normalized()

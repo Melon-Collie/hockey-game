@@ -49,6 +49,34 @@ static func decide(ctx: RoleContext, is_high: bool) -> RoleDecision:
 	return _decide_mid(ctx)
 
 
+# 5v5's 1-2-2 second layer (plan §2): the same inverse-pass-threat argmax
+# as the 3v3 F2, run around a LANE-specific search center — the strong-side
+# man works the wall at half-wall height (kill the first outlet: the
+# half-wall winger), the weak-side man locks the middle lane at
+# circle-tops-to-line height (kill the center outlet + cross-ice reverse).
+# The pair re-sorts automatically when the puck crosses (strong_x flip
+# re-elects the slots).
+const F2_STRONG_WALL_INSET_M: float = 4.0
+const F2_STRONG_DEPTH_OFF_GOAL_M: float = 12.0
+
+
+static func decide_f2(ctx: RoleContext, is_strong: bool) -> RoleDecision:
+	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
+	if not carrier_pos.is_finite():
+		var d := RoleDecision.new()
+		d.target_position = ctx.self_pos
+		return d
+	var center: Vector3
+	if is_strong:
+		center = Vector3(
+				ctx.strong_x * (GameRules.RINK_HALF_WIDTH - F2_STRONG_WALL_INSET_M),
+				0.0,
+				-ctx.own_goal_dir * (GameRules.GOAL_LINE_Z - F2_STRONG_DEPTH_OFF_GOAL_M))
+	else:
+		center = _mid_search_center(ctx, carrier_pos)
+	return _decide_mid_at(ctx, carrier_pos, center)
+
+
 # ── F3: high safety — hold the line only while the race home is winnable ─────
 static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -58,46 +86,40 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
 	var wall_x: float = ctx.strong_x * (GameRules.RINK_HALF_WIDTH - F3_WALL_INSET_M)
 
-	# The pinch read: how much time does the FASTEST opponent (momentum-aware,
-	# real Speed caps) need to reach our net? F3 may stand anywhere it can
-	# still beat that race with a standing-start sprint PLUS the set-up margin
-	# (arrive stopped and facing the play, not blowing past the cage). That
-	# bounds the hold point to a circle of radius R around our net; the hold
-	# is the most FORWARD point of F3's wall lane inside it — the blue line
-	# when the race is comfortable (opponents bottled deep), sagging down the
-	# wall as a breakout threat develops or a stretch man lurks behind the
-	# line. Closed-form: on the lane x = wall_x, dist-to-net <= R means
-	# |z - net.z| <= sqrt(R^2 - (wall_x - net.x)^2).
+	# The pinch read: hold the blue-line stand while it contains every
+	# counter path (fill_counter_channels — outlet flight + carry, raced to
+	# the first path station F3 can reach set). Opponents bottled deep keep
+	# the line; a breakout threat or a stretch man lurking behind it sags
+	# the hold down the retreat line toward home — sag-to-even, exactly as
+	# far as the developing counter demands.
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	var r: float = AIRoleHelpers.race_home_radius(ctx, opp_states, our_net)
-	var hold_z: float = blue_z
-	if r < INF:
-		var dx: float = wall_x - our_net.x
-		var lane_reach_sq: float = r * r - dx * dx
-		# Lane never reaches inside the circle (degenerate: the threat beats us
-		# home from anywhere) → stand at the lane point nearest our net.
-		var lane_reach: float = sqrt(lane_reach_sq) if lane_reach_sq > 0.0 else 0.0
-		# Most forward allowed z on the lane, then never forward of the blue line.
-		var allowed_fwd: float = ctx.own_goal_dir * our_net.z - lane_reach
-		hold_z = ctx.own_goal_dir * maxf(ctx.own_goal_dir * blue_z, allowed_fwd)
-	d.target_position = Vector3(wall_x, 0.0, hold_z)
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	d.target_position = AIRoleHelpers.most_forward_feasible(
+			Vector3(wall_x, 0.0, blue_z), ctx.self_max_speed, ctx.self_max_accel)
 	return d
 
 
 # ── F2: mid-lane breakout-pass read ──────────────────────────────────────────
 static func _decide_mid(ctx: RoleContext) -> RoleDecision:
-	var d := RoleDecision.new()
-
 	# Read off the carrier; fall back to the puck when it's loose (a
 	# loose puck deep in their zone is a prime forecheck moment). Stand
 	# still only if there's no puck at all.
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
+		var d := RoleDecision.new()
 		d.target_position = ctx.self_pos
 		return d
+	return _decide_mid_at(ctx, carrier_pos, _mid_search_center(ctx, carrier_pos))
+
+
+# The F2 argmax body, parameterized on the search center so the 3v3 mid read
+# and the 5v5 lane pair share one implementation.
+static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
+		search_center: Vector3) -> RoleDecision:
+	var d := RoleDecision.new()
 
 	var opp_teammates: Array[Vector3] = ctx.scratch_opp_receivers
 	# Anticipate: lead the breakout-pass receivers to where they're cutting.
@@ -105,7 +127,7 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	if opp_teammates.is_empty():
 		# No outlet receivers to deny — sit at the high-zone read spot so
 		# F2 still pressures the breakout lane rather than freezing.
-		d.target_position = _mid_search_center(ctx, carrier_pos)
+		d.target_position = search_center
 		return d
 
 	# We're defending OUR net, but F2's job is to deny the opp's BREAKOUT
@@ -118,9 +140,21 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
-	var search_center: Vector3 = _mid_search_center(ctx, carrier_pos)
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the forecheck spot unless a fresh one deflates the
+	# feed clearly more, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
+
+	# Per-receiver pass-threat upper bounds (no candidate appended) for the
+	# per-candidate max() early-out — same monotone-in-defenders argument as
+	# AIRoleHelpers.carrier_option_bases, same exact result.
+	var bases: Array[float] = ctx.scratch_option_bases
+	bases.clear()
+	for opp_pos: Vector3 in opp_teammates:
+		bases.append(AIActionScoring.threat_surface_pass(
+				carrier_pos, opp_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
 
 	var best_pos: Vector3 = search_center
 	var best_score: float = -INF
@@ -140,8 +174,8 @@ static func _decide_mid(ctx: RoleContext) -> RoleDecision:
 			continue
 		var threat: float = _max_pass_threat(
 				c, carrier_pos, opp_teammates, our_net, our_goalie_pos,
-				our_team_excluding_self)
-		var score: float = -threat
+				our_team_excluding_self, bases)
+		var score: float = -threat + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c
@@ -167,22 +201,41 @@ static func _mid_search_center(ctx: RoleContext, carrier_pos: Vector3) -> Vector
 
 # Highest pass-threat surface the carrier could exploit to any teammate,
 # with our hypothetical defender at `candidate` added to the carrier's
-# "opponents" list. Same primitive PRESSURE uses.
+# "opponents" list. Same primitive PRESSURE uses. `bases` (per-receiver
+# threats WITHOUT the candidate, in opp_teammates order) bound each term
+# from above — adding a defender only lowers a surface — so terms evaluate
+# in descending-bound order and stop when the running max meets the next
+# bound: identical result, fewer surfaces.
 static func _max_pass_threat(
 		candidate: Vector3,
 		carrier_pos: Vector3,
 		opp_teammates: Array[Vector3],
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
-		our_team_excluding_self: Array[Vector3]) -> float:
-	var carrier_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
-	carrier_view_defenders.append(candidate)
+		our_team_excluding_self: Array[Vector3],
+		bases: Array[float]) -> float:
+	# Carrier's view of defenders = our team + me at c. Append-and-restore the
+	# caller's array in place instead of duplicating it per candidate (10×/decide
+	# in F2's positioning argmax); the array is left exactly as passed and keeps
+	# its capacity across the push/pop, so steady-state calls don't alloc.
+	our_team_excluding_self.push_back(candidate)
 
 	var max_threat: float = 0.0
-	for opp_pos: Vector3 in opp_teammates:
+	var used: int = 0
+	while true:
+		var bi: int = -1
+		var bound: float = -1.0
+		for i: int in bases.size():
+			if used & (1 << i) == 0 and bases[i] > bound:
+				bound = bases[i]
+				bi = i
+		if bi == -1 or bound <= max_threat:
+			break
+		used |= 1 << bi
 		var threat: float = AIActionScoring.threat_surface_pass(
-				carrier_pos, opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, carrier_view_defenders)
+				carrier_pos, opp_teammates[bi], our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 		if threat > max_threat:
 			max_threat = threat
+	our_team_excluding_self.pop_back()
 	return max_threat

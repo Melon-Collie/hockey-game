@@ -81,8 +81,35 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				0.0,
 				0.0,
 				our_net.z - ctx.own_goal_dir * GameRules.SLOT_DIST_M)
+	# Per-opp threat upper bounds (no candidate appended) for the per-
+	# candidate max() early-out — same monotone-in-defenders argument as
+	# AIRoleHelpers.carrier_option_bases, same exact result.
+	var bases: Array[float] = ctx.scratch_option_bases
+	bases.clear()
+	for opp_pos: Vector3 in opp_positions:
+		bases.append(AIActionScoring.threat_surface_shoot(
+				opp_pos, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+
+	# Far from the recovery region, skate at the CALCULATED cover directly:
+	# the stick-in-the-lane point on the biggest base threat — the same
+	# cover geometry the assigned-man path uses — instead of refining a
+	# minimax between spots that get re-read from closer before arrival
+	# (see STATION_ARGMAX_LOD_M).
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, search_center):
+		var worst: int = 0
+		for i: int in bases.size():
+			if bases[i] > bases[worst]:
+				worst = i
+		d.target_position = AIThreatAssignment.cover_anchor(
+				opp_positions[worst], our_net)
+		return d
+
 	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
 			ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the recovery spot unless a fresh one covers clearly
+	# more dangerous ice, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -94,7 +121,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 		var mark_score: float = -_max_shot_threat(
 				c, opp_positions, our_net, our_goalie_pos,
-				our_team_excluding_self)
+				our_team_excluding_self, bases) + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if mark_score > best_score:
 			best_score = mark_score
 			best_pos = c
@@ -109,22 +136,39 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 # position_potential when score_shoot returns 0 — gives the fallback a non-zero
 # gradient across opp positions even when no opp is in immediate shooting range,
 # so an unassigned marker pulls into the dominant opp's pressure cone instead of
-# sitting flat at slot.
+# sitting flat at slot. `bases` (per-opp threats WITHOUT the candidate, in
+# opp_positions order) bound each term from above — adding a defender only
+# lowers a surface — so terms evaluate in descending-bound order and stop when
+# the running max meets the next bound: identical result, fewer surfaces.
 static func _max_shot_threat(
 		candidate: Vector3,
 		opp_positions: Array[Vector3],
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
-		our_team_excluding_self: Array[Vector3]) -> float:
-	# Build the opp's view of defenders: our team + me at c.
-	var opp_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
-	opp_view_defenders.append(candidate)
+		our_team_excluding_self: Array[Vector3],
+		bases: Array[float]) -> float:
+	# Opp's view of defenders = our team + me at c. Append-and-restore the
+	# caller's array in place instead of duplicating it per candidate (10×/decide
+	# in the unassigned-marker fallback); the array is left exactly as passed and
+	# keeps its capacity across the push/pop, so steady-state calls don't alloc.
+	our_team_excluding_self.push_back(candidate)
 
 	var max_threat: float = 0.0
-	for opp_pos: Vector3 in opp_positions:
+	var used: int = 0
+	while true:
+		var bi: int = -1
+		var bound: float = -1.0
+		for i: int in bases.size():
+			if used & (1 << i) == 0 and bases[i] > bound:
+				bound = bases[i]
+				bi = i
+		if bi == -1 or bound <= max_threat:
+			break
+		used |= 1 << bi
 		var threat: float = AIActionScoring.threat_surface_shoot(
-				opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, opp_view_defenders)
+				opp_positions[bi], our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
 		if threat > max_threat:
 			max_threat = threat
+	our_team_excluding_self.pop_back()
 	return max_threat

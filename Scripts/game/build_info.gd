@@ -88,7 +88,57 @@ const VERSION: String = "dev"
 #     context-sensitive team message + bot-directive broadcast. New @rpc
 #     methods shift the name-sorted RPC indices (see v14), so a bump is
 #     required even though existing wire formats are unchanged.
-const PROTOCOL_VERSION: int = 23
+# v24: stats packet grew — PlayerStats.to_array() 10 -> 11 (game_winning_goals,
+#     host-stamped at the final horn for the Three Stars GWG bonus), so
+#     STATS_PLAYER_RECORD_SIZE 11 -> 12.
+# v25: rematch vote widened bool -> int (RematchVoteRules.Choice) so the
+#     end-of-game vote carries a flavor — REMATCH or return-to-LOBBY — through
+#     the same request/notify pair (a mixed-build vote would decode the wrong
+#     variant type), plus a new notify_rematch_voters RPC (host-broadcast voter
+#     total, the skip-vote pattern) shifting the name-sorted RPC indices.
+# v26: input flags gain bit [12] — hit_held (the body-check / hit button, C).
+#     Reuses a previously-zero bit in the existing u16 flags, so BYTES_SIZE is
+#     unchanged, but the wire semantics differ (a mixed-build host would read a
+#     new client's hit intent as noise), so a bump is required. Not yet consumed
+#     by any behavior — wired ahead of the hit-system redesign.
+# v27: skater world-state block 40 -> 41 B — adds knockdown_timer (u8 @0.01s) after
+#     stagger_timer, so a hard body check that knocks the victim down replicates and
+#     the local victim's predicted knockdown survives reconcile (same rail/reason as
+#     stagger's v10 add).
+# v28: intent byte gains bit [6] — hit_committed (the body-check brace/delivery
+#     signal, moved off brake onto the Hit button). No block-size change (spare bit),
+#     but a client now reads a remote victim's brace and a remote attacker's
+#     full-vs-passive delivery from it, so a bump is required.
+# v29: two new host-broadcast cue RPCs (notify_post_hit / notify_goalie_hit) so a
+#     puck off the post or a pad/goalie save is heard by every peer, not only those
+#     whose local puck prediction registered the contact (matching the existing
+#     deflection / board / body-block broadcasts). New RPC methods shift the
+#     name-sorted RPC indices, so a mixed-build pair would call the wrong method.
+# v30: stats packet grew — PlayerStats.to_array() 11 -> 14 (one_timer_goals,
+#      tip_goals, ot_goals: host-tagged goal-flavor / overtime-winner counters
+#      driving the One-Timer / Redirect / Overtime Hero achievements), so
+#      STATS_PLAYER_RECORD_SIZE 12 -> 15.
+# v31: pickup / poke / stick-lift claim RPCs carry the client's own blade geometry
+#     (client-authoritative "aim"): pickup adds blade_curr + blade_prev + top_hand,
+#     poke adds blade_curr + blade_prev, stick-lift adds blade_curr. The host now
+#     validates against the client-sent blade (reach-clamped to the server body)
+#     instead of reconstructing it from its self-view snapshot, so a legit grab the
+#     host's reconstruction was rejecting (the grab-then-lose bug) now confirms. A
+#     mixed-build host would read the extra Vector3 args as garbage, so a bump is
+#     required.
+# v32: 5v5 mode — notify_lobby_settings / notify_game_start /
+#      notify_join_in_progress each grew a positional team_size arg, and
+#      team_slot's range widened to 0..4 (LD/RD lobby positions).
+# v33: notify_lobby_settings grew bot_difficulty + goalie_difficulty args so
+#      clients' dimmed lobby dropdowns mirror the host's AI difficulty picks
+#      (display only — the AI is host-simulated from the host's PlayerPrefs).
+# v34: input-batch header u16 repurposed — was the client's last-received
+#      world-state seq (an echo the host diffed to estimate loss, which
+#      undersampled and inflated a clean link to ~50%); now carries the client's
+#      OWN measured downstream loss in basis points, stored verbatim as the peer
+#      loss. Same header size, but a mixed-build host would read the field as a
+#      seq and mis-estimate loss, so a bump is required.
+const PROTOCOL_VERSION: int = 34
 
 
 func _ready() -> void:

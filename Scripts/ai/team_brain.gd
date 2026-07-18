@@ -33,6 +33,10 @@ const TICK_PERIOD: float = 1.0 / 6.0
 const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
+# Latched match team size (3 or 5). Selects the role-slot path: 3 → the
+# legacy AIRoleSlots election (verbatim), 5 → AIRoleSlots5's position-aware
+# group-scoped election. Set once at construction from the state machine.
+var team_size: int = GameRules.DEFAULT_TEAM_SIZE
 var state: int = AIPossessionState.State.DZONE
 # Live smart-ping directives for this team's bots (host-only AI bookkeeping,
 # same shape as _one_timer_ready_by_peer). GameManager routes a validated
@@ -42,7 +46,7 @@ var ping_directives := AIPingDirectives.new()
 var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Slot
 # Central man-on-threat partition: backline defender peer_id -> the opponent
 # (carrier's receiver) it should cover. Computed per tick in defensive states
-# so ANCHOR / COVER each focus on a DISTINCT man instead of all collapsing on
+# so the MARK defenders each focus on a DISTINCT man instead of all collapsing on
 # the single most dangerous opponent. Empty in offensive / neutral states.
 var threat_assignments: Dictionary[int, int] = {}    # defender peer -> opp peer
 
@@ -65,15 +69,23 @@ var _team_id_by_peer: Dictionary = {}
 # Live per-peer AISkaterCaps from PlayerRegistry (memoized), so man-marking reads
 # each defender's real top speed. Empty when unwired (tests) → league default.
 var _caps_by_peer: Dictionary = {}
+# Live peer_id → lobby team_slot (0–4) from PlayerRegistry. 5v5 only: feeds
+# the F/D group split and the home-side rest bias in AIRoleSlots5. Empty in
+# 3v3 / tests (the legacy path never reads it).
+var _position_by_peer: Dictionary = {}
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
 var _own_goal_z: float = 0.0
 
 
-func _init(t: int, team_id_by_peer: Dictionary, caps_by_peer: Dictionary = {}) -> void:
+func _init(t: int, team_id_by_peer: Dictionary, caps_by_peer: Dictionary = {},
+		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE,
+		position_by_peer: Dictionary = {}) -> void:
 	team_id = t
 	_team_id_by_peer = team_id_by_peer
 	_caps_by_peer = caps_by_peer
+	team_size = p_team_size
+	_position_by_peer = position_by_peer
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
 
 
@@ -142,13 +154,21 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		elif _strong_x < 0.0 and puck_x > STRONG_SIDE_HYSTERESIS_M:
 			_strong_x = 1.0
 
-	# 3. Slot assignment by current geometry. CARRIER is fixed to the
-	#    puck holder; everything else falls out of the permutation
-	#    enumeration with hysteresis. No locking needed.
+	# 3. Slot assignment by current kinematics (momentum-aware soonest-to-
+	#    arrive elections at each peer's real Speed cap). CARRIER is fixed
+	#    to the puck holder; everything else falls out of the per-state
+	#    elections with hysteresis. No locking needed. 5v5 routes through
+	#    the position-aware group-scoped election; 3v3 keeps the legacy
+	#    path verbatim (plan §"Guiding constraint").
 	var prev_assignments: Dictionary = slot_assignments
-	slot_assignments = AIRoleSlots.assign(
-			snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
-			prev_assignments, _strong_x)
+	if team_size >= 5:
+		slot_assignments = AIRoleSlots5.assign(
+				snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
+				prev_assignments, _strong_x, _caps_by_peer, _position_by_peer)
+	else:
+		slot_assignments = AIRoleSlots.assign(
+				snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
+				prev_assignments, _strong_x, _caps_by_peer)
 	# Drop excluded peers (puppeted tutorial bots) so neither they nor any
 	# downstream consumer of get_slot / get_anchor pulls them toward a slot
 	# anchor. AIRoleSlots.assign already may have given them a slot — erase
@@ -176,7 +196,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 # states only (DZONE + TRANS_OD); every other state returns {} so no defender
 # carries a stale assignment.
 #
-# Backline = our peers slotted ANCHOR / COVER (DZONE) or BACKCHECK (TRANS_OD).
+# Backline = our peers slotted MARK (DZONE and TRANS_OD).
 # The carrier is owned separately — PRESSURE in DZONE, the CONTAIN gap defender
 # in TRANS_OD — so it's excluded; the men are the opposing carrier's potential
 # receivers (every opponent except the carrier). Each man's value is the raw
@@ -239,13 +259,28 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		man_value[pid] = AIActionScoring.threat_surface_pass(
 				carrier_pos, mp, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, no_defenders)
-		# Finish danger if fed: shot value from his spot with the goalie where
-		# he is NOW (tracking the carrier, not this off-puck man), no field
-		# defenders — an off-axis net-front man reads lethal because the net is
-		# open to his side. Feeds the net-front override (drops the lane factor
-		# man_value folds in: a contested feed still becomes a tap-in).
+		# Finish danger if fed: shot value from his spot with the goalie
+		# PREDICTED OVER THE FEED'S FLIGHT (he starts tracking the carrier;
+		# a short doorstep feed arrives before he traverses — lethal — while
+		# a long perimeter feed hands him the whole flight to re-square), no
+		# field defenders. Feeds the net-front override (drops the lane
+		# factor man_value folds in: a contested feed still becomes a
+		# tap-in if it arrives).
+		var feed_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, mp)
+		var feed_flight: float = carrier_pos.distance_to(mp) / maxf(feed_speed, 1.0)
+		# Predicted post-seal for the man's spot (derive_post_seal_x_sign): a
+		# sharp-angle man fires into the wall a competent keeper adopts, so he
+		# is not a finish threat the assignment must chase.
+		var man_seal: float = AIActionScoring.derive_post_seal_x_sign(mp, our_net)
 		man_danger[pid] = AIActionScoring.score_shoot(
-				mp, our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH, no_defenders)
+				mp, our_net,
+				AIActionScoring.predict_goalie_pos(
+						our_goalie_pos, our_net, feed_flight, mp),
+				GameRules.NET_HALF_WIDTH, no_defenders,
+				AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+				AIActionScoring.goalie_unsettled(
+						our_goalie_pos, our_net, feed_flight, mp),
+				[], -1.0, false, man_seal, man_seal != 0.0)
 	if men.is_empty():
 		return empty
 
@@ -273,7 +308,7 @@ func get_slot(peer_id: int) -> int:
 
 # The opponent a given backline defender is assigned to cover, or -1 if it has
 # no man-coverage assignment this tick (offensive/neutral state, or the peer
-# isn't a backline defender). Read by ANCHOR / COVER via RoleContext.
+# isn't a backline defender). Read by MARK via RoleContext.
 func assigned_threat(peer_id: int) -> int:
 	return threat_assignments.get(peer_id, -1)
 
@@ -284,6 +319,12 @@ func assigned_threat(peer_id: int) -> int:
 # of recomputing a raw sign that would thrash near center ice.
 func strong_x() -> float:
 	return _strong_x
+
+
+# This peer's lobby position (team_slot 0–4; see PlayerRules.POSITION_NAMES).
+# 0 (C) when unknown — tests / 3v3, where nothing reads it.
+func position_of(peer_id: int) -> int:
+	return _position_by_peer.get(peer_id, 0)
 
 
 # ── One-timer readiness signaling ───────────────────────────────────────────
@@ -352,4 +393,7 @@ func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		carrier_pos = snapshot.skater_states[carrier_pid].position
+	if team_size >= 5:
+		return AIRoleSlots5.slot_anchor(
+				slot, _own_goal_z, _strong_x, puck_pos, carrier_pos)
 	return AIRoleSlots.slot_anchor(slot, carrier_pos)

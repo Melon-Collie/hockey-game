@@ -33,6 +33,10 @@ var sprint_locked: bool = false
 # (see BodyCheckRules / SkaterController._apply_movement). Host-authoritative: only
 # the host sets it on a hit; clients receive the resolved value off the wire.
 var stagger_timer: float = 0.0
+# Body-check knockdown: seconds of full movement lockout remaining. Replicated for
+# the same reason as stagger_timer — the local victim's reconcile snaps it to the
+# host baseline and it decays deterministically forward. Host-authoritative.
+var knockdown_timer: float = 0.0
 # Movement INTENT: the raw WASD vector (world frame, 8-way quantized on the
 # wire) and the brake hold. Cosmetic-only — the gait reads what the player is
 # TRYING to do (crossover intent, deliberate hockey stop, no-keys glide) a
@@ -45,6 +49,12 @@ var brake_intent: bool = false
 # client-rendered remotes, which never resolve sprint themselves. Bit 5 of
 # the intent byte (v16).
 var sprint_active: bool = false
+# Resolved hit-commit (the Hit button held + stamina available), from
+# SkaterController.hit_committed on the simulating machine. Replicated so the body-
+# check resolver reads a REMOTE victim's brace and a remote attacker's full-vs-
+# passive delivery correctly on a client (host knows all locally) — the brace moved
+# off brake onto the hit button. Bit 6 of the intent byte (no block growth).
+var hit_committed: bool = false
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 # World-space top-hand (grip) point. host-only, not serialized — paired with
@@ -75,6 +85,8 @@ func to_array() -> Array:
 		move_intent,
 		brake_intent,
 		sprint_active,
+		knockdown_timer,
+		hit_committed,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -95,9 +107,11 @@ func copy_from(s: SkaterNetworkState) -> void:
 	stamina = s.stamina
 	sprint_locked = s.sprint_locked
 	stagger_timer = s.stagger_timer
+	knockdown_timer = s.knockdown_timer
 	move_intent = s.move_intent
 	brake_intent = s.brake_intent
 	sprint_active = s.sprint_active
+	hit_committed = s.hit_committed
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 	top_hand_world = s.top_hand_world
@@ -130,4 +144,8 @@ static func from_array(data: Array) -> SkaterNetworkState:
 		state.brake_intent = data[18]
 	if data.size() > 19:
 		state.sprint_active = data[19]
+	if data.size() > 20:
+		state.knockdown_timer = data[20]
+	if data.size() > 21:
+		state.hit_committed = data[21]
 	return state

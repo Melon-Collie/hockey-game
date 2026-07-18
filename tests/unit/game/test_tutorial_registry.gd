@@ -20,11 +20,22 @@ func test_each_registered_id_has_steps() -> void:
 				"tutorial '%s' has no steps registered" % id)
 
 
-func test_each_registered_id_has_display_name() -> void:
+func test_each_registered_id_has_display_name_key() -> void:
+	# Every registered id must map to a real translation key (not fall through
+	# to the raw id), so the UI's tr() lands on a catalogued string.
 	for id: String in TutorialRegistry.ALL_IDS:
-		var display_name: String = TutorialRegistry.get_display_name(id)
-		assert_ne(display_name, "",
-				"tutorial '%s' has no display name" % id)
+		var key: String = TutorialRegistry.display_name_key(id)
+		assert_ne(key, "", "tutorial '%s' has no display-name key" % id)
+		assert_ne(key, id, "tutorial '%s' fell through to the raw id" % id)
+
+
+func test_sequence_position_is_one_based_and_zero_for_unknown() -> void:
+	# 1-based position drives the "Part N of M" course framing.
+	for i: int in TutorialRegistry.ALL_IDS.size():
+		assert_eq(TutorialRegistry.sequence_position(TutorialRegistry.ALL_IDS[i]), i + 1,
+				"position of ALL_IDS[%d] should be %d" % [i, i + 1])
+	assert_eq(TutorialRegistry.sequence_position("nope"), 0,
+			"unknown id should have position 0")
 
 
 func test_unknown_id_returns_empty_steps() -> void:
@@ -60,10 +71,14 @@ func test_shooting_covers_the_drill_sequence() -> void:
 	# Pin the Shooting curriculum so a refactor can't drop a drill.
 	var steps: Array[int] = TutorialRegistry.get_step_ids(TutorialRegistry.SHOOTING_ID)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_WRIST)
+	assert_has(steps, TutorialRegistry.STEP_SHOOT_BACKHAND)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_TARGETS)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_SLAP)
 	assert_has(steps, TutorialRegistry.STEP_ONE_TIMER)
 	assert_has(steps, TutorialRegistry.STEP_SHOOT_FINISH)
+	assert_true(steps.find(TutorialRegistry.STEP_SHOOT_BACKHAND)
+			> steps.find(TutorialRegistry.STEP_SHOOT_WRIST),
+			"the backhand drill builds on the wrister — it must come after it")
 
 
 func test_passing_covers_pass_types_and_reception() -> void:

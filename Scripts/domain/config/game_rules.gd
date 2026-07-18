@@ -171,6 +171,47 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 	var az: float = absf(world_xz.y)
 	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
 
+# Projects a skater's XZ clear of the goal-net exclusion box so a CharacterBody
+# cylinder can never seat into the concave net pocket (back + side panels), the
+# same wedge-and-freeze failure the boards have. The net is off the skater physics
+# mask (LAYER_NET, puck-only); skaters are held clear analytically here, mirroring
+# clamp_to_rink_inner for the boards. Returns world_xz unchanged when the center is
+# already outside the box. Handles both net ends (|z|). Pure value-type math — no
+# allocation, hot-path safe at 120 Hz × actors.
+#
+# The box spans the net footprint: laterally |x| <= NET_BACK_HALF_WIDTH (the wider
+# trapezoid end), in depth |z| in [GOAL_LINE_Z, GOAL_LINE_Z + NET_DEPTH]. The back
+# and both side faces inset by `radius` so the body EDGE stops at the panel. The
+# FRONT face — the open goal mouth at the goal-line plane — is deliberately NOT
+# inset: a skater can still jam with their center right up to the goal line and
+# reach into the mouth, so crease / net-front play is untouched; they're only
+# stopped from putting their center past the line into the cage. Ejects along the
+# least-penetrated face.
+static func push_out_of_net(world_xz: Vector2, radius: float = 0.0) -> Vector2:
+	var az: float = absf(world_xz.y)
+	var min_z: float = GOAL_LINE_Z                       # front (open mouth) — no inset
+	var max_z: float = GOAL_LINE_Z + NET_DEPTH + radius  # back panel (body edge stops here)
+	if az <= min_z or az >= max_z:
+		return world_xz
+	var max_x: float = NET_BACK_HALF_WIDTH + radius
+	var x: float = world_xz.x
+	if absf(x) >= max_x:
+		return world_xz
+	# Center is inside the exclusion box — eject along the least-penetrated face.
+	var pen_front: float = az - min_z    # toward center ice (reduce |z|)
+	var pen_back: float = max_z - az     # behind the net (increase |z|)
+	var pen_left: float = x + max_x      # toward -x
+	var pen_right: float = max_x - x     # toward +x
+	var min_pen: float = minf(minf(pen_front, pen_back), minf(pen_left, pen_right))
+	var end_sign: float = signf(world_xz.y)
+	if min_pen == pen_front:
+		return Vector2(x, end_sign * min_z)
+	if min_pen == pen_back:
+		return Vector2(x, end_sign * max_z)
+	if min_pen == pen_left:
+		return Vector2(-max_x, world_xz.y)
+	return Vector2(max_x, world_xz.y)
+
 # ── Puck ──────────────────────────────────────────────────────────────────────
 # Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
 # so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with
@@ -215,6 +256,13 @@ const GRAVITY_M_S2: float = 9.8
 # so AI trajectory prediction and client puck extrapolation decelerate the same
 # way Jolt does — derived from ICE_FRICTION, which the live ice is also built from.
 const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
+# Height above the ice at which a puck counts as AIRBORNE — the blade-plane
+# gate: a grounded blade only plays pucks below this plane, a lifted blade
+# only above it (Puck.is_airborne / PuckReceptionRules.blade_can_interact).
+# Single source so the AI's saucer flight model (when a lofted pass is over
+# a grounded stick, and where it must land to be receivable) agrees with
+# the live interaction gate.
+const PUCK_AIRBORNE_HEIGHT_M: float = 0.05
 # Board restitution coefficient. Mirrors Physics/boards.tres `bounce` so AI
 # prediction models post-bounce trajectories the way Jolt resolves them. Unlike
 # ICE_FRICTION this can't be single-sourced — boards.tres is a static resource a
@@ -346,6 +394,18 @@ const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_SHOT_POWER_M_S: float = 14.0
 
+# ── Loft vertical launch speeds (ShotMechanics loft levels) ───────────────────
+# Each loft level is a FIXED vertical launch speed independent of shot power
+# (see ShotMechanics.loft_y — charge buys pace, loft buys height). Shared
+# defaults between the SkaterController exports (loft_vertical_speed_low/high)
+# and the bot AI's shot model, which needs the real arc to know what height a
+# lofted shot physically ARRIVES at over a given range/power (a HIGH-loft
+# full-power wrister from 5 m tops out at belly height, not the top corner).
+#   LOW  2.2  → ~0.26 m apex (saucer: clears stick blades, lands and slides)
+#   HIGH 4.65 → ~1.10 m apex (puck top ~5 cm under the crossbar's inner edge)
+const DEFAULT_LOFT_VY_LOW_M_S: float = 2.2
+const DEFAULT_LOFT_VY_HIGH_M_S: float = 4.65
+
 # ── Wrister power-model default (ShotMechanics.wrister_power_t) ──────────────
 # Feel tunable — live editor tuning isn't the workflow, but it's an @export on
 # SkaterController; this is the shared default so the bot AI stays calibrated to
@@ -383,17 +443,34 @@ const DEFAULT_GOALIE_T_PUSH_SPEED_M_S: float = 3.8
 # AI predicts against the top-tier keeper like every other goalie constant
 # here). The ramp is the window a hard lateral cut in tight genuinely beats.
 const DEFAULT_GOALIE_LATERAL_ACCEL_M_S2: float = 14.0
+# The pad-top seam: the height where the goalie's coverage changes hands from
+# the leg pads to the torso + arms. Mirrors the stance anatomy in
+# GoalieBodyConfigBuilder (torso bottom "glued to the pad-top seam at 0.86" —
+# body centre 1.22 minus the 0.72 Goalie.tscn torso box's half-height; keep in
+# sync if that anatomy resizes). AIActionScoring's hole model uses it as the
+# HIGH band's arrival floor: a lofted shot is only an over-the-pads target if
+# its arc physically crosses the net line above this seam.
+const DEFAULT_GOALIE_PAD_TOP_SEAM_M: float = 0.86
 
 # ── Players ───────────────────────────────────────────────────────────────────
-const MAX_PLAYERS: int = 6  # 3v3
+# Team size is a per-match config latched at puck drop (GameStateMachine.
+# team_size, applied via apply_config — the exact rule_set rail). The lobby
+# picks it from TEAM_SIZE_OPTIONS; everything sized per-slot uses the CAPACITY
+# (PlayerRules.MAX_PER_TEAM = 5) so a live lobby can flip modes without
+# re-keying.
+const DEFAULT_TEAM_SIZE: int = 3
+const TEAM_SIZE_OPTIONS: Array[int] = [3, 5]
+const TEAM_SIZE_NAMES: Array[String] = ["3v3", "5v5"]
+
+const MAX_PLAYERS: int = 10  # capacity: 5v5 roster (3v3 uses 6 of these)
 const MAX_SPECTATORS: int = 4
 # Sentinel team_id for spectators; players use 0 (home) or 1 (away). The lobby
 # slot encoding, assign_player_slot RPC, and GameManager spectator branches all
 # compare against this. -1 because it falls cleanly outside the 0..1 player
 # team range and is naturally invalid for any team-indexed array.
 const SPECTATOR_TEAM_ID: int = -1
-# ENet connection cap = playable roster + spectator slots. Player count
-# (3v3 roster) is still gated separately by PlayerRules.MAX_PER_TEAM.
+# Connection cap = playable roster capacity + spectator slots. The live
+# roster is gated separately by the latched GameStateMachine.team_size.
 const MAX_CONNECTIONS: int = MAX_PLAYERS + MAX_SPECTATORS
 
 # ── Faceoff Positions ─────────────────────────────────────────────────────────
@@ -423,14 +500,51 @@ const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 
 # Per-team, per-slot XZ offsets from whichever dot is active. Team 0 stands on
 # the +Z side of the dot, team 1 on -Z (preserves team 0 = +Z half convention).
-# Indexed by [team_id][team_slot]. Center on the dot line (slot 0); wingers sit
-# on a ~4.9 m circle around the dot (±4.0 wide, 2.8 back) — tighter than the old
-# ±5.0/3.0 spread so the formation reads like a faceoff circle and the post-goal
-# radial skate-in converges cleanly instead of running in parallel.
+# Indexed by [team_id][team_slot]. Center on the dot line (slot 0); wingers
+# stand ON THE CIRCLE'S EDGE at the hash marks, nearly level with the dot
+# (±4.7 wide, 0.9 back — just outside the 4.57 m circle), so opposing wingers
+# line up nose-to-nose ~1.8 m apart across the dot, the real alignment.
+# Slots 3/4 (LD/RD, 5v5 only) stand behind everyone outside the circle — the
+# real alignment puts D behind the hash marks; near an end-zone dot the raw
+# offset can land past the goal line, which faceoff_position clamps back in.
+# END-ZONE draws override this table for the D pair only (the FACEOFF_END_*
+# constants below + PlayerRules.faceoff_position): the one dot-relative shape
+# is the real alignment at center/neutral dots, but an end-zone draw's D jobs
+# are positional, not dot-relative (plan §10, landed).
 const FACEOFF_OFFSETS: Array = [
-	[Vector2( 0.0,  1.5), Vector2(-4.0,  2.8), Vector2( 4.0,  2.8)],  # team 0
-	[Vector2( 0.0, -1.5), Vector2(-4.0, -2.8), Vector2( 4.0, -2.8)],  # team 1
+	[Vector2( 0.0,  1.5), Vector2(-4.7,  0.9), Vector2( 4.7,  0.9),
+			Vector2(-2.4,  7.0), Vector2( 2.4,  7.0)],  # team 0
+	[Vector2( 0.0, -1.5), Vector2(-4.7, -0.9), Vector2( 4.7, -0.9),
+			Vector2(-2.4, -7.0), Vector2( 2.4, -7.0)],  # team 1
 ]
+
+# ── End-zone draw alignment (5v5; see PlayerRules.faceoff_position) ──────────
+# The real positional jobs at an end-zone dot, replacing the dot-relative
+# offsets above for the players whose jobs there aren't dot-relative.
+# DEFENDING side plays the NHL wall-and-stack: the strong-side D (identity
+# side == the dot's side of the ice) holds the WALL — at the boards, level
+# with the dot (a hair on-side) — for the boards battle and the rim; the
+# weak-side D and the boards-side WINGER form the shoulder-to-shoulder STACK
+# on the goal-side arc of the circle (just outside it — the on-side rule) —
+# a won draw comes straight back to the stack for the breakout, and on a
+# loss the stack D boxes out to the net-front while the stack W releases up
+# to the strong point. The net-front itself is the goalie's at the drop —
+# the old near-post D spawn double-covered it while leaving the wall empty.
+# The inside winger keeps the table's hash-mark spot (the checking matchup).
+# ATTACKING side plays the points at the blue line: strong point directly
+# above the dot (the boards-side lane + draw-back target), weak point toward
+# the middle of the line (the middle-ice valve).
+const FACEOFF_END_WALL_INSET_M: float = 1.2       # wall D: in from the boards
+const FACEOFF_END_WALL_ONSIDE_M: float = 0.3      # ...level with the dot, a hair on-side
+const FACEOFF_END_STACK_BEHIND_M: float = 4.8     # stack: goal-side, outside the 4.57 m circle
+const FACEOFF_END_STACK_HALF_SEP_M: float = 0.9   # shoulder-to-shoulder half split
+const FACEOFF_END_POINT_INSIDE_M: float = 1.0     # points: inside the blue line
+const FACEOFF_END_WEAK_POINT_X_M: float = 1.2     # weak point: past mid, off-dot side
+# Depth cap for faceoff placements: no slot spawns closer to the end boards
+# than this far in front of the goal line, so a defensive-zone draw's D pair
+# (raw offset ~7 m behind an end-zone dot) stands net-side instead of inside
+# the netting.
+const FACEOFF_MAX_ABS_Z: float = GOAL_LINE_Z - 1.0
 
 # ── Bench-Door Start Points (pre-game intro skate-in) ─────────────────────────
 # Where each skater begins the opening/rematch intro before skating out to its
@@ -444,8 +558,9 @@ const FACEOFF_OFFSETS: Array = [
 const BENCH_DOOR_X: float          = 11.5
 const BENCH_DOOR_CENTER_Z: float   = 4.4   # mirrors arena_stands.gd _BENCH_CENTER_Z
 # Per-slot fan-out along the bench span (index = team_slot). Center leaves from
-# the middle of the bench; wingers from either side so the three don't stack.
-const BENCH_DOOR_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4]
+# the middle of the bench; wingers from either side, D from the outer edges,
+# so the five don't stack (3v3 uses the first three).
+const BENCH_DOOR_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4, 4.8, -4.8]
 
 # Returns the faceoff dot closest to the given XZ point — picks among centre
 # ice, the four end-zone dots, and the four neutral-zone dots. Used to pick

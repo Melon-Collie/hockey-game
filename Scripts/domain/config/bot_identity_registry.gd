@@ -61,15 +61,25 @@ static func get_all() -> Array[Dictionary]:
 
 # Picks an identity for a bot slot at lobby-toggle time. If the configured
 # pool has an entry whose name is not in `used_names`, returns one at
-# random so successive toggles in the same lobby don't duplicate. When the
-# pool is empty or exhausted, returns the generic "Bot N" fallback derived
-# from `slot_key` so the lobby card still has something concrete to display.
+# random so successive toggles in the same lobby don't duplicate — preferring
+# identities whose `position` matches the slot's position (a defenseman
+# archetype fills the LD card), falling back to any unused identity when the
+# position pool is exhausted. When the whole pool is spent, returns the
+# generic "Bot N" fallback derived from `slot_key` so the lobby card still
+# has something concrete to display.
 static func pick_for_slot(slot_key: int, used_names: Array[String]) -> Dictionary:
 	ensure_loaded()
+	var slot_position: String = PlayerRules.position_name(LobbySlotKey.slot(slot_key))
 	var available: Array[Dictionary] = []
+	var position_matches: Array[Dictionary] = []
 	for entry: Dictionary in _identities:
-		if not used_names.has(entry.name):
-			available.append(entry)
+		if used_names.has(entry.name):
+			continue
+		available.append(entry)
+		if not slot_position.is_empty() and entry.get("position", "") == slot_position:
+			position_matches.append(entry)
+	if not position_matches.is_empty():
+		return position_matches.pick_random()
 	if not available.is_empty():
 		return available.pick_random()
 	return fallback_identity(slot_key)
@@ -79,7 +89,8 @@ static func fallback_identity(slot_key: int) -> Dictionary:
 	return {
 		"name":           "Bot %d" % (slot_key + 1),
 		"number":         80 + slot_key,
-		"is_left_handed": (slot_key % 3) % 2 == 1,
+		"is_left_handed": LobbySlotKey.slot(slot_key) % 2 == 1,
+		"position":       PlayerRules.position_name(LobbySlotKey.slot(slot_key)),
 		"speed":          PlayerAttributes.LEVEL_MEDIUM,
 		"agility":        PlayerAttributes.LEVEL_MEDIUM,
 		"hands":          PlayerAttributes.LEVEL_MEDIUM,
@@ -132,10 +143,16 @@ static func normalize_entry(entry: Dictionary) -> Dictionary:
 		size = PlayerAttributes.LEVEL_MEDIUM
 		physical = PlayerAttributes.LEVEL_MEDIUM
 		shot = PlayerAttributes.LEVEL_MEDIUM
+	# Optional casting hint: which lineup slot this identity suits (see
+	# PlayerRules.POSITION_NAMES). Unknown/missing → "" (fills any slot).
+	var position: String = String(entry.get("position", "")).to_upper()
+	if position not in PlayerRules.POSITION_NAMES:
+		position = ""
 	return {
 		"name":           entry_name,
 		"number":         int(entry.get("number", 0)),
 		"is_left_handed": bool(entry.get("is_left_handed", false)),
+		"position":       position,
 		"speed":          speed,
 		"agility":        agility,
 		"hands":          hands,

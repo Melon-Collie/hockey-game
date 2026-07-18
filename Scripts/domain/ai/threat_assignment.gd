@@ -38,8 +38,9 @@ class_name AIThreatAssignment
 # rewards are close — the same oscillation we're fixing, just faster. Mirrors
 # the strong-side / slot-assignment hysteresis already in the brain.
 #
-# Brute-forced over permutations: the backline is ≤ 3 skaters, so the matching
-# is tiny (≤ 3! leaves). Runs at the 6 Hz brain tick, never the 120 Hz path.
+# Brute-forced over permutations: the backline is ≤ 4 skaters (5v5's TRANS_OD
+# MARK crew), so the matching is tiny (≤ 4! orderings). Runs at the 6 Hz brain
+# tick, never the 120 Hz path.
 
 # How far goal-side of the man the cover anchor sits (m). Roughly a stick into
 # the man→net lane: close enough to deny the one-timer, not on top of the body.
@@ -66,9 +67,12 @@ const HYSTERESIS_MARGIN_FRAC: float = 0.15
 # this add something over man_value, which already folds the lane in).
 #
 # The bar is the finish-danger floor that counts as a genuine house threat —
-# below it, trust the efficiency matching. score_shoot returns 0..1; a real
-# net-front look past a carrier-tracking goalie sits well above this.
-const NET_FRONT_DANGER_BAR: float = 0.45
+# below it, trust the efficiency matching. Under the make-probability
+# currency the caller's read (goalie predicted over the feed's flight) is
+# P(goal | clean feed): the canonical net-front man measures ~1.0, a
+# perimeter winger ~0.0 (the keeper re-squares inside the feed's flight), so
+# the bar is "more likely than not".
+const NET_FRONT_DANGER_BAR: float = 0.5
 
 
 # Returns Dictionary[int, int]: defender_peer_id -> assigned man (opponent)

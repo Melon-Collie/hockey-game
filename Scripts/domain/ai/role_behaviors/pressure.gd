@@ -42,8 +42,25 @@ class_name AIRolePressure
 # motion and our actual reach.
 #
 # No exposure factor — PRESSURE is by definition the bot pressuring
-# the puck; "getting caught up-ice" isn't applicable. ANCHOR / COVER
-# own defensive recovery for this team.
+# the puck; "getting caught up-ice" isn't applicable. The MARK
+# defenders own defensive recovery for this team.
+
+# Engaged/closing boundary: within ~1.5 search steps of the cut-off the
+# argmax runs the full polar ring incl. half-step samples (fine corrections
+# while engaged); beyond it the candidates are the CALCULATED closing stands
+# (shot cut-off / best-pass-lane cut-off / midpoint — see decide) — steering
+# is consuming the target at full stride, where ring resolution is
+# invisible. Physical scale: the outer ring's own step distance.
+const PRESSURE_INNER_RING_RANGE_M: float = 4.5
+
+# Switch-hysteresis on the chosen cut-off point is the shared off-puck mechanism
+# (AIRoleHelpers.append_incumbent / incumbent_bonus / TARGET_SWITCH_MARGIN): the
+# standing target is injected into the candidate set and given a stickiness bonus,
+# so it's re-scored live and kept unless a fresh candidate deflates the carrier's
+# best option by at least the margin more. Without it, "block the shot" and
+# "block the best pass" trade places on near-equal scores every dispatch and the
+# pressurer oscillates between two spots metres apart, covering neither.
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -59,7 +76,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	# Commit to a body check on the carrier when it's a real, reachable,
 	# separating hit (AIBodyCheck). PRESSURE always has support behind it —
-	# ANCHOR/COVER in DZONE, F2/F3 on the forecheck (F1 dispatches here) — so
+	# the MARK pair in DZONE, F2/F3 on the forecheck (F1 dispatches here) — so
 	# the commit risk is acceptable; the last-man gap defender (CONTAIN) never
 	# hunts hits. When committed, drive at the body intercept; the state machine
 	# forces sprint so the closing collision delivers the hit.
@@ -111,10 +128,53 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		search_center += to_net.normalized() * (
 				SkaterAgentStateMachine.BLADE_REACH_M + ctx.pursuit_standoff_m)
 
-	# Search around the cut-off point; goal-side filter rejects the
-	# half-disc on the wrong side of the carrier (toward opp net).
-	var candidates: Array[Vector3] = AIRoleHelpers.generate_candidates_around(
-			ctx.self_pos, search_center)
+	# Upper bounds for the per-candidate max() early-out: the carrier's
+	# option values with the current defenders only. One extra surface pass
+	# here lets every candidate below skip the pass lanes that can't matter
+	# (identical argmax — see carrier_option_bases). Also the data the
+	# CALCULATED closing stands below are built from.
+	var bases: Array[float] = ctx.scratch_option_bases
+	AIRoleHelpers.carrier_option_bases(
+			carrier_pos, our_net, our_goalie_pos,
+			our_team_excluding_self, opp_teammates, bases)
+
+	# Candidate set. ENGAGED (within the inner-ring range of the cut-off):
+	# the full polar ring incl. half-step samples — a pressurer standing at
+	# the cut-off expresses small live corrections. CLOSING (the common
+	# case): the ring's argmax reduces to a choice between COMPUTABLE
+	# stands — its own hysteresis note says the near-tied pair is "block
+	# the shot" vs "block the best pass" — so score exactly those directly:
+	# the shot-line cut-off (the search center), the same stick-length
+	# stand-off dropped onto the carrier's best pass lane (from the bases,
+	# already computed), and their midpoint (the split stand). Steering
+	# consumes the target at full stride while closing, so the ring's ±3 m
+	# refinements were indistinguishable en route.
+	var near_cutoff: bool = ctx.self_pos.distance_squared_to(search_center) \
+			< PRESSURE_INNER_RING_RANGE_M * PRESSURE_INNER_RING_RANGE_M
+	var candidates: Array[Vector3] = []
+	if near_cutoff:
+		candidates = AIRoleHelpers.generate_candidates_around(
+				ctx.self_pos, search_center, true)
+	else:
+		candidates.append(search_center)
+		var worst_pass: int = -1
+		for i: int in range(1, bases.size()):
+			if worst_pass == -1 or bases[i] > bases[worst_pass]:
+				worst_pass = i
+		if worst_pass != -1 and bases[worst_pass] > 0.0:
+			var lane: Vector3 = opp_teammates[worst_pass - 1] - lead
+			var lane_len: float = sqrt(lane.x * lane.x + lane.z * lane.z)
+			if lane_len > 0.001:
+				var pass_stand: Vector3 = lead + lane * (
+						(SkaterAgentStateMachine.BLADE_REACH_M
+								+ ctx.pursuit_standoff_m) / lane_len)
+				candidates.append(pass_stand)
+				candidates.append((search_center + pass_stand) * 0.5)
+	# Switch-hysteresis: inject the standing cut-off point so it's re-scored live
+	# and held (via incumbent_bonus) unless a fresh candidate is clearly better.
+	# It runs the same legality / goal-side / anti-crowd filters below, so a
+	# now-illegal or wrong-side incumbent is dropped outright.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -128,55 +188,16 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 		# Score = -carrier_best_option(with me at c). Higher = better
 		# for us (lower for the carrier).
-		var pressure_score: float = -_carrier_best_option(
+		var pressure_score: float = -AIRoleHelpers.carrier_best_option(
 				c, carrier_pos, our_net, our_goalie_pos,
-				our_team_excluding_self, opp_teammates)
+				our_team_excluding_self, opp_teammates, bases) \
+				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if pressure_score > best_score:
 			best_score = pressure_score
 			best_pos = c
 
 	d.target_position = best_pos
 	return d
-
-
-# Computes the carrier's best option (shoot or pass to any teammate)
-# with our hypothetical defender position included. Returns the max
-# over all options — that's what PRESSURE wants to minimize.
-#
-# Uses the threat-surface helpers so the gradient survives when
-# score_shoot / score_pass collapse to 0 (carrier far from net or
-# all receivers far from net). The position_potential floor pulls
-# PRESSURE tight to the carrier in TRANS_OD scenarios where there's
-# no immediate scoring threat to defend — without it the score is
-# flat across goal-side candidates and PRESSURE picks arbitrarily.
-static func _carrier_best_option(
-		candidate: Vector3,
-		carrier_pos: Vector3,
-		our_net: Vector3,
-		our_goalie_pos: Vector3,
-		our_team_excluding_self: Array[Vector3],
-		opp_teammates: Array[Vector3]) -> float:
-	# Build the carrier's view of defenders: our team + me at c.
-	var carrier_view_defenders: Array[Vector3] = our_team_excluding_self.duplicate()
-	carrier_view_defenders.append(candidate)
-
-	# Carrier's best shot at our net (with positional fallback floor).
-	var shoot_value: float = AIActionScoring.threat_surface_shoot(
-			carrier_pos, our_net, our_goalie_pos,
-			GameRules.NET_HALF_WIDTH, carrier_view_defenders)
-
-	# Carrier's best pass to any teammate (with positional fallback).
-	# Use our_net as `attacking_goal` — the carrier is shooting at OUR
-	# net, so the receiver's threat is evaluated against our goalie.
-	var pass_value: float = 0.0
-	for opp_pos: Vector3 in opp_teammates:
-		var pass_score: float = AIActionScoring.threat_surface_pass(
-				carrier_pos, opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, carrier_view_defenders)
-		if pass_score > pass_value:
-			pass_value = pass_score
-
-	return maxf(shoot_value, pass_value)
 
 
 # True if `c` is on the our-net side of the carrier — i.e., between

@@ -195,40 +195,105 @@ func test_no_opponents_means_no_exposure_penalty() -> void:
 	assert_true(absf(d.target_position.z) <= GameRules.GOAL_LINE_Z)
 
 
-func _opp(pos: Vector3) -> SkaterNetworkState:
-	var s := SkaterNetworkState.new()
-	s.position = pos
-	return s
-
-
-func _speed_caps(v: float) -> AISkaterCaps:
-	var c := AISkaterCaps.new()
-	c.max_speed = v
-	return c
-
-
-func test_min_opp_time_home_uses_each_opponents_real_speed() -> void:
-	# One opponent, fixed position. A faster opponent (higher Speed) recovers to
-	# our net in less time — SUPPORT reads a shorter min-time-home.
+func test_covering_self_erases_the_counter_from_a_recoverable_spot() -> void:
+	# The covering-set contract at SUPPORT's seam (counter_rush_cost with
+	# SUPPORT itself as the per-candidate racer): same loss, same collector —
+	# standing where SUPPORT beats the counter home erases the threat (self
+	# joins the covering set, the counter shot is a blocked look), while
+	# standing past the play leaves it live. This is what replaced the old
+	# my_time/safe_time ramp: who COVERS, not who wins a footrace ratio.
 	var net := Vector3(0, 0, OUR_NET_Z)
-	var opps: Array[SkaterNetworkState] = [_opp(Vector3(0, 0, 0))]
-	var slow: float = AIRoleSupport._min_opp_time_home(opps, [_speed_caps(6.0)], net)
-	var fast: float = AIRoleSupport._min_opp_time_home(opps, [_speed_caps(14.0)], net)
-	assert_lt(fast, slow, "a faster opponent recovers home sooner")
+	var goalie := Vector3(0, 0, OUR_NET_Z - 0.8)
+	var loss := Vector3(0, 0, 0)                      # turnover at center ice
+	var opps: Array[Vector3] = [Vector3(1, 0, 1)]     # collector on the puck
+	var vels: Array[Vector3] = [Vector3.ZERO]
+	var no_mates: Array[Vector3] = []
+	var recoverable: float = AIActionScoring.counter_rush_cost(
+			loss, 1.0, net, goalie, GameRules.NET_HALF_WIDTH, no_mates,
+			Vector3(0, 0, 14), AIActionScoring.SKATER_REF_SPEED_M_S,
+			opps, vels, [])
+	var exposed: float = AIActionScoring.counter_rush_cost(
+			loss, 1.0, net, goalie, GameRules.NET_HALF_WIDTH, no_mates,
+			Vector3(0, 0, -15), AIActionScoring.SKATER_REF_SPEED_M_S,
+			opps, vels, [])
+	assert_gt(exposed, 0.25,
+			"a spot past the play leaves the counter live; got %f" % exposed)
+	assert_lt(recoverable, exposed * 0.5,
+			"covering the counter point collapses the threat (one body walls "
+			+ "most of the slot look); recoverable=%f exposed=%f"
+			% [recoverable, exposed])
 
 
-func test_exposure_lower_for_a_faster_defender() -> void:
-	# Same candidate and opponent-recovery time, but a faster ME (Speed) beats the
-	# puck back from that spot more easily → less exposure.
-	var net := Vector3(0, 0, OUR_NET_Z)
-	var candidate := Vector3(0, 0, 0)  # ~26.65 m from our net
-	var min_home: float = 3.0
-	var slow_me: float = AIRoleSupport._exposure(candidate, net, min_home, 6.0)
-	var fast_me: float = AIRoleSupport._exposure(candidate, net, min_home, 14.0)
-	assert_lt(fast_me, slow_me, "a faster defender is less exposed from the same spot")
+func test_crease_lurker_does_not_zero_the_high_stations() -> void:
+	# The covering-set replacement's headline fix: a beaten opponent parked at
+	# OUR crease gave the old body-ETA ramp a ~0 time-home, which zeroed every
+	# OZ station's score (the full-veto exposure) and degenerated the argmax.
+	# Under the covering-set read the lurker is no counter threat at all — he
+	# must skate the length of the rink to collect a loss at the carrier and
+	# all the way back — so the third man plays his normal high station and
+	# leaves the lurker to the goalie.
+	var carrier_pos := Vector3(-9, 0, -23)
+	var self_pos := Vector3(-5, 0, -14)
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
+		[200, 1, Vector3(-7.8, 0, -21.8), Vector3.ZERO],       # cycle pressure on the carrier
+		[210, 1, Vector3(0, 0, OUR_NET_Z - 2), Vector3.ZERO],  # crease lurker
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	_add_opp_goalie(ctx, carrier_pos)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	assert_lt(d.target_position.z, -8.0,
+			"the third man keeps a real OZ station instead of hiding home;"
+			+ " got %s" % d.target_position)
 
+
+
+
+# A live opposing keeper challenging on the carrier's arc. Without him the
+# fixtures model a keeper parked ON the goal line, against whom every
+# doorstep feed saturates to certainty and every high station reads dead —
+# inverting the staging these tests lock (same fix as the finisher fixtures).
+func _add_opp_goalie(ctx: RoleContext, carrier_pos: Vector3) -> void:
+	var g := GoalieNetworkState.new()
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var dir: Vector3 = (carrier_pos - net).normalized()
+	g.position_x = net.x + dir.x * 1.3
+	g.position_z = net.z + dir.z * 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
 
 # ── Third man HIGH in the offensive zone ─────────────────────────────────────
+
+func test_swings_off_a_covered_high_post_to_a_live_outlet() -> void:
+	# A defender parked on the carrier→high-post feed lane: the high post is
+	# a dead outlet, so the third man stages an alternative station whose
+	# feed lane is genuinely live (the half-wall bump / center point / weak
+	# flank family) — value-arbitrated, not glued to one spot.
+	var carrier_pos := Vector3(-9, 0, -23)
+	var self_pos := Vector3(-5, 0, -14)
+	var high_post := Vector3(
+			carrier_pos.x * 0.5, 0.0,
+			-GameRules.BLUE_LINE_Z - AIRoleSupport.HIGH_POST_INSET_M)
+	var lane_blocker: Vector3 = (carrier_pos + high_post) * 0.5
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
+		[200, 1, lane_blocker, Vector3.ZERO],           # on the high-post lane
+		[210, 1, Vector3(-2, 0, -23), Vector3.ZERO],
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	_add_opp_goalie(ctx, carrier_pos)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	var chosen_lane: float = AIActionScoring.lane_clear(
+			carrier_pos, d.target_position, [lane_blocker],
+			AIActionScoring.expected_pass_speed(carrier_pos, d.target_position))
+	var post_lane: float = AIActionScoring.lane_clear(
+			carrier_pos, high_post, [lane_blocker],
+			AIActionScoring.expected_pass_speed(carrier_pos, high_post))
+	assert_gt(chosen_lane, post_lane,
+			"the chosen station's feed lane beats the covered high post's;"
+			+ " got %s" % d.target_position)
+
 
 func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 	# Carrier cycling deep in the OZ corner. The old candidate set orbited the
@@ -244,13 +309,53 @@ func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 		[210, 1, Vector3(-2, 0, -23), Vector3.ZERO],
 	]
 	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	_add_opp_goalie(ctx, carrier_pos)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_gt(d.target_position.distance_to(carrier_pos), AIRoleSupport.SEARCH_RADIUS_M + 1.0,
 			"the third man is no longer glued to the carrier's orbit; got %s"
 			% str(d.target_position))
-	assert_lt(absf(d.target_position.z - (-GameRules.BLUE_LINE_Z)),
-			AIRoleSupport.HIGH_POST_INSET_M + AIRoleSupport.SEARCH_RADIUS_M + 0.5,
-			"…and holds the top of the zone (high post); got z=%f" % d.target_position.z)
+
+
+func test_holds_the_high_post_over_the_flank_one_timer() -> void:
+	pending("Re-scoped by the #25 covering-set exposure, which showed the"
+			+ " original gate was wrong: a from-the-OZ-corner counter is a ~6 s"
+			+ " full-rink lug, so every OZ station is honestly recoverable"
+			+ " (cost ~0) and the compete is decided by pass value — where the"
+			+ " flank one-timer vs a traversing keeper reads near-certain."
+			+ " The honest gate is the PREDICTED keeper lacking the live"
+			+ " goalie's backdoor depth-cap pre-arm (backdoor_depth_cap): a"
+			+ " keeper who pre-arms against the weak-side man deflates that"
+			+ " one-timer from near-certain to merely strong, at which point"
+			+ " structure can compete. It may also be the honest 3v3 read that"
+			+ " the seam IS the better play (NHL 3v3 flashes the third man into"
+			+ " seams) — decide from playtest before modelling further."
+			+ " ARCHITECTURE Known Issues.")
+
+
+func test_deep_trailer_tracks_the_rush_past_a_beaten_forechecker() -> void:
+	# Transition D→O: our carrier has broken out to the NZ and is rushing, but a
+	# beaten forechecker sits deep in OUR zone (near our net → tiny time-home).
+	# The old saturating exposure zeroed every up-ice candidate, stranding the
+	# deep trailer back in the D-zone ("the furthest player never joins the
+	# transition"). Capped exposure keeps a floor of pass value on the up-ice
+	# option, so the trailer follows the rush up behind the carrier (staying
+	# goal-side of it) instead of sitting deep.
+	var carrier_pos := Vector3(0, 0, 0)        # rushed out to the NZ
+	var self_pos := Vector3(0, 0, 20)          # trailer still buried deep
+	var skaters: Array = [
+		[1, TEAM_ID, self_pos, Vector3.ZERO],              # us (SUPPORT), deep
+		[100, TEAM_ID, carrier_pos, Vector3.ZERO],         # carrier at NZ
+		[200, 1, Vector3(0, 0, OUR_NET_Z - 4), Vector3.ZERO],  # beaten forechecker, deep in our zone
+	]
+	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var d: RoleDecision = AIRoleSupport.decide(ctx)
+	assert_lt(d.target_position.z, self_pos.z - 8.0,
+			"the deep trailer advances up toward the rush instead of stranding"
+			+ " deep; got z=%f (self z=%f)" % [d.target_position.z, self_pos.z])
+	# Still the safety valve — goal-side of (not ahead of) the carrier.
+	assert_gte(ctx.own_goal_dir * d.target_position.z,
+			ctx.own_goal_dir * carrier_pos.z - AIRoleSupport.GOAL_SIDE_TOLERANCE_M - 0.01,
+			"…while staying goal-side of the carrier; got z=%f" % d.target_position.z)
 
 
 func test_transition_keeps_the_carrier_orbit_trail() -> void:

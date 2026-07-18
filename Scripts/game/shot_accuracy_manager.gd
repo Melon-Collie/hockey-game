@@ -252,8 +252,8 @@ func _slot_z() -> float:
 # pickup lock left from the previous attempt so it can be collected normally.
 func _stage_puck_for_player() -> void:
 	_puck.remove_skater_cooldown(_skater)
-	if _puck.carrier != null:
-		_puck.drop()
-	_puck.set_puck_position(Vector3(_skater.global_position.x, _ICE_Y,
+	# stage_at fully parks the puck (position + linear AND angular velocity + any
+	# queued elevation), so a missed shot left spinning/sliding can't carry its
+	# momentum into the next rep.
+	_puck.stage_at(Vector3(_skater.global_position.x, _ICE_Y,
 			_skater.global_position.z - _STAGE_PUCK_AHEAD))
-	_puck.linear_velocity = Vector3.ZERO

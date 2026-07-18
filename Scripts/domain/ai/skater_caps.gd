@@ -27,8 +27,10 @@ var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # All-direction acceleration / thrust (Agility). The reachable-set tests ask
 # "how far off its momentum line can this skater pull a stick?" — that ceiling is
-# this value. Default mirrors SkaterController.thrust's 12.0 default.
-var max_accel: float = 12.0
+# this value. Default mirrors SkaterController.thrust's league default (it read
+# 12.0 for a while after the thrust retune to 10.5 — a silently stale baseline
+# for every caps-less ETA).
+var max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 
 # Hand-to-toe blade span = stick + blade (Size, via stick length). The state
 # machine derives its reach gates (blade reach, pass-reception offset, poke reach)
@@ -38,6 +40,17 @@ var blade_span: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLA
 # Stick length ALONE (Size). The lane-interception model uses stick reach (not the
 # full stick+blade span) for a defender's blade in a pass/shot lane.
 var stick_reach: float = GameRules.DEFAULT_STICK_LENGTH_M
+
+# Maximum distance from the body origin to a legal blade-contact point — the
+# fully-extended arm + stick + blade span (arm ROM displacement + stick + blade).
+# NOT a bot-planning input: the host uses it as the structural anti-cheat ceiling
+# for client-authoritative blade claims (pickup / poke / stick-lift). A claim
+# carries the client's own blade geometry (its "aim"), and the host pins that
+# geometry to within this reach of the SERVER-authoritative body so a modified
+# client can't teleport its blade onto a distant puck. A real measurement built
+# from the same scaled geometry the body uses (SkaterController.build_ai_caps),
+# not a tuned margin. Default = league stick + blade + baseline backhand ROM reach.
+var max_blade_reach: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M + 0.46
 
 # Charged wrister release speed (Shot). Feeds shot-quality eval (score_shoot) — a
 # high-Shot player's shot reaches the net faster, leaving defenders less reaction
@@ -51,6 +64,13 @@ var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # its aiming looks as fast as its hands actually are, no artificial per-difficulty
 # override. Default mirrors the controller's 10.0.
 var blade_speed: float = 10.0
+
+# Backhand power coefficient (Hands, = SkaterController.backhand_power_coefficient
+# — hands_backhand_mult un-penalizes it toward 1.0). The release-offset sampler
+# prices a backhand-side release at this fraction of the wrister pace, so the
+# in-tight backhand finish is exactly as attractive as this build's hands make
+# it. Default mirrors the controller's 0.75.
+var backhand_power_coefficient: float = 0.75
 
 # Body-check delivery (Size + Physical): the attacker impulse coefficient. The
 # victim impulse is `approach × (attacker_weight / victim_weight) × transfer` (see

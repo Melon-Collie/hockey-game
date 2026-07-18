@@ -285,8 +285,8 @@ func _render_client(t: NetworkTelemetry) -> void:
 	else:
 		_context(_band(rtt_avg, 80.0, 150.0), "Ping (RTT)", "%.0f ms avg, %.0f ms last" % [rtt_avg, rtt_last],
 			"round-trip to host; <80 great, 80-150 playable, >150 laggy — distance, not a bug (doesn't flag the header)")
-	var offset := NetworkManager.get_clock_offset_ms()
-	_info("Clock offset", ("%+.0f ms" % offset), "your clock vs host's; just informational")
+	var clock_offset := NetworkManager.get_clock_offset_ms()
+	_info("Clock offset", ("%+.0f ms" % clock_offset), "your clock vs host's; just informational")
 	_metric(_band(t.packet_loss_pct, 1.0, 5.0), "Packet loss", "%.1f%%" % t.packet_loss_pct,
 		"dropped packets; <1% great, >5% causes rubber-banding")
 	_context(_band(t.jitter_p95_ms, 8.0, 20.0), "Jitter", "%.1f ms" % t.jitter_p95_ms,

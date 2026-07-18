@@ -12,13 +12,21 @@ extends CanvasLayer
 
 signal retry_pressed
 signal exit_pressed
+# The in-play "Skip" control: abandon the current attempt and move on. Opt-in
+# (hidden until enable_skip()) so drills that want an escape hatch — e.g. the
+# passing drill, where a fumbled rep can leave the puck out of reach — surface
+# one without forcing it on every drill.
+signal skip_pressed
 
 var _shot_label: Label = null
 var _score_label: Label = null
 var _flash_label: Label = null
+var _flash_card: Control = null
 var _results_panel: Control = null
 var _results_heading: Label = null
 var _results_sub: Label = null
+var _skip_btn: Button = null
+var _skip_enabled: bool = false
 
 const _GREEN: Color = Color(0.3, 1.0, 0.45, 0.9)
 const _RED: Color = Color(1.0, 0.42, 0.4, 0.9)
@@ -125,15 +133,59 @@ func _build_tracker() -> void:
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		vbox.add_child(hint)
 
+	# In-play escape hatch, hidden until enable_skip(). Sits under the tracker so
+	# it's reachable during play but out of the way; toggled off while the
+	# results card is up (that card owns its own buttons).
+	_skip_btn = Button.new()
+	_skip_btn.text = "Skip ▸"
+	_skip_btn.add_theme_font_size_override("font_size", 12)
+	_skip_btn.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	_skip_btn.visible = false
+	_skip_btn.pressed.connect(func() -> void: skip_pressed.emit())
+	SoundManager.wire_button(_skip_btn)
+	vbox.add_child(_skip_btn)
+
 
 func _build_flash() -> void:
+	# A broadcast-style verdict card in the same visual language as the faceoff
+	# "2 → 1 → DROP!" countdown chyron: a BROADCAST_BG panel with 4px rounded
+	# corners, sat in the lower-centre so it doesn't cover the net. Replaces the
+	# old bare floating word so a result reads as HUD chrome, not stray text.
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.BROADCAST_BG
+	style.set_corner_radius_all(4)
+	style.anti_aliasing = false
+	style.set_content_margin(SIDE_LEFT, 40)
+	style.set_content_margin(SIDE_RIGHT, 40)
+	style.set_content_margin(SIDE_TOP, 16)
+	style.set_content_margin(SIDE_BOTTOM, 16)
+
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", style)
+
 	_flash_label = Label.new()
-	_flash_label.add_theme_font_size_override("font_size", 72)
-	_flash_label.set_anchors_preset(Control.PRESET_CENTER)
+	_flash_label.add_theme_font_size_override("font_size", 60)
 	_flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_flash_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_flash_label.visible = false
-	add_child(_flash_label)
+	_flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	panel.add_child(_flash_label)
+
+	# Bottom-centre band, mirroring the faceoff banner's placement (clear of the
+	# top-right tracker and the goal mouth).
+	var root := Control.new()
+	root.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	root.offset_top = -260.0
+	root.offset_bottom = -100.0
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var centering := CenterContainer.new()
+	centering.set_anchors_preset(Control.PRESET_FULL_RECT)
+	centering.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	centering.add_child(MenuStyle.wrap_drop_shadow(panel, Vector2(5, 5)))
+	root.add_child(centering)
+
+	_flash_card = root
+	_flash_card.visible = false
+	add_child(_flash_card)
 
 
 func _build_results_panel() -> void:
@@ -193,28 +245,42 @@ func _build_results_panel() -> void:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+# Reveal the in-play Skip button (opt-in per drill). Idempotent.
+func enable_skip() -> void:
+	_skip_enabled = true
+	if _skip_btn != null:
+		_skip_btn.visible = true
+
+
 func set_progress(attempt_number: int, total: int, makes: int) -> void:
-	_flash_label.visible = false
+	_flash_card.visible = false
 	_shot_label.text = "Shot %d / %d" % [attempt_number, total]
 	_score_label.text = "%s: %d" % [_score_noun(), makes]
+	if _skip_btn != null:
+		_skip_btn.visible = _skip_enabled
 
 
 func flash_result(made: bool, makes: int, attempts_taken: int) -> void:
 	_flash_label.text = _success_flash() if made else _fail_flash()
 	_flash_label.add_theme_color_override("font_color", _GREEN if made else _RED)
-	_flash_label.visible = true
+	_flash_card.visible = true
 	_score_label.text = "%s: %d / %d" % [_score_noun(), makes, attempts_taken]
 
 
 func show_results(makes: int, total: int) -> void:
-	_flash_label.visible = false
+	_flash_card.visible = false
 	_results_heading.text = "%d / %d" % [makes, total]
 	_results_sub.text = _verdict(makes, total)
 	_results_panel.visible = true
+	# The results card owns Try Again / Exit; the in-play Skip would just clutter.
+	if _skip_btn != null:
+		_skip_btn.visible = false
 
 
 func hide_results() -> void:
 	_results_panel.visible = false
+	if _skip_btn != null:
+		_skip_btn.visible = _skip_enabled
 
 
 func _unhandled_input(event: InputEvent) -> void:

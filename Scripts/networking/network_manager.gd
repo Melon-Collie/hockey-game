@@ -8,7 +8,7 @@ extends Node
 # must use is_bot_peer / is_real_peer to gate routing — peer_id sign is
 # NOT a bot indicator and must not be assumed.
 const BOT_ID_BASE: int = 10_000
-const BOT_ID_MAX: int = BOT_ID_BASE + 5  # 6 bots max (3 per team)
+const BOT_ID_MAX: int = BOT_ID_BASE + 9  # 10 bots max (5 per team, 5v5 capacity)
 
 # Re-exported from ClockSync so lag-comp resolvers can reference it without
 # loading the script directly. Single source of truth lives in clock_sync.gd.
@@ -84,21 +84,24 @@ signal lobby_roster_synced(roster: Array)
 signal color_vote_changed(peer_id: int, color_slot: int)
 signal color_votes_synced(votes: Dictionary)
 signal team_colors_changed(home_slot: int, away_slot: int)
-signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int)
+signal lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int, team_size: int, bot_difficulty: int, goalie_difficulty: int)
 signal return_to_lobby_received(roster: Array)
 signal player_ready_changed(peer_id: int, is_ready: bool)
 # Lobby per-slot bot toggle. Slot keys follow LobbyManager._slot_key (team*3+slot).
 # Host authoritative; clients mirror. Phase 1 only emits on host-driven changes.
 signal bot_slot_changed(slot_key: int, is_bot: bool)
 signal bot_slots_synced(bot_slots: Dictionary)
-signal rematch_vote_changed(peer_id: int, vote: bool)
+signal rematch_vote_changed(peer_id: int, vote: int)
+signal rematch_voters_changed(total: int)
 signal clock_ready
-signal pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float)
-signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
-signal stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int)
+signal pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3)
+signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3, blade_prev: Vector3)
+signal stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float)
 signal board_hit_received(position: Vector3)
 signal goal_body_hit_received(position: Vector3)
+signal post_hit_received(position: Vector3)
+signal goalie_hit_received(position: Vector3)
 signal deflection_received(position: Vector3)
 signal body_block_received(position: Vector3)
 signal puck_strip_received(position: Vector3)
@@ -214,6 +217,13 @@ var pending_num_periods: int = GameRules.NUM_PERIODS
 var pending_period_duration: float = GameRules.PERIOD_DURATION
 var pending_ot_enabled: bool = GameRules.OT_ENABLED
 var pending_rule_set: int = GameRules.DEFAULT_RULE_SET
+var pending_team_size: int = GameRules.DEFAULT_TEAM_SIZE
+# Host's AI difficulty picks, mirrored to clients for lobby DISPLAY only —
+# the AI itself is host-simulated from the host's PlayerPrefs, so clients
+# never feed these back into gameplay (and never write them to their own
+# prefs).
+var pending_bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL
+var pending_goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL
 var pending_join_players: Array = []     # sync_existing_players data for join-in-progress
 
 # Client: true between learning that a Hockey-scene (re)load is coming
@@ -296,12 +306,15 @@ var _ws_drop_window: int = 0
 var _ws_recv_window: int = 0
 var _ws_loss_window_timer: float = 0.0
 var packet_loss_pct: float = 0.0
-# Host-side: per-peer loss via echoed sequence numbers in input batches.
-var _peer_last_echoed: Dictionary = {}
-var _peer_echo_drop_window: Dictionary = {}
-var _peer_echo_recv_window: Dictionary = {}
+# Host-side: per-peer downstream (host->client) loss %. The client measures its OWN
+# world-state loss from gaps in the seq numbers it received (the accurate signal —
+# _ws_drop_window below) and reports it in each input-batch header; the host stores
+# it here verbatim. This replaced an echo-gap estimator that re-derived loss from
+# the client's last-received seq: because the client echoed only its LATEST seq
+# once per batch while world state broadcasts at STATE_RATE, any WS packet the
+# client received-but-didn't-echo (Steam delivers clumpy) was miscounted as
+# dropped, inflating a clean link to ~50%. Read by get_peer_loss_rate.
 var _peer_loss_rates: Dictionary = {}
-var _peer_loss_timer: float = 0.0
 # Jitter measurement (client side)
 var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
@@ -389,7 +402,8 @@ func start_offline() -> void:
 	_peer_numbers[1] = local_jersey_number
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
-			"rule_set": GameRules.DEFAULT_RULE_SET}
+			"rule_set": GameRules.DEFAULT_RULE_SET,
+			"team_size": GameRules.DEFAULT_TEAM_SIZE}
 
 
 # Entry point that wraps start_offline with the free-play-specific seeding:
@@ -634,12 +648,8 @@ func _on_peer_disconnected(id: int) -> void:
 	peer_disconnected.emit(id)
 	_peer_steam_ids.erase(id)
 	_kicked_peers.erase(id)
-	# Per-peer telemetry books, else the host's 1 Hz loss loop iterates a stale
-	# peer forever and its ping lingers on scoreboards.
+	# Per-peer telemetry books, else a stale peer's ping lingers on scoreboards.
 	_peer_ping_ms.erase(id)
-	_peer_last_echoed.erase(id)
-	_peer_echo_drop_window.erase(id)
-	_peer_echo_recv_window.erase(id)
 	_peer_loss_rates.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
@@ -654,7 +664,13 @@ func _on_connected_to_server() -> void:
 	_clock_sync = _ClockSyncScript.new()
 	_clock_sync.init_session(_session_start_ms)
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
-	_peer_attributes[1] = local_attrs
+	# Stamp the local peer's OWN entry, not [1] (which is the host from a
+	# client's view). on_slot_assigned spawns the local skater via
+	# get_peer_attributes(local_peer_id()); keying at 1 here made that lookup
+	# miss and fall back to all-medium, so the client's own matchup card and
+	# local-prediction build showed defaults while every host-sourced view was
+	# correct. Valid here — the unique id is assigned before connected_to_server.
+	_peer_attributes[local_peer_id()] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.speed, local_attrs.agility, local_attrs.hands,
 			local_attrs.size, local_attrs.physical, local_attrs.shot,
@@ -706,11 +722,7 @@ func _close() -> void:
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()
 	_peer_ping_ms.clear()
-	_peer_last_echoed.clear()
-	_peer_echo_drop_window.clear()
-	_peer_echo_recv_window.clear()
 	_peer_loss_rates.clear()
-	_peer_loss_timer = 0.0
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -777,6 +789,9 @@ func reset() -> void:
 	pending_period_duration = GameRules.PERIOD_DURATION
 	pending_ot_enabled = GameRules.OT_ENABLED
 	pending_rule_set = GameRules.DEFAULT_RULE_SET
+	pending_team_size = GameRules.DEFAULT_TEAM_SIZE
+	pending_bot_difficulty = BotSkillProfile.Difficulty.NORMAL
+	pending_goalie_difficulty = GoalieSkillProfile.Difficulty.NORMAL
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -793,11 +808,7 @@ func reset() -> void:
 	_ws_loss_window_timer = 0.0
 	packet_loss_pct = 0.0
 	_peer_ping_ms.clear()
-	_peer_last_echoed.clear()
-	_peer_echo_drop_window.clear()
-	_peer_echo_recv_window.clear()
 	_peer_loss_rates.clear()
-	_peer_loss_timer = 0.0
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
 	_pdv_floor = -1.0
@@ -894,8 +905,11 @@ func _process(delta: float) -> void:
 			var batch_frames: int = 24 if get_peer_loss_rate() > 10.0 else 12
 			var batch: Array[InputState] = _input_batch_provider.call(batch_frames)
 			var buf := PackedByteArray(); buf.resize(3)
-			# u16 echo (0xFFFF = no world state received yet), u8 count
-			buf.encode_u16(0, _last_ws_seq_received if _last_ws_seq_received >= 0 else 0xFFFF)
+			# u16 client-measured downstream loss in basis points (0..10000 = 0..100%),
+			# u8 count. The client's own WS-seq-gap loss is authoritative for the
+			# host->client link, so the host stores it directly instead of re-deriving
+			# loss from an undersampled seq echo (see _peer_loss_rates).
+			buf.encode_u16(0, clampi(roundi(packet_loss_pct * 100.0), 0, 65535))
 			buf.encode_u8(2, batch.size())
 			for s: InputState in batch:
 				buf.append_array(s.to_bytes())
@@ -914,21 +928,6 @@ func _process(delta: float) -> void:
 			_ws_drop_window = 0
 			_ws_recv_window = 0
 			_ws_loss_window_timer = 0.0
-
-	if is_host:
-		# Broadcast cadence lives in _physics_process so it stays well-paced
-		# across host main-thread stalls. The 1Hz peer-loss aggregation stays
-		# render-frame-paced — it's a slow per-second sample, not latency-critical.
-		_peer_loss_timer += capped_delta
-		if _peer_loss_timer >= 1.0:
-			for pid: int in _peer_echo_recv_window:
-				var recvd: int = _peer_echo_recv_window[pid]
-				var dropped: int = _peer_echo_drop_window.get(pid, 0)
-				var total: int = recvd + dropped
-				_peer_loss_rates[pid] = (float(dropped) / float(total) * 100.0) if total > 0 else 0.0
-				_peer_echo_drop_window[pid] = 0
-				_peer_echo_recv_window[pid] = 0
-			_peer_loss_timer = 0.0
 
 # Runtime broadcast-rate knob. No callers today — see the `_state_tick_divisor`
 # doc-comment for why the per-phase dead-puck downshift was removed — retained
@@ -1193,8 +1192,9 @@ func receive_input_batch(data: PackedByteArray) -> void:
 		func(d: PackedByteArray, sid: int) -> void:
 			if d.size() < 3:
 				return
-			var echo_raw: int = d.decode_u16(0)
-			_update_peer_echo(sid, -1 if echo_raw == 0xFFFF else echo_raw)
+			# Client-reported downstream loss (basis points) — stored verbatim as
+			# this peer's link loss (see _peer_loss_rates).
+			_peer_loss_rates[sid] = float(d.decode_u16(0)) / 100.0
 			var count: int = d.decode_u8(2)
 			if count > _MAX_INPUTS_PER_BATCH:
 				push_warning("oversized input batch from peer %d: count=%d" % [sid, count])
@@ -1273,14 +1273,22 @@ func receive_pong(client_send_time: float, host_time: float) -> void:
 				clock_ready.emit(),
 		[client_send_time, host_time], true)
 
-func send_pickup_claim(host_timestamp: float, interp_delay_ms: float) -> void:
+# Client-authoritative blade geometry rides the claim: the client sends the blade
+# it actually reached with (blade_curr + one-tick-prior blade_prev for the swept
+# test, plus the top-hand grip for the pickup reception face-normal), so the host
+# validates against what the client saw instead of reconstructing the blade from
+# its lossy self-view snapshot. World-space; the host reach-clamps each point to
+# the claimant's server-authoritative body (LagCompRewind.clamp_client_blade).
+func send_pickup_claim(host_timestamp: float, interp_delay_ms: float,
+		blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
 	NetworkSimManager.send(
-		func(ts: float, idms: float) -> void:
-			receive_pickup_claim.rpc_id(1, ts, idms),
-		[host_timestamp, interp_delay_ms], true)
+		func(ts: float, idms: float, bc: Vector3, bp: Vector3, th: Vector3) -> void:
+			receive_pickup_claim.rpc_id(1, ts, idms, bc, bp, th),
+		[host_timestamp, interp_delay_ms, blade_curr, blade_prev, top_hand], true)
 
 @rpc("any_peer", "reliable")
-func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float) -> void:
+func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float,
+		blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
@@ -1290,37 +1298,41 @@ func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float) -> void
 	# inherit it.
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		return
-	pickup_claim_received.emit(peer_id, host_timestamp, interp_delay_ms)
+	pickup_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, blade_curr, blade_prev, top_hand)
 
-func send_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func send_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int,
+		blade_curr: Vector3, blade_prev: Vector3) -> void:
 	NetworkSimManager.send(
-		func(ts: float, idms: float, cpid: int) -> void:
-			receive_poke_claim.rpc_id(1, ts, idms, cpid),
-		[host_timestamp, interp_delay_ms, expected_carrier_peer_id], true)
+		func(ts: float, idms: float, cpid: int, bc: Vector3, bp: Vector3) -> void:
+			receive_poke_claim.rpc_id(1, ts, idms, cpid, bc, bp),
+		[host_timestamp, interp_delay_ms, expected_carrier_peer_id, blade_curr, blade_prev], true)
 
 @rpc("any_peer", "reliable")
-func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int,
+		blade_curr: Vector3, blade_prev: Vector3) -> void:
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		return
-	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id, blade_curr, blade_prev)
 
-func send_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func send_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int,
+		blade_curr: Vector3) -> void:
 	NetworkSimManager.send(
-		func(ts: float, idms: float, cpid: int) -> void:
-			receive_stick_lift_claim.rpc_id(1, ts, idms, cpid),
-		[host_timestamp, interp_delay_ms, expected_carrier_peer_id], true)
+		func(ts: float, idms: float, cpid: int, bc: Vector3) -> void:
+			receive_stick_lift_claim.rpc_id(1, ts, idms, cpid, bc),
+		[host_timestamp, interp_delay_ms, expected_carrier_peer_id, blade_curr], true)
 
 @rpc("any_peer", "reliable")
-func receive_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func receive_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int,
+		blade_curr: Vector3) -> void:
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		return
-	stick_lift_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+	stick_lift_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id, blade_curr)
 
 func send_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	NetworkSimManager.send(
@@ -1598,9 +1610,13 @@ func notify_puck_stolen(event_seq: int, was_stick_lift: bool) -> void:
 		[event_seq, was_stick_lift], true)
 
 func send_one_timer_release(direction: Vector3, power: float, origin: Vector3) -> void:
+	# Adapted interp delay (get_interpolation_delay), the value that actually
+	# positioned the rendered puck — the host rewinds to it (remote_view_time) for
+	# the "did I connect with the puck I saw" range gate. Matches the pickup / poke /
+	# stick-lift / hit claim sends; target would lead it mid-jitter.
 	release_puck_one_timer.rpc_id(1, direction, power,
 			estimated_host_time(), get_latest_rtt_ms(),
-			get_target_interpolation_delay() * 1000.0, origin)
+			get_interpolation_delay() * 1000.0, origin)
 
 @rpc("any_peer", "reliable")
 func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
@@ -1774,8 +1790,11 @@ func send_player_ready(is_ready: bool) -> void:
 	else:
 		request_player_ready.rpc_id(1, is_ready)
 
+# `vote` is a RematchVoteRules.Choice — NONE withdraws, REMATCH/LOBBY are the
+# two flavors of the shared end-of-game "play again" vote (HUD resolves the
+# pool via RematchVoteRules; the host acts on the outcome).
 @rpc("any_peer", "reliable")
-func request_rematch_vote(vote: bool) -> void:
+func request_rematch_vote(vote: int) -> void:
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
@@ -1784,10 +1803,10 @@ func request_rematch_vote(vote: bool) -> void:
 	rematch_vote_changed.emit(peer_id, vote)
 
 @rpc("authority", "reliable")
-func notify_rematch_vote(peer_id: int, vote: bool) -> void:
+func notify_rematch_vote(peer_id: int, vote: int) -> void:
 	rematch_vote_changed.emit(peer_id, vote)
 
-func send_rematch_vote(vote: bool) -> void:
+func send_rematch_vote(vote: int) -> void:
 	if is_host:
 		var peer_id: int = local_peer_id()
 		for remote_id: int in connected_peer_ids():
@@ -1795,6 +1814,19 @@ func send_rematch_vote(vote: bool) -> void:
 		rematch_vote_changed.emit(peer_id, vote)
 	else:
 		request_rematch_vote.rpc_id(1, vote)
+
+# Voter-pool size for the end-of-game vote, host-broadcast (the skip-replay
+# pattern: host counts, peers display). Clients can't compute it themselves —
+# from-lobby spectators are only ever tracked host-side, so a client-local
+# "peers minus spectators" undercounts the subtraction.
+@rpc("authority", "reliable")
+func notify_rematch_voters(total: int) -> void:
+	rematch_voters_changed.emit(total)
+
+func send_rematch_voters_to_all(total: int) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_rematch_voters.rpc_id(peer_id, total)
+	rematch_voters_changed.emit(total)
 
 signal join_in_progress(config: Dictionary)
 
@@ -1804,10 +1836,12 @@ func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
 		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
-		p_game_id: String = "") -> void:
+		p_game_id: String = "",
+		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	pending_team_size = p_team_size
 	# The Hockey scene is about to be (re)loaded for this join — stash any
 	# slot/roster RPCs that land before the new scene's _ready.
 	scene_swap_pending = true
@@ -1820,6 +1854,7 @@ func notify_join_in_progress(p_num_periods: int, p_period_duration: float,
 		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
+		"team_size": p_team_size,
 	})
 
 func send_join_in_progress(peer_id: int, config: Dictionary) -> void:
@@ -1827,9 +1862,10 @@ func send_join_in_progress(peer_id: int, config: Dictionary) -> void:
 	var aslot: int = int(config.get("away_color_slot", pending_away_color_slot))
 	var rs: int = config.get("rule_set", pending_rule_set)
 	var gid: String = config.get("game_id", "")
+	var ts: int = config.get("team_size", pending_team_size)
 	notify_join_in_progress.rpc_id(peer_id,
 		config.num_periods, config.period_duration,
-		config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
+		config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid, ts)
 
 @rpc("authority", "reliable")
 func notify_game_start(p_num_periods: int, p_period_duration: float,
@@ -1837,10 +1873,12 @@ func notify_game_start(p_num_periods: int, p_period_duration: float,
 		p_home_color_slot: int = TeamColorRegistry.DEFAULT_HOME_SLOT,
 		p_away_color_slot: int = TeamColorRegistry.DEFAULT_AWAY_SLOT,
 		p_rule_set: int = GameRules.DEFAULT_RULE_SET,
-		p_game_id: String = "") -> void:
+		p_game_id: String = "",
+		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE) -> void:
 	pending_home_color_slot = p_home_color_slot
 	pending_away_color_slot = p_away_color_slot
 	pending_rule_set = p_rule_set
+	pending_team_size = p_team_size
 	# Lobby → Hockey transition incoming; same stash-forcing as join-in-progress.
 	scene_swap_pending = true
 	game_started.emit({
@@ -1852,6 +1890,7 @@ func notify_game_start(p_num_periods: int, p_period_duration: float,
 		"away_color_slot": p_away_color_slot,
 		"rule_set": p_rule_set,
 		"game_id": p_game_id,
+		"team_size": p_team_size,
 	})
 
 @rpc("authority", "reliable")
@@ -1864,13 +1903,15 @@ func send_game_start(config: Dictionary) -> void:
 	var aslot: int = int(config.get("away_color_slot", TeamColorRegistry.DEFAULT_AWAY_SLOT))
 	var rs: int = config.get("rule_set", GameRules.DEFAULT_RULE_SET)
 	var gid: String = config.get("game_id", "")
+	var ts: int = config.get("team_size", GameRules.DEFAULT_TEAM_SIZE)
 	pending_home_color_slot = hslot
 	pending_away_color_slot = aslot
 	pending_rule_set = rs
+	pending_team_size = ts
 	for peer_id: int in connected_peer_ids():
 		notify_game_start.rpc_id(peer_id,
 			config.num_periods, config.period_duration,
-			config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid)
+			config.ot_enabled, config.ot_duration, hslot, aslot, rs, gid, ts)
 	game_started.emit(config)
 
 func send_lobby_roster(peer_id: int, roster: Array) -> void:
@@ -1987,24 +2028,37 @@ func send_bot_slots_to(peer_id: int, bot_slots: Dictionary, identities: Dictiona
 
 @rpc("authority", "reliable")
 func notify_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool,
-		rule_set: int = GameRules.DEFAULT_RULE_SET) -> void:
+		rule_set: int = GameRules.DEFAULT_RULE_SET,
+		team_size: int = GameRules.DEFAULT_TEAM_SIZE,
+		bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL,
+		goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL) -> void:
 	pending_num_periods = num_periods
 	pending_period_duration = period_duration
 	pending_ot_enabled = ot_enabled
 	pending_rule_set = rule_set
-	lobby_settings_synced.emit(num_periods, period_duration, ot_enabled, rule_set)
+	pending_team_size = team_size
+	pending_bot_difficulty = bot_difficulty
+	pending_goalie_difficulty = goalie_difficulty
+	lobby_settings_synced.emit(num_periods, period_duration, ot_enabled, rule_set, team_size,
+			bot_difficulty, goalie_difficulty)
 
-func send_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+func send_lobby_settings(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
 	pending_num_periods = num_periods
 	pending_period_duration = period_duration
 	pending_ot_enabled = ot_enabled
 	pending_rule_set = rule_set
+	pending_team_size = team_size
+	pending_bot_difficulty = bot_difficulty
+	pending_goalie_difficulty = goalie_difficulty
 	for peer_id: int in connected_peer_ids():
-		notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set)
+		notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set,
+				team_size, bot_difficulty, goalie_difficulty)
 
 func send_lobby_settings_to(peer_id: int, num_periods: int, period_duration: float, ot_enabled: bool,
-		rule_set: int) -> void:
-	notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set)
+		rule_set: int, team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
+	notify_lobby_settings.rpc_id(peer_id, num_periods, period_duration, ot_enabled, rule_set,
+			team_size, bot_difficulty, goalie_difficulty)
 
 @rpc("authority", "reliable")
 func notify_return_to_lobby(roster: Array) -> void:
@@ -2051,9 +2105,11 @@ func get_packet_delay_floor_ms() -> float:
 
 func get_target_interpolation_delay() -> float:
 	# Cached once per physics frame: get_jitter_p95() duplicates + sorts the sample
-	# buffer, and this is read by the per-packet shared-delay advance plus every
-	# claim-send. The target drifts slowly (adapt clamps ±1.5/+10 ms per packet),
-	# so a frame of staleness is irrelevant.
+	# buffer, and this is read by the per-packet shared-delay advance and the F3
+	# overlay. (Claim-sends report the ADAPTED get_interpolation_delay instead —
+	# the value that actually positioned the rendered entity — so the host's
+	# remote-view rewind matches what the client saw.) The target drifts slowly
+	# (adapt clamps ±1.5/+10 ms per packet), so a frame of staleness is irrelevant.
 	var frame: int = Engine.get_physics_frames()
 	if frame != _target_interp_frame:
 		_target_interp_frame = frame
@@ -2135,22 +2191,6 @@ func _on_ws_sequence_received(seq: int) -> void:
 	_ws_recv_window += 1
 	_last_ws_seq_received = seq
 
-func _update_peer_echo(peer_id: int, echoed_seq: int) -> void:
-	if echoed_seq < 0:
-		return
-	if not _peer_last_echoed.has(peer_id):
-		_peer_last_echoed[peer_id] = echoed_seq
-		_peer_echo_drop_window[peer_id] = 0
-		_peer_echo_recv_window[peer_id] = 0
-		return
-	var prev: int = _peer_last_echoed[peer_id]
-	if echoed_seq == prev:
-		return  # duplicate echo between WS ticks
-	var gap: int = (echoed_seq - prev - 1 + 65536) % 65536
-	_peer_echo_drop_window[peer_id] += gap
-	_peer_echo_recv_window[peer_id] += 1
-	_peer_last_echoed[peer_id] = echoed_seq
-
 # ── Registration ──────────────────────────────────────────────────────────────
 func set_world_state_provider(provider: Callable) -> void:
 	_world_state_provider = provider
@@ -2173,6 +2213,22 @@ func send_goal_body_hit_to_all(position: Vector3) -> void:
 @rpc("authority", "unreliable")
 func notify_goal_body_hit(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: goal_body_hit_received.emit(pos), [position], false)
+
+func send_post_hit_to_all(position: Vector3) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_post_hit.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_post_hit(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: post_hit_received.emit(pos), [position], false)
+
+func send_goalie_hit_to_all(position: Vector3) -> void:
+	for peer_id: int in connected_peer_ids():
+		notify_goalie_hit.rpc_id(peer_id, position)
+
+@rpc("authority", "unreliable")
+func notify_goalie_hit(position: Vector3) -> void:
+	NetworkSimManager.send(func(pos: Vector3) -> void: goalie_hit_received.emit(pos), [position], false)
 
 func send_deflection_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():

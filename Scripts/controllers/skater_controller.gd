@@ -41,6 +41,24 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # SkaterPoseCoordinator.apply_facing. Deterministic from sprint_active, so it
 # re-derives identically through reconcile replay (no new wire state).
 @export var sprint_turn_multiplier: float = 0.55
+# ── Hit-Button (Body-Check Commit) Tuning ─────────────────────────────────────
+# The hit button (Ctrl / input.hit_held) commits a check: it delivers the full
+# body-check transfer (see Skater.hit_passive_transfer_mult for the uncommitted
+# floor), and pays for it the way sprint does — a stamina drain on the shared pool
+# plus a wider turn radius. So a big hit is a committed read (line them up, spend
+# stamina, sacrifice agility), not a free bump. Both costs are deterministic from
+# the replicated input.hit_held, so they re-derive through reconcile replay.
+@export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
+@export var hit_turn_multiplier: float = 0.6          # turn-rate scale while committing (< 1.0 = wider turns)
+# Commit stance (cosmetic): while the Hit button is held the skater visibly loads
+# up for the check — leans into it, drops the leading shoulder, and sinks into a
+# crouch. A render-rate blend (SkaterSkatingCoordinator) off the replicated
+# skater.hit_committed, so it reads on every machine and never touches the physics-
+# rate blade anchor (no reconcile geometry impact). Eases in/out as Ctrl is held.
+@export var hit_commit_lean_deg: float = 16.0         # forward trunk lean into the check
+@export var hit_commit_shoulder_deg: float = 12.0     # leading-shoulder drop (roll)
+@export var hit_commit_crouch_m: float = 0.07         # sink into the checking stance
+@export var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
 # stamina bite, both scaled by how hard the hit landed (the m/s transfer impulse).
@@ -49,8 +67,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # for every player in v1 (the hit strength already reflects the attacker's Size/
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
-@export var stagger_min_impulse: float = 3.0       # m/s transfer delta below which a hit doesn't stagger
-@export var stagger_ref_impulse: float = 11.0      # m/s transfer delta treated as a full-strength check
+# Grounded to the Slice B inelastic magnitudes: the delivered victim impulse is
+# closing_speed × transfer × m_a/(m_a+m_b), so a committed equal-mass hit at ~6–10
+# m/s closing lands ~1.4–2.3 m/s and an enforcer/fast hit ~3.5–5. The ladder is set
+# to that scale (was 3/11 on the old weight-ratio model, which never fired). Still
+# feel tunables — nudge from here once you've played it.
+@export var stagger_min_impulse: float = 1.0       # m/s transfer delta below which a hit doesn't stagger
+@export var stagger_ref_impulse: float = 2.5       # m/s transfer delta treated as a full-strength check
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
 @export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
 @export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
@@ -66,6 +89,29 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # (stagger_recoil_dir); remotes recoil generically backward (they get the timer
 # off the wire, not the direction). Applied in SkaterPoseCoordinator._apply_lean.
 @export var stagger_recoil_deg: float = 13.0  # peak torso recoil lean at full stagger
+# ── Knockdown Tuning ──────────────────────────────────────────────────────────
+# The top of the stagger continuum: a hit whose victim impulse exceeds
+# knockdown_impulse KNOCKS THE VICTIM DOWN — movement locked, no puck interaction,
+# the body slides from the hit and bleeds speed via knockdown_friction — for a
+# recovery window scaling with the hit (see BodyCheckRules.knockdown_seconds_from_
+# impulse). knockdown_timer rides the SAME replicated / snapped / decayed rail as
+# stagger_timer. NOTE: on the OLD magnitude scale — wants a downward re-tune with
+# the stagger thresholds once the Slice B inelastic feel is dialed. Set
+# knockdown_impulse very high (or 0) to effectively disable knockdowns.
+@export var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down
+@export var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
+@export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
+@export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
+@export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
+# Knockdown pose (cosmetic): a downed player crumples — the body drops toward the
+# ice, the legs go limp, and the torso reels hard in the hit direction (an
+# amplified stagger recoil). All driven off the replicated knockdown_timer, so it
+# renders identically on every machine and through reconcile, like the stagger
+# stumble. knockdown_getup_seconds is the tail window over which the pose eases back
+# up (the get-up) — the pose holds full while more than this much time remains.
+@export var knockdown_pose_drop_m: float = 0.85    # how far the body sinks while down
+@export var knockdown_fold_deg: float = 50.0       # peak torso reel (added onto the recoil) while down
+@export var knockdown_getup_seconds: float = 0.4   # tail over which the down pose eases back up
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -465,8 +511,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 #   the marginal over-the-bar condition started landing on ordinary shots.
 # Where the arc sits at the net is emergent from distance + power — that read
 # is the skill (the old ballistic solve auto-arrived at a target height).
-@export var loft_vertical_speed_low: float = 2.2
-@export var loft_vertical_speed_high: float = 4.65
+@export var loft_vertical_speed_low: float = GameRules.DEFAULT_LOFT_VY_LOW_M_S
+@export var loft_vertical_speed_high: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
 
 # ── Head Tracking Tuning ─────────────────────────────────────────────────────
 @export var head_track_speed: float = 12.0
@@ -686,6 +732,14 @@ var _blade_relative_angle: float = 0.0
 # so it stays deterministic. Only read by the FOLLOW_THROUGH pose branches, which
 # never run on the faceoff/skate-in cosmetic paths, so a stale value is harmless.
 var _current_aim_world: Vector3 = Vector3.ZERO
+# Reused ShotResult for the per-tick "where would this charge go if released now"
+# prediction in _update_wrister_charge — a caller-owned scratch so that hot path
+# (120 Hz while charging, re-run per replayed input on reconcile) doesn't churn
+# the heap. Pure output, overwritten each solve.
+var _wrister_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
+# Same scratch for the slapper windup's release-now prediction (_update_slapper_
+# charge) — the goalie pre-leans off it toward a charging slapshot's aimed corner.
+var _slapper_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
 # Per-tick mirror of input.elevation_level (0 flat / 1 low / 2 high) — NOT
 # sticky state: overwritten from the frame every tick, so reconcile replay
 # re-derives it from the replayed inputs with nothing to snap.
@@ -698,6 +752,20 @@ var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
 var is_replaying: bool = false
+# Previous-tick puck PIN (get_carry_target_global), the swept `prev` the carried-
+# puck net clamp feeds NetClampRules so it can tell a legit front-mouth occupant
+# (rides in / out) from a side/back intrusion (pushed out). Always a clamped
+# (legal) position, per NetClampRules' inductive front-entry contract. Reset when
+# the puck comes loose. See _clamp_carry_pin_from_net.
+var _prev_carry_pin: Vector3 = Vector3.ZERO
+var _has_prev_carry_pin: bool = false
+# True on frames where a special locked-phase path posed the body itself this
+# tick — faceoff-prep blade aim, the faceoff skate-in approach, and replay
+# playback. Those paths run their own gait / head / off-hand (they're brief and
+# not the 120 Hz × N hot path), so the render-rate cosmetic hook yields to them
+# to avoid a double gait pass. The main live path (_process_input) clears it and
+# delegates cosmetics to the render hook.
+var _self_posing: bool = false
 # Sprint stamina (0..1) and the exhaustion lockout latch. Updated deterministically
 # each tick in _apply_movement; the local player's reconcile snaps both to the
 # host's authoritative value before replay (see LocalController.reconcile) and
@@ -709,6 +777,11 @@ var _sprint_locked: bool = false
 # decayed each tick in _apply_movement, and replicated so the local player's
 # reconcile snaps it to the host baseline before replay (same as stamina).
 var stagger_timer: float = 0.0
+# Body-check knockdown: seconds of full movement lockout remaining. Set host-
+# authoritatively (and predicted on the local victim) when a hit exceeds the
+# knockdown threshold; while > 0 the skater is down (no input, sliding, no puck).
+# Replicated / snapped / decayed exactly like stagger_timer.
+var knockdown_timer: float = 0.0
 # Body-frame direction the last check shoved this skater (x = right, y = forward
 # in the (x, z) plane). Drives the recoil lean in SkaterPoseCoordinator; set on
 # the local victim / host from the transfer impulse, left at the default (0, 1 =
@@ -720,6 +793,12 @@ var stagger_recoil_dir: Vector2 = Vector2(0.0, 1.0)
 # coordinator to apply the turn-rate penalty. Public so the pose collaborator
 # can read it without a getter.
 var sprint_active: bool = false
+# Resolved hit-commit (body-check button) state for this tick. Written in
+# _apply_movement alongside sprint_active and read by the pose coordinator for the
+# turn-rate penalty; also mirrored to skater.hit_committed so the collision
+# resolver picks full-vs-passive transfer. Deterministic from input.hit_held +
+# stamina, so it re-derives through reconcile replay with no wire state.
+var hit_active: bool = false
 
 var _game_state_has_faceoff_prep: bool = false
 var _game_state_has_period_break: bool = false
@@ -832,6 +911,11 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_sm.setup(_cb, _aiming)
 	_pose.setup(skater, _sm, _aiming, self, _skating)
 	_skating.setup(skater, _sm, self)
+	# Cosmetic pose (leg gait / head / off-hand IK) now runs at render rate in
+	# Skater._process instead of every physics tick — it feeds only meshes, not
+	# the blade world frame. RemoteController overrides _render_pose_update to
+	# drop head tracking (a wire-fed body has no cursor aim).
+	skater.render_pose_update = _render_pose_update
 
 # Reach ROM is derived from arm length, not an independent tunable. The
 # forehand side is shoulder-joint-limited (about 56% of arm length — the top
@@ -897,8 +981,14 @@ func build_ai_caps() -> AISkaterCaps:
 	caps.max_accel = thrust
 	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
 	caps.stick_reach = stick_length
+	# Fully-extended body→blade reach (arm ROM displacement + stick + blade). Read
+	# off the same scaled geometry the body uses, so the host's client-blade
+	# anti-cheat clamp bounds against this build's real reach, not the league
+	# default. See AISkaterCaps.max_blade_reach / the claim resolvers.
+	caps.max_blade_reach = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M + rom_backhand_reach_max
 	caps.wrister_shot_speed = max_wrister_power
 	caps.blade_speed = max_blade_speed
+	caps.backhand_power_coefficient = backhand_power_coefficient
 	# Handle reach scales with the Hands dangle lever: max_blade_speed / its base
 	# is exactly hands_blade_mult(), so a better handler protects the puck further
 	# out. _base is captured on the first apply_attributes (always run before this).
@@ -1071,6 +1161,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	_cached_block_move_cfg = null
 	_cached_stamina_cfg = null
 	_cached_wrister_cfg = null
+	_cached_slapper_cfg = null
 	skater.apply_appearance(attrs)
 
 
@@ -1141,12 +1232,18 @@ func _on_body_check_received(impulse: Vector3) -> void:
 	var recoil_xz: Vector2 = Vector2(local_impulse.x, local_impulse.z)
 	if recoil_xz.length() > 0.001:
 		stagger_recoil_dir = recoil_xz.normalized()
+	var cfg: BodyCheckRules.Config = _body_check_config()
+	# Knockdown rides the same "extend, never shorten" rule as stagger and is set on
+	# both the host and the local victim's prediction — so a downed local player goes
+	# down immediately, and reconcile snaps knockdown_timer to the host value.
+	var knockdown_add: float = BodyCheckRules.knockdown_seconds_from_impulse(impulse_magnitude, cfg)
 	if not _is_host:
 		if skater.is_local_skater:
 			stagger_timer = maxf(stagger_timer,
-					BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, _body_check_config()))
+					BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg))
+			knockdown_timer = maxf(knockdown_timer, knockdown_add)
 		return
-	var cfg: BodyCheckRules.Config = _body_check_config()
+	knockdown_timer = maxf(knockdown_timer, knockdown_add)
 	var add: float = BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg)
 	# Only extend (never shorten) the stagger window, and only bite stamina when
 	# this hit is harder than the residual — incremental_stamina_drain handles the
@@ -1171,10 +1268,11 @@ func _on_body_block_hit(body: Node3D) -> void:
 # FLAT grounded redirect, LOW grounded tip up, HIGH knock an airborne puck down /
 # stick-lift (reach follows blade_can_interact; direction from Puck.apply_blade_deflect).
 # AIController
-# overrides this to always-false — bots don't deliberate-deflect; holding the
-# shoot button off-puck sets up their wrister one-timers instead. Moving deflect
-# off the shoot button (it used to be shoot_held off-puck) also unmasks the
-# human wrister one-timer, which the deflect intent previously suppressed.
+# overrides this to always-false — bots don't deliberate-deflect; their
+# one-timers hold the SLAP button off-puck (the real slapper charge + pickup
+# zone — the only one-timer path on_puck_picked_up_network supports: a held
+# wrister's state is force-reset to SKATING_WITH_PUCK on pickup, so a wrister
+# release edge can never fire on a caught feed).
 func _wants_deflect(input: InputState) -> bool:
 	return input.stick_lift_held and not has_puck
 
@@ -1189,6 +1287,7 @@ func _process_input(input: InputState, delta: float) -> void:
 	# small residual vectors at rest (potential-field repels never fully
 	# cancel) that would otherwise read as a perpetual dig-in chop, and the
 	# wire octant would inflate them to unit length on remote clients.
+	_self_posing = false  # main live path delegates cosmetics to the render hook
 	skater.move_intent = input.move_vector \
 			if input.move_vector.length() > move_deadzone else Vector2.ZERO
 	skater.brake_intent = input.brake
@@ -1235,6 +1334,13 @@ func _process_input(input: InputState, delta: float) -> void:
 	_pose.apply_velocity_lean(delta)
 	_pose.apply_facing(input, delta)
 	_apply_state(input, delta)
+	# Keep the PUCK ITSELF out of the net. The blade net-clamp (in apply_blade_
+	# from_mouse) keeps the BLADE out, but a carried puck pins to a carry offset
+	# OFF the blade (Skater.get_carry_target_global), a separate point the blade
+	# clamp never validated — so a stick reaching from behind/beside could drag
+	# the pinned puck into the net even with the blade reading legal. Runs after
+	# _apply_state so it sees this tick's final blade pose.
+	_clamp_carry_pin_from_net()
 	# Mirror the state machine into the replicated field on every simulated
 	# tick, AFTER _apply_state so same-tick transitions are visible to the
 	# cosmetic consumers below (gait shot stance) and to Skater._process (stick
@@ -1262,33 +1368,50 @@ func _process_input(input: InputState, delta: float) -> void:
 		blade_world_pre = skater.upper_body_to_global(skater.get_blade_position())
 		hand_world_pre = skater.upper_body_to_global(skater.get_top_hand_position())
 	_pose.apply_upper_body(delta)
-	_pose.apply_head_tracking(input, delta)
 	if not is_slapper_charge:
 		skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 		skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
-	_ik.update_bottom_hand()
-	# Stick/arm mesh updates moved to Skater._process — they're write-only
-	# visuals recomputed from the markers this tick just placed, so one pass
-	# per rendered frame (after all physics ticks) replaces the per-tick (and
-	# per-reconcile-replayed-input) passes that used to run here.
+	# Head tracking, off-hand IK, and the leg gait moved to render rate
+	# (Skater.render_pose_update / _render_pose_update) — they feed only meshes,
+	# not the blade world frame, so they don't belong in the 120 Hz + reconcile-
+	# replay path. Stick/arm mesh rebuild already lives in Skater._process too.
 	if not is_replaying:
 		_pose.update_angular_velocities(delta)
-		# Cosmetic leg gait — derived from velocity, so it's skipped during replay
-		# (reconcile re-simulates many ticks per frame and would over-spin the phase).
-		_skating.apply(delta)
+		# Age the goal-celebration timer at physics rate. It used to ride the gait
+		# pass, but the gait is render-rate + visibility-gated now, so the timer
+		# owns its own physics tick here (real ticks only — it must not re-decrement
+		# through reconcile replay) so it stays deterministic and never freezes for
+		# an off-screen scorer.
+		tick_celebration(delta)
 		# Goal celebration: the scorer raises the stick. Overrides the hand/
 		# blade pose the tick just placed — cosmetic-only (pickup is locked
-		# through GOAL_CELEBRATION), real ticks only (the timer must not
-		# re-decrement through reconcile replay), and gated to plain skating
-		# so a whiffed shot's follow-through isn't fought over. The timer
-		# itself is aged in tick_celebration (called by the gait pass above,
-		# which runs on every path — wire-fed remotes included, since their
-		# timers now start too for the celebration leg bounce).
+		# through GOAL_CELEBRATION), real ticks only, and gated to plain skating
+		# so a whiffed shot's follow-through isn't fought over. The render off-hand
+		# IK yields while this is active (see _render_pose_update) so the fist pump
+		# isn't clobbered a frame later.
 		if _celebration_timer > 0.0:
 			var cel_state: SkaterStateMachine.State = _sm.get_state()
 			if cel_state == SkaterStateMachine.State.SKATING_WITH_PUCK \
 					or cel_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:
 				_shot_pose.apply_celebration_pose(1.0 - _celebration_timer / _celebration_total)
+
+
+# Render-rate cosmetic pose pass, registered on the skater and invoked once per
+# rendered frame from Skater._process (visibility-gated). Runs the purely-cosmetic
+# passes that used to sit in the 120 Hz physics tick: the leg gait, head tracking
+# (off the last-seen aim), and the off-hand grip IK. None feed the blade world
+# frame, so running them at render rate can't affect pickup or reconcile. Local
+# and AI controllers use this base; RemoteController overrides it to drop head
+# tracking (a wire-fed body has no cursor aim).
+func _render_pose_update(delta: float) -> void:
+	if skater == null or _self_posing:
+		return
+	_skating.apply(delta)
+	_pose.apply_head_tracking_aim(_current_aim_world, delta)
+	# During a goal celebration the physics tick places the off-hand fist pump
+	# (apply_celebration_pose); yield so the base grip IK doesn't clobber it.
+	if _celebration_timer <= 0.0:
+		_ik.update_bottom_hand()
 
 
 # Aim-only blade update for FACEOFF_PREP: drives the blade target from the
@@ -1315,11 +1438,9 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	_pose.apply_head_tracking(input, delta)
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
-	# The gait normally ticks at the end of _process_input, which this path
-	# replaces — run it here too so the faceoff ready-stance (crouch + foot
-	# stagger) engages during the countdown. At a locked standstill the
-	# stride terms are inert (intensity is speed-driven), so this is purely
-	# the stance layer. Callers are real-frame only (no reconcile replay).
+	# This locked-phase path poses its own gait ready-stance + off-hand (a brief
+	# countdown, not the hot path); the render hook yields to it (see _self_posing).
+	_self_posing = true
 	_skating.apply(delta)
 	_ik.update_bottom_hand()
 
@@ -1363,8 +1484,10 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.stamina = stamina
 	state.sprint_locked = _sprint_locked
 	state.stagger_timer = stagger_timer
+	state.knockdown_timer = knockdown_timer
 	state.move_intent = skater.move_intent
 	state.brake_intent = skater.brake_intent
+	state.hit_committed = skater.hit_committed
 	state.sprint_active = sprint_active
 
 func get_shot_state() -> int:
@@ -1387,6 +1510,9 @@ func get_queue_depth() -> int:
 func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	if skater == null:
 		return
+	# This path poses the gait + off-hand itself (below), so the render-rate
+	# cosmetic hook yields to it while a replay is driving this skater.
+	_self_posing = true
 	skater.global_position = state.position
 	skater.visual_offset = Vector3.ZERO
 	skater.velocity = state.velocity
@@ -1397,6 +1523,7 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# or stale live-play intent (goal replay on live actors).
 	skater.move_intent = state.move_intent
 	skater.brake_intent = state.brake_intent
+	skater.hit_committed = state.hit_committed
 	# Same for the shot-state renders Skater._process drives every frame:
 	# stick flex (shot_state transitions fire the release whip, shot_charge
 	# sets the load bow) and the loft-level blade scoop. Goal replays run on
@@ -1415,6 +1542,8 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# bit so replayed sprints stride like live ones.
 	sprint_active = state.sprint_active
 	stagger_timer = state.stagger_timer
+	knockdown_timer = state.knockdown_timer
+	skater.is_knocked_down = knockdown_timer > 0.0
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
@@ -1459,6 +1588,51 @@ func _do_release(direction: Vector3, power: float) -> void:
 		return
 	var slapper: bool = _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK
 	puck_release_requested.emit(direction, power, slapper)
+
+
+# Net exclusion for the CARRIED PUCK. The blade net-clamp keeps the blade out of
+# the net, but the puck pins to a carry offset off the blade (get_carry_target_
+# global) — a separate point. This clamps that pin the same way, so a carried
+# puck can only be inside the net box via a legit FRONT-mouth path (a wraparound
+# tuck rides in; a reach from behind/beside is pushed out and the puck knocked
+# loose). It is the physical invariant the goal check can then simply trust:
+# a puck in the net got there legally. Mirrors the slapshot-pin clamp, which
+# already guards its own pin — this covers the plain-carry and wrister-aim states
+# (SLAPPER_CHARGE_WITH_PUCK still uses its stricter allow_front=false clamp in
+# _update_slapper_charge, so skip it here to avoid fighting it).
+func _clamp_carry_pin_from_net() -> void:
+	if not has_puck or _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK:
+		_has_prev_carry_pin = false
+		return
+	var pin: Vector3 = skater.get_carry_target_global()
+	# First carry tick: no legal prior pin to induct from. Seed from the pin so a
+	# genuine front entry next tick is judged against a real position; a puck
+	# picked up already inside the net is a post-goal artifact (pickup is locked
+	# through the goal phase), so seeding it is benign.
+	var prev: Vector3 = _prev_carry_pin if _has_prev_carry_pin else pin
+	var clamped: Vector3 = NetClampRules.clamp_out_of_net(
+			pin, prev, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
+			GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
+			GameRules.NET_DEPTH, GameRules.NET_HEIGHT, true)
+	if clamped != pin:
+		# The pin sat in the net off a non-front path — knock the puck loose,
+		# pushed out along the clamp offset (out of the net), like any net contact.
+		_has_prev_carry_pin = false
+		var away: Vector3 = clamped - pin
+		# Diagnostic: log every ejection so an in-game session can confirm the
+		# guard is firing on the bot-behind-the-net plays (and that it's the PUCK
+		# being ejected, not the blade passing through the mesh — a different bug).
+		# Real ticks only; a temporary probe, safe to remove once verified.
+		if not is_replaying:
+			var depth_past: float = absf(pin.z) - GameRules.GOAL_LINE_Z
+			var face: String = "side" if absf(away.x) >= absf(away.z) else "back/front"
+			print("[net-pin-clamp] ejected carried puck: name=%s pin=(%.2f,%.2f,%.2f) depth_past_line=%.3f face=%s push=%.2f" % [
+					skater.name, pin.x, pin.y, pin.z, depth_past, face, away.length()])
+		if away.length() > 0.001:
+			_do_release(away.normalized(), goalie_strip_power)
+		return
+	_prev_carry_pin = pin
+	_has_prev_carry_pin = true
 
 # Nudge: the carrier taps the puck off the blade as a soft self-pass. The
 # released velocity is the skater's horizontal momentum plus a small push along
@@ -1528,7 +1702,11 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	stamina = 1.0
 	_sprint_locked = false
 	sprint_active = false
+	hit_active = false
+	skater.hit_committed = false
 	stagger_timer = 0.0
+	knockdown_timer = 0.0
+	skater.is_knocked_down = false
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
 	# respawn and the player drops into the faceoff already charged.
@@ -1673,6 +1851,9 @@ func _render_approach_pose(facing: Vector2, delta: float) -> void:
 	_pose.apply_head_tracking(_approach_input, delta)
 	skater.set_top_hand_position(skater.upper_body_to_local(hand_world_pre))
 	skater.set_blade_position(skater.upper_body_to_local(blade_world_pre))
+	# This intro-skate path poses its own gait + off-hand (a brief locked phase,
+	# not the hot path); the render hook yields to it (see _self_posing).
+	_self_posing = true
 	_skating.apply(delta)
 	# Publish the gait's lower-body yaw (hip-to-travel alignment) — normally
 	# written inside _pose.apply_facing, which this path replaces.
@@ -1940,6 +2121,19 @@ func _release_slapper(input: InputState) -> void:
 				charge,
 				cfg,
 				locked_dir_3d)
+		# One-timer (puck arrived mid-charge → window armed): apply the SAME graded
+		# centre-timing bonus the leniency-release path uses, so the ±10% is one
+		# mechanic on both release paths — reachable however the shot fires, graded
+		# by how centred the puck is. A one-timer that attaches on the pinned zone
+		# spot is a clean, well-timed catch and earns it; a normal carried slapshot
+		# has no window armed and is untouched.
+		if _aiming.one_timer_window_timer > 0.0:
+			var zone_world: Vector3 = skater.get_slapper_zone_global_position()
+			var zone_xz := Vector2(zone_world.x, zone_world.z)
+			var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
+			result.power = ShotReleaseRules.one_timer_power(
+					result.power, one_timer_center_power_bonus,
+					zone_xz, puck_xz, slapper_zone_radius)
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
@@ -1991,15 +2185,22 @@ func _update_wrister_charge(input: InputState) -> void:
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
 	# a player who drags one way then flicks the other at release moves the real
-	# impact off the goalie's lean (a tricky release beats the read). Host-only:
-	# remote carriers don't run this path, so their predicted velocity stays ZERO
-	# and the goalie falls back to a non-directional readiness tell.
+	# impact off the goalie's lean (a tricky release beats the read). Works for
+	# REMOTE shooters too: the host simulates their carry from replicated input
+	# (RemoteController._drive_from_input → this path), and both signals ride the
+	# wire — mouse_world_pos, plus mouse_screen_pos pre-aligned to world XZ by the
+	# gatherer's attack-direction negation (the drag direction _get_charge_direction
+	# reads) — with the remote's Shot Power Sensitivity from the join payload feeding
+	# _wrister_sweep_speed. Host-only in that it runs on the authoritative sim, not in
+	# that it's limited to host-controlled shooters.
 	var is_backhand: bool = _classify_backhand()
+	# Re-solves every tick while charging (+ per replayed input on reconcile), so
+	# fill a reused scratch instead of allocating a ShotResult each time.
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level,
 			_wrister_config(), _get_charge_direction(), false,
-			_wrister_sweep_speed(input), _wrister_stroke_travel())
+			_wrister_sweep_speed(input), _wrister_stroke_travel(), _wrister_pred_scratch)
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# shot_charge carries the release-now SPEED (normalized predicted power over
 	# the min→max band) — the pure mouse-speed model, so it always matches the
@@ -2012,6 +2213,27 @@ func _update_wrister_charge(input: InputState) -> void:
 func _update_slapper_charge(delta: float) -> void:
 	_aiming.tick_slapper(delta)
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
+	# Publish where this slapshot would go if released NOW, so the host-side goalie
+	# AI can pre-lean toward the aimed corner — the directional anticipation the
+	# wrister already gets (_update_wrister_charge). This was the "skate up and rip a
+	# slapper from the slot" cheese: the slapper path never published this, for ANY
+	# shooter (host player and bots included, not just remotes), so the goalie squared
+	# to the pinned puck but its glove rested centred and had to travel the full way
+	# to a corner on reaction. The distinguishing axis was slapper-vs-wrister, not
+	# local-vs-remote — the wrister already worked everywhere. Like the wrister, this
+	# runs on the host for remotes too (RemoteController._drive_from_input simulates
+	# their carry); the slapper direction is LOCKED at press (_sm.locked_slapper_dir,
+	# built in _enter_slapper_charge from the replicated mouse_world_pos), so no
+	# screen-space signal is even needed. Gated to the WITH-PUCK windup: a one-timer
+	# wind-up has no puck to lean toward, and the goalie reads only SLAPPER_CHARGE_WITH_PUCK.
+	if has_puck:
+		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
+		if locked_dir_3d.length_squared() > 0.0001:
+			var pred := ShotMechanics.release_slapper(
+					skater.global_position, skater.global_position,
+					_elevation_level, _aiming.slapper_charge_timer,
+					_slapper_config(), locked_dir_3d, _slapper_pred_scratch)
+			skater.predicted_shot_velocity = pred.direction * pred.power
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 	# Net exclusion for the slapshot PIN. While charging with the puck, the puck
@@ -2110,6 +2332,25 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	skater.is_braking = input.brake
 	skater.is_braced = input.brake
 
+	# Knockdown: the top of the stagger continuum. Decays every tick like stagger.
+	# While down, input is ignored entirely — the body keeps its momentum from the
+	# hit and bleeds it via heavy friction (slides, then stops), stamina regenerates,
+	# and stagger still decays, so the player recovers on all clocks while grounded.
+	# All deterministic → reconcile replay reproduces the down window; the flag gates
+	# puck pickup (Skater.is_knocked_down).
+	knockdown_timer = maxf(knockdown_timer - delta, 0.0)
+	skater.is_knocked_down = knockdown_timer > 0.0
+	if skater.is_knocked_down:
+		sprint_active = false
+		hit_active = false
+		skater.hit_committed = false
+		stagger_timer = maxf(stagger_timer - delta, 0.0)
+		var kd_cfg: StaminaRules.StaminaConfig = _stamina_config()
+		stamina = StaminaRules.next_stamina(stamina, false, has_puck, delta, kd_cfg, false)
+		_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, false, kd_cfg, false)
+		skater.velocity = skater.velocity.move_toward(Vector3.ZERO, knockdown_friction * delta)
+		return
+
 	var move_state: SkaterStateMachine.State = _sm.get_state()
 	# Locomotion is suppressed during a planted slap windup / block stance, but
 	# stamina still ticks (you can't sprint, so it regenerates). Computing it
@@ -2119,9 +2360,18 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	var is_moving: bool = not input.brake and input.move_vector.length() > move_deadzone
 	sprint_active = not locomotion_suppressed and StaminaRules.sprint_active(
 			stamina, input.sprint_held, is_moving, _sprint_locked)
+	# Hit commit shares the sprint stamina pool and lockout but needs no movement
+	# (you can hold the check-ready stance stationary to line someone up). Resolved
+	# before the stamina update so this tick's drain reflects the commit, and
+	# mirrored to the skater so the collision resolver reads full-vs-passive
+	# transfer. Deterministic (input.hit_held + snapped stamina), so reconcile
+	# replay reproduces it.
+	hit_active = not locomotion_suppressed and StaminaRules.hit_active(
+			stamina, input.hit_held, _sprint_locked)
+	skater.hit_committed = hit_active
 	var stamina_cfg: StaminaRules.StaminaConfig = _stamina_config()
-	stamina = StaminaRules.next_stamina(stamina, sprint_active, has_puck, delta, stamina_cfg)
-	_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, sprint_active, stamina_cfg)
+	stamina = StaminaRules.next_stamina(stamina, sprint_active, has_puck, delta, stamina_cfg, hit_active)
+	_sprint_locked = StaminaRules.next_locked(_sprint_locked, stamina, sprint_active, stamina_cfg, hit_active)
 	# Body-check stagger decays deterministically every tick (including during a
 	# planted charge/block and through reconcile replay), so the thrust penalty
 	# eases back on its own. Decayed before the suppression early-out so a player
@@ -2187,6 +2437,7 @@ func _stamina_config() -> StaminaRules.StaminaConfig:
 		_cached_stamina_cfg.carry_drain_multiplier = sprint_carry_drain_multiplier
 		_cached_stamina_cfg.regen_per_sec = stamina_regen_per_sec
 		_cached_stamina_cfg.unlock_fraction = sprint_unlock_fraction
+		_cached_stamina_cfg.hit_drain_per_sec = hit_stamina_drain_per_sec
 	return _cached_stamina_cfg
 
 # Body-check stagger config is flat (not attribute-scaled), so a single lazily-built
@@ -2203,6 +2454,10 @@ func _body_check_config() -> BodyCheckRules.Config:
 		_cached_body_check_cfg.max_stagger_seconds = stagger_max_seconds
 		_cached_body_check_cfg.max_stamina_drain = stagger_max_stamina_drain
 		_cached_body_check_cfg.max_thrust_penalty = stagger_max_thrust_penalty
+		_cached_body_check_cfg.knockdown_impulse = knockdown_impulse
+		_cached_body_check_cfg.knockdown_ref_impulse = knockdown_ref_impulse
+		_cached_body_check_cfg.min_knockdown_seconds = knockdown_min_seconds
+		_cached_body_check_cfg.max_knockdown_seconds = knockdown_max_seconds
 	return _cached_body_check_cfg
 
 # Cached — _update_wrister_charge reads it every aim tick (120 Hz, replayed
@@ -2267,11 +2522,18 @@ func _wrister_stroke_travel() -> float:
 		return INF
 	return _aiming.stroke_travel
 
+# Cached like the wrister config: _update_slapper_charge now re-solves the release
+# every windup tick (120 Hz × actors, replayed on reconcile) to publish
+# predicted_shot_velocity, so a fresh SlapperConfig per call would be per-tick heap
+# churn. Rebuilt lazily; invalidated in apply_attributes when the source exports change.
+var _cached_slapper_cfg: ShotMechanics.SlapperConfig = null
+
 func _slapper_config() -> ShotMechanics.SlapperConfig:
-	var cfg := ShotMechanics.SlapperConfig.new()
-	cfg.min_slapper_power = min_slapper_power
-	cfg.max_slapper_power = max_slapper_power
-	cfg.max_slapper_charge_time = max_slapper_charge_time
-	cfg.loft_vy_low = loft_vertical_speed_low
-	cfg.loft_vy_high = loft_vertical_speed_high
-	return cfg
+	if _cached_slapper_cfg == null:
+		_cached_slapper_cfg = ShotMechanics.SlapperConfig.new()
+		_cached_slapper_cfg.min_slapper_power = min_slapper_power
+		_cached_slapper_cfg.max_slapper_power = max_slapper_power
+		_cached_slapper_cfg.max_slapper_charge_time = max_slapper_charge_time
+		_cached_slapper_cfg.loft_vy_low = loft_vertical_speed_low
+		_cached_slapper_cfg.loft_vy_high = loft_vertical_speed_high
+	return _cached_slapper_cfg

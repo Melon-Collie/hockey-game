@@ -14,6 +14,15 @@ extends CanvasLayer
 const _WHITE := MenuStyle.BROADCAST_CREAM
 const _DIM := MenuStyle.BROADCAST_DIM
 
+# Position badges, matching scoreboard.gd / slot_grid_panel.gd's convention:
+# 3v3 is position-free rovers (plain L/R); 5v5 has a real forward/defense
+# split, so wingers spell out LW/RW. Home/away mirror slots 1/2 since away
+# attacks the opposite direction (see slot_grid_panel.gd's _DISPLAY_ORDER).
+const _POSITION_LABEL          := ["C", "L", "R", "LD", "RD"]
+const _POSITION_LABEL_AWAY     := ["C", "R", "L", "RD", "LD"]
+const _POSITION_LABEL_5V5      := ["C", "LW", "RW", "LD", "RD"]
+const _POSITION_LABEL_5V5_AWAY := ["C", "RW", "LW", "RD", "LD"]
+
 # Between the intermission reel's light wash (0.32) and the modal scrim
 # (0.55): the sweep behind is mood, not content, but should still read.
 const _INTRO_SCRIM := Color(0.024, 0.039, 0.071, 0.40)
@@ -117,8 +126,8 @@ func present(home_records: Array[PlayerRecord], away_records: Array[PlayerRecord
 		home_stripe: Color, away_stripe: Color) -> void:
 	_home_stripe_style.bg_color = home_stripe
 	_away_stripe_style.bg_color = away_stripe
-	_fill_rows(_home_rows, home_records, home_stripe)
-	_fill_rows(_away_rows, away_records, away_stripe)
+	_fill_rows(_home_rows, home_records, home_stripe, 0)
+	_fill_rows(_away_rows, away_records, away_stripe, 1)
 	visible = true
 	if _present_tween != null and _present_tween.is_running():
 		_present_tween.kill()
@@ -144,14 +153,32 @@ func hide_overlay() -> void:
 
 
 # Roster rebuilt per present(): once per match, a handful of rows. Each row:
-# the player's build as a small team-colored hex graph, then number + name.
+# a position badge, the player's build as a small team-colored hex graph, then
+# number + name. Records arrive slot-sorted (see hud.gd._show_matchup_overlay),
+# so in 5v5 the forward group (C/LW/RW) always precedes defense (LD/RD) — a
+# thin "DEFENSE" divider marks the seam so the matchup reads at a glance
+# instead of five undifferentiated names (3v3 has no such split, so no divider).
 func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
-		accent: Color) -> void:
+		accent: Color, team_id: int) -> void:
 	for child: Node in rows.get_children():
 		child.queue_free()
+	var is_5v5: bool = records.size() >= 5
+	var labels: Array = _POSITION_LABEL_AWAY if team_id == 1 else _POSITION_LABEL
+	if is_5v5:
+		labels = _POSITION_LABEL_5V5_AWAY if team_id == 1 else _POSITION_LABEL_5V5
 	for record: PlayerRecord in records:
+		if is_5v5 and record.team_slot == PlayerRules.FIRST_DEFENSE_SLOT:
+			var spacer := Control.new()
+			spacer.custom_minimum_size = Vector2(0, 6)
+			rows.add_child(spacer)
+			rows.add_child(_lbl("DEFENSE", 12, _DIM))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 12)
+		var pos := _lbl(labels[record.team_slot], 14, _DIM)
+		pos.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		pos.custom_minimum_size = Vector2(28, 0)
+		pos.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(pos)
 		var hex := AttributeHexGraph.new()
 		hex.custom_minimum_size = Vector2(54, 54)
 		hex.set_build(record.attributes, accent)

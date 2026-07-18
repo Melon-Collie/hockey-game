@@ -284,6 +284,22 @@ func _rebuild_shoulder_texture() -> void:
 	_shoulder_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
+# Arm-vs-sock stripe scale. A stripe's `width` is a fraction of the cylinder's
+# own side length (see _make_h_stripes_texture), and jerseys author arms and
+# socks with the SAME fractions (data/team_colors.json — Dragonfruit/Blueberry
+# use identical arrays). But the arm bones render longer than the socks: the
+# forearm/upper-arm design length is 0.35 m (Skater.forearm_length /
+# upper_arm_length) against the sock cylinder's 0.30 m height (SockL/R in
+# Skater.tscn). Both scale together with Size (m_height), so the ratio is fixed.
+# Without correction the identical fraction paints a physically taller band on
+# the thinner arm — the "arm stripes are too big" mismatch. Shrink the arm
+# pattern about its center by the length ratio so an authored width renders at
+# the same physical band height on arms as on socks.
+const _FOREARM_DESIGN_LEN: float = 0.35   # Skater.forearm_length / upper_arm_length default
+const _SOCK_DESIGN_LEN: float = 0.30      # SockL/R CylinderMesh height (Skater.tscn)
+const _ARM_STRIPE_SCALE: float = _SOCK_DESIGN_LEN / _FOREARM_DESIGN_LEN
+
+
 # Paints a bone cylinder (upper or lower arm) with horizontal stripes.
 # If the segment has no stripes, uses a solid material instead of building
 # a single-color texture — slightly cheaper, and keeps the simple case
@@ -295,8 +311,24 @@ func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
 	if segment.stripes.is_empty():
 		visual.material_override = _make_solid_mat(segment.base)
 		return
-	var tex: ImageTexture = _make_h_stripes_texture(segment.base, segment.stripes)
+	var scaled: Array[Dictionary] = _scale_stripes_about_center(segment.stripes, _ARM_STRIPE_SCALE)
+	var tex: ImageTexture = make_h_stripes_texture(segment.base, scaled)
 	visual.material_override = _make_texture_material(tex)
+
+
+# Returns a copy of `stripes` with each band's width and its offset from the
+# region center (0.5) multiplied by `scale`, shrinking the whole pattern about
+# its center while keeping it centered. Runs on uniform apply, not per tick, so
+# the fresh array is not a hot-path concern.
+func _scale_stripes_about_center(stripes: Array[Dictionary], scale: float) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for s: Dictionary in stripes:
+		out.append({
+			"pos": 0.5 + (float(s.pos) - 0.5) * scale,
+			"width": float(s.width) * scale,
+			"color": s.color,
+		})
+	return out
 
 
 # Paints a single thigh cylinder with vertical side-column stripes. Per-side
@@ -317,7 +349,7 @@ func _paint_pants_thigh(thigh: MeshInstance3D, pants_block: Dictionary, u_offset
 func _socks_material(socks_block: Dictionary) -> StandardMaterial3D:
 	if socks_block.stripes.is_empty():
 		return _make_solid_mat(socks_block.base)
-	return _make_texture_material(_make_h_stripes_texture(socks_block.base, socks_block.stripes))
+	return _make_texture_material(make_h_stripes_texture(socks_block.base, socks_block.stripes))
 
 
 # Builds a (4 × height_px) image of horizontal stripe bands over the
@@ -329,7 +361,14 @@ const _CYLINDER_SIDE_V_FRACTION: float = 0.5
 const _STRIPE_TEX_HEIGHT_PX: int = 128
 const _STRIPE_TEX_WIDTH_PX: int = 4
 
-func _make_h_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTexture:
+# Public static so the lobby's bench dummies can dress in the same stripe
+# convention without duplicating the band math. `top_cap`, when a Color,
+# overpaints the cylinder's NATIVE top-cap UV region (U ∈ [0, 0.5] of the
+# caps' V half) — the dummies' stand-in for JerseyDecal's yoke, which paints
+# the equivalent region on the real torso (shifted by that material's
+# uv1_offset). Meshes whose caps are hidden (socks, arms) leave it null.
+static func make_h_stripes_texture(base: Color, stripes: Array[Dictionary],
+		top_cap: Variant = null) -> ImageTexture:
 	var img := Image.create(_STRIPE_TEX_WIDTH_PX, _STRIPE_TEX_HEIGHT_PX, false, Image.FORMAT_RGBA8)
 	img.fill(base)
 	var side_px: int = int(round(_CYLINDER_SIDE_V_FRACTION * float(_STRIPE_TEX_HEIGHT_PX)))
@@ -340,6 +379,9 @@ func _make_h_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTe
 		var y1: int = clampi(int(round(center_px + half_px)), 0, side_px)
 		if y1 > y0:
 			img.fill_rect(Rect2i(0, y0, _STRIPE_TEX_WIDTH_PX, y1 - y0), s.color)
+	if top_cap is Color:
+		img.fill_rect(Rect2i(0, side_px, _STRIPE_TEX_WIDTH_PX / 2,
+				_STRIPE_TEX_HEIGHT_PX - side_px), top_cap)
 	return ImageTexture.create_from_image(img)
 
 

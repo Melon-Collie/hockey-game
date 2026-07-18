@@ -3,12 +3,15 @@ class_name AIBodyCheck
 # Pure decision: should an on-puck defensive bot COMMIT to a body check on the
 # carrier right now, and where's the body-intercept to drive at?
 #
-# Body checks are emergent — there is no hit button. A bot "delivers" one by
-# driving its body into an intercept on the carrier at speed; the collision in
-# Skater._resolve_player_collisions converts the closing velocity + attributes
-# into the transfer impulse, identical to a human hit. So this rule decides only
-# WHEN to commit and returns the intercept POINT to steer at; the state machine
-# points steering there and forces sprint (max closing velocity = harder hit).
+# Body checks are still emergent from the collision (there is no "throw a hit"
+# action). A bot "delivers" one by driving its body into an intercept on the
+# carrier at speed; Skater._resolve_player_collisions converts the closing
+# velocity + attributes into the transfer impulse, identical to a human hit. So
+# this rule decides only WHEN to commit and returns the intercept POINT to steer
+# at; the state machine points steering there, forces sprint (max closing velocity
+# = harder hit), AND holds the Hit button (input.hit_held) — committing delivers
+# the FULL transfer this rule's predicted_impulse assumes (an uncommitted drive
+# lands only the passive fraction) and braces the checker against the collision.
 #
 # Committing is a real risk — miss and you're out of the play — so the gate is
 # deliberately conservative and only fired by pressurers WITH support behind
@@ -18,11 +21,11 @@ class_name AIBodyCheck
 #   2. Reachable intercept — solving the lead (AITrajectory.intercept_time), can
 #      I actually get my body there before the carrier skates past? A carrier
 #      fleeing faster than me saturates the solve and is rejected.
-#   3. Real hit — the PREDICTED victim impulse clears COMMIT_IMPULSE_M_S (a
-#      separating hit, well above BodyCheckRules' 3 m/s "a bump lands" floor).
-#      Impulse = approach × (self_weight / victim_weight) × self_body_check_transfer,
-#      mirroring the collision math: a soft bump that won't separate man from
-#      puck isn't worth leaving position for.
+#   3. Real hit — the PREDICTED victim impulse clears COMMIT_IMPULSE_M_S.
+#      Predicted via SkaterCollisionRules.victim_kick — the same delivery
+#      function the contact resolver itself applies, so the prediction and
+#      the physics are one formula by construction: a soft bump that won't
+#      separate man from puck isn't worth leaving position for.
 #
 # Attribute expression falls out of (3): a high-Size/Physical bot's predicted
 # impulse clears the bar at lower closing speeds, so it hunts hits; a
@@ -33,8 +36,9 @@ class_name AIBodyCheck
 # Victim weight is the CARRIER's real mass (Size) when its build is known — a
 # light checker won't leave its feet for a hit it'd bounce off a heavy target
 # with. Defaults to the league baseline when unwired. (The victim's active BRACE
-# — Physical — only bites when the victim is shot-blocking, which a puck carrier
-# rarely is, so it's not modeled in this carrier-check gate.)
+# — Physical, now on the Hit button — only bites when the victim is committing a
+# check of their own, which a puck carrier rarely is, so it's not modeled in this
+# carrier-check gate.)
 
 # Only hunt a hit when the carrier is this close — beyond it, contain instead.
 const CHECK_RANGE_M: float = 6.0
@@ -42,11 +46,18 @@ const CHECK_RANGE_M: float = 6.0
 # Lead-solve horizon for the body intercept (seconds).
 const MAX_LEAD_S: float = 0.6
 
-# Predicted victim impulse (m/s velocity delta) required to commit. Above
-# BodyCheckRules' min_impulse (3.0 = "a bump lands nothing much") and below
-# ref_impulse (9.0 = full-strength check): 5 m/s is a solid separating hit, so
-# the bot only commits to checks that actually do something.
-const COMMIT_IMPULSE_M_S: float = 5.0
+# Predicted victim impulse (m/s velocity delta) required to commit — the
+# full-strength-check reference on the stagger ladder (SkaterController's
+# stagger_ref_impulse; the ladder doc there derives the scale from the
+# inelastic magnitudes: a committed equal-mass drive at ~6–10 m/s closing
+# lands ~1.4–2.3, an enforcer or a real head-on collision ~2.5–4). Commit
+# only to a hit that lands a FULL stagger: a baseline build must catch the
+# carrier closing (a real collision), an enforcer's transfer clears it on
+# its own drive, a lightweight never whiffs a check it'd bounce off.
+# (Predecessor was 5.0 against the pre-inelastic weight-ratio model — a bar
+# ~5× above what the rewritten collision can physically deliver, which is
+# why bots stopped hitting when the resolver changed.)
+const COMMIT_IMPULSE_M_S: float = 2.5
 
 # League-average victim mass (Skater.weight default) — the weight_ratio
 # denominator until opponent attributes are modeled.
@@ -99,12 +110,15 @@ static func evaluate(
 		return r
 
 	# 3. Real hit. Predict the victim impulse from the closing velocity I'd
-	# bring driving at the intercept, my weight ratio, and my transfer.
+	# bring driving at the intercept, through the resolver's OWN delivery
+	# function (SkaterCollisionRules.victim_kick — the same code path
+	# resolve() applies on contact, so this prediction can never drift from
+	# the physics again). The victim's REAL mass (Size) is in the reduced-mass
+	# denominator, so a heavy carrier moves less for the same hit and a light
+	# checker correctly predicts bouncing off — it won't leave its feet for it.
 	var approach: float = _predicted_approach(self_pos, self_max_speed, intercept, carrier_vel)
-	# Victim's REAL mass (Size): a heavy carrier moves less for the same hit, so a
-	# light checker correctly predicts bouncing off and won't leave its feet for it.
-	var weight_ratio: float = self_weight / maxf(victim_weight, 0.001)
-	var predicted_impulse: float = approach * weight_ratio * self_body_check_transfer
+	var predicted_impulse: float = SkaterCollisionRules.victim_kick(
+			approach, self_weight, victim_weight, self_body_check_transfer)
 	if predicted_impulse < commit_impulse_threshold:
 		return r
 

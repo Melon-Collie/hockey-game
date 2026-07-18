@@ -40,10 +40,14 @@ func test_stationary_puck_picks_closest() -> void:
 func test_faster_skater_wins_the_race_from_further_out() -> void:
 	# A nearer slow skater vs a further fast one, both stationary. With league
 	# speeds the nearer wins; giving the far skater a real top-speed edge (Speed)
-	# flips the race — a burner genuinely gets to a loose puck first.
+	# flips the race — a burner genuinely gets to a loose puck first. The race
+	# must be LONG enough for top speed to engage: the calibrated ETA charges
+	# both builds the same standing-start ramp, so acceleration decides short
+	# races and the cap only pays past its ramp distance — which is the real
+	# physics (a 6 m sprint is won by position, not top gear).
 	var states := {
-		100: _skater(Vector3(4, 0, 0)),   # nearer
-		200: _skater(Vector3(6.5, 0, 0)), # further
+		100: _skater(Vector3(0, 0, 12)),  # nearer
+		200: _skater(Vector3(0, 0, 16)),  # further
 	}
 	var league: int = AILoosePuckChase.elect(
 			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1)

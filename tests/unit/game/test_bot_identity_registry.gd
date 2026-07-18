@@ -144,3 +144,58 @@ func test_normalize_defaults_missing_attributes_to_medium() -> void:
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({"name": "NameOnly"})
 	for axis: String in ["speed", "agility", "hands", "size", "physical", "shot"]:
 		assert_eq(int(norm[axis]), PlayerAttributes.LEVEL_MEDIUM)
+
+
+func test_every_bundled_entry_has_a_valid_position() -> void:
+	# 5v5 casting: each identity declares the lineup slot it suits.
+	for entry: Dictionary in _bundled_entries():
+		var position: String = String(entry.get("position", ""))
+		assert_true(position in PlayerRules.POSITION_NAMES,
+				"bot '%s' has invalid position '%s'" % [entry.get("name", "?"), position])
+
+
+func test_bundled_pool_covers_every_position() -> void:
+	# A full 5v5 bot game casts 10 bots across 5 positions per team; the pool
+	# needs at least two of each so pick_for_slot never runs a position dry
+	# on the first team.
+	var counts: Dictionary = {}
+	for entry: Dictionary in _bundled_entries():
+		var position: String = String(entry.get("position", ""))
+		counts[position] = int(counts.get(position, 0)) + 1
+	for position: String in PlayerRules.POSITION_NAMES:
+		assert_gte(int(counts.get(position, 0)), 2,
+				"need at least two bundled '%s' identities" % position)
+
+
+func test_normalize_validates_position() -> void:
+	var with_pos: Dictionary = BotIdentityRegistry.normalize_entry(
+			{"name": "T", "position": "ld"})
+	assert_eq(with_pos.position, "LD", "position is case-normalized")
+	var junk: Dictionary = BotIdentityRegistry.normalize_entry(
+			{"name": "T", "position": "GOALIE"})
+	assert_eq(junk.position, "", "unknown position clears to fill-any")
+	var missing: Dictionary = BotIdentityRegistry.normalize_entry({"name": "T"})
+	assert_eq(missing.position, "", "missing position defaults to fill-any")
+
+
+func test_pick_for_slot_prefers_matching_position() -> void:
+	# Slot key 3 = home LD. With the whole pool available the pick must come
+	# from the LD-tagged identities.
+	var used: Array[String] = []
+	for _i: int in 20:
+		var picked: Dictionary = BotIdentityRegistry.pick_for_slot(3, used)
+		assert_eq(picked.get("position", ""), "LD",
+				"slot 3 should cast an LD archetype while any remain")
+		used.clear()
+
+
+func test_pick_for_slot_falls_back_when_position_pool_exhausted() -> void:
+	# Consume every LD identity; the next LD pick must still return someone.
+	var used: Array[String] = []
+	for entry: Dictionary in BotIdentityRegistry.get_all():
+		if entry.get("position", "") == "LD":
+			used.append(String(entry.name))
+	var picked: Dictionary = BotIdentityRegistry.pick_for_slot(3, used)
+	assert_false(String(picked.get("name", "")).is_empty())
+	assert_ne(picked.get("position", ""), "LD",
+			"all LDs were used; fallback casts across positions")

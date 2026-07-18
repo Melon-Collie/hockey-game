@@ -125,8 +125,54 @@ select
     (metrics->>'delay_spread_ms_max')::float             as delay_spread_peak,
     (metrics->>'clock_correction_ms_max')::float         as clock_correction_peak,   -- client only; sustained large = clock sync unstable (poisons lag comp)
     (metrics->>'worst_peer_rtt_ms_avg')::float           as worst_peer_rtt_avg,      -- host only; the host row's real link picture
-    (metrics->>'worst_peer_loss_pct_max')::float         as worst_peer_loss_peak,    -- host only
-    (metrics->>'auto_marker_count')::int                 as auto_marker_count        -- objective tripwire firings (markers themselves in metrics->'auto_markers')
+    (metrics->>'worst_peer_loss_pct_max')::float         as worst_peer_loss_peak,    -- host only; now the CLIENT-reported downstream loss (accurate), not the old echo-gap estimate that inflated a clean link to ~50%
+    (metrics->>'auto_marker_count')::int                 as auto_marker_count,       -- objective tripwire firings (markers themselves in metrics->'auto_markers')
+    -- Lag-comp pickup-claim health (host only; the host processes every client's
+    -- claim). misses/claims ≈ rewind accuracy: near-zero = the rewound blade/puck
+    -- reproduce what the client saw; a high fraction = the rewind is off (the
+    -- "reached for it, didn't get it" symptom). deflects = reached but not catchable.
+    (metrics->>'pickup_claims_total')::float             as pickup_claims_total,
+    (metrics->>'pickup_claim_misses_total')::float       as pickup_claim_misses_total,
+    (metrics->>'pickup_claim_deflects_total')::float     as pickup_claim_deflects_total,
+    -- Client-side optimistic-pickup outcomes (the felt "grab, then lose it"). A pin
+    -- is the visual attach; timeouts = the host silently declined and it rolled back
+    -- (the felt bug), stolen = a different carrier legitimately won it. Watch
+    -- timeouts / pins: the pin-predicate gate should drive it toward 0. Client only.
+    (metrics->>'provisional_pins_total')::float          as provisional_pins_total,
+    (metrics->>'provisional_confirmed_total')::float     as provisional_confirmed_total,
+    (metrics->>'provisional_timeouts_total')::float      as provisional_timeouts_total,
+    (metrics->>'provisional_stolen_total')::float        as provisional_stolen_total,
+    -- Lag-comp poke / stick-lift claim health (host only), same read as the pickup
+    -- claim columns: misses/claims ≈ how often the host's rewind disagreed with the
+    -- client's in-range view for a stick-on-stick check. Trailing-append (see below).
+    (metrics->>'poke_claims_total')::float               as poke_claims_total,
+    (metrics->>'poke_claim_misses_total')::float         as poke_claim_misses_total,
+    (metrics->>'stick_lift_claims_total')::float         as stick_lift_claims_total,
+    (metrics->>'stick_lift_claim_misses_total')::float   as stick_lift_claim_misses_total,
+    -- Reconcile-match health. A find_at miss falls back to the (prediction-lead)
+    -- live position and trips a spurious position snap, so a low match AVG (vs the
+    -- MIN, which one post-faceoff window can own) is the residual-churn driver. The
+    -- miss totals attribute it: EMPTY/OLDER = post-clear transient (benign), GAP =
+    -- a real hole in the prediction history (the bug to chase). gap_ms_peak is the
+    -- worst ack-vs-history-bound distance seen (large ⇒ clear-related, small ⇒ off-by-one).
+    (metrics->>'reconcile_match_pct_avg')::float         as reconcile_match_avg,     -- client only; pairs with reconcile_match_min
+    (metrics->>'reconcile_miss_empty_total')::float      as reconcile_miss_empty_total,
+    (metrics->>'reconcile_miss_older_total')::float      as reconcile_miss_older_total,
+    (metrics->>'reconcile_miss_newer_total')::float      as reconcile_miss_newer_total,
+    (metrics->>'reconcile_miss_gap_total')::float        as reconcile_miss_gap_total,
+    (metrics->>'reconcile_miss_gap_ms_max')::float       as reconcile_miss_gap_ms_peak,
+    -- Shot-launch divergence (client only): client-predicted vs host-authoritative
+    -- puck at the first host-confirmed broadcast after a local release. Both run
+    -- identical Jolt from the same client-sent origin, so the peak should be small
+    -- (RTT jitter); a large peak = real launch divergence, and it's the shot-launch
+    -- slice of puck_hard_snaps. Read the peaks against shot_launches_total (denominator).
+    (metrics->>'shot_launch_div_m_max')::float           as shot_launch_div_peak,     -- m; worst launch position gap
+    (metrics->>'shot_launch_vel_div_max')::float         as shot_launch_vel_div_peak,  -- m/s; worst launch velocity gap
+    (metrics->>'shot_launches_total')::float             as shot_launches_total,       -- shots measured (denominator)
+    -- Host physics-tick hitches (gap > 33ms) this session. worst_stall_ms is the
+    -- single worst gap; this is HOW MANY. The auto_markers carry the phase / actor
+    -- count / last game-event breadcrumb to attribute them. Host only.
+    (metrics->>'host_stalls_total')::float               as host_stalls_total
 from public.network_sessions
 where net_sim_active is not true;
 
@@ -167,7 +213,20 @@ select
     -- Trailing-append rule applies here too (create or replace view).
     sum(auto_marker_count)                                     as auto_marker_total,
     max(delay_spread_peak)      filter (where role = 'client') as worst_client_delay_spread,
-    max(clock_correction_peak)  filter (where role = 'client') as worst_client_clock_correction
+    max(clock_correction_peak)  filter (where role = 'client') as worst_client_clock_correction,
+    -- Host-side lag-comp pickup-claim health for the match (one host per game).
+    -- Read misses relative to claims: high misses/claims flags a rewind that
+    -- isn't reproducing what clients saw when they reached for a loose puck.
+    max(pickup_claims_total)         filter (where role = 'host') as host_pickup_claims,
+    max(pickup_claim_misses_total)   filter (where role = 'host') as host_pickup_claim_misses,
+    max(pickup_claim_deflects_total) filter (where role = 'host') as host_pickup_claim_deflects,
+    -- Poke / stick-lift claim health for the match (one host per game). Same read
+    -- as the pickup columns: high misses/claims flags a rewind not reproducing what
+    -- clients saw when they poked / hooked a carrier's stick.
+    max(poke_claims_total)             filter (where role = 'host') as host_poke_claims,
+    max(poke_claim_misses_total)       filter (where role = 'host') as host_poke_claim_misses,
+    max(stick_lift_claims_total)       filter (where role = 'host') as host_stick_lift_claims,
+    max(stick_lift_claim_misses_total) filter (where role = 'host') as host_stick_lift_claim_misses
 from public.network_session_health
 where game_id is not null
 group by game_id;

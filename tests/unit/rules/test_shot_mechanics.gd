@@ -360,6 +360,19 @@ func test_slapper_falls_back_to_blade_mouse_when_no_direction() -> void:
 		_slapper_cfg(), Vector3.ZERO)
 	assert_gt(result.direction.x, 0.9, "falls back to blade→mouse (+X)")
 
+func test_slapper_fills_and_reuses_out_scratch() -> void:
+	# The goalie pre-lean re-solves the release every windup tick to publish
+	# predicted_shot_velocity (SkaterController._update_slapper_charge). That hot
+	# path passes a caller-owned scratch so it doesn't churn the heap — assert the
+	# out instance is filled and returned (not a fresh allocation), mirroring the
+	# wrister's out contract.
+	var scratch := ShotMechanics.ShotResult.new()
+	var result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3(0.5, 0, 0), Vector3(10, 0, 0), 0, 1.0,
+		_slapper_cfg(), Vector3(0, 0, -1), scratch)
+	assert_eq(result, scratch, "release_slapper writes into the provided scratch")
+	assert_almost_eq(scratch.direction.z, -1.0, 0.05, "scratch carries the locked heading")
+
 func test_slapper_power_scales_with_charge_time() -> void:
 	var cfg := _slapper_cfg()
 	var short_result: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
@@ -481,6 +494,60 @@ func test_wall_pin_ignored_below_threshold() -> void:
 
 func test_wall_pin_ignored_at_threshold() -> void:
 	assert_false(ShotMechanics.should_release_on_wall_pin(0.3, 0.3), "equal is not above")
+
+
+# ── Wall-pin release direction ───────────────────────────────────────────────
+# Convention: wall_normal points INWARD (away from the boards). A puck lost on
+# the wall should squirt ALONG the boards in the carrier's travel direction.
+
+func test_wall_pin_release_runs_along_boards_not_inward() -> void:
+	# Boards on +X (normal points inward toward -X), carrier skating in +Z.
+	var wall_normal := Vector3(-1, 0, 0)
+	var carrier_vel := Vector3(0.2, 0, 5.0)  # mostly along the wall (+Z)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, carrier_vel)
+	assert_almost_eq(dir.length(), 1.0, 0.001, "normalized")
+	assert_almost_eq(dir.z, 1.0, 0.001, "released along the boards (+Z)")
+	assert_almost_eq(dir.x, 0.0, 0.001, "no inward/outward component")
+
+func test_wall_pin_release_signs_by_carrier_direction() -> void:
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3(0, 0, -4.0))
+	assert_almost_eq(dir.z, -1.0, 0.001, "carrier going -Z loses it -Z along the boards")
+
+func test_wall_pin_release_ignores_into_wall_velocity() -> void:
+	# Velocity is purely into the wall (+X) — no along-wall component → inward normal.
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3(6.0, 0, 0))
+	assert_almost_eq(dir.x, -1.0, 0.001, "pinned dead into the wall frees along the inward normal")
+
+func test_wall_pin_release_no_along_momentum_falls_back_inward() -> void:
+	var wall_normal := Vector3(0, 0, -1)  # boards on +Z, inward toward -Z
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3.ZERO)
+	assert_eq(dir, Vector3(0, 0, -1), "no momentum → inward normal so the puck still frees")
+
+func test_wall_pin_release_no_wall_normal_uses_heading() -> void:
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(Vector3.ZERO, Vector3(3.0, 0, 0))
+	assert_almost_eq(dir.x, 1.0, 0.001, "degenerate normal → carrier heading")
+
+func test_wall_pin_release_fully_degenerate_returns_zero() -> void:
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(Vector3.ZERO, Vector3.ZERO)
+	assert_eq(dir, Vector3.ZERO, "no normal and no momentum → ZERO (caller fallback)")
+
+func test_wall_pin_release_inward_bias_peels_off_the_boards() -> void:
+	# Boards on +X (inward -X), carrier along +Z. A positive bias tips the release
+	# slightly inward (-X) while staying mostly along the boards (+Z).
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3(0, 0, 5.0), 0.25)
+	assert_almost_eq(dir.length(), 1.0, 0.001, "normalized")
+	assert_lt(dir.x, 0.0, "biased inward, away from the boards")
+	assert_gt(dir.z, 0.0, "still travelling along the boards")
+	assert_gt(dir.z, absf(dir.x), "along-wall component dominates a small bias")
+
+func test_wall_pin_release_bias_does_not_affect_dead_pin() -> void:
+	# No along-wall momentum still returns the pure inward normal regardless of bias.
+	var wall_normal := Vector3(-1, 0, 0)
+	var dir: Vector3 = ShotMechanics.wall_pin_release_direction(wall_normal, Vector3.ZERO, 0.25)
+	assert_eq(dir, Vector3(-1, 0, 0), "dead pin frees along the inward normal, bias irrelevant")
 
 
 # ── Follow-through aim blend ──────────────────────────────────────────────────

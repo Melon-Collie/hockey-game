@@ -185,10 +185,16 @@ func _build_complete_panel() -> void:
 	# the next part as part of the same course, and the continue button is the
 	# big primary CTA with Free Play demoted to a secondary "skip" link.
 	var next_id: String = TutorialRegistry.get_next_id(_tutorial_id)
+	# Shared "Part N of M" label for the next part (localized; word order can
+	# differ per language). Empty when this was the last tutorial.
+	var next_seq: String = ""
+	if next_id != "":
+		next_seq = tr("TUTORIAL_PART_N_OF_M") % [
+			TutorialRegistry.sequence_position(next_id), TutorialRegistry.ALL_IDS.size()]
 
 	var heading := Label.new()
-	heading.text = ("%s Complete!" % TutorialRegistry.get_display_name(_tutorial_id)) \
-		if next_id != "" else "Tutorial Complete!"
+	heading.text = (tr("TUTORIAL_COMPLETE_NAMED") % tr(TutorialRegistry.display_name_key(_tutorial_id))) \
+		if next_id != "" else tr("TUTORIAL_COMPLETE_GENERIC")
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.add_theme_font_size_override("font_size", 36)
 	heading.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
@@ -196,12 +202,12 @@ func _build_complete_panel() -> void:
 
 	var sub := Label.new()
 	if next_id != "":
-		sub.text = "That's %s done. Up next — %s: %s. Finish the set before you hit the ice." % [
-			TutorialRegistry.get_display_name(_tutorial_id),
-			TutorialRegistry.get_sequence_label(next_id),
-			TutorialRegistry.get_display_name(next_id)]
+		sub.text = tr("TUTORIAL_NEXT_SUBTITLE") % [
+			tr(TutorialRegistry.display_name_key(_tutorial_id)),
+			next_seq,
+			tr(TutorialRegistry.display_name_key(next_id))]
 	else:
-		sub.text = "You know the ropes — now get out there."
+		sub.text = tr("TUTORIAL_ALL_DONE")
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sub.custom_minimum_size = Vector2(440, 0)
@@ -217,9 +223,9 @@ func _build_complete_panel() -> void:
 	if next_id != "":
 		# Primary CTA: the big, hover-scaled popup_button so continuing reads as
 		# the expected path, not an optional extra the player can overlook.
-		var next_btn := MenuStyle.popup_button("Continue → %s: %s" % [
-			TutorialRegistry.get_sequence_label(next_id),
-			TutorialRegistry.get_display_name(next_id)])
+		var next_btn := MenuStyle.popup_button(tr("TUTORIAL_CONTINUE_CTA") % [
+			next_seq,
+			tr(TutorialRegistry.display_name_key(next_id))])
 		next_btn.pressed.connect(func() -> void: _on_continue_to_tutorial(next_id))
 		btn_row.add_child(next_btn)
 
@@ -409,6 +415,8 @@ func _on_exit_confirmed() -> void:
 	# Sticky: marking complete here means the player won't be auto-routed back
 	# into this tutorial on next launch. They can still re-enter from the menu.
 	PlayerPrefs.mark_tutorial_complete(_tutorial_id)
+	# Course-complete achievement check (no-op until every tutorial is done).
+	GameManager.notify_tutorial_completed()
 	_exit_to_free_play()
 
 

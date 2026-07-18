@@ -123,6 +123,13 @@ var last_prep_preroll: float = 0.0
 # period card + camera sweep) instead of the skate-in countdown hold.
 var last_prep_was_period_intro: bool = false
 
+# Host-only scoring log, one entry per goal in scoring order: x = scoring
+# team id, y = credited scorer peer id (-1 when nobody could be credited).
+# Feeds the game-winning-goal stamp at the final horn; cleared on rematch via
+# reset_goal_log(). Stays empty on clients (their goals arrive via
+# on_goal_received) — they read the GWG through the replicated stats instead.
+var _goal_log: Array[Vector2i] = []
+
 
 func setup(
 		state_machine: GameStateMachine,
@@ -194,7 +201,12 @@ func handle_phase_entered() -> void:
 			if puck != null:
 				puck.pickup_locked = true
 			clock_updated.emit(0.0)
+			_stamp_game_winning_goal()
 			game_over.emit()
+	# Breadcrumb for host-stall attribution: this is the one host-side hook that
+	# fires on every phase transition (goal replay, faceoff, period, game over), so
+	# a hitch logged moments after can be traced to the entering phase's handler.
+	NetworkTelemetry.note_host_event(GamePhase.Phase.keys()[_state_machine.current_phase])
 	phase_changed.emit(_state_machine.current_phase)
 
 
@@ -243,7 +255,8 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 						record.controller.faceoff_draw_peak_decay,
 						record.controller.faceoff_draw_window)
 		var pos: Vector3 = PlayerRules.faceoff_position(
-				record.team.team_id, record.team_slot, dot, reach)
+				record.team.team_id, record.team_slot, dot, reach,
+				_state_machine.team_size)
 		var facing: Vector2 = PlayerRules.faceoff_facing(record.team.team_id)
 		var start: Vector3 = _approach_start_for(record, pos, dot, from_bench, staged)
 		var duration: float = _faceoff_approach_duration(peer_id, start, pos, from_bench, skate_in, staged)
@@ -346,12 +359,19 @@ func on_goal_scored_into(defending_team: Team) -> void:
 		var record: PlayerRecord = _registry.get_record(scorer_id)
 		if record != null:
 			record.stats.goals += 1
+			# Overtime winner: any non-own goal in sudden-death OT wins the game.
+			if not is_own_goal and _state_machine.is_overtime():
+				record.stats.ot_goals += 1
+			# Tag one-timer / tip goal flavor BEFORE clear_pending() below wipes
+			# the shot-tracker state these reads depend on.
+			_tag_goal_flavor(record, scorer_id, carrier_peer_id, is_own_goal)
 			var assist_names: Array[String] = _shot_tracker.credit_assists(scorer_id)
 			assist1_name = assist_names[0] if assist_names.size() > 0 else ""
 			assist2_name = assist_names[1] if assist_names.size() > 1 else ""
 			if not is_own_goal:
 				_shot_tracker.on_goal_confirmed(scorer_id)
 			scorer_name = record.display_name()
+	_goal_log.append(Vector2i(scoring_team_id, scorer_id))
 	_shot_tracker.clear_pending()
 	stats_need_sync.emit()
 
@@ -369,6 +389,69 @@ func on_goal_scored_into(defending_team: Team) -> void:
 			scoring_team_id, _state_machine.scores[0], _state_machine.scores[1],
 			scorer_name, assist1_name, assist2_name)
 	_capture_goal_moment_frame()
+
+
+# Host: stamp the scoring goal's "flavor" counters (one_timer_goals / tip_goals)
+# on the scorer. These are broadcast like the other stat counters (via the
+# stats_need_sync above), so a client scorer's own copy carries them into the
+# game-over achievement sweep. Own goals carry no flavor. Reads the shot-tracker
+# state, so the caller MUST invoke this before clear_pending().
+#   one-timer — the scorer released the shot themselves as a one-timer.
+#   tip-in    — the scorer was the last, deflecting toucher of a teammate's
+#               in-flight shot (nobody carried it in).
+func _tag_goal_flavor(scorer: PlayerRecord, scorer_id: int,
+		carrier_peer_id: int, is_own_goal: bool) -> void:
+	if is_own_goal or scorer == null or scorer.team == null:
+		return
+	if not _shot_tracker.has_pending_shot():
+		return
+	var shooter_id: int = _shot_tracker.get_shooter_peer_id()
+	if shooter_id == scorer_id:
+		if _shot_tracker.pending_is_one_timer():
+			scorer.stats.one_timer_goals += 1
+		return
+	# Shooter differs from the scorer → a redirect. A tip-in requires the puck to
+	# have gone in off the deflection (no carrier drove it in) and the shooter to
+	# be a teammate feeding it — an opposing shot deflected in is an own goal path.
+	if carrier_peer_id != -1:
+		return
+	var shooter: PlayerRecord = _registry.get_record(shooter_id)
+	if shooter == null or shooter.team == null:
+		return
+	if shooter.team.team_id == scorer.team.team_id:
+		scorer.stats.tip_goals += 1
+
+
+# Host, final horn: stamp game_winning_goals on the scorer of the goal that
+# put the winner past the loser's final total (the NHL GWG definition). It
+# rides the ordinary stats broadcast (stats_need_sync) so every peer's Three
+# Stars math reads the same counters. A draw stamps nobody, and so does an
+# uncredited goal (own goal with no attributable scorer) at the pivotal slot.
+func _stamp_game_winning_goal() -> void:
+	var score0: int = _state_machine.scores[0]
+	var score1: int = _state_machine.scores[1]
+	if score0 == score1:
+		return
+	var winning_team: int = 0 if score0 > score1 else 1
+	var gwg_idx: int = StarOfGameRules.game_winning_goal_index(
+			maxi(score0, score1), mini(score0, score1))
+	var seen: int = 0
+	for goal: Vector2i in _goal_log:
+		if goal.x != winning_team:
+			continue
+		if seen == gwg_idx:
+			var record: PlayerRecord = _registry.get_record(goal.y)
+			if record != null:
+				record.stats.game_winning_goals = 1
+				stats_need_sync.emit()
+			return
+		seen += 1
+
+
+# Rematch reset: a fresh match must not inherit the previous game's scoring
+# log (the stat counters themselves reset via PlayerRegistry.reset_all_stats).
+func reset_goal_log() -> void:
+	_goal_log.clear()
 
 
 func _is_own_goal(raw_scorer_id: int, defending_team_id: int) -> bool:

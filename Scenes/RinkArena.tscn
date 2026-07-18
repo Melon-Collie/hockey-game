@@ -1,9 +1,11 @@
 [gd_scene format=3 uid="uid://dfo84ap3fvymg"]
 
 [ext_resource type="PhysicsMaterial" uid="uid://bo58ocxbodjpo" path="res://Physics/boards.tres" id="2_xt5ul"]
+[ext_resource type="PhysicsMaterial" path="res://Physics/goal_pipe.tres" id="3_rc3uc"]
 [ext_resource type="Script" uid="uid://0m52yshmlqpi" path="res://Scripts/actors/hockey_rink.gd" id="3_ypjup"]
 [ext_resource type="Script" uid="uid://dnmmf3sl24ex4" path="res://Scripts/actors/hockey_goal.gd" id="4_ma1gh"]
 [ext_resource type="Script" uid="uid://dqofvuyxy7qno" path="res://Scripts/actors/arena_stands.gd" id="5_bejrj"]
+[ext_resource type="Script" path="res://Scripts/actors/jumbotron.gd" id="6_pt3l4"]
 
 [sub_resource type="Environment" id="Environment_rxg2q"]
 background_mode = 1
@@ -30,6 +32,7 @@ adjustment_enabled = true
 environment = SubResource("Environment_rxg2q")
 
 [node name="Rink" type="StaticBody3D" parent="." unique_id=2100473277]
+collision_layer = 32
 physics_material_override = ExtResource("2_xt5ul")
 script = ExtResource("3_ypjup")
 ice_color = Color(0.92941177, 0.9490196, 0.972549, 1)
@@ -37,9 +40,13 @@ ice_fog_color = Color(0.7490196, 0.80784315, 0.8862745, 1)
 ice_roughness_head_on = 0.35
 
 [node name="GoalBottom" type="StaticBody3D" parent="." unique_id=1648202477]
+collision_layer = 64
+physics_material_override = ExtResource("3_rc3uc")
 script = ExtResource("4_ma1gh")
 
 [node name="GoalTop" type="StaticBody3D" parent="." unique_id=1374888956]
+collision_layer = 64
+physics_material_override = ExtResource("3_rc3uc")
 script = ExtResource("4_ma1gh")
 facing = -1
 
@@ -229,3 +236,6 @@ light_specular = 0.35
 spot_range = 25.0
 spot_attenuation = 0.7
 spot_angle = 60.0
+
+[node name="Jumbotron" type="Node3D" parent="." unique_id=1942553558]
+script = ExtResource("6_pt3l4")

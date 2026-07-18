@@ -133,6 +133,12 @@ var _puck_was_carried: bool = false
 # Any single-tick puck travel beyond this (metres) is a reset/reposition, not a
 # real crossing — the tracker reseeds and skips it. Far above any shot or blade
 # speed at 120 Hz (~2 m/tick = 240 m/s); a faceoff/OOB reset jumps much further.
+# The AI goalies' fixed identities, indexed by team_id — spawned onto the
+# jerseys and reused by the Three Stars podium when a goalie stars. Same on
+# every machine, so a goalie star candidate needs no wire traffic.
+const GOALIE_NAMES: Array[String] = ["WALL", "WARD"]
+const GOALIE_NUMBERS: Array[int] = [31, 35]
+
 const _GOAL_MAX_TICK_TRAVEL: float = 2.0
 # Tighter bound for a puck that was PINNED on both ends of the segment. A
 # carried puck teleports to the carry target every tick, and that target can
@@ -184,6 +190,11 @@ var team_brains: Array[TeamBrain] = []
 # read from here instead of each fetching their own — saves redundant
 # interpolation work and per-tick allocations.
 var current_snapshot: WorldSnapshot = null
+# Global per-skater acceleration read for the bots. Each skater's smoothed
+# accel is identical for every bot, so it is computed once per host frame here
+# and shared onto current_snapshot.accel_by_peer instead of all 6 bots
+# recomputing the same velocity diff every tick (see AIAccelerationTracker).
+var _accel_tracker: AIAccelerationTracker = AIAccelerationTracker.new()
 # Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
 # (on_host_started). Drives the carrier reaction delay applied to current_
 # snapshot below, and is read by PlayerRegistry.spawn_bot to wire each agent's
@@ -248,6 +259,9 @@ var _hit_claim: HitClaimResolver = null
 var _phase_coord: PhaseCoordinator = null
 var _swap_coord: SlotSwapCoordinator = null
 var _telemetry: NetworkTelemetry = null
+# Last phase pushed to telemetry.current_phase — dirty-checks the per-frame push so
+# the GamePhase.Phase.keys() name lookup only runs on an actual transition.
+var _last_telemetry_phase_id: int = -1
 var _debug_overlay: NetworkDebugOverlay = null
 var _state_buffer_manager: StateBufferManager = null
 # Per-team last-elected loose-puck chaser, fed back into
@@ -346,6 +360,18 @@ var _ranked_match: bool = false
 # puck_controller / _phase_coord — recreated each match in _spawn_world). The
 # guard prevents duplicate connections to the persistent set on rematch.
 var _persistent_sound_signals_wired: bool = false
+
+# Echo-suppression for the two broadcast save cues (post / goalie). The shooter
+# client simulates its own shot in flight, so its predicted puck fires the
+# post/goalie contact LOCALLY the instant it happens (the live cue) and then
+# hears the host's broadcast ~RTT later — the same event twice. Non-shooter peers
+# never predict the loose puck, so the live cue never fires for them and the
+# broadcast is their only play. We stamp the local play time here and skip an
+# incoming broadcast that lands within the echo window. Keyed on a real local
+# play (not on "am I the shooter"), so a peer that did NOT predict the contact
+# still hears the broadcast — no silence hole. See _save_cue_is_echo.
+var _local_post_cue_at: float = -1000.0
+var _local_goalie_cue_at: float = -1000.0
 
 
 func _ready() -> void:
@@ -478,6 +504,11 @@ func _physics_process(delta: float) -> void:
 		current_snapshot = get_state_delayed(0.0)
 		if current_snapshot != null:
 			_enrich_snapshot_for_ai(current_snapshot)
+			# Shared dead-reckoning: advance the global accel estimate once and
+			# hand it to every bot by reference (was recomputed per bot per tick).
+			_accel_tracker.update(current_snapshot.skater_states, delta)
+			current_snapshot.accel_by_peer = _accel_tracker.accel_by_peer
+			current_snapshot.heading_omega_by_peer = _accel_tracker.heading_omega_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
 	if not team_brains.is_empty() and current_snapshot != null:
 		for brain: TeamBrain in team_brains:
@@ -521,8 +552,11 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
 			# Escape diagnostics — every whistle here means the puck got past
-			# collision that should have contained it. Rare event, so the log
-			# string build is fine; playtest logs pinpoint where/how it got out.
+			# BOTH the boards' collision AND the analytic containment backstop
+			# in Puck._integrate_forces (which rescues any center < 2 m past
+			# the boundary), so it should now be near-unreachable outside a
+			# far teleport. Rare event, so the log string build is fine;
+			# playtest logs pinpoint where/how it got out.
 			print("[puck-oob] whistle: pos=%.2v vel=%.1v height=%.2f xz_outside=%.3f" % [
 					pos, puck.linear_velocity, pos.y - puck.ice_height, xz_outside])
 			# Use the boundary projection — how far past the boards the puck
@@ -731,7 +765,7 @@ func _check_goal_crossing() -> void:
 			if carried and was_carried else _GOAL_MAX_TICK_TRAVEL
 	if _prev_puck_pos.distance_to(curr) <= max_travel:
 		for goal: HockeyGoal in goals:
-			goal.check_goal_crossing(_prev_puck_pos, curr)
+			goal.check_goal_crossing(_prev_puck_pos, curr, carried)
 	_prev_puck_pos = curr
 
 
@@ -788,6 +822,9 @@ func on_host_started() -> void:
 	var goalie_diff: int = PlayerPrefs.freeplay_goalie_difficulty \
 			if NetworkManager.is_free_play_mode else PlayerPrefs.goalie_difficulty
 	goalie_skill_profile = GoalieSkillProfile.for_difficulty(goalie_diff)
+	# Sync the bots' shot model to the tier — otherwise they score their shots
+	# against a Hard goalie's reads and pass up looks that beat a weaker one.
+	AIActionScoring.set_goalie_profile(goalie_skill_profile)
 	_perceived_carrier_peer_id = -1
 	_real_carrier_last = -1
 	_carrier_reaction_timer = 0.0
@@ -883,6 +920,7 @@ func on_player_connected(peer_id: int) -> void:
 		"home_color_slot": NetworkManager.pending_home_color_slot,
 		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"rule_set": _state_machine.rule_set,
+		"team_size": _state_machine.team_size,
 	}
 	# Reconnect branch: a peer whose Steam ID matches a live reservation reclaims
 	# its held team/slot/stats instead of going through fresh auto-balance.
@@ -902,13 +940,13 @@ func on_player_connected(peer_id: int) -> void:
 				Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
 		NetworkManager.send_sync_existing_players(peer_id, _collect_existing_player_data())
 		return
-	# Roster gate: when both teams are at MAX_PER_TEAM, a mid-game joiner comes
-	# in as a spectator instead of overflowing the roster — the state machine
-	# would otherwise hand out team_slot == MAX_PER_TEAM, and the next faceoff
-	# indexes FACEOFF_OFFSETS out of bounds (host-side script error). If the
-	# spectator gallery is also full, kick with a reason instead.
-	if _state_machine.count_players_on_team(0) >= PlayerRules.MAX_PER_TEAM \
-			and _state_machine.count_players_on_team(1) >= PlayerRules.MAX_PER_TEAM:
+	# Roster gate: when both teams are at the latched team size, a mid-game
+	# joiner comes in as a spectator instead of overflowing the roster — the
+	# state machine would otherwise hand out team_slot == team_size, and the
+	# next faceoff indexes FACEOFF_OFFSETS out of bounds in 5v5 (host-side
+	# script error). If the spectator gallery is also full, kick with a reason.
+	if _state_machine.count_players_on_team(0) >= _state_machine.team_size \
+			and _state_machine.count_players_on_team(1) >= _state_machine.team_size:
 		if _spectator_peers.size() >= GameRules.MAX_SPECTATORS:
 			NetworkManager.kick_peer(peer_id, "Match is full.")
 			return
@@ -1117,7 +1155,8 @@ func _spawn_world() -> void:
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
 		_state_machine.apply_config(cfg.num_periods, cfg.period_duration, cfg.ot_enabled, cfg.ot_duration,
-				cfg.get("rule_set", GameRules.DEFAULT_RULE_SET))
+				cfg.get("rule_set", GameRules.DEFAULT_RULE_SET),
+				cfg.get("team_size", GameRules.DEFAULT_TEAM_SIZE))
 		var cfg_id: String = cfg.get("game_id", "")
 		if cfg_id.is_empty() or _is_valid_game_id(cfg_id):
 			_game_id = cfg_id
@@ -1138,8 +1177,10 @@ func _spawn_world() -> void:
 	_wire_subsystems()
 	if NetworkManager.is_host:
 		team_brains = [
-				TeamBrain.new(0, _registry.team_id_by_peer, _registry.caps_by_peer),
-				TeamBrain.new(1, _registry.team_id_by_peer, _registry.caps_by_peer),
+				TeamBrain.new(0, _registry.team_id_by_peer, _registry.caps_by_peer,
+						_state_machine.team_size, _registry.position_by_peer),
+				TeamBrain.new(1, _registry.team_id_by_peer, _registry.caps_by_peer,
+						_state_machine.team_size, _registry.position_by_peer),
 		]
 		_connect_goal_signals()
 
@@ -1217,7 +1258,7 @@ func _spawn_goalies() -> void:
 		var goalie: Goalie = result.bottom_goalie if team_id == 0 else result.top_goalie
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		goalie.apply_uniform(colors)
-		goalie.apply_jersey_info("WALL" if team_id == 0 else "WARD", 31 if team_id == 0 else 35)
+		goalie.apply_jersey_info(GOALIE_NAMES[team_id], GOALIE_NUMBERS[team_id])
 
 
 func _wire_subsystems() -> void:
@@ -1453,15 +1494,19 @@ func _wire_sound_signals() -> void:
 	puck.puck_touched_goalie.connect(
 		func(_g: Goalie) -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd), 0.05)
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, puck.get_puck_position(), _puck_speed_volume(spd) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05)
+			_local_goalie_cue_at = NetworkManager.local_time()
 			if NetworkManager.is_host:
+				NetworkManager.send_goalie_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_goalie", puck.get_puck_position(), spd))
 	puck.puck_touched_post.connect(
 		func() -> void:
 			var spd: float = puck.linear_velocity.length()
-			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd), 0.04)
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, puck.get_puck_position(), _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
 			puck.fire_post_ping_vfx(spd)
+			_local_post_cue_at = NetworkManager.local_time()
 			if NetworkManager.is_host:
+				NetworkManager.send_post_hit_to_all(puck.get_puck_position())
 				_record_replay_audio_event("puck_post", puck.get_puck_position(), spd))
 
 	# Persistent connections: NetworkManager autoload + GameManager self-signals
@@ -1482,6 +1527,19 @@ func _wire_sound_signals() -> void:
 				puck.fire_board_impact_vfx(spd))
 	NetworkManager.goal_body_hit_received.connect(
 		func(pos: Vector3) -> void: SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+	NetworkManager.post_hit_received.connect(
+		func(pos: Vector3) -> void:
+			if _save_cue_is_echo(_local_post_cue_at):
+				return  # already played locally off this peer's predicted contact
+			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
+			SoundManager.play_world(SoundManager.Sound.PUCK_POST, pos, _puck_speed_volume(spd) + _POST_SAVE_VOLUME_BUMP_DB, 0.04, _post_pitch(spd))
+			if puck != null:
+				puck.fire_post_ping_vfx(spd))
+	NetworkManager.goalie_hit_received.connect(
+		func(pos: Vector3) -> void:
+			if _save_cue_is_echo(_local_goalie_cue_at):
+				return  # already played locally off this peer's predicted contact
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOALIE, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0) + _PAD_SAVE_VOLUME_BUMP_DB, 0.05))
 	NetworkManager.deflection_received.connect(
 		func(pos: Vector3) -> void:
 			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
@@ -1971,7 +2029,7 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 		return
 	if new_team_id < 0 or new_team_id > 1:
 		return
-	if new_slot < 0 or new_slot >= PlayerRules.MAX_PER_TEAM:
+	if new_slot < 0 or new_slot >= _state_machine.team_size:
 		return
 	# Liveness guard: a swap-request RPC can still be in flight when the requesting
 	# spectator disconnects. Without this the host would spawn + broadcast a skater
@@ -1985,7 +2043,7 @@ func _promote_spectator_to_player(peer_id: int, new_team_id: int, new_slot: int)
 	# Don't promote into a slot held for a reconnecting player (see try_swap_slot).
 	if _state_machine.is_slot_reserved(new_team_id, new_slot):
 		return
-	if _state_machine.count_players_on_team(new_team_id) >= PlayerRules.MAX_PER_TEAM:
+	if _state_machine.count_players_on_team(new_team_id) >= _state_machine.team_size:
 		return
 	_spectator_peers.erase(peer_id)
 	var is_local: bool = peer_id == NetworkManager.local_peer_id()
@@ -2217,6 +2275,7 @@ func _build_replay_header() -> Dictionary:
 		"period_duration": _state_machine.period_duration if _state_machine != null else GameRules.PERIOD_DURATION,
 		"ot_enabled": _state_machine.ot_enabled if _state_machine != null else GameRules.OT_ENABLED,
 		"rule_set": _state_machine.rule_set if _state_machine != null else GameRules.DEFAULT_RULE_SET,
+		"team_size": _state_machine.team_size if _state_machine != null else GameRules.DEFAULT_TEAM_SIZE,
 		"home_color_slot": NetworkManager.pending_home_color_slot,
 		"away_color_slot": NetworkManager.pending_away_color_slot,
 		"recorded_by_peer_id": NetworkManager.local_peer_id(),
@@ -2394,6 +2453,10 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			# Kicks in above a firm 5.0; the camera aims along the shove.
 			local_player_impact.emit(impulse, clampf((impulse.length() - 5.0) / 6.0, 0.0, 1.0)))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
+		# Historical positions of the OTHER skaters for the reconcile replay's
+		# body-check re-resolution (Slice C) — sampled from each remote's
+		# interpolation buffer at the replayed input's host timestamp.
+		local_ctrl.set_historical_others_provider(_sample_historical_others)
 	# AI bots release shots through the same signal as humans, but they live
 	# only on the host (record.is_local is false). Without this connection
 	# the wrister state machine transitions to FOLLOW_THROUGH but the puck
@@ -2583,22 +2646,28 @@ func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
 	(record.controller as RemoteController).apply_ghost_rpc(is_ghost)
 
 
-func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
+func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
+		blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms)
+	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms,
+			blade_curr, blade_prev, top_hand)
 
 
-func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
+		expected_carrier_peer_id: int, blade_curr: Vector3, blade_prev: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id,
+			blade_curr, blade_prev)
 
 
-func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, expected_carrier_peer_id: int) -> void:
+func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
+		expected_carrier_peer_id: int, blade_curr: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id)
+	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id,
+			blade_curr)
 
 
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
@@ -2917,7 +2986,7 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 	# a moving puck without possessing it) so goal attribution and assist credit
 	# work — without this, get_last_toucher() returns the passer at goal time.
 	_shot_tracker.on_deflection(pid)
-	_shot_tracker.on_shot_started(pid)
+	_shot_tracker.on_shot_started(pid, true)  # one-timer tag → One-Timer achievement
 	# Lag-comp the goalie reaction trigger (see _fire_remote_shot for the
 	# full rationale). One-timers go through the same RPC-back-date flow.
 	# clamp_back_date also zeroes the host's own path (host_timestamp = 0 →
@@ -3321,6 +3390,13 @@ func _observe_telemetry() -> void:
 	if puck_controller != null:
 		extrapolating = extrapolating or puck_controller.is_extrapolating
 	_telemetry.observe_actors(skater_buf, puck_buf, goalie_buf, extrapolating)
+	# Host-stall attribution context (see NetworkTelemetry.current_phase). Phase
+	# name resolves only on a transition — GamePhase.Phase.keys() allocates, so the
+	# dirty check keeps it off the per-frame path. Actor count is a cached size.
+	if _state_machine != null and _state_machine.current_phase != _last_telemetry_phase_id:
+		_last_telemetry_phase_id = _state_machine.current_phase
+		_telemetry.current_phase = GamePhase.Phase.keys()[_state_machine.current_phase]
+	_telemetry.current_actor_count = (_registry.skaters().size() if _registry != null else 0) + goalie_controllers.size()
 	# Connection facts the static record_* path doesn't carry — sampled by the
 	# session fold at window rollover. Clients refresh their link-to-host reads;
 	# the host refreshes its per-peer view instead (its own RTT/loss are 0).
@@ -3515,27 +3591,72 @@ func _pregame_intro_eligible() -> bool:
 
 
 # Three Stars of the Game, ranked best first, computed locally from the
-# replicated stat counters. Every machine sees the same counters and the same
-# sorted-peer-id candidate order, and StarOfGameRules breaks ties explicitly,
-# so selection is deterministic without an RPC. Can return fewer than three
-# entries (empty when nobody registered a counting stat).
+# replicated stat counters. Every machine sees the same counters (including
+# the host-stamped game-winning-goal flag) and the same sorted-peer-id
+# candidate order, and StarOfGameRules breaks ties explicitly, so selection
+# is deterministic without an RPC. The GWG bonus scales with the final margin
+# (a one-goal winner is the story of the night, a blowout GWG is trivia),
+# losing-team stat lines are discounted at selection, and the first star
+# always comes from the winning team; humans and bots compete on equal
+# footing. The two AI goalies are candidates too (after the skaters in the
+# stable order), rated on goals saved above the Mitts-average expectation —
+# team shots and scores are replicated, so their scores are as deterministic
+# as the skaters'. Can return fewer than three entries (empty when nobody
+# registered a counting stat).
 func get_stars_of_game() -> Array[PlayerRecord]:
 	var result: Array[PlayerRecord] = []
 	if _registry == null:
 		return result
+	var goal_margin: int = 0
+	var winning_team: int = -1
+	if _state_machine != null:
+		goal_margin = absi(_state_machine.scores[0] - _state_machine.scores[1])
+		if goal_margin > 0:
+			winning_team = 0 if _state_machine.scores[0] > _state_machine.scores[1] else 1
 	var peer_ids: Array[int] = []
 	for pid: int in _registry.all().keys():
 		peer_ids.append(pid)
 	peer_ids.sort()
 	var scores: Array[float] = []
-	var is_human: Array[bool] = []
+	var on_losing_team: Array[bool] = []
 	for pid: int in peer_ids:
 		var rec: PlayerRecord = _registry.get_record(pid)
-		scores.append(StarOfGameRules.score(rec.stats))
-		is_human.append(not rec.is_bot)
-	for star_idx: int in StarOfGameRules.pick_stars(scores, is_human):
-		result.append(_registry.get_record(peer_ids[star_idx]))
+		scores.append(StarOfGameRules.score(rec.stats, goal_margin))
+		on_losing_team.append(winning_team != -1 and rec.team != null
+				and rec.team.team_id != winning_team)
+	var goalie_candidates: bool = _state_machine != null and teams.size() == 2
+	if goalie_candidates:
+		for team_id: int in 2:
+			scores.append(StarOfGameRules.goalie_score(
+					_state_machine.team_shots[1 - team_id],
+					_state_machine.scores[1 - team_id]))
+			on_losing_team.append(winning_team != -1 and team_id != winning_team)
+	for star_idx: int in StarOfGameRules.pick_stars(scores, on_losing_team):
+		if star_idx < peer_ids.size():
+			result.append(_registry.get_record(peer_ids[star_idx]))
+		else:
+			result.append(_goalie_star_record(star_idx - peer_ids.size()))
 	return result
+
+
+# A starred goalie has no roster record, so the podium gets a synthesized
+# one carrying just what the HUD reads (name, number, team, is_goalie). The
+# negative peer id is a sentinel — this record never enters the registry.
+func _goalie_star_record(team_id: int) -> PlayerRecord:
+	var rec := PlayerRecord.new(-(team_id + 1), 0, false, teams[team_id])
+	rec.player_name = GOALIE_NAMES[team_id]
+	rec.jersey_number = GOALIE_NUMBERS[team_id]
+	rec.is_bot = true
+	rec.is_goalie = true
+	return rec
+
+
+# Replicated team shots-on-goal (NHL convention: goals count as shots). The
+# HUD reads this at podium time to caption a starred goalie's saves line.
+func get_team_shots(team_id: int) -> int:
+	if _state_machine == null:
+		return 0
+	return _state_machine.team_shots[team_id]
 
 
 # ── Scene exit & reset ───────────────────────────────────────────────────────
@@ -3567,6 +3688,10 @@ func _on_game_over() -> void:
 		if _achievements_active():
 			if _achievements != null:
 				_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
+				# Roster achievements — read the live Steam lobby membership so any
+				# machine (host or client) can award "played a game with X".
+				_achievements.evaluate_roster(
+						SteamManager.lobby_member_steam_ids(), SteamManager.steam_id)
 			if _stat_recorder != null:
 				_stat_recorder.record_game(local.stats, outcome)
 				if _achievements != null:
@@ -3622,6 +3747,20 @@ func _report_net_session(end_reason: String) -> void:
 # or tutorial / penalty-drill practice.
 func _achievements_active() -> bool:
 	return not NetworkManager.is_free_play_mode and not NetworkManager.is_drill_mode()
+
+
+# Called from the tutorial-completion paths (TutorialManager / TutorialHUD) each
+# time a tutorial is marked complete. Fires the "Student of the Game" achievement
+# once the whole course is done. Deliberately outside _achievements_active — the
+# course runs in tutorial mode, where that gate is closed, so the meta hook is
+# called directly. Idempotent downstream (AchievementService de-dupes).
+func notify_tutorial_completed() -> void:
+	if _achievements == null:
+		return
+	for id: String in TutorialRegistry.ALL_IDS:
+		if not PlayerPrefs.is_tutorial_complete(id):
+			return
+	_achievements.on_tutorials_complete()
 
 
 # Latches _ranked_match (see its doc) once two humans share the match. Called
@@ -3805,6 +3944,8 @@ func _apply_reset() -> void:
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
+	if _phase_coord != null:
+		_phase_coord.reset_goal_log()
 	if _turnover_tracker != null:
 		_turnover_tracker.reset()
 	if _possession_tracker != null:
@@ -3835,12 +3976,18 @@ func return_to_lobby() -> void:
 			var r: PlayerRecord = _registry.get_record(peer_id)
 			if r == null or not r.is_bot or r.team == null:
 				continue
-			var slot_key: int = r.team.team_id * 3 + r.team_slot
+			var slot_key: int = LobbySlotKey.encode(r.team.team_id, r.team_slot)
 			bot_slots[slot_key] = true
 			bot_identities[slot_key] = {
 				"name":           r.player_name,
 				"number":         r.jersey_number,
 				"is_left_handed": r.is_left_handed,
+				"speed":          r.attributes.speed,
+				"agility":        r.attributes.agility,
+				"hands":          r.attributes.hands,
+				"size":           r.attributes.size,
+				"physical":       r.attributes.physical,
+				"shot":           r.attributes.shot,
 			}
 	NetworkManager.pending_bot_slots = bot_slots
 	NetworkManager.pending_bot_identities = bot_identities
@@ -3886,6 +4033,10 @@ func _on_local_attributes_changed(attrs: PlayerAttributes) -> void:
 	if record == null:
 		return
 	record.attributes = attrs
+	# Customized your build — a meta achievement, fired directly (this signal only
+	# fires from the free-play picker Apply, where the game-over sweep never runs).
+	if _achievements != null:
+		_achievements.on_build_edited()
 	if NetworkManager.is_in_online_match():
 		return
 	if record.controller != null:
@@ -3987,6 +4138,7 @@ func refresh_freeplay_goalie_difficulty() -> void:
 	if not NetworkManager.is_free_play_mode:
 		return
 	goalie_skill_profile = GoalieSkillProfile.for_difficulty(PlayerPrefs.freeplay_goalie_difficulty)
+	AIActionScoring.set_goalie_profile(goalie_skill_profile)
 	for gc: GoalieController in goalie_controllers:
 		gc.apply_skill_profile(goalie_skill_profile)
 
@@ -4007,6 +4159,36 @@ func return_to_free_play() -> void:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 func _puck_speed_volume(speed: float) -> float:
 	return lerpf(-10.0, 0.0, clampf((speed - 1.0) / 20.0, 0.0, 1.0))
+
+
+# Base loudness bumps layered on top of the speed curve for the two save cues.
+# `_puck_speed_volume` ceilings at 0 dB (it only attenuates), so a hard clang off
+# the iron or a fat pad save was never louder than the stream baseline; the bump
+# lets a save carry the way it should. Post rings brighter/louder than the
+# damped pad thump. Kept in sync with ReplayEventReplayer's mirrored constants.
+const _POST_SAVE_VOLUME_BUMP_DB: float = 4.0
+const _PAD_SAVE_VOLUME_BUMP_DB: float = 2.0
+
+
+# Pitch for a puck-off-the-post cue. A hard shot rings the iron bright and
+# sharp; a slow puck clunks dull. Speed-driven off the same replicated puck
+# velocity the volume uses, so host and remote peers ring a given post alike.
+# Kept in sync with ReplayEventReplayer._post_pitch.
+func _post_pitch(speed: float) -> float:
+	return lerpf(0.9, 1.12, clampf((speed - 5.0) / 25.0, 0.0, 1.0))
+
+
+# True if a broadcast save cue arriving now is the echo of a local (predicted)
+# play this peer already made — see the _local_*_cue_at doc-block. The window is
+# the expected echo delay: the local play leads the host's broadcast by ~one RTT
+# (the client's prediction runs ahead, the host echoes back a round-trip later),
+# the same RTT-based hand-off the puck predictor uses at _on_client_puck_hit_post.
+# Clamped so a normal RTT can't under-cover the echo and a lag spike can't gate a
+# genuinely separate second save. `local_cue_at` starts far in the past, so a peer
+# that never played locally (never predicted the contact) is never suppressed.
+func _save_cue_is_echo(local_cue_at: float) -> bool:
+	var window: float = clampf(NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.05, 0.08, 0.5)
+	return NetworkManager.local_time() - local_cue_at < window
 
 
 # Pitch for a blade deflection cue. A low-speed result is a bobble (the blade
@@ -4100,12 +4282,17 @@ func _spawn_bots_from_lobby() -> void:
 	for slot_key: int in NetworkManager.pending_bot_slots:
 		if not NetworkManager.pending_bot_slots[slot_key]:
 			continue
-		# Slot keys for non-spectator slots: team*3+slot. Spectator keys are
-		# >= 100 and bots can't occupy them; skip defensively.
-		if slot_key < 0 or slot_key >= 6:
+		# Slot keys for non-spectator slots: team*MAX_PER_TEAM+slot (the fixed
+		# capacity stride — see LobbySlotKey). Spectator keys are >= 100 and
+		# bots can't occupy them; skip defensively.
+		if slot_key < 0 or slot_key >= PlayerRules.MAX_PER_TEAM * 2:
 			continue
-		var team_id: int = 0 if slot_key < 3 else 1
-		var team_slot: int = slot_key % 3
+		var team_id: int = LobbySlotKey.team_id(slot_key)
+		var team_slot: int = LobbySlotKey.slot(slot_key)
+		# 3v3 never fields the D slots even if a stale bot toggle survives a
+		# mode flip — the latched size is the roster authority.
+		if team_slot >= _state_machine.team_size:
+			continue
 		# Refuse to overwrite a slot that a human already claimed.
 		if _slot_already_taken(team_id, team_slot):
 			continue
@@ -4149,6 +4336,36 @@ func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 		return null
 	var ts: float = NetworkManager.local_time() - delay_seconds
 	return _state_buffer_manager.get_state_at(ts)
+
+
+# Historical {skater, position, velocity, hit} for every skater EXCEPT
+# `exclude_skater` at `host_ts`, sampled from each remote's interpolation buffer.
+# Wired to the local player's LocalController as the reconcile replay's
+# body-check re-resolution source (Slice C) — it re-derives contact against where
+# the host actually had the others, replacing the old recorded-impulse bridge.
+# NOTE: allocates an Array + per-other Dictionary per call (once per replayed
+# input during a reconcile). Correct but not yet optimized — a scratch-fill pass
+# is the "make it look good" follow-up.
+func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
+	var out: Array = []
+	if _registry == null:
+		return out
+	for rec: PlayerRecord in _registry.all().values():
+		if rec.skater == null or rec.skater == exclude_skater:
+			continue
+		var remote: RemoteController = rec.controller as RemoteController
+		if remote == null:
+			continue
+		var state: SkaterNetworkState = remote.sample_state_at(host_ts)
+		if state == null:
+			continue
+		out.append({
+			"skater": rec.skater,
+			"position": state.position,
+			"velocity": state.velocity,
+			"hit": state.hit_committed,
+		})
+	return out
 
 
 # Bots' discrete-event reaction delay. Positions/velocities on `snap` stay
@@ -4250,9 +4467,9 @@ func get_world_state() -> PackedByteArray:
 func _record_world_state_to_file(host_ts: float, data: PackedByteArray) -> void:
 	if _replay_file_writer == null or not _should_record_to_file():
 		return
-	var phase_changed: bool = _state_machine != null \
+	var phase_did_change: bool = _state_machine != null \
 			and _state_machine.current_phase != _last_recorded_phase
-	if not phase_changed \
+	if not phase_did_change \
 			and host_ts - _last_file_frame_ts < 1.0 / float(Constants.REPLAY_FILE_RATE):
 		return
 	_replay_file_writer.enqueue_frame(host_ts, data)
@@ -4592,11 +4809,11 @@ func _on_smart_ping_received(sender_peer_id: int, ping_type: int,
 	var local_team: int = _registry.team_id_by_peer.get(NetworkManager.local_peer_id(), -1)
 	if local_team == sender_team and not NetworkManager.is_replay_mode():
 		if ping_type == PingRules.Type.GO_THERE:
-			_spawn_ping_marker(world_pos, PingRules.message_for(ping_type))
+			_spawn_ping_marker(world_pos, tr(PingRules.message_key_for(ping_type)))
 		else:
 			var sender_rec: PlayerRecord = _registry.get_record(sender_peer_id)
 			if sender_rec != null and sender_rec.skater != null:
-				sender_rec.skater.show_ping_bubble(PingRules.message_for(ping_type))
+				sender_rec.skater.show_ping_bubble(tr(PingRules.message_key_for(ping_type)))
 		SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
 
 	# Bot obedience is host-only (bots are host-simulated; offline free play
@@ -4649,6 +4866,10 @@ func get_num_periods() -> int:
 
 func get_rule_set() -> int:
 	return _state_machine.rule_set if _state_machine != null else GameRules.DEFAULT_RULE_SET
+
+
+func get_team_size() -> int:
+	return _state_machine.team_size if _state_machine != null else GameRules.DEFAULT_TEAM_SIZE
 
 
 func get_period_scores() -> Array:

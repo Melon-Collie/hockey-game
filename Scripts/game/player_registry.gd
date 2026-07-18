@@ -27,8 +27,8 @@ signal player_left(name: String, team_color: Color)
 var _players: Dictionary[int, PlayerRecord] = {}
 # Hot-path lookup tables that mirror `_players[peer_id]` fields,
 # maintained alongside `_players` on every spawn / remove / slot-swap
-# (slot swap mutates team_id_by_* only; peer_id_by_skater is stable
-# for the lifetime of the skater).
+# (slot swap mutates team_id_by_* and position_by_peer; peer_id_by_skater
+# is stable for the lifetime of the skater).
 # AI dispatch and PuckController.poke_check both iterate skaters and
 # need O(1) team lookups; the original Callable-resolver pattern paid
 # Callable.call overhead in tight loops. Read live by reference —
@@ -43,6 +43,11 @@ var peer_id_by_skater: Dictionary = {}    # Skater object -> peer_id
 # bot's decision layer looks up caps_by_peer[pid]; a missing entry means the
 # league default (unwired / mid-spawn), which reproduces the prior behaviour.
 var caps_by_peer: Dictionary[int, AISkaterCaps] = {}
+# Live peer_id → lobby team_slot (0–4). team_slot doubles as the position
+# identity (C/LW/RW/LD/RD — see PlayerRules.POSITION_NAMES); the 5v5
+# TeamBrain reads this by reference for the F/D group split and home-side
+# rest bias. Same maintenance contract as team_id_by_peer.
+var position_by_peer: Dictionary[int, int] = {}
 # Flat skater list for the per-tick scan loops (puck interactions, goalie
 # crease-jam checks). Rebuilt on spawn/remove; consumers read the live
 # reference through their skater-getter Callable and must not mutate it.
@@ -138,6 +143,11 @@ func spawn(
 	# record.team — the goalie's `carrier.get_team_id()` reads the live value
 	# from the registry rather than a cached field that drifts.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
+	# Analytic skater-vs-skater contact iterates the cached skater list (skaters are
+	# off each other's move_and_slide mask now — see Skater._resolve_player_collisions).
+	# peer_id is the machine-stable tiebreak for the aggressor gate's head-on case.
+	spawned.skater.set_skater_collision_provider(skaters)
+	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(player_name)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(player_name, jersey_number)
@@ -149,6 +159,7 @@ func spawn(
 	spawned.controller.set_spawn_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
+	position_by_peer[peer_id] = record.team_slot
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
 	refresh_caps(peer_id)
@@ -182,7 +193,7 @@ func spawn_bot(
 		team_slot: int,
 		team: Team,
 		identity: Dictionary = {}) -> PlayerRecord:
-	assert(bot_id >= 0 and bot_id < 6, "bot_id must be 0..5 (one per team slot)")
+	assert(bot_id >= 0 and bot_id < 10, "bot_id must be 0..9 (one per team slot)")
 	var peer_id: int = NetworkManager.BOT_ID_BASE + bot_id
 	var colors: Dictionary = TeamColorRegistry.get_colors(team.color_slot, team.team_id)
 	var record := PlayerRecord.new(peer_id, team_slot, false, team)
@@ -228,6 +239,9 @@ func spawn_bot(
 	(spawned.controller as AIController).setup_agent(peer_id, team.team_id, brain, team_id_by_peer, record.is_left_handed, GameManager.bot_skill_profile, caps_by_peer)
 	# Same resolver-based team lookup as spawn() — see comment there.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
+	# See spawn() — analytic skater-vs-skater contact iterates the cached skater list.
+	spawned.skater.set_skater_collision_provider(skaters)
+	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(record.player_name)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number)
@@ -239,6 +253,7 @@ func spawn_bot(
 	spawned.controller.set_spawn_facing(PlayerRules.faceoff_facing(team.team_id))
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
+	position_by_peer[peer_id] = record.team_slot
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
 	refresh_caps(peer_id)
@@ -265,6 +280,7 @@ func remove(peer_id: int) -> PlayerRecord:
 	_players.erase(peer_id)
 	team_id_by_peer.erase(peer_id)
 	caps_by_peer.erase(peer_id)
+	position_by_peer.erase(peer_id)
 	if record.skater != null:
 		team_id_by_skater.erase(record.skater)
 		peer_id_by_skater.erase(record.skater)
@@ -417,6 +433,7 @@ func get_slot_roster() -> Array[Dictionary]:
 func clear_state() -> void:
 	_players.clear()
 	team_id_by_peer.clear()
+	position_by_peer.clear()
 	team_id_by_skater.clear()
 	peer_id_by_skater.clear()
 	_skaters_cache.clear()

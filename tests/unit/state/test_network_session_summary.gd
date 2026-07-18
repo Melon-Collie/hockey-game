@@ -77,6 +77,20 @@ func test_blade_jumps_is_a_total_key() -> void:
 	s.observe({"blade_jumps": 4.0})
 	assert_eq(s.to_dict()["blade_jumps_total"], 5.0)
 
+func test_pickup_claim_outcomes_are_total_keys() -> void:
+	# Host-side lag-comp pickup-claim outcomes are per-window event counts, so
+	# they ship as session sums (no smearing avg) — the sanity check is
+	# misses/claims on the host row.
+	var s := _make()
+	s.observe({"pickup_claims": 5.0, "pickup_claim_misses": 1.0, "pickup_claim_deflects": 2.0})
+	s.observe({"pickup_claims": 3.0, "pickup_claim_misses": 0.0, "pickup_claim_deflects": 1.0})
+	var d := s.to_dict()
+	assert_eq(d["pickup_claims_total"], 8.0)
+	assert_eq(d["pickup_claim_misses_total"], 1.0)
+	assert_eq(d["pickup_claim_deflects_total"], 3.0)
+	assert_false(d.has("pickup_claims_avg"))
+	assert_false(d.has("pickup_claim_misses_max"))
+
 func test_buffer_depths_are_min_keys() -> void:
 	# Interp buffers running dry (lower) is the bad direction — the session
 	# minimum is the diagnostic extreme.

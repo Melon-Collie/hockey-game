@@ -161,29 +161,72 @@ func test_opponent_within_forward_degenerate_dir_is_omnidirectional() -> void:
 	assert_true(sm._opponent_within_forward(s, Vector3.ZERO, Vector3.ZERO, 10.0))
 
 
-# ── _angle_intercept_inside (static, pure geometry) ──────────────────────────
+# ── _shade_intercept_goal_side (static, pure geometry) ───────────────────────
+# Full coverage lives in test_ai_chase_angling.gd; this is the slice's smoke
+# check that the shade pulls the intercept toward the defended net by one
+# blade reach.
 
-func test_angle_intercept_passthrough_within_bias_band() -> void:
-	# |carrier.x| <= CHASE_ANGLE_BIAS_M → target returned unchanged.
+func test_shade_intercept_pulls_toward_our_net() -> void:
 	var target := Vector3(3, 0, -10)
-	assert_eq(Agent._angle_intercept_inside(target, Vector3(1.0, 0, 0)), target)
+	var our_net := Vector3(0, 0, GameRules.GOAL_LINE_Z)
+	var shaded: Vector3 = Agent._shade_intercept_goal_side(target, our_net)
+	assert_almost_eq(
+			Vector2(shaded.x - target.x, shaded.z - target.z).length(),
+			Agent.BLADE_REACH_M, 0.0001)
+	assert_gt(shaded.z, target.z, "shade moves the point toward the +Z net")
 
 
-func test_angle_intercept_biases_toward_center_when_wide() -> void:
-	var target := Vector3(3, 0, -10)
-	# carrier on +X side → bias target by -CHASE_ANGLE_BIAS_M (toward center).
-	var out_right: Vector3 = Agent._angle_intercept_inside(target, Vector3(5.0, 0, 0))
-	assert_almost_eq(out_right.x, target.x - Agent.CHASE_ANGLE_BIAS_M, 0.0001)
-	# carrier on -X side → bias the other way.
-	var out_left: Vector3 = Agent._angle_intercept_inside(target, Vector3(-5.0, 0, 0))
-	assert_almost_eq(out_left.x, target.x + Agent.CHASE_ANGLE_BIAS_M, 0.0001)
-	assert_eq(out_right.z, target.z, "only X is biased")
+# ── _lead_intercept (speed-capped kinematic reachability) ────────────────────
+
+func test_lead_intercept_stationary_puck_targets_puck() -> void:
+	# A stationary puck's trajectory never moves; the intercept must be the
+	# puck itself regardless of which constraint binds first.
+	var out: Vector3 = sm._lead_intercept(
+			Vector3.ZERO, Vector3.ZERO, Vector3(6, 0, 0), Vector3.ZERO)
+	assert_almost_eq(out.x, 6.0, 0.001)
+	assert_almost_eq(out.z, 0.0, 0.001)
+
+
+func test_lead_intercept_receding_fast_puck_respects_speed_cap() -> void:
+	# From rest, a puck receding at 8 m/s from 6 m ahead. The accel-only
+	# model (½·A·T² reach) claimed an intercept ~1.9 s out — arrival speed
+	# would be ~22 m/s, far past the cap — so the bot aimed at a point it
+	# physically could not make. With the cruise bound the chosen point
+	# must lie at or beyond what an accel-then-cruise sprint actually
+	# covers by the time the puck is there.
+	var puck_pos := Vector3(0, 0, 6)
+	var puck_vel := Vector3(0, 0, 8)
+	var out: Vector3 = sm._lead_intercept(Vector3.ZERO, Vector3.ZERO, puck_pos, puck_vel)
+	# Old model's pick sat near z≈21 (T≈1.87 s). The speed-honest model
+	# must aim meaningfully deeper (or at the window's end).
+	assert_gt(out.z, 22.0,
+			"speed cap rejects the accel-only phantom intercept at z≈21")
+
+
+func test_lead_intercept_moving_with_puck_picks_early_point() -> void:
+	# Already at top speed right behind a slower puck: the chase is nearly
+	# won and the intercept should resolve within the first few steps.
+	var out: Vector3 = sm._lead_intercept(
+			Vector3.ZERO, Vector3(0, 0, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S),
+			Vector3(0, 0, 2), Vector3(0, 0, 2))
+	assert_lt(out.z, 6.0, "closing chase resolves to a near intercept")
+
+
+func test_cruise_distance_matches_closed_form() -> void:
+	# From rest at A=12, V=9: t_acc = 0.75 s. At t=0.5 (accel phase):
+	# ½·12·0.25 = 1.5 m. At t=2.0: ½·12·0.5625 + 9·1.25 = 14.625 m.
+	sm._chase_max_accel = 12.0
+	sm._self_max_speed = 9.0
+	assert_almost_eq(sm._cruise_distance(0.0, 0.5), 1.5, 0.001)
+	assert_almost_eq(sm._cruise_distance(0.0, 2.0), 14.625, 0.001)
+	# Moving AWAY (v0 negative) covers strictly less ground.
+	assert_lt(sm._cruise_distance(-4.0, 2.0), sm._cruise_distance(0.0, 2.0))
 
 
 # ── Slice 2: mouse / aim motion geometry ─────────────────────────────────────
-# Pure motion model — no snapshot, no role state. The output carries no noise
-# (MOUSE_NOISE_STD_M == 0), so the returned point equals the smooth _mouse_pos
-# and exact assertions hold.
+# Pure motion model — no snapshot, no role state. The output is the smooth
+# _mouse_pos (per-tick cursor noise no longer exists; execution error is a
+# per-release sample that never touches raw agents), so exact assertions hold.
 
 func _self_state(facing: Vector2) -> SkaterNetworkState:
 	var st := SkaterNetworkState.new()
@@ -412,29 +455,6 @@ func test_dispatch_throttled_tick_reuses_cached_decision() -> void:
 	assert_almost_eq(input.mouse_world_pos.z, 2.0, 1e-6)
 
 
-# ── wants_direct_aim: skip the second-stage cursor lerp during committed shot ──
-
-func test_wants_direct_aim_true_in_shot_states() -> void:
-	sm._state = Agent.State.SHOOT_PRESSED
-	assert_true(sm.wants_direct_aim(), "charging a wrister tracks the cursor directly")
-	sm._state = Agent.State.ONE_TIMER_PRESSED
-	assert_true(sm.wants_direct_aim(), "one-timer tracks directly")
-
-
-func test_wants_direct_aim_true_when_pre_aiming_a_shot() -> void:
-	sm._state = Agent.State.CARRY
-	sm._intended_action = Agent.State.SHOOT_PRESSED
-	assert_true(sm.wants_direct_aim(), "shot pre-aim (still in CARRY) tracks directly")
-
-
-func test_wants_direct_aim_false_for_carry_and_pass() -> void:
-	sm._state = Agent.State.CARRY
-	sm._intended_action = Agent.State.CARRY
-	assert_false(sm.wants_direct_aim(), "plain carry keeps the second-stage lerp")
-	sm._intended_action = Agent.State.PASS_PRESSED
-	assert_false(sm.wants_direct_aim(), "pass pre-aim keeps the softening lerp")
-
-
 # ── Slice 5: press-state handlers + transitions ──────────────────────────────
 # The fire states (SHOOT_PRESSED / ONE_TIMER_PRESSED / PASS_PRESSED) are
 # entered by the carrier from CARRY, but once entered they run
@@ -515,9 +535,10 @@ func test_shoot_pressed_lost_puck_bails() -> void:
 	assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
 
 
-func test_shoot_pressed_stagger_cancels_via_block() -> void:
+func test_shoot_pressed_stagger_cancels_via_slap() -> void:
 	# A body check mid-charge (stagger_timer set) cancels the wrister rather
-	# than flailing it through the hit. Cancel is via block_held, not a release.
+	# than flailing it through the hit. Cancel routes through slap_pressed (the
+	# other shot button), not a release — block no longer cancels shots.
 	sm._state = Agent.State.SHOOT_PRESSED
 	var s := _self_snap(Vector3.ZERO, true)
 	sm.dispatch(InputState.new(), s)  # tick 0 (bail only fires once charge_tick > 0)
@@ -525,10 +546,10 @@ func test_shoot_pressed_stagger_cancels_via_block() -> void:
 	var i := InputState.new()
 	sm.dispatch(i, s)
 	assert_eq(sm.get_state(), Agent.State.CARRY, "a check mid-charge cancels the wrister")
-	assert_true(i.block_held, "cancel routes through block_held, not a shot release")
+	assert_true(i.slap_pressed, "cancel routes through slap_pressed, not a shot release")
 
 
-func test_shoot_pressed_front_pressure_cancels_via_block() -> void:
+func test_shoot_pressed_front_pressure_cancels_via_slap() -> void:
 	# An opponent closing from the front (toward the attacking goal) within the
 	# bail radius cancels the windup. Team 0 attacks −Z.
 	sm._state = Agent.State.SHOOT_PRESSED
@@ -538,7 +559,7 @@ func test_shoot_pressed_front_pressure_cancels_via_block() -> void:
 	var i := InputState.new()
 	sm.dispatch(i, s)
 	assert_eq(sm.get_state(), Agent.State.CARRY, "front pressure cancels the windup")
-	assert_true(i.block_held)
+	assert_true(i.slap_pressed)
 
 
 func test_shoot_pressed_ignores_rear_pressure() -> void:
@@ -552,50 +573,323 @@ func test_shoot_pressed_ignores_rear_pressure() -> void:
 	assert_eq(sm.get_state(), Agent.State.SHOOT_PRESSED, "rear pressure does not cancel the charge")
 
 
-# ── ONE_TIMER_PRESSED (off-puck, fire on contact) ────────────────────────────
+# ── ONE_TIMER_PRESSED (the real slapper one-timer: wind up, settle, release) ─
 
-func test_one_timer_holds_until_puck_arrives() -> void:
+func _inbound_feed_snap(self_pos: Vector3, puck_pos: Vector3,
+		puck_vel: Vector3) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = puck_pos
+	s.puck_state.velocity = puck_vel
+	s.puck_state.carrier_peer_id = -1
+	_add_skater(s, SELF_ID, self_pos)
+	return s
+
+
+func test_one_timer_winds_up_the_slapper_through_the_flight() -> void:
+	# A live feed inbound: tick 0 presses SLAP (the real slapper one-timer —
+	# the diegetic wind-up the controller animates) and holds it while the
+	# feed flies. On attachment (the controller's one-timer window) the button
+	# drops and release_slapper fires.
 	sm._state = Agent.State.ONE_TIMER_PRESSED
-	var s := _self_snap(Vector3.ZERO, false)  # puck not here yet
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
 	var i0 := InputState.new()
 	sm.dispatch(i0, s)
-	assert_true(i0.shoot_pressed, "tick 0 fires the press edge")
-	assert_true(i0.shoot_held, "holds the charge while waiting for the puck")
+	assert_true(i0.slap_pressed, "tick 0 presses the slap charge")
+	assert_true(i0.slap_held, "the wind-up holds while the feed is in flight")
 	assert_eq(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "keeps waiting off-puck")
-	# Puck contacts the blade → release fires.
+	# Puck attaches mid-charge → the window opens → release.
 	s.real_puck_carrier_peer_id = SELF_ID
 	var i1 := InputState.new()
 	sm.dispatch(i1, s)
-	assert_false(i1.shoot_held, "release drops shoot_held on contact")
+	assert_false(i1.slap_held, "release drops slap_held inside the window")
 	assert_eq(sm.get_state(), Agent.State.CARRY)
 
 
-func test_one_timer_safety_bail_after_timeout() -> void:
-	# If the puck never arrives within the press budget, release with no puck
-	# (no shot fires) and drop to the puck-lost state.
+func test_one_timer_bails_when_the_feed_dies() -> void:
+	# No live inbound line and no puck at the zone (picked off / deflected
+	# dead): drop the swing (honest whiff) and get back into the play.
 	sm._state = Agent.State.ONE_TIMER_PRESSED
-	sm._intent_max_wait_ticks = 2
-	var s := _self_snap(Vector3.ZERO, false)
-	var bailed := false
-	for _n in range(5):
-		var i := InputState.new()
-		sm.dispatch(i, s)
-		if sm.get_state() != Agent.State.ONE_TIMER_PRESSED:
-			assert_false(i.shoot_held, "timeout releases without holding")
-			assert_eq(sm.get_state(), sm._post_puck_lost_state(s))
-			bailed = true
-			break
-	assert_true(bailed, "the press times out and bails")
-
-
-func test_one_timer_seeks_moving_anchor() -> void:
-	# Mode-A reception sets a net-forward anchor; the bot skates to it while
-	# holding the shot (vs the FINISHER fast path, which brakes in place at INF).
-	sm._state = Agent.State.ONE_TIMER_PRESSED
-	sm._one_timer_anchor = Vector3(5, 0, 0)  # far to +X
+	var s := _self_snap(Vector3(4, 0, 4), false)   # stationary dead puck
 	var i := InputState.new()
-	sm.dispatch(i, _self_snap(Vector3.ZERO, false))
-	assert_gt(i.move_vector.x, 0.0, "seeks the moving one-timer anchor")
+	sm.dispatch(i, s)
+	assert_false(i.slap_held, "a dead feed releases the swing")
+	assert_eq(sm.get_state(), sm._post_puck_lost_state(s), "back into the play")
+
+
+func test_one_timer_budget_backstop_bails() -> void:
+	# Even with a (pathologically) ever-inbound feed, the press budget bails.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._one_timer_press_tick = Agent.ONE_TIMER_PRESS_MAX_TICKS - 1
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_false(i.slap_held, "budget backstop releases")
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "and exits the press")
+
+
+func test_one_timer_settles_onto_the_live_feed_line() -> void:
+	# The feed crosses 3 m net-side of the waiting shooter: the body seeks the
+	# live-line settle anchor (walking the slapper ZONE onto the pass's real
+	# path) rather than braking on the spot it anticipated.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -3.0), Vector3(16, 0, 0))
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_lt(i.move_vector.y, -0.3, "shuffles toward the actual crossing line")
+
+
+func test_one_timer_press_waits_for_the_aim_to_settle() -> void:
+	# The controller locks the slapper direction from the mouse AT THE PRESS,
+	# so a bot that enters the press state still looking away from the net
+	# (late-ready commit, zone-fallback trigger) must NOT press yet — pressing
+	# immediately locked a watching-the-play aim and the one-timer fired
+	# wherever the bot had been looking. Facing dead away from the net (the
+	# net beyond the reach cone) defers the press; squared up, it fires.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)   # facing OUR end — net at back
+	var i0 := InputState.new()
+	sm.dispatch(i0, s)
+	assert_false(i0.slap_pressed, "no press while the net aim is in the back wedge")
+	assert_false(i0.slap_held, "…and nothing to hold yet")
+	assert_eq(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "still waiting on the feed")
+	s.skater_states[SELF_ID].facing = Vector2(0, -1)   # squared to the net
+	var i1 := InputState.new()
+	sm.dispatch(i1, s)
+	assert_true(i1.slap_pressed, "squared up — the press fires with a real net aim")
+	assert_true(i1.slap_held, "…and the wind-up holds")
+
+
+func test_one_timer_backstop_aborts_when_it_never_squares() -> void:
+	# Never squaring to the net (the net aim stays beyond the reach cone) means
+	# the locked line would fire WIDE. Past the aim-wait backstop the wind-up is
+	# ABORTED — catch the feed instead of firing into the corner. Nothing was
+	# pressed, so no slapper charge to cancel.
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	sm._one_timer_press_tick = Agent.ONE_TIMER_AIM_WAIT_MAX_TICKS
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)   # facing our end — net at back
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_false(i.slap_pressed, "an unsquared wind-up is not fired wide")
+	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED, "it bails to catch instead")
+
+
+func test_oz_receiver_stance_opens_hips_between_puck_and_net() -> void:
+	# A teammate has the puck and we're camped in the OZ — we're a candidate
+	# receiver, so the near-anchor ready stance splits between the play and
+	# the net (the puck-net bisector) instead of staring straight at the
+	# puck: the catch lands with the shot already loaded.
+	var self_pos := Vector3(0, 0, -15)
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = Vector3(8, 0, -15)
+	s.puck_state.carrier_peer_id = TEAMMATE_ID
+	_add_skater(s, SELF_ID, self_pos)
+	_add_skater(s, TEAMMATE_ID, Vector3(8, 0, -15))
+	var dir: Vector3 = sm._compute_desired_aim_dir(self_pos, self_pos, s)
+	assert_gt(dir.x, 0.4, "the play stays in front of the stance")
+	assert_lt(dir.z, -0.4, "…and the hips open toward the net")
+
+
+func test_defensive_watching_still_faces_the_puck() -> void:
+	# An OPPONENT carrier in the same geometry: eyes stay on the threat —
+	# the open-hips split is a receiver's stance, not a defender's.
+	var self_pos := Vector3(0, 0, -15)
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = Vector3(8, 0, -15)
+	s.puck_state.carrier_peer_id = OPP_ID
+	_add_skater(s, SELF_ID, self_pos)
+	_add_skater(s, OPP_ID, Vector3(8, 0, -15))
+	var dir: Vector3 = sm._compute_desired_aim_dir(self_pos, self_pos, s)
+	assert_gt(dir.x, 0.9, "faces the carrier square")
+	assert_gt(dir.z, -0.1, "no net bias while defending")
+
+
+func test_aim_flip_is_debounced_at_the_near_anchor_boundary() -> void:
+	# A bot orbiting right at FACE_THREAT_NEAR_ANCHOR_M used to swing the aim
+	# between the anchor (far) and the puck/threat (near) every dispatch. The
+	# hysteresis band latches the mode: crossing the raw threshold is not enough,
+	# the distance must clear a full band past it before the direction flips.
+	# self at origin, anchor down -z, a loose puck (threat) out +x — anchor-dir
+	# and threat-dir are ~90° apart, so a flip is unambiguous in the output.
+	var self_pos := Vector3.ZERO
+	var s := _loose_puck_snap(Vector3(10, 0, 0))   # threat_dir ≈ +x
+	var near_m: float = Agent.FACE_THREAT_NEAR_ANCHOR_M   # 6.0
+	var band: float = Agent.FACE_NEAR_ANCHOR_HYSTERESIS_M # 0.75
+
+	# Start clearly FAR → aims the anchor (−z).
+	var far_anchor := Vector3(0, 0, -(near_m + band + 2.0))
+	assert_lt(sm._compute_desired_aim_dir(self_pos, far_anchor, s).z, -0.9,
+			"clearly far: aims the anchor")
+	# Ease inside the RAW threshold but still within the band — latch holds far.
+	var boundary_anchor := Vector3(0, 0, -(near_m - 0.25))
+	assert_lt(sm._compute_desired_aim_dir(self_pos, boundary_anchor, s).z, -0.9,
+			"just inside the threshold but within the band: still aims the anchor")
+	# Clear the band on the near side → flips to the threat (+x).
+	var near_anchor := Vector3(0, 0, -(near_m - band - 1.0))
+	assert_gt(sm._compute_desired_aim_dir(self_pos, near_anchor, s).x, 0.9,
+			"past the band: flips to the threat")
+	# Drift back inside the raw threshold from below — latch holds near.
+	assert_gt(sm._compute_desired_aim_dir(self_pos, boundary_anchor, s).x, 0.9,
+			"back within the band from the near side: still aims the threat")
+	# Clear the band on the far side → flips back to the anchor.
+	assert_lt(sm._compute_desired_aim_dir(self_pos, far_anchor, s).z, -0.9,
+			"past the far edge of the band: flips back to the anchor")
+
+
+func test_live_off_puck_aim_tracks_the_carrier_puck_during_a_jab() -> void:
+	# On skipped throttle ticks an ACTIVE poke-jab re-derives its aim from the
+	# CURRENT carrier puck position (the counters advance on dispatch, but the
+	# stab tracks live so the swept blade actually sweeps THROUGH the moving
+	# puck). The helper returns the live puck point while _off_puck_jab_live.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = Vector3(1.4, 0, 0)
+	s.puck_state.carrier_peer_id = OPP_ID
+	_add_skater(s, OPP_ID, Vector3(1.6, 0, 0))
+	sm._off_puck_jab_live = true
+	var aim: Vector3 = sm._off_puck_live_aim(s, self_pos)
+	assert_almost_eq(aim.x, 1.4, 0.001, "jab aim tracks the live carrier puck")
+	# Puck slides; the live re-derive follows it (a staircased stab would lag).
+	s.puck_state.position = Vector3(1.1, 0, 0.5)
+	aim = sm._off_puck_live_aim(s, self_pos)
+	assert_almost_eq(aim.x, 1.1, 0.001, "…and keeps following as it moves")
+	assert_almost_eq(aim.z, 0.5, 0.001, "…on both axes")
+	# Carrier releases (loose puck) → no carrier to jab → INF, fall to cached.
+	s.puck_state.carrier_peer_id = -1
+	assert_false(sm._off_puck_live_aim(s, self_pos).is_finite(),
+			"no opposing carrier → no live jab target")
+
+
+func test_man_to_beat_is_sticky_across_the_contest_boundary() -> void:
+	# The square-to-net facing hinges on _has_man_to_beat. A bare radius let a
+	# defender riding the boundary flip the whole carry-aim forward direction; the
+	# hysteresis band latches it. Team 0 attacks −z, so a goal-side defender is
+	# down −z from the carrier.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	_add_skater(s, SELF_ID, self_pos)
+	# Just OUTSIDE the base contest radius (3.5 m): no man to beat.
+	_add_skater(s, OPP_ID, Vector3(0, 0, -3.6))
+	assert_false(sm._has_man_to_beat(s, self_pos), "outside the base radius: no man")
+	# Inside the base radius: engages.
+	s.skater_states[OPP_ID].position = Vector3(0, 0, -3.4)
+	assert_true(sm._has_man_to_beat(s, self_pos), "inside the base radius: man to beat")
+	# Back outside the base radius but within the widened sustain band (3.5 +
+	# 0.75): the prior answer STICKS instead of flipping.
+	s.skater_states[OPP_ID].position = Vector3(0, 0, -3.6)
+	assert_true(sm._has_man_to_beat(s, self_pos),
+			"riding the boundary holds the prior answer (sticky)")
+	# Clear the widened band (> 4.25 m): the man is finally beaten.
+	s.skater_states[OPP_ID].position = Vector3(0, 0, -4.3)
+	assert_false(sm._has_man_to_beat(s, self_pos), "past the widened band: man beaten")
+
+
+func test_threat_facing_fallback_is_debounced() -> void:
+	# _face_threat_or_current holds facing when the puck is inside a geometry
+	# floor (too close to aim by). A bare threshold flipped the ready-stance aim
+	# between the puck and frozen facing per tick; the band latches it.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	_add_skater(s, SELF_ID, self_pos)
+	s.skater_states[SELF_ID].facing = Vector2(1, 0)   # facing +x
+	# Puck clearly beyond the floor (+z) → aims at the puck.
+	s.puck_state.position = Vector3(0, 0, 1.0)
+	assert_gt(sm._face_threat_or_current(s, self_pos).z, 0.9, "far puck: aims at it")
+	# Eases inside the raw floor (0.3) but within the band → still aims the puck.
+	s.puck_state.position = Vector3(0, 0, 0.25)
+	assert_gt(sm._face_threat_or_current(s, self_pos).z, 0.9,
+			"inside the floor but within the band: still aims the puck")
+	# Clear the band on the near side (< 0.15) → holds facing (+x).
+	s.puck_state.position = Vector3(0, 0, 0.1)
+	assert_gt(sm._face_threat_or_current(s, self_pos).x, 0.9, "past the near band: holds facing")
+	# Drift back inside the floor from below → latched close, still holds facing.
+	s.puck_state.position = Vector3(0, 0, 0.25)
+	assert_gt(sm._face_threat_or_current(s, self_pos).x, 0.9,
+			"back within the band from close: still holds facing")
+	# Clear the band on the far side (> 0.45) → re-aims the puck.
+	s.puck_state.position = Vector3(0, 0, 0.5)
+	assert_gt(sm._face_threat_or_current(s, self_pos).z, 0.9, "past the far band: re-aims the puck")
+
+
+func test_carry_entry_resets_the_smoothed_shield() -> void:
+	# A fresh pickup must not inherit a phantom shield (or a stale man-to-beat
+	# latch) from a previous carry — _set_state zeroes them on CARRY entry so the
+	# shield eases in from nothing.
+	sm._state = Agent.State.OFF_PUCK
+	sm._carry_protect_gain_smooth = 0.8
+	sm._carry_protect_offset_smooth = Vector3(1, 0, 0)
+	sm._carry_has_man = true
+	sm._set_state(Agent.State.CARRY)
+	assert_eq(sm._carry_protect_gain_smooth, 0.0, "shield gain resets on carry entry")
+	assert_eq(sm._carry_protect_offset_smooth, Vector3.ZERO, "shield offset resets on carry entry")
+	assert_false(sm._carry_has_man, "man-to-beat latch resets on carry entry")
+
+
+func test_one_timer_feed_time_reads_the_remaining_flight() -> void:
+	# Puck 8 m up-line at 16 m/s → my perpendicular foot in 0.5 s: the aim
+	# reads the goalie at feed ARRIVAL, not where he stands mid-re-square.
+	var s := _inbound_feed_snap(Vector3.ZERO, Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	assert_almost_eq(sm._one_timer_feed_time_s(s, Vector3.ZERO), 0.5, 0.01)
+	# A dead/held puck reads as arriving now.
+	var dead := _self_snap(Vector3.ZERO, false)
+	assert_almost_eq(sm._one_timer_feed_time_s(dead, Vector3.ZERO), 0.0, 0.001)
+
+
+# ── incoming-feed reception: give with the puck ──────────────────────────────
+
+func test_receiver_gives_with_a_hot_incoming_feed() -> void:
+	# A feed inbound at pace with the receiver skating INTO it: the catch gate
+	# judges the puck in the RECEIVER'S frame, so the bot's own closing stacks
+	# onto the puck's — over the receivable ceiling it brakes (sheds its own
+	# closing) and never sprints at the feed.
+	# Staged in OUR half so _try_shot_reception's catch-and-shoot posture
+	# (Mode B) never engages — this pins the plain reception path.
+	sm._state = Agent.State.CHASE_PUCK
+	var s := _loose_puck_snap(Vector3(-10, 0, 15))
+	s.puck_state.velocity = Vector3(18, 0, 0)
+	_add_skater(s, SELF_ID, Vector3(0, 0, 15))
+	s.skater_states[SELF_ID].velocity = Vector3(-4, 0, 0)   # charging the feed
+	s.skater_states[SELF_ID].facing = Vector2(-1, 0)
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_true(i.brake, "over the receiver-frame ceiling — give with the puck")
+	assert_false(i.sprint_held, "never sprint at an inbound feed")
+
+
+func test_receiver_in_stride_keeps_skating_on_a_soft_feed() -> void:
+	# The same inbound geometry at a catchable relative pace: reception stays
+	# IN STRIDE — no brake, the blade gate does the catching.
+	sm._state = Agent.State.CHASE_PUCK
+	var s := _loose_puck_snap(Vector3(-10, 0, 15))
+	s.puck_state.velocity = Vector3(15, 0, 0)
+	_add_skater(s, SELF_ID, Vector3(0, 0, 15))
+	s.skater_states[SELF_ID].velocity = Vector3(-1, 0, 0)   # settled at the gate
+	s.skater_states[SELF_ID].facing = Vector2(-1, 0)
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	assert_false(i.brake, "a catchable relative pace keeps the in-stride reception")
+
+
+func test_far_chase_faces_its_route() -> void:
+	# The far-chase cursor is FACE-aimed (snapped pointing intent), so the bot
+	# looks down its chase line immediately instead of arc-swinging the cursor
+	# for seconds while skating sideways.
+	sm._state = Agent.State.CHASE_PUCK
+	var s := _loose_puck_snap(Vector3(10, 0, -10))
+	_add_skater(s, SELF_ID, Vector3.ZERO)
+	s.skater_states[SELF_ID].facing = Vector2(0, -1)
+	var i := InputState.new()
+	sm.dispatch(i, s)
+	var mouse_dir := Vector2(i.mouse_world_pos.x, i.mouse_world_pos.z).normalized()
+	var to_puck := Vector2(10, -10).normalized()
+	assert_gt(mouse_dir.dot(to_puck), 0.85,
+			"the chase cursor points down the pursuit line on the first tick")
 
 
 # ── PASS_PRESSED ─────────────────────────────────────────────────────────────
@@ -959,25 +1253,60 @@ func test_poke_evade_fires_driving_at_a_stationary_defender() -> void:
 	# The deke's closing gate is RELATIVE: a carrier skating into a waiting / angled
 	# defender closes the gap, so the deke fires. The old defender-only closing left
 	# the bot skating straight into a static poke without cutting around it.
+	# A usable seam is required now (no blind fallback), so give the carrier one.
+	var snap := _poke_snap(Vector3(0, 0, -6), Vector3(0, 0, -3.5), Vector3.ZERO)
+	sm._carrier.evade_seam_world = Vector3(1.5, 0, -1.5)   # a real cut direction
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, Vector3.ZERO)
+	assert_gt(sm._poke_evade_active_ticks, 0,
+			"driving at a stationary defender within poke reach triggers the deke")
+	assert_ne(sm._poke_evade_dir, Vector2.ZERO, "the cut latches the seam direction")
+
+
+func test_poke_evade_never_triggers_without_a_usable_maneuver() -> void:
+	# No seam read (Easy's closed protect gate / seam not computed) and no brake
+	# read → the poke-evade must not trigger at all: there is no blind fallback
+	# cut, and the window + cooldown are only spent on a committed move.
+	var snap := _poke_snap(Vector3(0, 0, -6), Vector3(0, 0, -3.5), Vector3.ZERO)
+	# sm._carrier.evade_seam_world stays INF and brake_check_favored false.
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, Vector3.ZERO)
+	assert_eq(sm._poke_evade_active_ticks, 0, "no seam + no brake read → no evade")
+	assert_eq(sm._poke_evade_cooldown_ticks, 0, "no cooldown burned on a non-maneuver")
+
+
+func test_poke_evade_brake_check_triggers_without_a_seam() -> void:
+	# A brake read alone is a usable maneuver: the brake check needs no cut
+	# direction (it steers by the carry anchor on exit), so it triggers even
+	# when the seam is underfoot/unusable — and it presses the real brake key.
+	var snap := _poke_snap(Vector3(0, 0, -6), Vector3(0, 0, -3.5), Vector3.ZERO)
+	sm._carrier.brake_check_favored = true
+	sm._last_carry_anchor = Vector3(0, 0, -8)
+	var input := InputState.new()
+	sm._poke_evade_modulate_steering(input, snap, Vector3.ZERO)
+	assert_gt(sm._poke_evade_active_ticks, 0, "brake read alone triggers the maneuver")
+	assert_true(input.brake, "the brake check presses the real brake key")
+
+
+# Builds the standard poke-trigger scene: self carrying at `self_vel`, one
+# opponent at `opp_pos` with `opp_vel`, counters cleared for a fresh trigger.
+func _poke_snap(self_vel: Vector3, opp_pos: Vector3, opp_vel: Vector3) -> WorldSnapshot:
 	var snap := WorldSnapshot.new()
 	var me := SkaterNetworkState.new()
 	me.position = Vector3(0, 0, 0)
-	me.velocity = Vector3(0, 0, -6)          # skating hard at the defender
+	me.velocity = self_vel
 	snap.skater_states[SELF_ID] = me
 	var opp := SkaterNetworkState.new()
-	opp.position = Vector3(0, 0, -3.5)       # ~1.5 m ahead of the puck (2 m forward)
-	opp.velocity = Vector3.ZERO              # stationary — NOT closing on its own
-	opp.blade_contact_world = Vector3(0, 0, -3.5)
+	opp.position = opp_pos
+	opp.velocity = opp_vel
+	opp.blade_contact_world = opp_pos
 	snap.skater_states[OPP_ID] = opp
 	snap.puck_state = PuckNetworkState.new()
 	snap.puck_state.carrier_peer_id = SELF_ID
 	snap.puck_state.position = me.position
 	sm._poke_evade_active_ticks = 0
 	sm._poke_evade_cooldown_ticks = 0
-	var input := InputState.new()
-	sm._poke_evade_modulate_steering(input, snap, me.position)
-	assert_gt(sm._poke_evade_active_ticks, 0,
-			"driving at a stationary defender within poke reach triggers the deke")
+	return snap
 
 
 func test_poke_evade_skips_a_defender_neither_side_is_closing_on() -> void:
@@ -1188,7 +1517,7 @@ func test_pass_aim_leads_from_the_puck_not_the_body() -> void:
 			"a puck 3 m out front shortens the flight and the lead follows")
 
 
-# ── Contest read + live-bot aim noise ────────────────────────────────────────
+# ── Contest read + live-bot execution error ─────────────────────────────────
 
 func test_opponent_within_of_reads_contest_range() -> void:
 	var s := _loose_puck_snap(Vector3(5, 0, 0))
@@ -1206,14 +1535,118 @@ func test_opponent_within_of_reads_contest_range() -> void:
 			"a teammate near the puck is not an opposing contest")
 
 
-func test_aim_noise_off_raw_on_after_profile() -> void:
+func test_aim_error_off_raw_on_after_profile() -> void:
 	# A bare state machine is bit-deterministic (tests, replay tooling); a LIVE
-	# bot wired through apply_profile gets the execution noise.
-	assert_almost_eq(sm._mouse_noise_std_m, 0.0, 1e-9,
-			"raw agents stay noiseless")
+	# bot wired through apply_profile gets the per-tier execution error pair
+	# plus the timing humaniser.
+	assert_almost_eq(sm._shot_aim_error_rad, 0.0, 1e-9,
+			"raw agents stay error-free on shots")
+	assert_almost_eq(sm._pass_aim_error_rad, 0.0, 1e-9,
+			"raw agents stay error-free on passes")
+	assert_almost_eq(sm._shot_timing_error_s, 0.0, 1e-9,
+			"raw agents release tick-perfect")
 	sm.apply_profile(BotSkillProfile.hard())
-	assert_almost_eq(sm._mouse_noise_std_m, Agent.AIM_NOISE_STD_M, 1e-9,
-			"profiled (live) agents carry the aim noise")
+	assert_almost_eq(sm._shot_aim_error_rad, BotSkillProfile.hard().shot_aim_error_rad, 1e-9,
+			"profiled (live) agents carry the shot aim error")
+	assert_almost_eq(sm._pass_aim_error_rad, BotSkillProfile.hard().pass_aim_error_rad, 1e-9,
+			"profiled (live) agents carry the pass aim error")
+	assert_almost_eq(sm._shot_timing_error_s, BotSkillProfile.hard().shot_timing_error_s, 1e-9,
+			"profiled (live) agents carry the release timing variance")
+
+
+func test_press_entry_samples_release_error_per_budget() -> void:
+	# Each press entry draws ONE aim error for the whole release: shots and
+	# one-timers on the (larger) shot budget, passes on the pass budget. The
+	# budget IS the radian bound (tier errors are angles, ring-independent) —
+	# bound it, and check a fresh entry re-samples rather than reusing the
+	# previous release's error.
+	sm.apply_profile(BotSkillProfile.easy())
+	var shot_bound: float = BotSkillProfile.easy().shot_aim_error_rad
+	var pass_bound: float = BotSkillProfile.easy().pass_aim_error_rad
+	var samples: Array[float] = []
+	for i: int in 16:
+		sm._set_state(Agent.State.SHOOT_PRESSED)
+		assert_lte(absf(sm._committed_aim_error_rad), shot_bound,
+				"shot error stays inside the shot budget")
+		samples.append(sm._committed_aim_error_rad)
+		sm._set_state(Agent.State.CARRY)
+	var all_equal: bool = true
+	for v: float in samples:
+		if absf(v - samples[0]) > 1e-12:
+			all_equal = false
+	assert_false(all_equal, "each release draws a fresh error sample")
+	sm._set_state(Agent.State.PASS_PRESSED)
+	assert_lte(absf(sm._committed_aim_error_rad), pass_bound,
+			"pass error stays inside the (smaller) pass budget")
+	sm._set_state(Agent.State.CARRY)
+	sm._set_state(Agent.State.ONE_TIMER_PRESSED)
+	assert_lte(absf(sm._committed_aim_error_rad), shot_bound,
+			"a one-timer samples on the shot budget")
+	sm._set_state(Agent.State.OFF_PUCK)
+
+
+func test_shot_entry_samples_release_hold_inside_timing_budget() -> void:
+	# The late-release hold is bounded by the tier's timing variance, and a
+	# raw (zero-variance) agent always releases on the intended tick.
+	assert_eq(sm._sample_release_hold_ticks(), 0,
+			"raw agents never hold the release")
+	sm.apply_profile(BotSkillProfile.normal())
+	var max_ticks: int = int(round(
+			BotSkillProfile.normal().shot_timing_error_s / Agent.MOUSE_TICK_DELTA))
+	for i: int in 16:
+		sm._set_state(Agent.State.SHOOT_PRESSED)
+		assert_between(sm._shoot_release_hold_ticks, 0, max_ticks,
+				"sampled hold stays inside the timing budget")
+		sm._set_state(Agent.State.CARRY)
+	sm._set_state(Agent.State.OFF_PUCK)
+
+
+# ── Cognition gates (difficulty-tiered hockey IQ) ────────────────────────────
+
+func test_apply_profile_sets_cognition_gates() -> void:
+	# Raw agents keep the perfect-bot defaults (all reads on).
+	assert_true(sm._reads_goalie_motion, "raw agent reads goalie motion")
+	assert_true(sm._holds_for_developing_feeds, "raw agent holds for developing plays")
+	assert_true(sm._angles_the_chase, "raw agent angles its chase")
+	assert_true(sm._reads_receiver_commitment, "raw agent reads receiver commitment")
+	sm.apply_profile(BotSkillProfile.easy())
+	assert_false(sm._reads_goalie_motion, "Easy is goalie-motion blind")
+	assert_false(sm._holds_for_developing_feeds, "Easy plays only what exists now")
+	assert_false(sm._angles_the_chase, "Easy chases straight-line")
+	assert_false(sm._reads_receiver_commitment,
+			"Easy is commitment-blind — chucks feeds at turning players")
+	sm.apply_profile(BotSkillProfile.normal())
+	assert_true(sm._reads_goalie_motion,
+			"Normal keeps the goalie-motion read — Hard/Normal differ by tuning only")
+	assert_true(sm._holds_for_developing_feeds, "Normal keeps the developing-feed hold")
+	assert_true(sm._angles_the_chase, "Normal keeps the chase angling")
+	assert_true(sm._reads_receiver_commitment, "Normal keeps the receiver-commitment read")
+
+
+func test_motion_blind_aim_ignores_the_goalie_slide() -> void:
+	# Goalie on the shooter's arc but sliding hard +x: a motion-reading bot
+	# projects the shadow along the slide and aims into the recovery arc
+	# ("across the grain"); a motion-blind bot's aim is EXACTLY the aim
+	# against the same goalie standing still — it shoots at where he IS.
+	var s := WorldSnapshot.new()
+	var gs := GoalieNetworkState.new()
+	gs.position_x = 0.0
+	gs.position_z = -GameRules.GOAL_LINE_Z + 1.2   # out on the challenge arc
+	gs.velocity_x = 4.0                            # committed slide
+	s.goalie_states[1] = gs                        # opp team (self is team 0)
+	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 10.0)
+
+	var aim_reading: Vector3 = sm._shot_aim_point(s, self_pos)
+	sm._reads_goalie_motion = false
+	var aim_blind: Vector3 = sm._shot_aim_point(s, self_pos)
+	sm._reads_goalie_motion = true
+	gs.velocity_x = 0.0
+	var aim_still: Vector3 = sm._shot_aim_point(s, self_pos)
+
+	assert_almost_eq(aim_blind.x, aim_still.x, 1e-6,
+			"blind aim equals the still-goalie aim — where he IS, not where he'll be")
+	assert_gt(absf(aim_reading.x - aim_blind.x), 0.05,
+			"the motion read genuinely moves the aim into the recovery arc")
 
 
 # ── Protect-side turn (carry arc direction) ──────────────────────────────────
@@ -1254,8 +1687,12 @@ func test_protect_turn_stays_short_when_both_sides_threatened() -> void:
 func test_arc_step_commits_to_the_protected_direction() -> void:
 	# Integration through _arc_step_mouse_target: with a defender on the short
 	# side, successive arc steps walk the mouse the LONG way and stay committed.
+	# The target sits ~172° around — genuinely BEHIND the body — so this is a
+	# turn-around, the only case the long-way orbit still fires (see
+	# _target_is_behind); a front-hemisphere protect reach takes the short way.
 	var self_pos := Vector3.ZERO
 	var s := _protect_snap(self_pos, Vector3(2.0, 0, 0.2))
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)   # facing +z; target is behind
 	sm._state = Agent.State.CARRY
 	sm._current_snapshot = s
 	sm._mouse_pos = Vector3(0, 0, 2.0)   # parked dead ahead (angle 0)
@@ -1271,6 +1708,27 @@ func test_arc_step_commits_to_the_protected_direction() -> void:
 			self_pos, target, s.skater_states[SELF_ID], 5.0)
 	var ang2: float = atan2(stepped2.x - self_pos.x, stepped2.z - self_pos.z)
 	assert_lt(ang2, ang, "the commitment holds on the next step — no mid-sweep flip")
+
+
+func test_arc_step_front_reach_takes_short_way_despite_short_side_threat() -> void:
+	# A protect REACH to a spot in the FRONT hemisphere never orbits the long way
+	# around the back, even with a defender on the short-sweep side — the blade's
+	# ROM extends across the front instead of the body spinning around. Only a
+	# genuine turn-around (target behind) earns the long-way shield (see
+	# _target_is_behind). Target ~86° to the +x side; mouse parked dead ahead.
+	var self_pos := Vector3.ZERO
+	var s := _protect_snap(self_pos, Vector3(1.4, 0, 1.0))   # defender on the +x short side
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)          # facing +z; target is to the side, in front
+	sm._state = Agent.State.CARRY
+	sm._current_snapshot = s
+	sm._mouse_pos = Vector3(0, 0, 2.0)
+	sm._mouse_pos_initialized = true
+	var target := self_pos + Vector3(sin(1.5), 0, cos(1.5)) * 5.0   # ~86° off forward
+	var stepped: Vector3 = sm._arc_step_mouse_target(
+			self_pos, target, s.skater_states[SELF_ID], 5.0)
+	var ang: float = atan2(stepped.x - self_pos.x, stepped.z - self_pos.z)
+	assert_gt(ang, 0.0, "front-hemisphere reach sweeps the short (+) way, no back-orbit spin")
+	assert_eq(sm._arc_protect_sign, 0.0, "no long-way commitment latched for a front reach")
 
 
 func test_arc_step_shortest_way_in_open_ice() -> void:
@@ -1298,3 +1756,213 @@ func test_aim_slew_arc_rate_uses_blade_orbit_radius() -> void:
 	sm._apply_aim_slew(40.0, 1.6)
 	assert_almost_eq(sm._mouse_arc_rate_rad_s, Agent.MOUSE_ARC_RATE_RAD_S, 1e-6,
 			"arc rate never exceeds the IK-gate ceiling")
+
+
+# ── One-timer line settle: the anchor tracks the LIVE feed line ──────────────
+# The physical catch needs the blade contact within the pickup radius of the
+# puck's REAL path; the settle anchor is what puts the net-aimed blade there.
+
+func _feed_snap(puck_pos: Vector3, puck_vel: Vector3) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = puck_pos
+	s.puck_state.velocity = puck_vel
+	s.puck_state.carrier_peer_id = -1
+	return s
+
+
+func test_one_timer_line_anchor_puts_the_slapper_zone_on_the_live_line() -> void:
+	# Team 0 attacks -Z (net straight down -Z from the origin). A hard feed
+	# crossing 1.5 m net-side of the bot along +X: perp foot (0, 0, -1.5),
+	# net_dir (0, 0, -1), RH blade side +X → body = crossing point minus the
+	# slapper ZONE's offset (right·1.0 + net_dir·0.4) = (-1.0, 0, -1.1).
+	var snap := _feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	var anchor: Vector3 = sm._one_timer_line_anchor(snap, Vector3.ZERO)
+	assert_true(anchor.is_finite(), "a live inbound feed defines a settle anchor")
+	assert_almost_eq(anchor.x, -1.0, 0.01,
+			"body stands a zone-width off the line on the blade side")
+	assert_almost_eq(anchor.z, -1.1, 0.01,
+			"…so the armed slapper ZONE sits exactly ON the line")
+
+
+func test_one_timer_line_anchor_defers_to_a_better_positioned_teammate() -> void:
+	# The feed crosses nearer a teammate — it's theirs; don't get dragged off
+	# the station (mirror of _incoming_pass_to_me's filter).
+	var snap := _feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	_add_skater(snap, TEAMMATE_ID, Vector3(0.2, 0, -1.5))   # right at the crossing
+	assert_false(sm._one_timer_line_anchor(snap, Vector3.ZERO).is_finite(),
+			"a teammate nearer the crossing owns the feed")
+
+
+func test_one_timer_line_anchor_follows_a_shifted_feed() -> void:
+	# The same feed released one metre off the anticipated line: the anchor
+	# shifts with it — a live re-read, never a latched prediction.
+	var a1: Vector3 = sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0)), Vector3.ZERO)
+	var a2: Vector3 = sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -2.5), Vector3(16, 0, 0)), Vector3.ZERO)
+	assert_almost_eq(a2.z - a1.z, -1.0, 0.01,
+			"the settle anchor tracks the feed's actual line")
+
+
+func test_one_timer_line_anchor_ignores_non_feeds() -> void:
+	var held := _feed_snap(Vector3(-8, 0, -1.5), Vector3(16, 0, 0))
+	held.real_puck_carrier_peer_id = 7
+	assert_false(sm._one_timer_line_anchor(held, Vector3.ZERO).is_finite(),
+			"a held puck is not a feed")
+	assert_false(sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -1.5), Vector3(5, 0, 0)), Vector3.ZERO).is_finite(),
+			"a drifting puck is not a feed to settle on")
+	assert_false(sm._one_timer_line_anchor(
+			_feed_snap(Vector3(8, 0, -1.5), Vector3(16, 0, 0)), Vector3.ZERO).is_finite(),
+			"already past our level — the chase owns it")
+	assert_false(sm._one_timer_line_anchor(
+			_feed_snap(Vector3(-8, 0, -7.0), Vector3(16, 0, 0)), Vector3.ZERO).is_finite(),
+			"a feed crossing far away doesn't drag us off the spot")
+
+
+# ── Carry facing follows the route (face where you're going) ─────────────────
+
+func _carry_snap(self_pos: Vector3) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	var me := SkaterNetworkState.new()
+	me.position = self_pos
+	me.facing = Vector2(0, -1)
+	s.skater_states[SELF_ID] = me
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.carrier_peer_id = SELF_ID
+	s.puck_state.position = self_pos
+	return s
+
+
+func test_carry_aim_faces_the_route_when_driving_laterally() -> void:
+	# Anchor due +X (a wall exit / a seam it just cut to); attacking -Z. The
+	# cursor — and with it body facing — points down the ROUTE: the
+	# goal-facing default had the carrier crabbing the whole way in the slow
+	# crossover class, letting beaten defenders catch back up.
+	sm._last_carry_anchor = Vector3(8, 0, 0)
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
+	assert_gt(target.normalized().x, 0.9, "cursor points down the lateral route")
+
+
+func test_carry_aim_faces_the_play_when_retreating() -> void:
+	# A genuine regroup (route back toward our own +Z net): back out facing
+	# the attacking net — the real posture, at the honest backward-speed cost.
+	sm._last_carry_anchor = Vector3(0, 0, 8)
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
+	assert_lt(target.normalized().z, -0.9, "a regroup keeps the eyes up ice")
+
+
+func test_carry_aim_faces_the_play_when_anchor_is_underfoot() -> void:
+	# Settling on a spot: no meaningful travel direction — face the play.
+	sm._last_carry_anchor = Vector3(0.3, 0, 0.3)
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(Vector3.ZERO), Vector3.ZERO)
+	assert_lt(target.normalized().z, -0.9, "underfoot anchor: face the play")
+
+
+# ── O-zone square-up: point at the goalie when there's no man to beat ────────
+# Team 0 attacks -Z; the O-zone is z < -BLUE_LINE_Z. Facing is measured as the
+# cursor direction relative to the body (target - self), since self isn't at
+# the origin here.
+
+func test_carry_aim_squares_to_goalie_in_ozone_with_no_man_to_beat() -> void:
+	# Deep in the O-zone with a LATERAL carry anchor and nobody to beat: face
+	# the net (the goalie, at the attacking goal with no goalie state) rather
+	# than skating on down the sideways route into an awkward-angle shot.
+	var oz_pos := Vector3(0, 0, -15)   # z < -BLUE_LINE_Z → offensive zone
+	sm._last_carry_anchor = Vector3(8, 0, -15)   # due +X, a lateral route
+	var target: Vector3 = sm._carry_mouse_aim(_carry_snap(oz_pos), oz_pos)
+	var facing: Vector3 = (target - oz_pos).normalized()
+	assert_lt(facing.z, -0.9, "no man to beat in the O-zone: squared to the goalie")
+
+
+func test_carry_aim_keeps_the_route_in_ozone_when_a_man_must_be_beaten() -> void:
+	# Same lateral O-zone carry, but a goal-side defender is inside the contest
+	# band — a man still to beat, so FACE THE ROUTE keeps the fast forward
+	# stride down the escape instead of squaring up early.
+	var oz_pos := Vector3(0, 0, -15)
+	sm._last_carry_anchor = Vector3(8, 0, -15)
+	var s := _carry_snap(oz_pos)
+	_add_skater(s, OPP_ID, Vector3(2, 0, -16))   # goal-side, ~2.2 m away
+	var target: Vector3 = sm._carry_mouse_aim(s, oz_pos)
+	var facing: Vector3 = (target - oz_pos).normalized()
+	assert_gt(facing.x, 0.9, "a man to beat keeps the carrier facing its route")
+
+
+func test_carry_aim_ignores_a_beaten_man_behind_in_the_ozone() -> void:
+	# A defender the carrier has already skated PAST (behind it toward our own
+	# end) is beaten and doesn't count, so the carrier squares up to the goalie
+	# even with him trailing close behind.
+	var oz_pos := Vector3(0, 0, -15)
+	sm._last_carry_anchor = Vector3(8, 0, -15)
+	var s := _carry_snap(oz_pos)
+	_add_skater(s, OPP_ID, Vector3(0, 0, -12))   # 3 m behind toward our +Z end
+	var target: Vector3 = sm._carry_mouse_aim(s, oz_pos)
+	var facing: Vector3 = (target - oz_pos).normalized()
+	assert_lt(facing.z, -0.9, "a beaten man behind doesn't stop the square-up")
+
+
+# ── Off-puck arrival: velocity-matched seek to the role spot ─────────────────
+
+func test_off_puck_arrival_redirects_cross_momentum() -> void:
+	# Off-puck steering opts into the velocity-matched seek: a bot drifting
+	# cross-ice toward its role spot steers back ONTO the line to it, where a
+	# plain seek would ignore the drift and orbit past.
+	var s := WorldSnapshot.new()
+	var me := SkaterNetworkState.new()
+	me.position = Vector3.ZERO
+	me.velocity = Vector3(4, 0, 0)   # drifting +X across the approach
+	s.skater_states[SELF_ID] = me
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.carrier_peer_id = -1
+	var anchor := Vector3(0, 0, -8)  # role spot straight ahead (-Z)
+	var seek_in := InputState.new()
+	sm._apply_steering(seek_in, s, Vector3.ZERO, anchor)                  # plain seek
+	var match_in := InputState.new()
+	sm._apply_steering(match_in, s, Vector3.ZERO, anchor, true, sm._self_max_speed)
+	assert_almost_eq(seek_in.move_vector.x, 0.0, 0.02, "plain seek ignores the cross-drift")
+	assert_lt(match_in.move_vector.x, -0.1,
+			"off-puck arrival redirects onto the line to the spot")
+
+
+# ── Fake-then-cut deke lifecycle (containment trigger + phase split) ─────────
+
+func test_containment_deke_fakes_then_cuts() -> void:
+	# Standstill duel (below the lateral cut's speed floor): the carrier's
+	# deke read arms and the maneuver commits — thrust sells the fake side,
+	# then explodes across to the cut side, and the carry-cursor override
+	# sells it with the puck. Cooldown afterwards is the longer deke pace.
+	var s := _self_snap(Vector3.ZERO, true)
+	sm._carrier.deke_go = true
+	sm._carrier.deke_fake_dir = Vector2(1, 0)
+	sm._carrier.deke_cut_dir = Vector2(-0.7, -0.7)
+	var i := InputState.new()
+	sm._poke_evade_modulate_steering(i, s, Vector3.ZERO)
+	assert_true(sm._poke_evade_deking, "the containment stalemate commits the deke")
+	assert_almost_eq(i.move_vector.x, 1.0, 0.01, "fake phase thrusts the sell side")
+	var fake_mouse: Vector3 = sm._deke_mouse_target(Vector3.ZERO)
+	assert_gt(fake_mouse.x, 0.5, "the cursor sells the fake WITH the puck")
+	# Wind the window down to the cut phase.
+	sm._poke_evade_active_ticks = Agent.DEKE_CUT_TICKS
+	var i2 := InputState.new()
+	sm._poke_evade_modulate_steering(i2, s, Vector3.ZERO)
+	assert_lt(i2.move_vector.x, 0.0, "cut phase explodes across")
+	var cut_mouse: Vector3 = sm._deke_mouse_target(Vector3.ZERO)
+	assert_lt(cut_mouse.x, 0.0, "the cursor snaps across for the cut")
+	# Expire → the deliberate deke cooldown arms.
+	sm._poke_evade_active_ticks = 1
+	sm._poke_evade_modulate_steering(InputState.new(), s, Vector3.ZERO)
+	assert_false(sm._poke_evade_deking, "the maneuver ends with the window")
+	assert_eq(sm._poke_evade_cooldown_ticks, Agent.DEKE_COOLDOWN_TICKS,
+			"dekes pace at the longer cooldown")
+
+
+func test_no_deke_without_the_carrier_read() -> void:
+	# Standstill with no manufactured opening: nothing fires — the window and
+	# cooldown are only ever spent on a committed move.
+	var s := _self_snap(Vector3.ZERO, true)
+	sm._carrier.deke_go = false
+	var i := InputState.new()
+	sm._poke_evade_modulate_steering(i, s, Vector3.ZERO)
+	assert_false(sm._poke_evade_deking)
+	assert_eq(sm._poke_evade_active_ticks, 0)

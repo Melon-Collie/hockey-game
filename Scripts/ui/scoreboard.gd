@@ -10,8 +10,12 @@ const _SEP     := MenuStyle.BROADCAST_SEP
 # Away's slot 1/2 are its own RW/LW — the mirror image of home's LW/RW in the
 # same slots, since the away team attacks the opposite direction. See
 # slot_grid_panel.gd's _DISPLAY_ORDER comment for the full explanation.
-const _POSITION_LABEL      := ["C", "L", "R"]   # indexed by team_slot, home
-const _POSITION_LABEL_AWAY := ["C", "R", "L"]   # indexed by team_slot, away
+# 3v3 is position-free rovers (slots 1/2 labeled plain L/R); 5v5 has a real
+# forward/defense split, so the wingers read LW/RW there.
+const _POSITION_LABEL           := ["C", "L", "R", "LD", "RD"]     # 3v3, indexed by team_slot, home
+const _POSITION_LABEL_AWAY      := ["C", "R", "L", "RD", "LD"]     # 3v3, indexed by team_slot, away
+const _POSITION_LABEL_5V5       := ["C", "LW", "RW", "LD", "RD"]   # 5v5, indexed by team_slot, home
+const _POSITION_LABEL_5V5_AWAY  := ["C", "RW", "LW", "RD", "LD"]   # 5v5, indexed by team_slot, away
 
 var _rows_container: VBoxContainer = null
 var _period_score_labels: Array = []  # [team_id][period_index, then total]
@@ -287,6 +291,14 @@ func _refresh() -> void:
 		return a.team_slot < b.team_slot
 	)
 
+	# Position labels depend on team size (5v5 has a real forward/defense
+	# split, so wingers read LW/RW there instead of 3v3's plain L/R) — count
+	# each team's roster rather than reaching for a team-size provider, so
+	# this works identically in live and replay (external_control) mode.
+	var team_counts: Dictionary = {}
+	for record: PlayerRecord in sorted:
+		team_counts[record.team.team_id] = team_counts.get(record.team.team_id, 0) + 1
+
 	var last_team_id: int = -1
 	for record: PlayerRecord in sorted:
 		if record.team.team_id != last_team_id:
@@ -298,7 +310,12 @@ func _refresh() -> void:
 		var pts := s.goals + s.assists
 		var display_name: String = record.display_name()
 		var ping_str: String = _ping_label(record.peer_id)
-		var labels: Array = _POSITION_LABEL_AWAY if record.team.team_id == 1 else _POSITION_LABEL
+		var is_5v5: bool = int(team_counts.get(record.team.team_id, 0)) >= 5
+		var labels: Array
+		if record.team.team_id == 1:
+			labels = _POSITION_LABEL_5V5_AWAY if is_5v5 else _POSITION_LABEL_AWAY
+		else:
+			labels = _POSITION_LABEL_5V5 if is_5v5 else _POSITION_LABEL
 		var pos_str: String = labels[record.team_slot]
 		var num_str: String = str(record.jersey_number)
 		_fill_row(row,

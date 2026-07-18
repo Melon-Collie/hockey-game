@@ -9,23 +9,36 @@ class_name AIRoleSupport
 #
 # Algorithm: argmax over a candidate set of
 #
-#     score_pass(carrier, candidate) × (1 - exposure(candidate))
+#     score_pass(carrier, candidate) − counter_cost(candidate)
 #
 # `score_pass` (existing AIActionScoring primitive) handles
 # "available for a pass + good shot if I receive": it factors lane
 # clearance from carrier through projected opponents and recursively
 # evaluates the candidate's own future-action value via score_at.
 #
-# `exposure` is the foot-race-home consideration so SUPPORT doesn't
-# get caught past the play. Compares my sprint ETA to our net against
-# the fastest opp's momentum-aware ETA via time_to_arrive. Floored
-# at 0; the (1 - exposure) factor goes negative when opps clearly
-# beat me home, naturally rejecting unrecoverable candidates.
+# `counter_cost` is the COVERING-SET exposure (AIActionScoring.
+# counter_rush_cost — the same grounded model the carrier's transition-
+# exposure term runs): IF possession flips at the carrier, the fastest
+# opponent collects the loss and drives the counter point, and the threat
+# he generates there survives only the bodies that beat him home with time
+# to set — teammates, and SUPPORT ITSELF racing back from the candidate
+# being priced. Standing somewhere recoverable literally erases the
+# counter (self joins the covering set → the counter shot is a blocked
+# look); standing somewhere deep leaves it live. The whole thing is
+# weighted by a REAL turnover probability: the CARRIER's live stand
+# safety (1 − carry_safety at his spot) — a pressured cycle carrier makes
+# recoverability worth paying for, an unpressured rush frees the trailer
+# to play offense. This replaced a frozen body-ETA time ramp
+# (my_time/safe_time − 1) whose canonical failure was the crease-lurker: a
+# beaten forechecker parked at our crease zeroed every up-ice spot, paying
+# SUPPORT to strand home — under the covering-set read that lurker must
+# skate all the way UP to collect a loss and all the way BACK, so the
+# covering set beats him trivially and the trailer joins the rush.
 #
 # Search center is derived from in-game references (the carrier's
 # position) rather than ctx.anchor. Polar samples around the carrier
-# feed the score function; exposure penalizes candidates the opp would
-# beat us back from, biasing toward recoverable depth.
+# feed the score function; the counter cost penalizes candidates that
+# leave the counter uncovered, biasing toward recoverable depth.
 #
 # On top of that soft bias, SUPPORT enforces a HARD goal-side
 # constraint (GOAL_SIDE_TOLERANCE_M): candidates up-ice of the carrier
@@ -62,6 +75,12 @@ const HIGH_POST_INSET_M: float = 3.0
 # knob to open up the offense. Raise OUTLET's role for the up-ice option.
 const GOAL_SIDE_TOLERANCE_M: float = 1.5
 
+# Scratch buffers for the covering-set exposure (caller-owned pattern —
+# refilled once per decide, no per-candidate allocation).
+static var _scratch_opp_vels: Array[Vector3] = []
+static var _scratch_mate_etas: Array[float] = []
+static var _scratch_threat_by_cover: Array[float] = []
+
 
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
@@ -83,11 +102,53 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
-	var min_opp_time_home: float = _min_opp_time_home(opp_states, ctx.scratch_opp_caps, our_net)
+
+	# Covering-set exposure inputs — all candidate-invariant, computed once
+	# (see the header): the turnover prior is the CARRIER's live stand
+	# safety, the counter collects at the carrier, and each teammate's race
+	# to the counter point is pre-solved. Only SUPPORT's own recovery race
+	# (self from the candidate) varies per candidate, inside
+	# counter_rush_cost. An unpressured carrier → prior 0 → the cost
+	# short-circuits and the argmax is pure pass value.
+	_scratch_opp_vels.clear()
+	for s: SkaterNetworkState in opp_states:
+		_scratch_opp_vels.append(s.velocity)
+	var turnover_prior: float = 0.0
+	if not opp_positions.is_empty():
+		turnover_prior = 1.0 - AIActionScoring.carry_safety(
+				carrier_pos, carrier_pos, AIActionScoring.EVADE_HORIZON_S,
+				opp_positions, _scratch_opp_vels, ctx.scratch_opp_caps)
+	AIActionScoring.fill_counter_cover_etas(
+			our_net, teammate_positions, _scratch_mate_etas)
+	_scratch_threat_by_cover.clear()
+	for _i: int in teammate_positions.size() + 2:
+		_scratch_threat_by_cover.append(-1.0)
+	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
+
+	# Far from the station, skate at the CALCULATED post directly — the
+	# openness argmax refines a read that will be re-taken from closer before
+	# arrival (see STATION_ARGMAX_LOD_M). In the OZ the station is the high
+	# post; in transit it's the goal-side trail a step behind the carrier
+	# (always passes the goal-side valve by construction).
+	var station: Vector3
+	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
+		station = Vector3(
+				carrier_pos.x * 0.5, 0.0,
+				-ctx.own_goal_dir * GameRules.BLUE_LINE_Z
+						- ctx.own_goal_dir * HIGH_POST_INSET_M)
+	else:
+		station = carrier_pos + Vector3(
+				0.0, 0.0, ctx.own_goal_dir * AIRoleHelpers.SEARCH_STEP_M)
+	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, station):
+		d.target_position = station
+		return d
 
 	# Search around the carrier. Polar samples cover the cycle space;
 	# anti-crowd filter rejects the carrier-overlap candidate.
 	var candidates: Array[Vector3] = _generate_candidates(ctx, carrier_pos)
+	# Switch-hysteresis: hold the chosen station unless a fresh spot is clearly
+	# better, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -108,8 +169,12 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				carrier_pos, c, ctx.attacking_goal_pos,
 				goalie_pos, GameRules.NET_HALF_WIDTH,
 				opp_positions, pass_speed)
-		var exposure: float = _exposure(c, our_net, min_opp_time_home, ctx.self_max_speed)
-		var score: float = pass_value * (1.0 - exposure)
+		var counter_cost: float = AIActionScoring.counter_rush_cost(
+				carrier_pos, turnover_prior, our_net, our_goalie,
+				GameRules.NET_HALF_WIDTH, teammate_positions, c,
+				ctx.self_max_speed, opp_positions, _scratch_opp_vels,
+				ctx.scratch_opp_caps, _scratch_mate_etas, _scratch_threat_by_cover)
+		var score: float = pass_value - counter_cost + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c
@@ -144,19 +209,30 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 	var result: Array[Vector3] = []
 	result.append(ctx.self_pos)
 	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
+		# NAMED third-man-high stations — the OZ zone-keeper geography, not a
+		# blind ring around one center (same conversion as the finisher's
+		# one-timer stations). Each is a structural cycle spot; the scoring
+		# (pass value × recoverability) arbitrates per the live coverage:
 		var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
-		var high_post := Vector3(
-				carrier_pos.x * 0.5,
-				0.0,
-				blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M)
-		for angle: float in AIRoleHelpers.POLAR_ANGLES:
-			result.append(Vector3(
-					high_post.x + SEARCH_RADIUS_M * cos(angle),
-					0.0,
-					high_post.z + SEARCH_RADIUS_M * sin(angle)))
+		var post_z: float = blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M
+		var wall_sign: float = signf(carrier_pos.x) if absf(carrier_pos.x) > 0.1 \
+				else ctx.strong_x
+		# HIGH POST — top of the zone shaded to the carrier's side: the
+		# point outlet / zone keeper / first man back.
+		var high_post := Vector3(carrier_pos.x * 0.5, 0.0, post_z)
 		result.append(high_post)
-		# Half-wall cycle option between the high post and the carrier.
+		# HALF-WALL BUMP — the classic cycle bump spot between the high post
+		# and the carrier's wall.
 		result.append((high_post + carrier_pos) * 0.5)
+		# CENTER POINT — the middle of the line: the cross-ice outlet when
+		# the strong-side lane is walled off.
+		result.append(Vector3(0.0, 0.0, post_z))
+		# WEAK FLANK — the far dot lane at the top of the circles: the
+		# cross-seam outlet that flips the point of attack.
+		result.append(Vector3(
+				-wall_sign * GameRules.END_ZONE_FACEOFF_DOT_X, 0.0,
+				ctx.attacking_goal_pos.z + ctx.own_goal_dir
+						* (GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z + 3.0)))
 		return result
 	result.append(carrier_pos)
 	for angle: float in AIRoleHelpers.POLAR_ANGLES:
@@ -167,30 +243,3 @@ static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Arra
 	return result
 
 
-# ── Role-specific scoring ────────────────────────────────────────────────────
-
-# Min over opponents of momentum-aware ETA back to our net. Shared race-home
-# primitive (AIRoleHelpers.min_opp_time_home) — also the forecheck safety's
-# pinch read.
-static func _min_opp_time_home(opp_states: Array[SkaterNetworkState],
-		opp_caps: Array, our_net: Vector3) -> float:
-	return AIRoleHelpers.min_opp_time_home(opp_states, opp_caps, our_net)
-
-
-# Foot-race-home exposure in [0, 1]. 0 when I beat every opp back
-# to our net; ramps to 1 (full unrecoverable) as my ETA exceeds the
-# fastest opp's. CLAMPED to 1 so (1 - exposure) stays non-negative —
-# without the upper clamp, the factor goes negative for deeply-
-# exposed candidates, and multiplying score_pass by a large negative
-# INVERTS the argmax preference (small pass_value × large negative
-# wins over big pass_value × less-negative, picking the most exposed
-# candidate). Clamp pushes all-exposed-equally candidates to score 0
-# so the loop falls back to self_pos.
-static func _exposure(candidate: Vector3, our_net: Vector3,
-		min_opp_time_home: float, self_max_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S) -> float:
-	var safe_time: float = maxf(min_opp_time_home, 0.001)
-	var dist: float = candidate.distance_to(our_net)
-	# My own foot-race home at MY real top speed (Speed) — a fast defender is less
-	# exposed from the same spot.
-	var my_time: float = dist / maxf(self_max_speed, 0.001)
-	return clampf(my_time / safe_time - 1.0, 0.0, 1.0)

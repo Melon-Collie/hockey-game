@@ -100,13 +100,16 @@ func test_moving_goalie_scores_higher_than_set_goalie() -> void:
 	# Same shot geometry against a square goalie; the only difference is whether
 	# the goalie is caught moving. The moving case must score higher (lower
 	# effective coverage), so bots prefer the play that gets the goalie sliding.
-	var goalie := _goalie_at(_arc_match_x(SHOOTER.x))
+	# In tight both reads saturate at certainty under the make-probability
+	# currency, so the compare runs in the calibrated gradient band (~9 m).
+	var band_shooter := Vector3(2.0, 0, -17.8)
+	var goalie := _goalie_at(_arc_match_x(band_shooter.x))
 	var opps: Array[Vector3] = []
 	var set_score := AIActionScoring.score_shoot(
-			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			band_shooter, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0)
 	var moving_score := AIActionScoring.score_shoot(
-			SHOOTER, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
+			band_shooter, GOAL, goalie, GameRules.NET_HALF_WIDTH, opps,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 1.0)
 	assert_gt(moving_score, set_score,
 			"a shot at a caught-moving goalie should rate above the same shot at a set one")
@@ -131,8 +134,10 @@ func test_score_pass_credits_caught_moving_goalie() -> void:
 	# A cross-seam feed (shooter weak-side, receiver strong-side) to a goalie
 	# squared to the receiver. Same geometry, only the motion factor differs —
 	# the caught-moving case must score higher so off-puck roles stage the feed.
-	var shooter := Vector3(-2.0, 0, -20.0)
-	var receiver := Vector3(2.0, 0, -20.0)
+	# Gradient band (see the moving-vs-set test above): in tight both feeds
+	# saturate at certainty.
+	var shooter := Vector3(-2.0, 0, -17.8)
+	var receiver := Vector3(2.0, 0, -17.8)
 	var goalie := _goalie_at(_arc_match_x(receiver.x))
 	var opps: Array[Vector3] = []
 	var set_s := AIActionScoring.score_pass(
@@ -146,8 +151,10 @@ func test_score_pass_credits_caught_moving_goalie() -> void:
 
 
 func test_score_pass_default_factor_back_compatible() -> void:
-	var shooter := Vector3(-2.0, 0, -20.0)
-	var receiver := Vector3(2.0, 0, -20.0)
+	# Gradient band (see the moving-vs-set test above): in tight both feeds
+	# saturate at certainty.
+	var shooter := Vector3(-2.0, 0, -17.8)
+	var receiver := Vector3(2.0, 0, -17.8)
 	var goalie := _goalie_at(_arc_match_x(receiver.x))
 	var opps: Array[Vector3] = []
 	var implicit := AIActionScoring.score_pass(

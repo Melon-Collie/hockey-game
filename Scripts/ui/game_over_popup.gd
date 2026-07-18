@@ -14,7 +14,7 @@ extends CanvasLayer
 # this screen carries the moment (score, stars, what-next).
 
 signal rematch_toggled
-signal host_action_pressed
+signal lobby_vote_toggled
 signal free_play_pressed
 signal exit_pressed
 
@@ -28,7 +28,9 @@ const _STAR_REVEAL_DELAY: float = 0.55
 const _STAR_REVEAL_GAP: float = 0.55
 
 const _MAX_STARS: int = 3
-const _RANK_TAGS: Array[String] = ["1ST STAR", "2ND STAR", "3RD STAR"]
+# Translation keys, tr()'d at the display seam (see _build_star_row); localized
+# copy lives in locale/translations.csv.
+const _RANK_TAG_KEYS: Array[String] = ["STAR_FIRST", "STAR_SECOND", "STAR_THIRD"]
 # First star reads bigger than the runners-up — rank is carried by scale and
 # color, not by borders.
 const _RANK_NAME_SIZES: Array[int] = [38, 24, 24]
@@ -53,8 +55,8 @@ var _star_name_labels: Array[Label] = []
 var _star_line_labels: Array[Label] = []
 var _star_stripe_styles: Array[StyleBoxFlat] = []
 var _rematch_btn: Button = null
+var _lobby_btn: Button = null
 var _vote_label: Label = null
-var _host_btn: Button = null
 var _present_tween: Tween = null
 
 
@@ -105,26 +107,26 @@ func _build_top_block(root: Control) -> void:
 # [stripe] HOME  3   —   2  AWAY [stripe] — the scorebug's stripe language at
 # hero scale, so the final score reads in the same visual system as the game.
 func _build_score_row() -> Control:
-	var wrap := HBoxContainer.new()
-	wrap.alignment = BoxContainer.ALIGNMENT_CENTER
-	wrap.add_theme_constant_override("separation", 14)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
 
 	_home_stripe_style = _stripe_style()
-	wrap.add_child(_stripe(_home_stripe_style))
-	wrap.add_child(_lbl("HOME", 24, _WHITE))
+	row.add_child(_stripe(_home_stripe_style))
+	row.add_child(_lbl("HOME", 24, _WHITE))
 	_home_score_label = _lbl("0", 56, _WHITE)
-	wrap.add_child(_home_score_label)
+	row.add_child(_home_score_label)
 
 	var dash := _lbl("—", 30, _DIM)
 	dash.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	wrap.add_child(dash)
+	row.add_child(dash)
 
 	_away_score_label = _lbl("0", 56, _WHITE)
-	wrap.add_child(_away_score_label)
-	wrap.add_child(_lbl("AWAY", 24, _WHITE))
+	row.add_child(_away_score_label)
+	row.add_child(_lbl("AWAY", 24, _WHITE))
 	_away_stripe_style = _stripe_style()
-	wrap.add_child(_stripe(_away_stripe_style))
-	return wrap
+	row.add_child(_stripe(_away_stripe_style))
+	return row
 
 
 # Three star rows, typography straight on the scrim. Every row is anchored
@@ -139,7 +141,7 @@ func _build_stars_block(root: Control) -> void:
 	_stars_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_stars_block)
 
-	_stars_tag = _lbl("★  STARS OF THE GAME  ★", 15, _GOLD)
+	_stars_tag = _lbl(tr("STARS_OF_THE_GAME"), 15, _GOLD)
 	_stars_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_stars_block.add_child(_stars_tag)
 
@@ -153,7 +155,7 @@ func _build_star_row(rank: int) -> Control:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var first: bool = rank == 0
-	var tag := _lbl(_RANK_TAGS[rank], 14 if first else 12, _GOLD if first else _DIM)
+	var tag := _lbl(tr(_RANK_TAG_KEYS[rank]), 14 if first else 12, _GOLD if first else _DIM)
 	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	tag.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -213,13 +215,17 @@ func _build_bottom_block(root: Control) -> void:
 	_rematch_btn.pressed.connect(func() -> void: rematch_toggled.emit())
 	actions.add_child(_rematch_btn)
 
-	# "Return to Lobby" only exists for an online host — it pulls the whole
-	# group back to the shared lobby. Offline has no lobby, and clients can't
-	# drive everyone's scene, so neither sees this button.
-	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
-		_host_btn = _action_button("Return to Lobby")
-		_host_btn.pressed.connect(func() -> void: host_action_pressed.emit())
-		actions.add_child(_host_btn)
+	# "Return to Lobby" is the second flavor of the same play-again vote (see
+	# RematchVoteRules): once the pool is unanimous, any lobby vote routes the
+	# whole group to the shared lobby instead of an instant rematch. Shown
+	# unconditionally — every real match starts from the unified lobby (offline
+	# included), and game over never fires in the lobby-less modes (free play,
+	# tutorial, drills). Offline the voter pool is just the host, so the vote
+	# resolves on the click; a host who wants to force the lobby without
+	# waiting on the vote still has the pause menu's instant Return to Lobby.
+	_lobby_btn = _action_button("Return to Lobby")
+	_lobby_btn.pressed.connect(func() -> void: lobby_vote_toggled.emit())
+	actions.add_child(_lobby_btn)
 
 	# Always available: drop to solo free play. Offline this is the only leave
 	# action; for an online client it disconnects just them; for an online host
@@ -309,6 +315,7 @@ func _append_star_reveal(rank: int) -> void:
 
 func set_spectator(is_spec: bool) -> void:
 	_rematch_btn.visible = not is_spec
+	_lobby_btn.visible = not is_spec
 	_vote_label.visible = not is_spec
 
 
@@ -318,13 +325,20 @@ func hide_popup() -> void:
 	visible = false
 
 
-func update_votes(votes: Dictionary, total_voters: int, local_voted: bool) -> void:
-	_rematch_btn.text = "Unvote" if local_voted else "Rematch"
-	var count: int = 0
-	for v: bool in votes.values():
-		if v:
-			count += 1
-	_vote_label.text = "%d / %d voted" % [count, total_voters]
+# `votes` is peer_id -> RematchVoteRules.Choice; `local_vote` is the local
+# player's current flavor. The button you voted flips to "Unvote" (pressing
+# the other flavor switches the vote instead); the tally line flags when the
+# pool is already headed to the lobby.
+func update_votes(votes: Dictionary[int, int], total_voters: int, local_vote: int) -> void:
+	_rematch_btn.text = "Unvote" \
+			if local_vote == RematchVoteRules.Choice.REMATCH else "Rematch"
+	_lobby_btn.text = "Unvote" \
+			if local_vote == RematchVoteRules.Choice.LOBBY else "Return to Lobby"
+	var count: int = RematchVoteRules.count_voted(votes)
+	var tally: String = "%d / %d voted" % [count, total_voters]
+	if RematchVoteRules.has_lobby_vote(votes):
+		tally += " · returning to lobby"
+	_vote_label.text = tally
 
 
 # Slimmer than MenuStyle.popup_button so four of them sit comfortably in one

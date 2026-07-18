@@ -1,8 +1,10 @@
 extends GutTest
 
 # AIRoleSlots is pure-function. Tests cover slot lists per state and
-# assignment via state-specific semantic queries (closest-to-puck,
-# closest-to-net, goal-side gap defender).
+# assignment via state-specific semantic queries (soonest-to-puck,
+# soonest-to-net, goal-side gap defender). Elections are momentum-aware
+# (time_to_arrive at each peer's Speed cap); stationary peers with
+# default caps reduce to distance ordering, which most tests use.
 
 const OUR_NET_Z: float = 26.65
 const TEAM_ID: int = 0
@@ -10,11 +12,14 @@ const TEAM_ID: int = 0
 
 func _make_snapshot(skaters: Array, carrier_pid: int = -1, puck_z: float = 0.0,
 		puck_x: float = 0.0) -> WorldSnapshot:
-	# skaters: Array of [peer_id, team_id, position]
+	# skaters: Array of [peer_id, team_id, position] or
+	# [peer_id, team_id, position, velocity]
 	var snap := WorldSnapshot.new()
 	for entry: Array in skaters:
 		var s := SkaterNetworkState.new()
 		s.position = entry[2]
+		if entry.size() > 3:
+			s.velocity = entry[3]
 		snap.skater_states[entry[0]] = s
 	var puck := PuckNetworkState.new()
 	puck.carrier_peer_id = carrier_pid
@@ -155,6 +160,32 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 	assert_eq(assignments[120], AIRoleSlots.Slot.SUPPORT, "deep bot becomes SUPPORT")
 
 
+func test_breakout_strong_keeps_the_outlet_role_across_the_handoff() -> void:
+	# BREAKOUT→TRANS_DO renames BREAKOUT_STRONG→OUTLET; the peer that was the
+	# up-ice strong-side outlet should STAY the up-ice OUTLET across the flip
+	# (hysteresis continuity class), not swap destinations with the trailer.
+	# Two peers tied on ETA to the opp net: the pid tiebreak alone would hand
+	# OUTLET to the lower pid (110), but 120 held BREAKOUT_STRONG last tick, so
+	# the continuity bonus keeps OUTLET on 120.
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, 0.0)],    # carrier at NZ
+			[110, 0, Vector3(-3.0, 0.0, -10.0)], # tied ETA to opp net
+			[120, 0, Vector3(3.0, 0.0, -10.0)],  # tied ETA to opp net
+	]
+	var snap := _make_snapshot(skaters, 100)
+	var prev: Dictionary = {
+			120: AIRoleSlots.Slot.BREAKOUT_STRONG,
+			110: AIRoleSlots.Slot.BREAKOUT_WEAK,
+	}
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DO,
+			_resolver(skaters), prev)
+	assert_eq(assignments[120], AIRoleSlots.Slot.OUTLET,
+			"the ex-BREAKOUT_STRONG peer stays the up-ice OUTLET")
+	assert_eq(assignments[110], AIRoleSlots.Slot.SUPPORT,
+			"the ex-BREAKOUT_WEAK peer stays the trailer")
+
+
 func test_assign_breakout_strong_goes_to_strong_side_peer() -> void:
 	# Carrier deep in our own zone. Strong side is +X (default
 	# _strong_x = +1), so the +X non-carrier takes BREAKOUT_STRONG and
@@ -219,27 +250,30 @@ func test_assign_forecheck_f1_pressures_puck_f3_is_high() -> void:
 	assert_eq(assignments[120], AIRoleSlots.Slot.F2_MID, "leftover bot reads the mid lane")
 
 
-func test_assign_trans_od_gap_is_closest_goal_side_to_carrier() -> void:
-	# TRANS_OD: CONTAIN goes to the closest GOAL-SIDE peer (between carrier and
-	# our +Z net), not the deepest. Carrier at z=0; peer 110 (z=5) is goal-side
-	# and nearest the carrier, so it gaps; the deep peer (120) and the
-	# caught-up-ice peer (100, not goal-side) backcheck to a man each.
+func test_assign_trans_od_contain_is_last_man_back() -> void:
+	# TRANS_OD: CONTAIN goes to the LAST MAN BACK — the peer soonest to our
+	# OWN +Z net (momentum-aware), i.e. the deepest line of defense that's
+	# genuinely in front of the rush. Carrier at z=0; peer 120 (z=20) is deepest
+	# and nearest our net, so it contains, while the up-ice peers (100, 110) mark
+	# a man each. This is the fix for the "last man leaves to mark a receiver,
+	# nobody picks up the carrier" failure: the man in front of the rush stays on
+	# the rush, and the peers further up the ice pick up the receivers.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -8.0)],  # up-ice, NOT goal-side → MARK
-			[110, 0, Vector3(0.0, 0.0, 5.0)],   # goal-side, closest to carrier → CONTAIN
-			[120, 0, Vector3(0.0, 0.0, 20.0)],  # goal-side but deep → MARK
+			[100, 0, Vector3(0.0, 0.0, -8.0)],  # up-ice → MARK
+			[110, 0, Vector3(0.0, 0.0, 5.0)],   # mid, closest to carrier → MARK
+			[120, 0, Vector3(0.0, 0.0, 20.0)],  # deepest / last man back → CONTAIN
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[110], AIRoleSlots.Slot.CONTAIN,
-			"closest goal-side peer gaps the carrier as CONTAIN")
+	assert_eq(assignments[120], AIRoleSlots.Slot.CONTAIN,
+			"the last man back (soonest to our net) contains the carrier")
 	assert_eq(assignments[100], AIRoleSlots.Slot.MARK,
-			"caught-up-ice peer marks home to a man")
-	assert_eq(assignments[120], AIRoleSlots.Slot.MARK,
-			"deep peer marks (it's not the closest to the carrier)")
+			"up-ice peer marks home to a man")
+	assert_eq(assignments[110], AIRoleSlots.Slot.MARK,
+			"the peer nearer the carrier marks (it is NOT the last man back)")
 	# Exactly one engager — no double-team.
 	var contain_count: int = 0
 	for pid: int in [100, 110, 120]:
@@ -248,12 +282,33 @@ func test_assign_trans_od_gap_is_closest_goal_side_to_carrier() -> void:
 	assert_eq(contain_count, 1, "exactly one CONTAIN")
 
 
-func test_assign_trans_od_gap_falls_back_to_deepest_when_none_goal_side() -> void:
-	# The whole team caught up-ice on the turnover — nobody is goal-side of the
-	# carrier (all on the -Z side of it). CONTAIN falls back to the deepest peer
-	# (closest to our +Z net), who recovers into the gap fastest.
+func test_assign_trans_od_contain_is_momentum_aware() -> void:
+	# "Soonest to our net" folds in momentum, not just raw depth: a peer a touch
+	# further from the net but already skating hard toward it beats a marginally
+	# deeper peer drifting up-ice. Peer 110 is 2 m further from our net than 120
+	# but barrelling home; 120 is nearer but coasting the wrong way.
 	var skaters: Array = [
-			[100, 0, Vector3(0.0, 0.0, -5.0)],  # deepest of the caught peers → CONTAIN
+			[100, 0, Vector3(0.0, 0.0, -6.0)],                       # up-ice → MARK
+			[110, 0, Vector3(0.0, 0.0, 16.0), Vector3(0.0, 0.0, 12.0)], # closing home fast → CONTAIN
+			[120, 0, Vector3(0.0, 0.0, 18.0), Vector3(0.0, 0.0, -12.0)],# nearer but fleeing up-ice
+			[200, 1, Vector3(0.0, 0.0, 0.0)],                        # opp carrier
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
+			_resolver(skaters), {})
+	assert_eq(assignments[110], AIRoleSlots.Slot.CONTAIN,
+			"the peer genuinely arriving home soonest (momentum) contains, not the nearer coaster")
+
+
+func test_assign_trans_od_contain_when_whole_team_caught_up_ice() -> void:
+	# The whole team is beaten up the ice on the turnover — every peer is on the
+	# -Z (up-ice) side of the carrier. The race-home election still resolves
+	# cleanly: the peer nearest our +Z net recovers into the gap fastest and
+	# contains, the rest MARK. (No special goal-side fallback needed — "soonest
+	# home" subsumes it.)
+	var skaters: Array = [
+			[100, 0, Vector3(0.0, 0.0, -5.0)],  # nearest our net of the caught peers → CONTAIN
 			[110, 0, Vector3(0.0, 0.0, -10.0)],
 			[120, 0, Vector3(0.0, 0.0, -8.0)],
 			[200, 1, Vector3(0.0, 0.0, 0.0)],   # opp carrier; all peers are up-ice of it
@@ -263,17 +318,17 @@ func test_assign_trans_od_gap_falls_back_to_deepest_when_none_goal_side() -> voi
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.CONTAIN,
-			"no goal-side peer → deepest (nearest our net) recovers as the gapper")
+			"peer nearest our net recovers as the last man back")
 	assert_eq(assignments[110], AIRoleSlots.Slot.MARK)
 	assert_eq(assignments[120], AIRoleSlots.Slot.MARK)
 
 
 func test_assign_hysteresis_keeps_prev_when_close() -> void:
-	# Semantic assignment: PRESSURE = closest to puck, with
-	# HYSTERESIS_PENALTY_M (1.0 m) added to a contender's effective
-	# distance. Setup: peer 110 is 0.5 m closer to puck than 100,
-	# but 100 currently has PRESSURE — hysteresis (1.0 m penalty
-	# on 110) keeps 100 in the slot.
+	# Semantic assignment: PRESSURE = soonest to puck, with
+	# HYSTERESIS_PENALTY_S added to a contender's effective arrival
+	# time. Setup: peer 110 is 0.5 m closer to puck than 100, but 100
+	# currently has PRESSURE — the time penalty on 110 keeps 100 in
+	# the slot.
 	var skaters: Array = [
 			[100, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m from puck
 			[110, 0, Vector3(4.5, 0.0, 22.0)],   # 0.5 m from puck (raw closer)
@@ -289,19 +344,18 @@ func test_assign_hysteresis_keeps_prev_when_close() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), prev)
-	# Effective distance: 100 = 1.0 (no penalty, was PRESSURE),
-	# 110 = 0.5 + 1.0 = 1.5 (penalty for not having PRESSURE).
-	# 100 wins.
+	# Calibrated standing-start ETAs: 100 ≈ 0.48 s (no penalty, was
+	# PRESSURE); 110 ≈ 0.34 + 0.2 hysteresis ≈ 0.54 s. 100 wins.
 	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE,
 			"peer 100 keeps PRESSURE despite peer 110 being 0.5 m closer to puck")
 
 
-func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
-	# Same setup but contender is now 1.5 m closer than the holder —
-	# enough to overcome the 1.0 m hysteresis margin. Roles flip.
+func test_assign_hysteresis_swaps_when_contender_meaningfully_sooner() -> void:
+	# The contender's arrival advantage now exceeds the hysteresis
+	# margin — the slot flips to the genuinely better-placed peer.
 	var skaters: Array = [
-			[100, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m from puck
-			[110, 0, Vector3(4.7, 0.0, 22.0)],   # ~0.3 m from puck (1.5 m advantage on raw vs hysteresis penalty)
+			[100, 0, Vector3(2.0, 0.0, 22.0)],   # 3.0 m from puck → ≈0.83 s
+			[110, 0, Vector3(4.0, 0.0, 22.0)],   # 1.0 m → ≈0.48 + 0.2 = 0.68 s
 			[120, 0, Vector3(-2.0, 0.0, 25.0)],
 			[200, 1, Vector3(5.0, 0.0, 22.0)],
 	]
@@ -314,11 +368,49 @@ func test_assign_hysteresis_swaps_when_contender_meaningfully_closer() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
 			_resolver(skaters), prev)
-	# 100.d = 1.0; 110.d = 0.3 + 1.0 = 1.3. 100 still wins (penalty
-	# margin not yet overcome).
-	assert_eq(assignments[100], AIRoleSlots.Slot.PRESSURE,
-			"hysteresis blocks the swap when contender's raw advantage"
-			+ " is less than the penalty")
+	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
+			"a contender arriving clearly sooner takes the slot through hysteresis")
+
+
+func test_assign_momentum_beats_raw_distance() -> void:
+	# The election is momentum-aware: a nearer peer coasting AWAY from the
+	# puck loses PRESSURE to a farther peer already skating at it. This is
+	# the raw-distance failure the ETA election replaces (the old metric
+	# handed the slot to the wrong body, which then brake-pivoted).
+	var skaters: Array = [
+			[100, 0, Vector3(3.0, 0.0, 22.0), Vector3(-8.0, 0.0, 0.0)],  # 2 m away, fleeing → ETA 2/(9−8) = 2 s
+			[110, 0, Vector3(9.0, 0.0, 22.0), Vector3(-8.0, 0.0, 0.0)],  # 4 m away, closing → ETA 4/17 ≈ 0.24 s
+			[120, 0, Vector3(-2.0, 0.0, 25.0)],
+			[200, 1, Vector3(5.0, 0.0, 22.0)],
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
+			_resolver(skaters), {})
+	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
+			"the peer skating AT the puck wins over a nearer peer coasting away")
+	assert_eq(assignments[100], AIRoleSlots.Slot.MARK)
+
+
+func test_assign_speed_cap_feeds_election() -> void:
+	# Each peer races at its real Speed cap: a faster build farther out
+	# arrives sooner and takes the slot. Distances long enough for top
+	# speed to engage — the calibrated ETA charges both builds the same
+	# standing-start ramp, so the cap only pays past its ramp distance.
+	var skaters: Array = [
+			[100, 0, Vector3(5.0, 0.0, 4.0)],    # 18 m from puck at ref 9
+			[110, 0, Vector3(5.0, 0.0, -4.0)],   # 26 m from puck at cap 20
+			[120, 0, Vector3(-10.0, 0.0, -18.0)],  # far — out of the race
+			[200, 1, Vector3(5.0, 0.0, 22.0)],
+	]
+	var snap := _make_snapshot(skaters, 200)
+	var fast_caps := AISkaterCaps.new()
+	fast_caps.max_speed = 20.0
+	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.DZONE,
+			_resolver(skaters), {}, 1.0, {110: fast_caps})
+	assert_eq(assignments[110], AIRoleSlots.Slot.PRESSURE,
+			"a faster Speed build farther out wins the arrival race")
 
 
 # ─── NEUTRAL assignment ─────────────────────────────────────────────────────

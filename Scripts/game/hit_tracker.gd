@@ -71,7 +71,8 @@ func setup(registry: PlayerRegistry) -> void:
 
 func on_contact(hitter_peer_id: int, victim_peer_id: int, victim_team_id: int,
 		force: float, hit_dir: Vector3,
-		attacker_has_puck: bool, victim_is_carrier: bool) -> void:
+		attacker_has_puck: bool, victim_is_carrier: bool,
+		attacker_committed: bool = true) -> void:
 	var record: PlayerRecord = _registry.get_record(hitter_peer_id)
 	if record == null:
 		return
@@ -79,7 +80,7 @@ func on_contact(hitter_peer_id: int, victim_peer_id: int, victim_team_id: int,
 		return  # no credit for hitting a teammate
 	var since_loss: float = _possession_lost_ago.get(victim_peer_id, INF)
 	var verdict: HitRules.Verdict = HitRules.classify_contact(
-			force, attacker_has_puck, victim_is_carrier, since_loss)
+			force, attacker_has_puck, victim_is_carrier, since_loss, attacker_committed)
 	if verdict == HitRules.Verdict.REJECT:
 		return
 	var key: String = "%d:%d" % [hitter_peer_id, victim_peer_id]

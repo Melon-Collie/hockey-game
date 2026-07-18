@@ -80,17 +80,20 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var poke_strip_max_speed: float = 9.0
 @export var poke_carrier_vel_blend: float = 0.5
 @export var poke_checker_cooldown: float = 0.1
-# Delivered victim-impulse (BodyCheckRules.puck_strip_impulse: attacker transfer ×
-# both masses × closing speed) needed to knock the puck off the carrier. 2.7 keeps
-# the pre-Physical baseline strip point (~6 m/s closing, medium build) while now
-# letting Physical/mass move it: an enforcer strips at lower closing speed, a
+# Delivered victim-impulse (BodyCheckRules.puck_strip_impulse — the REAL applied
+# knockback |Δv|, via SkaterCollisionRules.victim_kick) needed to knock the puck
+# off the carrier. The ladder sits on the same inelastic scale as the stagger
+# exports (SkaterController's 1.0 min / 2.5 full-strength): 1.35 keeps the
+# equal-mass baseline strip point (~6 m/s closing, medium build — the old 2.7 bar
+# on the pre-inelastic reconstruction, which read ~2× the real kick) while
+# Physical/mass move it honestly: an enforcer strips at lower closing speed, a
 # low-Physical hit needs much more.
-@export var body_check_strip_threshold: float = 2.7
+@export var body_check_strip_threshold: float = 1.35
 @export var body_check_puck_speed: float = 3.0           # soft-strip trickle pace along the hit line
 @export var body_check_loose_speed: float = 0.8          # forward carry a full-strength hit leaves (puck drops loose at contact)
-@export var body_check_strip_ref_impulse: float = 11.0   # delivered impulse that fully deadens the strip (puck jarred dead)
+@export var body_check_strip_ref_impulse: float = 5.5    # delivered impulse that fully deadens the strip (puck jarred dead)
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
-@export var hit_pickup_cooldown_threshold: float = 2.7    # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
+@export var hit_pickup_cooldown_threshold: float = 1.35   # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
 @export var body_block_cooldown: float = 0.1
 # Vertical clamp: the puck's Y is capped at ice_height + max_height in
@@ -99,6 +102,19 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # that pegs this clamp sits above the boards and escapes the rink. If you raise
 # this, raise COLLISION_OVERGLASS_TOP to keep the margin.
 @export var max_height: float = 3.0
+
+# Analytic rink-containment backstop (see _integrate_forces). The boards'
+# trimesh + CCD contains the puck almost always, but a sustained wall slide can
+# still squeeze the center past a facet plane, and a zero-thickness triangle
+# then depenetrates it OUTWARD — the "puck leaves the arena" escape. Trigger:
+# center past the inner (kickplate-lip) boundary by more than float noise —
+# the disc is then embedded a full radius, provably beyond any contact slop.
+const CONTAINMENT_EPSILON: float = 0.001
+# An escape in progress is caught on its first tick, ≤ max_speed/120 ≈ 0.32 m
+# past the boundary. Anything further out in a single step is a deliberate
+# teleport (drill managers stash the puck at (100, 100) between attempts) and
+# must be left alone — the drill owns puck placement.
+const CONTAINMENT_TELEPORT_SKIP: float = 2.0
 
 # ── Save-rebound control (host-authoritative) ─────────────────────────────────
 # A real goalie controls rebounds instead of caroming every shot back into the
@@ -126,7 +142,19 @@ var pickup_locked: bool = false
 # (e.g. tutorial puppet bot teardown) before the per-tick cleanup loop drops
 # its stale entry. Public API still takes a Skater; the int conversion is
 # internal.
+#
+# Values are ABSOLUTE expiry timestamps in the host's local_time() base — the
+# same base StateBufferManager stamps its rewind snapshots with. Storing expiry
+# (rather than a per-tick countdown) is what lets the lag-comp pickup resolver
+# ask "was this skater on cooldown at their view-time?" via is_on_cooldown_at,
+# consistent with how it rewinds is_ghost / shot_state. It also puts the cooldown
+# clock on the same wall-time as the snapshot buffer instead of fixed-delta sim
+# seconds (the two diverge under host dilation).
 var _cooldown_timers: Dictionary[int, float] = {}
+# Time source for cooldown expiry (host local_time). Injected by PuckController so
+# the actor stays engine-clock-agnostic; falls back to monotonic wall-time for
+# standalone use (tests that never run a lag-comp query).
+var _now_provider: Callable = Callable()
 # Reused scratch for the per-tick cooldown expiry sweep — cleared (capacity
 # retained) each tick instead of reallocated, since cooldowns are active through
 # most of live play (every touch arms a ~0.5s reattach window).
@@ -221,6 +249,25 @@ func set_puck_position(pos: Vector3) -> void:
 func set_puck_velocity(vel: Vector3) -> void:
 	linear_velocity = vel
 
+# Immediately parks a LOOSE puck at rest at `pos` — used to restage the puck
+# between offline-drill attempts. Unlike reset() the position lands THIS frame
+# (no deferred _pending_reset) and no puck_released signal fires; unlike a bare
+# set_puck_position + linear=0 it also zeroes ANGULAR velocity and any queued
+# release/elevation velocity, so a fast, spinning missed puck can't keep rolling
+# or carry momentum into the next rep (the "velocity carries over" annoyance). A
+# loose puck is never frozen, so Jolt's unfreeze-zeroing doesn't apply here — the
+# spin has to be cleared explicitly. Wakes the body so a settled puck honors the
+# teleport.
+func stage_at(pos: Vector3) -> void:
+	if carrier != null:
+		drop()
+	sleeping = false
+	global_position = pos
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	_pending_elevation_vel = Vector3.ZERO
+	_pending_elevation = false
+
 # Used by client-side prediction release (notify_local_release). Applies the
 # same _pending_elevation_vel treatment as release() so Jolt's first dynamic
 # integration step gets the full XYZ vector instead of starting at zero.
@@ -252,15 +299,30 @@ func clear_carrier() -> void:
 	freeze = false
 
 # ── Cooldown Helpers ──────────────────────────────────────────────────────────
+# Host local_time() (injected) so cooldown expiry shares the snapshot-buffer base.
+func set_time_provider(provider: Callable) -> void:
+	_now_provider = provider
+
+func _now() -> float:
+	return _now_provider.call() if _now_provider.is_valid() else Time.get_ticks_msec() / 1000.0
+
 func is_on_cooldown(skater: Skater) -> bool:
-	return _cooldown_timers.get(skater.get_instance_id(), 0.0) > 0.0
+	return is_on_cooldown_at(skater, _now())
+
+# Was the skater on cooldown at an arbitrary host-time `at`? Used by the lag-comp
+# pickup resolver to judge eligibility at the claimant's view-time rather than at
+# present time (up to one-way latency later), matching its rewound is_ghost /
+# shot_state checks. Present-time `is_on_cooldown` is `is_on_cooldown_at(_, now)`.
+func is_on_cooldown_at(skater: Skater, at: float) -> bool:
+	return _cooldown_timers.get(skater.get_instance_id(), -1.0) > at
 
 func _set_cooldown(skater: Skater, duration: float) -> void:
 	# Take the max with any existing entry so a shorter cooldown set immediately
 	# after a longer one (e.g. body_block_cooldown 0.1s right after reattach 0.5s)
-	# never shortens the in-flight cooldown.
+	# never shortens the in-flight cooldown. Values are absolute expiry times, so
+	# a lingering already-expired entry (expiry < now) is correctly superseded.
 	var id: int = skater.get_instance_id()
-	_cooldown_timers[id] = maxf(_cooldown_timers.get(id, 0.0), duration)
+	_cooldown_timers[id] = maxf(_cooldown_timers.get(id, -1.0), _now() + duration)
 
 func set_skater_cooldown(skater: Skater, duration: float) -> void:
 	_set_cooldown(skater, duration)
@@ -341,9 +403,17 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 	# raw attacker-weight × speed impact_force — so the same hit dislodges the puck
 	# for an enforcer but not for a low-Physical player. Matches the stagger's
 	# hardness measure; see BodyCheckRules.puck_strip_impulse.
+	#
+	# The attacker's transfer is commit-gated by the Hit button, the SAME way the
+	# knockback is (Skater._resolve_player_collisions): a committed check strips at
+	# full force, an uncommitted bump only at hit_passive_transfer_mult — so
+	# "without the hit button, hits shouldn't be that powerful" holds for the puck
+	# too, not just the knockback. The victim's brace (hit_committed) already cut it.
+	var checker_transfer: float = checker.body_check_transfer \
+			* (1.0 if checker.hit_committed else checker.hit_passive_transfer_mult)
 	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
-			impact_force, checker.body_check_transfer,
-			victim.weight, victim.body_check_brace_resistance, victim.brake_intent)
+			impact_force, checker.weight, checker_transfer,
+			victim.weight, victim.body_check_brace_resistance, victim.hit_committed)
 	if strip_impulse < hit_pickup_cooldown_threshold:
 		return
 	# Hard hits temporarily deny the victim a pickup, even if they weren't carrying.
@@ -517,7 +587,7 @@ func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	puck_released.emit()
 
 func is_airborne() -> bool:
-	return position.y > ice_height + 0.05
+	return position.y > ice_height + GameRules.PUCK_AIRBORNE_HEIGHT_M
 
 # Drops a puck that settled on low net geometry (the back/skirt frame) straight
 # down to the ice so it becomes playable again — it was only a few cm up but
@@ -696,6 +766,34 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		state.transform.origin.y = ice_height + max_height
 		if state.linear_velocity.y > 0.0:
 			state.linear_velocity.y = 0.0
+	# Analytic rink-containment backstop. The rink boundary is exactly known
+	# (rounded rectangle — the same GameRules.clamp_to_rink_inner the boards'
+	# collider is built on and that holds skaters in), so a center past it is
+	# provably an escape the trimesh failed to stop: put the disc back flush
+	# against the boards and reflect any outward velocity with the boards'
+	# restitution (PuckCollisionRules.board_rescue_velocity — the same
+	# reflection the AI trajectory model predicts), so a rescued rim reads as
+	# a normal carom. Deliberate far teleports are skipped (see
+	# CONTAINMENT_TELEPORT_SKIP). Pure value-type math, no allocation on the
+	# per-tick path, and deterministic — client prediction and reconcile
+	# replay resolve a rescue identically to the host.
+	var xz := Vector2(state.transform.origin.x, state.transform.origin.z)
+	var boundary_xz: Vector2 = GameRules.clamp_to_rink_inner(xz)
+	var escape_depth: float = xz.distance_to(boundary_xz)
+	if escape_depth > CONTAINMENT_EPSILON and escape_depth < CONTAINMENT_TELEPORT_SKIP:
+		var inside_xz: Vector2 = GameRules.clamp_to_rink_inner(
+				xz, GameRules.PUCK_COLLISION_RADIUS)
+		state.transform.origin.x = inside_xz.x
+		state.transform.origin.z = inside_xz.y
+		var rescued: Vector3 = PuckCollisionRules.board_rescue_velocity(
+				state.linear_velocity, (xz - boundary_xz) / escape_depth,
+				GameRules.PUCK_BOARD_BOUNCE)
+		if rescued != state.linear_velocity:
+			state.linear_velocity = rescued
+			# Mirror the contact path's board-hit feedback so the rescue
+			# sounds/looks like the bounce it stands in for.
+			if carrier == null and rescued.length() >= 1.0:
+				puck_hit_boards.emit()
 	if _clamp_at_goal_line:
 		var z: float = state.transform.origin.z
 		var goal_z: float = GameRules.GOAL_LINE_Z
@@ -709,7 +807,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	# response. Taken after all writes so it reflects a same-step release too.
 	_pre_contact_velocity = state.linear_velocity
 
-func _physics_process(delta: float) -> void:
+func _physics_process(_delta: float) -> void:
 	if not _is_server:
 		return
 
@@ -720,14 +818,16 @@ func _physics_process(delta: float) -> void:
 	# no-cooldowns case; the reused _expired_cooldowns scratch avoids a per-tick
 	# allocation while cooldowns are active (per-tick path).
 	if not _cooldown_timers.is_empty():
+		var now: float = _now()
 		_expired_cooldowns.clear()
 		for id: int in _cooldown_timers:
 			var skater: Skater = instance_from_id(id) as Skater
 			if not is_instance_valid(skater):
 				_expired_cooldowns.append(id)
 				continue
-			_cooldown_timers[id] -= delta
-			if _cooldown_timers[id] <= 0.0:
+			# Expiry timestamps (local_time base), so drop once we pass them —
+			# no per-tick decrement, and the sweep no longer depends on `delta`.
+			if _cooldown_timers[id] <= now:
 				_expired_cooldowns.append(id)
 		for id: int in _expired_cooldowns:
 			_cooldown_timers.erase(id)

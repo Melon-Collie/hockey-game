@@ -60,11 +60,13 @@ const FPS_CAP_VALUES: Array[int] = [30, 60, 120, 144, 240, 0]
 # Camera tilt. The game uses a single tilted-perspective camera; the only
 # user-facing camera adjustment is a small tilt nudge around the default.
 # GameCamera reads camera_tilt_deg each tick to drive pitch and the off-axis
-# follow offset. Kept subtle by design — much steeper and the mouse-to-world
+# follow offset. Kept subtle by design — much shallower and the mouse-to-world
 # projection becomes nonlinear enough to break stickhandling, so the slider is
-# clamped to a tight band around the default.
+# clamped to a tight band around the default. The low end trades a little of
+# that projection linearity for forward view: at 70° the camera sits further
+# behind the play and shows noticeably more of the attacking zone.
 const CAMERA_TILT_DEFAULT: float = 75.0
-const CAMERA_TILT_MIN: float = 73.0
+const CAMERA_TILT_MIN: float = 70.0
 const CAMERA_TILT_MAX: float = 77.0
 
 # Camera framing mode. DYNAMIC is the broadcast-style cam that frames the
@@ -133,6 +135,11 @@ const CROWD_DENSITY_LABELS: Array[String] = [
 ]
 const CROWD_DENSITY_LOW_TERRACES: int = 5
 const CROWD_DENSITY_HIGH_TERRACES: int = 15
+# Upper-deck rows behind the concourse walkway (ArenaStands.upper_terraces).
+# LOW skips the second deck entirely — it roughly doubles the spectator
+# instance count — leaving the shell wall to close in behind the small bowl.
+const CROWD_DENSITY_LOW_UPPER_TERRACES: int = 0
+const CROWD_DENSITY_HIGH_UPPER_TERRACES: int = 10
 
 # 3D render scale. Lowers the internal rendertarget resolution and upscales
 # back to window size. Bilinear is cheap and blurry; FSR/FSR2 reconstruct
@@ -171,7 +178,7 @@ const AA_LABELS: Array[String] = [
 
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "sprint", "brake",
-	"shoot", "quick_shot", "slapshot", "block", "elevation_up", "elevation_down",
+	"shoot", "quick_shot", "slapshot", "hit", "block", "elevation_up", "elevation_down",
 	"stick_lift",
 ]
 
@@ -343,6 +350,13 @@ var default_bindings: Dictionary = {}
 # Options → Game → Data Sharing.
 var share_gameplay_stats: bool = true
 
+# UI language. Empty string means "follow the OS language" (resolved to a
+# shipped locale, else English); a non-empty code ("en", "es") forces that
+# language. Applied through LocaleManager into Godot's TranslationServer, which
+# every UI tr() reads. Shipped languages + resolution live in LocaleManager;
+# the string catalogue is locale/translations.csv.
+var locale: String = ""
+
 # Replay recording. Recording fires on every peer (host + clients) for every
 # multiplayer game; offline / tutorial sessions never record. ReplayFileIndex
 # purges oldest replays in user://replays/ down to keep_count at writer-open
@@ -460,6 +474,7 @@ func save() -> void:
 	cfg.set_value("game", "goalie_difficulty_scale_version", 1)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
+	cfg.set_value("game", "locale", locale)
 	cfg.set_value("replay", "recording_enabled", replay_recording_enabled)
 	cfg.set_value("replay", "keep_count", replay_keep_count)
 	cfg.set_value("tutorials", "completion", tutorial_completion)
@@ -474,6 +489,10 @@ func save() -> void:
 			cfg.set_value("bindings", action + "_code", b.get("physical_keycode", 0))
 		elif t == "mouse":
 			cfg.set_value("bindings", action + "_code", b.get("button_index", 0))
+	# Marks the Hit/Block control-scheme swap applied (see _load's migration), so
+	# a returning config is remapped exactly once and never re-forces Block off a
+	# key the player has since chosen for it.
+	cfg.set_value("bindings", "scheme_version", 1)
 	cfg.save(_get_save_path())
 	_push_to_cloud()
 
@@ -538,6 +557,10 @@ func _sync_from_cloud() -> void:
 	f.store_buffer(cloud_bytes)
 	f = null
 	_load()
+
+func apply_locale() -> void:
+	LocaleManager.apply(locale)
+
 
 func apply_bindings() -> void:
 	for action: String in bindings:
@@ -720,11 +743,13 @@ func apply_video() -> void:
 	var stands := scene.find_child("ArenaStands", true, false) as Node3D
 	if stands != null:
 		stands.visible = (crowd_density != CROWD_DENSITY_OFF)
-		if crowd_density != CROWD_DENSITY_OFF and "num_terraces" in stands:
-			var terraces: int = CROWD_DENSITY_HIGH_TERRACES \
-				if crowd_density == CROWD_DENSITY_HIGH \
-				else CROWD_DENSITY_LOW_TERRACES
-			stands.set("num_terraces", terraces)
+		if crowd_density != CROWD_DENSITY_OFF and stands.has_method("set_crowd_rows"):
+			if crowd_density == CROWD_DENSITY_HIGH:
+				stands.call("set_crowd_rows",
+						CROWD_DENSITY_HIGH_TERRACES, CROWD_DENSITY_HIGH_UPPER_TERRACES)
+			else:
+				stands.call("set_crowd_rows",
+						CROWD_DENSITY_LOW_TERRACES, CROWD_DENSITY_LOW_UPPER_TERRACES)
 	var scratch := scene.find_child("IceScratchMap", true, false)
 	if scratch != null and scratch.has_method("set_enabled"):
 		scratch.call("set_enabled", ice_scratches_enabled)
@@ -1050,6 +1075,8 @@ func _load() -> void:
 		freeplay_goalie_difficulty = clampi(int(cfg.get_value("game", "freeplay_goalie_difficulty", GoalieSkillProfile.Difficulty.EASY)), 0, GOALIE_DIFFICULTY_LABELS.size() - 1)
 		hud_scale = clampf(cfg.get_value("game", "hud_scale", 1.0), HUD_SCALE_MIN, HUD_SCALE_MAX)
 		share_gameplay_stats = cfg.get_value("game", "share_gameplay_stats", true)
+		var raw_locale: Variant = cfg.get_value("game", "locale", "")
+		locale = raw_locale if raw_locale is String else ""
 		replay_recording_enabled = cfg.get_value("replay", "recording_enabled", true)
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
 		var raw_completion: Variant = cfg.get_value("tutorials", "completion", {})
@@ -1066,6 +1093,19 @@ func _load() -> void:
 				bindings[action] = {"type": "key", "physical_keycode": cfg.get_value("bindings", action + "_code", 0)}
 			elif t == "mouse":
 				bindings[action] = {"type": "mouse", "button_index": cfg.get_value("bindings", action + "_code", 0)}
+		# Control-scheme swap (scheme_version 1): Hit takes Ctrl, Block moves to C.
+		# Block was moved off Ctrl to free it for the new Hit button. A config
+		# predating the swap that still has Block on its old Ctrl default is
+		# remapped to C so the new layout takes effect; a player who deliberately
+		# rebound Block elsewhere is left alone. Hit is new — erased here so the
+		# default-fill below seeds it from the fresh project default (Ctrl). Runs
+		# once, gated like the difficulty-scale remaps above.
+		if int(cfg.get_value("bindings", "scheme_version", 0)) < 1:
+			var old_block: Dictionary = bindings.get("block", {})
+			if old_block.get("type") == "key" \
+					and int(old_block.get("physical_keycode", 0)) == KEY_CTRL:
+				bindings["block"] = {"type": "key", "physical_keycode": KEY_C}
+			bindings.erase("hit")
 	# Fill in InputMap defaults for any action not in the saved config
 	for action: String in REBINDABLE_ACTIONS:
 		if not bindings.has(action):
@@ -1076,6 +1116,7 @@ func _load() -> void:
 	# above entirely), so there is always at least one preset and the flat build
 	# matches the active one.
 	_finalize_presets()
+	apply_locale()
 	apply_audio()
 	apply_bindings()
 	call_deferred(&"apply_input")
@@ -1135,23 +1176,23 @@ func set_active_preset(index: int) -> void:
 
 # Overwrite the build (and optionally the name) of an existing preset. If it is
 # the active preset the flat mirror is refreshed too.
-func save_preset(index: int, attrs: PlayerAttributes, name: String = "") -> void:
+func save_preset(index: int, attrs: PlayerAttributes, preset_name: String = "") -> void:
 	if attrs == null or index < 0 or index >= attr_presets.size():
 		return
 	attr_presets[index]["attrs"] = _copy_attrs(attrs)
-	if name != "":
-		attr_presets[index]["name"] = _sanitize_preset_name(name)
+	if preset_name != "":
+		attr_presets[index]["name"] = _sanitize_preset_name(preset_name)
 	if index == attr_active_preset:
 		_sync_flat_from_active()
 
 
 # Append a new preset (up to MAX_PRESETS). Defaults to a copy of the current
 # active build. Returns the new index, or -1 if the cap is reached.
-func add_preset(attrs: PlayerAttributes = null, name: String = "") -> int:
+func add_preset(attrs: PlayerAttributes = null, preset_name: String = "") -> int:
 	if attr_presets.size() >= MAX_PRESETS:
 		return -1
 	var a: PlayerAttributes = attrs if attrs != null else get_player_attributes()
-	var nm: String = name if name != "" else _default_preset_name()
+	var nm: String = preset_name if preset_name != "" else _default_preset_name()
 	attr_presets.append(_make_preset(nm, a))
 	return attr_presets.size() - 1
 
@@ -1223,8 +1264,8 @@ func _sync_flat_from_active() -> void:
 	attr_shot     = a.shot
 
 
-func _make_preset(name: String, attrs: PlayerAttributes) -> Dictionary:
-	return {"name": _sanitize_preset_name(name), "attrs": _copy_attrs(attrs)}
+func _make_preset(preset_name: String, attrs: PlayerAttributes) -> Dictionary:
+	return {"name": _sanitize_preset_name(preset_name), "attrs": _copy_attrs(attrs)}
 
 
 # Independent copy so a preset never shares a PlayerAttributes instance with a
@@ -1238,8 +1279,8 @@ func _default_preset_name() -> String:
 	return "Build %d" % (attr_presets.size() + 1)
 
 
-func _sanitize_preset_name(name: String) -> String:
-	var n: String = name.strip_edges()
+func _sanitize_preset_name(preset_name: String) -> String:
+	var n: String = preset_name.strip_edges()
 	if n.is_empty():
 		n = DEFAULT_PRESET_NAME
 	return n.substr(0, PRESET_NAME_MAX_LEN)

@@ -3,11 +3,23 @@ extends Node
 
 const _SETTING_CONTROL_WIDTH: int = 220
 
+# The lobby panel sits over the live arena backdrop, and its content carries
+# its own surfaces (slot cards, the recessed settings tray), so the shell can
+# be a tint rather than a wall — let the rink read through. Local to the
+# lobby: MenuStyle surfaces stay solid for every other popup by design.
+const _PANEL_BG_ALPHA: float = 0.75
+
 # key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
 # Players: team_id ∈ {0, 1}, slot ∈ {0,1,2}. Spectators: team_id = -1, slot = spectator_idx.
 var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
+var _backdrop: LobbyArenaBackdrop = null
+# Host-only convenience: one press fills every open player slot with a bot.
+# Deliberately a one-shot button, not a persistent auto-fill — slots that
+# open later just leave the button pressable again, and it greys out when
+# there's nothing to fill.
+var _fill_bots_btn: Button = null
 var _kick_confirm: ConfirmDialog = null
 var _kick_pending_peer: int = -1
 var _start_btn: Button = null
@@ -19,8 +31,10 @@ var _spectator_join_btn: Button = null
 # Dynamic teams column: every widget is built once, then _refresh_teams_column
 # toggles visibility per refresh. A team with at least one human resolves its
 # color from votes (the local player's vote dropdown shows while they're on a
-# team); a humanless (bots/empty) team instead shows a host-picked dropdown,
-# replicated to clients via notify_team_colors.
+# team); a humanless (bots/empty) team instead gets a host-picked dropdown,
+# shown to the HOST ONLY — clients see the resulting colors on the slot cards
+# (replicated via notify_team_colors) plus the "Host picks" hint, not a dead
+# disabled picker.
 var _vote_row: HBoxContainer = null
 var _my_color_dropdown: PaletteDropdown = null
 var _home_color_row: HBoxContainer = null
@@ -46,11 +60,16 @@ var _visibility_hint: Label = null
 var _ready_states: Dictionary = {}
 var _local_is_ready: bool = false
 
-# Settings (host only editable; all players see them)
+# Settings (host only editable; all players see them). The two AI difficulty
+# values are the host's PlayerPrefs, synced to clients for display only —
+# clients never persist them (see LobbySettingsPanel's class doc).
 var _num_periods: int = GameRules.NUM_PERIODS
 var _period_duration: float = GameRules.PERIOD_DURATION
 var _ot_enabled: bool = GameRules.OT_ENABLED
 var _rule_set: int = GameRules.DEFAULT_RULE_SET
+var _team_size: int = GameRules.DEFAULT_TEAM_SIZE
+var _bot_difficulty: int = BotSkillProfile.Difficulty.NORMAL
+var _goalie_difficulty: int = GoalieSkillProfile.Difficulty.NORMAL
 
 # Team color presets used as placeholders in the lobby slot-grid preview.
 # Real per-team colors are resolved from votes at game start.
@@ -70,6 +89,15 @@ func _ready() -> void:
 	_period_duration = NetworkManager.pending_period_duration
 	_ot_enabled = NetworkManager.pending_ot_enabled
 	_rule_set = NetworkManager.pending_rule_set
+	_team_size = NetworkManager.pending_team_size
+	# Host: the difficulty dropdowns show (and edit) the host's own prefs.
+	# Client: show whatever the host last synced.
+	if NetworkManager.is_host:
+		_bot_difficulty = PlayerPrefs.bot_difficulty
+		_goalie_difficulty = PlayerPrefs.goalie_difficulty
+	else:
+		_bot_difficulty = NetworkManager.pending_bot_difficulty
+		_goalie_difficulty = NetworkManager.pending_goalie_difficulty
 	_my_color_slot = _initial_color_preference()
 	_color_votes = NetworkManager.pending_color_votes.duplicate()
 	# Re-entering the lobby (return-to-lobby after a match) restores whatever
@@ -134,18 +162,13 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(root)
 
-	# Same ice texture as the rest of the UI. Stretch covers any aspect ratio
-	# without warping. A future pass will replace this with a live hockey
-	# scene running the rink + bench in 3D behind the lobby panel.
-	var bg := TextureRect.new()
-	bg.texture = load("res://Assets/Mitts_ice_background.png")
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(bg)
+	# Live 3D arena behind the panel — the real rink + stands with a slow
+	# camera drift. Sits in the 3D world, so the CanvasLayer UI draws over it.
+	_backdrop = LobbyArenaBackdrop.new()
+	add_child(_backdrop)
 
 	var panel_style := MenuStyle.panel()
+	panel_style.bg_color = Color(MenuStyle.PANEL_BG, _PANEL_BG_ALPHA)
 
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", panel_style)
@@ -159,17 +182,28 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 20)
 	panel.add_child(vbox)
 
+	# Header row: screen title + (host only) the lobby-visibility selector.
+	vbox.add_child(_build_header_row())
+
 	_slot_grid = SlotGridPanel.new()
+	_slot_grid.set_active_team_size(_team_size)
 	_slot_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_slot_grid.slot_selected.connect(_on_slot_selected)
 	_slot_grid.bot_toggled.connect(_on_bot_toggled)
 	_slot_grid.kick_requested.connect(_on_kick_requested)
-	vbox.add_child(_slot_grid)
+	# Tighter inner box so the host's fill-bots toggle reads as part of the
+	# grid rather than a separate section in the 20px-separated outer stack.
+	var grid_box := VBoxContainer.new()
+	grid_box.add_theme_constant_override("separation", 4)
+	grid_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid_box.add_child(_slot_grid)
+	if NetworkManager.is_host:
+		grid_box.add_child(_build_fill_bots_row())
+	vbox.add_child(grid_box)
 
-	# Three-column section below the slot grid: TEAMS / MATCH / SPECTATORS.
-	# Columns line up with the slot columns above thanks to the same 56px
-	# left offset that SlotGridPanel uses for its AWAY/HOME labels.
-	vbox.add_child(_build_columns_row())
+	# Recessed settings tray below the slot grid: TEAMS / MATCH / SPECTATORS
+	# side by side in one full-width strip.
+	vbox.add_child(_build_settings_tray())
 
 	var btn_box := HBoxContainer.new()
 	btn_box.add_theme_constant_override("separation", 12)
@@ -209,23 +243,125 @@ func _on_edit_build_pressed() -> void:
 		_build_popup.open()
 
 
-# Lay out the bottom of the lobby as three vertical columns aligned with the
-# slot-grid columns above. Left offset of 56px matches SlotGridPanel's
-# AWAY/HOME team-label column so the headers below line up under LW/C/RW.
-func _build_columns_row() -> HBoxContainer:
+# Host-only one-shot button tucked under the slot grid (see _fill_bots_btn).
+func _build_fill_bots_row() -> HBoxContainer:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.alignment = BoxContainer.ALIGNMENT_END
+	_fill_bots_btn = Button.new()
+	_fill_bots_btn.text = "Fill with Bots"
+	_fill_bots_btn.add_theme_font_size_override("font_size", 13)
+	_fill_bots_btn.custom_minimum_size = Vector2(0, 28)
+	MenuStyle.wire_hover_scale(_fill_bots_btn)
+	SoundManager.wire_button(_fill_bots_btn)
+	_fill_bots_btn.pressed.connect(_fill_open_slots_with_bots)
+	row.add_child(_fill_bots_btn)
+	return row
 
-	var left_offset := Control.new()
-	left_offset.custom_minimum_size = Vector2(56, 0)
-	row.add_child(left_offset)
+
+# Grey the fill button out when every fielded slot is already taken.
+func _update_fill_bots_btn() -> void:
+	if _fill_bots_btn == null:
+		return
+	var open: int = 0
+	for team_id: int in 2:
+		for s: int in _team_size:
+			var key: int = LobbySlotKey.encode(team_id, s)
+			if not _lobby_slots.has(key) and not NetworkManager.pending_bot_slots.get(key, false):
+				open += 1
+	_fill_bots_btn.disabled = open == 0
+
+
+# Top up every open player slot with a bot. Each send_bot_slot broadcasts and
+# re-fires _refresh_grid via bot_slot_changed, so the cards land one by one.
+func _fill_open_slots_with_bots() -> void:
+	if not NetworkManager.is_host:
+		return
+	for team_id: int in 2:
+		for s: int in _team_size:
+			var key: int = LobbySlotKey.encode(team_id, s)
+			if _lobby_slots.has(key):
+				continue
+			if NetworkManager.pending_bot_slots.get(key, false):
+				continue
+			NetworkManager.send_bot_slot(key, true)
+
+
+# Header row above the slot grid: heading on the left and, for the host, the
+# lobby-visibility selector (with its status hint) on the right. Visibility is
+# a session-level state — who can get in at all — not a match rule, so it
+# lives up here rather than in the MATCH settings stack. Clients joined
+# through a visibility they can't change, so their header is just the title.
+func _build_header_row() -> HBoxContainer:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var title := Label.new()
+	title.text = "Lobby"
+	MenuStyle.apply_heading(title, 30)
+	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(title)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+
+	if NetworkManager.is_host:
+		var vis_box := VBoxContainer.new()
+		vis_box.add_theme_constant_override("separation", 2)
+		vis_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		vis_box.custom_minimum_size = Vector2(280, 0)
+		vis_box.add_child(_build_visibility_row())
+		_visibility_hint = Label.new()
+		_visibility_hint.add_theme_font_size_override("font_size", 11)
+		_visibility_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+		_visibility_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_visibility_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vis_box.add_child(_visibility_hint)
+		header.add_child(vis_box)
+		_update_visibility_row()
+
+	return header
+
+
+# One recessed full-width strip holding the three option sections side by
+# side, split by hairlines: TEAMS | MATCH | SPECTATORS. MATCH gets roughly
+# double width — LobbySettingsPanel lays its rows out in two columns — so all
+# three sections land at a similar height instead of one tall middle tower.
+# The tray shares the empty slot cards' surface (SURFACE_ELEV) so the screen
+# reads as two tones — shell + raised surfaces — rather than a third dark.
+func _build_settings_tray() -> PanelContainer:
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.SURFACE_ELEV
+	style.set_corner_radius_all(6)
+	style.set_content_margin_all(16)
+
+	var tray := PanelContainer.new()
+	tray.add_theme_stylebox_override("panel", style)
+	tray.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tray.add_child(row)
 
 	row.add_child(_build_teams_column())
-	row.add_child(_build_match_column())
+	row.add_child(_tray_separator())
+	var match_col := _build_match_column()
+	match_col.size_flags_stretch_ratio = 2.2
+	row.add_child(match_col)
+	row.add_child(_tray_separator())
 	row.add_child(_build_spectators_column())
 
-	return row
+	return tray
+
+
+# 1px vertical hairline between tray sections.
+func _tray_separator() -> ColorRect:
+	var sep := ColorRect.new()
+	sep.color = MenuStyle.TEXT_SEP
+	sep.custom_minimum_size = Vector2(1, 0)
+	return sep
 
 
 # Small uppercase tracking-y header used at the top of each column to
@@ -295,8 +431,10 @@ func _refresh_teams_column() -> void:
 		if _lobby_slots[k].peer_id == local_peer:
 			local_on_team = true
 	_vote_row.visible = local_on_team
-	_home_color_row.visible = not home_has_human
-	_away_color_row.visible = not away_has_human
+	# Host-picked open-team dropdowns are host-only (see the var-block doc);
+	# clients read the pick off the slot cards and the hint below.
+	_home_color_row.visible = NetworkManager.is_host and not home_has_human
+	_away_color_row.visible = NetworkManager.is_host and not away_has_human
 	# Keep the direct dropdowns showing the live resolved slots — a manual pick
 	# can be re-rolled by the collision rule when the other team's votes land
 	# on the same palette.
@@ -338,26 +476,16 @@ func _build_match_column() -> VBoxContainer:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.add_child(_column_header("MATCH"))
 
-	# Visibility selector sits above the match rules — host only; clients
-	# joined through it, so there's nothing for them to set.
-	if NetworkManager.is_host:
-		col.add_child(_build_visibility_row())
-		_visibility_hint = Label.new()
-		_visibility_hint.add_theme_font_size_override("font_size", 11)
-		_visibility_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
-		_visibility_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		col.add_child(_visibility_hint)
-		_update_visibility_row()
-
-	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set, NetworkManager.is_host)
+	_settings_panel = LobbySettingsPanel.new(_num_periods, _period_duration, _ot_enabled, _rule_set,
+			NetworkManager.is_host, _team_size, _bot_difficulty, _goalie_difficulty)
 	_settings_panel.settings_changed.connect(_on_settings_panel_changed)
 	col.add_child(_settings_panel)
 
 	return col
 
 
-# "Lobby: [Offline | Friends | Public]" — mirrors LobbySettingsPanel's row
-# look. Selecting Friends/Public from Offline attaches the Steam transport
+# "Visibility: [Offline | Friends | Public]" — the header-row selector.
+# Selecting Friends/Public from Offline attaches the Steam transport
 # (async — the selector disables until host_lobby_ready / _failed lands);
 # Friends ↔ Public is a live Steam lobby-type flip; Offline detaches, and is
 # only selectable with no human peers connected.
@@ -368,7 +496,7 @@ func _build_visibility_row() -> HBoxContainer:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var lbl := Label.new()
-	lbl.text = "Lobby"
+	lbl.text = "Visibility"
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -524,12 +652,12 @@ func _on_spectate_pressed() -> void:
 
 # Writes the player's vote into the shared pool. Host receives the vote,
 # updates pending_color_votes, recomputes resolved team colors, and
-# broadcasts. PlayerPrefs is updated so the next session remembers. Works
-# offline too — the host is then the only voter on their own team.
+# broadcasts. Deliberately does NOT touch PlayerPrefs.preferred_color_slot —
+# the favorite color (set in the player settings popup) only seeds the
+# initial vote; a lobby vote is a per-session choice. Works offline too —
+# the host is then the only voter on their own team.
 func _on_my_color_vote_selected(slot: int) -> void:
 	_my_color_slot = slot
-	PlayerPrefs.preferred_color_slot = slot
-	PlayerPrefs.save()
 	NetworkManager.send_color_vote(slot)
 
 
@@ -582,7 +710,7 @@ func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is
 	# respawn the moment the player moved away. send_bot_slot is host-only;
 	# clients pick up the change via the broadcast RPC.
 	if team_id != GameRules.SPECTATOR_TEAM_ID:
-		var bot_key: int = team_id * 3 + slot
+		var bot_key: int = LobbySlotKey.encode(team_id, slot)
 		if NetworkManager.pending_bot_slots.get(bot_key, false):
 			NetworkManager.send_bot_slot(bot_key, false)
 
@@ -596,7 +724,7 @@ func _find_balanced_slot(_peer_id: int) -> Array:
 		else: team1 += 1
 	var preferred_team: int = 0 if team0 <= team1 else 1
 	for attempt_team: int in [preferred_team, 1 - preferred_team]:
-		for s: int in PlayerRules.MAX_PER_TEAM:
+		for s: int in _team_size:
 			if not _lobby_slots.has(LobbySlotKey.encode(attempt_team, s)):
 				return [attempt_team, s]
 	return []
@@ -661,12 +789,34 @@ func _refresh_grid() -> void:
 	if _slot_grid == null:
 		return
 	_recompute_resolved_colors()
+	if _backdrop != null:
+		_backdrop.set_team_color_slots(_home_color_slot, _away_color_slot)
+		var bench: Array[int] = _bench_occupancy()
+		_backdrop.set_bench_counts(bench[0], bench[1])
 	_slot_grid.refresh(_build_slot_grid_roster(), _get_team_colors(),
 			NetworkManager.pending_bot_slots, NetworkManager.is_host,
 			NetworkManager.pending_bot_identities, true, true)
 	_refresh_teams_column()
 	_update_visibility_row()
+	_update_fill_bots_btn()
 	_refresh_spectator_panel()
+
+# [home, away] occupied-slot counts (humans + bots) for the backdrop's bench
+# dummies. Slots beyond the live team size don't count — they aren't fielded.
+func _bench_occupancy() -> Array[int]:
+	var counts: Array[int] = [0, 0]
+	for k: int in _lobby_slots:
+		if LobbySlotKey.is_spectator(k) or LobbySlotKey.slot(k) >= _team_size:
+			continue
+		counts[LobbySlotKey.team_id(k)] += 1
+	for bot_key: int in NetworkManager.pending_bot_slots:
+		if not NetworkManager.pending_bot_slots[bot_key]:
+			continue
+		if LobbySlotKey.is_spectator(bot_key) or LobbySlotKey.slot(bot_key) >= _team_size:
+			continue
+		counts[LobbySlotKey.team_id(bot_key)] += 1
+	return counts
+
 
 # Live vote resolution. Walks the current roster, buckets each player's vote
 # onto their currently assigned team, then asks ColorVoteRules for the new
@@ -779,7 +929,8 @@ func _on_peer_joined(peer_id: int) -> void:
 		NetworkManager.send_lobby_roster(existing_peer, roster)
 	NetworkManager.send_color_votes_to(peer_id, _color_votes)
 	NetworkManager.send_team_colors_to(peer_id, _home_color_slot, _away_color_slot)
-	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled, _rule_set)
+	NetworkManager.send_lobby_settings_to(peer_id, _num_periods, _period_duration, _ot_enabled,
+			_rule_set, _team_size, _bot_difficulty, _goalie_difficulty)
 	NetworkManager.send_bot_slots_to(peer_id, NetworkManager.pending_bot_slots, NetworkManager.pending_bot_identities)
 	_broadcast_confirm(peer_id, target[0], target[1])
 	_update_start_btn()
@@ -824,7 +975,7 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 				continue
 			if LobbySlotKey.team_id(k) == new_team_id:
 				count += 1
-		if count >= PlayerRules.MAX_PER_TEAM:
+		if count >= _team_size:
 			return
 	var identity: Dictionary = _find_peer_identity(peer_id)
 	_assign_slot(peer_id, new_team_id, new_slot,
@@ -909,7 +1060,7 @@ func _on_bot_toggled(team_id: int, slot: int, is_bot: bool) -> void:
 	# this only fires from the host. send_bot_slot is a no-op on clients.
 	if not NetworkManager.is_host:
 		return
-	NetworkManager.send_bot_slot(team_id * 3 + slot, is_bot)
+	NetworkManager.send_bot_slot(LobbySlotKey.encode(team_id, slot), is_bot)
 
 func _on_bot_slot_changed(_key: int, _is_bot: bool) -> void:
 	_refresh_grid()
@@ -917,20 +1068,65 @@ func _on_bot_slot_changed(_key: int, _is_bot: bool) -> void:
 func _on_bot_slots_synced(_bot_slots: Dictionary) -> void:
 	_refresh_grid()
 
-func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+func _on_lobby_settings_synced(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
+	_bot_difficulty = bot_difficulty
+	_goalie_difficulty = goalie_difficulty
+	_apply_team_size(team_size)
 	if _settings_panel != null:
-		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set)
+		_settings_panel.apply_settings(num_periods, period_duration, ot_enabled, rule_set, team_size,
+				bot_difficulty, goalie_difficulty)
 
-func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int) -> void:
+func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_enabled: bool, rule_set: int,
+		team_size: int, bot_difficulty: int, goalie_difficulty: int) -> void:
 	_num_periods = num_periods
 	_period_duration = period_duration
 	_ot_enabled = ot_enabled
 	_rule_set = rule_set
-	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set)
+	_bot_difficulty = bot_difficulty
+	_goalie_difficulty = goalie_difficulty
+	_apply_team_size(team_size)
+	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set, team_size,
+			bot_difficulty, goalie_difficulty)
+
+# Applies a mode (team size) change to the live lobby: resizes the visible
+# grid and — host only — evicts anything seated in a slot the new size no
+# longer fields (a 5v5 → 3v3 flip with players/bots on LD/RD). Bots retire;
+# humans re-seat into the first open slot (spectator gallery as the overflow
+# valve so nobody is ever silently dropped).
+func _apply_team_size(team_size: int) -> void:
+	var changed: bool = team_size != _team_size
+	_team_size = team_size
+	if _slot_grid != null:
+		_slot_grid.set_active_team_size(team_size)
+	if not changed or not NetworkManager.is_host:
+		_refresh_grid()
+		return
+	# Retire bots parked beyond the new size.
+	for bot_key: int in NetworkManager.pending_bot_slots.keys():
+		if NetworkManager.pending_bot_slots[bot_key] \
+				and not LobbySlotKey.is_spectator(bot_key) \
+				and LobbySlotKey.slot(bot_key) >= team_size:
+			NetworkManager.send_bot_slot(bot_key, false)
+	# Re-seat humans stranded on now-invalid slots.
+	for k: int in _lobby_slots.keys():
+		if LobbySlotKey.is_spectator(k) or LobbySlotKey.slot(k) < team_size:
+			continue
+		var entry: Dictionary = _lobby_slots[k]
+		var seat: Array = _find_balanced_slot(entry.peer_id)
+		if seat.is_empty():
+			var spec_slot: int = _find_open_spectator_slot()
+			if spec_slot == -1:
+				continue  # nowhere to go; grid will still render the row
+			seat = [GameRules.SPECTATOR_TEAM_ID, spec_slot]
+		_assign_slot(entry.peer_id, seat[0], seat[1],
+				entry.player_name, entry.is_left_handed, entry.jersey_number)
+		_broadcast_confirm(entry.peer_id, seat[0], seat[1])
+	_refresh_grid()
 
 func _on_game_started(config: Dictionary) -> void:
 	NetworkManager.pending_game_config = config
@@ -969,6 +1165,7 @@ func _on_start_pressed() -> void:
 		"home_color_slot": _home_color_slot,
 		"away_color_slot": _away_color_slot,
 		"rule_set": _rule_set,
+		"team_size": _team_size,
 		# Minted on the host and broadcast via game_start so every peer shares
 		# the same id. Used as the .mreplay filename and (Feature C) stored on
 		# career_stats rows so a game can be reconstructed across players.

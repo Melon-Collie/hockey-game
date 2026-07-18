@@ -116,6 +116,9 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 		# carrier on the weak wall.
 		var search_center: Vector3 = _weak_search_center(carrier_pos, side_x)
 		candidates = AIRoleHelpers.generate_candidates_around(ctx.self_pos, search_center)
+	# Switch-hysteresis: hold the outlet spot unless a fresh one is clearly
+	# better, so the cursor (which snaps to this target) stays steady.
+	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
@@ -141,7 +144,8 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 		# Floored lane (see BLOCKED_LANE_FLOOR): dead lanes still rank by
 		# potential so the outlet keeps skating its route instead of
 		# freezing when the carrier is draped / the column is covered.
-		var score: float = maxf(lane, BLOCKED_LANE_FLOOR) * potential
+		var score: float = maxf(lane, BLOCKED_LANE_FLOOR) * potential \
+				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
 			best_pos = c

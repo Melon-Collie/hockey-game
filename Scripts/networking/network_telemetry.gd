@@ -16,6 +16,22 @@ var session := NetworkSessionSummary.new()
 # each frame so the session fold can sample them at window rollover.
 var current_rtt_ms: float = 0.0
 var current_peer_count: int = 0
+# Host-stall attribution context, pushed by GameManager each frame: the live game
+# phase and actor count, plus a breadcrumb of the last notable game-event
+# transition (note_host_event) and when it fired. Captured into every auto-marker
+# so a host hitch says WHAT it coincided with — a stall in steady PLAYING points
+# at per-tick cost; one in GOAL_SCORED / FACEOFF_PREP (or moments after that
+# transition) points at that phase's handler (replay capture, faceoff reset).
+var current_phase: String = "—"
+var current_actor_count: int = 0
+var _last_host_event: String = ""
+var _last_host_event_sec: float = -1.0
+# Host physics ticks whose inter-tick wall gap exceeded _HOST_STALL_MS this window
+# — a session total of noticeable hitches (worst_stall_ms is the single worst gap;
+# this is HOW MANY). Threshold is a feel/diagnostic cutoff (~2 dropped 60 Hz
+# frames), not an evaluator constant. Host only. Folded as a TOTAL_KEY.
+const _HOST_STALL_MS: float = 33.0
+var _host_stall_count: int = 0
 # Client-side: de-clumped path jitter (PDV) — read WITH jitter_p95: jitter high
 # but this low = benign relay clumping; both high = genuinely jittery path that
 # needs buffer depth. Also the term that sizes the interpolation cushion, so if
@@ -51,6 +67,16 @@ var _reconcile_mag_sum: float = 0.0
 var _reconcile_mag_n: int = 0
 var _reconcile_lookup_count: int = 0
 var _reconcile_match_count: int = 0
+# Reconcile-match MISS attribution (ReconciliationRules.MatchMiss buckets). A miss
+# forces the prediction-lead fallback that trips a spurious position snap, so a
+# high miss rate drives residual reconcile churn; these say WHERE the ack fell so
+# we can tell a benign post-clear transient (EMPTY/OLDER) from a real history hole
+# (GAP). Session totals; gap_ms tracks the worst ack-vs-history-bound distance.
+var _reconcile_miss_empty: int = 0
+var _reconcile_miss_older: int = 0
+var _reconcile_miss_newer: int = 0
+var _reconcile_miss_gap: int = 0
+var _reconcile_miss_gap_ms_max: float = 0.0
 var _recon_pos_trips: int = 0
 var _recon_vel_trips: int = 0
 var _recon_ubody_trips: int = 0
@@ -69,6 +95,36 @@ var _ooo_drop_count: int = 0
 var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
+# Host-side lag-comp pickup-claim outcomes (the host processes every client's
+# claim, so its row summarizes rewind health for the whole lobby). A claim that
+# reaches the rewound geometry test counts in _pickup_claim_count; if the rewound
+# blade/puck don't overlap it's a _pickup_claim_miss (client's view said in-range
+# but the host's rewind disagreed — the "reached for it, didn't get it" symptom),
+# and a geometry-hit-but-not-catchable verdict is a _pickup_claim_deflect. A high
+# miss FRACTION means the rewind isn't reproducing the client's view; near-zero
+# means the lag-comp pickup path is working. Folded as session totals (TOTAL_KEYS).
+var _pickup_claim_count: int = 0
+var _pickup_claim_miss_count: int = 0
+var _pickup_claim_deflect_count: int = 0
+# Poke / stick-lift lag-comp claim outcomes — the same rewind-health signal as the
+# pickup claim counters, for the other two client-authoritative blade actions. A
+# claim that reaches the rewound geometry test counts in _*_claim_count; a
+# geometry fail (rewound blade/target don't overlap) is a _*_claim_miss — the
+# "reached for it, didn't get it" symptom. A high miss FRACTION on the host row
+# flags a rewind not reproducing the client's view. Folded as session totals.
+var _poke_claim_count: int = 0
+var _poke_claim_miss_count: int = 0
+var _stick_lift_claim_count: int = 0
+var _stick_lift_claim_miss_count: int = 0
+# CLIENT-side optimistic-pickup outcomes (the felt "grab, then lose it"). A pin
+# is the visual attach; it resolves as confirmed (host granted), timeout (host
+# silently declined → rolled back = the felt bug), or stolen (a different carrier
+# legitimately won it). timeouts/pins is the felt-bug rate the pin predicate gate
+# is meant to drive toward zero. Session totals (TOTAL_KEYS); host rows fold 0s.
+var _provisional_pin_count: int = 0
+var _provisional_confirmed_count: int = 0
+var _provisional_timeout_count: int = 0
+var _provisional_stolen_count: int = 0
 # Bandwidth: bytes seen this window. Counted at the NetworkManager boundary so
 # the value reflects payload bytes only (excludes the Steam transport + UDP/IP
 # framing, and SDR relay overhead when not directly connected — none of which is
@@ -85,6 +141,14 @@ var _bytes_received_window: int = 0
 var _puck_traj_soft_count: int = 0
 var _puck_traj_vel_only_count: int = 0
 var _puck_traj_hard_snap_count: int = 0
+# Shot-launch divergence: on the first host-confirmed broadcast after a LOCAL
+# shot release, the gap between the client-predicted puck and the host-authoritative
+# launch. Both run identical Jolt from the same client-sent origin, so this should
+# be tiny — a spike means real launch divergence, and it attributes the shot-launch
+# share of puck_hard_snaps. Window MAX (peak) + a session shot count (TOTAL). Client only.
+var _shot_launch_pos_div_max: float = 0.0
+var _shot_launch_vel_div_max: float = 0.0
+var _shot_launch_count: int = 0
 var _window_timer: float = 0.0
 
 # ── Published metrics (read by overlay) ──────────────────────────────────────
@@ -285,6 +349,19 @@ static func record_reconcile_match(matched: bool) -> void:
 	if matched:
 		instance._reconcile_match_count += 1
 
+# A find_at miss, bucketed by ReconciliationRules.classify_match_miss. gap_ms is
+# how far the ack sat past the nearest history bound (0 for EMPTY/GAP).
+static func record_reconcile_miss(reason: int, gap_ms: float) -> void:
+	if instance == null:
+		return
+	match reason:
+		ReconciliationRules.MatchMiss.EMPTY: instance._reconcile_miss_empty += 1
+		ReconciliationRules.MatchMiss.OLDER: instance._reconcile_miss_older += 1
+		ReconciliationRules.MatchMiss.NEWER: instance._reconcile_miss_newer += 1
+		ReconciliationRules.MatchMiss.GAP: instance._reconcile_miss_gap += 1
+	if gap_ms > instance._reconcile_miss_gap_ms_max:
+		instance._reconcile_miss_gap_ms_max = gap_ms
+
 # Which reconcile channel(s) tripped the snap this time (diagnostic attribution).
 static func record_reconcile_cause(pos: bool, vel: bool, ubody: bool) -> void:
 	if instance == null:
@@ -326,6 +403,18 @@ static func record_puck_trajectory_zone(zone: int) -> void:
 		1: instance._puck_traj_vel_only_count += 1
 		2: instance._puck_traj_hard_snap_count += 1
 
+# Divergence between the client's predicted puck and the host's authoritative
+# launch at the first host-confirmed broadcast after a local release (see
+# PuckController). Keeps the window peak of each; count is the shot denominator.
+static func record_shot_launch_divergence(pos_div_m: float, vel_div: float) -> void:
+	if instance == null:
+		return
+	instance._shot_launch_count += 1
+	if pos_div_m > instance._shot_launch_pos_div_max:
+		instance._shot_launch_pos_div_max = pos_div_m
+	if vel_div > instance._shot_launch_vel_div_max:
+		instance._shot_launch_vel_div_max = vel_div
+
 # input_lead: estimated_host_time() - input.host_timestamp at the moment an
 # input is popped from the host queue. Near-zero means inputs are processed
 # right on schedule; consistently high means the queue is backing up.
@@ -340,6 +429,48 @@ static func record_input_lead(lead_sec: float) -> void:
 static func record_input_starvation() -> void:
 	if instance: instance._starvation_count += 1
 
+# Host-side lag-comp pickup-claim outcomes (see the window-counter comment).
+# record_pickup_claim() is the denominator — a claim that reached the rewound
+# geometry test; miss / deflect are the two non-grant verdicts. Host-only in
+# practice (clients never run the claim resolver); no-op outside a session.
+static func record_pickup_claim() -> void:
+	if instance: instance._pickup_claim_count += 1
+
+static func record_pickup_claim_miss() -> void:
+	if instance: instance._pickup_claim_miss_count += 1
+
+static func record_pickup_claim_deflect() -> void:
+	if instance: instance._pickup_claim_deflect_count += 1
+
+# Poke / stick-lift lag-comp claim outcomes (see the counter comment). record_*_claim
+# is the denominator (reached the rewound geometry test); record_*_claim_miss is the
+# geometry-fail verdict. Host-only in practice; no-op outside a session.
+static func record_poke_claim() -> void:
+	if instance: instance._poke_claim_count += 1
+
+static func record_poke_claim_miss() -> void:
+	if instance: instance._poke_claim_miss_count += 1
+
+static func record_stick_lift_claim() -> void:
+	if instance: instance._stick_lift_claim_count += 1
+
+static func record_stick_lift_claim_miss() -> void:
+	if instance: instance._stick_lift_claim_miss_count += 1
+
+# Client-side optimistic-pickup outcomes (see the counter comment). pin is the
+# denominator; timeout is the felt "grab, then lose it".
+static func record_provisional_pin() -> void:
+	if instance: instance._provisional_pin_count += 1
+
+static func record_provisional_confirmed() -> void:
+	if instance: instance._provisional_confirmed_count += 1
+
+static func record_provisional_timeout() -> void:
+	if instance: instance._provisional_timeout_count += 1
+
+static func record_provisional_stolen() -> void:
+	if instance: instance._provisional_stolen_count += 1
+
 # Wall-clock microseconds between consecutive host physics ticks. Steady state
 # ≈ 4170us; a stall produces one large sample followed by near-zero catch-up
 # samples. Host-only.
@@ -349,6 +480,18 @@ static func record_host_physics_tick_us(us: int) -> void:
 	instance._phys_tick_samples_us.append(us)
 	if instance._phys_tick_samples_us.size() > PHYS_TICK_WINDOW:
 		instance._phys_tick_samples_us.pop_front()
+	if float(us) > _HOST_STALL_MS * 1000.0:
+		instance._host_stall_count += 1
+
+# Breadcrumb of the last notable host game-event transition, for stall
+# attribution — called from PhaseCoordinator.handle_phase_entered with the phase
+# name. Records the name and the session-second it fired so a marker can report
+# how long before the hitch it happened. No-op outside a session.
+static func note_host_event(name: String) -> void:
+	if instance == null:
+		return
+	instance._last_host_event = name
+	instance._last_host_event_sec = float(instance.session.seconds)
 
 # Wall-clock microseconds between consecutive `_broadcast_state()` calls on the
 # host. Should track the ~8.3ms (120Hz) physics-driven cadence.
@@ -452,6 +595,11 @@ func tick(delta: float) -> void:
 	_reconcile_mag_n = 0
 	_reconcile_lookup_count = 0
 	_reconcile_match_count = 0
+	_reconcile_miss_empty = 0
+	_reconcile_miss_older = 0
+	_reconcile_miss_newer = 0
+	_reconcile_miss_gap = 0
+	_reconcile_miss_gap_ms_max = 0.0
 	_recon_pos_trips = 0
 	_recon_vel_trips = 0
 	_recon_ubody_trips = 0
@@ -472,9 +620,24 @@ func tick(delta: float) -> void:
 	_puck_traj_soft_count = 0
 	_puck_traj_vel_only_count = 0
 	_puck_traj_hard_snap_count = 0
+	_shot_launch_pos_div_max = 0.0
+	_shot_launch_vel_div_max = 0.0
+	_shot_launch_count = 0
 	_input_lead_sum = 0.0
 	_input_lead_n = 0
 	_starvation_count = 0
+	_host_stall_count = 0
+	_pickup_claim_count = 0
+	_pickup_claim_miss_count = 0
+	_pickup_claim_deflect_count = 0
+	_poke_claim_count = 0
+	_poke_claim_miss_count = 0
+	_stick_lift_claim_count = 0
+	_stick_lift_claim_miss_count = 0
+	_provisional_pin_count = 0
+	_provisional_confirmed_count = 0
+	_provisional_timeout_count = 0
+	_provisional_stolen_count = 0
 	_window_timer = 0.0
 
 # Fold this window's published metrics into the session summary. Keys here are
@@ -518,12 +681,45 @@ func _fold_session_sample() -> void:
 		"input_queue_depth": float(input_queue_depth_median),
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,
+		"host_stalls": float(_host_stall_count),
 		"peer_count": float(current_peer_count),
 		# Rare-event tripwires fold as this window's raw COUNTS — TOTAL_KEYS in
 		# the summary, so the row carries a session total instead of an average
 		# that smears 3 hard snaps in a 10-minute game to ~0.
 		"puck_hard_snaps": float(_puck_traj_hard_snap_count),
 		"blade_jumps": float(_blade_jump_count),
+		# Reconcile-match miss attribution (TOTAL_KEYS). A miss → prediction-lead
+		# fallback → spurious position snap, so these split the residual reconcile
+		# churn by cause. gap_ms is a regular key (the view takes its _max).
+		"reconcile_miss_empty": float(_reconcile_miss_empty),
+		"reconcile_miss_older": float(_reconcile_miss_older),
+		"reconcile_miss_newer": float(_reconcile_miss_newer),
+		"reconcile_miss_gap": float(_reconcile_miss_gap),
+		"reconcile_miss_gap_ms": _reconcile_miss_gap_ms_max,
+		# Shot-launch divergence (client only): window-peak client-vs-host launch gap
+		# (regular keys → view takes _max), plus the session shot count (TOTAL).
+		"shot_launch_div_m": _shot_launch_pos_div_max,
+		"shot_launch_vel_div": _shot_launch_vel_div_max,
+		"shot_launches": float(_shot_launch_count),
+		# Host-side lag-comp pickup-claim outcomes (also TOTAL_KEYS session sums).
+		# On the host row, misses/claims ≈ rewind health (near-zero = working);
+		# deflects are the reached-but-not-catchable verdicts. Clients fold 0s.
+		"pickup_claims": float(_pickup_claim_count),
+		"pickup_claim_misses": float(_pickup_claim_miss_count),
+		"pickup_claim_deflects": float(_pickup_claim_deflect_count),
+		# Poke / stick-lift claim outcomes (also TOTAL_KEYS session sums). Same
+		# rewind-health read as pickup: misses/claims ≈ how often the host's rewind
+		# disagreed with the client's in-range view. Clients fold 0s.
+		"poke_claims": float(_poke_claim_count),
+		"poke_claim_misses": float(_poke_claim_miss_count),
+		"stick_lift_claims": float(_stick_lift_claim_count),
+		"stick_lift_claim_misses": float(_stick_lift_claim_miss_count),
+		# Client-side optimistic-pickup outcomes (TOTAL_KEYS). timeouts/pins is the
+		# felt grab-then-lose rate; the pin predicate gate should drive it to ~0.
+		"provisional_pins": float(_provisional_pin_count),
+		"provisional_confirmed": float(_provisional_confirmed_count),
+		"provisional_timeouts": float(_provisional_timeout_count),
+		"provisional_stolen": float(_provisional_stolen_count),
 		# Interp buffer depths (MIN_KEYS — running dry is the bad direction).
 		# Host rows fold structural 0s; `role` disambiguates at query time.
 		"buffer_depth_skater": float(buffer_depth_skater),
@@ -558,12 +754,30 @@ func recent_samples() -> Array[Dictionary]:
 	return _recent_samples.duplicate()
 
 
+# Freeze tripwires. A multi-second main-loop suspension (alt-tab, window drag,
+# OS suspend, a load hitch) does NOT register as a physics stall — the tick loop
+# isn't running to measure its own gap — so worst_stall_ms stays tiny while
+# broadcasts halt and the client-input queue backs up with stale inputs. These
+# two catch that class of freeze and, read together, localize it: broadcast_gap
+# fires when THIS host stopped sending, so both firing in a window ⇒ a host-side
+# freeze; input_backlog firing alone (broadcasts on-time, host draining stale
+# inputs) ⇒ the freeze was on the CLIENT's send side. Thresholds are physical,
+# not the F3 live BAND: 500 ms is half a second of no snapshots / half-a-second-
+# stale inputs — a visibly frozen world, well clear of the ~17 ms / ~240 ms
+# window ceilings a clean session ever reaches. Both metrics fold 0 on clients,
+# so these are naturally host-only.
+const _BROADCAST_GAP_MARKER_MS: float = 500.0
+const _INPUT_BACKLOG_MARKER_MS: float = 500.0
+
+
 # Objective anomaly markers — the same mechanism as a tester's F4 press, fired
 # automatically when a window crosses a tripwire, so rare bugs land with a
-# timestamp and a pre-history trace even when nobody reacted. Thresholds mirror
-# the F3 overlay's BAD bands (keep in sync with network_debug_overlay.gd and
-# docs/telemetry_dictionary.md); rarity is enforced by the summary's per-trigger
-# cooldown + session cap, so a broken session records the onset, not spam.
+# timestamp and a pre-history trace even when nobody reacted. Most thresholds
+# mirror the F3 overlay's BAD bands (keep in sync with network_debug_overlay.gd
+# and docs/telemetry_dictionary.md); the freeze tripwires (broadcast_gap /
+# input_backlog) instead use the suspension-scale thresholds above. Rarity is
+# enforced by the summary's per-trigger cooldown + session cap, so a broken
+# session records the onset, not spam.
 func _check_auto_markers() -> void:
 	if _puck_traj_hard_snap_count >= 2:
 		_auto_marker("puck_hard_snaps")
@@ -575,13 +789,26 @@ func _check_auto_markers() -> void:
 		_auto_marker("host_stall")
 	if input_starvations_per_sec >= 5.0:
 		_auto_marker("input_starvation")
+	if broadcast_interval_p95_ms >= _BROADCAST_GAP_MARKER_MS:
+		_auto_marker("broadcast_gap")
+	if input_lead_avg_ms >= _INPUT_BACKLOG_MARKER_MS:
+		_auto_marker("input_backlog")
 
 
 func _auto_marker(trigger: String) -> void:
-	# The pre-history's last entry IS the offending window, so the snapshot only
-	# carries what the numeric samples can't: the puck's replication mode.
-	session.record_auto_marker(float(session.seconds), trigger,
-			{"puck_mode": puck_mode}, recent_samples())
+	# The pre-history's last entry IS the offending window; the snapshot carries the
+	# context the numeric samples can't — the puck's replication mode, the live game
+	# phase + actor count, and the last game-event transition (with its age), so a
+	# host_stall can be pinned to a goal / faceoff / period handler vs steady play.
+	var snapshot: Dictionary = {
+		"puck_mode": puck_mode,
+		"phase": current_phase,
+		"actor_count": current_actor_count,
+	}
+	if not _last_host_event.is_empty():
+		snapshot["last_event"] = _last_host_event
+		snapshot["last_event_age_s"] = maxf(0.0, float(session.seconds) - _last_host_event_sec)
+	session.record_auto_marker(float(session.seconds), trigger, snapshot, recent_samples())
 
 
 # Fresh accumulator for a rematch: each game posts its own row keyed to its own

@@ -1,0 +1,29 @@
+keys,en,es
+PING_PASS_TO_ME,Pass to me!,¡Pásamela!
+PING_IM_OPEN,I'm open!,¡Estoy solo!
+PING_SHOOT,Shoot!,¡Tira!
+PING_GET_PUCK,Get the puck!,¡Al disco!
+PING_GET_OPEN,Get open!,¡Desmárcate!
+PING_PICK_HIM_UP,Pick him up!,¡Márcalo!
+PING_GET_HIM,Get him!,¡A por él!
+PING_COVER_HIM,Cover him!,¡Cúbrelo!
+PING_OVER_THERE,Over there!,¡Por allí!
+STAR_FIRST,1ST STAR,1.ª ESTRELLA
+STAR_SECOND,2ND STAR,2.ª ESTRELLA
+STAR_THIRD,3RD STAR,3.ª ESTRELLA
+STARS_OF_THE_GAME,★  STARS OF THE GAME  ★,★  ESTRELLAS DEL PARTIDO  ★
+TUTORIAL_MOVEMENT,Movement,Movimiento
+TUTORIAL_STICK_BASICS,Stick Basics,Manejo del Stick
+TUTORIAL_SHOOTING,Shooting,Tiro
+TUTORIAL_PASSING,Passing,Pases
+TUTORIAL_DEFENSE,Defense,Defensa
+TUTORIAL_RULES,Rules,Reglas
+TUTORIAL_PART_N_OF_M,Part %d of %d,Parte %d de %d
+TUTORIAL_COMPLETE_NAMED,%s Complete!,¡Has completado %s!
+TUTORIAL_COMPLETE_GENERIC,Tutorial Complete!,¡Tutorial completado!
+TUTORIAL_NEXT_SUBTITLE,That's %s done. Up next — %s: %s. Finish the set before you hit the ice.,Has completado %s. A continuación — %s: %s. Termina la serie antes de saltar al hielo.
+TUTORIAL_ALL_DONE,You know the ropes — now get out there.,Ya lo dominas — ahora salta al hielo.
+TUTORIAL_CONTINUE_CTA,Continue → %s: %s,Continuar → %s: %s
+DRILL_PENALTY_SHOTS,Penalty Shots,Penaltis
+DRILL_SHOT_ACCURACY,Shot Accuracy,Precisión de Tiro
+DRILL_PASSING,Passing,Pases

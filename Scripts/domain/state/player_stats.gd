@@ -21,6 +21,26 @@ var takeaways: int = 0
 var giveaways: int = 0
 var faceoff_wins: int = 0
 var faceoff_losses: int = 0
+# Stamped once by the host at the final horn (PhaseCoordinator's goal log →
+# the goal that put the winner past the loser's final total, NHL-style) and
+# broadcast like the counters above, so every peer's Three Stars selection
+# reads the same flag. Deliberately absent from to_dict(): the career_stats
+# table has no column for it, and PostgREST rejects rows with unknown keys —
+# adding it there means a schema migration first.
+var game_winning_goals: int = 0
+# Host-authoritative goal-flavor counters, broadcast like the counters above so
+# a client scorer's own copy reflects them at game-over (where the single-game
+# achievements read them). Like game_winning_goals, absent from to_dict(): the
+# career_stats table has no column for them.
+#   one_timer_goals — goals scored off a one-timer (shot from the shooting zone
+#                     without possessing the puck; PhaseCoordinator reads
+#                     ShotOnGoalTracker.pending_is_one_timer at goal time).
+#   tip_goals       — goals scored by redirecting a teammate's in-flight shot
+#                     (the scorer was the last, deflecting toucher, not the shooter).
+#   ot_goals        — goals scored in sudden-death overtime (always the winner).
+var one_timer_goals: int = 0
+var tip_goals: int = 0
+var ot_goals: int = 0
 # Tracked locally on every peer (game_manager._physics_process) rather than
 # host-authoritative + broadcast like the counters above. Each peer's own
 # value is what ships to Supabase, since report() runs per-peer at game-over.
@@ -33,7 +53,8 @@ var toi_seconds: float = 0.0
 # and PROTOCOL_VERSION is bumped whenever this grows.
 func to_array() -> Array:
 	return [goals, assists, shots_on_goal, hits, shots_blocked,
-			hits_taken, takeaways, giveaways, faceoff_wins, faceoff_losses]
+			hits_taken, takeaways, giveaways, faceoff_wins, faceoff_losses,
+			game_winning_goals, one_timer_goals, tip_goals, ot_goals]
 
 static func from_array(a: Array) -> PlayerStats:
 	var s := PlayerStats.new()
@@ -56,6 +77,10 @@ func update_from_array(a: Array) -> void:
 	giveaways = a[7]
 	faceoff_wins = a[8]
 	faceoff_losses = a[9]
+	game_winning_goals = a[10]
+	one_timer_goals = a[11]
+	tip_goals = a[12]
+	ot_goals = a[13]
 
 func to_dict() -> Dictionary:
 	return {
