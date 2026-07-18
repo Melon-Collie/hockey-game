@@ -103,7 +103,7 @@ func spawn_local_player(
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
 	controller.set_local_team_id(team_id)
-	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_medium())
+	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_average())
 	return {"skater": skater, "controller": controller}
 
 # ── AI player (skater + AIController) ────────────────────────────────────────
@@ -125,7 +125,7 @@ func spawn_ai_player(
 	var controller: AIController = AI_CONTROLLER_SCENE.instantiate()
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
-	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_medium())
+	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_average())
 	return {"skater": skater, "controller": controller}
 
 # ── Remote player (skater + RemoteController) ────────────────────────────────
@@ -143,5 +143,5 @@ func spawn_remote_player(
 	var controller: RemoteController = REMOTE_CONTROLLER_SCENE.instantiate()
 	_scene_root.add_child(controller)
 	controller.setup(skater, puck, game_state)
-	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_medium())
+	controller.apply_attributes(attributes if attributes != null else PlayerAttributes.all_average())
 	return {"skater": skater, "controller": controller}

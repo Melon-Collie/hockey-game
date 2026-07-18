@@ -17,6 +17,7 @@ class MovementConfig:
 	var friction_drag: float = 0.0               # velocity-proportional drag coefficient (m/s² per m/s)
 	var sprint_thrust_multiplier: float = 1.0     # thrust boost while sprinting (modest, to reach the cap)
 	var sprint_max_speed_multiplier: float = 1.0  # top-speed boost while sprinting (the headline effect)
+	var sprint_carry_penalty_bypass: float = 0.0  # fraction of the carry speed penalty waived WHILE sprinting (heads-down straight-line flat-out); 0 = no bypass
 
 static func apply_movement(
 		current_velocity: Vector3,
@@ -51,7 +52,14 @@ static func apply_movement(
 		# Speed cap — but preserve over-max speed from external sources (body
 		# check boost, etc.) so we don't instantly clamp a legitimate momentum gain.
 		var base_max: float = cfg.max_speed * sprint_max
-		var effective_max: float = base_max * cfg.puck_carry_speed_multiplier if has_puck else base_max
+		# Sprinting with the puck is heads-down and straight-line (the turn radius
+		# blows up anyway), so most of the carry speed penalty is waived while
+		# sprinting — that's what lets a fast carrier actually run. The 1.6x sprint
+		# stamina drain (StaminaRules) is the real cost of carrying at speed.
+		var carry_mult: float = cfg.puck_carry_speed_multiplier
+		if sprint_active:
+			carry_mult = lerpf(carry_mult, 1.0, cfg.sprint_carry_penalty_bypass)
+		var effective_max: float = base_max * carry_mult if has_puck else base_max
 		var horiz := Vector2(velocity.x, velocity.z)
 		var speed: float = horiz.length()
 		if speed > effective_max:

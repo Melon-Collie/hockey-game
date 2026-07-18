@@ -14,7 +14,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 @export var move_deadzone: float = 0.1
 @export var brake_multiplier: float = 4.0
-@export var puck_carry_speed_multiplier: float = 0.86
+@export var puck_carry_speed_multiplier: float = 0.92  # pre-apply default; per-build value is set by apply_attributes (PlayerAttributes.carry_speed_mult, Hands+Speed-eased)
 @export var backward_thrust_multiplier: float = 0.80
 @export var crossover_thrust_multiplier: float = 0.90
 # Ceiling on the velocity fed to the gait during the faceoff / intro skate-in
@@ -25,10 +25,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Sprint / Stamina Tuning ───────────────────────────────────────────────────
 # Sprint (Shift) burns a stamina pool for a top-speed burst. Boost is primarily
 # the speed cap; a smaller thrust bump lets you actually reach it. Stamina is a
-# 0..1 fraction; drain/regen are fractions-per-second. Flat for every player in
-# v1 (not attribute-scaled) — but the cap they multiply, max_speed, is already
-# Speed-scaled, so faster skaters get a proportionally faster sprint for free.
-@export var sprint_max_speed_multiplier: float = 1.18
+# 0..1 fraction; drain/regen are fractions-per-second.
+# sprint_max_speed_multiplier is now OVERWRITTEN per-build by apply_attributes
+# (PlayerAttributes.sprint_ceiling_mult) so the sprint CEILING is Speed-attributed
+# and grounded to the 20–25 mph NHL burst band — a burner opens a gear a plodder
+# doesn't have. This @export is just the pre-apply default (a neutral build).
+@export var sprint_max_speed_multiplier: float = 1.14
+# Fraction of the puck-carry speed penalty waived WHILE sprinting — heads-down,
+# straight-line, flat-out. Lets a fast carrier separate; the real carry cost is
+# the sprint stamina drain below, not an intrinsic slowdown.
+@export var sprint_carry_penalty_bypass: float = 0.6
 @export var sprint_thrust_multiplier: float = 1.20
 @export var sprint_drain_per_sec: float = 0.45         # ~2.2s of full sprint off-puck
 @export var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
@@ -1001,19 +1007,25 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 		return
 	if not _attr_base_captured:
 		_capture_attribute_bases()
-	var m_speed:   float = attrs.speed_mult()
-	var m_agility: float = attrs.agility_mult()
-	var m_size:    float = attrs.size_mult()
 	var m_height:  float = attrs.height_mult()
-	# Speed owns top-end velocity (and through it sprint payoff — sprint
-	# multiplies max_speed). Agility owns acceleration: thrust, plus the
-	# turn/brake/edge handling below. Splitting them makes Speed the
-	# straight-line stat and Agility the quickness/control stat.
-	max_speed = _base_max_speed * m_speed
-	thrust    = _base_thrust    * m_agility
+	# Skating splits into THREE height-routed sub-levers: Speed owns top-end
+	# velocity (max_speed; the sprint ceiling below scales off it), Acceleration
+	# owns thrust (forward burst — small-favored, floored above agility so a big
+	# weak-skater can still drive straight), and Agility owns the turn/brake/edge
+	# handling. Splitting burst off top speed lets a small player be explosive and
+	# shifty without owning the top gear, and a big weak-skater feel bad in the
+	# TURN rather than glued to the ice.
+	var m_agility: float = attrs.agility_mult()
+	max_speed = _base_max_speed * attrs.speed_mult()
+	thrust    = _base_thrust    * attrs.accel_mult()
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
 	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
+	# The sprint CEILING is Speed-attributed (grounded to the 20–25 mph NHL burst
+	# band), replacing the old flat multiplier that handed every skater the same
+	# top gear. A real burner opens a gear a plodder simply doesn't have — that's
+	# where puck-carrier separation lives now that cruise speeds are near-uniform.
+	sprint_max_speed_multiplier = attrs.sprint_ceiling_mult()
 	# friction_drag is velocity-proportional drag — scaling it inversely
 	# with Agility gives agile players the "good edges" feel: less momentum
 	# leaks through the blades during a cut, so they carry more speed out
@@ -1021,10 +1033,16 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# skater shares the same forward > lateral > backward shape; what makes
 	# Slick agile is how cleanly they transition between those directions.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
-	# Hands owns the puck game: blade speed (how fast the blade chases the cursor
-	# through the dangle arc and draws back to absorb fast passes), carry speed
-	# (how little the puck slows you), and the backhand finish below.
-	puck_carry_speed_multiplier = _base_puck_carry_speed_multiplier * attrs.hands_carry_mult()
+	# Carry speed retention is a small, Hands(primary)+Speed(secondary)-eased tax
+	# (elite dangler OR elite skater ≈ effortless). The real cost of carrying at
+	# speed is the 1.6x sprint stamina drain (StaminaRules), not an intrinsic
+	# slowdown — so a fast carrier CAN separate, in a stamina-limited burst. This
+	# is a computed value, not a base×mult, so it's set directly.
+	puck_carry_speed_multiplier = attrs.carry_speed_mult()
+	# Skill owns the puck game (blade speed / carry / backhand — small-favored) and
+	# the shot (power ceiling + wind-up — big-favored). Blade speed drives how fast
+	# the blade chases the cursor through the dangle arc and draws back to absorb
+	# fast passes.
 	max_blade_speed             = _base_max_blade_speed             * attrs.hands_blade_mult()
 	# Backhand coefficient scales UP toward 1.0 with Hands — a great backhand
 	# barely drops off (the in-tight finish that separates the dangler from the
@@ -1047,22 +1065,21 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# Slapper wind-up time keeps the gentler shot_charge curve. (Wrister power is
 	# pure mouse speed — no charge distance — so Shot only scales its ceiling.)
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
-	# Body checks read two attributes on different axes (so they compose, not
-	# double-count): Size sets `weight` (the weight_ratio — a heavy player is hard
-	# to MOVE and lands a heavier hit), Physical sets the transfer/brace
-	# coefficients (how hard you DELIVER a check, and how hard you are to PUT
-	# DOWN). Brace is inverse: lower = better resistance.
-	skater.weight                      = _base_skater_weight                  * attrs.size_weight_mult()
-	skater.body_check_transfer         = _base_skater_body_check_transfer     * attrs.physical_check_mult()
-	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * attrs.physical_brace_mult()
-	# Physical conditions the sprint engine on two SEPARATE curves: a gentle drain
-	# scale (sprint duration stays usable at every level) and a steep, asymmetric
-	# regen scale (recovery). A low-Physical player sprints nearly as long but is
-	# punished hard on recovery — gas the bar out and a full refill runs ~9 s
-	# (≈4.5 s to the half-bar sprint-unlock) vs ~3 s for high Physical. The cached
-	# stamina config is dropped below so the next tick rebuilds from these rates.
-	sprint_drain_per_sec  = _base_sprint_drain_per_sec  / attrs.physical_drain_mult()
-	stamina_regen_per_sec = _base_stamina_regen_per_sec * attrs.physical_regen_mult()
+	# Physical battles are Checking-decided; height is only a MINOR mass edge, not a
+	# substitute. `weight` (mass, the weight_ratio — hard to MOVE) is a small
+	# height lever; Checking sets delivery (how hard you DELIVER a check, tall-
+	# favored) and brace (how hard to PUT DOWN, tier-dominant — a big weak-Checking
+	# build is genuinely hittable). Brace is inverse: lower = better resistance.
+	skater.weight                      = _base_skater_weight                  * attrs.mass_mult()
+	skater.body_check_transfer         = _base_skater_body_check_transfer     * attrs.check_delivery_mult()
+	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * attrs.brace_mult()
+	# Stamina is height-flavored metabolism (no attribute touches it): a small player
+	# has a SHALLOWER pool (drains faster) but recovers FAST, a big player has a
+	# DEEP pool (drains slow) but recovers SLOWLY. So small = short repeatable
+	# bursts, big = one long drive then a slow refill. Both scales ride height. The
+	# cached stamina config is dropped below so the next tick rebuilds from these rates.
+	sprint_drain_per_sec  = _base_sprint_drain_per_sec  * attrs.stamina_drain_mult()
+	stamina_regen_per_sec = _base_stamina_regen_per_sec * attrs.stamina_regen_mult()
 	# Arms scale with actual height (the dedicated height_mult,
 	# tighter than the gameplay size_mult) — keeps proportions realistic so
 	# a taller player has correspondingly longer arms (and ROM) rather than
@@ -1110,18 +1127,18 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	var arm_eff: float = arm_total * rom_arm_extension
 	var reach_drop: float = skater.shoulder_height - hand_rest_y
 	rom_backhand_reach_max    = sqrt(maxf(arm_eff * arm_eff - reach_drop * reach_drop, 0.0))
-	# Hitbox: cylinder radius scales with the wider gameplay Size multiplier
-	# (matches body-check feel). Height is held CONSTANT for every player — a
-	# taller Size-scaled cylinder grew tall enough to touch several faces of the
-	# concave net/goal geometry at once and wedge the body in a corner. The
-	# visual mesh still scales on Y (appearance coordinator), so big players
-	# still look tall; only the physics hitbox height is fixed. Skater._ready()
-	# duplicated the shape so this mutation is per-instance and won't leak.
+	# Hitbox: cylinder radius scales with height (frame width — a taller player is
+	# a bit wider). Height is held CONSTANT for every player — a taller cylinder
+	# grew tall enough to touch several faces of the concave net/goal geometry at
+	# once and wedge the body in a corner. The visual mesh still scales on Y
+	# (appearance coordinator), so big players still look tall; only the physics
+	# hitbox height is fixed. Skater._ready() duplicated the shape so this mutation
+	# is per-instance and won't leak.
 	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if col != null:
 		var cyl: CylinderShape3D = col.shape as CylinderShape3D
 		if cyl != null:
-			cyl.radius = _base_skater_collision_radius * m_size
+			cyl.radius = _base_skater_collision_radius * attrs.radius_mult()
 			cyl.height = _base_skater_collision_height
 	# Attribute scaling rewrote the exports the cached configs were built
 	# from — drop them so the next tick rebuilds with the new values.
@@ -2349,6 +2366,7 @@ func _build_movement_config() -> SkaterMovementRules.MovementConfig:
 	cfg.crossover_thrust_multiplier = crossover_thrust_multiplier
 	cfg.sprint_thrust_multiplier = sprint_thrust_multiplier
 	cfg.sprint_max_speed_multiplier = sprint_max_speed_multiplier
+	cfg.sprint_carry_penalty_bypass = sprint_carry_penalty_bypass
 	return cfg
 
 # Stamina config is flat (not attribute-scaled), so a single lazily-built

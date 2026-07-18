@@ -1,7 +1,7 @@
 class_name AttributePickerPanel
 extends VBoxContainer
 
-# Reusable point-buy attribute picker with build presets. Embedded by both the
+# Reusable height + tier attribute picker with build presets. Embedded by both the
 # free-play PlayerSettingsPopup and the lobby's build editor so the two never
 # diverge. Owns a WORKING COPY of the player's presets (deep-copied from
 # PlayerPrefs on snapshot()) and edits it in place; the host commits or reverts:
@@ -13,32 +13,33 @@ extends VBoxContainer
 # The panel emits `changed` on every edit so the host can refresh its Apply
 # button; the host gates Apply on panel.is_dirty() and panel.is_valid().
 #
-# Invariant kept by the UI: you can't LEAVE a preset (switch chips / add a new
-# one) unless it spends exactly BUDGET, so every stored preset is a legal build.
-# The one preset that can be mid-spend is the active one you're currently
-# dragging — is_valid() blocks Apply until it's whole. A pre-existing
-# under-budget preset (legacy-migrated) doesn't block a name-only edit because
-# is_valid() only demands full budget once a build was actually touched.
+# A build is a free HEIGHT (5'8"..6'7") plus three TIERS (Skating / Skill /
+# Checking, weak/avg/strong). A LEGAL build spends exactly one strength and one
+# weakness (or all-average) — see PlayerAttributes.is_legal_build. Invariant kept
+# by the UI: you can't LEAVE a preset (switch chips / add a new one) unless it's
+# a legal shape; the one preset that can be mid-edit is the active one. is_valid()
+# only demands legality once a build was actually touched, so a name-only edit
+# over a pre-existing (migrated) preset isn't blocked.
 
 signal changed
 
-# Order matches PlayerAttributes.Attribute (Speed, Agility, Hands, Size,
-# Physical, Shot); the per-preset "levels" arrays are indexed by that enum.
-const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Hands", "Size", "Physical", "Shot"]
+# The three attribute tiers. Height is a separate, always-free dial handled above
+# these. The per-preset "levels" array is [height, skating, skill, checking].
+const _TIER_LABELS: Array[String] = ["Skating", "Skill", "Checking"]
+const _TIER_NAMES: Array[String] = ["Weak", "Average", "Strong"]  # tier 1..3
+const _HEIGHT_NAMES: Array[String] = ["5'8\"", "5'10\"", "6'1\"", "6'4\"", "6'7\""]
 
-# Hover tooltips, one per attribute (same enum order). Headline effects only —
-# what the player feels — not the multiplier tables (those live on
-# PlayerAttributes and shift with tuning).
-const _ATTR_TOOLTIPS: Array[String] = [
-	"Top skating speed.\nAlso raises the sprint ceiling — sprint multiplies this.",
-	"Acceleration, turn rate, braking, and edge glide.",
-	"Faster blade for dangles and catching hard passes,\nless slowdown carrying the puck, stronger backhand.",
-	"Height, reach, and mass — longer stick, harder to\nknock off the puck, and your hits carry more momentum.",
-	"Deliver bigger checks that stagger and strip the puck,\nbrace against hits, and burn/recover stamina better.",
-	"Higher charged-shot power ceiling and a faster wrister\ncharge. Quick shot & pass speed stay equal for everyone.",
+# Hover tooltips. Headline effects only — height decides the baselines and how
+# each tier's payoff lands (small = agility/hands/elusive, big = speed/shot/hits).
+const _HEIGHT_TOOLTIP: String = "Frame: reach, mass, and the speed/agility/shot/hands baselines.\nSmall = quicker & shiftier with better hands; big = harder shot & hits."
+const _TIER_TOOLTIPS: Array[String] = [
+	"Speed, acceleration, and agility. Small frames turn this into\nelite agility; big frames into straight-line speed.",
+	"Hands (dangle / carry / backhand) and shot power. Small frames\nlean it into hands; big frames into a harder shot.",
+	"Delivering checks and resisting them. Big frames lay bigger hits;\nsmall frames get elusive and hard to knock off the puck.",
 ]
 
-# Working copy: Array of {"name": String, "levels": Array[int]} (six levels).
+# Working copy: Array of {"name": String, "levels": Array[int]}: [height, skating,
+# skill, checking] — height 1..5, each tier 1..3.
 var _working: Array[Dictionary] = []
 var _active: int = 0
 # Deep copy taken on snapshot(); restore() reverts to it and is_dirty() compares
@@ -53,10 +54,12 @@ var _chip_buttons: Array[Button] = []
 var _new_btn: Button = null
 var _delete_btn: Button = null
 var _name_field: LineEdit = null
-var _points_label: Label = null
+var _status_label: Label = null
 var _lock_label: Label = null
-var _attr_sliders: Array[HSlider] = []
-var _attr_value_labels: Array[Label] = []
+var _height_slider: HSlider = null
+var _height_value_label: Label = null
+var _tier_sliders: Array[HSlider] = []
+var _tier_value_labels: Array[Label] = []
 
 
 func _ready() -> void:
@@ -75,10 +78,10 @@ func _build() -> void:
 	_build_preset_row()
 	_build_name_row()
 
-	_points_label = Label.new()
-	_points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_points_label.add_theme_font_size_override("font_size", 14)
-	add_child(_points_label)
+	_status_label = Label.new()
+	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_status_label.add_theme_font_size_override("font_size", 14)
+	add_child(_status_label)
 
 	_lock_label = Label.new()
 	_lock_label.text = "Locked during online play."
@@ -88,10 +91,11 @@ func _build() -> void:
 	_lock_label.visible = false
 	add_child(_lock_label)
 
-	_attr_sliders = []
-	_attr_value_labels = []
-	for attr_idx: int in _ATTR_LABELS.size():
-		_build_attribute_slider_row(attr_idx)
+	_build_height_row()
+	_tier_sliders = []
+	_tier_value_labels = []
+	for tier_idx: int in _TIER_LABELS.size():
+		_build_tier_slider_row(tier_idx)
 
 
 func _build_preset_row() -> void:
@@ -151,43 +155,78 @@ func _build_name_row() -> void:
 	row.add_child(_name_field)
 
 
-func _build_attribute_slider_row(attr_idx: int) -> void:
+func _build_height_row() -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 12)
 	add_child(row)
 
 	var label := Label.new()
-	label.text = _ATTR_LABELS[attr_idx]
+	label.text = "Height"
 	label.custom_minimum_size = Vector2(80, 0)
 	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	# Labels ignore the mouse by default, which suppresses tooltips.
 	label.mouse_filter = Control.MOUSE_FILTER_STOP
-	label.tooltip_text = _ATTR_TOOLTIPS[attr_idx]
+	label.tooltip_text = _HEIGHT_TOOLTIP
+	row.add_child(label)
+
+	_height_slider = HSlider.new()
+	_height_slider.min_value = PlayerAttributes.HEIGHT_MIN
+	_height_slider.max_value = PlayerAttributes.HEIGHT_MAX
+	_height_slider.step = 1
+	_height_slider.custom_minimum_size = Vector2(200, 36)
+	_height_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_height_slider.set_value_no_signal(PlayerAttributes.HEIGHT_MEDIUM)
+	_height_slider.tooltip_text = _HEIGHT_TOOLTIP
+	_height_slider.value_changed.connect(_on_height_changed)
+	row.add_child(_height_slider)
+
+	_height_value_label = Label.new()
+	_height_value_label.custom_minimum_size = Vector2(52, 0)
+	_height_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_height_value_label.add_theme_font_size_override("font_size", 18)
+	_height_value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	_height_value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_height_value_label)
+
+
+func _build_tier_slider_row(tier_idx: int) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	add_child(row)
+
+	var label := Label.new()
+	label.text = _TIER_LABELS[tier_idx]
+	label.custom_minimum_size = Vector2(80, 0)
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_STOP
+	label.tooltip_text = _TIER_TOOLTIPS[tier_idx]
 	row.add_child(label)
 
 	var slider := HSlider.new()
-	slider.min_value = PlayerAttributes.LEVEL_MIN
-	slider.max_value = PlayerAttributes.LEVEL_MAX
+	slider.min_value = PlayerAttributes.TIER_WEAK
+	slider.max_value = PlayerAttributes.TIER_STRONG
 	slider.step = 1
 	slider.custom_minimum_size = Vector2(200, 36)
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	slider.set_value_no_signal(PlayerAttributes.LEVEL_MEDIUM)
-	slider.tooltip_text = _ATTR_TOOLTIPS[attr_idx]
-	slider.value_changed.connect(_on_slider_changed.bind(attr_idx))
+	slider.set_value_no_signal(PlayerAttributes.TIER_AVERAGE)
+	slider.tooltip_text = _TIER_TOOLTIPS[tier_idx]
+	slider.value_changed.connect(_on_tier_changed.bind(tier_idx))
 	row.add_child(slider)
-	_attr_sliders.append(slider)
+	_tier_sliders.append(slider)
 
 	var value_label := Label.new()
-	value_label.custom_minimum_size = Vector2(24, 0)
+	value_label.custom_minimum_size = Vector2(64, 0)
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	value_label.add_theme_font_size_override("font_size", 18)
 	value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(value_label)
-	_attr_value_labels.append(value_label)
+	_tier_value_labels.append(value_label)
 
 
 # ── Host API ─────────────────────────────────────────────────────────────────
@@ -195,7 +234,7 @@ func _build_attribute_slider_row(attr_idx: int) -> void:
 # Whether attribute editing is disabled (an active online match locks the build).
 func set_locked(locked: bool) -> void:
 	_locked = locked
-	if not _attr_sliders.is_empty():
+	if not _tier_sliders.is_empty():
 		_refresh()
 
 
@@ -238,18 +277,27 @@ func is_dirty() -> bool:
 	return false
 
 
-# Valid to commit: full budget is only required once a build was actually
-# touched, so a name-only edit over a legacy under-budget preset isn't blocked.
+# Valid to commit: legality is only required once a build was actually touched,
+# so a name-only edit over a pre-existing (migrated) preset isn't blocked.
 func is_valid() -> bool:
-	return not _builds_changed() or _all_full_budget()
+	return not _builds_changed() or _all_legal()
 
 
 # ── Interaction ──────────────────────────────────────────────────────────────
 
-func _on_slider_changed(value: float, attr_idx: int) -> void:
+func _on_height_changed(value: float) -> void:
 	if _active < 0 or _active >= _working.size():
 		return
-	(_working[_active]["levels"] as Array)[attr_idx] = int(value)
+	(_working[_active]["levels"] as Array)[0] = int(value)
+	_refresh()
+	changed.emit()
+
+
+func _on_tier_changed(value: float, tier_idx: int) -> void:
+	if _active < 0 or _active >= _working.size():
+		return
+	# levels[0] is height; tiers live at levels[1..3].
+	(_working[_active]["levels"] as Array)[tier_idx + 1] = int(value)
 	_refresh()
 	changed.emit()
 
@@ -317,22 +365,25 @@ func _rebuild_chips() -> void:
 		_chip_buttons.append(chip)
 
 
-# Refresh sliders, value labels, points readout, chip states, and button enables
+# Refresh sliders, value labels, status readout, chip states, and button enables
 # from the working model. Does NOT touch the name field (avoids clobbering typing
 # / focus) — that's done by _load_active_into_name_field on preset switches.
 func _refresh() -> void:
-	if _attr_sliders.is_empty() or _active < 0 or _active >= _working.size():
+	if _tier_sliders.is_empty() or _active < 0 or _active >= _working.size():
 		return
 	var levels: Array = _working[_active]["levels"]
-	for i: int in _attr_sliders.size():
-		_attr_sliders[i].set_value_no_signal(levels[i])
-		_attr_sliders[i].editable = not _locked
-		_attr_value_labels[i].text = str(levels[i])
+	_height_slider.set_value_no_signal(levels[0])
+	_height_slider.editable = not _locked
+	_height_value_label.text = _height_name(int(levels[0]))
+	for i: int in _tier_sliders.size():
+		_tier_sliders[i].set_value_no_signal(levels[i + 1])
+		_tier_sliders[i].editable = not _locked
+		_tier_value_labels[i].text = _TIER_NAMES[clampi(int(levels[i + 1]) - 1, 0, 2)]
 
-	var spent: int = _spend(levels)
-	_points_label.text = "Points: %d / %d" % [spent, PlayerAttributes.BUDGET]
-	_points_label.add_theme_color_override("font_color",
-			MenuStyle.TEXT_BODY if spent == PlayerAttributes.BUDGET else MenuStyle.DANGER)
+	var legal: bool = _levels_legal(levels)
+	_status_label.text = _shape_status(levels)
+	_status_label.add_theme_color_override("font_color",
+			MenuStyle.TEXT_BODY if legal else MenuStyle.DANGER)
 
 	_lock_label.visible = _locked
 	_name_field.editable = not _locked
@@ -342,7 +393,7 @@ func _refresh() -> void:
 	var can_leave: bool = _can_leave_active()
 	for i: int in _chip_buttons.size():
 		MenuStyle.apply_tab_button(_chip_buttons[i], i == _active)
-		# Can't jump off a half-spent build; the active chip stays clickable.
+		# Can't jump off an illegal build; the active chip stays clickable.
 		_chip_buttons[i].disabled = _locked or (i != _active and not can_leave)
 
 
@@ -357,7 +408,7 @@ func _read_prefs_working() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for p: Dictionary in PlayerPrefs.get_presets():
 		var a: PlayerAttributes = p["attrs"]
-		var levels: Array[int] = [a.speed, a.agility, a.hands, a.size, a.physical, a.shot]
+		var levels: Array[int] = [a.height, a.skating, a.skill, a.checking]
 		out.append({"name": String(p["name"]), "levels": levels})
 	return out
 
@@ -376,20 +427,37 @@ func _dup_levels(levels: Array) -> Array[int]:
 	return out
 
 
-func _spend(levels: Array) -> int:
-	var total: int = 0
-	for v: int in levels:
-		total += v
-	return total
+# levels = [height, skating, skill, checking].
+func _levels_legal(levels: Array) -> bool:
+	if levels.size() < 4:
+		return false
+	return PlayerAttributes.is_legal_build(
+			int(levels[0]), int(levels[1]), int(levels[2]), int(levels[3]))
+
+
+# Human-readable status for the active build's shape.
+func _shape_status(levels: Array) -> String:
+	var strong: int = 0
+	var weak: int = 0
+	for i: int in [1, 2, 3]:
+		if int(levels[i]) == PlayerAttributes.TIER_STRONG:
+			strong += 1
+		elif int(levels[i]) == PlayerAttributes.TIER_WEAK:
+			weak += 1
+	if strong > weak:
+		return "Each strength needs a weakness"
+	if strong == 0 and weak == 0:
+		return "All-average ✓"
+	return "1 strength, 1 weakness ✓" if strong == 1 else "Legal ✓"
 
 
 func _can_leave_active() -> bool:
-	return _spend(_working[_active]["levels"]) == PlayerAttributes.BUDGET
+	return _levels_legal(_working[_active]["levels"])
 
 
-func _all_full_budget() -> bool:
+func _all_legal() -> bool:
 	for e: Dictionary in _working:
-		if _spend(e["levels"]) != PlayerAttributes.BUDGET:
+		if not _levels_legal(e["levels"]):
 			return false
 	return true
 
@@ -411,6 +479,10 @@ func _levels_equal(a: Array, b: Array) -> bool:
 		if int(a[i]) != int(b[i]):
 			return false
 	return true
+
+
+func _height_name(level: int) -> String:
+	return _HEIGHT_NAMES[clampi(level - PlayerAttributes.HEIGHT_MIN, 0, _HEIGHT_NAMES.size() - 1)]
 
 
 func _default_preset_name() -> String:

@@ -138,7 +138,12 @@ const VERSION: String = "dev"
 #      OWN measured downstream loss in basis points, stored verbatim as the peer
 #      loss. Same header size, but a mixed-build host would read the field as a
 #      seq and mis-estimate loss, so a bump is required.
-const PROTOCOL_VERSION: int = 34
+# v35: attributes model replaced — request_join / request_update_attributes carry
+#      the new height + three-tier build (4 ints: height/skating/skill/checking)
+#      instead of the old six 1..5 attributes. Host validates with is_legal_build
+#      (one-strong-one-weak) instead of the point-buy budget. Fewer positional
+#      args on both RPCs, so a mixed-build pair decodes garbage — bump required.
+const PROTOCOL_VERSION: int = 35
 
 
 func _ready() -> void:
