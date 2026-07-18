@@ -79,45 +79,6 @@ static func incremental_stamina_drain(prev_stagger_timer: float, impulse_mag: fl
 	return ((add - prev_stagger_timer) / cfg.max_stagger_seconds) * cfg.max_stamina_drain
 
 
-# The transfer-impulse magnitude a body check actually lands on its victim: closing
-# speed along the hit normal × mass ratio × the victim's brace-adjusted transfer.
-# This single magnitude is the shared "how hard did it land" number every downstream
-# effect keys off — the victim's knockback (Skater._resolve_player_collisions), the
-# stagger it inflicts, the puck strip (reconstructed from impact_force by
-# puck_strip_impulse below), and the attacker's own drive-through rebound
-# (attacker_restitution). Folding the brace in HERE is what makes a committed hit on
-# a braced/immovable victim peel off in a battle instead of the attacker gluing to
-# them: the brace cuts the delivered impulse, which raises the rebound.
-static func delivered_transfer_impulse(
-		approach: float,
-		weight_ratio: float,
-		attacker_transfer: float,
-		victim_brace_resistance: float,
-		victim_braced: bool) -> float:
-	var effective_transfer: float = attacker_transfer * (victim_brace_resistance if victim_braced else 1.0)
-	return approach * weight_ratio * effective_transfer
-
-
-# Attacker rebound (restitution) for a hit, scaled DOWN as the delivered impulse
-# rises: a glancing shoulder bounces the attacker back at base_restitution, a
-# squared-up monster hit falls toward floor_restitution (~0) so the attacker
-# "drives through" the check and keeps their forward momentum to arrive on the
-# loose puck instead of rebounding off the victim. Keyed off the same delivered
-# impulse magnitude the puck strip and stagger use, so a harder hit reads harder
-# everywhere. Pure floats (no Config) to keep the hot-path collision resolver in
-# skater.gd decoupled from the stagger Config.
-static func attacker_restitution(
-		delivered_impulse: float,
-		base_restitution: float,
-		floor_restitution: float,
-		min_impulse: float,
-		ref_impulse: float) -> float:
-	if ref_impulse <= min_impulse:
-		return base_restitution
-	var t: float = clampf((delivered_impulse - min_impulse) / (ref_impulse - min_impulse), 0.0, 1.0)
-	return lerpf(base_restitution, floor_restitution, t)
-
-
 # Thrust multiplier (<= 1.0) for the stagger remaining this tick. The penalty is
 # proportional to the fraction of a full-strength window still on the clock, so a
 # harder hit (longer timer) both starts deeper and takes longer to ease back to
@@ -130,24 +91,29 @@ static func thrust_mult(stagger_timer: float, cfg: Config) -> float:
 
 
 # The victim transfer-impulse the puck-strip / pickup-denial decision keys off —
-# the SAME "how hard did it land on the victim" magnitude the stagger uses, so a
-# hit's Physical (transfer), both skaters' Size (attacker + victim mass), and the
-# closing Speed all decide whether the puck comes loose. A low-Physical shove
-# barely jars it; an enforcer strips it clean.
+# the SAME "how hard did it land on the victim" magnitude the stagger uses (the
+# actually-applied |Δv|), so a hit's Physical (transfer), both skaters' Size
+# (attacker + victim mass), and the closing Speed all decide whether the puck
+# comes loose. A low-Physical shove barely jars it; an enforcer strips it clean.
 #
 # Reconstructed from impact_force = attacker_weight × approach (what the
-# body_checked_player signal carries) so the attacker-weight term cancels:
-#     delivered = approach × (att_weight / vic_weight) × effective_transfer
-#               = (impact_force / att_weight) × (att_weight / vic_weight) × eff
-#               = impact_force × effective_transfer / vic_weight
-# MUST stay equal to the knockback magnitude in
-# Skater._resolve_player_collisions (`other.velocity -= normal × approach ×
-# weight_ratio × effective_transfer`); test_body_check_rules locks the identity.
+# body_checked_player signal carries): closing = impact_force / attacker_weight,
+# then the delivery is the collision resolver's OWN function
+# (SkaterCollisionRules.victim_kick — the exact inelastic reduced-mass kick
+# resolve() applies), with the brace folded into the transfer the same way the
+# resolver call site does. Delegating rather than mirroring is the point: the
+# pre-inelastic weight-ratio reconstruction here went silently stale when the
+# resolver was rewritten (~2× the real kick at equal masses, wrong Size curve);
+# now a delivery-model change propagates here in the same edit.
+# test_body_check_rules locks the identity against a live resolve() contact.
 static func puck_strip_impulse(
 		impact_force: float,
+		attacker_weight: float,
 		attacker_transfer: float,
 		victim_weight: float,
 		victim_brace_resistance: float,
 		victim_braced: bool) -> float:
 	var effective_transfer: float = attacker_transfer * (victim_brace_resistance if victim_braced else 1.0)
-	return impact_force * effective_transfer / maxf(victim_weight, 0.001)
+	return SkaterCollisionRules.victim_kick(
+			impact_force / maxf(attacker_weight, 0.001),
+			attacker_weight, victim_weight, effective_transfer)

@@ -769,7 +769,7 @@ func _resolve_player_collisions() -> void:
 		# resolver, skipping churn the next host snapshot overwrites. The emit records
 		# the victim's incoming impulse for ITS reconcile replay and drives the stagger
 		# (body_check_received). The knockback magnitude (|dvel_b|) is now the inelastic
-		# reduced-mass impulse, not the old weight-ratio delivered_transfer_impulse.
+		# reduced-mass impulse, not the old weight-ratio transfer formula.
 		if is_host_machine or other.is_local_skater:
 			other.global_position += _collision_result.sep_b
 			var other_vel_before: Vector3 = other.velocity

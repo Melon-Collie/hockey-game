@@ -23,7 +23,8 @@ func _eval(carrier_pos: Vector3, carrier_vel: Vector3, transfer: float,
 
 func test_high_physical_commits_on_stationary_carrier() -> void:
 	# Carrier 4 m away, head-on, stationary. A high-Physical checker predicts a
-	# separating hit (9 × 1 × 0.61 ≈ 5.5 ≥ 5) and commits.
+	# full-strength hit (9 × 0.61 × 0.5 ≈ 2.7 ≥ 2.5, the inelastic
+	# reduced-mass delivery at equal masses) and commits.
 	var r: AIBodyCheck.Result = _eval(Vector3(4, 0, 0), Vector3.ZERO, HIGH_TRANSFER)
 	assert_true(r.commit, "high-Physical checker commits to a reachable hit")
 	assert_almost_eq(r.target.x, 4.0, 0.3, "target is the body intercept")
@@ -31,15 +32,15 @@ func test_high_physical_commits_on_stationary_carrier() -> void:
 
 func test_low_physical_does_not_commit_same_geometry() -> void:
 	# Identical geometry; a low-Physical checker predicts a bounce-off
-	# (9 × 1 × 0.29 ≈ 2.6 < 5) and stays in position instead of whiffing.
+	# (9 × 0.29 × 0.5 ≈ 1.3 < 2.5) and stays in position instead of whiffing.
 	var r: AIBodyCheck.Result = _eval(Vector3(4, 0, 0), Vector3.ZERO, LOW_TRANSFER)
 	assert_false(r.commit, "low-Physical checker won't commit to a soft hit")
 
 
 func test_heavy_victim_bounces_off_a_committing_checker() -> void:
-	# HIGH_TRANSFER commits on a league-weight carrier (9 × 1 × 0.61 ≈ 5.5 ≥ 5).
+	# HIGH_TRANSFER commits on a league-weight carrier (9 × 0.61 × 0.5 ≈ 2.7 ≥ 2.5).
 	# Against a HEAVY carrier (Size — weight 1.4) the same hit moves it less
-	# (9 × 1/1.4 × 0.61 ≈ 3.9 < 5), so the checker won't leave its feet for it.
+	# (9 × 0.61 × 1/2.4 ≈ 2.3 < 2.5), so the checker won't leave its feet for it.
 	var vs_league: AIBodyCheck.Result = AIBodyCheck.evaluate(
 			SELF_POS, SELF_SPEED, WEIGHT, HIGH_TRANSFER, 0.0,
 			Vector3(4, 0, 0), Vector3.ZERO)
@@ -52,11 +53,11 @@ func test_heavy_victim_bounces_off_a_committing_checker() -> void:
 
 func test_medium_holds_on_stationary_but_commits_when_carrier_closes() -> void:
 	# A medium checker doesn't hunt a stationary carrier head-on
-	# (9 × 0.45 ≈ 4.05 < 5)...
+	# (9 × 0.45 × 0.5 ≈ 2.0 < 2.5)...
 	var still: AIBodyCheck.Result = _eval(Vector3(4, 0, 0), Vector3.ZERO, BASE_TRANSFER)
 	assert_false(still.commit, "medium checker holds vs a stationary carrier")
 	# ...but a carrier skating INTO the check raises the closing speed
-	# (≈13 × 0.45 ≈ 5.85 ≥ 5), so the bigger collision is worth committing to.
+	# (13 × 0.45 × 0.5 ≈ 2.9 ≥ 2.5), so the bigger collision is worth committing to.
 	var closing: AIBodyCheck.Result = _eval(Vector3(4, 0, 0), Vector3(-4, 0, 0), BASE_TRANSFER)
 	assert_true(closing.commit, "medium checker commits when the carrier closes on it")
 
@@ -91,7 +92,7 @@ func test_no_commit_while_staggered() -> void:
 
 func test_raised_commit_threshold_suppresses_a_marginal_hit() -> void:
 	# The same high-Physical head-on hit that commits at the default threshold
-	# (impulse ≈ 5.5) is declined once an easier tier raises the required impulse
+	# (impulse ≈ 2.7) is declined once an easier tier raises the required impulse
 	# above it — the bot only commits to harder hits, or (at the extreme) none.
 	var default_commit: AIBodyCheck.Result = AIBodyCheck.evaluate(
 			SELF_POS, SELF_SPEED, WEIGHT, HIGH_TRANSFER, 0.0,
@@ -99,5 +100,5 @@ func test_raised_commit_threshold_suppresses_a_marginal_hit() -> void:
 	assert_true(default_commit.commit, "commits at the default threshold")
 	var raised: AIBodyCheck.Result = AIBodyCheck.evaluate(
 			SELF_POS, SELF_SPEED, WEIGHT, HIGH_TRANSFER, 0.0,
-			Vector3(4, 0, 0), Vector3.ZERO, 7.0)
+			Vector3(4, 0, 0), Vector3.ZERO, 3.5)
 	assert_false(raised.commit, "declines the same hit once the threshold is raised")

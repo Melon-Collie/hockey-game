@@ -80,17 +80,20 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var poke_strip_max_speed: float = 9.0
 @export var poke_carrier_vel_blend: float = 0.5
 @export var poke_checker_cooldown: float = 0.1
-# Delivered victim-impulse (BodyCheckRules.puck_strip_impulse: attacker transfer ×
-# both masses × closing speed) needed to knock the puck off the carrier. 2.7 keeps
-# the pre-Physical baseline strip point (~6 m/s closing, medium build) while now
-# letting Physical/mass move it: an enforcer strips at lower closing speed, a
+# Delivered victim-impulse (BodyCheckRules.puck_strip_impulse — the REAL applied
+# knockback |Δv|, via SkaterCollisionRules.victim_kick) needed to knock the puck
+# off the carrier. The ladder sits on the same inelastic scale as the stagger
+# exports (SkaterController's 1.0 min / 2.5 full-strength): 1.35 keeps the
+# equal-mass baseline strip point (~6 m/s closing, medium build — the old 2.7 bar
+# on the pre-inelastic reconstruction, which read ~2× the real kick) while
+# Physical/mass move it honestly: an enforcer strips at lower closing speed, a
 # low-Physical hit needs much more.
-@export var body_check_strip_threshold: float = 2.7
+@export var body_check_strip_threshold: float = 1.35
 @export var body_check_puck_speed: float = 3.0           # soft-strip trickle pace along the hit line
 @export var body_check_loose_speed: float = 0.8          # forward carry a full-strength hit leaves (puck drops loose at contact)
-@export var body_check_strip_ref_impulse: float = 11.0   # delivered impulse that fully deadens the strip (puck jarred dead)
+@export var body_check_strip_ref_impulse: float = 5.5    # delivered impulse that fully deadens the strip (puck jarred dead)
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
-@export var hit_pickup_cooldown_threshold: float = 2.7    # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
+@export var hit_pickup_cooldown_threshold: float = 1.35   # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
 @export var body_block_cooldown: float = 0.1
 # Vertical clamp: the puck's Y is capped at ice_height + max_height in
@@ -409,7 +412,7 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 	var checker_transfer: float = checker.body_check_transfer \
 			* (1.0 if checker.hit_committed else checker.hit_passive_transfer_mult)
 	var strip_impulse: float = BodyCheckRules.puck_strip_impulse(
-			impact_force, checker_transfer,
+			impact_force, checker.weight, checker_transfer,
 			victim.weight, victim.body_check_brace_resistance, victim.hit_committed)
 	if strip_impulse < hit_pickup_cooldown_threshold:
 		return

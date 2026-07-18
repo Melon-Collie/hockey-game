@@ -123,111 +123,56 @@ func test_thrust_mult_clamps_overlong_timer() -> void:
 	assert_almost_eq(BodyCheckRules.thrust_mult(5.0, _cfg), 0.5, 0.0001, "over-window timer caps at peak penalty")
 
 
-# ── attacker_restitution ──────────────────────────────────────────────────────
-# The attacker's rebound eases from base (glancing) down to floor (drive through)
-# as the delivered impulse rises between min_impulse and ref_impulse.
-
-func test_restitution_full_below_min() -> void:
-	assert_almost_eq(BodyCheckRules.attacker_restitution(4.0, 0.25, 0.0, 4.0, 11.0), 0.25, 0.0001,
-			"at/below min impulse → full base rebound")
-	assert_almost_eq(BodyCheckRules.attacker_restitution(1.0, 0.25, 0.0, 4.0, 11.0), 0.25, 0.0001,
-			"below min clamps to base")
-
-func test_restitution_floor_at_or_above_ref() -> void:
-	assert_almost_eq(BodyCheckRules.attacker_restitution(11.0, 0.25, 0.0, 4.0, 11.0), 0.0, 0.0001,
-			"full-strength hit drives through → floor rebound")
-	assert_almost_eq(BodyCheckRules.attacker_restitution(20.0, 0.25, 0.0, 4.0, 11.0), 0.0, 0.0001,
-			"above ref clamps to floor")
-
-func test_restitution_lerps_between() -> void:
-	# midpoint 7.5 between 4 and 11 → halfway from 0.25 to 0.0 = 0.125
-	assert_almost_eq(BodyCheckRules.attacker_restitution(7.5, 0.25, 0.0, 4.0, 11.0), 0.125, 0.0001,
-			"midpoint impulse → half the rebound")
-	assert_lt(BodyCheckRules.attacker_restitution(9.0, 0.25, 0.0, 4.0, 11.0),
-			BodyCheckRules.attacker_restitution(6.0, 0.25, 0.0, 4.0, 11.0),
-			"harder hit → less rebound (more drive-through)")
-
-func test_restitution_degenerate_band_is_safe() -> void:
-	assert_almost_eq(BodyCheckRules.attacker_restitution(10.0, 0.25, 0.0, 11.0, 11.0), 0.25, 0.0001,
-			"ref<=min never divides by zero — falls back to base")
-
-func test_restitution_honors_nonzero_floor() -> void:
-	assert_almost_eq(BodyCheckRules.attacker_restitution(11.0, 0.25, 0.1, 4.0, 11.0), 0.1, 0.0001,
-			"a full hit eases to the configured floor, not necessarily zero")
-
-
-# ── delivered_transfer_impulse ────────────────────────────────────────────────
-# The shared "how hard did it land on the victim" magnitude — closing speed × mass
-# ratio × brace-adjusted transfer — that the knockback, stagger, strip, and (the
-# point of these cases) the attacker's drive-through vs peel-off rebound all key off.
-
-func test_delivered_impulse_matches_raw_formula() -> void:
-	# approach 8 × weight_ratio 1.0 × transfer 0.45, unbraced.
-	assert_almost_eq(BodyCheckRules.delivered_transfer_impulse(8.0, 1.0, 0.45, 0.4, false),
-			3.6, 0.0001, "unbraced delivered impulse = approach × weight_ratio × transfer")
-
-func test_delivered_impulse_brace_cuts_it() -> void:
-	var open: float = BodyCheckRules.delivered_transfer_impulse(8.0, 1.0, 0.45, 0.4, false)
-	var braced: float = BodyCheckRules.delivered_transfer_impulse(8.0, 1.0, 0.45, 0.4, true)
-	assert_lt(braced, open, "a braced victim absorbs less of the hit")
-	assert_almost_eq(braced, open * 0.4, 0.0001, "brace scales the delivered impulse by brace_resistance")
-
-func test_braced_victim_makes_attacker_peel_off_not_drive_through() -> void:
-	# Regression guard for the "stuck to them" fix: the SAME committed hit (high
-	# closing speed, equal masses) into an open vs a braced victim. The open victim is
-	# sent flying → the attacker's rebound falls toward the floor (drives through onto
-	# the loose puck); the braced victim holds → the brace cuts the delivered impulse,
-	# so the attacker keeps a real rebound and peels off in a battle instead of gluing.
-	var open: float = BodyCheckRules.delivered_transfer_impulse(14.0, 1.2, 0.45, 0.4, false)
-	var braced: float = BodyCheckRules.delivered_transfer_impulse(14.0, 1.2, 0.45, 0.4, true)
-	var rebound_open: float = BodyCheckRules.attacker_restitution(open, 0.25, 0.0, 4.0, 11.0)
-	var rebound_braced: float = BodyCheckRules.attacker_restitution(braced, 0.25, 0.0, 4.0, 11.0)
-	assert_gt(rebound_braced, rebound_open, "braced victim → more attacker rebound (peel off, not drive through)")
-	assert_gt(rebound_braced, 0.0, "a braced hit leaves a real rebound so the bodies separate")
-
-
 # ── puck_strip_impulse ──────────────────────────────────────────────────────────
-# The strip decision must key off the SAME delivered impulse as the stagger, so
-# Physical (transfer), both masses, and closing speed all move it.
+# The strip decision must key off the SAME delivered impulse as the stagger —
+# the real applied knockback |dvel_b|, reconstructed through the collision
+# resolver's own victim_kick — so Physical (transfer), both masses, and closing
+# speed all move it and the reconstruction can never drift from the physics.
 
-func test_puck_strip_impulse_matches_delivered_knockback() -> void:
-	# Locks the algebra identity against the knockback formula in
-	# Skater._resolve_player_collisions: delivered = approach × weight_ratio ×
-	# effective_transfer, and impact_force = attacker_weight × approach.
-	var approach: float = 7.0
+func test_puck_strip_impulse_matches_resolver_knockback() -> void:
+	# Locks the identity against a LIVE SkaterCollisionRules.resolve contact:
+	# the strip magnitude reconstructed from impact_force (= attacker_weight ×
+	# closing) must equal the |dvel_b| the resolver actually applies for the
+	# same closing speed, masses, and transfer.
 	var att_weight: float = 1.18
 	var vic_weight: float = 0.82
 	var transfer: float = 0.55
-	var impact_force: float = att_weight * approach
-	var weight_ratio: float = att_weight / vic_weight
-	var expected: float = approach * weight_ratio * transfer  # effective_transfer, unbraced
+	var out := SkaterCollisionRules.Result.new()
+	SkaterCollisionRules.resolve(out,
+			Vector3.ZERO, Vector3(7.0, 0.0, 0.0), att_weight, 0.42,
+			Vector3(0.8, 0.0, 0.0), Vector3.ZERO, vic_weight, 0.42, transfer)
+	assert_true(out.impulse_applied)
+	var impact_force: float = att_weight * out.closing_speed
 	assert_almost_eq(
-			BodyCheckRules.puck_strip_impulse(impact_force, transfer, vic_weight, 0.4, false),
-			expected, 1e-5, "reconstruction must equal the knockback magnitude")
+			BodyCheckRules.puck_strip_impulse(
+					impact_force, att_weight, transfer, vic_weight, 0.4, false),
+			out.dvel_b.length(), 1e-5,
+			"reconstruction must equal the applied knockback magnitude")
 
 func test_puck_strip_impulse_scales_with_physical() -> void:
 	# Same hit, higher attacker transfer (Physical) → more likely to strip.
-	var enforcer: float = BodyCheckRules.puck_strip_impulse(6.0, 0.61, 1.0, 0.4, false)
-	var weakling: float = BodyCheckRules.puck_strip_impulse(6.0, 0.29, 1.0, 0.4, false)
+	var enforcer: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.61, 1.0, 0.4, false)
+	var weakling: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.29, 1.0, 0.4, false)
 	assert_gt(enforcer, weakling, "higher Physical/transfer delivers a harder strip impulse")
 
 func test_puck_strip_impulse_scales_inverse_with_victim_mass() -> void:
 	# Same hit, heavier victim → harder to dislodge the puck.
-	var light: float = BodyCheckRules.puck_strip_impulse(6.0, 0.45, 0.82, 0.4, false)
-	var heavy: float = BodyCheckRules.puck_strip_impulse(6.0, 0.45, 1.18, 0.4, false)
+	var light: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.45, 0.82, 0.4, false)
+	var heavy: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.45, 1.18, 0.4, false)
 	assert_gt(light, heavy, "a heavier victim absorbs more of the hit — smaller strip impulse")
 
 func test_puck_strip_impulse_brace_reduces_when_braced() -> void:
-	var braced: float = BodyCheckRules.puck_strip_impulse(6.0, 0.45, 1.0, 0.4, true)
-	var unbraced: float = BodyCheckRules.puck_strip_impulse(6.0, 0.45, 1.0, 0.4, false)
+	var braced: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.45, 1.0, 0.4, true)
+	var unbraced: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.45, 1.0, 0.4, false)
 	assert_lt(braced, unbraced, "an actively braced victim protects the puck (brace_resistance < 1)")
 	# Braced value = unbraced × brace_resistance.
 	assert_almost_eq(braced, unbraced * 0.4, 1e-5, "brace scales the delivered impulse by brace_resistance")
 
-func test_puck_strip_impulse_baseline_preserves_legacy_strip_point() -> void:
-	# Medium build vs medium build (weights 1.0, transfer 0.45, unbraced): the old
-	# code stripped at impact_force = weight×approach ≥ 6.0. The new delivered
-	# impulse at that same point is 6.0 × 0.45 = 2.7 — the recalibrated threshold.
+func test_puck_strip_impulse_baseline_preserves_strip_point() -> void:
+	# Medium build vs medium build (weights 1.0, transfer 0.45, unbraced): the
+	# ~6 m/s-closing baseline strip point (impact_force 6.0) delivers a real
+	# kick of 6.0 × 0.45 × 0.5 = 1.35 — the recalibrated threshold, preserving
+	# the equal-mass strip feel across the inelastic migration.
 	assert_almost_eq(
-			BodyCheckRules.puck_strip_impulse(6.0, 0.45, 1.0, 0.4, false),
-			2.7, 1e-5, "baseline medium-vs-medium strip point maps to the 2.7 threshold")
+			BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.45, 1.0, 0.4, false),
+			1.35, 1e-5, "baseline medium-vs-medium strip point maps to the 1.35 threshold")

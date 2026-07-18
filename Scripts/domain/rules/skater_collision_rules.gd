@@ -112,12 +112,29 @@ static func resolve(
 	if s <= 0.0:
 		return  # separating or sliding tangentially — separation only, no hit impulse
 
-	# Single inelastic impulse. reduced_mass = (mA·mB)/(mA+mB) = 1/inv_sum. No (1+e)
-	# term: J removes/transfers at most the closing momentum (scaled by transfer),
-	# so the attacker can slow toward — but never past — a stop. No bounce.
-	var t: float = clampf(transfer, 0.0, 1.0)
-	var reduced_mass: float = 1.0 / inv_sum
-	var j: float = s * reduced_mass * t
-	out.dvel_a = -n * (j * inv_a)   # attacker decelerates (drive-through emerges: Δv = J/m_a)
-	out.dvel_b = n * (j * inv_b)    # victim launched along the hit line
+	# Single inelastic impulse via the shared victim_kick (J·inv_b): no (1+e)
+	# term — J removes/transfers at most the closing momentum (scaled by
+	# transfer), so the attacker can slow toward — but never past — a stop. No
+	# bounce. Routing the delivery through victim_kick keeps this resolver and
+	# every PREDICTOR of it (the AI's check-commit gate) on one formula.
+	var kick_b: float = victim_kick(s, mass_a, mass_b, transfer)
+	# Equal-and-opposite momentum: Δv_a = J/m_a = kick_b · m_b/m_a.
+	out.dvel_a = -n * (kick_b * mass_b * inv_a)   # attacker decelerates (drive-through emerges)
+	out.dvel_b = n * kick_b                       # victim launched along the hit line
 	out.impulse_applied = true
+
+
+# The victim's velocity-delta magnitude (m/s) for a hit closing at
+# `closing_speed` — THE single inelastic delivery this resolver applies:
+# Δv_b = J·inv_b with J = closing × reduced_mass × transfer, which reduces to
+# closing × transfer × m_a/(m_a + m_b). This is the "how hard did it land"
+# number the stagger ladder, knockdown, and puck-strip key off. Factored out
+# and consumed by resolve() itself so PREDICTORS of a future hit — the AI's
+# check-commit gate (AIBodyCheck) — share the exact delivery math: when this
+# model changes, every prediction of it changes in the same edit, instead of
+# a mirrored formula silently going stale (which is how the AI stopped
+# hitting for a while after the inelastic rewrite).
+static func victim_kick(closing_speed: float, mass_a: float, mass_b: float,
+		transfer: float) -> float:
+	return closing_speed * clampf(transfer, 0.0, 1.0) \
+			* mass_a / maxf(mass_a + mass_b, _EPS)
