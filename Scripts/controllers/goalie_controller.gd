@@ -915,6 +915,9 @@ var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Input
 
 # ── Cached rule configs (built once in setup) ────────────────────────────────
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
+# Speed-floor-free variant of _shot_cfg for the universal-reaction path (slow
+# tricklers / board bounces must classify even below shot_speed_threshold).
+var _universal_shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
@@ -1312,6 +1315,23 @@ func _build_rule_configs() -> void:
 	_shot_cfg.reaction_delay = reaction_delay
 	_shot_cfg.low_shot_threshold = low_shot_threshold
 	_shot_cfg.elevated_threshold = elevated_threshold
+	# Universal-reaction impact classification uses the SAME geometry but with NO
+	# speed floor. The universal path's urgency decision is already made by
+	# should_react_to_puck (imminence + on-net, tiny anti-jitter floor only) — its
+	# whole point is that a slow trickler / dying board-bounce at the doorstep is
+	# MORE urgent than a rocket from the point, not less. Re-running detect_shot
+	# with `_shot_cfg`'s 5 m/s `shot_speed_threshold` here silently rejected every
+	# sub-threshold puck, so slow pucks oozing at the net never triggered a
+	# reaction and the goalie sat a statue. This clone keeps low/elevated
+	# classification and the on-net check; speed gating stays on the RELEASE path
+	# (which must still filter slow dribbled passes) via `_shot_cfg`.
+	_universal_shot_cfg = GoalieBehaviorRules.ShotDetectionConfig.new()
+	_universal_shot_cfg.shot_speed_threshold = 0.0
+	_universal_shot_cfg.net_half_width = net_half_width
+	_universal_shot_cfg.net_margin = net_margin
+	_universal_shot_cfg.reaction_delay = reaction_delay
+	_universal_shot_cfg.low_shot_threshold = low_shot_threshold
+	_universal_shot_cfg.elevated_threshold = elevated_threshold
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
 	_screen_cfg.screener_radius = screener_radius
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
@@ -3616,7 +3636,7 @@ func _check_universal_reaction() -> void:
 		return
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, vel,
-			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
+			_goal_line_z, _goal_center_x, _universal_shot_cfg, _scratch_shot)
 	if not result.is_shot:
 		return
 	if debug_goalie_reads:

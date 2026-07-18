@@ -39,6 +39,30 @@ func test_slow_puck_not_a_shot() -> void:
 		26.6, 0.0, _shot_cfg())
 	assert_false(result.is_shot)
 
+# The universal-reaction path (board bounces, dying rebounds, slow tricklers)
+# classifies impact with the shot_speed_threshold set to 0 — should_react_to_puck
+# already owns the urgency decision (imminence + on-net), so the speed floor that
+# filters slow dribbled passes on the RELEASE path must NOT re-reject a slow puck
+# oozing at the doorstep here. This locks that contract: a 2 m/s on-net puck is a
+# (low) shot when the floor is removed, so the goalie actually drops for it.
+func test_slow_on_net_puck_classifies_without_speed_floor() -> void:
+	var cfg := _shot_cfg()
+	cfg.shot_speed_threshold = 0.0
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+		Vector3(0, 0, 25), Vector3(0, 0, 2),   # 2 m/s, ~0.8s from the +Z goal line
+		26.6, 0.0, cfg)
+	assert_true(result.is_shot, "slow on-net puck should classify once the speed floor is removed")
+	assert_true(result.is_low, "a grounded trickler is a low shot → butterfly drop")
+
+# The RELEASE path keeps the speed floor — the SAME slow puck is NOT a shot with
+# the default threshold, so slow dribbled passes don't fire a release reaction
+# from across the rink. This is the guard the universal path deliberately bypasses.
+func test_slow_on_net_puck_rejected_with_speed_floor() -> void:
+	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
+		Vector3(0, 0, 25), Vector3(0, 0, 2),
+		26.6, 0.0, _shot_cfg())
+	assert_false(result.is_shot)
+
 func test_fast_puck_on_target_is_shot() -> void:
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
 		Vector3(0, 0, 10), Vector3(0, 0, 20),   # heading toward +Z goal
