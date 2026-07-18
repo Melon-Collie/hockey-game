@@ -1344,10 +1344,14 @@ func _wire_subsystems() -> void:
 	_hit_tracker.hit_credited.connect(_on_hit_credited)
 
 	# Host-only takeaway / giveaway / faceoff-win attribution off possession
-	# changes. Fed by the pickup, strip, and shot-on-goal hooks below.
+	# changes. Fed by the pickup, strip, and shot hooks below. Every shot RELEASE
+	# opens the rebound window (so recovering a missed/wide shot isn't a turnover);
+	# a confirmed shot-on-goal refreshes it at the save so the rebound stays
+	# covered past the shot's flight.
 	_turnover_tracker = TurnoverTracker.new()
 	_turnover_tracker.setup(_registry)
-	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot_on_goal)
+	_shot_tracker.shot_attempted.connect(_turnover_tracker.note_shot)
+	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot)
 
 	# Host-only established-possession model (PossessionRules): turnover /
 	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
@@ -1478,7 +1482,7 @@ func _wire_sound_signals() -> void:
 			SoundManager.play_world(SoundManager.Sound.PUCK_BODY_BLOCK, puck.get_puck_position(), _puck_speed_volume(spd), 0.07)
 			NetworkManager.send_body_block_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_body_block", puck.get_puck_position(), spd))
-		puck_controller.puck_stripped_from.connect(func(_pid: int) -> void:
+		puck_controller.puck_stripped_from.connect(func(_pid: int, _stripper: int) -> void:
 			var spd: float = puck.linear_velocity.length()
 			var pos: Vector3 = puck.get_puck_position()
 			if puck_controller.is_processing_stick_lift():
@@ -2705,7 +2709,7 @@ func _force_retick_team_brains() -> void:
 		brain.force_retick()
 
 
-func _on_server_puck_stripped_from(peer_id: int) -> void:
+func _on_server_puck_stripped_from(peer_id: int, stripper_peer_id: int) -> void:
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
@@ -2713,8 +2717,10 @@ func _on_server_puck_stripped_from(peer_id: int) -> void:
 	# credited hit (the strip path a check-knocked-loose puck goes through).
 	if _hit_tracker != null:
 		_hit_tracker.note_possession_stripped(peer_id)
+	# The takeaway credits the defender who made the play (stripper), not
+	# whoever recovers the loose puck. -1 (goalie strip) credits nobody.
 	if _turnover_tracker != null:
-		_turnover_tracker.note_strip(peer_id)
+		_turnover_tracker.note_strip(peer_id, stripper_peer_id)
 	if _possession_tracker != null:
 		_possession_tracker.on_puck_lost(peer_id)
 	_state_machine.notify_icing_contact()

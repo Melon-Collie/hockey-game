@@ -40,11 +40,37 @@ func test_takeaway_credits_only_at_establishment() -> void:
 	_add_player(10, 0)
 	var stealer := _add_player(20, 1)
 	_gain_and_establish(10)
-	tracker.note_strip(10)
+	tracker.note_strip(10, 20)  # 20 strips 10, then recovers it themselves
 	tracker.on_carrier_gained(20, false)
 	assert_eq(stealer.stats.takeaways, 0, "pickup alone credits nothing")
 	assert_true(tracker.on_possession_established(20))
 	assert_eq(stealer.stats.takeaways, 1)
+
+
+func test_takeaway_credits_the_stripper_not_the_recoverer() -> void:
+	# The user's poke-to-a-teammate case: 20 strips the carrier and the loose
+	# puck is recovered by 20's linemate 21. The takeaway is the STRIPPER's.
+	_add_player(10, 0)
+	var stripper := _add_player(20, 1)
+	var recoverer := _add_player(21, 1)
+	_gain_and_establish(10)
+	tracker.note_strip(10, 20)     # 20 makes the defensive play
+	tracker.on_carrier_gained(21, false)  # 21 corrals the loose puck
+	assert_true(tracker.on_possession_established(21))
+	assert_eq(stripper.stats.takeaways, 1, "credit the player who caused the loss")
+	assert_eq(recoverer.stats.takeaways, 0, "not whoever happened to pick it up")
+
+
+func test_goalie_strip_credits_no_takeaway() -> void:
+	# A goalie strip carries stripper = -1: a skater recovers, but no player
+	# takeaway is credited (the goalie made the play).
+	_add_player(10, 0)
+	var recoverer := _add_player(20, 1)
+	_gain_and_establish(10)
+	tracker.note_strip(10, -1)
+	tracker.on_carrier_gained(20, false)
+	assert_false(tracker.on_possession_established(20), "no stat credited")
+	assert_eq(recoverer.stats.takeaways, 0, "no skater stripper — no takeaway")
 
 
 func test_scramble_touches_credit_nothing() -> void:
@@ -52,11 +78,11 @@ func test_scramble_touches_credit_nothing() -> void:
 	var owner := _add_player(10, 0)
 	var stealer := _add_player(20, 1)
 	_gain_and_establish(10)
-	tracker.note_strip(10)
+	tracker.note_strip(10, 20)
 	tracker.on_carrier_gained(20, false)  # touch...
-	tracker.note_strip(20)
+	tracker.note_strip(20, 10)
 	tracker.on_carrier_gained(10, false)  # ...counter-touch...
-	tracker.note_strip(10)
+	tracker.note_strip(10, 20)
 	tracker.on_carrier_gained(20, false)  # ...and again — still no control
 	assert_eq(stealer.stats.takeaways, 0, "no establishment, no takeaway chain")
 	assert_eq(owner.stats.takeaways, 0)
@@ -70,9 +96,9 @@ func test_takeaway_candidate_dies_when_recoverer_loses_it() -> void:
 	var teammate := _add_player(11, 0)
 	var stealer := _add_player(20, 1)
 	_gain_and_establish(10)
-	tracker.note_strip(10)
+	tracker.note_strip(10, 20)
 	tracker.on_carrier_gained(20, false)  # takeaway candidate armed...
-	tracker.note_strip(20)
+	tracker.note_strip(20, 11)
 	assert_false(_gain_and_establish(11))  # ...overwritten: same team as owner
 	assert_eq(stealer.stats.takeaways, 0)
 	assert_eq(teammate.stats.takeaways, 0, "recovery from a non-established touch")
@@ -82,7 +108,7 @@ func test_same_team_recovery_after_strip_is_nothing() -> void:
 	_add_player(10, 0)
 	var teammate := _add_player(11, 0)
 	_gain_and_establish(10)
-	tracker.note_strip(10)
+	tracker.note_strip(10, -1)
 	assert_false(_gain_and_establish(11))
 	assert_eq(teammate.stats.takeaways, 0)
 
@@ -107,20 +133,36 @@ func test_no_giveaway_when_interceptor_never_establishes() -> void:
 	_add_player(20, 1)
 	_gain_and_establish(10)
 	tracker.on_carrier_gained(20, false)
-	tracker.note_strip(20)
+	tracker.note_strip(20, 11)
 	_gain_and_establish(11)
 	assert_eq(passer.stats.giveaways, 0)
 	assert_eq(teammate.stats.takeaways, 0, "prev owner was same-team — no stat")
 
 
-func test_rebound_recovery_is_not_a_giveaway() -> void:
+func test_rebound_recovery_is_neither_giveaway_nor_takeaway() -> void:
+	# Any shot the other team recovers (saved, missed, or blocked) is a rebound,
+	# not a turnover — no giveaway to the shooter, no takeaway to the recoverer.
 	var shooter := _add_player(10, 0)
-	_add_player(20, 1)
+	var recoverer := _add_player(20, 1)
 	_gain_and_establish(10)
-	tracker.note_shot_on_goal(10)
+	tracker.note_shot(10)  # fed from every shot release, on goal or not
 	tracker.on_carrier_gained(20, false)
 	tracker.on_possession_established(20)
-	assert_eq(shooter.stats.giveaways, 0, "a shot on goal is never a giveaway")
+	assert_eq(shooter.stats.giveaways, 0, "a shot is never a giveaway")
+	assert_eq(recoverer.stats.takeaways, 0, "recovering a shot is not a takeaway")
+
+
+func test_shot_recovery_beats_a_coincident_strip() -> void:
+	# recent_shot is checked before recent_strip: if a puck was both shot and
+	# (rarely) grazed, its recovery still reads as a rebound, not a takeaway.
+	_add_player(10, 0)
+	var stripper := _add_player(20, 1)
+	_gain_and_establish(10)
+	tracker.note_strip(10, 20)
+	tracker.note_shot(10)
+	tracker.on_carrier_gained(20, false)
+	tracker.on_possession_established(20)
+	assert_eq(stripper.stats.takeaways, 0, "a shot recovery outranks the strip")
 
 
 func test_no_stats_before_any_established_owner() -> void:
@@ -161,7 +203,7 @@ func test_no_turnover_charged_on_the_draw() -> void:
 	var centre0 := _add_player(10, 0, 0)
 	var centre1 := _add_player(20, 1, 0)
 	tracker.on_carrier_gained(10, true)
-	tracker.note_strip(10)
+	tracker.note_strip(10, 20)
 	tracker.on_carrier_gained(20, false)
 	tracker.on_possession_established(20)
 	assert_eq(centre1.stats.takeaways, 0)

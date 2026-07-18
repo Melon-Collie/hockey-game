@@ -19,11 +19,13 @@ func test_opponent_recovers_after_a_strip_is_a_takeaway() -> void:
 	assert_eq(TurnoverRules.classify(0, 1, true, false), TurnoverRules.TAKEAWAY)
 
 
-func test_strip_takes_precedence_over_shot() -> void:
-	# If both flags are set, the active strip wins — it's a takeaway, not a wash.
-	assert_eq(TurnoverRules.classify(0, 1, true, true), TurnoverRules.TAKEAWAY)
+func test_shot_takes_precedence_over_strip() -> void:
+	# If both flags are set, the shot wins — recovering a shot is always a
+	# rebound (no turnover), never a takeaway, even if a graze also registered.
+	assert_eq(TurnoverRules.classify(0, 1, true, true), TurnoverRules.NONE)
 
 
 func test_opponent_recovers_a_rebound_is_nothing() -> void:
-	# Shot on goal recovered by the other team is a rebound, not a giveaway.
+	# A shot (saved or missed) recovered by the other team is a rebound, neither
+	# a giveaway to the shooter nor a takeaway to the recoverer.
 	assert_eq(TurnoverRules.classify(0, 1, false, true), TurnoverRules.NONE)

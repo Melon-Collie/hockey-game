@@ -10,8 +10,10 @@ extends RefCounted
 #   on_possession_established(peer_id) → upgrades the toucher to ESTABLISHED
 #                                     possession (breaks opposing assist chains)
 #   on_poke_check(peer_id)          → records the poke-checker as the last toucher
-#                                     (so a puck poked straight into the net is the
-#                                     poker's goal) WITHOUT making them assist-eligible
+#                                     (so a puck poked into the net is the poker's
+#                                     goal, and a poke that feeds a scoring teammate
+#                                     earns the poker an assist — a defensive strip
+#                                     that sets up the goal is a play, NHL-style)
 #   on_deflection(peer_id)          → records toucher in carrier history, keeps pending shot alive
 #   on_shot_started(peer_id)        → arms pending-shot timer (on net until told otherwise)
 #   note_trajectory(on_net)         → live ballistic read (ShotOnNetRules) after
@@ -31,6 +33,12 @@ signal shots_on_goal_changed(sog_0: int, sog_1: int)
 # Fires once per counted shot on goal, carrying the shooter. TurnoverTracker uses
 # it to treat a rebound recovered by the other team as a shot (not a giveaway).
 signal shot_on_goal_recorded(peer_id: int)
+# Fires on every shot RELEASE (armed pending shot), carrying the shooter —
+# before it's known whether the shot is on goal. TurnoverTracker uses it so
+# recovering ANY shot (saved, missed wide, blocked) reads as a rebound rather
+# than a giveaway/takeaway; shot_on_goal_recorded then refreshes the window at
+# the save so a rebound stays covered past the shot's flight time.
+signal shot_attempted(peer_id: int)
 
 const SHOT_ON_GOAL_TIMEOUT: float = 5.0
 # A genuine blocked shot happens within a beat of the release — the puck travels
@@ -44,19 +52,14 @@ const BLOCK_WINDOW: float = 0.85
 const MAX_RECENT_CARRIERS: int = 5
 const MAX_ASSISTS: int = 2
 
-# Parallel arrays: the recent puck touchers (most recent first), whether
+# Parallel arrays: the recent puck touchers (most recent first) and whether
 # each touch became ESTABLISHED possession (held long enough / made a play —
 # see PossessionTracker) or stayed a mere touch (deflection, momentary
-# scramble attach), and whether the entry is a poke-check dispossession.
-# The possession flag drives the NHL assist chain — opposing ESTABLISHED
-# possession breaks it, an opposing touch doesn't. A pickup starts as a touch
-# and upgrades via on_possession_established. The poke flag lets a poke-checker
-# be the last toucher (so a puck poked straight into the net is their goal)
-# while credit_assists skips it — a defensive strip isn't a play that feeds a
-# goal, so it never earns an assist.
+# scramble attach). The possession flag drives the NHL assist chain — opposing
+# ESTABLISHED possession breaks it, an opposing touch doesn't. A pickup starts
+# as a touch and upgrades via on_possession_established.
 var _recent_carriers: Array[int] = []
 var _recent_carrier_possession: Array[bool] = []
-var _recent_carrier_poke: Array[bool] = []
 var _shooter_peer_id: int = -1
 var _pending_remaining: float = -1.0
 var _block_window_remaining: float = -1.0
@@ -104,35 +107,50 @@ func on_possession_established(peer_id: int) -> void:
 func on_deflection(peer_id: int) -> void:
 	if peer_id == -1:
 		return
+	# Rebound re-shot: the pending shot was already SAVED and counted, and now an
+	# ATTACKING player redirects the loose puck. That's a fresh shot attempt — the
+	# prior save's SOG already landed, so re-arm a new pending shot (this player as
+	# shooter) and let the next save, or a tap-in goal, count its own SOG. The
+	# caller re-reads the trajectory right after, so _pending_on_net self-corrects.
+	# Repeated goalie contact on the same rebound with no attacking touch between
+	# never re-arms, so it stays one SOG. A first tip of a still-live (not yet
+	# counted) shot is untouched here — keeping that pending shot alive is correct.
+	if _shot_on_goal_counted and _shooter_peer_id != -1 and _registry != null \
+			and _registry.resolve_team_id_for_peer(peer_id) \
+				== _registry.resolve_team_id_for_peer(_shooter_peer_id):
+		_shooter_peer_id = peer_id
+		_pending_remaining = SHOT_ON_GOAL_TIMEOUT
+		_block_window_remaining = -1.0
+		_shot_on_goal_counted = false
+		_pending_one_timer = false
+		_pending_on_net = true
 	_record_toucher(peer_id, false)
 
 
 # A defender poke-checked the carrier. Record them as the most recent toucher
 # so a puck poked directly off the carrier's stick into the net is attributed
-# to the poker (get_last_toucher). Flagged as a poke so credit_assists skips it:
-# stripping the puck loose isn't a play that sets up the goal.
+# to the poker (get_last_toucher), and — since a poke that goes to a teammate is
+# a play that sets up the goal — so the poker is assist-eligible in the chain
+# like any other toucher. The opposing carrier they stripped still breaks the
+# chain (their entry carries ESTABLISHED possession), so credit walks no further
+# back than the strip.
 func on_poke_check(peer_id: int) -> void:
 	if peer_id == -1:
 		return
-	_record_toucher(peer_id, false, true)
+	_record_toucher(peer_id, false)
 
 
-func _record_toucher(peer_id: int, possession: bool, is_poke: bool = false) -> void:
+func _record_toucher(peer_id: int, possession: bool) -> void:
 	if not _recent_carriers.is_empty() and _recent_carriers[0] == peer_id:
 		# Consecutive touches by the same player collapse into one entry; an
 		# established flag already earned on the entry survives further touches.
 		_recent_carrier_possession[0] = _recent_carrier_possession[0] or possession
-		# A genuine touch (pickup/deflection) layered onto a poke entry clears the
-		# poke flag — the player did more than strip, so they can earn an assist.
-		_recent_carrier_poke[0] = _recent_carrier_poke[0] and is_poke
 		return
 	_recent_carriers.push_front(peer_id)
 	_recent_carrier_possession.push_front(possession)
-	_recent_carrier_poke.push_front(is_poke)
 	if _recent_carriers.size() > MAX_RECENT_CARRIERS:
 		_recent_carriers.resize(MAX_RECENT_CARRIERS)
 		_recent_carrier_possession.resize(MAX_RECENT_CARRIERS)
-		_recent_carrier_poke.resize(MAX_RECENT_CARRIERS)
 
 
 # Call when a carrier releases the puck as a normal shot. The carrier was
@@ -151,6 +169,9 @@ func on_shot_started(shooter_peer_id: int, is_one_timer: bool = false) -> void:
 	# right after the authoritative release) says otherwise — a missed read
 	# should over-credit, not swallow saves.
 	_pending_on_net = true
+	# A shot went off — mark the turnover shot window so a recovery of it reads as
+	# a rebound (not a turnover), whether or not it turns out to be on goal.
+	shot_attempted.emit(shooter_peer_id)
 
 
 # Updates the pending shot's on-net read (computed by the caller from the live
@@ -247,7 +268,9 @@ func on_goal_confirmed(scorer_peer_id: int) -> void:
 # opposing ESTABLISHED possession breaks the chain, but a mere opposing touch
 # (a pass deflecting off a defender's blade or body, or a momentary attach in
 # a goal-mouth scramble) does not — the player who sent the puck in still
-# earns the assist when no opponent ever controlled it.
+# earns the assist when no opponent ever controlled it. A poke-check that feeds
+# a teammate counts as such a play: the poker sits in the chain like any other
+# toucher, and the opposing carrier they stripped breaks it a step further back.
 func credit_assists(scorer_peer_id: int) -> Array[String]:
 	var names: Array[String] = []
 	var credited: Array[int] = []
@@ -265,8 +288,6 @@ func credit_assists(scorer_peer_id: int) -> Array[String]:
 			if _recent_carrier_possession[i]:
 				break  # opponent possessed the puck — chain broken
 			continue  # opponent only touched it — skip, keep walking
-		if _recent_carrier_poke[i]:
-			continue  # a poke-check strip isn't a play that fed the goal — no assist
 		if pid in credited:
 			continue  # already credited: a teammate touching twice earns one assist
 		record.stats.assists += 1
@@ -322,7 +343,6 @@ func clear_pending() -> void:
 func reset_all() -> void:
 	_recent_carriers.clear()
 	_recent_carrier_possession.clear()
-	_recent_carrier_poke.clear()
 	clear_pending()
 	if _state_machine != null:
 		_state_machine.team_shots[0] = 0
@@ -334,7 +354,6 @@ func reset_all() -> void:
 func clear_state() -> void:
 	_recent_carriers.clear()
 	_recent_carrier_possession.clear()
-	_recent_carrier_poke.clear()
 	clear_pending()
 
 

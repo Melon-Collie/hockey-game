@@ -176,7 +176,10 @@ var _team_id_by_skater: Dictionary = {}
 # ── Signals (server-side puck events, GameManager listens) ───────────────────
 signal puck_picked_up_by(peer_id: int)
 signal puck_released_by_carrier(peer_id: int)
-signal puck_stripped_from(peer_id: int)
+# `peer_id` is the dispossessed carrier; `stripper_peer_id` is the defender who
+# took the puck (poke / stick-lift / body-check), or -1 when a goalie stripped
+# it. Stat attribution credits the takeaway to the stripper.
+signal puck_stripped_from(peer_id: int, stripper_peer_id: int)
 signal puck_poke_checked_by(peer_id: int)  # defender who poke-stripped the carrier
 signal puck_touched_while_loose(peer_id: int)  # deflection or body block — peer who touched
 signal puck_touched_by_goalie(goalie: Goalie)  # puck contacted a goalie body while a shot was in flight
@@ -797,11 +800,13 @@ func _on_puck_released() -> void:
 	if peer_id != -1:
 		puck_released_by_carrier.emit(peer_id)
 
-func _on_puck_stripped(ex_carrier: Skater) -> void:
+func _on_puck_stripped(ex_carrier: Skater, checker: Skater) -> void:
 	var peer_id: int = _resolve_peer_id(ex_carrier)
 	if peer_id == -1:
 		return
-	puck_stripped_from.emit(peer_id)
+	# checker is null for a goalie strip — resolve to -1 (no player takeaway).
+	var stripper_peer_id: int = _resolve_peer_id(checker) if checker != null else -1
+	puck_stripped_from.emit(peer_id, stripper_peer_id)
 
 func _resolve_peer_id(skater: Skater) -> int:
 	if skater == null or not _peer_id_resolver.is_valid():
