@@ -52,6 +52,18 @@ Diagnosed root causes, in code:
     protect and wait a beat*, so the carrier never buys the half-second the
     Over needs.
 
+- **GAP 2b — the rim exists only as a zero-gain concession, so it never
+  fires (playtest-confirmed: bots don't rim the puck).** `_best_dump`'s
+  own-zone branch generates the hard rim (`dump_clear_target` — same-side
+  boards, centre-ice-or-better), but its `gain` is hardcoded 0: only the
+  soft dump-and-chase earns recovery value. Priced as pure loss
+  (`−concede`), the rim can only win when retention is HOPELESS (dump >
+  honest raw carry) *and* no pass beats it — and some option almost always
+  scrapes above a pure giveaway, so the window never opens. The model is
+  missing what a rim actually is in a real breakout: a **bank pass with a
+  receiver** — the half-wall winger racing to the wall touch. A corollary:
+  the wall W never receives rim touches today because rims never happen.
+
 - **GAP 3 — the half-wall winger is a lane-chaser, not a wall post.**
   `AIRoleBreakout` STRONG samples two columns (wall + mid-seam) by
   lane × potential. Under a real forecheck the honest answer to "where is the
@@ -153,12 +165,21 @@ decision layer:
    exit. The escape-speed gate (already in `reach_clearance`) is what makes
    the wheel price *well* exactly when the retriever has a step — the
    real trigger, for free.
-2. **Reverse rim.** A second DUMP variant: hard rim around the *strong*
-   boards back the way the play came (target = the trailing wall behind
-   the carrier), generated only under chase pressure from ahead-of-the-rim
-   direction. Uses `AITrajectory`'s existing board-bounce prediction for
-   the flight and the dump's existing race pricing (who reaches the rim
-   exit first) — the same machinery, new target geometry.
+2. **The rim family — rim-as-a-bank-pass (fixes GAP 2b).** Rims stop being
+   zero-gain concessions and become PASSES whose lane is the boards wrap:
+   - Receiver: the wall player up the rim's path (the half-wall W on the
+     forward rim; the trailing partner / wall mate on the REVERSE rim back
+     the way the play came).
+   - Flight: `AITrajectory`'s existing board-bounce prediction (the bank
+     is real physics the model can already simulate).
+   - Completion: the wall-touch race at the receiver's meet point — the
+     same contested-pickup / chase-race primitives the dump already prices,
+     now with OUR wall post as the favourite instead of nobody.
+   - Value: the receiver's spot value at the meet point (the wall W's
+     second-touch options are what make it worth more than a giveaway).
+   The panic clear (`gain = 0` hard rim) survives as the true last resort;
+   the rim-to-the-winger out-prices it whenever the wall post is manned —
+   which Phase A guarantees it is.
 3. **Over as a developing feed.** Extend `_developing_outlet_feed` to watch
    `BREAKOUT_D2`'s route to the net-back valve, so a pressured carrier can
    pay a protected half-second for the D-to-D the same way he already can
@@ -213,6 +234,10 @@ Same methodology as the duel harness (#27):
 2. **Retrieval margin**: how "clearly" must we win the race — one
    reaction-time (~0.25 s) of ETA margin is the grounded starting guess;
    calibrate against the harness cough-up metric.
-3. **Rim receiver expectations**: is the half-wall W winning rimmed-puck
-   touches reliably enough today (contested-pickup momentum contest), or
-   does Phase C need a "meet the rim" micro-behavior on the wall post?
+3. ~~Rim receiver expectations~~ — **answered by playtest**: the W never
+   gets rim touches because rims never fire at all (GAP 2b). With
+   rim-as-a-pass landing in Phase B, Phase C's wall post gains a "meet the
+   rim" read by default: when a rim commits toward his wall, the W attacks
+   the meet point along the boards (arrive-at-speed, blade to the wall
+   line) instead of holding the post — the receiving half of the same
+   bank-pass contract.
