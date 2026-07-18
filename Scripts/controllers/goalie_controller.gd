@@ -709,10 +709,12 @@ extends Node
 # counter-read, not a flat buff). The lean is PARTIAL (`prelean_strength` of the
 # way to the predicted reach) and never adds save speed — it only changes the
 # resting hand position, so the arm-delay / glove-speed caps on the actual
-# reaction still hold. Directional pre-lean needs the shooter's aim, which is
-# only host-side for host-controlled shooters (host player + bots); remote
-# shooters fall back to a non-directional "hands up, ready" tell. Host-only like
-# all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
+# reaction still hold. Directional pre-lean needs the shooter's aim: a WRISTER
+# publishes it only host-side (host player + bots), so a remote wrister falls back
+# to a non-directional "hands up, ready" tell; a SLAPPER publishes it for everyone
+# including remotes (its aim is locked at press and reconstructed host-side), so
+# the aimed-corner lean fires on every slapshot. Host-only like all goalie AI —
+# the lean rides the broadcast glove/blocker pose to clients.
 @export var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
 @export var prelean_max_distance: float = 9.0       # m — goalie→shooter range the read fires within
 @export var prelean_ready_lift: float = 0.06        # m — non-directional hands-up lift (remote shooters)
@@ -3443,10 +3445,11 @@ func _set_pad_toe_out_inputs() -> void:
 
 # Populate the pose builder's pre-lean fields. The goalie leans toward a charging
 # shot's predicted impact while reading the windup (see _is_reading_shot_threat).
-# Directional lean needs the shooter's live predicted velocity, which is only
-# published host-side for host-controlled shooters (host player + bots); remote
-# shooters leave it ZERO and get the non-directional readiness tell. Re-solved
-# every tick off the LIVE aim, so a late release moves the impact off the lean.
+# Directional lean needs the shooter's live predicted velocity: a remote WRISTER
+# leaves it ZERO (screen-space drag isn't on the wire) and gets the non-directional
+# readiness tell, but a SLAPPER publishes it for every shooter (locked aim, known
+# host-side), so its lean is directional even for remotes. Re-solved every tick off
+# the LIVE aim, so a late release moves the impact off the lean.
 func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = false
 	_pose_inputs.prelean_directional = false
