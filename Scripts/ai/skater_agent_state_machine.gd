@@ -4403,21 +4403,32 @@ func _step_carry_cursor(input: InputState, snapshot: WorldSnapshot,
 		input.mouse_world_pos = _step_mouse_aim(mouse_target)
 
 
-# Forward carry reach, cradled tight when the body is behind/beside the attacking
-# net (see CARRY_BEHIND_NET_CRADLE_M). Returns the full reach everywhere else.
+# Forward carry reach, cradled tight when the body is behind/beside EITHER net
+# (see CARRY_BEHIND_NET_CRADLE_M). Returns the full reach everywhere else.
 func _carry_reach_behind_net(self_pos: Vector3) -> float:
 	# Wide of the cage laterally — carrying up the wall / in the corner, not net-
 	# working — keep the full reach (the wall margin + net_safe_blade_target own
 	# that side).
 	if absf(self_pos.x) > GameRules.NET_BACK_HALF_WIDTH + CARRY_BEHIND_NET_LATERAL_M:
 		return CARRY_BLADE_AIM_FORWARD_M
-	# Signed distance PAST the attacking goal line toward the end boards (>0 is
-	# behind the net). attacking_z = -_own_goal_dir.
-	var past: float = (self_pos.z - _attacking_goal_pos.z) * (-_own_goal_dir)
+	# Signed distance PAST a goal line toward its end boards (>0 = behind that net,
+	# in the band where the full-reach blade would chord through the cage). BOTH
+	# nets cradle now, taking whichever the body is behind:
+	#   - Attacking net (was the only case): net-working a wraparound / walkout.
+	#   - OUR net (added): a defender retrieving or wheeling behind its own cage is
+	#     the WORSE case — the residual blade-into-net contact net_safe_blade_target
+	#     can't fully absorb pops the puck loose IN OUR CREASE (own goal) and, tick
+	#     after tick, re-pins the bot back there unable to skate it out (the
+	#     "stuck behind our own net" report). Cradling tight kills that loop and
+	#     lets the body wheel the puck out cleanly.
+	var past_att: float = (self_pos.z - _attacking_goal_pos.z) * (-_own_goal_dir)
+	var past_own: float = (self_pos.z - _own_goal_dir * GameRules.GOAL_LINE_Z) * _own_goal_dir
+	var past: float = maxf(past_att, past_own)
 	# Ramp: full reach until a band's width in front of the line, tight cradle once
-	# at/behind it. In FRONT of the net a genuine scoring drive is fire-tracked
-	# (overrides this), so cradling only the last stride before the line — and
-	# everything behind — never blunts a shot.
+	# at/behind it. In FRONT of the attacking net a genuine scoring drive is
+	# fire-tracked (overrides this), so cradling only the last stride before the
+	# line — and everything behind — never blunts a shot. In front of OUR net there's
+	# no shot to blunt: cradling the puck tight there is purely protection.
 	var t: float = clampf((past + CARRY_BEHIND_NET_BAND_M) / CARRY_BEHIND_NET_BAND_M, 0.0, 1.0)
 	return lerpf(CARRY_BLADE_AIM_FORWARD_M, CARRY_BEHIND_NET_CRADLE_M, t)
 

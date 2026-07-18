@@ -1902,6 +1902,44 @@ func test_carry_aim_ignores_a_beaten_man_behind_in_the_ozone() -> void:
 	assert_lt(facing.z, -0.9, "a beaten man behind doesn't stop the square-up")
 
 
+# ── Behind-net blade cradle (both cages) ─────────────────────────────────────
+# The carry blade shortens toward CARRY_BEHIND_NET_CRADLE_M when the body is
+# behind/beside a net, so the offset puck rides tight instead of chording the
+# blade through the cage. This must fire behind OUR net (team 0: +Z), not just
+# the attacking one — the residual blade-into-net contact behind our own cage
+# pops the puck loose (own goal) and re-pins the bot back there (the "stuck
+# behind our net, can't skate it out" report).
+
+func test_carry_reach_cradles_behind_our_own_net() -> void:
+	var reach: float = sm._carry_reach_behind_net(
+			Vector3(0, 0, GameRules.GOAL_LINE_Z + 0.5))
+	assert_almost_eq(reach, SkaterAgentStateMachine.CARRY_BEHIND_NET_CRADLE_M, 0.01,
+			"blade cradles tight behind our own net")
+
+
+func test_carry_reach_symmetric_behind_both_nets() -> void:
+	var own: float = sm._carry_reach_behind_net(
+			Vector3(0, 0, GameRules.GOAL_LINE_Z + 0.5))
+	var att: float = sm._carry_reach_behind_net(
+			Vector3(0, 0, -GameRules.GOAL_LINE_Z - 0.5))
+	assert_almost_eq(own, att, 0.001, "cradle is symmetric behind both nets")
+
+
+func test_carry_reach_full_in_neutral_zone() -> void:
+	var reach: float = sm._carry_reach_behind_net(Vector3(0, 0, 0))
+	assert_almost_eq(reach, SkaterAgentStateMachine.CARRY_BLADE_AIM_FORWARD_M, 0.01,
+			"full reach away from both cages")
+
+
+func test_carry_reach_full_wide_behind_own_net() -> void:
+	# Wide of the cage (in the corner) behind our own net — carrying the wall,
+	# not net-working — keeps full reach.
+	var reach: float = sm._carry_reach_behind_net(
+			Vector3(2.5, 0, GameRules.GOAL_LINE_Z + 0.5))
+	assert_almost_eq(reach, SkaterAgentStateMachine.CARRY_BLADE_AIM_FORWARD_M, 0.01,
+			"wide in the corner behind our net keeps full reach")
+
+
 # ── Off-puck arrival: velocity-matched seek to the role spot ─────────────────
 
 func test_off_puck_arrival_redirects_cross_momentum() -> void:
