@@ -272,15 +272,14 @@ var move_intent: Vector2 = Vector2.ZERO
 var brake_intent: bool = false
 # Predicted world-space shot velocity (direction * speed) if the carrier
 # released the shot they're currently charging RIGHT NOW. Published each tick by
-# SkaterController during a live charge. A WRISTER publishes it only for host-
-# controlled skaters (its power/direction signal is screen-space mouse drag, which
-# remote carriers don't put on the wire), so a remote wrister leaves it ZERO. A
-# SLAPPER publishes it for EVERY shooter including remotes: the slapper direction
-# is locked at press and reconstructed host-side from the replicated mouse_world_
-# pos, so the host always has it. The goalie AI reads it to pre-lean toward a
-# charging shot's predicted impact; it gates on `current_shot_state` for freshness
-# and on a non-zero length for "is this a host-side read", so a stale value left
-# after release is never trusted.
+# SkaterController during a live charge (WRISTER via _update_wrister_charge, SLAPPER
+# via _update_slapper_charge) for EVERY shooter — host player, bot, and remote alike.
+# The host simulates a remote's carry from its replicated input (RemoteController.
+# _drive_from_input), and everything the solve needs rides the wire: mouse_world_pos,
+# the attack-aligned mouse_screen_pos (wrister drag), and the join-payload Shot Power
+# Sensitivity. The goalie AI reads it to pre-lean toward a charging shot's predicted
+# impact; it gates on `current_shot_state` for freshness and on a non-zero length so
+# a stale value left after release (or an as-yet-unset one) is never trusted.
 var predicted_shot_velocity: Vector3 = Vector3.ZERO
 
 # ── Stick Flex Runtime State (see Stick Flex Tuning exports) ──────────────────

@@ -2141,9 +2141,14 @@ func _update_wrister_charge(input: InputState) -> void:
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
 	# a player who drags one way then flicks the other at release moves the real
-	# impact off the goalie's lean (a tricky release beats the read). Host-only:
-	# remote carriers don't run this path, so their predicted velocity stays ZERO
-	# and the goalie falls back to a non-directional readiness tell.
+	# impact off the goalie's lean (a tricky release beats the read). Works for
+	# REMOTE shooters too: the host simulates their carry from replicated input
+	# (RemoteController._drive_from_input → this path), and both signals ride the
+	# wire — mouse_world_pos, plus mouse_screen_pos pre-aligned to world XZ by the
+	# gatherer's attack-direction negation (the drag direction _get_charge_direction
+	# reads) — with the remote's Shot Power Sensitivity from the join payload feeding
+	# _wrister_sweep_speed. Host-only in that it runs on the authoritative sim, not in
+	# that it's limited to host-controlled shooters.
 	var is_backhand: bool = _classify_backhand()
 	# Re-solves every tick while charging (+ per replayed input on reconcile), so
 	# fill a reused scratch instead of allocating a ShotResult each time.
@@ -2166,15 +2171,17 @@ func _update_slapper_charge(delta: float) -> void:
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
 	# Publish where this slapshot would go if released NOW, so the host-side goalie
 	# AI can pre-lean toward the aimed corner — the directional anticipation the
-	# wrister already gets (_update_wrister_charge). Without this the goalie squares
-	# to the pinned puck but its glove rests centred and must travel the full way to
-	# a corner on reaction, so a well-placed slot slapper beats a squared keeper.
-	# Unlike the wrister, the slapper direction is LOCKED at press (_sm.locked_slapper
-	# _dir, reconstructed host-side in _enter_slapper_charge from the press-tick
-	# mouse_world_pos), so this is valid for REMOTE shooters too, not just host-
-	# controlled ones — the online-slapshot cheese the wrister's screen-space drag
-	# signal can't cover. Gated to the WITH-PUCK windup: a one-timer wind-up has no
-	# puck to lean toward, and the goalie's read only fires on SLAPPER_CHARGE_WITH_PUCK.
+	# wrister already gets (_update_wrister_charge). This was the "skate up and rip a
+	# slapper from the slot" cheese: the slapper path never published this, for ANY
+	# shooter (host player and bots included, not just remotes), so the goalie squared
+	# to the pinned puck but its glove rested centred and had to travel the full way
+	# to a corner on reaction. The distinguishing axis was slapper-vs-wrister, not
+	# local-vs-remote — the wrister already worked everywhere. Like the wrister, this
+	# runs on the host for remotes too (RemoteController._drive_from_input simulates
+	# their carry); the slapper direction is LOCKED at press (_sm.locked_slapper_dir,
+	# built in _enter_slapper_charge from the replicated mouse_world_pos), so no
+	# screen-space signal is even needed. Gated to the WITH-PUCK windup: a one-timer
+	# wind-up has no puck to lean toward, and the goalie reads only SLAPPER_CHARGE_WITH_PUCK.
 	if has_puck:
 		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 		if locked_dir_3d.length_squared() > 0.0001:
