@@ -116,6 +116,7 @@ func _snapshot() -> Dictionary:
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
 		"camera_mode": PlayerPrefs.camera_mode,
+		"minimap_enabled": PlayerPrefs.minimap_enabled,
 		"hud_scale": PlayerPrefs.hud_scale,
 		"share_gameplay_stats": PlayerPrefs.share_gameplay_stats,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
@@ -265,6 +266,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
 	PlayerPrefs.camera_mode = c.camera_mode
+	PlayerPrefs.minimap_enabled = c.minimap_enabled
 	PlayerPrefs.hud_scale = c.hud_scale
 	PlayerPrefs.share_gameplay_stats = c.share_gameplay_stats
 	PlayerPrefs.bindings = (c.bindings as Dictionary).duplicate(true)
@@ -359,6 +361,7 @@ func _defaults() -> Dictionary:
 		"fov": 50.0,
 		"camera_distance": 1.0,
 		"camera_mode": PlayerPrefs.CAMERA_MODE_DYNAMIC,
+		"minimap_enabled": true,
 		"hud_scale": 1.0,
 		"share_gameplay_stats": true,
 		"bindings": PlayerPrefs.default_bindings.duplicate(true),
