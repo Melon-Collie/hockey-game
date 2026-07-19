@@ -228,25 +228,36 @@ can't run headless, so networking feel is verified on the developer's machine.
    impulse injection. Nothing to mispredict → no snap. Cost: ~½-RTT before you
    feel a check you delivered (reads as weight, not lag).
 3. **Remote skater input-broadcast + forward-integration** + host rewind to the
-   predicted instant. *(In progress on the experimental branch.)* The movement
+   predicted instant. *(Built on the experimental branch.)* The movement
    intent is already on the wire (v15/v16/v28, lossless for keyboard's 8-way
    input — no PROTOCOL bump). `SkaterMovementRules.integrate_forward` is the
-   shared primitive; `RemoteController` (render) and `HitClaimResolver` (host
-   claim rewind) both drive it to the same depth via
-   `LagCompRewind.forward_predict_ticks`, so render == rewind holds at any lead.
-   Gated by `Constants.REMOTE_FORWARD_PREDICT_FRACTION`, **set to 1.0 (full
-   present) on this experimental branch** for the Steam playtest — dial toward
-   0.5 / 0.0 if remotes overshoot on hard cuts. Pickup/poke puck rewind is stage 4.
+   shared primitive; `RemoteController` (render) and **every carrier-anchored
+   claim resolver** — hit, poke, stick-lift — reconstruct the identical
+   prediction host-side via `LagCompRewind.forward_predict_skater`
+   (same fraction/decay constants, intent quantized through the wire codec so
+   raw bot intent matches what clients decoded, rewind snapshots carry the
+   intent fields), so render == rewind holds at any lead. Gated by
+   `Constants.REMOTE_FORWARD_PREDICT_FRACTION`, **set to 1.0 (full present) on
+   this experimental branch** for the Steam playtest — dial toward 0.5 / 0.0 if
+   remotes overshoot on hard cuts. The loose-puck pickup rewind needs no
+   migration while the puck lead is parked (see stage 4).
 4. **Conditional puck lead** *(built on the experimental branch)* +
    **goalie spectator pose-lead** *(deferred — see below)*.
    - *Puck lead:* the loose puck reuses its existing lead machinery (ice-friction
-     dead-reckon + board gate), now driven by the shared
-     `Constants.REMOTE_FORWARD_PREDICT_FRACTION` and gated by `_blade_lead_scale`
+     dead-reckon + board gate), driven by its own
+     `Constants.PUCK_FORWARD_LEAD_FRACTION` and gated by `_blade_lead_scale`
      — the lead eases to 0 as any blade nears the puck, so it renders at the past
      interp instant exactly where pickup/poke claims fire. That keeps render ==
      rewind **with no host-side change** (the host already rewinds the puck to the
-     past; the client just renders it there whenever a claim can happen). Enabled
-     at fraction 1.0 for the playtest alongside the skater lead.
+     past; the client just renders it there whenever a claim can happen).
+     **PARKED at fraction 0.0 for the playtest** (skaters stay at 1.0): the
+     blade-eased collapse regresses render time non-monotonically on fast
+     incoming pucks (the artifact class the handoff slew exists to prevent),
+     and the deterministic-puck migration replaces this lead outright — the
+     clean playtest signal is "present-time skating" without collapse artifacts
+     contaminating the read. The machinery stays wired for an A/B (set the
+     constant > 0; the buffer prune and the extrapolation canary are already
+     lead-aware).
    - *Goalie pose-lead — DEFERRED.* Lower value (spectator-only cosmetic) and a
      real footgun: the shooter's shot is already lag-comp'd against the goalie
      they saw, so leading the goalie for the shooter would make them aim at a

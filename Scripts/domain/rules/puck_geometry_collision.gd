@@ -10,9 +10,9 @@ class_name PuckGeometryCollision
 # x = ±GameRules.NET_HALF_WIDTH, z = ±GameRules.GOAL_LINE_Z, radius GameRules.NET_POST_RADIUS,
 # spanning y ∈ [0, NET_HEIGHT]; the crossbar is a horizontal pipe joining the post tops at
 # y = NET_HEIGHT; the top net panel is the mesh roof behind it. The crossbar and top panel
-# are ABOVE the current loft ceiling (the puck tops ~1.14 m, under the 1.19 m crossbar
-# underside) so they never fire at today's tuning — they're authored anyway so raising the
-# loft ceiling later needs no new collision. A post hit is 2D in XZ (circle vs circle); the
+# sit above the LAUNCHED loft ceiling (a clean loft shot tops ~1.14 m, under the 1.19 m
+# crossbar underside) — but deflections and goalie rebounds can carry the puck higher
+# (Puck.max_height is 3.0), so these are reachable in live play, not dead code. A post hit is 2D in XZ (circle vs circle); the
 # crossbar is 2D in Y-Z; the top panel is a horizontal-plane bounce.
 #
 # Pure / static — headless-testable, allocation-free on the per-tick path (fills a caller-
@@ -93,9 +93,9 @@ static func _resolve_one_post(pos: Vector3, vel: Vector3, puck_radius: float,
 # Resolve a puck against the CROSSBAR — a horizontal pipe (axis along X) at y = NET_HEIGHT,
 # z = ±GOAL_LINE_Z, spanning |x| <= NET_CROWN_HALF_WIDTH. The test is 2D in the Y-Z plane:
 # circle (puck) vs circle (pipe). Reflects the Y-Z velocity at POST_RESTITUTION, keeping the
-# along-bar X channel. NOTE: unreachable at current tuning — the loft ceiling tops the puck
-# at ~1.14 m, under the 1.19 m crossbar underside — so this never fires today; it's authored
-# so raising the loft ceiling later needs no new collision. Puck treated as a sphere of
+# along-bar X channel. Launched loft tops out under the bar (~1.14 m vs the 1.19 m
+# underside), but deflections / goalie rebounds can arrive higher, so this does fire in
+# live play. Puck treated as a sphere of
 # puck_radius here (the flat disc is oblate in Y-Z, so this is slightly generous vertically —
 # harmless for a top-corner edge case).
 static func resolve_crossbar(pos: Vector3, vel: Vector3, puck_radius: float, result: Result) -> bool:

@@ -83,10 +83,11 @@ static func prev_tick(view_time: float) -> float:
 
 # Stage-3 forward-prediction depth: how many physics ticks a remote body is
 # intent-integrated forward from its interpolated-past base toward host-present.
-# The client (RemoteController render) and the host (HitClaimResolver claim rewind)
-# BOTH call this with the SAME fraction (Constants.REMOTE_FORWARD_PREDICT_FRACTION)
-# and interp_delay, so their tick counts — and therefore the predicted positions —
-# agree, keeping render == rewind. `fraction` is a param (not read here) so the
+# The client (RemoteController render) and the host claim rewinds (hit / poke /
+# stick-lift, via forward_predict_skater below) ALL call this with the SAME
+# fraction (Constants.REMOTE_FORWARD_PREDICT_FRACTION) and interp_delay, so
+# their tick counts — and therefore the predicted positions — agree, keeping
+# render == rewind. `fraction` is a param (not read here) so the
 # formula is unit-testable at any value even while the shipped constant varies.
 # The delay is clamped to the same ceiling remote_view_time uses — the host-side
 # caller feeds it the raw client-reported interp_delay_ms, and without the clamp

@@ -72,9 +72,9 @@ const NETWORK_INTERPOLATION_DELAY: float = 0.075
 # toward host-present, as a fraction of interp_delay: 0.0 = legacy interpolate-in-
 # the-past (render == rewind exactly, the shipped behavior); 1.0 = full ~interp_delay
 # of forward prediction (remote bodies render at ~present). READ BY BOTH the client
-# render (RemoteController) AND the host claim-rewind (HitClaimResolver) via
-# LagCompRewind.forward_predict_ticks, so render stays == rewind at any value — the
-# two MUST use the same fraction. Set to 1.0 (full ~interp_delay of forward
+# render (RemoteController) AND every carrier-anchored host claim rewind (hit, poke,
+# stick-lift — via LagCompRewind.forward_predict_skater / forward_predict_ticks), so
+# render stays == rewind at any value — all consumers MUST use the same fraction. Set to 1.0 (full ~interp_delay of forward
 # prediction, remote bodies at ~present) for the experimental Steam playtest build.
 # Dial toward 0.5 / 0.0 if remote skaters overshoot on hard cuts (extrapolation
 # snap-back) or contested-hit feel regresses; 0.0 restores exact render == rewind.
