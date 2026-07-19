@@ -133,6 +133,17 @@ var _pending_local_release_deadline: float = -1.0
 const _PENDING_RELEASE_TIMEOUT_S: float = 0.3  # ~2× typical RTT, well above any healthy network
 var _shot_rtt_ms: float = 0.0             # RTT captured at release time; used for trajectory reconcile
 var is_extrapolating: bool = false
+
+# ── Phase-0 shadow-puck comparator (dev + host only) ──────────────────────────
+# Runs the analytic shadow puck (PuckShadowComparator) alongside the real Jolt puck
+# each host tick and logs divergence — the determinism go/no-go instrument
+# (docs/netcode-phase0-shadow-puck-spec.md). Created ONLY in dev builds
+# (BuildInfo.VERSION == "dev", the same gate NetworkSimManager uses), so it's absent
+# from exported builds and can never ship. Never drives the real puck.
+var _shadow: PuckShadowComparator = null
+var _shadow_board_contact: bool = false
+var _shadow_log_timer: float = 0.0
+const _SHADOW_LOG_INTERVAL_S: float = 3.0
 # Scoped true only while a stick-lift strip is being applied, so the synchronous
 # puck_stripped_from handlers (sound + victim notify) can tell a stick lift apart
 # from a poke/body-check strip and pick the right cue. Read via
@@ -202,6 +213,11 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		puck.puck_touched_loose.connect(func(s: Skater) -> void: puck_touched_while_loose.emit(_peer_id_resolver.call(s)))
 		puck.puck_body_blocked.connect(func(s: Skater) -> void: puck_touched_while_loose.emit(_peer_id_resolver.call(s)))
 		puck.puck_touched_goalie.connect(func(g: Goalie) -> void: puck_touched_by_goalie.emit(g))
+		# Phase-0 determinism harness: dev builds only, host only. Absent (null) in
+		# exported builds, so the observe() call below is a no-op there.
+		if BuildInfo.VERSION == "dev":
+			_shadow = PuckShadowComparator.new()
+			puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
 	else:
 		puck.puck_touched_goalie.connect(_on_client_puck_hit_goalie)
 		puck.puck_touched_post.connect(_on_client_puck_hit_post)
@@ -220,6 +236,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if is_server:
 		_check_interactions()
+		_observe_shadow(delta)
 		_prev_puck_pos = puck.get_puck_position()
 		return
 	# A despawned / demoted remote carrier drops the pin back to interpolation.
@@ -776,6 +793,29 @@ func _estimated_puck_speed() -> float:
 	if _state_buffer.is_empty():
 		return INF
 	return _state_buffer.back().state.velocity.length()
+
+
+# Feed the host's authoritative loose-puck state to the Phase-0 shadow comparator
+# (dev-only; _shadow is null otherwise, so this is a cheap early return in release —
+# though it's never even reached there since exported builds skip creation). Only the
+# grounded, freely-sliding loose puck is in scope: carried / dead / airborne pucks
+# reset the comparator so each flight re-seeds (airborne needs gravity — a later
+# phase; carried is pinned). Logs a one-line digest on a throttle. Never mutates the
+# puck. `puck.linear_velocity` is authoritative here (host-side Jolt integration).
+func _observe_shadow(delta: float) -> void:
+	if _shadow == null:
+		return
+	if puck.carrier != null or puck.pickup_locked or puck.is_airborne():
+		_shadow.reset()
+		_shadow_board_contact = false
+		return
+	_shadow.observe(puck.get_puck_position(), puck.linear_velocity, _shadow_board_contact, delta)
+	_shadow_board_contact = false
+	_shadow_log_timer += delta
+	if _shadow_log_timer >= _SHADOW_LOG_INTERVAL_S:
+		_shadow_log_timer = 0.0
+		if _shadow.samples > 0:
+			print("[phase0] ", _shadow.summary())
 
 
 func _clear_provisional() -> void:
