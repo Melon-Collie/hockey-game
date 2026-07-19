@@ -1596,22 +1596,23 @@ func set_block_stance(active: bool) -> void:
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
 
 
-# The body-block sphere the analytic detector tests against (PuckController). PASSIVE: a
-# radius-body_block_radius sphere raised to torso height, so a grounded puck passes UNDER it
-# and only a torso-height puck is blocked. SHOT-BLOCK crouch: a wider block_body_radius sphere
-# rebased down to seal the ice from ~0 up to ~2·radius (a flat shot no longer slides under the
-# crouch). Mirrors the old Area3D geometry exactly (see set_block_stance history).
-func get_body_block_center() -> Vector3:
-	# SHOT-BLOCK: the sphere was rebased to an ABSOLUTE global Y to seal the ice. PASSIVE: it
-	# sat at a LOCAL torso offset above the skater origin. Reproduce both so a grounded puck
-	# passes under the passive sphere exactly as before.
-	if _block_stance_active:
-		return Vector3(global_position.x, block_body_radius - 0.05, global_position.z)
-	return Vector3(global_position.x, global_position.y + body_block_height, global_position.z)
-
-
+# The body-block CYLINDER the analytic detector tests against (PuckController) — a vertical
+# cylinder at the skater's XZ axis matching the torso. PASSIVE: radius body_block_radius over a
+# torso band raised off the ice, so a grounded puck slides UNDER (a flat shot passes clean).
+# SHOT-BLOCK crouch: the wider block_body_radius, banded from the ice up so a low shot is
+# sealed. Reach is uniform across the band (unlike the old sphere, which bulged at one height).
 func get_body_block_radius() -> float:
 	return block_body_radius if _block_stance_active else body_block_radius
+
+
+# World-Y extent [bottom, top] of the body-block cylinder.
+func get_body_block_y_range() -> Vector2:
+	if _block_stance_active:
+		# Seal the ice up through the body (a crouched block stops a flat shot).
+		return Vector2(0.0, 2.0 * block_body_radius)
+	# Torso band centred at body_block_height, raised off the ice so a grounded puck passes under.
+	var center_y: float = global_position.y + body_block_height
+	return Vector2(center_y - body_block_radius, center_y + body_block_radius)
 
 
 # ── Slapper Zone ──────────────────────────────────────────────────────────────

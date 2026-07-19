@@ -225,38 +225,47 @@ func test_blade_under_stick_under_margin_requires_clearance() -> void:
 		Vector3(0, 1, 0), Vector3(1, 1, 0), 0.5, 0.2))
 
 
-# ── check_body_block (analytic replacement for the body-block Area3D) ──
+# ── check_body_block (analytic vertical-cylinder replacement for the Area3D) ──
 
-func test_body_block_hits_a_puck_into_the_torso_sphere() -> void:
-	# Puck driven into a torso-height sphere centre.
-	var center := Vector3(0, 0.7, 0)
-	var reach: float = 0.5 + 0.065
+const _AXIS := Vector2(0, 0)        # body cylinder axis
+const _REACH: float = 0.5 + 0.065   # body radius + puck radius
+const _Y_BOT: float = 0.2           # passive torso band [0.2, 1.2]
+const _Y_TOP: float = 1.2
+
+
+func test_body_block_hits_a_puck_into_the_torso_band() -> void:
 	assert_true(PuckInteractionRules.check_body_block(
-			Vector3(-1, 0.7, 0), Vector3(0, 0.7, 0), center, reach))
+			Vector3(-1, 0.7, 0), Vector3(0, 0.7, 0), _AXIS, _REACH, _Y_BOT, _Y_TOP))
 
 
-func test_body_block_grounded_puck_passes_under_raised_sphere() -> void:
-	# A grounded puck (y≈ice) slides UNDER a passive torso sphere — the whole point of
-	# raising it. The 3D distance test gives the height gate for free.
-	var center := Vector3(0, 0.7, 0)
-	var reach: float = 0.5 + 0.065
+func test_body_block_grounded_puck_passes_under_raised_band() -> void:
+	# A grounded puck (y≈ice) is below the raised torso band — slides under, a flat shot passes.
 	assert_false(PuckInteractionRules.check_body_block(
-			Vector3(-1, 0.0175, 0), Vector3(1, 0.0175, 0), center, reach),
-			"grounded puck clears the raised passive sphere")
+			Vector3(-1, 0.0175, 0), Vector3(1, 0.0175, 0), _AXIS, _REACH, _Y_BOT, _Y_TOP),
+			"grounded puck clears the raised passive band")
 
 
-func test_body_block_swept_catches_a_fast_puck_through_the_sphere() -> void:
-	# A puck fast enough to cross the whole sphere in one tick — both endpoints outside, but
-	# the swept segment passes through the centre, so the segment test still catches it.
-	var center := Vector3(0, 0.7, 0)
-	var reach: float = 0.5 + 0.065
+func test_body_block_uniform_reach_high_in_the_band() -> void:
+	# Unlike the old sphere (which narrowed at height), the cylinder blocks with FULL reach at
+	# the top of the torso band — a puck near the band edge is still stopped at the body radius.
 	assert_true(PuckInteractionRules.check_body_block(
-			Vector3(-2, 0.7, 0), Vector3(2, 0.7, 0), center, reach),
+			Vector3(-1, 1.15, 0), Vector3(0, 1.15, 0), _AXIS, _REACH, _Y_BOT, _Y_TOP),
+			"uniform horizontal reach across the whole band, not just the centre")
+
+
+func test_body_block_swept_catches_a_fast_puck_through_the_cylinder() -> void:
+	assert_true(PuckInteractionRules.check_body_block(
+			Vector3(-2, 0.7, 0), Vector3(2, 0.7, 0), _AXIS, _REACH, _Y_BOT, _Y_TOP),
 			"swept test catches a tunnelling puck a point test would miss")
 
 
 func test_body_block_misses_a_puck_wide_of_the_body() -> void:
-	var center := Vector3(0, 0.7, 0)
-	var reach: float = 0.5 + 0.065
 	assert_false(PuckInteractionRules.check_body_block(
-			Vector3(5, 0.7, 0), Vector3(6, 0.7, 0), center, reach))
+			Vector3(5, 0.7, 0), Vector3(6, 0.7, 0), _AXIS, _REACH, _Y_BOT, _Y_TOP))
+
+
+func test_body_block_misses_a_puck_over_the_top_of_the_band() -> void:
+	# Horizontally aligned but above the torso band (a high shot over the shoulder).
+	assert_false(PuckInteractionRules.check_body_block(
+			Vector3(-1, 1.6, 0), Vector3(0, 1.6, 0), _AXIS, _REACH, _Y_BOT, _Y_TOP),
+			"a puck above the band clears the body")
