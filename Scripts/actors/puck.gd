@@ -747,12 +747,18 @@ func _drive_analytic(dt: float) -> void:
 	_pending_elevation_vel = Vector3.ZERO  # consumed
 	_pending_elevation = false
 
-	# 1+2) Integrate (ice friction + gravity + board caroms, with the max-speed / max-height
-	# clamps) AND resolve the goal frame. Near a net, SUB-STEP so a hard shot (0.33 m/tick at
-	# 40 m/s) can't tunnel through the thin posts / net panels: each sub-step advances under a
-	# puck radius, which the position-based frame resolvers can't be tunnelled through. Open ice
-	# needs a single step — its only geometry is the boards, a position clamp that can't tunnel.
+	# Integrate (ice friction + gravity + board caroms + clamps) AND resolve ALL near-net
+	# collision — posts, crossbar, net panels, and the goalie — in ONE sub-stepped pass. Near the
+	# thin frame the puck advances in < 4 cm sub-steps so a hard shot (0.33 m/tick at 40 m/s)
+	# can't tunnel through the pipes/panels, and every contact is resolved in order on the
+	# sub-step it happens (the goalie sees each sub-step's real segment, not one straight tick
+	# chord — so a post-ricochet-into-a-save reads right). Open ice steps once: its only geometry
+	# is the boards, a position clamp that can't tunnel. Two ranges: sub-step within
+	# _FRAME_SUBSTEP_RANGE_Z of a goal line (the thin frame); run goalie detection out to the
+	# wider _GOALIE_DETECT_RANGE_Z (a goalie challenges further than the frame sits).
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
+	var goalie_range: bool = absf(prev.z) > GameRules.GOAL_LINE_Z - _GOALIE_DETECT_RANGE_Z
+	var goalies: Array = _goalie_provider.call() if goalie_range and not _goalie_provider.is_null() else []
 	var substeps: int = 1
 	if absf(prev.z) > GameRules.GOAL_LINE_Z - _FRAME_SUBSTEP_RANGE_Z:
 		substeps = clampi(ceili(incoming.length() * dt / _FRAME_SUBSTEP_M), 1, _MAX_FRAME_SUBSTEPS)
@@ -760,6 +766,7 @@ func _drive_analytic(dt: float) -> void:
 	var pos: Vector3 = prev
 	var vel: Vector3 = incoming
 	for _sub in substeps:
+		var sub_prev: Vector3 = pos
 		var stepped: Transform3D = PuckAuthorityRules.advance_loose_puck(
 				pos, vel, sub_dt, max_speed, ice_height, max_height)
 		pos = stepped.origin
@@ -776,18 +783,9 @@ func _drive_analytic(dt: float) -> void:
 			vel = _frame_result.velocity
 			if incoming.length() >= 1.0:
 				puck_hit_goal_body.emit()
-	# Board feedback: a real carom is the raw (un-reflected) full-tick position crossing the
-	# boundary with into-board pace — a puck sliding parallel doesn't fire.
-	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)
-	if raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 and incoming.length() >= 1.0:
-		puck_hit_boards.emit()
-
-	# 3) Goalie: swept-OBB detect → deaden / steer / catch / live reflect. Gated to near a goal
-	# line (a goalie never challenges more than a few metres out) so the ~9-box-per-goalie
-	# swept test is skipped for the puck's long mid-ice life — hot-path discipline at 120 Hz.
-	if not _goalie_provider.is_null() and absf(prev.z) > GameRules.GOAL_LINE_Z - _GOALIE_DETECT_RANGE_Z:
-		var goalies: Array = _goalie_provider.call()
-		if GoalieContactDetector.nearest(goalies, prev, pos, radius, _goalie_scratch, _goalie_contact):
+		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
+		if not goalies.is_empty() and GoalieContactDetector.nearest(
+				goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact):
 			var part: int = _classify_save_part(_goalie_contact.part as Node3D)
 			var g3: Node3D = _goalie_contact.goalie as Node3D
 			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
@@ -801,6 +799,11 @@ func _drive_analytic(dt: float) -> void:
 			puck_touched_goalie.emit(_goalie_contact.goalie as Goalie)
 			if _save_result.caught:
 				puck_caught_by_goalie.emit(_goalie_contact.goalie as Goalie)
+	# Board feedback: a real carom is the raw (un-reflected) full-tick position crossing the
+	# boundary with into-board pace — a puck sliding parallel doesn't fire.
+	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)
+	if raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 and incoming.length() >= 1.0:
+		puck_hit_boards.emit()
 
 	# 4) Goal-line clamp (re-homed from _integrate_forces).
 	if _clamp_at_goal_line:
