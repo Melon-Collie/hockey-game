@@ -25,7 +25,7 @@ extends RefCounted
 # and the post-engagement blade-reset cooldown scaling.
 var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
-# All-direction acceleration / thrust (Agility). The reachable-set tests ask
+# All-direction acceleration / thrust (Acceleration). The reachable-set tests ask
 # "how far off its momentum line can this skater pull a stick?" — that ceiling is
 # this value. Default mirrors SkaterController.thrust's league default (it read
 # 12.0 for a while after the thrust retune to 10.5 — a silently stale baseline

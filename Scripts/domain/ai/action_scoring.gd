@@ -689,11 +689,12 @@ const SKATER_BRAKE_TIME_S: float = 0.3
 # eventually."
 const MIN_TRAVEL_SPEED_M_S: float = 1.0
 
-# League-default all-direction thrust (Agility-scaled per skater) — the redirect
-# authority a caps-less time_to_arrive caller assumes for the cross-momentum shed.
-# Per-bot callers pass the skater's REAL max_accel (AISkaterCaps.max_accel) instead,
-# so a nimble build sheds sideways momentum faster than a heavy one. Mirrors
-# SkaterController.thrust; a physical acceleration, not an evaluation shape knob.
+# League-default all-direction thrust (Acceleration-scaled per skater) — the
+# redirect authority a caps-less time_to_arrive caller assumes for the cross-
+# momentum shed. Per-bot callers pass the skater's REAL max_accel
+# (AISkaterCaps.max_accel) instead, so a high-Acceleration build sheds sideways
+# momentum faster than a low one. Mirrors SkaterController.thrust; a physical
+# acceleration, not an evaluation shape knob.
 const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 
 # Utility-AI knobs. AIRoleCarrier._pick_action re-runs every
@@ -2912,7 +2913,7 @@ static func reach_clearance(
 		var stick: float = EVADE_STICK_REACH_M
 		var vmax: float = SKATER_REF_SPEED_M_S
 		if has_caps:
-			# Per-opponent build — Agility (max_accel) sets the ramp, Size
+			# Per-opponent build — Acceleration (max_accel) sets the ramp, reach
 			# (blade_span) the stick, Speed (max_speed) the cap. Empty caps →
 			# league constants for all (every non-attribute caller).
 			var caps: AISkaterCaps = opponent_caps[i]
@@ -3793,11 +3794,11 @@ static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float
 # SUPPORT's foot-race-home exposure check uses this for the threat opp's ETA home).
 #
 # `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
-# thrust (Agility-scaled) — both default to league references so cross-player
+# thrust (Acceleration-scaled) — both default to league references so cross-player
 # callers (opponent / teammate ETA, the loose-puck election that must stay
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
-# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build sheds
-# sideways momentum faster, so it reaches an off-axis cut sooner).
+# arrival passes its attribute-scaled top speed AND max_accel (a high-Acceleration
+# build sheds sideways momentum faster, so it reaches an off-axis cut sooner).
 # ── Calibrated phase model ─────────────────────────────────────────────────────
 # The measured controller (SkaterMovementRules at 120 Hz driven by the real
 # steering — the velocity-matched seek plus the pivot brake, see
@@ -3858,11 +3859,11 @@ static func pursuit_ramp_distance(tau: float,
 
 
 # `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
-# thrust (Agility-scaled) — both default to league references so cross-player
+# thrust (Acceleration-scaled) — both default to league references so cross-player
 # callers (opponent / teammate ETA, the loose-puck election that must stay
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
-# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build
-# redirects and ramps faster, so it reaches an off-axis cut sooner).
+# arrival passes its attribute-scaled top speed AND max_accel (a higher-Acceleration
+# build redirects and ramps faster, so it reaches an off-axis cut sooner).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
 		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
@@ -3878,11 +3879,11 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 			+ from_velocity.z * from_velocity.z
 	var v_perp: float = sqrt(maxf(0.0, v_len_sq - v_along * v_along))
 	# REDIRECT: only the cross momentum the seek can't shed for free pays,
-	# scaled by this build's thrust relative to league (a nimbler build has
-	# more headroom).
-	var agility: float = maxf(accel_m_s2, 0.001) / SHED_ACCEL_DEFAULT_M_S2
-	var t: float = maxf(0.0, v_perp - VM_FREE_SHED_M_S * agility) \
-			/ (VM_SHED_DECEL_M_S2 * agility)
+	# scaled by this build's thrust relative to league (a higher-Acceleration
+	# build has more headroom).
+	var accel_ratio: float = maxf(accel_m_s2, 0.001) / SHED_ACCEL_DEFAULT_M_S2
+	var t: float = maxf(0.0, v_perp - VM_FREE_SHED_M_S * accel_ratio) \
+			/ (VM_SHED_DECEL_M_S2 * accel_ratio)
 	var r: float = dist
 	var v0: float = v_along
 	if v0 < 0.0:
