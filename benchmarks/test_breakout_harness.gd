@@ -41,6 +41,11 @@ const WARMUP_S: float = 1.2
 const JITTERS: int = 3
 
 var _rows: Array[Dictionary] = []
+# Calibration probe v1: every team-0 release's scored pass EV paired with its
+# realized fate (completed to us / died) — the measured completion curve the
+# pass-lane recalibration will be derived from (the #27 method). Thin at 18
+# trials; grows with the trial matrix.
+var _probe: Array[Dictionary] = []
 
 
 # Both rosters in seed spots for the warmup genesis; the warmup itself
@@ -99,9 +104,24 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 	var first_touch_peer: int = -1
 	var first_touch_t: float = -1.0
 	var intercept_pos := Vector3.INF
+	var seen_releases: int = releases_before
+	var pending_probe: Dictionary = {}
 	while t < LIMIT_S:
 		duel.run(STEP_S)
 		t += STEP_S
+		# Probe: pair each team-0 release with its fate — the next pickup
+		# (ours = completed, theirs = died) or an uncontrolled zone exit.
+		while seen_releases < duel.releases.size():
+			var rec: Dictionary = duel.releases[seen_releases]
+			seen_releases += 1
+			if int(rec.get("team", -1)) == 0 and rec.has("pass_score") 					and String(rec.get("decision", "")).begins_with("PASS"):
+				if not pending_probe.is_empty():
+					_probe.append({"ev": pending_probe.ev, "completed": false})
+				pending_probe = {"ev": float(rec.get("pass_score", 0.0))}
+		if not pending_probe.is_empty() and duel.carrier_id != -1:
+			_probe.append({"ev": pending_probe.ev,
+					"completed": duel.team_map.get(duel.carrier_id, -1) == 0})
+			pending_probe = {}
 		if (duel.brains[0] as TeamBrain).state == AIPossessionState.State.RETRIEVAL:
 			retrieval_seen = true
 		var cid: int = duel.carrier_id
@@ -164,6 +184,21 @@ func _report() -> void:
 				row.scenario, int(row.mirror), int(row.jitter), row.outcome,
 				row.t, "Y" if row.retrieval else "n",
 				int(row.touch_peer), float(row.touch_t), rel_bit])
+	# The completion curve: scored pass EV bucket vs realized completion.
+	if not _probe.is_empty():
+		var buckets: Array = [[0.0, 0.05], [0.05, 0.1], [0.1, 0.2], [0.2, 9.9]]
+		var bits: Array[String] = []
+		for b: Array in buckets:
+			var done: int = 0
+			var total: int = 0
+			for pr: Dictionary in _probe:
+				if pr.ev >= b[0] and pr.ev < b[1]:
+					total += 1
+					if pr.completed:
+						done += 1
+			if total > 0:
+				bits.append("ev[%.2f-%.2f) %d/%d" % [b[0], b[1], done, total])
+		gut.p("  pass probe (completed/fired by scored EV): " + ", ".join(bits))
 	var n: int = _rows.size()
 	gut.p("  totals: clean %d/%d, clear %d/%d, cough %d/%d, timeout %d/%d | retrieval fired %d/%d" % [
 			int(counts.get("clean-exit", 0)), n,

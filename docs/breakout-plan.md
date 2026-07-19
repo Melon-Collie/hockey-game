@@ -267,13 +267,26 @@ Same methodology as the duel harness (#27):
      vs actual outcome per release across many trials, re-derive the lane /
      release-contest constants from the measured curve (the #27 method).
      Once honest, protect/wheel/rim should out-compete the coin-flip pass.
-  2. **The retrieval race read is net-blind.** dump-behind-net: the entering
-     opponent wins first touch every trial on both branches — and on the
-     branch RETRIEVAL had FIRED (the read predicted a win). The intercept
-     estimate (`best_intercept_time`) is straight-line; the real route
-     rounds the cage. Next iteration: net-aware ETA (detour via the
-     behind-net apex when the straight path crosses the cage — the wheel's
-     own waypoint trick), used by both the race read and the chase election.
+  2. ~~The retrieval race read is net-blind~~ — **LANDED as the net-aware
+     ETA**: `time_to_arrive` itself now routes around the cage when the
+     straight segment crosses it (four corner waypoints — both posts, the
+     back alley, the front lip — each priced as two calibrated direct legs;
+     a near-free z-gate keeps open ice bit-identical, and endpoints INSIDE
+     the frame box keep the direct model — race-home reads target the net
+     center as their home proxy). Every consumer inherits honest routing:
+     chase elections, the RETRIEVAL race read, station races. Pinned in
+     test_time_to_arrive_calibration (open-ice identity, cross-cage cost
+     bounds, alley traverse, the honest behind-net race loss).
+  3. **Remaining behind-net finding (next):** with the read honest, the
+     harness still shows our elected chaser never getting first touch on
+     behind-net dumps — the residual suspect is chase EXECUTION around the
+     cage (steering's net detour only engages from behind the line), partly
+     masked by a harness approximation (no body-vs-net collision). Trace
+     the elected chaser's path next iteration.
+  4. **Calibration probe v1 landed** (release-fate attribution in the
+     harness): completed/fired by scored pass EV. First thin read (13
+     fires): ev[0–.05) 2/5, ev[.05–.10) 0/4, ev[.10–.20) 3/4 — roughly
+     EV-ordered; grow the trial matrix before deriving constants from it.
 
 ## 4. Non-goals
 
