@@ -16,7 +16,8 @@ extends RefCounted
 # Flow:
 #   receive_claim(peer_id, host_ts, interp_delay, client_blade_curr/prev, top_hand)
 #     → reject if puck locked, claim stale, skater missing/ghost, on cooldown
-#     → rewind puck to LagCompRewind.remote_view_time(host_ts, interp_delay) and
+#     → rewind puck to LagCompRewind.puck_view_time (the claim stamp under
+#       Phase-3 client puck prediction; the interpolated past otherwise) and
 #       the claimant's body to self_view_time(host_ts); reach-clamp the client
 #       blade to that body — never rtt/2
 #     → reject if PuckInteractionRules.check_pickup fails against the client blade
@@ -120,11 +121,14 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
-	# Blade is SELF-view, puck is REMOTE-view — see LagCompRewind for the
-	# derivation of both. The pair of get_state_at calls per entity (curr + one
-	# physics tick back) feeds the swept-segment test below.
+	# Blade is SELF-view; the loose puck reads through puck_view_time — under
+	# Phase-3 client puck prediction the claimant rendered it predicted AT the
+	# claim stamp (render == rewind at present), with prediction off it is the
+	# legacy REMOTE-view past. See LagCompRewind for both derivations. The pair
+	# of get_state_at calls per entity (curr + one physics tick back) feeds the
+	# swept-segment test below.
 	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
-	var puck_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
+	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp, interp_delay_ms)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:
 		return

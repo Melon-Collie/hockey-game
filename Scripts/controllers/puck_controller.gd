@@ -148,15 +148,20 @@ var _shadow_goalie_contact: bool = false  # Jolt fired a goalie entry this tick 
 var _goalie_provider: Callable = Callable()  # dev-only: returns Array[Goalie] for the FP probe
 var _shadow_log_timer: float = 0.0
 const _SHADOW_LOG_INTERVAL_S: float = 3.0
-# Dev-build mode switch (see setup): true = the analytic sim drives the loose puck
-# (the determinism-migration playtest configuration); false = Jolt drives and the
-# Phase-0/2 shadow harnesses measure the analytic model against it. Mutually
-# exclusive because a harness measuring the drive's own output measures nothing.
+# Dev-build measurement switch (see setup): true (the shipped value) = the
+# analytic sim drives the loose puck everywhere; false = a DEV host reverts to
+# Jolt and runs the Phase-0/2 shadow harnesses against it (a measurement
+# session). Exported builds always drive analytically regardless.
 const _ANALYTIC_DRIVE_IN_DEV: bool = true
 # The proactive FP probe only runs when a goalie is within this of the puck — a cheap gate
 # so probe_ticks (and the per-tick get_colliding_bodies allocation) stay off unless the
 # puck is actually near a net.
 const _GOALIE_PROBE_RANGE_M: float = 1.5
+# ── Phase-3 loose-puck prediction scratch (client only; see _predict_loose) ──
+var _predict_frame_scratch: PuckGeometryCollision.Result = null
+var _predict_tick_result: PuckAuthorityRules.TickResult = null
+var _predict_goalie_contact: GoalieContactDetector.Contact = null
+var _predict_obb_scratch: SweptDiscOBB.Result = null
 # Scoped true only while a stick-lift strip is being applied, so the synchronous
 # puck_stripped_from handlers (sound + victim notify) can tell a stick lift apart
 # from a poke/body-check strip and pick the right cue. Read via
@@ -226,25 +231,30 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		puck.puck_touched_loose.connect(func(s: Skater) -> void: puck_touched_while_loose.emit(_peer_id_resolver.call(s)))
 		puck.puck_body_blocked.connect(func(s: Skater) -> void: puck_touched_while_loose.emit(_peer_id_resolver.call(s)))
 		puck.puck_touched_goalie.connect(func(g: Goalie) -> void: puck_touched_by_goalie.emit(g))
-		# Dev + host only: EITHER the analytic drive OR the Phase-0/2 shadow
-		# harnesses — never both. The harnesses measure the analytic model
-		# against Jolt; with the drive on, "Jolt's" state IS the analytic sim,
-		# so every digest would compare the model against itself (divergence
-		# ≡ 0, ground truth = the drive's own signals) — measurement theater.
-		# Flip the const to false for a measurement session against real Jolt.
-		if BuildInfo.VERSION == "dev":
-			if _ANALYTIC_DRIVE_IN_DEV:
-				# Determinism migration: the analytic sim drives the loose puck.
-				# The goalie provider is forwarded in set_goalie_provider.
-				puck.set_analytic_drive_enabled(true)
-			else:
-				_shadow = PuckShadowComparator.new()
-				puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
-				_goalie_shadow = GoalieCollisionShadow.new()
-				puck.puck_touched_goalie.connect(_on_shadow_goalie_contact)
+		# The analytic sim IS the authority for the loose puck on every host —
+		# dev, exported, offline (Phase 1/2 of the determinism migration,
+		# feel-validated in the dev playtest). This is what lets clients run the
+		# same sim predictively (Phase 3). The Phase-0/2 shadow harnesses are a
+		# dev-only opt-in that swaps the drive OUT for a Jolt measurement
+		# session — never both at once (a harness measuring the drive's own
+		# output measures nothing).
+		if BuildInfo.VERSION == "dev" and not _ANALYTIC_DRIVE_IN_DEV:
+			_shadow = PuckShadowComparator.new()
+			puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
+			_goalie_shadow = GoalieCollisionShadow.new()
+			puck.puck_touched_goalie.connect(_on_shadow_goalie_contact)
+		else:
+			# The goalie provider is forwarded in set_goalie_provider.
+			puck.set_analytic_drive_enabled(true)
 	else:
 		puck.puck_touched_goalie.connect(_on_client_puck_hit_goalie)
 		puck.puck_touched_post.connect(_on_client_puck_hit_post)
+		# Phase-3 loose-puck prediction scratch (built once; the predictor runs
+		# per physics frame and must allocate nothing).
+		_predict_frame_scratch = PuckGeometryCollision.Result.new()
+		_predict_tick_result = PuckAuthorityRules.TickResult.new()
+		_predict_goalie_contact = GoalieContactDetector.Contact.new()
+		_predict_obb_scratch = SweptDiscOBB.Result.new()
 
 func set_peer_id_resolver(resolver: Callable) -> void:
 	_peer_id_resolver = resolver
@@ -310,12 +320,16 @@ func _physics_process(delta: float) -> void:
 		_pin_puck_to_carrier(_remote_carrier_skater, delta)
 		if NetworkTelemetry.instance: NetworkTelemetry.instance.puck_mode = "pinned_remote"
 	elif not _predicting_trajectory:
-		_interpolate(delta)
-		if NetworkTelemetry.instance:
-			# "interp_handoff" surfaces the post-shot slew in F3 so playtest can see
-			# how long the timeline ease actually runs on a real link.
-			NetworkTelemetry.instance.puck_mode = "interp_handoff" \
-					if (_slew_lead > 0.0 or _handoff_slew_pending) else "interpolating"
+		# Phase-3: predict the loose puck to host-present off the newest
+		# authoritative snapshot; the interpolated past is the fallback for
+		# stale data (deep loss) / clock warmup / the constant being off.
+		if not _predict_loose(delta):
+			_interpolate(delta)
+			if NetworkTelemetry.instance:
+				# "interp_handoff" surfaces the post-shot slew in F3 so playtest can
+				# see how long the timeline ease actually runs on a real link.
+				NetworkTelemetry.instance.puck_mode = "interp_handoff" \
+						if (_slew_lead > 0.0 or _handoff_slew_pending) else "interpolating"
 	else:
 		is_extrapolating = false
 		_smooth_initialized = false
@@ -1180,6 +1194,81 @@ func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
 	return vel * (new_speed / speed)
 
 
+# ── Phase-3: client-side loose-puck prediction (the RL-family payoff) ────────
+# Run the SAME analytic sim the host drives the puck with
+# (PuckAuthorityRules.step_frame_substep — integration, friction, gravity,
+# boards, goal frame) forward from the newest authoritative snapshot to this
+# client's estimate of host present, every frame. Stateless re-predict: each
+# frame starts over from the newest snapshot, so host-side events the client
+# couldn't know (deflects, blade touches, new shots) are incorporated the
+# moment their snapshot lands — the "reconcile" is implicit and the residual
+# is absorbed by the shared SmoothDamp tail. Static geometry agrees with the
+# host by construction (shared step); the GOALIE is a prediction STOP — hold
+# at the detected contact, velocity zeroed, until authoritative snapshots
+# reveal the save outcome (the save is a host decision; predicting a rebound
+# would re-derive it — the ghost-save lesson). Returns false when prediction
+# isn't possible (no data / stale snapshot / constant off) — caller falls back
+# to the legacy interpolation path.
+func _predict_loose(delta: float) -> bool:
+	if not Constants.PUCK_CLIENT_PREDICTION:
+		return false
+	if _state_buffer.is_empty():
+		return false
+	var newest: BufferedPuckState = _state_buffer.back()
+	var now: float = NetworkManager.estimated_host_time()
+	var age: float = now - newest.timestamp
+	if age < 0.0 or age > Constants.PUCK_PREDICT_MAX_S:
+		return false
+	# The handoff slew belongs to the interpolated timeline; the predicted
+	# target already sits at present, so any trajectory→predicted seam is an
+	# along-track offset the snap-guarded smoother absorbs.
+	_handoff_slew_pending = false
+	_slew_lead = 0.0
+	var dt: float = 1.0 / float(Constants.PHYSICS_TICK)
+	var ticks: int = floori(age * float(Constants.PHYSICS_TICK))
+	var frac: float = age - float(ticks) * dt
+	var pos: Vector3 = newest.state.position
+	var vel: Vector3 = newest.state.velocity
+	var radius: float = GameRules.PUCK_COLLISION_RADIUS
+	var goalies: Array = _goalie_provider.call() if not _goalie_provider.is_null() else []
+	var stopped: bool = false
+	for _t in ticks:
+		var tick_prev: Vector3 = pos
+		var substeps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), dt)
+		var sub_dt: float = dt / float(substeps)
+		for _sub in substeps:
+			_predict_tick_result.touched_post = false
+			_predict_tick_result.touched_net = false
+			PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
+					puck.max_speed, puck.ice_height, puck.max_height,
+					_predict_frame_scratch, _predict_tick_result)
+			pos = _predict_tick_result.position
+			vel = _predict_tick_result.velocity
+		# Goalie stop: tested over the tick's chord (cheaper than the host's
+		# per-sub-step interleave; the stop is cosmetic holding, not a response,
+		# so chord-level timing is enough). The goalie pose used is the client's
+		# RENDERED (interpolated) goalie — approximate by nature, which is
+		# exactly why the response is never predicted, only the hold.
+		if not goalies.is_empty() \
+				and absf(pos.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z \
+				and GoalieContactDetector.nearest(goalies, tick_prev, pos, radius,
+						_predict_obb_scratch, _predict_goalie_contact):
+			pos = _predict_goalie_contact.point \
+					+ _predict_goalie_contact.normal * _predict_goalie_contact.depth
+			vel = Vector3.ZERO
+			stopped = true
+			break
+	if not stopped:
+		# Sub-tick remainder: advance by velocity so the render doesn't quantize
+		# to the tick grid (the host stamps whole ticks; est_host_time doesn't).
+		pos += vel * maxf(frac, 0.0)
+	is_extrapolating = false  # prediction is the mode, not a buffer underrun
+	if NetworkTelemetry.instance:
+		NetworkTelemetry.instance.puck_mode = "predicted_hold" if stopped else "predicted"
+	_smooth_apply_and_prune(pos, vel, delta, NetworkManager.get_interpolation_delay())
+	return true
+
+
 func _interpolate(delta: float) -> void:
 	# Shared delay keeps the loose puck on the skaters' timeline (render == the
 	# lag-comp rewind instant at extrapolation_lead_fraction 0 — see the export).
@@ -1269,33 +1358,41 @@ func _interpolate(delta: float) -> void:
 	# only the residual error is critically damped. On a fresh entry into interpolation
 	# (carry / trajectory / extrap → loose) seed from the puck's live spot so the seam
 	# blends; a pathological gap snaps.
-	var target_pos: Vector3 = interpolated.position
+	_smooth_apply_and_prune(interpolated.position, interpolated.velocity, delta, interp_delay)
+
+
+# Shared render tail for the loose puck (interpolated AND Phase-3 predicted
+# targets): velocity-feed-forward SmoothDamp with the velocity-aware snap guard,
+# commit to the puck, prune the buffer.
+#
+# Snap guard (PuckHandoffRules): only CROSS-track error at the snap distance
+# means the rendered trajectory is genuinely wrong; along-track error up to
+# velocity × _ALONG_SNAP_TIME_S is an expected timeline offset (the slew's job —
+# and, under prediction, the trajectory→predicted seam) and must not teleport a
+# fast puck. At rest (resets, faceoffs) it degrades to the plain distance check.
+#
+# Prune against the un-led PAST instant (est_host − full interp_delay), NOT the
+# render target's own time: with a stage-4 lead / handoff slew / Phase-3
+# prediction active the target runs up to interp_delay ahead of the past
+# instant, and pruning there discards exactly the samples an interpolation
+# fallback needs. The un-led time is the minimum any future frame can request,
+# so pruning there is always safe.
+func _smooth_apply_and_prune(target_pos: Vector3, vel: Vector3, delta: float,
+		interp_delay: float) -> void:
 	if not _smooth_initialized:
 		_smooth_pos = puck.get_puck_position()
 		_smooth_vel = Vector3.ZERO
 		_smooth_initialized = true
-	# Velocity-aware snap guard (PuckHandoffRules): only CROSS-track error at the
-	# snap distance means the rendered trajectory is genuinely wrong; along-track
-	# error up to velocity × _ALONG_SNAP_TIME_S is an expected timeline offset
-	# (the slew's job) and must not teleport a fast puck. At rest (resets,
-	# faceoffs) it degrades to the plain distance check.
-	if PuckHandoffRules.needs_hard_snap(target_pos - _smooth_pos, interpolated.velocity,
+	if PuckHandoffRules.needs_hard_snap(target_pos - _smooth_pos, vel,
 			_SMOOTH_SNAP_DIST, _ALONG_SNAP_TIME_S, _HANDOFF_MIN_SPEED):
 		_smooth_pos = target_pos
 		_smooth_vel = Vector3.ZERO
 	else:
-		_smooth_pos += interpolated.velocity * delta
+		_smooth_pos += vel * delta
 		_smooth_pos = _smooth_damp(_smooth_pos, target_pos, position_smooth_time, delta)
-	interpolated.position = _smooth_pos
-	_apply_state_to_puck(interpolated)
-	# Prune against the un-led PAST instant (est_host − full interp_delay), NOT
-	# render_time: with a stage-4 lead (or the handoff slew) active, render_time
-	# runs up to interp_delay ahead of the past instant, and pruning at the led
-	# time discards exactly the samples the buffer needs when the blade-eased
-	# lead collapses back toward the past — find_bracket would return null and
-	# the rendered puck froze for the collapse window. The un-led time is the
-	# minimum any future frame can request (lead and slew are both ≥ 0), so
-	# pruning there is always safe.
+	_scratch_interp.position = _smooth_pos
+	_scratch_interp.velocity = vel
+	_apply_state_to_puck(_scratch_interp)
 	BufferedStateInterpolator.drop_stale(
 			_state_buffer, NetworkManager.estimated_host_time() - interp_delay)
 

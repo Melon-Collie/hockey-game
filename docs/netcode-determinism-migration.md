@@ -187,10 +187,29 @@ Once the loose puck is a deterministic sim both sides run:
   drive emits the feedback signals. All collision math is unit-tested; the Jolt seam + feel
   are the remaining validation, done in a local dev session (the shadow harness runs alongside
   for divergence numbers). Shipped/online builds keep the Jolt puck untouched.
-- **Phase 3 — client-side puck prediction + reconcile** (the RL-family payoff): every
-  client predicts the loose puck; remove interpolate/lead/handoff-slew for it.
+- **Phase 3 — client-side puck prediction + reconcile (the RL-family payoff). BUILT,
+  pending online feel validation.** The analytic drive is now the authority in EVERY
+  build (the dev gate is gone; `PROTOCOL_VERSION` 36 refuses mixed lobbies), and every
+  client runs the SAME sim forward from the newest authoritative snapshot to its
+  estimate of host present (`PuckController._predict_loose`). The integration + goal-
+  frame step is literally shared code — `PuckAuthorityRules.step_frame_substep` /
+  `frame_substeps`, called by both `Puck._drive_analytic` (host, goalie response
+  interleaved) and the client predictor (goalie contact = a prediction STOP: hold at
+  the contact, velocity zeroed, until snapshots reveal the save — the save is a host
+  decision, never re-derived). Prediction is a **stateless re-predict** each frame, so
+  host-side events (deflects, touches, new shots) fold in the moment their snapshot
+  lands and the residual rides the existing SmoothDamp + velocity-aware snap guard;
+  there is no separate reconcile pass to tune. Loose-puck claim rewinds (pickup /
+  deflect verdict / one-timer range gate) read the claim stamp
+  (`LagCompRewind.puck_view_time`) so render == rewind holds at present; the carried
+  puck stays on the carrier's stage-3 timeline. Stale data (> `PUCK_PREDICT_MAX_S`)
+  falls back to the legacy interpolation path, which also remains the shooter's
+  trajectory-prediction reconcile target for now.
 - **Phase 4 — simplify.** Delete the now-dead Jolt puck config and the puck-specific
-  netcode special-cases. The puck's netcode is now the skater's: predict + reconcile.
+  netcode special-cases (interpolate-in-the-past becomes fallback-only today; the
+  stage-4 conditional lead, handoff slew, and the shooter's separate client-Jolt
+  trajectory-prediction path all collapse into the one predicted mode). The puck's
+  netcode is now the skater's: predict + reconcile.
 
 ## Recommendation
 

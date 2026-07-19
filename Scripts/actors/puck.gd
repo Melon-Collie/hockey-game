@@ -224,20 +224,14 @@ func set_team_resolver(resolver: Callable) -> void:
 # _drive_analytic. Gated by BuildInfo.VERSION == "dev" at the PuckController seam.
 var _analytic_drive_enabled: bool = false
 var _goalie_provider: Callable = Callable()  # returns Array of live Goalie nodes for contact detection
-# Only run goalie contact detection when the puck is within this of a goal line (a goalie's
-# deepest challenge + margin) — skips the swept-OBB test for the puck's mid-ice life.
-const _GOALIE_DETECT_RANGE_Z: float = 6.0
-# Sub-step the drive when the puck is within this of a goal line, so a hard shot can't tunnel
-# through the thin posts / net panels (the goalie is already swept). Elsewhere the puck steps
-# once per tick — only the boards, an untunnelable position clamp, live out there.
-const _FRAME_SUBSTEP_RANGE_Z: float = 3.0
-const _FRAME_SUBSTEP_M: float = 0.04         # max advance per sub-step (< a puck radius)
-const _MAX_FRAME_SUBSTEPS: int = 16          # cap (16 × 0.04 m = 0.64 m/tick ≈ 77 m/s)
+# Sub-step ranges/counts and the goalie-detect gate live on PuckAuthorityRules —
+# SHARED with the client's Phase-3 prediction so both sides step identically.
 # Caller-owned scratch so the per-tick drive allocates nothing.
 var _frame_result: PuckGeometryCollision.Result = null
 var _goalie_contact: GoalieContactDetector.Contact = null
 var _goalie_scratch: SweptDiscOBB.Result = null
 var _save_result: GoalieSaveRules.ContactResult = null
+var _tick_result: PuckAuthorityRules.TickResult = null
 # Shared read-only empty (const arrays are frozen) — the no-goalies-in-range default
 # every open-ice tick, instead of allocating a fresh `[]` per tick.
 const _NO_GOALIES: Array = []
@@ -261,6 +255,7 @@ func set_analytic_drive_enabled(enabled: bool) -> void:
 		_goalie_contact = GoalieContactDetector.Contact.new()
 		_goalie_scratch = SweptDiscOBB.Result.new()
 		_save_result = GoalieSaveRules.ContactResult.new()
+		_tick_result = PuckAuthorityRules.TickResult.new()
 	if enabled:
 		# The puck is frozen for its ENTIRE life under the analytic drive — carried (carry pin)
 		# or loose (the drive) — so Jolt never integrates or collides it and there is no dynamic
@@ -795,16 +790,14 @@ func _drive_analytic(dt: float) -> void:
 	# _FRAME_SUBSTEP_RANGE_Z of a goal line (the thin frame); run goalie detection out to the
 	# wider _GOALIE_DETECT_RANGE_Z (a goalie challenges further than the frame sits).
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
-	var goalie_range: bool = absf(prev.z) > GameRules.GOAL_LINE_Z - _GOALIE_DETECT_RANGE_Z
+	var goalie_range: bool = absf(prev.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z
 	# _NO_GOALIES (a shared read-only const), not a `[]` literal — this line runs
 	# every loose-puck tick and a fresh Array per tick is exactly the hot-path
 	# allocation churn CLAUDE.md forbids.
 	var goalies: Array = _NO_GOALIES
 	if goalie_range and not _goalie_provider.is_null():
 		goalies = _goalie_provider.call()
-	var substeps: int = 1
-	if absf(prev.z) > GameRules.GOAL_LINE_Z - _FRAME_SUBSTEP_RANGE_Z:
-		substeps = clampi(ceili(incoming.length() * dt / _FRAME_SUBSTEP_M), 1, _MAX_FRAME_SUBSTEPS)
+	var substeps: int = PuckAuthorityRules.frame_substeps(prev.z, incoming.length(), dt)
 	var sub_dt: float = dt / float(substeps)
 	var pos: Vector3 = prev
 	var vel: Vector3 = incoming
@@ -825,22 +818,19 @@ func _drive_analytic(dt: float) -> void:
 	var emit_caught: Goalie = null
 	for _sub in substeps:
 		var sub_prev: Vector3 = pos
-		var stepped: Transform3D = PuckAuthorityRules.advance_loose_puck(
-				pos, vel, sub_dt, max_speed, ice_height, max_height)
-		pos = stepped.origin
-		vel = stepped.basis.x
-		# Posts + crossbar (pipe ping), then top + back/side net panels (twine).
-		if PuckGeometryCollision.resolve_posts(pos, vel, radius, _frame_result) \
-				or PuckGeometryCollision.resolve_crossbar(pos, vel, radius, _frame_result):
-			pos = _frame_result.position
-			vel = _frame_result.velocity
+		# Integration + boards + goal frame: the SHARED Phase-3 step (identical on
+		# the client's prediction path), so static-geometry motion agrees by
+		# construction. Touched flags OR-accumulate; clear per sub-step read.
+		_tick_result.touched_post = false
+		_tick_result.touched_net = false
+		PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
+				max_speed, ice_height, max_height, _frame_result, _tick_result)
+		pos = _tick_result.position
+		vel = _tick_result.velocity
+		if _tick_result.touched_post:
 			touched_post = true
-		if PuckGeometryCollision.resolve_top_net(pos, vel, _frame_result) \
-				or PuckGeometryCollision.resolve_net_panels(sub_prev, pos, vel, radius, _frame_result):
-			pos = _frame_result.position
-			vel = _frame_result.velocity
-			if incoming.length() >= 1.0:
-				touched_net = true
+		if _tick_result.touched_net and incoming.length() >= 1.0:
+			touched_net = true
 		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
 		if not goalies.is_empty() and GoalieContactDetector.nearest(
 				goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact):

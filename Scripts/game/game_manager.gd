@@ -1221,7 +1221,9 @@ func _spawn_puck() -> void:
 	# building a fresh array per call allocated twice per physics tick.
 	puck_controller.set_skater_getter(func() -> Array:
 		return _registry.skaters() if _registry != null else [])
-	# Dev-only Phase-2 harness: the live goalie list for the proactive false-positive probe.
+	# The live goalie list: the host's analytic drive detects goalie contact
+	# through it, and the client's Phase-3 loose-puck prediction uses it for the
+	# goalie prediction-STOP (dev shadow harnesses also probe through it).
 	puck_controller.set_goalie_provider(func() -> Array:
 		return goalies)
 	puck_controller.puck_picked_up_by.connect(_on_server_puck_picked_up_by)
@@ -2930,16 +2932,17 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	var controller: SkaterController = record.controller
 	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
 			rtt_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
-	# Range gate against the puck the shooter saw: rewind to their interpolated
-	# view when the stamp is fresh, otherwise use the live puck. This is the ONLY
-	# part of the one-timer the client gets a say in — "did I connect with the
-	# puck I saw" — and it stays lag-comped. The shot itself (below) is host-derived.
+	# Range gate against the puck the shooter saw — puck_view_time: predicted at
+	# the claim stamp under Phase-3 client puck prediction, the interpolated past
+	# otherwise; live puck when the stamp is stale. This is the ONLY part of the
+	# one-timer the client gets a say in — "did I connect with the puck I saw" —
+	# and it stays lag-comped. The shot itself (below) is host-derived.
 	var now: float = NetworkManager.estimated_host_time()
 	var view_puck_pos: Vector3 = puck.get_puck_position()
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() \
 			and ShotReleaseRules.is_timestamp_fresh(now, host_timestamp):
 		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(
-				LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms))
+				LagCompRewind.puck_view_time(host_timestamp, interp_delay_ms))
 		if snap != null and snap.puck_state != null:
 			view_puck_pos = snap.puck_state.position
 	var zone_world: Vector3 = record.skater.get_slapper_zone_global_position()

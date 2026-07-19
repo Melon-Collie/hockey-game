@@ -81,6 +81,20 @@ static func prev_tick(view_time: float) -> float:
 	return view_time - 1.0 / float(Constants.PHYSICS_TICK)
 
 
+# Host-time at which to query the LOOSE puck for a claim. Under Phase-3 client
+# puck prediction the claimant renders the loose puck predicted to its estimate
+# of host present — i.e. AT the claim stamp — so the host rewinds its own
+# history to the stamp itself (clamped non-future). With prediction off it is
+# the legacy interpolated past. The CARRIED puck is unaffected — it rides the
+# carrier's render timeline (remote_view + forward_predict_skater); this helper
+# is only for claims against a loose puck (pickup / deflect verdicts, the
+# one-timer range gate).
+static func puck_view_time(host_timestamp: float, interp_delay_ms: float) -> float:
+	if Constants.PUCK_CLIENT_PREDICTION:
+		return host_timestamp
+	return remote_view_time(host_timestamp, interp_delay_ms)
+
+
 # Stage-3 forward-prediction depth: how many physics ticks a remote body is
 # intent-integrated forward from its interpolated-past base toward host-present.
 # The client (RemoteController render) and the host claim rewinds (hit / poke /

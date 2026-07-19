@@ -101,6 +101,24 @@ const FORWARD_PREDICT_INTENT_DECAY_TICKS: int = 5
 # + the eased base_render_time in PuckController._interpolate) stays wired and
 # correct — set this > 0.0 to re-enable for an A/B.
 const PUCK_FORWARD_LEAD_FRACTION: float = 0.0
+# Phase-3 determinism migration (docs/netcode-determinism-migration.md): every
+# client runs the SAME analytic sim the host drives the loose puck with,
+# forward from the newest authoritative snapshot to its estimate of host
+# present — real predict-and-reconcile, replacing interpolate-in-the-past for
+# the loose puck. Static geometry (boards, posts, crossbar, net) is fully
+# predicted via the shared PuckAuthorityRules step; goalie contact is a
+# prediction STOP (hold at the contact — the save outcome is a host decision,
+# never re-derived client-side). Host claim rewinds for the LOOSE puck
+# (pickup, one-timer range gate) read the claim stamp instead of the
+# interpolated past — see LagCompRewind.puck_view_time — so render == rewind
+# holds at present. Both sides read this constant and PROTOCOL_VERSION gates
+# mixed builds, so the pair can never disagree. false restores the legacy
+# interpolated loose puck AND the interpolated-past claim rewind.
+const PUCK_CLIENT_PREDICTION: bool = true
+# Prediction depth cap: a snapshot older than this (deep packet loss) is too
+# stale to predict from — the client falls back to the legacy interpolation
+# path, whose extrapolation cap + hold already handle starvation gracefully.
+const PUCK_PREDICT_MAX_S: float = 0.35
 # Wire encoding for session-relative timestamps: u32 in 0.1 ms units
 # (seconds × this scale). Replaces f32 seconds, whose ULP degraded with host
 # uptime — ~1 ms error at 2.3 h (visible interpolation jitter), ~2 ms at
