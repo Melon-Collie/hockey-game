@@ -95,6 +95,7 @@ var _ooo_drop_count: int = 0
 var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
+var _input_drain_count: int = 0
 # Host-side lag-comp pickup-claim outcomes (the host processes every client's
 # claim, so its row summarizes rewind health for the whole lobby). A claim that
 # reaches the rewound geometry test counts in _pickup_claim_count; if the rewound
@@ -225,6 +226,7 @@ var puck_traj_hard_snap_per_sec: float = 0.0
 var input_queue_depth_median: int = 0
 var input_lead_avg_ms: float = 0.0
 var input_starvations_per_sec: float = 0.0
+var input_drains_per_sec: float = 0.0
 var _queue_depth_window: Array[int] = []
 var packet_loss_pct: float = 0.0
 var jitter_p95_ms: float = 0.0
@@ -429,6 +431,13 @@ static func record_input_lead(lead_sec: float) -> void:
 static func record_input_starvation() -> void:
 	if instance: instance._starvation_count += 1
 
+# input_drain: a stale queued input was acked-without-applying by the backlog
+# drain (RemoteController._drain_backlog) — the counterpart of starvation on
+# the recovery side. Sustained non-zero here means upstream jitter bursts are
+# routinely overrunning the input lead's 2-tick cushion.
+static func record_input_drain() -> void:
+	if instance: instance._input_drain_count += 1
+
 # Host-side lag-comp pickup-claim outcomes (see the window-counter comment).
 # record_pickup_claim() is the denominator — a claim that reached the rewound
 # geometry test; miss / deflect are the two non-grant verdicts. Host-only in
@@ -547,6 +556,7 @@ func tick(delta: float) -> void:
 	puck_traj_hard_snap_per_sec = _puck_traj_hard_snap_count / _window_timer
 	input_lead_avg_ms = (_input_lead_sum / _input_lead_n * 1000.0) if _input_lead_n > 0 else 0.0
 	input_starvations_per_sec = _starvation_count / _window_timer
+	input_drains_per_sec = _input_drain_count / _window_timer
 	if not _queue_depth_window.is_empty():
 		var sorted := _queue_depth_window.duplicate()
 		sorted.sort()
@@ -626,6 +636,7 @@ func tick(delta: float) -> void:
 	_input_lead_sum = 0.0
 	_input_lead_n = 0
 	_starvation_count = 0
+	_input_drain_count = 0
 	_host_stall_count = 0
 	_pickup_claim_count = 0
 	_pickup_claim_miss_count = 0

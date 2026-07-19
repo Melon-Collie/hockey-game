@@ -156,6 +156,45 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 	while _input_queue.size() > MAX_QUEUE_DEPTH:
 		_input_queue.pop_front()
 
+# Backlog drain thresholds. Consumption is one input per tick and production is
+# one per tick, so the queue can never catch up on its own: an upstream jitter
+# burst that empties the queue for N ticks (fallback fires, consumption pauses,
+# production continues) leaves the queue N deep PERMANENTLY once the delayed
+# inputs land — every subsequent input applied ~N ticks stale, ratcheting up
+# with each burst until the 0.5 s cap. The drain bounds that: when the front
+# input is overdue past the trigger, stale inputs are acked-without-applying
+# (the same philosophy as the movement-locked drain) down to the target, with
+# edge flags (presses) folded into the next applied input so a press inside the
+# dropped span still fires once. The client sees one reconcile correction for
+# the dropped span — the honest cost of inputs the network delivered too late —
+# instead of a session of staleness. Trigger sits well above healthy overdue
+# (≤ one batch interval, ~8.3 ms) so ordinary jitter never trips it; target
+# restores the healthy depth rather than clamping at the trigger.
+const _DRAIN_TRIGGER_S: float = 4.0 / 120.0  # ~33 ms overdue engages the drain
+const _DRAIN_TARGET_S: float = 1.0 / 120.0   # drain back down to ~1 tick overdue
+
+
+func _drain_backlog(now: float) -> void:
+	if _input_queue.size() <= 1:
+		return
+	if now - _input_queue.front().host_timestamp <= _DRAIN_TRIGGER_S:
+		return
+	var target: float = now - _DRAIN_TARGET_S
+	while _input_queue.size() > 1 and _input_queue.front().host_timestamp < target:
+		var stale: InputState = _input_queue.pop_front()
+		last_processed_host_timestamp = stale.host_timestamp
+		# Presses are edges the player committed — dropping the frame that carried
+		# one must not eat the action. Held/absolute state (move vector, brake,
+		# aim, elevation_level) is NOT carried: the next applied input holds the
+		# current truth, which is the point of the drain.
+		var next: InputState = _input_queue.front()
+		next.shoot_pressed = next.shoot_pressed or stale.shoot_pressed
+		next.slap_pressed = next.slap_pressed or stale.slap_pressed
+		next.stick_lift_pressed = next.stick_lift_pressed or stale.stick_lift_pressed
+		next.quick_shot_pressed = next.quick_shot_pressed or stale.quick_shot_pressed
+		NetworkTelemetry.record_input_drain()
+
+
 func _drive_from_input(delta: float) -> void:
 	# Pop one input per physics tick so every client input gets simulated on the
 	# host in order. last_processed_host_timestamp advances only for inputs that
@@ -170,6 +209,8 @@ func _drive_from_input(delta: float) -> void:
 	# timestamp, so the queue empties between 60Hz batches and fallback-input fires
 	# every gap. Fall through when clock isn't ready to preserve behaviour during
 	# NTP warmup.
+	if NetworkManager.is_clock_ready():
+		_drain_backlog(NetworkManager.estimated_host_time())
 	var input_due: bool = _input_queue.size() > 0 and (
 			not NetworkManager.is_clock_ready() or
 			_input_queue.front().host_timestamp <= NetworkManager.estimated_host_time())

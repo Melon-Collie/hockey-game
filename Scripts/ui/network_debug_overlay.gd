@@ -360,6 +360,8 @@ func _render_host(t: NetworkTelemetry) -> void:
 			"how late inputs arrive vs schedule; want near 0")
 		_metric(_band(t.input_starvations_per_sec, 0.5, 5.0), "Starvations", "%.1f/s" % t.input_starvations_per_sec,
 			"ticks with no client input (reused last); want 0")
+		_metric(_band(t.input_drains_per_sec, 0.5, 5.0), "Backlog drains", "%.1f/s" % t.input_drains_per_sec,
+			"stale inputs dropped by the overdue drain; want 0, bursts after jitter are the fix working")
 
 	_section("Host frame health")
 	_frame_health(t)
