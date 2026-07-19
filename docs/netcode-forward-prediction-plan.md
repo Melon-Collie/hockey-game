@@ -234,9 +234,9 @@ can't run headless, so networking feel is verified on the developer's machine.
    shared primitive; `RemoteController` (render) and `HitClaimResolver` (host
    claim rewind) both drive it to the same depth via
    `LagCompRewind.forward_predict_ticks`, so render == rewind holds at any lead.
-   Gated by `Constants.REMOTE_FORWARD_PREDICT_FRACTION`, **shipped at 0 (no-op /
-   current behavior)** — raise it on the experimental build to enable + tune
-   (0.5 conservative, 1.0 full present). Pickup/poke puck rewind is stage 4.
+   Gated by `Constants.REMOTE_FORWARD_PREDICT_FRACTION`, **set to 1.0 (full
+   present) on this experimental branch** for the Steam playtest — dial toward
+   0.5 / 0.0 if remotes overshoot on hard cuts. Pickup/poke puck rewind is stage 4.
 4. **Conditional puck lead** + **goalie spectator pose-lead** (share the "host
    rewinds to predicted instant" spine).
 5. **Rate drop** (now free on feel) **+ delta-encode** (when egress-metered).

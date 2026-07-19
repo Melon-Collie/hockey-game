@@ -74,10 +74,11 @@ const NETWORK_INTERPOLATION_DELAY: float = 0.075
 # of forward prediction (remote bodies render at ~present). READ BY BOTH the client
 # render (RemoteController) AND the host claim-rewind (HitClaimResolver) via
 # LagCompRewind.forward_predict_ticks, so render stays == rewind at any value — the
-# two MUST use the same fraction. Held at 0.0 until playtested: raise it (0.5 is a
-# conservative first step, 1.0 full present) on the experimental build and watch
-# remote skaters on hard cuts (extrapolation overshoot) and contested-hit feel.
-const REMOTE_FORWARD_PREDICT_FRACTION: float = 0.0
+# two MUST use the same fraction. Set to 1.0 (full ~interp_delay of forward
+# prediction, remote bodies at ~present) for the experimental Steam playtest build.
+# Dial toward 0.5 / 0.0 if remote skaters overshoot on hard cuts (extrapolation
+# snap-back) or contested-hit feel regresses; 0.0 restores exact render == rewind.
+const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
 # Wire encoding for session-relative timestamps: u32 in 0.1 ms units
 # (seconds × this scale). Replaces f32 seconds, whose ULP degraded with host
 # uptime — ~1 ms error at 2.3 h (visible interpolation jitter), ~2 ms at
