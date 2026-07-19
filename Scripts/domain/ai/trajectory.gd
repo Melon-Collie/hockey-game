@@ -29,13 +29,14 @@ static func predict(pos: Vector3, vel: Vector3,
 		decel_m_s2: float = 0.0,
 		bounce_factor: float = 0.0,
 		accel: Vector3 = Vector3.ZERO,
-		max_speed_m_s: float = 0.0) -> Array[Vector3]:
+		max_speed_m_s: float = 0.0,
+		board_friction: float = 0.0) -> Array[Vector3]:
 	var out: Array[Vector3] = []
 	var p: Vector3 = pos
 	var v: Vector3 = vel
 	for i: int in range(steps):
 		var stepped: Transform3D = _step(
-				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s)
+				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s, board_friction)
 		p = stepped.origin
 		v = stepped.basis.x
 		out.append(p)
@@ -52,12 +53,13 @@ static func predict_final(pos: Vector3, vel: Vector3,
 		decel_m_s2: float = 0.0,
 		bounce_factor: float = 0.0,
 		accel: Vector3 = Vector3.ZERO,
-		max_speed_m_s: float = 0.0) -> Vector3:
+		max_speed_m_s: float = 0.0,
+		board_friction: float = 0.0) -> Vector3:
 	var p: Vector3 = pos
 	var v: Vector3 = vel
 	for i: int in range(steps):
 		var stepped: Transform3D = _step(
-				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s)
+				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s, board_friction)
 		p = stepped.origin
 		v = stepped.basis.x
 	return p
@@ -70,7 +72,8 @@ static func predict_final(pos: Vector3, vel: Vector3,
 # identical physics.
 static func _step(p: Vector3, v: Vector3, dt: float,
 		decel_m_s2: float, bounce_factor: float,
-		accel: Vector3, max_speed_m_s: float) -> Transform3D:
+		accel: Vector3, max_speed_m_s: float,
+		board_friction: float = 0.0) -> Transform3D:
 	# Apply control acceleration BEFORE the position step so the step uses the
 	# velocity the body has during it. Forward-Euler is off by 0.5·a·dt² from the
 	# exact closed form per step, dwarfed by the pass / chase windows where this
@@ -105,7 +108,20 @@ static func _step(p: Vector3, v: Vector3, dt: float,
 			var v_xz := Vector2(v.x, v.z)
 			var vn: float = v_xz.dot(n)
 			if vn > 0.0:  # moving outward into the boards
+				# Reflect the normal (into-board) component with restitution.
 				v_xz -= (1.0 + bounce_factor) * vn * n
+				# Board friction (Coulomb): bleed the ALONG-board (tangential) speed by an
+				# amount proportional to the normal impulse — what actually kills a hard
+				# rim-around. A glancing carom (small vn) barely slows; a square hit sheds
+				# more. Applied to the post-reflection tangential component (reflection
+				# leaves it unchanged), clamped so it can't reverse.
+				if board_friction > 0.0:
+					var v_tan := v_xz - v_xz.dot(n) * n
+					var t_speed: float = v_tan.length()
+					if t_speed > 1e-6:
+						var drop: float = board_friction * (1.0 + bounce_factor) * vn
+						var new_t: float = maxf(t_speed - drop, 0.0)
+						v_xz += v_tan * (new_t / t_speed - 1.0)
 				v.x = v_xz.x
 				v.z = v_xz.y
 	p = Vector3(clamped_xz.x, p.y, clamped_xz.y)
@@ -178,7 +194,8 @@ static func predict_puck(pos: Vector3, vel: Vector3,
 		steps: int, dt: float) -> Array[Vector3]:
 	return predict(pos, vel, steps, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2,
-			GameRules.PUCK_BOARD_BOUNCE)
+			GameRules.PUCK_BOARD_BOUNCE,
+			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
 
 
 static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
@@ -187,7 +204,8 @@ static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 		return pos
 	var dt: float = lead_time_s / float(steps)
 	return predict_final(pos, vel, steps, dt,
-			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE)
+			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
+			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
 
 
 # One deterministic puck step (ice friction + rounded-corner board reflection),
@@ -205,7 +223,7 @@ static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 	return _step(pos, vel, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
-			Vector3.ZERO, 0.0)
+			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
 
 
 # Puck rest height on the ice — disc bottom on y=0, cylinder half-height above (matches
@@ -239,7 +257,7 @@ static func step_puck_3d(pos: Vector3, vel: Vector3, dt: float,
 	# preserves Y) with a downward gravity accel and zero ice friction.
 	var stepped: Transform3D = _step(pos, vel, dt,
 			0.0, GameRules.PUCK_BOARD_BOUNCE,
-			Vector3(0.0, -GameRules.GRAVITY_M_S2, 0.0), 0.0)
+			Vector3(0.0, -GameRules.GRAVITY_M_S2, 0.0), 0.0, GameRules.PUCK_BOARD_FRICTION)
 	var p: Vector3 = stepped.origin
 	var v: Vector3 = stepped.basis.x
 	if p.y <= rest_height:

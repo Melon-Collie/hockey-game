@@ -227,6 +227,12 @@ var _goalie_provider: Callable = Callable()  # returns Array of live Goalie node
 # Only run goalie contact detection when the puck is within this of a goal line (a goalie's
 # deepest challenge + margin) — skips the swept-OBB test for the puck's mid-ice life.
 const _GOALIE_DETECT_RANGE_Z: float = 6.0
+# Sub-step the drive when the puck is within this of a goal line, so a hard shot can't tunnel
+# through the thin posts / net panels (the goalie is already swept). Elsewhere the puck steps
+# once per tick — only the boards, an untunnelable position clamp, live out there.
+const _FRAME_SUBSTEP_RANGE_Z: float = 3.0
+const _FRAME_SUBSTEP_M: float = 0.04         # max advance per sub-step (< a puck radius)
+const _MAX_FRAME_SUBSTEPS: int = 16          # cap (16 × 0.04 m = 0.64 m/tick ≈ 77 m/s)
 # Caller-owned scratch so the per-tick drive allocates nothing.
 var _frame_result: PuckGeometryCollision.Result = null
 var _goalie_contact: GoalieContactDetector.Contact = null
@@ -741,31 +747,40 @@ func _drive_analytic(dt: float) -> void:
 	_pending_elevation_vel = Vector3.ZERO  # consumed
 	_pending_elevation = false
 
-	# 1) Integrate: ice friction + gravity + board caroms, with the max-speed / max-height
-	# clamps _integrate_forces enforced.
-	var stepped: Transform3D = PuckAuthorityRules.advance_loose_puck(
-			prev, incoming, dt, max_speed, ice_height, max_height)
-	var pos: Vector3 = stepped.origin
-	var vel: Vector3 = stepped.basis.x
-	# Board feedback: a real carom is the raw (un-reflected) next position crossing the
+	# 1+2) Integrate (ice friction + gravity + board caroms, with the max-speed / max-height
+	# clamps) AND resolve the goal frame. Near a net, SUB-STEP so a hard shot (0.33 m/tick at
+	# 40 m/s) can't tunnel through the thin posts / net panels: each sub-step advances under a
+	# puck radius, which the position-based frame resolvers can't be tunnelled through. Open ice
+	# needs a single step — its only geometry is the boards, a position clamp that can't tunnel.
+	var radius: float = GameRules.PUCK_COLLISION_RADIUS
+	var substeps: int = 1
+	if absf(prev.z) > GameRules.GOAL_LINE_Z - _FRAME_SUBSTEP_RANGE_Z:
+		substeps = clampi(ceili(incoming.length() * dt / _FRAME_SUBSTEP_M), 1, _MAX_FRAME_SUBSTEPS)
+	var sub_dt: float = dt / float(substeps)
+	var pos: Vector3 = prev
+	var vel: Vector3 = incoming
+	for _sub in substeps:
+		var stepped: Transform3D = PuckAuthorityRules.advance_loose_puck(
+				pos, vel, sub_dt, max_speed, ice_height, max_height)
+		pos = stepped.origin
+		vel = stepped.basis.x
+		# Posts + crossbar (pipe ping), then top + back/side net panels (twine).
+		if PuckGeometryCollision.resolve_posts(pos, vel, radius, _frame_result) \
+				or PuckGeometryCollision.resolve_crossbar(pos, vel, radius, _frame_result):
+			pos = _frame_result.position
+			vel = _frame_result.velocity
+			puck_touched_post.emit()
+		if PuckGeometryCollision.resolve_top_net(pos, vel, _frame_result) \
+				or PuckGeometryCollision.resolve_net_panels(pos, vel, radius, _frame_result):
+			pos = _frame_result.position
+			vel = _frame_result.velocity
+			if incoming.length() >= 1.0:
+				puck_hit_goal_body.emit()
+	# Board feedback: a real carom is the raw (un-reflected) full-tick position crossing the
 	# boundary with into-board pace — a puck sliding parallel doesn't fire.
 	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)
 	if raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 and incoming.length() >= 1.0:
 		puck_hit_boards.emit()
-
-	# 2) Goal frame: posts + crossbar (pipe ping) then top + back/side net panels (twine).
-	var radius: float = GameRules.PUCK_COLLISION_RADIUS
-	if PuckGeometryCollision.resolve_posts(pos, vel, radius, _frame_result) \
-			or PuckGeometryCollision.resolve_crossbar(pos, vel, radius, _frame_result):
-		pos = _frame_result.position
-		vel = _frame_result.velocity
-		puck_touched_post.emit()
-	if PuckGeometryCollision.resolve_top_net(pos, vel, _frame_result) \
-			or PuckGeometryCollision.resolve_net_panels(pos, vel, radius, _frame_result):
-		pos = _frame_result.position
-		vel = _frame_result.velocity
-		if incoming.length() >= 1.0:
-			puck_hit_goal_body.emit()
 
 	# 3) Goalie: swept-OBB detect → deaden / steer / catch / live reflect. Gated to near a goal
 	# line (a goalie never challenges more than a few metres out) so the ~9-box-per-goalie
@@ -795,9 +810,16 @@ func _drive_analytic(dt: float) -> void:
 			pos.z = GameRules.GOAL_LINE_Z * signf(z)
 			vel = Vector3.ZERO
 
-	# 5) Commit. _pre_contact_velocity mirrors the Jolt path (pre-collision incoming) for any
-	# external reader; linear_velocity is the authoritative store (persists on the frozen body)
-	# so gameplay readers (get_puck_velocity, AI, HUD) and next tick's interactions see it.
+	# 5) Commit. The puck can never sit below the ice — re-homes the Jolt path's grounded
+	# `position.y = ice_height` pin, and catches a goalie eject / save whose normal drove the
+	# disc down into the surface (the "puck in the ice, only the shadow shows" bug).
+	if pos.y < ice_height:
+		pos.y = ice_height
+		if vel.y < 0.0:
+			vel.y = 0.0
+	# _pre_contact_velocity mirrors the Jolt path (pre-collision incoming) for any external
+	# reader; linear_velocity is the authoritative store (persists on the frozen body) so
+	# gameplay readers (get_puck_velocity, AI, HUD) and next tick's interactions see it.
 	_pre_contact_velocity = incoming
 	linear_velocity = vel
 	global_position = pos

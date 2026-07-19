@@ -173,6 +173,18 @@ func test_step_puck_reflects_velocity_at_board() -> void:
 	assert_lte(stepped.origin.x, GameRules.INNER_HALF_WIDTH + 0.001, "stays inside the boards")
 
 
+func test_step_puck_board_friction_bleeds_tangential_speed() -> void:
+	# A puck glancing off the +X board (small into-board X, large along-board Z) loses some of
+	# its ALONG-board speed to board friction — the term that kills a hard rim-around. Ice
+	# friction over one tick is ~0.004 m/s (negligible at this speed), so the drop is the board.
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.02, 0, 0)
+	var vel := Vector3(6, 0, 30)  # mostly tangential (+Z), gentle into the +X board
+	var stepped: Transform3D = AITrajectory.step_puck(pos, vel, 1.0 / 120.0)
+	assert_lt(stepped.basis.x.x, 0.0, "into-board component reflected")
+	assert_lt(stepped.basis.x.z, 29.5, "along-board (tangential) speed bled by board friction")
+	assert_gt(stepped.basis.x.z, 27.0, "but most of the tangential pace is kept on a glance")
+
+
 func test_step_puck_chained_matches_predict_puck_at() -> void:
 	# The load-bearing guarantee: the shadow harness free-runs by CHAINING step_puck,
 	# and that must equal the AITrajectory predictor the AI already trusts to match

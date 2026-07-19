@@ -273,6 +273,14 @@ const PUCK_AIRBORNE_HEIGHT_M: float = 0.05
 # whatever the combine does: Godot's non-absorbent bounce combine ADDS the two,
 # and the puck's side is 0, so 0 + 0.4 = 0.4 regardless.)
 const PUCK_BOARD_BOUNCE: float = 0.4
+# Board kinetic friction coefficient. Mirrors Physics/boards.tres `friction` (guarded by
+# test_physics_material_mirrors alongside the bounce). On a carom the boards bleed tangential
+# speed via Coulomb friction proportional to the normal impulse — this is what stops a hard
+# rim-around from circling the rink forever (ice friction alone is far too weak to kill it).
+# Under the analytic puck sim this is applied in AITrajectory; Jolt applied it as contact
+# friction. Godot's friction combine is min(a, b) and the puck's side is 1.0, so the effective
+# value is min(1.0, 0.15) = 0.15 — matching this const.
+const PUCK_BOARD_FRICTION: float = 0.15
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
 # the stoppage feels responsive, long enough that a transient penetration spike
 # (a slapshot buried into the boards for a tick or two before Jolt's recovery
