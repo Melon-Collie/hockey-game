@@ -104,12 +104,20 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	# shaft stays REMOTE-view (host-reconstructed, as before). See
 	# PickupClaimResolver / LagCompRewind.clamp_client_blade.
 	var max_reach: float = 0.0
+	var blade_speed: float = 0.0
 	if _registry != null:
 		var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
 		if caps != null:
 			max_reach = caps.max_blade_reach
+			blade_speed = caps.blade_speed
 	var attacker_blade: Vector3 = LagCompRewind.clamp_client_blade(
 			client_blade_curr, attacker_snap.position, max_reach)
+	# Tighter continuity bound toward the host's own blade reconstruction — see
+	# PickupClaimResolver / LagCompRewind.continuity_clamp. No-ops when the host
+	# has no reconstruction for the attacker at the rewind instant.
+	attacker_blade = LagCompRewind.continuity_clamp(attacker_blade,
+			attacker_snap.blade_contact_world,
+			LagCompRewind.blade_continuity_tolerance(blade_speed))
 	# Host-only claim-outcome telemetry (no-op off the host): the claim reached the
 	# rewound geometry test; a check_blade_under_stick fail is the lag-comp
 	# "reached for it, didn't get it" signal. See NetworkTelemetry / network_sessions.

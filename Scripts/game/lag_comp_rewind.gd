@@ -102,3 +102,45 @@ static func clamp_client_blade(point: Vector3, body: Vector3, max_reach: float) 
 	if d <= max_reach:
 		return point
 	return body + offset * (max_reach / d)
+
+
+# Second, tighter anti-cheat bound on the client-authoritative blade, layered on
+# top of the reach clamp. The reach clamp alone leaves the whole arm+stick+blade
+# sphere (~2.5 m) free, so a modified client could aim its blade straight at the
+# puck on every contested tick ("always-max-reach, always-catch"). But the host
+# INDEPENDENTLY reconstructs that skater's blade from the client's own replicated
+# inputs (SkaterNetworkState.blade_contact_world, buffered + interpolated), so it
+# knows roughly where the blade actually was. Pin the client point to within a
+# physically-plausible continuity distance of that reconstruction: a legit precise
+# aim differs from the lossy reconstruction only by the reconstruction error, so
+# it passes untouched; a synthesized teleport onto the puck is pulled back.
+#
+# `reconstructed == ZERO` means the host has no sample for this skater at the
+# rewind instant (warmup, or the host-only field never populated) — skip the
+# clamp and lean on the reach clamp alone, exactly as if this bound didn't exist.
+# GRACEFUL: like the reach clamp, it never rejects a claim, only clips an
+# impossible offset along the aim line (angular aim preserved, distance capped).
+static func continuity_clamp(point: Vector3, reconstructed: Vector3, max_offset: float) -> Vector3:
+	if reconstructed == Vector3.ZERO or max_offset <= 0.0:
+		return point
+	var offset: Vector3 = point - reconstructed
+	var d: float = offset.length()
+	if d <= max_offset:
+		return point
+	return reconstructed + offset * (max_offset / d)
+
+
+# Max legitimate distance between the client's exact-view-time blade and the
+# host's buffer-reconstructed blade (continuity_clamp's `max_offset`). The
+# reconstruction lags the true blade by the buffer interpolation window: the blade
+# (Hands-scaled `blade_speed`, a real cap) traverses this far over that window,
+# plus slack for IK smoothing, body translation, and NTP error. CONSERVATIVE by
+# design — sized to clear fast-dangle / packet-loss reconstruction lag so a legit
+# claim is never pulled (which would re-introduce the grab-then-lose bug that made
+# the blade client-authoritative in the first place). Tighten from the
+# pickup/poke/stick-lift claim-miss telemetry once validated on a real link.
+const _BLADE_CONTINUITY_WINDOW_S: float = 0.033
+const _BLADE_CONTINUITY_SLACK_M: float = 0.30
+
+static func blade_continuity_tolerance(blade_speed: float) -> float:
+	return maxf(blade_speed, 0.0) * _BLADE_CONTINUITY_WINDOW_S + _BLADE_CONTINUITY_SLACK_M

@@ -142,3 +142,59 @@ func test_clamp_blade_zero_reach_no_ops() -> void:
 	var body := Vector3.ZERO
 	var blade := Vector3(9.0, 0.0, 0.0)
 	assert_eq(LagCompRewind.clamp_client_blade(blade, body, 0.0), blade)
+
+
+# ── continuity_clamp ──────────────────────────────────────────────────────────
+# Second, tighter anti-cheat bound: the client blade is pinned to within a
+# plausible continuity distance of the host's OWN reconstruction of the blade,
+# shrinking the exploitable slop from the reach sphere to the reconstruction error.
+
+func test_continuity_within_tolerance_passes_through() -> void:
+	# A client blade 0.4m from the host reconstruction, tolerance 0.6m — a legit
+	# precise aim inside the reconstruction error is returned untouched.
+	var recon := Vector3(5.0, 0.0, 5.0)
+	var blade := Vector3(5.4, 0.0, 5.0)
+	assert_eq(LagCompRewind.continuity_clamp(blade, recon, 0.6), blade)
+
+
+func test_continuity_beyond_tolerance_pinned_along_aim() -> void:
+	# A blade 2m from the reconstruction with a 0.6m tolerance — an implausible
+	# teleport toward the puck, pulled back to the tolerance sphere ALONG the aim
+	# line (direction preserved, distance clipped). Non-zero anchor so the
+	# ZERO-means-no-sample guard doesn't fire.
+	var recon := Vector3(5.0, 0.0, 5.0)
+	var blade := Vector3(7.0, 0.0, 5.0)
+	var clamped: Vector3 = LagCompRewind.continuity_clamp(blade, recon, 0.6)
+	assert_almost_eq(clamped.x, 5.6, EPSILON)
+	assert_almost_eq(recon.distance_to(clamped), 0.6, EPSILON)
+
+
+func test_continuity_zero_reconstruction_no_ops() -> void:
+	# reconstructed == ZERO means the host has no sample (warmup / unpopulated
+	# host-only field) — skip the clamp rather than pull the blade to the origin.
+	var blade := Vector3(9.0, 0.0, 0.0)
+	assert_eq(LagCompRewind.continuity_clamp(blade, Vector3.ZERO, 0.6), blade)
+
+
+func test_continuity_zero_tolerance_no_ops() -> void:
+	# max_offset <= 0 skips the clamp (defensive — a zero tolerance would collapse
+	# the blade onto the reconstruction).
+	var recon := Vector3(1.0, 0.0, 0.0)
+	var blade := Vector3(3.0, 0.0, 0.0)
+	assert_eq(LagCompRewind.continuity_clamp(blade, recon, 0.0), blade)
+
+
+func test_continuity_tolerance_is_blade_speed_plus_slack() -> void:
+	# Grounded in the real Hands-scaled blade speed: traverse over the
+	# reconstruction window + slack. Pins the formula so a tightening pass is
+	# deliberate. (10 m/s default -> 10*0.033 + 0.30 = 0.63 m.)
+	assert_almost_eq(LagCompRewind.blade_continuity_tolerance(10.0), 0.63, 1e-4)
+
+
+func test_continuity_tolerance_floor_at_zero_blade_speed() -> void:
+	# No caps entry (blade_speed 0) -> the slack floor, still a valid bound.
+	assert_almost_eq(LagCompRewind.blade_continuity_tolerance(0.0), 0.30, 1e-4)
+
+
+func test_continuity_tolerance_negative_blade_speed_clamped() -> void:
+	assert_almost_eq(LagCompRewind.blade_continuity_tolerance(-5.0), 0.30, 1e-4)
