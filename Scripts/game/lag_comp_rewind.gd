@@ -34,20 +34,28 @@ const _INTERP_DELAY_CLAMP_MS_MAX: float = 200.0
 # shrinks the shoppable window to real jitter. Future stamps are never legit.
 const _STAMP_FUTURE_SLACK_S: float = 0.05
 const _STAMP_PAST_SLACK_S: float = 0.1  # frame alignment + ping jitter + NTP error
+# Conservative RTT assumed when the host has no ping sample for the peer yet
+# (warmup, or a modified client that deliberately never calls report_ping to
+# escape the past bound). Must exceed a real bad-link one-way + slack so a
+# legitimate high-ping claim in the warmup gap isn't rejected, while still
+# denying the "no sample -> unbounded backdate" hole. The real teeth are the
+# host-measured RTT (P0 part a); this is the floor that holds until it lands.
+const _STAMP_NO_SAMPLE_RTT_MS: float = 150.0
 
 
 # `peer_rtt_ms` is the host-measured ping for the claiming peer
-# (NetworkManager.get_peer_ping_ms); <= 0 means no sample yet, in which case
-# only the future bound applies (the resolvers' age cap still holds).
+# (NetworkManager.get_peer_ping_ms); <= 0 means no sample yet, in which case a
+# conservative default RTT bounds the past age (NOT unbounded — a client that
+# never reports must not thereby win every backdated 50/50). The resolvers'
+# absolute MAX_CLAIM_AGE_S cap still holds on top of this.
 static func is_claim_stamp_plausible(now: float, host_timestamp: float, peer_rtt_ms: float) -> bool:
 	if not is_finite(host_timestamp):
 		return false
 	var elapsed: float = now - host_timestamp
 	if elapsed < -_STAMP_FUTURE_SLACK_S:
 		return false
-	if peer_rtt_ms <= 0.0:
-		return true
-	return elapsed <= peer_rtt_ms / 2000.0 + _STAMP_PAST_SLACK_S
+	var effective_rtt_ms: float = peer_rtt_ms if peer_rtt_ms > 0.0 else _STAMP_NO_SAMPLE_RTT_MS
+	return elapsed <= effective_rtt_ms / 2000.0 + _STAMP_PAST_SLACK_S
 
 
 # Host-time at which to query StateBufferManager for the claimant's

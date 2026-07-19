@@ -96,9 +96,17 @@ func test_stamp_small_future_ntp_error_tolerated() -> void:
 	assert_true(LagCompRewind.is_claim_stamp_plausible(10.0, 10.02, 80.0))
 
 
-func test_stamp_no_ping_sample_only_future_bound_applies() -> void:
-	assert_true(LagCompRewind.is_claim_stamp_plausible(10.0, 9.5, 0.0),
-			"no measurement yet -> resolvers' absolute age cap is the only past bound")
+func test_stamp_no_ping_sample_uses_conservative_past_bound() -> void:
+	# No host ping sample yet must NOT mean "unbounded past" (a modified client
+	# could never report ping and then backdate freely to win every 50/50). A
+	# conservative default RTT (150ms -> 75ms one-way + 100ms slack = 175ms)
+	# bounds the age; the future bound and the resolvers' absolute cap still hold.
+	assert_true(LagCompRewind.is_claim_stamp_plausible(10.0, 10.0 - 0.15, 0.0),
+			"legit warmup claim within the conservative default is accepted")
+	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, 10.0 - 0.19, 0.0),
+			"190ms backdate with no sample is rejected (was accepted before P0)")
+	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, 9.5, 0.0),
+			"500ms backdate with no sample is rejected (was accepted before P0)")
 	assert_false(LagCompRewind.is_claim_stamp_plausible(10.0, 10.5, 0.0))
 
 
