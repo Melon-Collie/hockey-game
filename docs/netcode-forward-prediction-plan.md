@@ -205,13 +205,14 @@ can't run headless, so networking feel is verified on the developer's machine.
 1. **Independent bug/anti-cheat batch** (free, headlessly testable, no
    architecture dependency — do first):
    - **P0** — claim-stamp plausibility trusts a client-self-reported ping and
-     goes *unbounded* when none is reported. Two parts: (a) **host-measure
-     per-peer RTT** instead of trusting `report_ping` (`network_manager.gd`
-     `report_ping` / `get_peer_ping_ms`; wire-touching, needs local test), and
-     (b) **no-sample must not be unbounded** — `LagCompRewind.is_claim_stamp_plausible`
-     returns `true` when `peer_rtt_ms <= 0` (`lag_comp_rewind.gd:48`), so a
-     client that never reports gets no past bound. Part (b) is pure-domain and
-     landed first.
+     goes *unbounded* when none is reported. Two parts, both landed: (a)
+     **host-measure per-peer RTT** — `report_ping` (client self-report) replaced
+     by a host-initiated `host_ping`/`host_pong` round trip the host times +
+     EMA-smooths into `_peer_ping_ms`, which `get_peer_ping_ms` backs;
+     `PROTOCOL_VERSION` 34→35. Wire-touching — needs a live-session / net-sim
+     check that measured RTT tracks the link. (b) **no-sample bound** —
+     `LagCompRewind.is_claim_stamp_plausible` no longer returns `true` when
+     `peer_rtt_ms <= 0`; a conservative default RTT bounds the age instead.
    - **P1** — blade reach clamp bounds *distance* but not *plausibility*
      (`lag_comp_rewind.gd:89`); add a blade-history continuity check so a
      modified client can't synthesize an always-max-reach, always-catch blade.
