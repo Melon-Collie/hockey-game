@@ -227,6 +227,9 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 			puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
 			_goalie_shadow = GoalieCollisionShadow.new()
 			puck.puck_touched_goalie.connect(_on_shadow_goalie_contact)
+			# Determinism migration: drive the loose puck with the analytic sim instead of Jolt
+			# (dev + host only). The goalie provider is forwarded in set_goalie_provider.
+			puck.set_analytic_drive_enabled(true)
 	else:
 		puck.puck_touched_goalie.connect(_on_client_puck_hit_goalie)
 		puck.puck_touched_post.connect(_on_client_puck_hit_post)
@@ -242,9 +245,13 @@ func set_team_id_by_skater(d: Dictionary) -> void:
 
 
 # Dev-only: a Callable returning the live Array[Goalie], for the Phase-2 proactive
-# false-positive probe. Injected by GameManager; absent in release (probe never runs).
+# false-positive probe AND the analytic puck drive's goalie contact detection. Injected by
+# GameManager; absent in release (neither runs). Forwarded to the puck so its host drive can
+# detect goalie contacts.
 func set_goalie_provider(provider: Callable) -> void:
 	_goalie_provider = provider
+	if puck != null:
+		puck.set_goalie_provider(provider)
 
 func _physics_process(delta: float) -> void:
 	if puck == null:

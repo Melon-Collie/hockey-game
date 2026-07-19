@@ -173,9 +173,20 @@ Once the loose puck is a deterministic sim both sides run:
   puck 3× on rim-arounds where the analytic model can't. The board/rim feel matches and
   the rim bug is fixed. Full result in `netcode-phase0-shadow-puck-spec.md`. **Gravity/
   loft and the goalie remain untested — Phase 2 is the real risk.**
-- **Phase 1 — switch loose-puck integration + board bounces to analytic** (host and
-  client), Jolt still present for comparison. A/B feel. This is the feel-matching gate.
-- **Phase 2 — add pipes + net + goalie-part collision** (the moving-geometry work).
+- **Phases 1 + 2 — analytic loose-puck drive (host), BUILT (dev-gated), pending feel
+  validation.** Fused rather than shipped boards-first: an analytic-everywhere puck passes
+  through any geometry not yet authored, so a boards-only "on" would break saves — there is
+  no safe partial. The whole loose-puck driver is now analytic behind `BuildInfo.VERSION ==
+  "dev"` + host (`Puck._drive_analytic`, wired at the PuckController seam): integration + ice
+  friction + gravity + board caroms (`PuckAuthorityRules` / `AITrajectory.step_puck_3d`),
+  goal-frame reflection (`PuckGeometryCollision`: posts, crossbar, top + back/side net —
+  crossbar/top authored above the loft ceiling for future tuning), and goalie detection +
+  response (`GoalieContactDetector` + `GoalieSaveRules.resolve_contact` — deaden/steer/catch
+  or live reflect). The puck is frozen (the same frozen-body-teleport the carry pin already
+  uses) so Jolt neither integrates nor collides it; `_on_body_entered` is guarded off and the
+  drive emits the feedback signals. All collision math is unit-tested; the Jolt seam + feel
+  are the remaining validation, done in a local dev session (the shadow harness runs alongside
+  for divergence numbers). Shipped/online builds keep the Jolt puck untouched.
 - **Phase 3 — client-side puck prediction + reconcile** (the RL-family payoff): every
   client predicts the loose puck; remove interpolate/lead/handoff-slew for it.
 - **Phase 4 — simplify.** Delete the now-dead Jolt puck config and the puck-specific
