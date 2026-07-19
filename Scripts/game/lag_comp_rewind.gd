@@ -87,9 +87,16 @@ static func prev_tick(view_time: float) -> float:
 # BOTH call this with the SAME fraction (Constants.REMOTE_FORWARD_PREDICT_FRACTION)
 # and interp_delay, so their tick counts — and therefore the predicted positions —
 # agree, keeping render == rewind. `fraction` is a param (not read here) so the
-# formula is unit-testable at any value even while the constant defaults to 0.
+# formula is unit-testable at any value even while the shipped constant varies.
+# The delay is clamped to the same ceiling remote_view_time uses — the host-side
+# caller feeds it the raw client-reported interp_delay_ms, and without the clamp
+# a crafted claim (or a NaN/huge warmup glitch) turns the integration loop into
+# an unbounded host stall.
 static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int:
-	return roundi(clampf(fraction, 0.0, 1.0) * maxf(interp_delay_s, 0.0) * float(Constants.PHYSICS_TICK))
+	if not is_finite(interp_delay_s):
+		return 0
+	var delay_s: float = clampf(interp_delay_s, 0.0, _INTERP_DELAY_CLAMP_MS_MAX / 1000.0)
+	return roundi(clampf(fraction, 0.0, 1.0) * delay_s * float(Constants.PHYSICS_TICK))
 
 
 # Structural anti-cheat for client-authoritative blade claims. A pickup / poke /

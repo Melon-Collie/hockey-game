@@ -90,6 +90,17 @@ const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
 # of a full-lead (~9-tick) window; lower = more conservative (less overshoot, less
 # catch-up), higher = more aggressive. Tune alongside REMOTE_FORWARD_PREDICT_FRACTION.
 const FORWARD_PREDICT_INTENT_DECAY_TICKS: int = 5
+# Stage-4 loose-puck forward lead, DECOUPLED from the skater fraction above and
+# parked at 0.0 (legacy interpolate-in-the-past). Rationale: the loose-puck lead
+# is the piece of forward prediction the deterministic-puck migration explicitly
+# replaces (docs/netcode-determinism-migration.md — "a stepping stone that this
+# replaces"), and its blade-eased collapse regresses render time non-monotonically
+# on fast incoming pucks (the artifact class the handoff slew exists to prevent).
+# Keeping skaters at full lead with the puck at 0 gives the playtest a clean
+# "does present-time skating feel better" signal. The machinery (_blade_lead_scale
+# + the eased base_render_time in PuckController._interpolate) stays wired and
+# correct — set this > 0.0 to re-enable for an A/B.
+const PUCK_FORWARD_LEAD_FRACTION: float = 0.0
 # Wire encoding for session-relative timestamps: u32 in 0.1 ms units
 # (seconds × this scale). Replaces f32 seconds, whose ULP degraded with host
 # uptime — ~1 ms error at 2.3 h (visible interpolation jitter), ~2 ms at

@@ -2372,8 +2372,21 @@ func _movement_config() -> SkaterMovementRules.MovementConfig:
 # prediction — the client (RemoteController) and host (HitClaimResolver) both
 # drive SkaterMovementRules.integrate_forward with the target skater's own config.
 # Live-tuning caveat aside, treat the returned object as read-only.
+#
+# thrust is re-normalized to the attribute-scaled base on every read: the live
+# movement path transiently writes the stagger-scaled thrust into the CACHED
+# config each tick, but only on the machine that simulates this skater (the
+# host, or a bot's host controller) — a client's RemoteController never runs
+# _apply_movement, so its copy holds base thrust. Without the reset the host
+# claim rewind would integrate a recently-checked victim with present-tick
+# staggered thrust while the client rendered base thrust — an input asymmetry
+# breaking render == rewind right after checks, when follow-up claims cluster.
+# Both sides deliberately integrate at base thrust (the stagger residual over
+# the short window is absorbed by the snapshot correction).
 func get_movement_config() -> SkaterMovementRules.MovementConfig:
-	return _movement_config()
+	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
+	cfg.thrust = thrust
+	return cfg
 
 func _block_movement_config() -> SkaterMovementRules.MovementConfig:
 	if _cached_block_move_cfg == null:

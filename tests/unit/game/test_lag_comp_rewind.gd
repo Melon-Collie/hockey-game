@@ -80,6 +80,17 @@ func test_forward_predict_ticks_clamps_and_guards() -> void:
 	assert_eq(LagCompRewind.forward_predict_ticks(1.0, -0.05), 0, "negative delay -> 0")
 
 
+func test_forward_predict_ticks_caps_hostile_delay() -> void:
+	# The host-side caller feeds this the RAW client-reported interp_delay_ms —
+	# without the 200 ms ceiling (same clamp as remote_view_time) a crafted
+	# claim with a huge delay turns the per-claim integration loop into an
+	# unbounded host stall. 200 ms at 120 Hz -> 24 ticks, the hard ceiling.
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, 1.0e6), 24)
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, 0.2), 24, "legit delay at the ceiling")
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, INF), 0, "non-finite -> 0")
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, NAN), 0, "non-finite -> 0")
+
+
 # ── Composition ──────────────────────────────────────────────────────────────
 
 func test_self_and_remote_diverge_by_input_lead_plus_interp_delay() -> void:

@@ -70,10 +70,11 @@ const _ALONG_SNAP_TIME_S: float = 0.3
 # claimant reached for it, so pickups miss — badly during jitter, when
 # interp_delay spikes. The SmoothDamp below still absorbs bounce overshoot.
 #
-# SUPERSEDED by stage-4: _interpolate now leads via Constants.REMOTE_FORWARD_PREDICT_FRACTION
-# (shared with the skaters) gated by _blade_lead_scale, which eases the lead to 0
-# as a blade nears so render == rewind holds where pickups fire — this raw export
-# had no such gate and is no longer read. Left at 0.
+# SUPERSEDED by stage-4: _interpolate now leads via Constants.PUCK_FORWARD_LEAD_FRACTION
+# (decoupled from the skater fraction, parked at 0 — see that constant) gated by
+# _blade_lead_scale, which eases the lead to 0 as a blade nears so render == rewind
+# holds where pickups fire — this raw export had no such gate and is no longer read.
+# Left at 0.
 @export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the loose-puck position. Slightly above
 # the skater's so bounce overshoot blends out cleanly.
@@ -1172,15 +1173,16 @@ func _interpolate(delta: float) -> void:
 	# Shared delay keeps the loose puck on the skaters' timeline (render == the
 	# lag-comp rewind instant at extrapolation_lead_fraction 0 — see the export).
 	var interp_delay: float = NetworkManager.get_interpolation_delay()
-	# Stage-4 loose-puck forward lead: share the skaters' fraction so a chasing
-	# skater and the loose puck sit on the same (near-present) timeline, but ease
-	# the lead to 0 as any blade closes on the puck (_blade_lead_scale) — that is
-	# what keeps render == rewind exactly where pickup/poke claims fire (the host
-	# rewinds the puck to the past interp instant, so the puck the claimant reached
-	# for must render there too). No host-side change: the puck is at past whenever a
-	# claim can happen. The ice-friction dead-reckon + board gate below produce the
-	# lead. 0 fraction (default) = legacy interpolate-in-the-past.
-	var lead_fraction: float = Constants.REMOTE_FORWARD_PREDICT_FRACTION
+	# Stage-4 loose-puck forward lead (own constant, parked at 0.0 — see
+	# Constants.PUCK_FORWARD_LEAD_FRACTION for why it is decoupled from the
+	# skater fraction): when > 0 the loose puck leads toward present with the
+	# skaters, easing to 0 as any blade closes on the puck (_blade_lead_scale) —
+	# that is what keeps render == rewind exactly where pickup/poke claims fire
+	# (the host rewinds the puck to the past interp instant, so the puck the
+	# claimant reached for must render there too). No host-side change: the puck
+	# is at past whenever a claim can happen. The ice-friction dead-reckon +
+	# board gate below produce the lead. 0 = legacy interpolate-in-the-past.
+	var lead_fraction: float = Constants.PUCK_FORWARD_LEAD_FRACTION
 	if lead_fraction > 0.0:
 		lead_fraction *= _blade_lead_scale(puck.get_puck_position())
 	var base_render_time: float = NetworkManager.estimated_host_time() \
@@ -1208,7 +1210,12 @@ func _interpolate(delta: float) -> void:
 	# Slew frames extrapolate past the newest sample BY DESIGN (the lead starts
 	# ~RTT/2 + interp_delay ahead of the interp point); keep them out of the
 	# is_extrapolating canary, which exists to catch genuine buffer underruns.
-	is_extrapolating = bracket != null and bracket.is_extrapolating and _slew_lead <= 0.0
+	# Slew frames AND stage-4 lead frames extrapolate past the newest sample BY
+	# DESIGN — keep both out of the underrun canary (it exists to catch genuine
+	# buffer starvation; at a non-zero puck lead it would otherwise saturate at
+	# ~100% and poison the F3 extrapolation_pct telemetry).
+	is_extrapolating = bracket != null and bracket.is_extrapolating \
+			and _slew_lead <= 0.0 and lead_fraction <= 0.0
 	if bracket == null:
 		return
 	# Reused scratch (per-tick path); both branches write position + velocity,
@@ -1270,7 +1277,16 @@ func _interpolate(delta: float) -> void:
 		_smooth_pos = _smooth_damp(_smooth_pos, target_pos, position_smooth_time, delta)
 	interpolated.position = _smooth_pos
 	_apply_state_to_puck(interpolated)
-	BufferedStateInterpolator.drop_stale(_state_buffer, render_time)
+	# Prune against the un-led PAST instant (est_host − full interp_delay), NOT
+	# render_time: with a stage-4 lead (or the handoff slew) active, render_time
+	# runs up to interp_delay ahead of the past instant, and pruning at the led
+	# time discards exactly the samples the buffer needs when the blade-eased
+	# lead collapses back toward the past — find_bracket would return null and
+	# the rendered puck froze for the collapse window. The un-led time is the
+	# minimum any future frame can request (lead and slew are both ≥ 0), so
+	# pruning there is always safe.
+	BufferedStateInterpolator.drop_stale(
+			_state_buffer, NetworkManager.estimated_host_time() - interp_delay)
 
 
 # True when world position `p` (XZ) lies outside the inner board boundary — i.e.
