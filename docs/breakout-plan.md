@@ -322,10 +322,42 @@ Same methodology as the duel harness (#27):
   play the intended sequence end-to-end: rim wraps the corner arc, the
   chaser commits immediately, first touch is OURS in 4/6 (one clean exit
   via a behind-net CARRY pickup → BreakD2 — the wheel country working).
-  Remaining behavioral finding for a future pass: **no DZ wall-kill for
-  wingers** — nobody steps TO the boards to deaden an incoming rim (the
-  defensive mirror of the O-zone point keep-in), so hot rims are chased to
-  where they slow rather than being cut off at the half-wall.
+  6. ~~DZ wall-kill~~ — **RESOLVED (iteration 4) as arrival slack, no new
+     behavior needed.** The per-teammate kill-time trace showed the missing
+     wall-kill was not a positioning or role gap: the elected chaser HAD
+     makeable reads (kill ~1.0–1.8 s) and chased — but every intercept was
+     solved ZERO-SLACK (earliest point where ETA ≤ T exactly), so steering
+     aimed the body at a dead heat with a 13 m/s rim; any execution slop
+     missed by a hair, re-solved to a new dead-heat point further along,
+     and missed again — a sliding-intercept treadmill (kill reads hovering
+     1–2 s for three straight seconds while the rim stayed ahead). Real
+     players cut to a point FURTHER along and arrive early, set in the
+     lane. The grounded quantity is the reception setup time
+     (`AILoosePuckChase.KILL_SETUP_MARGIN_S` 0.25 s — blade to the gate +
+     a beat): fast-puck intercepts now require that arrival slack, in both
+     the path-race read (`path_intercept_time`) and the SM's chase aim
+     (`_lead_intercept`, fast pucks only — slow-puck chases keep the exact
+     test and converge as before). Effect: behind-net first touch OURS
+     7/10 with wall-kills at 1.8–1.9 s (was 3.6 s chasing the wrap), and
+     the treadmill wrap-outs are near-gone.
+- **v4 table** (30 trials — JITTERS 5 + a per-jitter warmup stagger, since
+  an identical warmup across jitters made "n trials" ≈ n/3 independent
+  samples): clean 11/30, clear 2/30, cough 17/30, timeout 0 | retrieval
+  30/30, 13 exits mean 4.9 s. (main baseline on the old 18-trial matrix:
+  clean 2/18, retrieval 0/18.)
+- **Probe scoping note (iteration 4):** at 16 fires the completion curve
+  reads ev[0–.05) 3/6, ev[.05–.10) 3/6, ev[.10–.20) 0/4 — sub-0.10-EV
+  breakout passes complete ~50% while the compete prices the rim-out at
+  −0.3..−0.5, so a coin-flip pass in our own slot area outcompetes a
+  guaranteed neutral clear (the residual behind-net coughs are all
+  post-retrieval first-pass deaths now). Two things gate the recalibration:
+  (a) n is still far too thin to fit, and (b) breakout first-passes sample
+  only the desperation corner of the pass distribution — fitting GLOBAL
+  lane/release-contest constants from them would overfit that regime. The
+  probe should accumulate across the other live instruments (rush/shot
+  harnesses fire passes too) before constants move; the cheaper nearer-term
+  lever is the DUMP side of that compete (does a clear's neutral-reset
+  value deserve −0.5 under a committed forecheck?).
 
 ## 4. Non-goals
 

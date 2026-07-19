@@ -58,6 +58,17 @@ const RACE_LOOKAHEAD_S: float = 3.0
 # 0.25 s steps — fine enough that the RETRIEVAL enter margin (0.25 s) can
 # still resolve between quantized path times.
 const RACE_STEPS: int = 12
+# Arrival slack a fast-puck intercept must clear: the reception setup time
+# (swing the blade to the gate on the puck's line and get set — a body
+# arriving dead-even with a rim at pace corrals nothing). A zero-slack
+# intercept read fed steering aims the body where it meets the puck exactly,
+# so any execution slop missed by a hair, re-solved to a new zero-slack
+# point further along, and missed again — the sliding-intercept treadmill
+# the breakout traces showed (kill reads hovering 1-2 s for three straight
+# seconds while the rim stayed ahead). Requiring the margin picks the point
+# far enough along the path that the skater genuinely arrives EARLY and
+# sets — the real wall-kill stance.
+const KILL_SETUP_MARGIN_S: float = 0.25
 
 
 static func is_fast_puck(puck_vel: Vector3) -> bool:
@@ -85,24 +96,28 @@ static func race_trajectory(puck_pos: Vector3, puck_vel: Vector3) -> Array[Vecto
 	return _traj_cache
 
 
-# Earliest time (s) this skater can meet the puck ON its predicted path.
-# Quantized to the walk's step times. When no step is makeable the race
-# resolves at the settled end of the walk: the skater collects the puck
-# where it stops (or exits the horizon), arriving no earlier than the
-# horizon itself.
+# Earliest time (s) this skater can meet the puck ON its predicted path,
+# arriving with the KILL_SETUP_MARGIN_S of slack that makes the contact a
+# set-and-corral instead of a dead heat. Quantized to the walk's step
+# times. When no step is makeable the race resolves at the settled end of
+# the walk: the skater collects the puck where it stops (or exits the
+# horizon), arriving no earlier than the horizon itself.
 static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		skater_pos: Vector3, skater_vel: Vector3, max_speed: float) -> float:
 	for i: int in traj.size():
 		var t_step: float = (i + 1) * step_dt
+		var t_set: float = t_step - KILL_SETUP_MARGIN_S
+		if t_set <= 0.0:
+			continue
 		# Exact prune: even at a flying top-speed start, ETA ≥ dist / v_max —
 		# skip the full phase-model call when that bound alone misses T.
 		var dx: float = traj[i].x - skater_pos.x
 		var dz: float = traj[i].z - skater_pos.z
-		var reach: float = max_speed * t_step
+		var reach: float = max_speed * t_set
 		if dx * dx + dz * dz > reach * reach:
 			continue
 		if AIActionScoring.time_to_arrive(
-				skater_pos, traj[i], skater_vel, max_speed) <= t_step:
+				skater_pos, traj[i], skater_vel, max_speed) <= t_set:
 			return t_step
 	var horizon: float = traj.size() * step_dt
 	return maxf(horizon, AIActionScoring.time_to_arrive(

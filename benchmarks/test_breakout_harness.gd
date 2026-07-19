@@ -47,7 +47,12 @@ const Duel := preload("res://tests/unit/ai/duel_harness.gd")
 const LIMIT_S: float = 12.0
 const STEP_S: float = 0.1
 const WARMUP_S: float = 1.2
-const JITTERS: int = 3
+const JITTERS: int = 5
+# Per-jitter warmup stagger: without it the warmup (and so the trigger
+# pose) is IDENTICAL across a scenario's jitters — only the scripted aim
+# varied, so "n trials" was closer to n/3 independent samples. A ±ladder
+# around the base warmup dislodges the whole pose.
+const WARMUP_JITTER_S: float = 0.12
 # Post-launch re-catch lockout for scripted dumps (see the launch-grace
 # comment in _run_trial) — roughly the rim's flight to the corner.
 const SCRIPTED_DUMP_GRACE_S: float = 1.0
@@ -111,14 +116,19 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 	# moves the puck himself — his release IS the dump moment (we script
 	# its target, not its timing). Running the full fixed warmup past a
 	# release fired the scripted dump from a mid-flight pass metres behind
-	# him, straight past his own (ungraced) stick.
-	var warm_ticks: int = int(float(opts.get("warmup_s", WARMUP_S)) / Duel.DT)
+	# him, straight past his own (ungraced) stick. The per-jitter warmup
+	# stagger dislodges the whole trigger pose between jitters.
+	var warm_base: float = float(opts.get("warmup_s", WARMUP_S))
+	var warm_s: float = maxf(0.2,
+			warm_base + _jit(jitter, 37, WARMUP_JITTER_S))
+	var warm_ticks: int = int(warm_s / Duel.DT)
 	for _i: int in warm_ticks:
 		duel.step()
 		if duel.carrier_id != warm_carrier:
 			break
-	# The trigger event puts the puck loose, jittered so trials sample the
-	# neighborhood, not one frozen pose. Two forms:
+	# The trigger event puts the puck loose, jittered (aim + the staggered
+	# warmup above) so trials sample the neighborhood, not one frozen pose.
+	# Two forms:
 	#   dump_speed > 0 — a REAL dump: fired from the puck's live position
 	#     toward the (jittered) aim point, so the flight time is the
 	#     defense's honest retreat window and the rim wraps the corner arc
@@ -192,8 +202,21 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 					st_name = SkaterAgentStateMachine.State.keys()[es.agent._state]
 				bit = "%d %s (%.1f,%.1f) v%.1f" % [elected, st_name,
 						es.pos.x, es.pos.z, Vector2(es.vel.x, es.vel.z).length()]
-			chaser_trace.append("%4.1fs %s | puck(%.1f,%.1f)" % [
-					t, bit, duel.puck_pos.x, duel.puck_pos.z])
+			# Per-teammate path intercept times — who COULD kill this puck.
+			var kill_bits: Array[String] = []
+			if AILoosePuckChase.is_fast_puck(duel.puck_vel):
+				var ktraj: Array[Vector3] = AILoosePuckChase.race_trajectory(
+						duel.puck_pos, duel.puck_vel)
+				var sdt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
+						/ float(AILoosePuckChase.RACE_STEPS)
+				for s2: RefCounted in duel.skaters:
+					if s2.team_id != 0:
+						continue
+					kill_bits.append("%d:%.1f" % [s2.peer_id % 100,
+							AILoosePuckChase.path_intercept_time(
+									ktraj, sdt, s2.pos, s2.vel, 9.0)])
+			chaser_trace.append("%4.1fs %s | puck(%.1f,%.1f) | %s" % [
+					t, bit, duel.puck_pos.x, duel.puck_pos.z, " ".join(kill_bits)])
 		# Probe: pair each team-0 release with its fate — the next pickup
 		# (ours = completed, theirs = died) or an uncontrolled zone exit.
 		while seen_releases < duel.releases.size():

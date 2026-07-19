@@ -5447,10 +5447,23 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 	# instead of always returning traj[i] (over-runs by up to dt); a
 	# speed-cap flip takes traj[i] directly (no comparable surplus units).
 	var a_max_sq: float = _chase_max_accel * _chase_max_accel
+	# Fast pucks demand arrival SLACK, not a dead heat: reachability is
+	# tested against t − KILL_SETUP_MARGIN_S so the aim point sits far
+	# enough along the path that the body genuinely arrives early and sets
+	# (blade to the gate) instead of meeting the puck at pace. Zero-slack
+	# aims produced the sliding-intercept treadmill on rims: miss by a
+	# hair, re-solve to a new dead-heat point further along, miss again.
+	# Slow pucks keep the exact test — the intercept converges on its own.
+	var setup_margin: float = AILoosePuckChase.KILL_SETUP_MARGIN_S \
+			if AILoosePuckChase.is_fast_puck(puck_vel) else 0.0
 	var prev_surplus: float = -INF
 	var prev_pos: Vector3 = self_pos
 	for i: int in traj.size():
-		var t_step: float = (i + 1) * dt
+		var t_step: float = (i + 1) * dt - setup_margin
+		if t_step <= 0.0:
+			prev_surplus = -INF
+			prev_pos = traj[i]
+			continue
 		var t_sq: float = t_step * t_step
 		var t_4: float = t_sq * t_sq
 		var residual_x: float = traj[i].x - self_pos.x - self_vel.x * t_step
