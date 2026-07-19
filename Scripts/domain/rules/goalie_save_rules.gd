@@ -50,6 +50,54 @@ class DeadenConfig:
 	var steer_lateral_weight: float = 1.0   # cornerward bias (lateral vs forward)
 	var steer_forward_weight: float = 0.35  # out-of-crease bias
 
+# Raw restitution off a goalie surface for a LIVE (uncontrolled) rebound — mirrors the Jolt
+# PhysicsMaterials (Physics/goalie_pad.tres 0.2, Physics/goalie_stick.tres 0.4). Only reached
+# on a live rebound: PAD/BLOCKER above pad_max_incoming_speed (a hard shot beats the pad), and
+# STICK always (it redirects, never deadens). Chest/glove are always controlled, so their
+# material bounce is never used. Named here because the analytic puck no longer reads the Jolt
+# material; a mirror guard should pin the pair like the boards.
+const PAD_RESTITUTION: float = 0.2
+const STICK_RESTITUTION: float = 0.4
+
+
+static func live_restitution(part: int) -> float:
+	return STICK_RESTITUTION if part == SavePart.STICK else PAD_RESTITUTION
+
+
+# Whole-contact result: the resolved velocity plus the two discrete flags the caller acts on
+# (a controlled save vs a live rebound; a glove catch that freezes the play).
+class ContactResult:
+	var velocity: Vector3 = Vector3.ZERO
+	var deadened: bool = false  # controlled save — velocity is the deaden/steer result
+	var caught: bool = false    # glove catch — freeze the play
+
+
+# Resolve a puck-vs-goalie contact end to end: classify via is_controlled_save, then either
+# deaden/steer/catch (controlled) or reflect off the contact face at the surface restitution
+# (live). `contact_normal` points from the goalie surface toward the puck (SweptDiscOBB's
+# outward normal); `contact_side` / `direction_sign` are the goalie-frame terms
+# deadened_velocity needs. Fills a caller-owned result (no allocation). Deterministic, so a
+# client-predicted puck and the host agree before reconciliation.
+static func resolve_contact(
+		incoming: Vector3, part: int, contact_normal: Vector3,
+		contact_side: float, direction_sign: int, cfg: DeadenConfig, result: ContactResult) -> void:
+	if is_controlled_save(incoming.length(), part, cfg):
+		result.velocity = deadened_velocity(incoming, part, contact_side, direction_sign, cfg)
+		result.deadened = true
+		result.caught = part == SavePart.GLOVE
+		return
+	# Live rebound: reflect the into-face velocity component with the surface restitution, keep
+	# the tangential (a glancing pad save holds pace, a square hard shot kicks straight out).
+	var n: Vector3 = contact_normal.normalized()
+	var vn: float = incoming.dot(n)
+	if vn < 0.0:
+		result.velocity = incoming - (1.0 + live_restitution(part)) * vn * n
+	else:
+		result.velocity = incoming  # already separating — nothing to reflect
+	result.deadened = false
+	result.caught = false
+
+
 # True when the save should be deadened (rebound killed) rather than left live.
 static func is_controlled_save(incoming_speed: float, part: int, cfg: DeadenConfig) -> bool:
 	match part:

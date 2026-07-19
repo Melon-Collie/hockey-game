@@ -105,3 +105,61 @@ func test_pad_steer_forward_sign_flips_with_goal_side() -> void:
 	var v := GoalieSaveRules.deadened_velocity(
 			Vector3(0.0, 0.0, 20.0), GoalieSaveRules.SavePart.PAD, 1.0, -1, _cfg())
 	assert_lt(v.z, 0.0, "out-of-crease is -Z for the +Z goal")
+
+
+# ── resolve_contact: the whole-contact core the analytic goalie path calls ──
+
+func test_resolve_contact_controlled_pad_steers_and_flags_deadened() -> void:
+	# A medium pad save (under pad_max_incoming_speed) steers cornerward and is flagged
+	# controlled, not a live rebound.
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(3.0, 0.0, -20.0), GoalieSaveRules.SavePart.PAD,
+			Vector3(0, 0, 1), 1.0, 1, _cfg(), res)
+	assert_true(res.deadened, "medium pad save is controlled")
+	assert_false(res.caught)
+	assert_almost_eq(res.velocity.length(), 5.0, 0.001, "steered at pad_steer_speed")
+
+
+func test_resolve_contact_glove_catches() -> void:
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(2.0, 1.0, -30.0), GoalieSaveRules.SavePart.GLOVE,
+			Vector3(0, 0, 1), 1.0, 1, _cfg(), res)
+	assert_true(res.deadened)
+	assert_true(res.caught, "a glove save is a catch (freezes the play)")
+	assert_almost_eq(res.velocity.z, 0.0, 0.001, "caught puck killed")
+
+
+func test_resolve_contact_hard_pad_kicks_a_live_rebound() -> void:
+	# Above pad_max_incoming_speed the pad is beaten: a live rebound reflecting off the
+	# contact face with PAD_RESTITUTION, not a steer.
+	var res := GoalieSaveRules.ContactResult.new()
+	var incoming := Vector3(0, 0, -40.0)  # hard, straight in; normal faces +z (toward puck)
+	GoalieSaveRules.resolve_contact(
+			incoming, GoalieSaveRules.SavePart.PAD, Vector3(0, 0, 1), 0.0, 1, _cfg(), res)
+	assert_false(res.deadened, "hard shot beats the pad — live rebound")
+	assert_false(res.caught)
+	assert_gt(res.velocity.z, 0.0, "kicked back out")
+	assert_almost_eq(res.velocity.z, 40.0 * GoalieSaveRules.PAD_RESTITUTION, 0.01,
+			"rebounds at PAD_RESTITUTION (0.2)")
+
+
+func test_resolve_contact_stick_is_always_a_live_redirect() -> void:
+	# The stick never deadens, even on a slow puck — it redirects live at STICK_RESTITUTION.
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0, 0, -10.0), GoalieSaveRules.SavePart.STICK, Vector3(0, 0, 1), 0.0, 1, _cfg(), res)
+	assert_false(res.deadened, "stick is always live")
+	assert_almost_eq(res.velocity.z, 10.0 * GoalieSaveRules.STICK_RESTITUTION, 0.01,
+			"redirects at STICK_RESTITUTION (0.4)")
+
+
+func test_resolve_contact_live_glance_keeps_tangential_pace() -> void:
+	# A hard puck glancing off the pad at an angle keeps its along-face pace (a live rebound
+	# to the corner, not a dead stop).
+	var res := GoalieSaveRules.ContactResult.new()
+	# Mostly lateral travel (+x), small into-face component (-z); normal +z.
+	GoalieSaveRules.resolve_contact(
+			Vector3(30.0, 0.0, -6.0), GoalieSaveRules.SavePart.PAD, Vector3(0, 0, 1), 1.0, 1, _cfg(), res)
+	assert_gt(res.velocity.x, 25.0, "tangential pace largely retained on a glance")
