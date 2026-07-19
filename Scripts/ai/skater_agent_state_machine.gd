@@ -2790,7 +2790,7 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# brake — keep momentum to drive in (which also cushions a straight feed,
 	# #373's relative frame). On contact the bot enters CARRY already net-facing,
 	# so the follow-up shot needs no reorientation; near the net the carrier
-	# scorer takes the quick shot.
+	# scorer takes the quick pass.
 	_apply_steering(input, snapshot, self_pos, anchor)
 	input.mouse_world_pos = _step_mouse_toward(
 			_blade_gate_on_puck_line(self_pos, puck_pos, puck_vel))
@@ -3595,11 +3595,11 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 		debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft else "↝out")) \
 				if is_dump else "PASS→%s" % target_slot_label
-		# Instant quick shot via the dedicated button flag — fires this tick from
+		# Instant quick pass via the dedicated button flag — fires this tick from
 		# carry (player→blade snap at the fixed pass power), same semantics the
 		# one-tick shoot release used to produce before the timing classifier was
 		# removed. Clear target so a future PASS/DUMP picks a fresh one.
-		input.quick_shot_pressed = true
+		input.quick_pass_pressed = true
 		_pass_target_peer_id = -1
 		_dump_target = Vector3.INF
 		_set_state(State.CARRY)

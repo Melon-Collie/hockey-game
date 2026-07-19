@@ -34,7 +34,7 @@ Use the in-game **Report Bug** button (bottom-right corner) — it attaches your
 |-------|--------|
 | **WASD** | Skate |
 | **Mouse** | Blade position |
-| **E** | Quick shot / pass — instant snap toward the cursor |
+| **E** | Quick pass — instant snap toward the cursor |
 | **Left click (hold + flick)** | Wrister — the drag direction is your aim, and how fast the cursor is moving when you release is your power |
 | **Right click (hold)** | Slapshot — charge the wind-up, release to shoot |
 | **Q (hold, no puck)** | Deflect — redirect an incoming puck off the blade instead of catching it (at high loft it doubles as a stick-lift) |

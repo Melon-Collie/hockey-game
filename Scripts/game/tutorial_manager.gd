@@ -406,7 +406,7 @@ func _build_key_tokens() -> void:
 		"brake":          PlayerPrefs.action_display("brake"),
 		"hit":            PlayerPrefs.action_display("hit"),
 		"shoot":          PlayerPrefs.action_display("shoot"),
-		"quick_shot":     PlayerPrefs.action_display("quick_shot"),
+		"quick_pass":     PlayerPrefs.action_display("quick_pass"),
 		"slapshot":       PlayerPrefs.action_display("slapshot"),
 		"block":          PlayerPrefs.action_display("block"),
 		"stick_lift":     PlayerPrefs.action_display("stick_lift"),
@@ -516,8 +516,8 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_QUICK_PASS:
 			return _step(
 				"Quick Pass",
-				"That instant snap on {quick_shot} is your pass — flat, fixed pace, fired toward your cursor the moment you tap. Put one on your teammate's blade.",
-				"Lead with the cursor: point at their blade, tap {quick_shot}.")
+				"That instant snap on {quick_pass} is your pass — flat, fixed pace, fired toward your cursor the moment you tap. Put one on your teammate's blade.",
+				"Lead with the cursor: point at their blade, tap {quick_pass}.")
 		STEP_TOUCH_PASS:
 			return _step(
 				"Touch Pass",
@@ -526,7 +526,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_SAUCER_PASS:
 			return _step(
 				"Saucer Pass",
-				"A board's in the passing lane — a flat pass can't get through. Tap {elevation_up} to loft the pass, then {quick_shot}: the saucer flips over the board and lands flat on the far side.",
+				"A board's in the passing lane — a flat pass can't get through. Tap {elevation_up} to loft the pass, then {quick_pass}: the saucer flips over the board and lands flat on the far side.",
 				"Same quick pass, lofted. A LOW saucer clears blades and boards mid-flight, then sits down and slides to the target.")
 		STEP_RECEIVE:
 			# Live copy is swapped per-wave; this is the soft-feed default.
@@ -1439,7 +1439,7 @@ func _on_shooting_shot(_dir: Vector3, _power: float, is_slapper: bool) -> void:
 		STEP_SHOOT_BACKHAND:
 			# The release path classifies every wrister FH/BH from the sweep's
 			# chirality and stamps last_release_hand just before this signal
-			# fires ("" for quick shots / slappers — no backhand concept there).
+			# fires ("" for quick passes / slappers — no backhand concept there).
 			_last_shot_qualifies = (not is_slapper) \
 					and _local_controller.last_release_hand == "BH"
 			if _last_shot_qualifies:
@@ -1850,7 +1850,7 @@ func _passing_tick(delta: float) -> void:
 			if _current_step_id() == STEP_TOUCH_PASS:
 				_hud.set_alert(_fmt("He got it — but that was the quick snap. Hold {shoot} and sweep it over slowly."))
 			else:
-				_hud.set_alert(_fmt("He got it — but off a sweep. Tap {quick_shot} for the snap pass instead."))
+				_hud.set_alert(_fmt("He got it — but off a sweep. Tap {quick_pass} for the snap pass instead."))
 		if _pass_restage_timer < 0.0:
 			_pass_restage_timer = _REATTEMPT_DELAY
 		# Fall through to the countdown below while he holds the dead attempt.

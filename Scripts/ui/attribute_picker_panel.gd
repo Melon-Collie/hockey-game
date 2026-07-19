@@ -35,7 +35,7 @@ const _ATTR_TOOLTIPS: Array[String] = [
 	"Faster blade for dangles and catching hard passes,\nless slowdown carrying the puck, stronger backhand.",
 	"Height, reach, and mass — longer stick, harder to\nknock off the puck, and your hits carry more momentum.",
 	"Deliver bigger checks that stagger and strip the puck,\nbrace against hits, and burn/recover stamina better.",
-	"Higher charged-shot power ceiling and a faster wrister\ncharge. Quick shot & pass speed stay equal for everyone.",
+	"Higher charged-shot power ceiling and a faster wrister\ncharge. Quick-pass speed stays equal for everyone.",
 ]
 
 # Working copy: Array of {"name": String, "levels": Array[int]} (six levels).
