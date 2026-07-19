@@ -242,25 +242,38 @@ Same methodology as the duel harness (#27):
   once Phase C.3 lands, the mirrored O-zone metric: keep-in % (rims/clears
   up the wall the point D holds at the line vs escapes).
 - Baseline discipline: the instrument (`benchmarks/test_breakout_harness.gd`,
-  run with `-gselect=breakout`) was built after A–C landed, so the pre-rework
-  baseline was measured by running it against `main` in a worktree. First
-  tables (10 trials: corner ×2 depths, weak-wall rim-in, behind-net, dump-in
-  runway, mirrored):
-  * `main` (pre-rework):  clean 0/10, clear 2/10, cough 4/10, timeout 4/10
-  * A+B+C branch:         clean 0/10, clear 2/10, cough 4/10, timeout 4/10
-    (per-trial flips only — behind-net cough→clear on the branch)
-  HONEST READ: the staged aggregate hasn't moved yet at this sample size.
-  The known limits: races staged already-contested suppress RETRIEVAL by
-  design; still skaters can't express the wheel's has-a-step trigger; and
-  the dominant observed cough is the retriever's FIRST PASS into the
-  forecheck (pickup at ~0.2 s, intercepted at ~1.1 s) — which points the
-  next iteration at first-touch option selection under the new structure.
-  This is the Phase D loop working as intended: iterate against the
-  instrument, adjudicate feel in playtest.
-- Regression pins: the plays fire under their researched triggers (wheel
-  wins when the retriever has a step; over wins when F1 overcommits strong;
-  reverse beats the committed chaser; rim never turns over in the slot),
-  and the DZONE override still holds contested races.
+  `-gselect=breakout`) is the before/after gauge; `main` comparisons run in a
+  worktree (patch the RETRIEVAL trace line out for pre-rework code).
+- **Instrument v2** (first iteration of the Phase D loop): organic staging —
+  every trial begins as live play (the opponents CARRY through a warmup, both
+  teams settle into brain-made shapes with real velocities) before the
+  trigger event; deterministic jitter (18 trials); per-trial TRACES
+  (RETRIEVAL engagement, first touch, the first release's committed decision
+  + compete scores, from the duel harness's enriched release records). Two
+  harness bugs the traces caught: the duel harness had NO BOARDS (dumped
+  pucks left the world — every dump scenario unwinnable) and its snapshot
+  never published the chase election (`closest_to_puck_by_team`) — so no bot
+  could enter CHASE on a loose DZONE puck and RETRIEVAL could never fire.
+  Both fixed in the harness (production was never affected — GameManager
+  publishes the enrichment).
+- **v2 tables** (18 trials, organic staging):
+  * `main`:  clean 2, clear 3, cough 13 | retrieval 0/18, 5 exits mean 4.0 s
+  * branch:  clean 2, clear 0, cough 16 | retrieval 15/18, 2 exits mean 3.2 s
+  Aggregate still noise-level at n=18; the ROBUST cross-branch findings are
+  the two model indictments the traces confirmed at scale:
+  1. **First-pass completion is over-priced at the desperation margin.** The
+     retriever's first release fires at pass EV ~0.02–0.16 and almost always
+     dies. Next iteration: the calibration probe — record scored completion
+     vs actual outcome per release across many trials, re-derive the lane /
+     release-contest constants from the measured curve (the #27 method).
+     Once honest, protect/wheel/rim should out-compete the coin-flip pass.
+  2. **The retrieval race read is net-blind.** dump-behind-net: the entering
+     opponent wins first touch every trial on both branches — and on the
+     branch RETRIEVAL had FIRED (the read predicted a win). The intercept
+     estimate (`best_intercept_time`) is straight-line; the real route
+     rounds the cage. Next iteration: net-aware ETA (detour via the
+     behind-net apex when the straight path crosses the cage — the wheel's
+     own waypoint trick), used by both the race read and the chase election.
 
 ## 4. Non-goals
 

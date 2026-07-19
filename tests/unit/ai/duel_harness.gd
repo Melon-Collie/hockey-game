@@ -120,6 +120,11 @@ var move_cfg: SkaterMovementRules.MovementConfig
 var _puck_history: Array[Vector3] = []
 # peer_id -> tick until which that peer can't re-catch its own release.
 var _release_grace: Dictionary = {}
+# Per-team incumbent for the snapshot's chase election (hysteresis feed).
+var _prev_chase_by_team: Dictionary = {}
+# Loose-puck board bounce restitution (the harness's coarse boards — flight
+# fidelity is still not the point; containment is).
+const BOARD_RESTITUTION: float = 0.5
 
 # ── Outcome telemetry (scenario assertions read these) ──────────────────────
 var deke_fired: bool = false
@@ -261,7 +266,22 @@ func step() -> void:
 				or (c.was_holding_shot and not c.input.shoot_held) \
 				or (c.was_holding_slap and not c.input.slap_held)
 		if released:
-			releases.append({"tick": ticks, "peer": c.peer_id})
+			# The release record carries the DECISION CONTEXT alongside the
+			# event (all additive keys — older consumers read tick/peer only):
+			# the carrier's intent and its compete debug scores at the moment
+			# of firing, so scenario harnesses can trace WHY a release
+			# happened and, later, compare scored completion odds against the
+			# actual outcome (the calibration-probe loop).
+			var rec: Dictionary = {"tick": ticks, "peer": c.peer_id,
+					"team": c.team_id, "pos": c.pos}
+			if c.agent != null and c.agent._carrier != null:
+				rec["decision"] = c.agent.debug_last_decision
+				rec["intent"] = c.agent._carrier.intended_action
+				rec["pass_peer"] = c.agent._carrier.debug_pass_peer_id
+				rec["pass_score"] = c.agent._carrier.debug_pass_score
+				rec["carry_score"] = c.agent._carrier.debug_carry_score
+				rec["dump_score"] = c.agent._carrier.debug_dump_score
+			releases.append(rec)
 			_release_grace[c.peer_id] = ticks + RELEASE_GRACE_TICKS
 			var aim: Vector3 = c.input.mouse_world_pos - c.pos
 			aim.y = 0.0
@@ -315,6 +335,18 @@ func step() -> void:
 			var scale: float = maxf(speed - drop, 0.0) / speed
 			puck_vel *= scale
 		puck_pos += puck_vel * DT
+		# Boards: clamp to the rink and reflect the outward component (the
+		# same analytic backstop the real Puck runs). Without this a dumped
+		# or rimmed puck sailed out of the world and every loose-puck
+		# scenario beyond a few metres was unwinnable by construction —
+		# and rims can't wrap corners a harness doesn't have.
+		var clamped: Vector2 = GameRules.clamp_to_rink_inner(
+				Vector2(puck_pos.x, puck_pos.z))
+		if clamped.x != puck_pos.x or clamped.y != puck_pos.z:
+			var outward := Vector2(puck_pos.x - clamped.x, puck_pos.z - clamped.y)
+			puck_vel = PuckCollisionRules.board_rescue_velocity(
+					puck_vel, outward, BOARD_RESTITUTION)
+			puck_pos = Vector3(clamped.x, puck_pos.y, clamped.y)
 		for s: SimSkater in skaters:
 			if s.agent == null:
 				continue   # a puppet contains and pokes; it never carries
@@ -393,6 +425,21 @@ func _build_snapshot() -> WorldSnapshot:
 	snap.puck_state.velocity = puck_vel
 	snap.puck_state.carrier_peer_id = carrier_id
 	snap.real_puck_carrier_peer_id = carrier_id
+	# The AI enrichment GameManager publishes in production
+	# (_enrich_snapshot_for_ai): team rosters + the hysteretic loose-puck
+	# chase election. Without these no bot can ever be the elected chaser
+	# (the CHASE_PUCK gate reads the election) and the brain's RETRIEVAL
+	# read can't see a playable race — loose-puck scenarios silently played
+	# without the production loose-puck machinery.
+	for s: SimSkater in skaters:
+		var arr: Array = snap.teammate_ids_by_team.get_or_add(s.team_id, [])
+		arr.append(s.peer_id)
+	for tid: int in snap.teammate_ids_by_team:
+		var elected: int = AILoosePuckChase.elect(
+				snap.skater_states, snap.teammate_ids_by_team[tid],
+				puck_pos, puck_vel, int(_prev_chase_by_team.get(tid, -1)))
+		snap.closest_to_puck_by_team[tid] = elected
+		_prev_chase_by_team[tid] = elected
 	# Static home keepers so shot scoring sees someone in each net (goalie
 	# BEHAVIOR is out of scope — this only keeps "empty net!" from dominating
 	# every carrier compete).
