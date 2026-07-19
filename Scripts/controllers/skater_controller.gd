@@ -2376,6 +2376,14 @@ func _movement_config() -> SkaterMovementRules.MovementConfig:
 		_cached_move_cfg = _build_movement_config()
 	return _cached_move_cfg
 
+# Public read of the cached movement config (built from this skater's scaled
+# tuning, rebuilt on apply_attributes). Consumed by stage-3 remote forward-
+# prediction — the client (RemoteController) and host (HitClaimResolver) both
+# drive SkaterMovementRules.integrate_forward with the target skater's own config.
+# Live-tuning caveat aside, treat the returned object as read-only.
+func get_movement_config() -> SkaterMovementRules.MovementConfig:
+	return _movement_config()
+
 func _block_movement_config() -> SkaterMovementRules.MovementConfig:
 	if _cached_block_move_cfg == null:
 		_cached_block_move_cfg = _build_movement_config()

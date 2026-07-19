@@ -67,6 +67,17 @@ const REPLAY_FILE_RATE: int = 30
 # for RemoteController / PuckController / GoalieController; each controller
 # still exposes it as @export so individual actors can be tuned independently.
 const NETWORK_INTERPOLATION_DELAY: float = 0.075
+# Stage-3 remote forward-prediction (see docs/netcode-forward-prediction-plan.md).
+# How far a remote skater is intent-integrated from its interpolated-past base
+# toward host-present, as a fraction of interp_delay: 0.0 = legacy interpolate-in-
+# the-past (render == rewind exactly, the shipped behavior); 1.0 = full ~interp_delay
+# of forward prediction (remote bodies render at ~present). READ BY BOTH the client
+# render (RemoteController) AND the host claim-rewind (HitClaimResolver) via
+# LagCompRewind.forward_predict_ticks, so render stays == rewind at any value — the
+# two MUST use the same fraction. Held at 0.0 until playtested: raise it (0.5 is a
+# conservative first step, 1.0 full present) on the experimental build and watch
+# remote skaters on hard cuts (extrapolation overshoot) and contested-hit feel.
+const REMOTE_FORWARD_PREDICT_FRACTION: float = 0.0
 # Wire encoding for session-relative timestamps: u32 in 0.1 ms units
 # (seconds × this scale). Replaces f32 seconds, whose ULP degraded with host
 # uptime — ~1 ms error at 2.3 h (visible interpolation jitter), ~2 ms at

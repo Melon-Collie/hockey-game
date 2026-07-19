@@ -228,7 +228,15 @@ can't run headless, so networking feel is verified on the developer's machine.
    impulse injection. Nothing to mispredict → no snap. Cost: ~½-RTT before you
    feel a check you delivered (reads as weight, not lag).
 3. **Remote skater input-broadcast + forward-integration** + host rewind to the
-   predicted instant.
+   predicted instant. *(In progress on the experimental branch.)* The movement
+   intent is already on the wire (v15/v16/v28, lossless for keyboard's 8-way
+   input — no PROTOCOL bump). `SkaterMovementRules.integrate_forward` is the
+   shared primitive; `RemoteController` (render) and `HitClaimResolver` (host
+   claim rewind) both drive it to the same depth via
+   `LagCompRewind.forward_predict_ticks`, so render == rewind holds at any lead.
+   Gated by `Constants.REMOTE_FORWARD_PREDICT_FRACTION`, **shipped at 0 (no-op /
+   current behavior)** — raise it on the experimental build to enable + tune
+   (0.5 conservative, 1.0 full present). Pickup/poke puck rewind is stage 4.
 4. **Conditional puck lead** + **goalie spectator pose-lead** (share the "host
    rewinds to predicted instant" spine).
 5. **Rate drop** (now free on feel) **+ delta-encode** (when egress-metered).

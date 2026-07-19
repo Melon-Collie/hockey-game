@@ -58,6 +58,28 @@ func test_prev_tick_subtracts_one_physics_tick() -> void:
 	assert_almost_eq(LagCompRewind.prev_tick(10.0), 10.0 - 1.0 / float(Constants.PHYSICS_TICK), EPSILON)
 
 
+# ── forward_predict_ticks (stage-3 render == rewind depth) ────────────────────
+
+func test_forward_predict_ticks_zero_fraction_is_zero() -> void:
+	# The shipped default: no forward integration -> render == rewind in the past.
+	assert_eq(LagCompRewind.forward_predict_ticks(0.0, 0.075), 0)
+
+
+func test_forward_predict_ticks_full_fraction_is_interp_delay_worth() -> void:
+	# fraction 1.0, 75 ms interp delay, 120 Hz -> 9 ticks (0.075 * 120).
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, 0.075), 9)
+
+
+func test_forward_predict_ticks_half_fraction() -> void:
+	assert_eq(LagCompRewind.forward_predict_ticks(0.5, 0.075), 5)  # round(4.5)
+
+
+func test_forward_predict_ticks_clamps_and_guards() -> void:
+	assert_eq(LagCompRewind.forward_predict_ticks(2.0, 0.075), 9, "fraction clamps to 1.0")
+	assert_eq(LagCompRewind.forward_predict_ticks(-1.0, 0.075), 0, "negative fraction -> 0")
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, -0.05), 0, "negative delay -> 0")
+
+
 # ── Composition ──────────────────────────────────────────────────────────────
 
 func test_self_and_remote_diverge_by_input_lead_plus_interp_delay() -> void:

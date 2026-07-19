@@ -81,6 +81,17 @@ static func prev_tick(view_time: float) -> float:
 	return view_time - 1.0 / float(Constants.PHYSICS_TICK)
 
 
+# Stage-3 forward-prediction depth: how many physics ticks a remote body is
+# intent-integrated forward from its interpolated-past base toward host-present.
+# The client (RemoteController render) and the host (HitClaimResolver claim rewind)
+# BOTH call this with the SAME fraction (Constants.REMOTE_FORWARD_PREDICT_FRACTION)
+# and interp_delay, so their tick counts — and therefore the predicted positions —
+# agree, keeping render == rewind. `fraction` is a param (not read here) so the
+# formula is unit-testable at any value even while the constant defaults to 0.
+static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int:
+	return roundi(clampf(fraction, 0.0, 1.0) * maxf(interp_delay_s, 0.0) * float(Constants.PHYSICS_TICK))
+
+
 # Structural anti-cheat for client-authoritative blade claims. A pickup / poke /
 # stick-lift claim now carries the client's OWN blade geometry (its "aim" — the
 # precise thing the client is authoritative over, exactly as AAA FPS lag-comp

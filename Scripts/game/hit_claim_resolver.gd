@@ -41,6 +41,8 @@ var _hit_tracker: HitTracker = null
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 
 var _last_claim_sent: Dictionary[String, float] = {}  # client only: "hitter:victim" -> time
+# Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
+var _fp_result := SkaterMovementRules.ForwardResult.new()
 
 
 func setup(
@@ -138,7 +140,28 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	var victim_snap: SkaterNetworkState = victim_snapshot.get_skater_state(victim_peer_id)
 	if hitter_snap == null or victim_snap == null:
 		return
-	if hitter_snap.position.distance_to(victim_snap.position) > MAX_RANGE_M:
+	# Stage-3: intent-integrate the victim's rewound body toward host-present by the
+	# SAME depth the client rendered it at (shared forward_predict_ticks + fraction +
+	# the client-reported interp_delay), so the geometry the host validates matches
+	# what the attacker actually saw — render == rewind. The hitter stays
+	# un-integrated (self-view: the client predicts its own body). has_puck forced
+	# false to match RemoteController's render integration exactly. No-op at
+	# fraction 0 (the shipped default).
+	var vic_pos: Vector3 = victim_snap.position
+	var vic_vel: Vector3 = victim_snap.velocity
+	var fp_ticks: int = LagCompRewind.forward_predict_ticks(
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
+	var vic_ctrl: SkaterController = victim_rec.controller as SkaterController
+	if fp_ticks > 0 and vic_ctrl != null:
+		SkaterMovementRules.integrate_forward(
+				victim_snap.position, victim_snap.velocity, victim_snap.move_intent,
+				atan2(victim_snap.facing.x, victim_snap.facing.y), false,
+				victim_snap.brake_intent, victim_snap.sprint_active,
+				vic_ctrl.get_movement_config(), 1.0 / float(Constants.PHYSICS_TICK),
+				fp_ticks, _fp_result)
+		vic_pos = _fp_result.position
+		vic_vel = _fp_result.velocity
+	if hitter_snap.position.distance_to(vic_pos) > MAX_RANGE_M:
 		return
 	# Puck carrier read from the victim's rewind snapshot — that's the world the
 	# attacker saw when they committed to the check. The tracker's grace path
@@ -151,12 +174,12 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# Re-derive impulse from rewound velocities along the hitter→victim normal.
 	# Each velocity is read from its own rewound snapshot so the closing speed
 	# reflects what the attacker actually saw, not a single mid-time slice.
-	var to_victim: Vector3 = victim_snap.position - hitter_snap.position
+	var to_victim: Vector3 = vic_pos - hitter_snap.position
 	to_victim.y = 0.0
 	if to_victim.length_squared() < 0.0001:
 		return
 	var normal: Vector3 = to_victim.normalized()
-	var rel_vel: Vector3 = hitter_snap.velocity - victim_snap.velocity
+	var rel_vel: Vector3 = hitter_snap.velocity - vic_vel
 	rel_vel.y = 0.0
 	var impulse: float = rel_vel.dot(normal)
 	# Scale by the hitter's weight BEFORE the tracker validates so the claim

@@ -18,6 +18,13 @@ func shot_power_sensitivity() -> float:
 # miss (worst during jitter, when interp_delay spikes). 0 keeps render == rewind:
 # the standard predict-self / interpolate-remote / server-lag-comp model. The
 # SmoothDamp stage still absorbs correction error.
+#
+# SUPERSEDED for forward prediction by stage-3 Constants.REMOTE_FORWARD_PREDICT_FRACTION
+# (see _interpolate): that leads the body via INTENT-driven integration
+# (SkaterMovementRules.integrate_forward) instead of this raw-velocity render_time
+# shift, and the host integrates the hit-claim rewind by the same depth so it stays
+# render == rewind even when non-zero. Keep THIS export at 0 — it rides the buffer
+# edge (raw dead-reckon) and breaks the claim match.
 @export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the remote body position. Larger =
 # smoother corrections, more chase lag; smaller = snappier, jumpier.
@@ -43,6 +50,9 @@ const _KNOCKBACK_LEAD_MAX_M: float = 0.22  # peak lead at a full-strength check
 # allocating fresh ones each tick was measurable churn at the physics rate × 5 remotes.
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_interp := SkaterNetworkState.new()
+# Stage-3 forward-prediction scratch (see _interpolate): reused so the per-tick ×
+# remotes intent-integration allocates nothing.
+var _fp_result := SkaterMovementRules.ForwardResult.new()
 # Critically-damped position smoother state (see _interpolate). Persistent across
 # ticks; SmoothDamp tracks the moving render target so lead errors blend out.
 var _smooth_pos: Vector3 = Vector3.ZERO
@@ -344,6 +354,25 @@ func _interpolate(delta: float) -> void:
 		# old "interpolate strictly in the past" rule was relaxed once that smoother
 		# replaced the snap-prone steady advance. blade/top_hand are upper_body-local
 		# and ride the body through the scene tree, so they need no projection.
+	# Stage-3 forward prediction: intent-integrate the interpolated-past body toward
+	# host-present so a remote reads at its true closing distance instead of a full
+	# interp_delay behind. The host runs the IDENTICAL integration on the hit-claim
+	# rewind snapshot (HitClaimResolver) via the shared forward_predict_ticks depth,
+	# so render == rewind holds at any fraction. has_puck is forced false to match
+	# that host reconstruction exactly (the carry speed cap is a ~cm-scale term over
+	# the window and both sides drop it). Facing is held (rendered from the
+	# interpolated value); position + velocity advance. No-op at fraction 0 —
+	# forward_predict_ticks returns 0 and integrate_forward is the identity.
+	var fp_ticks: int = LagCompRewind.forward_predict_ticks(
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay)
+	if fp_ticks > 0:
+		SkaterMovementRules.integrate_forward(
+				interpolated.position, interpolated.velocity, interpolated.move_intent,
+				atan2(interpolated.facing.x, interpolated.facing.y), false,
+				interpolated.brake_intent, interpolated.sprint_active, _movement_config(),
+				1.0 / float(Constants.PHYSICS_TICK), fp_ticks, _fp_result)
+		interpolated.position = _fp_result.position
+		interpolated.velocity = _fp_result.velocity
 	# Velocity-feed-forward error smoothing on the collision body position. We advance
 	# by the target's OWN velocity each frame (zero steady-state lag — smoothing the
 	# absolute position instead trails a moving body by ~velocity × smooth_time) and
