@@ -142,3 +142,51 @@ func test_top_net_ignores_a_low_puck() -> void:
 	var pos := Vector3(0.0, 0.3, GameRules.GOAL_LINE_Z + 0.3)
 	var res := PuckGeometryCollision.Result.new()
 	assert_false(PuckGeometryCollision.resolve_top_net(pos, Vector3(0, 2, 0), res))
+
+
+# ── Back / side net panels (the twine that catches a scored puck) ──
+
+func test_back_panel_absorbs_and_reflects_toward_mouth() -> void:
+	# A puck driven into the back of the net rebounds weakly back toward the mouth (-z).
+	var back_z: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH
+	var pos := Vector3(0.0, 0.0175, back_z - 0.01)
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(pos, Vector3(0, 0, 8), R, res)
+	assert_true(hit, "puck into the back panel contacts it")
+	assert_lt(res.velocity.z, 0.0, "rebounds back toward the mouth")
+	assert_almost_eq(res.velocity.z, -8.0 * PuckGeometryCollision.NET_RESTITUTION, 0.01,
+			"absorbed hard at NET_RESTITUTION (0.05)")
+	assert_lte(absf(res.position.z), back_z, "clamped inside the back panel")
+
+
+func test_side_panel_reflects_toward_center() -> void:
+	var pos := Vector3(0.95, 0.0175, GameRules.GOAL_LINE_Z + 0.25)
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(pos, Vector3(5, 0, 0), R, res)
+	assert_true(hit, "puck into the side panel contacts it")
+	assert_lt(res.velocity.x, 0.0, "rebounds back toward center")
+
+
+func test_net_panels_ignore_puck_in_front_of_the_goal_line() -> void:
+	var pos := Vector3(0.0, 0.0175, GameRules.GOAL_LINE_Z - 0.1)  # still in the mouth approach
+	var res := PuckGeometryCollision.Result.new()
+	assert_false(PuckGeometryCollision.resolve_net_panels(pos, Vector3(0, 0, 8), R, res))
+
+
+func test_net_panels_ignore_puck_outside_the_cage_laterally() -> void:
+	var pos := Vector3(1.3, 0.0175, GameRules.GOAL_LINE_Z + 0.3)  # wide of the net
+	var res := PuckGeometryCollision.Result.new()
+	assert_false(PuckGeometryCollision.resolve_net_panels(pos, Vector3(0, 0, 5), R, res))
+
+
+func test_side_panel_follows_the_trapezoid_widening() -> void:
+	# The same lateral position (x = 0.9) hits the side near the narrow mouth but clears it
+	# near the wider back — proving the depth-interpolated (trapezoid) side limit.
+	var near_mouth := Vector3(0.9, 0.0175, GameRules.GOAL_LINE_Z + 0.05)
+	var near_back := Vector3(0.9, 0.0175, GameRules.GOAL_LINE_Z + 0.85)
+	var res := PuckGeometryCollision.Result.new()
+	assert_true(PuckGeometryCollision.resolve_net_panels(near_mouth, Vector3(3, 0, 0), R, res),
+			"x=0.9 hits the side near the narrow mouth")
+	var res2 := PuckGeometryCollision.Result.new()
+	assert_false(PuckGeometryCollision.resolve_net_panels(near_back, Vector3(3, 0, 0), R, res2),
+			"the same x clears the side near the wider back")
