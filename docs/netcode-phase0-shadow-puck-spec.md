@@ -19,6 +19,39 @@ over a real shot, and specifically at a board bounce?*
   analytic reflect can't capture) → stop, having spent a harness, not a rewrite. The
   pragmatic stage-4 lead stands.
 
+## Rim-arounds: match where Jolt is good, BEAT where Jolt is bad
+
+Board caroms off the straight walls are the "match Jolt" case (Jolt is fine there).
+**Rim-arounds — the puck sent hard around the curved end-boards behind the net, a
+core hockey play — are the opposite: Jolt is BROKEN there.** With the current
+trimesh geometry the puck jitters, takes wrong caroms, and can squeeze its center
+past the boundary in the rounded corners and **fall out of the arena** — which is the
+whole reason the `board_rescue_velocity` / containment-teleport hack (C1) exists.
+
+So for rim-arounds the success criterion **inverts**: we are not trying to reproduce
+Jolt, we are trying to be *correct where Jolt isn't*. And the analytic model is very
+likely the fix, not merely an equal:
+- `GameRules.clamp_to_rink_inner` does exact **rounded-rectangle** projection, so the
+  curved corners are real geometry, not a trimesh approximation.
+- `AITrajectory` reflects about the **inward normal at the contact point** — its own
+  doc-comment notes the old axis-aligned-rectangle reflection produced "phantom corner
+  ice and caroms off walls that aren't there," which the corner-aware version already
+  fixed for the AI.
+- A puck analytically clamped to the boundary **cannot leave it** — the escape-and-
+  rescue failure mode is structurally impossible, so the C1 backstop retires (it
+  becomes the primary, correct path).
+
+This means Phase 0 has TWO deliverables, not one:
+1. **Straight caroms** — measured *against Jolt* (match it; go/no-go thresholds below).
+2. **Rim-arounds** — measured *on their own merits* (containment + a smooth,
+   hockey-plausible curved path), NOT against Jolt, because Jolt's rim-around is the
+   bug we're replacing. Comparing to Jolt here is meaningless — Jolt + the C1 hack IS
+   the thing that "absolutely sucks."
+
+If the analytic rim-around is smooth and contained (very likely, given the AI already
+rides it), that's a strong *independent* reason to migrate even if straight caroms
+were merely a wash — determinism fixes a live physics bug, not just the netcode.
+
 ## The key finding: the sim already exists
 
 `Scripts/domain/ai/trajectory.gd` (`AITrajectory`) already forward-simulates the
@@ -45,8 +78,10 @@ sim is `AITrajectory.predict_puck` / `_step`.
 ## Scope (deliberately narrow)
 
 **In:** the freely-sliding, grounded loose puck — translation + friction + **board**
-bounces. This is the common case and the feel-critical one (board caroms are the
-puck-feel signature).
+bounces, including **rim-arounds** (hard puck around the curved end-boards). Straight
+caroms are the puck-feel signature (measured vs Jolt); rim-arounds are the case Jolt
+gets *wrong* (measured on their own merits — see above). Both ride the same
+`AITrajectory` path, so both are testable in Phase 0.
 
 **Out (measured in later phases, each its own prototype):**
 - **Gravity / airborne loft** — `AITrajectory` is XZ-only; loft shots/saucer passes
@@ -139,6 +174,18 @@ real data lands):
   closing with restitution tuning → Jolt is resolving the carom with something the
   analytic reflect can't reproduce (contact manifold, sub-tick timing) → **NO-GO** for
   a naive swept-disc; escalate (swept sub-stepping, or accept the pragmatic lead).
+
+**Rim-around track (measured on its own merits, NOT vs Jolt):**
+- **Containment** — over a session of hard rim-arounds, the analytic puck NEVER leaves
+  the boundary (the `board_rescue_velocity` escape/teleport never has to fire). Binary
+  and decisive: if it's contained by construction, the live "falls out of the arena"
+  bug is fixed.
+- **Curve quality** — the puck follows a smooth, continuous path along the rounded
+  corner (no jitter, no stall, no phantom wall-hit), and exits at a hockey-plausible
+  angle. Judged visually against the ghost puck + a trace log of the corner segment.
+- A **GO on containment + curve here is an independent reason to migrate**, even if
+  straight caroms were only a wash vs Jolt — it retires the C1 hack and fixes a real
+  gameplay bug.
 
 ## Effort & sequence
 

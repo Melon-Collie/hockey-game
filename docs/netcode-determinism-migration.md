@@ -17,6 +17,14 @@ it moves:
   puck — the defining object, and the one the opening review called "the weakest
   client-side story" — stops being interpolated-in-the-past-with-hacks and becomes
   a real client-predicted, server-reconciled object like RL's ball.
+- **It also fixes a live gameplay physics bug.** Rim-arounds (the puck sent hard
+  around the curved end-boards — a core hockey play) are broken under Jolt today:
+  jitter, wrong caroms, and the puck squeezing past the boundary in the rounded
+  corners and *falling out of the arena* (the reason the `board_rescue_velocity`
+  containment hack exists). An analytically-clamped puck **cannot leave a boundary
+  it's clamped to**, so the migration retires that hack and makes rim-arounds correct
+  by construction. This is a gameplay win independent of the netcode one — see the
+  Phase-0 spec's rim-around track.
 - **It does NOT, by itself, make the game AAA.** The other axes from that review are
   untouched: participant-host P2P (host advantage, no host migration, a host that
   can cheat), no delta compression, 120 Hz bandwidth. Those are stages 5–6 and a
