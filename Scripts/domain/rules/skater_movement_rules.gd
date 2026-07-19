@@ -73,3 +73,47 @@ static func apply_movement(
 	velocity.x = horiz_vel.x
 	velocity.z = horiz_vel.y
 	return velocity
+
+
+# Caller-owned result for integrate_forward (fill-a-scratch, no per-call alloc).
+class ForwardResult:
+	var position: Vector3 = Vector3.ZERO
+	var velocity: Vector3 = Vector3.ZERO
+
+
+# Forward-integrate a skater's position + velocity from a snapshot through `ticks`
+# physics steps of `dt`, driving the SAME apply_movement physics with the skater's
+# broadcast movement intent (move_input / brake / sprint). This is the shared
+# primitive behind stage-3 remote forward-prediction: the client calls it to render
+# a remote at (near) present instead of a full interp_delay in the past, and the
+# HOST calls it — with the identical snapshot base + intent — to reconstruct that
+# same predicted position when validating lag-comp claims, so render stays == rewind.
+# Sharing one primitive is what guarantees the two agree; any divergence would
+# reopen the contested-pickup desync that render == rewind fixed.
+#
+# Free-space integration (position += velocity·dt per tick): board/net clamps and
+# facing evolution are deliberately omitted. Facing affects only the thrust-
+# alignment scale and turns slowly over the ~interp_delay span, so it is held
+# constant here; the caller renders facing via the existing angular-velocity
+# extrapolation. The residual vs the host's true move_and_slide is corrected by the
+# next snapshot — what must match exactly is client-render vs host-rewind, and both
+# run THIS function on the same inputs. Fills the caller-owned `result`.
+static func integrate_forward(
+		position: Vector3,
+		velocity: Vector3,
+		move_input: Vector2,
+		facing_rotation_y: float,
+		has_puck: bool,
+		brake: bool,
+		sprint_active: bool,
+		cfg: MovementConfig,
+		dt: float,
+		ticks: int,
+		result: ForwardResult) -> void:
+	var pos: Vector3 = position
+	var vel: Vector3 = velocity
+	for _tick in maxi(ticks, 0):
+		vel = apply_movement(vel, move_input, facing_rotation_y, has_puck, brake, dt, cfg, sprint_active)
+		pos += vel * dt
+	result.position = pos
+	result.velocity = vel

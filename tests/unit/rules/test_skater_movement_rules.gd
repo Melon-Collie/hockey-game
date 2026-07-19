@@ -101,3 +101,69 @@ func test_backward_thrust_scaled_down() -> void:
 		Vector3.ZERO, Vector2(0, 1), 0.0, false, false, 0.1, cfg)
 	# Forward thrust full; backward thrust scaled by backward_thrust_multiplier (0.7)
 	assert_gt(forward.length(), backward.length(), "backward thrust should be weaker than forward")
+
+
+# ── integrate_forward (stage-3 remote forward-prediction primitive) ────────────
+
+func test_integrate_forward_zero_ticks_is_identity() -> void:
+	var r := SkaterMovementRules.ForwardResult.new()
+	var pos := Vector3(3, 0, 4)
+	var vel := Vector3(5, 0, 0)
+	SkaterMovementRules.integrate_forward(pos, vel, Vector2(1, 0), 0.0,
+		false, false, false, _default_cfg(), 0.01, 0, r)
+	assert_eq(r.position, pos, "0 ticks leaves position unchanged")
+	assert_eq(r.velocity, vel, "0 ticks leaves velocity unchanged")
+
+
+func test_integrate_forward_negative_ticks_clamped() -> void:
+	var r := SkaterMovementRules.ForwardResult.new()
+	var pos := Vector3(3, 0, 4)
+	var vel := Vector3(5, 0, 0)
+	SkaterMovementRules.integrate_forward(pos, vel, Vector2(1, 0), 0.0,
+		false, false, false, _default_cfg(), 0.01, -5, r)
+	assert_eq(r.position, pos, "negative ticks treated as zero — no integration")
+
+
+func test_integrate_forward_matches_sequential_apply_movement() -> void:
+	# The whole point: the primitive must equal N hand-rolled apply_movement steps
+	# with position accumulation — the client render and host rewind both call it,
+	# so its equivalence to the live per-tick math is what keeps them aligned.
+	var cfg := _default_cfg()
+	var pos := Vector3(0, 0, 0)
+	var vel := Vector3(2, 0, 1)
+	var mv := Vector2(1, 0)
+	var expect_pos := pos
+	var expect_vel := vel
+	for _i in 9:
+		expect_vel = SkaterMovementRules.apply_movement(expect_vel, mv, 0.0, false, false, 0.0083, cfg, false)
+		expect_pos += expect_vel * 0.0083
+	var r := SkaterMovementRules.ForwardResult.new()
+	SkaterMovementRules.integrate_forward(pos, vel, mv, 0.0, false, false, false, cfg, 0.0083, 9, r)
+	assert_almost_eq(r.velocity.x, expect_vel.x, 1e-6)
+	assert_almost_eq(r.velocity.z, expect_vel.z, 1e-6)
+	assert_almost_eq(r.position.x, expect_pos.x, 1e-6)
+	assert_almost_eq(r.position.z, expect_pos.z, 1e-6)
+
+
+func test_integrate_forward_is_deterministic() -> void:
+	# render == rewind rests on this: identical inputs must give identical output,
+	# so the host's rewind reconstruction lands exactly where the client rendered.
+	var cfg := _default_cfg()
+	var a := SkaterMovementRules.ForwardResult.new()
+	var b := SkaterMovementRules.ForwardResult.new()
+	SkaterMovementRules.integrate_forward(Vector3(1, 0, 2), Vector3(4, 0, -3),
+		Vector2(0, 1), 1.2, true, false, true, cfg, 0.0083, 9, a)
+	SkaterMovementRules.integrate_forward(Vector3(1, 0, 2), Vector3(4, 0, -3),
+		Vector2(0, 1), 1.2, true, false, true, cfg, 0.0083, 9, b)
+	assert_eq(a.position, b.position, "same inputs -> same predicted position")
+	assert_eq(a.velocity, b.velocity, "same inputs -> same predicted velocity")
+
+
+func test_integrate_forward_coasts_to_a_stop_with_no_input() -> void:
+	var cfg := _default_cfg()
+	var r := SkaterMovementRules.ForwardResult.new()
+	SkaterMovementRules.integrate_forward(Vector3(6, 0, 0), Vector3(6, 0, 0),
+		Vector2.ZERO, 0.0, false, false, false, cfg, 0.0083, 9, r)
+	assert_lt(Vector2(r.velocity.x, r.velocity.z).length(), 6.0,
+		"no input -> friction bleeds speed over the prediction window")
+	assert_gt(r.position.x, 6.0, "still drifts forward while decelerating")
