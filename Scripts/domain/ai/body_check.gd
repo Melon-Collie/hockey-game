@@ -46,17 +46,20 @@ const CHECK_RANGE_M: float = 6.0
 # Lead-solve horizon for the body intercept (seconds).
 const MAX_LEAD_S: float = 0.6
 
-# Predicted victim impulse (m/s velocity delta) required to commit — the
-# full-strength-check reference on the stagger ladder (SkaterController's
-# stagger_ref_impulse; the ladder doc there derives the scale from the
-# inelastic magnitudes: a committed equal-mass drive at ~6–10 m/s closing
-# lands ~1.4–2.3, an enforcer or a real head-on collision ~2.5–4). Commit
-# only to a hit that lands a FULL stagger: a baseline build must catch the
-# carrier closing (a real collision), an enforcer's transfer clears it on
-# its own drive, a lightweight never whiffs a check it'd bounce off.
-# (Predecessor was 5.0 against the pre-inelastic weight-ratio model — a bar
-# ~5× above what the rewritten collision can physically deliver, which is
-# why bots stopped hitting when the resolver changed.)
+# Predicted victim impulse (m/s velocity delta) required to commit. This is a
+# CONSERVATIVE RISK BAR, deliberately DECOUPLED from the human stagger ladder's
+# full-check point (SkaterController.stagger_ref_impulse, now 1.35): committing to
+# a hit means abandoning containment position, so a bot only leaves its feet for a
+# SOLIDLY-landing check — one that fully staggers AND strips the puck with margin,
+# well past the point where a human check merely registers. At the inelastic scale
+# (a medium drive is ~0.225 × closing, an enforcer ~0.33 ×) this bar means a
+# baseline build must catch the carrier closing (a real collision), an enforcer's
+# transfer clears it on its own drive, and a lightweight never whiffs a check it'd
+# bounce off. It sits just below the knockdown floor (3.0), so a committed bot hit
+# lands a hard stagger without auto-flattening. (Predecessor was 5.0 against the
+# pre-inelastic weight-ratio model — a bar ~5× above what the rewritten collision
+# can physically deliver, which is why bots stopped hitting when the resolver
+# changed.)
 const COMMIT_IMPULSE_M_S: float = 2.5
 
 # League-average victim mass (Skater.weight default) — the weight_ratio
