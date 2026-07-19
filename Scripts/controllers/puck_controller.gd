@@ -815,7 +815,9 @@ func _observe_shadow(delta: float) -> void:
 	if _shadow_log_timer >= _SHADOW_LOG_INTERVAL_S:
 		_shadow_log_timer = 0.0
 		if _shadow.samples > 0:
-			print("[phase0] ", _shadow.summary())
+			# jolt_escapes in the summary reads ~0 (C1 rescues before we see it); the
+			# real rim-around escape frequency is the puck's containment_rescue_count.
+			print("[phase0] %s c1_rescues=%d" % [_shadow.summary(), puck.containment_rescue_count])
 
 
 func _clear_provisional() -> void:

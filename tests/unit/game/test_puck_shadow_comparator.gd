@@ -132,6 +132,34 @@ func test_per_tick_step_mode_agrees_on_free_flight() -> void:
 	assert_lt(comp.div_max, 1e-4, "free-flight one-step prediction matches; error appears at bounces/clamps")
 
 
+func test_analytic_near_board_buckets_post_bounce_without_signal() -> void:
+	# A puck hugging the boards (within _BOARD_PROXIMITY_M) counts as a contact even with
+	# board_contact = false — the fix for glancing rim-arounds the puck_hit_boards signal
+	# misses. A real puck sliding ALONG the +X board (constant velocity, no friction) vs
+	# the friction shadow diverges, and that divergence must land in the post-bounce
+	# bucket purely from analytic board proximity.
+	var comp := PuckShadowComparator.new()
+	comp.mode = PuckShadowComparator.Mode.FREE_RUN
+	var p := Vector3(GameRules.INNER_HALF_WIDTH - 0.1, 0, 0)  # right at the +X board
+	var v := Vector3(0, 0, 15)
+	comp.observe(p, v, false, DT)  # seed; NOTE board_contact is FALSE throughout
+	for _i in 30:
+		p += v * DT
+		comp.observe(p, v, false, DT)
+	assert_gt(comp.post_bounce_div_max, 0.0, "near-board divergence bucketed via analytic detection, no signal")
+
+
+func test_free_run_reseeds_on_decorrelation() -> void:
+	# The fix for the 57 m nonsense: once the shadow drifts past the reseed cap the
+	# free-run re-seeds instead of reporting unbounded chaotic divergence.
+	var comp := PuckShadowComparator.new()
+	comp.mode = PuckShadowComparator.Mode.FREE_RUN
+	comp.observe(Vector3(0, 0, 0), Vector3(5, 0, 0), false, DT)   # seed
+	comp.observe(Vector3(0, 0, 10), Vector3(5, 0, 0), false, DT)  # real 10 m away -> past the 3 m cap
+	assert_gt(comp.free_run_reseeds, 0, "large divergence re-seeds the free-run")
+	assert_lt(comp.div_max, 12.0, "divergence bounded near the reseed cap, not tens of metres")
+
+
 func test_per_tick_step_flags_boundary_clamp_divergence() -> void:
 	# The interaction PER_TICK_STEP exists to isolate: when the real puck steps OUTSIDE
 	# the boundary (a Jolt escape), the shadow's one-step prediction clamps it inside,

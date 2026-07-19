@@ -117,6 +117,12 @@ const CONTAINMENT_EPSILON: float = 0.001
 # teleport (drill managers stash the puck at (100, 100) between attempts) and
 # must be left alone — the drill owns puck placement.
 const CONTAINMENT_TELEPORT_SKIP: float = 2.0
+# Count of times the analytic containment backstop below has rescued an escaped puck
+# (Jolt's trimesh let the center past the boards — the rim-around "falls out of the
+# arena" bug). This is the TRUE escape frequency the Phase-0 harness wants: by the time
+# PuckController reads the puck, the rescue has already reseated it, so the comparator's
+# own boundary check reads ~0. Read via PuckController's shadow log.
+var containment_rescue_count: int = 0
 
 # ── Save-rebound control (host-authoritative) ─────────────────────────────────
 # A real goalie controls rebounds instead of caroming every shot back into the
@@ -783,6 +789,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	var boundary_xz: Vector2 = GameRules.clamp_to_rink_inner(xz)
 	var escape_depth: float = xz.distance_to(boundary_xz)
 	if escape_depth > CONTAINMENT_EPSILON and escape_depth < CONTAINMENT_TELEPORT_SKIP:
+		containment_rescue_count += 1  # Phase-0: true Jolt escape frequency (see the var)
 		var inside_xz: Vector2 = GameRules.clamp_to_rink_inner(
 				xz, GameRules.PUCK_COLLISION_RADIUS)
 		state.transform.origin.x = inside_xz.x

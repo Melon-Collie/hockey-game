@@ -37,8 +37,23 @@ const _POST_BOUNCE_WINDOW: int = 6
 # (past float noise on the boundary itself).
 const _ESCAPE_EPS: float = 0.02
 const _ESCAPE_EPS_SQ: float = _ESCAPE_EPS * _ESCAPE_EPS
+# The puck within this of the rink boundary counts as a board contact — catches the
+# glancing rim-arounds the coarse puck_hit_boards signal (hard perpendicular hits only)
+# misses. Detected analytically from the boundary, so it can't be undercounted.
+const _BOARD_PROXIMITY_M: float = 0.3
+# FREE_RUN self-limit: two puck sims decorrelate CHAOTICALLY over many bounces, so an
+# unbounded free-run of a puck that stays loose for tens of seconds measures noise, not
+# model error (a 40 m "divergence" is just two unrelated trajectories). Re-seed once the
+# shadow drifts past this and count it, so FREE_RUN reports "tracks to within X before
+# decorrelating" instead of nonsense. PER_TICK_STEP (the default) doesn't have this
+# problem — it re-seeds every tick.
+const _FREE_RUN_RESEED_M: float = 3.0
 
-var mode: int = Mode.FREE_RUN
+# PER_TICK_STEP is the default: it re-seeds from the real puck every tick, so it never
+# decorrelates and its error is a bounded, meaningful per-interaction signal (~zero in
+# free flight, spiking at bounces/clamps — the rim-around fidelity). FREE_RUN measures
+# accumulated drift over a SHORT flight and needs reset() at flight boundaries.
+var mode: int = Mode.PER_TICK_STEP
 
 # ── Shadow state ──────────────────────────────────────────────────────────────
 var _shadow_pos: Vector3 = Vector3.ZERO
@@ -62,6 +77,7 @@ var post_bounce_div_max: float = 0.0
 var bounce_events: int = 0
 var bounce_angle_err_sum_deg: float = 0.0
 var real_escape_ticks: int = 0
+var free_run_reseeds: int = 0
 
 
 # Drop the per-flight shadow so the next observe() re-seeds. Call on loose↔carried /
@@ -83,16 +99,27 @@ func reset_session() -> void:
 	bounce_events = 0
 	bounce_angle_err_sum_deg = 0.0
 	real_escape_ticks = 0
+	free_run_reseeds = 0
 
 
 # Feed one authoritative tick of the real (Jolt) loose puck. `board_contact` = the
 # real puck hit a board this tick (from Puck._on_body_entered classification).
 # Returns the shadow position for optional ghost rendering.
 func observe(real_pos: Vector3, real_vel: Vector3, board_contact: bool, dt: float) -> Vector3:
-	# Containment: did Jolt leave the rink this tick? The shadow can't, by construction.
 	var real_xz := Vector2(real_pos.x, real_pos.z)
+	# Containment: did Jolt leave the rink this tick? The shadow can't, by construction.
+	# NOTE: on the live host this usually reads 0 even during a bad rim-around, because
+	# the C1 board_rescue_velocity hack in Puck._integrate_forces reseats the puck BEFORE
+	# _physics_process feeds it here — so the true rim-around escape frequency is the C1
+	# rescue count, instrumented separately, not this field.
 	if GameRules.clamp_to_rink_inner(real_xz).distance_squared_to(real_xz) > _ESCAPE_EPS_SQ:
 		real_escape_ticks += 1
+
+	# Board contact = the coarse signal OR the puck sitting within _BOARD_PROXIMITY_M of
+	# the boundary (analytic — catches glancing rim-arounds the signal misses).
+	var near_board: bool = GameRules.clamp_to_rink_inner(real_xz, _BOARD_PROXIMITY_M) \
+			.distance_squared_to(real_xz) > 1e-6
+	var contact: bool = board_contact or near_board
 
 	# Resolve a pending bounce-angle comparison against this tick's real velocity
 	# (the real puck's post-bounce direction, one tick after the contact).
@@ -104,7 +131,7 @@ func observe(real_pos: Vector3, real_vel: Vector3, board_contact: bool, dt: floa
 			bounce_events += 1
 			bounce_angle_err_sum_deg += rad_to_deg(absf(sh.angle_to(rl)))
 
-	if board_contact:
+	if contact:
 		_post_bounce_ticks = _POST_BOUNCE_WINDOW
 
 	match mode:
@@ -116,7 +143,7 @@ func observe(real_pos: Vector3, real_vel: Vector3, board_contact: bool, dt: floa
 			_has_pending_pred = true
 			_shadow_pos = s.origin
 			_shadow_vel = s.basis.x
-			if board_contact:
+			if contact:
 				_pending_bounce_vel = s.basis.x
 				_has_pending_bounce = true
 		Mode.FREE_RUN:
@@ -128,10 +155,17 @@ func observe(real_pos: Vector3, real_vel: Vector3, board_contact: bool, dt: floa
 				var s: Transform3D = AITrajectory.step_puck(_shadow_pos, _shadow_vel, dt)
 				_shadow_pos = s.origin
 				_shadow_vel = s.basis.x
-				_record_divergence(_shadow_pos.distance_to(real_pos))
-				if board_contact:
+				var d: float = _shadow_pos.distance_to(real_pos)
+				_record_divergence(d)
+				if contact:
 					_pending_bounce_vel = _shadow_vel
 					_has_pending_bounce = true
+				# Chaotic decorrelation guard: once the two pucks are this far apart the
+				# free-run is measuring noise — re-seed and count it (see _FREE_RUN_RESEED_M).
+				if d > _FREE_RUN_RESEED_M:
+					_shadow_pos = real_pos
+					_shadow_vel = real_vel
+					free_run_reseeds += 1
 
 	if _post_bounce_ticks > 0:
 		_post_bounce_ticks -= 1
@@ -158,7 +192,8 @@ func avg_bounce_angle_err_deg() -> float:
 
 # One-line session digest for the F-overlay / log header.
 func summary() -> String:
-	return ("shadow-puck: n=%d avg=%.3fm max=%.3fm free_max=%.3fm bounce_max=%.3fm " +
-			"bounce_ang=%.1f° (%d) jolt_escapes=%d") % [
+	return ("shadow-puck[%s]: n=%d avg=%.3fm max=%.3fm free_max=%.3fm bounce_max=%.3fm " +
+			"bounce_ang=%.1f° (%d) jolt_escapes=%d reseeds=%d") % [
+		"per-tick" if mode == Mode.PER_TICK_STEP else "free-run",
 		samples, avg_divergence(), div_max, free_flight_div_max, post_bounce_div_max,
-		avg_bounce_angle_err_deg(), bounce_events, real_escape_ticks]
+		avg_bounce_angle_err_deg(), bounce_events, real_escape_ticks, free_run_reseeds]
