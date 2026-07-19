@@ -141,6 +141,7 @@ var is_extrapolating: bool = false
 # (BuildInfo.VERSION == "dev", the same gate NetworkSimManager uses), so it's absent
 # from exported builds and can never ship. Never drives the real puck.
 var _shadow: PuckShadowComparator = null
+var _goalie_shadow: GoalieCollisionShadow = null  # Phase-2 goalie-collision harness
 var _shadow_board_contact: bool = false
 var _shadow_log_timer: float = 0.0
 const _SHADOW_LOG_INTERVAL_S: float = 3.0
@@ -218,6 +219,8 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		if BuildInfo.VERSION == "dev":
 			_shadow = PuckShadowComparator.new()
 			puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
+			_goalie_shadow = GoalieCollisionShadow.new()
+			puck.puck_touched_goalie.connect(_on_shadow_goalie_contact)
 	else:
 		puck.puck_touched_goalie.connect(_on_client_puck_hit_goalie)
 		puck.puck_touched_post.connect(_on_client_puck_hit_post)
@@ -805,19 +808,34 @@ func _estimated_puck_speed() -> float:
 func _observe_shadow(delta: float) -> void:
 	if _shadow == null:
 		return
+	# Puck-trajectory shadow (Phase 0): only the grounded, freely-sliding loose puck is
+	# in scope — carried / dead / airborne reset it so each flight re-seeds.
 	if puck.carrier != null or puck.pickup_locked or puck.is_airborne():
 		_shadow.reset()
-		_shadow_board_contact = false
-		return
-	_shadow.observe(puck.get_puck_position(), puck.linear_velocity, _shadow_board_contact, delta)
+	else:
+		_shadow.observe(puck.get_puck_position(), puck.linear_velocity, _shadow_board_contact, delta)
 	_shadow_board_contact = false
+	# Combined throttled digest (runs regardless of puck mode — the goalie harness records
+	# contacts asynchronously via the signal, including airborne glove saves).
 	_shadow_log_timer += delta
 	if _shadow_log_timer >= _SHADOW_LOG_INTERVAL_S:
 		_shadow_log_timer = 0.0
 		if _shadow.samples > 0:
-			# jolt_escapes in the summary reads ~0 (C1 rescues before we see it); the
-			# real rim-around escape frequency is the puck's containment_rescue_count.
+			# jolt_escapes reads ~0 (C1 rescues before we see it); the true rim-around
+			# escape frequency is the puck's containment_rescue_count.
 			print("[phase0] %s c1_rescues=%d" % [_shadow.summary(), puck.containment_rescue_count])
+		if _goalie_shadow != null and _goalie_shadow.jolt_contacts > 0:
+			print("[phase2] %s" % _goalie_shadow.summary())
+
+
+# Phase-2 goalie-collision harness (dev + host): on Jolt's puck-vs-goalie contact, feed
+# the analytic swept-disc-vs-goalie-OBBs detector the same swept segment + the part Jolt
+# reported, so it records detection agreement / part-match / normal sanity.
+func _on_shadow_goalie_contact(goalie: Goalie) -> void:
+	if _goalie_shadow == null:
+		return
+	_goalie_shadow.record_contact(goalie, puck.last_goalie_contact_body,
+			_prev_puck_pos, puck.get_puck_position(), GameRules.PUCK_COLLISION_RADIUS)
 
 
 func _clear_provisional() -> void:

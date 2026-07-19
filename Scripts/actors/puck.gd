@@ -123,6 +123,10 @@ const CONTAINMENT_TELEPORT_SKIP: float = 2.0
 # PuckController reads the puck, the rescue has already reseated it, so the comparator's
 # own boundary check reads ~0. Read via PuckController's shadow log.
 var containment_rescue_count: int = 0
+# The goalie StaticBody3D part Jolt reported the most recent contact against — read
+# synchronously by the Phase-2 goalie-collision harness on the puck_touched_goalie
+# signal (set just before that emit), to compare Jolt's part against the analytic pick.
+var last_goalie_contact_body: Node = null
 
 # ── Save-rebound control (host-authoritative) ─────────────────────────────────
 # A real goalie controls rebounds instead of caroming every shot back into the
@@ -638,6 +642,7 @@ func _on_body_entered(body: Node3D) -> void:
 		# non-upright catching state and skips, keeping an upright catch upright.
 		if _is_server:
 			_resolve_save_rebound(body)
+		last_goalie_contact_body = body  # for the Phase-2 goalie-collision harness
 		puck_touched_goalie.emit(goalie)
 	elif body is HockeyGoal:
 		puck_touched_post.emit()
