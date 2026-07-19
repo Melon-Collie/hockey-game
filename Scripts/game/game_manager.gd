@@ -4343,14 +4343,25 @@ func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
 # Wired to the local player's LocalController as the reconcile replay's
 # body-check re-resolution source (Slice C) — it re-derives contact against where
 # the host actually had the others, replacing the old recorded-impulse bridge.
-# NOTE: allocates an Array + per-other Dictionary per call (once per replayed
-# input during a reconcile). Correct but not yet optimized — a scratch-fill pass
-# is the "make it look good" follow-up.
+#
+# HOT PATH: called once per replayed input during a reconcile (120 Hz × unacked
+# window, worst exactly when the network is bad — the case CLAUDE.md forbids
+# allocating in). So it fills a persistent scratch Array from a pooled set of
+# reused Dictionaries and iterates the roster by key (avoiding the fresh array
+# `.values()` copies), instead of allocating an Array + per-other Dictionary each
+# call. The caller (LocalController._replay_resolve_body_checks) consumes the
+# result read-only within a single call and never retains it across calls, so a
+# shared cleared-and-refilled buffer is safe.
+var _hist_others_scratch: Array = []
+var _hist_others_pool: Array[Dictionary] = []
+
 func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
-	var out: Array = []
+	_hist_others_scratch.clear()
 	if _registry == null:
-		return out
-	for rec: PlayerRecord in _registry.all().values():
+		return _hist_others_scratch
+	var players: Dictionary = _registry.all()
+	for peer_id: int in players:
+		var rec: PlayerRecord = players[peer_id]
 		if rec.skater == null or rec.skater == exclude_skater:
 			continue
 		var remote: RemoteController = rec.controller as RemoteController
@@ -4359,13 +4370,19 @@ func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
 		var state: SkaterNetworkState = remote.sample_state_at(host_ts)
 		if state == null:
 			continue
-		out.append({
-			"skater": rec.skater,
-			"position": state.position,
-			"velocity": state.velocity,
-			"hit": state.hit_committed,
-		})
-	return out
+		var idx: int = _hist_others_scratch.size()
+		var entry: Dictionary
+		if idx < _hist_others_pool.size():
+			entry = _hist_others_pool[idx]
+		else:
+			entry = {}
+			_hist_others_pool.append(entry)
+		entry["skater"] = rec.skater
+		entry["position"] = state.position
+		entry["velocity"] = state.velocity
+		entry["hit"] = state.hit_committed
+		_hist_others_scratch.append(entry)
+	return _hist_others_scratch
 
 
 # Bots' discrete-event reaction delay. Positions/velocities on `snap` stay

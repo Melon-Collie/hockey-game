@@ -259,6 +259,13 @@ var _peer_attributes: Dictionary[int, PlayerAttributes] = {}
 # power matches what the client predicted with its own sensitivity.
 var _peer_shot_sensitivity: Dictionary[int, float] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
+# Host-only: EMA of the host's OWN round-trip measurement to each peer
+# (host_ping/host_pong). Backs _peer_ping_ms on the host — the trusted RTT that
+# lag-comp claim validation reads via get_peer_ping_ms — so a modified client
+# can't forge the value (the old client-self-reported report_ping). Float here
+# for smoothing; the rounded int is mirrored into _peer_ping_ms for consumers.
+var _peer_rtt_ema_ms: Dictionary[int, float] = {}
+const _PEER_RTT_EMA_ALPHA: float = 0.3
 
 # Host: peers that have connected but not yet sent request_join, keyed to
 # their connect time (local_time()). Swept in _process — a peer that never
@@ -650,6 +657,7 @@ func _on_peer_disconnected(id: int) -> void:
 	_kicked_peers.erase(id)
 	# Per-peer telemetry books, else a stale peer's ping lingers on scoreboards.
 	_peer_ping_ms.erase(id)
+	_peer_rtt_ema_ms.erase(id)
 	_peer_loss_rates.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
@@ -722,6 +730,7 @@ func _close() -> void:
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()
 	_peer_ping_ms.clear()
+	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
@@ -808,6 +817,7 @@ func reset() -> void:
 	_ws_loss_window_timer = 0.0
 	packet_loss_pct = 0.0
 	_peer_ping_ms.clear()
+	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
@@ -894,9 +904,11 @@ func _process(delta: float) -> void:
 	if _ping_timer >= _PING_INTERVAL:
 		_ping_timer = 0.0
 		if is_host and not is_offline_mode:
-			_broadcast_all_pings()
-		elif not is_host and _clock_sync != null and _clock_sync.is_ready:
-			report_ping.rpc_id(1, int(get_rtt_ms()))
+			_send_host_pings()      # host times each peer's RTT itself
+			_broadcast_all_pings()  # distribute the measured pings (display)
+		# Clients no longer self-report their RTT (report_ping removed) — the host
+		# measures it via host_ping/host_pong, so the ping backing lag-comp claim
+		# validation can't be forged by a modified client.
 
 	if not is_host and _input_batch_provider.is_valid():
 		_input_timer += capped_delta
@@ -1273,6 +1285,48 @@ func receive_pong(client_send_time: float, host_time: float) -> void:
 				clock_ready.emit(),
 		[client_send_time, host_time], true)
 
+# ── Host-measured peer RTT ────────────────────────────────────────────────────
+# The host times a round trip to each peer ITSELF so lag-comp claim validation
+# (is_claim_stamp_plausible, via get_peer_ping_ms) reads a ping the host measured
+# rather than one the client self-reported. The old report_ping let a modified
+# client forge a large RTT — or never report at all — to widen its claim-stamp
+# "timestamp-shopping" window. Unreliable + routed through the net sim like the
+# clock-sync pings: a dropped probe just skips one sample (the EMA tolerates gaps)
+# and the dev latency sim is folded into the measurement.
+func _send_host_pings() -> void:
+	var t: float = local_time()
+	for peer_id: int in connected_peer_ids():
+		host_ping.rpc_id(peer_id, t)
+
+@rpc("authority", "unreliable")
+func host_ping(host_send_time: float) -> void:
+	if is_host:
+		return
+	# Echo the host's own timestamp straight back so it can measure the round trip.
+	NetworkSimManager.send(
+		func(t: float) -> void:
+			host_pong.rpc_id(1, t),
+		[host_send_time], false)
+
+@rpc("any_peer", "unreliable")
+func host_pong(host_send_time: float) -> void:
+	if not is_host:
+		return
+	# Capture the sender before the sim defers the callable (it loses RPC context).
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	NetworkSimManager.send(
+		func(pid: int, sent: float) -> void:
+			_record_host_measured_rtt(pid, (local_time() - sent) * 1000.0),
+		[peer_id, host_send_time], false)
+
+func _record_host_measured_rtt(peer_id: int, sample_ms: float) -> void:
+	if sample_ms < 0.0 or not is_finite(sample_ms):
+		return
+	var prev: float = _peer_rtt_ema_ms.get(peer_id, -1.0)
+	var ema: float = sample_ms if prev < 0.0 else lerpf(prev, sample_ms, _PEER_RTT_EMA_ALPHA)
+	_peer_rtt_ema_ms[peer_id] = ema
+	_peer_ping_ms[peer_id] = int(roundf(ema))
+
 # Client-authoritative blade geometry rides the claim: the client sends the blade
 # it actually reached with (blade_curr + one-tick-prior blade_prev for the swept
 # test, plus the top-hand grip for the pickup reception face-normal), so the host
@@ -1501,10 +1555,6 @@ func get_clock_correction_ms() -> float:
 	if _clock_sync == null:
 		return 0.0
 	return _clock_sync.last_correction_ms
-
-@rpc("any_peer", "unreliable")
-func report_ping(rtt_ms: int) -> void:
-	_peer_ping_ms[multiplayer.get_remote_sender_id()] = rtt_ms
 
 func _broadcast_all_pings() -> void:
 	var pings: Dictionary[int, int] = {}
