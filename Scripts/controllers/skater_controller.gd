@@ -577,6 +577,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
 @export var one_timer_leniency_time: float = 0.08   # seconds of puck travel added to zone radius as leniency
 @export var one_timer_center_power_bonus: float = 0.10  # ±10%: edge of zone = −10%, dead centre = +10%
+# Minimum wind-up (seconds of slapper charge) before an arriving puck opens the
+# timed one-timer window. Below it — the "puck was already at the stick when the
+# wind-up began" case — a forced window would open at ~zero power and cancel
+# straight to carry (a flicker + a shot that never happens). Under this floor the
+# catch rolls into a plain slapshot charge instead: keep winding up, release when
+# ready. Feel floor, deliberately small so genuine early one-timers still window.
+@export var one_timer_min_windup_time: float = 0.15
 
 var show_one_timer_indicator: bool = false
 
@@ -1650,21 +1657,27 @@ func on_puck_picked_up_network() -> void:
 	var local_blade: Vector3 = skater.get_blade_position() - skater.shoulder.position
 	_blade_relative_angle = atan2(local_blade.x, -local_blade.z)
 	if _sm.get_state() == State.SLAPPER_CHARGE_WITHOUT_PUCK:
-		# One-timer: puck arrived during a slapper charge. Open the timing
-		# window — player must release within one_timer_window_duration or
-		# the shot is cancelled and they keep the puck in carry state.
+		# Puck arrived during a puckless slapper wind-up. Pin it to the ice and
+		# switch into the with-puck charge — same setup as the carry → slapshot
+		# entry path (without the pin the puck snaps to the overhead wind-up blade).
 		skater.set_slapper_zone(false)
 		skater.set_slapper_mode(true)
-		# Pin the just-attached puck to the ice for the one-timer window — same
-		# as the carry → slapshot entry path. Without this the puck snaps to
-		# the overhead blade contact the moment it attaches.
 		var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
 		skater.enter_slapshot_pinning(blade_side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
-		_aiming.one_timer_window_timer = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
-		if show_one_timer_indicator:
-			skater.update_slapper_indicator_convergence(1.0)
-			skater.update_slapper_indicator_window(1.0)
+		if _aiming.slapper_charge_timer >= one_timer_min_windup_time:
+			# A genuine one-timer: the wind-up was already built when the feed
+			# arrived. Open the timing window — release within
+			# one_timer_window_duration to fire, or it cancels back to carry.
+			_aiming.one_timer_window_timer = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
+			if show_one_timer_indicator:
+				skater.update_slapper_indicator_convergence(1.0)
+				skater.update_slapper_indicator_window(1.0)
+		# else: the puck was already at the stick when the wind-up started (charge
+		# still ~0). Leave the window closed so it doesn't open at no power and
+		# cancel straight to carry — this is now a plain slapshot charge that keeps
+		# building and fires on release. _update_one_timer_indicator drops the
+		# reticle for a windowless with-puck charge, leaving just the aim arrow.
 	else:
 		_sm.set_state(State.SKATING_WITH_PUCK)
 
