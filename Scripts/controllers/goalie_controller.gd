@@ -247,6 +247,18 @@ extends Node
 # angle 0.25 m closer to center. Track the pinned puck itself (weight → 0) so the
 # goalie squares to where the shot actually comes from.
 @export var shooter_weight_slapper_windup: float = 0.0
+# Slapper aim shade (anticipatory read): squaring to the pinned puck alone leaves
+# the against-the-grain corner of a committed slot slapshot open by ~1 m — the
+# goalie holds its set angle and a corner shot goes past its side (the "Colin
+# cheese"). A real goalie reads the shot's side off the LOCKED wind-up and cheats
+# his angle that way. This shades the goalie's lateral target toward where the shot
+# will cross his depth plane (from the published predicted velocity), ramped by how
+# long he's read the wind-up (prearm_read_time) so a quick release gets little shade
+# — the skill window survives — while a lazy full wind-up to an open corner gets cut
+# off. Directional, so a faked aim shades him the WRONG way (counter-readable, not a
+# flat buff). Kept below 1.0 so a well-placed, quick corner release can still beat
+# him (beatable realism). See _move_along_arc.
+@export_range(0.0, 1.0, 0.05) var slapper_aim_shade: float = 0.7
 # Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
 # scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
 # effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
@@ -3090,6 +3102,24 @@ func _move_along_arc(delta: float) -> Vector2:
 	var cross_crease_push: bool = is_server and _cross_crease_timer > 0.0
 	if cross_crease_push:
 		target_xz.x = _cross_crease_target_x
+	# Slapper aim shade (anticipatory read): while reading a committed slot slapshot
+	# wind-up, cheat the angle toward where the shot will cross the goalie's depth
+	# plane — the real "he's lined it up top-far, I'll shade that way" read (see the
+	# slapper_aim_shade export). Ramped by wind-up read time so a quick release keeps
+	# the skill window; directional off the LOCKED aim, so a fake shades him wrong.
+	# Skipped during a cross-crease push (a pass in flight owns the lateral target).
+	if is_server and _reading_slapper_tell and not cross_crease_push and slapper_aim_shade > 0.0:
+		var shade_carrier: Skater = puck.get_carrier()
+		if shade_carrier != null:
+			var shade_vel: Vector3 = shade_carrier.predicted_shot_velocity
+			if shade_vel.length_squared() >= 0.01 and absf(shade_vel.z) >= 0.001:
+				var goalie_plane_z: float = _goal_line_z + _direction_sign * _current_depth
+				var t_cross: float = (goalie_plane_z - puck.global_position.z) / shade_vel.z
+				if t_cross > 0.0:
+					var shot_x_at_depth: float = puck.global_position.x + shade_vel.x * t_cross
+					var shade_t: float = clampf(
+							_shot_read_timer / maxf(prearm_read_time, 0.001), 0.0, 1.0) * slapper_aim_shade
+					target_xz.x = lerpf(target_xz.x, shot_x_at_depth, shade_t)
 	_target_x = target_xz.x
 	var delta_2d: float = current.distance_to(target_xz)
 	var move_speed: float
