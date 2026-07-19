@@ -238,6 +238,20 @@ var _frame_result: PuckGeometryCollision.Result = null
 var _goalie_contact: GoalieContactDetector.Contact = null
 var _goalie_scratch: SweptDiscOBB.Result = null
 var _save_result: GoalieSaveRules.ContactResult = null
+# Shared read-only empty (const arrays are frozen) — the no-goalies-in-range default
+# every open-ice tick, instead of allocating a fresh `[]` per tick.
+const _NO_GOALIES: Array = []
+# Edge-trigger latches for the drive's contact signals: true = the matching contact
+# occurred LAST tick, so a sustained contact re-fires nothing (Jolt's body_entered
+# was edge-triggered per separation; the analytic tests are level-triggered).
+var _contact_latch_post: bool = false
+var _contact_latch_net: bool = false
+var _contact_latch_goalie: bool = false
+# Replay playback hold: the replay drivers own the puck transform while a goal /
+# post-game replay plays. `freeze = true` alone no longer stops the puck under the
+# analytic drive (the drive sets freeze itself and integrates regardless), so the
+# drivers raise this instead.
+var _replay_hold: bool = false
 
 func set_analytic_drive_enabled(enabled: bool) -> void:
 	_analytic_drive_enabled = enabled
@@ -251,6 +265,16 @@ func set_analytic_drive_enabled(enabled: bool) -> void:
 		# or loose (the drive) — so Jolt never integrates or collides it and there is no dynamic
 		# tick anywhere, not at spawn, release, or reset. (Phase 4 replaces the frozen body with
 		# a plain Node3D outright.)
+		freeze = true
+
+
+# Raised by the goal / post-game replay drivers for the playback's duration: the
+# driver scrubs recorded frames onto the live actors, and the analytic drive must
+# not keep simulating the loose puck underneath (it would slide away and resume
+# from wherever it drifted when playback ends).
+func set_replay_hold(active: bool) -> void:
+	_replay_hold = active
+	if active:
 		freeze = true
 
 func set_goalie_provider(provider: Callable) -> void:
@@ -732,6 +756,18 @@ func _drive_analytic(dt: float) -> void:
 		_pending_reset_xz = Vector2.ZERO
 		freeze = true
 		return
+	# Dead / pinned puck (goalie cover or glove hold, whistle phases) and replay
+	# playback: the pinning authority (GoalieController, PhaseCoordinator, the
+	# replay driver) owns the position — the drive must not integrate gravity or
+	# collision against it. Under Jolt the frozen body simply didn't move; without
+	# this gate the drive fought the glove pin every tick (re-detecting the held
+	# puck inside the glove box and re-firing puck_touched_goalie at 120 Hz).
+	if pickup_locked or _replay_hold:
+		freeze = true
+		_contact_latch_goalie = false
+		_contact_latch_post = false
+		_contact_latch_net = false
+		return
 	# Deliberate far teleport (drills stash the puck off-rink between reps): leave it parked,
 	# matching the CONTAINMENT_TELEPORT_SKIP guard in the Jolt path.
 	var here := Vector2(global_position.x, global_position.z)
@@ -758,13 +794,28 @@ func _drive_analytic(dt: float) -> void:
 	# wider _GOALIE_DETECT_RANGE_Z (a goalie challenges further than the frame sits).
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
 	var goalie_range: bool = absf(prev.z) > GameRules.GOAL_LINE_Z - _GOALIE_DETECT_RANGE_Z
-	var goalies: Array = _goalie_provider.call() if goalie_range and not _goalie_provider.is_null() else []
+	# _NO_GOALIES (a shared read-only const), not a `[]` literal — this line runs
+	# every loose-puck tick and a fresh Array per tick is exactly the hot-path
+	# allocation churn CLAUDE.md forbids.
+	var goalies: Array = _NO_GOALIES
+	if goalie_range and not _goalie_provider.is_null():
+		goalies = _goalie_provider.call()
 	var substeps: int = 1
 	if absf(prev.z) > GameRules.GOAL_LINE_Z - _FRAME_SUBSTEP_RANGE_Z:
 		substeps = clampi(ceili(incoming.length() * dt / _FRAME_SUBSTEP_M), 1, _MAX_FRAME_SUBSTEPS)
 	var sub_dt: float = dt / float(substeps)
 	var pos: Vector3 = prev
 	var vel: Vector3 = incoming
+	# Per-tick contact occurrence, latched across ticks so sustained contact
+	# (grinding a post, a puck resting against a pad) emits ONCE like Jolt's
+	# edge-triggered body_entered did — not per sub-step per tick. The physics
+	# response still applies every sub-step; only the SIGNALS are edge-gated
+	# (each emit fans out to sounds / RPCs / stat sync, so a level-triggered
+	# re-fire was up to 120 RPCs/s during held contact).
+	var touched_post: bool = false
+	var touched_net: bool = false
+	var touched_goalie: bool = false
+	var caught_emitted: bool = false
 	for _sub in substeps:
 		var sub_prev: Vector3 = pos
 		var stepped: Transform3D = PuckAuthorityRules.advance_loose_puck(
@@ -776,13 +827,17 @@ func _drive_analytic(dt: float) -> void:
 				or PuckGeometryCollision.resolve_crossbar(pos, vel, radius, _frame_result):
 			pos = _frame_result.position
 			vel = _frame_result.velocity
-			puck_touched_post.emit()
+			if not _contact_latch_post and not touched_post:
+				puck_touched_post.emit()
+			touched_post = true
 		if PuckGeometryCollision.resolve_top_net(pos, vel, _frame_result) \
-				or PuckGeometryCollision.resolve_net_panels(pos, vel, radius, _frame_result):
+				or PuckGeometryCollision.resolve_net_panels(sub_prev, pos, vel, radius, _frame_result):
 			pos = _frame_result.position
 			vel = _frame_result.velocity
 			if incoming.length() >= 1.0:
-				puck_hit_goal_body.emit()
+				if not _contact_latch_net and not touched_net:
+					puck_hit_goal_body.emit()
+				touched_net = true
 		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
 		if not goalies.is_empty() and GoalieContactDetector.nearest(
 				goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact):
@@ -793,12 +848,26 @@ func _drive_analytic(dt: float) -> void:
 			GoalieSaveRules.resolve_contact(
 					vel, part, _goalie_contact.normal, side, dir_sign, _deaden_cfg, _save_result)
 			vel = _save_result.velocity
-			# Eject the disc flush off the contacted face so it never sits inside the pad.
-			pos = _goalie_contact.point + _goalie_contact.normal * radius
+			# Eject the disc flush off the contacted face. `point` is the sphere
+			# CENTRE at toi — already `radius` off the real face via the
+			# Minkowski-expanded box — so only the start-inside depenetration
+			# `depth` is added (adding `radius` again parked the puck ~13 cm off
+			# every save, a visible pop).
+			pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
 			last_goalie_contact_body = _goalie_contact.part
-			puck_touched_goalie.emit(_goalie_contact.goalie as Goalie)
-			if _save_result.caught:
+			if not _contact_latch_goalie and not touched_goalie:
+				puck_touched_goalie.emit(_goalie_contact.goalie as Goalie)
+			# The catch is gated on its own occurrence, NOT the touch latch — a
+			# pad-contact tick followed by a glove catch next tick must still
+			# fire the catch (it pins the puck and locks the play through the
+			# goalie controller).
+			if _save_result.caught and not caught_emitted:
 				puck_caught_by_goalie.emit(_goalie_contact.goalie as Goalie)
+				caught_emitted = true
+			touched_goalie = true
+	_contact_latch_post = touched_post
+	_contact_latch_net = touched_net
+	_contact_latch_goalie = touched_goalie
 	# Board feedback: a real carom is the raw (un-reflected) full-tick position crossing the
 	# boundary with into-board pace — a puck sliding parallel doesn't fire.
 	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)

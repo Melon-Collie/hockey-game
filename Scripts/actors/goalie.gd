@@ -143,6 +143,29 @@ func get_glove_position() -> Vector3:
 func set_stick_collision_enabled(enabled: bool) -> void:
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK if enabled else 0
 
+
+# Cached list of this goalie's CollisionShape3D parts (pads / body / head / glove /
+# stick / blocker) for the analytic puck drive's contact queries. The subtree is
+# static after _ready — only transforms move — so one gather serves every query;
+# GoalieContactDetector re-gathering per sub-step allocated hundreds of arrays per
+# tick in a crease scramble. Runtime enable/disable (the clear-sweep stick toggle
+# above) is filtered at QUERY time from the live layer/disabled flags, so the cache
+# never goes stale.
+var _collision_parts_cache: Array[CollisionShape3D] = []
+
+
+func get_collision_parts() -> Array[CollisionShape3D]:
+	if _collision_parts_cache.is_empty():
+		_gather_collision_parts(self, _collision_parts_cache)
+	return _collision_parts_cache
+
+
+static func _gather_collision_parts(node: Node, found: Array[CollisionShape3D]) -> void:
+	for child in node.get_children():
+		if child is CollisionShape3D:
+			found.append(child)
+		_gather_collision_parts(child, found)
+
 func get_blocker_position() -> Vector3:
 	return _block_arm.position
 

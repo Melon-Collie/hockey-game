@@ -144,14 +144,26 @@ func test_top_net_ignores_a_low_puck() -> void:
 	assert_false(PuckGeometryCollision.resolve_top_net(pos, Vector3(0, 2, 0), res))
 
 
+func test_post_ends_at_the_crossbar() -> void:
+	# The pipes stop at NET_HEIGHT — an airborne puck passing over the bar at post
+	# x/z must NOT ping off a phantom pipe extending into the air.
+	var pos := Vector3(GameRules.NET_HALF_WIDTH + 0.01, GameRules.NET_HEIGHT + 0.3,
+			GameRules.GOAL_LINE_Z)
+	var res := PuckGeometryCollision.Result.new()
+	assert_false(PuckGeometryCollision.resolve_posts(pos, Vector3(0, 0, 10), R, res),
+			"no post contact above the crossbar")
+
+
 # ── Back / side net panels (the twine that catches a scored puck) ──
 
 func test_back_panel_absorbs_and_reflects_toward_mouth() -> void:
 	# A puck driven into the back of the net rebounds weakly back toward the mouth (-z).
+	# prev is inside the cavity (came in through the mouth) → interior faces apply.
 	var back_z: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH
+	var prev := Vector3(0.0, 0.0175, back_z - 0.08)
 	var pos := Vector3(0.0, 0.0175, back_z - 0.01)
 	var res := PuckGeometryCollision.Result.new()
-	var hit: bool = PuckGeometryCollision.resolve_net_panels(pos, Vector3(0, 0, 8), R, res)
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 8), R, res)
 	assert_true(hit, "puck into the back panel contacts it")
 	assert_lt(res.velocity.z, 0.0, "rebounds back toward the mouth")
 	assert_almost_eq(res.velocity.z, -8.0 * PuckGeometryCollision.NET_RESTITUTION, 0.01,
@@ -160,33 +172,109 @@ func test_back_panel_absorbs_and_reflects_toward_mouth() -> void:
 
 
 func test_side_panel_reflects_toward_center() -> void:
+	var prev := Vector3(0.88, 0.0175, GameRules.GOAL_LINE_Z + 0.25)  # interior
 	var pos := Vector3(0.95, 0.0175, GameRules.GOAL_LINE_Z + 0.25)
 	var res := PuckGeometryCollision.Result.new()
-	var hit: bool = PuckGeometryCollision.resolve_net_panels(pos, Vector3(5, 0, 0), R, res)
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(5, 0, 0), R, res)
 	assert_true(hit, "puck into the side panel contacts it")
 	assert_lt(res.velocity.x, 0.0, "rebounds back toward center")
 
 
 func test_net_panels_ignore_puck_in_front_of_the_goal_line() -> void:
+	var prev := Vector3(0.0, 0.0175, GameRules.GOAL_LINE_Z - 0.17)
 	var pos := Vector3(0.0, 0.0175, GameRules.GOAL_LINE_Z - 0.1)  # still in the mouth approach
 	var res := PuckGeometryCollision.Result.new()
-	assert_false(PuckGeometryCollision.resolve_net_panels(pos, Vector3(0, 0, 8), R, res))
+	assert_false(PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 8), R, res))
 
 
 func test_net_panels_ignore_puck_outside_the_cage_laterally() -> void:
+	var prev := Vector3(1.3, 0.0175, GameRules.GOAL_LINE_Z + 0.25)
 	var pos := Vector3(1.3, 0.0175, GameRules.GOAL_LINE_Z + 0.3)  # wide of the net
 	var res := PuckGeometryCollision.Result.new()
-	assert_false(PuckGeometryCollision.resolve_net_panels(pos, Vector3(0, 0, 5), R, res))
+	assert_false(PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 5), R, res))
 
 
 func test_side_panel_follows_the_trapezoid_widening() -> void:
 	# The same lateral position (x = 0.9) hits the side near the narrow mouth but clears it
 	# near the wider back — proving the depth-interpolated (trapezoid) side limit.
+	var interior_prev_mouth := Vector3(0.8, 0.0175, GameRules.GOAL_LINE_Z + 0.05)
+	var interior_prev_back := Vector3(0.8, 0.0175, GameRules.GOAL_LINE_Z + 0.85)
 	var near_mouth := Vector3(0.9, 0.0175, GameRules.GOAL_LINE_Z + 0.05)
 	var near_back := Vector3(0.9, 0.0175, GameRules.GOAL_LINE_Z + 0.85)
 	var res := PuckGeometryCollision.Result.new()
-	assert_true(PuckGeometryCollision.resolve_net_panels(near_mouth, Vector3(3, 0, 0), R, res),
+	assert_true(PuckGeometryCollision.resolve_net_panels(
+			interior_prev_mouth, near_mouth, Vector3(3, 0, 0), R, res),
 			"x=0.9 hits the side near the narrow mouth")
 	var res2 := PuckGeometryCollision.Result.new()
-	assert_false(PuckGeometryCollision.resolve_net_panels(near_back, Vector3(3, 0, 0), R, res2),
+	assert_false(PuckGeometryCollision.resolve_net_panels(
+			interior_prev_back, near_back, Vector3(3, 0, 0), R, res2),
 			"the same x clears the side near the wider back")
+
+
+# ── Exterior faces (two-sided twine — the wraparound / rim regression) ──
+
+func test_wraparound_beside_the_cage_is_never_pulled_inside() -> void:
+	# The C1 regression: a wraparound puck rounding the cage — inside the old
+	# one-sided band (|x| ≤ NET_BACK_HALF_WIDTH + R) but OUTSIDE the side twine —
+	# was clamped inward through the mesh into the cavity. Clear of the mesh (+R)
+	# it must pass untouched.
+	var prev := Vector3(1.05, 0.0175, GameRules.GOAL_LINE_Z + 0.15)
+	var pos := Vector3(1.05, 0.0175, GameRules.GOAL_LINE_Z + 0.2)
+	var res := PuckGeometryCollision.Result.new()
+	assert_false(PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 5), R, res),
+			"a puck rounding the cage clear of the side mesh is not a panel contact")
+
+
+func test_wraparound_graze_resolves_outward_never_inward() -> void:
+	# A wraparound hugging the mesh close enough for the disc to genuinely touch
+	# the twine: the contact is real, but it must resolve OUTWARD (the exterior
+	# face) — the pre-fix clamp teleported this puck inside the cage.
+	var prev := Vector3(1.0, 0.0175, GameRules.GOAL_LINE_Z + 0.15)
+	var pos := Vector3(1.0, 0.0175, GameRules.GOAL_LINE_Z + 0.2)
+	var mesh_x: float = lerpf(GameRules.NET_HALF_WIDTH, GameRules.NET_BACK_HALF_WIDTH,
+			0.2 / GameRules.NET_DEPTH)
+	var res := PuckGeometryCollision.Result.new()
+	if PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 5), R, res):
+		assert_gte(res.position.x, mesh_x, "a grazing exterior contact stays outside the mesh")
+		assert_gte(res.velocity.x, 0.0, "and is never redirected into the cage")
+
+
+func test_exterior_back_press_reflects_away_not_through() -> void:
+	# A puck behind the net pressing toward the goal line must bounce off the BACK
+	# of the mesh (away from the goal), not be pulled through into the cavity.
+	var back_z: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH
+	var prev := Vector3(0.0, 0.0175, back_z + 0.1)
+	var pos := Vector3(0.0, 0.0175, back_z + 0.02)
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, -6), R, res)
+	assert_true(hit, "pressing the back mesh from behind is a contact")
+	assert_gte(absf(res.position.z), back_z + R, "ejected to the exterior face, not inside")
+	assert_gt(res.velocity.z, 0.0, "rebounds away from the goal (+z at the +z end)")
+
+
+func test_exterior_side_press_reflects_outward() -> void:
+	# A puck outside the side mesh pushed inward (a board-side scramble) reflects
+	# back out instead of entering the cage through the twine.
+	var half_at: float = lerpf(GameRules.NET_HALF_WIDTH, GameRules.NET_BACK_HALF_WIDTH,
+			0.25 / GameRules.NET_DEPTH)
+	var prev := Vector3(half_at + 0.1, 0.0175, GameRules.GOAL_LINE_Z + 0.25)
+	var pos := Vector3(half_at + 0.02, 0.0175, GameRules.GOAL_LINE_Z + 0.25)
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(-4, 0, 0), R, res)
+	assert_true(hit, "pressing the side mesh from outside is a contact")
+	assert_gt(res.velocity.x, 0.0, "rebounds outward (+x on the +x side)")
+	assert_gt(res.position.x, half_at, "stays on the exterior side of the mesh")
+
+
+func test_scored_puck_entering_through_mouth_still_plays_interior() -> void:
+	# A scored puck crossing the goal line into the cavity (prev in FRONT of the
+	# line, within the mouth) must classify as interior — the two-sided fix cannot
+	# break goals.
+	var prev := Vector3(0.2, 0.0175, GameRules.GOAL_LINE_Z - 0.02)
+	var back_z: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH
+	var pos := Vector3(0.2, 0.0175, back_z - 0.01)
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 12), R, res)
+	assert_true(hit, "a scored puck reaching the back mesh contacts the interior face")
+	assert_lt(res.velocity.z, 0.0, "rebounds back toward the mouth")
+	assert_lt(absf(res.position.z), back_z, "held inside the cavity")

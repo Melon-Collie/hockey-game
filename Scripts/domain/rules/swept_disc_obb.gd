@@ -19,6 +19,13 @@ class Result:
 	var toi: float = 0.0                 # 0..1 along prev->curr at first contact
 	var point: Vector3 = Vector3.ZERO    # world contact point (sphere centre at toi)
 	var normal: Vector3 = Vector3.ZERO   # world outward surface normal
+	# Penetration of the sphere CENTRE into the Minkowski-expanded box along `normal`
+	# at toi. 0 for a clean surface contact; positive for a start-inside contact —
+	# `point + normal * depth` is the centre pushed flush onto the expanded surface
+	# (i.e. the sphere resting ON the box face). Callers ejecting the disc use this;
+	# adding a further `radius` along the normal double-counts (the expanded box is
+	# already radius bigger than the real one).
+	var depth: float = 0.0
 
 
 # box_transform: world transform of the box CENTRE (CollisionShape3D.global_transform).
@@ -59,16 +66,37 @@ static func contact(prev: Vector3, curr: Vector3, radius: float,
 			t_far = minf(t_far, t2)
 			if t_near > t_far:
 				return false
-	# Contact must land within this tick's segment. t_near < 0 (already overlapping at
-	# prev) is a hit clamped to toi 0; t_far < 0 (box behind the start) or t_near > 1
-	# (contact beyond curr) is a miss.
-	if t_far < 0.0 or t_near > 1.0 or hit_axis < 0:
+	# Contact must land within this tick's segment. t_far < 0 (box behind the start) or
+	# t_near > 1 (contact beyond curr) is a miss. t_near < 0 means the start point is
+	# already inside the expanded box; hit_axis < 0 means every axis took the parallel
+	# branch WITHOUT rejecting — a (near-)zero-length sweep fully inside the box, e.g.
+	# the goalie dropping onto a RESTING puck, which the ray test alone cannot see.
+	if hit_axis >= 0 and (t_far < 0.0 or t_near > 1.0):
 		return false
-	var toi: float = clampf(t_near, 0.0, 1.0)
+	var toi: float = clampf(t_near, 0.0, 1.0) if hit_axis >= 0 else 0.0
+	var depth: float = 0.0
+	if hit_axis < 0 or t_near < 0.0:
+		# Start-inside contact: depenetrate along the MINIMUM-penetration axis of the
+		# start point. That axis's face is also the honest contact normal here — the
+		# backward-extrapolated entry slab could name a face the puck never touched
+		# (and under the analytic drive the normal now drives the save response, not
+		# just a detection metric).
+		toi = 0.0
+		var best_axis: int = 0
+		var best_pen: float = INF
+		for axis in 3:
+			var pen: float = e[axis] - absf(p0[axis])
+			if pen < best_pen:
+				best_pen = pen
+				best_axis = axis
+		hit_axis = best_axis
+		hit_sign = 1.0 if p0[best_axis] >= 0.0 else -1.0
+		depth = maxf(best_pen, 0.0)
 	var local_n := Vector3.ZERO
 	local_n[hit_axis] = hit_sign
 	result.hit = true
 	result.toi = toi
 	result.point = prev + (curr - prev) * toi
 	result.normal = (box_transform.basis * local_n).normalized()
+	result.depth = depth
 	return true

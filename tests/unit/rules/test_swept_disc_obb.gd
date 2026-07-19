@@ -72,6 +72,56 @@ func test_already_overlapping_is_a_contact_at_toi_zero() -> void:
 	assert_almost_eq(res.toi, 0.0, 0.001, "already-overlapping contacts at toi 0")
 
 
+func test_surface_hit_has_zero_depth() -> void:
+	# A clean from-outside contact needs no depenetration: point (the centre at toi)
+	# already rests on the expanded surface, so depth must be 0 — the eject is
+	# `point + normal * depth`, and a non-zero depth here would pop the puck off
+	# the face it just touched.
+	var res := SweptDiscOBB.Result.new()
+	assert_true(SweptDiscOBB.contact(
+		Vector3(-2, 0, 0), Vector3(0, 0, 0), R,
+		_unit_box(Vector3.ZERO), Vector3(0.5, 0.5, 0.5), res))
+	assert_almost_eq(res.depth, 0.0, 1e-6)
+
+
+func test_stationary_overlap_is_detected_with_min_penetration_normal() -> void:
+	# Zero-length sweep fully inside the box — the goalie dropped ONTO a resting
+	# puck. The ray slab test alone cannot see this (every axis is parallel); it
+	# must still report a contact, normal along the MINIMUM-penetration axis
+	# (nearest face), with depth pushing the centre back to that face.
+	var res := SweptDiscOBB.Result.new()
+	var hit: bool = SweptDiscOBB.contact(
+		Vector3(0.4, 0.1, 0.0), Vector3(0.4, 0.1, 0.0), R,
+		_unit_box(Vector3.ZERO), Vector3(0.5, 0.5, 0.5), res)
+	assert_true(hit, "a resting puck inside a box is a contact")
+	assert_almost_eq(res.toi, 0.0, 0.001)
+	assert_almost_eq(res.normal.x, 1.0, 0.01, "nearest face is +X (0.4 of 0.5+R)")
+	# Push-out lands the centre on the expanded (+X) surface: 0.4 + depth == 0.5 + R.
+	assert_almost_eq(res.depth, 0.5 + R - 0.4, 0.001)
+
+
+func test_stationary_outside_is_a_miss() -> void:
+	# Zero-length sweep clear of the box — no phantom contact from the overlap path.
+	var res := SweptDiscOBB.Result.new()
+	assert_false(SweptDiscOBB.contact(
+		Vector3(2.0, 0.0, 0.0), Vector3(2.0, 0.0, 0.0), R,
+		_unit_box(Vector3.ZERO), Vector3(0.5, 0.5, 0.5), res))
+
+
+func test_start_inside_normal_is_nearest_face_and_depth_ejects() -> void:
+	# Start-inside with motion: the honest normal is the nearest face of the START
+	# point (min penetration), not the backward-extrapolated entry slab — under the
+	# analytic drive this normal drives the save response. Start near the +Z face,
+	# moving +X: entry-slab extrapolation would blame an X face; nearest is +Z.
+	var res := SweptDiscOBB.Result.new()
+	var hit: bool = SweptDiscOBB.contact(
+		Vector3(0.0, 0.0, 0.45), Vector3(0.1, 0.0, 0.45), R,
+		_unit_box(Vector3.ZERO), Vector3(0.5, 0.5, 0.5), res)
+	assert_true(hit)
+	assert_almost_eq(res.normal.z, 1.0, 0.01, "min-penetration axis is +Z")
+	assert_almost_eq(res.depth, 0.5 + R - 0.45, 0.001)
+
+
 func test_translated_box_hit_point_is_world_space() -> void:
 	# Box centered at (5, 0, 5); puck driven into it — contact point near the box, not
 	# near the origin (verifies the world transform is applied).

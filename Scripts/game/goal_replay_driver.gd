@@ -379,6 +379,10 @@ func _apply_interpolated_snapshot(t: float, dt: float, sim_delta: float) -> void
 func _freeze_live_simulation() -> void:
 	if _puck != null:
 		_puck.freeze = true
+		# freeze alone no longer stops the puck under the analytic drive (the
+		# drive sets freeze itself and integrates regardless) — the hold flag is
+		# what parks the loose-puck sim while playback scrubs the actors.
+		_puck.set_replay_hold(true)
 	_saved_goalie_processing.clear()
 	for gc: GoalieController in _goalie_controllers:
 		_saved_goalie_processing.append(gc.is_physics_processing())
@@ -387,9 +391,11 @@ func _freeze_live_simulation() -> void:
 
 func _unfreeze_live_simulation() -> void:
 	# puck.freeze is intentionally not restored: after stop() the game transitions
-	# to FACEOFF_PREP which calls puck.reset(), unconditionally setting freeze=false.
-	# Restoring a saved value here could re-freeze the puck before reset() runs.
+	# to FACEOFF_PREP which calls puck.reset(). (Under the analytic drive reset
+	# keeps the body frozen and the drive owns motion; on the Jolt path reset
+	# unfreezes. Either way, restoring a saved value here could fight reset().)
 	if _puck != null:
+		_puck.set_replay_hold(false)
 		_puck.freeze = false
 	for i: int in _goalie_controllers.size():
 		var was: bool = _saved_goalie_processing[i] if i < _saved_goalie_processing.size() else true

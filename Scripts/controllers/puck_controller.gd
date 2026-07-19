@@ -148,6 +148,11 @@ var _shadow_goalie_contact: bool = false  # Jolt fired a goalie entry this tick 
 var _goalie_provider: Callable = Callable()  # dev-only: returns Array[Goalie] for the FP probe
 var _shadow_log_timer: float = 0.0
 const _SHADOW_LOG_INTERVAL_S: float = 3.0
+# Dev-build mode switch (see setup): true = the analytic sim drives the loose puck
+# (the determinism-migration playtest configuration); false = Jolt drives and the
+# Phase-0/2 shadow harnesses measure the analytic model against it. Mutually
+# exclusive because a harness measuring the drive's own output measures nothing.
+const _ANALYTIC_DRIVE_IN_DEV: bool = true
 # The proactive FP probe only runs when a goalie is within this of the puck — a cheap gate
 # so probe_ticks (and the per-tick get_colliding_bodies allocation) stay off unless the
 # puck is actually near a net.
@@ -221,16 +226,22 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		puck.puck_touched_loose.connect(func(s: Skater) -> void: puck_touched_while_loose.emit(_peer_id_resolver.call(s)))
 		puck.puck_body_blocked.connect(func(s: Skater) -> void: puck_touched_while_loose.emit(_peer_id_resolver.call(s)))
 		puck.puck_touched_goalie.connect(func(g: Goalie) -> void: puck_touched_by_goalie.emit(g))
-		# Phase-0 determinism harness: dev builds only, host only. Absent (null) in
-		# exported builds, so the observe() call below is a no-op there.
+		# Dev + host only: EITHER the analytic drive OR the Phase-0/2 shadow
+		# harnesses — never both. The harnesses measure the analytic model
+		# against Jolt; with the drive on, "Jolt's" state IS the analytic sim,
+		# so every digest would compare the model against itself (divergence
+		# ≡ 0, ground truth = the drive's own signals) — measurement theater.
+		# Flip the const to false for a measurement session against real Jolt.
 		if BuildInfo.VERSION == "dev":
-			_shadow = PuckShadowComparator.new()
-			puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
-			_goalie_shadow = GoalieCollisionShadow.new()
-			puck.puck_touched_goalie.connect(_on_shadow_goalie_contact)
-			# Determinism migration: drive the loose puck with the analytic sim instead of Jolt
-			# (dev + host only). The goalie provider is forwarded in set_goalie_provider.
-			puck.set_analytic_drive_enabled(true)
+			if _ANALYTIC_DRIVE_IN_DEV:
+				# Determinism migration: the analytic sim drives the loose puck.
+				# The goalie provider is forwarded in set_goalie_provider.
+				puck.set_analytic_drive_enabled(true)
+			else:
+				_shadow = PuckShadowComparator.new()
+				puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
+				_goalie_shadow = GoalieCollisionShadow.new()
+				puck.puck_touched_goalie.connect(_on_shadow_goalie_contact)
 	else:
 		puck.puck_touched_goalie.connect(_on_client_puck_hit_goalie)
 		puck.puck_touched_post.connect(_on_client_puck_hit_post)

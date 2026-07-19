@@ -68,3 +68,41 @@ func test_picks_nearest_across_two_goalies() -> void:
 	var scratch := SweptDiscOBB.Result.new()
 	GoalieContactDetector.nearest([near, far], Vector3(-2, 0, 0), Vector3(6, 0, 0), R, scratch, out)
 	assert_eq(out.goalie, near, "nearest contact is the near goalie")
+
+
+func test_zero_layer_part_is_skipped() -> void:
+	# The goalie's clear-sweep disables the stick by zeroing its collision layer
+	# (Goalie.set_stick_collision_enabled(false)); Jolt then ignores it, and the
+	# analytic test must too — or the goalie's own sweep ricochets off his
+	# "disabled" blade.
+	var goalie := _goalie_with_box(Vector3.ZERO, Vector3(0.5, 0.5, 0.5))
+	var body := goalie.get_child(0) as StaticBody3D
+	body.collision_layer = 0
+	var out := GoalieContactDetector.Contact.new()
+	var scratch := SweptDiscOBB.Result.new()
+	assert_false(GoalieContactDetector.nearest(
+			[goalie], Vector3(-2, 0, 0), Vector3(0, 0, 0), R, scratch, out),
+			"a zero-layer (collision-disabled) part must not contact")
+
+
+func test_disabled_shape_is_skipped() -> void:
+	var goalie := _goalie_with_box(Vector3.ZERO, Vector3(0.5, 0.5, 0.5))
+	var cs := (goalie.get_child(0) as StaticBody3D).get_child(0) as CollisionShape3D
+	cs.disabled = true
+	var out := GoalieContactDetector.Contact.new()
+	var scratch := SweptDiscOBB.Result.new()
+	assert_false(GoalieContactDetector.nearest(
+			[goalie], Vector3(-2, 0, 0), Vector3(0, 0, 0), R, scratch, out),
+			"a disabled CollisionShape3D must not contact")
+
+
+func test_stationary_puck_inside_box_is_detected() -> void:
+	# The goalie dropping ONTO a resting puck: zero-length sweep, overlap only.
+	# The ray test alone cannot see this; the min-penetration path must.
+	var goalie := _goalie_with_box(Vector3.ZERO, Vector3(0.5, 0.5, 0.5))
+	var out := GoalieContactDetector.Contact.new()
+	var scratch := SweptDiscOBB.Result.new()
+	assert_true(GoalieContactDetector.nearest(
+			[goalie], Vector3(0.45, 0, 0), Vector3(0.45, 0, 0), R, scratch, out),
+			"a resting puck overlapped by a goalie box is a contact")
+	assert_gt(out.depth, 0.0, "carries the depenetration depth for the eject")
