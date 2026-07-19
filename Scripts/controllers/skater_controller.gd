@@ -55,7 +55,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # stamina, sacrifice agility), not a free bump. Both costs are deterministic from
 # the replicated input.hit_held, so they re-derive through reconcile replay.
 @export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
-@export var hit_turn_multiplier: float = 0.6          # turn-rate scale while committing (< 1.0 = wider turns)
+# Turn-rate scale while committing (< 1.0 = wider turns). Eased up from the
+# original 0.6 — committing still costs some agility (you're loading up, not
+# pivoting on a dime), but 0.6 fought you too hard when tracking a target you're
+# actively lining up. The commitment cost now lives mostly in stamina + the
+# sprint turn radius, not in a heavy hit-button steering penalty.
+@export var hit_turn_multiplier: float = 0.8
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
 # up for the check — leans into it, drops the leading shoulder, and sinks into a
 # crouch. A render-rate blend (SkaterSkatingCoordinator) off the replicated
@@ -73,13 +78,21 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # for every player in v1 (the hit strength already reflects the attacker's Size/
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
-# Grounded to the Slice B inelastic magnitudes: the delivered victim impulse is
-# closing_speed × transfer × m_a/(m_a+m_b), so a committed equal-mass hit at ~6–10
-# m/s closing lands ~1.4–2.3 m/s and an enforcer/fast hit ~3.5–5. The ladder is set
-# to that scale (was 3/11 on the old weight-ratio model, which never fired). Still
-# feel tunables — nudge from here once you've played it.
-@export var stagger_min_impulse: float = 1.0       # m/s transfer delta below which a hit doesn't stagger
-@export var stagger_ref_impulse: float = 2.5       # m/s transfer delta treated as a full-strength check
+# Grounded to the inelastic magnitudes: the delivered victim impulse is
+# closing_speed × transfer × m_a/(m_a+m_b), so at a MEDIUM build (transfer 0.45,
+# equal mass → ×0.5) it's ~0.225 × closing, and an enforcer (transfer ~0.61, a
+# touch heavier) is ~0.33 × closing. The ref point is deliberately the SAME as the
+# puck-strip threshold (Puck.body_check_strip_threshold, 1.35): a hit hard enough
+# to count as a full check is exactly a hit hard enough to knock the puck loose.
+# That lands a full check at ~6 m/s closing for a medium build and ~4 m/s for an
+# enforcer — "square them up and skate into them with some pace," NOT a sprint-only
+# collision. (Was 1.0/2.5, which needed ~11 m/s closing at a medium build — full
+# force was effectively gated behind a sprint, the degenerate coupling this fixes.)
+# Speed still buys MORE than a full check: closing past the ref keeps scaling the
+# impulse linearly into the knockdown band below, so a sprint / head-on collision
+# is a bigger hit — a ceiling, not a requirement. Still feel tunables.
+@export var stagger_min_impulse: float = 0.6       # m/s transfer delta below which a hit doesn't stagger
+@export var stagger_ref_impulse: float = 1.35      # m/s transfer delta treated as a full-strength check (== puck-strip threshold)
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
 @export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
 @export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
@@ -101,8 +114,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the body slides from the hit and bleeds speed via knockdown_friction — for a
 # recovery window scaling with the hit (see BodyCheckRules.knockdown_seconds_from_
 # impulse). knockdown_timer rides the SAME replicated / snapped / decayed rail as
-# stagger_timer. NOTE: on the OLD magnitude scale — wants a downward re-tune with
-# the stagger thresholds once the Slice B inelastic feel is dialed. Set
+# stagger_timer. Deliberately left ABOVE the retuned full-check point (stagger_ref
+# 1.35): a full check staggers + strips; a KNOCKDOWN is reserved for a genuinely
+# big hit — an enforcer at pace (~9 m/s closing) or a fast/head-on collision
+# (~13 m/s at a medium build). It's the speed/Size ceiling, not the default outcome
+# of a check, and it sits above the AI's commit bar (AIBodyCheck.COMMIT_IMPULSE_M_S
+# 2.5) so a bot leaving position lands a solid check without auto-flattening. Set
 # knockdown_impulse very high (or 0) to effectively disable knockdowns.
 @export var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down
 @export var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
@@ -726,6 +743,9 @@ var _current_aim_world: Vector3 = Vector3.ZERO
 # (120 Hz while charging, re-run per replayed input on reconcile) doesn't churn
 # the heap. Pure output, overwritten each solve.
 var _wrister_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
+# Same scratch for the slapper windup's release-now prediction (_update_slapper_
+# charge) — the goalie pre-leans off it toward a charging slapshot's aimed corner.
+var _slapper_pred_scratch: ShotMechanics.ShotResult = ShotMechanics.ShotResult.new()
 # Per-tick mirror of input.elevation_level (0 flat / 1 low / 2 high) — NOT
 # sticky state: overwritten from the frame every tick, so reconcile replay
 # re-derives it from the replayed inputs with nothing to snap.
@@ -1147,6 +1167,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	_cached_block_move_cfg = null
 	_cached_stamina_cfg = null
 	_cached_wrister_cfg = null
+	_cached_slapper_cfg = null
 	skater.apply_appearance(attrs)
 
 
@@ -2154,9 +2175,14 @@ func _update_wrister_charge(input: InputState) -> void:
 	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
 	# release math in _release_wrister (same inputs), and re-solves every tick — so
 	# a player who drags one way then flicks the other at release moves the real
-	# impact off the goalie's lean (a tricky release beats the read). Host-only:
-	# remote carriers don't run this path, so their predicted velocity stays ZERO
-	# and the goalie falls back to a non-directional readiness tell.
+	# impact off the goalie's lean (a tricky release beats the read). Works for
+	# REMOTE shooters too: the host simulates their carry from replicated input
+	# (RemoteController._drive_from_input → this path), and both signals ride the
+	# wire — mouse_world_pos, plus mouse_screen_pos pre-aligned to world XZ by the
+	# gatherer's attack-direction negation (the drag direction _get_charge_direction
+	# reads) — with the remote's Shot Power Sensitivity from the join payload feeding
+	# _wrister_sweep_speed. Host-only in that it runs on the authoritative sim, not in
+	# that it's limited to host-controlled shooters.
 	var is_backhand: bool = _classify_backhand()
 	# Re-solves every tick while charging (+ per replayed input on reconcile), so
 	# fill a reused scratch instead of allocating a ShotResult each time.
@@ -2177,6 +2203,27 @@ func _update_wrister_charge(input: InputState) -> void:
 func _update_slapper_charge(delta: float) -> void:
 	_aiming.tick_slapper(delta)
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
+	# Publish where this slapshot would go if released NOW, so the host-side goalie
+	# AI can pre-lean toward the aimed corner — the directional anticipation the
+	# wrister already gets (_update_wrister_charge). This was the "skate up and rip a
+	# slapper from the slot" cheese: the slapper path never published this, for ANY
+	# shooter (host player and bots included, not just remotes), so the goalie squared
+	# to the pinned puck but its glove rested centred and had to travel the full way
+	# to a corner on reaction. The distinguishing axis was slapper-vs-wrister, not
+	# local-vs-remote — the wrister already worked everywhere. Like the wrister, this
+	# runs on the host for remotes too (RemoteController._drive_from_input simulates
+	# their carry); the slapper direction is LOCKED at press (_sm.locked_slapper_dir,
+	# built in _enter_slapper_charge from the replicated mouse_world_pos), so no
+	# screen-space signal is even needed. Gated to the WITH-PUCK windup: a one-timer
+	# wind-up has no puck to lean toward, and the goalie reads only SLAPPER_CHARGE_WITH_PUCK.
+	if has_puck:
+		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
+		if locked_dir_3d.length_squared() > 0.0001:
+			var pred := ShotMechanics.release_slapper(
+					skater.global_position, skater.global_position,
+					_elevation_level, _aiming.slapper_charge_timer,
+					_slapper_config(), locked_dir_3d, _slapper_pred_scratch)
+			skater.predicted_shot_velocity = pred.direction * pred.power
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 	# Net exclusion for the slapshot PIN. While charging with the puck, the puck
@@ -2451,11 +2498,18 @@ func _wrister_sweep_speed(input: InputState) -> float:
 		return ShotMechanics.wrister_speed_for_power_t(input.bot_wrister_power_t, _wrister_config())
 	return _aiming.cursor_speed_ema * shot_power_sensitivity()
 
+# Cached like the wrister config: _update_slapper_charge now re-solves the release
+# every windup tick (120 Hz × actors, replayed on reconcile) to publish
+# predicted_shot_velocity, so a fresh SlapperConfig per call would be per-tick heap
+# churn. Rebuilt lazily; invalidated in apply_attributes when the source exports change.
+var _cached_slapper_cfg: ShotMechanics.SlapperConfig = null
+
 func _slapper_config() -> ShotMechanics.SlapperConfig:
-	var cfg := ShotMechanics.SlapperConfig.new()
-	cfg.min_slapper_power = min_slapper_power
-	cfg.max_slapper_power = max_slapper_power
-	cfg.max_slapper_charge_time = max_slapper_charge_time
-	cfg.loft_vy_low = loft_vertical_speed_low
-	cfg.loft_vy_high = loft_vertical_speed_high
-	return cfg
+	if _cached_slapper_cfg == null:
+		_cached_slapper_cfg = ShotMechanics.SlapperConfig.new()
+		_cached_slapper_cfg.min_slapper_power = min_slapper_power
+		_cached_slapper_cfg.max_slapper_power = max_slapper_power
+		_cached_slapper_cfg.max_slapper_charge_time = max_slapper_charge_time
+		_cached_slapper_cfg.loft_vy_low = loft_vertical_speed_low
+		_cached_slapper_cfg.loft_vy_high = loft_vertical_speed_high
+	return _cached_slapper_cfg

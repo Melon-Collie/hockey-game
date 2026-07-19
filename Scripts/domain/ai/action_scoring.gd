@@ -4021,8 +4021,15 @@ static func net_safe_blade_target(from: Vector3, target: Vector3) -> Vector3:
 #
 # Slot rect: x ∈ ±OWN_DZ_SLOT_HALF_WIDTH_M, z ∈ [own_goal_line - depth,
 # own_goal_line] for own_goal_z > 0; mirrored for own_goal_z < 0.
-const OWN_DZ_SLOT_HALF_WIDTH_M: float = 2.0
-const OWN_DZ_SLOT_DEPTH_M: float = 5.0
+# Sized to the real "home plate" high-danger area, not just the net mouth: a
+# blind feed across the front of your own net that clips the flanks (a receiver
+# a stick outside the posts, a lead point past the crease top) is the cardinal
+# giveaway — it deserves the same hard veto as a dead-centre one. Half-width
+# ~3× NET_HALF_WIDTH (0.915) covers the posts plus a stick either side; depth
+# reaches out toward the hash marks. Widened from 2.0×5.0, which let side-of-
+# crease centering feeds slip the veto and become goals-against.
+const OWN_DZ_SLOT_HALF_WIDTH_M: float = 2.75
+const OWN_DZ_SLOT_DEPTH_M: float = 6.0
 static func pass_crosses_own_slot(from: Vector3, to: Vector3, own_goal_z: float) -> bool:
 	var depth: float = OWN_DZ_SLOT_DEPTH_M
 	var half_w: float = OWN_DZ_SLOT_HALF_WIDTH_M

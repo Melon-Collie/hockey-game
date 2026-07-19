@@ -520,6 +520,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos
 	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
+	# shot_charge is re-derived from the (restored) charge timers / swing state on
+	# every live tick, but _update_slapper_charge / _update_wrister_charge also
+	# rewrite it during replay from the unconfirmed window. Save/restore it with its
+	# source state so it isn't left at a replay-derived value until the next live
+	# tick recomputes it — otherwise the local player's stick-flex pose reads a
+	# stale charge for one frame after a reconcile (cosmetic; completes the set).
+	var pre_shot_charge: float = skater.shot_charge
 	skater.global_position = server_state.position
 	skater.velocity = server_state.velocity
 	# Stamina + lockout are deterministic from inputs, exactly like velocity:
@@ -595,6 +602,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
 	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir
+	skater.shot_charge = pre_shot_charge
 	# Server authority on shot state — but never revert past a release transition.
 	# If the client is in FOLLOW_THROUGH and the server is still in an aim state,
 	# the host just hasn't processed the release input yet; the reliable RPC already

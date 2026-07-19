@@ -138,12 +138,18 @@ const VERSION: String = "dev"
 #      OWN measured downstream loss in basis points, stored verbatim as the peer
 #      loss. Same header size, but a mixed-build host would read the field as a
 #      seq and mis-estimate loss, so a bump is required.
-# v35: attributes model replaced — request_join / request_update_attributes carry
+# v35: host-measured peer RTT. The forgeable client report_ping RPC (a self-
+#      reported RTT the host trusted for lag-comp claim-stamp validation) is
+#      replaced by a host-initiated round trip (host_ping -> peer echoes
+#      host_pong -> host measures + EMA-smooths). Adding/removing @rpc methods
+#      shifts the name-sorted RPC index of every method after them (see v14/v23),
+#      so a bump is required even though no serialized wire format changed.
+# v36: attributes model replaced — request_join / request_update_attributes carry
 #      the new height + three-tier build (4 ints: height/skating/skill/checking)
 #      instead of the old six 1..5 attributes. Host validates with is_legal_build
 #      (one-strong-one-weak) instead of the point-buy budget. Fewer positional
 #      args on both RPCs, so a mixed-build pair decodes garbage — bump required.
-const PROTOCOL_VERSION: int = 35
+const PROTOCOL_VERSION: int = 36
 
 
 func _ready() -> void:
