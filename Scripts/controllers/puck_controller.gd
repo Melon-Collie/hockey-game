@@ -143,8 +143,14 @@ var is_extrapolating: bool = false
 var _shadow: PuckShadowComparator = null
 var _goalie_shadow: GoalieCollisionShadow = null  # Phase-2 goalie-collision harness
 var _shadow_board_contact: bool = false
+var _shadow_goalie_contact: bool = false  # Jolt fired a goalie entry this tick (probe ground truth)
+var _goalie_provider: Callable = Callable()  # dev-only: returns Array[Goalie] for the FP probe
 var _shadow_log_timer: float = 0.0
 const _SHADOW_LOG_INTERVAL_S: float = 3.0
+# The proactive FP probe only runs when a goalie is within this of the puck — a cheap gate
+# so probe_ticks (and the per-tick get_colliding_bodies allocation) stay off unless the
+# puck is actually near a net.
+const _GOALIE_PROBE_RANGE_M: float = 1.5
 # Scoped true only while a stick-lift strip is being applied, so the synchronous
 # puck_stripped_from handlers (sound + victim notify) can tell a stick lift apart
 # from a poke/body-check strip and pick the right cue. Read via
@@ -233,6 +239,12 @@ func set_skater_getter(getter: Callable) -> void:
 
 func set_team_id_by_skater(d: Dictionary) -> void:
 	_team_id_by_skater = d
+
+
+# Dev-only: a Callable returning the live Array[Goalie], for the Phase-2 proactive
+# false-positive probe. Injected by GameManager; absent in release (probe never runs).
+func set_goalie_provider(provider: Callable) -> void:
+	_goalie_provider = provider
 
 func _physics_process(delta: float) -> void:
 	if puck == null:
@@ -815,7 +827,10 @@ func _observe_shadow(delta: float) -> void:
 		_shadow.reset()
 	else:
 		_shadow.observe(puck.get_puck_position(), puck.linear_velocity, _shadow_board_contact, delta)
+	# Phase-2 proactive false-positive probe (consumes _shadow_goalie_contact as ground truth).
+	_probe_goalie_false_positives()
 	_shadow_board_contact = false
+	_shadow_goalie_contact = false
 	# Combined throttled digest (runs regardless of puck mode — the goalie harness records
 	# contacts asynchronously via the signal, including airborne glove saves).
 	_shadow_log_timer += delta
@@ -835,8 +850,51 @@ func _observe_shadow(delta: float) -> void:
 func _on_shadow_goalie_contact(goalie: Goalie) -> void:
 	if _goalie_shadow == null:
 		return
+	_shadow_goalie_contact = true  # ground truth for this tick's proactive probe
 	_goalie_shadow.record_contact(goalie, puck.last_goalie_contact_body,
 			_prev_puck_pos, puck.get_puck_position(), GameRules.PUCK_COLLISION_RADIUS)
+
+
+# Phase-2 proactive false-positive probe (dev + host): every tick the loose puck is near a
+# goalie, run the analytic swept test and compare to Jolt's ground truth for the tick
+# (entry signal OR continuous overlap). Counts phantoms — analytic contacts Jolt didn't
+# see. The near-goalie gate keeps this (and the get_colliding_bodies allocation) off the
+# hot path unless the puck is actually by a net.
+func _probe_goalie_false_positives() -> void:
+	if _goalie_shadow == null or _goalie_provider.is_null():
+		return
+	if puck.carrier != null or puck.pickup_locked:
+		return
+	var goalies: Array = _goalie_provider.call()
+	var pk: Vector3 = puck.get_puck_position()
+	var near: bool = false
+	for g: Node in goalies:
+		var g3: Node3D = g as Node3D
+		if g3 != null and g3.global_position.distance_to(pk) < _GOALIE_PROBE_RANGE_M:
+			near = true
+			break
+	if not near:
+		return
+	# Ground truth: the entry signal (fast transit / CCD) OR continuous overlap (a puck
+	# resting or sliding on the goalie, which fires no fresh body_entered).
+	var jolt_contact: bool = _shadow_goalie_contact
+	if not jolt_contact:
+		for body: Node in puck.get_colliding_bodies():
+			if _body_belongs_to_a_goalie(body, goalies):
+				jolt_contact = true
+				break
+	_goalie_shadow.probe(goalies, _prev_puck_pos, pk, GameRules.PUCK_COLLISION_RADIUS, jolt_contact)
+
+
+# True if `body` is (or is under) one of the goalie nodes — Jolt reports the goalie's
+# StaticBody3D part, which sits beneath the Goalie node.
+static func _body_belongs_to_a_goalie(body: Node, goalies: Array) -> bool:
+	var n: Node = body
+	while n != null:
+		if n in goalies:
+			return true
+		n = n.get_parent()
+	return false
 
 
 func _clear_provisional() -> void:

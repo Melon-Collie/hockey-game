@@ -1221,6 +1221,9 @@ func _spawn_puck() -> void:
 	# building a fresh array per call allocated twice per physics tick.
 	puck_controller.set_skater_getter(func() -> Array:
 		return _registry.skaters() if _registry != null else [])
+	# Dev-only Phase-2 harness: the live goalie list for the proactive false-positive probe.
+	puck_controller.set_goalie_provider(func() -> Array:
+		return goalies)
 	puck_controller.puck_picked_up_by.connect(_on_server_puck_picked_up_by)
 	puck_controller.puck_released_by_carrier.connect(_on_server_puck_released_by_carrier)
 	puck_controller.puck_stripped_from.connect(_on_server_puck_stripped_from)

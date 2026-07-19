@@ -10,15 +10,33 @@ extends RefCounted
 # contacts? — deciding fully-deterministic vs hybrid. Dev + host only. Never drives the
 # puck.
 #
-# Reactive (runs on Jolt's contact), so it measures agreement + part-match on Jolt's
-# real contacts; it does NOT measure analytic false-positives (a proactive per-tick pass
-# would — a later addition). `analytic_missed` (jolt_contacts - analytic_agreed) is the
-# number to watch: contacts Jolt saw that the analytic test didn't reproduce.
+# Two directions:
+#  - record_contact() is REACTIVE (runs on Jolt's contact): agreement + part-match +
+#    normal-sanity on Jolt's real contacts. `missed` (jolt_contacts - analytic_agreed) is
+#    the number to watch here — contacts Jolt saw that the analytic test didn't reproduce.
+#  - probe() is PROACTIVE (runs every tick near a goalie): counts analytic false-positives
+#    (phantoms) — ticks the analytic test fires while Jolt shows no contact, using Jolt's
+#    entry signal OR continuous overlap as ground truth. This is the direction that matters
+#    if the analytic model were to DRIVE a deterministic goalie.
 
 var jolt_contacts: int = 0
 var analytic_agreed: int = 0
 var part_matches: int = 0
 var normal_sane: int = 0          # analytic normal opposes the puck's travel (rebound-plausible)
+
+# ── Proactive per-tick false-positive probe ────────────────────────────────────
+# record_contact answers "did we catch Jolt's contacts?" (the reactive direction). probe()
+# answers the OTHER direction — "do we fire contacts Jolt DIDN'T?" (phantoms) — the risk if
+# the analytic model were to DRIVE a deterministic goalie. Runs every host tick the puck is
+# loose near a goalie. Ground truth = Jolt registered goalie contact this tick, from EITHER
+# the entry signal (fast single-tick transit / CCD) OR continuous overlap
+# (get_colliding_bodies, for a resting/sliding puck) — combining both is what keeps a puck
+# legitimately settling on the pads from being miscounted as a phantom. A tick where the
+# analytic test says "hit" but Jolt shows neither is a phantom.
+var probe_ticks: int = 0            # ticks probed (puck loose near a goalie)
+var probe_hit_ticks: int = 0        # of those, ticks the analytic test said "contact"
+var false_positive_ticks: int = 0   # analytic hit, Jolt showed no contact this tick — phantom
+var agreed_probe_ticks: int = 0     # analytic hit AND Jolt contact this tick
 var _scratch := SweptDiscOBB.Result.new()
 
 
@@ -27,6 +45,10 @@ func reset_session() -> void:
 	analytic_agreed = 0
 	part_matches = 0
 	normal_sane = 0
+	probe_ticks = 0
+	probe_hit_ticks = 0
+	false_positive_ticks = 0
+	agreed_probe_ticks = 0
 
 
 # Called on a Jolt goalie contact. `goalie` = the Goalie hit; `jolt_part` = the specific
@@ -56,6 +78,42 @@ func record_contact(goalie: Node, jolt_part: Node, prev: Vector3, curr: Vector3,
 	var travel := curr - prev
 	if travel.length_squared() > 1e-9 and best_normal.dot(travel.normalized()) < 0.0:
 		normal_sane += 1
+
+
+# One host tick's proactive probe. `goalies` = every goalie to test; prev/curr = the
+# puck's swept segment this tick; radius = puck collision radius; `jolt_contact_this_tick`
+# = did Jolt register a goalie contact this tick (entry signal OR continuous overlap —
+# resolved by the caller). Counts a phantom when the analytic test says hit and Jolt shows
+# nothing. Only call while the puck is loose AND near a goalie, so true-negative ticks
+# (the puck nowhere near the net) don't flood probe_ticks.
+func probe(goalies: Array, prev: Vector3, curr: Vector3, radius: float, jolt_contact_this_tick: bool) -> void:
+	probe_ticks += 1
+	var analytic_hit: bool = false
+	for goalie: Node in goalies:
+		if goalie == null:
+			continue
+		for cs: CollisionShape3D in _collision_shapes(goalie):
+			var box := cs.shape as BoxShape3D
+			if box == null:
+				continue
+			if SweptDiscOBB.contact(prev, curr, radius, cs.global_transform, box.size * 0.5, _scratch):
+				analytic_hit = true
+				break
+		if analytic_hit:
+			break
+	if not analytic_hit:
+		return
+	probe_hit_ticks += 1
+	if jolt_contact_this_tick:
+		agreed_probe_ticks += 1
+	else:
+		false_positive_ticks += 1
+
+
+# Of the ticks the analytic test fired, the share Jolt saw no contact on (the phantom
+# rate). Low is good: a high rate means a deterministic goalie would swat pucks Jolt lets by.
+func false_positive_pct() -> float:
+	return 100.0 * float(false_positive_ticks) / float(probe_hit_ticks) if probe_hit_ticks > 0 else 0.0
 
 
 static func _collision_shapes(root: Node) -> Array[CollisionShape3D]:
@@ -88,6 +146,8 @@ func part_match_pct() -> float:
 
 
 func summary() -> String:
-	return "goalie-collision: jolt=%d caught=%d (%.0f%%) missed=%d part_match=%d (%.0f%%) normal_sane=%d" % [
+	return ("goalie-collision: jolt=%d caught=%d (%.0f%%) missed=%d part_match=%d (%.0f%%) " +
+			"normal_sane=%d | probe=%d hit=%d phantom=%d (%.0f%%)") % [
 		jolt_contacts, analytic_agreed, agreement_pct(), jolt_contacts - analytic_agreed,
-		part_matches, part_match_pct(), normal_sane]
+		part_matches, part_match_pct(), normal_sane,
+		probe_ticks, probe_hit_ticks, false_positive_ticks, false_positive_pct()]

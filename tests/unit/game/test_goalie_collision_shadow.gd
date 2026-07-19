@@ -74,11 +74,48 @@ func test_picks_nearest_part_among_several() -> void:
 	assert_eq(shadow.part_matches, 1, "analytic picked the nearer box, matching the reported part")
 
 
+func test_probe_counts_a_phantom_when_analytic_hits_but_jolt_saw_nothing() -> void:
+	# The analytic swept test contacts the box, but Jolt reported no contact this tick ->
+	# phantom (the false-positive direction record_contact structurally can't see).
+	var goalie := _make_goalie_with_box(Vector3(0, 0, 0), Vector3(0.5, 0.5, 0.5))
+	var shadow := GoalieCollisionShadow.new()
+	shadow.probe([goalie], Vector3(-2, 0, 0), Vector3(0, 0, 0), R, false)
+	assert_eq(shadow.probe_ticks, 1)
+	assert_eq(shadow.probe_hit_ticks, 1, "analytic fired")
+	assert_eq(shadow.false_positive_ticks, 1, "Jolt saw nothing -> phantom")
+	assert_almost_eq(shadow.false_positive_pct(), 100.0, 0.01)
+
+
+func test_probe_agrees_when_jolt_also_saw_contact() -> void:
+	# Analytic hit AND Jolt contact this tick -> agreement, not a phantom (the sustained-
+	# contact case: a puck resting on the pads that get_colliding_bodies reports).
+	var goalie := _make_goalie_with_box(Vector3(0, 0, 0), Vector3(0.5, 0.5, 0.5))
+	var shadow := GoalieCollisionShadow.new()
+	shadow.probe([goalie], Vector3(-2, 0, 0), Vector3(0, 0, 0), R, true)
+	assert_eq(shadow.probe_hit_ticks, 1)
+	assert_eq(shadow.agreed_probe_ticks, 1, "Jolt agreed -> not a phantom")
+	assert_eq(shadow.false_positive_ticks, 0)
+
+
+func test_probe_clear_miss_records_no_hit() -> void:
+	# Analytic finds no contact (puck passes 2 m above) -> probed but no hit, no phantom.
+	var goalie := _make_goalie_with_box(Vector3(0, 0, 0), Vector3(0.3, 0.3, 0.3))
+	var shadow := GoalieCollisionShadow.new()
+	shadow.probe([goalie], Vector3(-2, 2, 0), Vector3(2, 2, 0), R, false)
+	assert_eq(shadow.probe_ticks, 1)
+	assert_eq(shadow.probe_hit_ticks, 0, "analytic correctly saw nothing")
+	assert_eq(shadow.false_positive_ticks, 0, "no hit -> no phantom")
+
+
 func test_reset_session_zeroes() -> void:
 	var goalie := _make_goalie_with_box(Vector3.ZERO, Vector3(0.5, 0.5, 0.5))
 	var shadow := GoalieCollisionShadow.new()
 	shadow.record_contact(goalie, goalie.get_child(0), Vector3(-2, 0, 0), Vector3(0, 0, 0), R)
 	assert_gt(shadow.jolt_contacts, 0)
+	shadow.probe([goalie], Vector3(-2, 0, 0), Vector3(0, 0, 0), R, false)
+	assert_gt(shadow.probe_ticks, 0)
 	shadow.reset_session()
 	assert_eq(shadow.jolt_contacts, 0)
 	assert_eq(shadow.analytic_agreed, 0)
+	assert_eq(shadow.probe_ticks, 0)
+	assert_eq(shadow.false_positive_ticks, 0)

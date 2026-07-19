@@ -74,6 +74,16 @@ changing behavior:
 Same rails as `PuckShadowComparator`: dev + host only (`BuildInfo.VERSION == "dev"`),
 log a digest on a throttle, never drive the real puck.
 
+**Both directions are now instrumented** (`GoalieCollisionShadow`):
+- `record_contact()` — REACTIVE, on Jolt's `puck_touched_goalie`: catch-rate, part-match,
+  normal-sanity per real contact (the `jolt=/caught=/part_match=/normal_sane=` digest).
+- `probe()` — PROACTIVE, every host tick the loose puck is within `_GOALIE_PROBE_RANGE_M`
+  of a goalie: counts **false positives** (analytic fires, Jolt didn't). Ground truth for
+  the tick is Jolt's entry signal **OR** continuous overlap (`get_colliding_bodies()`) —
+  combining both is what stops a puck legitimately settling on the pads (which fires no
+  fresh `body_entered`) from being miscounted as a phantom (the `probe=/hit=/phantom=`
+  digest). This closes the false-positive metric the go/no-go needs.
+
 ## Metrics & go/no-go
 
 - **Detection agreement** ≥ ~95% of Jolt's goalie contacts caught analytically, with a
