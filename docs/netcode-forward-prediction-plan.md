@@ -237,8 +237,23 @@ can't run headless, so networking feel is verified on the developer's machine.
    Gated by `Constants.REMOTE_FORWARD_PREDICT_FRACTION`, **set to 1.0 (full
    present) on this experimental branch** for the Steam playtest — dial toward
    0.5 / 0.0 if remotes overshoot on hard cuts. Pickup/poke puck rewind is stage 4.
-4. **Conditional puck lead** + **goalie spectator pose-lead** (share the "host
-   rewinds to predicted instant" spine).
+4. **Conditional puck lead** *(built on the experimental branch)* +
+   **goalie spectator pose-lead** *(deferred — see below)*.
+   - *Puck lead:* the loose puck reuses its existing lead machinery (ice-friction
+     dead-reckon + board gate), now driven by the shared
+     `Constants.REMOTE_FORWARD_PREDICT_FRACTION` and gated by `_blade_lead_scale`
+     — the lead eases to 0 as any blade nears the puck, so it renders at the past
+     interp instant exactly where pickup/poke claims fire. That keeps render ==
+     rewind **with no host-side change** (the host already rewinds the puck to the
+     past; the client just renders it there whenever a claim can happen). Enabled
+     at fraction 1.0 for the playtest alongside the skater lead.
+   - *Goalie pose-lead — DEFERRED.* Lower value (spectator-only cosmetic) and a
+     real footgun: the shooter's shot is already lag-comp'd against the goalie
+     they saw, so leading the goalie for the shooter would make them aim at a
+     goalie the host won't judge against — worse, not better. A safe version has
+     to suppress the lead whenever the local player is aiming/charging, which is
+     fiddly state logic for a cosmetic gain. Revisit only if the skater+puck lead
+     feels good and the goalie's past-ness still reads badly.
 5. **Rate drop** (now free on feel) **+ delta-encode** (when egress-metered).
 6. **Pure-server-mode + Steam auth ticket + hybrid dedicated for ranked.**
 

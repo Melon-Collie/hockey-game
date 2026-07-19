@@ -69,6 +69,11 @@ const _ALONG_SNAP_TIME_S: float = 0.3
 # host validate grabs against a puck up to interp_delay/2 behind where the
 # claimant reached for it, so pickups miss — badly during jitter, when
 # interp_delay spikes. The SmoothDamp below still absorbs bounce overshoot.
+#
+# SUPERSEDED by stage-4: _interpolate now leads via Constants.REMOTE_FORWARD_PREDICT_FRACTION
+# (shared with the skaters) gated by _blade_lead_scale, which eases the lead to 0
+# as a blade nears so render == rewind holds where pickups fire — this raw export
+# had no such gate and is no longer read. Left at 0.
 @export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the loose-puck position. Slightly above
 # the skater's so bounce overshoot blends out cleanly.
@@ -739,6 +744,31 @@ func _is_pickup_contested(local_skater: Skater) -> bool:
 	return false
 
 
+# Stage-4 loose-puck lead gate (see _interpolate): 1.0 in open ice — full forward
+# lead, the puck sits at ~present coherent with the forward-predicted skaters —
+# easing to 0.0 as ANY blade closes on the puck. Dropping the lead near a blade is
+# what preserves render == rewind exactly where pickup/poke claims happen: the host
+# rewinds the puck to the past interp instant, so the puck the claimant reaches for
+# must be there too. The ease is subtle for the slow loose pucks pickups target
+# (present-vs-past offset = puck_speed × interp_delay); a fast puck near a blade is a
+# reception/deflect, host-authoritative anyway. ALL skaters (incl. local) count, so
+# the local player's own grab regime is non-leading. Invalid getter → 0 (no lead,
+# the render == rewind-safe fallback). Cheap value-type math, hot-path safe.
+const _LEAD_DROP_NEAR_M: float = 0.7  # ≥ pickup reach: at claim range the lead is fully off
+const _LEAD_DROP_FAR_M: float = 1.8   # beyond contest range: full lead
+func _blade_lead_scale(puck_pos: Vector3) -> float:
+	if not _skater_getter.is_valid():
+		return 0.0
+	var nearest_sq: float = INF
+	for s: Skater in _skater_getter.call():
+		if not is_instance_valid(s) or s.is_ghost:
+			continue
+		var d_sq: float = s.get_blade_contact_global().distance_squared_to(puck_pos)
+		if d_sq < nearest_sq:
+			nearest_sq = d_sq
+	return smoothstep(_LEAD_DROP_NEAR_M, _LEAD_DROP_FAR_M, sqrt(nearest_sq))
+
+
 # During interpolation the RigidBody is frozen (velocity ~0), so read the host's
 # broadcast speed from the newest buffered snapshot. Empty buffer → no data yet,
 # treat as fast so we stay conservative and skip the optimistic attach.
@@ -986,8 +1016,19 @@ func _interpolate(delta: float) -> void:
 	# Shared delay keeps the loose puck on the skaters' timeline (render == the
 	# lag-comp rewind instant at extrapolation_lead_fraction 0 — see the export).
 	var interp_delay: float = NetworkManager.get_interpolation_delay()
+	# Stage-4 loose-puck forward lead: share the skaters' fraction so a chasing
+	# skater and the loose puck sit on the same (near-present) timeline, but ease
+	# the lead to 0 as any blade closes on the puck (_blade_lead_scale) — that is
+	# what keeps render == rewind exactly where pickup/poke claims fire (the host
+	# rewinds the puck to the past interp instant, so the puck the claimant reached
+	# for must render there too). No host-side change: the puck is at past whenever a
+	# claim can happen. The ice-friction dead-reckon + board gate below produce the
+	# lead. 0 fraction (default) = legacy interpolate-in-the-past.
+	var lead_fraction: float = Constants.REMOTE_FORWARD_PREDICT_FRACTION
+	if lead_fraction > 0.0:
+		lead_fraction *= _blade_lead_scale(puck.get_puck_position())
 	var base_render_time: float = NetworkManager.estimated_host_time() \
-			- interp_delay * (1.0 - extrapolation_lead_fraction)
+			- interp_delay * (1.0 - lead_fraction)
 	# Handoff slew: on a fresh entry from trajectory prediction, seed a temporary
 	# render-time lead that lines the first interp target up with the live
 	# (predicted) puck, then shed it at handoff_slew_rate — the timeline eases
