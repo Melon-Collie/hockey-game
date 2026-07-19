@@ -97,6 +97,10 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
 @export var hit_pickup_cooldown_threshold: float = 1.35   # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
+# Puck energy retention on an ACTIVE (shot-block crouch) block — lower than the passive
+# dampen so a committed block kills more of the shot. Was SkaterController.active_block_dampen;
+# consolidated here with the passive value now that on_body_block picks between them.
+@export var body_block_active_dampen: float = 0.35
 @export var body_block_cooldown: float = 0.1
 # Vertical clamp: the puck's Y is capped at ice_height + max_height in
 # _integrate_forces. Must stay BELOW the rink's collision top
@@ -425,7 +429,7 @@ func apply_blade_deflect(skater: Skater) -> void:
 	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
 	puck_touched_loose.emit(skater)
 
-func on_body_block(blocker: Skater, dampen_override: float = -1.0) -> void:
+func on_body_block(blocker: Skater) -> void:
 	if not _is_server:
 		return
 	if pickup_locked:
@@ -442,9 +446,12 @@ func on_body_block(blocker: Skater, dampen_override: float = -1.0) -> void:
 	if contact_normal.length() < 0.001:
 		contact_normal = -blocker.global_transform.basis.z
 	contact_normal = contact_normal.normalized()
-	var effective_dampen: float = dampen_override if dampen_override >= 0.0 else body_block_dampen
+	# A committed shot-block crouch kills more of the shot than a passive body absorb.
+	var dampen: float = body_block_active_dampen \
+			if blocker.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
+			else body_block_dampen
 	linear_velocity = PuckCollisionRules.body_block_velocity(
-			linear_velocity, contact_normal, effective_dampen)
+			linear_velocity, contact_normal, dampen)
 	_set_cooldown(blocker, body_block_cooldown)
 	puck_body_blocked.emit(blocker)
 

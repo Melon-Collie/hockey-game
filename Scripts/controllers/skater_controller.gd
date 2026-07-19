@@ -682,7 +682,6 @@ var show_one_timer_indicator: bool = false
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
 # Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
 @export var block_speed_multiplier: float = 0.45
-@export var active_block_dampen: float = 0.35      # puck energy retention on active block
 # Choreographed "stick down" block pose, authored in upper-body-local space.
 # Forward is local −Z (toward the shooter the stance snapped to on entry); the
 # stick side is +X for a righty, −X for a lefty (blade_side_sign). The blade lies
@@ -888,7 +887,6 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	process_physics_priority = -1  # Run before Skater.move_and_slide
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_check_received.connect(_on_body_check_received)
-	skater.body_block_hit.connect(_on_body_block_hit)
 	_ik.setup(skater, self)
 	_shot_pose.setup(skater, _sm, _aiming, _ik, self)
 	var _cb := SkaterStateMachine.Callbacks.new()
@@ -1241,13 +1239,6 @@ func _on_body_check_received(impulse: Vector3) -> void:
 	stamina = maxf(stamina - BodyCheckRules.incremental_stamina_drain(stagger_timer, impulse_magnitude, cfg), 0.0)
 	stagger_timer = add
 
-func _on_body_block_hit(body: Node3D) -> void:
-	if not _is_host:
-		return
-	if not body is Puck:
-		return
-	var dampen: float = active_block_dampen if _sm.get_state() == State.SHOT_BLOCKING else puck.body_block_dampen
-	puck.on_body_block(skater, dampen)
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 # Whether this skater is committing to a deliberate deflect this tick. Base

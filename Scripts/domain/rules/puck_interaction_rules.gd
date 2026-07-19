@@ -20,6 +20,19 @@ static func check_poke(
 	return _segment_segment_dist_sq(puck_prev, puck_curr, blade_prev, blade_curr) <= radius * radius
 
 
+# Body-block trigger: the puck's swept path (puck_prev→puck_curr) comes within `radius` of
+# the blocker's body sphere centre. `radius` folds in the sphere radius + the puck radius.
+# A swept segment-vs-point test (like check_pickup/poke) so a fast puck can't tunnel through
+# the torso in a single tick — the analytic replacement for the body-block Area3D sensor.
+# The sphere centre carries its own height (torso for a passive block, ice-sealing for a
+# shot-block crouch), so a grounded puck naturally passes UNDER a raised passive sphere.
+static func check_body_block(
+		puck_prev: Vector3, puck_curr: Vector3,
+		body_center: Vector3, radius: float) -> bool:
+	var closest: Vector3 = _closest_point_on_segment(body_center, puck_prev, puck_curr)
+	return closest.distance_squared_to(body_center) <= radius * radius
+
+
 # Stick-lift trigger geometry. The attacker's blade is a single point; the
 # victim's stick is the hand→blade shaft segment. A lift fires when the
 # attacker's blade is within `radius` of the shaft AND sits below the shaft at

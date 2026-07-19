@@ -244,7 +244,6 @@ signal body_check_impulse_applied(impulse: Vector3)
 # being hit. Host-authoritative consumers gate on is_host; see
 # SkaterController._on_body_check_received.
 signal body_check_received(impulse: Vector3)
-signal body_block_hit(body: Node3D)
 # Fired at the END of _physics_process, AFTER move_and_slide + collision
 # resolution + rink clamp have settled this tick's position and velocity. The
 # local player's controller uses it to capture its reconcile prediction snapshot
@@ -429,8 +428,6 @@ var _last_finite_position: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
 var _collision_cyl: CylinderShape3D = null
-var _body_block_area: Area3D = null
-var _body_block_sphere: SphereShape3D = null
 var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
@@ -551,22 +548,6 @@ func _ready() -> void:
 	zone_shape.shape = _slapper_zone_sphere
 	_slapper_zone_area.add_child(zone_shape)
 	add_child(_slapper_zone_area)
-
-	_body_block_area = Area3D.new()
-	_body_block_area.name = "BodyBlockArea"
-	# Raised to torso height so grounded pucks pass under the passive sphere (see
-	# body_block_height). The explicit-block widening (set_block_stance) reaches
-	# back down to the ice from here.
-	_body_block_area.position.y = body_block_height
-	_body_block_area.collision_layer = 0
-	_body_block_area.collision_mask = Constants.LAYER_PUCK
-	var block_shape := CollisionShape3D.new()
-	_body_block_sphere = SphereShape3D.new()
-	_body_block_sphere.radius = body_block_radius
-	block_shape.shape = _body_block_sphere
-	_body_block_area.add_child(block_shape)
-	add_child(_body_block_area)
-	_body_block_area.body_entered.connect(func(body: Node3D) -> void: body_block_hit.emit(body))
 
 	upper_arm_mesh = _resolve_or_create_bone_mesh("UpperArmMesh")
 	forearm_mesh = _resolve_or_create_bone_mesh("ForearmMesh")
@@ -1598,12 +1579,10 @@ func set_ghost(ghost: bool) -> void:
 	if ghost:
 		_blade_area.collision_layer = 0
 		_slapper_zone_area.collision_layer = 0
-		_body_block_area.collision_mask = 0
 		collision_layer = 0
 		collision_mask = Constants.LAYER_WALLS
 	else:
 		_blade_area.collision_layer = Constants.LAYER_BLADE_AREAS
-		_body_block_area.collision_mask = Constants.LAYER_PUCK
 		collision_layer = Constants.LAYER_SKATER_BODIES
 		collision_mask = Constants.MASK_SKATER
 	_uniform.apply_ghost(ghost)
@@ -1612,20 +1591,27 @@ func set_ghost(ghost: bool) -> void:
 
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 func set_block_stance(active: bool) -> void:
-	_body_block_sphere.radius = block_body_radius if active else body_block_radius
-	if active:
-		# Seal the ice: the creation-time local offset (body_block_height above
-		# the hip-height origin) parks the sphere at the torso, where the active
-		# radius bottoms out well above a grounded puck — a flat shot slid clean
-		# under the crouch. Rebase the sphere so it spans the ice up to ~2·radius
-		# (same global-Y trick as set_slapper_zone); the small margin keeps a
-		# puck hugging the ice inside the sphere rather than tangent to it.
-		_body_block_area.global_position.y = block_body_radius - 0.05
-	else:
-		_body_block_area.position.y = body_block_height
 	_block_stance_active = active
 	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
+
+
+# The body-block sphere the analytic detector tests against (PuckController). PASSIVE: a
+# radius-body_block_radius sphere raised to torso height, so a grounded puck passes UNDER it
+# and only a torso-height puck is blocked. SHOT-BLOCK crouch: a wider block_body_radius sphere
+# rebased down to seal the ice from ~0 up to ~2·radius (a flat shot no longer slides under the
+# crouch). Mirrors the old Area3D geometry exactly (see set_block_stance history).
+func get_body_block_center() -> Vector3:
+	# SHOT-BLOCK: the sphere was rebased to an ABSOLUTE global Y to seal the ice. PASSIVE: it
+	# sat at a LOCAL torso offset above the skater origin. Reproduce both so a grounded puck
+	# passes under the passive sphere exactly as before.
+	if _block_stance_active:
+		return Vector3(global_position.x, block_body_radius - 0.05, global_position.z)
+	return Vector3(global_position.x, global_position.y + body_block_height, global_position.z)
+
+
+func get_body_block_radius() -> float:
+	return block_body_radius if _block_stance_active else body_block_radius
 
 
 # ── Slapper Zone ──────────────────────────────────────────────────────────────

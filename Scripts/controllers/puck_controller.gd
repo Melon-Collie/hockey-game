@@ -531,6 +531,10 @@ func _check_interactions() -> void:
 					break
 	else:
 		if not puck.pickup_locked:
+			# Body block first: a puck driven into a player's torso is absorbed/dampened before
+			# any stick play. If one lands, the velocity changed this tick — skip the pickup pass.
+			if _check_body_blocks(skaters, puck_curr):
+				return
 			# On-ice/off-ice gate is invariant across skaters this tick.
 			var puck_airborne: bool = puck.is_airborne()
 			for skater: Skater in skaters:
@@ -596,6 +600,25 @@ func _check_interactions() -> void:
 				else:
 					puck.apply_blade_deflect(skater)
 				break
+
+
+# Analytic body-block: a loose puck driven into a player's body sphere is absorbed/dampened.
+# The analytic replacement for the per-skater body-block Area3D — a swept segment-vs-sphere
+# test (so a fast puck can't tunnel through the torso), reading the same sphere geometry the
+# Area used (torso-height passive, ice-sealing shot-block crouch). Ghost skaters never block
+# (matching the old Area mask); the body_block_cooldown de-dups the level-triggered test the
+# way the Area's edge trigger did. Knocked-down players still block, as before. Returns true
+# on the first block so the caller skips the pickup pass this tick.
+func _check_body_blocks(skaters: Array, puck_curr: Vector3) -> bool:
+	for skater: Skater in skaters:
+		if skater.is_ghost or puck.is_on_cooldown(skater):
+			continue
+		var reach: float = skater.get_body_block_radius() + GameRules.PUCK_COLLISION_RADIUS
+		if PuckInteractionRules.check_body_block(
+				_prev_puck_pos, puck_curr, skater.get_body_block_center(), reach):
+			puck.on_body_block(skater)
+			return true
+	return false
 
 
 # ── Local Prediction ──────────────────────────────────────────────────────────
