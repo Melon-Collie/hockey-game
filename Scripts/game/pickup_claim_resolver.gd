@@ -101,6 +101,10 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 	# time base (the client stamped it with estimated_host_time).
 	# Time.get_ticks_msec() is OS uptime and would diverge by however long the
 	# host was alive before the game started.
+	# Anti-cheat: bound the self-reported render delay against the measured link
+	# before any rewind / forward-predict depth reads it (see LagCompRewind).
+	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
 	var now: float = NetworkManager.local_time()
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return

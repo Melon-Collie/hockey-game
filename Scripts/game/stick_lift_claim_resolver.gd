@@ -63,6 +63,10 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	# Same age check as pickup/poke — `host_timestamp` is in the
 	# `estimated_host_time` base, matched against session-relative `local_time`.
+	# Anti-cheat: bound the self-reported render delay against the measured link
+	# before any rewind / forward-predict depth reads it (see LagCompRewind).
+	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
 	var now: float = NetworkManager.local_time()
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return

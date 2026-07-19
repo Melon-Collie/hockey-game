@@ -125,3 +125,18 @@ func test_interpolated_snapshot_carries_is_ghost_from_newer_endpoint() -> void:
 	var snap: WorldSnapshot = sbm.get_state_at(10.05)
 	var s: SkaterNetworkState = snap.get_skater_state(PEER)
 	assert_true(s.is_ghost)
+
+
+func test_interpolated_snapshot_carries_stagger_timer() -> void:
+	# The forward prediction applies the victim's stagger as a thrust penalty;
+	# like intent/shot_state it must survive the interpolated rewind (newer
+	# endpoint — the same snapshot the client render's bracket reads).
+	var older := _slot(0, false, Vector3.ZERO)
+	var newer := _slot(0, false, Vector3.ONE)
+	newer.stagger_timer = 0.45
+	_seed_two_slots(10.0, older, 10.1, newer)
+	var snap: WorldSnapshot = sbm.get_state_at(10.05)
+	var s: SkaterNetworkState = snap.get_skater_state(PEER)
+	assert_not_null(s)
+	assert_almost_eq(s.stagger_timer, 0.45, 1e-6,
+		"interpolated rewind must carry the newer endpoint's stagger_timer")

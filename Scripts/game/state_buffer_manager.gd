@@ -187,6 +187,11 @@ func _interpolate_skater(peer_id: int, ts: float) -> SkaterNetworkState:
 	result.move_intent = to_s.move_intent
 	result.brake_intent = to_s.brake_intent
 	result.sprint_active = to_s.sprint_active
+	# Stagger rides the same newer-endpoint rule: the forward prediction applies
+	# it as a thrust penalty, and the client render reads its bracket's to_state
+	# — the same snapshot — so the two agree. (It decays linearly, so newer-
+	# endpoint vs lerp differ by <= one broadcast interval of decay — sub-mm.)
+	result.stagger_timer = to_s.stagger_timer
 	result.host_timestamp = ts
 	return result
 

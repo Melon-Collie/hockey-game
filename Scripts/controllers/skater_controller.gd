@@ -2381,12 +2381,21 @@ func _movement_config() -> SkaterMovementRules.MovementConfig:
 # claim rewind would integrate a recently-checked victim with present-tick
 # staggered thrust while the client rendered base thrust — an input asymmetry
 # breaking render == rewind right after checks, when follow-up claims cluster.
-# Both sides deliberately integrate at base thrust (the stagger residual over
-# the short window is absorbed by the snapshot correction).
+# The stagger penalty is then applied SYMMETRICALLY inside integrate_forward
+# (both sides pass the snapshot's replicated stagger_timer + this skater's
+# body-check config), so the normalization here is what keeps the base clean
+# for that shared scaling rather than a decision to ignore stagger.
 func get_movement_config() -> SkaterMovementRules.MovementConfig:
 	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
 	cfg.thrust = thrust
 	return cfg
+
+
+# Public read of the cached body-check config — consumed by the stage-3 forward
+# prediction (both the client render and the host claim rewind) to apply the
+# victim's stagger thrust penalty identically on both sides.
+func get_body_check_config() -> BodyCheckRules.Config:
+	return _body_check_config()
 
 func _block_movement_config() -> SkaterMovementRules.MovementConfig:
 	if _cached_block_move_cfg == null:

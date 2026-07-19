@@ -120,6 +120,10 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
+	# Anti-cheat: bound the self-reported render delay against the measured link
+	# before any rewind / forward-predict depth reads it (see LagCompRewind).
+	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(hitter_peer_id)))
 	var now: float = NetworkManager.local_time()
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return

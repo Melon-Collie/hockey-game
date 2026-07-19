@@ -98,6 +98,15 @@ class ForwardResult:
 # extrapolation. The residual vs the host's true move_and_slide is corrected by the
 # next snapshot — what must match exactly is client-render vs host-rewind, and both
 # run THIS function on the same inputs. Fills the caller-owned `result`.
+# `stagger_timer` / `body_check_cfg` (optional): the snapshot's replicated
+# body-check stagger, applied as the live sim's per-tick thrust penalty
+# (BodyCheckRules.thrust_mult of the tick-decayed remaining timer) so a
+# recently-checked skater predicts its honest reduced acceleration — right
+# after checks is exactly when follow-up contests cluster. Both the client
+# render and the host claim rewind pass the SAME snapshot field through the
+# same formula, so render == rewind holds. cfg.thrust is transiently scaled
+# and restored (the caller may pass a shared cached config). Omit (0 / null)
+# to integrate at base thrust.
 static func integrate_forward(
 		position: Vector3,
 		velocity: Vector3,
@@ -110,10 +119,13 @@ static func integrate_forward(
 		dt: float,
 		ticks: int,
 		intent_decay_ticks: int,
-		result: ForwardResult) -> void:
+		result: ForwardResult,
+		stagger_timer: float = 0.0,
+		body_check_cfg: BodyCheckRules.Config = null) -> void:
 	var pos: Vector3 = position
 	var vel: Vector3 = velocity
 	var n: int = maxi(ticks, 0)
+	var base_thrust: float = cfg.thrust
 	for i in n:
 		# Rocket-League-style input decay: a held intent is less likely to still be
 		# held further into the prediction, so fade the assumed move_input linearly to
@@ -125,7 +137,13 @@ static func integrate_forward(
 		var decayed_input: Vector2 = move_input
 		if intent_decay_ticks > 0:
 			decayed_input = move_input * clampf(1.0 - float(i) / float(intent_decay_ticks), 0.0, 1.0)
+		if stagger_timer > 0.0 and body_check_cfg != null:
+			# Mirror the live order: the sim decays the timer, THEN scales thrust
+			# from the decayed value — tick i uses stagger after i+1 decays.
+			var remaining: float = maxf(stagger_timer - float(i + 1) * dt, 0.0)
+			cfg.thrust = base_thrust * BodyCheckRules.thrust_mult(remaining, body_check_cfg)
 		vel = apply_movement(vel, decayed_input, facing_rotation_y, has_puck, brake, dt, cfg, sprint_active)
 		pos += vel * dt
+	cfg.thrust = base_thrust
 	result.position = pos
 	result.velocity = vel

@@ -186,3 +186,51 @@ func test_integrate_forward_intent_decay_reduces_thrust_travel() -> void:
 	assert_lt(decayed.position.x, full.position.x, "decayed intent applies less thrust -> less travel")
 	assert_lt(decayed.velocity.x, full.velocity.x, "decayed intent -> lower end speed")
 	assert_gt(decayed.position.x, 0.0, "but still moves forward (near ticks apply near-full intent)")
+
+
+func test_integrate_forward_stagger_reduces_thrust_travel() -> void:
+	# A staggered victim (thrust penalized by BodyCheckRules.thrust_mult) must
+	# predict LESS forward travel than a healthy one — right after checks is
+	# exactly when follow-up contests cluster, so both sides apply the penalty.
+	var bc_cfg := BodyCheckRules.Config.new()
+	bc_cfg.max_stagger_seconds = 1.0
+	bc_cfg.max_thrust_penalty = 0.6
+	var healthy := SkaterMovementRules.ForwardResult.new()
+	var staggered := SkaterMovementRules.ForwardResult.new()
+	var mv := Vector2(1, 0)
+	SkaterMovementRules.integrate_forward(Vector3.ZERO, Vector3.ZERO, mv, 0.0,
+		false, false, false, _default_cfg(), 1.0 / 120.0, 9, 0, healthy)
+	SkaterMovementRules.integrate_forward(Vector3.ZERO, Vector3.ZERO, mv, 0.0,
+		false, false, false, _default_cfg(), 1.0 / 120.0, 9, 0, staggered, 0.8, bc_cfg)
+	assert_lt(staggered.position.length(), healthy.position.length(),
+		"stagger thrust penalty must reduce predicted travel")
+	assert_gt(staggered.position.length(), 0.0, "penalized, not frozen")
+
+
+func test_integrate_forward_restores_cfg_thrust() -> void:
+	# The primitive transiently scales cfg.thrust (callers pass a shared cached
+	# config) — it must ALWAYS restore the base afterward, or the render path's
+	# next tick inherits a stale stagger penalty.
+	var cfg := _default_cfg()
+	var base: float = cfg.thrust
+	var bc_cfg := BodyCheckRules.Config.new()
+	bc_cfg.max_stagger_seconds = 1.0
+	bc_cfg.max_thrust_penalty = 0.6
+	var r := SkaterMovementRules.ForwardResult.new()
+	SkaterMovementRules.integrate_forward(Vector3.ZERO, Vector3.ZERO, Vector2(1, 0), 0.0,
+		false, false, false, cfg, 1.0 / 120.0, 9, 0, r, 0.8, bc_cfg)
+	assert_eq(cfg.thrust, base, "cfg.thrust restored after integration")
+
+
+func test_integrate_forward_zero_stagger_matches_unstaggered() -> void:
+	# stagger 0 / null cfg are exact no-ops — the default path is unchanged.
+	var bc_cfg := BodyCheckRules.Config.new()
+	bc_cfg.max_stagger_seconds = 1.0
+	bc_cfg.max_thrust_penalty = 0.6
+	var plain := SkaterMovementRules.ForwardResult.new()
+	var zeroed := SkaterMovementRules.ForwardResult.new()
+	SkaterMovementRules.integrate_forward(Vector3.ZERO, Vector3.ZERO, Vector2(1, 0), 0.0,
+		false, false, false, _default_cfg(), 1.0 / 120.0, 9, 0, plain)
+	SkaterMovementRules.integrate_forward(Vector3.ZERO, Vector3.ZERO, Vector2(1, 0), 0.0,
+		false, false, false, _default_cfg(), 1.0 / 120.0, 9, 0, zeroed, 0.0, bc_cfg)
+	assert_eq(zeroed.position, plain.position, "zero stagger is a no-op")

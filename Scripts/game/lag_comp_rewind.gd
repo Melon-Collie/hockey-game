@@ -58,6 +58,31 @@ static func is_claim_stamp_plausible(now: float, host_timestamp: float, peer_rtt
 	return elapsed <= effective_rtt_ms / 2000.0 + _STAMP_PAST_SLACK_S
 
 
+# Generous allowance over the link-derived floor for the client's LEGITIMATE
+# jitter margin (its adaptive delay adds the measured PDV spread, which can
+# genuinely spike). The bound halves the exploit window on a clean link; it is
+# not, and cannot be, exact — the host can't see the client's downstream PDV.
+const _INTERP_DELAY_JITTER_ALLOWANCE_MS: float = 100.0
+
+
+# Anti-cheat bound on the claim-carried interp_delay_ms — the companion of
+# is_claim_stamp_plausible, completing the P0/P1 family. The client self-reports
+# the interpolation delay its render used, and every remote-view rewind AND the
+# stage-3 forward-predict depth trust it. Bounded only by the flat 200 ms cap, a
+# modified client on a 20 ms link could report the cap and get victims rewound
+# ~175 ms further into the past than it ever saw ("hit them where they were").
+# The host bounds the report against what the delay SHOULD be on the measured
+# link: one-way + one broadcast interval + the jitter allowance. No ping sample
+# yet → the same conservative default RTT the stamp check uses.
+static func plausible_interp_delay_ms(reported_ms: float, peer_rtt_ms: float) -> float:
+	if not is_finite(reported_ms):
+		return 0.0
+	var rtt: float = peer_rtt_ms if peer_rtt_ms > 0.0 else _STAMP_NO_SAMPLE_RTT_MS
+	var ceiling: float = rtt / 2.0 + 1000.0 / float(Constants.STATE_RATE) \
+			+ _INTERP_DELAY_JITTER_ALLOWANCE_MS
+	return clampf(reported_ms, 0.0, minf(ceiling, _INTERP_DELAY_CLAMP_MS_MAX))
+
+
 # Host-time at which to query StateBufferManager for the claimant's
 # locally-predicted entity. RTT does not enter the formula — the rewind depth
 # is a function of the INPUT_LEAD_SEC convention, so validation is
@@ -140,7 +165,8 @@ static func forward_predict_skater(snap: SkaterNetworkState, ctrl: SkaterControl
 			atan2(snap.facing.x, snap.facing.y), false,
 			snap.brake_intent, snap.sprint_active,
 			ctrl.get_movement_config(), 1.0 / float(Constants.PHYSICS_TICK),
-			ticks, Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, scratch)
+			ticks, Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, scratch,
+			snap.stagger_timer, ctrl.get_body_check_config())
 	return true
 
 

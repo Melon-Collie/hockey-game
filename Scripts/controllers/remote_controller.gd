@@ -407,12 +407,18 @@ func _interpolate(delta: float) -> void:
 	var fp_ticks: int = LagCompRewind.forward_predict_ticks(
 			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay)
 	if fp_ticks > 0:
+		# Stagger from the bracket's NEWER endpoint — the same snapshot the host's
+		# rewind reads (StateBufferManager copies newer-endpoint too), so the
+		# thrust penalty is identical on both sides.
+		var fp_stagger: float = _scratch_bracket.to_state.stagger_timer \
+				if _scratch_bracket.to_state != null else 0.0
 		SkaterMovementRules.integrate_forward(
 				interpolated.position, interpolated.velocity, interpolated.move_intent,
 				atan2(interpolated.facing.x, interpolated.facing.y), false,
 				interpolated.brake_intent, interpolated.sprint_active, _movement_config(),
 				1.0 / float(Constants.PHYSICS_TICK), fp_ticks,
-				Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, _fp_result)
+				Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, _fp_result,
+				fp_stagger, _body_check_config())
 		interpolated.position = _fp_result.position
 		interpolated.velocity = _fp_result.velocity
 	# Velocity-feed-forward error smoothing on the collision body position. We advance

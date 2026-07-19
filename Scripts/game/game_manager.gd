@@ -2937,6 +2937,10 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	# otherwise; live puck when the stamp is stale. This is the ONLY part of the
 	# one-timer the client gets a say in — "did I connect with the puck I saw" —
 	# and it stays lag-comped. The shot itself (below) is host-derived.
+	# Anti-cheat: bound the self-reported render delay against the measured link
+	# before any rewind reads it (see LagCompRewind.plausible_interp_delay_ms).
+	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
 	var now: float = NetworkManager.estimated_host_time()
 	var view_puck_pos: Vector3 = puck.get_puck_position()
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() \
@@ -3019,6 +3023,9 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		# from buffered host snapshots at host_time - interp_delay, so the
 		# shooter saw the goalie at that earlier moment. Rewind to that snapshot
 		# for fair puck/goalie geometry at the release. See LagCompRewind.
+		# Anti-cheat: delay bounded against the shooter's measured link first.
+		interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+				interp_delay_ms, float(NetworkManager.get_peer_ping_ms(pid)))
 		var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 		for gc: GoalieController in goalie_controllers:
@@ -3121,6 +3128,9 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 			# Goalie is REMOTE-view from the shooter — the shooter saw the goalie at
 			# host_time - interp_delay (the buffered render path); rewind to that
 			# snapshot for fair puck/goalie geometry at the release moment.
+			# Anti-cheat: delay bounded against the shooter's measured link first.
+			interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+					interp_delay_ms, float(NetworkManager.get_peer_ping_ms(shooter_peer_id)))
 			var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 			var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 			for gc: GoalieController in goalie_controllers:

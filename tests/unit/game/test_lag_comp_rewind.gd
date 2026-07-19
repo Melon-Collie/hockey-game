@@ -246,3 +246,37 @@ func test_puck_view_time_follows_the_prediction_constant() -> void:
 	else:
 		assert_almost_eq(t, LagCompRewind.remote_view_time(10.0, 75.0), EPSILON,
 				"prediction off -> legacy interpolated past")
+
+
+# ── plausible_interp_delay_ms (P2: bound the self-reported render delay) ──────
+
+func test_interp_delay_honest_report_passes_through() -> void:
+	# 80 ms RTT peer legitimately reporting ~60 ms (one-way 40 + interval + jitter).
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(60.0, 80.0), 60.0, EPSILON)
+
+
+func test_interp_delay_inflated_report_clamped_to_link() -> void:
+	# 20 ms link reporting the 200 ms cap — the "hit them where they were"
+	# exploit. Bound = one-way (10) + broadcast interval (~8.3) + 100 allowance.
+	var bounded: float = LagCompRewind.plausible_interp_delay_ms(200.0, 20.0)
+	assert_almost_eq(bounded, 10.0 + 1000.0 / float(Constants.STATE_RATE) + 100.0, 0.01)
+	assert_lt(bounded, 200.0, "the flat cap alone no longer bounds a fast link")
+
+
+func test_interp_delay_no_sample_uses_conservative_default() -> void:
+	# No ping sample yet -> the same conservative default RTT the stamp check
+	# uses (150 ms), not an unbounded pass-through.
+	var bounded: float = LagCompRewind.plausible_interp_delay_ms(200.0, 0.0)
+	assert_almost_eq(bounded, 75.0 + 1000.0 / float(Constants.STATE_RATE) + 100.0, 0.01)
+
+
+func test_interp_delay_never_exceeds_absolute_cap() -> void:
+	# A terrible-but-real link (300 ms RTT): the link-derived ceiling would pass
+	# 258 ms, but the absolute 200 ms cap still rules.
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(500.0, 300.0), 200.0, EPSILON)
+
+
+func test_interp_delay_rejects_garbage() -> void:
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(NAN, 80.0), 0.0, EPSILON)
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(INF, 80.0), 0.0, EPSILON)
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(-50.0, 80.0), 0.0, EPSILON)
