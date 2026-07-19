@@ -1,9 +1,40 @@
 # Phase 0 spec: shadow-puck divergence harness (determinism go/no-go)
 
-Status: **spec, ready to build.** Phase 0 of the deterministic-puck migration
-(`netcode-determinism-migration.md`). This is the cheap, high-information step that
-gates the whole project: it answers *can an analytic puck sim match Jolt's feel?*
-with **measured data**, before a single line of gameplay changes.
+Status: **COMPLETE — GO.** Phase 0 of the deterministic-puck migration
+(`netcode-determinism-migration.md`). It answered the gating question — *can an
+analytic puck sim match Jolt's feel?* — with measured data. It can. See the result
+below; the rest of the doc is the spec that produced it.
+
+## Result (GO) — live session, boards + rim-arounds, PER_TICK_STEP
+
+| Metric | GO threshold | Measured | |
+|---|---|---|---|
+| Free-flight drift | < 5 cm | **0.000 m** (exact) | ✅ |
+| Post-bounce position error (single-tick) | < 0.25 m | **0.088 → 0.154 m** | ✅ |
+| Bounce-angle error (~2000 samples) | < 5° | **0.2–0.3°** | ✅ |
+| Rim containment | model beats Jolt | **Jolt escaped 3×; model 0** | ✅ |
+
+Reading: the analytic model matches Jolt's straight-line motion *exactly*, and its
+carom **direction** off the boards matches to under a third of a degree across ~2000
+real bounces. The worst per-tick position error at a bounce (~15 cm) is a **sub-tick
+timing phase difference** (model reflects the tick the puck crosses the boundary, Jolt
+a fraction off) — one tick, non-accumulating, correct angle, well inside the reconcile
+SmoothDamp budget; it scales with puck speed but stays a one-tick correction. And the
+rim-around bug is real and recurring: Jolt lost the puck 3× in a single rim-around
+session (`c1_rescues=3`), where the analytically-clamped model cannot.
+
+**Conclusion:** an analytic swept-disc puck matches Jolt on the feel-critical
+grounded-puck-on-boards case *and* fixes the rim-around escape bug. GO on the
+boards/rim track. **Not yet answered:** gravity/loft and — the real remaining unknown
+— the goalie's moving collision geometry (Phase 2, `netcode-phase2-goalie-collision-spec.md`).
+
+---
+
+## The question Phase 0 answered (original spec below)
+
+This is the cheap, high-information step that gates the whole project: it answers
+*can an analytic puck sim match Jolt's feel?* with **measured data**, before a single
+line of gameplay changes.
 
 ## The question Phase 0 answers
 

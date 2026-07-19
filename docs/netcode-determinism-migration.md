@@ -165,11 +165,14 @@ Once the loose puck is a deterministic sim both sides run:
 
 ## Phased plan (each phase playtested; no big-bang)
 
-- **Phase 0 — shadow prototype (cheap, de-risks everything).** Build the analytic
-  swept-disc sim (translation + gravity + boards only) and run it *alongside* Jolt on
-  the host, logging trajectory divergence. Do not switch anything. This answers the
-  one question that gates the whole project: *can analytic bounces match Jolt's feel?*
-  If the board-carom feel can't be matched, stop here — cheaply.
+- **Phase 0 — shadow prototype (cheap, de-risks everything). ✅ COMPLETE — GO.** Ran
+  the analytic sim (`AITrajectory.step_puck`, already extracted) alongside Jolt via
+  `PuckShadowComparator` and measured divergence over a live board/rim session. Result:
+  free-flight exact (0.000 m), carom-angle error 0.2–0.3° over ~2000 bounces, worst
+  bounce error ~15 cm (a non-accumulating sub-tick timing phase), and Jolt lost the
+  puck 3× on rim-arounds where the analytic model can't. The board/rim feel matches and
+  the rim bug is fixed. Full result in `netcode-phase0-shadow-puck-spec.md`. **Gravity/
+  loft and the goalie remain untested — Phase 2 is the real risk.**
 - **Phase 1 — switch loose-puck integration + board bounces to analytic** (host and
   client), Jolt still present for comparison. A/B feel. This is the feel-matching gate.
 - **Phase 2 — add pipes + net + goalie-part collision** (the moving-geometry work).
