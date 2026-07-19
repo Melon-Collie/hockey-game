@@ -99,6 +99,36 @@ static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int
 	return roundi(clampf(fraction, 0.0, 1.0) * delay_s * float(Constants.PHYSICS_TICK))
 
 
+# Stage-3 shared reconstruction: intent-integrate a remote-rendered skater from
+# its rewound (interpolated-past) snapshot to the instant the claimant actually
+# rendered it, filling caller-owned `scratch`. Returns true when integration ran
+# (fraction > 0, valid inputs); false = fraction 0 / no controller — caller uses
+# the raw snapshot, the exact legacy render == rewind. One helper so every claim
+# resolver reconstructs identically to RemoteController's render:
+#  - same primitive (SkaterMovementRules.integrate_forward), same shared
+#    fraction/decay constants, same has_puck=false convention;
+#  - intent quantized through the wire codec (quantize_move_intent) so the host's
+#    raw buffered intent (bots are analog) matches what clients decoded;
+#  - depth from the claim-carried interp_delay_ms — the same value the
+#    claimant's render used that frame.
+static func forward_predict_skater(snap: SkaterNetworkState, ctrl: SkaterController,
+		interp_delay_ms: float, scratch: SkaterMovementRules.ForwardResult) -> bool:
+	if snap == null or ctrl == null:
+		return false
+	var ticks: int = forward_predict_ticks(
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
+	if ticks <= 0:
+		return false
+	SkaterMovementRules.integrate_forward(
+			snap.position, snap.velocity,
+			WorldStateCodec.quantize_move_intent(snap.move_intent),
+			atan2(snap.facing.x, snap.facing.y), false,
+			snap.brake_intent, snap.sprint_active,
+			ctrl.get_movement_config(), 1.0 / float(Constants.PHYSICS_TICK),
+			ticks, Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, scratch)
+	return true
+
+
 # Structural anti-cheat for client-authoritative blade claims. A pickup / poke /
 # stick-lift claim now carries the client's OWN blade geometry (its "aim" — the
 # precise thing the client is authoritative over, exactly as AAA FPS lag-comp

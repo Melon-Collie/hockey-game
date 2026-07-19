@@ -14,6 +14,10 @@ extends RefCounted
 #       skater missing/ghost, attempting to poke self or teammate
 #     → rewind the carried puck to LagCompRewind.remote_view_time(host_ts,
 #       interp_delay) and the attacker's body to self_view_time(host_ts);
+#       stage-3: shift the puck segment by the carrier's forward-predicted
+#       displacement (LagCompRewind.forward_predict_skater — the claimant
+#       rendered the carrier intent-integrated toward present, and the carried
+#       puck rides the carrier's blade);
 #       reach-clamp the CLIENT-sent attacker blade to that body — never rtt/2
 #       (the blade is client-authoritative aim, like PickupClaimResolver)
 #     → reject if PuckInteractionRules.check_poke fails against that geometry
@@ -27,6 +31,8 @@ var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
 var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
+# Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
+var _fp_result := SkaterMovementRules.ForwardResult.new()
 
 
 func setup(
@@ -87,9 +93,28 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	# stripped first, or the carrier released the puck), the claim is stale.
 	if puck_snap.puck_state.carrier_peer_id != expected_carrier_peer_id:
 		return
+	# Looked up here (rather than at apply time) because the stage-3 carrier
+	# reconstruction below needs the carrier's controller.
+	var expected_record: PlayerRecord = _registry.get_record(expected_carrier_peer_id)
+	if expected_record == null or expected_record.skater == null:
+		return
 	var puck_pos: Vector3 = puck_snap.puck_state.position
 	var puck_prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(puck_rewind_time))
 	var puck_prev: Vector3 = puck_prev_snap.puck_state.position if puck_prev_snap.puck_state != null else puck_pos
+	# Stage-3: the claimant rendered the CARRIER forward-predicted toward
+	# host-present (RemoteController's intent integration), and the carried puck
+	# rides the carrier's blade — so the puck the attacker poked at sits at the
+	# rewound puck position PLUS the carrier's forward-predicted displacement.
+	# Shift both swept endpoints by the same delta (rigid translation: the
+	# segment's shape is the carrier's own blade motion, which the render leaves
+	# at its rewound body-relative pose). No-op at fraction 0 — exact legacy
+	# render == rewind.
+	var carrier_snap: SkaterNetworkState = puck_snap.get_skater_state(expected_carrier_peer_id)
+	if LagCompRewind.forward_predict_skater(carrier_snap,
+			expected_record.controller as SkaterController, interp_delay_ms, _fp_result):
+		var carrier_delta: Vector3 = _fp_result.position - carrier_snap.position
+		puck_pos += carrier_delta
+		puck_prev += carrier_delta
 	var blade_snap: WorldSnapshot = _state_buffer.get_state_at(blade_rewind_time)
 	var blade_prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(blade_rewind_time))
 	var skater_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
@@ -129,8 +154,5 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	# Pass the intended victim through so apply guards against the carrier
 	# having changed (X → Z) between claim send and apply. Looked up from the
-	# claimant's expected target, not from the current `puck.carrier`.
-	var expected_record: PlayerRecord = _registry.get_record(expected_carrier_peer_id)
-	if expected_record == null or expected_record.skater == null:
-		return
+	# claimant's expected target (above), not from the current `puck.carrier`.
 	pc.apply_lag_comp_poke(record.skater, expected_record.skater)

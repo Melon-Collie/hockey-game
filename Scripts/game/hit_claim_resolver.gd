@@ -149,16 +149,8 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# fraction 0 (the shipped default).
 	var vic_pos: Vector3 = victim_snap.position
 	var vic_vel: Vector3 = victim_snap.velocity
-	var fp_ticks: int = LagCompRewind.forward_predict_ticks(
-			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
-	var vic_ctrl: SkaterController = victim_rec.controller as SkaterController
-	if fp_ticks > 0 and vic_ctrl != null:
-		SkaterMovementRules.integrate_forward(
-				victim_snap.position, victim_snap.velocity, victim_snap.move_intent,
-				atan2(victim_snap.facing.x, victim_snap.facing.y), false,
-				victim_snap.brake_intent, victim_snap.sprint_active,
-				vic_ctrl.get_movement_config(), 1.0 / float(Constants.PHYSICS_TICK),
-				fp_ticks, Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, _fp_result)
+	if LagCompRewind.forward_predict_skater(victim_snap,
+			victim_rec.controller as SkaterController, interp_delay_ms, _fp_result):
 		vic_pos = _fp_result.position
 		vic_vel = _fp_result.velocity
 	if hitter_snap.position.distance_to(vic_pos) > MAX_RANGE_M:

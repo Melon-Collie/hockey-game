@@ -451,6 +451,20 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	return b
 
 
+# The exact encode→decode round trip of the v15 move-intent octant above, as a
+# standalone value transform. The host-side stage-3 claim rewind runs it on the
+# raw buffered intent before forward-integrating, so the host integrates the
+# SAME vector clients decoded off the wire: human WASD is 8-way (lossless), but
+# bot steering intents are analog — un-quantized they'd diverge from the octant
+# unit vector every client rendered (direction off by up to 22.5°, magnitude
+# inflated to 1.0). Keep in lockstep with the encoder/decoder above.
+static func quantize_move_intent(v: Vector2) -> Vector2:
+	if v.length_squared() <= 0.0025:
+		return Vector2.ZERO
+	var a: float = float(wrapi(roundi(atan2(v.x, v.y) / (PI / 4.0)), 0, 8)) * (PI / 4.0)
+	return Vector2(sin(a), cos(a))
+
+
 static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	if b.size() < SKATER_STATE_BYTES:
 		push_warning("WorldStateCodec: truncated skater block (%d bytes)" % b.size())
