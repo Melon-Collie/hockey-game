@@ -95,9 +95,9 @@ func _run_flyby(start: Vector3, vel: Vector3, ticks: int,
 			brain.tick(20 * DT, snap)
 		input.shoot_pressed = false
 		input.slap_pressed = false
-		input.quick_shot_pressed = false
+		input.quick_pass_pressed = false
 		agent.dispatch(input, snap)
-		var released: bool = input.quick_shot_pressed \
+		var released: bool = input.quick_pass_pressed \
 				or (prev_shoot and not input.shoot_held) \
 				or (prev_slap and not input.slap_held)
 		if released:

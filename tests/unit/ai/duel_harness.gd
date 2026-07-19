@@ -235,7 +235,7 @@ func step() -> void:
 		s.was_holding_slap = s.input.slap_held
 		s.input.shoot_pressed = false
 		s.input.slap_pressed = false
-		s.input.quick_shot_pressed = false
+		s.input.quick_pass_pressed = false
 		s.input.stick_lift_pressed = false
 		if collect_perf:
 			var t0: int = Time.get_ticks_usec()
@@ -257,7 +257,7 @@ func step() -> void:
 	# charge dropping. The puck leaves along the shooter's aim.
 	if carrier_id != -1:
 		var c: SimSkater = _skater(carrier_id)
-		var released: bool = c.input.quick_shot_pressed \
+		var released: bool = c.input.quick_pass_pressed \
 				or (c.was_holding_shot and not c.input.shoot_held) \
 				or (c.was_holding_slap and not c.input.slap_held)
 		if released:

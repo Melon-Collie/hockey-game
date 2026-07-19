@@ -29,7 +29,7 @@ func test_round_trip_preserves_all_fields() -> void:
 	s.stick_lift_held  = true
 	s.sprint_held      = true
 	s.stick_lift_pressed = true
-	s.quick_shot_pressed = true
+	s.quick_pass_pressed = true
 	s.hit_held           = true
 
 	var r := InputState.from_array(s.to_array())
@@ -52,7 +52,7 @@ func test_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.stick_lift_held, s.stick_lift_held)
 	assert_eq(r.sprint_held,     s.sprint_held)
 	assert_eq(r.stick_lift_pressed, s.stick_lift_pressed)
-	assert_eq(r.quick_shot_pressed, s.quick_shot_pressed)
+	assert_eq(r.quick_pass_pressed, s.quick_pass_pressed)
 	assert_eq(r.hit_held,           s.hit_held)
 
 
@@ -103,7 +103,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	s.stick_lift_held  = true
 	s.sprint_held      = true
 	s.stick_lift_pressed = true
-	s.quick_shot_pressed = true
+	s.quick_pass_pressed = true
 	s.hit_held           = true
 
 	var r := InputState.from_bytes(s.to_bytes())
@@ -126,7 +126,7 @@ func test_bytes_round_trip_preserves_all_fields() -> void:
 	assert_eq(r.stick_lift_held, s.stick_lift_held)
 	assert_eq(r.sprint_held,     s.sprint_held)
 	assert_eq(r.stick_lift_pressed, s.stick_lift_pressed)
-	assert_eq(r.quick_shot_pressed, s.quick_shot_pressed)
+	assert_eq(r.quick_pass_pressed, s.quick_pass_pressed)
 	assert_eq(r.hit_held,           s.hit_held)
 
 

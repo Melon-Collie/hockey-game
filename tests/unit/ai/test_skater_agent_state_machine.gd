@@ -489,7 +489,7 @@ func test_press_state_ignores_dispatch_throttle() -> void:
 	sm._dispatch_skip_counter = 5
 	var i := InputState.new()
 	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
-	assert_true(i.quick_shot_pressed, "press states are never throttled")
+	assert_true(i.quick_pass_pressed, "press states are never throttled")
 	assert_eq(sm.get_state(), Agent.State.CARRY)
 
 
@@ -902,7 +902,7 @@ func test_pass_pressed_quick_fires_and_clears_target() -> void:
 	_add_skater(s, TEAMMATE_ID, Vector3(3, 0, 0))
 	var i := InputState.new()
 	sm.dispatch(i, s)
-	assert_true(i.quick_shot_pressed, "quick pass fires the dedicated quick-shot edge")
+	assert_true(i.quick_pass_pressed, "quick pass fires the dedicated quick-shot edge")
 	assert_eq(sm.get_state(), Agent.State.CARRY, "quick pass is a one-tick press")
 	assert_eq(sm._pass_target_peer_id, -1, "quick pass clears its target for the next pick")
 
@@ -950,7 +950,7 @@ func test_pass_pressed_dump_clear_chips_high_and_clears() -> void:
 	sm._dump_is_soft = false
 	var i := InputState.new()
 	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
-	assert_true(i.quick_shot_pressed, "a dump fires the one-tick quick release")
+	assert_true(i.quick_pass_pressed, "a dump fires the one-tick quick release")
 	assert_eq(i.elevation_level, ShotMechanics.ELEVATION_HIGH, "a clear-out chips HIGH")
 	assert_eq(sm.get_state(), Agent.State.CARRY, "the dump is a one-tick press")
 	assert_false(sm._dump_target.is_finite(), "firing clears the dump target")
@@ -964,7 +964,7 @@ func test_pass_pressed_dump_in_is_a_soft_low_flip() -> void:
 	sm._dump_is_soft = true
 	var i := InputState.new()
 	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
-	assert_true(i.quick_shot_pressed, "a dump-in fires the one-tick quick release")
+	assert_true(i.quick_pass_pressed, "a dump-in fires the one-tick quick release")
 	assert_eq(i.elevation_level, ShotMechanics.ELEVATION_LOW, "a dump-in flips LOW")
 	assert_false(sm._dump_target.is_finite(), "firing clears the dump target")
 

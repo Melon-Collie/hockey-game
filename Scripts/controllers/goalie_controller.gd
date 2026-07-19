@@ -339,7 +339,7 @@ extends Node
 # than buffs. Sitting deeper opens the carrier's direct-shot angle: respecting
 # the back door is a genuine trade the shooter can exploit.
 @export var backdoor_release_time: float = 0.15         # s — receiver's one-timer swing
-@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 @export var backdoor_max_shooter_distance: float = 9.0  # m — shooter→goal eligibility
 
 # ── Beaten-wide post seal ────────────────────────────────────────────────────
