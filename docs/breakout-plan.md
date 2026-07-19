@@ -202,7 +202,7 @@ decision layer:
    needs an own-goal-risk model (a missed behind-net bank near our own
    cage) — a follow-up, not a drive-by.
 
-### Phase C — Wall play, both sides (GAP 3 + the rim's defensive complement)
+### Phase C — Wall play, both sides (GAP 3 + the rim's defensive complement) — landed
 
 1. `AIRoleBreakout` STRONG becomes a **post-holder**: the primary station is
    the strong half-wall at the hash marks (boards inset, facing up-ice);
@@ -230,7 +230,7 @@ decision layer:
    the real keep-in point skill, and it rides the existing pinch/valve
    machinery rather than new structure.
 
-### Phase D — Measure, calibrate, pin
+### Phase D — Measure, calibrate, pin — instrument landed
 
 Same methodology as the duel harness (#27):
 
@@ -241,9 +241,22 @@ Same methodology as the duel harness (#27):
   our zone within N seconds of retrieval), time-to-exit distribution — and,
   once Phase C.3 lands, the mirrored O-zone metric: keep-in % (rims/clears
   up the wall the point D holds at the line vs escapes).
-- Baseline BEFORE Phase A lands, re-measure after each phase — the same
-  before/after discipline as the perf work, so each phase's contribution is
-  measured, not assumed.
+- Baseline discipline: the instrument (`benchmarks/test_breakout_harness.gd`,
+  run with `-gselect=breakout`) was built after A–C landed, so the pre-rework
+  baseline was measured by running it against `main` in a worktree. First
+  tables (10 trials: corner ×2 depths, weak-wall rim-in, behind-net, dump-in
+  runway, mirrored):
+  * `main` (pre-rework):  clean 0/10, clear 2/10, cough 4/10, timeout 4/10
+  * A+B+C branch:         clean 0/10, clear 2/10, cough 4/10, timeout 4/10
+    (per-trial flips only — behind-net cough→clear on the branch)
+  HONEST READ: the staged aggregate hasn't moved yet at this sample size.
+  The known limits: races staged already-contested suppress RETRIEVAL by
+  design; still skaters can't express the wheel's has-a-step trigger; and
+  the dominant observed cough is the retriever's FIRST PASS into the
+  forecheck (pickup at ~0.2 s, intercepted at ~1.1 s) — which points the
+  next iteration at first-touch option selection under the new structure.
+  This is the Phase D loop working as intended: iterate against the
+  instrument, adjudicate feel in playtest.
 - Regression pins: the plays fire under their researched triggers (wheel
   wins when the retriever has a step; over wins when F1 overcommits strong;
   reverse beats the committed chaser; rim never turns over in the slot),

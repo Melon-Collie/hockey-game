@@ -63,7 +63,17 @@ const STRONG_MIN_LEAD_M: float = 3.0
 # both columns the same lane × potential argmax picks the wall when the
 # middle is contested (the classic breakout) and swings inside when the
 # wall lane is occupied or covered.
+#
+# 5v5 (breakout plan §C.1): STRONG is a WALL POST — the researched winger
+# holds the boards (the outlet that exists BECAUSE the wall is the one
+# protected lane, and the rim's receiver), adjusting only along the wall,
+# so the mid-seam column is generated ONLY when the carrier's own route
+# occupies the wall lane (his wheel — the one case the post must yield).
+# 3v3 keeps both columns (its rover outlet legitimately swings inside).
 const MID_SEAM_FRACTION: float = 0.5
+# "The carrier owns the wall lane": within the wall inset plus a body of
+# the boards on the outlet's side.
+const WALL_LANE_BAND_M: float = 3.0
 
 # Floor on the lane term so dead pass lanes rank candidates instead of
 # erasing them. lane_clear reads ~0 for EVERY candidate while a
@@ -176,13 +186,20 @@ static func _strong_wall_candidates(ctx: RoleContext, carrier_pos: Vector3,
 	# close to the line (then all samples collapse onto the blue line).
 	var bottom_depth: float = maxf(carrier_depth - STRONG_MIN_LEAD_M, blue_depth)
 	var top_depth: float = blue_depth
+	# 5v5 wall post (see the MID_SEAM doc): the mid-seam column exists only
+	# when the carrier's own route occupies the wall lane — otherwise the
+	# winger holds the boards and adjusts along them.
+	var carrier_on_wall: bool = signf(carrier_pos.x) == signf(side_x) \
+			and GameRules.RINK_HALF_WIDTH - absf(carrier_pos.x) < WALL_LANE_BAND_M
+	var wall_only: bool = ctx.team_size >= 5 and not carrier_on_wall
 	for i: int in STRONG_WALL_SAMPLES:
 		var t: float = 0.0
 		if STRONG_WALL_SAMPLES > 1:
 			t = float(i) / float(STRONG_WALL_SAMPLES - 1)
 		var depth: float = lerpf(bottom_depth, top_depth, t)
 		result.append(Vector3(wall_x, 0.0, own_dir * depth))
-		result.append(Vector3(mid_x, 0.0, own_dir * depth))
+		if not wall_only:
+			result.append(Vector3(mid_x, 0.0, own_dir * depth))
 	result.append(ctx.self_pos)
 	return result
 
