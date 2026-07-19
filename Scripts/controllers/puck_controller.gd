@@ -800,17 +800,18 @@ func _estimated_puck_speed() -> float:
 
 # Feed the host's authoritative loose-puck state to the Phase-0 shadow comparator
 # (dev-only; _shadow is null otherwise, so this is a cheap early return in release —
-# though it's never even reached there since exported builds skip creation). Only the
-# grounded, freely-sliding loose puck is in scope: carried / dead / airborne pucks
-# reset the comparator so each flight re-seeds (airborne needs gravity — a later
-# phase; carried is pinned). Logs a one-line digest on a throttle. Never mutates the
-# puck. `puck.linear_velocity` is authoritative here (host-side Jolt integration).
+# though it's never even reached there since exported builds skip creation). Any freely-
+# flying loose puck is in scope — grounded slides AND airborne flights (loft shots,
+# saucer passes, glove rebounds), since step_puck_3d now models gravity. Only a carried
+# or dead (pinned/frozen) puck resets the comparator so each flight re-seeds. Logs a
+# one-line digest on a throttle. Never mutates the puck. `puck.linear_velocity` is
+# authoritative here (host-side Jolt integration).
 func _observe_shadow(delta: float) -> void:
 	if _shadow == null:
 		return
-	# Puck-trajectory shadow (Phase 0): only the grounded, freely-sliding loose puck is
-	# in scope — carried / dead / airborne reset it so each flight re-seeds.
-	if puck.carrier != null or puck.pickup_locked or puck.is_airborne():
+	# Puck-trajectory shadow (Phase 0): any freely-flying loose puck is in scope (grounded
+	# or airborne) — only carried / dead (pinned) pucks reset it so each flight re-seeds.
+	if puck.carrier != null or puck.pickup_locked:
 		_shadow.reset()
 	else:
 		_shadow.observe(puck.get_puck_position(), puck.linear_velocity, _shadow_board_contact, delta)

@@ -160,6 +160,39 @@ func test_free_run_reseeds_on_decorrelation() -> void:
 	assert_lt(comp.div_max, 12.0, "divergence bounded near the reseed cap, not tens of metres")
 
 
+func test_airborne_flight_is_measured_and_bucketed() -> void:
+	# A loft shot: the real puck follows the analytic 3D model (chained step_puck_3d), so
+	# divergence stays ~0 AND the airborne samples are counted — the "height stuff" is now
+	# in scope, not reset away.
+	var comp := PuckShadowComparator.new()
+	comp.mode = PuckShadowComparator.Mode.FREE_RUN
+	var p := Vector3(0, AITrajectory.PUCK_REST_HEIGHT_M, 0)
+	var v := Vector3(5, 4.0, 0)  # launched up + forward
+	comp.observe(p, v, false, DT)  # seed
+	for _i in 90:
+		var s: Transform3D = AITrajectory.step_puck_3d(p, v, DT)
+		p = s.origin
+		v = s.basis.x
+		comp.observe(p, v, false, DT)
+	assert_gt(comp.airborne_samples, 0, "airborne ticks were measured, not reset away")
+	assert_lt(comp.div_max, 1e-3, "real == 3D model -> shadow tracks the arc (~0 divergence)")
+
+
+func test_grounded_puck_records_no_airborne_samples() -> void:
+	# A pure on-ice slide must not land in the airborne bucket.
+	var comp := PuckShadowComparator.new()
+	comp.mode = PuckShadowComparator.Mode.PER_TICK_STEP
+	var p := Vector3(0, AITrajectory.PUCK_REST_HEIGHT_M, 0)
+	var v := Vector3(6, 0, 0)
+	for _i in 10:
+		comp.observe(p, v, false, DT)
+		var s: Transform3D = AITrajectory.step_puck_3d(p, v, DT)
+		p = s.origin
+		v = s.basis.x
+	assert_gt(comp.samples, 0)
+	assert_eq(comp.airborne_samples, 0, "grounded slide records zero airborne samples")
+
+
 func test_per_tick_step_flags_boundary_clamp_divergence() -> void:
 	# The interaction PER_TICK_STEP exists to isolate: when the real puck steps OUTSIDE
 	# the boundary (a Jolt escape), the shadow's one-step prediction clamps it inside,

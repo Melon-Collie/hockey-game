@@ -115,9 +115,14 @@ gets *wrong* (measured on their own merits — see above). Both ride the same
 `AITrajectory` path, so both are testable in Phase 0.
 
 **Out (measured in later phases, each its own prototype):**
-- **Gravity / airborne loft** — `AITrajectory` is XZ-only; loft shots/saucer passes
-  aren't modeled. Add a Y channel (`vy -= GRAVITY_M_S2·dt`, land at
-  `PUCK_AIRBORNE_HEIGHT_M`, reuse `ShotMechanics.loft_y`) in a Phase-2 prototype.
+- ~~**Gravity / airborne loft**~~ — **DONE** (`AITrajectory.step_puck_3d`). The XZ atom
+  now has a vertical channel: airborne pucks integrate ballistically (`vy -=
+  GRAVITY_M_S2·dt`, no ice friction — no ice contact means no normal force), reflect off
+  the full-height boards in XZ, and land-and-slide at the rest height with vertical speed
+  killed (matching Puck.gd's pin — no vertical restitution). The comparator now measures
+  loft shots / saucer passes / glove rebounds instead of resetting on airborne, and
+  reports an `air_n` / `air_max` sub-bucket so airborne divergence is read separately from
+  the grounded slide. Branch test shared via `AITrajectory.is_puck_airborne`.
 - **Goalie / net / pipe collision** — not in `AITrajectory`. The goalie is *moving
   geometry* (the hard part); Phase 2. Net panels + goal pipes are static and simpler.
 - **Carried puck / pickup** — unchanged; possession stays host-arbitrated.

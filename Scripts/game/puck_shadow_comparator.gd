@@ -2,10 +2,12 @@ class_name PuckShadowComparator
 extends RefCounted
 
 # Phase-0 determinism go/no-go instrument (docs/netcode-phase0-shadow-puck-spec.md).
-# Runs a SHADOW puck — the analytic AITrajectory.step_puck model, the same one the AI
-# already trusts to match Jolt — alongside the authoritative Jolt puck, and
-# accumulates how far the two diverge. It NEVER drives the real puck: pure
-# measurement. Host-only, dev-only (the caller gates on a dev flag + is_host).
+# Runs a SHADOW puck — the analytic AITrajectory.step_puck_3d model (grounded slide +
+# the airborne gravity channel), the same family the AI already trusts to match Jolt —
+# alongside the authoritative Jolt puck, and accumulates how far the two diverge. It
+# NEVER drives the real puck: pure measurement. Host-only, dev-only (the caller gates on
+# a dev flag + is_host). Divergence is the full 3D distance, so loft shots / saucer
+# passes / glove rebounds contribute their vertical error too, not just the XZ slide.
 #
 # Two comparison modes (run a session in each; they answer different questions):
 #  - PER_TICK_STEP: every tick, step the shadow ONE tick from the real puck's CURRENT
@@ -78,6 +80,12 @@ var bounce_events: int = 0
 var bounce_angle_err_sum_deg: float = 0.0
 var real_escape_ticks: int = 0
 var free_run_reseeds: int = 0
+# Airborne sub-bucket: how many samples were taken while the real puck was off the ice,
+# and the worst divergence among them — the direct read on whether the gravity channel
+# (loft shots / saucer passes / glove rebounds) reconciles as well as the grounded slide.
+var airborne_samples: int = 0
+var airborne_div_max: float = 0.0
+var _real_airborne: bool = false
 
 
 # Drop the per-flight shadow so the next observe() re-seeds. Call on loose↔carried /
@@ -100,12 +108,17 @@ func reset_session() -> void:
 	bounce_angle_err_sum_deg = 0.0
 	real_escape_ticks = 0
 	free_run_reseeds = 0
+	airborne_samples = 0
+	airborne_div_max = 0.0
 
 
 # Feed one authoritative tick of the real (Jolt) loose puck. `board_contact` = the
 # real puck hit a board this tick (from Puck._on_body_entered classification).
 # Returns the shadow position for optional ghost rendering.
 func observe(real_pos: Vector3, real_vel: Vector3, board_contact: bool, dt: float) -> Vector3:
+	# Bucket this sample as airborne if the real puck is off the ice or moving vertically
+	# (the same test step_puck_3d uses to branch ballistic vs grounded).
+	_real_airborne = AITrajectory.is_puck_airborne(real_pos, real_vel)
 	var real_xz := Vector2(real_pos.x, real_pos.z)
 	# Containment: did Jolt leave the rink this tick? The shadow can't, by construction.
 	# NOTE: on the live host this usually reads 0 even during a bad rim-around, because
@@ -138,7 +151,7 @@ func observe(real_pos: Vector3, real_vel: Vector3, board_contact: bool, dt: floa
 		Mode.PER_TICK_STEP:
 			if _has_pending_pred:
 				_record_divergence(_pending_pred_pos.distance_to(real_pos))
-			var s: Transform3D = AITrajectory.step_puck(real_pos, real_vel, dt)
+			var s: Transform3D = AITrajectory.step_puck_3d(real_pos, real_vel, dt)
 			_pending_pred_pos = s.origin
 			_has_pending_pred = true
 			_shadow_pos = s.origin
@@ -152,7 +165,7 @@ func observe(real_pos: Vector3, real_vel: Vector3, board_contact: bool, dt: floa
 				_shadow_vel = real_vel
 				_seeded = true
 			else:
-				var s: Transform3D = AITrajectory.step_puck(_shadow_pos, _shadow_vel, dt)
+				var s: Transform3D = AITrajectory.step_puck_3d(_shadow_pos, _shadow_vel, dt)
 				_shadow_pos = s.origin
 				_shadow_vel = s.basis.x
 				var d: float = _shadow_pos.distance_to(real_pos)
@@ -176,6 +189,9 @@ func _record_divergence(d: float) -> void:
 	samples += 1
 	div_sum += d
 	div_max = maxf(div_max, d)
+	if _real_airborne:
+		airborne_samples += 1
+		airborne_div_max = maxf(airborne_div_max, d)
 	if _post_bounce_ticks > 0:
 		post_bounce_div_max = maxf(post_bounce_div_max, d)
 	else:
@@ -193,7 +209,8 @@ func avg_bounce_angle_err_deg() -> float:
 # One-line session digest for the F-overlay / log header.
 func summary() -> String:
 	return ("shadow-puck[%s]: n=%d avg=%.3fm max=%.3fm free_max=%.3fm bounce_max=%.3fm " +
-			"bounce_ang=%.1f° (%d) jolt_escapes=%d reseeds=%d") % [
+			"air_n=%d air_max=%.3fm bounce_ang=%.1f° (%d) jolt_escapes=%d reseeds=%d") % [
 		"per-tick" if mode == Mode.PER_TICK_STEP else "free-run",
 		samples, avg_divergence(), div_max, free_flight_div_max, post_bounce_div_max,
+		airborne_samples, airborne_div_max,
 		avg_bounce_angle_err_deg(), bounce_events, real_escape_ticks, free_run_reseeds]

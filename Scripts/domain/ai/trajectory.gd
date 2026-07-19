@@ -206,3 +206,51 @@ static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 	return _step(pos, vel, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
 			Vector3.ZERO, 0.0)
+
+
+# Puck rest height on the ice — disc bottom on y=0, cylinder half-height above (matches
+# Puck.ice_height / GameRules.PUCK_START_POS.y). A puck at this height with no vertical
+# speed is grounded; anything higher or moving vertically is airborne (ballistic).
+const PUCK_REST_HEIGHT_M: float = 0.0175
+# A puck this far above rest, OR with |vy| above this, integrates ballistically. Small
+# enough that any real loft (launch vy ≥ ~2 m/s) is airborne and a pinned-to-ice puck
+# (vy == 0) is grounded; large enough to ignore float noise on a resting puck.
+const _AIRBORNE_POS_EPS_M: float = 0.001
+const _AIRBORNE_VY_EPS_M_S: float = 0.05
+
+
+# step_puck with a vertical (gravity) channel — the airborne extension of the puck atom,
+# so loft shots, saucer passes, and rebounds off the goalie's glove are modeled too, not
+# just the grounded slide. Matches Jolt + Puck.gd:
+#  - AIRBORNE (off the ice or moving vertically): ballistic — gravity on Y, board
+#    reflection on XZ, and NO ice friction (no ice contact means no normal force, so a
+#    puck in flight keeps its horizontal pace).
+#  - LANDING: the puck lands and slides — Puck.gd zeroes linear_velocity.y and pins the
+#    height the instant it's back on the ice, so there is NO vertical restitution/bounce.
+#  - GROUNDED (at rest height, no vertical speed): identical to step_puck (ice friction +
+#    board reflection); the height passes through unchanged.
+# Returns (pos, vel) packed into a Transform3D (origin = pos, basis.x = vel) — the same
+# value-type, no-alloc convention as _step / step_puck.
+static func step_puck_3d(pos: Vector3, vel: Vector3, dt: float,
+		rest_height: float = PUCK_REST_HEIGHT_M) -> Transform3D:
+	if not is_puck_airborne(pos, vel, rest_height):
+		return step_puck(pos, vel, dt)
+	# Ballistic step: reuse _step (which reflects XZ off the rounded-corner boards and
+	# preserves Y) with a downward gravity accel and zero ice friction.
+	var stepped: Transform3D = _step(pos, vel, dt,
+			0.0, GameRules.PUCK_BOARD_BOUNCE,
+			Vector3(0.0, -GameRules.GRAVITY_M_S2, 0.0), 0.0)
+	var p: Vector3 = stepped.origin
+	var v: Vector3 = stepped.basis.x
+	if p.y <= rest_height:
+		p.y = rest_height
+		v.y = 0.0
+	return Transform3D(Basis(v, Vector3.ZERO, Vector3.ZERO), p)
+
+
+# Whether a puck at (pos, vel) integrates ballistically (off the ice or moving
+# vertically) vs slides on the ice. The branch step_puck_3d uses — exposed so callers
+# that bucket airborne vs grounded (the shadow comparator) share the exact same test.
+static func is_puck_airborne(pos: Vector3, vel: Vector3,
+		rest_height: float = PUCK_REST_HEIGHT_M) -> bool:
+	return pos.y > rest_height + _AIRBORNE_POS_EPS_M or absf(vel.y) > _AIRBORNE_VY_EPS_M_S
