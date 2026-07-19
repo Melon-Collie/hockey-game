@@ -21,6 +21,15 @@ extends GutTest
 # Trials are jittered deterministically (PlayerRules.stagger01) for sample
 # size without RNG.
 #
+# REAL DUMP FLIGHTS (v3): dump trials fire the puck from the warm carrier's
+# live position at trigger instead of teleporting it deep. The teleport gave
+# the forecheck a free head start equal to the dump's whole flight time —
+# the chaser-path trace showed our retriever charging honestly at full
+# stride and still losing every behind-net race, because the defense never
+# got the retreat window a real dump concedes. With flight restored, the
+# rim wraps the corner arc off the real board model and the retrieval race
+# is the one the live game actually plays.
+#
 # Each trial also records a TRACE: whether RETRIEVAL engaged, the first
 # touch, and the first team-0 release with its intent + compete scores
 # (from the duel harness's enriched release records) and its fate — the
@@ -39,6 +48,9 @@ const LIMIT_S: float = 12.0
 const STEP_S: float = 0.1
 const WARMUP_S: float = 1.2
 const JITTERS: int = 3
+# Post-launch re-catch lockout for scripted dumps (see the launch-grace
+# comment in _run_trial) — roughly the rim's flight to the corner.
+const SCRIPTED_DUMP_GRACE_S: float = 1.0
 
 var _rows: Array[Dictionary] = []
 # Calibration probe v1: every team-0 release's scored pass EV paired with its
@@ -75,11 +87,16 @@ func _jit(trial: int, salt: int, spread: float) -> float:
 
 func _run_trial(scenario: String, mirror: float, jitter: int,
 		warm_carrier: int, warm_carrier_pos: Vector3,
-		puck: Vector3, puck_vel: Vector3) -> void:
+		puck: Vector3, puck_vel: Vector3, dump_speed: float = 0.0,
+		chip_hang_s: float = 0.0, opts: Dictionary = {}) -> void:
 	var duel: RefCounted = Duel.new()
 	_add_rosters(duel, mirror)
 	# Seed the warmup possession: the opponents play LIVE (their cycle /
 	# their entry) while our five settle into the brain's own shape.
+	# opts.warm_vel seeds carrier momentum and opts.warmup_s shortens the
+	# settle — a wall carrier given a long warmup can (correctly!) decide
+	# the entry is bad and regroup to his own end, and then the scripted
+	# dump fires from a spot that no longer matches the scenario.
 	var wc: RefCounted = null
 	for s: RefCounted in duel.skaters:
 		if s.peer_id == warm_carrier:
@@ -87,15 +104,60 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 	wc.pos = Vector3(warm_carrier_pos.x * mirror, 0, warm_carrier_pos.z)
 	wc.blade = wc.pos
 	wc.prev_blade = wc.pos
+	var warm_vel: Vector3 = opts.get("warm_vel", Vector3.ZERO)
+	wc.vel = Vector3(warm_vel.x * mirror, 0, warm_vel.z)
 	duel.start(warm_carrier)
-	duel.run(WARMUP_S)
-	# The trigger event: the puck comes loose (a strip / bobble / dump),
-	# jittered so trials sample the neighborhood, not one frozen pose.
+	# Warm up tick-by-tick, cutting to the trigger the moment the carrier
+	# moves the puck himself — his release IS the dump moment (we script
+	# its target, not its timing). Running the full fixed warmup past a
+	# release fired the scripted dump from a mid-flight pass metres behind
+	# him, straight past his own (ungraced) stick.
+	var warm_ticks: int = int(float(opts.get("warmup_s", WARMUP_S)) / Duel.DT)
+	for _i: int in warm_ticks:
+		duel.step()
+		if duel.carrier_id != warm_carrier:
+			break
+	# The trigger event puts the puck loose, jittered so trials sample the
+	# neighborhood, not one frozen pose. Two forms:
+	#   dump_speed > 0 — a REAL dump: fired from the puck's live position
+	#     toward the (jittered) aim point, so the flight time is the
+	#     defense's honest retreat window and the rim wraps the corner arc
+	#     off the board model. chip_hang_s > 0 lofts it instead: airborne
+	#     (untouchable) for the hang, ground speed solved to land ON the aim
+	#     point — the over-the-traffic dump a flat 2D fire can't stage.
+	#   dump_speed == 0 — a local squirt (strip / bobble): the puck
+	#     teleports to the jittered spot with the given velocity.
 	duel.carrier_id = -1
-	duel.puck_pos = Vector3(
-			(puck.x + _jit(jitter, 11, 1.5)) * mirror, 0,
-			puck.z + _jit(jitter, 23, 1.5))
-	duel.puck_vel = Vector3(puck_vel.x * mirror, 0, puck_vel.z)
+	if dump_speed > 0.0 or chip_hang_s > 0.0:
+		var aim := Vector3(
+				(puck.x + _jit(jitter, 11, 1.5)) * mirror, 0,
+				puck.z + _jit(jitter, 23, 1.5))
+		var dir: Vector3 = aim - duel.puck_pos
+		dir.y = 0.0
+		if chip_hang_s > 0.0:
+			duel.puck_vel = dir / chip_hang_s
+			duel.airborne_ticks = int(chip_hang_s / Duel.DT)
+		else:
+			duel.puck_vel = dir.normalized() * dump_speed
+		# Launch grace for every opponent near the release point — the
+		# dumper and his point-blank support. Without it a trigger landing
+		# mid-warmup-pass fired the "dump" straight into the intended
+		# receiver's blade one tick later, and a wall dumper sprinting in
+		# his own rim's wake re-caught it the tick the production-length
+		# grace expired (his brain never CHOSE the dump, so the loose puck
+		# reads as a gift a stride away). The scripted launch gets a grace
+		# covering the flight to the corner: dump-and-chase pressures the
+		# RETRIEVER, it doesn't re-possess mid-flight.
+		for s: RefCounted in duel.skaters:
+			if s.team_id == 1 and Vector2(s.pos.x - duel.puck_pos.x,
+					s.pos.z - duel.puck_pos.z).length() < 4.0:
+				duel._release_grace[s.peer_id] = duel.ticks \
+						+ int(SCRIPTED_DUMP_GRACE_S / Duel.DT)
+	else:
+		duel.puck_pos = Vector3(
+				(puck.x + _jit(jitter, 11, 1.5)) * mirror, 0,
+				puck.z + _jit(jitter, 23, 1.5))
+		duel.puck_vel = Vector3(puck_vel.x * mirror, 0, puck_vel.z)
 	var releases_before: int = duel.releases.size()
 
 	var t: float = 0.0
@@ -106,9 +168,32 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 	var intercept_pos := Vector3.INF
 	var seen_releases: int = releases_before
 	var pending_probe: Dictionary = {}
+	var entered_zone: bool = dump_speed <= 0.0 and chip_hang_s <= 0.0
+	# Chaser-path trace (behind-net diagnosis): sample OUR elected chaser's
+	# body + agent state against the puck until first touch. First line is
+	# the trigger itself — where the dump actually launched from and the
+	# warm carrier's position there (a warmup release moves the launch).
+	var chaser_trace: Array[String] = []
+	if scenario == "dump-behind-net":
+		chaser_trace.append("trig puck(%.1f,%.1f) v(%.1f,%.1f) wc(%.1f,%.1f)" % [
+				duel.puck_pos.x, duel.puck_pos.z, duel.puck_vel.x, duel.puck_vel.z,
+				wc.pos.x, wc.pos.z])
 	while t < LIMIT_S:
 		duel.run(STEP_S)
 		t += STEP_S
+		if scenario == "dump-behind-net" and first_touch_peer == -1 \
+				and (t < 1.05 or int(roundf(t * 10.0)) % 5 == 0):
+			var elected: int = int(duel._prev_chase_by_team.get(0, -1))
+			var bit: String = "e:none"
+			if elected != -1:
+				var es: RefCounted = duel._skater(elected)
+				var st_name: String = "?"
+				if es.agent != null:
+					st_name = SkaterAgentStateMachine.State.keys()[es.agent._state]
+				bit = "%d %s (%.1f,%.1f) v%.1f" % [elected, st_name,
+						es.pos.x, es.pos.z, Vector2(es.vel.x, es.vel.z).length()]
+			chaser_trace.append("%4.1fs %s | puck(%.1f,%.1f)" % [
+					t, bit, duel.puck_pos.x, duel.puck_pos.z])
 		# Probe: pair each team-0 release with its fate — the next pickup
 		# (ours = completed, theirs = died) or an uncontrolled zone exit.
 		while seen_releases < duel.releases.size():
@@ -128,10 +213,21 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 		if first_touch_peer == -1 and cid != -1:
 			first_touch_peer = cid
 			first_touch_t = t
-		if duel.puck_pos.z < GameRules.BLUE_LINE_Z:
-			outcome = "clean-exit" \
-					if cid != -1 and duel.team_map.get(cid, -1) == 0 \
-					else "clear-exit"
+		# A dump launches near the blue line — an "exit" only counts after
+		# the puck has actually been established inside our zone.
+		if not entered_zone:
+			entered_zone = duel.puck_pos.z > GameRules.BLUE_LINE_Z + 2.0
+		if entered_zone and duel.puck_pos.z < GameRules.BLUE_LINE_Z:
+			# Clean = our carrier skates it out, OR our controlled PASS is
+			# in flight across the line (a breakout feed is a controlled
+			# exit; only rims/chips/deflections count as "clear").
+			var controlled: bool = cid != -1 and duel.team_map.get(cid, -1) == 0
+			if not controlled and cid == -1 and not duel.releases.is_empty():
+				var last_rel: Dictionary = duel.releases[-1]
+				controlled = int(last_rel.get("team", -1)) == 0 \
+						and String(last_rel.get("decision", "")).begins_with("PASS") \
+						and duel.ticks - int(last_rel.get("tick", 0)) < 180
+			outcome = "clean-exit" if controlled else "clear-exit"
 			break
 		if cid != -1 and duel.team_map.get(cid, -1) == 1:
 			outcome = "cough-up"
@@ -149,7 +245,8 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 	_rows.append({"scenario": scenario, "mirror": mirror, "jitter": jitter,
 			"outcome": outcome, "t": t, "retrieval": retrieval_seen,
 			"touch_peer": first_touch_peer, "touch_t": first_touch_t,
-			"release": first_release, "intercept": intercept_pos})
+			"release": first_release, "intercept": intercept_pos,
+			"chaser_trace": chaser_trace})
 
 
 func _intent_label(rec: Dictionary) -> String:
@@ -168,7 +265,7 @@ func _intent_label(rec: Dictionary) -> String:
 
 func _report() -> void:
 	gut.p("")
-	gut.p("=== Breakout harness v2 (organic warmup staging; %.0fs limit, %d trials) ===" % [
+	gut.p("=== Breakout harness v3 (organic warmup + real dump flights; %.0fs limit, %d trials) ===" % [
 			LIMIT_S, _rows.size()])
 	var counts: Dictionary = {}
 	var exit_times: Array[float] = []
@@ -184,6 +281,9 @@ func _report() -> void:
 				row.scenario, int(row.mirror), int(row.jitter), row.outcome,
 				row.t, "Y" if row.retrieval else "n",
 				int(row.touch_peer), float(row.touch_t), rel_bit])
+		if int(row.jitter) == 0 and not (row.chaser_trace as Array).is_empty():
+			for line: String in row.chaser_trace:
+				gut.p("      " + line)
 	# The completion curve: scored pass EV bucket vs realized completion.
 	if not _probe.is_empty():
 		var buckets: Array = [[0.0, 0.05], [0.05, 0.1], [0.1, 0.2], [0.2, 9.9]]
@@ -222,14 +322,21 @@ func test_breakout_scenarios() -> void:
 			_run_trial("cycle-turnover", mirror, j,
 					10013, Vector3(10.5, 0, 17.0),
 					Vector3(9.5, 0, 25.0), Vector3(1.0, 0, 2.0))
-			# Dump-in: their C carries the NZ, dumps it deep to our corner;
-			# the forecheck enters with real runway — RETRIEVAL country.
+			# Dump-in: their C carries the NZ and CHIPS it over the traffic
+			# into our corner — the lofted dump a flat 2D fire can't stage
+			# (a flat center-lane dump gets picked off, which is exactly
+			# why real dumps are chipped). Flight + hang is the defense's
+			# honest retreat window.
 			_run_trial("dump-in", mirror, j,
 					10011, Vector3(0.0, 0, 2.0),
-					Vector3(8.0, 0, 23.0), Vector3(2.0, 0, 8.0))
-			# Rimmed dump dying behind our net (wheel country).
+					Vector3(10.5, 0, 25.0), Vector3.ZERO, 0.0, 0.95)
+			# Wall entry + hard rim: their C drives up the boards and rims
+			# it from the true wall lane — the rim hugs the boards past the
+			# pinching winger's reach, wraps the corner arc, dies
+			# behind/beside our net (wheel country).
 			_run_trial("dump-behind-net", mirror, j,
-					10011, Vector3(0.0, 0, 2.0),
-					Vector3(2.0, 0, 28.2), Vector3(-4.0, 0, 0))
+					10011, Vector3(11.0, 0, 6.0),
+					Vector3(12.7, 0, 18.0), Vector3.ZERO, 17.0,
+					0.0, {"warmup_s": 0.6, "warm_vel": Vector3(0, 0, 7.0)})
 	_report()
 	assert_eq(_rows.size(), JITTERS * 6, "all trials ran")

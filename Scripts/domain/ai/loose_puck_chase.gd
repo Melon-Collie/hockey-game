@@ -43,6 +43,71 @@ const HYSTERESIS_S: float = 0.2
 # election lead.
 const MAX_LEAD_S: float = 0.5
 
+# ── Path race (fast pucks) ───────────────────────────────────────────────────
+# Above FAST_PUCK_SPEED the puck's path diverges from its position inside
+# the race horizon, and every current-position read lies: the man chasing a
+# rim's tail from a metre back "wins" a race he can never finish (the puck
+# outruns him too), while the far-side skater whose true intercept is where
+# the wrap comes to him reads as hopeless — so he declines the chase and the
+# rim rides the whole zone untouched. Fast pucks therefore race on the
+# friction + board-aware predicted path: at each step T of the walk, a
+# skater makes the intercept iff his calibrated ETA to that point fits
+# inside T. Slow pucks keep the cheap bounded-lead read (path ≈ position).
+const FAST_PUCK_SPEED_M_S: float = 4.0
+const RACE_LOOKAHEAD_S: float = 3.0
+# 0.25 s steps — fine enough that the RETRIEVAL enter margin (0.25 s) can
+# still resolve between quantized path times.
+const RACE_STEPS: int = 12
+
+
+static func is_fast_puck(puck_vel: Vector3) -> bool:
+	return puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z \
+			> FAST_PUCK_SPEED_M_S * FAST_PUCK_SPEED_M_S
+
+
+# The shared predicted path for one race — memoized on the exact puck state,
+# because every consumer in one AI tick (both teams' elections, the brain's
+# RETRIEVAL read, each chaser's race-lost decline) races the SAME puck: one
+# walk per tick, not one per caller. Callers must treat the returned array
+# as read-only.
+static var _traj_cache_pos: Vector3 = Vector3.INF
+static var _traj_cache_vel: Vector3 = Vector3.INF
+static var _traj_cache: Array[Vector3] = []
+
+
+static func race_trajectory(puck_pos: Vector3, puck_vel: Vector3) -> Array[Vector3]:
+	if puck_pos == _traj_cache_pos and puck_vel == _traj_cache_vel:
+		return _traj_cache
+	_traj_cache_pos = puck_pos
+	_traj_cache_vel = puck_vel
+	_traj_cache = AITrajectory.predict_puck(puck_pos, puck_vel, RACE_STEPS,
+			RACE_LOOKAHEAD_S / float(RACE_STEPS))
+	return _traj_cache
+
+
+# Earliest time (s) this skater can meet the puck ON its predicted path.
+# Quantized to the walk's step times. When no step is makeable the race
+# resolves at the settled end of the walk: the skater collects the puck
+# where it stops (or exits the horizon), arriving no earlier than the
+# horizon itself.
+static func path_intercept_time(traj: Array[Vector3], step_dt: float,
+		skater_pos: Vector3, skater_vel: Vector3, max_speed: float) -> float:
+	for i: int in traj.size():
+		var t_step: float = (i + 1) * step_dt
+		# Exact prune: even at a flying top-speed start, ETA ≥ dist / v_max —
+		# skip the full phase-model call when that bound alone misses T.
+		var dx: float = traj[i].x - skater_pos.x
+		var dz: float = traj[i].z - skater_pos.z
+		var reach: float = max_speed * t_step
+		if dx * dx + dz * dz > reach * reach:
+			continue
+		if AIActionScoring.time_to_arrive(
+				skater_pos, traj[i], skater_vel, max_speed) <= t_step:
+			return t_step
+	var horizon: float = traj.size() * step_dt
+	return maxf(horizon, AIActionScoring.time_to_arrive(
+			skater_pos, traj[-1], skater_vel, max_speed))
+
 
 # Returns the peer_id that should chase the loose puck for this team, or
 # -1 if the team has no eligible skater.
@@ -67,6 +132,11 @@ static func elect(
 		puck_playable: bool = true) -> int:
 	if not puck_playable:
 		return -1
+	# Fast puck → the shared path walk (see the path-race block above).
+	var traj: Array[Vector3] = []
+	if is_fast_puck(puck_vel):
+		traj = race_trajectory(puck_pos, puck_vel)
+	var step_dt: float = RACE_LOOKAHEAD_S / float(RACE_STEPS)
 	var best_pid: int = -1
 	var best_t: float = INF
 	for pid: int in teammate_ids:
@@ -78,7 +148,9 @@ static func elect(
 		var caps: AISkaterCaps = caps_by_peer.get(pid)
 		var max_speed: float = caps.max_speed if caps != null \
 				else AIActionScoring.SKATER_REF_SPEED_M_S
-		var t: float = _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)
+		var t: float = path_intercept_time(traj, step_dt, s.position, s.velocity, max_speed) \
+				if not traj.is_empty() \
+				else _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)
 		# Incumbent hysteresis: challengers pay HYSTERESIS_S, so the
 		# current chaser keeps the role unless beaten by the margin.
 		if pid != prev_elected:
@@ -102,6 +174,10 @@ static func best_intercept_time(
 		puck_pos: Vector3,
 		puck_vel: Vector3,
 		caps_by_peer: Dictionary = {}) -> float:
+	var traj: Array[Vector3] = []
+	if is_fast_puck(puck_vel):
+		traj = race_trajectory(puck_pos, puck_vel)
+	var step_dt: float = RACE_LOOKAHEAD_S / float(RACE_STEPS)
 	var best_t: float = INF
 	for pid: int in ids:
 		var s: SkaterNetworkState = skater_states.get(pid)
@@ -110,8 +186,9 @@ static func best_intercept_time(
 		var caps: AISkaterCaps = caps_by_peer.get(pid)
 		var max_speed: float = caps.max_speed if caps != null \
 				else AIActionScoring.SKATER_REF_SPEED_M_S
-		var t: float = _intercept_time(
-				s.position, s.velocity, puck_pos, puck_vel, max_speed)
+		var t: float = path_intercept_time(traj, step_dt, s.position, s.velocity, max_speed) \
+				if not traj.is_empty() \
+				else _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)
 		if t < best_t:
 			best_t = t
 	return best_t

@@ -277,16 +277,55 @@ Same methodology as the duel harness (#27):
      chase elections, the RETRIEVAL race read, station races. Pinned in
      test_time_to_arrive_calibration (open-ice identity, cross-cage cost
      bounds, alley traverse, the honest behind-net race loss).
-  3. **Remaining behind-net finding (next):** with the read honest, the
-     harness still shows our elected chaser never getting first touch on
-     behind-net dumps — the residual suspect is chase EXECUTION around the
-     cage (steering's net detour only engages from behind the line), partly
-     masked by a harness approximation (no body-vs-net collision). Trace
-     the elected chaser's path next iteration.
-  4. **Calibration probe v1 landed** (release-fate attribution in the
+  3. ~~Behind-net chase execution~~ — **RESOLVED (iteration 3), in two
+     parts.** The chaser-path trace EXONERATED the execution layer: the
+     elected chaser charged at full stride on an honest route and correctly
+     read a race the forecheck had already won — because the instrument's
+     teleported dump skipped the flight, spotting the forecheck a free head
+     start equal to the whole flight time. **Instrument v3** restores real
+     dumps: fired from the warm carrier's live position (his own release
+     moment IS the trigger when he moves it first), a CHIP variant in the
+     duel harness (airborne = untouchable for the hang, landing speed loss —
+     the over-traffic dump a flat 2D fire can't stage), rims wrapping the
+     real corner arc, flight-length launch grace, and release-aware exit
+     classification (a controlled PASS in flight across the line is clean).
+  4. **The rim race exposed a real model hole — LANDED as the path race.**
+     With real rims staged, the elected chaser dithered CHASE↔OFF_PUCK at
+     walking pace while the rim rode the zone: `loose_puck_race_lost` (and
+     the election's coarse lead) raced ETAs to the puck's CURRENT position,
+     so the dumper tail-chasing the rim a metre back "won" a race the puck
+     itself outruns, while the far-side skater whose true intercept is where
+     the wrap comes to him read as hopeless and declined. Fast pucks
+     (> 4 m/s) now race on the friction + board-aware predicted path
+     (`AILoosePuckChase.race_trajectory` — memoized per puck state, one walk
+     per tick shared by every consumer; `path_intercept_time` with an exact
+     dist/v_max prune): the election, the brain's RETRIEVAL read, and the
+     race-lost decline all inherit it from the same seam, so they can never
+     disagree. Pinned in test_loose_puck_chase (rim elects the downstream
+     skater over the tail-chaser; parked-in-path intercept reads the puck's
+     arrival, not the skate distance; race-lost A/B with settled-puck
+     control). Effect in the harness: the elected chaser commits from the
+     first sample, the election hands off cleanly across the wrap, and the
+     far-side D intercepts at the wall. ai_perf A/B'd same-session: within
+     noise after memoization. (The container-duel pin was converted to
+     check resolution LIVE — the winning carrier now collects his own dump
+     behind the net-less harness goal line and wraps up-ice, and the
+     defender's honest path-intercept counters; the final-frame assert was
+     pinning the missing net, not the duel.)
+  5. **Calibration probe v1 landed** (release-fate attribution in the
      harness): completed/fired by scored pass EV. First thin read (13
      fires): ev[0–.05) 2/5, ev[.05–.10) 0/4, ev[.10–.20) 3/4 — roughly
      EV-ordered; grow the trial matrix before deriving constants from it.
+     (v3 staging changed the mix — n still too thin to fit.)
+- **v3 table** (18 trials, real dump flights): clean 6, clear 1, cough 11,
+  timeout 0 | retrieval 18/18, 7 exits mean 4.8 s. Behind-net trials now
+  play the intended sequence end-to-end: rim wraps the corner arc, the
+  chaser commits immediately, first touch is OURS in 4/6 (one clean exit
+  via a behind-net CARRY pickup → BreakD2 — the wheel country working).
+  Remaining behavioral finding for a future pass: **no DZ wall-kill for
+  wingers** — nobody steps TO the boards to deaden an incoming rim (the
+  defensive mirror of the O-zone point keep-in), so hot rims are chased to
+  where they slow rather than being cut off at the half-wall.
 
 ## 4. Non-goals
 

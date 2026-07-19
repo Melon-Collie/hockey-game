@@ -114,6 +114,13 @@ var perf_tick_us: Array[int] = []
 var puck_pos: Vector3 = Vector3.ZERO
 var puck_vel: Vector3 = Vector3.ZERO
 var carrier_id: int = -1
+# Airborne CHIP support: while > 0 the puck is in the air — constant ground
+# velocity (ballistic track), no ice friction, no pickups (no bot volunteers
+# a deflect) — then it lands, keeping LANDING_SPEED_KEEP of its pace (the
+# bounce/skid loss). Scenario harnesses set this to hang_time / DT when
+# staging a lofted dump; 0 (the default) is the ordinary ice puck.
+var airborne_ticks: int = 0
+const LANDING_SPEED_KEEP: float = 0.6
 var ticks: int = 0
 var move_cfg: SkaterMovementRules.MovementConfig
 # Rolling puck positions for the puppets' reaction-delayed read.
@@ -328,6 +335,22 @@ func step() -> void:
 				sweep.y = 0.0
 				puck_vel = sweep.limit_length(STRIP_SQUIRT_M_S)
 				break
+	elif airborne_ticks > 0:
+		# In the air: ballistic ground track, untouchable, lands with a
+		# bounce/skid speed loss. Rink clamp still applies (a chip into the
+		# glass drops at the boards).
+		airborne_ticks -= 1
+		puck_pos += puck_vel * DT
+		var clamped_air: Vector2 = GameRules.clamp_to_rink_inner(
+				Vector2(puck_pos.x, puck_pos.z))
+		if clamped_air.x != puck_pos.x or clamped_air.y != puck_pos.z:
+			airborne_ticks = 0
+			var outward_air := Vector2(puck_pos.x - clamped_air.x, puck_pos.z - clamped_air.y)
+			puck_vel = PuckCollisionRules.board_rescue_velocity(
+					puck_vel, outward_air, BOARD_RESTITUTION)
+			puck_pos = Vector3(clamped_air.x, puck_pos.y, clamped_air.y)
+		if airborne_ticks == 0:
+			puck_vel *= LANDING_SPEED_KEEP
 	else:
 		var speed: float = Vector2(puck_vel.x, puck_vel.z).length()
 		if speed > 0.0:
