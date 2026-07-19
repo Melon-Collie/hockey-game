@@ -887,13 +887,18 @@ func _probe_goalie_false_positives() -> void:
 
 
 # True if `body` is (or is under) one of the goalie nodes — Jolt reports the goalie's
-# StaticBody3D part, which sits beneath the Goalie node.
+# StaticBody3D part, which sits beneath the Goalie node. Compares by identity per goalie
+# rather than `body in goalies`: `goalies` is a TypedArray[Goalie], and `in` / find() on it
+# validates the needle's type, throwing on a plain Node (the StaticBody3D part we walk up).
 static func _body_belongs_to_a_goalie(body: Node, goalies: Array) -> bool:
-	var n: Node = body
-	while n != null:
-		if n in goalies:
-			return true
-		n = n.get_parent()
+	for g: Node in goalies:
+		if g == null:
+			continue
+		var n: Node = body
+		while n != null:
+			if n == g:
+				return true
+			n = n.get_parent()
 	return false
 
 
