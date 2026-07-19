@@ -205,11 +205,17 @@ Once the loose puck is a deterministic sim both sides run:
   puck stays on the carrier's stage-3 timeline. Stale data (> `PUCK_PREDICT_MAX_S`)
   falls back to the legacy interpolation path, which also remains the shooter's
   trajectory-prediction reconcile target for now.
-- **Phase 4 — simplify.** Delete the now-dead Jolt puck config and the puck-specific
-  netcode special-cases (interpolate-in-the-past becomes fallback-only today; the
-  stage-4 conditional lead, handoff slew, and the shooter's separate client-Jolt
-  trajectory-prediction path all collapse into the one predicted mode). The puck's
-  netcode is now the skater's: predict + reconcile.
+- **Phase 4 — simplify. 4a DONE, 4b gated on the playtest.** 4a (landed): the
+  shooter's trajectory prediction swapped from client Jolt onto the shared analytic
+  step (`_advance_local_trajectory` — same solver, sub-stepping, and frame geometry
+  as the host drive; goalie = hold, frame = keep simulating), making client Jolt
+  fully inert (the client puck body is frozen in every mode); the stage-4
+  conditional-lead machinery and the dead lead exports deleted outright. 4b (after
+  the playtest proves Phase 3): collapse the trajectory mode into the one predicted
+  mode (needs a local-release seed), delete the handoff slew and shrink the
+  interpolation fallback to hold-at-newest, remove the `PUCK_CLIENT_PREDICTION`
+  escape hatch, and retire the Jolt puck node itself (a .tscn change). The puck's
+  netcode is then the skater's: predict + reconcile.
 
 ## Recommendation
 

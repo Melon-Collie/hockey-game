@@ -8,24 +8,6 @@ func shot_power_sensitivity() -> float:
 	return net_shot_power_sensitivity
 
 @export var extrapolation_max_ms: float = 50.0
-# Forward-projection toward host-present, 0..1 (see _interpolate). Held at 0:
-# pure interpolate-in-the-past renders remote bodies a FULL interp_delay behind
-# host-present, which is exactly what the lag-comp rewind assumes
-# (LagCompRewind.remote_view_time subtracts the full interp_delay). A non-zero
-# lead renders closer to present but DESYNCS render from that rewind — the host
-# then validates hit/pickup/poke claims against a remote position up to
-# interp_delay/2 behind where the claimant actually saw it, so contested plays
-# miss (worst during jitter, when interp_delay spikes). 0 keeps render == rewind:
-# the standard predict-self / interpolate-remote / server-lag-comp model. The
-# SmoothDamp stage still absorbs correction error.
-#
-# SUPERSEDED for forward prediction by stage-3 Constants.REMOTE_FORWARD_PREDICT_FRACTION
-# (see _interpolate): that leads the body via INTENT-driven integration
-# (SkaterMovementRules.integrate_forward) instead of this raw-velocity render_time
-# shift, and the host integrates the hit-claim rewind by the same depth so it stays
-# render == rewind even when non-zero. Keep THIS export at 0 — it rides the buffer
-# edge (raw dead-reckon) and breaks the claim match.
-@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the remote body position. Larger =
 # smoother corrections, more chase lag; smaller = snappier, jumpier.
 @export var position_smooth_time: float = 0.05
@@ -317,7 +299,7 @@ func _interpolate(delta: float) -> void:
 	# fraction 0 == legacy "interpolate in the past"; 1 == render at present (full
 	# ~interp_delay of dead-reckon). Scales with interp_delay, so it tracks RTT/jitter.
 	var render_time: float = NetworkManager.estimated_host_time() \
-			- interp_delay * (1.0 - extrapolation_lead_fraction)
+			- interp_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
 	is_extrapolating = bracket != null and bracket.is_extrapolating
@@ -388,12 +370,11 @@ func _interpolate(delta: float) -> void:
 		interpolated.brake_intent = to_state.brake_intent
 		interpolated.hit_committed = to_state.hit_committed
 		interpolated.sprint_active = to_state.sprint_active
-		# render_time is led toward present by extrapolation_lead_fraction, so the
-		# hermite result already sits close to the host's live pose (or, past the
-		# newest sample, the is_extrapolating branch dead-reckons it). The position
-		# error from a wrong lead is absorbed by the SmoothDamp stage below — the
-		# old "interpolate strictly in the past" rule was relaxed once that smoother
-		# replaced the snap-prone steady advance. blade/top_hand are upper_body-local
+		# The hermite result sits a full interp_delay in the past (or, past the
+		# newest sample, the is_extrapolating branch dead-reckons it); the stage-3
+		# intent integration below is what carries the body toward present. Any
+		# correction error is absorbed by the SmoothDamp stage. blade/top_hand are
+		# upper_body-local
 		# and ride the body through the scene tree, so they need no projection.
 	# Stage-3 forward prediction: intent-integrate the interpolated-past body toward
 	# host-present so a remote reads at its true closing distance instead of a full

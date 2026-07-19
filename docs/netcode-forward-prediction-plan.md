@@ -243,21 +243,13 @@ can't run headless, so networking feel is verified on the developer's machine.
    migration while the puck lead is parked (see stage 4).
 4. **Conditional puck lead** *(built on the experimental branch)* +
    **goalie spectator pose-lead** *(deferred — see below)*.
-   - *Puck lead:* the loose puck reuses its existing lead machinery (ice-friction
-     dead-reckon + board gate), driven by its own
-     `Constants.PUCK_FORWARD_LEAD_FRACTION` and gated by `_blade_lead_scale`
-     — the lead eases to 0 as any blade nears the puck, so it renders at the past
-     interp instant exactly where pickup/poke claims fire. That keeps render ==
-     rewind **with no host-side change** (the host already rewinds the puck to the
-     past; the client just renders it there whenever a claim can happen).
-     **PARKED at fraction 0.0 for the playtest** (skaters stay at 1.0): the
-     blade-eased collapse regresses render time non-monotonically on fast
-     incoming pucks (the artifact class the handoff slew exists to prevent),
-     and the deterministic-puck migration replaces this lead outright — the
-     clean playtest signal is "present-time skating" without collapse artifacts
-     contaminating the read. The machinery stays wired for an A/B (set the
-     constant > 0; the buffer prune and the extrapolation canary are already
-     lead-aware).
+   - *Puck lead:* **DELETED (Phase 4a).** The blade-eased conditional lead was
+     built, parked at fraction 0 (its collapse regresses render time
+     non-monotonically on fast incoming pucks), and then superseded outright by
+     Phase-3 client puck prediction — the loose puck now renders at ~host
+     present via the shared analytic sim, with claims validated at the stamp,
+     which is strictly better than any eased lead. The machinery was removed
+     rather than left dormant.
    - *Goalie pose-lead — DEFERRED.* Lower value (spectator-only cosmetic) and a
      real footgun: the shooter's shot is already lag-comp'd against the goalie
      they saw, so leading the goalie for the shooter would make them aim at a

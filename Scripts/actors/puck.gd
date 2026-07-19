@@ -309,7 +309,13 @@ func set_server_mode(is_server: bool) -> void:
 func set_client_prediction_mode(active: bool) -> void:
 	if _is_server:
 		return
-	freeze = not active
+	# Phase 4a: the shooter's client prediction is analytic (the controller
+	# advances the body directly with the shared solver), so the client puck is
+	# frozen in EVERY mode — Jolt never integrates or collides it anywhere,
+	# mirroring the host under the drive. "Prediction mode" now only means the
+	# controller owns motion; leaving it zeroes the velocity store and the
+	# goal-line clamp exactly as before.
+	freeze = true
 	if not active:
 		linear_velocity = Vector3.ZERO
 		_clamp_at_goal_line = false

@@ -61,21 +61,6 @@ const _HANDOFF_MIN_SPEED: float = 2.0
 # snapping — the expected timeline offset a fast puck carries, which the slew
 # (not the position smoother) is responsible for absorbing.
 const _ALONG_SNAP_TIME_S: float = 0.3
-# Loose-puck forward lead toward host-present, 0..1 (see _interpolate), mirroring
-# RemoteController so a chasing skater and the loose puck share a timeline. Held
-# at 0 so the puck renders a FULL interp_delay behind host-present — matching the
-# lag-comp pickup/poke rewind (LagCompRewind.remote_view_time subtracts the full
-# interp_delay). A non-zero lead renders the puck closer to present but makes the
-# host validate grabs against a puck up to interp_delay/2 behind where the
-# claimant reached for it, so pickups miss — badly during jitter, when
-# interp_delay spikes. The SmoothDamp below still absorbs bounce overshoot.
-#
-# SUPERSEDED by stage-4: _interpolate now leads via Constants.PUCK_FORWARD_LEAD_FRACTION
-# (decoupled from the skater fraction, parked at 0 — see that constant) gated by
-# _blade_lead_scale, which eases the lead to 0 as a blade nears so render == rewind
-# holds where pickups fire — this raw export had no such gate and is no longer read.
-# Left at 0.
-@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the loose-puck position. Slightly above
 # the skater's so bounce overshoot blends out cleanly.
 @export var position_smooth_time: float = 0.06
@@ -83,10 +68,6 @@ const _ALONG_SNAP_TIME_S: float = 0.3
 # board within the lead window, stop leading for that frame and hold at the newest
 # authoritative position instead of projecting through the boards (see _interpolate).
 @export var stop_extrapolation_at_boards: bool = true
-# Extra friction applied during trajectory prediction to compensate for any
-# divergence between client and host Jolt friction. Set to 0 while both run
-# identical physics; tune upward if free-puck trajectories drift apart.
-@export var prediction_extra_friction: float = 0.0
 @export var carry_smoothing_speed: float = 80.0
 # Optimistic (visual-only) pickup: a loose pickup is treated as uncontested —
 # safe to attach locally before the host confirms — only when no other skater's
@@ -123,6 +104,10 @@ const _PROVISIONAL_TIMEOUT_S: float = 0.3     # floor; scaled up by RTT in try_p
 var _prev_puck_pos: Vector3 = Vector3.ZERO
 var _state_buffer: Array[BufferedPuckState] = []
 var _predicting_trajectory: bool = false
+# True while the shooter's predicted puck is HELD at a goalie contact inside the
+# post-contact window (the analytic advance is suspended; the save outcome is a
+# host decision the client never re-derives). Reset on trajectory entry/exit.
+var _trajectory_hold: bool = false
 var _pending_local_release: bool = false  # true from local release until host confirms carrier == -1
 # Hard deadline (session-relative seconds, NetworkManager.local_time base) past
 # which _pending_local_release force-clears even without a confirming snapshot.
@@ -247,10 +232,11 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 			# The goalie provider is forwarded in set_goalie_provider.
 			puck.set_analytic_drive_enabled(true)
 	else:
-		puck.puck_touched_goalie.connect(_on_client_puck_hit_goalie)
-		puck.puck_touched_post.connect(_on_client_puck_hit_post)
-		# Phase-3 loose-puck prediction scratch (built once; the predictor runs
-		# per physics frame and must allocate nothing).
+		# Phase-3/4a prediction scratch (built once; the loose-puck predictor and
+		# the shooter's analytic trajectory advance run per physics frame and
+		# must allocate nothing). No Jolt contact-signal wiring: the client puck
+		# is frozen in every mode — contacts are detected analytically inside
+		# the advances themselves.
 		_predict_frame_scratch = PuckGeometryCollision.Result.new()
 		_predict_tick_result = PuckAuthorityRules.TickResult.new()
 		_predict_goalie_contact = GoalieContactDetector.Contact.new()
@@ -334,25 +320,28 @@ func _physics_process(delta: float) -> void:
 		is_extrapolating = false
 		_smooth_initialized = false
 		if NetworkTelemetry.instance:
-			# "post_contact" = inside the RTT wait window after a goalie/post hit
-			# (goalie: frozen at the pad; post: still simulating the local bounce).
+			# "post_contact" = inside the RTT wait window after a goalie/frame hit
+			# (goalie: held at the pad; post/net: still simulating the local bounce).
 			NetworkTelemetry.instance.puck_mode = "post_contact" \
 					if _post_contact_timer >= 0.0 else "predicting"
 		if _post_contact_timer >= 0.0:
 			_post_contact_timer -= delta
 			if _post_contact_timer < 0.0:
-				# Suppression window expired: buffer has post-bounce data. Hand back to
-				# interpolation; the next _interpolate reseeds the position smoother from
-				# the puck's held (goalie) or Jolt-simulated (post) spot and seeds the
-				# render-time slew, so the timeline eases back to the interpolated past
-				# instead of the puck jumping backward along its flight — off a goalie
-				# freeze the seeded lead is ~0 (stationary puck) and the cross-track
-				# smoother alone carries the puck out along the host's rebound line.
+				# Suppression window expired: buffer has post-bounce data. Hand back
+				# to the loose-puck path (_predict_loose, or the interpolation
+				# fallback), which reseeds the position smoother from the puck's held
+				# (goalie) or locally-bounced (frame) spot.
 				_predicting_trajectory = false
+				_trajectory_hold = false
 				_handoff_slew_pending = true
 				puck.set_client_prediction_mode(false)
-		if _predicting_trajectory and prediction_extra_friction > 0.0:
-			puck.set_puck_velocity(puck.get_puck_velocity() * pow(1.0 - prediction_extra_friction, delta))
+			elif not _trajectory_hold:
+				# Frame bounces keep simulating through the window (static geometry
+				# on the SAME solver as the host — the local rebound IS the host's);
+				# a goalie hold does not (the save outcome is a host decision).
+				_advance_local_trajectory(delta)
+		elif _predicting_trajectory:
+			_advance_local_trajectory(delta)
 
 # ── Lag Compensation ─────────────────────────────────────────────────────────
 # Called by GameManager after validating a client pickup claim against the
@@ -700,6 +689,7 @@ func notify_local_release(direction: Vector3, power: float, rtt_ms: float) -> Ve
 	_arm_provisional_lockout()  # post-release reattach cooldown — don't optimistically re-grab
 	_clear_handoff_slew()
 	_predicting_trajectory = true
+	_trajectory_hold = false
 	_pending_local_release = true
 	_pending_local_release_deadline = NetworkManager.local_time() + _PENDING_RELEASE_TIMEOUT_S
 	_shot_rtt_ms = rtt_ms
@@ -730,6 +720,7 @@ func notify_local_nudge(velocity: Vector3, rtt_ms: float) -> void:
 	_arm_provisional_lockout(puck.nudge_cooldown)
 	_clear_handoff_slew()
 	_predicting_trajectory = true
+	_trajectory_hold = false
 	_pending_local_release = true
 	_pending_local_release_deadline = NetworkManager.local_time() + _PENDING_RELEASE_TIMEOUT_S
 	_shot_rtt_ms = rtt_ms
@@ -832,31 +823,6 @@ func _is_pickup_contested(local_skater: Skater) -> bool:
 		if s.get_blade_contact_global().distance_to(puck_pos) <= contest_danger_radius:
 			return true
 	return false
-
-
-# Stage-4 loose-puck lead gate (see _interpolate): 1.0 in open ice — full forward
-# lead, the puck sits at ~present coherent with the forward-predicted skaters —
-# easing to 0.0 as ANY blade closes on the puck. Dropping the lead near a blade is
-# what preserves render == rewind exactly where pickup/poke claims happen: the host
-# rewinds the puck to the past interp instant, so the puck the claimant reaches for
-# must be there too. The ease is subtle for the slow loose pucks pickups target
-# (present-vs-past offset = puck_speed × interp_delay); a fast puck near a blade is a
-# reception/deflect, host-authoritative anyway. ALL skaters (incl. local) count, so
-# the local player's own grab regime is non-leading. Invalid getter → 0 (no lead,
-# the render == rewind-safe fallback). Cheap value-type math, hot-path safe.
-const _LEAD_DROP_NEAR_M: float = 0.7  # ≥ pickup reach: at claim range the lead is fully off
-const _LEAD_DROP_FAR_M: float = 1.8   # beyond contest range: full lead
-func _blade_lead_scale(puck_pos: Vector3) -> float:
-	if not _skater_getter.is_valid():
-		return 0.0
-	var nearest_sq: float = INF
-	for s: Skater in _skater_getter.call():
-		if not is_instance_valid(s) or s.is_ghost:
-			continue
-		var d_sq: float = s.get_blade_contact_global().distance_squared_to(puck_pos)
-		if d_sq < nearest_sq:
-			nearest_sq = d_sq
-	return smoothstep(_LEAD_DROP_NEAR_M, _LEAD_DROP_FAR_M, sqrt(nearest_sq))
 
 
 # During interpolation the RigidBody is frozen (velocity ~0), so read the host's
@@ -1020,44 +986,6 @@ func _resolve_peer_id(skater: Skater) -> int:
 		return -1
 	return _peer_id_resolver.call(skater)
 
-func _on_client_puck_hit_goalie(_goalie: Goalie) -> void:
-	if not _predicting_trajectory or _post_contact_timer >= 0.0:
-		return
-	# Freeze-and-wait: a locally simulated rebound off a goalie is essentially
-	# always wrong — the rendered goalie sits interp_delay + RTT/2 in the past,
-	# and the host's outcome isn't raw restitution anyway (GoalieSaveRules
-	# deadens chest contacts, holds glove catches, steers pad rebounds
-	# cornerward — controller logic this client doesn't run), so letting Jolt
-	# play our own bounce animates a rebound that's wrong in KIND, then has to
-	# be corrected. Instead the puck holds at the contact point ("stuck in the
-	# pads") while the window below waits out the round trip for the host's
-	# authoritative post-bounce data; the slewed handoff then carries it out
-	# along the true line — and if the host actually deadened/smothered it, the
-	# freeze already IS the correct visual. Window sizing: our predicted bounce
-	# leads the host's by ~RTT/2 and the first post-bounce snapshot takes
-	# another RTT/2 to arrive, so RTT + one broadcast of slack is the earliest
-	# the buffer can hold the truth. Ending prediction immediately instead
-	# would blend toward pre-bounce buffer positions — the puck would slide
-	# backward into the goalie and replay the save.
-	_pending_local_release = false
-	_pending_local_release_deadline = -1.0
-	_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
-	puck.set_client_prediction_mode(false)  # freeze at the pad; velocity zeroed
-
-func _on_client_puck_hit_post() -> void:
-	if not _predicting_trajectory or _post_contact_timer >= 0.0:
-		return
-	# Post bounces deliberately KEEP simulating through the window (unlike the
-	# goalie freeze above): the post is static geometry and both sims run
-	# identical Jolt from the same client-sent origin, so the local rebound
-	# usually IS the host's — freezing would add a pointless hold to a bounce
-	# we can predict. The window still suppresses reconcile so pre-bounce
-	# snapshots can't drag the puck back into the post; a razor-edge graze
-	# that genuinely diverged lands in the zone-2 slewed handoff instead.
-	_pending_local_release = false
-	_pending_local_release_deadline = -1.0
-	_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
-
 # ── State Serialization ───────────────────────────────────────────────────────
 # Returns the typed network state object. Flattening to Array happens at the
 # RPC boundary (GameManager.get_world_state), not here.
@@ -1194,6 +1122,71 @@ func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
 	return vel * (new_speed / speed)
 
 
+# Phase 4a: the shooter's own shot advances on the SAME analytic solver as the
+# host drive and the loose-puck prediction (PuckAuthorityRules.step_frame_substep)
+# instead of client-side Jolt — killing the last cross-engine divergence (the
+# authority is analytic; a Jolt-predicted bounce reconciled against a different
+# physics engine). Same sub-stepping and frame geometry; the goalie is a
+# prediction STOP as in _predict_loose, but here it also arms the post-contact
+# suppression window: a locally simulated goalie rebound is wrong in KIND (the
+# host deadens/holds/steers via GoalieSaveRules — controller logic this client
+# doesn't run), so the puck holds at the contact while the round trip brings the
+# authoritative outcome — and if the host smothered it, the hold already IS the
+# correct visual. Frame (post/net) bounces arm the same window but KEEP
+# simulating: static geometry on the shared solver, so the local rebound is the
+# host's; the window only suppresses reconcile so pre-bounce snapshots can't
+# drag the puck back into the post. Window sizing: our bounce leads the host's
+# by ~RTT/2 and the first post-bounce snapshot takes another ~RTT/2 to arrive.
+# The goal-line clamp mirrors the host's: the client never predicts a goal — it
+# parks the puck on the line and lets the authoritative outcome arrive.
+func _advance_local_trajectory(delta: float) -> void:
+	var pos: Vector3 = puck.get_puck_position()
+	var vel: Vector3 = puck.get_puck_velocity()
+	var radius: float = GameRules.PUCK_COLLISION_RADIUS
+	var substeps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), delta)
+	var sub_dt: float = delta / float(substeps)
+	var goalies: Array = _goalie_provider.call() if not _goalie_provider.is_null() else []
+	var hit_goalie: bool = false
+	var hit_frame: bool = false
+	for _sub in substeps:
+		var sub_prev: Vector3 = pos
+		_predict_tick_result.touched_post = false
+		_predict_tick_result.touched_net = false
+		PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
+				puck.max_speed, puck.ice_height, puck.max_height,
+				_predict_frame_scratch, _predict_tick_result)
+		pos = _predict_tick_result.position
+		vel = _predict_tick_result.velocity
+		if _predict_tick_result.touched_post or _predict_tick_result.touched_net:
+			hit_frame = true
+		if not goalies.is_empty() \
+				and absf(pos.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z \
+				and GoalieContactDetector.nearest(goalies, sub_prev, pos, radius,
+						_predict_obb_scratch, _predict_goalie_contact):
+			pos = _predict_goalie_contact.point \
+					+ _predict_goalie_contact.normal * _predict_goalie_contact.depth
+			vel = Vector3.ZERO
+			hit_goalie = true
+			break
+	# No goal prediction: park an inbound puck on the goal line inside the posts.
+	if absf(pos.z) >= GameRules.GOAL_LINE_Z and pos.z * vel.z > 0.0 \
+			and absf(pos.x) <= GameRules.NET_HALF_WIDTH:
+		pos.z = GameRules.GOAL_LINE_Z * signf(pos.z)
+		vel = Vector3.ZERO
+	puck.set_puck_position(pos)
+	puck.set_puck_velocity(vel)
+	if hit_goalie:
+		_trajectory_hold = true
+		_pending_local_release = false
+		_pending_local_release_deadline = -1.0
+		if _post_contact_timer < 0.0:
+			_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
+	elif hit_frame and _post_contact_timer < 0.0:
+		_pending_local_release = false
+		_pending_local_release_deadline = -1.0
+		_post_contact_timer = NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.025
+
+
 # ── Phase-3: client-side loose-puck prediction (the RL-family payoff) ────────
 # Run the SAME analytic sim the host drives the puck with
 # (PuckAuthorityRules.step_frame_substep — integration, friction, gravity,
@@ -1270,23 +1263,15 @@ func _predict_loose(delta: float) -> bool:
 
 
 func _interpolate(delta: float) -> void:
-	# Shared delay keeps the loose puck on the skaters' timeline (render == the
-	# lag-comp rewind instant at extrapolation_lead_fraction 0 — see the export).
+	# Shared delay keeps this fallback on the same timeline every interpolator
+	# uses (render == the legacy lag-comp rewind instant).
 	var interp_delay: float = NetworkManager.get_interpolation_delay()
-	# Stage-4 loose-puck forward lead (own constant, parked at 0.0 — see
-	# Constants.PUCK_FORWARD_LEAD_FRACTION for why it is decoupled from the
-	# skater fraction): when > 0 the loose puck leads toward present with the
-	# skaters, easing to 0 as any blade closes on the puck (_blade_lead_scale) —
-	# that is what keeps render == rewind exactly where pickup/poke claims fire
-	# (the host rewinds the puck to the past interp instant, so the puck the
-	# claimant reached for must render there too). No host-side change: the puck
-	# is at past whenever a claim can happen. The ice-friction dead-reckon +
-	# board gate below produce the lead. 0 = legacy interpolate-in-the-past.
-	var lead_fraction: float = Constants.PUCK_FORWARD_LEAD_FRACTION
-	if lead_fraction > 0.0:
-		lead_fraction *= _blade_lead_scale(puck.get_puck_position())
-	var base_render_time: float = NetworkManager.estimated_host_time() \
-			- interp_delay * (1.0 - lead_fraction)
+	# Interpolate a full interp_delay in the past — since Phase 3 this path is
+	# the stale-data FALLBACK (and the trajectory handoff target); the normal
+	# loose puck renders through _predict_loose at ~host present. (The stage-4
+	# eased forward lead that briefly lived here was deleted in Phase 4a —
+	# superseded outright by prediction.)
+	var base_render_time: float = NetworkManager.estimated_host_time() - interp_delay
 	# Handoff slew: on a fresh entry from trajectory prediction, seed a temporary
 	# render-time lead that lines the first interp target up with the live
 	# (predicted) puck, then shed it at handoff_slew_rate — the timeline eases
@@ -1310,12 +1295,9 @@ func _interpolate(delta: float) -> void:
 	# Slew frames extrapolate past the newest sample BY DESIGN (the lead starts
 	# ~RTT/2 + interp_delay ahead of the interp point); keep them out of the
 	# is_extrapolating canary, which exists to catch genuine buffer underruns.
-	# Slew frames AND stage-4 lead frames extrapolate past the newest sample BY
-	# DESIGN — keep both out of the underrun canary (it exists to catch genuine
-	# buffer starvation; at a non-zero puck lead it would otherwise saturate at
-	# ~100% and poison the F3 extrapolation_pct telemetry).
-	is_extrapolating = bracket != null and bracket.is_extrapolating \
-			and _slew_lead <= 0.0 and lead_fraction <= 0.0
+	# Slew frames extrapolate past the newest sample BY DESIGN — keep them out
+	# of the underrun canary (it exists to catch genuine buffer starvation).
+	is_extrapolating = bracket != null and bracket.is_extrapolating and _slew_lead <= 0.0
 	if bracket == null:
 		return
 	# Reused scratch (per-tick path); both branches write position + velocity,

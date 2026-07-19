@@ -4198,7 +4198,7 @@ func _post_pitch(speed: float) -> float:
 # play this peer already made — see the _local_*_cue_at doc-block. The window is
 # the expected echo delay: the local play leads the host's broadcast by ~one RTT
 # (the client's prediction runs ahead, the host echoes back a round-trip later),
-# the same RTT-based hand-off the puck predictor uses at _on_client_puck_hit_post.
+# the same RTT-based hand-off the puck predictor's post-contact window uses.
 # Clamped so a normal RTT can't under-cover the echo and a lag spike can't gate a
 # genuinely separate second save. `local_cue_at` starts far in the past, so a peer
 # that never played locally (never predicted the contact) is never suppressed.
