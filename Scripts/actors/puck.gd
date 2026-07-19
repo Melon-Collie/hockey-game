@@ -244,6 +244,7 @@ const _NO_GOALIES: Array = []
 # Edge-trigger latches for the drive's contact signals: true = the matching contact
 # occurred LAST tick, so a sustained contact re-fires nothing (Jolt's body_entered
 # was edge-triggered per separation; the analytic tests are level-triggered).
+var _contact_latch_boards: bool = false
 var _contact_latch_post: bool = false
 var _contact_latch_net: bool = false
 var _contact_latch_goalie: bool = false
@@ -767,6 +768,7 @@ func _drive_analytic(dt: float) -> void:
 		_contact_latch_goalie = false
 		_contact_latch_post = false
 		_contact_latch_net = false
+		_contact_latch_boards = false
 		return
 	# Deliberate far teleport (drills stash the puck off-rink between reps): leave it parked,
 	# matching the CONTAINMENT_TELEPORT_SKIP guard in the Jolt path.
@@ -815,7 +817,12 @@ func _drive_analytic(dt: float) -> void:
 	var touched_post: bool = false
 	var touched_net: bool = false
 	var touched_goalie: bool = false
-	var caught_emitted: bool = false
+	# Emissions are DEFERRED to after the commit below: synchronous listeners
+	# (the save sound reading puck velocity, stat sync) must see this tick's
+	# committed post-contact state, not last tick's — Jolt's body_entered fired
+	# mid-step with current state; emitting mid-loop here read stale fields.
+	var emit_goalie: Goalie = null
+	var emit_caught: Goalie = null
 	for _sub in substeps:
 		var sub_prev: Vector3 = pos
 		var stepped: Transform3D = PuckAuthorityRules.advance_loose_puck(
@@ -827,16 +834,12 @@ func _drive_analytic(dt: float) -> void:
 				or PuckGeometryCollision.resolve_crossbar(pos, vel, radius, _frame_result):
 			pos = _frame_result.position
 			vel = _frame_result.velocity
-			if not _contact_latch_post and not touched_post:
-				puck_touched_post.emit()
 			touched_post = true
 		if PuckGeometryCollision.resolve_top_net(pos, vel, _frame_result) \
 				or PuckGeometryCollision.resolve_net_panels(sub_prev, pos, vel, radius, _frame_result):
 			pos = _frame_result.position
 			vel = _frame_result.velocity
 			if incoming.length() >= 1.0:
-				if not _contact_latch_net and not touched_net:
-					puck_hit_goal_body.emit()
 				touched_net = true
 		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
 		if not goalies.is_empty() and GoalieContactDetector.nearest(
@@ -856,23 +859,21 @@ func _drive_analytic(dt: float) -> void:
 			pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
 			last_goalie_contact_body = _goalie_contact.part
 			if not _contact_latch_goalie and not touched_goalie:
-				puck_touched_goalie.emit(_goalie_contact.goalie as Goalie)
+				emit_goalie = _goalie_contact.goalie as Goalie
 			# The catch is gated on its own occurrence, NOT the touch latch — a
 			# pad-contact tick followed by a glove catch next tick must still
 			# fire the catch (it pins the puck and locks the play through the
 			# goalie controller).
-			if _save_result.caught and not caught_emitted:
-				puck_caught_by_goalie.emit(_goalie_contact.goalie as Goalie)
-				caught_emitted = true
+			if _save_result.caught and emit_caught == null:
+				emit_caught = _goalie_contact.goalie as Goalie
 			touched_goalie = true
-	_contact_latch_post = touched_post
-	_contact_latch_net = touched_net
-	_contact_latch_goalie = touched_goalie
 	# Board feedback: a real carom is the raw (un-reflected) full-tick position crossing the
-	# boundary with into-board pace — a puck sliding parallel doesn't fire.
+	# boundary with into-board pace — a puck sliding parallel doesn't fire. Latched like the
+	# other contacts (a rim-around can re-cross the raw boundary every tick of the curve —
+	# one carom must read as one thud, not a 120 Hz burst).
 	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)
-	if raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 and incoming.length() >= 1.0:
-		puck_hit_boards.emit()
+	var touched_boards: bool = raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 \
+			and incoming.length() >= 1.0
 
 	# 4) Goal-line clamp (re-homed from _integrate_forces).
 	if _clamp_at_goal_line:
@@ -895,6 +896,25 @@ func _drive_analytic(dt: float) -> void:
 	_pre_contact_velocity = incoming
 	linear_velocity = vel
 	global_position = pos
+
+	# Deferred contact signals (see the emit_* locals above): edge-gated by the
+	# cross-tick latches, fired against the committed state. Order matters — the
+	# goalie touch fires before the catch, matching the Jolt path's
+	# _resolve_save_rebound-then-signal sequence the controller relies on.
+	if touched_boards and not _contact_latch_boards:
+		puck_hit_boards.emit()
+	if touched_post and not _contact_latch_post:
+		puck_touched_post.emit()
+	if touched_net and not _contact_latch_net:
+		puck_hit_goal_body.emit()
+	if emit_goalie != null:
+		puck_touched_goalie.emit(emit_goalie)
+	if emit_caught != null:
+		puck_caught_by_goalie.emit(emit_caught)
+	_contact_latch_boards = touched_boards
+	_contact_latch_post = touched_post
+	_contact_latch_net = touched_net
+	_contact_latch_goalie = touched_goalie
 
 
 # The goalie's save surfaces are StaticBody3D parts at different scene depths —
