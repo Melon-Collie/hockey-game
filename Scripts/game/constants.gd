@@ -79,6 +79,17 @@ const NETWORK_INTERPOLATION_DELAY: float = 0.075
 # Dial toward 0.5 / 0.0 if remote skaters overshoot on hard cuts (extrapolation
 # snap-back) or contested-hit feel regresses; 0.0 restores exact render == rewind.
 const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
+# Rocket-League-style input decay for the forward prediction: over this many ticks
+# the assumed (held) move-intent fades linearly to 0, so the far end of the
+# prediction window coasts on friction instead of thrusting in a possibly-stale
+# direction. This is what tames overshoot when a remote player CUTS mid-window —
+# the single biggest quality lever on the skater lead. Read by BOTH the client
+# render (RemoteController) and the host claim rewind (HitClaimResolver) via
+# SkaterMovementRules.integrate_forward, so the decay is identical and render ==
+# rewind holds. 0 = no decay (full intent every tick). ~5 fades over the near half
+# of a full-lead (~9-tick) window; lower = more conservative (less overshoot, less
+# catch-up), higher = more aggressive. Tune alongside REMOTE_FORWARD_PREDICT_FRACTION.
+const FORWARD_PREDICT_INTENT_DECAY_TICKS: int = 5
 # Wire encoding for session-relative timestamps: u32 in 0.1 ms units
 # (seconds × this scale). Replaces f32 seconds, whose ULP degraded with host
 # uptime — ~1 ms error at 2.3 h (visible interpolation jitter), ~2 ms at

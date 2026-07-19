@@ -109,11 +109,23 @@ static func integrate_forward(
 		cfg: MovementConfig,
 		dt: float,
 		ticks: int,
+		intent_decay_ticks: int,
 		result: ForwardResult) -> void:
 	var pos: Vector3 = position
 	var vel: Vector3 = velocity
-	for _tick in maxi(ticks, 0):
-		vel = apply_movement(vel, move_input, facing_rotation_y, has_puck, brake, dt, cfg, sprint_active)
+	var n: int = maxi(ticks, 0)
+	for i in n:
+		# Rocket-League-style input decay: a held intent is less likely to still be
+		# held further into the prediction, so fade the assumed move_input linearly to
+		# 0 over intent_decay_ticks. The far ticks coast on friction instead of
+		# thrusting in a possibly-stale direction — this is what tames overshoot when
+		# the real player CUTS mid-window. Both the client render and the host claim
+		# rewind pass the SAME shared constant, so the decay is identical on both and
+		# render == rewind holds. 0 = no decay (full intent every tick, the raw form).
+		var decayed_input: Vector2 = move_input
+		if intent_decay_ticks > 0:
+			decayed_input = move_input * clampf(1.0 - float(i) / float(intent_decay_ticks), 0.0, 1.0)
+		vel = apply_movement(vel, decayed_input, facing_rotation_y, has_puck, brake, dt, cfg, sprint_active)
 		pos += vel * dt
 	result.position = pos
 	result.velocity = vel

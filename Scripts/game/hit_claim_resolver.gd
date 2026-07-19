@@ -158,7 +158,7 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 				atan2(victim_snap.facing.x, victim_snap.facing.y), false,
 				victim_snap.brake_intent, victim_snap.sprint_active,
 				vic_ctrl.get_movement_config(), 1.0 / float(Constants.PHYSICS_TICK),
-				fp_ticks, _fp_result)
+				fp_ticks, Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, _fp_result)
 		vic_pos = _fp_result.position
 		vic_vel = _fp_result.velocity
 	if hitter_snap.position.distance_to(vic_pos) > MAX_RANGE_M:
