@@ -5,11 +5,12 @@ extends RefCounted
 # ----------------
 # Per-skater tuning built on a HEIGHT-ROUTED model. A build is:
 #
-#   • HEIGHT — a free 5-step archetype dial (H1 5'8" … H5 6'7"), NOT point-buy.
-#     Height decides reach, the speed/agility/shot/hands BASELINES, and how much
-#     an attribute investment pays off on each lever. It is the axis that makes
-#     the same "strong Skating" mean elite agility on a small frame and top speed
-#     on a big one.
+#   • HEIGHT — a free CONTINUOUS archetype dial in inches (every inch 5'8"..6'7"),
+#     NOT point-buy. The gameplay tables are authored at 5 anchor heights and any
+#     height in between interpolates. Height decides reach, the speed/agility/shot/
+#     hands BASELINES, and how much an attribute investment pays off on each lever.
+#     It is the axis that makes the same "strong Skating" mean elite agility on a
+#     small frame and top speed on a big one.
 #   • THREE ATTRIBUTES — Skating, Skill, Checking — each a TIER (weak / average /
 #     strong). A legal build spends exactly one STRONG and one WEAK with the third
 #     AVERAGE (all-average is legal but flavorless). No point budget — the strong
@@ -75,19 +76,23 @@ extends RefCounted
 
 enum Attribute { SKATING, SKILL, CHECKING }
 
-# Height: 5 steps, H1 5'8" … H5 6'7". Neutral (all-multipliers-1.0) is H3, 6'1".
-const HEIGHT_MIN: int = 1
-const HEIGHT_MEDIUM: int = 3
-const HEIGHT_MAX: int = 5
+# Height is stored in INCHES and is a free CONTINUOUS dial: every inch from 5'8"
+# (68) to 6'7" (79) is playable. The gameplay tables are authored at 5 anchor
+# heights (ANCHOR_INCHES); any height in between linearly interpolates the two
+# adjacent rows (see _anchor / _h / _ht). Neutral (all-multipliers-1.0) is 6'1".
+const HEIGHT_MIN: int = 68     # 5'8"
+const HEIGHT_MEDIUM: int = 73  # 6'1"  (neutral)
+const HEIGHT_MAX: int = 79     # 6'7"
+
+# The 5 table rows sit at these heights (inches). 5'10" (row 1) is the mesh-native
+# anchor where the reach/height multiplier is exactly 1.0. A build's height may
+# land anywhere in [68, 79]; the lookups interpolate between the bracketing rows.
+const ANCHOR_INCHES: Array[int] = [68, 70, 73, 76, 79]  # 5'8", 5'10", 6'1", 6'4", 6'7"
 
 # Attribute tiers. tier_delta = tier - TIER_AVERAGE → {-1, 0, +1}.
 const TIER_WEAK: int = 1
 const TIER_AVERAGE: int = 2
 const TIER_STRONG: int = 3
-
-# Real heights per step (inches), for reference / UI. H2 (5'10") is the mesh-native
-# anchor where the reach/height multiplier is exactly 1.0.
-const HEIGHT_INCHES: Array[int] = [68, 70, 73, 76, 79]  # 5'8", 5'10", 6'1", 6'4", 6'7"
 
 # ── Gameplay tables — 5 rows (H1..H5) × 3 cols (WEAK, AVERAGE, STRONG) ─────────
 # Each cell is the resolved multiplier on the shipped @export baseline. H3/AVERAGE
@@ -241,7 +246,7 @@ var checking: int = TIER_AVERAGE
 
 func _init(p_height: int = HEIGHT_MEDIUM, p_skating: int = TIER_AVERAGE,
 		p_skill: int = TIER_AVERAGE, p_checking: int = TIER_AVERAGE) -> void:
-	height = clampi(p_height, HEIGHT_MIN, HEIGHT_MAX)
+	height = coerce_height(p_height)
 	skating = _clamp_tier(p_skating)
 	skill = _clamp_tier(p_skill)
 	checking = _clamp_tier(p_checking)
@@ -264,10 +269,11 @@ static func from_levels(p_height: int, p_skating: int, p_skill: int,
 # only thing that grants unearned power (a strength with no matching weakness,
 # e.g. one strong + two average). The host validates joiners with this; the
 # picker UI enforces the exact one-up-one-down shape.
-static func is_legal_build(p_height: int, p_skating: int, p_skill: int,
+static func is_legal_build(_p_height: int, p_skating: int, p_skill: int,
 		p_checking: int) -> bool:
-	if p_height < HEIGHT_MIN or p_height > HEIGHT_MAX:
-		return false
+	# Height is a free lateral dial that always coerces into range
+	# (coerce_height), so it's never a rejection axis — only the tier SHAPE is
+	# validated: every tier in [1,3] and no more strengths than weaknesses.
 	for t: int in [p_skating, p_skill, p_checking]:
 		if t < TIER_WEAK or t > TIER_STRONG:
 			return false
@@ -295,7 +301,16 @@ func tier_for(attr: int) -> int:
 
 
 func height_inches() -> int:
-	return HEIGHT_INCHES[clampi(height - HEIGHT_MIN, 0, HEIGHT_INCHES.size() - 1)]
+	return height
+
+
+func height_label() -> String:
+	return inches_label(height)
+
+
+# Format an inches value as feet'inches" (e.g. 73 → 6'1").
+static func inches_label(inches: int) -> String:
+	return "%d'%d\"" % [inches / 12, inches % 12]
 
 
 # ── Named multiplier accessors ────────────────────────────────────────────────
@@ -385,7 +400,9 @@ static func from_dict(d: Dictionary) -> PlayerAttributes:
 # WEAK (lowest), one AVERAGE (middle) — always a legal shape. Deterministic ties.
 static func migrate_legacy(speed: int, agility: int, hands: int, size: int,
 		physical: int, shot: int) -> PlayerAttributes:
-	var new_height: int = clampi(size, HEIGHT_MIN, HEIGHT_MAX)
+	# Old Size was a 1..5 step; map it onto the anchor heights (coerce_height
+	# accepts a 1..5 step and returns the matching inches).
+	var new_height: int = coerce_height(size)
 	# Composite scores on a common ~2..10 scale (physical doubled to match the sums).
 	var scores: Array = [
 		{"attr": Attribute.SKATING,  "score": speed + agility},
@@ -416,20 +433,48 @@ func equals(other: PlayerAttributes) -> bool:
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────
-# 5×3 lookup: [height][tier].
-static func _ht(table: Array, h: int, tier: int) -> float:
-	var row: Array = table[clampi(h - HEIGHT_MIN, 0, table.size() - 1)]
-	return float(row[clampi(tier - TIER_WEAK, 0, row.size() - 1)])
+# Bracketing anchor rows for a height in inches: [lo_row, hi_row, t] where the
+# interpolated value is lerp(row[lo], row[hi], t). A height on an anchor gives
+# lo == hi (t = 0); the ends clamp.
+static func _anchor(inches: int) -> Array:
+	var h: int = clampi(inches, HEIGHT_MIN, HEIGHT_MAX)
+	for i: int in range(ANCHOR_INCHES.size() - 1):
+		if h <= ANCHOR_INCHES[i + 1]:
+			var span: float = float(ANCHOR_INCHES[i + 1] - ANCHOR_INCHES[i])
+			var t: float = 0.0 if span <= 0.0 else float(h - ANCHOR_INCHES[i]) / span
+			return [i, i + 1, t]
+	var last: int = ANCHOR_INCHES.size() - 1
+	return [last, last, 0.0]
 
 
-# 5-vec lookup by height.
-static func _h(table: Array, h: int) -> float:
-	return float(table[clampi(h - HEIGHT_MIN, 0, table.size() - 1)])
+# 5×3 lookup interpolated by height: pick the tier column in the two bracketing
+# rows and lerp between them.
+static func _ht(table: Array, inches: int, tier: int) -> float:
+	var a: Array = _anchor(inches)
+	var lo_row: Array = table[a[0]]
+	var hi_row: Array = table[a[1]]
+	var tc: int = clampi(tier - TIER_WEAK, 0, lo_row.size() - 1)
+	return lerpf(float(lo_row[tc]), float(hi_row[tc]), a[2])
 
 
-# 3-vec lookup by tier.
+# 5-vec lookup interpolated by height.
+static func _h(table: Array, inches: int) -> float:
+	var a: Array = _anchor(inches)
+	return lerpf(float(table[a[0]]), float(table[a[1]]), a[2])
+
+
+# 3-vec lookup by tier (discrete — tiers don't interpolate).
 static func _t(table: Array, tier: int) -> float:
 	return float(table[clampi(tier - TIER_WEAK, 0, table.size() - 1)])
+
+
+# Accept a legacy 1..5 step (maps onto the anchor heights) OR a raw inches value.
+# No real hockey height falls in 6..67, so the split is unambiguous; this keeps
+# old prefs/bot/step values working without a version bump.
+static func coerce_height(v: int) -> int:
+	if v <= ANCHOR_INCHES.size():
+		return ANCHOR_INCHES[clampi(v, 1, ANCHOR_INCHES.size()) - 1]
+	return clampi(v, HEIGHT_MIN, HEIGHT_MAX)
 
 
 static func _clamp_tier(v: int) -> int:

@@ -26,8 +26,8 @@ signal changed
 # The three attribute tiers. Height is a separate, always-free dial handled above
 # these. The per-preset "levels" array is [height, skating, skill, checking].
 const _TIER_LABELS: Array[String] = ["Skating", "Skill", "Checking"]
-const _TIER_NAMES: Array[String] = ["Weak", "Average", "Strong"]  # tier 1..3
-const _HEIGHT_NAMES: Array[String] = ["5'8\"", "5'10\"", "6'1\"", "6'4\"", "6'7\""]
+# Button state names, indexed by (tier - TIER_WEAK): weak / average / strong.
+const _TIER_STATE_NAMES: Array[String] = ["Weakness", "Neither", "Strength"]
 
 # Hover tooltips. Headline effects only — height decides the baselines and how
 # each tier's payoff lands (small = agility/hands/elusive, big = speed/shot/hits).
@@ -58,8 +58,7 @@ var _status_label: Label = null
 var _lock_label: Label = null
 var _height_slider: HSlider = null
 var _height_value_label: Label = null
-var _tier_sliders: Array[HSlider] = []
-var _tier_value_labels: Array[Label] = []
+var _tier_buttons: Array[Button] = []
 
 
 func _ready() -> void:
@@ -92,10 +91,7 @@ func _build() -> void:
 	add_child(_lock_label)
 
 	_build_height_row()
-	_tier_sliders = []
-	_tier_value_labels = []
-	for tier_idx: int in _TIER_LABELS.size():
-		_build_tier_slider_row(tier_idx)
+	_build_tier_button_row()
 
 
 func _build_preset_row() -> void:
@@ -191,42 +187,41 @@ func _build_height_row() -> void:
 	row.add_child(_height_value_label)
 
 
-func _build_tier_slider_row(tier_idx: int) -> void:
+# One button per attribute. Clicking cycles its state — Neither → Strength →
+# Weakness → Neither — so a legal build (one strength + one weakness, or all
+# Neither) is a couple of clicks away. The status line + Apply gate enforce the
+# shape; the buttons themselves rotate freely.
+func _build_tier_button_row() -> void:
+	var hint := Label.new()
+	hint.text = "Click to cycle: Strength / Weakness / Neither"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	add_child(hint)
+
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 12)
 	add_child(row)
 
-	var label := Label.new()
-	label.text = _TIER_LABELS[tier_idx]
-	label.custom_minimum_size = Vector2(80, 0)
-	label.add_theme_font_size_override("font_size", 18)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.mouse_filter = Control.MOUSE_FILTER_STOP
-	label.tooltip_text = _TIER_TOOLTIPS[tier_idx]
-	row.add_child(label)
+	_tier_buttons = []
+	for tier_idx: int in _TIER_LABELS.size():
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(150, 56)
+		btn.add_theme_font_size_override("font_size", 16)
+		btn.tooltip_text = _TIER_TOOLTIPS[tier_idx]
+		SoundManager.wire_button(btn)
+		btn.pressed.connect(_on_tier_cycle.bind(tier_idx))
+		row.add_child(btn)
+		_tier_buttons.append(btn)
 
-	var slider := HSlider.new()
-	slider.min_value = PlayerAttributes.TIER_WEAK
-	slider.max_value = PlayerAttributes.TIER_STRONG
-	slider.step = 1
-	slider.custom_minimum_size = Vector2(200, 36)
-	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	slider.set_value_no_signal(PlayerAttributes.TIER_AVERAGE)
-	slider.tooltip_text = _TIER_TOOLTIPS[tier_idx]
-	slider.value_changed.connect(_on_tier_changed.bind(tier_idx))
-	row.add_child(slider)
-	_tier_sliders.append(slider)
 
-	var value_label := Label.new()
-	value_label.custom_minimum_size = Vector2(64, 0)
-	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	value_label.add_theme_font_size_override("font_size", 18)
-	value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(value_label)
-	_tier_value_labels.append(value_label)
+# Cycle order: Neither → Strength → Weakness → Neither.
+func _next_tier(tier: int) -> int:
+	match tier:
+		PlayerAttributes.TIER_AVERAGE: return PlayerAttributes.TIER_STRONG
+		PlayerAttributes.TIER_STRONG:  return PlayerAttributes.TIER_WEAK
+		_:                             return PlayerAttributes.TIER_AVERAGE
 
 
 # ── Host API ─────────────────────────────────────────────────────────────────
@@ -234,7 +229,7 @@ func _build_tier_slider_row(tier_idx: int) -> void:
 # Whether attribute editing is disabled (an active online match locks the build).
 func set_locked(locked: bool) -> void:
 	_locked = locked
-	if not _tier_sliders.is_empty():
+	if not _tier_buttons.is_empty():
 		_refresh()
 
 
@@ -293,11 +288,12 @@ func _on_height_changed(value: float) -> void:
 	changed.emit()
 
 
-func _on_tier_changed(value: float, tier_idx: int) -> void:
-	if _active < 0 or _active >= _working.size():
+func _on_tier_cycle(tier_idx: int) -> void:
+	if _locked or _active < 0 or _active >= _working.size():
 		return
 	# levels[0] is height; tiers live at levels[1..3].
-	(_working[_active]["levels"] as Array)[tier_idx + 1] = int(value)
+	var levels: Array = _working[_active]["levels"]
+	levels[tier_idx + 1] = _next_tier(int(levels[tier_idx + 1]))
 	_refresh()
 	changed.emit()
 
@@ -369,16 +365,17 @@ func _rebuild_chips() -> void:
 # from the working model. Does NOT touch the name field (avoids clobbering typing
 # / focus) — that's done by _load_active_into_name_field on preset switches.
 func _refresh() -> void:
-	if _tier_sliders.is_empty() or _active < 0 or _active >= _working.size():
+	if _tier_buttons.is_empty() or _active < 0 or _active >= _working.size():
 		return
 	var levels: Array = _working[_active]["levels"]
 	_height_slider.set_value_no_signal(levels[0])
 	_height_slider.editable = not _locked
-	_height_value_label.text = _height_name(int(levels[0]))
-	for i: int in _tier_sliders.size():
-		_tier_sliders[i].set_value_no_signal(levels[i + 1])
-		_tier_sliders[i].editable = not _locked
-		_tier_value_labels[i].text = _TIER_NAMES[clampi(int(levels[i + 1]) - 1, 0, 2)]
+	_height_value_label.text = PlayerAttributes.inches_label(int(levels[0]))
+	for i: int in _tier_buttons.size():
+		var tier: int = int(levels[i + 1])
+		_tier_buttons[i].text = "%s\n%s" % [_TIER_LABELS[i], _TIER_STATE_NAMES[clampi(tier - 1, 0, 2)]]
+		_tier_buttons[i].disabled = _locked
+		_tier_buttons[i].add_theme_color_override("font_color", _tier_color(tier))
 
 	var legal: bool = _levels_legal(levels)
 	_status_label.text = _shape_status(levels)
@@ -481,8 +478,11 @@ func _levels_equal(a: Array, b: Array) -> bool:
 	return true
 
 
-func _height_name(level: int) -> String:
-	return _HEIGHT_NAMES[clampi(level - PlayerAttributes.HEIGHT_MIN, 0, _HEIGHT_NAMES.size() - 1)]
+func _tier_color(tier: int) -> Color:
+	match tier:
+		PlayerAttributes.TIER_STRONG: return MenuStyle.TEAL
+		PlayerAttributes.TIER_WEAK:   return MenuStyle.DANGER
+		_:                            return MenuStyle.TEXT_DIM
 
 
 func _default_preset_name() -> String:

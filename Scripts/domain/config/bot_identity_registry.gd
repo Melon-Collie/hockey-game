@@ -20,8 +20,9 @@ class_name BotIdentityRegistry
 # range value resets to all-average, so the bot keeps its identity but loses the
 # illegal stats — the host can theme their roster, but can't field a super-bot.
 #
-# JSON schema (native height + three tiers; height 1..5 = 5'8"..6'7", each tier
-# 1=weak / 2=average / 3=strong):
+# JSON schema (native height + three tiers). Height may be a raw inches value
+# (68..79 = 5'8"..6'7") or a legacy 1..5 step (mapped onto the 5 anchor heights);
+# each tier is 1=weak / 2=average / 3=strong:
 #   {
 #     "identities": [
 #       { "name": "Wayne Gretzky", "number": 99, "is_left_handed": false,

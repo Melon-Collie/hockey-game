@@ -8,9 +8,9 @@ extends GutTest
 #
 # This test is the executable spec for the tables authored in player_attributes.gd.
 
-const H1: int = 1  # 5'8"
-const H3: int = PlayerAttributes.HEIGHT_MEDIUM  # 6'1"
-const H5: int = 5  # 6'7"
+const H1: int = PlayerAttributes.HEIGHT_MIN     # 5'8" (68")
+const H3: int = PlayerAttributes.HEIGHT_MEDIUM  # 6'1" (73")
+const H5: int = PlayerAttributes.HEIGHT_MAX     # 6'7" (79")
 const WEAK: int = PlayerAttributes.TIER_WEAK
 const AVG: int = PlayerAttributes.TIER_AVERAGE
 const STRONG: int = PlayerAttributes.TIER_STRONG
@@ -42,27 +42,47 @@ func test_neutral_is_all_ones() -> void:
 
 
 func test_scale_constants() -> void:
-	assert_eq(PlayerAttributes.HEIGHT_MIN, 1)
-	assert_eq(PlayerAttributes.HEIGHT_MEDIUM, 3)
-	assert_eq(PlayerAttributes.HEIGHT_MAX, 5)
+	# Height is stored in inches now: 5'8" .. 6'7", neutral 6'1".
+	assert_eq(PlayerAttributes.HEIGHT_MIN, 68)
+	assert_eq(PlayerAttributes.HEIGHT_MEDIUM, 73)
+	assert_eq(PlayerAttributes.HEIGHT_MAX, 79)
 	assert_eq(PlayerAttributes.TIER_WEAK, 1)
 	assert_eq(PlayerAttributes.TIER_AVERAGE, 2)
 	assert_eq(PlayerAttributes.TIER_STRONG, 3)
 
 
-func test_constructor_clamps() -> void:
+func test_constructor_clamps_and_coerces() -> void:
 	var low := PlayerAttributes.new(-9, -9, -9, -9)
-	var high := PlayerAttributes.new(99, 99, 99, 99)
+	var high := PlayerAttributes.new(999, 99, 99, 99)
 	assert_eq(low.height, PlayerAttributes.HEIGHT_MIN)
 	assert_eq(low.skating, PlayerAttributes.TIER_WEAK)
 	assert_eq(high.height, PlayerAttributes.HEIGHT_MAX)
 	assert_eq(high.checking, PlayerAttributes.TIER_STRONG)
 
 
-func test_height_inches() -> void:
-	assert_eq(_build(H1, AVG, AVG, AVG).height_inches(), 68)  # 5'8"
-	assert_eq(_build(2, AVG, AVG, AVG).height_inches(), 70)   # 5'10" mesh-native
-	assert_eq(_build(H5, AVG, AVG, AVG).height_inches(), 79)  # 6'7"
+func test_legacy_1to5_height_maps_to_anchor_inches() -> void:
+	# A legacy 1..5 step (old prefs / bot rosters) maps onto the anchor heights.
+	assert_eq(PlayerAttributes.new(1, AVG, AVG, AVG).height, 68)  # 5'8"
+	assert_eq(PlayerAttributes.new(2, AVG, AVG, AVG).height, 70)  # 5'10"
+	assert_eq(PlayerAttributes.new(3, AVG, AVG, AVG).height, 73)  # 6'1"
+	assert_eq(PlayerAttributes.new(5, AVG, AVG, AVG).height, 79)  # 6'7"
+
+
+func test_height_inches_and_label() -> void:
+	assert_eq(_build(H1, AVG, AVG, AVG).height_inches(), 68)
+	assert_eq(_build(70, AVG, AVG, AVG).height_inches(), 70)   # an in-between inch
+	assert_eq(_build(H5, AVG, AVG, AVG).height_inches(), 79)
+	assert_eq(PlayerAttributes.inches_label(73), "6'1\"")
+	assert_eq(PlayerAttributes.inches_label(68), "5'8\"")
+
+
+func test_continuous_height_interpolates_between_anchors() -> void:
+	# 71" sits between the 70" and 73" rows; its multiplier is the lerp of the two.
+	var lo := _build(70, AVG, AVG, AVG).agility_mult()
+	var hi := _build(73, AVG, AVG, AVG).agility_mult()
+	var mid := _build(71, AVG, AVG, AVG).agility_mult()
+	assert_true(mid < lo and mid > hi, "71\" agility falls between the 70\" and 73\" rows")
+	assert_almost_eq(mid, lerpf(lo, hi, 1.0 / 3.0), 0.0001, "linear between anchors")
 
 
 # ── Skating: speed hump, agility slope, acceleration floor ─────────────────────
@@ -214,8 +234,10 @@ func test_legal_build_shapes() -> void:
 	assert_false(PlayerAttributes.is_legal_build(H3, STRONG, AVG, AVG))
 	# Two strong = illegal.
 	assert_false(PlayerAttributes.is_legal_build(H3, STRONG, STRONG, WEAK))
-	# Out-of-range height / tier.
-	assert_false(PlayerAttributes.is_legal_build(9, STRONG, WEAK, AVG))
+	# Out-of-range tier = illegal. (Height is never a rejection axis — it coerces.)
+	assert_false(PlayerAttributes.is_legal_build(H3, 9, WEAK, AVG))
+	# Any height passes — an out-of-range one coerces into [68,79], legal shape.
+	assert_true(PlayerAttributes.is_legal_build(9999, STRONG, WEAK, AVG))
 
 
 # ── Serialization ─────────────────────────────────────────────────────────────
@@ -231,7 +253,7 @@ func test_dict_round_trip() -> void:
 func test_legacy_six_attr_migration_enforcer() -> void:
 	# A legacy size-5 / physical-5 enforcer → tall, Checking-strong, Skating-weak.
 	var a := PlayerAttributes.migrate_legacy(2, 1, 2, 5, 5, 4)
-	assert_eq(a.height, 5)
+	assert_eq(a.height, PlayerAttributes.HEIGHT_MAX)  # size 5 -> 6'7"
 	assert_eq(a.checking, STRONG)
 	assert_eq(a.skating, WEAK)
 	assert_true(a.is_legal())
@@ -240,7 +262,7 @@ func test_legacy_six_attr_migration_enforcer() -> void:
 func test_legacy_six_attr_migration_dangler() -> void:
 	# A small agility-5 / hands-5 dangler → short, and its top axis is a strength.
 	var a := PlayerAttributes.migrate_legacy(2, 5, 5, 2, 2, 2)
-	assert_eq(a.height, 2)
+	assert_eq(a.height, 70)  # size 2 -> 5'10"
 	assert_eq(a.checking, WEAK)  # physical was the clear low
 	assert_true(a.is_legal())
 
@@ -248,11 +270,11 @@ func test_legacy_six_attr_migration_dangler() -> void:
 func test_from_dict_detects_legacy_vs_native() -> void:
 	# Native dict.
 	var native := PlayerAttributes.from_dict({"height": 4, "skating": STRONG, "skill": WEAK, "checking": AVG})
-	assert_eq(native.height, 4)
+	assert_eq(native.height, 76)  # native "4" reads as a legacy step -> 6'4"
 	assert_eq(native.skating, STRONG)
 	# Legacy dict (no native keys) is migrated, not read as neutral.
 	var legacy := PlayerAttributes.from_dict({"speed": 2, "agility": 1, "hands": 2, "size": 5, "physical": 5, "shot": 4})
-	assert_eq(legacy.height, 5)
+	assert_eq(legacy.height, PlayerAttributes.HEIGHT_MAX)
 	assert_eq(legacy.checking, STRONG)
 
 

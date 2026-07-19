@@ -5,7 +5,8 @@ extends GutTest
 # The player keeps up to MAX_PRESETS named builds and switches which one is
 # ACTIVE; the flat attr_* fields (what get_player_attributes() and thus the
 # online join handshake read) always mirror the active preset. A build is a
-# HEIGHT (1..5) plus three TIERS (skating/skill/checking, 1..3). These tests pin
+# HEIGHT in inches (a legacy 1..5 step coerces onto the anchor heights, e.g.
+# 5 → 79") plus three TIERS (skating/skill/checking, 1..3). These tests pin
 # the seeding/sync, the active-index bookkeeping through add/delete, and the
 # stored-array parse (which must survive a hand-corrupted / cloud-synced config
 # without crashing).
@@ -143,7 +144,7 @@ func test_add_preset_defaults_to_copy_of_active_build() -> void:
 	assert_true(p.get_presets()[1]["attrs"].equals(_attrs(5, 3, 2, 1)))
 	# Independent object: mutating the new preset must not bleed into the source.
 	p.get_presets()[1]["attrs"].height = 1
-	assert_eq(p.get_presets()[0]["attrs"].height, 5, "presets don't share instances")
+	assert_eq(p.get_presets()[0]["attrs"].height, 79, "presets don't share instances")
 
 
 func test_add_preset_uses_sequential_default_name() -> void:
@@ -212,7 +213,7 @@ func test_set_player_attributes_updates_active_preset() -> void:
 			"free-play edits write through to the active preset")
 	# Stored copy must be independent of the argument.
 	build.height = 1
-	assert_eq(_active_attrs(p).height, 5, "active preset doesn't alias the caller's object")
+	assert_eq(_active_attrs(p).height, 79, "active preset doesn't alias the caller's object")
 
 
 # ── _parse_stored_presets ────────────────────────────────────────────────────
@@ -256,7 +257,7 @@ func test_parse_migrates_legacy_six_attribute_preset() -> void:
 		{"name": "Legacy", "speed": 2, "agility": 1, "hands": 2, "size": 5, "physical": 5, "shot": 4},
 	])
 	assert_eq(parsed.size(), 1)
-	assert_eq(parsed[0]["attrs"].height, 5, "legacy size → height")
+	assert_eq(parsed[0]["attrs"].height, 79, "legacy size → height")
 	assert_eq(parsed[0]["attrs"].checking, PlayerAttributes.TIER_STRONG)
 
 

@@ -108,11 +108,12 @@ func test_normalize_resets_illegal_build_to_all_average() -> void:
 	assert_eq(int(norm.checking), PlayerAttributes.TIER_AVERAGE)
 
 
-func test_normalize_resets_out_of_range_build() -> void:
-	# Out-of-range levels (a typo like height 9) also fail is_legal_build and reset.
+func test_normalize_resets_out_of_range_tier() -> void:
+	# An out-of-range tier (a typo like skating 9) fails is_legal_build and resets.
+	# (Height is never a rejection axis — it coerces into range at construction.)
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Typo", "height": 9, "skating": 3, "skill": 2, "checking": 1})
-	assert_eq(int(norm.height), PlayerAttributes.HEIGHT_MEDIUM)
+			"name": "Typo", "height": 73, "skating": 9, "skill": 2, "checking": 1})
+	assert_eq(int(norm.skating), PlayerAttributes.TIER_AVERAGE)
 
 
 func test_normalize_migrates_legacy_six_attribute_entry() -> void:
@@ -120,7 +121,7 @@ func test_normalize_migrates_legacy_six_attribute_entry() -> void:
 	# becomes tall + Checking-strong.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
 			"name": "Legacy", "speed": 2, "agility": 1, "hands": 2, "size": 5, "physical": 5, "shot": 4})
-	assert_eq(int(norm.height), 5, "legacy size → height")
+	assert_eq(int(norm.height), 79, "legacy size → height")
 	assert_eq(int(norm.checking), PlayerAttributes.TIER_STRONG, "physical → Checking strong")
 
 

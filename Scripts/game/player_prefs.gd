@@ -956,8 +956,10 @@ func _load() -> void:
 		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
 		if attr_ver >= 4:
-			# Native height + three-tier model.
-			attr_height   = clampi(int(cfg.get_value("player", "attr_height",   PlayerAttributes.HEIGHT_MEDIUM)), PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MAX)
+			# Native height + three-tier model. coerce_height accepts either a raw
+			# inches value or a legacy 1..5 step (an early v4 save predating the
+			# continuous-inches height), mapping the latter onto the anchor heights.
+			attr_height   = PlayerAttributes.coerce_height(int(cfg.get_value("player", "attr_height", PlayerAttributes.HEIGHT_MEDIUM)))
 			attr_skating  = _clamp_tier(int(cfg.get_value("player", "attr_skating",  PlayerAttributes.TIER_AVERAGE)))
 			attr_skill    = _clamp_tier(int(cfg.get_value("player", "attr_skill",    PlayerAttributes.TIER_AVERAGE)))
 			attr_checking = _clamp_tier(int(cfg.get_value("player", "attr_checking", PlayerAttributes.TIER_AVERAGE)))
