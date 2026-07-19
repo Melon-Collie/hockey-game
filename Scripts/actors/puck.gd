@@ -236,6 +236,12 @@ func set_analytic_drive_enabled(enabled: bool) -> void:
 		_goalie_contact = GoalieContactDetector.Contact.new()
 		_goalie_scratch = SweptDiscOBB.Result.new()
 		_save_result = GoalieSaveRules.ContactResult.new()
+	if enabled:
+		# The puck is frozen for its ENTIRE life under the analytic drive — carried (carry pin)
+		# or loose (the drive) — so Jolt never integrates or collides it and there is no dynamic
+		# tick anywhere, not at spawn, release, or reset. (Phase 4 replaces the frozen body with
+		# a plain Node3D outright.)
+		freeze = true
 
 func set_goalie_provider(provider: Callable) -> void:
 	_goalie_provider = provider
@@ -341,7 +347,11 @@ func set_carrier(skater: Skater) -> void:
 
 func clear_carrier() -> void:
 	carrier = null
-	freeze = false
+	# Under the analytic drive the loose puck STAYS frozen — the drive owns it and Jolt never
+	# integrates it, so there's no dynamic tick between release and the drive taking over. Only
+	# the Jolt path unfreezes to a dynamic body.
+	if not _analytic_drive_enabled:
+		freeze = false
 
 # ── Cooldown Helpers ──────────────────────────────────────────────────────────
 # Host local_time() (injected) so cooldown expiry shares the snapshot-buffer base.
@@ -618,7 +628,10 @@ func drop() -> void:
 
 func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	carrier = null
-	freeze = false  # ensure _integrate_forces is called on the next step
+	# Jolt path unfreezes so _integrate_forces runs next step; the analytic drive stays frozen
+	# and applies the pending reset itself (no dynamic tick).
+	if not _analytic_drive_enabled:
+		freeze = false
 	sleeping = false  # a slept body skips _integrate_forces, so it would ignore the teleport
 	_cooldown_timers.clear()
 	linear_velocity = Vector3.ZERO
