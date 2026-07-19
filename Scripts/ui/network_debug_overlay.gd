@@ -319,7 +319,13 @@ func _render_client(t: NetworkTelemetry) -> void:
 			"resid = distance from server AFTER the snap+replay. At rest it should be ~0; if resid stays ~9cm the replay isn't converging (offset rebuilds), vs ~0 = rebuild is in normal physics")
 	_metric(_band(t.extrapolation_pct, 25.0, 60.0), "Guessing ahead", "%.0f%% of frames (%.0f fps)" % [t.extrapolation_pct, t.client_fps],
 		"share of rendered frames dead-reckoning a remote past the buffer (framerate-independent). If high on a clumpy link, the jitter cushion is too thin — see Smoothing delay")
-	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")
+	_info("Puck mode", t.puck_mode, "predicted = shared-sim to present, predicted_hold = held at goalie, interp = stale-data fallback, carried = on a stick")
+	_metric(_band(t.puck_predict_residual_avg_m * 100.0, 15.0, 50.0), "Puck predict err",
+		"%.1f cm avg · %.0f cm peak" % [t.puck_predict_residual_avg_m * 100.0, t.puck_predict_residual_max_m * 100.0],
+		"pre-damp error between the shared-sim prediction and the render; ~0 = agreeing, peaks = host events (deflects/saves) folding in")
+	_metric(_band(t.remote_correction_avg_m * 100.0, 10.0, 30.0), "Remote predict err",
+		"%.1f cm avg · %.0f cm peak" % [t.remote_correction_avg_m * 100.0, t.remote_correction_max_m * 100.0],
+		"same pre-damp error on remote skater bodies; steady growth = intent decay / hard cuts outrunning the prediction")
 
 	_section("Smoothing buffers")
 	_info("Interp depth", "skater %d · puck %d · goalie %d" % [t.buffer_depth_skater, t.buffer_depth_puck, t.buffer_depth_goalie],

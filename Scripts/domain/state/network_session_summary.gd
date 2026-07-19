@@ -40,7 +40,8 @@ const MIN_KEYS: Array[String] = ["sim_rate_hz", "reconcile_match_pct", "client_f
 # them invisible (3 hard snaps in a 10-minute game ≈ 0.005/s), so to_dict()
 # emits a single "<key>_total" (the sum across the session) instead of the
 # max/avg pair.
-const TOTAL_KEYS: Array[String] = ["puck_hard_snaps", "blade_jumps",
+const TOTAL_KEYS: Array[String] = ["puck_predict_fallbacks", "delay_clamps",
+	"puck_hard_snaps", "blade_jumps",
 		"pickup_claims", "pickup_claim_misses", "pickup_claim_deflects",
 		"poke_claims", "poke_claim_misses",
 		"stick_lift_claims", "stick_lift_claim_misses",

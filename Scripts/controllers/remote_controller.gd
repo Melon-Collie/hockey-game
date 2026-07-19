@@ -402,6 +402,11 @@ func _interpolate(delta: float) -> void:
 				fp_stagger, _body_check_config())
 		interpolated.position = _fp_result.position
 		interpolated.velocity = _fp_result.velocity
+	# Forward-prediction quality: the pre-damp error the smoother is about to
+	# absorb on this body (fp error + correction pressure).
+	if _smooth_initialized:
+		NetworkTelemetry.record_remote_correction(
+				(interpolated.position - _smooth_pos).length())
 	# Velocity-feed-forward error smoothing on the collision body position. We advance
 	# by the target's OWN velocity each frame (zero steady-state lag — smoothing the
 	# absolute position instead trails a moving body by ~velocity × smooth_time) and

@@ -80,7 +80,13 @@ static func plausible_interp_delay_ms(reported_ms: float, peer_rtt_ms: float) ->
 	var rtt: float = peer_rtt_ms if peer_rtt_ms > 0.0 else _STAMP_NO_SAMPLE_RTT_MS
 	var ceiling: float = rtt / 2.0 + 1000.0 / float(Constants.STATE_RATE) \
 			+ _INTERP_DELAY_JITTER_ALLOWANCE_MS
-	return clampf(reported_ms, 0.0, minf(ceiling, _INTERP_DELAY_CLAMP_MS_MAX))
+	var bounded: float = clampf(reported_ms, 0.0, minf(ceiling, _INTERP_DELAY_CLAMP_MS_MAX))
+	# Telemetry: legit players should never trip this — sustained clamps mean
+	# the allowance is too tight (mis-rewinding honest high-jitter claims) or a
+	# client is inflating its delay. >1 ms guard skips float noise.
+	if reported_ms - bounded > 1.0:
+		NetworkTelemetry.record_delay_clamped(reported_ms - bounded)
+	return bounded
 
 
 # Host-time at which to query StateBufferManager for the claimant's

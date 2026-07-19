@@ -1211,6 +1211,8 @@ func _predict_loose(delta: float) -> bool:
 	var now: float = NetworkManager.estimated_host_time()
 	var age: float = now - newest.timestamp
 	if age < 0.0 or age > Constants.PUCK_PREDICT_MAX_S:
+		if age > Constants.PUCK_PREDICT_MAX_S:
+			NetworkTelemetry.record_puck_predict_fallback()
 		return false
 	# The handoff slew belongs to the interpolated timeline; the predicted
 	# target already sits at present, so any trajectory→predicted seam is an
@@ -1258,6 +1260,11 @@ func _predict_loose(delta: float) -> bool:
 	is_extrapolating = false  # prediction is the mode, not a buffer underrun
 	if NetworkTelemetry.instance:
 		NetworkTelemetry.instance.puck_mode = "predicted_hold" if stopped else "predicted"
+	# Prediction-quality metric: the pre-damp error the smoother is about to
+	# absorb. Steady-state ~0 when the shared sim agrees with the authority;
+	# spikes measure host-side events folding in (deflects, saves, releases).
+	if _smooth_initialized:
+		NetworkTelemetry.record_puck_predict_residual((pos - _smooth_pos).length())
 	_smooth_apply_and_prune(pos, vel, delta, NetworkManager.get_interpolation_delay())
 	return true
 

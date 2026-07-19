@@ -96,6 +96,26 @@ var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
 var _input_drain_count: int = 0
+# Phase-3/4a prediction quality (client): the pre-damp residual between the
+# analytic prediction target and the rendered (smoothed) position — steady
+# state ~0 when the shared sim agrees with the authority; spikes on host-side
+# events the client couldn't know (deflects, saves). The single number that
+# answers "is predict-and-reconcile working?" in a session row.
+var _puck_predict_residual_sum: float = 0.0
+var _puck_predict_residual_n: int = 0
+var _puck_predict_residual_max: float = 0.0
+var _puck_predict_fallback_count: int = 0
+# Remote-skater forward-prediction quality (client): same pre-damp residual on
+# remote bodies — fp error + correction pressure per tick.
+var _remote_correction_sum: float = 0.0
+var _remote_correction_n: int = 0
+var _remote_correction_max: float = 0.0
+# Host: claim-carried interp_delay_ms clamped by the P2 plausibility bound.
+# Legit players should never trip it — sustained non-zero means either the
+# jitter allowance is too tight (mis-rewinding honest high-jitter claims) or a
+# client is inflating its delay.
+var _delay_clamp_count: int = 0
+var _delay_clamp_excess_max_ms: float = 0.0
 # Host-side lag-comp pickup-claim outcomes (the host processes every client's
 # claim, so its row summarizes rewind health for the whole lobby). A claim that
 # reaches the rewound geometry test counts in _pickup_claim_count; if the rewound
@@ -227,6 +247,10 @@ var input_queue_depth_median: int = 0
 var input_lead_avg_ms: float = 0.0
 var input_starvations_per_sec: float = 0.0
 var input_drains_per_sec: float = 0.0
+var puck_predict_residual_avg_m: float = 0.0
+var puck_predict_residual_max_m: float = 0.0
+var remote_correction_avg_m: float = 0.0
+var remote_correction_max_m: float = 0.0
 var _queue_depth_window: Array[int] = []
 var packet_loss_pct: float = 0.0
 var jitter_p95_ms: float = 0.0
@@ -438,6 +462,33 @@ static func record_input_starvation() -> void:
 static func record_input_drain() -> void:
 	if instance: instance._input_drain_count += 1
 
+# puck_predict_residual: per-frame pre-damp error between the Phase-3 analytic
+# prediction target and the rendered puck (predicted mode only).
+static func record_puck_predict_residual(meters: float) -> void:
+	if not instance: return
+	instance._puck_predict_residual_sum += meters
+	instance._puck_predict_residual_n += 1
+	instance._puck_predict_residual_max = maxf(instance._puck_predict_residual_max, meters)
+
+# puck_predict_fallback: _predict_loose declined with buffer data present
+# (snapshot older than PUCK_PREDICT_MAX_S) — the interp fallback engaged.
+static func record_puck_predict_fallback() -> void:
+	if instance: instance._puck_predict_fallback_count += 1
+
+# remote_correction: per-tick pre-damp error on a remote skater body (stage-3
+# forward-prediction quality + correction pressure).
+static func record_remote_correction(meters: float) -> void:
+	if not instance: return
+	instance._remote_correction_sum += meters
+	instance._remote_correction_n += 1
+	instance._remote_correction_max = maxf(instance._remote_correction_max, meters)
+
+# delay_clamped: the host bounded a claim-carried interp_delay_ms (P2).
+static func record_delay_clamped(excess_ms: float) -> void:
+	if not instance: return
+	instance._delay_clamp_count += 1
+	instance._delay_clamp_excess_max_ms = maxf(instance._delay_clamp_excess_max_ms, excess_ms)
+
 # Host-side lag-comp pickup-claim outcomes (see the window-counter comment).
 # record_pickup_claim() is the denominator — a claim that reached the rewound
 # geometry test; miss / deflect are the two non-grant verdicts. Host-only in
@@ -557,6 +608,12 @@ func tick(delta: float) -> void:
 	input_lead_avg_ms = (_input_lead_sum / _input_lead_n * 1000.0) if _input_lead_n > 0 else 0.0
 	input_starvations_per_sec = _starvation_count / _window_timer
 	input_drains_per_sec = _input_drain_count / _window_timer
+	puck_predict_residual_avg_m = (_puck_predict_residual_sum / _puck_predict_residual_n) \
+			if _puck_predict_residual_n > 0 else 0.0
+	puck_predict_residual_max_m = _puck_predict_residual_max
+	remote_correction_avg_m = (_remote_correction_sum / _remote_correction_n) \
+			if _remote_correction_n > 0 else 0.0
+	remote_correction_max_m = _remote_correction_max
 	if not _queue_depth_window.is_empty():
 		var sorted := _queue_depth_window.duplicate()
 		sorted.sort()
@@ -637,6 +694,15 @@ func tick(delta: float) -> void:
 	_input_lead_n = 0
 	_starvation_count = 0
 	_input_drain_count = 0
+	_puck_predict_residual_sum = 0.0
+	_puck_predict_residual_n = 0
+	_puck_predict_residual_max = 0.0
+	_puck_predict_fallback_count = 0
+	_remote_correction_sum = 0.0
+	_remote_correction_n = 0
+	_remote_correction_max = 0.0
+	_delay_clamp_count = 0
+	_delay_clamp_excess_max_ms = 0.0
 	_host_stall_count = 0
 	_pickup_claim_count = 0
 	_pickup_claim_miss_count = 0
@@ -689,6 +755,18 @@ func _fold_session_sample() -> void:
 		"bytes_recv_per_sec": bytes_received_per_sec,
 		"bytes_sent_per_sec": bytes_sent_per_sec,
 		"input_starvations_per_sec": input_starvations_per_sec,
+		"input_drains_per_sec": input_drains_per_sec,
+		# Phase-3/4a prediction quality (regular keys → view takes avg/max):
+		# residual ~0 = the shared sim agrees; spikes = host events folding in.
+		"puck_predict_residual_m": puck_predict_residual_avg_m,
+		"puck_predict_residual_peak_m": puck_predict_residual_max_m,
+		"remote_correction_m": remote_correction_avg_m,
+		"remote_correction_peak_m": remote_correction_max_m,
+		# TOTAL_KEYS event counters: interp fallbacks (deep loss) and the host's
+		# P2 delay-bound clamps (legit players should never trip it).
+		"puck_predict_fallbacks": float(_puck_predict_fallback_count),
+		"delay_clamps": float(_delay_clamp_count),
+		"delay_clamp_excess_ms": _delay_clamp_excess_max_ms,
 		"input_queue_depth": float(input_queue_depth_median),
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,

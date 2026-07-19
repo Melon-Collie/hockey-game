@@ -163,16 +163,33 @@ select
     (metrics->>'reconcile_miss_gap_ms_max')::float       as reconcile_miss_gap_ms_peak,
     -- Shot-launch divergence (client only): client-predicted vs host-authoritative
     -- puck at the first host-confirmed broadcast after a local release. Both run
-    -- identical Jolt from the same client-sent origin, so the peak should be small
-    -- (RTT jitter); a large peak = real launch divergence, and it's the shot-launch
-    -- slice of puck_hard_snaps. Read the peaks against shot_launches_total (denominator).
+    -- the SAME shared analytic solver from the same client-sent origin (Phase 4a),
+    -- so the peak should be tiny (RTT jitter); a large peak = real launch
+    -- divergence, the shot-launch slice of puck_hard_snaps. Read the peaks
+    -- against shot_launches_total (denominator).
     (metrics->>'shot_launch_div_m_max')::float           as shot_launch_div_peak,     -- m; worst launch position gap
     (metrics->>'shot_launch_vel_div_max')::float         as shot_launch_vel_div_peak,  -- m/s; worst launch velocity gap
     (metrics->>'shot_launches_total')::float             as shot_launches_total,       -- shots measured (denominator)
     -- Host physics-tick hitches (gap > 33ms) this session. worst_stall_ms is the
     -- single worst gap; this is HOW MANY. The auto_markers carry the phase / actor
     -- count / last game-event breadcrumb to attribute them. Host only.
-    (metrics->>'host_stalls_total')::float               as host_stalls_total
+    (metrics->>'host_stalls_total')::float               as host_stalls_total,
+    -- Phase-3/4a prediction quality (client only). The residuals are the pre-damp
+    -- error between the shared-sim prediction and the render: avg ~0 = the client
+    -- and host sims agree; peaks measure host events (deflects, saves) folding in.
+    -- Fallbacks = the loose puck dropped to legacy interpolation (deep loss).
+    (metrics->>'puck_predict_residual_m_avg')::float     as puck_predict_err_avg,     -- m
+    (metrics->>'puck_predict_residual_peak_m_max')::float as puck_predict_err_peak,   -- m
+    (metrics->>'remote_correction_m_avg')::float         as remote_predict_err_avg,   -- m
+    (metrics->>'remote_correction_peak_m_max')::float    as remote_predict_err_peak,  -- m
+    (metrics->>'puck_predict_fallbacks_total')::float    as puck_predict_fallbacks_total,
+    -- Host-side upstream/anti-cheat health: backlog drains (stale inputs
+    -- acked-without-applying after jitter bursts — the ratchet fix working) and
+    -- P2 delay-bound clamps (legit players should never trip it; sustained
+    -- non-zero = allowance too tight OR a client inflating its delay).
+    (metrics->>'input_drains_per_sec_max')::float        as input_drains_peak,        -- host only
+    (metrics->>'delay_clamps_total')::float              as delay_clamps_total,       -- host only
+    (metrics->>'delay_clamp_excess_ms_max')::float       as delay_clamp_excess_peak_ms -- host only
 from public.network_sessions
 where net_sim_active is not true;
 
