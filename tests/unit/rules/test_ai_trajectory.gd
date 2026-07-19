@@ -149,3 +149,44 @@ func test_predict_final_matches_predict_endpoint() -> void:
 		assert_almost_eq(final_pos.x, endpoint.x, 0.0001, "predict_final x matches endpoint")
 		assert_almost_eq(final_pos.y, endpoint.y, 0.0001, "predict_final y matches endpoint")
 		assert_almost_eq(final_pos.z, endpoint.z, 0.0001, "predict_final z matches endpoint")
+
+
+# ── step_puck (deterministic single-step atom for the puck-sim migration) ──────
+
+func test_step_puck_returns_position_and_velocity() -> void:
+	# The whole reason step_puck exists: it returns velocity too (origin = pos,
+	# basis.x = vel), so a free-run can carry it forward. A straight slide advances
+	# ~vel·dt and keeps ~its direction (friction only trims magnitude).
+	var stepped: Transform3D = AITrajectory.step_puck(Vector3(0, 0, 0), Vector3(4, 0, 0), 0.1)
+	assert_almost_eq(stepped.origin.x, 0.4, 0.01, "position advanced by ~vel·dt")
+	assert_gt(stepped.basis.x.x, 0.0, "velocity still points +X")
+	assert_lt(stepped.basis.x.x, 4.0, "friction trimmed the speed slightly")
+
+
+func test_step_puck_reflects_velocity_at_board() -> void:
+	# Stepped hard into the +X board, the returned VELOCITY must flip sign (× the
+	# restitution) — the thing predict_final can't report, and what a free-run needs
+	# to continue the carom.
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.05, 0, 0)
+	var stepped: Transform3D = AITrajectory.step_puck(pos, Vector3(30, 0, 0), 1.0 / 12.0)
+	assert_lt(stepped.basis.x.x, 0.0, "post-board velocity reversed in X")
+	assert_lte(stepped.origin.x, GameRules.INNER_HALF_WIDTH + 0.001, "stays inside the boards")
+
+
+func test_step_puck_chained_matches_predict_puck_at() -> void:
+	# The load-bearing guarantee: the shadow harness free-runs by CHAINING step_puck,
+	# and that must equal the AITrajectory predictor the AI already trusts to match
+	# Jolt. Chain N steps and compare the endpoint to predict_puck_at(N steps).
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, 2.0)
+	var vel := Vector3(18, 0, 6)  # fast enough to carom off +X within the window
+	var dt: float = 1.0 / 12.0
+	var steps: int = 6
+	var p := pos
+	var v := vel
+	for _i in steps:
+		var s: Transform3D = AITrajectory.step_puck(p, v, dt)
+		p = s.origin
+		v = s.basis.x
+	var reference: Vector3 = AITrajectory.predict_puck_at(pos, vel, dt * float(steps), steps)
+	assert_almost_eq(p.x, reference.x, 1e-5, "chained step_puck endpoint == predict_puck_at (x)")
+	assert_almost_eq(p.z, reference.z, 1e-5, "chained step_puck endpoint == predict_puck_at (z)")

@@ -188,3 +188,21 @@ static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 	var dt: float = lead_time_s / float(steps)
 	return predict_final(pos, vel, steps, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE)
+
+
+# One deterministic puck step (ice friction + rounded-corner board reflection),
+# returning BOTH the new position AND velocity packed into a Transform3D
+# (origin = position, basis.x = velocity — the same value-type, no-alloc convention
+# _step / predict use internally). predict_final returns position only, so free-run
+# callers that must carry velocity forward tick-by-tick need this.
+#
+# This is the shared atom of the determinism migration (docs/netcode-determinism-
+# migration.md, docs/netcode-phase0-shadow-puck-spec.md): the Phase-0 shadow-puck
+# comparator free-runs the loose puck by chaining this, and the eventual Phase-1
+# deterministic puck sim is built on it — so the sim the AI already trusts to match
+# Jolt IS the sim that would drive the puck. Grounded (XZ) puck only; gravity/loft
+# and goalie/net/pipe collision are later-phase additions.
+static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
+	return _step(pos, vel, dt,
+			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
+			Vector3.ZERO, 0.0)
