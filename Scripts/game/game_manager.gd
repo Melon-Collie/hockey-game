@@ -1093,11 +1093,10 @@ func sync_existing_players(player_data: Array) -> void:
 		var p_name: String = entry[7] if entry.size() > 7 else "Player"
 		var p_number: int = entry[8] if entry.size() > 8 else 10
 		var attrs: PlayerAttributes
-		if entry.size() > 14:
-			attrs = PlayerAttributes.new(int(entry[9]), int(entry[10]), int(entry[11]),
-					int(entry[12]), int(entry[13]), int(entry[14]))
+		if entry.size() > 12:
+			attrs = PlayerAttributes.new(int(entry[9]), int(entry[10]), int(entry[11]), int(entry[12]))
 		else:
-			attrs = PlayerAttributes.all_medium()
+			attrs = PlayerAttributes.all_average()
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 		_registry.spawn(peer_id, team_slot, teams[team_id],
@@ -1140,7 +1139,7 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int,
 			colors.jersey_stripe, colors.gloves, colors.pants_stripe, colors.socks, colors.socks_stripe,
 			colors.secondary, colors.text, colors.text_outline,
 			is_left_handed, player_name, false, jersey_number,
-			attributes if attributes != null else PlayerAttributes.all_medium())
+			attributes if attributes != null else PlayerAttributes.all_average())
 
 
 # ── World Spawn ───────────────────────────────────────────────────────────────
@@ -3982,12 +3981,10 @@ func return_to_lobby() -> void:
 				"name":           r.player_name,
 				"number":         r.jersey_number,
 				"is_left_handed": r.is_left_handed,
-				"speed":          r.attributes.speed,
-				"agility":        r.attributes.agility,
-				"hands":          r.attributes.hands,
-				"size":           r.attributes.size,
-				"physical":       r.attributes.physical,
-				"shot":           r.attributes.shot,
+				"height":         r.attributes.height,
+				"skating":        r.attributes.skating,
+				"skill":          r.attributes.skill,
+				"checking":       r.attributes.checking,
 			}
 	NetworkManager.pending_bot_slots = bot_slots
 	NetworkManager.pending_bot_identities = bot_identities
@@ -4432,11 +4429,11 @@ func _collect_existing_player_data() -> Array[Array]:
 	var existing: Array[Array] = []
 	for peer_id: int in _registry.all():
 		var r: PlayerRecord = _registry.get_record(peer_id)
-		var attrs: PlayerAttributes = r.attributes if r.attributes != null else PlayerAttributes.all_medium()
+		var attrs: PlayerAttributes = r.attributes if r.attributes != null else PlayerAttributes.all_average()
 		existing.append([peer_id, r.team_slot, r.team.team_id,
 				r.jersey_color, r.helmet_color, r.pants_color,
 				r.is_left_handed, r.player_name, r.jersey_number,
-				attrs.speed, attrs.agility, attrs.hands, attrs.size, attrs.physical, attrs.shot])
+				attrs.height, attrs.skating, attrs.skill, attrs.checking])
 	return existing
 
 

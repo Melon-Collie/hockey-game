@@ -121,7 +121,7 @@ func spawn(
 	record.is_left_handed = is_left_handed
 	record.player_name = player_name
 	record.jersey_number = jersey_number
-	record.attributes = attributes if attributes != null else PlayerAttributes.all_medium()
+	record.attributes = attributes if attributes != null else PlayerAttributes.all_average()
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
@@ -213,18 +213,15 @@ func spawn_bot(
 		record.is_left_handed = (team_slot % 2 == 1)
 		record.player_name = "Bot %d" % (bot_id + 1)
 		record.jersey_number = 80 + bot_id
-		record.attributes = PlayerAttributes.all_medium()
+		record.attributes = PlayerAttributes.all_average()
 	else:
 		record.is_left_handed = identity.get("is_left_handed", team_slot % 2 == 1)
 		record.player_name = identity.get("name", "Bot %d" % (bot_id + 1))
 		record.jersey_number = identity.get("number", 80 + bot_id)
-		record.attributes = PlayerAttributes.new(
-				int(identity.get("speed",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("agility",  PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("hands",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("size",     PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("physical", PlayerAttributes.LEVEL_MEDIUM)),
-				int(identity.get("shot",     PlayerAttributes.LEVEL_MEDIUM)))
+		# Identity dicts are normalized by BotIdentityRegistry to the native
+		# height/skating/skill/checking keys; from_dict also migrates a legacy
+		# six-attribute roster on the fly.
+		record.attributes = PlayerAttributes.from_dict(identity)
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck

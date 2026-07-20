@@ -35,7 +35,7 @@ func before_each() -> void:
 	_controller = REMOTE_CONTROLLER_SCENE.instantiate() as RemoteController
 	add_child_autofree(_controller)
 	_controller.setup(_skater, null, gs)
-	_controller.apply_attributes(PlayerAttributes.all_medium())
+	_controller.apply_attributes(PlayerAttributes.all_average())
 	_skater.set_facing(Vector2(0.0, -1.0))
 	_leg_l = _skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
 
