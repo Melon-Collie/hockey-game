@@ -146,7 +146,7 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 			if not AIRoleHelpers.is_legal_position(c):
 				continue
 			if not AIRoleHelpers.race_home_feasible(
-					c, ctx.self_max_speed, ctx.self_max_accel):
+					c, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel):
 				continue
 			if AIRoleHelpers.too_close_to_teammate(c, teammates):
 				continue
@@ -164,7 +164,7 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 		# behind the line): sag down the retreat line only as far as the
 		# counter paths demand — sag-to-even, not sag-to-center-ice.
 		best_pos = AIRoleHelpers.most_forward_feasible(
-				base_stand, ctx.self_max_speed, ctx.self_max_accel)
+				base_stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	d.target_position = best_pos
 	return d
 
@@ -233,7 +233,7 @@ static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	var our_net: Vector3 = ctx.defending_goal_pos
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			Vector3(lane_x, 0.0, pinch_z), ctx.self_max_speed, ctx.self_max_accel)
+			Vector3(lane_x, 0.0, pinch_z), AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	return d
 
 
@@ -258,7 +258,7 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 	var our_net: Vector3 = ctx.defending_goal_pos
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	target = AIRoleHelpers.most_forward_feasible(
-			target, ctx.self_max_speed, ctx.self_max_accel)
+			target, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	d.target_position = target
 	# The rush advances every tick — pace the waypoint, don't brake at it.
 	d.arrive_at_speed = true

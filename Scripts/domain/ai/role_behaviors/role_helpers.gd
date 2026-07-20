@@ -812,11 +812,21 @@ static func fill_counter_channels(ctx: RoleContext,
 		var s: SkaterNetworkState = opp_states[i]
 		var speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
 		var accel: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2
+		var sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 		if has_caps:
 			var caps: AISkaterCaps = ctx.scratch_opp_caps[i]
 			if caps != null:
 				speed = caps.max_speed
 				accel = caps.max_accel
+				sprint_mult = caps.sprint_speed_mult
+		# The counter racer SPRINTS his rush — the gain race as a loose-puck
+		# race, the carry as the breakaway sprint (carry-penalty bypass) —
+		# so a cruise-priced channel under-clocked every counter this build
+		# could actually run. Race length ≈ his whole trip to our net;
+		# stamina-gated by his replicated pool.
+		speed = BotSprintRules.race_speed(speed, sprint_mult,
+				s.stamina, s.sprint_locked,
+				_xz_distance(s.position, our_net))
 		# A skater's momentum can't exceed his real top speed — an over-cap
 		# state velocity (transient physics, or test inputs) would otherwise
 		# double-credit the carry legs through time_to_arrive's along-speed.
@@ -875,7 +885,28 @@ static func fill_counter_channels(ctx: RoleContext,
 						s.position, puck_pos, vel, speed)
 			_append_channel(puck_pos, t_ret, Vector3.ZERO, speed, accel)
 	_race_key_speed = -1.0
-	_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
+	_prepare_reach(self_race_vmax(ctx), ctx.self_max_accel)
+
+
+# Sprint-aware SELF cap for home/station races — the backchecking body
+# sprints (an explicit BotSprintRules use case), so a cruise-priced
+# containment radius under-reached every long race home and the stands
+# sagged earlier than the legs they model. Race length ≈ the trip home;
+# pool/lockout from our own replicated state. Every race_home_feasible /
+# most_forward_feasible caller passes THIS (not ctx.self_max_speed) so the
+# per-fill reach memo keys one consistent value.
+static func self_race_vmax(ctx: RoleContext) -> float:
+	if ctx.snapshot == null:
+		return ctx.self_max_speed
+	var s: SkaterNetworkState = ctx.snapshot.skater_states.get(ctx.peer_id)
+	if s == null:
+		return ctx.self_max_speed
+	var caps: AISkaterCaps = ctx.caps_by_peer.get(ctx.peer_id)
+	var mult: float = caps.sprint_speed_mult if caps != null \
+			else AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+	return BotSprintRules.race_speed(
+			ctx.self_max_speed, mult, s.stamina, s.sprint_locked,
+			_xz_distance(ctx.self_pos, ctx.defending_goal_pos))
 
 
 # Precompute, for the calling defender's build, the squared containment
