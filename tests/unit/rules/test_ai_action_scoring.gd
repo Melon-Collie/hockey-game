@@ -2275,3 +2275,88 @@ func test_box_out_defender_deflates_the_rebound() -> void:
 			0.0, false, 0.0, crash)
 	assert_lt(boxed_crash, free_crash,
 			"a box-out body deflates the second chance; %f vs %f" % [boxed_crash, free_crash])
+
+
+# ── Hole-model v3: the HIGH band reads the replicated hands ──────────────────
+# Pose numbers cited from GoalieBodyConfigBuilder: READY glove (−0.42, 0.90),
+# blocker (0.44, 0.86); butterfly drops both to y ≈ 0.44. GOAL here is +z, so
+# net_dx = local_x (hands_read's m = +1).
+
+const HANDS_READY := Vector4(-0.42, 0.90, 0.44, 0.86)
+const HANDS_BUTTERFLY := Vector4(-0.42, 0.44, 0.44, 0.44)
+
+
+func test_ready_hands_reproduce_the_legacy_high_cover() -> void:
+	# The resting stance parks the hands at ~the torso edge inside the band —
+	# the pose path must degenerate to the legacy deploy there (no static
+	# armpit hole the stance actually covers).
+	var spread: float = BotSkillProfile.hard().shot_aim_error_rad
+	for dist: float in [5.0, 9.0, 14.0]:
+		var shooter := Vector3(0.0, 0.0, GOAL.z - dist)
+		var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
+		var legacy: float = AIActionScoring.open_net_danger(
+				shooter, GOAL, goalie, NET_HW,
+				AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+				-1.0, false, 0.0, false, spread)
+		var posed: float = AIActionScoring.open_net_danger(
+				shooter, GOAL, goalie, NET_HW,
+				AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+				-1.0, false, 0.0, false, spread, 0.0, HANDS_READY)
+		assert_almost_eq(posed, legacy, 0.12,
+				"READY pose ≈ legacy cover at %.0f m (posed %.3f legacy %.3f)"
+				% [dist, posed, legacy])
+
+
+func test_low_hands_open_the_top_in_tight_and_recover_at_range() -> void:
+	# Hands caught at pad height (butterfly): in tight the lift can't beat
+	# the flight, so the above-the-pads window opens — the EMERGENT armpit /
+	# high look. From the point the lift + extension fits and the top shuts
+	# again. This is the arm-commitment perception the old model refused to
+	# fake with a static hole.
+	var spread: float = BotSkillProfile.hard().shot_aim_error_rad
+	var tight := Vector3(0.0, 0.0, GOAL.z - 7.0)
+	var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
+	# Measured at the raw hole-angle level (the danger scalar saturates in
+	# tight for BOTH poses — an in-tight look is near-certain regardless).
+	var tight_ready: float = AIActionScoring._hole_open_angle(
+			0, tight, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, 0.0, 0.0, HANDS_READY)
+	var tight_low: float = AIActionScoring._hole_open_angle(
+			0, tight, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, 0.0, 0.0, HANDS_BUTTERFLY)
+	assert_gt(tight_low, tight_ready + 0.005,
+			"low hands in tight widen the high window (%.4f vs %.4f rad)"
+			% [tight_low, tight_ready])
+	var point := Vector3(0.0, 0.0, GOAL.z - 16.0)
+	var point_ready: float = AIActionScoring.open_net_danger(
+			point, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, spread, 0.0, HANDS_READY)
+	var point_low: float = AIActionScoring.open_net_danger(
+			point, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, spread, 0.0, HANDS_BUTTERFLY)
+	assert_almost_eq(point_low, point_ready, 0.1,
+			"from the point the lift + extend fits — the top shuts again")
+
+
+func test_committed_glove_side_covers_and_vacates_correctly() -> void:
+	# Glove dragged WIDE toward net-left (a committed reach): its side's high
+	# corner is covered sooner, and the vacated right side (blocker parked
+	# low) opens — per-side asymmetry the band aggregate could never see.
+	var shooter := Vector3(0.0, 0.0, GOAL.z - 6.0)
+	var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
+	var committed_left := Vector4(-0.80, 0.95, 0.44, 0.40)  # glove wide-left, blocker low
+	var left_open: float = AIActionScoring._hole_open_angle(
+			0, shooter, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, 0.0, 0.0, committed_left)
+	var right_open: float = AIActionScoring._hole_open_angle(
+			1, shooter, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, 0.0, 0.0, committed_left)
+	assert_lt(left_open, right_open,
+			"the committed glove walls its side; the low blocker's side opens"
+			+ " (L %.4f vs R %.4f)" % [left_open, right_open])

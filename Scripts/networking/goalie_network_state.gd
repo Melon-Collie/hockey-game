@@ -82,6 +82,28 @@ func post_seal_x_sign(guarded_goal_z: float) -> float:
 	return 0.0
 
 
+# The replicated HAND positions in the NET frame, packed for the shot
+# model's pose-aware HIGH band (hole-model v3):
+#   (glove_net_dx, glove_height, blocker_net_dx, blocker_height)
+# net_dx is the hand's lateral offset from the goalie's own center in world
+# x. Local→world x uses the same mapping the controller's post-seal pick
+# documents above (local_x = world_dx · −direction_sign, direction_sign =
+# sign(−goal_z)) → world_dx = local_x · sign(goal_z). Heights are the local
+# offset y (the rig roots at ice level). Like is_down(), this is the one
+# place the pose offsets are interpreted off the wire for the shot model.
+func hands_read(guarded_goal_z: float) -> Vector4:
+	# All-zero offsets mean the pose has not been captured/replicated yet
+	# (a real stance always holds both hands off the body's origin —
+	# READY/butterfly/RVH all have nonzero x). Report ABSENT so the shot
+	# model keeps its declared-stance constants instead of reading a
+	# phantom "hands at his feet, dead center" goalie.
+	if glove_offset == Vector3.ZERO and blocker_offset == Vector3.ZERO:
+		return Vector4.INF
+	var m: float = signf(guarded_goal_z)
+	return Vector4(glove_offset.x * m, glove_offset.y,
+			blocker_offset.x * m, blocker_offset.y)
+
+
 # TALL post seal = VH (post pad vertical, body upright at the post): the
 # whole near-post column is a wall, ice to over the shoulder. False for RVH,
 # whose compressed stance seals the ice at the post but leaves short-side
