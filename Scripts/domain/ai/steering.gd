@@ -481,19 +481,27 @@ static func _net_detour(self_pos: Vector3, anchor: Vector3) -> Vector2:
 	# Only engage at/behind the line (a hair in front allowed for body depth).
 	if inward > NET_DETOUR_FRONT_MARGIN:
 		return Vector2.ZERO
+	# A target ACROSS the cage (opposite x sign — the wheel's far-side exit)
+	# keeps the detour alive for the whole behind-net traverse: without it,
+	# a body starting outside the post span steered the straight line and
+	# scraped the cage's back corner instead of rounding it.
+	var traverse: bool = signf(anchor.x) != 0.0 \
+			and signf(self_pos.x) != 0.0 \
+			and signf(self_pos.x) != signf(anchor.x)
 	# Already clear of the post laterally → let the anchor pull round the
-	# corner on its own.
+	# corner on its own (unless mid-traverse — see above).
 	var post_span: float = GameRules.NET_HALF_WIDTH + NET_DETOUR_POST_MARGIN
-	if absf(self_pos.x) >= post_span:
+	if absf(self_pos.x) >= post_span and not traverse:
 		return Vector2.ZERO
 	# Only detour toward a target on the rink side of this line. A target
 	# also behind the line (a deliberate loose-puck retrieval / wraparound
 	# setup) needs no detour.
 	if (anchor.z - goal_z) * -goal_z_sign <= 0.0:
 		return Vector2.ZERO
-	# Push toward the nearer post side; at dead-center, go around the side
+	# Push toward the nearer post side; on a traverse, toward the TARGET's
+	# side (crossing behind the cage); at dead-center, go around the side
 	# the play (anchor) is on.
-	var side: float = signf(self_pos.x)
+	var side: float = signf(anchor.x) if traverse else signf(self_pos.x)
 	if side == 0.0:
 		side = signf(anchor.x)
 		if side == 0.0:

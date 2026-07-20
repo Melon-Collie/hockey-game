@@ -96,7 +96,7 @@ func _ready() -> void:
 	_hud.retry_pressed.connect(_on_retry)
 	_hud.exit_pressed.connect(_on_exit)
 
-	# Any release (quick shot, wrister, slapper) arms the in-flight watch —
+	# Any release (quick pass, wrister, slapper) arms the in-flight watch —
 	# picking the right tool for the called spot is the whole drill.
 	_on_shot_callable = func(_dir: Vector3, _power: float, _is_slapper: bool) -> void:
 		_on_shot_released()

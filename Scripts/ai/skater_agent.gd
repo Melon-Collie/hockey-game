@@ -135,5 +135,5 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	input.hit_held = false
 	# Fire-once edge: PASS_PRESSED's one-tick release path (the dump) sets it on its
 	# release tick and nothing else clears it, so a latched true would fire an
-	# instant quick shot on every subsequent carry tick.
-	input.quick_shot_pressed = false
+	# instant quick pass on every subsequent carry tick.
+	input.quick_pass_pressed = false

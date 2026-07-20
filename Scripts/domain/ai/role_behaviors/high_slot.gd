@@ -50,7 +50,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			0.0, 0.0, opp_net.z + own_dir * BAND_DEPTHS_M[1])
 	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, band_center):
 		d.target_position = AIRoleHelpers.most_forward_feasible(
-				band_center, ctx.self_max_speed, ctx.self_max_accel)
+				band_center, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 		return d
 
 	var pass_speed_ref: float = AIActionScoring.expected_pass_speed(
@@ -67,7 +67,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			if not AIRoleHelpers.is_legal_position(c):
 				continue
 			if not AIRoleHelpers.race_home_feasible(
-					c, ctx.self_max_speed, ctx.self_max_accel):
+					c, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel):
 				continue
 			if AIRoleHelpers.too_close_to_teammate(c, teammates):
 				continue
@@ -88,6 +88,6 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		best_pos = AIRoleHelpers.most_forward_feasible(
 				Vector3(0.0, 0.0,
 						opp_net.z + own_dir * (GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z - 1.0)),
-				ctx.self_max_speed, ctx.self_max_accel)
+				AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	d.target_position = best_pos
 	return d

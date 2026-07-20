@@ -24,9 +24,12 @@ extends RefCounted
 #     blade speed (no ROM cone, no lift plane).
 #   - Strips: a defender's blade sweeping through the carried puck knocks it
 #     loose along the sweep (no host restitution detail).
-#   - Absent entirely: body collisions / checks, stamina & sprint, boards
-#     (duels are staged mid-ice), goalie BEHAVIOR (a static net-center keeper
-#     exists per team purely so shot scoring sees someone home).
+#   - Sprint & stamina: REAL (StaminaRules gate/drain/lockout + the movement
+#     model's sprint multipliers at league tuning) — required for parity with
+#     the sprint-aware race reads.
+#   - Absent entirely: body collisions / checks, boards beyond the analytic
+#     clamp+reflect, goalie BEHAVIOR (a static net-center keeper exists per
+#     team purely so shot scoring sees someone home).
 #
 # ASSERTION PHILOSOPHY: scenarios pin THAT a behavior works — "possession
 # retained and 5 m of progress within 6 s" — never frame-exact trajectories.
@@ -86,6 +89,12 @@ class SimSkater:
 	var profile: BotSkillProfile = null
 	var was_holding_shot: bool = false
 	var was_holding_slap: bool = false
+	# Live sprint pool (StaminaRules): the plant runs real sprint physics so
+	# the sprint-aware race reads and the harness bodies agree — a read that
+	# prices sprint against a plant that can't sprint recreates the
+	# treadmill class of artifact.
+	var stamina: float = 1.0
+	var sprint_locked: bool = false
 	# ≥ 0 marks a scripted puppet container (no agent); the gap it holds.
 	var puppet_hold_gap: float = -1.0
 	var puppet_depth_floor_z: float = 0.0
@@ -114,12 +123,25 @@ var perf_tick_us: Array[int] = []
 var puck_pos: Vector3 = Vector3.ZERO
 var puck_vel: Vector3 = Vector3.ZERO
 var carrier_id: int = -1
+# Airborne CHIP support: while > 0 the puck is in the air — constant ground
+# velocity (ballistic track), no ice friction, no pickups (no bot volunteers
+# a deflect) — then it lands, keeping LANDING_SPEED_KEEP of its pace (the
+# bounce/skid loss). Scenario harnesses set this to hang_time / DT when
+# staging a lofted dump; 0 (the default) is the ordinary ice puck.
+var airborne_ticks: int = 0
+const LANDING_SPEED_KEEP: float = 0.6
 var ticks: int = 0
 var move_cfg: SkaterMovementRules.MovementConfig
+var _stamina_cfg: StaminaRules.StaminaConfig
 # Rolling puck positions for the puppets' reaction-delayed read.
 var _puck_history: Array[Vector3] = []
 # peer_id -> tick until which that peer can't re-catch its own release.
 var _release_grace: Dictionary = {}
+# Per-team incumbent for the snapshot's chase election (hysteresis feed).
+var _prev_chase_by_team: Dictionary = {}
+# Loose-puck board bounce restitution (the harness's coarse boards — flight
+# fidelity is still not the point; containment is).
+const BOARD_RESTITUTION: float = 0.5
 
 # ── Outcome telemetry (scenario assertions read these) ──────────────────────
 var deke_fired: bool = false
@@ -160,6 +182,12 @@ func _init() -> void:
 	move_cfg.backward_thrust_multiplier = 0.80
 	move_cfg.crossover_thrust_multiplier = 0.90
 	move_cfg.friction_drag = 0.27
+	# Sprint plant (SkaterController league export defaults) — see the
+	# SimSkater stamina comment.
+	move_cfg.sprint_thrust_multiplier = 1.20
+	move_cfg.sprint_max_speed_multiplier = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+	move_cfg.sprint_carry_penalty_bypass = 0.6
+	_stamina_cfg = StaminaRules.StaminaConfig.new()
 
 
 func add_skater(peer_id: int, team_id: int, pos: Vector3,
@@ -235,7 +263,7 @@ func step() -> void:
 		s.was_holding_slap = s.input.slap_held
 		s.input.shoot_pressed = false
 		s.input.slap_pressed = false
-		s.input.quick_shot_pressed = false
+		s.input.quick_pass_pressed = false
 		s.input.stick_lift_pressed = false
 		if collect_perf:
 			var t0: int = Time.get_ticks_usec()
@@ -257,11 +285,26 @@ func step() -> void:
 	# charge dropping. The puck leaves along the shooter's aim.
 	if carrier_id != -1:
 		var c: SimSkater = _skater(carrier_id)
-		var released: bool = c.input.quick_shot_pressed \
+		var released: bool = c.input.quick_pass_pressed \
 				or (c.was_holding_shot and not c.input.shoot_held) \
 				or (c.was_holding_slap and not c.input.slap_held)
 		if released:
-			releases.append({"tick": ticks, "peer": c.peer_id})
+			# The release record carries the DECISION CONTEXT alongside the
+			# event (all additive keys — older consumers read tick/peer only):
+			# the carrier's intent and its compete debug scores at the moment
+			# of firing, so scenario harnesses can trace WHY a release
+			# happened and, later, compare scored completion odds against the
+			# actual outcome (the calibration-probe loop).
+			var rec: Dictionary = {"tick": ticks, "peer": c.peer_id,
+					"team": c.team_id, "pos": c.pos}
+			if c.agent != null and c.agent._carrier != null:
+				rec["decision"] = c.agent.debug_last_decision
+				rec["intent"] = c.agent._carrier.intended_action
+				rec["pass_peer"] = c.agent._carrier.debug_pass_peer_id
+				rec["pass_score"] = c.agent._carrier.debug_pass_score
+				rec["carry_score"] = c.agent._carrier.debug_carry_score
+				rec["dump_score"] = c.agent._carrier.debug_dump_score
+			releases.append(rec)
 			_release_grace[c.peer_id] = ticks + RELEASE_GRACE_TICKS
 			var aim: Vector3 = c.input.mouse_world_pos - c.pos
 			aim.y = 0.0
@@ -279,9 +322,18 @@ func step() -> void:
 		if to_mouse.length() > move_cfg.move_deadzone:
 			s.facing = s.facing.lerp(to_mouse.normalized(), FACING_DRAG * DT).normalized()
 		var rot_y: float = atan2(-s.facing.x, -s.facing.y)
+		# Real sprint physics + stamina pool, from the agent's own sprint
+		# input — the same gate/drain/lockout chain the controller runs.
+		var is_moving: bool = s.input.move_vector.length() > move_cfg.move_deadzone
+		var sprint_on: bool = StaminaRules.sprint_active(
+				s.stamina, s.input.sprint_held, is_moving, s.sprint_locked)
 		s.vel = SkaterMovementRules.apply_movement(
 				s.vel, s.input.move_vector, rot_y, carrier_id == s.peer_id,
-				s.input.brake, DT, move_cfg)
+				s.input.brake, DT, move_cfg, sprint_on)
+		s.stamina = StaminaRules.next_stamina(
+				s.stamina, sprint_on, carrier_id == s.peer_id, DT, _stamina_cfg)
+		s.sprint_locked = StaminaRules.next_locked(
+				s.sprint_locked, s.stamina, sprint_on, _stamina_cfg)
 		s.pos += s.vel * DT
 		s.prev_blade = s.blade
 		var to_cursor: Vector3 = s.input.mouse_world_pos - s.pos
@@ -308,6 +360,22 @@ func step() -> void:
 				sweep.y = 0.0
 				puck_vel = sweep.limit_length(STRIP_SQUIRT_M_S)
 				break
+	elif airborne_ticks > 0:
+		# In the air: ballistic ground track, untouchable, lands with a
+		# bounce/skid speed loss. Rink clamp still applies (a chip into the
+		# glass drops at the boards).
+		airborne_ticks -= 1
+		puck_pos += puck_vel * DT
+		var clamped_air: Vector2 = GameRules.clamp_to_rink_inner(
+				Vector2(puck_pos.x, puck_pos.z))
+		if clamped_air.x != puck_pos.x or clamped_air.y != puck_pos.z:
+			airborne_ticks = 0
+			var outward_air := Vector2(puck_pos.x - clamped_air.x, puck_pos.z - clamped_air.y)
+			puck_vel = PuckCollisionRules.board_rescue_velocity(
+					puck_vel, outward_air, BOARD_RESTITUTION)
+			puck_pos = Vector3(clamped_air.x, puck_pos.y, clamped_air.y)
+		if airborne_ticks == 0:
+			puck_vel *= LANDING_SPEED_KEEP
 	else:
 		var speed: float = Vector2(puck_vel.x, puck_vel.z).length()
 		if speed > 0.0:
@@ -315,6 +383,18 @@ func step() -> void:
 			var scale: float = maxf(speed - drop, 0.0) / speed
 			puck_vel *= scale
 		puck_pos += puck_vel * DT
+		# Boards: clamp to the rink and reflect the outward component (the
+		# same analytic backstop the real Puck runs). Without this a dumped
+		# or rimmed puck sailed out of the world and every loose-puck
+		# scenario beyond a few metres was unwinnable by construction —
+		# and rims can't wrap corners a harness doesn't have.
+		var clamped: Vector2 = GameRules.clamp_to_rink_inner(
+				Vector2(puck_pos.x, puck_pos.z))
+		if clamped.x != puck_pos.x or clamped.y != puck_pos.z:
+			var outward := Vector2(puck_pos.x - clamped.x, puck_pos.z - clamped.y)
+			puck_vel = PuckCollisionRules.board_rescue_velocity(
+					puck_vel, outward, BOARD_RESTITUTION)
+			puck_pos = Vector3(clamped.x, puck_pos.y, clamped.y)
 		for s: SimSkater in skaters:
 			if s.agent == null:
 				continue   # a puppet contains and pokes; it never carries
@@ -386,13 +466,29 @@ func _build_snapshot() -> WorldSnapshot:
 		st.velocity = s.vel
 		st.facing = s.facing
 		st.blade_contact_world = s.blade
-		st.stamina = 1.0
+		st.stamina = s.stamina
+		st.sprint_locked = s.sprint_locked
 		snap.skater_states[s.peer_id] = st
 	snap.puck_state = PuckNetworkState.new()
 	snap.puck_state.position = puck_pos
 	snap.puck_state.velocity = puck_vel
 	snap.puck_state.carrier_peer_id = carrier_id
 	snap.real_puck_carrier_peer_id = carrier_id
+	# The AI enrichment GameManager publishes in production
+	# (_enrich_snapshot_for_ai): team rosters + the hysteretic loose-puck
+	# chase election. Without these no bot can ever be the elected chaser
+	# (the CHASE_PUCK gate reads the election) and the brain's RETRIEVAL
+	# read can't see a playable race — loose-puck scenarios silently played
+	# without the production loose-puck machinery.
+	for s: SimSkater in skaters:
+		var arr: Array = snap.teammate_ids_by_team.get_or_add(s.team_id, [])
+		arr.append(s.peer_id)
+	for tid: int in snap.teammate_ids_by_team:
+		var elected: int = AILoosePuckChase.elect(
+				snap.skater_states, snap.teammate_ids_by_team[tid],
+				puck_pos, puck_vel, int(_prev_chase_by_team.get(tid, -1)))
+		snap.closest_to_puck_by_team[tid] = elected
+		_prev_chase_by_team[tid] = elected
 	# Static home keepers so shot scoring sees someone in each net (goalie
 	# BEHAVIOR is out of scope — this only keeps "empty net!" from dominating
 	# every carrier compete).

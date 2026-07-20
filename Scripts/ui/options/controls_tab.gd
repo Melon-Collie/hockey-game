@@ -12,7 +12,7 @@ const _REBINDABLE_ACTIONS: Array = [
 	{"action": "sprint",         "label": "Sprint"},
 	{"action": "brake",          "label": "Brake"},
 	{"action": "shoot",          "label": "Shoot"},
-	{"action": "quick_shot",     "label": "Quick Pass"},
+	{"action": "quick_pass",     "label": "Quick Pass"},
 	{"action": "slapshot",       "label": "Slapshot"},
 	{"action": "hit",            "label": "Hit"},
 	{"action": "block",          "label": "Block"},

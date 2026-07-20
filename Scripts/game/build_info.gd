@@ -144,15 +144,20 @@ const VERSION: String = "dev"
 #      host_pong -> host measures + EMA-smooths). Adding/removing @rpc methods
 #      shifts the name-sorted RPC index of every method after them (see v14/v23),
 #      so a bump is required even though no serialized wire format changed.
-# v36: deterministic puck goes authoritative + Phase-3 client prediction. The
+# v36: attributes model replaced — request_join / request_update_attributes carry
+#      the new height + three-tier build (4 ints: height/skating/skill/checking)
+#      instead of the old six 1..5 attributes. Host validates with is_legal_build
+#      (one-strong-one-weak) instead of the point-buy budget. Fewer positional
+#      args on both RPCs, so a mixed-build pair decodes garbage — bump required.
+# v37: deterministic puck goes authoritative + Phase-3 client prediction. The
 #      host's loose puck is now the analytic sim in EVERY build (not just dev),
 #      clients predict it to host-present with the same shared step, and the
 #      host rewinds loose-puck claims (pickup / one-timer range) to the claim
 #      stamp instead of the interpolated past (LagCompRewind.puck_view_time).
-#      No serialized format changed, but a v35 peer would render/validate
+#      No serialized format changed, but a v36 peer would render/validate
 #      against different puck physics and a mismatched claim-rewind convention,
 #      so mixed lobbies must be refused.
-const PROTOCOL_VERSION: int = 36
+const PROTOCOL_VERSION: int = 37
 
 
 func _ready() -> void:

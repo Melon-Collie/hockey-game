@@ -238,3 +238,53 @@ func test_strong_follows_strong_x_flip() -> void:
 	var ctx := _make_ctx(self_pos, 100, skaters, -1.0)
 	var d: RoleDecision = AIRoleBreakout.decide(ctx, true)
 	assert_lt(d.target_position.x, 0.0, "strong outlet follows the flipped (-X) strong side")
+
+
+# ── 5v5 wall post (breakout plan §C.1) ───────────────────────────────────────
+# In 5v5 the STRONG outlet is a WALL POST: it adjusts along the boards and
+# yields the mid-seam only when the carrier's own route occupies the wall
+# lane (his wheel). 3v3 keeps both columns (the rover swing).
+
+func test_5v5_strong_holds_the_wall_past_a_half_wall_camper() -> void:
+	# A forechecker camped on the half-wall lane: the 3v3 argmax would swing
+	# inside; the 5v5 post holds the boards and slides along them instead.
+	var self_pos := Vector3(11.0, 0, 15.0)
+	var carrier := Vector3(3.0, 0, 24.0)
+	var ctx := _make_ctx(self_pos, 2, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, carrier],
+			[10, 1, Vector3(10.5, 0, 16.0)]])
+	ctx.team_size = 5
+	var d: RoleDecision = AIRoleBreakout.decide(ctx, true)
+	assert_gt(d.target_position.x, GameRules.RINK_HALF_WIDTH - 2.5,
+			"the 5v5 winger is a wall post — he slides ALONG the boards")
+
+
+func test_5v5_strong_yields_the_wall_to_the_carriers_own_route() -> void:
+	# The carrier himself is driving up the wall lane (his wheel exit): the
+	# post yields — the mid-seam column reopens so the outlet swings inside
+	# instead of standing in the carrier's road.
+	var self_pos := Vector3(11.0, 0, 15.0)
+	var carrier := Vector3(11.2, 0, 22.0)
+	var ctx := _make_ctx(self_pos, 2, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, carrier],
+			[10, 1, Vector3(10.5, 0, 16.0)]])
+	ctx.team_size = 5
+	var d: RoleDecision = AIRoleBreakout.decide(ctx, true)
+	assert_lt(d.target_position.x, GameRules.RINK_HALF_WIDTH - 2.5,
+			"the wall is the carrier's road — the outlet swings inside")
+
+
+func test_3v3_strong_keeps_the_two_column_swing() -> void:
+	# The identical camped-wall setup in 3v3 keeps the shipped behavior:
+	# the argmax may swing the outlet into the mid-seam.
+	var self_pos := Vector3(11.0, 0, 15.0)
+	var carrier := Vector3(3.0, 0, 24.0)
+	var ctx := _make_ctx(self_pos, 2, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, carrier],
+			[10, 1, Vector3(10.5, 0, 16.0)]])
+	var d: RoleDecision = AIRoleBreakout.decide(ctx, true)
+	assert_lt(d.target_position.x, GameRules.RINK_HALF_WIDTH - 2.5,
+			"3v3 keeps the inside swing off a camped wall")

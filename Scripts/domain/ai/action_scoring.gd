@@ -100,9 +100,12 @@ const SLOT_RADIUS_M: float = 6.0
 # trade); a standing set goalie's glove has the whole soft-arc flight to
 # deploy, which is what actually shuts the top shelf against a set keeper.
 #
-# (The armpit / body-side seam is deliberately absent — it only opens when the
-# goalie commits his arm elsewhere, a condition this model can't see, so a static
-# seam would be a phantom target. Re-add it only with a real arm-commitment model.)
+# (The armpit / body-side seam has no STATIC hole — it only opens when the
+# goalie commits his arm elsewhere. With the replicated pose in scope
+# (goalie_hands — hole-model v3), that condition is now SEEN: the HIGH cover
+# races from where each hand actually is (_band_cover's per-side hand read),
+# so the seam emerges exactly when a hand is genuinely caught low or wide,
+# and never as a phantom the resting stance covers.)
 #
 # The goalie FREEZES on the shot (he can't slide into it), so the only thing
 # range buys him is REACTION time to extend the relevant body part to the
@@ -138,9 +141,9 @@ const SLOT_RADIUS_M: float = 6.0
 #           ARM reaction. In tight the glove can't extend → roof it; at range it
 #           gets there → top corners shut. This is the over-the-shoulder read.
 # Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's glove_max_x_outward.
-# (There is no MID/armpit band: the body-side seam only opens when the goalie
-# commits his arm elsewhere, a condition this model can't see, so a static seam
-# would be a phantom opening — dropped until a real arm-commitment model exists.)
+# (There is no MID/armpit band — with the replicated pose (goalie_hands, v3)
+# the body-side seam emerges through the per-side hand race instead: a hand
+# caught low/wide leaves its high side at the torso core, which IS the seam.)
 # [LOW, HIGH] half-width, fully deployed. LOW is the live butterfly's real
 # splayed pad edge — pad_local_offset 0.42 + butterfly_pad_half_width 0.42
 # (GoalieController's pose), the exact span the shot-outcome sim measures
@@ -251,7 +254,29 @@ static func _band_pace(band: int, dist: float, shot_speed_m_s: float) -> float:
 #         how much of that gap he closes is pure kinematics — honest range
 #         windows shrink, honest in-tight and caught-moving windows stay
 #         open because the flight beats his first stride.
-static func _band_cover(band: int, t_read: float, goalie_down: bool) -> float:
+# The splayed (butterfly) pad's half-LENGTH — the x-extent a 90°-rolled pad
+# presents. HOLE_BAND_CORE[LOW] (0.84) = pad offset 0.42 + this, the same
+# anatomy the declared constant was derived from.
+const PAD_SPLAY_HALF_M: float = 0.42
+
+
+# A pad's LOW-band x-extent from its replicated roll, consumed as
+# SPLAYED-vs-STANDING (45° threshold): a standing pad — including the
+# stance's cosmetic ~12° A-frame lean — presents its box width (exactly
+# the declared stance column, calibration-checked), a rolled-flat pad its
+# full splayed half-length. Fine roll interpolation is deliberately NOT
+# modeled: the butterfly-drop race in _band_cover owns mid-transition
+# growth, and no instrument calibrates the intermediate angles — an
+# uncheckable curve would be shape-fitting, not measurement.
+static func _pad_half_extent(roll: float) -> float:
+	if absf(sin(roll)) > 0.707:
+		return PAD_SPLAY_HALF_M
+	return GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5
+
+
+static func _band_cover(band: int, t_read: float, goalie_down: bool,
+		side: int = 0, goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> float:
 	var t_move: float = maxf(0.0, t_read - _band_delay(band))
 	var push: float = _goalie_lateral_reach(t_move)
 	# The puck's own radius rides on the cover edge: a puck whose CENTER
@@ -261,10 +286,71 @@ static func _band_cover(band: int, t_read: float, goalie_down: bool) -> float:
 	# angle phantom in miniature).
 	var edge: float = GameRules.PUCK_COLLISION_RADIUS + push
 	if band == HOLE_BAND_HIGH:
+		# ── Hole-model v3: the HIGH cover reads the side's REAL hand ─────
+		# With the replicated pose in scope (goalie_hands finite, a signed
+		# hole side), the reaction race STARTS where the hand actually is
+		# instead of at a declared stance core: a READY hand (parked in the
+		# band at ~the torso edge) reproduces the legacy deploy, a hand
+		# committed LOW (butterfly, gloves at pad height) must LIFT to the
+		# band floor before its lateral coverage counts, and a hand caught
+		# on the wrong side contributes nothing this side beyond the torso.
+		# The armpit / above-pad seam therefore EMERGES exactly when a hand
+		# is genuinely elsewhere — never as a static hole the resting
+		# stance covers (the phantom the old model refused to add).
+		if side != 0 and goalie_hands.is_finite():
+			var arm_speed: float = HOLE_BAND_EXT[HOLE_BAND_HIGH] \
+					/ maxf(goalie_arm_deploy_s, 0.001)
+			var cap: float = HOLE_BAND_CORE[HOLE_BAND_HIGH] \
+					+ HOLE_BAND_EXT[HOLE_BAND_HIGH]
+			# The hand defending this side: the one with the larger
+			# side-ward offset from the goalie's center.
+			var dx_a: float = goalie_hands.x * float(side)
+			var dx_b: float = goalie_hands.z * float(side)
+			var hand_lat: float = dx_a
+			var hand_y: float = goalie_hands.y
+			if dx_b > dx_a:
+				hand_lat = dx_b
+				hand_y = goalie_hands.w
+			var t_arm: float = t_move
+			# Below the band floor the hand covers nothing HIGH until it
+			# has risen to the pad-top seam (the same boundary the arrival
+			# honesty uses) — the lift spends read budget at the arm's pace.
+			if hand_y < GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M:
+				t_arm = maxf(0.0, t_arm
+						- (GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M - hand_y)
+								/ arm_speed)
+				if t_arm <= 0.0:
+					# Hand still below the band at release — torso only.
+					return HOLE_BAND_CORE[HOLE_BAND_HIGH] + edge
+			# A hand caught on the WRONG side (negative side-ward offset)
+			# pays the cross-over distance — it starts from where it is.
+			var start_lat: float = clampf(hand_lat, -cap, cap)
+			var hand_cover: float = clampf(start_lat + arm_speed * t_arm, 0.0, cap)
+			return maxf(HOLE_BAND_CORE[HOLE_BAND_HIGH], hand_cover) + edge
 		var deploy: float = 0.0 if goalie_down \
 				else clampf(t_move / goalie_arm_deploy_s, 0.0, 1.0)
 		return HOLE_BAND_CORE[HOLE_BAND_HIGH] \
 				+ HOLE_BAND_EXT[HOLE_BAND_HIGH] * deploy + edge
+	# ── Hole-model v3: the LOW cover reads the side's REAL pad ───────────
+	# With the replicated pads in scope, the side's cover starts at the
+	# MEASURED pad edge — the pad's rotated-box x-extent (box half-width
+	# ·|cos roll| + splay half-length·|sin roll|: standing ~0.22 m tall
+	# pads project narrow, the 90°-rolled butterfly pad its full splayed
+	# length) at its actual lateral offset — and the butterfly drop RACE
+	# grows it toward the committed splay edge at the same average pace
+	# the declared-stance lerp implied. Mid-drop, mid-slide, and the
+	# asymmetric post stances all read as the pads actually sit; a DOWN
+	# goalie's measurement IS the truth (nothing left to drop).
+	if side != 0 and goalie_pads.is_finite():
+		var d_left: float = goalie_pads.x * float(side) + _pad_half_extent(goalie_pads.y)
+		var d_right: float = goalie_pads.z * float(side) + _pad_half_extent(goalie_pads.w)
+		var measured: float = maxf(maxf(d_left, d_right), 0.0)
+		if goalie_down:
+			return measured + edge
+		var drop_rate: float = (HOLE_BAND_CORE[HOLE_BAND_LOW] - LOW_CORE_STANDING_M) \
+				/ maxf(goalie_butterfly_drop_s, 0.001)
+		return minf(measured + drop_rate * t_move,
+				maxf(HOLE_BAND_CORE[HOLE_BAND_LOW], measured)) + edge
 	var core: float = HOLE_BAND_CORE[HOLE_BAND_LOW]
 	if not goalie_down:
 		var drop: float = clampf(t_move / goalie_butterfly_drop_s, 0.0, 1.0)
@@ -464,13 +550,13 @@ const LANE_DEFENDER_BODY_RADIUS_M: float = GameRules.OFFSIDE_LINE_SLACK
 # linear velocity directly (see Puck.release), so "power" IS m/s.
 # Sourced from GameRules so the AI's lane reaction window matches
 # the live shot mechanics. score_shoot defaults to wrister speed;
-# score_pass uses pass speed (which is quick_shot_power — short
+# score_pass uses pass speed (which is quick_pass_power — short
 # passes in this codebase are mechanically quick-shots, long ones
 # get wrister-charged for more pace — see PASS_CHARGE_SPEED_M_S /
 # expected_pass_speed).
 const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
-const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 
 # Target ARRIVAL speed at the receiver — the "magnet" pace a bot aims to hit its
 # teammate at. Crisp enough to beat a defender's reaction and shrink the pass's
@@ -689,11 +775,12 @@ const SKATER_BRAKE_TIME_S: float = 0.3
 # eventually."
 const MIN_TRAVEL_SPEED_M_S: float = 1.0
 
-# League-default all-direction thrust (Agility-scaled per skater) — the redirect
-# authority a caps-less time_to_arrive caller assumes for the cross-momentum shed.
-# Per-bot callers pass the skater's REAL max_accel (AISkaterCaps.max_accel) instead,
-# so a nimble build sheds sideways momentum faster than a heavy one. Mirrors
-# SkaterController.thrust; a physical acceleration, not an evaluation shape knob.
+# League-default all-direction thrust (Acceleration-scaled per skater) — the
+# redirect authority a caps-less time_to_arrive caller assumes for the cross-
+# momentum shed. Per-bot callers pass the skater's REAL max_accel
+# (AISkaterCaps.max_accel) instead, so a high-Acceleration build sheds sideways
+# momentum faster than a low one. Mirrors SkaterController.thrust; a physical
+# acceleration, not an evaluation shape knob.
 const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 
 # Utility-AI knobs. AIRoleCarrier._pick_action re-runs every
@@ -742,7 +829,7 @@ const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # AIThreatAssignment.HYSTERESIS_MARGIN_FRAC. Applied only to POSITIVE
 # scores — a committed intent that has decayed to worthless (or
 # negative EV) earns no stickiness. Only applies to fire intents
-# (SHOOT, QUICK_SHOT, PASS) — CARRY doesn't get a bonus, so the bot is
+# (SHOOT, QUICK_PASS, PASS) — CARRY doesn't get a bonus, so the bot is
 # free to switch to fire as soon as fire scores higher. Raise toward
 # 0.30 if intent flickers visibly; lower toward 0.05 if intent feels
 # too sticky.
@@ -785,7 +872,9 @@ static func open_net_danger(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0,
-		screen_dist_m: float = 0.0) -> float:
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> float:
 	# Best of the holes. Pure value-type math, no allocation — safe to run
 	# per carry candidate at tick rate (see _hole_open_angle). Pace is per-band
 	# inside _hole_open_angle: HIGH holes fly at the arrival-honest solved pace,
@@ -797,7 +886,7 @@ static func open_net_danger(
 				net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 				goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m)
+				screen_dist_m, goalie_hands, goalie_pads)
 		if a > best_angle:
 			best_angle = a
 	return clampf(
@@ -818,12 +907,14 @@ static func best_shot_loft(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0,
-		screen_dist_m: float = 0.0) -> int:
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> int:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m)
+			screen_dist_m, goalie_hands, goalie_pads)
 	if hole < 0:
 		return ShotMechanics.ELEVATION_FLAT
 	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
@@ -844,12 +935,14 @@ static func best_shot_power_t(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0,
-		screen_dist_m: float = 0.0) -> float:
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> float:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m)
+			screen_dist_m, goalie_hands, goalie_pads)
 	if hole < 0 or HOLE_BAND[hole] != HOLE_BAND_HIGH:
 		return 1.0
 	var v_h: float = _high_band_horizontal_speed(
@@ -876,17 +969,19 @@ static func best_shot_aim(
 		aim_spread_rad: float = 0.0,
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
-		screen_dist_m: float = 0.0) -> Vector3:
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> Vector3:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m)
+			screen_dist_m, goalie_hands, goalie_pads)
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor, aim_spread_rad,
-			goalie_down, screen_dist_m)
+			goalie_down, screen_dist_m, goalie_hands, goalie_pads)
 	return Vector3(aim_x, 0.0, attacking_goal.z)
 
 
@@ -902,13 +997,15 @@ static func _choose_shot_hole(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0,
-		screen_dist_m: float = 0.0) -> int:
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> int:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m)
+				screen_dist_m, goalie_hands, goalie_pads)
 		if a > best_angle:
 			best_angle = a
 	if best_angle <= 0.0:
@@ -921,7 +1018,7 @@ static func _choose_shot_hole(
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m)
+				screen_dist_m, goalie_hands, goalie_pads)
 		if a < threshold:
 			continue
 		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
@@ -941,7 +1038,9 @@ static func _hole_aim_x(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float, unsettled: float,
 		aim_spread_rad: float = 0.0, goalie_down: bool = false,
-		screen_dist_m: float = 0.0) -> float:
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> float:
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
@@ -987,7 +1086,8 @@ static func _hole_aim_x(
 	var t_reach: float = sqrt(u * u + dv * dv) / pace
 	var t_read: float = t_reach - screen_dist_m / pace \
 			- clampf(unsettled, 0.0, 1.0) * UNSETTLE_READ_PENALTY_S
-	var cover: float = _band_cover(band, t_read, goalie_down)
+	var cover: float = _band_cover(band, t_read, goalie_down, side, goalie_hands,
+			goalie_pads)
 	var cov_lo_x: float = post_hi_x
 	var cov_hi_x: float = post_lo_x
 	if dv >= 0.001:
@@ -1037,7 +1137,9 @@ static func _hole_open_angle(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		_aim_spread_rad: float = 0.0,
-		screen_dist_m: float = 0.0) -> float:
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
@@ -1166,7 +1268,8 @@ static func _hole_open_angle(
 	# real lateral push on both, with the butterfly's defining trade (a DOWN
 	# goalie seals the ice and concedes the top band's extension) — see
 	# _band_cover.
-	var cover: float = _band_cover(band, t_read, goalie_down)
+	var cover: float = _band_cover(band, t_read, goalie_down, side, goalie_hands,
+			goalie_pads)
 
 	# Net posts and the goalie's cover, all as bearings from the shooter's eye.
 	var post_lo_x: float = attacking_goal.x - net_half_width
@@ -1478,7 +1581,9 @@ static func score_shoot(
 		goalie_post_seal_x: float = 0.0,
 		goalie_post_seal_tall: bool = false,
 		aim_spread_rad: float = 0.0,
-		screeners: Array[Vector3] = []) -> float:
+		screeners: Array[Vector3] = [],
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> float:
 	# No shot from on/behind the goal line: the mouth faces the other way, so there
 	# is no straight line from a back-there release into the net. Checked BEFORE
 	# the release clamp below — clamping a behind-the-net release used to teleport
@@ -1503,7 +1608,7 @@ static func score_shoot(
 			shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist)
+			screen_dist, goalie_hands, goalie_pads)
 	if shot_quality <= 0.0:
 		return 0.0
 	# Lane clear vs the aim point ShotAim picks (past the goalie's shadow) —
@@ -1735,6 +1840,26 @@ static func predict_goalie_pos(
 	if dist_to_target <= max_move:
 		return Vector3(target_x, goalie_now.y, goalie_now.z)
 	return Vector3(goalie_now.x + signf(dx) * max_move, goalie_now.y, goalie_now.z)
+
+
+# PREDICTED hands for a keeper in motion — the pose accompaniment to
+# predict_goalie_pos, and THE seam the backdoor pre-arm rebuild needs
+# (ARCHITECTURE Known Issues): a pushing/recovering goalie's hands ride at
+# the SLIDING pose height (glove y 0.55, GoalieBodyConfigBuilder's slide —
+# arms tucked for the push, not presented in the band), so a keeper
+# predicted to be moving at release is scored against hands that genuinely
+# trail low — the unsettled body's partial silhouette, measured instead of
+# declared. Laterals are kept (the hands travel with the body); heights
+# sink toward the slide pose by the unsettled fraction. INF passes through.
+const SLIDING_HANDS_Y_M: float = 0.55
+
+
+static func predicted_goalie_hands(current: Vector4, unsettled: float) -> Vector4:
+	if not current.is_finite():
+		return current
+	var u: float = clampf(unsettled, 0.0, 1.0)
+	return Vector4(current.x, lerpf(current.y, SLIDING_HANDS_Y_M, u),
+			current.z, lerpf(current.w, SLIDING_HANDS_Y_M, u))
 
 
 # Companion to predict_goalie_pos: how UNSETTLED [0, 1] the goalie is AT release.
@@ -2484,6 +2609,50 @@ static func threat_surface_shoot(
 	return maxf(shoot, positional)
 
 
+# LOCAL threat — the score_shoot branch of threat_surface_shoot WITHOUT the
+# positional-gradient fallback. The fallback is right for MARK positioning
+# (a defender needs a non-zero gradient toward a far-but-dangerous man) and
+# WRONG for absolute turnover pricing: it floors possession-against-us at
+# ~0.25–0.55 everywhere on the rink, so conceding at the safest spot on the
+# ice read like handing over half a slot chance and the own-zone clear
+# could never win a compete. The honest split prices the immediate danger
+# here (this function — ~0 outside our zone with the goalie home, hot in
+# our slot) and the FUTURE carry-in danger via counter_rush_cost, which
+# sees the covering set — a clear against a committed forecheck then reads
+# nearly free exactly because our posts beat the counter home.
+static func threat_local_shoot(
+		opp_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	if not in_offensive_zone(opp_pos, our_net) \
+			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
+		return 0.0
+	var seal_x: float = derive_post_seal_x_sign(opp_pos, our_net)
+	return score_shoot(
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
+			WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal_x, seal_x != 0.0)
+
+
+# turnover_cost with the LOCAL threat surface (see threat_local_shoot) —
+# the absolute-price variant for competes that pair it with the
+# counter-rush term carrying the future-danger half.
+static func turnover_cost_local(
+		loss_point: Vector3,
+		loss_prob: float,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		our_defenders: Array[Vector3]) -> float:
+	if not loss_point.is_finite():
+		return 0.0
+	if loss_prob <= 0.0:
+		return 0.0
+	return loss_prob * threat_local_shoot(
+			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
+
+
 # Pass-threat surface — score_pass with a positional fallback for
 # the same reason as threat_surface_shoot. score_pass folds in
 # lane_clear × score_shoot(receiver); when receiver_shot collapses
@@ -2624,29 +2793,75 @@ static func counter_rush_cost(
 		opponent_vels: Array[Vector3],
 		opponent_caps: Array,
 		mate_etas: Array[float] = [],
-		threat_by_cover: Array[float] = []) -> float:
+		threat_by_cover: Array[float] = [],
+		opponent_stamina: Array[float] = []) -> float:
 	if not loss_point.is_finite() or loss_prob <= 0.0 or opponents.is_empty():
 		return 0.0
 	var counter_point: Vector3 = counter_point_for(our_net)
 
-	# Fastest opponent: collect the loss, then carry to the counter point.
+	# Fastest opponent: collect the loss, then carry to the counter point —
+	# SPRINTING it (the collect is a loose-puck race, the carry the breakaway
+	# sprint), at his stamina-gated race cap. `opponent_stamina` carries the
+	# pool with the exhaustion lockout folded in as 0.0 (race_speed reads
+	# both as cruise); missing → 1.0, the fresh worst case a danger term
+	# defaults to.
 	var carry_dist: float = loss_point.distance_to(counter_point)
 	var t_counter: float = INF
+	var t_collect_best: float = INF
 	var has_vels: bool = opponent_vels.size() == opponents.size()
 	var has_caps: bool = opponent_caps.size() == opponents.size()
+	var has_stam: bool = opponent_stamina.size() == opponents.size()
 	for i: int in opponents.size():
 		var speed: float = SKATER_REF_SPEED_M_S
+		var sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 		if has_caps:
 			var caps: AISkaterCaps = opponent_caps[i]
 			if caps != null:
 				speed = caps.max_speed
+				sprint_mult = caps.sprint_speed_mult
+		var collect_dist: float = opponents[i].distance_to(loss_point)
+		speed = BotSprintRules.race_speed(speed, sprint_mult,
+				opponent_stamina[i] if has_stam else 1.0, false,
+				collect_dist + carry_dist)
 		var vel: Vector3 = opponent_vels[i] if has_vels else Vector3.ZERO
-		var t: float = time_to_arrive(opponents[i], loss_point, vel, speed) \
-				+ carry_dist / maxf(speed, 0.001)
+		var t_collect: float = time_to_arrive(opponents[i], loss_point, vel, speed)
+		if t_collect < t_collect_best:
+			t_collect_best = t_collect
+		var t: float = t_collect + carry_dist / maxf(speed, 0.001)
 		if t < t_counter:
 			t_counter = t
 	if t_counter == INF:
 		return 0.0
+	# PASS-FORWARD leg (transition-exposure follow-up, plan §6): the
+	# collector doesn't have to lug it the length of the ice — the real
+	# counter hits the outlet already AHEAD. From the fastest collect,
+	# price the hardest feed to each other opponent's spot and HIS carry
+	# home (gather → carry, same restart-from-rest read as the retrieve
+	# channels), and let the min compete with the lone-carrier time. This
+	# is what makes an everyone-deep shape genuinely expensive: the lone
+	# read let a corner collector's 5+ s lug keep the covering set full
+	# while the stretch man at center turned it into a ~4 s strike.
+	for j: int in opponents.size():
+		var j_speed: float = SKATER_REF_SPEED_M_S
+		var j_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+		if has_caps:
+			var j_caps: AISkaterCaps = opponent_caps[j]
+			if j_caps != null:
+				j_speed = j_caps.max_speed
+				j_mult = j_caps.sprint_speed_mult
+		var j_carry: float = opponents[j].distance_to(counter_point)
+		# The feed only helps when the outlet is genuinely AHEAD of the
+		# lug — skip receivers whose own carry isn't shorter.
+		if j_carry >= carry_dist:
+			continue
+		j_speed = BotSprintRules.race_speed(j_speed, j_mult,
+				opponent_stamina[j] if has_stam else 1.0, false, j_carry)
+		var t_pf: float = t_collect_best \
+				+ loss_point.distance_to(opponents[j]) \
+						/ GameRules.DEFAULT_WRISTER_POWER_MAX_M_S \
+				+ time_to_arrive(opponents[j], counter_point, Vector3.ZERO, j_speed)
+		if t_pf < t_counter:
+			t_counter = t_pf
 
 	# Covering set: bodies that beat the counter home WITH TIME TO SET —
 	# the same brake-to-arrive margin race_home_radius charges (a defender
@@ -2912,7 +3127,7 @@ static func reach_clearance(
 		var stick: float = EVADE_STICK_REACH_M
 		var vmax: float = SKATER_REF_SPEED_M_S
 		if has_caps:
-			# Per-opponent build — Agility (max_accel) sets the ramp, Size
+			# Per-opponent build — Acceleration (max_accel) sets the ramp, reach
 			# (blade_span) the stick, Speed (max_speed) the cap. Empty caps →
 			# league constants for all (every non-attribute caller).
 			var caps: AISkaterCaps = opponent_caps[i]
@@ -3793,11 +4008,11 @@ static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float
 # SUPPORT's foot-race-home exposure check uses this for the threat opp's ETA home).
 #
 # `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
-# thrust (Agility-scaled) — both default to league references so cross-player
+# thrust (Acceleration-scaled) — both default to league references so cross-player
 # callers (opponent / teammate ETA, the loose-puck election that must stay
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
-# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build sheds
-# sideways momentum faster, so it reaches an off-axis cut sooner).
+# arrival passes its attribute-scaled top speed AND max_accel (a high-Acceleration
+# build sheds sideways momentum faster, so it reaches an off-axis cut sooner).
 # ── Calibrated phase model ─────────────────────────────────────────────────────
 # The measured controller (SkaterMovementRules at 120 Hz driven by the real
 # steering — the velocity-matched seek plus the pivot brake, see
@@ -3858,12 +4073,95 @@ static func pursuit_ramp_distance(tau: float,
 
 
 # `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
-# thrust (Agility-scaled) — both default to league references so cross-player
+# thrust (Acceleration-scaled) — both default to league references so cross-player
 # callers (opponent / teammate ETA, the loose-puck election that must stay
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
-# arrival passes its attribute-scaled top speed AND max_accel (a nimbler build
-# redirects and ramps faster, so it reaches an off-axis cut sooner).
+# arrival passes its attribute-scaled top speed AND max_accel (a higher-Acceleration
+# build redirects and ramps faster, so it reaches an off-axis cut sooner).
+#
+# NET-AWARE: a route whose straight line crosses a cage prices the real
+# around-the-cage detour (see _time_to_arrive_routed) — a skater cannot skate
+# through the net frame, and the straight-line time was a fiction exactly in
+# the races that decide behind-net play (retrieval races, chase elections,
+# station races near the nets — the harness caught the retrieval read
+# predicting behind-net race wins the skater physically could not deliver).
+# The common open-ice case pays only the cheap z-gate below (a cage sits at
+# |z| ≥ the goal line; a segment that never reaches it cannot cross one).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
+		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
+		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
+	# Route only when the segment passes THROUGH a cage — an endpoint inside
+	# the inflated frame box is a conceptual "at the net" destination (race-
+	# home reads target the net center as their home proxy; a pinned body
+	# starts against the mesh) and keeps the direct model.
+	if maxf(absf(from_pos.z), absf(dest.z)) \
+			>= GameRules.GOAL_LINE_Z - CARRY_NET_CLEAR_MARGIN_M \
+			and carry_path_blocked_by_net(from_pos, dest) \
+			and not _point_in_cage_box(from_pos) \
+			and not _point_in_cage_box(dest):
+		return _time_to_arrive_routed(
+				from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2)
+	return _time_to_arrive_direct(
+			from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2)
+
+
+# True when `p` sits inside either inflated cage frame box (the same
+# inflation carry_path_blocked_by_net tests against).
+static func _point_in_cage_box(p: Vector3) -> bool:
+	if absf(p.x) > GameRules.NET_BACK_HALF_WIDTH + CARRY_NET_CLEAR_MARGIN_M:
+		return false
+	var az: float = absf(p.z)
+	return az >= GameRules.GOAL_LINE_Z - CARRY_NET_CLEAR_MARGIN_M \
+			and az <= GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH \
+					+ CARRY_NET_CLEAR_MARGIN_M
+
+
+# The around-the-cage route: the better of four corner waypoints — beside
+# either post at mid-cage depth, the behind-net alley, and the front lip.
+# The four cover every crossing geometry with its honest small detour (a
+# behind-net traverse routes through the alley, a crease-front graze dips in
+# front, a front-to-behind trip rounds the nearer post) — picking only post
+# waypoints routed a 2 m behind-net skate the long way around. Each leg runs
+# the calibrated direct model, carrying pace through the corner exactly like
+# the wheel's two-leg pricing. Legs are not re-checked for blockage: the
+# waypoints sit a body's clearance outside the inflated frame, which clears
+# them in every practical geometry.
+static func _time_to_arrive_routed(from_pos: Vector3, dest: Vector3,
+		from_velocity: Vector3, ref_speed_m_s: float,
+		accel_m_s2: float) -> float:
+	# The cage being crossed is on the side the route actually reaches.
+	var s: float = signf(from_pos.z) \
+			if absf(from_pos.z) >= absf(dest.z) else signf(dest.z)
+	var side_x: float = GameRules.NET_BACK_HALF_WIDTH \
+			+ CARRY_NET_CLEAR_MARGIN_M + NET_ROUTE_CLEAR_M
+	var mid_z: float = s * (GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH * 0.5)
+	var back_z: float = s * (GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH \
+			+ CARRY_NET_CLEAR_MARGIN_M + NET_ROUTE_CLEAR_M)
+	var front_z: float = s * (GameRules.GOAL_LINE_Z \
+			- CARRY_NET_CLEAR_MARGIN_M - NET_ROUTE_CLEAR_M)
+	var vmax: float = maxf(ref_speed_m_s, MIN_TRAVEL_SPEED_M_S)
+	var best: float = INF
+	for wp: Vector3 in [
+			Vector3(-side_x, 0.0, mid_z), Vector3(side_x, 0.0, mid_z),
+			Vector3(0.0, 0.0, back_z), Vector3(0.0, 0.0, front_z)]:
+		var t1: float = _time_to_arrive_direct(
+				from_pos, wp, from_velocity, ref_speed_m_s, accel_m_s2)
+		var to_dest: Vector3 = dest - wp
+		to_dest.y = 0.0
+		var v_wp := Vector3.ZERO
+		if to_dest.length_squared() > 0.0001:
+			v_wp = to_dest.normalized() * minf(
+					from_pos.distance_to(wp) / maxf(t1, 0.001), vmax)
+		var t: float = t1 + _time_to_arrive_direct(
+				wp, dest, v_wp, ref_speed_m_s, accel_m_s2)
+		if t < best:
+			best = t
+	return best
+
+
+# The calibrated direct-route travel model (no net awareness — the public
+# time_to_arrive gates and routes; the routed legs call this).
+static func _time_to_arrive_direct(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
 		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
 	var dx: float = dest.x - from_pos.x
@@ -3878,11 +4176,11 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 			+ from_velocity.z * from_velocity.z
 	var v_perp: float = sqrt(maxf(0.0, v_len_sq - v_along * v_along))
 	# REDIRECT: only the cross momentum the seek can't shed for free pays,
-	# scaled by this build's thrust relative to league (a nimbler build has
-	# more headroom).
-	var agility: float = maxf(accel_m_s2, 0.001) / SHED_ACCEL_DEFAULT_M_S2
-	var t: float = maxf(0.0, v_perp - VM_FREE_SHED_M_S * agility) \
-			/ (VM_SHED_DECEL_M_S2 * agility)
+	# scaled by this build's thrust relative to league (a higher-Acceleration
+	# build has more headroom).
+	var accel_ratio: float = maxf(accel_m_s2, 0.001) / SHED_ACCEL_DEFAULT_M_S2
+	var t: float = maxf(0.0, v_perp - VM_FREE_SHED_M_S * accel_ratio) \
+			/ (VM_SHED_DECEL_M_S2 * accel_ratio)
 	var r: float = dist
 	var v0: float = v_along
 	if v0 < 0.0:
@@ -3951,6 +4249,10 @@ static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
 # puck for the path, a blade length of standoff for the cursor (same standard
 # as the boards clamp).
 const CARRY_NET_CLEAR_MARGIN_M: float = 0.5
+# Extra lateral/depth clearance the net-aware ETA's corner waypoints keep
+# beyond the inflated frame — a body's half-width, the corner is skated
+# around, not clipped (see _time_to_arrive_routed).
+const NET_ROUTE_CLEAR_M: float = 0.4
 const BLADE_NET_CLEAR_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
 
 

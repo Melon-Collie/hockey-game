@@ -72,7 +72,7 @@ func test_dropped_presses_fold_into_the_next_applied_input() -> void:
 	var now: float = 10.0
 	var stale := _input_at(now - 0.1)
 	stale.shoot_pressed = true
-	stale.quick_shot_pressed = true
+	stale.quick_pass_pressed = true
 	stale.brake = true  # held — must NOT carry
 	var fresh := _input_at(now - TICK * 0.5)
 	rc._input_queue.append(stale)
@@ -80,7 +80,7 @@ func test_dropped_presses_fold_into_the_next_applied_input() -> void:
 	rc._drain_backlog(now)
 	assert_eq(rc._input_queue.size(), 1)
 	assert_true(fresh.shoot_pressed, "press carried forward")
-	assert_true(fresh.quick_shot_pressed, "press carried forward")
+	assert_true(fresh.quick_pass_pressed, "press carried forward")
 	assert_false(fresh.brake, "held state not carried — next input owns the truth")
 
 

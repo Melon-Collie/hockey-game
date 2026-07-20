@@ -50,6 +50,11 @@ var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Sl
 # the single most dangerous opponent. Empty in offensive / neutral states.
 var threat_assignments: Dictionary[int, int] = {}    # defender peer -> opp peer
 
+# True while last tick's state was RETRIEVAL — feeds the enter/hold
+# hysteresis in AIPossessionState.retrieval_read so the DZONE ↔ RETRIEVAL
+# boundary can't flicker at the race margin.
+var _was_retrieval: bool = false
+
 # Internal — sticky possession for loose-puck handling.
 var _last_carrier_team: int = -1
 # Hysteretic strong-side X. Updated per brain tick from puck.x.
@@ -145,6 +150,33 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 			snapshot, team_id, _own_goal_z, _team_id_by_peer, _last_carrier_team)
 	_last_carrier_team = possession.carrier_team
 	state = possession.state
+
+	# 1.5 RETRIEVAL upgrade (5v5 only — docs/breakout-plan.md Phase A): a
+	# loose puck in our DZ that WE clearly win the race to flips the team
+	# from defensive coverage into the breakout posture — the outlets take
+	# their posts WHILE the retriever skates back, instead of only after
+	# pickup (which left him meeting the forecheck alone). Gated on the
+	# same race model the chase election runs (best_intercept_time), with
+	# enter/hold hysteresis in AIPossessionState.retrieval_read. A dead
+	# puck (goalie smother / phase lock) publishes a −1 chase election and
+	# stays DZONE; contested races stay DZONE (a slot scramble is defense).
+	if team_size >= 5 and state == AIPossessionState.State.DZONE \
+			and snapshot != null and snapshot.puck_state != null \
+			and snapshot.puck_state.carrier_peer_id == -1 \
+			and snapshot.closest_to_puck_by_team.get(team_id, -1) != -1:
+		var p_pos: Vector3 = snapshot.puck_state.position
+		var p_vel: Vector3 = snapshot.puck_state.velocity
+		var our_t: float = AILoosePuckChase.best_intercept_time(
+				snapshot.skater_states,
+				snapshot.teammate_ids_by_team.get(team_id, []),
+				p_pos, p_vel, _caps_by_peer)
+		var opp_t: float = AILoosePuckChase.best_intercept_time(
+				snapshot.skater_states,
+				snapshot.teammate_ids_by_team.get(1 - team_id, []),
+				p_pos, p_vel, _caps_by_peer)
+		if AIPossessionState.retrieval_read(our_t, opp_t, _was_retrieval):
+			state = AIPossessionState.State.RETRIEVAL
+	_was_retrieval = state == AIPossessionState.State.RETRIEVAL
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:

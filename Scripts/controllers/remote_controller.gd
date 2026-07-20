@@ -173,7 +173,7 @@ func _drain_backlog(now: float) -> void:
 		next.shoot_pressed = next.shoot_pressed or stale.shoot_pressed
 		next.slap_pressed = next.slap_pressed or stale.slap_pressed
 		next.stick_lift_pressed = next.stick_lift_pressed or stale.stick_lift_pressed
-		next.quick_shot_pressed = next.quick_shot_pressed or stale.quick_shot_pressed
+		next.quick_pass_pressed = next.quick_pass_pressed or stale.quick_pass_pressed
 		NetworkTelemetry.record_input_drain()
 
 
