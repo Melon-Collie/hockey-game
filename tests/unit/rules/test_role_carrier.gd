@@ -2581,10 +2581,13 @@ func test_developing_feed_watches_the_over_valve_in_5v5() -> void:
 	# for BREAKOUT_D2 (5v5-inherent: the slot only exists there). The
 	# behind-net Over remains unrepresentable by the own-goal-risk zeros
 	# (lead-past-our-line + net-blocker) — pended in the plan doc.
-	var self_pos := Vector3(10.0, 0, 20.5)
+	# Lane staged above the HOME-PLATE slot veto's upper edge (widened to
+	# 2.75 × 6.0 in 534f534 — the watch prices the future feed through the
+	# same veto, so a lane inside the deeper rect now honestly reads dead).
+	var self_pos := Vector3(10.0, 0, 20.0)
 	var ctx := _make_ctx(self_pos, [
 			[1, TEAM_ID, self_pos],
-			[2, TEAM_ID, Vector3(-4.0, 0, 20.2), false, Vector3(-2.0, 0, 0.6)]])
+			[2, TEAM_ID, Vector3(-4.0, 0, 19.2), false, Vector3(-2.0, 0, 0.6)]])
 	var brain := TeamBrain.new(TEAM_ID, ctx.team_id_by_peer)
 	brain.slot_assignments[2] = AIRoleSlots.Slot.BREAKOUT_D2
 	ctx.team_brain = brain

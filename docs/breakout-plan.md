@@ -358,6 +358,21 @@ Same methodology as the duel harness (#27):
   harnesses fire passes too) before constants move; the cheaper nearer-term
   lever is the DUMP side of that compete (does a clear's neutral-reset
   value deserve −0.5 under a committed forecheck?).
+- **Live retune measured (534f534 merged from main):** the home-plate slot
+  veto (2.75 × 6.0, was 2.0 × 5.0) + behind-net blade cradle. Same-day
+  30-trial A/B: clean 11→13, cough 17→15 — and the row-level shift is the
+  point: the m+1 j0 behind-net retrieval that fired a 0.05-EV slot feed
+  (cough) now finds a 0.22-EV BreakStrong feed (clean exit) once the cheap
+  cross-slot option is hard-vetoed. Residual coughs split between honest
+  race losses (their forecheck first to the landing spot on some jitters)
+  and low-EV NON-slot feeds (0.03–0.08 wall/D2 lanes) that still
+  out-compete the −0.36..−0.50 dump — the dump/clear valuation question
+  above is unchanged. Interaction note: the widened rect reaches the
+  BREAKOUT_D2 post's net-front station (0, goal−1.0) — most direct feeds
+  to a PARKED D2 now veto (feeds to a moving D2 still land), so D2's value
+  shifts toward carry-reversal / handoff / second-wave body. The Over-watch
+  pin restaged its lane above the deeper rect's edge (the watch prices the
+  future feed through the same veto, so the old lane honestly reads dead).
 
 ## 4. Non-goals
 
