@@ -1019,8 +1019,25 @@ static func loose_puck_race_lost(
 	if snapshot == null or snapshot.puck_state == null:
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
-	var my_eta: float = AIActionScoring.time_to_arrive(
-			self_pos, puck_pos, self_vel, maxf(self_max_speed, 1.0))
+	# A FAST puck races on its predicted path, not its current position —
+	# ETAs to where a rim IS misread both sides of the race (the tail-chaser
+	# a metre behind it "wins" a race the puck itself outruns; the far-side
+	# skater whose real intercept is where the wrap comes to him reads as
+	# hopeless, declines, and the rim rides the zone untouched). Same walk
+	# as the chase election, so the decline can never contradict it.
+	var puck_vel: Vector3 = snapshot.puck_state.velocity
+	var traj: Array[Vector3] = []
+	if AILoosePuckChase.is_fast_puck(puck_vel):
+		traj = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
+	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
+			/ float(AILoosePuckChase.RACE_STEPS)
+	var my_eta: float
+	if traj.is_empty():
+		my_eta = AIActionScoring.time_to_arrive(
+				self_pos, puck_pos, self_vel, maxf(self_max_speed, 1.0))
+	else:
+		my_eta = AILoosePuckChase.path_intercept_time(
+				traj, step_dt, self_pos, self_vel, maxf(self_max_speed, 1.0))
 	var best_opp_eta: float = INF
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) == team_id:
@@ -1029,7 +1046,12 @@ static func loose_puck_race_lost(
 		var caps: AISkaterCaps = caps_by_peer.get(pid)
 		var speed: float = caps.max_speed if caps != null \
 				else AIActionScoring.SKATER_REF_SPEED_M_S
-		var t: float = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)
+		var t: float
+		if traj.is_empty():
+			t = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)
+		else:
+			t = AILoosePuckChase.path_intercept_time(
+					traj, step_dt, s.position, s.velocity, speed)
 		if t < best_opp_eta:
 			best_opp_eta = t
 	if best_opp_eta == INF:

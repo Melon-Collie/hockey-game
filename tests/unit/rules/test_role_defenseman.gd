@@ -256,3 +256,55 @@ func test_dback_shades_with_the_puck() -> void:
 	var left: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DBACK_L)
 	assert_gt(left.target_position.x, -5.0,
 			"the back post slides toward the puck side, bounded")
+
+
+# ── O-zone rim keep-ins (breakout plan §C.3) ─────────────────────────────────
+# A board-hugging clear coming up MY wall pre-empts the walk: step to the
+# boards at the line and kill it — gated by the honest intercept race.
+
+func test_point_steps_to_the_wall_on_a_winnable_rim() -> void:
+	# Rim fired up the +x wall from deep in the attacking zone; the strong
+	# point (side +x) wins the race to the line comfortably.
+	var ctx: RoleContext = _make_ctx(Vector3(9.5, 0.0, -9.3),
+			[[2, TEAM_ID, Vector3(0.0, 0.0, -20.0)]], -1,
+			Vector3(11.5, 0.0, -22.0))
+	ctx.snapshot.puck_state.velocity = Vector3(0.2, 0.0, 10.5)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.POINT_STRONG)
+	assert_gt(d.target_position.x, 10.5, "the keep-in stand is ON the wall")
+	assert_almost_eq(d.target_position.z, -(GameRules.BLUE_LINE_Z + 0.5), 0.01,
+			"...at the blue line, just inside the zone")
+	assert_true(d.arrive_at_speed, "attack the meet point in stride")
+
+
+func test_point_bails_when_the_rim_wins_the_race() -> void:
+	# The same rim already at the hash marks and flying — the race is lost;
+	# chasing it seals the point out of the play. Hold the walk instead.
+	var ctx: RoleContext = _make_ctx(Vector3(6.7, 0.0, -9.3),
+			[[2, TEAM_ID, Vector3(0.0, 0.0, -20.0)]], -1,
+			Vector3(11.5, 0.0, -10.0))
+	ctx.snapshot.puck_state.velocity = Vector3(0.2, 0.0, 12.0)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.POINT_STRONG)
+	assert_lt(d.target_position.x, 10.5,
+			"a lost race holds the station — never chase a gone puck")
+
+
+func test_point_ignores_a_slow_drifting_wall_puck() -> void:
+	# Below rim pace it's an ordinary loose puck — the chase election's
+	# business, not a keep-in pre-empt.
+	var ctx: RoleContext = _make_ctx(Vector3(9.5, 0.0, -9.3),
+			[[2, TEAM_ID, Vector3(0.0, 0.0, -20.0)]], -1,
+			Vector3(11.5, 0.0, -22.0))
+	ctx.snapshot.puck_state.velocity = Vector3(0.0, 0.0, 3.0)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.POINT_STRONG)
+	assert_lt(d.target_position.x, 10.5, "a drifting puck is not a rim")
+
+
+func test_weak_point_ignores_a_rim_on_the_far_wall() -> void:
+	# The rim is on the +x wall; the weak point's wall is -x — his read
+	# never fires, the strong point owns that boards lane.
+	var ctx: RoleContext = _make_ctx(Vector3(-4.5, 0.0, -9.3),
+			[[2, TEAM_ID, Vector3(0.0, 0.0, -20.0)]], -1,
+			Vector3(11.5, 0.0, -22.0))
+	ctx.snapshot.puck_state.velocity = Vector3(0.2, 0.0, 10.5)
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.POINT_WEAK)
+	assert_lt(d.target_position.x, 0.0, "the weak point holds his own side")

@@ -2485,6 +2485,50 @@ static func threat_surface_shoot(
 	return maxf(shoot, positional)
 
 
+# LOCAL threat — the score_shoot branch of threat_surface_shoot WITHOUT the
+# positional-gradient fallback. The fallback is right for MARK positioning
+# (a defender needs a non-zero gradient toward a far-but-dangerous man) and
+# WRONG for absolute turnover pricing: it floors possession-against-us at
+# ~0.25–0.55 everywhere on the rink, so conceding at the safest spot on the
+# ice read like handing over half a slot chance and the own-zone clear
+# could never win a compete. The honest split prices the immediate danger
+# here (this function — ~0 outside our zone with the goalie home, hot in
+# our slot) and the FUTURE carry-in danger via counter_rush_cost, which
+# sees the covering set — a clear against a committed forecheck then reads
+# nearly free exactly because our posts beat the counter home.
+static func threat_local_shoot(
+		opp_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	if not in_offensive_zone(opp_pos, our_net) \
+			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
+		return 0.0
+	var seal_x: float = derive_post_seal_x_sign(opp_pos, our_net)
+	return score_shoot(
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
+			WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal_x, seal_x != 0.0)
+
+
+# turnover_cost with the LOCAL threat surface (see threat_local_shoot) —
+# the absolute-price variant for competes that pair it with the
+# counter-rush term carrying the future-danger half.
+static func turnover_cost_local(
+		loss_point: Vector3,
+		loss_prob: float,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		our_defenders: Array[Vector3]) -> float:
+	if not loss_point.is_finite():
+		return 0.0
+	if loss_prob <= 0.0:
+		return 0.0
+	return loss_prob * threat_local_shoot(
+			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
+
+
 # Pass-threat surface — score_pass with a positional fallback for
 # the same reason as threat_surface_shoot. score_pass folds in
 # lane_clear × score_shoot(receiver); when receiver_shot collapses
@@ -3864,7 +3908,90 @@ static func pursuit_ramp_distance(tau: float,
 # consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
 # arrival passes its attribute-scaled top speed AND max_accel (a higher-Acceleration
 # build redirects and ramps faster, so it reaches an off-axis cut sooner).
+#
+# NET-AWARE: a route whose straight line crosses a cage prices the real
+# around-the-cage detour (see _time_to_arrive_routed) — a skater cannot skate
+# through the net frame, and the straight-line time was a fiction exactly in
+# the races that decide behind-net play (retrieval races, chase elections,
+# station races near the nets — the harness caught the retrieval read
+# predicting behind-net race wins the skater physically could not deliver).
+# The common open-ice case pays only the cheap z-gate below (a cage sits at
+# |z| ≥ the goal line; a segment that never reaches it cannot cross one).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
+		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
+		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
+	# Route only when the segment passes THROUGH a cage — an endpoint inside
+	# the inflated frame box is a conceptual "at the net" destination (race-
+	# home reads target the net center as their home proxy; a pinned body
+	# starts against the mesh) and keeps the direct model.
+	if maxf(absf(from_pos.z), absf(dest.z)) \
+			>= GameRules.GOAL_LINE_Z - CARRY_NET_CLEAR_MARGIN_M \
+			and carry_path_blocked_by_net(from_pos, dest) \
+			and not _point_in_cage_box(from_pos) \
+			and not _point_in_cage_box(dest):
+		return _time_to_arrive_routed(
+				from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2)
+	return _time_to_arrive_direct(
+			from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2)
+
+
+# True when `p` sits inside either inflated cage frame box (the same
+# inflation carry_path_blocked_by_net tests against).
+static func _point_in_cage_box(p: Vector3) -> bool:
+	if absf(p.x) > GameRules.NET_BACK_HALF_WIDTH + CARRY_NET_CLEAR_MARGIN_M:
+		return false
+	var az: float = absf(p.z)
+	return az >= GameRules.GOAL_LINE_Z - CARRY_NET_CLEAR_MARGIN_M \
+			and az <= GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH \
+					+ CARRY_NET_CLEAR_MARGIN_M
+
+
+# The around-the-cage route: the better of four corner waypoints — beside
+# either post at mid-cage depth, the behind-net alley, and the front lip.
+# The four cover every crossing geometry with its honest small detour (a
+# behind-net traverse routes through the alley, a crease-front graze dips in
+# front, a front-to-behind trip rounds the nearer post) — picking only post
+# waypoints routed a 2 m behind-net skate the long way around. Each leg runs
+# the calibrated direct model, carrying pace through the corner exactly like
+# the wheel's two-leg pricing. Legs are not re-checked for blockage: the
+# waypoints sit a body's clearance outside the inflated frame, which clears
+# them in every practical geometry.
+static func _time_to_arrive_routed(from_pos: Vector3, dest: Vector3,
+		from_velocity: Vector3, ref_speed_m_s: float,
+		accel_m_s2: float) -> float:
+	# The cage being crossed is on the side the route actually reaches.
+	var s: float = signf(from_pos.z) \
+			if absf(from_pos.z) >= absf(dest.z) else signf(dest.z)
+	var side_x: float = GameRules.NET_BACK_HALF_WIDTH \
+			+ CARRY_NET_CLEAR_MARGIN_M + NET_ROUTE_CLEAR_M
+	var mid_z: float = s * (GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH * 0.5)
+	var back_z: float = s * (GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH \
+			+ CARRY_NET_CLEAR_MARGIN_M + NET_ROUTE_CLEAR_M)
+	var front_z: float = s * (GameRules.GOAL_LINE_Z \
+			- CARRY_NET_CLEAR_MARGIN_M - NET_ROUTE_CLEAR_M)
+	var vmax: float = maxf(ref_speed_m_s, MIN_TRAVEL_SPEED_M_S)
+	var best: float = INF
+	for wp: Vector3 in [
+			Vector3(-side_x, 0.0, mid_z), Vector3(side_x, 0.0, mid_z),
+			Vector3(0.0, 0.0, back_z), Vector3(0.0, 0.0, front_z)]:
+		var t1: float = _time_to_arrive_direct(
+				from_pos, wp, from_velocity, ref_speed_m_s, accel_m_s2)
+		var to_dest: Vector3 = dest - wp
+		to_dest.y = 0.0
+		var v_wp := Vector3.ZERO
+		if to_dest.length_squared() > 0.0001:
+			v_wp = to_dest.normalized() * minf(
+					from_pos.distance_to(wp) / maxf(t1, 0.001), vmax)
+		var t: float = t1 + _time_to_arrive_direct(
+				wp, dest, v_wp, ref_speed_m_s, accel_m_s2)
+		if t < best:
+			best = t
+	return best
+
+
+# The calibrated direct-route travel model (no net awareness — the public
+# time_to_arrive gates and routes; the routed legs call this).
+static func _time_to_arrive_direct(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
 		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
 	var dx: float = dest.x - from_pos.x
@@ -3952,6 +4079,10 @@ static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
 # puck for the path, a blade length of standoff for the cursor (same standard
 # as the boards clamp).
 const CARRY_NET_CLEAR_MARGIN_M: float = 0.5
+# Extra lateral/depth clearance the net-aware ETA's corner waypoints keep
+# beyond the inflated frame — a body's half-width, the corner is skated
+# around, not clipped (see _time_to_arrive_routed).
+const NET_ROUTE_CLEAR_M: float = 0.4
 const BLADE_NET_CLEAR_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
 
 
