@@ -126,13 +126,27 @@ extends Node
 # <200 ms, and Clear Sight Analytics' set-and-sighted threshold is ~0.5 s of
 # clear read before release (~97% save when met). Screens and caught-moving
 # penalties still ADD on top, so only a set, sighted goalie collects the credit
-# — and quick-release snaps (no windup state, nothing to fixate) never prime,
-# which is exactly the real "quick release beats the read" edge. The prime
-# lingers `prearm_linger` past the read so the release event can't race the
-# flag off on the same tick the windup state clears.
+# — and a quick-release snap FROM RANGE (no windup state, nothing to fixate)
+# never earns the windup prime, which is exactly the real "quick release beats
+# the read" edge. The prime lingers `prearm_linger` past the read so the release
+# event can't race the flag off on the same tick the windup state clears.
+#
+# SLOT PROXIMITY PRIME (`prime_slot_distance`): a set, upright goalie with an
+# opposing carrier already in tight is coiled and pre-programmed to react even
+# WITHOUT a held windup — a real slot goalie is never a frozen statue on a quick
+# release. So an in-front carrier inside `prime_slot_distance` arms the same prime
+# by proximity. This is not a "save it anyway" buff: it only makes both limbs
+# START moving (the cold arm read of 0.18 s exceeds a slot shot's ~0.10-0.16 s
+# flight, so uncredited the goalie never moves at all). The flat reach-speed cap
+# (`glove_react_max_speed`) still bounds how much net he covers in the time left,
+# so a corner picked out of that reach beats him — the intended "pick a corner,
+# don't face a statue" in-tight window. Distance is grounded at the zone where a
+# cold arm read outlasts the shot's flight (flight < 0.18 s ⇒ under ~5-6 m for
+# 25-30 m/s releases), so it targets exactly the freeze zone and no farther.
 @export var prearmed_reaction_delay: float = 0.07
 @export var prearm_read_time: float = 0.40
 @export var prearm_linger: float = 0.25
+@export var prime_slot_distance: float = 6.0
 
 # Imminence gate on STARTING a release reaction at all. A release whose puck is
 # more than this many seconds from crossing the goal line doesn't begin a
@@ -3629,6 +3643,16 @@ func _update_shot_commit(delta: float, carrier: Skater) -> void:
 			_prime_linger_timer = prearm_linger
 	else:
 		_shot_read_timer = 0.0
+	# Set-and-sighted in the slot: a coiled, upright goalie with an opposing
+	# carrier already in tight is pre-programmed to react even without a held
+	# windup, so a quick slot release draws a reflex save ATTEMPT instead of
+	# freezing him in place (see the prearm doc-block). Refreshed every tick the
+	# threat sits in the slot; `prearm_linger` carries the prime across the release
+	# tick (which clears the carrier) into _on_puck_released. The movement-read
+	# penalty still ADDS on top at _on_puck_released, so a goalie caught scrambling
+	# in the slot claws the credit back — only a genuinely set goalie collects it.
+	if _is_set_in_slot(carrier):
+		_prime_linger_timer = prearm_linger
 
 # True when an opposing carrier in the slot is winding up a shot (wrister drag or
 # slapshot charge) close enough that the goalie respects it. Drives both the
@@ -3637,19 +3661,35 @@ func _update_shot_commit(delta: float, carrier: Skater) -> void:
 # only `current_shot_state` (replicated) so it fires for remote shooters too;
 # the DIRECTIONAL lean additionally needs the host-side predicted velocity.
 func _is_reading_shot_threat(carrier: Skater) -> bool:
+	if not _opposing_carrier_in_front(carrier, prelean_max_distance):
+		return false
+	return carrier.current_shot_state == SkaterStateMachine.State.WRISTER_AIM \
+			or carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
+
+# True when a set, upright goalie has an opposing carrier already in tight (within
+# `prime_slot_distance`, in front). Arms the slot-proximity prime — the goalie is
+# coiled and reacts reflexively on a quick release rather than freezing. No windup
+# state required (that's the point: quick slot snaps are the freeze case). See the
+# prearm doc-block for why this is an ATTEMPT enabler, not a save buff.
+func _is_set_in_slot(carrier: Skater) -> bool:
+	return _opposing_carrier_in_front(carrier, prime_slot_distance)
+
+# Shared geometric core of the windup read and the slot-proximity prime: `carrier`
+# is an opposing puck-carrier in front of the goalie (slot side, not behind the
+# net) within `max_dist`, with the goalie upright and not already reacting (once a
+# shot is in flight the reaction pipeline owns the read). Reads only replicated
+# `global_position` / team so it fires for remote carriers too.
+func _opposing_carrier_in_front(carrier: Skater, max_dist: float) -> bool:
 	if carrier == null:
 		return false
 	if _reaction.reacting or not _sm.is_upright():
 		return false
 	if team_id != -1 and carrier.get_team_id() == team_id:
 		return false
-	if carrier.current_shot_state != SkaterStateMachine.State.WRISTER_AIM \
-			and carrier.current_shot_state != SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
-		return false
-	# In front of the goalie (slot side), within read range — not behind the net.
+	# In front of the goalie (slot side), not behind the net.
 	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
 		return false
-	return goalie.global_position.distance_to(carrier.global_position) <= prelean_max_distance
+	return goalie.global_position.distance_to(carrier.global_position) <= max_dist
 
 # Universal puck-tracking trigger. Runs each host physics frame on loose
 # pucks; if the puck is fast and on track for the net within the

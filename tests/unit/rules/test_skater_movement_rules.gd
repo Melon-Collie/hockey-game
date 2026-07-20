@@ -68,6 +68,43 @@ func test_sprint_raises_top_speed() -> void:
 	assert_almost_eq(sprint_speed, cfg.max_speed * cfg.sprint_max_speed_multiplier, 0.2,
 		"sprint cap is max_speed × sprint_max_speed_multiplier")
 
+func test_sprint_with_puck_waives_most_of_carry_penalty() -> void:
+	# Sprinting with the puck is heads-down / straight-line, so most of the carry
+	# speed penalty is waived (sprint_carry_penalty_bypass) — that's what lets a
+	# fast carrier separate. A sprinting carrier tops out higher than a cruising
+	# one, near max_speed × sprint × the bypassed carry mult.
+	var cfg := _default_cfg()
+	cfg.sprint_max_speed_multiplier = 1.3
+	cfg.sprint_thrust_multiplier = 1.2
+	cfg.puck_carry_speed_multiplier = 0.85   # 15% cruise carry penalty
+	cfg.sprint_carry_penalty_bypass = 0.6    # waive 60% of it while sprinting
+	var v_cruise := Vector3.ZERO
+	var v_sprint := Vector3.ZERO
+	for i in range(2000):
+		v_cruise = SkaterMovementRules.apply_movement(v_cruise, Vector2(1, 0), 0.0, true, false, 0.01, cfg, false)
+		v_sprint = SkaterMovementRules.apply_movement(v_sprint, Vector2(1, 0), 0.0, true, false, 0.01, cfg, true)
+	var cruise_speed: float = Vector2(v_cruise.x, v_cruise.z).length()
+	var sprint_speed: float = Vector2(v_sprint.x, v_sprint.z).length()
+	assert_gt(sprint_speed, cruise_speed, "sprinting with the puck tops out faster than cruising with it")
+	var eff_carry: float = lerpf(cfg.puck_carry_speed_multiplier, 1.0, cfg.sprint_carry_penalty_bypass)
+	assert_almost_eq(sprint_speed, cfg.max_speed * cfg.sprint_max_speed_multiplier * eff_carry, 0.2,
+		"sprint carry cap = max × sprint × the bypassed carry mult")
+
+func test_sprint_carry_bypass_zero_keeps_full_penalty() -> void:
+	# Default bypass (0.0) leaves the carry penalty fully in place even while
+	# sprinting, so the pre-bypass behavior is preserved for callers that omit it.
+	var cfg := _default_cfg()
+	cfg.sprint_max_speed_multiplier = 1.3
+	cfg.sprint_thrust_multiplier = 1.2
+	cfg.puck_carry_speed_multiplier = 0.85
+	# sprint_carry_penalty_bypass left at its 0.0 default.
+	var v := Vector3.ZERO
+	for i in range(2000):
+		v = SkaterMovementRules.apply_movement(v, Vector2(1, 0), 0.0, true, false, 0.01, cfg, true)
+	var speed: float = Vector2(v.x, v.z).length()
+	assert_almost_eq(speed, cfg.max_speed * cfg.sprint_max_speed_multiplier * cfg.puck_carry_speed_multiplier, 0.2,
+		"no bypass → sprint carry cap keeps the full carry penalty")
+
 func test_sprint_inactive_matches_baseline() -> void:
 	# Default multipliers + sprint_active=false must be a no-op vs the old 7-arg path.
 	var cfg := _default_cfg()
