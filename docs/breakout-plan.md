@@ -415,6 +415,36 @@ Same methodology as the duel harness (#27):
   shifts toward carry-reversal / handoff / second-wave body. The Over-watch
   pin restaged its lane above the deeper rect's edge (the watch prices the
   future feed through the same veto, so the old lane honestly reads dead).
+- **Sprint-aware race reads (iteration 6, branch claude/sprint-aware-eta):**
+  every AI race read was Speed-attribute-BLIND by construction — cruise
+  speed is near-uniform by design (the attribute doc puts Speed's separation
+  in the sprint ceiling, `sprint_ceiling_mult` 1.07→1.16), the body sprints
+  its races (`_resolve_sprint`), and the reads priced cruise (~0.3 s off on
+  a 3 s race — larger than the RETRIEVAL and kill-setup margins). New
+  `BotSprintRules.race_speed`: the read-side sprint model — the body's own
+  engage gates (lockout, stamina floor, sprint engage gap) + the pool's
+  sustainable burst (t_burst = stamina/drain) collapsed to the exact
+  two-phase distance-weighted cap. One seam (`AILoosePuckChase.race_vmax`)
+  feeds the election, `best_intercept_time` (RETRIEVAL), and
+  `loose_puck_race_lost` (which gained `self_pid` so its own side is
+  stamina-read too); the SM chase walk races at the same cap
+  (`_lead_intercept` vmax override). `AISkaterCaps.sprint_speed_mult` is
+  plumbed from the controller (league default fallback — a capless league
+  body sprints). The duel harness gained a REAL sprint plant (StaminaRules
+  gate/drain/lockout + the movement model's sprint multipliers at league
+  tuning) so reads and instrument stay in parity — a sprint-pricing read
+  against a sprint-less plant would recreate the treadmill artifact class.
+  Approximations (documented on race_speed): ramp charged at normal thrust
+  (sprint's ×1.2 bump ignored — conservative), turn gate ignored (races
+  priced straight), carriers never sprint-read (race consumers are
+  loose-puck reads; breakaway sprint pricing is future work if carry races
+  ever consume it). Pins: race_speed model (cap / gates / two-phase blend),
+  burner-vs-plodder election flip, gassed-vs-fresh race flip. Harness with
+  the sprint plant: clean 6 / clear 10 / cough 14, 16 exits (was 13), mean
+  cough danger 0.212 — the forecheck arrives hotter too, so more
+  retrievals resolve as rim-outs; reads and bodies agree (no treadmill
+  rows, no timeouts). Follow-on candidates: counter-rush fastest-opponent
+  leg and station/race-home reads (backchecking sprints there too).
 
 ## 4. Non-goals
 

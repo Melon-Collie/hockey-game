@@ -812,11 +812,21 @@ static func fill_counter_channels(ctx: RoleContext,
 		var s: SkaterNetworkState = opp_states[i]
 		var speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
 		var accel: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2
+		var sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 		if has_caps:
 			var caps: AISkaterCaps = ctx.scratch_opp_caps[i]
 			if caps != null:
 				speed = caps.max_speed
 				accel = caps.max_accel
+				sprint_mult = caps.sprint_speed_mult
+		# The counter racer SPRINTS his rush — the gain race as a loose-puck
+		# race, the carry as the breakaway sprint (carry-penalty bypass) —
+		# so a cruise-priced channel under-clocked every counter this build
+		# could actually run. Race length ≈ his whole trip to our net;
+		# stamina-gated by his replicated pool.
+		speed = BotSprintRules.race_speed(speed, sprint_mult,
+				s.stamina, s.sprint_locked,
+				_xz_distance(s.position, our_net))
 		# A skater's momentum can't exceed his real top speed — an over-cap
 		# state velocity (transient physics, or test inputs) would otherwise
 		# double-credit the carry legs through time_to_arrive's along-speed.
@@ -875,7 +885,28 @@ static func fill_counter_channels(ctx: RoleContext,
 						s.position, puck_pos, vel, speed)
 			_append_channel(puck_pos, t_ret, Vector3.ZERO, speed, accel)
 	_race_key_speed = -1.0
-	_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
+	_prepare_reach(self_race_vmax(ctx), ctx.self_max_accel)
+
+
+# Sprint-aware SELF cap for home/station races — the backchecking body
+# sprints (an explicit BotSprintRules use case), so a cruise-priced
+# containment radius under-reached every long race home and the stands
+# sagged earlier than the legs they model. Race length ≈ the trip home;
+# pool/lockout from our own replicated state. Every race_home_feasible /
+# most_forward_feasible caller passes THIS (not ctx.self_max_speed) so the
+# per-fill reach memo keys one consistent value.
+static func self_race_vmax(ctx: RoleContext) -> float:
+	if ctx.snapshot == null:
+		return ctx.self_max_speed
+	var s: SkaterNetworkState = ctx.snapshot.skater_states.get(ctx.peer_id)
+	if s == null:
+		return ctx.self_max_speed
+	var caps: AISkaterCaps = ctx.caps_by_peer.get(ctx.peer_id)
+	var mult: float = caps.sprint_speed_mult if caps != null \
+			else AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+	return BotSprintRules.race_speed(
+			ctx.self_max_speed, mult, s.stamina, s.sprint_locked,
+			_xz_distance(ctx.self_pos, ctx.defending_goal_pos))
 
 
 # Precompute, for the calling defender's build, the squared containment
@@ -1015,7 +1046,7 @@ static func _xz_distance(a: Vector3, b: Vector3) -> float:
 static func loose_puck_race_lost(
 		snapshot: WorldSnapshot, self_pos: Vector3, self_vel: Vector3,
 		self_max_speed: float, team_id: int, team_id_by_peer: Dictionary,
-		caps_by_peer: Dictionary) -> bool:
+		caps_by_peer: Dictionary, self_pid: int = -1) -> bool:
 	if snapshot == null or snapshot.puck_state == null:
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
@@ -1031,21 +1062,31 @@ static func loose_puck_race_lost(
 		traj = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
 	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
 			/ float(AILoosePuckChase.RACE_STEPS)
+	# Sprint-aware self cap: same seam as the election (race_vmax), fed by
+	# our own replicated stamina/lockout when the caller identifies us.
+	var self_vmax: float = maxf(self_max_speed, 1.0)
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(self_pid)
+	if self_state != null:
+		var self_caps: AISkaterCaps = caps_by_peer.get(self_pid)
+		var self_mult: float = self_caps.sprint_speed_mult if self_caps != null \
+				else AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+		self_vmax = BotSprintRules.race_speed(
+				self_vmax, self_mult, self_state.stamina, self_state.sprint_locked,
+				Vector2(puck_pos.x - self_pos.x, puck_pos.z - self_pos.z).length())
 	var my_eta: float
 	if traj.is_empty():
 		my_eta = AIActionScoring.time_to_arrive(
-				self_pos, puck_pos, self_vel, maxf(self_max_speed, 1.0))
+				self_pos, puck_pos, self_vel, self_vmax)
 	else:
 		my_eta = AILoosePuckChase.path_intercept_time(
-				traj, step_dt, self_pos, self_vel, maxf(self_max_speed, 1.0))
+				traj, step_dt, self_pos, self_vel, self_vmax)
 	var best_opp_eta: float = INF
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
-		var caps: AISkaterCaps = caps_by_peer.get(pid)
-		var speed: float = caps.max_speed if caps != null \
-				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var speed: float = AILoosePuckChase.race_vmax(
+				s, caps_by_peer.get(pid), puck_pos)
 		var t: float
 		if traj.is_empty():
 			t = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)

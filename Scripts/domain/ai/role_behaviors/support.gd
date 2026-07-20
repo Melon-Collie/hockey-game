@@ -78,6 +78,9 @@ const GOAL_SIDE_TOLERANCE_M: float = 1.5
 # Scratch buffers for the covering-set exposure (caller-owned pattern —
 # refilled once per decide, no per-candidate allocation).
 static var _scratch_opp_vels: Array[Vector3] = []
+# Sprint pools index-matched to the opponent list, lockout folded in as 0.0
+# (the counter-rush racer's stamina-gated race cap).
+static var _scratch_opp_stamina: Array[float] = []
 static var _scratch_mate_etas: Array[float] = []
 static var _scratch_threat_by_cover: Array[float] = []
 
@@ -111,8 +114,10 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# counter_rush_cost. An unpressured carrier → prior 0 → the cost
 	# short-circuits and the argmax is pure pass value.
 	_scratch_opp_vels.clear()
+	_scratch_opp_stamina.clear()
 	for s: SkaterNetworkState in opp_states:
 		_scratch_opp_vels.append(s.velocity)
+		_scratch_opp_stamina.append(0.0 if s.sprint_locked else s.stamina)
 	var turnover_prior: float = 0.0
 	if not opp_positions.is_empty():
 		turnover_prior = 1.0 - AIActionScoring.carry_safety(
@@ -173,7 +178,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				carrier_pos, turnover_prior, our_net, our_goalie,
 				GameRules.NET_HALF_WIDTH, teammate_positions, c,
 				ctx.self_max_speed, opp_positions, _scratch_opp_vels,
-				ctx.scratch_opp_caps, _scratch_mate_etas, _scratch_threat_by_cover)
+				ctx.scratch_opp_caps, _scratch_mate_etas, _scratch_threat_by_cover,
+				_scratch_opp_stamina)
 		var score: float = pass_value - counter_cost + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score

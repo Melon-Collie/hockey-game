@@ -112,3 +112,37 @@ func test_facing_zero_skips_the_gate() -> void:
 			BotSprintRules.should_sprint(false, FAR, FAST, STRAIGHT, 1.0, false, false, false,
 					Vector2.ZERO),
 			"ZERO facing skips the facing gate")
+
+
+# ── race_speed: the read-side sprint model ───────────────────────────────────
+# Race-class ETAs price the sprint gear the body actually runs (Speed's
+# headline separation lever), stamina-gated. Cruise 9, league sprint ×1.14.
+
+func test_race_speed_full_pool_short_race_hits_sprint_cap() -> void:
+	# 10 m at a full pool: the burst (2.2 s ≈ 22+ m) covers the whole race.
+	assert_almost_eq(BotSprintRules.race_speed(9.0, 1.14, 1.0, false, 10.0),
+			9.0 * 1.14, 0.001, "a fully-fueled short race runs at the sprint ceiling")
+
+
+func test_race_speed_gates_mirror_the_body() -> void:
+	assert_almost_eq(BotSprintRules.race_speed(9.0, 1.14, 1.0, true, 10.0),
+			9.0, 0.001, "exhaustion lockout races at cruise")
+	assert_almost_eq(BotSprintRules.race_speed(9.0, 1.14, 0.1, false, 10.0),
+			9.0, 0.001, "below the engage floor races at cruise")
+	assert_almost_eq(BotSprintRules.race_speed(9.0, 1.14, 1.0, false, 4.0),
+			9.0, 0.001, "inside the sprint engage gap races at cruise (arrival band)")
+
+
+func test_race_speed_long_race_blends_burst_and_cruise() -> void:
+	# 60 m on a half pool: the burst covers only part of the race, so the
+	# effective cap sits strictly between cruise and the sprint ceiling —
+	# the exact two-phase average, not a curve.
+	var v: float = BotSprintRules.race_speed(9.0, 1.14, 0.5, false, 60.0)
+	assert_gt(v, 9.0, "some burst is still worth real speed")
+	assert_lt(v, 9.0 * 1.14, "but a drained pool can't sprint the whole race")
+	# Exact check: t_burst = 0.5/drain, d_sprint = 10.26·t_burst,
+	# v = 60 / (t_burst + (60 − d_sprint)/9).
+	var t_burst: float = 0.5 / 0.45
+	var d_sprint: float = 9.0 * 1.14 * t_burst
+	var expected: float = 60.0 / (t_burst + (60.0 - d_sprint) / 9.0)
+	assert_almost_eq(v, expected, 0.001, "two-phase distance-weighted average")

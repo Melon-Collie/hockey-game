@@ -26,7 +26,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var puck_pos: Vector3 = ctx.snapshot.puck_state.position
 	if AIRoleHelpers.loose_puck_race_lost(
 			ctx.snapshot, ctx.self_pos, ctx.self_velocity, ctx.self_max_speed,
-			ctx.team_id, ctx.team_id_by_peer, ctx.caps_by_peer):
+			ctx.team_id, ctx.team_id_by_peer, ctx.caps_by_peer, ctx.peer_id):
 		# Pre-contain the collector: CONTAIN's gap formula on the pickup spot.
 		var our_net: Vector3 = ctx.defending_goal_pos
 		var to_net: Vector3 = our_net - puck_pos

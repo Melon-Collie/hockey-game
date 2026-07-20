@@ -529,6 +529,10 @@ var _scratch_opponent_vels: Array[Vector3] = []
 # reachable-set model reads each defender's real Agility/Size reach. Filled
 # alongside the positions in _build_action_opponents_lists.
 var _scratch_opponent_caps: Array[AISkaterCaps] = []
+# Sprint pools index-matched to _scratch_opponents, the exhaustion lockout
+# folded in as 0.0 — the counter-rush racer's stamina-gated race cap
+# (counter_rush_cost / BotSprintRules.race_speed).
+var _scratch_opponent_stamina: Array[float] = []
 # Opponent positions advanced to the RELEASE instant — current pos + velocity ×
 # the commit→release windup (BOT_WRISTER_LOOKAHEAD_S). Both the wrister SHOOT
 # lane and the charged PASS lane/reception fire ~135 ms after the intent commits,
@@ -944,9 +948,16 @@ func _pick_action(ctx: RoleContext) -> void:
 	var wrister_goalie_down: bool = false
 	var wrister_seal_x: float = 0.0
 	var wrister_seal_tall: bool = false
+	var wrister_hands: Vector4 = Vector4.INF
+	var wrister_pads: Vector4 = Vector4.INF
 	var opp_goalie_state: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
 	if opp_goalie_state != null:
 		wrister_goalie_down = opp_goalie_state.is_down()
+		# Hand + pad positions off the same replicated pose (hole-model v3):
+		# the HIGH cover races from where the glove/blocker actually are,
+		# the LOW cover from the measured pad edges.
+		wrister_hands = opp_goalie_state.hands_read(ctx.attacking_goal_pos.z)
+		wrister_pads = opp_goalie_state.pads_read(ctx.attacking_goal_pos.z)
 		wrister_five_hole = GoalieBehaviorRules.five_hole_gap_m(
 				wrister_goalie_down, opp_goalie_state.five_hole_openness)
 		# Post-seal stance (VH/RVH): the goalie is committed to a post and the
@@ -1019,7 +1030,7 @@ func _pick_action(ctx: RoleContext) -> void:
 				sample_speed, wrister_unsettled, _scratch_opponent_caps,
 				wrister_five_hole, wrister_goalie_down,
 				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-				_scratch_option_receiver_pos)
+				_scratch_option_receiver_pos, wrister_hands, wrister_pads)
 		if s > shoot_score:
 			shoot_score = s
 			_shot_sample_release = release
@@ -1284,19 +1295,20 @@ func _pick_action(ctx: RoleContext) -> void:
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist)
+					shot_screen_dist, wrister_hands, wrister_pads)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					ctx.self_aim_spread_rad,
-					wrister_seal_x, wrister_seal_tall, shot_screen_dist)
+					wrister_seal_x, wrister_seal_tall, shot_screen_dist,
+					wrister_hands, wrister_pads)
 			shot_power_t = AIActionScoring.best_shot_power_t(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist)
+					shot_screen_dist, wrister_hands, wrister_pads)
 			shot_release_offset = _shot_sample_offset
 			if _shot_sample_backhand:
 				# The controller applies backhand_power_coefficient to the FINAL
@@ -1348,6 +1360,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponent_vels.clear()
 	_scratch_opponent_caps.clear()
+	_scratch_opponent_stamina.clear()
 	_scratch_opponents_release.clear()
 	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
@@ -1358,6 +1371,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 			_scratch_opponents.append(s.position)
 			_scratch_opponent_vels.append(s.velocity)
 			_scratch_opponent_caps.append(ctx.caps_by_peer.get(peer_id))
+			_scratch_opponent_stamina.append(0.0 if s.sprint_locked else s.stamina)
 			_scratch_opponents_release.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
 		else:
@@ -1897,7 +1911,8 @@ func _counter_exposure_cost(ctx: RoleContext, loss_point: Vector3,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders,
 			recover_from, ctx.self_max_speed,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
-			_scratch_exposure_mate_etas, _scratch_exposure_threat_memo)
+			_scratch_exposure_mate_etas, _scratch_exposure_threat_memo,
+			_scratch_opponent_stamina)
 
 
 # Rotation time: how long the bot needs to rotate facing to point at

@@ -90,3 +90,28 @@ func test_sooner_counter_costs_more() -> void:
 	var soon_cost: float = _cost(nobody, LOSS_POINT, at_strip, 5.5)
 	var late_cost: float = _cost(nobody, LOSS_POINT, across_rink, 5.5)
 	assert_gt(soon_cost, late_cost)
+
+
+func test_stretch_outlet_makes_the_deep_loss_dearer() -> void:
+	# The PASS-FORWARD leg: the checker collecting in the corner doesn't lug
+	# it 50 m himself — he hits the stretch man already at center, who
+	# carries home. The lone-carrier read gave every recovering body the
+	# collector's full lug to race; with a genuine outlet ahead, the counter
+	# arrives sooner and the same defensive shape covers less. Control: the
+	# outlet parked BEHIND the play (deeper than the collector's own carry)
+	# adds nothing — the feed only helps when it actually gains ice.
+	var opponents_stretch: Array[Vector3] = [
+		Vector3(6.0, 0.0, -19.5),   # the checker (collector)
+		Vector3(0.0, 0.0, 2.0),     # stretch outlet past center
+	]
+	var opponents_trailer: Array[Vector3] = [
+		Vector3(6.0, 0.0, -19.5),
+		Vector3(0.0, 0.0, -24.0),   # a trailer even deeper than the loss
+	]
+	var d1_deep := Vector3(6.0, 0.0, -20.0)
+	# Partner recovering from mid-ice: covers the slow lug, not the strike.
+	var partner: Array[Vector3] = [Vector3(-4.0, 0.0, -2.0)]
+	var with_stretch: float = _cost(partner, d1_deep, opponents_stretch)
+	var with_trailer: float = _cost(partner, d1_deep, opponents_trailer)
+	assert_gt(with_stretch, with_trailer * 1.15,
+			"a live stretch outlet raises the deep carry's price")

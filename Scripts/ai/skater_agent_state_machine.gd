@@ -987,6 +987,11 @@ var _pass_aim_target: Vector3 = Vector3.ZERO
 # behave exactly as before capabilities are applied. Cross-player reasoning
 # (opponent ETA/reach, the loose-puck election) stays on the shared defaults.
 var _self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+# Sprint ceiling multiplier (Speed) — the chase walk races at the
+# stamina-gated sprint cap (BotSprintRules.race_speed), because the body
+# sprints its chases (_resolve_sprint) and a cruise-priced walk aimed at
+# intercept points the sprinting body overruns.
+var _self_sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # Body-check delivery (Size + Physical), so a defensive role can predict THIS
 # bot's hit strength before committing to a check. League baselines until
@@ -1389,6 +1394,7 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	if caps == null:
 		return
 	_self_max_speed = caps.max_speed
+	_self_sprint_mult = caps.sprint_speed_mult
 	_chase_max_accel = caps.max_accel
 	_blade_reach = caps.blade_span + BLADE_REACH_BUFFER_M
 	_receive_body_offset = caps.blade_span - RECEIVE_BODY_INSET_M
@@ -2372,7 +2378,17 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 		var self_state2: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 		if self_state2 != null:
 			self_vel_3d = self_state2.velocity
-		var target: Vector3 = _lead_intercept(self_pos, self_vel_3d, puck_pos, snapshot.puck_state.velocity)
+		# Race at the sprint-aware cap — the body sprints this chase
+		# (_resolve_sprint below), so a cruise-priced walk aimed at points
+		# the sprinting body overruns.
+		var race_cap: float = _self_max_speed
+		if self_state2 != null:
+			race_cap = BotSprintRules.race_speed(
+					_self_max_speed, _self_sprint_mult,
+					self_state2.stamina, self_state2.sprint_locked,
+					Vector2(puck_pos.x - self_pos.x, puck_pos.z - self_pos.z).length())
+		var target: Vector3 = _lead_intercept(
+				self_pos, self_vel_3d, puck_pos, snapshot.puck_state.velocity, race_cap)
 		# Angling: when an OPPONENT carries the puck, shade the intercept
 		# toward OUR net so we approach on the inside lane and force them
 		# outside. Loose pucks get the raw intercept — there's no carrier
@@ -5440,7 +5456,12 @@ static func _shade_intercept_goal_side(target: Vector3, our_net: Vector3) -> Vec
 	return Vector3(target.x + to_net.x * inv, target.y, target.z + to_net.z * inv)
 
 
-func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
+# `vmax` overrides the speed cap for the reachability walk (< 0 → the cruise
+# _self_max_speed). The chase passes its sprint-aware race cap — see
+# _chase_race_vmax.
+func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3,
+		puck_vel: Vector3, vmax: float = -1.0) -> Vector3:
+	var cap: float = vmax if vmax > 0.0 else _self_max_speed
 	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
 	# Use puck-physics-aware prediction (ice friction + board bounces).
 	# Constant-velocity over 1.5 s consistently overshot where a sliding
@@ -5508,7 +5529,7 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 		var speed_ok: bool = true
 		if dist > 0.001:
 			var v0_along: float = (self_vel.x * dist_x + self_vel.z * dist_z) / dist
-			speed_ok = _cruise_distance(v0_along, t_step) >= dist
+			speed_ok = _cruise_distance(v0_along, t_step, cap) >= dist
 		if surplus >= 0.0 and speed_ok:
 			if prev_surplus > -INF and prev_surplus < 0.0:
 				var frac: float = -prev_surplus / (surplus - prev_surplus)
@@ -5523,16 +5544,17 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3, pu
 
 # Distance a sprint covers along one axis in `t` seconds: accelerate from
 # `v0` (the current velocity component along the target line — negative when
-# moving away, so the turn-around is charged) at _chase_max_accel until
-# _self_max_speed, then cruise at the cap. The 1D leg of _lead_intercept's
-# reachability check (constraint 2 above).
-func _cruise_distance(v0: float, t: float) -> float:
-	var v_start: float = minf(v0, _self_max_speed)
-	var t_acc: float = (_self_max_speed - v_start) / maxf(_chase_max_accel, 0.001)
+# moving away, so the turn-around is charged) at _chase_max_accel until the
+# speed cap, then cruise at it. The 1D leg of _lead_intercept's reachability
+# check (constraint 2 above). `vmax` < 0 → the cruise _self_max_speed.
+func _cruise_distance(v0: float, t: float, vmax: float = -1.0) -> float:
+	var cap: float = vmax if vmax > 0.0 else _self_max_speed
+	var v_start: float = minf(v0, cap)
+	var t_acc: float = (cap - v_start) / maxf(_chase_max_accel, 0.001)
 	if t <= t_acc:
 		return v_start * t + 0.5 * _chase_max_accel * t * t
 	return v_start * t_acc + 0.5 * _chase_max_accel * t_acc * t_acc \
-			+ _self_max_speed * (t - t_acc)
+			+ cap * (t - t_acc)
 
 
 # True iff a TEAMMATE (not me, not opp) currently has the puck. Used to
@@ -5589,7 +5611,7 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 	var self_vel: Vector3 = self_state.velocity if self_state != null else Vector3.ZERO
 	return not AIRoleHelpers.loose_puck_race_lost(
 			snapshot, self_pos, self_vel, _self_max_speed,
-			_team_id, _team_id_by_peer, _caps_by_peer)
+			_team_id, _team_id_by_peer, _caps_by_peer, _peer_id)
 
 
 # Returns true if this bot is the closest teammate to the current

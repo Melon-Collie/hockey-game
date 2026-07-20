@@ -128,3 +128,68 @@ func test_value_surface_is_not_flat_through_the_mid_slot() -> void:
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [],
 			-1.0, false, 0.0, false, spread), 0.05,
 			"a clean point shot at a set goalie stays a non-chance")
+
+
+# ── Pose-fed calibration (hole-model v3) ─────────────────────────────────────
+# The pose path must track the same measured surface: READY hands parked at
+# the stance edges are the same goalie the instrument models, so feeding the
+# replicated-pose read (instead of the declared band constants) must
+# reproduce the calibration bands. GOAL is at −z here → net_dx = −local_x
+# (GoalieNetworkState.hands_read's mirror): READY glove local (−0.42, 0.90),
+# blocker (0.44, 0.86) — GoalieBodyConfigBuilder's stance.
+const HANDS_READY_NEG_Z := Vector4(0.42, 0.90, -0.44, 0.86)
+# Standing pads local ±0.22 at ~12° roll, mirrored to the −z net frame.
+const PADS_STANDING_NEG_Z := Vector4(0.22, -0.209, -0.22, 0.209)
+
+
+func _measured_goal_frac_posed(shooter: Vector3, goalie: Vector3,
+		unsettled: float, spread: float, hands: Vector4) -> float:
+	var aim: Vector3 = AIActionScoring.best_shot_aim(shooter, _goal, goalie,
+			GameRules.NET_HALF_WIDTH, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+			unsettled, -1.0, false, spread, 0.0, false, 0.0, hands,
+			PADS_STANDING_NEG_Z)
+	var loft: int = AIActionScoring.best_shot_loft(shooter, _goal, goalie,
+			GameRules.NET_HALF_WIDTH, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+			unsettled, -1.0, false, 0.0, false, spread, 0.0, hands,
+			PADS_STANDING_NEG_Z)
+	var power_t: float = AIActionScoring.best_shot_power_t(shooter, _goal, goalie,
+			GameRules.NET_HALF_WIDTH, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
+			unsettled, -1.0, false, 0.0, false, spread, 0.0, hands,
+			PADS_STANDING_NEG_Z)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = SEED
+	var goals: int = 0
+	for _i: int in SAMPLES:
+		var err: float = rng.randf_range(-spread, spread)
+		if Sim.classify_shot(shooter, _goal, goalie, aim, loft, power_t,
+				err, unsettled) == Sim.GOAL:
+			goals += 1
+	return float(goals) / float(SAMPLES)
+
+
+func test_pose_fed_value_tracks_the_same_surface() -> void:
+	var spread: float = BotSkillProfile.hard().shot_aim_error_rad
+	var checked: int = 0
+	for unsettled: float in [0.0, 0.5]:
+		for spot: Vector3 in _spots():
+			var goalie: Vector3 = Sim.goalie_set_pos(spot, _goal)
+			goalie.x = clampf(goalie.x + unsettled * Sim.CAUGHT_OFFSET_M,
+					-GameRules.NET_HALF_WIDTH, GameRules.NET_HALF_WIDTH)
+			var value: float = AIActionScoring.score_shoot(
+					spot, _goal, goalie, GameRules.NET_HALF_WIDTH, [],
+					AIActionScoring.WRISTER_SHOT_SPEED_M_S, unsettled, [],
+					-1.0, false, 0.0, false, spread, [], HANDS_READY_NEG_Z,
+					PADS_STANDING_NEG_Z)
+			var measured: float = _measured_goal_frac_posed(
+					spot, goalie, unsettled, spread, HANDS_READY_NEG_Z)
+			var label: String = "posed (%.0f, %.1f m out, unsettled %.2f): value %.3f vs measured %.2f" % [
+					spot.x, spot.distance_to(_goal), unsettled, value, measured]
+			checked += 1
+			if measured >= 0.95:
+				assert_gt(value, CERTAIN_MIN, "near-certain cell reads high — " + label)
+			elif measured <= 0.05:
+				assert_lt(value, DEAD_MAX, "near-dead cell reads low — " + label)
+			else:
+				assert_almost_eq(value, measured, TRANSITION_TOL,
+						"transition cell tracks — " + label)
+	assert_gt(checked, 20, "the posed grid actually ran")
