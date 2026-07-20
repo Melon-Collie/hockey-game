@@ -358,6 +358,48 @@ Same methodology as the duel harness (#27):
   harnesses fire passes too) before constants move; the cheaper nearer-term
   lever is the DUMP side of that compete (does a clear's neutral-reset
   value deserve −0.5 under a committed forecheck?).
+- **The clear re-grounded (iteration 5 — the "neutral clear is quite good
+  under pressure" decision):** decomposing the live compete's −0.5 dump
+  scores found TWO model lies stacked:
+  1. **The rim was priced as a chord.** From a behind-net/corner origin the
+     straight line to the center-boards target threads the middle of our
+     zone (blocked, loss point in front of our net); the real rim rides
+     the boards. `_best_dump` now routes the delivery origin → wall
+     waypoint at the origin's depth → target, two lane-priced legs (the
+     chip keeps the chord — air ignores boards). Same fix family as the
+     net-aware ETA: price the route, not the fiction.
+  2. **The threat surface's positional floor delocalized every concede.**
+     `threat_surface_shoot = max(score_shoot, position_potential)` — the
+     positional fallback is right for MARK's gradient and WRONG for
+     absolute turnover pricing: it floors possession-against-us at
+     ~0.25–0.55 EVERYWHERE (measured: 0.457 at center boards, 0.246 at
+     THEIR high slot), so conceding at the safest spot on the ice read
+     like half a slot chance. New `threat_local_shoot` /
+     `turnover_cost_local` (score_shoot branch only, no floor) price the
+     5v5 own-zone clear's concessions, paired with counter_rush_cost
+     carrying the future-danger half — which sees the covering set the
+     breakout posts provide, so a clear against a committed forecheck
+     reads nearly free exactly when doctrine says it is. Every loss mode
+     (lane pick AND target concede) pays both halves — a locally-cheap
+     pinch pick still charges the in-zone possession it hands over
+     (pinned by the camped-wall chip test). Measured: the live-moment
+     clear −0.492 → −0.035; clears now FIRE (DUMP↝out first releases).
+     Scoped 5v5+own-zone with the rest of the rim family; MARK's gradient
+     surface and the 3v3 ordering untouched. The pass/carry failure
+     branches still ride the flat floor — recalibrating THOSE against the
+     probe is the standing global item.
+- **Outcome taxonomy upgraded (cough danger):** "cough-up" lumped a
+  doorstep scramble giveaway with a re-entry against five set defenders —
+  blind to exactly what the clear doctrine trades on. Each cough row now
+  carries the LOCAL shot threat at the concede moment. First read splits
+  perfectly on the doctrine line: every clear-first cough concedes at
+  dgr 0.00 (set-defense re-entry), every desperation-pass death at
+  dgr 1.00 (dead on a stick in our slot); race-loss coughs 0.00–0.03.
+  Mean 0.224 over 17. Raw clean/cough counts are no longer the headline
+  metric for clear-heavy strategies — danger-weighted reading required.
+  Remaining dgr 1.00 rows are 0.07-EV passes still narrowly outbidding
+  the ~0.0 clear — the pass-side probe calibration will settle that
+  ordering.
 - **Live retune measured (534f534 merged from main):** the home-plate slot
   veto (2.75 × 6.0, was 2.0 × 5.0) + behind-net blade cradle. Same-day
   30-trial A/B: clean 11→13, cough 17→15 — and the row-level shift is the

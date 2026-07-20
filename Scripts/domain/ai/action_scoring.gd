@@ -2484,6 +2484,50 @@ static func threat_surface_shoot(
 	return maxf(shoot, positional)
 
 
+# LOCAL threat — the score_shoot branch of threat_surface_shoot WITHOUT the
+# positional-gradient fallback. The fallback is right for MARK positioning
+# (a defender needs a non-zero gradient toward a far-but-dangerous man) and
+# WRONG for absolute turnover pricing: it floors possession-against-us at
+# ~0.25–0.55 everywhere on the rink, so conceding at the safest spot on the
+# ice read like handing over half a slot chance and the own-zone clear
+# could never win a compete. The honest split prices the immediate danger
+# here (this function — ~0 outside our zone with the goalie home, hot in
+# our slot) and the FUTURE carry-in danger via counter_rush_cost, which
+# sees the covering set — a clear against a committed forecheck then reads
+# nearly free exactly because our posts beat the counter home.
+static func threat_local_shoot(
+		opp_pos: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	if not in_offensive_zone(opp_pos, our_net) \
+			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
+		return 0.0
+	var seal_x: float = derive_post_seal_x_sign(opp_pos, our_net)
+	return score_shoot(
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
+			WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal_x, seal_x != 0.0)
+
+
+# turnover_cost with the LOCAL threat surface (see threat_local_shoot) —
+# the absolute-price variant for competes that pair it with the
+# counter-rush term carrying the future-danger half.
+static func turnover_cost_local(
+		loss_point: Vector3,
+		loss_prob: float,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		our_defenders: Array[Vector3]) -> float:
+	if not loss_point.is_finite():
+		return 0.0
+	if loss_prob <= 0.0:
+		return 0.0
+	return loss_prob * threat_local_shoot(
+			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
+
+
 # Pass-threat surface — score_pass with a positional fallback for
 # the same reason as threat_surface_shoot. score_pass folds in
 # lane_clear × score_shoot(receiver); when receiver_shot collapses

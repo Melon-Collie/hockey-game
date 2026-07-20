@@ -2257,40 +2257,87 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 		# plan §5): possession is the whole game there, and the panic chip's
 		# last-resort ordering must not move.
 		var origin: Vector3 = _pass_origin(ctx)
-		var flight_t: float = origin.distance_to(target) \
-				/ maxf(AIActionScoring.PASS_SPEED_M_S, 1.0)
-		var rim_lane: float = AIActionScoring.lane_clear(
-				origin, target, _scratch_opponents,
+		# The rim RIDES THE BOARDS: from a corner or behind-net origin the
+		# real delivery goes out to the near wall and wraps down it to the
+		# target — two legs through a wall waypoint at the origin's depth.
+		# An origin already on the wall degenerates to the straight line.
+		# Pricing the chord instead threaded a behind-net "rim" through the
+		# middle of our own zone — lane blocked by the forecheck, loss point
+		# in front of our net — which buried the clear at ~−0.4 exactly when
+		# it's the right play (breakout plan, iteration 5). Same fix family
+		# as the net-aware time_to_arrive: price the route, not the fiction.
+		var wall_wp := Vector3(target.x, 0.0, origin.z)
+		var leg1_len: float = absf(wall_wp.x - origin.x)
+		var leg1_lane: float = 1.0
+		if leg1_len > 0.5:
+			leg1_lane = AIActionScoring.lane_clear(
+					origin, wall_wp, _scratch_opponents,
+					AIActionScoring.PASS_SPEED_M_S,
+					_scratch_opponent_vels, _scratch_opponent_caps, true)
+		var leg2_lane: float = AIActionScoring.lane_clear(
+				wall_wp, target, _scratch_opponents,
 				AIActionScoring.PASS_SPEED_M_S,
 				_scratch_opponent_vels, _scratch_opponent_caps, true)
+		var rim_lane: float = leg1_lane * leg2_lane
+		var flight_t: float = (leg1_len + wall_wp.distance_to(target)) \
+				/ maxf(AIActionScoring.PASS_SPEED_M_S, 1.0)
 		var rim_gain: float = rim_lane * recovery * value \
 				* AIActionScoring.delay_discount(flight_t) * chase_decay
-		# An intercepted rim dies on the wall lane — price the loss where the
-		# pick actually happens, replacing the share of the target-spot
-		# concession the interception forecloses.
-		var rim_concede: float = AIActionScoring.turnover_cost(
-				AIActionScoring.lane_loss_point(self_pos, target,
-						_scratch_opponents, AIActionScoring.PASS_SPEED_M_S,
-						_scratch_opponent_vels),
-				1.0 - rim_lane, defending_goal, our_goalie,
+		# The clear's concessions are priced LOCAL + counter-rush (see
+		# threat_local_shoot): the gradient surface's positional floor made
+		# conceding at center-ice boards read like half a slot chance, which
+		# buried the clear at ~−0.5 under exactly the committed forecheck it
+		# should relieve. The immediate danger at each loss point is the
+		# local shot threat; the future carry-in danger is the
+		# counter-exposure term, which sees the covering set our breakout
+		# posts provide. 5v5-scoped with the rest of this branch — the 3v3
+		# panic-chip ordering keeps the shipped pricing.
+		# An intercepted rim dies on whichever leg is weaker — price the
+		# loss where the pick actually happens, replacing the share of the
+		# target-spot concession the interception forecloses.
+		var loss_leg_from: Vector3 = origin
+		var loss_leg_to: Vector3 = wall_wp
+		if leg1_len <= 0.5 or leg2_lane < leg1_lane:
+			loss_leg_from = wall_wp
+			loss_leg_to = target
+		# Every loss mode pays BOTH halves — local shot threat at the loss
+		# spot + the possession's counter/cycle value from there. A pinch
+		# pick on our wall is locally cheap (sharp angle) but hands them a
+		# live in-zone possession; pricing only the local half made rimming
+		# into a camped lane read acceptable.
+		var rim_loss_point: Vector3 = AIActionScoring.lane_loss_point(
+				loss_leg_from, loss_leg_to, _scratch_opponents,
+				AIActionScoring.PASS_SPEED_M_S, _scratch_opponent_vels)
+		var rim_concede: float = AIActionScoring.turnover_cost_local(
+				rim_loss_point, 1.0 - rim_lane, defending_goal, our_goalie,
 				GameRules.NET_HALF_WIDTH, _scratch_our_defenders) \
-				+ AIActionScoring.turnover_cost(
+				+ _counter_exposure_cost(ctx, rim_loss_point, 1.0 - rim_lane,
+						ctx.self_pos, our_goalie) \
+				+ AIActionScoring.turnover_cost_local(
 						target, rim_lane * (1.0 - recovery), defending_goal,
 						our_goalie, GameRules.NET_HALF_WIDTH,
 						_scratch_our_defenders) \
 				+ _counter_exposure_cost(ctx, target,
 						rim_lane * (1.0 - recovery), ctx.self_pos, our_goalie)
+		var chip_concede: float = AIActionScoring.turnover_cost_local(
+				target, 1.0 - recovery, defending_goal, our_goalie,
+				GameRules.NET_HALF_WIDTH, _scratch_our_defenders) \
+				+ _counter_exposure_cost(ctx, target, 1.0 - recovery,
+						ctx.self_pos, our_goalie)
 		# The chip's whole airborne + landing-bounce window (2·vy/g at the
 		# HIGH loft's launch speed) is dead time nobody can play the puck
-		# through — the rim's on-the-tape arrival never pays it.
+		# through — the rim's on-the-tape arrival never pays it. The chip
+		# flies the CHORD (air ignores boards).
 		var chip_hang_s: float = 2.0 * GameRules.DEFAULT_LOFT_VY_HIGH_M_S \
 				/ AIActionScoring.GRAVITY_M_S2
+		var chip_flight_t: float = origin.distance_to(target) \
+				/ maxf(AIActionScoring.PASS_SPEED_M_S, 1.0)
 		var chip_gain: float = recovery * value \
-				* AIActionScoring.delay_discount(flight_t + chip_hang_s) \
+				* AIActionScoring.delay_discount(chip_flight_t + chip_hang_s) \
 				* chase_decay
-		if rim_gain - rim_concede > chip_gain - concede:
+		if rim_gain - rim_concede > chip_gain - chip_concede:
 			return [rim_gain - rim_concede, target, false, true]
-		return [chip_gain - concede, target, false, false]
+		return [chip_gain - chip_concede, target, false, false]
 	return [gain - concede, target, is_soft, false]
 
 

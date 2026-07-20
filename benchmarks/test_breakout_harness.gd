@@ -172,6 +172,7 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 
 	var t: float = 0.0
 	var outcome: String = "timeout"
+	var cough_danger: float = -1.0
 	var retrieval_seen: bool = false
 	var first_touch_peer: int = -1
 	var first_touch_t: float = -1.0
@@ -256,6 +257,20 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 			outcome = "cough-up"
 			if duel.team_map.get(first_touch_peer, -1) == 0:
 				intercept_pos = duel.puck_pos
+			# Danger of the possession we conceded: the LOCAL shot threat at
+			# the cough spot against our actual bodies. A doorstep scramble
+			# giveaway and a re-entry against five set defenders both label
+			# "cough-up" — this column is what the clear-vs-pass doctrine
+			# actually trades on (a clear converts the first into the
+			# second even when possession comes back).
+			var our_bodies: Array[Vector3] = []
+			for s3: RefCounted in duel.skaters:
+				if s3.team_id == 0 and s3.peer_id != cid:
+					our_bodies.append(s3.pos)
+			cough_danger = AIActionScoring.threat_local_shoot(
+					duel.puck_pos, Vector3(0, 0, GameRules.GOAL_LINE_Z),
+					Vector3(0, 0, GameRules.GOAL_LINE_Z - 0.8),
+					GameRules.NET_HALF_WIDTH, our_bodies)
 			break
 
 	# First team-0 release after the trigger — the retriever's first move.
@@ -269,7 +284,7 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 			"outcome": outcome, "t": t, "retrieval": retrieval_seen,
 			"touch_peer": first_touch_peer, "touch_t": first_touch_t,
 			"release": first_release, "intercept": intercept_pos,
-			"chaser_trace": chaser_trace})
+			"chaser_trace": chaser_trace, "cough_danger": cough_danger})
 
 
 func _intent_label(rec: Dictionary) -> String:
@@ -300,9 +315,12 @@ func _report() -> void:
 		if row.retrieval:
 			retrieval_fires += 1
 		var rel_bit: String = _intent_label(row.release)
-		gut.p("  %-16s m%+d j%d → %-10s %5.1fs  retr:%s touch:%d@%.1fs 1st:%s" % [
+		var danger_bit: String = ""
+		if float(row.cough_danger) >= 0.0:
+			danger_bit = " dgr%.2f" % float(row.cough_danger)
+		gut.p("  %-16s m%+d j%d → %-10s %5.1fs%s retr:%s touch:%d@%.1fs 1st:%s" % [
 				row.scenario, int(row.mirror), int(row.jitter), row.outcome,
-				row.t, "Y" if row.retrieval else "n",
+				row.t, danger_bit, "Y" if row.retrieval else "n",
 				int(row.touch_peer), float(row.touch_t), rel_bit])
 		if int(row.jitter) == 0 and not (row.chaser_trace as Array).is_empty():
 			for line: String in row.chaser_trace:
@@ -322,6 +340,15 @@ func _report() -> void:
 			if total > 0:
 				bits.append("ev[%.2f-%.2f) %d/%d" % [b[0], b[1], done, total])
 		gut.p("  pass probe (completed/fired by scored EV): " + ", ".join(bits))
+	var danger_sum: float = 0.0
+	var danger_n: int = 0
+	for row: Dictionary in _rows:
+		if float(row.cough_danger) >= 0.0:
+			danger_sum += float(row.cough_danger)
+			danger_n += 1
+	if danger_n > 0:
+		gut.p("  mean cough danger (local threat at concede): %.3f over %d coughs" % [
+				danger_sum / danger_n, danger_n])
 	var n: int = _rows.size()
 	gut.p("  totals: clean %d/%d, clear %d/%d, cough %d/%d, timeout %d/%d | retrieval fired %d/%d" % [
 			int(counts.get("clean-exit", 0)), n,

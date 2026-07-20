@@ -2565,6 +2565,30 @@ func test_own_zone_clear_is_a_flat_rim_when_the_wall_lane_is_open() -> void:
 	assert_false(r3[3], "3v3 keeps the shipped chip — no rim delivery")
 
 
+func test_behind_net_clear_rides_the_boards_not_the_chord() -> void:
+	# Retriever picks up BEHIND our net with the forecheck committed — the
+	# breakout harness's compete moment. The chord from there to the
+	# center-boards clear target threads the middle of our own zone
+	# (blocked by the forecheck, loss point in front of our net) and
+	# priced the clear at ~−0.4 exactly when doctrine says it's the right
+	# play; the real rim rides the boards out of the corner. The routed
+	# delivery must read as the good play it is: clearly positive.
+	var self_pos := Vector3(2.0, 0, 28.2)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(10.5, 0, 14.0)],      # wall winger posted
+			[3, 1, Vector3(3.5, 0, 25.8)],             # F1 chasing net-front
+			[4, 1, Vector3(6.5, 0, 22.0)],             # F2 inside shoulder
+			[5, 1, Vector3(0.0, 0, 15.0)]])            # high man in the middle
+	ctx.team_size = 5
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
+	assert_gt(r[0], 0.0,
+			"the boards-routed clear reads positive under a committed forecheck")
+	assert_true(r[3], "and it is the flat rim — the wall path is the protected lane")
+
+
 func test_rim_falls_back_to_the_chip_over_a_camped_wall_lane() -> void:
 	var ctx := _rim_ctx(5, true)
 	var c := AIRoleCarrier.new()
