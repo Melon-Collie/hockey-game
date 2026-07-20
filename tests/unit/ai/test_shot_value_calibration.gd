@@ -138,19 +138,24 @@ func test_value_surface_is_not_flat_through_the_mid_slot() -> void:
 # (GoalieNetworkState.hands_read's mirror): READY glove local (−0.42, 0.90),
 # blocker (0.44, 0.86) — GoalieBodyConfigBuilder's stance.
 const HANDS_READY_NEG_Z := Vector4(0.42, 0.90, -0.44, 0.86)
+# Standing pads local ±0.22 at ~12° roll, mirrored to the −z net frame.
+const PADS_STANDING_NEG_Z := Vector4(0.22, -0.209, -0.22, 0.209)
 
 
 func _measured_goal_frac_posed(shooter: Vector3, goalie: Vector3,
 		unsettled: float, spread: float, hands: Vector4) -> float:
 	var aim: Vector3 = AIActionScoring.best_shot_aim(shooter, _goal, goalie,
 			GameRules.NET_HALF_WIDTH, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-			unsettled, -1.0, false, spread, 0.0, false, 0.0, hands)
+			unsettled, -1.0, false, spread, 0.0, false, 0.0, hands,
+			PADS_STANDING_NEG_Z)
 	var loft: int = AIActionScoring.best_shot_loft(shooter, _goal, goalie,
 			GameRules.NET_HALF_WIDTH, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-			unsettled, -1.0, false, 0.0, false, spread, 0.0, hands)
+			unsettled, -1.0, false, 0.0, false, spread, 0.0, hands,
+			PADS_STANDING_NEG_Z)
 	var power_t: float = AIActionScoring.best_shot_power_t(shooter, _goal, goalie,
 			GameRules.NET_HALF_WIDTH, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-			unsettled, -1.0, false, 0.0, false, spread, 0.0, hands)
+			unsettled, -1.0, false, 0.0, false, spread, 0.0, hands,
+			PADS_STANDING_NEG_Z)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	var goals: int = 0
@@ -173,7 +178,8 @@ func test_pose_fed_value_tracks_the_same_surface() -> void:
 			var value: float = AIActionScoring.score_shoot(
 					spot, _goal, goalie, GameRules.NET_HALF_WIDTH, [],
 					AIActionScoring.WRISTER_SHOT_SPEED_M_S, unsettled, [],
-					-1.0, false, 0.0, false, spread, [], HANDS_READY_NEG_Z)
+					-1.0, false, 0.0, false, spread, [], HANDS_READY_NEG_Z,
+					PADS_STANDING_NEG_Z)
 			var measured: float = _measured_goal_frac_posed(
 					spot, goalie, unsettled, spread, HANDS_READY_NEG_Z)
 			var label: String = "posed (%.0f, %.1f m out, unsettled %.2f): value %.3f vs measured %.2f" % [

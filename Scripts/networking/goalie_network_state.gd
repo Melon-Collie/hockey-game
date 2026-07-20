@@ -104,6 +104,21 @@ func hands_read(guarded_goal_z: float) -> Vector4:
 			blocker_offset.x * m, blocker_offset.y)
 
 
+# The replicated PAD positions + rolls in the NET frame, packed for the shot
+# model's pose-aware LOW band (hole-model v3):
+#   (left_pad_net_dx, left_pad_roll, right_pad_net_dx, right_pad_roll)
+# Same local→world x mapping as hands_read; rolls are radians straight off
+# the wire (only |sin|/|cos| are consumed, so the roll's sign convention
+# never matters). All-zero pad offsets = pose absent (a real stance always
+# splits the pads off center).
+func pads_read(guarded_goal_z: float) -> Vector4:
+	if left_pad_offset == Vector3.ZERO and right_pad_offset == Vector3.ZERO:
+		return Vector4.INF
+	var m: float = signf(guarded_goal_z)
+	return Vector4(left_pad_offset.x * m, left_pad_roll,
+			right_pad_offset.x * m, right_pad_roll)
+
+
 # TALL post seal = VH (post pad vertical, body upright at the post): the
 # whole near-post column is a wall, ice to over the shoulder. False for RVH,
 # whose compressed stance seals the ice at the post but leaves short-side

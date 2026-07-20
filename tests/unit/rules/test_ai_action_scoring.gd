@@ -2360,3 +2360,85 @@ func test_committed_glove_side_covers_and_vacates_correctly() -> void:
 	assert_lt(left_open, right_open,
 			"the committed glove walls its side; the low blocker's side opens"
 			+ " (L %.4f vs R %.4f)" % [left_open, right_open])
+
+
+# ── Hole-model v3: the LOW band reads the replicated pads ────────────────────
+# Standing pads local ±0.22 at ~12° roll; butterfly ±0.42 rolled 90° flat
+# (GoalieBodyConfigBuilder). GOAL is +z here → net_dx = local_x.
+
+const PADS_STANDING := Vector4(-0.22, -0.209, 0.22, 0.209)
+const PADS_BUTTERFLY := Vector4(-0.42, -PI * 0.5, 0.42, PI * 0.5)
+
+
+func test_ready_pads_reproduce_the_legacy_low_cover() -> void:
+	var spread: float = BotSkillProfile.hard().shot_aim_error_rad
+	for dist: float in [5.0, 9.0, 14.0]:
+		var shooter := Vector3(0.0, 0.0, GOAL.z - dist)
+		var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
+		var legacy: float = AIActionScoring.open_net_danger(
+				shooter, GOAL, goalie, NET_HW,
+				AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+				-1.0, false, 0.0, false, spread)
+		var posed: float = AIActionScoring.open_net_danger(
+				shooter, GOAL, goalie, NET_HW,
+				AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+				-1.0, false, 0.0, false, spread, 0.0,
+				HANDS_READY, PADS_STANDING)
+		assert_almost_eq(posed, legacy, 0.15,
+				"standing pads ≈ legacy LOW at %.0f m (posed %.3f legacy %.3f)"
+				% [dist, posed, legacy])
+
+
+func test_butterfly_pads_measure_the_full_splay() -> void:
+	# A DOWN goalie's measured splayed pads equal the declared butterfly
+	# edge exactly (0.42 offset + 0.42 rolled-flat half-length = 0.84).
+	var spread: float = BotSkillProfile.hard().shot_aim_error_rad
+	var shooter := Vector3(0.0, 0.0, GOAL.z - 8.0)
+	var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
+	var legacy: float = AIActionScoring.open_net_danger(
+			shooter, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, true, 0.0, false, spread)
+	var posed: float = AIActionScoring.open_net_danger(
+			shooter, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, true, 0.0, false, spread, 0.0,
+			HANDS_BUTTERFLY, PADS_BUTTERFLY)
+	assert_almost_eq(posed, legacy, 0.1,
+			"butterfly measurement = the declared splay (posed %.3f legacy %.3f)"
+			% [posed, legacy])
+
+
+func test_slid_pads_open_the_vacated_low_corner() -> void:
+	# The goalie mid-slide toward net-left: both pads carried left of
+	# center. His left low corner is walled beyond the stance; the vacated
+	# right low corner opens — asymmetry the declared symmetric core could
+	# never see (the cross-crease slide leak, measured).
+	var shooter := Vector3(0.0, 0.0, GOAL.z - 6.0)
+	var goalie := Vector3(-0.3, 0.0, GOAL.z - 1.2)
+	var slid_left := Vector4(-0.75, -PI * 0.5, -0.05, -PI * 0.5)
+	var left_low: float = AIActionScoring._hole_open_angle(
+			2, shooter, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.6,
+			-1.0, true, 0.0, false, 0.0, 0.0, Vector4.INF, slid_left)
+	var right_low: float = AIActionScoring._hole_open_angle(
+			3, shooter, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.6,
+			-1.0, true, 0.0, false, 0.0, 0.0, Vector4.INF, slid_left)
+	assert_lt(left_low, right_low,
+			"the slide walls its side low and vacates the other (L %.4f R %.4f)"
+			% [left_low, right_low])
+
+
+func test_predicted_hands_sink_when_unsettled() -> void:
+	# The pre-arm rebuild seam: a keeper predicted to be moving at release
+	# is scored against hands at the sliding pose height, not the presented
+	# stance — the unsettled body's partial silhouette, measured.
+	var set_hands: Vector4 = AIActionScoring.predicted_goalie_hands(HANDS_READY, 0.0)
+	assert_almost_eq(set_hands.y, HANDS_READY.y, 0.001, "a set keeper keeps his stance")
+	var moving: Vector4 = AIActionScoring.predicted_goalie_hands(HANDS_READY, 1.0)
+	assert_almost_eq(moving.y, AIActionScoring.SLIDING_HANDS_Y_M, 0.001,
+			"a fully caught-moving keeper's glove rides at the slide height")
+	assert_almost_eq(moving.x, HANDS_READY.x, 0.001, "laterals travel with the body")
+	assert_false(AIActionScoring.predicted_goalie_hands(Vector4.INF, 1.0).is_finite(),
+			"absent pose passes through")
