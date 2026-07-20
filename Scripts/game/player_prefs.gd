@@ -178,7 +178,7 @@ const AA_LABELS: Array[String] = [
 
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "sprint", "brake",
-	"shoot", "quick_shot", "slapshot", "hit", "block", "elevation_up", "elevation_down",
+	"shoot", "quick_pass", "slapshot", "hit", "block", "elevation_up", "elevation_down",
 	"stick_lift",
 ]
 
@@ -1097,6 +1097,17 @@ func _load() -> void:
 				bindings[action] = {"type": "key", "physical_keycode": cfg.get_value("bindings", action + "_code", 0)}
 			elif t == "mouse":
 				bindings[action] = {"type": "mouse", "button_index": cfg.get_value("bindings", action + "_code", 0)}
+		# Action rename (quick_shot → quick_pass): the quick-pass action was renamed
+		# off "quick_shot" so it stops reading as a shot. A config predating the
+		# rename stored the bind under the old key — adopt it so a player's custom
+		# quick-pass key survives the rename instead of resetting to the E default.
+		# (The old key is left in the file; it's simply never read again.)
+		if not bindings.has("quick_pass"):
+			var old_qp_type: String = cfg.get_value("bindings", "quick_shot_type", "")
+			if old_qp_type == "key":
+				bindings["quick_pass"] = {"type": "key", "physical_keycode": cfg.get_value("bindings", "quick_shot_code", 0)}
+			elif old_qp_type == "mouse":
+				bindings["quick_pass"] = {"type": "mouse", "button_index": cfg.get_value("bindings", "quick_shot_code", 0)}
 		# Control-scheme swap (scheme_version 1): Hit takes Ctrl, Block moves to C.
 		# Block was moved off Ctrl to free it for the new Hit button. A config
 		# predating the swap that still has Block on its old Ctrl default is

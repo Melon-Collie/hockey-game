@@ -499,10 +499,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # for every player — Hands still gates the off-axis (lateral/dangle) component,
 # which stays capped at max_blade_speed. See SkaterIKCoordinator.apply_blade_from_mouse.
 @export var wrister_on_axis_blade_speed: float = 60.0
-# Fixed power of the quick shot / pass (player→blade snap fired by the dedicated
-# quick_shot button). Doubles as the pass speed, so it stays flat for everyone.
-@export var quick_shot_power: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
-# Loft-level vertical launch speeds (m/s), shared by quick shots, wristers, and
+# Fixed power of the quick pass (blade→cursor snap fired by the dedicated
+# quick_pass button). Doubles as the pass speed, so it stays flat for everyone.
+@export var quick_pass_power: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
+# Loft-level vertical launch speeds (m/s), shared by quick passes, wristers, and
 # slappers in every direction — one elevation mechanic for shots AND passes
 # (see ShotMechanics loft-level doc). Apex above the launch point (ice_height
 # 0.0175 m) is v_y²/2g; the crossbar pipe runs 1.19–1.25 m (centerline 1.22 m):
@@ -591,12 +591,12 @@ var show_one_timer_indicator: bool = false
 # shot / pass stays snappy (the blade is choreographed for the whole timer, so
 # this is also how long the blade ignores the cursor after a pass), and the
 # slapper swings biggest. Every amplitude below additionally scales with the
-# shot's follow_through_power, set at release (wrister by charge, quick shot
+# shot's follow_through_power, set at release (wrister by charge, quick pass
 # fixed low, slapper full) — a soft pass flicks, a full-charge bomb finishes
 # high. Shapes ride sin(PI · t^arc_skew): 1.0 is a symmetric up-down arc, <1
 # peaks earlier so the finish snaps up with the release and settles slowly.
 @export var follow_through_duration: float = 0.35             # wrister
-@export var quick_shot_follow_through_duration: float = 0.18  # snap pass flick
+@export var quick_pass_follow_through_duration: float = 0.18  # snap pass flick
 @export var slapper_follow_through_duration: float = 0.5
 @export var follow_through_arc_skew: float = 0.7
 # First fraction of the wrister/quick FT spent blending from the captured
@@ -611,7 +611,7 @@ var show_one_timer_indicator: bool = false
 # reads through the meat of the timer.
 @export var follow_through_return_frac: float = 0.4
 @export var wrister_follow_through_min_power: float = 0.55  # amplitude floor at zero charge
-@export var quick_shot_follow_through_power: float = 0.5
+@export var quick_pass_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
 @export var wrister_follow_through_blade_lift: float = 0.55  # high-finish blade height off the ice
 @export var wrister_follow_through_reach: float = 0.4  # forward carry along the shot line (the "through the shot" continuation)
@@ -907,7 +907,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.enter_slapper_charge = _enter_slapper_charge
 	_cb.transition_to_skating = _transition_to_skating
 	_cb.release_wrister = _release_wrister
-	_cb.fire_quick_shot = _fire_quick_shot
+	_cb.fire_quick_pass = _fire_quick_pass
 	_cb.release_slapper = _release_slapper
 	_cb.try_one_timer_release = _try_one_timer_release
 	_cb.update_wrister_charge = _update_wrister_charge
@@ -951,7 +951,7 @@ var _base_brake_multiplier:             float = 0.0
 var _base_friction_drag:                float = 0.0
 var _base_min_wrister_power:            float = 0.0
 var _base_max_wrister_power:            float = 0.0
-var _base_quick_shot_power:             float = 0.0
+var _base_quick_pass_power:             float = 0.0
 var _base_min_slapper_power:            float = 0.0
 var _base_max_slapper_power:            float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
@@ -1070,7 +1070,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# (see ShotMechanics.release_slapper).
 	backhand_power_coefficient  = _base_backhand_power_coefficient  * attrs.hands_backhand_mult()
 	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
-	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_shot
+	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_pass
 	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
 	# min_wrister is held at baseline too — it's the soft-touch floor (a slow
 	# sweep is a touch pass, deliberately BELOW the snap speed), and everyone's
@@ -1079,7 +1079,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	var m_shot_ceil: float = attrs.shot_power_mult()
 	min_wrister_power = _base_min_wrister_power              # baseline floor (= snap)
 	max_wrister_power = _base_max_wrister_power * m_shot_ceil
-	quick_shot_power  = _base_quick_shot_power               # baseline — also the pass speed
+	quick_pass_power  = _base_quick_pass_power               # baseline — also the pass speed
 	min_slapper_power = _base_min_slapper_power * m_shot_ceil
 	max_slapper_power = _base_max_slapper_power * m_shot_ceil
 	# Slapper wind-up time keeps the gentler shot_charge curve. (Wrister power is
@@ -1180,7 +1180,7 @@ func _capture_attribute_bases() -> void:
 	_base_friction_drag                = friction_drag
 	_base_min_wrister_power            = min_wrister_power
 	_base_max_wrister_power            = max_wrister_power
-	_base_quick_shot_power             = quick_shot_power
+	_base_quick_pass_power             = quick_pass_power
 	_base_min_slapper_power            = min_slapper_power
 	_base_max_slapper_power            = max_slapper_power
 	_base_max_slapper_charge_time      = max_slapper_charge_time
@@ -2043,8 +2043,8 @@ func _release_wrister(input: InputState) -> void:
 		# Forehand/backhand from the sweep intent — which side of the body the
 		# drag went toward (see _classify_backhand / ShotMechanics.is_backhand_shot).
 		var is_backhand: bool = _classify_backhand()
-		# LMB is always a charged wrister now — the quick shot lives on its own
-		# button (_fire_quick_shot). A bare tap here fires a min-charge wrister.
+		# LMB is always a charged wrister now — the quick pass lives on its own
+		# button (_fire_quick_pass). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
@@ -2072,12 +2072,12 @@ func _release_wrister(input: InputState) -> void:
 	_sm.follow_through_timer = follow_through_duration
 	_sm.follow_through_duration_total = follow_through_duration
 
-# Instant quick shot / pass — the fixed-power player→blade snap, fired straight
-# from carry by the dedicated quick_shot button (no wrister aim/charge). Backhand
-# is irrelevant here: the quick shot takes no backhand penalty (it doubles as the
-# pass and its power is flat). apply_blade_from_mouse ran earlier this tick, so
-# last_target_blade_world is current.
-func _fire_quick_shot(input: InputState) -> void:
+# Instant quick pass — the fixed-power blade→cursor snap, fired straight from
+# carry by the dedicated quick_pass button (no wrister aim/charge). Backhand is
+# irrelevant here: the quick pass takes no backhand penalty (its power is flat).
+# apply_blade_from_mouse ran earlier this tick, so last_target_blade_world is
+# current.
+func _fire_quick_pass(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
 		last_release_hand = ""
@@ -2094,11 +2094,11 @@ func _fire_quick_shot(input: InputState) -> void:
 		_do_release(result.direction, result.power)
 
 	_sm.follow_through_is_slapper = false
-	_sm.follow_through_power = quick_shot_follow_through_power
+	_sm.follow_through_power = quick_pass_follow_through_power
 	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
-	_sm.follow_through_timer = quick_shot_follow_through_duration
-	_sm.follow_through_duration_total = quick_shot_follow_through_duration
+	_sm.follow_through_timer = quick_pass_follow_through_duration
+	_sm.follow_through_duration_total = quick_pass_follow_through_duration
 
 func _release_slapper(input: InputState) -> void:
 	if has_puck:
@@ -2463,7 +2463,7 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 		_cached_wrister_cfg.min_wrister_power = min_wrister_power
 		_cached_wrister_cfg.max_wrister_power = max_wrister_power
 		_cached_wrister_cfg.backhand_power_coefficient = backhand_power_coefficient
-		_cached_wrister_cfg.quick_shot_power = quick_shot_power
+		_cached_wrister_cfg.quick_pass_power = quick_pass_power
 		_cached_wrister_cfg.loft_vy_low = loft_vertical_speed_low
 		_cached_wrister_cfg.loft_vy_high = loft_vertical_speed_high
 		_cached_wrister_cfg.power_curve = wrister_power_curve
