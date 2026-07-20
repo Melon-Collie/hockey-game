@@ -1015,7 +1015,7 @@ static func _xz_distance(a: Vector3, b: Vector3) -> float:
 static func loose_puck_race_lost(
 		snapshot: WorldSnapshot, self_pos: Vector3, self_vel: Vector3,
 		self_max_speed: float, team_id: int, team_id_by_peer: Dictionary,
-		caps_by_peer: Dictionary) -> bool:
+		caps_by_peer: Dictionary, self_pid: int = -1) -> bool:
 	if snapshot == null or snapshot.puck_state == null:
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
@@ -1031,21 +1031,31 @@ static func loose_puck_race_lost(
 		traj = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
 	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
 			/ float(AILoosePuckChase.RACE_STEPS)
+	# Sprint-aware self cap: same seam as the election (race_vmax), fed by
+	# our own replicated stamina/lockout when the caller identifies us.
+	var self_vmax: float = maxf(self_max_speed, 1.0)
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(self_pid)
+	if self_state != null:
+		var self_caps: AISkaterCaps = caps_by_peer.get(self_pid)
+		var self_mult: float = self_caps.sprint_speed_mult if self_caps != null \
+				else AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+		self_vmax = BotSprintRules.race_speed(
+				self_vmax, self_mult, self_state.stamina, self_state.sprint_locked,
+				Vector2(puck_pos.x - self_pos.x, puck_pos.z - self_pos.z).length())
 	var my_eta: float
 	if traj.is_empty():
 		my_eta = AIActionScoring.time_to_arrive(
-				self_pos, puck_pos, self_vel, maxf(self_max_speed, 1.0))
+				self_pos, puck_pos, self_vel, self_vmax)
 	else:
 		my_eta = AILoosePuckChase.path_intercept_time(
-				traj, step_dt, self_pos, self_vel, maxf(self_max_speed, 1.0))
+				traj, step_dt, self_pos, self_vel, self_vmax)
 	var best_opp_eta: float = INF
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
-		var caps: AISkaterCaps = caps_by_peer.get(pid)
-		var speed: float = caps.max_speed if caps != null \
-				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var speed: float = AILoosePuckChase.race_vmax(
+				s, caps_by_peer.get(pid), puck_pos)
 		var t: float
 		if traj.is_empty():
 			t = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)

@@ -76,6 +76,23 @@ static func is_fast_puck(puck_vel: Vector3) -> bool:
 			> FAST_PUCK_SPEED_M_S * FAST_PUCK_SPEED_M_S
 
 
+# Sprint-aware race cap for one candidate (BotSprintRules.race_speed): cruise
+# and sprint ceiling from caps (league defaults when unset — a league body
+# sprints), pool and lockout from the replicated skater state, race length
+# approximated by the straight distance to the puck's current spot. THE seam
+# through which Speed's sprint separation reaches every race read — election,
+# RETRIEVAL margin, and the race-lost decline all price with it, so they
+# can't disagree about who has the extra gear.
+static func race_vmax(s: SkaterNetworkState, caps: AISkaterCaps,
+		puck_pos: Vector3) -> float:
+	var cruise: float = caps.max_speed if caps != null \
+			else AIActionScoring.SKATER_REF_SPEED_M_S
+	var mult: float = caps.sprint_speed_mult if caps != null \
+			else AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+	return BotSprintRules.race_speed(cruise, mult, s.stamina, s.sprint_locked,
+			Vector2(puck_pos.x - s.position.x, puck_pos.z - s.position.z).length())
+
+
 # The shared predicted path for one race — memoized on the exact puck state,
 # because every consumer in one AI tick (both teams' elections, the brain's
 # RETRIEVAL read, each chaser's race-lost decline) races the SAME puck: one
@@ -158,11 +175,10 @@ static func elect(
 		var s: SkaterNetworkState = skater_states.get(pid)
 		if s == null:
 			continue
-		# Each candidate races at ITS real top speed (Speed) — a fast skater
-		# genuinely reaches a loose puck first. Missing caps → league default.
-		var caps: AISkaterCaps = caps_by_peer.get(pid)
-		var max_speed: float = caps.max_speed if caps != null \
-				else AIActionScoring.SKATER_REF_SPEED_M_S
+		# Each candidate races at ITS real sprint-aware race cap (Speed +
+		# the stamina-gated sprint gear) — a fast skater genuinely reaches
+		# a loose puck first. Missing caps → league default.
+		var max_speed: float = race_vmax(s, caps_by_peer.get(pid), puck_pos)
 		var t: float = path_intercept_time(traj, step_dt, s.position, s.velocity, max_speed) \
 				if not traj.is_empty() \
 				else _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)
@@ -198,9 +214,7 @@ static func best_intercept_time(
 		var s: SkaterNetworkState = skater_states.get(pid)
 		if s == null:
 			continue
-		var caps: AISkaterCaps = caps_by_peer.get(pid)
-		var max_speed: float = caps.max_speed if caps != null \
-				else AIActionScoring.SKATER_REF_SPEED_M_S
+		var max_speed: float = race_vmax(s, caps_by_peer.get(pid), puck_pos)
 		var t: float = path_intercept_time(traj, step_dt, s.position, s.velocity, max_speed) \
 				if not traj.is_empty() \
 				else _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)

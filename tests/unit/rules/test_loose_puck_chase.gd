@@ -21,9 +21,11 @@ func _states(entries: Dictionary) -> Dictionary:
 	return entries
 
 
-func _caps(max_speed: float) -> AISkaterCaps:
+func _caps(max_speed: float, sprint_mult: float = -1.0) -> AISkaterCaps:
 	var c := AISkaterCaps.new()
 	c.max_speed = max_speed
+	if sprint_mult > 0.0:
+		c.sprint_speed_mult = sprint_mult
 	return c
 
 
@@ -206,6 +208,43 @@ func test_rim_race_not_lost_for_downstream_defender() -> void:
 			snap, Vector3(10, 0, 14), Vector3.ZERO, REF,
 			0, {1: 0, 2: 1}, {})
 	assert_true(lost_settled, "a settled puck at the opponent's feet is honestly lost")
+
+
+# ── Sprint-aware races (BotSprintRules.race_speed via race_vmax) ─────────────
+
+func test_sprint_gear_wins_the_long_race() -> void:
+	# Equal cruise speed, equal 20 m race — but 100 is a burner (strong-
+	# Speed sprint ceiling 1.16) and 200 a plodder (1.07). Cruise-priced
+	# reads called this a tie broken by peer id; the sprint-aware race
+	# elects the extra gear. This is Speed's headline separation finally
+	# reaching the AI's race reads.
+	var states := {
+		100: _skater(Vector3(0, 0, 20)),
+		200: _skater(Vector3(20, 0, 20)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(10, 0, 0), Vector3.ZERO, -1,
+			{100: _caps(9.0, 1.16), 200: _caps(9.0, 1.07)})
+	assert_eq(pid, 100, "the burner's sprint gear wins an otherwise even race")
+	var flipped: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(10, 0, 0), Vector3.ZERO, -1,
+			{100: _caps(9.0, 1.07), 200: _caps(9.0, 1.16)})
+	assert_eq(flipped, 200, "and it is the gear deciding it, not the peer id")
+
+
+func test_gassed_skater_loses_the_race_to_fresh_legs() -> void:
+	# Same builds, same distance — but 100's pool is nearly empty (below
+	# the sprint engage floor) while 200 is fresh. Fresh legs win the race
+	# a stamina-blind read called a tie.
+	var states := {
+		100: _skater(Vector3(0, 0, 20)),
+		200: _skater(Vector3(20, 0, 20)),
+	}
+	states[100].stamina = 0.1
+	states[200].stamina = 1.0
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(10, 0, 0), Vector3.ZERO, -1)
+	assert_eq(pid, 200, "fresh legs beat a gassed skater over the same ground")
 
 
 func test_dead_puck_elects_nobody() -> void:

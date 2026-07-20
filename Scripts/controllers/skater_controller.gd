@@ -990,6 +990,7 @@ var _base_hand_y_max:                   float = 0.0
 func build_ai_caps() -> AISkaterCaps:
 	var caps := AISkaterCaps.new()
 	caps.max_speed = max_speed
+	caps.sprint_speed_mult = sprint_max_speed_multiplier
 	caps.max_accel = thrust
 	caps.blade_span = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M
 	caps.stick_reach = stick_length
