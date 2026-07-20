@@ -2683,6 +2683,7 @@ static func counter_rush_cost(
 	# defaults to.
 	var carry_dist: float = loss_point.distance_to(counter_point)
 	var t_counter: float = INF
+	var t_collect_best: float = INF
 	var has_vels: bool = opponent_vels.size() == opponents.size()
 	var has_caps: bool = opponent_caps.size() == opponents.size()
 	var has_stam: bool = opponent_stamina.size() == opponents.size()
@@ -2699,12 +2700,44 @@ static func counter_rush_cost(
 				opponent_stamina[i] if has_stam else 1.0, false,
 				collect_dist + carry_dist)
 		var vel: Vector3 = opponent_vels[i] if has_vels else Vector3.ZERO
-		var t: float = time_to_arrive(opponents[i], loss_point, vel, speed) \
-				+ carry_dist / maxf(speed, 0.001)
+		var t_collect: float = time_to_arrive(opponents[i], loss_point, vel, speed)
+		if t_collect < t_collect_best:
+			t_collect_best = t_collect
+		var t: float = t_collect + carry_dist / maxf(speed, 0.001)
 		if t < t_counter:
 			t_counter = t
 	if t_counter == INF:
 		return 0.0
+	# PASS-FORWARD leg (transition-exposure follow-up, plan §6): the
+	# collector doesn't have to lug it the length of the ice — the real
+	# counter hits the outlet already AHEAD. From the fastest collect,
+	# price the hardest feed to each other opponent's spot and HIS carry
+	# home (gather → carry, same restart-from-rest read as the retrieve
+	# channels), and let the min compete with the lone-carrier time. This
+	# is what makes an everyone-deep shape genuinely expensive: the lone
+	# read let a corner collector's 5+ s lug keep the covering set full
+	# while the stretch man at center turned it into a ~4 s strike.
+	for j: int in opponents.size():
+		var j_speed: float = SKATER_REF_SPEED_M_S
+		var j_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
+		if has_caps:
+			var j_caps: AISkaterCaps = opponent_caps[j]
+			if j_caps != null:
+				j_speed = j_caps.max_speed
+				j_mult = j_caps.sprint_speed_mult
+		var j_carry: float = opponents[j].distance_to(counter_point)
+		# The feed only helps when the outlet is genuinely AHEAD of the
+		# lug — skip receivers whose own carry isn't shorter.
+		if j_carry >= carry_dist:
+			continue
+		j_speed = BotSprintRules.race_speed(j_speed, j_mult,
+				opponent_stamina[j] if has_stam else 1.0, false, j_carry)
+		var t_pf: float = t_collect_best \
+				+ loss_point.distance_to(opponents[j]) \
+						/ GameRules.DEFAULT_WRISTER_POWER_MAX_M_S \
+				+ time_to_arrive(opponents[j], counter_point, Vector3.ZERO, j_speed)
+		if t_pf < t_counter:
+			t_counter = t_pf
 
 	# Covering set: bodies that beat the counter home WITH TIME TO SET —
 	# the same brake-to-arrive margin race_home_radius charges (a defender

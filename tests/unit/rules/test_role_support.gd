@@ -317,19 +317,18 @@ func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 
 
 func test_holds_the_high_post_over_the_flank_one_timer() -> void:
-	pending("Re-scoped by the #25 covering-set exposure, which showed the"
-			+ " original gate was wrong: a from-the-OZ-corner counter is a ~6 s"
-			+ " full-rink lug, so every OZ station is honestly recoverable"
-			+ " (cost ~0) and the compete is decided by pass value — where the"
-			+ " flank one-timer vs a traversing keeper reads near-certain."
-			+ " The honest gate is the PREDICTED keeper lacking the live"
-			+ " goalie's backdoor depth-cap pre-arm (backdoor_depth_cap): a"
-			+ " keeper who pre-arms against the weak-side man deflates that"
-			+ " one-timer from near-certain to merely strong, at which point"
-			+ " structure can compete. It may also be the honest 3v3 read that"
-			+ " the seam IS the better play (NHL 3v3 flashes the third man into"
-			+ " seams) — decide from playtest before modelling further."
-			+ " ARCHITECTURE Known Issues.")
+	pending("The backdoor pre-arm gate was ATTEMPTED (backdoor_depth_cap in"
+			+ " the planning keeper) and reverted: with score_shoot's set-body"
+			+ " coverage assumption, an on-line pre-armed keeper flips between"
+			+ " a wall (feeds erased to 0.0 — SUPPORT loses its whole pass"
+			+ " signal) and a no-op depending on geometry; there is no stable"
+			+ " merely-strong band until the hole model can price an UNSETTLED"
+			+ " body's partial silhouette. That is hole-model v3 (score against"
+			+ " the replicated pose) — the two items converge; build the"
+			+ " pre-arm ON v3. Also still open: whether the 3v3 third man"
+			+ " should even prefer structure over the seam (NHL 3v3 flashes"
+			+ " the third man into seams) — playtest call. ARCHITECTURE"
+			+ " Known Issues.")
 
 
 func test_deep_trailer_tracks_the_rush_past_a_beaten_forechecker() -> void:
