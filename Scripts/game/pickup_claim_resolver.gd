@@ -160,6 +160,15 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 			client_blade_prev, skater_prev_snap.position, max_reach)
 	var top_hand: Vector3 = LagCompRewind.clamp_client_blade(
 			client_top_hand, skater_snap.position, max_reach)
+	# Second, tighter bound: pin each client point to within a plausible continuity
+	# distance of the host's OWN reconstruction of the blade/hand at the rewind
+	# instant (blade_contact_world / top_hand_world, derived from the claimant's
+	# replicated inputs) — shrinks the exploitable slop from the reach sphere to the
+	# reconstruction error. No-ops per point when the host has no reconstruction.
+	var continuity: float = LagCompRewind.blade_continuity_tolerance(_peer_blade_speed(peer_id))
+	blade_curr = LagCompRewind.continuity_clamp(blade_curr, skater_snap.blade_contact_world, continuity)
+	blade_prev = LagCompRewind.continuity_clamp(blade_prev, skater_prev_snap.blade_contact_world, continuity)
+	top_hand = LagCompRewind.continuity_clamp(top_hand, skater_snap.top_hand_world, continuity)
 	# Sanity telemetry (host-only, no-op off the host): this claim reached the
 	# rewound geometry test — the client's view said in-range and every
 	# eligibility gate passed. A check_pickup fail below means the host's rewind
@@ -260,3 +269,13 @@ func _peer_max_reach(peer_id: int) -> float:
 		return 0.0
 	var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
 	return caps.max_blade_reach if caps != null else 0.0
+
+
+# The claimant's real Hands-scaled blade traverse speed (AISkaterCaps.blade_speed),
+# feeding the continuity tolerance. 0.0 when the peer has no caps entry — the
+# continuity clamp then reduces to its slack floor, still a valid bound.
+func _peer_blade_speed(peer_id: int) -> float:
+	if _registry == null:
+		return 0.0
+	var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
+	return caps.blade_speed if caps != null else 0.0

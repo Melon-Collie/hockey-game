@@ -464,13 +464,13 @@ const LANE_DEFENDER_BODY_RADIUS_M: float = GameRules.OFFSIDE_LINE_SLACK
 # linear velocity directly (see Puck.release), so "power" IS m/s.
 # Sourced from GameRules so the AI's lane reaction window matches
 # the live shot mechanics. score_shoot defaults to wrister speed;
-# score_pass uses pass speed (which is quick_shot_power — short
+# score_pass uses pass speed (which is quick_pass_power — short
 # passes in this codebase are mechanically quick-shots, long ones
 # get wrister-charged for more pace — see PASS_CHARGE_SPEED_M_S /
 # expected_pass_speed).
 const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
-const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 
 # Target ARRIVAL speed at the receiver — the "magnet" pace a bot aims to hit its
 # teammate at. Crisp enough to beat a defender's reaction and shrink the pass's
@@ -742,7 +742,7 @@ const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # AIThreatAssignment.HYSTERESIS_MARGIN_FRAC. Applied only to POSITIVE
 # scores — a committed intent that has decayed to worthless (or
 # negative EV) earns no stickiness. Only applies to fire intents
-# (SHOOT, QUICK_SHOT, PASS) — CARRY doesn't get a bonus, so the bot is
+# (SHOOT, QUICK_PASS, PASS) — CARRY doesn't get a bonus, so the bot is
 # free to switch to fire as soon as fire scores higher. Raise toward
 # 0.30 if intent flickers visibly; lower toward 0.05 if intent feels
 # too sticky.
@@ -4108,8 +4108,15 @@ static func net_safe_blade_target(from: Vector3, target: Vector3) -> Vector3:
 #
 # Slot rect: x ∈ ±OWN_DZ_SLOT_HALF_WIDTH_M, z ∈ [own_goal_line - depth,
 # own_goal_line] for own_goal_z > 0; mirrored for own_goal_z < 0.
-const OWN_DZ_SLOT_HALF_WIDTH_M: float = 2.0
-const OWN_DZ_SLOT_DEPTH_M: float = 5.0
+# Sized to the real "home plate" high-danger area, not just the net mouth: a
+# blind feed across the front of your own net that clips the flanks (a receiver
+# a stick outside the posts, a lead point past the crease top) is the cardinal
+# giveaway — it deserves the same hard veto as a dead-centre one. Half-width
+# ~3× NET_HALF_WIDTH (0.915) covers the posts plus a stick either side; depth
+# reaches out toward the hash marks. Widened from 2.0×5.0, which let side-of-
+# crease centering feeds slip the veto and become goals-against.
+const OWN_DZ_SLOT_HALF_WIDTH_M: float = 2.75
+const OWN_DZ_SLOT_DEPTH_M: float = 6.0
 static func pass_crosses_own_slot(from: Vector3, to: Vector3, own_goal_z: float) -> bool:
 	var depth: float = OWN_DZ_SLOT_DEPTH_M
 	var half_w: float = OWN_DZ_SLOT_HALF_WIDTH_M

@@ -398,6 +398,16 @@ func test_breakout_pass_not_blocked() -> void:
 	assert_false(AIActionScoring.pass_crosses_own_slot(from, to, GOAL.z))
 
 
+func test_own_slot_side_of_crease_feed_blocked() -> void:
+	# A centering feed hugging the flank of the crease — x ≈ 2.2–2.6, a stick
+	# outside the post but squarely in the home-plate high-danger area. This
+	# slipped the old ±2.0 rect (x never entered [-2, 2]) and became a
+	# goal-against; the widened ±2.75 rect vetoes it as the giveaway it is.
+	var from := Vector3(2.6, 0.0, 26.0)
+	var to := Vector3(2.2, 0.0, 21.0)
+	assert_true(AIActionScoring.pass_crosses_own_slot(from, to, GOAL.z))
+
+
 # ── Shot danger: seven-hole open-net calibration ─────────────────────────────
 # score_shoot rates a shot by the best of the seven goalie holes (open_net_danger)
 # — top/bottom corners, five-hole, armpits — each scored as the net it clears past

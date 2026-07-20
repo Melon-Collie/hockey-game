@@ -138,7 +138,13 @@ const VERSION: String = "dev"
 #      OWN measured downstream loss in basis points, stored verbatim as the peer
 #      loss. Same header size, but a mixed-build host would read the field as a
 #      seq and mis-estimate loss, so a bump is required.
-const PROTOCOL_VERSION: int = 34
+# v35: host-measured peer RTT. The forgeable client report_ping RPC (a self-
+#      reported RTT the host trusted for lag-comp claim-stamp validation) is
+#      replaced by a host-initiated round trip (host_ping -> peer echoes
+#      host_pong -> host measures + EMA-smooths). Adding/removing @rpc methods
+#      shifts the name-sorted RPC index of every method after them (see v14/v23),
+#      so a bump is required even though no serialized wire format changed.
+const PROTOCOL_VERSION: int = 35
 
 
 func _ready() -> void:

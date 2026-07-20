@@ -247,6 +247,18 @@ extends Node
 # angle 0.25 m closer to center. Track the pinned puck itself (weight → 0) so the
 # goalie squares to where the shot actually comes from.
 @export var shooter_weight_slapper_windup: float = 0.0
+# Slapper aim shade (anticipatory read): squaring to the pinned puck alone leaves
+# the against-the-grain corner of a committed slot slapshot open by ~1 m — the
+# goalie holds its set angle and a corner shot goes past its side (the "Colin
+# cheese"). A real goalie reads the shot's side off the LOCKED wind-up and cheats
+# his angle that way. This shades the goalie's lateral target toward where the shot
+# will cross his depth plane (from the published predicted velocity), ramped by how
+# long he's read the wind-up (prearm_read_time) so a quick release gets little shade
+# — the skill window survives — while a lazy full wind-up to an open corner gets cut
+# off. Directional, so a faked aim shades him the WRONG way (counter-readable, not a
+# flat buff). Kept below 1.0 so a well-placed, quick corner release can still beat
+# him (beatable realism). See _move_along_arc.
+@export_range(0.0, 1.0, 0.05) var slapper_aim_shade: float = 0.7
 # Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
 # scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
 # effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
@@ -327,7 +339,7 @@ extends Node
 # than buffs. Sitting deeper opens the carrier's direct-shot angle: respecting
 # the back door is a genuine trade the shooter can exploit.
 @export var backdoor_release_time: float = 0.15         # s — receiver's one-timer swing
-@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 @export var backdoor_max_shooter_distance: float = 9.0  # m — shooter→goal eligibility
 
 # ── Beaten-wide post seal ────────────────────────────────────────────────────
@@ -709,10 +721,13 @@ extends Node
 # counter-read, not a flat buff). The lean is PARTIAL (`prelean_strength` of the
 # way to the predicted reach) and never adds save speed — it only changes the
 # resting hand position, so the arm-delay / glove-speed caps on the actual
-# reaction still hold. Directional pre-lean needs the shooter's aim, which is
-# only host-side for host-controlled shooters (host player + bots); remote
-# shooters fall back to a non-directional "hands up, ready" tell. Host-only like
-# all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
+# reaction still hold. Directional pre-lean needs the shooter's live predicted
+# velocity, which SkaterController publishes every charge tick for BOTH shot types
+# and EVERY shooter — host player, bot, and remote (the host simulates a remote's
+# carry from replicated input, and both the aim and the wrister's world-aligned drag
+# ride the wire). The non-directional "hands up, ready" tell is the fallback only
+# when the current aim isn't at the net, not a remote-shooter limitation. Host-only
+# like all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
 @export var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
 @export var prelean_max_distance: float = 9.0       # m — goalie→shooter range the read fires within
 @export var prelean_ready_lift: float = 0.06        # m — non-directional hands-up lift (remote shooters)
@@ -915,6 +930,9 @@ var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Input
 
 # ── Cached rule configs (built once in setup) ────────────────────────────────
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
+# Speed-floor-free variant of _shot_cfg for the universal-reaction path (slow
+# tricklers / board bounces must classify even below shot_speed_threshold).
+var _universal_shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
@@ -1312,6 +1330,23 @@ func _build_rule_configs() -> void:
 	_shot_cfg.reaction_delay = reaction_delay
 	_shot_cfg.low_shot_threshold = low_shot_threshold
 	_shot_cfg.elevated_threshold = elevated_threshold
+	# Universal-reaction impact classification uses the SAME geometry but with NO
+	# speed floor. The universal path's urgency decision is already made by
+	# should_react_to_puck (imminence + on-net, tiny anti-jitter floor only) — its
+	# whole point is that a slow trickler / dying board-bounce at the doorstep is
+	# MORE urgent than a rocket from the point, not less. Re-running detect_shot
+	# with `_shot_cfg`'s 5 m/s `shot_speed_threshold` here silently rejected every
+	# sub-threshold puck, so slow pucks oozing at the net never triggered a
+	# reaction and the goalie sat a statue. This clone keeps low/elevated
+	# classification and the on-net check; speed gating stays on the RELEASE path
+	# (which must still filter slow dribbled passes) via `_shot_cfg`.
+	_universal_shot_cfg = GoalieBehaviorRules.ShotDetectionConfig.new()
+	_universal_shot_cfg.shot_speed_threshold = 0.0
+	_universal_shot_cfg.net_half_width = net_half_width
+	_universal_shot_cfg.net_margin = net_margin
+	_universal_shot_cfg.reaction_delay = reaction_delay
+	_universal_shot_cfg.low_shot_threshold = low_shot_threshold
+	_universal_shot_cfg.elevated_threshold = elevated_threshold
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
 	_screen_cfg.screener_radius = screener_radius
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
@@ -3067,6 +3102,24 @@ func _move_along_arc(delta: float) -> Vector2:
 	var cross_crease_push: bool = is_server and _cross_crease_timer > 0.0
 	if cross_crease_push:
 		target_xz.x = _cross_crease_target_x
+	# Slapper aim shade (anticipatory read): while reading a committed slot slapshot
+	# wind-up, cheat the angle toward where the shot will cross the goalie's depth
+	# plane — the real "he's lined it up top-far, I'll shade that way" read (see the
+	# slapper_aim_shade export). Ramped by wind-up read time so a quick release keeps
+	# the skill window; directional off the LOCKED aim, so a fake shades him wrong.
+	# Skipped during a cross-crease push (a pass in flight owns the lateral target).
+	if is_server and _reading_slapper_tell and not cross_crease_push and slapper_aim_shade > 0.0:
+		var shade_carrier: Skater = puck.get_carrier()
+		if shade_carrier != null:
+			var shade_vel: Vector3 = shade_carrier.predicted_shot_velocity
+			if shade_vel.length_squared() >= 0.01 and absf(shade_vel.z) >= 0.001:
+				var goalie_plane_z: float = _goal_line_z + _direction_sign * _current_depth
+				var t_cross: float = (goalie_plane_z - puck.global_position.z) / shade_vel.z
+				if t_cross > 0.0:
+					var shot_x_at_depth: float = puck.global_position.x + shade_vel.x * t_cross
+					var shade_t: float = clampf(
+							_shot_read_timer / maxf(prearm_read_time, 0.001), 0.0, 1.0) * slapper_aim_shade
+					target_xz.x = lerpf(target_xz.x, shot_x_at_depth, shade_t)
 	_target_x = target_xz.x
 	var delta_2d: float = current.distance_to(target_xz)
 	var move_speed: float
@@ -3443,10 +3496,10 @@ func _set_pad_toe_out_inputs() -> void:
 
 # Populate the pose builder's pre-lean fields. The goalie leans toward a charging
 # shot's predicted impact while reading the windup (see _is_reading_shot_threat).
-# Directional lean needs the shooter's live predicted velocity, which is only
-# published host-side for host-controlled shooters (host player + bots); remote
-# shooters leave it ZERO and get the non-directional readiness tell. Re-solved
-# every tick off the LIVE aim, so a late release moves the impact off the lean.
+# Directional lean needs the shooter's live predicted velocity, which SkaterController
+# publishes for both shot types and every shooter including remotes (the host
+# simulates a remote's carry from replicated input). Re-solved every tick off the
+# LIVE aim, so a late release moves the impact off the lean.
 func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = false
 	_pose_inputs.prelean_directional = false
@@ -3460,7 +3513,7 @@ func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = true
 	var vel: Vector3 = carrier.predicted_shot_velocity
 	if vel.length_squared() < 0.01:
-		return  # remote shooter (no aim on the wire) — non-directional tell only
+		return  # not yet published this charge (freshness guard) — non-directional tell
 	var res: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, vel, _goal_line_z, _goal_center_x,
 			_shot_cfg, _scratch_prelean_shot)
@@ -3616,7 +3669,7 @@ func _check_universal_reaction() -> void:
 		return
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, vel,
-			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
+			_goal_line_z, _goal_center_x, _universal_shot_cfg, _scratch_shot)
 	if not result.is_shot:
 		return
 	if debug_goalie_reads:

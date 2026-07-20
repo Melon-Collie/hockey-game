@@ -2793,7 +2793,7 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# brake — keep momentum to drive in (which also cushions a straight feed,
 	# #373's relative frame). On contact the bot enters CARRY already net-facing,
 	# so the follow-up shot needs no reorientation; near the net the carrier
-	# scorer takes the quick shot.
+	# scorer takes the quick pass.
 	_apply_steering(input, snapshot, self_pos, anchor)
 	input.mouse_world_pos = _step_mouse_toward(
 			_blade_gate_on_puck_line(self_pos, puck_pos, puck_vel))
@@ -3607,11 +3607,11 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft
 				else ("↝rim" if _dump_is_rim else "↝out"))) \
 				if is_dump else "PASS→%s" % target_slot_label
-		# Instant quick shot via the dedicated button flag — fires this tick from
+		# Instant quick pass via the dedicated button flag — fires this tick from
 		# carry (player→blade snap at the fixed pass power), same semantics the
 		# one-tick shoot release used to produce before the timing classifier was
 		# removed. Clear target so a future PASS/DUMP picks a fresh one.
-		input.quick_shot_pressed = true
+		input.quick_pass_pressed = true
 		_pass_target_peer_id = -1
 		_dump_target = Vector3.INF
 		_set_state(State.CARRY)
@@ -4307,6 +4307,19 @@ func _goalie_now(snapshot: WorldSnapshot) -> Vector3:
 	return Vector3(opp_goalie.position_x, 0.0, opp_goalie.position_z)
 
 
+# Our OWN goalie's current world position, or Vector3.INF when its state isn't
+# buffered yet. Used by the carry-cursor blade cradle: the same stick-through-
+# goalie feedback loop that dislodges the puck at the ATTACKING net is an
+# OWN-GOAL when it happens at our own cage (a defender carrying across its own
+# crease waves the blade through its own goalie, the puck pops free in the
+# slot). The blade must cradle off our goalie exactly like it does off theirs.
+func _own_goalie_now(snapshot: WorldSnapshot) -> Vector3:
+	var own_goalie: GoalieNetworkState = snapshot.goalie_states.get(_team_id)
+	if own_goalie == null:
+		return Vector3.INF
+	return Vector3(own_goalie.position_x, 0.0, own_goalie.position_z)
+
+
 # Wraps AIActionScoring.predict_goalie_pos for the common case where
 # the puck-at-release is the position we're scoring a shot from.
 # `release_time_s` is the time from now until the bot fires (e.g.,
@@ -4402,21 +4415,32 @@ func _step_carry_cursor(input: InputState, snapshot: WorldSnapshot,
 		input.mouse_world_pos = _step_mouse_aim(mouse_target)
 
 
-# Forward carry reach, cradled tight when the body is behind/beside the attacking
-# net (see CARRY_BEHIND_NET_CRADLE_M). Returns the full reach everywhere else.
+# Forward carry reach, cradled tight when the body is behind/beside EITHER net
+# (see CARRY_BEHIND_NET_CRADLE_M). Returns the full reach everywhere else.
 func _carry_reach_behind_net(self_pos: Vector3) -> float:
 	# Wide of the cage laterally — carrying up the wall / in the corner, not net-
 	# working — keep the full reach (the wall margin + net_safe_blade_target own
 	# that side).
 	if absf(self_pos.x) > GameRules.NET_BACK_HALF_WIDTH + CARRY_BEHIND_NET_LATERAL_M:
 		return CARRY_BLADE_AIM_FORWARD_M
-	# Signed distance PAST the attacking goal line toward the end boards (>0 is
-	# behind the net). attacking_z = -_own_goal_dir.
-	var past: float = (self_pos.z - _attacking_goal_pos.z) * (-_own_goal_dir)
+	# Signed distance PAST a goal line toward its end boards (>0 = behind that net,
+	# in the band where the full-reach blade would chord through the cage). BOTH
+	# nets cradle now, taking whichever the body is behind:
+	#   - Attacking net (was the only case): net-working a wraparound / walkout.
+	#   - OUR net (added): a defender retrieving or wheeling behind its own cage is
+	#     the WORSE case — the residual blade-into-net contact net_safe_blade_target
+	#     can't fully absorb pops the puck loose IN OUR CREASE (own goal) and, tick
+	#     after tick, re-pins the bot back there unable to skate it out (the
+	#     "stuck behind our own net" report). Cradling tight kills that loop and
+	#     lets the body wheel the puck out cleanly.
+	var past_att: float = (self_pos.z - _attacking_goal_pos.z) * (-_own_goal_dir)
+	var past_own: float = (self_pos.z - _own_goal_dir * GameRules.GOAL_LINE_Z) * _own_goal_dir
+	var past: float = maxf(past_att, past_own)
 	# Ramp: full reach until a band's width in front of the line, tight cradle once
-	# at/behind it. In FRONT of the net a genuine scoring drive is fire-tracked
-	# (overrides this), so cradling only the last stride before the line — and
-	# everything behind — never blunts a shot.
+	# at/behind it. In FRONT of the attacking net a genuine scoring drive is
+	# fire-tracked (overrides this), so cradling only the last stride before the
+	# line — and everything behind — never blunts a shot. In front of OUR net there's
+	# no shot to blunt: cradling the puck tight there is purely protection.
 	var t: float = clampf((past + CARRY_BEHIND_NET_BAND_M) / CARRY_BEHIND_NET_BAND_M, 0.0, 1.0)
 	return lerpf(CARRY_BLADE_AIM_FORWARD_M, CARRY_BEHIND_NET_CRADLE_M, t)
 
@@ -4440,8 +4464,16 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# _best_carry wants — including skating backward toward the carry
 	# anchor via brake-pivot. The hockey-real "back out facing the
 	# play" behavior emerges from facing being held rather than reset.
+	#
+	# BOTH goalies gate this, not just theirs: waving the blade through
+	# OUR goalie in OUR crease pops the puck loose in our own slot — an
+	# own goal, the worst version of the same feedback loop. A defender
+	# carrying across its own doorstep must cradle exactly the same way.
 	var goalie_pos: Vector3 = _goalie_now(snapshot)
 	if self_pos.distance_to(goalie_pos) < _blade_reach:
+		return self_pos
+	var own_goalie_pos: Vector3 = _own_goalie_now(snapshot)
+	if own_goalie_pos.is_finite() and self_pos.distance_to(own_goalie_pos) < _blade_reach:
 		return self_pos
 
 	var to_goal: Vector3 = _attacking_goal_pos - self_pos

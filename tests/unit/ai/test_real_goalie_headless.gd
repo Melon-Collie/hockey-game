@@ -119,9 +119,9 @@ func test_carrier_shoots_more_against_a_challenging_goalie() -> void:
 			brain.tick(20 * DT, snap)
 		input.shoot_pressed = false
 		input.slap_pressed = false
-		input.quick_shot_pressed = false
+		input.quick_pass_pressed = false
 		agent.dispatch(input, snap)
-		if input.quick_shot_pressed or (prev_shoot and not input.shoot_held):
+		if input.quick_pass_pressed or (prev_shoot and not input.shoot_held):
 			shots += 1
 		prev_shoot = input.shoot_held
 		if pos.distance_to(Vector3(0, 0, GOAL_Z)) < 9.0:

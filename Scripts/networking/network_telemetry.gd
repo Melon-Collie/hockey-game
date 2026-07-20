@@ -754,12 +754,30 @@ func recent_samples() -> Array[Dictionary]:
 	return _recent_samples.duplicate()
 
 
+# Freeze tripwires. A multi-second main-loop suspension (alt-tab, window drag,
+# OS suspend, a load hitch) does NOT register as a physics stall — the tick loop
+# isn't running to measure its own gap — so worst_stall_ms stays tiny while
+# broadcasts halt and the client-input queue backs up with stale inputs. These
+# two catch that class of freeze and, read together, localize it: broadcast_gap
+# fires when THIS host stopped sending, so both firing in a window ⇒ a host-side
+# freeze; input_backlog firing alone (broadcasts on-time, host draining stale
+# inputs) ⇒ the freeze was on the CLIENT's send side. Thresholds are physical,
+# not the F3 live BAND: 500 ms is half a second of no snapshots / half-a-second-
+# stale inputs — a visibly frozen world, well clear of the ~17 ms / ~240 ms
+# window ceilings a clean session ever reaches. Both metrics fold 0 on clients,
+# so these are naturally host-only.
+const _BROADCAST_GAP_MARKER_MS: float = 500.0
+const _INPUT_BACKLOG_MARKER_MS: float = 500.0
+
+
 # Objective anomaly markers — the same mechanism as a tester's F4 press, fired
 # automatically when a window crosses a tripwire, so rare bugs land with a
-# timestamp and a pre-history trace even when nobody reacted. Thresholds mirror
-# the F3 overlay's BAD bands (keep in sync with network_debug_overlay.gd and
-# docs/telemetry_dictionary.md); rarity is enforced by the summary's per-trigger
-# cooldown + session cap, so a broken session records the onset, not spam.
+# timestamp and a pre-history trace even when nobody reacted. Most thresholds
+# mirror the F3 overlay's BAD bands (keep in sync with network_debug_overlay.gd
+# and docs/telemetry_dictionary.md); the freeze tripwires (broadcast_gap /
+# input_backlog) instead use the suspension-scale thresholds above. Rarity is
+# enforced by the summary's per-trigger cooldown + session cap, so a broken
+# session records the onset, not spam.
 func _check_auto_markers() -> void:
 	if _puck_traj_hard_snap_count >= 2:
 		_auto_marker("puck_hard_snaps")
@@ -771,6 +789,10 @@ func _check_auto_markers() -> void:
 		_auto_marker("host_stall")
 	if input_starvations_per_sec >= 5.0:
 		_auto_marker("input_starvation")
+	if broadcast_interval_p95_ms >= _BROADCAST_GAP_MARKER_MS:
+		_auto_marker("broadcast_gap")
+	if input_lead_avg_ms >= _INPUT_BACKLOG_MARKER_MS:
+		_auto_marker("input_backlog")
 
 
 func _auto_marker(trigger: String) -> void:

@@ -108,7 +108,7 @@ func test_release_kicks_back_leg_and_transfers_weight() -> void:
 			"leg split should settle to rest")
 
 
-func test_quick_shot_release_still_flicks() -> void:
+func test_quick_pass_release_still_flicks() -> void:
 	# A pass fires from carry with no aim state and no charge — the kick must
 	# still read at the min-power floor.
 	_skater.current_shot_state = State.SKATING_WITH_PUCK
