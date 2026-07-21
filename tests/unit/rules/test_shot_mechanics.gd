@@ -238,6 +238,82 @@ func test_wrister_speed_for_power_t_clamps() -> void:
 	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(1.5, cfg),
 			cfg.full_sweep_speed, 0.001, "over-1 target clamps to the full-speed reference")
 
+# ── Wrister: travel-gated ceiling ─────────────────────────────────────────────
+# The top of the band must be EARNED with blade travel: cursor speed alone (a
+# twitch, a wiggle, a cranked sensitivity) caps at the flick-pass floor. The
+# gate is a cap — it can only lower the speed-derived t, never raise it — so
+# everything below the floor (the touch-pass precision band) is bit-identical
+# to the ungated model.
+
+func _gated_cfg() -> ShotMechanics.WristerConfig:
+	var cfg := _wrister_cfg()
+	cfg.full_stroke_travel = 1.0
+	cfg.travel_cap_floor = 0.4
+	return cfg
+
+func test_travel_cap_disabled_when_full_travel_unset() -> void:
+	# full_stroke_travel <= 0 disables the gate — cap is 1.0 for any travel.
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.0, _wrister_cfg()),
+		1.0, 0.001, "unset gate never caps")
+
+func test_travel_cap_zero_travel_floors_at_flick_pass_tier() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.0, _gated_cfg()),
+		0.4, 0.001, "zero travel earns the flick-pass floor, not zero")
+
+func test_travel_cap_full_travel_unlocks_ceiling() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(1.0, _gated_cfg()),
+		1.0, 0.001, "a full stroke unlocks the whole band")
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(2.5, _gated_cfg()),
+		1.0, 0.001, "over-travel clamps at 1")
+
+func test_travel_cap_scales_between_floor_and_full() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.7, _gated_cfg()),
+		0.7, 0.001, "partial stroke earns a proportional ceiling")
+
+func test_wrister_twitch_full_speed_no_travel_caps_at_floor() -> void:
+	# THE exploit case: max cursor speed with no blade travel (wiggle / jerk /
+	# cranked Shot Power Sensitivity) releases at the flick-pass tier, not max.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP, 0.0)
+	var floor_power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power,
+			cfg.travel_cap_floor)
+	assert_almost_eq(r.power, floor_power, 0.01,
+		"speed without travel caps at the flick-pass tier")
+
+func test_wrister_full_sweep_with_full_travel_maxes_power() -> void:
+	# The honest rip: full speed AND a real swept stroke — untouched by the gate.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP, 1.2)
+	assert_almost_eq(r.power, cfg.max_wrister_power, 0.01,
+		"an earned stroke keeps the full ceiling")
+
+func test_wrister_soft_sweep_below_floor_untouched_by_gate() -> void:
+	# The mastered touch pass: a slow sweep's speed-derived t sits under the
+	# floor, so gated and ungated release identically even at zero travel.
+	var slow_sweep: float = 1.0
+	var gated: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, _gated_cfg(), Vector3(1, 0, 0), false, slow_sweep, 0.0)
+	var ungated: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, _wrister_cfg(), Vector3(1, 0, 0), false, slow_sweep)
+	assert_almost_eq(gated.power, ungated.power, 0.001,
+		"the soft band is bit-identical to the ungated model")
+
+func test_wrister_default_travel_bypasses_gate() -> void:
+	# Callers that pass no stroke_travel (bots via INF, quick shots) keep the
+	# full ceiling even on a gated config.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP)
+	assert_almost_eq(r.power, cfg.max_wrister_power, 0.01,
+		"default (INF) stroke_travel means no gate")
+
 # ── Forehand/backhand from swing chirality ───────────────────────────────────
 # Convention (empirically flippable): a POSITIVE net swing rotation is a
 # forehand for a right-handed shooter, mirrored for lefties. The classifier
