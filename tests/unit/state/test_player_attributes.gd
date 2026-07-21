@@ -335,3 +335,22 @@ func test_visual_tells_map_to_body() -> void:
 func test_labels() -> void:
 	assert_eq(PlayerAttributes.inches_label(73), "6'1\"")
 	assert_eq(_body(H_MED, 201).weight_label(), "201 lbs")
+
+
+# ── Stick length: the first live gear slot ────────────────────────────────────
+func test_stick_length_lean() -> void:
+	# A lean on the height's cut (never an absolute pick): ±4% around the
+	# height band center, so max-height + LONG can't stack absolute reach
+	# beyond the tuned corner.
+	var std := PlayerAttributes.all_average()
+	var short := PlayerAttributes.new(73, 201, 1, 1, 1, PlayerAttributes.LENGTH_SHORT)
+	var long := PlayerAttributes.new(73, 201, 1, 1, 1, PlayerAttributes.LENGTH_LONG)
+	assert_almost_eq(std.stick_len_mult(), 1.028, 0.0001, "STANDARD = the height's cut")
+	assert_almost_eq(short.stick_len_mult(), 1.028 * 0.96, 0.0001)
+	assert_almost_eq(long.stick_len_mult(), 1.028 * 1.04, 0.0001)
+	# The other three slots stay inert: no accessor reads them yet.
+	var geared := PlayerAttributes.new(73, 201, 2, 0, 2, 1)
+	assert_true(geared.stick_len_mult() == std.stick_len_mult()
+			and geared.speed_mult() == std.speed_mult()
+			and geared.shot_power_mult() == std.shot_power_mult(),
+			"profile/curve/flex have zero gameplay effect")

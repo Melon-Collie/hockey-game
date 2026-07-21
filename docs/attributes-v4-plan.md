@@ -9,13 +9,20 @@ into. Designed in chat 2026-07-21; this document is the agreed plan per the
 CLAUDE.md workflow — implementation sessions should treat it as the design of
 record and ask before deviating.
 
-Status: **step 1 (body-plane rework, §9 landing order) IMPLEMENTED** — the
-height+weight body plane, gear slots stubbed at balanced, prefs v5 migration,
-protocol v37, re-authored bot roster, and the neutral-identity test are on
-the branch; §6 (wrister gate) landed separately on main. Remaining stages:
-blade servo + stick length, flex/curve gameplay, skate profile, AI/goalie
-calibration. Numbers marked `TBD` are authored at implementation time and
-tuned in playtest.
+Status: **steps 1–2 (§9 landing order) IMPLEMENTED** — step 1: the
+height+weight body plane (plus the weight agility bite via the new
+`lateral_grip` movement term, and frame-scaled hitbox width), gear slots
+stubbed, prefs v5 migration, protocol v37, re-authored bot roster,
+neutral-identity test. Step 2: the second-order blade servo (arrive-law
+accel clamp, ships with `max_blade_accel = 0` = disabled — **the inertia
+dial is turned in local playtest**), the lever derivation (tip speed ∝
+lever, accel cap ∝ 1/lever^k, k export default 1.2), stick length as the
+first live gear slot with its picker selector, and the two calibration
+curves as GUT tests (traverse flatness ≤8%, reversal seesaw 1.15–1.8×
+bounded and monotonic). §6 (wrister gate) landed separately on main.
+Remaining: flex/curve gameplay, skate profile, AI/goalie calibration.
+Numbers marked `TBD` are authored at implementation time and tuned in
+playtest.
 
 ---
 

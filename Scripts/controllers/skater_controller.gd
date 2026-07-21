@@ -224,6 +224,19 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # low Hands; tune DOWN if fast dangling feels the same at L1 and L5. (Live-feel
 # call — can't be measured headless.)
 @export var max_blade_speed: float = 10.0
+# Second-order blade: acceleration cap (m/s²) on the dangle velocity — the
+# stick's INERTIA. 0 disables it (the shipped first-order feel; the servo runs
+# the exact legacy path). Dial upward from ~600 (barely felt) down toward ~250
+# (heavy) to turn the blade into a physical object: direction REVERSALS pay the
+# cost, traverse speed doesn't. Per-build value derives from lever geometry in
+# apply_attributes: cap ∝ 1/lever^k — a long stick sweeps faster (tip speed
+# below) but can't cut back as fast; a short stick is the scalpel. This is the
+# hands seesaw of attributes v4 — geometry, never a fidelity table.
+@export var max_blade_accel: float = 0.0
+# The k in cap ∝ 1/lever^k. Raw physics is k=2 (I ∝ mL²), but reversal time
+# then scales ~L³ across the build range — too brutal. The model's FORM is
+# physical; the exponent is feel. Start low.
+@export var blade_inertia_exponent: float = 1.2
 
 # ── Nudge (self-tap, nutmeg setup) ────────────────────────────────────────────
 # Tap stick-lift (Q) while carrying in plain SKATING_WITH_PUCK to push the puck a
@@ -987,6 +1000,7 @@ var _base_min_slapper_power:            float = 0.0
 var _base_max_slapper_power:            float = 0.0
 var _base_max_slapper_charge_time:      float = 0.0
 var _base_max_blade_speed:              float = 0.0
+var _base_max_blade_accel:              float = 0.0
 var _base_puck_carry_speed_multiplier:  float = 0.0
 var _base_stick_length:                 float = 0.0
 var _base_wrister_full_stroke_travel:   float = 0.0
@@ -1027,9 +1041,10 @@ func build_ai_caps() -> AISkaterCaps:
 	caps.wrister_shot_speed = max_wrister_power
 	caps.blade_speed = max_blade_speed
 	caps.backhand_power_coefficient = backhand_power_coefficient
-	# Handle reach scales with the Hands dangle lever: max_blade_speed / its base
-	# is exactly hands_blade_mult(), so a better handler protects the puck further
-	# out. _base is captured on the first apply_attributes (always run before this).
+	# Handle reach scales with the blade lever: max_blade_speed / its base is
+	# exactly the lever ratio (attributes v4 — reach + stick length), so a
+	# longer lever protects the puck further out. _base is captured on the
+	# first apply_attributes (always run before this).
 	if _base_max_blade_speed > 0.001:
 		caps.handle_reach = AIActionScoring.EVADE_CARRY_HANDLE_M \
 				* (max_blade_speed / _base_max_blade_speed)
@@ -1099,16 +1114,12 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# stamina-limited burst. This is a computed value, not a base×mult, so it's
 	# set directly.
 	puck_carry_speed_multiplier = attrs.carry_speed_mult()
-	# Skill owns the puck game (blade speed / carry / backhand — small-favored) and
-	# the shot (power ceiling + wind-up — big-favored). Blade speed drives how fast
-	# the blade chases the cursor through the dangle arc and draws back to absorb
-	# fast passes.
-	max_blade_speed             = _base_max_blade_speed             * attrs.hands_blade_mult()
-	# Backhand coefficient scales UP toward 1.0 with Hands — a great backhand
-	# barely drops off (the in-tight finish that separates the dangler from the
-	# sniper). Wrister-only today; the slapshot path applies no backhand penalty
-	# (see ShotMechanics.release_slapper).
-	backhand_power_coefficient  = _base_backhand_power_coefficient  * attrs.hands_backhand_mult()
+	# Hands has no lever by constitution (attributes v4 — "your hands are you"):
+	# the blade caps derive from LEVER GEOMETRY below, after the reach/stick
+	# rescale computes this build's actual sweep radius. Backhand is a flat
+	# mechanic (technique is the human); only the blade-curve gear slot will
+	# lean it, in its own stage.
+	backhand_power_coefficient  = _base_backhand_power_coefficient
 	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
 	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_pass
 	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
@@ -1198,6 +1209,26 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	var sweep_radius: float = stick_length + rom_forehand_reach_max
 	wrister_full_stroke_travel = _base_wrister_full_stroke_travel \
 			* sweep_radius / maxf(base_sweep_radius, 0.001)
+	# Blade caps derive from the same LEVER (constitution: geometry, never a
+	# fidelity table). Tip speed rides the lever linearly — v = ω·L, the same
+	# angular gesture sweeps a longer blade faster in m/s, so every build's
+	# wrists are heard at the same ANGULAR fidelity (traverse time across your
+	# own reach envelope stays ~flat; the calibration test pins it). The
+	# acceleration cap (inertia) falls with lever^k — I ∝ mL², softened to the
+	# authored blade_inertia_exponent — so the long lever sweeps but can't cut
+	# back, the short lever is the scalpel. Base accel 0 = inertia disabled.
+	# The ratio normalizes to the NEUTRAL build's lever (6'1"/standard), NOT the
+	# mesh-native base geometry (the reach-1.0 anchor is 5'10", below the
+	# gameplay neutral): neutral identity demands the neutral build's caps equal
+	# the shipped exports exactly.
+	var neutral_attrs := PlayerAttributes.all_average()
+	var neutral_sweep: float = _base_stick_length * neutral_attrs.stick_len_mult() \
+			+ (_base_skater_upper_arm_length + _base_skater_forearm_length) \
+			* neutral_attrs.height_mult() * _ROM_FOREHAND_OF_ARM
+	var lever_ratio: float = sweep_radius / maxf(neutral_sweep, 0.001)
+	max_blade_speed = _base_max_blade_speed * lever_ratio
+	max_blade_accel = _base_max_blade_accel / pow(lever_ratio, blade_inertia_exponent) \
+			if _base_max_blade_accel > 0.0 else 0.0
 	# Hitbox: cylinder radius scales with height (frame width — a taller player is
 	# a bit wider). Height is held CONSTANT for every player — a taller cylinder
 	# grew tall enough to touch several faces of the concave net/goal geometry at
@@ -1237,6 +1268,7 @@ func _capture_attribute_bases() -> void:
 	_base_max_slapper_power            = max_slapper_power
 	_base_max_slapper_charge_time      = max_slapper_charge_time
 	_base_max_blade_speed              = max_blade_speed
+	_base_max_blade_accel              = max_blade_accel
 	_base_backhand_power_coefficient   = backhand_power_coefficient
 	_base_sprint_drain_per_sec         = sprint_drain_per_sec
 	_base_stamina_regen_per_sec        = stamina_regen_per_sec

@@ -22,8 +22,10 @@ extends RefCounted
 #     stamina metabolism fork (lean = shallow pool / fast regen).
 #   • GEAR — four discrete slots (skate profile, blade curve, stick flex,
 #     stick length), three options each, all LATERAL (no net power).
-#     **Step-1 status: stored, replicated and validated but ZERO gameplay
-#     effect — every slot behaves as BALANCED until its landing stage.**
+#     **Slot status: STICK LENGTH is live (leans stick_len_mult — reach and
+#     the blade-cap lever derivation follow); profile / curve / flex are
+#     stored, replicated and validated but have ZERO gameplay effect until
+#     their landing stages.**
 #
 # There is NO power economy: no tiers, no strong/weak shape, no legality
 # beyond range coercion. Body dials are lateral; gear is lateral; validation
@@ -135,8 +137,17 @@ const _RADIUS_F: Array[float] = [0.96, 0.98, 1.00, 1.03, 1.06]
 const _HEIGHT: Array[float] = [0.971, 1.000, 1.043, 1.086, 1.129]
 
 # Stick length — equipment, ~0.65× the height deviation from mesh-native 5'10".
-# The LENGTH gear slot will lean this in a later stage; height-only for now.
+# Height sets the BAND CENTER (real sticks are cut to the body)…
 const _STICK_LEN: Array[float] = [0.981, 1.000, 1.028, 1.056, 1.084]
+# …and the LENGTH gear slot leans it — THE FIRST LIVE GEAR SLOT. A lean on
+# your height's stick, not an absolute pick, so max-height + LONG can't stack
+# reach beyond the tuned corner. Symmetric ±4% to start (whether LONG should
+# lean more conservatively than SHORT is an open tuning call — reach is the
+# closest thing the game has to raw power, but the lever-derived inertia and
+# tip-speed tradeoffs are what price it honestly). Everything downstream of
+# stick_len_mult follows automatically: stick/blade mesh, poke + claim reach,
+# blade-cap lever derivation, wrister full-stroke rescale.
+const _LENGTH_LEAN: Array[float] = [0.960, 1.000, 1.040]  # SHORT / STANDARD / LONG
 
 # ── Gameplay tables — frame-indexed (5 rows lean→heavy at the BMI anchors) ────
 
@@ -330,7 +341,9 @@ func brace_mult() -> float:          return 1.0
 # the visual silhouette.
 func radius_mult() -> float:    return _h(_RADIUS, height) * _f(_RADIUS_F)
 func height_mult() -> float:    return _h(_HEIGHT, height)
-func stick_len_mult() -> float: return _h(_STICK_LEN, height)
+# Height band center × the length gear lean (see _LENGTH_LEAN; `length` is
+# constructor-clamped to 0..2, so the direct index is safe).
+func stick_len_mult() -> float: return _h(_STICK_LEN, height) * _LENGTH_LEAN[length]
 
 
 # Sprint ceiling — speed-normalized, grounded to the 20–25 mph burst band.
