@@ -21,9 +21,16 @@ bit-exact), the lever derivation (tip speed ∝ lever, accel cap ∝
 selector, the inner ROM boundary (§5.4) with the CLOSE-regime angular
 clamp, and the calibration curves as GUT tests (traverse flatness ≤8%,
 reversal seesaw bounded and monotonic). §6 (wrister gate) landed
-separately on main. Remaining: flex/curve gameplay, skate profile,
-AI/goalie calibration. Numbers marked `TBD` are authored at
-implementation time and tuned in playtest.
+separately on main. Step 3 (flex + curve) is IMPLEMENTED: flex leans the
+shot ceiling WITH wind-up and runway (its charge lean deliberately breaks
+from the height 2−power coupling — a lateral slot trades, never stacks),
+curve leans LOW-loft launch / runway / backhand (parity-bounded), the
+crossbar ceiling and the 0.81× stacked runway floor are pinned by
+calibration tests, and the picker has all three stick rows. Remaining:
+skate profile, AI/goalie calibration (incl. teaching AI models the
+per-player LOW-loft speed and release time — they currently read the
+GameRules neutrals). Numbers marked `TBD` are authored at implementation
+time and tuned in playtest.
 
 ---
 

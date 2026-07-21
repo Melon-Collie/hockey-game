@@ -23,9 +23,9 @@ extends VBoxContainer
 # pounds, so a lean build stays lean as it grows.
 #
 # Gear slots ride through the preset levels; each gains its selector when its
-# gameplay stage lands. Live so far: STICK LENGTH (a three-way exclusive row —
-# short/standard/long, editing levels[5]). Profile/curve/flex are stored but
-# not yet editable here.
+# gameplay stage lands. Live: STICK LENGTH (levels[5]), BLADE CURVE
+# (levels[3]) and STICK FLEX (levels[4]) — three-way exclusive rows sharing
+# one builder. Skate profile (levels[2]) is stored but not yet editable.
 
 signal changed
 
@@ -34,6 +34,10 @@ const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the spee
 const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = quicker first step, fast stamina recovery, easier to move.\nHeavy = harder hits & harder to move, deep but slow-refilling tank."
 const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
 const _LENGTH_LABELS: Array[String] = ["Short", "Standard", "Long"]
+const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to elevate.\nOpen = easy elevation & quick release, weak backhand."
+const _CURVE_LABELS: Array[String] = ["Closed", "Balanced", "Open"]
+const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
+const _FLEX_LABELS: Array[String] = ["Whippy", "Medium", "Stiff"]
 
 # Working copy: Array of {"name": String, "levels": Array[int]} in canonical
 # order [height_in, weight_lbs, profile, curve, flex, length]. The UI edits
@@ -58,7 +62,9 @@ var _height_slider: HSlider = null
 var _height_value_label: Label = null
 var _weight_slider: HSlider = null
 var _weight_value_label: Label = null
-var _length_buttons: Array[Button] = []
+# Gear selector button rows, keyed by the levels index they edit
+# (3 = curve, 4 = flex, 5 = length).
+var _gear_buttons: Dictionary = {}
 
 
 func _ready() -> void:
@@ -92,7 +98,12 @@ func _build() -> void:
 
 	_build_height_row()
 	_build_weight_row()
-	_build_length_row()
+	# The live gear slots, in the order they landed. Each is a three-way
+	# exclusive choice (the loft-level pattern — discrete and chunky, never a
+	# slider). Skate profile joins when its stage lands.
+	_build_gear_row("Stick", _LENGTH_TOOLTIP, _LENGTH_LABELS, 5)
+	_build_gear_row("Curve", _CURVE_TOOLTIP, _CURVE_LABELS, 3)
+	_build_gear_row("Flex", _FLEX_TOOLTIP, _FLEX_LABELS, 4)
 
 
 func _build_preset_row() -> void:
@@ -221,35 +232,35 @@ func _build_weight_row() -> void:
 	row.add_child(_weight_value_label)
 
 
-# The first live gear slot: a three-way exclusive choice (the loft-level
-# pattern — discrete and chunky, never a slider). Edits levels[5].
-func _build_length_row() -> void:
+func _build_gear_row(label_text: String, tooltip: String,
+		option_labels: Array[String], level_idx: int) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 12)
 	add_child(row)
 
 	var label := Label.new()
-	label.text = "Stick"
+	label.text = label_text
 	label.custom_minimum_size = Vector2(80, 0)
 	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.mouse_filter = Control.MOUSE_FILTER_STOP
-	label.tooltip_text = _LENGTH_TOOLTIP
+	label.tooltip_text = tooltip
 	row.add_child(label)
 
-	_length_buttons = []
-	for i: int in _LENGTH_LABELS.size():
+	var buttons: Array[Button] = []
+	for i: int in option_labels.size():
 		var btn := Button.new()
-		btn.text = _LENGTH_LABELS[i]
+		btn.text = option_labels[i]
 		btn.custom_minimum_size = Vector2(92, 40)
 		btn.add_theme_font_size_override("font_size", 15)
-		btn.tooltip_text = _LENGTH_TOOLTIP
+		btn.tooltip_text = tooltip
 		SoundManager.wire_button(btn)
-		btn.pressed.connect(_on_length_pressed.bind(i))
+		btn.pressed.connect(_on_gear_pressed.bind(level_idx, i))
 		row.add_child(btn)
-		_length_buttons.append(btn)
+		buttons.append(btn)
+	_gear_buttons[level_idx] = buttons
 
 
 # ── Host API ─────────────────────────────────────────────────────────────────
@@ -334,13 +345,13 @@ func _on_weight_changed(value: float) -> void:
 	changed.emit()
 
 
-func _on_length_pressed(option: int) -> void:
+func _on_gear_pressed(level_idx: int, option: int) -> void:
 	if _locked or _active < 0 or _active >= _working.size():
 		return
 	var levels: Array = _working[_active]["levels"]
-	if int(levels[5]) == option:
+	if int(levels[level_idx]) == option:
 		return
-	levels[5] = option
+	levels[level_idx] = option
 	_refresh()
 	changed.emit()
 
@@ -425,10 +436,12 @@ func _refresh() -> void:
 	_weight_slider.editable = not _locked
 	_weight_value_label.text = "%d lbs" % w
 
-	var length_opt: int = clampi(int(levels[5]), 0, _LENGTH_LABELS.size() - 1)
-	for i: int in _length_buttons.size():
-		MenuStyle.apply_tab_button(_length_buttons[i], i == length_opt)
-		_length_buttons[i].disabled = _locked and i != length_opt
+	for level_idx: int in _gear_buttons:
+		var buttons: Array[Button] = _gear_buttons[level_idx]
+		var opt: int = clampi(int(levels[level_idx]), 0, buttons.size() - 1)
+		for i: int in buttons.size():
+			MenuStyle.apply_tab_button(buttons[i], i == opt)
+			buttons[i].disabled = _locked and i != opt
 
 	_status_label.text = "%s  ·  %d lbs" % [PlayerAttributes.inches_label(h), w]
 	_status_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)

@@ -1015,6 +1015,7 @@ var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_collision_radius:      float = 0.0
 var _base_skater_collision_height:      float = 0.0
 var _base_backhand_power_coefficient:   float = 0.0
+var _base_loft_vertical_speed_low:      float = 0.0
 var _base_sprint_drain_per_sec:         float = 0.0
 var _base_stamina_regen_per_sec:        float = 0.0
 var _base_hand_rest_y:                  float = 0.0
@@ -1117,10 +1118,16 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	puck_carry_speed_multiplier = attrs.carry_speed_mult()
 	# Hands has no lever by constitution (attributes v4 — "your hands are you"):
 	# the blade caps derive from LEVER GEOMETRY below, after the reach/stick
-	# rescale computes this build's actual sweep radius. Backhand is a flat
-	# mechanic (technique is the human); only the blade-curve gear slot will
-	# lean it, in its own stage.
-	backhand_power_coefficient  = _base_backhand_power_coefficient
+	# rescale computes this build's actual sweep radius. Backhand technique is
+	# the human; what leans the coefficient is the BLADE's shape — the curve
+	# gear slot (closed relaxes toward, never past, forehand parity; open
+	# deepens the penalty).
+	backhand_power_coefficient  = _base_backhand_power_coefficient * attrs.curve_backhand_mult()
+	# Curve elevation: OPEN steepens the LOW loft (saucer / money tip);
+	# loft_vertical_speed_high is DELIBERATELY untouched — the HIGH apex
+	# ceiling (puck top ~5 cm under the crossbar) is pinned for every curve,
+	# by construction (the calibration test asserts it).
+	loft_vertical_speed_low = _base_loft_vertical_speed_low * attrs.curve_loft_low_mult()
 	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
 	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_pass
 	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
@@ -1208,8 +1215,13 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	var base_sweep_radius: float = _base_stick_length + \
 			(_base_skater_upper_arm_length + _base_skater_forearm_length) * _ROM_FOREHAND_OF_ARM
 	var sweep_radius: float = stick_length + rom_forehand_reach_max
+	# The runway = sweep-normalized full stroke × the gear lean (whippy flex /
+	# open curve compress it — "max power with less real estate consumed";
+	# stiff flex extends it). Quick-release gear beats the goalie by emitting
+	# LESS WIND-UP EVIDENCE, not by a stat the goalie is told about.
 	wrister_full_stroke_travel = _base_wrister_full_stroke_travel \
-			* sweep_radius / maxf(base_sweep_radius, 0.001)
+			* sweep_radius / maxf(base_sweep_radius, 0.001) \
+			* attrs.wrister_runway_mult()
 	# Blade caps derive from the same LEVER (constitution: geometry, never a
 	# fidelity table). Tip speed rides the lever linearly — v = ω·L, the same
 	# angular gesture sweeps a longer blade faster in m/s, so every build's
@@ -1271,6 +1283,7 @@ func _capture_attribute_bases() -> void:
 	_base_max_blade_speed              = max_blade_speed
 	_base_max_blade_accel              = max_blade_accel
 	_base_backhand_power_coefficient   = backhand_power_coefficient
+	_base_loft_vertical_speed_low      = loft_vertical_speed_low
 	_base_sprint_drain_per_sec         = sprint_drain_per_sec
 	_base_stamina_regen_per_sec        = stamina_regen_per_sec
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier

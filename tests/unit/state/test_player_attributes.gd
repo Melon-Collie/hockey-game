@@ -348,9 +348,47 @@ func test_stick_length_lean() -> void:
 	assert_almost_eq(std.stick_len_mult(), 1.028, 0.0001, "STANDARD = the height's cut")
 	assert_almost_eq(short.stick_len_mult(), 1.028 * 0.96, 0.0001)
 	assert_almost_eq(long.stick_len_mult(), 1.028 * 1.04, 0.0001)
-	# The other three slots stay inert: no accessor reads them yet.
-	var geared := PlayerAttributes.new(73, 201, 2, 0, 2, 1)
-	assert_true(geared.stick_len_mult() == std.stick_len_mult()
-			and geared.speed_mult() == std.speed_mult()
-			and geared.shot_power_mult() == std.shot_power_mult(),
-			"profile/curve/flex have zero gameplay effect")
+	# The one remaining stub: skate profile reads into nothing yet.
+	var profiled := PlayerAttributes.new(73, 201, 2, 1, 1, 1)
+	assert_true(profiled.speed_mult() == std.speed_mult()
+			and profiled.agility_mult() == std.agility_mult()
+			and profiled.accel_mult() == std.accel_mult(),
+			"profile has zero gameplay effect until its stage")
+
+
+# ── Flex + curve: the shot gear slots ────────────────────────────────────────
+func test_flex_is_a_power_release_seesaw() -> void:
+	# Stiff loads a bigger shot but pays a slower load — the charge lean goes
+	# WITH the power lean (a lateral trade), unlike the height coupling where
+	# a harder shot also threatens sooner.
+	var whippy := PlayerAttributes.new(73, 201, 1, 1, PlayerAttributes.FLEX_LOW, 1)
+	var stiff := PlayerAttributes.new(73, 201, 1, 1, PlayerAttributes.FLEX_HIGH, 1)
+	assert_lt(whippy.shot_power_mult(), stiff.shot_power_mult(), "stiff shoots harder")
+	assert_lt(whippy.shot_charge_mult(), stiff.shot_charge_mult(), "stiff loads slower")
+	assert_lt(whippy.wrister_runway_mult(), stiff.wrister_runway_mult(),
+			"whippy needs less runway for max power")
+	# Height keeps its inherited inverse coupling underneath.
+	var tall := PlayerAttributes.new(79, 235)
+	assert_lt(tall.shot_charge_mult(), 1.0, "big frame still threatens sooner at medium flex")
+
+
+func test_curve_trades_elevation_and_release_for_backhand() -> void:
+	var closed := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
+	var open := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
+	assert_gt(open.curve_loft_low_mult(), 1.0, "open elevates the LOW loft easier")
+	assert_lt(closed.curve_loft_low_mult(), 1.0, "closed is hardest to elevate")
+	assert_lt(open.wrister_runway_mult(), 1.0, "open is the quick release")
+	assert_gt(closed.curve_backhand_mult(), open.curve_backhand_mult())
+	# Backhand relief approaches but never reaches forehand parity: the
+	# controller's 0.75 base coefficient stays below 1.0 under CLOSED.
+	assert_lt(0.75 * closed.curve_backhand_mult(), 1.0, "no full-parity backhand")
+
+
+func test_stacked_runway_floor() -> void:
+	# The runway-floor constraint: the fastest-release loadout (whippy + open)
+	# still consumes ≥75% of the neutral runway — a max-power release always
+	# emits a readable wind-up tell inside the goalie's calibrated read band.
+	var quickest := PlayerAttributes.new(73, 201, 1,
+			PlayerAttributes.CURVE_OPEN, PlayerAttributes.FLEX_LOW, 1)
+	assert_gte(quickest.wrister_runway_mult(), 0.75, "runway floor holds")
+	assert_almost_eq(PlayerAttributes.all_average().wrister_runway_mult(), 1.0, 0.0001)

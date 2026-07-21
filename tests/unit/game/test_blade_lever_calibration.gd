@@ -141,3 +141,56 @@ func test_apply_is_idempotent() -> void:
 	c.apply_attributes(attrs)
 	assert_almost_eq(c.max_blade_speed, speed_once, 0.0001, "tip speed stable")
 	assert_almost_eq(c.max_blade_accel, accel_once, 0.0001, "accel cap stable")
+
+
+# ── Flex + curve calibration (the shot gear slots) ───────────────────────────
+
+func test_crossbar_ceiling_pinned_for_every_curve() -> void:
+	# THE hard constraint from the plan doc: the HIGH loft's apex ceiling
+	# (puck top ~5 cm under the crossbar's inner edge) is pinned for every
+	# curve — no gear may sail the top-corner snipe over the net. Open leans
+	# only the LOW loft.
+	var c := _make_controller()
+	c.apply_attributes(PlayerAttributes.all_average())
+	var neutral_high: float = c.loft_vertical_speed_high
+	var neutral_low: float = c.loft_vertical_speed_low
+	for curve: int in [PlayerAttributes.CURVE_CLOSED, PlayerAttributes.CURVE_OPEN]:
+		c.apply_attributes(PlayerAttributes.new(73, 201, 1, curve, 1, 1))
+		assert_almost_eq(c.loft_vertical_speed_high, neutral_high, 0.0001,
+				"HIGH loft untouched by curve %d" % curve)
+		assert_ne(c.loft_vertical_speed_low, neutral_low,
+				"LOW loft leans with curve %d" % curve)
+
+
+func test_flex_leans_ceiling_and_windup_together() -> void:
+	# Stiff = bigger wrister/slapper ceiling AND a longer slapper charge (the
+	# lateral seesaw); whippy the mirror.
+	var c := _make_controller()
+	c.apply_attributes(PlayerAttributes.new(73, 201, 1, 1, PlayerAttributes.FLEX_LOW, 1))
+	var whippy_power: float = c.max_wrister_power
+	var whippy_charge: float = c.max_slapper_charge_time
+	c.apply_attributes(PlayerAttributes.new(73, 201, 1, 1, PlayerAttributes.FLEX_HIGH, 1))
+	assert_gt(c.max_wrister_power, whippy_power, "stiff shoots harder")
+	assert_gt(c.max_slapper_charge_time, whippy_charge, "stiff loads slower")
+
+
+func test_quick_release_loadout_compresses_runway_within_floor() -> void:
+	# Whippy + open is the fastest release in the game: less blade travel for
+	# max power, but never below the floor (the readable-tell guarantee).
+	var c := _make_controller()
+	c.apply_attributes(PlayerAttributes.all_average())
+	var neutral_runway: float = c.wrister_full_stroke_travel
+	c.apply_attributes(PlayerAttributes.new(73, 201, 1,
+			PlayerAttributes.CURVE_OPEN, PlayerAttributes.FLEX_LOW, 1))
+	assert_lt(c.wrister_full_stroke_travel, neutral_runway, "quick gear compresses runway")
+	assert_gte(c.wrister_full_stroke_travel, neutral_runway * 0.75, "runway floor holds")
+
+
+func test_curve_leans_backhand_within_parity() -> void:
+	var c := _make_controller()
+	c.apply_attributes(PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1))
+	var closed_bh: float = c.backhand_power_coefficient
+	c.apply_attributes(PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1))
+	var open_bh: float = c.backhand_power_coefficient
+	assert_gt(closed_bh, open_bh, "closed blade is the honest backhand")
+	assert_lt(closed_bh, 1.0, "backhand never reaches forehand parity")

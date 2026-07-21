@@ -149,6 +149,30 @@ const _STICK_LEN: Array[float] = [0.981, 1.000, 1.028, 1.056, 1.084]
 # blade-cap lever derivation, wrister full-stroke rescale.
 const _LENGTH_LEAN: Array[float] = [0.960, 1.000, 1.040]  # SHORT / STANDARD / LONG
 
+# ── Gear-lean tables — 3-vec, indexed by the slot option (0/1/2) ─────────────
+# STICK FLEX — power ↔ release, a true seesaw: stiff loads a bigger shot but
+# pays a slower load (longer slapper wind-up AND longer wrister runway);
+# whippy is the snap release at a softer ceiling. NOTE the charge lean goes
+# WITH the power lean, deliberately breaking from the height coupling
+# (2 − power, where a harder shooter also threatens sooner — a double
+# benefit the v3 tier price policed): a lateral slot must trade, never
+# stack. Real-hockey sign convention: high flex number = stiffer.
+const _FLEX_SHOT_LEAN: Array[float] = [0.94, 1.00, 1.06]    # whippy / medium / stiff
+const _FLEX_CHARGE_LEAN: Array[float] = [0.92, 1.00, 1.10]  # wind-up time, with power
+const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-stroke travel
+
+# BLADE CURVE — elevation & release ↔ backhand. OPEN steepens the LOW loft
+# (the saucer / mid-net money tip) and shortens the wrister runway (quick
+# release) but deepens the backhand penalty; CLOSED is the honest-both-ways
+# blade — best backhand, hardest to elevate. THE CROSSBAR CONSTRAINT: the
+# HIGH loft's apex ceiling (puck top ~5 cm under the bar) is pinned for
+# every curve — open never touches loft_vertical_speed_high; it reaches the
+# same ceiling on a steeper LOW arc instead. Backhand relief approaches but
+# never reaches forehand parity (0.75 base × 1.08 = 0.81).
+const _CURVE_LOFT_LOW_LEAN: Array[float] = [0.90, 1.00, 1.12]  # closed / balanced / open
+const _CURVE_RUNWAY_LEAN: Array[float] = [1.00, 1.00, 0.90]
+const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.92]
+
 # ── Gameplay tables — frame-indexed (5 rows lean→heavy at the BMI anchors) ────
 
 # Acceleration (thrust / forward burst). Lean = first-step quickness; heavy
@@ -311,10 +335,14 @@ func agility_mult() -> float: return _h(_AGILITY_H, height) * _f(_AGILITY_F)
 # accel↔momentum fork promises (the tank turns wide but coasts like his mass
 # says he should). Derived so it can't drift from the height number it mirrors.
 func agility_glide_mult() -> float: return 2.0 - _h(_AGILITY_H, height)
-func shot_power_mult() -> float:    return _h(_SHOT_H, height)
-# Slapper wind-up is the inverse of shot power (harder shooter threatens
-# sooner). The FLEX gear slot will slide builds along this same coupling.
-func shot_charge_mult() -> float:   return 2.0 - shot_power_mult()
+# Shot ceiling = height baseline × flex lean (stiff loads more).
+func shot_power_mult() -> float:    return _h(_SHOT_H, height) * _FLEX_SHOT_LEAN[flex]
+# Slapper wind-up: the HEIGHT part keeps the inherited inverse coupling
+# (2 − power — a big frame's harder shot also threatens sooner); the FLEX
+# part goes WITH the power lean (stiff = slower load) so the gear slot is a
+# lateral trade, not a stacked buff. See the _FLEX_CHARGE_LEAN doc.
+func shot_charge_mult() -> float:
+	return (2.0 - _h(_SHOT_H, height)) * _FLEX_CHARGE_LEAN[flex]
 
 # Body — frame
 func accel_mult() -> float:         return _f(_ACCEL_F)
@@ -344,6 +372,25 @@ func height_mult() -> float:    return _h(_HEIGHT, height)
 # Height band center × the length gear lean (see _LENGTH_LEAN; `length` is
 # constructor-clamped to 0..2, so the direct index is safe).
 func stick_len_mult() -> float: return _h(_STICK_LEN, height) * _LENGTH_LEAN[length]
+
+# ── Gear-lean accessors (flex + curve) ───────────────────────────────────────
+# Wrister runway: fraction of the full-stroke travel this loadout needs for a
+# max-power release ("max power with less real estate consumed"). Flex and
+# curve stack; the floor across the stacked extremes (0.90 × 0.90 = 0.81) is
+# the runway-floor constraint — a max-power release must still emit a
+# readable wind-up tell (pinned by the calibration test).
+func wrister_runway_mult() -> float:
+	return _FLEX_RUNWAY_LEAN[flex] * _CURVE_RUNWAY_LEAN[curve]
+
+# Backhand coefficient lean — the one place backhand varies (technique is the
+# human; hands_backhand_mult stays 1.0 by constitution — this is the BLADE's
+# shape, not the player's skill).
+func curve_backhand_mult() -> float: return _CURVE_BACKHAND_LEAN[curve]
+
+# LOW-loft vertical launch lean (the saucer / money-tip elevation). HIGH is
+# deliberately not an accessor — the crossbar ceiling is pinned for every
+# curve by construction.
+func curve_loft_low_mult() -> float: return _CURVE_LOFT_LOW_LEAN[curve]
 
 
 # Sprint ceiling — speed-normalized, grounded to the 20–25 mph burst band.
