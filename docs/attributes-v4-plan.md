@@ -252,23 +252,29 @@ max-length can't stack absolute reach beyond tuning.
 
 ## 6. Wrister release model — ROM-distance power gating
 
-(Designed separately; recorded here because the gear release levers cash out
-in it.)
+**IMPLEMENTED** (main, "Travel-gated wrister ceiling", 2026-07 — designed
+separately; recorded here because the gear release levers cash out in it).
+As shipped:
 
-Power = `min(speed_power, ceiling(rom_distance))`:
+Power t = `min(speed_t, wrister_travel_cap_t)` (`ShotMechanics`):
 
-- `speed_power` — the existing pure mouse-speed model, unchanged. Soft and
-  medium shots never hit the ceiling, so the touch game (the reason v3 moved
-  off distance) is untouched.
-- `ceiling(rom_distance)` — ramps ~60% → 100% (`TBD`) over a runway measured
-  in **ROM distance** (blade travel through the skater's reach envelope —
-  body-space, so DPI/camera-zoom are non-issues and the runway lives in the
-  same geometry as everything else). Only the max-power bomb demands runway.
+- `speed_t` — the pure mouse-speed model, unchanged. Soft and medium shots
+  never hit the ceiling, so the touch game (the reason v3 moved off
+  distance) is computed identically to the ungated model.
+- `wrister_travel_cap_t` = `clamp(stroke_travel / full_stroke_travel,
+  travel_cap_floor, 1.0)` — `stroke_travel` is the stroke's world-space
+  blade XZ path length (meters, `ChargeTracking`, variance-break reset,
+  per-tick step bounded so forged cursor teleports can't buy the arc).
+  Body-space, so DPI/sensitivity/zoom can't buy the ceiling. Floor is 0.4
+  of the band (the instant flick-pass / snap tier).
 
-Gear: blade curve (open) and stick flex (low) **compress** the runway needed
-for full ceiling — "max power release with less real estate consumed";
-stiff flex extends it. Height/stick length set how much ROM you *have*;
-curve/flex set how much a max release *consumes*. One physical currency.
+**The gear hook is already open**: `wrister_full_stroke_travel` (@export,
+1.0 m base) is rescaled in `apply_attributes` by the build's own sweep
+radius (stick length + arm ROM), so height/length set how much ROM you
+*have* and the reference stays fair across frames. Blade curve (open) and
+stick flex (low) become a per-loadout multiplier on the captured base —
+"max power release with less real estate consumed"; stiff flex extends it.
+One physical currency, one multiply per slot.
 
 **Evidence economy.** A full-power shot must now emit a tell — a visible
 loading gesture the blade pose and per-tick `shot_charge` ramp broadcast and
@@ -281,9 +287,11 @@ by emitting *less evidence*, not by a stat check. Consequences:
 - **Runway floor (hard)**: the minimum stacked runway (open + whippy) must
   still be long enough that a max-power release emits a readable tell inside
   the goalie model's calibrated reaction band. → calibration test, §7.
-- Bot gesture synthesis: the power-model inverse
-  (`wrister_speed_for_power_t`) gains a runway term parameterized by the
-  bot's loadout — bots need gear identities before/with this change.
+- Bot gesture synthesis: bots **bypass the gate** (stroke_travel = INF —
+  their committed power fraction is the whole gesture, wind-up cosmetic),
+  so the inverse needs no runway term. Gear for bots therefore only enters
+  through the levers bots do use (power ceiling, wind-up time, elevation) —
+  simpler than the pre-implementation plan assumed.
 
 ---
 
@@ -358,8 +366,10 @@ bottom-up.
 - **Blade servo** (§4): second-order with accel clamp; deterministic pure
   function of cursor input so reconcile replay is unaffected; cheap enough
   for 120 Hz × actors (a clamp, no allocation).
-- **Wrister model** (§6): min/ceiling structure + runway; bot inverse gains
-  runway term; ships together with gear, not before.
+- **Wrister model** (§6): **already on main** (travel-gated ceiling). Gear
+  work is a per-loadout multiplier on `_base_wrister_full_stroke_travel`
+  (flex/curve) applied in `apply_attributes`; bots bypass the gate, no
+  inverse change needed.
 - **AI reads**: `AIActionScoring` shot/pass EV consumes per-player release
   time and elevation ease instead of assuming neutral (grounded-model rule:
   the AI sees the real quantities).
@@ -368,7 +378,10 @@ bottom-up.
 - **Picker rebuild**: two sliders (height, frame) + four 3-way gear
   selectors; presets keep working; legality UI simplifies away.
 - **Visual**: weight-driven bulk replaces tier limb tells; stick mesh
-  renders length + curve.
+  renders length + curve — the curve seam **already exists**:
+  `StickBladeMeshBuilder.Params` (curve_depth / curve_start_frac /
+  toe_round_frac, on main) declares itself the gear hook; open/closed
+  curves are a Params preset per option.
 
 Suggested landing order: (1) body-plane rework with gear slots stubbed at
 balanced (neutral-identity test green end-to-end, protocol + prefs + bots
