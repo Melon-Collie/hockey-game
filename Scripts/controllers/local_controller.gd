@@ -522,6 +522,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# the same inputs is discarded.
 	var pre_charge_swing_rotation: float = _aiming.swing_rotation
 	var pre_charge_cursor_speed: float = _aiming.cursor_speed_ema
+	var pre_charge_stroke_travel: float = _aiming.stroke_travel
 	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos
 	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
@@ -604,6 +605,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.swing_rotation = pre_charge_swing_rotation
 	_aiming.cursor_speed_ema = pre_charge_cursor_speed
+	_aiming.stroke_travel = pre_charge_stroke_travel
 	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
 	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir
