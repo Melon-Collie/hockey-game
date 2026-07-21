@@ -14,7 +14,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 @export var move_deadzone: float = 0.1
 @export var brake_multiplier: float = 4.0
-@export var puck_carry_speed_multiplier: float = 0.92  # pre-apply default; per-build value is set by apply_attributes (PlayerAttributes.carry_speed_mult, Hands+Speed-eased)
+@export var puck_carry_speed_multiplier: float = 0.92  # pre-apply default; per-build value is set by apply_attributes (PlayerAttributes.carry_speed_mult, Speed-eased)
 @export var backward_thrust_multiplier: float = 0.80
 @export var crossover_thrust_multiplier: float = 0.90
 # Ceiling on the velocity fed to the gait during the faceoff / intro skate-in
@@ -210,11 +210,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Cap on how fast the aim target can move in world XZ per second. The IK consumes
 # the smoothed target, so the blade visibly inherits the cap. Originally a high
 # (60 m/s) smoothing cap that only bound on fast mouse wraps; now lowered into
-# the dangle-speed range (~8-14 m/s) so it's the Hands "quick hands" lever —
-# scaled by attrs.hands_blade_mult() in apply_attributes(), it gates how fast you
-# can whip the blade forehand-to-backhand. A medium player's full ROM span is
-# ~1.18 m, so 10 m/s crosses it in ~118 ms; the Hands spread (−15% / +25%) puts
-# that at ~139 ms (L1) to ~94 ms (L5). Tune UP if deliberate aim feels laggy at
+# the dangle-speed range (~8-14 m/s). Under attributes v4 the blade tracks every
+# build's cursor at the same fidelity (hands_blade_mult() is 1.0 by
+# constitution — no hands stat), so this cap is uniform; the lever-geometry
+# stage (stick length → tip speed vs inertia) will derive it from reach
+# instead. A medium player's full ROM span is ~1.18 m, so 10 m/s crosses it in
+# ~118 ms. Tune UP if deliberate aim feels laggy at
 # low Hands; tune DOWN if fast dangling feels the same at L1 and L5. (Live-feel
 # call — can't be measured headless.)
 @export var max_blade_speed: float = 10.0

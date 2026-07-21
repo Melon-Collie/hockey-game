@@ -9,9 +9,13 @@ into. Designed in chat 2026-07-21; this document is the agreed plan per the
 CLAUDE.md workflow — implementation sessions should treat it as the design of
 record and ask before deviating.
 
-Status: **PLAN — not implemented.** Numbers marked `TBD` are authored at
-implementation time and tuned in playtest; numbers given here are anchors
-carried over from the current system or derived from it.
+Status: **step 1 (body-plane rework, §9 landing order) IMPLEMENTED** — the
+height+weight body plane, gear slots stubbed at balanced, prefs v5 migration,
+protocol v37, re-authored bot roster, and the neutral-identity test are on
+the branch; §6 (wrister gate) landed separately on main. Remaining stages:
+blade servo + stick length, flex/curve gameplay, skate profile, AI/goalie
+calibration. Numbers marked `TBD` are authored at implementation time and
+tuned in playtest.
 
 ---
 
@@ -104,7 +108,7 @@ same machinery as height, neutral = 26.5 (the real NHL-average build:
 | 5'10"  | 167 | 176 | 185 | 193 | 202 |
 | 6'1"   | 182 | 191 | **201** | 210 | 220 |
 | 6'4"   | 197 | 207 | 218 | 228 | 238 |
-| 6'7"   | 213 | 224 | 235 | 246 | 258 |
+| 6'7"   | 213 | 224 | 235 | 246 | 257 |
 
 Calibration namechecks: McDavid (6'1"/194) = lean-mid; Gaudreau ≈ small-
 LIGHT; DeBrincat (5'8"/180) ≈ SOLID; Ovechkin (6'3"/238) = 6'4"-HEAVY

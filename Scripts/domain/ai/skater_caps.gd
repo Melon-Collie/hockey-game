@@ -75,8 +75,9 @@ var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # override. Default mirrors the controller's 10.0.
 var blade_speed: float = 10.0
 
-# Backhand power coefficient (Hands, = SkaterController.backhand_power_coefficient
-# — hands_backhand_mult un-penalizes it toward 1.0). The release-offset sampler
+# Backhand power coefficient (= SkaterController.backhand_power_coefficient,
+# a flat mechanic under attributes v4 — backhand technique is the human; only
+# the blade-curve gear slot will lean it). The release-offset sampler
 # prices a backhand-side release at this fraction of the wrister pace, so the
 # in-tight backhand finish is exactly as attractive as this build's hands make
 # it. Default mirrors the controller's 0.75.
