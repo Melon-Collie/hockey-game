@@ -99,8 +99,10 @@ func test_speed_peaks_at_medium_height() -> void:
 
 
 func test_agility_small_favored() -> void:
-	assert_almost_eq(_body(H_MIN, 0).agility_mult(), 1.05, 0.001)
-	assert_almost_eq(_body(H_MAX, 0).agility_mult(), 0.93, 0.001)
+	# Neutral-frame builds (tolerance covers the integer-band rounding at 68",
+	# where the neutral 174 lbs sits at frame_t 0.485, a ~0.1% frame term).
+	assert_almost_eq(_body(H_MIN, 0).agility_mult(), 1.05, 0.002)
+	assert_almost_eq(_body(H_MAX, 0).agility_mult(), 0.93, 0.002)
 	assert_true(_body(H_MIN, 0).agility_mult() > _body(H_MED, 0).agility_mult())
 
 
@@ -113,10 +115,12 @@ func test_shot_big_favored_and_nhl_anchored() -> void:
 
 
 func test_continuous_height_interpolates_between_anchors() -> void:
-	var lo := _body(70, 0).agility_mult()
-	var hi := _body(73, 0).agility_mult()
-	var mid := _body(71, 0).agility_mult()
-	assert_true(mid < lo and mid > hi, "71\" agility falls between the 70\" and 73\" rows")
+	# Uses a height-only lever (shot) so the per-height integer-band rounding of
+	# the neutral frame can't wobble the pure-height interpolation being pinned.
+	var lo := _body(70, 0).shot_power_mult()
+	var hi := _body(73, 0).shot_power_mult()
+	var mid := _body(71, 0).shot_power_mult()
+	assert_true(mid > lo and mid < hi, "71\" shot falls between the 70\" and 73\" rows")
 	assert_almost_eq(mid, lerpf(lo, hi, 1.0 / 3.0), 0.0001, "linear between anchors")
 
 
@@ -186,10 +190,42 @@ func test_checking_accessors_neutral_mass_carries_it() -> void:
 			"the physical edge lives entirely in mass")
 
 
+func test_agility_bites_with_weight() -> void:
+	# F = mv²/r: heavy turns wide and stops long. Frame term multiplies the
+	# height baseline.
+	var lean := _body(H_MED, 182)
+	var heavy := _body(H_MED, 220)
+	assert_almost_eq(lean.agility_mult(), 1.03, 0.001, "lean agility bonus")
+	assert_almost_eq(heavy.agility_mult(), 0.96, 0.001, "heavy agility tax")
+	# Corner budget: the worst body corner (6'7"/257) stays at/above ~0.89 —
+	# just under the v3 "feels bad but playable" floor; the best (5'8"/158)
+	# stays under the old 1.11 ceiling, leaving the profile gear room to lean.
+	assert_between(_body(H_MAX, 257).agility_mult(), 0.885, 0.90, "worst corner")
+	assert_between(_body(H_MIN, 158).agility_mult(), 1.07, 1.10, "best corner")
+
+
+func test_glide_ignores_weight_tank_still_coasts() -> void:
+	# Glide derives from the HEIGHT-ONLY agility component: a heavy build turns
+	# wide but must NOT bleed speed while coasting — momentum is his identity.
+	var lean := _body(H_MED, 182)
+	var heavy := _body(H_MED, 220)
+	assert_almost_eq(lean.agility_glide_mult(), heavy.agility_glide_mult(), 0.0001,
+			"weight never enters glide")
+	assert_almost_eq(heavy.agility_glide_mult(), 1.0, 0.0001, "6'1\" glide is neutral")
+
+
+func test_radius_widens_with_frame() -> void:
+	# Hitbox tracks the silhouette: same height, heavier = wider.
+	assert_true(_body(H_MED, 220).radius_mult() > _body(H_MED, 182).radius_mult())
+	assert_almost_eq(_body(H_MED, 201).radius_mult(), 1.0, 0.0001, "neutral radius")
+
+
 # ── Derived (coupled) levers ──────────────────────────────────────────────────
 func test_glide_and_charge_are_inverse_of_partner() -> void:
-	var a := _body(H_MIN, 165)
-	assert_almost_eq(a.agility_glide_mult(), 2.0 - a.agility_mult(), 0.0001)
+	# Glide mirrors the height-only agility (weight exempt — see above): at the
+	# height's neutral frame the frame term is ~1, so glide ≈ 2 − agility there.
+	var a := _body(H_MIN, 0)
+	assert_almost_eq(a.agility_glide_mult(), 2.0 - 1.05, 0.0001, "height-only inverse")
 	assert_almost_eq(a.shot_charge_mult(), 2.0 - a.shot_power_mult(), 0.0001)
 
 

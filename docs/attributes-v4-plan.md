@@ -146,6 +146,18 @@ instead of height/tier — values `TBD`, anchored to v3 spreads):
 - **Accel ↔ momentum** — lean = first-step burst (v3 `_ACCEL` small-favored
   shape), heavy = holds speed through contact (momentum is mass-emergent; do
   not add a separate "momentum" table).
+- **Agility bite** (`_AGILITY_F`, lean-favored, multiplies the height
+  baseline) — F = mv²/r: heavy turns wide and stops long. This is the
+  counterweight that makes the dial a real seesaw (mass 1.28 is a big buy;
+  accel alone was too mild a tax). Corner budget (body-only): best 5'8"-lean
+  ≈ 1.08, worst 6'7"-heavy ≈ 0.89 — re-check stacked corners when the
+  skate-profile gear lean lands. **Glide is exempt**: `agility_glide_mult`
+  derives from the height-only agility component, so the tank turns wide but
+  still coasts like his mass says he should (top speed also stays
+  weight-free — cruise is power-vs-drag, and "holds speed through contact"
+  already emerges from mass in the resolver).
+- **Hitbox width** (`_RADIUS_F`) — the radius tracks the visual frame bulk:
+  same height, heavier = wider (bigger poke target and net-front screen).
 - **Stamina fork** — moves off height: lean = shallow pool / fast regen,
   heavy = deep pool / slow regen (the existing `_STAMINA_DRAIN`/`_STAMINA_REGEN`
   shapes, re-indexed by frame).

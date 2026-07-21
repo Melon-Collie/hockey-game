@@ -15,8 +15,11 @@ extends RefCounted
 #     interval generates a plausible pounds range at every inch, so implausible
 #     bodies (6'6"/160) are unrepresentable by construction. Weight decides
 #     mass (linearly — mass IS the physical/checking system now), the
-#     accel↔momentum fork (lean = first-step burst; momentum is mass-emergent)
-#     and the stamina metabolism fork (lean = shallow pool / fast regen).
+#     accel↔momentum fork (lean = first-step burst; momentum is mass-emergent),
+#     an agility bite (F = mv²/r — heavy turns wide and stops long, the
+#     counterweight that makes the dial a real seesaw; glide is exempt so the
+#     tank still coasts), hitbox width (tracks the visual frame bulk) and the
+#     stamina metabolism fork (lean = shallow pool / fast regen).
 #   • GEAR — four discrete slots (skate profile, blade curve, stick flex,
 #     stick length), three options each, all LATERAL (no net power).
 #     **Step-1 status: stored, replicated and validated but ZERO gameplay
@@ -120,9 +123,12 @@ const _AGILITY_H: Array[float] = [1.050, 1.020, 1.000, 0.960, 0.930]
 # leverage a long frame loads into a shot. Wind-up derives inversely.
 const _SHOT_H: Array[float] = [0.900, 0.940, 1.000, 1.050, 1.090]
 
-# Hitbox cylinder radius — frame width, modest with height. (A frame component
-# is plausible later; height-only for step 1.)
+# Hitbox cylinder radius — frame width. Height sets the skeleton's breadth…
 const _RADIUS: Array[float] = [0.95, 0.975, 1.00, 1.05, 1.10]
+# …and the frame widens it (a heavy body IS wider — matches the visual frame
+# bulk, so the hitbox tracks the silhouette): bigger poke target and net-front
+# screen for the heavy build, slimmer profile for the lean one.
+const _RADIUS_F: Array[float] = [0.96, 0.98, 1.00, 1.03, 1.06]
 
 # Body height (mesh Y-scale, arm/ROM length, hand heights). Mesh-native 5'10"
 # is row 1, so the 1.0 identity sits there (NOT the 6'1" gameplay neutral).
@@ -138,6 +144,17 @@ const _STICK_LEN: Array[float] = [0.981, 1.000, 1.028, 1.056, 1.084]
 # trades the first step for mass-emergent momentum (no separate table — the
 # collision/inertia math already carries it).
 const _ACCEL_F: Array[float] = [1.080, 1.040, 1.000, 0.980, 0.970]
+
+# Agility (turn / brake / facing) frame term — multiplies the height baseline.
+# Grounded in F = mv²/r: at fixed leg strength more mass means a wider arc and
+# a longer stop. This is the counterweight that makes the weight dial a real
+# seesaw (mass 1.28 is a big buy; without this its only tax was mild accel).
+# CORNER BUDGET (body-only): best 5'8"-lean 1.05·1.03 ≈ 1.08, worst 6'7"-heavy
+# 0.93·0.96 ≈ 0.89 — pinned just under the v3 "feels bad but playable" floor;
+# the skate-profile gear lean stacks on top later, so re-check the stacked
+# corners when that slot lands. Deliberately NOT applied to edge glide — see
+# agility_glide_mult.
+const _AGILITY_F: Array[float] = [1.030, 1.015, 1.000, 0.980, 0.960]
 
 # Stamina drain scale (sprint DURATION / pool depth). Lean = fast metabolism =
 # higher drain; heavy = deep pool = drains slower.
@@ -274,10 +291,15 @@ static func inches_label(inches: int) -> String:
 # ── Named multiplier accessors ────────────────────────────────────────────────
 # Body — height
 func speed_mult() -> float:   return _h(_SPEED_H, height)
-func agility_mult() -> float: return _h(_AGILITY_H, height)
-# Edge glide is the inverse of agility (lower drag = better edges) — derived so
-# it can't drift from the agility number it mirrors.
-func agility_glide_mult() -> float: return 2.0 - agility_mult()
+# Agility = height baseline × frame term (F = mv²/r — mass widens the arc and
+# lengthens the stop). Feeds turn / brake / facing / lateral quickness.
+func agility_mult() -> float: return _h(_AGILITY_H, height) * _f(_AGILITY_F)
+# Edge glide is the inverse of the HEIGHT-ONLY agility component — deliberately
+# NOT the full agility_mult: routing the frame term in would make a heavy build
+# bleed speed while coasting, the opposite of the momentum identity the
+# accel↔momentum fork promises (the tank turns wide but coasts like his mass
+# says he should). Derived so it can't drift from the height number it mirrors.
+func agility_glide_mult() -> float: return 2.0 - _h(_AGILITY_H, height)
 func shot_power_mult() -> float:    return _h(_SHOT_H, height)
 # Slapper wind-up is the inverse of shot power (harder shooter threatens
 # sooner). The FLEX gear slot will slide builds along this same coupling.
@@ -303,8 +325,10 @@ func hands_backhand_mult() -> float: return 1.0
 func check_delivery_mult() -> float: return 1.0
 func brace_mult() -> float:          return 1.0
 
-# Height-only geometry
-func radius_mult() -> float:    return _h(_RADIUS, height)
+# Geometry
+# Hitbox radius = skeleton breadth (height) × frame width (weight) — tracks
+# the visual silhouette.
+func radius_mult() -> float:    return _h(_RADIUS, height) * _f(_RADIUS_F)
 func height_mult() -> float:    return _h(_HEIGHT, height)
 func stick_len_mult() -> float: return _h(_STICK_LEN, height)
 
