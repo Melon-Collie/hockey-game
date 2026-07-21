@@ -313,6 +313,17 @@ coverage, interception), so the inertia and close-control costs of Long must
 genuinely bite, and the band is height-relative precisely so max-height +
 max-length can't stack absolute reach beyond tuning.
 
+**The in-tight cost is the INNER ROM boundary** (implemented): the CLOSE
+regime's `hand_y_max` chest cap means the blade can never come closer to the
+body than `sqrt(S² − drop²)` — super-linear in stick length near the
+vertical limit, so a short stick plays the phone booth (inner circle ≈ 0)
+while a long stick carries a ~0.3–0.4 m no-go circle in tight. This is the
+real-hockey reason to cut a stick, it's what prices the scythe's dangle
+honestly (the input model has no angular-precision cost — cursor aim is
+absolute — so in-tight geometry is the long lever's true tax), and the
+CLOSE regime now also enforces the same angular ROM as FAR (previously a
+slowly-swept cursor could walk the blade fully behind the body).
+
 ---
 
 ## 6. Wrister release model — ROM-distance power gating
