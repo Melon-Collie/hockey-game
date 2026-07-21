@@ -304,15 +304,22 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		# sharp-angle man fires into the wall a competent keeper adopts, so he
 		# is not a finish threat the assignment must chase.
 		var man_seal: float = AIActionScoring.derive_post_seal_x_sign(mp, our_net)
+		# Pre-armed feed keeper: our goalie's backdoor depth cap already
+		# guards this man, so the threat partition weighs him at the
+		# merely-strong danger the real keeper concedes.
+		var g_state: GoalieNetworkState = snapshot.goalie_states.get(team_id)
+		AIActionScoring.resolve_feed_keeper(
+				our_goalie_pos, our_net, feed_flight, mp, carrier_pos,
+				g_state.hands_read(our_net.z) if g_state != null else Vector4.INF,
+				feed_speed)
 		man_danger[pid] = AIActionScoring.score_shoot(
 				mp, our_net,
-				AIActionScoring.predict_goalie_pos(
-						our_goalie_pos, our_net, feed_flight, mp),
+				AIActionScoring.feed_keeper_pos,
 				GameRules.NET_HALF_WIDTH, no_defenders,
 				AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-				AIActionScoring.goalie_unsettled(
-						our_goalie_pos, our_net, feed_flight, mp),
-				[], -1.0, false, man_seal, man_seal != 0.0)
+				AIActionScoring.feed_keeper_unsettled,
+				[], -1.0, false, man_seal, man_seal != 0.0, 0.0, [],
+				AIActionScoring.feed_keeper_hands)
 	if men.is_empty():
 		return empty
 

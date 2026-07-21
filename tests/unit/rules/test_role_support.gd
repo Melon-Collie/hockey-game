@@ -283,6 +283,15 @@ func test_swings_off_a_covered_high_post_to_a_live_outlet() -> void:
 	]
 	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
 	_add_opp_goalie(ctx, carrier_pos)
+	# Keeper drawn OUT challenging the deep-corner carrier — the regime
+	# where feed value genuinely differentiates stations. (A HOME keeper
+	# pre-arms every feed to parity and staging is decided by the other
+	# terms — the doctrine the backdoor pre-arm added.)
+	var out_goalie: GoalieNetworkState = ctx.snapshot.goalie_states[1 - TEAM_ID]
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var challenge: Vector3 = (carrier_pos - net).normalized() * 4.0
+	out_goalie.position_x = net.x + challenge.x
+	out_goalie.position_z = net.z + challenge.z
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	var chosen_lane: float = AIActionScoring.lane_clear(
 			carrier_pos, d.target_position, [lane_blocker],
@@ -317,17 +326,16 @@ func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 
 
 func test_holds_the_high_post_over_the_flank_one_timer() -> void:
-	pending("The backdoor pre-arm gate was ATTEMPTED (backdoor_depth_cap in"
-			+ " the planning keeper) and reverted: with score_shoot's set-body"
-			+ " coverage assumption, an on-line pre-armed keeper flips between"
-			+ " a wall (feeds erased to 0.0 — SUPPORT loses its whole pass"
-			+ " signal) and a no-op depending on geometry; there is no stable"
-			+ " merely-strong band until the hole model can price an UNSETTLED"
-			+ " body's partial silhouette. That is hole-model v3 (score against"
-			+ " the replicated pose) — the two items converge; build the"
-			+ " pre-arm ON v3. Also still open: whether the 3v3 third man"
-			+ " should even prefer structure over the seam (NHL 3v3 flashes"
-			+ " the third man into seams) — playtest call. ARCHITECTURE"
+	pending("The backdoor pre-arm IS now built on hole-model v3"
+			+ " (AIActionScoring.resolve_feed_keeper: cap-arced keeper, race"
+			+ " tightness as unsettledness, hands sunk by the slide — SUPPORT"
+			+ " candidates price flank seams merely-strong, not"
+			+ " phantom-certain), so the mechanical blocker is gone. What"
+			+ " remains is the doctrine call this test would pin: should the"
+			+ " 3v3 third man prefer the high-post STRUCTURE over a"
+			+ " merely-strong flank seam at all? NHL 3v3 flashes the third man"
+			+ " into seams — structure-first is a choice, not a fact. Playtest"
+			+ " call; pin the argmax once the doctrine is chosen. ARCHITECTURE"
 			+ " Known Issues.")
 
 

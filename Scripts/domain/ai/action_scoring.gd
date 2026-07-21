@@ -1825,6 +1825,124 @@ static func goalie_squared_pos(
 # `puck_pos_at_release` is where the puck will be when fired (= the
 # shooter's position for direct shots; receiver lead for passes;
 # carry candidate for carry-then-shoot).
+# ── The backdoor pre-arm (planning keeper), rebuilt on hole-model v3 ─────────
+# A live goalie who can see a one-timer man on the weak side is never out at
+# full carrier-challenge depth when the feed goes — his challenge radius is
+# capped by GoalieBehaviorRules.backdoor_depth_cap (the same rule the real
+# keeper runs). The planning keeper for a FEED therefore reads:
+#   position    — arc-matched ON the receiver's shot line at the capped
+#                 depth: the cap's construction proves line-arrival inside
+#                 the feed's window for a keeper who RESPECTED it (r ≤ cap).
+#                 Caught out beyond it (r > cap) he covers only cap/r of the
+#                 lateral gap — the chord he must cover is r·sinθ against a
+#                 window that buys cap·sinθ — so the arrival falls short of
+#                 the line by the overrun and the feed sees a real,
+#                 continuously-growing positional miss.
+#   unsettled   — the race's TIGHTNESS, radius/cap exactly (cap = coverable
+#                 / sinθ, so r·sinθ/coverable collapses to r/cap): riding
+#                 the cap edge he arrives at the buzzer, parked deep he
+#                 arrives set.
+#   hands       — predicted_goalie_hands sunk by that tightness: an
+#                 at-the-buzzer keeper crosses the line mid-push with his
+#                 hands at the slide height, so the band above the pads
+#                 stays honestly open — the "merely strong" outcome. This
+#                 is the piece the first pre-arm attempt lacked: without
+#                 the sunk hands, score_shoot priced the on-line keeper as
+#                 a SET wall and proven-reachable feeds erased to zero.
+# Fill via resolve_feed_keeper (one call, static outputs — the scratch
+# pattern; single-threaded AI tick), consumed by the feed evaluators.
+static var feed_keeper_pos: Vector3 = Vector3.INF
+static var feed_keeper_unsettled: float = 0.0
+static var feed_keeper_hands: Vector4 = Vector4.INF
+
+# Planning-side mirror of the live goalie's backdoor tuning (GoalieController
+# exports at league defaults; values cited from the controller).
+static var _backdoor_cfg_planning: GoalieBehaviorRules.BackdoorThreatConfig = \
+		_build_planning_backdoor_cfg()
+
+
+static func _build_planning_backdoor_cfg() -> GoalieBehaviorRules.BackdoorThreatConfig:
+	var cfg := GoalieBehaviorRules.BackdoorThreatConfig.new()
+	cfg.pass_speed = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
+	cfg.release_time = 0.15         # backdoor_release_time export default
+	cfg.react_delay = 0.12          # cross_crease_react_delay export default
+	cfg.goalie_lateral_speed = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
+	cfg.goalie_lateral_accel = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2
+	cfg.max_shooter_distance = 9.0  # backdoor_max_shooter_distance export default
+	return cfg
+
+
+# Minimum radius the pre-arm can pull the planning keeper to — the live
+# caller floors an unwinnable race at its defensive crease depth.
+const _BACKDOOR_PLANNING_FLOOR_M: float = 0.8
+
+
+# Resolves the pre-armed feed keeper into the feed_keeper_* statics.
+# Returns true when the backdoor cap BOUND (the pre-armed triple is live);
+# false leaves the caller on the ordinary predict_goalie_pos path (no live
+# one-timer geometry — receiver behind the line, out of range, or on the
+# carrier's own shot line).
+static func resolve_feed_keeper(
+		goalie_now: Vector3,
+		attacking_goal: Vector3,
+		release_time_s: float,
+		receiver_pos: Vector3,
+		carrier_pos: Vector3,
+		pose_hands: Vector4 = Vector4.INF,
+		pass_speed_m_s: float = -1.0) -> bool:
+	var dir_sign: int = int(-signf(attacking_goal.z))
+	# The cap must be priced at the feed actually being scored: the callers
+	# fire expected_pass_speed (charged for long cross-seam feeds), and a
+	# quick-pass-priced cap hands the planning keeper ~35% more window than
+	# the real puck gives him. Default keeps the league quick-pass read for
+	# callers with no speed in scope.
+	_backdoor_cfg_planning.pass_speed = pass_speed_m_s \
+			if pass_speed_m_s > 0.0 else GameRules.DEFAULT_QUICK_PASS_POWER_M_S
+	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			carrier_pos, carrier_pos, receiver_pos,
+			attacking_goal.z, attacking_goal.x, dir_sign, _backdoor_cfg_planning)
+	if cap >= INF:
+		feed_keeper_pos = predict_goalie_pos(
+				goalie_now, attacking_goal, release_time_s, receiver_pos)
+		feed_keeper_unsettled = goalie_unsettled(
+				goalie_now, attacking_goal, release_time_s, receiver_pos)
+		feed_keeper_hands = pose_hands
+		return false
+	var cap_floored: float = maxf(cap, _BACKDOOR_PLANNING_FLOOR_M)
+	var gx: float = goalie_now.x - attacking_goal.x
+	var gz: float = goalie_now.z - attacking_goal.z
+	var radius: float = sqrt(gx * gx + gz * gz)
+	var start: Vector3 = goalie_now
+	if radius > cap_floored and radius > 0.001:
+		var s: float = cap_floored / radius
+		start = Vector3(attacking_goal.x + gx * s, goalie_now.y,
+				attacking_goal.z + gz * s)
+	var tightness: float = clampf(
+			minf(radius, cap_floored) / maxf(cap, 0.001), 0.0, 1.0)
+	# The cap's line-arrival guarantee holds only for a keeper who RESPECTED
+	# it: the chord he must cover to re-square is r·sinθ and the feed window
+	# buys cap·sinθ, so a keeper caught out at r > cap covers only cap/r of
+	# the lateral gap — his arrival falls short of the receiver's line by the
+	# overrun. An over-challenged keeper honestly bleeds a positional miss
+	# that grows with how far past his doctrine he was caught (continuous at
+	# r = cap, where progress hits 1 and the guarantee resumes).
+	var progress: float = 1.0
+	if radius > cap_floored:
+		progress = cap_floored / radius
+	var matched_x: float = goalie_arc_match_x(start, attacking_goal, receiver_pos)
+	feed_keeper_pos = Vector3(
+			lerpf(start.x, matched_x, progress), start.y, start.z)
+	feed_keeper_unsettled = tightness
+	# No replicated pose in scope → the league READY stance
+	# (GoalieBodyConfigBuilder's hands) stands in, so the sunk-hands read —
+	# the piece that keeps a buzzer-arrival from pricing as a set wall —
+	# exists for every caller.
+	var hands: Vector4 = pose_hands if pose_hands.is_finite() \
+			else Vector4(-0.42, 0.90, 0.44, 0.86)
+	feed_keeper_hands = predicted_goalie_hands(hands, tightness)
+	return true
+
+
 static func predict_goalie_pos(
 		goalie_now: Vector3,
 		attacking_goal: Vector3,
@@ -1910,7 +2028,9 @@ static func score_pass(
 		opponents: Array[Vector3],
 		pass_speed_m_s: float = PASS_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0,
-		precomputed_lane: float = -1.0) -> float:
+		precomputed_lane: float = -1.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
@@ -1943,7 +2063,7 @@ static func score_pass(
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
 			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor, [], -1.0, false,
-			seal_x, seal_x != 0.0)
+			seal_x, seal_x != 0.0, 0.0, [], goalie_hands, goalie_pads)
 	return lane * receiver_shot
 
 

@@ -327,18 +327,24 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		# off-puck mirror of the carrier's own feed scoring.
 		var flight_t: float = clampf(
 				carrier_pos.distance_to(c) / pass_speed, 0.0, FEED_FLIGHT_MAX_S)
-		var cand_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
-				goalie_pos, ctx.attacking_goal_pos, flight_t, c)
-		var cand_unsettled: float = AIActionScoring.goalie_unsettled(
-				goalie_pos, ctx.attacking_goal_pos, flight_t, c)
+		# Pre-armed feed keeper (backdoor_depth_cap on v3's predicted pose):
+		# a live goalie who can see this one-timer spot is already
+		# depth-capped against it, arriving on the line with hands sunk by
+		# the race's tightness — the cross-seam look prices merely-strong,
+		# not phantom-certain (and a post-sealable deep-wide spot honestly
+		# dies against the wall the real keeper adopts).
+		AIActionScoring.resolve_feed_keeper(
+				goalie_pos, ctx.attacking_goal_pos, flight_t, c, carrier_pos,
+				AIRoleHelpers.opp_goalie_hands(ctx), pass_speed)
 		# A staging spot is worth the better of its two payoffs: the one-timer
 		# feed (score_pass — being open for a pass-and-shoot) or the TIP of
 		# the carrier's direct rip through this spot (tip_ev — standing where
 		# the blast can be deflected). max(), not sum: one puck, one outcome.
 		var feed: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
-				cand_goalie, GameRules.NET_HALF_WIDTH,
-				opp_positions, pass_speed, cand_unsettled)
+				AIActionScoring.feed_keeper_pos, GameRules.NET_HALF_WIDTH,
+				opp_positions, pass_speed, AIActionScoring.feed_keeper_unsettled,
+				-1.0, AIActionScoring.feed_keeper_hands)
 		var tip: float = AIActionScoring.tip_ev(
 				carrier_release, c, ctx.attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, opp_positions,

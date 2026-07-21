@@ -170,10 +170,19 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# Match the speed our carrier would actually fire at (see
 		# finisher.gd for rationale).
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
+		# Pre-armed feed keeper (backdoor_depth_cap on v3's predicted pose):
+		# a candidate the keeper can pre-arm against prices merely-strong
+		# instead of phantom-certain, so structural stations genuinely
+		# compete with the seam (the SUPPORT flank pend).
+		var cand_flight: float = carrier_pos.distance_to(c) / maxf(pass_speed, 1.0)
+		AIActionScoring.resolve_feed_keeper(
+				goalie_pos, ctx.attacking_goal_pos, cand_flight, c, carrier_pos,
+				AIRoleHelpers.opp_goalie_hands(ctx), pass_speed)
 		var pass_value: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
-				goalie_pos, GameRules.NET_HALF_WIDTH,
-				opp_positions, pass_speed)
+				AIActionScoring.feed_keeper_pos, GameRules.NET_HALF_WIDTH,
+				opp_positions, pass_speed, AIActionScoring.feed_keeper_unsettled,
+				-1.0, AIActionScoring.feed_keeper_hands)
 		var counter_cost: float = AIActionScoring.counter_rush_cost(
 				carrier_pos, turnover_prior, our_net, our_goalie,
 				GameRules.NET_HALF_WIDTH, teammate_positions, c,
