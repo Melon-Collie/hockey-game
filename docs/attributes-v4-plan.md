@@ -155,7 +155,13 @@ instead of height/tier — values `TBD`, anchored to v3 spreads):
   derives from the height-only agility component, so the tank turns wide but
   still coasts like his mass says he should (top speed also stays
   weight-free — cruise is power-vs-drag, and "holds speed through contact"
-  already emerges from mass in the resolver).
+  already emerges from mass in the resolver). **Mechanism** (implemented):
+  agility scales `lateral_grip` — the movement core decomposes thrust
+  against the current motion and scales only the perpendicular component
+  (`SkaterMovementRules`, grip 1.0 = exact no-op, standing starts exempt) —
+  so the emergent turn radius v²/(grip·a_perp) genuinely widens/tightens
+  with the build; facing/brake scaling is the *feel* of quickness, grip is
+  the arc itself.
 - **Hitbox width** (`_RADIUS_F`) — the radius tracks the visual frame bulk:
   same height, heavier = wider (bigger poke target and net-front screen).
 - **Stamina fork** — moves off height: lean = shallow pool / fast regen,
@@ -237,9 +243,15 @@ tooltip contains a bare "+".
 
 ### 5.1 Skate profile — top-end vs. burst
 
-- **Power**: +top speed / glide, −agility (turn/brake).
+- **Power**: +top speed / glide, −agility (turn/brake/grip).
 - **Balanced**: neutral (≡ shipped defaults).
 - **Agility**: +acceleration / first step / cornering, −top speed.
+
+The cornering lever this slot needs **already exists**: `lateral_grip`
+(perpendicular thrust authority in `SkaterMovementRules`, added with the
+weight agility bite) — the profile lean multiplies it alongside
+glide/top-speed, no new mechanism required. Re-check the stacked
+body × gear grip corners here (see §3.2 corner budget).
 
 The first step is deliberately assigned to the *agility* profile (rockered
 blade = quick starts and cuts; long flat = glide and top end). This is both

@@ -18,6 +18,19 @@ class MovementConfig:
 	var sprint_thrust_multiplier: float = 1.0     # thrust boost while sprinting (modest, to reach the cap)
 	var sprint_max_speed_multiplier: float = 1.0  # top-speed boost while sprinting (the headline effect)
 	var sprint_carry_penalty_bypass: float = 0.0  # fraction of the carry speed penalty waived WHILE sprinting (heads-down straight-line flat-out); 0 = no bypass
+	# Lateral grip — the edges' authority to REDIRECT momentum. Scales only the
+	# component of thrust perpendicular to the current motion, so straight-line
+	# drive (and slowing down) is untouched and 1.0 is an exact no-op. The
+	# emergent turn radius is v²/(grip·a_perp) — the F = mv²/r seam that agility
+	# (and later the skate-profile gear) actually owns: sub-1.0 turns wide AT
+	# SPEED while a standing start keeps full authority (no momentum to fight).
+	var lateral_grip: float = 1.0
+
+# Below this horizontal speed (m/s) the grip decomposition is skipped: there is
+# no meaningful momentum to redirect, and the velocity direction is numerically
+# unstable. A standing start always gets full thrust authority.
+const GRIP_MIN_SPEED: float = 0.5
+
 
 static func apply_movement(
 		current_velocity: Vector3,
@@ -47,7 +60,21 @@ static func apply_movement(
 			thrust_scale = lerpf(cfg.backward_thrust_multiplier, cfg.crossover_thrust_multiplier, move_dot + 1.0)
 
 		var applied_thrust: float = cfg.thrust * sprint_thrust
-		velocity += thrust_dir * applied_thrust * thrust_scale * delta
+		var thrust_vec: Vector3 = thrust_dir * applied_thrust * thrust_scale
+		# Lateral grip: decompose the thrust against the current motion and scale
+		# only the perpendicular component (see MovementConfig.lateral_grip). The
+		# parallel component — driving on, or slowing down — always passes whole,
+		# and grip 1.0 recomposes exactly (guarded out as a no-op).
+		if cfg.lateral_grip != 1.0:
+			var vel_dir := Vector2(current_velocity.x, current_velocity.z)
+			if vel_dir.length() > GRIP_MIN_SPEED:
+				vel_dir = vel_dir.normalized()
+				var t2 := Vector2(thrust_vec.x, thrust_vec.z)
+				var par: Vector2 = vel_dir * t2.dot(vel_dir)
+				var gripped: Vector2 = par + (t2 - par) * cfg.lateral_grip
+				thrust_vec = Vector3(gripped.x, 0.0, gripped.y)
+		var thrust_delta: Vector3 = thrust_vec * delta
+		velocity += thrust_delta
 
 		# Speed cap — but preserve over-max speed from external sources (body
 		# check boost, etc.) so we don't instantly clamp a legitimate momentum gain.
@@ -64,8 +91,8 @@ static func apply_movement(
 		var speed: float = horiz.length()
 		if speed > effective_max:
 			var pre_thrust_speed: float = Vector2(
-				velocity.x - thrust_dir.x * applied_thrust * thrust_scale * delta,
-				velocity.z - thrust_dir.z * applied_thrust * thrust_scale * delta
+				velocity.x - thrust_delta.x,
+				velocity.z - thrust_delta.z
 			).length()
 			var target_speed: float = maxf(pre_thrust_speed, effective_max)
 			if speed > target_speed:

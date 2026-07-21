@@ -14,6 +14,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 @export var move_deadzone: float = 0.1
 @export var brake_multiplier: float = 4.0
+# Lateral grip — perpendicular-to-motion thrust authority (the edges' bite in a
+# cut; see SkaterMovementRules.MovementConfig.lateral_grip). 1.0 = the shipped
+# neutral feel; per-build value = base × agility_mult in apply_attributes, and
+# the skate-profile gear slot leans it later. Turn radius at speed rides this.
+@export var lateral_grip: float = 1.0
 @export var puck_carry_speed_multiplier: float = 0.92  # pre-apply default; per-build value is set by apply_attributes (PlayerAttributes.carry_speed_mult, Speed-eased)
 @export var backward_thrust_multiplier: float = 0.80
 @export var crossover_thrust_multiplier: float = 0.90
@@ -974,6 +979,7 @@ var _base_facing_drag_speed:            float = 0.0
 var _base_facing_drag_speed_braking:    float = 0.0
 var _base_brake_multiplier:             float = 0.0
 var _base_friction_drag:                float = 0.0
+var _base_lateral_grip:                 float = 0.0
 var _base_min_wrister_power:            float = 0.0
 var _base_max_wrister_power:            float = 0.0
 var _base_quick_pass_power:             float = 0.0
@@ -1068,6 +1074,12 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
 	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
+	# Lateral grip is where agility's turn promise physically lands: it scales
+	# the perpendicular thrust authority in the movement core, so the emergent
+	# turn radius v²/(grip·a_perp) genuinely widens for a heavy/tall build and
+	# tightens for a lean/small one (the facing/brake terms above are the feel
+	# of quickness; this is the arc itself).
+	lateral_grip                = _base_lateral_grip                * m_agility
 	# The sprint CEILING is Speed-attributed (grounded to the 20–25 mph NHL burst
 	# band), replacing the old flat multiplier that handed every skater the same
 	# top gear. A real burner opens a gear a plodder simply doesn't have — that's
@@ -1217,6 +1229,7 @@ func _capture_attribute_bases() -> void:
 	_base_facing_drag_speed_braking    = facing_drag_speed_braking
 	_base_brake_multiplier             = brake_multiplier
 	_base_friction_drag                = friction_drag
+	_base_lateral_grip                 = lateral_grip
 	_base_min_wrister_power            = min_wrister_power
 	_base_max_wrister_power            = max_wrister_power
 	_base_quick_pass_power             = quick_pass_power
@@ -2475,6 +2488,7 @@ func _build_movement_config() -> SkaterMovementRules.MovementConfig:
 	cfg.sprint_thrust_multiplier = sprint_thrust_multiplier
 	cfg.sprint_max_speed_multiplier = sprint_max_speed_multiplier
 	cfg.sprint_carry_penalty_bypass = sprint_carry_penalty_bypass
+	cfg.lateral_grip = lateral_grip
 	return cfg
 
 # Stamina config is flat (not attribute-scaled), so a single lazily-built
