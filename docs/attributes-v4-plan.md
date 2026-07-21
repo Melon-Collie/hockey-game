@@ -24,9 +24,10 @@ reversal seesaw bounded and monotonic). §6 (wrister gate) landed
 separately on main. Step 3 (flex + curve) is IMPLEMENTED: flex leans the
 shot ceiling WITH wind-up and runway (its charge lean deliberately breaks
 from the height 2−power coupling — a lateral slot trades, never stacks),
-curve leans LOW-loft launch / runway / backhand (parity-bounded), the
-crossbar ceiling and the 0.81× stacked runway floor are pinned by
-calibration tests, and the picker has all three stick rows. Remaining:
+curve is the FACE-ANGLE launch cap (§5.2 v2 — roofing-distance gradient,
+crossbar equality at pace) plus runway / backhand leans (parity-bounded),
+the 0.81× stacked runway floor is pinned by calibration tests, and the
+picker has all three stick rows. Remaining:
 skate profile, AI/goalie calibration (incl. teaching AI models the
 per-player LOW-loft speed and release time — they currently read the
 GameRules neutrals). Numbers marked `TBD` are authored at implementation
@@ -277,20 +278,28 @@ fork — the tuning corners are height-extreme × matching lean; check
 6'1"+power (fastest thing in the game) and 5'8"+agility (shiftiest)
 deliberately.
 
-### 5.2 Blade curve — elevation & release vs. backhand
+### 5.2 Blade curve — the face angle vs. backhand (IMPLEMENTED, v2 model)
 
-- **Open**: easier elevation on FLAT/LOW loft (steeper `loft_vertical_speed`
-  for the saucer and mid-net game), quicker release (shorter ROM runway —
-  §6), worst backhand (deepens the backhand coeff penalty).
-- **Balanced**: neutral.
-- **Closed**: hardest to elevate, medium release, best backhand (relaxes the
-  backhand penalty toward — never past — forehand parity).
+The curve is the blade's **FACE ANGLE** — a launch-angle cap in the release
+math (`ShotMechanics.loft_y`'s ratio IS tan(launch angle); the face tightens
+the pre-existing universal 45° cap, `MAX_LOFT_RATIO`):
 
-**Crossbar constraint (hard)**: HIGH loft's apex ceiling (puck top ~5 cm
-under the crossbar's inner edge) is pinned **for every curve**. Open face
-may reach that apex *sooner* (steeper arc, shorter distance-to-apex), never
-higher. The no-sail guarantee is load-bearing shot feel and survives v4
-untouched. → calibration test, §7.
+- **Open (45°)**: = the universal cap — bit-identical to the pre-curve
+  shipped behavior. Roofs from the doorstep (~2.2 m), sauces a standstill
+  flip. Quicker release (shorter runway), worst backhand.
+- **Balanced (31°)**: roofs from the slot (~3.7 m).
+- **Closed (23°)**: needs the high slot (~5.2 m); the soft saucer flattens
+  (needs pace under it). Best backhand (toward, never past, parity).
+
+Loft levels stay fixed vertical speeds, so **at pace every curve reaches
+the same apex** — the crossbar ceiling holds for all blades (the no-sail
+guarantee survives, and the realism check holds too: pros roof with any
+pattern at pace). What the face gates is the SOFT steep release — the
+in-tight roof and the standstill flip — so each curve's minimum roofing
+distance emerges from ballistics alone. **Trajectory is a pure function of
+(power, level, face) — never of where the net is**: same gesture, same arc,
+from anywhere on the ice. (The earlier LOW-loft vy lean is superseded by
+this single mechanism.) → calibration tests, §7.
 
 ### 5.3 Stick flex — power ceiling vs. release
 

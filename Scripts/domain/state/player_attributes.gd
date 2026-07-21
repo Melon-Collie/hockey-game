@@ -161,15 +161,21 @@ const _FLEX_SHOT_LEAN: Array[float] = [0.94, 1.00, 1.06]    # whippy / medium / 
 const _FLEX_CHARGE_LEAN: Array[float] = [0.92, 1.00, 1.10]  # wind-up time, with power
 const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-stroke travel
 
-# BLADE CURVE — elevation & release ↔ backhand. OPEN steepens the LOW loft
-# (the saucer / mid-net money tip) and shortens the wrister runway (quick
+# BLADE CURVE — the FACE ANGLE ↔ backhand. The face angle caps the shot's
+# LAUNCH ANGLE (ShotMechanics.loft_y's ratio is tan(launch angle); the curve
+# tightens the pre-existing universal 45° cap, MAX_LOFT_RATIO): a shot can
+# never leave the blade steeper than the face. Loft levels stay fixed
+# vertical speeds, so at PACE every curve still reaches the same apex — the
+# crossbar ceiling holds for all blades — but the SOFT steep shot that roofs
+# in tight is face-gated: min bar-height roofing distance emerges at ~2.2 m
+# (open, 45° = today's global cap, bit-identical) / ~3.7 m (balanced, 31°) /
+# ~5.2 m (closed, 23°), and the standstill saucer flip flattens on a closed
+# blade the same way. Trajectory is a pure function of (power, level, face) —
+# never of where the net is. OPEN also shortens the wrister runway (quick
 # release) but deepens the backhand penalty; CLOSED is the honest-both-ways
-# blade — best backhand, hardest to elevate. THE CROSSBAR CONSTRAINT: the
-# HIGH loft's apex ceiling (puck top ~5 cm under the bar) is pinned for
-# every curve — open never touches loft_vertical_speed_high; it reaches the
-# same ceiling on a steeper LOW arc instead. Backhand relief approaches but
-# never reaches forehand parity (0.75 base × 1.08 = 0.81).
-const _CURVE_LOFT_LOW_LEAN: Array[float] = [0.90, 1.00, 1.12]  # closed / balanced / open
+# blade. Backhand relief approaches but never reaches forehand parity
+# (0.75 base × 1.08 = 0.81).
+const _CURVE_FACE_ANGLE_DEG: Array[float] = [23.0, 31.0, 45.0]  # closed / balanced / open
 const _CURVE_RUNWAY_LEAN: Array[float] = [1.00, 1.00, 0.90]
 const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.92]
 
@@ -387,10 +393,11 @@ func wrister_runway_mult() -> float:
 # shape, not the player's skill).
 func curve_backhand_mult() -> float: return _CURVE_BACKHAND_LEAN[curve]
 
-# LOW-loft vertical launch lean (the saucer / money-tip elevation). HIGH is
-# deliberately not an accessor — the crossbar ceiling is pinned for every
-# curve by construction.
-func curve_loft_low_mult() -> float: return _CURVE_LOFT_LOW_LEAN[curve]
+# tan(face angle) — the launch-angle cap the release math applies (see the
+# _CURVE_FACE_ANGLE_DEG doc). Open's 45° equals ShotMechanics.MAX_LOFT_RATIO,
+# so the open blade is bit-identical to the pre-curve shipped behavior.
+func curve_loft_tan() -> float:
+	return tan(deg_to_rad(_CURVE_FACE_ANGLE_DEG[curve]))
 
 
 # Sprint ceiling — speed-normalized, grounded to the 20–25 mph burst band.

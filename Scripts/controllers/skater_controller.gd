@@ -1015,7 +1015,9 @@ var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_collision_radius:      float = 0.0
 var _base_skater_collision_height:      float = 0.0
 var _base_backhand_power_coefficient:   float = 0.0
-var _base_loft_vertical_speed_low:      float = 0.0
+# Blade face-angle cap (tan) for the release math — set per-build from the
+# curve gear in apply_attributes; defaults to the universal 45° cap.
+var loft_tan_max: float = ShotMechanics.MAX_LOFT_RATIO
 var _base_sprint_drain_per_sec:         float = 0.0
 var _base_stamina_regen_per_sec:        float = 0.0
 var _base_hand_rest_y:                  float = 0.0
@@ -1123,11 +1125,13 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# gear slot (closed relaxes toward, never past, forehand parity; open
 	# deepens the penalty).
 	backhand_power_coefficient  = _base_backhand_power_coefficient * attrs.curve_backhand_mult()
-	# Curve elevation: OPEN steepens the LOW loft (saucer / money tip);
-	# loft_vertical_speed_high is DELIBERATELY untouched — the HIGH apex
-	# ceiling (puck top ~5 cm under the crossbar) is pinned for every curve,
-	# by construction (the calibration test asserts it).
-	loft_vertical_speed_low = _base_loft_vertical_speed_low * attrs.curve_loft_low_mult()
+	# Curve elevation is the blade FACE ANGLE: a launch-angle cap in the
+	# release math (ShotMechanics.loft_y), never a lean on the loft speeds —
+	# so at pace every curve reaches the same per-level apex (the crossbar
+	# ceiling holds for all blades) while the soft in-tight roof is
+	# face-gated. Open (45°) equals the universal MAX_LOFT_RATIO cap, i.e.
+	# the pre-curve shipped behavior bit-exact.
+	loft_tan_max = attrs.curve_loft_tan()
 	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
 	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_pass
 	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
@@ -1283,7 +1287,6 @@ func _capture_attribute_bases() -> void:
 	_base_max_blade_speed              = max_blade_speed
 	_base_max_blade_accel              = max_blade_accel
 	_base_backhand_power_coefficient   = backhand_power_coefficient
-	_base_loft_vertical_speed_low      = loft_vertical_speed_low
 	_base_sprint_drain_per_sec         = sprint_drain_per_sec
 	_base_stamina_regen_per_sec        = stamina_regen_per_sec
 	_base_puck_carry_speed_multiplier  = puck_carry_speed_multiplier
@@ -2587,6 +2590,7 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 		_cached_wrister_cfg.quick_pass_power = quick_pass_power
 		_cached_wrister_cfg.loft_vy_low = loft_vertical_speed_low
 		_cached_wrister_cfg.loft_vy_high = loft_vertical_speed_high
+		_cached_wrister_cfg.loft_tan_max = loft_tan_max
 		_cached_wrister_cfg.power_curve = wrister_power_curve
 		# Pure mouse-speed model: power is a curve over the cursor speed (fed as
 		# sweep_speed by _wrister_sweep_speed). full_sweep_speed is the cursor
@@ -2648,4 +2652,5 @@ func _slapper_config() -> ShotMechanics.SlapperConfig:
 		_cached_slapper_cfg.max_slapper_charge_time = max_slapper_charge_time
 		_cached_slapper_cfg.loft_vy_low = loft_vertical_speed_low
 		_cached_slapper_cfg.loft_vy_high = loft_vertical_speed_high
+		_cached_slapper_cfg.loft_tan_max = loft_tan_max
 	return _cached_slapper_cfg

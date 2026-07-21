@@ -372,11 +372,17 @@ func test_flex_is_a_power_release_seesaw() -> void:
 	assert_lt(tall.shot_charge_mult(), 1.0, "big frame still threatens sooner at medium flex")
 
 
-func test_curve_trades_elevation_and_release_for_backhand() -> void:
+func test_curve_trades_face_angle_and_release_for_backhand() -> void:
 	var closed := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
+	var balanced := PlayerAttributes.all_average()
 	var open := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
-	assert_gt(open.curve_loft_low_mult(), 1.0, "open elevates the LOW loft easier")
-	assert_lt(closed.curve_loft_low_mult(), 1.0, "closed is hardest to elevate")
+	# The face angle is the elevation lever: open ≥ balanced ≥ closed, and
+	# open's 45° equals the universal launch-angle cap — an open blade is
+	# bit-identical to the pre-curve shipped behavior.
+	assert_lt(closed.curve_loft_tan(), balanced.curve_loft_tan(), "closed is flattest")
+	assert_lt(balanced.curve_loft_tan(), open.curve_loft_tan())
+	assert_almost_eq(open.curve_loft_tan(), ShotMechanics.MAX_LOFT_RATIO, 0.0001,
+			"open face = the universal 45° cap")
 	assert_lt(open.wrister_runway_mult(), 1.0, "open is the quick release")
 	assert_gt(closed.curve_backhand_mult(), open.curve_backhand_mult())
 	# Backhand relief approaches but never reaches forehand parity: the

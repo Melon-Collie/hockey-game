@@ -146,20 +146,25 @@ func test_apply_is_idempotent() -> void:
 # ── Flex + curve calibration (the shot gear slots) ───────────────────────────
 
 func test_crossbar_ceiling_pinned_for_every_curve() -> void:
-	# THE hard constraint from the plan doc: the HIGH loft's apex ceiling
-	# (puck top ~5 cm under the crossbar's inner edge) is pinned for every
-	# curve — no gear may sail the top-corner snipe over the net. Open leans
-	# only the LOW loft.
+	# THE hard constraint from the plan doc: the loft LEVELS (fixed vertical
+	# speeds — the crossbar apex ceiling among them) are pinned for every
+	# curve. The curve differentiates via the FACE ANGLE cap in the release
+	# math (loft_tan_max), which only binds on soft shots — no gear may sail
+	# the top-corner snipe over the net, and at pace every blade reaches the
+	# same apex.
 	var c := _make_controller()
 	c.apply_attributes(PlayerAttributes.all_average())
 	var neutral_high: float = c.loft_vertical_speed_high
 	var neutral_low: float = c.loft_vertical_speed_low
+	var neutral_tan: float = c.loft_tan_max
 	for curve: int in [PlayerAttributes.CURVE_CLOSED, PlayerAttributes.CURVE_OPEN]:
 		c.apply_attributes(PlayerAttributes.new(73, 201, 1, curve, 1, 1))
 		assert_almost_eq(c.loft_vertical_speed_high, neutral_high, 0.0001,
 				"HIGH loft untouched by curve %d" % curve)
-		assert_ne(c.loft_vertical_speed_low, neutral_low,
-				"LOW loft leans with curve %d" % curve)
+		assert_almost_eq(c.loft_vertical_speed_low, neutral_low, 0.0001,
+				"LOW loft untouched by curve %d" % curve)
+		assert_ne(c.loft_tan_max, neutral_tan,
+				"face-angle cap varies with curve %d" % curve)
 
 
 func test_flex_leans_ceiling_and_windup_together() -> void:
