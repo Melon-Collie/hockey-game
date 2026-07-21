@@ -14,15 +14,16 @@ height+weight body plane (plus the weight agility bite via the new
 `lateral_grip` movement term, and frame-scaled hitbox width), gear slots
 stubbed, prefs v5 migration, protocol v37, re-authored bot roster,
 neutral-identity test. Step 2: the second-order blade servo (arrive-law
-accel clamp, ships with `max_blade_accel = 0` = disabled — **the inertia
-dial is turned in local playtest**), the lever derivation (tip speed ∝
-lever, accel cap ∝ 1/lever^k, k export default 1.2), stick length as the
-first live gear slot with its picker selector, and the two calibration
-curves as GUT tests (traverse flatness ≤8%, reversal seesaw 1.15–1.8×
-bounded and monotonic). §6 (wrister gate) landed separately on main.
-Remaining: flex/curve gameplay, skate profile, AI/goalie calibration.
-Numbers marked `TBD` are authored at implementation time and tuned in
-playtest.
+accel clamp — **shipped ON at the playtest-calibrated `max_blade_accel =
+250`, `blade_inertia_exponent = 1.6`**; 0 reverts to the first-order servo
+bit-exact), the lever derivation (tip speed ∝ lever, accel cap ∝
+1/lever^k), stick length as the first live gear slot with its picker
+selector, the inner ROM boundary (§5.4) with the CLOSE-regime angular
+clamp, and the calibration curves as GUT tests (traverse flatness ≤8%,
+reversal seesaw bounded and monotonic). §6 (wrister gate) landed
+separately on main. Remaining: flex/curve gameplay, skate profile,
+AI/goalie calibration. Numbers marked `TBD` are authored at
+implementation time and tuned in playtest.
 
 ---
 

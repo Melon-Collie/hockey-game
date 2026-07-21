@@ -223,7 +223,8 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 			else:
 				_smoothed_blade_world += move
 		else:
-			# First-order path (inertia disabled — the shipped feel, bit-exact).
+			# First-order path (max_blade_accel 0 = inertia disabled — the
+			# pre-v4 servo, kept bit-exact as the escape hatch).
 			var step_len: float = step.length()
 			if step_len > max_step:
 				# Target is beyond the dangle-speed budget this tick — step toward it.

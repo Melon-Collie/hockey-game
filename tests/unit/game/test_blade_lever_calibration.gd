@@ -40,9 +40,8 @@ func _make_controller() -> SkaterController:
 	add_child_autofree(gs)
 	var controller := SkaterController.new()
 	add_child_autofree(controller)
-	# Turn the inertia dial on BEFORE the first apply captures bases, so the
-	# accel-cap derivation is live for the seesaw assertions below.
-	controller.max_blade_accel = 400.0
+	# Runs at the SHIPPED defaults (max_blade_accel 250, exponent 1.6 —
+	# playtest-calibrated): the seesaw assertions below spec the live game.
 	controller.setup(skater, puck, gs)
 	return controller
 

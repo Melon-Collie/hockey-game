@@ -225,18 +225,19 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # call — can't be measured headless.)
 @export var max_blade_speed: float = 10.0
 # Second-order blade: acceleration cap (m/s²) on the dangle velocity — the
-# stick's INERTIA. 0 disables it (the shipped first-order feel; the servo runs
-# the exact legacy path). Dial upward from ~600 (barely felt) down toward ~250
-# (heavy) to turn the blade into a physical object: direction REVERSALS pay the
-# cost, traverse speed doesn't. Per-build value derives from lever geometry in
-# apply_attributes: cap ∝ 1/lever^k — a long stick sweeps faster (tip speed
-# below) but can't cut back as fast; a short stick is the scalpel. This is the
-# hands seesaw of attributes v4 — geometry, never a fidelity table.
-@export var max_blade_accel: float = 0.0
+# stick's INERTIA. Direction REVERSALS pay the cost, traverse speed doesn't.
+# Per-build value derives from lever geometry in apply_attributes: cap ∝
+# 1/lever^k — a long stick sweeps faster (tip speed below) but can't cut back
+# as fast; a short stick is the scalpel. This is the hands seesaw of
+# attributes v4 — geometry, never a fidelity table. The shipped 250 was
+# playtest-calibrated across the min/neutral/max builds; 0 disables inertia
+# entirely (the pre-v4 first-order servo, bit-exact).
+@export var max_blade_accel: float = 250.0
 # The k in cap ∝ 1/lever^k. Raw physics is k=2 (I ∝ mL²), but reversal time
 # then scales ~L³ across the build range — too brutal. The model's FORM is
-# physical; the exponent is feel. Start low.
-@export var blade_inertia_exponent: float = 1.2
+# physical; the exponent is feel — 1.6 is the playtest-calibrated spread
+# (scalpel↔scythe contrast reads clearly without breaking the scythe).
+@export var blade_inertia_exponent: float = 1.6
 
 # ── Nudge (self-tap, nutmeg setup) ────────────────────────────────────────────
 # Tap stick-lift (Q) while carrying in plain SKATING_WITH_PUCK to push the puck a
