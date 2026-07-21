@@ -279,8 +279,13 @@ func _physics_process(delta: float) -> void:
 			# A deliberate deflect (holding LMB without the puck) is NOT a pickup —
 			# suppress the speculative claim + optimistic pin so we don't predict a
 			# catch the host will resolve as a deflect (which would roll back). The
-			# deflect itself comes back authoritatively through the puck sync.
-			if in_range and not skater.deflect_intent and _pickup_claim_floor <= 0.0 and (rising_edge or _claim_cooldown <= 0.0):
+			# deflect itself comes back authoritatively through the puck sync. A puckless
+			# one-timer wind-up (SLAPPER_CHARGE_WITHOUT_PUCK) is suppressed for the same
+			# reason: it's a redirect, not a corral. Front-running it would pin the puck
+			# to the raised wind-up blade (snapping it overhead for a frame) until the
+			# host confirm re-pinned it to the ice zone — the host catches the feed and
+			# it arrives through the puck sync.
+			if in_range and not skater.deflect_intent and _sm.get_state() != State.SLAPPER_CHARGE_WITHOUT_PUCK and _pickup_claim_floor <= 0.0 and (rising_edge or _claim_cooldown <= 0.0):
 				_pickup_claim_floor = _PICKUP_CLAIM_FLOOR_S
 				_claim_cooldown = _CLAIM_COOLDOWN_S
 				# Report the ADAPTED interp delay (get_interpolation_delay) — the value
@@ -521,6 +526,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos
 	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
+	# shot_charge is re-derived from the (restored) charge timers / swing state on
+	# every live tick, but _update_slapper_charge / _update_wrister_charge also
+	# rewrite it during replay from the unconfirmed window. Save/restore it with its
+	# source state so it isn't left at a replay-derived value until the next live
+	# tick recomputes it — otherwise the local player's stick-flex pose reads a
+	# stale charge for one frame after a reconcile (cosmetic; completes the set).
+	var pre_shot_charge: float = skater.shot_charge
 	skater.global_position = server_state.position
 	skater.velocity = server_state.velocity
 	# Stamina + lockout are deterministic from inputs, exactly like velocity:
@@ -597,6 +609,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
 	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir
+	skater.shot_charge = pre_shot_charge
 	# Server authority on shot state — but never revert past a release transition.
 	# If the client is in FOLLOW_THROUGH and the server is still in an aim state,
 	# the host just hasn't processed the release input yet; the reliable RPC already
@@ -622,6 +635,20 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 				server_state.shot_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK
 		if client_aiming and server_skating:
 			apply_server_shot_state = false
+	# Same protection for the puckless one-timer wind-up. It has no puck, so the
+	# has_puck guard above never covers it: a client charging a one-timer
+	# (SLAPPER_CHARGE_WITHOUT_PUCK) is ejected the moment the server's lagged
+	# shot_state — still SKATING_WITHOUT_PUCK because the slap press hasn't been
+	# processed there yet — is applied. The eject silently kills the wind-up (the
+	# held RMB can't re-fire the rising-edge entry) and strands the aim arrow on
+	# screen with no one-timer reticle. Hold the local state until the server
+	# catches up; any real progression still applies — the puck arriving flips
+	# the server to SLAPPER_CHARGE_WITH_PUCK, a release to FOLLOW_THROUGH, neither
+	# of which is SKATING_WITHOUT_PUCK.
+	if apply_server_shot_state \
+			and pre_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK \
+			and server_state.shot_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:
+		apply_server_shot_state = false
 	if apply_server_shot_state:
 		_sm.set_state(server_state.shot_state as SkaterStateMachine.State)
 	# Wrister charge is a local control input (the player's precision sweep), not a
@@ -766,10 +793,16 @@ func on_puck_picked_up_network() -> void:
 
 func _update_one_timer_indicator() -> void:
 	var state: State = _sm.get_state()
-	if state == State.SLAPPER_CHARGE_WITH_PUCK and _aiming.one_timer_window_timer > 0.0:
-		var full_window: float = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
-		var t: float = clampf(_aiming.one_timer_window_timer / full_window, 0.0, 1.0)
-		skater.update_slapper_indicator_window(t)
+	if state == State.SLAPPER_CHARGE_WITH_PUCK:
+		# One-timer window (puck arrived mid-charge): shrink the reticle ring toward
+		# the release. A plain carry → slapshot charge has no window, so it keeps
+		# only the aim arrow (set in _enter_slapper_charge) and shows no reticle.
+		if _aiming.one_timer_window_timer > 0.0:
+			var full_window: float = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
+			var t: float = clampf(_aiming.one_timer_window_timer / full_window, 0.0, 1.0)
+			skater.update_slapper_indicator_window(t)
+		else:
+			skater.set_slapper_indicator(false)
 	elif state == State.SLAPPER_CHARGE_WITHOUT_PUCK:
 		var zone_world: Vector3 = skater.get_slapper_zone_global_position()
 		var zone_xz := Vector2(zone_world.x, zone_world.z)
@@ -778,7 +811,14 @@ func _update_one_timer_indicator() -> void:
 		skater.set_slapper_indicator_ready(dist <= _effective_one_timer_leniency())
 		skater.update_slapper_indicator_convergence(clampf(dist / slapper_zone_radius, 0.0, 1.0))
 	else:
+		# No slapper aim active — force BOTH HUD elements down. The arrow is
+		# normally cleared by _hide_slapshot_hud on every deliberate exit, but a
+		# reconcile force-set of shot_state leaves a slapper state without routing
+		# through it; without this the aim arrow used to strand on screen with no
+		# reticle. Driving both off from the live state every tick makes the local
+		# HUD self-correcting regardless of how the state was left.
 		skater.set_slapper_indicator(false)
+		skater.set_slapshot_arrow(false)
 
 func _predict_offside() -> void:
 	if _is_host:

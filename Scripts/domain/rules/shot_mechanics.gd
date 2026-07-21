@@ -30,7 +30,7 @@ class ShotResult:
 # power and shot direction. Where the puck sits on its arc when it reaches the
 # net is therefore emergent from loft × power × distance — range and charge
 # management are the skill, not a solved-for arrival height. Levels apply
-# identically to quick shots (passes), wristers, and slappers, in every
+# identically to quick passes, wristers, and slappers, in every
 # direction — a saucer pass, a flip clear, and a top-shelf snipe are all the
 # same mechanic. (The old system ballistically solved Y to arrive at a target
 # height at the goal line, which both trivialized top-corner aim and made
@@ -56,7 +56,7 @@ class WristerConfig:
 	var min_wrister_power: float = 0.0
 	var max_wrister_power: float = 0.0
 	var backhand_power_coefficient: float = 0.0
-	var quick_shot_power: float = 0.0
+	var quick_pass_power: float = 0.0
 	var loft_vy_low: float = 0.0                # vertical launch speed (m/s), level 1
 	var loft_vy_high: float = 0.0               # vertical launch speed (m/s), level 2
 	# ── Power model (see wrister_power_t) ──
@@ -165,12 +165,12 @@ static func is_backhand_from_swing(
 	var handed: float = -1.0 if is_left_handed else 1.0
 	return swing_rotation * handed < -deadband
 
-# Wrister release. HARD BINARY — a quick shot and a charged wrister are two
-# distinct shots, with NO blend between them. Which one fires is decided by the
-# INPUT at the call site (not any threshold in here) and passed in as is_quick_shot:
-#   - QUICK SHOT (the dedicated quick_shot button, via _fire_quick_shot): aims
-#     player→blade (the blade tracks the cursor via ROM-clamped IK, so aim is
-#     accurate and can never point behind the player) at the fixed quick/pass power.
+# Wrister release. HARD BINARY — a quick pass and a charged wrister are two
+# distinct releases, with NO blend between them. Which one fires is decided by the
+# INPUT at the call site (not any threshold in here) and passed in as is_quick_pass:
+#   - QUICK PASS (the dedicated quick_pass button, via _fire_quick_pass): aims
+#     blade→cursor — from the puck's position (the blade) toward the cursor, so
+#     the pass goes where you point — at the fixed quick/pass power.
 #   - WRISTER (the LMB shoot button, via _release_wrister): aims along the DRAG
 #     (the swept cursor direction) at charged power — the pure mouse-speed model
 #     above (wrister_power_t), fed by sweep_speed. The drag direction IS the aim —
@@ -194,26 +194,30 @@ static func release_wrister(
 		elevation_level: int,
 		cfg: WristerConfig,
 		charge_direction: Vector3 = Vector3.ZERO,
-		is_quick_shot: bool = false,
+		is_quick_pass: bool = false,
 		sweep_speed: float = 0.0,
 		stroke_travel: float = INF,
 		out: ShotResult = null) -> ShotResult:
 	var target := Vector3(mouse_world_pos.x, 0.0, mouse_world_pos.z)
 	var player_xz := Vector3(player_pos.x, 0.0, player_pos.z)
 
-	if is_quick_shot:
-		# QUICK SHOT — aim player→blade at fixed quick/pass power. Loft rides
-		# the same level table as charged shots: level 1 at pass power is the
-		# saucer pass, level 2 the flip.
+	if is_quick_pass:
+		# QUICK PASS — aim from the blade (the puck's position) toward the cursor,
+		# so the pass goes where you point. The old player→blade aim inherited the
+		# blade's lateral carry-side offset (the puck sits off to the forehand
+		# side), which pulled the pass off the cursor line — this reads blade→cursor
+		# directly. Falls back to player→cursor only when the cursor sits on the
+		# blade (degenerate, no direction). Loft rides the same level table as
+		# charged shots: level 1 at pass power is the saucer pass, level 2 the flip.
 		var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
-		var tap_dir: Vector3 = (blade_xz - player_xz).normalized()
-		if tap_dir.length_squared() < 0.0001:
-			tap_dir = (target - player_xz).normalized()
-		var tap_y: float = loft_y(cfg.quick_shot_power,
+		var pass_dir: Vector3 = (target - blade_xz).normalized()
+		if pass_dir.length_squared() < 0.0001:
+			pass_dir = (target - player_xz).normalized()
+		var tap_y: float = loft_y(cfg.quick_pass_power,
 				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 		return ShotResult.make(
-				Vector3(tap_dir.x, tap_y, tap_dir.z).normalized(),
-				cfg.quick_shot_power, out)
+				Vector3(pass_dir.x, tap_y, pass_dir.z).normalized(),
+				cfg.quick_pass_power, out)
 
 	# WRISTER — aim along the drag, power from the pure mouse-speed model with
 	# the travel-gated ceiling (wrister_power_t). Falls back to player→mouse

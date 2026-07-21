@@ -228,6 +228,24 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 const WALKOUT_POST_CLEARANCE_M: float = 0.9
 const WALKOUT_FRONT_M: float = 0.7
 
+# The WHEEL (5v5 only — breakout plan §B): from at/behind our own goal line,
+# the carry around the BACK of the cage and out the far half-wall — the
+# researched escape when the retriever has a step on the chaser (the net is
+# the screen; a committed F1 can't corner with him). The straight route to
+# any far-side destination crosses the cage and prunes, and the walkouts
+# only step to the near posts, so without these the behind-net retriever had
+# no representable way to KEEP SKATING. Priced as an honest TWO-LEG carry
+# through the behind-net apex (each leg runs the same lane/safety reads as
+# every other candidate, defenders projected through leg one), so it wins
+# exactly when the wheel is genuinely on: the escape-speed gate makes a
+# committed same-side chaser read as beaten, while a waiting far-side body
+# kills leg two. Exit depth = the top of the low battle ice
+# (AIZoneCoverage.LOW_ZONE_DEPTH_M — the first stride of open wall past the
+# boards battles); apex = the middle of the behind-net alley (cage back +
+# half the gap to the boards).
+const WHEEL_EXIT_UP_ICE_M: float = 8.0
+const WHEEL_APEX_CLEARANCE_M: float = 0.75
+
 # Zone-exit "wheel" routes — two extra long-range carry candidates up
 # each boards lane to just past our own blue line, generated only while
 # the carrier is in its own half. The slot anchor is the only other
@@ -436,10 +454,13 @@ var shot_release_offset: Vector3 = Vector3.ZERO
 var last_carry_anchor: Vector3 = Vector3.ZERO
 
 # Set when intent commits to DUMP: the world spot to fire the puck at (no
-# receiver), and whether it's a soft flip (dump-and-chase into the OZ corner) vs a
-# hard rim (clearing our own zone). Read by the state machine's dump release.
+# receiver), and the delivery kind — a soft flip (dump-and-chase into the OZ
+# corner), a FLAT rim up our own wall (5v5 — the bank-pass delivery the wall
+# winger meets; breakout plan §B), or the HIGH chip clear (neither flag).
+# Read by the state machine's dump release.
 var dump_target: Vector3 = Vector3.INF
 var dump_is_soft: bool = false
+var dump_is_rim: bool = false
 
 # ── Puck-protect mirror (read by the state machine's carry blade aim) ────────
 # Where in the blade's handling envelope the puck is safest right now, as an
@@ -508,6 +529,10 @@ var _scratch_opponent_vels: Array[Vector3] = []
 # reachable-set model reads each defender's real Agility/Size reach. Filled
 # alongside the positions in _build_action_opponents_lists.
 var _scratch_opponent_caps: Array[AISkaterCaps] = []
+# Sprint pools index-matched to _scratch_opponents, the exhaustion lockout
+# folded in as 0.0 — the counter-rush racer's stamina-gated race cap
+# (counter_rush_cost / BotSprintRules.race_speed).
+var _scratch_opponent_stamina: Array[float] = []
 # Opponent positions advanced to the RELEASE instant — current pos + velocity ×
 # the commit→release windup (BOT_WRISTER_LOOKAHEAD_S). Both the wrister SHOOT
 # lane and the charged PASS lane/reception fire ~135 ms after the intent commits,
@@ -923,9 +948,16 @@ func _pick_action(ctx: RoleContext) -> void:
 	var wrister_goalie_down: bool = false
 	var wrister_seal_x: float = 0.0
 	var wrister_seal_tall: bool = false
+	var wrister_hands: Vector4 = Vector4.INF
+	var wrister_pads: Vector4 = Vector4.INF
 	var opp_goalie_state: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
 	if opp_goalie_state != null:
 		wrister_goalie_down = opp_goalie_state.is_down()
+		# Hand + pad positions off the same replicated pose (hole-model v3):
+		# the HIGH cover races from where the glove/blocker actually are,
+		# the LOW cover from the measured pad edges.
+		wrister_hands = opp_goalie_state.hands_read(ctx.attacking_goal_pos.z)
+		wrister_pads = opp_goalie_state.pads_read(ctx.attacking_goal_pos.z)
 		wrister_five_hole = GoalieBehaviorRules.five_hole_gap_m(
 				wrister_goalie_down, opp_goalie_state.five_hole_openness)
 		# Post-seal stance (VH/RVH): the goalie is committed to a post and the
@@ -998,7 +1030,7 @@ func _pick_action(ctx: RoleContext) -> void:
 				sample_speed, wrister_unsettled, _scratch_opponent_caps,
 				wrister_five_hole, wrister_goalie_down,
 				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-				_scratch_option_receiver_pos)
+				_scratch_option_receiver_pos, wrister_hands, wrister_pads)
 		if s > shoot_score:
 			shoot_score = s
 			_shot_sample_release = release
@@ -1263,19 +1295,20 @@ func _pick_action(ctx: RoleContext) -> void:
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist)
+					shot_screen_dist, wrister_hands, wrister_pads)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					ctx.self_aim_spread_rad,
-					wrister_seal_x, wrister_seal_tall, shot_screen_dist)
+					wrister_seal_x, wrister_seal_tall, shot_screen_dist,
+					wrister_hands, wrister_pads)
 			shot_power_t = AIActionScoring.best_shot_power_t(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist)
+					shot_screen_dist, wrister_hands, wrister_pads)
 			shot_release_offset = _shot_sample_offset
 			if _shot_sample_backhand:
 				# The controller applies backhand_power_coefficient to the FINAL
@@ -1299,6 +1332,7 @@ func _pick_action(ctx: RoleContext) -> void:
 		new_intent = INTENT_DUMP
 		dump_target = dump_result[1]
 		dump_is_soft = dump_result[2]
+		dump_is_rim = dump_result[3]
 	else:
 		# Not firing. Advance the hold clock only while the developing play is the
 		# reason (it out-scores plain carrying); a normal carry resets it so the
@@ -1326,6 +1360,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents.clear()
 	_scratch_opponent_vels.clear()
 	_scratch_opponent_caps.clear()
+	_scratch_opponent_stamina.clear()
 	_scratch_opponents_release.clear()
 	_scratch_our_defenders.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
@@ -1336,6 +1371,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 			_scratch_opponents.append(s.position)
 			_scratch_opponent_vels.append(s.velocity)
 			_scratch_opponent_caps.append(ctx.caps_by_peer.get(peer_id))
+			_scratch_opponent_stamina.append(0.0 if s.sprint_locked else s.stamina)
 			_scratch_opponents_release.append(AITrajectory.predict_at(
 					s.position, s.velocity, SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S))
 		else:
@@ -1875,7 +1911,8 @@ func _counter_exposure_cost(ctx: RoleContext, loss_point: Vector3,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders,
 			recover_from, ctx.self_max_speed,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
-			_scratch_exposure_mate_etas, _scratch_exposure_threat_memo)
+			_scratch_exposure_mate_etas, _scratch_exposure_threat_memo,
+			_scratch_opponent_stamina)
 
 
 # Rotation time: how long the bot needs to rotate facing to point at
@@ -2092,6 +2129,23 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			if walk_total > best_score:
 				best_score = walk_total
 				best_pos = walkout
+		# WHEEL exits (5v5, own end only — see WHEEL_* doc): the far half-wall
+		# via the behind-net apex. Only priced for destinations whose straight
+		# route the cage blocks — a side the straight line reaches is already
+		# covered by the normal candidates above.
+		if ctx.team_size >= 5 and own_goal_dir * self_pos.z > 0.0:
+			var wheel_x: float = GameRules.RINK_HALF_WIDTH - CARRY_EXIT_WALL_INSET_M
+			var wheel_z: float = own_goal_dir \
+					* (GameRules.GOAL_LINE_Z - WHEEL_EXIT_UP_ICE_M)
+			for side: float in [-1.0, 1.0]:
+				var wheel := Vector3(side * wheel_x, 0.0, wheel_z)
+				if not AIActionScoring.carry_path_blocked_by_net(self_pos, wheel):
+					continue
+				var wheel_total: float = _score_wheel_candidate(
+						ctx, wheel, our_goalie, maxf(best_score, cont_bound))
+				if wheel_total > best_score:
+					best_score = wheel_total
+					best_pos = wheel
 
 	# Evasion seam — the reachable-set escape, in its objective-DIRECTED form
 	# (best_evade_point_toward, computed once per re-eval in _pick_action): the
@@ -2161,7 +2215,8 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var defending_goal: Vector3 = ctx.defending_goal_pos
 	var target: Vector3
 	var is_soft: bool
-	if AIActionScoring.in_offensive_zone(self_pos, defending_goal):
+	var in_own_zone: bool = AIActionScoring.in_offensive_zone(self_pos, defending_goal)
+	if in_own_zone:
 		target = AIActionScoring.dump_clear_target(self_pos, -ctx.own_goal_dir)
 		is_soft = false
 	elif AIActionScoring.past_center_toward_attack(self_pos, attacking_goal) \
@@ -2169,7 +2224,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 		target = AIActionScoring.dump_in_target(self_pos, attacking_goal)
 		is_soft = true
 	else:
-		return [-INF, Vector3.INF, false]
+		return [-INF, Vector3.INF, false, false]
 
 	# Our chasers = teammates + ourselves; theirs = the opponents already gathered.
 	_scratch_our_chasers.clear()
@@ -2183,19 +2238,122 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 	concede += _counter_exposure_cost(ctx, target, 1.0 - recovery,
 			ctx.self_pos, our_goalie)
+	var nearest_our: float = INF
+	for c: Vector3 in _scratch_our_chasers:
+		nearest_our = minf(nearest_our, c.distance_to(target))
+	# Whoever meets the cleared/dumped puck races it at our own top speed
+	# (Speed) — a faster chaser reaches it sooner, so the decay bites less.
+	var chase_decay: float = AIActionScoring.delay_discount(
+			nearest_our / maxf(ctx.self_max_speed, 0.001))
+	var value: float = AIActionScoring.position_potential(
+			target, attacking_goal, _scratch_opponents)
 	var gain: float = 0.0
 	if is_soft:
-		var nearest_our: float = INF
-		for c: Vector3 in _scratch_our_chasers:
-			nearest_our = minf(nearest_our, c.distance_to(target))
-		# Dump-and-CHASE: we race the dumped puck at our own top speed (Speed) —
-		# a faster chaser reaches it sooner, so the decay bites less.
-		var chase_decay: float = AIActionScoring.delay_discount(
-				nearest_our / maxf(ctx.self_max_speed, 0.001))
-		var value: float = AIActionScoring.position_potential(
-				target, attacking_goal, _scratch_opponents)
+		# Dump-and-CHASE into the OZ corner.
 		gain = recovery * value * chase_decay
-	return [gain - concede, target, is_soft]
+	elif ctx.team_size >= 5 and in_own_zone:
+		# The rim family (5v5 — breakout plan §B): the own-zone clear is a
+		# DELIVERY, not a pure concession — the wall target is exactly where
+		# the half-wall winger posts (Phase A guarantees the post is manned
+		# through the retrieval), and chase_recovery already races OUR bodies
+		# against theirs at the exit. Two deliveries compete:
+		#   RIM — flat and hard along the wall to the target. Receivable at
+		#     pace by the posted winger, but a stick in the wall lane picks
+		#     it off: completion = the lane model over the actual flight.
+		#   CHIP — the HIGH flip over every stick into the same ice. Nothing
+		#     intercepts it in flight (it clears blades the way the saucer
+		#     does, higher), but nobody can PLAY it in flight either, and it
+		#     lands as a bouncing 50/50 — the receiving side pays the HIGH
+		#     loft's full hang time (2·vy/g, the airborne+settle window the
+		#     rim's on-the-tape arrival never pays) before the race even
+		#     starts. That measured time cost is the honest rim-vs-chip
+		#     trade: a mostly-clear wall lane beats it, a camped one doesn't.
+		# 3v3 keeps the shipped zero-gain clear (5v5-exclusive by decision,
+		# plan §5): possession is the whole game there, and the panic chip's
+		# last-resort ordering must not move.
+		var origin: Vector3 = _pass_origin(ctx)
+		# The rim RIDES THE BOARDS: from a corner or behind-net origin the
+		# real delivery goes out to the near wall and wraps down it to the
+		# target — two legs through a wall waypoint at the origin's depth.
+		# An origin already on the wall degenerates to the straight line.
+		# Pricing the chord instead threaded a behind-net "rim" through the
+		# middle of our own zone — lane blocked by the forecheck, loss point
+		# in front of our net — which buried the clear at ~−0.4 exactly when
+		# it's the right play (breakout plan, iteration 5). Same fix family
+		# as the net-aware time_to_arrive: price the route, not the fiction.
+		var wall_wp := Vector3(target.x, 0.0, origin.z)
+		var leg1_len: float = absf(wall_wp.x - origin.x)
+		var leg1_lane: float = 1.0
+		if leg1_len > 0.5:
+			leg1_lane = AIActionScoring.lane_clear(
+					origin, wall_wp, _scratch_opponents,
+					AIActionScoring.PASS_SPEED_M_S,
+					_scratch_opponent_vels, _scratch_opponent_caps, true)
+		var leg2_lane: float = AIActionScoring.lane_clear(
+				wall_wp, target, _scratch_opponents,
+				AIActionScoring.PASS_SPEED_M_S,
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
+		var rim_lane: float = leg1_lane * leg2_lane
+		var flight_t: float = (leg1_len + wall_wp.distance_to(target)) \
+				/ maxf(AIActionScoring.PASS_SPEED_M_S, 1.0)
+		var rim_gain: float = rim_lane * recovery * value \
+				* AIActionScoring.delay_discount(flight_t) * chase_decay
+		# The clear's concessions are priced LOCAL + counter-rush (see
+		# threat_local_shoot): the gradient surface's positional floor made
+		# conceding at center-ice boards read like half a slot chance, which
+		# buried the clear at ~−0.5 under exactly the committed forecheck it
+		# should relieve. The immediate danger at each loss point is the
+		# local shot threat; the future carry-in danger is the
+		# counter-exposure term, which sees the covering set our breakout
+		# posts provide. 5v5-scoped with the rest of this branch — the 3v3
+		# panic-chip ordering keeps the shipped pricing.
+		# An intercepted rim dies on whichever leg is weaker — price the
+		# loss where the pick actually happens, replacing the share of the
+		# target-spot concession the interception forecloses.
+		var loss_leg_from: Vector3 = origin
+		var loss_leg_to: Vector3 = wall_wp
+		if leg1_len <= 0.5 or leg2_lane < leg1_lane:
+			loss_leg_from = wall_wp
+			loss_leg_to = target
+		# Every loss mode pays BOTH halves — local shot threat at the loss
+		# spot + the possession's counter/cycle value from there. A pinch
+		# pick on our wall is locally cheap (sharp angle) but hands them a
+		# live in-zone possession; pricing only the local half made rimming
+		# into a camped lane read acceptable.
+		var rim_loss_point: Vector3 = AIActionScoring.lane_loss_point(
+				loss_leg_from, loss_leg_to, _scratch_opponents,
+				AIActionScoring.PASS_SPEED_M_S, _scratch_opponent_vels)
+		var rim_concede: float = AIActionScoring.turnover_cost_local(
+				rim_loss_point, 1.0 - rim_lane, defending_goal, our_goalie,
+				GameRules.NET_HALF_WIDTH, _scratch_our_defenders) \
+				+ _counter_exposure_cost(ctx, rim_loss_point, 1.0 - rim_lane,
+						ctx.self_pos, our_goalie) \
+				+ AIActionScoring.turnover_cost_local(
+						target, rim_lane * (1.0 - recovery), defending_goal,
+						our_goalie, GameRules.NET_HALF_WIDTH,
+						_scratch_our_defenders) \
+				+ _counter_exposure_cost(ctx, target,
+						rim_lane * (1.0 - recovery), ctx.self_pos, our_goalie)
+		var chip_concede: float = AIActionScoring.turnover_cost_local(
+				target, 1.0 - recovery, defending_goal, our_goalie,
+				GameRules.NET_HALF_WIDTH, _scratch_our_defenders) \
+				+ _counter_exposure_cost(ctx, target, 1.0 - recovery,
+						ctx.self_pos, our_goalie)
+		# The chip's whole airborne + landing-bounce window (2·vy/g at the
+		# HIGH loft's launch speed) is dead time nobody can play the puck
+		# through — the rim's on-the-tape arrival never pays it. The chip
+		# flies the CHORD (air ignores boards).
+		var chip_hang_s: float = 2.0 * GameRules.DEFAULT_LOFT_VY_HIGH_M_S \
+				/ AIActionScoring.GRAVITY_M_S2
+		var chip_flight_t: float = origin.distance_to(target) \
+				/ maxf(AIActionScoring.PASS_SPEED_M_S, 1.0)
+		var chip_gain: float = recovery * value \
+				* AIActionScoring.delay_discount(chip_flight_t + chip_hang_s) \
+				* chase_decay
+		if rim_gain - rim_concede > chip_gain - chip_concede:
+			return [rim_gain - rim_concede, target, false, true]
+		return [chip_gain - chip_concede, target, false, false]
+	return [gain - concede, target, is_soft, false]
 
 
 # EV of one movement carry candidate — the uniform scoring every
@@ -2423,6 +2581,87 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	# the spot this carry commits him to (plan §6: the one-up-one-back read).
 	cost += _counter_exposure_cost(ctx, strip_point, 1.0 - keep_prob,
 			candidate, our_goalie)
+	return benefit - cost
+
+
+# EV of a WHEEL candidate (see the WHEEL_* doc): the two-leg carry around
+# the back of the cage — self → the behind-net apex → the far half-wall
+# exit. The same pricing pieces as _score_move_candidate, applied PER LEG
+# with the defense projected through leg one, because every straight-line
+# read for this route would sample the inside of the cage. The escape gate
+# (apply_escape) is what makes the wheel price well exactly when the
+# retriever has a step on his chaser — the researched trigger — while a
+# body already waiting on the far side kills leg two honestly.
+func _score_wheel_candidate(ctx: RoleContext, dest: Vector3,
+		our_goalie: Vector3, best_so_far: float) -> float:
+	var self_pos: Vector3 = ctx.self_pos
+	var apex := Vector3(0.0, 0.0, ctx.own_goal_dir
+			* (GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH + WHEEL_APEX_CLEARANCE_M))
+	var t1: float = AIActionScoring.time_to_arrive(
+			self_pos, apex, ctx.self_velocity, ctx.self_max_speed,
+			ctx.self_max_accel)
+	# Carry pace through the apex, consistent with the arrival model.
+	var to_dest: Vector3 = dest - apex
+	to_dest.y = 0.0
+	var apex_speed: float = minf(
+			self_pos.distance_to(apex) / maxf(t1, 0.001), ctx.self_max_speed)
+	var v_apex: Vector3 = to_dest.normalized() * apex_speed \
+			if to_dest.length_squared() > 0.0001 else Vector3.ZERO
+	var t2: float = AIActionScoring.time_to_arrive(
+			apex, dest, v_apex, ctx.self_max_speed, ctx.self_max_accel)
+	# The same exact ceiling ladder as _score_move_candidate, per leg.
+	var decay: float = AIActionScoring.delay_discount(t1 + t2)
+	if decay <= best_so_far:
+		return -INF
+	var lane1: float = AIActionScoring.carry_lane_clearance(
+			self_pos, apex, t1, _scratch_opponents, _scratch_opponent_vels,
+			ctx.self_max_speed)
+	if lane1 <= 0.0 or lane1 * decay <= best_so_far:
+		return -INF
+	var cur_puck: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
+	var apex_puck: Vector3 = _puck_pos_at(apex, ctx.attacking_goal_pos)
+	var dest_puck: Vector3 = _puck_pos_at(dest, ctx.attacking_goal_pos)
+	var safety1: float = AIActionScoring.carry_safety(
+			cur_puck, apex_puck, t1, _scratch_opponents,
+			_scratch_opponent_vels, _scratch_opponent_caps, true)
+	if lane1 * decay * safety1 <= best_so_far:
+		return -INF
+	# Leg two starts where the defense has skated to during leg one.
+	_project_opponents_to(ctx, t1, _scratch_opponents_cont)
+	var lane2: float = AIActionScoring.carry_lane_clearance(
+			apex, dest, t2, _scratch_opponents_cont, _scratch_opponent_vels,
+			ctx.self_max_speed)
+	if lane2 <= 0.0:
+		return -INF
+	var safety2: float = AIActionScoring.carry_safety(
+			apex_puck, dest_puck, t2, _scratch_opponents_cont,
+			_scratch_opponent_vels, _scratch_opponent_caps, true)
+	var keep: float = safety1 * safety2
+	var ceiling: float = lane1 * lane2 * decay * keep
+	if ceiling <= best_so_far:
+		return -INF
+	_project_opponents_to(ctx, t1 + t2, _scratch_opponents_cont)
+	var dest_score: float = _score_at(ctx, dest, self_pos,
+			_scratch_opponents_cont, _goalie_now(ctx),
+			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
+	var benefit: float = dest_score * ceiling
+	if keep >= 1.0:
+		return benefit
+	# The strip is priced on whichever leg is the unsafe one.
+	var strip_point: Vector3
+	if safety1 <= safety2:
+		strip_point = AIActionScoring.carry_strip_point(
+				cur_puck, apex_puck, t1, _scratch_opponents,
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
+	else:
+		_project_opponents_to(ctx, t1, _scratch_opponents_cont)
+		strip_point = AIActionScoring.carry_strip_point(
+				apex_puck, dest_puck, t2, _scratch_opponents_cont,
+				_scratch_opponent_vels, _scratch_opponent_caps, true)
+	var cost: float = AIActionScoring.turnover_cost(
+			strip_point, 1.0 - keep, ctx.defending_goal_pos,
+			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+	cost += _counter_exposure_cost(ctx, strip_point, 1.0 - keep, dest, our_goalie)
 	return benefit - cost
 
 
@@ -2870,7 +3109,14 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 					GameRules.NET_HALF_WIDTH, _scratch_opponents_pass,
 					pass_speed, feed_unsettled)
 		elif slot == AIRoleSlots.Slot.BREAKOUT_STRONG \
-				or slot == AIRoleSlots.Slot.OUTLET:
+				or slot == AIRoleSlots.Slot.OUTLET \
+				or slot == AIRoleSlots.Slot.BREAKOUT_D2:
+			# BREAKOUT_D2 (5v5): the OVER — the D-to-D behind the net that
+			# reverses the flow when F1 overcommits strong-side. Holding a
+			# beat for the partner still SKATING to the valve is the
+			# researched play (unlike the weak-side valve below, which is
+			# always priceable live); the min-speed gate below means a
+			# partner already parked there never reads as developing.
 			feed = _developing_outlet_feed(ctx, tm, our_goalie, self_facing, ctx.caps_by_peer.get(pid))
 		if feed > best:
 			best = feed

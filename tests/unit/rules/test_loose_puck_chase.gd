@@ -21,9 +21,11 @@ func _states(entries: Dictionary) -> Dictionary:
 	return entries
 
 
-func _caps(max_speed: float) -> AISkaterCaps:
+func _caps(max_speed: float, sprint_mult: float = -1.0) -> AISkaterCaps:
 	var c := AISkaterCaps.new()
 	c.max_speed = max_speed
+	if sprint_mult > 0.0:
+		c.sprint_speed_mult = sprint_mult
 	return c
 
 
@@ -150,6 +152,99 @@ func test_stale_incumbent_falls_back_to_election() -> void:
 	var pid: int = AILoosePuckChase.elect(
 			states, [100, 200], Vector3.ZERO, Vector3.ZERO, 999)
 	assert_eq(pid, 100, "stale incumbent gives no one the discount — nearest wins")
+
+
+# ── Path race (fast pucks) ───────────────────────────────────────────────────
+# A rim's race runs on its predicted path, not its current position — the
+# tail-chaser a metre behind it can never finish the race the position read
+# says he's winning (docs/breakout-plan.md, iteration 3).
+
+func test_rim_elects_downstream_skater_over_tail_chaser() -> void:
+	# Hard rim up the wall: teammate 100 trails it by 1.5 m at 8 m/s (the
+	# nearest-right-now read) but the puck outruns him for the whole
+	# horizon; teammate 200 stands 24 m downstream, 2 m off the wall — the
+	# rim comes TO him. Position-based election picked the tail-chaser.
+	var states := {
+		100: _skater(Vector3(12, 0, -11.5), Vector3(0, 0, 8)),
+		200: _skater(Vector3(10, 0, 14)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(12, 0, -10), Vector3(0, 0, 15), -1)
+	assert_eq(pid, 200, "the rim's path elects the downstream skater, not the tail-chaser")
+
+
+func test_path_intercept_time_reads_arrival_of_the_puck() -> void:
+	# Skater parked in a fast puck's path: his intercept time is when the
+	# PUCK arrives (~20 m at rim pace → ~1.5 s), not his skate time to the
+	# puck's current spot (20 m from rest ≈ 2.9 s).
+	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(
+			Vector3(12, 0, 0), Vector3(0, 0, 15))
+	var dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S / float(AILoosePuckChase.RACE_STEPS)
+	var t: float = AILoosePuckChase.path_intercept_time(
+			traj, dt, Vector3(12, 0, 20), Vector3.ZERO, REF)
+	assert_between(t, 1.0, 2.0, "intercept ≈ the puck's own arrival at the parked skater")
+
+
+func test_rim_race_not_lost_for_downstream_defender() -> void:
+	# loose_puck_race_lost on the same rim: the opponent tail-chasing 1.5 m
+	# back "wins" every current-position ETA, but can never finish; the
+	# downstream defender's path intercept is the only makeable one, so HIS
+	# race is alive. (Before the path race he declined here and the rim
+	# rode the zone untouched — the breakout-harness dither.)
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(12, 0, -10)
+	snap.puck_state.velocity = Vector3(0, 0, 15)
+	snap.skater_states[1] = _skater(Vector3(10, 0, 14))
+	snap.skater_states[2] = _skater(Vector3(12, 0, -11.5), Vector3(0, 0, 8))
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(10, 0, 14), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_false(lost, "the downstream defender's path intercept keeps the race alive")
+	# Control: the same puck SETTLED at the opponent's feet is honestly lost.
+	snap.puck_state.position = Vector3(12, 0, -11.0)
+	snap.puck_state.velocity = Vector3.ZERO
+	var lost_settled: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(10, 0, 14), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_true(lost_settled, "a settled puck at the opponent's feet is honestly lost")
+
+
+# ── Sprint-aware races (BotSprintRules.race_speed via race_vmax) ─────────────
+
+func test_sprint_gear_wins_the_long_race() -> void:
+	# Equal cruise speed, equal 20 m race — but 100 is a burner (strong-
+	# Speed sprint ceiling 1.16) and 200 a plodder (1.07). Cruise-priced
+	# reads called this a tie broken by peer id; the sprint-aware race
+	# elects the extra gear. This is Speed's headline separation finally
+	# reaching the AI's race reads.
+	var states := {
+		100: _skater(Vector3(0, 0, 20)),
+		200: _skater(Vector3(20, 0, 20)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(10, 0, 0), Vector3.ZERO, -1,
+			{100: _caps(9.0, 1.16), 200: _caps(9.0, 1.07)})
+	assert_eq(pid, 100, "the burner's sprint gear wins an otherwise even race")
+	var flipped: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(10, 0, 0), Vector3.ZERO, -1,
+			{100: _caps(9.0, 1.07), 200: _caps(9.0, 1.16)})
+	assert_eq(flipped, 200, "and it is the gear deciding it, not the peer id")
+
+
+func test_gassed_skater_loses_the_race_to_fresh_legs() -> void:
+	# Same builds, same distance — but 100's pool is nearly empty (below
+	# the sprint engage floor) while 200 is fresh. Fresh legs win the race
+	# a stamina-blind read called a tie.
+	var states := {
+		100: _skater(Vector3(0, 0, 20)),
+		200: _skater(Vector3(20, 0, 20)),
+	}
+	states[100].stamina = 0.1
+	states[200].stamina = 1.0
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(10, 0, 0), Vector3.ZERO, -1)
+	assert_eq(pid, 200, "fresh legs beat a gassed skater over the same ground")
 
 
 func test_dead_puck_elects_nobody() -> void:

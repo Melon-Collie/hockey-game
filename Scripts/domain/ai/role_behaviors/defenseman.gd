@@ -57,6 +57,18 @@ const DBACK_X_M: float = 5.0
 const DBACK_PUCK_SHADE: float = 0.2
 const DBACK_SHADE_MAX_M: float = 1.5
 
+# ── O-zone rim keep-ins (breakout plan §C.3) ─────────────────────────────────
+# A board-hugging clear travelling up a point's wall would sail past the
+# walk-the-line stands (they hold the line OFF the wall) and out of the zone
+# untouched — the exact hole real rims exploit. The read classifies the
+# flight the same way the breakout side does (loose, inside the wall band,
+# fired toward our end) and is priced as the honest intercept race; losing
+# the race means holding the station, not chasing a gone puck.
+const RIM_WALL_BAND_M: float = 1.6       # boards-hugging corridor: ~a body off the glass
+const RIM_MIN_SPEED_M_S: float = 8.0     # a FIRED clear — slower loose pucks are the
+										 # chase election's ordinary business
+const RIM_KEEPIN_WALL_INSET_M: float = 1.0
+
 
 static func decide(ctx: RoleContext, slot: int) -> RoleDecision:
 	match slot:
@@ -87,6 +99,17 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	var opp_net: Vector3 = ctx.attacking_goal_pos
 	var line_z: float = -own_dir * (GameRules.BLUE_LINE_Z + POINT_INSET_M)
 	var side: float = ctx.strong_x if is_strong else -ctx.strong_x
+
+	# Keep-in pre-empt (see the RIM_* doc): a rim coming up MY wall — step to
+	# the boards at the line and kill it, arriving at pace (blade to the wall
+	# lane), instead of walking the line while it sails past. The weak D's
+	# middle cover on the step is the existing emergent rotation; if the race
+	# is lost the branch never fires and the stand below holds.
+	var keepin: Vector3 = _wall_rim_keepin(ctx, side)
+	if keepin.is_finite():
+		d.target_position = keepin
+		d.arrive_at_speed = true
+		return d
 
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
@@ -123,7 +146,7 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 			if not AIRoleHelpers.is_legal_position(c):
 				continue
 			if not AIRoleHelpers.race_home_feasible(
-					c, ctx.self_max_speed, ctx.self_max_accel):
+					c, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel):
 				continue
 			if AIRoleHelpers.too_close_to_teammate(c, teammates):
 				continue
@@ -141,9 +164,46 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 		# behind the line): sag down the retreat line only as far as the
 		# counter paths demand — sag-to-even, not sag-to-center-ice.
 		best_pos = AIRoleHelpers.most_forward_feasible(
-				base_stand, ctx.self_max_speed, ctx.self_max_accel)
+				base_stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	d.target_position = best_pos
 	return d
+
+
+# The keep-in intercept stand for a rim coming up this point's wall, or
+# Vector3.INF when there is none / the race is lost. The classification is
+# the shared rim-flight read (loose puck, inside the wall band on MY side,
+# fired at rim pace toward our end); the stand is my wall at the blue line,
+# just inside the zone; the gate is the intercept race — the puck's time to
+# the line (undecayed pace: underestimating its time only makes the read
+# bail earlier, the conservative direction) against my calibrated arrival.
+static func _wall_rim_keepin(ctx: RoleContext, side: float) -> Vector3:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return Vector3.INF
+	var puck: PuckNetworkState = ctx.snapshot.puck_state
+	if puck.carrier_peer_id != -1:
+		return Vector3.INF
+	if signf(puck.position.x) != signf(side) \
+			or GameRules.INNER_HALF_WIDTH - absf(puck.position.x) > RIM_WALL_BAND_M:
+		return Vector3.INF
+	var own_dir: float = ctx.own_goal_dir
+	var speed: float = Vector2(puck.velocity.x, puck.velocity.z).length()
+	# Fired, and travelling OUT of the zone (toward our end).
+	if speed < RIM_MIN_SPEED_M_S or puck.velocity.z * own_dir <= 0.0:
+		return Vector3.INF
+	var stand := Vector3(
+			side * (GameRules.INNER_HALF_WIDTH - RIM_KEEPIN_WALL_INSET_M),
+			0.0, -own_dir * (GameRules.BLUE_LINE_Z + 0.5))
+	# Already escaped past the line → gone; the TRANS flip owns it.
+	if (puck.position.z - stand.z) * own_dir > 0.0:
+		return Vector3.INF
+	var t_puck: float = absf(puck.position.z - stand.z) \
+			/ maxf(absf(puck.velocity.z), 0.001)
+	var t_me: float = AIActionScoring.time_to_arrive(
+			ctx.self_pos, stand, ctx.self_velocity,
+			ctx.self_max_speed, ctx.self_max_accel)
+	if t_me > t_puck:
+		return Vector3.INF
+	return stand
 
 
 # ── FORECHECK: play the lane between the pinch and the sag ──────────────────
@@ -173,7 +233,7 @@ static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	var our_net: Vector3 = ctx.defending_goal_pos
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			Vector3(lane_x, 0.0, pinch_z), ctx.self_max_speed, ctx.self_max_accel)
+			Vector3(lane_x, 0.0, pinch_z), AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	return d
 
 
@@ -198,7 +258,7 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 	var our_net: Vector3 = ctx.defending_goal_pos
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	target = AIRoleHelpers.most_forward_feasible(
-			target, ctx.self_max_speed, ctx.self_max_accel)
+			target, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	d.target_position = target
 	# The rush advances every tick — pace the waypoint, don't brake at it.
 	d.arrive_at_speed = true

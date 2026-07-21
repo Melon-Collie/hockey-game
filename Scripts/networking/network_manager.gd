@@ -259,6 +259,13 @@ var _peer_attributes: Dictionary[int, PlayerAttributes] = {}
 # power matches what the client predicted with its own sensitivity.
 var _peer_shot_sensitivity: Dictionary[int, float] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
+# Host-only: EMA of the host's OWN round-trip measurement to each peer
+# (host_ping/host_pong). Backs _peer_ping_ms on the host — the trusted RTT that
+# lag-comp claim validation reads via get_peer_ping_ms — so a modified client
+# can't forge the value (the old client-self-reported report_ping). Float here
+# for smoothing; the rounded int is mirrored into _peer_ping_ms for consumers.
+var _peer_rtt_ema_ms: Dictionary[int, float] = {}
+const _PEER_RTT_EMA_ALPHA: float = 0.3
 
 # Host: peers that have connected but not yet sent request_join, keyed to
 # their connect time (local_time()). Swept in _process — a peer that never
@@ -650,6 +657,7 @@ func _on_peer_disconnected(id: int) -> void:
 	_kicked_peers.erase(id)
 	# Per-peer telemetry books, else a stale peer's ping lingers on scoreboards.
 	_peer_ping_ms.erase(id)
+	_peer_rtt_ema_ms.erase(id)
 	_peer_loss_rates.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
@@ -672,8 +680,7 @@ func _on_connected_to_server() -> void:
 	# correct. Valid here — the unique id is assigned before connected_to_server.
 	_peer_attributes[local_peer_id()] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
-			local_attrs.speed, local_attrs.agility, local_attrs.hands,
-			local_attrs.size, local_attrs.physical, local_attrs.shot,
+			local_attrs.height, local_attrs.skating, local_attrs.skill, local_attrs.checking,
 			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
 			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity)
 	client_connected.emit()
@@ -722,6 +729,7 @@ func _close() -> void:
 func prepare_for_new_game() -> void:
 	_input_batch_provider = Callable()
 	_peer_ping_ms.clear()
+	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
@@ -808,6 +816,7 @@ func reset() -> void:
 	_ws_loss_window_timer = 0.0
 	packet_loss_pct = 0.0
 	_peer_ping_ms.clear()
+	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
@@ -894,9 +903,11 @@ func _process(delta: float) -> void:
 	if _ping_timer >= _PING_INTERVAL:
 		_ping_timer = 0.0
 		if is_host and not is_offline_mode:
-			_broadcast_all_pings()
-		elif not is_host and _clock_sync != null and _clock_sync.is_ready:
-			report_ping.rpc_id(1, int(get_rtt_ms()))
+			_send_host_pings()      # host times each peer's RTT itself
+			_broadcast_all_pings()  # distribute the measured pings (display)
+		# Clients no longer self-report their RTT (report_ping removed) — the host
+		# measures it via host_ping/host_pong, so the ping backing lag-comp claim
+		# validation can't be forged by a modified client.
 
 	if not is_host and _input_batch_provider.is_valid():
 		_input_timer += capped_delta
@@ -987,9 +998,8 @@ func _broadcast_state() -> void:
 # ── RPCs ──────────────────────────────────────────────────────────────────────
 @rpc("any_peer", "reliable")
 func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10,
-		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM,
+		attr_height: int = PlayerAttributes.HEIGHT_MEDIUM, attr_skating: int = PlayerAttributes.TIER_AVERAGE,
+		attr_skill: int = PlayerAttributes.TIER_AVERAGE, attr_checking: int = PlayerAttributes.TIER_AVERAGE,
 		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0,
 		shot_power_sensitivity: float = 1.0) -> void:
 	if not is_host:
@@ -1026,12 +1036,12 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
 	_peer_numbers[sender_id] = clampi(jersey_number, 0, 99)
-	# Budget validation (not just per-level clamping): a modified client can
-	# send an over-budget 5/5/5/5 — only spreads within the point-buy budget
-	# are accepted; anything over-budget falls back to all-medium.
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
-			if PlayerAttributes.is_within_budget(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
-			else PlayerAttributes.all_medium()
+	# Legal-shape validation (not just per-level clamping): a modified client can
+	# send an illegal all-strong build — only the one-strong-one-weak shape (or
+	# all-average) is accepted; anything illegal falls back to all-average.
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_skating, attr_skill, attr_checking) \
+			if PlayerAttributes.is_legal_build(attr_height, attr_skating, attr_skill, attr_checking) \
+			else PlayerAttributes.all_average()
 	_peer_shot_sensitivity[sender_id] = clampf(shot_power_sensitivity, 0.25, 4.0)
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
@@ -1109,7 +1119,7 @@ func take_session_end_reason() -> String:
 func get_peer_attributes(peer_id: int) -> PlayerAttributes:
 	var attrs: PlayerAttributes = _peer_attributes.get(peer_id, null)
 	if attrs == null:
-		return PlayerAttributes.all_medium()
+		return PlayerAttributes.all_average()
 	return attrs
 
 # A peer's replicated Shot Power Sensitivity (host-side). Defaults to 1.0 for a
@@ -1152,13 +1162,12 @@ func update_lobby_attributes(attrs: PlayerAttributes) -> void:
 		return
 	_peer_attributes[local_peer_id()] = attrs
 	if not is_host:
-		request_update_attributes.rpc_id(1, attrs.speed, attrs.agility, attrs.hands,
-				attrs.size, attrs.physical, attrs.shot)
+		request_update_attributes.rpc_id(1, attrs.height, attrs.skating, attrs.skill, attrs.checking)
 
 
 # Client → host: update the sender's locked build from the lobby. The host
-# re-validates the point-buy budget (a modified client can send an over-budget
-# spread) and ignores a peer that never completed the join handshake.
+# re-validates the legal shape (a modified client can send an illegal all-strong
+# build) and ignores a peer that never completed the join handshake.
 #
 # No match-in-progress gate: _peer_attributes is consulted only at spawn, so a
 # stray mid-match edit can't perturb a live simulation, and a mid-match
@@ -1166,16 +1175,16 @@ func update_lobby_attributes(attrs: PlayerAttributes) -> void:
 # (game_initiated is unusable as a gate here — it's set true at start_offline /
 # start_client_lobby, i.e. throughout the pre-match lobby, not just in-game.)
 @rpc("any_peer", "reliable")
-func request_update_attributes(attr_speed: int, attr_agility: int, attr_hands: int,
-		attr_size: int, attr_physical: int, attr_shot: int) -> void:
+func request_update_attributes(attr_height: int, attr_skating: int, attr_skill: int,
+		attr_checking: int) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
 	if not _peer_names.has(sender_id):
 		return
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
-			if PlayerAttributes.is_within_budget(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot) \
-			else PlayerAttributes.all_medium()
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_skating, attr_skill, attr_checking) \
+			if PlayerAttributes.is_legal_build(attr_height, attr_skating, attr_skill, attr_checking) \
+			else PlayerAttributes.all_average()
 
 # Cap on inputs per RPC. Matches the host queue depth in RemoteController so a
 # malicious peer can't force the loop into hundreds of failed decode iterations
@@ -1272,6 +1281,48 @@ func receive_pong(client_send_time: float, host_time: float) -> void:
 			if not was_ready and _clock_sync.is_ready:
 				clock_ready.emit(),
 		[client_send_time, host_time], true)
+
+# ── Host-measured peer RTT ────────────────────────────────────────────────────
+# The host times a round trip to each peer ITSELF so lag-comp claim validation
+# (is_claim_stamp_plausible, via get_peer_ping_ms) reads a ping the host measured
+# rather than one the client self-reported. The old report_ping let a modified
+# client forge a large RTT — or never report at all — to widen its claim-stamp
+# "timestamp-shopping" window. Unreliable + routed through the net sim like the
+# clock-sync pings: a dropped probe just skips one sample (the EMA tolerates gaps)
+# and the dev latency sim is folded into the measurement.
+func _send_host_pings() -> void:
+	var t: float = local_time()
+	for peer_id: int in connected_peer_ids():
+		host_ping.rpc_id(peer_id, t)
+
+@rpc("authority", "unreliable")
+func host_ping(host_send_time: float) -> void:
+	if is_host:
+		return
+	# Echo the host's own timestamp straight back so it can measure the round trip.
+	NetworkSimManager.send(
+		func(t: float) -> void:
+			host_pong.rpc_id(1, t),
+		[host_send_time], false)
+
+@rpc("any_peer", "unreliable")
+func host_pong(host_send_time: float) -> void:
+	if not is_host:
+		return
+	# Capture the sender before the sim defers the callable (it loses RPC context).
+	var peer_id: int = multiplayer.get_remote_sender_id()
+	NetworkSimManager.send(
+		func(pid: int, sent: float) -> void:
+			_record_host_measured_rtt(pid, (local_time() - sent) * 1000.0),
+		[peer_id, host_send_time], false)
+
+func _record_host_measured_rtt(peer_id: int, sample_ms: float) -> void:
+	if sample_ms < 0.0 or not is_finite(sample_ms):
+		return
+	var prev: float = _peer_rtt_ema_ms.get(peer_id, -1.0)
+	var ema: float = sample_ms if prev < 0.0 else lerpf(prev, sample_ms, _PEER_RTT_EMA_ALPHA)
+	_peer_rtt_ema_ms[peer_id] = ema
+	_peer_ping_ms[peer_id] = int(roundf(ema))
 
 # Client-authoritative blade geometry rides the claim: the client sends the blade
 # it actually reached with (blade_curr + one-tick-prior blade_prev for the swept
@@ -1502,10 +1553,6 @@ func get_clock_correction_ms() -> float:
 		return 0.0
 	return _clock_sync.last_correction_ms
 
-@rpc("any_peer", "unreliable")
-func report_ping(rtt_ms: int) -> void:
-	_peer_ping_ms[multiplayer.get_remote_sender_id()] = rtt_ms
-
 func _broadcast_all_pings() -> void:
 	var pings: Dictionary[int, int] = {}
 	for pid: int in _peer_ping_ms:
@@ -1534,10 +1581,9 @@ func assign_player_slot(team_slot: int, team_id: int, jersey_color: Color, helme
 
 @rpc("authority", "reliable")
 func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10,
-		attr_speed: int = PlayerAttributes.LEVEL_MEDIUM, attr_agility: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_hands: int = PlayerAttributes.LEVEL_MEDIUM, attr_size: int = PlayerAttributes.LEVEL_MEDIUM,
-		attr_physical: int = PlayerAttributes.LEVEL_MEDIUM, attr_shot: int = PlayerAttributes.LEVEL_MEDIUM) -> void:
-	var attrs := PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot)
+		attr_height: int = PlayerAttributes.HEIGHT_MEDIUM, attr_skating: int = PlayerAttributes.TIER_AVERAGE,
+		attr_skill: int = PlayerAttributes.TIER_AVERAGE, attr_checking: int = PlayerAttributes.TIER_AVERAGE) -> void:
+	var attrs := PlayerAttributes.new(attr_height, attr_skating, attr_skill, attr_checking)
 	_peer_attributes[peer_id] = attrs
 	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number, attrs)
 
@@ -1750,9 +1796,9 @@ func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey
 	# fan-out so connected clients see the bot.
 	if is_offline_mode:
 		return
-	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_medium()
+	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_average()
 	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number,
-			attrs.speed, attrs.agility, attrs.hands, attrs.size, attrs.physical, attrs.shot)
+			attrs.height, attrs.skating, attrs.skill, attrs.checking)
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:
 	sync_existing_players.rpc_id(peer_id, player_data)

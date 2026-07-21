@@ -7,7 +7,7 @@ func _wrister_cfg() -> ShotMechanics.WristerConfig:
 	cfg.min_wrister_power = 8.0
 	cfg.max_wrister_power = 25.0
 	cfg.backhand_power_coefficient = 0.75
-	cfg.quick_shot_power = 12.0
+	cfg.quick_pass_power = 12.0
 	cfg.loft_vy_low = 2.2
 	cfg.loft_vy_high = 5.4
 	cfg.full_sweep_speed = 7.0
@@ -26,10 +26,10 @@ func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 	cfg.loft_vy_high = 5.4
 	return cfg
 
-# ── Wrister: quick shot branch ───────────────────────────────────────────────
+# ── Wrister: quick pass branch ───────────────────────────────────────────────
 
-func test_wrister_quick_shot_uses_quick_shot_power() -> void:
-	# is_quick_shot=true — fixed quick power regardless of any sweep speed.
+func test_wrister_quick_pass_uses_quick_pass_power() -> void:
+	# is_quick_pass=true — fixed quick power regardless of any sweep speed.
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,                   # player_pos
 		Vector3(10, 0, 0),              # mouse at (10, 0, 0)
@@ -37,20 +37,25 @@ func test_wrister_quick_shot_uses_quick_shot_power() -> void:
 		false, 0,
 		_wrister_cfg(),
 		Vector3.ZERO,
-		true)                           # is_quick_shot
-	assert_almost_eq(result.power, 12.0, 0.01, "quick shot uses fixed quick_shot_power")
+		true)                           # is_quick_pass
+	assert_almost_eq(result.power, 12.0, 0.01, "quick pass uses fixed quick_pass_power")
 
-func test_wrister_quick_shot_direction_from_blade() -> void:
-	# Quick shot aims from the player through the blade (toward the cursor)
+func test_wrister_quick_pass_aims_at_cursor_not_blade_offset() -> void:
+	# Regression guard for "quick passes don't go the right way": the pass aims
+	# blade→cursor, so with the cursor straight ahead (−Z) the pass goes straight
+	# ahead even though the blade sits off to the forehand side (+X, the carry
+	# offset). The OLD player→blade aim would veer toward that +X offset; the
+	# blade→cursor aim tracks the cursor line instead.
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		Vector3(0, 0, 0),
-		Vector3(10, 0, 0),
-		Vector3(0.5, 0, 0),
+		Vector3(0, 0, 0),               # player at origin
+		Vector3(0, 0, -10),             # cursor straight ahead (−Z)
+		Vector3(0.6, 0, -0.4),          # blade offset to the forehand carry side (+X)
 		false, 0,
 		_wrister_cfg(),
 		Vector3.ZERO,
-		true)                           # is_quick_shot
-	assert_gt(result.direction.x, 0.0, "direction toward the target (+X)")
+		true)                           # is_quick_pass
+	assert_almost_eq(result.direction.z, -1.0, 0.05, "pass tracks the cursor line (−Z), not the blade offset")
+	assert_lt(absf(result.direction.x), 0.1, "pass does not veer toward the carry-side blade offset")
 
 # ── Wrister: charged branch ──────────────────────────────────────────────────
 
@@ -131,21 +136,21 @@ func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 	assert_almost_eq(result.direction.x, 0.0, 0.05, "shot does not veer toward mouse")
 
 func test_wrister_hard_binary_quick_vs_charged() -> void:
-	# HARD BINARY (no blend): with the SAME drag, is_quick_shot flips the shot
-	# categorically. Quick = aim player→blade (+X here, toward cursor) at
-	# quick_shot_power; charged = aim along the drag (-Z) at charged power. Mouse is
+	# HARD BINARY (no blend): with the SAME drag, is_quick_pass flips the shot
+	# categorically. Quick = aim blade→cursor (+X here, toward the cursor) at
+	# quick_pass_power; charged = aim along the drag (-Z) at charged power. Mouse is
 	# +X, drag is -Z, so the aim axis itself flips between the two.
 	var cfg := _wrister_cfg()
 	var drag := Vector3(0, 0, -1)
 	var quick: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-		false, 0, cfg, drag, true)          # is_quick_shot
+		false, 0, cfg, drag, true)          # is_quick_pass
 	var charged: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
 		false, 0, cfg, drag, false, FULL_SWEEP)  # charged wrister
-	assert_gt(quick.direction.x, 0.9, "quick shot aims player→blade (+X), ignores drag")
+	assert_gt(quick.direction.x, 0.9, "quick pass aims blade→cursor (+X), ignores drag")
 	assert_almost_eq(charged.direction.z, -1.0, 0.05, "charged wrister aims along drag (-Z)")
-	assert_almost_eq(quick.power, cfg.quick_shot_power, 0.01, "quick shot fires fixed quick_shot_power")
+	assert_almost_eq(quick.power, cfg.quick_pass_power, 0.01, "quick pass fires fixed quick_pass_power")
 	assert_almost_eq(charged.power, cfg.max_wrister_power, 0.01, "charged wrister scales power with sweep speed")
 
 
@@ -210,13 +215,13 @@ func test_wrister_zero_full_sweep_speed_floors_power() -> void:
 	assert_almost_eq(r.power, cfg.min_wrister_power, 0.01,
 		"disabled speed axis floors the release power")
 
-func test_wrister_quick_shot_ignores_sweep_speed() -> void:
+func test_wrister_quick_pass_ignores_sweep_speed() -> void:
 	var cfg := _wrister_cfg()
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
 		false, 0, cfg, Vector3.ZERO, true, FULL_SWEEP)
-	assert_almost_eq(r.power, cfg.quick_shot_power, 0.01,
-		"quick shot stays at fixed pass power whatever the sweep did")
+	assert_almost_eq(r.power, cfg.quick_pass_power, 0.01,
+		"quick pass stays at fixed pass power whatever the sweep did")
 
 func test_wrister_speed_for_power_t_round_trip() -> void:
 	# The bot inverse: a target power fraction → a cursor speed that, run forward
@@ -438,9 +443,9 @@ func test_loft_direction_agnostic() -> void:
 		"same loft level and power -> same y, regardless of direction")
 
 
-# Quick shots (the pass mechanic) ride the same loft table — LOW at pass power
-# IS the saucer pass, in any direction including toward the net.
-func test_quick_shot_loft_uses_level_table() -> void:
+# Quick passes ride the same loft table — LOW at pass power IS the saucer pass,
+# in any direction including toward the net.
+func test_quick_pass_loft_uses_level_table() -> void:
 	var cfg := _wrister_cfg()
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
@@ -448,7 +453,7 @@ func test_quick_shot_loft_uses_level_table() -> void:
 		false, 1,
 		cfg,
 		Vector3.ZERO,
-		true)                           # is_quick_shot
+		true)                           # is_quick_pass
 	var v_y: float = r.power * r.direction.y
 	assert_almost_eq(v_y, cfg.loft_vy_low, 0.01,
 		"quick-shot saucer launches at the LOW level vertical speed")

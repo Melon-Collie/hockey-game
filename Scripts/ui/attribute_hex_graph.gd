@@ -1,23 +1,31 @@
 class_name AttributeHexGraph
 extends Control
 
-# Six-axis radar ("hex graph") of a player's attribute build — Speed, Agility,
-# Hands, Size, Physical, Shot in PlayerAttributes' canonical order, clockwise
-# from the top vertex. A pure _draw() Control: the grid is two reference
-# hexagons (the level-5 ceiling and the all-medium level-3 ring, so a spike or
-# dump reads against the baseline build at a glance) plus spokes, with the
-# build itself as a filled accent polygon. Level 1 renders on an inner ring,
-# not at the center, so a dumped stat still contributes a visible shape.
+# Six-axis radar ("hex graph") of a player's RESOLVED capabilities — Speed,
+# Acceleration, Agility, Hands, Shot, Checking, clockwise from the top vertex.
+# Under the height-routed model a build is a height dial plus three tiers, so the
+# radar plots the net gameplay multipliers those produce (a tall enforcer reads
+# high SHT/CHK + low AGI/HND; a small dangler the mirror) rather than raw axis
+# picks — the silhouette IS the archetype. A pure _draw() Control: the grid is
+# an outer ceiling hexagon and the all-average (1.0-multiplier) ring, so a spike
+# or dump reads against the baseline, plus spokes, with the build as a filled
+# accent polygon.
 #
 # Used on the pre-game matchup screen: one small unlabeled hex per roster row
 # (accent = team color) and one larger `show_labels` legend hex under the VS
-# that names the axes once for all of them. Redraws only on set_build /
-# resize — nothing per-frame.
+# that names the axes once for all of them. Redraws only on set_build / resize.
 
 const _AXES: int = 6
-const _AXIS_LABELS: Array[String] = ["SPD", "AGI", "HND", "SIZ", "PHY", "SHT"]
+const _AXIS_LABELS: Array[String] = ["SPD", "ACC", "AGI", "HND", "SHT", "CHK"]
 const _LABEL_FONT_SIZE: int = 11
 const _LABEL_PAD: float = 16.0
+
+# All resolved multipliers live in ~[0.76, 1.36]. Map to a 0..1 draw fraction so
+# the all-average 1.0 sits at the medium ring (0.6, matching the old level-3
+# look) and the extremes still read: frac = 0.6 + (mult - 1) * SPREAD, clamped.
+const _MEDIUM_FRAC: float = 0.6
+const _FRAC_SPREAD: float = 1.2
+const _FRAC_MIN: float = 0.12
 
 const _GRID_OUTER := Color(1.0, 1.0, 1.0, 0.16)
 const _GRID_MEDIUM := Color(1.0, 1.0, 1.0, 0.09)
@@ -29,12 +37,18 @@ const _FILL_ALPHA: float = 0.30
 # (never call set_build) for a pure axis key.
 @export var show_labels: bool = false
 
-var _levels: Array[int] = []
+var _fracs: Array[float] = []
 
 
 func set_build(attrs: PlayerAttributes, p_accent: Color) -> void:
-	_levels = [attrs.speed, attrs.agility, attrs.hands,
-			attrs.size, attrs.physical, attrs.shot]
+	_fracs = [
+		_norm(attrs.speed_mult()),
+		_norm(attrs.accel_mult()),
+		_norm(attrs.agility_mult()),
+		_norm(attrs.hands_blade_mult()),
+		_norm(attrs.shot_power_mult()),
+		_norm(attrs.check_delivery_mult()),
+	]
 	accent = p_accent
 	queue_redraw()
 
@@ -46,14 +60,13 @@ func _draw() -> void:
 	if radius <= 0.0:
 		return
 	draw_polyline(_ring(center, radius), _GRID_OUTER, 1.0, true)
-	draw_polyline(_ring(center, radius * _level_frac(PlayerAttributes.LEVEL_MEDIUM)),
-			_GRID_MEDIUM, 1.0, true)
+	draw_polyline(_ring(center, radius * _MEDIUM_FRAC), _GRID_MEDIUM, 1.0, true)
 	for i: int in _AXES:
 		draw_line(center, center + _dir(i) * radius, _GRID_SPOKE, 1.0, true)
-	if _levels.size() == _AXES:
+	if _fracs.size() == _AXES:
 		var pts := PackedVector2Array()
 		for i: int in _AXES:
-			pts.append(center + _dir(i) * radius * _level_frac(_levels[i]))
+			pts.append(center + _dir(i) * radius * _fracs[i])
 		draw_colored_polygon(pts, Color(accent.r, accent.g, accent.b, _FILL_ALPHA))
 		pts.append(pts[0])  # close the outline
 		draw_polyline(pts, accent, 1.5, true)
@@ -67,8 +80,9 @@ func _dir(i: int) -> Vector2:
 	return Vector2(cos(angle), sin(angle))
 
 
-func _level_frac(level: int) -> float:
-	return float(level) / float(PlayerAttributes.LEVEL_MAX)
+# Resolved multiplier → draw fraction. All-average (1.0) sits at the medium ring.
+func _norm(mult: float) -> float:
+	return clampf(_MEDIUM_FRAC + (mult - 1.0) * _FRAC_SPREAD, _FRAC_MIN, 1.0)
 
 
 func _ring(center: Vector2, radius: float) -> PackedVector2Array:

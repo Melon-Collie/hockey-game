@@ -19,8 +19,14 @@ class_name BodyCheckRules
 # scale together off a single replicated value and ease back as it decays.
 
 class Config:
-	var min_impulse: float = 1.0          # m/s victim velocity delta below which no debuff lands
-	var ref_impulse: float = 2.5          # m/s delta treated as a full-strength check
+	# Defaults mirror SkaterController's @export tunables (the authoritative
+	# source). The stagger band is tuned to the inelastic magnitudes: ref_impulse
+	# equals the puck-strip threshold (1.35), so a full-strength check is exactly
+	# a puck-dislodging check — landing at ~6 m/s closing for a medium build,
+	# ~4 m/s for an enforcer ("skate into them with some pace", not a sprint-only
+	# collision). See the ladder derivation on SkaterController.stagger_min_impulse.
+	var min_impulse: float = 0.6          # m/s victim velocity delta below which no debuff lands
+	var ref_impulse: float = 1.35         # m/s delta treated as a full-strength check (== puck-strip threshold)
 	var max_stagger_seconds: float = 1.0  # recovery window of a full-strength check
 	var max_stamina_drain: float = 0.35   # pool fraction (0..1) a full-strength check bites
 	var max_thrust_penalty: float = 0.5   # peak thrust reduction (fraction) at full stagger
@@ -29,9 +35,10 @@ class Config:
 	# (movement locked, slides + bleeds speed, can't touch the puck) for a recovery
 	# window that scales with how far past the threshold it landed, from
 	# min_knockdown_seconds at the threshold to max_knockdown_seconds at
-	# knockdown_ref_impulse. NOTE: these (and min/ref_impulse above) are placeholders
-	# on the OLD magnitude scale — the Slice B inelastic model delivers ~half the old
-	# impulse, so the whole ladder wants a downward re-tune once the feel is dialed.
+	# knockdown_ref_impulse. Deliberately kept ABOVE the retuned full-check point
+	# (ref_impulse): a full check staggers + strips, but a knockdown is reserved for
+	# a genuinely big hit — an enforcer at pace or a fast/head-on collision — so it's
+	# the speed/Size ceiling, not the default result of every check.
 	var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down (0 disables)
 	var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
 	var min_knockdown_seconds: float = 0.7     # down time of a just-barely knockdown

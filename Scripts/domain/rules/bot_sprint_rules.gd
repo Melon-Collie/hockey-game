@@ -47,6 +47,50 @@ const TURN_ALIGN_MIN_DOT: float = 0.34
 const TURN_GATE_SPEED_M_S: float = 3.0
 
 
+# ── Read-side sprint model (race_speed) ──────────────────────────────────────
+# Default stamina tuning mirrored for the READ side (the live pool runs the
+# controller's exported StaminaConfig; league defaults here — per-peer stamina
+# itself is replicated, the drain RATE is a league constant to the observer).
+static var _read_stamina_cfg := StaminaRules.StaminaConfig.new()
+
+
+# Effective top speed a skater delivers over a committed straight-line RACE of
+# `dist` metres — the sprint model the body actually runs (the should_sprint
+# gates above + StaminaRules' pool), collapsed to one cruise-equivalent cap
+# for the ETA phase model. Without this every AI race read was Speed-blind:
+# cruise speed is near-uniform by design (the attribute doc), the sprint
+# ceiling is where Speed's separation lives, and the body sprints its races
+# while the read priced cruise (~0.3 s off on a 3 s race — larger than the
+# RETRIEVAL and kill-setup margins).
+#
+#   - locked out, or pool below the engage floor, or the race shorter than
+#     the sprint engage gap → cruise (the bot genuinely won't sprint it).
+#   - else: sprint at cruise × sprint_mult while the pool sustains it
+#     (t_burst = stamina / drain), cruise for the remainder — returned as
+#     the exact two-phase distance-weighted average speed.
+#
+# Approximations, both conservative-or-neutral: the ramp to the higher cap is
+# charged at normal thrust (sprint's ×1.2 thrust bump is ignored), and the
+# turn gate is ignored (races are priced as straight lines; a race the body
+# refuses to sprint because it starts misaligned resolves over the first
+# re-evaluation). Carriers don't sprint (no breakaway modelling here) — race
+# consumers are loose-puck reads, where every racer is a non-carrier.
+static func race_speed(cruise_vmax: float, sprint_mult: float,
+		stamina: float, sprint_locked: bool, dist: float) -> float:
+	if sprint_locked or sprint_mult <= 1.0 \
+			or stamina < STAMINA_ENGAGE_FLOOR or dist < GAP_ENGAGE_M:
+		return cruise_vmax
+	var v_sprint: float = cruise_vmax * sprint_mult
+	var t_burst: float = stamina / maxf(_read_stamina_cfg.drain_per_sec, 0.001)
+	var d_sprint: float = v_sprint * t_burst
+	if d_sprint >= dist:
+		return v_sprint
+	# Two-phase average: sprint covers d_sprint in t_burst, cruise covers the
+	# rest — total distance over total time.
+	var total_t: float = t_burst + (dist - d_sprint) / maxf(cruise_vmax, 0.001)
+	return dist / maxf(total_t, 0.001)
+
+
 # `was_sprinting` is last tick's decision (drives the gap hysteresis band).
 # `desired_move` is the steering output for this tick (a direction; length may
 # be < 1 when softened). `carrying` + `breakaway` gate the puck carrier: a

@@ -98,7 +98,7 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			Vector3(wall_x, 0.0, blue_z), ctx.self_max_speed, ctx.self_max_accel)
+			Vector3(wall_x, 0.0, blue_z), AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	return d
 
 

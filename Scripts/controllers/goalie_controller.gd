@@ -126,13 +126,27 @@ extends Node
 # <200 ms, and Clear Sight Analytics' set-and-sighted threshold is ~0.5 s of
 # clear read before release (~97% save when met). Screens and caught-moving
 # penalties still ADD on top, so only a set, sighted goalie collects the credit
-# — and quick-release snaps (no windup state, nothing to fixate) never prime,
-# which is exactly the real "quick release beats the read" edge. The prime
-# lingers `prearm_linger` past the read so the release event can't race the
-# flag off on the same tick the windup state clears.
+# — and a quick-release snap FROM RANGE (no windup state, nothing to fixate)
+# never earns the windup prime, which is exactly the real "quick release beats
+# the read" edge. The prime lingers `prearm_linger` past the read so the release
+# event can't race the flag off on the same tick the windup state clears.
+#
+# SLOT PROXIMITY PRIME (`prime_slot_distance`): a set, upright goalie with an
+# opposing carrier already in tight is coiled and pre-programmed to react even
+# WITHOUT a held windup — a real slot goalie is never a frozen statue on a quick
+# release. So an in-front carrier inside `prime_slot_distance` arms the same prime
+# by proximity. This is not a "save it anyway" buff: it only makes both limbs
+# START moving (the cold arm read of 0.18 s exceeds a slot shot's ~0.10-0.16 s
+# flight, so uncredited the goalie never moves at all). The flat reach-speed cap
+# (`glove_react_max_speed`) still bounds how much net he covers in the time left,
+# so a corner picked out of that reach beats him — the intended "pick a corner,
+# don't face a statue" in-tight window. Distance is grounded at the zone where a
+# cold arm read outlasts the shot's flight (flight < 0.18 s ⇒ under ~5-6 m for
+# 25-30 m/s releases), so it targets exactly the freeze zone and no farther.
 @export var prearmed_reaction_delay: float = 0.07
 @export var prearm_read_time: float = 0.40
 @export var prearm_linger: float = 0.25
+@export var prime_slot_distance: float = 6.0
 
 # Imminence gate on STARTING a release reaction at all. A release whose puck is
 # more than this many seconds from crossing the goal line doesn't begin a
@@ -247,6 +261,18 @@ extends Node
 # angle 0.25 m closer to center. Track the pinned puck itself (weight → 0) so the
 # goalie squares to where the shot actually comes from.
 @export var shooter_weight_slapper_windup: float = 0.0
+# Slapper aim shade (anticipatory read): squaring to the pinned puck alone leaves
+# the against-the-grain corner of a committed slot slapshot open by ~1 m — the
+# goalie holds its set angle and a corner shot goes past its side (the "Colin
+# cheese"). A real goalie reads the shot's side off the LOCKED wind-up and cheats
+# his angle that way. This shades the goalie's lateral target toward where the shot
+# will cross his depth plane (from the published predicted velocity), ramped by how
+# long he's read the wind-up (prearm_read_time) so a quick release gets little shade
+# — the skill window survives — while a lazy full wind-up to an open corner gets cut
+# off. Directional, so a faked aim shades him the WRONG way (counter-readable, not a
+# flat buff). Kept below 1.0 so a well-placed, quick corner release can still beat
+# him (beatable realism). See _move_along_arc.
+@export_range(0.0, 1.0, 0.05) var slapper_aim_shade: float = 0.7
 # Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
 # scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
 # effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
@@ -327,7 +353,7 @@ extends Node
 # than buffs. Sitting deeper opens the carrier's direct-shot angle: respecting
 # the back door is a genuine trade the shooter can exploit.
 @export var backdoor_release_time: float = 0.15         # s — receiver's one-timer swing
-@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_SHOT_POWER_M_S
+@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 @export var backdoor_max_shooter_distance: float = 9.0  # m — shooter→goal eligibility
 
 # ── Beaten-wide post seal ────────────────────────────────────────────────────
@@ -918,6 +944,9 @@ var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Input
 
 # ── Cached rule configs (built once in setup) ────────────────────────────────
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
+# Speed-floor-free variant of _shot_cfg for the universal-reaction path (slow
+# tricklers / board bounces must classify even below shot_speed_threshold).
+var _universal_shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
@@ -1315,6 +1344,23 @@ func _build_rule_configs() -> void:
 	_shot_cfg.reaction_delay = reaction_delay
 	_shot_cfg.low_shot_threshold = low_shot_threshold
 	_shot_cfg.elevated_threshold = elevated_threshold
+	# Universal-reaction impact classification uses the SAME geometry but with NO
+	# speed floor. The universal path's urgency decision is already made by
+	# should_react_to_puck (imminence + on-net, tiny anti-jitter floor only) — its
+	# whole point is that a slow trickler / dying board-bounce at the doorstep is
+	# MORE urgent than a rocket from the point, not less. Re-running detect_shot
+	# with `_shot_cfg`'s 5 m/s `shot_speed_threshold` here silently rejected every
+	# sub-threshold puck, so slow pucks oozing at the net never triggered a
+	# reaction and the goalie sat a statue. This clone keeps low/elevated
+	# classification and the on-net check; speed gating stays on the RELEASE path
+	# (which must still filter slow dribbled passes) via `_shot_cfg`.
+	_universal_shot_cfg = GoalieBehaviorRules.ShotDetectionConfig.new()
+	_universal_shot_cfg.shot_speed_threshold = 0.0
+	_universal_shot_cfg.net_half_width = net_half_width
+	_universal_shot_cfg.net_margin = net_margin
+	_universal_shot_cfg.reaction_delay = reaction_delay
+	_universal_shot_cfg.low_shot_threshold = low_shot_threshold
+	_universal_shot_cfg.elevated_threshold = elevated_threshold
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
 	_screen_cfg.screener_radius = screener_radius
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
@@ -3070,6 +3116,24 @@ func _move_along_arc(delta: float) -> Vector2:
 	var cross_crease_push: bool = is_server and _cross_crease_timer > 0.0
 	if cross_crease_push:
 		target_xz.x = _cross_crease_target_x
+	# Slapper aim shade (anticipatory read): while reading a committed slot slapshot
+	# wind-up, cheat the angle toward where the shot will cross the goalie's depth
+	# plane — the real "he's lined it up top-far, I'll shade that way" read (see the
+	# slapper_aim_shade export). Ramped by wind-up read time so a quick release keeps
+	# the skill window; directional off the LOCKED aim, so a fake shades him wrong.
+	# Skipped during a cross-crease push (a pass in flight owns the lateral target).
+	if is_server and _reading_slapper_tell and not cross_crease_push and slapper_aim_shade > 0.0:
+		var shade_carrier: Skater = puck.get_carrier()
+		if shade_carrier != null:
+			var shade_vel: Vector3 = shade_carrier.predicted_shot_velocity
+			if shade_vel.length_squared() >= 0.01 and absf(shade_vel.z) >= 0.001:
+				var goalie_plane_z: float = _goal_line_z + _direction_sign * _current_depth
+				var t_cross: float = (goalie_plane_z - puck.global_position.z) / shade_vel.z
+				if t_cross > 0.0:
+					var shot_x_at_depth: float = puck.global_position.x + shade_vel.x * t_cross
+					var shade_t: float = clampf(
+							_shot_read_timer / maxf(prearm_read_time, 0.001), 0.0, 1.0) * slapper_aim_shade
+					target_xz.x = lerpf(target_xz.x, shot_x_at_depth, shade_t)
 	_target_x = target_xz.x
 	var delta_2d: float = current.distance_to(target_xz)
 	var move_speed: float
@@ -3579,6 +3643,16 @@ func _update_shot_commit(delta: float, carrier: Skater) -> void:
 			_prime_linger_timer = prearm_linger
 	else:
 		_shot_read_timer = 0.0
+	# Set-and-sighted in the slot: a coiled, upright goalie with an opposing
+	# carrier already in tight is pre-programmed to react even without a held
+	# windup, so a quick slot release draws a reflex save ATTEMPT instead of
+	# freezing him in place (see the prearm doc-block). Refreshed every tick the
+	# threat sits in the slot; `prearm_linger` carries the prime across the release
+	# tick (which clears the carrier) into _on_puck_released. The movement-read
+	# penalty still ADDS on top at _on_puck_released, so a goalie caught scrambling
+	# in the slot claws the credit back — only a genuinely set goalie collects it.
+	if _is_set_in_slot(carrier):
+		_prime_linger_timer = prearm_linger
 
 # True when an opposing carrier in the slot is winding up a shot (wrister drag or
 # slapshot charge) close enough that the goalie respects it. Drives both the
@@ -3587,19 +3661,35 @@ func _update_shot_commit(delta: float, carrier: Skater) -> void:
 # only `current_shot_state` (replicated) so it fires for remote shooters too;
 # the DIRECTIONAL lean additionally needs the host-side predicted velocity.
 func _is_reading_shot_threat(carrier: Skater) -> bool:
+	if not _opposing_carrier_in_front(carrier, prelean_max_distance):
+		return false
+	return carrier.current_shot_state == SkaterStateMachine.State.WRISTER_AIM \
+			or carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
+
+# True when a set, upright goalie has an opposing carrier already in tight (within
+# `prime_slot_distance`, in front). Arms the slot-proximity prime — the goalie is
+# coiled and reacts reflexively on a quick release rather than freezing. No windup
+# state required (that's the point: quick slot snaps are the freeze case). See the
+# prearm doc-block for why this is an ATTEMPT enabler, not a save buff.
+func _is_set_in_slot(carrier: Skater) -> bool:
+	return _opposing_carrier_in_front(carrier, prime_slot_distance)
+
+# Shared geometric core of the windup read and the slot-proximity prime: `carrier`
+# is an opposing puck-carrier in front of the goalie (slot side, not behind the
+# net) within `max_dist`, with the goalie upright and not already reacting (once a
+# shot is in flight the reaction pipeline owns the read). Reads only replicated
+# `global_position` / team so it fires for remote carriers too.
+func _opposing_carrier_in_front(carrier: Skater, max_dist: float) -> bool:
 	if carrier == null:
 		return false
 	if _reaction.reacting or not _sm.is_upright():
 		return false
 	if team_id != -1 and carrier.get_team_id() == team_id:
 		return false
-	if carrier.current_shot_state != SkaterStateMachine.State.WRISTER_AIM \
-			and carrier.current_shot_state != SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
-		return false
-	# In front of the goalie (slot side), within read range — not behind the net.
+	# In front of the goalie (slot side), not behind the net.
 	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
 		return false
-	return goalie.global_position.distance_to(carrier.global_position) <= prelean_max_distance
+	return goalie.global_position.distance_to(carrier.global_position) <= max_dist
 
 # Universal puck-tracking trigger. Runs each host physics frame on loose
 # pucks; if the puck is fast and on track for the net within the
@@ -3619,7 +3709,7 @@ func _check_universal_reaction() -> void:
 		return
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
 			puck.global_position, vel,
-			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
+			_goal_line_z, _goal_center_x, _universal_shot_cfg, _scratch_shot)
 	if not result.is_shot:
 		return
 	if debug_goalie_reads:

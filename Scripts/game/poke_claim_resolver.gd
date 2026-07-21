@@ -103,14 +103,22 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	# modified client can't teleport its blade onto the carrier. See
 	# PickupClaimResolver / LagCompRewind.clamp_client_blade.
 	var max_reach: float = 0.0
+	var blade_speed: float = 0.0
 	if _registry != null:
 		var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
 		if caps != null:
 			max_reach = caps.max_blade_reach
+			blade_speed = caps.blade_speed
 	var blade_curr: Vector3 = LagCompRewind.clamp_client_blade(
 			client_blade_curr, skater_snap.position, max_reach)
 	var blade_prev: Vector3 = LagCompRewind.clamp_client_blade(
 			client_blade_prev, skater_prev_snap.position, max_reach)
+	# Tighter continuity bound toward the host's own blade reconstruction — see
+	# PickupClaimResolver / LagCompRewind.continuity_clamp. No-ops when the host
+	# has no reconstruction for the skater at the rewind instant.
+	var continuity: float = LagCompRewind.blade_continuity_tolerance(blade_speed)
+	blade_curr = LagCompRewind.continuity_clamp(blade_curr, skater_snap.blade_contact_world, continuity)
+	blade_prev = LagCompRewind.continuity_clamp(blade_prev, skater_prev_snap.blade_contact_world, continuity)
 	# Host-only claim-outcome telemetry (no-op off the host): the claim reached the
 	# rewound geometry test. A check_poke fail is the "reached for it, didn't get it"
 	# signal — a high miss FRACTION on the host row flags a rewind not reproducing
