@@ -50,11 +50,27 @@ class Params:
 	var u_start: float = 0.0           # span start, fraction heel→toe
 	var u_end: float = 1.0             # span end, fraction heel→toe
 	var segments: int = 16
+	# Hosel: the tapered throat that carries the heel cross-section up the
+	# shaft line. 0 (the tape-band default) keeps a flat heel cap instead.
+	# The angle is the stick's lie (Skater.blade_lie_deg): the shaft-follow
+	# tilt keeps the blade rigidly at that angle to the shaft, so in
+	# blade-local space the shaft ALWAYS ascends from the heel at the lie —
+	# fixed hosel geometry stays glued to the rendered shaft in every pose
+	# (only the clamped extremes of the follow pitch open a small seam, and
+	# the tip is buried inside the shaft box).
+	var hosel_length: float = 0.0      # along the shaft line from the heel
+	var hosel_angle_deg: float = 42.0  # lie: shaft↔ice angle at flat blade
 
 
 # Height factor floor at the toe tip — the rounded toe ends in a small flat
 # cap instead of a degenerate zero-height edge.
 const _TOE_TIP_MIN_HEIGHT_FRAC: float = 0.18
+
+# Hosel tip half cross-section: just inside the 0.04 × 0.05 shaft BoxMesh so
+# the taper's end cap hides within the shaft rather than poking through it.
+const _HOSEL_TIP_HALF_W: float = 0.018
+const _HOSEL_TIP_HALF_H: float = 0.023
+const _HOSEL_SEGMENTS: int = 5
 
 
 static func build(p: Params) -> ArrayMesh:
@@ -119,10 +135,64 @@ static func build(p: Params) -> ArrayMesh:
 		_quad(st, fb[i], fb[i + 1], bb[i + 1], bb[i])  # bottom (−Y)
 		_quad(st, fb[i], ft[i], ft[i + 1], fb[i + 1])  # front face (+lateral)
 		_quad(st, bb[i], bb[i + 1], bt[i + 1], bt[i])  # back face (−lateral)
-	_quad(st, fb[0], bb[0], bt[0], ft[0])              # heel cap (+Z)
+	if p.hosel_length > 0.0:
+		_add_hosel(st, p, fb[0], ft[0], bt[0], bb[0])
+	else:
+		_quad(st, fb[0], bb[0], bt[0], ft[0])          # heel cap (+Z)
 	_quad(st, bb[n], fb[n], ft[n], bt[n])              # toe cap (−Z)
 	st.generate_normals()
 	return st.commit()
+
+
+# Extrudes the tapered hosel from the blade's heel ring up the shaft line.
+# Stations march from the heel cross-section (the exact ring the blade strips
+# end on, so the seam is welded) along axis (0, sin lie, cos lie) — up and
+# BACKWARD, +Z being heel-ward — while the cross-section eases into the small
+# vertical rectangle of _HOSEL_TIP_HALF_W/H tilted perpendicular to the shaft.
+# The smoothstepped height blend is what draws the throat fillet: the blade's
+# tall top edge sweeps up into the shaft line instead of stepping.
+static func _add_hosel(st: SurfaceTool, p: Params,
+		heel_fb: Vector3, heel_ft: Vector3, heel_bt: Vector3, heel_bb: Vector3) -> void:
+	var lie: float = deg_to_rad(p.hosel_angle_deg)
+	var axis := Vector3(0.0, sin(lie), cos(lie))
+	var tip_up := Vector3(0.0, cos(lie), -sin(lie))  # perpendicular "up" at the tip
+	var base_center: Vector3 = (heel_ft + heel_fb + heel_bt + heel_bb) * 0.25
+	var base_half_w: float = absf(heel_ft.x - heel_bt.x) * 0.5
+	var base_half_h: float = absf(heel_ft.y - heel_fb.y) * 0.5
+	var m: int = _HOSEL_SEGMENTS
+	var fb: PackedVector3Array = PackedVector3Array()
+	var ft: PackedVector3Array = PackedVector3Array()
+	var bt: PackedVector3Array = PackedVector3Array()
+	var bb: PackedVector3Array = PackedVector3Array()
+	fb.resize(m + 1)
+	ft.resize(m + 1)
+	bt.resize(m + 1)
+	bb.resize(m + 1)
+	fb[0] = heel_fb
+	ft[0] = heel_ft
+	bt[0] = heel_bt
+	bb[0] = heel_bb
+	for j in range(1, m + 1):
+		var t: float = float(j) / float(m)
+		var ease_t: float = t * t * (3.0 - 2.0 * t)
+		var center: Vector3 = base_center + axis * (p.hosel_length * t)
+		var half_w: float = lerpf(base_half_w, _HOSEL_TIP_HALF_W, t)
+		var half_h: float = lerpf(base_half_h, _HOSEL_TIP_HALF_H, ease_t)
+		var up_dir: Vector3 = (Vector3.UP * (1.0 - t) + tip_up * t).normalized()
+		var side := Vector3(half_w, 0.0, 0.0)
+		fb[j] = center + side - up_dir * half_h
+		ft[j] = center + side + up_dir * half_h
+		bt[j] = center - side + up_dir * half_h
+		bb[j] = center - side - up_dir * half_h
+	# Stations advance heel-ward (+Z-ish) — the reverse longitudinal direction
+	# of the blade strips, so each quad order mirrors its blade counterpart to
+	# keep the winding outward.
+	for j in m:
+		_quad(st, ft[j], ft[j + 1], bt[j + 1], bt[j])  # top
+		_quad(st, bb[j], bb[j + 1], fb[j + 1], fb[j])  # bottom
+		_quad(st, fb[j], fb[j + 1], ft[j + 1], ft[j])  # front face (+X)
+		_quad(st, bb[j], bt[j], bt[j + 1], bb[j + 1])  # back face (−X)
+	_quad(st, ft[m], fb[m], bb[m], bt[m])              # tip cap (+axis, in-shaft)
 
 
 # Emits one quad as two triangles. Corners are listed CLOCKWISE as seen from

@@ -142,6 +142,45 @@ func test_tape_band_is_proud_heel_slice() -> void:
 	assert_between(tape_z_min, -0.20, -0.17, "tape ends around 62% of the blade")
 
 
+func test_hosel_extends_up_the_shaft_line() -> void:
+	var p := StickBladeMeshBuilder.Params.new()
+	p.hosel_length = 0.085
+	var mesh: ArrayMesh = StickBladeMeshBuilder.build(p)
+	var verts: PackedVector3Array = _verts(mesh)
+	var norms: PackedVector3Array = _norms(mesh)
+	var lie: float = deg_to_rad(p.hosel_angle_deg)
+	var axis := Vector3(0.0, sin(lie), cos(lie))
+	# The throat replaces the flat heel cap and climbs up-and-back along the
+	# shaft line (heel-ward is +Z in blade space).
+	var z_max: float = -INF
+	var y_max: float = -INF
+	for v: Vector3 in verts:
+		z_max = maxf(z_max, v.z)
+		y_max = maxf(y_max, v.y)
+	assert_gt(z_max, 0.04, "hosel reaches behind the heel along the shaft")
+	assert_gt(y_max, 0.05, "hosel climbs above the blade's top edge")
+	# Base ring center: the heel cross-section's midpoint (rocker lifts the
+	# bottom edge, so mid sits at rocker/2 above zero).
+	var base_center := Vector3(0.0, p.rocker_m * 0.5, 0.0)
+	var seen_tip_cap: bool = false
+	var tri_count: int = int(verts.size() / 3.0)
+	for t in tri_count:
+		var c: Vector3 = (verts[t * 3] + verts[t * 3 + 1] + verts[t * 3 + 2]) / 3.0
+		var n: Vector3 = norms[t * 3]
+		# The old flat heel cap (+Z normal) must be gone; the only strongly
+		# +Z-ish normal left is the tip cap, which faces along the shaft axis.
+		assert_lt(n.z, 0.9, "no flat heel cap remains once the hosel replaces it")
+		if n.dot(axis) > 0.9:
+			seen_tip_cap = true
+			continue
+		# Hosel strips: outward-wound cross-sections around the shaft axis —
+		# every normal points away from its station's point on the axis.
+		if c.z > 0.01:
+			var axis_point: Vector3 = base_center + axis * (c - base_center).dot(axis)
+			assert_gt(n.dot(c - axis_point), 0.0, "hosel strip winds outward")
+	assert_true(seen_tip_cap, "tip cap faces along the shaft axis")
+
+
 # ── Skater rig integration ────────────────────────────────────────────────────
 
 func _make_skater() -> Skater:
@@ -157,6 +196,10 @@ func test_skater_installs_generated_blade_at_marker_origin() -> void:
 	var blade_mesh: MeshInstance3D = skater.blade.get_node("MeshInstance3D") as MeshInstance3D
 	assert_not_null(blade_mesh.mesh as ArrayMesh, "placeholder BoxMesh replaced")
 	assert_eq(blade_mesh.position, Vector3.ZERO, "heel-origin mesh seated at the marker")
+	var z_max: float = -INF
+	for v: Vector3 in _verts(blade_mesh.mesh as ArrayMesh):
+		z_max = maxf(z_max, v.z)
+	assert_gt(z_max, 0.04, "skater blade carries the hosel taper")
 
 
 func test_handedness_flip_regenerates_opposite_curve() -> void:

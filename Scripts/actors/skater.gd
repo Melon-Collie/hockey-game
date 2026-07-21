@@ -73,6 +73,12 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 @export var blade_curve_depth: float = 0.022
 @export var blade_curve_start_frac: float = 0.35
 @export var blade_toe_round_frac: float = 0.24
+# Length of the hosel — the tapered throat carrying the heel cross-section up
+# the shaft line (the shaft-follow tilt keeps the blade rigidly at
+# blade_lie_deg to the shaft, so fixed blade-local hosel geometry stays glued
+# to the rendered shaft in every pose). Blade mesh only; the tape band keeps
+# its flat heel cap.
+@export var blade_hosel_length: float = 0.085
 # The stick's built-in lie: the shaft↔ice angle at which the blade sits flat.
 # Derived from the rest pose (hand ~0.87 m above the heel over a
 # sqrt(1.30² − 0.87²) ≈ 0.97 m horizontal run → atan ≈ 42°, i.e. about a
@@ -974,7 +980,8 @@ func _rebuild_blade_mesh() -> void:
 	if blade_mesh == null:
 		return
 	var curve_sign: float = 1.0 if is_left_handed else -1.0
-	blade_mesh.mesh = StickBladeMeshBuilder.build(blade_mesh_params(0.0, 0.0, 1.0))
+	blade_mesh.mesh = StickBladeMeshBuilder.build(
+			blade_mesh_params(0.0, 0.0, 1.0, blade_hosel_length))
 	blade_mesh.position = Vector3.ZERO
 	_blade_mesh_instance = blade_mesh
 	_blade_mesh_curve_sign = curve_sign
@@ -986,7 +993,10 @@ func _rebuild_blade_mesh() -> void:
 # Builder params for the current blade geometry — shared by the blade mesh and
 # the team-tape band (SkaterUniformCoordinator calls build_blade_tape_mesh so
 # the band follows the same curve instead of clipping through it as a box).
-func blade_mesh_params(inflate: float, u_start: float, u_end: float) -> StickBladeMeshBuilder.Params:
+# hosel_length defaults to 0 (flat heel cap) — only the blade mesh itself
+# carries the hosel taper.
+func blade_mesh_params(inflate: float, u_start: float, u_end: float,
+		hosel_length: float = 0.0) -> StickBladeMeshBuilder.Params:
 	var p := StickBladeMeshBuilder.Params.new()
 	p.length = blade_length
 	p.curve_depth = blade_curve_depth
@@ -996,6 +1006,8 @@ func blade_mesh_params(inflate: float, u_start: float, u_end: float) -> StickBla
 	p.inflate = inflate
 	p.u_start = u_start
 	p.u_end = u_end
+	p.hosel_length = hosel_length
+	p.hosel_angle_deg = blade_lie_deg
 	return p
 
 
