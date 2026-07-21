@@ -1080,11 +1080,12 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# skater shares the same forward > lateral > backward shape; what makes
 	# Slick agile is how cleanly they transition between those directions.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
-	# Carry speed retention is a small, Hands(primary)+Speed(secondary)-eased tax
-	# (elite dangler OR elite skater ≈ effortless). The real cost of carrying at
-	# speed is the 1.6x sprint stamina drain (StaminaRules), not an intrinsic
-	# slowdown — so a fast carrier CAN separate, in a stamina-limited burst. This
-	# is a computed value, not a base×mult, so it's set directly.
+	# Carry speed retention is a small, Speed-eased tax (attributes v4 folded the
+	# old Hands term into the base — no hands lever by constitution). The real
+	# cost of carrying at speed is the 1.6x sprint stamina drain (StaminaRules),
+	# not an intrinsic slowdown — so a fast carrier CAN separate, in a
+	# stamina-limited burst. This is a computed value, not a base×mult, so it's
+	# set directly.
 	puck_carry_speed_multiplier = attrs.carry_speed_mult()
 	# Skill owns the puck game (blade speed / carry / backhand — small-favored) and
 	# the shot (power ceiling + wind-up — big-favored). Blade speed drives how fast
