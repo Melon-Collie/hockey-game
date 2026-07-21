@@ -91,12 +91,42 @@ geometric — §4).
 
 ### 3.2 Weight (new dial)
 
-**Frame-relative, not absolute pounds**: the dial is *lean ↔ heavy for your
-height*. Displayed weight in lbs is computed from height + frame position
-(flavor only). This keeps the 2D tuning surface inside plausible hockey
-bodies and avoids re-deriving the height correlation. Suggested: 5 frame
-anchors (VERY_LEAN..VERY_HEAVY) with interpolation, same table machinery as
-height.
+**Frame-relative via a single BMI band** — one authored interval generates a
+plausible pounds range at every height, so implausible bodies (6'6"/160,
+BMI ~18.5) are unrepresentable by construction rather than by rule. Band:
+**BMI 24.0 (LEAN) → 29.0 (HEAVY)**, five frame anchors interpolated with the
+same machinery as height, neutral = 26.5 (the real NHL-average build:
+6'1"/201). Displayed lbs = BMI × inches² / 703:
+
+| height | LEAN 24.0 | LIGHT 25.25 | MEDIUM 26.5 | SOLID 27.75 | HEAVY 29.0 |
+|--------|-----------|-------------|-------------|-------------|------------|
+| 5'8"   | 158 | 166 | 174 | 183 | 191 |
+| 5'10"  | 167 | 176 | 185 | 193 | 202 |
+| 6'1"   | 182 | 191 | **201** | 210 | 220 |
+| 6'4"   | 197 | 207 | 218 | 228 | 238 |
+| 6'7"   | 213 | 224 | 235 | 246 | 258 |
+
+Calibration namechecks: McDavid (6'1"/194) = lean-mid; Gaudreau ≈ small-
+LIGHT; DeBrincat (5'8"/180) ≈ SOLID; Ovechkin (6'3"/238) = 6'4"-HEAVY
+exactly; Chara between SOLID and HEAVY; Tage Thompson (6'6"/218) ≈
+tall-LEAN. Floor 24.0 deliberately excludes rare sub-24 outliers; one
+const if it ever widens.
+
+**Storage**: weight in lbs (int) on the wire, like height in inches — the
+identity stays human-readable and the bot roster reads like hockey cards.
+Validation is `coerce_weight(height, lbs)` — a clamp into the band, never a
+rejection (the `coerce_height` philosophy). Picker: a lbs slider bounded
+for the current height; moving the height slider preserves the frame
+fraction and recomputes lbs (a LEAN build stays lean as you grow).
+Internally everything normalizes to frame-t for table lookups.
+
+**Mass**: `mass_mult = lbs / 201` (linear in displayed weight), range
+0.79–1.28 — a 1.63× spread vs v3's deliberate 1.16×. Intentional: v3 kept
+mass minor because Checking carried physical battles; in v4 mass IS the
+physical system. Escape hatch if it proves too swingy: compress with an
+exponent (`(lbs/201)^p`, p ≤ 1) — physics gives the shape, playtest the
+magnitude. Calibrate against `test_body_check_rules` so HEAVY delivers like
+v3 strong-Checking and LEAN absorbs like v3 weak-Checking.
 
 Routes (all shapes carried over from existing v3 tables, re-indexed by frame
 instead of height/tier — values `TBD`, anchored to v3 spreads):
@@ -392,8 +422,7 @@ curve, (4) skate profile, (5) AI/goalie calibration pass.
 
 ## 10. Open questions (user decides before implementation)
 
-1. Frame band width — how heavy can 5'8" get, how lean can 6'7" get
-   (the displayed-lbs table)?
+1. ~~Frame band width~~ — RESOLVED: single BMI band 24.0–29.0, see §3.2.
 2. Starting `k` for the inertia exponent, and the initial reversal spread.
 3. Runway numbers: ceiling ramp floor (~60%?), neutral runway length in ROM
    terms, and the compress/extend deltas per gear option.
