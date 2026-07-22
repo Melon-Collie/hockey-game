@@ -77,6 +77,16 @@ var _last_carrier_team: int = -1
 var _strong_x: float = 1.0
 
 var _accumulator: float = 0.0
+# Cadence phase offset (seconds): team 1's natural ticks run half a period
+# out of phase with team 0's, so the two brains' per-tick computes never land
+# on the same physics frame (host FPS is set by the worst tick, and the two
+# ~200-300 µs brain ticks stacking is a recurring spike for free). Both
+# brains are force-reticked together on possession events — which would
+# re-phase-lock them — so the offset is re-applied at every forced-tick
+# accumulator reset, not just at construction. Forced ticks themselves still
+# fire same-frame by design (they're event-driven); only the natural 6 Hz
+# cadence is staggered.
+var _cadence_offset_s: float = 0.0
 # Set by force_retick(); next tick() call bypasses the rate-limit and
 # computes immediately. Used for event-driven re-evaluation when a
 # puck-carrier change makes the current slot assignment stale.
@@ -108,6 +118,8 @@ func _init(t: int, team_id_by_peer: Dictionary, caps_by_peer: Dictionary = {},
 	team_size = p_team_size
 	_position_by_peer = position_by_peer
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
+	_cadence_offset_s = TICK_PERIOD * 0.5 if t == 1 else 0.0
+	_accumulator = _cadence_offset_s
 
 
 # Called every host physics frame from GameManager. Snapshot is the freshest
@@ -122,11 +134,15 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	if _accumulator < TICK_PERIOD and not _force_tick_pending:
 		return
 	# Natural cadence: drain one tick's worth of accumulator. Forced
-	# tick: reset accumulator to zero so the next natural tick fires
-	# TICK_PERIOD seconds from now (avoids back-to-back forced+natural
-	# ticks compounding into a double-rate burst).
+	# tick: reset the accumulator to this brain's cadence phase, so the next
+	# natural tick fires a comfortable fraction of a period out (a full
+	# TICK_PERIOD for team 0, half for team 1 — never the back-to-back
+	# forced+natural double-rate burst) and the two teams' cadences come out
+	# of the shared force-retick de-phased instead of locked (see
+	# _cadence_offset_s — both brains are force-reticked together on
+	# possession events).
 	if _force_tick_pending:
-		_accumulator = 0.0
+		_accumulator = _cadence_offset_s
 		_force_tick_pending = false
 	else:
 		_accumulator -= TICK_PERIOD

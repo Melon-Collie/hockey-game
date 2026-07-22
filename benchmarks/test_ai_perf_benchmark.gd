@@ -92,6 +92,9 @@ func _run_case(scenario: String, size: int, carrier_peer: int,
 	duel.perf_dispatch_us.clear()
 	duel.perf_dispatch_calls.clear()
 	duel.perf_tick_us.clear()
+	for s: RefCounted in duel.skaters:
+		if s.agent != null:
+			(s.agent as SkaterAgentStateMachine).full_dispatch_count = 0
 	var wall_t0: int = Time.get_ticks_usec()
 	duel.run(WINDOW_S)
 	var wall_us: int = Time.get_ticks_usec() - wall_t0
@@ -108,6 +111,14 @@ func _run_case(scenario: String, size: int, carrier_peer: int,
 	for pid: int in duel.perf_dispatch_us:
 		dispatch_us += int(duel.perf_dispatch_us[pid])
 	var ai_us: int = dispatch_us + duel.perf_brain_us
+	# FULL-dispatch volume (throttle-skipped ticks excluded): the far-play
+	# dispatch LOD thins how OFTEN the full state handler runs, which the
+	# scenario totals can't show (the play evolves differently run-to-run) —
+	# full dispatches/s shows the thinning directly.
+	var dispatch_calls: int = 0
+	for s: RefCounted in duel.skaters:
+		if s.agent != null:
+			dispatch_calls += (s.agent as SkaterAgentStateMachine).full_dispatch_count
 
 	# Per-slot attribution: bucket each bot's window cost by the slot it
 	# holds at the end of the window (bots hold slots for long stretches in
@@ -125,6 +136,7 @@ func _run_case(scenario: String, size: int, carrier_peer: int,
 		"ai_us_per_s": float(ai_us) / WINDOW_S,
 		"brain_us_per_s": float(duel.perf_brain_us) / WINDOW_S,
 		"dispatch_us_per_s": float(dispatch_us) / WINDOW_S,
+		"dispatch_calls_per_s": float(dispatch_calls) / WINDOW_S,
 		"wall_us_per_s": float(wall_us) / WINDOW_S,
 		"tick_max_us": tick_max,
 		"tick_p95_us": tick_p95,
@@ -136,9 +148,10 @@ func _report() -> void:
 	gut.p("")
 	gut.p("=== AI host-cost benchmark (µs per game-second; 120 Hz tick budget = 1,000,000) ===")
 	for row: Dictionary in _rows:
-		gut.p("%-14s %dv%d  AI %8.0f  (brain %6.0f + dispatch %8.0f)   tick p95 %5d max %5d" % [
+		gut.p("%-14s %dv%d  AI %8.0f  (brain %6.0f + dispatch %8.0f over %4.0f full/s)   tick p95 %5d max %5d" % [
 				row.scenario, row.size, row.size, row.ai_us_per_s,
 				row.brain_us_per_s, row.dispatch_us_per_s,
+				row.dispatch_calls_per_s,
 				row.tick_p95_us, row.tick_max_us])
 		var slot_bits: Array[String] = []
 		var by_slot: Dictionary = row.by_slot

@@ -1221,6 +1221,17 @@ const FAR_PLAY_LOD_RADIUS_M: float = 18.0
 # only then are the one-timer trigger and crash read tick-critical.
 const FINISHER_FLIGHT_NEAR_M: float = 12.0
 var _role_decision_cooldown: int = 0
+# The dispatch span armed by the most recent full dispatch (see the far-play
+# dispatch LOD at the throttle site): the real tick gap between full
+# dispatches, which the role-argmax cooldown drains by so its wall-clock
+# cadences hold under the halved far shell instead of silently stretching.
+# One arming stale at the far↔near boundary (±2 ticks, once) — the cadences
+# here tolerate that.
+var _dispatch_armed_span_ticks: int = DISPATCH_PERIOD_TICKS
+# Full-dispatch counter (throttle-skipped ticks excluded). Read by the AI
+# benchmarks to verify dispatch-thinning LODs actually thin; no gameplay
+# consumer. One int increment per full dispatch.
+var full_dispatch_count: int = 0
 
 
 # True for slots whose positioning read tracks something that moves at play
@@ -1494,6 +1505,7 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	# Aim slew is NOT a difficulty knob anymore — it's the bot's real Hands blade
 	# speed, set in apply_capabilities. Difficulty here is reaction/cadence/pace.
 	_dispatch_period_ticks = maxi(1, profile.dispatch_period_ticks)
+	_dispatch_armed_span_ticks = _dispatch_period_ticks
 	# Cadence changed — re-derive this bot's pacing phase for the new period.
 	_stagger_cadence_phases()
 	_pursuit_standoff_m = profile.pursuit_standoff_m
@@ -1818,7 +1830,35 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 					_cached_aim_target, _cached_aim_mode,
 					_cached_aim_max_speed, _cached_aim_arc_rate)
 		return
-	_dispatch_skip_counter = _dispatch_period_ticks - 1
+	# FAR-FROM-PLAY DISPATCH LOD: an OFF_PUCK bot beyond FAR_PLAY_LOD_RADIUS_M
+	# of the puck runs the full state handler (steering recompute, sprint
+	# resolver, role predicates) at HALF the dispatch rate — the shell-level
+	# twin of the role-argmax far LOD below, and the flat majority of the 5v5
+	# AI bill (8-ish post-holders paying battle rates to hold formation).
+	# Same approach-physics grounding as the argmax LOD (the play needs
+	# ≥ ~0.55 s to arrive from 18 m out; the halved shell adds ≤ ~17 ms), and
+	# the per-tick texture is preserved on skipped ticks regardless: blade aim
+	# re-derives from live perception and steering re-steps the cached move
+	# vector every physics tick. OFF_PUCK only — CARRY/CHASE track the puck
+	# itself and the press states never enter this throttle. The FINISHER's
+	# tick-critical ring (FINISHER_FLIGHT_NEAR_M = 12 m) sits inside the LOD
+	# radius, so a bot arming a one-timer is never on the halved shell.
+	var dispatch_span: int = _dispatch_period_ticks
+	if _state == State.OFF_PUCK and snapshot.puck_state != null \
+			and self_pos.distance_squared_to(snapshot.puck_state.position) \
+			> FAR_PLAY_LOD_RADIUS_M * FAR_PLAY_LOD_RADIUS_M:
+		dispatch_span = _dispatch_period_ticks * 2
+		# Anti-lockstep: synchronized events (a possession flip transitions
+		# many bots at once, zeroing their counters via _set_state) would
+		# otherwise march every far bot on the same doubled period forever —
+		# same total work, spikier per-tick distribution (host FPS is the
+		# worst tick). Slightly-unequal periods drift the phases apart within
+		# a few cycles — the same idiom the role-argmax cooldown uses
+		# ((peer_id % 3) + period below).
+		dispatch_span += _peer_id % 2
+	_dispatch_armed_span_ticks = dispatch_span
+	_dispatch_skip_counter = dispatch_span - 1
+	full_dispatch_count += 1
 
 	match _state:
 		State.OFF_PUCK:
@@ -1960,7 +2000,11 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			_role_decision_cooldown = (_peer_id % 3) + period
 			_role_decision_pinged = ctx.ping_move_target.is_finite()
 		else:
-			_role_decision_cooldown -= _dispatch_period_ticks
+			# Drain by the REAL dispatch span (see _dispatch_armed_span_ticks):
+			# under the far-play dispatch LOD the shell runs at half rate, and
+			# draining by the base period there would stretch the argmax
+			# cadences a second time on top of the argmax's own far LOD.
+			_role_decision_cooldown -= _dispatch_armed_span_ticks
 			decision = _cached_role_decision
 		# Smart-ping GO_THERE override: a live location order from a human
 		# teammate replaces the role's move target for its duration. The role
