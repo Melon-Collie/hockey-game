@@ -359,12 +359,16 @@ static func hard() -> BotSkillProfile:
 # play now. Tune shot error first when Normal's scoring is off: it's the dial
 # that moves goals without making the bots look drunk.
 #
-# Pace: defenders sag ~1.5 m off the cut-off line, lead the play ~60% as far,
-# and hit-hunting is dialed back (check_aggression 0.65 → only the harder hits
-# commit). Passes launch at the full solved receiver-relative pace (the old
-# 85% reduction under-delivered the arrival solve and passes died short). A
-# human gets a beat of time and the play develops more readably — the
-# difference felt every possession. The precision knobs above and these pace
+# Pace: defenders sag ~0.75 m off the cut-off line (a half-stride of room —
+# the old 1.5 m sat the pressurer permanently outside blade reach, so a
+# Normal defender literally could never poke and playtests read the tier as
+# "bots never challenge"; at 0.75 the carrier's own motion brings the puck
+# transiently into contest range while the human still gets his beat), lead
+# the play ~60% as far, and hit-hunting is dialed back (check_aggression
+# 0.65 → only the harder hits commit). Passes launch at the full solved
+# receiver-relative pace (the old 85% reduction under-delivered the arrival
+# solve and passes died short). A human gets a beat of time and the play
+# develops more readably — the difference felt every possession. The precision knobs above and these pace
 # knobs are INDEPENDENT dials: if Normal plays like a pushover, raise the
 # precision knobs back toward Hard (sharper hands/reads) and let these pace
 # knobs keep it beatable; if it still feels superhuman, soften the pace knobs
@@ -380,7 +384,7 @@ static func hard() -> BotSkillProfile:
 # above). Easy is where the behaviour gates close.
 static func normal() -> BotSkillProfile:
 	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.30,
-			1.5, 1.0, 0.65, 0.6,
+			0.75, 1.0, 0.65, 0.6,
 			true, true, true, true, true, true)
 
 

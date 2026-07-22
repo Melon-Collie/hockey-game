@@ -175,6 +175,18 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# caps buffer used to size-mismatch and silently demote every trailer to
 	# league-reference speed, so a plodding trailer forced a deep sag and a
 	# burner was under-feared).
+	#
+	# A trailer a TEAMMATE is already home on is NOT CONTAIN's problem — his
+	# marker owns that channel (the MARK pair / 5v5 backline exist exactly for
+	# this). Without the read, CONTAIN priced itself as the sole defender
+	# against every body on the ice, and with 4–5 opponents (5v5 especially)
+	# no stand on the line ever contained them all — the feasibility bisection
+	# sagged every rush to the net, overriding even the blue-line stand
+	# ("defenders never challenge, retreat to their own crease"). The read is
+	# per-man and positional: a teammate goal-side of the man's lead point and
+	# within cover-engagement reach (the cover stand's depth + a stick) can
+	# contain that man's channel; a marker still sprinting home does NOT
+	# count, so a genuinely beaten team still sags on the honest race.
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	var opp_caps: Array[AISkaterCaps] = ctx.scratch_opp_caps
 	var receivers: Array[Vector3] = ctx.scratch_opp_receivers
@@ -186,12 +198,15 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id or pid == carrier_pid:
 			continue
 		var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
-		opp_states.append(s)
-		opp_caps.append(ctx.caps_by_peer.get(pid))
 		# The same bodies are the carrier's receivers for the lane fan below —
 		# velocity-led so the fan guards where each feed is going.
-		receivers.append(AIRoleHelpers.lead_threat(
-				s.position, s.velocity, ctx.defensive_anticipation_scale))
+		var lead: Vector3 = AIRoleHelpers.lead_threat(
+				s.position, s.velocity, ctx.defensive_anticipation_scale)
+		if _teammate_home_on(ctx, lead):
+			continue
+		opp_states.append(s)
+		opp_caps.append(ctx.caps_by_peer.get(pid))
+		receivers.append(lead)
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	var dir_net: Vector3 = to_net / dist
 	var stand: Vector3 = AIRoleHelpers.most_forward_feasible(
@@ -231,6 +246,32 @@ static func _has_support_behind(ctx: RoleContext) -> bool:
 		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
 			continue
 		if ctx.own_goal_dir * ctx.snapshot.skater_states[pid].position.z > my_depth:
+			return true
+	return false
+
+
+# True when a teammate (not self) is HOME ON this man: goal-side of the man's
+# lead point AND within cover-engagement reach of it — the marker's cover
+# stand sits COVER_DEPTH_M goal-side with a stick's reach beyond, so a body
+# inside that envelope owns the man's counter channel (deny the feed, or be
+# on him the moment it arrives). Both quantities CONTAIN can physically see:
+# where the teammate is standing and where the man is cutting. A teammate
+# still racing back from up-ice fails the goal-side test and does not count.
+static func _teammate_home_on(ctx: RoleContext, man_lead: Vector3) -> bool:
+	var reach: float = AIThreatAssignment.COVER_DEPTH_M \
+			+ SkaterAgentStateMachine.BLADE_REACH_M
+	var man_depth: float = ctx.own_goal_dir * man_lead.z
+	for pid: int in ctx.snapshot.skater_states:
+		if pid == ctx.peer_id:
+			continue
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+			continue
+		var t: SkaterNetworkState = ctx.snapshot.skater_states[pid]
+		if ctx.own_goal_dir * t.position.z <= man_depth:
+			continue
+		var dx: float = t.position.x - man_lead.x
+		var dz: float = t.position.z - man_lead.z
+		if dx * dx + dz * dz <= reach * reach:
 			return true
 	return false
 

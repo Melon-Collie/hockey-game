@@ -386,3 +386,73 @@ func test_two_on_one_gate_keeps_lower_tiers_on_the_carrier_line() -> void:
 	var d: RoleDecision = AIRoleContain.decide(ctx)
 	assert_almost_eq(d.target_position.x, 0.0, 0.001,
 			"gated tiers hold the pure retreat line")
+
+
+# ── Retreat floor + teammate-covered trailers ──────────────────────────────
+
+func test_retreat_floors_at_the_net_front_stand_not_the_goal_line() -> void:
+	# A trailer already at the doorstep makes every stand on the retreat line
+	# infeasible — the honest sag. But the sag must terminate at the NET-FRONT
+	# stand (top of the crease repel skirt), never converge onto the goal-line
+	# net point: a skater there duplicates the goalie, fights his own crease
+	# repel, and body overshoot carries him behind his own goal line.
+	var carrier := Vector3(0, 0, 22)
+	var ctx := _make_ctx(Vector3(0, 0, 10), [
+			[1, TEAM_ID, Vector3(0, 0, 10)],
+			[200, 1, carrier],
+			[210, 1, Vector3(0.3, 0, 26.6)],   # trailer parked at the net mouth
+	], 200)
+	ctx.plays_rush_pass_lanes = false
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	var floor_z: float = OUR_NET_Z \
+			- (CreaseRules.ARC_RADIUS + AISteering.CREASE_REPEL_EXTENSION)
+	assert_lt(d.target_position.z, floor_z + 0.1,
+			"the sag terminates at the net-front stand, not the net point;"
+			+ " got z=%f" % d.target_position.z)
+	assert_gt(d.target_position.z, floor_z - 0.4,
+			"…and it IS the deep net-front stand (the sag was real);"
+			+ " got z=%f" % d.target_position.z)
+
+
+func test_line_stand_holds_when_the_trailer_is_marked() -> void:
+	# The doorstep trailer that would force a full sag has a MARKER home on
+	# him (goal-side, within cover reach) — his counter channel is the
+	# marker's problem, not CONTAIN's. With the channel owned, the blue-line
+	# stand holds: CONTAIN meets the entry instead of conceding every rush to
+	# the crease. (This is the 5v5 failure: pricing itself as the sole
+	# defender against every body on the ice, no stand ever contained.)
+	var carrier := Vector3(0, 0, GameRules.BLUE_LINE_Z - 3.0)
+	var ctx := _make_ctx(Vector3(0, 0, 12), [
+			[1, TEAM_ID, Vector3(0, 0, 12)],
+			[2, TEAM_ID, Vector3(1.5, 0, 26.2)],   # marker home on the trailer
+			[200, 1, carrier],
+			[210, 1, Vector3(1, 0, 25.8)],         # doorstep trailer, marked
+	], 200)
+	ctx.plays_rush_pass_lanes = false
+	# OFF ruleset: the doorstep trailer is a LIVE channel (with offsides on,
+	# the offside-clamp already defuses him at the blue line and the test
+	# would pass without the marker read).
+	ctx.offsides_enforced = false
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	assert_almost_eq(d.target_position.z,
+			GameRules.BLUE_LINE_Z + AIRoleContain.LINE_STAND_INSIDE_M, 0.3,
+			"with the trailer's channel owned by his marker, CONTAIN plants"
+			+ " at the blue-line stand; got z=%f" % d.target_position.z)
+
+
+func test_unmarked_trailer_still_sags_the_stand() -> void:
+	# Same doorstep trailer, marker caught UP-ICE of him (not goal-side) —
+	# the channel is genuinely CONTAIN's problem and the honest sag stands.
+	var carrier := Vector3(0, 0, GameRules.BLUE_LINE_Z - 3.0)
+	var ctx := _make_ctx(Vector3(0, 0, 12), [
+			[1, TEAM_ID, Vector3(0, 0, 12)],
+			[2, TEAM_ID, Vector3(1.5, 0, 20.0)],   # deep, but NOT goal-side of the man
+			[200, 1, carrier],
+			[210, 1, Vector3(1, 0, 25.8)],         # doorstep trailer, unmarked
+	], 200)
+	ctx.plays_rush_pass_lanes = false
+	ctx.offsides_enforced = false   # live cherry-picker (see the marked twin)
+	var d: RoleDecision = AIRoleContain.decide(ctx)
+	assert_gt(d.target_position.z, 20.0,
+			"an unmarked doorstep trailer still sags the stand deep;"
+			+ " got z=%f" % d.target_position.z)
