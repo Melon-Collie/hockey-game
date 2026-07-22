@@ -11,6 +11,7 @@ var _fov_slider: HSlider = null
 var _fov_label: Label = null
 var _cam_dist_slider: HSlider = null
 var _cam_dist_label: Label = null
+var _minimap_check: CheckButton = null
 
 func _build_content() -> void:
 	_camera_mode_btn = OptionButton.new()
@@ -52,12 +53,22 @@ func _build_content() -> void:
 	_cam_dist_slider.value_changed.connect(func(v: float) -> void: _cam_dist_label.text = "%.2fx" % v)
 	add_child(_slider_row("Distance", _cam_dist_slider, _cam_dist_label))
 
+	# Top-down rink minimap in the bottom-left HUD corner. Its orientation tracks
+	# the camera (including the "Always Attack Up" flip), so it lives here with the
+	# other framing controls rather than in the Gameplay tab.
+	_minimap_check = CheckButton.new()
+	_minimap_check.set_pressed_no_signal(PlayerPrefs.minimap_enabled)
+	SoundManager.wire_button(_minimap_check)
+	_minimap_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
+	add_child(_field_row("Minimap", _minimap_check))
+
 func read_controls() -> Dictionary:
 	return {
 		"camera_mode": _camera_mode_btn.selected,
 		"camera_tilt_deg": _tilt_slider.value,
 		"fov": _fov_slider.value,
 		"camera_distance": _cam_dist_slider.value,
+		"minimap_enabled": _minimap_check.button_pressed,
 	}
 
 func apply_values(v: Dictionary) -> void:
@@ -65,3 +76,4 @@ func apply_values(v: Dictionary) -> void:
 	_tilt_slider.value = v.camera_tilt_deg
 	_fov_slider.value = v.fov
 	_cam_dist_slider.value = v.camera_distance
+	_minimap_check.set_pressed_no_signal(v.minimap_enabled)
