@@ -178,7 +178,6 @@ var _expired_cooldowns: Array[int] = []
 var _is_server: bool = false
 var _pending_reset: bool = false
 var _pending_reset_xz: Vector2 = Vector2.ZERO
-var _clamp_at_goal_line: bool = false
 # Last known-finite puck position, cached each physics step so the non-finite
 # guard in _integrate_forces can restore a sane position rather than crash Jolt.
 var _last_finite_position: Vector3 = Vector3.ZERO
@@ -306,23 +305,6 @@ func set_server_mode(is_server: bool) -> void:
 	if not is_server:
 		freeze = true
 
-func set_client_prediction_mode(active: bool) -> void:
-	if _is_server:
-		return
-	# Phase 4a: the shooter's client prediction is analytic (the controller
-	# advances the body directly with the shared solver), so the client puck is
-	# frozen in EVERY mode — Jolt never integrates or collides it anywhere,
-	# mirroring the host under the drive. "Prediction mode" now only means the
-	# controller owns motion; leaving it zeroes the velocity store and the
-	# goal-line clamp exactly as before.
-	freeze = true
-	if not active:
-		linear_velocity = Vector3.ZERO
-		_clamp_at_goal_line = false
-
-func set_goal_line_clamp(enabled: bool) -> void:
-	_clamp_at_goal_line = enabled
-
 # ── Contract for PuckController ───────────────────────────────────────────────
 func get_puck_position() -> Vector3:
 	return global_position
@@ -355,7 +337,7 @@ func stage_at(pos: Vector3) -> void:
 	_pending_elevation_vel = Vector3.ZERO
 	_pending_elevation = false
 
-# Used by client-side prediction release (notify_local_release). Applies the
+# Direct-velocity launch used by the tutorial's staged pucks. Applies the
 # same _pending_elevation_vel treatment as release() so Jolt's first dynamic
 # integration step gets the full XYZ vector instead of starting at zero.
 func apply_release_velocity(vel: Vector3) -> void:
@@ -871,15 +853,7 @@ func _drive_analytic(dt: float) -> void:
 	var touched_boards: bool = raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 \
 			and incoming.length() >= 1.0
 
-	# 4) Goal-line clamp (re-homed from _integrate_forces).
-	if _clamp_at_goal_line:
-		var z: float = pos.z
-		if absf(z) >= GameRules.GOAL_LINE_Z and z * vel.z > 0.0 \
-				and absf(pos.x) <= GameRules.NET_HALF_WIDTH:
-			pos.z = GameRules.GOAL_LINE_Z * signf(z)
-			vel = Vector3.ZERO
-
-	# 5) Commit. The puck can never sit below the ice — re-homes the Jolt path's grounded
+	# 4) Commit. The puck can never sit below the ice — re-homes the Jolt path's grounded
 	# `position.y = ice_height` pin, and catches a goalie eject / save whose normal drove the
 	# disc down into the surface (the "puck in the ice, only the shadow shows" bug).
 	if pos.y < ice_height:
@@ -1064,13 +1038,6 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 			# sounds/looks like the bounce it stands in for.
 			if carrier == null and rescued.length() >= 1.0:
 				puck_hit_boards.emit()
-	if _clamp_at_goal_line:
-		var z: float = state.transform.origin.z
-		var goal_z: float = GameRules.GOAL_LINE_Z
-		if abs(z) >= goal_z and z * state.linear_velocity.z > 0.0 \
-				and abs(state.transform.origin.x) <= GameRules.NET_HALF_WIDTH:
-			state.transform.origin.z = goal_z * sign(z)
-			state.linear_velocity = Vector3.ZERO
 	# Cache the velocity the puck carries out of this step — the save-deaden
 	# classifier reads it as the pre-bounce incoming velocity, since
 	# linear_velocity in _on_body_entered may already carry the restitution

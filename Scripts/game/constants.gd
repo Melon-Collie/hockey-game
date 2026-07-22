@@ -90,20 +90,18 @@ const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
 # of a full-lead (~9-tick) window; lower = more conservative (less overshoot, less
 # catch-up), higher = more aggressive. Tune alongside REMOTE_FORWARD_PREDICT_FRACTION.
 const FORWARD_PREDICT_INTENT_DECAY_TICKS: int = 5
-# Phase-3 determinism migration (docs/netcode-determinism-migration.md): every
-# client runs the SAME analytic sim the host drives the loose puck with,
-# forward from the newest authoritative snapshot to its estimate of host
-# present — real predict-and-reconcile, replacing interpolate-in-the-past for
-# the loose puck. Static geometry (boards, posts, crossbar, net) is fully
-# predicted via the shared PuckAuthorityRules step; goalie contact is a
-# prediction STOP (hold at the contact — the save outcome is a host decision,
-# never re-derived client-side). Host claim rewinds for the LOOSE puck
-# (pickup, one-timer range gate) read the claim stamp instead of the
-# interpolated past — see LagCompRewind.puck_view_time — so render == rewind
-# holds at present. Both sides read this constant and PROTOCOL_VERSION gates
-# mixed builds, so the pair can never disagree. false restores the legacy
-# interpolated loose puck AND the interpolated-past claim rewind.
-const PUCK_CLIENT_PREDICTION: bool = true
+# Phase-3/4b determinism migration (docs/netcode-determinism-migration.md):
+# every client runs the SAME analytic sim the host drives the loose puck with,
+# forward to its estimate of host present — real predict-and-reconcile; the
+# loose puck is never interpolated except as the stale-data fallback. The
+# source is the newest authoritative snapshot, or — for the shooter's own
+# release, until the host's snapshots reflect it — the local release seed
+# (PuckController._release_seed_*). Static geometry (boards, posts, crossbar,
+# net) is fully predicted via the shared PuckAuthorityRules step; goalie
+# contact is a prediction STOP (hold at the contact — the save outcome is a
+# host decision, never re-derived client-side). Host claim rewinds for the
+# LOOSE puck (pickup, one-timer range gate) read the claim stamp — see
+# LagCompRewind.puck_view_time — so render == rewind holds at present.
 # Prediction depth cap: a snapshot older than this (deep packet loss) is too
 # stale to predict from — the client falls back to the legacy interpolation
 # path, whose extrapolation cap + hold already handle starvation gracefully.

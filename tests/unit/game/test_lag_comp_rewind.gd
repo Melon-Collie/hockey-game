@@ -233,19 +233,14 @@ func test_continuity_tolerance_negative_blade_speed_clamped() -> void:
 	assert_almost_eq(LagCompRewind.blade_continuity_tolerance(-5.0), 0.30, 1e-4)
 
 
-# ── puck_view_time (Phase-3 loose-puck claim rewind) ──────────────────────────
+# ── puck_view_time (Phase-3/4b loose-puck claim rewind) ───────────────────────
 
-func test_puck_view_time_follows_the_prediction_constant() -> void:
-	# Under Phase-3 client puck prediction the claimant renders the loose puck
-	# predicted AT the claim stamp, so the host rewinds to the stamp itself;
-	# with prediction off it is the legacy interpolated past. The assertion
-	# reads the constant so this test states the truth under either setting.
-	var t: float = LagCompRewind.puck_view_time(10.0, 75.0)
-	if Constants.PUCK_CLIENT_PREDICTION:
-		assert_almost_eq(t, 10.0, EPSILON, "prediction on -> rewind at the stamp")
-	else:
-		assert_almost_eq(t, LagCompRewind.remote_view_time(10.0, 75.0), EPSILON,
-				"prediction off -> legacy interpolated past")
+func test_puck_view_time_is_the_claim_stamp() -> void:
+	# The claimant renders the loose puck predicted AT the claim stamp (render
+	# == rewind at present, unconditional since Phase 4b removed the prediction
+	# escape hatch), so the host rewinds to the stamp itself.
+	assert_almost_eq(LagCompRewind.puck_view_time(10.0), 10.0, EPSILON,
+			"loose-puck claims rewind to the claim stamp")
 
 
 # ── plausible_interp_delay_ms (P2: bound the self-reported render delay) ──────

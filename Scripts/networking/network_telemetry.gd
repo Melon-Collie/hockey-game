@@ -152,20 +152,18 @@ var _provisional_stolen_count: int = 0
 # visible from inside the engine).
 var _bytes_sent_window: int = 0
 var _bytes_received_window: int = 0
-# Puck trajectory three-zone correction counters. Each broadcast during
-# trajectory prediction picks one zone based on client-vs-server divergence:
-# 0=soft blend (<0.3m), 1=velocity-only (0.3-1.5m), 2=hard snap (>1.5m).
-# Healthy: mostly zone 0, occasional zone 1, zone 2 only on real physics
-# divergence (wall/goalie bounce). Zone 2 firing every shot indicates a
-# trajectory math bug; zones 0+1 oscillating frame-to-frame indicates RTT
-# jitter exceeding the bounded velocity-only band.
-var _puck_traj_soft_count: int = 0
-var _puck_traj_vel_only_count: int = 0
-var _puck_traj_hard_snap_count: int = 0
-# Shot-launch divergence: on the first host-confirmed broadcast after a LOCAL
-# shot release, the gap between the client-predicted puck and the host-authoritative
-# launch. Both run identical Jolt from the same client-sent origin, so this should
-# be tiny — a spike means real launch divergence, and it attributes the shot-launch
+# Loose-puck hard snaps: the render smoother's velocity-aware snap guard
+# (PuckHandoffRules.needs_hard_snap) fired on a MOVING target — genuine
+# trajectory divergence (a bounce that differed, a deflect the client missed),
+# never a faceoff/goal-reset teleport (those hit the at-rest branch and aren't
+# counted). Near-zero in healthy play; firing every shot is a prediction bug.
+var _puck_hard_snap_count: int = 0
+# Shot-launch divergence: at the release-seed → snapshot handover after a LOCAL
+# release, the gap between the seed-predicted puck (advanced to the confirming
+# snapshot's own instant) and that authoritative snapshot. Both sides fire from
+# the same client-sent origin on the same solver, so this should be tiny —
+# a spike means real launch divergence (clock estimate error × puck speed, or a
+# host-side event inside the one-way window), and it attributes the shot-launch
 # share of puck_hard_snaps. Window MAX (peak) + a session shot count (TOTAL). Client only.
 var _shot_launch_pos_div_max: float = 0.0
 var _shot_launch_vel_div_max: float = 0.0
@@ -236,13 +234,9 @@ var ooo_drops_per_sec: float = 0.0       # expect 0; non-zero means UDP reorderi
 # 120Hz, so per-recipient bytes_sent_per_sec should stay under ~60 KB/s.
 var bytes_sent_per_sec: float = 0.0
 var bytes_received_per_sec: float = 0.0
-# Puck trajectory three-zone correction rates (Hz). All three sum to roughly
-# (post-shot broadcast rate ≈ 120/s) DURING trajectory prediction only — they're
-# zero when puck is carried or interpolated. Mostly soft, occasional vel-only,
-# hard-snap only on real divergence. Hard-snap firing every shot is a bug.
-var puck_traj_soft_per_sec: float = 0.0
-var puck_traj_vel_only_per_sec: float = 0.0
-var puck_traj_hard_snap_per_sec: float = 0.0
+# Loose-puck hard-snap rate (Hz): moving-target smoother snaps only (see
+# _puck_hard_snap_count). Near-zero in healthy play.
+var puck_hard_snap_per_sec: float = 0.0
 var input_queue_depth_median: int = 0
 var input_lead_avg_ms: float = 0.0
 var input_starvations_per_sec: float = 0.0
@@ -417,21 +411,15 @@ static func record_post_replay_residual(meters: float) -> void:
 static func record_ooo_drop() -> void:
 	if instance: instance._ooo_drop_count += 1
 
-# puck_trajectory_zone: which three-zone branch fired for this broadcast during
-# trajectory prediction. 0=soft (<0.3m), 1=velocity-only (0.3-1.5m), 2=hard snap
-# (>1.5m + buffer clear). Used to detect oscillation around zone boundaries and
-# to flag hard-snap rates that should only ever fire on real physics divergence.
-static func record_puck_trajectory_zone(zone: int) -> void:
-	if instance == null:
-		return
-	match zone:
-		0: instance._puck_traj_soft_count += 1
-		1: instance._puck_traj_vel_only_count += 1
-		2: instance._puck_traj_hard_snap_count += 1
+# puck_hard_snap: the loose-puck render smoother teleported a MOVING puck —
+# genuine trajectory divergence (see PuckController._smooth_apply_and_prune).
+static func record_puck_hard_snap() -> void:
+	if instance: instance._puck_hard_snap_count += 1
 
-# Divergence between the client's predicted puck and the host's authoritative
-# launch at the first host-confirmed broadcast after a local release (see
-# PuckController). Keeps the window peak of each; count is the shot denominator.
+# Divergence between the client's seed-predicted puck and the host's
+# authoritative launch at the release-seed → snapshot handover after a local
+# release (see PuckController._predict_loose). Keeps the window peak of each;
+# count is the shot denominator.
 static func record_shot_launch_divergence(pos_div_m: float, vel_div: float) -> void:
 	if instance == null:
 		return
@@ -602,9 +590,7 @@ func tick(delta: float) -> void:
 	ooo_drops_per_sec = _ooo_drop_count / _window_timer
 	bytes_sent_per_sec = _bytes_sent_window / _window_timer
 	bytes_received_per_sec = _bytes_received_window / _window_timer
-	puck_traj_soft_per_sec = _puck_traj_soft_count / _window_timer
-	puck_traj_vel_only_per_sec = _puck_traj_vel_only_count / _window_timer
-	puck_traj_hard_snap_per_sec = _puck_traj_hard_snap_count / _window_timer
+	puck_hard_snap_per_sec = _puck_hard_snap_count / _window_timer
 	input_lead_avg_ms = (_input_lead_sum / _input_lead_n * 1000.0) if _input_lead_n > 0 else 0.0
 	input_starvations_per_sec = _starvation_count / _window_timer
 	input_drains_per_sec = _input_drain_count / _window_timer
@@ -684,9 +670,7 @@ func tick(delta: float) -> void:
 	_ooo_drop_count = 0
 	_bytes_sent_window = 0
 	_bytes_received_window = 0
-	_puck_traj_soft_count = 0
-	_puck_traj_vel_only_count = 0
-	_puck_traj_hard_snap_count = 0
+	_puck_hard_snap_count = 0
 	_shot_launch_pos_div_max = 0.0
 	_shot_launch_vel_div_max = 0.0
 	_shot_launch_count = 0
@@ -775,7 +759,7 @@ func _fold_session_sample() -> void:
 		# Rare-event tripwires fold as this window's raw COUNTS — TOTAL_KEYS in
 		# the summary, so the row carries a session total instead of an average
 		# that smears 3 hard snaps in a 10-minute game to ~0.
-		"puck_hard_snaps": float(_puck_traj_hard_snap_count),
+		"puck_hard_snaps": float(_puck_hard_snap_count),
 		"blade_jumps": float(_blade_jump_count),
 		# Reconcile-match miss attribution (TOTAL_KEYS). A miss → prediction-lead
 		# fallback → spurious position snap, so these split the residual reconcile
@@ -868,7 +852,7 @@ const _INPUT_BACKLOG_MARKER_MS: float = 500.0
 # enforced by the summary's per-trigger cooldown + session cap, so a broken
 # session records the onset, not spam.
 func _check_auto_markers() -> void:
-	if _puck_traj_hard_snap_count >= 2:
+	if _puck_hard_snap_count >= 2:
 		_auto_marker("puck_hard_snaps")
 	if reconcile_per_sec >= 5.0:
 		_auto_marker("reconcile_storm")

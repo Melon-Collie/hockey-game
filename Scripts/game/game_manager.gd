@@ -2825,11 +2825,10 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		var record := _registry.get_local()
 		if record != null:
 			record.controller.on_puck_released_network()
-		var shot_rtt_ms: float = NetworkManager.get_latest_rtt_ms()
 		# Seed local puck prediction only. The host fires the authoritative shot from
 		# THIS client's input-stream release (host-derived, _on_remote_derived_release),
 		# so there is no shot RPC — the inputs the host already replays carry it.
-		puck_controller.notify_local_release(direction, power, shot_rtt_ms)
+		puck_controller.notify_local_release(direction, power)
 
 
 # Nudge (self-tap nutmeg setup). Mirrors the shot-release split — host fires the
@@ -2851,7 +2850,7 @@ func _on_nudge_requested(velocity: Vector3) -> void:
 		var record := _registry.get_local()
 		if record != null:
 			record.controller.on_puck_released_network()
-		puck_controller.notify_local_nudge(velocity, NetworkManager.get_latest_rtt_ms())
+		puck_controller.notify_local_nudge(velocity)
 
 
 # Host-side authoritative nudge derived from a remote player's replayed input.
@@ -2901,8 +2900,7 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 		if puck_controller != null:
 			var record := _registry.get_local()
 			if record != null:
-				var rtt_ms: float = NetworkManager.get_latest_rtt_ms()
-				origin = puck_controller.notify_local_release(direction, power, rtt_ms)
+				origin = puck_controller.notify_local_release(direction, power)
 		NetworkManager.send_one_timer_release(direction, power, origin)
 		return
 	# Host's own one-timer: shooter is local, no client-view rewind needed.
@@ -2932,11 +2930,11 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	var controller: SkaterController = record.controller
 	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
 			rtt_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
-	# Range gate against the puck the shooter saw — puck_view_time: predicted at
-	# the claim stamp under Phase-3 client puck prediction, the interpolated past
-	# otherwise; live puck when the stamp is stale. This is the ONLY part of the
-	# one-timer the client gets a say in — "did I connect with the puck I saw" —
-	# and it stays lag-comped. The shot itself (below) is host-derived.
+	# Range gate against the puck the shooter saw — puck_view_time: the loose
+	# puck renders predicted at ~host present, so the rewind reads the claim
+	# stamp itself; live puck when the stamp is stale. This is the ONLY part of
+	# the one-timer the client gets a say in — "did I connect with the puck I
+	# saw" — and it stays lag-comped. The shot itself (below) is host-derived.
 	# Anti-cheat: bound the self-reported render delay against the measured link
 	# before any rewind reads it (see LagCompRewind.plausible_interp_delay_ms).
 	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
@@ -2946,7 +2944,7 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() \
 			and ShotReleaseRules.is_timestamp_fresh(now, host_timestamp):
 		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(
-				LagCompRewind.puck_view_time(host_timestamp, interp_delay_ms))
+				LagCompRewind.puck_view_time(host_timestamp))
 		if snap != null and snap.puck_state != null:
 			view_puck_pos = snap.puck_state.position
 	var zone_world: Vector3 = record.skater.get_slapper_zone_global_position()

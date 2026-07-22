@@ -203,19 +203,34 @@ Once the loose puck is a deterministic sim both sides run:
   deflect verdict / one-timer range gate) read the claim stamp
   (`LagCompRewind.puck_view_time`) so render == rewind holds at present; the carried
   puck stays on the carrier's stage-3 timeline. Stale data (> `PUCK_PREDICT_MAX_S`)
-  falls back to the legacy interpolation path, which also remains the shooter's
-  trajectory-prediction reconcile target for now.
-- **Phase 4 — simplify. 4a DONE, 4b gated on the playtest.** 4a (landed): the
-  shooter's trajectory prediction swapped from client Jolt onto the shared analytic
-  step (`_advance_local_trajectory` — same solver, sub-stepping, and frame geometry
-  as the host drive; goalie = hold, frame = keep simulating), making client Jolt
-  fully inert (the client puck body is frozen in every mode); the stage-4
-  conditional-lead machinery and the dead lead exports deleted outright. 4b (after
-  the playtest proves Phase 3): collapse the trajectory mode into the one predicted
-  mode (needs a local-release seed), delete the handoff slew and shrink the
-  interpolation fallback to hold-at-newest, remove the `PUCK_CLIENT_PREDICTION`
-  escape hatch, and retire the Jolt puck node itself (a .tscn change). The puck's
-  netcode is then the skater's: predict + reconcile.
+  falls back to the legacy interpolation path.
+- **Phase 4 — simplify. DONE (4a and 4b landed; playtest validated Phase 3 with
+  ~11 cm avg puck agreement and it "felt really solid").** 4a: the shooter's
+  trajectory prediction swapped from client Jolt onto the shared analytic step,
+  making client Jolt fully inert (the client puck body is frozen in every mode);
+  the stage-4 conditional-lead machinery and the dead lead exports deleted
+  outright. 4b: the separate trajectory mode is gone — the shooter's own release
+  now rides the ONE predicted mode via a **local-release seed**
+  (`PuckController._release_seed_*`): from the release instant until the host's
+  snapshots reflect it (~one-way), `_predict_loose` predicts from the client-fired
+  origin + velocity (the same origin the host fires from), then hands over to
+  normal snapshot prediction on the first fresh loose snapshot — measuring
+  shot-launch divergence at exactly that seam. With every loose-puck target at
+  ~host present there is no cross-timeline handoff left, so the render-time slew
+  (`PuckHandoffRules.timeline_lead`), the three-zone trajectory reconcile, the
+  post-contact suppression window, and the pending-release machinery are all
+  deleted (the velocity-aware `needs_hard_snap` guard remains — it's the
+  every-frame smoother's snap decision, now also the `puck_hard_snaps` telemetry
+  source). The `PUCK_CLIENT_PREDICTION` escape hatch is removed and
+  `LagCompRewind.puck_view_time` reads the claim stamp unconditionally.
+  **One deliberate deviation from the original 4b scope:** the interpolation
+  fallback was kept as-is (buffered interpolate-in-the-past + capped board-aware
+  extrapolation) rather than shrunk to hold-at-newest — it only runs on deep loss
+  (> `PUCK_PREDICT_MAX_S` staleness), and its graceful-degradation behavior there
+  is strictly better than a hold for zero added complexity. Still open: retiring
+  the Jolt puck node itself (Puck.tscn RigidBody3D → a plain body — a .tscn
+  change, made in the editor). The puck's netcode is now the skater's: predict +
+  reconcile.
 
 ## Recommendation
 
