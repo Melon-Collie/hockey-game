@@ -493,6 +493,11 @@ func blade_y_local() -> float:
 	# IK solves from it) rises off the ice. blend is 0 in all shot/carry states
 	# (blade_up is gated off then), so this is a no-op except during a lift.
 	var lift: float = _skater.get_blade_lift_blend() * _controller.blade_lift_height
+	# Plus the commit-stance stick raise: a body-check commit pulls the stick off
+	# the ice as a readable tell. Gameplay-inert (the blade is already withdrawn
+	# from puck play while committed), so this is a pure cosmetic overlay; 0 except
+	# during an empty-handed commit.
+	lift += _skater.get_commit_lift_blend() * _controller.hit_commit_blade_lift_m
 	return (_controller.blade_height + lift) - _skater.upper_body.global_position.y
 
 # Lean-corrected blade Y for a given blade local (X, Z). Computes the local Y

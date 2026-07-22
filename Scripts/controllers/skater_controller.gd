@@ -70,13 +70,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # (sprint_turn_multiplier). Dial below 1.0 if committed checks feel too sticky.
 @export var hit_turn_multiplier: float = 1.0
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
-# up for the check — leans into it, drops the leading shoulder, and sinks into a
-# crouch. A render-rate blend (SkaterSkatingCoordinator) off the replicated
-# skater.hit_committed, so it reads on every machine and never touches the physics-
-# rate blade anchor (no reconcile geometry impact). Eases in/out as Ctrl is held.
-@export var hit_commit_lean_deg: float = 16.0         # forward trunk lean into the check
-@export var hit_commit_shoulder_deg: float = 12.0     # leading-shoulder drop (roll)
-@export var hit_commit_crouch_m: float = 0.07         # sink into the checking stance
+# up for the check — leans into it, drops the leading shoulder, sinks into a
+# crouch, and (empty-handed only) pulls the stick up off the ice. A render-rate
+# trunk blend (SkaterSkatingCoordinator) off the replicated skater.hit_committed
+# plus a stick raise driven through the IK's blade_y (gameplay-inert while
+# committed), so it reads on every machine and never affects puck play. Deliberately
+# pronounced — the stance has to be unmistakable so the commitment (and the withdrawn
+# stick) is legible to the player and their opponent. Eases in/out as Ctrl is held.
+@export var hit_commit_lean_deg: float = 24.0         # forward trunk lean into the check
+@export var hit_commit_shoulder_deg: float = 19.0     # leading-shoulder drop (roll)
+@export var hit_commit_crouch_m: float = 0.12         # sink into the checking stance
+@export var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an empty-handed commit
 @export var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
