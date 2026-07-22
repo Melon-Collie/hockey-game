@@ -58,6 +58,39 @@ func test_prev_tick_subtracts_one_physics_tick() -> void:
 	assert_almost_eq(LagCompRewind.prev_tick(10.0), 10.0 - 1.0 / float(Constants.PHYSICS_TICK), EPSILON)
 
 
+# ── forward_predict_ticks (stage-3 render == rewind depth) ────────────────────
+
+func test_forward_predict_ticks_zero_fraction_is_zero() -> void:
+	# The shipped default: no forward integration -> render == rewind in the past.
+	assert_eq(LagCompRewind.forward_predict_ticks(0.0, 0.075), 0)
+
+
+func test_forward_predict_ticks_full_fraction_is_interp_delay_worth() -> void:
+	# fraction 1.0, 75 ms interp delay, 120 Hz -> 9 ticks (0.075 * 120).
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, 0.075), 9)
+
+
+func test_forward_predict_ticks_half_fraction() -> void:
+	assert_eq(LagCompRewind.forward_predict_ticks(0.5, 0.075), 5)  # round(4.5)
+
+
+func test_forward_predict_ticks_clamps_and_guards() -> void:
+	assert_eq(LagCompRewind.forward_predict_ticks(2.0, 0.075), 9, "fraction clamps to 1.0")
+	assert_eq(LagCompRewind.forward_predict_ticks(-1.0, 0.075), 0, "negative fraction -> 0")
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, -0.05), 0, "negative delay -> 0")
+
+
+func test_forward_predict_ticks_caps_hostile_delay() -> void:
+	# The host-side caller feeds this the RAW client-reported interp_delay_ms —
+	# without the 200 ms ceiling (same clamp as remote_view_time) a crafted
+	# claim with a huge delay turns the per-claim integration loop into an
+	# unbounded host stall. 200 ms at 120 Hz -> 24 ticks, the hard ceiling.
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, 1.0e6), 24)
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, 0.2), 24, "legit delay at the ceiling")
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, INF), 0, "non-finite -> 0")
+	assert_eq(LagCompRewind.forward_predict_ticks(1.0, NAN), 0, "non-finite -> 0")
+
+
 # ── Composition ──────────────────────────────────────────────────────────────
 
 func test_self_and_remote_diverge_by_input_lead_plus_interp_delay() -> void:
@@ -198,3 +231,84 @@ func test_continuity_tolerance_floor_at_zero_blade_speed() -> void:
 
 func test_continuity_tolerance_negative_blade_speed_clamped() -> void:
 	assert_almost_eq(LagCompRewind.blade_continuity_tolerance(-5.0), 0.30, 1e-4)
+
+
+# ── puck_view_time (Phase-3/4b loose-puck claim rewind) ───────────────────────
+
+func test_puck_view_time_is_the_claim_stamp() -> void:
+	# The claimant renders the loose puck predicted AT the claim stamp (render
+	# == rewind at present, unconditional since Phase 4b removed the prediction
+	# escape hatch), so the host rewinds to the stamp itself.
+	assert_almost_eq(LagCompRewind.puck_view_time(10.0), 10.0, EPSILON,
+			"loose-puck claims rewind to the claim stamp")
+
+
+# ── plausible_interp_delay_ms (P2: bound the self-reported render delay) ──────
+
+func test_interp_delay_honest_report_passes_through() -> void:
+	# 80 ms RTT peer legitimately reporting ~60 ms (one-way 40 + interval + jitter).
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(60.0, 80.0), 60.0, EPSILON)
+
+
+func test_interp_delay_inflated_report_clamped_to_link() -> void:
+	# 20 ms link reporting the 200 ms cap — the "hit them where they were"
+	# exploit. Bound = one-way (10) + broadcast interval (~8.3) + 100 allowance.
+	var bounded: float = LagCompRewind.plausible_interp_delay_ms(200.0, 20.0)
+	assert_almost_eq(bounded, 10.0 + 1000.0 / float(Constants.STATE_RATE) + 100.0, 0.01)
+	assert_lt(bounded, 200.0, "the flat cap alone no longer bounds a fast link")
+
+
+func test_interp_delay_no_sample_uses_conservative_default() -> void:
+	# No ping sample yet -> the same conservative default RTT the stamp check
+	# uses (150 ms), not an unbounded pass-through.
+	var bounded: float = LagCompRewind.plausible_interp_delay_ms(200.0, 0.0)
+	assert_almost_eq(bounded, 75.0 + 1000.0 / float(Constants.STATE_RATE) + 100.0, 0.01)
+
+
+func test_interp_delay_never_exceeds_absolute_cap() -> void:
+	# A terrible-but-real link (300 ms RTT): the link-derived ceiling would pass
+	# 258 ms, but the absolute 200 ms cap still rules.
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(500.0, 300.0), 200.0, EPSILON)
+
+
+func test_interp_delay_rejects_garbage() -> void:
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(NAN, 80.0), 0.0, EPSILON)
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(INF, 80.0), 0.0, EPSILON)
+	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(-50.0, 80.0), 0.0, EPSILON)
+
+
+# ── self_view_time with the claim-carried adaptive lead ───────────────────────
+
+func test_self_view_honest_lead_passes_through() -> void:
+	# A claim carrying base + 10 ms of adaptive extra rewinds to exactly that.
+	var lead_ms: float = (NetworkManager.INPUT_LEAD_SEC + 0.010) * 1000.0
+	assert_almost_eq(LagCompRewind.self_view_time(10.0, lead_ms),
+			10.0 + NetworkManager.INPUT_LEAD_SEC + 0.010, EPSILON)
+
+
+func test_self_view_inflated_lead_clamped() -> void:
+	# A modified client reporting a huge lead can't push its self-view rewind
+	# arbitrarily forward — bounded at base + MAX extra (mirrors ClockSync).
+	var t: float = LagCompRewind.self_view_time(10.0, 500.0)
+	assert_almost_eq(t, 10.0 + NetworkManager.INPUT_LEAD_SEC + 0.05, EPSILON)
+
+
+func test_self_view_undercut_lead_clamped_to_base() -> void:
+	# Reporting less than the base constant is equally implausible (the stamp
+	# convention floors there) — clamped up to base.
+	assert_almost_eq(LagCompRewind.self_view_time(10.0, 1.0),
+			10.0 + NetworkManager.INPUT_LEAD_SEC, EPSILON)
+
+
+func test_self_view_default_and_garbage_use_base() -> void:
+	assert_almost_eq(LagCompRewind.self_view_time(10.0),
+			10.0 + NetworkManager.INPUT_LEAD_SEC, EPSILON)
+	assert_almost_eq(LagCompRewind.self_view_time(10.0, NAN),
+			10.0 + NetworkManager.INPUT_LEAD_SEC, EPSILON)
+
+
+func test_lead_extra_max_mirrors_clock_sync() -> void:
+	# The host-side clamp must track the client-side servo ceiling — if they
+	# drift apart a legit fully-adapted claim gets mis-rewound.
+	var cs_script: GDScript = load("res://Scripts/networking/clock_sync.gd")
+	assert_eq(LagCompRewind._INPUT_LEAD_EXTRA_MAX_S, cs_script.MAX_LEAD_EXTRA_S)

@@ -1456,11 +1456,6 @@ func reset_to_crease() -> void:
 	_pp_trapped = false
 	_pp_stride_phase = 0.0
 	_pp_stride_intensity = 0.0
-	# A caught puck is FROZEN (RigidBody freeze, carry-style) — a mid-catch
-	# reset (whistle/faceoff/goal) must unfreeze it or it stays pinned in the
-	# air forever; the phase machinery owns pickup_locked through stoppages.
-	if _catch_secured and puck != null:
-		puck.freeze = false
 	_catch_secured = false
 	_catch_pressured = false
 	_catch_hold_timer = 0.0
@@ -2432,8 +2427,9 @@ func _tick_catch(delta: float) -> void:
 		return
 	if not _catch_secured:
 		_catch_secured = true
+		# pickup_locked both makes the puck dead to blades AND parks the
+		# analytic drive, so the per-tick glove pin below owns the position.
 		puck.pickup_locked = true
-		puck.freeze = true
 		puck.set_puck_velocity(Vector3.ZERO)
 		if _catch_pressured:
 			puck_covered.emit(team_id)
@@ -2448,7 +2444,6 @@ func _tick_catch(delta: float) -> void:
 # machinery (dwell → lane-aware windup-strike, or another cover if the lanes
 # are jammed) handles what happens next.
 func _drop_caught_puck() -> void:
-	puck.freeze = false
 	puck.pickup_locked = false
 	_catch_secured = false
 	puck.set_puck_position(Vector3(

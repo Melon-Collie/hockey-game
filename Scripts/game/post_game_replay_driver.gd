@@ -230,7 +230,8 @@ func _find_frame_idx(t: float) -> int:
 
 func _freeze_live_simulation() -> void:
 	if _puck != null:
-		_puck.freeze = true
+		# See GoalReplayDriver: the hold flag parks the analytic loose-puck sim.
+		_puck.set_replay_hold(true)
 	_saved_goalie_processing.clear()
 	for gc: GoalieController in _goalie_controllers:
 		_saved_goalie_processing.append(gc.is_physics_processing())
@@ -239,7 +240,7 @@ func _freeze_live_simulation() -> void:
 
 func _unfreeze_live_simulation() -> void:
 	if _puck != null:
-		_puck.freeze = false
+		_puck.set_replay_hold(false)
 	for i: int in _goalie_controllers.size():
 		var was: bool = _saved_goalie_processing[i] if i < _saved_goalie_processing.size() else true
 		_goalie_controllers[i].set_physics_process(was)

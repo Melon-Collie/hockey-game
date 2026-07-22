@@ -41,6 +41,8 @@ var _hit_tracker: HitTracker = null
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 
 var _last_claim_sent: Dictionary[String, float] = {}  # client only: "hitter:victim" -> time
+# Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
+var _fp_result := SkaterMovementRules.ForwardResult.new()
 
 
 func setup(
@@ -115,9 +117,14 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 			NetworkManager.get_interpolation_delay() * 1000.0)
 
 
-func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
+func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float,
+		interp_delay_ms: float, input_lead_ms: float) -> void:
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
+	# Anti-cheat: bound the self-reported render delay against the measured link
+	# before any rewind / forward-predict depth reads it (see LagCompRewind).
+	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(hitter_peer_id)))
 	var now: float = NetworkManager.local_time()
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return
@@ -130,7 +137,7 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# interpolation (REMOTE view). Using one rewind for both (as the prior
 	# `host_timestamp - rtt/2` did) compares hitter-from-one-time against
 	# victim-from-another-time. See LagCompRewind for the derivation.
-	var hitter_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var hitter_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
 	var victim_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 	var hitter_snapshot: WorldSnapshot = _state_buffer.get_state_at(hitter_rewind_time)
 	var victim_snapshot: WorldSnapshot = _state_buffer.get_state_at(victim_rewind_time)
@@ -144,7 +151,20 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# a stale client claim that raced the ghost flag from crediting a hit.
 	if hitter_snap.is_ghost or victim_snap.is_ghost:
 		return
-	if hitter_snap.position.distance_to(victim_snap.position) > MAX_RANGE_M:
+	# Stage-3: intent-integrate the victim's rewound body toward host-present by the
+	# SAME depth the client rendered it at (shared forward_predict_ticks + fraction +
+	# the client-reported interp_delay), so the geometry the host validates matches
+	# what the attacker actually saw — render == rewind. The hitter stays
+	# un-integrated (self-view: the client predicts its own body). has_puck forced
+	# false to match RemoteController's render integration exactly. No-op at
+	# fraction 0 (the shipped default).
+	var vic_pos: Vector3 = victim_snap.position
+	var vic_vel: Vector3 = victim_snap.velocity
+	if LagCompRewind.forward_predict_skater(victim_snap,
+			victim_rec.controller as SkaterController, interp_delay_ms, _fp_result):
+		vic_pos = _fp_result.position
+		vic_vel = _fp_result.velocity
+	if hitter_snap.position.distance_to(vic_pos) > MAX_RANGE_M:
 		return
 	# Puck carrier read from the victim's rewind snapshot — that's the world the
 	# attacker saw when they committed to the check. The tracker's grace path
@@ -157,12 +177,12 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# Re-derive impulse from rewound velocities along the hitter→victim normal.
 	# Each velocity is read from its own rewound snapshot so the closing speed
 	# reflects what the attacker actually saw, not a single mid-time slice.
-	var to_victim: Vector3 = victim_snap.position - hitter_snap.position
+	var to_victim: Vector3 = vic_pos - hitter_snap.position
 	to_victim.y = 0.0
 	if to_victim.length_squared() < 0.0001:
 		return
 	var normal: Vector3 = to_victim.normalized()
-	var rel_vel: Vector3 = hitter_snap.velocity - victim_snap.velocity
+	var rel_vel: Vector3 = hitter_snap.velocity - vic_vel
 	rel_vel.y = 0.0
 	var impulse: float = rel_vel.dot(normal)
 	# Scale by the hitter's weight BEFORE the tracker validates so the claim

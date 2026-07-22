@@ -732,7 +732,6 @@ var show_one_timer_indicator: bool = false
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
 # Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
 @export var block_speed_multiplier: float = 0.45
-@export var active_block_dampen: float = 0.35      # puck energy retention on active block
 # Choreographed "stick down" block pose, authored in upper-body-local space.
 # Forward is local −Z (toward the shooter the stance snapped to on entry); the
 # stick side is +X for a righty, −X for a lefty (blade_side_sign). The blade lies
@@ -938,7 +937,6 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	process_physics_priority = -1  # Run before Skater.move_and_slide
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_check_received.connect(_on_body_check_received)
-	skater.body_block_hit.connect(_on_body_block_hit)
 	_ik.setup(skater, self)
 	_shot_pose.setup(skater, _sm, _aiming, _ik, self)
 	var _cb := SkaterStateMachine.Callbacks.new()
@@ -1362,13 +1360,6 @@ func _on_body_check_received(impulse: Vector3) -> void:
 	stamina = maxf(stamina - BodyCheckRules.incremental_stamina_drain(stagger_timer, impulse_magnitude, cfg), 0.0)
 	stagger_timer = add
 
-func _on_body_block_hit(body: Node3D) -> void:
-	if not _is_host:
-		return
-	if not body is Puck:
-		return
-	var dampen: float = active_block_dampen if _sm.get_state() == State.SHOT_BLOCKING else puck.body_block_dampen
-	puck.on_body_block(skater, dampen)
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 # Whether this skater is committing to a deliberate deflect this tick. Base
@@ -2517,6 +2508,36 @@ func _movement_config() -> SkaterMovementRules.MovementConfig:
 	if _cached_move_cfg == null:
 		_cached_move_cfg = _build_movement_config()
 	return _cached_move_cfg
+
+# Public read of the cached movement config (built from this skater's scaled
+# tuning, rebuilt on apply_attributes). Consumed by stage-3 remote forward-
+# prediction — the client (RemoteController) and host (HitClaimResolver) both
+# drive SkaterMovementRules.integrate_forward with the target skater's own config.
+# Live-tuning caveat aside, treat the returned object as read-only.
+#
+# thrust is re-normalized to the attribute-scaled base on every read: the live
+# movement path transiently writes the stagger-scaled thrust into the CACHED
+# config each tick, but only on the machine that simulates this skater (the
+# host, or a bot's host controller) — a client's RemoteController never runs
+# _apply_movement, so its copy holds base thrust. Without the reset the host
+# claim rewind would integrate a recently-checked victim with present-tick
+# staggered thrust while the client rendered base thrust — an input asymmetry
+# breaking render == rewind right after checks, when follow-up claims cluster.
+# The stagger penalty is then applied SYMMETRICALLY inside integrate_forward
+# (both sides pass the snapshot's replicated stagger_timer + this skater's
+# body-check config), so the normalization here is what keeps the base clean
+# for that shared scaling rather than a decision to ignore stagger.
+func get_movement_config() -> SkaterMovementRules.MovementConfig:
+	var cfg: SkaterMovementRules.MovementConfig = _movement_config()
+	cfg.thrust = thrust
+	return cfg
+
+
+# Public read of the cached body-check config — consumed by the stage-3 forward
+# prediction (both the client render and the host claim rewind) to apply the
+# victim's stagger thrust penalty identically on both sides.
+func get_body_check_config() -> BodyCheckRules.Config:
+	return _body_check_config()
 
 func _block_movement_config() -> SkaterMovementRules.MovementConfig:
 	if _cached_block_move_cfg == null:

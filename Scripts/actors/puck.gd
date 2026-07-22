@@ -1,5 +1,5 @@
 class_name Puck
-extends RigidBody3D
+extends Node3D
 
 signal puck_released()
 signal puck_stripped(ex_carrier: Skater)
@@ -97,25 +97,23 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
 @export var hit_pickup_cooldown_threshold: float = 1.35   # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
+# Puck energy retention on an ACTIVE (shot-block crouch) block — lower than the passive
+# dampen so a committed block kills more of the shot. Was SkaterController.active_block_dampen;
+# consolidated here with the passive value now that on_body_block picks between them.
+@export var body_block_active_dampen: float = 0.35
 @export var body_block_cooldown: float = 0.1
-# Vertical clamp: the puck's Y is capped at ice_height + max_height in
-# _integrate_forces. Must stay BELOW the rink's collision top
+# Vertical clamp: the puck's Y is capped at ice_height + max_height by the
+# analytic step (PuckAuthorityRules). Must stay BELOW the rink's collision top
 # (HockeyRink.COLLISION_OVERGLASS_TOP, 3.2 m) — otherwise an elevated deflection
 # that pegs this clamp sits above the boards and escapes the rink. If you raise
 # this, raise COLLISION_OVERGLASS_TOP to keep the margin.
 @export var max_height: float = 3.0
 
-# Analytic rink-containment backstop (see _integrate_forces). The boards'
-# trimesh + CCD contains the puck almost always, but a sustained wall slide can
-# still squeeze the center past a facet plane, and a zero-thickness triangle
-# then depenetrates it OUTWARD — the "puck leaves the arena" escape. Trigger:
-# center past the inner (kickplate-lip) boundary by more than float noise —
-# the disc is then embedded a full radius, provably beyond any contact slop.
-const CONTAINMENT_EPSILON: float = 0.001
-# An escape in progress is caught on its first tick, ≤ max_speed/120 ≈ 0.32 m
-# past the boundary. Anything further out in a single step is a deliberate
-# teleport (drill managers stash the puck at (100, 100) between attempts) and
-# must be left alone — the drill owns puck placement.
+# A puck further outside the rink boundary than this in a single step is a
+# deliberate teleport (drill managers stash the puck at (100, 100) between
+# attempts) and the analytic drive leaves it parked — the drill owns puck
+# placement. Anything inside it is contained by construction: the shared step
+# clamps the center to the rink's rounded rectangle every sub-step.
 const CONTAINMENT_TELEPORT_SKIP: float = 2.0
 
 # ── Save-rebound control (host-authoritative) ─────────────────────────────────
@@ -138,6 +136,13 @@ const CONTAINMENT_TELEPORT_SKIP: float = 2.0
 
 var carrier: Skater = null
 var pickup_locked: bool = false
+# The puck's velocity store. The puck is a plain Node3D — no physics body, no
+# engine integration — so this is just state the analytic drive (host) and the
+# gameplay interactions (deflects, pokes, strips, sweeps) read and write; the
+# name is kept from the RigidBody3D era so every external reader still works.
+# On clients PuckController owns motion and this holds whatever the last
+# prediction/seed wrote (position is the replicated truth).
+var linear_velocity: Vector3 = Vector3.ZERO
 # Per-skater puck pickup cooldowns. Keyed by Skater.get_instance_id() rather
 # than the Skater object directly so that the typed Dictionary's erase()
 # validator doesn't reject freed-instance keys when a skater is queue_freed
@@ -164,29 +169,11 @@ var _expired_cooldowns: Array[int] = []
 var _is_server: bool = false
 var _pending_reset: bool = false
 var _pending_reset_xz: Vector2 = Vector2.ZERO
-var _clamp_at_goal_line: bool = false
-# Last known-finite puck position, cached each physics step so the non-finite
-# guard in _integrate_forces can restore a sane position rather than crash Jolt.
-var _last_finite_position: Vector3 = Vector3.ZERO
-# Full velocity stored by release() for every shot, applied by _integrate_forces.
-# Jolt does not preserve linear_velocity set on a frozen body when it activates
-# as dynamic — state.linear_velocity on the first dynamic step is zero. Storing
-# and applying the full vector here ensures XYZ reach the simulation correctly.
-# For elevated shots (y > 0) _integrate_forces also writes the elevated Y position.
+# Full velocity queued by release()/nudge() for the analytic drive's next tick
+# (get_release_velocity returns it until consumed), so same-frame consumers of
+# the puck_released signal — and the drive itself — see the full XYZ launch
+# vector (incl. loft vy) even though the release ran before the physics step.
 var _pending_elevation_vel: Vector3 = Vector3.ZERO
-# Belt-and-suspenders for _physics_process: skip is_airborne() zeroing the
-# same frame as release() so _pending_elevation_vel reaches _integrate_forces.
-var _pending_elevation: bool = false
-# Velocity the puck carried into this physics step (cached at the end of
-# _integrate_forces), read by the save-deaden classifier as the pre-bounce
-# incoming velocity — linear_velocity in _on_body_entered may already reflect the
-# restitution response for the step.
-var _pre_contact_velocity: Vector3 = Vector3.ZERO
-# Queued controlled-save deaden, applied on the next _integrate_forces step so it
-# definitively overrides the engine's restitution rebound (host-only; set in
-# _on_body_entered). Mirrors the _pending_elevation_vel apply pattern.
-var _pending_save_deaden: Vector3 = Vector3.ZERO
-var _pending_save_deaden_active: bool = false
 # Built once from the save-deaden exports (rebuilt only on demand — exports don't
 # change at runtime), so the per-save classification allocates nothing.
 var _deaden_cfg: GoalieSaveRules.DeadenConfig = null
@@ -197,18 +184,52 @@ var _team_resolver: Callable = Callable()
 func set_team_resolver(resolver: Callable) -> void:
 	_team_resolver = resolver
 
+# ── Analytic host drive (the ONE puck simulation) ─────────────────────────────
+# The LOOSE puck is driven by the deterministic analytic sim on every host:
+# integration + ice friction + gravity + board caroms (PuckAuthorityRules / step_puck_3d),
+# goal-frame reflection (PuckGeometryCollision: posts / crossbar / top + back/side net), and
+# goalie detection + response (GoalieContactDetector + GoalieSaveRules.resolve_contact).
+# The puck is a plain Node3D — no physics engine ever touches it; gameplay pickup /
+# deflect / poke / goal-detection are analytic too, and the drive emits every contact
+# feedback signal itself. Clients never run this (_physics_process is host-only);
+# they render through PuckController's shared-solver prediction.
+var _goalie_provider: Callable = Callable()  # returns Array of live Goalie nodes for contact detection
+# Sub-step ranges/counts and the goalie-detect gate live on PuckAuthorityRules —
+# SHARED with the client's Phase-3 prediction so both sides step identically.
+# Caller-owned scratch so the per-tick drive allocates nothing.
+var _frame_result: PuckGeometryCollision.Result = null
+var _goalie_contact: GoalieContactDetector.Contact = null
+var _goalie_scratch: SweptDiscOBB.Result = null
+var _save_result: GoalieSaveRules.ContactResult = null
+var _tick_result: PuckAuthorityRules.TickResult = null
+# Shared read-only empty (const arrays are frozen) — the no-goalies-in-range default
+# every open-ice tick, instead of allocating a fresh `[]` per tick.
+const _NO_GOALIES: Array = []
+# Edge-trigger latches for the drive's contact signals: true = the matching contact
+# occurred LAST tick, so a sustained contact re-fires nothing (Jolt's body_entered
+# was edge-triggered per separation; the analytic tests are level-triggered).
+var _contact_latch_boards: bool = false
+var _contact_latch_post: bool = false
+var _contact_latch_net: bool = false
+var _contact_latch_goalie: bool = false
+# Replay playback hold: the replay drivers own the puck transform while a goal /
+# post-game replay plays — the drive must not simulate the loose puck underneath,
+# so the drivers raise this for the playback's duration.
+var _replay_hold: bool = false
+
+
+# Raised by the goal / post-game replay drivers for the playback's duration: the
+# driver scrubs recorded frames onto the live actors, and the analytic drive must
+# not keep simulating the loose puck underneath (it would slide away and resume
+# from wherever it drifted when playback ends).
+func set_replay_hold(active: bool) -> void:
+	_replay_hold = active
+
+func set_goalie_provider(provider: Callable) -> void:
+	_goalie_provider = provider
+
 func _ready() -> void:
-	# Puck body sits on its own layer so goal sensors can detect it.
-	# Mask bounces it off boards (LAYER_BOARDS) + goalie bodies/nets/ice
-	# (LAYER_WALLS) + goalie stick, but not skater bodies.
-	collision_layer = Constants.LAYER_PUCK
-	collision_mask  = Constants.MASK_PUCK
-	continuous_cd = true
 	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
-	contact_monitor = true
-	max_contacts_reported = 4
-	body_entered.connect(_on_body_entered)
-	_last_finite_position = global_position
 	_build_deaden_cfg()
 
 	var vfx := PuckVFX.new()
@@ -224,19 +245,14 @@ func _ready() -> void:
 # ── Server Mode ───────────────────────────────────────────────────────────────
 func set_server_mode(is_server: bool) -> void:
 	_is_server = is_server
-	if not is_server:
-		freeze = true
-
-func set_client_prediction_mode(active: bool) -> void:
-	if _is_server:
-		return
-	freeze = not active
-	if not active:
-		linear_velocity = Vector3.ZERO
-		_clamp_at_goal_line = false
-
-func set_goal_line_clamp(enabled: bool) -> void:
-	_clamp_at_goal_line = enabled
+	# The host drives the loose puck analytically every tick — build the drive's
+	# reusable scratch once (the per-tick path must allocate nothing).
+	if is_server and _frame_result == null:
+		_frame_result = PuckGeometryCollision.Result.new()
+		_goalie_contact = GoalieContactDetector.Contact.new()
+		_goalie_scratch = SweptDiscOBB.Result.new()
+		_save_result = GoalieSaveRules.ContactResult.new()
+		_tick_result = PuckAuthorityRules.TickResult.new()
 
 # ── Contract for PuckController ───────────────────────────────────────────────
 func get_puck_position() -> Vector3:
@@ -254,39 +270,31 @@ func set_puck_velocity(vel: Vector3) -> void:
 # Immediately parks a LOOSE puck at rest at `pos` — used to restage the puck
 # between offline-drill attempts. Unlike reset() the position lands THIS frame
 # (no deferred _pending_reset) and no puck_released signal fires; unlike a bare
-# set_puck_position + linear=0 it also zeroes ANGULAR velocity and any queued
-# release/elevation velocity, so a fast, spinning missed puck can't keep rolling
-# or carry momentum into the next rep (the "velocity carries over" annoyance). A
-# loose puck is never frozen, so Jolt's unfreeze-zeroing doesn't apply here — the
-# spin has to be cleared explicitly. Wakes the body so a settled puck honors the
-# teleport.
+# set_puck_position + velocity=0 it also clears any queued release/elevation
+# velocity, so a fast missed puck can't carry momentum into the next rep (the
+# "velocity carries over" annoyance).
 func stage_at(pos: Vector3) -> void:
 	if carrier != null:
 		drop()
-	sleeping = false
 	global_position = pos
 	linear_velocity = Vector3.ZERO
-	angular_velocity = Vector3.ZERO
 	_pending_elevation_vel = Vector3.ZERO
-	_pending_elevation = false
 
-# Used by client-side prediction release (notify_local_release). Applies the
-# same _pending_elevation_vel treatment as release() so Jolt's first dynamic
-# integration step gets the full XYZ vector instead of starting at zero.
+# Direct-velocity launch used by the tutorial's staged pucks. Applies the
+# same _pending_elevation_vel treatment as release() so the drive's next tick
+# (and same-frame get_release_velocity readers) get the full XYZ vector.
 func apply_release_velocity(vel: Vector3) -> void:
 	linear_velocity = vel
 	if vel.y > 0.0:
 		_pending_elevation_vel = vel
-		_pending_elevation = true
 
 func get_carrier() -> Skater:
 	return carrier
 
-# Returns linear_velocity, OR _pending_elevation_vel when release() has just
-# fired and Jolt hasn't yet applied it (Jolt zeroes velocity on the first
-# dynamic step after unfreeze, so release() stores the full vector here for
-# _integrate_forces to write next tick). Use this from same-frame consumers
-# of the puck_released signal — `linear_velocity` reads zero in that window.
+# Returns linear_velocity, OR _pending_elevation_vel when release()/nudge() has
+# just queued a launch the drive hasn't consumed yet. Use this from same-frame
+# consumers of the puck_released signal — `linear_velocity` may still read the
+# pre-release (carried ≈ zero) value in that window.
 func get_release_velocity() -> Vector3:
 	if not _pending_elevation_vel.is_zero_approx():
 		return _pending_elevation_vel
@@ -294,11 +302,9 @@ func get_release_velocity() -> Vector3:
 
 func set_carrier(skater: Skater) -> void:
 	carrier = skater
-	freeze = true
 
 func clear_carrier() -> void:
 	carrier = null
-	freeze = false
 
 # ── Cooldown Helpers ──────────────────────────────────────────────────────────
 # Host local_time() (injected) so cooldown expiry shares the snapshot-buffer base.
@@ -372,7 +378,7 @@ func apply_blade_deflect(skater: Skater) -> void:
 	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
 	puck_touched_loose.emit(skater)
 
-func on_body_block(blocker: Skater, dampen_override: float = -1.0) -> void:
+func on_body_block(blocker: Skater) -> void:
 	if not _is_server:
 		return
 	if pickup_locked:
@@ -389,9 +395,12 @@ func on_body_block(blocker: Skater, dampen_override: float = -1.0) -> void:
 	if contact_normal.length() < 0.001:
 		contact_normal = -blocker.global_transform.basis.z
 	contact_normal = contact_normal.normalized()
-	var effective_dampen: float = dampen_override if dampen_override >= 0.0 else body_block_dampen
+	# A committed shot-block crouch kills more of the shot than a passive body absorb.
+	var dampen: float = body_block_active_dampen \
+			if blocker.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
+			else body_block_dampen
 	linear_velocity = PuckCollisionRules.body_block_velocity(
-			linear_velocity, contact_normal, effective_dampen)
+			linear_velocity, contact_normal, dampen)
 	_set_cooldown(blocker, body_block_cooldown)
 	puck_body_blocked.emit(blocker)
 
@@ -512,13 +521,11 @@ func apply_goalie_poke_check(blade_pos: Vector3, blade_vel: Vector3) -> void:
 func apply_goalie_sweep(sweep_velocity: Vector3) -> void:
 	if carrier != null:
 		return
-	sleeping = false
 	linear_velocity = sweep_velocity
 
 
 func release(direction: Vector3, power: float) -> void:
 	var ex_carrier: Skater = carrier
-	# Set position while still frozen so Jolt activates from the correct state.
 	# Slapshot wind-up: the blade is overhead and pulled back, but the puck has
 	# been pinned to a stable ice offset via get_carry_target_global. Read from
 	# that pin instead of the elevated blade contact so the shot fires from
@@ -530,7 +537,6 @@ func release(direction: Vector3, power: float) -> void:
 			global_position = ex_carrier.get_blade_contact_global()
 	if direction.y > 0:
 		global_position.y = ice_height + 0.1
-		_pending_elevation = true
 	else:
 		global_position.y = ice_height
 	_pending_elevation_vel = direction * power
@@ -544,14 +550,13 @@ func release(direction: Vector3, power: float) -> void:
 # controller computed from the carrier's momentum + a small stick-direction
 # push. Grounded only (a nutmeg lives on the ice), and the ex-carrier gets only
 # the short nudge_cooldown so they can re-collect the puck after it slips the
-# gap. Reuses _pending_elevation_vel so Jolt's first dynamic step keeps the
-# velocity (a frozen-body linear_velocity write is otherwise zeroed on unfreeze).
+# gap. Reuses _pending_elevation_vel so the drive's next tick launches with
+# the full nudge vector.
 func nudge(velocity: Vector3) -> void:
 	var ex_carrier: Skater = carrier
 	if ex_carrier != null:
 		global_position = ex_carrier.get_blade_contact_global()
 	global_position.y = ice_height
-	_pending_elevation = false
 	var v := velocity
 	v.y = 0.0
 	_pending_elevation_vel = v
@@ -566,24 +571,19 @@ func drop() -> void:
 	linear_velocity = Vector3.ZERO
 	# A shot fired the same tick as a stoppage could leave a release velocity
 	# queued (release() runs before the physics step); clear it so the dropped
-	# puck doesn't inherit it and rocket off on the next _integrate_forces.
+	# puck doesn't inherit it and rocket off on the drive's next tick.
 	_pending_elevation_vel = Vector3.ZERO
-	_pending_elevation = false
 	if ex_carrier != null:
 		_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_released.emit()
 
 func reset(at_xz: Vector2 = Vector2.ZERO) -> void:
 	carrier = null
-	freeze = false  # ensure _integrate_forces is called on the next step
-	sleeping = false  # a slept body skips _integrate_forces, so it would ignore the teleport
 	_cooldown_timers.clear()
 	linear_velocity = Vector3.ZERO
-	angular_velocity = Vector3.ZERO
 	# Discard any release velocity queued this frame — a faceoff / whistle reset
 	# must not inherit a shot fired on the same tick (would launch the dot puck).
 	_pending_elevation_vel = Vector3.ZERO
-	_pending_elevation = false
 	_pending_reset = true
 	_pending_reset_xz = at_xz
 	puck_released.emit()
@@ -598,7 +598,6 @@ func is_airborne() -> bool:
 func settle_to_ice() -> void:
 	global_position.y = ice_height
 	linear_velocity.y = 0.0
-	angular_velocity = Vector3.ZERO
 
 # One-shot spark burst at the puck for a stick-lift strip. Delegated to PuckVFX
 # (child "VFX"); the burst anchors to the puck, which sits at the dislodge point.
@@ -619,46 +618,155 @@ func fire_post_ping_vfx(speed: float) -> void:
 	if vfx != null:
 		vfx.fire_post_ping_burst(speed)
 
-func _on_body_entered(body: Node3D) -> void:
-	if carrier != null:
+# Host-only analytic drive for one tick of the LOOSE puck — the one and only
+# puck simulation. Position + velocity are written directly on the Node3D.
+func _drive_analytic(dt: float) -> void:
+	# Faceoff / reset staging.
+	if _pending_reset:
+		_pending_reset = false
+		global_position = Vector3(_pending_reset_xz.x, ice_height, _pending_reset_xz.y)
+		linear_velocity = Vector3.ZERO
+		_pending_reset_xz = Vector2.ZERO
 		return
-	var goalie: Goalie = _goalie_ancestor(body)
-	if goalie != null:
-		# Host-authoritative rebound control: deaden a controlled save so it
-		# doesn't carom into the slot. The deadened velocity replicates to clients
-		# through the normal puck sync / reconciliation, same as pokes and sweeps.
-		# Resolved BEFORE the generic contact signal so a glove CATCH transitions
-		# the goalie first — _on_puck_contact's rebound-butterfly then sees a
-		# non-upright catching state and skips, keeping an upright catch upright.
-		if _is_server:
-			_resolve_save_rebound(body)
-		puck_touched_goalie.emit(goalie)
-	elif body is HockeyGoal:
-		puck_touched_post.emit()
-	elif body.get_parent() is HockeyGoal:
-		if linear_velocity.length() >= 1.0:
-			puck_hit_goal_body.emit()
-	elif body is HockeyRink and linear_velocity.length() >= 1.0:
-		# Only the rink's perimeter boards (HockeyRink's own collider) fire the
-		# board-hit thud / chip VFX / RPC. The ice surface is a SEPARATE
-		# StaticBody3D child, so the old `body is StaticBody3D` also fired on every
-		# grounded release and every landing — a board hit at the wrong spot.
+	# Dead / pinned puck (goalie cover or glove hold, whistle phases) and replay
+	# playback: the pinning authority (GoalieController, PhaseCoordinator, the
+	# replay driver) owns the position — the drive must not integrate gravity or
+	# collision against it. Without this gate the drive fought the glove pin
+	# every tick (re-detecting the held puck inside the glove box and re-firing
+	# puck_touched_goalie at 120 Hz).
+	if pickup_locked or _replay_hold:
+		_contact_latch_goalie = false
+		_contact_latch_post = false
+		_contact_latch_net = false
+		_contact_latch_boards = false
+		return
+	# Deliberate far teleport (drills stash the puck off-rink between reps): leave it parked,
+	# matching the CONTAINMENT_TELEPORT_SKIP guard in the Jolt path.
+	var here := Vector2(global_position.x, global_position.z)
+	if here.distance_to(GameRules.clamp_to_rink_inner(here)) > CONTAINMENT_TELEPORT_SKIP:
+		return
+	var prev: Vector3 = global_position
+	# Authoritative velocity: get_release_velocity() returns the queued shot/nudge vector on a
+	# release tick (full XYZ incl. loft vy) and linear_velocity otherwise — so every analytic
+	# interaction that writes linear_velocity mid-flight (deflect, poke, strip, sweep, body
+	# block) is picked up.
+	var incoming: Vector3 = get_release_velocity()
+	_pending_elevation_vel = Vector3.ZERO  # consumed
+
+	# Integrate (ice friction + gravity + board caroms + clamps) AND resolve ALL near-net
+	# collision — posts, crossbar, net panels, and the goalie — in ONE sub-stepped pass. Near the
+	# thin frame the puck advances in < 4 cm sub-steps so a hard shot (0.33 m/tick at 40 m/s)
+	# can't tunnel through the pipes/panels, and every contact is resolved in order on the
+	# sub-step it happens (the goalie sees each sub-step's real segment, not one straight tick
+	# chord — so a post-ricochet-into-a-save reads right). Open ice steps once: its only geometry
+	# is the boards, a position clamp that can't tunnel. Two ranges: sub-step within
+	# _FRAME_SUBSTEP_RANGE_Z of a goal line (the thin frame); run goalie detection out to the
+	# wider _GOALIE_DETECT_RANGE_Z (a goalie challenges further than the frame sits).
+	var radius: float = GameRules.PUCK_COLLISION_RADIUS
+	var goalie_range: bool = absf(prev.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z
+	# _NO_GOALIES (a shared read-only const), not a `[]` literal — this line runs
+	# every loose-puck tick and a fresh Array per tick is exactly the hot-path
+	# allocation churn CLAUDE.md forbids.
+	var goalies: Array = _NO_GOALIES
+	if goalie_range and not _goalie_provider.is_null():
+		goalies = _goalie_provider.call()
+	var substeps: int = PuckAuthorityRules.frame_substeps(prev.z, incoming.length(), dt)
+	var sub_dt: float = dt / float(substeps)
+	var pos: Vector3 = prev
+	var vel: Vector3 = incoming
+	# Per-tick contact occurrence, latched across ticks so sustained contact
+	# (grinding a post, a puck resting against a pad) emits ONCE like Jolt's
+	# edge-triggered body_entered did — not per sub-step per tick. The physics
+	# response still applies every sub-step; only the SIGNALS are edge-gated
+	# (each emit fans out to sounds / RPCs / stat sync, so a level-triggered
+	# re-fire was up to 120 RPCs/s during held contact).
+	var touched_post: bool = false
+	var touched_net: bool = false
+	var touched_goalie: bool = false
+	# Emissions are DEFERRED to after the commit below: synchronous listeners
+	# (the save sound reading puck velocity, stat sync) must see this tick's
+	# committed post-contact state, not last tick's — Jolt's body_entered fired
+	# mid-step with current state; emitting mid-loop here read stale fields.
+	var emit_goalie: Goalie = null
+	var emit_caught: Goalie = null
+	for _sub in substeps:
+		var sub_prev: Vector3 = pos
+		# Integration + boards + goal frame: the SHARED Phase-3 step (identical on
+		# the client's prediction path), so static-geometry motion agrees by
+		# construction. Touched flags OR-accumulate; clear per sub-step read.
+		_tick_result.touched_post = false
+		_tick_result.touched_net = false
+		PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
+				max_speed, ice_height, max_height, _frame_result, _tick_result)
+		pos = _tick_result.position
+		vel = _tick_result.velocity
+		if _tick_result.touched_post:
+			touched_post = true
+		if _tick_result.touched_net and incoming.length() >= 1.0:
+			touched_net = true
+		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
+		if not goalies.is_empty() and GoalieContactDetector.nearest(
+				goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact):
+			var part: int = _classify_save_part(_goalie_contact.part as Node3D)
+			var g3: Node3D = _goalie_contact.goalie as Node3D
+			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
+			var dir_sign: int = int(signf(-g3.global_position.z)) if g3 != null else 0
+			GoalieSaveRules.resolve_contact(
+					vel, part, _goalie_contact.normal, side, dir_sign, _deaden_cfg, _save_result)
+			vel = _save_result.velocity
+			# Eject the disc flush off the contacted face. `point` is the sphere
+			# CENTRE at toi — already `radius` off the real face via the
+			# Minkowski-expanded box — so only the start-inside depenetration
+			# `depth` is added (adding `radius` again parked the puck ~13 cm off
+			# every save, a visible pop).
+			pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
+			if not _contact_latch_goalie and not touched_goalie:
+				emit_goalie = _goalie_contact.goalie as Goalie
+			# The catch is gated on its own occurrence, NOT the touch latch — a
+			# pad-contact tick followed by a glove catch next tick must still
+			# fire the catch (it pins the puck and locks the play through the
+			# goalie controller).
+			if _save_result.caught and emit_caught == null:
+				emit_caught = _goalie_contact.goalie as Goalie
+			touched_goalie = true
+	# Board feedback: a real carom is the raw (un-reflected) full-tick position crossing the
+	# boundary with into-board pace — a puck sliding parallel doesn't fire. Latched like the
+	# other contacts (a rim-around can re-cross the raw boundary every tick of the curve —
+	# one carom must read as one thud, not a 120 Hz burst).
+	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)
+	var touched_boards: bool = raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 \
+			and incoming.length() >= 1.0
+
+	# 4) Commit. The puck can never sit below the ice — re-homes the Jolt path's grounded
+	# `position.y = ice_height` pin, and catches a goalie eject / save whose normal drove the
+	# disc down into the surface (the "puck in the ice, only the shadow shows" bug).
+	if pos.y < ice_height:
+		pos.y = ice_height
+		if vel.y < 0.0:
+			vel.y = 0.0
+	# linear_velocity is the authoritative store, so gameplay readers
+	# (get_puck_velocity, AI, HUD) and next tick's interactions see it.
+	linear_velocity = vel
+	global_position = pos
+
+	# Deferred contact signals (see the emit_* locals above): edge-gated by the
+	# cross-tick latches, fired against the committed state. Order matters — the
+	# goalie touch fires before the catch (the controller relies on that
+	# sequence to transition the catching goalie first).
+	if touched_boards and not _contact_latch_boards:
 		puck_hit_boards.emit()
-
-
-# The goalie's save surfaces are StaticBody3D parts at different scene depths —
-# pads/body/head/glove sit directly under the Goalie root, but the stick and
-# blocker hang off the BlockArm rig. Walk ancestors so a paddle or blocker save
-# reads as a goalie touch too (a single get_parent() check silently dropped
-# those saves from SOG tracking and goalie reaction resets). Contact-frequency
-# only, never per-tick.
-func _goalie_ancestor(node: Node) -> Goalie:
-	var n: Node = node.get_parent()
-	while n != null:
-		if n is Goalie:
-			return n as Goalie
-		n = n.get_parent()
-	return null
+	if touched_post and not _contact_latch_post:
+		puck_touched_post.emit()
+	if touched_net and not _contact_latch_net:
+		puck_hit_goal_body.emit()
+	if emit_goalie != null:
+		puck_touched_goalie.emit(emit_goalie)
+	if emit_caught != null:
+		puck_caught_by_goalie.emit(emit_caught)
+	_contact_latch_boards = touched_boards
+	_contact_latch_post = touched_post
+	_contact_latch_net = touched_net
+	_contact_latch_goalie = touched_goalie
 
 
 # Build the cached deaden config from the exports. Called from _ready; the
@@ -690,126 +798,7 @@ func _classify_save_part(part_body: Node3D) -> int:
 	return GoalieSaveRules.SavePart.PAD
 
 
-# Host-only: on a controlled save, queue a deadened rebound so the puck dies in
-# the paint instead of caroming into the slot. The crease-sweep then clears it.
-# Live saves (hard pad shots, stick redirects) return without queueing anything,
-# so the engine's restitution rebound stands.
-func _resolve_save_rebound(part_body: Node3D) -> void:
-	if _deaden_cfg == null:
-		return
-	var part: int = _classify_save_part(part_body)
-	var incoming: Vector3 = _pre_contact_velocity
-	if not GoalieSaveRules.is_controlled_save(incoming.length(), part, _deaden_cfg):
-		return
-	# A controlled GLOVE save is a CATCH: the deaden below still kills the puck
-	# this step (we're inside a physics callback — no freeze here), and the
-	# goalie controller pins it into the glove on its next tick.
-	if part == GoalieSaveRules.SavePart.GLOVE:
-		var catch_goalie: Goalie = _goalie_ancestor(part_body)
-		if catch_goalie != null:
-			puck_caught_by_goalie.emit(catch_goalie)
-	# Steered pad/blocker saves need the contact side (which side of the goalie
-	# the puck arrived at → which corner the toe-out fires it to) and the
-	# goalie's direction_sign (forward = out of the crease). Both derived from
-	# the contacted goalie's transform, deterministic on host and client.
-	var save_goalie: Goalie = _goalie_ancestor(part_body)
-	var contact_side: float = 0.0
-	var goalie_dir_sign: int = 0
-	if save_goalie != null:
-		contact_side = signf(global_position.x - save_goalie.global_position.x)
-		goalie_dir_sign = int(signf(-save_goalie.global_position.z))
-	_pending_save_deaden = GoalieSaveRules.deadened_velocity(
-			incoming, part, contact_side, goalie_dir_sign, _deaden_cfg)
-	_pending_save_deaden_active = true
-
-func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
-	if _pending_reset:
-		_pending_reset = false
-		state.transform = Transform3D(Basis(),
-				Vector3(_pending_reset_xz.x, ice_height, _pending_reset_xz.y))
-		state.linear_velocity = Vector3.ZERO
-		state.angular_velocity = Vector3.ZERO
-		_pending_reset_xz = Vector2.ZERO
-		return
-	# Backstop: a non-finite velocity or position handed to Jolt is a hard native
-	# crash (the max_speed clamp below can't catch it — NaN > max_speed is false).
-	# Sanitize at the seam and log the source. Should never fire.
-	if not state.linear_velocity.is_finite():
-		push_error("Puck: non-finite velocity %s in _integrate_forces — zeroing." % state.linear_velocity)
-		state.linear_velocity = Vector3.ZERO
-	if state.transform.origin.is_finite():
-		_last_finite_position = state.transform.origin
-	else:
-		push_error("Puck: non-finite position %s — restoring %s." % [state.transform.origin, _last_finite_position])
-		var fixed: Transform3D = state.transform
-		fixed.origin = _last_finite_position
-		state.transform = fixed
-		state.linear_velocity = Vector3.ZERO
-		state.angular_velocity = Vector3.ZERO
-	if not _pending_elevation_vel.is_zero_approx():
-		# Write the full velocity vector directly into Jolt's physics state.
-		# Jolt zeros state.linear_velocity on the first dynamic step after a
-		# body unfreezes, so velocity set on a frozen body is lost without this.
-		state.linear_velocity = _pending_elevation_vel
-		if _pending_elevation_vel.y > 0.0:
-			state.transform.origin.y = ice_height + 0.1
-		_pending_elevation_vel = Vector3.ZERO
-	if _pending_save_deaden_active:
-		# Controlled-save deaden queued last step in _on_body_entered — override
-		# the engine's restitution rebound so the puck dies in the paint. Applied
-		# a step late (invisible ~8 ms) so it wins over the collision response.
-		state.linear_velocity = _pending_save_deaden
-		state.angular_velocity = Vector3.ZERO
-		_pending_save_deaden = Vector3.ZERO
-		_pending_save_deaden_active = false
-	if state.linear_velocity.length() > max_speed:
-		state.linear_velocity = state.linear_velocity.normalized() * max_speed
-	if state.transform.origin.y > ice_height + max_height:
-		state.transform.origin.y = ice_height + max_height
-		if state.linear_velocity.y > 0.0:
-			state.linear_velocity.y = 0.0
-	# Analytic rink-containment backstop. The rink boundary is exactly known
-	# (rounded rectangle — the same GameRules.clamp_to_rink_inner the boards'
-	# collider is built on and that holds skaters in), so a center past it is
-	# provably an escape the trimesh failed to stop: put the disc back flush
-	# against the boards and reflect any outward velocity with the boards'
-	# restitution (PuckCollisionRules.board_rescue_velocity — the same
-	# reflection the AI trajectory model predicts), so a rescued rim reads as
-	# a normal carom. Deliberate far teleports are skipped (see
-	# CONTAINMENT_TELEPORT_SKIP). Pure value-type math, no allocation on the
-	# per-tick path, and deterministic — client prediction and reconcile
-	# replay resolve a rescue identically to the host.
-	var xz := Vector2(state.transform.origin.x, state.transform.origin.z)
-	var boundary_xz: Vector2 = GameRules.clamp_to_rink_inner(xz)
-	var escape_depth: float = xz.distance_to(boundary_xz)
-	if escape_depth > CONTAINMENT_EPSILON and escape_depth < CONTAINMENT_TELEPORT_SKIP:
-		var inside_xz: Vector2 = GameRules.clamp_to_rink_inner(
-				xz, GameRules.PUCK_COLLISION_RADIUS)
-		state.transform.origin.x = inside_xz.x
-		state.transform.origin.z = inside_xz.y
-		var rescued: Vector3 = PuckCollisionRules.board_rescue_velocity(
-				state.linear_velocity, (xz - boundary_xz) / escape_depth,
-				GameRules.PUCK_BOARD_BOUNCE)
-		if rescued != state.linear_velocity:
-			state.linear_velocity = rescued
-			# Mirror the contact path's board-hit feedback so the rescue
-			# sounds/looks like the bounce it stands in for.
-			if carrier == null and rescued.length() >= 1.0:
-				puck_hit_boards.emit()
-	if _clamp_at_goal_line:
-		var z: float = state.transform.origin.z
-		var goal_z: float = GameRules.GOAL_LINE_Z
-		if abs(z) >= goal_z and z * state.linear_velocity.z > 0.0 \
-				and abs(state.transform.origin.x) <= GameRules.NET_HALF_WIDTH:
-			state.transform.origin.z = goal_z * sign(z)
-			state.linear_velocity = Vector3.ZERO
-	# Cache the velocity the puck carries out of this step — the save-deaden
-	# classifier reads it as the pre-bounce incoming velocity, since
-	# linear_velocity in _on_body_entered may already carry the restitution
-	# response. Taken after all writes so it reflects a same-step release too.
-	_pre_contact_velocity = state.linear_velocity
-
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if not _is_server:
 		return
 
@@ -835,29 +824,13 @@ func _physics_process(_delta: float) -> void:
 			_cooldown_timers.erase(id)
 
 	if carrier != null:
-		_pending_elevation = false
 		_pending_elevation_vel = Vector3.ZERO
-		freeze = true
 		# Pin at the carry target — same as blade contact when blade is
 		# centered, but inverse-offset from the blade's actual position when
 		# the IK shifted the marker for forehand/backhand carry. Result: puck
 		# stays at the cursor while the blade renders to one side.
 		global_position = carrier.get_carry_target_global()
 		global_position.y = ice_height
-	elif _pending_elevation:
-		# Elevated release this frame: skip is_airborne() so linear_velocity.y
-		# is not zeroed before _integrate_forces can apply _pending_elevation_vel.
-		_pending_elevation = false
-	elif not is_airborne():
-		# Max-speed clamp already runs every physics substep in _integrate_forces.
-		linear_velocity.y = 0.0
-		position.y = ice_height
-	elif sleeping and not freeze:
-		# A loose airborne puck can only be supported by the goalie's body (the
-		# puck mask excludes skater bodies) — e.g. a deadened save settling on
-		# top of the butterfly pads. Jolt sleeping it there is a trap: the pads
-		# are animated bodies, and kinematic support moving away never wakes a
-		# slept body, so the puck would hang frozen in mid-air (a sleeping body
-		# skips _integrate_forces, so even gravity stops). Keep a loose airborne
-		# puck awake; the frozen case (goalie catch pin) is exempt by design.
-		sleeping = false
+	else:
+		# The analytic sim owns the loose puck on every host.
+		_drive_analytic(delta)

@@ -38,16 +38,22 @@ var stagger_timer: float = 0.0
 # host baseline and it decays deterministically forward. Host-authoritative.
 var knockdown_timer: float = 0.0
 # Movement INTENT: the raw WASD vector (world frame, 8-way quantized on the
-# wire) and the brake hold. Cosmetic-only — the gait reads what the player is
-# TRYING to do (crossover intent, deliberate hockey stop, no-keys glide) a
-# beat before velocity responds. One byte on the wire (v15).
+# wire) and the brake hold. Originally cosmetic-only (the gait reads what the
+# player is TRYING to do — crossover intent, deliberate hockey stop, no-keys
+# glide — a beat before velocity responds); since stage-3 forward prediction
+# these are LOAD-BEARING: they drive SkaterMovementRules.integrate_forward on
+# both the client render (RemoteController) and the host claim rewind
+# (LagCompRewind.forward_predict_skater), so render == rewind depends on them
+# surviving the rewind snapshot (StateBufferManager copies them). One byte on
+# the wire (v15).
 var move_intent: Vector2 = Vector2.ZERO
 var brake_intent: bool = false
 # Resolved sprint-boost state (held + moving + stamina available), from
-# SkaterController.sprint_active on the simulating machine. Cosmetic-only —
-# drives the sprint gait read (longer strides, deeper sit, forward lean) on
-# client-rendered remotes, which never resolve sprint themselves. Bit 5 of
-# the intent byte (v16).
+# SkaterController.sprint_active on the simulating machine. Drives the sprint
+# gait read (longer strides, deeper sit, forward lean) on client-rendered
+# remotes, which never resolve sprint themselves — and, since stage-3, the
+# sprint term of the forward prediction (load-bearing, like move_intent
+# above). Bit 5 of the intent byte (v16).
 var sprint_active: bool = false
 # Resolved hit-commit (the Hit button held + stamina available), from
 # SkaterController.hit_committed on the simulating machine. Replicated so the body-

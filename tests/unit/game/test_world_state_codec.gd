@@ -260,6 +260,31 @@ func test_skater_move_intent_round_trips_all_octants() -> void:
 		assert_eq(dec.hit_committed, s.hit_committed, "octant %d hit-commit" % oct)
 
 
+func test_quantize_move_intent_matches_wire_round_trip() -> void:
+	# quantize_move_intent is the standalone form of the v15 intent octant —
+	# the host-side stage-3 claim rewind runs it on raw buffered intent (bots
+	# are analog) so the host integrates the same vector clients decoded. Pin
+	# it to the REAL encode→decode transform across octant-aligned, analog
+	# off-octant, sub-unit, and deadzone inputs so the two can't drift apart.
+	var cases: Array[Vector2] = [
+		Vector2(0.0, 1.0), Vector2(1.0, 0.0), Vector2(-1.0, 0.0), Vector2(0.0, -1.0),
+		Vector2(1.0, 1.0).normalized(),
+		Vector2(0.3, 0.9),      # analog, off-octant — snaps to nearest octant unit
+		Vector2(-0.7, 0.2),     # analog, off-octant
+		Vector2(0.2, 0.2),      # sub-unit but above deadzone
+		Vector2(0.03, 0.02),    # inside deadzone -> ZERO
+		Vector2.ZERO,
+	]
+	for v: Vector2 in cases:
+		var s := SkaterNetworkState.new()
+		s.move_intent = v
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		var q: Vector2 = WorldStateCodec.quantize_move_intent(v)
+		assert_almost_eq(q.x, dec.move_intent.x, 0.0001, "%s x" % v)
+		assert_almost_eq(q.y, dec.move_intent.y, 0.0001, "%s y" % v)
+
+
 func test_skater_idle_intent_round_trips_zero() -> void:
 	var s := SkaterNetworkState.new()
 	s.move_intent = Vector2.ZERO

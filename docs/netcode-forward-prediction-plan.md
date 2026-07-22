@@ -228,9 +228,35 @@ can't run headless, so networking feel is verified on the developer's machine.
    impulse injection. Nothing to mispredict → no snap. Cost: ~½-RTT before you
    feel a check you delivered (reads as weight, not lag).
 3. **Remote skater input-broadcast + forward-integration** + host rewind to the
-   predicted instant.
-4. **Conditional puck lead** + **goalie spectator pose-lead** (share the "host
-   rewinds to predicted instant" spine).
+   predicted instant. *(Built on the experimental branch.)* The movement
+   intent is already on the wire (v15/v16/v28, lossless for keyboard's 8-way
+   input — no PROTOCOL bump). `SkaterMovementRules.integrate_forward` is the
+   shared primitive; `RemoteController` (render) and **every carrier-anchored
+   claim resolver** — hit, poke, stick-lift — reconstruct the identical
+   prediction host-side via `LagCompRewind.forward_predict_skater`
+   (same fraction/decay constants, intent quantized through the wire codec so
+   raw bot intent matches what clients decoded, rewind snapshots carry the
+   intent fields), so render == rewind holds at any lead. Gated by
+   `Constants.REMOTE_FORWARD_PREDICT_FRACTION`, **set to 1.0 (full present) on
+   this experimental branch** for the Steam playtest — dial toward 0.5 / 0.0 if
+   remotes overshoot on hard cuts. The loose-puck pickup rewind needs no
+   migration while the puck lead is parked (see stage 4).
+4. **Conditional puck lead** *(built on the experimental branch)* +
+   **goalie spectator pose-lead** *(deferred — see below)*.
+   - *Puck lead:* **DELETED (Phase 4a).** The blade-eased conditional lead was
+     built, parked at fraction 0 (its collapse regresses render time
+     non-monotonically on fast incoming pucks), and then superseded outright by
+     Phase-3 client puck prediction — the loose puck now renders at ~host
+     present via the shared analytic sim, with claims validated at the stamp,
+     which is strictly better than any eased lead. The machinery was removed
+     rather than left dormant.
+   - *Goalie pose-lead — DEFERRED.* Lower value (spectator-only cosmetic) and a
+     real footgun: the shooter's shot is already lag-comp'd against the goalie
+     they saw, so leading the goalie for the shooter would make them aim at a
+     goalie the host won't judge against — worse, not better. A safe version has
+     to suppress the lead whenever the local player is aiming/charging, which is
+     fiddly state logic for a cosmetic gain. Revisit only if the skater+puck lead
+     feels good and the goalie's past-ness still reads badly.
 5. **Rate drop** (now free on feel) **+ delta-encode** (when egress-metered).
 6. **Pure-server-mode + Steam auth ticket + hybrid dedicated for ranked.**
 

@@ -58,13 +58,58 @@ static func is_claim_stamp_plausible(now: float, host_timestamp: float, peer_rtt
 	return elapsed <= effective_rtt_ms / 2000.0 + _STAMP_PAST_SLACK_S
 
 
+# Generous allowance over the link-derived floor for the client's LEGITIMATE
+# jitter margin (its adaptive delay adds the measured PDV spread, which can
+# genuinely spike). The bound halves the exploit window on a clean link; it is
+# not, and cannot be, exact — the host can't see the client's downstream PDV.
+const _INTERP_DELAY_JITTER_ALLOWANCE_MS: float = 100.0
+
+
+# Anti-cheat bound on the claim-carried interp_delay_ms — the companion of
+# is_claim_stamp_plausible, completing the P0/P1 family. The client self-reports
+# the interpolation delay its render used, and every remote-view rewind AND the
+# stage-3 forward-predict depth trust it. Bounded only by the flat 200 ms cap, a
+# modified client on a 20 ms link could report the cap and get victims rewound
+# ~175 ms further into the past than it ever saw ("hit them where they were").
+# The host bounds the report against what the delay SHOULD be on the measured
+# link: one-way + one broadcast interval + the jitter allowance. No ping sample
+# yet → the same conservative default RTT the stamp check uses.
+static func plausible_interp_delay_ms(reported_ms: float, peer_rtt_ms: float) -> float:
+	if not is_finite(reported_ms):
+		return 0.0
+	var rtt: float = peer_rtt_ms if peer_rtt_ms > 0.0 else _STAMP_NO_SAMPLE_RTT_MS
+	var ceiling: float = rtt / 2.0 + 1000.0 / float(Constants.STATE_RATE) \
+			+ _INTERP_DELAY_JITTER_ALLOWANCE_MS
+	var bounded: float = clampf(reported_ms, 0.0, minf(ceiling, _INTERP_DELAY_CLAMP_MS_MAX))
+	# Telemetry: legit players should never trip this — sustained clamps mean
+	# the allowance is too tight (mis-rewinding honest high-jitter claims) or a
+	# client is inflating its delay. >1 ms guard skips float noise.
+	if reported_ms - bounded > 1.0:
+		NetworkTelemetry.record_delay_clamped(reported_ms - bounded)
+	return bounded
+
+
+# Hard bound on the claim-carried adaptive lead extra — mirrors
+# ClockSync.MAX_LEAD_EXTRA_S (pinned by test) so a modified client can't push
+# its self-view rewind arbitrarily forward by inflating the reported lead.
+const _INPUT_LEAD_EXTRA_MAX_S: float = 0.05
+
+
 # Host-time at which to query StateBufferManager for the claimant's
 # locally-predicted entity. RTT does not enter the formula — the rewind depth
-# is a function of the INPUT_LEAD_SEC convention, so validation is
+# is a function of the input-lead stamping convention, so validation is
 # RTT-independent and lower-ping players don't beat higher-ping players on
-# legitimately-stamped claims.
-static func self_view_time(host_timestamp: float) -> float:
-	return host_timestamp + NetworkManager.INPUT_LEAD_SEC
+# legitimately-stamped claims. Since the lead ADAPTS (ClockSync's servo raises
+# the stamp lead when the host queue runs dry), claims carry the lead the
+# client stamped with and the rewind follows it — bounded to
+# [INPUT_LEAD_SEC, INPUT_LEAD_SEC + extra max]. input_lead_ms < 0 (or absent
+# — the host's own local claims) uses the base constant.
+static func self_view_time(host_timestamp: float, input_lead_ms: float = -1.0) -> float:
+	if input_lead_ms < 0.0 or not is_finite(input_lead_ms):
+		return host_timestamp + NetworkManager.INPUT_LEAD_SEC
+	var lead_s: float = clampf(input_lead_ms / 1000.0,
+			NetworkManager.INPUT_LEAD_SEC, NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
+	return host_timestamp + lead_s
 
 
 # Host-time at which to query StateBufferManager for any entity the claimant
@@ -79,6 +124,68 @@ static func remote_view_time(host_timestamp: float, interp_delay_ms: float) -> f
 # endpoint in swept-segment pickup/poke tests. Works for either perspective.
 static func prev_tick(view_time: float) -> float:
 	return view_time - 1.0 / float(Constants.PHYSICS_TICK)
+
+
+# Host-time at which to query the LOOSE puck for a claim. The claimant renders
+# the loose puck predicted to its estimate of host present — i.e. AT the claim
+# stamp — so the host rewinds its own history to the stamp itself (the callers'
+# freshness gates clamp a stale/future stamp). Kept as a named seam rather than
+# inlined so every loose-puck rewind states which timeline it reads. The
+# CARRIED puck is unaffected — it rides the carrier's render timeline
+# (remote_view + forward_predict_skater); this helper is only for claims
+# against a loose puck (pickup / deflect verdicts, the one-timer range gate).
+static func puck_view_time(host_timestamp: float) -> float:
+	return host_timestamp
+
+
+# Stage-3 forward-prediction depth: how many physics ticks a remote body is
+# intent-integrated forward from its interpolated-past base toward host-present.
+# The client (RemoteController render) and the host claim rewinds (hit / poke /
+# stick-lift, via forward_predict_skater below) ALL call this with the SAME
+# fraction (Constants.REMOTE_FORWARD_PREDICT_FRACTION) and interp_delay, so
+# their tick counts — and therefore the predicted positions — agree, keeping
+# render == rewind. `fraction` is a param (not read here) so the
+# formula is unit-testable at any value even while the shipped constant varies.
+# The delay is clamped to the same ceiling remote_view_time uses — the host-side
+# caller feeds it the raw client-reported interp_delay_ms, and without the clamp
+# a crafted claim (or a NaN/huge warmup glitch) turns the integration loop into
+# an unbounded host stall.
+static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int:
+	if not is_finite(interp_delay_s):
+		return 0
+	var delay_s: float = clampf(interp_delay_s, 0.0, _INTERP_DELAY_CLAMP_MS_MAX / 1000.0)
+	return roundi(clampf(fraction, 0.0, 1.0) * delay_s * float(Constants.PHYSICS_TICK))
+
+
+# Stage-3 shared reconstruction: intent-integrate a remote-rendered skater from
+# its rewound (interpolated-past) snapshot to the instant the claimant actually
+# rendered it, filling caller-owned `scratch`. Returns true when integration ran
+# (fraction > 0, valid inputs); false = fraction 0 / no controller — caller uses
+# the raw snapshot, the exact legacy render == rewind. One helper so every claim
+# resolver reconstructs identically to RemoteController's render:
+#  - same primitive (SkaterMovementRules.integrate_forward), same shared
+#    fraction/decay constants, same has_puck=false convention;
+#  - intent quantized through the wire codec (quantize_move_intent) so the host's
+#    raw buffered intent (bots are analog) matches what clients decoded;
+#  - depth from the claim-carried interp_delay_ms — the same value the
+#    claimant's render used that frame.
+static func forward_predict_skater(snap: SkaterNetworkState, ctrl: SkaterController,
+		interp_delay_ms: float, scratch: SkaterMovementRules.ForwardResult) -> bool:
+	if snap == null or ctrl == null:
+		return false
+	var ticks: int = forward_predict_ticks(
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
+	if ticks <= 0:
+		return false
+	SkaterMovementRules.integrate_forward(
+			snap.position, snap.velocity,
+			WorldStateCodec.quantize_move_intent(snap.move_intent),
+			atan2(snap.facing.x, snap.facing.y), false,
+			snap.brake_intent, snap.sprint_active,
+			ctrl.get_movement_config(), 1.0 / float(Constants.PHYSICS_TICK),
+			ticks, Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, scratch,
+			snap.stagger_timer, ctrl.get_body_check_config())
+	return true
 
 
 # Structural anti-cheat for client-authoritative blade claims. A pickup / poke /

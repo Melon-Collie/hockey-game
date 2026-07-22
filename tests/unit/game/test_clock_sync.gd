@@ -92,3 +92,81 @@ func test_positive_offset_when_host_is_ahead() -> void:
 		cs.record_pong(0.0, 10.05, 0.1)
 	var now: float = Time.get_ticks_msec() / 1000.0
 	assert_almost_eq(cs.estimated_host_time(), now + 10.0, 0.05)
+
+
+# ── Adaptive input-lead servo ────────────────────────────────────────────────
+
+func _ready_clock() -> RefCounted:
+	var cs := _make()
+	cs.record_pong(0.0, 0.05, 0.1)
+	cs.record_pong(0.0, 0.05, 0.1)
+	cs.record_pong(0.0, 0.05, 0.1)
+	return cs
+
+
+func test_lead_extra_starts_at_one_tick() -> void:
+	# Initial extra = one tick — the playtest-measured deficit of the static
+	# lead on a clean link, so warm-up starts near the right answer.
+	var cs := _ready_clock()
+	assert_almost_eq(cs.current_input_lead_s(),
+			cs.INPUT_LEAD_SEC + 1.0 / 120.0, 1e-6)
+
+
+func test_sustained_overdue_raises_the_lead() -> void:
+	# The host popping our inputs ~20 ms late (queue running dry) must climb
+	# the extra — this is the servo's whole purpose.
+	var cs := _ready_clock()
+	var before: float = cs.current_input_lead_s()
+	for _i in range(60):
+		cs.record_ack_overdue(0.020)
+	assert_gt(cs.current_input_lead_s(), before, "sustained overdue climbs the lead")
+
+
+func test_lead_extra_is_hard_capped() -> void:
+	var cs := _ready_clock()
+	for _i in range(5000):
+		cs.record_ack_overdue(0.2)
+	assert_lte(cs.current_input_lead_s(), cs.INPUT_LEAD_SEC + cs.MAX_LEAD_EXTRA_S + 1e-9,
+			"extra never exceeds MAX_LEAD_EXTRA_S")
+
+
+func test_healthy_overdue_relaxes_toward_zero_extra() -> void:
+	# Overdue steady under the one-tick grace -> the servo slowly gives the
+	# extra back (over-lead only costs remote-visibility latency, but it does
+	# cost it).
+	var cs := _ready_clock()
+	for _i in range(60):
+		cs.record_ack_overdue(0.020)
+	var raised: float = cs.current_input_lead_s()
+	for _i in range(2000):
+		cs.record_ack_overdue(0.0)
+	assert_lt(cs.current_input_lead_s(), raised, "healthy acks relax the lead")
+
+
+func test_phase_artifact_overdue_is_ignored() -> void:
+	# A multi-second overdue is an input parked across a replay/intermission,
+	# not link lateness — it must not spike the servo.
+	var cs := _ready_clock()
+	var before: float = cs.current_input_lead_s()
+	for _i in range(50):
+		cs.record_ack_overdue(3.0)
+	assert_almost_eq(cs.current_input_lead_s(), before, 1e-9,
+			"phase-resume artifacts are excluded from the servo")
+
+
+func test_servo_never_touches_the_ntp_offset() -> void:
+	# The invariant: lead adaptation is separate state; the offset stays pure
+	# ping/pong NTP. Feeding the servo must not move estimated_host_time's base.
+	var cs := _ready_clock()
+	var offset_before: float = cs.estimated_host_time() - cs.local_time() \
+			if cs.has_method("local_time") else 0.0
+	var t_before: float = cs.estimated_host_time()
+	for _i in range(100):
+		cs.record_ack_overdue(0.05)
+	# estimated_host_time is monotone wall-clock-based; compare stamp-vs-base
+	# spacing instead: the gap between stamp time and host time must equal the
+	# current lead exactly — no hidden offset drift folded in.
+	var lead_gap: float = cs.estimated_input_stamp_time() - cs.estimated_host_time()
+	assert_almost_eq(lead_gap, cs.current_input_lead_s(), 1e-6,
+			"stamp lead is exactly base + extra; offset untouched")
+	assert_true(is_finite(offset_before) and is_finite(t_before))

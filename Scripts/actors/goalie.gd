@@ -69,15 +69,16 @@ var _last_block_arm_pos: Vector3
 
 func _ready() -> void:
 	# The stick is a hooked shape that snagged skaters when it shared LAYER_WALLS
-	# with the rest of the goalie. Move it to LAYER_GOALIE_STICK: the puck mask
-	# includes that layer so shots still rebound off the stick, but the skater
-	# mask omits it so players pass through instead of getting caught.
+	# with the rest of the goalie. Move it to LAYER_GOALIE_STICK: the skater
+	# mask omits that layer so players pass through instead of getting caught
+	# (the puck's stick rebounds are analytic — GoalieContactDetector).
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK
 	# The body parts come off the scene-default LAYER_WALLS onto their own
 	# LAYER_GOALIE_BODIES so a ghosted skater (whose mask drops back to bare
 	# LAYER_WALLS — see Skater.set_ghost) passes through the goalie while still
-	# standing on the ice. MASK_PUCK and MASK_SKATER both include the new layer,
-	# so shots rebound and non-ghost skaters bump exactly as before.
+	# standing on the ice. MASK_SKATER includes the new layer, so non-ghost
+	# skaters bump exactly as before; the puck's save contacts are analytic
+	# (GoalieContactDetector reads these same parts), so no mask is involved.
 	_left_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_right_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_body.collision_layer = Constants.LAYER_GOALIE_BODIES
@@ -154,6 +155,29 @@ func get_glove_position() -> Vector3:
 # including back into the goalie's own net. Disabled for the swing's duration.
 func set_stick_collision_enabled(enabled: bool) -> void:
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK if enabled else 0
+
+
+# Cached list of this goalie's CollisionShape3D parts (pads / body / head / glove /
+# stick / blocker) for the analytic puck drive's contact queries. The subtree is
+# static after _ready — only transforms move — so one gather serves every query;
+# GoalieContactDetector re-gathering per sub-step allocated hundreds of arrays per
+# tick in a crease scramble. Runtime enable/disable (the clear-sweep stick toggle
+# above) is filtered at QUERY time from the live layer/disabled flags, so the cache
+# never goes stale.
+var _collision_parts_cache: Array[CollisionShape3D] = []
+
+
+func get_collision_parts() -> Array[CollisionShape3D]:
+	if _collision_parts_cache.is_empty():
+		_gather_collision_parts(self, _collision_parts_cache)
+	return _collision_parts_cache
+
+
+static func _gather_collision_parts(node: Node, found: Array[CollisionShape3D]) -> void:
+	for child in node.get_children():
+		if child is CollisionShape3D:
+			found.append(child)
+		_gather_collision_parts(child, found)
 
 func get_blocker_position() -> Vector3:
 	return _block_arm.position

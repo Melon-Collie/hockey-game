@@ -154,7 +154,21 @@ const VERSION: String = "dev"
 #      length) instead of the 4-int height+tier build. Validation is pure
 #      coercion (lateral axes, no legal-shape check). Positional arg counts
 #      changed on all three RPCs — bump required.
-const PROTOCOL_VERSION: int = 37
+# v38: deterministic puck goes authoritative + Phase-3 client prediction. The
+#      host's loose puck is now the analytic sim in EVERY build (not just dev),
+#      clients predict it to host-present with the same shared step, and the
+#      host rewinds loose-puck claims (pickup / one-timer range) to the claim
+#      stamp instead of the interpolated past (LagCompRewind.puck_view_time).
+#      No serialized format changed, but a v37 peer would render/validate
+#      against different puck physics and a mismatched claim-rewind convention,
+#      so mixed lobbies must be refused.
+# v39: adaptive input lead. The client's stamp lead becomes INPUT_LEAD_SEC + a
+#      servo-adapted extra (ClockSync measures pop-overdue from the snapshot
+#      ack stream), and the four blade/hit claim RPCs gain an input_lead_ms arg
+#      so LagCompRewind.self_view_time rewinds with the lead the claimant
+#      actually stamped with (bounded host-side). Positional arg counts changed
+#      on all four claim RPCs — bump required.
+const PROTOCOL_VERSION: int = 39
 
 
 func _ready() -> void:

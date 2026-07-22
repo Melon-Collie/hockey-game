@@ -13,14 +13,22 @@ extends GutTest
 #     reach, so it's the one pair a test has to enforce.
 
 
+const _BOARDS_MAT: PhysicsMaterial = preload("res://Physics/boards.tres")
+
+
 func test_board_bounce_matches_boards_material() -> void:
-	var mat: PhysicsMaterial = load("res://Physics/boards.tres")
-	assert_not_null(mat, "Physics/boards.tres must exist and load as a PhysicsMaterial")
+	assert_not_null(_BOARDS_MAT, "Physics/boards.tres must exist and load as a PhysicsMaterial")
 	# Resource stores bounce as a 32-bit float, the const is a 64-bit double, so
 	# compare with a tolerance well below any meaningful tuning step.
-	assert_almost_eq(mat.bounce, GameRules.PUCK_BOARD_BOUNCE, 1e-4,
+	assert_almost_eq(_BOARDS_MAT.bounce, GameRules.PUCK_BOARD_BOUNCE, 1e-4,
 			"boards.tres bounce must equal GameRules.PUCK_BOARD_BOUNCE — the AI/client " +
 			"prediction models board rebounds from this constant. Update both together.")
+
+
+func test_board_friction_matches_boards_material() -> void:
+	assert_almost_eq(_BOARDS_MAT.friction, GameRules.PUCK_BOARD_FRICTION, 1e-4,
+			"boards.tres friction must equal GameRules.PUCK_BOARD_FRICTION — the analytic puck " +
+			"sim bleeds tangential rim speed from this constant. Update both together.")
 
 
 func test_puck_ice_decel_derives_from_ice_friction_and_gravity() -> void:

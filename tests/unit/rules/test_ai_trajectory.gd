@@ -149,3 +149,132 @@ func test_predict_final_matches_predict_endpoint() -> void:
 		assert_almost_eq(final_pos.x, endpoint.x, 0.0001, "predict_final x matches endpoint")
 		assert_almost_eq(final_pos.y, endpoint.y, 0.0001, "predict_final y matches endpoint")
 		assert_almost_eq(final_pos.z, endpoint.z, 0.0001, "predict_final z matches endpoint")
+
+
+# ── step_puck (deterministic single-step atom for the puck-sim migration) ──────
+
+func test_step_puck_returns_position_and_velocity() -> void:
+	# The whole reason step_puck exists: it returns velocity too (origin = pos,
+	# basis.x = vel), so a free-run can carry it forward. A straight slide advances
+	# ~vel·dt and keeps ~its direction (friction only trims magnitude).
+	var stepped: Transform3D = AITrajectory.step_puck(Vector3(0, 0, 0), Vector3(4, 0, 0), 0.1)
+	assert_almost_eq(stepped.origin.x, 0.4, 0.01, "position advanced by ~vel·dt")
+	assert_gt(stepped.basis.x.x, 0.0, "velocity still points +X")
+	assert_lt(stepped.basis.x.x, 4.0, "friction trimmed the speed slightly")
+
+
+func test_step_puck_reflects_velocity_at_board() -> void:
+	# Stepped hard into the +X board, the returned VELOCITY must flip sign (× the
+	# restitution) — the thing predict_final can't report, and what a free-run needs
+	# to continue the carom.
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.05, 0, 0)
+	var stepped: Transform3D = AITrajectory.step_puck(pos, Vector3(30, 0, 0), 1.0 / 12.0)
+	assert_lt(stepped.basis.x.x, 0.0, "post-board velocity reversed in X")
+	assert_lte(stepped.origin.x, GameRules.INNER_HALF_WIDTH + 0.001, "stays inside the boards")
+
+
+func test_step_puck_board_friction_bleeds_tangential_speed() -> void:
+	# A puck glancing off the +X board (small into-board X, large along-board Z) loses some of
+	# its ALONG-board speed to board friction — the term that kills a hard rim-around. Ice
+	# friction over one tick is ~0.004 m/s (negligible at this speed), so the drop is the board.
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.02, 0, 0)
+	var vel := Vector3(6, 0, 30)  # mostly tangential (+Z), gentle into the +X board
+	var stepped: Transform3D = AITrajectory.step_puck(pos, vel, 1.0 / 120.0)
+	assert_lt(stepped.basis.x.x, 0.0, "into-board component reflected")
+	assert_lt(stepped.basis.x.z, 29.5, "along-board (tangential) speed bled by board friction")
+	assert_gt(stepped.basis.x.z, 27.0, "but most of the tangential pace is kept on a glance")
+
+
+func test_step_puck_chained_matches_predict_puck_at() -> void:
+	# The load-bearing guarantee: the shadow harness free-runs by CHAINING step_puck,
+	# and that must equal the AITrajectory predictor the AI already trusts to match
+	# Jolt. Chain N steps and compare the endpoint to predict_puck_at(N steps).
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, 2.0)
+	var vel := Vector3(18, 0, 6)  # fast enough to carom off +X within the window
+	var dt: float = 1.0 / 12.0
+	var steps: int = 6
+	var p := pos
+	var v := vel
+	for _i in steps:
+		var s: Transform3D = AITrajectory.step_puck(p, v, dt)
+		p = s.origin
+		v = s.basis.x
+	var reference: Vector3 = AITrajectory.predict_puck_at(pos, vel, dt * float(steps), steps)
+	assert_almost_eq(p.x, reference.x, 1e-5, "chained step_puck endpoint == predict_puck_at (x)")
+	assert_almost_eq(p.z, reference.z, 1e-5, "chained step_puck endpoint == predict_puck_at (z)")
+
+
+# ── step_puck_3d (the airborne/gravity extension of the puck atom) ─────────────
+
+const _REST: float = AITrajectory.PUCK_REST_HEIGHT_M
+
+
+func test_step_puck_3d_grounded_matches_step_puck() -> void:
+	# A resting/sliding puck (at rest height, no vertical speed) must be BYTE-identical to
+	# the grounded step_puck — the 3D atom only adds a vertical channel, it doesn't change
+	# the on-ice slide.
+	var pos := Vector3(1.0, _REST, 2.0)
+	var vel := Vector3(8.0, 0.0, -3.0)
+	var dt: float = 1.0 / 120.0
+	var a: Transform3D = AITrajectory.step_puck_3d(pos, vel, dt)
+	var b: Transform3D = AITrajectory.step_puck(pos, vel, dt)
+	assert_almost_eq(a.origin.x, b.origin.x, 1e-6, "grounded 3D == step_puck (x)")
+	assert_almost_eq(a.origin.z, b.origin.z, 1e-6, "grounded 3D == step_puck (z)")
+	assert_almost_eq(a.origin.y, b.origin.y, 1e-6, "grounded height passes through")
+
+
+func test_step_puck_3d_gravity_pulls_a_rising_puck_down() -> void:
+	# An airborne puck loses vy by g·dt each tick (ballistic), and gains height while vy>0.
+	var dt: float = 1.0 / 120.0
+	var stepped: Transform3D = AITrajectory.step_puck_3d(
+			Vector3(0, 0.5, 0), Vector3(10, 3.0, 0), dt)
+	assert_almost_eq(stepped.basis.x.y, 3.0 - GameRules.GRAVITY_M_S2 * dt, 1e-4, "vy dropped by g·dt")
+	assert_gt(stepped.origin.y, 0.5, "still rising this tick (vy was positive)")
+	assert_almost_eq(stepped.basis.x.x, 10.0, 1e-6, "no ice friction in the air — horizontal pace held")
+
+
+func test_step_puck_3d_lands_and_slides() -> void:
+	# A puck just above the ice with a small downward vy lands THIS tick: clamped to rest
+	# height, vy killed (no vertical bounce), and horizontal speed preserved for the slide.
+	var dt: float = 1.0 / 120.0
+	var stepped: Transform3D = AITrajectory.step_puck_3d(
+			Vector3(0, _REST + 0.005, 0), Vector3(6, -2.0, 0), dt)
+	assert_almost_eq(stepped.origin.y, _REST, 1e-6, "clamped to rest height on landing")
+	assert_eq(stepped.basis.x.y, 0.0, "vertical speed killed — land-and-slide, no bounce")
+	assert_gt(stepped.basis.x.x, 0.0, "horizontal slide continues")
+
+
+func test_step_puck_3d_ballistic_flight_time_matches_closed_form() -> void:
+	# Chained airborne steps: a puck launched with vy = v0 lands after ~2·v0/g (no vertical
+	# restitution), and with no ice friction its horizontal range is vx·flight_time. Verify
+	# against the closed form to a tick's tolerance.
+	var dt: float = 1.0 / 240.0
+	var v0: float = 4.0     # up
+	var vx: float = 5.0
+	var p := Vector3(0, _REST, 0)
+	var v := Vector3(vx, v0, 0)
+	var t: float = 0.0
+	var apex: float = _REST
+	for _i in 1000:
+		var s: Transform3D = AITrajectory.step_puck_3d(p, v, dt)
+		p = s.origin
+		v = s.basis.x
+		t += dt
+		apex = maxf(apex, p.y)
+		if v.y == 0.0 and p.y <= _REST + 1e-6 and t > dt:
+			break  # landed
+	var expected_flight: float = 2.0 * v0 / GameRules.GRAVITY_M_S2
+	assert_almost_eq(t, expected_flight, 3.0 * dt, "flight time ≈ 2·v0/g")
+	assert_almost_eq(apex - _REST, v0 * v0 / (2.0 * GameRules.GRAVITY_M_S2), 0.02, "apex ≈ v0²/2g")
+	assert_almost_eq(p.x, vx * expected_flight, 0.05, "horizontal range ≈ vx·flight_time (no air friction)")
+
+
+func test_step_puck_3d_reflects_off_boards_while_airborne() -> void:
+	# A puck flying into the +X board mid-air caroms in XZ (like the grounded puck) while
+	# gravity keeps acting on Y — boards are full-height, so height doesn't spare the wall.
+	var dt: float = 1.0 / 120.0
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.05, 0.6, 0)
+	var stepped: Transform3D = AITrajectory.step_puck_3d(pos, Vector3(30, 1.0, 0), dt)
+	assert_lt(stepped.basis.x.x, 0.0, "airborne puck reflected off the +X board")
+	assert_lte(stepped.origin.x, GameRules.INNER_HALF_WIDTH + 0.001, "stays inside the boards")
+	assert_lt(stepped.basis.x.y, 1.0, "gravity still acting on the vertical channel")

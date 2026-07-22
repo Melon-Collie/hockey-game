@@ -319,7 +319,13 @@ func _render_client(t: NetworkTelemetry) -> void:
 			"resid = distance from server AFTER the snap+replay. At rest it should be ~0; if resid stays ~9cm the replay isn't converging (offset rebuilds), vs ~0 = rebuild is in normal physics")
 	_metric(_band(t.extrapolation_pct, 25.0, 60.0), "Guessing ahead", "%.0f%% of frames (%.0f fps)" % [t.extrapolation_pct, t.client_fps],
 		"share of rendered frames dead-reckoning a remote past the buffer (framerate-independent). If high on a clumpy link, the jitter cushion is too thin — see Smoothing delay")
-	_info("Puck mode", t.puck_mode, "interp = smoothed, trajectory = predicted flight, carried = on a stick")
+	_info("Puck mode", t.puck_mode, "predicted = shared-sim to present, predicted_seed = own release pre-confirm, predicted_hold = held at goalie, interp = stale-data fallback, carried = on a stick")
+	_metric(_band(t.puck_predict_residual_avg_m * 100.0, 15.0, 50.0), "Puck predict err",
+		"%.1f cm avg · %.0f cm peak" % [t.puck_predict_residual_avg_m * 100.0, t.puck_predict_residual_max_m * 100.0],
+		"pre-damp error between the shared-sim prediction and the render; ~0 = agreeing, peaks = host events (deflects/saves) folding in")
+	_metric(_band(t.remote_correction_avg_m * 100.0, 10.0, 30.0), "Remote predict err",
+		"%.1f cm avg · %.0f cm peak" % [t.remote_correction_avg_m * 100.0, t.remote_correction_max_m * 100.0],
+		"same pre-damp error on remote skater bodies; steady growth = intent decay / hard cuts outrunning the prediction")
 
 	_section("Smoothing buffers")
 	_info("Interp depth", "skater %d · puck %d · goalie %d" % [t.buffer_depth_skater, t.buffer_depth_puck, t.buffer_depth_goalie],
@@ -360,6 +366,8 @@ func _render_host(t: NetworkTelemetry) -> void:
 			"how late inputs arrive vs schedule; want near 0")
 		_metric(_band(t.input_starvations_per_sec, 0.5, 5.0), "Starvations", "%.1f/s" % t.input_starvations_per_sec,
 			"ticks with no client input (reused last); want 0")
+		_metric(_band(t.input_drains_per_sec, 0.5, 5.0), "Backlog drains", "%.1f/s" % t.input_drains_per_sec,
+			"stale inputs dropped by the overdue drain; want 0, bursts after jitter are the fix working")
 
 	_section("Host frame health")
 	_frame_health(t)
@@ -410,8 +418,8 @@ func _render_watch(t: NetworkTelemetry) -> void:
 	var any := false
 	any = _watch(_when_positive(t.blade_jump_per_sec, 10.0), "Stick jumps", "%.1f/s (%.2f m avg)" % [t.blade_jump_per_sec, t.blade_jump_mag_avg],
 		"a reconcile teleported the blade >5 cm; want 0 (normal fast stickhandling no longer counts)") or any
-	any = _watch(_band(t.puck_traj_hard_snap_per_sec, 2.0, 10.0), "Puck hard-snaps", "%.1f/s" % t.puck_traj_hard_snap_per_sec,
-		"puck flight snapped hard; expected only on real bounces, not every shot") or any
+	any = _watch(_band(t.puck_hard_snap_per_sec, 2.0, 10.0), "Puck hard-snaps", "%.1f/s" % t.puck_hard_snap_per_sec,
+		"a moving puck's render teleported; genuine prediction divergence only — want ~0") or any
 	any = _watch(_band(t.ooo_drops_per_sec, 2.0, 10.0), "Out-of-order drops", "%.1f/s" % t.ooo_drops_per_sec,
 		"packets arrived reordered and were discarded; occasional is normal UDP, a steady stream is a problem") or any
 	any = _watch(_band(100.0 - t.reconcile_match_pct, 5.0, 30.0), "Reconcile match", "%.0f%% matched" % t.reconcile_match_pct,

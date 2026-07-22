@@ -55,7 +55,7 @@ func test_clear_resets_pending_claim() -> void:
 func test_receive_claim_with_null_puck_getter_is_noop() -> void:
 	# Empty Callables → puck/pc resolve to null → early return without crash.
 	# Client blade args (v28 client-authoritative aim) are all zero here.
-	resolver.receive_claim(1, 0.0, 30.0, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO)
+	resolver.receive_claim(1, 0.0, 30.0, 25.0, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO)
 	assert_eq(resolver._pending_peer_id, -1)
 
 

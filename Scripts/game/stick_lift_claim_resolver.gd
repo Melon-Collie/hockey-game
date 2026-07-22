@@ -13,9 +13,13 @@ extends RefCounted
 #     → reject if puck locked, no carrier, carrier changed, claim stale,
 #       skater missing/ghost, attempting to lift self or a teammate
 #     → rewind the carrier's stick shaft to remote_view_time(host_ts, interp_delay)
-#       and the attacker's body to self_view_time(host_ts); reach-clamp the
-#       CLIENT-sent attacker blade to that body — never rtt/2 (the blade is
-#       client-authoritative aim, like PickupClaimResolver; see LagCompRewind)
+#       and the attacker's body to self_view_time(host_ts); stage-3: shift the
+#       shaft by the carrier's forward-predicted displacement
+#       (LagCompRewind.forward_predict_skater — the claimant rendered the
+#       carrier intent-integrated toward present, and the shaft rides the
+#       carrier's body); reach-clamp the CLIENT-sent attacker blade to that
+#       body — never rtt/2 (the blade is client-authoritative aim, like
+#       PickupClaimResolver; see LagCompRewind)
 #     → reject if PuckInteractionRules.check_blade_under_stick fails against that
 #       geometry (attacker's blade within radius of the shaft AND below it)
 #     → apply_lag_comp_stick_lift (idempotent — re-checks carrier on apply so a
@@ -31,6 +35,8 @@ var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
 var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
+# Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
+var _fp_result := SkaterMovementRules.ForwardResult.new()
 
 
 func setup(
@@ -45,7 +51,7 @@ func setup(
 
 
 func receive_claim(peer_id: int, host_timestamp: float,
-		interp_delay_ms: float, expected_carrier_peer_id: int,
+		interp_delay_ms: float, input_lead_ms: float, expected_carrier_peer_id: int,
 		client_blade_curr: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
@@ -57,6 +63,10 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	# Same age check as pickup/poke — `host_timestamp` is in the
 	# `estimated_host_time` base, matched against session-relative `local_time`.
+	# Anti-cheat: bound the self-reported render delay against the measured link
+	# before any rewind / forward-predict depth reads it (see LagCompRewind).
+	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
 	var now: float = NetworkManager.local_time()
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
 		return
@@ -79,7 +89,7 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	# Attacker's blade is SELF-view (they render their own body via prediction);
 	# the carrier's stick shaft is REMOTE-view (rendered via interpolation).
-	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
 	var shaft_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 	var shaft_snap: WorldSnapshot = _state_buffer.get_state_at(shaft_rewind_time)
 	if shaft_snap.puck_state == null:
@@ -92,6 +102,24 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	var victim_snap: SkaterNetworkState = shaft_snap.get_skater_state(expected_carrier_peer_id)
 	if victim_snap == null:
 		return
+	# Looked up here (rather than at apply time) because the stage-3 carrier
+	# reconstruction below needs the carrier's controller.
+	var expected_record: PlayerRecord = _registry.get_record(expected_carrier_peer_id)
+	if expected_record == null or expected_record.skater == null:
+		return
+	# Stage-3: the claimant rendered the CARRIER forward-predicted toward
+	# host-present, and the stick shaft rides the carrier's upper body — so the
+	# shaft the attacker hooked under sits at the rewound shaft position PLUS the
+	# carrier's forward-predicted displacement (rigid translation: the render
+	# holds the body-relative shaft pose and advances the body). No-op at
+	# fraction 0 — exact legacy render == rewind.
+	var shaft_top: Vector3 = victim_snap.top_hand_world
+	var shaft_blade: Vector3 = victim_snap.blade_contact_world
+	if LagCompRewind.forward_predict_skater(victim_snap,
+			expected_record.controller as SkaterController, interp_delay_ms, _fp_result):
+		var carrier_delta: Vector3 = _fp_result.position - victim_snap.position
+		shaft_top += carrier_delta
+		shaft_blade += carrier_delta
 	var blade_snap: WorldSnapshot = _state_buffer.get_state_at(blade_rewind_time)
 	var attacker_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
 	if attacker_snap == null:
@@ -124,13 +152,10 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	NetworkTelemetry.record_stick_lift_claim()
 	if not PuckInteractionRules.check_blade_under_stick(
 			attacker_blade,
-			victim_snap.top_hand_world, victim_snap.blade_contact_world,
+			shaft_top, shaft_blade,
 			PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN):
 		NetworkTelemetry.record_stick_lift_claim_miss()
 		return
 	# Pass the intended victim through so apply guards against the carrier having
-	# changed (X → Z) between claim send and apply.
-	var expected_record: PlayerRecord = _registry.get_record(expected_carrier_peer_id)
-	if expected_record == null or expected_record.skater == null:
-		return
+	# changed (X → Z) between claim send and apply. Looked up above.
 	pc.apply_lag_comp_stick_lift(record.skater, expected_record.skater)

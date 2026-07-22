@@ -1221,6 +1221,11 @@ func _spawn_puck() -> void:
 	# building a fresh array per call allocated twice per physics tick.
 	puck_controller.set_skater_getter(func() -> Array:
 		return _registry.skaters() if _registry != null else [])
+	# The live goalie list: the host's analytic drive detects goalie contact
+	# through it, and the client's Phase-3 loose-puck prediction uses it for the
+	# goalie prediction-STOP (dev shadow harnesses also probe through it).
+	puck_controller.set_goalie_provider(func() -> Array:
+		return goalies)
 	puck_controller.puck_picked_up_by.connect(_on_server_puck_picked_up_by)
 	puck_controller.puck_released_by_carrier.connect(_on_server_puck_released_by_carrier)
 	puck_controller.puck_stripped_from.connect(_on_server_puck_stripped_from)
@@ -2647,27 +2652,27 @@ func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
 
 
 func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
-		blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
+		input_lead_ms: float, blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms,
+	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, input_lead_ms,
 			blade_curr, blade_prev, top_hand)
 
 
 func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
-		expected_carrier_peer_id: int, blade_curr: Vector3, blade_prev: Vector3) -> void:
+		input_lead_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3, blade_prev: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id,
-			blade_curr, blade_prev)
+	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, input_lead_ms,
+			expected_carrier_peer_id, blade_curr, blade_prev)
 
 
 func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
-		expected_carrier_peer_id: int, blade_curr: Vector3) -> void:
+		input_lead_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, expected_carrier_peer_id,
-			blade_curr)
+	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, input_lead_ms,
+			expected_carrier_peer_id, blade_curr)
 
 
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
@@ -2820,11 +2825,10 @@ func _on_puck_release_requested(direction: Vector3, power: float, is_slapper: bo
 		var record := _registry.get_local()
 		if record != null:
 			record.controller.on_puck_released_network()
-		var shot_rtt_ms: float = NetworkManager.get_latest_rtt_ms()
 		# Seed local puck prediction only. The host fires the authoritative shot from
 		# THIS client's input-stream release (host-derived, _on_remote_derived_release),
 		# so there is no shot RPC — the inputs the host already replays carry it.
-		puck_controller.notify_local_release(direction, power, shot_rtt_ms)
+		puck_controller.notify_local_release(direction, power)
 
 
 # Nudge (self-tap nutmeg setup). Mirrors the shot-release split — host fires the
@@ -2846,7 +2850,7 @@ func _on_nudge_requested(velocity: Vector3) -> void:
 		var record := _registry.get_local()
 		if record != null:
 			record.controller.on_puck_released_network()
-		puck_controller.notify_local_nudge(velocity, NetworkManager.get_latest_rtt_ms())
+		puck_controller.notify_local_nudge(velocity)
 
 
 # Host-side authoritative nudge derived from a remote player's replayed input.
@@ -2896,8 +2900,7 @@ func _on_one_timer_release_requested(direction: Vector3, power: float, skater: S
 		if puck_controller != null:
 			var record := _registry.get_local()
 			if record != null:
-				var rtt_ms: float = NetworkManager.get_latest_rtt_ms()
-				origin = puck_controller.notify_local_release(direction, power, rtt_ms)
+				origin = puck_controller.notify_local_release(direction, power)
 		NetworkManager.send_one_timer_release(direction, power, origin)
 		return
 	# Host's own one-timer: shooter is local, no client-view rewind needed.
@@ -2927,16 +2930,21 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	var controller: SkaterController = record.controller
 	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
 			rtt_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
-	# Range gate against the puck the shooter saw: rewind to their interpolated
-	# view when the stamp is fresh, otherwise use the live puck. This is the ONLY
-	# part of the one-timer the client gets a say in — "did I connect with the
-	# puck I saw" — and it stays lag-comped. The shot itself (below) is host-derived.
+	# Range gate against the puck the shooter saw — puck_view_time: the loose
+	# puck renders predicted at ~host present, so the rewind reads the claim
+	# stamp itself; live puck when the stamp is stale. This is the ONLY part of
+	# the one-timer the client gets a say in — "did I connect with the puck I
+	# saw" — and it stays lag-comped. The shot itself (below) is host-derived.
+	# Anti-cheat: bound the self-reported render delay against the measured link
+	# before any rewind reads it (see LagCompRewind.plausible_interp_delay_ms).
+	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
 	var now: float = NetworkManager.estimated_host_time()
 	var view_puck_pos: Vector3 = puck.get_puck_position()
 	if _state_buffer_manager != null and _state_buffer_manager.is_ready() \
 			and ShotReleaseRules.is_timestamp_fresh(now, host_timestamp):
 		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(
-				LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms))
+				LagCompRewind.puck_view_time(host_timestamp))
 		if snap != null and snap.puck_state != null:
 			view_puck_pos = snap.puck_state.position
 	var zone_world: Vector3 = record.skater.get_slapper_zone_global_position()
@@ -3013,6 +3021,9 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 		# from buffered host snapshots at host_time - interp_delay, so the
 		# shooter saw the goalie at that earlier moment. Rewind to that snapshot
 		# for fair puck/goalie geometry at the release. See LagCompRewind.
+		# Anti-cheat: delay bounded against the shooter's measured link first.
+		interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+				interp_delay_ms, float(NetworkManager.get_peer_ping_ms(pid)))
 		var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 		var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 		for gc: GoalieController in goalie_controllers:
@@ -3115,6 +3126,9 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 			# Goalie is REMOTE-view from the shooter — the shooter saw the goalie at
 			# host_time - interp_delay (the buffered render path); rewind to that
 			# snapshot for fair puck/goalie geometry at the release moment.
+			# Anti-cheat: delay bounded against the shooter's measured link first.
+			interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
+					interp_delay_ms, float(NetworkManager.get_peer_ping_ms(shooter_peer_id)))
 			var rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 			var snap: WorldSnapshot = _state_buffer_manager.get_state_at(rewind_time)
 			for gc: GoalieController in goalie_controllers:
@@ -3530,10 +3544,11 @@ func _on_body_check_landed(hitter_peer_id: int, victim_peer_id: int,
 		rc.start_knockback_lead(hit_dir, force)
 
 
-func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
+func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float,
+		interp_delay_ms: float, input_lead_ms: float) -> void:
 	if not NetworkManager.is_host:
 		return
-	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms)
+	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms, input_lead_ms)
 
 
 # Relay for PhaseCoordinator.faceoff_prep_announced that recognizes the
@@ -4176,7 +4191,7 @@ func _post_pitch(speed: float) -> float:
 # play this peer already made — see the _local_*_cue_at doc-block. The window is
 # the expected echo delay: the local play leads the host's broadcast by ~one RTT
 # (the client's prediction runs ahead, the host echoes back a round-trip later),
-# the same RTT-based hand-off the puck predictor uses at _on_client_puck_hit_post.
+# the same RTT-based hand-off the puck predictor's post-contact window uses.
 # Clamped so a normal RTT can't under-cover the echo and a lag spike can't gate a
 # genuinely separate second save. `local_cue_at` starts far in the past, so a peer
 # that never played locally (never predicted the contact) is never suppressed.

@@ -75,7 +75,16 @@ alter table public.network_sessions add constraint network_sessions_sane_sizes c
 --          round(avg(reconcile_avg),2) avg_corrections
 --     from network_session_health group by platform order by avg_corrections desc;
 --   select * from network_session_health where felt_lag_count > 0 order by created_at desc;
-create or replace view public.network_session_health as
+-- Views are stateless (every row lives in the network_sessions table), so they
+-- are DROPPED and recreated rather than replaced: `create or replace view` can
+-- only append trailing columns, and any historical divergence between this file
+-- and the live view's column order fails with "cannot change name of view
+-- column" (seen in the wild). Drop order: match_health first — it selects from
+-- network_session_health. Re-running this whole file is always safe.
+drop view if exists public.match_health;
+drop view if exists public.network_session_health;
+
+create view public.network_session_health as
 select
     id, created_at, player_name, game_version, platform, role,
     duration_sec, felt_lag_count,
@@ -95,9 +104,8 @@ select
     (metrics->>'input_starvations_per_sec_max')::float as starvations_peak,  -- host only
     (metrics->>'bytes_recv_per_sec_avg')::float / 1024.0 as down_kbps_avg,
     (metrics->>'bytes_sent_per_sec_avg')::float / 1024.0 as up_kbps_avg,
-    -- Appended after the original columns: `create or replace view` can only ADD
-    -- trailing columns, never reorder/rename existing ones (a mid-list insert
-    -- errors with "cannot change name of view column"). Keep new columns here.
+    -- (Column order is free to change now that the file drops-and-recreates the
+    -- views — the old trailing-append-only constraint no longer applies.)
     (metrics->>'extrapolation_pct_avg')::float        as guessing_ahead_pct_avg,  -- % of frames extrapolating (framerate-independent)
     (metrics->>'extrapolation_pct_max')::float        as guessing_ahead_pct_peak,
     (metrics->>'client_fps_avg')::float               as client_fps_avg,          -- effective render rate; contextualizes the raw per-sec rates
@@ -112,7 +120,7 @@ select
     -- Match join key + how the session ended ('completed' vs the abnormal ends
     -- the old game-over-only reporter never saw), then the rare-event tripwire
     -- TOTALS (session sums — averaging smears 3 hard snaps to ~0/s) and the
-    -- buffer/broadcast health added to the fold. Trailing-append rule applies.
+    -- buffer/broadcast health added to the fold.
     game_id,
     end_reason,
     (metrics->>'puck_hard_snaps_total')::float           as puck_hard_snaps_total,   -- client only; genuine host/client physics divergence
@@ -163,16 +171,33 @@ select
     (metrics->>'reconcile_miss_gap_ms_max')::float       as reconcile_miss_gap_ms_peak,
     -- Shot-launch divergence (client only): client-predicted vs host-authoritative
     -- puck at the first host-confirmed broadcast after a local release. Both run
-    -- identical Jolt from the same client-sent origin, so the peak should be small
-    -- (RTT jitter); a large peak = real launch divergence, and it's the shot-launch
-    -- slice of puck_hard_snaps. Read the peaks against shot_launches_total (denominator).
+    -- the SAME shared analytic solver from the same client-sent origin (Phase 4a),
+    -- so the peak should be tiny (RTT jitter); a large peak = real launch
+    -- divergence, the shot-launch slice of puck_hard_snaps. Read the peaks
+    -- against shot_launches_total (denominator).
     (metrics->>'shot_launch_div_m_max')::float           as shot_launch_div_peak,     -- m; worst launch position gap
     (metrics->>'shot_launch_vel_div_max')::float         as shot_launch_vel_div_peak,  -- m/s; worst launch velocity gap
     (metrics->>'shot_launches_total')::float             as shot_launches_total,       -- shots measured (denominator)
     -- Host physics-tick hitches (gap > 33ms) this session. worst_stall_ms is the
     -- single worst gap; this is HOW MANY. The auto_markers carry the phase / actor
     -- count / last game-event breadcrumb to attribute them. Host only.
-    (metrics->>'host_stalls_total')::float               as host_stalls_total
+    (metrics->>'host_stalls_total')::float               as host_stalls_total,
+    -- Phase-3/4a prediction quality (client only). The residuals are the pre-damp
+    -- error between the shared-sim prediction and the render: avg ~0 = the client
+    -- and host sims agree; peaks measure host events (deflects, saves) folding in.
+    -- Fallbacks = the loose puck dropped to legacy interpolation (deep loss).
+    (metrics->>'puck_predict_residual_m_avg')::float     as puck_predict_err_avg,     -- m
+    (metrics->>'puck_predict_residual_peak_m_max')::float as puck_predict_err_peak,   -- m
+    (metrics->>'remote_correction_m_avg')::float         as remote_predict_err_avg,   -- m
+    (metrics->>'remote_correction_peak_m_max')::float    as remote_predict_err_peak,  -- m
+    (metrics->>'puck_predict_fallbacks_total')::float    as puck_predict_fallbacks_total,
+    -- Host-side upstream/anti-cheat health: backlog drains (stale inputs
+    -- acked-without-applying after jitter bursts — the ratchet fix working) and
+    -- P2 delay-bound clamps (legit players should never trip it; sustained
+    -- non-zero = allowance too tight OR a client inflating its delay).
+    (metrics->>'input_drains_per_sec_max')::float        as input_drains_peak,        -- host only
+    (metrics->>'delay_clamps_total')::float              as delay_clamps_total,       -- host only
+    (metrics->>'delay_clamp_excess_ms_max')::float       as delay_clamp_excess_peak_ms -- host only
 from public.network_sessions
 where net_sim_active is not true;
 
@@ -186,7 +211,7 @@ where net_sim_active is not true;
 -- lobby: one bad experience is a bad match. Starting points:
 --   select * from match_health where abnormal_ends > 0 order by started_at desc;
 --   select * from match_health order by worst_client_hard_snaps desc nulls last limit 20;
-create or replace view public.match_health as
+create view public.match_health as
 select
     game_id,
     min(created_at)                                        as started_at,
@@ -210,7 +235,7 @@ select
     max(puck_hard_snaps_total)  filter (where role = 'client') as worst_client_hard_snaps,
     max(blade_jumps_total)      filter (where role = 'client') as worst_client_blade_jumps,
     min(buffer_skater_min)      filter (where role = 'client') as worst_client_buffer_min,
-    -- Trailing-append rule applies here too (create or replace view).
+    -- (Drop-and-recreate above — column order is unconstrained.)
     sum(auto_marker_count)                                     as auto_marker_total,
     max(delay_spread_peak)      filter (where role = 'client') as worst_client_delay_spread,
     max(clock_correction_peak)  filter (where role = 'client') as worst_client_clock_correction,

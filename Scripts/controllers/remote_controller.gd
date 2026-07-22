@@ -8,17 +8,6 @@ func shot_power_sensitivity() -> float:
 	return net_shot_power_sensitivity
 
 @export var extrapolation_max_ms: float = 50.0
-# Forward-projection toward host-present, 0..1 (see _interpolate). Held at 0:
-# pure interpolate-in-the-past renders remote bodies a FULL interp_delay behind
-# host-present, which is exactly what the lag-comp rewind assumes
-# (LagCompRewind.remote_view_time subtracts the full interp_delay). A non-zero
-# lead renders closer to present but DESYNCS render from that rewind — the host
-# then validates hit/pickup/poke claims against a remote position up to
-# interp_delay/2 behind where the claimant actually saw it, so contested plays
-# miss (worst during jitter, when interp_delay spikes). 0 keeps render == rewind:
-# the standard predict-self / interpolate-remote / server-lag-comp model. The
-# SmoothDamp stage still absorbs correction error.
-@export_range(0.0, 1.0, 0.05) var extrapolation_lead_fraction: float = 0.0
 # Critically-damped smoothing time (s) for the remote body position. Larger =
 # smoother corrections, more chase lag; smaller = snappier, jumpier.
 @export var position_smooth_time: float = 0.05
@@ -43,6 +32,9 @@ const _KNOCKBACK_LEAD_MAX_M: float = 0.22  # peak lead at a full-strength check
 # allocating fresh ones each tick was measurable churn at the physics rate × 5 remotes.
 var _scratch_bracket := BufferedStateInterpolator.BracketResult.new()
 var _scratch_interp := SkaterNetworkState.new()
+# Stage-3 forward-prediction scratch (see _interpolate): reused so the per-tick ×
+# remotes intent-integration allocates nothing.
+var _fp_result := SkaterMovementRules.ForwardResult.new()
 # Critically-damped position smoother state (see _interpolate). Persistent across
 # ticks; SmoothDamp tracks the moving render target so lead errors blend out.
 var _smooth_pos: Vector3 = Vector3.ZERO
@@ -146,6 +138,65 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 	while _input_queue.size() > MAX_QUEUE_DEPTH:
 		_input_queue.pop_front()
 
+# Backlog drain thresholds. Consumption is one input per tick and production is
+# one per tick, so the queue can never catch up on its own: an upstream jitter
+# burst that empties the queue for N ticks (fallback fires, consumption pauses,
+# production continues) leaves the queue N deep PERMANENTLY once the delayed
+# inputs land — every subsequent input applied ~N ticks stale, ratcheting up
+# with each burst until the 0.5 s cap. The drain bounds that: when the front
+# input is overdue past the trigger, stale inputs are acked-without-applying
+# (the same philosophy as the movement-locked drain) down to the target, with
+# edge flags (presses) folded into the next applied input so a press inside the
+# dropped span still fires once. The client sees one reconcile correction for
+# the dropped span — the honest cost of inputs the network delivered too late —
+# instead of a session of staleness. Trigger sits well above healthy overdue
+# (≤ one batch interval, ~8.3 ms) so ordinary jitter never trips it; target
+# restores the healthy depth rather than clamping at the trigger.
+const _DRAIN_TRIGGER_S: float = 4.0 / 120.0  # ~33 ms overdue engages the drain
+const _DRAIN_TARGET_S: float = 1.0 / 120.0   # drain back down to ~1 tick overdue
+# A LONE input this stale is a phase-resume artifact (parked across a goal
+# replay / intermission), not the freshest available intent — drop-and-ack it
+# (fallback covers the tick) instead of applying seconds-old held state. Its
+# presses are equally stale actions and are deliberately NOT carried.
+const _DRAIN_STALE_SOLO_S: float = 0.25
+# Drains counted in telemetry only at jitter scale — a phase-resume flush is a
+# designed catch-up, and counting it buried the ratchet-fix signal the metric
+# exists to show.
+const _DRAIN_TELEMETRY_MAX_S: float = 1.0
+
+
+func _drain_backlog(now: float) -> void:
+	if _input_queue.is_empty():
+		return
+	# Lone-stale drop (see _DRAIN_STALE_SOLO_S).
+	if _input_queue.size() == 1 			and now - _input_queue.front().host_timestamp > _DRAIN_STALE_SOLO_S:
+		var solo: InputState = _input_queue.pop_front()
+		last_processed_host_timestamp = solo.host_timestamp
+		return
+	if _input_queue.size() <= 1:
+		return
+	if now - _input_queue.front().host_timestamp <= _DRAIN_TRIGGER_S:
+		return
+	var target: float = now - _DRAIN_TARGET_S
+	while _input_queue.size() > 1 and _input_queue.front().host_timestamp < target:
+		var stale: InputState = _input_queue.pop_front()
+		var overdue: float = now - stale.host_timestamp
+		last_processed_host_timestamp = stale.host_timestamp
+		# Presses are edges the player committed — dropping the frame that carried
+		# one must not eat the action. Held/absolute state (move vector, brake,
+		# aim, elevation_level) is NOT carried: the next applied input holds the
+		# current truth, which is the point of the drain. Presses older than the
+		# stale-solo bound are phase artifacts and are dropped with their frame.
+		if overdue <= _DRAIN_STALE_SOLO_S:
+			var next: InputState = _input_queue.front()
+			next.shoot_pressed = next.shoot_pressed or stale.shoot_pressed
+			next.slap_pressed = next.slap_pressed or stale.slap_pressed
+			next.stick_lift_pressed = next.stick_lift_pressed or stale.stick_lift_pressed
+			next.quick_pass_pressed = next.quick_pass_pressed or stale.quick_pass_pressed
+		if overdue <= _DRAIN_TELEMETRY_MAX_S:
+			NetworkTelemetry.record_input_drain()
+
+
 func _drive_from_input(delta: float) -> void:
 	# Pop one input per physics tick so every client input gets simulated on the
 	# host in order. last_processed_host_timestamp advances only for inputs that
@@ -160,14 +211,20 @@ func _drive_from_input(delta: float) -> void:
 	# timestamp, so the queue empties between 60Hz batches and fallback-input fires
 	# every gap. Fall through when clock isn't ready to preserve behaviour during
 	# NTP warmup.
+	if NetworkManager.is_clock_ready():
+		_drain_backlog(NetworkManager.estimated_host_time())
 	var input_due: bool = _input_queue.size() > 0 and (
 			not NetworkManager.is_clock_ready() or
 			_input_queue.front().host_timestamp <= NetworkManager.estimated_host_time())
 	if input_due:
 		var input: InputState = _input_queue.pop_front()
 		last_processed_host_timestamp = input.host_timestamp
-		NetworkTelemetry.record_input_lead(
-				NetworkManager.estimated_host_time() - input.host_timestamp)
+		if not _game_state.is_movement_locked():
+			# Recorded for LIVE pops only: locked-phase pops (faceoff prep,
+			# celebrations) measure phase cadence, not link health, and were
+			# skewing the metric the adaptive lead is judged by.
+			NetworkTelemetry.record_input_lead(
+					NetworkManager.estimated_host_time() - input.host_timestamp)
 		if not _game_state.is_movement_locked():
 			_process_input(input, delta)
 		elif not tick_faceoff_approach(delta):
@@ -266,7 +323,7 @@ func _interpolate(delta: float) -> void:
 	# fraction 0 == legacy "interpolate in the past"; 1 == render at present (full
 	# ~interp_delay of dead-reckon). Scales with interp_delay, so it tracks RTT/jitter.
 	var render_time: float = NetworkManager.estimated_host_time() \
-			- interp_delay * (1.0 - extrapolation_lead_fraction)
+			- interp_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
 	is_extrapolating = bracket != null and bracket.is_extrapolating
@@ -337,13 +394,47 @@ func _interpolate(delta: float) -> void:
 		interpolated.brake_intent = to_state.brake_intent
 		interpolated.hit_committed = to_state.hit_committed
 		interpolated.sprint_active = to_state.sprint_active
-		# render_time is led toward present by extrapolation_lead_fraction, so the
-		# hermite result already sits close to the host's live pose (or, past the
-		# newest sample, the is_extrapolating branch dead-reckons it). The position
-		# error from a wrong lead is absorbed by the SmoothDamp stage below — the
-		# old "interpolate strictly in the past" rule was relaxed once that smoother
-		# replaced the snap-prone steady advance. blade/top_hand are upper_body-local
+		# The hermite result sits a full interp_delay in the past (or, past the
+		# newest sample, the is_extrapolating branch dead-reckons it); the stage-3
+		# intent integration below is what carries the body toward present. Any
+		# correction error is absorbed by the SmoothDamp stage. blade/top_hand are
+		# upper_body-local
 		# and ride the body through the scene tree, so they need no projection.
+	# Stage-3 forward prediction: intent-integrate the interpolated-past body toward
+	# host-present so a remote reads at its true closing distance instead of a full
+	# interp_delay behind. The host runs the IDENTICAL integration on the hit-claim
+	# rewind snapshot (HitClaimResolver) via the shared forward_predict_ticks depth,
+	# so render == rewind holds at any fraction. has_puck is forced false to match
+	# that host reconstruction exactly (the carry speed cap is a ~cm-scale term over
+	# the window and both sides drop it). Facing is held (rendered from the
+	# interpolated value); position + velocity advance. No-op at fraction 0 —
+	# forward_predict_ticks returns 0 and integrate_forward is the identity.
+	var fp_ticks: int = LagCompRewind.forward_predict_ticks(
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay)
+	if fp_ticks > 0:
+		# Stagger from the bracket's NEWER endpoint — the same snapshot the host's
+		# rewind reads (StateBufferManager copies newer-endpoint too), so the
+		# thrust penalty is identical on both sides.
+		var fp_stagger: float = _scratch_bracket.to_state.stagger_timer \
+				if _scratch_bracket.to_state != null else 0.0
+		SkaterMovementRules.integrate_forward(
+				interpolated.position, interpolated.velocity, interpolated.move_intent,
+				atan2(interpolated.facing.x, interpolated.facing.y), false,
+				interpolated.brake_intent, interpolated.sprint_active, _movement_config(),
+				1.0 / float(Constants.PHYSICS_TICK), fp_ticks,
+				Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, _fp_result,
+				fp_stagger, _body_check_config())
+		interpolated.position = _fp_result.position
+		interpolated.velocity = _fp_result.velocity
+	# Forward-prediction quality: the pre-damp error the smoother is about to
+	# absorb on this body (fp error + correction pressure). Teleport-scale
+	# distances (faceoff/goal resets — anything the snap guard hard-snaps) are
+	# excluded: legitimate repositions, not prediction error (they buried the
+	# real peaks under ~40 m resets in the first playtest's rows).
+	if _smooth_initialized:
+		var residual: float = (interpolated.position - _smooth_pos).length()
+		if residual < _SMOOTH_SNAP_DIST:
+			NetworkTelemetry.record_remote_correction(residual)
 	# Velocity-feed-forward error smoothing on the collision body position. We advance
 	# by the target's OWN velocity each frame (zero steady-state lag — smoothing the
 	# absolute position instead trails a moving body by ~velocity × smooth_time) and

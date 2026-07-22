@@ -178,6 +178,20 @@ func _interpolate_skater(peer_id: int, ts: float) -> SkaterNetworkState:
 	# interpolated rewind reported SKATING_WITHOUT_PUCK (0) and that gate was dead
 	# on any link where the blade rewind interpolates (one-way > INPUT_LEAD).
 	result.shot_state = to_s.shot_state
+	# Movement intent (discrete like shot_state — newer endpoint). The stage-3
+	# claim rewind (HitClaimResolver) forward-integrates the victim from this
+	# snapshot with SkaterMovementRules.integrate_forward; without these three
+	# fields every interpolated rewind carried zero intent and the host
+	# integrated a friction coast while the client rendered the real thrust —
+	# breaking render == rewind by the whole thrust contribution.
+	result.move_intent = to_s.move_intent
+	result.brake_intent = to_s.brake_intent
+	result.sprint_active = to_s.sprint_active
+	# Stagger rides the same newer-endpoint rule: the forward prediction applies
+	# it as a thrust penalty, and the client render reads its bracket's to_state
+	# — the same snapshot — so the two agree. (It decays linearly, so newer-
+	# endpoint vs lerp differ by <= one broadcast interval of decay — sub-mm.)
+	result.stagger_timer = to_s.stagger_timer
 	result.host_timestamp = ts
 	return result
 

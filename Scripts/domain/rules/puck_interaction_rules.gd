@@ -20,6 +20,28 @@ static func check_poke(
 	return _segment_segment_dist_sq(puck_prev, puck_curr, blade_prev, blade_curr) <= radius * radius
 
 
+# Body-block trigger: the puck's swept path (puck_prev→puck_curr) passes through the blocker's
+# body as a VERTICAL CYLINDER (matching the real torso, not a floating sphere). Horizontally
+# within `radius` of the body axis at the closest approach, AND — at that same point — inside
+# the [y_bottom, y_top] height band. The band carries the height gate: a raised passive band
+# lets a grounded puck slide UNDER (a flat shot passes clean), a shot-block crouch seals to the
+# ice. Swept (like check_pickup/poke) so a fast puck can't tunnel through the torso in one
+# tick. `radius` folds in the puck radius. The analytic replacement for the body-block Area3D.
+static func check_body_block(
+		puck_prev: Vector3, puck_curr: Vector3,
+		axis_xz: Vector2, radius: float, y_bottom: float, y_top: float) -> bool:
+	var p0 := Vector2(puck_prev.x, puck_prev.z)
+	var p1 := Vector2(puck_curr.x, puck_curr.z)
+	var seg := p1 - p0
+	var len_sq: float = seg.length_squared()
+	var t: float = 0.0 if len_sq <= 1e-10 else clampf((axis_xz - p0).dot(seg) / len_sq, 0.0, 1.0)
+	var closest_xz: Vector2 = p0 + seg * t
+	if closest_xz.distance_squared_to(axis_xz) > radius * radius:
+		return false
+	var y: float = lerpf(puck_prev.y, puck_curr.y, t)
+	return y >= y_bottom and y <= y_top
+
+
 # Stick-lift trigger geometry. The attacker's blade is a single point; the
 # victim's stick is the hand→blade shaft segment. A lift fires when the
 # attacker's blade is within `radius` of the shaft AND sits below the shaft at

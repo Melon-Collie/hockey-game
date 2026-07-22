@@ -285,7 +285,6 @@ signal body_check_impulse_applied(impulse: Vector3)
 # being hit. Host-authoritative consumers gate on is_host; see
 # SkaterController._on_body_check_received.
 signal body_check_received(impulse: Vector3)
-signal body_block_hit(body: Node3D)
 # Fired at the END of _physics_process, AFTER move_and_slide + collision
 # resolution + rink clamp have settled this tick's position and velocity. The
 # local player's controller uses it to capture its reconcile prediction snapshot
@@ -470,8 +469,6 @@ var _last_finite_position: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
 var _collision_cyl: CylinderShape3D = null
-var _body_block_area: Area3D = null
-var _body_block_sphere: SphereShape3D = null
 var _blade_area: Area3D = null
 var _slapper_zone_area: Area3D = null
 var _slapper_zone_sphere: SphereShape3D = null
@@ -592,22 +589,6 @@ func _ready() -> void:
 	zone_shape.shape = _slapper_zone_sphere
 	_slapper_zone_area.add_child(zone_shape)
 	add_child(_slapper_zone_area)
-
-	_body_block_area = Area3D.new()
-	_body_block_area.name = "BodyBlockArea"
-	# Raised to torso height so grounded pucks pass under the passive sphere (see
-	# body_block_height). The explicit-block widening (set_block_stance) reaches
-	# back down to the ice from here.
-	_body_block_area.position.y = body_block_height
-	_body_block_area.collision_layer = 0
-	_body_block_area.collision_mask = Constants.LAYER_PUCK
-	var block_shape := CollisionShape3D.new()
-	_body_block_sphere = SphereShape3D.new()
-	_body_block_sphere.radius = body_block_radius
-	block_shape.shape = _body_block_sphere
-	_body_block_area.add_child(block_shape)
-	add_child(_body_block_area)
-	_body_block_area.body_entered.connect(func(body: Node3D) -> void: body_block_hit.emit(body))
 
 	upper_arm_mesh = _resolve_or_create_bone_mesh("UpperArmMesh")
 	forearm_mesh = _resolve_or_create_bone_mesh("ForearmMesh")
@@ -1725,7 +1706,6 @@ func set_ghost(ghost: bool) -> void:
 	if ghost:
 		_blade_area.collision_layer = 0
 		_slapper_zone_area.collision_layer = 0
-		_body_block_area.collision_mask = 0
 		collision_layer = 0
 		# Bare LAYER_WALLS = ice only: goalie bodies live on their own
 		# LAYER_GOALIE_BODIES (dropped here), so a ghost skates through the
@@ -1734,7 +1714,6 @@ func set_ghost(ghost: bool) -> void:
 		collision_mask = Constants.LAYER_WALLS
 	else:
 		_blade_area.collision_layer = Constants.LAYER_BLADE_AREAS
-		_body_block_area.collision_mask = Constants.LAYER_PUCK
 		collision_layer = Constants.LAYER_SKATER_BODIES
 		collision_mask = Constants.MASK_SKATER
 	_uniform.apply_ghost(ghost)
@@ -1743,20 +1722,28 @@ func set_ghost(ghost: bool) -> void:
 
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 func set_block_stance(active: bool) -> void:
-	_body_block_sphere.radius = block_body_radius if active else body_block_radius
-	if active:
-		# Seal the ice: the creation-time local offset (body_block_height above
-		# the hip-height origin) parks the sphere at the torso, where the active
-		# radius bottoms out well above a grounded puck — a flat shot slid clean
-		# under the crouch. Rebase the sphere so it spans the ice up to ~2·radius
-		# (same global-Y trick as set_slapper_zone); the small margin keeps a
-		# puck hugging the ice inside the sphere rather than tangent to it.
-		_body_block_area.global_position.y = block_body_radius - 0.05
-	else:
-		_body_block_area.position.y = body_block_height
 	_block_stance_active = active
 	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
+
+
+# The body-block CYLINDER the analytic detector tests against (PuckController) — a vertical
+# cylinder at the skater's XZ axis matching the torso. PASSIVE: radius body_block_radius over a
+# torso band raised off the ice, so a grounded puck slides UNDER (a flat shot passes clean).
+# SHOT-BLOCK crouch: the wider block_body_radius, banded from the ice up so a low shot is
+# sealed. Reach is uniform across the band (unlike the old sphere, which bulged at one height).
+func get_body_block_radius() -> float:
+	return block_body_radius if _block_stance_active else body_block_radius
+
+
+# World-Y extent [bottom, top] of the body-block cylinder.
+func get_body_block_y_range() -> Vector2:
+	if _block_stance_active:
+		# Seal the ice up through the body (a crouched block stops a flat shot).
+		return Vector2(0.0, 2.0 * block_body_radius)
+	# Torso band centred at body_block_height, raised off the ice so a grounded puck passes under.
+	var center_y: float = global_position.y + body_block_height
+	return Vector2(center_y - body_block_radius, center_y + body_block_radius)
 
 
 # ── Slapper Zone ──────────────────────────────────────────────────────────────

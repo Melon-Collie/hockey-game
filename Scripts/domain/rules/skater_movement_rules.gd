@@ -108,3 +108,77 @@ static func apply_movement(
 	velocity.x = horiz_vel.x
 	velocity.z = horiz_vel.y
 	return velocity
+
+
+# Caller-owned result for integrate_forward (fill-a-scratch, no per-call alloc).
+class ForwardResult:
+	var position: Vector3 = Vector3.ZERO
+	var velocity: Vector3 = Vector3.ZERO
+
+
+# Forward-integrate a skater's position + velocity from a snapshot through `ticks`
+# physics steps of `dt`, driving the SAME apply_movement physics with the skater's
+# broadcast movement intent (move_input / brake / sprint). This is the shared
+# primitive behind stage-3 remote forward-prediction: the client calls it to render
+# a remote at (near) present instead of a full interp_delay in the past, and the
+# HOST calls it — with the identical snapshot base + intent — to reconstruct that
+# same predicted position when validating lag-comp claims, so render stays == rewind.
+# Sharing one primitive is what guarantees the two agree; any divergence would
+# reopen the contested-pickup desync that render == rewind fixed.
+#
+# Free-space integration (position += velocity·dt per tick): board/net clamps and
+# facing evolution are deliberately omitted. Facing affects only the thrust-
+# alignment scale and turns slowly over the ~interp_delay span, so it is held
+# constant here; the caller renders facing via the existing angular-velocity
+# extrapolation. The residual vs the host's true move_and_slide is corrected by the
+# next snapshot — what must match exactly is client-render vs host-rewind, and both
+# run THIS function on the same inputs. Fills the caller-owned `result`.
+# `stagger_timer` / `body_check_cfg` (optional): the snapshot's replicated
+# body-check stagger, applied as the live sim's per-tick thrust penalty
+# (BodyCheckRules.thrust_mult of the tick-decayed remaining timer) so a
+# recently-checked skater predicts its honest reduced acceleration — right
+# after checks is exactly when follow-up contests cluster. Both the client
+# render and the host claim rewind pass the SAME snapshot field through the
+# same formula, so render == rewind holds. cfg.thrust is transiently scaled
+# and restored (the caller may pass a shared cached config). Omit (0 / null)
+# to integrate at base thrust.
+static func integrate_forward(
+		position: Vector3,
+		velocity: Vector3,
+		move_input: Vector2,
+		facing_rotation_y: float,
+		has_puck: bool,
+		brake: bool,
+		sprint_active: bool,
+		cfg: MovementConfig,
+		dt: float,
+		ticks: int,
+		intent_decay_ticks: int,
+		result: ForwardResult,
+		stagger_timer: float = 0.0,
+		body_check_cfg: BodyCheckRules.Config = null) -> void:
+	var pos: Vector3 = position
+	var vel: Vector3 = velocity
+	var n: int = maxi(ticks, 0)
+	var base_thrust: float = cfg.thrust
+	for i in n:
+		# Rocket-League-style input decay: a held intent is less likely to still be
+		# held further into the prediction, so fade the assumed move_input linearly to
+		# 0 over intent_decay_ticks. The far ticks coast on friction instead of
+		# thrusting in a possibly-stale direction — this is what tames overshoot when
+		# the real player CUTS mid-window. Both the client render and the host claim
+		# rewind pass the SAME shared constant, so the decay is identical on both and
+		# render == rewind holds. 0 = no decay (full intent every tick, the raw form).
+		var decayed_input: Vector2 = move_input
+		if intent_decay_ticks > 0:
+			decayed_input = move_input * clampf(1.0 - float(i) / float(intent_decay_ticks), 0.0, 1.0)
+		if stagger_timer > 0.0 and body_check_cfg != null:
+			# Mirror the live order: the sim decays the timer, THEN scales thrust
+			# from the decayed value — tick i uses stagger after i+1 decays.
+			var remaining: float = maxf(stagger_timer - float(i + 1) * dt, 0.0)
+			cfg.thrust = base_thrust * BodyCheckRules.thrust_mult(remaining, body_check_cfg)
+		vel = apply_movement(vel, decayed_input, facing_rotation_y, has_puck, brake, dt, cfg, sprint_active)
+		pos += vel * dt
+	cfg.thrust = base_thrust
+	result.position = pos
+	result.velocity = vel

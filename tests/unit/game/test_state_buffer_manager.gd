@@ -59,6 +59,29 @@ func test_interpolated_snapshot_carries_shot_state_from_newer_endpoint() -> void
 		"interpolated rewind must carry the newer endpoint's shot_state")
 
 
+func test_interpolated_snapshot_carries_movement_intent() -> void:
+	# The stage-3 hit-claim rewind forward-integrates the victim from this
+	# snapshot with its broadcast movement intent. Intent is discrete (like
+	# shot_state) — newer endpoint. Before the fix the interpolated path left
+	# all three fields at their defaults (ZERO/false/false), so the host
+	# integrated every victim as a friction coast while the client rendered
+	# the real thrust — breaking render == rewind on any link where the
+	# rewind interpolates (the normal case).
+	var older := _slot(0, false, Vector3.ZERO)
+	var newer := _slot(0, false, Vector3.ONE)
+	newer.move_intent = Vector2(0.0, 1.0)
+	newer.brake_intent = true
+	newer.sprint_active = true
+	_seed_two_slots(10.0, older, 10.1, newer)
+	var snap: WorldSnapshot = sbm.get_state_at(10.05)
+	var s: SkaterNetworkState = snap.get_skater_state(PEER)
+	assert_not_null(s)
+	assert_eq(s.move_intent, Vector2(0.0, 1.0),
+		"interpolated rewind must carry the newer endpoint's move_intent")
+	assert_true(s.brake_intent, "brake_intent must survive interpolation")
+	assert_true(s.sprint_active, "sprint_active must survive interpolation")
+
+
 func test_interpolated_snapshot_still_interpolates_position() -> void:
 	# Guard against a regression that swaps the whole result for a passthrough:
 	# position must still be the lerp midpoint at t = 0.5.
@@ -102,3 +125,18 @@ func test_interpolated_snapshot_carries_is_ghost_from_newer_endpoint() -> void:
 	var snap: WorldSnapshot = sbm.get_state_at(10.05)
 	var s: SkaterNetworkState = snap.get_skater_state(PEER)
 	assert_true(s.is_ghost)
+
+
+func test_interpolated_snapshot_carries_stagger_timer() -> void:
+	# The forward prediction applies the victim's stagger as a thrust penalty;
+	# like intent/shot_state it must survive the interpolated rewind (newer
+	# endpoint — the same snapshot the client render's bracket reads).
+	var older := _slot(0, false, Vector3.ZERO)
+	var newer := _slot(0, false, Vector3.ONE)
+	newer.stagger_timer = 0.45
+	_seed_two_slots(10.0, older, 10.1, newer)
+	var snap: WorldSnapshot = sbm.get_state_at(10.05)
+	var s: SkaterNetworkState = snap.get_skater_state(PEER)
+	assert_not_null(s)
+	assert_almost_eq(s.stagger_timer, 0.45, 1e-6,
+		"interpolated rewind must carry the newer endpoint's stagger_timer")

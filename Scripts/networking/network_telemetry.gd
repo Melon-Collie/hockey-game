@@ -95,6 +95,27 @@ var _ooo_drop_count: int = 0
 var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
+var _input_drain_count: int = 0
+# Phase-3/4a prediction quality (client): the pre-damp residual between the
+# analytic prediction target and the rendered (smoothed) position — steady
+# state ~0 when the shared sim agrees with the authority; spikes on host-side
+# events the client couldn't know (deflects, saves). The single number that
+# answers "is predict-and-reconcile working?" in a session row.
+var _puck_predict_residual_sum: float = 0.0
+var _puck_predict_residual_n: int = 0
+var _puck_predict_residual_max: float = 0.0
+var _puck_predict_fallback_count: int = 0
+# Remote-skater forward-prediction quality (client): same pre-damp residual on
+# remote bodies — fp error + correction pressure per tick.
+var _remote_correction_sum: float = 0.0
+var _remote_correction_n: int = 0
+var _remote_correction_max: float = 0.0
+# Host: claim-carried interp_delay_ms clamped by the P2 plausibility bound.
+# Legit players should never trip it — sustained non-zero means either the
+# jitter allowance is too tight (mis-rewinding honest high-jitter claims) or a
+# client is inflating its delay.
+var _delay_clamp_count: int = 0
+var _delay_clamp_excess_max_ms: float = 0.0
 # Host-side lag-comp pickup-claim outcomes (the host processes every client's
 # claim, so its row summarizes rewind health for the whole lobby). A claim that
 # reaches the rewound geometry test counts in _pickup_claim_count; if the rewound
@@ -131,20 +152,18 @@ var _provisional_stolen_count: int = 0
 # visible from inside the engine).
 var _bytes_sent_window: int = 0
 var _bytes_received_window: int = 0
-# Puck trajectory three-zone correction counters. Each broadcast during
-# trajectory prediction picks one zone based on client-vs-server divergence:
-# 0=soft blend (<0.3m), 1=velocity-only (0.3-1.5m), 2=hard snap (>1.5m).
-# Healthy: mostly zone 0, occasional zone 1, zone 2 only on real physics
-# divergence (wall/goalie bounce). Zone 2 firing every shot indicates a
-# trajectory math bug; zones 0+1 oscillating frame-to-frame indicates RTT
-# jitter exceeding the bounded velocity-only band.
-var _puck_traj_soft_count: int = 0
-var _puck_traj_vel_only_count: int = 0
-var _puck_traj_hard_snap_count: int = 0
-# Shot-launch divergence: on the first host-confirmed broadcast after a LOCAL
-# shot release, the gap between the client-predicted puck and the host-authoritative
-# launch. Both run identical Jolt from the same client-sent origin, so this should
-# be tiny — a spike means real launch divergence, and it attributes the shot-launch
+# Loose-puck hard snaps: the render smoother's velocity-aware snap guard
+# (PuckHandoffRules.needs_hard_snap) fired on a MOVING target — genuine
+# trajectory divergence (a bounce that differed, a deflect the client missed),
+# never a faceoff/goal-reset teleport (those hit the at-rest branch and aren't
+# counted). Near-zero in healthy play; firing every shot is a prediction bug.
+var _puck_hard_snap_count: int = 0
+# Shot-launch divergence: at the release-seed → snapshot handover after a LOCAL
+# release, the gap between the seed-predicted puck (advanced to the confirming
+# snapshot's own instant) and that authoritative snapshot. Both sides fire from
+# the same client-sent origin on the same solver, so this should be tiny —
+# a spike means real launch divergence (clock estimate error × puck speed, or a
+# host-side event inside the one-way window), and it attributes the shot-launch
 # share of puck_hard_snaps. Window MAX (peak) + a session shot count (TOTAL). Client only.
 var _shot_launch_pos_div_max: float = 0.0
 var _shot_launch_vel_div_max: float = 0.0
@@ -215,16 +234,17 @@ var ooo_drops_per_sec: float = 0.0       # expect 0; non-zero means UDP reorderi
 # 120Hz, so per-recipient bytes_sent_per_sec should stay under ~60 KB/s.
 var bytes_sent_per_sec: float = 0.0
 var bytes_received_per_sec: float = 0.0
-# Puck trajectory three-zone correction rates (Hz). All three sum to roughly
-# (post-shot broadcast rate ≈ 120/s) DURING trajectory prediction only — they're
-# zero when puck is carried or interpolated. Mostly soft, occasional vel-only,
-# hard-snap only on real divergence. Hard-snap firing every shot is a bug.
-var puck_traj_soft_per_sec: float = 0.0
-var puck_traj_vel_only_per_sec: float = 0.0
-var puck_traj_hard_snap_per_sec: float = 0.0
+# Loose-puck hard-snap rate (Hz): moving-target smoother snaps only (see
+# _puck_hard_snap_count). Near-zero in healthy play.
+var puck_hard_snap_per_sec: float = 0.0
 var input_queue_depth_median: int = 0
 var input_lead_avg_ms: float = 0.0
 var input_starvations_per_sec: float = 0.0
+var input_drains_per_sec: float = 0.0
+var puck_predict_residual_avg_m: float = 0.0
+var puck_predict_residual_max_m: float = 0.0
+var remote_correction_avg_m: float = 0.0
+var remote_correction_max_m: float = 0.0
 var _queue_depth_window: Array[int] = []
 var packet_loss_pct: float = 0.0
 var jitter_p95_ms: float = 0.0
@@ -391,21 +411,15 @@ static func record_post_replay_residual(meters: float) -> void:
 static func record_ooo_drop() -> void:
 	if instance: instance._ooo_drop_count += 1
 
-# puck_trajectory_zone: which three-zone branch fired for this broadcast during
-# trajectory prediction. 0=soft (<0.3m), 1=velocity-only (0.3-1.5m), 2=hard snap
-# (>1.5m + buffer clear). Used to detect oscillation around zone boundaries and
-# to flag hard-snap rates that should only ever fire on real physics divergence.
-static func record_puck_trajectory_zone(zone: int) -> void:
-	if instance == null:
-		return
-	match zone:
-		0: instance._puck_traj_soft_count += 1
-		1: instance._puck_traj_vel_only_count += 1
-		2: instance._puck_traj_hard_snap_count += 1
+# puck_hard_snap: the loose-puck render smoother teleported a MOVING puck —
+# genuine trajectory divergence (see PuckController._smooth_apply_and_prune).
+static func record_puck_hard_snap() -> void:
+	if instance: instance._puck_hard_snap_count += 1
 
-# Divergence between the client's predicted puck and the host's authoritative
-# launch at the first host-confirmed broadcast after a local release (see
-# PuckController). Keeps the window peak of each; count is the shot denominator.
+# Divergence between the client's seed-predicted puck and the host's
+# authoritative launch at the release-seed → snapshot handover after a local
+# release (see PuckController._predict_loose). Keeps the window peak of each;
+# count is the shot denominator.
 static func record_shot_launch_divergence(pos_div_m: float, vel_div: float) -> void:
 	if instance == null:
 		return
@@ -428,6 +442,40 @@ static func record_input_lead(lead_sec: float) -> void:
 # last known input for this physics tick.
 static func record_input_starvation() -> void:
 	if instance: instance._starvation_count += 1
+
+# input_drain: a stale queued input was acked-without-applying by the backlog
+# drain (RemoteController._drain_backlog) — the counterpart of starvation on
+# the recovery side. Sustained non-zero here means upstream jitter bursts are
+# routinely overrunning the input lead's 2-tick cushion.
+static func record_input_drain() -> void:
+	if instance: instance._input_drain_count += 1
+
+# puck_predict_residual: per-frame pre-damp error between the Phase-3 analytic
+# prediction target and the rendered puck (predicted mode only).
+static func record_puck_predict_residual(meters: float) -> void:
+	if not instance: return
+	instance._puck_predict_residual_sum += meters
+	instance._puck_predict_residual_n += 1
+	instance._puck_predict_residual_max = maxf(instance._puck_predict_residual_max, meters)
+
+# puck_predict_fallback: _predict_loose declined with buffer data present
+# (snapshot older than PUCK_PREDICT_MAX_S) — the interp fallback engaged.
+static func record_puck_predict_fallback() -> void:
+	if instance: instance._puck_predict_fallback_count += 1
+
+# remote_correction: per-tick pre-damp error on a remote skater body (stage-3
+# forward-prediction quality + correction pressure).
+static func record_remote_correction(meters: float) -> void:
+	if not instance: return
+	instance._remote_correction_sum += meters
+	instance._remote_correction_n += 1
+	instance._remote_correction_max = maxf(instance._remote_correction_max, meters)
+
+# delay_clamped: the host bounded a claim-carried interp_delay_ms (P2).
+static func record_delay_clamped(excess_ms: float) -> void:
+	if not instance: return
+	instance._delay_clamp_count += 1
+	instance._delay_clamp_excess_max_ms = maxf(instance._delay_clamp_excess_max_ms, excess_ms)
 
 # Host-side lag-comp pickup-claim outcomes (see the window-counter comment).
 # record_pickup_claim() is the denominator — a claim that reached the rewound
@@ -542,11 +590,16 @@ func tick(delta: float) -> void:
 	ooo_drops_per_sec = _ooo_drop_count / _window_timer
 	bytes_sent_per_sec = _bytes_sent_window / _window_timer
 	bytes_received_per_sec = _bytes_received_window / _window_timer
-	puck_traj_soft_per_sec = _puck_traj_soft_count / _window_timer
-	puck_traj_vel_only_per_sec = _puck_traj_vel_only_count / _window_timer
-	puck_traj_hard_snap_per_sec = _puck_traj_hard_snap_count / _window_timer
+	puck_hard_snap_per_sec = _puck_hard_snap_count / _window_timer
 	input_lead_avg_ms = (_input_lead_sum / _input_lead_n * 1000.0) if _input_lead_n > 0 else 0.0
 	input_starvations_per_sec = _starvation_count / _window_timer
+	input_drains_per_sec = _input_drain_count / _window_timer
+	puck_predict_residual_avg_m = (_puck_predict_residual_sum / _puck_predict_residual_n) \
+			if _puck_predict_residual_n > 0 else 0.0
+	puck_predict_residual_max_m = _puck_predict_residual_max
+	remote_correction_avg_m = (_remote_correction_sum / _remote_correction_n) \
+			if _remote_correction_n > 0 else 0.0
+	remote_correction_max_m = _remote_correction_max
 	if not _queue_depth_window.is_empty():
 		var sorted := _queue_depth_window.duplicate()
 		sorted.sort()
@@ -617,15 +670,23 @@ func tick(delta: float) -> void:
 	_ooo_drop_count = 0
 	_bytes_sent_window = 0
 	_bytes_received_window = 0
-	_puck_traj_soft_count = 0
-	_puck_traj_vel_only_count = 0
-	_puck_traj_hard_snap_count = 0
+	_puck_hard_snap_count = 0
 	_shot_launch_pos_div_max = 0.0
 	_shot_launch_vel_div_max = 0.0
 	_shot_launch_count = 0
 	_input_lead_sum = 0.0
 	_input_lead_n = 0
 	_starvation_count = 0
+	_input_drain_count = 0
+	_puck_predict_residual_sum = 0.0
+	_puck_predict_residual_n = 0
+	_puck_predict_residual_max = 0.0
+	_puck_predict_fallback_count = 0
+	_remote_correction_sum = 0.0
+	_remote_correction_n = 0
+	_remote_correction_max = 0.0
+	_delay_clamp_count = 0
+	_delay_clamp_excess_max_ms = 0.0
 	_host_stall_count = 0
 	_pickup_claim_count = 0
 	_pickup_claim_miss_count = 0
@@ -678,6 +739,18 @@ func _fold_session_sample() -> void:
 		"bytes_recv_per_sec": bytes_received_per_sec,
 		"bytes_sent_per_sec": bytes_sent_per_sec,
 		"input_starvations_per_sec": input_starvations_per_sec,
+		"input_drains_per_sec": input_drains_per_sec,
+		# Phase-3/4a prediction quality (regular keys → view takes avg/max):
+		# residual ~0 = the shared sim agrees; spikes = host events folding in.
+		"puck_predict_residual_m": puck_predict_residual_avg_m,
+		"puck_predict_residual_peak_m": puck_predict_residual_max_m,
+		"remote_correction_m": remote_correction_avg_m,
+		"remote_correction_peak_m": remote_correction_max_m,
+		# TOTAL_KEYS event counters: interp fallbacks (deep loss) and the host's
+		# P2 delay-bound clamps (legit players should never trip it).
+		"puck_predict_fallbacks": float(_puck_predict_fallback_count),
+		"delay_clamps": float(_delay_clamp_count),
+		"delay_clamp_excess_ms": _delay_clamp_excess_max_ms,
 		"input_queue_depth": float(input_queue_depth_median),
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,
@@ -686,7 +759,7 @@ func _fold_session_sample() -> void:
 		# Rare-event tripwires fold as this window's raw COUNTS — TOTAL_KEYS in
 		# the summary, so the row carries a session total instead of an average
 		# that smears 3 hard snaps in a 10-minute game to ~0.
-		"puck_hard_snaps": float(_puck_traj_hard_snap_count),
+		"puck_hard_snaps": float(_puck_hard_snap_count),
 		"blade_jumps": float(_blade_jump_count),
 		# Reconcile-match miss attribution (TOTAL_KEYS). A miss → prediction-lead
 		# fallback → spurious position snap, so these split the residual reconcile
@@ -779,7 +852,7 @@ const _INPUT_BACKLOG_MARKER_MS: float = 500.0
 # enforced by the summary's per-trigger cooldown + session cap, so a broken
 # session records the onset, not spam.
 func _check_auto_markers() -> void:
-	if _puck_traj_hard_snap_count >= 2:
+	if _puck_hard_snap_count >= 2:
 		_auto_marker("puck_hard_snaps")
 	if reconcile_per_sec >= 5.0:
 		_auto_marker("reconcile_storm")

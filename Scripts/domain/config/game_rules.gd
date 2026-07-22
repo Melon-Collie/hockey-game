@@ -91,6 +91,8 @@ const NET_POST_RADIUS: float = 0.030     # goal-pipe radius — must match Hocke
 const NET_DEPTH: float = 1.02            # goal depth from goal line to back frame
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
 const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
+const NET_CROWN_HALF_WIDTH: float = 0.815  # half-span of the crossbar / top net panel — must match HockeyGoal.CROWN_HALF_WIDTH
+const NET_TOP_DEPTH: float = 0.559       # depth of the top net panel from the goal line — must match HockeyGoal.TOP_DEPTH
 const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
 
 # Half the skater's body so the blue line keys off the body EDGE, not its
@@ -271,6 +273,14 @@ const PUCK_AIRBORNE_HEIGHT_M: float = 0.05
 # whatever the combine does: Godot's non-absorbent bounce combine ADDS the two,
 # and the puck's side is 0, so 0 + 0.4 = 0.4 regardless.)
 const PUCK_BOARD_BOUNCE: float = 0.4
+# Board kinetic friction coefficient. Mirrors Physics/boards.tres `friction` (guarded by
+# test_physics_material_mirrors alongside the bounce). On a carom the boards bleed tangential
+# speed via Coulomb friction proportional to the normal impulse — this is what stops a hard
+# rim-around from circling the rink forever (ice friction alone is far too weak to kill it).
+# Under the analytic puck sim this is applied in AITrajectory; Jolt applied it as contact
+# friction. Godot's friction combine is min(a, b) and the puck's side is 1.0, so the effective
+# value is min(1.0, 0.15) = 0.15 — matching this const.
+const PUCK_BOARD_FRICTION: float = 0.15
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
 # the stoppage feels responsive, long enough that a transient penetration spike
 # (a slapshot buried into the boards for a tick or two before Jolt's recovery

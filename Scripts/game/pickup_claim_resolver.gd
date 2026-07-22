@@ -16,7 +16,8 @@ extends RefCounted
 # Flow:
 #   receive_claim(peer_id, host_ts, interp_delay, client_blade_curr/prev, top_hand)
 #     → reject if puck locked, claim stale, skater missing/ghost, on cooldown
-#     → rewind puck to LagCompRewind.remote_view_time(host_ts, interp_delay) and
+#     → rewind puck to LagCompRewind.puck_view_time (the claim stamp — the
+#       claimant renders the loose puck predicted at ~host present) and
 #       the claimant's body to self_view_time(host_ts); reach-clamp the client
 #       blade to that body — never rtt/2
 #     → reject if PuckInteractionRules.check_pickup fails against the client blade
@@ -85,8 +86,11 @@ func clear() -> void:
 	_pending_blade_prev = Vector3.ZERO
 
 
-func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
-		client_blade_curr: Vector3, client_blade_prev: Vector3,
+# _interp_delay_ms rides the shared claim wire shape but is unused here since
+# the loose-puck rewind reads the claim stamp itself (puck_view_time) and the
+# blade rewind is self-view — nothing in a pickup claim renders remote-view.
+func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
+		input_lead_ms: float, client_blade_curr: Vector3, client_blade_prev: Vector3,
 		client_top_hand: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
@@ -116,15 +120,17 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 	# expired in that window would grant a claim the claimant couldn't have made
 	# at send time. self_view_time is the claimant's own body timeline (matching
 	# the blade rewind below); the expiry store shares its local_time base.
-	if puck.is_on_cooldown_at(record.skater, LagCompRewind.self_view_time(host_timestamp)):
+	if puck.is_on_cooldown_at(record.skater, LagCompRewind.self_view_time(host_timestamp, input_lead_ms)):
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
-	# Blade is SELF-view, puck is REMOTE-view — see LagCompRewind for the
-	# derivation of both. The pair of get_state_at calls per entity (curr + one
-	# physics tick back) feeds the swept-segment test below.
-	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
-	var puck_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
+	# Blade is SELF-view; the loose puck reads through puck_view_time — the
+	# claimant rendered it predicted AT the claim stamp (render == rewind at
+	# present). See LagCompRewind for the derivations. The pair of get_state_at
+	# calls per entity (curr + one physics tick back) feeds the swept-segment
+	# test below.
+	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
+	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:
 		return

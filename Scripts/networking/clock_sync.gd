@@ -20,6 +20,57 @@ const BUFFER_TICKS: float = 2.0
 const TICK_DURATION: float = 1.0 / _PhysicsConstants.PHYSICS_TICK
 const INPUT_LEAD_SEC: float = BATCH_INTERVAL + BUFFER_TICKS * TICK_DURATION  # ~25 ms at 120 Hz input / 120 Hz tick
 
+# ── Adaptive input-lead extra ────────────────────────────────────────────────
+# The static INPUT_LEAD_SEC proved marginal in playtest: on a clean ~23 ms link
+# the host's input queue ran median-0 with pops averaging 25-40 ms overdue —
+# transit + batching + NTP offset error consumed the whole cushion, costing
+# ~1 fallback tick/sec and the reconcile churn that follows. The client can see
+# this itself from data already on the wire: each snapshot's input ack tells it
+# how overdue that input was when the host popped it (snapshot host_ts − ack
+# stamp). This servo adapts a bounded EXTRA lead on top of the constant —
+# Jacobson mean + 4·dev of measured overdue, allowing one tick of grace,
+# stepped asymmetrically (fast up: a starving host queue is felt immediately;
+# slow down: over-lead only costs remote-visibility latency). The claim rewind
+# convention follows it: claims carry the lead the client stamped with, and
+# LagCompRewind.self_view_time uses the carried value (bounded host-side), so
+# render == rewind holds at any adapted lead.
+#
+# NOTE (invariant): this state is SEPARATE from the NTP offset. ClockSync's
+# offset stays pure ping/pong NTP — the ban on queue-depth feedback into
+# _offset stands; the lead servo only shapes future STAMPS, never the clock.
+const MAX_LEAD_EXTRA_S: float = 0.05          # hard ceiling: 6 ticks of extra
+const _LEAD_GRACE_S: float = TICK_DURATION    # one tick of overdue is healthy
+const _OVR_GAIN: float = 0.05                 # EMA horizon ~20 acks (~170 ms)
+const _LEAD_UP_STEP_S: float = 0.001          # per ack: ~120 ms/s climb at 120 Hz
+const _LEAD_DOWN_STEP_S: float = 0.00005      # per ack: ~6 ms/s relax
+# Overdue beyond this is a phase-resume artifact (an input parked across a
+# replay/intermission), not link lateness — excluded from the servo.
+const _OVR_SAMPLE_MAX_S: float = 0.25
+var _lead_extra: float = TICK_DURATION  # start one tick up (the playtest-measured deficit)
+var _ovr_mean: float = 0.0
+var _ovr_dev: float = 0.0
+
+
+# Feed one measured pop-overdue sample (snapshot host_ts − freshly-advanced
+# input ack). Caller dedupes repeated acks; range-guarded here.
+func record_ack_overdue(overdue_s: float) -> void:
+	if not is_ready:
+		return
+	if overdue_s < 0.0 or overdue_s > _OVR_SAMPLE_MAX_S or not is_finite(overdue_s):
+		return
+	_ovr_mean += (overdue_s - _ovr_mean) * _OVR_GAIN
+	_ovr_dev += (absf(overdue_s - _ovr_mean) - _ovr_dev) * _OVR_GAIN
+	# Servo: the measured overdue already includes the current extra's effect,
+	# so the target is RELATIVE — current extra plus the measured excess over
+	# the one-tick grace. Excess ~0 → hold; negative → slow relax toward 0.
+	var target: float = clampf(
+			_lead_extra + (_ovr_mean + 4.0 * _ovr_dev - _LEAD_GRACE_S), 0.0, MAX_LEAD_EXTRA_S)
+	_lead_extra += clampf(target - _lead_extra, -_LEAD_DOWN_STEP_S, _LEAD_UP_STEP_S)
+
+
+func current_input_lead_s() -> float:
+	return INPUT_LEAD_SEC + _lead_extra
+
 var is_ready: bool = false
 var rtt_ms: float = 0.0
 var latest_rtt_ms: float = 0.0
@@ -65,7 +116,7 @@ func estimated_host_time() -> float:
 	return _last_estimated_time
 
 func estimated_input_stamp_time() -> float:
-	return estimated_host_time() + INPUT_LEAD_SEC
+	return estimated_host_time() + INPUT_LEAD_SEC + _lead_extra
 
 func _recompute() -> void:
 	var sorted := _samples.duplicate()
