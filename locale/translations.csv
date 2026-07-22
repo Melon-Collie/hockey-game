@@ -27,3 +27,24 @@ TUTORIAL_CONTINUE_CTA,Continue → %s: %s,Continuar → %s: %s
 DRILL_PENALTY_SHOTS,Penalty Shots,Penaltis
 DRILL_SHOT_ACCURACY,Shot Accuracy,Precisión de Tiro
 DRILL_PASSING,Passing,Pases
+TITLE_HAT_TRICK,Hat Trick,Hat Trick
+TITLE_PLAYMAKER,Playmaker,Creador de Juego
+TITLE_BIG_NIGHT,Stat Stuffer,Llenaplanillas
+TITLE_BRICK_WALL,Brick Wall,Muralla
+TITLE_FIRST_GOAL,Lamp Lighter,Farolero
+TITLE_ONE_TIMER,Triggerman,Gatillero
+TITLE_TIP_IN,Garbage Man,Basurero
+TITLE_OVERTIME_HERO,Overtime Hero,Héroe de la Prórroga
+TITLE_FACEOFF_BOSS,Master of the Dot,Amo del Punto
+TITLE_PICKPOCKET,Pickpocket,Carterista
+TITLE_SHUTOUT,Lockdown,Candado
+TITLE_FIRST_WIN,Winner,Ganador
+TITLE_FIRST_STAR,First Star,Primera Estrella
+TITLE_FREIGHT_TRAIN,Freight Train,Tren de Carga
+TITLE_STUDENT,Student of the Game,Estudiante del Juego
+TITLE_CUSTOM_BUILD,Self-Made,Hecho a Medida
+TITLE_PLAY_WITH_BUUKIE,Buukie's Buddy,Amigo de Buukie
+TITLE_SNIPER,Sniper,Francotirador
+TITLE_SETUP_ARTIST,Setup Artist,Asistidor
+TITLE_ENFORCER,Enforcer,Ejecutor
+TITLE_VETERAN,Veteran,Veterano

@@ -15,6 +15,7 @@ var _name_field: LineEdit = null
 var _name_warning: Label = null
 var _number_field: LineEdit = null
 var _number_warning: Label = null
+var _title_dropdown: OptionButton = null
 var _left_btn: Button = null
 var _right_btn: Button = null
 var _color_dropdown: PaletteDropdown = null
@@ -29,6 +30,7 @@ var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
+var _pending_title_id: String = ""  # achievement id, "" = no title
 var _name_valid: bool = true
 var _number_valid: bool = true
 
@@ -72,6 +74,7 @@ func _build() -> void:
 
 	_build_name_section(vbox)
 	_build_number_section(vbox)
+	_build_title_section(vbox)
 	_build_handedness_section(vbox)
 	_build_team_section(vbox)
 	_attr_panel = AttributePickerPanel.new()
@@ -200,6 +203,63 @@ func _on_number_text_changed(t: String) -> void:
 	_update_apply_state()
 
 
+# Equipped title: lobby-card flair unlocked by earning achievements. The
+# dropdown lists "None" plus every unlocked achievement's title (repopulated on
+# each open() so a fresh unlock shows without restarting); item metadata holds
+# the achievement id. Nothing unlocked (or Steam absent) leaves just "None".
+func _build_title_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	var label := Label.new()
+	label.text = "Title:"
+	label.add_theme_font_size_override("font_size", 20)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(label)
+
+	_title_dropdown = OptionButton.new()
+	_title_dropdown.custom_minimum_size = Vector2(200, 48)
+	_title_dropdown.add_theme_font_size_override("font_size", 18)
+	SoundManager.wire_button(_title_dropdown)
+	row.add_child(_title_dropdown)
+
+	_title_dropdown.item_selected.connect(func(index: int) -> void:
+		_pending_title_id = str(_title_dropdown.get_item_metadata(index))
+		_update_apply_state())
+
+
+func _populate_title_options() -> void:
+	if _title_dropdown == null:
+		return
+	_title_dropdown.clear()
+	_title_dropdown.add_item("None")
+	_title_dropdown.set_item_metadata(0, "")
+	for entry: Dictionary in Achievements.ALL:
+		var id: String = String(entry["id"])
+		# Unlocked titles only — plus the currently-equipped one regardless, so
+		# a dev achievement reset can't strand the selection on a missing item.
+		if not SteamManager.is_achievement_unlocked(id) and id != PlayerPrefs.player_title:
+			continue
+		_title_dropdown.add_item(tr(Achievements.title_key(id)))
+		_title_dropdown.set_item_metadata(_title_dropdown.item_count - 1, id)
+
+
+# Select the dropdown item whose metadata matches `title_id` (index 0 = "None"
+# when absent — e.g. prefs referencing a title the populate pass dropped).
+func _select_title(title_id: String) -> void:
+	if _title_dropdown == null:
+		return
+	for i: int in _title_dropdown.item_count:
+		if str(_title_dropdown.get_item_metadata(i)) == title_id:
+			_title_dropdown.select(i)
+			return
+	_title_dropdown.select(0)
+	_pending_title_id = ""
+
+
 func _build_handedness_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -303,6 +363,7 @@ func _update_apply_state() -> void:
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
 		or _pending_color_slot != _snapshot.get("color_slot", -1)
+		or _pending_title_id != _snapshot.get("title", "")
 		or attrs_dirty)
 	# The picker panel owns attribute validity (full budget on any touched build);
 	# name/number/etc. can apply on their own.
@@ -331,6 +392,12 @@ func _apply() -> void:
 		# local_identity_changed signal that GameManager listens to so the
 		# live skater updates without a respawn.
 		NetworkManager.apply_local_identity(_pending_name, _pending_number, _pending_is_left)
+	if _pending_title_id != _snapshot.get("title", ""):
+		# Cosmetic lobby-card flair — no live listener; the next lobby open /
+		# session join reads the updated value (a client's replicated title is
+		# locked at join, like the name).
+		PlayerPrefs.player_title = _pending_title_id
+		NetworkManager.apply_local_title(_pending_title_id)
 	if color_changed_b:
 		# apply_preferred_color writes PlayerPrefs.preferred_color_slot and
 		# emits local_preferred_color_changed so GameManager can re-tint
@@ -365,6 +432,8 @@ func _restore_from_snapshot() -> void:
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
 	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
+	_pending_title_id = _snapshot.get("title", "")
+	_select_title(_pending_title_id)
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
@@ -392,7 +461,10 @@ func open() -> void:
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
 		"color_slot": saved_slot,
+		"title": PlayerPrefs.player_title,
 	}
+	# Repopulate each open so titles unlocked this session appear immediately.
+	_populate_title_options()
 	if _attr_panel != null:
 		_attr_panel.set_locked(NetworkManager.is_in_online_match())
 		_attr_panel.snapshot()

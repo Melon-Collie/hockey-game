@@ -174,7 +174,13 @@ const VERSION: String = "dev"
 #      optimistic pin rolls back immediately instead of waiting out the
 #      RTT-scaled timeout. Adding an @rpc method shifts the rpc-config
 #      ordering both peers hash, so mixed builds must be refused.
-const PROTOCOL_VERSION: int = 40
+# v41: player titles — request_join grew a trailing player_title arg (equipped
+#      achievement id, host-validated against Achievements.ALL) and the lobby
+#      roster array grew entry[7] (title). Both sides parse defensively (arg
+#      default + size-checked entry), but per policy any RPC signature change
+#      bumps so mixed builds are rejected at the handshake instead of relying
+#      on decode luck.
+const PROTOCOL_VERSION: int = 41
 
 
 func _ready() -> void:

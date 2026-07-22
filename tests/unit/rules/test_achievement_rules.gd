@@ -285,6 +285,30 @@ func test_meta_event_ids_resolve() -> void:
 	assert_eq(Achievements.event_id("build_edited"), Achievements.CUSTOM_BUILD)
 
 
+func test_has_id_matches_registry() -> void:
+	assert_true(Achievements.has_id(Achievements.HAT_TRICK))
+	assert_false(Achievements.has_id("ACH_NOPE"))
+	# "" is not an id — "no title" is the caller's own valid case, and treating
+	# it as an id would let title_key mint a bogus "TITLE_" key.
+	assert_false(Achievements.has_id(""))
+
+
+func test_title_key_derives_from_id() -> void:
+	assert_eq(Achievements.title_key(Achievements.FIRST_STAR), "TITLE_FIRST_STAR")
+	assert_eq(Achievements.title_key(Achievements.PLAY_WITH_BUUKIE), "TITLE_PLAY_WITH_BUUKIE")
+	# Unknown/empty ids fail closed so the UI renders nothing, not a raw key.
+	assert_eq(Achievements.title_key("ACH_NOPE"), "")
+	assert_eq(Achievements.title_key(""), "")
+
+
+func test_every_achievement_has_a_title_key() -> void:
+	# Names double as equippable titles, so every registry entry must derive a
+	# usable TITLE_* key (each needs a matching translations.csv row).
+	for entry in Achievements.ALL:
+		var key := Achievements.title_key(String(entry["id"]))
+		assert_true(key.begins_with("TITLE_"), "no title key for %s" % entry["id"])
+
+
 func test_all_ids_are_unique() -> void:
 	var seen: Dictionary = {}
 	for entry in Achievements.ALL:

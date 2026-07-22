@@ -9,6 +9,12 @@ class_name Achievements
 ## for our own docs (steam/ACHIEVEMENTS.md is generated to mirror this); the
 ## strings shown to players come from Steamworks, not from this file.
 ##
+## Achievement names double as unlockable PLAYER TITLES (worn under the name on
+## the lobby card), so every name is written to describe the player, not the
+## event. The in-game title string is localized: each id has a TITLE_* row in
+## locale/translations.csv (key derived by title_key), which must be kept in
+## sync with the Steamworks display name and the `name` here.
+##
 ## Adding an achievement (the "easy to change" path):
 ##   1. Add one row to ALL with a `cond` (see the kinds below).
 ##   2. Create the achievement in Steamworks under the same `id`, then publish.
@@ -242,3 +248,23 @@ static func event_id(key: String) -> String:
 		if cond.get("kind", "") == "event" and cond.get("key", "") == key:
 			return String(entry["id"])
 	return ""
+
+
+# Whether `id` names a registered achievement. Used by the host to validate a
+# joiner's claimed title id — the empty string ("no title") is NOT an id; the
+# caller treats it as its own valid case.
+static func has_id(id: String) -> bool:
+	for entry in ALL:
+		if String(entry["id"]) == id:
+			return true
+	return false
+
+
+# The translations.csv key for an achievement's player-title string
+# ("ACH_HAT_TRICK" -> "TITLE_HAT_TRICK"). Returns "" for the empty/unknown id
+# so a titleless player renders nothing instead of a raw key. Domain stays
+# engine-free: callers tr() the key at the display seam.
+static func title_key(id: String) -> String:
+	if not has_id(id):
+		return ""
+	return "TITLE_" + id.trim_prefix("ACH_")

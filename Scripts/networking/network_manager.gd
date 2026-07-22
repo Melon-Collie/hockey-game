@@ -183,6 +183,10 @@ var game_initiated: bool = false
 var local_is_left_handed: bool = true
 var local_player_name: String = "Player"
 var local_jersey_number: int = 10
+# Equipped title (achievement id, "" = none) — cosmetic lobby-card flair,
+# self-reported like the name and locked at join for clients (no mid-session
+# identity RPC exists; an edit applies from the next session/lobby open).
+var local_player_title: String = ""
 var pending_game_config: Dictionary = {}
 var pending_lobby_slots: Dictionary = {}  # peer_id → { team_id, team_slot, player_name, is_left_handed }
 var pending_lobby_roster: Array = []
@@ -243,6 +247,7 @@ var pending_replay_path: String = ""
 var _peer_handedness: Dictionary = {}     # peer_id -> bool (host only)
 var _peer_names: Dictionary = {}          # peer_id -> String (host only)
 var _peer_numbers: Dictionary = {}        # peer_id -> int (host only)
+var _peer_titles: Dictionary = {}         # peer_id -> achievement id or "" (host only)
 # peer_id -> SteamID64 (host only), captured from request_join. Stable across a
 # reconnect (the peer_id is not), so GameManager keys reserved slots by it to
 # restore a returning player's team/slot/stats. 0 when the joiner sent no Steam
@@ -402,6 +407,7 @@ func _ready() -> void:
 	local_player_name = PlayerPrefs.player_name
 	local_jersey_number = PlayerPrefs.jersey_number
 	local_is_left_handed = PlayerPrefs.is_left_handed
+	local_player_title = PlayerPrefs.player_title
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 
 # ── Connection ────────────────────────────────────────────────────────────────
@@ -412,6 +418,7 @@ func start_offline() -> void:
 	_peer_handedness[1] = local_is_left_handed
 	_peer_names[1] = local_player_name
 	_peer_numbers[1] = local_jersey_number
+	_peer_titles[1] = local_player_title
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
 			"rule_set": GameRules.DEFAULT_RULE_SET,
@@ -484,6 +491,15 @@ func apply_local_identity(p_name: String, p_number: int, p_is_left: bool) -> voi
 	_peer_numbers[1] = p_number
 	_peer_handedness[1] = p_is_left
 	local_identity_changed.emit(p_name, p_number, p_is_left)
+
+
+# In-session title edit, mirroring apply_local_identity. Cosmetic and
+# lobby-only, so no signal: nothing live renders it — the next lobby open /
+# roster build reads the updated value. Clients' replicated titles are locked
+# at join (same as the name), so a mid-online edit shows up next session.
+func apply_local_title(title_id: String) -> void:
+	local_player_title = title_id if Achievements.has_id(title_id) else ""
+	_peer_titles[1] = local_player_title
 
 
 func start_tutorial(id: String = TutorialRegistry.MOVEMENT_ID) -> void:
@@ -652,6 +668,7 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_handedness.erase(id)
 	_peer_names.erase(id)
 	_peer_numbers.erase(id)
+	_peer_titles.erase(id)
 	_peer_attributes.erase(id)
 	pending_color_votes.erase(id)
 	# NOTE: _peer_steam_ids is deliberately NOT erased before the emit below —
@@ -692,7 +709,8 @@ func _on_connected_to_server() -> void:
 			local_attrs.height, local_attrs.weight, local_attrs.profile,
 			local_attrs.curve, local_attrs.flex, local_attrs.length,
 			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
-			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity)
+			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity,
+			local_player_title)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -790,6 +808,7 @@ func reset() -> void:
 	_peer_handedness.clear()
 	_peer_names.clear()
 	_peer_numbers.clear()
+	_peer_titles.clear()
 	_peer_steam_ids.clear()
 	_kicked_peers.clear()
 	_peer_attributes.clear()
@@ -1035,7 +1054,7 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_flex: int = PlayerAttributes.GEAR_BALANCED,
 		attr_length: int = PlayerAttributes.GEAR_BALANCED,
 		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0,
-		shot_power_sensitivity: float = 1.0) -> void:
+		shot_power_sensitivity: float = 1.0, player_title: String = "") -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -1070,6 +1089,10 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
 	_peer_numbers[sender_id] = clampi(jersey_number, 0, 99)
+	# Title is self-reported cosmetics (the host can't read another account's
+	# Steam achievements) — validate only that it names a real achievement so a
+	# modified client can't inject an arbitrary display string.
+	_peer_titles[sender_id] = player_title if Achievements.has_id(player_title) else ""
 	# v4 builds have no power economy to validate — every axis is lateral, so
 	# validation is pure coercion: the constructor clamps height/gear into range
 	# and weight into the height's BMI band. A forged extreme build lands on the
@@ -1138,6 +1161,11 @@ func get_peer_name(peer_id: int) -> String:
 
 func get_peer_number(peer_id: int) -> int:
 	return _peer_numbers.get(peer_id, 10)
+
+# A peer's equipped title (achievement id, "" = none), host-side. Already
+# registry-validated at request_join.
+func get_peer_title(peer_id: int) -> String:
+	return _peer_titles.get(peer_id, "")
 
 func get_peer_steam_id(peer_id: int) -> int:
 	return _peer_steam_ids.get(peer_id, 0)

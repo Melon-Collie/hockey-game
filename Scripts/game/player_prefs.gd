@@ -186,6 +186,10 @@ var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
 var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
+# Equipped player title: an achievement id from Achievements.ALL, "" = none.
+# Purely cosmetic (lobby-card flair); validated against the registry on load
+# and again host-side at join, so a stale/hand-edited id degrades to titleless.
+var player_title: String = ""
 
 # Per-player build (attributes v4, body + gear): a free HEIGHT in inches
 # (5'8"..6'7"), a free WEIGHT in lbs (clamped to the height's BMI band), and
@@ -398,6 +402,7 @@ func save() -> void:
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
+	cfg.set_value("player", "title", player_title)
 	cfg.set_value("player", "attr_height",  attr_height)
 	cfg.set_value("player", "attr_weight",  attr_weight)
 	cfg.set_value("player", "attr_profile", attr_profile)
@@ -958,6 +963,8 @@ func _load() -> void:
 		# key is ignored — hard break, no migration. -1 falls back to the default at
 		# next lobby join.
 		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
+		var saved_title: String = str(cfg.get_value("player", "title", ""))
+		player_title = saved_title if Achievements.has_id(saved_title) else ""
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
 		if attr_ver >= 5:
 			# Native v4 body+gear model. Funnel through set_player_attributes so

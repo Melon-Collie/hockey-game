@@ -9,7 +9,7 @@ const _SETTING_CONTROL_WIDTH: int = 220
 # lobby: MenuStyle surfaces stay solid for every other popup by design.
 const _PANEL_BG_ALPHA: float = 0.75
 
-# key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number }
+# key = LobbySlotKey.encode(team_id, slot)  →  { peer_id, player_name, is_left_handed, jersey_number, player_title }
 # Players: team_id ∈ {0, 1}, slot ∈ {0,1,2}. Spectators: team_id = -1, slot = spectator_idx.
 var _lobby_slots: Dictionary = {}
 
@@ -136,7 +136,7 @@ func _ready() -> void:
 		_on_lobby_roster_synced(NetworkManager.pending_lobby_roster)
 		NetworkManager.pending_lobby_roster = []
 	elif NetworkManager.is_host:
-		_assign_slot(1, 0, 0, NetworkManager.local_player_name, NetworkManager.local_is_left_handed, NetworkManager.local_jersey_number)
+		_assign_slot(1, 0, 0, NetworkManager.local_player_name, NetworkManager.local_is_left_handed, NetworkManager.local_jersey_number, NetworkManager.local_player_title)
 		_broadcast_confirm(1, 0, 0)
 	# Initial Start-button state. The button is constructed disabled; nothing
 	# else fires _update_start_btn until a peer joins/readies, so without this
@@ -694,7 +694,7 @@ func _btn(text: String) -> Button:
 
 # ── Slot management ───────────────────────────────────────────────────────────
 
-func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is_left_handed: bool, jersey_number: int = 10) -> void:
+func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is_left_handed: bool, jersey_number: int = 10, player_title: String = "") -> void:
 	# Clear any existing slot for this peer first.
 	for k: int in _lobby_slots.keys():
 		if _lobby_slots[k].peer_id == peer_id:
@@ -705,6 +705,7 @@ func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is
 		"player_name": player_name,
 		"is_left_handed": is_left_handed,
 		"jersey_number": jersey_number,
+		"player_title": player_title,
 	}
 	# If a player takes over a bot slot, retire the bot — otherwise it would
 	# respawn the moment the player moved away. send_bot_slot is host-only;
@@ -742,7 +743,7 @@ func _build_roster_array() -> Array:
 		var slot: int = LobbySlotKey.slot(k)
 		var entry: Dictionary = _lobby_slots[k]
 		var is_ready: bool = _ready_states.get(entry.peer_id, false)
-		result.append([entry.peer_id, team_id, slot, entry.player_name, entry.is_left_handed, entry.get("jersey_number", 10), is_ready])
+		result.append([entry.peer_id, team_id, slot, entry.player_name, entry.is_left_handed, entry.get("jersey_number", 10), is_ready, entry.get("player_title", "")])
 	return result
 
 func _build_slot_grid_roster() -> Array[Dictionary]:
@@ -761,6 +762,7 @@ func _build_slot_grid_roster() -> Array[Dictionary]:
 			"jersey_number":  entry.get("jersey_number", 10),
 			"is_left_handed": entry.is_left_handed,
 			"is_ready":       _ready_states.get(entry.peer_id, false),
+			"player_title":   entry.get("player_title", ""),
 		})
 	return result
 
@@ -922,7 +924,8 @@ func _on_peer_joined(peer_id: int) -> void:
 	var name_val: String = NetworkManager.get_peer_name(peer_id)
 	var is_left: bool = NetworkManager.get_peer_handedness(peer_id)
 	var num: int = NetworkManager.get_peer_number(peer_id)
-	_assign_slot(peer_id, target[0], target[1], name_val, is_left, num)
+	_assign_slot(peer_id, target[0], target[1], name_val, is_left, num,
+			NetworkManager.get_peer_title(peer_id))
 	_ready_states[peer_id] = false
 	var roster: Array = _build_roster_array()
 	for existing_peer: int in NetworkManager.connected_peer_ids():
@@ -957,8 +960,9 @@ func _find_peer_identity(peer_id: int) -> Dictionary:
 				"player_name": entry.player_name,
 				"is_left_handed": entry.is_left_handed,
 				"jersey_number": entry.get("jersey_number", 10),
+				"player_title": entry.get("player_title", ""),
 			}
-	return { "player_name": "", "is_left_handed": true, "jersey_number": 10 }
+	return { "player_name": "", "is_left_handed": true, "jersey_number": 10, "player_title": "" }
 
 func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> void:
 	if not NetworkManager.is_host:
@@ -979,7 +983,8 @@ func _on_slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int) -> v
 			return
 	var identity: Dictionary = _find_peer_identity(peer_id)
 	_assign_slot(peer_id, new_team_id, new_slot,
-			identity.player_name, identity.is_left_handed, identity.jersey_number)
+			identity.player_name, identity.is_left_handed, identity.jersey_number,
+			identity.player_title)
 	_broadcast_confirm(peer_id, new_team_id, new_slot)
 	# Swapping to/from spectator changes who counts toward the ready check, so
 	# re-evaluate the start button — otherwise a sole client moving to spectate
@@ -993,7 +998,8 @@ func _on_slot_swap_confirmed(peer_id: int, _old_team_id: int, _old_slot: int,
 		_jersey: Color, _helmet: Color, _pants: Color) -> void:
 	var identity: Dictionary = _find_peer_identity(peer_id)
 	_assign_slot(peer_id, new_team_id, new_slot,
-			identity.player_name, identity.is_left_handed, identity.jersey_number)
+			identity.player_name, identity.is_left_handed, identity.jersey_number,
+			identity.player_title)
 	_refresh_grid()
 	_refresh_spectator_panel()
 
@@ -1008,11 +1014,13 @@ func _on_lobby_roster_synced(roster: Array) -> void:
 		var is_left: bool = entry[4] if entry.size() > 4 else true
 		var p_number: int = entry[5] if entry.size() > 5 else 10
 		var is_ready: bool = entry[6] if entry.size() > 6 else false
+		var p_title: String = entry[7] if entry.size() > 7 else ""
 		_lobby_slots[LobbySlotKey.encode(team_id, slot)] = {
 			"peer_id": peer_id,
 			"player_name": p_name,
 			"is_left_handed": is_left,
 			"jersey_number": p_number,
+			"player_title": p_title,
 		}
 		# Host (peer_id 1) doesn't participate in the ready-check.
 		if peer_id != 1:
@@ -1124,7 +1132,8 @@ func _apply_team_size(team_size: int) -> void:
 				continue  # nowhere to go; grid will still render the row
 			seat = [GameRules.SPECTATOR_TEAM_ID, spec_slot]
 		_assign_slot(entry.peer_id, seat[0], seat[1],
-				entry.player_name, entry.is_left_handed, entry.jersey_number)
+				entry.player_name, entry.is_left_handed, entry.jersey_number,
+				entry.get("player_title", ""))
 		_broadcast_confirm(entry.peer_id, seat[0], seat[1])
 	_refresh_grid()
 

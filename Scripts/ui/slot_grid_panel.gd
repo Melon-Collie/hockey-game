@@ -7,10 +7,12 @@ extends VBoxContainer
 #
 #   ┌──────────────────────────────────┐
 #   │ ▶  88  PLAYERNAME              L │   ← action icon (X / +) top-left;
-#   │ │                       ●  32ms  │     position letter top-right;
-#   └──────────────────────────────────┘     name in middle; ping or AI label
-#                                            bottom-right; left stripe in
-#                                            the team's UI stripe color.
+#   │ │      First Star       ●  32ms  │     position letter top-right;
+#   └──────────────────────────────────┘     name in middle with the equipped
+#                                            title (achievement flair) under
+#                                            it; ping or AI label bottom-right;
+#                                            left stripe in the team's UI
+#                                            stripe color.
 #
 # Cards use the team's canonical UI palette (TeamColorRegistry.get_ui_colors):
 # home = primary body + secondary stripe, away = light body + primary stripe.
@@ -70,6 +72,8 @@ const _ICON_SIZE: int = 20
 const _NAME_FONT_SIZE: int = 24
 const _NAME_FONT_SIZE_OPEN: int = 18
 const _NAME_FONT_MIN: int = 14
+# Equipped-title flair line under the name (small, muted; see _update_card).
+const _TITLE_FONT_SIZE: int = 12
 
 # Ping color bands (ms).
 const _PING_GREEN: int  = 60
@@ -89,6 +93,7 @@ var _stripe:       Array = [[], []]   # Panel — left edge band, rounded outsid
 var _stripe_style: Array = [[], []]   # StyleBoxFlat backing each stripe (for recolor)
 var _num_labels:   Array = [[], []]
 var _name_labels:  Array = [[], []]
+var _title_labels: Array = [[], []]   # equipped-title flair under the name
 var _pos_labels:   Array = [[], []]
 var _right_cols:   Array = [[], []]   # VBoxContainer holding pos + status
 var _status_box:   Array = [[], []]   # HBoxContainer holding ping/AI
@@ -353,23 +358,42 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	main_row.add_child(num)
 	_num_labels[team_id][slot] = num
 
-	# Name label fills the remaining width to the right of the number. It
-	# auto-shrinks to fit (see _fit_name): "fit_base" is the preferred size,
-	# re-fit on every layout change via the resized signal so it tracks
-	# window resizing. clip_text stays on purely as a last-resort guard for
-	# pathologically long names that hit _NAME_FONT_MIN.
+	# Name column fills the remaining width to the right of the number: the
+	# name with the equipped-title flair line under it, both vertically
+	# centered as a block. The name auto-shrinks to fit (see _fit_name):
+	# "fit_base" is the preferred size, re-fit on every layout change via the
+	# resized signal so it tracks window resizing. clip_text stays on purely
+	# as a last-resort guard for pathologically long names that hit
+	# _NAME_FONT_MIN.
+	var name_col := VBoxContainer.new()
+	name_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	name_col.add_theme_constant_override("separation", 0)
+	name_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	main_row.add_child(name_col)
+
 	var name_lbl := Label.new()
 	name_lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	name_lbl.add_theme_font_size_override("font_size", _NAME_FONT_SIZE)
 	name_lbl.set_meta("fit_base", _NAME_FONT_SIZE)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lbl.clip_text = true
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name_lbl.resized.connect(_fit_name.bind(name_lbl))
-	main_row.add_child(name_lbl)
+	name_col.add_child(name_lbl)
 	_name_labels[team_id][slot] = name_lbl
+
+	# Title flair — small, muted, mixed-case against the all-caps name.
+	# Hidden for empty/bot/titleless cards; _update_card sets text + color.
+	var title_lbl := Label.new()
+	title_lbl.add_theme_font_size_override("font_size", _TITLE_FONT_SIZE)
+	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	title_lbl.clip_text = true
+	title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title_lbl.visible = false
+	name_col.add_child(title_lbl)
+	_title_labels[team_id][slot] = title_lbl
 
 	# Right column: position letter pinned to top, status (ping or AI)
 	# pinned to bottom. The middle spacer eats any leftover height so the
@@ -473,7 +497,9 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 
 # ── Refresh ──────────────────────────────────────────────────────────────────
 
-# roster: Array of { team_id, slot, peer_id, player_name, jersey_number, is_left_handed, is_ready }
+# roster: Array of { team_id, slot, peer_id, player_name, jersey_number, is_left_handed, is_ready, player_title }
+#   player_title is the equipped achievement id ("" / absent = no flair line —
+#   rosters that predate titles, e.g. the mid-match grid, simply omit it).
 # team_colors: Array[Dictionary] indexed by team_id, each with ui_base/ui_stripe/ui_text fields
 # bot_slots: slot_key (team*3+slot) -> bool. Marks empty slots that should
 #   render as bots and (host-only) show the X action.
@@ -514,6 +540,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	var stripe_style: StyleBoxFlat = _stripe_style[team_id][slot]
 	var num_lbl:  Label = _num_labels[team_id][slot]
 	var name_lbl: Label = _name_labels[team_id][slot]
+	var title_lbl: Label = _title_labels[team_id][slot]
 	var pos_lbl:  Label = _pos_labels[team_id][slot]
 	var right_col: VBoxContainer = _right_cols[team_id][slot]
 	var ping_lbl: Label = _ping_label[team_id][slot]
@@ -548,6 +575,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		# per-card L/C/R indicator.
 		num_lbl.visible = false
 		right_col.visible = false
+		title_lbl.visible = false
 		name_lbl.text = "OPEN SLOT"
 		name_lbl.set_meta("fit_base", _NAME_FONT_SIZE_OPEN)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
@@ -576,6 +604,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		name_lbl.text = bot_name.to_upper()
 		name_lbl.add_theme_color_override("font_color", text_c)
 		_fit_name(name_lbl)
+		title_lbl.visible = false
 		pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 		ping_lbl.visible = false
 		dot.visible = false
@@ -598,6 +627,13 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	name_lbl.text = p_name.to_upper() if not p_name.is_empty() else "PLAYER"
 	name_lbl.add_theme_color_override("font_color", text_c)
 	_fit_name(name_lbl)
+	# Equipped-title flair. The roster carries the achievement id; the display
+	# string is localized here at the UI seam (domain returns only the key).
+	var t_key: String = Achievements.title_key(entry.get("player_title", ""))
+	title_lbl.visible = not t_key.is_empty()
+	if title_lbl.visible:
+		title_lbl.text = tr(t_key)
+		title_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 	pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 
 	ai_lbl.visible = false
