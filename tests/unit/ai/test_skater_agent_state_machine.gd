@@ -2023,3 +2023,51 @@ func test_no_deke_without_the_carrier_read() -> void:
 	sm._poke_evade_modulate_steering(i, s, Vector3.ZERO)
 	assert_false(sm._poke_evade_deking)
 	assert_eq(sm._poke_evade_active_ticks, 0)
+
+
+# ── Own-net blade discipline (_deflect_safe_aim_dir) ─────────────────────────
+
+func test_house_blade_clears_the_puck_to_mouth_corridor() -> void:
+	# Net-front defender, loose puck up the middle: the ready-stance dir
+	# points at the puck, parking the blade dead in the puck→mouth corridor —
+	# a deflection surface in tight (the own-goal tip). The safe dir slides
+	# the blade to the corridor's edge at full stance length; the body stays
+	# where the role put it.
+	var self_pos := Vector3(0, 0, 24.5)            # in the house; own net +26.65
+	var s := _loose_puck_snap(Vector3(0, 0, 17))   # slot shot line through us
+	var dir := Vector3(0, 0, -1)                   # aiming straight at the puck
+	var safe: Vector3 = sm._deflect_safe_aim_dir(self_pos, dir, s)
+	var blade_pt: Vector3 = self_pos + safe * Agent.READY_STANCE_AIM_FORWARD_M
+	# The corridor runs up the z-axis here, so |x| IS the perp clearance.
+	assert_gte(absf(blade_pt.x), Agent.BLADE_LANE_CLEAR_M - 0.01,
+			"parked blade slides to the corridor edge; got %s" % blade_pt)
+	assert_almost_eq(self_pos.distance_to(blade_pt),
+			Agent.READY_STANCE_AIM_FORWARD_M, 0.01,
+			"stance length is preserved — only the direction rotates")
+
+
+func test_blade_discipline_only_applies_in_the_house() -> void:
+	var self_pos := Vector3(0, 0, 12)              # high zone, out of the house
+	var s := _loose_puck_snap(Vector3(0, 0, 5))
+	var dir := Vector3(0, 0, -1)
+	assert_eq(sm._deflect_safe_aim_dir(self_pos, dir, s), dir,
+			"outside the house the ready stance is untouched")
+
+
+func test_blade_discipline_yields_to_contest_range() -> void:
+	# Puck inside blade reach: play it — winning the puck ends the danger.
+	var self_pos := Vector3(0, 0, 24.5)
+	var s := _loose_puck_snap(Vector3(0, 0, 23.4))   # ~1.1 m away, in reach
+	var dir := Vector3(0, 0, -1)
+	assert_eq(sm._deflect_safe_aim_dir(self_pos, dir, s), dir,
+			"a puck in contest range is played, not conceded")
+
+
+func test_blade_discipline_ignores_our_own_possession() -> void:
+	# Teammate carrying near our net (breakout regroup): no lane to guard.
+	var self_pos := Vector3(0, 0, 24.5)
+	var s := _loose_puck_snap(Vector3(0, 0, 17))
+	s.puck_state.carrier_peer_id = TEAMMATE_ID
+	var dir := Vector3(0, 0, -1)
+	assert_eq(sm._deflect_safe_aim_dir(self_pos, dir, s), dir,
+			"our own possession needs no deflection discipline")
