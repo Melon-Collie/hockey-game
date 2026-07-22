@@ -27,3 +27,15 @@ TUTORIAL_CONTINUE_CTA,Continue → %s: %s,Continuar → %s: %s
 DRILL_PENALTY_SHOTS,Penalty Shots,Penaltis
 DRILL_SHOT_ACCURACY,Shot Accuracy,Precisión de Tiro
 DRILL_PASSING,Passing,Pases
+ARCH_WATERBUG,Waterbug,Torbellino
+ARCH_SPARK_PLUG,Spark Plug,Bujía
+ARCH_FIRE_HYDRANT,Fire Hydrant,Tanqueta
+ARCH_GREYHOUND,Greyhound,Galgo
+ARCH_TWO_WAY,Two-Way,Todoterreno
+ARCH_BRUISER,Bruiser,Leñero
+ARCH_RANGY,Rangy,Zancudo
+ARCH_TOWER,Tower,Torre
+ARCH_TANK,Tank,Tanque
+ARCH_TELL_QUICK_RELEASE,Quick Release,Disparo Rápido
+ARCH_TELL_HOWITZER,Howitzer,Obús
+ARCH_TELL_SHIFTY,Shifty,Escurridizo

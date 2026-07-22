@@ -4,9 +4,11 @@ extends CanvasLayer
 # Opening-faceoff matchup screen, scrim-first: the pre-game camera sweep and
 # bench skate-on stay visible through a medium dim wash while the two rosters
 # read on top — team columns (color stripe + HOME/AWAY header, then per player
-# an attribute hex graph + jersey number + name) around a center VS with one
-# labeled legend hex naming the six axes for all of them. Pure presentation,
-# no buttons; shown for the front of the PREGAME_INTRO_DURATION hold and
+# jersey number + name + a scouting-style archetype tag) around a center VS.
+# The tag ("WATERBUG", "TANK · HOWITZER") is BuildArchetypeRules' read of the
+# v4 build — hockey-card flavor instead of raw dials, and honest about the
+# all-lateral system (no build reads as "bigger"). Pure presentation, no
+# buttons; shown for the front of the PREGAME_INTRO_DURATION hold and
 # dismissed before the faceoff countdown takes the banner.
 #
 # Owned by HUD, which passes the slot-sorted PlayerRecords per team.
@@ -78,22 +80,12 @@ func _build_ui() -> void:
 	_home_rows = home_col.get_meta(&"rows") as VBoxContainer
 	columns.add_child(home_col)
 
-	# Center spine: VS over the legend hex that names the six attribute axes
-	# once, so the per-player hexes can stay small and unlabeled.
-	var spine := VBoxContainer.new()
-	spine.alignment = BoxContainer.ALIGNMENT_CENTER
-	spine.add_theme_constant_override("separation", 14)
-	spine.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	columns.add_child(spine)
-
+	# Center spine: just the VS — the archetype tags carry the build story in
+	# words, so there is no legend to key.
 	var vs := _lbl("VS", 30, _DIM)
 	vs.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	spine.add_child(vs)
-
-	var legend := AttributeHexGraph.new()
-	legend.show_labels = true
-	legend.custom_minimum_size = Vector2(128, 128)
-	spine.add_child(legend)
+	vs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	columns.add_child(vs)
 
 	_away_stripe_style = _stripe_style()
 	var away_col := _build_team_column("AWAY", _away_stripe_style)
@@ -126,8 +118,8 @@ func present(home_records: Array[PlayerRecord], away_records: Array[PlayerRecord
 		home_stripe: Color, away_stripe: Color) -> void:
 	_home_stripe_style.bg_color = home_stripe
 	_away_stripe_style.bg_color = away_stripe
-	_fill_rows(_home_rows, home_records, home_stripe, 0)
-	_fill_rows(_away_rows, away_records, away_stripe, 1)
+	_fill_rows(_home_rows, home_records, 0)
+	_fill_rows(_away_rows, away_records, 1)
 	visible = true
 	if _present_tween != null and _present_tween.is_running():
 		_present_tween.kill()
@@ -153,13 +145,15 @@ func hide_overlay() -> void:
 
 
 # Roster rebuilt per present(): once per match, a handful of rows. Each row:
-# a position badge, the player's build as a small team-colored hex graph, then
-# number + name. Records arrive slot-sorted (see hud.gd._show_matchup_overlay),
-# so in 5v5 the forward group (C/LW/RW) always precedes defense (LD/RD) — a
-# thin "DEFENSE" divider marks the seam so the matchup reads at a glance
-# instead of five undifferentiated names (3v3 has no such split, so no divider).
+# a position badge, jersey number, name, then the build's scouting tag
+# (body archetype, plus a gear tell when the loadout has one — see
+# BuildArchetypeRules). Records arrive slot-sorted (see
+# hud.gd._show_matchup_overlay), so in 5v5 the forward group (C/LW/RW) always
+# precedes defense (LD/RD) — a thin "DEFENSE" divider marks the seam so the
+# matchup reads at a glance instead of five undifferentiated names (3v3 has
+# no such split, so no divider).
 func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
-		accent: Color, team_id: int) -> void:
+		team_id: int) -> void:
 	for child: Node in rows.get_children():
 		child.queue_free()
 	var is_5v5: bool = records.size() >= 5
@@ -179,10 +173,6 @@ func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 		pos.custom_minimum_size = Vector2(28, 0)
 		pos.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(pos)
-		var hex := AttributeHexGraph.new()
-		hex.custom_minimum_size = Vector2(54, 54)
-		hex.set_build(record.attributes, accent)
-		row.add_child(hex)
 		var num := _lbl("%d" % record.jersey_number, 16, _DIM)
 		num.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		num.custom_minimum_size = Vector2(30, 0)
@@ -191,7 +181,21 @@ func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 		var name_label := _lbl(record.display_name(), 22, _WHITE)
 		name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(name_label)
+		var tag := _lbl(_archetype_text(record.attributes), 13, _DIM)
+		tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(tag)
 		rows.add_child(row)
+
+
+# "WATERBUG" / "TANK · HOWITZER" — the build's scouting tag, tr()'d here at
+# the display seam (the rule hands back keys) and uppercased to match the
+# screen's broadcast type.
+func _archetype_text(attrs: PlayerAttributes) -> String:
+	var text: String = tr(BuildArchetypeRules.body_key(attrs))
+	var tell_key: String = BuildArchetypeRules.gear_tell_key(attrs)
+	if not tell_key.is_empty():
+		text += " · " + tr(tell_key)
+	return text.to_upper()
 
 
 func _stripe_style() -> StyleBoxFlat:
