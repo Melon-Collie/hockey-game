@@ -23,6 +23,13 @@
     {"name": "Marsh", "number": 63, "is_left_handed": true, "height": 69, "weight": 176, "flex": 0, "length": 0, "position": "LW"},
     {"name": "Quill", "number": 71, "is_left_handed": false, "height": 68, "weight": 170, "profile": 0, "position": "LW"},
     {"name": "Ferro", "number": 77, "is_left_handed": false, "height": 76, "weight": 236, "length": 2, "position": "LW"},
-    {"name": "Lavoie", "number": 43, "is_left_handed": true, "height": 70, "weight": 178, "profile": 0, "flex": 0, "position": "LD"}
+    {"name": "Lavoie", "number": 43, "is_left_handed": true, "height": 70, "weight": 178, "profile": 0, "flex": 0, "position": "LD"},
+    {"name": "Nagy", "number": 18, "is_left_handed": false, "height": 74, "weight": 224, "curve": 0, "position": "C"},
+    {"name": "Lind", "number": 29, "is_left_handed": true, "height": 71, "weight": 183, "curve": 2, "flex": 0, "position": "C"},
+    {"name": "Tesar", "number": 17, "is_left_handed": false, "height": 75, "weight": 218, "profile": 2, "position": "RW"},
+    {"name": "Krol", "number": 11, "is_left_handed": true, "height": 69, "weight": 168, "flex": 0, "length": 0, "position": "RW"},
+    {"name": "Duval", "number": 2, "is_left_handed": true, "height": 74, "weight": 210, "curve": 0, "position": "LD"},
+    {"name": "Voss", "number": 25, "is_left_handed": false, "height": 72, "weight": 200, "flex": 0, "position": "RD"}
+
   ]
 }
