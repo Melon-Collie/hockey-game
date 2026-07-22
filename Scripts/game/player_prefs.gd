@@ -187,15 +187,17 @@ var jersey_number: int = 10
 var is_left_handed: bool = true
 var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
 
-# Per-player build: a free HEIGHT (1..5 = 5'8"..6'7") plus three attribute TIERS
-# (Skating / Skill / Checking, 1=weak / 2=average / 3=strong). Default to H3 +
-# all-average so a fresh install plays identically to the shipped baseline. A
-# legal build spends one strong + one weak (all-average legal) — see
-# PlayerAttributes.is_legal_build.
-var attr_height:   int = PlayerAttributes.HEIGHT_MEDIUM
-var attr_skating:  int = PlayerAttributes.TIER_AVERAGE
-var attr_skill:    int = PlayerAttributes.TIER_AVERAGE
-var attr_checking: int = PlayerAttributes.TIER_AVERAGE
+# Per-player build (attributes v4, body + gear): a free HEIGHT in inches
+# (5'8"..6'7"), a free WEIGHT in lbs (clamped to the height's BMI band), and
+# four gear slots (0/1/2, 1 = balanced). Every axis is lateral — validation is
+# coercion, not rejection. Default is the neutral build (6'1"/201, balanced)
+# so a fresh install plays identically to the shipped baseline.
+var attr_height:  int = PlayerAttributes.HEIGHT_MEDIUM
+var attr_weight:  int = int(PlayerAttributes.NEUTRAL_WEIGHT_LBS)
+var attr_profile: int = PlayerAttributes.GEAR_BALANCED
+var attr_curve:   int = PlayerAttributes.GEAR_BALANCED
+var attr_flex:    int = PlayerAttributes.GEAR_BALANCED
+var attr_length:  int = PlayerAttributes.GEAR_BALANCED
 
 # Named attribute-build presets. The player keeps up to MAX_PRESETS builds and
 # switches which one is ACTIVE; the flat attr_* fields above always mirror the
@@ -393,25 +395,23 @@ func save() -> void:
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
-	cfg.set_value("player", "attr_height",   attr_height)
-	cfg.set_value("player", "attr_skating",  attr_skating)
-	cfg.set_value("player", "attr_skill",    attr_skill)
-	cfg.set_value("player", "attr_checking", attr_checking)
-	# Marks the values above as already on the height + three-tier model so _load()
-	# doesn't re-run the six-attribute → height/tier migration on them.
-	cfg.set_value("player", "attr_scale_version", 4)
-	# Presets are stored in the same version-4 native format. The flat attr_* keys
+	cfg.set_value("player", "attr_height",  attr_height)
+	cfg.set_value("player", "attr_weight",  attr_weight)
+	cfg.set_value("player", "attr_profile", attr_profile)
+	cfg.set_value("player", "attr_curve",   attr_curve)
+	cfg.set_value("player", "attr_flex",    attr_flex)
+	cfg.set_value("player", "attr_length",  attr_length)
+	# Marks the values above as already on the v4 body+gear model so _load()
+	# doesn't re-run the tier / six-attribute migrations on them.
+	cfg.set_value("player", "attr_scale_version", 5)
+	# Presets are stored in the same version-5 native format. The flat attr_* keys
 	# above remain the active build's mirror for backward compat.
 	var stored_presets: Array = []
 	for p: Dictionary in attr_presets:
 		var a: PlayerAttributes = p["attrs"]
-		stored_presets.append({
-			"name":     p["name"],
-			"height":   a.height,
-			"skating":  a.skating,
-			"skill":    a.skill,
-			"checking": a.checking,
-		})
+		var stored: Dictionary = a.to_dict()
+		stored["name"] = p["name"]
+		stored_presets.append(stored)
 	cfg.set_value("player", "attr_presets", stored_presets)
 	cfg.set_value("player", "attr_active_preset", attr_active_preset)
 	cfg.set_value("audio", "master_volume", master_volume)
@@ -955,18 +955,28 @@ func _load() -> void:
 		# next lobby join.
 		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
-		if attr_ver >= 4:
-			# Native height + three-tier model. coerce_height accepts either a raw
-			# inches value or a legacy 1..5 step (an early v4 save predating the
-			# continuous-inches height), mapping the latter onto the anchor heights.
-			attr_height   = PlayerAttributes.coerce_height(int(cfg.get_value("player", "attr_height", PlayerAttributes.HEIGHT_MEDIUM)))
-			attr_skating  = _clamp_tier(int(cfg.get_value("player", "attr_skating",  PlayerAttributes.TIER_AVERAGE)))
-			attr_skill    = _clamp_tier(int(cfg.get_value("player", "attr_skill",    PlayerAttributes.TIER_AVERAGE)))
-			attr_checking = _clamp_tier(int(cfg.get_value("player", "attr_checking", PlayerAttributes.TIER_AVERAGE)))
+		if attr_ver >= 5:
+			# Native v4 body+gear model. Funnel through set_player_attributes so
+			# every axis coerces (weight into the height's band, gear into 0..2).
+			set_player_attributes(PlayerAttributes.new(
+					int(cfg.get_value("player", "attr_height", PlayerAttributes.HEIGHT_MEDIUM)),
+					int(cfg.get_value("player", "attr_weight", 0)),
+					int(cfg.get_value("player", "attr_profile", PlayerAttributes.GEAR_BALANCED)),
+					int(cfg.get_value("player", "attr_curve",   PlayerAttributes.GEAR_BALANCED)),
+					int(cfg.get_value("player", "attr_flex",    PlayerAttributes.GEAR_BALANCED)),
+					int(cfg.get_value("player", "attr_length",  PlayerAttributes.GEAR_BALANCED))))
+		elif attr_ver == 4:
+			# v4-era save: height + three tiers. Deterministic map onto body+gear
+			# (PlayerAttributes.migrate_tiers — Checking→frame, Skating→profile, …).
+			set_player_attributes(PlayerAttributes.migrate_tiers(
+					int(cfg.get_value("player", "attr_height", PlayerAttributes.HEIGHT_MEDIUM)),
+					int(cfg.get_value("player", "attr_skating",  2)),
+					int(cfg.get_value("player", "attr_skill",    2)),
+					int(cfg.get_value("player", "attr_checking", 2))))
 		else:
 			# Any pre-v4 save is on the legacy six-attribute scale (or an even older
 			# 1..3 / four-attribute one). Rebuild a v3 six-attribute build via the old
-			# migration chain, then map it to the height/tier model with migrate_legacy.
+			# migration chain, then map it to the body+gear model with migrate_legacy.
 			var sp: int
 			var ag: int
 			var ha: int
@@ -999,10 +1009,10 @@ func _load() -> void:
 				ph = 3
 				sh = sk
 			set_player_attributes(PlayerAttributes.migrate_legacy(sp, ag, ha, sz, ph, sh))
-		# One choke point: whichever branch ran above, the resulting build must be a
-		# legal shape before anything reads it (free play, hosting, the picker). A
-		# hand-edited cfg could carry an illegal one. Runs BEFORE the presets load so
-		# a pre-presets save seeds its Default preset from the already-repaired build.
+		# One choke point: whichever branch ran above, the flat build re-coerces
+		# through the constructor (weight into the height's band, gear into range)
+		# before anything reads it. Runs BEFORE the presets load so a pre-presets
+		# save seeds its Default preset from the already-repaired build.
 		_enforce_attr_legal()
 		# Load the preset list (validated + clamped). If the save predates presets
 		# the array is empty here; _finalize_presets() seeds a Default from the flat
@@ -1140,22 +1150,23 @@ func _load() -> void:
 
 
 func get_player_attributes() -> PlayerAttributes:
-	# Mirror the host-side joiner validation (NetworkManager.request_join): a build
-	# that somehow carries an illegal shape falls back to all-average rather than
-	# handing the sim an illegal spread. _load()/_enforce_attr_legal already
-	# repairs, so this is a defensive net covering any other mutation path.
-	if not PlayerAttributes.is_legal_build(attr_height, attr_skating, attr_skill, attr_checking):
-		return PlayerAttributes.all_average()
-	return PlayerAttributes.new(attr_height, attr_skating, attr_skill, attr_checking)
+	# Mirror the host-side joiner validation (NetworkManager.request_join): the
+	# constructor coerces every axis (weight into the height's band, gear into
+	# range), so a hand-edited or corrupt flat build lands on the nearest legal
+	# body instead of leaking out-of-band values into the sim.
+	return PlayerAttributes.new(attr_height, attr_weight,
+			attr_profile, attr_curve, attr_flex, attr_length)
 
 
 func set_player_attributes(attrs: PlayerAttributes) -> void:
 	if attrs == null:
 		return
-	attr_height   = attrs.height
-	attr_skating  = attrs.skating
-	attr_skill    = attrs.skill
-	attr_checking = attrs.checking
+	attr_height  = attrs.height
+	attr_weight  = attrs.weight
+	attr_profile = attrs.profile
+	attr_curve   = attrs.curve
+	attr_flex    = attrs.flex
+	attr_length  = attrs.length
 	# The active preset IS the flat build — editing the live build (free-play
 	# picker Apply) edits the active preset. Guarded for the pre-_finalize window.
 	if attr_active_preset >= 0 and attr_active_preset < attr_presets.size():
@@ -1234,10 +1245,16 @@ func set_all_presets(entries: Array, active: int) -> void:
 		if not (entry is Dictionary):
 			continue
 		var lv: Array = (entry as Dictionary).get("levels", [])
-		if lv.size() < 4:
+		if lv.size() < 2:
 			continue
+		# Canonical levels order: [height, weight, profile, curve, flex, length].
+		# Missing gear entries (a short array) default to balanced.
 		var attrs := PlayerAttributes.from_levels(
-				int(lv[0]), int(lv[1]), int(lv[2]), int(lv[3]))
+				int(lv[0]), int(lv[1]),
+				int(lv[2]) if lv.size() > 2 else PlayerAttributes.GEAR_BALANCED,
+				int(lv[3]) if lv.size() > 3 else PlayerAttributes.GEAR_BALANCED,
+				int(lv[4]) if lv.size() > 4 else PlayerAttributes.GEAR_BALANCED,
+				int(lv[5]) if lv.size() > 5 else PlayerAttributes.GEAR_BALANCED)
 		out.append(_make_preset(String((entry as Dictionary).get("name", DEFAULT_PRESET_NAME)), attrs))
 		if out.size() >= MAX_PRESETS:
 			break
@@ -1250,10 +1267,6 @@ func set_all_presets(entries: Array, active: int) -> void:
 
 func _clamp_1to5(v: int) -> int:
 	return clampi(v, 1, 5)
-
-
-func _clamp_tier(v: int) -> int:
-	return clampi(v, PlayerAttributes.TIER_WEAK, PlayerAttributes.TIER_STRONG)
 
 
 # Guarantees at least one preset exists and the flat build matches the active
@@ -1272,10 +1285,12 @@ func _sync_flat_from_active() -> void:
 	if attr_active_preset < 0 or attr_active_preset >= attr_presets.size():
 		return
 	var a: PlayerAttributes = attr_presets[attr_active_preset]["attrs"]
-	attr_height   = a.height
-	attr_skating  = a.skating
-	attr_skill    = a.skill
-	attr_checking = a.checking
+	attr_height  = a.height
+	attr_weight  = a.weight
+	attr_profile = a.profile
+	attr_curve   = a.curve
+	attr_flex    = a.flex
+	attr_length  = a.length
 
 
 func _make_preset(preset_name: String, attrs: PlayerAttributes) -> Dictionary:
@@ -1285,7 +1300,8 @@ func _make_preset(preset_name: String, attrs: PlayerAttributes) -> Dictionary:
 # Independent copy so a preset never shares a PlayerAttributes instance with a
 # caller (which could mutate it out from under us).
 func _copy_attrs(attrs: PlayerAttributes) -> PlayerAttributes:
-	return PlayerAttributes.from_levels(attrs.height, attrs.skating, attrs.skill, attrs.checking)
+	return PlayerAttributes.from_levels(attrs.height, attrs.weight,
+			attrs.profile, attrs.curve, attrs.flex, attrs.length)
 
 
 func _default_preset_name() -> String:
@@ -1312,9 +1328,9 @@ func _parse_stored_presets(raw: Variant) -> Array[Dictionary]:
 		if not (entry is Dictionary):
 			continue
 		var d: Dictionary = entry
+		# from_dict migrates tier-era and six-attribute preset dicts and the
+		# constructor coerces every axis, so no legality pass is needed.
 		var attrs := PlayerAttributes.from_dict(d)
-		if not attrs.is_legal():
-			attrs = PlayerAttributes.all_average()
 		out.append(_make_preset(String(d.get("name", DEFAULT_PRESET_NAME)), attrs))
 		if out.size() >= MAX_PRESETS:
 			break
@@ -1328,12 +1344,12 @@ func _migrate_legacy_level(old: int) -> int:
 	return _clamp_1to5(2 * clampi(old, 1, 3) - 1)
 
 
-# Guarantee the loaded/migrated build is a legal shape (one-strong-one-weak or
-# all-average). A hand-edited / corrupt cfg could carry an illegal shape, which
-# unchecked would let an offline or HOSTING player field an unearned build (the
-# joiner gate in NetworkManager only validates REMOTE peers). get_player_attributes
-# resets an illegal build to all-average; funnel through set_player_attributes so
-# the active preset mirror stays in sync.
+# Re-coerce the loaded/migrated flat build through the constructor (weight into
+# the height's BMI band, gear into 0..2). A hand-edited / corrupt cfg could
+# carry out-of-band values, which unchecked would let an offline or HOSTING
+# player field them (the joiner gate in NetworkManager only coerces REMOTE
+# peers). Funnel through set_player_attributes so the active preset mirror
+# stays in sync.
 func _enforce_attr_legal() -> void:
 	set_player_attributes(get_player_attributes())
 

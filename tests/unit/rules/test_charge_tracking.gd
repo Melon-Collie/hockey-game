@@ -1,10 +1,11 @@
 extends GutTest
 
 # ChargeTracking — wrister SWING tracking: the forehand/backhand chirality
-# (accumulated blade rotation) and the direction-variance reset that starts a
-# fresh stroke. Power is NOT tracked here — it's the pure cursor speed
-# (SkaterAimingBehavior.cursor_speed_ema) — so accumulate() only reports
-# { direction, reset, rotation }.
+# (accumulated blade rotation), the stroke's blade travel (the power-ceiling
+# gate signal), and the direction-variance reset that starts a fresh stroke.
+# Power is NOT tracked here — it's the pure cursor speed
+# (SkaterAimingBehavior.cursor_speed_ema) — so accumulate() reports
+# { direction, reset, rotation, travel }.
 #
 # accumulate() reads an INTENT pair (cursor motion, drives direction + variance)
 # and a BLADE pair (world motion, drives the rotation via signed angular step).
@@ -115,6 +116,58 @@ func test_rotation_resets_on_variance_break() -> void:
 		Vector3(1, 0, 0), VARIANCE_DEG, 5.0)
 	assert_true(result.reset)
 	assert_almost_eq(result.rotation, -PI / 2.0, 0.001, "rotation reset then this step counted")
+
+# ── Stroke travel (the power-ceiling gate signal) ─────────────────────────────
+
+func test_travel_step_xz_length() -> void:
+	assert_almost_eq(ChargeTracking.travel_step(Vector3.ZERO, Vector3(0.3, 0, 0.4)),
+		0.5, 0.001, "travel step is the XZ path length")
+	assert_almost_eq(ChargeTracking.travel_step(Vector3.ZERO, Vector3(0.3, 5.0, 0.4)),
+		0.5, 0.001, "vertical component ignored")
+	assert_almost_eq(ChargeTracking.travel_step(Vector3.ZERO, Vector3(3, 0, 4), 0.5),
+		0.5, 0.001, "step capped at max_step (anti-teleport bound)")
+
+func test_travel_accumulates_over_stroke() -> void:
+	# Two ticks of a steady drag: blade sweeps 0.2 then 0.3 → 0.5 m of stroke.
+	var s1: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.5, 0, 0),
+		Vector3(1.0, 0, 0), Vector3(1.2, 0, 0),
+		Vector3.ZERO, VARIANCE_DEG, 0.0, 0.0)
+	assert_almost_eq(s1.travel, 0.2, 0.001, "first tick banks its blade step")
+	var s2: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(1.0, 0, 0),
+		Vector3(1.2, 0, 0), Vector3(1.5, 0, 0),
+		s1.direction, VARIANCE_DEG, s1.rotation, s1.travel)
+	assert_almost_eq(s2.travel, 0.5, 0.001, "same-stroke steps sum")
+
+func test_travel_holds_without_cursor_intent() -> void:
+	# Cursor idle, blade moved anyway (locomotion/IK noise) — no intent, no
+	# travel banked: the gate can't be farmed by skating with the blade out.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(0.5, 0, 0),
+		Vector3(1.0, 0, 0), Vector3(1.4, 0, 0),
+		Vector3(1, 0, 0), VARIANCE_DEG, 0.0, 0.3)
+	assert_almost_eq(result.travel, 0.3, 0.001, "idle cursor holds travel")
+
+func test_travel_resets_on_variance_break() -> void:
+	# A wiggle's direction reversal starts a fresh stroke: banked travel is
+	# discarded and only this tick's step counts — a zig-zag can never
+	# accumulate the full-stroke travel that unlocks the power ceiling.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3(0.5, 0, 0), Vector3(0.3, 0, 0),          # cursor reverses → break
+		Vector3(1.0, 0, 0), Vector3(1.1, 0, 0),
+		Vector3(1, 0, 0), VARIANCE_DEG, 0.0, 2.0)
+	assert_true(result.reset)
+	assert_almost_eq(result.travel, 0.1, 0.001, "travel reset, then this tick's step counted")
+
+func test_travel_step_capped_in_accumulate() -> void:
+	# A one-tick blade-target jump across the arc banks only max_travel_step —
+	# forged cursor teleports can't buy the stroke.
+	var result: Dictionary = ChargeTracking.accumulate(
+		Vector3.ZERO, Vector3(0.5, 0, 0),
+		Vector3(1.0, 0, 0), Vector3(-1.0, 0, 0),         # 2.0 m target jump
+		Vector3.ZERO, VARIANCE_DEG, 0.0, 0.0, 0.25)
+	assert_almost_eq(result.travel, 0.25, 0.001, "per-tick travel bounded by max_travel_step")
 
 func test_swing_direction_classifies_forehand_vs_backhand() -> void:
 	# End-to-end: a two-tick arc one way vs the other yields opposite net

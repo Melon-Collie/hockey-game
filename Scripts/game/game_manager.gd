@@ -1093,8 +1093,9 @@ func sync_existing_players(player_data: Array) -> void:
 		var p_name: String = entry[7] if entry.size() > 7 else "Player"
 		var p_number: int = entry[8] if entry.size() > 8 else 10
 		var attrs: PlayerAttributes
-		if entry.size() > 12:
-			attrs = PlayerAttributes.new(int(entry[9]), int(entry[10]), int(entry[11]), int(entry[12]))
+		if entry.size() > 14:
+			attrs = PlayerAttributes.new(int(entry[9]), int(entry[10]), int(entry[11]),
+					int(entry[12]), int(entry[13]), int(entry[14]))
 		else:
 			attrs = PlayerAttributes.all_average()
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
@@ -3993,15 +3994,11 @@ func return_to_lobby() -> void:
 				continue
 			var slot_key: int = LobbySlotKey.encode(r.team.team_id, r.team_slot)
 			bot_slots[slot_key] = true
-			bot_identities[slot_key] = {
-				"name":           r.player_name,
-				"number":         r.jersey_number,
-				"is_left_handed": r.is_left_handed,
-				"height":         r.attributes.height,
-				"skating":        r.attributes.skating,
-				"skill":          r.attributes.skill,
-				"checking":       r.attributes.checking,
-			}
+			var bot_identity: Dictionary = r.attributes.to_dict()
+			bot_identity["name"] = r.player_name
+			bot_identity["number"] = r.jersey_number
+			bot_identity["is_left_handed"] = r.is_left_handed
+			bot_identities[slot_key] = bot_identity
 	NetworkManager.pending_bot_slots = bot_slots
 	NetworkManager.pending_bot_identities = bot_identities
 	for peer_id: int in NetworkManager.connected_peer_ids():
@@ -4449,7 +4446,8 @@ func _collect_existing_player_data() -> Array[Array]:
 		existing.append([peer_id, r.team_slot, r.team.team_id,
 				r.jersey_color, r.helmet_color, r.pants_color,
 				r.is_left_handed, r.player_name, r.jersey_number,
-				attrs.height, attrs.skating, attrs.skill, attrs.checking])
+				attrs.height, attrs.weight, attrs.profile,
+				attrs.curve, attrs.flex, attrs.length])
 	return existing
 
 

@@ -149,15 +149,20 @@ const VERSION: String = "dev"
 #      instead of the old six 1..5 attributes. Host validates with is_legal_build
 #      (one-strong-one-weak) instead of the point-buy budget. Fewer positional
 #      args on both RPCs, so a mixed-build pair decodes garbage — bump required.
-# v37: deterministic puck goes authoritative + Phase-3 client prediction. The
+# v37: attributes v4 (body + gear) — request_join / request_update_attributes /
+#      spawn_remote_skater carry 6 ints (height, weight, profile, curve, flex,
+#      length) instead of the 4-int height+tier build. Validation is pure
+#      coercion (lateral axes, no legal-shape check). Positional arg counts
+#      changed on all three RPCs — bump required.
+# v38: deterministic puck goes authoritative + Phase-3 client prediction. The
 #      host's loose puck is now the analytic sim in EVERY build (not just dev),
 #      clients predict it to host-present with the same shared step, and the
 #      host rewinds loose-puck claims (pickup / one-timer range) to the claim
 #      stamp instead of the interpolated past (LagCompRewind.puck_view_time).
-#      No serialized format changed, but a v36 peer would render/validate
+#      No serialized format changed, but a v37 peer would render/validate
 #      against different puck physics and a mismatched claim-rewind convention,
 #      so mixed lobbies must be refused.
-const PROTOCOL_VERSION: int = 37
+const PROTOCOL_VERSION: int = 38
 
 
 func _ready() -> void:

@@ -219,7 +219,7 @@ func spawn_bot(
 		record.player_name = identity.get("name", "Bot %d" % (bot_id + 1))
 		record.jersey_number = identity.get("number", 80 + bot_id)
 		# Identity dicts are normalized by BotIdentityRegistry to the native
-		# height/skating/skill/checking keys; from_dict also migrates a legacy
+		# height/weight/gear keys; from_dict also migrates tier-era and legacy
 		# six-attribute roster on the fly.
 		record.attributes = PlayerAttributes.from_dict(identity)
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)

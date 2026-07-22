@@ -382,9 +382,10 @@ const POKE_RADIUS_M: float = 0.5
 # Wrister/slapper/quick-shot puck release speeds. The puck consumes
 # `direction × power` directly as linear velocity (see Puck.release),
 # so "power" IS m/s. Min and max bracket the wrister power model
-# (ShotMechanics.wrister_power_t — sweep speed × drag distance, feel-curve
-# shaped). The min sits BELOW the quick-shot/pass speed on purpose: a slow
-# deliberate sweep is a soft touch pass, softer than the fixed snap pass.
+# (ShotMechanics.wrister_power_t — pure cursor speed, feel-curve shaped, with
+# the blade-travel-gated ceiling). The min sits BELOW the quick-shot/pass
+# speed on purpose: a slow deliberate sweep is a soft touch pass, softer than
+# the fixed snap pass.
 # The maxes are the LEAGUE-AVERAGE (Shot L3) anchors, calibrated so the
 # _SHOT_POWER_MULTS spread (+/-18%, see PlayerAttributes) puts Shot L5 at an
 # elite top-of-the-NHL release:

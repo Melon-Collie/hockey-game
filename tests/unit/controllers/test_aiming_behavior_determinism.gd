@@ -37,6 +37,8 @@ func test_wrister_charge_deterministic_from_neutral_start() -> void:
 			"cursor_speed_ema (the power signal) must be deterministic from identical inputs")
 	assert_eq(a.swing_rotation, b.swing_rotation,
 			"swing_rotation must be deterministic from identical inputs")
+	assert_eq(a.stroke_travel, b.stroke_travel,
+			"stroke_travel (the power-ceiling gate) must be deterministic from identical inputs")
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir,
 			"prev_blade_dir must match")
 	assert_eq(a.prev_intent_pos, b.prev_intent_pos,
@@ -53,11 +55,13 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 	var b := SkaterAimingBehavior.new()
 	a.cursor_speed_ema = 700.0
 	a.swing_rotation = 0.3
+	a.stroke_travel = 0.4
 	a.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
 	a.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
 	a.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
 	b.cursor_speed_ema = 700.0
 	b.swing_rotation = 0.3
+	b.stroke_travel = 0.4
 	b.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
 	b.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
 	b.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
@@ -69,6 +73,7 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 		b.tick_wrister_charge(p, p, 35.0, DT, SMOOTHING)
 	assert_eq(a.cursor_speed_ema, b.cursor_speed_ema)
 	assert_eq(a.swing_rotation, b.swing_rotation)
+	assert_eq(a.stroke_travel, b.stroke_travel)
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir)
 	assert_eq(a.prev_intent_pos, b.prev_intent_pos)
 	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater)

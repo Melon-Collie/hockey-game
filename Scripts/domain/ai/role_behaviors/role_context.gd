@@ -79,6 +79,9 @@ var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # time_to_arrive's cross-momentum shed cost, so a high-Acceleration build prices a
 # redirect (killing sideways momentum to reach a carry candidate) faster than a low one.
 var self_max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+# This bot's lateral-grip multiplier (AISkaterCaps.lateral_grip) — its own
+# ETA reads shed cross-momentum at the real perpendicular authority.
+var self_lateral_grip: float = 1.0
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
 # This bot's own aim-execution spread (radians, worst-case): the per-release
 # sampled aim error over the blade aim arm. The shot-aim model reserves this
@@ -105,6 +108,9 @@ var self_pass_aim_error_rad: float = 0.0
 # the WHEN axis instead of the WHERE. 0 for a tick-perfect (test/raw) agent.
 var shot_timing_error_s: float = 0.0
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+# This bot's blade face-angle cap (tan — curve gear), so its own HIGH-hole
+# pricing knows its real minimum roofing distance (AISkaterCaps.loft_tan_max).
+var self_loft_tan: float = 1.0
 # This bot's body-check delivery (Size + Physical) and current stagger, so the
 # on-puck defensive roles (PRESSURE / FORECHECK F1) can decide whether a check
 # is worth committing to via AIBodyCheck. League baselines / 0 when unwired.

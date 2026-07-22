@@ -200,7 +200,7 @@ static func _wall_rim_keepin(ctx: RoleContext, side: float) -> Vector3:
 			/ maxf(absf(puck.velocity.z), 0.001)
 	var t_me: float = AIActionScoring.time_to_arrive(
 			ctx.self_pos, stand, ctx.self_velocity,
-			ctx.self_max_speed, ctx.self_max_accel)
+			ctx.self_max_speed, ctx.self_max_accel, ctx.self_lateral_grip)
 	if t_me > t_puck:
 		return Vector3.INF
 	return stand

@@ -238,6 +238,82 @@ func test_wrister_speed_for_power_t_clamps() -> void:
 	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(1.5, cfg),
 			cfg.full_sweep_speed, 0.001, "over-1 target clamps to the full-speed reference")
 
+# ── Wrister: travel-gated ceiling ─────────────────────────────────────────────
+# The top of the band must be EARNED with blade travel: cursor speed alone (a
+# twitch, a wiggle, a cranked sensitivity) caps at the flick-pass floor. The
+# gate is a cap — it can only lower the speed-derived t, never raise it — so
+# everything below the floor (the touch-pass precision band) is bit-identical
+# to the ungated model.
+
+func _gated_cfg() -> ShotMechanics.WristerConfig:
+	var cfg := _wrister_cfg()
+	cfg.full_stroke_travel = 1.0
+	cfg.travel_cap_floor = 0.4
+	return cfg
+
+func test_travel_cap_disabled_when_full_travel_unset() -> void:
+	# full_stroke_travel <= 0 disables the gate — cap is 1.0 for any travel.
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.0, _wrister_cfg()),
+		1.0, 0.001, "unset gate never caps")
+
+func test_travel_cap_zero_travel_floors_at_flick_pass_tier() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.0, _gated_cfg()),
+		0.4, 0.001, "zero travel earns the flick-pass floor, not zero")
+
+func test_travel_cap_full_travel_unlocks_ceiling() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(1.0, _gated_cfg()),
+		1.0, 0.001, "a full stroke unlocks the whole band")
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(2.5, _gated_cfg()),
+		1.0, 0.001, "over-travel clamps at 1")
+
+func test_travel_cap_scales_between_floor_and_full() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.7, _gated_cfg()),
+		0.7, 0.001, "partial stroke earns a proportional ceiling")
+
+func test_wrister_twitch_full_speed_no_travel_caps_at_floor() -> void:
+	# THE exploit case: max cursor speed with no blade travel (wiggle / jerk /
+	# cranked Shot Power Sensitivity) releases at the flick-pass tier, not max.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP, 0.0)
+	var floor_power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power,
+			cfg.travel_cap_floor)
+	assert_almost_eq(r.power, floor_power, 0.01,
+		"speed without travel caps at the flick-pass tier")
+
+func test_wrister_full_sweep_with_full_travel_maxes_power() -> void:
+	# The honest rip: full speed AND a real swept stroke — untouched by the gate.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP, 1.2)
+	assert_almost_eq(r.power, cfg.max_wrister_power, 0.01,
+		"an earned stroke keeps the full ceiling")
+
+func test_wrister_soft_sweep_below_floor_untouched_by_gate() -> void:
+	# The mastered touch pass: a slow sweep's speed-derived t sits under the
+	# floor, so gated and ungated release identically even at zero travel.
+	var slow_sweep: float = 1.0
+	var gated: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, _gated_cfg(), Vector3(1, 0, 0), false, slow_sweep, 0.0)
+	var ungated: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, _wrister_cfg(), Vector3(1, 0, 0), false, slow_sweep)
+	assert_almost_eq(gated.power, ungated.power, 0.001,
+		"the soft band is bit-identical to the ungated model")
+
+func test_wrister_default_travel_bypasses_gate() -> void:
+	# Callers that pass no stroke_travel (bots via INF, quick shots) keep the
+	# full ceiling even on a gated config.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP)
+	assert_almost_eq(r.power, cfg.max_wrister_power, 0.01,
+		"default (INF) stroke_travel means no gate")
+
 # ── Forehand/backhand from swing chirality ───────────────────────────────────
 # Convention (empirically flippable): a POSITIVE net swing rotation is a
 # forehand for a right-handed shooter, mirrored for lefties. The classifier
@@ -525,3 +601,69 @@ func test_follow_through_aim_ignores_degenerate_cursor() -> void:
 	var shot_dir := Vector3(0, 0, -1)
 	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, Vector3.ZERO, 1.0, 0.4)
 	assert_almost_eq(aim.z, -1.0, 0.0001, "degenerate cursor holds shot line")
+
+
+# ── Blade face angle (curve gear): the launch-angle cap ──────────────────────
+# The loft_y ratio IS tan(launch angle); the curve's face angle caps it.
+# Face tans (from PlayerAttributes._CURVE_FACE_ANGLE_DEG): closed 23°,
+# balanced 31°, open 45° (= MAX_LOFT_RATIO, the pre-curve universal cap).
+
+const _TAN_CLOSED: float = 0.42447  # tan 23°
+const _TAN_BALANCED: float = 0.60086  # tan 31°
+const _TAN_OPEN: float = 1.0        # tan 45°
+const _VY_HIGH: float = 4.65        # GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+
+
+func test_face_angle_never_binds_at_pace() -> void:
+	# A full-power HIGH shot launches well under every face angle, so all
+	# three curves produce the IDENTICAL arc — the crossbar apex ceiling is
+	# reached by every blade at pace.
+	var open_y: float = ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_OPEN)
+	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_CLOSED), open_y, 0.0001,
+			"closed matches open at pace")
+	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_BALANCED), open_y, 0.0001,
+			"balanced matches open at pace")
+	# And the achieved vy is the full level speed.
+	var vy: float = 30.0 * open_y / sqrt(1.0 + open_y * open_y)
+	assert_almost_eq(vy, _VY_HIGH, 0.001, "full apex at pace")
+
+
+func test_face_angle_flattens_the_soft_roof() -> void:
+	# The in-tight roof is a SOFT steep shot — exactly where the face gates.
+	# At 6 m/s the uncapped ratio wants ~51°; each face clamps to its own
+	# angle, so the achieved vertical speed (and thus the apex) ranks
+	# open > balanced > closed, and none reaches the full HIGH apex.
+	var soft: float = 6.0
+	var y_open: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_OPEN)
+	var y_bal: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_BALANCED)
+	var y_closed: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_CLOSED)
+	assert_almost_eq(y_open, _TAN_OPEN, 0.0001, "open pins at its face")
+	assert_almost_eq(y_bal, _TAN_BALANCED, 0.0001, "balanced pins at its face")
+	assert_almost_eq(y_closed, _TAN_CLOSED, 0.0001, "closed pins at its face")
+	var vy_open: float = soft * y_open / sqrt(1.0 + y_open * y_open)
+	var vy_closed: float = soft * y_closed / sqrt(1.0 + y_closed * y_closed)
+	assert_gt(vy_open, vy_closed, "open climbs harder from the same soft touch")
+	assert_lt(vy_open, _VY_HIGH, "even open can't full-roof this soft")
+
+
+func test_roofing_distance_gradient() -> void:
+	# The emergent per-curve minimum bar-height roofing distance: the softest
+	# pace whose arc still achieves the full HIGH vy is power = vy/sin(face),
+	# and its apex sits at (vy/tan(face))·(vy/g). Ballistics alone produces
+	# the doorstep/slot/high-slot gradient — no positional term anywhere
+	# (trajectory is a pure function of power + level + face).
+	var g: float = 9.8
+	var expected: Array[float] = []
+	for t: float in [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED]:
+		expected.append((_VY_HIGH / t) * (_VY_HIGH / g))
+	assert_almost_eq(expected[0], 2.21, 0.05, "open roofs from the doorstep")
+	assert_almost_eq(expected[1], 3.67, 0.05, "balanced roofs from the slot")
+	assert_almost_eq(expected[2], 5.20, 0.05, "closed needs the high slot")
+	# And verify the model agrees: at each curve's boundary pace the cap is
+	# exactly at the bind point — full vy achieved, no steeper.
+	for i: int in 3:
+		var t: float = [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED][i]
+		var boundary_power: float = _VY_HIGH / (t / sqrt(1.0 + t * t))
+		var y: float = ShotMechanics.loft_y(boundary_power, _VY_HIGH, t)
+		var vy: float = boundary_power * y / sqrt(1.0 + y * y)
+		assert_almost_eq(vy, _VY_HIGH, 0.01, "full vy exactly at the bind boundary")
