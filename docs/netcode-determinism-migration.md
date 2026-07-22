@@ -1,6 +1,11 @@
 # Netcode: deterministic puck — the shooter → Rocket-League family migration
 
-Status: **design / scoping.** This is the ceiling-raising path: it moves the puck
+Status: **migration COMPLETE.** The puck moved to the analytic deterministic sim
+across Phases 0–4 (built, shipped in every build, and playtest-validated at ~11 cm
+avg online agreement), and the last skater Jolt collision (`move_and_slide`) is
+removed — every A-list item below is done. What remains (dedicated servers, delta
+compression, anti-cheat) is out of scope for determinism and lives in the closing
+section. This was the ceiling-raising path: it moves the puck
 from the netcode family the game is in today (shooter-style *claim + server
 rewind*) into the family Rocket League is in (*deterministic predict + reconcile*).
 Everything else in `netcode-forward-prediction-plan.md` polishes within the current
@@ -175,8 +180,10 @@ Once the loose puck is a deterministic sim both sides run:
   puck 3× on rim-arounds where the analytic model can't. The board/rim feel matches and
   the rim bug is fixed. Full result in `netcode-phase0-shadow-puck-spec.md`. **Gravity/
   loft and the goalie remain untested — Phase 2 is the real risk.**
-- **Phases 1 + 2 — analytic loose-puck drive (host), BUILT (dev-gated), pending feel
-  validation.** Fused rather than shipped boards-first: an analytic-everywhere puck passes
+- **Phases 1 + 2 — analytic loose-puck drive (host). ✅ DONE.** (The dev gate described
+  below was removed in Phase 3, the Jolt puck retired in Phase 4, and feel validated
+  in Phase 3/4 — the "dev-gated" state here is the historical Phase-1/2 build step.)
+  Fused rather than shipped boards-first: an analytic-everywhere puck passes
   through any geometry not yet authored, so a boards-only "on" would break saves — there is
   no safe partial. The whole loose-puck driver is now analytic behind `BuildInfo.VERSION ==
   "dev"` + host (`Puck._drive_analytic`, wired at the PuckController seam): integration + ice
@@ -189,8 +196,9 @@ Once the loose puck is a deterministic sim both sides run:
   drive emits the feedback signals. All collision math is unit-tested; the Jolt seam + feel
   are the remaining validation, done in a local dev session (the shadow harness runs alongside
   for divergence numbers). Shipped/online builds keep the Jolt puck untouched.
-- **Phase 3 — client-side puck prediction + reconcile (the RL-family payoff). BUILT,
-  pending online feel validation.** The analytic drive is now the authority in EVERY
+- **Phase 3 — client-side puck prediction + reconcile (the RL-family payoff). ✅ DONE —
+  playtest-validated (~11 cm avg puck agreement, "felt really solid"; see Phase 4).**
+  The analytic drive is now the authority in EVERY
   build (the dev gate is gone; `PROTOCOL_VERSION` 36 refuses mixed lobbies), and every
   client runs the SAME sim forward from the newest authoritative snapshot to its
   estimate of host present (`PuckController._predict_loose`). The integration + goal-
