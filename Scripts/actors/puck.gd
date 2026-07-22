@@ -223,6 +223,15 @@ var _contact_latch_goalie: bool = false
 # post-game replay plays — the drive must not simulate the loose puck underneath,
 # so the drivers raise this for the playback's duration.
 var _replay_hold: bool = false
+# An external authority is actively positioning the puck THIS tick (the goalie
+# pinning it under a glove / smother — see GoalieController). Distinct from
+# pickup_locked: pickup_locked means "blades can't play it" and is true for every
+# dead-puck phase (goal celebration, period end, whistle), but during those
+# NOBODY owns the transform — the loose puck should keep coasting (bounce in the
+# net after a goal, slide after the buzzer), the charm the Jolt RigidBody gave for
+# free. Only motion_pinned (goalie pin) and _replay_hold freeze the drive; a mere
+# pickup_lock lets the puck integrate to a natural rest while staying unplayable.
+var motion_pinned: bool = false
 
 
 # Raised by the goal / post-game replay drivers for the playback's duration: the
@@ -636,13 +645,18 @@ func _drive_analytic(dt: float) -> void:
 		linear_velocity = Vector3.ZERO
 		_pending_reset_xz = Vector2.ZERO
 		return
-	# Dead / pinned puck (goalie cover or glove hold, whistle phases) and replay
-	# playback: the pinning authority (GoalieController, PhaseCoordinator, the
-	# replay driver) owns the position — the drive must not integrate gravity or
-	# collision against it. Without this gate the drive fought the glove pin
-	# every tick (re-detecting the held puck inside the glove box and re-firing
+	# Pinned puck (goalie cover / glove hold) and replay playback: the pinning
+	# authority (GoalieController re-pins the position every tick; the replay driver
+	# scrubs recorded frames) owns the transform — the drive must not integrate
+	# gravity or collision against it. Without this gate the drive fought the glove
+	# pin every tick (re-detecting the held puck inside the glove box and re-firing
 	# puck_touched_goalie at 120 Hz).
-	if pickup_locked or _replay_hold:
+	# NOTE: pickup_locked is deliberately NOT a freeze condition. A dead-puck phase
+	# (goal celebration, period end, whistle) locks pickup but has no transform
+	# owner, so the loose puck keeps coasting — friction, board caroms and net
+	# reflections still run, and it settles to a natural rest instead of stopping
+	# dead mid-flight. Blades/bots still see it as unplayable via pickup_locked.
+	if motion_pinned or _replay_hold:
 		_contact_latch_goalie = false
 		_contact_latch_post = false
 		_contact_latch_net = false
