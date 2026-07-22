@@ -538,8 +538,8 @@ func _physics_process(delta: float) -> void:
 
 
 # End-of-tick host capture + broadcast, invoked by PostPhysicsNetHook at
-# physics priority 2 — after SkaterController (−1), the bodies' move_and_slide
-# (0), and the puck's analytic step (+1) — so the ring slot holds this tick's
+# physics priority 2 — after SkaterController (−1), the bodies' integration +
+# analytic contact (0), and the puck's analytic step (+1) — so the ring slot holds this tick's
 # fully-integrated state, phase-coherent (position AND velocity post-move),
 # labeled with the wall time it was actually produced. The packet leaves one
 # tick earlier than the old start-of-next-tick capture, and the snapshot ack
@@ -2524,6 +2524,10 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# reaches into an autoload itself.
 	record.skater.is_host_machine = NetworkManager.is_host
 	record.skater.is_local_skater = record.is_local
+	# Analytic skater-vs-goalie body block (move_and_slide is gone) reads the same
+	# host-refreshed goalie pose cache the blade clamp uses. get_goalie_data returns
+	# empty until goalies exist (tutorial dummy / test), so the block no-ops there.
+	record.skater.set_goalie_data_provider(get_goalie_data)
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
 		local_ctrl.set_goal_context(
@@ -4907,18 +4911,38 @@ func get_goalie_data() -> Array[Dictionary]:
 
 # Rebuilds `_cached_goalie_data` from the live goalies array. Reuses each
 # Dictionary in place so the steady-state per-tick cost is three key
-# writes per goalie rather than a full Array+Dictionary allocation.
+# writes per goalie rather than a full Array+Dictionary allocation. The single-
+# net drill goalies (tutorial / penalty), kept out of the `goalies` array, are
+# appended when present so the analytic blade AND body clamps hold the skater
+# clear of them too — otherwise the move_and_slide removal would let a skater
+# walk through the drill goalie into the net.
 func _refresh_goalie_data_cache() -> void:
 	var n: int = goalies.size()
-	while _cached_goalie_data.size() < n:
+	var extra: int = 0
+	if _tutorial_goalie != null:
+		extra += 1
+	if _penalty_goalie != null:
+		extra += 1
+	var total: int = n + extra
+	while _cached_goalie_data.size() < total:
 		_cached_goalie_data.append({})
-	while _cached_goalie_data.size() > n:
+	while _cached_goalie_data.size() > total:
 		_cached_goalie_data.pop_back()
 	for i: int in range(n):
-		var entry: Dictionary = _cached_goalie_data[i]
-		entry["position"] = goalies[i].global_position
-		entry["rotation_y"] = goalies[i].get_goalie_rotation_y()
-		entry["is_butterfly"] = goalie_controllers[i].is_butterfly()
+		_write_goalie_data_entry(_cached_goalie_data[i], goalies[i], goalie_controllers[i])
+	var idx: int = n
+	if _tutorial_goalie != null:
+		_write_goalie_data_entry(_cached_goalie_data[idx], _tutorial_goalie, _tutorial_goalie_controller)
+		idx += 1
+	if _penalty_goalie != null:
+		_write_goalie_data_entry(_cached_goalie_data[idx], _penalty_goalie, _penalty_goalie_controller)
+		idx += 1
+
+
+func _write_goalie_data_entry(entry: Dictionary, g: Goalie, gc: GoalieController) -> void:
+	entry["position"] = g.global_position
+	entry["rotation_y"] = g.get_goalie_rotation_y()
+	entry["is_butterfly"] = gc.is_butterfly() if gc != null else false
 
 
 func get_slot_roster() -> Array[Dictionary]:

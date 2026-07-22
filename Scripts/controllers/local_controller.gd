@@ -472,11 +472,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 			divergence_upper_body, server_state.upper_body_rotation_y,
 			reconcile_upper_body_rotation_threshold):
 		return
-	# Suppress reconcile jitter while pressing against the boards. Wall contact
-	# causes move_and_slide vs. server-physics noise that repeatedly sets small
-	# visual_offsets which compound into visible oscillation.
+	# Suppress reconcile jitter while pressing against a boundary. Analytic
+	# containment (boards / net / goalie) vs. server-physics noise repeatedly sets
+	# small visual_offsets that compound into visible oscillation. is_touching_boundary
+	# is the analytic stand-in for the old move_and_slide is_on_wall() flag — it's
+	# raised by the clamps whenever they repositioned the body last tick.
 	# Errors above 5 cm are real desync and still fire through.
-	if skater.is_on_wall() and skater.global_position.distance_to(server_state.position) < 0.05:
+	if skater.is_touching_boundary() and skater.global_position.distance_to(server_state.position) < 0.05:
 		return
 	# Attribute which channel tripped the snap (diagnostic): at rest the position
 	# and velocity channels are ~zero, so a non-zero "rot" count isolates
@@ -615,6 +617,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# in lockstep with the live tick so a net brush can't compound into a reconcile
 		# loop.
 		skater.clamp_body_to_net()
+		# And the goalie footprint — the live tick blocks the skater out of the goalie
+		# analytically now (move_and_slide is gone), so the replay must too or a goalie
+		# brush compounds into a reconcile loop.
+		skater.clamp_body_to_goalies()
 		# Re-record this input's prediction from the corrected trajectory. The
 		# stale pre-correction snapshots were made on the trajectory the replay
 		# just abandoned, so without this every subsequent advanced ack in the
