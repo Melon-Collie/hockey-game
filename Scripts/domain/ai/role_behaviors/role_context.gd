@@ -79,6 +79,9 @@ var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # time_to_arrive's cross-momentum shed cost, so a high-Acceleration build prices a
 # redirect (killing sideways momentum to reach a carry candidate) faster than a low one.
 var self_max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+# This bot's lateral-grip multiplier (AISkaterCaps.lateral_grip) — its own
+# ETA reads shed cross-momentum at the real perpendicular authority.
+var self_lateral_grip: float = 1.0
 # Also the upper clamp on this bot's distance-adaptive pass launch speed.
 # This bot's own aim-execution spread (radians, worst-case): the per-release
 # sampled aim error over the blade aim arm. The shot-aim model reserves this

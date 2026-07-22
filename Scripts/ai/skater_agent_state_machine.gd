@@ -994,6 +994,7 @@ var _self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 var _self_sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 var _self_loft_tan: float = 1.0
+var _self_lateral_grip: float = 1.0
 # Body-check delivery (Size + Physical), so a defensive role can predict THIS
 # bot's hit strength before committing to a check. League baselines until
 # apply_capabilities runs.
@@ -1402,6 +1403,7 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	_poke_jab_reach = caps.blade_span + GameRules.POKE_RADIUS_M
 	_self_wrister_shot_speed = caps.wrister_shot_speed
 	_self_loft_tan = caps.loft_tan_max
+	_self_lateral_grip = caps.lateral_grip
 	_self_weight = caps.weight
 	_self_body_check_transfer = caps.body_check_transfer
 	_self_handle_reach = caps.handle_reach
@@ -2123,6 +2125,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_max_accel = _chase_max_accel
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
 	ctx.self_loft_tan = _self_loft_tan
+	ctx.self_lateral_grip = _self_lateral_grip
 	# The scoring/aim spread budgets the SHOT error — that's the budget the
 	# release that matters (a scored shot) is actually sampled on.
 	ctx.self_aim_spread_rad = _shot_aim_error_rad
