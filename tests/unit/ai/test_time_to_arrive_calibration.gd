@@ -231,3 +231,34 @@ func test_retrieval_race_read_is_now_net_honest() -> void:
 			states, [2], puck, Vector3.ZERO)
 	assert_gt(t_defender, t_attacker,
 			"the cage-rounding defender honestly loses this race")
+
+
+# ── Lateral grip: planning matches the gripped body ──────────────────────────
+# Attributes v4 gave the movement core a perpendicular-thrust authority
+# (MovementConfig.lateral_grip) and the ETA's cross-momentum shed reads the
+# same quantity (accel × grip). This pins the match: for a hard 90° redirect
+# at speed, the LOW-grip body genuinely arrives later in the real sim, and
+# the grip-aware model tracks the gripped sim within the suite's band.
+
+func test_low_grip_redirect_model_tracks_gripped_sim() -> void:
+	var v0 := Vector3(8.0, 0.0, 0.0)          # flying +X
+	var target := Vector3(0.0, 0.0, 14.0)     # hard 90° redirect
+	_cfg.lateral_grip = 0.85
+	var sim_gripped: float = _sim_arrival_s(v0, target)
+	_cfg.lateral_grip = 1.0
+	var sim_neutral: float = _sim_arrival_s(v0, target)
+	assert_gt(sim_gripped, sim_neutral,
+			"the low-grip body really does arrive later on a redirect")
+	var model_gripped: float = AIActionScoring.time_to_arrive(
+			Vector3.ZERO, target, v0,
+			GameRules.DEFAULT_SKATER_MAX_SPEED_M_S,
+			GameRules.DEFAULT_SKATER_THRUST_M_S2, 0.85)
+	var model_neutral: float = AIActionScoring.time_to_arrive(
+			Vector3.ZERO, target, v0,
+			GameRules.DEFAULT_SKATER_MAX_SPEED_M_S,
+			GameRules.DEFAULT_SKATER_THRUST_M_S2, 1.0)
+	assert_gt(model_gripped, model_neutral,
+			"the model prices the same redirect penalty")
+	var tol: float = maxf(sim_gripped * TOL_FRAC, TOL_FLOOR_S)
+	assert_almost_eq(model_gripped, sim_gripped, tol,
+			"grip-aware model tracks the gripped sim within the band")

@@ -75,8 +75,23 @@ var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # override. Default mirrors the controller's 10.0.
 var blade_speed: float = 10.0
 
-# Backhand power coefficient (Hands, = SkaterController.backhand_power_coefficient
-# — hands_backhand_mult un-penalizes it toward 1.0). The release-offset sampler
+# Blade face-angle cap as tan(angle) (= SkaterController.loft_tan_max, from
+# the curve gear). Caps how steep this build's shots can launch — the HIGH
+# hole solver reads it so a closed-blade bot prices its real minimum roofing
+# distance instead of the open blade's. Default = the universal 45° cap.
+var loft_tan_max: float = 1.0
+
+# Lateral grip multiplier (= SkaterController.lateral_grip — agility × the
+# skate-profile lean). Scales the PERPENDICULAR thrust authority in the real
+# movement core, so planning reads it wherever it models a direction change:
+# the cross-momentum shed in time_to_arrive / reach_clearance, and the deke's
+# bite/unwind budgets. Straight-line phases (ramp, race-home) stay pure accel
+# — grip never limits parallel drive, in planning or in physics.
+var lateral_grip: float = 1.0
+
+# Backhand power coefficient (= SkaterController.backhand_power_coefficient,
+# a flat mechanic under attributes v4 — backhand technique is the human,
+# leaned only by the blade-curve gear). The release-offset sampler
 # prices a backhand-side release at this fraction of the wrister pace, so the
 # in-tight backhand finish is exactly as attractive as this build's hands make
 # it. Default mirrors the controller's 0.75.

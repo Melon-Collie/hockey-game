@@ -2,21 +2,22 @@ class_name AttributeHexGraph
 extends Control
 
 # Six-axis radar ("hex graph") of a player's RESOLVED capabilities — Speed,
-# Acceleration, Agility, Hands, Shot, Checking, clockwise from the top vertex.
-# Under the height-routed model a build is a height dial plus three tiers, so the
-# radar plots the net gameplay multipliers those produce (a tall enforcer reads
-# high SHT/CHK + low AGI/HND; a small dangler the mirror) rather than raw axis
-# picks — the silhouette IS the archetype. A pure _draw() Control: the grid is
-# an outer ceiling hexagon and the all-average (1.0-multiplier) ring, so a spike
-# or dump reads against the baseline, plus spokes, with the build as a filled
-# accent polygon.
+# Acceleration, Agility, Shot, Hit (mass), Stamina (regen), clockwise from the
+# top vertex. Under the v4 body+gear model a build is two body dials, so the
+# radar plots the net gameplay multipliers those produce (a heavy tower reads
+# high SHT/HIT + low AGI/STA; a lean waterbug the mirror) rather than raw axis
+# picks — the silhouette IS the archetype. Hands has no axis by constitution
+# (no build scales it), and checking IS the mass axis (delivery/brace are
+# mass-emergent). A pure _draw() Control: the grid is an outer ceiling hexagon
+# and the neutral (1.0-multiplier) ring, so a spike or dump reads against the
+# baseline, plus spokes, with the build as a filled accent polygon.
 #
 # Used on the pre-game matchup screen: one small unlabeled hex per roster row
 # (accent = team color) and one larger `show_labels` legend hex under the VS
 # that names the axes once for all of them. Redraws only on set_build / resize.
 
 const _AXES: int = 6
-const _AXIS_LABELS: Array[String] = ["SPD", "ACC", "AGI", "HND", "SHT", "CHK"]
+const _AXIS_LABELS: Array[String] = ["SPD", "ACC", "AGI", "SHT", "HIT", "STA"]
 const _LABEL_FONT_SIZE: int = 11
 const _LABEL_PAD: float = 16.0
 
@@ -45,9 +46,9 @@ func set_build(attrs: PlayerAttributes, p_accent: Color) -> void:
 		_norm(attrs.speed_mult()),
 		_norm(attrs.accel_mult()),
 		_norm(attrs.agility_mult()),
-		_norm(attrs.hands_blade_mult()),
 		_norm(attrs.shot_power_mult()),
-		_norm(attrs.check_delivery_mult()),
+		_norm(attrs.mass_mult()),
+		_norm(attrs.stamina_regen_mult()),
 	]
 	accent = p_accent
 	queue_redraw()

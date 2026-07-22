@@ -202,7 +202,8 @@ const GRAVITY_M_S2: float = 9.8   # engine default the airborne puck falls under
 # Returns 0.0 when no legal wrister power puts the arrival in the band:
 #   · in tight, even the min-power arc hasn't risen to the floor yet;
 #   · at long range, every legal arc has fallen back below it.
-static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float) -> float:
+static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float,
+		loft_tan: float = 1.0) -> float:
 	var vy: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
 	var disc: float = vy * vy - 2.0 * GRAVITY_M_S2 * GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M
 	if disc <= 0.0:
@@ -219,8 +220,14 @@ static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float) -> f
 			GameRules.DEFAULT_WRISTER_POWER_MIN_M_S * GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 					- vy * vy,
 			0.0))
+	# The blade FACE floor (curve gear): below vy/tan(face) the full level-vy
+	# is unachievable — the launch pins at the face angle and the arc is
+	# strictly lower (ShotMechanics.loft_y). A closed blade therefore can't
+	# take the slow steep arc that roofs in tight, which is exactly the
+	# human's minimum roofing distance — the bot prices the same gradient.
+	var v_h_face: float = vy / maxf(loft_tan, 0.001)
 	var v_h: float = minf(v_h_full, v_h_ceiling)
-	if v_h < maxf(v_h_floor_geom, v_h_min_power):
+	if v_h < maxf(maxf(v_h_floor_geom, v_h_min_power), v_h_face):
 		return 0.0
 	return v_h
 
@@ -229,9 +236,10 @@ static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float) -> f
 # HIGH holes fly at the arrival-honest solved pace (or 0.0 when the band is
 # unreachable), FLAT bands at the committed full pace. The five-hole rides the
 # LOW band. Divides the shooter→goalie gap for the reach budget (t_reach).
-static func _band_pace(band: int, dist: float, shot_speed_m_s: float) -> float:
+static func _band_pace(band: int, dist: float, shot_speed_m_s: float,
+		loft_tan: float = 1.0) -> float:
 	if band == HOLE_BAND_HIGH:
-		return _high_band_horizontal_speed(dist, shot_speed_m_s)
+		return _high_band_horizontal_speed(dist, shot_speed_m_s, loft_tan)
 	return maxf(shot_speed_m_s, 1.0)
 
 
@@ -874,7 +882,8 @@ static func open_net_danger(
 		aim_spread_rad: float = 0.0,
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> float:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
 	# Best of the holes. Pure value-type math, no allocation — safe to run
 	# per carry candidate at tick rate (see _hole_open_angle). Pace is per-band
 	# inside _hole_open_angle: HIGH holes fly at the arrival-honest solved pace,
@@ -886,7 +895,7 @@ static func open_net_danger(
 				net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 				goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m, goalie_hands, goalie_pads)
+				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 		if a > best_angle:
 			best_angle = a
 	return clampf(
@@ -909,12 +918,13 @@ static func best_shot_loft(
 		aim_spread_rad: float = 0.0,
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> int:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> int:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m, goalie_hands, goalie_pads)
+			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 	if hole < 0:
 		return ShotMechanics.ELEVATION_FLAT
 	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
@@ -937,16 +947,17 @@ static func best_shot_power_t(
 		aim_spread_rad: float = 0.0,
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> float:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m, goalie_hands, goalie_pads)
+			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 	if hole < 0 or HOLE_BAND[hole] != HOLE_BAND_HIGH:
 		return 1.0
 	var v_h: float = _high_band_horizontal_speed(
-			shooter.distance_to(attacking_goal), shot_speed_m_s)
+			shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan)
 	if v_h <= 0.0:
 		return 1.0  # unreachable band can't be the chosen hole; defensive only
 	var vy: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
@@ -971,17 +982,18 @@ static func best_shot_aim(
 		goalie_post_seal_tall: bool = false,
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> Vector3:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> Vector3:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m, goalie_hands, goalie_pads)
+			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor, aim_spread_rad,
-			goalie_down, screen_dist_m, goalie_hands, goalie_pads)
+			goalie_down, screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 	return Vector3(aim_x, 0.0, attacking_goal.z)
 
 
@@ -999,13 +1011,14 @@ static func _choose_shot_hole(
 		aim_spread_rad: float = 0.0,
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> int:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> int:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m, goalie_hands, goalie_pads)
+				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 		if a > best_angle:
 			best_angle = a
 	if best_angle <= 0.0:
@@ -1018,7 +1031,7 @@ static func _choose_shot_hole(
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m, goalie_hands, goalie_pads)
+				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 		if a < threshold:
 			continue
 		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
@@ -1040,7 +1053,8 @@ static func _hole_aim_x(
 		aim_spread_rad: float = 0.0, goalie_down: bool = false,
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> float:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
@@ -1048,7 +1062,7 @@ static func _hole_aim_x(
 	# aim and score read the same reaction-gated cover. A chosen hole is never
 	# band-unreachable (its opening would have scored 0), so the fallback to
 	# full pace is belt-and-braces.
-	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s)
+	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan)
 	if pace <= 0.0:
 		pace = maxf(shot_speed_m_s, 1.0)
 	var net_z: float = attacking_goal.z
@@ -1139,7 +1153,8 @@ static func _hole_open_angle(
 		_aim_spread_rad: float = 0.0,
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> float:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
@@ -1150,7 +1165,7 @@ static func _hole_open_angle(
 	# Per-band pace: HIGH holes fly at the arrival-honest solved pace (the arc
 	# must physically reach the top band — see _band_pace); 0 = no legal
 	# power gets there, so the hole isn't a target at all.
-	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s)
+	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan)
 	if pace <= 0.0:
 		return 0.0
 	# Reach budget: the puck crosses the goalie's reach envelope at HIS body —
@@ -1583,7 +1598,8 @@ static func score_shoot(
 		aim_spread_rad: float = 0.0,
 		screeners: Array[Vector3] = [],
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> float:
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
 	# No shot from on/behind the goal line: the mouth faces the other way, so there
 	# is no straight line from a back-there release into the net. Checked BEFORE
 	# the release clamp below — clamping a behind-the-net release used to teleport
@@ -1608,7 +1624,7 @@ static func score_shoot(
 			shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist, goalie_hands, goalie_pads)
+			screen_dist, goalie_hands, goalie_pads, loft_tan)
 	if shot_quality <= 0.0:
 		return 0.0
 	# Lane clear vs the aim point ShotAim picks (past the goalie's shadow) —
@@ -3126,6 +3142,7 @@ static func reach_clearance(
 		var accel: float = MANEUVER_ACCEL_M_S2
 		var stick: float = EVADE_STICK_REACH_M
 		var vmax: float = SKATER_REF_SPEED_M_S
+		var grip: float = 1.0
 		if has_caps:
 			# Per-opponent build — Acceleration (max_accel) sets the ramp, reach
 			# (blade_span) the stick, Speed (max_speed) the cap. Empty caps →
@@ -3135,6 +3152,7 @@ static func reach_clearance(
 				accel = caps.max_accel
 				stick = caps.blade_span
 				vmax = caps.max_speed
+				grip = caps.lateral_grip
 		# PRESCREEN (exact): the phase model's total ground toward the point is
 		# bounded by the whole window at the better of current pace or cap
 		# (coast ≤ |v|·coast, capped pursuit ≤ vmax·τ; shed/brake only lose
@@ -3164,7 +3182,7 @@ static func reach_clearance(
 		var clear: float = _reach_clearance_one(
 				puck_point.x, puck_point.z, time, w,
 				opponents[i].x, opponents[i].z,
-				opponent_vels[i].x, opponent_vels[i].z, accel, stick, vmax)
+				opponent_vels[i].x, opponent_vels[i].z, accel, stick, vmax, grip)
 		if clear < worst:
 			worst = clear
 			if worst < abort_below:
@@ -3179,7 +3197,8 @@ static func reach_clearance(
 # moment on the path.
 static func _reach_clearance_one(point_x: float, point_z: float, time: float,
 		w: float, ox: float, oz: float, vx: float, vz: float,
-		accel: float, stick: float, vmax: float) -> float:
+		accel: float, stick: float, vmax: float,
+		lateral_grip: float = 1.0) -> float:
 	var tau: float = maxf(0.0, minf(time, w) - EVADE_REACTION_S)
 	var coast: float = time - tau
 	var px: float = ox + vx * coast
@@ -3192,9 +3211,11 @@ static func _reach_clearance_one(point_x: float, point_z: float, time: float,
 		var inv: float = 1.0 / dist
 		var v_along: float = (vx * dx + vz * dz) * inv
 		var v_perp: float = absf((vx * dz - vz * dx) * inv)
-		# Shed excess cross-speed (a pure delay, as calibrated), then brake
-		# out any retreat (losing ground), then the capped pursuit ramp.
-		var agility: float = maxf(accel, 0.001) / SHED_ACCEL_DEFAULT_M_S2
+		# Shed excess cross-speed (a pure delay, as calibrated — perpendicular
+		# authority = thrust × lateral_grip, the same quantity the movement
+		# core scales), then brake out any retreat (losing ground), then the
+		# capped pursuit ramp (pure accel — grip never limits parallel drive).
+		var agility: float = maxf(accel * lateral_grip, 0.001) / SHED_ACCEL_DEFAULT_M_S2
 		var tau_p: float = tau - maxf(0.0, v_perp - VM_FREE_SHED_M_S * agility) \
 				/ (VM_SHED_DECEL_M_S2 * agility)
 		if tau_p > 0.0:
@@ -3822,11 +3843,19 @@ static func deke_cut_side(
 	var d_vel: Vector3 = opponent_vels[deked_idx]
 	var d_accel: float = MANEUVER_ACCEL_M_S2
 	var d_span: float = EVADE_STICK_REACH_M
+	var d_grip: float = 1.0
 	if opponent_caps.size() == opponents.size():
 		var caps: AISkaterCaps = opponent_caps[deked_idx]
 		if caps != null:
 			d_accel = caps.max_accel
 			d_span = caps.blade_span
+			d_grip = caps.lateral_grip
+	# The fake/cut exchange is fought entirely in the defender's LATERAL
+	# authority (the bite displaces him perpendicular to his line, the unwind
+	# fights that momentum back) — thrust × grip, like the movement core. A
+	# power-profile defender bites less but also unwinds less; the rockered
+	# one bites hard and recovers hard. Self-calibrating either way.
+	var d_accel_lat: float = d_accel * d_grip
 	# Where the cut can put the puck: the ballistic ride plus the CUT phase's
 	# own handling envelope (the fake spends the earlier effort selling the
 	# other way, so only the cut leg's maneuver counts — conservative).
@@ -3834,11 +3863,11 @@ static func deke_cut_side(
 	var ride: Vector3 = carrier_vel * t_total
 	# Post-fake bite: he reads for EVADE_REACTION_S, then matches the fake.
 	var t_bite: float = maxf(0.0, DEKE_FAKE_S - EVADE_REACTION_S)
-	var bite_v: float = d_accel * t_bite
-	var bite_disp: float = 0.5 * d_accel * t_bite * t_bite
+	var bite_v: float = d_accel_lat * t_bite
+	var bite_disp: float = 0.5 * d_accel_lat * t_bite * t_bite
 	# His redirect budget during the cut, reaction-gated afresh (he must read
 	# the cut before unwinding the bite).
-	var cut_maneuver: float = 0.5 * d_accel \
+	var cut_maneuver: float = 0.5 * d_accel_lat \
 			* pow(maxf(0.0, DEKE_CUT_S - EVADE_REACTION_S), 2.0)
 	var best_side: int = 0
 	var best_post: float = -INF
@@ -4089,7 +4118,8 @@ static func pursuit_ramp_distance(tau: float,
 # |z| ≥ the goal line; a segment that never reaches it cannot cross one).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
-		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
+		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2,
+		lateral_grip: float = 1.0) -> float:
 	# Route only when the segment passes THROUGH a cage — an endpoint inside
 	# the inflated frame box is a conceptual "at the net" destination (race-
 	# home reads target the net center as their home proxy; a pinned body
@@ -4100,9 +4130,11 @@ static func time_to_arrive(from_pos: Vector3, dest: Vector3,
 			and not _point_in_cage_box(from_pos) \
 			and not _point_in_cage_box(dest):
 		return _time_to_arrive_routed(
-				from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2)
+				from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2,
+				lateral_grip)
 	return _time_to_arrive_direct(
-			from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2)
+			from_pos, dest, from_velocity, ref_speed_m_s, accel_m_s2,
+			lateral_grip)
 
 
 # True when `p` sits inside either inflated cage frame box (the same
@@ -4128,7 +4160,7 @@ static func _point_in_cage_box(p: Vector3) -> bool:
 # them in every practical geometry.
 static func _time_to_arrive_routed(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float,
-		accel_m_s2: float) -> float:
+		accel_m_s2: float, lateral_grip: float = 1.0) -> float:
 	# The cage being crossed is on the side the route actually reaches.
 	var s: float = signf(from_pos.z) \
 			if absf(from_pos.z) >= absf(dest.z) else signf(dest.z)
@@ -4145,7 +4177,8 @@ static func _time_to_arrive_routed(from_pos: Vector3, dest: Vector3,
 			Vector3(-side_x, 0.0, mid_z), Vector3(side_x, 0.0, mid_z),
 			Vector3(0.0, 0.0, back_z), Vector3(0.0, 0.0, front_z)]:
 		var t1: float = _time_to_arrive_direct(
-				from_pos, wp, from_velocity, ref_speed_m_s, accel_m_s2)
+				from_pos, wp, from_velocity, ref_speed_m_s, accel_m_s2,
+				lateral_grip)
 		var to_dest: Vector3 = dest - wp
 		to_dest.y = 0.0
 		var v_wp := Vector3.ZERO
@@ -4153,7 +4186,7 @@ static func _time_to_arrive_routed(from_pos: Vector3, dest: Vector3,
 			v_wp = to_dest.normalized() * minf(
 					from_pos.distance_to(wp) / maxf(t1, 0.001), vmax)
 		var t: float = t1 + _time_to_arrive_direct(
-				wp, dest, v_wp, ref_speed_m_s, accel_m_s2)
+				wp, dest, v_wp, ref_speed_m_s, accel_m_s2, lateral_grip)
 		if t < best:
 			best = t
 	return best
@@ -4163,7 +4196,8 @@ static func _time_to_arrive_routed(from_pos: Vector3, dest: Vector3,
 # time_to_arrive gates and routes; the routed legs call this).
 static func _time_to_arrive_direct(from_pos: Vector3, dest: Vector3,
 		from_velocity: Vector3, ref_speed_m_s: float = SKATER_REF_SPEED_M_S,
-		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
+		accel_m_s2: float = SHED_ACCEL_DEFAULT_M_S2,
+		lateral_grip: float = 1.0) -> float:
 	var dx: float = dest.x - from_pos.x
 	var dz: float = dest.z - from_pos.z
 	var dist: float = sqrt(dx * dx + dz * dz)
@@ -4176,9 +4210,12 @@ static func _time_to_arrive_direct(from_pos: Vector3, dest: Vector3,
 			+ from_velocity.z * from_velocity.z
 	var v_perp: float = sqrt(maxf(0.0, v_len_sq - v_along * v_along))
 	# REDIRECT: only the cross momentum the seek can't shed for free pays,
-	# scaled by this build's thrust relative to league (a higher-Acceleration
-	# build has more headroom).
-	var accel_ratio: float = maxf(accel_m_s2, 0.001) / SHED_ACCEL_DEFAULT_M_S2
+	# scaled by this build's PERPENDICULAR authority relative to league —
+	# thrust × lateral_grip, exactly the quantity SkaterMovementRules scales
+	# in the real body (a power-profile/heavy build sheds sideways momentum
+	# slower; the ramp below stays pure accel — grip never limits parallel
+	# drive, in planning or in physics).
+	var accel_ratio: float = maxf(accel_m_s2 * lateral_grip, 0.001) / SHED_ACCEL_DEFAULT_M_S2
 	var t: float = maxf(0.0, v_perp - VM_FREE_SHED_M_S * accel_ratio) \
 			/ (VM_SHED_DECEL_M_S2 * accel_ratio)
 	var r: float = dist

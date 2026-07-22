@@ -601,3 +601,69 @@ func test_follow_through_aim_ignores_degenerate_cursor() -> void:
 	var shot_dir := Vector3(0, 0, -1)
 	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, Vector3.ZERO, 1.0, 0.4)
 	assert_almost_eq(aim.z, -1.0, 0.0001, "degenerate cursor holds shot line")
+
+
+# ── Blade face angle (curve gear): the launch-angle cap ──────────────────────
+# The loft_y ratio IS tan(launch angle); the curve's face angle caps it.
+# Face tans (from PlayerAttributes._CURVE_FACE_ANGLE_DEG): closed 23°,
+# balanced 31°, open 45° (= MAX_LOFT_RATIO, the pre-curve universal cap).
+
+const _TAN_CLOSED: float = 0.42447  # tan 23°
+const _TAN_BALANCED: float = 0.60086  # tan 31°
+const _TAN_OPEN: float = 1.0        # tan 45°
+const _VY_HIGH: float = 4.65        # GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+
+
+func test_face_angle_never_binds_at_pace() -> void:
+	# A full-power HIGH shot launches well under every face angle, so all
+	# three curves produce the IDENTICAL arc — the crossbar apex ceiling is
+	# reached by every blade at pace.
+	var open_y: float = ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_OPEN)
+	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_CLOSED), open_y, 0.0001,
+			"closed matches open at pace")
+	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_BALANCED), open_y, 0.0001,
+			"balanced matches open at pace")
+	# And the achieved vy is the full level speed.
+	var vy: float = 30.0 * open_y / sqrt(1.0 + open_y * open_y)
+	assert_almost_eq(vy, _VY_HIGH, 0.001, "full apex at pace")
+
+
+func test_face_angle_flattens_the_soft_roof() -> void:
+	# The in-tight roof is a SOFT steep shot — exactly where the face gates.
+	# At 6 m/s the uncapped ratio wants ~51°; each face clamps to its own
+	# angle, so the achieved vertical speed (and thus the apex) ranks
+	# open > balanced > closed, and none reaches the full HIGH apex.
+	var soft: float = 6.0
+	var y_open: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_OPEN)
+	var y_bal: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_BALANCED)
+	var y_closed: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_CLOSED)
+	assert_almost_eq(y_open, _TAN_OPEN, 0.0001, "open pins at its face")
+	assert_almost_eq(y_bal, _TAN_BALANCED, 0.0001, "balanced pins at its face")
+	assert_almost_eq(y_closed, _TAN_CLOSED, 0.0001, "closed pins at its face")
+	var vy_open: float = soft * y_open / sqrt(1.0 + y_open * y_open)
+	var vy_closed: float = soft * y_closed / sqrt(1.0 + y_closed * y_closed)
+	assert_gt(vy_open, vy_closed, "open climbs harder from the same soft touch")
+	assert_lt(vy_open, _VY_HIGH, "even open can't full-roof this soft")
+
+
+func test_roofing_distance_gradient() -> void:
+	# The emergent per-curve minimum bar-height roofing distance: the softest
+	# pace whose arc still achieves the full HIGH vy is power = vy/sin(face),
+	# and its apex sits at (vy/tan(face))·(vy/g). Ballistics alone produces
+	# the doorstep/slot/high-slot gradient — no positional term anywhere
+	# (trajectory is a pure function of power + level + face).
+	var g: float = 9.8
+	var expected: Array[float] = []
+	for t: float in [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED]:
+		expected.append((_VY_HIGH / t) * (_VY_HIGH / g))
+	assert_almost_eq(expected[0], 2.21, 0.05, "open roofs from the doorstep")
+	assert_almost_eq(expected[1], 3.67, 0.05, "balanced roofs from the slot")
+	assert_almost_eq(expected[2], 5.20, 0.05, "closed needs the high slot")
+	# And verify the model agrees: at each curve's boundary pace the cap is
+	# exactly at the bind point — full vy achieved, no steeper.
+	for i: int in 3:
+		var t: float = [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED][i]
+		var boundary_power: float = _VY_HIGH / (t / sqrt(1.0 + t * t))
+		var y: float = ShotMechanics.loft_y(boundary_power, _VY_HIGH, t)
+		var vy: float = boundary_power * y / sqrt(1.0 + y * y)
+		assert_almost_eq(vy, _VY_HIGH, 0.01, "full vy exactly at the bind boundary")

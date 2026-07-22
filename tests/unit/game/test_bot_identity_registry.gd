@@ -2,11 +2,12 @@ extends GutTest
 
 # BotIdentityRegistry — the curated AI roster loaded from
 # res://data/bot_identities.json (with an optional editable user:// override).
-# Bots spawn from these picks, so a malformed or illegal entry would either
-# crash spawning or hand a bot a build a human player could never make. Bots are
-# host-authoritative online, so the host's roster is exactly what every machine
-# plays against — which is why the loader enforces the legal-shape rule
-# (normalize_entry → is_legal_build) even on a hand-edited custom file.
+# Bots spawn from these picks, so a malformed entry would either crash spawning
+# or field an impossible body. Bots are host-authoritative online, so the
+# host's roster is exactly what every machine plays against — which is why the
+# loader COERCES every entry (normalize_entry → the PlayerAttributes
+# constructor): under attributes v4 all axes are lateral, so validation is a
+# clamp into the body bands rather than a legal-shape rejection.
 
 const _RES_JSON_PATH: String = "res://data/bot_identities.json"
 
@@ -34,21 +35,17 @@ func test_bundled_file_has_a_full_roster() -> void:
 			"expected a sizeable curated bot pool")
 
 
-func _entry_levels(entry: Dictionary) -> Array:
-	return [
-		int(entry.get("height",   PlayerAttributes.HEIGHT_MEDIUM)),
-		int(entry.get("skating",  PlayerAttributes.TIER_AVERAGE)),
-		int(entry.get("skill",    PlayerAttributes.TIER_AVERAGE)),
-		int(entry.get("checking", PlayerAttributes.TIER_AVERAGE)),
-	]
-
-
-func test_every_bundled_build_is_legal() -> void:
-	# Bots must obey the same legal-shape rule as human players — no freebies.
+func test_every_bundled_body_is_inside_its_band() -> void:
+	# The curated roster should be authored exactly, not silently coerced: every
+	# height is a real inches value and every weight sits inside that height's
+	# BMI band.
 	for entry: Dictionary in _bundled_entries():
-		var lv: Array = _entry_levels(entry)
-		assert_true(PlayerAttributes.is_legal_build(lv[0], lv[1], lv[2], lv[3]),
-				"bot '%s' has an illegal or out-of-range build" % entry.get("name", "?"))
+		var h: int = int(entry.get("height", PlayerAttributes.HEIGHT_MEDIUM))
+		assert_between(h, PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MAX,
+				"bot '%s' height out of range" % entry.get("name", "?"))
+		var w: int = int(entry.get("weight", 0))
+		assert_between(w, PlayerAttributes.weight_min(h), PlayerAttributes.weight_max(h),
+				"bot '%s' weight %d outside the %d\" band" % [entry.get("name", "?"), w, h])
 
 
 func test_names_and_numbers_are_unique() -> void:
@@ -67,70 +64,76 @@ func test_names_and_numbers_are_unique() -> void:
 		seen_numbers[number] = true
 
 
-func test_stat_lines_are_distinct() -> void:
-	# Identical builds make bots feel samey on the ice. Under the height + tier
-	# model the space is smaller (5 heights × 7 shapes = 35), but the curated
-	# roster should still give each bot its own (height, shape).
+func test_bodies_are_distinct() -> void:
+	# Identical builds make bots feel samey on the ice. The continuous body
+	# plane gives the roster plenty of room for every bot to own its
+	# (height, weight, gear) card.
 	var seen: Dictionary = {}
 	for entry: Dictionary in _bundled_entries():
-		var lv: Array = _entry_levels(entry)
-		var key: String = "%d/%d/%d/%d" % [lv[0], lv[1], lv[2], lv[3]]
+		var attrs := PlayerAttributes.from_dict(entry)
+		var key: String = "%d/%d/%d%d%d%d" % [attrs.height, attrs.weight,
+				attrs.profile, attrs.curve, attrs.flex, attrs.length]
 		assert_false(seen.has(key),
 				"bot '%s' duplicates the build %s" % [entry.get("name", "?"), key])
 		seen[key] = true
 
 
-# ── normalize_entry: the budget-enforcement seam for editable rosters ─────────
+# ── normalize_entry: the coercion seam for editable rosters ──────────────────
 
-func test_normalize_keeps_a_legal_build_intact() -> void:
-	# A legal (one-strong-one-weak) custom bot passes through untouched.
+func test_normalize_keeps_an_in_band_build_intact() -> void:
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
 			"name": "Sniper", "number": 9, "is_left_handed": true,
-			"height": 2, "skating": 2, "skill": 3, "checking": 1})
+			"height": 70, "weight": 172, "curve": 2})
 	assert_eq(norm.name, "Sniper")
 	assert_eq(norm.number, 9)
 	assert_true(norm.is_left_handed)
-	assert_eq(norm.height, 2, "legal build must not be altered")
-	assert_eq(norm.skill, PlayerAttributes.TIER_STRONG)
-	assert_eq(norm.checking, PlayerAttributes.TIER_WEAK)
+	assert_eq(int(norm.height), 70, "in-range height must not be altered")
+	assert_eq(int(norm.weight), 172, "in-band weight must not be altered")
+	assert_eq(int(norm.curve), PlayerAttributes.CURVE_OPEN)
 
 
-func test_normalize_resets_illegal_build_to_all_average() -> void:
-	# The cheat vector: a hand-edited file giving a bot two strengths and no
-	# weakness. The loader resets the tiers to all-average but keeps the identity.
+func test_normalize_coerces_out_of_band_body() -> void:
+	# The old cheat vector was an illegal tier shape; the v4 equivalent is an
+	# impossible body — it clamps to the nearest legal one, keeping the identity.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Cheater", "number": 1,
-			"height": 5, "skating": 3, "skill": 3, "checking": 3})
-	assert_eq(norm.name, "Cheater", "identity is preserved")
-	assert_eq(norm.number, 1)
-	assert_eq(int(norm.skating), PlayerAttributes.TIER_AVERAGE)
-	assert_eq(int(norm.skill), PlayerAttributes.TIER_AVERAGE)
-	assert_eq(int(norm.checking), PlayerAttributes.TIER_AVERAGE)
+			"name": "Tank", "number": 1, "height": 99, "weight": 500})
+	assert_eq(norm.name, "Tank", "identity is preserved")
+	assert_eq(int(norm.height), PlayerAttributes.HEIGHT_MAX)
+	assert_eq(int(norm.weight), PlayerAttributes.weight_max(PlayerAttributes.HEIGHT_MAX))
+	var stringbean: Dictionary = BotIdentityRegistry.normalize_entry({
+			"name": "Bean", "height": 79, "weight": 150})
+	assert_eq(int(stringbean.weight), PlayerAttributes.weight_min(79),
+			"underweight clamps to the band floor")
 
 
-func test_normalize_resets_out_of_range_tier() -> void:
-	# An out-of-range tier (a typo like skating 9) fails is_legal_build and resets.
-	# (Height is never a rejection axis — it coerces into range at construction.)
+func test_normalize_migrates_tier_era_entry() -> void:
+	# A tier-era roster (height step + skating/skill/checking) migrates through
+	# PlayerAttributes.migrate_tiers: strong Checking → heavier frame + long stick.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Typo", "height": 73, "skating": 9, "skill": 2, "checking": 1})
-	assert_eq(int(norm.skating), PlayerAttributes.TIER_AVERAGE)
+			"name": "OldPohl", "height": 5, "skating": 1, "skill": 2, "checking": 3})
+	assert_eq(int(norm.height), 79, "legacy 1..5 step → inches")
+	assert_eq(int(norm.weight), PlayerAttributes.weight_for_bmi(79, 27.75))
+	assert_eq(int(norm.length), PlayerAttributes.LENGTH_LONG)
 
 
 func test_normalize_migrates_legacy_six_attribute_entry() -> void:
-	# A legacy six-attribute file is migrated: a size-5 / physical-5 enforcer
-	# becomes tall + Checking-strong.
+	# The oldest six-attribute shape still loads: a size-5 / physical-5
+	# enforcer becomes tall + heavy.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Legacy", "speed": 2, "agility": 1, "hands": 2, "size": 5, "physical": 5, "shot": 4})
+			"name": "Legacy", "speed": 2, "agility": 1, "hands": 2, "size": 5,
+			"physical": 5, "shot": 4})
 	assert_eq(int(norm.height), 79, "legacy size → height")
-	assert_eq(int(norm.checking), PlayerAttributes.TIER_STRONG, "physical → Checking strong")
+	assert_gt(int(norm.weight), PlayerAttributes.weight_neutral(79),
+			"physical-heavy legacy build → heavier than neutral")
 
 
-func test_normalize_defaults_missing_attributes_to_average() -> void:
-	# A name-only entry (the "rename your bots" shape) loads as all-average.
+func test_normalize_defaults_missing_attributes_to_neutral() -> void:
+	# A name-only entry (the "rename your bots" shape) loads as the neutral build.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({"name": "NameOnly"})
 	assert_eq(int(norm.height), PlayerAttributes.HEIGHT_MEDIUM)
-	for axis: String in ["skating", "skill", "checking"]:
-		assert_eq(int(norm[axis]), PlayerAttributes.TIER_AVERAGE)
+	assert_eq(int(norm.weight), int(PlayerAttributes.NEUTRAL_WEIGHT_LBS))
+	for slot: String in ["profile", "curve", "flex", "length"]:
+		assert_eq(int(norm[slot]), PlayerAttributes.GEAR_BALANCED)
 
 
 func test_every_bundled_entry_has_a_valid_position() -> void:

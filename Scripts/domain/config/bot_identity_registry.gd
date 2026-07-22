@@ -14,28 +14,30 @@ class_name BotIdentityRegistry
 # sync_existing_players. Clients never consult their own copy, so the host's
 # roster is exactly what the whole lobby plays against — no divergence.
 #
-# The legal-shape rule is ENFORCED on load (normalize_entry → is_legal_build): a
-# custom bot must spend the same one-strong-one-weak shape a human does (or all-
-# average). An illegal build (a strength with no matching weakness) or an out-of-
-# range value resets to all-average, so the bot keeps its identity but loses the
-# illegal stats — the host can theme their roster, but can't field a super-bot.
+# Builds are COERCED on load (normalize_entry → the PlayerAttributes
+# constructor): v4 axes are all lateral, so there is no legal shape to enforce —
+# an out-of-range height/weight/gear value clamps to the nearest legal body
+# (weight into the height's BMI band), so a typo neither crashes the game nor
+# fields an impossible frame. A super-bot is unrepresentable by construction.
 #
-# JSON schema (native height + three tiers). Height may be a raw inches value
-# (68..79 = 5'8"..6'7") or a legacy 1..5 step (mapped onto the 5 anchor heights);
-# each tier is 1=weak / 2=average / 3=strong:
+# JSON schema (attributes v4, body + gear). Height may be a raw inches value
+# (68..79 = 5'8"..6'7") or a legacy 1..5 step (mapped onto the anchor heights);
+# weight is lbs inside the height's band (omit for the height's neutral frame);
+# gear slots are 0/1/2 with 1 = balanced (profile: 0 agility / 2 power;
+# curve: 0 closed / 2 open; flex: 0 whippy / 2 stiff; length: 0 short / 2 long
+# — no gameplay effect yet, cosmetic/forward-compat):
 #   {
 #     "identities": [
 #       { "name": "Wayne Gretzky", "number": 99, "is_left_handed": false,
-#         "height": 2, "skating": 2, "skill": 3, "checking": 1, "position": "C" },
+#         "height": 72, "weight": 185, "curve": 2, "position": "C" },
 #       ...
 #     ]
 #   }
 #
-# Fields are optional; missing values default to medium. A legacy six-attribute
-# file (speed/agility/hands/size/physical/shot, or the older skill/strength axis)
-# is migrated on load via PlayerAttributes.migrate_legacy, so old user:// rosters
-# keep working. Illegal or out-of-range builds reset (see normalize_entry) so a
-# typo in JSON neither crashes the game nor grants an unearned build.
+# Fields are optional; missing values default to the neutral build. A tier-era
+# file (skating/skill/checking) migrates via PlayerAttributes.migrate_tiers and
+# the oldest six-attribute files (speed/agility/hands/size/physical/shot) via
+# migrate_legacy, so old user:// rosters keep working.
 #
 # A well-formed file with zero entries is valid — the caller treats an empty
 # pool as "use the old deterministic defaults".
@@ -94,9 +96,11 @@ static func fallback_identity(slot_key: int) -> Dictionary:
 		"is_left_handed": LobbySlotKey.slot(slot_key) % 2 == 1,
 		"position":       PlayerRules.position_name(LobbySlotKey.slot(slot_key)),
 		"height":         PlayerAttributes.HEIGHT_MEDIUM,
-		"skating":        PlayerAttributes.TIER_AVERAGE,
-		"skill":          PlayerAttributes.TIER_AVERAGE,
-		"checking":       PlayerAttributes.TIER_AVERAGE,
+		"weight":         int(PlayerAttributes.NEUTRAL_WEIGHT_LBS),
+		"profile":        PlayerAttributes.GEAR_BALANCED,
+		"curve":          PlayerAttributes.GEAR_BALANCED,
+		"flex":           PlayerAttributes.GEAR_BALANCED,
+		"length":         PlayerAttributes.GEAR_BALANCED,
 	}
 
 
@@ -117,59 +121,23 @@ static func _try_load_from(path: String) -> bool:
 	return true
 
 
-# Turns one raw JSON entry into a canonical identity dict: reads the native
-# height + three-tier fields (migrating a legacy six-attribute entry via
-# PlayerAttributes.migrate_legacy so old user:// rosters keep loading), then
-# ENFORCES the legal-shape rule (one-strong-one-weak / all-average — see
-# is_legal_build). An illegal or out-of-range build (the only way a custom roster
-# could grant unearned power — e.g. a strength with no weakness) resets to
-# all-average while keeping the bot's name/number/handedness. Extracted from
-# _try_load_from so the rule is unit-testable without touching the filesystem.
+# Turns one raw JSON entry into a canonical identity dict: routes the
+# attribute keys through PlayerAttributes.from_dict (which handles native v4
+# body+gear keys, tier-era keys via migrate_tiers, and legacy six-attribute
+# keys via migrate_legacy) and takes the COERCED values back — out-of-range
+# height/weight/gear lands on the nearest legal body rather than being
+# rejected. Extracted from _try_load_from so the rule is unit-testable
+# without touching the filesystem.
 static func normalize_entry(entry: Dictionary) -> Dictionary:
-	var entry_name: String = entry.get("name", "")
-	var height: int
-	var skating: int
-	var skill: int
-	var checking: int
-	var has_native: bool = entry.has("height") or entry.has("skating") or entry.has("checking")
-	var has_legacy: bool = entry.has("speed") or entry.has("agility") or entry.has("size") \
-			or entry.has("physical") or entry.has("shot") or entry.has("strength")
-	if has_native or not has_legacy:
-		# Native height + three-tier keys (or a name-only entry with no attributes,
-		# which loads as all-average). Missing native keys default to medium.
-		height   = int(entry.get("height",   PlayerAttributes.HEIGHT_MEDIUM))
-		skating  = int(entry.get("skating",  PlayerAttributes.TIER_AVERAGE))
-		skill    = int(entry.get("skill",    PlayerAttributes.TIER_AVERAGE))
-		checking = int(entry.get("checking", PlayerAttributes.TIER_AVERAGE))
-	else:
-		# Legacy six-attribute (or four-attribute) roster.
-		var legacy_skill: int = int(entry.get("skill", entry.get("strength", 3)))
-		var migrated := PlayerAttributes.migrate_legacy(
-				int(entry.get("speed", 3)), int(entry.get("agility", 3)),
-				int(entry.get("hands", legacy_skill)), int(entry.get("size", 3)),
-				int(entry.get("physical", 3)), int(entry.get("shot", legacy_skill)))
-		height = migrated.height
-		skating = migrated.skating
-		skill = migrated.skill
-		checking = migrated.checking
-	if not PlayerAttributes.is_legal_build(height, skating, skill, checking):
-		push_warning("BotIdentityRegistry: '%s' has an illegal build; resetting to all-average" % entry_name)
-		height = PlayerAttributes.HEIGHT_MEDIUM
-		skating = PlayerAttributes.TIER_AVERAGE
-		skill = PlayerAttributes.TIER_AVERAGE
-		checking = PlayerAttributes.TIER_AVERAGE
+	var attrs := PlayerAttributes.from_dict(entry)
 	# Optional casting hint: which lineup slot this identity suits (see
 	# PlayerRules.POSITION_NAMES). Unknown/missing → "" (fills any slot).
 	var position: String = String(entry.get("position", "")).to_upper()
 	if position not in PlayerRules.POSITION_NAMES:
 		position = ""
-	return {
-		"name":           entry_name,
-		"number":         int(entry.get("number", 0)),
-		"is_left_handed": bool(entry.get("is_left_handed", false)),
-		"position":       position,
-		"height":         height,
-		"skating":        skating,
-		"skill":          skill,
-		"checking":       checking,
-	}
+	var out: Dictionary = attrs.to_dict()
+	out["name"] = entry.get("name", "")
+	out["number"] = int(entry.get("number", 0))
+	out["is_left_handed"] = bool(entry.get("is_left_handed", false))
+	out["position"] = position
+	return out

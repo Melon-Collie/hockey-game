@@ -59,6 +59,9 @@ class WristerConfig:
 	var quick_pass_power: float = 0.0
 	var loft_vy_low: float = 0.0                # vertical launch speed (m/s), level 1
 	var loft_vy_high: float = 0.0               # vertical launch speed (m/s), level 2
+	# Blade FACE angle as tan(angle) — caps the launch angle per curve gear
+	# (see loft_y). Default = the universal cap, i.e. an open blade.
+	var loft_tan_max: float = MAX_LOFT_RATIO
 	# ── Power model (see wrister_power_t) ──
 	# Cursor speed (m/s of screen-space pointer travel, already scaled by the
 	# player's Shot Power Sensitivity) that reads as a full-power release.
@@ -84,6 +87,7 @@ class SlapperConfig:
 	var max_slapper_charge_time: float = 0.0
 	var loft_vy_low: float = 0.0
 	var loft_vy_high: float = 0.0
+	var loft_tan_max: float = MAX_LOFT_RATIO    # blade face angle cap (see loft_y)
 
 # ── Wrister power model (pure mouse speed, travel-gated ceiling) ─────────────
 # Normalized 0..1 charged-wrister power from a single signal: CURSOR SPEED —
@@ -214,7 +218,8 @@ static func release_wrister(
 		if pass_dir.length_squared() < 0.0001:
 			pass_dir = (target - player_xz).normalized()
 		var tap_y: float = loft_y(cfg.quick_pass_power,
-				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
+				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high),
+				cfg.loft_tan_max)
 		return ShotResult.make(
 				Vector3(pass_dir.x, tap_y, pass_dir.z).normalized(),
 				cfg.quick_pass_power, out)
@@ -232,7 +237,9 @@ static func release_wrister(
 	if is_backhand:
 		power *= cfg.backhand_power_coefficient
 
-	var y: float = loft_y(power, _loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
+	var y: float = loft_y(power,
+			_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high),
+			cfg.loft_tan_max)
 	return ShotResult.make(
 			Vector3(wrister_dir.x, y, wrister_dir.z).normalized(),
 			power, out)
@@ -259,7 +266,9 @@ static func release_slapper(
 	var charge_t: float = clampf(charge_time / cfg.max_slapper_charge_time, 0.0, 1.0)
 	var power: float = lerpf(cfg.min_slapper_power, cfg.max_slapper_power, charge_t)
 
-	var y: float = loft_y(power, _loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
+	var y: float = loft_y(power,
+			_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high),
+			cfg.loft_tan_max)
 	return ShotResult.make(
 			Vector3(shot_dir.x, y, shot_dir.z).normalized(),
 			power, out)
@@ -278,14 +287,22 @@ static func _loft_vy(elevation_level: int, vy_low: float, vy_high: float) -> flo
 #   v_y = power · y / sqrt(1 + y²)  →  y = loft_vy / sqrt(power² − loft_vy²)
 # Since loft_vy is per-level constant, the apex (v_y²/2g) is the same for every
 # shot at that level — charge buys pace, not height, so the two aim axes stay
-# orthogonal. When power can't meaningfully exceed loft_vy (a very soft flip),
-# the ratio is capped at MAX_LOFT_RATIO instead of running toward vertical.
-static func loft_y(power: float, loft_vy: float) -> float:
+# orthogonal. The ratio IS tan(launch angle), and it is capped at the blade's
+# FACE angle (`loft_tan_max`, per curve gear; MAX_LOFT_RATIO = the 45° open
+# face = the pre-curve universal cap): a shot can never leave the blade
+# steeper than the face. At pace the cap never binds — every curve reaches
+# the full per-level apex (the crossbar ceiling holds for all blades) — but
+# the SOFT steep release that roofs in tight flattens on a closed face, so
+# each curve's minimum roofing distance emerges from ballistics alone.
+# Trajectory stays a pure function of (power, level, face) — never position.
+static func loft_y(power: float, loft_vy: float,
+		loft_tan_max: float = MAX_LOFT_RATIO) -> float:
 	if loft_vy <= 0.0:
 		return 0.0
-	var max_vy_at_cap: float = power * MAX_LOFT_RATIO / sqrt(1.0 + MAX_LOFT_RATIO * MAX_LOFT_RATIO)
+	var tan_cap: float = minf(MAX_LOFT_RATIO, loft_tan_max)
+	var max_vy_at_cap: float = power * tan_cap / sqrt(1.0 + tan_cap * tan_cap)
 	if loft_vy >= max_vy_at_cap:
-		return MAX_LOFT_RATIO
+		return tan_cap
 	return loft_vy / sqrt(power * power - loft_vy * loft_vy)
 
 # Follow-through aim direction (world XZ). The finish choreography sweeps the

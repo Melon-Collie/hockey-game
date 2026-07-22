@@ -680,7 +680,8 @@ func _on_connected_to_server() -> void:
 	# correct. Valid here — the unique id is assigned before connected_to_server.
 	_peer_attributes[local_peer_id()] = local_attrs
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
-			local_attrs.height, local_attrs.skating, local_attrs.skill, local_attrs.checking,
+			local_attrs.height, local_attrs.weight, local_attrs.profile,
+			local_attrs.curve, local_attrs.flex, local_attrs.length,
 			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
 			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity)
 	client_connected.emit()
@@ -998,8 +999,11 @@ func _broadcast_state() -> void:
 # ── RPCs ──────────────────────────────────────────────────────────────────────
 @rpc("any_peer", "reliable")
 func request_join(is_left_handed: bool, player_name: String, jersey_number: int = 10,
-		attr_height: int = PlayerAttributes.HEIGHT_MEDIUM, attr_skating: int = PlayerAttributes.TIER_AVERAGE,
-		attr_skill: int = PlayerAttributes.TIER_AVERAGE, attr_checking: int = PlayerAttributes.TIER_AVERAGE,
+		attr_height: int = PlayerAttributes.HEIGHT_MEDIUM, attr_weight: int = 0,
+		attr_profile: int = PlayerAttributes.GEAR_BALANCED,
+		attr_curve: int = PlayerAttributes.GEAR_BALANCED,
+		attr_flex: int = PlayerAttributes.GEAR_BALANCED,
+		attr_length: int = PlayerAttributes.GEAR_BALANCED,
 		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0,
 		shot_power_sensitivity: float = 1.0) -> void:
 	if not is_host:
@@ -1036,12 +1040,12 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	var sanitized_name: String = player_name.strip_edges().left(10)
 	_peer_names[sender_id] = sanitized_name if NameFilter.is_alphanumeric(sanitized_name) and NameFilter.is_clean(sanitized_name) else "Player"
 	_peer_numbers[sender_id] = clampi(jersey_number, 0, 99)
-	# Legal-shape validation (not just per-level clamping): a modified client can
-	# send an illegal all-strong build — only the one-strong-one-weak shape (or
-	# all-average) is accepted; anything illegal falls back to all-average.
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_skating, attr_skill, attr_checking) \
-			if PlayerAttributes.is_legal_build(attr_height, attr_skating, attr_skill, attr_checking) \
-			else PlayerAttributes.all_average()
+	# v4 builds have no power economy to validate — every axis is lateral, so
+	# validation is pure coercion: the constructor clamps height/gear into range
+	# and weight into the height's BMI band. A forged extreme build lands on the
+	# nearest legal body instead of being rejected.
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_weight,
+			attr_profile, attr_curve, attr_flex, attr_length)
 	_peer_shot_sensitivity[sender_id] = clampf(shot_power_sensitivity, 0.25, 4.0)
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
@@ -1162,7 +1166,8 @@ func update_lobby_attributes(attrs: PlayerAttributes) -> void:
 		return
 	_peer_attributes[local_peer_id()] = attrs
 	if not is_host:
-		request_update_attributes.rpc_id(1, attrs.height, attrs.skating, attrs.skill, attrs.checking)
+		request_update_attributes.rpc_id(1, attrs.height, attrs.weight,
+				attrs.profile, attrs.curve, attrs.flex, attrs.length)
 
 
 # Client → host: update the sender's locked build from the lobby. The host
@@ -1175,16 +1180,16 @@ func update_lobby_attributes(attrs: PlayerAttributes) -> void:
 # (game_initiated is unusable as a gate here — it's set true at start_offline /
 # start_client_lobby, i.e. throughout the pre-match lobby, not just in-game.)
 @rpc("any_peer", "reliable")
-func request_update_attributes(attr_height: int, attr_skating: int, attr_skill: int,
-		attr_checking: int) -> void:
+func request_update_attributes(attr_height: int, attr_weight: int, attr_profile: int,
+		attr_curve: int, attr_flex: int, attr_length: int) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
 	if not _peer_names.has(sender_id):
 		return
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_skating, attr_skill, attr_checking) \
-			if PlayerAttributes.is_legal_build(attr_height, attr_skating, attr_skill, attr_checking) \
-			else PlayerAttributes.all_average()
+	# Coerce-construct — same lateral-axes validation as request_join.
+	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_weight,
+			attr_profile, attr_curve, attr_flex, attr_length)
 
 # Cap on inputs per RPC. Matches the host queue depth in RemoteController so a
 # malicious peer can't force the loop into hundreds of failed decode iterations
@@ -1581,9 +1586,13 @@ func assign_player_slot(team_slot: int, team_id: int, jersey_color: Color, helme
 
 @rpc("authority", "reliable")
 func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_color: Color, helmet_color: Color, pants_color: Color, is_left_handed: bool, player_name: String, jersey_number: int = 10,
-		attr_height: int = PlayerAttributes.HEIGHT_MEDIUM, attr_skating: int = PlayerAttributes.TIER_AVERAGE,
-		attr_skill: int = PlayerAttributes.TIER_AVERAGE, attr_checking: int = PlayerAttributes.TIER_AVERAGE) -> void:
-	var attrs := PlayerAttributes.new(attr_height, attr_skating, attr_skill, attr_checking)
+		attr_height: int = PlayerAttributes.HEIGHT_MEDIUM, attr_weight: int = 0,
+		attr_profile: int = PlayerAttributes.GEAR_BALANCED,
+		attr_curve: int = PlayerAttributes.GEAR_BALANCED,
+		attr_flex: int = PlayerAttributes.GEAR_BALANCED,
+		attr_length: int = PlayerAttributes.GEAR_BALANCED) -> void:
+	var attrs := PlayerAttributes.new(attr_height, attr_weight,
+			attr_profile, attr_curve, attr_flex, attr_length)
 	_peer_attributes[peer_id] = attrs
 	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number, attrs)
 
@@ -1798,7 +1807,7 @@ func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey
 		return
 	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_average()
 	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number,
-			attrs.height, attrs.skating, attrs.skill, attrs.checking)
+			attrs.height, attrs.weight, attrs.profile, attrs.curve, attrs.flex, attrs.length)
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:
 	sync_existing_players.rpc_id(peer_id, player_data)

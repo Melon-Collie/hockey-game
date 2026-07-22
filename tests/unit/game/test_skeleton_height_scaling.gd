@@ -44,8 +44,8 @@ func _make_rig() -> Dictionary:
 
 
 static func _size_attrs(height_level: int) -> PlayerAttributes:
-	return PlayerAttributes.from_levels(height_level,
-			PlayerAttributes.TIER_AVERAGE, PlayerAttributes.TIER_AVERAGE, PlayerAttributes.TIER_AVERAGE)
+	# Weight 0 coerces to the height's neutral frame — the pure-height build.
+	return PlayerAttributes.from_levels(height_level, 0)
 
 
 func test_skeleton_scales_about_ice_plane() -> void:

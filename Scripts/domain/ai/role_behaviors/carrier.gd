@@ -1030,7 +1030,7 @@ func _pick_action(ctx: RoleContext) -> void:
 				sample_speed, wrister_unsettled, _scratch_opponent_caps,
 				wrister_five_hole, wrister_goalie_down,
 				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-				_scratch_option_receiver_pos, wrister_hands, wrister_pads)
+				_scratch_option_receiver_pos, wrister_hands, wrister_pads, ctx.self_loft_tan)
 		if s > shoot_score:
 			shoot_score = s
 			_shot_sample_release = release
@@ -1295,20 +1295,20 @@ func _pick_action(ctx: RoleContext) -> void:
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, wrister_hands, wrister_pads)
+					shot_screen_dist, wrister_hands, wrister_pads, ctx.self_loft_tan)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					ctx.self_aim_spread_rad,
 					wrister_seal_x, wrister_seal_tall, shot_screen_dist,
-					wrister_hands, wrister_pads)
+					wrister_hands, wrister_pads, ctx.self_loft_tan)
 			shot_power_t = AIActionScoring.best_shot_power_t(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, wrister_hands, wrister_pads)
+					shot_screen_dist, wrister_hands, wrister_pads, ctx.self_loft_tan)
 			shot_release_offset = _shot_sample_offset
 			if _shot_sample_backhand:
 				# The controller applies backhand_power_coefficient to the FINAL
@@ -2411,7 +2411,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 		return -INF
 	var local_time: float = AIActionScoring.time_to_arrive(
 			self_pos, candidate, ctx.self_velocity, ctx.self_max_speed,
-			ctx.self_max_accel)
+			ctx.self_max_accel, ctx.self_lateral_grip)
 	# CEILING PRUNES (exact): the candidate's score is dest_score × lane ×
 	# decay × safety − cost, with dest_score ≤ 1, cost ≥ 0 — so each partial
 	# product of the ≤-1 factors is a hard upper bound, checked in cost
@@ -2552,7 +2552,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 		# slot carries a t2 decay that often decides the argmax by itself.
 		var slot_t2: float = AIActionScoring.time_to_arrive(
 				candidate, _slot_anchor(ctx.own_goal_dir), arrive_vel,
-				ctx.self_max_speed, ctx.self_max_accel)
+				ctx.self_max_speed, ctx.self_max_accel, ctx.self_lateral_grip)
 		var cont_ceiling: float = CONTINUATION_DISCOUNT \
 				* AIActionScoring.delay_discount(slot_t2)
 		if maxf(dest_score, cont_ceiling) * lane * decay * safety > best_so_far:
@@ -2599,7 +2599,7 @@ func _score_wheel_candidate(ctx: RoleContext, dest: Vector3,
 			* (GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH + WHEEL_APEX_CLEARANCE_M))
 	var t1: float = AIActionScoring.time_to_arrive(
 			self_pos, apex, ctx.self_velocity, ctx.self_max_speed,
-			ctx.self_max_accel)
+			ctx.self_max_accel, ctx.self_lateral_grip)
 	# Carry pace through the apex, consistent with the arrival model.
 	var to_dest: Vector3 = dest - apex
 	to_dest.y = 0.0
@@ -2608,7 +2608,7 @@ func _score_wheel_candidate(ctx: RoleContext, dest: Vector3,
 	var v_apex: Vector3 = to_dest.normalized() * apex_speed \
 			if to_dest.length_squared() > 0.0001 else Vector3.ZERO
 	var t2: float = AIActionScoring.time_to_arrive(
-			apex, dest, v_apex, ctx.self_max_speed, ctx.self_max_accel)
+			apex, dest, v_apex, ctx.self_max_speed, ctx.self_max_accel, ctx.self_lateral_grip)
 	# The same exact ceiling ladder as _score_move_candidate, per leg.
 	var decay: float = AIActionScoring.delay_discount(t1 + t2)
 	if decay <= best_so_far:
@@ -2849,7 +2849,7 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 	# may have already solved it (t2_precomputed — the ceiling check).
 	var t2: float = t2_precomputed if t2_precomputed >= 0.0 \
 			else AIActionScoring.time_to_arrive(
-					candidate, slot, arrive_vel, ctx.self_max_speed, ctx.self_max_accel)
+					candidate, slot, arrive_vel, ctx.self_max_speed, ctx.self_max_accel, ctx.self_lateral_grip)
 	# Second-leg reach safety: defenders start the leg where the first leg's
 	# time has taken them — including the RE-SET (see
 	# _project_opponents_collapsing): the first leg's dwell is time the
