@@ -234,6 +234,11 @@ func _physics_process(delta: float) -> void:
 			or not is_instance_valid(_provisional_carrier_skater) \
 			or _provisional_carrier_skater.is_ghost or _provisional_carrier_skater.is_knocked_down):
 		_clear_provisional()
+	# Same freed-object guard as the remote/provisional pins: a despawn/demote
+	# that lands before the carrier-drop notification must not dereference a
+	# freed skater for the gap frame.
+	if _local_carrier_skater != null and not is_instance_valid(_local_carrier_skater):
+		_local_carrier_skater = null
 	if _local_carrier_skater != null:
 		is_extrapolating = false
 		_smooth_initialized = false
@@ -953,6 +958,14 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 			break
 	if not stopped:
 		pos += vel * maxf(frac, 0.0)
+		# The remainder bypasses the step's board carom, so a fast puck could
+		# render up to ~25 cm past a board plane on approach frames. Clamp the
+		# center back inside the rink — the next whole tick reflects properly;
+		# this only keeps the rendered position contained meanwhile.
+		var contained: Vector2 = GameRules.clamp_to_rink_inner(
+				Vector2(pos.x, pos.z), radius)
+		pos.x = contained.x
+		pos.z = contained.y
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
 	# goal line inside the posts and let the authoritative outcome arrive (the
 	# goal horn is a host decision, like the save).

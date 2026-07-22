@@ -157,6 +157,10 @@ select
     (metrics->>'poke_claim_misses_total')::float         as poke_claim_misses_total,
     (metrics->>'stick_lift_claims_total')::float         as stick_lift_claims_total,
     (metrics->>'stick_lift_claim_misses_total')::float   as stick_lift_claim_misses_total,
+    -- Claims dropped pre-resolver by the stamp-plausibility gate (host only).
+    -- Expect 0; sustained non-zero = legit claims eaten by an RTT spike the
+    -- ping EMA hadn't caught, or a client shopping timestamps.
+    (metrics->>'claim_stamp_rejects_total')::float       as claim_stamp_rejects_total,
     -- Reconcile-match health. A find_at miss falls back to the (prediction-lead)
     -- live position and trips a spurious position snap, so a low match AVG (vs the
     -- MIN, which one post-faceoff window can own) is the residual-churn driver. The
@@ -251,7 +255,8 @@ select
     max(poke_claims_total)             filter (where role = 'host') as host_poke_claims,
     max(poke_claim_misses_total)       filter (where role = 'host') as host_poke_claim_misses,
     max(stick_lift_claims_total)       filter (where role = 'host') as host_stick_lift_claims,
-    max(stick_lift_claim_misses_total) filter (where role = 'host') as host_stick_lift_claim_misses
+    max(stick_lift_claim_misses_total) filter (where role = 'host') as host_stick_lift_claim_misses,
+    max(claim_stamp_rejects_total)     filter (where role = 'host') as host_claim_stamp_rejects
 from public.network_session_health
 where game_id is not null
 group by game_id;

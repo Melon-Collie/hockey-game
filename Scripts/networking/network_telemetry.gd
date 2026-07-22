@@ -137,6 +137,14 @@ var _poke_claim_count: int = 0
 var _poke_claim_miss_count: int = 0
 var _stick_lift_claim_count: int = 0
 var _stick_lift_claim_miss_count: int = 0
+# Host: claims dropped at the RPC boundary by the stamp-plausibility gate
+# (LagCompRewind.is_claim_stamp_plausible) — BEFORE any resolver ran, so they
+# appear in no other claim counter. Expected ~0: a legit claim's stamp is
+# ~one-way old at arrival, well inside the bound. Sustained non-zero means
+# either an RTT spike outran the host's slow ping EMA (legit claims silently
+# eaten — the felt "reached the puck, nothing happened") or a client is
+# shopping timestamps. Folded as a session total (TOTAL_KEYS).
+var _claim_stamp_reject_count: int = 0
 # CLIENT-side optimistic-pickup outcomes (the felt "grab, then lose it"). A pin
 # is the visual attach; it resolves as confirmed (host granted), timeout (host
 # silently declined → rolled back = the felt bug), or stolen (a different carrier
@@ -505,6 +513,11 @@ static func record_stick_lift_claim() -> void:
 static func record_stick_lift_claim_miss() -> void:
 	if instance: instance._stick_lift_claim_miss_count += 1
 
+# Host: a claim rejected by the stamp-plausibility gate (see the counter
+# comment) — one counter across all four claim types; no-op outside a session.
+static func record_claim_stamp_reject() -> void:
+	if instance: instance._claim_stamp_reject_count += 1
+
 # Client-side optimistic-pickup outcomes (see the counter comment). pin is the
 # denominator; timeout is the felt "grab, then lose it".
 static func record_provisional_pin() -> void:
@@ -695,6 +708,7 @@ func tick(delta: float) -> void:
 	_poke_claim_miss_count = 0
 	_stick_lift_claim_count = 0
 	_stick_lift_claim_miss_count = 0
+	_claim_stamp_reject_count = 0
 	_provisional_pin_count = 0
 	_provisional_confirmed_count = 0
 	_provisional_timeout_count = 0
@@ -787,6 +801,11 @@ func _fold_session_sample() -> void:
 		"poke_claim_misses": float(_poke_claim_miss_count),
 		"stick_lift_claims": float(_stick_lift_claim_count),
 		"stick_lift_claim_misses": float(_stick_lift_claim_miss_count),
+		# Claims dropped at the RPC boundary by the stamp-plausibility gate
+		# (TOTAL_KEYS) — pre-resolver, so counted nowhere else. Expect 0;
+		# sustained non-zero = legit claims eaten by an RTT spike the ping EMA
+		# hadn't caught (or a client shopping timestamps). Clients fold 0s.
+		"claim_stamp_rejects": float(_claim_stamp_reject_count),
 		# Client-side optimistic-pickup outcomes (TOTAL_KEYS). timeouts/pins is the
 		# felt grab-then-lose rate; the pin predicate gate should drive it to ~0.
 		"provisional_pins": float(_provisional_pin_count),

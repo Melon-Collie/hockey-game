@@ -914,7 +914,12 @@ func _process(delta: float) -> void:
 	if not is_host and _input_batch_provider.is_valid():
 		_input_timer += capped_delta
 		if _input_timer >= input_delta:
-			_input_timer -= input_delta
+			# One batch per _process call, so below 120 fps the remainder can only
+			# grow — cap it at one interval or a long sub-120 fps stretch banks
+			# minutes of "owed" sends and the client double-sends (one per render
+			# frame) long after the frame rate recovers. The 12/24-frame batch
+			# redundancy already covers the low-fps cadence itself.
+			_input_timer = minf(_input_timer - input_delta, input_delta)
 			var batch_frames: int = 24 if get_peer_loss_rate() > 10.0 else 12
 			var batch: Array[InputState] = _input_batch_provider.call(batch_frames)
 			var buf := PackedByteArray(); buf.resize(3)
@@ -1382,6 +1387,7 @@ func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float, input_l
 	# LagCompRewind). Applied at the trust boundary so all claim resolvers
 	# inherit it.
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		NetworkTelemetry.record_claim_stamp_reject()
 		return
 	pickup_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, input_lead_ms, blade_curr, blade_prev, top_hand)
 
@@ -1399,6 +1405,7 @@ func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, input_lea
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		NetworkTelemetry.record_claim_stamp_reject()
 		return
 	poke_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, input_lead_ms, expected_carrier_peer_id, blade_curr, blade_prev)
 
@@ -1416,6 +1423,7 @@ func receive_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, inp
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
+		NetworkTelemetry.record_claim_stamp_reject()
 		return
 	stick_lift_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, input_lead_ms, expected_carrier_peer_id, blade_curr)
 
@@ -1432,6 +1440,7 @@ func receive_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_
 		return
 	var hitter_peer_id: int = multiplayer.get_remote_sender_id()
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(hitter_peer_id))):
+		NetworkTelemetry.record_claim_stamp_reject()
 		return
 	hit_claim_received.emit(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms, input_lead_ms)
 
@@ -2272,7 +2281,13 @@ func get_peer_loss_rate(peer_id: int = -1) -> float:
 func _on_ws_sequence_received(seq: int) -> void:
 	if _last_ws_seq_received >= 0:
 		var gap: int = (seq - _last_ws_seq_received - 1 + 65536) % 65536
-		_ws_drop_window += gap
+		# A duplicate or reordered packet reads as a near-full wrap (gap ≈ 65535)
+		# and would count as ~65k drops for the window. The real transport
+		# (unreliable_ordered) filters those before this handler, but the dev
+		# NetworkSimManager delivers with independent per-packet jitter and CAN
+		# reorder — treat a half-window "gap" as reorder and count nothing.
+		if gap < 32768:
+			_ws_drop_window += gap
 	_ws_recv_window += 1
 	_last_ws_seq_received = seq
 
