@@ -15,6 +15,7 @@ extends Node3D
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
 @onready var _block_arm: Node3D = $BlockArm
+@onready var _blocker: StaticBody3D = $BlockArm/Blocker
 @onready var _stick: StaticBody3D = $BlockArm/Stick
 @onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
 
@@ -68,10 +69,22 @@ var _last_block_arm_pos: Vector3
 
 func _ready() -> void:
 	# The stick is a hooked shape that snagged skaters when it shared LAYER_WALLS
-	# with the rest of the goalie. Move it to LAYER_GOALIE_STICK: the puck mask
-	# includes that layer so shots still rebound off the stick, but the skater
-	# mask omits it so players pass through instead of getting caught.
+	# with the rest of the goalie. Move it to LAYER_GOALIE_STICK: the skater
+	# mask omits that layer so players pass through instead of getting caught
+	# (the puck's stick rebounds are analytic — GoalieContactDetector).
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK
+	# The body parts come off the scene-default LAYER_WALLS onto their own
+	# LAYER_GOALIE_BODIES so a ghosted skater (whose mask drops back to bare
+	# LAYER_WALLS — see Skater.set_ghost) passes through the goalie while still
+	# standing on the ice. MASK_SKATER includes the new layer, so non-ghost
+	# skaters bump exactly as before; the puck's save contacts are analytic
+	# (GoalieContactDetector reads these same parts), so no mask is involved.
+	_left_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_right_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_body.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_head.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_glove.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_blocker.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_init_connectors()
 	_init_arm_bones()
 	_setup_uniform_coordinator()

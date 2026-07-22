@@ -145,6 +145,12 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	var victim_snap: SkaterNetworkState = victim_snapshot.get_skater_state(victim_peer_id)
 	if hitter_snap == null or victim_snap == null:
 		return
+	# Ghost gate from the rewound snapshots (same convention as the pickup/poke/
+	# stick-lift resolvers): a ghosted skater neither lands nor absorbs a check,
+	# and the live resolver no longer emits contact for ghost pairs — this stops
+	# a stale client claim that raced the ghost flag from crediting a hit.
+	if hitter_snap.is_ghost or victim_snap.is_ghost:
+		return
 	# Stage-3: intent-integrate the victim's rewound body toward host-present by the
 	# SAME depth the client rendered it at (shared forward_predict_ticks + fraction +
 	# the client-reported interp_delay), so the geometry the host validates matches
