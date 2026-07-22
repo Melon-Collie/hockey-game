@@ -98,9 +98,8 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	var puck_result: Dictionary = _spawner.spawn_puck_with_controller(false)
 	_puck = puck_result.puck
 	_puck_controller = puck_result.controller
-	# RigidBody freeze prevents physics drift between FileReplayDriver writes.
-	# PuckController would otherwise run client-side prediction every tick.
-	_puck.freeze = true
+	# PuckController would otherwise run client-side prediction every tick;
+	# with it off, nothing moves the Node3D puck between FileReplayDriver writes.
 	_puck_controller.set_physics_process(false)
 
 	var goalie_result: Dictionary = _spawner.spawn_goalie_pair(_puck, false)

@@ -227,10 +227,15 @@ Once the loose puck is a deterministic sim both sides run:
   fallback was kept as-is (buffered interpolate-in-the-past + capped board-aware
   extrapolation) rather than shrunk to hold-at-newest — it only runs on deep loss
   (> `PUCK_PREDICT_MAX_S` staleness), and its graceful-degradation behavior there
-  is strictly better than a hold for zero added complexity. Still open: retiring
-  the Jolt puck node itself (Puck.tscn RigidBody3D → a plain body — a .tscn
-  change, made in the editor). The puck's netcode is now the skater's: predict +
-  reconcile.
+  is strictly better than a hold for zero added complexity. The Jolt puck node
+  itself is retired too: Puck.tscn's root is a plain Node3D (no collision
+  layers, no CCD, no contact monitor), puck.gd extends Node3D with
+  `linear_velocity` as a plain var, the Jolt-only paths (`_integrate_forces`,
+  `_on_body_entered`, the freeze/sleep machinery, the queued save-deaden) are
+  deleted, and the Phase-0/2 shadow harnesses (PuckShadowComparator /
+  GoalieCollisionShadow) are removed — their Jolt ground truth no longer
+  exists, and their job (validating the analytic solver against Jolt) is
+  complete. The puck's netcode is now the skater's: predict + reconcile.
 
 ## Recommendation
 

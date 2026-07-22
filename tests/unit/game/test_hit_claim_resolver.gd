@@ -38,5 +38,5 @@ func test_reset_throttle_clears_dict() -> void:
 func test_receive_claim_with_null_state_buffer_is_noop() -> void:
 	# state_buffer is null → early return without crash. The credit path also
 	# wouldn't fire, but the lighter assertion is that nothing throws.
-	resolver.receive_claim(1, 2, 0.0, 75.0)
+	resolver.receive_claim(1, 2, 0.0, 75.0, 25.0)
 	assert_eq(hit_tracker._last_hit_time.size(), 0)

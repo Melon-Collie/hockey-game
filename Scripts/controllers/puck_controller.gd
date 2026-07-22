@@ -108,28 +108,9 @@ var _release_seed_vel: Vector3 = Vector3.ZERO
 const _RELEASE_SEED_TIMEOUT_S: float = 0.5  # ~2× worst healthy RTT + broadcast interval
 var is_extrapolating: bool = false
 
-# ── Phase-0 shadow-puck comparator (dev + host only) ──────────────────────────
-# Runs the analytic shadow puck (PuckShadowComparator) alongside the real Jolt puck
-# each host tick and logs divergence — the determinism go/no-go instrument
-# (docs/netcode-phase0-shadow-puck-spec.md). Created ONLY in dev builds
-# (BuildInfo.VERSION == "dev", the same gate NetworkSimManager uses), so it's absent
-# from exported builds and can never ship. Never drives the real puck.
-var _shadow: PuckShadowComparator = null
-var _goalie_shadow: GoalieCollisionShadow = null  # Phase-2 goalie-collision harness
-var _shadow_board_contact: bool = false
-var _shadow_goalie_contact: bool = false  # Jolt fired a goalie entry this tick (probe ground truth)
-var _goalie_provider: Callable = Callable()  # dev-only: returns Array[Goalie] for the FP probe
-var _shadow_log_timer: float = 0.0
-const _SHADOW_LOG_INTERVAL_S: float = 3.0
-# Dev-build measurement switch (see setup): true (the shipped value) = the
-# analytic sim drives the loose puck everywhere; false = a DEV host reverts to
-# Jolt and runs the Phase-0/2 shadow harnesses against it (a measurement
-# session). Exported builds always drive analytically regardless.
-const _ANALYTIC_DRIVE_IN_DEV: bool = true
-# The proactive FP probe only runs when a goalie is within this of the puck — a cheap gate
-# so probe_ticks (and the per-tick get_colliding_bodies allocation) stay off unless the
-# puck is actually near a net.
-const _GOALIE_PROBE_RANGE_M: float = 1.5
+# Returns Array[Goalie]: feeds the host drive's contact detection (forwarded to
+# the puck in set_goalie_provider) and the client prediction's goalie stop.
+var _goalie_provider: Callable = Callable()
 # ── Phase-3/4b loose-puck prediction scratch (client only; see _predict_loose) ──
 var _predict_frame_scratch: PuckGeometryCollision.Result = null
 var _predict_tick_result: PuckAuthorityRules.TickResult = null
@@ -201,20 +182,9 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		puck.puck_body_blocked.connect(func(s: Skater) -> void: puck_touched_while_loose.emit(_peer_id_resolver.call(s)))
 		puck.puck_touched_goalie.connect(func(g: Goalie) -> void: puck_touched_by_goalie.emit(g))
 		# The analytic sim IS the authority for the loose puck on every host —
-		# dev, exported, offline (Phase 1/2 of the determinism migration,
-		# feel-validated in the dev playtest). This is what lets clients run the
-		# same sim predictively (Phase 3). The Phase-0/2 shadow harnesses are a
-		# dev-only opt-in that swaps the drive OUT for a Jolt measurement
-		# session — never both at once (a harness measuring the drive's own
-		# output measures nothing).
-		if BuildInfo.VERSION == "dev" and not _ANALYTIC_DRIVE_IN_DEV:
-			_shadow = PuckShadowComparator.new()
-			puck.puck_hit_boards.connect(func() -> void: _shadow_board_contact = true)
-			_goalie_shadow = GoalieCollisionShadow.new()
-			puck.puck_touched_goalie.connect(_on_shadow_goalie_contact)
-		else:
-			# The goalie provider is forwarded in set_goalie_provider.
-			puck.set_analytic_drive_enabled(true)
+		# the puck's own _physics_process drives it (the goalie provider is
+		# forwarded in set_goalie_provider). This is what lets clients run the
+		# same sim predictively.
 	else:
 		# Phase-3/4b prediction scratch (built once; the loose-puck predictor —
 		# which also carries the shooter's own release via the seed — runs per
@@ -236,10 +206,9 @@ func set_team_id_by_skater(d: Dictionary) -> void:
 	_team_id_by_skater = d
 
 
-# Dev-only: a Callable returning the live Array[Goalie], for the Phase-2 proactive
-# false-positive probe AND the analytic puck drive's goalie contact detection. Injected by
-# GameManager; absent in release (neither runs). Forwarded to the puck so its host drive can
-# detect goalie contacts.
+# A Callable returning the live Array[Goalie], for the analytic puck drive's goalie
+# contact detection (host) and the client prediction's goalie stop. Injected by
+# GameManager; forwarded to the puck so its host drive can detect goalie contacts.
 func set_goalie_provider(provider: Callable) -> void:
 	_goalie_provider = provider
 	if puck != null:
@@ -250,7 +219,6 @@ func _physics_process(delta: float) -> void:
 		return
 	if is_server:
 		_check_interactions()
-		_observe_shadow(delta)
 		_prev_puck_pos = puck.get_puck_position()
 		return
 	# A despawned / demoted remote carrier drops the pin back to interpolation.
@@ -760,98 +728,6 @@ func _estimated_puck_speed() -> float:
 	if _state_buffer.is_empty():
 		return INF
 	return _state_buffer.back().state.velocity.length()
-
-
-# Feed the host's authoritative loose-puck state to the Phase-0 shadow comparator
-# (dev-only; _shadow is null otherwise, so this is a cheap early return in release —
-# though it's never even reached there since exported builds skip creation). Any freely-
-# flying loose puck is in scope — grounded slides AND airborne flights (loft shots,
-# saucer passes, glove rebounds), since step_puck_3d now models gravity. Only a carried
-# or dead (pinned/frozen) puck resets the comparator so each flight re-seeds. Logs a
-# one-line digest on a throttle. Never mutates the puck. `puck.linear_velocity` is
-# authoritative here (host-side Jolt integration).
-func _observe_shadow(delta: float) -> void:
-	if _shadow == null:
-		return
-	# Puck-trajectory shadow (Phase 0): any freely-flying loose puck is in scope (grounded
-	# or airborne) — only carried / dead (pinned) pucks reset it so each flight re-seeds.
-	if puck.carrier != null or puck.pickup_locked:
-		_shadow.reset()
-	else:
-		_shadow.observe(puck.get_puck_position(), puck.linear_velocity, _shadow_board_contact, delta)
-	# Phase-2 proactive false-positive probe (consumes _shadow_goalie_contact as ground truth).
-	_probe_goalie_false_positives()
-	_shadow_board_contact = false
-	_shadow_goalie_contact = false
-	# Combined throttled digest (runs regardless of puck mode — the goalie harness records
-	# contacts asynchronously via the signal, including airborne glove saves).
-	_shadow_log_timer += delta
-	if _shadow_log_timer >= _SHADOW_LOG_INTERVAL_S:
-		_shadow_log_timer = 0.0
-		if _shadow.samples > 0:
-			# jolt_escapes reads ~0 (C1 rescues before we see it); the true rim-around
-			# escape frequency is the puck's containment_rescue_count.
-			print("[phase0] %s c1_rescues=%d" % [_shadow.summary(), puck.containment_rescue_count])
-		if _goalie_shadow != null and _goalie_shadow.jolt_contacts > 0:
-			print("[phase2] %s" % _goalie_shadow.summary())
-
-
-# Phase-2 goalie-collision harness (dev + host): on Jolt's puck-vs-goalie contact, feed
-# the analytic swept-disc-vs-goalie-OBBs detector the same swept segment + the part Jolt
-# reported, so it records detection agreement / part-match / normal sanity.
-func _on_shadow_goalie_contact(goalie: Goalie) -> void:
-	if _goalie_shadow == null:
-		return
-	_shadow_goalie_contact = true  # ground truth for this tick's proactive probe
-	_goalie_shadow.record_contact(goalie, puck.last_goalie_contact_body,
-			_prev_puck_pos, puck.get_puck_position(), GameRules.PUCK_COLLISION_RADIUS)
-
-
-# Phase-2 proactive false-positive probe (dev + host): every tick the loose puck is near a
-# goalie, run the analytic swept test and compare to Jolt's ground truth for the tick
-# (entry signal OR continuous overlap). Counts phantoms — analytic contacts Jolt didn't
-# see. The near-goalie gate keeps this (and the get_colliding_bodies allocation) off the
-# hot path unless the puck is actually by a net.
-func _probe_goalie_false_positives() -> void:
-	if _goalie_shadow == null or _goalie_provider.is_null():
-		return
-	if puck.carrier != null or puck.pickup_locked:
-		return
-	var goalies: Array = _goalie_provider.call()
-	var pk: Vector3 = puck.get_puck_position()
-	var near: bool = false
-	for g: Node in goalies:
-		var g3: Node3D = g as Node3D
-		if g3 != null and g3.global_position.distance_to(pk) < _GOALIE_PROBE_RANGE_M:
-			near = true
-			break
-	if not near:
-		return
-	# Ground truth: the entry signal (fast transit / CCD) OR continuous overlap (a puck
-	# resting or sliding on the goalie, which fires no fresh body_entered).
-	var jolt_contact: bool = _shadow_goalie_contact
-	if not jolt_contact:
-		for body: Node in puck.get_colliding_bodies():
-			if _body_belongs_to_a_goalie(body, goalies):
-				jolt_contact = true
-				break
-	_goalie_shadow.probe(goalies, _prev_puck_pos, pk, GameRules.PUCK_COLLISION_RADIUS, jolt_contact)
-
-
-# True if `body` is (or is under) one of the goalie nodes — Jolt reports the goalie's
-# StaticBody3D part, which sits beneath the Goalie node. Compares by identity per goalie
-# rather than `body in goalies`: `goalies` is a TypedArray[Goalie], and `in` / find() on it
-# validates the needle's type, throwing on a plain Node (the StaticBody3D part we walk up).
-static func _body_belongs_to_a_goalie(body: Node, goalies: Array) -> bool:
-	for g: Node in goalies:
-		if g == null:
-			continue
-		var n: Node = body
-		while n != null:
-			if n == g:
-				return true
-			n = n.get_parent()
-	return false
 
 
 func _clear_provisional() -> void:

@@ -2,7 +2,7 @@ class_name GoalieContactDetector
 extends RefCounted
 
 # Production analytic puck-vs-goalie contact detection for the determinism migration — the
-# same swept-disc-vs-oriented-boxes test the Phase-2 harness (GoalieCollisionShadow) validated
+# same swept-disc-vs-oriented-boxes test the Phase-2 measurement harness validated
 # against Jolt (~97% agreement on real contacts), promoted to drive the puck. Given the puck's
 # swept segment this tick and the live goalies, it returns the NEAREST contact (smallest time
 # of impact) across every goalie part's BoxShape3D: which part was struck (for save-part
