@@ -152,6 +152,19 @@ static func _cavity_half_width(az: float) -> float:
 	return lerpf(GameRules.NET_HALF_WIDTH, GameRules.NET_BACK_HALF_WIDTH, depth_t)
 
 
+# Goal-line-relative depth of the SLANTED back mesh at height `y`: the full
+# NET_DEPTH (BASE_DEPTH) at the ice, tapering to NET_TOP_DEPTH under the
+# crossbar. This mirrors HockeyGoal's back panel, whose top edge sits at
+# NET_TOP_DEPTH and bottom at NET_DEPTH — the real NHL goal is shallow at the
+# top shelf. A flat back wall at the full NET_DEPTH let a top-corner snipe sail
+# ~0.35 m THROUGH the visible top twine before stopping, the "puck through the
+# net after a goal" bug; a scored puck must die on the twine where the net
+# actually is, not deep behind it.
+static func _back_depth_at_height(y: float) -> float:
+	var t: float = clampf(y / GameRules.NET_HEIGHT, 0.0, 1.0)
+	return lerpf(GameRules.NET_DEPTH, GameRules.NET_TOP_DEPTH, t)
+
+
 # True when a puck at `p` is on the INTERIOR side of the netting — inside the cavity, or in
 # front of the goal line within the open mouth (about to enter the way a scored puck does).
 # The sub-stepped drive keeps the previous sample within ~4 cm of any crossing, so this
@@ -171,9 +184,10 @@ static func _interior_or_mouth(p: Vector3, puck_radius: float) -> bool:
 # Resolve a puck against the back and side net-mesh panels — TWO-SIDED, like the twine it
 # models. Which face applies is classified from the segment START (`prev`, see
 # _interior_or_mouth): a puck that entered through the open mouth (a scored puck, a
-# bounce-out) plays the INTERIOR faces — clamped inside the trapezoid cavity (depth
-# NET_DEPTH, widening from NET_HALF_WIDTH at the mouth to NET_BACK_HALF_WIDTH at the back;
-# the mouth itself is open so it can bounce back out). A puck OUTSIDE the netting (a
+# bounce-out) plays the INTERIOR faces — clamped inside the trapezoid cavity (depth tapering
+# from NET_DEPTH at the ice to NET_TOP_DEPTH under the crossbar — the slanted back mesh — and
+# widening from NET_HALF_WIDTH at the mouth to NET_BACK_HALF_WIDTH at the back; the mouth
+# itself is open so it can bounce back out). A puck OUTSIDE the netting (a
 # wraparound rounding the cage, a rim pressing the back mesh) plays the EXTERIOR faces and
 # is reflected away — it must never be pulled through the twine into the cavity (the
 # pre-fix one-sided clamp teleported exactly those pucks inside). Rebounds absorb hard
@@ -196,8 +210,15 @@ static func resolve_net_panels(prev: Vector3, pos: Vector3, vel: Vector3,
 	var hit: bool = false
 	var end_sign: float = signf(pos.z)
 	if _interior_or_mouth(prev, puck_radius):
-		# INTERIOR faces (a puck that came in through the mouth).
-		var back_limit: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH - puck_radius
+		# INTERIOR faces (a puck that came in through the mouth). The back mesh is
+		# a slanted plane, shallow at the top shelf — clamp to its depth AT THIS
+		# HEIGHT (_back_depth_at_height) so a top-corner goal dies on the twine
+		# instead of sailing through it into the deep cavity. The rebound stays a
+		# horizontal −z absorb: at NET_RESTITUTION the puck barely bounces and
+		# then drops, so the plane's gentle y-tilt isn't worth reflecting through
+		# (and a low puck, where the twine is near-vertical, still kicks straight
+		# back out toward the mouth).
+		var back_limit: float = GameRules.GOAL_LINE_Z + _back_depth_at_height(p.y) - puck_radius
 		if absf(p.z) > back_limit:
 			p.z = end_sign * back_limit
 			v = reflect_3d(v, Vector3(0.0, 0.0, -end_sign), NET_RESTITUTION)

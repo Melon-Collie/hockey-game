@@ -266,6 +266,38 @@ func test_exterior_side_press_reflects_outward() -> void:
 	assert_gt(res.position.x, half_at, "stays on the exterior side of the mesh")
 
 
+func test_back_panel_tapers_shallow_at_the_top_shelf() -> void:
+	# The real net back is a SLANTED plane (HockeyGoal): only NET_TOP_DEPTH deep
+	# under the crossbar, deepening to NET_DEPTH at the ice. A flat back wall at
+	# the full depth let a top-corner snipe sail ~0.35 m THROUGH the visible top
+	# twine before stopping — the "puck through the net after a goal" bug. A high
+	# puck must be caught on the shallow top-shelf twine, not the deep back wall.
+	var y: float = 1.10
+	var expected_depth: float = lerpf(GameRules.NET_DEPTH, GameRules.NET_TOP_DEPTH,
+			clampf(y / GameRules.NET_HEIGHT, 0.0, 1.0))
+	var prev := Vector3(0.0, y, GameRules.GOAL_LINE_Z + 0.45)  # interior, in front of the shallow back
+	var pos := Vector3(0.0, y, GameRules.GOAL_LINE_Z + 0.95)   # driven deep past it
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 20), R, res)
+	assert_true(hit, "a high puck reaching the shallow back twine contacts it")
+	assert_almost_eq(absf(res.position.z), GameRules.GOAL_LINE_Z + expected_depth - R, 0.001,
+			"caught at the top-shelf depth, not the deep back wall")
+	assert_lt(res.velocity.z, 0.0, "rebounds back toward the mouth")
+
+
+func test_back_panel_keeps_full_depth_at_the_ice() -> void:
+	# At ice level the back twine is at (near) the full NET_DEPTH — the taper must
+	# not pull a grounded puck's back wall forward toward the mouth.
+	var y: float = 0.0175
+	var prev := Vector3(0.0, y, GameRules.GOAL_LINE_Z + 0.90)
+	var pos := Vector3(0.0, y, GameRules.GOAL_LINE_Z + 1.01)
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 8), R, res)
+	assert_true(hit)
+	assert_gt(absf(res.position.z), GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH - R - 0.02,
+			"a grounded puck is still caught near the full ice-level depth")
+
+
 func test_scored_puck_entering_through_mouth_still_plays_interior() -> void:
 	# A scored puck crossing the goal line into the cavity (prev in FRONT of the
 	# line, within the mouth) must classify as interior — the two-sided fix cannot
