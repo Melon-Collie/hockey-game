@@ -214,6 +214,73 @@ static func push_out_of_net(world_xz: Vector2, radius: float = 0.0) -> Vector2:
 		return Vector2(-max_x, world_xz.y)
 	return Vector2(max_x, world_xz.y)
 
+# ── Goalie body containment (analytic skater block) ─────────────────────────
+# Base goalie footprint for the analytic skater body-block. The goalie body
+# parts used to stop skaters via move_and_slide (LAYER_GOALIE_BODIES on the
+# skater mask); with move_and_slide removed the block is analytic, like the
+# boards/net. Two footprints by stance: a cylinder while standing/RVH, a wide-
+# but-shallow oriented box in the butterfly (the leg pads spread laterally).
+# These mirror the blade clamp's goalie_block_radius / butterfly_pad_half_* on
+# SkaterController — the goalie is beatable-realism furniture here, not a precise
+# collision hull. The skater's own collision radius is added on top at the call
+# site (Skater.clamp_body_to_goalies) so the body EDGE stops at the goalie
+# surface; kept here (not on the actor) so the live tick and the reconcile replay
+# read one shared value.
+const GOALIE_BLOCK_RADIUS: float = 0.50
+const GOALIE_BUTTERFLY_HALF_X: float = 0.84
+const GOALIE_BUTTERFLY_HALF_Z: float = 0.25
+
+# Projects a skater's XZ clear of a goalie's body footprint so the skater can't
+# walk through the goalie now that skater-vs-goalie is analytic. Mirrors
+# push_out_of_net: standing/RVH uses a cylinder of `radius` around the goalie
+# center; the butterfly uses an oriented box (half_x × half_z rotated by the
+# goalie's yaw) covering the spread leg pads. `radius` / half-extents should
+# already include the skater's own collision radius so the body EDGE stops at the
+# goalie surface. Returns world_xz unchanged when the center is already clear.
+# Pure value-type math — no allocation, hot-path safe at 120 Hz × actors.
+static func push_out_of_goalie(world_xz: Vector2, gpos: Vector2, rot_y: float,
+		is_butterfly: bool, radius: float, half_x: float, half_z: float) -> Vector2:
+	if is_butterfly:
+		return _push_out_of_goalie_box(world_xz, gpos, rot_y, half_x, half_z)
+	# Standing / RVH — cylinder push-out around the goalie center.
+	var to_body: Vector2 = world_xz - gpos
+	var dist: float = to_body.length()
+	if dist >= radius:
+		return world_xz
+	var dir: Vector2
+	if dist > 0.001:
+		dir = to_body / dist
+	else:
+		# Coincident centers — eject toward center ice (away from the goal line).
+		dir = Vector2(0.0, -signf(gpos.y)) if gpos.y != 0.0 else Vector2(0.0, 1.0)
+	return gpos + dir * radius
+
+# Oriented-box push-out for the butterfly stance: transform world_xz into the
+# goalie's local frame (yaw rot_y), eject along the least-penetrated local axis,
+# then rotate the escape back to world. Mirrors the blade clamp's
+# _clamp_blade_butterfly_box so the body and blade agree on the pad box.
+static func _push_out_of_goalie_box(world_xz: Vector2, gpos: Vector2, rot_y: float,
+		half_x: float, half_z: float) -> Vector2:
+	var d: Vector2 = world_xz - gpos
+	var c: float = cos(rot_y)
+	var s: float = sin(rot_y)
+	var local_x: float = d.x * c + d.y * s
+	var local_z: float = -d.x * s + d.y * c
+	if absf(local_x) >= half_x or absf(local_z) >= half_z:
+		return world_xz
+	# Inside the box — eject along the least-penetrated axis (goalie-local).
+	var ox: float = half_x - absf(local_x)
+	var oz: float = half_z - absf(local_z)
+	var ex: float = local_x
+	var ez: float = local_z
+	if ox < oz:
+		ex = half_x * signf(local_x) if local_x != 0.0 else half_x
+	else:
+		ez = half_z * signf(local_z) if local_z != 0.0 else half_z
+	var world_dx: float = ex * c - ez * s
+	var world_dz: float = ex * s + ez * c
+	return Vector2(gpos.x + world_dx, gpos.y + world_dz)
+
 # ── Puck ──────────────────────────────────────────────────────────────────────
 # Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
 # so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with

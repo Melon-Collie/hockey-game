@@ -392,6 +392,30 @@ func set_skater_collision_provider(provider: Callable) -> void:
 	_skater_collision_provider = provider
 
 
+# Live (cached) goalie pose list — one Dictionary per goalie with
+# position / rotation_y / is_butterfly — set by GameManager on spawn
+# (get_goalie_data). clamp_body_to_goalies reads it to hold the skater clear of
+# each goalie now that skater-vs-goalie is analytic (move_and_slide is gone).
+# Empty Callable (tutorial dummy / test) → no goalie block.
+var _goalie_data_provider: Callable = Callable()
+
+
+func set_goalie_data_provider(provider: Callable) -> void:
+	_goalie_data_provider = provider
+
+
+# Set true by the analytic containment clamps (rink / net / goalie) on any tick
+# they reposition the body — the analytic stand-in for the CharacterBody
+# is_on_wall() flag move_and_slide used to raise. LocalController reads it to
+# suppress reconcile jitter while a skater is pinned against a boundary. Reset at
+# the start of each _physics_process integration.
+var _touched_boundary: bool = false
+
+
+func is_touching_boundary() -> bool:
+	return _touched_boundary
+
+
 # The disc radius used for analytic skater-vs-skater contact — the (Size-scaled)
 # physics cylinder radius, so the hitbox and the contact geometry stay identical.
 func collision_radius() -> float:
@@ -554,13 +578,12 @@ func _ready() -> void:
 	collision_mask  = Constants.MASK_SKATER
 
 	# Top-down game: the body never moves vertically (no gravity, velocity.y
-	# pinned to 0). Locking the Y axis stops move_and_slide from nudging the
-	# body up off the knife-edge ice contact every tick — the spurious vertical
-	# bounce that a post-move `global_position.y` override used to mask. The
-	# override re-embedded the cylinder bottom in the wall collider's Y=0 bottom
-	# cap (backface-on) each tick, so against the boards move_and_slide couldn't
-	# find a clean slide and the skater stuck. With the axis locked there is no Y
-	# motion to undo, so no override and no re-embedding.
+	# pinned to 0), so the manual integration in _physics_process
+	# (global_position += velocity·dt) leaves Y untouched by construction. The
+	# axis lock is now belt-and-suspenders — it only ever affected move_and_slide,
+	# which is gone (it used to stop the slide from nudging the body up off the
+	# knife-edge ice contact every tick). Kept harmless in case a body physics move
+	# is ever reintroduced.
 	axis_lock_linear_y = true
 
 	_blade_area = Area3D.new()
@@ -678,30 +701,36 @@ func _physics_process(delta: float) -> void:
 	# value there is a hard, uncatchable native crash. This should never fire;
 	# when it does it logs the offending state so the upstream source is findable.
 	_sanitize_physics_state()
-	# Y is axis-locked (see _ready): move_and_slide leaves global_position.y
-	# untouched, so live prediction, reconcile replay, and host authority all
-	# agree on Y without a post-move override. move_and_slide now handles only
-	# walls (ice + goalie bodies) — skaters are off each other's mask; skater-vs-
-	# skater contact is resolved analytically in _resolve_player_collisions below.
-	move_and_slide()
-	# Capture velocity AFTER the wall slide but BEFORE the analytic skater-vs-skater
-	# resolution, so the delta below isolates the body-check impulse (the resolver's
-	# self velocity change) for the reconcile replay recording — same as when this
-	# delta came from the old Jolt-driven _resolve_player_collisions.
-	var vel_after_slide: Vector3 = velocity
+	# Integrate velocity → position directly. move_and_slide() is gone: its only
+	# real collisions were skater-vs-goalie-body (now analytic in
+	# clamp_body_to_goalies below) and the ice floor — a no-op under the Y-lock,
+	# since velocity.y is pinned to 0 (top-down game, no gravity). Boards, net, and
+	# skater-vs-skater were already analytic. This `pos += vel·dt` is now bit-
+	# identical to LocalController's reconcile-replay integration, so the live tick
+	# and the replay no longer differ on the move step.
+	_touched_boundary = false
+	global_position += velocity * delta
+	# Capture velocity BEFORE the analytic skater-vs-skater resolution so the delta
+	# below isolates the body-check impulse (the resolver's self velocity change) for
+	# the reconcile replay recording — same as when this delta came from the old
+	# Jolt-driven _resolve_player_collisions.
+	var vel_pre_body_check: Vector3 = velocity
 	_resolve_player_collisions()
-	var body_check_delta: Vector3 = velocity - vel_after_slide
+	var body_check_delta: Vector3 = velocity - vel_pre_body_check
 	if body_check_delta.length_squared() > 0.0001:
 		body_check_impulse_applied.emit(body_check_delta)
 	# Boards are off the skater's physics mask (a CharacterBody cylinder wedges in
 	# the concave corner mesh), so hold the body inside the rink analytically.
 	# Runs AFTER the body-check delta is captured so a board slide never reads as
-	# a hit, and after move_and_slide so the ice/skater/goalie collisions resolve
-	# first. The reconcile replay calls the same methods (see LocalController).
+	# a hit. The reconcile replay calls the same methods (see LocalController).
 	clamp_body_to_rink()
 	# Net is off the skater's physics mask too (a cylinder wedges in the concave
 	# pocket like the boards) — hold the body clear of the goal-net box analytically.
 	clamp_body_to_net()
+	# Goalie bodies are no longer on the skater physics mask now that move_and_slide
+	# is gone — hold the skater clear of the goalie footprint analytically so you
+	# can't walk through the goalie (see clamp_body_to_goalies).
+	clamp_body_to_goalies()
 	_update_blade_elevation(delta)
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
@@ -847,6 +876,7 @@ func clamp_body_to_rink() -> void:
 		velocity.z = vel_xz.y
 	global_position.x = clamped.x
 	global_position.z = clamped.y
+	_touched_boundary = true
 
 
 # Holds the body out of the goal-net pocket analytically. The net is off the
@@ -876,6 +906,53 @@ func clamp_body_to_net() -> void:
 		velocity.z = vel_xz.y
 	global_position.x = pushed.x
 	global_position.z = pushed.y
+	_touched_boundary = true
+
+
+# Holds the skater clear of every goalie's footprint analytically so you can't
+# walk through the goalie now that the goalie body parts are off the skater
+# physics mask (move_and_slide is gone). Mirrors clamp_body_to_net: push the XZ
+# out of the goalie footprint — a cylinder while standing/RVH, an oriented box in
+# the butterfly (the leg pads spread wide) — and strip any velocity pointing into
+# the goalie so the skater slides along it instead of being re-seated next tick.
+# Reads the same host-refreshed goalie pose cache the blade clamp uses (position /
+# rotation_y / is_butterfly). A ghosted skater (crease-dwell / offside) passes
+# through, matching the mask drop in set_ghost and the is_ghost gate in
+# _resolve_player_collisions. Pure value-type math — no allocation, hot-path safe
+# at 120 Hz × actors. Called live after the rink/net clamps and re-used by
+# LocalController's reconcile replay so both paths agree.
+func clamp_body_to_goalies() -> void:
+	if is_ghost or not _goalie_data_provider.is_valid():
+		return
+	var goalie_data: Array = _goalie_data_provider.call()
+	if goalie_data == null:
+		return
+	var radius: float = _collision_cyl.radius if _collision_cyl != null else 0.0
+	var xz := Vector2(global_position.x, global_position.z)
+	for data: Dictionary in goalie_data:
+		var gpos: Vector3 = data["position"]
+		var gpos_xz := Vector2(gpos.x, gpos.z)
+		var pushed: Vector2 = GameRules.push_out_of_goalie(
+				xz, gpos_xz, data["rotation_y"], data["is_butterfly"],
+				GameRules.GOALIE_BLOCK_RADIUS + radius,
+				GameRules.GOALIE_BUTTERFLY_HALF_X + radius,
+				GameRules.GOALIE_BUTTERFLY_HALF_Z + radius)
+		if xz.distance_squared_to(pushed) <= 1e-6:
+			continue
+		var out_dir: Vector2 = (pushed - xz).normalized()
+		var vel_xz := Vector2(velocity.x, velocity.z)
+		var into_goalie: float = vel_xz.dot(out_dir)
+		if into_goalie < 0.0:
+			# Velocity points into the goalie — strip that component, keep the
+			# tangential slide so the skater brushes past instead of sticking.
+			vel_xz -= into_goalie * out_dir
+			velocity.x = vel_xz.x
+			velocity.z = vel_xz.y
+		global_position.x = pushed.x
+		global_position.z = pushed.y
+		# Re-seat the working XZ so a second goalie is tested from the new spot.
+		xz = pushed
+		_touched_boundary = true
 
 
 # Re-positions the four hand/shoulder Marker3Ds based on the current

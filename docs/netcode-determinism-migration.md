@@ -91,9 +91,11 @@ raycasts or shape queries anywhere. The **goalie is not a physics body** at all
    primary path.
 4. **CCD** for fast shots — a swept test, which you need anyway once collision is
    analytic.
-5. **Skater `move_and_slide`** — whose *only* real Jolt collision is
-   skater-vs-goalie-body (`StaticBody3D`) and the tutorial wall. Ice is a no-op under
-   the Y-lock; skater-vs-skater / boards / net are already analytic.
+5. **Skater `move_and_slide`** — ✅ **DONE.** Removed: the skater integrates its own
+   motion (`global_position += velocity·dt`) and the last real Jolt collision,
+   skater-vs-goalie-body, is now analytic (`GameRules.push_out_of_goalie` /
+   `Skater.clamp_body_to_goalies`, mirroring the boards/net clamps). Ice was already a
+   no-op under the Y-lock; skater-vs-skater / boards / net were already analytic.
 
 Existing analytic backstops that become the primary path: `board_rescue_velocity`
 (C1), the save deaden (C2), the grounded-puck Y-pin + height/speed clamps (C3), the

@@ -48,14 +48,17 @@ const LAYER_NET: int            = 64
 const LAYER_GOALIE_BODIES: int  = 128
 
 # ── Composed Masks ────────────────────────────────────────────────────────────
-# Skater move_and_slide collides with the ice (LAYER_WALLS) + goalie bodies;
-# boards + net are held analytically (see above), and skater-vs-skater contact is
-# now resolved analytically too — SkaterCollisionRules in Skater._resolve_player_
-# collisions, replacing move_and_slide's rigid cylinder separation + the old
-# restitution bounce (the pinball) with an inelastic disc model. Skaters keep their
-# LAYER_SKATER_BODIES layer (harmless; nothing masks it now) so any future physics
-# query against skater bodies still has a layer to target.
-const MASK_SKATER: int = LAYER_WALLS | LAYER_GOALIE_BODIES  # ice + goalie bodies; boards, net, and other skaters handled analytically
+# Vestigial for movement since the Skater's move_and_slide was removed: the skater
+# now integrates its own motion (global_position += velocity·dt in
+# Skater._physics_process) and resolves ALL contact analytically — boards + net via
+# the GameRules clamps, skater-vs-skater via SkaterCollisionRules
+# (Skater._resolve_player_collisions), and goalie bodies via
+# GameRules.push_out_of_goalie (Skater.clamp_body_to_goalies). Nothing drives the
+# skater body off this mask anymore, but Skater.set_ghost still toggles it and it
+# names the layers a future physics query would target, so it's kept. Skaters keep
+# their LAYER_SKATER_BODIES layer (harmless; nothing masks it) so such a query
+# still has a target.
+const MASK_SKATER: int = LAYER_WALLS | LAYER_GOALIE_BODIES  # ice + goalie bodies; all skater contact is analytic now
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
 const PORT: int = 7777
