@@ -32,6 +32,21 @@ are addressable incrementally.
 
 ---
 
+## Status (updated as fixes land on this branch)
+
+- **Fixed — Phase 0:** D2's telemetry half (`claim_stamp_rejects` counter +
+  session column; NACK still pending, Phase 2), B4 (reorder guard), C3
+  (input-timer clamp), F7 (sub-tick remainder clamp), F8 (local-pin validity
+  guard).
+- **Fixed — Phase 1:** F1 (client carrier view; poke/stick-lift claims live
+  again, carry-long pickup-claim spam gone), F2 (`is_ghost` in
+  `sample_state_at`), F3 (offside carrier exemption via `has_puck`), F4
+  (prediction history re-recorded during replay), F5 (replay seeded from the
+  ack-time shot state).
+- **Open:** A1–A4 (clock foundation), B1–B3 (channels / replay-event
+  packing / 5v5 bandwidth), C1–C2 (post-physics broadcast), D1
+  (claim-vs-present-time contest), D2's NACK, D3–D4, E1–E3, F6, F9–F11.
+
 ## What clears the AAA bar (calibration — don't touch these)
 
 - **Trajectory-comparison reconcile** with prediction history keyed by input
