@@ -27,11 +27,20 @@ from the height 2−power coupling — a lateral slot trades, never stacks),
 curve is the FACE-ANGLE launch cap (§5.2 v2 — roofing-distance gradient,
 crossbar equality at pace) plus runway / backhand leans (parity-bounded),
 the 0.81× stacked runway floor is pinned by calibration tests, and the
-picker has all three stick rows. Remaining:
-skate profile, AI/goalie calibration (incl. teaching AI models the
-per-player LOW-loft speed and release time — they currently read the
-GameRules neutrals). Numbers marked `TBD` are authored at implementation
-time and tuned in playtest.
+picker has all three stick rows. Step 4 (skate profile) and the AI pass
+are IMPLEMENTED: profile leans speed/accel/agility(+grip)/glide (§5.1 —
+sprint band re-widened ~20.5–24 mph, stacked agility corners pinned
+0.84–1.15), the picker has all four gear rows, and bots price their own
+gear — `AISkaterCaps.loft_tan_max` threads the blade face angle through
+the HIGH-hole chain (`_high_band_horizontal_speed`'s face floor), so a
+bot's minimum roofing distance matches its human counterpart's; blade
+caps/reach/backhand already rode the caps. **v4 IS COMPLETE.** Residual
+known drifts (accepted, revisit on evidence): bot movement PLANNING
+doesn't model per-build `lateral_grip` (bodies obey it; plans assume
+neutral cornering); defensive reads of opposing shooters assume an open
+face (conservative); the saucer/chip soft-pace face bind sits below
+pass paces so those sites read neutrals. Numbers marked `TBD` are
+authored at implementation time and tuned in playtest.
 
 ---
 

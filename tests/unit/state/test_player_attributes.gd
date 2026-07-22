@@ -348,12 +348,31 @@ func test_stick_length_lean() -> void:
 	assert_almost_eq(std.stick_len_mult(), 1.028, 0.0001, "STANDARD = the height's cut")
 	assert_almost_eq(short.stick_len_mult(), 1.028 * 0.96, 0.0001)
 	assert_almost_eq(long.stick_len_mult(), 1.028 * 1.04, 0.0001)
-	# The one remaining stub: skate profile reads into nothing yet.
-	var profiled := PlayerAttributes.new(73, 201, 2, 1, 1, 1)
-	assert_true(profiled.speed_mult() == std.speed_mult()
-			and profiled.agility_mult() == std.agility_mult()
-			and profiled.accel_mult() == std.accel_mult(),
-			"profile has zero gameplay effect until its stage")
+	# All four slots are live — a balanced loadout is the only zero-lean one.
+	assert_true(PlayerAttributes.new(73, 201).equals(PlayerAttributes.all_average()))
+
+
+# ── Skate profile: top-end ↔ burst ───────────────────────────────────────────
+func test_profile_is_a_topend_burst_seesaw() -> void:
+	var rocker := PlayerAttributes.new(73, 201, PlayerAttributes.PROFILE_AGILITY, 1, 1, 1)
+	var flat := PlayerAttributes.new(73, 201, PlayerAttributes.PROFILE_POWER, 1, 1, 1)
+	assert_gt(flat.speed_mult(), rocker.speed_mult(), "power owns the top end")
+	assert_gt(rocker.accel_mult(), flat.accel_mult(), "agility owns the first step")
+	assert_gt(rocker.agility_mult(), flat.agility_mult(), "agility owns the corner")
+	assert_lt(flat.agility_glide_mult(), rocker.agility_glide_mult(),
+			"the long flat coasts, the rocker scrubs")
+	# The profile re-widens the sprint band the body plane compressed.
+	assert_gt(flat.sprint_ceiling_mult(), rocker.sprint_ceiling_mult())
+
+
+func test_stacked_agility_corners_budgeted() -> void:
+	# Body × gear extremes, pinned: the involuntary body floor stays ~0.89;
+	# the self-chosen worst (heavy tank on power skates) may dip below it but
+	# never under 0.84, and the shiftiest possible build stays under 1.15.
+	var worst := PlayerAttributes.new(79, 257, PlayerAttributes.PROFILE_POWER, 1, 1, 1)
+	var best := PlayerAttributes.new(68, 158, PlayerAttributes.PROFILE_AGILITY, 1, 1, 1)
+	assert_between(worst.agility_mult(), 0.84, 0.90, "worst stacked corner")
+	assert_between(best.agility_mult(), 1.10, 1.15, "best stacked corner")
 
 
 # ── Flex + curve: the shot gear slots ────────────────────────────────────────

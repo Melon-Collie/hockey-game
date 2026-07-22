@@ -38,6 +38,8 @@ const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to 
 const _CURVE_LABELS: Array[String] = ["Closed", "Balanced", "Open"]
 const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
 const _FLEX_LABELS: Array[String] = ["Whippy", "Medium", "Stiff"]
+const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
+const _PROFILE_LABELS: Array[String] = ["Agility", "Balanced", "Power"]
 
 # Working copy: Array of {"name": String, "levels": Array[int]} in canonical
 # order [height_in, weight_lbs, profile, curve, flex, length]. The UI edits
@@ -98,12 +100,12 @@ func _build() -> void:
 
 	_build_height_row()
 	_build_weight_row()
-	# The live gear slots, in the order they landed. Each is a three-way
-	# exclusive choice (the loft-level pattern — discrete and chunky, never a
-	# slider). Skate profile joins when its stage lands.
+	# The four gear slots — all live. Each is a three-way exclusive choice
+	# (the loft-level pattern — discrete and chunky, never a slider).
 	_build_gear_row("Stick", _LENGTH_TOOLTIP, _LENGTH_LABELS, 5)
 	_build_gear_row("Curve", _CURVE_TOOLTIP, _CURVE_LABELS, 3)
 	_build_gear_row("Flex", _FLEX_TOOLTIP, _FLEX_LABELS, 4)
+	_build_gear_row("Skates", _PROFILE_TOOLTIP, _PROFILE_LABELS, 2)
 
 
 func _build_preset_row() -> void:

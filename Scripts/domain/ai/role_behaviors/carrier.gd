@@ -1030,7 +1030,7 @@ func _pick_action(ctx: RoleContext) -> void:
 				sample_speed, wrister_unsettled, _scratch_opponent_caps,
 				wrister_five_hole, wrister_goalie_down,
 				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-				_scratch_option_receiver_pos, wrister_hands, wrister_pads)
+				_scratch_option_receiver_pos, wrister_hands, wrister_pads, ctx.self_loft_tan)
 		if s > shoot_score:
 			shoot_score = s
 			_shot_sample_release = release
@@ -1295,20 +1295,20 @@ func _pick_action(ctx: RoleContext) -> void:
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, wrister_hands, wrister_pads)
+					shot_screen_dist, wrister_hands, wrister_pads, ctx.self_loft_tan)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					ctx.self_aim_spread_rad,
 					wrister_seal_x, wrister_seal_tall, shot_screen_dist,
-					wrister_hands, wrister_pads)
+					wrister_hands, wrister_pads, ctx.self_loft_tan)
 			shot_power_t = AIActionScoring.best_shot_power_t(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
 					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, wrister_hands, wrister_pads)
+					shot_screen_dist, wrister_hands, wrister_pads, ctx.self_loft_tan)
 			shot_release_offset = _shot_sample_offset
 			if _shot_sample_backhand:
 				# The controller applies backhand_power_coefficient to the FINAL

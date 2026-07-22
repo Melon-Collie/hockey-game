@@ -20,12 +20,12 @@ extends RefCounted
 #     counterweight that makes the dial a real seesaw; glide is exempt so the
 #     tank still coasts), hitbox width (tracks the visual frame bulk) and the
 #     stamina metabolism fork (lean = shallow pool / fast regen).
-#   • GEAR — four discrete slots (skate profile, blade curve, stick flex,
-#     stick length), three options each, all LATERAL (no net power).
-#     **Slot status: STICK LENGTH is live (leans stick_len_mult — reach and
-#     the blade-cap lever derivation follow); profile / curve / flex are
-#     stored, replicated and validated but have ZERO gameplay effect until
-#     their landing stages.**
+#   • GEAR — four discrete slots, three options each, ALL LIVE and all
+#     LATERAL (no net power): SKATE PROFILE (top-end/glide ↔ first-step/
+#     cornering incl. grip), BLADE CURVE (face angle gates the soft roof ↔
+#     backhand honesty, + runway lean), STICK FLEX (shot ceiling ↔ load
+#     time + runway), STICK LENGTH (reach/sweep ↔ snap/inner-circle — the
+#     blade-cap lever).
 #
 # There is NO power economy: no tiers, no strong/weak shape, no legality
 # beyond range coercion. Body dials are lateral; gear is lateral; validation
@@ -150,6 +150,20 @@ const _STICK_LEN: Array[float] = [0.981, 1.000, 1.028, 1.056, 1.084]
 const _LENGTH_LEAN: Array[float] = [0.960, 1.000, 1.040]  # SHORT / STANDARD / LONG
 
 # ── Gear-lean tables — 3-vec, indexed by the slot option (0/1/2) ─────────────
+# SKATE PROFILE — top-end ↔ burst (the last slot to land). POWER (long flat
+# grind) = +top speed and +glide, −agility (turn/brake/grip — it multiplies
+# the full agility lever, lateral_grip included); AGILITY (rockered) = +first
+# step and +cornering, −top speed. The speed lean is what re-widens the
+# sprint band the body plane deliberately compressed (~20.5–24 mph across
+# profiles, approaching the v3 20–25 target). STACKED AGILITY CORNERS
+# (body × gear, pinned by test): best 5'8"-lean-agility ≈ 1.14, worst
+# 6'7"-heavy-power ≈ 0.85 — a self-chosen extreme, deliberately below the
+# involuntary body floor (~0.89).
+const _PROFILE_SPEED_LEAN: Array[float] = [0.96, 1.00, 1.04]    # agility / balanced / power
+const _PROFILE_AGILITY_LEAN: Array[float] = [1.05, 1.00, 0.95]
+const _PROFILE_ACCEL_LEAN: Array[float] = [1.04, 1.00, 0.98]
+const _PROFILE_GLIDE_LEAN: Array[float] = [1.03, 1.00, 0.96]    # drag mult: lower = coasts better
+
 # STICK FLEX — power ↔ release, a true seesaw: stiff loads a bigger shot but
 # pays a slower load (longer slapper wind-up AND longer wrister runway);
 # whippy is the snap release at a softer ceiling. NOTE the charge lean goes
@@ -330,17 +344,21 @@ static func inches_label(inches: int) -> String:
 
 
 # ── Named multiplier accessors ────────────────────────────────────────────────
-# Body — height
-func speed_mult() -> float:   return _h(_SPEED_H, height)
+# Body — height (× the skate-profile gear lean where the profile owns a share)
+func speed_mult() -> float:
+	return _h(_SPEED_H, height) * _PROFILE_SPEED_LEAN[profile]
 # Agility = height baseline × frame term (F = mv²/r — mass widens the arc and
-# lengthens the stop). Feeds turn / brake / facing / lateral quickness.
-func agility_mult() -> float: return _h(_AGILITY_H, height) * _f(_AGILITY_F)
+# lengthens the stop) × profile lean. Feeds turn / brake / facing / grip.
+func agility_mult() -> float:
+	return _h(_AGILITY_H, height) * _f(_AGILITY_F) * _PROFILE_AGILITY_LEAN[profile]
 # Edge glide is the inverse of the HEIGHT-ONLY agility component — deliberately
 # NOT the full agility_mult: routing the frame term in would make a heavy build
 # bleed speed while coasting, the opposite of the momentum identity the
 # accel↔momentum fork promises (the tank turns wide but coasts like his mass
-# says he should). Derived so it can't drift from the height number it mirrors.
-func agility_glide_mult() -> float: return 2.0 - _h(_AGILITY_H, height)
+# says he should). The PROFILE lean does apply — blade contact length is
+# literally the glide surface (the long flat coasts, the rocker scrubs).
+func agility_glide_mult() -> float:
+	return (2.0 - _h(_AGILITY_H, height)) * _PROFILE_GLIDE_LEAN[profile]
 # Shot ceiling = height baseline × flex lean (stiff loads more).
 func shot_power_mult() -> float:    return _h(_SHOT_H, height) * _FLEX_SHOT_LEAN[flex]
 # Slapper wind-up: the HEIGHT part keeps the inherited inverse coupling
@@ -350,8 +368,8 @@ func shot_power_mult() -> float:    return _h(_SHOT_H, height) * _FLEX_SHOT_LEAN
 func shot_charge_mult() -> float:
 	return (2.0 - _h(_SHOT_H, height)) * _FLEX_CHARGE_LEAN[flex]
 
-# Body — frame
-func accel_mult() -> float:         return _f(_ACCEL_F)
+# Body — frame (× the profile's first-step lean)
+func accel_mult() -> float:         return _f(_ACCEL_F) * _PROFILE_ACCEL_LEAN[profile]
 func stamina_drain_mult() -> float: return _f(_STAMINA_DRAIN_F)
 func stamina_regen_mult() -> float: return _f(_STAMINA_REGEN_F)
 # Mass is linear in displayed weight — see NEUTRAL_WEIGHT_LBS.

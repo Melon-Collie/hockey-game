@@ -105,6 +105,9 @@ var self_pass_aim_error_rad: float = 0.0
 # the WHEN axis instead of the WHERE. 0 for a tick-perfect (test/raw) agent.
 var shot_timing_error_s: float = 0.0
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+# This bot's blade face-angle cap (tan — curve gear), so its own HIGH-hole
+# pricing knows its real minimum roofing distance (AISkaterCaps.loft_tan_max).
+var self_loft_tan: float = 1.0
 # This bot's body-check delivery (Size + Physical) and current stagger, so the
 # on-puck defensive roles (PRESSURE / FORECHECK F1) can decide whether a check
 # is worth committing to via AIBodyCheck. League baselines / 0 when unwired.

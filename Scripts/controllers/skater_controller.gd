@@ -1044,6 +1044,7 @@ func build_ai_caps() -> AISkaterCaps:
 	caps.max_blade_reach = stick_length + GameRules.DEFAULT_BLADE_LENGTH_M + rom_backhand_reach_max
 	caps.wrister_shot_speed = max_wrister_power
 	caps.blade_speed = max_blade_speed
+	caps.loft_tan_max = loft_tan_max
 	caps.backhand_power_coefficient = backhand_power_coefficient
 	# Handle reach scales with the blade lever: max_blade_speed / its base is
 	# exactly the lever ratio (attributes v4 — reach + stick length), so a
