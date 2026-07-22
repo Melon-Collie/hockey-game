@@ -1165,8 +1165,9 @@ func apply_local_attributes(attrs: PlayerAttributes) -> void:
 # re-apply): here we're in the pre-match lobby, no skater exists yet, so this
 # only updates the value the host spawns from at game start. We stamp the local
 # peer's own entry (host = 1) so the local spawn path reads it directly; a
-# client also forwards the build to the host, which re-validates the point-buy
-# budget before storing it as authority. No live re-apply, no reconcile.
+# client also forwards the build to the host, which coerce-validates it (v4
+# lateral axes — clamp/BMI-band, no budget) before storing it as authority.
+# No live re-apply, no reconcile.
 func update_lobby_attributes(attrs: PlayerAttributes) -> void:
 	if attrs == null:
 		return
