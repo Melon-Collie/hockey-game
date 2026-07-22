@@ -235,14 +235,23 @@ static func _restrict_prev(prev: Dictionary, reward: Dictionary) -> Dictionary:
 
 
 # Goal-side cover point for a man: a stick into the man→our-net lane. Clamped
-# so a man already at the net doesn't push the anchor past the goal line.
+# so a man already at the net doesn't push the anchor past the goal line, and
+# held in front of the line outright for a man AT/BEHIND it (corner lurker,
+# wraparound walker): min(depth, dist) only stops the anchor overshooting the
+# net CENTER, so a behind-the-line man used to station his marker behind the
+# goal line with him — you front that man from the post, you don't chase him
+# behind your own net (the goalie's RVH owns the wrap).
 static func cover_anchor(man: Vector3, our_net: Vector3) -> Vector3:
 	var to_net: Vector3 = our_net - man
 	var dist: float = to_net.length()
 	if dist < 0.001:
 		return man
 	var depth: float = minf(COVER_DEPTH_M, dist)
-	return man + (to_net / dist) * depth
+	var anchor: Vector3 = man + (to_net / dist) * depth
+	var line_z: float = GameRules.GOAL_LINE_Z - AIRoleHelpers.GOAL_LINE_BUFFER_M
+	if absf(anchor.z) > line_z:
+		anchor.z = signf(anchor.z) * line_z
+	return anchor
 
 
 # Max-reward distinct-man matching, brute-forced. Returns [total_reward, map].

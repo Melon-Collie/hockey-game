@@ -215,6 +215,11 @@ var _receive_body_offset: float = (
 # flight time to spare — otherwise the default lead-intercept (which
 # gets the bot to the puck faster, even if at a worse angle) wins.
 const RECEIVE_TIMING_MARGIN: float = 0.9
+# Body-center inset from the boards for the receive stance anchor (a
+# skater's collision radius, so the shoulder — not the anchor point —
+# stops at the glass). Applies when the side-stand offset from a
+# boards-hugging rim line would push the stance into the wall.
+const RECEIVE_BODY_WALL_MARGIN_M: float = 0.5
 
 # ── Shot-aware reception (catch WITH shot intent) ─────────────────────────────
 # When a pass is incoming and a shot from the reception area is on, the bot
@@ -2435,6 +2440,15 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 					puck_pos.x - self_pos.x, 0.0, puck_pos.z - self_pos.z)
 			if through.length_squared() > 0.0001:
 				target = puck_pos + through.normalized() * ENGAGEMENT_PROXIMITY_M
+				# The drive-through is a SKATING route — it cannot pass
+				# through a cage. A 50/50 at the crease edge used to
+				# overshoot INTO the goal mouth (the bot crashing its own
+				# net, bulldozing the goalie, shoveling the contest toward
+				# the mesh). When the through-line crosses a net, engage at
+				# the puck itself: the blade contest still happens, without
+				# committing the body through the frame.
+				if AIActionScoring.carry_path_blocked_by_net(puck_pos, target):
+					target = puck_pos
 				# Sprint gate reads the overshoot too — the easing that slows a
 				# clean solo pickup must not bleed speed out of a contest.
 				_chase_sprint_ref = target
@@ -2560,6 +2574,14 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	if t <= 0.0:
 		return false
 	var perp_foot: Vector3 = puck_pos + puck_dir * t
+	# A rimmed puck rides the wall (and curls the corner arc), so the straight
+	# continuation of its velocity can leave the rink entirely — mid-corner it
+	# points at the glass. Clamp the line geometry onto the rink inner surface
+	# (rounded corners included) so the stance is built where the puck can
+	# physically travel, not on the phantom straight line.
+	var foot_xz: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(perp_foot.x, perp_foot.z))
+	perp_foot = Vector3(foot_xz.x, 0.0, foot_xz.y)
 	var perp_off: Vector3 = self_pos - perp_foot
 	perp_off.y = 0.0
 	var perp_dist: float = perp_off.length()
@@ -2575,6 +2597,13 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	else:
 		lateral = Vector3(-puck_dir.z, 0.0, puck_dir.x)
 	var body_anchor: Vector3 = perp_foot + lateral * _receive_body_offset
+	# Wall reception: the side-stand offset from a boards-hugging line can
+	# push the body target into/through the wall — keep the body's center a
+	# body radius inside so the stance is standable and the blade (not the
+	# chest) plays the rim line.
+	var anchor_xz: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(body_anchor.x, body_anchor.z), RECEIVE_BODY_WALL_MARGIN_M)
+	body_anchor = Vector3(anchor_xz.x, 0.0, anchor_xz.y)
 	# Timing gate: do we have time to reach body_anchor before the puck
 	# arrives at perp_foot? If not, default lead-intercept will get us
 	# closer (even if at a worse angle) — bail and let it run.
@@ -2647,6 +2676,13 @@ func _blade_gate_on_puck_line(
 	if t <= 0.0:
 		return puck_pos
 	var foot := Vector3(puck_pos.x + dir.x * t, 0.0, puck_pos.z + dir.z * t)
+	# Rim/board pucks: the straight continuation exits the rink mid-corner —
+	# clamp the line point onto the inner surface (rounded corners included)
+	# so the blade parks where the rimming puck actually comes through, not
+	# on a phantom point past the glass.
+	var foot_clamped: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(foot.x, foot.z))
+	foot = Vector3(foot_clamped.x, 0.0, foot_clamped.y)
 	var perp_dx: float = self_pos.x - foot.x
 	var perp_dz: float = self_pos.z - foot.z
 	var perp_sq: float = perp_dx * perp_dx + perp_dz * perp_dz
@@ -2662,7 +2698,12 @@ func _blade_gate_on_puck_line(
 		return foot
 	# Entry point: the front edge of the reach circle along the puck's travel —
 	# the earliest touchable spot, leaving the rest of the reach as margin.
-	return foot - dir * sqrt(reach_sq - perp_sq)
+	# Clamped like the foot: on a wall line the un-clamped entry can back off
+	# the line through the boards.
+	var gate: Vector3 = foot - dir * sqrt(reach_sq - perp_sq)
+	var gate_clamped: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(gate.x, gate.z))
+	return Vector3(gate_clamped.x, 0.0, gate_clamped.y)
 
 
 # Anticipation: is a fast loose puck (a pass) heading toward us right now? Same
@@ -5294,7 +5335,99 @@ func _ready_stance_aim(self_pos: Vector3, anchor: Vector3, snapshot: WorldSnapsh
 		near_anchor_m: float = FACE_THREAT_NEAR_ANCHOR_M) -> Vector3:
 	var desired_dir: Vector3 = _compute_desired_aim_dir(
 			self_pos, anchor, snapshot, near_anchor_m)
+	desired_dir = _deflect_safe_aim_dir(self_pos, desired_dir, snapshot)
 	return self_pos + desired_dir * READY_STANCE_AIM_FORWARD_M
+
+
+# ── Own-net blade discipline ─────────────────────────────────────────────────
+# In the house in front of our own net, a passively parked blade sitting in
+# the puck→our-mouth corridor is a deflection surface: glancing contact keeps
+# the along-face pace (PuckCollisionRules), and in tight the redirect finds
+# the mouth — the own-goal tip ("bots keep their sticks too close"). Real
+# doctrine agrees: in tight you take your stick OUT of the shooting lane and
+# let the goalie see the puck. Only the BLADE clears the corridor — the body
+# stays where the role put it (a body block deadens; positioning is the
+# role's call). Applies to the passive ready stance only: active plays
+# (chase-gate interceptions, poke jabs, pickups) keep the blade on the
+# puck's line — breaking up the play ends the danger.
+
+# Depth of the discipline zone from our goal center — the house, where a
+# redirect still fits inside the mouth angle (tactical staging constant).
+const OWN_NET_BLADE_DISCIPLINE_M: float = 8.0
+# Clearance the parked blade keeps off the puck→mouth corridor: a blade
+# length plus the puck's contact radius, with a step of margin.
+const BLADE_LANE_CLEAR_M: float = (
+		GameRules.DEFAULT_BLADE_LENGTH_M + GameRules.PUCK_COLLISION_RADIUS + 0.2)
+
+
+# Returns `dir` unchanged outside the discipline conditions; otherwise the
+# minimal rotation that slides the parked blade point to the edge of the
+# puck→our-mouth corridor on its current side.
+func _deflect_safe_aim_dir(
+		self_pos: Vector3, dir: Vector3, snapshot: WorldSnapshot) -> Vector3:
+	if snapshot == null or snapshot.puck_state == null:
+		return dir
+	# Runs every physics tick per off-puck bot (live-aim path): the house
+	# test goes first — pure arithmetic that exits for everyone but the 1-3
+	# net-front bodies, before any dictionary lookups.
+	var own_net := Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
+	var net_dx: float = own_net.x - self_pos.x
+	var net_dz: float = own_net.z - self_pos.z
+	if net_dx * net_dx + net_dz * net_dz \
+			> OWN_NET_BLADE_DISCIPLINE_M * OWN_NET_BLADE_DISCIPLINE_M:
+		return dir
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier != -1 and _team_id_by_peer.get(carrier, -1) == _team_id:
+		return dir   # our puck — offensive stance, no lane to guard
+	var puck_pos: Vector3 = snapshot.puck_state.position
+	var pdx: float = puck_pos.x - self_pos.x
+	var pdz: float = puck_pos.z - self_pos.z
+	if pdx * pdx + pdz * pdz <= _blade_reach * _blade_reach:
+		return dir   # contest range — play the puck, don't concede it
+	var lane: Vector3 = own_net - puck_pos
+	lane.y = 0.0
+	var lane_len: float = lane.length()
+	if lane_len < 0.001:
+		return dir
+	var u: Vector3 = lane / lane_len
+	var blade_pt: Vector3 = self_pos + dir * READY_STANCE_AIM_FORWARD_M
+	var t: float = (blade_pt.x - puck_pos.x) * u.x \
+			+ (blade_pt.z - puck_pos.z) * u.z
+	if t <= 0.0 or t >= lane_len:
+		return dir   # parked blade outside the corridor's span
+	var foot := Vector3(puck_pos.x + u.x * t, 0.0, puck_pos.z + u.z * t)
+	var perp := Vector3(blade_pt.x - foot.x, 0.0, blade_pt.z - foot.z)
+	var perp_len: float = perp.length()
+	if perp_len >= BLADE_LANE_CLEAR_M:
+		return dir
+	var side: Vector3
+	if perp_len > 0.001:
+		side = perp / perp_len
+	else:
+		side = Vector3(-u.z, 0.0, u.x)   # on the line — either edge works
+	# Park the blade ON the corridor-edge line at the full stance length:
+	# intersect the stance circle (radius READY_STANCE_AIM_FORWARD_M around
+	# the body) with the edge line, taking the crossing nearest the original
+	# park (least rotation). No crossing → the stance can't reach the edge;
+	# hold the blade perpendicular-off for the max clearance available.
+	var p0: Vector3 = puck_pos + side * BLADE_LANE_CLEAR_M
+	var d0x: float = self_pos.x - p0.x
+	var d0z: float = self_pos.z - p0.z
+	var along: float = d0x * u.x + d0z * u.z
+	var hx: float = d0x - u.x * along
+	var hz: float = d0z - u.z * along
+	var h_sq: float = hx * hx + hz * hz
+	var r_sq: float = READY_STANCE_AIM_FORWARD_M * READY_STANCE_AIM_FORWARD_M
+	if h_sq >= r_sq:
+		return side
+	var half_span: float = sqrt(r_sq - h_sq)
+	var s_pick: float = along + half_span if absf(along + half_span - t) \
+			< absf(along - half_span - t) else along - half_span
+	var safe_dir: Vector3 = p0 + u * s_pick - self_pos
+	safe_dir.y = 0.0
+	if safe_dir.length_squared() < 0.0001:
+		return dir
+	return safe_dir.normalized()
 
 
 # Picks the desired raw aim direction: anchor direction when far,

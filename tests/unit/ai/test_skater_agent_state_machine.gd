@@ -1441,6 +1441,22 @@ func test_blade_gate_chases_a_puck_already_past() -> void:
 	assert_eq(gate, puck_pos, "a puck already past our level is chased, not gated")
 
 
+func test_blade_gate_clamps_a_corner_rim_line_into_the_rink() -> void:
+	# Rim heading into the corner: the puck's straight continuation exits the
+	# rink (mid-corner its velocity points at the glass), so the un-clamped
+	# perpendicular foot lands PAST the boards — a phantom point the blade
+	# would park on while the real puck curls the arc inside. The gate must
+	# sit on/inside the rink inner surface.
+	var puck_pos := Vector3(12.5, 0, 19.0)          # riding high on the +X wall
+	var puck_vel := Vector3(9.9, 0, 9.9)            # angling into the +X/+Z corner
+	var self_pos := Vector3(12.6, 0, 23.5)          # downstream, waiting on the rim
+	var gate: Vector3 = sm._blade_gate_on_puck_line(self_pos, puck_pos, puck_vel)
+	var inside: Vector2 = GameRules.clamp_to_rink_inner(Vector2(gate.x, gate.z))
+	assert_almost_eq(inside.distance_to(Vector2(gate.x, gate.z)), 0.0, 0.01,
+			"gate parks on the rink inner surface, not past the glass; got %s"
+			% gate)
+
+
 func test_blade_gate_stationary_puck_is_the_puck() -> void:
 	var puck_pos := Vector3(5, 0, 5)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
@@ -1466,10 +1482,12 @@ func test_receive_takes_the_feed_in_stride_when_roughly_synced() -> void:
 	# 6 m/s arrives inside its own blade window of the puck — running through
 	# the reception keeps the blade on the line when the puck gets there, so no
 	# brake: full speed through the catch (stride is the DEFAULT now).
-	var s := _receive_snap(Vector3.ZERO, Vector3(20, 0, 0),
-			Vector3(14, 0, 4), Vector3(0, 0, -6))
+	# (Coordinates kept inside the real rink — the receive geometry is
+	# board-aware now, so an out-of-rink stance would be clamped.)
+	var s := _receive_snap(Vector3(-14, 0, 0), Vector3(20, 0, 0),
+			Vector3(0, 0, 4), Vector3(0, 0, -6))
 	var input := InputState.new()
-	assert_true(sm._pass_receive_aim_and_steer(input, s, Vector3(14, 0, 4)),
+	assert_true(sm._pass_receive_aim_and_steer(input, s, Vector3(0, 0, 4)),
 			"scenario commits the reception")
 	assert_false(input.brake, "synced arrival → take it in stride, no arrival brake")
 
@@ -1478,8 +1496,9 @@ func test_receive_settles_only_when_genuinely_early() -> void:
 	# Bot already sitting ON the anchor at 4 m/s with the puck still a full
 	# second away — far outside the blade window its motion covers, so waiting
 	# is forced and it brakes to hold the gate.
-	var self_pos := Vector3(14, 0, 1.4)
-	var s := _receive_snap(Vector3(-6, 0, 0), Vector3(20, 0, 0),
+	# (In-rink coordinates — see the in-stride test above.)
+	var self_pos := Vector3(0, 0, 1.4)
+	var s := _receive_snap(Vector3(-20, 0, 0), Vector3(20, 0, 0),
 			self_pos, Vector3(0, 0, -4))
 	var input := InputState.new()
 	assert_true(sm._pass_receive_aim_and_steer(input, s, self_pos),
@@ -2004,3 +2023,51 @@ func test_no_deke_without_the_carrier_read() -> void:
 	sm._poke_evade_modulate_steering(i, s, Vector3.ZERO)
 	assert_false(sm._poke_evade_deking)
 	assert_eq(sm._poke_evade_active_ticks, 0)
+
+
+# ── Own-net blade discipline (_deflect_safe_aim_dir) ─────────────────────────
+
+func test_house_blade_clears_the_puck_to_mouth_corridor() -> void:
+	# Net-front defender, loose puck up the middle: the ready-stance dir
+	# points at the puck, parking the blade dead in the puck→mouth corridor —
+	# a deflection surface in tight (the own-goal tip). The safe dir slides
+	# the blade to the corridor's edge at full stance length; the body stays
+	# where the role put it.
+	var self_pos := Vector3(0, 0, 24.5)            # in the house; own net +26.65
+	var s := _loose_puck_snap(Vector3(0, 0, 17))   # slot shot line through us
+	var dir := Vector3(0, 0, -1)                   # aiming straight at the puck
+	var safe: Vector3 = sm._deflect_safe_aim_dir(self_pos, dir, s)
+	var blade_pt: Vector3 = self_pos + safe * Agent.READY_STANCE_AIM_FORWARD_M
+	# The corridor runs up the z-axis here, so |x| IS the perp clearance.
+	assert_gte(absf(blade_pt.x), Agent.BLADE_LANE_CLEAR_M - 0.01,
+			"parked blade slides to the corridor edge; got %s" % blade_pt)
+	assert_almost_eq(self_pos.distance_to(blade_pt),
+			Agent.READY_STANCE_AIM_FORWARD_M, 0.01,
+			"stance length is preserved — only the direction rotates")
+
+
+func test_blade_discipline_only_applies_in_the_house() -> void:
+	var self_pos := Vector3(0, 0, 12)              # high zone, out of the house
+	var s := _loose_puck_snap(Vector3(0, 0, 5))
+	var dir := Vector3(0, 0, -1)
+	assert_eq(sm._deflect_safe_aim_dir(self_pos, dir, s), dir,
+			"outside the house the ready stance is untouched")
+
+
+func test_blade_discipline_yields_to_contest_range() -> void:
+	# Puck inside blade reach: play it — winning the puck ends the danger.
+	var self_pos := Vector3(0, 0, 24.5)
+	var s := _loose_puck_snap(Vector3(0, 0, 23.4))   # ~1.1 m away, in reach
+	var dir := Vector3(0, 0, -1)
+	assert_eq(sm._deflect_safe_aim_dir(self_pos, dir, s), dir,
+			"a puck in contest range is played, not conceded")
+
+
+func test_blade_discipline_ignores_our_own_possession() -> void:
+	# Teammate carrying near our net (breakout regroup): no lane to guard.
+	var self_pos := Vector3(0, 0, 24.5)
+	var s := _loose_puck_snap(Vector3(0, 0, 17))
+	s.puck_state.carrier_peer_id = TEAMMATE_ID
+	var dir := Vector3(0, 0, -1)
+	assert_eq(sm._deflect_safe_aim_dir(self_pos, dir, s), dir,
+			"our own possession needs no deflection discipline")

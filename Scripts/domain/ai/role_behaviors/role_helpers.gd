@@ -768,6 +768,12 @@ static var _race_station_ts: Array[float] = []
 static var _race_reach_sq: Array[float] = []
 static var _race_channel_count: int = 0
 static var _race_net: Vector3 = Vector3.ZERO
+# The deepest useful defensive stand: the net-front spot at the top of the
+# crease repel skirt (crease arc + extension). Deeper than this a skater
+# adds nothing the goalie doesn't already cover, his own steering fights
+# the spot (crease repel), and body overshoot carries him onto/behind the
+# goal line — the retreat bisection floors here, never at the net point.
+static var _race_home_stand: Vector3 = Vector3.ZERO
 # Memo key: every full-opponent-list consumer of the same team on the same
 # snapshot builds IDENTICAL channels (points, high slot, valve, line holds all
 # fill right after collect_opponents) — one fill serves them all. CONTAIN's
@@ -809,6 +815,9 @@ static func fill_counter_channels(ctx: RoleContext,
 	_race_station_ts.clear()
 	_race_channel_count = 0
 	_race_net = our_net
+	_race_home_stand = Vector3(our_net.x, 0.0,
+			our_net.z - signf(our_net.z) * (
+					CreaseRules.ARC_RADIUS + AISteering.CREASE_REPEL_EXTENSION))
 	var puck_pos: Vector3 = Vector3.INF
 	var opp_has_puck: bool = false
 	if ctx.snapshot != null and ctx.snapshot.puck_state != null:
@@ -1024,11 +1033,16 @@ static func race_home_feasible(c: Vector3,
 	return true
 
 
-# The most forward point on the `fwd` → our-net segment that is still
+# The most forward point on the `fwd` → net-front segment that is still
 # race-home feasible: `fwd` itself when the stand holds, else a bisection
 # down the retreat line — the sag-to-even that replaces the old radius
-# clamp. Falls all the way to the net when nothing on the line contains
-# (a threat already behind everyone), which is the honest answer.
+# clamp. When nothing on the line contains (a threat already behind
+# everyone), the honest floor is the NET-FRONT STAND (_race_home_stand),
+# not the net point: a skater on the goal line duplicates the goalie,
+# fights his own crease repel, and overshoots behind the line — the
+# "defenders skating behind their own goal line" failure. A `fwd` already
+# deeper than the floor (doorstep containment) is untouched — the floor
+# only binds the retreat endpoint.
 static func most_forward_feasible(fwd: Vector3,
 		self_max_speed: float, self_max_accel: float) -> Vector3:
 	if race_home_feasible(fwd, self_max_speed, self_max_accel):
@@ -1037,12 +1051,12 @@ static func most_forward_feasible(fwd: Vector3,
 	var hi: float = 1.0
 	for _i: int in 6:
 		var mid: float = (lo + hi) * 0.5
-		if race_home_feasible(_race_net.lerp(fwd, mid),
+		if race_home_feasible(_race_home_stand.lerp(fwd, mid),
 				self_max_speed, self_max_accel):
 			lo = mid
 		else:
 			hi = mid
-	return _race_net.lerp(fwd, lo)
+	return _race_home_stand.lerp(fwd, lo)
 
 
 static func _xz_distance(a: Vector3, b: Vector3) -> float:
@@ -1103,6 +1117,16 @@ static func loose_puck_race_lost(
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		# A SLOW puck's race is only lost to an opponent actually running it
+		# (on the puck, or genuinely closing — committed_to_race). The ETA
+		# model prices his hypothetical sprint-from-now; declining on a body
+		# that is NOT going for the puck left it sitting between two staring
+		# teams (both sides declined on hypothetical winners). Fast pucks
+		# keep the pure path race: momentum already encodes commitment
+		# there, and a downstream interceptor legitimately waits still.
+		if traj.is_empty() \
+				and not AILoosePuckChase.committed_to_race(s, puck_pos):
+			continue
 		var speed: float = AILoosePuckChase.race_vmax(
 				s, caps_by_peer.get(pid), puck_pos)
 		var t: float

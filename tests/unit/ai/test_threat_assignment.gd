@@ -231,3 +231,14 @@ func test_cover_anchor_is_goal_side_of_man() -> void:
 			"anchor sits COVER_DEPTH_M off the man")
 	assert_lt(anchor.distance_to(OUR_NET), man.distance_to(OUR_NET),
 			"anchor is closer to our net than the man (goal-side)")
+
+
+func test_cover_anchor_stays_in_front_of_the_goal_line() -> void:
+	# A man AT/BEHIND the goal line (corner lurker, wraparound walker) must
+	# not station his marker behind the line with him — the anchor is held a
+	# buffer in front (front him at the post; the goalie's RVH owns the wrap).
+	var man := Vector3(3.0, 0.0, 27.5)   # behind the +Z goal line
+	var anchor: Vector3 = AIThreatAssignment.cover_anchor(man, OUR_NET)
+	assert_lt(anchor.z, GameRules.GOAL_LINE_Z - 0.99,
+			"anchor clamps a buffer in front of the goal line; got z=%f"
+			% anchor.z)

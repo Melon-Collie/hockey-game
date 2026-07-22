@@ -514,3 +514,18 @@ func test_arrival_brake_hysteresis_holds_the_brake_longer() -> void:
 			"outside the engage margin — don't start braking")
 	assert_true(AISteering.should_arrival_brake(Vector3.ZERO, anchor, vel, true),
 			"inside the release margin — hold an in-progress brake")
+
+
+func test_board_repel_yields_to_a_deliberate_wall_anchor() -> void:
+	# A rim-reception / wall-retrieval anchor sits AT the boards on purpose —
+	# the anti-hug field must not hold the body an equilibrium step inside the
+	# wall (the blade never reached the rim line). Holding the wall stance:
+	# near-zero net force. Same body position with a mid-ice anchor: the full
+	# inward field (pull + repel) still applies.
+	var stance := Vector3(RINK_X - 0.05, 0, 0)
+	var v_hold := _move(stance, stance)
+	assert_almost_eq(v_hold.x, 0.0, 0.05,
+			"anchor at the wall: repel yields, the stance is holdable")
+	var v_leave := _move(stance, Vector3(0, 0, 0))
+	assert_lt(v_leave.x, -0.9,
+			"mid-ice anchor from the same spot: full inward pull + repel")

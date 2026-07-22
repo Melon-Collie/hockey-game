@@ -12,19 +12,25 @@ class_name AIRoleContain
 # home to cover the carrier's receivers; CONTAIN owns the carrier.
 #
 # Geometry: target = a point on the carrier→our-net line, goal-side of the
-# carrier, at a gap that TIGHTENS as the carrier nears the net:
+# carrier, at a gap sized by the RUSH'S PACE — the cushion the defender
+# physically needs to answer a burst:
 #
-#     gap = clamp(carrier_dist_to_net × GAP_FRACTION, GAP_MIN_M, GAP_MAX_M)
+#     gap = clamp(GAP_MIN_M + closing_speed × GAP_CUSHION_REACT_S,
+#                 GAP_MIN_M, GAP_MAX_M)
 #     target = carrier + (our_net - carrier).normalized() × gap
 #
-# Far out (rush at the blue line) the gap is loose — CONTAIN stands off and
-# skates backward, mirroring the carrier without committing. Near the net the
-# gap collapses to a stick's length — CONTAIN is right on the carrier at the
-# doorstep. Because the target is always goal-side of the carrier and a fixed
-# distance IN FRONT of the net, CONTAIN never retreats behind its own goal line
-# (the old BACKCHECK failure) and never lunges past the carrier (the old
-# CONTAIN failure). Sprint-home to re-establish the gap is emergent from the
-# state machine's _resolve_sprint on this target.
+# A carrier charging at full stride keeps the deep cushion — committed
+# straight-line speed is what beats a defender clean. A gliding,
+# regrouping, or stalled carrier is met TIGHT, collapsing toward poke range
+# — "gapping up". The old distance-fraction gap (dist_to_net × 0.3) could
+# not gap up by construction: it parked the defender six metres off ANY
+# carrier at the blue line however slowly the rush came on — good at
+# getting back, never closing. At the doorstep both models agree (gap ≤
+# dist keeps it tight in close). Because the target is always goal-side of
+# the carrier and in FRONT of the net, CONTAIN never retreats behind its
+# own goal line (the old BACKCHECK failure) and never lunges past the
+# carrier (the old CONTAIN failure). Sprint-home to re-establish the gap is
+# emergent from the state machine's _resolve_sprint on this target.
 #
 # ── Odd-man pass-lane read ("play the pass") ─────────────────────────────────
 # The gap machinery above fixes the DEPTH; the DIRECTION is no longer pinned
@@ -58,12 +64,22 @@ class_name AIRoleContain
 # Falls back to the loose-puck spot when no skater carries the puck (so it keeps
 # containing the developing play), and to self_pos only when there's no puck.
 
-# Gap as a fraction of the carrier's distance to our net, then clamped. The
-# fraction gives the "tighten as they close" ramp; the clamps bound it to a
-# real challenge distance at both extremes.
-const GAP_FRACTION: float = 0.3
+# Pace-based gap cushion (see the header): the rush's closing speed times
+# the defender's answer time — reaction (~0.2 s) plus the pivot from the
+# matching backpedal into a committed stride (~0.3 s) — on a floor of
+# GAP_MIN_M (poke range plus the standstill-burst allowance; a stalled
+# carrier can still jump, but from zero) and capped at GAP_MAX_M (deeper
+# concedes an uncontested shot anyway).
 const GAP_MIN_M: float = 1.6
 const GAP_MAX_M: float = 6.0
+const GAP_CUSHION_REACT_S: float = 0.5
+
+
+# Shared with AIRoleChase's lost-race pre-contain, so the gap defender and
+# the chaser retreating into the gap stand read one formula.
+static func gap_for_pace(closing_m_s: float) -> float:
+	return clampf(GAP_MIN_M + closing_m_s * GAP_CUSHION_REACT_S,
+			GAP_MIN_M, GAP_MAX_M)
 
 # Where CONTAIN plants for the line stand: this far inside OUR blue line, so
 # the carrier meets a set defender exactly at the entry moment. One stride of
@@ -122,9 +138,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# laterally had CONTAIN back-pedalling along a stale carrier→net line
 	# and re-correcting every tick. Velocity-based, so it shrinks to
 	# nothing the moment the carrier slows — no phantom to overshoot.
+	var carrier_vel: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
 	carrier_pos = AIRoleHelpers.lead_threat(
-			carrier_pos, AIRoleHelpers.resolve_play_ref_velocity(ctx),
-			ctx.defensive_anticipation_scale)
+			carrier_pos, carrier_vel, ctx.defensive_anticipation_scale)
 
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var to_net: Vector3 = our_net - carrier_pos
@@ -134,7 +150,12 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		d.target_position = carrier_pos
 		return d
 
-	var gap: float = clampf(dist * GAP_FRACTION, GAP_MIN_M, GAP_MAX_M)
+	# The rush's pace = the carrier's closing speed down his own attack
+	# line (lateral or backward motion buys no burst head-start toward our
+	# net — the turn radius pays that conversion before it threatens).
+	var closing: float = maxf(
+			(carrier_vel.x * to_net.x + carrier_vel.z * to_net.z) / dist, 0.0)
+	var gap: float = gap_for_pace(closing)
 	# STAND UP AT THE BLUE LINE — but only with a safety layer home behind us.
 	# The raw distance-fraction gap concedes the entry by construction: at the
 	# moment the carrier reaches our blue line the gap is ~maxed, so CONTAIN is
@@ -175,6 +196,18 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# caps buffer used to size-mismatch and silently demote every trailer to
 	# league-reference speed, so a plodding trailer forced a deep sag and a
 	# burner was under-feared).
+	#
+	# A trailer a TEAMMATE is already home on is NOT CONTAIN's problem — his
+	# marker owns that channel (the MARK pair / 5v5 backline exist exactly for
+	# this). Without the read, CONTAIN priced itself as the sole defender
+	# against every body on the ice, and with 4–5 opponents (5v5 especially)
+	# no stand on the line ever contained them all — the feasibility bisection
+	# sagged every rush to the net, overriding even the blue-line stand
+	# ("defenders never challenge, retreat to their own crease"). The read is
+	# per-man and positional: a teammate goal-side of the man's lead point and
+	# within cover-engagement reach (the cover stand's depth + a stick) can
+	# contain that man's channel; a marker still sprinting home does NOT
+	# count, so a genuinely beaten team still sags on the honest race.
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	var opp_caps: Array[AISkaterCaps] = ctx.scratch_opp_caps
 	var receivers: Array[Vector3] = ctx.scratch_opp_receivers
@@ -186,12 +219,15 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id or pid == carrier_pid:
 			continue
 		var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
-		opp_states.append(s)
-		opp_caps.append(ctx.caps_by_peer.get(pid))
 		# The same bodies are the carrier's receivers for the lane fan below —
 		# velocity-led so the fan guards where each feed is going.
-		receivers.append(AIRoleHelpers.lead_threat(
-				s.position, s.velocity, ctx.defensive_anticipation_scale))
+		var lead: Vector3 = AIRoleHelpers.lead_threat(
+				s.position, s.velocity, ctx.defensive_anticipation_scale)
+		if _teammate_home_on(ctx, lead):
+			continue
+		opp_states.append(s)
+		opp_caps.append(ctx.caps_by_peer.get(pid))
+		receivers.append(lead)
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	var dir_net: Vector3 = to_net / dist
 	var stand: Vector3 = AIRoleHelpers.most_forward_feasible(
@@ -231,6 +267,32 @@ static func _has_support_behind(ctx: RoleContext) -> bool:
 		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
 			continue
 		if ctx.own_goal_dir * ctx.snapshot.skater_states[pid].position.z > my_depth:
+			return true
+	return false
+
+
+# True when a teammate (not self) is HOME ON this man: goal-side of the man's
+# lead point AND within cover-engagement reach of it — the marker's cover
+# stand sits COVER_DEPTH_M goal-side with a stick's reach beyond, so a body
+# inside that envelope owns the man's counter channel (deny the feed, or be
+# on him the moment it arrives). Both quantities CONTAIN can physically see:
+# where the teammate is standing and where the man is cutting. A teammate
+# still racing back from up-ice fails the goal-side test and does not count.
+static func _teammate_home_on(ctx: RoleContext, man_lead: Vector3) -> bool:
+	var reach: float = AIThreatAssignment.COVER_DEPTH_M \
+			+ SkaterAgentStateMachine.BLADE_REACH_M
+	var man_depth: float = ctx.own_goal_dir * man_lead.z
+	for pid: int in ctx.snapshot.skater_states:
+		if pid == ctx.peer_id:
+			continue
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+			continue
+		var t: SkaterNetworkState = ctx.snapshot.skater_states[pid]
+		if ctx.own_goal_dir * t.position.z <= man_depth:
+			continue
+		var dx: float = t.position.x - man_lead.x
+		var dz: float = t.position.z - man_lead.z
+		if dx * dx + dz * dz <= reach * reach:
 			return true
 	return false
 
