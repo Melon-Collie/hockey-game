@@ -88,24 +88,34 @@ func test_target_is_goal_side_of_carrier_on_net_line() -> void:
 			"target sits on the carrier→net line; got x=%f" % d.target_position.x)
 
 
-func test_gap_tightens_as_carrier_nears_net() -> void:
-	# Far carrier → loose gap (stand off); near carrier → tight gap (on him).
-	var far_carrier := Vector3(0, 0, 0)
-	var near_carrier := Vector3(0, 0, 24)
-	var far_skaters: Array = [
+func test_gap_matches_the_rush_pace() -> void:
+	# The gap is a reaction cushion against the rush's PACE: a charging
+	# carrier is stood off deep (committed speed is what beats a defender
+	# clean); a gliding one is met tight — "gapping up", which the old
+	# distance-fraction gap never did (six metres off any blue-line carrier
+	# however slowly the rush came on).
+	var carrier := Vector3(0, 0, 4)
+	var charging: Array = [
 		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
-		[200, 1 - TEAM_ID, far_carrier, Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier, Vector3(0, 0, 9)],
 	]
-	var near_skaters: Array = [
-		[1, TEAM_ID, Vector3(0, 0, 22), Vector3.ZERO],
-		[200, 1 - TEAM_ID, near_carrier, Vector3.ZERO],
+	var gliding: Array = [
+		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
+		[200, 1 - TEAM_ID, carrier, Vector3(0, 0, 2)],
 	]
-	var far_t: Vector3 = AIRoleContain.decide(_make_ctx(Vector3(0, 0, 18), far_skaters, 200)).target_position
-	var near_t: Vector3 = AIRoleContain.decide(_make_ctx(Vector3(0, 0, 22), near_skaters, 200)).target_position
-	var far_gap: float = far_carrier.distance_to(far_t)
-	var near_gap: float = near_carrier.distance_to(near_t)
-	assert_lt(near_gap, far_gap,
-			"gap tightens as the carrier nears the net; near=%f far=%f" % [near_gap, far_gap])
+	var charge_t: Vector3 = AIRoleContain.decide(
+			_make_ctx(Vector3(0, 0, 18), charging, 200)).target_position
+	var glide_t: Vector3 = AIRoleContain.decide(
+			_make_ctx(Vector3(0, 0, 18), gliding, 200)).target_position
+	var charge_gap: float = carrier.distance_to(charge_t)
+	var glide_gap: float = carrier.distance_to(glide_t)
+	assert_lt(glide_gap, charge_gap - 2.0,
+			"a gliding carrier is met tight, a charging one stood off deep;"
+			+ " glide=%f charge=%f" % [glide_gap, charge_gap])
+	assert_almost_eq(glide_t.z - (carrier.z + 2.0
+			* AIRoleHelpers.DEFENSIVE_ANTICIPATION_S),
+			AIRoleContain.gap_for_pace(2.0), 0.3,
+			"the tight gap is the pace cushion off the led carrier")
 
 
 func test_leads_a_laterally_cutting_carrier() -> void:
@@ -154,7 +164,7 @@ func test_stands_up_at_the_blue_line_with_support_behind() -> void:
 	var ctx := _make_ctx(Vector3(0, 0, 12), [
 			[1, TEAM_ID, Vector3(0, 0, 12)],
 			[2, TEAM_ID, Vector3(0, 0, 20)],   # safety home behind CONTAIN
-			[200, 1, carrier],
+			[200, 1, carrier, Vector3(0, 0, 8)],   # driving the line at pace
 	], 200)
 	var d: RoleDecision = AIRoleContain.decide(ctx)
 	assert_almost_eq(d.target_position.z,
@@ -173,12 +183,12 @@ func test_last_man_contains_instead_of_standing_up() -> void:
 	var supported := _make_ctx(Vector3(0, 0, 12), [
 			[1, TEAM_ID, Vector3(0, 0, 12)],
 			[2, TEAM_ID, Vector3(0, 0, 20)],   # safety home behind → stand up
-			[200, 1, carrier],
+			[200, 1, carrier, Vector3(0, 0, 8)],
 	], 200)
 	var last_man := _make_ctx(Vector3(0, 0, 12), [
 			[1, TEAM_ID, Vector3(0, 0, 12)],
 			[2, TEAM_ID, Vector3(0, 0, -10)],  # partner caught up-ice → last man
-			[200, 1, carrier],
+			[200, 1, carrier, Vector3(0, 0, 8)],
 	], 200)
 	var supported_z: float = AIRoleContain.decide(supported).target_position.z
 	var last_man_z: float = AIRoleContain.decide(last_man).target_position.z
@@ -193,14 +203,13 @@ func test_gap_cap_releases_once_the_zone_is_gained() -> void:
 	var carrier := Vector3(0, 0, GameRules.BLUE_LINE_Z + 3.0)
 	var ctx := _make_ctx(Vector3(0, 0, 16), [
 			[1, TEAM_ID, Vector3(0, 0, 16)],
-			[200, 1, carrier],
+			[200, 1, carrier, Vector3(0, 0, 8)],
 	], 200)
 	var d: RoleDecision = AIRoleContain.decide(ctx)
-	var dist_to_net: float = carrier.distance_to(Vector3(0, 0, OUR_NET_Z))
-	var expected_gap: float = clampf(dist_to_net * AIRoleContain.GAP_FRACTION,
-			AIRoleContain.GAP_MIN_M, AIRoleContain.GAP_MAX_M)
-	assert_almost_eq(d.target_position.z, carrier.z + expected_gap, 0.3,
-			"inside the zone the normal gap ramp resumes")
+	var led: Vector3 = AIRoleHelpers.lead_threat(carrier, Vector3(0, 0, 8))
+	var expected_gap: float = AIRoleContain.gap_for_pace(8.0)
+	assert_almost_eq(d.target_position.z, led.z + expected_gap, 0.3,
+			"inside the zone the normal pace-cushion gap resumes")
 
 
 func test_never_advances_past_recovery_toward_a_distant_carrier() -> void:
@@ -298,9 +307,7 @@ func test_two_on_one_splits_toward_the_open_feed_lane() -> void:
 	# CONTAIN neither lunges at the carrier nor abandons the retreat. The
 	# expected depth is the normal protect-the-net ramp (the trailer's
 	# counter path is contained from there, so no extra sag applies).
-	var ramp_gap: float = clampf(
-			Vector3(0, 0, 14).distance_to(Vector3(0, 0, OUR_NET_Z)) * AIRoleContain.GAP_FRACTION,
-			AIRoleContain.GAP_MIN_M, AIRoleContain.GAP_MAX_M)
+	var ramp_gap: float = AIRoleContain.gap_for_pace(0.0)
 	var gap_dist: float = d.target_position.distance_to(Vector3(0, 0, 14))
 	assert_between(gap_dist, ramp_gap - 0.3, 9.5,
 			"lane candidates keep the gap depth; got %.2f m off the carrier" % gap_dist)
@@ -425,7 +432,7 @@ func test_line_stand_holds_when_the_trailer_is_marked() -> void:
 	var ctx := _make_ctx(Vector3(0, 0, 12), [
 			[1, TEAM_ID, Vector3(0, 0, 12)],
 			[2, TEAM_ID, Vector3(1.5, 0, 26.2)],   # marker home on the trailer
-			[200, 1, carrier],
+			[200, 1, carrier, Vector3(0, 0, 8)],   # driving the line at pace
 			[210, 1, Vector3(1, 0, 25.8)],         # doorstep trailer, marked
 	], 200)
 	ctx.plays_rush_pass_lanes = false
@@ -447,7 +454,7 @@ func test_unmarked_trailer_still_sags_the_stand() -> void:
 	var ctx := _make_ctx(Vector3(0, 0, 12), [
 			[1, TEAM_ID, Vector3(0, 0, 12)],
 			[2, TEAM_ID, Vector3(1.5, 0, 20.0)],   # deep, but NOT goal-side of the man
-			[200, 1, carrier],
+			[200, 1, carrier, Vector3(0, 0, 8)],   # driving the line at pace
 			[210, 1, Vector3(1, 0, 25.8)],         # doorstep trailer, unmarked
 	], 200)
 	ctx.plays_rush_pass_lanes = false

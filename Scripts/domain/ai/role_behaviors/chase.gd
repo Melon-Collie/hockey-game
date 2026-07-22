@@ -27,13 +27,18 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	if AIRoleHelpers.loose_puck_race_lost(
 			ctx.snapshot, ctx.self_pos, ctx.self_velocity, ctx.self_max_speed,
 			ctx.team_id, ctx.team_id_by_peer, ctx.caps_by_peer, ctx.peer_id):
-		# Pre-contain the collector: CONTAIN's gap formula on the pickup spot.
+		# Pre-contain the collector: CONTAIN's pace-based gap on the pickup
+		# spot — the puck's closing speed toward our net stands in for the
+		# rush pace until the collector actually carries (a dead settle is
+		# met tight, a puck still running toward our end keeps the cushion).
 		var our_net: Vector3 = ctx.defending_goal_pos
 		var to_net: Vector3 = our_net - puck_pos
 		var dist: float = to_net.length()
 		if dist > 0.001:
-			var gap: float = clampf(dist * AIRoleContain.GAP_FRACTION,
-					AIRoleContain.GAP_MIN_M, AIRoleContain.GAP_MAX_M)
+			var puck_vel: Vector3 = ctx.snapshot.puck_state.velocity
+			var closing: float = maxf(
+					(puck_vel.x * to_net.x + puck_vel.z * to_net.z) / dist, 0.0)
+			var gap: float = AIRoleContain.gap_for_pace(closing)
 			d.target_position = puck_pos + (to_net / dist) * minf(gap, dist)
 			return d
 	d.target_position = puck_pos
