@@ -463,3 +463,54 @@ func test_unmarked_trailer_still_sags_the_stand() -> void:
 	assert_gt(d.target_position.z, 20.0,
 			"an unmarked doorstep trailer still sags the stand deep;"
 			+ " got z=%f" % d.target_position.z)
+
+
+func test_gaps_up_when_it_has_beaten_the_rush_home() -> void:
+	# The "beaten to the slot" gap-up: CONTAIN is deep with clear inside position
+	# on the whole rush (goal-side of the carrier AND the trailer). It STEPS UP to
+	# challenge the carrier instead of sagging to cover the trailer — because a man
+	# it's already this far ahead of can't burn it. Contrast: the same carrier with
+	# the trailer PAST it (a doorstep cherry-picker) is a genuinely contested race,
+	# so the conservative sag stands.
+	var carrier := Vector3(0, 0, 10.0)
+	var cvel := Vector3(0, 0, 5.0)              # driving our net
+	# Won the race: trailer up-ice, CONTAIN goal-side of both.
+	var won := _make_ctx(Vector3(0, 0, 16.0), [
+			[1, TEAM_ID, Vector3(0, 0, 16.0)],
+			[200, 1, carrier, cvel],
+			[210, 1, Vector3(4, 0, 7.0), Vector3(3, 0, 6)],   # unmarked trailer, UP-ICE
+	], 200)
+	won.offsides_enforced = false
+	# Contested: same, but the trailer is a doorstep man DEEPER than CONTAIN.
+	var contested := _make_ctx(Vector3(0, 0, 16.0), [
+			[1, TEAM_ID, Vector3(0, 0, 16.0)],
+			[200, 1, carrier, cvel],
+			[210, 1, Vector3(1, 0, 24.0), Vector3.ZERO],      # doorstep cherry-picker
+	], 200)
+	contested.offsides_enforced = false
+	var won_t: Vector3 = AIRoleContain.decide(won).target_position
+	var contested_t: Vector3 = AIRoleContain.decide(contested).target_position
+	# own_goal_dir = +1, so a SMALLER z is more forward/up-ice (gapped up); larger
+	# z is sagged deep toward our net.
+	assert_lt(won_t.z, contested_t.z - 2.0,
+			"beaten-the-rush-home stands up to challenge; a deeper trailer sags it"
+			+ " back — won z=%f contested z=%f" % [won_t.z, contested_t.z])
+	assert_lt(won_t.distance_to(carrier), 5.0,
+			"the won-race stand is a real challenge gap, not a deep contain;"
+			+ " gap=%f" % won_t.distance_to(carrier))
+
+
+func test_lone_charger_still_gets_the_full_pace_standoff() -> void:
+	# The gap-up is trailer-earned: with NO trailer (a pure 1-on-1), a charging
+	# carrier CONTAIN has beaten home still gets the full pace cushion — you don't
+	# lunge at a lone rusher just because you have inside position.
+	var carrier := Vector3(0, 0, 6.0)
+	var charging := _make_ctx(Vector3(0, 0, 18.0), [
+			[1, TEAM_ID, Vector3(0, 0, 18.0)],
+			[200, 1, carrier, Vector3(0, 0, 9.0)],   # flying in, no trailer
+	], 200)
+	var t: Vector3 = AIRoleContain.decide(charging).target_position
+	var led_carrier_z: float = carrier.z + 9.0 * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S
+	assert_almost_eq(t.z - led_carrier_z, AIRoleContain.gap_for_pace(9.0), 0.3,
+			"a lone charger keeps the full pace standoff (no trailer to recover from);"
+			+ " got gap=%f" % (t.z - led_carrier_z))

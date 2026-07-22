@@ -74,6 +74,24 @@ const GAP_MIN_M: float = 1.6
 const GAP_MAX_M: float = 6.0
 const GAP_CUSHION_REACT_S: float = 0.5
 
+# "Beaten the rush to the slot" margin. When CONTAIN sits comfortably goal-side
+# (this many metres deeper toward our net) of the carrier AND every unmarked
+# trailer, it has genuinely won the race home — the whole attack is up-ice of it.
+# In that regime it STEPS UP to challenge the carrier (takes the forward gap)
+# instead of sagging to the crease: the trailer-containment sag exists to stop a
+# 2-on-1 burn, and you can't be burned by a man you're already this far ahead of.
+# The sag still owns the genuinely contested race — a trailer level with or
+# deeper than CONTAIN (a cherry-picker / true odd-man break) fails the margin and
+# keeps the conservative retreat. Feel knob (defensive aggression); larger =
+# CONTAIN demands a bigger cushion before it steps up.
+const INSIDE_POSITION_MARGIN_M: float = 2.5
+# The pace cushion CONTAIN uses once it has won the race home (see above): a
+# tighter reaction budget than GAP_CUSHION_REACT_S, because a beaten-you-clean
+# overrun isn't a clean break when you're this far ahead — so the gap it holds on
+# a moving carrier shrinks toward challenge range. Feel knob; raise toward
+# GAP_CUSHION_REACT_S to make the won-race stand less aggressive.
+const WON_RACE_CUSHION_REACT_S: float = 0.25
+
 
 # Shared with AIRoleChase's lost-race pre-contain, so the gap defender and
 # the chaser retreating into the gap stand read one formula.
@@ -230,8 +248,35 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		receivers.append(lead)
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	var dir_net: Vector3 = to_net / dist
-	var stand: Vector3 = AIRoleHelpers.most_forward_feasible(
-			carrier_pos + dir_net * gap, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+	# Have we clearly beaten the whole rush home? "Deeper toward our net" is
+	# own_goal_dir·z (larger = closer to our net = more goal-side). CONTAIN is set
+	# in the slot when it's INSIDE_POSITION_MARGIN_M goal-side of the carrier's
+	# lead point AND of every unmarked trailer's lead (receivers, already built).
+	var self_ahead: float = ctx.own_goal_dir * ctx.self_pos.z
+	var won_race_home: bool = self_ahead \
+			> ctx.own_goal_dir * carrier_pos.z + INSIDE_POSITION_MARGIN_M
+	if won_race_home:
+		for r: Vector3 in receivers:
+			if self_ahead <= ctx.own_goal_dir * r.z + INSIDE_POSITION_MARGIN_M:
+				won_race_home = false
+				break
+	# Won the race → GAP UP: challenge with a tighter cushion. The deep gap on a
+	# rush is really two costs — the pace standoff (1-on-1 respect for the
+	# carrier's burst) and the sag that gives extra ground to stay ahead of
+	# TRAILERS. Once you've beaten the whole rush home, the trailer cost is unearned
+	# (you're already ahead of them), so recover it: re-tighten the pace gap with
+	# the won-race cushion and skip the trailer-sag. Gated on there BEING trailers —
+	# a pure 1-on-1 (no receivers) keeps the full pace standoff, the correct read
+	# for a lone charger you must not lunge at. The tighten never loosens the
+	# standoff already picked (the blue-line stand cap still binds).
+	if won_race_home and not receivers.is_empty():
+		var tight_gap: float = clampf(
+				GAP_MIN_M + closing * WON_RACE_CUSHION_REACT_S, GAP_MIN_M, GAP_MAX_M)
+		gap = minf(gap, minf(tight_gap, dist))
+	var gap_point: Vector3 = carrier_pos + dir_net * gap
+	var stand: Vector3 = gap_point if won_race_home \
+			else AIRoleHelpers.most_forward_feasible(
+					gap_point, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	# The stand stays on the carrier→net line (net, stand, and the gap point
 	# are collinear), so the lane fan's gap distance updates with it.
 	gap = carrier_pos.distance_to(stand)
