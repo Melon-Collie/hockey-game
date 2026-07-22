@@ -2744,6 +2744,16 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	if _hit_tracker != null and _state_machine != null \
 			and _state_machine.current_phase == GamePhase.Phase.PLAYING:
 		_hit_tracker.note_possession_released(peer_id)
+	# A non-shot release with no teammate in its flight corridor is a dump / clear
+	# / rim, not a pass — mark the dump window so recovering it reads as a
+	# concession, not a giveaway (mirrors the shot window). Gated to live play (a
+	# whistle drop lands here too); shots already opened the window via note_shot,
+	# so skip when a shot is pending to keep the pass/dump geometry off them.
+	if _turnover_tracker != null and _state_machine != null \
+			and _state_machine.current_phase == GamePhase.Phase.PLAYING \
+			and (_shot_tracker == null or not _shot_tracker.has_pending_shot()) \
+			and _is_dump_release(peer_id):
+		_turnover_tracker.note_dump(peer_id)
 	if _possession_tracker != null:
 		_possession_tracker.on_puck_lost(peer_id)
 	record.controller.on_puck_released_network()
@@ -2752,6 +2762,37 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 	# NEUTRAL or TRANS_DO → TRANS_OD on a steal). See pickup hook
 	# for rationale.
 	_force_retick_team_brains()
+
+
+# Host: was `peer_id`'s just-fired non-shot release a dump/clear/rim (no teammate
+# positioned to receive) rather than a pass? Reads the puck's queued launch and
+# the releaser's teammates' positions; the pure geometry is TurnoverRules. Runs
+# on a release event (not the hot per-tick path), so the small teammate gather is
+# fine. get_release_velocity (not linear_velocity) — release() queues the launch
+# for the next drive step, so linear_velocity reads ~zero in this same-frame window.
+func _is_dump_release(peer_id: int) -> bool:
+	if puck == null or _registry == null:
+		return false
+	var record: PlayerRecord = _registry.get_record(peer_id)
+	if record == null or record.team == null:
+		return false
+	var vel: Vector3 = puck.get_release_velocity()
+	var launch_dir: Vector2 = Vector2(vel.x, vel.z)
+	if launch_dir.length() < 0.001:
+		return false
+	var launch_pos: Vector3 = puck.get_puck_position()
+	var launch: Vector2 = Vector2(launch_pos.x, launch_pos.z)
+	var team_id: int = record.team.team_id
+	var teammates: Array[Vector2] = []
+	for pid: int in _registry.all():
+		if pid == peer_id:
+			continue
+		var r: PlayerRecord = _registry.get_record(pid)
+		if r == null or r.team == null or r.team.team_id != team_id or r.skater == null:
+			continue
+		var pos: Vector3 = r.skater.global_position
+		teammates.append(Vector2(pos.x, pos.z))
+	return TurnoverRules.is_dump_release(launch, launch_dir, teammates)
 
 
 # Forces both team brains to re-evaluate possession state + role

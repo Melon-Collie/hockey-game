@@ -165,6 +165,78 @@ func test_shot_recovery_beats_a_coincident_strip() -> void:
 	assert_eq(stripper.stats.takeaways, 0, "a shot recovery outranks the strip")
 
 
+func test_dump_recovery_is_neither_giveaway_nor_takeaway() -> void:
+	# A dump/clear the other team retrieves is a deliberate surrender to open
+	# ice, not a giveaway to the dumper.
+	var dumper := _add_player(10, 0)
+	var recoverer := _add_player(20, 1)
+	_gain_and_establish(10)
+	tracker.note_dump(10)
+	tracker.on_carrier_gained(20, false)
+	tracker.on_possession_established(20)
+	assert_eq(dumper.stats.giveaways, 0, "a dump is never a giveaway")
+	assert_eq(recoverer.stats.takeaways, 0, "retrieving a dump is not a takeaway")
+
+
+func test_decayed_strip_still_credits_a_takeaway_not_a_giveaway() -> void:
+	# A poke whose loose puck skitters a beat before the opponent recovers still
+	# credits the defender a takeaway (wide window + establishment consumption) —
+	# the stripped victim is never charged a giveaway for it.
+	var victim := _add_player(10, 0)
+	var stripper := _add_player(20, 1)
+	_gain_and_establish(10)
+	tracker.note_strip(10, 20)
+	tracker.on_carrier_gained(20, false)
+	assert_true(tracker.on_possession_established(20))
+	assert_eq(stripper.stats.takeaways, 1)
+	assert_eq(victim.stats.giveaways, 0, "the stripped victim is never charged")
+
+
+func test_strip_is_consumed_at_establishment() -> void:
+	# The wide strip window must not bleed a stale takeaway onto a later, clean
+	# loss. After the victim's own team re-establishes, a subsequent clean cough
+	# is a giveaway, not a takeaway off the old strip.
+	var owner := _add_player(10, 0)
+	var teammate := _add_player(11, 0)
+	var opp := _add_player(20, 1)
+	_gain_and_establish(10)
+	tracker.note_strip(10, 20)
+	_gain_and_establish(11)             # same team re-establishes — strip consumed
+	tracker.on_carrier_gained(20, false)  # now a clean loss to the opponent
+	assert_true(tracker.on_possession_established(20))
+	assert_eq(opp.stats.takeaways, 0, "the old strip must not linger")
+	assert_eq(teammate.stats.giveaways, 1, "clean loss by the new owner")
+	assert_eq(owner.stats.giveaways, 0)
+
+
+func test_contested_loose_puck_is_not_a_giveaway() -> void:
+	# Board battle: team 0 loses it, team 1 touches, team 0 fights it back with a
+	# touch, team 1 finally comes out with control. The losing team contested it —
+	# not a clean cough-up, so no giveaway.
+	var loser := _add_player(10, 0)
+	_add_player(11, 0)
+	_add_player(20, 1)
+	_gain_and_establish(10)
+	tracker.on_carrier_gained(20, false)  # opponent touches the loose puck
+	tracker.on_carrier_gained(11, false)  # loser's team fights it back
+	tracker.on_carrier_gained(20, false)  # opponent recovers again
+	assert_false(tracker.on_possession_established(20), "contested loss credits nothing")
+	assert_eq(loser.stats.giveaways, 0, "a lost battle is not a giveaway")
+
+
+func test_clean_interception_after_an_own_retouch_is_still_a_giveaway() -> void:
+	# A carrier who drops and re-grabs their own puck (no opponent touch between)
+	# has not contested anything — a later clean interception is still a giveaway.
+	var owner := _add_player(10, 0)
+	_add_player(11, 0)
+	_add_player(20, 1)
+	_gain_and_establish(10)
+	tracker.on_carrier_gained(11, false)  # own team re-touches (no opp touch yet)
+	tracker.on_carrier_gained(20, false)  # opponent picks it off cleanly
+	assert_true(tracker.on_possession_established(20))
+	assert_eq(owner.stats.giveaways, 1, "an own re-touch is not a contest")
+
+
 func test_no_stats_before_any_established_owner() -> void:
 	var first := _add_player(20, 1)
 	tracker.on_carrier_gained(20, false)
