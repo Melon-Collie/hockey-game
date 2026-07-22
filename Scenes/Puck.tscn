@@ -1,30 +1,47 @@
-[gd_scene format=3 uid="uid://i5j5ehpb8hfk"]
+[gd_scene format=3 uid="uid://knwl4ymvxdb0"]
 
 [ext_resource type="Script" uid="uid://dndlvito5ey17" path="res://Scripts/actors/puck.gd" id="1_5ddw5"]
+[ext_resource type="CylinderMesh" uid="uid://cbc3f5d7bcaeh" path="res://Assets/puck_mesh.tres" id="2_kf2af"]
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_idj7w"]
-albedo_color = Color(0.201527, 0.201527, 0.201527, 1)
-
-[sub_resource type="CylinderMesh" id="CylinderMesh_kln2b"]
-material = SubResource("StandardMaterial3D_idj7w")
-top_radius = 0.065
-bottom_radius = 0.065
-height = 0.035
-
-[sub_resource type="CylinderShape3D" id="CylinderShape3D_rgh2o"]
-height = 0.035
-radius = 0.065
-
-[node name="Puck" type="RigidBody3D" unique_id=1611395284]
-collision_layer = 0
-axis_lock_angular_x = true
-axis_lock_angular_z = true
-mass = 0.17
-continuous_cd = true
+[node name="Puck" type="Node3D" unique_id=1470771922]
 script = ExtResource("1_5ddw5")
+max_speed = null
+reattach_cooldown = null
+nudge_cooldown = null
+ice_height = null
+pickup_max_speed = null
+deflect_min_speed = null
+alignment_receive_bonus = null
+deflect_normal_restitution = null
+deflect_normal_restitution_min = null
+deflect_tangential_retain = null
+deflect_speed_ref = null
+deflect_cooldown = null
+deflect_up_loft_speed = null
+deflect_down_loft_speed = null
+bobble_speed_threshold = null
+bobble_cooldown = null
+poke_strip_min_speed = null
+poke_strip_max_speed = null
+poke_carrier_vel_blend = null
+poke_checker_cooldown = null
+body_check_strip_threshold = null
+body_check_puck_speed = null
+body_check_loose_speed = null
+body_check_strip_ref_impulse = null
+hit_pickup_cooldown = null
+hit_pickup_cooldown_threshold = null
+body_block_dampen = null
+body_block_active_dampen = null
+body_block_cooldown = null
+max_height = null
+save_deaden_pad_max_speed = null
+save_deaden_drop_speed = null
+save_deaden_glove_retain = null
+save_deaden_chest_retain = null
+save_steer_speed = null
+save_steer_lateral_weight = null
+save_steer_forward_weight = null
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=834541236]
-mesh = SubResource("CylinderMesh_kln2b")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1623490111]
-shape = SubResource("CylinderShape3D_rgh2o")
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1226005083]
+mesh = ExtResource("2_kf2af")

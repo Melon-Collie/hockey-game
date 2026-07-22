@@ -1,5 +1,5 @@
 class_name Puck
-extends RigidBody3D
+extends Node3D
 
 signal puck_released()
 signal puck_stripped(ex_carrier: Skater)
@@ -255,12 +255,6 @@ func set_analytic_drive_enabled(enabled: bool) -> void:
 		_goalie_scratch = SweptDiscOBB.Result.new()
 		_save_result = GoalieSaveRules.ContactResult.new()
 		_tick_result = PuckAuthorityRules.TickResult.new()
-	if enabled:
-		# The puck is frozen for its ENTIRE life under the analytic drive — carried (carry pin)
-		# or loose (the drive) — so Jolt never integrates or collides it and there is no dynamic
-		# tick anywhere, not at spawn, release, or reset. (Phase 4 replaces the frozen body with
-		# a plain Node3D outright.)
-		freeze = true
 
 
 # Raised by the goal / post-game replay drivers for the playback's duration: the
@@ -269,8 +263,6 @@ func set_analytic_drive_enabled(enabled: bool) -> void:
 # from wherever it drifted when playback ends).
 func set_replay_hold(active: bool) -> void:
 	_replay_hold = active
-	if active:
-		freeze = true
 
 func set_goalie_provider(provider: Callable) -> void:
 	_goalie_provider = provider
@@ -279,13 +271,7 @@ func _ready() -> void:
 	# Puck body sits on its own layer so goal sensors can detect it.
 	# Mask bounces it off boards (LAYER_BOARDS) + goalie bodies/nets/ice
 	# (LAYER_WALLS) + goalie stick, but not skater bodies.
-	collision_layer = Constants.LAYER_PUCK
-	collision_mask  = Constants.MASK_PUCK
-	continuous_cd = true
 	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
-	contact_monitor = true
-	max_contacts_reported = 4
-	body_entered.connect(_on_body_entered)
 	_last_finite_position = global_position
 	_build_deaden_cfg()
 
@@ -302,8 +288,6 @@ func _ready() -> void:
 # ── Server Mode ───────────────────────────────────────────────────────────────
 func set_server_mode(is_server: bool) -> void:
 	_is_server = is_server
-	if not is_server:
-		freeze = true
 
 # ── Contract for PuckController ───────────────────────────────────────────────
 func get_puck_position() -> Vector3:
