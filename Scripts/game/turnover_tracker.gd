@@ -28,11 +28,17 @@ class_name TurnoverTracker extends RefCounted
 ## Only ever constructed/called on the host (like HitTracker), so the stats
 ## it writes are authoritative and ride the normal stats broadcast.
 
-# A recovery within this of a strip counts as a takeaway; within this of a shot
-# attempt counts as a rebound (no turnover). Generous windows — possession often
-# bounces loose for a moment between the event and the recovery.
-const STRIP_WINDOW_S: float = 1.5
+# A recovery within this of a strip counts as a takeaway; within a shot / dump
+# window it counts as a deliberate surrender (no turnover). Generous windows —
+# possession often bounces loose for a while between the event and the recovery,
+# and a strip is additionally CONSUMED on the next establishment (below) so the
+# wide window can't bleed a stale strip into a later, unrelated pickup. The strip
+# window was widened from 1.5s so a poke whose loose puck skitters a beat before
+# the recovery still credits the defender a takeaway instead of charging the
+# stripped victim a giveaway. The dump window covers the chase to a dumped puck.
+const STRIP_WINDOW_S: float = 3.0
 const SHOT_WINDOW_S: float = 2.0
+const DUMP_WINDOW_S: float = 3.0
 
 var _registry: PlayerRegistry = null
 # Last ESTABLISHED possession — the "previous owner" a new gain classifies
@@ -47,6 +53,16 @@ var _strip_victim_team: int = -1
 var _strip_stripper_peer: int = -1
 var _shot_time: float = -INF
 var _shot_team: int = -1
+var _dump_time: float = -INF
+var _dump_team: int = -1
+# Contested-loss veto: while a loose puck is unowned, we track whether the
+# opponent of the last-established team has touched it, and — only after such an
+# opponent touch — whether the last-established (losing) team has fought it back
+# with a touch of its own. A giveaway that lands out of that back-and-forth is a
+# lost board battle, not a clean cough-up, so it is vetoed at establishment. Both
+# reset the moment anyone establishes possession.
+var _loose_touched_by_opponent: bool = false
+var _loser_recontacted: bool = false
 # Candidate turnover computed at pickup, credited when the carrier establishes.
 # Overwritten by the next pickup, so it always describes the current carrier.
 var _candidate_type: String = TurnoverRules.NONE
@@ -82,13 +98,23 @@ func on_carrier_gained(peer_id: int, was_faceoff: bool) -> void:
 		# Draw scramble — no turnovers until the draw resolves.
 		_clear_candidate()
 		return
+	# Track the loose-puck battle so a contested loss can be vetoed at
+	# establishment (see the flag docs). A touch by the opponent of the losing
+	# team opens the battle; a touch back BY the losing team after that is the
+	# contest that voids the giveaway.
+	if new_team != _last_established_team:
+		_loose_touched_by_opponent = true
+	elif _loose_touched_by_opponent:
+		_loser_recontacted = true
 	var now: float = _now()
 	var recent_strip: bool = _strip_time + STRIP_WINDOW_S > now \
 			and _strip_victim_team == _last_established_team
 	var recent_shot: bool = _shot_time + SHOT_WINDOW_S > now \
 			and _shot_team == _last_established_team
+	var recent_dump: bool = _dump_time + DUMP_WINDOW_S > now \
+			and _dump_team == _last_established_team
 	_candidate_type = TurnoverRules.classify(
-			_last_established_team, new_team, recent_strip, recent_shot)
+			_last_established_team, new_team, recent_strip, recent_shot, recent_dump)
 	_candidate_carrier_peer = peer_id
 	match _candidate_type:
 		TurnoverRules.TAKEAWAY:
@@ -125,11 +151,23 @@ func on_possession_established(peer_id: int) -> bool:
 					taker.stats.takeaways += 1
 					credited = true
 			TurnoverRules.GIVEAWAY:
-				var prev: PlayerRecord = _registry.get_record(_candidate_credit_peer)
-				if prev != null and prev.stats != null:
-					prev.stats.giveaways += 1
-					credited = true
+				# Veto a giveaway the losing team fought back for and still lost —
+				# a contested board battle is not a clean cough-up (see the flag
+				# docs). A clean interception/fumble (no recontact) still charges it.
+				if not _loser_recontacted:
+					var prev: PlayerRecord = _registry.get_record(_candidate_credit_peer)
+					if prev != null and prev.stats != null:
+						prev.stats.giveaways += 1
+						credited = true
 	_clear_candidate()
+	# Establishment resolves the loose-puck phase: consume the strip so the wide
+	# window can't credit a stale takeaway on a later pickup, and clear the
+	# contested-battle flags for the next possession.
+	_strip_time = -INF
+	_strip_stripper_peer = -1
+	_strip_victim_team = -1
+	_loose_touched_by_opponent = false
+	_loser_recontacted = false
 	_last_established_peer = peer_id
 	_last_established_team = rec.team.team_id
 	return credited
@@ -171,6 +209,15 @@ func note_shot(shooter_peer_id: int) -> void:
 	_shot_team = _team_of(shooter_peer_id)
 
 
+# `dumper_peer_id` deliberately surrendered the puck to open ice (a dump-and-chase,
+# a zone clear, or a rim) — no receiver. Opens the window in which recovering the
+# loose puck reads as a concession, not a giveaway. Fed from a non-shot release
+# the geometry (TurnoverRules.is_dump_release) classifies as a dump, not a pass.
+func note_dump(dumper_peer_id: int) -> void:
+	_dump_time = _now()
+	_dump_team = _team_of(dumper_peer_id)
+
+
 # Clear all context (new game / rematch reset).
 func reset() -> void:
 	_last_established_peer = -1
@@ -180,6 +227,10 @@ func reset() -> void:
 	_strip_stripper_peer = -1
 	_shot_time = -INF
 	_shot_team = -1
+	_dump_time = -INF
+	_dump_team = -1
+	_loose_touched_by_opponent = false
+	_loser_recontacted = false
 	_clear_candidate()
 	_faceoff_pending = false
 
