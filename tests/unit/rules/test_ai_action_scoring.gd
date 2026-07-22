@@ -953,6 +953,31 @@ func test_dump_in_target_is_far_offensive_corner() -> void:
 			"a corner retrieval short of the goal line, not behind the net")
 
 
+func test_dump_clear_side_follows_momentum_through_centre() -> void:
+	# The "dump sideways / behind me" artifact: a carrier a hair onto the -x side
+	# but skating hard toward the +x wall. The raw x-sign rims BACK across the body
+	# to the -x boards; the release-time lateral read rims up the +x wall the
+	# carrier is actually committed to.
+	var carrier := Vector3(-0.3, 0.0, -22.0)   # defending -Z → up-ice is +Z
+	var vel := Vector3(9.0, 0.0, 0.0)          # committed to the +x wall
+	var t: Vector3 = AIActionScoring.dump_clear_target(carrier, 1.0, vel)
+	assert_gt(t.x, 0.0, "rims up the wall the carrier's momentum commits to, not back across the body")
+	# And it does NOT over-flip: a carrier firmly on the -x wall keeps that wall
+	# even with a little opposite drift.
+	var on_wall := Vector3(-8.0, 0.0, -22.0)
+	var t2: Vector3 = AIActionScoring.dump_clear_target(on_wall, 1.0, Vector3(3.0, 0.0, 0.0))
+	assert_lt(t2.x, 0.0, "a carrier committed to a wall isn't flipped by a small opposite drift")
+
+
+func test_dump_in_far_corner_is_stable_through_centre() -> void:
+	# Same read for the dump-in far corner: a near-centre carrier drifting +x picks
+	# its far corner off the committed lateral, not the raw x-sign.
+	var carrier := Vector3(-0.2, 0.0, 4.0)
+	var vel := Vector3(8.0, 0.0, 0.0)   # drifting onto the +x side
+	var t: Vector3 = AIActionScoring.dump_in_target(carrier, GOAL, vel)
+	assert_lt(t.x, 0.0, "far corner is opposite the momentum-committed side (-x here)")
+
+
 func test_chase_recovery_race() -> void:
 	var target := Vector3(10, 0, 20)
 	# No chaser of ours → we never get it; no opponent → uncontested.

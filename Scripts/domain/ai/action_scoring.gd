@@ -2683,11 +2683,14 @@ const DUMP_CLEAR_AHEAD_M: float = 2.0 * GameRules.BLUE_LINE_Z
 # for a carrier just inside the blue line the fixed z=0 point degenerated — the
 # "clear" banged the wall basically sideways, gaining nothing — so the target
 # extends up-ice to keep the clear a genuine forward diagonal from anywhere.
-# `up_ice_dir` is the direction OUT of our end (-own_goal_dir).
-static func dump_clear_target(carrier_pos: Vector3, up_ice_dir: float) -> Vector3:
-	var side: float = signf(carrier_pos.x)
-	if side == 0.0:
-		side = 1.0
+# `up_ice_dir` is the direction OUT of our end (-own_goal_dir). `carrier_vel`
+# is the carrier's horizontal velocity — the strong side is read at the puck's
+# RELEASE-time lateral position (`_dump_side_sign`), so a carrier crossing centre
+# rims up the wall its momentum commits to instead of flipping to the wall behind
+# its body on the raw x-sign (the "dump sideways/behind me" artifact).
+static func dump_clear_target(carrier_pos: Vector3, up_ice_dir: float,
+		carrier_vel: Vector3 = Vector3.ZERO) -> Vector3:
+	var side: float = _dump_side_sign(carrier_pos, carrier_vel)
 	# Depth measured into OUR half (positive = our side of centre). Centre ice is
 	# 0; one NZ ahead of the carrier may land past centre (negative) — take the
 	# farther up-ice of the two.
@@ -2699,12 +2702,31 @@ static func dump_clear_target(carrier_pos: Vector3, up_ice_dir: float) -> Vector
 			-up_ice_dir * target_depth)
 
 
+# The strong-side sign used by the dump targets: the sign of the carrier's
+# lateral position at PUCK RELEASE (position led by velocity over the release
+# lookahead), so the choice of wall/corner is stable through centre ice. A
+# carrier drifting across the red line keeps the wall its momentum commits to
+# instead of flipping to the opposite board on the raw x-sign — the fix for
+# dumps that fired sideways or back across the carrier's body. Falls back to the
+# raw position sign (then +1) when the projected lateral is exactly centred.
+static func _dump_side_sign(carrier_pos: Vector3, carrier_vel: Vector3) -> float:
+	var lateral_at_release: float = carrier_pos.x \
+			+ carrier_vel.x * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+	var side: float = signf(lateral_at_release)
+	if side == 0.0:
+		side = signf(carrier_pos.x)
+	if side == 0.0:
+		side = 1.0
+	return side
+
+
 # Dump-in target: the FAR offensive corner (opposite the carrier's side), near the
 # goal line — forces the defence to turn and retrieve with their back to the play.
-static func dump_in_target(carrier_pos: Vector3, attacking_goal: Vector3) -> Vector3:
-	var far_side: float = -signf(carrier_pos.x)
-	if far_side == 0.0:
-		far_side = 1.0
+# `carrier_vel` reads the strong side at release time (see `_dump_side_sign`) so
+# the far corner doesn't flip cross-ice as the carrier drifts through centre.
+static func dump_in_target(carrier_pos: Vector3, attacking_goal: Vector3,
+		carrier_vel: Vector3 = Vector3.ZERO) -> Vector3:
+	var far_side: float = -_dump_side_sign(carrier_pos, carrier_vel)
 	var goal_dir: float = signf(attacking_goal.z)
 	return Vector3(
 			far_side * (GameRules.RINK_HALF_WIDTH - DUMP_RINK_INSET_M),

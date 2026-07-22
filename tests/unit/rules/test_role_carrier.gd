@@ -2691,3 +2691,43 @@ func test_developing_feed_watches_the_over_valve_in_5v5() -> void:
 	carrier._scratch_teammate_ids = [2]
 	assert_gt(carrier._best_developing_feed(ctx), 0.0,
 			"a partner skating to the net-back valve is a developing Over")
+
+
+func test_no_direct_shot_from_on_or_behind_the_goal_line() -> void:
+	# The "skate past the goal line and clank the outer bar" bug: a carrier whose
+	# body is BEHIND the goal line, skating out, had its velocity-projected blade
+	# release land a hair in front and clamp to a phantom point-blank open net —
+	# scoring a zero-angle rip off the outer pipe. The mouth faces up-ice; from back
+	# there the only play is a wrap/walk-out carry, so the direct shot must not
+	# score at all.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var behind := Vector3(0.6, 0.0, -(GameRules.GOAL_LINE_Z + 0.6))   # behind the net
+	var ctx := _make_ctx(behind, [[1, TEAM_ID, behind]])
+	ctx.self_velocity = Vector3(0.0, 0.0, 6.0)                        # skating out toward the line
+	ctx.snapshot.puck_state.position = behind
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(behind, net, 1.0)
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c.debug_shoot_score, 0.001,
+			"no direct shot is scored from on/behind the goal line; got %f" \
+			% c.debug_shoot_score)
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"the behind-the-net carrier wraps/carries, never rips the outer pipe")
+
+
+func test_in_front_shot_still_scores_through_the_gate() -> void:
+	# The gate is position-specific, not a blanket shot kill: a carrier genuinely in
+	# front (in tight, with the keeper beaten to one side) still gets a real shot.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var slot := Vector3(0.0, 0.0, -(GameRules.GOAL_LINE_Z - 5.0))     # 5 m out, dead slot
+	var ctx := _make_ctx(slot, [[1, TEAM_ID, slot]])
+	ctx.snapshot.puck_state.position = slot
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.75                                              # beaten to the +x side
+	g.position_z = net.z + 1.3
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = g
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_gt(c.debug_shoot_score, 0.0,
+			"an in-tight look at a beaten keeper still scores a shot; got %f" \
+			% c.debug_shoot_score)
