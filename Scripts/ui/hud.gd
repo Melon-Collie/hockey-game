@@ -1408,6 +1408,9 @@ var _game_over_present_tween: Tween = null
 func _on_game_over() -> void:
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG  # clear any residual goal tint
 	_tagline_label.text = "FINAL"
+	# Clear the last goal's team tint (_on_goal_scored overrides this label's
+	# color per-goal); FINAL is a non-team context, so it reads in the default.
+	_tagline_label.add_theme_color_override("font_color", _WHITE)
 	_tagline_label.visible = true
 	_phase_label.visible = true
 	_scorer_label.visible = false
