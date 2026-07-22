@@ -576,7 +576,21 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# the first replayed input's ROM-clamped target — the live smoothed value
 	# would otherwise bias the replay's first tick.
 	_ik.reset_blade_smoothing()
+	# Replay under the ACK-TIME baseline: the host evolved these same inputs
+	# starting from server_state.shot_state, so seed the state machine there
+	# rather than replaying under the LIVE state (which post-dates the whole
+	# unacked window — a window spanning a shot transition otherwise replays
+	# its pre-release ticks in the wrong movement branch: aim facing-freeze /
+	# follow-through damping vs skating). State transitions re-fire from the
+	# replayed input edges with is_replaying suppressing their side effects;
+	# the live state is restored below and server authority is then applied
+	# through the in-flight guards, exactly as before.
+	_sm.set_state(server_state.shot_state as SkaterStateMachine.State)
 	is_replaying = true
+	# Walk the (already ack-trimmed, chronological) prediction history alongside
+	# the replayed inputs so each entry can be RE-RECORDED from the corrected
+	# trajectory below — see the re-record comment inside the loop.
+	var replay_hist_i: int = 0
 	for input in _input_history:
 		_process_input(input, input.delta)
 		skater.global_position += skater.velocity * input.delta
@@ -601,6 +615,29 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# in lockstep with the live tick so a net brush can't compound into a reconcile
 		# loop.
 		skater.clamp_body_to_net()
+		# Re-record this input's prediction from the corrected trajectory. The
+		# stale pre-correction snapshots were made on the trajectory the replay
+		# just abandoned, so without this every subsequent advanced ack in the
+		# unacked span re-trips the threshold against them and re-runs a full
+		# reconcile (~an RTT window of redundant corrections per real
+		# divergence). The live body follows this same replayed trajectory, so
+		# the re-recorded history stays honest for later comparisons. Matched
+		# by timestamp (epsilon-tolerant) rather than assumed 1:1 — the live
+		# capture is deferred to post_move_integrated and can skip a tick.
+		while replay_hist_i < _prediction_history.size() \
+				and _prediction_history[replay_hist_i].host_timestamp \
+					< input.host_timestamp - PredictedState.TS_MATCH_EPSILON:
+			replay_hist_i += 1
+		if replay_hist_i < _prediction_history.size() \
+				and absf(_prediction_history[replay_hist_i].host_timestamp - input.host_timestamp) \
+					<= PredictedState.TS_MATCH_EPSILON:
+			var replay_snap: PredictedState = _prediction_history[replay_hist_i]
+			replay_snap.position = skater.global_position
+			replay_snap.velocity = skater.velocity
+			replay_snap.facing = _pose.facing
+			replay_snap.shot_state = _sm.get_state() as int
+			replay_snap.upper_body_rotation_y = _pose.upper_body_angle
+			replay_hist_i += 1
 	is_replaying = false
 	# Restore shot-state fields that replay must not transition past.
 	_sm.set_state(pre_state)
