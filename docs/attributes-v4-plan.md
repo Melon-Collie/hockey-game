@@ -34,12 +34,14 @@ sprint band re-widened ~20.5–24 mph, stacked agility corners pinned
 gear — `AISkaterCaps.loft_tan_max` threads the blade face angle through
 the HIGH-hole chain (`_high_band_horizontal_speed`'s face floor), so a
 bot's minimum roofing distance matches its human counterpart's; blade
-caps/reach/backhand already rode the caps. **v4 IS COMPLETE.** Residual
-known drifts (accepted, revisit on evidence): bot movement PLANNING
-doesn't model per-build `lateral_grip` (bodies obey it; plans assume
-neutral cornering); defensive reads of opposing shooters assume an open
-face (conservative); the saucer/chip soft-pace face bind sits below
-pass paces so those sites read neutrals. Numbers marked `TBD` are
+caps/reach/backhand already rode the caps. **v4 IS COMPLETE.** Planning is
+grip-aware too: `AISkaterCaps.lateral_grip` feeds the ETA cross-momentum
+shed, each defender's `reach_clearance` shed, and the deke's lateral
+bite/unwind budgets (calibration test pins the grip-aware model against
+a gripped real-physics sim). Residual known drifts (accepted, revisit
+on evidence): defensive reads of opposing shooters assume an open face
+(conservative); the saucer/chip soft-pace face bind sits below pass
+paces so those sites read neutrals. Numbers marked `TBD` are
 authored at implementation time and tuned in playtest.
 
 ---
