@@ -1117,6 +1117,16 @@ static func loose_puck_race_lost(
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		# A SLOW puck's race is only lost to an opponent actually running it
+		# (on the puck, or genuinely closing — committed_to_race). The ETA
+		# model prices his hypothetical sprint-from-now; declining on a body
+		# that is NOT going for the puck left it sitting between two staring
+		# teams (both sides declined on hypothetical winners). Fast pucks
+		# keep the pure path race: momentum already encodes commitment
+		# there, and a downstream interceptor legitimately waits still.
+		if traj.is_empty() \
+				and not AILoosePuckChase.committed_to_race(s, puck_pos):
+			continue
 		var speed: float = AILoosePuckChase.race_vmax(
 				s, caps_by_peer.get(pid), puck_pos)
 		var t: float

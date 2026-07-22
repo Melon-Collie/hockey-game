@@ -2556,6 +2556,21 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 			and puck.get_carrier() == null)
 	for team_id: int in snap.teammate_ids_by_team:
 		var ids: Array = snap.teammate_ids_by_team[team_id]
+		# Election-side eligibility (see AILoosePuckChase.elect): humans
+		# can't be assigned by an election (they only suppress the bots
+		# while demonstrably playing the puck), and a one-timer camper has
+		# opted out of loose-puck work (its camp veto would refuse the
+		# chase while nobody else was elected — the frozen-team pickup).
+		var human_ids: Array = []
+		var camped_ids: Array = []
+		var brain: TeamBrain = team_brains[team_id] \
+				if team_id >= 0 and team_id < team_brains.size() else null
+		for pid: int in ids:
+			var rec: PlayerRecord = _registry.get_record(pid)
+			if rec != null and not rec.is_bot:
+				human_ids.append(pid)
+			elif brain != null and brain.is_one_timer_ready(pid):
+				camped_ids.append(pid)
 		# Momentum-aware + hysteretic election (see AILoosePuckChase):
 		# the teammate who actually arrives first keeps the role unless
 		# a challenger clearly beats them, instead of the raw-nearest bot
@@ -2563,7 +2578,7 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		var best_pid: int = AILoosePuckChase.elect(
 				snap.skater_states, ids, puck_pos, puck_vel,
 				_prev_chase_by_team.get(team_id, -1), _registry.caps_by_peer,
-				puck_playable)
+				puck_playable, human_ids, camped_ids)
 		# Smart-ping GET_PUCK: a live retrieval order replaces the natural
 		# election for its duration — the ordered bot chases (the state
 		# machine's decline gates are bypassed for it too) and nobody else

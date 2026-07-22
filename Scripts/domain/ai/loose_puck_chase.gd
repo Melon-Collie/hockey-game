@@ -58,6 +58,30 @@ const RACE_LOOKAHEAD_S: float = 3.0
 # 0.25 s steps — fine enough that the RETRIEVAL enter margin (0.25 s) can
 # still resolve between quantized path times.
 const RACE_STEPS: int = 12
+
+# ── Race commitment (is that body actually going for the puck?) ─────────────
+# First-stride floor: a skater actually running a race for a loose puck
+# exceeds this closing speed toward it within his first strides; below it
+# the body is standing or skating elsewhere — not a collector, whatever his
+# hypothetical ETA says. Two consumers, both fixing a "puck sits there while
+# everyone stares" freeze:
+#   - the election (below): a HUMAN teammate can't be assigned by election,
+#     so he only suppresses the bots while demonstrably playing the puck;
+#   - the chase decline (AIRoleHelpers.loose_puck_race_lost): an opponent
+#     who is NOT running the race must not talk our chaser out of it — with
+#     both teams declining on hypothetical winners, nobody ever went.
+const RACE_COMMIT_MIN_CLOSING_M_S: float = 1.0
+
+
+# On the puck (inside the physical contest band) or genuinely closing on it.
+static func committed_to_race(s: SkaterNetworkState, puck_pos: Vector3) -> bool:
+	var dx: float = puck_pos.x - s.position.x
+	var dz: float = puck_pos.z - s.position.z
+	var d: float = sqrt(dx * dx + dz * dz)
+	if d <= AIActionScoring.CHASE_CONTEST_MARGIN_M:
+		return true
+	return (s.velocity.x * dx + s.velocity.z * dz) / d \
+			>= RACE_COMMIT_MIN_CLOSING_M_S
 # Arrival slack a fast-puck intercept must clear: the reception setup time
 # (swing the blade to the gate on the puck's line and get set — a body
 # arriving dead-even with a rim at pace corrals nothing). A zero-slack
@@ -154,6 +178,18 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 #                    around a covered puck: attackers peel off the crease, the
 #                    defense resets for the release instead of hovering over a
 #                    puck they can't touch.
+#   human_ids      — teammate_ids under HUMAN control. Election can't make a
+#                    human skate: he suppresses the bots only while he is
+#                    demonstrably playing the puck (committed_to_race) — a
+#                    human standing over a loose puck ignoring it used to
+#                    freeze every bot out of the pickup.
+#   camped_ids     — teammates opted out of loose-puck work (the one-timer
+#                    camp veto). Electing one anyway froze the whole team:
+#                    the camper refused the chase and nobody else was
+#                    elected. Skipped so the next-best teammate goes; if the
+#                    filters exclude EVERYONE the raw election runs instead
+#                    (someone must own the read — the camper's own veto
+#                    still governs its behavior, exactly as before).
 static func elect(
 		skater_states: Dictionary,
 		teammate_ids: Array,
@@ -161,7 +197,9 @@ static func elect(
 		puck_vel: Vector3,
 		prev_elected: int,
 		caps_by_peer: Dictionary = {},
-		puck_playable: bool = true) -> int:
+		puck_playable: bool = true,
+		human_ids: Array = [],
+		camped_ids: Array = []) -> int:
 	if not puck_playable:
 		return -1
 	# Fast puck → the shared path walk (see the path-race block above).
@@ -174,6 +212,11 @@ static func elect(
 	for pid: int in teammate_ids:
 		var s: SkaterNetworkState = skater_states.get(pid)
 		if s == null:
+			continue
+		if not camped_ids.is_empty() and camped_ids.has(pid):
+			continue
+		if not human_ids.is_empty() and human_ids.has(pid) \
+				and not committed_to_race(s, puck_pos):
 			continue
 		# Each candidate races at ITS real sprint-aware race cap (Speed +
 		# the stamina-gated sprint gear) — a fast skater genuinely reaches
@@ -190,6 +233,10 @@ static func elect(
 		if t < best_t or (t == best_t and (best_pid == -1 or pid < best_pid)):
 			best_t = t
 			best_pid = pid
+	if best_pid == -1 and (not camped_ids.is_empty() or not human_ids.is_empty()):
+		# Filters excluded every teammate — fall back to the raw election.
+		return elect(skater_states, teammate_ids, puck_pos, puck_vel,
+				prev_elected, caps_by_peer)
 	return best_pid
 
 

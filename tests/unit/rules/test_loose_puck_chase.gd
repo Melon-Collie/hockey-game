@@ -265,3 +265,95 @@ func test_dead_puck_elects_nobody() -> void:
 	var pid_live: int = AILoosePuckChase.elect(
 			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, true)
 	assert_eq(pid_live, 100, "playable again → normal election resumes")
+
+
+# ── Election eligibility: campers + non-committal humans ─────────────────────
+
+func test_camped_finisher_is_skipped_in_election() -> void:
+	# The nearer teammate is a one-timer camper (opted out of loose-puck
+	# work): electing him froze the team — he refused the chase and nobody
+	# else was elected. The next-best teammate takes the election.
+	var states := {
+		100: _skater(Vector3(3, 0, 0)),
+		200: _skater(Vector3(6, 0, 0)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, true,
+			[], [100])
+	assert_eq(pid, 200, "the camper is skipped; the next teammate chases")
+
+
+func test_all_camped_falls_back_to_raw_election() -> void:
+	# Someone must own the puck read — with every teammate filtered, the
+	# raw election runs (the camper's own veto still governs its behavior).
+	var states := {
+		100: _skater(Vector3(3, 0, 0)),
+		200: _skater(Vector3(6, 0, 0)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, true,
+			[], [100, 200])
+	assert_eq(pid, 100, "filters excluding everyone fall back to the raw best")
+
+
+func test_afk_human_does_not_suppress_the_election() -> void:
+	# A human 4 m from the puck, standing still — the election can't make
+	# him skate, and treating him as a guaranteed collector froze every bot
+	# out of the pickup. The bot gets elected instead.
+	var states := {
+		100: _skater(Vector3(4, 0, 0)),            # human, stationary
+		200: _skater(Vector3(8, 0, 0)),            # bot, further out
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, true,
+			[100], [])
+	assert_eq(pid, 200, "a non-committal human yields the election to a bot")
+
+
+func test_committed_human_keeps_the_election() -> void:
+	# Same human actually skating for the puck: he suppresses the bots
+	# exactly as before.
+	var states := {
+		100: _skater(Vector3(4, 0, 0), Vector3(-4, 0, 0)),   # closing hard
+		200: _skater(Vector3(8, 0, 0)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, true,
+			[100], [])
+	assert_eq(pid, 100, "a human genuinely playing the puck keeps the election")
+
+
+func test_human_on_the_puck_keeps_the_election() -> void:
+	# A human INSIDE the contest band counts as on the puck regardless of
+	# velocity — he can simply reach it.
+	var states := {
+		100: _skater(Vector3(1.2, 0, 0)),          # human, on the puck
+		200: _skater(Vector3(6, 0, 0)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1, {}, true,
+			[100], [])
+	assert_eq(pid, 100, "a human on the puck keeps the election")
+
+
+func test_race_not_lost_to_an_opponent_ignoring_the_puck() -> void:
+	# Settled puck, opponent nearer but standing flat-footed 4 m away, not
+	# moving for it: his hypothetical sprint ETA beats ours, but he is not
+	# running any race — declining here left the puck sitting between two
+	# staring teams. Our chase stays alive.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3.ZERO
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(0, 0, 8))     # us
+	snap.skater_states[2] = _skater(Vector3(0, 0, -4))    # idle opponent
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(0, 0, 8), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_false(lost, "an opponent not running the race can't talk us out of it")
+	# Control: the same opponent actually closing on the puck wins it back.
+	snap.skater_states[2] = _skater(Vector3(0, 0, -4), Vector3(0, 0, 5))
+	var lost_live: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(0, 0, 8), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_true(lost_live, "a committed nearer opponent honestly wins the race")
