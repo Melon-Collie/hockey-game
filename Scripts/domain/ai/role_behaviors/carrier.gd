@@ -626,6 +626,50 @@ var _pass_option_at_self: float = 0.0
 # any candidate's option read (recomputed every re-eval in _pick_action).
 var _pass_option_ceiling: float = 0.0
 
+# ── Carry-candidate beam (two-ply search budget) ─────────────────────────────
+# The two-ply reads (pass OPTION + carry CONTINUATION) are ~90% of a carry
+# candidate's cost, and the exact incumbent-bound prunes lose their teeth
+# exactly where the compete is at its most expensive — open ice, where
+# safety/lane ≈ 1 for every spot so no candidate's ceiling falls below the
+# running best. The beam bounds that worst case by POLICY instead: pass 1
+# (_score_move_candidate_base) scores every candidate ONE-PLY — safety ×
+# lane × decay × arrival-shot − turnover, a strict LOWER bound on its full
+# value since the two-ply reads only ever RAISE a spot — and pass 2
+# (_upgrade_candidate_two_ply) completes the two-ply reads for the
+# CARRY_BEAM_WIDTH best one-ply rows only, best-first, under the same exact
+# incumbent-bound prunes as before. This makes the argmax approximate — a
+# spot whose entire winning margin lives in the second ply can miss the
+# beam — accepted as a SEARCH-BUDGET policy (how much lookahead the bot
+# buys), not an evaluation-model change: every score computed is still the
+# same grounded model, and candidates outside the beam keep their one-ply
+# totals, which can never win (the beam holds the K best lower bounds and
+# upgrades only raise them). Guarded by the duel scenarios (beat-your-man
+# sequences are exactly where a second-ply-only spot would matter) and the
+# ai_micro / host-cost benches.
+const CARRY_BEAM_WIDTH: int = 5
+# Beam rows — one entry per base-scored candidate this re-eval, index-matched
+# (cleared per _best_carry; clear() keeps capacity, so steady state allocates
+# nothing). _beam_upgraded marks rows already completed by pass 2.
+var _beam_pos: Array[Vector3] = []
+var _beam_total: Array[float] = []
+var _beam_dest: Array[float] = []
+var _beam_lane: Array[float] = []
+var _beam_decay: Array[float] = []
+var _beam_safety: Array[float] = []
+var _beam_cost: Array[float] = []
+var _beam_time: Array[float] = []
+var _beam_arrive_vel: Array[Vector3] = []
+var _beam_tracked_goalie: Array[Vector3] = []
+# Pass-1 running prune bound: stand-still's secured total, tightened to the
+# BEST one-ply total seen so far. Exact for the argmax even though it can
+# prune candidates out of the beam: a candidate whose ceiling ≤ the best
+# one-ply row can never out-upgrade that row (upgrades only raise values),
+# so it can't win from inside the beam either — and matching the old
+# sequential compete's incumbent-bound strength is what keeps the CONTESTED
+# case cheap (under pressure most candidates still die at the lane/safety
+# ceilings before paying for their arrival-shot read). Reset per _best_carry.
+var _beam_prune_bound: float = -INF
+
 # ── Debug readout ────────────────────────────────────────────────────────────
 # Populated every re-eval; the state machine forwards these to its
 # own debug_* fields for AIController / floating label.
@@ -2062,11 +2106,13 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 #   - Two post walkouts when behind either goal line (see WALKOUT_*)
 #   - The objective-directed evasion seam
 #
-# Each movement candidate scored uniformly via _score_move_candidate;
-# time uses momentum-aware effective speed (backward candidates
-# self-discount via longer arrival), and a candidate whose straight
-# route crosses a net frame prunes (the walkouts are the exempt,
-# around-the-post routes).
+# Each movement candidate scored uniformly and in TWO PASSES (see
+# CARRY_BEAM_WIDTH): every candidate gets the one-ply base score
+# (_score_move_candidate_base), then only the beam's best rows pay for the
+# two-ply reads (_upgrade_candidate_two_ply). Time uses momentum-aware
+# effective speed (backward candidates self-discount via longer arrival),
+# and a candidate whose straight route crosses a net frame prunes (the
+# walkouts are the exempt, around-the-post routes).
 #
 # `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
 # stand-still's shot branch shares it verbatim — see the stand-still block.
@@ -2109,11 +2155,10 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 
 	# Stand-still is COMPUTED up front (its comparison stays last — see the
 	# tail comment for the strictly-greater tie rule) because it doubles as
-	# an exact continuation-pruning floor: stand always participates in this
-	# argmax, so every movement candidate whose ceiling can't strictly beat
-	# stand_total can't affect the outcome — _score_move_candidate skips its
-	# two-ply continuation read (~90% of a candidate's cost) against this
-	# bound from the very first candidate.
+	# an exact pruning floor: stand always participates in this argmax, so
+	# every movement candidate whose ceiling can't strictly beat stand_total
+	# can't affect the outcome — it seeds the beam's pass-1 prune bound and
+	# the pass-2 incumbent bound from the very first candidate.
 	var stand_score: float = shoot_now_score
 	if not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
 		var stand_potential: float = AIActionScoring.position_potential(
@@ -2133,6 +2178,22 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	var stand_total: float = stand_score * stand_safety - stand_cost
 	var cont_bound: float = stand_total
 
+	# ── Pass 1 (beam base): one-ply rows for every legal candidate ───────────
+	# Candidates stay ordered forward-first: the prune bound tightens to the
+	# best one-ply total as rows land (exact — see _beam_prune_bound), so a
+	# strong early spot still prunes the tail's ceiling ladder cheaply.
+	_beam_pos.clear()
+	_beam_total.clear()
+	_beam_dest.clear()
+	_beam_lane.clear()
+	_beam_decay.clear()
+	_beam_safety.clear()
+	_beam_cost.clear()
+	_beam_time.clear()
+	_beam_arrive_vel.clear()
+	_beam_tracked_goalie.clear()
+	_beam_prune_bound = cont_bound
+
 	# 8 polar cardinals at CARRY_SEARCH_STEP_M. Forward = toward slot;
 	# rotate by 0°, 45°, ..., 315° to span all directions.
 	for angle: float in _POLAR_ANGLES:
@@ -2147,11 +2208,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			continue
 		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 			continue
-		var s_total: float = _score_move_candidate(ctx, candidate, our_goalie,
-				false, maxf(best_score, cont_bound))
-		if s_total > best_score:
-			best_score = s_total
-			best_pos = candidate
+		_beam_score_base(ctx, candidate, our_goalie, false)
 
 	# RETREAT ring — see CARRY_RETREAT_* doc: the committed peel-out arc across
 	# the back half at double the local step, the move that creates REAL
@@ -2170,11 +2227,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				continue
 			if absf(retreat.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 				continue
-			var retreat_total: float = _score_move_candidate(ctx, retreat, our_goalie,
-					false, maxf(best_score, cont_bound))
-			if retreat_total > best_score:
-				best_score = retreat_total
-				best_pos = retreat
+			_beam_score_base(ctx, retreat, our_goalie, false)
 
 	# COMMITTED-CUT ring (see _CUT_ANGLES): the curl candidates between the
 	# local cardinals and the far anchors. Attacking half only — the curl is
@@ -2192,20 +2245,12 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				continue
 			if absf(cut.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
 				continue
-			var cut_total: float = _score_move_candidate(ctx, cut, our_goalie,
-					false, maxf(best_score, cont_bound))
-			if cut_total > best_score:
-				best_score = cut_total
-				best_pos = cut
+			_beam_score_base(ctx, cut, our_goalie, false)
 
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
 	# already cover it via local polar candidates.
-	var slot_total: float = _score_move_candidate(ctx, slot_pos, our_goalie,
-			false, maxf(best_score, cont_bound))
-	if slot_total > best_score:
-		best_score = slot_total
-		best_pos = slot_pos
+	_beam_score_base(ctx, slot_pos, our_goalie, false)
 
 	# Zone-exit wall routes — see CARRY_EXIT_* doc. Only generated in
 	# our own half: an exit route is meaningless once the puck is
@@ -2214,18 +2259,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	if own_goal_dir * self_pos.z > 0.0:
 		var exit_x: float = GameRules.RINK_HALF_WIDTH - CARRY_EXIT_WALL_INSET_M
 		var exit_z: float = own_goal_dir * (GameRules.BLUE_LINE_Z - CARRY_EXIT_NZ_LEAD_M)
-		var exit_right := Vector3(exit_x, 0.0, exit_z)
-		var exit_right_total: float = _score_move_candidate(
-				ctx, exit_right, our_goalie, false, maxf(best_score, cont_bound))
-		if exit_right_total > best_score:
-			best_score = exit_right_total
-			best_pos = exit_right
-		var exit_left := Vector3(-exit_x, 0.0, exit_z)
-		var exit_left_total: float = _score_move_candidate(
-				ctx, exit_left, our_goalie, false, maxf(best_score, cont_bound))
-		if exit_left_total > best_score:
-			best_score = exit_left_total
-			best_pos = exit_left
+		_beam_score_base(ctx, Vector3(exit_x, 0.0, exit_z), our_goalie, false)
+		_beam_score_base(ctx, Vector3(-exit_x, 0.0, exit_z), our_goalie, false)
 
 	# Post walkouts — see WALKOUT_* doc: the only representable carries out
 	# from behind a goal line (everything else's straight route crosses the
@@ -2235,29 +2270,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		var walk_z: float = behind_sign * (GameRules.GOAL_LINE_Z - WALKOUT_FRONT_M)
 		var walk_x: float = GameRules.NET_HALF_WIDTH + WALKOUT_POST_CLEARANCE_M
 		for side: float in [-1.0, 1.0]:
-			var walkout := Vector3(side * walk_x, 0.0, walk_z)
-			var walk_total: float = _score_move_candidate(
-					ctx, walkout, our_goalie, true, maxf(best_score, cont_bound))
-			if walk_total > best_score:
-				best_score = walk_total
-				best_pos = walkout
-		# WHEEL exits (5v5, own end only — see WHEEL_* doc): the far half-wall
-		# via the behind-net apex. Only priced for destinations whose straight
-		# route the cage blocks — a side the straight line reaches is already
-		# covered by the normal candidates above.
-		if ctx.team_size >= 5 and own_goal_dir * self_pos.z > 0.0:
-			var wheel_x: float = GameRules.RINK_HALF_WIDTH - CARRY_EXIT_WALL_INSET_M
-			var wheel_z: float = own_goal_dir \
-					* (GameRules.GOAL_LINE_Z - WHEEL_EXIT_UP_ICE_M)
-			for side: float in [-1.0, 1.0]:
-				var wheel := Vector3(side * wheel_x, 0.0, wheel_z)
-				if not AIActionScoring.carry_path_blocked_by_net(self_pos, wheel):
-					continue
-				var wheel_total: float = _score_wheel_candidate(
-						ctx, wheel, our_goalie, maxf(best_score, cont_bound))
-				if wheel_total > best_score:
-					best_score = wheel_total
-					best_pos = wheel
+			_beam_score_base(
+					ctx, Vector3(side * walk_x, 0.0, walk_z), our_goalie, true)
 
 	# Evasion seam — the reachable-set escape, in its objective-DIRECTED form
 	# (best_evade_point_toward, computed once per re-eval in _pick_action): the
@@ -2266,11 +2280,49 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# into PLAYMAKING — the bot cuts past a committed defender into the lane he
 	# vacates instead of only surviving pressure. Scored like any candidate, so
 	# it only wins when the space it opens is actually worth carrying to.
-	var seam_total: float = _score_move_candidate(ctx, directed_seam, our_goalie,
-			false, maxf(best_score, cont_bound))
-	if seam_total > best_score:
-		best_score = seam_total
-		best_pos = directed_seam
+	_beam_score_base(ctx, directed_seam, our_goalie, false)
+
+	# ── Pass 2: complete the two-ply reads for the beam's best rows ──────────
+	# Best-first, consuming each row as it upgrades, under the same running
+	# incumbent bound the inline compete used (stand's secured value, then the
+	# best upgraded total — which after the first upgrade already dominates
+	# every remaining one-ply row). Rows outside the beam keep their one-ply
+	# totals and can never win (see the CARRY_BEAM_WIDTH doc).
+	for rank: int in CARRY_BEAM_WIDTH:
+		var bi: int = -1
+		var bt: float = -INF
+		for j: int in _beam_total.size():
+			if _beam_total[j] > bt:
+				bt = _beam_total[j]
+				bi = j
+		if bi == -1:
+			break
+		var up_total: float = _upgrade_candidate_two_ply(
+				ctx, bi, maxf(best_score, cont_bound))
+		if up_total > best_score:
+			best_score = up_total
+			best_pos = _beam_pos[bi]
+		_beam_total[bi] = -INF   # consumed — next rank takes the next-best row
+
+	# WHEEL exits (5v5, own end only — see WHEEL_* doc): the far half-wall
+	# via the behind-net apex. Only priced for destinations whose straight
+	# route the cage blocks — a side the straight line reaches is already
+	# covered by the normal candidates above. Already a complete two-leg
+	# read, so it competes after the beam, against the post-beam bound.
+	if absf(self_pos.z) > GameRules.GOAL_LINE_Z \
+			and ctx.team_size >= 5 and own_goal_dir * self_pos.z > 0.0:
+		var wheel_x: float = GameRules.RINK_HALF_WIDTH - CARRY_EXIT_WALL_INSET_M
+		var wheel_z: float = own_goal_dir \
+				* (GameRules.GOAL_LINE_Z - WHEEL_EXIT_UP_ICE_M)
+		for side: float in [-1.0, 1.0]:
+			var wheel := Vector3(side * wheel_x, 0.0, wheel_z)
+			if not AIActionScoring.carry_path_blocked_by_net(self_pos, wheel):
+				continue
+			var wheel_total: float = _score_wheel_candidate(
+					ctx, wheel, our_goalie, maxf(best_score, cont_bound))
+			if wheel_total > best_score:
+				best_score = wheel_total
+				best_pos = wheel
 
 	# Stand-still last. Only wins on STRICTLY greater than the best
 	# movement candidate — patience must be earned. Its SHOT branch is the
@@ -2494,7 +2546,22 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 # destination: a carry that ends in open ice but threads our own slot must pay the
 # slot's turnover cost. Cost self-localizes: ~0 driving into the OZ, large when the
 # route drags the puck through our own slot.
-func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
+# Pass-1 candidate entry (see CARRY_BEAM_WIDTH): base-score `candidate` into
+# the beam rows and tighten the running prune bound to the best one-ply
+# total so far (see _beam_prune_bound for why that stays exact).
+func _beam_score_base(ctx: RoleContext, candidate: Vector3,
+		our_goalie: Vector3, is_post_walkout: bool) -> void:
+	var total: float = _score_move_candidate_base(
+			ctx, candidate, our_goalie, is_post_walkout, _beam_prune_bound)
+	if total > _beam_prune_bound:
+		_beam_prune_bound = total
+
+
+# ONE-PLY pass of the beam (see CARRY_BEAM_WIDTH): everything above except
+# the two-ply reads, which _upgrade_candidate_two_ply adds for the beam's
+# winners. Every finite score also appends a beam row stashing the
+# intermediates the upgrade needs, so pass 2 recomputes nothing.
+func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 		our_goalie: Vector3, is_post_walkout: bool = false,
 		best_so_far: float = -INF) -> float:
 	var self_pos: Vector3 = ctx.self_pos
@@ -2626,74 +2693,113 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, cand_unsettled, ctx.self_aim_spread_rad)
-	# ...plus the pass OPTION the spot opens (see _candidate_pass_option): what
-	# the carrier can DO from a candidate includes moving the puck, not just
-	# shooting from it — the missing half of "back off to create space". A
-	# retreat that reopens a lane to a valuable teammate inherits (a discounted
-	# cut of) that value, which is what finally lets a contained carrier peel
-	# out instead of grinding on the defender in front of a dead shot. Credited
-	# as the IMPROVEMENT over the same read at the current spot: a lane already
-	# open from here is the live pass's to take (fire wins ties), so holding a
-	# cashable option is never a reason to keep carrying.
-	# CEILING PRUNE (exact): the option credit is maxf'd in and can't exceed
-	# _pass_option_ceiling − at_self, so when even that can't raise dest_score
-	# the per-receiver lane loop is already decided and skips wholesale — the
-	# common case whenever the carrier's own spot still reaches the best man.
+	var keep_prob: float = safety
+	var cost: float = 0.0
+	# A fully safe route pays no turnover cost at all — skip localizing a
+	# strip that cannot happen (the strip-point walk is a per-defender loop;
+	# this is the common open-ice case).
+	if keep_prob < 1.0:
+		# Price the loss where the strip actually happens — the earliest covered
+		# point on the route — not the (often safe) destination. A candidate that
+		# ends in open ice but threads a defender through our own slot must pay the
+		# slot's turnover cost, not the destination's. This is what keeps a doomed
+		# carry honestly negative.
+		var strip_point: Vector3 = AIActionScoring.carry_strip_point(
+				cur_puck_pos, cand_puck_pos, local_time,
+				_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps, true)
+		cost = AIActionScoring.turnover_cost(
+				strip_point, 1.0 - keep_prob, ctx.defending_goal_pos,
+				our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
+		# Transition exposure (5v5): a strip on this route also hands over the
+		# counter-rush. The carrier's recovery race starts from the CANDIDATE —
+		# the spot this carry commits him to (plan §6: the one-up-one-back read).
+		cost += _counter_exposure_cost(ctx, strip_point, 1.0 - keep_prob,
+				candidate, our_goalie)
+	var total: float = dest_score * lane * decay * safety - cost
+	# Beam row: the intermediates _upgrade_candidate_two_ply needs. The row is
+	# this candidate's FINAL value unless pass 2 elects and upgrades it.
+	_beam_pos.append(candidate)
+	_beam_total.append(total)
+	_beam_dest.append(dest_score)
+	_beam_lane.append(lane)
+	_beam_decay.append(decay)
+	_beam_safety.append(safety)
+	_beam_cost.append(cost)
+	_beam_time.append(local_time)
+	_beam_arrive_vel.append(arrive_vel)
+	_beam_tracked_goalie.append(tracked_goalie)
+	return total
+
+
+# TWO-PLY pass of the beam (see CARRY_BEAM_WIDTH): completes beam row `i` with
+# the reads the base pass deferred, under the same exact incumbent-bound
+# prunes the inline compete ran.
+#
+# The pass OPTION the spot opens (see _candidate_pass_option): what the
+# carrier can DO from a candidate includes moving the puck, not just shooting
+# from it — the missing half of "back off to create space". A retreat that
+# reopens a lane to a valuable teammate inherits (a discounted cut of) that
+# value, which is what finally lets a contained carrier peel out instead of
+# grinding on the defender in front of a dead shot. Credited as the
+# IMPROVEMENT over the same read at the current spot: a lane already open
+# from here is the live pass's to take (fire wins ties), so holding a
+# cashable option is never a reason to keep carrying. CEILING PRUNE (exact):
+# the option credit is maxf'd in and can't exceed _pass_option_ceiling −
+# at_self, so when even that can't raise dest_score the per-receiver lane
+# loop is already decided and skips wholesale.
+#
+# The carry CONTINUATION it opens (see _carry_continuation_value — the pass
+# option's skating twin): the two-ply read that lets a spot be worth what it
+# enables NEXT. It can only RAISE dest_score, and its value is capped at
+# CONTINUATION_DISCOUNT (shot2/lane2/safety2/decay all ≤ 1) — so when even
+# that ceiling times this row's lane/decay/safety can't beat the incumbent
+# (cost only subtracts further), the argmax is already decided and the read
+# is skipped. Exact by the same argument as the threat-surface bound pruning.
+func _upgrade_candidate_two_ply(ctx: RoleContext, i: int,
+		best_so_far: float) -> float:
+	var candidate: Vector3 = _beam_pos[i]
+	var dest_score: float = _beam_dest[i]
+	var lane: float = _beam_lane[i]
+	var decay: float = _beam_decay[i]
+	var safety: float = _beam_safety[i]
 	if _pass_option_ceiling - _pass_option_at_self > dest_score:
 		dest_score = maxf(dest_score, maxf(
 				0.0, _candidate_pass_option(ctx, candidate,
 						dest_score + _pass_option_at_self) - _pass_option_at_self))
-	# ...and the carry CONTINUATION it opens (see _carry_continuation_value —
-	# the pass option's skating twin): the two-ply read that lets a spot be
-	# worth what it enables NEXT. Skipped when the first leg already dies
-	# (benefit zeroes regardless — hot-path prune), and BOUND-PRUNED against
-	# the caller's running best: the read is by far the priciest piece of a
-	# candidate (~90% of its cost), it can only RAISE dest_score, and its
-	# value is capped at CONTINUATION_DISCOUNT (shot2/lane2/safety2/decay all
-	# ≤ 1) — so when even that ceiling times this candidate's lane/decay/
-	# safety can't beat the incumbent (cost only subtracts further), the
-	# argmax is already decided and the read is skipped. Exact by the same
-	# argument as the threat-surface bound pruning.
 	if safety > 0.0 and dest_score < CONTINUATION_DISCOUNT \
 			and maxf(dest_score, CONTINUATION_DISCOUNT) * lane * decay * safety \
 					> best_so_far \
-			and AIActionScoring.in_offensive_zone(self_pos, ctx.attacking_goal_pos):
+			and AIActionScoring.in_offensive_zone(ctx.self_pos, ctx.attacking_goal_pos):
 		# Tighten the ceiling with the SECOND leg's own decay before paying
 		# for the full read: t2 is one calibrated-ETA call (~1 µs) against a
 		# ~180 µs continuation, and a candidate arriving facing away from the
 		# slot carries a t2 decay that often decides the argmax by itself.
 		var slot_t2: float = AIActionScoring.time_to_arrive(
-				candidate, _slot_anchor(ctx.own_goal_dir), arrive_vel,
+				candidate, _slot_anchor(ctx.own_goal_dir), _beam_arrive_vel[i],
 				ctx.self_max_speed, ctx.self_max_accel, ctx.self_lateral_grip)
 		var cont_ceiling: float = CONTINUATION_DISCOUNT \
 				* AIActionScoring.delay_discount(slot_t2)
 		if maxf(dest_score, cont_ceiling) * lane * decay * safety > best_so_far:
 			dest_score = maxf(dest_score, _carry_continuation_value(
-					ctx, candidate, arrive_vel, local_time, tracked_goalie,
-					slot_t2))
-	var benefit: float = dest_score * lane * decay * safety
-	var keep_prob: float = safety
-	# A fully safe route pays no turnover cost at all — skip localizing a
-	# strip that cannot happen (the strip-point walk is a per-defender loop;
-	# this is the common open-ice case).
-	if keep_prob >= 1.0:
-		return benefit
-	# Price the loss where the strip actually happens — the earliest covered point on
-	# the route — not the (often safe) destination. A candidate that ends in open ice
-	# but threads a defender through our own slot must pay the slot's turnover cost,
-	# not the destination's. This is what keeps a doomed carry honestly negative.
-	var strip_point: Vector3 = AIActionScoring.carry_strip_point(
-			cur_puck_pos, cand_puck_pos, local_time,
-			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps, true)
-	var cost: float = AIActionScoring.turnover_cost(
-			strip_point, 1.0 - keep_prob, ctx.defending_goal_pos,
-			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
-	# Transition exposure (5v5): a strip on this route also hands over the
-	# counter-rush. The carrier's recovery race starts from the CANDIDATE —
-	# the spot this carry commits him to (plan §6: the one-up-one-back read).
-	cost += _counter_exposure_cost(ctx, strip_point, 1.0 - keep_prob,
-			candidate, our_goalie)
-	return benefit - cost
+					ctx, candidate, _beam_arrive_vel[i], _beam_time[i],
+					_beam_tracked_goalie[i], slot_t2))
+	return dest_score * lane * decay * safety - _beam_cost[i]
+
+
+# One-shot FULL eval of a single candidate — base + two-ply upgrade in one
+# call, the pre-beam semantics. Kept for the single-candidate consumers
+# (unit tests, the ai_micro bench); the compete itself runs the two-pass
+# beam form. Leaves the candidate's row in the beam scratch, which the next
+# _best_carry clears.
+func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
+		our_goalie: Vector3, is_post_walkout: bool = false,
+		best_so_far: float = -INF) -> float:
+	var rows_before: int = _beam_total.size()
+	var base: float = _score_move_candidate_base(
+			ctx, candidate, our_goalie, is_post_walkout, best_so_far)
+	if _beam_total.size() == rows_before:
+		return base   # ceiling-pruned — no row to upgrade
+	return _upgrade_candidate_two_ply(ctx, _beam_total.size() - 1, best_so_far)
 
 
 # EV of a WHEEL candidate (see the WHEEL_* doc): the two-leg carry around
