@@ -1678,30 +1678,47 @@ func test_best_dump_geometry_in_own_zone_is_a_hard_rim_out() -> void:
 
 
 func test_contained_past_center_with_open_backfield_regroups() -> void:
-	# Carrier past centre, walled off short of the blue line, nothing to pass —
-	# but the ice BEHIND is open: the real play is curling back to regroup.
-	pending("Exposed by the #27 honest reach pricing: this fixture's 'wall' "
-			+ "(one back-pedalling D, one static D wide) no longer reads as "
-			+ "containment — a carrier can honestly route around it, so the "
-			+ "compete advances instead of regrouping. Pinning the real "
-			+ "denied-entry regroup needs a support-aware entry EV (a 1v2 "
-			+ "zone entry with no trailers should price low even when the "
-			+ "carry itself survives) — ARCHITECTURE Known Issues.")
-	return
+	# Carrier past centre, denied at the blue line, nothing to pass — but the
+	# ice BEHIND is open: the real play is curling back to regroup. Un-pended
+	# by restaging the wall as a GENUINE denial: the old fixture (one
+	# back-pedalling D + one static D wide) left honest routes around, and
+	# under the #27 reach pricing the compete rightly took them — the test
+	# was the broken thing, not the behavior. A real stand-up line — set,
+	# shaded to the carrier, head D at proper gap, flankers bracketing both
+	# swing lanes — kills every crossing, and the regroup emerges from the
+	# existing pricing with no dedicated model. Probed boundaries (both
+	# honest): a static head D INSIDE ~1.2 m gets stepped around (too tight
+	# to deny), and a line RETREATING from a tight gap concedes the blue
+	# line and gets blown through; this fixture sits three ladder steps
+	# inside the deny plateau (identical anchor across head-gap 1.4-2.0 m).
 	var self_pos := Vector3(2, 0, -4)                      # attacking half (attack -Z), pre-blue
-	var skaters: Array = [
+	var walled: Array = [
 			[1, TEAM_ID, self_pos],
-			[3, 1, Vector3(2, 0, -5), false, Vector3(0, 0, -4)],  # D backing off us
-			[4, 1, Vector3(-1, 0, -5.5)],                      # D sealing the lane across
+			[3, 1, Vector3(-4, 0, -6)],                     # weak-side flanker
+			[4, 1, Vector3(2, 0, -5.5)],                    # head D, set at gap
+			[5, 1, Vector3(8, 0, -6)],                      # strong-side flanker
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
-	c.decide(ctx)
+	c.decide(_make_ctx(self_pos, walled))
 	assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
 			"an open backfield beats conceding the puck")
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY, "regroups with possession")
 	assert_gt(c.last_carry_anchor.z, self_pos.z + 2.0,
 			"the regroup carries back toward centre, creating space")
+
+	# Contrast pin: the OLD fixture's loose pair is NOT a wall — the compete
+	# honestly attacks the seam instead of ceding ice to two beatable bodies.
+	var loose: Array = [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2, 0, -5), false, Vector3(0, 0, -4)],  # D backing off us
+			[4, 1, Vector3(-1, 0, -5.5)],                      # D wide of the lane
+	]
+	var c2 := AIRoleCarrier.new()
+	c2.decide(_make_ctx(self_pos, loose))
+	assert_eq(c2.intended_action, AIRoleCarrier.INTENT_CARRY,
+			"two beatable bodies are not denial")
+	assert_lt(c2.last_carry_anchor.z, self_pos.z - 2.0,
+			"…and the carrier takes the ice they concede")
 
 
 func test_best_dump_geometry_past_center_is_a_soft_flip_to_the_far_corner() -> void:

@@ -289,10 +289,14 @@ static func _lane_fan_target(
 				carrier_pos, receivers[i])
 		var feed_flight: float = carrier_pos.distance_to(receivers[i]) \
 				/ maxf(feed_speed, 1.0)
-		var recv_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
-				our_goalie_pos, our_net, feed_flight, receivers[i])
-		var recv_unsettled: float = AIActionScoring.goalie_unsettled(
-				our_goalie_pos, our_net, feed_flight, receivers[i])
+		# Pre-armed feed keeper — OUR goalie sees the fed man too (the
+		# backdoor depth cap he actually runs), so the wide feed's danger
+		# reads against the pre-armed, hands-sunk keeper: merely-strong,
+		# not the phantom certainty that made CONTAIN chase every
+		# back-door shadow.
+		AIActionScoring.resolve_feed_keeper(
+				our_goalie_pos, our_net, feed_flight, receivers[i], carrier_pos,
+				AIRoleHelpers.our_goalie_hands(ctx), feed_speed)
 		# Predicted post-seal for the receiver's spot: a wide-but-deep receiver
 		# fires into the RVH/VH wall (or the dead-angle post erasure) a
 		# competent keeper adopts — without it every sharp-angle lane read as
@@ -300,9 +304,12 @@ static func _lane_fan_target(
 		var recv_seal: float = AIActionScoring.derive_post_seal_x_sign(
 				receivers[i], our_net)
 		var recv_danger: float = AIActionScoring.score_shoot(
-				receivers[i], our_net, recv_goalie, GameRules.NET_HALF_WIDTH,
+				receivers[i], our_net, AIActionScoring.feed_keeper_pos,
+				GameRules.NET_HALF_WIDTH,
 				no_defenders, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-				recv_unsettled, [], -1.0, false, recv_seal, recv_seal != 0.0)
+				AIActionScoring.feed_keeper_unsettled, [], -1.0, false,
+				recv_seal, recv_seal != 0.0, 0.0, [],
+				AIActionScoring.feed_keeper_hands)
 		if recv_danger < LANE_PLAY_DANGER_BAR:
 			continue
 		var lane_x: float = receivers[i].x - carrier_pos.x

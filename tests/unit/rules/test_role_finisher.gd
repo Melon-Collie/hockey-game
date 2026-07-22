@@ -303,14 +303,27 @@ func _cycle_ctx(skaters: Array) -> RoleContext:
 
 
 func test_finisher_stages_the_open_backdoor() -> void:
-	# Net-front cover parked on the bumper, cross-seam lane to the far post
-	# wide open: the staging argmax must take the backdoor — the far-post
-	# one-timer is the highest-value look the coverage concedes.
+	# The coverage that genuinely concedes the far post: bumper covered,
+	# the net-front/tip man boxed out goal-side, and the keeper CAUGHT out
+	# challenging the wall carrier beyond his backdoor depth cap (priced at
+	# the real cross-seam feed speed, the cap tops out short of this 2.2 m
+	# challenge) — his re-square covers only cap/r of the lateral gap, so
+	# the far-post one-timer finishes behind him and the cross-seam lane is
+	# the one feed this box leaves open. (Against a HOME, cap-respecting
+	# keeper the pre-armed feed read correctly deflates the backdoor and
+	# the finisher stages the tip/net-front station instead — see
+	# test_finisher_parks_the_tip_station… for that regime.)
 	var ctx: RoleContext = _cycle_ctx([
 			_make_skater(1, TEAM_ID, Vector3(-3.0, 0.0, -20.0)),
 			_make_skater(2, TEAM_ID, Vector3(8.0, 0.0, -20.0)),   # carrier, wall
 			_make_skater(10, 1, Vector3(-0.8, 0.0, -21.5)),       # bumper cover
+			_make_skater(11, 1, Vector3(2.2, 0.0, -25.3)),        # net-front box-out
 	])
+	var out_goalie: GoalieNetworkState = ctx.snapshot.goalie_states[1 - TEAM_ID]
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var challenge: Vector3 = (Vector3(8.0, 0.0, -20.0) - net).normalized() * 2.2
+	out_goalie.position_x = net.x + challenge.x
+	out_goalie.position_z = net.z + challenge.z
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
 	assert_lt(d.target_position.x, -1.5,
 			"stages beyond the far post, not mid-slot; got %s" % d.target_position)
