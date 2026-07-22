@@ -126,8 +126,10 @@ func test_thrust_mult_clamps_overlong_timer() -> void:
 # ── puck_strip_impulse ──────────────────────────────────────────────────────────
 # The strip decision must key off the SAME delivered impulse as the stagger —
 # the real applied knockback |dvel_b|, reconstructed through the collision
-# resolver's own victim_kick — so Physical (transfer), both masses, and closing
-# speed all move it and the reconstruction can never drift from the physics.
+# resolver's own victim_kick — so the transfer, both masses, and closing speed
+# all move it and the reconstruction can never drift from the physics. (In v4 the
+# transfer is flat across builds — 0.65 — so mass is the build differentiator; the
+# transfer-scaling test below still pins the function's monotonicity in that arg.)
 
 func test_puck_strip_impulse_matches_resolver_knockback() -> void:
 	# Locks the identity against a LIVE SkaterCollisionRules.resolve contact:
@@ -149,11 +151,13 @@ func test_puck_strip_impulse_matches_resolver_knockback() -> void:
 			out.dvel_b.length(), 1e-5,
 			"reconstruction must equal the applied knockback magnitude")
 
-func test_puck_strip_impulse_scales_with_physical() -> void:
-	# Same hit, higher attacker transfer (Physical) → more likely to strip.
-	var enforcer: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.61, 1.0, 0.4, false)
-	var weakling: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.29, 1.0, 0.4, false)
-	assert_gt(enforcer, weakling, "higher Physical/transfer delivers a harder strip impulse")
+func test_puck_strip_impulse_scales_with_transfer() -> void:
+	# Same hit, higher attacker transfer → more likely to strip (monotonic in the
+	# transfer arg; in v4 the transfer is flat across builds, but the resolver term
+	# still moves the strip magnitude).
+	var high: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.65, 1.0, 0.4, false)
+	var low: float = BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.30, 1.0, 0.4, false)
+	assert_gt(high, low, "higher transfer delivers a harder strip impulse")
 
 func test_puck_strip_impulse_scales_inverse_with_victim_mass() -> void:
 	# Same hit, heavier victim → harder to dislodge the puck.
@@ -168,11 +172,16 @@ func test_puck_strip_impulse_brace_reduces_when_braced() -> void:
 	# Braced value = unbraced × brace_resistance.
 	assert_almost_eq(braced, unbraced * 0.4, 1e-5, "brace scales the delivered impulse by brace_resistance")
 
-func test_puck_strip_impulse_baseline_preserves_strip_point() -> void:
-	# Medium build vs medium build (weights 1.0, transfer 0.45, unbraced): the
-	# ~6 m/s-closing baseline strip point (impact_force 6.0) delivers a real
-	# kick of 6.0 × 0.45 × 0.5 = 1.35 — the recalibrated threshold, preserving
-	# the equal-mass strip feel across the inelastic migration.
+func test_puck_strip_impulse_baseline_strip_point_is_reachable() -> void:
+	# Medium build vs medium build (weights 1.0, transfer 0.65, unbraced). The
+	# strip THRESHOLD value is unchanged at 1.35, but the 0.65 transfer re-anchors
+	# where it sits in closing speed: 6 m/s closing now over-strips (6.0 × 0.65 ×
+	# 0.5 = 1.95), and the threshold itself lands at a reachable ~4.15 m/s closing
+	# (1.35 / (0.65 × 0.5)). This is the drifted-breakpoint fix — a full check/strip
+	# no longer needs ~6 m/s closing.
 	assert_almost_eq(
-			BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.45, 1.0, 0.4, false),
-			1.35, 1e-5, "baseline medium-vs-medium strip point maps to the 1.35 threshold")
+			BodyCheckRules.puck_strip_impulse(6.0, 1.0, 0.65, 1.0, 0.4, false),
+			1.95, 1e-5, "medium-vs-medium at 6 m/s closing over-strips at the 0.65 transfer")
+	assert_almost_eq(
+			BodyCheckRules.puck_strip_impulse(1.35 / 0.325, 1.0, 0.65, 1.0, 0.4, false),
+			1.35, 1e-5, "the 1.35 strip threshold lands at ~4.15 m/s closing")

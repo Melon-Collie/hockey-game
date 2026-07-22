@@ -166,11 +166,16 @@ const _BLADE_TAPE_END_FRAC: float = 0.62
 
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
-@export var body_check_restitution: float = 0.25         # attacker rebound on a glancing hit
-@export var body_check_restitution_floor: float = 0.0    # rebound on a full-strength hit (drive through the check)
-@export var body_check_drive_min_impulse: float = 4.0    # delivered impulse where drive-through starts easing in
-@export var body_check_drive_ref_impulse: float = 11.0   # delivered impulse of a full plow-through hit
-@export var body_check_transfer: float = 0.45
+# Fraction of closing momentum the inelastic resolver transfers on a committed
+# check (SkaterCollisionRules — the only body-check delivery term now; the old
+# restitution/drive-through exports were pre-inelastic dead code, removed). At
+# equal mass the victim's knockback is closing × transfer × 0.5, so this is the
+# master "how hard does a check hit" dial: raising it strips/staggers/knocks-down
+# at lower closing speeds AND deepens the attacker's own inelastic decel (the
+# symmetric exchange — a real check costs the checker some speed too). Scaled
+# per-build by PlayerAttributes.check_delivery_mult (flat 1.0 in v4 — mass is the
+# only differentiator), so the same 0.65 lands for every build.
+@export var body_check_transfer: float = 0.65
 @export var body_check_brace_resistance: float = 0.4
 # Fraction of body_check_transfer that lands WITHOUT the hit button committed.
 # The hit button (Ctrl / input.hit_held) is the intent gate: a committed check

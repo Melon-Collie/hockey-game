@@ -89,15 +89,18 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # off the carrier. Deliberately EQUAL to the full-check point on the stagger ladder
 # (SkaterController.stagger_ref_impulse, 1.35): a hit hard enough to count as a
 # full-strength check is exactly a hit hard enough to strip the puck. The
-# equal-mass baseline lands there at ~6 m/s closing (medium build) while
-# Physical/mass move it honestly: an enforcer strips at lower closing speed, a
-# low-Physical hit needs much more. Below it (down to stagger_min 0.6) a hit still
-# staggers the carrier but leaves the puck on his stick — a jarring bump, not a
-# turnover.
+# equal-mass baseline lands there at ~4 m/s closing (medium build, 0.65 transfer)
+# while mass moves it honestly: a heavier checker strips at lower closing speed, a
+# lighter one needs more. Below it (down to stagger_min 0.6) a hit still staggers
+# the carrier but leaves the puck on his stick — a jarring bump, not a turnover.
 @export var body_check_strip_threshold: float = 1.35
 @export var body_check_puck_speed: float = 3.0           # soft-strip trickle pace along the hit line
 @export var body_check_loose_speed: float = 0.8          # forward carry a full-strength hit leaves (puck drops loose at contact)
-@export var body_check_strip_ref_impulse: float = 5.5    # delivered impulse that fully deadens the strip (puck jarred dead)
+# Delivered impulse at which the strip fully deadens the puck (jarred dead at the
+# carrier's feet). Re-anchored from 5.5 — which needed ~17 m/s closing at the 0.65
+# transfer, so the deadening ramp never engaged in real play — down onto the
+# reachable knockdown band, so a solid knockdown-grade check kills the puck dead.
+@export var body_check_strip_ref_impulse: float = 3.5    # delivered impulse that fully deadens the strip (puck jarred dead)
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
 @export var hit_pickup_cooldown_threshold: float = 1.35   # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5

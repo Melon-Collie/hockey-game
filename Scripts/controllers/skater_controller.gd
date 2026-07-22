@@ -84,15 +84,18 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
 # Grounded to the inelastic magnitudes: the delivered victim impulse is
-# closing_speed × transfer × m_a/(m_a+m_b), so at a MEDIUM build (transfer 0.45,
-# equal mass → ×0.5) it's ~0.225 × closing, and an enforcer (transfer ~0.61, a
-# touch heavier) is ~0.33 × closing. The ref point is deliberately the SAME as the
-# puck-strip threshold (Puck.body_check_strip_threshold, 1.35): a hit hard enough
-# to count as a full check is exactly a hit hard enough to knock the puck loose.
-# That lands a full check at ~6 m/s closing for a medium build and ~4 m/s for an
-# enforcer — "square them up and skate into them with some pace," NOT a sprint-only
-# collision. (Was 1.0/2.5, which needed ~11 m/s closing at a medium build — full
-# force was effectively gated behind a sprint, the degenerate coupling this fixes.)
+# closing_speed × transfer × m_a/(m_a+m_b), so at a MEDIUM build (transfer 0.65,
+# equal mass → ×0.5) it's ~0.325 × closing, and a heavier build (a touch more mass
+# ratio) is higher still. The ref point is deliberately the SAME as the puck-strip
+# threshold (Puck.body_check_strip_threshold, 1.35): a hit hard enough to count as
+# a full check is exactly a hit hard enough to knock the puck loose. At the 0.65
+# transfer that lands a full check + strip at ~4 m/s closing for a medium build
+# (~3.4 for a heavy one) — "square them up and skate into them with some pace,"
+# comfortably reachable. (The impulse breakpoints used to sit at closing speeds
+# that were partly unreachable — a full check needed ~6 m/s and a knockdown ~13 —
+# after the transfer and the attribute mass range drifted apart across reworks;
+# the 0.65 transfer + the retuned knockdown band below re-anchor the whole ladder
+# into the reachable 2–10 m/s closing range this fixes.)
 # Speed still buys MORE than a full check: closing past the ref keeps scaling the
 # impulse linearly into the knockdown band below, so a sprint / head-on collision
 # is a bigger hit — a ceiling, not a requirement. Still feel tunables.
@@ -119,15 +122,18 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the body slides from the hit and bleeds speed via knockdown_friction — for a
 # recovery window scaling with the hit (see BodyCheckRules.knockdown_seconds_from_
 # impulse). knockdown_timer rides the SAME replicated / snapped / decayed rail as
-# stagger_timer. Deliberately left ABOVE the retuned full-check point (stagger_ref
-# 1.35): a full check staggers + strips; a KNOCKDOWN is reserved for a genuinely
-# big hit — an enforcer at pace (~9 m/s closing) or a fast/head-on collision
-# (~13 m/s at a medium build). It's the speed/Size ceiling, not the default outcome
-# of a check, and it sits above the AI's commit bar (AIBodyCheck.COMMIT_IMPULSE_M_S
-# 2.5) so a bot leaving position lands a solid check without auto-flattening. Set
-# knockdown_impulse very high (or 0) to effectively disable knockdowns.
-@export var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down
-@export var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
+# stagger_timer. Deliberately kept ABOVE the full-check point (stagger_ref 1.35):
+# a full check staggers + strips; a KNOCKDOWN is the reward for a genuinely SOLID
+# hit — ~5.5 m/s closing at a medium build (~4.5 for a heavy one), the pace of a
+# committed skate-in on a carrier, up to a maximal ~9.5 m/s head-on/sprint
+# collision. It sits just above the AI's commit bar (AIBodyCheck.COMMIT_IMPULSE_M_S
+# 1.6) so a committed bot check lands a hard stagger/strip and, at real closing,
+# tips into a knockdown. (Was 3.0/5.0 — a band that needed ~13–22 m/s closing,
+# above the top skater speed, so knockdowns were effectively unreachable; retuned
+# so solid hits knock down as intended.) Set knockdown_impulse very high (or 0) to
+# effectively disable knockdowns.
+@export var knockdown_impulse: float = 1.8         # m/s victim impulse above which a hit knocks down
+@export var knockdown_ref_impulse: float = 3.1     # m/s impulse of a maximal (longest) knockdown
 @export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
 @export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
 @export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
