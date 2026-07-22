@@ -108,6 +108,7 @@ func _ready() -> void:
 	# the virtual viewport immediately, not on the first _process.
 	_update_hud_scale()
 	_build_scorebug()
+	_build_minimap()
 	_build_phase_banner()
 	_build_clock_warning()
 	_build_top_goal_banner()
@@ -581,6 +582,14 @@ func _apply_spectator_chrome() -> void:
 func _build_offscreen_indicators() -> void:
 	var indicators := OffScreenPlayerIndicators.new()
 	add_child(indicators)
+
+# Top-down rink minimap, bottom-left corner. Lives under _scale_root so it honors
+# the HUD-scale pref and anchors to the true screen corner; it self-gates on
+# PlayerPrefs.minimap_enabled (drawing nothing when off), so no visibility wiring
+# is needed here.
+func _build_minimap() -> void:
+	var minimap := Minimap.new()
+	_scale_root.add_child(minimap)
 
 func _build_bug_icon() -> void:
 	var icon_tex := load("res://Assets/Icons/bug_report.svg") as Texture2D

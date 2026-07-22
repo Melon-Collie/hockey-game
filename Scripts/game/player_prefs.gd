@@ -273,6 +273,9 @@ var cursor_style: int = CURSOR_STYLE_DOT
 var cursor_color: Color = Color(1.0, 0.45, 0.1)  # high-contrast orange on white ice
 var cursor_size: int = 28
 var attack_up: bool = false
+# Top-down rink minimap in the HUD corner (Options → Camera). On by default; the
+# widget itself reads this live each frame (see Minimap._draw).
+var minimap_enabled: bool = true
 # On-ice self/team/enemy ring colors, relationship-relative to the local player.
 # Fully user-pickable (Options → Game → Ring Colors) so players can dial in a
 # colorblind-safe palette or any scheme they like. SkaterHUDCoordinator reads
@@ -443,6 +446,7 @@ func save() -> void:
 	cfg.set_value("input", "cursor_color", cursor_color)
 	cfg.set_value("input", "cursor_size", cursor_size)
 	cfg.set_value("game", "attack_up", attack_up)
+	cfg.set_value("game", "minimap_enabled", minimap_enabled)
 	cfg.set_value("game", "has_opened_player_settings", has_opened_player_settings)
 	cfg.set_value("game", "ring_color_self", ring_color_self)
 	cfg.set_value("game", "ring_color_team", ring_color_team)
@@ -1052,6 +1056,7 @@ func _load() -> void:
 		cursor_color = raw_cursor_color if raw_cursor_color is Color else cursor_color
 		cursor_size = clampi(int(cfg.get_value("input", "cursor_size", cursor_size)), CURSOR_SIZE_MIN, CURSOR_SIZE_MAX)
 		attack_up = cfg.get_value("game", "attack_up", false)
+		minimap_enabled = cfg.get_value("game", "minimap_enabled", true)
 		has_opened_player_settings = cfg.get_value("game", "has_opened_player_settings", false)
 		var raw_ring_self: Variant = cfg.get_value("game", "ring_color_self", ring_color_self)
 		ring_color_self = raw_ring_self if raw_ring_self is Color else ring_color_self
