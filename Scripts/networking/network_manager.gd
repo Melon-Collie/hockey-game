@@ -2282,61 +2282,72 @@ func set_world_state_provider(provider: Callable) -> void:
 func set_input_batch_provider(provider: Callable) -> void:
 	_input_batch_provider = provider
 
+# ── One-shot cue broadcasts (sounds/VFX) ─────────────────────────────────────
+# All notify_* cue RPCs below are RELIABLE on purpose: each is a single
+# transient event with no retransmit redundancy of its own (unlike world state,
+# which repeats at the broadcast rate, or carrier events, which ride the
+# snapshot event block as a second channel). As plain "unreliable" RPCs, any
+# packet drop deleted the cue outright — the host heard the contact, a client
+# got permanent silence, which playtests reported as missing audio. They're
+# rare (edge-latched per contact) and tiny, so reliable delivery costs nothing
+# measurable; a cue arriving one retransmit late still beats one that never
+# arrives. (Transfer-mode change only — RPC names/signatures unchanged, so no
+# PROTOCOL_VERSION bump.)
 func send_board_hit_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_board_hit.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_board_hit(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: board_hit_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: board_hit_received.emit(pos), [position], true)
 
 func send_goal_body_hit_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_goal_body_hit.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_goal_body_hit(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: goal_body_hit_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: goal_body_hit_received.emit(pos), [position], true)
 
 func send_post_hit_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_post_hit.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_post_hit(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: post_hit_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: post_hit_received.emit(pos), [position], true)
 
 func send_goalie_hit_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_goalie_hit.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_goalie_hit(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: goalie_hit_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: goalie_hit_received.emit(pos), [position], true)
 
 func send_deflection_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_deflection.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_deflection(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: deflection_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: deflection_received.emit(pos), [position], true)
 
 func send_body_block_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_body_block.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_body_block(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: body_block_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: body_block_received.emit(pos), [position], true)
 
 func send_puck_strip_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_puck_strip.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_puck_strip(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: puck_strip_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: puck_strip_received.emit(pos), [position], true)
 
 func send_body_check_to_all(hitter_peer_id: int, victim_peer_id: int,
 		force: float, hit_dir: Vector3) -> void:
@@ -2346,21 +2357,21 @@ func send_body_check_to_all(hitter_peer_id: int, victim_peer_id: int,
 # hitter_peer_id on the wire since PROTOCOL_VERSION 19: the check-delivery
 # body pose (the hitter's shoulder drive) fires from this same broadcast so it
 # lands the identical frame as the burst/thud on every machine.
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_body_check(hitter_peer_id: int, victim_peer_id: int,
 		force: float, hit_dir: Vector3) -> void:
 	NetworkSimManager.send(
 			func(hid: int, vid: int, f: float, d: Vector3) -> void:
 				body_check_landed.emit(hid, vid, f, d),
-			[hitter_peer_id, victim_peer_id, force, hit_dir], false)
+			[hitter_peer_id, victim_peer_id, force, hit_dir], true)
 
 func send_stick_lift_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_stick_lift.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_stick_lift(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: stick_lift_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: stick_lift_received.emit(pos), [position], true)
 
 # Nudge (self-tap) cue. Host-authoritative, like the shot cue: the nudger already
 # played it locally the instant they tapped, so the host excludes them and every
@@ -2372,9 +2383,9 @@ func send_nudge_to_all(position: Vector3, except_peer_id: int = -1) -> void:
 			continue
 		notify_nudge.rpc_id(peer_id, position)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_nudge(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: nudge_received.emit(pos), [position], false)
+	NetworkSimManager.send(func(pos: Vector3) -> void: nudge_received.emit(pos), [position], true)
 
 # Shot SFX (wrister/slapper). Unlike puck-collision SFX, the shooter already
 # plays the cue locally the instant they release (LocalController path), so the
@@ -2386,11 +2397,11 @@ func send_shot_to_all(position: Vector3, is_slapper: bool, except_peer_id: int =
 			continue
 		notify_shot.rpc_id(peer_id, position, is_slapper)
 
-@rpc("authority", "unreliable")
+@rpc("authority", "reliable")
 func notify_shot(position: Vector3, is_slapper: bool) -> void:
 	NetworkSimManager.send(
 		func(pos: Vector3, slap: bool) -> void: shot_sound_received.emit(pos, slap),
-		[position, is_slapper], false)
+		[position, is_slapper], true)
 
 func send_spectator_demoted_to_all(peer_id: int) -> void:
 	for remote_id: int in connected_peer_ids():
