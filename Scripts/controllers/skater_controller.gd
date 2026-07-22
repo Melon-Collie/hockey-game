@@ -55,17 +55,20 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Hit-Button (Body-Check Commit) Tuning ─────────────────────────────────────
 # The hit button (Ctrl / input.hit_held) commits a check: it delivers the full
 # body-check transfer (see Skater.hit_passive_transfer_mult for the uncommitted
-# floor), and pays for it the way sprint does — a stamina drain on the shared pool
-# plus a wider turn radius. So a big hit is a committed read (line them up, spend
-# stamina, sacrifice agility), not a free bump. Both costs are deterministic from
-# the replicated input.hit_held, so they re-derive through reconcile replay.
+# floor), and pays for it with a stamina drain on the shared sprint pool PLUS the
+# commitment of pulling the stick off the ice — while committed you can't poke,
+# receive a pass, or corral a loose puck (gated in PuckController/PickupClaim on
+# the replicated skater.hit_committed). So a big hit is a committed read (line them
+# up, spend stamina, give up puck play), not a free bump. Deterministic from the
+# replicated input.hit_held, so every cost re-derives through reconcile replay.
 @export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
-# Turn-rate scale while committing (< 1.0 = wider turns). Eased up from the
-# original 0.6 — committing still costs some agility (you're loading up, not
-# pivoting on a dime), but 0.6 fought you too hard when tracking a target you're
-# actively lining up. The commitment cost now lives mostly in stamina + the
-# sprint turn radius, not in a heavy hit-button steering penalty.
-@export var hit_turn_multiplier: float = 0.8
+# Turn-rate scale while committing (< 1.0 = wider turns). Now 1.0 (no penalty): the
+# commitment cost moved entirely onto the withdrawn stick above, so you can steer
+# freely to line up the hit — the old penalty punished the ATTEMPT (tracking a
+# mover) rather than the miss, which is backwards. Full-speed homing is still
+# bounded because sprinting in for max closing pays sprint's own turn radius
+# (sprint_turn_multiplier). Dial below 1.0 if committed checks feel too sticky.
+@export var hit_turn_multiplier: float = 1.0
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
 # up for the check — leans into it, drops the leading shoulder, and sinks into a
 # crouch. A render-rate blend (SkaterSkatingCoordinator) off the replicated

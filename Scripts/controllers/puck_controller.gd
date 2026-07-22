@@ -480,7 +480,9 @@ func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector
 		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 				or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 			continue
-		if skater.blade_up or skater.deflect_intent:
+		# blade_up / deflect_intent already withdraw the stick; a committed body-check
+		# does the same (stick off the ice — no corral).
+		if skater.blade_up or skater.deflect_intent or skater.hit_committed:
 			continue
 		if not PuckReceptionRules.blade_can_interact(skater.blade_up, puck_airborne):
 			continue
@@ -519,6 +521,11 @@ func _check_interactions() -> void:
 				var checker_team: int = _team_id_by_skater.get(skater, -1)
 				if not PuckCollisionRules.can_poke_check(carrier_team, checker_team):
 					continue
+				# Committed to a body check — the stick is off the ice, so no poke
+				# (nor stick-lift). It's the body or nothing; matches the loose-puck
+				# withdrawal gates and the claim/provisional paths.
+				if skater.hit_committed:
+					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
 				if skater.blade_up:
 					# Stick lift: the attacker's lifted blade hooked under the
@@ -551,6 +558,10 @@ func _check_interactions() -> void:
 			var puck_airborne: bool = puck.is_airborne()
 			for skater: Skater in skaters:
 				if skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
+					continue
+				# Committed to a body check — the stick is off the ice, so no
+				# corral/receive (mirrors the poke + claim + provisional gates).
+				if skater.hit_committed:
 					continue
 				# A crouched shot-blocker can't corral the puck with their stick —
 				# the blade is committed to the block. Same for a shooter mid
@@ -792,6 +803,10 @@ func try_provisional_pickup(local_skater: Skater) -> void:
 		return
 	# Knocked down — can't corral the puck (mirrors the host's is_knocked_down gate).
 	if local_skater.is_knocked_down:
+		return
+	# Committed to a body check — stick's off the ice (mirrors the host's
+	# hit_committed pickup gate), so don't pin a puck the host won't grant.
+	if local_skater.hit_committed:
 		return
 	if _is_pickup_contested(local_skater):
 		return

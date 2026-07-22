@@ -786,8 +786,16 @@ func _resolve_player_collisions() -> void:
 		# committing (the victim) braces to cut the delivered impulse ("take less") —
 		# the brace moved off brake onto the same button. Both read the REPLICATED
 		# hit_committed so they evaluate identically on every machine.
+		#
+		# But a puck CARRIER can't DELIVER an offensive check — holding the button
+		# while carrying only BRACES (the victim-brace below still reads hit_committed
+		# regardless of possession), so a carrier bulldozing lands the incidental
+		# passive bump, not a full hit. Derived from the replicated current_shot_state
+		# so it re-evaluates identically on every machine and through reconcile.
+		var delivering: bool = hit_committed \
+				and not SkaterStateMachine.state_has_puck(current_shot_state)
 		var atk_transfer: float = body_check_transfer \
-				* (1.0 if hit_committed else hit_passive_transfer_mult)
+				* (1.0 if delivering else hit_passive_transfer_mult)
 		var brace: float = other.body_check_brace_resistance if other.hit_committed else 1.0
 		SkaterCollisionRules.resolve(_collision_result,
 				global_position, velocity, weight, my_radius,

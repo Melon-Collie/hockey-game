@@ -238,6 +238,13 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 			or skater_snap.shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
+	# Committed to a body check at send time — the stick was off the ice (matches
+	# the present-time withdrawal in PuckController._check_interactions and the
+	# client's own provisional gate), so no pickup grant. hit_committed rides the
+	# replicated SkaterNetworkState, so the rewound stance is authoritative here.
+	if skater_snap.hit_committed:
+		NetworkManager.send_pickup_claim_nack(peer_id)
+		return
 	# Client-authoritative blade ("aim"): the claim carries the blade geometry the
 	# client actually reached with, instead of the host reconstructing it from its
 	# lossy self-view snapshot (the reconstruction diverged from what the client
