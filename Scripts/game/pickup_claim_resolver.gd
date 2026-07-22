@@ -86,6 +86,83 @@ func clear() -> void:
 	_pending_blade_prev = Vector3.ZERO
 
 
+# Clear because someone was granted the puck authoritatively (any pickup —
+# lag-comp grant, arbitrated present grab, one-timer catch). If the discarded
+# pending claimant isn't the grantee, NACK them so their optimistic pin rolls
+# back now instead of waiting out the RTT-scaled timeout.
+func clear_for_grant(granted_peer_id: int) -> void:
+	if _pending_peer_id != -1 and _pending_peer_id != granted_peer_id:
+		NetworkManager.send_pickup_claim_nack(_pending_peer_id)
+	clear()
+
+
+# ── Claim-vs-present-time arbitration ────────────────────────────────────────
+# The host's present-time pickup tick (PuckController._check_interactions) used
+# to grant unconditionally and the grant path then cleared any pending claim —
+# so a lag-comp claim sitting in its contest window ALWAYS lost to a host-live
+# blade (the host player's own, or a remote's replayed one), no matter how much
+# earlier it was stamped. In tight scrambles that read as "the host wins every
+# 50/50". This entry point runs at the present-time grant moment and applies
+# the same stamp-fairness rule the claim-vs-claim path uses, treating the live
+# grab as a claim stamped `now`.
+#
+# Pure decision half, pinned by GUT: CONTESTED when the stamps are within the
+# contest window (a genuine 50/50 → squirt), PENDING_WON when the pending stamp
+# is older than the window (the claimant reached it first in client-time — the
+# grab happening before tick()'s window expiry is just RPC-arrival timing).
+enum PresentGrab { CONTESTED = 0, PENDING_WON = 1 }
+
+static func classify_present_grab(pending_stamp: float, now: float) -> int:
+	return PresentGrab.CONTESTED if now - pending_stamp < CONTEST_WINDOW_S \
+			else PresentGrab.PENDING_WON
+
+
+# Returns true when the resolver CONSUMED the grab (contest squirt applied, or
+# the pending claim granted outright) — the present-time path must then NOT set
+# the carrier. Returns false when the present grab should proceed: no pending
+# claim, the grabber IS the pending claimant (their replayed blade caught up
+# with their own claim — the normal grant clears pending), or the pending
+# claimant has despawned. Three-way scrambles (a live-vs-live contest while a
+# third claim pends) keep the existing behavior — the live pair squirts and the
+# pending claim resolves against the squirted puck via its own window.
+func arbitrate_present_grab(grabber: Skater, grabber_peer_id: int,
+		grab_blade_pos: Vector3, grab_blade_vel: Vector3, now: float) -> bool:
+	if _pending_peer_id == -1:
+		return false
+	if grabber_peer_id == _pending_peer_id:
+		return false
+	var prior_record: PlayerRecord = _registry.get_record(_pending_peer_id)
+	if prior_record == null or prior_record.skater == null:
+		clear()  # claimant despawned/demoted mid-window — same as tick()'s handling
+		return false
+	if grabber == null:
+		return false
+	if not _puck_controller_getter.is_valid():
+		return false
+	var pc: PuckController = _puck_controller_getter.call() as PuckController
+	if pc == null:
+		return false
+	if classify_present_grab(_pending_host_timestamp, now) == PresentGrab.CONTESTED:
+		# Genuine 50/50 — live grabber's kinematics vs the pending claimant's
+		# stored client-reported blade (its authoritative aim at its view-time),
+		# exactly mirroring the claim-vs-claim contest resolution. The claimant
+		# gets no possession (squirt), so NACK their optimistic pin.
+		var prior_pos: Vector3 = prior_record.skater.get_blade_contact_global()
+		var prior_vel: Vector3 = prior_record.skater.blade_world_velocity
+		if _pending_blade_curr != Vector3.ZERO:
+			prior_pos = _pending_blade_curr
+			prior_vel = (_pending_blade_curr - _pending_blade_prev) * float(Constants.PHYSICS_TICK)
+		pc.apply_contested_pickup(grabber, prior_record.skater,
+				grab_blade_vel, prior_vel, grab_blade_pos, prior_pos)
+		NetworkManager.send_pickup_claim_nack(_pending_peer_id)
+	else:
+		# Stamp-earlier claim wins outright — grant now rather than at the
+		# window expiry tick() would have used.
+		pc.apply_lag_comp_pickup(prior_record.skater)
+	clear()
+	return true
+
+
 # _interp_delay_ms rides the shared claim wire shape but is unused here since
 # the loose-puck rewind reads the claim stamp itself (puck_view_time) and the
 # blade rewind is self-view — nothing in a pickup claim renders remote-view.
@@ -99,6 +176,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	if puck == null or pc == null:
 		return
 	if puck.carrier != null or puck.pickup_locked:
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	# Use session-relative game time so the age check matches host_timestamp's
 	# time base (the client stamped it with estimated_host_time).
@@ -106,6 +184,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# host was alive before the game started.
 	var now: float = NetworkManager.local_time()
 	if now - host_timestamp > MAX_CLAIM_AGE_S:
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null or record.skater == null:
@@ -121,8 +200,10 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# at send time. self_view_time is the claimant's own body timeline (matching
 	# the blade rewind below); the expiry store shares its local_time base.
 	if puck.is_on_cooldown_at(record.skater, LagCompRewind.self_view_time(host_timestamp, input_lead_ms)):
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	# Blade is SELF-view; the loose puck reads through puck_view_time — the
 	# claimant rendered it predicted AT the claim stamp (render == rewind at
@@ -133,6 +214,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	var puck_pos: Vector3 = puck_snap.puck_state.position
 	var puck_prev_snap: WorldSnapshot = _state_buffer.get_state_at(LagCompRewind.prev_tick(puck_rewind_time))
@@ -142,8 +224,10 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	var skater_snap: SkaterNetworkState = blade_snap.get_skater_state(peer_id)
 	var skater_prev_snap: SkaterNetworkState = blade_prev_snap.get_skater_state(peer_id)
 	if skater_snap == null or skater_prev_snap == null:
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	if skater_snap.is_ghost:
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	# A crouched shot-blocker can't corral the puck with their stick, and
 	# neither can a shooter mid follow-through (the stick is whipping through
@@ -152,6 +236,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# matches the stance the claimant actually held at send time.
 	if skater_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 			or skater_snap.shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	# Client-authoritative blade ("aim"): the claim carries the blade geometry the
 	# client actually reached with, instead of the host reconstructing it from its
@@ -184,6 +269,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	NetworkTelemetry.record_pickup_claim()
 	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
 		NetworkTelemetry.record_pickup_claim_miss()
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	# Catch vs deflect — run the SAME decision the present-time path uses
 	# (PuckController._check_interactions → PuckReceptionRules.should_receive),
@@ -210,6 +296,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 		# the puck" from "reached it but it wasn't catchable".
 		NetworkTelemetry.record_pickup_claim_deflect()
 		pc.apply_lag_comp_deflect(record.skater)
+		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	if _pending_peer_id != -1:
 		# Gate the contest decision on claim timestamps, not RPC arrival order.
@@ -238,6 +325,8 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 					prior_vel = (_pending_blade_curr - _pending_blade_prev) * float(Constants.PHYSICS_TICK)
 				pc.apply_contested_pickup(record.skater, prior_record.skater,
 						new_vel, prior_vel, blade_curr, prior_pos)
+				NetworkManager.send_pickup_claim_nack(peer_id)
+				NetworkManager.send_pickup_claim_nack(_pending_peer_id)
 				clear()
 			else:
 				_arm_pending(peer_id, host_timestamp, blade_curr, blade_prev)
@@ -251,7 +340,9 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 				# New claim is actually earlier — apply it now and drop pending.
 				pc.apply_lag_comp_pickup(record.skater)
 				clear()
-			# else: new claim is later, drop it and let pending resolve via tick().
+			else:
+				# New claim is later — drop it and let pending resolve via tick().
+				NetworkManager.send_pickup_claim_nack(peer_id)
 	else:
 		_arm_pending(peer_id, host_timestamp, blade_curr, blade_prev)
 

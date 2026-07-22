@@ -60,7 +60,7 @@ signal clock_updated(time_remaining: float)
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal queue_depth_feedback(depth: int)
 
-const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + f32 host_capture_time (4) + u8 num_skaters (1)
+const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + u32 host_capture_time in 0.1ms units (4) + u8 num_skaters (1)
 const SKATER_STATE_BYTES: int = 41  # inner skater state block (was hardcoded 39 at two
                                     # decode sites and silently truncated on the v15 grow;
                                     # 40->41 adds knockdown_timer u8@0.01s)
@@ -390,7 +390,7 @@ func decode_stats(data: Array) -> void:
 # Skater: SKATER_STATE_BYTES (41) bytes
 # Offsets: pos(0..4) vel(5..10) blade(11..16) top_hand(17..22)
 #          facing(23..24) ubrot(25..26) fav(27..28) ubav(29..30) lp_ts(31..34)
-#          flags(35) charge(36) stamina(37) stagger(38)
+#          flags(35) charge(36) stamina(37) stagger(38) knockdown(39) intent(40)
 static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	var b := PackedByteArray()
 	b.resize(SKATER_STATE_BYTES)

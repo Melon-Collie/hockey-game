@@ -69,6 +69,14 @@ var is_server: bool = false
 # ── State ─────────────────────────────────────────────────────────────────────
 var _carrier_peer_id: int = -1            # server-side authoritative carrier
 var _local_carrier_skater: Skater = null  # client-side: local skater while carrying
+# Client-side carrier VIEW (peer id, -1 = loose), driven EXCLUSIVELY by the
+# carrier events — pickup grant / carrier-changed / steal / drop, arriving via
+# reliable RPC or the snapshot event block — never by world state (unreliable
+# ordering vs locally-predicted transitions). This is what LocalController's
+# claim gate branches on: puck.carrier is HOST-only (never set on clients), so
+# gating on it left the poke/stick-lift claim path unreachable and re-fired
+# pickup claims against a carried puck for entire carries.
+var _client_carrier_peer_id: int = -1
 # Client-side: the remote skater currently carrying, when it's NOT the local
 # player. While set, the puck is pinned to this skater's interpolated blade
 # rather than interpolating from its own buffer — the two used to run on
@@ -163,8 +171,34 @@ func get_local_carrier() -> Skater:
 func get_carrier_peer_id() -> int:
 	return _carrier_peer_id
 
+# Client-side carrier view (see _client_carrier_peer_id). -1 = loose/unknown.
+func get_client_carrier_peer_id() -> int:
+	return _client_carrier_peer_id
+
+# The carrier's Skater on this client's view, when spawned locally: the pinned
+# remote carrier or the local skater. Null while loose, or when the carrier's
+# skater isn't available here (unspawned record) — callers that need geometry
+# (poke/stick-lift aim) must handle null.
+func get_client_carrier_skater() -> Skater:
+	if _local_carrier_skater != null and is_instance_valid(_local_carrier_skater):
+		return _local_carrier_skater
+	if _remote_carrier_skater != null and is_instance_valid(_remote_carrier_skater):
+		return _remote_carrier_skater
+	return null
+
 # Callable (Skater) -> int peer_id, or -1 if not registered.
 var _peer_id_resolver: Callable = Callable()
+# Host-only. Callable (grabber: Skater, grabber_peer_id: int, blade_pos: Vector3,
+# blade_vel: Vector3, now: float) -> bool — PickupClaimResolver.arbitrate_present_grab,
+# wired by GameManager. Consulted at the present-time pickup grant moment so a
+# pending lag-comp claim contests the grab by STAMP instead of always losing to
+# whichever blade is host-live (the "host wins every 50/50" hole). True = the
+# resolver consumed the grab (contest squirt / pending granted) — don't set carrier.
+var _present_grab_arbiter: Callable = Callable()
+
+
+func set_present_grab_arbiter(arbiter: Callable) -> void:
+	_present_grab_arbiter = arbiter
 # Callable () -> Array[Skater] of all active skaters. Host-only interaction detection.
 var _skater_getter: Callable = Callable()
 # Live Skater -> team_id dict owned by PlayerRegistry. Read in the
@@ -265,6 +299,11 @@ func _physics_process(delta: float) -> void:
 			or not is_instance_valid(_provisional_carrier_skater) \
 			or _provisional_carrier_skater.is_ghost or _provisional_carrier_skater.is_knocked_down):
 		_clear_provisional()
+	# Same freed-object guard as the remote/provisional pins: a despawn/demote
+	# that lands before the carrier-drop notification must not dereference a
+	# freed skater for the gap frame.
+	if _local_carrier_skater != null and not is_instance_valid(_local_carrier_skater):
+		_local_carrier_skater = null
 	if _local_carrier_skater != null:
 		is_extrapolating = false
 		_smooth_initialized = false
@@ -567,6 +606,14 @@ func _check_interactions() -> void:
 						apply_contested_pickup(skater, contender,
 								skater.blade_world_velocity, contender.blade_world_velocity,
 								skater.get_blade_contact_global(), contender.get_blade_contact_global())
+					elif _present_grab_arbiter.is_valid() and _present_grab_arbiter.call(
+							skater,
+							_peer_id_resolver.call(skater) if _peer_id_resolver.is_valid() else -1,
+							skater.get_blade_contact_global(), skater.blade_world_velocity,
+							NetworkManager.local_time()):
+						# A pending lag-comp claim contested (or won) this grab by
+						# stamp — the resolver applied the outcome; no carrier here.
+						pass
 					else:
 						puck.set_carrier(skater)
 						_on_puck_picked_up(skater)
@@ -600,6 +647,7 @@ func _check_body_blocks(skaters: Array, puck_curr: Vector3) -> bool:
 func notify_local_pickup(local_skater: Skater) -> void:
 	_local_carrier_skater = local_skater
 	_remote_carrier_skater = null
+	_client_carrier_peer_id = NetworkManager.local_peer_id()
 	# Host confirmed our pickup. If we were already provisionally pinned to this
 	# same blade, this promotes it seamlessly (no visible change); otherwise it
 	# attaches now.
@@ -614,9 +662,10 @@ func notify_local_pickup(local_skater: Skater) -> void:
 # interpolated blade so it shares the carrier's render timeline instead of
 # interpolating from its own buffer. Mirrors notify_local_pickup. GameManager
 # only calls this for non-local carriers whose skater is spawned on this client.
-func notify_remote_pickup(remote_skater: Skater) -> void:
+func notify_remote_pickup(remote_skater: Skater, carrier_peer_id: int) -> void:
 	_remote_carrier_skater = remote_skater
 	_local_carrier_skater = null
+	_client_carrier_peer_id = carrier_peer_id
 	if _provisional_carrier_skater != null:
 		NetworkTelemetry.record_provisional_stolen()  # legit loss of a 50/50, not the felt bug
 	_clear_provisional()  # a different player won the puck — roll back our optimistic pin
@@ -636,6 +685,7 @@ func notify_local_release(direction: Vector3, power: float) -> Vector3:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
 		release_pos.y = puck.ice_height
 	_local_carrier_skater = null
+	_client_carrier_peer_id = -1
 	_arm_provisional_lockout()  # post-release reattach cooldown — don't optimistically re-grab
 	# Fire from the blade and seed the shared loose-puck prediction — no forward
 	# advance. The host is authoritative and fires from this same (client-sent)
@@ -659,6 +709,7 @@ func notify_local_nudge(velocity: Vector3) -> void:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
 		release_pos.y = puck.ice_height
 	_local_carrier_skater = null
+	_client_carrier_peer_id = -1
 	_arm_provisional_lockout(puck.nudge_cooldown)
 	var v := velocity
 	v.y = 0.0
@@ -687,6 +738,7 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	if new_carrier_peer_id != -1:
 		_release_seed_active = false
 	_remote_carrier_skater = null
+	_client_carrier_peer_id = new_carrier_peer_id
 	_clear_provisional()
 
 # Called when the server forcibly ends a carry (e.g. goal scored).
@@ -694,9 +746,21 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 func notify_local_puck_dropped() -> void:
 	_local_carrier_skater = null
 	_remote_carrier_skater = null
+	_client_carrier_peer_id = -1
 	_arm_provisional_lockout()  # we just lost the puck — host won't hand it back during reattach cooldown
 	_release_seed_active = false
 	_state_buffer.clear()
+
+
+# Host NACK'd our pickup claim (stamp reject, geometry miss, deflect verdict,
+# contest loss) — roll the optimistic pin back immediately instead of waiting
+# out the RTT-scaled timeout. Same felt outcome as the timeout (host declined),
+# so it shares the provisional_timeouts counter; arriving sooner is the point.
+func notify_claim_rejected() -> void:
+	if is_server or _provisional_carrier_skater == null:
+		return
+	NetworkTelemetry.record_provisional_timeout()
+	_clear_provisional()
 
 
 # ── Optimistic (visual-only) pickup ──────────────────────────────────────────
@@ -1036,6 +1100,14 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	_pred_cue_goalie_prev = span_goalie
 	if not stopped:
 		pos += vel * maxf(frac, 0.0)
+		# The remainder bypasses the step's board carom, so a fast puck could
+		# render up to ~25 cm past a board plane on approach frames. Clamp the
+		# center back inside the rink — the next whole tick reflects properly;
+		# this only keeps the rendered position contained meanwhile.
+		var contained: Vector2 = GameRules.clamp_to_rink_inner(
+				Vector2(pos.x, pos.z), radius)
+		pos.x = contained.x
+		pos.z = contained.y
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
 	# goal line inside the posts and let the authoritative outcome arrive (the
 	# goal horn is a host decision, like the save).

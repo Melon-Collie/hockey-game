@@ -390,6 +390,15 @@ func _ready() -> void:
 	_net_session_reporter = NetworkSessionReporter.new()
 	_achievements = AchievementService.new()
 	_stat_recorder = SteamStatRecorder.new()
+	# End-of-tick capture + broadcast (physics priority 2 — after all actor
+	# integration), replacing the old start-of-next-tick capture in
+	# _physics_process. Ships each tick's state the tick it was simulated:
+	# ~8.3 ms off every client's world view and off the measured input-lead
+	# overdue the servo pads. The callback body carries all the session gates,
+	# so the hook is safe to run from boot.
+	var net_hook := PostPhysicsNetHook.new()
+	net_hook.callback = _capture_and_broadcast_post_physics
+	add_child(net_hook)
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
 
@@ -425,6 +434,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_attributes_changed.connect(_on_local_attributes_changed)
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
+	NetworkManager.pickup_claim_rejected_received.connect(_on_pickup_claim_rejected)
 	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
 	NetworkManager.stick_lift_claim_received.connect(_on_stick_lift_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
@@ -487,18 +497,17 @@ func _physics_process(delta: float) -> void:
 	# don't fight (or pollute the recorder with) replay positions.
 	if NetworkManager.is_replay_mode():
 		return
-	if _state_buffer_manager != null and puck_controller != null:
-		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
-		# Broadcast immediately after capture so the world-state packet reflects
-		# this tick's state. Lives here (rather than in NetworkManager._physics_process)
-		# because autoload tree order would otherwise have NetworkManager run
-		# first and broadcast last tick's snapshot — see NetworkManager.try_broadcast.
-		NetworkManager.try_broadcast()
-	# Build the shared "current frame" snapshot once after capture. AI
-	# controllers and team brains both read from current_snapshot rather
-	# than each calling get_state_delayed independently — at 6 bots + 2
-	# brains that's 8 redundant interpolation passes per frame, each
-	# allocating ~10 RefCounted state objects.
+	# Capture + broadcast moved to _capture_and_broadcast_post_physics
+	# (PostPhysicsNetHook, physics priority 2) so the packet ships THIS tick's
+	# post-integration state instead of paying a tick of departure latency.
+	#
+	# Build the shared "current frame" snapshot once per tick. AI controllers
+	# and team brains both read from current_snapshot rather than each calling
+	# get_state_delayed independently — at 6 bots + 2 brains that's 8 redundant
+	# interpolation passes per frame, each allocating ~10 RefCounted state
+	# objects. Reads the ring captured at the END of the previous tick — the
+	# identical content the old start-of-this-tick capture produced, so AI
+	# data age is unchanged by the capture move.
 	if _state_buffer_manager != null:
 		# Fresh ground-truth snapshot — bots track every position/velocity in
 		# real time (so a receiver aims at the puck's ACTUAL spot, not a stale
@@ -526,6 +535,26 @@ func _physics_process(delta: float) -> void:
 	_hit_tracker.tick(delta)
 	_possession_tracker.tick(delta)
 	_pickup_claim.tick(delta)
+
+
+# End-of-tick host capture + broadcast, invoked by PostPhysicsNetHook at
+# physics priority 2 — after SkaterController (−1), the bodies' move_and_slide
+# (0), and the puck's analytic step (+1) — so the ring slot holds this tick's
+# fully-integrated state, phase-coherent (position AND velocity post-move),
+# labeled with the wall time it was actually produced. The packet leaves one
+# tick earlier than the old start-of-next-tick capture, and the snapshot ack
+# reaches clients one tick earlier — the input-lead servo's measured overdue
+# drops by the same tick, so the lead relaxes to match. Gates mirror the old
+# _physics_process block: host only, live session, not during goal replay
+# (the recorder must not see replay positions).
+func _capture_and_broadcast_post_physics() -> void:
+	if not NetworkManager.is_host or puck == null or _state_machine == null:
+		return
+	if NetworkManager.is_replay_mode():
+		return
+	if _state_buffer_manager != null and puck_controller != null:
+		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
+		NetworkManager.try_broadcast()
 
 
 func _check_puck_out_of_bounds(delta: float) -> void:
@@ -1388,6 +1417,11 @@ func _wire_subsystems() -> void:
 
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+	# Claim-vs-present-time pickup arbitration (see arbitrate_present_grab):
+	# the present-time grant consults the pending lag-comp claim by stamp
+	# instead of silently discarding it via the grant-path clear().
+	if puck_controller != null:
+		puck_controller.set_present_grab_arbiter(_pickup_claim.arbitrate_present_grab)
 
 	_poke_claim = PokeClaimResolver.new()
 	_poke_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
@@ -2662,7 +2696,10 @@ func _resolve_skater_peer_id(skater: Skater) -> int:
 
 
 func _on_server_puck_picked_up_by(peer_id: int) -> void:
-	_pickup_claim.clear()
+	# clear_for_grant, not clear(): if a different peer's claim was pending,
+	# NACK it so their optimistic pin rolls back now (covers every
+	# authoritative grant path, including the one-timer catch).
+	_pickup_claim.clear_for_grant(peer_id)
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
@@ -2708,6 +2745,12 @@ func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
 	if record == null or record.skater == null or record.is_local:
 		return
 	(record.controller as RemoteController).apply_ghost_rpc(is_ghost)
+
+
+# Client: host NACK'd our pickup claim — roll the optimistic pin back now.
+func _on_pickup_claim_rejected() -> void:
+	if puck_controller != null:
+		puck_controller.notify_claim_rejected()
 
 
 func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
@@ -3353,7 +3396,7 @@ func _on_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	if record == null or record.skater == null or record.is_local:
 		puck_controller.notify_remote_carrier_changed(new_carrier_peer_id)
 		return
-	puck_controller.notify_remote_pickup(record.skater)
+	puck_controller.notify_remote_pickup(record.skater, new_carrier_peer_id)
 
 
 func on_carrier_puck_dropped() -> void:
