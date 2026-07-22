@@ -732,10 +732,17 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool) -> void:
 	if not _historical_others_provider.is_valid():
 		return
+	# Ghost gate — mirrors the live resolver (Skater._resolve_player_collisions):
+	# a ghosted skater has no body contact in either direction. Self reads the
+	# live flag (same read the live resolver makes on the host); the others read
+	# their rewound snapshot's flag so a mid-window ghost transition replays the
+	# way the host actually resolved it.
+	if skater.is_ghost:
+		return
 	var others: Array = _historical_others_provider.call(skater, host_ts)
 	for rec: Dictionary in others:
 		var other: Skater = rec["skater"]
-		if other == null:
+		if other == null or rec["ghost"]:
 			continue
 		var opos: Vector3 = rec["position"]
 		var ovel: Vector3 = rec["velocity"]
