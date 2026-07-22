@@ -129,6 +129,37 @@ func test_threat_partition_assigns_distinct_men() -> void:
 				"assigned peer %d is MARK, got slot %d" % [pid, slot])
 
 
+# ── Shared threat memo (threat_shoot_base_by_opp) ───────────────────────────
+
+func test_threat_memo_published_while_markers_live() -> void:
+	# DZONE slots MARK defenders, so the brain publishes the shared
+	# per-opponent shoot-threat bases their unassigned fallback consumes
+	# (see threat_shoot_base_by_opp). One base per opponent, carrier included.
+	var brain: TeamBrain = _make_brain_3v3()
+	brain.force_retick()
+	brain.tick(0.001, _make_dzone_3v3())
+	var has_mark: bool = false
+	for pid: int in brain.slot_assignments:
+		if brain.slot_assignments[pid] == AIRoleSlots.Slot.MARK:
+			has_mark = true
+	assert_true(has_mark, "fixture sanity: DZONE slots at least one MARK")
+	for opp_pid: int in [200, 210, 220]:
+		assert_true(brain.threat_shoot_base_by_opp.has(opp_pid),
+				"memo carries a base for opponent %d" % opp_pid)
+	assert_gt(brain.threat_shoot_base_by_opp[200], 0.0,
+			"an opp carrier in our slot is a live threat surface")
+
+
+func test_threat_memo_empty_without_markers() -> void:
+	# We possess (OZONE) → no MARK slot → the memo must stay empty so
+	# consumers fall back to the exact local computation, never a stale read.
+	var brain: TeamBrain = _make_brain()
+	brain.force_retick()
+	brain.tick(0.001, _make_snapshot(100, Vector3(0.0, 0.0, -22.0)))
+	assert_true(brain.threat_shoot_base_by_opp.is_empty(),
+			"no MARK live → memo empty; got %s" % str(brain.threat_shoot_base_by_opp))
+
+
 func test_threat_partition_cleared_when_we_possess() -> void:
 	# When we carry the puck (OZONE/TRANS), there's no defensive man coverage.
 	var brain: TeamBrain = _make_brain_3v3()

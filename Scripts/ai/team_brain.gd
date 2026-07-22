@@ -49,6 +49,22 @@ var slot_assignments: Dictionary[int, int] = {}      # peer_id -> AIRoleSlots.Sl
 # so the MARK defenders each focus on a DISTINCT man instead of all collapsing on
 # the single most dangerous opponent. Empty in offensive / neutral states.
 var threat_assignments: Dictionary[int, int] = {}    # defender peer -> opp peer
+# Shared per-opponent shoot-threat bases for MARK's unassigned fallback (the
+# TeamBrain-shared threat memo, ARCHITECTURE Known Issues): opp peer_id -> the
+# threat_surface_shoot of his current spot against our net/goalie/full team.
+# Each unassigned marker used to recompute these near-identical surfaces every
+# ~30 Hz re-eval; the brain computes them once per ~6 Hz tick and the markers
+# consume them via RoleContext as ordering / pruning bounds. APPROXIMATE by
+# design: the memo's defender set is the full team (a marker's exact read
+# excludes its own hypothetical self — one body in a 4-defender surface), its
+# opponents are raw positions (the marker leads them by its anticipation
+# scale), and the read is up to a brain tick stale. All of that only perturbs
+# the unassigned fallback's candidate ordering — never an assigned-man cover.
+# Empty whenever no MARK slot is live, so consumers fall back to the exact
+# local computation (tests / brainless contexts included).
+var threat_shoot_base_by_opp: Dictionary[int, float] = {}
+# Scratch defender list for the memo fill (reused per tick, no allocation).
+var _memo_defenders: Array[Vector3] = []
 
 # True while last tick's state was RETRIEVAL — feeds the enter/hold
 # hysteresis in AIPossessionState.retrieval_read so the DZONE ↔ RETRIEVAL
@@ -215,6 +231,9 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#    they're never picked as defenders here.
 	threat_assignments = _compute_threat_assignments(snapshot, threat_assignments)
 
+	# 4.5 Shared threat memo for the markers (see threat_shoot_base_by_opp).
+	_refresh_threat_base_memo(snapshot)
+
 	# 5. Smart-ping obedience: force-slot the obeying bots (COVER_HIM also
 	#    pins its man into the threat partition, the house-pin shape). Applied
 	#    last so a live human order wins over the geometric assignment.
@@ -326,6 +345,34 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	return AIThreatAssignment.assign(
 			defenders, defender_pos, defender_vel,
 			men, man_pos, man_value, our_net, prev, defender_caps, man_danger)
+
+
+# Refills threat_shoot_base_by_opp (see its doc). Runs only while at least one
+# of our peers holds MARK — the one slot whose unassigned fallback consumes the
+# memo — and leaves it empty otherwise so nothing reads a stale surface.
+func _refresh_threat_base_memo(snapshot: WorldSnapshot) -> void:
+	threat_shoot_base_by_opp.clear()
+	if snapshot == null:
+		return
+	var have_mark: bool = false
+	for pid: int in slot_assignments:
+		if slot_assignments[pid] == AIRoleSlots.Slot.MARK:
+			have_mark = true
+			break
+	if not have_mark:
+		return
+	var our_net := Vector3(0.0, 0.0, _own_goal_z)
+	var our_goalie_pos: Vector3 = _resolve_our_goalie_pos(snapshot)
+	_memo_defenders.clear()
+	for pid: int in snapshot.skater_states:
+		if _team_id_by_peer.get(pid, -1) == team_id:
+			_memo_defenders.append(snapshot.skater_states[pid].position)
+	for pid: int in snapshot.skater_states:
+		if _team_id_by_peer.get(pid, -1) == team_id:
+			continue
+		threat_shoot_base_by_opp[pid] = AIActionScoring.threat_surface_shoot(
+				snapshot.skater_states[pid].position, our_net, our_goalie_pos,
+				GameRules.NET_HALF_WIDTH, _memo_defenders)
 
 
 # Our goalie's current world position, or the goal mouth as a first-frame

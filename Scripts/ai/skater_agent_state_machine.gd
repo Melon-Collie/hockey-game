@@ -816,6 +816,9 @@ var _scratch_opp_ids: Array[int] = []
 # buffers persist across calls. Dispatch is sequential per bot, so a single
 # instance is safe; the role decide() consumes everything before the next build.
 var _role_ctx := RoleContext.new()
+# Never-written stand-in for the brainless ctx build (no per-build literal —
+# a {} in the hot path would allocate every dispatch).
+var _empty_threat_memo: Dictionary[int, float] = {}
 
 # The slot + target this bot's role chose on the previous role dispatch —
 # feeds RoleContext.prev_role_target for argmax switch-hysteresis (INF is
@@ -2172,6 +2175,9 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
 		ctx.strong_x = _team_brain.strong_x()
 		ctx.assigned_threat_peer = _team_brain.assigned_threat(_peer_id)
+		# Live reference to the brain's shared threat memo (re-stamped every
+		# build — the reused ctx must never carry another brain's dict).
+		ctx.threat_shoot_base_by_opp = _team_brain.threat_shoot_base_by_opp
 		# 5v5 position identity (plan §1/§6). Re-stamped every build — the
 		# reused ctx must never carry another match's team size.
 		ctx.team_size = _team_brain.team_size
@@ -2190,6 +2196,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		# since the reused instance would otherwise carry a stale value.
 		ctx.strong_x = 1.0
 		ctx.assigned_threat_peer = -1
+		ctx.threat_shoot_base_by_opp = _empty_threat_memo
 		ctx.ping_move_target = Vector3.INF
 		ctx.ping_shoot_active = false
 		ctx.ping_pass_target_peer = -1

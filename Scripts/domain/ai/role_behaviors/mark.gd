@@ -83,13 +83,26 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				our_net.z - ctx.own_goal_dir * GameRules.SLOT_DIST_M)
 	# Per-opp threat upper bounds (no candidate appended) for the per-
 	# candidate max() early-out — same monotone-in-defenders argument as
-	# AIRoleHelpers.carrier_option_bases, same exact result.
+	# AIRoleHelpers.carrier_option_bases, same exact result when computed
+	# locally. When TeamBrain published its shared threat memo this tick,
+	# read the bases from it instead of recomputing them per decide — the
+	# memo is APPROXIMATE (full-team defender set, raw opponent positions,
+	# up to a brain tick stale; see TeamBrain.threat_shoot_base_by_opp),
+	# which can perturb the fallback's candidate ordering by roughly one
+	# body in a 4-defender surface — the accepted price of not paying
+	# these surfaces per marker per re-eval. Empty memo (no brain / no
+	# MARK slot live / tests) keeps the exact local computation.
+	var memo: Dictionary[int, float] = ctx.threat_shoot_base_by_opp
+	var opp_ids: Array[int] = ctx.scratch_opp_ids
 	var bases: Array[float] = ctx.scratch_option_bases
 	bases.clear()
-	for opp_pos: Vector3 in opp_positions:
-		bases.append(AIActionScoring.threat_surface_shoot(
-				opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+	for i: int in opp_positions.size():
+		var base: float = memo.get(opp_ids[i], -1.0) if not memo.is_empty() else -1.0
+		if base < 0.0:
+			base = AIActionScoring.threat_surface_shoot(
+					opp_positions[i], our_net, our_goalie_pos,
+					GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+		bases.append(base)
 
 	# Far from the recovery region, skate at the CALCULATED cover directly:
 	# the stick-in-the-lane point on the biggest base threat — the same
