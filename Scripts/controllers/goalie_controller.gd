@@ -1439,7 +1439,11 @@ func reset_to_crease() -> void:
 	_chest_t = 0.0
 	# Cover state clears with the goalie; the puck's pickup_locked is owned by
 	# the phase machinery through stoppages (FACEOFF_PREP locks, PLAYING entry
-	# unlocks), so a reset mid-cover never needs to touch the lock here.
+	# unlocks), so a reset mid-cover never needs to touch the lock here. But
+	# motion_pinned IS the goalie's — a reset stops the per-tick pin, so release it
+	# or the drive would stay frozen after the faceoff drop unlocks pickup.
+	if puck != null:
+		puck.motion_pinned = false
 	_cover_secured = false
 	_cover_reach_timer = 0.0
 	_cover_hold_timer = 0.0
@@ -2223,6 +2227,7 @@ func _strike_pending_sweep() -> void:
 	_sweep_anim_timer = sweep_anim_duration
 	if cover_release:
 		puck.pickup_locked = false
+		puck.motion_pinned = false  # releasing the pin — the drive owns it again
 		_cover_secured = false
 		_apply_strike_velocity()
 		_cover_cooldown_timer = cover_cooldown_s
@@ -2376,6 +2381,7 @@ func _tick_cover(delta: float) -> void:
 		_cover_secured = true
 		_cover_hold_timer = cover_hold_s
 		puck.pickup_locked = true
+		puck.motion_pinned = true  # goalie owns the transform now — freeze the drive
 		puck.set_puck_velocity(Vector3.ZERO)
 		puck_covered.emit(team_id)
 		return
@@ -2427,9 +2433,10 @@ func _tick_catch(delta: float) -> void:
 		return
 	if not _catch_secured:
 		_catch_secured = true
-		# pickup_locked both makes the puck dead to blades AND parks the
-		# analytic drive, so the per-tick glove pin below owns the position.
+		# pickup_locked makes the puck dead to blades; motion_pinned parks the
+		# analytic drive so the per-tick glove pin below owns the position.
 		puck.pickup_locked = true
+		puck.motion_pinned = true
 		puck.set_puck_velocity(Vector3.ZERO)
 		if _catch_pressured:
 			puck_covered.emit(team_id)
@@ -2445,6 +2452,7 @@ func _tick_catch(delta: float) -> void:
 # are jammed) handles what happens next.
 func _drop_caught_puck() -> void:
 	puck.pickup_locked = false
+	puck.motion_pinned = false  # releasing the glove pin — the drive owns it again
 	_catch_secured = false
 	puck.set_puck_position(Vector3(
 			goalie.global_position.x, puck.ice_height,
@@ -2642,6 +2650,7 @@ func _tick_puck_play(delta: float) -> void:
 func _abort_cover() -> void:
 	if _cover_secured:
 		puck.pickup_locked = false
+		puck.motion_pinned = false  # cover fell through — hand the puck back to the drive
 		_cover_secured = false
 	if _sweep_windup_timer > 0.0:
 		# A wound-up release dies with the cover; give the stick its collision
