@@ -215,6 +215,11 @@ var _receive_body_offset: float = (
 # flight time to spare — otherwise the default lead-intercept (which
 # gets the bot to the puck faster, even if at a worse angle) wins.
 const RECEIVE_TIMING_MARGIN: float = 0.9
+# Body-center inset from the boards for the receive stance anchor (a
+# skater's collision radius, so the shoulder — not the anchor point —
+# stops at the glass). Applies when the side-stand offset from a
+# boards-hugging rim line would push the stance into the wall.
+const RECEIVE_BODY_WALL_MARGIN_M: float = 0.5
 
 # ── Shot-aware reception (catch WITH shot intent) ─────────────────────────────
 # When a pass is incoming and a shot from the reception area is on, the bot
@@ -2560,6 +2565,14 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	if t <= 0.0:
 		return false
 	var perp_foot: Vector3 = puck_pos + puck_dir * t
+	# A rimmed puck rides the wall (and curls the corner arc), so the straight
+	# continuation of its velocity can leave the rink entirely — mid-corner it
+	# points at the glass. Clamp the line geometry onto the rink inner surface
+	# (rounded corners included) so the stance is built where the puck can
+	# physically travel, not on the phantom straight line.
+	var foot_xz: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(perp_foot.x, perp_foot.z))
+	perp_foot = Vector3(foot_xz.x, 0.0, foot_xz.y)
 	var perp_off: Vector3 = self_pos - perp_foot
 	perp_off.y = 0.0
 	var perp_dist: float = perp_off.length()
@@ -2575,6 +2588,13 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	else:
 		lateral = Vector3(-puck_dir.z, 0.0, puck_dir.x)
 	var body_anchor: Vector3 = perp_foot + lateral * _receive_body_offset
+	# Wall reception: the side-stand offset from a boards-hugging line can
+	# push the body target into/through the wall — keep the body's center a
+	# body radius inside so the stance is standable and the blade (not the
+	# chest) plays the rim line.
+	var anchor_xz: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(body_anchor.x, body_anchor.z), RECEIVE_BODY_WALL_MARGIN_M)
+	body_anchor = Vector3(anchor_xz.x, 0.0, anchor_xz.y)
 	# Timing gate: do we have time to reach body_anchor before the puck
 	# arrives at perp_foot? If not, default lead-intercept will get us
 	# closer (even if at a worse angle) — bail and let it run.
@@ -2647,6 +2667,13 @@ func _blade_gate_on_puck_line(
 	if t <= 0.0:
 		return puck_pos
 	var foot := Vector3(puck_pos.x + dir.x * t, 0.0, puck_pos.z + dir.z * t)
+	# Rim/board pucks: the straight continuation exits the rink mid-corner —
+	# clamp the line point onto the inner surface (rounded corners included)
+	# so the blade parks where the rimming puck actually comes through, not
+	# on a phantom point past the glass.
+	var foot_clamped: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(foot.x, foot.z))
+	foot = Vector3(foot_clamped.x, 0.0, foot_clamped.y)
 	var perp_dx: float = self_pos.x - foot.x
 	var perp_dz: float = self_pos.z - foot.z
 	var perp_sq: float = perp_dx * perp_dx + perp_dz * perp_dz
@@ -2662,7 +2689,12 @@ func _blade_gate_on_puck_line(
 		return foot
 	# Entry point: the front edge of the reach circle along the puck's travel —
 	# the earliest touchable spot, leaving the rest of the reach as margin.
-	return foot - dir * sqrt(reach_sq - perp_sq)
+	# Clamped like the foot: on a wall line the un-clamped entry can back off
+	# the line through the boards.
+	var gate: Vector3 = foot - dir * sqrt(reach_sq - perp_sq)
+	var gate_clamped: Vector2 = GameRules.clamp_to_rink_inner(
+			Vector2(gate.x, gate.z))
+	return Vector3(gate_clamped.x, 0.0, gate_clamped.y)
 
 
 # Anticipation: is a fast loose puck (a pass) heading toward us right now? Same

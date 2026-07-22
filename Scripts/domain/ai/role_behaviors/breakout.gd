@@ -44,9 +44,15 @@ class_name AIRoleBreakout
 # slot assignment.
 
 # Lateral inset from the boards for the strong-side wall, so candidates
-# don't sit hard against the glass. WEAK's ring uses AIRoleHelpers'
-# shared SEARCH_STEP_M via generate_candidates_around.
-const WALL_INSET_M: float = 2.0
+# don't sit hard against the glass — but INSIDE the blade's receive reach
+# of the rim line at the wall: the STRONG outlet is the designated rim
+# receiver, and the old 2.0 m stance left the rim physically untouchable
+# (body ~1.85 m off the inner wall vs a ~1.4 m comfortable blade span —
+# every rim-around sailed past the post man). 1.2 m keeps a shoulder of
+# air off the glass while the extended blade covers the boards line.
+# WEAK's ring uses AIRoleHelpers' shared SEARCH_STEP_M via
+# generate_candidates_around.
+const WALL_INSET_M: float = 1.2
 
 # STRONG wall sampling: how many points along the wall (carrier→blue line)
 # and how far ahead of the carrier the NEAREST one sits. The samples span

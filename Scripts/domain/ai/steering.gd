@@ -307,15 +307,26 @@ static func compute_move_vector(
 				force_z += dz * inv_d * falloff * opponent_repel_weight
 
 	# Repel from boards: only kicks in within BOARD_REPEL_DISTANCE of a wall.
-	# Pushes inward proportionally to how close the bot is to the wall.
+	# Pushes inward proportionally to how close the bot is to the wall —
+	# scaled by the ANCHOR's own distance from that wall: an anchor
+	# deliberately AT the boards (rim reception, wall retrieval, board
+	# battles) is a spot the body must actually occupy, and the unscaled
+	# field held an equilibrium a step inside the wall so the blade never
+	# reached the rim line. An anchor clear of the boards keeps the full
+	# anti-hug field; the scale is per-axis so a wall anchor doesn't also
+	# disable the END-boards repel (and vice versa).
 	var x_to_wall: float = rink_half_x - absf(self_pos.x)
 	if x_to_wall < BOARD_REPEL_DISTANCE and x_to_wall > 0.0:
+		var anchor_x_gap: float = clampf(
+				(rink_half_x - absf(anchor.x)) / BOARD_REPEL_DISTANCE, 0.0, 1.0)
 		var falloff_x: float = 1.0 - x_to_wall / BOARD_REPEL_DISTANCE
-		force_x -= signf(self_pos.x) * BOARD_REPEL_WEIGHT * falloff_x
+		force_x -= signf(self_pos.x) * BOARD_REPEL_WEIGHT * falloff_x * anchor_x_gap
 	var z_to_wall: float = rink_half_z - absf(self_pos.z)
 	if z_to_wall < BOARD_REPEL_DISTANCE and z_to_wall > 0.0:
+		var anchor_z_gap: float = clampf(
+				(rink_half_z - absf(anchor.z)) / BOARD_REPEL_DISTANCE, 0.0, 1.0)
 		var falloff_z: float = 1.0 - z_to_wall / BOARD_REPEL_DISTANCE
-		force_z -= signf(self_pos.z) * BOARD_REPEL_WEIGHT * falloff_z
+		force_z -= signf(self_pos.z) * BOARD_REPEL_WEIGHT * falloff_z * anchor_z_gap
 
 	# Repel from own shot lane — keep off-puck bots out of the line from
 	# our carrier to the attacking goal so they don't block teammate shots.

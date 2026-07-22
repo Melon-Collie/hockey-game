@@ -288,3 +288,15 @@ func test_3v3_strong_keeps_the_two_column_swing() -> void:
 	var d: RoleDecision = AIRoleBreakout.decide(ctx, true)
 	assert_lt(d.target_position.x, GameRules.RINK_HALF_WIDTH - 2.5,
 			"3v3 keeps the inside swing off a camped wall")
+
+
+func test_strong_wall_stance_leaves_the_rim_line_in_blade_reach() -> void:
+	# The STRONG outlet is the designated rim receiver: his wall stance must
+	# keep the boards line (where a rim actually travels) inside a
+	# comfortable blade extension — the old 2.0 m inset left the rim
+	# physically untouchable and every rim-around sailed past the post man.
+	var stance_x: float = GameRules.RINK_HALF_WIDTH - AIRoleBreakout.WALL_INSET_M
+	var reach: float = GameRules.DEFAULT_STICK_LENGTH_M \
+			+ GameRules.DEFAULT_BLADE_LENGTH_M - 0.2
+	assert_lt(GameRules.INNER_HALF_WIDTH - stance_x, reach,
+			"wall stance keeps the rim line within the blade's receive reach")

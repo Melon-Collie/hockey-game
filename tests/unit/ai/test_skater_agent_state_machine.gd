@@ -1441,6 +1441,22 @@ func test_blade_gate_chases_a_puck_already_past() -> void:
 	assert_eq(gate, puck_pos, "a puck already past our level is chased, not gated")
 
 
+func test_blade_gate_clamps_a_corner_rim_line_into_the_rink() -> void:
+	# Rim heading into the corner: the puck's straight continuation exits the
+	# rink (mid-corner its velocity points at the glass), so the un-clamped
+	# perpendicular foot lands PAST the boards — a phantom point the blade
+	# would park on while the real puck curls the arc inside. The gate must
+	# sit on/inside the rink inner surface.
+	var puck_pos := Vector3(12.5, 0, 19.0)          # riding high on the +X wall
+	var puck_vel := Vector3(9.9, 0, 9.9)            # angling into the +X/+Z corner
+	var self_pos := Vector3(12.6, 0, 23.5)          # downstream, waiting on the rim
+	var gate: Vector3 = sm._blade_gate_on_puck_line(self_pos, puck_pos, puck_vel)
+	var inside: Vector2 = GameRules.clamp_to_rink_inner(Vector2(gate.x, gate.z))
+	assert_almost_eq(inside.distance_to(Vector2(gate.x, gate.z)), 0.0, 0.01,
+			"gate parks on the rink inner surface, not past the glass; got %s"
+			% gate)
+
+
 func test_blade_gate_stationary_puck_is_the_puck() -> void:
 	var puck_pos := Vector3(5, 0, 5)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
@@ -1466,10 +1482,12 @@ func test_receive_takes_the_feed_in_stride_when_roughly_synced() -> void:
 	# 6 m/s arrives inside its own blade window of the puck — running through
 	# the reception keeps the blade on the line when the puck gets there, so no
 	# brake: full speed through the catch (stride is the DEFAULT now).
-	var s := _receive_snap(Vector3.ZERO, Vector3(20, 0, 0),
-			Vector3(14, 0, 4), Vector3(0, 0, -6))
+	# (Coordinates kept inside the real rink — the receive geometry is
+	# board-aware now, so an out-of-rink stance would be clamped.)
+	var s := _receive_snap(Vector3(-14, 0, 0), Vector3(20, 0, 0),
+			Vector3(0, 0, 4), Vector3(0, 0, -6))
 	var input := InputState.new()
-	assert_true(sm._pass_receive_aim_and_steer(input, s, Vector3(14, 0, 4)),
+	assert_true(sm._pass_receive_aim_and_steer(input, s, Vector3(0, 0, 4)),
 			"scenario commits the reception")
 	assert_false(input.brake, "synced arrival → take it in stride, no arrival brake")
 
@@ -1478,8 +1496,9 @@ func test_receive_settles_only_when_genuinely_early() -> void:
 	# Bot already sitting ON the anchor at 4 m/s with the puck still a full
 	# second away — far outside the blade window its motion covers, so waiting
 	# is forced and it brakes to hold the gate.
-	var self_pos := Vector3(14, 0, 1.4)
-	var s := _receive_snap(Vector3(-6, 0, 0), Vector3(20, 0, 0),
+	# (In-rink coordinates — see the in-stride test above.)
+	var self_pos := Vector3(0, 0, 1.4)
+	var s := _receive_snap(Vector3(-20, 0, 0), Vector3(20, 0, 0),
 			self_pos, Vector3(0, 0, -4))
 	var input := InputState.new()
 	assert_true(sm._pass_receive_aim_and_steer(input, s, self_pos),
