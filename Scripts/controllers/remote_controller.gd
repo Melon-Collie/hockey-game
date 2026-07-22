@@ -154,9 +154,25 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 # restores the healthy depth rather than clamping at the trigger.
 const _DRAIN_TRIGGER_S: float = 4.0 / 120.0  # ~33 ms overdue engages the drain
 const _DRAIN_TARGET_S: float = 1.0 / 120.0   # drain back down to ~1 tick overdue
+# A LONE input this stale is a phase-resume artifact (parked across a goal
+# replay / intermission), not the freshest available intent — drop-and-ack it
+# (fallback covers the tick) instead of applying seconds-old held state. Its
+# presses are equally stale actions and are deliberately NOT carried.
+const _DRAIN_STALE_SOLO_S: float = 0.25
+# Drains counted in telemetry only at jitter scale — a phase-resume flush is a
+# designed catch-up, and counting it buried the ratchet-fix signal the metric
+# exists to show.
+const _DRAIN_TELEMETRY_MAX_S: float = 1.0
 
 
 func _drain_backlog(now: float) -> void:
+	if _input_queue.is_empty():
+		return
+	# Lone-stale drop (see _DRAIN_STALE_SOLO_S).
+	if _input_queue.size() == 1 			and now - _input_queue.front().host_timestamp > _DRAIN_STALE_SOLO_S:
+		var solo: InputState = _input_queue.pop_front()
+		last_processed_host_timestamp = solo.host_timestamp
+		return
 	if _input_queue.size() <= 1:
 		return
 	if now - _input_queue.front().host_timestamp <= _DRAIN_TRIGGER_S:
@@ -164,17 +180,21 @@ func _drain_backlog(now: float) -> void:
 	var target: float = now - _DRAIN_TARGET_S
 	while _input_queue.size() > 1 and _input_queue.front().host_timestamp < target:
 		var stale: InputState = _input_queue.pop_front()
+		var overdue: float = now - stale.host_timestamp
 		last_processed_host_timestamp = stale.host_timestamp
 		# Presses are edges the player committed — dropping the frame that carried
 		# one must not eat the action. Held/absolute state (move vector, brake,
 		# aim, elevation_level) is NOT carried: the next applied input holds the
-		# current truth, which is the point of the drain.
-		var next: InputState = _input_queue.front()
-		next.shoot_pressed = next.shoot_pressed or stale.shoot_pressed
-		next.slap_pressed = next.slap_pressed or stale.slap_pressed
-		next.stick_lift_pressed = next.stick_lift_pressed or stale.stick_lift_pressed
-		next.quick_pass_pressed = next.quick_pass_pressed or stale.quick_pass_pressed
-		NetworkTelemetry.record_input_drain()
+		# current truth, which is the point of the drain. Presses older than the
+		# stale-solo bound are phase artifacts and are dropped with their frame.
+		if overdue <= _DRAIN_STALE_SOLO_S:
+			var next: InputState = _input_queue.front()
+			next.shoot_pressed = next.shoot_pressed or stale.shoot_pressed
+			next.slap_pressed = next.slap_pressed or stale.slap_pressed
+			next.stick_lift_pressed = next.stick_lift_pressed or stale.stick_lift_pressed
+			next.quick_pass_pressed = next.quick_pass_pressed or stale.quick_pass_pressed
+		if overdue <= _DRAIN_TELEMETRY_MAX_S:
+			NetworkTelemetry.record_input_drain()
 
 
 func _drive_from_input(delta: float) -> void:
@@ -199,8 +219,12 @@ func _drive_from_input(delta: float) -> void:
 	if input_due:
 		var input: InputState = _input_queue.pop_front()
 		last_processed_host_timestamp = input.host_timestamp
-		NetworkTelemetry.record_input_lead(
-				NetworkManager.estimated_host_time() - input.host_timestamp)
+		if not _game_state.is_movement_locked():
+			# Recorded for LIVE pops only: locked-phase pops (faceoff prep,
+			# celebrations) measure phase cadence, not link health, and were
+			# skewing the metric the adaptive lead is judged by.
+			NetworkTelemetry.record_input_lead(
+					NetworkManager.estimated_host_time() - input.host_timestamp)
 		if not _game_state.is_movement_locked():
 			_process_input(input, delta)
 		elif not tick_faceoff_approach(delta):

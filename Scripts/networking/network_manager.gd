@@ -976,7 +976,12 @@ func try_broadcast() -> void:
 	_state_tick_counter = 0
 	var now_us: int = Time.get_ticks_usec()
 	if _last_broadcast_us != 0:
-		NetworkTelemetry.record_broadcast_interval_us(now_us - _last_broadcast_us)
+		var gap_us: int = now_us - _last_broadcast_us
+		# Gaps > 1 s are designed pauses (goal replay / intermission stop the
+		# broadcast entirely), not send-cadence sag — recording them saturated
+		# broadcast_interval_p95 at seconds and buried the real cadence signal.
+		if gap_us < 1_000_000:
+			NetworkTelemetry.record_broadcast_interval_us(gap_us)
 	_last_broadcast_us = now_us
 	_broadcast_state()
 

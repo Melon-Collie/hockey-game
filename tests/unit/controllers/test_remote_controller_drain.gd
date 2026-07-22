@@ -84,11 +84,41 @@ func test_dropped_presses_fold_into_the_next_applied_input() -> void:
 	assert_false(fresh.brake, "held state not carried — next input owns the truth")
 
 
-func test_single_entry_queue_never_drains() -> void:
-	# With one queued input the normal pop path owns it regardless of staleness.
+func test_fresh_single_entry_queue_never_drains() -> void:
+	# A lone input at jitter-scale staleness belongs to the normal pop path.
 	var rc := _controller()
 	var now: float = 10.0
-	_seed(rc, [now - 0.3])
+	_seed(rc, [now - 0.1])
 	rc._drain_backlog(now)
 	assert_eq(rc._input_queue.size(), 1)
 	assert_eq(rc.last_processed_host_timestamp, 0.0)
+
+
+func test_lone_stale_input_is_dropped_not_applied() -> void:
+	# A LONE input parked across a goal replay / intermission (seconds stale)
+	# must be acked-and-dropped, not applied: its held state is ancient, and
+	# applying it produced multi-second input_lead spikes at every phase resume.
+	var rc := _controller()
+	var now: float = 10.0
+	var stale := _input_at(now - 3.0)
+	stale.shoot_pressed = true  # a 3-second-old press is a stale ACTION — dropped
+	rc._input_queue.append(stale)
+	rc._drain_backlog(now)
+	assert_eq(rc._input_queue.size(), 0, "phase-resume artifact dropped")
+	assert_almost_eq(rc.last_processed_host_timestamp, now - 3.0, 1e-6,
+			"acked so the client stops replaying it")
+
+
+func test_stale_presses_are_not_carried_across_a_phase_pause() -> void:
+	# In a multi-entry drain, presses older than the stale-solo bound are phase
+	# artifacts and drop with their frame (only jitter-scale presses carry).
+	var rc := _controller()
+	var now: float = 10.0
+	var ancient := _input_at(now - 2.0)
+	ancient.shoot_pressed = true
+	var fresh := _input_at(now - TICK * 0.5)
+	rc._input_queue.append(ancient)
+	rc._input_queue.append(fresh)
+	rc._drain_backlog(now)
+	assert_eq(rc._input_queue.size(), 1)
+	assert_false(fresh.shoot_pressed, "a 2-second-old press does not fire on resume")
