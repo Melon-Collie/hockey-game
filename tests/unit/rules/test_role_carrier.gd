@@ -1190,25 +1190,29 @@ func test_decide_throttles_pick_action_at_period_ticks() -> void:
 
 func test_decide_re_evaluates_after_cooldown_expires() -> void:
 	# Same as above, but tick exactly PICK_ACTION_PERIOD_TICKS times
-	# so the next decide() re-evaluates.
+	# so the next decide() re-evaluates. A steady-state re-eval is
+	# TIME-SLICED across two dispatches (fire phase, then carry + commit —
+	# see the slice doc above _commit_phase_pending), so the new intent
+	# lands on the second decide() after the cooldown expires.
 	var c := AIRoleCarrier.new()
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, -22.0))
 
-	c.decide(ctx)  # tick 0: runs _pick_action
+	c.decide(ctx)  # tick 0: runs _pick_action (first eval = single-call)
 	# Drain the cooldown.
 	for i in range(AIRoleCarrier.PICK_ACTION_PERIOD_TICKS):
 		c.decide(ctx)
-	# Force-flip and call once more: should re-run _pick_action and
-	# overwrite our flip.
+	# Force-flip and run the sliced re-eval to its commit: fire phase on the
+	# first call, carry + commit (which overwrites our flip) on the second.
 	c.intended_action = AIRoleCarrier.INTENT_PASS
+	c.decide(ctx)
 	c.decide(ctx)
 
 	# After re-eval the carrier picks based on the snapshot. The exact
 	# winning intent depends on scoring math (covered in
-	# test_ai_action_scoring); the contract here is just "_pick_action
+	# test_ai_action_scoring); the contract here is just "the re-eval
 	# ran and overwrote our manual flip."
 	assert_ne(c.intended_action, AIRoleCarrier.INTENT_PASS,
-			"decide() should re-run _pick_action after cooldown elapses, replacing the manually-set intent")
+			"decide() should re-run the compete after cooldown elapses, replacing the manually-set intent")
 
 
 # ─── decide() return shape ────────────────────────────────────────────────

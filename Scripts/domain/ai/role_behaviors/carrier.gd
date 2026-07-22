@@ -504,8 +504,48 @@ var deke_cut_dir: Vector2 = Vector2.ZERO
 var _pick_action_cooldown: int = 0
 # Physics ticks elapsed since the last _pick_action re-eval (accumulated per
 # decide() call by ctx.dispatch_period_ticks), so the hold clock advances in
-# real time regardless of the AI dispatch cadence. Reset when _pick_action runs.
+# real time regardless of the AI dispatch cadence. Reset when a commit runs.
 var _ticks_since_pick: int = 0
+
+# ── Compete time-slice ───────────────────────────────────────────────────────
+# The full re-eval is the host's worst per-tick AI spike (~1.7–2.7 ms in the
+# ai_micro bench — over a quarter of the 8333 µs tick budget in one call).
+# Steady-state re-evals therefore split across two consecutive dispatches:
+# the FIRE phase (_pick_fire_phase — opponent lists, seam/protect/deke reads,
+# pass-option cache, SHOOT + PASS scoring) runs at cooldown expiry, and the
+# COMMIT phase (_pick_commit_phase — carry candidates, dump, the fire-vs-carry
+# compete) runs on the NEXT dispatch against a fresh snapshot, roughly halving
+# the per-tick spike. The slice's cost is staleness, not cadence: at commit
+# the fire scores are one dispatch (~2 ticks at the perfect-bot 60 Hz) old —
+# well inside the ~135 ms windup the fired-puck lanes are already priced
+# across — and the post-commit cooldown is shortened by the dispatch the
+# commit phase consumed, so commits land at the same wall-clock cadence as
+# the old single-call evals. Single-call full evals still run for:
+#   - the FIRST eval of a possession (reset()) and the first after a
+#     press-state bail (clear_intent()): no cached plan exists yet, and the
+#     fresh touch / bail is the contested moment where a dispatch of commit
+#     latency would show;
+#   - tiers whose dispatch span already covers the eval period (slicing
+#     would halve their decision cadence — a behavior change, not a
+#     scheduling one).
+var _commit_phase_pending: bool = false
+var _full_eval_pending: bool = true
+# Fire-phase products consumed by the commit phase (instance fields so a
+# sliced eval hands them across the dispatch boundary):
+var _phase_current_safety: float = 0.0
+var _phase_shoot_score: float = -1.0
+var _phase_best_pass_peer: int = -1
+var _phase_best_pass_score: float = -1.0
+var _phase_best_pass_saucer: bool = false
+# Opposing-goalie env captured alongside the winning shot sample, so the
+# commit's loft/aim/power solve reads the same goalie the score saw:
+var _shot_env_unsettled: float = 0.0
+var _shot_env_five_hole: float = -1.0
+var _shot_env_goalie_down: bool = false
+var _shot_env_seal_x: float = 0.0
+var _shot_env_seal_tall: bool = false
+var _shot_env_hands: Vector4 = Vector4.INF
+var _shot_env_pads: Vector4 = Vector4.INF
 
 # ── Transition-exposure appetite (5v5 only — plan §6) ────────────────────────
 # The per-position risk-aversion FEEL scalar on the counter-rush cost (the
@@ -624,29 +664,26 @@ func decide(ctx: RoleContext) -> RoleDecision:
 	elif _settle_remaining_s > 0.0:
 		_settle_remaining_s -= float(step_ticks) / float(_PhysicsConstants.PHYSICS_TICK)
 	_ticks_since_pick += step_ticks
-	if _pick_action_cooldown <= 0:
-		_pick_action(ctx)  # reads _ticks_since_pick for the hold-clock advance
-		_pick_action_cooldown = PICK_ACTION_PERIOD_TICKS
-		# OPEN-ICE LOD: the full compete is at its most expensive exactly when
-		# its answer changes least — nobody within reach, committed to keep
-		# skating. With every opponent outside OPEN_ICE_LOD_RADIUS_M and the
-		# argmax answering CARRY, re-arm at a third of the rate. Grounded
-		# safety margin: worst-case closing is two skaters head-on (~18 m/s),
-		# so a threat appearing at the radius needs ~0.36 s to reach a stick
-		# on the puck — several extended periods; the next full eval sees him
-		# while he is still outside every reach model. Fire/pass intents keep
-		# the full cadence (their follow-through is timing-critical).
-		if intended_action == INTENT_CARRY:
-			var lod_sq: float = OPEN_ICE_LOD_RADIUS_M * OPEN_ICE_LOD_RADIUS_M
-			var open_ice: bool = true
-			for opp: Vector3 in _scratch_opponents:
-				if opp.distance_squared_to(ctx.self_pos) < lod_sq:
-					open_ice = false
-					break
-			if open_ice:
-				_pick_action_cooldown = PICK_ACTION_PERIOD_TICKS \
-						* OPEN_ICE_LOD_PERIOD_MULT
+	if _commit_phase_pending:
+		# Second dispatch of a sliced re-eval: carry/dump scoring + the commit
+		# compete against a fresh snapshot (see the slice doc above
+		# _commit_phase_pending). The post-commit cooldown is shortened by the
+		# dispatch this phase consumed so the commit cadence matches the old
+		# single-call evals.
+		_commit_phase_pending = false
+		_pick_commit_phase(ctx, true)
+		_arm_pick_cooldown(ctx, maxi(PICK_ACTION_PERIOD_TICKS - step_ticks, 0))
 		_ticks_since_pick = 0
+	elif _pick_action_cooldown <= 0:
+		if _full_eval_pending or step_ticks >= PICK_ACTION_PERIOD_TICKS:
+			# reads _ticks_since_pick for the hold-clock advance
+			_full_eval_pending = false
+			_pick_action(ctx)
+			_arm_pick_cooldown(ctx, PICK_ACTION_PERIOD_TICKS)
+			_ticks_since_pick = 0
+		else:
+			_pick_fire_phase(ctx)
+			_commit_phase_pending = true
 	else:
 		_pick_action_cooldown -= step_ticks
 
@@ -659,6 +696,29 @@ func decide(ctx: RoleContext) -> RoleDecision:
 			d.pass_intent = true
 			d.pass_target_peer_id = pass_target_peer_id
 	return d
+
+
+# Post-commit cooldown from `base_ticks` (the eval period, less any dispatch a
+# sliced eval's commit phase already consumed).
+# OPEN-ICE LOD: the full compete is at its most expensive exactly when
+# its answer changes least — nobody within reach, committed to keep
+# skating. With every opponent outside OPEN_ICE_LOD_RADIUS_M and the
+# argmax answering CARRY, re-arm at a third of the rate. Grounded
+# safety margin: worst-case closing is two skaters head-on (~18 m/s),
+# so a threat appearing at the radius needs ~0.36 s to reach a stick
+# on the puck — several extended periods; the next full eval sees him
+# while he is still outside every reach model. Fire/pass intents keep
+# the full cadence (their follow-through is timing-critical).
+func _arm_pick_cooldown(ctx: RoleContext, base_ticks: int) -> void:
+	_pick_action_cooldown = base_ticks
+	if intended_action != INTENT_CARRY:
+		return
+	var lod_sq: float = OPEN_ICE_LOD_RADIUS_M * OPEN_ICE_LOD_RADIUS_M
+	for opp: Vector3 in _scratch_opponents:
+		if opp.distance_squared_to(ctx.self_pos) < lod_sq:
+			return
+	_pick_action_cooldown = base_ticks \
+			+ PICK_ACTION_PERIOD_TICKS * (OPEN_ICE_LOD_PERIOD_MULT - 1)
 
 
 # Clear all carrier state. Called by the state machine when leaving
@@ -687,6 +747,11 @@ func reset() -> void:
 	_hold_elapsed_s = 0.0
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
+	# A half-finished sliced eval is void with the possession (its fire reads
+	# priced a puck we no longer hold); the fresh touch runs a single-call
+	# full eval (see the slice doc above _commit_phase_pending).
+	_commit_phase_pending = false
+	_full_eval_pending = true
 	# The puck is gone — the next decide() is a fresh possession, so re-arm the
 	# settle window (see _settle_arm_pending).
 	_settle_arm_pending = true
@@ -708,6 +773,11 @@ func clear_intent() -> void:
 	dump_is_soft = false
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
+	# A press bail re-enters CARRY mid-play with no live intent — the next
+	# decide() answers same-call (single full eval) rather than paying a
+	# dispatch of slice latency at a timing-critical seam.
+	_commit_phase_pending = false
+	_full_eval_pending = true
 
 
 # ── Implementation ──────────────────────────────────────────────────────────
@@ -719,7 +789,20 @@ func clear_intent() -> void:
 # CARRY only beats fire on STRICTLY better future-action value.
 # Mutates pass_target_peer_id when PASS wins, shot_loft_level when
 # SHOOT wins, last_carry_anchor + intended_action always.
+#
+# Split into two phases so decide() can time-slice a steady-state re-eval
+# across two dispatches (see the slice doc above _commit_phase_pending);
+# this single-call form runs both back-to-back.
 func _pick_action(ctx: RoleContext) -> void:
+	_pick_fire_phase(ctx)
+	_pick_commit_phase(ctx, false)
+
+
+# FIRE phase of the compete: opponent lists, the evasion / brake-check / deke /
+# protect reads, the pass-option cache, and the SHOOT + PASS scoring. Leaves
+# its products in the _phase_* / _shot_env_* / _shot_sample_* fields (plus the
+# _scratch_* buffers) for _pick_commit_phase.
+func _pick_fire_phase(ctx: RoleContext) -> void:
 	var snapshot: WorldSnapshot = ctx.snapshot
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
@@ -730,15 +813,15 @@ func _pick_action(ctx: RoleContext) -> void:
 	# retain the puck against the defenders' momentum-reach? We read it as our
 	# EVADABILITY — the clearance at the best seam we could handle the puck into —
 	# so pressure we can dance out of (a committed charger) doesn't read as danger,
-	# while a stick actually on the puck does. Feeds the hold's keep-probability.
+	# while a stick actually on the puck does. Feeds the hold's keep-probability
+	# in the commit phase.
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
 	var evade_seam: Vector3 = AIActionScoring.best_evade_point(
 			cur_puck_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
 			ctx.self_handle_reach, _scratch_opponent_caps)
-	var current_safety: float = AIActionScoring.clearance_to_safety(
+	_phase_current_safety = AIActionScoring.clearance_to_safety(
 			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
-	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 
 	# The DIRECTED seam — where to put the puck to get PAST the pressure toward
 	# the spot this carrier actually wants (the live carry anchor; the attacking
@@ -943,23 +1026,25 @@ func _pick_action(ctx: RoleContext) -> void:
 	# The five-hole as it physically exists RIGHT NOW, from the replicated pose:
 	# standing = the real ~0.20 m slot between the pads (sealable by dropping —
 	# the model gates on the reach time vs the drop), down = the residual leak.
-	var wrister_unsettled: float = 0.0
-	var wrister_five_hole: float = -1.0
-	var wrister_goalie_down: bool = false
-	var wrister_seal_x: float = 0.0
-	var wrister_seal_tall: bool = false
-	var wrister_hands: Vector4 = Vector4.INF
-	var wrister_pads: Vector4 = Vector4.INF
+	# Instance fields (_shot_env_*), so the commit phase's loft/aim/power solve
+	# reads the same goalie env the winning sample was scored against.
+	_shot_env_unsettled = 0.0
+	_shot_env_five_hole = -1.0
+	_shot_env_goalie_down = false
+	_shot_env_seal_x = 0.0
+	_shot_env_seal_tall = false
+	_shot_env_hands = Vector4.INF
+	_shot_env_pads = Vector4.INF
 	var opp_goalie_state: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
 	if opp_goalie_state != null:
-		wrister_goalie_down = opp_goalie_state.is_down()
+		_shot_env_goalie_down = opp_goalie_state.is_down()
 		# Hand + pad positions off the same replicated pose (hole-model v3):
 		# the HIGH cover races from where the glove/blocker actually are,
 		# the LOW cover from the measured pad edges.
-		wrister_hands = opp_goalie_state.hands_read(ctx.attacking_goal_pos.z)
-		wrister_pads = opp_goalie_state.pads_read(ctx.attacking_goal_pos.z)
-		wrister_five_hole = GoalieBehaviorRules.five_hole_gap_m(
-				wrister_goalie_down, opp_goalie_state.five_hole_openness)
+		_shot_env_hands = opp_goalie_state.hands_read(ctx.attacking_goal_pos.z)
+		_shot_env_pads = opp_goalie_state.pads_read(ctx.attacking_goal_pos.z)
+		_shot_env_five_hole = GoalieBehaviorRules.five_hole_gap_m(
+				_shot_env_goalie_down, opp_goalie_state.five_hole_openness)
 		# Post-seal stance (VH/RVH): the goalie is committed to a post and the
 		# pose IS the coverage — see the seal model in _hole_open_angle. A
 		# committed post stance also does not re-square: he holds the post
@@ -968,8 +1053,8 @@ func _pick_action(ctx: RoleContext) -> void:
 		# not a hypothetical arc-squared keeper — the squared model both
 		# invents coverage he'd need to leave the post to provide AND hides
 		# the far-side opening his commitment concedes.
-		wrister_seal_x = opp_goalie_state.post_seal_x_sign(attacking_goal.z)
-		wrister_seal_tall = opp_goalie_state.is_post_seal_tall()
+		_shot_env_seal_x = opp_goalie_state.post_seal_x_sign(attacking_goal.z)
+		_shot_env_seal_tall = opp_goalie_state.is_post_seal_tall()
 
 	# Top-level SHOOT: the release-offset sweep (see RELEASE_SAMPLE_FRACS). Each
 	# sample relocates the projected release across the blade envelope, prices
@@ -993,7 +1078,7 @@ func _pick_action(ctx: RoleContext) -> void:
 	var forehand_perp: Vector3 = Vector3(shot_dir.z, 0.0, -shot_dir.x) \
 			* ctx.self_forehand_perp_sign
 	var usable_offset: float = _usable_release_offset(ctx.self_handle_reach)
-	var shoot_score: float = -1.0
+	_phase_shoot_score = -1.0
 	for frac: float in RELEASE_SAMPLE_FRACS:
 		var offset: Vector3 = forehand_perp * (frac * usable_offset)
 		var sample_speed: float = ctx.self_wrister_shot_speed
@@ -1015,7 +1100,7 @@ func _pick_action(ctx: RoleContext) -> void:
 		# early enough beats the push, late enough meets a square goalie.
 		# Windows the median release can't hit score ~0 through the hole
 		# geometry and lose the compete on their own.
-		var sample_goalie: Vector3 = goalie_now if wrister_seal_x != 0.0 \
+		var sample_goalie: Vector3 = goalie_now if _shot_env_seal_x != 0.0 \
 				else AIActionScoring.predict_goalie_pos(
 						goalie_now, attacking_goal,
 						SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + shift_s
@@ -1027,12 +1112,12 @@ func _pick_action(ctx: RoleContext) -> void:
 		var s: float = AIActionScoring.score_shoot(
 				release, attacking_goal, sample_goalie,
 				GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
-				sample_speed, wrister_unsettled, _scratch_opponent_caps,
-				wrister_five_hole, wrister_goalie_down,
-				wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-				_scratch_option_receiver_pos, wrister_hands, wrister_pads, ctx.self_loft_tan)
-		if s > shoot_score:
-			shoot_score = s
+				sample_speed, _shot_env_unsettled, _scratch_opponent_caps,
+				_shot_env_five_hole, _shot_env_goalie_down,
+				_shot_env_seal_x, _shot_env_seal_tall, ctx.self_aim_spread_rad,
+				_scratch_option_receiver_pos, _shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
+		if s > _phase_shoot_score:
+			_phase_shoot_score = s
 			_shot_sample_release = release
 			_shot_sample_goalie = sample_goalie
 			_shot_sample_speed = sample_speed
@@ -1056,8 +1141,8 @@ func _pick_action(ctx: RoleContext) -> void:
 					tip_release, tip_man, attacking_goal, goalie_now,
 					GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
 					ctx.self_wrister_shot_speed, _scratch_opponent_caps)
-			if tip_s > shoot_score:
-				shoot_score = tip_s
+			if tip_s > _phase_shoot_score:
+				_phase_shoot_score = tip_s
 				_shot_sample_release = tip_release
 				_shot_sample_goalie = goalie_now
 				_shot_sample_speed = ctx.self_wrister_shot_speed
@@ -1069,9 +1154,36 @@ func _pick_action(ctx: RoleContext) -> void:
 	var self_state: SkaterNetworkState = snapshot.skater_states[ctx.peer_id]
 	var best_pass: Array = _compute_best_pass(
 			ctx, self_state.facing, _scratch_teammate_ids)
-	var best_pass_peer: int = best_pass[0]
-	var best_pass_score: float = best_pass[1]
-	var best_pass_saucer: bool = best_pass[2]
+	_phase_best_pass_peer = best_pass[0]
+	_phase_best_pass_score = best_pass[1]
+	_phase_best_pass_saucer = best_pass[2]
+
+
+# COMMIT phase of the compete: the CARRY candidate argmax, the DUMP read, and
+# the fire-vs-carry-vs-hold compete that commits the intent. Consumes the fire
+# phase's _phase_* / _shot_env_* / _shot_sample_* products. `rebuild_lists` is
+# true on the second dispatch of a SLICED eval: the fire phase's opponent
+# lists are one dispatch old there, so the carry/dump scoring rebuilds them
+# from the fresh snapshot (the fire SCORES stay the older reads — the
+# accepted slice staleness; single-call evals skip the rebuild).
+func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
+	var snapshot: WorldSnapshot = ctx.snapshot
+	var self_pos: Vector3 = ctx.self_pos
+	var attacking_goal: Vector3 = ctx.attacking_goal_pos
+	if rebuild_lists:
+		_build_action_opponents_lists(ctx)
+	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
+	var puck_now: Vector3 = self_pos
+	if snapshot.puck_state != null:
+		puck_now = Vector3(
+				snapshot.puck_state.position.x, 0.0,
+				snapshot.puck_state.position.z)
+	var directed_seam: Vector3 = evade_seam_world
+	var current_safety: float = _phase_current_safety
+	var shoot_score: float = _phase_shoot_score
+	var best_pass_peer: int = _phase_best_pass_peer
+	var best_pass_score: float = _phase_best_pass_score
+	var best_pass_saucer: bool = _phase_best_pass_saucer
 
 	# Top-level CARRY — best carry candidate (8 polar around the slot
 	# direction + slot anchor + own-half wall exits + stand-still).
@@ -1293,22 +1405,22 @@ func _pick_action(ctx: RoleContext) -> void:
 			shot_loft_level = AIActionScoring.best_shot_loft(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
-					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
-					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, wrister_hands, wrister_pads, ctx.self_loft_tan)
+					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
+					_shot_env_seal_x, _shot_env_seal_tall, ctx.self_aim_spread_rad,
+					shot_screen_dist, _shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
-					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
+					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
 					ctx.self_aim_spread_rad,
-					wrister_seal_x, wrister_seal_tall, shot_screen_dist,
-					wrister_hands, wrister_pads, ctx.self_loft_tan)
+					_shot_env_seal_x, _shot_env_seal_tall, shot_screen_dist,
+					_shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
 			shot_power_t = AIActionScoring.best_shot_power_t(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
-					wrister_unsettled, wrister_five_hole, wrister_goalie_down,
-					wrister_seal_x, wrister_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, wrister_hands, wrister_pads, ctx.self_loft_tan)
+					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
+					_shot_env_seal_x, _shot_env_seal_tall, ctx.self_aim_spread_rad,
+					shot_screen_dist, _shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
 			shot_release_offset = _shot_sample_offset
 			if _shot_sample_backhand:
 				# The controller applies backhand_power_coefficient to the FINAL
