@@ -2381,11 +2381,13 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var is_soft: bool
 	var in_own_zone: bool = AIActionScoring.in_offensive_zone(self_pos, defending_goal)
 	if in_own_zone:
-		target = AIActionScoring.dump_clear_target(self_pos, -ctx.own_goal_dir)
+		target = AIActionScoring.dump_clear_target(
+				self_pos, -ctx.own_goal_dir, ctx.self_velocity)
 		is_soft = false
 	elif AIActionScoring.past_center_toward_attack(self_pos, attacking_goal) \
 			and not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
-		target = AIActionScoring.dump_in_target(self_pos, attacking_goal)
+		target = AIActionScoring.dump_in_target(
+				self_pos, attacking_goal, ctx.self_velocity)
 		is_soft = true
 	else:
 		return [-INF, Vector3.INF, false, false]
