@@ -552,15 +552,17 @@ func _emit_riser(st: SurfaceTool, inner: PackedVector2Array, y_bot: float, y_top
 		var ta: Vector3 = Vector3(inner[i].x, y_top, inner[i].y)
 		var bb: Vector3 = Vector3(inner[j].x, y_bot, inner[j].y)
 		var tb: Vector3 = Vector3(inner[j].x, y_top, inner[j].y)
-		# With the ring sampled CCW (viewed from above), this winding fronts
-		# the wall toward the rink — load-bearing now that the terrace/shell
-		# materials cull back faces.
+		# Wind so the wall's front face points toward the rink interior —
+		# load-bearing now that the terrace/shell materials cull back faces.
+		# (The mirror image of this winding fronts outward and gets culled from
+		# every in-bowl camera, which hid all the risers, the fascia, and the
+		# shell wall behind them.)
 		st.add_vertex(ba)
-		st.add_vertex(tb)
 		st.add_vertex(bb)
-		st.add_vertex(ba)
-		st.add_vertex(ta)
 		st.add_vertex(tb)
+		st.add_vertex(ba)
+		st.add_vertex(tb)
+		st.add_vertex(ta)
 
 
 # Compute the (straight-X, straight-Z) sample counts, derived once from the
