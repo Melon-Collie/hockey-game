@@ -81,6 +81,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var hit_commit_shoulder_deg: float = 19.0     # leading-shoulder drop (roll)
 @export var hit_commit_crouch_m: float = 0.12         # sink into the checking stance
 @export var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an empty-handed commit
+# Loaded blade pose: while committing (empty-handed), the blade STOPS chasing the
+# cursor and eases to a fixed body-local "ready to hit" position — stick up (the
+# lift above) and held in front, so the stance snaps to a distinct silhouette
+# instead of a raised-but-still-tracking stick. Body-local XZ: +x is the forehand
+# side (× blade_side_sign), −z is in front of the skater (see _blade_relative_angle
+# bearing math). Gameplay-inert — the blade is withdrawn from puck play while
+# committed, so this is a pure cosmetic override that eases back to cursor tracking
+# on release. Feel dials; verify the silhouette in-game.
+@export var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
+@export var hit_commit_blade_local_z: float = -0.34   # how far in FRONT the loaded blade sits (−z = ahead)
 @export var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
