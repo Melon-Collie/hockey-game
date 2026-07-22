@@ -533,6 +533,12 @@ var _full_eval_pending: bool = true
 # Fire-phase products consumed by the commit phase (instance fields so a
 # sliced eval hands them across the dispatch boundary):
 var _phase_current_safety: float = 0.0
+# Clearance safety AT THE CURRENT SPOT (not the best evade seam) — "is a stick
+# on the puck right now", the pressure the SHOOT settle beat reads for poise. A
+# shooter isn't trying to escape, so evadability (a lane exists) is the wrong
+# read; a defender bearing down rushes the release regardless. Same grounded
+# reach model as _phase_current_safety, evaluated where the carrier stands.
+var _phase_pos_safety: float = 1.0
 var _phase_shoot_score: float = -1.0
 var _phase_best_pass_peer: int = -1
 var _phase_best_pass_score: float = -1.0
@@ -865,6 +871,12 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 			ctx.self_handle_reach, _scratch_opponent_caps)
 	_phase_current_safety = AIActionScoring.clearance_to_safety(
 			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
+					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
+	# Poise pressure: the clearance right where the carrier STANDS (not the escape
+	# seam), so a stick bearing down reads as pressure on the SHOT release even
+	# when an evade lane exists. Feeds the pressure-scaled shot settle beat.
+	_phase_pos_safety = AIActionScoring.clearance_to_safety(
+			AIActionScoring.reach_clearance(cur_puck_pos, AIActionScoring.EVADE_HORIZON_S,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 
 	# The DIRECTED seam — where to put the puck to get PAST the pressure toward
@@ -1340,8 +1352,29 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# (ctx.carry_settle_delay_s; 0 at Hard / for humans of the perfect-bot
 	# baseline). Same shape as the stagger gate: everything still scores, the
 	# commit just waits, so the window draining releases the current best play.
+	#
+	# The beat is applied BY RELEASE TYPE. PASS and DUMP settle FLAT (settling):
+	# a fresh carrier composes an outlet before it can move it, and pressuring one
+	# is a real defensive play. The SHOOT beat is PRESSURE-SCALED (shot_settling)
+	# — poise under pressure: an UNPRESSURED carrier (pos_safety ≈ 1) may finish
+	# the instant it gains the puck (the open backdoor tap-in the flat beat used to
+	# swallow), while a HOUNDED one (a stick on the puck, pos_safety → 0) pays the
+	# full beat because rushed hands can't calmly settle-and-snipe. pos_safety is
+	# the clearance right where the carrier STANDS (see _phase_pos_safety) — NOT
+	# the evade-seam safety: a shooter isn't fleeing, so "a lane exists" is the
+	# wrong read; what rushes the release is a stick bearing down. Same grounded
+	# reach model, so no new perception. Reception one-timers stay ungated (the
+	# puck never settles on the tape). The threshold reads off the SAME countdown:
+	# while _settle_remaining_s (base → 0) still exceeds base × pos_safety, the shot
+	# is settling — a fully-clear look (threshold = base) clears at once, a pinned
+	# one (threshold = 0) waits the whole drain. Live each tick: shedding the
+	# pressure mid-window releases the shot immediately.
 	var staggered: bool = ctx.self_stagger_timer > 0.0
 	var settling: bool = _settle_remaining_s > 0.0
+	var shot_settling: bool = _settle_remaining_s > ctx.carry_settle_delay_s * _phase_pos_safety
+	# The fire gate blocks the WINNING intent by its OWN beat: a shot by the
+	# pressure-scaled beat, a pass by the flat one (the dump, below, is flat too).
+	var fire_settle_blocked: bool = shot_settling if fire_intent == INTENT_SHOOT else settling
 
 	# Opportunity cost of firing NOW: the value of keeping the puck for a
 	# developing cross-seam one-timer a teammate is staging. Same EV currency as
@@ -1381,7 +1414,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# happen (the hold gate drops there too: holding IS retention).
 	if ((fire_score >= carry_score and fire_score >= hold_value)
 			or (retention_hopeless and fire_score >= dump_score)) \
-			and fire_score > FIRE_MIN_VALUE and not staggered and not settling:
+			and fire_score > FIRE_MIN_VALUE and not staggered and not fire_settle_blocked:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:

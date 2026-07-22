@@ -1120,6 +1120,57 @@ func test_zero_settle_delay_is_the_hard_baseline() -> void:
 			"no settle delay → the tick-one fire is unchanged")
 
 
+# ─── poise under pressure: the SHOOT settle beat is pressure-scaled ──────────
+
+func test_unpressured_shot_bypasses_the_settle_beat() -> void:
+	# The in-tight 1v1 (test_standstill_1v1_winds_up_the_cut) with NO opposing
+	# skaters near the shooter — current_safety ≈ 1. A fresh-possession settle
+	# beat that flat-gated every commit used to hold this look and CARRY through
+	# it; with the shot beat pressure-scaled, an unpressured carrier finishes the
+	# instant it gains the puck (the open backdoor tap-in). This is the fix.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
+	var ctx := _make_ctx(self_pos)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	ctx.carry_settle_delay_s = 0.3   # a full Normal-ish beat
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"an unpressured shot fires on tick one despite the settle beat")
+
+
+func test_pressured_shot_still_pays_the_settle_beat() -> void:
+	# Same in-tight look, but a defender draped tight on the shooter (behind the
+	# puck, so it doesn't screen the puck→net line — the shot still scores) tanks
+	# current_safety. The pressure-scaled beat now holds the shot on tick one, then
+	# releases it once the countdown drains below base × safety — poise: rushed
+	# hands can't settle-and-snipe the instant they gain the puck.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
+	# Poise reads the clearance where the carrier STANDS (not the evade seam), so a
+	# single checker draped ON the puck is enough — a stick bearing down rushes the
+	# release even though a lane exists. Same z as the shooter → along-sightline
+	# distance ~0, no screen registers, the shot still scores.
+	var checker_pos := Vector3(0.25, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[9, 1 - TEAM_ID, checker_pos],
+	])
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	ctx.carry_settle_delay_s = 0.3
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c._phase_pos_safety, 1.0,
+			"sanity: a stick on the puck lowers the current-spot poise safety below 1")
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"a hounded fresh carrier can't fire on tick one — it pays the beat")
+	# Drain the pressure-scaled window; the held shot then commits.
+	for _i: int in range(60):
+		c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"once the settle beat drains, the pressured shot releases")
+
+
 # ─── reset() ──────────────────────────────────────────────────────────────
 
 func test_reset_clears_all_persistent_state() -> void:

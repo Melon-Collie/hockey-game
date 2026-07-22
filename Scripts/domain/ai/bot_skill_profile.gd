@@ -69,14 +69,21 @@ extends RefCounted
 #     fat the window really is instead of being 100%. Grounded as a physical
 #     measurement (human release-timing variance), not a shape parameter.
 #   • carry_settle_delay_s — how long after gaining possession the carrier may
-#     ONLY carry before a SHOOT / PASS / DUMP commit is allowed. This is the
-#     "human can't release the instant the puck touches the tape" lever: the
-#     hard bot's tick-zero touch pass reads as inhuman, and the settle beat is
-#     also a real defensive window (pressure a fresh Normal/Easy carrier and
-#     you arrive before the outlet fires). Consumed in AIRoleCarrier via
-#     RoleContext; reception one-timers are NOT gated here (the puck never
-#     settles on the tape) — they're already throttled by the reaction delay
-#     and by the shot-spread budget on the reception gate.
+#     ONLY carry before a commit is allowed — the "human can't release the
+#     instant the puck touches the tape" lever (the hard bot's tick-zero touch
+#     pass reads as inhuman). Applied BY RELEASE TYPE in AIRoleCarrier:
+#       – PASS / DUMP settle FLAT for the whole beat — composing an outlet takes
+#         a moment, and pressuring a fresh Normal/Easy carrier before it fires is
+#         a real defensive window.
+#       – SHOOT settles PRESSURE-SCALED: the beat shrinks with the carrier's own
+#         reachable-set evadability (current_safety), so an UNPRESSURED look
+#         finishes at once (the open backdoor tap-in) while a HOUNDED one pays the
+#         full beat (rushed hands can't calmly settle-and-snipe). This is the
+#         poise-under-pressure model — it reuses the grounded pressure read the
+#         hold already computes, no new perception.
+#     Consumed via RoleContext; reception one-timers are NOT gated here (the puck
+#     never settles on the tape) — they're already throttled by the reaction
+#     delay and by the shot-spread budget on the reception gate.
 #
 # ── Pace knobs (a SEPARATE axis from the precision knobs above) ───────────────
 # The four knobs above tune how SHARP the bot is — its hands, its shots, its
@@ -227,9 +234,12 @@ var pass_aim_error_rad: float
 var shot_timing_error_s: float
 
 # How long (seconds) after gaining possession the carrier may only CARRY
-# before any SHOOT / PASS / DUMP commit is allowed — the "settle the puck
-# before you can move it" beat. 0.0 = today's instant release. Consumed by
-# AIRoleCarrier via RoleContext.carry_settle_delay_s. Tick-independent.
+# before a commit is allowed — the "settle the puck before you can move it"
+# beat. 0.0 = today's instant release. Applied by release type in AIRoleCarrier
+# via RoleContext: PASS / DUMP wait the FLAT beat; SHOOT waits a PRESSURE-SCALED
+# fraction of it (the beat × how pinned the carrier is), so an unpressured shot
+# finishes at once and only a hounded one pays the full settle — poise under
+# pressure. Tick-independent.
 var carry_settle_delay_s: float
 
 # PACE: extra metres the on-puck PRESSURE defender drops its cut-off line back
@@ -353,10 +363,11 @@ static func hard() -> BotSkillProfile:
 # odd wide one, and the score's spread budget stops the from-range snipes
 # entirely); pass error stays near-Hard at 0.015 rad so the passing game keeps
 # connecting. Release timing slop 0.16 s — Normal still tries the tight
-# plays but a set goalie regularly wins the late draws. Settle beat 0.30 s —
-# the puck visibly arrives on the
-# tape before the next play starts, and pressuring a fresh carrier is a real
-# play now. Tune shot error first when Normal's scoring is off: it's the dial
+# plays but a set goalie regularly wins the late draws. Settle beat 0.30 s on
+# PASSES — the puck visibly arrives on the tape before the outlet fires, and
+# pressuring a fresh carrier is a real play. On SHOTS the beat is pressure-
+# scaled: an open look finishes at once (Normal buries the clean backdoor feed),
+# a hounded one still pays the beat. Tune shot error first when Normal's scoring is off: it's the dial
 # that moves goals without making the bots look drunk.
 #
 # Pace: defenders sag ~0.75 m off the cut-off line (a half-stride of room —
@@ -403,8 +414,10 @@ static func normal() -> BotSkillProfile:
 # genuinely gaping hole, and even those aren't automatic); pass error 0.0225 rad
 # keeps tape-to-tape mostly connecting with the occasional honest bobble.
 # Release timing slop 0.24 s — Easy telegraphs and fires a beat late. Settle
-# beat 0.55 s — a newcomer can watch an Easy bot receive, gather, and THEN
-# decide, and closing on a fresh carrier reliably forces the turnover.
+# beat 0.55 s on passes (and pressure-scaled on shots, like Normal, so even an
+# open Easy look isn't frozen behind a full beat) — a newcomer can watch an Easy
+# bot receive, gather, and THEN decide, and closing on a fresh carrier reliably
+# forces the turnover.
 #
 # Pace: defenders sag ~3 m off (lots of room to carry and look up), barely lead
 # the play (anticipation 0.2 → a step behind), and bots NEVER hunt body checks
