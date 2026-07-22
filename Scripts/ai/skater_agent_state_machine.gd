@@ -5367,15 +5367,18 @@ func _deflect_safe_aim_dir(
 		self_pos: Vector3, dir: Vector3, snapshot: WorldSnapshot) -> Vector3:
 	if snapshot == null or snapshot.puck_state == null:
 		return dir
-	var carrier: int = snapshot.puck_state.carrier_peer_id
-	if carrier != -1 and _team_id_by_peer.get(carrier, -1) == _team_id:
-		return dir   # our puck — offensive stance, no lane to guard
+	# Runs every physics tick per off-puck bot (live-aim path): the house
+	# test goes first — pure arithmetic that exits for everyone but the 1-3
+	# net-front bodies, before any dictionary lookups.
 	var own_net := Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
 	var net_dx: float = own_net.x - self_pos.x
 	var net_dz: float = own_net.z - self_pos.z
 	if net_dx * net_dx + net_dz * net_dz \
 			> OWN_NET_BLADE_DISCIPLINE_M * OWN_NET_BLADE_DISCIPLINE_M:
 		return dir
+	var carrier: int = snapshot.puck_state.carrier_peer_id
+	if carrier != -1 and _team_id_by_peer.get(carrier, -1) == _team_id:
+		return dir   # our puck — offensive stance, no lane to guard
 	var puck_pos: Vector3 = snapshot.puck_state.position
 	var pdx: float = puck_pos.x - self_pos.x
 	var pdz: float = puck_pos.z - self_pos.z
