@@ -37,7 +37,37 @@ class_name AIPossessionState
 # oscillation (e.g., stick-on-stick contact during a strip) naturally —
 # we sample at the brain tick, not every physics tick.
 
-enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT, FORECHECK }
+enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT, FORECHECK, RETRIEVAL }
+
+# ── RETRIEVAL (5v5 only; docs/breakout-plan.md Phase A) ──────────────────────
+# The retrieval posture: a loose puck in our DZ that WE clearly win the race
+# to. compute() below never returns it — its inputs are race elections the
+# TeamBrain owns — the brain UPGRADES its DZONE result through retrieval_read
+# after computing both teams' best intercept times. The team shape is the
+# BREAKOUT posts with the race winner chasing (AIRoleSlots5), so the outlets
+# are standing at their stations by the time the retriever touches the puck —
+# real breakouts are choreographed during the retrieval, not after pickup.
+# A contested race stays DZONE: a strip scramble in our slot is defense.
+#
+# Margins: ENTER commits the posture only on a clear win — the starting value
+# covers the forechecker's reaction gate (EVADE_REACTION_S 0.15) plus one
+# brain tick (~0.17 s at 6 Hz) of read staleness; calibrate against the
+# breakout harness's cough-up metric (plan Phase D). HOLD < ENTER is the
+# hysteresis: once postured, the team holds the shape until the advantage
+# genuinely collapses, so the boundary can't flicker DZONE ↔ RETRIEVAL.
+const RETRIEVAL_ENTER_MARGIN_S: float = 0.25
+const RETRIEVAL_HOLD_MARGIN_S: float = 0.1
+
+
+# True when the race read says to take (or keep) the retrieval posture:
+# our best intercept time beats theirs by the margin — enter margin
+# normally, the smaller hold margin while already postured (`was_retrieval`).
+# INF opp time (nobody can reach it) always reads as a win.
+static func retrieval_read(our_best_t: float, opp_best_t: float,
+		was_retrieval: bool) -> bool:
+	var margin: float = RETRIEVAL_HOLD_MARGIN_S if was_retrieval \
+			else RETRIEVAL_ENTER_MARGIN_S
+	return our_best_t + margin <= opp_best_t
 
 class Result:
 	var state: int           # AIPossessionState.State enum value

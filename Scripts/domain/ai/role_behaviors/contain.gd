@@ -195,7 +195,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
 	var dir_net: Vector3 = to_net / dist
 	var stand: Vector3 = AIRoleHelpers.most_forward_feasible(
-			carrier_pos + dir_net * gap, ctx.self_max_speed, ctx.self_max_accel)
+			carrier_pos + dir_net * gap, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	# The stand stays on the carrier→net line (net, stand, and the gap point
 	# are collinear), so the lane fan's gap distance updates with it.
 	gap = carrier_pos.distance_to(stand)

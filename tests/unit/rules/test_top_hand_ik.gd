@@ -259,3 +259,80 @@ func test_righty_mirrors_lefty_in_x() -> void:
 	assert_almost_eq(lefty.hand.z, righty.hand.z, 0.001, "hand Z matches")
 	assert_almost_eq(lefty.blade.x, -righty.blade.x, 0.001, "blade X mirrors")
 	assert_almost_eq(lefty.blade.z, righty.blade.z, 0.001, "blade Z matches")
+
+
+# ── CLOSE-regime angular ROM (the behind-the-back fix) ───────────────────
+
+func test_close_regime_cannot_reach_behind() -> void:
+	# The bug this pins: the FAR regime always clamped direction to the
+	# angular ROM, but a slowly-swept cursor entering the CLOSE regime could
+	# walk the blade to ANY angle — including directly behind the body. The
+	# CLOSE aim now respects the same asymmetric limits.
+	var shoulder := _lefty_shoulder()
+	# Target close in and directly BEHIND the shoulder (+Z is behind).
+	var behind := Vector2(shoulder.x + 0.05, shoulder.z + 0.6)
+	var blade: Vector3 = TopHandIK.project_blade(shoulder, behind, -1.0, _cfg())
+	var dir := Vector2(blade.x - shoulder.x, blade.z - shoulder.z).normalized()
+	# Forehand-signed angle for a lefty (blade_side_sign −1).
+	var angle_fh: float = atan2(dir.x, -dir.y) * -1.0
+	assert_between(angle_fh, -BACK_ANGLE - 0.001, FORE_ANGLE + 0.001,
+			"CLOSE blade direction stays inside the angular ROM")
+
+
+func test_close_regime_in_rom_aim_unchanged() -> void:
+	# A close target inside the ROM keeps its exact aim direction — the clamp
+	# only engages past the limits.
+	var shoulder := _lefty_shoulder()
+	var target := Vector2(shoulder.x - 0.3, shoulder.z - 0.4)  # front, blade side
+	var blade: Vector3 = TopHandIK.project_blade(shoulder, target, -1.0, _cfg())
+	var aim := (target - Vector2(shoulder.x, shoulder.z)).normalized()
+	var got := Vector2(blade.x - shoulder.x, blade.z - shoulder.z).normalized()
+	assert_almost_eq(got.x, aim.x, 0.0001, "in-ROM close aim x preserved")
+	assert_almost_eq(got.y, aim.y, 0.0001, "in-ROM close aim z preserved")
+
+
+func test_close_and_far_agree_at_the_boundary_behind() -> void:
+	# Continuity for an out-of-ROM aim: a behind-ish target just inside vs just
+	# outside the rest radius lands the blade in the same clamped direction.
+	var shoulder := _lefty_shoulder()
+	var shoulder_xz := Vector2(shoulder.x, shoulder.z)
+	var aim := Vector2(0.2, 1.0).normalized()  # well past the backhand limit
+	var close_target: Vector2 = shoulder_xz + aim * (STICK_HORIZ_AT_REST - 0.01)
+	var far_target: Vector2 = shoulder_xz + aim * (STICK_HORIZ_AT_REST + 0.01)
+	var close_blade: Vector3 = TopHandIK.project_blade(shoulder, close_target, -1.0, _cfg())
+	var far_blade: Vector3 = TopHandIK.project_blade(shoulder, far_target, -1.0, _cfg())
+	var close_dir := Vector2(close_blade.x - shoulder.x, close_blade.z - shoulder.z).normalized()
+	var far_dir := Vector2(far_blade.x - shoulder.x, far_blade.z - shoulder.z).normalized()
+	assert_almost_eq(close_dir.x, far_dir.x, 0.01, "clamped direction continuous across regimes")
+	assert_almost_eq(close_dir.y, far_dir.y, 0.01)
+
+
+# ── Inner boundary: hand_y_max × stick length (the phone-booth seesaw) ────
+
+func test_inner_boundary_grows_with_stick_length() -> void:
+	# The blade's minimum distance from the shoulder is sqrt(S² − drop_max²):
+	# a longer stick has a bigger no-go circle in tight. Pin monotonic growth,
+	# and the near-vertical sensitivity that makes the stick-length gear lean
+	# a real in-tight tradeoff: when S barely exceeds the max hand drop, a few
+	# cm of stick add a LOT of inner circle.
+	var shoulder := _lefty_shoulder()
+	var at_shoulder := Vector2(shoulder.x, shoulder.z - 0.01)
+	var inner: Array[float] = []
+	for stick: float in [1.44, 1.50, 1.56]:
+		var cfg := _cfg()
+		cfg.stick_length = stick
+		var blade: Vector3 = TopHandIK.project_blade(shoulder, at_shoulder, -1.0, cfg)
+		inner.append(Vector2(blade.x - shoulder.x, blade.z - shoulder.z).length())
+	assert_lt(inner[0], inner[1], "short stick works tighter than standard")
+	assert_lt(inner[1], inner[2], "standard works tighter than long")
+	# Near the vertical limit (S ≈ max drop 1.25) the growth is steep.
+	var near := _cfg()
+	near.stick_length = 1.26
+	var near_blade: Vector3 = TopHandIK.project_blade(shoulder, at_shoulder, -1.0, near)
+	var near_inner: float = Vector2(near_blade.x - shoulder.x, near_blade.z - shoulder.z).length()
+	var near2 := _cfg()
+	near2.stick_length = 1.31
+	var near2_blade: Vector3 = TopHandIK.project_blade(shoulder, at_shoulder, -1.0, near2)
+	var near2_inner: float = Vector2(near2_blade.x - shoulder.x, near2_blade.z - shoulder.z).length()
+	assert_gt(near2_inner, near_inner * 2.0,
+			"5 cm of stick more than doubles the inner circle near the vertical limit")

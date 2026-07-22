@@ -144,7 +144,17 @@ const VERSION: String = "dev"
 #      host_pong -> host measures + EMA-smooths). Adding/removing @rpc methods
 #      shifts the name-sorted RPC index of every method after them (see v14/v23),
 #      so a bump is required even though no serialized wire format changed.
-const PROTOCOL_VERSION: int = 35
+# v36: attributes model replaced — request_join / request_update_attributes carry
+#      the new height + three-tier build (4 ints: height/skating/skill/checking)
+#      instead of the old six 1..5 attributes. Host validates with is_legal_build
+#      (one-strong-one-weak) instead of the point-buy budget. Fewer positional
+#      args on both RPCs, so a mixed-build pair decodes garbage — bump required.
+# v37: attributes v4 (body + gear) — request_join / request_update_attributes /
+#      spawn_remote_skater carry 6 ints (height, weight, profile, curve, flex,
+#      length) instead of the 4-int height+tier build. Validation is pure
+#      coercion (lateral axes, no legal-shape check). Positional arg counts
+#      changed on all three RPCs — bump required.
+const PROTOCOL_VERSION: int = 37
 
 
 func _ready() -> void:

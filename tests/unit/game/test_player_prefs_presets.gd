@@ -4,10 +4,13 @@ extends GutTest
 # -----------------------------------
 # The player keeps up to MAX_PRESETS named builds and switches which one is
 # ACTIVE; the flat attr_* fields (what get_player_attributes() and thus the
-# online join handshake read) always mirror the active preset. These tests pin
-# the seeding/migration, the active-index bookkeeping through add/delete, and
-# the stored-array parse (which must survive a hand-corrupted / cloud-synced
-# config without crashing).
+# online join handshake read) always mirror the active preset. A build is the
+# v4 body+gear model: HEIGHT in inches (a legacy 1..5 step coerces onto the
+# anchor heights, e.g. 5 → 79"), WEIGHT in lbs (clamped to the height's BMI
+# band; 0 → the height's neutral frame), and four gear slots. These tests pin
+# the seeding/sync, the active-index bookkeeping through add/delete, and the
+# stored-array parse (which must survive a hand-corrupted / cloud-synced config
+# without crashing, and must migrate tier-era and six-attribute presets).
 #
 # PlayerPrefs is the autoload (extends Node, no class_name). We instantiate the
 # script directly and never add it to the tree, so _ready()/_load() never fire
@@ -21,8 +24,8 @@ func _fresh() -> Node:
 	return autofree(PlayerPrefsScript.new())
 
 
-func _attrs(sp: int, ag: int, ha: int, sz: int, ph: int, sh: int) -> PlayerAttributes:
-	return PlayerAttributes.from_levels(sp, ag, ha, sz, ph, sh)
+func _attrs(h: int, w: int) -> PlayerAttributes:
+	return PlayerAttributes.from_levels(h, w)
 
 
 func _active_attrs(p: Node) -> PlayerAttributes:
@@ -38,43 +41,47 @@ func _set_presets(p: Node, entries: Array) -> void:
 	p.attr_presets = out
 
 
+func _set_flat(p: Node, h: int, w: int) -> void:
+	p.attr_height = h
+	p.attr_weight = w
+	p.attr_profile = PlayerAttributes.GEAR_BALANCED
+	p.attr_curve = PlayerAttributes.GEAR_BALANCED
+	p.attr_flex = PlayerAttributes.GEAR_BALANCED
+	p.attr_length = PlayerAttributes.GEAR_BALANCED
+
+
 # ── _finalize_presets: seeding & sync ────────────────────────────────────────
 
 func test_finalize_seeds_default_from_flat_when_empty() -> void:
 	var p: Node = _fresh()
-	p.attr_speed = 5
-	p.attr_agility = 1
-	p.attr_hands = 4
-	p.attr_size = 2
-	p.attr_physical = 3
-	p.attr_shot = 3
+	_set_flat(p, 79, 250)
 	p._finalize_presets()
 	assert_eq(p.get_presets().size(), 1, "seeds exactly one preset")
 	assert_eq(p.get_active_preset_index(), 0)
 	assert_eq(p.get_presets()[0]["name"], "Default")
-	assert_true(_active_attrs(p).equals(_attrs(5, 1, 4, 2, 3, 3)),
+	assert_true(_active_attrs(p).equals(_attrs(79, 250)),
 			"Default preset carries the flat build verbatim")
 
 
 func test_finalize_syncs_flat_from_active_when_presets_present() -> void:
 	var p: Node = _fresh()
 	_set_presets(p, [
-		p._make_preset("A", _attrs(1, 1, 1, 1, 1, 1)),
-		p._make_preset("B", _attrs(5, 4, 3, 2, 2, 2)),
+		p._make_preset("A", _attrs(68, 162)),
+		p._make_preset("B", _attrs(79, 250)),
 	])
 	p.attr_active_preset = 1
 	# Flat fields deliberately stale — finalize must overwrite them from active.
-	p.attr_speed = 3
+	p.attr_height = 73
 	p._finalize_presets()
-	assert_true(p.get_player_attributes().equals(_attrs(5, 4, 3, 2, 2, 2)),
+	assert_true(p.get_player_attributes().equals(_attrs(79, 250)),
 			"flat build re-synced from the active preset")
 
 
 func test_finalize_clamps_out_of_range_active_index() -> void:
 	var p: Node = _fresh()
 	_set_presets(p, [
-		p._make_preset("A", _attrs(3, 3, 3, 3, 3, 3)),
-		p._make_preset("B", _attrs(1, 1, 1, 1, 1, 1)),
+		p._make_preset("A", _attrs(73, 201)),
+		p._make_preset("B", _attrs(68, 162)),
 	])
 	p.attr_active_preset = 9
 	p._finalize_presets()
@@ -86,14 +93,14 @@ func test_finalize_clamps_out_of_range_active_index() -> void:
 func test_set_active_preset_switches_flat_build() -> void:
 	var p: Node = _fresh()
 	_set_presets(p, [
-		p._make_preset("A", _attrs(1, 1, 1, 1, 1, 1)),
-		p._make_preset("B", _attrs(5, 5, 5, 1, 1, 1)),
+		p._make_preset("A", _attrs(68, 162)),
+		p._make_preset("B", _attrs(79, 250)),
 	])
 	p.attr_active_preset = 0
 	p._sync_flat_from_active()
 	p.set_active_preset(1)
 	assert_eq(p.get_active_preset_index(), 1)
-	assert_true(p.get_player_attributes().equals(_attrs(5, 5, 5, 1, 1, 1)))
+	assert_true(p.get_player_attributes().equals(_attrs(79, 250)))
 
 
 func test_set_active_preset_ignores_invalid_index() -> void:
@@ -110,22 +117,22 @@ func test_set_active_preset_ignores_invalid_index() -> void:
 func test_save_preset_overwrites_active_and_syncs_flat() -> void:
 	var p: Node = _fresh()
 	p._finalize_presets()
-	p.save_preset(0, _attrs(5, 1, 1, 5, 1, 5), "Sniper")
+	p.save_preset(0, _attrs(76, 210), "Sniper")
 	assert_eq(p.get_presets()[0]["name"], "Sniper")
-	assert_true(p.get_player_attributes().equals(_attrs(5, 1, 1, 5, 1, 5)),
+	assert_true(p.get_player_attributes().equals(_attrs(76, 210)),
 			"editing the active preset updates the flat mirror")
 
 
 func test_save_preset_on_inactive_does_not_touch_flat() -> void:
 	var p: Node = _fresh()
 	_set_presets(p, [
-		p._make_preset("A", _attrs(3, 3, 3, 3, 3, 3)),
-		p._make_preset("B", _attrs(1, 1, 1, 1, 1, 1)),
+		p._make_preset("A", _attrs(73, 201)),
+		p._make_preset("B", _attrs(68, 162)),
 	])
 	p.attr_active_preset = 0
 	p._sync_flat_from_active()
-	p.save_preset(1, _attrs(5, 5, 5, 1, 1, 1))
-	assert_true(p.get_player_attributes().equals(_attrs(3, 3, 3, 3, 3, 3)),
+	p.save_preset(1, _attrs(79, 250))
+	assert_true(p.get_player_attributes().equals(_attrs(73, 201)),
 			"editing an inactive preset leaves the active build alone")
 
 
@@ -133,19 +140,14 @@ func test_save_preset_on_inactive_does_not_touch_flat() -> void:
 
 func test_add_preset_defaults_to_copy_of_active_build() -> void:
 	var p: Node = _fresh()
-	p.attr_speed = 5
-	p.attr_agility = 1
-	p.attr_hands = 4
-	p.attr_size = 2
-	p.attr_physical = 3
-	p.attr_shot = 3
+	_set_flat(p, 79, 250)
 	p._finalize_presets()
 	var idx: int = p.add_preset()
 	assert_eq(idx, 1)
-	assert_true(p.get_presets()[1]["attrs"].equals(_attrs(5, 1, 4, 2, 3, 3)))
+	assert_true(p.get_presets()[1]["attrs"].equals(_attrs(79, 250)))
 	# Independent object: mutating the new preset must not bleed into the source.
-	p.get_presets()[1]["attrs"].speed = 1
-	assert_eq(p.get_presets()[0]["attrs"].speed, 5, "presets don't share instances")
+	p.get_presets()[1]["attrs"].height = 68
+	assert_eq(p.get_presets()[0]["attrs"].height, 79, "presets don't share instances")
 
 
 func test_add_preset_uses_sequential_default_name() -> void:
@@ -176,30 +178,30 @@ func test_delete_last_preset_is_rejected() -> void:
 func test_delete_before_active_shifts_active_down() -> void:
 	var p: Node = _fresh()
 	_set_presets(p, [
-		p._make_preset("A", _attrs(1, 1, 1, 1, 1, 1)),
-		p._make_preset("B", _attrs(2, 2, 2, 2, 2, 2)),
-		p._make_preset("C", _attrs(3, 3, 3, 3, 3, 3)),
+		p._make_preset("A", _attrs(68, 162)),
+		p._make_preset("B", _attrs(70, 185)),
+		p._make_preset("C", _attrs(73, 214)),
 	])
 	p.attr_active_preset = 2
 	p._sync_flat_from_active()
 	p.delete_preset(0)
 	assert_eq(p.get_active_preset_index(), 1, "active follows its preset after a lower delete")
-	assert_true(p.get_player_attributes().equals(_attrs(3, 3, 3, 3, 3, 3)),
+	assert_true(p.get_player_attributes().equals(_attrs(73, 214)),
 			"flat still points at the same build (C)")
 
 
 func test_delete_active_last_clamps_active() -> void:
 	var p: Node = _fresh()
 	_set_presets(p, [
-		p._make_preset("A", _attrs(1, 1, 1, 1, 1, 1)),
-		p._make_preset("B", _attrs(2, 2, 2, 2, 2, 2)),
+		p._make_preset("A", _attrs(68, 162)),
+		p._make_preset("B", _attrs(70, 185)),
 	])
 	p.attr_active_preset = 1
 	p._sync_flat_from_active()
 	p.delete_preset(1)
 	assert_eq(p.get_presets().size(), 1)
 	assert_eq(p.get_active_preset_index(), 0, "clamps to the remaining preset")
-	assert_true(p.get_player_attributes().equals(_attrs(1, 1, 1, 1, 1, 1)),
+	assert_true(p.get_player_attributes().equals(_attrs(68, 162)),
 			"flat re-synced to the surviving preset")
 
 
@@ -208,13 +210,13 @@ func test_delete_active_last_clamps_active() -> void:
 func test_set_player_attributes_updates_active_preset() -> void:
 	var p: Node = _fresh()
 	p._finalize_presets()
-	var build := _attrs(5, 5, 1, 1, 5, 1)
+	var build := _attrs(79, 250)
 	p.set_player_attributes(build)
-	assert_true(_active_attrs(p).equals(_attrs(5, 5, 1, 1, 5, 1)),
+	assert_true(_active_attrs(p).equals(_attrs(79, 250)),
 			"free-play edits write through to the active preset")
 	# Stored copy must be independent of the argument.
-	build.speed = 1
-	assert_eq(_active_attrs(p).speed, 5, "active preset doesn't alias the caller's object")
+	build.height = 68
+	assert_eq(_active_attrs(p).height, 79, "active preset doesn't alias the caller's object")
 
 
 # ── _parse_stored_presets ────────────────────────────────────────────────────
@@ -222,36 +224,53 @@ func test_set_player_attributes_updates_active_preset() -> void:
 func test_parse_reconstructs_valid_entries() -> void:
 	var p: Node = _fresh()
 	var parsed: Array = p._parse_stored_presets([
-		{"name": "One", "speed": 5, "agility": 1, "hands": 4, "size": 2, "physical": 3, "shot": 3},
-		{"name": "Two", "speed": 1, "agility": 1, "hands": 1, "size": 1, "physical": 1, "shot": 1},
+		{"name": "One", "height": 79, "weight": 250, "profile": 2, "curve": 1,
+				"flex": 1, "length": 2},
+		{"name": "Two", "height": 68, "weight": 162},
 	])
 	assert_eq(parsed.size(), 2)
 	assert_eq(parsed[0]["name"], "One")
-	assert_true(parsed[0]["attrs"].equals(_attrs(5, 1, 4, 2, 3, 3)))
+	assert_eq(parsed[0]["attrs"].weight, 250)
+	assert_eq(parsed[0]["attrs"].length, PlayerAttributes.LENGTH_LONG)
+	assert_true(parsed[1]["attrs"].equals(_attrs(68, 162)))
 
 
-func test_parse_clamps_out_of_range_levels() -> void:
+func test_parse_coerces_out_of_band_body() -> void:
 	var p: Node = _fresh()
 	var parsed: Array = p._parse_stored_presets([
-		{"name": "Wild", "speed": 99, "agility": 0, "hands": 3, "size": 3, "physical": 3, "shot": 3},
+		{"name": "Wild", "height": 99, "weight": 500},
 	])
-	assert_eq(parsed[0]["attrs"].speed, PlayerAttributes.LEVEL_MAX, "99 clamps to 5")
-	assert_eq(parsed[0]["attrs"].agility, PlayerAttributes.LEVEL_MIN, "0 clamps to 1")
+	assert_eq(parsed[0]["attrs"].height, PlayerAttributes.HEIGHT_MAX, "99 clamps to 6'7\"")
+	assert_eq(parsed[0]["attrs"].weight,
+			PlayerAttributes.weight_max(PlayerAttributes.HEIGHT_MAX),
+			"500 lbs clamps to the band ceiling")
 
 
-func test_parse_trims_over_budget_preset() -> void:
-	# Per-level clamping bounds each axis but not the sum — a hand-edited cfg can
-	# store an over-budget preset, and presets are authoritative for the flat
-	# build (they sync AFTER _enforce_attr_budget ran). The parse must repair it
-	# with the same deterministic trim as the flat choke point: round-robin over
-	# ATTR_TRIM_ORDER, so an all-5 forgery lands on all-medium (the trim sheds one
-	# point per axis per pass and stops exactly at BUDGET).
+func test_parse_migrates_tier_era_preset() -> void:
+	# A v4-era stored preset (height + skating/skill/checking tiers) migrates
+	# through PlayerAttributes.migrate_tiers instead of being dropped.
 	var p: Node = _fresh()
 	var parsed: Array = p._parse_stored_presets([
-		{"name": "Forged", "speed": 5, "agility": 5, "hands": 5, "size": 5, "physical": 5, "shot": 5},
+		{"name": "OldTiers", "height": 5, "skating": 1, "skill": 2, "checking": 3},
 	])
-	assert_true(parsed[0]["attrs"].equals(_attrs(3, 3, 3, 3, 3, 3)),
-			"over-budget stored preset is trimmed to a legal build")
+	assert_eq(parsed.size(), 1)
+	assert_eq(parsed[0]["attrs"].height, 79)
+	assert_eq(parsed[0]["attrs"].weight, PlayerAttributes.weight_for_bmi(79, 27.75),
+			"strong Checking → SOLID frame")
+	assert_eq(parsed[0]["attrs"].length, PlayerAttributes.LENGTH_LONG)
+
+
+func test_parse_migrates_legacy_six_attribute_preset() -> void:
+	# A pre-v4 stored preset (old six-attribute keys) is migrated, not dropped.
+	var p: Node = _fresh()
+	var parsed: Array = p._parse_stored_presets([
+		{"name": "Legacy", "speed": 2, "agility": 1, "hands": 2, "size": 5,
+				"physical": 5, "shot": 4},
+	])
+	assert_eq(parsed.size(), 1)
+	assert_eq(parsed[0]["attrs"].height, 79, "legacy size → height")
+	assert_gt(parsed[0]["attrs"].weight, PlayerAttributes.weight_neutral(79),
+			"physical-heavy legacy build → heavier than neutral")
 
 
 func test_parse_skips_malformed_entries() -> void:
@@ -259,7 +278,7 @@ func test_parse_skips_malformed_entries() -> void:
 	var parsed: Array = p._parse_stored_presets([
 		"not a dict",
 		42,
-		{"name": "Good", "speed": 3, "agility": 3, "hands": 3, "size": 3, "physical": 3, "shot": 3},
+		{"name": "Good", "height": 73, "weight": 201},
 	])
 	assert_eq(parsed.size(), 1, "non-dict entries are skipped, valid ones kept")
 	assert_eq(parsed[0]["name"], "Good")
@@ -269,7 +288,7 @@ func test_parse_caps_at_max_presets() -> void:
 	var p: Node = _fresh()
 	var raw: Array = []
 	for i: int in range(PlayerPrefsScript.MAX_PRESETS + 3):
-		raw.append({"name": "P%d" % i, "speed": 3, "agility": 3, "hands": 3, "size": 3, "physical": 3, "shot": 3})
+		raw.append({"name": "P%d" % i, "height": 73, "weight": 201})
 	var parsed: Array = p._parse_stored_presets(raw)
 	assert_eq(parsed.size(), PlayerPrefsScript.MAX_PRESETS, "excess presets are dropped")
 

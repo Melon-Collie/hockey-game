@@ -7,7 +7,7 @@ func _wrister_cfg() -> ShotMechanics.WristerConfig:
 	cfg.min_wrister_power = 8.0
 	cfg.max_wrister_power = 25.0
 	cfg.backhand_power_coefficient = 0.75
-	cfg.quick_shot_power = 12.0
+	cfg.quick_pass_power = 12.0
 	cfg.loft_vy_low = 2.2
 	cfg.loft_vy_high = 5.4
 	cfg.full_sweep_speed = 7.0
@@ -26,10 +26,10 @@ func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 	cfg.loft_vy_high = 5.4
 	return cfg
 
-# ── Wrister: quick shot branch ───────────────────────────────────────────────
+# ── Wrister: quick pass branch ───────────────────────────────────────────────
 
-func test_wrister_quick_shot_uses_quick_shot_power() -> void:
-	# is_quick_shot=true — fixed quick power regardless of any sweep speed.
+func test_wrister_quick_pass_uses_quick_pass_power() -> void:
+	# is_quick_pass=true — fixed quick power regardless of any sweep speed.
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO,                   # player_pos
 		Vector3(10, 0, 0),              # mouse at (10, 0, 0)
@@ -37,20 +37,25 @@ func test_wrister_quick_shot_uses_quick_shot_power() -> void:
 		false, 0,
 		_wrister_cfg(),
 		Vector3.ZERO,
-		true)                           # is_quick_shot
-	assert_almost_eq(result.power, 12.0, 0.01, "quick shot uses fixed quick_shot_power")
+		true)                           # is_quick_pass
+	assert_almost_eq(result.power, 12.0, 0.01, "quick pass uses fixed quick_pass_power")
 
-func test_wrister_quick_shot_direction_from_blade() -> void:
-	# Quick shot aims from the player through the blade (toward the cursor)
+func test_wrister_quick_pass_aims_at_cursor_not_blade_offset() -> void:
+	# Regression guard for "quick passes don't go the right way": the pass aims
+	# blade→cursor, so with the cursor straight ahead (−Z) the pass goes straight
+	# ahead even though the blade sits off to the forehand side (+X, the carry
+	# offset). The OLD player→blade aim would veer toward that +X offset; the
+	# blade→cursor aim tracks the cursor line instead.
 	var result: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		Vector3(0, 0, 0),
-		Vector3(10, 0, 0),
-		Vector3(0.5, 0, 0),
+		Vector3(0, 0, 0),               # player at origin
+		Vector3(0, 0, -10),             # cursor straight ahead (−Z)
+		Vector3(0.6, 0, -0.4),          # blade offset to the forehand carry side (+X)
 		false, 0,
 		_wrister_cfg(),
 		Vector3.ZERO,
-		true)                           # is_quick_shot
-	assert_gt(result.direction.x, 0.0, "direction toward the target (+X)")
+		true)                           # is_quick_pass
+	assert_almost_eq(result.direction.z, -1.0, 0.05, "pass tracks the cursor line (−Z), not the blade offset")
+	assert_lt(absf(result.direction.x), 0.1, "pass does not veer toward the carry-side blade offset")
 
 # ── Wrister: charged branch ──────────────────────────────────────────────────
 
@@ -131,21 +136,21 @@ func test_wrister_charged_uses_drag_direction_not_player_to_mouse() -> void:
 	assert_almost_eq(result.direction.x, 0.0, 0.05, "shot does not veer toward mouse")
 
 func test_wrister_hard_binary_quick_vs_charged() -> void:
-	# HARD BINARY (no blend): with the SAME drag, is_quick_shot flips the shot
-	# categorically. Quick = aim player→blade (+X here, toward cursor) at
-	# quick_shot_power; charged = aim along the drag (-Z) at charged power. Mouse is
+	# HARD BINARY (no blend): with the SAME drag, is_quick_pass flips the shot
+	# categorically. Quick = aim blade→cursor (+X here, toward the cursor) at
+	# quick_pass_power; charged = aim along the drag (-Z) at charged power. Mouse is
 	# +X, drag is -Z, so the aim axis itself flips between the two.
 	var cfg := _wrister_cfg()
 	var drag := Vector3(0, 0, -1)
 	var quick: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-		false, 0, cfg, drag, true)          # is_quick_shot
+		false, 0, cfg, drag, true)          # is_quick_pass
 	var charged: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
 		false, 0, cfg, drag, false, FULL_SWEEP)  # charged wrister
-	assert_gt(quick.direction.x, 0.9, "quick shot aims player→blade (+X), ignores drag")
+	assert_gt(quick.direction.x, 0.9, "quick pass aims blade→cursor (+X), ignores drag")
 	assert_almost_eq(charged.direction.z, -1.0, 0.05, "charged wrister aims along drag (-Z)")
-	assert_almost_eq(quick.power, cfg.quick_shot_power, 0.01, "quick shot fires fixed quick_shot_power")
+	assert_almost_eq(quick.power, cfg.quick_pass_power, 0.01, "quick pass fires fixed quick_pass_power")
 	assert_almost_eq(charged.power, cfg.max_wrister_power, 0.01, "charged wrister scales power with sweep speed")
 
 
@@ -210,13 +215,13 @@ func test_wrister_zero_full_sweep_speed_floors_power() -> void:
 	assert_almost_eq(r.power, cfg.min_wrister_power, 0.01,
 		"disabled speed axis floors the release power")
 
-func test_wrister_quick_shot_ignores_sweep_speed() -> void:
+func test_wrister_quick_pass_ignores_sweep_speed() -> void:
 	var cfg := _wrister_cfg()
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
 		false, 0, cfg, Vector3.ZERO, true, FULL_SWEEP)
-	assert_almost_eq(r.power, cfg.quick_shot_power, 0.01,
-		"quick shot stays at fixed pass power whatever the sweep did")
+	assert_almost_eq(r.power, cfg.quick_pass_power, 0.01,
+		"quick pass stays at fixed pass power whatever the sweep did")
 
 func test_wrister_speed_for_power_t_round_trip() -> void:
 	# The bot inverse: a target power fraction → a cursor speed that, run forward
@@ -232,6 +237,82 @@ func test_wrister_speed_for_power_t_clamps() -> void:
 	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(0.0, cfg), 0.0, 0.001)
 	assert_almost_eq(ShotMechanics.wrister_speed_for_power_t(1.5, cfg),
 			cfg.full_sweep_speed, 0.001, "over-1 target clamps to the full-speed reference")
+
+# ── Wrister: travel-gated ceiling ─────────────────────────────────────────────
+# The top of the band must be EARNED with blade travel: cursor speed alone (a
+# twitch, a wiggle, a cranked sensitivity) caps at the flick-pass floor. The
+# gate is a cap — it can only lower the speed-derived t, never raise it — so
+# everything below the floor (the touch-pass precision band) is bit-identical
+# to the ungated model.
+
+func _gated_cfg() -> ShotMechanics.WristerConfig:
+	var cfg := _wrister_cfg()
+	cfg.full_stroke_travel = 1.0
+	cfg.travel_cap_floor = 0.4
+	return cfg
+
+func test_travel_cap_disabled_when_full_travel_unset() -> void:
+	# full_stroke_travel <= 0 disables the gate — cap is 1.0 for any travel.
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.0, _wrister_cfg()),
+		1.0, 0.001, "unset gate never caps")
+
+func test_travel_cap_zero_travel_floors_at_flick_pass_tier() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.0, _gated_cfg()),
+		0.4, 0.001, "zero travel earns the flick-pass floor, not zero")
+
+func test_travel_cap_full_travel_unlocks_ceiling() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(1.0, _gated_cfg()),
+		1.0, 0.001, "a full stroke unlocks the whole band")
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(2.5, _gated_cfg()),
+		1.0, 0.001, "over-travel clamps at 1")
+
+func test_travel_cap_scales_between_floor_and_full() -> void:
+	assert_almost_eq(ShotMechanics.wrister_travel_cap_t(0.7, _gated_cfg()),
+		0.7, 0.001, "partial stroke earns a proportional ceiling")
+
+func test_wrister_twitch_full_speed_no_travel_caps_at_floor() -> void:
+	# THE exploit case: max cursor speed with no blade travel (wiggle / jerk /
+	# cranked Shot Power Sensitivity) releases at the flick-pass tier, not max.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP, 0.0)
+	var floor_power: float = lerpf(cfg.min_wrister_power, cfg.max_wrister_power,
+			cfg.travel_cap_floor)
+	assert_almost_eq(r.power, floor_power, 0.01,
+		"speed without travel caps at the flick-pass tier")
+
+func test_wrister_full_sweep_with_full_travel_maxes_power() -> void:
+	# The honest rip: full speed AND a real swept stroke — untouched by the gate.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP, 1.2)
+	assert_almost_eq(r.power, cfg.max_wrister_power, 0.01,
+		"an earned stroke keeps the full ceiling")
+
+func test_wrister_soft_sweep_below_floor_untouched_by_gate() -> void:
+	# The mastered touch pass: a slow sweep's speed-derived t sits under the
+	# floor, so gated and ungated release identically even at zero travel.
+	var slow_sweep: float = 1.0
+	var gated: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, _gated_cfg(), Vector3(1, 0, 0), false, slow_sweep, 0.0)
+	var ungated: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, _wrister_cfg(), Vector3(1, 0, 0), false, slow_sweep)
+	assert_almost_eq(gated.power, ungated.power, 0.001,
+		"the soft band is bit-identical to the ungated model")
+
+func test_wrister_default_travel_bypasses_gate() -> void:
+	# Callers that pass no stroke_travel (bots via INF, quick shots) keep the
+	# full ceiling even on a gated config.
+	var cfg := _gated_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 0, cfg, Vector3(1, 0, 0), false, FULL_SWEEP)
+	assert_almost_eq(r.power, cfg.max_wrister_power, 0.01,
+		"default (INF) stroke_travel means no gate")
 
 # ── Forehand/backhand from swing chirality ───────────────────────────────────
 # Convention (empirically flippable): a POSITIVE net swing rotation is a
@@ -362,9 +443,9 @@ func test_loft_direction_agnostic() -> void:
 		"same loft level and power -> same y, regardless of direction")
 
 
-# Quick shots (the pass mechanic) ride the same loft table — LOW at pass power
-# IS the saucer pass, in any direction including toward the net.
-func test_quick_shot_loft_uses_level_table() -> void:
+# Quick passes ride the same loft table — LOW at pass power IS the saucer pass,
+# in any direction including toward the net.
+func test_quick_pass_loft_uses_level_table() -> void:
 	var cfg := _wrister_cfg()
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(10, 0, 0),
@@ -372,7 +453,7 @@ func test_quick_shot_loft_uses_level_table() -> void:
 		false, 1,
 		cfg,
 		Vector3.ZERO,
-		true)                           # is_quick_shot
+		true)                           # is_quick_pass
 	var v_y: float = r.power * r.direction.y
 	assert_almost_eq(v_y, cfg.loft_vy_low, 0.01,
 		"quick-shot saucer launches at the LOW level vertical speed")
@@ -520,3 +601,69 @@ func test_follow_through_aim_ignores_degenerate_cursor() -> void:
 	var shot_dir := Vector3(0, 0, -1)
 	var aim: Vector3 = ShotMechanics.follow_through_aim(shot_dir, Vector3.ZERO, 1.0, 0.4)
 	assert_almost_eq(aim.z, -1.0, 0.0001, "degenerate cursor holds shot line")
+
+
+# ── Blade face angle (curve gear): the launch-angle cap ──────────────────────
+# The loft_y ratio IS tan(launch angle); the curve's face angle caps it.
+# Face tans (from PlayerAttributes._CURVE_FACE_ANGLE_DEG): closed 23°,
+# balanced 31°, open 45° (= MAX_LOFT_RATIO, the pre-curve universal cap).
+
+const _TAN_CLOSED: float = 0.42447  # tan 23°
+const _TAN_BALANCED: float = 0.60086  # tan 31°
+const _TAN_OPEN: float = 1.0        # tan 45°
+const _VY_HIGH: float = 4.65        # GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+
+
+func test_face_angle_never_binds_at_pace() -> void:
+	# A full-power HIGH shot launches well under every face angle, so all
+	# three curves produce the IDENTICAL arc — the crossbar apex ceiling is
+	# reached by every blade at pace.
+	var open_y: float = ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_OPEN)
+	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_CLOSED), open_y, 0.0001,
+			"closed matches open at pace")
+	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_BALANCED), open_y, 0.0001,
+			"balanced matches open at pace")
+	# And the achieved vy is the full level speed.
+	var vy: float = 30.0 * open_y / sqrt(1.0 + open_y * open_y)
+	assert_almost_eq(vy, _VY_HIGH, 0.001, "full apex at pace")
+
+
+func test_face_angle_flattens_the_soft_roof() -> void:
+	# The in-tight roof is a SOFT steep shot — exactly where the face gates.
+	# At 6 m/s the uncapped ratio wants ~51°; each face clamps to its own
+	# angle, so the achieved vertical speed (and thus the apex) ranks
+	# open > balanced > closed, and none reaches the full HIGH apex.
+	var soft: float = 6.0
+	var y_open: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_OPEN)
+	var y_bal: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_BALANCED)
+	var y_closed: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_CLOSED)
+	assert_almost_eq(y_open, _TAN_OPEN, 0.0001, "open pins at its face")
+	assert_almost_eq(y_bal, _TAN_BALANCED, 0.0001, "balanced pins at its face")
+	assert_almost_eq(y_closed, _TAN_CLOSED, 0.0001, "closed pins at its face")
+	var vy_open: float = soft * y_open / sqrt(1.0 + y_open * y_open)
+	var vy_closed: float = soft * y_closed / sqrt(1.0 + y_closed * y_closed)
+	assert_gt(vy_open, vy_closed, "open climbs harder from the same soft touch")
+	assert_lt(vy_open, _VY_HIGH, "even open can't full-roof this soft")
+
+
+func test_roofing_distance_gradient() -> void:
+	# The emergent per-curve minimum bar-height roofing distance: the softest
+	# pace whose arc still achieves the full HIGH vy is power = vy/sin(face),
+	# and its apex sits at (vy/tan(face))·(vy/g). Ballistics alone produces
+	# the doorstep/slot/high-slot gradient — no positional term anywhere
+	# (trajectory is a pure function of power + level + face).
+	var g: float = 9.8
+	var expected: Array[float] = []
+	for t: float in [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED]:
+		expected.append((_VY_HIGH / t) * (_VY_HIGH / g))
+	assert_almost_eq(expected[0], 2.21, 0.05, "open roofs from the doorstep")
+	assert_almost_eq(expected[1], 3.67, 0.05, "balanced roofs from the slot")
+	assert_almost_eq(expected[2], 5.20, 0.05, "closed needs the high slot")
+	# And verify the model agrees: at each curve's boundary pace the cap is
+	# exactly at the bind point — full vy achieved, no steeper.
+	for i: int in 3:
+		var t: float = [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED][i]
+		var boundary_power: float = _VY_HIGH / (t / sqrt(1.0 + t * t))
+		var y: float = ShotMechanics.loft_y(boundary_power, _VY_HIGH, t)
+		var vy: float = boundary_power * y / sqrt(1.0 + y * y)
+		assert_almost_eq(vy, _VY_HIGH, 0.01, "full vy exactly at the bind boundary")

@@ -1,10 +1,11 @@
 class_name AttributePickerPanel
 extends VBoxContainer
 
-# Reusable point-buy attribute picker with build presets. Embedded by both the
-# free-play PlayerSettingsPopup and the lobby's build editor so the two never
-# diverge. Owns a WORKING COPY of the player's presets (deep-copied from
-# PlayerPrefs on snapshot()) and edits it in place; the host commits or reverts:
+# Reusable body-build picker (attributes v4) with build presets. Embedded by
+# both the free-play PlayerSettingsPopup and the lobby's build editor so the
+# two never diverge. Owns a WORKING COPY of the player's presets (deep-copied
+# from PlayerPrefs on snapshot()) and edits it in place; the host commits or
+# reverts:
 #
 #   host.open()   -> panel.set_locked(...); panel.snapshot()
 #   host.cancel() -> panel.restore()
@@ -13,36 +14,40 @@ extends VBoxContainer
 # The panel emits `changed` on every edit so the host can refresh its Apply
 # button; the host gates Apply on panel.is_dirty() and panel.is_valid().
 #
-# Invariant kept by the UI: you can't LEAVE a preset (switch chips / add a new
-# one) unless it spends exactly BUDGET, so every stored preset is a legal build.
-# The one preset that can be mid-spend is the active one you're currently
-# dragging — is_valid() blocks Apply until it's whole. A pre-existing
-# under-budget preset (legacy-migrated) doesn't block a name-only edit because
-# is_valid() only demands full budget once a build was actually touched.
+# A build is two continuous body dials: HEIGHT (5'8"..6'7", every inch) and
+# WEIGHT (lbs, bounded per height by the single BMI band — see
+# PlayerAttributes.weight_min/max). Every slider position is a legal build —
+# there is no power economy and no shape to validate, so is_valid() is always
+# true and preset switching is never blocked. Moving the height slider
+# preserves the build's FRAME (its position in the BMI band) and recomputes
+# pounds, so a lean build stays lean as it grows.
+#
+# Gear slots ride through the preset levels; each gains its selector when its
+# gameplay stage lands. Live: STICK LENGTH (levels[5]), BLADE CURVE
+# (levels[3]) and STICK FLEX (levels[4]) — three-way exclusive rows sharing
+# one builder. Skate profile (levels[2]) is stored but not yet editable.
 
 signal changed
 
-# Order matches PlayerAttributes.Attribute (Speed, Agility, Hands, Size,
-# Physical, Shot); the per-preset "levels" arrays are indexed by that enum.
-const _ATTR_LABELS: Array[String] = ["Speed", "Agility", "Hands", "Size", "Physical", "Shot"]
+# Hover tooltips. Headline effects only.
+const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the speed/agility/shot baselines.\nSmall = shiftier with quicker turns; big = longer reach & harder shot."
+const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = quicker first step, fast stamina recovery, easier to move.\nHeavy = harder hits & harder to move, deep but slow-refilling tank."
+const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
+const _LENGTH_LABELS: Array[String] = ["Short", "Standard", "Long"]
+const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to elevate.\nOpen = easy elevation & quick release, weak backhand."
+const _CURVE_LABELS: Array[String] = ["Closed", "Balanced", "Open"]
+const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
+const _FLEX_LABELS: Array[String] = ["Whippy", "Medium", "Stiff"]
+const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
+const _PROFILE_LABELS: Array[String] = ["Agility", "Balanced", "Power"]
 
-# Hover tooltips, one per attribute (same enum order). Headline effects only —
-# what the player feels — not the multiplier tables (those live on
-# PlayerAttributes and shift with tuning).
-const _ATTR_TOOLTIPS: Array[String] = [
-	"Top skating speed.\nAlso raises the sprint ceiling — sprint multiplies this.",
-	"Acceleration, turn rate, braking, and edge glide.",
-	"Faster blade for dangles and catching hard passes,\nless slowdown carrying the puck, stronger backhand.",
-	"Height, reach, and mass — longer stick, harder to\nknock off the puck, and your hits carry more momentum.",
-	"Deliver bigger checks that stagger and strip the puck,\nbrace against hits, and burn/recover stamina better.",
-	"Higher charged-shot power ceiling and a faster wrister\ncharge. Quick shot & pass speed stay equal for everyone.",
-]
-
-# Working copy: Array of {"name": String, "levels": Array[int]} (six levels).
+# Working copy: Array of {"name": String, "levels": Array[int]} in canonical
+# order [height_in, weight_lbs, profile, curve, flex, length]. The UI edits
+# only height/weight; gear carries through.
 var _working: Array[Dictionary] = []
 var _active: int = 0
-# Deep copy taken on snapshot(); restore() reverts to it and is_dirty() compares
-# against it.
+# Deep copy taken on snapshot(); restore() reverts to it and is_dirty()
+# compares against it.
 var _snapshot_working: Array[Dictionary] = []
 var _snapshot_active: int = 0
 var _locked: bool = false
@@ -53,10 +58,15 @@ var _chip_buttons: Array[Button] = []
 var _new_btn: Button = null
 var _delete_btn: Button = null
 var _name_field: LineEdit = null
-var _points_label: Label = null
+var _status_label: Label = null
 var _lock_label: Label = null
-var _attr_sliders: Array[HSlider] = []
-var _attr_value_labels: Array[Label] = []
+var _height_slider: HSlider = null
+var _height_value_label: Label = null
+var _weight_slider: HSlider = null
+var _weight_value_label: Label = null
+# Gear selector button rows, keyed by the levels index they edit
+# (3 = curve, 4 = flex, 5 = length).
+var _gear_buttons: Dictionary = {}
 
 
 func _ready() -> void:
@@ -75,10 +85,10 @@ func _build() -> void:
 	_build_preset_row()
 	_build_name_row()
 
-	_points_label = Label.new()
-	_points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_points_label.add_theme_font_size_override("font_size", 14)
-	add_child(_points_label)
+	_status_label = Label.new()
+	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_status_label.add_theme_font_size_override("font_size", 14)
+	add_child(_status_label)
 
 	_lock_label = Label.new()
 	_lock_label.text = "Locked during online play."
@@ -88,10 +98,14 @@ func _build() -> void:
 	_lock_label.visible = false
 	add_child(_lock_label)
 
-	_attr_sliders = []
-	_attr_value_labels = []
-	for attr_idx: int in _ATTR_LABELS.size():
-		_build_attribute_slider_row(attr_idx)
+	_build_height_row()
+	_build_weight_row()
+	# The four gear slots — all live. Each is a three-way exclusive choice
+	# (the loft-level pattern — discrete and chunky, never a slider).
+	_build_gear_row("Stick", _LENGTH_TOOLTIP, _LENGTH_LABELS, 5)
+	_build_gear_row("Curve", _CURVE_TOOLTIP, _CURVE_LABELS, 3)
+	_build_gear_row("Flex", _FLEX_TOOLTIP, _FLEX_LABELS, 4)
+	_build_gear_row("Skates", _PROFILE_TOOLTIP, _PROFILE_LABELS, 2)
 
 
 func _build_preset_row() -> void:
@@ -151,43 +165,104 @@ func _build_name_row() -> void:
 	row.add_child(_name_field)
 
 
-func _build_attribute_slider_row(attr_idx: int) -> void:
+func _build_height_row() -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 12)
 	add_child(row)
 
 	var label := Label.new()
-	label.text = _ATTR_LABELS[attr_idx]
+	label.text = "Height"
 	label.custom_minimum_size = Vector2(80, 0)
 	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	# Labels ignore the mouse by default, which suppresses tooltips.
 	label.mouse_filter = Control.MOUSE_FILTER_STOP
-	label.tooltip_text = _ATTR_TOOLTIPS[attr_idx]
+	label.tooltip_text = _HEIGHT_TOOLTIP
 	row.add_child(label)
 
-	var slider := HSlider.new()
-	slider.min_value = PlayerAttributes.LEVEL_MIN
-	slider.max_value = PlayerAttributes.LEVEL_MAX
-	slider.step = 1
-	slider.custom_minimum_size = Vector2(200, 36)
-	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	slider.set_value_no_signal(PlayerAttributes.LEVEL_MEDIUM)
-	slider.tooltip_text = _ATTR_TOOLTIPS[attr_idx]
-	slider.value_changed.connect(_on_slider_changed.bind(attr_idx))
-	row.add_child(slider)
-	_attr_sliders.append(slider)
+	_height_slider = HSlider.new()
+	_height_slider.min_value = PlayerAttributes.HEIGHT_MIN
+	_height_slider.max_value = PlayerAttributes.HEIGHT_MAX
+	_height_slider.step = 1
+	_height_slider.custom_minimum_size = Vector2(200, 36)
+	_height_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_height_slider.set_value_no_signal(PlayerAttributes.HEIGHT_MEDIUM)
+	_height_slider.tooltip_text = _HEIGHT_TOOLTIP
+	_height_slider.value_changed.connect(_on_height_changed)
+	row.add_child(_height_slider)
 
-	var value_label := Label.new()
-	value_label.custom_minimum_size = Vector2(24, 0)
-	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	value_label.add_theme_font_size_override("font_size", 18)
-	value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(value_label)
-	_attr_value_labels.append(value_label)
+	_height_value_label = Label.new()
+	_height_value_label.custom_minimum_size = Vector2(60, 0)
+	_height_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_height_value_label.add_theme_font_size_override("font_size", 18)
+	_height_value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	_height_value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_height_value_label)
+
+
+func _build_weight_row() -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	add_child(row)
+
+	var label := Label.new()
+	label.text = "Weight"
+	label.custom_minimum_size = Vector2(80, 0)
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_STOP
+	label.tooltip_text = _WEIGHT_TOOLTIP
+	row.add_child(label)
+
+	_weight_slider = HSlider.new()
+	_weight_slider.step = 1
+	_weight_slider.custom_minimum_size = Vector2(200, 36)
+	_weight_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_weight_slider.tooltip_text = _WEIGHT_TOOLTIP
+	_weight_slider.value_changed.connect(_on_weight_changed)
+	row.add_child(_weight_slider)
+
+	_weight_value_label = Label.new()
+	_weight_value_label.custom_minimum_size = Vector2(60, 0)
+	_weight_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_weight_value_label.add_theme_font_size_override("font_size", 18)
+	_weight_value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	_weight_value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_weight_value_label)
+
+
+func _build_gear_row(label_text: String, tooltip: String,
+		option_labels: Array[String], level_idx: int) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	add_child(row)
+
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size = Vector2(80, 0)
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_STOP
+	label.tooltip_text = tooltip
+	row.add_child(label)
+
+	var buttons: Array[Button] = []
+	for i: int in option_labels.size():
+		var btn := Button.new()
+		btn.text = option_labels[i]
+		btn.custom_minimum_size = Vector2(92, 40)
+		btn.add_theme_font_size_override("font_size", 15)
+		btn.tooltip_text = tooltip
+		SoundManager.wire_button(btn)
+		btn.pressed.connect(_on_gear_pressed.bind(level_idx, i))
+		row.add_child(btn)
+		buttons.append(btn)
+	_gear_buttons[level_idx] = buttons
 
 
 # ── Host API ─────────────────────────────────────────────────────────────────
@@ -195,7 +270,7 @@ func _build_attribute_slider_row(attr_idx: int) -> void:
 # Whether attribute editing is disabled (an active online match locks the build).
 func set_locked(locked: bool) -> void:
 	_locked = locked
-	if not _attr_sliders.is_empty():
+	if _height_slider != null:
 		_refresh()
 
 
@@ -238,27 +313,53 @@ func is_dirty() -> bool:
 	return false
 
 
-# Valid to commit: full budget is only required once a build was actually
-# touched, so a name-only edit over a legacy under-budget preset isn't blocked.
+# Every slider position is a legal v4 build (lateral axes, coercion-validated),
+# so there is nothing to gate. Kept for the host-API contract.
 func is_valid() -> bool:
-	return not _builds_changed() or _all_full_budget()
+	return true
 
 
 # ── Interaction ──────────────────────────────────────────────────────────────
 
-func _on_slider_changed(value: float, attr_idx: int) -> void:
+func _on_height_changed(value: float) -> void:
 	if _active < 0 or _active >= _working.size():
 		return
-	(_working[_active]["levels"] as Array)[attr_idx] = int(value)
+	# Preserve the FRAME across the height change: a lean build stays lean as
+	# it grows instead of snapping against the new band edge.
+	var levels: Array = _working[_active]["levels"]
+	var old_h: int = int(levels[0])
+	var old_w: int = int(levels[1])
+	var bmi: float = 703.0 * float(old_w) / float(old_h * old_h)
+	var new_h: int = int(value)
+	levels[0] = new_h
+	levels[1] = PlayerAttributes.coerce_weight(new_h,
+			PlayerAttributes.weight_for_bmi(new_h, bmi))
+	_refresh()
+	changed.emit()
+
+
+func _on_weight_changed(value: float) -> void:
+	if _locked or _active < 0 or _active >= _working.size():
+		return
+	var levels: Array = _working[_active]["levels"]
+	levels[1] = PlayerAttributes.coerce_weight(int(levels[0]), int(value))
+	_refresh()
+	changed.emit()
+
+
+func _on_gear_pressed(level_idx: int, option: int) -> void:
+	if _locked or _active < 0 or _active >= _working.size():
+		return
+	var levels: Array = _working[_active]["levels"]
+	if int(levels[level_idx]) == option:
+		return
+	levels[level_idx] = option
 	_refresh()
 	changed.emit()
 
 
 func _on_chip_pressed(index: int) -> void:
 	if index == _active or index < 0 or index >= _working.size():
-		return
-	if not _can_leave_active():
-		_refresh()  # re-assert disabled/active states; the switch is rejected
 		return
 	_active = index
 	_load_active_into_name_field()
@@ -267,7 +368,7 @@ func _on_chip_pressed(index: int) -> void:
 
 
 func _on_new_pressed() -> void:
-	if _working.size() >= PlayerPrefs.MAX_PRESETS or not _can_leave_active() or _locked:
+	if _working.size() >= PlayerPrefs.MAX_PRESETS or _locked:
 		return
 	var copy_levels: Array[int] = _dup_levels(_working[_active]["levels"])
 	_working.append({"name": _default_preset_name(), "levels": copy_levels})
@@ -317,33 +418,44 @@ func _rebuild_chips() -> void:
 		_chip_buttons.append(chip)
 
 
-# Refresh sliders, value labels, points readout, chip states, and button enables
+# Refresh sliders, value labels, status readout, chip states, and button enables
 # from the working model. Does NOT touch the name field (avoids clobbering typing
 # / focus) — that's done by _load_active_into_name_field on preset switches.
 func _refresh() -> void:
-	if _attr_sliders.is_empty() or _active < 0 or _active >= _working.size():
+	if _height_slider == null or _active < 0 or _active >= _working.size():
 		return
 	var levels: Array = _working[_active]["levels"]
-	for i: int in _attr_sliders.size():
-		_attr_sliders[i].set_value_no_signal(levels[i])
-		_attr_sliders[i].editable = not _locked
-		_attr_value_labels[i].text = str(levels[i])
+	var h: int = int(levels[0])
+	var w: int = int(levels[1])
+	_height_slider.set_value_no_signal(h)
+	_height_slider.editable = not _locked
+	_height_value_label.text = PlayerAttributes.inches_label(h)
+	# Bounds first, then the value — setting a value outside the slider's
+	# current range would clamp it before the new bounds land.
+	_weight_slider.min_value = PlayerAttributes.weight_min(h)
+	_weight_slider.max_value = PlayerAttributes.weight_max(h)
+	_weight_slider.set_value_no_signal(w)
+	_weight_slider.editable = not _locked
+	_weight_value_label.text = "%d lbs" % w
 
-	var spent: int = _spend(levels)
-	_points_label.text = "Points: %d / %d" % [spent, PlayerAttributes.BUDGET]
-	_points_label.add_theme_color_override("font_color",
-			MenuStyle.TEXT_BODY if spent == PlayerAttributes.BUDGET else MenuStyle.DANGER)
+	for level_idx: int in _gear_buttons:
+		var buttons: Array[Button] = _gear_buttons[level_idx]
+		var opt: int = clampi(int(levels[level_idx]), 0, buttons.size() - 1)
+		for i: int in buttons.size():
+			MenuStyle.apply_tab_button(buttons[i], i == opt)
+			buttons[i].disabled = _locked and i != opt
+
+	_status_label.text = "%s  ·  %d lbs" % [PlayerAttributes.inches_label(h), w]
+	_status_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 
 	_lock_label.visible = _locked
 	_name_field.editable = not _locked
-	_new_btn.disabled = _locked or _working.size() >= PlayerPrefs.MAX_PRESETS or not _can_leave_active()
+	_new_btn.disabled = _locked or _working.size() >= PlayerPrefs.MAX_PRESETS
 	_delete_btn.disabled = _locked or _working.size() <= 1
 
-	var can_leave: bool = _can_leave_active()
 	for i: int in _chip_buttons.size():
 		MenuStyle.apply_tab_button(_chip_buttons[i], i == _active)
-		# Can't jump off a half-spent build; the active chip stays clickable.
-		_chip_buttons[i].disabled = _locked or (i != _active and not can_leave)
+		_chip_buttons[i].disabled = _locked and i != _active
 
 
 func _load_active_into_name_field() -> void:
@@ -357,7 +469,7 @@ func _read_prefs_working() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for p: Dictionary in PlayerPrefs.get_presets():
 		var a: PlayerAttributes = p["attrs"]
-		var levels: Array[int] = [a.speed, a.agility, a.hands, a.size, a.physical, a.shot]
+		var levels: Array[int] = [a.height, a.weight, a.profile, a.curve, a.flex, a.length]
 		out.append({"name": String(p["name"]), "levels": levels})
 	return out
 
@@ -374,34 +486,6 @@ func _dup_levels(levels: Array) -> Array[int]:
 	for v: int in levels:
 		out.append(v)
 	return out
-
-
-func _spend(levels: Array) -> int:
-	var total: int = 0
-	for v: int in levels:
-		total += v
-	return total
-
-
-func _can_leave_active() -> bool:
-	return _spend(_working[_active]["levels"]) == PlayerAttributes.BUDGET
-
-
-func _all_full_budget() -> bool:
-	for e: Dictionary in _working:
-		if _spend(e["levels"]) != PlayerAttributes.BUDGET:
-			return false
-	return true
-
-
-# Whether any build's LEVELS differ from the snapshot (names/active ignored).
-func _builds_changed() -> bool:
-	if _working.size() != _snapshot_working.size():
-		return true
-	for i: int in _working.size():
-		if not _levels_equal(_working[i]["levels"], _snapshot_working[i]["levels"]):
-			return true
-	return false
 
 
 func _levels_equal(a: Array, b: Array) -> bool:

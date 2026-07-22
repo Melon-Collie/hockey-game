@@ -178,7 +178,7 @@ const AA_LABELS: Array[String] = [
 
 const REBINDABLE_ACTIONS: PackedStringArray = [
 	"move_up", "move_down", "move_left", "move_right", "sprint", "brake",
-	"shoot", "quick_shot", "slapshot", "hit", "block", "elevation_up", "elevation_down",
+	"shoot", "quick_pass", "slapshot", "hit", "block", "elevation_up", "elevation_down",
 	"stick_lift",
 ]
 
@@ -187,15 +187,17 @@ var jersey_number: int = 10
 var is_left_handed: bool = true
 var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
 
-# Per-player attribute levels on a 1..5 scale (3 = medium = baseline). Default
-# to medium across the board so a fresh install plays identically to the
-# pre-attributes baseline. Builds are point-buy (see PlayerAttributes.BUDGET).
-var attr_speed:    int = PlayerAttributes.LEVEL_MEDIUM
-var attr_agility:  int = PlayerAttributes.LEVEL_MEDIUM
-var attr_hands:    int = PlayerAttributes.LEVEL_MEDIUM
-var attr_size:     int = PlayerAttributes.LEVEL_MEDIUM
-var attr_physical: int = PlayerAttributes.LEVEL_MEDIUM
-var attr_shot:     int = PlayerAttributes.LEVEL_MEDIUM
+# Per-player build (attributes v4, body + gear): a free HEIGHT in inches
+# (5'8"..6'7"), a free WEIGHT in lbs (clamped to the height's BMI band), and
+# four gear slots (0/1/2, 1 = balanced). Every axis is lateral — validation is
+# coercion, not rejection. Default is the neutral build (6'1"/201, balanced)
+# so a fresh install plays identically to the shipped baseline.
+var attr_height:  int = PlayerAttributes.HEIGHT_MEDIUM
+var attr_weight:  int = int(PlayerAttributes.NEUTRAL_WEIGHT_LBS)
+var attr_profile: int = PlayerAttributes.GEAR_BALANCED
+var attr_curve:   int = PlayerAttributes.GEAR_BALANCED
+var attr_flex:    int = PlayerAttributes.GEAR_BALANCED
+var attr_length:  int = PlayerAttributes.GEAR_BALANCED
 
 # Named attribute-build presets. The player keeps up to MAX_PRESETS builds and
 # switches which one is ACTIVE; the flat attr_* fields above always mirror the
@@ -208,11 +210,6 @@ var attr_shot:     int = PlayerAttributes.LEVEL_MEDIUM
 const MAX_PRESETS: int = 4
 const PRESET_NAME_MAX_LEN: int = 16
 const DEFAULT_PRESET_NAME: String = "Default"
-# Trim order for over-budget repair (indices into PlayerAttributes.Attribute):
-# shed the non-identity axes (Hands, Physical — the two seeded by the 4→6
-# migration) first, then the rest. Shared by the flat-build choke point
-# (_enforce_attr_budget) and the per-preset load trim (_parse_stored_presets).
-const ATTR_TRIM_ORDER: PackedInt32Array = [2, 4, 0, 1, 3, 5]
 var attr_presets: Array[Dictionary] = []
 var attr_active_preset: int = 0
 var master_volume: float = 0.5
@@ -401,29 +398,23 @@ func save() -> void:
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
-	cfg.set_value("player", "attr_speed",    attr_speed)
-	cfg.set_value("player", "attr_agility",  attr_agility)
-	cfg.set_value("player", "attr_hands",    attr_hands)
-	cfg.set_value("player", "attr_size",     attr_size)
-	cfg.set_value("player", "attr_physical", attr_physical)
-	cfg.set_value("player", "attr_shot",     attr_shot)
-	# Marks the values above as already on the six-attribute scale so _load()
-	# doesn't re-run the 1..3 → 1..5 or the four → six migration on them.
-	cfg.set_value("player", "attr_scale_version", 3)
-	# Presets are stored in the same version-3 six-attribute format. The flat
-	# attr_* keys above remain the active build's mirror for backward compat.
+	cfg.set_value("player", "attr_height",  attr_height)
+	cfg.set_value("player", "attr_weight",  attr_weight)
+	cfg.set_value("player", "attr_profile", attr_profile)
+	cfg.set_value("player", "attr_curve",   attr_curve)
+	cfg.set_value("player", "attr_flex",    attr_flex)
+	cfg.set_value("player", "attr_length",  attr_length)
+	# Marks the values above as already on the v4 body+gear model so _load()
+	# doesn't re-run the tier / six-attribute migrations on them.
+	cfg.set_value("player", "attr_scale_version", 5)
+	# Presets are stored in the same version-5 native format. The flat attr_* keys
+	# above remain the active build's mirror for backward compat.
 	var stored_presets: Array = []
 	for p: Dictionary in attr_presets:
 		var a: PlayerAttributes = p["attrs"]
-		stored_presets.append({
-			"name":     p["name"],
-			"speed":    a.speed,
-			"agility":  a.agility,
-			"hands":    a.hands,
-			"size":     a.size,
-			"physical": a.physical,
-			"shot":     a.shot,
-		})
+		var stored: Dictionary = a.to_dict()
+		stored["name"] = p["name"]
+		stored_presets.append(stored)
 	cfg.set_value("player", "attr_presets", stored_presets)
 	cfg.set_value("player", "attr_active_preset", attr_active_preset)
 	cfg.set_value("audio", "master_volume", master_volume)
@@ -968,42 +959,65 @@ func _load() -> void:
 		# next lobby join.
 		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
-		if attr_ver >= 3:
-			attr_speed    = _clamp_attr(int(cfg.get_value("player", "attr_speed",    PlayerAttributes.LEVEL_MEDIUM)))
-			attr_agility  = _clamp_attr(int(cfg.get_value("player", "attr_agility",  PlayerAttributes.LEVEL_MEDIUM)))
-			attr_hands    = _clamp_attr(int(cfg.get_value("player", "attr_hands",    PlayerAttributes.LEVEL_MEDIUM)))
-			attr_size     = _clamp_attr(int(cfg.get_value("player", "attr_size",     PlayerAttributes.LEVEL_MEDIUM)))
-			attr_physical = _clamp_attr(int(cfg.get_value("player", "attr_physical", PlayerAttributes.LEVEL_MEDIUM)))
-			attr_shot     = _clamp_attr(int(cfg.get_value("player", "attr_shot",     PlayerAttributes.LEVEL_MEDIUM)))
+		if attr_ver >= 5:
+			# Native v4 body+gear model. Funnel through set_player_attributes so
+			# every axis coerces (weight into the height's band, gear into 0..2).
+			set_player_attributes(PlayerAttributes.new(
+					int(cfg.get_value("player", "attr_height", PlayerAttributes.HEIGHT_MEDIUM)),
+					int(cfg.get_value("player", "attr_weight", 0)),
+					int(cfg.get_value("player", "attr_profile", PlayerAttributes.GEAR_BALANCED)),
+					int(cfg.get_value("player", "attr_curve",   PlayerAttributes.GEAR_BALANCED)),
+					int(cfg.get_value("player", "attr_flex",    PlayerAttributes.GEAR_BALANCED)),
+					int(cfg.get_value("player", "attr_length",  PlayerAttributes.GEAR_BALANCED))))
+		elif attr_ver == 4:
+			# v4-era save: height + three tiers. Deterministic map onto body+gear
+			# (PlayerAttributes.migrate_tiers — Checking→frame, Skating→profile, …).
+			set_player_attributes(PlayerAttributes.migrate_tiers(
+					int(cfg.get_value("player", "attr_height", PlayerAttributes.HEIGHT_MEDIUM)),
+					int(cfg.get_value("player", "attr_skating",  2)),
+					int(cfg.get_value("player", "attr_skill",    2)),
+					int(cfg.get_value("player", "attr_checking", 2))))
 		else:
-			# Build a four-attribute (Speed/Agility/Size/Skill) intermediate from
-			# whichever older format is on disk, then split it into six below.
+			# Any pre-v4 save is on the legacy six-attribute scale (or an even older
+			# 1..3 / four-attribute one). Rebuild a v3 six-attribute build via the old
+			# migration chain, then map it to the body+gear model with migrate_legacy.
 			var sp: int
 			var ag: int
+			var ha: int
 			var sz: int
-			var sk: int
-			if attr_ver >= 2:
-				# Already on the 1..5 / Skill-renamed scale.
-				sp = _clamp_attr(int(cfg.get_value("player", "attr_speed",   PlayerAttributes.LEVEL_MEDIUM)))
-				ag = _clamp_attr(int(cfg.get_value("player", "attr_agility", PlayerAttributes.LEVEL_MEDIUM)))
-				sz = _clamp_attr(int(cfg.get_value("player", "attr_size",    PlayerAttributes.LEVEL_MEDIUM)))
-				sk = _clamp_attr(int(cfg.get_value("player", "attr_skill",   PlayerAttributes.LEVEL_MEDIUM)))
+			var ph: int
+			var sh: int
+			if attr_ver >= 3:
+				sp = _clamp_1to5(int(cfg.get_value("player", "attr_speed",    3)))
+				ag = _clamp_1to5(int(cfg.get_value("player", "attr_agility",  3)))
+				ha = _clamp_1to5(int(cfg.get_value("player", "attr_hands",    3)))
+				sz = _clamp_1to5(int(cfg.get_value("player", "attr_size",     3)))
+				ph = _clamp_1to5(int(cfg.get_value("player", "attr_physical", 3)))
+				sh = _clamp_1to5(int(cfg.get_value("player", "attr_shot",     3)))
 			else:
-				# Legacy 1..3 scale (medium = 2) → 1..5 (medium = 3) via new = 2·old − 1,
-				# and the renamed Strength → Skill axis. Endpoints map cleanly:
-				# old-1 → 1, old-2 → 3, old-3 → 5.
-				sp = _migrate_legacy_level(int(cfg.get_value("player", "attr_speed",    2)))
-				ag = _migrate_legacy_level(int(cfg.get_value("player", "attr_agility",  2)))
-				sz = _migrate_legacy_level(int(cfg.get_value("player", "attr_size",     2)))
-				sk = _migrate_legacy_level(int(cfg.get_value("player", "attr_strength", 2)))
-			_migrate_four_to_six(sp, ag, sz, sk)
-		# One choke point: whichever branch ran above, the resulting build must be
-		# a legal point-buy spread before anything reads it (free play, hosting,
-		# the picker). Legacy migration and hand-edited cfgs can both exceed BUDGET.
-		# Runs BEFORE the presets load so a pre-presets save seeds its Default
-		# preset from the already-trimmed build; stored presets get the same
-		# per-entry trim in _parse_stored_presets.
-		_enforce_attr_budget()
+				# v1 (1..3) / v2 (1..5, Skill-renamed) four-attribute saves: rebuild the
+				# Speed/Agility/Size/Skill intermediate, seeding Hands/Physical at medium
+				# and using Skill for Shot, matching the old four→six split.
+				var sk: int
+				if attr_ver >= 2:
+					sp = _clamp_1to5(int(cfg.get_value("player", "attr_speed",   3)))
+					ag = _clamp_1to5(int(cfg.get_value("player", "attr_agility", 3)))
+					sz = _clamp_1to5(int(cfg.get_value("player", "attr_size",    3)))
+					sk = _clamp_1to5(int(cfg.get_value("player", "attr_skill",   3)))
+				else:
+					sp = _migrate_legacy_level(int(cfg.get_value("player", "attr_speed",    2)))
+					ag = _migrate_legacy_level(int(cfg.get_value("player", "attr_agility",  2)))
+					sz = _migrate_legacy_level(int(cfg.get_value("player", "attr_size",     2)))
+					sk = _migrate_legacy_level(int(cfg.get_value("player", "attr_strength", 2)))
+				ha = 3
+				ph = 3
+				sh = sk
+			set_player_attributes(PlayerAttributes.migrate_legacy(sp, ag, ha, sz, ph, sh))
+		# One choke point: whichever branch ran above, the flat build re-coerces
+		# through the constructor (weight into the height's band, gear into range)
+		# before anything reads it. Runs BEFORE the presets load so a pre-presets
+		# save seeds its Default preset from the already-repaired build.
+		_enforce_attr_legal()
 		# Load the preset list (validated + clamped). If the save predates presets
 		# the array is empty here; _finalize_presets() seeds a Default from the flat
 		# build below. When presets ARE present they are authoritative for the
@@ -1098,6 +1112,17 @@ func _load() -> void:
 				bindings[action] = {"type": "key", "physical_keycode": cfg.get_value("bindings", action + "_code", 0)}
 			elif t == "mouse":
 				bindings[action] = {"type": "mouse", "button_index": cfg.get_value("bindings", action + "_code", 0)}
+		# Action rename (quick_shot → quick_pass): the quick-pass action was renamed
+		# off "quick_shot" so it stops reading as a shot. A config predating the
+		# rename stored the bind under the old key — adopt it so a player's custom
+		# quick-pass key survives the rename instead of resetting to the E default.
+		# (The old key is left in the file; it's simply never read again.)
+		if not bindings.has("quick_pass"):
+			var old_qp_type: String = cfg.get_value("bindings", "quick_shot_type", "")
+			if old_qp_type == "key":
+				bindings["quick_pass"] = {"type": "key", "physical_keycode": cfg.get_value("bindings", "quick_shot_code", 0)}
+			elif old_qp_type == "mouse":
+				bindings["quick_pass"] = {"type": "mouse", "button_index": cfg.get_value("bindings", "quick_shot_code", 0)}
 		# Control-scheme swap (scheme_version 1): Hit takes Ctrl, Block moves to C.
 		# Block was moved off Ctrl to free it for the new Hit button. A config
 		# predating the swap that still has Block on its old Ctrl default is
@@ -1130,25 +1155,23 @@ func _load() -> void:
 
 
 func get_player_attributes() -> PlayerAttributes:
-	# Mirror the host-side joiner validation (NetworkManager.request_join): a build
-	# that somehow exceeds the point-buy budget falls back to all-medium rather
-	# than handing the sim an illegal spread. _load()/_enforce_attr_budget already
-	# trims, so this is a defensive net covering any other mutation path.
-	if not PlayerAttributes.is_within_budget(
-			attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot):
-		return PlayerAttributes.all_medium()
-	return PlayerAttributes.new(attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot)
+	# Mirror the host-side joiner validation (NetworkManager.request_join): the
+	# constructor coerces every axis (weight into the height's band, gear into
+	# range), so a hand-edited or corrupt flat build lands on the nearest legal
+	# body instead of leaking out-of-band values into the sim.
+	return PlayerAttributes.new(attr_height, attr_weight,
+			attr_profile, attr_curve, attr_flex, attr_length)
 
 
 func set_player_attributes(attrs: PlayerAttributes) -> void:
 	if attrs == null:
 		return
-	attr_speed    = attrs.speed
-	attr_agility  = attrs.agility
-	attr_hands    = attrs.hands
-	attr_size     = attrs.size
-	attr_physical = attrs.physical
-	attr_shot     = attrs.shot
+	attr_height  = attrs.height
+	attr_weight  = attrs.weight
+	attr_profile = attrs.profile
+	attr_curve   = attrs.curve
+	attr_flex    = attrs.flex
+	attr_length  = attrs.length
 	# The active preset IS the flat build — editing the live build (free-play
 	# picker Apply) edits the active preset. Guarded for the pre-_finalize window.
 	if attr_active_preset >= 0 and attr_active_preset < attr_presets.size():
@@ -1217,20 +1240,26 @@ func delete_preset(index: int) -> void:
 
 # Bulk-replace the whole preset list and active index in one shot — the commit
 # path for the picker panel, which edits a working copy and pushes it back on
-# Apply. Each entry is {"name": String, "levels": Array[int]} in Attribute enum
-# order (Speed, Agility, Hands, Size, Physical, Shot). Ignores entries that
-# don't carry six levels and never leaves the list empty (a no-op if nothing
-# usable is supplied). Callers persist with save() afterward.
+# Apply. Each entry is {"name": String, "levels": Array[int]} in the order
+# [height, skating, skill, checking]. Ignores entries that don't carry four
+# levels and never leaves the list empty (a no-op if nothing usable is
+# supplied). Callers persist with save() afterward.
 func set_all_presets(entries: Array, active: int) -> void:
 	var out: Array[Dictionary] = []
 	for entry: Variant in entries:
 		if not (entry is Dictionary):
 			continue
 		var lv: Array = (entry as Dictionary).get("levels", [])
-		if lv.size() < 6:
+		if lv.size() < 2:
 			continue
+		# Canonical levels order: [height, weight, profile, curve, flex, length].
+		# Missing gear entries (a short array) default to balanced.
 		var attrs := PlayerAttributes.from_levels(
-				int(lv[0]), int(lv[1]), int(lv[2]), int(lv[3]), int(lv[4]), int(lv[5]))
+				int(lv[0]), int(lv[1]),
+				int(lv[2]) if lv.size() > 2 else PlayerAttributes.GEAR_BALANCED,
+				int(lv[3]) if lv.size() > 3 else PlayerAttributes.GEAR_BALANCED,
+				int(lv[4]) if lv.size() > 4 else PlayerAttributes.GEAR_BALANCED,
+				int(lv[5]) if lv.size() > 5 else PlayerAttributes.GEAR_BALANCED)
 		out.append(_make_preset(String((entry as Dictionary).get("name", DEFAULT_PRESET_NAME)), attrs))
 		if out.size() >= MAX_PRESETS:
 			break
@@ -1241,8 +1270,8 @@ func set_all_presets(entries: Array, active: int) -> void:
 	_sync_flat_from_active()
 
 
-func _clamp_attr(v: int) -> int:
-	return clampi(v, PlayerAttributes.LEVEL_MIN, PlayerAttributes.LEVEL_MAX)
+func _clamp_1to5(v: int) -> int:
+	return clampi(v, 1, 5)
 
 
 # Guarantees at least one preset exists and the flat build matches the active
@@ -1261,12 +1290,12 @@ func _sync_flat_from_active() -> void:
 	if attr_active_preset < 0 or attr_active_preset >= attr_presets.size():
 		return
 	var a: PlayerAttributes = attr_presets[attr_active_preset]["attrs"]
-	attr_speed    = a.speed
-	attr_agility  = a.agility
-	attr_hands    = a.hands
-	attr_size     = a.size
-	attr_physical = a.physical
-	attr_shot     = a.shot
+	attr_height  = a.height
+	attr_weight  = a.weight
+	attr_profile = a.profile
+	attr_curve   = a.curve
+	attr_flex    = a.flex
+	attr_length  = a.length
 
 
 func _make_preset(preset_name: String, attrs: PlayerAttributes) -> Dictionary:
@@ -1276,8 +1305,8 @@ func _make_preset(preset_name: String, attrs: PlayerAttributes) -> Dictionary:
 # Independent copy so a preset never shares a PlayerAttributes instance with a
 # caller (which could mutate it out from under us).
 func _copy_attrs(attrs: PlayerAttributes) -> PlayerAttributes:
-	return PlayerAttributes.from_levels(attrs.speed, attrs.agility, attrs.hands,
-			attrs.size, attrs.physical, attrs.shot)
+	return PlayerAttributes.from_levels(attrs.height, attrs.weight,
+			attrs.profile, attrs.curve, attrs.flex, attrs.length)
 
 
 func _default_preset_name() -> String:
@@ -1291,13 +1320,11 @@ func _sanitize_preset_name(preset_name: String) -> String:
 	return n.substr(0, PRESET_NAME_MAX_LEN)
 
 
-# Rebuilds the runtime preset list from the stored array-of-dicts, clamping each
-# level, trimming each build to the point-buy budget, and capping at MAX_PRESETS.
-# Tolerates malformed entries (skips non-dicts) so a corrupt save degrades to
-# fewer presets rather than crashing. The per-entry budget trim matters because
-# presets are authoritative for the flat build (_finalize_presets syncs flat ←
-# active AFTER _enforce_attr_budget ran), so a hand-edited over-budget preset
-# would otherwise sneak past the load-time choke point.
+# Rebuilds the runtime preset list from the stored array-of-dicts, capping at
+# MAX_PRESETS. Native entries (height/skating/skill/checking) are read directly;
+# a legacy six-attribute preset dict is migrated via PlayerAttributes.from_dict.
+# An illegal build resets to all-average. Tolerates malformed entries (skips
+# non-dicts) so a corrupt save degrades to fewer presets rather than crashing.
 func _parse_stored_presets(raw: Variant) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	if not (raw is Array):
@@ -1306,49 +1333,30 @@ func _parse_stored_presets(raw: Variant) -> Array[Dictionary]:
 		if not (entry is Dictionary):
 			continue
 		var d: Dictionary = entry
-		var attrs := PlayerAttributes.trimmed_to_budget(
-				int(d.get("speed",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(d.get("agility",  PlayerAttributes.LEVEL_MEDIUM)),
-				int(d.get("hands",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(d.get("size",     PlayerAttributes.LEVEL_MEDIUM)),
-				int(d.get("physical", PlayerAttributes.LEVEL_MEDIUM)),
-				int(d.get("shot",     PlayerAttributes.LEVEL_MEDIUM)),
-				ATTR_TRIM_ORDER)
+		# from_dict migrates tier-era and six-attribute preset dicts and the
+		# constructor coerces every axis, so no legality pass is needed.
+		var attrs := PlayerAttributes.from_dict(d)
 		out.append(_make_preset(String(d.get("name", DEFAULT_PRESET_NAME)), attrs))
 		if out.size() >= MAX_PRESETS:
 			break
 	return out
 
 
-# Remaps a legacy 1..3 attribute level onto the 1..5 scale (medium 2 → 3).
+# Remaps a legacy 1..3 attribute level onto the 1..5 scale (medium 2 → 3). Used
+# only by the pre-v2 prefs migration to reconstruct the six-attribute
+# intermediate that migrate_legacy then maps to the height/tier model.
 func _migrate_legacy_level(old: int) -> int:
-	return _clamp_attr(2 * clampi(old, 1, 3) - 1)
+	return _clamp_1to5(2 * clampi(old, 1, 3) - 1)
 
 
-# Splits a legacy four-attribute build (Speed/Agility/Size/Skill on the 1..5
-# scale) into the six-attribute scale. Skill is the scoring heir → Shot; Hands
-# and Physical are new axes seeded at medium. The result can exceed BUDGET (a
-# 5/5/5/5 legacy build → 5/5/3/5/3/5 = 26); _enforce_attr_budget() (called once
-# after the load/migrate branch) trims it. Persisted as version 3 on next save().
-func _migrate_four_to_six(sp: int, ag: int, sz: int, sk: int) -> void:
-	attr_speed    = sp
-	attr_agility  = ag
-	attr_size     = sz
-	attr_shot     = sk
-	attr_hands    = PlayerAttributes.LEVEL_MEDIUM
-	attr_physical = PlayerAttributes.LEVEL_MEDIUM
-
-
-# Guarantee the loaded/migrated build respects the point-buy budget. Per-level
-# clamping bounds each axis but not the sum, so a legacy 4→6 split (two new axes
-# seeded at medium) or a hand-edited / corrupt cfg can exceed BUDGET — which,
-# unchecked, let an offline or HOSTING player carry an over-budget build (the
-# joiner gate in NetworkManager only validates REMOTE peers). Trim deterministically,
-# shedding the non-identity axes (Hands=2, Physical=4) first.
-func _enforce_attr_budget() -> void:
-	set_player_attributes(PlayerAttributes.trimmed_to_budget(
-			attr_speed, attr_agility, attr_hands, attr_size, attr_physical, attr_shot,
-			ATTR_TRIM_ORDER))
+# Re-coerce the loaded/migrated flat build through the constructor (weight into
+# the height's BMI band, gear into 0..2). A hand-edited / corrupt cfg could
+# carry out-of-band values, which unchecked would let an offline or HOSTING
+# player field them (the joiner gate in NetworkManager only coerces REMOTE
+# peers). Funnel through set_player_attributes so the active preset mirror
+# stays in sync.
+func _enforce_attr_legal() -> void:
+	set_player_attributes(get_player_attributes())
 
 
 func is_tutorial_complete(id: String) -> bool:

@@ -76,8 +76,15 @@ static func project_blade(
 	# CLOSE regime: target is inside the default stick reach. The hand would
 	# rise so the stick tilts more vertically, shortening its horizontal reach
 	# to hit the target exactly. If it can't rise far enough (hand_y_max clamp),
-	# the blade overshoots along the aim line at the minimum stick_horiz.
+	# the blade overshoots along the aim line at the minimum stick_horiz —
+	# hand_y_max IS the inner boundary: sqrt(S² − drop²) grows super-linearly
+	# with stick length near the vertical limit, so a long stick's blade can't
+	# work in tight to the body while a short one plays the phone booth. The
+	# AIM is clamped to the same angular ROM the FAR regime enforces — the
+	# wrists don't gain articulation because the puck is close; without this
+	# clamp a slowly-swept cursor could walk the blade fully behind the body.
 	if r < stick_horiz_at_rest:
+		aim_dir = _clamp_aim_to_rom(aim_dir, blade_side_sign, cfg)
 		var ideal_drop_sq: float = stick_length * stick_length - r * r
 		var ideal_hand_y: float = blade_y + sqrt(maxf(ideal_drop_sq, 0.0))
 		var hand_y: float = minf(ideal_hand_y, cfg.hand_y_max)
@@ -162,6 +169,21 @@ static func solve(
 		var hand_y: float = cfg.blade_y + sqrt(maxf(drop_sq, 0.0))
 		out.hand = Vector3(shoulder_xz.x, hand_y, shoulder_xz.y)
 	return out
+
+# Clamp an aim direction (unit, from the shoulder) to the asymmetric angular
+# ROM — the same limits the FAR regime applies to the hand displacement.
+# Returns the input unchanged when already inside the ROM, else the boundary
+# ray on the exceeded side (matching FAR's clamped-world-angle behavior: past
+# the limit the blade holds at the boundary rather than wrapping).
+static func _clamp_aim_to_rom(aim_dir: Vector2, blade_side_sign: float, cfg: Config) -> Vector2:
+	var angle_to_forehand: float = atan2(aim_dir.x, -aim_dir.y) * blade_side_sign
+	var clamped: float = clampf(
+			angle_to_forehand, -cfg.rom_backhand_angle_max, cfg.rom_forehand_angle_max)
+	if clamped == angle_to_forehand:
+		return aim_dir
+	var world_angle: float = clamped * blade_side_sign
+	return Vector2(sin(world_angle), -cos(world_angle))
+
 
 # Horizontal stick projection at a given hand Y. Clamped to a tiny positive
 # value so the solver never divides by zero even at edge cases where the

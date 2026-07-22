@@ -68,6 +68,43 @@ func test_sprint_raises_top_speed() -> void:
 	assert_almost_eq(sprint_speed, cfg.max_speed * cfg.sprint_max_speed_multiplier, 0.2,
 		"sprint cap is max_speed × sprint_max_speed_multiplier")
 
+func test_sprint_with_puck_waives_most_of_carry_penalty() -> void:
+	# Sprinting with the puck is heads-down / straight-line, so most of the carry
+	# speed penalty is waived (sprint_carry_penalty_bypass) — that's what lets a
+	# fast carrier separate. A sprinting carrier tops out higher than a cruising
+	# one, near max_speed × sprint × the bypassed carry mult.
+	var cfg := _default_cfg()
+	cfg.sprint_max_speed_multiplier = 1.3
+	cfg.sprint_thrust_multiplier = 1.2
+	cfg.puck_carry_speed_multiplier = 0.85   # 15% cruise carry penalty
+	cfg.sprint_carry_penalty_bypass = 0.6    # waive 60% of it while sprinting
+	var v_cruise := Vector3.ZERO
+	var v_sprint := Vector3.ZERO
+	for i in range(2000):
+		v_cruise = SkaterMovementRules.apply_movement(v_cruise, Vector2(1, 0), 0.0, true, false, 0.01, cfg, false)
+		v_sprint = SkaterMovementRules.apply_movement(v_sprint, Vector2(1, 0), 0.0, true, false, 0.01, cfg, true)
+	var cruise_speed: float = Vector2(v_cruise.x, v_cruise.z).length()
+	var sprint_speed: float = Vector2(v_sprint.x, v_sprint.z).length()
+	assert_gt(sprint_speed, cruise_speed, "sprinting with the puck tops out faster than cruising with it")
+	var eff_carry: float = lerpf(cfg.puck_carry_speed_multiplier, 1.0, cfg.sprint_carry_penalty_bypass)
+	assert_almost_eq(sprint_speed, cfg.max_speed * cfg.sprint_max_speed_multiplier * eff_carry, 0.2,
+		"sprint carry cap = max × sprint × the bypassed carry mult")
+
+func test_sprint_carry_bypass_zero_keeps_full_penalty() -> void:
+	# Default bypass (0.0) leaves the carry penalty fully in place even while
+	# sprinting, so the pre-bypass behavior is preserved for callers that omit it.
+	var cfg := _default_cfg()
+	cfg.sprint_max_speed_multiplier = 1.3
+	cfg.sprint_thrust_multiplier = 1.2
+	cfg.puck_carry_speed_multiplier = 0.85
+	# sprint_carry_penalty_bypass left at its 0.0 default.
+	var v := Vector3.ZERO
+	for i in range(2000):
+		v = SkaterMovementRules.apply_movement(v, Vector2(1, 0), 0.0, true, false, 0.01, cfg, true)
+	var speed: float = Vector2(v.x, v.z).length()
+	assert_almost_eq(speed, cfg.max_speed * cfg.sprint_max_speed_multiplier * cfg.puck_carry_speed_multiplier, 0.2,
+		"no bypass → sprint carry cap keeps the full carry penalty")
+
 func test_sprint_inactive_matches_baseline() -> void:
 	# Default multipliers + sprint_active=false must be a no-op vs the old 7-arg path.
 	var cfg := _default_cfg()
@@ -101,3 +138,77 @@ func test_backward_thrust_scaled_down() -> void:
 		Vector3.ZERO, Vector2(0, 1), 0.0, false, false, 0.1, cfg)
 	# Forward thrust full; backward thrust scaled by backward_thrust_multiplier (0.7)
 	assert_gt(forward.length(), backward.length(), "backward thrust should be weaker than forward")
+
+
+# ── Lateral grip (perpendicular thrust authority — the edges) ─────────────────
+
+func test_grip_one_is_exact_noop() -> void:
+	# grip 1.0 must recompose the thrust bit-identically — the neutral build's
+	# feel is the shipped baseline, not "almost".
+	var cfg := _default_cfg()
+	var gripped := _default_cfg()
+	gripped.lateral_grip = 1.0
+	var vel := Vector3(6, 0, 2)
+	var a: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(0.3, -0.9), 0.5, false, false, 1.0 / 120.0, cfg)
+	var b: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(0.3, -0.9), 0.5, false, false, 1.0 / 120.0, gripped)
+	assert_eq(a, b, "grip 1.0 is the identity")
+
+
+func test_low_grip_widens_the_turn() -> void:
+	# Moving +X, thrusting +Z (perpendicular): low grip redirects less per tick.
+	var cfg := _default_cfg()
+	cfg.lateral_grip = 0.9
+	var vel := Vector3(8, 0, 0)
+	var neutral: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(0, 1), 0.0, false, false, 1.0 / 120.0, _default_cfg())
+	var heavy: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(0, 1), 0.0, false, false, 1.0 / 120.0, cfg)
+	assert_lt(heavy.z, neutral.z, "low grip turns less per tick")
+	assert_almost_eq(heavy.x, neutral.x, 0.0001, "along-motion component untouched")
+	# The perpendicular gain scales exactly by the grip factor.
+	assert_almost_eq(heavy.z, neutral.z * 0.9, 0.0001, "perp thrust scales by grip")
+
+
+func test_grip_does_not_impede_straight_drive_or_slowing() -> void:
+	var cfg := _default_cfg()
+	cfg.lateral_grip = 0.85
+	var vel := Vector3(5, 0, 0)
+	# Thrust dead along the motion: identical to neutral.
+	var straight: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(1, 0), PI / 2.0, false, false, 1.0 / 120.0, cfg)
+	var straight_neutral: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(1, 0), PI / 2.0, false, false, 1.0 / 120.0, _default_cfg())
+	assert_eq(straight, straight_neutral, "parallel thrust passes whole")
+	# Thrust dead against the motion (slowing down): also untouched — grip
+	# limits redirecting momentum, never shedding it.
+	var slow: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(-1, 0), PI / 2.0, false, false, 1.0 / 120.0, cfg)
+	var slow_neutral: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(-1, 0), PI / 2.0, false, false, 1.0 / 120.0, _default_cfg())
+	assert_eq(slow, slow_neutral, "decelerating thrust passes whole")
+
+
+func test_grip_skipped_at_standing_start() -> void:
+	# Below GRIP_MIN_SPEED there is no momentum to fight — full authority, so a
+	# heavy build's first step off the mark is accel's business, not grip's.
+	var cfg := _default_cfg()
+	cfg.lateral_grip = 0.85
+	var from_rest: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3.ZERO, Vector2(0, 1), 0.0, false, false, 1.0 / 120.0, cfg)
+	var from_rest_neutral: Vector3 = SkaterMovementRules.apply_movement(
+		Vector3.ZERO, Vector2(0, 1), 0.0, false, false, 1.0 / 120.0, _default_cfg())
+	assert_eq(from_rest, from_rest_neutral, "standing start ignores grip")
+
+
+func test_high_grip_tightens_the_turn() -> void:
+	# Better edges bite harder: grip above 1.0 redirects more per tick.
+	var cfg := _default_cfg()
+	cfg.lateral_grip = 1.08
+	var vel := Vector3(8, 0, 0)
+	var neutral: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(0, 1), 0.0, false, false, 1.0 / 120.0, _default_cfg())
+	var sharp: Vector3 = SkaterMovementRules.apply_movement(
+		vel, Vector2(0, 1), 0.0, false, false, 1.0 / 120.0, cfg)
+	assert_gt(sharp.z, neutral.z, "high grip turns more per tick")

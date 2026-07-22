@@ -24,6 +24,7 @@ func before_each() -> void:
 func test_initial_state() -> void:
 	assert_almost_eq(ab.cursor_speed_ema, 0.0, 0.001)
 	assert_almost_eq(ab.swing_rotation, 0.0, 0.001)
+	assert_almost_eq(ab.stroke_travel, 0.0, 0.001)
 	assert_eq(ab.prev_intent_pos, Vector3.ZERO)
 	assert_eq(ab.prev_blade_pos_rel_skater, Vector3.ZERO)
 	assert_eq(ab.prev_blade_dir, Vector3.ZERO)
@@ -89,13 +90,50 @@ func test_swing_rotation_accumulates_from_blade_bearing() -> void:
 func test_reset_wrister_zeroes_state_and_seeds_pos() -> void:
 	ab.swing_rotation = 1.2
 	ab.cursor_speed_ema = 900.0
+	ab.stroke_travel = 0.8
 	ab.prev_blade_dir = Vector3(1, 0, 0)
 	ab.reset_wrister(Vector3(0.2, 0.0, 0.1), Vector3(0.25, 0.0, 0.05))
 	assert_almost_eq(ab.swing_rotation, 0.0, 0.001)
 	assert_almost_eq(ab.cursor_speed_ema, 0.0, 0.001)
+	assert_almost_eq(ab.stroke_travel, 0.0, 0.001)
 	assert_eq(ab.prev_blade_dir, Vector3.ZERO)
 	assert_eq(ab.prev_intent_pos, Vector3(0.2, 0.0, 0.1))
 	assert_eq(ab.prev_blade_pos_rel_skater, Vector3(0.25, 0.0, 0.05))
+
+# ── Stroke travel (the power-ceiling gate signal) ─────────────────────────────
+
+func test_stroke_travel_accumulates_blade_path() -> void:
+	# Cursor drags steadily +X while the blade sweeps 0.1 m per tick — the
+	# stroke banks the blade's path length.
+	ab.reset_wrister(Vector3.ZERO, Vector3(1.0, 0.0, 0.0))
+	for i in range(5):
+		ab.tick_wrister_charge(
+				Vector3(10.0 * (i + 1), 0.0, 0.0),
+				Vector3(1.0 + 0.1 * (i + 1), 0.0, 0.0),
+				VARIANCE_DEG, DT, SMOOTHING)
+	assert_almost_eq(ab.stroke_travel, 0.5, 0.001, "blade path sums over the stroke")
+
+func test_stroke_travel_resets_on_direction_reversal() -> void:
+	# Build a stroke, then reverse the cursor: the variance break discards the
+	# banked travel — a wiggle can never accumulate a full stroke.
+	ab.reset_wrister(Vector3.ZERO, Vector3(1.0, 0.0, 0.0))
+	for i in range(5):
+		ab.tick_wrister_charge(
+				Vector3(10.0 * (i + 1), 0.0, 0.0),
+				Vector3(1.0 + 0.1 * (i + 1), 0.0, 0.0),
+				VARIANCE_DEG, DT, SMOOTHING)
+	var built: float = ab.stroke_travel
+	assert_gt(built, 0.4)
+	ab.tick_wrister_charge(Vector3(40.0, 0.0, 0.0), Vector3(1.45, 0.0, 0.0),
+			VARIANCE_DEG, DT, SMOOTHING)  # cursor reverses -X → break
+	assert_lt(ab.stroke_travel, 0.1, "variance break restarts the travel bank")
+
+func test_stroke_travel_per_tick_step_capped() -> void:
+	# A one-tick blade jump across the arc banks only max_travel_step.
+	ab.reset_wrister(Vector3.ZERO, Vector3(1.0, 0.0, 0.0))
+	ab.tick_wrister_charge(Vector3(10.0, 0.0, 0.0), Vector3(-1.0, 0.0, 0.0),
+			VARIANCE_DEG, DT, SMOOTHING, 0.25)
+	assert_almost_eq(ab.stroke_travel, 0.25, 0.001, "teleport step bounded by the budget")
 
 func test_tick_slapper_increments_timer() -> void:
 	ab.tick_slapper(0.016)

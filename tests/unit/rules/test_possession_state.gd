@@ -156,3 +156,40 @@ func test_not_neutral_when_loose_puck_moving_fast() -> void:
 			_resolver([[100, 0], [200, 1]]), 0)  # we passed it
 	assert_eq(result.state, AIPossessionState.State.TRANS_DO,
 			"in-flight pass keeps TRANS state via sticky possession")
+
+
+# ── retrieval_read (the RETRIEVAL upgrade's race gate; breakout plan §A) ─────
+# compute() never returns RETRIEVAL — the TeamBrain upgrades its DZONE result
+# through this read after computing both teams' best intercept times.
+
+func test_compute_never_returns_retrieval_for_loose_puck_in_our_dz() -> void:
+	# The loose-in-our-DZ override stays DZONE at the compute layer; the
+	# posture upgrade is the brain's (it owns the race elections).
+	var snap := _make_snapshot(-1, OUR_NET_Z - 4.0)
+	var result: AIPossessionState.Result = AIPossessionState.compute(
+			snap, TEAM_ID, OUR_NET_Z,
+			_resolver([[100, 0], [200, 1]]), 1)
+	assert_eq(result.state, AIPossessionState.State.DZONE)
+
+
+func test_retrieval_enters_only_on_a_clear_race_win() -> void:
+	# Clear win: our best beats theirs by more than the enter margin.
+	assert_true(AIPossessionState.retrieval_read(1.0, 1.3, false),
+			"a 0.3 s race edge clears the 0.25 s enter margin")
+	# Contested: inside the margin — stay DZONE (a slot scramble is defense).
+	assert_false(AIPossessionState.retrieval_read(1.0, 1.2, false),
+			"a 0.2 s edge is a contested race — no posture")
+	assert_false(AIPossessionState.retrieval_read(1.3, 1.0, false),
+			"losing the race is never a posture")
+
+
+func test_retrieval_hold_margin_is_sticky() -> void:
+	# The same 0.15 s edge that can't ENTER the posture still HOLDS it —
+	# the enter/hold split is what keeps the boundary from flickering.
+	assert_false(AIPossessionState.retrieval_read(1.0, 1.15, false))
+	assert_true(AIPossessionState.retrieval_read(1.0, 1.15, true))
+
+
+func test_retrieval_unreachable_opponents_always_read_as_a_win() -> void:
+	assert_true(AIPossessionState.retrieval_read(2.0, INF, false),
+			"nobody contesting → posture")

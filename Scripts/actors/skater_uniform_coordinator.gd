@@ -442,9 +442,13 @@ func _make_stick_shaft_mat() -> ShaderMaterial:
 
 
 # Paints the blade matte black and (re)builds the team-colored tape band wrapped
-# around the heel→mid of the blade, leaving the toe end bare black. The cosmetic
-# handed tilt lives on the rig (Skater._apply_blade_tilt) so it tracks live
-# handedness flips; the tape, being a child of the blade mesh, inherits it.
+# around the heel→mid of the blade, leaving the toe end bare black. The band's
+# geometry comes from the skater (Skater.build_blade_tape_mesh — a slightly
+# inflated heel→mid slice of the same procedural curved-blade mesh), so it hugs
+# the curve; on a handedness flip Skater._rebuild_blade_mesh regenerates the
+# band mesh in place. The cosmetic tilt lives on the rig
+# (Skater._apply_blade_tilt); the tape, being a child of the blade mesh,
+# inherits it.
 func _rebuild_blade(tape_color: Color) -> void:
 	_blade_mesh.material_override = _make_solid_mat(_BLADE_COLOR, _ROUGH_BLADE)
 
@@ -453,13 +457,7 @@ func _rebuild_blade(tape_color: Color) -> void:
 		_blade_tape.queue_free()
 	_blade_tape = MeshInstance3D.new()
 	_blade_tape.name = "BladeTape"
-	var box := BoxMesh.new()
-	# Slightly proud of the 0.04 × 0.06 × 0.30 blade in face-normal (X) and
-	# height (Y); ~70% of the length (Z), shifted toward the heel (+Z in mesh
-	# space) so the toe end stays bare black.
-	box.size = Vector3(0.046, 0.062, 0.21)
-	_blade_tape.mesh = box
-	_blade_tape.position = Vector3(0.0, 0.0, 0.045)
+	_blade_tape.mesh = _skater.build_blade_tape_mesh()
 	_blade_tape.material_override = _make_solid_mat(tape_color, _ROUGH_CLOTH)
 	_blade_mesh.add_child(_blade_tape)
 

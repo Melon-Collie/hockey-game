@@ -30,6 +30,12 @@ var _controller: SkaterController = null  # tunables, _do_release, _game_state, 
 # intent point through unreachable space while the blade crawls.
 var _smoothed_blade_world: Vector3 = Vector3.ZERO
 var _smoothed_blade_initialized: bool = false
+# Dangle velocity (world XZ, relative to the skater) — the second-order blade's
+# state when max_blade_accel > 0 (see the arrive-law branch in
+# apply_blade_from_mouse). Kept coherent through the first-order and
+# wrister-aim paths so mode transitions never hand the inertia model a stale
+# velocity. Reset with the smoothing baseline.
+var _blade_dangle_vel: Vector3 = Vector3.ZERO
 # Skater world position (XZ) at the previous smoothing tick. The blade-speed cap
 # is applied RELATIVE to the skater: each tick the smoothed blade is first
 # carried along by the skater's own translation, so skating velocity doesn't eat
@@ -75,6 +81,7 @@ func invalidate_configs() -> void:
 # baseline rather than carrying the live smoothed value across the snap.
 func reset_blade_smoothing() -> void:
 	_smoothed_blade_initialized = false
+	_blade_dangle_vel = Vector3.ZERO
 
 # Seed the smoothed-blade baseline to a specific world position so the next solve
 # steps toward the cursor FROM there rather than from a stale value. Called by
@@ -87,6 +94,9 @@ func seed_blade_smoothing(world_pos: Vector3) -> void:
 	_smoothed_blade_world = Vector3(world_pos.x, 0.0, world_pos.z)
 	_prev_skater_pos = Vector3(_skater.global_position.x, 0.0, _skater.global_position.z)
 	_smoothed_blade_initialized = true
+	# The follow-through choreographed the blade directly; the dangle resumes
+	# from rest at the seeded position.
+	_blade_dangle_vel = Vector3.ZERO
 
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
 # Input is treated as a desired blade position. The top hand is solved as a
@@ -149,6 +159,7 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 		_smoothed_blade_world = target_blade_world
 		_prev_skater_pos = skater_pos
 		_smoothed_blade_initialized = true
+		_blade_dangle_vel = Vector3.ZERO
 	_smoothed_blade_world += skater_pos - _prev_skater_pos
 	_smoothed_blade_world.y = 0.0
 	_prev_skater_pos = skater_pos
@@ -182,14 +193,47 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 			if off_len > max_step:
 				off_axis *= max_step / off_len
 			_smoothed_blade_world += on_axis + off_axis
+			# Keep the dangle-velocity state coherent through the aim mode so
+			# exiting a wrister aim doesn't hand the inertia model a stale
+			# velocity from before the wind-up.
+			_blade_dangle_vel = (on_axis + off_axis) / delta
+		elif _controller.max_blade_accel > 0.0:
+			# SECOND-ORDER BLADE (attributes v4 hands model): the stick has
+			# inertia. Dangle velocity chases an arrive-law target — speed
+			# toward the target is bounded by both the tip-speed cap and
+			# sqrt(2·A·dist) (the fastest approach that can still stop on the
+			# target), and the velocity itself may only change at A per second.
+			# Traverse speed is barely touched (the caps are tuned to bind only
+			# at gesture extremes); direction REVERSALS pay the inertia — the
+			# lever seesaw's whole point. No spring, no overshoot: the arrive
+			# law decays approach speed to zero at the target, and the landing
+			# snap below catches the final sub-tick step exactly like the
+			# first-order path did.
+			var accel: float = _controller.max_blade_accel
+			var dist: float = step.length()
+			var desired := Vector3.ZERO
+			if dist > 0.00001:
+				var arrive_speed: float = minf(
+						_controller.max_blade_speed, sqrt(2.0 * accel * dist))
+				desired = step * (arrive_speed / dist)
+			_blade_dangle_vel = _blade_dangle_vel.move_toward(desired, accel * delta)
+			var move: Vector3 = _blade_dangle_vel * delta
+			if move.length() >= dist and _blade_dangle_vel.dot(step) >= 0.0:
+				_smoothed_blade_world = target_blade_world
+			else:
+				_smoothed_blade_world += move
 		else:
+			# First-order path (max_blade_accel 0 = inertia disabled — the
+			# pre-v4 servo, kept bit-exact as the escape hatch).
 			var step_len: float = step.length()
 			if step_len > max_step:
 				# Target is beyond the dangle-speed budget this tick — step toward it.
 				_smoothed_blade_world += step * (max_step / step_len)
+				_blade_dangle_vel = step * (max_step / step_len) / delta
 			else:
 				# Within budget this tick — the blade can reach the target.
 				_smoothed_blade_world = target_blade_world
+				_blade_dangle_vel = step / delta if delta > 0.0 else Vector3.ZERO
 	# else (delta == 0): no wall-clock elapsed, so the blade traverses no ROM.
 	# This is the reconcile final re-apply path (LocalController.reconcile passes
 	# delta 0.0 to re-place the blade in the post-snap body frame). Snapping to

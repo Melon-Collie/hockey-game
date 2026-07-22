@@ -23,6 +23,14 @@ extends CharacterBody3D
 # on opposite sides for L/R) is a tiny resting cup.
 const _BLADE_TOE_LIFT_DEG: float = 4.0
 const _BLADE_FACE_OPEN_DEG: float = 4.0
+# Rigid shaft-follow pitch (see _apply_blade_tilt): the blade mesh pitches by
+# (blade_lie_deg − live shaft angle), so it stays rigidly attached to the shaft
+# through every pose — toe-up through the slapshot wind-up and stick lifts,
+# a slight toe-drag dig when the cursor pulls the blade in close. The clamps
+# bound the read: the dig floor keeps the toe from visibly stabbing through
+# the ice, the ceiling caps the wind-up apex just past shaft-aligned.
+const _BLADE_FOLLOW_PITCH_MIN_DEG: float = -18.0
+const _BLADE_FOLLOW_PITCH_MAX_DEG: float = 100.0
 # Blended in with the scroll-wheel loft level (half strength at LOW, full at
 # HIGH): the loft opens the face upward to "scoop" the puck, so elevation keys
 # off the Z loft far more than the X toe-lift. Eased via _blade_elevation_blend
@@ -53,9 +61,35 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # the shaft meets the blade); the blade mesh extends forward by this distance.
 # The puck plays at the contact point, which is blade_length * 0.5 forward
 # of the Marker3D along its local forward axis (-Z in local, which
-# set_blade_position() orients via look_at each tick). Must match the blade
-# mesh Z size in Scenes/Skater.tscn.
+# set_blade_position() orients via look_at each tick). The visible blade mesh
+# is generated from this length by StickBladeMeshBuilder (_rebuild_blade_mesh)
+# — the BoxMesh in Scenes/Skater.tscn is only a pre-_ready placeholder.
 @export var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
+# Cosmetic blade-mesh geometry (StickBladeMeshBuilder): how deep the curve
+# bows, where along the blade it starts, and how much of the toe rounds off.
+# Pure visuals — contact math reads the Blade marker + blade_length only. A
+# future gear system makes these per-player (the stick "pattern"); until then
+# they're one house pattern for everyone.
+@export var blade_curve_depth: float = 0.022
+@export var blade_curve_start_frac: float = 0.35
+@export var blade_toe_round_frac: float = 0.24
+# Length of the hosel — the tapered throat carrying the heel cross-section up
+# the shaft line (the shaft-follow tilt keeps the blade rigidly at
+# blade_lie_deg to the shaft, so fixed blade-local hosel geometry stays glued
+# to the rendered shaft in every pose). Blade mesh only; the tape band keeps
+# its flat heel cap.
+@export var blade_hosel_length: float = 0.085
+# The stick's built-in lie: the shaft↔ice angle at which the blade sits flat.
+# Derived from the rest pose (hand ~0.87 m above the heel over a
+# sqrt(1.30² − 0.87²) ≈ 0.97 m horizontal run → atan ≈ 42°, i.e. about a
+# real lie 5.5). The shaft-follow pitch reads deviation from this angle.
+@export var blade_lie_deg: float = 42.0
+# Tape band geometry: cross-section growth over the blade, heel overhang (the
+# band's heel cap sits proud of the blade's own — coplanar caps z-fight), and
+# where along the blade the bare toe starts.
+const _BLADE_TAPE_INFLATE_M: float = 0.004
+const _BLADE_TAPE_HEEL_OVERHANG_FRAC: float = -0.02
+const _BLADE_TAPE_END_FRAC: float = 0.62
 @export var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
@@ -186,6 +220,13 @@ var is_local_skater: bool = false
 @onready var stick_mesh: MeshInstance3D = $MeshRoot/UpperBody/StickMesh
 # Made public so SkaterUniformCoordinator can colour the head mesh.
 @onready var helmet: MeshInstance3D = $MeshRoot/UpperBody/Helmet
+
+# Cached blade MeshInstance3D (child of the Blade marker) and the curve sign
+# its procedural mesh was last built with (0 = not built yet). The tilt pass
+# runs at render rate, so the node lookup is resolved once in
+# _rebuild_blade_mesh rather than per frame.
+var _blade_mesh_instance: MeshInstance3D = null
+var _blade_mesh_curve_sign: float = 0.0
 
 # Top hand: the moving IK output. Positioned by the controller each tick.
 var top_hand: Marker3D = null
@@ -875,30 +916,106 @@ func _position_hand_markers() -> void:
 	top_hand.position        = Vector3(shoulder.position.x, 0.0, 0.0)
 	bottom_shoulder.position = Vector3(-top_hand_side_sign * shoulder_offset, shoulder_height, 0.0)
 	bottom_hand.position     = Vector3(bottom_shoulder.position.x, 0.0, 0.0)
+	# The procedural blade mesh bakes the curve direction in, so a handedness
+	# change (including the first call from _ready, when the sign is still 0)
+	# rebuilds it. No-ops on the attribute-reapply path (same sign).
+	var curve_sign: float = 1.0 if is_left_handed else -1.0
+	if curve_sign != _blade_mesh_curve_sign:
+		_rebuild_blade_mesh()
 	_apply_blade_tilt()
 
 
-# Sets the cosmetic toe-lift + handedness-signed face-open loft on the blade
-# *mesh* (the Blade marker itself is untouched, so puck-contact math is
-# unaffected). Idempotent: recomputed from identity each call, scale preserved,
-# so the tape-band child rides along. Safe before _ready() — exits if the mesh
-# isn't there yet.
+# Sets the cosmetic blade-mesh orientation — never the Blade marker the
+# puck-contact math reads (set_blade_position / get_blade_contact_global).
+# Three composed reads:
+#   1. Shaft-follow pitch: the blade is rigidly attached to the shaft, so it
+#      pitches by (blade_lie_deg − live shaft angle). At the rest lie that's
+#      ~0 (blade flat on the ice); when the stick rises (slapshot wind-up,
+#      stick lift, high follow-through finish) the blade tips toe-up and stays
+#      on the shaft line instead of floating ice-parallel at the tip of a
+#      steep shaft; when the cursor pulls the blade in close (steep shaft) it
+#      digs slightly toe-down — the toe-drag read. Clamped by the
+#      _BLADE_FOLLOW_PITCH_* bounds.
+#   2. Resting toe-lift + the scroll-loft elevation extras (about X).
+#   3. Face-open loft (about Z, handedness-signed — the forehand face is on
+#      opposite sides for L/R shots).
+# The mesh is heel-origin (StickBladeMeshBuilder), so the rotation pivots
+# about the heel and the shaft→blade junction stays pinned at any pitch.
+# Idempotent (recomputed from identity each call, scale preserved — the
+# tape-band child rides along); safe before _ready(). Runs at render rate
+# from update_stick_mesh (value-type math only, no allocation).
 func _apply_blade_tilt() -> void:
+	if _blade_mesh_instance == null or not is_instance_valid(_blade_mesh_instance):
+		return
+	var follow_pitch_deg: float = 0.0
+	if top_hand != null and blade != null:
+		var shaft: Vector3 = blade.position - top_hand.position
+		var horiz: float = Vector2(shaft.x, shaft.z).length()
+		if horiz > 0.001 or absf(shaft.y) > 0.001:
+			var shaft_pitch_deg: float = rad_to_deg(atan2(-shaft.y, horiz))
+			follow_pitch_deg = clampf(blade_lie_deg - shaft_pitch_deg,
+					_BLADE_FOLLOW_PITCH_MIN_DEG, _BLADE_FOLLOW_PITCH_MAX_DEG)
+	# Loft sign: opens the forehand face upward. Flipped from the usual
+	# blade_side_sign convention so the cup tilts the right way for each hand.
+	var blade_side_sign: float = 1.0 if is_left_handed else -1.0
+	var toe_lift: float = _BLADE_TOE_LIFT_DEG + follow_pitch_deg \
+			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
+	var loft: float = (_BLADE_FACE_OPEN_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG) * blade_side_sign
+	var rot: Basis = Basis.IDENTITY \
+			.rotated(Vector3.RIGHT, deg_to_rad(toe_lift)) \
+			.rotated(Vector3.BACK, deg_to_rad(loft))
+	var keep_scale: Vector3 = _blade_mesh_instance.transform.basis.get_scale()
+	_blade_mesh_instance.transform.basis = rot.scaled(keep_scale)
+
+
+# (Re)generates the procedural curved blade mesh (and the tape band riding it,
+# when the uniform pass has already created one) for the current handedness.
+# The generated mesh is heel-origin, so the MeshInstance3D is re-seated at the
+# Blade marker origin — replacing the centered placeholder BoxMesh transform
+# from the scene. Caches the MeshInstance3D for the render-rate tilt pass.
+func _rebuild_blade_mesh() -> void:
 	if blade == null:
 		return
 	var blade_mesh: MeshInstance3D = blade.get_node_or_null("MeshInstance3D") as MeshInstance3D
 	if blade_mesh == null:
 		return
-	# Loft sign: opens the forehand face upward. Flipped from the usual
-	# blade_side_sign convention so the cup tilts the right way for each hand.
-	var blade_side_sign: float = 1.0 if is_left_handed else -1.0
-	var toe_lift: float = _BLADE_TOE_LIFT_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
-	var loft: float = (_BLADE_FACE_OPEN_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG) * blade_side_sign
-	var rot: Basis = Basis.IDENTITY \
-			.rotated(Vector3.RIGHT, deg_to_rad(toe_lift)) \
-			.rotated(Vector3.BACK, deg_to_rad(loft))
-	var keep_scale: Vector3 = blade_mesh.transform.basis.get_scale()
-	blade_mesh.transform.basis = rot.scaled(keep_scale)
+	var curve_sign: float = 1.0 if is_left_handed else -1.0
+	blade_mesh.mesh = StickBladeMeshBuilder.build(
+			blade_mesh_params(0.0, 0.0, 1.0, blade_hosel_length))
+	blade_mesh.position = Vector3.ZERO
+	_blade_mesh_instance = blade_mesh
+	_blade_mesh_curve_sign = curve_sign
+	var tape: MeshInstance3D = blade_mesh.get_node_or_null("BladeTape") as MeshInstance3D
+	if tape != null:
+		tape.mesh = build_blade_tape_mesh()
+
+
+# Builder params for the current blade geometry — shared by the blade mesh and
+# the team-tape band (SkaterUniformCoordinator calls build_blade_tape_mesh so
+# the band follows the same curve instead of clipping through it as a box).
+# hosel_length defaults to 0 (flat heel cap) — only the blade mesh itself
+# carries the hosel taper.
+func blade_mesh_params(inflate: float, u_start: float, u_end: float,
+		hosel_length: float = 0.0) -> StickBladeMeshBuilder.Params:
+	var p := StickBladeMeshBuilder.Params.new()
+	p.length = blade_length
+	p.curve_depth = blade_curve_depth
+	p.curve_start_frac = blade_curve_start_frac
+	p.toe_round_frac = blade_toe_round_frac
+	p.curve_sign = 1.0 if is_left_handed else -1.0
+	p.inflate = inflate
+	p.u_start = u_start
+	p.u_end = u_end
+	p.hosel_length = hosel_length
+	p.hosel_angle_deg = blade_lie_deg
+	return p
+
+
+# Tape-band mesh for the current blade geometry, heel-origin like the blade
+# mesh itself (the band node sits at the blade mesh's origin, untransformed).
+func build_blade_tape_mesh() -> ArrayMesh:
+	return StickBladeMeshBuilder.build(blade_mesh_params(
+			_BLADE_TAPE_INFLATE_M, _BLADE_TAPE_HEEL_OVERHANG_FRAC, _BLADE_TAPE_END_FRAC))
 
 
 # Eases the elevation blend toward the loft level each tick and re-tilts the
@@ -1351,6 +1468,9 @@ func update_stick_mesh() -> void:
 	stick_mesh.scale.z = to_blade.length()
 	stick_mesh.look_at(upper_body.to_global(blade.position), Vector3.UP)
 	_update_stick_knob(stick_origin, to_blade)
+	# The shaft-follow pitch reads the same hand/blade markers that dirtied
+	# this rebuild, so the blade mesh re-orients here at render rate too.
+	_apply_blade_tilt()
 
 
 # Rides the knob just past the top hand, along the shaft away from the blade,

@@ -43,15 +43,16 @@ func _make_rig() -> Dictionary:
 	return {"skater": skater, "controller": controller}
 
 
-static func _size_attrs(size_level: int) -> PlayerAttributes:
-	return PlayerAttributes.from_levels(1, 1, 1, size_level, 1, 1)
+static func _size_attrs(height_level: int) -> PlayerAttributes:
+	# Weight 0 coerces to the height's neutral frame — the pure-height build.
+	return PlayerAttributes.from_levels(height_level, 0)
 
 
 func test_skeleton_scales_about_ice_plane() -> void:
 	var rig: Dictionary = _make_rig()
 	var skater: Skater = rig["skater"]
 	var controller: SkaterController = rig["controller"]
-	var attrs: PlayerAttributes = _size_attrs(PlayerAttributes.LEVEL_MAX)
+	var attrs: PlayerAttributes = _size_attrs(PlayerAttributes.HEIGHT_MAX)
 	var h: float = attrs.height_mult()
 	controller.apply_attributes(attrs)
 
@@ -95,7 +96,7 @@ func test_reapply_is_idempotent_and_reversible() -> void:
 	var rig: Dictionary = _make_rig()
 	var skater: Skater = rig["skater"]
 	var controller: SkaterController = rig["controller"]
-	var big: PlayerAttributes = _size_attrs(PlayerAttributes.LEVEL_MAX)
+	var big: PlayerAttributes = _size_attrs(PlayerAttributes.HEIGHT_MAX)
 	var upper: Node3D = skater.get_node("MeshRoot/UpperBody") as Node3D
 	var leg_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
 
@@ -110,7 +111,7 @@ func test_reapply_is_idempotent_and_reversible() -> void:
 
 	# Free-play picker path: big → medium must land exactly where a fresh
 	# medium application lands.
-	var medium := PlayerAttributes.all_medium()
+	var medium := PlayerAttributes.all_average()
 	controller.apply_attributes(medium)
 	var fresh: Dictionary = _make_rig()
 	(fresh["controller"] as SkaterController).apply_attributes(medium)
@@ -124,7 +125,7 @@ func test_root_offset_composes_with_crouch_drop() -> void:
 	var rig: Dictionary = _make_rig()
 	var skater: Skater = rig["skater"]
 	var controller: SkaterController = rig["controller"]
-	var attrs: PlayerAttributes = _size_attrs(PlayerAttributes.LEVEL_MAX)
+	var attrs: PlayerAttributes = _size_attrs(PlayerAttributes.HEIGHT_MAX)
 	var h: float = attrs.height_mult()
 	controller.apply_attributes(attrs)
 	var root: float = (h - 1.0) * GameRules.FACEOFF_SPAWN_HEIGHT

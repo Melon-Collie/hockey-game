@@ -2,11 +2,12 @@ extends GutTest
 
 # BotIdentityRegistry — the curated AI roster loaded from
 # res://data/bot_identities.json (with an optional editable user:// override).
-# Bots spawn from these picks, so a malformed or over-budget entry would either
-# crash spawning or hand a bot an illegal build that a human player could never
-# make. Bots are host-authoritative online, so the host's roster is exactly
-# what every machine plays against — which is why the loader enforces the
-# point-buy budget (normalize_entry) even on a hand-edited custom file.
+# Bots spawn from these picks, so a malformed entry would either crash spawning
+# or field an impossible body. Bots are host-authoritative online, so the
+# host's roster is exactly what every machine plays against — which is why the
+# loader COERCES every entry (normalize_entry → the PlayerAttributes
+# constructor): under attributes v4 all axes are lateral, so validation is a
+# clamp into the body bands rather than a legal-shape rejection.
 
 const _RES_JSON_PATH: String = "res://data/bot_identities.json"
 
@@ -34,34 +35,17 @@ func test_bundled_file_has_a_full_roster() -> void:
 			"expected a sizeable curated bot pool")
 
 
-func test_every_bundled_build_is_within_budget() -> void:
-	# Bots must obey the same point-buy budget as human players — no freebies.
+func test_every_bundled_body_is_inside_its_band() -> void:
+	# The curated roster should be authored exactly, not silently coerced: every
+	# height is a real inches value and every weight sits inside that height's
+	# BMI band.
 	for entry: Dictionary in _bundled_entries():
-		var legal: bool = PlayerAttributes.is_within_budget(
-				int(entry.get("speed",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("agility",  PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("hands",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("size",     PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("physical", PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("shot",     PlayerAttributes.LEVEL_MEDIUM)))
-		assert_true(legal,
-				"bot '%s' has an over-budget or out-of-range build" % entry.get("name", "?"))
-
-
-func test_bundled_builds_spend_the_full_budget() -> void:
-	# Curated archetypes should be fully-realized builds (exact spend), not
-	# accidentally under-spent — that's the difference between a designed bot
-	# and a typo. (Humans may under-spend; the curated roster shouldn't.)
-	for entry: Dictionary in _bundled_entries():
-		var spend: int = (
-				int(entry.get("speed",    PlayerAttributes.LEVEL_MEDIUM))
-				+ int(entry.get("agility",  PlayerAttributes.LEVEL_MEDIUM))
-				+ int(entry.get("hands",    PlayerAttributes.LEVEL_MEDIUM))
-				+ int(entry.get("size",     PlayerAttributes.LEVEL_MEDIUM))
-				+ int(entry.get("physical", PlayerAttributes.LEVEL_MEDIUM))
-				+ int(entry.get("shot",     PlayerAttributes.LEVEL_MEDIUM)))
-		assert_eq(spend, PlayerAttributes.BUDGET,
-				"bot '%s' should spend the full budget (%d)" % [entry.get("name", "?"), PlayerAttributes.BUDGET])
+		var h: int = int(entry.get("height", PlayerAttributes.HEIGHT_MEDIUM))
+		assert_between(h, PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MAX,
+				"bot '%s' height out of range" % entry.get("name", "?"))
+		var w: int = int(entry.get("weight", 0))
+		assert_between(w, PlayerAttributes.weight_min(h), PlayerAttributes.weight_max(h),
+				"bot '%s' weight %d outside the %d\" band" % [entry.get("name", "?"), w, h])
 
 
 func test_names_and_numbers_are_unique() -> void:
@@ -80,70 +64,76 @@ func test_names_and_numbers_are_unique() -> void:
 		seen_numbers[number] = true
 
 
-func test_stat_lines_are_distinct() -> void:
-	# Identical stat spreads make bots feel samey on the ice — the migrated
-	# roster had literal duplicates. Each archetype should be its own build.
+func test_bodies_are_distinct() -> void:
+	# Identical builds make bots feel samey on the ice. The continuous body
+	# plane gives the roster plenty of room for every bot to own its
+	# (height, weight, gear) card.
 	var seen: Dictionary = {}
 	for entry: Dictionary in _bundled_entries():
-		var key: String = "%d/%d/%d/%d/%d/%d" % [
-				int(entry.get("speed",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("agility",  PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("hands",    PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("size",     PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("physical", PlayerAttributes.LEVEL_MEDIUM)),
-				int(entry.get("shot",     PlayerAttributes.LEVEL_MEDIUM))]
+		var attrs := PlayerAttributes.from_dict(entry)
+		var key: String = "%d/%d/%d%d%d%d" % [attrs.height, attrs.weight,
+				attrs.profile, attrs.curve, attrs.flex, attrs.length]
 		assert_false(seen.has(key),
-				"bot '%s' duplicates the stat line %s" % [entry.get("name", "?"), key])
+				"bot '%s' duplicates the build %s" % [entry.get("name", "?"), key])
 		seen[key] = true
 
 
-# ── normalize_entry: the budget-enforcement seam for editable rosters ─────────
+# ── normalize_entry: the coercion seam for editable rosters ──────────────────
 
-func test_normalize_keeps_a_legal_build_intact() -> void:
-	# A within-budget custom bot passes through untouched.
+func test_normalize_keeps_an_in_band_build_intact() -> void:
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
 			"name": "Sniper", "number": 9, "is_left_handed": true,
-			"speed": 3, "agility": 3, "hands": 4, "size": 2, "physical": 1, "shot": 5})
+			"height": 70, "weight": 172, "curve": 2})
 	assert_eq(norm.name, "Sniper")
 	assert_eq(norm.number, 9)
 	assert_true(norm.is_left_handed)
-	assert_eq(norm.shot, 5, "legal build must not be altered")
-	assert_eq(norm.physical, 1)
+	assert_eq(int(norm.height), 70, "in-range height must not be altered")
+	assert_eq(int(norm.weight), 172, "in-band weight must not be altered")
+	assert_eq(int(norm.curve), PlayerAttributes.CURVE_OPEN)
 
 
-func test_normalize_resets_over_budget_build_to_all_medium() -> void:
-	# The cheat vector: a hand-edited file giving a bot maxed everything. The
-	# loader resets the attributes to all-medium but keeps the identity.
+func test_normalize_coerces_out_of_band_body() -> void:
+	# The old cheat vector was an illegal tier shape; the v4 equivalent is an
+	# impossible body — it clamps to the nearest legal one, keeping the identity.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Cheater", "number": 1,
-			"speed": 5, "agility": 5, "hands": 5, "size": 5, "physical": 5, "shot": 5})
-	assert_eq(norm.name, "Cheater", "identity is preserved")
-	assert_eq(norm.number, 1)
-	for axis: String in ["speed", "agility", "hands", "size", "physical", "shot"]:
-		assert_eq(int(norm[axis]), PlayerAttributes.LEVEL_MEDIUM,
-				"over-budget '%s' should reset to medium" % axis)
+			"name": "Tank", "number": 1, "height": 99, "weight": 500})
+	assert_eq(norm.name, "Tank", "identity is preserved")
+	assert_eq(int(norm.height), PlayerAttributes.HEIGHT_MAX)
+	assert_eq(int(norm.weight), PlayerAttributes.weight_max(PlayerAttributes.HEIGHT_MAX))
+	var stringbean: Dictionary = BotIdentityRegistry.normalize_entry({
+			"name": "Bean", "height": 79, "weight": 150})
+	assert_eq(int(stringbean.weight), PlayerAttributes.weight_min(79),
+			"underweight clamps to the band floor")
 
 
-func test_normalize_resets_out_of_range_build() -> void:
-	# Out-of-range levels (a typo like 9) also fail is_within_budget and reset.
+func test_normalize_migrates_tier_era_entry() -> void:
+	# A tier-era roster (height step + skating/skill/checking) migrates through
+	# PlayerAttributes.migrate_tiers: strong Checking → heavier frame + long stick.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Typo", "speed": 9, "agility": 3, "hands": 3, "size": 1, "physical": 1, "shot": 1})
-	assert_eq(int(norm.speed), PlayerAttributes.LEVEL_MEDIUM)
+			"name": "OldPohl", "height": 5, "skating": 1, "skill": 2, "checking": 3})
+	assert_eq(int(norm.height), 79, "legacy 1..5 step → inches")
+	assert_eq(int(norm.weight), PlayerAttributes.weight_for_bmi(79, 27.75))
+	assert_eq(int(norm.length), PlayerAttributes.LENGTH_LONG)
 
 
-func test_normalize_seeds_legacy_skill_into_shot_and_hands() -> void:
-	# A legacy four-attribute file (old "skill" axis) seeds both offensive heirs.
+func test_normalize_migrates_legacy_six_attribute_entry() -> void:
+	# The oldest six-attribute shape still loads: a size-5 / physical-5
+	# enforcer becomes tall + heavy.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Legacy", "speed": 2, "agility": 2, "size": 2, "physical": 2, "skill": 4})
-	assert_eq(int(norm.hands), 4, "legacy skill seeds hands")
-	assert_eq(int(norm.shot), 4, "legacy skill seeds shot")
+			"name": "Legacy", "speed": 2, "agility": 1, "hands": 2, "size": 5,
+			"physical": 5, "shot": 4})
+	assert_eq(int(norm.height), 79, "legacy size → height")
+	assert_gt(int(norm.weight), PlayerAttributes.weight_neutral(79),
+			"physical-heavy legacy build → heavier than neutral")
 
 
-func test_normalize_defaults_missing_attributes_to_medium() -> void:
-	# A name-only entry (the old "rename your bots" shape) loads as all-medium.
+func test_normalize_defaults_missing_attributes_to_neutral() -> void:
+	# A name-only entry (the "rename your bots" shape) loads as the neutral build.
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({"name": "NameOnly"})
-	for axis: String in ["speed", "agility", "hands", "size", "physical", "shot"]:
-		assert_eq(int(norm[axis]), PlayerAttributes.LEVEL_MEDIUM)
+	assert_eq(int(norm.height), PlayerAttributes.HEIGHT_MEDIUM)
+	assert_eq(int(norm.weight), int(PlayerAttributes.NEUTRAL_WEIGHT_LBS))
+	for slot: String in ["profile", "curve", "flex", "length"]:
+		assert_eq(int(norm[slot]), PlayerAttributes.GEAR_BALANCED)
 
 
 func test_every_bundled_entry_has_a_valid_position() -> void:

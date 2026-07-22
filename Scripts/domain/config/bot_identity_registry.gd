@@ -14,26 +14,30 @@ class_name BotIdentityRegistry
 # sync_existing_players. Clients never consult their own copy, so the host's
 # roster is exactly what the whole lobby plays against — no divergence.
 #
-# Budget is ENFORCED on load (normalize_entry → is_within_budget): a custom bot
-# can't be handed more than the point-buy budget a human player gets. An
-# over-budget or out-of-range build resets to all-medium (a legal exact-budget
-# build), so the bot keeps its identity but loses the illegal stats — the host
-# can theme their roster, but can't field a 5/5/5/5/5/5 super-bot.
+# Builds are COERCED on load (normalize_entry → the PlayerAttributes
+# constructor): v4 axes are all lateral, so there is no legal shape to enforce —
+# an out-of-range height/weight/gear value clamps to the nearest legal body
+# (weight into the height's BMI band), so a typo neither crashes the game nor
+# fields an impossible frame. A super-bot is unrepresentable by construction.
 #
-# JSON schema:
+# JSON schema (attributes v4, body + gear). Height may be a raw inches value
+# (68..79 = 5'8"..6'7") or a legacy 1..5 step (mapped onto the anchor heights);
+# weight is lbs inside the height's band (omit for the height's neutral frame);
+# gear slots are 0/1/2 with 1 = balanced (profile: 0 agility / 2 power;
+# curve: 0 closed / 2 open; flex: 0 whippy / 2 stiff; length: 0 short / 2 long
+# — no gameplay effect yet, cosmetic/forward-compat):
 #   {
 #     "identities": [
 #       { "name": "Wayne Gretzky", "number": 99, "is_left_handed": false,
-#         "speed": 3, "agility": 5, "hands": 5, "size": 2, "physical": 1, "shot": 5 },
+#         "height": 72, "weight": 185, "curve": 2, "position": "C" },
 #       ...
 #     ]
 #   }
 #
-# Attribute fields are optional; missing values default to LEVEL_MEDIUM so
-# older identity files keep loading. A legacy four-attribute file (with the old
-# "skill"/"strength" axis) seeds both Shot and Hands from it. Out-of-range values
-# are clamped and over-budget builds reset (see normalize_entry) so a typo in
-# JSON neither crashes the game nor grants an illegal build.
+# Fields are optional; missing values default to the neutral build. A tier-era
+# file (skating/skill/checking) migrates via PlayerAttributes.migrate_tiers and
+# the oldest six-attribute files (speed/agility/hands/size/physical/shot) via
+# migrate_legacy, so old user:// rosters keep working.
 #
 # A well-formed file with zero entries is valid — the caller treats an empty
 # pool as "use the old deterministic defaults".
@@ -91,12 +95,12 @@ static func fallback_identity(slot_key: int) -> Dictionary:
 		"number":         80 + slot_key,
 		"is_left_handed": LobbySlotKey.slot(slot_key) % 2 == 1,
 		"position":       PlayerRules.position_name(LobbySlotKey.slot(slot_key)),
-		"speed":          PlayerAttributes.LEVEL_MEDIUM,
-		"agility":        PlayerAttributes.LEVEL_MEDIUM,
-		"hands":          PlayerAttributes.LEVEL_MEDIUM,
-		"size":           PlayerAttributes.LEVEL_MEDIUM,
-		"physical":       PlayerAttributes.LEVEL_MEDIUM,
-		"shot":           PlayerAttributes.LEVEL_MEDIUM,
+		"height":         PlayerAttributes.HEIGHT_MEDIUM,
+		"weight":         int(PlayerAttributes.NEUTRAL_WEIGHT_LBS),
+		"profile":        PlayerAttributes.GEAR_BALANCED,
+		"curve":          PlayerAttributes.GEAR_BALANCED,
+		"flex":           PlayerAttributes.GEAR_BALANCED,
+		"length":         PlayerAttributes.GEAR_BALANCED,
 	}
 
 
@@ -117,46 +121,23 @@ static func _try_load_from(path: String) -> bool:
 	return true
 
 
-# Turns one raw JSON entry into a canonical identity dict: applies the legacy
-# four-attribute seed, defaults missing fields to LEVEL_MEDIUM, and ENFORCES the
-# point-buy budget. An over-budget or out-of-range attribute spread (the only
-# way a custom roster could grant unearned power) resets all six attributes to
-# all-medium — a legal exact-budget build — while keeping the bot's
-# name/number/handedness. Extracted from _try_load_from so the budget rule is
-# unit-testable without touching the filesystem.
+# Turns one raw JSON entry into a canonical identity dict: routes the
+# attribute keys through PlayerAttributes.from_dict (which handles native v4
+# body+gear keys, tier-era keys via migrate_tiers, and legacy six-attribute
+# keys via migrate_legacy) and takes the COERCED values back — out-of-range
+# height/weight/gear lands on the nearest legal body rather than being
+# rejected. Extracted from _try_load_from so the rule is unit-testable
+# without touching the filesystem.
 static func normalize_entry(entry: Dictionary) -> Dictionary:
-	var entry_name: String = entry.get("name", "")
-	# A legacy four-attribute file carries "skill" (or the older "strength");
-	# seed both Shot and Hands from it so old user:// copies still load.
-	var legacy_skill: int = int(entry.get("skill", entry.get("strength", PlayerAttributes.LEVEL_MEDIUM)))
-	var speed: int    = int(entry.get("speed",    PlayerAttributes.LEVEL_MEDIUM))
-	var agility: int  = int(entry.get("agility",  PlayerAttributes.LEVEL_MEDIUM))
-	var hands: int    = int(entry.get("hands",    legacy_skill))
-	var size: int     = int(entry.get("size",     PlayerAttributes.LEVEL_MEDIUM))
-	var physical: int = int(entry.get("physical", PlayerAttributes.LEVEL_MEDIUM))
-	var shot: int     = int(entry.get("shot",     legacy_skill))
-	if not PlayerAttributes.is_within_budget(speed, agility, hands, size, physical, shot):
-		push_warning("BotIdentityRegistry: '%s' has an over-budget build; resetting to all-medium" % entry_name)
-		speed = PlayerAttributes.LEVEL_MEDIUM
-		agility = PlayerAttributes.LEVEL_MEDIUM
-		hands = PlayerAttributes.LEVEL_MEDIUM
-		size = PlayerAttributes.LEVEL_MEDIUM
-		physical = PlayerAttributes.LEVEL_MEDIUM
-		shot = PlayerAttributes.LEVEL_MEDIUM
+	var attrs := PlayerAttributes.from_dict(entry)
 	# Optional casting hint: which lineup slot this identity suits (see
 	# PlayerRules.POSITION_NAMES). Unknown/missing → "" (fills any slot).
 	var position: String = String(entry.get("position", "")).to_upper()
 	if position not in PlayerRules.POSITION_NAMES:
 		position = ""
-	return {
-		"name":           entry_name,
-		"number":         int(entry.get("number", 0)),
-		"is_left_handed": bool(entry.get("is_left_handed", false)),
-		"position":       position,
-		"speed":          speed,
-		"agility":        agility,
-		"hands":          hands,
-		"size":           size,
-		"physical":       physical,
-		"shot":           shot,
-	}
+	var out: Dictionary = attrs.to_dict()
+	out["name"] = entry.get("name", "")
+	out["number"] = int(entry.get("number", 0))
+	out["is_left_handed"] = bool(entry.get("is_left_handed", false))
+	out["position"] = position
+	return out

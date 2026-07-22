@@ -2,9 +2,9 @@ extends GutTest
 
 # SkaterAgent — the InputState scratch buffer is reused across ticks, so
 # _zero_input must reset every field a state-machine handler can set. A missed
-# field latches: the regression this guards is quick_shot_pressed staying true
-# after a bot's first pass/quick shot (added in the dedicated-button split),
-# which made every subsequent carry tick fire an instant quick shot.
+# field latches: the regression this guards is quick_pass_pressed staying true
+# after a bot's first pass/quick pass (added in the dedicated-button split),
+# which made every subsequent carry tick fire an instant quick pass.
 
 
 func test_zero_input_resets_every_field_the_sm_can_set() -> void:
@@ -22,7 +22,7 @@ func test_zero_input_resets_every_field_the_sm_can_set() -> void:
 	input.elevation_level = 2
 	input.block_held = true
 	input.stick_lift_held = true
-	input.quick_shot_pressed = true
+	input.quick_pass_pressed = true
 
 	agent._zero_input(input, 1.0 / 120.0, 12.5)
 
@@ -40,5 +40,5 @@ func test_zero_input_resets_every_field_the_sm_can_set() -> void:
 	assert_eq(input.elevation_level, 0)
 	assert_false(input.block_held)
 	assert_false(input.stick_lift_held)
-	assert_false(input.quick_shot_pressed,
+	assert_false(input.quick_pass_pressed,
 			"quick-shot edge must not latch across ticks in the reused scratch buffer")
