@@ -51,6 +51,12 @@ var _active: int = 0
 var _snapshot_working: Array[Dictionary] = []
 var _snapshot_active: int = 0
 var _locked: bool = false
+# Reentrancy guard for _refresh(): assigning the weight slider's min/max there
+# can re-clamp its value and emit value_changed (Godot's Range.set_min/set_max
+# route through set_value, which is NOT silenced by set_value_no_signal). Left
+# unguarded, that reentrant _on_weight_changed clobbers the active preset's
+# stored weight with a band-clamped value — the "weight isn't saved" bug.
+var _refreshing: bool = false
 
 # Controls.
 var _chip_row: HBoxContainer = null
@@ -322,7 +328,7 @@ func is_valid() -> bool:
 # ── Interaction ──────────────────────────────────────────────────────────────
 
 func _on_height_changed(value: float) -> void:
-	if _active < 0 or _active >= _working.size():
+	if _refreshing or _active < 0 or _active >= _working.size():
 		return
 	# Preserve the FRAME across the height change: a lean build stays lean as
 	# it grows instead of snapping against the new band edge.
@@ -339,7 +345,7 @@ func _on_height_changed(value: float) -> void:
 
 
 func _on_weight_changed(value: float) -> void:
-	if _locked or _active < 0 or _active >= _working.size():
+	if _refreshing or _locked or _active < 0 or _active >= _working.size():
 		return
 	var levels: Array = _working[_active]["levels"]
 	levels[1] = PlayerAttributes.coerce_weight(int(levels[0]), int(value))
@@ -424,6 +430,9 @@ func _rebuild_chips() -> void:
 func _refresh() -> void:
 	if _height_slider == null or _active < 0 or _active >= _working.size():
 		return
+	# Guard the whole pass: assigning the weight slider's bounds below can emit a
+	# reentrant value_changed that would otherwise clobber the stored weight.
+	_refreshing = true
 	var levels: Array = _working[_active]["levels"]
 	var h: int = int(levels[0])
 	var w: int = int(levels[1])
@@ -456,6 +465,8 @@ func _refresh() -> void:
 	for i: int in _chip_buttons.size():
 		MenuStyle.apply_tab_button(_chip_buttons[i], i == _active)
 		_chip_buttons[i].disabled = _locked and i != _active
+
+	_refreshing = false
 
 
 func _load_active_into_name_field() -> void:
