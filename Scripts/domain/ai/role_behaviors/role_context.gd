@@ -34,6 +34,12 @@ var strong_x: float = 1.0
 # Lets the MARK defenders focus on a DISTINCT man so two don't both
 # collapse onto the single most dangerous opponent.
 var assigned_threat_peer: int = -1
+# TeamBrain's shared per-opponent shoot-threat bases (opp peer_id -> surface;
+# see TeamBrain.threat_shoot_base_by_opp for the approximation contract).
+# MARK's unassigned fallback consumes these as ordering / pruning bounds
+# instead of recomputing them per decide. Live reference to the brain's dict;
+# empty = no memo (no brain, or no MARK slot live) — compute exactly.
+var threat_shoot_base_by_opp: Dictionary[int, float] = {}
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
 # owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
 # be a `Callable`; downgraded to a Dictionary because role decide() and
@@ -251,6 +257,9 @@ var scratch_opp_states: Array[SkaterNetworkState] = []
 # null), filled by collect_opponents so defensive ETAs read each opponent's real
 # top speed. A null entry / short buffer means the league default.
 var scratch_opp_caps: Array[AISkaterCaps] = []
+# Peer ids index-matched to scratch_opp_positions, filled alongside it by
+# collect_opponents (MARK's fallback keys the brain's threat memo by pid).
+var scratch_opp_ids: Array[int] = []
 var scratch_teammates: Array[Vector3] = []
 var scratch_opp_receivers: Array[Vector3] = []
 # Per-decide option-value upper bounds for the pruned carrier_best_option

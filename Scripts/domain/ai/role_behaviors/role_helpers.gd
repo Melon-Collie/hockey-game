@@ -707,6 +707,7 @@ static func collect_opponents(ctx: RoleContext,
 	out_positions.clear()
 	out_states.clear()
 	ctx.scratch_opp_caps.clear()
+	ctx.scratch_opp_ids.clear()
 	for pid: int in ctx.snapshot.skater_states:
 		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
 			var s: SkaterNetworkState = ctx.snapshot.skater_states[pid]
@@ -716,6 +717,7 @@ static func collect_opponents(ctx: RoleContext,
 					if anticipate else s.position)
 			out_states.append(s)
 			ctx.scratch_opp_caps.append(ctx.caps_by_peer.get(pid))
+			ctx.scratch_opp_ids.append(pid)
 
 
 # ── The race-home read: puck-path intercept model ───────────────────────────

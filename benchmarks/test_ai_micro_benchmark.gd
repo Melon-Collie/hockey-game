@@ -96,6 +96,15 @@ func test_evaluator_costs() -> void:
 		AIRoleZoneDefense.decide(d_ctx, AIRoleSlots.Slot.ZONE_W_WEAK))
 	_bench("PRESSURE", func() -> void: AIRolePressure.decide(d_ctx))
 	_bench("MARK (unassigned fallback)", func() -> void: AIRoleMark.decide(d_ctx))
+	# Same fallback fed TeamBrain's shared threat memo (the live-play path in
+	# defensive states — see TeamBrain.threat_shoot_base_by_opp): the per-opp
+	# base surfaces come precomputed, only the candidate argmax remains.
+	var memo_ctx: RoleContext = _make_ctx(Vector3(2.0, 0.0, 20.0))
+	var memo_brain := TeamBrain.new(TEAM_ID, memo_ctx.team_id_by_peer)
+	memo_brain.force_retick()
+	memo_brain.tick(1.0, memo_ctx.snapshot)
+	memo_ctx.threat_shoot_base_by_opp = memo_brain.threat_shoot_base_by_opp
+	_bench("MARK (fallback, brain memo)", func() -> void: AIRoleMark.decide(memo_ctx))
 	_bench("CONTAIN", func() -> void: AIRoleContain.decide(d_ctx))
 
 	# Off-puck offensive reads (our carrier deep in THEIR end).

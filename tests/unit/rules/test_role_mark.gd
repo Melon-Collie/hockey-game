@@ -296,6 +296,32 @@ func test_fallback_center_is_puck_adaptive_not_fixed_slot() -> void:
 			+ " got z=%f (slot=%f, midpoint≈%f)" % [d.target_position.z, slot_z, midpoint_z])
 
 
+func test_fallback_far_cover_reads_the_brain_threat_memo() -> void:
+	# The far-from-region fallback skates at the cover of the biggest BASE
+	# threat directly, so it is fully bases-driven — the seam that proves the
+	# marker consumes TeamBrain's shared threat memo (ctx.threat_shoot_base_by_
+	# opp) instead of recomputing the surfaces. Opp 200 is the true dominant
+	# threat (on-axis slot carrier); 210 is parked wide. The exact local bases
+	# cover 200; a memo declaring 210 the bigger surface must flip the cover
+	# onto 210's lane.
+	var skaters: Array = [
+		[1, TEAM_ID, Vector3(0, 0, -20), Vector3.ZERO],        # us, far up-ice
+		[200, 1 - TEAM_ID, Vector3(0, 0, 20), Vector3.ZERO],   # slot — dominant
+		[210, 1 - TEAM_ID, Vector3(12, 0, 25), Vector3.ZERO],  # wide, weak angle
+	]
+	var ctx_exact: RoleContext = _make_ctx(Vector3(0, 0, -20), skaters, 200)
+	var exact_target: Vector3 = AIRoleMark.decide(ctx_exact).target_position
+	assert_lt(absf(exact_target.x), 1.0,
+			"exact bases cover the on-axis dominant threat; got %s" % exact_target)
+
+	var ctx_memo: RoleContext = _make_ctx(Vector3(0, 0, -20), skaters, 200)
+	var memo: Dictionary[int, float] = {200: 0.01, 210: 0.9}
+	ctx_memo.threat_shoot_base_by_opp = memo
+	var memo_target: Vector3 = AIRoleMark.decide(ctx_memo).target_position
+	assert_gt(memo_target.x, 1.0,
+			"memo bases flip the cover onto the wide man's lane; got %s" % memo_target)
+
+
 # ── Helper: lead clamp ─────────────────────────────────────────────────────
 
 func test_lead_threat_clamps_long_lead() -> void:

@@ -1656,6 +1656,42 @@ static func score_shoot(
 	return minf(shot_quality + second_chance, 1.0) * lane * pressure_factor
 
 
+# FIELDED twin of score_shoot for the threat-surface consumer family
+# (threat_surface_shoot / threat_local_shoot / the zone soft-lock read):
+# the goalie-hole core comes from AIDangerField's memoized surface — league
+# pace, unsettled 0, declared stance, seal derived from position, goalie at
+# his CURRENT spot, which are exactly this family's inputs — and only the
+# defender terms (shot lane, release contest) run live, so a hypothetical
+# defender body still blocks exactly. Two deliberate drops vs the exact
+# twin, both bounded by the calibration test (test_danger_field.gd):
+#   - sightline screening (a body delaying the goalie's read raises true
+#     quality — the fielded read understates a screened shooter);
+#   - the second-chance rebound term (its screeners input is always empty
+#     on this family, so it contributes 0 there anyway).
+# Same guard + release clamp as the exact twin, applied BEFORE sampling so
+# the memo is keyed on the clamped release like score_shoot scores it.
+static func score_shoot_threat_fielded(
+		shooter: Vector3,
+		our_net: Vector3,
+		our_goalie_pos: Vector3,
+		net_half_width: float,
+		defenders: Array[Vector3]) -> float:
+	if (shooter.z - our_net.z) * -signf(our_net.z) < 0.001:
+		return 0.0
+	var clamped: Vector3 = release_ahead_of_goalie(shooter, our_net, our_goalie_pos)
+	var q: float = AIDangerField.quality(
+			clamped, our_net, our_goalie_pos, net_half_width)
+	if q <= 0.0:
+		return 0.0
+	var aim: Vector3 = AIShotAim.compute_open_net_aim(
+			clamped, our_goalie_pos, our_net.z,
+			net_half_width, GOALIE_SHADOW_HALF_M)
+	var lane: float = lane_clear(clamped, aim, defenders, WRISTER_SHOT_SPEED_M_S)
+	var pressure: float = release_contest_clean(
+			release_point_toward(clamped, our_net), defenders)
+	return q * lane * pressure
+
+
 # ── Predicted post-seal (RVH/VH) — the ONE xG model, consistent inputs ─────────
 # score_shoot is the single xG model. The only reason it gave two answers for the
 # same spot was its INPUTS: the shoot-now eval reads the LIVE goalie's seal state
@@ -2734,14 +2770,13 @@ static func threat_surface_shoot(
 	if not in_offensive_zone(opp_pos, our_net) \
 			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
 		return positional
-	# Predicted post-seal for the opponent's spot: a dead-angle look at OUR net is
-	# walled by our keeper's RVH/VH the same way the offensive read models it, so
-	# the defensive threat matches the real coverage (no phantom sharp-angle threat
-	# our defenders would over-respect).
-	var seal_x: float = derive_post_seal_x_sign(opp_pos, our_net)
-	var shoot: float = score_shoot(
-			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
-			WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal_x, seal_x != 0.0)
+	# FIELDED read (see AIDangerField): the goalie-hole core — including the
+	# predicted post-seal for the opponent's spot, derived inside the field,
+	# so a dead-angle look at OUR net is walled exactly as before — comes
+	# from the memoized surface; only the lane / release-contest terms run
+	# against `defenders` live.
+	var shoot: float = score_shoot_threat_fielded(
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
 	return maxf(shoot, positional)
 
 
@@ -2765,10 +2800,10 @@ static func threat_local_shoot(
 	if not in_offensive_zone(opp_pos, our_net) \
 			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
 		return 0.0
-	var seal_x: float = derive_post_seal_x_sign(opp_pos, our_net)
-	return score_shoot(
-			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
-			WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false, seal_x, seal_x != 0.0)
+	# FIELDED read — same memoized core as threat_surface_shoot (seal derived
+	# inside the field), live lane/contest terms.
+	return score_shoot_threat_fielded(
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
 
 
 # turnover_cost with the LOCAL threat surface (see threat_local_shoot) —
