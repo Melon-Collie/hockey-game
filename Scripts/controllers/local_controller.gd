@@ -174,11 +174,10 @@ func _physics_process(delta: float) -> void:
 	if NetworkManager.is_replay_mode():
 		return
 	if not skater.visual_offset.is_zero_approx():
-		# Frame-rate-independent decay: (1 - alpha) is the per-tick factor at the
-		# nominal 120 Hz tick; raising it to delta x PHYSICS_TICK holds the
-		# wall-clock decay constant when the host dilates (longer ticks). Without
-		# the delta term the offset collapses in fewer real milliseconds exactly
-		# when a stalling host produces the largest, most frequent corrections.
+		# Per-tick decay: (1 - alpha) is the factor at the nominal 120 Hz tick.
+		# Godot reports a CONSTANT physics delta (1/120) even when the sim
+		# dilates, so the exponent is always 1.0 today — the pow form only
+		# matters if this decay ever moves to a variable-delta context.
 		var decay: float = pow(1.0 - _RECONCILE_VISUAL_ALPHA, delta * float(Constants.PHYSICS_TICK))
 		var new_offset: Vector3 = skater.visual_offset * decay
 		skater.visual_offset = new_offset if new_offset.length_squared() > 0.000001 else Vector3.ZERO
