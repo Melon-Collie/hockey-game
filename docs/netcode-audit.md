@@ -49,9 +49,14 @@ are addressable incrementally.
   (`notify_pickup_claim_rejected` — every no-grant pickup-claim outcome rolls
   the optimistic pin back ~one-way after the reject), D3 (host-ping seed on
   join), D4 (per-peer claim + input-batch rate caps).
+- **Fixed — C1+C2:** capture + broadcast moved to an end-of-tick hook
+  (`PostPhysicsNetHook`, physics priority 2): each snapshot now ships this
+  tick's fully-integrated state the tick it was simulated (~8.3 ms off every
+  client's world view), the velocity/position phase mix is gone, and the
+  label skew the input-lead servo was padding over is removed (expect
+  `input_lead_ms` to relax by ~a tick).
 - **Open:** A1–A4 (clock foundation), B1–B3 (channels / replay-event
-  packing / 5v5 bandwidth), C1–C2 (post-physics broadcast), E1–E3, F6,
-  F9–F11.
+  packing / 5v5 bandwidth), E1–E3, F6, F9–F11.
 
 ## What clears the AAA bar (calibration — don't touch these)
 

@@ -362,9 +362,10 @@ var pending_session_end_reason: String = ""
 var _input_timer: float = 0.0
 # Broadcast cadence. Counter ticks here every physics frame (see
 # `_physics_process`); the broadcast call itself fires from `try_broadcast`,
-# invoked by GameManager._physics_process after StateBufferManager.capture so
-# the broadcast reads this tick's state. `_last_broadcast_us` tracks wall-clock
-# for telemetry.
+# invoked end-of-tick by GameManager._capture_and_broadcast_post_physics
+# (PostPhysicsNetHook, physics priority 2) right after StateBufferManager
+# .capture, so the broadcast ships this tick's post-integration state.
+# `_last_broadcast_us` tracks wall-clock for telemetry.
 var _state_tick_counter: int = 0
 var _last_broadcast_us: int = 0
 var _ping_timer: float = 0.0
@@ -976,19 +977,21 @@ func set_broadcast_rate(hz: float) -> void:
 	# Reset the counter so the new cadence starts cleanly from the next tick.
 	_state_tick_counter = 0
 
-# Called by GameManager._physics_process right after
-# StateBufferManager.capture() so the broadcast reads this tick's state
-# instead of the prior tick's snapshot. The cadence counter is incremented
-# in `_physics_process` regardless of whether this runs, so on a host stall
-# Godot's physics catch-up still produces back-to-back broadcasts (one per
-# eligible call) with distinct host_timestamps — clients get the multiple
-# snapshots they need to interpolate through the catch-up window.
+# Called by GameManager._capture_and_broadcast_post_physics (PostPhysicsNetHook,
+# physics priority 2) right after StateBufferManager.capture() — AFTER all actor
+# integration this tick, so the broadcast ships this tick's fully-integrated
+# state the same tick it was simulated. The cadence counter is incremented in
+# `_physics_process` (priority 0, so always before the hook) regardless of
+# whether this runs, so on a host stall Godot's physics catch-up still produces
+# back-to-back broadcasts (one per eligible call) with distinct host_timestamps
+# — clients get the multiple snapshots they need to interpolate through the
+# catch-up window.
 #
-# Routing through here (rather than firing the broadcast from
-# NetworkManager._physics_process directly) is necessary because autoload
-# tree order puts NetworkManager ahead of GameManager: a broadcast from
-# NetworkManager._physics_process would always read last tick's capture,
-# adding a one-physics-tick (~4.17ms) latency floor to every client.
+# Routing through the hook (rather than firing the broadcast from
+# NetworkManager._physics_process directly) matters because autoload tree order
+# runs NetworkManager before the scene's actors: a broadcast from here at
+# priority 0 would read pre-integration (last tick's) state, re-adding the
+# one-tick departure-latency floor the hook removes.
 func try_broadcast() -> void:
 	if not is_host:
 		return
