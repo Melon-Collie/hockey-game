@@ -5,14 +5,15 @@ class_name TurnoverRules
 ##
 ## Deterministic Mitts model of the (scorer-judgment) NHL definitions:
 ##   - No prior owner, or the same team recovers → nothing.
+##   - Opponent recovers a puck the previous owner just SHOT (saved, missed, or
+##     blocked) → nothing: putting the puck at the net is neither a giveaway by
+##     the shooter nor a takeaway by whoever collects the loose puck. Checked
+##     FIRST so a rebound is never scored as a turnover.
 ##   - Opponent recovers a puck the previous owner was STRIPPED of (a recent
-##     poke / stick-lift) → takeaway to the recoverer: their team made the
-##     defensive play. Being stripped is NOT a self-inflicted turnover, so no
-##     giveaway is charged. (We credit the recoverer rather than the stripper
-##     because the possession-change hook knows who gained the puck, not who
-##     poked it — and NHL credits the player who takes possession.)
-##   - Opponent recovers a puck the previous owner SHOT on goal (a rebound) →
-##     nothing: a shot at the net isn't a giveaway.
+##     poke / stick-lift / body-check) → takeaway. The credit goes to the
+##     STRIPPER — the defender who made the play — not whoever recovers the loose
+##     puck (TurnoverTracker carries the stripper's id alongside the strip). Being
+##     stripped is NOT a self-inflicted turnover, so no giveaway is charged.
 ##   - Opponent recovers a puck otherwise lost (fumble / intercepted pass) →
 ##     giveaway to the previous owner.
 
@@ -28,8 +29,10 @@ static func classify(prev_team: int, new_team: int,
 		recent_strip: bool, recent_shot: bool) -> String:
 	if prev_team < 0 or prev_team == new_team:
 		return NONE
-	if recent_strip:
-		return TAKEAWAY
+	# A shot recovery is never a turnover — checked before the strip so a puck
+	# both shot and (rarely) grazed still reads as a rebound, not a takeaway.
 	if recent_shot:
 		return NONE
+	if recent_strip:
+		return TAKEAWAY
 	return GIVEAWAY

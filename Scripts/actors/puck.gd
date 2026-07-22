@@ -2,7 +2,11 @@ class_name Puck
 extends Node3D
 
 signal puck_released()
-signal puck_stripped(ex_carrier: Skater)
+# `checker` is the defender who took the puck (poke / stick-lift / body-check),
+# or null when no skater caused it (a goalie poke — no skater takeaway credit).
+# Stat attribution credits the takeaway to the checker (the player who made the
+# defensive play), not whoever recovers the loose puck.
+signal puck_stripped(ex_carrier: Skater, checker: Skater)
 signal puck_touched_loose(skater: Skater)  # blade redirect (deflection, tip-in)
 signal puck_body_blocked(skater: Skater)   # puck absorbed by a player's body
 signal puck_touched_goalie(goalie: Goalie)  # puck contacted a goalie StaticBody3D part while uncarried
@@ -450,7 +454,7 @@ func _body_check_strip(checker: Skater, hit_direction: Vector3, strip_intensity:
 			hit_direction, body_check_puck_speed, body_check_loose_speed, strip_intensity)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	_set_cooldown(checker, poke_checker_cooldown)
-	puck_stripped.emit(ex_carrier)
+	puck_stripped.emit(ex_carrier, checker)
 	puck_released.emit()
 
 func apply_poke_check(checker_skater: Skater) -> void:
@@ -468,7 +472,7 @@ func apply_poke_check(checker_skater: Skater) -> void:
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	_set_cooldown(checker_skater, poke_checker_cooldown)
-	puck_stripped.emit(ex_carrier)
+	puck_stripped.emit(ex_carrier, checker_skater)
 	puck_released.emit()
 
 # Stick-lift strip: unlike a poke (which squirts the puck off the blade contact),
@@ -484,7 +488,7 @@ func apply_stick_lift_strip(checker_skater: Skater) -> void:
 	linear_velocity = Vector3(ex_carrier.velocity.x, 0.0, ex_carrier.velocity.z)
 	_set_cooldown(ex_carrier, reattach_cooldown)
 	_set_cooldown(checker_skater, poke_checker_cooldown)
-	puck_stripped.emit(ex_carrier)
+	puck_stripped.emit(ex_carrier, checker_skater)
 	puck_released.emit()
 # blade_world_velocity / cooldown table entry), so it gets its own entry
 # point. Strip velocity uses the goalie's blade position + the controller's
@@ -507,7 +511,8 @@ func apply_goalie_poke_check(blade_pos: Vector3, blade_vel: Vector3) -> void:
 			poke_strip_max_speed,
 			fallback_dir)
 	_set_cooldown(ex_carrier, reattach_cooldown)
-	puck_stripped.emit(ex_carrier)
+	# No skater checker — a goalie strip earns no player takeaway credit.
+	puck_stripped.emit(ex_carrier, null)
 	puck_released.emit()
 
 

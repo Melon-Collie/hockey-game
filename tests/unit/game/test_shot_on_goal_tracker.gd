@@ -146,6 +146,74 @@ func test_sog_counted_once_per_shot() -> void:
 	assert_eq(shooter.stats.shots_on_goal, 1)
 
 
+# ── Rebounds after a save re-arm for a second shot on goal ───────────────────
+
+func test_rebound_reshot_after_save_counts_a_second_sog() -> void:
+	# Goalie saves (SOG #1), a teammate bats the loose rebound back on net, the
+	# goalie saves again — that's a distinct shot, so a second SOG lands.
+	var shooter := _add_player(10, 0)
+	var rebounder := _add_player(11, 0)
+	tracker.on_shot_started(10)
+	tracker.on_goalie_touch(1)          # save #1 → SOG to the shooter
+	tracker.on_deflection(11)           # teammate re-shoots the rebound (re-arm)
+	tracker.on_goalie_touch(1)          # save #2 → SOG to the rebounder
+	assert_eq(shooter.stats.shots_on_goal, 1)
+	assert_eq(rebounder.stats.shots_on_goal, 1)
+	assert_eq(sm.team_shots[0], 2, "two distinct shots, two SOG")
+
+
+func test_rebound_tap_in_goal_counts_its_own_sog() -> void:
+	var shooter := _add_player(10, 0)
+	var rebounder := _add_player(11, 0)
+	tracker.on_shot_started(10)
+	tracker.on_goalie_touch(1)          # save #1 → SOG to the shooter
+	tracker.on_deflection(11)           # teammate taps the rebound (re-arm)
+	tracker.on_goal_confirmed(11)       # ...and scores → SOG #2 to the rebounder
+	assert_eq(shooter.stats.shots_on_goal, 1)
+	assert_eq(rebounder.stats.shots_on_goal, 1)
+	assert_eq(sm.team_shots[0], 2)
+
+
+func test_repeated_save_on_same_rebound_stays_one_sog() -> void:
+	# The goalie kicks the same puck twice with no attacking touch between —
+	# one shot, one SOG (nothing re-arms it).
+	var shooter := _add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.on_goalie_touch(1)
+	tracker.on_goalie_touch(1)
+	assert_eq(shooter.stats.shots_on_goal, 1)
+	assert_eq(sm.team_shots[0], 1)
+
+
+func test_defender_touch_of_rebound_does_not_rearm() -> void:
+	# A defender playing the loose rebound is not an attacking re-shot, so the
+	# pending shot is not re-armed and no phantom second SOG lands.
+	var shooter := _add_player(10, 0)
+	var defender := _add_player(20, 1)
+	tracker.on_shot_started(10)
+	tracker.on_goalie_touch(1)
+	tracker.on_deflection(20)  # opponent — different team, no re-arm
+	tracker.on_goalie_touch(1)
+	assert_eq(shooter.stats.shots_on_goal, 1)
+	assert_eq(defender.stats.shots_on_goal, 0)
+	assert_eq(sm.team_shots[0], 1)
+
+
+func test_original_shooter_gets_an_assist_on_a_rebound_goal() -> void:
+	# The shooter's saved shot becomes a teammate's rebound goal — the shooter is
+	# the prior toucher in the chain, so they earn the assist.
+	var shooter := _add_player(10, 0)
+	var rebounder := _add_player(11, 0)
+	tracker.on_pickup(10)          # shooter carries, then shoots
+	tracker.on_shot_started(10)
+	tracker.on_goalie_touch(1)     # saved
+	tracker.on_deflection(11)      # teammate buries the rebound
+	var assists: Array[String] = tracker.credit_assists(11)
+	assert_eq(assists.size(), 1)
+	assert_eq(shooter.stats.assists, 1, "the shot that caused the rebound is an assist")
+	assert_eq(rebounder.stats.assists, 0)
+
+
 # ── On-net gating (NHL: only a puck that would go in counts when stopped) ────
 
 func test_goalie_touch_on_off_net_trajectory_is_not_sog() -> void:
@@ -400,27 +468,35 @@ func test_poke_check_makes_poker_the_last_toucher() -> void:
 			"a puck poked directly into the net is the poker's goal")
 
 
-func test_poke_check_does_not_earn_the_poker_an_assist() -> void:
+func test_poke_check_feeding_a_teammate_earns_the_poker_an_assist() -> void:
+	# A poke that strips the carrier and goes straight to a teammate who scores
+	# is a play that set up the goal — the poker gets the assist. The opposing
+	# carrier they stripped (who possessed the puck) breaks the chain a step
+	# further back, so credit never walks into the other team.
 	var poker := _add_player(10, 0, "Poker")
-	_add_player(20, 1, "Defender")
+	var defender := _add_player(20, 1, "Defender")
 	var scorer := _add_player(11, 0, "Scorer")
-	tracker.on_pickup(20)      # defender carries
-	tracker.on_poke_check(10)  # attacker pokes it off the defender
-	tracker.on_pickup(11)      # a teammate corrals the loose puck and scores
+	tracker.on_pickup(20)
+	tracker.on_possession_established(20)  # defender actually controlled it
+	tracker.on_poke_check(10)  # attacker pokes it off the defender to a teammate
+	tracker.on_pickup(11)      # the teammate corrals the loose puck and scores
 	var assists: Array[String] = tracker.credit_assists(11)
-	assert_eq(assists.size(), 0, "a poke strip isn't a play that set up the goal")
-	assert_eq(poker.stats.assists, 0)
+	assert_eq(assists.size(), 1, "a poke that feeds the scorer is an assist")
+	assert_eq(assists[0], "Poker")
+	assert_eq(poker.stats.assists, 1)
+	assert_eq(defender.stats.assists, 0, "chain stopped at the stripped opponent")
+	assert_eq(scorer.stats.assists, 0)
 
 
-func test_poke_then_own_pickup_clears_poke_flag_and_earns_assist() -> void:
+func test_poke_then_own_pickup_feeds_a_teammate_for_an_assist() -> void:
 	# The poker strips it, corrals the loose puck themselves, then feeds a
-	# teammate — now they made a genuine play, so the assist counts.
+	# teammate. Two touches by the poker collapse to one entry — still one assist.
 	var poker := _add_player(10, 0, "Poker")
 	_add_player(20, 1, "Defender")
 	var scorer := _add_player(11, 0, "Scorer")
 	tracker.on_pickup(20)      # defender carries
-	tracker.on_poke_check(10)  # poke → entry flagged poke
-	tracker.on_pickup(10)      # poker picks it up (collapses, clears the poke flag)
+	tracker.on_poke_check(10)  # poke strips it
+	tracker.on_pickup(10)      # poker picks it up (collapses onto the poke entry)
 	tracker.on_pickup(11)      # feeds the teammate who scores
 	var assists: Array[String] = tracker.credit_assists(11)
 	assert_eq(assists.size(), 1)

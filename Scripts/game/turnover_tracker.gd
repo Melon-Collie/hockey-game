@@ -2,10 +2,13 @@ class_name TurnoverTracker extends RefCounted
 ## Host-only attribution of takeaways / giveaways / faceoff wins from
 ## possession changes. GameManager feeds it four authoritative hooks — a
 ## possession gain (puck picked up), an ESTABLISHED possession (see
-## PossessionTracker), a strip (puck_stripped_from), and a shot on goal —
-## and it mutates the affected players' PlayerStats. The pure decision lives
-## in TurnoverRules; this holds the short-lived context (last established
-## owner + recent strip/shot) needed to classify each gain.
+## PossessionTracker), a strip (puck_stripped_from, carrying the defender who
+## made the play), and a shot attempt — and it mutates the affected players'
+## PlayerStats. The pure decision lives in TurnoverRules; this holds the
+## short-lived context (last established owner + recent strip/shot) needed to
+## classify each gain. A takeaway credits the STRIPPER (the defender who caused
+## the loss), not whoever recovers the loose puck; recovering a shot (saved or
+## missed) is neither a takeaway nor a giveaway.
 ##
 ## Crediting is deferred to ESTABLISHMENT: a pickup computes the candidate
 ## classification (against the last ESTABLISHED owner, with the strip/shot
@@ -26,8 +29,8 @@ class_name TurnoverTracker extends RefCounted
 ## it writes are authoritative and ride the normal stats broadcast.
 
 # A recovery within this of a strip counts as a takeaway; within this of a shot
-# on goal counts as a rebound (not a giveaway). Generous windows — possession
-# often bounces loose for a moment between the event and the recovery.
+# attempt counts as a rebound (no turnover). Generous windows — possession often
+# bounces loose for a moment between the event and the recovery.
 const STRIP_WINDOW_S: float = 1.5
 const SHOT_WINDOW_S: float = 2.0
 
@@ -38,6 +41,10 @@ var _last_established_peer: int = -1
 var _last_established_team: int = -1
 var _strip_time: float = -INF
 var _strip_victim_team: int = -1
+# The defender who made the strip (poke / stick-lift / body-check). A takeaway
+# is credited to THEM, not whoever recovers the loose puck. -1 for a goalie
+# strip (no player takeaway).
+var _strip_stripper_peer: int = -1
 var _shot_time: float = -INF
 var _shot_team: int = -1
 # Candidate turnover computed at pickup, credited when the carrier establishes.
@@ -85,7 +92,9 @@ func on_carrier_gained(peer_id: int, was_faceoff: bool) -> void:
 	_candidate_carrier_peer = peer_id
 	match _candidate_type:
 		TurnoverRules.TAKEAWAY:
-			_candidate_credit_peer = peer_id
+			# Credit the defender who made the strip, not this recoverer — a poke
+			# to a teammate is the poker's takeaway. -1 (goalie strip) credits none.
+			_candidate_credit_peer = _strip_stripper_peer
 		TurnoverRules.GIVEAWAY:
 			_candidate_credit_peer = _last_established_peer
 		_:
@@ -109,8 +118,11 @@ func on_possession_established(peer_id: int) -> bool:
 	elif _candidate_carrier_peer == peer_id:
 		match _candidate_type:
 			TurnoverRules.TAKEAWAY:
-				if rec.stats != null:
-					rec.stats.takeaways += 1
+				# Credit the stripper (the defender who made the play), which may
+				# be this recoverer or a teammate they fed. -1 = goalie strip → none.
+				var taker: PlayerRecord = _registry.get_record(_candidate_credit_peer)
+				if taker != null and taker.stats != null:
+					taker.stats.takeaways += 1
 					credited = true
 			TurnoverRules.GIVEAWAY:
 				var prev: PlayerRecord = _registry.get_record(_candidate_credit_peer)
@@ -140,14 +152,21 @@ func has_pending_faceoff() -> bool:
 	return _faceoff_pending
 
 
-# A poke / stick-lift stripped the puck from `victim_peer_id`.
-func note_strip(victim_peer_id: int) -> void:
+# A defender stripped the puck from `victim_peer_id` (poke / stick-lift /
+# body-check). `stripper_peer_id` is the defender who made the play — a takeaway
+# credits THEM, not whoever recovers the loose puck. -1 (goalie strip) = no
+# player takeaway.
+func note_strip(victim_peer_id: int, stripper_peer_id: int) -> void:
 	_strip_time = _now()
 	_strip_victim_team = _team_of(victim_peer_id)
+	_strip_stripper_peer = stripper_peer_id
 
 
-# `shooter_peer_id` put a shot on goal.
-func note_shot_on_goal(shooter_peer_id: int) -> void:
+# `shooter_peer_id` put the puck at the net (any shot attempt — saved, missed,
+# or blocked). Opens the window in which recovering the loose puck reads as a
+# rebound, not a turnover. Fed from every shot release, and refreshed at a
+# confirmed shot-on-goal so a save's rebound stays covered past the shot flight.
+func note_shot(shooter_peer_id: int) -> void:
 	_shot_time = _now()
 	_shot_team = _team_of(shooter_peer_id)
 
@@ -158,6 +177,7 @@ func reset() -> void:
 	_last_established_team = -1
 	_strip_time = -INF
 	_strip_victim_team = -1
+	_strip_stripper_peer = -1
 	_shot_time = -INF
 	_shot_team = -1
 	_clear_candidate()
