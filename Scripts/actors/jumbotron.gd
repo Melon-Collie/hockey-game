@@ -131,6 +131,49 @@ func current_mode() -> JumbotronRules.Mode:
 			_phase, _attract_locked or not _has_game_context)
 
 
+# ── Replay feed ──────────────────────────────────────────────────────────────
+# The offline ReplayViewer has no live GameManager signals to drive the board,
+# so it pushes the recorded game state (WorldStateCodec.decode_for_replay's
+# game_state block) and goal events here instead. Change-detected like the
+# signal handlers, so the one-redraw-per-content-change perf contract holds
+# while the driver emits on every recorded clock tick.
+
+func apply_replay_game_state(gs: Dictionary) -> void:
+	var changed: bool = not _has_game_context
+	_has_game_context = true
+	var score0: int = int(gs.get("score0", _score_home))
+	var score1: int = int(gs.get("score1", _score_away))
+	if score0 != _score_home or score1 != _score_away:
+		_score_home = score0
+		_score_away = score1
+		changed = true
+	var phase: int = int(gs.get("phase", _phase))
+	if phase != _phase:
+		_phase = phase
+		changed = true
+	var clock_txt: String = JumbotronRules.clock_text(
+			float(gs.get("time_remaining", 0.0)))
+	if clock_txt != _clock_str:
+		_clock_str = clock_txt
+		changed = true
+	var period_txt: String = JumbotronRules.period_text(int(gs.get("period", 1)))
+	if period_txt != _period_str:
+		_period_str = period_txt
+		changed = true
+	if changed:
+		_refresh()
+
+
+# Replayed goal event: the recorded event carries the scorer's display name
+# and scoring team id (no Team object offline). The GOAL page itself is
+# selected by the phase from apply_replay_game_state; this fills its content.
+func show_goal(scorer_name: String, team_id: int) -> void:
+	_has_game_context = true
+	_goal_scorer = scorer_name
+	_goal_color = _home_color if team_id == 0 else _away_color
+	_refresh()
+
+
 # ── Signal handlers ──────────────────────────────────────────────────────────
 
 # First game signal of any kind flips the board off the attract screen — that
@@ -174,11 +217,7 @@ func _on_period_synced(new_period: int) -> void:
 
 func _on_goal_scored(scoring_team: Team, scorer_name: String,
 		_assist1: String, _assist2: String) -> void:
-	_mark_game_context()
-	_goal_scorer = scorer_name
-	var team_id: int = scoring_team.team_id if scoring_team != null else 0
-	_goal_color = _home_color if team_id == 0 else _away_color
-	_refresh()
+	show_goal(scorer_name, scoring_team.team_id if scoring_team != null else 0)
 
 
 func _on_phase_changed(new_phase: GamePhase.Phase) -> void:

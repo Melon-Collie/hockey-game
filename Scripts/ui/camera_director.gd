@@ -1,10 +1,10 @@
 class_name CameraDirector
 extends Node
 
-# Owns the three cameras that spectator mode and the offline replay viewer
-# share (broadcast, chase, free). Handles mode cycling, chase-target cycling,
-# and input dispatch. Only one camera is current at a time; the others sit
-# parked as children of this node.
+# Owns the four cameras that spectator mode and the offline replay viewer
+# share (broadcast, chase, POV, free). Handles mode cycling, target cycling
+# for the skater-tracking modes, and input dispatch. Only one camera is
+# current at a time; the others sit parked as children of this node.
 #
 # Lifecycle: instance, add_child, setup(), then activate_initial() (defaults
 # to broadcast). On teardown(), restores whichever camera was current before
@@ -12,10 +12,13 @@ extends Node
 
 signal mode_changed(label: String)
 
-enum Mode { BROADCAST, CHASE, FREE }
+enum Mode { BROADCAST, CHASE, POV, FREE }
+
+const _MODE_COUNT: int = 4
 
 var _broadcast: SpectatorCamera = null
 var _chase: ChaseCamera = null
+var _pov: PovCamera = null
 var _free: FreeCamera = null
 
 var _mode: int = Mode.BROADCAST
@@ -24,7 +27,8 @@ var _skaters_getter: Callable = Callable()
 var _chase_index: int = 0
 # Cached cycle list so cycle_chase_target() sees the same ordering even if a
 # mid-game roster change reorders the dictionary. Refreshed on each entry into
-# CHASE mode and on cycle_chase_target.
+# a skater-tracking mode and on cycle_chase_target. Shared by CHASE and POV so
+# switching between them keeps the same tracked skater.
 var _cached_targets: Array[Skater] = []
 
 
@@ -36,12 +40,18 @@ func setup(puck_getter: Callable, skaters_getter: Callable) -> void:
 	add_child(_broadcast)
 	_broadcast.setup(puck_getter)
 
-	_chase = ChaseCamera.new()
-	add_child(_chase)
-	_chase.setup(func() -> Skater:
+	var target_getter: Callable = func() -> Skater:
 		if _cached_targets.is_empty():
 			return null
-		return _cached_targets[clampi(_chase_index, 0, _cached_targets.size() - 1)])
+		return _cached_targets[clampi(_chase_index, 0, _cached_targets.size() - 1)]
+
+	_chase = ChaseCamera.new()
+	add_child(_chase)
+	_chase.setup(target_getter)
+
+	_pov = PovCamera.new()
+	add_child(_pov)
+	_pov.setup(target_getter, puck_getter)
 
 	_free = FreeCamera.new()
 	add_child(_free)
@@ -59,6 +69,7 @@ func teardown() -> void:
 	match _mode:
 		Mode.BROADCAST: _broadcast.deactivate()
 		Mode.CHASE: _chase.deactivate()
+		Mode.POV: _pov.deactivate()
 		Mode.FREE: _free.deactivate()
 	queue_free()
 
@@ -72,22 +83,29 @@ func get_mode_label() -> String:
 		Mode.BROADCAST:
 			return "BROADCAST"
 		Mode.CHASE:
-			var n: int = _cached_targets.size()
-			if n == 0:
-				return "CHASE"
-			return "CHASE %d/%d" % [_chase_index + 1, n]
+			return _target_label("CHASE")
+		Mode.POV:
+			return _target_label("POV")
 		Mode.FREE:
 			return "FREE"
 	return ""
 
 
+func _target_label(prefix: String) -> String:
+	var n: int = _cached_targets.size()
+	if n == 0:
+		return prefix
+	return "%s %d/%d" % [prefix, _chase_index + 1, n]
+
+
 func cycle_mode() -> void:
-	# BROADCAST → CHASE → FREE → BROADCAST. CHASE is skipped if no skaters are
-	# on the ice (early-game roster gap, all peers spectating, etc.).
+	# BROADCAST → CHASE → POV → FREE → BROADCAST. The skater-tracking modes are
+	# skipped if no skaters are on the ice (early-game roster gap, all peers
+	# spectating, etc.).
 	var next: int = _mode
-	for _i in 3:
-		next = (next + 1) % 3
-		if next == Mode.CHASE and _refresh_targets().is_empty():
+	for _i in _MODE_COUNT:
+		next = (next + 1) % _MODE_COUNT
+		if (next == Mode.CHASE or next == Mode.POV) and _refresh_targets().is_empty():
 			continue
 		break
 	_set_mode(next)
@@ -102,10 +120,12 @@ func on_playback_discontinuity() -> void:
 			_broadcast.snap_to_position()
 		Mode.CHASE:
 			_chase.snap_to_target()
+		Mode.POV:
+			_pov.snap_to_target()
 
 
 func cycle_chase_target(direction: int) -> void:
-	if _mode != Mode.CHASE:
+	if _mode != Mode.CHASE and _mode != Mode.POV:
 		return
 	var targets: Array[Skater] = _refresh_targets()
 	if targets.is_empty():
@@ -113,7 +133,10 @@ func cycle_chase_target(direction: int) -> void:
 	_chase_index = posmod(_chase_index + direction, targets.size())
 	# Snap to the new target's pose so the next frame's smooth follow starts
 	# from there instead of lerping across the rink from the previous skater.
-	_chase.snap_to_target()
+	if _mode == Mode.CHASE:
+		_chase.snap_to_target()
+	else:
+		_pov.snap_to_target()
 	mode_changed.emit(get_mode_label())
 
 
@@ -124,6 +147,7 @@ func _set_mode(new_mode: int) -> void:
 	match _mode:
 		Mode.BROADCAST: _broadcast.deactivate()
 		Mode.CHASE: _chase.deactivate()
+		Mode.POV: _pov.deactivate()
 		Mode.FREE: _free.deactivate()
 	_mode = new_mode
 	match _mode:
@@ -132,6 +156,9 @@ func _set_mode(new_mode: int) -> void:
 		Mode.CHASE:
 			_refresh_targets()
 			_chase.activate()
+		Mode.POV:
+			_refresh_targets()
+			_pov.activate()
 		Mode.FREE:
 			# Inherit the previous camera's pose so the swap doesn't snap.
 			_free.activate(prev_xform)
@@ -142,6 +169,7 @@ func _current_transform() -> Transform3D:
 	match _mode:
 		Mode.BROADCAST: return _broadcast.global_transform
 		Mode.CHASE: return _chase.current_transform()
+		Mode.POV: return _pov.current_transform()
 		Mode.FREE: return _free.global_transform
 	return Transform3D.IDENTITY
 

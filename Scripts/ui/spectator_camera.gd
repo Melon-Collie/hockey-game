@@ -12,6 +12,14 @@ extends Camera3D
 # the player-perspective cams) flattens depth in the broadcast style — players
 # group up visually as the puck moves, which sells the play better than the
 # wider game-cam framing.
+#
+# Close-play zoom-out: a fixed telephoto FOV frames a constant ANGLE, so the
+# visible width shrinks linearly with distance — play at the camera-side
+# boards (~19 m away vs ~27 m at center ice) used to get a claustrophobic
+# frame that puck wiggle could exit. Rail cams instead hold a constant frame
+# WIDTH at the play (frame_width_m), exactly what a real camera operator's
+# zoom hand does: fov = 2·atan(W / 2d), floored at replay_fov so the far-side
+# wide shot keeps the published telephoto framing and only close play widens.
 
 @export var booth_x: float = 20.0        # outside the long boards (rink is ±13 wide)
 @export var booth_y: float = 18.0        # press-box elevation (~42° down to center ice)
@@ -19,11 +27,25 @@ extends Camera3D
 # 28° vertical → ~50° horizontal at 16:9 → frames ~35% of the rink length from
 # the booth distance, matching the published wide-shot guideline for NHL game-
 # follow cameras. Telephoto enough to compress depth (players group visually
-# as play moves) without losing the puck in long-bomb stretch passes.
+# as play moves) without losing the puck in long-bomb stretch passes. For rail
+# cams this is the FLOOR of the adaptive close-play zoom below.
 @export var replay_fov: float = 28.0
+# Constant visible frame width (m) held at the tracked play by the adaptive
+# zoom (rail cams only). 13.5 m is what replay_fov yields at the default
+# booth's center-ice distance (~27 m), so far/mid-ice framing is unchanged
+# and only closer play zooms out.
+@export var frame_width_m: float = 13.5
+# Zoom-out ceiling: past this the shot stops reading as a broadcast telephoto.
+@export var max_close_fov: float = 46.0
 @export var look_speed: float = 6.0      # rotation slerp speed
 @export var lead_time: float = 0.35      # seconds of puck-velocity lookahead
 @export var max_lead: float = 5.0        # cap the lead so fast shots don't overshoot
+# Angular cap on the velocity lead: the leaded look-target stays within this
+# fraction of the half-FOV of the puck itself. The absolute max_lead cap alone
+# was tuned for the ~27 m center-ice distance — at close range the same 5 m
+# subtends far more than the (narrower-in-meters) frame, letting a hard shot
+# fling the look-target clean off the play.
+@export var lead_fov_fraction: float = 0.75
 @export var noise_yaw_deg: float = 0.55
 @export var noise_pitch_deg: float = 0.30
 @export var noise_pos_amp: float = 0.06  # meters
@@ -89,6 +111,10 @@ func snap_to_position() -> void:
 		_target_velocity = Vector3.ZERO
 		_smoothing_initialized = true
 		global_position = Vector3(booth_x, booth_y, booth_z)
+		# A cut re-seeds the zoom too: land on the new distance's framing
+		# instead of easing from wherever the previous shot left the FOV.
+		if rail_track:
+			fov = _broadcast_fov(global_position.distance_to(target))
 		if global_position.distance_to(target) > 0.1:
 			look_at(target, Vector3.UP)
 	else:
@@ -131,12 +157,25 @@ func _process(delta: float) -> void:
 		var rail_alpha: float = clampf(delta * rail_smooth_rate, 0.0, 1.0)
 		booth_z = lerpf(booth_z, target_z, rail_alpha)
 
-	# Velocity-lead so the rotation anticipates the puck path. Capped so a
-	# slapshot doesn't fling the look-target past the play. The velocity is
-	# derived from the smoothed target, so this is wiggle-free.
+	# Constant-frame-width zoom (see class doc): re-derive the FOV from the
+	# smoothed target's distance so close play widens the shot instead of
+	# cropping it. Smoothness comes from the target smoothing itself. Parked
+	# custom presets (rail_track off, e.g. the inside-net cam) keep their
+	# set_booth FOV.
+	var booth_pos: Vector3 = Vector3(booth_x, booth_y, booth_z)
+	var target_dist: float = booth_pos.distance_to(_smoothed_target)
+	if rail_track:
+		fov = _broadcast_fov(target_dist)
+
+	# Velocity-lead so the rotation anticipates the puck path. Capped both
+	# absolutely and angularly (lead_fov_fraction of the half-FOV at the
+	# target's distance) so a slapshot doesn't fling the look-target past the
+	# play — the angular cap is what keeps close-range leads inside the frame.
 	var lead: Vector3 = _target_velocity * lead_time
-	if lead.length() > max_lead:
-		lead = lead.normalized() * max_lead
+	var lead_cap: float = minf(max_lead,
+			target_dist * tan(deg_to_rad(fov * 0.5) * lead_fov_fraction))
+	if lead.length() > lead_cap:
+		lead = lead.normalized() * lead_cap
 	var look_target: Vector3 = _smoothed_target + lead
 
 	# Wire-rig drift: subtle perlin-style noise on the booth position + look
@@ -153,12 +192,27 @@ func _process(delta: float) -> void:
 	global_position = Vector3(booth_x, booth_y, booth_z) + pos_noise * noise_pos_amp
 
 	# Build a look transform pointing at the leaded target, then nudge it by
-	# the rotation noise to add wire drift on top of the slerp.
+	# the rotation noise to add wire drift on top of the slerp. The weight must
+	# clamp at 1: a frame hitch pushing look_speed * delta past 1 would make
+	# interpolate_with EXTRAPOLATE beyond the target orientation.
 	if global_position.distance_to(look_target) > 0.1:
 		var look_xform: Transform3D = global_transform.looking_at(look_target, Vector3.UP)
 		look_xform = look_xform.rotated_local(Vector3.UP, deg_to_rad(yaw_noise * noise_yaw_deg))
 		look_xform = look_xform.rotated_local(Vector3.RIGHT, deg_to_rad(pitch_noise * noise_pitch_deg))
-		global_transform = global_transform.interpolate_with(look_xform, look_speed * delta)
+		global_transform = global_transform.interpolate_with(
+				look_xform, clampf(look_speed * delta, 0.0, 1.0))
+
+
+# The operator's-zoom model: hold frame_width_m of visible width at the play,
+# never tighter than replay_fov (the far wide shot), never wider than
+# max_close_fov. fov here is the vertical FOV; frame_width_m is measured
+# vertically in the frame (the rink's short axis from the side booth), which
+# is the axis that crops first at this camera's pitch.
+func _broadcast_fov(dist: float) -> float:
+	if dist <= 0.1:
+		return max_close_fov
+	var width_fov: float = rad_to_deg(2.0 * atan(frame_width_m / (2.0 * dist)))
+	return clampf(width_fov, replay_fov, max_close_fov)
 
 
 func _smooth_target_and_velocity(target_pos: Vector3, delta: float) -> void:

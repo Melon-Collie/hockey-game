@@ -13,6 +13,17 @@ extends Node3D
 # upper deck / shell exist so every camera sightline that clears the crowd
 # lands on building rather than the bare background color — the bowl used to
 # just end in the void.
+#
+# Seating sections: the bowl is divided into `num_aisles` seating sections by
+# radial aisle gaps (stair corridors cleared of spectators), aligned across
+# both decks via the shared base-path arc parameter (_base_path_s — the
+# perpendicular projection onto the boards' perimeter, so aisles run straight
+# up the rake like real stairways). A sub-1.0 `attendance` scatters empty
+# seats through the rows, and one upper-deck section is the designated
+# visiting-fan block — painted away-heavy so the bowl reads as a home crowd
+# with a real away section rather than a uniform sea. (The angular render
+# _CROWD_SECTIONS slices are unrelated: those exist purely for frustum
+# culling and don't align with the seating sections.)
 
 @export var rink_length: float = 60.0:
 	set(v):
@@ -125,11 +136,33 @@ extends Node3D
 		spectator_y_jitter = v
 		_request_rebuild()
 
+@export_group("Sections")
+# Radial aisles dividing the bowl into seating sections. Aisle positions are
+# evenly spaced along the boards' perimeter and shared by both decks (the
+# stair corridors line up down the rake). 0 disables sections entirely.
+@export var num_aisles: int = 12:
+	set(v):
+		num_aisles = v
+		_request_rebuild()
+# Cleared corridor width, measured along the base path (aisles fan slightly
+# wider toward the back rows in the corners, like real stairways).
+@export var aisle_width: float = 1.1:
+	set(v):
+		aisle_width = v
+		_request_rebuild()
+# Fraction of seats occupied. Real bowls are never packed solid — scattered
+# empties break up the wall of bodies.
+@export_range(0.0, 1.0) var attendance: float = 0.93:
+	set(v):
+		attendance = v
+		_request_rebuild()
+
 @export_group("Fan Mix")
 # Crowd composition. Home + away + neutral should sum to 1.0; the neutral
 # fraction is derived as max(0, 1 - home - away). Defaults model a typical
-# home arena: a wall of home colors, a sprinkling of neutrals, and a small
-# visiting-fan section's worth of away colors scattered through.
+# home arena: a wall of home colors, a sprinkling of neutrals, and a few away
+# colors scattered through — the bulk of the traveling support sits in the
+# designated upper-deck visiting section (see _away_section_id).
 @export_range(0.0, 1.0) var home_fan_ratio: float = 0.65:
 	set(v):
 		home_fan_ratio = v
@@ -336,7 +369,7 @@ func _geometry_key() -> String:
 			corner_segments, spectator_spacing, spectator_inset_from_riser,
 			spectator_yaw_jitter_deg, spectator_y_jitter,
 			walkway_depth, upper_terraces, upper_riser_height, upper_deck_rise,
-			shell_height])
+			shell_height, num_aisles, aisle_width, attendance])
 
 
 # Everything the paint pass reads: the four team colors + the mix ratios.
@@ -599,6 +632,89 @@ func _append_arc(pts: PackedVector2Array, center: Vector2, radius: float,
 		pts.append(center + Vector2(cos(ang), sin(ang)) * radius)
 
 
+# ── Seating sections ─────────────────────────────────────────────────────────
+# All section math runs on the BASE path's arc-length parameter: every seat
+# projects perpendicularly onto the boards' rounded-rect perimeter (straights
+# → perpendicular foot, corners → same angle on the base corner arc), so
+# seats stacked up the rake share one s value regardless of row offset. Aisles
+# are cuts at fixed s — that's what makes them radial and deck-aligned.
+
+# Arc length of the base (off = 0) path, in the sampler's traversal order.
+func _base_path_length() -> float:
+	return 2.0 * (rink_width - 2.0 * corner_radius) \
+			+ 2.0 * (rink_length - 2.0 * corner_radius) \
+			+ TAU * corner_radius
+
+
+# Arc position s ∈ [0, _base_path_length()) of a seat's perpendicular
+# projection onto the base path. p is (x, z), same packing as the samplers.
+# Segment order and directions mirror _sample_offset_path exactly.
+func _base_path_s(p: Vector2) -> float:
+	var cx_max: float = rink_width / 2.0 - corner_radius
+	var cz_max: float = rink_length / 2.0 - corner_radius
+	var len_x: float = 2.0 * cx_max
+	var len_z: float = 2.0 * cz_max
+	var len_c: float = (PI / 2.0) * corner_radius
+	var x: float = p.x
+	var z: float = p.y
+	if absf(x) <= cx_max:
+		# Short-end straights (behind the goals).
+		if z < 0.0:
+			return cx_max - x  # bottom edge: +x → −x
+		return len_x + 2.0 * len_c + len_z + (x + cx_max)  # top edge: −x → +x
+	if absf(z) <= cz_max:
+		# Long-side straights.
+		if x < 0.0:
+			return len_x + len_c + (z + cz_max)  # left edge: −z → +z
+		return 2.0 * len_x + 3.0 * len_c + len_z + (cz_max - z)  # right: +z → −z
+	# Corner fans: angular progress along the quarter arc, in sweep order.
+	var ang: float = atan2(z - signf(z) * cz_max, x - signf(x) * cx_max)
+	var progress: float
+	var s0: float
+	if x < 0.0 and z < 0.0:
+		progress = (-PI / 2.0 - ang) / (PI / 2.0)  # −π/2 → −π
+		s0 = len_x
+	elif x < 0.0:
+		progress = (PI - ang) / (PI / 2.0)  # π → π/2
+		s0 = len_x + len_c + len_z
+	elif z > 0.0:
+		progress = (PI / 2.0 - ang) / (PI / 2.0)  # π/2 → 0
+		s0 = 2.0 * len_x + 2.0 * len_c + len_z
+	else:
+		progress = -ang / (PI / 2.0)  # 0 → −π/2
+		s0 = 2.0 * len_x + 3.0 * len_c + 2.0 * len_z
+	return s0 + clampf(progress, 0.0, 1.0) * len_c
+
+
+# Whether an arc position falls inside a cleared aisle corridor. Aisles sit
+# at the section boundaries k · (perimeter / num_aisles).
+func _in_aisle(s: float) -> bool:
+	if num_aisles <= 0 or aisle_width <= 0.0:
+		return false
+	var seg: float = _base_path_length() / float(num_aisles)
+	var into: float = fposmod(s, seg)
+	return minf(into, seg - into) < aisle_width * 0.5
+
+
+func _section_id(s: float) -> int:
+	if num_aisles <= 0:
+		return 0
+	var seg: float = _base_path_length() / float(num_aisles)
+	return clampi(int(s / seg), 0, num_aisles - 1)
+
+
+# The visiting-fan block: the upper-deck section containing the top-left
+# corner's midpoint — an upper corner on the −X side, opposite the benches,
+# where real arenas park the away support.
+func _away_section_id() -> int:
+	if num_aisles <= 0:
+		return -1
+	var len_x: float = rink_width - 2.0 * corner_radius
+	var len_z: float = rink_length - 2.0 * corner_radius
+	var len_c: float = (PI / 2.0) * corner_radius
+	return _section_id(len_x + len_c + len_z + len_c * 0.5)
+
+
 # ── Spectator MultiMesh ──────────────────────────────────────────────────────
 
 # Build the color-independent half of the crowd into `layout`: per-section
@@ -611,20 +727,21 @@ func _append_arc(pts: PackedVector2Array, center: Vector2, radius: float,
 func _fill_spectator_layout(layout: Dictionary) -> void:
 	var transforms: Array[Transform3D] = []
 	var anim_data: Array[Color] = []
+	var away_block: PackedByteArray = PackedByteArray()
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = _SEED
 	for i: int in num_terraces:
 		# Spectators sit on the tread, inset slightly outward from the inner
 		# (rink-facing) edge so their feet aren't on the riser corner.
-		_append_spectator_row(transforms, anim_data, rng,
+		_append_spectator_row(transforms, anim_data, away_block, rng,
 				base_outward_offset + i * tread_depth + spectator_inset_from_riser,
-				stands_base_y + i * riser_height, i)
+				stands_base_y + i * riser_height, i, false)
 	# Upper deck rows. bench_row -1: the bench cutout is an ice-level concern
 	# only — the deck hangs far above the benches.
 	for j: int in upper_terraces:
-		_append_spectator_row(transforms, anim_data, rng,
+		_append_spectator_row(transforms, anim_data, away_block, rng,
 				_upper_deck_inner_offset() + j * tread_depth + spectator_inset_from_riser,
-				_upper_deck_base_y() + j * upper_riser_height, -1)
+				_upper_deck_base_y() + j * upper_riser_height, -1, true)
 
 	# Partition the bowl into angular slices around center ice, one MultiMesh
 	# pair per slice with a tight custom AABB. A single whole-bowl MultiMesh
@@ -646,12 +763,15 @@ func _fill_spectator_layout(layout: Dictionary) -> void:
 
 	var body_mms: Array[MultiMesh] = []
 	var head_mms: Array[MultiMesh] = []
+	var away_flags: Array[PackedByteArray] = []
 	for k: int in _CROWD_SECTIONS:
 		var idxs: PackedInt32Array = section_indices[k]
 		if idxs.is_empty():
 			continue
 		var body_mm: MultiMesh = _make_crowd_multimesh(body_mesh, idxs.size())
 		var head_mm: MultiMesh = _make_crowd_multimesh(head_mesh, idxs.size())
+		var slice_away: PackedByteArray = PackedByteArray()
+		slice_away.resize(idxs.size())
 		var seed_aabb: AABB = AABB(transforms[idxs[0]].origin, Vector3.ZERO)
 		for n_i: int in idxs.size():
 			var src: int = idxs[n_i]
@@ -659,6 +779,7 @@ func _fill_spectator_layout(layout: Dictionary) -> void:
 			body_mm.set_instance_custom_data(n_i, anim_data[src])
 			head_mm.set_instance_transform(n_i, transforms[src])
 			head_mm.set_instance_custom_data(n_i, anim_data[src])
+			slice_away[n_i] = away_block[src]
 			seed_aabb = seed_aabb.expand(transforms[src].origin)
 		# Godot's auto-AABB for MultiMesh is unreliable when transforms are
 		# pushed via set_instance_transform individually (vs. a single `buffer`
@@ -670,8 +791,10 @@ func _fill_spectator_layout(layout: Dictionary) -> void:
 		head_mm.custom_aabb = section_aabb
 		body_mms.append(body_mm)
 		head_mms.append(head_mm)
+		away_flags.append(slice_away)
 	layout["body_mms"] = body_mms
 	layout["head_mms"] = head_mms
+	layout["away_flags"] = away_flags
 
 
 func _make_crowd_multimesh(mesh: ArrayMesh, count: int) -> MultiMesh:
@@ -700,13 +823,24 @@ func _grow_section_aabb(seed_aabb: AABB) -> AABB:
 
 # One ring of spectators at `spectator_off` outward of the boards, feet at
 # `y`. bench_row is the lower-bowl row index for the bench cutout, or -1 for
-# rows the cutout can never apply to (the upper deck).
+# rows the cutout can never apply to (the upper deck). is_upper selects the
+# deck for the visiting-fan block (upper only). Appends a matching 0/1 flag
+# to away_block per placed spectator.
 func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Color],
-		rng: RandomNumberGenerator, spectator_off: float, y: float, bench_row: int) -> void:
+		away_block: PackedByteArray, rng: RandomNumberGenerator,
+		spectator_off: float, y: float, bench_row: int, is_upper: bool) -> void:
+	var away_section: int = _away_section_id()
 	var samples: PackedVector2Array = _sample_offset_path(spectator_off)
 	var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
 	for p: Vector2 in resampled:
 		if bench_row >= 0 and _in_bench_zone(bench_row, p):
+			continue
+		# Vacancy roll first (before any jitter rolls) so the occupied seats'
+		# jitter stream is stable relative to the seat sequence.
+		if rng.randf() > attendance:
+			continue
+		var arc_s: float = _base_path_s(p)
+		if _in_aisle(arc_s):
 			continue
 		var pos: Vector3 = Vector3(p.x, y + rng.randf_range(-spectator_y_jitter, spectator_y_jitter), p.y)
 		# Face the rink: local forward (-Z) should point from p toward XZ
@@ -716,6 +850,8 @@ func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Colo
 				+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
 		var spectator_basis: Basis = Basis(Vector3.UP, yaw)
 		transforms.append(Transform3D(spectator_basis, pos))
+		away_block.append(1 if is_upper and num_aisles > 0
+				and _section_id(arc_s) == away_section else 0)
 		# Animation roll (crowd.gdshader INSTANCE_CUSTOM): phase de-sync,
 		# sway amplitude, hop amplitude. Same data on body and head so the
 		# two draw calls move as one person.
@@ -734,7 +870,7 @@ func _add_spectators(layout: Dictionary) -> void:
 	var body_mms: Array[MultiMesh] = layout.body_mms
 	var head_mms: Array[MultiMesh] = layout.head_mms
 	if layout.paint_key != paint_key:
-		_paint_spectators(body_mms, head_mms)
+		_paint_spectators(layout)
 		layout.paint_key = paint_key
 
 	for k: int in body_mms.size():
@@ -758,15 +894,19 @@ func _add_spectators(layout: Dictionary) -> void:
 # Roll body/head colors for every spectator. Own rng stream (same _SEED),
 # consumed across the sections in their fixed build order, so the fan-mix
 # assignment is deterministic and identical across repaints of the same
-# layout.
-func _paint_spectators(body_mms: Array[MultiMesh], head_mms: Array[MultiMesh]) -> void:
+# layout. Seats flagged into the visiting-fan block roll the away-heavy mix.
+func _paint_spectators(layout: Dictionary) -> void:
+	var body_mms: Array[MultiMesh] = layout.body_mms
+	var head_mms: Array[MultiMesh] = layout.head_mms
+	var away_flags: Array[PackedByteArray] = layout.away_flags
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = _SEED
 	for k: int in body_mms.size():
 		var body_mm: MultiMesh = body_mms[k]
 		var head_mm: MultiMesh = head_mms[k]
+		var slice_away: PackedByteArray = away_flags[k]
 		for i: int in body_mm.instance_count:
-			var picked: Array[Color] = _pick_spectator_colors(rng)
+			var picked: Array[Color] = _pick_spectator_colors(rng, slice_away[i] != 0)
 			body_mm.set_instance_color(i, picked[0])
 			head_mm.set_instance_color(i, picked[1])
 
@@ -976,22 +1116,32 @@ func _resample_uniform(samples: PackedVector2Array, spacing: float) -> PackedVec
 	return out
 
 
+# Away-fan share inside the designated visiting block. A feel constant: real
+# visiting sections read as a wall of away colors with locals mixed through,
+# and 0.7 sells that without looking like a printed flag.
+const _AWAY_SECTION_FILL: float = 0.7
+
+
 # Roll a body + head color pair for one spectator. Returns [body, head].
 # Body roll: home_fan_ratio of home colors, away_fan_ratio of away colors,
 # rest neutral civilian shirts. Real arenas skew heavily toward home, with
-# only a small visiting-supporters section, so neutrals fill the gap.
+# the traveling support concentrated in one visiting block (in_away_block —
+# away-heavy, zero home) plus a sprinkle scattered through the bowl.
 # Within each team slice, secondary_color_ratio swap to the secondary tint.
 # Head roll: skin/hat palette by default, with a small team_cap_ratio chance
 # of a team-colored hat for committed fans.
-func _pick_spectator_colors(rng: RandomNumberGenerator) -> Array[Color]:
+func _pick_spectator_colors(rng: RandomNumberGenerator,
+		in_away_block: bool = false) -> Array[Color]:
 	var roll: float = rng.randf()
+	var home_cut: float = 0.0 if in_away_block else home_fan_ratio
+	var away_cut: float = _AWAY_SECTION_FILL if in_away_block else away_fan_ratio
 	var body: Color
 	var team_loyalty: Color = Color(0, 0, 0, 0)  # alpha=0 sentinel = neutral
-	if roll < home_fan_ratio:
+	if roll < home_cut:
 		var base: Color = home_color_secondary if rng.randf() < secondary_color_ratio else home_color
 		body = _shade(base, rng)
 		team_loyalty = home_color
-	elif roll < home_fan_ratio + away_fan_ratio:
+	elif roll < home_cut + away_cut:
 		var base: Color = away_color_secondary if rng.randf() < secondary_color_ratio else away_color
 		body = _shade(base, rng)
 		team_loyalty = away_color
