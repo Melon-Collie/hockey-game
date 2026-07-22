@@ -762,12 +762,19 @@ func _resolve_player_collisions() -> void:
 	# dummy / unit test) → no skater-vs-skater resolution.
 	if not _skater_collision_provider.is_valid():
 		return
+	# A ghosted skater (offside / icing / crease-dwell) has no physical presence:
+	# it neither delivers nor receives body contact. The physics layers set_ghost
+	# zeroes don't cover this path — skater-vs-skater contact is analytic, so the
+	# ghost gate has to live here. is_ghost replicates (SkaterNetworkState), so
+	# every machine skips the same pairs and the aggressor gate stays deterministic.
+	if is_ghost:
+		return
 	var others: Array = _skater_collision_provider.call()
 	if others == null:
 		return
 	var my_radius: float = collision_radius()
 	for other: Skater in others:
-		if other == null or other == self:
+		if other == null or other == self or other.is_ghost:
 			continue
 		# Center-to-center axis on XZ, n pointing self -> other (the hit direction).
 		# Fallback for coincident centers matches SkaterCollisionRules so the emit
