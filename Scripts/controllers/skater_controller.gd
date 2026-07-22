@@ -55,25 +55,42 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # ── Hit-Button (Body-Check Commit) Tuning ─────────────────────────────────────
 # The hit button (Ctrl / input.hit_held) commits a check: it delivers the full
 # body-check transfer (see Skater.hit_passive_transfer_mult for the uncommitted
-# floor), and pays for it the way sprint does — a stamina drain on the shared pool
-# plus a wider turn radius. So a big hit is a committed read (line them up, spend
-# stamina, sacrifice agility), not a free bump. Both costs are deterministic from
-# the replicated input.hit_held, so they re-derive through reconcile replay.
+# floor), and pays for it with a stamina drain on the shared sprint pool PLUS the
+# commitment of pulling the stick off the ice — while committed you can't poke,
+# receive a pass, or corral a loose puck (gated in PuckController/PickupClaim on
+# the replicated skater.hit_committed). So a big hit is a committed read (line them
+# up, spend stamina, give up puck play), not a free bump. Deterministic from the
+# replicated input.hit_held, so every cost re-derives through reconcile replay.
 @export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
-# Turn-rate scale while committing (< 1.0 = wider turns). Eased up from the
-# original 0.6 — committing still costs some agility (you're loading up, not
-# pivoting on a dime), but 0.6 fought you too hard when tracking a target you're
-# actively lining up. The commitment cost now lives mostly in stamina + the
-# sprint turn radius, not in a heavy hit-button steering penalty.
-@export var hit_turn_multiplier: float = 0.8
+# Turn-rate scale while committing (< 1.0 = wider turns). Now 1.0 (no penalty): the
+# commitment cost moved entirely onto the withdrawn stick above, so you can steer
+# freely to line up the hit — the old penalty punished the ATTEMPT (tracking a
+# mover) rather than the miss, which is backwards. Full-speed homing is still
+# bounded because sprinting in for max closing pays sprint's own turn radius
+# (sprint_turn_multiplier). Dial below 1.0 if committed checks feel too sticky.
+@export var hit_turn_multiplier: float = 1.0
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
-# up for the check — leans into it, drops the leading shoulder, and sinks into a
-# crouch. A render-rate blend (SkaterSkatingCoordinator) off the replicated
-# skater.hit_committed, so it reads on every machine and never touches the physics-
-# rate blade anchor (no reconcile geometry impact). Eases in/out as Ctrl is held.
-@export var hit_commit_lean_deg: float = 16.0         # forward trunk lean into the check
-@export var hit_commit_shoulder_deg: float = 12.0     # leading-shoulder drop (roll)
-@export var hit_commit_crouch_m: float = 0.07         # sink into the checking stance
+# up for the check — leans into it, drops the leading shoulder, sinks into a
+# crouch, and (empty-handed only) pulls the stick up off the ice. A render-rate
+# trunk blend (SkaterSkatingCoordinator) off the replicated skater.hit_committed
+# plus a stick raise driven through the IK's blade_y (gameplay-inert while
+# committed), so it reads on every machine and never affects puck play. Deliberately
+# pronounced — the stance has to be unmistakable so the commitment (and the withdrawn
+# stick) is legible to the player and their opponent. Eases in/out as Ctrl is held.
+@export var hit_commit_lean_deg: float = 24.0         # forward trunk lean into the check
+@export var hit_commit_shoulder_deg: float = 19.0     # leading-shoulder drop (roll)
+@export var hit_commit_crouch_m: float = 0.12         # sink into the checking stance
+@export var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an empty-handed commit
+# Loaded blade pose: while committing (empty-handed), the blade STOPS chasing the
+# cursor and eases to a fixed body-local "ready to hit" position — stick up (the
+# lift above) and held in front, so the stance snaps to a distinct silhouette
+# instead of a raised-but-still-tracking stick. Body-local XZ: +x is the forehand
+# side (× blade_side_sign), −z is in front of the skater (see _blade_relative_angle
+# bearing math). Gameplay-inert — the blade is withdrawn from puck play while
+# committed, so this is a pure cosmetic override that eases back to cursor tracking
+# on release. Feel dials; verify the silhouette in-game.
+@export var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
+@export var hit_commit_blade_local_z: float = -0.34   # how far in FRONT the loaded blade sits (−z = ahead)
 @export var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
@@ -84,15 +101,18 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
 # Grounded to the inelastic magnitudes: the delivered victim impulse is
-# closing_speed × transfer × m_a/(m_a+m_b), so at a MEDIUM build (transfer 0.45,
-# equal mass → ×0.5) it's ~0.225 × closing, and an enforcer (transfer ~0.61, a
-# touch heavier) is ~0.33 × closing. The ref point is deliberately the SAME as the
-# puck-strip threshold (Puck.body_check_strip_threshold, 1.35): a hit hard enough
-# to count as a full check is exactly a hit hard enough to knock the puck loose.
-# That lands a full check at ~6 m/s closing for a medium build and ~4 m/s for an
-# enforcer — "square them up and skate into them with some pace," NOT a sprint-only
-# collision. (Was 1.0/2.5, which needed ~11 m/s closing at a medium build — full
-# force was effectively gated behind a sprint, the degenerate coupling this fixes.)
+# closing_speed × transfer × m_a/(m_a+m_b), so at a MEDIUM build (transfer 0.65,
+# equal mass → ×0.5) it's ~0.325 × closing, and a heavier build (a touch more mass
+# ratio) is higher still. The ref point is deliberately the SAME as the puck-strip
+# threshold (Puck.body_check_strip_threshold, 1.35): a hit hard enough to count as
+# a full check is exactly a hit hard enough to knock the puck loose. At the 0.65
+# transfer that lands a full check + strip at ~4 m/s closing for a medium build
+# (~3.4 for a heavy one) — "square them up and skate into them with some pace,"
+# comfortably reachable. (The impulse breakpoints used to sit at closing speeds
+# that were partly unreachable — a full check needed ~6 m/s and a knockdown ~13 —
+# after the transfer and the attribute mass range drifted apart across reworks;
+# the 0.65 transfer + the retuned knockdown band below re-anchor the whole ladder
+# into the reachable 2–10 m/s closing range this fixes.)
 # Speed still buys MORE than a full check: closing past the ref keeps scaling the
 # impulse linearly into the knockdown band below, so a sprint / head-on collision
 # is a bigger hit — a ceiling, not a requirement. Still feel tunables.
@@ -119,15 +139,18 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the body slides from the hit and bleeds speed via knockdown_friction — for a
 # recovery window scaling with the hit (see BodyCheckRules.knockdown_seconds_from_
 # impulse). knockdown_timer rides the SAME replicated / snapped / decayed rail as
-# stagger_timer. Deliberately left ABOVE the retuned full-check point (stagger_ref
-# 1.35): a full check staggers + strips; a KNOCKDOWN is reserved for a genuinely
-# big hit — an enforcer at pace (~9 m/s closing) or a fast/head-on collision
-# (~13 m/s at a medium build). It's the speed/Size ceiling, not the default outcome
-# of a check, and it sits above the AI's commit bar (AIBodyCheck.COMMIT_IMPULSE_M_S
-# 2.5) so a bot leaving position lands a solid check without auto-flattening. Set
-# knockdown_impulse very high (or 0) to effectively disable knockdowns.
-@export var knockdown_impulse: float = 3.0         # m/s victim impulse above which a hit knocks down
-@export var knockdown_ref_impulse: float = 5.0     # m/s impulse of a maximal (longest) knockdown
+# stagger_timer. Deliberately kept ABOVE the full-check point (stagger_ref 1.35):
+# a full check staggers + strips; a KNOCKDOWN is the reward for a genuinely SOLID
+# hit — ~5.5 m/s closing at a medium build (~4.5 for a heavy one), the pace of a
+# committed skate-in on a carrier, up to a maximal ~9.5 m/s head-on/sprint
+# collision. It sits just above the AI's commit bar (AIBodyCheck.COMMIT_IMPULSE_M_S
+# 1.6) so a committed bot check lands a hard stagger/strip and, at real closing,
+# tips into a knockdown. (Was 3.0/5.0 — a band that needed ~13–22 m/s closing,
+# above the top skater speed, so knockdowns were effectively unreachable; retuned
+# so solid hits knock down as intended.) Set knockdown_impulse very high (or 0) to
+# effectively disable knockdowns.
+@export var knockdown_impulse: float = 1.8         # m/s victim impulse above which a hit knocks down
+@export var knockdown_ref_impulse: float = 3.1     # m/s impulse of a maximal (longest) knockdown
 @export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
 @export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
 @export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding

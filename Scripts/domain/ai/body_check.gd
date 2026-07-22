@@ -47,20 +47,19 @@ const CHECK_RANGE_M: float = 6.0
 const MAX_LEAD_S: float = 0.6
 
 # Predicted victim impulse (m/s velocity delta) required to commit. This is a
-# CONSERVATIVE RISK BAR, deliberately DECOUPLED from the human stagger ladder's
-# full-check point (SkaterController.stagger_ref_impulse, now 1.35): committing to
-# a hit means abandoning containment position, so a bot only leaves its feet for a
-# SOLIDLY-landing check — one that fully staggers AND strips the puck with margin,
-# well past the point where a human check merely registers. At the inelastic scale
-# (a medium drive is ~0.225 × closing, an enforcer ~0.33 ×) this bar means a
-# baseline build must catch the carrier closing (a real collision), an enforcer's
-# transfer clears it on its own drive, and a lightweight never whiffs a check it'd
-# bounce off. It sits just below the knockdown floor (3.0), so a committed bot hit
-# lands a hard stagger without auto-flattening. (Predecessor was 5.0 against the
-# pre-inelastic weight-ratio model — a bar ~5× above what the rewritten collision
-# can physically deliver, which is why bots stopped hitting when the resolver
-# changed.)
-const COMMIT_IMPULSE_M_S: float = 2.5
+# CONSERVATIVE RISK BAR: committing to a hit means abandoning containment position,
+# so a bot only leaves its feet for a SOLIDLY-landing check — one that at least
+# fully staggers AND strips the puck (stagger_ref / strip threshold 1.35), with a
+# little margin. It sits just BELOW the knockdown floor (SkaterController.
+# knockdown_impulse, 1.6 < 1.8): a committed bot check reliably strips + staggers
+# and, at real closing speed, tips into a knockdown — but the bar itself doesn't
+# demand one. At the inelastic scale (a medium drive is ~0.325 × closing, a heavy
+# build more) this means a baseline bot commits when it can bring ~5 m/s closing
+# (a real skate-in), a heavy build clears it sooner off its own drive, and a light
+# build correctly declines checks it'd bounce off a bigger target. (Was 2.5 against
+# a transfer of 0.45 — a bar needing ~11 m/s closing at a medium build, so bots
+# almost never committed; the 0.65 transfer + this bar restore aggressive hitting.)
+const COMMIT_IMPULSE_M_S: float = 1.6
 
 # League-average victim mass (Skater.weight default) — the weight_ratio
 # denominator until opponent attributes are modeled.

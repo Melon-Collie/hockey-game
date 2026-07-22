@@ -248,6 +248,21 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	#    capped position rather than the raw target.
 	var capped_blade_local: Vector3 = _skater.upper_body_to_local(_smoothed_blade_world)
 	var capped_blade_xz := Vector2(capped_blade_local.x, capped_blade_local.z)
+	# Commit stance: ease the blade OFF the cursor toward a fixed body-local "loaded"
+	# pose while committing (empty-handed), so the stick freezes into a distinct
+	# ready-to-hit silhouette instead of tracking. Blended by _commit_lift_blend
+	# (0 except during a commit), so it lerps in as Ctrl is held and back to cursor
+	# tracking on release — the underlying _smoothed_blade keeps tracking beneath the
+	# override, so there's no pop. Gameplay-inert (the blade is withdrawn from puck
+	# play while committed); the Y lift rides blade_y_local. Only the hand solve
+	# reads this local copy — _smoothed_blade state is untouched, staying coherent
+	# for the exit.
+	var commit_t: float = _skater.get_commit_lift_blend()
+	if commit_t > 0.0:
+		var loaded := Vector2(
+				_controller.hit_commit_blade_local_x * blade_side_sign,
+				_controller.hit_commit_blade_local_z)
+		capped_blade_xz = capped_blade_xz.lerp(loaded, commit_t)
 	var ik: TopHandIK.Result = _solve_top_hand(capped_blade_xz, blade_side_sign)
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
@@ -493,6 +508,11 @@ func blade_y_local() -> float:
 	# IK solves from it) rises off the ice. blend is 0 in all shot/carry states
 	# (blade_up is gated off then), so this is a no-op except during a lift.
 	var lift: float = _skater.get_blade_lift_blend() * _controller.blade_lift_height
+	# Plus the commit-stance stick raise: a body-check commit pulls the stick off
+	# the ice as a readable tell. Gameplay-inert (the blade is already withdrawn
+	# from puck play while committed), so this is a pure cosmetic overlay; 0 except
+	# during an empty-handed commit.
+	lift += _skater.get_commit_lift_blend() * _controller.hit_commit_blade_lift_m
 	return (_controller.blade_height + lift) - _skater.upper_body.global_position.y
 
 # Lean-corrected blade Y for a given blade local (X, Z). Computes the local Y

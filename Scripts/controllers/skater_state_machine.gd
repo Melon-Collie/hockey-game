@@ -11,6 +11,18 @@ enum State {
 	SHOT_BLOCKING,
 }
 
+
+# States in which the skater is handling the puck — carrying, aiming a wrister, or
+# a slapper wind-up that still holds it (the one-timer SLAPPER_CHARGE_WITHOUT_PUCK
+# does NOT). Pure/static so it reads the same on host, client, reconcile replay,
+# and the lag-comp claim path (which only has the replicated shot_state, not a live
+# carrier reference). Gates the "committed check" split: a carrier can hold the Hit
+# button to BRACE but can't DELIVER an offensive check while carrying.
+static func state_has_puck(state: int) -> bool:
+	return state == State.SKATING_WITH_PUCK \
+			or state == State.WRISTER_AIM \
+			or state == State.SLAPPER_CHARGE_WITH_PUCK
+
 # Controller operations injected at setup. All methods that need @export params
 # or actor/puck references stay on SkaterController and are wired as Callables
 # so the state machine only owns transition logic.

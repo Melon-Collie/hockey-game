@@ -166,11 +166,16 @@ const _BLADE_TAPE_END_FRAC: float = 0.62
 
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
-@export var body_check_restitution: float = 0.25         # attacker rebound on a glancing hit
-@export var body_check_restitution_floor: float = 0.0    # rebound on a full-strength hit (drive through the check)
-@export var body_check_drive_min_impulse: float = 4.0    # delivered impulse where drive-through starts easing in
-@export var body_check_drive_ref_impulse: float = 11.0   # delivered impulse of a full plow-through hit
-@export var body_check_transfer: float = 0.45
+# Fraction of closing momentum the inelastic resolver transfers on a committed
+# check (SkaterCollisionRules — the only body-check delivery term now; the old
+# restitution/drive-through exports were pre-inelastic dead code, removed). At
+# equal mass the victim's knockback is closing × transfer × 0.5, so this is the
+# master "how hard does a check hit" dial: raising it strips/staggers/knocks-down
+# at lower closing speeds AND deepens the attacker's own inelastic decel (the
+# symmetric exchange — a real check costs the checker some speed too). Scaled
+# per-build by PlayerAttributes.check_delivery_mult (flat 1.0 in v4 — mass is the
+# only differentiator), so the same 0.65 lands for every build.
+@export var body_check_transfer: float = 0.65
 @export var body_check_brace_resistance: float = 0.4
 # Fraction of body_check_transfer that lands WITHOUT the hit button committed.
 # The hit button (Ctrl / input.hit_held) is the intent gate: a committed check
@@ -422,6 +427,14 @@ var deflect_intent: bool = false
 # Eased 0→1 toward blade_up; drives the IK blade-lift offset (see
 # SkaterIKCoordinator.blade_y_local). Mirrors _blade_elevation_blend.
 var _blade_lift_blend: float = 0.0
+# Eased 0→1 toward an EMPTY-HANDED body-check commit (the "delivering" state).
+# Drives a cosmetic stick raise in SkaterIKCoordinator.blade_y_local so a committed
+# checker visibly pulls the stick off the ice — the readable tell that the stance
+# is live. Gameplay-inert: while committed the blade is already withdrawn from all
+# puck interaction (gated on hit_committed), so lifting it changes nothing but the
+# visual. A carrier holding the button to BRACE keeps the stick down (delivering is
+# false while carrying), so this never lifts a puck off someone's blade.
+var _commit_lift_blend: float = 0.0
 # Counts down while an opponent's stick-lift has forcibly popped this skater's
 # blade up. Set host-side by the stick-lift claim path; decremented every tick.
 # The controller ORs this into the effective blade_up regardless of possession,
@@ -705,6 +718,7 @@ func _physics_process(delta: float) -> void:
 	_update_blade_elevation(delta)
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
+	_update_commit_lift(delta)
 	_hud.update(delta)
 	# Position + velocity are now fully settled for this tick (move_and_slide,
 	# body-check collision resolution, and the rink clamp above have all run).
@@ -781,8 +795,16 @@ func _resolve_player_collisions() -> void:
 		# committing (the victim) braces to cut the delivered impulse ("take less") —
 		# the brace moved off brake onto the same button. Both read the REPLICATED
 		# hit_committed so they evaluate identically on every machine.
+		#
+		# But a puck CARRIER can't DELIVER an offensive check — holding the button
+		# while carrying only BRACES (the victim-brace below still reads hit_committed
+		# regardless of possession), so a carrier bulldozing lands the incidental
+		# passive bump, not a full hit. Derived from the replicated current_shot_state
+		# so it re-evaluates identically on every machine and through reconcile.
+		var delivering: bool = hit_committed \
+				and not SkaterStateMachine.state_has_puck(current_shot_state)
 		var atk_transfer: float = body_check_transfer \
-				* (1.0 if hit_committed else hit_passive_transfer_mult)
+				* (1.0 if delivering else hit_passive_transfer_mult)
 		var brace: float = other.body_check_brace_resistance if other.hit_committed else 1.0
 		SkaterCollisionRules.resolve(_collision_result,
 				global_position, velocity, weight, my_radius,
@@ -1021,6 +1043,9 @@ func _update_blade_elevation(delta: float) -> void:
 # Blend units/sec for the blade-lift ease (~0.08 s for a full lift). Snappier
 # than the elevation blend — a stick lift is a deliberate, quick action.
 const _BLADE_LIFT_BLEND_SPEED: float = 12.0
+# Ease rate for the commit-stance stick raise (units/sec). A touch slower than the
+# blade lift so the stick "loads up" into the check rather than snapping.
+const _COMMIT_LIFT_BLEND_SPEED: float = 9.0
 
 
 # Eases _blade_lift_blend toward blade_up each tick. The IK reads the blend via
@@ -1036,6 +1061,24 @@ func _update_blade_lift(delta: float) -> void:
 # Eased 0→1 lift factor consumed by SkaterIKCoordinator.blade_y_local().
 func get_blade_lift_blend() -> float:
 	return _blade_lift_blend
+
+
+# Eases _commit_lift_blend toward an empty-handed check commit ("delivering"), so
+# the committed checker's stick cosmetically rises off the ice. A carrier holding
+# the button to brace does NOT lift (delivering is false while carrying). Called
+# from _physics_process alongside _update_blade_lift.
+func _update_commit_lift(delta: float) -> void:
+	var delivering: bool = hit_committed \
+			and not SkaterStateMachine.state_has_puck(current_shot_state)
+	var target: float = 1.0 if delivering else 0.0
+	_commit_lift_blend = move_toward(
+			_commit_lift_blend, target, _COMMIT_LIFT_BLEND_SPEED * delta)
+
+
+# Eased 0→1 commit-stance stick-raise factor consumed by
+# SkaterIKCoordinator.blade_y_local().
+func get_commit_lift_blend() -> float:
+	return _commit_lift_blend
 
 
 # Forcibly pop this skater's blade up for `duration` seconds (opponent stick
