@@ -577,15 +577,6 @@ func _ready() -> void:
 	collision_layer = Constants.LAYER_SKATER_BODIES
 	collision_mask  = Constants.MASK_SKATER
 
-	# Top-down game: the body never moves vertically (no gravity, velocity.y
-	# pinned to 0), so the manual integration in _physics_process
-	# (global_position += velocity·dt) leaves Y untouched by construction. The
-	# axis lock is now belt-and-suspenders — it only ever affected move_and_slide,
-	# which is gone (it used to stop the slide from nudging the body up off the
-	# knife-edge ice contact every tick). Kept harmless in case a body physics move
-	# is ever reintroduced.
-	axis_lock_linear_y = true
-
 	_blade_area = Area3D.new()
 	_blade_area.name = "BladeArea"
 	_blade_area.collision_layer = Constants.LAYER_BLADE_AREAS
