@@ -1176,6 +1176,10 @@ func _spawn_world() -> void:
 	_spawn_goalies()
 	_wire_subsystems()
 	if NetworkManager.is_host:
+		# Fresh session, fresh memo — the danger field's vertices self-heal
+		# against goalie motion anyway (per-vertex epsilon validation), this
+		# just guarantees no value survives a world respawn.
+		AIDangerField.reset()
 		team_brains = [
 				TeamBrain.new(0, _registry.team_id_by_peer, _registry.caps_by_peer,
 						_state_machine.team_size, _registry.position_by_peer),

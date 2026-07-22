@@ -200,7 +200,11 @@ static func most_dangerous_man_in_area(
 		var margin: float = AREA_RELEASE_MARGIN_M if pid == incumbent_pid else 0.0
 		if not in_area(slot, strong_x, own_goal_z, pos, margin):
 			continue
-		var danger: float = AIActionScoring.score_shoot(
+		# FIELDED finish-danger read (AIDangerField memoized core; no field
+		# defenders, so the fielded value IS the core). Also aligns this read
+		# with the threat family's derived post-seal — a dead-angle man walled
+		# by the keeper's RVH/VH no longer out-dangers a live mid-ice man.
+		var danger: float = AIActionScoring.score_shoot_threat_fielded(
 				pos, our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH,
 				no_defenders)
 		# Incumbent wins ties (>=); a challenger needs strictly more danger.
