@@ -263,7 +263,15 @@ func _physics_process(delta: float) -> void:
 	_poke_claim_floor = maxf(_poke_claim_floor - delta, 0.0)
 	if not _is_host and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked and _sm.get_state() != State.SHOT_BLOCKING:
 		var blade_pos_for_claim: Vector3 = skater.get_blade_contact_global()
-		if puck.carrier == null:
+		# Branch on the CLIENT-side carrier view (PuckController, driven by the
+		# carrier events) — puck.carrier is host-only and never set on clients,
+		# so gating on it made this always read "loose": the poke/stick-lift
+		# claim branch was unreachable and the pickup branch re-claimed a
+		# carried puck (pinned ~0 m from the blade) for entire carries.
+		var pctrl: PuckController = GameManager.puck_controller
+		var view_carrier_pid: int = pctrl.get_client_carrier_peer_id() if pctrl != null else -1
+		var view_carrier: Skater = pctrl.get_client_carrier_skater() if pctrl != null else null
+		if view_carrier_pid == -1:
 			# Loose puck — speculative pickup claim. Host validates with rewind.
 			# Edge-triggered: fire the instant the puck enters blade range so a fast
 			# or contested puck brushing the blade claims at the contact moment (the
@@ -312,7 +320,7 @@ func _physics_process(delta: float) -> void:
 					GameManager.puck_controller.try_provisional_pickup(skater)
 			_was_in_pickup_range = in_range
 			_was_in_poke_range = false
-		elif puck.carrier != skater:
+		elif view_carrier != null and view_carrier != skater:
 			_was_in_pickup_range = false
 			# Opposing carrier — speculative poke OR stick-lift claim, edge-triggered
 			# on the same rationale as pickup: fire the instant the blade enters poke
@@ -320,25 +328,23 @@ func _physics_process(delta: float) -> void:
 			# 300ms throttle windows; re-fire on the throttle while it stays in range.
 			# Own timers (not the pickup cooldown) so the two actions don't block each
 			# other. Skip same-team carriers — the host would reject. Carrier peer_id
-			# comes from PuckController._carrier_peer_id (reliable-RPC-managed on
-			# clients, never world state), so it's safe for the expected-carrier check.
-			var carrier_team: int = puck.carrier.get_team_id()
-			var carrier_pid: int = -1
+			# and skater come from PuckController's client carrier view (carrier-event
+			# managed, never world state), so the expected-carrier check is safe.
+			var carrier_team: int = view_carrier.get_team_id()
+			var carrier_pid: int = view_carrier_pid
 			var in_poke_range: bool = false
 			var is_lift: bool = false
 			if carrier_team != _team_id and carrier_team != -1:
-				carrier_pid = GameManager.puck_controller.get_carrier_peer_id() if GameManager.puck_controller != null else -1
-				if carrier_pid != -1:
-					if skater.blade_up:
-						# Lifted blade — hook under the carrier's shaft for a stick lift.
-						is_lift = true
-						var c_hand: Vector3 = puck.carrier.upper_body_to_global(puck.carrier.get_top_hand_position())
-						var c_blade: Vector3 = puck.carrier.get_blade_contact_global()
-						in_poke_range = PuckInteractionRules.check_blade_under_stick(
-								blade_pos_for_claim, c_hand, c_blade,
-								PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN)
-					else:
-						in_poke_range = puck.global_position.distance_to(blade_pos_for_claim) <= PuckController.POKE_RADIUS
+				if skater.blade_up:
+					# Lifted blade — hook under the carrier's shaft for a stick lift.
+					is_lift = true
+					var c_hand: Vector3 = view_carrier.upper_body_to_global(view_carrier.get_top_hand_position())
+					var c_blade: Vector3 = view_carrier.get_blade_contact_global()
+					in_poke_range = PuckInteractionRules.check_blade_under_stick(
+							blade_pos_for_claim, c_hand, c_blade,
+							PuckController.STICK_LIFT_RADIUS, PuckController.STICK_LIFT_UNDER_MARGIN)
+				else:
+					in_poke_range = puck.global_position.distance_to(blade_pos_for_claim) <= PuckController.POKE_RADIUS
 			var rising_poke_edge: bool = in_poke_range and not _was_in_poke_range
 			if in_poke_range and _poke_claim_floor <= 0.0 and (rising_poke_edge or _poke_cooldown <= 0.0):
 				_poke_claim_floor = _POKE_CLAIM_FLOOR_S
@@ -358,8 +364,9 @@ func _physics_process(delta: float) -> void:
 						carrier_pid, blade_pos_for_claim, skater.get_prev_blade_contact_global())
 			_was_in_poke_range = in_poke_range
 		else:
-			# We carry the puck — reset both edges so a future loose / contest
-			# contact registers as a clean rising edge.
+			# We carry the puck (or the carrier's skater isn't spawned on this
+			# client — no geometry to aim a claim at). Reset both edges so a
+			# future loose / contest contact registers as a clean rising edge.
 			_was_in_pickup_range = false
 			_was_in_poke_range = false
 
@@ -391,9 +398,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if server_state.is_ghost:
 		skater.set_ghost(true)
 	elif skater.is_ghost:
-		var is_carrier: bool = puck != null and puck.carrier == skater
+		# has_puck, not the host-only puck.carrier (see _predict_offside) — with
+		# the dead read this hold-back also REFUSED the server's authoritative
+		# un-ghost while the carrier's own geometry still looked offside.
 		var puck_z: float = puck.global_position.z if puck != null else 0.0
-		if not InfractionRules.is_offside(skater.global_position.z, _team_id, puck_z, is_carrier):
+		if not InfractionRules.is_offside(skater.global_position.z, _team_id, puck_z, has_puck):
 			skater.set_ghost(false)
 	if _game_state.is_movement_locked():
 		# Dead-puck phase: don't reconcile. on_faceoff_positions is the reliable
@@ -834,9 +843,12 @@ func _predict_offside() -> void:
 	# prediction — the FACEOFF_PREP teleport is the visible feedback).
 	if GameManager.get_rule_set() != GameRules.RuleSet.ARCADE:
 		return
-	var is_carrier: bool = puck.carrier == skater
+	# has_puck, NOT puck.carrier — puck.carrier is host-only (never set on
+	# clients), so it read false here even while legally carrying and the
+	# "carriers are never offside" exemption was dead in local prediction:
+	# a body-leading zone entry self-ghosted the carrier.
 	var offside: bool = InfractionRules.is_offside(
-		skater.global_position.z, _team_id, puck.global_position.z, is_carrier)
+		skater.global_position.z, _team_id, puck.global_position.z, has_puck)
 	# Only predict offside → ghost. Icing ghost comes from server via reconcile.
 	if offside and not skater.is_ghost:
 		skater.set_ghost(true)

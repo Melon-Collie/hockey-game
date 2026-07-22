@@ -69,6 +69,14 @@ var is_server: bool = false
 # ── State ─────────────────────────────────────────────────────────────────────
 var _carrier_peer_id: int = -1            # server-side authoritative carrier
 var _local_carrier_skater: Skater = null  # client-side: local skater while carrying
+# Client-side carrier VIEW (peer id, -1 = loose), driven EXCLUSIVELY by the
+# carrier events — pickup grant / carrier-changed / steal / drop, arriving via
+# reliable RPC or the snapshot event block — never by world state (unreliable
+# ordering vs locally-predicted transitions). This is what LocalController's
+# claim gate branches on: puck.carrier is HOST-only (never set on clients), so
+# gating on it left the poke/stick-lift claim path unreachable and re-fired
+# pickup claims against a carried puck for entire carries.
+var _client_carrier_peer_id: int = -1
 # Client-side: the remote skater currently carrying, when it's NOT the local
 # player. While set, the puck is pinned to this skater's interpolated blade
 # rather than interpolating from its own buffer — the two used to run on
@@ -147,6 +155,21 @@ func get_local_carrier() -> Skater:
 
 func get_carrier_peer_id() -> int:
 	return _carrier_peer_id
+
+# Client-side carrier view (see _client_carrier_peer_id). -1 = loose/unknown.
+func get_client_carrier_peer_id() -> int:
+	return _client_carrier_peer_id
+
+# The carrier's Skater on this client's view, when spawned locally: the pinned
+# remote carrier or the local skater. Null while loose, or when the carrier's
+# skater isn't available here (unspawned record) — callers that need geometry
+# (poke/stick-lift aim) must handle null.
+func get_client_carrier_skater() -> Skater:
+	if _local_carrier_skater != null and is_instance_valid(_local_carrier_skater):
+		return _local_carrier_skater
+	if _remote_carrier_skater != null and is_instance_valid(_remote_carrier_skater):
+		return _remote_carrier_skater
+	return null
 
 # Callable (Skater) -> int peer_id, or -1 if not registered.
 var _peer_id_resolver: Callable = Callable()
@@ -574,6 +597,7 @@ func _check_body_blocks(skaters: Array, puck_curr: Vector3) -> bool:
 func notify_local_pickup(local_skater: Skater) -> void:
 	_local_carrier_skater = local_skater
 	_remote_carrier_skater = null
+	_client_carrier_peer_id = NetworkManager.local_peer_id()
 	# Host confirmed our pickup. If we were already provisionally pinned to this
 	# same blade, this promotes it seamlessly (no visible change); otherwise it
 	# attaches now.
@@ -588,9 +612,10 @@ func notify_local_pickup(local_skater: Skater) -> void:
 # interpolated blade so it shares the carrier's render timeline instead of
 # interpolating from its own buffer. Mirrors notify_local_pickup. GameManager
 # only calls this for non-local carriers whose skater is spawned on this client.
-func notify_remote_pickup(remote_skater: Skater) -> void:
+func notify_remote_pickup(remote_skater: Skater, carrier_peer_id: int) -> void:
 	_remote_carrier_skater = remote_skater
 	_local_carrier_skater = null
+	_client_carrier_peer_id = carrier_peer_id
 	if _provisional_carrier_skater != null:
 		NetworkTelemetry.record_provisional_stolen()  # legit loss of a 50/50, not the felt bug
 	_clear_provisional()  # a different player won the puck — roll back our optimistic pin
@@ -610,6 +635,7 @@ func notify_local_release(direction: Vector3, power: float) -> Vector3:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
 		release_pos.y = puck.ice_height
 	_local_carrier_skater = null
+	_client_carrier_peer_id = -1
 	_arm_provisional_lockout()  # post-release reattach cooldown — don't optimistically re-grab
 	# Fire from the blade and seed the shared loose-puck prediction — no forward
 	# advance. The host is authoritative and fires from this same (client-sent)
@@ -633,6 +659,7 @@ func notify_local_nudge(velocity: Vector3) -> void:
 		release_pos = _local_carrier_skater.get_blade_contact_global()
 		release_pos.y = puck.ice_height
 	_local_carrier_skater = null
+	_client_carrier_peer_id = -1
 	_arm_provisional_lockout(puck.nudge_cooldown)
 	var v := velocity
 	v.y = 0.0
@@ -661,6 +688,7 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	if new_carrier_peer_id != -1:
 		_release_seed_active = false
 	_remote_carrier_skater = null
+	_client_carrier_peer_id = new_carrier_peer_id
 	_clear_provisional()
 
 # Called when the server forcibly ends a carry (e.g. goal scored).
@@ -668,6 +696,7 @@ func notify_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 func notify_local_puck_dropped() -> void:
 	_local_carrier_skater = null
 	_remote_carrier_skater = null
+	_client_carrier_peer_id = -1
 	_arm_provisional_lockout()  # we just lost the puck — host won't hand it back during reattach cooldown
 	_release_seed_active = false
 	_state_buffer.clear()

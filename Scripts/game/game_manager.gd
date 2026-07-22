@@ -3272,7 +3272,7 @@ func _on_remote_carrier_changed(new_carrier_peer_id: int) -> void:
 	if record == null or record.skater == null or record.is_local:
 		puck_controller.notify_remote_carrier_changed(new_carrier_peer_id)
 		return
-	puck_controller.notify_remote_pickup(record.skater)
+	puck_controller.notify_remote_pickup(record.skater, new_carrier_peer_id)
 
 
 func on_carrier_puck_dropped() -> void:
