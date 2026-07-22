@@ -173,6 +173,17 @@ func get_client_carrier_skater() -> Skater:
 
 # Callable (Skater) -> int peer_id, or -1 if not registered.
 var _peer_id_resolver: Callable = Callable()
+# Host-only. Callable (grabber: Skater, grabber_peer_id: int, blade_pos: Vector3,
+# blade_vel: Vector3, now: float) -> bool — PickupClaimResolver.arbitrate_present_grab,
+# wired by GameManager. Consulted at the present-time pickup grant moment so a
+# pending lag-comp claim contests the grab by STAMP instead of always losing to
+# whichever blade is host-live (the "host wins every 50/50" hole). True = the
+# resolver consumed the grab (contest squirt / pending granted) — don't set carrier.
+var _present_grab_arbiter: Callable = Callable()
+
+
+func set_present_grab_arbiter(arbiter: Callable) -> void:
+	_present_grab_arbiter = arbiter
 # Callable () -> Array[Skater] of all active skaters. Host-only interaction detection.
 var _skater_getter: Callable = Callable()
 # Live Skater -> team_id dict owned by PlayerRegistry. Read in the
@@ -564,6 +575,14 @@ func _check_interactions() -> void:
 						apply_contested_pickup(skater, contender,
 								skater.blade_world_velocity, contender.blade_world_velocity,
 								skater.get_blade_contact_global(), contender.get_blade_contact_global())
+					elif _present_grab_arbiter.is_valid() and _present_grab_arbiter.call(
+							skater,
+							_peer_id_resolver.call(skater) if _peer_id_resolver.is_valid() else -1,
+							skater.get_blade_contact_global(), skater.blade_world_velocity,
+							NetworkManager.local_time()):
+						# A pending lag-comp claim contested (or won) this grab by
+						# stamp — the resolver applied the outcome; no carrier here.
+						pass
 					else:
 						puck.set_carrier(skater)
 						_on_puck_picked_up(skater)
@@ -700,6 +719,17 @@ func notify_local_puck_dropped() -> void:
 	_arm_provisional_lockout()  # we just lost the puck — host won't hand it back during reattach cooldown
 	_release_seed_active = false
 	_state_buffer.clear()
+
+
+# Host NACK'd our pickup claim (stamp reject, geometry miss, deflect verdict,
+# contest loss) — roll the optimistic pin back immediately instead of waiting
+# out the RTT-scaled timeout. Same felt outcome as the timeout (host declined),
+# so it shares the provisional_timeouts counter; arriving sooner is the point.
+func notify_claim_rejected() -> void:
+	if is_server or _provisional_carrier_skater == null:
+		return
+	NetworkTelemetry.record_provisional_timeout()
+	_clear_provisional()
 
 
 # ── Optimistic (visual-only) pickup ──────────────────────────────────────────

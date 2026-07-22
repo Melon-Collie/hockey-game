@@ -95,3 +95,55 @@ func test_peer_max_reach_reads_caps_entry() -> void:
 
 func test_peer_max_reach_zero_when_no_caps() -> void:
 	assert_eq(resolver._peer_max_reach(999), 0.0)
+
+
+# ── Claim-vs-present-time arbitration (v40) ──────────────────────────────────
+# The present-time pickup tick consults the pending claim by STAMP instead of
+# unconditionally granting and discarding it (the "host wins every 50/50"
+# hole). classify_present_grab is the pure decision half; the arbitrate guard
+# branches are covered with the same stubbed setup the rest of this file uses
+# (the apply paths need a live Puck/PuckController and belong to playtest).
+
+
+func test_classify_within_window_is_contested() -> void:
+	var now: float = 10.0
+	assert_eq(
+			PickupClaimResolver.classify_present_grab(
+					now - PickupClaimResolver.CONTEST_WINDOW_S + 0.01, now),
+			PickupClaimResolver.PresentGrab.CONTESTED,
+			"stamps within the contest window are a genuine 50/50")
+
+
+func test_classify_older_than_window_pending_wins() -> void:
+	var now: float = 10.0
+	assert_eq(
+			PickupClaimResolver.classify_present_grab(
+					now - PickupClaimResolver.CONTEST_WINDOW_S - 0.01, now),
+			PickupClaimResolver.PresentGrab.PENDING_WON,
+			"a pending stamp older than the window reached the puck first")
+
+
+func test_arbitrate_no_pending_lets_grab_proceed() -> void:
+	assert_false(resolver.arbitrate_present_grab(null, 5, Vector3.ZERO, Vector3.ZERO, 10.0),
+			"no pending claim -> present grab proceeds")
+
+
+func test_arbitrate_self_grab_lets_grant_proceed() -> void:
+	# The pending claimant's own replayed blade reached the puck present-time —
+	# the normal grant path (which clears pending) must handle it, not a
+	# self-contest.
+	resolver._arm_pending(7, 9.99, Vector3.ONE, Vector3.ONE)
+	# grabber Skater is irrelevant for this branch; peer id match short-circuits
+	# before any skater dereference.
+	assert_false(resolver.arbitrate_present_grab(null, 7, Vector3.ZERO, Vector3.ZERO, 10.0),
+			"grabber == pending claimant -> proceed with the normal grant")
+	assert_eq(resolver._pending_peer_id, 7, "pending stays armed for the grant path to clear")
+
+
+func test_arbitrate_despawned_claimant_clears_and_proceeds() -> void:
+	# Pending peer 42 is not in the registry (disconnect/demote mid-window):
+	# the grab proceeds and the stale pending is dropped, mirroring tick().
+	resolver._arm_pending(42, 9.99, Vector3.ONE, Vector3.ONE)
+	assert_false(resolver.arbitrate_present_grab(null, 5, Vector3.ZERO, Vector3.ZERO, 10.0),
+			"despawned claimant -> grab proceeds")
+	assert_eq(resolver._pending_peer_id, -1, "stale pending cleared")

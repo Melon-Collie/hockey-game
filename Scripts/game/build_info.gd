@@ -168,7 +168,13 @@ const VERSION: String = "dev"
 #      so LagCompRewind.self_view_time rewinds with the lead the claimant
 #      actually stamped with (bounded host-side). Positional arg counts changed
 #      on all four claim RPCs — bump required.
-const PROTOCOL_VERSION: int = 39
+# v40: pickup-claim NACK. New authority RPC notify_pickup_claim_rejected —
+#      the host tells a claimant its pickup claim resolved to no-grant (stamp
+#      reject, geometry miss, deflect verdict, contest loss) so the client's
+#      optimistic pin rolls back immediately instead of waiting out the
+#      RTT-scaled timeout. Adding an @rpc method shifts the rpc-config
+#      ordering both peers hash, so mixed builds must be refused.
+const PROTOCOL_VERSION: int = 40
 
 
 func _ready() -> void:

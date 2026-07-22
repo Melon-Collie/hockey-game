@@ -421,6 +421,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_attributes_changed.connect(_on_local_attributes_changed)
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
+	NetworkManager.pickup_claim_rejected_received.connect(_on_pickup_claim_rejected)
 	NetworkManager.poke_claim_received.connect(_on_poke_claim_received)
 	NetworkManager.stick_lift_claim_received.connect(_on_stick_lift_claim_received)
 	NetworkManager.ghost_state_received.connect(_on_ghost_state_received)
@@ -1380,6 +1381,11 @@ func _wire_subsystems() -> void:
 
 	_pickup_claim = PickupClaimResolver.new()
 	_pickup_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
+	# Claim-vs-present-time pickup arbitration (see arbitrate_present_grab):
+	# the present-time grant consults the pending lag-comp claim by stamp
+	# instead of silently discarding it via the grant-path clear().
+	if puck_controller != null:
+		puck_controller.set_present_grab_arbiter(_pickup_claim.arbitrate_present_grab)
 
 	_poke_claim = PokeClaimResolver.new()
 	_poke_claim.setup(_registry, _state_buffer_manager, get_puck, _get_puck_controller)
@@ -2622,7 +2628,10 @@ func _resolve_skater_peer_id(skater: Skater) -> int:
 
 
 func _on_server_puck_picked_up_by(peer_id: int) -> void:
-	_pickup_claim.clear()
+	# clear_for_grant, not clear(): if a different peer's claim was pending,
+	# NACK it so their optimistic pin rolls back now (covers every
+	# authoritative grant path, including the one-timer catch).
+	_pickup_claim.clear_for_grant(peer_id)
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null:
 		return
@@ -2668,6 +2677,12 @@ func _on_ghost_state_received(peer_id: int, is_ghost: bool) -> void:
 	if record == null or record.skater == null or record.is_local:
 		return
 	(record.controller as RemoteController).apply_ghost_rpc(is_ghost)
+
+
+# Client: host NACK'd our pickup claim — roll the optimistic pin back now.
+func _on_pickup_claim_rejected() -> void:
+	if puck_controller != null:
+		puck_controller.notify_claim_rejected()
 
 
 func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,

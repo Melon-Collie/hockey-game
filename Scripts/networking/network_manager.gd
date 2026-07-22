@@ -95,6 +95,10 @@ signal rematch_vote_changed(peer_id: int, vote: int)
 signal rematch_voters_changed(total: int)
 signal clock_ready
 signal pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, input_lead_ms: float, blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3)
+# Client: the host resolved our pickup claim to no-grant (stamp reject,
+# geometry miss, deflect verdict, contest loss). Rolls the optimistic pin
+# back immediately instead of waiting out the RTT-scaled timeout.
+signal pickup_claim_rejected_received
 signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, input_lead_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3, blade_prev: Vector3)
 signal stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, input_lead_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float, input_lead_ms: float)
@@ -659,6 +663,10 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_ping_ms.erase(id)
 	_peer_rtt_ema_ms.erase(id)
 	_peer_loss_rates.erase(id)
+	_claim_rate_window_start.erase(id)
+	_claim_rate_count.erase(id)
+	_input_rate_window_start.erase(id)
+	_input_rate_count.erase(id)
 	# Notify all remaining clients so they remove the stale skater. Host-only:
 	# the transport relays peer disconnects to clients too, and a client
 	# attempting this authority RPC would just be refused with error spam.
@@ -732,6 +740,10 @@ func prepare_for_new_game() -> void:
 	_peer_ping_ms.clear()
 	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
+	_claim_rate_window_start.clear()
+	_claim_rate_count.clear()
+	_input_rate_window_start.clear()
+	_input_rate_count.clear()
 	_input_timer = 0.0
 	state_delta = 1.0 / Constants.STATE_RATE
 	_state_tick_divisor = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -820,6 +832,10 @@ func reset() -> void:
 	_peer_ping_ms.clear()
 	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
+	_claim_rate_window_start.clear()
+	_claim_rate_count.clear()
+	_input_rate_window_start.clear()
+	_input_rate_count.clear()
 	_jitter_samples.clear()
 	_last_ws_arrival_time = -1.0
 	_pdv_floor = -1.0
@@ -1060,6 +1076,11 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	_peer_shot_sensitivity[sender_id] = clampf(shot_power_sensitivity, 0.25, 4.0)
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
+	# Seed the host-measured RTT immediately instead of waiting up to a full
+	# _PING_INTERVAL (2 s): until the first sample lands, claim-stamp
+	# plausibility runs on the conservative 150 ms no-sample fallback — a
+	# needlessly wide backdate window for the joiner's first scrambles.
+	host_ping.rpc_id(sender_id, local_time())
 	peer_joined.emit(sender_id)
 
 
@@ -1214,6 +1235,9 @@ func receive_input_batch(data: PackedByteArray) -> void:
 	# Liveness: stamp actual receipt time (before any NetworkSimManager delay).
 	if is_host and _peer_last_seen.has(sender_id):
 		_peer_last_seen[sender_id] = local_time()
+	if is_host and not _rate_ok(sender_id, _INPUT_BATCH_RATE_CAP_PER_S,
+			_input_rate_window_start, _input_rate_count):
+		return
 	NetworkSimManager.send(
 		func(d: PackedByteArray, sid: int) -> void:
 			if d.size() < 3:
@@ -1369,6 +1393,52 @@ func record_input_ack(host_ts: float, ack_ts: float) -> void:
 	_clock_sync.record_ack_overdue(host_ts - ack_ts)
 
 
+# Host → claimant: your pickup claim resolved to no-grant. Unreliable by
+# design — a lost NACK just falls back to the existing provisional-pin
+# timeout, and keeping it off the reliable channel means a rejection burst
+# can't head-of-line block carrier events. Bots/host-local claims no-op.
+func send_pickup_claim_nack(peer_id: int) -> void:
+	if not is_host or not is_real_peer(peer_id):
+		return
+	notify_pickup_claim_rejected.rpc_id(peer_id)
+
+
+@rpc("authority", "unreliable")
+func notify_pickup_claim_rejected() -> void:
+	if is_host:
+		return
+	NetworkSimManager.send(
+		func() -> void: pickup_claim_rejected_received.emit(), [], false)
+
+
+# ── Per-peer claim/input rate caps ───────────────────────────────────────────
+# Cheap host-side flood insurance: every claim costs the host two
+# StateBufferManager world-snapshot reconstructions and every input batch a
+# decode loop, so a modified client spamming them is a CPU lever. Caps sit
+# well above legitimate maxima (claims: client floors allow ~20/s per type →
+# 60/s combined headroom; input batches: ≤120/s by the send-timer clamp →
+# 200/s headroom) and drop silently beyond — a legit client can never hit them.
+const _CLAIM_RATE_CAP_PER_S: int = 60
+const _INPUT_BATCH_RATE_CAP_PER_S: int = 200
+var _claim_rate_window_start: Dictionary[int, float] = {}
+var _claim_rate_count: Dictionary[int, int] = {}
+var _input_rate_window_start: Dictionary[int, float] = {}
+var _input_rate_count: Dictionary[int, int] = {}
+
+
+func _rate_ok(peer_id: int, cap: int, window_start: Dictionary[int, float],
+		count: Dictionary[int, int]) -> bool:
+	var now: float = local_time()
+	var start: float = window_start.get(peer_id, -1.0)
+	if start < 0.0 or now - start >= 1.0:
+		window_start[peer_id] = now
+		count[peer_id] = 1
+		return true
+	var n: int = count.get(peer_id, 0) + 1
+	count[peer_id] = n
+	return n <= cap
+
+
 func send_pickup_claim(host_timestamp: float, interp_delay_ms: float,
 		blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
 	NetworkSimManager.send(
@@ -1382,12 +1452,15 @@ func receive_pickup_claim(host_timestamp: float, interp_delay_ms: float, input_l
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not _rate_ok(peer_id, _CLAIM_RATE_CAP_PER_S, _claim_rate_window_start, _claim_rate_count):
+		return
 	# Stamp plausibility against the host's own ping for this peer — closes
 	# the timestamp-shopping window the absolute age cap leaves open (see
 	# LagCompRewind). Applied at the trust boundary so all claim resolvers
 	# inherit it.
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		NetworkTelemetry.record_claim_stamp_reject()
+		send_pickup_claim_nack(peer_id)
 		return
 	pickup_claim_received.emit(peer_id, host_timestamp, interp_delay_ms, input_lead_ms, blade_curr, blade_prev, top_hand)
 
@@ -1404,6 +1477,8 @@ func receive_poke_claim(host_timestamp: float, interp_delay_ms: float, input_lea
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not _rate_ok(peer_id, _CLAIM_RATE_CAP_PER_S, _claim_rate_window_start, _claim_rate_count):
+		return
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		NetworkTelemetry.record_claim_stamp_reject()
 		return
@@ -1422,6 +1497,8 @@ func receive_stick_lift_claim(host_timestamp: float, interp_delay_ms: float, inp
 	if not is_host:
 		return
 	var peer_id: int = multiplayer.get_remote_sender_id()
+	if not _rate_ok(peer_id, _CLAIM_RATE_CAP_PER_S, _claim_rate_window_start, _claim_rate_count):
+		return
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(peer_id))):
 		NetworkTelemetry.record_claim_stamp_reject()
 		return
@@ -1439,6 +1516,8 @@ func receive_hit_claim(victim_peer_id: int, host_timestamp: float, interp_delay_
 	if not is_host:
 		return
 	var hitter_peer_id: int = multiplayer.get_remote_sender_id()
+	if not _rate_ok(hitter_peer_id, _CLAIM_RATE_CAP_PER_S, _claim_rate_window_start, _claim_rate_count):
+		return
 	if not LagCompRewind.is_claim_stamp_plausible(local_time(), host_timestamp, float(get_peer_ping_ms(hitter_peer_id))):
 		NetworkTelemetry.record_claim_stamp_reject()
 		return

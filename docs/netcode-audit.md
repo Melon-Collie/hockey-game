@@ -43,9 +43,15 @@ are addressable incrementally.
   `sample_state_at`), F3 (offside carrier exemption via `has_puck`), F4
   (prediction history re-recorded during replay), F5 (replay seeded from the
   ack-time shot state).
+- **Fixed — Phase 2 (PROTOCOL_VERSION 40):** D1 (present-time pickups now
+  stamp-arbitrate against a pending claim via
+  `PickupClaimResolver.arbitrate_present_grab`), D2's NACK
+  (`notify_pickup_claim_rejected` — every no-grant pickup-claim outcome rolls
+  the optimistic pin back ~one-way after the reject), D3 (host-ping seed on
+  join), D4 (per-peer claim + input-batch rate caps).
 - **Open:** A1–A4 (clock foundation), B1–B3 (channels / replay-event
-  packing / 5v5 bandwidth), C1–C2 (post-physics broadcast), D1
-  (claim-vs-present-time contest), D2's NACK, D3–D4, E1–E3, F6, F9–F11.
+  packing / 5v5 bandwidth), C1–C2 (post-physics broadcast), E1–E3, F6,
+  F9–F11.
 
 ## What clears the AAA bar (calibration — don't touch these)
 

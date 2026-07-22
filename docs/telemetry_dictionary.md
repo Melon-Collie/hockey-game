@@ -139,7 +139,7 @@ actually sees attach and, when it rolls back, feels as **"grab, then lose it."**
 | Key | Meaning |
 |---|---|
 | `provisional_pins_total` | Optimistic pins that attached (passed the eligibility gates *and* the host's swept `check_pickup` predicate run on the client's own view). The denominator. |
-| `provisional_timeouts_total` | Pins that rolled back because no host grant arrived — the host silently declined the claim. **This is the felt "grab, then lose it." `timeouts / pins` is the headline; it should sit near zero.** The dominant pre-v28 cause was blade-prediction divergence (the host reconstructed the claimant's blade and it disagreed with what the client saw); v28 sends the client's own blade in the claim, so a residual floor now points at the **puck** rewind (remote-view interp delay) or a genuine lost 50/50, not the blade. |
+| `provisional_timeouts_total` | Pins that rolled back because the host declined the claim — via an explicit NACK (v40, arrives ~one-way after the reject: stamp reject, geometry miss, deflect verdict, contest loss) or, if the NACK was lost, the RTT-scaled timeout. **This is the felt "grab, then lose it." `timeouts / pins` is the headline; it should sit near zero.** The dominant pre-v28 cause was blade-prediction divergence (the host reconstructed the claimant's blade and it disagreed with what the client saw); v28 sends the client's own blade in the claim, so a residual floor now points at the **puck** rewind (remote-view interp delay) or a genuine lost 50/50, not the blade. |
 | `provisional_confirmed_total` | Pins the host granted (promoted seamlessly to a real carry). |
 | `provisional_stolen_total` | Pins rolled back because a *different* carrier legitimately won the puck — a lost 50/50, **not** the felt bug. |
 
