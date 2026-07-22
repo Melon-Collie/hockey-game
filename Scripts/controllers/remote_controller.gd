@@ -403,10 +403,14 @@ func _interpolate(delta: float) -> void:
 		interpolated.position = _fp_result.position
 		interpolated.velocity = _fp_result.velocity
 	# Forward-prediction quality: the pre-damp error the smoother is about to
-	# absorb on this body (fp error + correction pressure).
+	# absorb on this body (fp error + correction pressure). Teleport-scale
+	# distances (faceoff/goal resets — anything the snap guard hard-snaps) are
+	# excluded: legitimate repositions, not prediction error (they buried the
+	# real peaks under ~40 m resets in the first playtest's rows).
 	if _smooth_initialized:
-		NetworkTelemetry.record_remote_correction(
-				(interpolated.position - _smooth_pos).length())
+		var residual: float = (interpolated.position - _smooth_pos).length()
+		if residual < _SMOOTH_SNAP_DIST:
+			NetworkTelemetry.record_remote_correction(residual)
 	# Velocity-feed-forward error smoothing on the collision body position. We advance
 	# by the target's OWN velocity each frame (zero steady-state lag — smoothing the
 	# absolute position instead trails a moving body by ~velocity × smooth_time) and

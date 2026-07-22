@@ -1263,8 +1263,14 @@ func _predict_loose(delta: float) -> bool:
 	# Prediction-quality metric: the pre-damp error the smoother is about to
 	# absorb. Steady-state ~0 when the shared sim agrees with the authority;
 	# spikes measure host-side events folding in (deflects, saves, releases).
+	# Teleport-scale distances (faceoff/goal resets — anything the snap guard
+	# hard-snaps) are excluded: they are legitimate repositions, and recording
+	# them buried the real signal under ~30 m rink-length "errors" (seen in the
+	# first playtest's session rows).
 	if _smooth_initialized:
-		NetworkTelemetry.record_puck_predict_residual((pos - _smooth_pos).length())
+		var residual: float = (pos - _smooth_pos).length()
+		if residual < _SMOOTH_SNAP_DIST:
+			NetworkTelemetry.record_puck_predict_residual(residual)
 	_smooth_apply_and_prune(pos, vel, delta, NetworkManager.get_interpolation_delay())
 	return true
 
