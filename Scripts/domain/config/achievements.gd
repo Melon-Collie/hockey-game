@@ -40,6 +40,7 @@ class_name Achievements
 # Live-fired ids are referenced by these constants from AchievementService; the
 # game-over ids are matched by data only, but we name them for symmetry + docs.
 const FIRST_GOAL := "ACH_FIRST_GOAL"
+const FIRST_STAR := "ACH_FIRST_STAR"
 const HAT_TRICK := "ACH_HAT_TRICK"
 const PLAYMAKER := "ACH_PLAYMAKER"
 const BIG_NIGHT := "ACH_BIG_NIGHT"
@@ -80,7 +81,7 @@ const ALL: Array[Dictionary] = [
 		"cond": {"kind": "game", "field": "assists", "min": 3},
 	},
 	{
-		"id": BIG_NIGHT, "name": "Big Night", "hidden": false,
+		"id": BIG_NIGHT, "name": "Stat Stuffer", "hidden": false,
 		"desc": "Put up 5 points (goals + assists) in a single game.",
 		"cond": {"kind": "game", "field": "points", "min": 5},
 	},
@@ -105,7 +106,7 @@ const ALL: Array[Dictionary] = [
 		# ever possessing the puck (the wind-up-off-puck slapper). Host tags the
 		# goal via ShotOnGoalTracker.pending_is_one_timer(); one_timer_goals is a
 		# broadcast stat so a client scorer earns it too.
-		"id": ONE_TIMER, "name": "One-Timer", "hidden": false,
+		"id": ONE_TIMER, "name": "Triggerman", "hidden": false,
 		"desc": "Score off a one-timer.",
 		"cond": {"kind": "game", "field": "one_timer_goals", "min": 1},
 	},
@@ -113,7 +114,7 @@ const ALL: Array[Dictionary] = [
 		# Redirect a teammate's shot into the net — a genuine tip-in (the scorer
 		# was the last, deflecting toucher of an in-flight shot, not its shooter).
 		# tip_goals is host-tagged in PhaseCoordinator and broadcast like above.
-		"id": TIP_IN, "name": "Redirect", "hidden": false,
+		"id": TIP_IN, "name": "Garbage Man", "hidden": false,
 		"desc": "Tip a teammate's shot into the net.",
 		"cond": {"kind": "game", "field": "tip_goals", "min": 1},
 	},
@@ -139,16 +140,24 @@ const ALL: Array[Dictionary] = [
 	},
 	# ── Compound game-over conditions ────────────────────────────────────────
 	{
-		"id": SHUTOUT, "name": "Shutout", "hidden": false,
+		"id": SHUTOUT, "name": "Lockdown", "hidden": false,
 		"desc": "Win a game without conceding a goal.",
 		"cond": {"kind": "special", "key": "shutout"},
 	},
 	{
 		# Onboarding: pops your first win, any mode. Single-game (win the game),
 		# not a career total.
-		"id": FIRST_WIN, "name": "W", "hidden": false,
+		"id": FIRST_WIN, "name": "Winner", "hidden": false,
 		"desc": "Win your first game.",
 		"cond": {"kind": "special", "key": "win"},
+	},
+	{
+		# Named the game's first star on the Three Stars podium. The podium is
+		# computed deterministically on every machine (StarOfGameRules), so the
+		# game-over sweep just receives "local player was stars[0]" via ctx.
+		"id": FIRST_STAR, "name": "First Star", "hidden": false,
+		"desc": "Be named the first star of the game.",
+		"cond": {"kind": "special", "key": "first_star"},
 	},
 	# ── Live, in-the-moment events ───────────────────────────────────────────
 	{
@@ -177,7 +186,7 @@ const ALL: Array[Dictionary] = [
 	{
 		# Customize your player. Fired the first time a free-play build edit is
 		# applied (NetworkManager.local_attributes_changed).
-		"id": CUSTOM_BUILD, "name": "Make It Yours", "hidden": false,
+		"id": CUSTOM_BUILD, "name": "Self-Made", "hidden": false,
 		"desc": "Edit your player's build.",
 		"cond": {"kind": "event", "key": "build_edited"},
 	},

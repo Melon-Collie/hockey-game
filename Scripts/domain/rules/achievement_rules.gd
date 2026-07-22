@@ -28,7 +28,10 @@ static func game_dict(stats: PlayerStats) -> Dictionary:
 
 # Ids earned from this single game. `game` is game_dict(); `ctx` carries the
 # game-level outcome fields the "special" conditions need:
-#   { "outcome": "win"/"loss"/"draw", "goals_for": int, "goals_against": int }
+#   { "outcome": "win"/"loss"/"draw", "goals_for": int, "goals_against": int,
+#     "first_star": bool }
+# Missing ctx keys fail closed (a caller that doesn't compute the podium simply
+# never awards First Star).
 static func earned_game(game: Dictionary, ctx: Dictionary) -> Array[String]:
 	var out: Array[String] = []
 	for entry in Achievements.ALL:
@@ -88,4 +91,8 @@ static func _special_met(key: String, _game: Dictionary, ctx: Dictionary) -> boo
 		"shutout":
 			return String(ctx.get("outcome", "")) == "win" \
 					and int(ctx.get("goals_against", 1)) == 0
+		"first_star":
+			# The Three Stars podium is computed by StarOfGameRules on every
+			# machine; the caller passes whether the local player topped it.
+			return bool(ctx.get("first_star", false))
 	return false

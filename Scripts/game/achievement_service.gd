@@ -14,14 +14,17 @@ var _unlocked_this_session: Dictionary = {}
 
 # Single-game + compound achievements, evaluated the moment a game ends. Reads
 # only this game's stats, so it runs in any mode (including offline vs bots) —
-# Steam availability is enforced downstream in SteamManager.
+# Steam availability is enforced downstream in SteamManager. `is_first_star` is
+# whether the local player topped the Three Stars podium (GameManager computes
+# the podium; the domain just reads the flag).
 func evaluate_single_game(stats: PlayerStats, outcome: String,
-		goals_for: int, goals_against: int) -> void:
+		goals_for: int, goals_against: int, is_first_star: bool = false) -> void:
 	if stats == null:
 		return
 	var game: Dictionary = AchievementRules.game_dict(stats)
 	var ctx: Dictionary = {
 		"outcome": outcome, "goals_for": goals_for, "goals_against": goals_against,
+		"first_star": is_first_star,
 	}
 	for id in AchievementRules.earned_game(game, ctx):
 		unlock(id)

@@ -50,23 +50,32 @@ for that checklist.
   NOT gated on stat-sharing, and no Supabase dependency). The mirrored stats must
   be defined too — see STATS.md.
 
+> **2026-07 rename pass.** Achievement names double as unlockable player titles
+> (a title describes the *player*, not the event), so several were renamed:
+> Big Night → **Stat Stuffer**, One-Timer → **Triggerman**, Redirect →
+> **Garbage Man**, Shutout → **Lockdown**, W → **Winner**, Make It Yours →
+> **Self-Made** — and **First Star** (`ACH_FIRST_STAR`) is new. API Names are
+> unchanged (existing unlocks survive); update the **display names** in
+> Steamworks on both apps and republish, and create `ACH_FIRST_STAR` fresh.
+
 | API Name (`id`)     | Name              | When    | Unlocks when…                                  |
 |---------------------|-------------------|---------|------------------------------------------------|
 | `ACH_HAT_TRICK`     | Hat Trick         | game    | 3 goals in a single game                       |
 | `ACH_PLAYMAKER`     | Playmaker         | game    | 3 assists in a single game                     |
-| `ACH_BIG_NIGHT`     | Big Night         | game    | 5 points (G+A) in a single game                |
+| `ACH_BIG_NIGHT`     | Stat Stuffer      | game    | 5 points (G+A) in a single game                |
 | `ACH_BRICK_WALL`    | Brick Wall        | game    | 3 blocked shots in a single game               |
 | `ACH_FIRST_GOAL`    | Lamp Lighter      | game    | score your first goal (any mode)               |
-| `ACH_ONE_TIMER`     | One-Timer         | game    | score off a one-timer                          |
-| `ACH_TIP_IN`        | Redirect          | game    | tip a teammate's shot into the net             |
+| `ACH_ONE_TIMER`     | Triggerman        | game    | score off a one-timer                          |
+| `ACH_TIP_IN`        | Garbage Man       | game    | tip a teammate's shot into the net             |
 | `ACH_OVERTIME_HERO` | Overtime Hero     | game    | score the overtime winner                      |
 | `ACH_FACEOFF_BOSS`  | Master of the Dot | game    | win 5 faceoffs in a single game                |
 | `ACH_PICKPOCKET`    | Pickpocket        | game    | 5 takeaways in a single game                   |
-| `ACH_SHUTOUT`       | Shutout           | special | win a game conceding 0 goals                   |
-| `ACH_FIRST_WIN`     | W                 | special | win your first game (any mode)                 |
+| `ACH_SHUTOUT`       | Lockdown          | special | win a game conceding 0 goals                   |
+| `ACH_FIRST_WIN`     | Winner            | special | win your first game (any mode)                 |
+| `ACH_FIRST_STAR`    | First Star        | special | be named the game's first star                 |
 | `ACH_FREIGHT_TRAIN` | Freight Train     | event   | land a body check above the big-hit threshold  |
 | `ACH_STUDENT`       | Student of the Game| event  | complete every tutorial                        |
-| `ACH_CUSTOM_BUILD`  | Make It Yours     | event   | edit your player's build                       |
+| `ACH_CUSTOM_BUILD`  | Self-Made         | event   | edit your player's build                       |
 | `ACH_PLAY_WITH_BUUKIE` | Buukie's Buddy | roster  | play an online game with Buukie (hidden)       |
 | `ACH_SNIPER`        | Sniper            | career  | 50 career goals                                |
 | `ACH_SETUP_ARTIST`  | Setup Artist      | career  | 50 career assists                              |

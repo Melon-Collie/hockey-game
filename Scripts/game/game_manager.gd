@@ -3847,7 +3847,12 @@ func _on_game_over() -> void:
 		# unlocks on the game that crosses it. No Supabase dependency.
 		if _achievements_active():
 			if _achievements != null:
-				_achievements.evaluate_single_game(local.stats, outcome, gf, ga)
+				# First Star — get_stars_of_game() returns registry instances for
+				# skaters (goalie stars are synthesized records, never `local`),
+				# so reference equality identifies the local player on top.
+				var stars: Array[PlayerRecord] = get_stars_of_game()
+				var is_first_star: bool = not stars.is_empty() and stars[0] == local
+				_achievements.evaluate_single_game(local.stats, outcome, gf, ga, is_first_star)
 				# Roster achievements — read the live Steam lobby membership so any
 				# machine (host or client) can award "played a game with X".
 				_achievements.evaluate_roster(

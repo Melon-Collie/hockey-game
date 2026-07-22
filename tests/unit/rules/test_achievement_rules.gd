@@ -46,8 +46,8 @@ func test_playmaker_unlocks_at_three_assists() -> void:
 
 
 func test_big_night_counts_goals_plus_assists() -> void:
-	# 3 + 2 = 5 points trips Big Night without tripping Hat Trick's 3-goal bar
-	# only on goals — 3 goals here also trips Hat Trick, so assert both fire.
+	# 3 + 2 = 5 points trips Stat Stuffer (ACH_BIG_NIGHT) — 3 goals here also
+	# trips Hat Trick, so assert both fire.
 	var ids := AchievementRules.earned_game(
 			AchievementRules.game_dict(_stats(3, 2, 6, 0, 0)), _ctx("win", 5, 1))
 	assert_has(ids, Achievements.BIG_NIGHT)
@@ -59,6 +59,26 @@ func test_big_night_from_mixed_line_without_hat_trick() -> void:
 			AchievementRules.game_dict(_stats(2, 3, 4, 0, 0)), _ctx("win", 5, 1))
 	assert_has(ids, Achievements.BIG_NIGHT)
 	assert_does_not_have(ids, Achievements.HAT_TRICK)
+
+
+func test_first_star_unlocks_when_flagged() -> void:
+	var ctx := _ctx("win", 3, 1)
+	ctx["first_star"] = true
+	var ids := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(2, 1, 4, 0, 0)), ctx)
+	assert_has(ids, Achievements.FIRST_STAR)
+
+
+func test_no_first_star_when_flag_false_or_absent() -> void:
+	var ctx := _ctx("win", 3, 1)
+	ctx["first_star"] = false
+	var flagged_false := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(2, 1, 4, 0, 0)), ctx)
+	assert_does_not_have(flagged_false, Achievements.FIRST_STAR)
+	# A caller that never computes the podium (no ctx key) must fail closed.
+	var absent := AchievementRules.earned_game(
+			AchievementRules.game_dict(_stats(2, 1, 4, 0, 0)), _ctx("win", 3, 1))
+	assert_does_not_have(absent, Achievements.FIRST_STAR)
 
 
 func test_brick_wall_unlocks_at_three_blocks() -> void:
