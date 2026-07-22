@@ -45,6 +45,14 @@ const INTENT_DUMP: int = 5
 # of them are worth the puck. A real in-range shot scores far above it.
 const FIRE_MIN_VALUE: float = 0.02
 
+# Minimum forward distance (m) the PUCK must sit in front of the goal-line plane
+# for a direct shot to be scored at all — below it (on/behind the line, or right
+# at the post plane) the mouth faces away and the only play is a wrap/walk-out
+# carry, not a rip. Guards the velocity-projected release from inventing a
+# point-blank open net for a carrier whose body has skated past the line. Feel
+# gate; a walk-out shooter is genuinely in front (well past this) by release.
+const SHOT_MIN_FORWARD_OF_LINE_M: float = 0.3
+
 # Small ANTI-NOISE floor under the offensive-zone shot value — NOT a position
 # map. The O-zone prices candidates by real shot danger alone (score_shoot — xG
 # is the best read of a spot; position_potential is deliberately absent in the
@@ -1066,6 +1074,18 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 				ctx.snapshot.puck_state.position.z)
 	var wrister_base_release: Vector3 = puck_now \
 			+ horizontal_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+	# No shot when the PUCK ITSELF is on/behind the goal line. score_shoot already
+	# zeroes a release behind the line, but it scores the velocity-projected
+	# release (puck led by body speed) and clamps a behind-the-goalie release to a
+	# jam point in FRONT of him — so a carrier whose body is past the line but
+	# whose projected blade lands a hair in front scored a phantom point-blank open
+	# net and fired a zero-angle rip off the outer pipe (the "skate past the goal
+	# line and clank the outer bar" bug). The mouth faces up-ice: from on/behind
+	# the line there is no direct shot, only a wrap or a walk-out CARRY. Gate on the
+	# real puck's forward distance, not the projection.
+	var puck_forward_of_line: float = (puck_now.z - attacking_goal.z) \
+			* -signf(attacking_goal.z)
+	var shot_from_behind_line: bool = puck_forward_of_line <= SHOT_MIN_FORWARD_OF_LINE_M
 
 	# The five-hole as it physically exists RIGHT NOW, from the replicated pose:
 	# standing = the real ~0.20 m slot between the pads (sealable by dropping —
@@ -1124,6 +1144,8 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	var usable_offset: float = _usable_release_offset(ctx.self_handle_reach)
 	_phase_shoot_score = -1.0
 	for frac: float in RELEASE_SAMPLE_FRACS:
+		if shot_from_behind_line:
+			break
 		var offset: Vector3 = forehand_perp * (frac * usable_offset)
 		var sample_speed: float = ctx.self_wrister_shot_speed
 		if frac < 0.0:
@@ -1177,7 +1199,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# — the tip's whole edge is the collapsed post-contact read, which the
 	# hole geometry prices via t_reach).
 	_shot_sample_is_tip = false
-	if not _scratch_option_receiver_pos.is_empty():
+	if not shot_from_behind_line and not _scratch_option_receiver_pos.is_empty():
 		var tip_release: Vector3 = AIActionScoring.release_ahead_of_goalie(
 				wrister_base_release, attacking_goal, goalie_now)
 		for tip_man: Vector3 in _scratch_option_receiver_pos:
