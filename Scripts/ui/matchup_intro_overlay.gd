@@ -4,12 +4,14 @@ extends CanvasLayer
 # Opening-faceoff matchup screen, scrim-first: the pre-game camera sweep and
 # bench skate-on stay visible through a medium dim wash while the two rosters
 # read on top — team columns (color stripe + HOME/AWAY header, then per player
-# jersey number + name + a scouting-style archetype tag) around a center VS.
-# The tag ("WATERBUG", "TANK · HOWITZER") is BuildArchetypeRules' read of the
-# v4 build — hockey-card flavor instead of raw dials, and honest about the
-# all-lateral system (no build reads as "bigger"). Pure presentation, no
-# buttons; shown for the front of the PREGAME_INTRO_DURATION hold and
-# dismissed before the faceoff countdown takes the banner.
+# jersey number + name) around a center VS. Deliberately no build readout:
+# the v4 attribute system is all-lateral (two body dials + gear leans, no
+# build is "better"), and every summary tried so far — a six-axis hex radar
+# of the resolved multipliers, then scouting archetype tags — either implied
+# a power ranking or editorialized; the bodies on the ice during the sweep
+# are the honest preview. Pure presentation, no buttons; shown for the front
+# of the PREGAME_INTRO_DURATION hold and dismissed before the faceoff
+# countdown takes the banner.
 #
 # Owned by HUD, which passes the slot-sorted PlayerRecords per team.
 
@@ -145,9 +147,7 @@ func hide_overlay() -> void:
 
 
 # Roster rebuilt per present(): once per match, a handful of rows. Each row:
-# a position badge, jersey number, name, then the build's scouting tag
-# (body archetype, plus a gear tell when the loadout has one — see
-# BuildArchetypeRules). Records arrive slot-sorted (see
+# a position badge, jersey number, name. Records arrive slot-sorted (see
 # hud.gd._show_matchup_overlay), so in 5v5 the forward group (C/LW/RW) always
 # precedes defense (LD/RD) — a thin "DEFENSE" divider marks the seam so the
 # matchup reads at a glance instead of five undifferentiated names (3v3 has
@@ -181,21 +181,7 @@ func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 		var name_label := _lbl(record.display_name(), 22, _WHITE)
 		name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(name_label)
-		var tag := _lbl(_archetype_text(record.attributes), 13, _DIM)
-		tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		row.add_child(tag)
 		rows.add_child(row)
-
-
-# "WATERBUG" / "TANK · HOWITZER" — the build's scouting tag, tr()'d here at
-# the display seam (the rule hands back keys) and uppercased to match the
-# screen's broadcast type.
-func _archetype_text(attrs: PlayerAttributes) -> String:
-	var text: String = tr(BuildArchetypeRules.body_key(attrs))
-	var tell_key: String = BuildArchetypeRules.gear_tell_key(attrs)
-	if not tell_key.is_empty():
-		text += " · " + tr(tell_key)
-	return text.to_upper()
 
 
 func _stripe_style() -> StyleBoxFlat:
