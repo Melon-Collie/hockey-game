@@ -1,14 +1,14 @@
 {
   "identities": [
     {"name": "Pohl", "number": 3, "is_left_handed": true, "height": 77, "weight": 240, "length": 2, "position": "LD"},
-    {"name": "Dahl", "number": 4, "is_left_handed": true, "height": 70, "weight": 172, "profile": 0, "position": "C"},
+    {"name": "Dahl", "number": 9, "is_left_handed": true, "height": 70, "weight": 172, "profile": 0, "position": "C"},
     {"name": "Vogel", "number": 5, "is_left_handed": false, "height": 74, "weight": 218, "length": 2, "position": "RD"},
     {"name": "Mauer", "number": 6, "is_left_handed": true, "height": 76, "weight": 212, "profile": 2, "flex": 2, "position": "LD"},
     {"name": "Renz", "number": 8, "is_left_handed": false, "height": 76, "weight": 220, "curve": 2, "position": "RW"},
     {"name": "Carr", "number": 12, "is_left_handed": true, "height": 70, "weight": 180, "profile": 0, "position": "LW"},
     {"name": "Roux", "number": 13, "is_left_handed": true, "height": 73, "weight": 188, "profile": 2, "position": "C"},
     {"name": "Salo", "number": 14, "is_left_handed": true, "height": 73, "weight": 201, "position": "C"},
-    {"name": "Boyd", "number": 16, "is_left_handed": false, "height": 79, "weight": 230, "profile": 2, "position": "RD"},
+    {"name": "Boyd", "number": 33, "is_left_handed": false, "height": 79, "weight": 230, "profile": 2, "position": "RD"},
     {"name": "Foley", "number": 19, "is_left_handed": true, "height": 68, "weight": 162, "flex": 0, "length": 0, "position": "LW"},
     {"name": "Kovac", "number": 22, "is_left_handed": true, "height": 76, "weight": 233, "length": 2, "position": "RW"},
     {"name": "Pruitt", "number": 24, "is_left_handed": false, "height": 68, "weight": 160, "profile": 0, "position": "RW"},
@@ -23,6 +23,6 @@
     {"name": "Marsh", "number": 63, "is_left_handed": false, "height": 70, "weight": 176, "flex": 0, "length": 0, "position": "C"},
     {"name": "Quill", "number": 71, "is_left_handed": false, "height": 68, "weight": 170, "profile": 0, "position": "LW"},
     {"name": "Ferro", "number": 77, "is_left_handed": false, "height": 76, "weight": 236, "length": 2, "position": "LW"},
-    {"name": "Lavoie", "number": 91, "is_left_handed": true, "height": 70, "weight": 178, "profile": 0, "flex": 0, "position": "LD"}
+    {"name": "Lavoie", "number": 43, "is_left_handed": true, "height": 70, "weight": 178, "profile": 0, "flex": 0, "position": "LD"}
   ]
 }
