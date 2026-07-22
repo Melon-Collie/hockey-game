@@ -121,6 +121,21 @@ var _predict_obb_scratch: SweptDiscOBB.Result = null
 var _sim_pos: Vector3 = Vector3.ZERO
 var _sim_vel: Vector3 = Vector3.ZERO
 var _sim_stopped: bool = false
+# Cross-frame latches for the predicted contact cues. The prediction is a
+# stateless re-predict from the newest snapshot every frame, so one physical
+# contact stays inside the re-simulated span (and keeps being re-detected) for
+# ~a one-way trip until a post-contact snapshot advances the base — up to
+# PUCK_PREDICT_MAX_S under loss. Mirroring the host drive's cross-tick contact
+# latches, a cue fires only on the rising edge: this frame's span contains the
+# contact class, last frame's didn't. A gap in prediction coverage (carry pin,
+# whistle, fallback interpolation) resets the latches so the first contact of
+# the next loose flight isn't eaten by a stale latch.
+var _pred_cue_post_prev: bool = false
+var _pred_cue_net_prev: bool = false
+var _pred_cue_boards_prev: bool = false
+var _pred_cue_goalie_prev: bool = false
+var _pred_cue_frame_ms: int = -10_000
+const _PRED_CUE_STALE_MS: int = 250
 # Scoped true only while a stick-lift strip is being applied, so the synchronous
 # puck_stripped_from handlers (sound + victim notify) can tell a stick lift apart
 # from a poke/body-check strip and pick the right cue. Read via
@@ -167,6 +182,22 @@ signal puck_stripped_from(peer_id: int, stripper_peer_id: int)
 signal puck_poke_checked_by(peer_id: int)  # defender who poke-stripped the carrier
 signal puck_touched_while_loose(peer_id: int)  # deflection or body block — peer who touched
 signal puck_touched_by_goalie(goalie: Goalie)  # puck contacted a goalie body while a shot was in flight
+
+# ── Signals (client-only predicted contact cues, GameManager plays sound/VFX) ──
+# Fired from the loose-puck prediction the instant the predicted flight rings a
+# post / thumps the net frame / caroms off the boards / meets a goalie. This
+# restores the instant local feedback the Jolt-era client puck got from its own
+# body_entered signals: the analytic migration removed every client-side contact
+# signal, leaving only the host's cue broadcast — which lands ~RTT late and can
+# be lost outright. Emission is edge-latched across frames (the stateless
+# re-predict re-detects the same contact every frame until the snapshot base
+# passes it — see the _pred_cue_*_prev latches in _run_prediction) and the
+# host's broadcast of the same contact is echo-suppressed in GameManager
+# (_cue_is_echo).
+signal predicted_post_contact(position: Vector3, speed: float)
+signal predicted_net_contact(position: Vector3, speed: float)
+signal predicted_board_contact(position: Vector3, speed: float)
+signal predicted_goalie_contact(position: Vector3, speed: float)
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
@@ -925,8 +956,27 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
 	var goalies: Array = _goalie_provider.call() if not _goalie_provider.is_null() else []
 	var stopped: bool = false
+	# Predicted-cue latch upkeep: a gap since the last re-predict means a new
+	# loose span (carry pin / whistle / fallback interpolation in between) —
+	# clear the cross-frame latches so the next flight's first contact fires.
+	var now_ms: int = Time.get_ticks_msec()
+	if now_ms - _pred_cue_frame_ms > _PRED_CUE_STALE_MS:
+		_pred_cue_post_prev = false
+		_pred_cue_net_prev = false
+		_pred_cue_boards_prev = false
+		_pred_cue_goalie_prev = false
+	_pred_cue_frame_ms = now_ms
+	# Span-wide contact occurrence (any tick of THIS re-predict), compared
+	# against last frame's span by the latches above to fire each cue once.
+	var span_post: bool = false
+	var span_net: bool = false
+	var span_boards: bool = false
+	var span_goalie: bool = false
 	for _t in ticks:
 		var tick_prev: Vector3 = pos
+		var tick_vel_in: Vector3 = vel
+		var tick_post: bool = false
+		var tick_net: bool = false
 		var substeps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), dt)
 		var sub_dt: float = dt / float(substeps)
 		for _sub in substeps:
@@ -937,6 +987,29 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 					_predict_frame_scratch, _predict_tick_result)
 			pos = _predict_tick_result.position
 			vel = _predict_tick_result.velocity
+			if _predict_tick_result.touched_post:
+				tick_post = true
+			if _predict_tick_result.touched_net:
+				tick_net = true
+		if tick_post and not span_post:
+			span_post = true
+			if not _pred_cue_post_prev:
+				predicted_post_contact.emit(pos, vel.length())
+		# Net gate mirrors the host drive: only a puck arriving with real pace
+		# (>= 1 m/s) reads as a net-frame thump.
+		if tick_net and not span_net and tick_vel_in.length() >= 1.0:
+			span_net = true
+			if not _pred_cue_net_prev:
+				predicted_net_contact.emit(pos, vel.length())
+		# Board carom: the host's own feedback read — the raw (un-reflected)
+		# full-tick XZ position crossing the inner boundary with into-board
+		# pace (see Puck._drive_analytic's touched_boards).
+		if not span_boards and tick_vel_in.length() >= 1.0:
+			var raw := Vector2(tick_prev.x + tick_vel_in.x * dt, tick_prev.z + tick_vel_in.z * dt)
+			if raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001:
+				span_boards = true
+				if not _pred_cue_boards_prev:
+					predicted_board_contact.emit(pos, vel.length())
 		# Goalie stop: tested over the tick's chord (cheaper than the host's
 		# per-sub-step interleave; the stop is cosmetic holding, not a response,
 		# so chord-level timing is enough). The goalie pose used is the client's
@@ -948,9 +1021,19 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 						_predict_obb_scratch, _predict_goalie_contact):
 			pos = _predict_goalie_contact.point \
 					+ _predict_goalie_contact.normal * _predict_goalie_contact.depth
+			span_goalie = true
+			# Cue speed is the INCOMING pace (the hold zeroes vel, and the save
+			# outcome — deaden vs live rebound — is host-only), so a hard shot
+			# into the pads thuds like one instead of always playing the floor.
+			if not _pred_cue_goalie_prev:
+				predicted_goalie_contact.emit(pos, tick_vel_in.length())
 			vel = Vector3.ZERO
 			stopped = true
 			break
+	_pred_cue_post_prev = span_post
+	_pred_cue_net_prev = span_net
+	_pred_cue_boards_prev = span_boards
+	_pred_cue_goalie_prev = span_goalie
 	if not stopped:
 		pos += vel * maxf(frac, 0.0)
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
