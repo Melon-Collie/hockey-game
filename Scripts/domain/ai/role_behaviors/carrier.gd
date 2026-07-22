@@ -632,6 +632,10 @@ var _pass_option_at_self: float = 0.0
 # any candidate's option read (recomputed every re-eval in _pick_action).
 var _pass_option_ceiling: float = 0.0
 
+# Reused decision object returned by decide() — repopulated each call rather than
+# freshly allocated, so the per-carry-dispatch call doesn't churn a RefCounted.
+var _decision: RoleDecision = RoleDecision.new()
+
 # ── Carry-candidate beam (two-ply search budget) ─────────────────────────────
 # The two-ply reads (pass OPTION + carry CONTINUATION) are ~90% of a carry
 # candidate's cost, and the exact incumbent-bound prunes lose their teeth
@@ -694,11 +698,12 @@ var debug_dump_score: float = 0.0
 # `pass_target_peer_id`, `shot_loft_level`, `last_carry_anchor`,
 # and the debug_* fields after this returns.
 #
-# Returns a RoleDecision shaped like the off-puck role behaviors:
-#   - target_position = last_carry_anchor (winning carry candidate)
-#   - shoot_intent / pass_intent flags reflect the
-#     current persistent intent (so the state machine can read these
-#     uniformly across roles in future phases).
+# Returns the reused `_decision` member (populated below), NOT a fresh
+# `RoleDecision` per call. The state machine's live path drives the carrier
+# through this object's public fields and discards the return, but the return
+# contract is kept (sibling roles and the test `_CarrierStub` share the
+# `decide() -> RoleDecision` shape). Reusing one instance removes the per-carry-
+# dispatch RefCounted allocation the old `RoleDecision.new()` here churned.
 func decide(ctx: RoleContext) -> RoleDecision:
 	# decide() is called once per AI dispatch; each call spans this many physics
 	# ticks (1 at the perfect-bot default). Draining the cooldown by the real span
@@ -737,15 +742,19 @@ func decide(ctx: RoleContext) -> RoleDecision:
 	else:
 		_pick_action_cooldown -= step_ticks
 
-	var d := RoleDecision.new()
-	d.target_position = last_carry_anchor
+	# Populate and return the reused decision (see the doc-block above). Fire
+	# flags are reset each call so a stale intent from a prior tick can't leak.
+	_decision.target_position = last_carry_anchor
+	_decision.shoot_intent = false
+	_decision.pass_intent = false
+	_decision.pass_target_peer_id = -1
 	match intended_action:
 		INTENT_SHOOT:
-			d.shoot_intent = true
+			_decision.shoot_intent = true
 		INTENT_PASS:
-			d.pass_intent = true
-			d.pass_target_peer_id = pass_target_peer_id
-	return d
+			_decision.pass_intent = true
+			_decision.pass_target_peer_id = pass_target_peer_id
+	return _decision
 
 
 # Post-commit cooldown from `base_ticks` (the eval period, less any dispatch a
@@ -2991,11 +3000,15 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		return potential_nz * AIActionScoring.potential_realization_discount(
 				pos, attacking_goal)
 	var seal_x: float = AIActionScoring.derive_post_seal_x_sign(pos, attacking_goal)
+	# Pass the shared read-only empty for `screeners` rather than omitting it: this
+	# is the per-candidate scorer (~40-60 calls per carrier compete), and an omitted
+	# `screeners` default-allocates a fresh empty Array[Vector3] on every one.
 	var shoot_s: float = AIActionScoring.score_shoot(
 			pos, attacking_goal, predicted_goalie_pos,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
 			goalie_unsettled_factor, _scratch_opponent_caps,
-			-1.0, false, seal_x, seal_x != 0.0, aim_spread_rad)
+			-1.0, false, seal_x, seal_x != 0.0, aim_spread_rad,
+			AIActionScoring.EMPTY_VEC3)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		# PURE xG in the offensive zone — position_potential (the progression
 		# value map) is deliberately NOT used here; the O-zone is xG's domain, a

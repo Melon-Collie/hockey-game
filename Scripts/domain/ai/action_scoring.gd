@@ -75,6 +75,32 @@ class_name AIActionScoring
 # back down to 0 at the goal mouth, so a hypothetical "carry past the
 # slot" candidate scores worse than the slot itself.
 #
+# Shared read-only empty arrays for the optional opponent-context args below.
+# A `const` array is instantiated once at class load and is read-only, so passing
+# it (instead of a fresh `[]` literal) at the internal pass-through sites binds the
+# one shared instance rather than allocating an empty array on every call — the
+# leaf scorers (score_shoot / score_pass / lane_clear) fire tens of times per
+# carrier compete × bots, so those per-call empties were real per-dispatch heap
+# churn. Read-only guarantees a stray mutation errors loudly rather than corrupting
+# the shared instance; every callee only reads these.
+#
+# NOTE: these are for ARGUMENT sites, NOT parameter defaults. A shared empty used
+# as a *default value* trips a Godot type-binding error at call time, so the `= []`
+# param defaults below stay literals — they only allocate when a caller omits the
+# arg anyway, and the hot callers pass their scratch arrays. Public so hot omitters
+# (carrier `_score_at`) can pass the shared empty explicitly.
+#
+# EMPTY_VEC3 is a read-only `static var`, NOT a `const`: a typed-`const` array
+# (`Array[Vector3]`) loses its element type when passed as a typed-array argument
+# (Godot rejects it — "does not have the same element type"), whereas a typed
+# static var keeps it. `_static_init` freezes it read-only so the safety net holds.
+# EMPTY_CAPS is untyped, so a plain read-only `const` is fine there.
+static var EMPTY_VEC3: Array[Vector3] = []
+const EMPTY_CAPS: Array = []
+
+static func _static_init() -> void:
+	EMPTY_VEC3.make_read_only()
+
 # SLOT_RADIUS_M is the platform width — positions within this distance
 # of the goal are all peak-value. Tuning: up (8 m) makes the gradient
 # pull bots from further out; down (4 m) tightens the sweet spot.
@@ -1432,7 +1458,7 @@ static func _rebound_conversion(
 		return 0.0
 	var put_back: float = score_shoot(
 			spot, attacking_goal, goalie_pos, net_half_width, opponents,
-			WRISTER_SHOT_SPEED_M_S, 1.0, [], 0.0, true)
+			WRISTER_SHOT_SPEED_M_S, 1.0, EMPTY_CAPS, 0.0, true)
 	return REBOUND_SIDE_UNCERTAINTY * p_first * put_back
 
 
@@ -1561,7 +1587,7 @@ static func tip_ev(
 	if p_contact <= 0.0:
 		return 0.0
 	# P(rip reaches him): the defenders' lane over the release→tip segment.
-	var lane: float = lane_clear(release, tip_pt, opponents, speed, [], opponent_caps)
+	var lane: float = lane_clear(release, tip_pt, opponents, speed, EMPTY_VEC3, opponent_caps)
 	if lane <= 0.0:
 		return 0.0
 	# The redirect: a new release at the tip point holding the incoming pace
@@ -1632,7 +1658,7 @@ static func score_shoot(
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			shooter, predicted_goalie_pos, attacking_goal.z,
 			net_half_width, GOALIE_SHADOW_HALF_M)
-	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s, [], opponent_caps)
+	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s, EMPTY_VEC3, opponent_caps)
 	# Release duress: opponents whose blade can reach the puck during the
 	# windup contest the release (release_contest_clean — bodies merely
 	# NEAR the shooter don't; bodies on the shot line are the lane's job).
@@ -2114,8 +2140,8 @@ static func score_pass(
 	var seal_x: float = derive_post_seal_x_sign(receiver, attacking_goal)
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor, [], -1.0, false,
-			seal_x, seal_x != 0.0, 0.0, [], goalie_hands, goalie_pads)
+			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor, EMPTY_CAPS, -1.0, false,
+			seal_x, seal_x != 0.0, 0.0, EMPTY_VEC3, goalie_hands, goalie_pads)
 	return lane * receiver_shot
 
 
