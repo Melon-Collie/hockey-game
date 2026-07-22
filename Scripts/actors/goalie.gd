@@ -15,6 +15,7 @@ extends Node3D
 @onready var _head: StaticBody3D = $Head
 @onready var _glove: StaticBody3D = $Glove
 @onready var _block_arm: Node3D = $BlockArm
+@onready var _blocker: StaticBody3D = $BlockArm/Blocker
 @onready var _stick: StaticBody3D = $BlockArm/Stick
 @onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
 
@@ -72,6 +73,17 @@ func _ready() -> void:
 	# includes that layer so shots still rebound off the stick, but the skater
 	# mask omits it so players pass through instead of getting caught.
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK
+	# The body parts come off the scene-default LAYER_WALLS onto their own
+	# LAYER_GOALIE_BODIES so a ghosted skater (whose mask drops back to bare
+	# LAYER_WALLS — see Skater.set_ghost) passes through the goalie while still
+	# standing on the ice. MASK_PUCK and MASK_SKATER both include the new layer,
+	# so shots rebound and non-ghost skaters bump exactly as before.
+	_left_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_right_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_body.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_head.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_glove.collision_layer = Constants.LAYER_GOALIE_BODIES
+	_blocker.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_init_connectors()
 	_init_arm_bones()
 	_setup_uniform_coordinator()

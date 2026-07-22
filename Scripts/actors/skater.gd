@@ -1727,6 +1727,10 @@ func set_ghost(ghost: bool) -> void:
 		_slapper_zone_area.collision_layer = 0
 		_body_block_area.collision_mask = 0
 		collision_layer = 0
+		# Bare LAYER_WALLS = ice only: goalie bodies live on their own
+		# LAYER_GOALIE_BODIES (dropped here), so a ghost skates through the
+		# goalie too. Skater-vs-skater contact is analytic and gated on
+		# is_ghost in _resolve_player_collisions.
 		collision_mask = Constants.LAYER_WALLS
 	else:
 		_blade_area.collision_layer = Constants.LAYER_BLADE_AREAS
