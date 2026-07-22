@@ -13,7 +13,7 @@ extends Node
 #   - This script on the root Node
 #   - The rink visuals + goals (HockeyGoal nodes for the net meshes)
 #   - WorldEnvironment + DirectionalLight3D for lighting
-#   - No Camera3D (CameraDirector mounts broadcast / chase / free cams at runtime)
+#   - No Camera3D (CameraDirector mounts broadcast / chase / POV / free cams at runtime)
 #   - No HUD (added in a follow-up commit)
 
 var _spawner: ActorSpawner = null
@@ -26,6 +26,10 @@ var _driver: FileReplayDriver = null
 var _camera_director: CameraDirector = null
 var _hud: ReplayViewerHUD = null
 var _crowd: CrowdAudioController = null
+# The arena's center-hung scoreboard (inside the instanced RinkArena scene).
+# Fed the recorded game state / goal events directly — its live GameManager
+# signals never fire during offline playback.
+var _jumbotron: Jumbotron = null
 # Recorded game phase of the currently-applied frame (GamePhase.Phase; −1
 # before the first frame lands). Backs the is_faceoff_prep() stub.
 var _replay_phase: int = -1
@@ -168,10 +172,10 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	# updates (position, blade, IK) on its own.
 	skater.set_physics_process(false)
 	# Latch off the flat-on-ice slot rings, name labels, stamina rings, and
-	# slapper indicators — they're designed for the top-down gameplay camera
-	# and look wrong from any of the broadcast / chase / free camera angles
-	# the replay viewer uses. set_physics_process(false) above also means
-	# SkaterHUDCoordinator.update() would never auto-hide them.
+	# slapper indicators — they're designed for the local player's top-down
+	# gameplay camera and look wrong (or misleading, in the top-down POV cam)
+	# from the director's camera angles. set_physics_process(false) above also
+	# means SkaterHUDCoordinator.update() would never auto-hide them.
 	skater.set_world_hud_hidden(true)
 	skater.set_player_name(p_name)
 	skater.set_uniform(team_colors)
@@ -189,17 +193,25 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	_records[record.peer_id] = record
 
 
-# The crowd (ArenaStands) lives inside the instanced RinkArena scene. In the
-# live game it recolors itself off GameManager.team_colors_ready, which never
-# fires for replay colors offline — so push the replay palette to it directly
-# here, reusing the same setup() the live signal would call. find_child returns
-# Node, so type the result for member access.
+# The crowd (ArenaStands) and scoreboard (Jumbotron) live inside the instanced
+# RinkArena scene. In the live game they recolor themselves off
+# GameManager.team_colors_ready, which never fires for replay colors offline —
+# so push the replay palette to them directly here, reusing the same setup /
+# set_team_colors the live signal would call. find_child returns Node, so type
+# the results for member access.
 func _apply_crowd_colors() -> void:
 	var stands: ArenaStands = find_child("ArenaStands", true, false) as ArenaStands
 	if stands == null:
 		push_warning("ReplayViewer: ArenaStands not found; crowd keeps default colors")
 		return
 	stands.setup(
+		_home_colors.primary, _home_colors.secondary,
+		_away_colors.primary, _away_colors.secondary)
+	_jumbotron = find_child("Jumbotron", true, false) as Jumbotron
+	if _jumbotron == null:
+		push_warning("ReplayViewer: Jumbotron not found; board stays on attract")
+		return
+	_jumbotron.set_team_colors(
 		_home_colors.primary, _home_colors.secondary,
 		_away_colors.primary, _away_colors.secondary)
 
@@ -256,6 +268,11 @@ func _start_playback(frames: Array) -> void:
 
 func _on_replay_game_state(gs: Dictionary) -> void:
 	_replay_phase = int(gs.get("phase", -1))
+	# Drive the arena scoreboard from the recorded game state — score, clock,
+	# period, and the phase-selected page (GOAL during celebrations, BREAK
+	# between periods, FINAL at game over) all track the playback clock.
+	if _jumbotron != null:
+		_jumbotron.apply_replay_game_state(gs)
 
 
 # Dispatch on event kind so the viewer stays in sync with mid-game roster
@@ -277,8 +294,14 @@ func _on_replay_event(event: Dictionary) -> void:
 		# Crowd cheer + ambient duck on replayed goals — the live
 		# GameManager.goal_scored that drives this in a real game doesn't
 		# fire offline, so trigger it off the recorded goal event here.
-		if kind == "goal" and _crowd != null:
-			_crowd.cheer()
+		if kind == "goal":
+			if _crowd != null:
+				_crowd.cheer()
+			# Fill the jumbotron's GOAL page (scorer name + team flash); the
+			# page itself is selected by the recorded phase.
+			if _jumbotron != null:
+				_jumbotron.show_goal(str(event.get("scorer", "")),
+						clampi(int(event.get("scoring_team_id", 0)), 0, 1))
 
 
 func _despawn_skater(peer_id: int) -> void:

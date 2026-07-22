@@ -151,9 +151,10 @@ var _slapper_ring_mesh: MeshInstance3D
 var _slapper_zone_radius_cached: float = 0.5
 var _slapper_current_ring_scale: float = 1.0
 # Force-hide all per-skater HUD chrome regardless of replay-mode state. Used
-# by the offline replay viewer and live spectator mode where the broadcast /
-# chase / free cameras frame the rink from angles the flat ring decals weren't
-# designed for. Latched once at setup; persists for the actor's lifetime.
+# by the offline replay viewer and live spectator mode, where the director's
+# cameras (broadcast / chase / POV / free) keep a clean broadcast look — the
+# flat ring decals were designed for the local player's own top-down framing.
+# Latched once at setup; persists for the actor's lifetime.
 var _force_world_hud_hidden: bool = false
 
 # Reusable resources + buffers — _rebuild_slapper_geometry() can fire every

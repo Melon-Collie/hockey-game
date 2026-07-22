@@ -1807,8 +1807,10 @@ func set_ring_relation_resolver(resolver: Callable) -> void:
 
 # Latch all per-skater HUD chrome (slot ring, name label, stamina ring,
 # chevron, slapper indicator/ring) off. Used by the offline replay viewer and
-# live spectator mode where broadcast / chase / free cameras frame the rink
-# from angles the flat ring decals weren't designed for.
+# live spectator mode: the broadcast / chase / free cameras frame the rink
+# from angles the flat ring decals weren't designed for, and the top-down POV
+# cam keeps the same clean broadcast look rather than faking one player's
+# local chrome.
 func set_world_hud_hidden(hidden: bool) -> void:
 	_hud.set_world_hud_hidden(hidden)
 

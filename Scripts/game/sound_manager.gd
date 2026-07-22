@@ -79,8 +79,8 @@ const _CROWD_POOL_SIZE: int = 4
 # LIVE — live play frames the puck closely (game cam ~15 m up), so the tight
 #   defaults keep events spatial without bleeding across the rink.
 # REPLAY_FAR — replay cameras parked far from the action: the offline viewer's
-#   broadcast/chase/free cams and the goal replay's press-box hard cam sit
-#   ~19–38 m from the puck, where the LIVE falloff attenuates recorded events
+#   broadcast/chase/POV/free cams and the goal replay's press-box hard cam sit
+#   ~10–38 m from the puck, where the LIVE falloff attenuates recorded events
 #   to near-silence (far-side events hit the 40 m cutoff entirely). Widen the
 #   curve so the cinematic distance stays audible while keeping stereo cues.
 # REPLAY_NEAR — the goal replay's behind-the-net cam (~4.5–10 m from the puck).
