@@ -280,3 +280,40 @@ func test_interp_delay_rejects_garbage() -> void:
 	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(NAN, 80.0), 0.0, EPSILON)
 	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(INF, 80.0), 0.0, EPSILON)
 	assert_almost_eq(LagCompRewind.plausible_interp_delay_ms(-50.0, 80.0), 0.0, EPSILON)
+
+
+# ── self_view_time with the claim-carried adaptive lead ───────────────────────
+
+func test_self_view_honest_lead_passes_through() -> void:
+	# A claim carrying base + 10 ms of adaptive extra rewinds to exactly that.
+	var lead_ms: float = (NetworkManager.INPUT_LEAD_SEC + 0.010) * 1000.0
+	assert_almost_eq(LagCompRewind.self_view_time(10.0, lead_ms),
+			10.0 + NetworkManager.INPUT_LEAD_SEC + 0.010, EPSILON)
+
+
+func test_self_view_inflated_lead_clamped() -> void:
+	# A modified client reporting a huge lead can't push its self-view rewind
+	# arbitrarily forward — bounded at base + MAX extra (mirrors ClockSync).
+	var t: float = LagCompRewind.self_view_time(10.0, 500.0)
+	assert_almost_eq(t, 10.0 + NetworkManager.INPUT_LEAD_SEC + 0.05, EPSILON)
+
+
+func test_self_view_undercut_lead_clamped_to_base() -> void:
+	# Reporting less than the base constant is equally implausible (the stamp
+	# convention floors there) — clamped up to base.
+	assert_almost_eq(LagCompRewind.self_view_time(10.0, 1.0),
+			10.0 + NetworkManager.INPUT_LEAD_SEC, EPSILON)
+
+
+func test_self_view_default_and_garbage_use_base() -> void:
+	assert_almost_eq(LagCompRewind.self_view_time(10.0),
+			10.0 + NetworkManager.INPUT_LEAD_SEC, EPSILON)
+	assert_almost_eq(LagCompRewind.self_view_time(10.0, NAN),
+			10.0 + NetworkManager.INPUT_LEAD_SEC, EPSILON)
+
+
+func test_lead_extra_max_mirrors_clock_sync() -> void:
+	# The host-side clamp must track the client-side servo ceiling — if they
+	# drift apart a legit fully-adapted claim gets mis-rewound.
+	var cs_script: GDScript = load("res://Scripts/networking/clock_sync.gd")
+	assert_eq(LagCompRewind._INPUT_LEAD_EXTRA_MAX_S, cs_script.MAX_LEAD_EXTRA_S)

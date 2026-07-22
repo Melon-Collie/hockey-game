@@ -162,7 +162,13 @@ const VERSION: String = "dev"
 #      No serialized format changed, but a v37 peer would render/validate
 #      against different puck physics and a mismatched claim-rewind convention,
 #      so mixed lobbies must be refused.
-const PROTOCOL_VERSION: int = 38
+# v39: adaptive input lead. The client's stamp lead becomes INPUT_LEAD_SEC + a
+#      servo-adapted extra (ClockSync measures pop-overdue from the snapshot
+#      ack stream), and the four blade/hit claim RPCs gain an input_lead_ms arg
+#      so LagCompRewind.self_view_time rewinds with the lead the claimant
+#      actually stamped with (bounded host-side). Positional arg counts changed
+#      on all four claim RPCs — bump required.
+const PROTOCOL_VERSION: int = 39
 
 
 func _ready() -> void:

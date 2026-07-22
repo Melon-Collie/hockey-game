@@ -51,7 +51,7 @@ func setup(
 
 
 func receive_claim(peer_id: int, host_timestamp: float,
-		interp_delay_ms: float, expected_carrier_peer_id: int,
+		interp_delay_ms: float, input_lead_ms: float, expected_carrier_peer_id: int,
 		client_blade_curr: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
@@ -89,7 +89,7 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	# Attacker's blade is SELF-view (they render their own body via prediction);
 	# the carrier's stick shaft is REMOTE-view (rendered via interpolation).
-	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
 	var shaft_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 	var shaft_snap: WorldSnapshot = _state_buffer.get_state_at(shaft_rewind_time)
 	if shaft_snap.puck_state == null:

@@ -87,7 +87,7 @@ func clear() -> void:
 
 
 func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
-		client_blade_curr: Vector3, client_blade_prev: Vector3,
+		input_lead_ms: float, client_blade_curr: Vector3, client_blade_prev: Vector3,
 		client_top_hand: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
@@ -121,7 +121,7 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 	# expired in that window would grant a claim the claimant couldn't have made
 	# at send time. self_view_time is the claimant's own body timeline (matching
 	# the blade rewind below); the expiry store shares its local_time base.
-	if puck.is_on_cooldown_at(record.skater, LagCompRewind.self_view_time(host_timestamp)):
+	if puck.is_on_cooldown_at(record.skater, LagCompRewind.self_view_time(host_timestamp, input_lead_ms)):
 		return
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
@@ -131,7 +131,7 @@ func receive_claim(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 	# legacy REMOTE-view past. See LagCompRewind for both derivations. The pair
 	# of get_state_at calls per entity (curr + one physics tick back) feeds the
 	# swept-segment test below.
-	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
 	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp, interp_delay_ms)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:

@@ -117,7 +117,8 @@ func notify_local_hit(hitter_peer_id: int, victim: Skater, impulse_magnitude: fl
 			NetworkManager.get_interpolation_delay() * 1000.0)
 
 
-func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float) -> void:
+func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float,
+		interp_delay_ms: float, input_lead_ms: float) -> void:
 	if _state_buffer == null or not _state_buffer.is_ready():
 		return
 	# Anti-cheat: bound the self-reported render delay against the measured link
@@ -136,7 +137,7 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# interpolation (REMOTE view). Using one rewind for both (as the prior
 	# `host_timestamp - rtt/2` did) compares hitter-from-one-time against
 	# victim-from-another-time. See LagCompRewind for the derivation.
-	var hitter_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var hitter_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
 	var victim_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 	var hitter_snapshot: WorldSnapshot = _state_buffer.get_state_at(hitter_rewind_time)
 	var victim_snapshot: WorldSnapshot = _state_buffer.get_state_at(victim_rewind_time)

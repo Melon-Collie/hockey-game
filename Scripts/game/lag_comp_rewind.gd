@@ -89,13 +89,27 @@ static func plausible_interp_delay_ms(reported_ms: float, peer_rtt_ms: float) ->
 	return bounded
 
 
+# Hard bound on the claim-carried adaptive lead extra — mirrors
+# ClockSync.MAX_LEAD_EXTRA_S (pinned by test) so a modified client can't push
+# its self-view rewind arbitrarily forward by inflating the reported lead.
+const _INPUT_LEAD_EXTRA_MAX_S: float = 0.05
+
+
 # Host-time at which to query StateBufferManager for the claimant's
 # locally-predicted entity. RTT does not enter the formula — the rewind depth
-# is a function of the INPUT_LEAD_SEC convention, so validation is
+# is a function of the input-lead stamping convention, so validation is
 # RTT-independent and lower-ping players don't beat higher-ping players on
-# legitimately-stamped claims.
-static func self_view_time(host_timestamp: float) -> float:
-	return host_timestamp + NetworkManager.INPUT_LEAD_SEC
+# legitimately-stamped claims. Since the lead ADAPTS (ClockSync's servo raises
+# the stamp lead when the host queue runs dry), claims carry the lead the
+# client stamped with and the rewind follows it — bounded to
+# [INPUT_LEAD_SEC, INPUT_LEAD_SEC + extra max]. input_lead_ms < 0 (or absent
+# — the host's own local claims) uses the base constant.
+static func self_view_time(host_timestamp: float, input_lead_ms: float = -1.0) -> float:
+	if input_lead_ms < 0.0 or not is_finite(input_lead_ms):
+		return host_timestamp + NetworkManager.INPUT_LEAD_SEC
+	var lead_s: float = clampf(input_lead_ms / 1000.0,
+			NetworkManager.INPUT_LEAD_SEC, NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
+	return host_timestamp + lead_s
 
 
 # Host-time at which to query StateBufferManager for any entity the claimant

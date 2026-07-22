@@ -47,7 +47,7 @@ func setup(
 
 
 func receive_claim(peer_id: int, host_timestamp: float,
-		interp_delay_ms: float, expected_carrier_peer_id: int,
+		interp_delay_ms: float, input_lead_ms: float, expected_carrier_peer_id: int,
 		client_blade_curr: Vector3, client_blade_prev: Vector3) -> void:
 	if not _puck_getter.is_valid() or not _puck_controller_getter.is_valid():
 		return
@@ -87,7 +87,7 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	# position is pinned to the carrier's interpolated body). See LagCompRewind
 	# for the derivation. The pair of get_state_at calls per entity (curr + one
 	# physics tick back) feeds the swept-segment test below.
-	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp)
+	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
 	var puck_rewind_time: float = LagCompRewind.remote_view_time(host_timestamp, interp_delay_ms)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null:
