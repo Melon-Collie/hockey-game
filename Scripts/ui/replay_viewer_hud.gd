@@ -14,8 +14,7 @@ extends CanvasLayer
 const _DARK_BG: Color    = Color(0.07, 0.07, 0.09, 0.92)
 const _WHITE: Color      = Color(1.00, 1.00, 1.00, 1.00)
 const _DIM: Color        = Color(0.62, 0.62, 0.68, 1.00)
-const _GOAL_TICK: Color   = Color(1.00, 0.85, 0.20, 0.85)  # goals — amber
-const _PERIOD_TICK: Color = Color(0.45, 0.75, 1.00, 0.85)  # period ends — blue
+const _PERIOD_TICK: Color = Color(0.00, 0.00, 0.00, 0.90)  # period ends — black
 
 const _SPEEDS: Array[float] = [0.25, 0.5, 1.0, 2.0, 4.0]
 # Parallel labels — GDScript's % operator doesn't support %g, and %f stamps
@@ -410,8 +409,9 @@ func _process(_delta: float) -> void:
 		_camera_label.text = "CAMERA: %s  ·  [C] cycle  ·  [↑↓] player  ·  RMB drag look" % _director.get_mode_label()
 
 
-# Tick marks along the slider: amber for goals, blue for period ends. Driven by
-# the slider's draw signal so they always sit at the correct screen-space x.
+# Tick marks along the slider: the scoring team's primary color for goals,
+# black for period ends. Driven by the slider's draw signal so they always sit
+# at the correct screen-space x.
 func _draw_event_ticks() -> void:
 	if _driver == null or _seek_bar_root == null:
 		return
@@ -436,7 +436,8 @@ func _draw_event_ticks() -> void:
 		var color: Color
 		match String(event.data.kind):
 			"goal":
-				color = _GOAL_TICK
+				# Scoring team's primary color: home = team 0, away = team 1.
+				color = _away_color if int(event.data.get("scoring_team_id", 0)) == 1 else _home_color
 			"period_end":
 				color = _PERIOD_TICK
 			_:
