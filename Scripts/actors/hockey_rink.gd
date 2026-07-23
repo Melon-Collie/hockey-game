@@ -123,7 +123,12 @@ extends StaticBody3D
 	set(v):
 		ice_specular = v
 		_rebuild()
-@export_range(0.0, 1.0) var ice_roughness_head_on: float = 0.20:
+# Head-on roughness governs how sharp screen-space reflections read when you
+# look down at the ice (grazing stays the mirror streak). Nudged 0.20 → 0.15
+# so skater/goal reflections hold together once SSR is enabled in the
+# WorldEnvironment (see docs/arena-atmosphere-spec.md); still short of a full
+# mirror, so the ice keeps its slightly-diffuse-head-on read.
+@export_range(0.0, 1.0) var ice_roughness_head_on: float = 0.15:
 	set(v):
 		ice_roughness_head_on = v
 		_rebuild()
