@@ -3493,6 +3493,12 @@ func _observe_telemetry() -> void:
 			_telemetry.current_rtt_ms = NetworkManager.get_rtt_ms()
 			_telemetry.current_delay_spread_ms = NetworkManager.get_packet_delay_spread_ms()
 			_telemetry.current_clock_correction_ms = NetworkManager.get_clock_correction_ms()
+			# The lead servo's live EXTRA (total stamp lead − the static
+			# INPUT_LEAD_SEC). Observability for the servo's equilibrium under
+			# the post-C1 honest capture labels — nothing else reports it, and
+			# the F3 latency budget shows only the static base.
+			_telemetry.current_input_lead_extra_ms = NetworkManager.get_input_lead_ms() \
+					- NetworkManager.INPUT_LEAD_SEC * 1000.0
 
 
 func _sync_stats_to_clients() -> void:
