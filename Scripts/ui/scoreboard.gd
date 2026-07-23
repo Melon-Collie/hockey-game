@@ -63,7 +63,11 @@ func configure(home_slot: int, away_slot: int, num_periods: int,
 func _input(event: InputEvent) -> void:
 	if _external_control:
 		return  # replay HUD owns Tab/Escape for this board
-	if event is InputEventKey and event.pressed and event.keycode == KEY_TAB:
+	var toggled: bool = (event is InputEventKey and event.pressed \
+			and (event as InputEventKey).keycode == KEY_TAB) \
+			or (event is InputEventJoypadButton and event.pressed \
+			and (event as InputEventJoypadButton).button_index == JOY_BUTTON_BACK)
+	if toggled:
 		visible = not visible
 		if visible:
 			_refresh()

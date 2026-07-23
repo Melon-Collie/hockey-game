@@ -156,11 +156,11 @@ func _accumulate_gamepad_edges() -> void:
 	if quick_pass_now and not _prev_pad_quick_pass:
 		_pending_quick_pass_pressed = true
 	_prev_pad_quick_pass = quick_pass_now
-	var up_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_DPAD_UP)
+	var up_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_Y)
 	if up_now and not _prev_pad_elev_up:
 		_elevation_level = mini(_elevation_level + 1, InputState.MAX_ELEVATION_LEVEL)
 	_prev_pad_elev_up = up_now
-	var down_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_DPAD_DOWN)
+	var down_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
 	if down_now and not _prev_pad_elev_down:
 		_elevation_level = maxi(_elevation_level - 1, 0)
 	_prev_pad_elev_down = down_now
@@ -208,9 +208,9 @@ func gather() -> InputState:
 		state.slap_held = _pad_trigger(JOY_AXIS_TRIGGER_LEFT)
 		state.brake = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_B)
 		state.sprint_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_STICK)
-		state.block_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_SHOULDER)
+		state.block_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_A)
 		state.stick_lift_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
-		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
+		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_SHOULDER)
 		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
 		# direction in _update_pad_cursor → player→cursor is the shot line), power from
 		# how hard the stick is pushed (its magnitude) — no flick, no drag timing, no
