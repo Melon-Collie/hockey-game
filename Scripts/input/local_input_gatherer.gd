@@ -23,13 +23,20 @@ const AIM_RADIUS_PX: float = 480.0
 # cursor speed (SkaterController.wrister_mouse_speed_full, ~2500 px/s), while a
 # gentle push stays in the touch-pass band. Shot Power Sensitivity scales it too.
 const GAMEPAD_CURSOR_SPEED: float = 3200.0
+# Stickhandle rest: when the stick is released, the cursor eases to a point this
+# many screen px ahead of the body along the facing direction, so the blade
+# settles into a natural forward carry that tracks where you're pointed (rather
+# than freezing in place or resting up-ice). REST_RETURN_RATE is the ease speed.
+const REST_OFFSET_PX: float = 150.0
+const REST_RETURN_RATE: float = 10.0
 const AIM_DEADZONE: float = 0.15
 # Analog-trigger pull that counts as a press for the wrister / slapshot.
 const TRIGGER_THRESHOLD: float = 0.5
 
 var _camera: Camera3D
-# The local player's own skater — the on-screen anchor for the gamepad cursor.
-var _aim_skater: Node3D = null
+# The local player's own skater — the on-screen anchor for the gamepad cursor and
+# the source of the facing the blade rests ahead of.
+var _aim_skater: Skater = null
 # Device id of the pad we read. NOT assumed to be 0 — Godot's connected-joypad id
 # depends on connect order / platform, so a real pad can sit on a non-zero id and
 # reads against 0 would silently return nothing. Cached and refreshed only on
@@ -88,9 +95,9 @@ func _refresh_pad_device() -> void:
 func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
 
-# The local player's skater, used as the on-screen anchor for the gamepad
-# skill-stick cursor. Set by LocalController once the skater is spawned.
-func set_aim_skater(skater: Node3D) -> void:
+# The local player's skater, used as the on-screen anchor for the gamepad cursor
+# and the facing the blade rests ahead of. Set by LocalController at spawn.
+func set_aim_skater(skater: Skater) -> void:
 	_aim_skater = skater
 
 # Gamepad drives aim/buttons only when the player opted in AND a pad is present —
@@ -251,8 +258,9 @@ func _screen_cursor(pad: bool) -> Vector2:
 
 # Update the gamepad cursor. Two modes, chosen on the shoot trigger:
 #   * STICKHANDLE (RT up): absolute proportional placement — the stick maps to a
-#     blade offset from the anchor. A centered stick freezes the cursor, so letting
-#     go HOLDS the blade where you set it (you can skate any direction hands-free).
+#     blade offset from the anchor. Releasing the stick eases the cursor to a rest
+#     just ahead of the body along the facing, so the blade settles into a natural
+#     forward carry that tracks where you're pointed.
 #   * SHOOT (RT held): velocity cursor — the stick sets screen-space velocity, so a
 #     flick is clean directional motion and releasing the stick can't snap the cursor
 #     back toward the anchor and corrupt the wrister's release read.
@@ -269,7 +277,30 @@ func _update_pad_cursor(delta: float) -> void:
 				_pad_cursor, stick, GAMEPAD_CURSOR_SPEED, delta, anchor, AIM_RADIUS_PX)
 	elif not stick.is_zero_approx():
 		_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick, AIM_RADIUS_PX)
-	# else: stickhandle mode, stick centered → hold the cursor where it was.
+	else:
+		# Stickhandle mode, stick released → ease the blade to its forward carry rest.
+		var ease: float = clampf(REST_RETURN_RATE * delta, 0.0, 1.0)
+		_pad_cursor = _pad_cursor.lerp(_facing_rest_screen(anchor), ease)
+
+# The stickhandle rest cursor: the body anchor pushed REST_OFFSET_PX toward the
+# facing's on-screen direction, so the blade settles ahead of where the skater is
+# pointed. Projects the facing to screen (skater pos → pos+facing) rather than
+# guessing a world distance, so it reads correctly under any camera tilt/zoom.
+# Falls back to the anchor when there's no skater/facing or it's behind the camera.
+func _facing_rest_screen(anchor: Vector2) -> Vector2:
+	if _aim_skater == null or _camera == null:
+		return anchor
+	var facing: Vector2 = _aim_skater.get_facing()
+	if facing.is_zero_approx():
+		return anchor
+	var pos: Vector3 = _aim_skater.global_position
+	var ahead := Vector3(pos.x + facing.x, pos.y, pos.z + facing.y)
+	if _camera.is_position_behind(pos) or _camera.is_position_behind(ahead):
+		return anchor
+	var screen_dir: Vector2 = _camera.unproject_position(ahead) - _camera.unproject_position(pos)
+	if screen_dir.length() < 0.001:
+		return anchor
+	return anchor + screen_dir.normalized() * REST_OFFSET_PX
 
 # On-screen anchor for the gamepad cursor: the skater's projected position, so the
 # reach disc tracks the player as the camera follows. Falls back to the viewport
