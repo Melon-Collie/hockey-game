@@ -15,6 +15,11 @@ var _loading_label: Label = null
 var _settings_container: Control = null
 var _input_received: bool = false
 var _transitioned: bool = false
+# Device auto-detect: the FIRST input on the splash decides the control scheme.
+# A pad button/stick as the first touch turns controller mode on (and focuses the
+# title menu so the pad can drive it); mouse/keyboard first leaves it off. Latched
+# after the first meaningful event so later input doesn't keep flipping it.
+var _device_detected: bool = false
 
 
 func _ready() -> void:
@@ -209,6 +214,36 @@ func _on_play_pressed() -> void:
 
 func _on_exit_pressed() -> void:
 	get_tree().quit()
+
+
+# First-input device detection (see _device_detected). Runs at the _input level so
+# it sees the event before any control consumes it. Only a pad flips the pref; a
+# mouse/keyboard first-touch just latches so a later pad press doesn't re-flip.
+func _input(event: InputEvent) -> void:
+	if _device_detected:
+		return
+	if event is InputEventJoypadButton and (event as InputEventJoypadButton).pressed:
+		_enable_gamepad_from_splash()
+	elif event is InputEventJoypadMotion and absf((event as InputEventJoypadMotion).axis_value) >= 0.5:
+		_enable_gamepad_from_splash()
+	elif (event is InputEventKey and (event as InputEventKey).pressed) \
+			or (event is InputEventMouseButton and (event as InputEventMouseButton).pressed):
+		_device_detected = true  # mouse/keyboard first — leave the pref as it was
+
+
+func _enable_gamepad_from_splash() -> void:
+	_device_detected = true
+	if not PlayerPrefs.gamepad_enabled:
+		PlayerPrefs.gamepad_enabled = true
+		PlayerPrefs.save()
+	# The title buttons were built before the pref flipped — give them the focus
+	# ring now and focus the first so the pad can drive the menu immediately.
+	if _button_column != null:
+		for child: Node in _button_column.get_children():
+			if child is Button:
+				MenuStyle.add_focus_ring(child as Button)
+		if _button_column.get_child_count() > 0:
+			(_button_column.get_child(0) as Control).grab_focus.call_deferred()
 
 
 func _unhandled_input(event: InputEvent) -> void:

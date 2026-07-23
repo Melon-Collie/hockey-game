@@ -235,7 +235,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			GameManager.request_local_skip_vote()
 			get_viewport().set_input_as_handled()
 		return
-	if not event.is_action_pressed(&"ui_cancel"):
+	# Menu OPEN is keyboard Escape or gamepad Start — NOT gamepad B (ui_cancel):
+	# B stays a gameplay input (brake) and is only used to back OUT of an open menu.
+	var kb_open: bool = event.is_action_pressed(&"ui_cancel") and not (event is InputEventJoypadButton)
+	var pad_open: bool = event is InputEventJoypadButton and event.pressed \
+			and (event as InputEventJoypadButton).button_index == JOY_BUTTON_START
+	if not (kb_open or pad_open):
 		return
 	if _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible:
 		return

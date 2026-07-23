@@ -274,8 +274,14 @@ static func popup_button(label: String) -> Button:
 # invisible, which is what we want for mouse play. Gamepad mode is set on the
 # splash before menus build, so factory-made buttons pick it up.
 static func _apply_focus_ring(btn: Button) -> void:
-	if not PlayerPrefs.gamepad_enabled:
-		return
+	if PlayerPrefs.gamepad_enabled:
+		add_focus_ring(btn)
+
+
+# Unconditionally give a button the teal focus ring. Used when controller mode is
+# switched on AFTER a button was built (the boot splash, which builds its buttons
+# before the first-input device detection flips the pref).
+static func add_focus_ring(btn: Button) -> void:
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0, 0, 0, 0)
 	s.set_corner_radius_all(6)
