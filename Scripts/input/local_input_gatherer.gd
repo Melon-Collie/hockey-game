@@ -20,11 +20,16 @@ extends Node
 # stick-direction line). Feel tunable.
 const AIM_RADIUS_PX: float = 480.0
 # Stickhandle rest: when the stick is released, the cursor eases to a point this
-# many screen px ahead of the body along the facing direction, so the blade
-# settles into a natural forward carry that tracks where you're pointed (rather
-# than freezing in place or resting up-ice). REST_RETURN_RATE is the ease speed.
-const REST_OFFSET_PX: float = 70.0
+# many METERS ahead of the body along the facing, so the blade settles into a
+# natural forward carry that tracks where you're pointed. Computed in WORLD space
+# (not a screen offset) so the screen↔world round-trip is exact and the rest
+# doesn't creep under the tilted camera. REST_RETURN_RATE is the ease speed.
+const REST_WORLD_DIST: float = 0.55
 const REST_RETURN_RATE: float = 10.0
+# Wrister charge: how long RT must be held to build full shot power. Aim is the
+# stick direction; power is the hold time, so the two are decoupled (pushing the
+# stick fully to aim no longer forces max power). A quick tap is a soft touch pass.
+const WRISTER_PAD_CHARGE_TIME: float = 0.4
 const AIM_DEADZONE: float = 0.15
 # Analog-trigger pull that counts as a press for the wrister / slapshot.
 const TRIGGER_THRESHOLD: float = 0.5
@@ -60,11 +65,13 @@ var _last_mouse_screen_pos: Vector2 = Vector2.ZERO
 # frame (or after a pad reconnect) so it starts on the player.
 var _pad_cursor: Vector2 = Vector2.ZERO
 var _pad_cursor_valid: bool = false
-# Committed wrister power (0..1), latched from the right-stick magnitude while RT
-# is held so the shot reads the held power even on the release frame. _prev_gather_rt
-# keeps commit true for that one release frame (RT already read as up).
+# Committed wrister power (0..1), latched from the RT charge time while held so the
+# shot reads the held power even on the release frame. _prev_gather_rt keeps commit
+# true for that one release frame (RT already read as up). _rt_charge_time is the
+# accumulated hold (seconds), reset on release.
 var _committed_wrister_power: float = 0.0
 var _prev_gather_rt: bool = false
+var _rt_charge_time: float = 0.0
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
 # input-frame cadence with the same pending-flag latch the mouse actions use.
@@ -210,11 +217,12 @@ func gather() -> InputState:
 		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
 		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
 		# direction in _update_pad_cursor → player→cursor is the shot line), power from
-		# the stick magnitude — no flick, no drag timing, no travel gate. Latch the
-		# power while RT is held and keep commit true one frame into the release so the
-		# shot (fired on RT up) reads the held power rather than a collapsed one.
+		# the RT CHARGE TIME (accumulated in _update_pad_cursor) — no flick, no drag
+		# timing, no travel gate, and decoupled from the aim stick. Latch the power
+		# while RT is held and keep commit true one frame into the release so the shot
+		# (fired on RT up) reads the held power rather than a collapsed one.
 		if state.shoot_held:
-			_committed_wrister_power = _pad_right_stick_dz().length()
+			_committed_wrister_power = clampf(_rt_charge_time / WRISTER_PAD_CHARGE_TIME, 0.0, 1.0)
 		state.commit_wrister_power = state.shoot_held or _prev_gather_rt
 		state.bot_wrister_power_t = _committed_wrister_power
 		_prev_gather_rt = state.shoot_held
@@ -276,7 +284,8 @@ func _screen_cursor(pad: bool) -> Vector2:
 #   * SHOOT (RT held): the cursor is parked at the reach radius in the stick
 #     DIRECTION, so the shot line (player→cursor, the release fallback used when the
 #     committed path zeroes the drag direction) is exactly where the stick points —
-#     a clean, held aim. Power rides the stick magnitude (committed in gather).
+#     a clean, held aim. Power is the RT hold time (accumulated here, decoupled from
+#     the stick so aiming at full deflection doesn't force max power).
 func _update_pad_cursor(delta: float) -> void:
 	var anchor: Vector2 = _aim_anchor_screen()
 	if not _pad_cursor_valid:
@@ -284,14 +293,17 @@ func _update_pad_cursor(delta: float) -> void:
 		_pad_cursor_valid = true
 	var stick := _pad_right_stick_dz()
 	if _pad_trigger(JOY_AXIS_TRIGGER_RIGHT):
-		# Aim = stick direction only (magnitude is power). A centered stick during RT
+		_rt_charge_time += delta
+		# Aim = stick direction only (a full radius out). A centered stick during RT
 		# holds the last aim so a shot already lined up doesn't drift to center.
 		if not stick.is_zero_approx():
 			_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick.normalized(), AIM_RADIUS_PX)
 	elif not stick.is_zero_approx():
+		_rt_charge_time = 0.0
 		_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick, AIM_RADIUS_PX)
 	else:
 		# Stickhandle mode, stick released → ease the blade to its forward carry rest.
+		_rt_charge_time = 0.0
 		var ease: float = clampf(REST_RETURN_RATE * delta, 0.0, 1.0)
 		_pad_cursor = _pad_cursor.lerp(_facing_rest_screen(anchor), ease)
 
@@ -301,25 +313,25 @@ func _pad_right_stick_dz() -> Vector2:
 			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
 			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y)), AIM_DEADZONE)
 
-# The stickhandle rest cursor: the body anchor pushed REST_OFFSET_PX toward the
-# facing's on-screen direction, so the blade settles ahead of where the skater is
-# pointed. Projects the facing to screen (skater pos → pos+facing) rather than
-# guessing a world distance, so it reads correctly under any camera tilt/zoom.
-# Falls back to the anchor when there's no skater/facing or it's behind the camera.
+# The stickhandle rest cursor: a WORLD point REST_WORLD_DIST metres ahead of the
+# body along the facing, projected to screen. Computing it in world space (not a
+# screen-pixel offset) makes the cursor's screen→world round-trip land back exactly
+# on this point — so the facing tracker (which chases the cursor while the cursor
+# chases this facing-derived rest) settles instead of creeping under the tilt.
+# On the flat ice (y = 0) the round-trip is exact. Falls back to the anchor with no
+# skater/facing or when the point is behind the camera.
 func _facing_rest_screen(anchor: Vector2) -> Vector2:
 	if _aim_skater == null or _camera == null:
 		return anchor
 	var facing: Vector2 = _aim_skater.get_facing()
 	if facing.is_zero_approx():
 		return anchor
+	var f: Vector2 = facing.normalized()
 	var pos: Vector3 = _aim_skater.global_position
-	var ahead := Vector3(pos.x + facing.x, pos.y, pos.z + facing.y)
-	if _camera.is_position_behind(pos) or _camera.is_position_behind(ahead):
+	var rest_world := Vector3(pos.x + f.x * REST_WORLD_DIST, 0.0, pos.z + f.y * REST_WORLD_DIST)
+	if _camera.is_position_behind(rest_world):
 		return anchor
-	var screen_dir: Vector2 = _camera.unproject_position(ahead) - _camera.unproject_position(pos)
-	if screen_dir.length() < 0.001:
-		return anchor
-	return anchor + screen_dir.normalized() * REST_OFFSET_PX
+	return _camera.unproject_position(rest_world)
 
 # On-screen anchor for the gamepad cursor: the skater's projected position, so the
 # reach disc tracks the player as the camera follows. Falls back to the viewport
