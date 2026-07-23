@@ -201,7 +201,7 @@ func open() -> void:
 		# joining need Steam.
 		_clear_list()
 		_set_status("Steam isn't running — joining online\ngames is unavailable. Start Game still works.")
-	MenuStyle.focus_first(self)  # controller: take focus off the Side Menu behind
+	ControllerNav.focus_first(self)  # controller: take focus off the Side Menu behind
 
 
 func _unhandled_input(event: InputEvent) -> void:

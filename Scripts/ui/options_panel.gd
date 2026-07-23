@@ -223,23 +223,18 @@ func _activate_tab(idx: int) -> void:
 # switches. Called by the Side Menu on open. No-op for mouse (focus_first gates).
 func focus_active_tab() -> void:
 	if _active_idx >= 0 and _active_idx < _tab_contents.size():
-		MenuStyle.focus_first(_tab_contents[_active_idx])
+		ControllerNav.focus_first(_tab_contents[_active_idx])
 
 
 # LB / RB cycle tabs — the console convention — so the pad doesn't have to walk
 # the tab bar. Only while the panel is on screen; guarded so it never touches the
 # game's LB (hit) during play. Refocuses the new page's first control.
 func _input(event: InputEvent) -> void:
-	if not is_visible_in_tree() or not PlayerPrefs.gamepad_enabled:
+	if not is_visible_in_tree():
 		return
-	if not (event is InputEventJoypadButton and (event as InputEventJoypadButton).pressed):
-		return
-	var button: int = (event as InputEventJoypadButton).button_index
-	if button == JOY_BUTTON_LEFT_SHOULDER:
-		_cycle_tab(-1)
-		get_viewport().set_input_as_handled()
-	elif button == JOY_BUTTON_RIGHT_SHOULDER:
-		_cycle_tab(1)
+	var delta: int = ControllerNav.bumper_tab_delta(event)
+	if delta != 0:
+		_cycle_tab(delta)
 		get_viewport().set_input_as_handled()
 
 

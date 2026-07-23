@@ -82,13 +82,8 @@ func _maybe_offer_reconnect() -> void:
 # while a sub-modal is up — so we only consume it when a main-list item is focused,
 # leaving sub-modal buttons to the GUI system.
 func _input(event: InputEvent) -> void:
-	if not visible or not event.is_action_pressed(&"ui_accept"):
-		return
-	for i: int in _nav_items.size():
-		if _nav_items[i].has_focus():
-			get_viewport().set_input_as_handled()
-			_nav_handlers[i].call()
-			return
+	if visible and ControllerNav.activate_focused(event, _nav_items, _nav_handlers):
+		get_viewport().set_input_as_handled()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -135,11 +130,9 @@ func open() -> void:
 # them non-focusable so a click never lands a focus ring. Read live each open, so
 # toggling the gamepad pref takes effect the next time the menu is opened.
 func _apply_nav_focus() -> void:
-	var gamepad: bool = PlayerPrefs.gamepad_enabled
-	for item: Control in _nav_items:
-		item.focus_mode = Control.FOCUS_ALL if gamepad else Control.FOCUS_NONE
-	if gamepad and not _nav_items.is_empty():
-		MenuStyle.grab_focus_if_gamepad(_nav_items[0])
+	ControllerNav.set_list_focusable(_nav_items, ControllerNav.active())
+	if not _nav_items.is_empty():
+		ControllerNav.grab_focus(_nav_items[0])
 
 
 # Restore controller focus to the menu list after a sub-modal or launched popup
@@ -147,9 +140,9 @@ func _apply_nav_focus() -> void:
 # focused. Returns to the last-focused row when we have one, else the top.
 func _return_focus_to_menu() -> void:
 	if _last_nav_focus != null and is_instance_valid(_last_nav_focus):
-		MenuStyle.grab_focus_if_gamepad(_last_nav_focus)
+		ControllerNav.grab_focus(_last_nav_focus)
 	elif not _nav_items.is_empty():
-		MenuStyle.grab_focus_if_gamepad(_nav_items[0])
+		ControllerNav.grab_focus(_nav_items[0])
 
 
 # When a launched popup (Player / Play / Career / Options) hides, pull focus back
@@ -774,7 +767,7 @@ func _on_tutorial_pressed() -> void:
 	_refresh_tutorial_rows()
 	_tutorial_container.visible = true
 	if _tutorial_rows_vbox.get_child_count() > 0:
-		MenuStyle.grab_focus_if_gamepad(_tutorial_rows_vbox.get_child(0) as Control)
+		ControllerNav.grab_focus(_tutorial_rows_vbox.get_child(0) as Control)
 
 
 func _on_drills_pressed() -> void:
@@ -785,7 +778,7 @@ func _on_drills_pressed() -> void:
 	_refresh_drills_rows()
 	_drills_container.visible = true
 	if _drills_rows_vbox.get_child_count() > 0:
-		MenuStyle.grab_focus_if_gamepad(_drills_rows_vbox.get_child(0) as Control)
+		ControllerNav.grab_focus(_drills_rows_vbox.get_child(0) as Control)
 
 
 func _launch_tutorial(id: String) -> void:
@@ -820,7 +813,7 @@ func _on_options_pressed() -> void:
 
 func _on_exit_pressed() -> void:
 	_exit_container.visible = true
-	MenuStyle.grab_focus_if_gamepad(_exit_cancel_btn)
+	ControllerNav.grab_focus(_exit_cancel_btn)
 
 
 # `lobby_id` comes from the public lobby browser or a Steam friend invite.

@@ -310,37 +310,5 @@ static func controller_focus_theme() -> Theme:
 		t.set_stylebox("focus", control_type, focus_ring_box())
 	return t
 
-
-# Grab focus on `control` — but only in controller mode, so mouse players never
-# get a focus ring they didn't ask for. Deferred so it runs after the control is
-# in the tree and laid out. The single seam every menu calls when it opens.
-static func grab_focus_if_gamepad(control: Control) -> void:
-	if control != null and PlayerPrefs.gamepad_enabled:
-		control.grab_focus.call_deferred()
-
-
-# In controller mode, focus the first focusable control under `root` (depth-first)
-# so an opening popup takes control off the menu behind it. The seam a popup calls
-# in its open(); a no-op for mouse players. Deferred so it runs after the popup's
-# content is built and laid out.
-static func focus_first(root: Node) -> void:
-	if PlayerPrefs.gamepad_enabled:
-		_focus_first_deferred.call_deferred(root)
-
-
-static func _focus_first_deferred(root: Node) -> void:
-	var c: Control = _first_focusable(root)
-	if c != null:
-		c.grab_focus()
-
-
-static func _first_focusable(node: Node) -> Control:
-	for child: Node in node.get_children():
-		if child is Control:
-			var ctrl := child as Control
-			if ctrl.visible and ctrl.focus_mode == Control.FOCUS_ALL:
-				return ctrl
-		var found: Control = _first_focusable(child)
-		if found != null:
-			return found
-	return null
+# Focus-grab / focus-first / list-focus and the input routing live in ControllerNav
+# (the nav BEHAVIOR); MenuStyle keeps only the focus VISUALS above.
