@@ -241,10 +241,12 @@ var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
 var puck_shadow_enabled: bool = true
 # Arena atmosphere effects (applied to the WorldEnvironment in apply_video). The
-# .tscn ships their parameters (fog density/albedo, SSR steps, SSAO intensity,
-# per-light fog contribution, darkened ambient); these bools gate the expensive
-# passes so low-end machines can drop them. Default on — the intended look.
-var volumetric_fog_enabled: bool = true
+# .tscn ships their parameters; these bools gate the expensive passes so low-end
+# machines can drop them. Fog defaults OFF: a hockey rink is bright and evenly
+# lit, and the top-down camera never sees the light-shaft payoff — it just reads
+# as haze — so it's an opt-in subtle-atmosphere toggle. SSR (ice reflections)
+# and SSAO (contact shadows) read well top-down and default on.
+var volumetric_fog_enabled: bool = false
 var reflections_enabled: bool = true       # screen-space reflections on the ice
 var ambient_occlusion_enabled: bool = true # SSAO contact shadows
 var scaling_3d_mode: int = SCALING_3D_BILINEAR
@@ -1063,7 +1065,7 @@ func _load() -> void:
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		puck_shadow_enabled = cfg.get_value("video", "puck_shadow_enabled", true)
-		volumetric_fog_enabled = cfg.get_value("video", "volumetric_fog_enabled", true)
+		volumetric_fog_enabled = cfg.get_value("video", "volumetric_fog_enabled", false)
 		reflections_enabled = cfg.get_value("video", "reflections_enabled", true)
 		ambient_occlusion_enabled = cfg.get_value("video", "ambient_occlusion_enabled", true)
 		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)

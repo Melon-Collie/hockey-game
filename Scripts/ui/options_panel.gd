@@ -341,7 +341,7 @@ func _defaults() -> Dictionary:
 		"crowd_density": PlayerPrefs.CROWD_DENSITY_HIGH,
 		"ice_scratches_enabled": true,
 		"puck_shadow_enabled": true,
-		"volumetric_fog_enabled": true,
+		"volumetric_fog_enabled": false,
 		"reflections_enabled": true,
 		"ambient_occlusion_enabled": true,
 		"render_scale": 1.0,
