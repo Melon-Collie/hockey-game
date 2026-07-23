@@ -14,11 +14,15 @@ extends Node
 # directly here (contained behind the pref) and mapped onto the existing input
 # flags. See CLAUDE.md → "How It Plays" for the mapping rationale.
 
-# How far a full right-stick deflection reaches from the skater on screen. The
-# blade IK ROM-clamps the projected cursor, so this only sets how much of the
-# stick's throw maps into reachable space; sized so a genuine flick clears the
-# wrister's full-power cursor speed (wrister_mouse_speed_full). Feel tunable.
+# Reach disc: how far the (velocity-integrated) cursor can sit from the anchor on
+# screen. The blade IK ROM-clamps beyond this, so it just bounds the cursor to
+# reachable ice. Feel tunable.
 const AIM_RADIUS_PX: float = 480.0
+# Cursor speed at full right-stick deflection (px/s). Doubles as the wrister power
+# lever: a committed slam moves the cursor fast enough to clear the full-power
+# cursor speed (SkaterController.wrister_mouse_speed_full, ~2500 px/s), while a
+# gentle push stays in the touch-pass band. Shot Power Sensitivity scales it too.
+const GAMEPAD_CURSOR_SPEED: float = 3200.0
 const AIM_DEADZONE: float = 0.15
 # Analog-trigger pull that counts as a press for the wrister / slapshot.
 const TRIGGER_THRESHOLD: float = 0.5
@@ -47,6 +51,11 @@ var _elevation_level: int = 0
 # the input batch), so this does not desync.
 var _last_mouse_world_pos: Vector3 = Vector3.ZERO
 var _last_mouse_screen_pos: Vector2 = Vector2.ZERO
+# Velocity-integrated gamepad cursor (screen space). The right stick sets its
+# velocity; it holds position when the stick centers. Seeded to the anchor on the
+# first active frame (or after a pad reconnect) so it starts on the player.
+var _pad_cursor: Vector2 = Vector2.ZERO
+var _pad_cursor_valid: bool = false
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
 # input-frame cadence with the same pending-flag latch the mouse actions use.
@@ -73,6 +82,8 @@ func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
 func _refresh_pad_device() -> void:
 	var pads: Array = Input.get_connected_joypads()
 	_pad_device = int(pads[0]) if not pads.is_empty() else -1
+	# Re-seed the cursor onto the player next active frame (device swap / reconnect).
+	_pad_cursor_valid = false
 
 func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
@@ -88,7 +99,7 @@ func set_aim_skater(skater: Node3D) -> void:
 func _gamepad_active() -> bool:
 	return PlayerPrefs.gamepad_enabled and _pad_device >= 0
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# Accumulate just_pressed events every frame — unless input is blocked,
 	# in which case presses made over menu UI shouldn't queue up and fire
 	# the moment the menu closes.
@@ -96,6 +107,7 @@ func _process(_delta: float) -> void:
 		return
 	if _gamepad_active():
 		_accumulate_gamepad_edges()
+		_integrate_pad_cursor(delta)
 		return
 	if Input.is_action_just_pressed("shoot"):
 		_pending_shoot_pressed = true
@@ -226,19 +238,35 @@ func _read_move(pad: bool) -> Vector2:
 	stick = GamepadAimRules.apply_radial_deadzone(stick, AIM_DEADZONE)
 	return (kbd + stick).limit_length(1.0)
 
-# The screen-space aim cursor: the OS mouse, or the gamepad skill-stick's
-# synthesized point anchored on the skater.
+# The screen-space aim cursor: the OS mouse, or the velocity-integrated gamepad
+# cursor (advanced in _integrate_pad_cursor). Seeds the gamepad cursor to the
+# anchor on first read so it starts on the player even before _process runs.
 func _screen_cursor(pad: bool) -> Vector2:
 	if not pad:
 		return get_viewport().get_mouse_position()
-	var stick := Vector2(
-			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
-			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y))
-	return GamepadAimRules.blade_cursor_screen(_aim_anchor_screen(), stick, AIM_RADIUS_PX, AIM_DEADZONE)
+	if not _pad_cursor_valid:
+		_pad_cursor = _aim_anchor_screen()
+		_pad_cursor_valid = true
+	return _pad_cursor
 
-# On-screen anchor for the skill-stick cursor: the skater's projected position, so
-# the blade cursor tracks the player as the camera follows. Falls back to the
-# viewport center before the skater is set or when it is behind the camera.
+# Advance the gamepad cursor by the right-stick velocity, clamped into the reach
+# disc around the anchor. The stick sets VELOCITY, so a centered stick holds the
+# cursor exactly where it was (the blade stays put and skating is free), and the
+# cursor's screen motion is pure stick intent — the clean signal the wrister reads
+# for power and direction, unlike a skater-anchored cursor that drifts with the camera.
+func _integrate_pad_cursor(delta: float) -> void:
+	if not _pad_cursor_valid:
+		_pad_cursor = _aim_anchor_screen()
+		_pad_cursor_valid = true
+	var stick := GamepadAimRules.apply_radial_deadzone(Vector2(
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y)), AIM_DEADZONE)
+	_pad_cursor = GamepadAimRules.integrate_cursor(
+			_pad_cursor, stick, GAMEPAD_CURSOR_SPEED, delta, _aim_anchor_screen(), AIM_RADIUS_PX)
+
+# On-screen anchor for the gamepad cursor: the skater's projected position, so the
+# reach disc tracks the player as the camera follows. Falls back to the viewport
+# center before the skater is set or when it is behind the camera.
 func _aim_anchor_screen() -> Vector2:
 	var vp_center: Vector2 = get_viewport().get_visible_rect().size * 0.5
 	if _aim_skater == null or _camera == null:
