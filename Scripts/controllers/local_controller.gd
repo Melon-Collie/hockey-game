@@ -637,6 +637,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 			replay_snap.facing = _pose.facing
 			replay_snap.shot_state = _sm.get_state() as int
 			replay_snap.upper_body_rotation_y = _pose.upper_body_angle
+			replay_snap.was_replay_rerecorded = true
 			replay_hist_i += 1
 	is_replaying = false
 	# Restore shot-state fields that replay must not transition past.
@@ -720,6 +721,12 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# the metric at 60/s no matter the true rate). This runs only past the snap
 	# threshold, so it still counts real corrections only.
 	NetworkTelemetry.record_reconcile(last_reconcile_error)
+	# Attribution: did this reconcile fire against a replay-RE-RECORDED
+	# prediction (the correction echoing through replay approximations) or a
+	# live one (genuine fresh divergence)? Separates replay-fidelity churn
+	# from real prediction misses in the storm telemetry.
+	if predicted != null and predicted.was_replay_rerecorded:
+		NetworkTelemetry.record_reconcile_on_replayed_entry()
 	# Post-replay residual: distance from the server AFTER snap+replay. At rest
 	# (no unacked movement to predict) this should be ~0 if the snap converged; a
 	# persistently non-zero value means the replay itself leaves the body

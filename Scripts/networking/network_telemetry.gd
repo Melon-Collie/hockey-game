@@ -56,6 +56,7 @@ var _recent_samples: Array[Dictionary] = []
 var _world_state_count: int = 0
 var _input_count: int = 0
 var _reconcile_count: int = 0
+var _reconcile_on_replayed_count: int = 0  # subset: matched a replay-re-recorded entry
 var _extrapolation_count: int = 0
 # Frames observed this window (one per observe_actors call = one per rendered
 # frame). Denominator for the framerate-INDEPENDENT extrapolation fraction:
@@ -193,6 +194,9 @@ var input_hz: float = 0.0                # ~120/s — input batch send rate (Con
 # check is structurally blind to (the class of bug that motivated trajectory-
 # based reconciliation in the first place).
 var reconcile_per_sec: float = 0.0
+# Subset of reconcile_per_sec whose matched prediction was replay-re-recorded
+# (correction echo through replay approximations vs fresh live divergence).
+var recon_replayed_entry_per_sec: float = 0.0
 # reconcile_magnitude_avg: average distance snapped per reconcile, in meters.
 # Expected: <0.05m on healthy network. Larger values mean threshold check is
 # letting big divergences accumulate before firing — or, if rate is high too,
@@ -333,6 +337,16 @@ static func record_ws_arrival_gap(gap_ms: float) -> void:
 # match, so the magnitude reflects true non-determinism (body-check mis-replay,
 # contested collisions). Falls back to post-replay residual when the prediction
 # snapshot isn't available (history capped, post-teleport, session warmup).
+# A reconcile whose MATCHED prediction was a replay-re-recorded entry (see
+# PredictedState.was_replay_rerecorded): the correction is echoing through the
+# replay's approximations rather than fresh live divergence. Read as a share of
+# reconcile_per_sec — a high fraction during storms points at replay fidelity
+# (goalie-body sliding, body-check re-resolution), a low one at genuine live
+# prediction misses (the contact-prediction Known Issue).
+static func record_reconcile_on_replayed_entry() -> void:
+	if instance: instance._reconcile_on_replayed_count += 1
+
+
 static func record_reconcile(delta_m: float) -> void:
 	if instance == null:
 		return
@@ -586,6 +600,7 @@ func tick(delta: float) -> void:
 	world_state_hz = _world_state_count / _window_timer
 	input_hz = _input_count / _window_timer
 	reconcile_per_sec = _reconcile_count / _window_timer
+	recon_replayed_entry_per_sec = _reconcile_on_replayed_count / _window_timer
 	extrapolation_per_sec = _extrapolation_count / _window_timer
 	client_fps = _frame_count / _window_timer
 	extrapolation_pct = (100.0 * _extrapolation_count / _frame_count) if _frame_count > 0 else 0.0
@@ -655,6 +670,7 @@ func tick(delta: float) -> void:
 	_world_state_count = 0
 	_input_count = 0
 	_reconcile_count = 0
+	_reconcile_on_replayed_count = 0
 	_extrapolation_count = 0
 	_frame_count = 0
 	_reconcile_mag_sum = 0.0
@@ -733,6 +749,10 @@ func _fold_session_sample() -> void:
 		"worst_peer_rtt_ms": current_worst_peer_rtt_ms,
 		"worst_peer_loss_pct": current_worst_peer_loss_pct,
 		"reconcile_per_sec": reconcile_per_sec,
+		# Subset of reconcile_per_sec that fired against a replay-re-recorded
+		# prediction — the storm-attribution split (replay-echo vs fresh live
+		# divergence). Client only; hosts fold 0s.
+		"recon_replayed_per_sec": recon_replayed_entry_per_sec,
 		"reconcile_mag_m": reconcile_magnitude_avg,
 		"reconcile_match_pct": reconcile_match_pct,
 		# Which channel tripped the snap — the attribution for diagnosing residual

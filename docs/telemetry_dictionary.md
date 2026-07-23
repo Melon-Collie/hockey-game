@@ -126,6 +126,7 @@ grab-then-lose bug. A miss fraction that stays high after v28 points at the
 | `poke_claim_misses_total` | Of those, how many failed the swept `check_poke` against the rewound carried puck. Read as `poke_claim_misses / poke_claims`. |
 | `stick_lift_claims_total` | Client stick-lift claims that reached the rewound geometry test (blade hooked under an opposing carrier's shaft). The denominator for lifts. |
 | `stick_lift_claim_misses_total` | Of those, how many failed `check_blade_under_stick` against the rewound shaft. Read as `stick_lift_claim_misses / stick_lift_claims`. |
+| `recon_replayed_per_sec` (max/avg) | Client only. Subset of `reconcile_per_sec` whose matched prediction was a replay-**re-recorded** entry rather than a live capture. The reconcile-storm attribution split: a high share means corrections are echoing through the replay's approximations (no goalie-body sliding, snapshot-approximated body checks — replay-fidelity work); a low share during storms means genuine fresh live-prediction divergence (the body-check/contact Known Issue). |
 | `claim_stamp_rejects_total` | Claims (any of the four types) dropped at the RPC boundary by the stamp-plausibility gate (`LagCompRewind.is_claim_stamp_plausible`) — before any resolver ran, so they appear in no other claim counter. Expect 0. Sustained non-zero = legit claims silently eaten because an RTT spike outran the host's ping EMA (felt as "reached the puck, nothing happened"), or a client shopping timestamps. |
 
 ## Optimistic-pickup outcomes (client rows only)
