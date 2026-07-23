@@ -152,7 +152,7 @@ func _accumulate_gamepad_edges() -> void:
 	if lift_now and not _prev_pad_stick_lift:
 		_pending_stick_lift_pressed = true
 	_prev_pad_stick_lift = lift_now
-	var quick_pass_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_A)
+	var quick_pass_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_STICK)
 	if quick_pass_now and not _prev_pad_quick_pass:
 		_pending_quick_pass_pressed = true
 	_prev_pad_quick_pass = quick_pass_now

@@ -45,7 +45,7 @@ func _build_content() -> void:
 
 	var pad_hint := Label.new()
 	pad_hint.text = "Left stick: skate   ·   Right stick: aim / stickhandle\n" \
-			+ "RT: Wrister   ·   LT: Slapshot   ·   A: Quick pass\n" \
+			+ "RT: Wrister   ·   LT: Slapshot   ·   R3: Quick pass\n" \
 			+ "RB: Deflect / Lift   ·   LB: Block   ·   X: Hit\n" \
 			+ "B: Brake   ·   L3: Sprint   ·   D-pad up/down: Loft"
 	pad_hint.add_theme_font_size_override("font_size", 13)
