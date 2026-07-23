@@ -14,7 +14,8 @@ extends CanvasLayer
 const _DARK_BG: Color    = Color(0.07, 0.07, 0.09, 0.92)
 const _WHITE: Color      = Color(1.00, 1.00, 1.00, 1.00)
 const _DIM: Color        = Color(0.62, 0.62, 0.68, 1.00)
-const _GOAL_TICK: Color  = Color(1.00, 0.85, 0.20, 0.85)
+const _GOAL_TICK: Color   = Color(1.00, 0.85, 0.20, 0.85)  # goals — amber
+const _PERIOD_TICK: Color = Color(0.45, 0.75, 1.00, 0.85)  # period ends — blue
 
 const _SPEEDS: Array[float] = [0.25, 0.5, 1.0, 2.0, 4.0]
 # Parallel labels — GDScript's % operator doesn't support %g, and %f stamps
@@ -180,6 +181,9 @@ func _build_back_button(root: Control) -> void:
 	var btn := Button.new()
 	btn.text = "×"
 	btn.add_theme_font_size_override("font_size", 22)
+	# FOCUS_NONE: the × opens the pause menu on click; without this it keeps
+	# focus and Space would re-toggle the menu instead of pausing playback.
+	btn.focus_mode = Control.FOCUS_NONE
 	btn.custom_minimum_size = Vector2(40, 40)
 	btn.anchor_left = 1.0
 	btn.anchor_right = 1.0
@@ -307,6 +311,11 @@ func _build_bottom_bar(root: Control) -> void:
 	_play_pause_btn.text = "▶"
 	_play_pause_btn.custom_minimum_size = Vector2(48, 36)
 	_play_pause_btn.add_theme_font_size_override("font_size", 18)
+	# FOCUS_NONE so the transport controls never retain keyboard focus: a focused
+	# Button/OptionButton treats Space/Enter as "activate," which stole the Space
+	# pause key (e.g. after picking a non-1× speed the dropdown kept focus and
+	# Space re-opened it instead of pausing). Mouse clicks still fire `pressed`.
+	_play_pause_btn.focus_mode = Control.FOCUS_NONE
 	_play_pause_btn.pressed.connect(_on_play_pause_pressed)
 	controls.add_child(_play_pause_btn)
 
@@ -320,6 +329,9 @@ func _build_bottom_bar(root: Control) -> void:
 	_seek_slider.max_value = 1.0
 	_seek_slider.step = 0.0001
 	_seek_slider.value = 0.0
+	# FOCUS_NONE: a focused slider consumes the arrow keys (bound to ±5 s seek)
+	# and can swallow Space — see the play/pause note. Dragging still works.
+	_seek_slider.focus_mode = Control.FOCUS_NONE
 	_seek_slider.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_seek_bar_root.add_child(_seek_slider)
 	_seek_slider.value_changed.connect(_on_seek_changed)
@@ -341,11 +353,15 @@ func _build_bottom_bar(root: Control) -> void:
 		_speed_btn.add_item(_SPEED_LABELS[i], i)
 	_speed_btn.select(_DEFAULT_SPEED_IDX)
 	_speed_btn.custom_minimum_size = Vector2(72, 36)
+	# FOCUS_NONE so picking a speed doesn't leave the dropdown holding keyboard
+	# focus — that was the "Space opens the time-scale menu instead of pausing"
+	# bug. Clicking still opens the popup and selects normally.
+	_speed_btn.focus_mode = Control.FOCUS_NONE
 	_speed_btn.item_selected.connect(_on_speed_changed)
 	controls.add_child(_speed_btn)
 
-	# Row 2: goal-event tick markers drawn under the seek bar.
-	_seek_bar_root.draw.connect(_draw_goal_ticks)
+	# Row 2: event tick markers drawn under the seek bar (goals + period ends).
+	_seek_bar_root.draw.connect(_draw_event_ticks)
 
 
 # ── Signal handlers ──────────────────────────────────────────────────────────
@@ -394,21 +410,40 @@ func _process(_delta: float) -> void:
 		_camera_label.text = "CAMERA: %s  ·  [C] cycle  ·  [↑↓] player  ·  RMB drag look" % _director.get_mode_label()
 
 
-# Yellow tick marks at each goal's progress along the slider. Driven by the
-# slider's draw signal so they always sit at the correct screen-space x.
-func _draw_goal_ticks() -> void:
+# Tick marks along the slider: amber for goals, blue for period ends. Driven by
+# the slider's draw signal so they always sit at the correct screen-space x.
+func _draw_event_ticks() -> void:
 	if _driver == null or _seek_bar_root == null:
 		return
 	var dur: float = _driver.get_duration()
 	if dur <= 0.0:
 		return
 	var rect: Rect2 = _seek_bar_root.get_rect()
+	# Align ticks to the slider's grabber travel, not the full bar width: the
+	# HSlider insets value 0→1 by half the grabber on each end, so ticks drawn
+	# across the raw rect drift left of the playhead early and right of it late —
+	# that was the "markers off, both before and after" symptom.
+	var grab_w: float = 0.0
+	if _seek_slider != null:
+		var grabber: Texture2D = _seek_slider.get_theme_icon("grabber", "HSlider")
+		if grabber != null:
+			grab_w = float(grabber.get_width())
+	var usable: float = maxf(rect.size.x - grab_w, 1.0)
+	var start_ts: float = _driver.get_start_ts()
 	for event: Dictionary in _driver.get_events():
-		if not event.data.has("kind") or event.data.kind != "goal":
+		if not event.data.has("kind"):
 			continue
-		var progress: float = (event.host_ts - _driver.get_start_ts()) / dur
-		var x: float = clampf(progress, 0.0, 1.0) * rect.size.x
-		_seek_bar_root.draw_line(Vector2(x, 4), Vector2(x, rect.size.y - 4), _GOAL_TICK, 2.0)
+		var color: Color
+		match String(event.data.kind):
+			"goal":
+				color = _GOAL_TICK
+			"period_end":
+				color = _PERIOD_TICK
+			_:
+				continue
+		var progress: float = (event.host_ts - start_ts) / dur
+		var x: float = grab_w * 0.5 + clampf(progress, 0.0, 1.0) * usable
+		_seek_bar_root.draw_line(Vector2(x, 4), Vector2(x, rect.size.y - 4), color, 2.0)
 
 
 func _update_play_pause_text() -> void:
