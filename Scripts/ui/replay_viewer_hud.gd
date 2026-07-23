@@ -52,6 +52,12 @@ var _period_scores_provider: Callable = Callable()
 # Remember whether playback was paused before the user opened the pause menu
 # so closing the menu doesn't auto-resume if they had already paused.
 var _was_paused_before_menu: bool = false
+# Clean-capture ("hide UI") toggle for trailer angles — the whole overlay chrome
+# hangs off _chrome_root, so one visibility flip clears the shot. The on-ice HUD
+# is already hidden throughout replay (ReplayViewer.set_world_hud_hidden). The
+# pause menu / options sit outside _chrome_root and stay reachable.
+var _chrome_root: Control = null
+var _capture_ui_hidden: bool = false
 
 
 func setup(driver: FileReplayDriver, header: Dictionary, director: CameraDirector = null,
@@ -89,6 +95,7 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
+	_chrome_root = root
 
 	_build_scoreboard(root)
 	_build_back_button(root)
@@ -449,6 +456,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	# speed changes — one tap = one action. The user re-taps to step again.
 	if key.echo:
 		return
+	# Clean-capture toggle (rebindable `toggle_ui`, default H): strip the overlay
+	# chrome for trailer angles. Action-based so it honors the player's rebind.
+	if event.is_action_pressed("toggle_ui"):
+		_toggle_capture_ui()
+		get_viewport().set_input_as_handled()
+		return
 	match key.keycode:
 		KEY_TAB:
 			# Toggle the full stats scoreboard. Works while playing or paused;
@@ -479,6 +492,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _driver.is_paused():
 				_driver.step_frame(1)
 				get_viewport().set_input_as_handled()
+
+
+func _toggle_capture_ui() -> void:
+	_capture_ui_hidden = not _capture_ui_hidden
+	if _chrome_root != null:
+		_chrome_root.visible = not _capture_ui_hidden
+	# The Tab stats board is a sibling CanvasLayer, so it isn't under
+	# _chrome_root — drop it too when hiding so nothing overlays the shot.
+	if _capture_ui_hidden and _scoreboard != null and _scoreboard.visible:
+		_scoreboard.hide_board()
 
 
 func _step_speed(direction: int) -> void:
