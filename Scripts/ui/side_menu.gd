@@ -40,6 +40,11 @@ var _loading_screen: LoadingScreen = null
 # (and the first one focused) only in controller mode when the menu opens — see
 # _apply_nav_focus. Mouse mode leaves them FOCUS_NONE so nothing changes.
 var _nav_items: Array[Control] = []
+# Activation callables, parallel to _nav_items. ui_accept (A) is routed here from
+# _unhandled_input rather than the items' gui_input: Godot doesn't deliver joypad
+# button events to a focused custom Control's gui_input (only InputEventKey), so a
+# plain-Control row never sees the A press — only real BaseButtons do.
+var _nav_handlers: Array[Callable] = []
 # The Exit dialog's Cancel button — the default focus target when that modal opens.
 var _exit_cancel_btn: Button = null
 
@@ -67,6 +72,18 @@ func _maybe_offer_reconnect() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not visible:
+		return
+	# ui_accept (A / Enter) on a focused activity row or the player card. Routed
+	# here because joypad button events never reach a plain Control's gui_input.
+	# A sub-modal's real Buttons handle their own ui_accept (consumed at the GUI
+	# stage, so it never reaches here), and nothing in the list has focus while a
+	# sub-modal is open — so this only ever fires the main list.
+	if event.is_action_pressed(&"ui_accept"):
+		for i: int in _nav_items.size():
+			if _nav_items[i].has_focus():
+				get_viewport().set_input_as_handled()
+				_nav_handlers[i].call()
+				return
 		return
 	if not event.is_action_pressed(&"ui_cancel"):
 		return
@@ -268,15 +285,13 @@ func _build_player_card(parent: VBoxContainer) -> void:
 	# controller mode (in _apply_nav_focus). The card is the first nav item.
 	_player_card_panel.focus_mode = Control.FOCUS_NONE
 	_nav_items.append(_player_card_panel)
+	_nav_handlers.append(_on_player_card_pressed)
 	var card_highlight := func(on: bool) -> void:
 		_player_card_panel.add_theme_stylebox_override("panel",
 				_player_card_hover if on else _player_card_normal)
 		_player_card_edit_icon.modulate = MenuStyle.TEAL_HOVER if on else MenuStyle.TEXT_MUTED
 	_player_card_panel.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			_on_player_card_pressed()
-		elif event.is_action_pressed(&"ui_accept"):
-			_player_card_panel.accept_event()
 			_on_player_card_pressed())
 	_player_card_panel.mouse_entered.connect(func() -> void: card_highlight.call(true))
 	_player_card_panel.mouse_exited.connect(func() -> void: card_highlight.call(false))
@@ -357,14 +372,13 @@ func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: 
 		handler.call()
 	row.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			fire.call()
-		elif event.is_action_pressed(&"ui_accept"):
-			row.accept_event()
 			fire.call())
 	# Focusable so a controller can step the list; focus_mode is switched on only in
-	# controller mode (in _apply_nav_focus). Registered as a nav item, in list order.
+	# controller mode (in _apply_nav_focus). Registered as a nav item + activation
+	# callable (ui_accept is routed from _unhandled_input — see _nav_handlers).
 	row.focus_mode = Control.FOCUS_NONE
 	_nav_items.append(row)
+	_nav_handlers.append(fire)
 	return row
 
 
