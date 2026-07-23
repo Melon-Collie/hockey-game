@@ -2071,3 +2071,50 @@ func test_blade_discipline_ignores_our_own_possession() -> void:
 	var dir := Vector3(0, 0, -1)
 	assert_eq(sm._deflect_safe_aim_dir(self_pos, dir, s), dir,
 			"our own possession needs no deflection discipline")
+
+
+# ── CARRY handler: two gaps the slice above (the _CarrierStub tests) leaves ──
+# The _CarrierStub slice (test_carry_*) already drives the CARRY handler through
+# every transition — lost-puck bail, INTENT_CARRY steering, shoot pre-aim+commit,
+# intent→press mapping, dump freeze, hysteresis hold, timeout. These two fill the
+# remainder: the pure INTENT_*→State map in isolation (all branches incl. the
+# fallback), and the post-commit freeze of the SHOT aim (the `_intended_action ==
+# CARRY` mirror guard, which the intent-hold test doesn't assert on).
+
+func test_state_from_carrier_intent_maps_every_intent() -> void:
+	# The map is intentionally decoupled from State (INTENT_* ints) for exactly
+	# this unit test — cover all four intents plus the unknown fallback directly.
+	assert_eq(sm._state_from_carrier_intent(AIRoleCarrier.INTENT_SHOOT),
+			Agent.State.SHOOT_PRESSED)
+	assert_eq(sm._state_from_carrier_intent(AIRoleCarrier.INTENT_PASS),
+			Agent.State.PASS_PRESSED)
+	assert_eq(sm._state_from_carrier_intent(AIRoleCarrier.INTENT_DUMP),
+			Agent.State.PASS_PRESSED, "a dump reuses the PASS_PRESSED release path")
+	assert_eq(sm._state_from_carrier_intent(AIRoleCarrier.INTENT_CARRY),
+			Agent.State.CARRY)
+	assert_eq(sm._state_from_carrier_intent(999), Agent.State.CARRY,
+			"an unknown intent falls back to CARRY")
+
+
+func test_carry_freezes_shot_aim_after_commit() -> void:
+	# Shot params (aim/loft/power) are mirrored from the carrier only WHILE still
+	# deliberating (_intended_action == CARRY). Once a fire intent latches they
+	# freeze, so the bot fires the exact shot that won the compete — not whatever
+	# a later re-eval moved the hole to. Deferring (facing away + frozen cursor)
+	# holds the latch across dispatches without committing to the press state.
+	var stub := _stub_carry(AIRoleCarrier.INTENT_SHOOT)
+	stub.shot_aim_point = Vector3(0, 0, -20)           # the hole the compete won
+	var s := _self_snap(Vector3.ZERO, true)
+	s.skater_states[SELF_ID].facing = Vector2(0, 1)    # net in the back wedge → defer
+	sm._mouse_max_speed_m_s = 0.0001                   # cursor can't converge this tick
+	sm._mouse_pos = Vector3(50, 0, 50)
+	sm._mouse_pos_initialized = true
+	sm.dispatch(InputState.new(), s)
+	assert_eq(sm._intended_action, Agent.State.SHOOT_PRESSED, "fire intent latched, deferring")
+	assert_eq(sm._shot_aim_locked, Vector3(0, 0, -20), "the winning hole aim was captured at commit")
+	# The carrier now drags its hole aim elsewhere; the committed shot must not follow.
+	stub.shot_aim_point = Vector3(0, 0, -5)
+	sm.dispatch(InputState.new(), s)
+	assert_eq(sm.get_state(), Agent.State.CARRY, "still pre-aiming")
+	assert_eq(sm._shot_aim_locked, Vector3(0, 0, -20),
+			"the committed shot aim is frozen — it stops tracking the carrier post-commit")

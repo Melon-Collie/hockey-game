@@ -16,6 +16,15 @@ extends Node
 # back to whatever was captured before the goal.
 #
 # Owned by GameManager (host only). start() / stop() called from there.
+#
+# Testing: no headless unit test — this extends Node and drives LIVE scene
+# actors (Skater / Puck / Goalie nodes) via the actor-driven
+# ReplayPlaybackEngine, so it's integration-only (a live scene, poor headless
+# ROI). The unit-testable pieces it composes ARE covered: the codec's
+# side-effect-free decode_for_replay (test_world_state_codec), ReplayRecorder
+# (test_replay_recorder), and GoalReplayStore (test_goal_replay_store).
+# Consciously accepted as integration-only — see the closed GH issue on
+# agent-SM / replay-driver coverage gaps.
 
 const CLIP_DURATION: float = 8.0  # seconds of history to replay
 
