@@ -30,6 +30,7 @@ var _player_popup: PlayerSettingsPopup = null
 var _play_popup: PlayPopup = null
 var _career_screen: CareerStatsScreen = null
 var _options_container: Control = null
+var _options_panel: OptionsPanel = null
 var _exit_container: Control = null
 var _tutorial_container: Control = null
 var _tutorial_rows_vbox: VBoxContainer = null
@@ -529,6 +530,7 @@ func _build_options_overlay() -> void:
 	options.close_requested.connect(func() -> void:
 		_options_container.visible = false)
 	panel.add_child(options)
+	_options_panel = options
 
 	_options_container = Control.new()
 	_options_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -811,7 +813,9 @@ func _on_career_pressed() -> void:
 
 func _on_options_pressed() -> void:
 	_options_container.visible = true
-	MenuStyle.focus_first(_options_container)
+	# Land the pad on the active tab's first control (not the close button).
+	if _options_panel != null:
+		_options_panel.focus_active_tab()
 
 
 func _on_exit_pressed() -> void:

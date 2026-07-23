@@ -28,6 +28,7 @@ var _tabs: Array[OptionsTab] = []
 var _video_tab: OptionsVideoTab = null   # kept typed for the display-revert resync
 var _apply_btn: Button = null
 var _original: Dictionary = {}
+var _active_idx: int = 0  # active tab, for controller bumper switching + focus
 
 func _ready() -> void:
 	add_theme_constant_override("separation", 16)
@@ -204,10 +205,44 @@ func _build_tab_switcher() -> Control:
 	return wrapper
 
 func _activate_tab(idx: int) -> void:
+	_active_idx = idx
 	for i: int in _tab_contents.size():
 		_tab_contents[i].visible = (i == idx)
 	for i: int in _tab_btns.size():
 		_apply_tab_style(_tab_btns[i], i == idx)
+
+
+# Controller: put focus on the first control of the active tab's page, so a pad
+# lands in the settings (not on the close button) when Options opens or a tab
+# switches. Called by the Side Menu on open. No-op for mouse (focus_first gates).
+func focus_active_tab() -> void:
+	if _active_idx >= 0 and _active_idx < _tab_contents.size():
+		MenuStyle.focus_first(_tab_contents[_active_idx])
+
+
+# LB / RB cycle tabs — the console convention — so the pad doesn't have to walk
+# the tab bar. Only while the panel is on screen; guarded so it never touches the
+# game's LB (hit) during play. Refocuses the new page's first control.
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree() or not PlayerPrefs.gamepad_enabled:
+		return
+	if not (event is InputEventJoypadButton and (event as InputEventJoypadButton).pressed):
+		return
+	var button: int = (event as InputEventJoypadButton).button_index
+	if button == JOY_BUTTON_LEFT_SHOULDER:
+		_cycle_tab(-1)
+		get_viewport().set_input_as_handled()
+	elif button == JOY_BUTTON_RIGHT_SHOULDER:
+		_cycle_tab(1)
+		get_viewport().set_input_as_handled()
+
+
+func _cycle_tab(dir: int) -> void:
+	var n: int = _tab_btns.size()
+	if n == 0:
+		return
+	_activate_tab((_active_idx + dir + n) % n)
+	focus_active_tab()
 
 func _apply_tab_style(btn: Button, active: bool) -> void:
 	MenuStyle.apply_tab_button(btn, active)
