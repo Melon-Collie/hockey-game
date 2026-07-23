@@ -112,6 +112,7 @@ func _snapshot() -> Dictionary:
 		"locale": PlayerPrefs.locale,
 		"screen_flash": PlayerPrefs.screen_flash,
 		"screen_shake": PlayerPrefs.screen_shake,
+		"hit_stop": PlayerPrefs.hit_stop,
 		"camera_tilt_deg": PlayerPrefs.camera_tilt_deg,
 		"fov": PlayerPrefs.fov,
 		"camera_distance": PlayerPrefs.camera_distance,
@@ -262,6 +263,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.locale = c.locale
 	PlayerPrefs.screen_flash = c.screen_flash
 	PlayerPrefs.screen_shake = c.screen_shake
+	PlayerPrefs.hit_stop = c.hit_stop
 	PlayerPrefs.camera_tilt_deg = c.camera_tilt_deg
 	PlayerPrefs.fov = c.fov
 	PlayerPrefs.camera_distance = c.camera_distance
@@ -357,6 +359,7 @@ func _defaults() -> Dictionary:
 		"freeplay_goalie_difficulty": GoalieSkillProfile.Difficulty.EASY,
 		"screen_flash": true,
 		"screen_shake": true,
+		"hit_stop": true,
 		"camera_tilt_deg": PlayerPrefs.CAMERA_TILT_DEFAULT,
 		"fov": 50.0,
 		"camera_distance": 1.0,

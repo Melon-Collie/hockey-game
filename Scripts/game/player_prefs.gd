@@ -310,9 +310,11 @@ const GOALIE_DIFFICULTY_LABELS: Array[String] = [
 ]
 # Accessibility: photosensitivity / motion options. screen_flash gates the
 # full-screen goal flash and hit vignette (FlashOverlay); screen_shake gates
-# camera trauma shake (GameCamera.shake). Both default on.
+# camera trauma shake (GameCamera.shake); hit_stop gates the brief time-freeze
+# on goals / hard checks (HitStop, offline only). All default on.
 var screen_flash: bool = true
 var screen_shake: bool = true
+var hit_stop: bool = true
 var camera_tilt_deg: float = CAMERA_TILT_DEFAULT  # GameCamera reads this each tick for pitch
 var fov: float = 50.0  # GameCamera writes this to its Camera3D.fov each tick
 var camera_distance: float = 1.0  # multiplier on min/ozone/max camera heights
@@ -454,6 +456,7 @@ func save() -> void:
 	cfg.set_value("game", "self_beacon_mode", self_beacon_mode)
 	cfg.set_value("game", "screen_flash", screen_flash)
 	cfg.set_value("game", "screen_shake", screen_shake)
+	cfg.set_value("game", "hit_stop", hit_stop)
 	cfg.set_value("game", "camera_tilt_deg", camera_tilt_deg)
 	cfg.set_value("game", "fov", fov)
 	cfg.set_value("game", "camera_distance", camera_distance)
@@ -1067,6 +1070,7 @@ func _load() -> void:
 		self_beacon_mode = clampi(int(cfg.get_value("game", "self_beacon_mode", BEACON_MODE_SMART)), 0, BEACON_MODE_LABELS.size() - 1)
 		screen_flash = cfg.get_value("game", "screen_flash", true)
 		screen_shake = cfg.get_value("game", "screen_shake", true)
+		hit_stop = cfg.get_value("game", "hit_stop", true)
 		camera_tilt_deg = clampf(cfg.get_value("game", "camera_tilt_deg", CAMERA_TILT_DEFAULT), CAMERA_TILT_MIN, CAMERA_TILT_MAX)
 		fov = clampf(cfg.get_value("game", "fov", 50.0), FOV_MIN, FOV_MAX)
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)

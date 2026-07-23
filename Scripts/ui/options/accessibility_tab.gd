@@ -7,6 +7,7 @@ extends OptionsTab
 
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null
+var _hit_stop_check: CheckButton = null
 var _hud_scale_slider: HSlider = null
 var _hud_scale_label: Label = null
 var _ring_preset_btn: OptionButton = null
@@ -33,6 +34,12 @@ func _build_content() -> void:
 	SoundManager.wire_button(_screen_shake_check)
 	_screen_shake_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
 	add_child(_field_row("Camera Shake", _screen_shake_check))
+
+	_hit_stop_check = CheckButton.new()
+	_hit_stop_check.set_pressed_no_signal(PlayerPrefs.hit_stop)
+	SoundManager.wire_button(_hit_stop_check)
+	_hit_stop_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
+	add_child(_field_row("Hit Stop (offline)", _hit_stop_check))
 
 	_hud_scale_slider = HSlider.new()
 	_hud_scale_slider.min_value = PlayerPrefs.HUD_SCALE_MIN
@@ -164,6 +171,7 @@ func read_controls() -> Dictionary:
 	return {
 		"screen_flash": _screen_flash_check.button_pressed,
 		"screen_shake": _screen_shake_check.button_pressed,
+		"hit_stop": _hit_stop_check.button_pressed,
 		"hud_scale": _hud_scale_slider.value,
 		"ring_color_self": _ring_self_color_btn.color,
 		"ring_color_team": _ring_team_color_btn.color,
@@ -176,6 +184,7 @@ func read_controls() -> Dictionary:
 func apply_values(v: Dictionary) -> void:
 	_screen_flash_check.set_pressed_no_signal(v.screen_flash)
 	_screen_shake_check.set_pressed_no_signal(v.screen_shake)
+	_hit_stop_check.set_pressed_no_signal(v.hit_stop)
 	_hud_scale_slider.value = v.hud_scale
 	_ring_self_color_btn.color = v.ring_color_self
 	_ring_team_color_btn.color = v.ring_color_team
