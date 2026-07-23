@@ -120,11 +120,18 @@ static func resolve_crossbar(pos: Vector3, vel: Vector3, puck_radius: float, res
 
 # Resolve a puck against the TOP NET PANEL — a horizontal mesh plane at y = NET_HEIGHT over
 # the net roof (|x| <= NET_CROWN_HALF_WIDTH, |z| in [GOAL_LINE_Z, GOAL_LINE_Z + NET_TOP_DEPTH]).
-# Vertical contact uses the puck's half-height (the flat disc's vertical reach), and the
-# vertical channel rebounds at NET_RESTITUTION (twine absorbs), keeping horizontal motion.
-# Also unreachable at current loft tuning — authored for the same future-proofing reason as
-# the crossbar.
-static func resolve_top_net(pos: Vector3, vel: Vector3, result: Result) -> bool:
+# The twine is two-sided; the vertical channel rebounds at NET_RESTITUTION (absorbs), keeping
+# horizontal motion. Reachable in live play by a hard deflection / goalie rebound kicked up
+# under the roof from inside the cage.
+#
+# SWEPT, not a thin-band snapshot: the face is chosen from the side the segment START (`prev`)
+# was on, and a puck approaching from below is caught the instant its disc top reaches the
+# twine, however far it overshot the plane centre this sub-step. The old point-sampled test
+# read the contact side from the CURRENT position and only fired inside a ±half_height band,
+# so a fast riser that cleared the ~3.5 cm band in one sub-step — or landed a hair ABOVE the
+# plane while still moving up — was mistaken for a puck resting on top (normal up, upward
+# velocity "separating") and sailed straight through to the ceiling. This is that fix.
+static func resolve_top_net(prev: Vector3, pos: Vector3, vel: Vector3, result: Result) -> bool:
 	result.hit = false
 	result.position = pos
 	result.velocity = vel
@@ -133,23 +140,33 @@ static func resolve_top_net(pos: Vector3, vel: Vector3, result: Result) -> bool:
 	var az: float = absf(pos.z)
 	if az < GameRules.GOAL_LINE_Z or az > GameRules.GOAL_LINE_Z + GameRules.NET_TOP_DEPTH:
 		return false
-	if absf(pos.y - GameRules.NET_HEIGHT) >= GameRules.PUCK_COLLISION_HALF_HEIGHT:
+	var hh: float = GameRules.PUCK_COLLISION_HALF_HEIGHT
+	if prev.y <= GameRules.NET_HEIGHT:
+		# Approaching from below (inside the cage): caught once the disc top reaches the
+		# twine, and ejected flush just under it with the rebound driven DOWN.
+		if pos.y < GameRules.NET_HEIGHT - hh:
+			return false
+		result.position = Vector3(pos.x, GameRules.NET_HEIGHT - hh, pos.z)
+		result.velocity = reflect_3d(vel, Vector3(0.0, -1.0, 0.0), NET_RESTITUTION)
+		result.hit = true
+		return true
+	# Resting on / dropping onto the roof from above.
+	if pos.y > GameRules.NET_HEIGHT + hh:
 		return false
-	# Normal points from the plane toward the puck; on-plane exactly → treat as the underside.
-	var side: float = signf(pos.y - GameRules.NET_HEIGHT)
-	if side == 0.0:
-		side = -1.0
-	result.position = Vector3(pos.x, GameRules.NET_HEIGHT + side * GameRules.PUCK_COLLISION_HALF_HEIGHT, pos.z)
-	result.velocity = reflect_3d(vel, Vector3(0.0, side, 0.0), NET_RESTITUTION)
+	result.position = Vector3(pos.x, GameRules.NET_HEIGHT + hh, pos.z)
+	result.velocity = reflect_3d(vel, Vector3(0.0, 1.0, 0.0), NET_RESTITUTION)
 	result.hit = true
 	return true
 
 
-# The trapezoid half-width of the net cavity at |z| = az (mesh surface, no radius margin):
-# NET_HALF_WIDTH at the mouth widening to NET_BACK_HALF_WIDTH at the back.
-static func _cavity_half_width(az: float) -> float:
-	var depth_t: float = clampf((az - GameRules.GOAL_LINE_Z) / GameRules.NET_DEPTH, 0.0, 1.0)
-	return lerpf(GameRules.NET_HALF_WIDTH, GameRules.NET_BACK_HALF_WIDTH, depth_t)
+# Half-width of the net cavity's SIDE twine — the visible side panels are straight vertical
+# planes at the post line (NET_HALF_WIDTH), so the lateral bound is constant with depth. (An
+# earlier model widened this to NET_BACK_HALF_WIDTH toward the back, letting a corner-driven
+# puck settle ~10 cm OUTSIDE the visible side mesh — a puck resting beside the twine. The
+# real cage doesn't flare; the only lateral narrowing is the back panel's top edge, a corner
+# gusset too small to model.)
+static func _cavity_half_width() -> float:
+	return GameRules.NET_HALF_WIDTH
 
 
 # Goal-line-relative depth of the SLANTED back mesh at height `y`: the full
@@ -178,16 +195,16 @@ static func _interior_or_mouth(p: Vector3, puck_radius: float) -> bool:
 		return absf(p.x) <= GameRules.NET_HALF_WIDTH
 	if az >= GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH + puck_radius:
 		return false
-	return absf(p.x) < _cavity_half_width(az)
+	return absf(p.x) < _cavity_half_width()
 
 
 # Resolve a puck against the back and side net-mesh panels — TWO-SIDED, like the twine it
 # models. Which face applies is classified from the segment START (`prev`, see
 # _interior_or_mouth): a puck that entered through the open mouth (a scored puck, a
-# bounce-out) plays the INTERIOR faces — clamped inside the trapezoid cavity (depth tapering
-# from NET_DEPTH at the ice to NET_TOP_DEPTH under the crossbar — the slanted back mesh — and
-# widening from NET_HALF_WIDTH at the mouth to NET_BACK_HALF_WIDTH at the back; the mouth
-# itself is open so it can bounce back out). A puck OUTSIDE the netting (a
+# bounce-out) plays the INTERIOR faces — clamped inside the cavity: the back mesh tapers from
+# NET_DEPTH at the ice to NET_TOP_DEPTH under the crossbar (the slanted back), the side twine
+# is straight at NET_HALF_WIDTH (_cavity_half_width), and the mouth itself is open so it can
+# bounce back out. A puck OUTSIDE the netting (a
 # wraparound rounding the cage, a rim pressing the back mesh) plays the EXTERIOR faces and
 # is reflected away — it must never be pulled through the twine into the cavity (the
 # pre-fix one-sided clamp teleported exactly those pucks inside). Rebounds absorb hard
@@ -223,7 +240,7 @@ static func resolve_net_panels(prev: Vector3, pos: Vector3, vel: Vector3,
 			p.z = end_sign * back_limit
 			v = reflect_3d(v, Vector3(0.0, 0.0, -end_sign), NET_RESTITUTION)
 			hit = true
-		var side_limit: float = _cavity_half_width(absf(p.z)) - puck_radius
+		var side_limit: float = _cavity_half_width() - puck_radius
 		if absf(p.x) > side_limit:
 			var x_sign: float = signf(p.x)
 			p.x = x_sign * side_limit
@@ -241,9 +258,8 @@ static func resolve_net_panels(prev: Vector3, pos: Vector3, vel: Vector3,
 			v = reflect_3d(v, Vector3(0.0, 0.0, end_sign), NET_RESTITUTION)
 			hit = true
 		else:
-			var side_surface_prev: float = _cavity_half_width(absf(prev.z))
-			var side_surface: float = _cavity_half_width(az)
-			if absf(prev.x) >= side_surface_prev and absf(p.x) < side_surface + puck_radius:
+			var side_surface: float = _cavity_half_width()
+			if absf(prev.x) >= side_surface and absf(p.x) < side_surface + puck_radius:
 				# Beside the cage, pressing inward: reflect off the exterior side face.
 				var x_sign: float = 1.0 if prev.x >= 0.0 else -1.0
 				p.x = x_sign * (side_surface + puck_radius)

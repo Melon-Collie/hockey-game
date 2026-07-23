@@ -87,7 +87,7 @@ static func step_frame_substep(pos: Vector3, vel: Vector3, sub_dt: float,
 		p = frame_scratch.position
 		v = frame_scratch.velocity
 		out.touched_post = true
-	if PuckGeometryCollision.resolve_top_net(p, v, frame_scratch) \
+	if PuckGeometryCollision.resolve_top_net(sub_prev, p, v, frame_scratch) \
 			or PuckGeometryCollision.resolve_net_panels(sub_prev, p, v, puck_radius, frame_scratch):
 		p = frame_scratch.position
 		v = frame_scratch.velocity

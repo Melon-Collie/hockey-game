@@ -121,9 +121,10 @@ func test_crossbar_ignores_a_grounded_puck() -> void:
 
 func test_top_net_absorbs_a_rising_puck() -> void:
 	# A puck rising into the net roof rebounds down, softly (NET_RESTITUTION 0.05).
+	var prev := Vector3(0.0, GameRules.NET_HEIGHT - 0.06, GameRules.GOAL_LINE_Z + 0.3)  # below the twine
 	var pos := Vector3(0.0, GameRules.NET_HEIGHT - 0.01, GameRules.GOAL_LINE_Z + 0.3)
 	var res := PuckGeometryCollision.Result.new()
-	var hit: bool = PuckGeometryCollision.resolve_top_net(pos, Vector3(2, 8, 0), res)
+	var hit: bool = PuckGeometryCollision.resolve_top_net(prev, pos, Vector3(2, 8, 0), res)
 	assert_true(hit, "puck into the roof from below contacts it")
 	assert_lt(res.velocity.y, 0.0, "rebounds downward")
 	assert_almost_eq(res.velocity.y, -8.0 * PuckGeometryCollision.NET_RESTITUTION, 0.01,
@@ -131,17 +132,32 @@ func test_top_net_absorbs_a_rising_puck() -> void:
 	assert_almost_eq(res.velocity.x, 2.0, 1e-5, "horizontal motion preserved")
 
 
+func test_top_net_catches_a_fast_riser_that_overshoots_the_plane() -> void:
+	# The GAP-2 fix: a hard upward deflection that clears the thin band in one
+	# sub-step — landing ABOVE the plane centre while still moving up — must be
+	# driven back DOWN, not mistaken for a puck resting on top and let through.
+	var prev := Vector3(0.0, GameRules.NET_HEIGHT - 0.02, GameRules.GOAL_LINE_Z + 0.3)  # from below
+	var pos := Vector3(0.0, GameRules.NET_HEIGHT + 0.05, GameRules.GOAL_LINE_Z + 0.3)   # overshot above
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_top_net(prev, pos, Vector3(0, 14, 0), res)
+	assert_true(hit, "a riser that overshot the plane still contacts the twine")
+	assert_lt(res.velocity.y, 0.0, "kicked back down, not allowed to separate upward")
+	assert_lt(res.position.y, GameRules.NET_HEIGHT, "ejected back under the roof")
+
+
 func test_top_net_misses_in_front_of_the_goal_line() -> void:
 	# Over the mouth (in front of the goal line) there is no roof — a lofted shot on net.
+	var prev := Vector3(0.0, GameRules.NET_HEIGHT - 0.05, GameRules.GOAL_LINE_Z - 0.3)
 	var pos := Vector3(0.0, GameRules.NET_HEIGHT, GameRules.GOAL_LINE_Z - 0.3)
 	var res := PuckGeometryCollision.Result.new()
-	assert_false(PuckGeometryCollision.resolve_top_net(pos, Vector3(0, 5, 0), res))
+	assert_false(PuckGeometryCollision.resolve_top_net(prev, pos, Vector3(0, 5, 0), res))
 
 
 func test_top_net_ignores_a_low_puck() -> void:
+	var prev := Vector3(0.0, 0.28, GameRules.GOAL_LINE_Z + 0.3)
 	var pos := Vector3(0.0, 0.3, GameRules.GOAL_LINE_Z + 0.3)
 	var res := PuckGeometryCollision.Result.new()
-	assert_false(PuckGeometryCollision.resolve_top_net(pos, Vector3(0, 2, 0), res))
+	assert_false(PuckGeometryCollision.resolve_top_net(prev, pos, Vector3(0, 2, 0), res))
 
 
 func test_post_ends_at_the_crossbar() -> void:
@@ -194,9 +210,12 @@ func test_net_panels_ignore_puck_outside_the_cage_laterally() -> void:
 	assert_false(PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 5), R, res))
 
 
-func test_side_panel_follows_the_trapezoid_widening() -> void:
-	# The same lateral position (x = 0.9) hits the side near the narrow mouth but clears it
-	# near the wider back — proving the depth-interpolated (trapezoid) side limit.
+func test_side_twine_is_straight_with_depth() -> void:
+	# The visible side panels are straight vertical planes at NET_HALF_WIDTH — the
+	# cage does not flare toward the back. The same lateral position hits the side
+	# identically near the mouth and near the back (no trapezoid widening), and a
+	# corner-driven puck can't settle OUTSIDE the visible twine.
+	var side_edge: float = GameRules.NET_HALF_WIDTH - R
 	var interior_prev_mouth := Vector3(0.8, 0.0175, GameRules.GOAL_LINE_Z + 0.05)
 	var interior_prev_back := Vector3(0.8, 0.0175, GameRules.GOAL_LINE_Z + 0.85)
 	var near_mouth := Vector3(0.9, 0.0175, GameRules.GOAL_LINE_Z + 0.05)
@@ -204,11 +223,13 @@ func test_side_panel_follows_the_trapezoid_widening() -> void:
 	var res := PuckGeometryCollision.Result.new()
 	assert_true(PuckGeometryCollision.resolve_net_panels(
 			interior_prev_mouth, near_mouth, Vector3(3, 0, 0), R, res),
-			"x=0.9 hits the side near the narrow mouth")
+			"x=0.9 hits the straight side near the mouth")
+	assert_almost_eq(absf(res.position.x), side_edge, 1e-4, "clamped flush to the side twine")
 	var res2 := PuckGeometryCollision.Result.new()
-	assert_false(PuckGeometryCollision.resolve_net_panels(
+	assert_true(PuckGeometryCollision.resolve_net_panels(
 			interior_prev_back, near_back, Vector3(3, 0, 0), R, res2),
-			"the same x clears the side near the wider back")
+			"the same x hits identically near the back — the side does not widen")
+	assert_almost_eq(absf(res2.position.x), side_edge, 1e-4, "same flush clamp deep in the cage")
 
 
 # ── Exterior faces (two-sided twine — the wraparound / rim regression) ──
@@ -229,12 +250,11 @@ func test_wraparound_graze_resolves_outward_never_inward() -> void:
 	# A wraparound hugging the mesh close enough for the disc to genuinely touch
 	# the twine: the contact is real, but it must resolve OUTWARD (the exterior
 	# face) — the pre-fix clamp teleported this puck inside the cage.
-	var prev := Vector3(1.0, 0.0175, GameRules.GOAL_LINE_Z + 0.15)
-	var pos := Vector3(1.0, 0.0175, GameRules.GOAL_LINE_Z + 0.2)
-	var mesh_x: float = lerpf(GameRules.NET_HALF_WIDTH, GameRules.NET_BACK_HALF_WIDTH,
-			0.2 / GameRules.NET_DEPTH)
+	var prev := Vector3(0.99, 0.0175, GameRules.GOAL_LINE_Z + 0.15)
+	var pos := Vector3(0.96, 0.0175, GameRules.GOAL_LINE_Z + 0.2)
+	var mesh_x: float = GameRules.NET_HALF_WIDTH  # straight side twine at the post line
 	var res := PuckGeometryCollision.Result.new()
-	if PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, 5), R, res):
+	if PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(-1, 0, 5), R, res):
 		assert_gte(res.position.x, mesh_x, "a grazing exterior contact stays outside the mesh")
 		assert_gte(res.velocity.x, 0.0, "and is never redirected into the cage")
 
@@ -255,8 +275,7 @@ func test_exterior_back_press_reflects_away_not_through() -> void:
 func test_exterior_side_press_reflects_outward() -> void:
 	# A puck outside the side mesh pushed inward (a board-side scramble) reflects
 	# back out instead of entering the cage through the twine.
-	var half_at: float = lerpf(GameRules.NET_HALF_WIDTH, GameRules.NET_BACK_HALF_WIDTH,
-			0.25 / GameRules.NET_DEPTH)
+	var half_at: float = GameRules.NET_HALF_WIDTH  # straight side twine at the post line
 	var prev := Vector3(half_at + 0.1, 0.0175, GameRules.GOAL_LINE_Z + 0.25)
 	var pos := Vector3(half_at + 0.02, 0.0175, GameRules.GOAL_LINE_Z + 0.25)
 	var res := PuckGeometryCollision.Result.new()
