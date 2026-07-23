@@ -26,10 +26,6 @@ const AIM_RADIUS_PX: float = 480.0
 # doesn't creep under the tilted camera. REST_RETURN_RATE is the ease speed.
 const REST_WORLD_DIST: float = 0.55
 const REST_RETURN_RATE: float = 10.0
-# Wrister charge: how long RT must be held to build full shot power. Aim is the
-# stick direction; power is the hold time, so the two are decoupled (pushing the
-# stick fully to aim no longer forces max power). A quick tap is a soft touch pass.
-const WRISTER_PAD_CHARGE_TIME: float = 0.4
 const AIM_DEADZONE: float = 0.15
 # Analog-trigger pull that counts as a press for the wrister / slapshot.
 const TRIGGER_THRESHOLD: float = 0.5
@@ -65,13 +61,12 @@ var _last_mouse_screen_pos: Vector2 = Vector2.ZERO
 # frame (or after a pad reconnect) so it starts on the player.
 var _pad_cursor: Vector2 = Vector2.ZERO
 var _pad_cursor_valid: bool = false
-# Committed wrister power (0..1), latched from the RT charge time while held so the
-# shot reads the held power even on the release frame. _prev_gather_rt keeps commit
-# true for that one release frame (RT already read as up). _rt_charge_time is the
-# accumulated hold (seconds), reset on release.
-var _committed_wrister_power: float = 0.0
+# The pad wrister always fires at full power (aim by stick, soft feeds go through
+# the quick pass). _prev_gather_rt keeps commit_wrister_power true for the one
+# release frame (RT already read as up) so the shot fired on RT-up still routes
+# through the committed-power / player→cursor-aim path rather than measured cursor
+# speed.
 var _prev_gather_rt: bool = false
-var _rt_charge_time: float = 0.0
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
 # input-frame cadence with the same pending-flag latch the mouse actions use.
@@ -216,15 +211,12 @@ func gather() -> InputState:
 		state.stick_lift_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
 		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
 		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
-		# direction in _update_pad_cursor → player→cursor is the shot line), power from
-		# the RT CHARGE TIME (accumulated in _update_pad_cursor) — no flick, no drag
-		# timing, no travel gate, and decoupled from the aim stick. Latch the power
-		# while RT is held and keep commit true one frame into the release so the shot
-		# (fired on RT up) reads the held power rather than a collapsed one.
-		if state.shoot_held:
-			_committed_wrister_power = clampf(_rt_charge_time / WRISTER_PAD_CHARGE_TIME, 0.0, 1.0)
+		# direction in _update_pad_cursor → player→cursor is the shot line), power is
+		# always full — no flick, no charge, no drag timing. Soft feeds are the quick
+		# pass. Keep commit true one frame into the release (via _prev_gather_rt) so the
+		# shot fired on RT-up routes through the committed / player→cursor path.
 		state.commit_wrister_power = state.shoot_held or _prev_gather_rt
-		state.bot_wrister_power_t = _committed_wrister_power
+		state.bot_wrister_power_t = 1.0
 		_prev_gather_rt = state.shoot_held
 	else:
 		state.shoot_held = Input.is_action_pressed("shoot")
@@ -284,8 +276,7 @@ func _screen_cursor(pad: bool) -> Vector2:
 #   * SHOOT (RT held): the cursor is parked at the reach radius in the stick
 #     DIRECTION, so the shot line (player→cursor, the release fallback used when the
 #     committed path zeroes the drag direction) is exactly where the stick points —
-#     a clean, held aim. Power is the RT hold time (accumulated here, decoupled from
-#     the stick so aiming at full deflection doesn't force max power).
+#     a clean, held aim. The shot itself is always full power (soft feeds = quick pass).
 func _update_pad_cursor(delta: float) -> void:
 	var anchor: Vector2 = _aim_anchor_screen()
 	if not _pad_cursor_valid:
@@ -293,17 +284,14 @@ func _update_pad_cursor(delta: float) -> void:
 		_pad_cursor_valid = true
 	var stick := _pad_right_stick_dz()
 	if _pad_trigger(JOY_AXIS_TRIGGER_RIGHT):
-		_rt_charge_time += delta
 		# Aim = stick direction only (a full radius out). A centered stick during RT
 		# holds the last aim so a shot already lined up doesn't drift to center.
 		if not stick.is_zero_approx():
 			_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick.normalized(), AIM_RADIUS_PX)
 	elif not stick.is_zero_approx():
-		_rt_charge_time = 0.0
 		_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick, AIM_RADIUS_PX)
 	else:
 		# Stickhandle mode, stick released → ease the blade to its forward carry rest.
-		_rt_charge_time = 0.0
 		var ease: float = clampf(REST_RETURN_RATE * delta, 0.0, 1.0)
 		_pad_cursor = _pad_cursor.lerp(_facing_rest_screen(anchor), ease)
 

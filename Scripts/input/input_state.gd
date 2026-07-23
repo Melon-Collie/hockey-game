@@ -48,15 +48,15 @@ var hit_held: bool = false
 # Runtime, NOT serialized. Committed wrister power fraction (0..1): the controller
 # converts it to the equivalent cursor speed (ShotMechanics.wrister_speed_for_power_t)
 # so a committed shooter drives the SAME pure-mouse power model deterministically.
-# Set by bots at their shot/pass windup, and by the gamepad path from the right-stick
-# magnitude. Mouse humans leave it at the default (unused — they read real cursor speed).
+# Set by bots at their shot/pass windup (per-shot fraction); the gamepad leaves it at
+# full (1.0). Mouse humans leave it at the default (unused — they read real cursor speed).
 var bot_wrister_power_t: float = 1.0
 # Runtime, NOT serialized. True when the wrister power/aim are COMMITTED rather than
 # measured from cursor motion: power comes from bot_wrister_power_t (with the travel
 # gate bypassed) and aim falls back to player→cursor (the parked stick direction),
-# not the drag direction. Set by the gamepad gatherer while RT is held (bots route
-# through is_ai_controlled() instead). NOTE: not on the wire yet — drives offline /
-# host play; online pad clients are a follow-up (needs a serialized field).
+# not the drag direction. Set by the gamepad gatherer while RT is held — a full-power
+# shot aimed by the stick (bots route through is_ai_controlled() instead). NOTE: not on
+# the wire yet — drives offline / host play; online pad clients are a follow-up.
 var commit_wrister_power: bool = false
 
 func to_array() -> Array:
