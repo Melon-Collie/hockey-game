@@ -70,20 +70,25 @@ func _maybe_offer_reconnect() -> void:
 			func() -> void: _on_join_pressed(lobby_id))
 
 
+# ui_accept (A / Enter) on a focused activity row or the player card. Handled at
+# the _input stage — NOT _unhandled_input — because the GUI focus system consumes
+# ui_accept for a focused control (trying to "press" it; a plain Control does
+# nothing but the event is still eaten), so it never reaches _unhandled_input.
+# A sub-modal's real Buttons DO activate on ui_accept, and no list item has focus
+# while a sub-modal is up — so we only consume it when a main-list item is focused,
+# leaving sub-modal buttons to the GUI system.
+func _input(event: InputEvent) -> void:
+	if not visible or not event.is_action_pressed(&"ui_accept"):
+		return
+	for i: int in _nav_items.size():
+		if _nav_items[i].has_focus():
+			get_viewport().set_input_as_handled()
+			_nav_handlers[i].call()
+			return
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not visible:
-		return
-	# ui_accept (A / Enter) on a focused activity row or the player card. Routed
-	# here because joypad button events never reach a plain Control's gui_input.
-	# A sub-modal's real Buttons handle their own ui_accept (consumed at the GUI
-	# stage, so it never reaches here), and nothing in the list has focus while a
-	# sub-modal is open — so this only ever fires the main list.
-	if event.is_action_pressed(&"ui_accept"):
-		for i: int in _nav_items.size():
-			if _nav_items[i].has_focus():
-				get_viewport().set_input_as_handled()
-				_nav_handlers[i].call()
-				return
 		return
 	if not event.is_action_pressed(&"ui_cancel"):
 		return
