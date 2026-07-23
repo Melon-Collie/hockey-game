@@ -14,8 +14,6 @@ extends Node
 # directly here (contained behind the pref) and mapped onto the existing input
 # flags. See CLAUDE.md → "How It Plays" for the mapping rationale.
 
-# First connected pad. A prototype-level assumption (one local human, one pad).
-const GAMEPAD_DEVICE: int = 0
 # How far a full right-stick deflection reaches from the skater on screen. The
 # blade IK ROM-clamps the projected cursor, so this only sets how much of the
 # stick's throw maps into reachable space; sized so a genuine flick clears the
@@ -28,6 +26,11 @@ const TRIGGER_THRESHOLD: float = 0.5
 var _camera: Camera3D
 # The local player's own skater — the on-screen anchor for the gamepad cursor.
 var _aim_skater: Node3D = null
+# Device id of the pad we read. NOT assumed to be 0 — Godot's connected-joypad id
+# depends on connect order / platform, so a real pad can sit on a non-zero id and
+# reads against 0 would silently return nothing. Cached and refreshed only on
+# connect/disconnect (rare) so the per-tick reads don't allocate. -1 = no pad.
+var _pad_device: int = -1
 var _local_team_id: int = -1
 var _pending_shoot_pressed: bool = false
 var _pending_slap_pressed: bool = false
@@ -57,6 +60,20 @@ var _prev_pad_elev_down: bool = false
 func _init(camera: Camera3D) -> void:
 	_camera = camera
 
+func _ready() -> void:
+	# Track which device id our pad is on, refreshed only when a pad connects or
+	# disconnects. Capturing the current state here covers a pad already plugged in
+	# before this node entered the tree.
+	Input.joy_connection_changed.connect(_on_joy_connection_changed)
+	_refresh_pad_device()
+
+func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
+	_refresh_pad_device()
+
+func _refresh_pad_device() -> void:
+	var pads: Array = Input.get_connected_joypads()
+	_pad_device = int(pads[0]) if not pads.is_empty() else -1
+
 func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
 
@@ -69,7 +86,7 @@ func set_aim_skater(skater: Node3D) -> void:
 # with no pad the synthesized cursor would freeze on the skater with no mouse
 # fallback. Read live so the Options toggle applies without a respawn.
 func _gamepad_active() -> bool:
-	return PlayerPrefs.gamepad_enabled and Input.get_connected_joypads().size() > 0
+	return PlayerPrefs.gamepad_enabled and _pad_device >= 0
 
 func _process(_delta: float) -> void:
 	# Accumulate just_pressed events every frame — unless input is blocked,
@@ -107,19 +124,19 @@ func _accumulate_gamepad_edges() -> void:
 	if slap_now and not _prev_pad_slap:
 		_pending_slap_pressed = true
 	_prev_pad_slap = slap_now
-	var lift_now: bool = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_RIGHT_SHOULDER)
+	var lift_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
 	if lift_now and not _prev_pad_stick_lift:
 		_pending_stick_lift_pressed = true
 	_prev_pad_stick_lift = lift_now
-	var quick_pass_now: bool = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_A)
+	var quick_pass_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_A)
 	if quick_pass_now and not _prev_pad_quick_pass:
 		_pending_quick_pass_pressed = true
 	_prev_pad_quick_pass = quick_pass_now
-	var up_now: bool = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_DPAD_UP)
+	var up_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_DPAD_UP)
 	if up_now and not _prev_pad_elev_up:
 		_elevation_level = mini(_elevation_level + 1, InputState.MAX_ELEVATION_LEVEL)
 	_prev_pad_elev_up = up_now
-	var down_now: bool = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_DPAD_DOWN)
+	var down_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_DPAD_DOWN)
 	if down_now and not _prev_pad_elev_down:
 		_elevation_level = maxi(_elevation_level - 1, 0)
 	_prev_pad_elev_down = down_now
@@ -165,11 +182,11 @@ func gather() -> InputState:
 	if pad:
 		state.shoot_held = _pad_trigger(JOY_AXIS_TRIGGER_RIGHT)
 		state.slap_held = _pad_trigger(JOY_AXIS_TRIGGER_LEFT)
-		state.brake = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_B)
-		state.sprint_held = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_LEFT_STICK)
-		state.block_held = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_LEFT_SHOULDER)
-		state.stick_lift_held = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_RIGHT_SHOULDER)
-		state.hit_held = Input.is_joy_button_pressed(GAMEPAD_DEVICE, JOY_BUTTON_X)
+		state.brake = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_B)
+		state.sprint_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_STICK)
+		state.block_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_SHOULDER)
+		state.stick_lift_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
+		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
 	else:
 		state.shoot_held = Input.is_action_pressed("shoot")
 		state.slap_held = Input.is_action_pressed("slapshot")
@@ -204,8 +221,8 @@ func _read_move(pad: bool) -> Vector2:
 	if not pad:
 		return kbd
 	var stick := Vector2(
-			Input.get_joy_axis(GAMEPAD_DEVICE, JOY_AXIS_LEFT_X),
-			Input.get_joy_axis(GAMEPAD_DEVICE, JOY_AXIS_LEFT_Y))
+			Input.get_joy_axis(_pad_device, JOY_AXIS_LEFT_X),
+			Input.get_joy_axis(_pad_device, JOY_AXIS_LEFT_Y))
 	stick = GamepadAimRules.apply_radial_deadzone(stick, AIM_DEADZONE)
 	return (kbd + stick).limit_length(1.0)
 
@@ -215,8 +232,8 @@ func _screen_cursor(pad: bool) -> Vector2:
 	if not pad:
 		return get_viewport().get_mouse_position()
 	var stick := Vector2(
-			Input.get_joy_axis(GAMEPAD_DEVICE, JOY_AXIS_RIGHT_X),
-			Input.get_joy_axis(GAMEPAD_DEVICE, JOY_AXIS_RIGHT_Y))
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y))
 	return GamepadAimRules.blade_cursor_screen(_aim_anchor_screen(), stick, AIM_RADIUS_PX, AIM_DEADZONE)
 
 # On-screen anchor for the skill-stick cursor: the skater's projected position, so
@@ -237,4 +254,4 @@ func _screen_to_world(camera: Camera3D, screen: Vector2) -> Vector3:
 	return ray_origin + ray_dir * t
 
 func _pad_trigger(axis: int) -> bool:
-	return Input.get_joy_axis(GAMEPAD_DEVICE, axis) >= TRIGGER_THRESHOLD
+	return Input.get_joy_axis(_pad_device, axis) >= TRIGGER_THRESHOLD
