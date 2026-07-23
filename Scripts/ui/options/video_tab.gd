@@ -23,6 +23,9 @@ var _shadow_quality_btn: OptionButton = null
 var _crowd_density_btn: OptionButton = null
 var _ice_scratches_check: CheckButton = null
 var _puck_shadow_check: CheckButton = null
+var _fog_check: CheckButton = null
+var _reflections_check: CheckButton = null
+var _ao_check: CheckButton = null
 var _render_scale_slider: HSlider = null
 var _scaling_3d_btn: OptionButton = null
 var _aa_btn: OptionButton = null
@@ -184,6 +187,26 @@ func _build_content() -> void:
 	_puck_shadow_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
 	add_child(_field_row("Puck Shadow", _puck_shadow_check))
 
+	# Atmosphere passes, heaviest first. Fog and reflections are the GPU-costly
+	# ones; ambient occlusion is cheap. All default on (the intended arena look).
+	_fog_check = CheckButton.new()
+	_fog_check.set_pressed_no_signal(PlayerPrefs.volumetric_fog_enabled)
+	SoundManager.wire_button(_fog_check)
+	_fog_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
+	add_child(_field_row("Volumetric Fog", _fog_check))
+
+	_reflections_check = CheckButton.new()
+	_reflections_check.set_pressed_no_signal(PlayerPrefs.reflections_enabled)
+	SoundManager.wire_button(_reflections_check)
+	_reflections_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
+	add_child(_field_row("Reflections", _reflections_check))
+
+	_ao_check = CheckButton.new()
+	_ao_check.set_pressed_no_signal(PlayerPrefs.ambient_occlusion_enabled)
+	SoundManager.wire_button(_ao_check)
+	_ao_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
+	add_child(_field_row("Ambient Occlusion", _ao_check))
+
 # --- Display handlers --------------------------------------------------------
 
 func _on_window_mode_selected(_idx: int) -> void:
@@ -332,6 +355,9 @@ func read_controls() -> Dictionary:
 		"crowd_density": _crowd_density_btn.selected,
 		"ice_scratches_enabled": _ice_scratches_check.button_pressed,
 		"puck_shadow_enabled": _puck_shadow_check.button_pressed,
+		"volumetric_fog_enabled": _fog_check.button_pressed,
+		"reflections_enabled": _reflections_check.button_pressed,
+		"ambient_occlusion_enabled": _ao_check.button_pressed,
 		"render_scale": _render_scale_slider.value,
 		"scaling_3d_mode": _scaling_3d_btn.selected,
 		"anti_aliasing_mode": _aa_btn.selected,
@@ -353,6 +379,9 @@ func apply_values(v: Dictionary) -> void:
 	_crowd_density_btn.selected = v.crowd_density
 	_ice_scratches_check.set_pressed_no_signal(v.ice_scratches_enabled)
 	_puck_shadow_check.set_pressed_no_signal(v.puck_shadow_enabled)
+	_fog_check.set_pressed_no_signal(v.volumetric_fog_enabled)
+	_reflections_check.set_pressed_no_signal(v.reflections_enabled)
+	_ao_check.set_pressed_no_signal(v.ambient_occlusion_enabled)
 	_render_scale_slider.value = v.render_scale
 	_scaling_3d_btn.selected = v.scaling_3d_mode
 	_aa_btn.selected = v.anti_aliasing_mode

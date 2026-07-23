@@ -148,11 +148,13 @@ func _create_shoulder_viewport() -> void:
 	mat_glove.albedo_texture = tex
 	mat_glove.roughness = _ROUGH_CLOTH
 	mat_glove.uv1_offset = Vector3(-0.25, 0.0, 0.0)
+	BodyRim.apply(mat_glove)
 	_goalie.glove_shoulder_sphere.material_override = mat_glove
 	var mat_blocker := StandardMaterial3D.new()
 	mat_blocker.albedo_texture = tex
 	mat_blocker.roughness = _ROUGH_CLOTH
 	mat_blocker.uv1_offset = Vector3(0.25, 0.0, 0.0)
+	BodyRim.apply(mat_blocker)
 	_goalie.blocker_shoulder_sphere.material_override = mat_blocker
 
 
@@ -226,10 +228,15 @@ func _make_h_stripes_texture(base: Color, stripes: Array) -> ImageTexture:
 	return ImageTexture.create_from_image(img)
 
 
+# Rim light (BodyRim, shared with the skater so both "players" read identically)
+# on every goalie part — head, pads, gloves, blocker, elbows. Applied at the two
+# factories + the inline shoulder mats; the jersey box body carries a matching
+# Fresnel term in goalie_jersey.gdshader (a ShaderMaterial can't use this rim).
 func _make_texture_material(tex: Texture2D) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
 	mat.roughness = _ROUGH_CLOTH
+	BodyRim.apply(mat)
 	return mat
 
 
@@ -237,4 +244,5 @@ func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardM
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.roughness = roughness
+	BodyRim.apply(mat)
 	return mat

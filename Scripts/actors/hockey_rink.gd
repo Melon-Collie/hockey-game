@@ -54,7 +54,13 @@ extends StaticBody3D
 	set(v):
 		wall_color = v
 		_rebuild()
-@export_range(0.0, 2.0) var wall_emission_energy: float = 0.0:
+# Boards are near-vertical, so the top-down ceiling rig grazes past them and
+# they read dark whatever its brightness. A touch of self-emission (each band
+# emits its own color — white wall, gold kickplate, navy cap rail) gives the
+# boards a color floor so they show their intended look from top-down, without
+# spilling any light onto the ice or crowd. Kept well under the glow HDR
+# threshold so they don't bloom.
+@export_range(0.0, 2.0) var wall_emission_energy: float = 0.15:
 	set(v):
 		wall_emission_energy = v
 		_rebuild()
@@ -62,7 +68,7 @@ extends StaticBody3D
 	set(v):
 		kickplate_color = v
 		_rebuild()
-@export_range(0.0, 2.0) var kickplate_emission_energy: float = 0.0:
+@export_range(0.0, 2.0) var kickplate_emission_energy: float = 0.5:
 	set(v):
 		kickplate_emission_energy = v
 		_rebuild()
@@ -70,7 +76,7 @@ extends StaticBody3D
 	set(v):
 		cap_rail_color = v
 		_rebuild()
-@export_range(0.0, 2.0) var cap_rail_emission_energy: float = 0.0:
+@export_range(0.0, 2.0) var cap_rail_emission_energy: float = 0.5:
 	set(v):
 		cap_rail_emission_energy = v
 		_rebuild()
@@ -123,7 +129,12 @@ extends StaticBody3D
 	set(v):
 		ice_specular = v
 		_rebuild()
-@export_range(0.0, 1.0) var ice_roughness_head_on: float = 0.20:
+# Head-on roughness governs how sharp screen-space reflections read when you
+# look down at the ice (grazing stays the mirror streak). Nudged 0.20 → 0.15
+# so skater/goal reflections hold together once SSR is enabled in the
+# WorldEnvironment (see docs/arena-atmosphere-spec.md); still short of a full
+# mirror, so the ice keeps its slightly-diffuse-head-on read.
+@export_range(0.0, 1.0) var ice_roughness_head_on: float = 0.15:
 	set(v):
 		ice_roughness_head_on = v
 		_rebuild()

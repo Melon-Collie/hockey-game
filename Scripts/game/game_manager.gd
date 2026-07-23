@@ -4794,6 +4794,18 @@ func get_skater_team(skater: Skater) -> Team:
 	return _registry.resolve_team(skater) if _registry != null else null
 
 
+# The scorer's live Skater, resolved by name (same lookup the celebration uses).
+# Null if the name doesn't match a record — callers fall back. Used by the goal
+# hero-cam to frame/follow the scorer.
+func get_scorer_skater(scorer_name: String) -> Skater:
+	if _registry == null or scorer_name.is_empty():
+		return null
+	for record: PlayerRecord in _registry.all().values():
+		if record.player_name == scorer_name:
+			return record.skater
+	return null
+
+
 func get_puck() -> Puck:
 	return puck
 

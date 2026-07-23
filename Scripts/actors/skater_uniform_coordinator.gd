@@ -120,6 +120,7 @@ func _create_jersey_viewport() -> void:
 	# texture's back-center (texel x=128) lands at the skater's +Z (back).
 	# Godot's CylinderMesh starts U=0 at +Z and increases CCW.
 	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
+	BodyRim.apply(mat)
 	_upper_body_mesh.material_override = mat
 
 
@@ -146,11 +147,13 @@ func _create_shoulder_viewport() -> void:
 	mat_l.albedo_texture = tex
 	mat_l.roughness = _ROUGH_CLOTH
 	mat_l.uv1_offset = Vector3(-0.25, 0.0, 0.0)
+	BodyRim.apply(mat_l)
 	_shoulder_l.material_override = mat_l
 	var mat_r := StandardMaterial3D.new()
 	mat_r.albedo_texture = tex
 	mat_r.roughness = _ROUGH_CLOTH
 	mat_r.uv1_offset = Vector3(0.25, 0.0, 0.0)
+	BodyRim.apply(mat_r)
 	_shoulder_r.material_override = mat_r
 
 
@@ -419,10 +422,16 @@ const _STICK_SHAFT_COLOR: Color = Color(0.06, 0.06, 0.07)
 const _BLADE_COLOR: Color = Color(0.05, 0.05, 0.05)
 
 
+# Subtle rim light on every body part (BodyRim, shared with the goalie so both
+# "players" read identically) — a Fresnel edge highlight that makes the rounded
+# primitive forms read as lit volumes rather than flat blobs from the top-down
+# camera. Applied at the two material factories + the inline viewport-textured
+# mats, so it rides every part.
 func _make_texture_material(tex: Texture2D, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
 	mat.roughness = roughness
+	BodyRim.apply(mat)
 	return mat
 
 
@@ -430,6 +439,7 @@ func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardM
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.roughness = roughness
+	BodyRim.apply(mat)
 	return mat
 
 
