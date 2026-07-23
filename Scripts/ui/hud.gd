@@ -37,7 +37,6 @@ var _side_menu: SideMenu = null
 var _bug_dialog: BugReportDialog = null
 var _toast_stack: ToastStack = null
 var _flash_overlay: FlashOverlay = null
-var _hit_stop: HitStop = null
 var _home_sog_label: Label = null
 var _away_sog_label: Label = null
 var _score_0: int = 0
@@ -160,8 +159,6 @@ func _ready() -> void:
 		NetworkManager.pending_error = ""
 	_flash_overlay = FlashOverlay.new()
 	add_child(_flash_overlay)
-	_hit_stop = HitStop.new()
-	add_child(_hit_stop)
 	_period_label.text = _period_ordinal(1)
 	_clock_label.text = _format_clock(GameManager.get_period_duration())
 	_home_score_label.text = "0"
@@ -169,7 +166,6 @@ func _ready() -> void:
 	_phase_wrapper.visible = false
 	GameManager.score_changed.connect(_on_score_changed)
 	GameManager.goal_scored.connect(_on_goal_scored)
-	GameManager.local_player_impact.connect(_on_impact_hit_stop)
 	GameManager.phase_changed.connect(_on_phase_changed)
 	GameManager.faceoff_prep_announced.connect(_on_faceoff_prep_announced)
 	GameManager.period_synced.connect(_on_period_synced)
@@ -1006,18 +1002,6 @@ func _on_goal_scored(scoring_team: Team, scorer_name: String, assist1_name: Stri
 		_assist_label.text = ""
 
 	_flash_overlay.flash(team_primary)
-	# Tactile clunk on the goal, right before the celebration beat. Offline-only
-	# + comfort toggle are enforced inside HitStop; a no-op online where the
-	# flash + camera shake carry the moment.
-	_hit_stop.freeze(0.8, 0.09)
-
-func _on_impact_hit_stop(_direction: Vector3, intensity: float) -> void:
-	# Micro-freeze on a hard body check (delivered or taken — local_player_impact
-	# fires for both). Below the threshold it's an incidental bump, so no stutter;
-	# above it, the freeze depth/length scale with how hard it landed.
-	if intensity < 0.35:
-		return
-	_hit_stop.freeze(intensity, lerpf(0.03, 0.07, intensity))
 
 func _initial_team_primary(team_id: int) -> Color:
 	if GameManager.teams.size() > team_id:
