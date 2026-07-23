@@ -137,6 +137,13 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	_away_colors = TeamColorRegistry.get_colors(_away_color_slot, 1)
 	goalie_result.bottom_goalie.apply_uniform(_home_colors)
 	goalie_result.top_goalie.apply_uniform(_away_colors)
+	# Goalie identity (name + number on the sweater), matching the live spawn in
+	# GameManager._spawn_goalies. The AI goalies' identities are compile-time
+	# constants (not in the .mreplay header), so read them straight from
+	# GameManager. bottom = home = team 0, top = away = team 1 (the same mapping
+	# the goalie_controllers indices use above).
+	goalie_result.bottom_goalie.apply_jersey_info(GameManager.GOALIE_NAMES[0], GameManager.GOALIE_NUMBERS[0])
+	goalie_result.top_goalie.apply_jersey_info(GameManager.GOALIE_NAMES[1], GameManager.GOALIE_NUMBERS[1])
 	_apply_crowd_colors()
 
 	_header_roster = header.get("roster", []) as Array
@@ -159,9 +166,15 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	team_obj.team_id = team_id
 	team_obj.color_slot = _home_color_slot if team_id == 0 else _away_color_slot
 	var team_colors: Dictionary = _home_colors if team_id == 0 else _away_colors
+	# Re-apply the recorded build (height / weight / gear) so the skater's mesh,
+	# reach, and re-derived lean match the host's — without it the replay skater
+	# sits at the neutral frame and the host's lean-compensated blade positions
+	# leave the stick floating off the ice. Missing "build" (legacy .mreplay) →
+	# from_dict returns the neutral build, matching the old behavior.
+	var attrs: PlayerAttributes = PlayerAttributes.from_dict(entry.get("build", {}) as Dictionary)
 	var spawned: Dictionary = _spawner.spawn_remote_player(
 			PlayerRules.faceoff_position(team_id, team_slot),
-			is_left, _puck, self)
+			is_left, _puck, self, attrs)
 	var skater: Skater = spawned.skater
 	var controller: RemoteController = spawned.controller
 	# Skater._physics_process calls move_and_slide each tick using whatever

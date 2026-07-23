@@ -1471,6 +1471,11 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(_on_goal_resolve_faceoff)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
+	# Record period-end markers into the .mreplay event stream (like goals) so the
+	# offline viewer can tick each period boundary. Uses the GameManager-level
+	# phase_changed so it fires on host (via _phase_coord) and client (via the
+	# codec decode path) alike, matching the goal-event recording.
+	phase_changed.connect(_on_phase_changed_for_replay_event)
 	_phase_coord.period_break_started.connect(_on_period_break_for_intermission)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
 	_phase_coord.period_break_started.connect(period_break_started.emit)
@@ -2349,6 +2354,11 @@ func _build_replay_header() -> Dictionary:
 				"team_slot": r.team_slot,
 				"is_left_handed": r.is_left_handed,
 				"is_local": peer_id == NetworkManager.local_peer_id(),
+				# Build (height / weight / gear) so the viewer can re-apply the
+				# player's attributes — otherwise replay skaters render at the
+				# neutral frame and their re-derived lean/reach no longer matches
+				# the host's lean-compensated blade positions (stick off the ice).
+				"build": r.attributes.to_dict() if r.attributes != null else {},
 			})
 	return {
 		"game_id": _game_id,
@@ -2431,6 +2441,24 @@ func _on_goal_for_replay_event(scoring_team: Team, scorer: String,
 	_replay_file_writer.enqueue_event(ts, payload)
 
 
+# Record a period-end marker for the .mreplay viewer's timeline. END_OF_PERIOD
+# marks a regulation period boundary (the buzzer point); GAME_OVER is the end of
+# the bar and needs no tick. current_period at this edge is the period that just
+# ended. Recorded on every peer, like goals.
+func _on_phase_changed_for_replay_event(new_phase: GamePhase.Phase) -> void:
+	if new_phase != GamePhase.Phase.END_OF_PERIOD:
+		return
+	if _replay_file_writer == null or _state_machine == null:
+		return
+	var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
+			else NetworkManager.estimated_host_time()
+	var payload: PackedByteArray = JSON.stringify({
+		"kind": "period_end",
+		"period": _state_machine.current_period,
+	}).to_utf8_buffer()
+	_replay_file_writer.enqueue_event(ts, payload)
+
+
 # Roster events for the .mreplay viewer. Header captures the initial roster;
 # these fire only for mid-game changes (joins, demotes, promotes,
 # disconnects) so the viewer can spawn / despawn actors instead of leaving
@@ -2451,6 +2479,9 @@ func _on_replay_player_joined_event(record: PlayerRecord) -> void:
 		"team_id": record.team.team_id if record.team != null else 0,
 		"team_slot": record.team_slot,
 		"is_left_handed": record.is_left_handed,
+		# Same build carry-through as the header roster — a mid-game arrival needs
+		# its attributes re-applied so its lean/reach match too (see _build_replay_header).
+		"build": record.attributes.to_dict() if record.attributes != null else {},
 	}).to_utf8_buffer()
 	_replay_file_writer.enqueue_event(ts, payload)
 
@@ -4667,6 +4698,15 @@ func _should_record_to_file() -> bool:
 	if _state_machine == null:
 		return true
 	var phase: int = _state_machine.current_phase
+	# FACEOFF_PREP is movement-locked for INPUT, but the skaters actively skate in
+	# to the dot over the "2 → 1 → DROP" countdown (PhaseCoordinator.begin_approach).
+	# Record it at the normal throttled rate so the replay plays the walk-up —
+	# capturing only the first (pre-approach) frame made the viewer teleport
+	# straight from there to the drop. The crossing bracket into FACEOFF_PREP is
+	# still a clean cut in FileReplayDriver (_is_faceoff_reset_bracket), so the
+	# puck's reset-to-dot doesn't smear; the intra-prep brackets interpolate.
+	if phase == GamePhase.Phase.FACEOFF_PREP:
+		return true
 	if PhaseRules.is_movement_locked(phase):
 		# Capture only the first frame of each movement-locked phase. Goal:
 		# the puck-in-net moment on GOAL_SCORED entry — without this, the
