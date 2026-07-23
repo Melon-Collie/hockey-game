@@ -434,17 +434,21 @@ func _draw_event_ticks() -> void:
 		if not event.data.has("kind"):
 			continue
 		var color: Color
+		# Period ends draw a touch thicker than goals so the black boundary reads
+		# as the heavier divider it is.
+		var width: float = 2.0
 		match String(event.data.kind):
 			"goal":
 				# Scoring team's primary color: home = team 0, away = team 1.
 				color = _away_color if int(event.data.get("scoring_team_id", 0)) == 1 else _home_color
 			"period_end":
 				color = _PERIOD_TICK
+				width = 3.5
 			_:
 				continue
 		var progress: float = (event.host_ts - start_ts) / dur
 		var x: float = grab_w * 0.5 + clampf(progress, 0.0, 1.0) * usable
-		_seek_bar_root.draw_line(Vector2(x, 4), Vector2(x, rect.size.y - 4), color, 2.0)
+		_seek_bar_root.draw_line(Vector2(x, 4), Vector2(x, rect.size.y - 4), color, width)
 
 
 func _update_play_pause_text() -> void:
