@@ -390,11 +390,39 @@ func _get_save_path() -> String:
 
 func _ready() -> void:
 	_load()
+	_ensure_joypad_ui_bindings()
 	# Steam Cloud reconcile is deferred: PlayerPrefs is autoload #1 and
 	# SteamManager #7, so Steam isn't initialised yet during the _load() above.
 	# A deferred call runs after every autoload's (synchronous) _ready, by which
 	# point Cloud availability is known. See _sync_from_cloud.
 	_sync_from_cloud.call_deferred()
+
+
+# Bind the standard gamepad buttons onto the built-in ui_* actions so controller
+# menu navigation both MOVES focus and ACTIVATES. In this project the engine
+# defaults left A/B off ui_accept/ui_cancel — focus could move (D-pad → ui_up/
+# down) but A never confirmed and B never backed out. Additive (keyboard bindings
+# are untouched) and idempotent (skips a button already bound), so it's safe to
+# run once at startup regardless of the control scheme.
+func _ensure_joypad_ui_bindings() -> void:
+	_add_joy_ui_button(&"ui_accept", JOY_BUTTON_A)
+	_add_joy_ui_button(&"ui_cancel", JOY_BUTTON_B)
+	_add_joy_ui_button(&"ui_up", JOY_BUTTON_DPAD_UP)
+	_add_joy_ui_button(&"ui_down", JOY_BUTTON_DPAD_DOWN)
+	_add_joy_ui_button(&"ui_left", JOY_BUTTON_DPAD_LEFT)
+	_add_joy_ui_button(&"ui_right", JOY_BUTTON_DPAD_RIGHT)
+
+
+func _add_joy_ui_button(action: StringName, button: JoyButton) -> void:
+	if not InputMap.has_action(action):
+		return
+	for existing: InputEvent in InputMap.action_get_events(action):
+		if existing is InputEventJoypadButton \
+				and (existing as InputEventJoypadButton).button_index == button:
+			return  # already bound — leave it
+	var ev := InputEventJoypadButton.new()
+	ev.button_index = button
+	InputMap.action_add_event(action, ev)
 
 
 func save() -> void:
