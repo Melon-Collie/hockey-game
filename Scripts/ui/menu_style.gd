@@ -253,6 +253,7 @@ static func apply_primary_cta(btn: Button, font_size: int = 20) -> void:
 	btn.text = btn.text.to_upper()
 	btn.add_theme_font_override("font", display_font_spaced())
 	btn.add_theme_font_size_override("font_size", font_size)
+	_apply_focus_ring(btn)
 
 
 # Standard popup-row button: 220×48, font 20, hover-scale tween, click sound.
@@ -261,6 +262,32 @@ static func popup_button(label: String) -> Button:
 	btn.text = label
 	btn.custom_minimum_size = Vector2(220, 48)
 	btn.add_theme_font_size_override("font_size", 20)
+	_apply_focus_ring(btn)
 	wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
 	return btn
+
+
+# Teal focus ring for controller navigation, applied by the button factories —
+# but ONLY in controller mode, so a mouse click never leaves a ring on the button
+# (mouse focus would otherwise show it). The project theme's default focus is
+# invisible, which is what we want for mouse play. Gamepad mode is set on the
+# splash before menus build, so factory-made buttons pick it up.
+static func _apply_focus_ring(btn: Button) -> void:
+	if not PlayerPrefs.gamepad_enabled:
+		return
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0, 0, 0, 0)
+	s.set_corner_radius_all(6)
+	s.border_color = TEAL
+	s.set_border_width_all(2)
+	s.set_expand_margin_all(3)  # sit just outside the label
+	btn.add_theme_stylebox_override("focus", s)
+
+
+# Grab focus on `control` — but only in controller mode, so mouse players never
+# get a focus ring they didn't ask for. Deferred so it runs after the control is
+# in the tree and laid out. The single seam every menu calls when it opens.
+static func grab_focus_if_gamepad(control: Control) -> void:
+	if control != null and PlayerPrefs.gamepad_enabled:
+		control.grab_focus.call_deferred()
