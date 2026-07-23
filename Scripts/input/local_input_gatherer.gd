@@ -107,7 +107,7 @@ func _process(delta: float) -> void:
 		return
 	if _gamepad_active():
 		_accumulate_gamepad_edges()
-		_integrate_pad_cursor(delta)
+		_update_pad_cursor(delta)
 		return
 	if Input.is_action_just_pressed("shoot"):
 		_pending_shoot_pressed = true
@@ -238,9 +238,9 @@ func _read_move(pad: bool) -> Vector2:
 	stick = GamepadAimRules.apply_radial_deadzone(stick, AIM_DEADZONE)
 	return (kbd + stick).limit_length(1.0)
 
-# The screen-space aim cursor: the OS mouse, or the velocity-integrated gamepad
-# cursor (advanced in _integrate_pad_cursor). Seeds the gamepad cursor to the
-# anchor on first read so it starts on the player even before _process runs.
+# The screen-space aim cursor: the OS mouse, or the gamepad cursor (advanced in
+# _update_pad_cursor). Seeds the gamepad cursor to the anchor on first read so it
+# starts on the player even before _process runs.
 func _screen_cursor(pad: bool) -> Vector2:
 	if not pad:
 		return get_viewport().get_mouse_position()
@@ -249,20 +249,27 @@ func _screen_cursor(pad: bool) -> Vector2:
 		_pad_cursor_valid = true
 	return _pad_cursor
 
-# Advance the gamepad cursor by the right-stick velocity, clamped into the reach
-# disc around the anchor. The stick sets VELOCITY, so a centered stick holds the
-# cursor exactly where it was (the blade stays put and skating is free), and the
-# cursor's screen motion is pure stick intent — the clean signal the wrister reads
-# for power and direction, unlike a skater-anchored cursor that drifts with the camera.
-func _integrate_pad_cursor(delta: float) -> void:
+# Update the gamepad cursor. Two modes, chosen on the shoot trigger:
+#   * STICKHANDLE (RT up): absolute proportional placement — the stick maps to a
+#     blade offset from the anchor. A centered stick freezes the cursor, so letting
+#     go HOLDS the blade where you set it (you can skate any direction hands-free).
+#   * SHOOT (RT held): velocity cursor — the stick sets screen-space velocity, so a
+#     flick is clean directional motion and releasing the stick can't snap the cursor
+#     back toward the anchor and corrupt the wrister's release read.
+func _update_pad_cursor(delta: float) -> void:
+	var anchor: Vector2 = _aim_anchor_screen()
 	if not _pad_cursor_valid:
-		_pad_cursor = _aim_anchor_screen()
+		_pad_cursor = anchor
 		_pad_cursor_valid = true
 	var stick := GamepadAimRules.apply_radial_deadzone(Vector2(
 			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
 			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y)), AIM_DEADZONE)
-	_pad_cursor = GamepadAimRules.integrate_cursor(
-			_pad_cursor, stick, GAMEPAD_CURSOR_SPEED, delta, _aim_anchor_screen(), AIM_RADIUS_PX)
+	if _pad_trigger(JOY_AXIS_TRIGGER_RIGHT):
+		_pad_cursor = GamepadAimRules.integrate_cursor(
+				_pad_cursor, stick, GAMEPAD_CURSOR_SPEED, delta, anchor, AIM_RADIUS_PX)
+	elif not stick.is_zero_approx():
+		_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick, AIM_RADIUS_PX)
+	# else: stickhandle mode, stick centered → hold the cursor where it was.
 
 # On-screen anchor for the gamepad cursor: the skater's projected position, so the
 # reach disc tracks the player as the camera follows. Falls back to the viewport

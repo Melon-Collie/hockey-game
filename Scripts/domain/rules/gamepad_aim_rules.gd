@@ -9,18 +9,18 @@ class_name GamepadAimRules
 ## charge tracker and its travel gate run unchanged — no controller branch below
 ## the input gatherer. See CLAUDE.md → "How It Plays".
 ##
-## The cursor is VELOCITY-INTEGRATED, not an absolute stick-to-position map. The
-## stick sets the cursor's screen-space velocity; a centered stick leaves it
-## exactly where it was. This matches the mouse in the two ways that matter:
-##   * it HOLDS position when you let go (you place the blade and it stays), and
-##   * its motion is pure stick intent in stable screen space — independent of the
-##     skater/camera drift that made an absolute skater-anchored cursor read random
-##     wrister power and direction.
-## The integrated cursor is clamped into a reach disc around an anchor so it stays
-## on reachable ice; the blade IK ROM-clamps beyond that.
+## The cursor runs in two modes (the gatherer picks per frame on the shoot trigger):
+##   * STICKHANDLE — `absolute_cursor`: the stick maps to an absolute offset from
+##     the anchor (proportional, precise blade placement). The gatherer freezes the
+##     cursor when the stick is centered, so letting go HOLDS the blade in place.
+##   * SHOOT (RT held) — `integrate_cursor`: the stick sets the cursor's screen
+##     VELOCITY, so a flick is clean directional motion and — crucially — releasing
+##     the stick to center produces NO motion, so it can't snap back toward the
+##     anchor and corrupt the wrister's release read (which is what made absolute
+##     shooting fire random directions).
 
 # Radial deadzone with edge rescale. Below `deadzone` the stick reads dead-zero
-# (so a resting stick can't slowly drift the held cursor); from the deadzone edge
+# (so a resting stick holds the cursor and can't drift it); from the deadzone edge
 # outward the magnitude is rescaled to span the full 0..1 with no step at the
 # boundary. Direction is preserved; magnitude is clamped to 1.
 static func apply_radial_deadzone(stick: Vector2, deadzone: float) -> Vector2:
@@ -33,13 +33,18 @@ static func apply_radial_deadzone(stick: Vector2, deadzone: float) -> Vector2:
 	var scaled: float = clampf((mag - deadzone) / span, 0.0, 1.0)
 	return (stick / mag) * scaled
 
-# Advance the screen-space cursor by the (already deadzoned) stick velocity and
-# clamp it into a `max_radius_px` disc around `anchor`. `stick_dz` is a 0..1
-# vector in the JOY_AXIS_RIGHT_* convention (x right, y down) — which already
-# matches screen axes. `speed_px_s` is the cursor speed at full deflection.
+# STICKHANDLE mode: absolute screen cursor = anchor + deadzoned_stick * radius_px.
+# `stick_dz` is a 0..1 vector in the JOY_AXIS_RIGHT_* convention (x right, y down),
+# which already matches screen axes. Proportional: half-deflection places the blade
+# half-way out to the reach radius.
+static func absolute_cursor(anchor: Vector2, stick_dz: Vector2, radius_px: float) -> Vector2:
+	return anchor + stick_dz * radius_px
+
+# SHOOT mode: advance the cursor by the (deadzoned) stick velocity and clamp it into
+# a `max_radius_px` disc around `anchor`. `speed_px_s` is the cursor speed at full
+# deflection. limit_length is a no-op inside the disc, so a held cursor not at the
+# rim is left untouched (it holds in stable screen space — no snap-back on release).
 static func integrate_cursor(cursor: Vector2, stick_dz: Vector2, speed_px_s: float,
 		delta: float, anchor: Vector2, max_radius_px: float) -> Vector2:
 	var moved: Vector2 = cursor + stick_dz * speed_px_s * delta
-	# limit_length is a no-op when already inside the disc, so a held cursor that
-	# is not at the rim is left untouched (it holds in stable screen space).
 	return anchor + (moved - anchor).limit_length(max_radius_px)

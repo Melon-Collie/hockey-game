@@ -35,6 +35,17 @@ func test_deadzone_preserves_direction_and_clamps_overrange() -> void:
 	assert_almost_eq(over.length(), 1.0, 0.0001, "over-range deflection clamps to unit")
 
 
+func test_absolute_cursor_is_proportional_offset() -> void:
+	# Stickhandle mode: cursor = anchor + stick * radius. Centered → on the anchor;
+	# full deflection → a radius out; half → half-way (proportional placement).
+	assert_eq(GamepadAimRules.absolute_cursor(ANCHOR, Vector2.ZERO, RADIUS), ANCHOR,
+			"centered stick sits on the anchor")
+	var full: Vector2 = GamepadAimRules.absolute_cursor(ANCHOR, Vector2(1.0, 0.0), RADIUS)
+	assert_almost_eq(full.x, ANCHOR.x + RADIUS, 0.01, "full-right places the blade a radius out")
+	var half: Vector2 = GamepadAimRules.absolute_cursor(ANCHOR, Vector2(0.0, 0.5), RADIUS)
+	assert_almost_eq(half.y, ANCHOR.y + RADIUS * 0.5, 0.01, "half-deflection places half-way out")
+
+
 func test_centered_stick_holds_cursor() -> void:
 	# The #1 fix: a centered stick must leave the cursor exactly where it was —
 	# no snap back to the anchor, so the player can set the blade and skate freely.
