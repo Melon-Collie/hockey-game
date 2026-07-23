@@ -24,6 +24,7 @@ const _REBINDABLE_ACTIONS: Array = [
 
 var _shot_power_slider: HSlider = null
 var _shot_power_field: LineEdit = null
+var _gamepad_check: CheckButton = null
 var _confine_mouse_check: CheckButton = null
 var _listening_action: String = ""
 var _pending_bindings: Dictionary = {}
@@ -31,6 +32,27 @@ var _binding_btns: Dictionary = {}
 var _conflict_label: Label = null
 
 func _build_content() -> void:
+	add_child(_section_header("Gamepad (Experimental)"))
+
+	# Opt-in gamepad scheme. When on AND a pad is connected, the right stick
+	# becomes the blade ("skill stick") and the pad drives everything else; the
+	# mouse+keyboard scheme is untouched when off or when no pad is present.
+	_gamepad_check = CheckButton.new()
+	_gamepad_check.set_pressed_no_signal(PlayerPrefs.gamepad_enabled)
+	SoundManager.wire_button(_gamepad_check)
+	_gamepad_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
+	add_child(_field_row("Enable Gamepad", _gamepad_check))
+
+	var pad_hint := Label.new()
+	pad_hint.text = "Left stick: skate   ·   Right stick: aim / stickhandle\n" \
+			+ "RT: Wrister   ·   LT: Slapshot   ·   A: Quick pass\n" \
+			+ "RB: Deflect / Lift   ·   LB: Block   ·   X: Hit\n" \
+			+ "B: Brake   ·   L3: Sprint   ·   D-pad up/down: Loft"
+	pad_hint.add_theme_font_size_override("font_size", 13)
+	pad_hint.add_theme_color_override("font_color", _DIM)
+	add_child(pad_hint)
+
+	add_child(_section_spacer())
 	add_child(_section_header("Mouse"))
 
 	# Shot Power Sensitivity — calibrates how hard you flick for a full-power
@@ -194,12 +216,14 @@ func is_valid() -> bool:
 func read_controls() -> Dictionary:
 	return {
 		"shot_power_sensitivity": _shot_power_slider.value,
+		"gamepad_enabled": _gamepad_check.button_pressed,
 		"confine_mouse": _confine_mouse_check.button_pressed,
 		"bindings": _pending_bindings.duplicate(true),
 	}
 
 func apply_values(v: Dictionary) -> void:
 	_shot_power_slider.value = v.shot_power_sensitivity
+	_gamepad_check.set_pressed_no_signal(v.gamepad_enabled)
 	_confine_mouse_check.set_pressed_no_signal(v.confine_mouse)
 	_listening_action = ""
 	_pending_bindings = (v.get("bindings", {}) as Dictionary).duplicate(true)
