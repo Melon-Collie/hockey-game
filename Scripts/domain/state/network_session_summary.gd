@@ -62,9 +62,11 @@ const MAX_AUTO_MARKERS: int = 20
 const AUTO_MARKER_COOLDOWN_SEC: float = 30.0
 
 # Markers that carry a pre-history trace, across BOTH lists. History is the
-# bulky part of a marker (~6 rounded samples), and the whole blob must stay
-# under the table's 64 KiB jsonb cap — so the first few markers get the full
-# trace and the rest stay lightweight.
+# bulky part of a marker (~6 rounded samples × every metric key). This static
+# cap is the first line of restraint; the HARD size guarantee is
+# to_dict_bounded() below — the metric-key set grows over time, so a fixed
+# marker count can't bound the payload by itself (the first playtest's client
+# rows blew the table's 64 KiB jsonb cap through exactly this cap).
 const MAX_MARKERS_WITH_HISTORY: int = 8
 
 var seconds: int = 0
@@ -159,3 +161,61 @@ func to_dict() -> Dictionary:
 		if key in MIN_KEYS:
 			out[key + "_min"] = _min[key]
 	return out
+
+
+# ── Size-bounded serialization ───────────────────────────────────────────────
+# The table bounds the metrics blob with `pg_column_size(metrics) < 64 KiB`,
+# measured on the COMPRESSED jsonb datum — so the safe TEXT budget sits well
+# below 64 KiB (compression varies with value entropy: borderline ~100 KiB
+# payloads have both passed and failed in the field — the first playtest's
+# client rows all 400'd on the constraint while a same-sized host row landed).
+# The static marker caps can't guarantee the bound because the metric-key set
+# grows over time (each history sample carries every key), so the serializer
+# enforces it directly.
+const METRICS_MAX_TEXT_BYTES: int = 48 * 1024
+
+
+# to_dict() with a hard serialized-size ceiling: sheds marker weight in
+# increasing order of diagnostic value until the payload fits. Aggregates are
+# never shed, and the counts (felt_lag_count / auto_marker_count) survive every
+# stage — only per-moment detail is dropped. Shed order:
+#   1. history traces off AUTO markers, last-attached first (earliest onsets
+#      keep their run-up),
+#   2. history traces off FELT markers, same order,
+#   3. whole auto markers from the tail,
+#   4. whole felt markers from the tail (the tester's explicit signal goes
+#      last).
+# If the aggregates alone exceed max_bytes (not reachable at real metric
+# counts) the oversize dict is returned as-is — the POST fails like today, but
+# the local mirror still lands.
+func to_dict_bounded(max_bytes: int = METRICS_MAX_TEXT_BYTES) -> Dictionary:
+	var out: Dictionary = to_dict()
+	if _encoded_size(out) <= max_bytes:
+		return out
+	# Work on copies — to_dict embeds the live marker lists by reference, and
+	# shedding must not mutate the session's own records.
+	var felt: Array[Dictionary] = []
+	for m: Dictionary in _markers:
+		felt.append(m.duplicate())
+	var auto: Array[Dictionary] = []
+	for m: Dictionary in _auto_markers:
+		auto.append(m.duplicate())
+	out["felt_lag_markers"] = felt
+	out["auto_markers"] = auto
+	for i: int in range(auto.size() - 1, -1, -1):
+		if _encoded_size(out) <= max_bytes:
+			return out
+		auto[i].erase("history")
+	for i: int in range(felt.size() - 1, -1, -1):
+		if _encoded_size(out) <= max_bytes:
+			return out
+		felt[i].erase("history")
+	while _encoded_size(out) > max_bytes and not auto.is_empty():
+		auto.pop_back()
+	while _encoded_size(out) > max_bytes and not felt.is_empty():
+		felt.pop_back()
+	return out
+
+
+static func _encoded_size(d: Dictionary) -> int:
+	return JSON.stringify(d).to_utf8_buffer().size()
