@@ -39,6 +39,13 @@ var _host_stall_count: int = 0
 var current_delay_spread_ms: float = 0.0
 # Client-side: last clock-sync offset correction magnitude (see ClockSync).
 var current_clock_correction_ms: float = 0.0
+# Client-side: the input-lead servo's live EXTRA above the static
+# INPUT_LEAD_SEC (ms). Post-C1 observability: the honest capture labels
+# changed what the servo measures as pop-overdue, and its equilibrium under
+# the new convention is an open question the session rows should answer —
+# pinned at MAX_LEAD_EXTRA (50) means runaway over-lead (a hidden input-latency
+# tax), ~0 with rising host drains means under-leading.
+var current_input_lead_extra_ms: float = 0.0
 # Host-side: worst per-peer link this instant, so the host row carries a real
 # link picture instead of degenerate zeros (its own RTT/loss are 0).
 var current_worst_peer_rtt_ms: float = 0.0
@@ -746,6 +753,9 @@ func _fold_session_sample() -> void:
 		"jitter_p95_ms": jitter_p95_ms,
 		"delay_spread_ms": current_delay_spread_ms,
 		"clock_correction_ms": current_clock_correction_ms,
+		# Servo's live extra lead (client only; hosts fold 0s). See the
+		# current_input_lead_extra_ms doc — the post-C1 equilibrium check.
+		"input_lead_extra_ms": current_input_lead_extra_ms,
 		"worst_peer_rtt_ms": current_worst_peer_rtt_ms,
 		"worst_peer_loss_pct": current_worst_peer_loss_pct,
 		"reconcile_per_sec": reconcile_per_sec,
