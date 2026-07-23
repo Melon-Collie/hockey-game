@@ -47,6 +47,9 @@ var _nav_items: Array[Control] = []
 var _nav_handlers: Array[Callable] = []
 # The Exit dialog's Cancel button — the default focus target when that modal opens.
 var _exit_cancel_btn: Button = null
+# The nav item the controller last had focus on, so closing a popup returns focus
+# there rather than jumping to the top of the list.
+var _last_nav_focus: Control = null
 
 
 func _ready() -> void:
@@ -138,11 +141,21 @@ func _apply_nav_focus() -> void:
 		MenuStyle.grab_focus_if_gamepad(_nav_items[0])
 
 
-# Restore controller focus to the menu list after a sub-modal (Exit / picker)
-# closes, so the pad can keep navigating instead of being left with nothing focused.
+# Restore controller focus to the menu list after a sub-modal or launched popup
+# closes, so the pad can keep navigating instead of being left with nothing
+# focused. Returns to the last-focused row when we have one, else the top.
 func _return_focus_to_menu() -> void:
-	if not _nav_items.is_empty():
+	if _last_nav_focus != null and is_instance_valid(_last_nav_focus):
+		MenuStyle.grab_focus_if_gamepad(_last_nav_focus)
+	elif not _nav_items.is_empty():
 		MenuStyle.grab_focus_if_gamepad(_nav_items[0])
+
+
+# When a launched popup (Player / Play / Career / Options) hides, pull focus back
+# to the menu list. Fires on show too — guarded on the popup being hidden.
+func _on_child_popup_hidden(popup: CanvasItem) -> void:
+	if visible and not popup.visible:
+		_return_focus_to_menu()
 
 
 func close() -> void:
@@ -300,7 +313,9 @@ func _build_player_card(parent: VBoxContainer) -> void:
 			_on_player_card_pressed())
 	_player_card_panel.mouse_entered.connect(func() -> void: card_highlight.call(true))
 	_player_card_panel.mouse_exited.connect(func() -> void: card_highlight.call(false))
-	_player_card_panel.focus_entered.connect(func() -> void: card_highlight.call(true))
+	_player_card_panel.focus_entered.connect(func() -> void:
+		_last_nav_focus = _player_card_panel
+		card_highlight.call(true))
 	_player_card_panel.focus_exited.connect(func() -> void: card_highlight.call(false))
 
 	# First-run callout: point new players at the card so they discover the
@@ -370,7 +385,9 @@ func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: 
 			SoundManager.play_ui(SoundManager.Sound.UI_HOVER)
 	row.mouse_entered.connect(func() -> void: highlight.call(true))
 	row.mouse_exited.connect(func() -> void: highlight.call(false))
-	row.focus_entered.connect(func() -> void: highlight.call(true))
+	row.focus_entered.connect(func() -> void:
+		_last_nav_focus = row
+		highlight.call(true))
 	row.focus_exited.connect(func() -> void: highlight.call(false))
 	var fire := func() -> void:
 		SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
@@ -468,6 +485,10 @@ func _build_popups() -> void:
 	_build_exit_overlay()
 	_build_tutorial_overlay()
 	_build_drills_overlay()
+
+	# Controller: when a launched popup closes, return focus to the menu list.
+	for popup: CanvasItem in [_player_popup, _play_popup, _career_screen, _options_container]:
+		popup.visibility_changed.connect(_on_child_popup_hidden.bind(popup))
 
 	_loading_screen = LoadingScreen.new()
 	_loading_screen.cancel_pressed.connect(_on_join_cancelled)
@@ -790,6 +811,7 @@ func _on_career_pressed() -> void:
 
 func _on_options_pressed() -> void:
 	_options_container.visible = true
+	MenuStyle.focus_first(_options_container)
 
 
 func _on_exit_pressed() -> void:

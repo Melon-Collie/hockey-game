@@ -132,6 +132,7 @@ func open() -> void:
 	_refresh_totals()
 	_refresh_recent_games()
 	_refresh_replays()
+	MenuStyle.focus_first(self)  # controller: take focus off the Side Menu behind
 
 
 func _unhandled_input(event: InputEvent) -> void:

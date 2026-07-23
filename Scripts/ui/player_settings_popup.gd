@@ -398,6 +398,7 @@ func open() -> void:
 		_attr_panel.snapshot()
 	_restore_from_snapshot()
 	visible = true
+	MenuStyle.focus_first(self)  # controller: take focus off the Side Menu behind
 
 
 func _unhandled_input(event: InputEvent) -> void:
