@@ -12,9 +12,11 @@ class_name DrillRegistry
 const PENALTY_SHOTS_ID: String = "penalty_shots"
 const SHOT_ACCURACY_ID: String = "shot_accuracy"
 const PASSING_ID: String = "passing"
+const DANGLE_GAUNTLET_ID: String = "dangle_gauntlet"
 
 # Display order — also drives the Drills submenu's row order.
-const ALL_IDS: Array[String] = [PENALTY_SHOTS_ID, SHOT_ACCURACY_ID, PASSING_ID]
+const ALL_IDS: Array[String] = [PENALTY_SHOTS_ID, SHOT_ACCURACY_ID, PASSING_ID,
+		DANGLE_GAUNTLET_ID]
 
 
 # Translation key for the drill's display name; the raw id for an unknown drill.
@@ -25,6 +27,7 @@ static func display_name_key(drill_id: String) -> String:
 		PENALTY_SHOTS_ID: return "DRILL_PENALTY_SHOTS"
 		SHOT_ACCURACY_ID: return "DRILL_SHOT_ACCURACY"
 		PASSING_ID: return "DRILL_PASSING"
+		DANGLE_GAUNTLET_ID: return "DRILL_DANGLE_GAUNTLET"
 	return drill_id
 
 
@@ -35,6 +38,7 @@ static func get_manager_path(drill_id: String) -> String:
 		PENALTY_SHOTS_ID: return "res://Scripts/game/penalty_drill_manager.gd"
 		SHOT_ACCURACY_ID: return "res://Scripts/game/shot_accuracy_manager.gd"
 		PASSING_ID: return "res://Scripts/game/passing_drill_manager.gd"
+		DANGLE_GAUNTLET_ID: return "res://Scripts/game/dangle_gauntlet_manager.gd"
 	return ""
 
 
