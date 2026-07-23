@@ -72,26 +72,28 @@ is off): 8 overhead `SpotLight3D` @ `2.2`, 6 `DasherSpotLight` @ `1.4`, 4
 
 ---
 
-## Lighting evenness pass (applied)
+## Board lighting (applied)
 
-The boards were dark and pooled-in-the-middle, and the two rinkside dashers
-behind the goals (`DasherSpotLight5/6` at `0,7,±32`) threw bright warm patches
-that also spilled onto the crowd. Fix:
+The board walls read dark from the top-down camera no matter how bright the
+ceiling rig is — they're near-vertical, so straight-down light grazes past them.
+Cranking the ceiling rig to compensate just blew out the ice and washed the
+crowd (an overhead-spill dead end). The right fix is to make the boards show
+their *own* color:
 
-- **Behind-goal dashers → off** (`light_energy = 0`). Removes the patch + the
-  crowd spill; behind the net now sits at the even overhead/ambient level.
-- **Overhead rig flattened, not widened much** — the cones already reach the
-  boards; the darkness was *attenuation*. `spot_attenuation 0.5→0.3`,
-  `spot_angle_attenuation 0.5→0.25`, `spot_angle 50→56`. Lifts the perimeter and
-  reduces the central pooling without new warm patches or much extra crowd spill.
-- The 4 corner dashers (`±15,±15`) stay at `1.4` — they light the long-side
-  boards, which we want bright.
+- **Board bands self-emit** (`hockey_rink.gd`): `wall_emission_energy 0→0.15`,
+  `kickplate_emission_energy 0→0.5` (gold lip), `cap_rail_emission_energy 0→0.5`
+  (navy top rail). Each band emits its own color, so the boards read correctly
+  top-down with **zero** light spilled onto ice or crowd. Kept under the glow
+  HDR threshold so they don't bloom.
+- **Behind-goal dashers stay off** (`DasherSpotLight5/6`, `light_energy = 0`) —
+  they threw a warm patch behind the net and spilled onto the crowd.
+- **Overhead rig left at ship values** (`spot_angle 50`, both attenuations `0.5`)
+  — flattening them over-brightened the ice and washed the crowd, so that's
+  reverted. The mild center pooling is accepted; if it bugs you, the fix is a
+  small **ambient** bump (`0.25→0.30`), which evens without the overhead spill.
 
-Next levers if the sides still read as warm pools rather than even: reduce the
-corner dashers to a gentle fill (`1.4→~0.8`) and lean harder on ambient +
-overhead; or, if cool overhead spill onto the lower stands becomes the new
-complaint, the clean separation is light cull masks (crowd on its own render
-layer, ice lights masked off it) — held in reserve since it's more surgery.
+Dials: board emission energies (up = boards pop more / risk bloom, down =
+subtler); a `0.03` ambient nudge for center pooling. All one-liners.
 
 ## If it still isn't bright/even enough
 
