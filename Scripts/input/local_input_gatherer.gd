@@ -27,7 +27,7 @@ const GAMEPAD_CURSOR_SPEED: float = 3200.0
 # many screen px ahead of the body along the facing direction, so the blade
 # settles into a natural forward carry that tracks where you're pointed (rather
 # than freezing in place or resting up-ice). REST_RETURN_RATE is the ease speed.
-const REST_OFFSET_PX: float = 150.0
+const REST_OFFSET_PX: float = 70.0
 const REST_RETURN_RATE: float = 10.0
 const AIM_DEADZONE: float = 0.15
 # Analog-trigger pull that counts as a press for the wrister / slapshot.
