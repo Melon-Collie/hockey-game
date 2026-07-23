@@ -278,17 +278,37 @@ static func _apply_focus_ring(btn: Button) -> void:
 		add_focus_ring(btn)
 
 
-# Unconditionally give a button the teal focus ring. Used when controller mode is
-# switched on AFTER a button was built (the boot splash, which builds its buttons
-# before the first-input device detection flips the pref).
-static func add_focus_ring(btn: Button) -> void:
+# The teal focus ring box — transparent fill, teal border, slight outward expand so
+# it sits just outside the control. A fresh box per call (styleboxes aren't shared).
+static func focus_ring_box() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0, 0, 0, 0)
 	s.set_corner_radius_all(6)
 	s.border_color = TEAL
 	s.set_border_width_all(2)
-	s.set_expand_margin_all(3)  # sit just outside the label
-	btn.add_theme_stylebox_override("focus", s)
+	s.set_expand_margin_all(3)
+	return s
+
+
+# Unconditionally give a button the teal focus ring. Used when controller mode is
+# switched on AFTER a button was built (the boot splash, which builds its buttons
+# before the first-input device detection flips the pref).
+static func add_focus_ring(btn: Button) -> void:
+	btn.add_theme_stylebox_override("focus", focus_ring_box())
+
+
+# A theme that adds the teal focus ring to control types the button factories
+# can't reach — CheckButtons especially, whose default focus is invisible here.
+# Set as a panel's `theme` (controller mode) to make toggles/dropdowns show focus;
+# it only defines the "focus" stylebox, so every other style falls through to the
+# project theme. A no-op for mouse (returns null so nothing is applied).
+static func controller_focus_theme() -> Theme:
+	if not PlayerPrefs.gamepad_enabled:
+		return null
+	var t := Theme.new()
+	for control_type: String in ["CheckButton", "CheckBox", "OptionButton", "Button"]:
+		t.set_stylebox("focus", control_type, focus_ring_box())
+	return t
 
 
 # Grab focus on `control` — but only in controller mode, so mouse players never

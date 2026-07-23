@@ -33,6 +33,12 @@ var _active_idx: int = 0  # active tab, for controller bumper switching + focus
 func _ready() -> void:
 	add_theme_constant_override("separation", 16)
 	alignment = BoxContainer.ALIGNMENT_CENTER
+	# Controller mode: give toggles/dropdowns a visible focus ring (CheckButton's
+	# default focus is invisible here). Only defines "focus", so all other styling
+	# falls through to the project theme. Null (mouse mode) leaves the theme unset.
+	var focus_theme: Theme = MenuStyle.controller_focus_theme()
+	if focus_theme != null:
+		theme = focus_theme
 
 	var close_row := HBoxContainer.new()
 	var close_spacer := Control.new()
@@ -426,6 +432,11 @@ func _scroll_wrap(content: Control) -> ScrollContainer:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Controller: keep the focused control in view as focus walks down a tall tab,
+	# so navigating past the visible area scrolls the page instead of focus moving
+	# to off-screen controls the player can't see (it looked like it jumped to the
+	# footer). Harmless for mouse (only acts on focus changes).
+	scroll.follow_focus = true
 
 	var margin := MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
