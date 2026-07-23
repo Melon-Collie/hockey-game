@@ -5,14 +5,14 @@ arena**: thin haze catching the overhead-light cones (god rays), a darkened
 bowl so the ice reads as the lit stage, real screen-space reflections of the
 skaters on the ice, and grounded contact shadows under the players.
 
-Everything here is **environment + light settings that live inline in
-`Scenes/RinkArena.tscn`** — per the project rule, those are yours to set in the
-Godot editor. This doc gives exact before → after values. The one code-side
-piece (ice roughness for reflection reception) is already done in
-`hockey_rink.gd` (`ice_roughness_head_on` 0.20 → 0.15).
+**Status: applied.** The environment/light values below are set in
+`Scenes/RinkArena.tscn`, the ice-roughness tune is in `hockey_rink.gd`, and the
+three expensive passes (fog, reflections, ambient occlusion) are now toggleable
+in **Options → Video** (default on). This doc is the reference for *what* was
+set and *how to tune* it — the tables are the dials, not a to-do list.
 
-Do it in passes and eyeball between each — the order below builds from "biggest
-mood change" to "polish."
+Since none of this can be verified without running the game, **eyeball it in a
+session and tell me what to nudge** — every value here is a one-line change.
 
 ---
 
@@ -39,12 +39,13 @@ Two consequences worth knowing:
    `ambient_light_energy = 0.25` is the *only* fill light in the default look —
    which is exactly why darkening it (below) gives such a strong stage effect.
    No global bounce fills the shadows back in.
-2. **These new effects are global, not yet a video option.** SSR and volumetric
-   fog are the two GPU-heavy additions. Ship them as the baseline look first;
-   if they cost too much on low-end machines, they should become a quality tier
-   in the Video options next to `gi_mode` / `shadow_quality`. That's a code
-   follow-up (wiring into `apply_video()` + `video_tab.gd`) — flagged at the
-   bottom.
+2. **The expensive passes are Video options.** `volumetric_fog_enabled`,
+   `reflections_enabled` (SSR), and `ambient_occlusion_enabled` (SSAO) are
+   `PlayerPrefs` bools (default on), gated in `apply_video()` and toggled in the
+   Video tab. The `.tscn` carries all the *parameters* (fog density/albedo, SSR
+   steps, SSAO intensity, per-light fog contribution, darkened ambient); the
+   toggles only flip the pass on/off. Turning a pass off drops that effect but
+   keeps the darkened-bowl mood (ambient + fill dimming are baked, not gated).
 
 ---
 
@@ -175,10 +176,11 @@ Optional and taste-dependent — skip if it starts to smear.
 - [ ] No pea-soup haze washing out the ice (lower fog density if so).
 - [ ] Frame rate acceptable on your target hardware (if not → quality tier).
 
-## Follow-up (code, when you want it)
+## Options wiring (done)
 
-Wire **SSR + volumetric fog + SSAO** into the Video options as a single
-"Atmosphere" (or per-effect) quality toggle, mirroring how `gi_mode` /
-`shadow_quality` already flow through `PlayerPrefs.apply_video()` +
-`video_tab.gd`. That makes the expensive passes user-disablable on low-end
-machines instead of a hard global cost. Ping me and I'll implement it.
+The three passes are per-effect toggles in **Options → Video → Performance**
+("Volumetric Fog", "Reflections", "Ambient Occlusion"), each a `PlayerPrefs`
+bool (default on) applied in `apply_video()`. Kept per-effect rather than one
+"Atmosphere" enum so a player can keep cheap SSAO while dropping the costly fog.
+If you'd rather collapse them into a single Low/Medium/High tier later, it's a
+small change — say the word.

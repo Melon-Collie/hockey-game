@@ -240,6 +240,13 @@ var shadow_quality: int = SHADOW_QUALITY_HIGH
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
 var puck_shadow_enabled: bool = true
+# Arena atmosphere effects (applied to the WorldEnvironment in apply_video). The
+# .tscn ships their parameters (fog density/albedo, SSR steps, SSAO intensity,
+# per-light fog contribution, darkened ambient); these bools gate the expensive
+# passes so low-end machines can drop them. Default on — the intended look.
+var volumetric_fog_enabled: bool = true
+var reflections_enabled: bool = true       # screen-space reflections on the ice
+var ambient_occlusion_enabled: bool = true # SSAO contact shadows
 var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
@@ -437,6 +444,9 @@ func save() -> void:
 	cfg.set_value("video", "crowd_density", crowd_density)
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
 	cfg.set_value("video", "puck_shadow_enabled", puck_shadow_enabled)
+	cfg.set_value("video", "volumetric_fog_enabled", volumetric_fog_enabled)
+	cfg.set_value("video", "reflections_enabled", reflections_enabled)
+	cfg.set_value("video", "ambient_occlusion_enabled", ambient_occlusion_enabled)
 	cfg.set_value("video", "scaling_3d_mode", scaling_3d_mode)
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
@@ -734,6 +744,13 @@ func apply_video() -> void:
 		we.environment.adjustment_enabled = true
 		we.environment.adjustment_color_correction = _build_color_correction_lut(gamma, color_grade_preset)
 		we.environment.sdfgi_enabled = (gi_mode == GI_MODE_SDFGI)
+		# Atmosphere passes — the .tscn carries their parameters; these gate the
+		# expensive passes per the player's Video options (heavy: fog > SSR; SSAO
+		# is cheap). The darkened ambient + per-light fog contribution are baked
+		# in the scene, so disabling a pass just drops that effect, not the mood.
+		we.environment.volumetric_fog_enabled = volumetric_fog_enabled
+		we.environment.ssr_enabled = reflections_enabled
+		we.environment.ssao_enabled = ambient_occlusion_enabled
 	_apply_shadow_quality(scene)
 	var stands := scene.find_child("ArenaStands", true, false) as Node3D
 	if stands != null:
@@ -1046,6 +1063,9 @@ func _load() -> void:
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		puck_shadow_enabled = cfg.get_value("video", "puck_shadow_enabled", true)
+		volumetric_fog_enabled = cfg.get_value("video", "volumetric_fog_enabled", true)
+		reflections_enabled = cfg.get_value("video", "reflections_enabled", true)
+		ambient_occlusion_enabled = cfg.get_value("video", "ambient_occlusion_enabled", true)
 		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
