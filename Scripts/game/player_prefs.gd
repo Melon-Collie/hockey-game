@@ -1059,7 +1059,7 @@ func _load() -> void:
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
 		show_fps = cfg.get_value("video", "show_fps", false)
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
-		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_NEUTRAL), 0, COLOR_GRADE_LABELS.size() - 1)
+		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_BROADCAST), 0, COLOR_GRADE_LABELS.size() - 1)
 		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
 		shadow_quality = clamp(cfg.get_value("video", "shadow_quality", SHADOW_QUALITY_HIGH), 0, SHADOW_QUALITY_LABELS.size() - 1)
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)

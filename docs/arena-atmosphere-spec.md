@@ -114,6 +114,24 @@ it — these are all one-line value edits I can make directly.
 
 ---
 
+## Cohesion pass (applied)
+
+Two changes that unify the frame and make the figures read as intentional:
+
+- **Broadcast color grade is now the default.** The `COLOR_GRADE_BROADCAST`
+  preset (teal-shadow split-tone + mild S-curve + slight desat, in
+  `_apply_grade_broadcast`) already existed but the load default was `NEUTRAL`,
+  so returning testers saw no grade. Load default → `BROADCAST`, matching the
+  var initializer and the reset-to-defaults value. Still switchable in
+  Options → Video → Color Grade.
+- **Rim light on skaters + goalie.** A subtle Fresnel edge highlight so the
+  rounded primitive forms read as lit volumes from top-down rather than flat
+  blobs. Skaters: `rim_enabled` on every body material via the two factories
+  (`_make_solid_mat` / `_make_texture_material`) + the inline torso/shoulder
+  mats (`_RIM_STRENGTH 0.4`, `_RIM_TINT 0.35` in `skater_uniform_coordinator`).
+  Goalie: a matching Fresnel emission term in `goalie_jersey.gdshader`. Dials:
+  the rim constants (up = stronger edge) and the goalie's `rim * 0.2`.
+
 ## Options wiring (done)
 
 Per-effect toggles in **Options → Video → Performance** — "Volumetric Fog"
