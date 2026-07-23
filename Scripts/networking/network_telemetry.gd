@@ -39,6 +39,13 @@ var _host_stall_count: int = 0
 var current_delay_spread_ms: float = 0.0
 # Client-side: last clock-sync offset correction magnitude (see ClockSync).
 var current_clock_correction_ms: float = 0.0
+# Client-side: the input-lead servo's live EXTRA above the static
+# INPUT_LEAD_SEC (ms). Post-C1 observability: the honest capture labels
+# changed what the servo measures as pop-overdue, and its equilibrium under
+# the new convention is an open question the session rows should answer —
+# pinned at MAX_LEAD_EXTRA (50) means runaway over-lead (a hidden input-latency
+# tax), ~0 with rising host drains means under-leading.
+var current_input_lead_extra_ms: float = 0.0
 # Host-side: worst per-peer link this instant, so the host row carries a real
 # link picture instead of degenerate zeros (its own RTT/loss are 0).
 var current_worst_peer_rtt_ms: float = 0.0
@@ -56,6 +63,7 @@ var _recent_samples: Array[Dictionary] = []
 var _world_state_count: int = 0
 var _input_count: int = 0
 var _reconcile_count: int = 0
+var _reconcile_on_replayed_count: int = 0  # subset: matched a replay-re-recorded entry
 var _extrapolation_count: int = 0
 # Frames observed this window (one per observe_actors call = one per rendered
 # frame). Denominator for the framerate-INDEPENDENT extrapolation fraction:
@@ -193,6 +201,9 @@ var input_hz: float = 0.0                # ~120/s — input batch send rate (Con
 # check is structurally blind to (the class of bug that motivated trajectory-
 # based reconciliation in the first place).
 var reconcile_per_sec: float = 0.0
+# Subset of reconcile_per_sec whose matched prediction was replay-re-recorded
+# (correction echo through replay approximations vs fresh live divergence).
+var recon_replayed_entry_per_sec: float = 0.0
 # reconcile_magnitude_avg: average distance snapped per reconcile, in meters.
 # Expected: <0.05m on healthy network. Larger values mean threshold check is
 # letting big divergences accumulate before firing — or, if rate is high too,
@@ -333,6 +344,16 @@ static func record_ws_arrival_gap(gap_ms: float) -> void:
 # match, so the magnitude reflects true non-determinism (body-check mis-replay,
 # contested collisions). Falls back to post-replay residual when the prediction
 # snapshot isn't available (history capped, post-teleport, session warmup).
+# A reconcile whose MATCHED prediction was a replay-re-recorded entry (see
+# PredictedState.was_replay_rerecorded): the correction is echoing through the
+# replay's approximations rather than fresh live divergence. Read as a share of
+# reconcile_per_sec — a high fraction during storms points at replay fidelity
+# (goalie-body sliding, body-check re-resolution), a low one at genuine live
+# prediction misses (the contact-prediction Known Issue).
+static func record_reconcile_on_replayed_entry() -> void:
+	if instance: instance._reconcile_on_replayed_count += 1
+
+
 static func record_reconcile(delta_m: float) -> void:
 	if instance == null:
 		return
@@ -586,6 +607,7 @@ func tick(delta: float) -> void:
 	world_state_hz = _world_state_count / _window_timer
 	input_hz = _input_count / _window_timer
 	reconcile_per_sec = _reconcile_count / _window_timer
+	recon_replayed_entry_per_sec = _reconcile_on_replayed_count / _window_timer
 	extrapolation_per_sec = _extrapolation_count / _window_timer
 	client_fps = _frame_count / _window_timer
 	extrapolation_pct = (100.0 * _extrapolation_count / _frame_count) if _frame_count > 0 else 0.0
@@ -655,6 +677,7 @@ func tick(delta: float) -> void:
 	_world_state_count = 0
 	_input_count = 0
 	_reconcile_count = 0
+	_reconcile_on_replayed_count = 0
 	_extrapolation_count = 0
 	_frame_count = 0
 	_reconcile_mag_sum = 0.0
@@ -730,9 +753,16 @@ func _fold_session_sample() -> void:
 		"jitter_p95_ms": jitter_p95_ms,
 		"delay_spread_ms": current_delay_spread_ms,
 		"clock_correction_ms": current_clock_correction_ms,
+		# Servo's live extra lead (client only; hosts fold 0s). See the
+		# current_input_lead_extra_ms doc — the post-C1 equilibrium check.
+		"input_lead_extra_ms": current_input_lead_extra_ms,
 		"worst_peer_rtt_ms": current_worst_peer_rtt_ms,
 		"worst_peer_loss_pct": current_worst_peer_loss_pct,
 		"reconcile_per_sec": reconcile_per_sec,
+		# Subset of reconcile_per_sec that fired against a replay-re-recorded
+		# prediction — the storm-attribution split (replay-echo vs fresh live
+		# divergence). Client only; hosts fold 0s.
+		"recon_replayed_per_sec": recon_replayed_entry_per_sec,
 		"reconcile_mag_m": reconcile_magnitude_avg,
 		"reconcile_match_pct": reconcile_match_pct,
 		# Which channel tripped the snap — the attribution for diagnosing residual

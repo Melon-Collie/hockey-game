@@ -15,6 +15,14 @@ var position: Vector3
 var velocity: Vector3
 var facing: Vector2
 var shot_state: int
+# True when this entry was RE-RECORDED by a reconcile replay (its values come
+# from the replay's manual integration) rather than the live post-move capture.
+# Attribution flag for reconcile telemetry: a reconcile whose matched
+# prediction was re-recorded fires against the replay's approximations (no
+# goalie-body sliding, snapshot-approximated body checks), so a high
+# replayed-entry share of reconciles points at replay fidelity, while a high
+# live-entry share points at genuine live prediction divergence.
+var was_replay_rerecorded: bool = false
 # Upper-body twist in radians. Reconcile compares this against server's
 # broadcast `upper_body_rotation_y` so a divergence channel (drift between
 # host and client's lerped upper-body angle across reconciles) is visible
