@@ -3088,7 +3088,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		# Distance in XZ only — mouse_pos is forced to y=0 in
 		# _step_mouse_toward but _aim_target_for_intent inherits
 		# self_pos.y (~1.0). A 3D distance would carry that constant
-		# y-mismatch and never reach AIM_CONVERGED_DIST_M = 0.15,
+		# y-mismatch and never reach AIM_CONVERGED_DIST_M = 0.10,
 		# so pre-aim would silently time out every time. Rink is
 		# flat, only XZ matters.
 		var dx: float = _mouse_pos.x - mouse_target.x
