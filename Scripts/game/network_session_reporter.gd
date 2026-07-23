@@ -51,7 +51,11 @@ func report(summary: NetworkSessionSummary, role: String, net_sim_active: bool,
 		"felt_lag_count": summary.felt_lag_count,
 		"game_id": game_id_value,
 		"end_reason": end_reason,
-		"metrics": summary.to_dict(),
+		# Bounded: the table rejects rows whose compressed metrics jsonb
+		# reaches 64 KiB (network_sessions_sane_sizes) — the first playtest's
+		# client rows all 400'd on it. The bounded serializer sheds marker
+		# detail (never aggregates or counts) until the payload fits.
+		"metrics": summary.to_dict_bounded(),
 	}
 	_write_local_dump(body, role)
 	_post(SupabaseConfig.URL + "/rest/v1/network_sessions", body)
