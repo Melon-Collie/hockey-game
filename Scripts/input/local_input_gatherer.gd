@@ -14,15 +14,11 @@ extends Node
 # directly here (contained behind the pref) and mapped onto the existing input
 # flags. See CLAUDE.md → "How It Plays" for the mapping rationale.
 
-# Reach disc: how far the (velocity-integrated) cursor can sit from the anchor on
-# screen. The blade IK ROM-clamps beyond this, so it just bounds the cursor to
-# reachable ice. Feel tunable.
+# Reach disc: how far the cursor can sit from the anchor on screen. The blade IK
+# ROM-clamps beyond this, so it just bounds the cursor to reachable ice. Also the
+# radius the cursor is placed at while aiming a shot (so blade→cursor is a clean
+# stick-direction line). Feel tunable.
 const AIM_RADIUS_PX: float = 480.0
-# Cursor speed at full right-stick deflection (px/s). Doubles as the wrister power
-# lever: a committed slam moves the cursor fast enough to clear the full-power
-# cursor speed (SkaterController.wrister_mouse_speed_full, ~2500 px/s), while a
-# gentle push stays in the touch-pass band. Shot Power Sensitivity scales it too.
-const GAMEPAD_CURSOR_SPEED: float = 3200.0
 # Stickhandle rest: when the stick is released, the cursor eases to a point this
 # many screen px ahead of the body along the facing direction, so the blade
 # settles into a natural forward carry that tracks where you're pointed (rather
@@ -58,11 +54,17 @@ var _elevation_level: int = 0
 # the input batch), so this does not desync.
 var _last_mouse_world_pos: Vector3 = Vector3.ZERO
 var _last_mouse_screen_pos: Vector2 = Vector2.ZERO
-# Velocity-integrated gamepad cursor (screen space). The right stick sets its
-# velocity; it holds position when the stick centers. Seeded to the anchor on the
-# first active frame (or after a pad reconnect) so it starts on the player.
+# Gamepad blade cursor (screen space). While stickhandling the stick maps to an
+# absolute offset from the anchor; while shooting (RT) it is parked at the reach
+# radius in the stick direction (aim). Seeded to the anchor on the first active
+# frame (or after a pad reconnect) so it starts on the player.
 var _pad_cursor: Vector2 = Vector2.ZERO
 var _pad_cursor_valid: bool = false
+# Committed wrister power (0..1), latched from the right-stick magnitude while RT
+# is held so the shot reads the held power even on the release frame. _prev_gather_rt
+# keeps commit true for that one release frame (RT already read as up).
+var _committed_wrister_power: float = 0.0
+var _prev_gather_rt: bool = false
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
 # input-frame cadence with the same pending-flag latch the mouse actions use.
@@ -206,6 +208,16 @@ func gather() -> InputState:
 		state.block_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_SHOULDER)
 		state.stick_lift_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
 		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
+		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
+		# direction in _update_pad_cursor → player→cursor is the shot line), power from
+		# the stick magnitude — no flick, no drag timing, no travel gate. Latch the
+		# power while RT is held and keep commit true one frame into the release so the
+		# shot (fired on RT up) reads the held power rather than a collapsed one.
+		if state.shoot_held:
+			_committed_wrister_power = _pad_right_stick_dz().length()
+		state.commit_wrister_power = state.shoot_held or _prev_gather_rt
+		state.bot_wrister_power_t = _committed_wrister_power
+		_prev_gather_rt = state.shoot_held
 	else:
 		state.shoot_held = Input.is_action_pressed("shoot")
 		state.slap_held = Input.is_action_pressed("slapshot")
@@ -261,26 +273,33 @@ func _screen_cursor(pad: bool) -> Vector2:
 #     blade offset from the anchor. Releasing the stick eases the cursor to a rest
 #     just ahead of the body along the facing, so the blade settles into a natural
 #     forward carry that tracks where you're pointed.
-#   * SHOOT (RT held): velocity cursor — the stick sets screen-space velocity, so a
-#     flick is clean directional motion and releasing the stick can't snap the cursor
-#     back toward the anchor and corrupt the wrister's release read.
+#   * SHOOT (RT held): the cursor is parked at the reach radius in the stick
+#     DIRECTION, so the shot line (player→cursor, the release fallback used when the
+#     committed path zeroes the drag direction) is exactly where the stick points —
+#     a clean, held aim. Power rides the stick magnitude (committed in gather).
 func _update_pad_cursor(delta: float) -> void:
 	var anchor: Vector2 = _aim_anchor_screen()
 	if not _pad_cursor_valid:
 		_pad_cursor = anchor
 		_pad_cursor_valid = true
-	var stick := GamepadAimRules.apply_radial_deadzone(Vector2(
-			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
-			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y)), AIM_DEADZONE)
+	var stick := _pad_right_stick_dz()
 	if _pad_trigger(JOY_AXIS_TRIGGER_RIGHT):
-		_pad_cursor = GamepadAimRules.integrate_cursor(
-				_pad_cursor, stick, GAMEPAD_CURSOR_SPEED, delta, anchor, AIM_RADIUS_PX)
+		# Aim = stick direction only (magnitude is power). A centered stick during RT
+		# holds the last aim so a shot already lined up doesn't drift to center.
+		if not stick.is_zero_approx():
+			_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick.normalized(), AIM_RADIUS_PX)
 	elif not stick.is_zero_approx():
 		_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick, AIM_RADIUS_PX)
 	else:
 		# Stickhandle mode, stick released → ease the blade to its forward carry rest.
 		var ease: float = clampf(REST_RETURN_RATE * delta, 0.0, 1.0)
 		_pad_cursor = _pad_cursor.lerp(_facing_rest_screen(anchor), ease)
+
+# Deadzoned right stick (aim), in the JOY_AXIS_RIGHT_* / screen convention.
+func _pad_right_stick_dz() -> Vector2:
+	return GamepadAimRules.apply_radial_deadzone(Vector2(
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y)), AIM_DEADZONE)
 
 # The stickhandle rest cursor: the body anchor pushed REST_OFFSET_PX toward the
 # facing's on-screen direction, so the blade settles ahead of where the skater is

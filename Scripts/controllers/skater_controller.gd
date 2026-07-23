@@ -2175,7 +2175,7 @@ func _release_wrister(input: InputState) -> void:
 		# LMB is always a charged wrister now — the quick pass lives on its own
 		# button (_fire_quick_pass). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
-		last_release_stroke_travel = _wrister_stroke_travel()
+		last_release_stroke_travel = _wrister_stroke_travel(input)
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -2183,10 +2183,10 @@ func _release_wrister(input: InputState) -> void:
 				is_backhand,
 				_elevation_level,
 				_wrister_config(),
-				_get_charge_direction(),
+				_wrister_charge_dir(input),
 				false,
 				_wrister_sweep_speed(input),
-				_wrister_stroke_travel())
+				_wrister_stroke_travel(input))
 		_sm.shot_dir = result.direction
 		_do_release(result.direction, result.power)
 
@@ -2197,7 +2197,7 @@ func _release_wrister(input: InputState) -> void:
 	# `result`) so a whiff still animates. Travel-gated like the real release,
 	# so a capped twitch shot finishes small — the finish IS the power readout.
 	var release_power_t: float = ShotMechanics.wrister_power_t(
-			_wrister_sweep_speed(input), _wrister_config(), _wrister_stroke_travel())
+			_wrister_sweep_speed(input), _wrister_config(), _wrister_stroke_travel(input))
 	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0, release_power_t)
 	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
@@ -2328,8 +2328,8 @@ func _update_wrister_charge(input: InputState) -> void:
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level,
-			_wrister_config(), _get_charge_direction(), false,
-			_wrister_sweep_speed(input), _wrister_stroke_travel(), _wrister_pred_scratch)
+			_wrister_config(), _wrister_charge_dir(input), false,
+			_wrister_sweep_speed(input), _wrister_stroke_travel(input), _wrister_pred_scratch)
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# shot_charge carries the release-now SPEED (normalized predicted power over
 	# the min→max band) — the pure mouse-speed model, so it always matches the
@@ -2669,18 +2669,26 @@ func shot_power_sensitivity() -> float:
 #   - Humans: the raw cursor speed, scaled by that player's Shot Power
 #     Sensitivity (calibrates the flick-for-power feel to their mouse DPI).
 func _wrister_sweep_speed(input: InputState) -> float:
-	if is_ai_controlled():
+	if is_ai_controlled() or input.commit_wrister_power:
 		return ShotMechanics.wrister_speed_for_power_t(input.bot_wrister_power_t, _wrister_config())
 	return _aiming.cursor_speed_ema * shot_power_sensitivity()
 
+# Shot direction source. A committed shot (gamepad) zeroes the drag direction so
+# release_wrister falls back to player→cursor — the parked stick direction — which is
+# a stable, held aim. Measured shooters (mouse) aim along the recorded drag.
+func _wrister_charge_dir(input: InputState) -> Vector3:
+	if input.commit_wrister_power:
+		return Vector3.ZERO
+	return _get_charge_direction()
+
 # Stroke travel fed to the travel-gated power ceiling
-# (ShotMechanics.wrister_travel_cap_t). Bots bypass the gate (INF): they have
-# no measured stroke — the committed bot_wrister_power_t IS their whole
-# gesture, and their wind-up geometry is cosmetic. Humans read the accumulated
-# blade-path length of the live stroke (world meters, so the ceiling can't be
-# bought with DPI or Shot Power Sensitivity).
-func _wrister_stroke_travel() -> float:
-	if is_ai_controlled():
+# (ShotMechanics.wrister_travel_cap_t). Committed shooters bypass the gate (INF):
+# bots and the gamepad have no measured stroke — the committed bot_wrister_power_t
+# IS the whole gesture, and the wind-up geometry is cosmetic. Mouse humans read the
+# accumulated blade-path length of the live stroke (world meters, so the ceiling
+# can't be bought with DPI or Shot Power Sensitivity).
+func _wrister_stroke_travel(input: InputState) -> float:
+	if is_ai_controlled() or input.commit_wrister_power:
 		return INF
 	return _aiming.stroke_travel
 

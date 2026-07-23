@@ -5,7 +5,6 @@ extends GutTest
 # Pure math, no engine input needed.
 
 const DZ: float = 0.15
-const SPEED: float = 3200.0
 const RADIUS: float = 480.0
 const ANCHOR := Vector2(960.0, 540.0)
 
@@ -46,26 +45,11 @@ func test_absolute_cursor_is_proportional_offset() -> void:
 	assert_almost_eq(half.y, ANCHOR.y + RADIUS * 0.5, 0.01, "half-deflection places half-way out")
 
 
-func test_centered_stick_holds_cursor() -> void:
-	# The #1 fix: a centered stick must leave the cursor exactly where it was —
-	# no snap back to the anchor, so the player can set the blade and skate freely.
-	var held := Vector2(1200.0, 400.0)
-	var out: Vector2 = GamepadAimRules.integrate_cursor(held, Vector2.ZERO, SPEED, 0.016, ANCHOR, RADIUS)
-	assert_eq(out, held, "zero stick velocity holds the cursor in place")
-
-
-func test_cursor_integrates_by_stick_velocity() -> void:
-	# Cursor advances by stick * speed * delta (pure screen-space velocity — the
-	# signal the wrister reads for power/direction, free of skater/camera drift).
-	var out: Vector2 = GamepadAimRules.integrate_cursor(ANCHOR, Vector2(1.0, 0.0), SPEED, 0.01, ANCHOR, RADIUS)
-	assert_almost_eq(out.x, ANCHOR.x + SPEED * 0.01, 0.01, "full-right advances one step of stick velocity")
-	assert_almost_eq(out.y, ANCHOR.y, 0.01, "no vertical drift on a horizontal push")
-
-
-func test_cursor_clamps_to_reach_disc() -> void:
-	# A sustained push pins at the reach radius, never running off toward the edge.
-	var out := ANCHOR
-	for _i in range(200):  # far more than enough to reach the rim
-		out = GamepadAimRules.integrate_cursor(out, Vector2(0.0, 1.0), SPEED, 0.016, ANCHOR, RADIUS)
-	assert_almost_eq((out - ANCHOR).length(), RADIUS, 0.01, "held stick pins the cursor at the reach radius")
-	assert_almost_eq(out.x, ANCHOR.x, 0.01, "and stays on the pushed axis")
+func test_normalized_stick_parks_at_the_rim_for_aim() -> void:
+	# Shot aim: a normalized stick places the cursor a full radius out in the stick
+	# direction, so player→cursor is a clean stick-direction shot line regardless of
+	# how hard the stick is pushed (magnitude is power, handled separately).
+	var gentle: Vector2 = GamepadAimRules.absolute_cursor(ANCHOR, Vector2(0.3, 0.0).normalized(), RADIUS)
+	var hard: Vector2 = GamepadAimRules.absolute_cursor(ANCHOR, Vector2(1.0, 0.0).normalized(), RADIUS)
+	assert_eq(gentle, hard, "aim direction is independent of push strength")
+	assert_almost_eq((gentle - ANCHOR).length(), RADIUS, 0.01, "parked at the reach radius")
