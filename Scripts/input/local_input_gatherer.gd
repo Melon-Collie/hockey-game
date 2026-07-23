@@ -61,11 +61,12 @@ var _last_mouse_screen_pos: Vector2 = Vector2.ZERO
 # frame (or after a pad reconnect) so it starts on the player.
 var _pad_cursor: Vector2 = Vector2.ZERO
 var _pad_cursor_valid: bool = false
-# The pad wrister always fires at full power (aim by stick, soft feeds go through
-# the quick pass). _prev_gather_rt keeps commit_wrister_power true for the one
-# release frame (RT already read as up) so the shot fired on RT-up still routes
-# through the committed-power / player→cursor-aim path rather than measured cursor
-# speed.
+# Committed wrister power (0..1) = how hard the right stick is pushed, latched while
+# RT is held so the shot reads the held power even on the release frame. Aim is the
+# stick DIRECTION, power the MAGNITUDE. _prev_gather_rt keeps commit_wrister_power
+# true for that one release frame (RT already read as up) so the shot fired on RT-up
+# still routes through the committed-power / player→cursor-aim path.
+var _committed_wrister_power: float = 0.0
 var _prev_gather_rt: bool = false
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
@@ -211,12 +212,14 @@ func gather() -> InputState:
 		state.stick_lift_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
 		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
 		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
-		# direction in _update_pad_cursor → player→cursor is the shot line), power is
-		# always full — no flick, no charge, no drag timing. Soft feeds are the quick
-		# pass. Keep commit true one frame into the release (via _prev_gather_rt) so the
-		# shot fired on RT-up routes through the committed / player→cursor path.
+		# direction in _update_pad_cursor → player→cursor is the shot line), power from
+		# how hard the stick is pushed (its magnitude) — no flick, no drag timing, no
+		# travel gate. Latch the power while RT is held and keep commit true one frame
+		# into the release so the shot (fired on RT-up) reads the held power.
+		if state.shoot_held:
+			_committed_wrister_power = _pad_right_stick_dz().length()
 		state.commit_wrister_power = state.shoot_held or _prev_gather_rt
-		state.bot_wrister_power_t = 1.0
+		state.bot_wrister_power_t = _committed_wrister_power
 		_prev_gather_rt = state.shoot_held
 	else:
 		state.shoot_held = Input.is_action_pressed("shoot")
@@ -276,7 +279,7 @@ func _screen_cursor(pad: bool) -> Vector2:
 #   * SHOOT (RT held): the cursor is parked at the reach radius in the stick
 #     DIRECTION, so the shot line (player→cursor, the release fallback used when the
 #     committed path zeroes the drag direction) is exactly where the stick points —
-#     a clean, held aim. The shot itself is always full power (soft feeds = quick pass).
+#     a clean, held aim. Power is how hard the stick is pushed (committed in gather).
 func _update_pad_cursor(delta: float) -> void:
 	var anchor: Vector2 = _aim_anchor_screen()
 	if not _pad_cursor_valid:
