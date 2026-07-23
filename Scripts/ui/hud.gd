@@ -73,6 +73,9 @@ var _spectator_wrapper: Control = null
 # Parent of all scalable HUD chrome — see _update_hud_scale. Popups/menus (own
 # CanvasLayers) and the off-screen indicators live outside it.
 var _scale_root: Control = null
+# Off-screen teammate/opponent arrows — a direct child, outside _scale_root, so
+# cinematic mode hides it explicitly alongside the scale root.
+var _offscreen_indicators: OffScreenPlayerIndicators = null
 var _ghost_banner_root: Control = null
 var _ghost_reason_label: Label = null
 var _ghost_instr_label: Label = null
@@ -94,6 +97,7 @@ const _SEP_COLOR  := MenuStyle.BROADCAST_SEP
 
 func _ready() -> void:
 	GameManager.team_colors_ready.connect(_on_team_colors_ready)
+	GameManager.cinematic_mode_changed.connect(_on_cinematic_mode_changed)
 	# Indicators stay a direct child (added before the scale root so the chrome
 	# still draws over them): they render at unprojected screen coordinates,
 	# which must not go through the HUD-scale transform.
@@ -216,6 +220,14 @@ func _ready() -> void:
 		_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed(&"toggle_ui"):
+		# Clean-capture toggle for trailer/screenshot footage. Hides every local
+		# UI layer; GameManager owns the state (on-ice HUD + ping markers), the
+		# HUD reacts to cinematic_mode_changed for its own chrome. Allowed while
+		# a menu is open — the menus are separate children and stay usable.
+		GameManager.toggle_cinematic_mode()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed(&"smart_ping"):
 		# Context-sensitive team ping (chat bubble + bot directive). Resolution
 		# and all gating (spectator/replay/cooldown/no-op contexts) live in
@@ -581,6 +593,7 @@ func _apply_spectator_chrome() -> void:
 
 func _build_offscreen_indicators() -> void:
 	var indicators := OffScreenPlayerIndicators.new()
+	_offscreen_indicators = indicators
 	add_child(indicators)
 
 # Top-down rink minimap, bottom-left corner. Lives under _scale_root so it honors
@@ -1026,6 +1039,17 @@ func _on_team_colors_ready(_home_primary: Color, _home_secondary: Color, _away_p
 		_home_badge_style.bg_color = _scorebug_stripe(0)
 	if _away_badge_style != null:
 		_away_badge_style.bg_color = _scorebug_stripe(1)
+
+
+func _on_cinematic_mode_changed(enabled: bool) -> void:
+	# Clean-capture mode: hide the screen-space chrome (scorebug, clock, minimap,
+	# toasts, banners, prompts) and the off-screen indicators. Modals/menus are
+	# separate children and stay reachable. The on-ice HUD and ping markers are
+	# hidden by GameManager; this only owns the HUD's own layers.
+	if _scale_root != null:
+		_scale_root.visible = not enabled
+	if _offscreen_indicators != null:
+		_offscreen_indicators.visible = not enabled
 
 func _on_replay_started() -> void:
 	# Lower-third chyron with goal data appears during replay. The labels were

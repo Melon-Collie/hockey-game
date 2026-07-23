@@ -94,6 +94,11 @@ signal skip_replay_vote_updated(current: int, total: int)
 # polling. Only ever fires once per session right now (lobby → game transition);
 # mid-game player ↔ spectator swap is deferred.
 signal local_spectator_state_changed(is_spectator: bool)
+# Cinematic / clean-capture mode toggled (local, visual-only). HUD listens to
+# hide its screen-space chrome; the on-ice HUD and ping markers are driven
+# directly from _apply_cinematic_mode. No gameplay effect, so it is safe online
+# — it only touches the local machine's rendering.
+signal cinematic_mode_changed(enabled: bool)
 # Emitted on every peer the moment an out-of-play puck is confirmed (after the
 # grace window). HUD listens to flash the "PUCK OUT OF PLAY" toast; the
 # FACEOFF_PREP phase change drives the countdown banner separately.
@@ -138,6 +143,10 @@ var _puck_was_carried: bool = false
 # every machine, so a goalie star candidate needs no wire traffic.
 const GOALIE_NAMES: Array[String] = ["WALL", "WARD"]
 const GOALIE_NUMBERS: Array[int] = [31, 35]
+
+# Scene group every location ping marker joins, so cinematic mode can hide the
+# lot in one call (see _apply_cinematic_mode).
+const PING_MARKER_GROUP: StringName = &"ping_markers"
 
 const _GOAL_MAX_TICK_TRAVEL: float = 2.0
 # Tighter bound for a puck that was PINNED on both ends of the segment. A
@@ -336,6 +345,10 @@ const RECONNECT_RESERVATION_S: float = 60.0
 # spawn path in on_slot_assigned.
 var _is_local_spectator: bool = false
 var _camera_director: CameraDirector = null
+
+# Clean-capture ("cinematic") mode: hides all local UI for trailer/screenshot
+# footage. Local + visual-only (see cinematic_mode_changed).
+var _cinematic_mode: bool = false
 
 # ── Game identity ─────────────────────────────────────────────────────────────
 # Minted by the host in LobbyManager._on_start_pressed and broadcast via
@@ -2053,6 +2066,36 @@ func is_local_spectator() -> bool:
 
 func get_camera_director() -> CameraDirector:
 	return _camera_director
+
+
+# Clean-capture toggle (bound to `toggle_ui`, default H). Flips the local-only
+# cinematic mode that strips every UI layer for trailer/screenshot footage:
+# the screen-space HUD chrome (via the cinematic_mode_changed signal), the
+# on-ice per-skater HUD (rings / stamina / names / chevrons / beacon), and any
+# live location ping markers. Purely visual and self-only, so it is unrestricted
+# in every mode — offline, free play, and online alike.
+func toggle_cinematic_mode() -> void:
+	_cinematic_mode = not _cinematic_mode
+	_apply_cinematic_mode()
+
+
+func is_cinematic_mode() -> bool:
+	return _cinematic_mode
+
+
+func _apply_cinematic_mode() -> void:
+	# On-ice HUD: reuse the same world-HUD hide the replay viewer drives, so a
+	# skater spawned or respawned mid-capture picks up the state on its next set.
+	if _registry != null:
+		for skater: Skater in _registry.skaters():
+			if skater != null and is_instance_valid(skater):
+				skater.set_world_hud_hidden(_cinematic_mode)
+	# Location ping markers (on-ice rings) are fire-and-forget nodes grouped
+	# under PING_MARKER_GROUP; hide the whole group in one call. The ping chat
+	# bubbles above heads live on SkaterHUDCoordinator and are already covered
+	# by set_world_hud_hidden above.
+	get_tree().set_group(PING_MARKER_GROUP, "visible", not _cinematic_mode)
+	cinematic_mode_changed.emit(_cinematic_mode)
 
 
 func get_game_id() -> String:
@@ -5056,7 +5099,12 @@ func _spawn_ping_marker(pos: Vector3, text: String) -> void:
 	var scene_root: Node = get_tree().current_scene
 	if scene_root == null:
 		return
-	scene_root.add_child(PingMarker.create(pos, text))
+	var marker: PingMarker = PingMarker.create(pos, text)
+	marker.add_to_group(PING_MARKER_GROUP)
+	# Born hidden if capture is live, so a stray ping mid-shoot stays invisible.
+	if _cinematic_mode:
+		marker.visible = false
+	scene_root.add_child(marker)
 
 
 func get_period_duration() -> float:
