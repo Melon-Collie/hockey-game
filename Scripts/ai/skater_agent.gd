@@ -39,6 +39,12 @@ func set_rule_set(rs: int) -> void:
 	_sm.rule_set = rs
 
 
+# Push this agent's one-timer readiness to the shared brain — main-thread only,
+# after dispatch (AI threading Phase 3c). See SkaterAgentStateMachine.
+func push_one_timer_ready() -> void:
+	_sm.push_one_timer_ready()
+
+
 # Returns the InputState for this physics tick. Caller must not retain a
 # reference past the next tick — same scratch buffer is reused.
 # The SM's cursor goes out untouched: its slew (the bot's real Hands blade

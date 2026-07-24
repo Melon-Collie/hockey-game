@@ -195,6 +195,8 @@ var current_snapshot: WorldSnapshot = null
 # and shared onto current_snapshot.accel_by_peer instead of all 6 bots
 # recomputing the same velocity diff every tick (see AIAccelerationTracker).
 var _accel_tracker: AIAccelerationTracker = AIAccelerationTracker.new()
+# Drives all bot dispatch off the AI worker thread (AI threading). See AICoordinator.
+var _ai_coordinator := AICoordinator.new()
 # Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
 # (on_host_started). Drives the carrier reaction delay applied to current_
 # snapshot below, and is read by PlayerRegistry.spawn_bot to wire each agent's
@@ -523,9 +525,22 @@ func _physics_process(delta: float) -> void:
 			current_snapshot.accel_by_peer = _accel_tracker.accel_by_peer
 			current_snapshot.heading_omega_by_peer = _accel_tracker.heading_omega_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
-	if not team_brains.is_empty() and current_snapshot != null:
-		for brain: TeamBrain in team_brains:
-			brain.tick(delta, current_snapshot)
+	# Centralized AI dispatch. Brains run first (team strategy) so each bot reads
+	# this tick's fresh slot assignments, then every bot dispatches against the
+	# SAME enriched snapshot the brains saw — unified perception (bots no longer
+	# lag the brains by the old priority-split tick; see docs/ai-threading-plan.md).
+	# This whole block is the seam Phase 3 lifts onto the AI worker thread; the
+	# per-bot dispatch moved here from AIController._physics_process (was prio -1).
+	if current_snapshot != null:
+		if not team_brains.is_empty():
+			for brain: TeamBrain in team_brains:
+				brain.tick(delta, current_snapshot)
+		if _registry != null:
+			# The coordinator freezes each brain's view (build_view) at the point it
+			# hands work to the worker — only while the worker is idle, so the view
+			# the worker reads is never rebuilt mid-batch.
+			_ai_coordinator.dispatch(
+					_registry.ai_controllers(), team_brains, current_snapshot, delta)
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
@@ -1474,8 +1489,12 @@ func _wire_subsystems() -> void:
 	# Record period-end markers into the .mreplay event stream (like goals) so the
 	# offline viewer can tick each period boundary. Uses the GameManager-level
 	# phase_changed so it fires on host (via _phase_coord) and client (via the
-	# codec decode path) alike, matching the goal-event recording.
-	phase_changed.connect(_on_phase_changed_for_replay_event)
+	# codec decode path) alike, matching the goal-event recording. Guarded because
+	# phase_changed is GameManager's OWN signal (autoload, persists across
+	# matches), unlike the _phase_coord signals above which are re-created each
+	# _spawn_world — without the guard a second match double-connects.
+	if not phase_changed.is_connected(_on_phase_changed_for_replay_event):
+		phase_changed.connect(_on_phase_changed_for_replay_event)
 	_phase_coord.period_break_started.connect(_on_period_break_for_intermission)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
 	_phase_coord.period_break_started.connect(period_break_started.emit)
@@ -1651,9 +1670,15 @@ func _wire_sound_signals() -> void:
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
 	# regulation periods, GAME_OVER for the final one. (Not period_synced, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
-	phase_changed.connect(func(p: GamePhase.Phase) -> void:
-		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
-			SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0))
+	# Named + guarded so a rematch doesn't stack a second lambda on GameManager's
+	# persistent phase_changed and double-fire the buzzer (see the note above).
+	if not phase_changed.is_connected(_on_phase_changed_period_buzzer):
+		phase_changed.connect(_on_phase_changed_period_buzzer)
+
+
+func _on_phase_changed_period_buzzer(p: GamePhase.Phase) -> void:
+	if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
+		SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0)
 
 
 func _on_local_pickup_sound() -> void:
@@ -4017,6 +4042,9 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_EXIT_TREE:
 		HockeyRink.release_shared_cache()
 		ArenaStands.release_shared_cache()
+		# Join the AI worker thread at app shutdown (no-op unless threaded and
+		# started) so a live Thread is never leaked past exit.
+		_ai_coordinator.shutdown()
 
 
 func on_scene_exit() -> void:
@@ -4054,6 +4082,9 @@ func on_scene_exit() -> void:
 	_state_buffer_manager = null
 	current_snapshot = null
 	team_brains = []
+	# Stop + join the AI worker thread (no-op unless threaded and started), so a
+	# torn-down match never leaves a live thread referencing freed controllers.
+	_ai_coordinator.shutdown()
 	# Null PhaseCoordinator's _state_machine before stopping the driver so
 	# any replay_stopped signal that fires during teardown returns early from
 	# _on_goal_replay_stopped's guard rather than calling handle_phase_entered

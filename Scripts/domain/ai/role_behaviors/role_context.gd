@@ -21,8 +21,10 @@ var own_goal_dir: float = 1.0
 # TeamBrain anchor for this bot's current slot. May be Vector3.ZERO when
 # unassigned (first ticks); roles fall back to self_pos in that case.
 var anchor: Vector3 = Vector3.ZERO
-# TeamBrain reference for queries like get_slot(other_peer_id).
-var team_brain: TeamBrain = null
+# Team-strategy read surface for queries like get_slot(other_peer_id). Holds the
+# live TeamBrain in unit tests and the frozen TeamBrainView in production dispatch
+# (both are TeamStrategyView) — see docs/ai-threading-plan.md, Phase 3a.
+var team_brain: TeamStrategyView = null
 # Hysteretic strong-side sign from the brain (+1 = +X side, -1 = -X).
 # BREAKOUT outlet roles read this so their strong/weak side matches the
 # brain's slot assignment. Defaults to +1 when no brain is wired (tests).
