@@ -253,6 +253,10 @@ var _hit_tracker: HitTracker = null
 var _turnover_tracker: TurnoverTracker = null
 var _possession_tracker: PossessionTracker = null
 var _advanced_stats_tracker: AdvancedStatsTracker = null
+# A CLIENT's copy of the game's shot log, pushed by the host at game-over
+# (analytics B1). The host reads its own live buffer off _advanced_stats_tracker
+# instead — get_shot_events() picks the right one. Cleared per match.
+var _client_shot_events: Array[ShotEvent] = []
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
 var _stick_lift_claim: StickLiftClaimResolver = null
@@ -428,6 +432,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.faceoff_positions_received.connect(_on_faceoff_positions_received)
 	NetworkManager.game_reset_received.connect(on_game_reset)
 	NetworkManager.stats_received.connect(_on_stats_received)
+	NetworkManager.shot_events_received.connect(_on_shot_events_received)
 	NetworkManager.slot_swap_requested.connect(_on_slot_swap_requested)
 	NetworkManager.slot_swap_confirmed.connect(_on_slot_swap_confirmed)
 	NetworkManager.return_to_lobby_received.connect(_on_return_to_lobby)
@@ -1401,6 +1406,9 @@ func _wire_subsystems() -> void:
 	_advanced_stats_tracker = AdvancedStatsTracker.new()
 	_advanced_stats_tracker.setup(_registry)
 	_shot_tracker.shot_resolved.connect(_advanced_stats_tracker.on_shot_resolved)
+	# A client's pushed copy belongs to the PREVIOUS match — drop it alongside the
+	# fresh host-side buffer this re-wire creates.
+	_client_shot_events.clear()
 
 	# Host-only established-possession model (PossessionRules): turnover /
 	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
@@ -3419,6 +3427,20 @@ func _defending_goalie_pos(line_z: float) -> Vector3:
 # Sum of individual xG (PlayerStats.xg_for) over a team's players — the team xGF
 # for a game, and (for the opponent) the team xGA. Read at game-over for the
 # career xGF% columns; every peer has all rows via the stats broadcast.
+# The host pushed its per-game shot log at game-over (analytics B1). Clients keep
+# it so the post-game analytics views read from the same list the host has.
+func _on_shot_events_received(data: Array) -> void:
+	_client_shot_events = ShotEvent.decode_list(data)
+
+
+# The game's shot log, whichever role this peer is: the host's live buffer, or a
+# client's pushed copy. The seam the post-game shot map / xG-flow read from.
+func get_shot_events() -> Array[ShotEvent]:
+	if NetworkManager.is_host and _advanced_stats_tracker != null:
+		return _advanced_stats_tracker.get_shot_events()
+	return _client_shot_events
+
+
 func _team_xg_sum(team_id: int) -> float:
 	var total: float = 0.0
 	if _registry == null:
@@ -3888,6 +3910,14 @@ func _on_game_over() -> void:
 	# Highlight reel runs for every game-over (online + Play vs Bots), so it's
 	# scheduled before the career/telemetry early-returns below.
 	_schedule_post_game_replay()
+	# Ship the game's shot log to clients (analytics B1) — same reasoning: the
+	# post-game analytics views are a LOCAL view of the match everyone just
+	# played, so this rides ahead of the Supabase upload gates below (those gate
+	# what leaves the machine, not what a peer sees of its own game). No-op with
+	# no peers, so offline / Play vs Bots costs nothing.
+	if NetworkManager.is_host and _advanced_stats_tracker != null:
+		NetworkManager.send_shot_events_to_all(
+				ShotEvent.encode_list(_advanced_stats_tracker.get_shot_events()))
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
 	var local: PlayerRecord = _registry.get_local()

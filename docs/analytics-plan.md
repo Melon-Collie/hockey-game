@@ -89,16 +89,25 @@ shot map / xG-flow / heatmap, captured host-side and persisted:
   (`CareerStatsReporter.report_shot_events`, one bulk insert), mapping shooter
   peer→steam via `NetworkManager.get_peer_steam_id` (0 for bots), under the same
   online/ranked/share gates as the career row. Host-only avoids per-peer dup.
+- Client delivery: the host pushes the whole log once at game-over
+  (`send_shot_events_to_all` / `receive_shot_events`, protocol v43 — a new `@rpc`
+  shifts the config hash), wired ungated ahead of the Supabase gates (those govern
+  what leaves the machine, not what a peer sees of its own match).
+  `ShotEvent.encode_list` / `decode_list` are the wire format (malformed rows
+  skipped, never a mid-walk script error). `GameManager.get_shot_events()` is the
+  role-agnostic seam the screens read: host → live buffer, client → pushed copy.
 - v1 edge (documented): a goal the goalie grazed first can log as SAVED (the SOG
   dedup guard blocks the GOAL re-label); a clean goal logs GOAL. Minor map mislabel.
 
 **B2 (the screens) NOT STARTED** — the post-game analytics screen (§7.1), the
-career heatmap, the client-delivery RPC that ships the host's shot list for a
-client's post-game view, and the real-game reliability-plot calibration. Godot
-`_draw()` UI that needs in-engine visual verification. **Scope addition (locked in
-chat 2026-07-24): B2 includes a FULL REWRITE of the Career Stats screen**
+career heatmap, and the real-game reliability-plot calibration. Godot `_draw()` UI
+that needs in-engine visual verification. **Scope addition (locked in chat
+2026-07-24): B2 includes a FULL REWRITE of the Career Stats screen**
 (`career_stats_screen.gd`), not just adding charts — the current screen's visual
 design is to be redone wholesale alongside the shot-map/heatmap work.
+
+**Data layer is COMPLETE**: every number and every dot the B2 screens need is now
+captured, broadcast, persisted, and reachable from one accessor on both roles.
 
 ---
 

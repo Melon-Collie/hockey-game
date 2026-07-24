@@ -44,6 +44,57 @@ static func make(shooter_peer: int, team_id: int, pos: Vector3, xg: float,
 	return e
 
 
+# ── Wire format ───────────────────────────────────────────────────────────────
+# The host holds the authoritative per-game shot log; it ships the whole list to
+# clients at game-over so every peer can render its own post-game shot map. Flat
+# fixed-size arrays (one per event) — the payload is a few dozen events once per
+# match, so compactness matters less than being obviously correct.
+
+const WIRE_SIZE: int = 10
+
+
+func to_array() -> Array:
+	return [shooter_peer, team_id, x, z, xg, outcome, shot_type, on_net,
+			period, clock_s]
+
+
+# Returns null on a malformed record (version skew / forged payload) so the
+# batch decoder can skip it rather than script-error mid-walk.
+static func from_array(a: Array) -> ShotEvent:
+	if a.size() != WIRE_SIZE:
+		return null
+	var e := ShotEvent.new()
+	e.shooter_peer = a[0]
+	e.team_id = a[1]
+	e.x = a[2]
+	e.z = a[3]
+	e.xg = a[4]
+	e.outcome = a[5]
+	e.shot_type = a[6]
+	e.on_net = a[7]
+	e.period = a[8]
+	e.clock_s = a[9]
+	return e
+
+
+static func encode_list(events: Array[ShotEvent]) -> Array:
+	var out: Array = []
+	for e: ShotEvent in events:
+		out.append(e.to_array())
+	return out
+
+
+# Skips malformed records; never returns nulls.
+static func decode_list(data: Array) -> Array[ShotEvent]:
+	var out: Array[ShotEvent] = []
+	for row: Variant in data:
+		if row is Array:
+			var e: ShotEvent = ShotEvent.from_array(row as Array)
+			if e != null:
+				out.append(e)
+	return out
+
+
 func outcome_key() -> String:
 	return _OUTCOME_KEY[outcome] if outcome >= 0 and outcome < _OUTCOME_KEY.size() else "missed"
 

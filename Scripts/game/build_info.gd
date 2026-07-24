@@ -181,7 +181,11 @@ const VERSION: String = "dev"
 # v42: analytics A2 — the stats record gains a float xg_for (individual expected
 #      goals), widening STATS_PLAYER_RECORD_SIZE 17 → 18. Same misalignment risk
 #      against a v41 peer, so mixed builds must be refused.
-const PROTOCOL_VERSION: int = 42
+# v43: analytics B1 — new authority RPC receive_shot_events: the host pushes the
+#      game's shot log at game-over so clients can render their own post-game
+#      shot map. Adding an @rpc method shifts the rpc-config ordering both peers
+#      hash, so mixed builds must be refused.
+const PROTOCOL_VERSION: int = 43
 
 
 func _ready() -> void:
