@@ -201,6 +201,9 @@ func _ready() -> void:
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
+	# Prompts follow the active device: rebuild the persistent on-screen hints when
+	# the mouse↔pad handoff flips (auto-disconnected when this HUD frees).
+	InputDeviceTracker.device_changed.connect(_refresh_device_prompts)
 	GameManager.intermission_started.connect(_on_intermission_started)
 	GameManager.intermission_clip_started.connect(_on_intermission_clip_started)
 	GameManager.intermission_ended.connect(_on_intermission_ended)
@@ -683,10 +686,23 @@ func _build_skip_replay_prompt() -> void:
 	_skip_prompt_label.visible = false
 	_scale_root.add_child(_skip_prompt_label)
 
+# Re-resolve the persistent on-screen prompts to the current device. Fired by
+# InputDeviceTracker.device_changed so the menu-open hint and the skip-vote prompt
+# follow a mid-session mouse↔pad swap. (The spectator toast is one-shot — it keeps
+# whatever device it was pushed with.)
+func _refresh_device_prompts(_is_gamepad: bool) -> void:
+	if _menu_hint_label != null:
+		_menu_hint_label.text = _menu_hint_text()
+	_refresh_skip_prompt_text()
+
+# Menu-open hint text, resolved to the active device: pad Start (≡ / + on Switch),
+# else keyboard Escape. Rebuilt on device swap via _refresh_device_prompts.
+func _menu_hint_text() -> String:
+	return "%s MENU" % ControllerGlyphs.prompt(
+			"[ESC]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START))
+
 func _build_menu_hint() -> void:
-	# Pad opens the menu with Start (≡ / + on Switch); keyboard with Escape.
-	_menu_hint_label = _lbl("%s MENU" % ControllerGlyphs.prompt(
-			"[ESC]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START)), 16, _WHITE)
+	_menu_hint_label = _lbl(_menu_hint_text(), 16, _WHITE)
 	_menu_hint_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
 	# box straddling the 0.5 anchor), sitting 16px above the bottom.

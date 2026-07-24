@@ -37,6 +37,9 @@ var _tutorial_rows_vbox: VBoxContainer = null
 var _drills_container: Control = null
 var _drills_rows_vbox: VBoxContainer = null
 var _loading_screen: LoadingScreen = null
+# Footer close-hint chip label — re-resolved to the active device (ESC ↔ back
+# button) on InputDeviceTracker.device_changed so it follows a mid-session swap.
+var _close_hint_label: Label = null
 # Controller navigation: the player card + activity rows, in order. Made focusable
 # (and the first one focused) only in controller mode when the menu opens — see
 # _apply_nav_focus. Mouse mode leaves them FOCUS_NONE so nothing changes.
@@ -412,8 +415,12 @@ func _build_footer(parent: VBoxContainer) -> void:
 	hbox.add_theme_constant_override("separation", 8)
 	parent.add_child(hbox)
 
-	# Close-hint chip: the active device's back button — B on a pad, ESC on a keyboard.
-	hbox.add_child(ControllerGlyphs.chip(ControllerGlyphs.prompt("ESC", "B")))
+	# Close-hint chip: the active device's back button — B/○ on a pad, ESC on a
+	# keyboard. The label is kept and re-resolved on a device swap.
+	var close_chip: PanelContainer = ControllerGlyphs.chip(_close_hint_text())
+	_close_hint_label = close_chip.get_child(0) as Label
+	hbox.add_child(close_chip)
+	InputDeviceTracker.device_changed.connect(_refresh_device_prompt)
 
 	var close_label := Label.new()
 	close_label.text = "Close"
@@ -421,6 +428,16 @@ func _build_footer(parent: VBoxContainer) -> void:
 	close_label.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
 	close_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(close_label)
+
+
+# Close-hint label for the active device: keyboard ESC, else the pad's back button
+# (brand-aware — B on Xbox, ○ on PlayStation).
+func _close_hint_text() -> String:
+	return ControllerGlyphs.prompt("ESC", ControllerGlyphs.joy_label(JOY_BUTTON_B))
+
+func _refresh_device_prompt(_is_gamepad: bool) -> void:
+	if _close_hint_label != null:
+		_close_hint_label.text = _close_hint_text()
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL

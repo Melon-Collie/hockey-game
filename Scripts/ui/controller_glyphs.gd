@@ -102,10 +102,15 @@ static func trigger_label(right: bool) -> String:
 			return "RT" if right else "LT"
 
 
-# The label to show for a prompt, resolved to the active device: the pad glyph in
-# controller mode, else the keyboard/mouse label.
+# The label to show for a prompt, resolved to the ACTIVE device (last-input-wins,
+# via InputDeviceTracker): the pad glyph while the pad is driving, else the
+# keyboard/mouse label. This is the transient "who's driving now" — distinct from
+# ControllerNav.active()'s "gamepad allowed" (which gates build-time menu focus).
+# A prompt that persists on screen should rebuild on InputDeviceTracker.device_changed
+# so it follows a mid-session device swap; a one-shot (a toast) just reflects the
+# device at the moment it was shown.
 static func prompt(keyboard_label: String, pad_label: String) -> String:
-	return pad_label if ControllerNav.active() else keyboard_label
+	return pad_label if InputDeviceTracker.is_gamepad_active() else keyboard_label
 
 
 # A hint chip: a bordered, rounded pill holding `text`, matching the ESC key hint.
