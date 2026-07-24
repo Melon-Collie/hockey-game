@@ -421,9 +421,9 @@ func _keyboard_key_tokens() -> Dictionary:
 
 # Gamepad token set: the same slots resolved to pad glyphs. Movement is the left
 # stick; aim/shoot are the right stick + triggers (fixed); the discrete actions
-# read the player's live pad binds so a rebind shows here too. (The surrounding
-# step prose still describes the cursor scheme — the pad tutorial copy is a larger
-# follow-up; this at least names the right buttons.)
+# read the player's live pad binds so a rebind shows here too. The step prose that
+# describes a device-specific MECHANIC (cursor aim, drag-speed wrister) has its own
+# pad variant via _pick(); these tokens fill the button names inside both.
 func _pad_key_tokens() -> Dictionary:
 	return {
 		"move_keys":      "Left Stick",
@@ -442,6 +442,16 @@ func _pad_key_tokens() -> Dictionary:
 
 func _fmt(text: String) -> String:
 	return text.format(_key_tokens)
+
+
+# Device-aware copy: the pad variant in controller mode, else the mouse/keyboard
+# one. Used for the steps whose MECHANIC differs by device — the cursor's aim-by-
+# position + drag-speed wrister vs. the pad's right-stick aim + push-magnitude
+# commit. Both variants still run through _fmt, so their {token}s resolve to the
+# active device's button labels. Steps that read the same on both devices keep a
+# single string. (See CLAUDE.md → "How It Plays" for the two schemes.)
+func _pick(keyboard_copy: String, pad_copy: String) -> String:
+	return pad_copy if ControllerNav.active() else keyboard_copy
 
 
 # TutorialStep factory that runs every string through the keybinding tokens.
@@ -490,12 +500,16 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_STICKHANDLE:
 			return _step(
 				"Stickhandling",
-				"Your blade follows your cursor — every frame, no button. Pick up the puck and sweep the cursor side to side to dangle it across your body.",
+				_pick(
+					"Your blade follows your cursor — every frame, no button. Pick up the puck and sweep the cursor side to side to dangle it across your body.",
+					"Your blade follows the right stick — every frame, no button. Pick up the puck and sweep the right stick side to side to dangle it across your body."),
 				"Big, smooth sweeps. The blade lifts slightly through centre, so the puck rides forehand to backhand.")
 		STEP_DEFLECT:
 			return _step(
 				"Deflect",
-				"Your teammate's going to feed you — don't catch it. Tap {elevation_up} to raise your loft to LOW, hold {stick_lift}, and angle the blade with your cursor to tip the pass as it arrives.",
+				_pick(
+					"Your teammate's going to feed you — don't catch it. Tap {elevation_up} to raise your loft to LOW, hold {stick_lift}, and angle the blade with your cursor to tip the pass as it arrives.",
+					"Your teammate's going to feed you — don't catch it. Tap {elevation_up} to raise your loft to LOW, hold {stick_lift}, and angle the blade with the right stick to tip the pass as it arrives."),
 				"Holding {stick_lift} means redirect, don't receive. At LOW loft the tip flicks the puck UP — that's the deflection goal.")
 		STEP_BLADE_LIFT:
 			return _step(
@@ -510,24 +524,38 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_SHOOT_WRIST:
 			return _step(
 				"Wrist Shot",
-				"You've got the puck. Hold {shoot}, drag toward the net, and release. The way you drag is your aim — and the faster you drag, the harder the shot.",
-				"A slow sweep is a soft pass — snap the drag toward the net to really rip it.")
+				_pick(
+					"You've got the puck. Hold {shoot}, drag toward the net, and release. The way you drag is your aim — and the faster you drag, the harder the shot.",
+					"You've got the puck. Hold {shoot}, point the right stick at the net, and release. The stick direction is your aim — and the harder you push the stick, the harder the shot."),
+				_pick(
+					"A slow sweep is a soft pass — snap the drag toward the net to really rip it.",
+					"A gentle push is a soft pass — shove the stick to the edge to really rip it."))
 		STEP_SHOOT_BACKHAND:
 			return _step(
 				"Backhand",
-				"Same wrister, other face of the blade: hold {shoot} and curl the drag across your body, then release — that's the backhand. It comes off softer than your forehand, but in tight it's the release you already have.",
-				"A straight-line drag always reads as forehand — the backhand is the deliberate curl around your body. It won't beat anyone with pace, so pick your spot.")
+				_pick(
+					"Same wrister, other face of the blade: hold {shoot} and curl the drag across your body, then release — that's the backhand. It comes off softer than your forehand, but in tight it's the release you already have.",
+					"Same wrister, other face of the blade: hold {shoot} and point the stick across your body, then release — that's the backhand. It comes off softer than your forehand, but in tight it's the release you already have."),
+				_pick(
+					"A straight-line drag always reads as forehand — the backhand is the deliberate curl around your body. It won't beat anyone with pace, so pick your spot.",
+					"Pointing straight ahead always reads as forehand — the backhand is aiming back across your body. It won't beat anyone with pace, so pick your spot."))
 		STEP_SHOOT_TARGETS:
 			# Live copy is set per-wave by _show_targets_wave; this is the wave-0 default.
 			return _step(
 				"Pick Your Spot",
 				"A goalie's in the net — but he's frozen stiff. Three targets mark the holes he leaves low. Stay flat and knock each one out — any order.",
-				"Aim is the direction you drag, not where the cursor sits.")
+				_pick(
+					"Aim is the direction you drag, not where the cursor sits.",
+					"Aim is the direction you push the stick."))
 		STEP_SHOOT_SLAP:
 			return _step(
 				"Slapshot",
-				"Hold {slapshot} to wind up a slapshot. It fires toward your mouse, and the shot's direction locks the moment you press — so aim with the cursor first. You'll keep gliding, but you can't steer or change the shot mid-wind-up.",
-				"Point the cursor where you want it before you press. The longer you hold, the harder it goes.")
+				_pick(
+					"Hold {slapshot} to wind up a slapshot. It fires toward your mouse, and the shot's direction locks the moment you press — so aim with the cursor first. You'll keep gliding, but you can't steer or change the shot mid-wind-up.",
+					"Hold {slapshot} to wind up a slapshot. It fires where the right stick points, and the shot's direction locks the moment you press — so aim the stick first. You'll keep gliding, but you can't steer or change the shot mid-wind-up."),
+				_pick(
+					"Point the cursor where you want it before you press. The longer you hold, the harder it goes.",
+					"Point the stick where you want it before you press. The longer you hold, the harder it goes."))
 		STEP_ONE_TIMER:
 			return _step(
 				"One-Timer",
@@ -541,13 +569,21 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_QUICK_PASS:
 			return _step(
 				"Quick Pass",
-				"That instant snap on {quick_pass} is your pass — flat, fixed pace, fired toward your cursor the moment you tap. Put one on your teammate's blade.",
-				"Lead with the cursor: point at their blade, tap {quick_pass}.")
+				_pick(
+					"That instant snap on {quick_pass} is your pass — flat, fixed pace, fired toward your cursor the moment you tap. Put one on your teammate's blade.",
+					"That instant snap on {quick_pass} is your pass — flat, fixed pace, fired where the right stick points the moment you tap. Put one on your teammate's blade."),
+				_pick(
+					"Lead with the cursor: point at their blade, tap {quick_pass}.",
+					"Lead with the stick: point at their blade, tap {quick_pass}."))
 		STEP_TOUCH_PASS:
 			return _step(
 				"Touch Pass",
-				"Now with the wrister: hold {shoot} and sweep slowly toward your teammate. Sweep speed is pass weight — a hard flick at this range just bounces off their blade.",
-				"Feather it. The slow, deliberate sweep is a genuinely soft touch pass.")
+				_pick(
+					"Now with the wrister: hold {shoot} and sweep slowly toward your teammate. Sweep speed is pass weight — a hard flick at this range just bounces off their blade.",
+					"Now with the wrister: hold {shoot} and push the stick gently toward your teammate. Push strength is pass weight — a hard shove at this range just bounces off their blade."),
+				_pick(
+					"Feather it. The slow, deliberate sweep is a genuinely soft touch pass.",
+					"Feather it. A soft, deliberate push is a genuinely soft touch pass."))
 		STEP_SAUCER_PASS:
 			return _step(
 				"Saucer Pass",
@@ -1607,7 +1643,9 @@ func _shooting_tick(delta: float) -> void:
 				# The backhand drill explains why the goal didn't count — a
 				# silent reset there reads as the drill eating a clean finish.
 				if _current_step_id() == STEP_SHOOT_BACKHAND:
-					_hud.set_alert("In — but off the forehand. Curl the drag around your body and let it go from the backhand.")
+					_hud.set_alert(_pick(
+						"In — but off the forehand. Curl the drag around your body and let it go from the backhand.",
+						"In — but off the forehand. Point the stick back across your body and let it go from the backhand."))
 				_begin_restage()
 			return
 
@@ -1694,7 +1732,9 @@ func _show_targets_wave(phase: int) -> void:
 			_set_live_copy(
 				"Pick Your Spot",
 				"A goalie's in the net — but he's frozen stiff. Three targets mark the holes he leaves low. Stay flat and knock each one out — any order.",
-				"Aim is the direction you drag, not where the cursor sits.")
+				_pick(
+					"Aim is the direction you drag, not where the cursor sits.",
+					"Aim is the direction you push the stick."))
 			_clear_wall()
 			_show_target_set(_LOW_TARGETS)
 		1:
