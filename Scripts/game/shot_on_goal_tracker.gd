@@ -39,6 +39,11 @@ signal shot_on_goal_recorded(peer_id: int)
 # than a giveaway/takeaway; shot_on_goal_recorded then refreshes the window at
 # the save so a rebound stays covered past the shot's flight time.
 signal shot_attempted(peer_id: int)
+# Fires when a defender's block is credited (on_block), carrying the SHOOTER
+# whose attempt was blocked. AdvancedStatsTracker uses it for individual Fenwick
+# (shot_attempts − shot_attempts_blocked). Same on-net-blocked set as the
+# shots_blocked defensive stat, so the two stay consistent.
+signal shot_attempt_blocked(shooter_peer_id: int)
 
 const SHOT_ON_GOAL_TIMEOUT: float = 5.0
 # A genuine blocked shot happens within a beat of the release — the puck travels
@@ -223,6 +228,9 @@ func on_block(blocker_peer_id: int) -> bool:
 	if record == null:
 		return false
 	record.stats.shots_blocked += 1
+	# Fenwick attribution: the shooter's attempt was blocked. Emit before
+	# clear_pending() zeroes _shooter_peer_id.
+	shot_attempt_blocked.emit(_shooter_peer_id)
 	clear_pending()
 	return true
 

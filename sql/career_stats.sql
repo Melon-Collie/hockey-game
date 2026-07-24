@@ -34,7 +34,14 @@ create table if not exists public.career_stats (
     takeaways      integer default 0 not null,
     giveaways      integer default 0 not null,
     faceoff_wins   integer default 0 not null,
-    faceoff_losses integer default 0 not null
+    faceoff_losses integer default 0 not null,
+    -- Analytics A1. Per-player shot-attempt volume (individual Corsi/Fenwick);
+    -- team_sog_* are team quantities carried on every row (like goals_for), the
+    -- PDO denominators. Fenwick = shot_attempts − shot_attempts_blocked.
+    shot_attempts         integer default 0 not null,
+    shot_attempts_blocked integer default 0 not null,
+    team_sog_for          integer default 0 not null,
+    team_sog_against      integer default 0 not null
 );
 
 -- Migration for an existing DB (the create above is skipped once the table
@@ -44,6 +51,10 @@ alter table public.career_stats add column if not exists takeaways      integer 
 alter table public.career_stats add column if not exists giveaways      integer default 0 not null;
 alter table public.career_stats add column if not exists faceoff_wins   integer default 0 not null;
 alter table public.career_stats add column if not exists faceoff_losses integer default 0 not null;
+alter table public.career_stats add column if not exists shot_attempts         integer default 0 not null;
+alter table public.career_stats add column if not exists shot_attempts_blocked integer default 0 not null;
+alter table public.career_stats add column if not exists team_sog_for          integer default 0 not null;
+alter table public.career_stats add column if not exists team_sog_against      integer default 0 not null;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
@@ -80,6 +91,10 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
     giveaways     between 0 and 5000  and
     faceoff_wins  between 0 and 5000  and
     faceoff_losses between 0 and 5000  and
+    shot_attempts         between 0 and 10000 and
+    shot_attempts_blocked between 0 and 10000 and
+    team_sog_for          between 0 and 10000 and
+    team_sog_against      between 0 and 10000 and
     toi_seconds   between 0 and 100000 and
     goals_for     between 0 and 1000  and
     goals_against between 0 and 1000  and
@@ -125,7 +140,16 @@ with (security_invoker = true) as
     sum(giveaways) AS giveaways,
     sum(faceoff_wins) AS faceoff_wins,
     sum(faceoff_losses) AS faceoff_losses,
-    round(sum(faceoff_wins)::numeric / NULLIF(sum(faceoff_wins) + sum(faceoff_losses), 0)::numeric * 100::numeric, 1) AS faceoff_pct
+    round(sum(faceoff_wins)::numeric / NULLIF(sum(faceoff_wins) + sum(faceoff_losses), 0)::numeric * 100::numeric, 1) AS faceoff_pct,
+    -- Analytics A1: lifetime advanced stats. iCF = shot attempts; Fenwick =
+    -- attempts − blocked. PDO = on-ice shooting% + save%, ×1000 (SH% from the
+    -- player's team goals/SOG, SV% from goals-against / SOG-against).
+    sum(shot_attempts) AS shot_attempts,
+    sum(shot_attempts - shot_attempts_blocked) AS fenwick,
+    round((
+        sum(goals_for)::numeric     / NULLIF(sum(team_sog_for), 0)::numeric
+      + 1::numeric - sum(goals_against)::numeric / NULLIF(sum(team_sog_against), 0)::numeric
+    ) * 1000::numeric, 0) AS pdo
    FROM career_stats
   WHERE steam_id IS NOT NULL
   GROUP BY steam_id;

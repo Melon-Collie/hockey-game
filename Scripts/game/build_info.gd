@@ -174,7 +174,11 @@ const VERSION: String = "dev"
 #      optimistic pin rolls back immediately instead of waiting out the
 #      RTT-scaled timeout. Adding an @rpc method shifts the rpc-config
 #      ordering both peers hash, so mixed builds must be refused.
-const PROTOCOL_VERSION: int = 40
+# v41: analytics A1 — the per-player stats record gains two host-authoritative
+#      broadcast counters (shot_attempts, shot_attempts_blocked → Corsi/Fenwick),
+#      widening STATS_PLAYER_RECORD_SIZE 15 → 17. A v40 peer would misalign the
+#      stats player-block walk, so mixed builds must be refused.
+const PROTOCOL_VERSION: int = 41
 
 
 func _ready() -> void:

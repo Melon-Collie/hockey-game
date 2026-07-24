@@ -13,7 +13,19 @@ workflow — implementation sessions should treat it as the design of record and
 ask before deviating. Numbers marked `TBD` are authored at implementation time
 and tuned/calibrated against logged data (see §3.3).
 
-Status: **NOT STARTED** — design only.
+Status: **A1 IMPLEMENTED** (2026-07-24). Per-player Corsi/Fenwick counters
+(`shot_attempts`, `shot_attempts_blocked` on `PlayerStats`) via a new host-only
+`AdvancedStatsTracker` fed by `ShotOnGoalTracker`'s `shot_attempted` /
+`shot_attempt_blocked` (new) signals; broadcast (protocol v41,
+`STATS_PLAYER_RECORD_SIZE` 15→17); persisted to `career_stats` with report-time
+team-SOG columns for PDO; `career_totals` derives lifetime iCF / Fenwick / PDO;
+Career screen shows all three. Two v1 simplifications, deliberate:
+**(a)** Corsi counts one attempt per *release* — a rebound re-shot or mid-flight
+tip is not re-counted (off `shot_attempted`, which fires once per release).
+**(b)** "blocked" = the on-net-blocked set (same as the `shots_blocked` defensive
+stat), so a blocked-off-net shot isn't excluded from Fenwick. Both are minor,
+consistent, and documented at the call sites. **A2 (xG) and B (event log) are NOT
+STARTED.**
 
 ---
 

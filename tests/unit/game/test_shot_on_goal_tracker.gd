@@ -547,6 +547,28 @@ func test_block_by_defender_credits_shots_blocked() -> void:
 			"defender intercept ends the shot — pending state cleared")
 
 
+func test_block_emits_shot_attempt_blocked_with_shooter() -> void:
+	# Fenwick attribution: a credited block carries the SHOOTER (peer 10), so the
+	# blocked attempt subtracts from the shooter's Corsi, not the blocker's.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.on_block(20)
+	assert_signal_emitted_with_parameters(tracker, "shot_attempt_blocked", [10])
+
+
+func test_uncredited_block_does_not_emit_shot_attempt_blocked() -> void:
+	# An off-net "block" is a takeaway, not a blocked shot — no Fenwick signal.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)
+	tracker.on_block(20)
+	assert_signal_not_emitted(tracker, "shot_attempt_blocked")
+
+
 func test_block_by_teammate_does_not_credit() -> void:
 	_add_player(10, 0)
 	var teammate := _add_player(11, 0)

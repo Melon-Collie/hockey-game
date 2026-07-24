@@ -252,6 +252,7 @@ var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _turnover_tracker: TurnoverTracker = null
 var _possession_tracker: PossessionTracker = null
+var _advanced_stats_tracker: AdvancedStatsTracker = null
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
 var _stick_lift_claim: StickLiftClaimResolver = null
@@ -1394,6 +1395,13 @@ func _wire_subsystems() -> void:
 	_turnover_tracker.setup(_registry)
 	_shot_tracker.shot_attempted.connect(_turnover_tracker.note_shot)
 	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot)
+
+	# Host-only advanced-stat attribution (analytics A1): per-player Corsi/Fenwick
+	# off the same shot-event signals. Counters ride the normal stats broadcast.
+	_advanced_stats_tracker = AdvancedStatsTracker.new()
+	_advanced_stats_tracker.setup(_registry)
+	_shot_tracker.shot_attempted.connect(_advanced_stats_tracker.on_shot_attempted)
+	_shot_tracker.shot_attempt_blocked.connect(_advanced_stats_tracker.on_shot_blocked)
 
 	# Host-only established-possession model (PossessionRules): turnover /
 	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
@@ -3892,7 +3900,8 @@ func _on_game_over() -> void:
 	if local == null or local.team == null:
 		return
 	_career_reporter.report(local, gf, ga, outcome,
-			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
+			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods,
+			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id])
 
 
 # One network-quality row per game, guarded so the game-over and scene-exit

@@ -199,6 +199,13 @@ func _on_totals_received(totals: Dictionary) -> void:
 	var faceoff_taken: int = _safe_int(totals.get("faceoff_wins", 0)) + _safe_int(totals.get("faceoff_losses", 0))
 	_add_totals_row("Faceoff %", "%.1f%%" % _safe_float(totals.get("faceoff_pct", 0.0)) if faceoff_taken > 0 else "—")
 	_add_totals_separator()
+	# Advanced stats (analytics A1). PDO is null until games with tracked
+	# shots-on-goal exist (pre-A1 rows have zero SOG denominators) — show "—".
+	_add_totals_row("Shot Attempts (Corsi)", str(_safe_int(totals.get("shot_attempts", 0))))
+	_add_totals_row("Fenwick",       str(_safe_int(totals.get("fenwick", 0))))
+	var pdo: Variant = totals.get("pdo", null)
+	_add_totals_row("PDO", "%d" % _safe_int(pdo) if pdo != null else "—")
+	_add_totals_separator()
 	_add_totals_row("+/-",           "%+d" % _safe_int(totals.get("plus_minus", 0)))
 	_add_totals_row("Goals For",     str(_safe_int(totals.get("goals_for", 0))))
 	_add_totals_row("Goals Against", str(_safe_int(totals.get("goals_against", 0))))
