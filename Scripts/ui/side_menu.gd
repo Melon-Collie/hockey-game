@@ -429,16 +429,6 @@ func _build_footer(parent: VBoxContainer) -> void:
 	close_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(close_label)
 
-
-# Close-hint label for the active device: keyboard ESC, else the pad's back button
-# (brand-aware — B on Xbox, ○ on PlayStation).
-func _close_hint_text() -> String:
-	return ControllerGlyphs.prompt("ESC", ControllerGlyphs.joy_label(JOY_BUTTON_B))
-
-func _refresh_device_prompt(_is_gamepad: bool) -> void:
-	if _close_hint_label != null:
-		_close_hint_label.text = _close_hint_text()
-
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(spacer)
@@ -452,6 +442,16 @@ func _refresh_device_prompt(_is_gamepad: bool) -> void:
 	version_label.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
 	version_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(version_label)
+
+
+# Close-hint label for the active device: keyboard ESC, else the pad's back button
+# (brand-aware — B on Xbox, ○ on PlayStation).
+func _close_hint_text() -> String:
+	return ControllerGlyphs.prompt("ESC", ControllerGlyphs.joy_label(JOY_BUTTON_B))
+
+func _refresh_device_prompt(_is_gamepad: bool) -> void:
+	if _close_hint_label != null:
+		_close_hint_label.text = _close_hint_text()
 
 
 # ── Popups ───────────────────────────────────────────────────────────────────
