@@ -288,7 +288,16 @@ func apply(delta: float) -> void:
 			if _shot_kick_is_slap:
 				_shot_kick_power = maxf(_slap_load, _controller.slapper_kick_min_power)
 			else:
-				_shot_kick_power = maxf(_wrister_load, _controller.wrister_kick_min_power)
+				# ALSO latch from the release charge, not just the smoothed aim load:
+				# the frozen wrister is a quick flick, so _wrister_load never builds
+				# over the brief coil and the kick was stuck at the min-power floor
+				# (a barely-there leg follow-through). shot_charge holds the release
+				# power through the follow-through, so a hard flick now drives a hard
+				# leg kick. The non-frozen path (where _wrister_load did build ≈
+				# shot_charge) is unchanged by the max.
+				_shot_kick_power = maxf(
+						maxf(_wrister_load, _skater.shot_charge),
+						_controller.wrister_kick_min_power)
 		_shot_prev_state = shot_state
 	var wrister_target: float = _skater.shot_charge if shot_state == State.WRISTER_AIM else 0.0
 	_wrister_load = lerpf(_wrister_load, wrister_target,
