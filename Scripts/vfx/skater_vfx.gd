@@ -12,8 +12,8 @@ const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
 # closing-speed the signal carries), normalized 0..1 between a light bump and a
 # big hit. Burst size/velocity read this so a freight-train check throws bigger,
 # faster debris than a glancing bump.
-const _CHECK_FORCE_MIN: float = 3.0   # impact_force of a glancing bump (matches HitRules.MIN_HIT_IMPULSE)
-const _CHECK_FORCE_REF: float = 14.0  # impact_force treated as a full-strength check
+const _CHECK_FORCE_MIN: float = HitRules.MIN_HIT_IMPULSE  # a glancing bump — the bar to register at all
+const _CHECK_FORCE_REF: float = 14.0  # a hard head-on mutual collision — the top of the burst ramp
 # Burst particle budget at the low/high end of the intensity range.
 const _CHECK_BURST_AMOUNT_MIN: int = 10
 const _CHECK_BURST_AMOUNT_MAX: int = 30
@@ -27,22 +27,24 @@ const _CHECK_BURST_VEL_MAX: float = 9.0   # initial_velocity_max at a full hit
 # real collision behind them — should make NO sound, or the hit audio
 # machine-guns through every scrum.
 #
-# The gate is in impact_force (weight x closing-speed) units, the same signal the
-# stagger keys off (BodyCheckRules reconstructs the victim impulse from it):
-#   ~3.0  MIN_HIT_IMPULSE — the bar to register a hit at all (~half a stagger)
-#   ~4.0  a full-strength check (victim ref_impulse 1.35 — "skate in at pace")
-#   ~5.5  a knockdown        (victim knockdown_impulse 1.8 — a committed solid hit)
-# Sound starts at the full-check floor (below it is a bump/rub: silent) and
-# reaches full volume by ~the knockdown point, so "loud thud" == "wobble or
-# knockdown" and softer contact is silent. These are FEEL tunables (how hard a
-# hit must land before you hear it), not evaluator constants.
-const _CHECK_SOUND_MIN_FORCE: float = 4.0    # below this the hit is silent (bump/rub)
+# The gate is in impact_force (weight x closing-speed) units — the scale whose
+# landmarks HitRules owns (MIN_HIT_IMPULSE / FULL_CHECK_IMPULSE / KNOCKDOWN_IMPULSE).
+# Sound starts AT the full-check landmark: below it the contact is a bump or a
+# board rub, and it stays silent.
+#
+# The full-volume point is deliberately NOT a landmark — it sits ABOVE the
+# knockdown landmark so the loudest thud is reserved for the hardest hits rather
+# than every knockdown-class check. It is a FEEL tunable (how hard a hit must
+# land before you hear it at all / at full), not an evaluator constant, so it is
+# hand-set on purpose and free to move without tracking the hit scale.
+const _CHECK_SOUND_MIN_FORCE: float = HitRules.FULL_CHECK_IMPULSE  # below this: silent
 const _CHECK_SOUND_FULL_FORCE: float = 6.5   # at/above this the thud is at full volume
-# Sound: louder + lower-pitched across the audible (full-check .. knockdown) band.
+# Sound: louder + lower-pitched across the audible band (full-check landmark up
+# to the hand-set full-volume point, which sits just past knockdown).
 const _CHECK_VOL_MIN_DB: float = -9.0    # a just-audible full-strength check
-const _CHECK_VOL_MAX_DB: float = 3.0     # a knockdown-class hit
+const _CHECK_VOL_MAX_DB: float = 3.0     # the hardest hits
 const _CHECK_PITCH_LIGHT: float = 1.10   # full check — higher, snappier
-const _CHECK_PITCH_HEAVY: float = 0.90   # knockdown — lower, heavier thud
+const _CHECK_PITCH_HEAVY: float = 0.90   # hardest hits — lower, heavier thud
 
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
 # Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.

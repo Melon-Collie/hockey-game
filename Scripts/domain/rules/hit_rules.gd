@@ -24,6 +24,19 @@ enum Verdict { REJECT, CREDIT, CREDIT_PENDING }
 
 # Minimum impulse magnitude (hitter weight × closing speed, m/s).
 const MIN_HIT_IMPULSE: float = 3.0
+# Empirical landmarks on the SAME impact_force scale, for presentation code that
+# has to decide "how big did that hit read?" (VFX burst, thud gate, camera kick).
+# They live here so the scale is described in ONE place instead of being restated
+# as bare literals at each consumer.
+#
+# These are OBSERVED landmarks, not derivations. The victim-side impulse the
+# stagger keys off (BodyCheckRules.Config.ref_impulse 1.35, knockdown_impulse
+# 1.8) is this magnitude divided through the collision's reduced mass, so the
+# mapping moves with the victim's build (mass_mult spans 0.79–1.28). There is no
+# exact constant conversion — do not "derive" one.
+const FULL_CHECK_IMPULSE: float = 4.0   # a one-sided full-strength check ("skate in at pace")
+const KNOCKDOWN_IMPULSE: float = 5.5    # a committed solid hit that knocks the victim down
+# A hard head-on MUTUAL collision (both bodies closing) lands ~12–14.
 # A contact this soon after the victim lost/released the puck still counts as a
 # hit on the carrier (the check "finishes" through the pass).
 const JUST_RELEASED_GRACE_S: float = 0.5

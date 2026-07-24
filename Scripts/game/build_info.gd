@@ -174,7 +174,14 @@ const VERSION: String = "dev"
 #      optimistic pin rolls back immediately instead of waiting out the
 #      RTT-scaled timeout. Adding an @rpc method shifts the rpc-config
 #      ordering both peers hash, so mixed builds must be refused.
-const PROTOCOL_VERSION: int = 40
+# v41: input block 23 -> 24 B — gamepad committed wrister power reaches the host.
+#      Flags gain bit [13] (commit_wrister_power) plus a new u8 power byte @23
+#      (bot_wrister_power_t, 1/255 steps). A pad CLIENT previously predicted power
+#      from its right-stick push while the host, seeing neither field, re-derived
+#      it from the pad's PARKED cursor (~0 speed) and fired at the floor — a
+#      predicted snipe vs. an authoritative floater on every pad wrister online.
+#      Both the size change and the new flag semantics make mixed builds unsafe.
+const PROTOCOL_VERSION: int = 41
 
 
 func _ready() -> void:

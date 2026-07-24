@@ -41,6 +41,11 @@ func ping_shoot(_peer_id: int) -> bool:
 func ping_pass_target(_peer_id: int) -> int:
 	return -1
 
+# Team-scoped (not per-peer): at most one bot is under a GET_PUCK retrieval order
+# at a time, so the view freezes the ordered peer as a scalar rather than a dict.
+func ping_chase_peer() -> int:
+	return -1
+
 func get_team_size() -> int:
 	return GameRules.DEFAULT_TEAM_SIZE
 

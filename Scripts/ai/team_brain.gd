@@ -531,6 +531,8 @@ func build_view(snapshot: WorldSnapshot) -> void:
 	var v: TeamBrainView = _view
 	v.strong_x_val = _strong_x
 	v.team_size_val = team_size
+	# Team-scoped, so it freezes here rather than in the per-peer loop below.
+	v.ping_chase_peer_val = ping_directives.chase_peer()
 	_freeze_int_dict(slot_assignments, v.slot_by_peer)
 	_freeze_int_dict(threat_assignments, v.assigned_threat_by_peer)
 	_freeze_int_dict(_position_by_peer, v.position_by_peer)

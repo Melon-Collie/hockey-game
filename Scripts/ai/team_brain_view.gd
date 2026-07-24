@@ -14,6 +14,7 @@ extends TeamStrategyView
 
 var strong_x_val: float = 1.0
 var team_size_val: int = GameRules.DEFAULT_TEAM_SIZE
+var ping_chase_peer_val: int = -1
 var slot_by_peer: Dictionary[int, int] = {}
 var anchor_by_peer: Dictionary[int, Vector3] = {}
 var assigned_threat_by_peer: Dictionary[int, int] = {}
@@ -61,6 +62,10 @@ func ping_shoot(peer_id: int) -> bool:
 
 func ping_pass_target(peer_id: int) -> int:
 	return ping_pass_by_peer.get(peer_id, -1)
+
+
+func ping_chase_peer() -> int:
+	return ping_chase_peer_val
 
 
 func get_team_size() -> int:

@@ -60,7 +60,7 @@ func test_array_length_sentinel() -> void:
 	# Field count sentinel — if someone adds a field without updating
 	# to_array/from_array, this catches the mismatch.
 	var s := InputState.new()
-	assert_eq(s.to_array().size(), 21)
+	assert_eq(s.to_array().size(), 23)
 
 
 func test_stick_lift_back_compat_defaults_false() -> void:
@@ -144,7 +144,72 @@ func test_bytes_negative_mouse_screen_pos_round_trips() -> void:
 
 
 func test_bytes_size_sentinel() -> void:
-	assert_eq(InputState.BYTES_SIZE, 23)
+	assert_eq(InputState.BYTES_SIZE, 24)
+
+
+# ── Committed wrister power (gamepad) ────────────────────────────────────────
+# A pad client commits power from its right-stick push instead of a measured
+# cursor speed. Both fields must cross the wire or the host re-derives power from
+# the pad's PARKED cursor (~0 speed) and fires a floater while the client
+# predicted a full shot.
+
+func test_bytes_round_trips_committed_wrister_power() -> void:
+	var s := InputState.new()
+	s.commit_wrister_power = true
+	s.bot_wrister_power_t = InputState.quantize_power_t(0.63)
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_true(r.commit_wrister_power, "commit flag survives the wire")
+	assert_eq(r.bot_wrister_power_t, s.bot_wrister_power_t,
+			"a source-quantized power decodes EXACTLY — no prediction divergence")
+
+
+func test_quantize_power_t_is_wire_exact_across_the_range() -> void:
+	# The whole point of quantizing at the source: whatever the sender predicts
+	# with must survive to_bytes/from_bytes bit-exactly, not merely closely. The
+	# client predicts on the raw InputState object and serializes separately, so
+	# any drift here lands on the one tick that sets the shot's launch velocity.
+	for raw: float in [0.0, 0.01, 0.137, 0.5, 0.6666667, 0.9, 0.999, 1.0]:
+		var s := InputState.new()
+		s.commit_wrister_power = true
+		s.bot_wrister_power_t = InputState.quantize_power_t(raw)
+		var r := InputState.from_bytes(s.to_bytes())
+		assert_eq(r.bot_wrister_power_t, s.bot_wrister_power_t,
+				"quantized %f round-trips exactly" % raw)
+
+
+func test_quantize_power_t_clamps_out_of_range() -> void:
+	assert_eq(InputState.quantize_power_t(-0.5), 0.0, "negative clamps to 0")
+	assert_eq(InputState.quantize_power_t(4.0), 1.0, "above-1 clamps to 1")
+
+
+func test_bytes_mouse_sender_leaves_power_uncommitted() -> void:
+	# A mouse human never sets the flag; the host must fall through to its real
+	# measured cursor speed rather than reading the power byte.
+	var s := InputState.new()
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_false(r.commit_wrister_power, "uncommitted by default")
+
+
+func test_bytes_forged_power_cannot_exceed_ceiling() -> void:
+	# Trust boundary: the u8 encoding caps the decode at 1.0 by construction, so a
+	# forged payload can't buy a shot above the power ceiling.
+	var s := InputState.new()
+	s.commit_wrister_power = true
+	s.bot_wrister_power_t = 99.0
+	var r := InputState.from_bytes(s.to_bytes())
+	assert_eq(r.bot_wrister_power_t, 1.0, "forged power clamps to the ceiling")
+
+
+func test_array_back_compat_defaults_power_uncommitted() -> void:
+	# A short array from an older sender must decode with power uncommitted, so
+	# the host uses its measured-cursor path instead of a garbage fraction.
+	var s := InputState.new()
+	s.commit_wrister_power = true
+	s.bot_wrister_power_t = 0.5
+	var short_array: Array = s.to_array()
+	short_array.resize(21)
+	var r := InputState.from_array(short_array)
+	assert_false(r.commit_wrister_power, "missing commit flag defaults false")
 
 
 func test_from_bytes_supports_offset() -> void:
