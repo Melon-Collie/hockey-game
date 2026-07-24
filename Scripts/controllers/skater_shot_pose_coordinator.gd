@@ -210,6 +210,15 @@ func apply_wrister_follow_through() -> void:
 		shot_local.y = 0.0
 		if shot_local.length_squared() > 0.0001:
 			var sweep: float = 1.0 - (1.0 - t) * (1.0 - t)
+			# FREEZE: the blade starts retracted at the origin with a coiled-BACK
+			# local bearing (the torso rotated during the coil while the blade held
+			# world-fixed). Sweeping dir_angle up from that start desyncs with the
+			# fast torso uncoil — the stick visibly swings BACKWARD before the whip
+			# carries it forward. Lock onto the world shot line from t=0 instead
+			# (shot_local is re-derived every frame, so it already counter-rotates
+			# for the uncoiling torso): the follow-through becomes a pure forward drive.
+			if _controller.wrister_freeze_blade:
+				sweep = 1.0
 			dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
 	var local_dir := Vector3(sin(dir_angle), 0.0, -cos(dir_angle))
 	var hand_pos := _skater.shoulder.position
