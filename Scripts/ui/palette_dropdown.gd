@@ -58,6 +58,15 @@ func _build_closed_state(min_size: Vector2) -> void:
 	_closed_btn.add_theme_stylebox_override("hover", _closed_panel_style)
 	_closed_btn.add_theme_stylebox_override("pressed", _closed_panel_style)
 	_closed_btn.add_theme_stylebox_override("focus", _closed_panel_style)
+	# Controller: the focus stylebox IS the color panel (no ring), so brighten its
+	# border while focused as the focus indicator.
+	if ControllerNav.active():
+		_closed_btn.focus_entered.connect(func() -> void:
+			_closed_panel_style.border_color = MenuStyle.TEAL
+			_closed_panel_style.set_border_width_all(2))
+		_closed_btn.focus_exited.connect(func() -> void:
+			_closed_panel_style.border_color = MenuStyle.TEAL_DIM
+			_closed_panel_style.set_border_width_all(1))
 
 	# Left stripe — same recipe as the lobby card stripe in slot_grid_panel.gd:
 	# rounded outside corners, flat inside corners, negative offsets escape
@@ -106,6 +115,32 @@ func set_disabled(b: bool) -> void:
 
 # Popup ──────────────────────────────────────────────────────────────────────
 
+# Controller: LEFT/RIGHT on the focused closed state cycle the color directly — the
+# reliable path (the popup is a separate window, which controller focus handles
+# poorly). Handled at _input so it cycles instead of moving focus off the widget.
+func _input(event: InputEvent) -> void:
+	if _disabled or _closed_btn == null or not _closed_btn.has_focus() or not ControllerNav.active():
+		return
+	if event.is_action_pressed(&"ui_left"):
+		_cycle_slot(-1)
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed(&"ui_right"):
+		_cycle_slot(1)
+		get_viewport().set_input_as_handled()
+
+
+func _cycle_slot(dir: int) -> void:
+	var slots: Array[int] = TeamColorRegistry.get_all_slots()
+	if slots.is_empty():
+		return
+	var idx: int = slots.find(_selected_slot)
+	if idx < 0:
+		idx = 0
+	var next: int = slots[(idx + dir + slots.size()) % slots.size()]
+	set_selected(next)
+	selected.emit(next)
+
+
 func _on_closed_pressed() -> void:
 	if _disabled:
 		return
@@ -116,6 +151,12 @@ func _on_closed_pressed() -> void:
 	var screen_pos: Vector2 = get_screen_position() + Vector2(0, size.y + 4)
 	_popup.position = screen_pos
 	_popup.popup()
+	# Controller: best-effort focus into the popup grid so a pad can pick a swatch
+	# (LEFT/RIGHT on the closed state is the reliable fallback if window focus balks).
+	if ControllerNav.active() and _popup.get_child_count() > 0:
+		var grid: Node = _popup.get_child(_popup.get_child_count() - 1)
+		if grid.get_child_count() > 0:
+			ControllerNav.grab_focus(grid.get_child(0) as Control)
 
 
 func _ensure_popup() -> void:

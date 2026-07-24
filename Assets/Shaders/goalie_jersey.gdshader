@@ -80,4 +80,11 @@ void fragment() {
 	}
 
 	ALBEDO = col;
+
+	// Fresnel rim to match the skaters' rim light — a soft white edge glow so
+	// the goalie reads as a lit volume from the top-down camera. Additive
+	// emission (independent of light direction) keeps it visible in the crease
+	// shadow; tuned subtle and well under the glow HDR threshold.
+	float rim = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), 3.0);
+	EMISSION = vec3(rim * 0.2);
 }

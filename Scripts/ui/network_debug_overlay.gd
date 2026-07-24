@@ -106,7 +106,7 @@ func _build_diag_row() -> void:
 	add_child(_diag_row)
 
 	_fps_label = Label.new()
-	_fps_label.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	_fps_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	_fps_label.add_theme_font_size_override("font_size", 14)
 	_fps_label.add_theme_color_override("font_color", MenuStyle.BROADCAST_CREAM)
 	_fps_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))

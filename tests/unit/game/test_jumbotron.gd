@@ -114,6 +114,28 @@ func test_replay_goal_event_fills_goal_page() -> void:
 	assert_eq(jumbo._goal_scorer_lbl.text, "Replay Scorer")
 
 
+func test_teardown_releases_screen_viewport() -> void:
+	# The screen SubViewport and its bound ViewportTexture must be released
+	# before the RenderingServer finalizes on quit, or they leak RIDs at exit
+	# (mirrors HockeyRink's render-target teardown). Teardown frees the viewport
+	# and unbinds it from the screen material, and is idempotent so the WM_CLOSE
+	# and _exit_tree paths can both fire.
+	var jumbo: Jumbotron = _make()
+	var viewport: SubViewport = jumbo.find_child("ScreenViewport", false, false)
+	assert_not_null(viewport, "screen viewport built")
+	var screen: MeshInstance3D = jumbo.find_child("Screen0", false, false)
+	assert_not_null(screen, "a screen face exists")
+	var mat: StandardMaterial3D = screen.material_override as StandardMaterial3D
+	assert_not_null(mat.albedo_texture, "screen starts bound to the viewport texture")
+
+	jumbo._teardown_viewport()
+	assert_false(is_instance_valid(viewport), "viewport freed before RS teardown")
+	assert_null(mat.albedo_texture, "screen material's viewport texture unbound")
+	assert_null(mat.emission_texture, "emission texture unbound too")
+
+	jumbo._teardown_viewport()  # second call must be a harmless no-op
+
+
 func test_goal_flash_uses_scoring_team_color() -> void:
 	var jumbo: Jumbotron = _make()
 	var home: Color = Color(0.9, 0.1, 0.1)

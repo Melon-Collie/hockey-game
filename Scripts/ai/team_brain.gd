@@ -1,5 +1,5 @@
 class_name TeamBrain
-extends RefCounted
+extends TeamStrategyView
 
 # Per-team strategy node, v2 (possession-state model). Replaces the
 # F1/F2/F3 closest-to-puck role assignment + man-to-man coverage
@@ -499,3 +499,73 @@ func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
 		return AIRoleSlots5.slot_anchor(
 				slot, _own_goal_z, _strong_x, puck_pos, carrier_pos)
 	return AIRoleSlots.slot_anchor(slot, carrier_pos)
+
+
+# TeamStrategyView interface: expose the two fields the role context reads so the
+# frozen TeamBrainView can mirror them behind the same method surface.
+func get_team_size() -> int:
+	return team_size
+
+
+func get_threat_shoot_base_by_opp() -> Dictionary[int, float]:
+	return threat_shoot_base_by_opp
+
+
+# ── Frozen strategy view (AI threading, Phase 3a) ────────────────────────────
+# A plain-data snapshot of this brain's outputs, rebuilt every host frame by
+# GameManager (and the duel harness) AFTER the brain tick, and read by the agent
+# dispatch instead of the live brain — so Phase 3c can run that dispatch off the
+# physics thread while the main thread keeps mutating the live brain (pings,
+# force_retick, spawns). Reused across frames (refilled, not reallocated). Freezes
+# every peer this brain currently assigns a slot, plus the shared threat memo.
+var _view: TeamBrainView = null
+
+
+func get_view() -> TeamBrainView:
+	return _view
+
+
+func build_view(snapshot: WorldSnapshot) -> void:
+	if _view == null:
+		_view = TeamBrainView.new()
+	var v: TeamBrainView = _view
+	v.strong_x_val = _strong_x
+	v.team_size_val = team_size
+	# Team-scoped, so it freezes here rather than in the per-peer loop below.
+	v.ping_chase_peer_val = ping_directives.chase_peer()
+	_freeze_int_dict(slot_assignments, v.slot_by_peer)
+	_freeze_int_dict(threat_assignments, v.assigned_threat_by_peer)
+	_freeze_int_dict(_position_by_peer, v.position_by_peer)
+	_freeze_bool_dict(_one_timer_ready_by_peer, v.one_timer_ready_by_peer)
+	_freeze_float_dict(threat_shoot_base_by_opp, v.threat_shoot_base)
+	# Per-slotted-peer reads: the anchor (recomputed here against the live frame
+	# so it stays per-frame fresh) and the resolved ping directives.
+	v.anchor_by_peer.clear()
+	v.ping_move_by_peer.clear()
+	v.ping_shoot_by_peer.clear()
+	v.ping_pass_by_peer.clear()
+	for pid: int in slot_assignments:
+		v.anchor_by_peer[pid] = get_anchor(pid, snapshot)
+		v.ping_move_by_peer[pid] = ping_directives.move_target_for(pid)
+		v.ping_shoot_by_peer[pid] = ping_directives.shoot_ping_for(pid)
+		v.ping_pass_by_peer[pid] = ping_directives.pass_target_for(pid)
+
+
+# Clear-and-refill helpers: reuse the destination dict's backing rather than
+# allocating a fresh one each frame (hot-path allocation discipline).
+func _freeze_int_dict(src: Dictionary, dst: Dictionary[int, int]) -> void:
+	dst.clear()
+	for k: int in src:
+		dst[k] = src[k]
+
+
+func _freeze_bool_dict(src: Dictionary, dst: Dictionary[int, bool]) -> void:
+	dst.clear()
+	for k: int in src:
+		dst[k] = src[k]
+
+
+func _freeze_float_dict(src: Dictionary, dst: Dictionary[int, float]) -> void:
+	dst.clear()
+	for k: int in src:
+		dst[k] = src[k]

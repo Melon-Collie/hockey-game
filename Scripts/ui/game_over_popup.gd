@@ -182,11 +182,13 @@ func _build_star_row(rank: int) -> Control:
 	row.add_child(content)
 
 	var name_label := _lbl("", _RANK_NAME_SIZES[rank], _WHITE)
+	name_label.uppercase = true
 	name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_star_name_labels.append(name_label)
 	content.add_child(name_label)
 
 	var line_label := _lbl("", _RANK_LINE_SIZES[rank], _DIM)
+	line_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	line_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_star_line_labels.append(line_label)
 	content.add_child(line_label)
@@ -245,6 +247,7 @@ func _build_bottom_block(root: Control) -> void:
 	_bottom_block.add_child(_vote_label)
 
 	var hint := _lbl("TAB · BOX SCORE", 12, MenuStyle.TEXT_MUTED)
+	hint.add_theme_font_override("font", MenuStyle.UI_FONT)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_bottom_block.add_child(hint)
 
@@ -277,6 +280,12 @@ func present(home_score: int, away_score: int,
 			_star_stripe_styles[rank].bg_color = star_stripes[rank]
 
 	visible = true
+	# Controller: focus the primary action (Rematch, or Lobby when Rematch is
+	# hidden for spectators) so the pad can act on the post-game screen.
+	if _rematch_btn != null and _rematch_btn.visible:
+		ControllerNav.grab_focus(_rematch_btn)
+	elif _lobby_btn != null:
+		ControllerNav.grab_focus(_lobby_btn)
 	if _present_tween != null and _present_tween.is_running():
 		_present_tween.kill()
 	_scrim.modulate.a = 0.0
@@ -350,6 +359,7 @@ func _action_button(label: String) -> Button:
 	btn.add_theme_font_size_override("font_size", 17)
 	MenuStyle.wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
+	MenuStyle.apply_focus_ring(btn)
 	return btn
 
 

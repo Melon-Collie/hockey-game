@@ -53,6 +53,11 @@ var position_by_peer: Dictionary[int, int] = {}
 # reference through their skater-getter Callable and must not mutate it.
 # Rebuilding per call allocated two arrays per invocation at the physics rate.
 var _skaters_cache: Array[Skater] = []
+# Flat bot-controller list for the centralized AI dispatch loop (AICoordinator
+# path). Rebuilt on spawn/remove alongside _skaters_cache; the host iterates it
+# once per tick instead of scanning _players for AIControllers. Bots are
+# host-only, so this is empty on clients.
+var _ai_controllers_cache: Array[AIController] = []
 var _spawner: ActorSpawner = null
 var _state_machine: GameStateMachine = null
 var _teams: Array[Team] = []
@@ -306,11 +311,20 @@ func skaters() -> Array[Skater]:
 	return _skaters_cache
 
 
+# Live reference to the cached bot-controller list — consumers must not mutate
+# it. Drives the host's centralized per-tick AI dispatch.
+func ai_controllers() -> Array[AIController]:
+	return _ai_controllers_cache
+
+
 func _rebuild_skaters_cache() -> void:
 	_skaters_cache.clear()
+	_ai_controllers_cache.clear()
 	for r: PlayerRecord in _players.values():
 		if r.skater != null:
 			_skaters_cache.append(r.skater)
+		if r.controller is AIController:
+			_ai_controllers_cache.append(r.controller as AIController)
 
 
 # (Re)build the memoized AI capabilities for one peer from its controller's
@@ -434,3 +448,4 @@ func clear_state() -> void:
 	team_id_by_skater.clear()
 	peer_id_by_skater.clear()
 	_skaters_cache.clear()
+	_ai_controllers_cache.clear()

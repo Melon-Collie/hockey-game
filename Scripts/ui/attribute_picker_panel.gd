@@ -269,6 +269,13 @@ func _build_gear_row(label_text: String, tooltip: String,
 		row.add_child(btn)
 		buttons.append(btn)
 	_gear_buttons[level_idx] = buttons
+	# Controller: keep D-pad left/right cycling WITHIN the segmented row (wrap at the
+	# ends) instead of escaping sideways to the slider above. Up/down still move
+	# between rows. Set after all buttons are in the tree so the paths resolve.
+	if ControllerNav.active() and buttons.size() > 1:
+		for i: int in buttons.size():
+			buttons[i].focus_neighbor_left = buttons[(i - 1 + buttons.size()) % buttons.size()].get_path()
+			buttons[i].focus_neighbor_right = buttons[(i + 1) % buttons.size()].get_path()
 
 
 # ── Host API ─────────────────────────────────────────────────────────────────

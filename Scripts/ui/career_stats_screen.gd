@@ -15,6 +15,7 @@ var _reporter := CareerStatsReporter.new()
 # native TabContainer which doesn't pick up our themed TabButton variations.
 var _tab_btns: Array[Button] = []
 var _tab_contents: Array[Control] = []
+var _active_idx: int = 0  # active tab, for controller bumper switching + focus
 
 const _TAB_REPLAYS: int = 2
 
@@ -54,18 +55,24 @@ func _ready() -> void:
 	vbox.add_theme_constant_override("separation", 14)
 	panel.add_child(vbox)
 
-	var header := HBoxContainer.new()
-	vbox.add_child(header)
+	# Mirrors the options header: the close button sits in its own row, pushed
+	# right by an expanding spacer, and the title is a separate full-width
+	# centered label — so it centers against the panel, not against the button.
+	var close_row := HBoxContainer.new()
+	var close_spacer := Control.new()
+	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_row.add_child(close_spacer)
+	var close_btn: Button = MenuStyle.close_button()
+	close_btn.pressed.connect(hide)
+	SoundManager.wire_button(close_btn)
+	close_row.add_child(close_btn)
+	vbox.add_child(close_row)
 
 	var title := Label.new()
 	title.text = "Career"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	MenuStyle.apply_heading(title)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
-
-	var close_btn: Button = MenuStyle.close_button()
-	close_btn.pressed.connect(hide)
-	header.add_child(close_btn)
+	vbox.add_child(title)
 
 	vbox.add_child(_build_tab_switcher())
 
@@ -118,10 +125,30 @@ func _build_tab_switcher() -> Control:
 
 
 func _activate_tab(idx: int) -> void:
+	_active_idx = idx
 	for i: int in _tab_contents.size():
 		_tab_contents[i].visible = (i == idx)
 	for i: int in _tab_btns.size():
 		MenuStyle.apply_tab_button(_tab_btns[i], i == idx)
+
+
+# Controller: LB / RB cycle tabs (console convention). Only while on screen, so it
+# never touches the game's LB during play. Refocuses the new page's first control.
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree():
+		return
+	var delta: int = ControllerNav.bumper_tab_delta(event)
+	if delta != 0:
+		var n: int = _tab_btns.size()
+		if n > 0:
+			_activate_tab((_active_idx + delta + n) % n)
+			_focus_active_tab()
+		get_viewport().set_input_as_handled()
+
+
+func _focus_active_tab() -> void:
+	if _active_idx >= 0 and _active_idx < _tab_contents.size():
+		ControllerNav.focus_first(_tab_contents[_active_idx])
 
 
 func open() -> void:
@@ -132,6 +159,7 @@ func open() -> void:
 	_refresh_totals()
 	_refresh_recent_games()
 	_refresh_replays()
+	_focus_active_tab()  # controller: land on the active tab's content, LB/RB switch tabs
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -259,6 +287,7 @@ func _build_recent_games_tab() -> Control:
 	tab.add_child(_recent_status)
 
 	var scroll := ScrollContainer.new()
+	scroll.follow_focus = true  # controller: scroll to keep the focused row in view
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tab.add_child(scroll)
@@ -542,6 +571,7 @@ func _build_replays_tab() -> Control:
 	tab.add_child(_replays_status)
 
 	var scroll := ScrollContainer.new()
+	scroll.follow_focus = true  # controller: scroll to keep the focused row in view
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED

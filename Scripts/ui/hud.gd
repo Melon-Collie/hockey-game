@@ -201,31 +201,61 @@ func _ready() -> void:
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
+	# Prompts follow the active device: rebuild the persistent on-screen hints when
+	# the mouse↔pad handoff flips (auto-disconnected when this HUD frees).
+	InputDeviceTracker.device_changed.connect(_refresh_device_prompts)
 	GameManager.intermission_started.connect(_on_intermission_started)
 	GameManager.intermission_clip_started.connect(_on_intermission_clip_started)
 	GameManager.intermission_ended.connect(_on_intermission_ended)
 	GameManager.local_spectator_state_changed.connect(func(is_spec: bool) -> void:
 		_apply_spectator_chrome()
 		if is_spec and _toast_stack != null:
-			_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE))
+			_toast_stack.push(_spectator_controls_hint(), _WHITE))
 	_apply_spectator_chrome()
 	# Catch the case where the local peer entered the scene already a
 	# spectator (lobby-assigned slot) — the signal was emitted before this
 	# HUD's connect, so push the toast inline.
 	if GameManager.is_local_spectator() and _toast_stack != null:
-		_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE)
+		_toast_stack.push(_spectator_controls_hint(), _WHITE)
+
+# Spectator camera-control hint, resolved to the active device. Pad: Y cycles the
+# camera mode, D-pad ↑↓ switches the followed player, the right stick free-looks
+# (see CameraDirector's joypad binds + FreeCamera's pad path). Keyboard: C / ↑↓ /
+# RMB-drag.
+func _spectator_controls_hint() -> String:
+	return ControllerGlyphs.prompt(
+			"C: camera  ·  ↑↓: player  ·  RMB drag: look",
+			"%s: camera  ·  ↑↓: player  ·  Right-stick: look" % ControllerGlyphs.joy_label(JOY_BUTTON_Y))
 
 func _unhandled_input(event: InputEvent) -> void:
+	var menu_open: bool = _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible
+	# Pad ping: the rebindable pad button (D-pad Up by default). Only fires — and
+	# only consumes — when no menu owns the screen, so the D-pad still navigates an
+	# open menu (which the GUI would have consumed before this anyway).
+	var pad_ping: bool = InputDeviceTracker.is_gamepad_active() and not menu_open \
+			and event is InputEventJoypadButton and event.pressed \
+			and (event as InputEventJoypadButton).button_index == PlayerPrefs.pad_button("smart_ping")
+	if pad_ping:
+		GameManager.try_send_smart_ping()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed(&"smart_ping"):
 		# Context-sensitive team ping (chat bubble + bot directive). Resolution
 		# and all gating (spectator/replay/cooldown/no-op contexts) live in
 		# GameManager.try_send_smart_ping; the HUD only swallows the press when
 		# a menu owns the screen.
-		if not (_confirm_dialog.visible or _pause_menu.visible or _side_menu.visible):
+		if not menu_open:
 			GameManager.try_send_smart_ping()
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed(&"skip_replay"):
+	# Skip vote: Space (keyboard) or pad A. A is the pad's block during play, but a
+	# skip is gated on a skippable window (goal cinematic / intermission) where
+	# gameplay input is blocked, so reusing it as the "confirm skip" button is safe
+	# and needs no free button. Hardcoded like the Start menu-open below (an
+	# InputMap joypad bind would be wiped by keyboard-rebind's action_erase_events).
+	var pad_skip: bool = InputDeviceTracker.is_gamepad_active() and event is InputEventJoypadButton \
+			and event.pressed and (event as InputEventJoypadButton).button_index == JOY_BUTTON_A
+	if event.is_action_pressed(&"skip_replay") or pad_skip:
 		# Gate on the skip-prompt visibility (goal cinematic — HUD's own label;
 		# intermission — the overlay's line) so the (Space-shared) brake key
 		# never accidentally fires a vote outside of a skippable window.
@@ -235,7 +265,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			GameManager.request_local_skip_vote()
 			get_viewport().set_input_as_handled()
 		return
-	if not event.is_action_pressed(&"ui_cancel"):
+	# Menu OPEN is keyboard Escape or gamepad Start — NOT gamepad B (ui_cancel):
+	# B stays a gameplay input (brake) and is only used to back OUT of an open menu.
+	var kb_open: bool = event.is_action_pressed(&"ui_cancel") and not (event is InputEventJoypadButton)
+	var pad_open: bool = event is InputEventJoypadButton and event.pressed \
+			and (event as InputEventJoypadButton).button_index == JOY_BUTTON_START
+	if not (kb_open or pad_open):
 		return
 	if _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible:
 		return
@@ -632,7 +667,10 @@ func _build_bug_icon() -> void:
 # the broadcast chyron itself stays focused on the goal info. The pulse draws
 # the eye to the prompt without yelling.
 func _build_skip_replay_prompt() -> void:
-	_skip_prompt_label = _lbl("[SPACE] TO SKIP", 18, _WHITE)
+	# Pad votes to skip with the south face button; keyboard with Space. Built from
+	# the same device/brand-aware text the vote-tally refresh uses.
+	_skip_prompt_label = _lbl(_skip_prompt_text(), 18, _WHITE)
+	_skip_prompt_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	_skip_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_skip_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	_skip_prompt_label.anchor_left = 1.0
@@ -648,8 +686,24 @@ func _build_skip_replay_prompt() -> void:
 	_skip_prompt_label.visible = false
 	_scale_root.add_child(_skip_prompt_label)
 
+# Re-resolve the persistent on-screen prompts to the current device. Fired by
+# InputDeviceTracker.device_changed so the menu-open hint and the skip-vote prompt
+# follow a mid-session mouse↔pad swap. (The spectator toast is one-shot — it keeps
+# whatever device it was pushed with.)
+func _refresh_device_prompts(_is_gamepad: bool) -> void:
+	if _menu_hint_label != null:
+		_menu_hint_label.text = _menu_hint_text()
+	_refresh_skip_prompt_text()
+
+# Menu-open hint text, resolved to the active device: pad Start (≡ / + on Switch),
+# else keyboard Escape. Rebuilt on device swap via _refresh_device_prompts.
+func _menu_hint_text() -> String:
+	return "%s MENU" % ControllerGlyphs.prompt(
+			"[ESC]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START))
+
 func _build_menu_hint() -> void:
-	_menu_hint_label = _lbl("[ESC] MENU", 16, _WHITE)
+	_menu_hint_label = _lbl(_menu_hint_text(), 16, _WHITE)
+	_menu_hint_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
 	# box straddling the 0.5 anchor), sitting 16px above the bottom.
 	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1079,10 +1133,13 @@ func _refresh_skip_prompt_text() -> void:
 		_intermission_overlay.set_skip_text(text)
 
 func _skip_prompt_text() -> String:
+	# Device-aware base label (pad A/✕/B / keyboard Space), see _unhandled_input.
+	var base: String = ControllerGlyphs.prompt(
+			"[SPACE] TO SKIP", "[%s] TO SKIP" % ControllerGlyphs.joy_label(JOY_BUTTON_A))
 	if _skip_vote_total <= 1:
 		# Solo session — no tally, the single press just skips.
-		return "[SPACE] TO SKIP"
-	return "[SPACE] TO SKIP  (%d/%d)" % [_skip_vote_current, _skip_vote_total]
+		return base
+	return "%s  (%d/%d)" % [base, _skip_vote_current, _skip_vote_total]
 
 # ── Intermission (between-periods highlight reel) ────────────────────────────
 

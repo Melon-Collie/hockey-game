@@ -772,6 +772,21 @@ var _team_id: int = 0
 var _own_goal_dir: float = 1.0
 var _attacking_goal_pos: Vector3 = Vector3.ZERO
 var _team_brain: TeamBrain = null
+# The strategy surface read during this dispatch — set at the top of dispatch()
+# from _strategy(). See the dispatch-site comment and docs/ai-threading-plan.md.
+var _current_strategy: TeamStrategyView = null
+
+
+# The team-strategy surface for the current dispatch: the brain's frozen
+# per-frame view when it exists (the off-thread-safe read path), falling back to
+# the live brain when no view has been built (unit tests that dispatch without
+# GameManager's per-frame build_view — single-threaded, so reading the live brain
+# is safe). Null when no brain is wired.
+func _strategy() -> TeamStrategyView:
+	if _team_brain == null:
+		return null
+	var v: TeamBrainView = _team_brain.get_view()
+	return v if v != null else _team_brain
 # Live peer -> team_id dict owned by PlayerRegistry. Read via
 # `_team_id_by_peer.get(pid, -1)` in hot loops (lane filters,
 # closest-teammate checks). Used to be a Callable; the
@@ -943,6 +958,12 @@ var _shoot_charge_tick: int = 0
 # in that frame and charge accumulation would stall on rushes.
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
 var _shoot_aim_target: Vector3 = Vector3.ZERO
+# Committed shot direction (world XZ, normalized), locked at charge tick 0. The
+# controller aims the positional wrister along this directly for bots (via
+# InputState.bot_wrister_aim_dir) — the fake wind-up cursor is a near-body bubble
+# and would give a garbage origin→cursor. This is the same aim_dir the old
+# gestural model shot (release_pos → aim_point, execution error folded in).
+var _shoot_aim_dir_locked: Vector3 = Vector3.ZERO
 # Wind-up side decision for SHOOT_PRESSED: +1 = forehand, -1 = backhand.
 # Captured at tick 0 (based on forehand-side pressure) and locked for the
 # charge so the swing doesn't flip mid-press if a defender shuffles in
@@ -987,6 +1008,10 @@ var _pass_charge_tick: int = 0
 # puck releases at the distance-adaptive launch speed instead of the wrister max.
 var _pass_wind_up_start: Vector3 = Vector3.ZERO
 var _pass_aim_target: Vector3 = Vector3.ZERO
+# Committed charged-pass direction (world XZ, normalized), locked at tick 0 — the
+# controller aims the positional wrister along this directly for bots (passes are
+# always forehand, so no committed backhand). See _shoot_aim_dir_locked.
+var _pass_aim_dir_locked: Vector3 = Vector3.ZERO
 
 # This bot's own attribute-scaled capabilities, set by apply_capabilities (from
 # AIController.apply_attributes). Used wherever the bot reasons about ITSELF —
@@ -1390,6 +1415,16 @@ var _current_delta: float = 0.0
 # considered. Persists until the next press fires.
 var debug_last_decision: String = ""
 
+# Gate for the COSTLY debug-readout strings. The readouts exist only to feed
+# AIController's floating per-bot label, but they are built on the AI worker at
+# dispatch rate (120 Hz × bots). The PASS/DUMP ones cost a strategy lookup plus
+# `%` formatting per release — real hot-path work for a label that ships off, so
+# they are gated. The bare-literal assignments (SHOOT / ONE_TIMER) are free and
+# stay ungated; nothing reads debug_last_decision while the label is off.
+# AIController.SHOW_DEBUG_LABEL derives from this so the flag lives in ONE place —
+# flip it here to turn the labels back on.
+const DEBUG_DECISIONS: bool = false
+
 # Per-tick decision-scoring readout for the floating debug label.
 # Populated by `_pick_action` every tick; AIController polls and
 # refreshes the label only when content changes (so it doesn't
@@ -1754,6 +1789,11 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	_current_self_state = self_state
 	_current_snapshot = snapshot
 	_current_delta = input.delta
+	# Frozen team-strategy view for this dispatch (AI threading Phase 3a): the
+	# brain's per-frame TeamBrainView when built (production / benchmark harness),
+	# else the live brain (single-threaded tests — no race). All dispatch-path
+	# brain reads go through this so Phase 3c can run dispatch off-thread.
+	_current_strategy = _strategy()
 	# Self-possession is instant (proprioception) — read the REAL carrier, not
 	# the reaction-delayed one on puck_state. Otherwise the bot would freeze
 	# holding the puck for the reaction window after receiving it. Everything
@@ -1927,7 +1967,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# cache would strand the bot), and a slot change (a cached target from
 		# the old role must not carry over). ctx (ping/aim reads) is rebuilt
 		# every tick regardless — only _dispatch_role_decision is throttled.
-		var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null \
+		var slot: int = _current_strategy.get_slot(_peer_id) if _current_strategy != null \
 				else AIRoleSlots.Slot.NONE
 		var is_finisher_slot: bool = slot == AIRoleSlots.Slot.FINISHER \
 				or slot == AIRoleSlots.Slot.NET_FRONT
@@ -2166,7 +2206,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.attacking_goal_pos = _attacking_goal_pos
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
 	ctx.own_goal_dir = _own_goal_dir
-	ctx.team_brain = _team_brain
+	ctx.team_brain = _current_strategy
 	ctx.team_id_by_peer = _team_id_by_peer
 	ctx.acceleration_by_peer = _accel_ref
 	ctx.heading_omega_by_peer = _omega_ref
@@ -2214,26 +2254,27 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# until he tags up at the blue line). Latched like the match's other
 	# rules; stamped every build since the ctx instance is reused.
 	ctx.offsides_enforced = rule_set != GameRules.RuleSet.OFF
-	if _team_brain != null:
-		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
+	if _current_strategy != null:
+		var brain_anchor: Vector3 = _current_strategy.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
-		ctx.strong_x = _team_brain.strong_x()
-		ctx.assigned_threat_peer = _team_brain.assigned_threat(_peer_id)
-		# Live reference to the brain's shared threat memo (re-stamped every
-		# build — the reused ctx must never carry another brain's dict).
-		ctx.threat_shoot_base_by_opp = _team_brain.threat_shoot_base_by_opp
+		ctx.strong_x = _current_strategy.strong_x()
+		ctx.assigned_threat_peer = _current_strategy.assigned_threat(_peer_id)
+		# The brain's shared threat memo, read off the strategy view (a frozen
+		# copy in production). Re-stamped every build so the reused ctx never
+		# carries another brain's dict.
+		ctx.threat_shoot_base_by_opp = _current_strategy.get_threat_shoot_base_by_opp()
 		# 5v5 position identity (plan §1/§6). Re-stamped every build — the
 		# reused ctx must never carry another match's team size.
-		ctx.team_size = _team_brain.team_size
-		var lobby_slot: int = _team_brain.position_of(_peer_id)
+		ctx.team_size = _current_strategy.get_team_size()
+		var lobby_slot: int = _current_strategy.position_of(_peer_id)
 		ctx.self_is_defense = PlayerRules.is_defense_slot(lobby_slot)
 		ctx.self_home_side = _home_side_of(lobby_slot)
 		# Live smart-ping directives on this bot (see AIPingDirectives). The
 		# reused ctx instance must be re-stamped every build — a stale ping
 		# field would keep obeying an expired order.
-		ctx.ping_move_target = _team_brain.ping_move_target(_peer_id)
-		ctx.ping_shoot_active = _team_brain.ping_shoot(_peer_id)
-		ctx.ping_pass_target_peer = _team_brain.ping_pass_target(_peer_id)
+		ctx.ping_move_target = _current_strategy.ping_move_target(_peer_id)
+		ctx.ping_shoot_active = _current_strategy.ping_shoot(_peer_id)
+		ctx.ping_pass_target_peer = _current_strategy.ping_pass_target(_peer_id)
 	else:
 		ctx.anchor = self_pos
 		# Match RoleContext.new()'s default when no brain is wired (tests),
@@ -2273,7 +2314,7 @@ func _home_side_of(lobby_slot: int) -> float:
 # here for the puck-in-flight case where the brain still has us
 # slotted CARRIER but we don't have the puck.
 func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
-	var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null else AIRoleSlots.Slot.NONE
+	var slot: int = _current_strategy.get_slot(_peer_id) if _current_strategy != null else AIRoleSlots.Slot.NONE
 	# Target switch-hysteresis input: the target this bot's role chose last
 	# dispatch — INF across a slot change so no role inherits another's
 	# target (see RoleContext.prev_role_target).
@@ -3475,6 +3516,9 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 			aim_vec = aim_vec.rotated(Vector3.UP, _committed_aim_error_rad)
 		var aim_dir_init: Vector3 = aim_vec.normalized() if aim_vec.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
 		var aim_distance: float = aim_vec.length()
+		# Lock the committed shot direction for the charge — the controller aims the
+		# positional wrister along this directly (bot_wrister_aim_dir below).
+		_shoot_aim_dir_locked = aim_dir_init
 		# aim_dir is captured once into the wind-up endpoint offsets below
 		# and held for the charge. A shuffling goalie cannot flip the
 		# chosen arc mid-swing because the endpoint offsets are frozen at
@@ -3564,6 +3608,18 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# synthesized sweep speed) so the bot deterministically fires the shot the
 	# scorer actually evaluated.
 	input.bot_wrister_power_t = _shot_power_committed
+	# Commit the aim direction and hand DIRECTLY (the fake cursor is now purely the
+	# cosmetic wind-up coil): the controller shoots the positional wrister along
+	# this for bots and reads forehand/backhand from the committed side, not the
+	# near-body cursor sweep. Set every tick so it's live on the release tick.
+	input.bot_wrister_aim_dir = _shoot_aim_dir_locked
+	input.bot_wrister_backhand = _shoot_side_sign < 0.0
+	# Freeze the puck at the SCORED lateral offset, not the centered carry pose.
+	# The wrister freeze pins the puck where the blade holds it; centered, that
+	# rides into the goalie's poke radius on a breakaway and the shot whiffs.
+	# The scorer priced an offset release (release_pos = anchor + this) — honor it
+	# so the puck freezes off the poke line where the scorer put it.
+	input.bot_wrister_origin_offset = _shot_release_offset_locked
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS + _shoot_release_hold_ticks:
 		# Still charging (or hanging on the sampled late-release hold —
@@ -3697,8 +3753,8 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
 	var target_slot_label: String = "?"
-	if _team_brain != null and _pass_target_peer_id != -1:
-		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
+	if DEBUG_DECISIONS and _current_strategy != null and _pass_target_peer_id != -1:
+		target_slot_label = _slot_label(_current_strategy.get_slot(_pass_target_peer_id))
 	# Aim point is the receiver's lead — speed-aware via
 	# _pass_aim_point so a charged pass leads less than a quick-shot
 	# (puck arrives sooner, receiver covers less ground in flight) —
@@ -3718,9 +3774,10 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# produces noisy cursor deltas, which the charge tracker reads as
 		# bizarre release directions on long charged passes.
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
-		debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft
-				else ("↝rim" if _dump_is_rim else "↝out"))) \
-				if is_dump else "PASS→%s" % target_slot_label
+		if DEBUG_DECISIONS:
+			debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft
+					else ("↝rim" if _dump_is_rim else "↝out"))) \
+					if is_dump else "PASS→%s" % target_slot_label
 		# Instant quick pass via the dedicated button flag — fires this tick from
 		# carry (player→blade snap at the fixed pass power), same semantics the
 		# one-tick shoot release used to produce before the timing classifier was
@@ -3747,7 +3804,8 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 				_set_state(State.CARRY)
 				return
 
-	debug_last_decision = "PASS+→%s" % target_slot_label
+	if DEBUG_DECISIONS:
+		debug_last_decision = "PASS+→%s" % target_slot_label
 
 	if _pass_charge_tick == 0:
 		# Capture aim direction toward the receiver and build wind-up endpoint
@@ -3761,6 +3819,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		sweep.y = 0.0
 		var aim_distance: float = sweep.length()
 		var aim_dir_init: Vector3 = sweep.normalized() if aim_distance > 0.01 else Vector3(0.0, 0.0, 1.0)
+		_pass_aim_dir_locked = aim_dir_init
 		var pass_span: float = BOT_WRISTER_WIND_UP_SPAN_M * maxf(_pass_power_t(), 0.35)
 		# Pass always sweeps on the forehand side — no defender-aware
 		# side flip like SHOOT_PRESSED (passes don't justify backhand power
@@ -3792,6 +3851,10 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# Pass power: the fraction of the bot's own wrister band that hits the
 	# distance-adaptive target speed. The controller reads this directly.
 	input.bot_wrister_power_t = _pass_power_t()
+	# Commit the pass aim directly (forehand — no backhand passes); the cursor is
+	# purely the cosmetic wind-up. Set every tick so it's live on the release tick.
+	input.bot_wrister_aim_dir = _pass_aim_dir_locked
+	input.bot_wrister_backhand = false
 
 	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		input.shoot_held = true
@@ -3979,11 +4042,20 @@ func _one_timer_feed_time_s(snapshot: WorldSnapshot, self_pos: Vector3) -> float
 # the opposite side of the brain (well — same brain) can read it via
 # `_team_brain.is_one_timer_ready(peer_id)`.
 func _set_one_timer_ready(ready: bool) -> void:
-	if _is_one_timer_ready == ready:
-		return
+	# Local only — the write to the shared brain is deferred to
+	# push_one_timer_ready(), called on the main thread after dispatch (AI
+	# threading Phase 3c), so the worker never writes team state. The brain read
+	# side is already frozen into the per-frame view, so the cross-agent signal
+	# was one frame late since Phase 3a regardless; the collection preserves that.
 	_is_one_timer_ready = ready
+
+
+# Main-thread collection of this agent's one-timer readiness into the shared
+# brain (called by the AI coordinator / duel harness after dispatch). Idempotent:
+# pushes the current local flag every frame, so a false erases the entry.
+func push_one_timer_ready() -> void:
 	if _team_brain != null:
-		_team_brain.set_one_timer_ready(_peer_id, ready)
+		_team_brain.set_one_timer_ready(_peer_id, _is_one_timer_ready)
 
 
 # The LIVE-line body anchor for a one-timer reception: place the slapper
@@ -5097,9 +5169,9 @@ func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # zone DZONE, the pressurer is whichever area role currently OWNS the puck —
 # AIZoneCoverage.pressure_owner — so exactly one zone defender ever jabs.)
 func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
-	if _team_brain == null:
+	if _current_strategy == null:
 		return false
-	var slot: int = _team_brain.get_slot(_peer_id)
+	var slot: int = _current_strategy.get_slot(_peer_id)
 	if slot == AIRoleSlots.Slot.PRESSURE \
 			or slot == AIRoleSlots.Slot.F1_PRESSURE \
 			or slot == AIRoleSlots.Slot.CONTAIN:
@@ -5111,7 +5183,7 @@ func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
 			if snapshot == null or snapshot.puck_state == null:
 				return false
 			return AIZoneCoverage.pressure_owner(
-					_team_brain.strong_x(),
+					_current_strategy.strong_x(),
 					_own_goal_dir * GameRules.GOAL_LINE_Z,
 					snapshot.puck_state.position) == slot
 	return false
@@ -5789,7 +5861,7 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 	# election and the race-lost decline below — an order is an order (the
 	# election override in GameManager._enrich_snapshot_for_ai keeps a second
 	# natural chaser from doubling up).
-	if _team_brain != null and _team_brain.ping_chase_peer() == _peer_id:
+	if _current_strategy != null and _current_strategy.ping_chase_peer() == _peer_id:
 		return true
 	if not _is_closest_teammate_to_puck_at(snapshot, self_pos):
 		return false

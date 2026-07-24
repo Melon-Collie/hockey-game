@@ -169,27 +169,48 @@ static func is_backhand_from_swing(
 	var handed: float = -1.0 if is_left_handed else 1.0
 	return swing_rotation * handed < -deadband
 
+# The wrister's aim DIRECTION (world XZ, un-normalized — release_wrister normalizes).
+# BOTS commit their direction directly (bot_aim_dir non-ZERO — they have no cursor,
+# and their cosmetic near-body wind-up cursor would make origin→cursor garbage);
+# HUMANS aim POSITIONALLY from the frozen shot origin toward the cursor ("the puck
+# fires from where it sits toward where you point"). See
+# SkaterController._wrister_aim_dir.
+static func wrister_aim_dir(bot_aim_dir: Vector3, mouse_world: Vector3,
+		origin_world: Vector3) -> Vector3:
+	if bot_aim_dir.length_squared() > 0.0001:
+		return bot_aim_dir
+	return Vector3(mouse_world.x - origin_world.x, 0.0, mouse_world.z - origin_world.z)
+
+# Wrister forehand/backhand. BOTS commit the hand (paired with a committed
+# bot_aim_dir); HUMANS read the CURSOR-sweep chirality (is_backhand_from_swing;
+# the blade is frozen so the cursor is the only sweep). See
+# SkaterController._wrister_is_backhand.
+static func wrister_is_backhand(bot_aim_dir: Vector3, bot_backhand: bool,
+		swing_rotation: float, is_left_handed: bool, deadband: float) -> bool:
+	if bot_aim_dir.length_squared() > 0.0001:
+		return bot_backhand
+	return is_backhand_from_swing(swing_rotation, is_left_handed, deadband)
+
 # Wrister release. HARD BINARY — a quick pass and a charged wrister are two
 # distinct releases, with NO blend between them. Which one fires is decided by the
 # INPUT at the call site (not any threshold in here) and passed in as is_quick_pass:
 #   - QUICK PASS (the dedicated quick_pass button, via _fire_quick_pass): aims
 #     blade→cursor — from the puck's position (the blade) toward the cursor, so
 #     the pass goes where you point — at the fixed quick/pass power.
-#   - WRISTER (the LMB shoot button, via _release_wrister): aims along the DRAG
-#     (the swept cursor direction) at charged power — the pure mouse-speed model
-#     above (wrister_power_t), fed by sweep_speed. The drag direction IS the aim —
-#     this is the defining mechanic of the shot, so it is never diluted.
+#   - WRISTER (the LMB shoot button, via _release_wrister): aims along the
+#     charge_direction the caller hands in, at charged power — the pure mouse-speed
+#     model above (wrister_power_t), fed by sweep_speed. The controller supplies
+#     that vector POSITIONALLY: from the frozen shot origin (the puck, held still
+#     during the charge) toward the cursor — the same aim as the quick pass, so
+#     "the puck fires from where it sits toward where you point." (Bots commit the
+#     direction directly.) Falls back to player→cursor when zero.
 # The two live on separate buttons precisely so there's no tap-vs-hold guess: the
 # old hold-time classifier made an ordinary tap that lingered a few ticks fire a
-# wrister when the player expected a snap. There is intentionally no blend band:
-# dragging to aim is the core of the game, and mixing the body-relative tap
-# direction into charged shots both muddies the feel and — because tap_dir depends
-# on the predicted body position — is a client/host divergence source. Netcode
-# upshot: a charged wrister's aim (the drag vector) is body-independent and
-# identical on client and host.
-# Backhand is the caller's call: the controller passes is_backhand from
-# is_backhand_from_swing (above) — the rotational sense of the blade's sweep
-# around the player over the stroke.
+# wrister when the player expected a snap.
+# Backhand is the caller's call: the controller passes is_backhand — for humans
+# the rotational sense of the CURSOR's bearing sweep over the stroke
+# (is_backhand_from_swing above; the blade is frozen so the cursor is the sweep),
+# for bots the committed hand.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,
@@ -334,6 +355,25 @@ static func follow_through_aim(
 	rt = rt * rt * (3.0 - 2.0 * rt)  # smoothstep
 	var ang: float = lerp_angle(atan2(sd.x, -sd.z), atan2(cd.x, -cd.z), rt)
 	return Vector3(sin(ang), 0.0, -cos(ang))
+
+# Follow-through blade-extension direction in the upper-body LOCAL frame, for a
+# shot along `axis_world` (world XZ). The frozen-wrister whip builds the stick
+# outward FROM THE SHOULDER along this local direction, so the blade drives along
+# the shot vector regardless of the body's yaw (the coil): for any yaw B,
+# `B * whip_local_dir(A, B)` is parallel to A in XZ. (Body lean — pitch/roll —
+# introduces a small error the vertical solve absorbs; yaw is exact.) This is what
+# keeps the finish on the shot line instead of splaying radially outward from the
+# body. Returns ZERO for a degenerate axis (caller falls back).
+static func whip_local_dir(axis_world: Vector3, upper_body_basis: Basis) -> Vector3:
+	var a := Vector3(axis_world.x, 0.0, axis_world.z)
+	if a.length_squared() < 0.0001:
+		return Vector3.ZERO
+	var local: Vector3 = upper_body_basis.inverse() * a.normalized()
+	var dir := Vector3(local.x, 0.0, local.z)
+	if dir.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return dir.normalized()
+
 
 # Should a blade-in-wall squeeze auto-release the puck? Pure threshold check.
 static func should_release_on_wall_pin(squeeze: float, threshold: float) -> bool:

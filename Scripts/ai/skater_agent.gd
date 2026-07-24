@@ -39,6 +39,12 @@ func set_rule_set(rs: int) -> void:
 	_sm.rule_set = rs
 
 
+# Push this agent's one-timer readiness to the shared brain — main-thread only,
+# after dispatch (AI threading Phase 3c). See SkaterAgentStateMachine.
+func push_one_timer_ready() -> void:
+	_sm.push_one_timer_ready()
+
+
 # Returns the InputState for this physics tick. Caller must not retain a
 # reference past the next tick — same scratch buffer is reused.
 # The SM's cursor goes out untouched: its slew (the bot's real Hands blade
@@ -137,3 +143,12 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	# release tick and nothing else clears it, so a latched true would fire an
 	# instant quick pass on every subsequent carry tick.
 	input.quick_pass_pressed = false
+	# Committed wrister aim/hand default to "not committed" every tick (reused
+	# scratch): only the SHOOT/PASS press states set them, and a latched aim_dir
+	# would make the controller read a stale bot aim on an ordinary carry tick.
+	input.bot_wrister_aim_dir = Vector3.ZERO
+	input.bot_wrister_backhand = false
+	# Committed freeze offset defaults to ZERO (centered) every tick: only the
+	# SHOOT press state sets the scored release offset, and a latched value would
+	# pin an ordinary carry tick's puck off to the stale scored spot.
+	input.bot_wrister_origin_offset = Vector3.ZERO

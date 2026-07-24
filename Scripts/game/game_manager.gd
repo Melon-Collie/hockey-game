@@ -195,6 +195,8 @@ var current_snapshot: WorldSnapshot = null
 # and shared onto current_snapshot.accel_by_peer instead of all 6 bots
 # recomputing the same velocity diff every tick (see AIAccelerationTracker).
 var _accel_tracker: AIAccelerationTracker = AIAccelerationTracker.new()
+# Drives all bot dispatch off the AI worker thread (AI threading). See AICoordinator.
+var _ai_coordinator := AICoordinator.new()
 # Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
 # (on_host_started). Drives the carrier reaction delay applied to current_
 # snapshot below, and is read by PlayerRegistry.spawn_bot to wire each agent's
@@ -529,9 +531,22 @@ func _physics_process(delta: float) -> void:
 			current_snapshot.accel_by_peer = _accel_tracker.accel_by_peer
 			current_snapshot.heading_omega_by_peer = _accel_tracker.heading_omega_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
-	if not team_brains.is_empty() and current_snapshot != null:
-		for brain: TeamBrain in team_brains:
-			brain.tick(delta, current_snapshot)
+	# Centralized AI dispatch. Brains run first (team strategy) so each bot reads
+	# this tick's fresh slot assignments, then every bot dispatches against the
+	# SAME enriched snapshot the brains saw — unified perception (bots no longer
+	# lag the brains by the old priority-split tick; see docs/ai-threading-plan.md).
+	# This whole block is the seam Phase 3 lifts onto the AI worker thread; the
+	# per-bot dispatch moved here from AIController._physics_process (was prio -1).
+	if current_snapshot != null:
+		if not team_brains.is_empty():
+			for brain: TeamBrain in team_brains:
+				brain.tick(delta, current_snapshot)
+		if _registry != null:
+			# The coordinator freezes each brain's view (build_view) at the point it
+			# hands work to the worker — only while the worker is idle, so the view
+			# the worker reads is never rebuilt mid-batch.
+			_ai_coordinator.dispatch(
+					_registry.ai_controllers(), team_brains, current_snapshot, delta)
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
@@ -1486,6 +1501,15 @@ func _wire_subsystems() -> void:
 	_phase_coord.goal_scored.connect(_on_goal_resolve_faceoff)
 	_phase_coord.score_changed.connect(score_changed.emit)
 	_phase_coord.phase_changed.connect(phase_changed.emit)
+	# Record period-end markers into the .mreplay event stream (like goals) so the
+	# offline viewer can tick each period boundary. Uses the GameManager-level
+	# phase_changed so it fires on host (via _phase_coord) and client (via the
+	# codec decode path) alike, matching the goal-event recording. Guarded because
+	# phase_changed is GameManager's OWN signal (autoload, persists across
+	# matches), unlike the _phase_coord signals above which are re-created each
+	# _spawn_world — without the guard a second match double-connects.
+	if not phase_changed.is_connected(_on_phase_changed_for_replay_event):
+		phase_changed.connect(_on_phase_changed_for_replay_event)
 	_phase_coord.period_break_started.connect(_on_period_break_for_intermission)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
 	_phase_coord.period_break_started.connect(period_break_started.emit)
@@ -1661,9 +1685,15 @@ func _wire_sound_signals() -> void:
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
 	# regulation periods, GAME_OVER for the final one. (Not period_synced, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
-	phase_changed.connect(func(p: GamePhase.Phase) -> void:
-		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
-			SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0))
+	# Named + guarded so a rematch doesn't stack a second lambda on GameManager's
+	# persistent phase_changed and double-fire the buzzer (see the note above).
+	if not phase_changed.is_connected(_on_phase_changed_period_buzzer):
+		phase_changed.connect(_on_phase_changed_period_buzzer)
+
+
+func _on_phase_changed_period_buzzer(p: GamePhase.Phase) -> void:
+	if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
+		SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0)
 
 
 func _on_local_pickup_sound() -> void:
@@ -2364,6 +2394,11 @@ func _build_replay_header() -> Dictionary:
 				"team_slot": r.team_slot,
 				"is_left_handed": r.is_left_handed,
 				"is_local": peer_id == NetworkManager.local_peer_id(),
+				# Build (height / weight / gear) so the viewer can re-apply the
+				# player's attributes — otherwise replay skaters render at the
+				# neutral frame and their re-derived lean/reach no longer matches
+				# the host's lean-compensated blade positions (stick off the ice).
+				"build": r.attributes.to_dict() if r.attributes != null else {},
 			})
 	return {
 		"game_id": _game_id,
@@ -2446,6 +2481,24 @@ func _on_goal_for_replay_event(scoring_team: Team, scorer: String,
 	_replay_file_writer.enqueue_event(ts, payload)
 
 
+# Record a period-end marker for the .mreplay viewer's timeline. END_OF_PERIOD
+# marks a regulation period boundary (the buzzer point); GAME_OVER is the end of
+# the bar and needs no tick. current_period at this edge is the period that just
+# ended. Recorded on every peer, like goals.
+func _on_phase_changed_for_replay_event(new_phase: GamePhase.Phase) -> void:
+	if new_phase != GamePhase.Phase.END_OF_PERIOD:
+		return
+	if _replay_file_writer == null or _state_machine == null:
+		return
+	var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
+			else NetworkManager.estimated_host_time()
+	var payload: PackedByteArray = JSON.stringify({
+		"kind": "period_end",
+		"period": _state_machine.current_period,
+	}).to_utf8_buffer()
+	_replay_file_writer.enqueue_event(ts, payload)
+
+
 # Roster events for the .mreplay viewer. Header captures the initial roster;
 # these fire only for mid-game changes (joins, demotes, promotes,
 # disconnects) so the viewer can spawn / despawn actors instead of leaving
@@ -2466,6 +2519,9 @@ func _on_replay_player_joined_event(record: PlayerRecord) -> void:
 		"team_id": record.team.team_id if record.team != null else 0,
 		"team_slot": record.team_slot,
 		"is_left_handed": record.is_left_handed,
+		# Same build carry-through as the header roster — a mid-game arrival needs
+		# its attributes re-applied so its lean/reach match too (see _build_replay_header).
+		"build": record.attributes.to_dict() if record.attributes != null else {},
 	}).to_utf8_buffer()
 	_replay_file_writer.enqueue_event(ts, payload)
 
@@ -2551,9 +2607,12 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(impulse: Vector3) -> void:
 			local_player_hit.emit(impulse.length())
-			# Delivered-impulse scale (≈11 at a full hit, matching the stagger ref).
-			# Kicks in above a firm 5.0; the camera aims along the shove.
-			local_player_impact.emit(impulse, clampf((impulse.length() - 5.0) / 6.0, 0.0, 1.0)))
+			# Victim Δv scale (m/s), the same magnitude the stagger keys off:
+			# ~0.6 stagger floor, ~1.35 a full check, ~1.8 a knockdown, up to ~3.1
+			# maximal (BodyCheckRules). Kick the camera along the shove, from nothing
+			# at a sub-stagger bump up to full by a knockdown. The old 5.0/11 floor
+			# predated the inelastic-resolver rewrite (Δv shrank ~2×) and never fired.
+			local_player_impact.emit(impulse, clampf((impulse.length() - 0.6) / 1.5, 0.0, 1.0)))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 		# Historical positions of the OTHER skaters for the reconcile replay's
 		# body-check re-resolution (Slice C) — sampled from each remote's
@@ -2594,16 +2653,14 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	record.skater.body_checked_player.connect(
 		func(v: Skater, f: float, d: Vector3) -> void: _on_hit_landed(pid, v, f, d)
 	)
-	# Impact burst + sound are NOT played here — they fire from the host-authoritative
-	# body_check_landed broadcast (_on_body_check_landed) once the contact validates
-	# (HitTracker.impact_landed), so they read identically on every client. This
+	# Impact burst + sound + replay recording are NOT driven here — they fire from
+	# the host-authoritative body_check_landed broadcast (_on_body_check_landed)
+	# once the contact validates (HitTracker.impact_landed), so they read
+	# identically on every client AND the replay captures only the credited,
+	# deduped hits that actually played (not this raw per-contact signal). This
 	# closure only routes the contact into the credit/claim path
 	# (_on_hit_landed → HitClaimResolver).
 	if NetworkManager.is_host:
-		record.skater.body_checked_player.connect(
-			func(v: Skater, f: float, d: Vector3) -> void:
-				_record_body_check_replay_event(record.peer_id, v, f, d)
-		)
 		# NHL delayed offside: any skater-skater contact can end it (Rule 83.3),
 		# not just a puck touch — see notify_offside_contact. Host-only: the host
 		# simulates every skater, so this fires reliably for any pair regardless
@@ -3716,9 +3773,16 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	# and this signal fires on the deliverer's machine, so gate on local peer.
 	if hitter_peer_id == NetworkManager.local_peer_id():
 		local_player_landed_hit.emit(impulse_magnitude)
-		# impact_force scale (weight × approach, ≈14 at a full check). Kick the
-		# camera along the direction you drove the hit (follow-through).
-		local_player_impact.emit(hit_dir, clampf((impulse_magnitude - 6.0) / 8.0, 0.0, 1.0))
+		# Kick the camera along the direction you drove the hit (follow-through),
+		# ramping from nothing at the register-a-hit floor to full one span above
+		# it — so an ordinary lined-up check kicks, not only head-on collisions
+		# (the old 6.0/14 floor missed every one-sided check). The impact_force
+		# scale's landmarks live on HitRules. The span is a hand-set camera FEEL
+		# value, not a landmark: it tops out a bit past KNOCKDOWN_IMPULSE so only
+		# the hardest hits max the kick.
+		const KICK_FULL_SPAN: float = 4.0
+		local_player_impact.emit(hit_dir, clampf(
+				(impulse_magnitude - HitRules.MIN_HIT_IMPULSE) / KICK_FULL_SPAN, 0.0, 1.0))
 		# Live achievement — excluded in free play / drills (no achievements there).
 		if _achievements != null and _achievements_active():
 			_achievements.on_local_hit(impulse_magnitude)
@@ -3758,8 +3822,20 @@ func _on_body_check_landed(hitter_peer_id: int, victim_peer_id: int,
 	var vfx: SkaterVFX = victim_rec.skater.get_node_or_null("VFX") as SkaterVFX
 	if vfx != null:
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
-	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
-			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
+	# Record the replay audio/burst event from THIS authoritative funnel — the
+	# same credited-and-deduped contact that plays live — rather than the raw
+	# body_checked_player signal, which fires on every closing contact (bumps,
+	# uncommitted collisions, per-tick re-fires) and made replays thud far more
+	# than was ever heard. Self-gates to host + not-replaying (see the helper);
+	# the replayer's own check_sound_audible gate then matches the live silence
+	# floor for soft hits, while the burst still fires for every credited check.
+	_record_body_check_replay_event(hitter_peer_id, victim_rec.skater, force, hit_dir)
+	# The burst fires for every credited check, but the thud is reserved for
+	# stagger-class-or-harder hits — a committed bump / board rub bursts faintly
+	# and stays silent (see SkaterVFX.check_sound_audible).
+	if SkaterVFX.check_sound_audible(force):
+		SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
+				SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
 	body_check_broadcast.emit(force)
 	# The hitter's check-delivery body pose (shoulder drive through the contact)
 	# rides the same broadcast as the burst/thud so all three land the identical
@@ -4050,6 +4126,20 @@ func _refresh_ranked_match() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_close_replay_file_writer()
+	# Release process-lifetime GPU caches before the RenderingServer finalizes.
+	# HockeyRink._build_cache (ice/stripe ImageTextures) and ArenaStands'
+	# _crowd_material / _layout_cache live in static vars that survive scene
+	# changes for perf; a static var is freed at script-unload, AFTER the server,
+	# so at exit their RIDs are reported as leaked. As an autoload, GameManager's
+	# EXIT_TREE fires only at real app shutdown — covering both the menu-Quit
+	# (get_tree().quit()) and window-close paths — while WM_CLOSE covers the
+	# window close before the quit cascade. release_shared_cache is idempotent.
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_EXIT_TREE:
+		HockeyRink.release_shared_cache()
+		ArenaStands.release_shared_cache()
+		# Join the AI worker thread at app shutdown (no-op unless threaded and
+		# started) so a live Thread is never leaked past exit.
+		_ai_coordinator.shutdown()
 
 
 func on_scene_exit() -> void:
@@ -4087,6 +4177,9 @@ func on_scene_exit() -> void:
 	_state_buffer_manager = null
 	current_snapshot = null
 	team_brains = []
+	# Stop + join the AI worker thread (no-op unless threaded and started), so a
+	# torn-down match never leaves a live thread referencing freed controllers.
+	_ai_coordinator.shutdown()
 	# Null PhaseCoordinator's _state_machine before stopping the driver so
 	# any replay_stopped signal that fires during teardown returns early from
 	# _on_goal_replay_stopped's guard rather than calling handle_phase_entered
@@ -4760,6 +4853,15 @@ func _should_record_to_file() -> bool:
 	if _state_machine == null:
 		return true
 	var phase: int = _state_machine.current_phase
+	# FACEOFF_PREP is movement-locked for INPUT, but the skaters actively skate in
+	# to the dot over the "2 → 1 → DROP" countdown (PhaseCoordinator.begin_approach).
+	# Record it at the normal throttled rate so the replay plays the walk-up —
+	# capturing only the first (pre-approach) frame made the viewer teleport
+	# straight from there to the drop. The crossing bracket into FACEOFF_PREP is
+	# still a clean cut in FileReplayDriver (_is_faceoff_reset_bracket), so the
+	# puck's reset-to-dot doesn't smear; the intra-prep brackets interpolate.
+	if phase == GamePhase.Phase.FACEOFF_PREP:
+		return true
 	if PhaseRules.is_movement_locked(phase):
 		# Capture only the first frame of each movement-locked phase. Goal:
 		# the puck-in-net moment on GOAL_SCORED entry — without this, the
@@ -4845,6 +4947,18 @@ func set_input_blocked(blocked: bool) -> void:
 
 func get_skater_team(skater: Skater) -> Team:
 	return _registry.resolve_team(skater) if _registry != null else null
+
+
+# The scorer's live Skater, resolved by name (same lookup the celebration uses).
+# Null if the name doesn't match a record — callers fall back. Used by the goal
+# hero-cam to frame/follow the scorer.
+func get_scorer_skater(scorer_name: String) -> Skater:
+	if _registry == null or scorer_name.is_empty():
+		return null
+	for record: PlayerRecord in _registry.all().values():
+		if record.player_name == scorer_name:
+			return record.skater
+	return null
 
 
 func get_puck() -> Puck:
