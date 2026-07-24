@@ -13,7 +13,7 @@ extends Node2D
 # target the upper-chest region (face_v ≈ 0.14–0.60) — the enlarged number
 # reads clearly on the goalie's back in post-goal replays.
 
-const FONT: Font = preload("res://Assets/Fonts/SairaCondensed-Bold.ttf")
+const FONT: Font = preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")
 const IMG_W: int = 256
 const IMG_H: int = 320
 const CENTER_X: int = IMG_W / 2
