@@ -45,17 +45,25 @@ in the lane reads as a blocked shot (real trackers score it that way too); a sho
 that misses by more than the 1.2 m margin isn't counted. The margins are hand-set
 *reporting* thresholds, tunable in playtest.
 
-**A2 IMPLEMENTED** (2026-07-24). Expected goals as a calibration head over the
-shared hole geometry:
+**A2 IMPLEMENTED + CALIBRATED** (2026-07-24). Expected goals as a calibration
+head over the shared hole geometry:
 - `AIActionScoring.expected_goals()` — a sibling to `open_net_danger`, both built
   on the extracted `best_open_angle()` (the widest goalie-beating opening;
-  `open_net_danger` kept bit-identical). It swaps the bot's per-build `aim_spread`
-  for a FIXED `XG_REFERENCE_SPREAD_RAD` (the stat can't move when bot difficulty is
-  retuned) and caps below 1.0 (`XG_MAX`). **Magnitude is provisional** — the shape
-  is grounded (open angle / goalie reach / real goalie position), but the two
-  constants are hand-set priors to be FIT against logged outcomes via the §3.3
-  reliability loop once B's shot-event log exists. The GUT test pins shape, not
-  magnitude (bounded, goalie-aware, decoupled from the aim knob).
+  `open_net_danger` kept bit-identical). Unlike the bot decision (which fuses
+  geometry and shooter precision into one spread, saturating good looks to ~1.0),
+  xG SEPARATES the two: the geometry is measured at a fixed sharp-hand spread
+  (`XG_ENTRY_SPREAD_RAD`, so the stat never moves when bot difficulty is retuned),
+  then a saturating **calibration head** (Michaelis–Menten, `XG_ANGLE_HALF` /
+  `XG_MAX`) maps the open angle to a probability.
+- **Calibrated against the shot-outcome sim** — the same `shot_sim_harness`
+  instrument `open_net_danger` was tuned to. `test_expected_goals_calibration.gd`
+  pins that xG tracks the measured goal fraction of a reference shooter across the
+  shot grid (loose bands, per the irreducible hole-model-vs-flat-sim scatter on
+  angled shots — same as the shot-value contract). So the magnitude is
+  measurement-grounded now, not hand-set. (The §3.3 reliability loop against
+  real-game logged outcomes stays a future refinement once B's shot-event log
+  exists — it re-fits the same two head constants.) A separate shape test pins
+  bounded / goalie-aware / spread-decoupled.
 - Computed at **release** from the real goalie geometry (`_note_shot_trajectory`
   → the directed goal's defending goalie position), held on the pending shot
   (`note_xg`), and committed at **resolution** on `shot_counted(peer, blocked, xg)`

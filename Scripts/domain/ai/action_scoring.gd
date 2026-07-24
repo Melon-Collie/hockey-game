@@ -955,21 +955,25 @@ static func best_open_angle(
 # ── Expected goals (xG) — the analytics stat ─────────────────────────────────
 # The make-probability of a shot, for the analytics layer. Same grounded hole
 # geometry as open_net_danger — the real goalie-beating open net — but built as a
-# STAT, not a bot decision:
-#   • It normalizes by a FIXED reference spread (XG_REFERENCE_SPREAD_RAD), not the
-#     caller's per-build aim_spread, so a career xG number never moves when bot
-#     aim/difficulty is retuned. The reference does double duty exactly as the bot
-#     model does — the release scatter that both insets the clean entry and scales
-#     the make-probability — so xG stays the internally-consistent P(beat the
-#     goalie into open net) for a reference shooter.
-#   • It caps below 1.0 (XG_MAX): even a wide-open Mitts look isn't a literal 100%.
-# MAGNITUDE IS PROVISIONAL. The shape is grounded (open angle, goalie reach, screen
-# — all physical); the two constants are hand-set priors to be FIT against logged
-# shot outcomes via the reliability-plot loop once the Phase-B shot-event log
-# exists (analytics plan §3.3). Passes are already excluded upstream — expected_goals
-# is only ever evaluated for a shot the resolution gate counted.
-const XG_REFERENCE_SPREAD_RAD: float = 0.02
-const XG_MAX: float = 0.90
+# STAT, not a bot decision. The bot's open_net_danger fuses the geometry and the
+# shooter's precision into ONE spread (window / 2·spread), which is right for a
+# decision but wrong for a stat: a sharp spread saturates every decent look to
+# ~1.0, and the number would move whenever bot aim is retuned. So xG SEPARATES the
+# two jobs:
+#   1. The GEOMETRY — best_open_angle at a fixed sharp-hand spread
+#      (XG_ENTRY_SPREAD_RAD) — the raw open net past the real goalie, in radians.
+#      Fixed, so xG never moves when bot difficulty is retuned.
+#   2. A CALIBRATION HEAD — a saturating map (Michaelis–Menten) from that open
+#      angle to a goal probability, capped at XG_MAX. XG_ANGLE_HALF is the opening
+#      at which xG reaches half the cap; it sets where the gradient sits.
+# The head's two constants are CALIBRATED against the shot-outcome sim (the same
+# instrument open_net_danger was tuned to — tests/unit/ai/test_expected_goals_
+# calibration.gd), so xG tracks the measured goal fraction across the shot grid.
+# Passes are already excluded upstream — expected_goals is only ever evaluated for
+# a shot the resolution gate counted.
+const XG_ENTRY_SPREAD_RAD: float = MIN_RELEASE_SPREAD_RAD  # sharp-hand geometry (skill lives in the head)
+const XG_ANGLE_HALF: float = 0.045
+const XG_MAX: float = 0.97
 
 static func expected_goals(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
@@ -985,9 +989,9 @@ static func expected_goals(
 	var angle: float = best_open_angle(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
-			goalie_post_seal_x, goalie_post_seal_tall, XG_REFERENCE_SPREAD_RAD,
+			goalie_post_seal_x, goalie_post_seal_tall, XG_ENTRY_SPREAD_RAD,
 			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
-	return minf(XG_MAX, angle / (2.0 * XG_REFERENCE_SPREAD_RAD))
+	return XG_MAX * angle / (angle + XG_ANGLE_HALF)
 
 
 # The LOFT the bot should shoot with, from the same hole geometry that
