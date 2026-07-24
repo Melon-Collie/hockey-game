@@ -287,7 +287,7 @@ func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: 
 	# Display font in caps — the activity list carries the same condensed
 	# athletic look as the player card above it and the scorebug.
 	label.uppercase = true
-	label.add_theme_font_override("font", MenuStyle.display_font_spaced())
+	label.add_theme_font_override("font", MenuStyle.name_font_spaced())
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", rest_color)
 	label.set_anchors_and_offsets_preset(Control.PRESET_LEFT_WIDE)

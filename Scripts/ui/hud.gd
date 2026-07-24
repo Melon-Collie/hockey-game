@@ -318,7 +318,7 @@ func _build_scorebug() -> void:
 	_away_sog_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_away_sog_label.custom_minimum_size = Vector2(28, 0)
 	shots_vbox.add_child(_away_sog_label)
-	var shots_header := _lbl_m("SHOTS", 10, _DIM)
+	var shots_header := _lbl("SHOTS", 10, _DIM)
 	shots_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shots_vbox.add_child(shots_header)
 	_home_sog_label = _lbl("0", 18, _WHITE)
@@ -335,7 +335,7 @@ func _build_scorebug() -> void:
 	time_vbox.add_theme_constant_override("separation", 2)
 	time_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	time_cell.add_child(time_vbox)
-	_period_label = _lbl_m("1ST", 13, _DIM)
+	_period_label = _lbl("1ST", 13, _DIM)
 	_period_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	time_vbox.add_child(_period_label)
 	_clock_label = _lbl("4:00", 26, _WHITE)
@@ -370,7 +370,7 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 	abbr_margin.add_theme_constant_override("margin_left", 8)
 	abbr_margin.add_theme_constant_override("margin_right", 4)
 	row.add_child(abbr_margin)
-	var abbr_label := _lbl_m(abbr, 18, _WHITE)
+	var abbr_label := _lbl(abbr, 18, _WHITE)
 	abbr_label.custom_minimum_size = Vector2(50, 0)
 	abbr_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	abbr_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -1675,17 +1675,6 @@ func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", color)
-	return l
-
-# Manrope variant for the scorebug's small caps labels (team abbreviation,
-# SHOTS header, period). The display face is kept for the numerals only —
-# scores, shot counts, clock — so the condensed font reads as an accent.
-func _lbl_m(text: String, size: int, color: Color) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_override("font", MenuStyle.NAME_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l

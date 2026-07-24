@@ -456,7 +456,7 @@ func _hsep() -> HSeparator:
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_override("font", MenuStyle.NAME_FONT)
+	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l

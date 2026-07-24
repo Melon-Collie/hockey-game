@@ -228,9 +228,10 @@ static func pulse(node: CanvasItem) -> Tween:
 	return t
 
 
-# Big Shoulders is tightly condensed; uppercase UI text at menu sizes needs a
-# touch of air between glyphs to stay legible. Built once and shared — every
-# heading / CTA / menu row references the same FontVariation.
+# The condensed display face wants a touch of air between glyphs when set in
+# uppercase at menu sizes. Built once and shared — popup/dialog headings and
+# primary CTAs reference this (main-menu identity); in-game menu rows use
+# name_font_spaced() (Manrope) instead so buttons read as clean UI.
 static var _display_font_spaced: FontVariation = null
 
 
@@ -240,6 +241,20 @@ static func display_font_spaced() -> FontVariation:
 		_display_font_spaced.base_font = DISPLAY_FONT
 		_display_font_spaced.set_spacing(TextServer.SPACING_GLYPH, 1)
 	return _display_font_spaced
+
+
+# Manrope SemiBold + tracking for uppercase in-game menu rows/buttons that
+# should read as clean UI rather than broadcast chrome. Same shared-instance
+# pattern as display_font_spaced().
+static var _name_font_spaced: FontVariation = null
+
+
+static func name_font_spaced() -> FontVariation:
+	if _name_font_spaced == null:
+		_name_font_spaced = FontVariation.new()
+		_name_font_spaced.base_font = NAME_FONT
+		_name_font_spaced.set_spacing(TextServer.SPACING_GLYPH, 1)
+	return _name_font_spaced
 
 
 # Heading treatment for popup/dialog titles — the condensed display font in

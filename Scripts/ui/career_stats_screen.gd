@@ -57,14 +57,23 @@ func _ready() -> void:
 	var header := HBoxContainer.new()
 	vbox.add_child(header)
 
+	# Close button lives in the top-right corner; a left spacer mirroring its
+	# width lets the title center against the true panel width, matching the
+	# centered content below instead of drifting left.
+	var close_btn: Button = MenuStyle.close_button()
+	close_btn.pressed.connect(hide)
+
+	var header_spacer := Control.new()
+	header_spacer.custom_minimum_size = Vector2(close_btn.custom_minimum_size.x, 0)
+	header.add_child(header_spacer)
+
 	var title := Label.new()
 	title.text = "Career"
 	MenuStyle.apply_heading(title)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	header.add_child(title)
 
-	var close_btn: Button = MenuStyle.close_button()
-	close_btn.pressed.connect(hide)
 	header.add_child(close_btn)
 
 	vbox.add_child(_build_tab_switcher())
