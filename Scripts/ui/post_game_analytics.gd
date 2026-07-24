@@ -203,6 +203,9 @@ func _refresh() -> void:
 	var events: Array[ShotEvent] = GameManager.get_shot_events()
 	var totals: Array[Dictionary] = _team_totals()
 
+	totals[0]["xg_base"] = XGBaseline.team_total(events, 0)
+	totals[1]["xg_base"] = XGBaseline.team_total(events, 1)
+
 	_map.configure(events, _team_colors)
 	_flow.configure(events, _team_colors,
 			GameManager.get_period_duration(), GameManager.get_num_periods())
@@ -217,8 +220,8 @@ func _refresh() -> void:
 # them. (The map/flow read the event list; both derive from the same shots.)
 func _team_totals() -> Array[Dictionary]:
 	var out: Array[Dictionary] = [
-		{"goals": 0, "sog": 0, "corsi": 0, "fenwick": 0, "xg": 0.0},
-		{"goals": 0, "sog": 0, "corsi": 0, "fenwick": 0, "xg": 0.0},
+		{"goals": 0, "sog": 0, "corsi": 0, "fenwick": 0, "xg": 0.0, "xg_base": 0.0},
+		{"goals": 0, "sog": 0, "corsi": 0, "fenwick": 0, "xg": 0.0, "xg_base": 0.0},
 	]
 	var players: Dictionary[int, PlayerRecord] = GameManager.get_players()
 	for peer_id: int in players:
@@ -251,6 +254,13 @@ func _build_tape_rows(totals: Array[Dictionary]) -> void:
 			"%d", true)
 	_add_tape_row("Expected goals", float(totals[0]["xg"]), float(totals[1]["xg"]),
 			"%.2f", true)
+	# The location-only cross-check (XGBaseline). Shown alongside the goalie-aware
+	# number while the two are being reconciled: the geometric model matches this
+	# closely against a SET goalie but runs several times hot once the goalie has
+	# been pulled off his line, because it prices the open net without pricing how
+	# hard the shot is to finish. Seeing both makes that gap visible per game.
+	_add_tape_row("xG (location model)", float(totals[0]["xg_base"]),
+			float(totals[1]["xg_base"]), "%.2f", true)
 
 
 # One head-to-head row: centred label (advanced rows carry a small tag), the two
