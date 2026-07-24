@@ -667,6 +667,7 @@ func _build_skip_replay_prompt() -> void:
 	# Pad votes to skip with the south face button; keyboard with Space. Built from
 	# the same device/brand-aware text the vote-tally refresh uses.
 	_skip_prompt_label = _lbl(_skip_prompt_text(), 18, _WHITE)
+	_skip_prompt_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	_skip_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_skip_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	_skip_prompt_label.anchor_left = 1.0
@@ -686,6 +687,7 @@ func _build_menu_hint() -> void:
 	# Pad opens the menu with Start (≡ / + on Switch); keyboard with Escape.
 	_menu_hint_label = _lbl("%s MENU" % ControllerGlyphs.prompt(
 			"[ESC]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START)), 16, _WHITE)
+	_menu_hint_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
 	# box straddling the 0.5 anchor), sitting 16px above the bottom.
 	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

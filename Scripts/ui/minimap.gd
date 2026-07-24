@@ -33,10 +33,14 @@ const _PUCK_FILL: Color = Color(0.02, 0.02, 0.02, 1.0)
 const _PUCK_OUTLINE: Color = Color(1.0, 1.0, 1.0, 0.9)
 const _DOT_OUTLINE: Color = Color(0.0, 0.0, 0.0, 0.7)
 const _LOCAL_RING: Color = Color(1.0, 1.0, 1.0, 0.95)
+# Faceoff spots — static reference marks only (no circles, no hashmarks), muted
+# and low-alpha so a live player/puck dot always wins the eye over them.
+const _FACEOFF_DOT_COLOR: Color = Color(0.86, 0.22, 0.22, 0.28)
 
 const _PLAYER_DOT_RADIUS: float = 3.5
 const _GOALIE_DOT_RADIUS: float = 3.0
 const _PUCK_DOT_RADIUS: float = 2.5
+const _FACEOFF_DOT_RADIUS: float = 1.3
 
 var _ice_width_px: float = 0.0   # short (X) axis, derived from rink aspect
 var _bg_style: StyleBoxFlat = null
@@ -68,9 +72,18 @@ func _ready() -> void:
 	_bg_style.set_border_width_all(1)
 	_bg_style.anti_aliasing = false
 
+	# Ice bed: a rounded rect whose corner radius is the REAL rink corner radius
+	# (GameRules.CORNER_RADIUS, 8.53 m) mapped through the map scale, so the map's
+	# corners bow exactly like the boards do instead of reading as a square. Scale
+	# is uniform (see _ice_width_px derivation), so the world's circular corner
+	# stays circular here. A thin border traces the rounded shape as the boards.
+	var px_per_m: float = _ICE_LENGTH_PX / (GameRules.RINK_HALF_LENGTH * 2.0)
+	var corner_px: int = int(round(GameRules.CORNER_RADIUS * px_per_m))
 	_ice_style = StyleBoxFlat.new()
 	_ice_style.bg_color = _ICE_COLOR
-	_ice_style.set_corner_radius_all(10)
+	_ice_style.set_corner_radius_all(corner_px)
+	_ice_style.border_color = _BORDER_COLOR
+	_ice_style.set_border_width_all(1)
 	_ice_style.anti_aliasing = false
 
 func _process(_delta: float) -> void:
@@ -93,6 +106,15 @@ func _draw() -> void:
 	draw_style_box(_bg_style, Rect2(Vector2.ZERO, size))
 	var ice_rect := Rect2(Vector2(_MARGIN, _MARGIN), Vector2(_ice_width_px, _ICE_LENGTH_PX))
 	draw_style_box(_ice_style, ice_rect)
+
+	# Faceoff spots first — static reference marks on the ice bed, under the lines
+	# and every dynamic dot. Center ice plus the neutral- and end-zone dots, drawn
+	# straight from the same geometry the faceoff staging uses.
+	_draw_faceoff_dot(Vector2.ZERO, flip)
+	for dot: Vector2 in GameRules.NEUTRAL_ZONE_FACEOFF_DOTS:
+		_draw_faceoff_dot(dot, flip)
+	for dot: Vector2 in GameRules.END_ZONE_FACEOFF_DOTS:
+		_draw_faceoff_dot(dot, flip)
 
 	# Zone lines run across the short axis (constant world Z → constant map Y).
 	_draw_zone_line(0.0, flip, _CENTER_LINE_COLOR, 1.5)
@@ -145,11 +167,34 @@ func _map_point(world_x: float, world_z: float, flip: bool) -> Vector2:
 	var cy: float = _MARGIN + _ICE_LENGTH_PX * 0.5
 	return Vector2(cx + nx * _ice_width_px * 0.5, cy + nz * _ICE_LENGTH_PX * 0.5)
 
-# A full-width line at a constant world Z (blue/center/goal line).
+# A zone line spanning the rink's width at a constant world Z. Blue/center lines
+# sit in the straight-wall middle, so they run the full width; the goal lines sit
+# past the corner center, so this insets them to the curved boards' actual width
+# there — otherwise they'd poke into the rounded-off corner void.
 func _draw_zone_line(world_z: float, flip: bool, color: Color, width: float) -> void:
-	var a: Vector2 = _map_point(-GameRules.RINK_HALF_WIDTH, world_z, flip)
-	var b: Vector2 = _map_point(GameRules.RINK_HALF_WIDTH, world_z, flip)
+	var hw: float = _rink_half_width_at_z(world_z)
+	var a: Vector2 = _map_point(-hw, world_z, flip)
+	var b: Vector2 = _map_point(hw, world_z, flip)
 	draw_line(a, b, color, width)
+
+# The rink's half-width at a given world Z, following the rounded corners: full
+# width through the straight middle, shrinking along the corner arc past the
+# corner center. Mirrors the board geometry in GameRules.clamp_to_rink_inner but
+# on the outer (board) dimensions.
+func _rink_half_width_at_z(world_z: float) -> float:
+	var az: float = absf(world_z)
+	var corner_center_z: float = GameRules.RINK_HALF_LENGTH - GameRules.CORNER_RADIUS
+	if az <= corner_center_z:
+		return GameRules.RINK_HALF_WIDTH
+	var dz: float = minf(az - corner_center_z, GameRules.CORNER_RADIUS)
+	var inner: float = sqrt(GameRules.CORNER_RADIUS * GameRules.CORNER_RADIUS - dz * dz)
+	return (GameRules.RINK_HALF_WIDTH - GameRules.CORNER_RADIUS) + inner
+
+# A single faceoff spot. spot is (world_x, world_z); drawn as a small faint mark
+# with no outline so it stays a background reference, never a foreground dot.
+func _draw_faceoff_dot(spot: Vector2, flip: bool) -> void:
+	var pos: Vector2 = _map_point(spot.x, spot.y, flip)
+	draw_circle(pos, _FACEOFF_DOT_RADIUS, _FACEOFF_DOT_COLOR)
 
 func _draw_dot(pos: Vector2, radius: float, fill: Color, is_local: bool) -> void:
 	draw_circle(pos, radius + 1.0, _DOT_OUTLINE)

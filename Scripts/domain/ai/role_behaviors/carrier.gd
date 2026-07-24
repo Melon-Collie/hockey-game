@@ -113,14 +113,20 @@ var _shot_sample_backhand: bool = false
 var _shot_sample_is_tip: bool = false
 
 
-# Lateral envelope usable for a release offset: the handling reach less what the
-# wind-up gesture itself consumes — half the sweep span along the aim line plus
-# the cosmetic side offset — so the blade holds BOTH the offset and the sweep
-# endpoints inside ROM. Pure geometry of real gesture measurements, not a knob.
+# Lateral envelope usable for a release offset: the handling reach less the
+# forward carry the frozen blade still holds the puck out at (half the wind-up
+# span ≈ the controllable carry distance), so a puck relocated laterally by this
+# much stays inside ROM. The wrister's blade FREEZES at the release offset now —
+# it no longer sweeps out to a side-offset endpoint — so the old BOT_WRISTER_
+# SIDE_OFFSET_M reservation (ROM the cosmetic sweep used to consume) is gone:
+# that side offset is purely the fake wind-up cursor's, not the blade's, so it
+# must not shrink the lateral the scorer can price. Dropping it widened the
+# priced release ~0.15 m — the frozen mechanic can genuinely reach it, so the
+# breakaway shot is scored (and executed) from the wider, honest angle.
+# Pure geometry of real gesture measurements, not a knob.
 static func _usable_release_offset(reach: float) -> float:
 	var half_span: float = SkaterAgentStateMachine.BOT_WRISTER_WIND_UP_SPAN_M * 0.5
-	return maxf(sqrt(maxf(reach * reach - half_span * half_span, 0.0))
-			- SkaterAgentStateMachine.BOT_WRISTER_SIDE_OFFSET_M, 0.0)
+	return sqrt(maxf(reach * reach - half_span * half_span, 0.0))
 
 
 # ── Smart-ping obedience ─────────────────────────────────────────────────────

@@ -205,6 +205,7 @@ func _build_panel() -> void:
 	var footer_panel := PanelContainer.new()
 	footer_panel.add_theme_stylebox_override("panel", footer_style)
 	var footer := _lbl("PRESS TAB TO TOGGLE", 11, _DIM)
+	footer.add_theme_font_override("font", MenuStyle.UI_FONT)
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	footer_panel.add_child(footer)
 	vbox.add_child(footer_panel)
@@ -416,7 +417,7 @@ func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: b
 		var cell := Label.new()
 		cell.text = texts[i]
 		cell.custom_minimum_size = Vector2(widths[i], 0)
-		cell.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+		cell.add_theme_font_override("font", MenuStyle.UI_FONT)
 		cell.add_theme_font_size_override("font_size", font_size)
 		var col := name_color if (i > 0 and i < 4 or is_header) else _WHITE
 		cell.add_theme_color_override("font_color", col)

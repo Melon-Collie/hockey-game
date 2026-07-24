@@ -51,13 +51,32 @@ var hit_held: bool = false
 # Set by bots at their shot/pass windup, and by the gamepad path from the right-stick
 # push magnitude. Mouse humans leave it at the default (unused — they read real cursor speed).
 var bot_wrister_power_t: float = 1.0
-# Runtime, NOT serialized. True when the wrister power/aim are COMMITTED rather than
+# Runtime, NOT serialized. True when the wrister POWER is COMMITTED rather than
 # measured from cursor motion: power comes from bot_wrister_power_t (with the travel
-# gate bypassed) and aim falls back to player→cursor (the parked stick direction),
-# not the drag direction. Set by the gamepad gatherer while RT is held — power from the
-# stick magnitude, aim from its direction (bots route through is_ai_controlled() instead).
+# gate bypassed) instead of the real cursor speed. Set by the gamepad gatherer while
+# RT is held — the pad has no meaningful cursor speed, so the right-stick push
+# magnitude is the whole power signal (aim still flows through the positional
+# origin→cursor model, since the gamepad parks the cursor in the stick direction).
 # NOTE: not on the wire yet — drives offline / host play; online pad clients are a follow-up.
 var commit_wrister_power: bool = false
+# BOT-ONLY, runtime, NOT serialized. The bot's committed shot DIRECTION (world XZ,
+# normalized) for a charged wrister/pass, and its committed forehand/backhand.
+# Bots have no real cursor, and the human wrister now aims POSITIONALLY (origin→
+# cursor) with forehand/backhand read from the cursor's bearing sweep — a bot's
+# cosmetic near-body wind-up cursor would make both garbage. So a bot commits its
+# aim and hand directly (like it already commits power via bot_wrister_power_t);
+# the controller uses them when bot_wrister_aim_dir is non-ZERO (see
+# SkaterController._wrister_aim_dir / _wrister_is_backhand). The fake cursor stays
+# purely cosmetic (the wind-up coil pose). Humans leave aim_dir ZERO → positional.
+var bot_wrister_aim_dir: Vector3 = Vector3.ZERO
+var bot_wrister_backhand: bool = false
+# BOT-ONLY. World XZ offset (from the skater) where the bot wants its puck to
+# FREEZE for the shot — the scored lateral release offset (`_shot_release_offset_locked`).
+# The freeze otherwise pins the puck at the centered carry pose; on a breakaway
+# that rides into the goalie's poke radius and the shot whiffs. Holding the puck
+# at this scored, off-the-poke-line spot (see SkaterController._apply_wrister_aim_blade)
+# restores the offset release the scorer priced. ZERO = centered (human / no offset).
+var bot_wrister_origin_offset: Vector3 = Vector3.ZERO
 
 func to_array() -> Array:
 	return [

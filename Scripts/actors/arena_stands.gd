@@ -288,6 +288,18 @@ var _suspend_rebuild: bool = false
 static var _layout_cache: Dictionary = {}
 
 
+# Drop the process-lifetime crowd caches. The static _crowd_material
+# (ShaderMaterial) and _layout_cache (terrace mesh + body/head MultiMeshes) hold
+# GPU RIDs that survive scene changes for perf. A static var is freed at
+# script-unload — AFTER the RenderingServer finalizes — so at exit these
+# destruct with a null RenderingServer and their RIDs are reported as leaked.
+# Clearing them here, from a real-shutdown hook (GameManager), drops the last
+# reference while the server is still alive. Only call at app quit.
+static func release_shared_cache() -> void:
+	_crowd_material = null
+	_layout_cache.clear()
+
+
 func _ready() -> void:
 	_rebuild()
 	# The crowd material is static (see its doc): a bowl mid-celebration when

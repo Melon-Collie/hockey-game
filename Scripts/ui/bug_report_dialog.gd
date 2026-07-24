@@ -87,7 +87,10 @@ func open() -> void:
 	_status_label.text = ""
 	_submit_button.disabled = false
 	show()
-	_description.grab_focus()
+	# grab_focus errors ("!is_inside_tree()") if the dialog was never parented;
+	# only grab once it's actually in the tree.
+	if _description.is_inside_tree():
+		_description.grab_focus()
 
 
 func _unhandled_input(event: InputEvent) -> void:

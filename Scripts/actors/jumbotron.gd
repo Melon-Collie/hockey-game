@@ -70,6 +70,11 @@ var _goal_color: Color = Color.WHITE
 
 var _viewport: SubViewport = null
 var _band_mat: StandardMaterial3D = null
+# The four faces' shared screen material, held so exit teardown can drop its
+# ViewportTexture bindings before the RenderingServer is finalized — see
+# _teardown_viewport().
+var _screen_mat: StandardMaterial3D = null
+var _viewport_freed: bool = false
 
 # Screen pages (one Control per JumbotronRules.Mode) and their labels.
 var _pages: Dictionary = {}
@@ -105,6 +110,38 @@ func _ready() -> void:
 		gm.goal_scored.connect(_on_goal_scored)
 	if gm.has_signal("phase_changed"):
 		gm.phase_changed.connect(_on_phase_changed)
+
+
+# Release the screen SubViewport and its ViewportTexture bindings explicitly,
+# before Godot finalizes the RenderingServer on quit. The four screen quads
+# share one material holding the viewport's texture as albedo + emission; left
+# bound at exit, the viewport — plus the canvas items and text-shaping RIDs from
+# its Label pages — is torn down after the server and reported as leaked RIDs.
+# Nulling the material's texture refs drops the binding and freeing the viewport
+# releases the RIDs in order. WM_CLOSE fires on the OS window close; _exit_tree
+# covers the menu Quit / scene-change paths. Guarded against a double-free, and
+# reset in _build so a rebuild after a reparent still tears down cleanly. Mirrors
+# HockeyRink._teardown_render_targets.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_teardown_viewport()
+
+
+func _exit_tree() -> void:
+	_teardown_viewport()
+
+
+func _teardown_viewport() -> void:
+	if _viewport_freed:
+		return
+	_viewport_freed = true
+	if _screen_mat != null:
+		_screen_mat.albedo_texture = null
+		_screen_mat.emission_texture = null
+	_screen_mat = null
+	if is_instance_valid(_viewport):
+		_viewport.free()
+	_viewport = null
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -278,6 +315,9 @@ func _set_band(color: Color, energy: float) -> void:
 # ── Build ────────────────────────────────────────────────────────────────────
 
 func _build() -> void:
+	# A prior _exit_tree (e.g. a reparent) may have latched the teardown guard;
+	# clear it so a genuine later teardown still frees the freshly built viewport.
+	_viewport_freed = false
 	for child: Node in get_children():
 		child.queue_free()
 	_build_screen_viewport()
@@ -311,6 +351,7 @@ func _build_meshes() -> void:
 	# Four screen quads, one per face, sharing the viewport texture. Unshaded
 	# + emissive so the board reads as a lit display, not a lit surface.
 	var screen_mat: StandardMaterial3D = StandardMaterial3D.new()
+	_screen_mat = screen_mat
 	screen_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	var screen_tex: ViewportTexture = _viewport.get_texture()
 	screen_mat.albedo_texture = screen_tex

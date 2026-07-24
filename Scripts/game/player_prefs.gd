@@ -268,6 +268,15 @@ var shadow_quality: int = SHADOW_QUALITY_HIGH
 var crowd_density: int = CROWD_DENSITY_HIGH
 var ice_scratches_enabled: bool = true
 var puck_shadow_enabled: bool = true
+# Arena atmosphere effects (applied to the WorldEnvironment in apply_video). The
+# .tscn ships their parameters; these bools gate the expensive passes so low-end
+# machines can drop them. Fog defaults OFF: a hockey rink is bright and evenly
+# lit, and the top-down camera never sees the light-shaft payoff — it just reads
+# as haze — so it's an opt-in subtle-atmosphere toggle. SSR (ice reflections)
+# and SSAO (contact shadows) read well top-down and default on.
+var volumetric_fog_enabled: bool = false
+var reflections_enabled: bool = true       # screen-space reflections on the ice
+var ambient_occlusion_enabled: bool = true # SSAO contact shadows
 var scaling_3d_mode: int = SCALING_3D_BILINEAR
 var render_scale: float = 1.0
 var anti_aliasing_mode: int = AA_MSAA_2X
@@ -462,6 +471,30 @@ func _add_joy_ui_button(action: StringName, button: JoyButton) -> void:
 	InputMap.action_add_event(action, ev)
 
 
+# Release the custom mouse cursor before the RenderingServer finalizes on quit.
+# apply_cursor() hands an ImageTexture to Input.set_custom_mouse_cursor, and the
+# Input singleton retains it past SceneTree teardown — so at exit it destructs
+# with a null RenderingServer, logged as "~ImageTexture ... RenderingServer is
+# null" plus a leaked Texture RID. Reverting to the system cursor here drops
+# that reference while the server is still alive. As an autoload, PlayerPrefs's
+# EXIT_TREE fires only at real app shutdown (both the window-close and menu-Quit
+# paths); WM_CLOSE additionally covers the window-close path before the quit
+# cascade. Guarded against a double-release.
+var _cursor_released: bool = false
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_EXIT_TREE:
+		_release_custom_cursor()
+
+
+func _release_custom_cursor() -> void:
+	if _cursor_released:
+		return
+	_cursor_released = true
+	Input.set_custom_mouse_cursor(null)
+
+
 func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("player", "name", player_name)
@@ -507,6 +540,9 @@ func save() -> void:
 	cfg.set_value("video", "crowd_density", crowd_density)
 	cfg.set_value("video", "ice_scratches_enabled", ice_scratches_enabled)
 	cfg.set_value("video", "puck_shadow_enabled", puck_shadow_enabled)
+	cfg.set_value("video", "volumetric_fog_enabled", volumetric_fog_enabled)
+	cfg.set_value("video", "reflections_enabled", reflections_enabled)
+	cfg.set_value("video", "ambient_occlusion_enabled", ambient_occlusion_enabled)
 	cfg.set_value("video", "scaling_3d_mode", scaling_3d_mode)
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
@@ -815,6 +851,13 @@ func apply_video() -> void:
 		we.environment.adjustment_enabled = true
 		we.environment.adjustment_color_correction = _build_color_correction_lut(gamma, color_grade_preset)
 		we.environment.sdfgi_enabled = (gi_mode == GI_MODE_SDFGI)
+		# Atmosphere passes — the .tscn carries their parameters; these gate the
+		# expensive passes per the player's Video options (heavy: fog > SSR; SSAO
+		# is cheap). The darkened ambient + per-light fog contribution are baked
+		# in the scene, so disabling a pass just drops that effect, not the mood.
+		we.environment.volumetric_fog_enabled = volumetric_fog_enabled
+		we.environment.ssr_enabled = reflections_enabled
+		we.environment.ssao_enabled = ambient_occlusion_enabled
 	_apply_shadow_quality(scene)
 	var stands := scene.find_child("ArenaStands", true, false) as Node3D
 	if stands != null:
@@ -1121,12 +1164,15 @@ func _load() -> void:
 		fps_cap_index = clamp(cfg.get_value("video", "fps_cap_index", 5), 0, FPS_CAP_VALUES.size() - 1)
 		show_fps = cfg.get_value("video", "show_fps", false)
 		gamma = clampf(cfg.get_value("video", "gamma", 1.0), 0.5, 2.0)
-		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_NEUTRAL), 0, COLOR_GRADE_LABELS.size() - 1)
+		color_grade_preset = clamp(cfg.get_value("video", "color_grade_preset", COLOR_GRADE_BROADCAST), 0, COLOR_GRADE_LABELS.size() - 1)
 		gi_mode = clamp(cfg.get_value("video", "gi_mode", GI_MODE_OFF), 0, GI_MODE_LABELS.size() - 1)
 		shadow_quality = clamp(cfg.get_value("video", "shadow_quality", SHADOW_QUALITY_HIGH), 0, SHADOW_QUALITY_LABELS.size() - 1)
 		crowd_density = clamp(cfg.get_value("video", "crowd_density", CROWD_DENSITY_HIGH), 0, CROWD_DENSITY_LABELS.size() - 1)
 		ice_scratches_enabled = cfg.get_value("video", "ice_scratches_enabled", true)
 		puck_shadow_enabled = cfg.get_value("video", "puck_shadow_enabled", true)
+		volumetric_fog_enabled = cfg.get_value("video", "volumetric_fog_enabled", false)
+		reflections_enabled = cfg.get_value("video", "reflections_enabled", true)
+		ambient_occlusion_enabled = cfg.get_value("video", "ambient_occlusion_enabled", true)
 		scaling_3d_mode = clamp(cfg.get_value("video", "scaling_3d_mode", SCALING_3D_BILINEAR), 0, SCALING_3D_LABELS.size() - 1)
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)

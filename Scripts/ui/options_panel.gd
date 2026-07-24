@@ -96,6 +96,9 @@ func _snapshot() -> Dictionary:
 		"crowd_density": PlayerPrefs.crowd_density,
 		"ice_scratches_enabled": PlayerPrefs.ice_scratches_enabled,
 		"puck_shadow_enabled": PlayerPrefs.puck_shadow_enabled,
+		"volumetric_fog_enabled": PlayerPrefs.volumetric_fog_enabled,
+		"reflections_enabled": PlayerPrefs.reflections_enabled,
+		"ambient_occlusion_enabled": PlayerPrefs.ambient_occlusion_enabled,
 		"render_scale": PlayerPrefs.render_scale,
 		"scaling_3d_mode": PlayerPrefs.scaling_3d_mode,
 		"anti_aliasing_mode": PlayerPrefs.anti_aliasing_mode,
@@ -277,6 +280,9 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.crowd_density = c.crowd_density
 	PlayerPrefs.ice_scratches_enabled = c.ice_scratches_enabled
 	PlayerPrefs.puck_shadow_enabled = c.puck_shadow_enabled
+	PlayerPrefs.volumetric_fog_enabled = c.volumetric_fog_enabled
+	PlayerPrefs.reflections_enabled = c.reflections_enabled
+	PlayerPrefs.ambient_occlusion_enabled = c.ambient_occlusion_enabled
 	PlayerPrefs.render_scale = c.render_scale
 	PlayerPrefs.scaling_3d_mode = c.scaling_3d_mode
 	PlayerPrefs.anti_aliasing_mode = c.anti_aliasing_mode
@@ -375,6 +381,9 @@ func _defaults() -> Dictionary:
 		"crowd_density": PlayerPrefs.CROWD_DENSITY_HIGH,
 		"ice_scratches_enabled": true,
 		"puck_shadow_enabled": true,
+		"volumetric_fog_enabled": false,
+		"reflections_enabled": true,
+		"ambient_occlusion_enabled": true,
 		"render_scale": 1.0,
 		"scaling_3d_mode": PlayerPrefs.SCALING_3D_BILINEAR,
 		"anti_aliasing_mode": PlayerPrefs.AA_MSAA_2X,

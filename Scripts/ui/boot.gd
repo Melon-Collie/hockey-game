@@ -154,15 +154,15 @@ func _build_ui() -> void:
 
 
 # Title-card menu button. Fixed width (SHRINK_CENTER keeps it from stretching
-# to the 820px logo column) with the display font in caps — the title screen
-# is the brand moment, so the buttons match the logo's athletic wordmark
-# instead of reading as body-font form controls.
+# to the 820px logo column) in Manrope SemiBold caps — matching every other
+# button in the game so controls read consistently; the Barlow identity lives
+# in the logo, scorebug, and headings, not the buttons.
 func _title_button(label: String) -> Button:
 	var btn := Button.new()
 	btn.text = label.to_upper()
 	btn.custom_minimum_size = Vector2(340, 56)
 	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	btn.add_theme_font_override("font", MenuStyle.display_font_spaced())
+	btn.add_theme_font_override("font", MenuStyle.name_font_spaced())
 	btn.add_theme_font_size_override("font_size", 26)
 	MenuStyle.wire_hover_scale(btn)
 	SoundManager.wire_button(btn)

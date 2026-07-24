@@ -38,9 +38,13 @@ const CLIP_DURATION: float = 8.0  # seconds of history to replay
 # to find the scoring possession's start. Within a tight gap, chained pickups
 # (assists / tic-tac-toe) extend the clip naturally. When the only pickup is a
 # single long carry, we use a fixed pre-shot floor instead of showing the whole
-# carry. See _compute_trimmed_clip_start_ts() for the algorithm.
+# carry. On top of that, a scrappy net-front goal — a scramble of jams, rebounds,
+# and stick battles — is cut to its LAST decisive contest (hit / stickcheck /
+# strip / tip) rather than replaying the whole pile-up. See
+# _compute_trimmed_clip_start_ts() for the algorithm.
 @export var pickup_chain_gap: float = 2.0    # max gap between consecutive pickups still in the chain
 @export var pre_pickup_buffer: float = 0.5   # extra time shown before the earliest chained pickup
+@export var pre_contest_buffer: float = 0.75 # extra time shown before the last hit/stickcheck/tip when it cuts the clip
 @export var min_pre_shot: float = 1.5        # floor when chain captures pickups (or no pickup found)
 @export var min_pre_shot_long_carry: float = 3.0  # floor when a pickup exists but the chain didn't capture it
 @export var max_pre_shot: float = 6.5        # ceiling on how far before the shot we'll trim back to
@@ -340,18 +344,35 @@ func _find_frame_idx(t: float) -> int:
 	return best
 
 
-# Walks "puck_pickup" events backward from the shot to find where the scoring
-# play started. Three cases:
+# Finds where the scoring play started. Two anchors, whichever sits closer to
+# the shot wins (so a late scramble touch shortens the clip rather than the
+# possession chain dragging it back through a whole pile-up):
+#   - the pickup-chain possession start (assists / tic-tac-toe / long carry —
+#     see _pickup_chain_start_ts), and
+#   - the last decisive CONTEST before the shot (hit / stickcheck / strip / tip
+#     — see _last_contest_event_ts). A jammy net-front goal chains a pile of
+#     pickups back through the scramble; cutting to its final contest instead
+#     shows "the last hit/stickcheck/tip and the goal," not the whole pile-up.
+# Result is clamped to (shot_ts - max_pre_shot, shot_ts - min_pre_shot), so the
+# clip is never shorter than min_pre_shot even when the contest was point-blank.
+func _compute_trimmed_clip_start_ts() -> float:
+	if _shot_event_ts < 0.0:
+		return _clip_start_ts  # no shot event — keep the full clip
+	var play_start: float = _pickup_chain_start_ts()
+	var contest_ts: float = _last_contest_event_ts()
+	if contest_ts >= 0.0:
+		play_start = maxf(play_start, contest_ts - pre_contest_buffer)
+	return clampf(play_start, _shot_event_ts - max_pre_shot, _shot_event_ts - min_pre_shot)
+
+
+# The pickup-chain possession start. Three cases:
 #   - Chain of pickups within pickup_chain_gap: extends through them (assists,
-#     tic-tac-toe). Clip starts pre_pickup_buffer before the earliest chain pickup.
+#     tic-tac-toe). Starts pre_pickup_buffer before the earliest chain pickup.
 #   - Single pickup well before the shot (long single carry): floor to
 #     min_pre_shot_long_carry — show only the last few seconds, not the whole carry.
 #   - No pickups at all (faceoff scramble, weird scenarios): use the standard
 #     min_pre_shot floor.
-# Result is clamped to (shot_ts - max_pre_shot, shot_ts - min_pre_shot).
-func _compute_trimmed_clip_start_ts() -> float:
-	if _shot_event_ts < 0.0:
-		return _clip_start_ts  # no shot event — keep the full clip
+func _pickup_chain_start_ts() -> float:
 	var play_start: float = _shot_event_ts
 	var prev_ts: float = _shot_event_ts
 	var has_any_pickup: bool = false
@@ -371,12 +392,31 @@ func _compute_trimmed_clip_start_ts() -> float:
 		prev_ts = ts
 	if play_start == _shot_event_ts:
 		# No chain captured. Long-carry floor if a pickup exists somewhere
-		# earlier in the clip; otherwise standard floor. Clamped to max so
-		# mis-tuned exports can't extend past the cap.
+		# earlier in the clip; otherwise standard floor.
 		var floor_seconds: float = min_pre_shot_long_carry if has_any_pickup else min_pre_shot
 		return _shot_event_ts - clampf(floor_seconds, min_pre_shot, max_pre_shot)
-	play_start -= pre_pickup_buffer
-	return clampf(play_start, _shot_event_ts - max_pre_shot, _shot_event_ts - min_pre_shot)
+	return play_start - pre_pickup_buffer
+
+
+# Timestamp of the last "contest" event strictly before the shot — a body check
+# (hit), stick lift (stickcheck), poke strip, or deflection (tip). These mark
+# the decisive touches of a net-front scramble. Returns -1.0 when the scoring
+# play had none (a clean rush), so the pickup chain alone drives the clip start.
+func _last_contest_event_ts() -> float:
+	for i: int in range(_events.size() - 1, -1, -1):
+		var entry: Dictionary = _events[i]
+		var ev: Dictionary = entry.event
+		if not ev.has("kind"):
+			continue
+		var kind: String = ev.kind
+		if kind != "body_check" and kind != "stick_lift" \
+				and kind != "puck_strip" and kind != "puck_deflection":
+			continue
+		var ts: float = entry.host_ts
+		if ts >= _shot_event_ts:
+			continue
+		return ts
+	return -1.0
 
 
 func _apply_interpolated_snapshot(t: float, dt: float, sim_delta: float) -> void:

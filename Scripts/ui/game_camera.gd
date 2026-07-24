@@ -107,6 +107,27 @@ const _KICK_IMPULSE_MAX: float = 6.0          # spring velocity injected at a fu
 const _KICK_STIFFNESS: float = 200.0          # spring pull toward rest (higher = snappier)
 const _KICK_DAMPING: float = 17.0             # < 2·sqrt(stiffness) ≈ 28.3 → one recoil overshoot
 
+# ── Goal hero-cam push-in ─────────────────────────────────────────────────────
+# On a goal the camera dives toward the net that was scored on for the live
+# GOAL_CELEBRATION beat — a punch-in that sells the moment before the host's
+# slow-mo replay cuts to its behind-the-net angle a beat later. Local + cosmetic:
+# it only rebiases the framing this camera already computes (center pulled toward
+# the net, height pushed in), reusing the existing tilt / look-at math, so shake
+# and the impact kick still layer on top for the pop. Runs on every peer
+# (goal_scored is emitted locally everywhere) and is superseded when the replay
+# camera goes current. Applied through render-only locals, so when the blend
+# returns to 0 the live framing is exactly where it would have been.
+const _GOAL_CINE_DURATION: float = 1.4     # < GOAL_CELEBRATION_DURATION (1.5) so it's easing out as the replay cuts
+const _GOAL_CINE_RISE: float = 0.4         # ease in/out time for the push (seconds)
+const _GOAL_CINE_SCORER_BIAS: float = 0.8  # how hard to center on the scorer (they're the subject)
+const _GOAL_CINE_NET_BIAS: float = 0.5     # fallback pull toward the net when the scorer can't be resolved
+const _GOAL_CINE_ZOOM: float = 0.72        # height multiplier at full push (< 1 = closer/lower)
+var _goal_cine_left: float = 0.0           # seconds of push remaining (counts down while > 0)
+var _goal_cine_blend: float = 0.0          # eased 0..1 push weight
+var _goal_cine_scorer: Skater = null       # the scoring player — followed live (primary subject)
+var _goal_cine_net: Vector3 = Vector3.ZERO # scored-on net position (xz, y = 0) — fallback subject
+var _goal_cine_has_net: bool = false       # whether the net fallback is valid this goal
+
 # ── Pre-game intro sweep ──────────────────────────────────────────────────────
 # Opening-faceoff crane shot: hold a high wide view of the rink and descend
 # onto the live gameplay framing. Triggered by GameManager.pregame_intro_started
@@ -127,6 +148,11 @@ func play_intro(duration: float) -> void:
 	# seamless hold → crane-down.
 	_wide_hold_left = 0.0
 	_wide_blend = 0.0
+	# A crane sweep also supersedes any lingering goal push-in (buzzer-beater
+	# goal into a period break): drop it so the two don't fight for the framing.
+	_goal_cine_left = 0.0
+	_goal_cine_blend = 0.0
+	_goal_cine_scorer = null
 
 # ── Period-break wide hold ────────────────────────────────────────────────────
 # Between periods the camera eases up to the intro's high wide framing and
@@ -212,6 +238,32 @@ func shake(trauma: float) -> void:
 		return
 	_shake_trauma = minf(1.0, _shake_trauma + trauma)
 
+# Goal moment: full-trauma shake plus the hero-cam push-in that follows the
+# scorer (net as fallback). Wired to GameManager.goal_scored (fires locally on
+# every peer).
+func _on_goal_scored_cinematic(scoring_team: Team, scorer_name: String, _assist1: String, _assist2: String) -> void:
+	shake(1.0)
+	_arm_goal_cinematic(scoring_team, scorer_name)
+
+func _arm_goal_cinematic(scoring_team: Team, scorer_name: String) -> void:
+	# Primary subject: the scorer's live Skater (followed as they celebrate).
+	_goal_cine_scorer = GameManager.get_scorer_skater(scorer_name)
+	var have_target: bool = _goal_cine_scorer != null and is_instance_valid(_goal_cine_scorer)
+	# Fallback subject: the scored-on net (the goal the scoring team attacks — the
+	# one defended by the OTHER team; _goal_0 is team 0's defended goal). Used
+	# when the scorer can't be resolved (name mismatch, drills, early setup).
+	_goal_cine_has_net = false
+	if scoring_team != null:
+		var scored_on: HockeyGoal = _goal_1 if scoring_team.team_id == 0 else _goal_0
+		if scored_on != null and is_instance_valid(scored_on):
+			# global_position.z is always 0 on a HockeyGoal; goal_line_z() is real.
+			_goal_cine_net = Vector3(0.0, 0.0, scored_on.goal_line_z())
+			_goal_cine_has_net = true
+			have_target = true
+	if not have_target:
+		return  # nothing to frame — the shake carries the moment alone
+	_goal_cine_left = _GOAL_CINE_DURATION
+
 func _ready() -> void:
 	make_current()
 	# The jumbotron hangs over center ice, directly between this top-down
@@ -222,7 +274,7 @@ func _ready() -> void:
 	GameManager.period_break_started.connect(hold_period_break_wide)
 	GameManager.period_intro_started.connect(
 			func(_period: int, duration: float) -> void: play_intro(duration))
-	GameManager.goal_scored.connect(func(_t, _n, _a1, _a2) -> void: shake(1.0))
+	GameManager.goal_scored.connect(_on_goal_scored_cinematic)
 	GameManager.local_player_hit.connect(func(mag: float) -> void:
 		if mag >= 3.0:
 			shake(clampf(mag / 12.0, 0.2, 0.4)))
@@ -422,8 +474,35 @@ func _physics_process(delta: float) -> void:
 		target_center.x = clampf(target_center.x, -safe_x, safe_x)
 		target_center.z = clampf(target_center.z, -safe_z, safe_z)
 
+	# ── Step 4b: Goal hero-cam push-in ────────────────────────────────────────
+	# Advance the push blend (ease up while the goal beat runs, ease back after
+	# it expires) and rebias the framing toward the scored-on net. Applied to
+	# render-only locals so the persistent framing state is untouched — when the
+	# blend returns to 0 the live framing is exactly where it would have been.
+	var render_center: Vector3 = target_center
+	var render_height: float = _current_height
+	if _goal_cine_left > 0.0 or _goal_cine_blend > 0.0:
+		var cine_dir: float = 1.0 if _goal_cine_left > 0.0 else -1.0
+		_goal_cine_left = maxf(_goal_cine_left - delta, 0.0)
+		_goal_cine_blend = clampf(_goal_cine_blend + cine_dir * delta / _GOAL_CINE_RISE, 0.0, 1.0)
+		var w: float = _goal_cine_blend * _goal_cine_blend * (3.0 - 2.0 * _goal_cine_blend)  # smoothstep
+		# Follow the scorer's live position (they coast/celebrate through the
+		# beat); fall back to the net. The final global_position lerp below
+		# smooths the follow, so a moving scorer never reads as jitter.
+		var subject: Vector3 = target_center
+		var subject_bias: float = 0.0
+		if _goal_cine_scorer != null and is_instance_valid(_goal_cine_scorer):
+			subject = _goal_cine_scorer.global_position + _goal_cine_scorer.visual_offset
+			subject.y = 0.0
+			subject_bias = _GOAL_CINE_SCORER_BIAS
+		elif _goal_cine_has_net:
+			subject = _goal_cine_net
+			subject_bias = _GOAL_CINE_NET_BIAS
+		render_center = target_center.lerp(subject, subject_bias * w)
+		render_height = _current_height * lerpf(1.0, _GOAL_CINE_ZOOM, w)
+
 	# ── Step 5: Smooth movement ───────────────────────────────────────────────
-	# The camera looks along a slanted ray, so a camera at target_center.xz
+	# The camera looks along a slanted ray, so a camera at render_center.xz
 	# looks at a point ~h*tan(off-axis-angle) behind itself. Offset the camera
 	# in the direction the view is being pulled away from so the play stays
 	# centered. attack_up flip mirrors the offset sign. The tilt magnitude is
@@ -431,11 +510,11 @@ func _physics_process(delta: float) -> void:
 	var tilt_deg: float = PlayerPrefs.camera_tilt_deg
 	var pitch: float = -tilt_deg
 	var off_axis_rad: float = deg_to_rad(90.0 - tilt_deg)  # 15° at 75° tilt
-	var raw_offset: float = _current_height * tan(off_axis_rad)
+	var raw_offset: float = render_height * tan(off_axis_rad)
 	var flip_sign: float = -1.0 if PlayerPrefs.attack_up and _local_team_id == 1 else 1.0
 	var tilt_z_offset: float = raw_offset * flip_sign
 	var target_pos: Vector3 = Vector3(
-			target_center.x, _current_height, target_center.z + tilt_z_offset)
+			render_center.x, render_height, render_center.z + tilt_z_offset)
 	global_position = global_position.lerp(target_pos, smooth_speed * delta)
 
 	# ── Step 5b: Apply pitch + attack-up yaw flip. Always tilted perspective. ──

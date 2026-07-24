@@ -12,7 +12,7 @@ extends Node2D
 # they are not borrowed from the jersey. 'No outline' = outline equal to
 # text color → skip the outline pass.
 
-const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
+const FONT: Font = preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")
 const IMG_W: int = 256
 const IMG_H: int = 256
 const NUMBER_FONT_SIZE: int = 56

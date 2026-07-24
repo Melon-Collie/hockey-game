@@ -55,18 +55,24 @@ func _ready() -> void:
 	vbox.add_theme_constant_override("separation", 14)
 	panel.add_child(vbox)
 
-	var header := HBoxContainer.new()
-	vbox.add_child(header)
+	# Mirrors the options header: the close button sits in its own row, pushed
+	# right by an expanding spacer, and the title is a separate full-width
+	# centered label — so it centers against the panel, not against the button.
+	var close_row := HBoxContainer.new()
+	var close_spacer := Control.new()
+	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_row.add_child(close_spacer)
+	var close_btn: Button = MenuStyle.close_button()
+	close_btn.pressed.connect(hide)
+	SoundManager.wire_button(close_btn)
+	close_row.add_child(close_btn)
+	vbox.add_child(close_row)
 
 	var title := Label.new()
 	title.text = "Career"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	MenuStyle.apply_heading(title)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
-
-	var close_btn: Button = MenuStyle.close_button()
-	close_btn.pressed.connect(hide)
-	header.add_child(close_btn)
+	vbox.add_child(title)
 
 	vbox.add_child(_build_tab_switcher())
 

@@ -261,7 +261,7 @@ func _build_player_card(parent: VBoxContainer) -> void:
 
 	_player_card_name = Label.new()
 	_player_card_name.text = PlayerPrefs.player_name
-	_player_card_name.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	_player_card_name.add_theme_font_override("font", MenuStyle.NAME_FONT)
 	_player_card_name.add_theme_font_size_override("font_size", 28)
 	_player_card_name.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	vbox.add_child(_player_card_name)
@@ -355,7 +355,7 @@ func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: 
 	# Display font in caps — the activity list carries the same condensed
 	# athletic look as the player card above it and the scorebug.
 	label.uppercase = true
-	label.add_theme_font_override("font", MenuStyle.display_font_spaced())
+	label.add_theme_font_override("font", MenuStyle.name_font_spaced())
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", rest_color)
 	label.set_anchors_and_offsets_preset(Control.PRESET_LEFT_WIDE)
