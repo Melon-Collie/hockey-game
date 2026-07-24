@@ -109,7 +109,6 @@ func _snapshot() -> Dictionary:
 		"master_muted": PlayerPrefs.master_muted,
 		"mute_when_unfocused": PlayerPrefs.mute_when_unfocused,
 		"shot_power_sensitivity": PlayerPrefs.shot_power_sensitivity,
-		"gamepad_enabled": PlayerPrefs.gamepad_enabled,
 		"confine_mouse": PlayerPrefs.confine_mouse,
 		"cursor_style": PlayerPrefs.cursor_style,
 		"cursor_color": PlayerPrefs.cursor_color,
@@ -293,10 +292,6 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mute_when_unfocused = c.mute_when_unfocused
 	PlayerPrefs.shot_power_sensitivity = c.shot_power_sensitivity
-	PlayerPrefs.gamepad_enabled = c.gamepad_enabled
-	# The allow gate may have flipped — re-broadcast so device-aware UI (prompts,
-	# tutorial copy) reflects it without waiting for the next input.
-	InputDeviceTracker.notify_gamepad_allowed_changed()
 	PlayerPrefs.confine_mouse = c.confine_mouse
 	PlayerPrefs.cursor_style = c.cursor_style
 	PlayerPrefs.cursor_color = c.cursor_color
@@ -397,7 +392,6 @@ func _defaults() -> Dictionary:
 		"master_muted": false,
 		"mute_when_unfocused": true,
 		"shot_power_sensitivity": 1.0,
-		"gamepad_enabled": false,
 		"confine_mouse": true,
 		"cursor_style": PlayerPrefs.CURSOR_STYLE_DOT,
 		"cursor_color": Color(1.0, 0.45, 0.1),

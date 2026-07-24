@@ -6,20 +6,18 @@
 # input (above a switch threshold) becomes active; idle drift or a resting thumb
 # never steals control.
 #
+# There is NO opt-in flag: the pad works the moment it's used and yields the moment
+# the mouse is. `is_gamepad_active()` is the single source of truth every device-
+# facing surface reads — gameplay control (the gatherer's cursor synthesis, the
+# free cam), the on-screen prompts / tutorial copy, AND the menu focus rings (the
+# tracker owns a shared ring stylebox that goes teal while the pad drives and
+# invisible the instant the mouse does, so a mouse player never sees a ring even
+# though the controls are focusable). Rings, prompts, and control stay linked
+# because they all key off this one flag.
+#
 # This is a purely LOCAL, presentation-time concern — it only decides how the local
 # player's InputState gets populated (OS mouse vs. synthesized-from-stick), not
 # anything the sim reads differently downstream, so it never touches netcode.
-#
-# Two-tier model:
-#   * PlayerPrefs.gamepad_allowed() = gamepad ALLOWED (the opt-in pref OR the Steam
-#     Deck; drives build-time menu focus rings). The pref defaults off on desktop
-#     and is flipped by the boot splash's first-pad-input; the Deck is always
-#     allowed (no mouse there) without persisting the pref.
-#   * is_gamepad_active() = gamepad CURRENTLY DRIVING (this tracker; drives the
-#     per-frame gameplay reads — the gatherer's cursor synthesis, the free cam —
-#     and the device-aware prompts / tutorial copy).
-# So a controller can stay plugged in without stealing the mouse: with gamepad
-# allowed, touch the mouse → KBM drives; push the stick → the pad drives.
 #
 # Reads input at _input (before GUI consumption) so a button press on a focused
 # menu control still counts as device activity. As an autoload it sits early under
@@ -27,9 +25,8 @@
 
 extends Node
 
-# Emitted when the active device flips. Payload is is_gamepad_active() (already
-# folded through the master gate), so a listener can rebuild device-specific UI or
-# re-seed the pad cursor. Best-effort hook for future menu/prompt hot-swap.
+# Emitted when the active device flips (payload = is_gamepad_active()). Listeners
+# rebuild device-specific UI (prompts, tutorial copy) or re-seed the pad cursor.
 signal device_changed(is_gamepad: bool)
 
 enum Device { NONE, KBM, GAMEPAD }
@@ -39,36 +36,51 @@ enum Device { NONE, KBM, GAMEPAD }
 const _MOUSE_MOVE_PX: float = 4.0          # one motion event's travel to claim KBM
 const _STICK_SWITCH_DEADZONE: float = 0.5  # stick/trigger past this claims GAMEPAD
 
+# Focus-ring colors. Teal while the pad drives; fully transparent (and zero border
+# width) while the mouse does, so a focused control shows nothing in mouse mode.
+const _RING_TEAL: Color = Color(0.15, 0.78, 0.75)
+
 var _active: int = Device.KBM
-# The last is_gamepad_active() value we broadcast, so device_changed fires only
-# when the EFFECTIVE driving device flips — not on raw _active churn that the
-# master gate swallows (a gamepad-off player bumping a stick shouldn't notify).
+# The last is_gamepad_active() we broadcast, so device_changed fires once per real
+# handoff (and the shared ring restyles in lockstep).
 var _emitted_gamepad: bool = false
+# ONE shared focus-ring stylebox handed to every controller-focusable control (via
+# MenuStyle). Mutating it here restyles them all at once — that's how the rings
+# follow the active device without any per-menu wiring. Built in _ready so it
+# exists before the first UI is built.
+var _focus_ring: StyleBoxFlat = null
 
 
 func _ready() -> void:
+	_focus_ring = StyleBoxFlat.new()
+	_focus_ring.bg_color = Color(0, 0, 0, 0)
+	_focus_ring.set_corner_radius_all(6)
+	_focus_ring.set_expand_margin_all(3)
+	_restyle_ring()
 	# A pad unplugged while it's driving hands control back to the mouse.
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 
 
 # The one question the rest of the game asks: is the gamepad the device driving
-# right now? False whenever gamepad isn't allowed, so mouse-only players (the
-# default) are entirely unaffected — the pad is never even consulted.
+# right now? Pure last-input-wins — no opt-in gate, so a pad works as soon as it's
+# used, and a mouse player who never touches a pad is simply always KBM.
 func is_gamepad_active() -> bool:
-	return PlayerPrefs.gamepad_allowed() and _active == Device.GAMEPAD
+	return _active == Device.GAMEPAD
 
 
 func active_device() -> int:
 	return _active
 
 
+# The shared, device-aware focus ring (see _focus_ring). MenuStyle hands this same
+# instance to every controller-focusable control; the tracker restyles it on a
+# handoff, so all rings appear/vanish together with the active device.
+func focus_ring() -> StyleBoxFlat:
+	return _focus_ring
+
+
 func _input(event: InputEvent) -> void:
 	var d: int = classify_event(event, _MOUSE_MOVE_PX, _STICK_SWITCH_DEADZONE)
-	# Track the raw device unconditionally; the master gate is applied only in
-	# is_gamepad_active() / the emit. This matters at the boot splash: the tracker
-	# (an autoload, so its _input runs before the scene's) sees the pad press that
-	# ENABLES gamepad before boot.gd flips the pref, so gating here would leave
-	# _active on KBM and the pad player would land in a keyboard-flavored tutorial.
 	if d == Device.GAMEPAD:
 		_set_active(Device.GAMEPAD)
 	elif d == Device.KBM:
@@ -100,21 +112,25 @@ func _set_active(device: int) -> void:
 	_emit_if_changed()
 
 
-# Emit device_changed only when the EFFECTIVE (gated) driving device flips, so a
-# gamepad-off player's stick churn stays silent and listeners rebuild at most once
-# per real handoff.
+# Restyle the shared ring + emit device_changed, once per real handoff.
 func _emit_if_changed() -> void:
 	var now: bool = is_gamepad_active()
 	if now != _emitted_gamepad:
 		_emitted_gamepad = now
+		_restyle_ring()
 		device_changed.emit(now)
 
 
-# Call after flipping PlayerPrefs.gamepad_enabled (Options apply, the boot splash):
-# the allow gate changed, so is_gamepad_active() may have flipped even though the
-# raw device didn't — re-broadcast so device-aware UI updates.
-func notify_gamepad_allowed_changed() -> void:
-	_emit_if_changed()
+# Teal border while the pad drives, zero-width (invisible) while the mouse does.
+# Mutating the shared stylebox redraws every focused control using it.
+func _restyle_ring() -> void:
+	if _focus_ring == null:
+		return
+	if is_gamepad_active():
+		_focus_ring.border_color = _RING_TEAL
+		_focus_ring.set_border_width_all(2)
+	else:
+		_focus_ring.set_border_width_all(0)
 
 
 func _on_joy_connection_changed(_device: int, connected: bool) -> void:

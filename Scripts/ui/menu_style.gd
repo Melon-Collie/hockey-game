@@ -292,40 +292,33 @@ static func popup_button(label: String) -> Button:
 	return btn
 
 
-# THE focus-ring seam: give a button the teal controller focus ring, but ONLY in
-# controller mode, so a mouse click never leaves a ring (the project theme's
-# default focus is invisibly-styled, which is what we want for mouse). Both the
-# button factories above and hand-built buttons call this, so there's one gated
-# path rather than a scattered `if ControllerNav.active()` at each call site. The
-# boot splash re-applies it to already-built title buttons once a pad is detected.
+# THE focus-ring seam: give a button the shared, device-aware focus ring. The ring
+# is ONE stylebox owned by InputDeviceTracker that goes teal while the pad drives
+# and invisible (zero-width) the instant the mouse does — so it's safe to apply
+# unconditionally: a mouse player's clicked button is focused but shows nothing,
+# and a pad player's navigation shows the teal ring. Both the button factories and
+# hand-built buttons call this, so there's one path rather than a scattered
+# `if` at each call site, and every ring follows the active device together.
 static func apply_focus_ring(btn: Button) -> void:
-	if PlayerPrefs.gamepad_allowed():
-		btn.add_theme_stylebox_override("focus", focus_ring_box())
+	btn.add_theme_stylebox_override("focus", focus_ring_box())
 
 
-# The teal focus ring box — transparent fill, teal border, slight outward expand so
-# it sits just outside the control. A fresh box per call (styleboxes aren't shared).
+# The shared device-aware focus ring (see InputDeviceTracker.focus_ring). The SAME
+# instance for every control, so a device handoff restyles them all at once.
 static func focus_ring_box() -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0, 0, 0, 0)
-	s.set_corner_radius_all(6)
-	s.border_color = TEAL
-	s.set_border_width_all(2)
-	s.set_expand_margin_all(3)
-	return s
+	return InputDeviceTracker.focus_ring()
 
 
-# A theme that adds the teal focus ring to control types the button factories
-# can't reach — CheckButtons especially, whose default focus is invisible here.
-# Set as a panel's `theme` (controller mode) to make toggles/dropdowns show focus;
-# it only defines the "focus" stylebox, so every other style falls through to the
-# project theme. A no-op for mouse (returns null so nothing is applied).
+# A theme that puts the shared device-aware ring on control types the button
+# factories can't reach — CheckButtons especially, whose default focus is invisible
+# here. Set as a panel's `theme` to make toggles/dropdowns show focus while the pad
+# drives; it only defines the "focus" stylebox, so every other style falls through
+# to the project theme. Invisible in mouse mode because the shared ring is.
 static func controller_focus_theme() -> Theme:
-	if not PlayerPrefs.gamepad_allowed():
-		return null
 	var t := Theme.new()
+	var ring: StyleBoxFlat = focus_ring_box()
 	for control_type: String in ["CheckButton", "CheckBox", "OptionButton", "Button"]:
-		t.set_stylebox("focus", control_type, focus_ring_box())
+		t.set_stylebox("focus", control_type, ring)
 	return t
 
 # Focus-grab / focus-first / list-focus and the input routing live in ControllerNav

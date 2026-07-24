@@ -27,11 +27,6 @@ const LOBBY_OP_TIMEOUT: float = 12.0
 
 # ── Availability ────────────────────────────────────────────────────────────
 var is_available: bool = false   # true iff Steam initialised successfully
-# Running on Steam Deck hardware — a gamepad-first device with no mouse. Cached
-# at init (it can't change mid-session) and read via is_steam_deck() so the pad
-# is treated as ALLOWED there without persisting a pref (which would cloud-sync a
-# forced-on gamepad flag back to the player's desktop). False when Steam is absent.
-var _is_deck: bool = false
 var steam_id: int = 0            # local user's SteamID64 (0 when unavailable)
 var persona_name: String = ""    # local user's Steam display name ("" when unavailable)
 var current_lobby_id: int = 0    # 0 when not in a lobby
@@ -107,7 +102,6 @@ func _try_init() -> void:
 		return
 
 	is_available = true
-	_is_deck = Steam.isSteamRunningOnSteamDeck()
 	steam_id = Steam.getSteamID()
 	persona_name = Steam.getPersonaName()
 	# Prime the local achievement/stat cache from Steam's servers so the first
@@ -122,12 +116,6 @@ func _try_init() -> void:
 	print("[SteamManager] Steam initialised under AppID %d" % Steam.getAppID())
 	_connect_steam_signals()
 	_check_launch_invite()
-
-
-# True when running on Steam Deck hardware (cached at init). The pad is treated as
-# allowed there regardless of the gamepad_enabled pref, since the Deck has no mouse.
-func is_steam_deck() -> bool:
-	return _is_deck
 
 
 func _connect_steam_signals() -> void:

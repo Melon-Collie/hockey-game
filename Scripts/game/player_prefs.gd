@@ -286,21 +286,6 @@ var anti_aliasing_mode: int = AA_MSAA_2X
 # Higher = shots reach full power with a gentler flick. Local-only (applied by
 # LocalController); does not affect bots or the aim direction.
 var shot_power_sensitivity: float = 1.0
-# Experimental gamepad support (opt-in, off by default). When on AND a pad is
-# connected, LocalInputGatherer reads aim/buttons from the pad instead of
-# mouse+keyboard — the right stick becomes an absolute "skill stick" driving the
-# blade. Read live by the gatherer, so toggling applies without a respawn.
-var gamepad_enabled: bool = false
-
-
-# Whether the gamepad is ALLOWED to drive — the master gate every "is a pad in
-# play" check reads (menu focus rings, the InputDeviceTracker's active state). The
-# stored pref OR the Steam Deck: the Deck is a gamepad-first device with no mouse,
-# so the pad is always allowed there without persisting the pref (persisting would
-# cloud-sync a forced-on flag to the player's desktop). On desktop this is just the
-# opt-in pref, flipped on by the boot splash's first-pad-input auto-detect.
-func gamepad_allowed() -> bool:
-	return gamepad_enabled or SteamManager.is_steam_deck()
 
 
 # First-run onboarding: false until the player opens the player-settings popup
@@ -559,7 +544,6 @@ func save() -> void:
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "shot_power_sensitivity", shot_power_sensitivity)
-	cfg.set_value("input", "gamepad_enabled", gamepad_enabled)
 	cfg.set_value("input", "confine_mouse", confine_mouse)
 	cfg.set_value("input", "cursor_style", cursor_style)
 	cfg.set_value("input", "cursor_color", cursor_color)
@@ -1189,7 +1173,6 @@ func _load() -> void:
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		shot_power_sensitivity = clampf(cfg.get_value("input", "shot_power_sensitivity", 1.0), 0.25, 4.0)
-		gamepad_enabled = cfg.get_value("input", "gamepad_enabled", false)
 		confine_mouse = cfg.get_value("input", "confine_mouse", true)
 		cursor_style = clampi(int(cfg.get_value("input", "cursor_style", CURSOR_STYLE_DOT)), 0, CURSOR_STYLE_LABELS.size() - 1)
 		var raw_cursor_color: Variant = cfg.get_value("input", "cursor_color", cursor_color)

@@ -16,11 +16,6 @@ var _settings_container: Control = null
 var _settings_panel: OptionsPanel = null  # for controller focus_active_tab on open
 var _input_received: bool = false
 var _transitioned: bool = false
-# Device auto-detect: the FIRST input on the splash decides the control scheme.
-# A pad button/stick as the first touch turns controller mode on (and focuses the
-# title menu so the pad can drive it); mouse/keyboard first leaves it off. Latched
-# after the first meaningful event so later input doesn't keep flipping it.
-var _device_detected: bool = false
 
 
 func _ready() -> void:
@@ -119,12 +114,10 @@ func _build_ui() -> void:
 	exit_btn.pressed.connect(_on_exit_pressed)
 	_button_column.add_child(exit_btn)
 
-	# Gamepad-allowed launch (the Deck has no mouse; a returning pad player kept the
-	# pref): prime the menu for the pad now so the first press activates Play. Desktop
-	# mouse launches skip this and stay ring-free; their first pad input primes it via
-	# the splash auto-detect. Deferred so grab_focus lands after this frame's layout.
-	if PlayerPrefs.gamepad_allowed():
-		_prime_title_menu_for_pad.call_deferred()
+	# Focus Play up front so a pad player's very first button press activates it
+	# (rather than merely revealing focus). Safe for a mouse player too: the focus
+	# ring is device-aware (invisible until a pad drives), so they see nothing.
+	_focus_title_menu()
 
 	# Hidden until Play is pressed before the threaded load finishes. Replaces
 	# the menu so the moment doesn't feel frozen.
@@ -172,6 +165,7 @@ func _title_button(label: String) -> Button:
 	btn.add_theme_font_override("font", MenuStyle.name_font_spaced())
 	btn.add_theme_font_size_override("font_size", 26)
 	MenuStyle.wire_hover_scale(btn)
+	MenuStyle.apply_focus_ring(btn)
 	SoundManager.wire_button(btn)
 	return btn
 
@@ -213,11 +207,15 @@ func _on_settings_pressed() -> void:
 			_settings_panel.focus_active_tab()
 
 
-# Controller: (re)focus the title menu's first button (Play). Used on launch when
-# a pad is detected and when the settings overlay closes.
+# Focus the title menu's first button (Play), deferred so it lands after layout.
+# Unconditional (not gated on the active device): the focus ring is device-aware,
+# so a mouse player sees nothing while a pad player's first press activates Play.
+# Used at build and when the settings overlay closes.
 func _focus_title_menu() -> void:
 	if _button_column != null and _button_column.get_child_count() > 0:
-		ControllerNav.grab_focus(_button_column.get_child(0) as Control)
+		var first: Control = _button_column.get_child(0) as Control
+		if first != null:
+			first.grab_focus.call_deferred()
 
 
 func _on_play_pressed() -> void:
@@ -233,48 +231,6 @@ func _on_play_pressed() -> void:
 
 func _on_exit_pressed() -> void:
 	get_tree().quit()
-
-
-# First-input device detection (see _device_detected). Runs at the _input level so
-# it sees the event before any control consumes it. Only a pad flips the pref; a
-# mouse/keyboard first-touch just latches so a later pad press doesn't re-flip.
-func _input(event: InputEvent) -> void:
-	if _device_detected:
-		return
-	if event is InputEventJoypadButton and (event as InputEventJoypadButton).pressed:
-		_enable_gamepad_from_splash()
-	elif event is InputEventJoypadMotion and absf((event as InputEventJoypadMotion).axis_value) >= 0.5:
-		_enable_gamepad_from_splash()
-	elif (event is InputEventKey and (event as InputEventKey).pressed) \
-			or (event is InputEventMouseButton and (event as InputEventMouseButton).pressed):
-		_device_detected = true  # mouse/keyboard first — leave the pref as it was
-
-
-func _enable_gamepad_from_splash() -> void:
-	_device_detected = true
-	# On the Deck the pad is already allowed (SteamManager), so there's nothing to
-	# persist — only a desktop first-pad-input flips and saves the opt-in pref.
-	if not PlayerPrefs.gamepad_allowed():
-		PlayerPrefs.gamepad_enabled = true
-		PlayerPrefs.save()
-		# The allow gate just opened; the tracker already saw this pad press and set
-		# its raw device to GAMEPAD, so re-broadcast now that is_gamepad_active() is
-		# true (device-aware prompts / the tutorial flip to pad without more input).
-		InputDeviceTracker.notify_gamepad_allowed_changed()
-	_prime_title_menu_for_pad()
-
-
-# Ring the title buttons and focus Play so a pad can drive the menu immediately.
-# Called at build on a gamepad-allowed launch (the Deck, or a returning opted-in
-# player) so the very FIRST button press activates Play, and again from the splash
-# auto-detect when a desktop player's first input is the pad.
-func _prime_title_menu_for_pad() -> void:
-	if _button_column == null:
-		return
-	for child: Node in _button_column.get_children():
-		if child is Button:
-			MenuStyle.apply_focus_ring(child as Button)
-	_focus_title_menu()
 
 
 func _unhandled_input(event: InputEvent) -> void:

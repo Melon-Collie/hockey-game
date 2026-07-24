@@ -232,7 +232,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Pad ping: the rebindable pad button (D-pad Up by default). Only fires — and
 	# only consumes — when no menu owns the screen, so the D-pad still navigates an
 	# open menu (which the GUI would have consumed before this anyway).
-	var pad_ping: bool = PlayerPrefs.gamepad_allowed() and not menu_open \
+	var pad_ping: bool = InputDeviceTracker.is_gamepad_active() and not menu_open \
 			and event is InputEventJoypadButton and event.pressed \
 			and (event as InputEventJoypadButton).button_index == PlayerPrefs.pad_button("smart_ping")
 	if pad_ping:
@@ -253,7 +253,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# gameplay input is blocked, so reusing it as the "confirm skip" button is safe
 	# and needs no free button. Hardcoded like the Start menu-open below (an
 	# InputMap joypad bind would be wiped by keyboard-rebind's action_erase_events).
-	var pad_skip: bool = PlayerPrefs.gamepad_allowed() and event is InputEventJoypadButton \
+	var pad_skip: bool = InputDeviceTracker.is_gamepad_active() and event is InputEventJoypadButton \
 			and event.pressed and (event as InputEventJoypadButton).button_index == JOY_BUTTON_A
 	if event.is_action_pressed(&"skip_replay") or pad_skip:
 		# Gate on the skip-prompt visibility (goal cinematic — HUD's own label;
