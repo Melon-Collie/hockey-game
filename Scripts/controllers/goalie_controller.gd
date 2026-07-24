@@ -982,6 +982,8 @@ var _slide: GoalieSlideBehavior = GoalieSlideBehavior.new()
 var _reaction: GoalieShotReaction = GoalieShotReaction.new()
 var _pose: GoalieBodyConfigBuilder = GoalieBodyConfigBuilder.new()
 var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Inputs.new()
+#   _puck_play — GoaliePuckPlay (behind-net rim-stop trip: decision, geometry, phase)
+var _puck_play: GoaliePuckPlay = GoaliePuckPlay.new()
 
 # ── Cached rule configs (built once in setup) ────────────────────────────────
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
@@ -1092,22 +1094,6 @@ var _slide_coverage_confirm_timer: float = 0.0
 # Reused scratch of opposing skater positions for the sweep-lane check (same
 # no-allocation idiom as _screen_positions).
 var _lane_opponents: PackedVector3Array = PackedVector3Array()
-# Behind-net puck-play trip state. Phases: OUT (skate to the stop point via
-# the post waypoint) → STOP (paddle down, trap the rim) → RETURN (back via the
-# waypoint). `_pp_wait_timer` bounds how long the STOP phase waits for a rim
-# that took a weird bounce and never arrives.
-const _PP_OUT: int = 0
-const _PP_STOP: int = 1
-const _PP_RETURN: int = 2
-var _pp_phase: int = _PP_OUT
-var _pp_stop_point: Vector2 = Vector2.ZERO
-var _pp_waypoint: Vector2 = Vector2.ZERO
-var _pp_home_point: Vector2 = Vector2.ZERO
-var _pp_stop_timer: float = 0.0
-var _pp_wait_timer: float = 0.0
-var _pp_cooldown_timer: float = 0.0
-var _pp_trapped: bool = false
-var _pp_past_waypoint: bool = false
 # Catch-and-hold state. `_catch_secured` flips once the pin (freeze + lock) is
 # applied on the first catching tick — physics writes are deferred out of the
 # contact callback the catch signal fires from. `_catch_pressured` picks the
@@ -1115,11 +1101,6 @@ var _pp_past_waypoint: bool = false
 var _catch_secured: bool = false
 var _catch_pressured: bool = false
 var _catch_hold_timer: float = 0.0
-# Behind-net skating stride: phase advances with distance traveled (never
-# treadmills), intensity eases with the trip speed and settles to zero at the
-# stop point / arrival.
-var _pp_stride_phase: float = 0.0
-var _pp_stride_intensity: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
@@ -1409,6 +1390,26 @@ func _configure_collaborators() -> void:
 	_pose.slide_pushoff_rot_deg = slide_pushoff_rot_deg
 	_pose.slide_body_lean_deg = slide_body_lean_deg
 	_pose.slide_initial_speed = slide_initial_speed
+	_puck_play.skate_speed = puck_play_skate_speed
+	_puck_play.skate_accel = puck_play_skate_accel
+	_puck_play.go_margin = puck_play_go_margin
+	_puck_play.abort_margin = puck_play_abort_margin
+	_puck_play.stop_beat = puck_play_stop_beat
+	_puck_play.set_beat = puck_play_set_beat
+	_puck_play.capture_radius = puck_play_capture_radius
+	_puck_play.min_puck_speed = puck_play_min_puck_speed
+	_puck_play.max_puck_speed = puck_play_max_puck_speed
+	_puck_play.opponent_speed = puck_play_opponent_speed
+	_puck_play.net_front_exclusion = puck_play_net_front_exclusion
+	_puck_play.cooldown_s = puck_play_cooldown_s
+	_puck_play.boards_inset = puck_play_boards_inset
+	_puck_play.post_clearance = puck_play_post_clearance
+	_puck_play.stride_cadence = puck_play_stride_cadence
+	_puck_play.goal_line_z = _goal_line_z
+	_puck_play.goal_center_x = _goal_center_x
+	_puck_play.direction_sign = _direction_sign
+	_puck_play.net_half_width = net_half_width
+	_puck_play.home_depth = maxf(depth_defensive, 0.2)
 	_build_rule_configs()
 
 # Rule configs are built once and reused — exports don't change at runtime.
@@ -1539,13 +1540,7 @@ func reset_to_crease() -> void:
 	_slide_coverage_confirm_timer = 0.0
 	_sweep_windup_timer = 0.0
 	_pending_sweep_cover_release = false
-	_pp_phase = _PP_OUT
-	_pp_stop_timer = 0.0
-	_pp_wait_timer = 0.0
-	_pp_cooldown_timer = 0.0
-	_pp_trapped = false
-	_pp_stride_phase = 0.0
-	_pp_stride_intensity = 0.0
+	_puck_play.reset()
 	_catch_secured = false
 	_catch_pressured = false
 	_catch_hold_timer = 0.0
@@ -1839,8 +1834,7 @@ func _update_state(delta: float) -> void:
 	_slide.tick_cooldown(delta)
 	if _cover_cooldown_timer > 0.0:
 		_cover_cooldown_timer = maxf(_cover_cooldown_timer - delta, 0.0)
-	if _pp_cooldown_timer > 0.0:
-		_pp_cooldown_timer = maxf(_pp_cooldown_timer - delta, 0.0)
+	_puck_play.tick_cooldown(delta)
 	# Convert puck global X into goalie local X. The -Z goal goalie is rotated PI
 	# so its local +X is global -X; multiplying by -_direction_sign corrects for that.
 	var puck_local_x: float = (_tracked_threat_position.x - _goal_center_x) * -_direction_sign
@@ -2573,186 +2567,47 @@ func _drop_caught_puck() -> void:
 	_sm.recovery_timer = 0.0
 
 
-# ── Behind-net puck play lifecycle ───────────────────────────────────────────
-# GO decision for the rim stop. Fills the trip geometry (_pp_* points) as a
-# side effect when it returns true — _enter_puck_play just commits. Cheap
-# early-outs run before any skater scan (this is polled per tick from the
-# upright and RVH branches on the host).
+# ── Behind-net puck play (delegated to GoaliePuckPlay) ───────────────────────
+# The trip's decision, geometry and phase live in the collaborator; the
+# controller keeps the scene-level guards, the state-machine transitions, and the
+# puck mutation (the trap), which must stay on the main thread.
 func _should_play_rim() -> bool:
-	if is_inf(puck_play_go_margin):
-		return false  # tier gate: only the top skill profile plays the puck
-	if _pp_cooldown_timer > 0.0 or _reaction.reacting:
+	if _reaction.reacting:
 		return false
 	if puck.get_carrier() != null or puck.pickup_locked:
 		return false
-	# Behind the goal line only, and genuinely rimming (speed window).
-	if _puck_front_of_goal_m() >= 0.0:
-		return false
+	# Cheap geometry rejects BEFORE the skater scan — this is polled every tick.
 	var vel: Vector3 = _loose_puck_velocity()
-	var speed: float = sqrt(vel.x * vel.x + vel.z * vel.z)
-	if speed < puck_play_min_puck_speed or speed > puck_play_max_puck_speed:
+	if not _puck_play.may_consider(puck.global_position, vel):
 		return false
-	# Fixed stop point: directly behind the net, just inside the end boards —
-	# where a real goalie traps the around-the-boards rim.
-	var boards_z: float = float(-_direction_sign) * GameRules.RINK_HALF_LENGTH
-	var stop := Vector2(_goal_center_x, boards_z + float(_direction_sign) * puck_play_boards_inset)
-	# The rim must still be COMING to the stop point.
-	var to_stop := Vector2(stop.x - puck.global_position.x, stop.y - puck.global_position.z)
-	if vel.x * to_stop.x + vel.z * to_stop.y <= 0.0:
-		return false
-	# Net-front veto + nearest pressure. One scan, no allocation.
 	_gather_opposing_positions()
-	var net_front := Vector2(_goal_center_x, _goal_line_z + float(_direction_sign) * 1.0)
-	var nearest_to_stop: float = INF
-	for opp in _lane_opponents:
-		var dn: float = Vector2(opp.x, opp.z).distance_to(net_front)
-		if dn < puck_play_net_front_exclusion:
-			return false  # someone lurking at the empty net — never leave
-		nearest_to_stop = minf(nearest_to_stop, Vector2(opp.x, opp.z).distance_to(stop))
-	# Trip geometry: around the post on the rim's incoming side, never through
-	# the net. Home is the front of the crease; the defensive-zone logic takes
-	# back over (RVH etc.) once the goalie is home.
-	var side: float = signf(puck.global_position.x - _goal_center_x)
-	if side == 0.0:
-		side = 1.0
-	var wp := Vector2(
-			_goal_center_x + side * (net_half_width + puck_play_post_clearance), _goal_line_z)
-	var home := Vector2(
-			_goal_center_x, _goal_line_z + float(_direction_sign) * maxf(depth_defensive, 0.2))
-	var pos := Vector2(goalie.global_position.x, goalie.global_position.z)
-	var l_out: float = pos.distance_to(wp) + wp.distance_to(stop)
-	var l_back: float = stop.distance_to(wp) + wp.distance_to(home)
-	var t_out: float = GoalieBehaviorRules.travel_time_from_rest(
-			l_out, puck_play_skate_speed, puck_play_skate_accel)
-	var t_back: float = GoalieBehaviorRules.travel_time_from_rest(
-			l_back, puck_play_skate_speed, puck_play_skate_accel)
-	# Must beat the rim there SET, and win the whole-trip race with the fat margin.
-	var puck_dist: float = Vector2(puck.global_position.x, puck.global_position.z).distance_to(stop)
-	if not GoalieBehaviorRules.can_beat_puck_to_stop(t_out, puck_dist, speed, puck_play_set_beat):
-		return false
-	if not GoalieBehaviorRules.puck_play_race_clear(
-			t_out, t_back, puck_play_stop_beat, nearest_to_stop,
-			puck_play_opponent_speed, puck_play_go_margin):
-		return false
-	_pp_stop_point = stop
-	_pp_waypoint = wp
-	_pp_home_point = home
-	return true
+	return _puck_play.should_go(
+			puck.global_position, vel, goalie.global_position, _lane_opponents)
 
 
 func _enter_puck_play() -> void:
-	_pp_phase = _PP_OUT
-	_pp_past_waypoint = false
-	_pp_trapped = false
-	_pp_stop_timer = 0.0
-	_pp_wait_timer = 0.0
-	_pp_stride_phase = 0.0
-	_pp_stride_intensity = 0.0
+	_puck_play.begin()
 	_move_speed_current = 0.0
 	_sm.transition_to(State.PLAYING_PUCK)
 
 
-# Mid-trip abort race — the conservative heart of the feature. Re-run every
-# tick with the STRICTER abort margin (hysteresis in the safe direction) using
-# the goalie's CURRENT remaining path: a forechecker who accelerates, a weird
-# bounce, or a shrinking window sends the goalie straight home. Bailing early
-# reads as a smart goalie; getting caught out reads as a broken one.
-func _puck_play_abort_needed() -> bool:
-	_gather_opposing_positions()
-	var nearest_to_stop: float = INF
-	var net_front := Vector2(_goal_center_x, _goal_line_z + float(_direction_sign) * 1.0)
-	for opp in _lane_opponents:
-		if Vector2(opp.x, opp.z).distance_to(net_front) < puck_play_net_front_exclusion:
-			return true
-		nearest_to_stop = minf(nearest_to_stop, Vector2(opp.x, opp.z).distance_to(_pp_stop_point))
-	var pos := Vector2(goalie.global_position.x, goalie.global_position.z)
-	var l_out: float = 0.0
-	if _pp_phase == _PP_OUT:
-		l_out = pos.distance_to(_pp_stop_point) if _pp_past_waypoint 				else pos.distance_to(_pp_waypoint) + _pp_waypoint.distance_to(_pp_stop_point)
-	var l_back: float = _pp_stop_point.distance_to(_pp_waypoint) 			+ _pp_waypoint.distance_to(_pp_home_point)
-	var t_out: float = GoalieBehaviorRules.travel_time_from_rest(
-			l_out, puck_play_skate_speed, puck_play_skate_accel)
-	var t_back: float = GoalieBehaviorRules.travel_time_from_rest(
-			l_back, puck_play_skate_speed, puck_play_skate_accel)
-	return not GoalieBehaviorRules.puck_play_race_clear(
-			t_out, t_back, puck_play_stop_beat, nearest_to_stop,
-			puck_play_opponent_speed, puck_play_abort_margin)
-
-
-# Current movement target for the trip: post waypoint until passed, then the
-# phase's endpoint (stop point out, home point back). STOP holds at the spot.
-func _pp_current_target() -> Vector2:
-	if _pp_phase == _PP_STOP:
-		return _pp_stop_point
-	var final: Vector2 = _pp_stop_point if _pp_phase == _PP_OUT else _pp_home_point
-	if not _pp_past_waypoint:
-		var pos := Vector2(_current_x, goalie.global_position.z)
-		if pos.distance_to(_pp_waypoint) < 0.25:
-			_pp_past_waypoint = true
-		else:
-			return _pp_waypoint
-	return final
-
-
-func _pp_go_home() -> void:
-	_pp_phase = _PP_RETURN
-	_pp_past_waypoint = false
-
-
-# Per-tick trip logic (host). OUT: skate the waypoint path, aborting on any
-# shrinking race. STOP: paddle down, trap the rim when it arrives (a rim that
-# never shows — weird bounce — times out). RETURN: home via the waypoint, then
-# hand back to the normal defensive-zone logic. The stopped puck is left where
-# it lies — "stop it, leave it, get back" — for the breakout D to collect.
 func _tick_puck_play(delta: float) -> void:
 	if not is_server:
 		return
-	if puck.get_carrier() != null and _pp_phase != _PP_RETURN:
-		_pp_go_home()
-		return
-	match _pp_phase:
-		_PP_OUT:
-			if _puck_play_abort_needed():
-				_pp_go_home()
-				return
-			var pos := Vector2(goalie.global_position.x, goalie.global_position.z)
-			if pos.distance_to(_pp_stop_point) < 0.2:
-				_pp_phase = _PP_STOP
-				_pp_trapped = false
-				# Wait for the rim only as long as its own flight plus a beat.
-				var speed: float = maxf(_loose_puck_velocity().length(), 0.5)
-				var puck_dist: float = Vector2(
-						puck.global_position.x, puck.global_position.z).distance_to(_pp_stop_point)
-				_pp_wait_timer = puck_dist / speed + 0.6
-		_PP_STOP:
-			if _puck_play_abort_needed():
-				_pp_go_home()
-				return
-			if not _pp_trapped:
-				var close: bool = goalie.global_position.distance_to(puck.global_position) 						<= puck_play_capture_radius
-				if close and _puck_front_of_goal_m() < 0.0:
-					# The trap: kill the rim dead at the paddle.
-					puck.apply_goalie_sweep(Vector3.ZERO)
-					_pp_trapped = true
-					_pp_stop_timer = puck_play_stop_beat
-				else:
-					_pp_wait_timer -= delta
-					if _pp_wait_timer <= 0.0:
-						_pp_go_home()
-			else:
-				_pp_stop_timer -= delta
-				if _pp_stop_timer <= 0.0:
-					_pp_go_home()
-		_PP_RETURN:
-			var pos := Vector2(goalie.global_position.x, goalie.global_position.z)
-			if pos.distance_to(_pp_home_point) < 0.25:
-				# Home — hand control back. `_current_depth` returns to radius
-				# units for the standing family; the defensive-zone check next
-				# tick post-integrates if the puck is still back there.
-				_pp_cooldown_timer = puck_play_cooldown_s
-				_current_depth = GoalieBehaviorRules.threat_distance_to_goal(
-						goalie.global_position, _goal_line_z, _goal_center_x)
-				_sm.transition_to(State.READY if _is_ready_situation() else State.STANDING)
+	_gather_opposing_positions()
+	_puck_play.advance(delta, goalie.global_position, puck.global_position,
+			_loose_puck_velocity().length(), puck.get_carrier() != null, _lane_opponents)
+	if _puck_play.wants_trap:
+		# The trap: kill the rim dead at the paddle. Physics write, so it is the
+		# controller's to perform — the collaborator only asks.
+		puck.apply_goalie_sweep(Vector3.ZERO)
+	if _puck_play.arrived_home:
+		# Home — hand control back. `_current_depth` returns to radius units for
+		# the standing family; the defensive-zone check next tick post-integrates
+		# if the puck is still back there.
+		_current_depth = GoalieBehaviorRules.threat_distance_to_goal(
+				goalie.global_position, _goal_line_z, _goal_center_x)
+		_sm.transition_to(State.READY if _is_ready_situation() else State.STANDING)
 
 
 # The smother failed (puck whacked away / picked up before the glove landed)
@@ -3184,25 +3039,11 @@ func _update_position(delta: float) -> void:
 		State.PLAYING_PUCK:
 			# Free skate along the post-waypoint path (the only movement mode not
 			# clamped to the crease arc — the trip routes AROUND the post, never
-			# through the net). Accel-ramped like every other push.
-			var pp_target: Vector2 = _pp_current_target()
-			var pp_cur := Vector2(_current_x, goalie.global_position.z)
-			_move_speed_current = move_toward(
-					_move_speed_current, puck_play_skate_speed, puck_play_skate_accel * delta)
-			var pp_step: float = _move_speed_current * delta
-			var pp_d: float = pp_cur.distance_to(pp_target)
-			var pp_next: Vector2 = pp_target if pp_d <= pp_step \
-					else pp_cur + (pp_target - pp_cur) * (pp_step / maxf(pp_d, 0.0001))
-			# Stride phase rides the distance actually covered this tick; the
-			# intensity envelope eases with speed and dies at the stop point.
-			var pp_moved: float = pp_cur.distance_to(pp_next)
-			_pp_stride_phase = wrapf(
-					_pp_stride_phase + pp_moved * puck_play_stride_cadence, 0.0, TAU)
-			var stride_target: float = 0.0
-			if _pp_phase != _PP_STOP:
-				stride_target = clampf(
-						_move_speed_current / maxf(puck_play_skate_speed, 0.001), 0.0, 1.0)
-			_pp_stride_intensity = lerpf(_pp_stride_intensity, stride_target, 6.0 * delta)
+			# through the net). The collaborator owns the path, the accel ramp and
+			# the stride envelope.
+			var pp_next: Vector2 = _puck_play.step_toward(
+					delta, _current_x, goalie.global_position.z,
+					_puck_play.current_target(_current_x, goalie.global_position.z))
 			_current_x = pp_next.x
 			new_z = pp_next.y
 		State.RVH_LEFT, State.VH_LEFT:
@@ -3563,9 +3404,9 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.standing_sweep_active = _is_standing_sweep_active()
 	_pose_inputs.head_yaw_deg = _desired_head_yaw_deg()
 	_pose_inputs.puck_play_stopping = _sm.current == State.PLAYING_PUCK \
-			and _pp_phase == _PP_STOP
-	_pose_inputs.puck_play_stride_phase = _pp_stride_phase
-	_pose_inputs.puck_play_stride_intensity = _pp_stride_intensity
+			and _puck_play.is_stopping()
+	_pose_inputs.puck_play_stride_phase = _puck_play.stride_phase
+	_pose_inputs.puck_play_stride_intensity = _puck_play.stride_intensity
 	_set_pad_toe_out_inputs()
 	_set_prelean_inputs()
 	var config: GoalieBodyConfig = _pose.build(_pose_inputs)

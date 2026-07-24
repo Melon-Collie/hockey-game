@@ -993,9 +993,19 @@ restructure.
 
 1. **Step 1** — `GoalieTuning` resource (930 lines out; also fixes
    `_apply_skill_profile`'s manual field copy and `_configure_collaborators`'s
-   manual push).
-2. **Step 2** — extract `GoaliePuckPlay` + `GoalieCreaseClear` (~550 lines,
-   ~23 member vars out).
+   manual push). **Re-ordered AFTER Step 2** on contact with the code: moving 205
+   exports touches essentially every method (~500 call sites) while detangling
+   nothing, whereas extracting cohesive behaviours is what actually serves Step 3
+   / 4 and threading. Do the behaviour extractions first.
+2. **Step 2** — extract `GoaliePuckPlay` + `GoalieCreaseClear`.
+   - ~~`GoaliePuckPlay`~~ ✅ **SHIPPED.** 331-line collaborator; controller
+     4340 → 4181 lines, 102 → 92 member vars. Owns the trip's decision, geometry
+     and phase; deliberately does NOT own state-machine transitions, body
+     movement, or the puck mutation (the trap is *requested* via `wants_trap` and
+     performed by the controller) — the same decision/actuation split
+     `GoalieDecision` / `GoalieActuation` generalise in Step 4.
+   - `GoalieCreaseClear` (sweep windup/strike/follow-through + cover + catch) —
+     still to do, ~350 lines / ~12 vars.
 3. **Step 3** — `GoalieWorldView` + `GoaliePerception`.
    **Note the fit: R1's lagged read is a *perception* concern, and this is its
    natural home.** If R1 lands first (recommended), Step 3 is where it stops
