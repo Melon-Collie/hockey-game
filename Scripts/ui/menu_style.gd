@@ -76,9 +76,14 @@ const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 #     in-game display voice is this OFL stand-in). Used for scorebug
 #     numbers, headers, player-card identity labels.
 #   - UI_FONT (Manrope Regular) — humanist sans, neutral body text.
-#     Default font for menu rows, button labels, body copy.
+#     Default font for menu rows, button labels, body copy, stat tables.
+#   - NAME_FONT (Manrope SemiBold) — player names (lobby cards, jersey
+#     nameplates) and the scorebug's small caps labels (AWAY/HOME/SHOTS/
+#     period). The display face is reserved for numerals and the wordmark,
+#     so it reads as a broadcast accent rather than carrying every surface.
 const DISPLAY_FONT       := preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")  # SIL OFL 1.1
 const UI_FONT            := preload("res://Assets/Fonts/Manrope-Regular.ttf")  # SIL OFL 1.1
+const NAME_FONT          := preload("res://Assets/Fonts/Manrope-SemiBold.ttf")  # SIL OFL 1.1
 # Dark surface for HUD overlays. Now identical to PANEL_BG so the menu and
 # scorebug share a single dark background — no visible seam between the two
 # surfaces when both are on screen.

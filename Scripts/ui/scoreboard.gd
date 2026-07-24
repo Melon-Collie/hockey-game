@@ -412,7 +412,7 @@ func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: b
 		var cell := Label.new()
 		cell.text = texts[i]
 		cell.custom_minimum_size = Vector2(widths[i], 0)
-		cell.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+		cell.add_theme_font_override("font", MenuStyle.UI_FONT)
 		cell.add_theme_font_size_override("font_size", font_size)
 		var col := name_color if (i > 0 and i < 4 or is_header) else _WHITE
 		cell.add_theme_color_override("font_color", col)
@@ -456,7 +456,7 @@ func _hsep() -> HSeparator:
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	l.add_theme_font_override("font", MenuStyle.NAME_FONT)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
 	return l

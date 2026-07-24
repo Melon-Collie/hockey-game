@@ -202,7 +202,7 @@ func _build_player_card(parent: VBoxContainer) -> void:
 
 	_player_card_name = Label.new()
 	_player_card_name.text = PlayerPrefs.player_name
-	_player_card_name.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	_player_card_name.add_theme_font_override("font", MenuStyle.NAME_FONT)
 	_player_card_name.add_theme_font_size_override("font_size", 28)
 	_player_card_name.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
 	vbox.add_child(_player_card_name)

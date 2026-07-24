@@ -18,6 +18,7 @@ extends Node2D
 # which looks identical but costs draw calls).
 
 const FONT: Font = preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")
+const NAME_FONT: Font = preload("res://Assets/Fonts/Manrope-SemiBold.ttf")
 const IMG_W: int = 512
 const IMG_H: int = 256
 const BACK_CENTER_X: int = 128         # paired with uv1_offset.x = 0.25
@@ -63,10 +64,10 @@ func _draw() -> void:
 
 	var name_upper: String = player_name.to_upper()
 	if name_upper.length() > 0:
-		_draw_centered(name_upper, NAME_FONT_SIZE, NAME_Y_TOP, NAME_OUTLINE_PX)
+		_draw_centered(NAME_FONT, name_upper, NAME_FONT_SIZE, NAME_Y_TOP, NAME_OUTLINE_PX)
 	var num_str: String = str(jersey_number)
 	if num_str.length() > 0:
-		_draw_centered(num_str, NUMBER_FONT_SIZE, NUMBER_Y_TOP, NUMBER_OUTLINE_PX)
+		_draw_centered(FONT, num_str, NUMBER_FONT_SIZE, NUMBER_Y_TOP, NUMBER_OUTLINE_PX)
 
 
 # Converts a v2 stripe {pos, width} over a region of height region_px into
@@ -82,17 +83,17 @@ static func _stripe_band(stripe: Dictionary, region_px: int) -> Vector2i:
 
 # Outline is drawn first so the fill sits on top of it. Outline pass is
 # skipped when outline_color matches text_color (the "no outline" sentinel).
-func _draw_centered(s: String, font_size: int, y_top: int, outline_px: int) -> void:
-	var width: float = FONT.get_string_size(
+func _draw_centered(font: Font, s: String, font_size: int, y_top: int, outline_px: int) -> void:
+	var width: float = font.get_string_size(
 			s, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
-	var ascent: float = FONT.get_ascent(font_size)
+	var ascent: float = font.get_ascent(font_size)
 	var x: float = float(BACK_CENTER_X) - width * 0.5
 	var y_baseline: float = float(y_top) + ascent
 	var pos := Vector2(x, y_baseline)
 	if outline_px > 0 and not text_outline_color.is_equal_approx(text_color):
-		draw_string_outline(FONT, pos, s,
+		draw_string_outline(font, pos, s,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, outline_px, text_outline_color)
-	draw_string(FONT, pos, s,
+	draw_string(font, pos, s,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)
 
 
