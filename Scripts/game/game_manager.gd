@@ -523,9 +523,19 @@ func _physics_process(delta: float) -> void:
 			current_snapshot.accel_by_peer = _accel_tracker.accel_by_peer
 			current_snapshot.heading_omega_by_peer = _accel_tracker.heading_omega_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
-	if not team_brains.is_empty() and current_snapshot != null:
-		for brain: TeamBrain in team_brains:
-			brain.tick(delta, current_snapshot)
+	# Centralized AI dispatch. Brains run first (team strategy) so each bot reads
+	# this tick's fresh slot assignments, then every bot dispatches against the
+	# SAME enriched snapshot the brains saw — unified perception (bots no longer
+	# lag the brains by the old priority-split tick; see docs/ai-threading-plan.md).
+	# This whole block is the seam Phase 3 lifts onto the AI worker thread; the
+	# per-bot dispatch moved here from AIController._physics_process (was prio -1).
+	if current_snapshot != null:
+		if not team_brains.is_empty():
+			for brain: TeamBrain in team_brains:
+				brain.tick(delta, current_snapshot)
+		if _registry != null:
+			for ai_ctrl: AIController in _registry.ai_controllers():
+				ai_ctrl.tick_agent(current_snapshot, delta)
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)

@@ -135,7 +135,13 @@ func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: 
 		skater.add_child(_debug_label)
 
 
-func _physics_process(delta: float) -> void:
+# Per-tick agent dispatch, driven by the host's centralized AI loop
+# (GameManager._physics_process) rather than the node's own _physics_process —
+# so all bots run from one seam that Phase 3 lifts onto a worker thread. The
+# snapshot is passed in (not read from GameManager.current_snapshot) so the same
+# entry works off-thread against a handed-off buffer. Host-only; bots don't exist
+# on clients.
+func tick_agent(snapshot: WorldSnapshot, delta: float) -> void:
 	if skater == null or puck == null or _agent == null:
 		return
 	if NetworkManager.is_replay_mode():
@@ -191,7 +197,7 @@ func _physics_process(delta: float) -> void:
 	# Read the frame's shared snapshot. GameManager publishes it once per
 	# host physics frame after StateBufferManager.capture; reading it here
 	# avoids 6 bots × redundant interpolation passes per frame.
-	perceived_snapshot = GameManager.current_snapshot
+	perceived_snapshot = snapshot
 	# Latched match rules for the AI's offside-aware reads (cheap int stamp;
 	# the rule set only changes at match config, but the agent must never
 	# carry a previous match's).

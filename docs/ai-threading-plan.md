@@ -148,6 +148,37 @@ Start with A behind a flag. If playtest shows the aim lag hurts reception feel,
 escalate the reception re-aim (only) to Model B — keep it live on main reading
 the present snapshot, leave the decision on the worker.
 
+## Two ordering facts the centralization must respect
+
+The exact per-tick execution order (verified) constrains a behavior-identical
+centralization:
+
+- **Bots read the *previous* tick's snapshot; brains read the *current* tick's.**
+  Bots dispatch in `AIController._physics_process` at priority **−1**, strictly
+  before `GameManager` (autoload, priority 0) rebuilds `current_snapshot` at
+  `game_manager.gd:517`. So a bot on tick N reads the snapshot object built on
+  tick N−1. The brains tick *inside* `GameManager._physics_process` at `:526`,
+  *after* the rebuild, so they see tick N. This one-tick perception asymmetry is
+  current behavior. The faithful transform is trivial: in the coordinator,
+  dispatch bots reading `current_snapshot` **before** the `:517` overwrite (it
+  still holds last tick's build at that point), then rebuild, then tick brains.
+  The apply (`_process_input`) still lands at priority-0-autoload, before the
+  `Skater` scene node integrates at priority-0-tree-order — so decision→apply→
+  integrate ordering is preserved (autoloads run before scene nodes at equal
+  priority). Model A collapses this asymmetry uniformly in Phase 3; Phase 2 keeps
+  it.
+
+- **The goalie is decoupled and deferred.** `GoalieController` reads **live actor
+  state** (`puck.global_position`, live skater positions), not `current_snapshot`,
+  and its decision runs pure `GoalieBehaviorRules` — it **never** calls
+  `AIActionScoring`, so it shares none of the per-tick static scratch. The
+  `set_goalie_profile` statics are set once at match config (`game_manager.gd:860,
+  4347`), read-only during play. Therefore the goalie has **no data-race hazard**
+  and doesn't gate the skater work. But moving it to a worker requires converting
+  its live-state reads to snapshot reads — a real perception-age change. So the
+  goalie is its own step (**Phase 2b / 3b**), sequenced after skaters, landing at
+  the same end state (all AI on the one worker) with its behavior change isolated.
+
 ## The prerequisite: centralize dispatch (no threading yet)
 
 Today the AI is **not** one loop — it's distributed across each
