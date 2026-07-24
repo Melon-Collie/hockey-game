@@ -1014,6 +1014,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	var _cb := SkaterStateMachine.Callbacks.new()
 	_cb.apply_blade_from_mouse = _ik.apply_blade_from_mouse
 	_cb.apply_wrister_aim_blade = _apply_wrister_aim_blade
+	_cb.wrister_chirality_seed = _wrister_chirality_seed
 	_cb.apply_slapper_blade_position = _shot_pose.apply_slapper_blade_position
 	_cb.apply_block_blade_position = _shot_pose.apply_block_blade_position
 	_cb.apply_wrister_follow_through = _shot_pose.apply_wrister_follow_through
@@ -2229,6 +2230,16 @@ func _wrister_aim_dir(input: InputState) -> Vector3:
 # the state machine's apply_wrister_aim_blade callback.
 func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
 	_ik.apply_blade_from_mouse(input, delta, wrister_freeze_blade)
+
+# Player-relative bearing the swing-chirality tracker seeds from at charge start.
+# MUST mirror _update_wrister_charge's chirality_source exactly (cursor when
+# frozen, the blade target when live), so the first swing_step is source-to-source
+# and banks no spurious rotation from a bearing discontinuity.
+func _wrister_chirality_seed(input: InputState) -> Vector3:
+	var src: Vector3 = input.mouse_world_pos if wrister_freeze_blade else _ik.last_target_blade_world
+	var bearing: Vector3 = src - skater.global_position
+	bearing.y = 0.0
+	return bearing
 
 # Forehand/backhand for the wrister, from the swing CHIRALITY — the net
 # rotational sense of the blade's sweep around the player over the stroke
