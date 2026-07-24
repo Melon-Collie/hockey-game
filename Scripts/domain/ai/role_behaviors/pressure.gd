@@ -44,6 +44,14 @@ class_name AIRolePressure
 # No exposure factor — PRESSURE is by definition the bot pressuring
 # the puck; "getting caught up-ice" isn't applicable. The MARK
 # defenders own defensive recovery for this team.
+#
+# One bound on that pressure: when NOBODY is home behind us (we are the last man
+# back, the normal case once a rush gains the zone and the markers are still
+# recovering), the cut-off is only taken as fast as it can be taken SET — the
+# shared last-man rendezvous clamp CONTAIN uses on the other side of the blue
+# line (AIRoleHelpers.settable_stand_depth). A lunge into a rush at pace ends
+# with the pressurer's momentum pointing the wrong way and the carrier walking
+# around him, which is worse than the space the clamp concedes.
 
 # Engaged/closing boundary: within ~1.5 search steps of the cut-off the
 # argmax runs the full polar ring incl. half-step samples (fine corrections
@@ -128,6 +136,46 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		search_center += to_net.normalized() * (
 				SkaterAgentStateMachine.BLADE_REACH_M + ctx.pursuit_standoff_m)
 
+	# LAST MAN: TAKE THE CUT-OFF SET, NEVER LUNGE INTO IT. The cut-off above is
+	# one stick-length goal-side of where the carrier is GOING — a challenge
+	# position, and the right one while there's a layer home behind us to answer
+	# a beaten challenge. As the genuine last man it is also a step-up, and a
+	# rush at pace is exactly when that step-up can't be made: measured in the
+	# harness, a properly-gapped defender took the CONTAIN → PRESSURE handoff at
+	# the blue line, saw the cut-off jump 6 m up-ice, charged it at 6 m/s, met
+	# the carrier once, and was then blown by and left 10 m behind the play. So
+	# bound the step-up to the rendezvous the last man can actually arrive SET at
+	# (AIRoleHelpers.settable_stand_depth — the same bound CONTAIN takes on the
+	# other side of the handoff, so the blue line doesn't change how hard the
+	# same body steps up). Inert whenever it should be: a carrier who isn't
+	# closing on our net (a cycle, a walk-out, an in-zone battle) leaves the
+	# budget unbounded, and any teammate home behind us skips it entirely — which
+	# is every forecheck (F2/F3 are between F1 and our net by construction) and
+	# any in-zone look where a MARK is covering the house.
+	var min_depth: float = -INF
+	var depth_dir: Vector3 = Vector3.ZERO
+	if not AIRoleHelpers.has_support_behind(ctx):
+		var net_dir: Vector3 = our_net - carrier_pos
+		var net_dist: float = net_dir.length()
+		if net_dist > 0.001:
+			net_dir /= net_dist
+			var closing: float = maxf(
+					carrier_velocity.x * net_dir.x + carrier_velocity.z * net_dir.z,
+					0.0)
+			var want: float = (search_center.x - carrier_pos.x) * net_dir.x \
+					+ (search_center.z - carrier_pos.z) * net_dir.z
+			var settable: float = AIRoleHelpers.settable_stand_depth(
+					ctx, carrier_pos, net_dir, want, closing)
+			if settable > want:
+				# Push the whole candidate ring back onto the settable line, so
+				# the argmax still picks the lateral angle — it just picks it
+				# from a stand this body can actually be planted at. The ring
+				# spans ±SEARCH_STEP_M, so the depth is also filtered per
+				# candidate below rather than only re-centred.
+				search_center += net_dir * (settable - want)
+				min_depth = settable
+				depth_dir = net_dir
+
 	# Upper bounds for the per-candidate max() early-out: the carrier's
 	# option values with the current defenders only. One extra surface pass
 	# here lets every candidate below skip the pass lanes that can't matter
@@ -183,6 +231,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			continue
 		if not _is_goal_side(c, carrier_pos, our_net):
 			continue
+		if min_depth > -INF and (c.x - carrier_pos.x) * depth_dir.x \
+				+ (c.z - carrier_pos.z) * depth_dir.z < min_depth - 0.01:
+			continue  # up-ice of the settable stand — a lunge (see above)
 		if AIRoleHelpers.too_close_to_teammate(c, our_team_excluding_self):
 			continue
 

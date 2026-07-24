@@ -381,10 +381,12 @@ const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 # naive-carry tiers get it too).
 const CARRY_MAN_TO_BEAT_RADIUS_M: float = 3.5
 # A defender the carrier has skated PAST — this far behind it toward our own
-# end along the netward line — is beaten and no longer a man to beat, so the
-# carrier squares up the instant it clears him even with him trailing close
-# behind (rather than waiting for the full contest radius to open). ~a body
-# length. Physical measurement.
+# end along the netward line, with both bodies projected to the evasion horizon
+# (see _has_man_to_beat) — is beaten and no longer a man to beat, so the carrier
+# squares up the instant it clears him even with him trailing close behind
+# (rather than waiting for the full contest radius to open). ~a body length.
+# Physical measurement: the tolerance on the read, not a stand-in for the closing
+# rate — the projection is what supplies that.
 const CARRY_MAN_TO_BEAT_BEHIND_M: float = 0.75
 # Hysteresis band on the man-to-beat contest (see _has_man_to_beat). Once a man
 # is being beaten the radius AND the behind-slack both widen by this, so a
@@ -4805,8 +4807,22 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # more than CARRY_MAN_TO_BEAT_BEHIND_M along the netward line) is beaten and does
 # NOT count, so the carrier squares up the instant it clears him. With no such
 # man the carrier is unobstructed. Measured from the body so a checker on any
-# side ahead counts. Runs on the carrier only (~1 bot/team) and loops the small
-# opponent set, so it's hot-path cheap.
+# side ahead counts.
+#
+# BOTH BODIES ARE PROJECTED to the evasion horizon, matching the read the protect
+# screen filter already runs (AIRoleCarrier._fill_protect_opponents). "Have I
+# beaten him?" is a question about the CLOSING RATE, and a frozen snapshot cannot
+# answer it: a chaser half a stride behind and losing ground is gone, while one
+# in the same spot and pulling even is the man you still have to beat. Reading
+# raw positions, the carrier kept both — so a beaten checker riding the hip held
+# the square-to-net facing off for as long as he trailed inside the slack, and
+# the carrier drove the zone at a lateral angle with its options shut down (the
+# "holds the stickhandling angle after cleanly beating his man" report), while a
+# back-checker about to pull even was written off a beat early. The slack and the
+# hysteresis stay what they are — a body length of tolerance and a debounce — but
+# they now sit on a read that can see who is actually going where. Runs on the
+# carrier only (~1 bot/team) and loops the small opponent set, so it's hot-path
+# cheap.
 func _has_man_to_beat(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	# Sticky contest (see CARRY_MAN_TO_BEAT_HYSTERESIS_M): while a man is already
 	# being beaten, widen the radius AND the behind-slack so a defender riding the
@@ -4823,11 +4839,18 @@ func _has_man_to_beat(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	var have_net: bool = net_len > 0.001
 	var nx: float = to_net.x / net_len if have_net else 0.0
 	var nz: float = to_net.z / net_len if have_net else 0.0
+	var horizon: float = AIActionScoring.EVADE_HORIZON_S
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	var self_x: float = self_pos.x
+	var self_z: float = self_pos.z
+	if self_state != null:
+		self_x += self_state.velocity.x * horizon
+		self_z += self_state.velocity.z * horizon
 	var found: bool = false
 	for peer_id: int in _opponent_ids(snapshot):
 		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		var dx: float = opp_state.position.x - self_pos.x
-		var dz: float = opp_state.position.z - self_pos.z
+		var dx: float = opp_state.position.x + opp_state.velocity.x * horizon - self_x
+		var dz: float = opp_state.position.z + opp_state.velocity.z * horizon - self_z
 		if dx * dx + dz * dz >= r2:
 			continue
 		# Goal-side (ahead toward the net) beyond the beaten-behind slack.

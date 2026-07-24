@@ -22,7 +22,20 @@ class_name AIRoleContain
 # A carrier charging at full stride keeps the deep cushion — committed
 # straight-line speed is what beats a defender clean. A gliding,
 # regrouping, or stalled carrier is met TIGHT, collapsing toward poke range
-# — "gapping up". The old distance-fraction gap (dist_to_net × 0.3) could
+# — "gapping up".
+#
+# The gap sizes WHERE the stand belongs; a second bound sizes how much of the
+# step-up to it can be taken now. The gap point is not a parked spot — it sweeps
+# goal-side at the rush's own pace — so as the LAST MAN BACK, CONTAIN steps up
+# only as far as it can travel and be SET before the sweeping point meets it
+# (the rendezvous clamp in decide()). Without it a last man 14 m up-ice of the
+# gap point charged the point as it stood, arrived carrying up-ice momentum into
+# a head-on carrier, got walked around during the reversal, and trailed the rush
+# into his own net — "chased backwards into the net, never actually challenges".
+# With it, the same defender holds his ground against a rush at pace and closes
+# right up on a slow one, which is what gap control looks like from the stands.
+#
+# The old distance-fraction gap (dist_to_net × 0.3) could
 # not gap up by construction: it parked the defender six metres off ANY
 # carrier at the blue line however slowly the rush came on — good at
 # getting back, never closing. At the doorstep both models agree (gap ≤
@@ -193,8 +206,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# hold the deeper contain gap instead (contain, don't challenge). The MARK pair
 	# recovering from up-ice flips this on the instant one gets home behind the
 	# stand, so the aggressive line stand returns exactly when it's backed.
+	var support_behind: bool = AIRoleHelpers.has_support_behind(ctx)
 	var ice_to_line: float = GameRules.BLUE_LINE_Z - ctx.own_goal_dir * carrier_pos.z
-	if ice_to_line > 0.0 and _has_support_behind(ctx):
+	if ice_to_line > 0.0 and support_behind:
 		gap = maxf(minf(gap, ice_to_line + LINE_STAND_INSIDE_M), GAP_MIN_M)
 	# Never project past the net — a gap wider than the carrier's own distance
 	# to the net would place the target behind the goal line.
@@ -273,6 +287,39 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		var tight_gap: float = clampf(
 				GAP_MIN_M + closing * WON_RACE_CUSHION_REACT_S, GAP_MIN_M, GAP_MAX_M)
 		gap = minf(gap, minf(tight_gap, dist))
+	# LAST MAN: TAKE THE GAP SET, NEVER LUNGE INTO IT. Everything above sizes
+	# WHERE the stand belongs; this bounds how much of the step-up to it can be
+	# taken NOW. The gap point is not a parked spot — it sweeps toward our net at
+	# the rush's own pace — so a defender who charges the point as it stands
+	# today arrives where the rush ALREADY WAS, carrying up-ice momentum into a
+	# carrier closing head-on. That reversal is the whole rush: measured in the
+	# harness, a last man 14 m up-ice of the gap point charged it at 6 m/s, was
+	# still bleeding that momentum off when the carrier arrived, got walked
+	# around, and trailed the play into his own net from behind — the "chased
+	# backwards into the net, never actually challenges" failure. Standing still
+	# and letting the rush come is not the answer either: on a slow, regrouping
+	# carrier the gap point crawls, and waiting for it concedes the whole zone.
+	#
+	# The honest bound is the RENDEZVOUS: step up only as far as you can travel
+	# and be SET (closing speed killed — AIRoleHelpers.set_arrival_distance, the
+	# same profile the counter-channel radii charge at every station) by the time
+	# the sweeping gap point meets you there. Step-up `s` off our current depth
+	# leaves `self_along - gap - s` of ice for the point to cover at `closing`,
+	# so `s` is feasible iff set_arrival_distance(that time) ≥ s — monotone in
+	# `s`, so one bisection lands the largest one. It falls out with the right
+	# shape at both ends by construction: a stalled or regrouping carrier gives
+	# an unbounded budget (CONTAIN closes right up and gaps up hard), a carrier
+	# flying in gives almost none (CONTAIN holds its ground and makes the rush
+	# come to it), with everything between a controlled step-up that ARRIVES.
+	#
+	# Only when there's nobody home behind us, matching the blue-line stand's
+	# gate exactly: these are the two halves of "am I the last man back?".
+	# Supported, a beaten challenge costs a scoring chance a teammate can still
+	# answer, so the aggressive step-up is a live option; as the last man it
+	# costs a breakaway, so the stand has to be one we can actually make.
+	if not support_behind:
+		gap = maxf(gap, AIRoleHelpers.settable_stand_depth(
+				ctx, carrier_pos, dir_net, gap, closing))
 	var gap_point: Vector3 = carrier_pos + dir_net * gap
 	var stand: Vector3 = gap_point if won_race_home \
 			else AIRoleHelpers.most_forward_feasible(
@@ -294,26 +341,6 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				ctx, carrier_pos, our_net, dir_net, gap,
 				receivers, opp_states, opp_caps)
 	return d
-
-
-# True when a teammate is home BEHIND CONTAIN — deeper toward our net (larger
-# own_goal_dir * z) than we are — i.e. there's a safety layer that can pick up
-# the carrier if our blue-line stand gets beaten wide. When false, CONTAIN is
-# the genuine last man back and must contain rather than challenge the entry.
-# Depth-axis read (not a race): the stand's risk is specifically "beaten wide,
-# nobody home," which is a positional question. Excludes self.
-static func _has_support_behind(ctx: RoleContext) -> bool:
-	if ctx.snapshot == null:
-		return false
-	var my_depth: float = ctx.own_goal_dir * ctx.self_pos.z
-	for pid: int in ctx.snapshot.skater_states:
-		if pid == ctx.peer_id:
-			continue
-		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
-			continue
-		if ctx.own_goal_dir * ctx.snapshot.skater_states[pid].position.z > my_depth:
-			return true
-	return false
 
 
 # True when a teammate (not self) is HOME ON this man: goal-side of the man's

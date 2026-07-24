@@ -789,6 +789,38 @@ func test_man_to_beat_is_sticky_across_the_contest_boundary() -> void:
 	assert_false(sm._has_man_to_beat(s, self_pos), "past the widened band: man beaten")
 
 
+func test_man_to_beat_reads_the_closing_rate_not_a_freeze_frame() -> void:
+	# "Have I beaten him?" is a question about the CLOSING RATE — the same two
+	# bodies in the same spots answer it differently depending on where they're
+	# going, so both are projected to the evasion horizon. Team 0 attacks −z.
+	# One geometry, a checker level with the carrier on his hip, three futures.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	_add_skater(s, SELF_ID, self_pos)
+	_add_skater(s, OPP_ID, Vector3(1.2, 0, 0.0))
+	s.skater_states[SELF_ID].velocity = Vector3(0, 0, -9.0)   # carrier at full stride
+
+	# Static freeze-frame (both velocities zero) — the level checker is a man.
+	s.skater_states[SELF_ID].velocity = Vector3.ZERO
+	assert_true(sm._has_man_to_beat(s, self_pos),
+			"level on the hip and nobody moving: still a man to beat")
+
+	# The carrier pulls away: same spots, but the checker is 2 m behind by the
+	# horizon and falling — beaten, so the O-zone square is free to fire.
+	sm._carry_has_man = false
+	s.skater_states[SELF_ID].velocity = Vector3(0, 0, -9.0)
+	s.skater_states[OPP_ID].velocity = Vector3(0, 0, -4.0)
+	assert_false(sm._has_man_to_beat(s, self_pos),
+			"a chaser losing ground from the same spot is beaten, not a man to beat")
+
+	# The checker is FASTER: same spots, but he pulls even and ahead over the
+	# horizon — a back-checker running the carrier down is still the man.
+	sm._carry_has_man = false
+	s.skater_states[OPP_ID].velocity = Vector3(0, 0, -12.0)
+	assert_true(sm._has_man_to_beat(s, self_pos),
+			"a chaser gaining from the same spot is very much still the man")
+
+
 func test_threat_facing_fallback_is_debounced() -> void:
 	# _face_threat_or_current holds facing when the puck is inside a geometry
 	# floor (too close to aim by). A bare threshold flipped the ready-stance aim
