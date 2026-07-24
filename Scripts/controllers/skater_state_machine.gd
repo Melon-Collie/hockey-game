@@ -29,6 +29,8 @@ static func state_has_puck(state: int) -> bool:
 class Callbacks:
 	# Blade / IK
 	var apply_blade_from_mouse: Callable          # (input: InputState, delta: float)
+	var apply_wrister_aim_blade: Callable         # (input: InputState, delta: float) — holds the blade at the shot origin while the torso coils
+	var wrister_chirality_seed: Callable          # (input: InputState) -> Vector3 — player-relative bearing the swing tracker seeds from; MUST match the source _update_wrister_charge feeds (cursor when frozen, blade when live)
 	var apply_slapper_blade_position: Callable    # ()
 	var apply_block_blade_position: Callable      # ()
 	var apply_wrister_follow_through: Callable    # ()
@@ -137,7 +139,9 @@ func _state_wrister_aim(_skater: Skater, input: InputState, delta: float, _has_p
 	if input.slap_pressed:
 		_cb.transition_to_skating.call()
 		return
-	_cb.apply_blade_from_mouse.call(input, delta)
+	# Holds the blade frozen at the shot origin (the puck sits still where the shot
+	# fires from) while the torso coils toward the cursor.
+	_cb.apply_wrister_aim_blade.call(input, delta)
 	_cb.update_wrister_charge.call(input)
 	if not input.shoot_held:
 		_cb.release_wrister.call(input)
@@ -227,10 +231,23 @@ func _enter_wrister_aim(skater: Skater, input: InputState) -> void:
 	# tick after press produces a delta of zero against these, so a spurious
 	# wide-angle direction-variance reset can't fire on the first frame.
 	var intent_pos := Vector3(input.mouse_screen_pos.x, 0.0, input.mouse_screen_pos.y)
-	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
-	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
+	# Chirality (FH/BH) baseline: seed from the SAME source the charge tick will
+	# feed (cursor bearing when frozen, blade bearing when live), so the first
+	# swing_step is source-to-source and doesn't bank a spurious rotation from a
+	# blade→cursor bearing jump — that jump was flipping frozen backhands (cursor
+	# starting opposite the carry blade) to forehands.
+	var blade_pos_rel_skater: Vector3
+	if _cb.wrister_chirality_seed.is_valid():
+		blade_pos_rel_skater = _cb.wrister_chirality_seed.call(input)
+	else:
+		var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
+		blade_pos_rel_skater = blade_world - skater.global_position
 	blade_pos_rel_skater.y = 0.0
-	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater)
+	# Pin the aim ORIGIN at stroke start (the puck's on-blade contact point, where
+	# the shot will fire from) for the positional-aim wrister — see
+	# SkaterAimingBehavior.wrister_origin_world. Anchoring here, before the blade
+	# sweeps, is what keeps origin→cursor stable through the stroke.
+	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater, skater.get_blade_contact_global())
 
 
 func _cancel_slapper_internal() -> void:

@@ -359,7 +359,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	# window resizing. clip_text stays on purely as a last-resort guard for
 	# pathologically long names that hit _NAME_FONT_MIN.
 	var name_lbl := Label.new()
-	name_lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	name_lbl.add_theme_font_override("font", MenuStyle.NAME_FONT)
 	name_lbl.add_theme_font_size_override("font_size", _NAME_FONT_SIZE)
 	name_lbl.set_meta("fit_base", _NAME_FONT_SIZE)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT

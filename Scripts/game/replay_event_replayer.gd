@@ -79,11 +79,13 @@ static func dispatch_with_records(event: Dictionary, records: Dictionary) -> voi
 			SoundManager.play_world(sound, pos, 0.0, 0.04)
 		"body_check":
 			# "speed" carries the recorded impact_force; scale sound + burst by it
-			# the same way live play does (SkaterVFX.check_*).
+			# the same way live play does (SkaterVFX.check_*). The thud is gated to
+			# stagger-class-or-harder hits (bumps/rubs stay silent), matching live play.
 			var check_force: float = float(event.get("speed", 0.0))
-			SoundManager.play_world(SoundManager.Sound.BODY_CHECK, pos,
-					SkaterVFX.check_sound_volume_db(check_force), 0.08,
-					SkaterVFX.check_sound_pitch_scale(check_force))
+			if SkaterVFX.check_sound_audible(check_force):
+				SoundManager.play_world(SoundManager.Sound.BODY_CHECK, pos,
+						SkaterVFX.check_sound_volume_db(check_force), 0.08,
+						SkaterVFX.check_sound_pitch_scale(check_force))
 			# Drive the burst directly (not via body_checked_player) so we don't
 			# re-trigger GameManager's hit-landed / replay-record closures — the
 			# latter would recursively record a new event.

@@ -76,6 +76,7 @@ func _build_ui() -> void:
 	_band.add_child(_build_score_row())
 
 	var hint := _lbl("TAB · BOX SCORE", 12, MenuStyle.TEXT_MUTED)
+	hint.add_theme_font_override("font", MenuStyle.UI_FONT)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_band.add_child(hint)
 
@@ -84,6 +85,7 @@ func _build_ui() -> void:
 	# Bottom-right skip line, same spot the HUD's replay prompt uses — text is
 	# pushed in by the HUD so the vote tally stays single-sourced.
 	_skip_label = _lbl("", 18, _WHITE)
+	_skip_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	_skip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_skip_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	_skip_label.offset_left = -324.0

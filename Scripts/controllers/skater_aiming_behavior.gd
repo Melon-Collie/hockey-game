@@ -35,6 +35,15 @@ var cursor_speed_ema: float = 0.0
 # Resets with the stroke on a variance break; saved/restored across reconcile
 # like cursor_speed_ema.
 var stroke_travel: float = 0.0
+# World position of the blade/puck at the MOMENT the wrister charge began (mouse
+# down), captured in reset_wrister. This is a human shot's aim ORIGIN: the
+# release fires along origin→cursor, so the
+# aim is anchored where the stroke STARTED, not on the live blade (which has
+# swung to an extreme by release — a leading, arcing point that made the aim
+# whip at tight angles / a close cursor). Pinned at stroke start so it doesn't
+# move as the stick sweeps. Saved/restored across reconcile like the rest of the
+# charge state (set once on the entry edge; restored so replay can't re-perturb).
+var wrister_origin_world: Vector3 = Vector3.ZERO
 # Reused output for ChargeTracking.accumulate_into — a per-controller scratch so
 # the per-tick charge update never allocates. Pure output (fully overwritten each
 # call), so it needs no reconcile save/restore.
@@ -46,13 +55,15 @@ var one_timer_window_timer: float = 0.0
 
 # ── Wrister ───────────────────────────────────────────────────────────────────
 
-func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Vector3) -> void:
+func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Vector3,
+		initial_origin_world: Vector3 = Vector3.ZERO) -> void:
 	swing_rotation = 0.0
 	cursor_speed_ema = 0.0
 	stroke_travel = 0.0
 	prev_blade_dir = Vector3.ZERO
 	prev_intent_pos = initial_intent_pos
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
+	wrister_origin_world = initial_origin_world
 
 
 func tick_wrister_charge(

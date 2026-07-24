@@ -10,8 +10,8 @@ const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
 
 # Body-check feedback scales with hit strength (the impact_force = weight x
 # closing-speed the signal carries), normalized 0..1 between a light bump and a
-# big hit. Burst size/velocity and sound volume/pitch all read this so a freight-
-# train check reads bigger and lower than a glancing bump.
+# big hit. Burst size/velocity read this so a freight-train check throws bigger,
+# faster debris than a glancing bump.
 const _CHECK_FORCE_MIN: float = 3.0   # impact_force of a glancing bump (matches HitRules.MIN_HIT_IMPULSE)
 const _CHECK_FORCE_REF: float = 14.0  # impact_force treated as a full-strength check
 # Burst particle budget at the low/high end of the intensity range.
@@ -19,11 +19,30 @@ const _CHECK_BURST_AMOUNT_MIN: int = 10
 const _CHECK_BURST_AMOUNT_MAX: int = 30
 const _CHECK_BURST_VEL_MIN: float = 2.5   # initial_velocity_max at a light hit
 const _CHECK_BURST_VEL_MAX: float = 9.0   # initial_velocity_max at a full hit
-# Sound: louder + lower-pitched as the hit gets harder.
-const _CHECK_VOL_MIN_DB: float = -6.0
-const _CHECK_VOL_MAX_DB: float = 3.0
-const _CHECK_PITCH_LIGHT: float = 1.10   # glancing bump — higher, snappier
-const _CHECK_PITCH_HEAVY: float = 0.90   # full check — lower, heavier thud
+
+# --- Body-check SOUND: reserved for hits with real weight behind them ---------
+# The impact BURST fires for every credited check (it scales with force via
+# check_intensity above), but the THUD is gated harder and rides its OWN curve:
+# an incidental bump or a board rub — two committed bodies grinding without a
+# real collision behind them — should make NO sound, or the hit audio
+# machine-guns through every scrum.
+#
+# The gate is in impact_force (weight x closing-speed) units, the same signal the
+# stagger keys off (BodyCheckRules reconstructs the victim impulse from it):
+#   ~3.0  MIN_HIT_IMPULSE — the bar to register a hit at all (~half a stagger)
+#   ~4.0  a full-strength check (victim ref_impulse 1.35 — "skate in at pace")
+#   ~5.5  a knockdown        (victim knockdown_impulse 1.8 — a committed solid hit)
+# Sound starts at the full-check floor (below it is a bump/rub: silent) and
+# reaches full volume by ~the knockdown point, so "loud thud" == "wobble or
+# knockdown" and softer contact is silent. These are FEEL tunables (how hard a
+# hit must land before you hear it), not evaluator constants.
+const _CHECK_SOUND_MIN_FORCE: float = 4.0    # below this the hit is silent (bump/rub)
+const _CHECK_SOUND_FULL_FORCE: float = 6.5   # at/above this the thud is at full volume
+# Sound: louder + lower-pitched across the audible (full-check .. knockdown) band.
+const _CHECK_VOL_MIN_DB: float = -9.0    # a just-audible full-strength check
+const _CHECK_VOL_MAX_DB: float = 3.0     # a knockdown-class hit
+const _CHECK_PITCH_LIGHT: float = 1.10   # full check — higher, snappier
+const _CHECK_PITCH_HEAVY: float = 0.90   # knockdown — lower, heavier thud
 
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
 # Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.
@@ -34,6 +53,16 @@ const BLADE_TRAIL_RADIUS: float = 0.025   # dot radius (smaller than puck's 0.05
 const BLADE_TRAIL_COLOR: Color = Color(0.95, 0.93, 0.88, 0.5)
 const BLADE_X_OFFSET: float = 0.12       # left/right blade separation from center
 const ICE_Y: float = 0.005              # world Y for trail dots (just above ice)
+# Same GPUParticles3D frustum-culling hazard as the puck trail (see PuckVFX): the
+# marks emit in world space but the visibility AABB is measured local to the node,
+# i.e. centred on the skater, and defaults to ~±4 m. A blade trail lingers 1.5 s and
+# streaks BLADE_TRAIL_LIFETIME × skate_speed (~18 m at a hard stride) behind the
+# skater — so when the skater rides the frame edge the whole trail is culled by its
+# skater-centred box, and a culled GPUParticles3D pauses processing, making the
+# gap-fill emitter emit a backward streak on re-entry. A generous skater-centred AABB
+# keeps it live whenever any mark could be on-screen. Half-extents (m) cover ~16 m/s.
+const BLADE_TRAIL_AABB_HALF_XZ: float = 24.0
+const BLADE_TRAIL_AABB_HALF_Y: float = 6.0
 
 # Two GPU trail systems: index 0 = left blade, 1 = right blade
 var _blade_trail_emitters: Array[GPUParticles3D] = []
@@ -139,12 +168,29 @@ static func check_intensity(force: float) -> float:
 	return clampf((force - _CHECK_FORCE_MIN) / (_CHECK_FORCE_REF - _CHECK_FORCE_MIN), 0.0, 1.0)
 
 
+# True when a check is hard enough to earn a thud — a full-strength (stagger)
+# check or harder. Softer contact (incidental bumps, committed board rubs) stays
+# SILENT. Both the live and replay sound paths gate on this so no near-silent
+# BODY_CHECK player is ever spawned for a bump.
+static func check_sound_audible(force: float) -> bool:
+	return force >= _CHECK_SOUND_MIN_FORCE
+
+
+# 0..1 sound hardness — a SEPARATE, harder-gated curve than the burst's
+# check_intensity: 0 at the full-check floor, 1 by the knockdown point. Only
+# meaningful once check_sound_audible() has passed.
+static func check_sound_intensity(force: float) -> float:
+	if _CHECK_SOUND_FULL_FORCE <= _CHECK_SOUND_MIN_FORCE:
+		return 0.0
+	return clampf((force - _CHECK_SOUND_MIN_FORCE) / (_CHECK_SOUND_FULL_FORCE - _CHECK_SOUND_MIN_FORCE), 0.0, 1.0)
+
+
 static func check_sound_volume_db(force: float) -> float:
-	return lerpf(_CHECK_VOL_MIN_DB, _CHECK_VOL_MAX_DB, check_intensity(force))
+	return lerpf(_CHECK_VOL_MIN_DB, _CHECK_VOL_MAX_DB, check_sound_intensity(force))
 
 
 static func check_sound_pitch_scale(force: float) -> float:
-	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_intensity(force))
+	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_sound_intensity(force))
 
 
 # Public so ReplayEventReplayer can fire the burst during replay without
@@ -173,6 +219,15 @@ func _set_blade_trails_emitting(active: bool) -> void:
 	for emitter: GPUParticles3D in _blade_trail_emitters:
 		emitter.emitting = active
 
+# Skater-centred visibility box, generous enough that it always overlaps the frustum
+# whenever a live blade mark could be on-screen — so the world-space trail is never
+# culled (nor its processing paused) as the skater rides the frame edge. See the
+# BLADE_TRAIL_AABB_HALF_* doc-block for why the default AABB is too small.
+func _blade_trail_visibility_aabb() -> AABB:
+	return AABB(
+			Vector3(-BLADE_TRAIL_AABB_HALF_XZ, -BLADE_TRAIL_AABB_HALF_Y, -BLADE_TRAIL_AABB_HALF_XZ),
+			Vector3(BLADE_TRAIL_AABB_HALF_XZ * 2.0, BLADE_TRAIL_AABB_HALF_Y * 2.0, BLADE_TRAIL_AABB_HALF_XZ * 2.0))
+
 func _make_blade_trail_emitter(index: int) -> GPUParticles3D:
 	var e := GPUParticles3D.new()
 	e.name = "BladeTrailEmitter%d" % index
@@ -183,6 +238,8 @@ func _make_blade_trail_emitter(index: int) -> GPUParticles3D:
 	e.fixed_fps = 0
 	e.local_coords = false
 	e.emitting = false
+	# Never let culling pause this tracker (see BLADE_TRAIL_AABB_HALF_XZ).
+	e.visibility_aabb = _blade_trail_visibility_aabb()
 
 	var shader := Shader.new()
 	shader.code = """shader_type particles;
@@ -217,6 +274,8 @@ func _make_blade_trail_sub_emitter(sub_name: String) -> GPUParticles3D:
 	e.fixed_fps = 0
 	e.local_coords = false
 	e.emitting = false
+	# World-space marks stream well past the default AABB; keep the trail un-culled.
+	e.visibility_aabb = _blade_trail_visibility_aabb()
 
 	var mat := ParticleProcessMaterial.new()
 	mat.direction = Vector3.ZERO
