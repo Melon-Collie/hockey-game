@@ -229,6 +229,10 @@ func _net_verdict(cross_x: float, cross_y: float) -> int:
 # tracking it live. Puck stays pinned on the carrier (the body-local freeze).
 func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 		power_t: float, ticks: int) -> void:
+	# Clean slate. Without this the goalie carries pose, depth, reaction and
+	# butterfly state from the PREVIOUS shot, so consecutive trials are not
+	# comparable — the dominant error term when sweeping arms against each other.
+	_ctrl.reset_to_crease()
 	_shooter.global_position = shooter
 	_shooter.velocity = Vector3.ZERO
 	_shooter.current_shot_state = SkaterStateMachine.State.WRISTER_AIM

@@ -144,6 +144,29 @@ extends Node
 # don't face a statue" in-tight window. Distance is grounded at the zone where a
 # cold arm read outlasts the shot's flight (flight < 0.18 s ⇒ under ~5-6 m for
 # 25-30 m/s releases), so it targets exactly the freeze zone and no farther.
+# ── Read staleness (the goalie can be WRONG) ─────────────────────────────────
+# Every other latency here answers "when does he start moving"; this one answers
+# "does he know where the puck is going". His committed belief about the shot's
+# destination is the aim he read `read_lag` seconds ago — the shooter's published
+# `predicted_shot_velocity`, sampled stale — and it converges onto the true line
+# over the same window once the puck is in flight and he can actually see it.
+#
+# NOT RNG, and deliberately so (both teams field identical goalies and it must
+# read that way): the error is a pure deterministic function of what the SHOOTER
+# did with their aim. A stable aim through the wind-up means the stale sample
+# EQUALS the truth, so a telegraphed shot is read exactly as well as before. A
+# late swing against the grain is the only thing that beats it, by exactly the
+# amount the shooter moved the aim. Repeatable, symmetric, attributable.
+#
+# What falls out, with no extra authoring: a long shot converges before it
+# arrives (read correctly); an in-tight one does not (beaten); a screen costs
+# ACCURACY as well as tempo, because there is nothing to converge WITH while the
+# puck is hidden; and a deflection resets the read, so a tip in tight beats him
+# while a tip from distance does not.
+#
+# Zero disables it entirely (belief == truth, exactly the pre-R1 goalie).
+# Difficulty-varied via GoalieSkillProfile.read_lag_s.
+@export var read_lag: float = 0.13
 @export var prearmed_reaction_delay: float = 0.07
 @export var prearm_read_time: float = 0.40
 @export var prearm_linger: float = 0.25
@@ -1024,6 +1047,24 @@ var _shot_commit_timer: float = 0.0
 # release itself (which clears the windup state) can't race it off.
 var _shot_read_timer: float = 0.0
 var _prime_linger_timer: float = 0.0
+# ── Read staleness (see the read_lag export) ─────────────────────────────────
+# Ring of the shooter's published aim, one entry per host tick while the goalie
+# is reading a wind-up. `_lagged_aim` reads `read_lag` seconds back — the belief
+# he commits to at release. Fixed capacity, written in place: no per-tick alloc.
+const _AIM_HISTORY_CAP: int = 64
+var _aim_history: PackedVector3Array = PackedVector3Array()
+var _aim_history_idx: int = 0
+var _aim_history_len: int = 0
+# The impact point the goalie BELIEVES at release, and how far he has converged
+# onto the true one (0 = fully on the stale read, 1 = caught up). `_read_hold`
+# freezes the convergence while the puck is hidden behind a screen — you cannot
+# refine a read you cannot see. `_read_last_vel` detects a mid-flight trajectory
+# change (a tip) so the read can be reset to what he was committed to.
+var _read_belief_x: float = 0.0
+var _read_belief_y: float = 0.0
+var _read_blend: float = 1.0
+var _read_hold: float = 0.0
+var _read_last_vel: Vector3 = Vector3.ZERO
 # Blocking-drop timer for fully-screened releases (audit F4): >= 0 counts down
 # from the base leg read; on expiry the goalie commits the blocking butterfly
 # without waiting to SEE the puck. -1 = inactive.
@@ -1142,6 +1183,12 @@ var _scratch_shot := GoalieBehaviorRules.ShotResult.new()
 # Separate scratch for the per-tick pre-lean prediction so it never races the
 # reaction re-projection scratch within a tick (both can run the same frame).
 var _scratch_prelean_shot := GoalieBehaviorRules.ShotResult.new()
+# Scratch for the read-belief solve at release (see _seed_read_belief).
+var _scratch_belief := GoalieBehaviorRules.ShotResult.new()
+# Mid-flight velocity change (m/s) that counts as a REDIRECT rather than the
+# analytic step's own drag/bounce jitter — a blade tip changes the line by far
+# more than a tick of friction does.
+const _DEFLECTION_DELTA_M_S: float = 3.0
 # Per-physics-frame memo for _opposing_shooter_near_puck (host hot path).
 var _shooter_near_memo_frame: int = -1
 var _shooter_near_memo: bool = false
@@ -1219,6 +1266,7 @@ func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
 	puck_play_go_margin = profile.puck_play_go_margin_s
 	reaction_delay = profile.reaction_delay_s
 	prearmed_reaction_delay = profile.prearmed_reaction_delay_s
+	read_lag = profile.read_lag_s
 	butterfly_drop_speed = profile.butterfly_drop_s
 	five_hole_base = profile.five_hole_base_m
 
@@ -1462,6 +1510,11 @@ func reset_to_crease() -> void:
 	_shot_commit_timer = 0.0
 	_shot_read_timer = 0.0
 	_prime_linger_timer = 0.0
+	_aim_history_idx = 0
+	_aim_history_len = 0
+	_read_blend = 1.0
+	_read_hold = 0.0
+	_read_last_vel = Vector3.ZERO
 	_screen_block_drop_timer = -1.0
 	_chest_t = 0.0
 	# Cover state clears with the goalie; the puck's pickup_locked is owned by
@@ -1590,11 +1643,15 @@ func _update_tracking(delta: float) -> void:
 			puck.global_position, _loose_puck_velocity(),
 			_goal_line_z, _goal_center_x, _shot_cfg, _scratch_shot)
 	if result.is_shot:
-		_reaction.update_impact(result.impact_x, result.impact_y)
+		# The goalie acts on his BELIEF, which converges onto the truth as the puck
+		# flies and he can actually see it (see _advance_read_convergence). With
+		# read_lag == 0 this is the old exact re-projection, unchanged.
+		_advance_read_convergence(delta, result)
 		# Elevated shot that's tipped low and tracking low — start the
 		# butterfly drop timer (still allowed during freeze; arms-and-drop
-		# are the body reactions the freeze permits).
-		if result.is_low:
+		# are the body reactions the freeze permits). Keyed off the BELIEVED
+		# impact height: he drops for the shot he thinks is coming.
+		if _reaction.impact_y < low_shot_threshold:
 			_reaction.tip_to_low(reaction_delay)
 	elif _puck_past_save_plane():
 		# The shot has passed the save point (or is a weak deflection wandering
@@ -3690,8 +3747,10 @@ func _update_shot_commit(delta: float, carrier: Skater) -> void:
 		_shot_read_timer += delta
 		if _shot_read_timer >= prearm_read_time:
 			_prime_linger_timer = prearm_linger
+		_push_aim_sample(carrier.predicted_shot_velocity)
 	else:
 		_shot_read_timer = 0.0
+		_aim_history_len = 0
 	# Set-and-sighted in the slot: a coiled, upright goalie with an opposing
 	# carrier already in tight is pre-programmed to react even without a held
 	# windup, so a quick slot release draws a reflex save ATTEMPT instead of
@@ -3741,6 +3800,99 @@ func _opposing_carrier_in_front(carrier: Skater, max_dist: float) -> bool:
 		return false
 	return goalie.global_position.distance_to(carrier.global_position) <= max_dist
 
+# Record one tick of the shooter's published aim. Ring buffer, written in place.
+func _push_aim_sample(aim: Vector3) -> void:
+	if read_lag <= 0.0:
+		return
+	if _aim_history.size() < _AIM_HISTORY_CAP:
+		_aim_history.resize(_AIM_HISTORY_CAP)
+	_aim_history[_aim_history_idx] = aim
+	_aim_history_idx = (_aim_history_idx + 1) % _AIM_HISTORY_CAP
+	_aim_history_len = mini(_aim_history_len + 1, _AIM_HISTORY_CAP)
+
+
+# The aim the goalie committed to: the sample from `read_lag` seconds back, or
+# the OLDEST one held if he has not been reading that long (a short wind-up means
+# a short history — he can only be as stale as what he has seen). Vector3.ZERO
+# when there is no usable read at all, which is the honest answer for a release
+# with no wind-up: no belief, fall back to observing the puck.
+func _lagged_aim() -> Vector3:
+	if read_lag <= 0.0 or _aim_history_len <= 0:
+		return Vector3.ZERO
+	var back: int = mini(int(round(read_lag * Engine.physics_ticks_per_second)),
+			_aim_history_len)
+	if back <= 0:
+		back = 1
+	var idx: int = (_aim_history_idx - back) % _AIM_HISTORY_CAP
+	if idx < 0:
+		idx += _AIM_HISTORY_CAP
+	return _aim_history[idx]
+
+
+# Seed the goalie's BELIEF about where a released shot is going. He sees the
+# release itself (the event is unambiguous), so `truth` still decides that a shot
+# is happening and when it arrives — but WHERE it is going comes from the stale
+# read. A wind-up whose aim never moved yields a belief identical to the truth,
+# which is exactly why a telegraphed shot is read as well as it ever was.
+# Returns true when a distinct (misled) belief was seeded.
+func _seed_read_belief(truth: GoalieBehaviorRules.ShotResult, screen_d: float) -> bool:
+	_read_belief_x = truth.impact_x
+	_read_belief_y = truth.impact_y
+	_read_blend = 1.0 if read_lag <= 0.0 else 0.0
+	# Convergence cannot start while the puck is still hidden — nothing to see.
+	_read_hold = screen_d
+	_read_last_vel = _loose_puck_velocity()
+	var aim: Vector3 = _lagged_aim()
+	_aim_history_len = 0
+	if aim.length_squared() < 0.01:
+		_read_blend = 1.0   # no wind-up read to be stale — observe the puck
+		return false
+	var belief: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
+			puck.global_position, aim, _goal_line_z, _goal_center_x,
+			_universal_shot_cfg, _scratch_belief)
+	if not belief.is_shot:
+		_read_blend = 1.0   # the read was not a shot on net — nothing to commit to
+		return false
+	_read_belief_x = belief.impact_x
+	_read_belief_y = belief.impact_y
+	return true
+
+
+# Advance the belief toward the truth as the puck flies and the goalie actually
+# observes it: fully converged after one `read_lag`. Held while screened. A
+# trajectory CHANGE mid-flight (a deflection) re-commits him to what he currently
+# believes and restarts the convergence — the whole point of a tip is that it
+# beats the READ, not the reach, so a tip in tight beats him and one from
+# distance does not.
+func _advance_read_convergence(delta: float, truth: GoalieBehaviorRules.ShotResult) -> void:
+	if read_lag <= 0.0:
+		_reaction.update_impact(truth.impact_x, truth.impact_y)
+		return
+	var vel: Vector3 = _loose_puck_velocity()
+	if _read_last_vel != Vector3.ZERO \
+			and vel.distance_to(_read_last_vel) > _DEFLECTION_DELTA_M_S:
+		# Redirected — he is committed to the old line; re-read from scratch.
+		_read_belief_x = lerpf(_read_belief_x, truth.impact_x, _read_blend)
+		_read_belief_y = lerpf(_read_belief_y, truth.impact_y, _read_blend)
+		_read_blend = 0.0
+	_read_last_vel = vel
+	# BALLISTIC COMMITMENT. The save is pre-programmed during the fixation and
+	# executed without mid-flight correction (quiet-eye: the movement is
+	# ballistic), so the belief must survive until he actually commits to it —
+	# otherwise the read latency and the motor latency run concurrently, the
+	# belief converges while the limb is still waiting on its delay, and a stale
+	# read can never bite. Convergence therefore starts only once the reach has
+	# actually deployed, and is held while the puck is screened (you cannot refine
+	# a read you cannot see).
+	if _reaction.arm_pending() or _read_hold > 0.0:
+		_read_hold = maxf(_read_hold - delta, 0.0)
+	else:
+		_read_blend = minf(_read_blend + delta / maxf(read_lag, 0.001), 1.0)
+	_reaction.update_impact(
+			lerpf(_read_belief_x, truth.impact_x, _read_blend),
+			lerpf(_read_belief_y, truth.impact_y, _read_blend))
+
+
 # Universal puck-tracking trigger. Runs each host physics frame on loose
 # pucks; if the puck is fast and on track for the net within the
 # reaction window, kicks off the same reaction pipeline as a release
@@ -3772,6 +3924,10 @@ func _check_universal_reaction() -> void:
 	# a fully-screened trajectory takes the blocking drop the same way.
 	var screen_d: float = _screen_delay(vel)
 	var move_d: float = _movement_read_delay()
+	# A loose puck has no wind-up to have been reading, so there is no stale
+	# belief — he reads the trajectory he can see. Seeding from `result` makes
+	# belief == truth and the convergence a no-op.
+	_seed_read_belief(result, screen_d)
 	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
 			result.reaction_delay, 0.0, screen_d + move_d)
 	_maybe_arm_screen_block_drop(screen_d, move_d, 0.0)
@@ -3893,7 +4049,12 @@ func _on_puck_released() -> void:
 	if _prime_linger_timer > 0.0:
 		leg_delay = minf(leg_delay, prearmed_reaction_delay)
 		arm_cut = maxf(reaction_delay - prearmed_reaction_delay, 0.0)
-	_reaction.start(result.impact_x, result.impact_y, result.is_elevated,
+	# WHERE he thinks it is going comes from the stale wind-up read; WHEN and
+	# WHETHER come from the release he actually saw. A stable aim makes the two
+	# identical — a telegraphed shot is read exactly as well as before R1.
+	_seed_read_belief(result, screen_d)
+	var believed_elevated: bool = _read_belief_y >= elevated_threshold
+	_reaction.start(_read_belief_x, _read_belief_y, believed_elevated,
 			leg_delay, back_date, screen_d + move_d, arm_cut)
 	_maybe_arm_screen_block_drop(screen_d, move_d, back_date)
 

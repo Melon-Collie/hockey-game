@@ -120,6 +120,16 @@ var prearmed_reaction_delay_s: float
 var butterfly_drop_s: float
 # Standing five-hole pad gap (m of separation each side of center).
 var five_hole_base_m: float
+# READ STALENESS (s) — how old the goalie's belief about WHERE the shot is going
+# is when he commits to it. Distinct from every other knob here: the rest set
+# WHEN he starts moving and HOW FAST he moves, all of which assume he knows the
+# destination exactly. This one prices being WRONG. A shooter whose aim is stable
+# through the wind-up is read perfectly at any lag (the stale sample equals the
+# truth); a shooter who swings late beats the read by exactly this much. It also
+# sets how fast he converges onto the true line once the puck is in flight, so a
+# long shot is read correctly and an in-tight one is not.
+# No RNG — the error is a pure function of what the shooter did with their aim.
+var read_lag_s: float
 
 
 func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
@@ -129,7 +139,8 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 		p_blocker_react_max_speed_mps: float, p_pad_toe_out_butterfly_deg: float,
 		p_lateral_accel_mps2: float, p_puck_play_go_margin_s: float,
 		p_reaction_delay_s: float, p_prearmed_reaction_delay_s: float,
-		p_butterfly_drop_s: float, p_five_hole_base_m: float) -> void:
+		p_butterfly_drop_s: float, p_five_hole_base_m: float,
+		p_read_lag_s: float = 0.13) -> void:
 	arm_reaction_delay_s = p_arm_reaction_delay_s
 	cross_crease_react_delay_s = p_cross_crease_react_delay_s
 	poke_radius_m = p_poke_radius_m
@@ -141,6 +152,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 	blocker_react_max_speed_mps = p_blocker_react_max_speed_mps
 	pad_toe_out_butterfly_deg = p_pad_toe_out_butterfly_deg
 	lateral_accel_mps2 = p_lateral_accel_mps2
+	read_lag_s = p_read_lag_s
 	puck_play_go_margin_s = p_puck_play_go_margin_s
 	reaction_delay_s = p_reaction_delay_s
 	prearmed_reaction_delay_s = p_prearmed_reaction_delay_s
@@ -153,7 +165,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 static func hard() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
 			1.75, 1.30, 5.0, 5.0, 18.0, 14.0, 0.9,
-			0.13, 0.07, 0.20, 0.02)
+			0.13, 0.07, 0.20, 0.02, 0.10)
 
 
 # Normal is the middle tier: enough goalie to punish a lazy shot, soft enough
@@ -166,7 +178,7 @@ static func hard() -> GoalieSkillProfile:
 static func normal() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.28, 0.22, 0.16, 0.45, 0.20,
 			1.35, 0.95, 3.8, 3.8, 11.0, 10.0, INF,
-			0.18, 0.10, 0.25, 0.035)
+			0.18, 0.10, 0.25, 0.035, 0.16)
 
 
 # Easy is the newcomer floor, tuned so ANY decently-aimed shot scores: he sits
@@ -179,7 +191,7 @@ static func normal() -> GoalieSkillProfile:
 static func easy() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.45, 0.40, 0.08, 0.70, 0.35,
 			0.90, 0.60, 2.4, 2.4, 5.0, 6.0, INF,
-			0.30, 0.16, 0.32, 0.06)
+			0.30, 0.16, 0.32, 0.06, 0.24)
 
 
 static func for_difficulty(difficulty: int) -> GoalieSkillProfile:

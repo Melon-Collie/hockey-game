@@ -34,7 +34,7 @@ is the threading blocker.
 
 Four headline findings, most important first:
 
-- **§5 — The goalie has no concept of being wrong.** His read of where the puck
+- **§5 — The goalie had no concept of being wrong.** ✅ *R1 shipped (§5.1b).* His read of where the puck
   is going is *exact*, on the release frame, and re-projected perfectly every
   tick. `GoalieSkillProfile`'s 16 knobs are 6 latency / 4 speed / 5 geometry /
   1 decision / **0 accuracy** — so every tier is a *slower omniscient* goalie
@@ -514,6 +514,52 @@ requiring it to move is what stops "make the goalie worse" passing as "make
 disguise pay." If goal *rates* are ever wanted, the existing seeded-scatter idiom
 (`run_spot` with `rng.seed = SEED`) dithers the step function into a smooth rate
 deterministically — at the cost of many more samples per cell.
+
+### 5.1b R1 — ✅ SHIPPED, and what it actually did
+
+Implemented as described in §5.2: a ring of the shooter's published aim, sampled
+each tick of the wind-up; at release the goalie's belief about **where** is the
+sample from `read_lag` ago, while **whether** and **when** still come from the
+release he plainly saw; the belief then converges onto the truth as the puck
+flies. Knob: `GoalieController.read_lag` / `GoalieSkillProfile.read_lag_s`
+(Hard 0.10 / Normal 0.16 / Easy 0.24). **`read_lag = 0` is bit-exact the old
+goalie**, which is what makes the A/B below trustworthy.
+
+Measured by the same instrument, both arms run in one test (14 shots each):
+
+| | telegraphed | wrong corner | wrong height |
+|---|---|---|---|
+| `read_lag = 0` (pre-R1) | 6 / 14 | 6 / 14 | 6 / 14 |
+| `read_lag = 0.10` (R1) | 6 / 14 | 6 / 14 | **11 / 14** |
+
+Three things to read off it:
+
+1. **Pre-R1, all three arms are identical.** Deception was worth exactly nothing
+   — the §5.1 claim, now proven by controlled A/B rather than argued.
+2. **An honest shot is read exactly as well as before** (6/14 either way, and the
+   same reach margin). A stable aim makes the stale sample equal the truth, so
+   R1 cannot be "the goalie got worse" — the test asserts this.
+3. **The LEG read is what pays, not the arm.** Selling the wrong *height*
+   converts hard (+5 goals); selling the wrong *corner* costs reach margin but
+   does not convert at 5–9 m. That asymmetry is a real property, not an artifact:
+   the butterfly drop is a **whole-body commitment that is expensive to undo**,
+   while the glove can re-aim cheaply and has margin at these ranges.
+
+**One implementation subtlety that decided the whole thing.** The first cut
+started the belief→truth convergence at release, and had *no effect whatsoever* —
+because the arm does not move until its ~0.12 s delay elapses, by which point the
+belief had already converged. Read latency and motor latency were running
+concurrently, so a stale read could never bite. The fix is the quiet-eye result
+itself: the save is **pre-programmed and executed ballistically, not corrected
+mid-flight**, so convergence must not begin until the reach has actually deployed
+(`_reaction.arm_pending()`), and is likewise held while the puck is screened.
+
+**Open tuning question for playtest.** 6/14 → 11/14 (43 % → 79 %) is a large jump
+for one perfectly-executed deception off a full 0.5 s wind-up. It is the intended
+*direction*, and the sweep is deliberately hard shots (top corners, 5–9 m), but
+whether that magnitude is right is a feel call. `read_lag` is the dial, and Normal
+/ Easy currently get *more* staleness than Hard — sanity-check that ordering in
+play, since a beginner facing Easy will also be telegraphing everything.
 
 ### 5.2 The fix: apply the read latency to WHAT HE KNOWS, not just when he moves
 

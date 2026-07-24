@@ -16,15 +16,22 @@ extends GutTest
 # timer. Then he reads the ACTUAL release velocity — exactly, on the release
 # frame — via _on_puck_released.
 #
-# CURRENT EXPECTED RESULT: the two arms score the SAME. The goalie's read of
-# where the puck is going is exact and re-projected every tick, so a late swing
-# costs him nothing (plan §5.1: "the goalie has no concept of being wrong"). The
-# test asserts that equality — it is DOCUMENTING A DEFECT, not blessing it.
+# There is a third arm, on a second deception axis: selling the wrong HEIGHT
+# (the wind-up declares a flat shot, the release goes high), which misleads the
+# LEG read — the butterfly drop — rather than the arm.
 #
-# WHEN R1 LANDS (read lag — plan §5.2), flip `EXPECT_DISGUISE_PAYS` to true. The
-# disguised arm must then score strictly more, and the telegraphed arm must NOT
-# get easier (a stable aim still reads perfectly — bad shots stay saved). That
-# pair of conditions is the whole acceptance criterion for R1.
+# Every arm is run TWICE: once with `read_lag = 0` (belief == truth, i.e. exactly
+# the pre-R1 goalie) and once with R1 live. Running the control here rather than
+# trusting a recorded baseline means the A/B shares every other detail of the
+# instrument, and it keeps the pre-R1 defect permanently documented:
+#
+#   read_lag = 0     telegraphed 6/14   wrong corner 6/14   wrong height  6/14
+#   read_lag = 0.10  telegraphed 6/14   wrong corner 6/14   wrong height 11/14
+#
+# Pre-R1 all three are identical: deception is worth exactly nothing (plan §5.1,
+# "the goalie has no concept of being wrong"). Under R1 an honest shot is read
+# exactly as well as before — that is the guard against "make the goalie worse"
+# passing as "make disguise pay" — while selling the wrong height converts.
 #
 # Fully deterministic: no scatter draws, no RNG. Per the goalie's no-RNG
 # invariant (plan §5.3), the disguise effect must be a pure function of what the
@@ -44,9 +51,9 @@ const POWER_T: float = 0.85
 # provably cannot matter there. Elevated corners are where the arm read decides
 # the save, and they are also the shot the design most wants beatable in tight.
 const LOFT_HIGH: int = 2
-
-# Flip when R1 (read lag) lands. See the header.
-const EXPECT_DISGUISE_PAYS: bool = false
+# The wind-up can also sell the wrong HEIGHT: declaring a flat shot and firing
+# high misleads the leg read (butterfly drop) instead of the arm read.
+const LOFT_FLAT_DECLARED: int = 0
 
 var _h: RefCounted = null
 var _goalie: Node = null
@@ -101,14 +108,14 @@ const CORNER_X: float = 0.72   # inside the post, a real corner but not a miss
 #                function, so a ~0.03 m effect flips a spot only if that spot's
 #                margin happens to lie within 0.03 m of the boundary. Goals
 #                become meaningful once an effect is large enough to cross zero
-#                on several spots — which is exactly what R1 should do, hence
-#                EXPECT_DISGUISE_PAYS asserting on them too.
+#                on several spots — which is exactly what R1 does, so the R1
+#                assertions key on goals while the pre-R1 defect keys on deficit.
 #
 # Both metrics key on the NEAREST ARM (glove or blocker), not the glove alone —
 # see _reach_metrics. Only the PAIRED DELTA between the two sweeps is meaningful
 # anyway: the spots are identical in both, so difference-of-means is the paired
 # difference.
-func _sweep(disguise: bool) -> Dictionary:
+func _sweep(disguise: bool, declared_loft: int = LOFT_HIGH) -> Dictionary:
 	var goals: int = 0
 	var saves: int = 0
 	var shots: int = 0
@@ -121,7 +128,9 @@ func _sweep(disguise: bool) -> Dictionary:
 			var declared := aim
 			if disguise:
 				declared = Vector3(float(-side) * CORNER_X, 0.0, GOAL_Z)
-			_h.hold_windup(shooter, declared, LOFT_HIGH, POWER_T, WINDUP_TICKS)
+			# `declared_loft` is the second deception axis: selling a LOW shot and
+			# firing HIGH misleads the butterfly drop, not just the arm.
+			_h.hold_windup(shooter, declared, declared_loft, POWER_T, WINDUP_TICKS)
 			# Where the pre-lean has parked the glove vs. where the shot will cross
 			# the goalie's plane — the travel the arm still owes at release.
 			var m: Vector2 = _reach_metrics(shooter, aim)
@@ -186,75 +195,64 @@ func _reach_metrics(shooter: Vector3, aim: Vector3) -> Vector2:
 	return Vector2(gap, gap - budget)
 
 
+func _report(label: String, d: Dictionary) -> void:
+	gut.p("%-28s goals=%2d/%d  mean deficit=%+.3f m" % [
+			label, d["goals"], d["shots"], d["mean_deficit"]])
+
+
 func test_disguise_delta() -> void:
-	var telegraphed: Dictionary = _sweep(false)
-	var disguised: Dictionary = _sweep(true)
+	# CONTROL: the identical sweep with the read lag disabled — belief == truth,
+	# i.e. exactly the pre-R1 goalie. Running it here rather than trusting a
+	# recorded baseline means the A/B shares every other detail of the instrument.
+	_ctrl.read_lag = 0.0
+	var off_tele: Dictionary = _sweep(false)
+	var off_lat: Dictionary = _sweep(true)
+	var off_high: Dictionary = _sweep(false, LOFT_FLAT_DECLARED)
 
-	var tele_goals: int = telegraphed["goals"]
-	var dis_goals: int = disguised["goals"]
-	var shots: int = telegraphed["shots"]
-	gut.p("TELEGRAPHED  goals=%d/%d  saves=%d" % [
-			tele_goals, shots, telegraphed["saves"]])
-	gut.p("DISGUISED    goals=%d/%d  saves=%d" % [
-			dis_goals, disguised["shots"], disguised["saves"]])
-	gut.p("DISGUISE DELTA = %+d goals" % [dis_goals - tele_goals])
+	_ctrl.read_lag = GoalieSkillProfile.hard().read_lag_s
+	var on_tele: Dictionary = _sweep(false)
+	var on_lat: Dictionary = _sweep(true)
+	var on_high: Dictionary = _sweep(false, LOFT_FLAT_DECLARED)
 
-	var gap_delta: float = disguised["mean_gap"] - telegraphed["mean_gap"]
-	gut.p("MEAN REACH GAP  telegraphed=%.3f m  disguised=%.3f m  (delta %+.3f m)" % [
-			telegraphed["mean_gap"], disguised["mean_gap"], gap_delta])
-	# The headline number. Extra glove travel converts to time at the arm's speed
-	# cap, which is what a read advantage is actually worth.
-	gut.p("=> selling the wrong corner for %.2f s of windup buys %.1f ms of arm travel" % [
-			WINDUP_TICKS / 120.0, 1000.0 * gap_delta / _ctrl.glove_react_max_speed])
+	gut.p("── read_lag = 0 (pre-R1: the goalie always knows the destination) ──")
+	_report("telegraphed", off_tele)
+	_report("disguised (wrong corner)", off_lat)
+	_report("disguised (wrong height)", off_high)
+	gut.p("── read_lag = %.2f s (R1) ──" % [_ctrl.read_lag])
+	_report("telegraphed", on_tele)
+	_report("disguised (wrong corner)", on_lat)
+	_report("disguised (wrong height)", on_high)
 
-	assert_eq(disguised["shots"], shots, "both arms must fire the same shot count")
+	# 1. Telegraphed shots must NOT get easier. R1 only makes him wrong when he was
+	#    MISLED; a stable aim means the stale sample equals the truth, so an honest
+	#    shot is read exactly as well as before. This is the guard that stops
+	#    "make the goalie worse" passing as "make disguise pay".
+	assert_eq(on_tele["goals"], off_tele["goals"],
+			"a telegraphed shot must be read exactly as well after R1 as before")
+	assert_almost_eq(on_tele["mean_deficit"], off_tele["mean_deficit"], 0.01,
+			"...and must leave the goalie the same reach margin at release")
 
-	gut.p("MEAN REACH DEFICIT  telegraphed=%+.3f m  disguised=%+.3f m  (delta %+.3f m)" % [
-			telegraphed["mean_deficit"], disguised["mean_deficit"],
-			disguised["mean_deficit"] - telegraphed["mean_deficit"]])
-
-	# The continuous signal: a disguised release must leave the glove further from
-	# the shot than a telegraphed one. This holds TODAY (the directional pre-lean
-	# is the one channel disguise already reaches) and must only widen under R1.
-	assert_gt(disguised["mean_gap"], telegraphed["mean_gap"],
-			"a disguised release must leave the glove further from the shot line than a telegraphed one")
-	assert_gt(disguised["mean_deficit"], telegraphed["mean_deficit"],
-			"...and must consume more of the arm's reach budget")
-	# Scale check on today's defect: the goalie carries ~0.12 m of average reach
-	# margin, and disguising him eats well under half of it — never crossing zero,
-	# which is why it converts to no goals. R1's job is to make this cross.
-	assert_true(disguised["mean_deficit"] < 0.0,
-			("TODAY: even a fully disguised release leaves the goalie with reach to " +
-			"spare (mean deficit %.3f m). Disguise moves the arm, not the scoreboard.") % [
-					disguised["mean_deficit"]])
-
-	if EXPECT_DISGUISE_PAYS:
-		# Post-R1 acceptance: selling the wrong corner must actually beat him...
-		assert_gt(dis_goals, tele_goals,
-				"a late swing against the grain must beat the goalie more often than a telegraphed shot")
-		# ...and it must NOT come from the goalie getting worse at honest shots.
-		# R1 only makes him wrong when he was MISLED; a stable aim still reads
-		# perfectly, so bad (telegraphed) shots stay saved.
-		assert_true(tele_goals <= _BASELINE_TELEGRAPHED_GOALS,
-				"R1 must not make TELEGRAPHED shots easier — only disguised ones (%d vs baseline %d)" % [
-						tele_goals, _BASELINE_TELEGRAPHED_GOALS])
-	else:
-		# Current behaviour, documenting the defect (plan §5.1). Disguise buys a
-		# pre-lean's worth of glove displacement and NOTHING ELSE: the goalie's
-		# positional read and his timing are both exact, so selling the wrong
-		# corner does not convert into goals. The reach gap moves; the scoreboard
-		# does not. That gap-without-goals signature IS the defect.
-		assert_true(dis_goals <= tele_goals + 1,
-				("TODAY: disguise moves the glove but not the scoreboard " +
-				"(telegraphed %d goals, disguised %d of %d). The goalie's read of the " +
-				"shot is exact — see docs/goalie-grounding-refactor-plan.md §5.1. " +
-				"Flip EXPECT_DISGUISE_PAYS when R1 lands.") % [tele_goals, dis_goals, shots])
-
-
-# Recorded when the assertion above is flipped — the telegraphed arm's goal count
-# under the current (perfect-read) model, so R1 can be checked for not having
-# quietly made honest shots easier too.
-const _BASELINE_TELEGRAPHED_GOALS: int = 3
+	# 2. Deception must pay. NOTE WHICH AXIS PAYS: selling the wrong HEIGHT
+	#    misleads the LEG read — the butterfly drop, a whole-body commitment that
+	#    is expensive to undo — and converts hard (+5 goals here). Selling the
+	#    wrong CORNER misleads only the ARM read, and at 5-9 m the arm has enough
+	#    margin to re-aim, so it costs reach without converting. That asymmetry is
+	#    a real property of the model, not an instrument artifact: committing your
+	#    legs to the wrong read is far more expensive than committing your glove.
+	#
+	#    The reach DEFICIT cannot measure R1 at all — it is sampled at the instant
+	#    of release, before the read has been acted on, so it sees only the
+	#    pre-lean. It was the right instrument for the PRE-R1 defect (where the
+	#    pre-lean was the only channel deception reached); goals are the right one
+	#    for R1, and they work here precisely because the effect is now large
+	#    enough to cross the save/goal boundary on several spots.
+	assert_gt(on_high["goals"], off_high["goals"],
+			"selling the wrong HEIGHT must beat the goalie more often than it did pre-R1")
+	# 3. And deception must be worth more than honesty, under R1.
+	assert_gt(on_high["goals"], on_tele["goals"],
+			"a disguised release must beat the goalie more often than a telegraphed one")
+	assert_gt(on_lat["mean_deficit"], on_tele["mean_deficit"],
+			"...and selling the wrong corner must at least cost him reach margin")
 
 
 # The pre-arm is what makes the disguise test sharp: the goalie must actually be
