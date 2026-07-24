@@ -43,6 +43,10 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 var _ft_start_hand: Vector3 = Vector3.ZERO
 var _ft_start_blade: Vector3 = Vector3.ZERO
 var _ft_start_valid: bool = false
+# World-space blade position at release — the launch point the frozen-wrister
+# whip drives forward FROM along the shot line (see _apply_wrister_whip). World,
+# not local, so the uncoiling torso can't rotate the anchor backward.
+var _ft_origin_world: Vector3 = Vector3.ZERO
 
 
 func begin_follow_through() -> void:
@@ -50,6 +54,7 @@ func begin_follow_through() -> void:
 		return
 	_ft_start_hand = _skater.get_top_hand_position()
 	_ft_start_blade = _skater.get_blade_position()
+	_ft_origin_world = _skater.upper_body_to_global(_skater.get_blade_position())
 	_ft_start_valid = true
 
 # ── Slapper Charge Pose ───────────────────────────────────────────────────────
@@ -193,32 +198,33 @@ func apply_wrister_follow_through() -> void:
 	var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
 	var env: float = sin(PI * pow(t, _controller.follow_through_arc_skew)) \
 			* _sm.follow_through_power
-	# Blade direction: ease from the release angle onto the shot line (fast
-	# ease-out, so the sweep-through happens in the front half of the timer).
-	# The aim eases from the shot line back to the LIVE cursor over the tail of
-	# the timer (follow_through_return_frac) so the finish lands where the mouse
-	# now is — otherwise the blade re-rotates to the cursor once tracking resumes.
-	# aim_world is world-space; re-derive its body-local angle each frame so the
-	# finish stays pointed at the target while the torso uncoils underneath.
-	# Whiffed releases (shot_dir zero → aim_world zero) hold the release angle.
-	var dir_angle: float = _controller._blade_relative_angle
+	# Aim axis (world XZ): the shot line, eased back to the LIVE cursor over the
+	# tail (follow_through_return_frac) so the finish hands off to blade-tracking
+	# without a re-rotate. Whiffed releases (shot_dir zero) return ZERO here.
 	var cursor_dir: Vector3 = _controller._current_aim_world - _skater.global_position
 	var aim_world: Vector3 = ShotMechanics.follow_through_aim(
 			_sm.shot_dir, cursor_dir, t, _controller.follow_through_return_frac)
+
+	# FREEZE: the coil → instant-release → "the blade replays the shot" path. Drive
+	# the blade in WORLD space forward from the captured release origin along the
+	# shot line (_apply_wrister_whip). This decouples the blade from the uncoiling
+	# torso: the old torso-local pose, bridged from a local-space anchor, swept the
+	# blade BACKWARD as the torso rotated out of the coil before the forward carry
+	# could win. A world-anchored drive has no backward term — reach grows from 0.
+	if _controller.wrister_freeze_blade:
+		_apply_wrister_whip(env, aim_world)
+		return
+
+	# ── Non-frozen (live-blade) wrister: the original torso-local swing ──
+	# Blade direction eases from the release angle onto the shot line (fast
+	# ease-out), then to the live cursor over the tail. Re-derived body-local each
+	# frame so the finish stays pointed at the target as the torso uncoils.
+	var dir_angle: float = _controller._blade_relative_angle
 	if aim_world.length_squared() > 0.0001:
 		var shot_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * aim_world
 		shot_local.y = 0.0
 		if shot_local.length_squared() > 0.0001:
 			var sweep: float = 1.0 - (1.0 - t) * (1.0 - t)
-			# FREEZE: the blade starts retracted at the origin with a coiled-BACK
-			# local bearing (the torso rotated during the coil while the blade held
-			# world-fixed). Sweeping dir_angle up from that start desyncs with the
-			# fast torso uncoil — the stick visibly swings BACKWARD before the whip
-			# carries it forward. Lock onto the world shot line from t=0 instead
-			# (shot_local is re-derived every frame, so it already counter-rotates
-			# for the uncoiling torso): the follow-through becomes a pure forward drive.
-			if _controller.wrister_freeze_blade:
-				sweep = 1.0
 			dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
 	var local_dir := Vector3(sin(dir_angle), 0.0, -cos(dir_angle))
 	var hand_pos := _skater.shoulder.position
@@ -255,6 +261,66 @@ func apply_wrister_follow_through() -> void:
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
 	var clamp_delta_xz := Vector3(
 		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
+	if clamp_delta_xz.length_squared() > 0.0:
+		hand_pos.x += clamp_delta_xz.x
+		hand_pos.z += clamp_delta_xz.z
+	var net_world: Vector3 = _ik.clamp_blade_from_net(_skater.upper_body_to_global(local_target))
+	var net_local: Vector3 = _skater.upper_body_to_local(net_world)
+	hand_pos.x += net_local.x - local_target.x
+	hand_pos.z += net_local.z - local_target.z
+	local_target = net_local
+	_skater.set_top_hand_position(hand_pos)
+	_skater.set_blade_position(local_target)
+
+# World-anchored blade whip for the frozen wrister (coil → instant release →
+# blade replays the shot). The blade drives FORWARD in WORLD space from the
+# release origin (_ft_origin_world) along the shot line — reach grows from 0, so
+# there is no backward term. The uncoiling torso only re-expresses the pose in
+# local space; it can't rotate the world anchor backward the way the old
+# torso-local bridge did. The Y / stick-length solve and the wall/net clamps are
+# the same as the tracked path — only the XZ anchoring changed. At t=0 (env=0)
+# the blade sits exactly at the origin, so the handoff from the frozen pose is
+# seamless with no bridge needed.
+func _apply_wrister_whip(env: float, aim_world: Vector3) -> void:
+	var axis: Vector3 = aim_world
+	if axis.length_squared() < 0.0001:
+		# Whiff / degenerate shot line: fall back to the blade's current bearing so
+		# the finish still resolves rather than snapping to a default.
+		axis = _skater.upper_body_to_global(_skater.get_blade_position()) - _skater.global_position
+		axis.y = 0.0
+		if axis.length_squared() < 0.0001:
+			return
+	axis = axis.normalized()
+	# Forward drive of the blade tip from the frozen release origin (world XZ).
+	var reach: float = env * _controller.wrister_follow_through_reach
+	var blade_world: Vector3 = _ft_origin_world + axis * reach
+	# Express the driven XZ and the shot axis in the upper-body-local frame for the
+	# reused height / stick-length solve.
+	var blade_local_pt: Vector3 = _skater.upper_body_to_local(
+			Vector3(blade_world.x, 0.0, blade_world.z))
+	var aim_local3: Vector3 = _skater.upper_body.global_transform.basis.inverse() * axis
+	var local_dir := Vector3(aim_local3.x, 0.0, aim_local3.z)
+	if local_dir.length_squared() < 0.0001:
+		return
+	local_dir = local_dir.normalized()
+	# Blade height (lean-corrected ice + high finish) and hand height (rest + lift),
+	# with the hand set one stick-length BEHIND the blade along the axis so the
+	# rigid stick_length is preserved (same pythagorean split as the tracked path).
+	var blade_y: float = _ik.blade_y_lean_corrected(blade_local_pt.x, blade_local_pt.z) \
+			+ env * _controller.wrister_follow_through_blade_lift
+	var hand_y: float = _controller.hand_rest_y + env * _controller.wrister_follow_through_hand_y
+	var drop: float = hand_y - blade_y
+	var horiz: float = sqrt(maxf(
+			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
+	var hand_pos := Vector3(
+			blade_local_pt.x - local_dir.x * horiz, hand_y,
+			blade_local_pt.z - local_dir.z * horiz)
+	var intended_target := Vector3(blade_local_pt.x, blade_y, blade_local_pt.z)
+	# Wall + net clamps (identical to the tracked path), keeping the hand rigid to
+	# the stick by carrying the same XZ correction.
+	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
+	var clamp_delta_xz := Vector3(
+			local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
 	if clamp_delta_xz.length_squared() > 0.0:
 		hand_pos.x += clamp_delta_xz.x
 		hand_pos.z += clamp_delta_xz.z
