@@ -545,44 +545,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Shot Power Sensitivity setting rather than this raw reference.
 @export var wrister_mouse_speed_full: float = 2500.0
 @export var wrister_mouse_speed_smoothing: float = 14.0
-# PROTOTYPE (aim-model A/B): when true, the wrister's DIRECTION is PINNED
-# ORIGIN → cursor — the shot fires along the line from where the stroke STARTED
-# (the blade/puck at mouse-down, SkaterAimingBehavior.wrister_origin_world) to
-# the cursor at release. This is the "start at your blade, drag to where you
-# point, and the puck follows that line" model — the endpoint form of the old
-# blade-ROM-sweep aim — and it's the SAME positional family the quick pass uses.
-# When false, the wrister aims along the drag vector (where the cursor was moving
-# at release) — the original gestural aim. Power is untouched either way: it stays
-# the pure mouse-SPEED model, so this only swaps the direction signal.
-# Rationale: the drag-vector wrister and the blade→cursor quick pass are two
-# contradictory aim models, and the quick pass trains the habit (park the cursor
-# on the target) that breaks the gestural wrister. Unifying them makes the quick
-# pass a genuine on-ramp ("a wrister at fixed power") and lets a live aim line be
-# drawn while charging (a drag-vector shot can't be previewed — its direction
-# doesn't exist until release). The origin is PINNED at stroke start, not read
-# from the live blade: the live blade leads and arcs to an extreme by release, so
-# a live-blade origin whipped the aim at tight angles / a close cursor.
-# NOTE (netcode): this reintroduces a body/blade-derived aim, the class of signal
-# the original blade-ROM aim was removed for (client/host divergence). The origin
-# is captured and reconcile-restored like the rest of the charge state, so it's
-# deterministic under replay — but validate an online shot before shipping the
-# swap. Flip in the editor to compare feel without a rebuild.
-@export var wrister_positional_aim: bool = true
-# PROTOTYPE (freeze-blade): when true, the blade+puck STOP chasing the cursor for
-# the duration of a wrister charge and hold at the shot origin — the torso still
-# coils toward the cursor, but the puck sits still where the shot will fire from.
-# This makes the origin visible and turns the charge into a legible "committing
-# to a shot" read (for the goalie and for other players), and makes the pinned
-# origin→cursor aim exact (the puck really is at the origin at release). Release
-# is unchanged — fires instantly, the existing follow-through plays the unwind.
-# Implies positional aim (a frozen blade has no drag/sweep to read). Forehand/
-# backhand still comes from the swing chirality, but sourced from the CURSOR's
-# bearing sweep while frozen (the blade can't swing) — see _update_wrister_charge.
-# The travel gate is disabled while frozen (a frozen blade banks no blade-path
-# travel), so power is uncapped mouse-speed for now (twitch = max); a real anti-
-# degeneracy pass (a cursor-sweep gate) comes later if the freeze is worth keeping.
-@export var wrister_freeze_blade: bool = true
-# ── Travel-gated ceiling (ShotMechanics.wrister_travel_cap_t) ──
+# ── Travel-gated ceiling (ShotMechanics.wrister_travel_cap_t) — CURRENTLY OFF ──
+# NOTE: the blade is FROZEN during the wrister charge (it holds at the shot origin
+# while the torso coils), so it sweeps no blade path and this gate has nothing to
+# read — it is permanently disabled in _wrister_stroke_travel (returns INF). The
+# fields + the domain mechanism are kept as the hook for a future cursor-sweep
+# anti-degeneracy gate. The doc below describes the (dormant) blade-path model.
 # The power CEILING must be earned with real blade travel: cursor speed alone
 # (a wiggle, a short jerk, a cranked Shot Power Sensitivity) caps at the floor
 # tier. Measured in WORLD meters of blade path over the stroke, so it can't be
@@ -2205,58 +2173,49 @@ func _enter_slapper_charge(input: InputState) -> void:
 func get_locked_slapper_dir() -> Vector2:
 	return _sm.locked_slapper_dir
 
-func _get_charge_direction() -> Vector3:
-	# prev_blade_dir is the screen-space cursor drag direction packed
-	# (x, 0, y), already in world XZ frame: LocalInputGatherer negates
-	# mouse_screen_pos for attack_up team 1, so by the time the tracker
-	# records this direction it's been pre-aligned with world XZ for
-	# both screen-pos and the blade frame the magnitude reads from.
-	# Don't re-flip here — that would invert correct shots.
-	return _aiming.prev_blade_dir
-
-# The wrister's aim DIRECTION (world XZ), chosen by wrister_positional_aim. Shared
-# by the release (_release_wrister) and the every-tick goalie-prediction path
-# (_update_wrister_charge) so the pre-lean predicts exactly the shot that fires.
-#   positional → pinned origin→cursor: from where the stroke STARTED
-#     (SkaterAimingBehavior.wrister_origin_world, captured at mouse-down) toward
-#     the cursor now — the "start at the blade, drag to where you point, the puck
-#     follows that line" model, and the same positional aim the quick pass uses.
-#     Anchoring at stroke start (not the live, swung blade) is what keeps it
-#     stable at tight angles / a close cursor.
-#   gestural → the drag vector (_get_charge_direction) — the original wrister aim.
-# release_wrister falls back to player→cursor if this is degenerate. Backhand is
-# unaffected either way (it's the sweep chirality, not the aim vector).
+# The wrister's aim DIRECTION (world XZ). Shared by the release (_release_wrister)
+# and the every-tick goalie-prediction path (_update_wrister_charge) so the
+# pre-lean predicts exactly the shot that fires.
+#   - BOTS commit the direction directly (bot_wrister_aim_dir): they have no real
+#     cursor, and their cosmetic near-body wind-up cursor would make origin→cursor
+#     a garbage vector. See InputState.bot_wrister_aim_dir.
+#   - HUMANS: POSITIONAL — from where the stroke STARTED (the frozen blade origin,
+#     SkaterAimingBehavior.wrister_origin_world captured at charge start) toward
+#     the cursor now: "the puck fires from where it sits toward where you point."
+#     Anchoring at the origin (not the live blade) is what keeps it stable at
+#     tight angles / a close cursor. release_wrister falls back to player→cursor
+#     if this is degenerate.
 func _wrister_aim_dir(input: InputState) -> Vector3:
-	# Freeze implies positional: a held blade has no drag/sweep to read.
-	if wrister_positional_aim or wrister_freeze_blade:
-		var d: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
-		d.y = 0.0
-		return d
-	return _get_charge_direction()
+	if input.bot_wrister_aim_dir.length_squared() > 0.0001:
+		return input.bot_wrister_aim_dir
+	var d: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
+	d.y = 0.0
+	return d
 
-# Blade update for the WRISTER_AIM state: hold the blade at the shot origin under
-# wrister_freeze_blade, else chase the cursor exactly like carry. Routed through
-# the state machine's apply_wrister_aim_blade callback.
+# Blade update for the WRISTER_AIM state: HOLD the blade at the shot origin — the
+# puck sits still where the shot fires from while the torso coils toward the
+# cursor. Routed through the state machine's apply_wrister_aim_blade callback.
 func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
-	_ik.apply_blade_from_mouse(input, delta, wrister_freeze_blade)
+	_ik.apply_blade_from_mouse(input, delta, true)
 
 # Player-relative bearing the swing-chirality tracker seeds from at charge start.
-# MUST mirror _update_wrister_charge's chirality_source exactly (cursor when
-# frozen, the blade target when live), so the first swing_step is source-to-source
-# and banks no spurious rotation from a bearing discontinuity.
+# MUST mirror _update_wrister_charge's chirality_source (the cursor) so the first
+# swing_step is cursor-to-cursor and banks no spurious rotation from a bearing jump.
 func _wrister_chirality_seed(input: InputState) -> Vector3:
-	var src: Vector3 = input.mouse_world_pos if wrister_freeze_blade else _ik.last_target_blade_world
-	var bearing: Vector3 = src - skater.global_position
+	var bearing: Vector3 = input.mouse_world_pos - skater.global_position
 	bearing.y = 0.0
 	return bearing
 
-# Forehand/backhand for the wrister, from the swing CHIRALITY — the net
-# rotational sense of the blade's sweep around the player over the stroke
-# (SkaterAimingBehavior.swing_rotation, accumulated by ChargeTracking). Shared
-# by the release path and the every-tick goalie-prediction path so both agree.
-# The accumulator is player-relative blade motion and is saved/restored across
-# reconcile alongside charge, so the classification is deterministic.
-func _classify_backhand() -> bool:
+# Forehand/backhand for the wrister.
+#   - BOTS commit it (bot_wrister_backhand): the fake cursor is now purely cosmetic.
+#   - HUMANS read the swing CHIRALITY — the net rotational sense of the CURSOR's
+#     bearing sweep around the player over the stroke (the blade is frozen, so
+#     the cursor is the only sweep). is_backhand_from_swing over swing_rotation,
+#     which is saved/restored across reconcile so the classification is
+#     deterministic. Shared by the release and goalie-prediction paths.
+func _wrister_is_backhand(input: InputState) -> bool:
+	if input.bot_wrister_aim_dir.length_squared() > 0.0001:
+		return input.bot_wrister_backhand
 	return ShotMechanics.is_backhand_from_swing(
 			_aiming.swing_rotation,
 			skater.is_left_handed,
@@ -2266,10 +2225,9 @@ func _release_wrister(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
 		var aim_dir: Vector3 = _wrister_aim_dir(input)
-		# Forehand/backhand from the swing chirality (ShotMechanics.is_backhand_from_swing),
-		# whose source is the cursor bearing when frozen and the blade bearing when
-		# live — see _update_wrister_charge. Same clockwise check either way.
-		var is_backhand: bool = _classify_backhand()
+		# Forehand/backhand: bots commit it, humans read the cursor-sweep chirality
+		# (see _wrister_is_backhand).
+		var is_backhand: bool = _wrister_is_backhand(input)
 		# LMB is always a charged wrister now — the quick pass lives on its own
 		# button (_fire_quick_pass). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
@@ -2297,7 +2255,6 @@ func _release_wrister(input: InputState) -> void:
 	var release_power_t: float = ShotMechanics.wrister_power_t(
 			_wrister_sweep_speed(input), _wrister_config(), _wrister_stroke_travel())
 	_sm.follow_through_power = lerpf(wrister_follow_through_min_power, 1.0, release_power_t)
-	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = follow_through_duration
 	_sm.follow_through_duration_total = follow_through_duration
@@ -2326,7 +2283,6 @@ func _fire_quick_pass(input: InputState) -> void:
 
 	_sm.follow_through_is_slapper = false
 	_sm.follow_through_power = quick_pass_follow_through_power
-	_shot_pose.begin_follow_through()
 	_sm.set_state(State.FOLLOW_THROUGH)
 	_sm.follow_through_timer = quick_pass_follow_through_duration
 	_sm.follow_through_duration_total = quick_pass_follow_through_duration
@@ -2396,16 +2352,14 @@ func _update_wrister_charge(input: InputState) -> void:
 	# gated by reachable space (a cursor past the reach limit pins the target →
 	# zero delta) while staying deterministic, so host and client agree on charge.
 	var blade_world: Vector3 = _ik.last_target_blade_world
-	# Chirality (forehand/backhand) source: the signed angular sweep of this
-	# bearing around the player over the stroke (ChargeTracking.swing_step). A
-	# LIVE blade uses its own bearing. A FROZEN blade doesn't move, so it has no
-	# chirality — read it from the CURSOR's bearing around the player instead: the
-	# same clockwise check, sourced from mouse movement, so "bring the puck back on
-	# the forehand and shoot forward" classifies as a forehand by its net rotation
-	# (not by which side it started on). Reproduces how a live-blade wrister
-	# classified before the freeze (the blade was tracking the cursor).
-	var chirality_source: Vector3 = input.mouse_world_pos if wrister_freeze_blade else blade_world
-	var blade_pos_rel_skater: Vector3 = chirality_source - skater.global_position
+	# Chirality (forehand/backhand) source for HUMANS: the signed angular sweep of
+	# the CURSOR's bearing around the player over the stroke (ChargeTracking.
+	# swing_step). The blade is frozen and can't sweep, so the cursor is the only
+	# sweep — the same clockwise check, sourced from mouse movement, so "bring the
+	# puck back on the forehand and shoot forward" classifies as a forehand by its
+	# net rotation (not by which side it started on). (Bots commit their hand
+	# directly — see _wrister_is_backhand — so this is cosmetic for them.)
+	var blade_pos_rel_skater: Vector3 = input.mouse_world_pos - skater.global_position
 	blade_pos_rel_skater.y = 0.0
 	# The stroke-travel accumulator's per-tick step is bounded by the on-axis
 	# blade-speed budget × delta: the target is a closed-form ROM clamp (not
@@ -2424,15 +2378,15 @@ func _update_wrister_charge(input: InputState) -> void:
 	# impact off the goalie's lean (a tricky release beats the read). Works for
 	# REMOTE shooters too: the host simulates their carry from replicated input
 	# (RemoteController._drive_from_input → this path), and both signals ride the
-	# wire — mouse_world_pos, plus mouse_screen_pos pre-aligned to world XZ by the
-	# gatherer's attack-direction negation (the drag direction _get_charge_direction
-	# reads) — with the remote's Shot Power Sensitivity from the join payload feeding
-	# _wrister_sweep_speed. Host-only in that it runs on the authoritative sim, not in
-	# that it's limited to host-controlled shooters.
+	# wire — mouse_world_pos (the positional aim's cursor), plus mouse_screen_pos
+	# pre-aligned to world XZ by the gatherer's attack-direction negation (the
+	# cursor bearing the chirality sweep reads) — with the remote's Shot Power
+	# Sensitivity from the join payload feeding _wrister_sweep_speed. Host-only in
+	# that it runs on the authoritative sim, not that it's limited to host shooters.
 	# Predict the exact release this tick — direction and backhand both matched to
 	# the release path so the goalie pre-leans toward the shot that would fire.
 	var charge_aim_dir: Vector3 = _wrister_aim_dir(input)
-	var is_backhand: bool = _classify_backhand()
+	var is_backhand: bool = _wrister_is_backhand(input)
 	# Re-solves every tick while charging (+ per replayed input on reconcile), so
 	# fill a reused scratch instead of allocating a ShotResult each time.
 	var pred := ShotMechanics.release_wrister(
@@ -2790,14 +2744,13 @@ func _wrister_sweep_speed(input: InputState) -> float:
 # blade-path length of the live stroke (world meters, so the ceiling can't be
 # bought with DPI or Shot Power Sensitivity).
 func _wrister_stroke_travel() -> float:
-	# A FROZEN blade sweeps no world-space path, so the travel-gated ceiling would
-	# pin every shot at the floor tier (the ~59% cap seen in playtest). The gesture
-	# that earns power is now the cursor sweep, not blade travel, so the blade-path
-	# gate is meaningless here — disable it (INF) while frozen. A real anti-
-	# degeneracy pass (a cursor-sweep gate) comes later if the freeze sticks.
-	if is_ai_controlled() or wrister_freeze_blade:
-		return INF
-	return _aiming.stroke_travel
+	# The blade is frozen during the wrister charge, so it sweeps no world-space
+	# path — the blade-travel gate has nothing to read and would pin every shot at
+	# the floor tier (the ~59% cap seen in playtest). Power is earned by the cursor
+	# sweep now, not blade travel, so the gate is permanently OFF (INF). The gate
+	# MECHANISM is kept (ShotMechanics.wrister_travel_cap_t + the config fields) as
+	# the hook for a future cursor-sweep-based anti-degeneracy pass.
+	return INF
 
 # Cached like the wrister config: _update_slapper_charge now re-solves the release
 # every windup tick (120 Hz × actors, replayed on reconcile) to publish

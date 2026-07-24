@@ -36,8 +36,8 @@ var cursor_speed_ema: float = 0.0
 # like cursor_speed_ema.
 var stroke_travel: float = 0.0
 # World position of the blade/puck at the MOMENT the wrister charge began (mouse
-# down), captured in reset_wrister. Under SkaterController.wrister_positional_aim
-# this is the shot's aim ORIGIN: the release fires along origin→cursor, so the
+# down), captured in reset_wrister. This is a human shot's aim ORIGIN: the
+# release fires along origin→cursor, so the
 # aim is anchored where the stroke STARTED, not on the live blade (which has
 # swung to an extreme by release — a leading, arcing point that made the aim
 # whip at tight angles / a close cursor). Pinned at stroke start so it doesn't

@@ -118,7 +118,7 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	# through center over carry_side_lerp_speed.
 	_skater.update_carry_side(_controller.has_puck, delta)
 
-	# FREEZE (SkaterController.wrister_freeze_blade prototype): during a wrister
+	# FREEZE (hold_blade, set for the WRISTER_AIM state): during a wrister
 	# charge, hold the blade at its current body-local pose instead of chasing the
 	# cursor. The puck pins to this held blade (get_carry_target_global), so it
 	# sits still AT the shot origin while the torso still coils toward the cursor

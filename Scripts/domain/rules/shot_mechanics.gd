@@ -177,22 +177,18 @@ static func is_backhand_from_swing(
 #     the pass goes where you point — at the fixed quick/pass power.
 #   - WRISTER (the LMB shoot button, via _release_wrister): aims along the
 #     charge_direction the caller hands in, at charged power — the pure mouse-speed
-#     model above (wrister_power_t), fed by sweep_speed. The controller chooses that
-#     vector: classically the DRAG (swept cursor direction), or — under the
-#     SkaterController.wrister_positional_aim prototype — blade→cursor, unifying the
-#     wrister's aim with the quick pass. Power is the mouse-speed model regardless;
-#     only the direction signal differs. Falls back to player→cursor when zero.
+#     model above (wrister_power_t), fed by sweep_speed. The controller supplies
+#     that vector POSITIONALLY: from the frozen shot origin (the puck, held still
+#     during the charge) toward the cursor — the same aim as the quick pass, so
+#     "the puck fires from where it sits toward where you point." (Bots commit the
+#     direction directly.) Falls back to player→cursor when zero.
 # The two live on separate buttons precisely so there's no tap-vs-hold guess: the
 # old hold-time classifier made an ordinary tap that lingered a few ticks fire a
-# wrister when the player expected a snap. There is intentionally no blend band:
-# dragging to aim is the core of the game, and mixing the body-relative tap
-# direction into charged shots both muddies the feel and — because tap_dir depends
-# on the predicted body position — is a client/host divergence source. Netcode
-# upshot: a charged wrister's aim (the drag vector) is body-independent and
-# identical on client and host.
-# Backhand is the caller's call: the controller passes is_backhand from
-# is_backhand_from_swing (above) — the rotational sense of the blade's sweep
-# around the player over the stroke.
+# wrister when the player expected a snap.
+# Backhand is the caller's call: the controller passes is_backhand — for humans
+# the rotational sense of the CURSOR's bearing sweep over the stroke
+# (is_backhand_from_swing above; the blade is frozen so the cursor is the sweep),
+# for bots the committed hand.
 static func release_wrister(
 		player_pos: Vector3,
 		mouse_world_pos: Vector3,

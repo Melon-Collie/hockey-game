@@ -329,7 +329,7 @@ func apply_upper_body(delta: float) -> void:
 			var through_deg: float = _controller.slapper_follow_through_twist_deg \
 					if _sm.follow_through_is_slapper else _controller.wrister_follow_through_twist_deg
 			var through: float = blade_side_sign * deg_to_rad(through_deg) * env
-			if _controller.wrister_freeze_blade and not _sm.follow_through_is_slapper:
+			if not _sm.follow_through_is_slapper:
 				# The coil IS the windup — discharge the through-overshoot INSTANTLY
 				# with the release. env is front-loaded (peaks ~40 ms), but a lerp at
 				# follow_through_twist_lerp_speed needs ~150 ms to converge, so it can
@@ -383,7 +383,7 @@ func apply_upper_body(delta: float) -> void:
 		# FROZEN blade can't lead the wind-up — so face the CURSOR directly, keeping
 		# the shoulders rotating toward the aim while the puck sits still.
 		var twist_source: Vector3 = _skater.upper_body_to_global(_skater.get_blade_position())
-		if _sm.get_state() == State.WRISTER_AIM and _controller.wrister_freeze_blade:
+		if _sm.get_state() == State.WRISTER_AIM:
 			twist_source = _controller._current_aim_world
 		var to_blade: Vector3 = twist_source - _skater.global_position
 		to_blade.y = 0.0

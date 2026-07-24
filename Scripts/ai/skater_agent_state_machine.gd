@@ -943,6 +943,12 @@ var _shoot_charge_tick: int = 0
 # in that frame and charge accumulation would stall on rushes.
 var _shoot_wind_up_start: Vector3 = Vector3.ZERO
 var _shoot_aim_target: Vector3 = Vector3.ZERO
+# Committed shot direction (world XZ, normalized), locked at charge tick 0. The
+# controller aims the positional wrister along this directly for bots (via
+# InputState.bot_wrister_aim_dir) — the fake wind-up cursor is a near-body bubble
+# and would give a garbage origin→cursor. This is the same aim_dir the old
+# gestural model shot (release_pos → aim_point, execution error folded in).
+var _shoot_aim_dir_locked: Vector3 = Vector3.ZERO
 # Wind-up side decision for SHOOT_PRESSED: +1 = forehand, -1 = backhand.
 # Captured at tick 0 (based on forehand-side pressure) and locked for the
 # charge so the swing doesn't flip mid-press if a defender shuffles in
@@ -987,6 +993,10 @@ var _pass_charge_tick: int = 0
 # puck releases at the distance-adaptive launch speed instead of the wrister max.
 var _pass_wind_up_start: Vector3 = Vector3.ZERO
 var _pass_aim_target: Vector3 = Vector3.ZERO
+# Committed charged-pass direction (world XZ, normalized), locked at tick 0 — the
+# controller aims the positional wrister along this directly for bots (passes are
+# always forehand, so no committed backhand). See _shoot_aim_dir_locked.
+var _pass_aim_dir_locked: Vector3 = Vector3.ZERO
 
 # This bot's own attribute-scaled capabilities, set by apply_capabilities (from
 # AIController.apply_attributes). Used wherever the bot reasons about ITSELF —
@@ -3475,6 +3485,9 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 			aim_vec = aim_vec.rotated(Vector3.UP, _committed_aim_error_rad)
 		var aim_dir_init: Vector3 = aim_vec.normalized() if aim_vec.length_squared() > 0.0001 else Vector3(0.0, 0.0, 1.0)
 		var aim_distance: float = aim_vec.length()
+		# Lock the committed shot direction for the charge — the controller aims the
+		# positional wrister along this directly (bot_wrister_aim_dir below).
+		_shoot_aim_dir_locked = aim_dir_init
 		# aim_dir is captured once into the wind-up endpoint offsets below
 		# and held for the charge. A shuffling goalie cannot flip the
 		# chosen arc mid-swing because the endpoint offsets are frozen at
@@ -3564,6 +3577,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# synthesized sweep speed) so the bot deterministically fires the shot the
 	# scorer actually evaluated.
 	input.bot_wrister_power_t = _shot_power_committed
+	# Commit the aim direction and hand DIRECTLY (the fake cursor is now purely the
+	# cosmetic wind-up coil): the controller shoots the positional wrister along
+	# this for bots and reads forehand/backhand from the committed side, not the
+	# near-body cursor sweep. Set every tick so it's live on the release tick.
+	input.bot_wrister_aim_dir = _shoot_aim_dir_locked
+	input.bot_wrister_backhand = _shoot_side_sign < 0.0
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS + _shoot_release_hold_ticks:
 		# Still charging (or hanging on the sampled late-release hold —
@@ -3761,6 +3780,7 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		sweep.y = 0.0
 		var aim_distance: float = sweep.length()
 		var aim_dir_init: Vector3 = sweep.normalized() if aim_distance > 0.01 else Vector3(0.0, 0.0, 1.0)
+		_pass_aim_dir_locked = aim_dir_init
 		var pass_span: float = BOT_WRISTER_WIND_UP_SPAN_M * maxf(_pass_power_t(), 0.35)
 		# Pass always sweeps on the forehand side — no defender-aware
 		# side flip like SHOOT_PRESSED (passes don't justify backhand power
@@ -3792,6 +3812,10 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# Pass power: the fraction of the bot's own wrister band that hits the
 	# distance-adaptive target speed. The controller reads this directly.
 	input.bot_wrister_power_t = _pass_power_t()
+	# Commit the pass aim directly (forehand — no backhand passes); the cursor is
+	# purely the cosmetic wind-up. Set every tick so it's live on the release tick.
+	input.bot_wrister_aim_dir = _pass_aim_dir_locked
+	input.bot_wrister_backhand = false
 
 	if _pass_charge_tick < BOT_WRISTER_CHARGE_TICKS:
 		input.shoot_held = true

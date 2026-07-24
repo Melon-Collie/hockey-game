@@ -28,30 +28,6 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 	_controller = controller
 
 
-# ── Follow-Through Start Capture ──────────────────────────────────────────────
-# The wrister/quick-shot pose at the release instant is wherever the aim left
-# it — hands dragged back, blade wound up. The authored follow-through curve
-# starts from the REST pose, so without a bridge the stick teleported to a
-# near-rest pose on the first FT frame (which looks like the follow-through's
-# END, since the envelopes finish at rest) and then played the arc — "the
-# animation runs twice". Capture the live pose at release; the FT blends from
-# it onto the authored swing over the first follow_through_takeover_frac of
-# the timer, so release reads as ONE continuous motion. Live ticks only:
-# reconcile replay re-runs releases against replayed poses and must not
-# clobber the visual capture. (The slapper doesn't need this — its downswing
-# already starts from the captured wind-up pose.)
-var _ft_start_hand: Vector3 = Vector3.ZERO
-var _ft_start_blade: Vector3 = Vector3.ZERO
-var _ft_start_valid: bool = false
-
-
-func begin_follow_through() -> void:
-	if _controller.is_replaying:
-		return
-	_ft_start_hand = _skater.get_top_hand_position()
-	_ft_start_blade = _skater.get_blade_position()
-	_ft_start_valid = true
-
 # ── Slapper Charge Pose ───────────────────────────────────────────────────────
 # Slapper has a fixed blade pose offset from the shoulder — separate from
 # the IK flow (this is a charged pre-shot pose, not player-aimed). Hand
@@ -191,81 +167,13 @@ func apply_celebration_pose(t: float) -> void:
 func apply_wrister_follow_through() -> void:
 	var total: float = maxf(_sm.follow_through_duration_total, 0.001)
 	var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
-	var env: float = sin(PI * pow(t, _controller.follow_through_arc_skew)) \
-			* _sm.follow_through_power
 	# Aim axis (world XZ): the shot line, eased back to the LIVE cursor over the
 	# tail (follow_through_return_frac) so the finish hands off to blade-tracking
 	# without a re-rotate. Whiffed releases (shot_dir zero) return ZERO here.
 	var cursor_dir: Vector3 = _controller._current_aim_world - _skater.global_position
 	var aim_world: Vector3 = ShotMechanics.follow_through_aim(
 			_sm.shot_dir, cursor_dir, t, _controller.follow_through_return_frac)
-
-	# FREEZE: the coil → instant-release → "the blade replays the shot" path. Drive
-	# the blade in WORLD space forward from the captured release origin along the
-	# shot line (_apply_wrister_whip). This decouples the blade from the uncoiling
-	# torso: the old torso-local pose, bridged from a local-space anchor, swept the
-	# blade BACKWARD as the torso rotated out of the coil before the forward carry
-	# could win. A world-anchored drive has no backward term — reach grows from 0.
-	if _controller.wrister_freeze_blade:
-		_apply_wrister_whip(t, aim_world)
-		return
-
-	# ── Non-frozen (live-blade) wrister: the original torso-local swing ──
-	# Blade direction eases from the release angle onto the shot line (fast
-	# ease-out), then to the live cursor over the tail. Re-derived body-local each
-	# frame so the finish stays pointed at the target as the torso uncoils.
-	var dir_angle: float = _controller._blade_relative_angle
-	if aim_world.length_squared() > 0.0001:
-		var shot_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * aim_world
-		shot_local.y = 0.0
-		if shot_local.length_squared() > 0.0001:
-			var sweep: float = 1.0 - (1.0 - t) * (1.0 - t)
-			dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
-	var local_dir := Vector3(sin(dir_angle), 0.0, -cos(dir_angle))
-	var hand_pos := _skater.shoulder.position
-	# Carry the whole stick FORWARD along the shot line as it climbs — the
-	# hands reach through the shot instead of the blade bobbing in place. Both
-	# endpoints translate by the same offset so the rigid stick_length solve
-	# below is untouched; env scales it so a snap pass barely reaches while a
-	# full-charge wrister finishes extended out over the shot line.
-	var carry: float = env * _controller.wrister_follow_through_reach
-	hand_pos.x += local_dir.x * carry
-	hand_pos.z += local_dir.z * carry
-	hand_pos.y = _controller.hand_rest_y + env * _controller.wrister_follow_through_hand_y
-	# Sample the ice height at the rest reach, lift the blade off it, then
-	# re-solve the horizontal reach so hand→blade stays one stick long.
-	var probe: Vector3 = hand_pos + local_dir * _ik.stick_horiz()
-	var blade_y: float = _ik.blade_y_lean_corrected(probe.x, probe.z) \
-			+ env * _controller.wrister_follow_through_blade_lift
-	var drop: float = hand_pos.y - blade_y
-	var horiz: float = sqrt(maxf(
-			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
-	var intended_target: Vector3 = hand_pos + local_dir * horiz
-	intended_target.y = blade_y
-	# Bridge from the captured release pose onto the authored swing (see
-	# begin_follow_through) — smoothstepped over the takeover window so the
-	# wound-up stick flows into the sweep instead of teleporting to rest.
-	# Blended BEFORE the wall/net clamps so the clamps see the final pose.
-	if _ft_start_valid:
-		var takeover: float = clampf(
-				t / maxf(_controller.follow_through_takeover_frac, 0.001), 0.0, 1.0)
-		takeover = takeover * takeover * (3.0 - 2.0 * takeover)
-		if takeover < 1.0:
-			hand_pos = _ft_start_hand.lerp(hand_pos, takeover)
-			intended_target = _ft_start_blade.lerp(intended_target, takeover)
-	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
-	var clamp_delta_xz := Vector3(
-		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
-	if clamp_delta_xz.length_squared() > 0.0:
-		hand_pos.x += clamp_delta_xz.x
-		hand_pos.z += clamp_delta_xz.z
-	var net_world: Vector3 = _ik.clamp_blade_from_net(_skater.upper_body_to_global(local_target))
-	var net_local: Vector3 = _skater.upper_body_to_local(net_world)
-	hand_pos.x += net_local.x - local_target.x
-	hand_pos.z += net_local.z - local_target.z
-	local_target = net_local
-	_skater.set_top_hand_position(hand_pos)
-	_skater.set_blade_position(local_target)
+	_apply_wrister_whip(t, aim_world)
 
 # Blade whip for the frozen wrister (coil → instant release → blade replays the
 # shot). ARM-CONTROLLED, same geometry as the tracked follow-through: the hand

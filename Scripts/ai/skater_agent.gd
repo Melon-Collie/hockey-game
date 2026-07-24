@@ -137,3 +137,8 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	# release tick and nothing else clears it, so a latched true would fire an
 	# instant quick pass on every subsequent carry tick.
 	input.quick_pass_pressed = false
+	# Committed wrister aim/hand default to "not committed" every tick (reused
+	# scratch): only the SHOOT/PASS press states set them, and a latched aim_dir
+	# would make the controller read a stale bot aim on an ordinary carry tick.
+	input.bot_wrister_aim_dir = Vector3.ZERO
+	input.bot_wrister_backhand = false

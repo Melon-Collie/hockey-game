@@ -29,7 +29,7 @@ static func state_has_puck(state: int) -> bool:
 class Callbacks:
 	# Blade / IK
 	var apply_blade_from_mouse: Callable          # (input: InputState, delta: float)
-	var apply_wrister_aim_blade: Callable         # (input: InputState, delta: float) — carry chase, or a held blade under wrister_freeze_blade
+	var apply_wrister_aim_blade: Callable         # (input: InputState, delta: float) — holds the blade at the shot origin while the torso coils
 	var wrister_chirality_seed: Callable          # (input: InputState) -> Vector3 — player-relative bearing the swing tracker seeds from; MUST match the source _update_wrister_charge feeds (cursor when frozen, blade when live)
 	var apply_slapper_blade_position: Callable    # ()
 	var apply_block_blade_position: Callable      # ()
@@ -139,8 +139,8 @@ func _state_wrister_aim(_skater: Skater, input: InputState, delta: float, _has_p
 	if input.slap_pressed:
 		_cb.transition_to_skating.call()
 		return
-	# Freeze-aware: holds the blade at the shot origin under wrister_freeze_blade,
-	# otherwise chases the cursor exactly like carry.
+	# Holds the blade frozen at the shot origin (the puck sits still where the shot
+	# fires from) while the torso coils toward the cursor.
 	_cb.apply_wrister_aim_blade.call(input, delta)
 	_cb.update_wrister_charge.call(input)
 	if not input.shoot_held:
