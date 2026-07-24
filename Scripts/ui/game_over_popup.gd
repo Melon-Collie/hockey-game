@@ -17,6 +17,7 @@ signal rematch_toggled
 signal lobby_vote_toggled
 signal free_play_pressed
 signal exit_pressed
+signal analytics_pressed
 
 const _GOLD := MenuStyle.GOLD
 const _WHITE := MenuStyle.BROADCAST_CREAM
@@ -212,6 +213,12 @@ func _build_bottom_block(root: Control) -> void:
 	actions.alignment = BoxContainer.ALIGNMENT_CENTER
 	actions.add_theme_constant_override("separation", 12)
 	_bottom_block.add_child(actions)
+
+	# Leads the strip: the analytics screen is a VIEW of the game just played,
+	# so it sits ahead of the what-next actions rather than among them.
+	var analytics_btn := _action_button("Game Analytics")
+	analytics_btn.pressed.connect(func() -> void: analytics_pressed.emit())
+	actions.add_child(analytics_btn)
 
 	_rematch_btn = _action_button("Rematch")
 	_rematch_btn.pressed.connect(func() -> void: rematch_toggled.emit())

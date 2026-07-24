@@ -30,6 +30,7 @@ var _assist_tag_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
+var _post_game_analytics: PostGameAnalytics = null
 var _intermission_overlay: IntermissionOverlay = null
 var _matchup_overlay: MatchupIntroOverlay = null
 var _pause_menu: PauseMenu = null
@@ -123,7 +124,10 @@ func _ready() -> void:
 	_game_over_popup.lobby_vote_toggled.connect(_on_lobby_vote_pressed)
 	_game_over_popup.free_play_pressed.connect(_on_game_over_free_play)
 	_game_over_popup.exit_pressed.connect(_on_game_over_exit)
+	_game_over_popup.analytics_pressed.connect(_on_game_over_analytics)
 	add_child(_game_over_popup)
+	_post_game_analytics = PostGameAnalytics.new()
+	add_child(_post_game_analytics)
 	_intermission_overlay = IntermissionOverlay.new()
 	add_child(_intermission_overlay)
 	_matchup_overlay = MatchupIntroOverlay.new()
@@ -1562,6 +1566,8 @@ func _on_game_reset() -> void:
 		_game_over_present_tween.kill()
 	_game_over_present_tween = null
 	_game_over_popup.hide_popup()
+	if _post_game_analytics != null:
+		_post_game_analytics.close()
 	if _pause_menu != null:
 		_pause_menu.close()
 	if _side_menu != null:
@@ -1628,6 +1634,14 @@ func _on_game_over_free_play() -> void:
 	_show_confirm(msg, func() -> void:
 		await NetworkManager.announce_match_end()
 		GameManager.return_to_free_play())
+
+# Opens the post-game analytics views (shot map / tale of the tape / xG flow)
+# over the game-over screen. Reads only local per-game data, so it works
+# identically offline and online.
+func _on_game_over_analytics() -> void:
+	if _post_game_analytics != null:
+		_post_game_analytics.present()
+
 
 func _on_game_over_exit() -> void:
 	_show_confirm("Exit game?", func() -> void:
