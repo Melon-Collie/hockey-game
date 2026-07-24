@@ -85,8 +85,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # cursor and eases to a fixed body-local "ready to hit" position — stick up (the
 # lift above) and held in front, so the stance snaps to a distinct silhouette
 # instead of a raised-but-still-tracking stick. Body-local XZ: +x is the forehand
-# side (× blade_side_sign), −z is in front of the skater (see _blade_relative_angle
-# bearing math). Gameplay-inert — the blade is withdrawn from puck play while
+# side (× blade_side_sign), −z is in front of the skater (the blade-bearing
+# convention). Gameplay-inert — the blade is withdrawn from puck play while
 # committed, so this is a pure cosmetic override that eases back to cursor tracking
 # on release. Feel dials; verify the silhouette in-game.
 @export var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
@@ -684,11 +684,6 @@ var show_one_timer_indicator: bool = false
 # with the shot instead of the old mid-timer bell (peak ~130 ms after the puck
 # already left). Shared with the slapper finish.
 @export var follow_through_arc_skew: float = 0.4
-# First fraction of the wrister/quick FT spent blending from the captured
-# release pose onto the authored swing (kills the release-instant teleport
-# to a near-rest pose — the "animation played twice" read). Small so the blade
-# leaves the (now retracted, frozen) origin FAST and whips through the shot.
-@export var follow_through_takeover_frac: float = 0.14
 # Last fraction of the wrister/quick/slapper FT spent easing the finish aim (torso
 # twist + blade) from the shot line back to the LIVE cursor, so the pose ends
 # where the mouse actually is and hands off to blade-tracking without re-rotating
@@ -823,7 +818,6 @@ var _game_state: Node = null
 var _is_host: bool = false
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
-var _blade_relative_angle: float = 0.0
 # Live cursor world position this tick — stamped in _process_input so the shot
 # follow-through can ease its finish aim back to wherever the mouse currently is
 # (see follow_through_return_frac). Fed from the replayed input during reconcile,
@@ -1815,8 +1809,6 @@ func _nudge() -> void:
 # ── Puck Signals ──────────────────────────────────────────────────────────────
 func on_puck_picked_up_network() -> void:
 	has_puck = true
-	var local_blade: Vector3 = skater.get_blade_position() - skater.shoulder.position
-	_blade_relative_angle = atan2(local_blade.x, -local_blade.z)
 	if _sm.get_state() == State.SLAPPER_CHARGE_WITHOUT_PUCK:
 		# Puck arrived during a puckless slapper wind-up. Pin it to the ice and
 		# switch into the with-puck charge — same setup as the carry → slapshot

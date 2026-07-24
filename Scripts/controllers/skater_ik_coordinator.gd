@@ -361,11 +361,6 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	_skater.set_top_hand_position(hand_local)
 	_skater.set_blade_position(wall_clamped)
 
-	# Store the blade's bearing from the shoulder for follow-through.
-	var bearing: Vector3 = wall_clamped - _skater.shoulder.position
-	if Vector2(bearing.x, bearing.z).length() > 0.001:
-		_controller._blade_relative_angle = atan2(bearing.x, -bearing.z)
-
 # While carrying, offset the IK target perpendicular to the shoulder→target
 # direction so the blade marker (and therefore the visible blade + stick
 # attachment) sits on the forehand or backhand side of the cursor. The puck
