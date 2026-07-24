@@ -2178,11 +2178,8 @@ func get_locked_slapper_dir() -> Vector2:
 #     tight angles / a close cursor. release_wrister falls back to player→cursor
 #     if this is degenerate.
 func _wrister_aim_dir(input: InputState) -> Vector3:
-	if input.bot_wrister_aim_dir.length_squared() > 0.0001:
-		return input.bot_wrister_aim_dir
-	var d: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
-	d.y = 0.0
-	return d
+	return ShotMechanics.wrister_aim_dir(
+			input.bot_wrister_aim_dir, input.mouse_world_pos, _aiming.wrister_origin_world)
 
 # Blade update for the WRISTER_AIM state: HOLD the blade at the shot origin — the
 # puck sits still where the shot fires from while the torso coils toward the
@@ -2206,12 +2203,9 @@ func _wrister_chirality_seed(input: InputState) -> Vector3:
 #     which is saved/restored across reconcile so the classification is
 #     deterministic. Shared by the release and goalie-prediction paths.
 func _wrister_is_backhand(input: InputState) -> bool:
-	if input.bot_wrister_aim_dir.length_squared() > 0.0001:
-		return input.bot_wrister_backhand
-	return ShotMechanics.is_backhand_from_swing(
-			_aiming.swing_rotation,
-			skater.is_left_handed,
-			wrister_backhand_deadband)
+	return ShotMechanics.wrister_is_backhand(
+			input.bot_wrister_aim_dir, input.bot_wrister_backhand,
+			_aiming.swing_rotation, skater.is_left_handed, wrister_backhand_deadband)
 
 func _release_wrister(input: InputState) -> void:
 	if has_puck:

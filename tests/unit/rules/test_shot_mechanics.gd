@@ -698,3 +698,41 @@ func test_whip_local_dir_degenerate_axis_returns_zero() -> void:
 			"degenerate shot axis returns ZERO so the caller can fall back")
 	assert_eq(ShotMechanics.whip_local_dir(Vector3(0.0, 1.0, 0.0), Basis()), Vector3.ZERO,
 			"purely vertical axis has no XZ direction → ZERO")
+
+# ── Bot-vs-human wrister aim/hand routing ──────────────────────────────────────
+# Bots commit their aim direction + hand directly (no cursor); humans aim
+# positionally (origin→cursor) with forehand/backhand from the cursor sweep. The
+# committed bot_aim_dir being non-ZERO is the "this is a bot commit" signal.
+func test_wrister_aim_dir_bot_commit_wins() -> void:
+	var bot_dir := Vector3(0.6, 0.0, -0.8)
+	# Cursor and origin are garbage-near-body (the bot's cosmetic bubble); the
+	# committed direction must be returned verbatim, ignoring them.
+	var got: Vector3 = ShotMechanics.wrister_aim_dir(
+			bot_dir, Vector3(1.0, 0.0, 1.0), Vector3(0.9, 0.0, 1.1))
+	assert_eq(got, bot_dir, "a committed bot aim dir is used verbatim, not origin→cursor")
+
+
+func test_wrister_aim_dir_human_positional() -> void:
+	# No bot commit (ZERO) → positional: mouse − origin, Y flattened.
+	var got: Vector3 = ShotMechanics.wrister_aim_dir(
+			Vector3.ZERO, Vector3(5.0, 2.0, 3.0), Vector3(1.0, 0.5, 1.0))
+	assert_almost_eq(got, Vector3(4.0, 0.0, 2.0), Vector3(0.001, 0.001, 0.001),
+			"human wrister aims origin→cursor (Y flattened)")
+
+
+func test_wrister_is_backhand_bot_commit_wins() -> void:
+	var bot_dir := Vector3(0.0, 0.0, -1.0)
+	# swing_rotation would say forehand, but the bot committed backhand → backhand.
+	assert_true(ShotMechanics.wrister_is_backhand(bot_dir, true, 0.0, false, 0.35),
+			"committed bot backhand wins over the (ignored) swing")
+	assert_false(ShotMechanics.wrister_is_backhand(bot_dir, false, -5.0, false, 0.35),
+			"committed bot forehand wins over a swing that would read backhand")
+
+
+func test_wrister_is_backhand_human_reads_swing() -> void:
+	# No bot commit → falls through to is_backhand_from_swing. Righty: negative
+	# swing past the deadband is a backhand; a near-zero swing defaults forehand.
+	assert_true(ShotMechanics.wrister_is_backhand(Vector3.ZERO, false, -1.0, false, 0.35),
+			"human: righty negative swing past deadband = backhand")
+	assert_false(ShotMechanics.wrister_is_backhand(Vector3.ZERO, false, 0.1, false, 0.35),
+			"human: near-straight drag inside the deadband defaults forehand")

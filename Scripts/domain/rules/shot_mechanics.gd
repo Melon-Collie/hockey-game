@@ -169,6 +169,28 @@ static func is_backhand_from_swing(
 	var handed: float = -1.0 if is_left_handed else 1.0
 	return swing_rotation * handed < -deadband
 
+# The wrister's aim DIRECTION (world XZ, un-normalized — release_wrister normalizes).
+# BOTS commit their direction directly (bot_aim_dir non-ZERO — they have no cursor,
+# and their cosmetic near-body wind-up cursor would make origin→cursor garbage);
+# HUMANS aim POSITIONALLY from the frozen shot origin toward the cursor ("the puck
+# fires from where it sits toward where you point"). See
+# SkaterController._wrister_aim_dir.
+static func wrister_aim_dir(bot_aim_dir: Vector3, mouse_world: Vector3,
+		origin_world: Vector3) -> Vector3:
+	if bot_aim_dir.length_squared() > 0.0001:
+		return bot_aim_dir
+	return Vector3(mouse_world.x - origin_world.x, 0.0, mouse_world.z - origin_world.z)
+
+# Wrister forehand/backhand. BOTS commit the hand (paired with a committed
+# bot_aim_dir); HUMANS read the CURSOR-sweep chirality (is_backhand_from_swing;
+# the blade is frozen so the cursor is the only sweep). See
+# SkaterController._wrister_is_backhand.
+static func wrister_is_backhand(bot_aim_dir: Vector3, bot_backhand: bool,
+		swing_rotation: float, is_left_handed: bool, deadband: float) -> bool:
+	if bot_aim_dir.length_squared() > 0.0001:
+		return bot_backhand
+	return is_backhand_from_swing(swing_rotation, is_left_handed, deadband)
+
 # Wrister release. HARD BINARY — a quick pass and a charged wrister are two
 # distinct releases, with NO blend between them. Which one fires is decided by the
 # INPUT at the call site (not any threshold in here) and passed in as is_quick_pass:
