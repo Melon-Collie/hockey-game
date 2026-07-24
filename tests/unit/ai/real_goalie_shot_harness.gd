@@ -77,19 +77,15 @@ func settle(shooter: Vector3, ticks: int) -> void:
 		_ctrl._physics_process(DT)
 
 
-# Fire one shot from `shooter` toward the net-plane `aim` at `loft_level` /
-# `power_t` with `err_rad` of aim scatter, and march it against the live goalie.
-# Returns the outcome enum. The goalie keeps reacting to the real puck motion
-# throughout the flight (release read → drop/push/glove deploy).
-func fire(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
-		err_rad: float) -> int:
-	var goal := Vector3(0.0, 0.0, _goal_z)
-	# Launch: horizontal heading toward the aim (+ scatter), pace split into the
-	# horizontal component and the loft's fixed vertical launch (same model as
-	# ShotMechanics / shot_sim_harness so the two instruments are comparable).
+# Launch velocity for a shot from `shooter` toward the net-plane `aim`: horizontal
+# heading toward the aim (+ scatter), pace split into the horizontal component and
+# the loft's fixed vertical launch (same model as ShotMechanics / shot_sim_harness
+# so the two instruments are comparable). Vector3.ZERO if the aim is degenerate.
+func shot_velocity(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
+		err_rad: float) -> Vector3:
 	var to_aim := Vector2(aim.x - shooter.x, aim.z - shooter.z)
 	if to_aim.length() < 0.001:
-		return WIDE
+		return Vector3.ZERO
 	var ang: float = to_aim.angle() + err_rad
 	var hdir := Vector2(cos(ang), sin(ang))
 	var speed: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S \
@@ -98,8 +94,14 @@ func fire(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
 	var loft_vy: float = ShotMechanics._loft_vy(loft_level,
 			GameRules.DEFAULT_LOFT_VY_LOW_M_S, GameRules.DEFAULT_LOFT_VY_HIGH_M_S)
 	var v_h: float = sqrt(maxf(speed * speed - loft_vy * loft_vy, 1.0))
-	var vel := Vector3(hdir.x * v_h, loft_vy, hdir.y * v_h)
+	return Vector3(hdir.x * v_h, loft_vy, hdir.y * v_h)
 
+
+func fire(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
+		err_rad: float) -> int:
+	var vel: Vector3 = shot_velocity(shooter, aim, loft_level, power_t, err_rad)
+	if vel == Vector3.ZERO:
+		return WIDE
 	_shooter.global_position = shooter
 	# Release: the puck leaves the blade and flies as a shot.
 	_puck.clear_carrier()
@@ -107,6 +109,14 @@ func fire(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
+	return _march(shooter, vel)
+
+
+# March a released puck against the live goalie until it resolves. Shared by the
+# plain `fire` path and the windup/release path below.
+func _march(shooter: Vector3, vel_in: Vector3) -> int:
+	var goal := Vector3(0.0, 0.0, _goal_z)
+	var vel: Vector3 = vel_in
 	var pos: Vector3 = shooter
 	pos.y = _puck.ice_height
 	var goal_dir: float = signf(goal.z - shooter.z)   # sign of z travel toward the net
@@ -191,3 +201,73 @@ func _net_verdict(cross_x: float, cross_y: float) -> int:
 			return POST
 		return WIDE
 	return GOAL
+
+
+# ── Windup → release path (the DISGUISE instrument) ──────────────────────────
+# `settle` + `fire` above never exercise the RELEASE event: the puck simply
+# appears in flight and the goalie picks it up through the universal-reaction
+# path, which explicitly grants no pre-arm. That is the right scope for raw
+# reach measurement, but it cannot see anything about what the goalie READ
+# before the shot — so it cannot measure disguise.
+#
+# This pair drives the real read pipeline instead:
+#   hold_windup()  — the carrier sits in WRISTER_AIM with the puck pinned,
+#                    publishing `declared_aim` as predicted_shot_velocity. This is
+#                    the aim the goalie fixates on: it feeds the pre-lean, the
+#                    pinned-windup squaring, and the quiet-eye pre-arm timer.
+#   fire_release() — clears the carry and emits puck_released with the ACTUAL
+#                    shot velocity, so GoalieController._on_puck_released runs
+#                    (consuming any pre-arm) exactly as it does in a real game.
+#
+# Pointing `declared_aim` and the release aim at the SAME corner is a telegraphed
+# shot; pointing them at OPPOSITE corners is a late swing — the disguised,
+# against-the-grain release. The save-rate delta between those two arms is the
+# measurement.
+
+
+# Hold a wrister windup aimed at `declared_aim` for `ticks`, with the goalie
+# tracking it live. Puck stays pinned on the carrier (the body-local freeze).
+func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
+		power_t: float, ticks: int) -> void:
+	_shooter.global_position = shooter
+	_shooter.velocity = Vector3.ZERO
+	_shooter.current_shot_state = SkaterStateMachine.State.WRISTER_AIM
+	# What the goalie can read off the windup: the shot that would fire right now.
+	_shooter.predicted_shot_velocity = shot_velocity(
+			shooter, declared_aim, loft_level, power_t, 0.0)
+	_puck.set_carrier(_shooter)
+	for _i: int in ticks:
+		_puck.global_position = shooter
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+
+
+# Release toward `aim` through the real puck_released event and march it.
+func fire_release(shooter: Vector3, aim: Vector3, loft_level: int,
+		power_t: float, err_rad: float) -> int:
+	var vel: Vector3 = shot_velocity(shooter, aim, loft_level, power_t, err_rad)
+	if vel == Vector3.ZERO:
+		return WIDE
+	last_part = -1
+	last_contact_pos = Vector3.INF
+	last_cross = Vector3.INF
+	last_goalie_pos = Vector3.INF
+	_shooter.current_shot_state = SkaterStateMachine.State.FOLLOW_THROUGH
+	_puck.clear_carrier()
+	var pos: Vector3 = shooter
+	pos.y = _puck.ice_height
+	_puck.global_position = pos
+	# The real release read: apply_release_velocity queues the launch the way
+	# release() does, so the goalie's get_release_velocity() sees the true shot on
+	# the signal frame.
+	_puck.apply_release_velocity(vel)
+	_puck.puck_released.emit()
+	return _march(shooter, vel)
+
+
+# One windup→release trial. `declared_aim == aim` is telegraphed; a different
+# `declared_aim` is a late swing. Returns the outcome enum.
+func windup_shot(shooter: Vector3, declared_aim: Vector3, aim: Vector3,
+		loft_level: int, power_t: float, windup_ticks: int) -> int:
+	hold_windup(shooter, declared_aim, loft_level, power_t, windup_ticks)
+	return fire_release(shooter, aim, loft_level, power_t, 0.0)

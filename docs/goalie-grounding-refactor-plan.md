@@ -455,6 +455,41 @@ one**. Three consequences, all observed in play:
 3. **The shot the design most wants rewarded — a well-disguised wrister against
    the grain — is the one the model cannot represent.**
 
+### 5.1a MEASURED: disguise is worth 5 milliseconds
+
+§5.1 was a code-reading claim. It is now instrumented —
+`tests/unit/ai/test_goalie_disguise_read.gd`, built on the real
+`GoalieController` + real analytic save loop, driving the **real release path**
+(`hold_windup` publishes a declared aim through `predicted_shot_velocity`, then
+`fire_release` emits `puck_released` so `_on_puck_released` runs and the pre-arm
+is consumed). Two arms, identical in every other respect, no RNG:
+
+| | telegraphed | disguised (late swing) |
+|---|---|---|
+| goals | 3 / 14 | 2 / 14 |
+| mean glove reach gap at release | 0.572 m | 0.596 m |
+
+**Selling the goalie the wrong corner for a full 0.5 s of windup buys +0.025 m of
+extra glove travel — 5.0 ms at `glove_react_max_speed`. And zero goals.**
+
+The 5 ms is the entire current value of deception, and it arrives through the one
+channel that reaches the goalie at all: the **directional pre-lean**, which by
+design "never adds save speed — it only changes the resting hand position." The
+positional read and the timing are both exact, so the shooter moves the glove a
+hair and nothing else. *The reach gap moves; the scoreboard does not.* That
+signature is the defect, measured.
+
+Two instrument lessons worth keeping:
+
+- **Shot type matters.** A first pass measured FLAT corner shots and found
+  nothing — correctly, since a low corner is a PAD save and the pre-lean moves
+  the GLOVE. Disguise can only be visible on elevated shots. The instrument uses
+  HIGH loft at the top corners.
+- **Use the continuous metric.** Goal counts on the real-goalie instrument are
+  near-binary per scenario, so a 14-shot count swings ±1 on one incidental flip
+  (the first run showed disguise at *−1 goal*, pure artifact). The reach gap is
+  the signal; goals are context.
+
 ### 5.2 The fix: apply the read latency to WHAT HE KNOWS, not just when he moves
 
 The signal already exists. `SkaterController` publishes
@@ -749,7 +784,14 @@ the suite green.
   R1/R3. Without it, every item below is a guess, and none of them can be
   playtested by the agent. **It is the single highest-leverage next task.**
 
-- **Step 0b** — record the **bot-vs-goalie** baseline too, from the existing
+- ~~**Step 0b (treatment arm)** — the disguise instrument.~~ ✅ **SHIPPED** —
+  `test_goalie_disguise_read.gd` + `hold_windup` / `fire_release` / `shot_velocity`
+  on the real-goalie harness. Result in §5.1a: disguise is worth 5.0 ms and zero
+  goals. `EXPECT_DISGUISE_PAYS` flips to `true` when R1 lands, at which point the
+  disguised arm must score strictly more AND the telegraphed arm must not get
+  easier — that pair is R1's acceptance criterion.
+
+- **Step 0b (control arm)** — record the **bot-vs-goalie** baseline too, from the existing
   `test_real_rush_sim.gd` / `rush_sim_harness.gd` pair. Per §5.6 these rates must
   be **unchanged** by R1 (a bot's aim is locked at charge tick 0, so it generates
   no disguise). Assert that as a regression invariant, not just a snapshot — if a
