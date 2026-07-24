@@ -32,28 +32,33 @@ the tuning bag, the perception layer, the decision layer, the actuation layer,
 and the network render path. The magic constants are concentrated there, and so
 is the threading blocker.
 
-Three headline findings:
+Four headline findings, most important first:
 
-- **§1 — The goalie double-counts the shooter's velocity through the whole
-  wrister windup.** During `WRISTER_AIM` the blade is frozen *body-local*, so the
-  puck rides the carrier rigidly and `_puck_velocity_est` **is** `carrier.velocity`
-  — yet the threat lead adds both, up to a 1.67× over-lead in tight. The slapper
-  branch already zeroes the puck lead for exactly this reason, and it matters
-  *more* on the wrister, because a slapper shooter is planted and decelerating
-  while a wrister shooter can be skating flat out. **A live over-lead on the
-  game's most common shot. Highest value, smallest diff.**
-- **§2 — The quiet-eye prearm is a step function, and `prime_slot_distance` is
-  the bandaid patching its dead zone.** The new wrister makes the honest
-  continuous model reachable — which is also the precondition realism-audit F15
-  named for raising `reaction_delay` off its sub-human 0.13 s floor. Two
-  bandaids delete.
+- **§5 — The goalie has no concept of being wrong.** His read of where the puck
+  is going is *exact*, on the release frame, and re-projected perfectly every
+  tick. `GoalieSkillProfile`'s 16 knobs are 6 latency / 4 speed / 5 geometry /
+  1 decision / **0 accuracy** — so every tier is a *slower omniscient* goalie
+  rather than a weaker one. Consequence: the only lever against him is geometry,
+  and **disguise, deception and late releases are worth exactly zero.** The fix
+  (apply the read latency to *what he knows*, not just when he moves) is
+  deterministic, needs no RNG, reuses a signal that already exists, and makes
+  Normal/Hard differ in *sharpness* instead of only limb speed. **The headline
+  change.**
+- **§1 — The goalie double-counted the shooter's velocity through the whole
+  wrister windup.** ✅ *Shipped.* The puck rides a body-local pin, so
+  `_puck_velocity_est` **is** `carrier.velocity`, yet the threat lead added both
+  — a 51 % over-lead measured at 2 m/s lateral, scaling with carrier speed.
 - **§3 — Seven independent models can pull depth; six can trigger the butterfly.
   Nobody owns the composition.** Each was added correctly and tested in
   isolation. The *interaction* is unmodeled, and that is the real source of the
   hand-tuned feel — more than any single constant.
+- **§2 — The quiet-eye prearm is a step function, and `prime_slot_distance` is
+  the bandaid patching its dead zone.** Folds into §5's fix: fixation should buy
+  a *fresher read* as well as a faster start.
 
-Recommended order: **§1 → §2 → §5 Step 0 (characterization) → refactor → §3.**
-§1 and §2 net-*remove* behavior, which makes the refactor smaller.
+**Full sequencing for every item in this document is §7.** Short version:
+instrument first (Step 0), then the over-performance work (§5), then the
+refactor (§6) with the grounding cleanup (§4) riding along inside it.
 
 ---
 
@@ -214,6 +219,14 @@ much live during a wrister windup, because `carrier.velocity` is real.
 **Recommendation: keep not dropping.** Only the stated reason changes. Flagged
 because a future reader would otherwise inherit "the puck is frozen, so this is a
 commit" — which is exactly backwards for the wrister.
+
+---
+
+### 1.6 Stale doc references — ✅ SHIPPED
+
+Doc-blocks describing the removed drag-aim wrister ("wrister drag",
+"world-aligned drag", "hold or cancel indefinitely") in `goalie_controller.gd`
+and `goalie_skill_profile.gd`, corrected per CLAUDE.md's stale-docs rule.
 
 ---
 
@@ -405,9 +418,160 @@ Worth stating explicitly so a future pass doesn't "fix" these:
 
 ---
 
-## 5. Refactor plan (#519)
+## 5. Over-performance — where the goalie beats a real goalie
 
-### 5.1 Why the current shape blocks threading
+§4 asked "is this number grounded?". This section asks a different question:
+**where is the goalie simply better than a real one, and at stopping what?**
+Design intent (`CLAUDE.md`) is *beatable realism* — "the realism additions only
+ever open scoring windows, never buff a set goalie into a brick wall."
+
+### 5.1 The goalie has no concept of being wrong — R1
+
+His model has three parts. Two are richly built; the third does not exist.
+
+| | Modeled? |
+|---|---|
+| **WHEN** he starts moving | Richly — `reaction_delay`, `arm_reaction_delay`, the prearm, screen occlusion, the caught-moving penalty, butterfly drop time |
+| **HOW FAST** he moves | Richly — `t_push_speed`, `lateral_accel`, `glove_react_max_speed`, `reachable_lateral_distance` |
+| **WHERE he thinks the puck is going** | **Perfect. Always. Every shot.** |
+
+`_on_puck_released` reads `puck.get_release_velocity()` — the exact velocity, on
+the exact frame of release, before physics has applied it — and solves the impact
+point with exact ballistics. `_update_tracking` then **re-projects it every tick**
+off the true `linear_velocity`. There is no error term anywhere in the goalie.
+
+`GoalieSkillProfile`'s 16 knobs confirm it structurally: **6 latency, 4 speed,
+5 geometry, 1 decision, 0 accuracy.**
+
+So every difficulty tier is *"a goalie who knows exactly where the puck is going,
+but starts late and moves slow"* — not a weaker goalie, a **slower omniscient
+one**. Three consequences, all observed in play:
+
+1. **Normal is hard to beat** because perfect knowledge of the destination is
+   worth more than reaction time.
+2. **The only lever against him is geometry** — pick a corner past his physical
+   reach. Disguise, deception, changeups and late releases are worth *exactly
+   zero*, because there is nothing to deceive.
+3. **The shot the design most wants rewarded — a well-disguised wrister against
+   the grain — is the one the model cannot represent.**
+
+### 5.2 The fix: apply the read latency to WHAT HE KNOWS, not just when he moves
+
+The signal already exists. `SkaterController` publishes
+`predicted_shot_velocity` every tick of the coil — the goalie is *already*
+watching the aim develop (the pre-lean and the shade both read it). The only
+reason disguise pays nothing is that **at release he discards it and takes the
+truth.**
+
+So: seed the impact prediction from the aim as of `read_lag` ago, then let it
+**converge toward the truth as the puck flies** and he genuinely observes it.
+
+**This introduces NO RNG — that invariant is non-negotiable and is preserved.**
+The read is a pure deterministic function of what the shooter did with their aim.
+See §5.3.
+
+Emergent behavior, with no new authoring:
+
+| Situation | Result |
+|---|---|
+| Aim stable through the windup | stale sample == truth → **reads it perfectly.** Today's behavior. Bad shots stay saved. |
+| Late flick / against the grain | committed to the old aim → starts the wrong way → **beaten, and it *looks* right** (you see him bite) |
+| Snap release, no windup | no sample to be stale → falls back to observing flight (today's cold read) |
+| Long shot | lots of flight time to converge → **reads it** |
+| Shot in tight | no time to converge → **doesn't** |
+| Screened shot | no observation to converge *with* → the screen costs him **accuracy**, not just tempo — which is what a screen actually does |
+| **Deflection / tip** | read converges to the *new* line over `read_lag` → **a tip in tight beats him, a tip from distance doesn't** — see §5.4 |
+
+The last four rows are the real distribution falling out of one mechanism rather
+than being tuned in.
+
+**Tuning fit.** This is exactly the stated goal of *same logic, tuned
+differently*: Normal gets a staler read (fooled more by disguise), Hard a fresher
+one. Same behavior, different sharpness — instead of today's "same omniscience,
+slower limbs." One new `GoalieSkillProfile` knob (`read_lag_s`), same category as
+the six latency knobs already there.
+
+### 5.3 Why this is fair, and why it is not RNG
+
+**Standing invariant: the goalie contains no randomness.** Losing to a goalie who
+"low-rolled his perception" feels terrible, and both teams field identical
+goalies, so it must *read* as identical. Note this is a **design invariant, not a
+technical one**: the goalie AI is host-only (clients are pure interpolators), so
+RNG there would not desync anything — only `GoalieSaveRules` is
+determinism-constrained by client prediction, and it is already explicitly
+RNG-free. The rule is a deliberate fairness choice and must be defended as one.
+
+The read-lag model satisfies it by construction, because **a model can be wrong
+deterministically**:
+
+- **No dice, no seed, no roll.** The read is `predicted_shot_velocity(t − lag)`,
+  a pure function of the shooter's own input history.
+- **Symmetric.** Both goalies run the same lag; the same shot fools both ends of
+  the rink identically.
+- **Repeatable.** Same input history → same read → same outcome. Replays exact.
+- **Attributable.** When you are beaten it is because the shooter disguised it —
+  never "the goalie rolled badly." The replay shows him biting on the aim he was
+  sold.
+- **Learnable both ways.** A disguised release *reliably* beats him; a
+  telegraphed one *reliably* does not. That is skill expression, the opposite of
+  variance.
+
+A goalie who bites on a fake is wrong — but wrong *because you faked him*, which
+is the fairest way to be scored on. Today he is never wrong, which is precisely
+why geometry is the only lever.
+
+**Known asymmetry to accept or fix deliberately:** bots commit
+`bot_wrister_aim_dir` at decision time and hold it, so a bot's published aim is
+rock-stable — **bots would never disguise a shot and would never fool the
+goalie**, while humans could. That is fair between the two goalies (both face it
+identically) and arguably correct (bots do not deceive today), but it does make
+human shooters relatively stronger, which shifts 3v3 balance. It is also a free
+lever later: a late aim swing is a behavior higher-tier bots could be given at
+zero cost to the goalie.
+
+### 5.4 The deflection mechanic is partly defeated by instant re-projection — R2
+
+`_update_tracking` re-projects the impact point every tick off the puck's live
+velocity (`_reaction.update_impact`), so when a tip changes the trajectory **the
+goalie re-solves the new one on the same frame it changes.**
+
+The design invests heavily in deflections — deliberate deflect on Q, loft levels
+signing the redirect, LOW documented as "the money tip — lift a low shot up and
+in," the whole bobble→live-redirect spectrum. But the *entire point* of a tip is
+that it beats the goalie's **read**, not his reach: a real tip works because he is
+committed to the original line and physically cannot re-read inside ~0.1 s. Here
+he re-reads instantly, so a tip mostly just relocates an already-perfect glove.
+
+R1's fix resolves this for free and deterministically (see the table above), which
+is a strong independent argument for it: it makes a mechanic you already built
+actually pay.
+
+### 5.5 Rebound suppression — R3, measure before touching
+
+Three overlapping effects make second chances rare, which compounds R1: if first
+shots are hard to score *and* rebounds are scarce, the goalie reads as a wall.
+**Lower confidence — these want harness measurement (Step 0) before any change.**
+
+- **Butterfly is nearly always sealed.** Six proactive triggers (§3), *plus*
+  `_on_puck_contact` auto-drops him on **any** save — including a high glove save.
+  The union makes "caught upright by a low shot" close to impossible. Real goalies
+  are caught upright constantly.
+- **Pads deaden everything ≤ 28 m/s into a steered corner exit**
+  (`pad_max_incoming_speed`). Most wristers live under 28, so the common case
+  yields a *controlled* rebound rather than a slot scramble.
+- **Chest and glove are controlled saves at any speed** —
+  `is_controlled_save` returns true unconditionally for both. A 40 m/s slapper
+  into the chest is absorbed dead, which is not what a 40 m/s shot off a chest
+  does.
+
+Each is individually defensible modern doctrine; the question is whether their
+*union* leaves enough second chances. That is a measurement, not an argument.
+
+---
+
+## 6. Refactor plan (#519)
+
+### 6.1 Why the current shape blocks threading
 
 `docs/ai-threading-plan.md:177-199` deferred the goalie with a precise diagnosis:
 
@@ -423,7 +587,7 @@ solved this already: `AICoordinator` works because `decide()` reads a frozen
 `WorldSnapshot` and writes only an `InputState`. The goalie has no equivalent
 seam.
 
-### 5.2 Target decomposition
+### 6.2 Target decomposition
 
 Split **by phase of the tick**, not by feature — that is what makes it threadable
 *and* what makes it testable.
@@ -444,7 +608,7 @@ Split **by phase of the tick**, not by feature — that is what makes it threada
 field copy (`:1181`), `_configure_collaborators`'s 45-line manual push (`:1277`),
 and the fact that "the tuning bag" is currently the same object as "the AI."
 
-### 5.3 Sequencing — each step independently shippable, suite green
+### 6.3 Sequencing — each step independently shippable, suite green
 
 **Step 0 — Characterization harness (do this first, always).**
 `tests/unit/ai/real_goalie_shot_harness.gd` already drives the *real* controller
@@ -474,7 +638,7 @@ Step 0's matrix must exist first.
 + `team_id`) and moving `GoalieDecision` onto the existing `AICoordinator`
 worker. The mutation split already exists from Step 3/4.
 
-### 5.4 Where the feel work fits
+### 6.4 Where the feel work fits
 
 Land **§1 (W1/W2) and §2 before Step 3.** They are small, high-value, measurable
 against Step 0's matrix, and they *net-delete* behavior — which makes Steps 3–4
@@ -486,29 +650,110 @@ is a model replacing a curve inside the code being restructured anyway.
 
 ---
 
-## 6. Suggested first tranche
+## 7. Roadmap — everything, in order
 
-Smallest diff with the highest ratio of "goalie reads the world" to "goalie was
-told the answer":
+Every item raised in this document, sequenced. Nothing here is dropped; items
+already shipped are struck through. Each tranche is independently shippable with
+the suite green.
 
-1. Step 0 — extend the shot-outcome harness into a committed baseline matrix.
-2. ~~W1 — `state_pins_puck`; stop double-counting carrier velocity through a
-   wrister windup.~~ **✅ SHIPPED.** Measured at 3.5 m / 2.0 m/s lateral: lead
-   0.240 m (carrier only) vs 0.362 m double-counted — a 51 % over-lead removed,
-   scaling with carrier speed.
-3. ~~W2 — same predicate for the chest bias during a windup.~~ **✅ SHIPPED**
-   (`shooter_weight_pinned_windup`).
-4. W3 — mobility-bounded aim shade; delete `slapper_aim_shade`. Held back
-   deliberately: the shade is gated on the new `_reading_planted_windup`
-   (slapper-only) until the origin-relocation bound exists.
-5. §2 — continuous fixation map on wall-clock (§2.3: *not* stability-weighted —
-   the caught-moving penalty already prices that); delete `prime_slot_distance`;
-   optionally raise `reaction_delay` to 0.18 behind the skill-profile seam.
-6. G1 — fold the lateral-pressure curve into the backdoor race solve.
+### Tranche A — shipped
 
-Items 2–6 remove **four** hand-tuned constants and one whole behavior, and every
-one of them replaces a curve with a quantity the goalie can physically see.
-Item 2 is the only one that is unambiguously a defect fix; 3–6 change feel.
+- ~~**W1** (§1.2) — `state_pins_puck`; stop double-counting carrier velocity
+  through a wrister windup.~~ ✅ Measured at 3.5 m / 2.0 m/s lateral: lead
+  0.240 m (carrier only) vs 0.362 m double-counted — a 51 % over-lead removed,
+  scaling with carrier speed.
+- ~~**W2** (§1.3) — same predicate for the chest bias during a windup
+  (`shooter_weight_pinned_windup`).~~ ✅
+- ~~**W4** (§1.5) — correct the doorstep-drop rationale (conclusion unchanged).~~ ✅
+- ~~Stale drag-aim wrister doc references (§1.6).~~ ✅
 
-All of it needs a local playtest — none of the feel claims here have been
-verified in a running game.
+### Tranche B — the instrument (do this next, it gates everything after)
+
+- **Step 0** (§6.3) — extend `tests/unit/ai/real_goalie_shot_harness.gd` into a
+  committed **save-rate matrix**: range × angle × loft × shot type, and — new,
+  for R1 — **× disguise** (aim held stable vs. swung late in the windup) and
+  **× tip-vs-clean**. Record the baseline.
+
+  This is the safety net for the refactor *and* the measuring instrument for
+  R1/R3. Without it, every item below is a guess, and none of them can be
+  playtested by the agent. **It is the single highest-leverage next task.**
+
+### Tranche C — over-performance (the feel work)
+
+Do this *before* the refactor: these items net-*remove* behavior, which makes the
+refactor smaller, and a feel regression is impossible to bisect after a large
+restructure.
+
+1. **R1** (§5.1–5.3) — the read-lag model. **The headline change.** Deterministic,
+   no RNG, one new `GoalieSkillProfile` knob (`read_lag_s`). Turns disguise from
+   worthless into the primary skill lever, and makes Normal/Hard differ in
+   *sharpness* rather than only in limb speed.
+   - Sub-item: fold the **prearm** (§2) into it — fixation should buy a
+     **fresher read** as well as a faster start. That unifies the quiet-eye prime
+     into one coherent mechanism instead of a motor-only prime, and it is what
+     makes `prime_slot_distance` (§2.2) safe to delete.
+   - Sub-item: **R2** (§5.4) — deflections stop being instantly re-read. Falls out
+     for free; verify against the Step 0 tip matrix.
+2. **W3** (§1.4) — the aim shade. Re-evaluate *after* R1: with a lagged read the
+   shade already uses the stale aim, so a late relocation shades him wrong
+   automatically. **The origin-relocation bound may become unnecessary** — check
+   before building it. If it survives, it is also where `slapper_aim_shade`'s
+   magic `0.7` gets replaced by `reachable_lateral_distance`.
+3. **R3** (§5.5) — rebound suppression. Measure the union of the three effects
+   against the Step 0 matrix first; only then decide whether to loosen the
+   auto-butterfly on save, `pad_max_incoming_speed`, or the unconditional
+   chest/glove absorb.
+
+### Tranche D — the refactor (§6)
+
+1. **Step 1** — `GoalieTuning` resource (930 lines out; also fixes
+   `_apply_skill_profile`'s manual field copy and `_configure_collaborators`'s
+   manual push).
+2. **Step 2** — extract `GoaliePuckPlay` + `GoalieCreaseClear` (~550 lines,
+   ~23 member vars out).
+3. **Step 3** — `GoalieWorldView` + `GoaliePerception`.
+   **Note the fit: R1's lagged read is a *perception* concern, and this is its
+   natural home.** If R1 lands first (recommended), Step 3 is where it stops
+   being a special case and becomes just how perception works.
+4. **Step 4** — `GoalieDecision` split, plus `GoalieDepthSolver` /
+   `GoalieSaveSelection` (§3 — the composition owners). The only step with real
+   behavior risk, which is why Tranche B exists.
+5. **Step 5** — threading. Now a small change: three replicated-state additions
+   and moving `GoalieDecision` onto the existing `AICoordinator` worker.
+
+### Tranche E — grounding cleanup (§4), folded into Tranche D
+
+Each Tier-1 item is a model replacing a curve *inside* code Step 4 is
+restructuring anyway, so they ride along rather than being a separate pass:
+
+- **G1** — fold the lateral-pressure curve into the backdoor race solve (two
+  behaviors become one model).
+- **G4** — `net_margin = 3.0` on a 0.915 m half-width net; split tracking margin
+  from freeze margin, or derive from stick reach.
+- **G5 / G6** — `recovery_proximity_threshold` and the `_is_threat_pressing`
+  ladder → one race ("can a shot from there beat my stand-up?").
+- **G7** — `prelean_strength` → bounded by arm recoverability.
+- **G8** — the three imminence gates → one honest shot-vs-pass classification
+  plumbed through the release event (also removes the `_universal_shot_cfg`
+  clone, G12).
+- **Tier 2 (G9–G13)** — derive the inline `0.38`, de-duplicate
+  `cross_crease_drive_edge`, demote the pad-geometry exports to derived
+  constants, name the remaining inline literals.
+
+### Open, deliberately not scheduled
+
+- **§1.4 W3's** fate depends on R1 — do not build the relocation bound
+  speculatively.
+- **The bot-disguise asymmetry** (§5.3) — a real balance consequence of R1.
+  Decide after playtesting whether higher-tier bots should learn a late aim
+  swing.
+
+---
+
+**Standing constraint on all of the above: no RNG in the goalie** (§5.3). Both
+teams field identical goalies and it must read that way. Model the error; never
+roll for it.
+
+**Standing caveat: none of the feel claims in this document have been verified in
+a running game.** The agent can run the GUT suite and the headless harnesses but
+cannot play the game. Every Tranche C item needs a local playtest.
