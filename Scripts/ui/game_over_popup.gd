@@ -247,6 +247,7 @@ func _build_bottom_block(root: Control) -> void:
 	_bottom_block.add_child(_vote_label)
 
 	var hint := _lbl("TAB · BOX SCORE", 12, MenuStyle.TEXT_MUTED)
+	hint.add_theme_font_override("font", MenuStyle.UI_FONT)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_bottom_block.add_child(hint)
 

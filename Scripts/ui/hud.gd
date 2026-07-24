@@ -633,6 +633,7 @@ func _build_bug_icon() -> void:
 # the eye to the prompt without yelling.
 func _build_skip_replay_prompt() -> void:
 	_skip_prompt_label = _lbl("[SPACE] TO SKIP", 18, _WHITE)
+	_skip_prompt_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	_skip_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_skip_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	_skip_prompt_label.anchor_left = 1.0
@@ -650,6 +651,7 @@ func _build_skip_replay_prompt() -> void:
 
 func _build_menu_hint() -> void:
 	_menu_hint_label = _lbl("[ESC] MENU", 16, _WHITE)
+	_menu_hint_label.add_theme_font_override("font", MenuStyle.UI_FONT)
 	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
 	# box straddling the 0.5 anchor), sitting 16px above the bottom.
 	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
