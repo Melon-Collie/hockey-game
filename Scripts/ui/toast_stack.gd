@@ -21,15 +21,15 @@ func _init() -> void:
 
 # Single-part toast: the whole text in `color`.
 func push(text: String, color: Color) -> void:
-	_push_labels([_make_label(text, 16, color)])
+	_push_labels([_make_label(text, 16, color, MenuStyle.UI_FONT)])
 
 
 # Two-part toast: `subject` (e.g. a player name — may contain spaces) in
 # `subject_color`, `detail` dimmed after it.
 func push_pair(subject: String, detail: String, subject_color: Color) -> void:
 	_push_labels([
-		_make_label(subject, 16, subject_color),
-		_make_label(detail, 16, MenuStyle.BROADCAST_DIM),
+		_make_label(subject, 16, subject_color, MenuStyle.DISPLAY_FONT),
+		_make_label(detail, 16, MenuStyle.BROADCAST_DIM, MenuStyle.UI_FONT),
 	])
 
 
@@ -73,10 +73,10 @@ func _push_labels(labels: Array[Label]) -> void:
 	tween.tween_callback(wrapper.queue_free)
 
 
-func _make_label(text: String, font_size: int, color: Color) -> Label:
+func _make_label(text: String, font_size: int, color: Color, font: Font) -> Label:
 	var lbl := Label.new()
 	lbl.text = text
-	lbl.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	lbl.add_theme_font_override("font", font)
 	lbl.add_theme_font_size_override("font_size", font_size)
 	lbl.add_theme_color_override("font_color", color)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE

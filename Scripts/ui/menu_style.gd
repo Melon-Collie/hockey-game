@@ -67,14 +67,23 @@ const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 # gray to match the game's precision-sport character. Tune here to shift
 # the whole HUD warmer/cooler/punchier.
 #
-# Typography is a two-font system, both OFL-licensed:
-#   - DISPLAY_FONT (Big Shoulders Display Black) — heavy condensed sans,
-#     matches the logo's wordmark. Used for scorebug numbers, headers,
-#     player-card identity labels.
+# Typography is a two-font system, both OFL-licensed (embeddable in the
+# exported build — unlike the logo's own wordmark face):
+#   - DISPLAY_FONT (Barlow Semi Condensed ExtraBold) — heavy condensed
+#     humanist sans, warm and punchy. Echoes the splayed M of the logo
+#     wordmark (which is set in Kenyan Coffee, a Typodermic face licensed
+#     for the logo/static art but NOT for embedding in the game, so the
+#     in-game display voice is this OFL stand-in). Used for scorebug
+#     numbers, headers, player-card identity labels.
 #   - UI_FONT (Manrope Regular) — humanist sans, neutral body text.
-#     Default font for menu rows, button labels, body copy.
-const DISPLAY_FONT       := preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")  # SIL OFL 1.1
+#     Default font for menu rows, button labels, body copy, stat tables.
+#   - NAME_FONT (Manrope SemiBold) — player names (lobby cards, jersey
+#     nameplates) and the scorebug's small caps labels (AWAY/HOME/SHOTS/
+#     period). The display face is reserved for numerals and the wordmark,
+#     so it reads as a broadcast accent rather than carrying every surface.
+const DISPLAY_FONT       := preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")  # SIL OFL 1.1
 const UI_FONT            := preload("res://Assets/Fonts/Manrope-Regular.ttf")  # SIL OFL 1.1
+const NAME_FONT          := preload("res://Assets/Fonts/Manrope-SemiBold.ttf")  # SIL OFL 1.1
 # Dark surface for HUD overlays. Now identical to PANEL_BG so the menu and
 # scorebug share a single dark background — no visible seam between the two
 # surfaces when both are on screen.
@@ -219,9 +228,10 @@ static func pulse(node: CanvasItem) -> Tween:
 	return t
 
 
-# Big Shoulders is tightly condensed; uppercase UI text at menu sizes needs a
-# touch of air between glyphs to stay legible. Built once and shared — every
-# heading / CTA / menu row references the same FontVariation.
+# The condensed display face wants a touch of air between glyphs when set in
+# uppercase at menu sizes. Built once and shared — popup/dialog headings and
+# primary CTAs reference this (main-menu identity); in-game menu rows use
+# name_font_spaced() (Manrope) instead so buttons read as clean UI.
 static var _display_font_spaced: FontVariation = null
 
 
@@ -231,6 +241,20 @@ static func display_font_spaced() -> FontVariation:
 		_display_font_spaced.base_font = DISPLAY_FONT
 		_display_font_spaced.set_spacing(TextServer.SPACING_GLYPH, 1)
 	return _display_font_spaced
+
+
+# Manrope SemiBold + tracking for uppercase in-game menu rows/buttons that
+# should read as clean UI rather than broadcast chrome. Same shared-instance
+# pattern as display_font_spaced().
+static var _name_font_spaced: FontVariation = null
+
+
+static func name_font_spaced() -> FontVariation:
+	if _name_font_spaced == null:
+		_name_font_spaced = FontVariation.new()
+		_name_font_spaced.base_font = NAME_FONT
+		_name_font_spaced.set_spacing(TextServer.SPACING_GLYPH, 1)
+	return _name_font_spaced
 
 
 # Heading treatment for popup/dialog titles — the condensed display font in
@@ -243,15 +267,15 @@ static func apply_heading(label: Label, font_size: int = 30) -> void:
 	label.add_theme_color_override("font_color", TEXT_TITLE)
 
 
-# Primary CTA treatment — the ButtonPrimary teal fill plus the display font
-# in caps, so the one loud button per screen reads athletic rather than
-# form-like. Uppercases the button's current text: call AFTER setting
-# btn.text, and any later dynamic text change must supply an uppercase
-# string itself (Button has no uppercase property).
+# Primary CTA treatment — the ButtonPrimary teal fill plus Manrope SemiBold
+# in caps, so the one loud button per screen reads as a clean control rather
+# than broadcast chrome. Uppercases the button's current text: call AFTER
+# setting btn.text, and any later dynamic text change must supply an
+# uppercase string itself (Button has no uppercase property).
 static func apply_primary_cta(btn: Button, font_size: int = 20) -> void:
 	btn.theme_type_variation = &"ButtonPrimary"
 	btn.text = btn.text.to_upper()
-	btn.add_theme_font_override("font", display_font_spaced())
+	btn.add_theme_font_override("font", name_font_spaced())
 	btn.add_theme_font_size_override("font_size", font_size)
 
 
