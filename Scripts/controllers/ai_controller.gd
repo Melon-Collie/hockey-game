@@ -85,9 +85,12 @@ var _script_shot_ticks: int = 0
 # Debug: floating label above each bot showing the bot's per-tick
 # decision breakdown. Refreshes only when the rendered text actually
 # changes (commit flip, winner flip, score moves enough to re-format)
-# so it doesn't flicker on every wobble. Toggle to false to disable
-# for shipping.
-const SHOW_DEBUG_LABEL: bool = false
+# so it doesn't flicker on every wobble.
+#
+# Derived from the state machine's gate rather than set here: the SM builds the
+# readout strings on the AI worker at dispatch rate, so the label and the work
+# that feeds it must switch together. Flip SkaterAgentStateMachine.DEBUG_DECISIONS.
+const SHOW_DEBUG_LABEL: bool = SkaterAgentStateMachine.DEBUG_DECISIONS
 const DEBUG_LABEL_HEIGHT_M: float = 2.4    # above the head
 var _debug_label: Label3D = null
 var _debug_last_text: String = ""

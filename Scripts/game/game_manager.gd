@@ -3697,14 +3697,16 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	# and this signal fires on the deliverer's machine, so gate on local peer.
 	if hitter_peer_id == NetworkManager.local_peer_id():
 		local_player_landed_hit.emit(impulse_magnitude)
-		# impact_force scale = weight × closing speed: a check REGISTERS at ~3
-		# (MIN_HIT_IMPULSE), a one-sided full-strength check lands ~4, a knockdown
-		# ~5.5, and a hard head-on mutual collision ~12-14. Kick the camera along
-		# the direction you drove the hit (follow-through), from a light kick at a
-		# bare check up to full by a knockdown-class hit — so an ordinary lined-up
-		# check kicks, not only head-on collisions (the old 6.0/14 floor missed
-		# every one-sided check).
-		local_player_impact.emit(hit_dir, clampf((impulse_magnitude - 3.0) / 4.0, 0.0, 1.0))
+		# Kick the camera along the direction you drove the hit (follow-through),
+		# ramping from nothing at the register-a-hit floor to full one span above
+		# it — so an ordinary lined-up check kicks, not only head-on collisions
+		# (the old 6.0/14 floor missed every one-sided check). The impact_force
+		# scale's landmarks live on HitRules. The span is a hand-set camera FEEL
+		# value, not a landmark: it tops out a bit past KNOCKDOWN_IMPULSE so only
+		# the hardest hits max the kick.
+		const KICK_FULL_SPAN: float = 4.0
+		local_player_impact.emit(hit_dir, clampf(
+				(impulse_magnitude - HitRules.MIN_HIT_IMPULSE) / KICK_FULL_SPAN, 0.0, 1.0))
 		# Live achievement — excluded in free play / drills (no achievements there).
 		if _achievements != null and _achievements_active():
 			_achievements.on_local_hit(impulse_magnitude)
