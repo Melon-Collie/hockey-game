@@ -10,8 +10,8 @@ const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
 
 # Body-check feedback scales with hit strength (the impact_force = weight x
 # closing-speed the signal carries), normalized 0..1 between a light bump and a
-# big hit. Burst size/velocity and sound volume/pitch all read this so a freight-
-# train check reads bigger and lower than a glancing bump.
+# big hit. Burst size/velocity read this so a freight-train check throws bigger,
+# faster debris than a glancing bump.
 const _CHECK_FORCE_MIN: float = 3.0   # impact_force of a glancing bump (matches HitRules.MIN_HIT_IMPULSE)
 const _CHECK_FORCE_REF: float = 14.0  # impact_force treated as a full-strength check
 # Burst particle budget at the low/high end of the intensity range.
@@ -19,11 +19,30 @@ const _CHECK_BURST_AMOUNT_MIN: int = 10
 const _CHECK_BURST_AMOUNT_MAX: int = 30
 const _CHECK_BURST_VEL_MIN: float = 2.5   # initial_velocity_max at a light hit
 const _CHECK_BURST_VEL_MAX: float = 9.0   # initial_velocity_max at a full hit
-# Sound: louder + lower-pitched as the hit gets harder.
-const _CHECK_VOL_MIN_DB: float = -6.0
-const _CHECK_VOL_MAX_DB: float = 3.0
-const _CHECK_PITCH_LIGHT: float = 1.10   # glancing bump — higher, snappier
-const _CHECK_PITCH_HEAVY: float = 0.90   # full check — lower, heavier thud
+
+# --- Body-check SOUND: reserved for hits with real weight behind them ---------
+# The impact BURST fires for every credited check (it scales with force via
+# check_intensity above), but the THUD is gated harder and rides its OWN curve:
+# an incidental bump or a board rub — two committed bodies grinding without a
+# real collision behind them — should make NO sound, or the hit audio
+# machine-guns through every scrum.
+#
+# The gate is in impact_force (weight x closing-speed) units, the same signal the
+# stagger keys off (BodyCheckRules reconstructs the victim impulse from it):
+#   ~3.0  MIN_HIT_IMPULSE — the bar to register a hit at all (~half a stagger)
+#   ~4.0  a full-strength check (victim ref_impulse 1.35 — "skate in at pace")
+#   ~5.5  a knockdown        (victim knockdown_impulse 1.8 — a committed solid hit)
+# Sound starts at the full-check floor (below it is a bump/rub: silent) and
+# reaches full volume by ~the knockdown point, so "loud thud" == "wobble or
+# knockdown" and softer contact is silent. These are FEEL tunables (how hard a
+# hit must land before you hear it), not evaluator constants.
+const _CHECK_SOUND_MIN_FORCE: float = 4.0    # below this the hit is silent (bump/rub)
+const _CHECK_SOUND_FULL_FORCE: float = 6.5   # at/above this the thud is at full volume
+# Sound: louder + lower-pitched across the audible (full-check .. knockdown) band.
+const _CHECK_VOL_MIN_DB: float = -9.0    # a just-audible full-strength check
+const _CHECK_VOL_MAX_DB: float = 3.0     # a knockdown-class hit
+const _CHECK_PITCH_LIGHT: float = 1.10   # full check — higher, snappier
+const _CHECK_PITCH_HEAVY: float = 0.90   # knockdown — lower, heavier thud
 
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
 # Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.
@@ -149,12 +168,29 @@ static func check_intensity(force: float) -> float:
 	return clampf((force - _CHECK_FORCE_MIN) / (_CHECK_FORCE_REF - _CHECK_FORCE_MIN), 0.0, 1.0)
 
 
+# True when a check is hard enough to earn a thud — a full-strength (stagger)
+# check or harder. Softer contact (incidental bumps, committed board rubs) stays
+# SILENT. Both the live and replay sound paths gate on this so no near-silent
+# BODY_CHECK player is ever spawned for a bump.
+static func check_sound_audible(force: float) -> bool:
+	return force >= _CHECK_SOUND_MIN_FORCE
+
+
+# 0..1 sound hardness — a SEPARATE, harder-gated curve than the burst's
+# check_intensity: 0 at the full-check floor, 1 by the knockdown point. Only
+# meaningful once check_sound_audible() has passed.
+static func check_sound_intensity(force: float) -> float:
+	if _CHECK_SOUND_FULL_FORCE <= _CHECK_SOUND_MIN_FORCE:
+		return 0.0
+	return clampf((force - _CHECK_SOUND_MIN_FORCE) / (_CHECK_SOUND_FULL_FORCE - _CHECK_SOUND_MIN_FORCE), 0.0, 1.0)
+
+
 static func check_sound_volume_db(force: float) -> float:
-	return lerpf(_CHECK_VOL_MIN_DB, _CHECK_VOL_MAX_DB, check_intensity(force))
+	return lerpf(_CHECK_VOL_MIN_DB, _CHECK_VOL_MAX_DB, check_sound_intensity(force))
 
 
 static func check_sound_pitch_scale(force: float) -> float:
-	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_intensity(force))
+	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_sound_intensity(force))
 
 
 # Public so ReplayEventReplayer can fire the burst during replay without

@@ -2567,9 +2567,12 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(impulse: Vector3) -> void:
 			local_player_hit.emit(impulse.length())
-			# Delivered-impulse scale (≈11 at a full hit, matching the stagger ref).
-			# Kicks in above a firm 5.0; the camera aims along the shove.
-			local_player_impact.emit(impulse, clampf((impulse.length() - 5.0) / 6.0, 0.0, 1.0)))
+			# Victim Δv scale (m/s), the same magnitude the stagger keys off:
+			# ~0.6 stagger floor, ~1.35 a full check, ~1.8 a knockdown, up to ~3.1
+			# maximal (BodyCheckRules). Kick the camera along the shove, from nothing
+			# at a sub-stagger bump up to full by a knockdown. The old 5.0/11 floor
+			# predated the inelastic-resolver rewrite (Δv shrank ~2×) and never fired.
+			local_player_impact.emit(impulse, clampf((impulse.length() - 0.6) / 1.5, 0.0, 1.0)))
 		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
 		# Historical positions of the OTHER skaters for the reconcile replay's
 		# body-check re-resolution (Slice C) — sampled from each remote's
@@ -3671,9 +3674,14 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	# and this signal fires on the deliverer's machine, so gate on local peer.
 	if hitter_peer_id == NetworkManager.local_peer_id():
 		local_player_landed_hit.emit(impulse_magnitude)
-		# impact_force scale (weight × approach, ≈14 at a full check). Kick the
-		# camera along the direction you drove the hit (follow-through).
-		local_player_impact.emit(hit_dir, clampf((impulse_magnitude - 6.0) / 8.0, 0.0, 1.0))
+		# impact_force scale = weight × closing speed: a check REGISTERS at ~3
+		# (MIN_HIT_IMPULSE), a one-sided full-strength check lands ~4, a knockdown
+		# ~5.5, and a hard head-on mutual collision ~12-14. Kick the camera along
+		# the direction you drove the hit (follow-through), from a light kick at a
+		# bare check up to full by a knockdown-class hit — so an ordinary lined-up
+		# check kicks, not only head-on collisions (the old 6.0/14 floor missed
+		# every one-sided check).
+		local_player_impact.emit(hit_dir, clampf((impulse_magnitude - 3.0) / 4.0, 0.0, 1.0))
 		# Live achievement — excluded in free play / drills (no achievements there).
 		if _achievements != null and _achievements_active():
 			_achievements.on_local_hit(impulse_magnitude)
@@ -3713,8 +3721,12 @@ func _on_body_check_landed(hitter_peer_id: int, victim_peer_id: int,
 	var vfx: SkaterVFX = victim_rec.skater.get_node_or_null("VFX") as SkaterVFX
 	if vfx != null:
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
-	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
-			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
+	# The burst fires for every credited check, but the thud is reserved for
+	# stagger-class-or-harder hits — a committed bump / board rub bursts faintly
+	# and stays silent (see SkaterVFX.check_sound_audible).
+	if SkaterVFX.check_sound_audible(force):
+		SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
+				SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
 	body_check_broadcast.emit(force)
 	# The hitter's check-delivery body pose (shoulder drive through the contact)
 	# rides the same broadcast as the burst/thud so all three land the identical
