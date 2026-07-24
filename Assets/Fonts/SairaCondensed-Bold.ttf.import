@@ -2,13 +2,13 @@
 
 importer="font_data_dynamic"
 type="FontFile"
-uid="uid://cs7ra9k2blvd8"
-path="res://.godot/imported/SairaCondensed-Bold.ttf-0a1b2c3d4e5f60718293a4b5c6d7e8f9.fontdata"
+uid="uid://cs7rbak2blvd8"
+path="res://.godot/imported/SairaCondensed-Bold.ttf-d1df3b1a0c57b4743c3ef8cf8caaedfa.fontdata"
 
 [deps]
 
 source_file="res://Assets/Fonts/SairaCondensed-Bold.ttf"
-dest_files=["res://.godot/imported/SairaCondensed-Bold.ttf-0a1b2c3d4e5f60718293a4b5c6d7e8f9.fontdata"]
+dest_files=["res://.godot/imported/SairaCondensed-Bold.ttf-d1df3b1a0c57b4743c3ef8cf8caaedfa.fontdata"]
 
 [params]
 

@@ -21,11 +21,12 @@ extends RefCounted
 # reads the frozen view, so there is no race. No mutex / double-buffer is needed:
 # main reads each result only after waiting on _done and before the next kick.
 #
-# Flip THREADED_AI to true (and rebuild) to enable the worker. Default off so the
-# shipped path is the validated single-threaded one; the threaded path can't be
-# exercised by the headless test suite and needs an in-game playtest.
+# THREADED_AI selects the path. Enabled: the worker runs the decisions. The
+# threaded path can't be exercised by the headless test suite (it bypasses the
+# coordinator), so it's validated in game — set this to false to fall back to the
+# single-threaded path if the worker ever misbehaves.
 
-const THREADED_AI := false
+const THREADED_AI := true
 
 # ── Worker plumbing (only used when THREADED_AI) ─────────────────────────────
 var _thread: Thread = null
