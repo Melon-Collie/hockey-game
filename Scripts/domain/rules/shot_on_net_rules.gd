@@ -14,12 +14,39 @@ class_name ShotOnNetRules
 # shot; slightly over-crediting beats swallowing real saves.
 
 const MARGIN: float = 0.15
+# "Directed at the net" — the wider Corsi/Fenwick mouth. A shot attempt is a puck
+# directed AT the net, which includes misses: Corsi counts shots that go wide or
+# hit the post, not just those that would go in. These margins widen is_on_net's
+# mouth so a shot missing within ~1.2 m of a post (or sailing under ~0.8 m over
+# the bar) still classifies as an attempt. They're hand-set *reporting* thresholds
+# (the same fuzzy line a human scorer draws for "was that even a shot?"), not
+# evaluator terms — tune in playtest. The vertical margin is smaller so a puck
+# flipped well over the glass reads as a clear/dump, not a shot.
+const DIRECTED_LATERAL_MARGIN: float = 1.2
+const DIRECTED_VERTICAL_MARGIN: float = 0.8
 
 
 # `goal_line_z` carries the end in its sign (± GameRules.GOAL_LINE_Z); the
 # goal mouth is centred on x = 0. False when the puck is moving parallel to or
 # away from that line.
 static func is_on_net(puck_pos: Vector3, puck_vel: Vector3, goal_line_z: float) -> bool:
+	return _crosses_mouth(puck_pos, puck_vel, goal_line_z, MARGIN, MARGIN)
+
+
+# The Corsi/Fenwick gate: is this release a SHOT (directed at the net) rather than
+# a pass or a clear? Same ballistic projection as is_on_net, widened by the
+# DIRECTED_* margins so misses still count. A pass to the wing, a cross-crease
+# feed (moving parallel to the goal line), or a dump-in projects outside the wide
+# mouth and reads false. A backdoor feed aimed straight at a teammate in the
+# crease can still read true here (it IS aimed at the net) — the "received by a
+# teammate" check upstream (ShotOnGoalTracker) reclassifies that as a pass.
+static func is_directed_at_net(puck_pos: Vector3, puck_vel: Vector3, goal_line_z: float) -> bool:
+	return _crosses_mouth(puck_pos, puck_vel, goal_line_z,
+			DIRECTED_LATERAL_MARGIN, DIRECTED_VERTICAL_MARGIN)
+
+
+static func _crosses_mouth(puck_pos: Vector3, puck_vel: Vector3, goal_line_z: float,
+		lateral_margin: float, vertical_margin: float) -> bool:
 	if absf(puck_vel.z) < 0.001:
 		return false
 	# Must approach the mouth from the FRONT: shots on the +Z goal travel +Z.
@@ -32,10 +59,10 @@ static func is_on_net(puck_pos: Vector3, puck_vel: Vector3, goal_line_z: float) 
 	if t <= 0.0:
 		return false  # already past the line
 	var x: float = puck_pos.x + puck_vel.x * t
-	if absf(x) > GameRules.NET_HALF_WIDTH + MARGIN:
+	if absf(x) > GameRules.NET_HALF_WIDTH + lateral_margin:
 		return false
 	var y: float = puck_pos.y + puck_vel.y * t \
 			- 0.5 * GameRules.GRAVITY_M_S2 * t * t
 	if y < 0.0:
 		y = 0.0  # arc lands short — the puck slides the rest of the way
-	return y <= GameRules.NET_HEIGHT + MARGIN
+	return y <= GameRules.NET_HEIGHT + vertical_margin

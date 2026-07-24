@@ -15,17 +15,36 @@ and tuned/calibrated against logged data (see §3.3).
 
 Status: **A1 IMPLEMENTED** (2026-07-24). Per-player Corsi/Fenwick counters
 (`shot_attempts`, `shot_attempts_blocked` on `PlayerStats`) via a new host-only
-`AdvancedStatsTracker` fed by `ShotOnGoalTracker`'s `shot_attempted` /
-`shot_attempt_blocked` (new) signals; broadcast (protocol v41,
-`STATS_PLAYER_RECORD_SIZE` 15→17); persisted to `career_stats` with report-time
-team-SOG columns for PDO; `career_totals` derives lifetime iCF / Fenwick / PDO;
-Career screen shows all three. Two v1 simplifications, deliberate:
-**(a)** Corsi counts one attempt per *release* — a rebound re-shot or mid-flight
-tip is not re-counted (off `shot_attempted`, which fires once per release).
-**(b)** "blocked" = the on-net-blocked set (same as the `shots_blocked` defensive
-stat), so a blocked-off-net shot isn't excluded from Fenwick. Both are minor,
-consistent, and documented at the call sites. **A2 (xG) and B (event log) are NOT
-STARTED.**
+`AdvancedStatsTracker`; broadcast (protocol v41, `STATS_PLAYER_RECORD_SIZE`
+15→17); persisted to `career_stats` with report-time team-SOG columns for PDO;
+`career_totals` derives lifetime iCF / Fenwick / PDO; Career screen shows all
+three.
+
+**Shot-vs-pass classification (the crux — a shot attempt is not a release).**
+Counting a Corsi attempt on every release over-counts badly: a quick pass, a
+wrister used as a pass, a backdoor feed, and a saucer to the slot are all
+releases but none are shots. Two facts can't distinguish them at release: the
+input type is discarded before the release signal (quick-pass and wrister collapse
+to the same `puck_release_requested`, `is_slapper=false`), and a backdoor feed is
+geometrically aimed at the goal mouth. So the count moved to shot **resolution**,
+where `ShotOnGoalTracker` applies the real Corsi definition — a puck **directed at
+the net** that resolves as **on-goal, missed, or blocked**:
+- **On-goal** (SOG/goal, `_confirm`) and **blocked** (`on_block`) already require
+  `_pending_on_net`, so passes (off-net) can't reach them. On-goal → Corsi+Fenwick;
+  blocked → Corsi only.
+- **Missed** (`_resolve_pending_miss`, on timeout / non-teammate pickup) requires
+  the release to have been **directed at the net** (`ShotOnNetRules.is_directed_at_net`,
+  the wider Corsi mouth: 1.2 m lateral / 0.8 m vertical margin) AND **not received
+  by a different teammate** (a backdoor feed / saucer the target collects is a
+  pass). The shooter recovering their own wide shot still counts.
+- One host-authoritative signal, `shot_counted(peer_id, blocked)`, feeds the
+  counter; attribution is the last attacking toucher (tipper on a tip).
+
+Accepted v1 edges (documented, minor): a hard backdoor feed a defender blocks
+in the lane reads as a blocked shot (real trackers score it that way too); a shot
+that misses by more than the 1.2 m margin isn't counted. The margins are hand-set
+*reporting* thresholds, tunable in playtest. **A2 (xG) and B (event log) are NOT
+STARTED** — but the directed-at-net gate is exactly A2's "is this a shot?" seam.
 
 ---
 

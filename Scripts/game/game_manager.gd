@@ -1400,8 +1400,7 @@ func _wire_subsystems() -> void:
 	# off the same shot-event signals. Counters ride the normal stats broadcast.
 	_advanced_stats_tracker = AdvancedStatsTracker.new()
 	_advanced_stats_tracker.setup(_registry)
-	_shot_tracker.shot_attempted.connect(_advanced_stats_tracker.on_shot_attempted)
-	_shot_tracker.shot_attempt_blocked.connect(_advanced_stats_tracker.on_shot_blocked)
+	_shot_tracker.shot_counted.connect(_advanced_stats_tracker.on_shot_counted)
 
 	# Host-only established-possession model (PossessionRules): turnover /
 	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
@@ -3378,11 +3377,19 @@ func _note_shot_trajectory() -> void:
 	# returns live linear_velocity.
 	var vel: Vector3 = puck.get_release_velocity()
 	var on_net: bool = false
+	var directed: bool = false
 	for goal: HockeyGoal in goals:
-		if ShotOnNetRules.is_on_net(pos, vel, goal.goal_line_z()):
+		var line_z: float = goal.goal_line_z()
+		if ShotOnNetRules.is_on_net(pos, vel, line_z):
 			on_net = true
+			directed = true
 			break
+		# Wider Corsi/Fenwick mouth: a shot that misses within the margin is still
+		# an attempt (is_on_net ⊆ is_directed_at_net, so only check when off net).
+		if ShotOnNetRules.is_directed_at_net(pos, vel, line_z):
+			directed = true
 	_shot_tracker.note_trajectory(on_net)
+	_shot_tracker.note_directed_at_net(directed)
 
 
 # Host-side: a shot off the pipes is a miss in NHL scoring — drop the pending
