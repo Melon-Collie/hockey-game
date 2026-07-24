@@ -286,6 +286,11 @@ var anti_aliasing_mode: int = AA_MSAA_2X
 # Higher = shots reach full power with a gentler flick. Local-only (applied by
 # LocalController); does not affect bots or the aim direction.
 var shot_power_sensitivity: float = 1.0
+# Accessibility: force keyboard/mouse only. Off by default (the pad drives on a
+# last-input-wins basis — see InputDeviceTracker). Turning it on makes
+# is_gamepad_active() always false, so a drifting/unwanted controller that can't be
+# unplugged is fully ignored and the game stays pure M+KB.
+var disable_gamepad: bool = false
 
 
 # First-run onboarding: false until the player opens the player-settings popup
@@ -544,6 +549,7 @@ func save() -> void:
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "shot_power_sensitivity", shot_power_sensitivity)
+	cfg.set_value("input", "disable_gamepad", disable_gamepad)
 	cfg.set_value("input", "confine_mouse", confine_mouse)
 	cfg.set_value("input", "cursor_style", cursor_style)
 	cfg.set_value("input", "cursor_color", cursor_color)
@@ -1173,6 +1179,7 @@ func _load() -> void:
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		shot_power_sensitivity = clampf(cfg.get_value("input", "shot_power_sensitivity", 1.0), 0.25, 4.0)
+		disable_gamepad = cfg.get_value("input", "disable_gamepad", false)
 		confine_mouse = cfg.get_value("input", "confine_mouse", true)
 		cursor_style = clampi(int(cfg.get_value("input", "cursor_style", CURSOR_STYLE_DOT)), 0, CURSOR_STYLE_LABELS.size() - 1)
 		var raw_cursor_color: Variant = cfg.get_value("input", "cursor_color", cursor_color)

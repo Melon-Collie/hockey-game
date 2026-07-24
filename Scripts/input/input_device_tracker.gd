@@ -62,10 +62,12 @@ func _ready() -> void:
 
 
 # The one question the rest of the game asks: is the gamepad the device driving
-# right now? Pure last-input-wins — no opt-in gate, so a pad works as soon as it's
-# used, and a mouse player who never touches a pad is simply always KBM.
+# right now? Last-input-wins — a pad works as soon as it's used, and a mouse player
+# who never touches a pad is simply always KBM. The sole gate is the accessibility
+# "force keyboard-only" pref (off by default), which pins this false so a
+# drifting/unwanted controller is ignored entirely.
 func is_gamepad_active() -> bool:
-	return _active == Device.GAMEPAD
+	return _active == Device.GAMEPAD and not PlayerPrefs.disable_gamepad
 
 
 func active_device() -> int:
@@ -119,6 +121,13 @@ func _emit_if_changed() -> void:
 		_emitted_gamepad = now
 		_restyle_ring()
 		device_changed.emit(now)
+
+
+# Re-evaluate the gate after the "force keyboard-only" pref flips (Options apply):
+# is_gamepad_active() may have changed with no new input, so restyle the ring and
+# re-broadcast so device-aware UI follows.
+func notify_gate_changed() -> void:
+	_emit_if_changed()
 
 
 # Teal border while the pad drives, zero-width (invisible) while the mouse does.

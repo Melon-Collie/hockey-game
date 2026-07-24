@@ -43,6 +43,7 @@ const _RESERVED_PAD_BUTTONS: Array = [JOY_BUTTON_START, JOY_BUTTON_BACK]
 
 var _shot_power_slider: HSlider = null
 var _shot_power_field: LineEdit = null
+var _disable_gamepad_check: CheckButton = null
 var _confine_mouse_check: CheckButton = null
 var _listening_action: String = ""
 var _pending_bindings: Dictionary = {}
@@ -57,7 +58,14 @@ func _build_content() -> void:
 
 	# No enable toggle: the pad drives whenever it's the most recently used device
 	# (InputDeviceTracker, last-input-wins) and yields the moment the mouse moves, so
-	# there's nothing to switch on. This section just documents the scheme + rebinds.
+	# there's nothing to switch on. The one control is an accessibility OFF switch —
+	# force keyboard/mouse only, to ignore a drifting controller that can't be
+	# unplugged. Off by default.
+	_disable_gamepad_check = CheckButton.new()
+	_disable_gamepad_check.set_pressed_no_signal(PlayerPrefs.disable_gamepad)
+	SoundManager.wire_button(_disable_gamepad_check)
+	_disable_gamepad_check.toggled.connect(func(_p: bool) -> void: _notify_changed())
+	add_child(_field_row("Keyboard/Mouse Only", _disable_gamepad_check))
 
 	# The fixed (non-rebindable) half of the scheme. The buttons are configurable
 	# below in "Gamepad Buttons", so they're deliberately not spelled out here —
@@ -333,6 +341,7 @@ func is_valid() -> bool:
 func read_controls() -> Dictionary:
 	return {
 		"shot_power_sensitivity": _shot_power_slider.value,
+		"disable_gamepad": _disable_gamepad_check.button_pressed,
 		"confine_mouse": _confine_mouse_check.button_pressed,
 		"bindings": _pending_bindings.duplicate(true),
 		"pad_bindings": _pending_pad_bindings.duplicate(true),
@@ -340,6 +349,7 @@ func read_controls() -> Dictionary:
 
 func apply_values(v: Dictionary) -> void:
 	_shot_power_slider.value = v.shot_power_sensitivity
+	_disable_gamepad_check.set_pressed_no_signal(v.disable_gamepad)
 	_confine_mouse_check.set_pressed_no_signal(v.confine_mouse)
 	_listening_action = ""
 	_listening_pad_action = ""
