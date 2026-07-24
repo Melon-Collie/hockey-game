@@ -130,7 +130,7 @@ var sweep_windup_max_yaw_deg: float = 25.0
 class Inputs:
 	var state: int  # GoalieStateMachine.State
 	var five_hole_openness: float = 0.0
-	var reading_slapper_tell: bool = false
+	var reading_shot_windup: bool = false  # slapper OR wrister wind-up — hands lift to half-ready
 	var reacting_to_shot: bool = false
 	var shot_is_elevated: bool = false
 	var shot_impact_x: float = 0.0
@@ -357,8 +357,8 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, -20.0)
 	c.glove_pos     = Vector3(-0.35, 1.19, -0.18)
 	c.glove_rot     = Vector3.ZERO
-	if inputs.reading_slapper_tell:
-		# Pose-only slapper tell: hands lifted to half-ready. Runs before the
+	if inputs.reading_shot_windup:
+		# Pose-only wind-up tell: hands lifted to half-ready. Runs before the
 		# elevated-shot reach so a real elevated shot can still override.
 		c.glove_pos.y += 0.06
 		c.blocker_pos.y += 0.06
@@ -386,7 +386,7 @@ func _set_ready_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, -20.0)
 	c.glove_pos     = Vector3(-0.42, 0.90, -0.32)
 	c.glove_rot     = Vector3.ZERO
-	if inputs.reading_slapper_tell:
+	if inputs.reading_shot_windup:
 		c.glove_pos.y += 0.06
 		c.blocker_pos.y += 0.06
 

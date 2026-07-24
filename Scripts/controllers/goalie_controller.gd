@@ -273,6 +273,26 @@ extends Node
 # flat buff). Kept below 1.0 so a well-placed, quick corner release can still beat
 # him (beatable realism). See _move_along_arc.
 @export_range(0.0, 1.0, 0.05) var slapper_aim_shade: float = 0.7
+# Wrister aim shade (anticipatory read, LAGGED). Same "cheat toward where the shot
+# will cross my plane" idea as slapper_aim_shade, but the wrister's aim is
+# origin→cursor resolved at RELEASE and never locked at press — so the published
+# predicted velocity live-updates as the shooter coils, and shading toward it
+# directly would let the goalie track the cursor perfectly (an unbeatable read that
+# breaks the beatable-realism contract). Instead the projected crossing is low-passed
+# through `_wrister_shade_x` at `wrister_shade_track_speed`: the goalie reads the coil
+# off the shoulders with a real tracking latency. A telegraphed, held aim lets the
+# shade catch up (he reads it — the punish for a lazy, honest wind-up); a disguised
+# late flick outruns the lag (the release beats the trailing shade — the counter).
+# Defaulted below the slapper's gain because the unlocked aim is inherently less
+# trustworthy, and kept < 1 so a quick, well-placed corner still beats him. See
+# _move_along_arc.
+@export_range(0.0, 1.0, 0.05) var wrister_aim_shade: float = 0.5
+# Quiet-eye tracking latency for the wrister shade, as a lerp rate (1/s): ~6 reaches
+# 63% of a step in ~0.17 s, a hand-and-eye tracking lag, so a cursor flick faster
+# than that outruns the shade. Feel knob (a difficulty dial, not an evaluator term) —
+# higher = the goalie follows the coil tighter (harder to disguise), lower = easier
+# to fool.
+@export var wrister_shade_track_speed: float = 6.0
 # Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
 # scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
 # effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
@@ -980,6 +1000,11 @@ var _puck_velocity_est: Vector3 = Vector3.ZERO
 var _prev_puck_position: Vector3 = Vector3.ZERO
 var _puck_approach_velocity: float = 0.0
 var _reading_slapper_tell: bool = false
+var _reading_wrister_tell: bool = false
+# Low-passed crossing-x for the wrister aim shade (the quiet-eye lag). INF means
+# uninitialized — it's seeded to the live crossing on the first frame of each
+# wind-up and reset to INF whenever no wrister is being read. See _move_along_arc.
+var _wrister_shade_x: float = INF
 # Cross-crease push state (standing "push on feet" toward a detected pass).
 # `_cross_crease_react_timer` counts down the human read delay after the pass is
 # detected; when it expires the push engages and `_cross_crease_timer` counts
@@ -1240,7 +1265,7 @@ func snap_to_standing_pose(open_five_hole: bool = false) -> void:
 	_five_hole_openness = pad_open
 	_pose_inputs.state = State.STANDING
 	_pose_inputs.five_hole_openness = pad_open
-	_pose_inputs.reading_slapper_tell = false
+	_pose_inputs.reading_shot_windup = false
 	_pose_inputs.reacting_to_shot = false
 	_pose_inputs.shot_is_elevated = false
 	_pose_inputs.current_x = _current_x
@@ -1426,6 +1451,8 @@ func reset_to_crease() -> void:
 	_target_x = _goal_center_x
 	_five_hole_openness = 0.0
 	_reading_slapper_tell = false
+	_reading_wrister_tell = false
+	_wrister_shade_x = INF
 	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
 	_prev_puck_position = _tracked_threat_position
@@ -1510,11 +1537,21 @@ func _update_tracking(delta: float) -> void:
 	_puck_velocity_est = (puck.global_position - _prev_puck_position) * inv_dt
 	_puck_approach_velocity = -_puck_velocity_est.z * _direction_sign
 	_prev_puck_position = puck.global_position
-	# Detect slapper windup on the carrier — stance tell, not a butterfly drop.
+	# Detect a committed shot wind-up on the carrier — a stance tell, not a butterfly
+	# drop. Both shots freeze the puck at the honest shot origin (the slapper pins it
+	# to a body offset, the wrister holds the blade at its frozen pose — both ride the
+	# body, no dangle jitter), so both earn the same square-to-origin tracking (see
+	# _compute_threat_position). They split ONLY on the aim shade: the slapper's aim is
+	# locked at press, the wrister's is origin→cursor at release, so the wrister read is
+	# lagged (see _move_along_arc). Upright-only.
 	var carrier: Skater = puck.get_carrier()
-	_reading_slapper_tell = carrier != null \
-			and carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
-			and _sm.is_upright()
+	var carrier_upright: bool = carrier != null and _sm.is_upright()
+	_reading_slapper_tell = carrier_upright \
+			and carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
+	_reading_wrister_tell = carrier_upright \
+			and carrier.current_shot_state == SkaterStateMachine.State.WRISTER_AIM
+	if not _reading_wrister_tell:
+		_wrister_shade_x = INF
 	# Compute desired threat target. With a carrier we lerp toward the
 	# blended (chest+puck) target so stickhandling jitter is smoothed. With
 	# no carrier (loose puck, rebound, shot in flight) the threat is the
@@ -1607,10 +1644,11 @@ func _compute_threat_position() -> Vector3:
 	_chest_t = chest_t
 	# Body bias fades OUT with distance (shooter_weight_far < base): the goalie
 	# squares to the puck at range and keeps only a small in-tight body dash.
-	# Slapshot windup is the exception: the puck is pinned (no jitter to reject)
-	# and IS the shot origin at every range, so square to it directly — no body
-	# bias, no distance blend. See shooter_weight_slapper_windup.
-	var w: float = shooter_weight_slapper_windup if _reading_slapper_tell \
+	# A shot wind-up (slapper OR wrister) is the exception: the puck is pinned/frozen
+	# (no jitter to reject) and IS the shot origin at every range, so square to it
+	# directly — no body bias, no distance blend. See shooter_weight_slapper_windup.
+	var reading_windup: bool = _reading_slapper_tell or _reading_wrister_tell
+	var w: float = shooter_weight_slapper_windup if reading_windup \
 			else lerpf(base_w, shooter_weight_far, chest_t)
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
@@ -1622,14 +1660,14 @@ func _compute_threat_position() -> Vector3:
 	# where it only chased stickhandling wiggle. Y is zeroed because skaters
 	# don't move vertically — leading height noise would drift the threat off ice.
 	#
-	# Slapshot windup is the exception: the puck is pinned to the body and moves
-	# WITH it, so `_puck_velocity_est` IS the carrier velocity — the two leads then
-	# double-count the same body motion (~1.67× lead in tight) and OVER-lead a
-	# lateral coast, over-committing the goalie ahead of the pinned puck and opening
-	# the against-the-grain side. There's no independent dangle to catch (the pin
-	# holds the offset fixed), so drop the puck lead during the windup and let the
-	# honest carrier lead alone keep the goalie square to a coasting slapper.
-	var puck_lead_scale: float = 0.0 if _reading_slapper_tell else (1.0 - chest_t)
+	# A shot wind-up (slapper OR wrister) is the exception: the puck is pinned/frozen
+	# to the body and moves WITH it, so `_puck_velocity_est` IS the carrier velocity —
+	# the two leads then double-count the same body motion (~1.67× lead in tight) and
+	# OVER-lead a lateral coast, over-committing the goalie ahead of the pinned puck and
+	# opening the against-the-grain side. There's no independent dangle to catch (the
+	# freeze holds the offset fixed), so drop the puck lead during the windup and let
+	# the honest carrier lead alone keep the goalie square to a coasting shooter.
+	var puck_lead_scale: float = 0.0 if reading_windup else (1.0 - chest_t)
 	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time \
 			+ _puck_velocity_est * puck_velocity_lead_time * puck_lead_scale
 	lead.y = 0.0
@@ -3120,24 +3158,43 @@ func _move_along_arc(delta: float) -> Vector2:
 	var cross_crease_push: bool = is_server and _cross_crease_timer > 0.0
 	if cross_crease_push:
 		target_xz.x = _cross_crease_target_x
-	# Slapper aim shade (anticipatory read): while reading a committed slot slapshot
-	# wind-up, cheat the angle toward where the shot will cross the goalie's depth
-	# plane — the real "he's lined it up top-far, I'll shade that way" read (see the
-	# slapper_aim_shade export). Ramped by wind-up read time so a quick release keeps
-	# the skill window; directional off the LOCKED aim, so a fake shades him wrong.
+	# Aim shade (anticipatory read): while reading a committed slot wind-up, cheat the
+	# lateral angle toward where the shot will cross the goalie's depth plane — the real
+	# "he's lined it up top-far, I'll shade that way" read. Ramped by wind-up read time
+	# so a quick release keeps the skill window, and kept < 1 so a well-placed corner
+	# still beats him. Two flavors that differ ONLY in how much to trust the aim:
+	#   Slapper — aim LOCKED at press, so the published predicted velocity is honest:
+	#     shade toward the LIVE crossing (a fake shades him the wrong way).
+	#   Wrister — aim is origin→cursor at RELEASE, never locked, so the live crossing
+	#     flicks with the cursor: read it through the quiet-eye LAG (`_wrister_shade_x`
+	#     low-passes it) so a telegraphed hold gets read while a disguised late snap
+	#     outruns the lag. See slapper_aim_shade / wrister_aim_shade.
 	# Skipped during a cross-crease push (a pass in flight owns the lateral target).
-	if is_server and _reading_slapper_tell and not cross_crease_push and slapper_aim_shade > 0.0:
+	if is_server and not cross_crease_push and (_reading_slapper_tell or _reading_wrister_tell):
 		var shade_carrier: Skater = puck.get_carrier()
-		if shade_carrier != null:
+		var shade_gain: float = slapper_aim_shade if _reading_slapper_tell else wrister_aim_shade
+		if shade_carrier != null and shade_gain > 0.0:
 			var shade_vel: Vector3 = shade_carrier.predicted_shot_velocity
-			if shade_vel.length_squared() >= 0.01 and absf(shade_vel.z) >= 0.001:
+			if shade_vel.length_squared() >= 0.01:
 				var goalie_plane_z: float = _goal_line_z + _direction_sign * _current_depth
-				var t_cross: float = (goalie_plane_z - puck.global_position.z) / shade_vel.z
-				if t_cross > 0.0:
-					var shot_x_at_depth: float = puck.global_position.x + shade_vel.x * t_cross
+				var live_cross_x: float = GoalieBehaviorRules.shot_crossing_x(
+						puck.global_position.x, puck.global_position.z,
+						shade_vel.x, shade_vel.z, goalie_plane_z)
+				if not is_nan(live_cross_x):
+					var shade_to_x: float
+					if _reading_slapper_tell:
+						shade_to_x = live_cross_x  # locked aim — read it live
+					else:
+						# Unlocked aim — low-pass the crossing at the tracking latency.
+						# INF seed: first frame reads the coil where it currently points
+						# (no lag yet), then the lag accumulates as the cursor moves.
+						_wrister_shade_x = live_cross_x if is_inf(_wrister_shade_x) \
+								else lerpf(_wrister_shade_x, live_cross_x,
+										clampf(wrister_shade_track_speed * delta, 0.0, 1.0))
+						shade_to_x = _wrister_shade_x
 					var shade_t: float = clampf(
-							_shot_read_timer / maxf(prearm_read_time, 0.001), 0.0, 1.0) * slapper_aim_shade
-					target_xz.x = lerpf(target_xz.x, shot_x_at_depth, shade_t)
+							_shot_read_timer / maxf(prearm_read_time, 0.001), 0.0, 1.0) * shade_gain
+					target_xz.x = lerpf(target_xz.x, shade_to_x, shade_t)
 	_target_x = target_xz.x
 	var delta_2d: float = current.distance_to(target_xz)
 	var move_speed: float
@@ -3398,7 +3455,7 @@ func _update_facing(delta: float) -> void:
 func _update_body_parts(delta: float) -> void:
 	_pose_inputs.state = _sm.current
 	_pose_inputs.five_hole_openness = _five_hole_openness
-	_pose_inputs.reading_slapper_tell = _reading_slapper_tell
+	_pose_inputs.reading_shot_windup = _reading_slapper_tell or _reading_wrister_tell
 	_pose_inputs.reacting_to_shot = _reaction.reacting
 	_pose_inputs.shot_is_elevated = _reaction.is_elevated
 	_pose_inputs.shot_impact_x = _reaction.impact_x

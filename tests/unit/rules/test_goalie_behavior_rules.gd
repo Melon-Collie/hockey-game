@@ -452,6 +452,38 @@ func test_cross_crease_works_for_other_team() -> void:
 		-26.6, 1, 5.0, 1.5)
 	assert_almost_eq(vx, 8.0, 0.001)
 
+# ── shot_crossing_x (anticipatory aim-shade projection) ───────────────────────
+# The X where a shot leaving the puck crosses the goalie's depth plane. This is the
+# geometry the slapper/wrister aim-shade cheats toward.
+
+func test_crossing_straight_shot_holds_x() -> void:
+	# Puck at x=0.5, flying straight toward the goal (no lateral): crosses at 0.5.
+	var x: float = GoalieBehaviorRules.shot_crossing_x(0.5, 10.0, 0.0, 20.0, 25.0)
+	assert_almost_eq(x, 0.5, 0.001)
+
+func test_crossing_angled_shot_projects_lateral() -> void:
+	# Puck at x=0, z=10, vel (vx=6, vz=20), plane at z=25 → t=(25-10)/20=0.75,
+	# crossing x = 0 + 6*0.75 = 4.5.
+	var x: float = GoalieBehaviorRules.shot_crossing_x(0.0, 10.0, 6.0, 20.0, 25.0)
+	assert_almost_eq(x, 4.5, 0.001)
+
+func test_crossing_negative_direction_sign_convention() -> void:
+	# The other net: puck z=-10, vz=-20 (toward the -Z goal), plane z=-25 →
+	# t=(-25-(-10))/-20=0.75, crossing x = -1 + 4*0.75 = 2.0.
+	var x: float = GoalieBehaviorRules.shot_crossing_x(-1.0, -10.0, 4.0, -20.0, -25.0)
+	assert_almost_eq(x, 2.0, 0.001)
+
+func test_crossing_receding_shot_is_nan() -> void:
+	# Puck moving AWAY from the plane (t_cross < 0) never reaches it → NAN.
+	var x: float = GoalieBehaviorRules.shot_crossing_x(0.0, 10.0, 6.0, -20.0, 25.0)
+	assert_true(is_nan(x), "a shot receding from the plane has no forward crossing")
+
+func test_crossing_nearly_lateral_shot_is_nan() -> void:
+	# No meaningful z component → the shot never closes the depth gap → NAN
+	# (guards a divide-by-~zero blowing the shade to infinity).
+	var x: float = GoalieBehaviorRules.shot_crossing_x(0.0, 10.0, 20.0, 0.0, 25.0)
+	assert_true(is_nan(x), "a lateral shot never crosses the depth plane")
+
 # ── compute_clear_velocity ────────────────────────────────────────────────────
 # Goal at +Z (goal_line_z = +26.6, direction_sign = -1). Forward (out of the
 # crease, into the rink) is therefore the -Z direction.

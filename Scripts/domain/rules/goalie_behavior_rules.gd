@@ -398,6 +398,28 @@ static func lateral_puck_velocity_in_slot(
 	return puck_velocity.x
 
 
+# X coordinate where a shot leaving `puck` at `vel` crosses the goalie's depth
+# plane (z == goalie_plane_z). This is the "where's it going to end up across my
+# angle" projection that the anticipatory aim-shade reads. Returns NAN when the
+# shot never reaches the plane going forward — a nearly-lateral velocity (no z
+# component to close the gap) or one receding from the plane — so the caller can
+# skip the shade rather than shade toward a garbage crossing. Shared by the
+# slapper shade (off the LOCKED wind-up aim) and the wrister shade (off the
+# LAGGED coil read); the difference in trust lives in the caller, not the geometry.
+static func shot_crossing_x(
+		puck_x: float,
+		puck_z: float,
+		vel_x: float,
+		vel_z: float,
+		goalie_plane_z: float) -> float:
+	if absf(vel_z) < 0.001:
+		return NAN
+	var t_cross: float = (goalie_plane_z - puck_z) / vel_z
+	if t_cross <= 0.0:
+		return NAN
+	return puck_x + vel_x * t_cross
+
+
 # ── Loose-puck clear ─────────────────────────────────────────────────────────
 # A slow loose puck sitting in the blue paint should be swept to the corner,
 # not left in front of the goalie for an opponent to bang in (the classic
