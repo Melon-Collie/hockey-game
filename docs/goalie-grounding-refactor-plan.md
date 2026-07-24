@@ -95,7 +95,7 @@ So the wrister windup gives the goalie **two** of the three things the slapper
 gives him — no jitter, and published intent — but **not** a stationary target.
 That asymmetry is what the fixes below have to respect.
 
-### 1.2 W1 — the double-counted lead (the live bug)
+### 1.2 W1 — the double-counted lead (the live bug) — ✅ SHIPPED
 
 `_compute_threat_position` (`:1633-1634`) adds two leads:
 
@@ -134,7 +134,7 @@ static func state_pins_puck(state: int) -> bool:
     return state == State.WRISTER_AIM or state == State.SLAPPER_CHARGE_WITH_PUCK
 ```
 
-### 1.3 W2 — the chest bias during a windup
+### 1.3 W2 — the chest bias during a windup — ✅ SHIPPED
 
 Same predicate, different consumer. `shooter_weight_slapper_windup = 0.0`
 (`:263`, applied `:1613`) exists because "the body-weight bias only exists to
@@ -492,11 +492,15 @@ Smallest diff with the highest ratio of "goalie reads the world" to "goalie was
 told the answer":
 
 1. Step 0 — extend the shot-outcome harness into a committed baseline matrix.
-2. W1 — `state_pins_puck`; stop double-counting carrier velocity through a
-   wrister windup. **This one is a bug fix, not a feel change** — it can land
-   ahead of everything else.
-3. W2 — same predicate for the chest bias during a windup.
-4. W3 — mobility-bounded aim shade; delete `slapper_aim_shade`.
+2. ~~W1 — `state_pins_puck`; stop double-counting carrier velocity through a
+   wrister windup.~~ **✅ SHIPPED.** Measured at 3.5 m / 2.0 m/s lateral: lead
+   0.240 m (carrier only) vs 0.362 m double-counted — a 51 % over-lead removed,
+   scaling with carrier speed.
+3. ~~W2 — same predicate for the chest bias during a windup.~~ **✅ SHIPPED**
+   (`shooter_weight_pinned_windup`).
+4. W3 — mobility-bounded aim shade; delete `slapper_aim_shade`. Held back
+   deliberately: the shade is gated on the new `_reading_planted_windup`
+   (slapper-only) until the origin-relocation bound exists.
 5. §2 — continuous fixation map on wall-clock (§2.3: *not* stability-weighted —
    the caught-moving penalty already prices that); delete `prime_slot_distance`;
    optionally raise `reaction_delay` to 0.18 behind the skill-profile seam.
