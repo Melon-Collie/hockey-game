@@ -13,6 +13,7 @@ const _HOCKEY_SCENE_PATH := "res://Scenes/Hockey.tscn"
 var _button_column: Control = null
 var _loading_label: Label = null
 var _settings_container: Control = null
+var _settings_panel: OptionsPanel = null  # for controller focus_active_tab on open
 var _input_received: bool = false
 var _transitioned: bool = false
 # Device auto-detect: the FIRST input on the splash decides the control scheme.
@@ -185,8 +186,10 @@ func _build_settings_overlay() -> void:
 
 	var options := OptionsPanel.new()
 	options.close_requested.connect(func() -> void:
-		_settings_container.visible = false)
+		_settings_container.visible = false
+		_focus_title_menu())
 	panel.add_child(options)
+	_settings_panel = options
 
 	_settings_container = Control.new()
 	_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -199,6 +202,15 @@ func _build_settings_overlay() -> void:
 func _on_settings_pressed() -> void:
 	if _settings_container != null:
 		_settings_container.visible = true
+		if _settings_panel != null:
+			_settings_panel.focus_active_tab()
+
+
+# Controller: (re)focus the title menu's first button (Play). Used on launch when
+# a pad is detected and when the settings overlay closes.
+func _focus_title_menu() -> void:
+	if _button_column != null and _button_column.get_child_count() > 0:
+		ControllerNav.grab_focus(_button_column.get_child(0) as Control)
 
 
 func _on_play_pressed() -> void:
@@ -242,8 +254,7 @@ func _enable_gamepad_from_splash() -> void:
 		for child: Node in _button_column.get_children():
 			if child is Button:
 				MenuStyle.add_focus_ring(child as Button)
-		if _button_column.get_child_count() > 0:
-			(_button_column.get_child(0) as Control).grab_focus.call_deferred()
+	_focus_title_menu()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -251,6 +262,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _settings_container != null and _settings_container.visible:
 		if event.is_action_pressed(&"ui_cancel"):
 			_settings_container.visible = false
+			_focus_title_menu()
 			get_viewport().set_input_as_handled()
 
 
