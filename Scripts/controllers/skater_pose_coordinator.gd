@@ -323,8 +323,18 @@ func apply_upper_body(delta: float) -> void:
 			var through_deg: float = _controller.slapper_follow_through_twist_deg \
 					if _sm.follow_through_is_slapper else _controller.wrister_follow_through_twist_deg
 			var through: float = blade_side_sign * deg_to_rad(through_deg) * env
-			upper_body_angle = lerp_angle(upper_body_angle, ft_aim + through,
-					_controller.follow_through_twist_lerp_speed * delta)
+			if _controller.wrister_freeze_blade and not _sm.follow_through_is_slapper:
+				# The coil IS the windup — discharge the through-overshoot INSTANTLY
+				# with the release. env is front-loaded (peaks ~40 ms), but a lerp at
+				# follow_through_twist_lerp_speed needs ~150 ms to converge, so it can
+				# never catch the fast bell — the snap gets muted into a slow rotation
+				# that trails the blade and reads as "release → pause → follow-through."
+				# Drive the angle straight off env instead: ft_aim ≈ the coil angle
+				# (same -angle·ratio formula), so this is continuous at the boundary.
+				upper_body_angle = ft_aim + through
+			else:
+				upper_body_angle = lerp_angle(upper_body_angle, ft_aim + through,
+						_controller.follow_through_twist_lerp_speed * delta)
 			_skater.set_upper_body_rotation(upper_body_angle)
 			# Keep the twist-follow spring glued to the tracked angle through the
 			# FT (it isn't advanced on this branch): the handoff preserves the
