@@ -1,8 +1,13 @@
 # AI threading: move bot decisions off the physics thread
 
-Status: **design proposed, awaiting sign-off.** Per CLAUDE.md workflow this is
-the design under review — not yet agreed, not yet implemented. Once signed off it
-becomes the plan of record and implementation follows the staged order below.
+Status: **design agreed, Phase 2 (centralize) in progress.** Per CLAUDE.md
+workflow this is the plan of record — ask before deviating. Decisions locked at
+sign-off: **Model A** (whole dispatch on the worker, uniform one-tick staleness,
+Model B held in reserve for the reception re-aim only); **single worker for all
+AI** — skaters + goalies + brains, keeping the shared static registers
+single-threaded; **centralize then thread** — land the single-threaded
+`AICoordinator` as its own reviewable, behavior-identical step before flipping it
+onto the worker.
 
 ## The problem
 
