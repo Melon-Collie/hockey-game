@@ -28,30 +28,6 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 	_controller = controller
 
 
-# ── Follow-Through Start Capture ──────────────────────────────────────────────
-# The wrister/quick-shot pose at the release instant is wherever the aim left
-# it — hands dragged back, blade wound up. The authored follow-through curve
-# starts from the REST pose, so without a bridge the stick teleported to a
-# near-rest pose on the first FT frame (which looks like the follow-through's
-# END, since the envelopes finish at rest) and then played the arc — "the
-# animation runs twice". Capture the live pose at release; the FT blends from
-# it onto the authored swing over the first follow_through_takeover_frac of
-# the timer, so release reads as ONE continuous motion. Live ticks only:
-# reconcile replay re-runs releases against replayed poses and must not
-# clobber the visual capture. (The slapper doesn't need this — its downswing
-# already starts from the captured wind-up pose.)
-var _ft_start_hand: Vector3 = Vector3.ZERO
-var _ft_start_blade: Vector3 = Vector3.ZERO
-var _ft_start_valid: bool = false
-
-
-func begin_follow_through() -> void:
-	if _controller.is_replaying:
-		return
-	_ft_start_hand = _skater.get_top_hand_position()
-	_ft_start_blade = _skater.get_blade_position()
-	_ft_start_valid = true
-
 # ── Slapper Charge Pose ───────────────────────────────────────────────────────
 # Slapper has a fixed blade pose offset from the shoulder — separate from
 # the IK flow (this is a charged pre-shot pose, not player-aimed). Hand
@@ -191,39 +167,44 @@ func apply_celebration_pose(t: float) -> void:
 func apply_wrister_follow_through() -> void:
 	var total: float = maxf(_sm.follow_through_duration_total, 0.001)
 	var t: float = clampf(1.0 - _sm.follow_through_timer / total, 0.0, 1.0)
-	var env: float = sin(PI * pow(t, _controller.follow_through_arc_skew)) \
-			* _sm.follow_through_power
-	# Blade direction: ease from the release angle onto the shot line (fast
-	# ease-out, so the sweep-through happens in the front half of the timer).
-	# The aim eases from the shot line back to the LIVE cursor over the tail of
-	# the timer (follow_through_return_frac) so the finish lands where the mouse
-	# now is — otherwise the blade re-rotates to the cursor once tracking resumes.
-	# aim_world is world-space; re-derive its body-local angle each frame so the
-	# finish stays pointed at the target while the torso uncoils underneath.
-	# Whiffed releases (shot_dir zero → aim_world zero) hold the release angle.
-	var dir_angle: float = _controller._blade_relative_angle
+	# Aim axis (world XZ): the shot line, eased back to the LIVE cursor over the
+	# tail (follow_through_return_frac) so the finish hands off to blade-tracking
+	# without a re-rotate. Whiffed releases (shot_dir zero) return ZERO here.
 	var cursor_dir: Vector3 = _controller._current_aim_world - _skater.global_position
 	var aim_world: Vector3 = ShotMechanics.follow_through_aim(
 			_sm.shot_dir, cursor_dir, t, _controller.follow_through_return_frac)
-	if aim_world.length_squared() > 0.0001:
-		var shot_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * aim_world
-		shot_local.y = 0.0
-		if shot_local.length_squared() > 0.0001:
-			var sweep: float = 1.0 - (1.0 - t) * (1.0 - t)
-			dir_angle = lerp_angle(dir_angle, atan2(shot_local.x, -shot_local.z), sweep)
-	var local_dir := Vector3(sin(dir_angle), 0.0, -cos(dir_angle))
-	var hand_pos := _skater.shoulder.position
-	# Carry the whole stick FORWARD along the shot line as it climbs — the
-	# hands reach through the shot instead of the blade bobbing in place. Both
-	# endpoints translate by the same offset so the rigid stick_length solve
-	# below is untouched; env scales it so a snap pass barely reaches while a
-	# full-charge wrister finishes extended out over the shot line.
+	_apply_wrister_whip(t, aim_world)
+
+# Blade whip for the frozen wrister (coil → instant release → blade replays the
+# shot). ARM-CONTROLLED, same geometry as the tracked follow-through: the hand
+# sits near the shoulder plus a forward carry, and the blade is one stick-length
+# AHEAD along the shot line (whip_local_dir). So the blade extends along the shot
+# vector FROM THE BODY — never radially outward — and the arm stays short (= the
+# carry) so it can't stretch. The frozen-specific parts: the aim points straight
+# down the shot line from t=0 (no coiled-back sweep, no retracted-origin bridge)
+# and the reach rides an attack-hold-release envelope, so the blade SNAPS to the
+# extended finish, HOLDS it, then relaxes — the explosive discharge, committed.
+func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
+	# Attack-hold-release (NOT a symmetric bell): SNAP to full extension within
+	# attack_frac, HOLD the finish through the middle, relax over the last
+	# release_frac. A bell eased the blade out and pulled it straight back — timid,
+	# never committed, read as delayed. The torso keeps its own bell env.
+	var attack: float = clampf(t / maxf(_controller.wrister_whip_attack_frac, 0.0001), 0.0, 1.0)
+	var release_start: float = 1.0 - clampf(_controller.wrister_whip_release_frac, 0.0, 1.0)
+	var env: float = attack * (1.0 - smoothstep(release_start, 1.0, t)) * _sm.follow_through_power
+	var axis: Vector3 = aim_world
+	if axis.length_squared() < 0.0001:
+		axis = -_skater.global_transform.basis.z  # whiff: skate-forward, never radial
+		axis.y = 0.0
+	var local_dir: Vector3 = ShotMechanics.whip_local_dir(
+			axis, _skater.upper_body.global_transform.basis)
+	if local_dir.length_squared() < 0.0001:
+		return
+	# Hand near the shoulder + a forward carry (arm length = carry, so it can't
+	# stretch); blade one stick-length ahead along the shot line, at ice + lift.
 	var carry: float = env * _controller.wrister_follow_through_reach
-	hand_pos.x += local_dir.x * carry
-	hand_pos.z += local_dir.z * carry
+	var hand_pos: Vector3 = _skater.shoulder.position + local_dir * carry
 	hand_pos.y = _controller.hand_rest_y + env * _controller.wrister_follow_through_hand_y
-	# Sample the ice height at the rest reach, lift the blade off it, then
-	# re-solve the horizontal reach so hand→blade stays one stick long.
 	var probe: Vector3 = hand_pos + local_dir * _ik.stick_horiz()
 	var blade_y: float = _ik.blade_y_lean_corrected(probe.x, probe.z) \
 			+ env * _controller.wrister_follow_through_blade_lift
@@ -232,20 +213,10 @@ func apply_wrister_follow_through() -> void:
 			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
 	var intended_target: Vector3 = hand_pos + local_dir * horiz
 	intended_target.y = blade_y
-	# Bridge from the captured release pose onto the authored swing (see
-	# begin_follow_through) — smoothstepped over the takeover window so the
-	# wound-up stick flows into the sweep instead of teleporting to rest.
-	# Blended BEFORE the wall/net clamps so the clamps see the final pose.
-	if _ft_start_valid:
-		var takeover: float = clampf(
-				t / maxf(_controller.follow_through_takeover_frac, 0.001), 0.0, 1.0)
-		takeover = takeover * takeover * (3.0 - 2.0 * takeover)
-		if takeover < 1.0:
-			hand_pos = _ft_start_hand.lerp(hand_pos, takeover)
-			intended_target = _ft_start_blade.lerp(intended_target, takeover)
+	# Wall + net clamps (identical to the tracked path), hand kept rigid to the stick.
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
 	var clamp_delta_xz := Vector3(
-		local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
+			local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
 	if clamp_delta_xz.length_squared() > 0.0:
 		hand_pos.x += clamp_delta_xz.x
 		hand_pos.z += clamp_delta_xz.z
@@ -276,11 +247,11 @@ func apply_slapper_follow_through() -> void:
 	var dir_world: Vector3 = _sm.shot_dir
 	if dir_world.length_squared() <= 0.0001:
 		dir_world = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
-	var dir_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * dir_world
-	dir_local.y = 0.0
-	if dir_local.length_squared() > 0.0001:
-		dir_local = dir_local.normalized()
-	else:
+	# Shot line in the upper-body frame — the SAME primitive the wrister whip uses,
+	# so both shots' finishes stay on the shot vector as the torso rotates through.
+	var dir_local: Vector3 = ShotMechanics.whip_local_dir(
+			dir_world, _skater.upper_body.global_transform.basis)
+	if dir_local.length_squared() < 0.0001:
 		dir_local = Vector3.FORWARD
 	var contact := Vector3(
 			_skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x,
@@ -324,8 +295,13 @@ func apply_slapper_follow_through() -> void:
 		# settle. Shares the wrister's asymmetric arc so both shots snap
 		# through contact and relax out of the pose.
 		var v: float = (t - cf) / (1.0 - cf)
-		var env: float = sin(PI * pow(v, _controller.follow_through_arc_skew)) \
-				* _sm.follow_through_power
+		# Attack-hold-release like the wrister whip: the finish SNAPS out along the
+		# shot line and HOLDS the high finish, then relaxes — committed, not a timid
+		# bell that eases out and straight back. (The downswing above is the
+		# slapper's own wind-up-to-contact; only the finish arc borrows the whip.)
+		var attack: float = clampf(v / maxf(_controller.wrister_whip_attack_frac, 0.0001), 0.0, 1.0)
+		var release_start: float = 1.0 - clampf(_controller.wrister_whip_release_frac, 0.0, 1.0)
+		var env: float = attack * (1.0 - smoothstep(release_start, 1.0, v)) * _sm.follow_through_power
 		var reach: float = env * _controller.slapper_follow_through_arc_dist
 		blade_pos = contact + dir_local * reach
 		blade_pos.y = _ik.blade_y_lean_corrected(blade_pos.x, blade_pos.z) \
