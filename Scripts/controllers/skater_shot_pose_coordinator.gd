@@ -339,11 +339,11 @@ func apply_slapper_follow_through() -> void:
 	var dir_world: Vector3 = _sm.shot_dir
 	if dir_world.length_squared() <= 0.0001:
 		dir_world = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
-	var dir_local: Vector3 = _skater.upper_body.global_transform.basis.inverse() * dir_world
-	dir_local.y = 0.0
-	if dir_local.length_squared() > 0.0001:
-		dir_local = dir_local.normalized()
-	else:
+	# Shot line in the upper-body frame — the SAME primitive the wrister whip uses,
+	# so both shots' finishes stay on the shot vector as the torso rotates through.
+	var dir_local: Vector3 = ShotMechanics.whip_local_dir(
+			dir_world, _skater.upper_body.global_transform.basis)
+	if dir_local.length_squared() < 0.0001:
 		dir_local = Vector3.FORWARD
 	var contact := Vector3(
 			_skater.shoulder.position.x + blade_side_sign * _controller.slapper_blade_x,
@@ -387,8 +387,13 @@ func apply_slapper_follow_through() -> void:
 		# settle. Shares the wrister's asymmetric arc so both shots snap
 		# through contact and relax out of the pose.
 		var v: float = (t - cf) / (1.0 - cf)
-		var env: float = sin(PI * pow(v, _controller.follow_through_arc_skew)) \
-				* _sm.follow_through_power
+		# Attack-hold-release like the wrister whip: the finish SNAPS out along the
+		# shot line and HOLDS the high finish, then relaxes — committed, not a timid
+		# bell that eases out and straight back. (The downswing above is the
+		# slapper's own wind-up-to-contact; only the finish arc borrows the whip.)
+		var attack: float = clampf(v / maxf(_controller.wrister_whip_attack_frac, 0.0001), 0.0, 1.0)
+		var release_start: float = 1.0 - clampf(_controller.wrister_whip_release_frac, 0.0, 1.0)
+		var env: float = attack * (1.0 - smoothstep(release_start, 1.0, v)) * _sm.follow_through_power
 		var reach: float = env * _controller.slapper_follow_through_arc_dist
 		blade_pos = contact + dir_local * reach
 		blade_pos.y = _ik.blade_y_lean_corrected(blade_pos.x, blade_pos.z) \
