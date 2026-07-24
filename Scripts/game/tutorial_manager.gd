@@ -376,6 +376,10 @@ func _ready() -> void:
 	add_child(_hud)
 	_hud.skip_pressed.connect(_on_skip)
 	_hud.reset_pressed.connect(_on_reset)
+	# Teaching copy follows the ACTIVE device (not just "gamepad allowed"), so a
+	# mouse player who clicked Play sees keyboard prose and a pad player sees pad
+	# prose — and it hot-swaps if they switch mid-tutorial (auto-disconnected on free).
+	InputDeviceTracker.device_changed.connect(_on_device_changed)
 
 	_begin_step(0)
 
@@ -396,7 +400,7 @@ func _exit_tree() -> void:
 # ── Keybinding tokens ─────────────────────────────────────────────────────────
 
 func _build_key_tokens() -> void:
-	_key_tokens = _pad_key_tokens() if ControllerNav.active() else _keyboard_key_tokens()
+	_key_tokens = _pad_key_tokens() if InputDeviceTracker.is_gamepad_active() else _keyboard_key_tokens()
 
 
 func _keyboard_key_tokens() -> Dictionary:
@@ -451,7 +455,7 @@ func _fmt(text: String) -> String:
 # active device's button labels. Steps that read the same on both devices keep a
 # single string. (See CLAUDE.md → "How It Plays" for the two schemes.)
 func _pick(keyboard_copy: String, pad_copy: String) -> String:
-	return pad_copy if ControllerNav.active() else keyboard_copy
+	return pad_copy if InputDeviceTracker.is_gamepad_active() else keyboard_copy
 
 
 # TutorialStep factory that runs every string through the keybinding tokens.
@@ -630,6 +634,28 @@ func _current_step_id() -> int:
 	if _step_index < 0 or _step_index >= _step_ids.size():
 		return -1
 	return _step_ids[_step_index]
+
+
+# Steps that override their own copy mid-step (two-beat gates / per-wave live copy).
+# The device hot-swap skips them so it can't clobber the beat-specific text; their
+# next live-copy beat re-picks with the now-current device via _pick.
+func _step_has_live_copy(step_id: int) -> bool:
+	return step_id == STEP_STAMINA or step_id == STEP_OFFSIDES \
+		or step_id == STEP_SHOOT_TARGETS or step_id == STEP_RECEIVE
+
+
+# Active-device handoff (InputDeviceTracker.device_changed): re-resolve the copy
+# tokens and re-emit the current step so its prose + button glyphs match whoever's
+# driving now. Skips live-copy steps (see above) and the between-steps gap.
+func _on_device_changed(_is_gamepad: bool) -> void:
+	if _hud == null:
+		return
+	_build_key_tokens()
+	var step_id: int = _current_step_id()
+	if step_id < 0 or _step_has_live_copy(step_id):
+		return
+	var step: TutorialStep = _step_def_for(step_id)
+	_hud.set_step(_step_index, _step_ids.size(), step.title, step.instruction, step.hint)
 
 
 # ── Step sequencing ───────────────────────────────────────────────────────────

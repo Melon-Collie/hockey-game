@@ -248,6 +248,10 @@ func _enable_gamepad_from_splash() -> void:
 	if not PlayerPrefs.gamepad_enabled:
 		PlayerPrefs.gamepad_enabled = true
 		PlayerPrefs.save()
+		# The allow gate just opened; the tracker already saw this pad press and set
+		# its raw device to GAMEPAD, so re-broadcast now that is_gamepad_active() is
+		# true (device-aware prompts / the tutorial flip to pad without more input).
+		InputDeviceTracker.notify_gamepad_allowed_changed()
 	# The title buttons were built before the pref flipped — give them the focus
 	# ring now and focus the first so the pad can drive the menu immediately.
 	if _button_column != null:

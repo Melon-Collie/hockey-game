@@ -37,6 +37,10 @@ const _MOUSE_MOVE_PX: float = 4.0          # one motion event's travel to claim 
 const _STICK_SWITCH_DEADZONE: float = 0.5  # stick/trigger past this claims GAMEPAD
 
 var _active: int = Device.KBM
+# The last is_gamepad_active() value we broadcast, so device_changed fires only
+# when the EFFECTIVE driving device flips — not on raw _active churn that the
+# master gate swallows (a gamepad-off player bumping a stick shouldn't notify).
+var _emitted_gamepad: bool = false
 
 
 func _ready() -> void:
@@ -57,12 +61,13 @@ func active_device() -> int:
 
 func _input(event: InputEvent) -> void:
 	var d: int = classify_event(event, _MOUSE_MOVE_PX, _STICK_SWITCH_DEADZONE)
+	# Track the raw device unconditionally; the master gate is applied only in
+	# is_gamepad_active() / the emit. This matters at the boot splash: the tracker
+	# (an autoload, so its _input runs before the scene's) sees the pad press that
+	# ENABLES gamepad before boot.gd flips the pref, so gating here would leave
+	# _active on KBM and the pad player would land in a keyboard-flavored tutorial.
 	if d == Device.GAMEPAD:
-		# Gamepad input only arbitrates when the pad is allowed — otherwise a mouse
-		# player with a controller plugged in could have a bumped stick flip _active
-		# (harmless while gated, but this keeps _active honestly on KBM for them).
-		if PlayerPrefs.gamepad_enabled:
-			_set_active(Device.GAMEPAD)
+		_set_active(Device.GAMEPAD)
 	elif d == Device.KBM:
 		_set_active(Device.KBM)
 	# Device.NONE (below threshold / irrelevant event) → no change.
@@ -89,7 +94,24 @@ func _set_active(device: int) -> void:
 	if _active == device:
 		return
 	_active = device
-	device_changed.emit(is_gamepad_active())
+	_emit_if_changed()
+
+
+# Emit device_changed only when the EFFECTIVE (gated) driving device flips, so a
+# gamepad-off player's stick churn stays silent and listeners rebuild at most once
+# per real handoff.
+func _emit_if_changed() -> void:
+	var now: bool = is_gamepad_active()
+	if now != _emitted_gamepad:
+		_emitted_gamepad = now
+		device_changed.emit(now)
+
+
+# Call after flipping PlayerPrefs.gamepad_enabled (Options apply, the boot splash):
+# the allow gate changed, so is_gamepad_active() may have flipped even though the
+# raw device didn't — re-broadcast so device-aware UI updates.
+func notify_gamepad_allowed_changed() -> void:
+	_emit_if_changed()
 
 
 func _on_joy_connection_changed(_device: int, connected: bool) -> void:

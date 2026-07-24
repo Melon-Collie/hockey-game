@@ -294,6 +294,9 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.mute_when_unfocused = c.mute_when_unfocused
 	PlayerPrefs.shot_power_sensitivity = c.shot_power_sensitivity
 	PlayerPrefs.gamepad_enabled = c.gamepad_enabled
+	# The allow gate may have flipped — re-broadcast so device-aware UI (prompts,
+	# tutorial copy) reflects it without waiting for the next input.
+	InputDeviceTracker.notify_gamepad_allowed_changed()
 	PlayerPrefs.confine_mouse = c.confine_mouse
 	PlayerPrefs.cursor_style = c.cursor_style
 	PlayerPrefs.cursor_color = c.cursor_color
