@@ -169,6 +169,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Good range: 1.0 (very lazy) – 3.0 (snappy).
 @export var facing_drag_speed: float = 5.0
 @export var facing_drag_speed_braking: float = 10.0
+# Facing RECOVERY rate during the shot follow-through. The coil freezes facing at
+# the wind-up cursor position (it must — the coil is the torso twisting relative
+# to the planted lower body), so at release the body is squared to where the aim
+# STARTED, not the cursor. Left at the normal drag, facing can't re-square in the
+# ~0.22 s follow-through, so when blade-tracking resumes the target is ROM-clamped
+# to the stale facing and the stick swings to the wrong side before catching the
+# cursor. Recover hard through the follow-through so the body is re-squared by the
+# handoff and the blade tracks straight from the finish to the cursor.
+@export var follow_through_facing_recover_speed: float = 18.0
 
 # ── Blade / Stick / Top-Hand IK Tuning ────────────────────────────────────────
 # Blade world-space Y. 0.0 = ice surface. Converted to upper-body-local via

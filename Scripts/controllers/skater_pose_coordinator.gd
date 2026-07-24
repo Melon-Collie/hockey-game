@@ -223,6 +223,12 @@ func apply_facing(input: InputState, delta: float) -> void:
 			else:
 				ik_locked_side = 0
 				var drag: float = _controller.facing_drag_speed_braking if input.brake else _controller.facing_drag_speed
+				# Re-square hard through the follow-through: the coil left facing stale
+				# at the wind-up cursor, and a lazy drag can't catch up in ~0.22 s, so
+				# the blade handoff snaps to the wrong side (ROM-clamped to the stale
+				# facing) before reaching the cursor. See follow_through_facing_recover_speed.
+				if s == State.FOLLOW_THROUGH:
+					drag = maxf(drag, _controller.follow_through_facing_recover_speed)
 				# Sprinting widens the turn: commit to straight-line speed at the
 				# cost of agility. sprint_active is resolved in _apply_movement
 				# earlier this tick, so it's deterministic across reconcile replay.
