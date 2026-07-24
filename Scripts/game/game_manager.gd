@@ -3988,6 +3988,17 @@ func _refresh_ranked_match() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_close_replay_file_writer()
+	# Release process-lifetime GPU caches before the RenderingServer finalizes.
+	# HockeyRink._build_cache (ice/stripe ImageTextures) and ArenaStands'
+	# _crowd_material / _layout_cache live in static vars that survive scene
+	# changes for perf; a static var is freed at script-unload, AFTER the server,
+	# so at exit their RIDs are reported as leaked. As an autoload, GameManager's
+	# EXIT_TREE fires only at real app shutdown — covering both the menu-Quit
+	# (get_tree().quit()) and window-close paths — while WM_CLOSE covers the
+	# window close before the quit cascade. release_shared_cache is idempotent.
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_EXIT_TREE:
+		HockeyRink.release_shared_cache()
+		ArenaStands.release_shared_cache()
 
 
 func on_scene_exit() -> void:
