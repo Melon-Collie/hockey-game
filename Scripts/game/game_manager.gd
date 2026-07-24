@@ -2613,16 +2613,14 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	record.skater.body_checked_player.connect(
 		func(v: Skater, f: float, d: Vector3) -> void: _on_hit_landed(pid, v, f, d)
 	)
-	# Impact burst + sound are NOT played here — they fire from the host-authoritative
-	# body_check_landed broadcast (_on_body_check_landed) once the contact validates
-	# (HitTracker.impact_landed), so they read identically on every client. This
+	# Impact burst + sound + replay recording are NOT driven here — they fire from
+	# the host-authoritative body_check_landed broadcast (_on_body_check_landed)
+	# once the contact validates (HitTracker.impact_landed), so they read
+	# identically on every client AND the replay captures only the credited,
+	# deduped hits that actually played (not this raw per-contact signal). This
 	# closure only routes the contact into the credit/claim path
 	# (_on_hit_landed → HitClaimResolver).
 	if NetworkManager.is_host:
-		record.skater.body_checked_player.connect(
-			func(v: Skater, f: float, d: Vector3) -> void:
-				_record_body_check_replay_event(record.peer_id, v, f, d)
-		)
 		# NHL delayed offside: any skater-skater contact can end it (Rule 83.3),
 		# not just a puck touch — see notify_offside_contact. Host-only: the host
 		# simulates every skater, so this fires reliably for any pair regardless
@@ -3721,6 +3719,14 @@ func _on_body_check_landed(hitter_peer_id: int, victim_peer_id: int,
 	var vfx: SkaterVFX = victim_rec.skater.get_node_or_null("VFX") as SkaterVFX
 	if vfx != null:
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
+	# Record the replay audio/burst event from THIS authoritative funnel — the
+	# same credited-and-deduped contact that plays live — rather than the raw
+	# body_checked_player signal, which fires on every closing contact (bumps,
+	# uncommitted collisions, per-tick re-fires) and made replays thud far more
+	# than was ever heard. Self-gates to host + not-replaying (see the helper);
+	# the replayer's own check_sound_audible gate then matches the live silence
+	# floor for soft hits, while the burst still fires for every credited check.
+	_record_body_check_replay_event(hitter_peer_id, victim_rec.skater, force, hit_dir)
 	# The burst fires for every credited check, but the thud is reserved for
 	# stagger-class-or-harder hits — a committed bump / board rub bursts faintly
 	# and stays silent (see SkaterVFX.check_sound_audible).
