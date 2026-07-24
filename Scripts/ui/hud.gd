@@ -222,7 +222,7 @@ func _ready() -> void:
 func _spectator_controls_hint() -> String:
 	return ControllerGlyphs.prompt(
 			"C: camera  ·  ↑↓: player  ·  RMB drag: look",
-			"Y: camera  ·  ↑↓: player  ·  Right-stick: look")
+			"%s: camera  ·  ↑↓: player  ·  Right-stick: look" % ControllerGlyphs.joy_label(JOY_BUTTON_Y))
 
 func _unhandled_input(event: InputEvent) -> void:
 	var menu_open: bool = _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible
@@ -664,8 +664,9 @@ func _build_bug_icon() -> void:
 # the broadcast chyron itself stays focused on the goal info. The pulse draws
 # the eye to the prompt without yelling.
 func _build_skip_replay_prompt() -> void:
-	# Pad votes to skip with A; keyboard with Space (see _unhandled_input).
-	_skip_prompt_label = _lbl(ControllerGlyphs.prompt("[SPACE] TO SKIP", "[A] TO SKIP"), 18, _WHITE)
+	# Pad votes to skip with the south face button; keyboard with Space. Built from
+	# the same device/brand-aware text the vote-tally refresh uses.
+	_skip_prompt_label = _lbl(_skip_prompt_text(), 18, _WHITE)
 	_skip_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_skip_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	_skip_prompt_label.anchor_left = 1.0
@@ -682,8 +683,9 @@ func _build_skip_replay_prompt() -> void:
 	_scale_root.add_child(_skip_prompt_label)
 
 func _build_menu_hint() -> void:
-	# Pad opens the menu with Start (≡); keyboard with Escape.
-	_menu_hint_label = _lbl("%s MENU" % ControllerGlyphs.prompt("[ESC]", "[≡]"), 16, _WHITE)
+	# Pad opens the menu with Start (≡ / + on Switch); keyboard with Escape.
+	_menu_hint_label = _lbl("%s MENU" % ControllerGlyphs.prompt(
+			"[ESC]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START)), 16, _WHITE)
 	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
 	# box straddling the 0.5 anchor), sitting 16px above the bottom.
 	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1113,8 +1115,9 @@ func _refresh_skip_prompt_text() -> void:
 		_intermission_overlay.set_skip_text(text)
 
 func _skip_prompt_text() -> String:
-	# Device-aware base label (pad A / keyboard Space), see _unhandled_input.
-	var base: String = ControllerGlyphs.prompt("[SPACE] TO SKIP", "[A] TO SKIP")
+	# Device-aware base label (pad A/✕/B / keyboard Space), see _unhandled_input.
+	var base: String = ControllerGlyphs.prompt(
+			"[SPACE] TO SKIP", "[%s] TO SKIP" % ControllerGlyphs.joy_label(JOY_BUTTON_A))
 	if _skip_vote_total <= 1:
 		# Solo session — no tally, the single press just skips.
 		return base

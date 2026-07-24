@@ -70,8 +70,10 @@ func _build_content() -> void:
 	# that grid is their source of truth and stays truthful after a rebind.
 	var pad_hint := Label.new()
 	pad_hint.text = "Left stick: skate   ·   Right stick: aim / stickhandle\n" \
-			+ "RT: Wrister   ·   LT: Slapshot\n" \
-			+ "Start: Menu   ·   Back: Scoreboard"
+			+ "%s: Wrister   ·   %s: Slapshot\n" % [
+				ControllerGlyphs.trigger_label(true), ControllerGlyphs.trigger_label(false)] \
+			+ "%s: Menu   ·   %s: Scoreboard" % [
+				ControllerGlyphs.joy_label(JOY_BUTTON_START), ControllerGlyphs.joy_label(JOY_BUTTON_BACK)]
 	pad_hint.add_theme_font_size_override("font_size", 13)
 	pad_hint.add_theme_color_override("font_color", _DIM)
 	add_child(pad_hint)
