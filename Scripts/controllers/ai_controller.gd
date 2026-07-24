@@ -27,6 +27,10 @@ var perceived_snapshot: WorldSnapshot = null
 # reads no autoloads.
 var _pending_input: InputState = null
 var _pending_host_time: float = 0.0
+# Set on the main thread when a special (non-agent) mode runs, so the next normal
+# apply idles one frame instead of replaying a decision from before the mode. A
+# main-only flag (not a _pending_input write) so it never races the worker.
+var _stale_pending: bool = false
 
 
 # Bots never set deliberate-deflect intent. The agent holds the shoot button
@@ -155,6 +159,7 @@ func tick_agent(snapshot: WorldSnapshot, delta: float) -> void:
 	# main, decide on the worker), so keep the three faithful to this order.
 	if not begin_tick(delta):
 		return
+	prep_for_decide()
 	decide(snapshot, delta)
 	apply_decision(delta)
 
@@ -173,16 +178,16 @@ func begin_tick(delta: float) -> bool:
 	# scripted shot mini-state-machine still feeds SkaterController, so shot
 	# release matches a human pressing the same buttons.
 	if scripted_mode:
-		# Special (non-agent) mode: drop any stale worker decision so a later
+		# Special (non-agent) mode: mark the pending decision stale so a later
 		# return to normal gameplay idles one frame instead of applying an old
 		# input (matters only on the threaded path; harmless inline).
-		_pending_input = null
+		_stale_pending = true
 		_build_script_input(delta)
 		_process_input(_script_input, delta)
 		skater.current_shot_state = _sm.get_state() as int
 		return false
 	if _game_state.is_movement_locked():
-		_pending_input = null  # drop stale worker decision (see scripted note)
+		_stale_pending = true  # mark pending decision stale (see scripted note)
 		# Faceoff / intro skate-in: the bot glides from its bench / current spot
 		# to the dot while an approach is active, then hands back to the draw-aim
 		# freeze below on arrival (see SkaterController.begin_approach).
@@ -209,7 +214,7 @@ func begin_tick(delta: float) -> bool:
 			apply_blade_aim_only(_faceoff_input, delta)
 		return false
 	if _game_state.is_in_goal_celebration():
-		_pending_input = null  # drop stale worker decision (see scripted note)
+		_stale_pending = true  # mark pending decision stale (see scripted note)
 		# Celebration is movement-allowed live gameplay (humans can react), but
 		# bots shouldn't be playing — they'd chase a pickup-locked puck and bunch
 		# at the net. Skip agent input; friction coasts them to a stop.
@@ -217,12 +222,21 @@ func begin_tick(delta: float) -> bool:
 	# Deliberately NO is_input_blocked() gate here: that flag means the LOCAL
 	# human's menu is open, and bots run only on the host — gating on it froze
 	# every bot when the host paused while the world played on.
-	# Latched match rules for the AI's offside-aware reads (cheap int stamp; the
-	# rule set only changes at match config, but the agent must never carry a
-	# previous match's). Stamped here (main) so decide() reads no autoloads.
+	# Normal gameplay — the caller runs decide() then apply_decision(). The rule
+	# set + host time are stamped separately in prep_for_decide() (at kick time,
+	# main thread) so decide() reads no autoloads and, on the threaded path, the
+	# non-blocking worker never sees them mutated mid-batch.
+	return true
+
+
+# Main-thread stamp done right before the worker is kicked (worker idle), so the
+# agent's latched rule set and the decision's host time are set without racing an
+# in-flight decide(). See AICoordinator.
+func prep_for_decide() -> void:
+	# Latched match rules for the AI's offside-aware reads (the agent must never
+	# carry a previous match's).
 	_agent.set_rule_set(GameManager.get_rule_set())
 	_pending_host_time = NetworkManager.estimated_host_time()
-	return true
 
 
 # WORKER-SAFE decision: run the agent against the frozen snapshot + strategy view
@@ -238,6 +252,11 @@ func decide(snapshot: WorldSnapshot, delta: float) -> void:
 # MAIN-THREAD apply: feed the decided InputState to SkaterController exactly like
 # a human's input, then mirror the shot state and refresh the debug label.
 func apply_decision(delta: float) -> void:
+	# Skip a decision from before a special mode (it may be seconds stale) — idle
+	# one frame instead, then apply fresh once the next batch lands.
+	if _stale_pending:
+		_stale_pending = false
+		return
 	if _pending_input == null:
 		return
 	_process_input(_pending_input, delta)

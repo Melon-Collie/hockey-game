@@ -536,12 +536,12 @@ func _physics_process(delta: float) -> void:
 		if not team_brains.is_empty():
 			for brain: TeamBrain in team_brains:
 				brain.tick(delta, current_snapshot)
-				# Freeze the brain's outputs into its per-frame view (AI threading
-				# Phase 3a). The bot dispatch below reads the view, not the live
-				# brain — the seam Phase 3c runs off the physics thread.
-				brain.build_view(current_snapshot)
 		if _registry != null:
-			_ai_coordinator.dispatch(_registry.ai_controllers(), current_snapshot, delta)
+			# The coordinator freezes each brain's view (build_view) at the point it
+			# hands work to the worker — only while the worker is idle, so the view
+			# the worker reads is never rebuilt mid-batch.
+			_ai_coordinator.dispatch(
+					_registry.ai_controllers(), team_brains, current_snapshot, delta)
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
