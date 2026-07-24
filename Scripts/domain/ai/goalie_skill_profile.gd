@@ -129,6 +129,14 @@ var five_hole_base_m: float
 # sets how fast he converges onto the true line once the puck is in flight, so a
 # long shot is read correctly and an in-tight one is not.
 # No RNG — the error is a pure function of what the shooter did with their aim.
+#
+# TUNING BAND. Measured against the height-deception sweep
+# (tests/unit/ai/test_goalie_disguise_read.gd), goals out of 14 when the wind-up
+# sells a low shot and the release goes high: 0.00 -> 6, 0.04 -> 7, 0.10 -> 11,
+# and flat above that. So the responsive band is roughly 0-0.10 s and the tiers
+# are anchored inside it; past ~0.10 the goalie is already fully committed to the
+# wrong read and more staleness buys the shooter nothing. Values above the band
+# are not "harder to beat", they are just indistinguishable.
 var read_lag_s: float
 
 
@@ -165,7 +173,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 static func hard() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
 			1.75, 1.30, 5.0, 5.0, 18.0, 14.0, 0.9,
-			0.13, 0.07, 0.20, 0.02, 0.10)
+			0.13, 0.07, 0.20, 0.02, 0.05)
 
 
 # Normal is the middle tier: enough goalie to punish a lazy shot, soft enough
@@ -178,7 +186,7 @@ static func hard() -> GoalieSkillProfile:
 static func normal() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.28, 0.22, 0.16, 0.45, 0.20,
 			1.35, 0.95, 3.8, 3.8, 11.0, 10.0, INF,
-			0.18, 0.10, 0.25, 0.035, 0.16)
+			0.18, 0.10, 0.25, 0.035, 0.10)
 
 
 # Easy is the newcomer floor, tuned so ANY decently-aimed shot scores: he sits
@@ -191,7 +199,7 @@ static func normal() -> GoalieSkillProfile:
 static func easy() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.45, 0.40, 0.08, 0.70, 0.35,
 			0.90, 0.60, 2.4, 2.4, 5.0, 6.0, INF,
-			0.30, 0.16, 0.32, 0.06, 0.24)
+			0.30, 0.16, 0.32, 0.06, 0.16)
 
 
 static func for_difficulty(difficulty: int) -> GoalieSkillProfile:

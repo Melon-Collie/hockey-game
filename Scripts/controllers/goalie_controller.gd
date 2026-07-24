@@ -1902,6 +1902,9 @@ func _update_state(delta: float) -> void:
 			# All three down states share the butterfly hold/drop animation.
 			# tick_butterfly drains drop_progress, hold_timer, event_lockout.
 			_slide.tick_butterfly(delta)
+			# A converged read that says "high" checks an unsealed drop.
+			if _maybe_arrest_drop():
+				return
 			# Recovery only fires from idle BUTTERFLY (not mid-slide and not
 			# mid-coil). Slide completion transitions back to BUTTERFLY first —
 			# recovery can fire on the next tick if conditions hold. RVH from
@@ -2909,6 +2912,38 @@ func _on_sm_transitioned(prev: State, new_state: State) -> void:
 			# `rvh_depth` from there. VH shares the fix-up (same post geometry).
 			_current_depth = (goalie.global_position.z - _goal_line_z) * _direction_sign
 
+# ARRESTED DROP. A goalie who commits his legs to a low read and then sees the
+# puck rising CHECKS the drop — he stays taller and gets the hand up. He can only
+# do it before the pads seal; past that the butterfly is spent and the top of the
+# net is open, which is what makes selling the wrong height work at all.
+#
+# This is what keeps height deception a RACE rather than a switch. Without it any
+# non-zero `read_lag` made the goalie wrong at the single instant the leg read
+# fired, and `butterfly_min_hold_time` (longer than most flights) then sealed the
+# outcome — so the deception converted identically at every range and at every
+# lag value, and `read_lag` was not a dial for it at all. With the arrest, the
+# question becomes "did the read converge before the pads did", which is a race
+# between two physical clocks: it restores the range falloff (in tight he is
+# genuinely beaten, from distance he recovers) and makes `read_lag` govern the
+# outcome, since a staler read means a deeper commitment before the correction.
+#
+# The cost is the honest one and is already modelled: he leaves through
+# RECOVERING (eating `recovery_duration` and the caught-moving read penalty)
+# rather than teleporting upright, and the arm still owes its late read. Only a
+# FRESH, unsealed drop qualifies — a committed slide is a different commitment
+# and is deliberately not abortable.
+func _maybe_arrest_drop() -> bool:
+	if _sm.current != State.BUTTERFLY:
+		return false
+	if not _reaction.reacting or not _reaction.is_elevated:
+		return false
+	if _slide.drop_progress >= 1.0:
+		return false   # pads already sealed — the butterfly is spent, wear it
+	_sm.transition_to(State.RECOVERING)
+	_sm.recovery_timer = 0.0
+	return true
+
+
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Hold conditions, in priority:
 #   1. Puck is CLOSE (within recovery_proximity_threshold)  → hold
@@ -3891,7 +3926,15 @@ func _advance_read_convergence(delta: float, truth: GoalieBehaviorRules.ShotResu
 	# read can never bite. Convergence therefore starts only once the reach has
 	# actually deployed, and is held while the puck is screened (you cannot refine
 	# a read you cannot see).
-	if not _read_committed and not _reaction.arm_pending():
+	# Convergence starts once he has committed the save he BELIEVES IN — whichever
+	# limb read governs it. Gating on the arm alone was wrong for exactly the case
+	# that matters: on a believed-LOW read the legs commit at the (much shorter)
+	# leg delay and the arm read never governs anything, so waiting on the arm
+	# delayed the correction past the whole flight and the goalie could never
+	# recover from being sold low at any range. He commits early and his eyes keep
+	# working; that gap is the race.
+	if not _read_committed \
+			and (_reaction.shot_timer <= 0.0 or not _reaction.arm_pending()):
 		_read_committed = true
 	if not _read_committed or _read_hold > 0.0:
 		_read_hold = maxf(_read_hold - delta, 0.0)

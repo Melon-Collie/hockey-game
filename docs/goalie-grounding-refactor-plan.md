@@ -597,13 +597,53 @@ Three ways out, materially different games:
   angle / stick pose, which really does change with loft) rather than off the
   loft setting. Properly grounded, and it makes the deception a real technique
   rather than a keystroke — but it is a new perception model, not a tweak.
-- **(e) Let a converging read ARREST an unsealed drop.** ← *recommended.* The drop
+- **(e) Let a converging read ARREST an unsealed drop.** ← **CHOSEN, ✅ shipped.** The drop
   takes `butterfly_drop_speed` (0.20 s) to seal; a real goalie who starts down and
   sees the puck rising checks the drop. Today it is unconditional once triggered.
   Making it abortable turns the switch back into a **race** — convergence vs. drop
   completion — which restores range falloff *and* makes `read_lag` a genuine dial
   for the first time. It is also the same grounded shape as everything else in the
   goalie: a race between two physical clocks.
+
+### 5.1d The arrested drop — ✅ SHIPPED, and `read_lag` is now a real dial
+
+Chose (e). `_maybe_arrest_drop`: a goalie whose converging read flips to
+"elevated" while the pads are still **unsealed** (`drop_progress < 1.0`) checks
+the drop and leaves through `RECOVERING`, paying `recovery_duration` and the
+caught-moving penalty. Past the seal the butterfly is spent and he wears it —
+which is what makes selling the wrong height work at all.
+
+**A second bug surfaced while validating it**, and it was the one that mattered.
+The first cut gated convergence on the *arm* read clearing. That is wrong for
+exactly the case in question: on a believed-**low** read the **legs** commit at
+the much shorter leg delay and the arm read never governs anything, so waiting on
+the arm pushed the correction past the entire flight and the goalie could never
+recover from being sold low **at any range**. A trace showed the arrest firing
+correctly at `drop = 0.54` but at t = 0.233 s against a ~0.26 s flight — right
+mechanism, hopeless timing. Convergence now starts when the **governing** limb
+commits (`shot_timer <= 0` *or* the arm clears).
+
+With both in, the axis became tunable for the first time — goals out of 14, and
+the per-range split:
+
+| `read_lag` | height-sold | 5 m / 7 m / 9 m |
+|---|---|---|
+| 0.00 | 6 / 14 | 4 / 2 / 0 |
+| 0.04 | **7 / 14** | 4 / 3 / **0** |
+| 0.10 | 11 / 14 | 4 / 5 / 2 |
+| 0.16 | 11 / 14 | 4 / 5 / 2 |
+| 0.24 | 11 / 14 | 4 / 5 / 2 |
+
+Monotonic, with the range falloff the model was supposed to produce: at 0.04 the
+9 m shots are *all* saved and only the in-tight ones get through. Tiers were
+re-anchored into the responsive band (**Hard 0.05 / Normal 0.10 / Easy 0.16**) —
+the previous 0.10/0.16/0.24 had every tier saturated and therefore *equally*
+fooled, which defeats the point of tiering.
+
+**Honest limit on this table:** 14 deterministic shots cannot resolve differences
+above ~0.10 s, so "flat above 0.10" means *"my instrument cannot tell them
+apart"*, not "provably identical". Widening the sweep is the fix if the band
+needs finer tuning.
 
 **Open tuning question for playtest.** 6/14 → 11/14 (43 % → 79 %) is a large jump
 for one perfectly-executed deception off a full 0.5 s wind-up. It is the intended
