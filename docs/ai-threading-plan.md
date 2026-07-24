@@ -290,11 +290,14 @@ the worker) — only the per-agent dispatch goes to the worker.
    **Needs a user playtest** to confirm bot feel before the live-threading step.
 3. **Thread it (Model A), in three sub-steps** so only the last introduces true
    concurrency:
-   - **3a — Freeze brain outputs** *(single-threaded, behavior-identical).* Tick
-     brains on main, freeze their per-peer output into plain data, redirect
-     `_build_role_context`'s brain reads to the frozen view. Gate: suite green,
-     benchmark flat, playtest identical. De-risks the brain-read redirection with
-     zero threading.
+   - **3a — Freeze brain outputs** *(done — committed).* `TeamStrategyView` base
+     implemented by the live `TeamBrain` and a frozen `TeamBrainView`;
+     `brain.build_view(snapshot)` runs each host frame after the brain tick; the
+     agent dispatch reads the view via a `_current_strategy` cache (falling back
+     to the live brain when no view is built, i.e. single-threaded unit tests).
+     Suite green (+ a focused mirror test), benchmark flat; the duel harness
+     builds views so the behavioral AI tests exercise the frozen path. One
+     intended shift: cross-agent one-timer readiness is now seen one frame late.
    - **3b — Split decide from apply** *(single-threaded, behavior-identical).*
      Separate `tick_agent` into `decide(snapshot) -> InputState` (worker-safe:
      only snapshot + frozen brain view + agent state) and `apply(input)`
