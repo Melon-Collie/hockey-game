@@ -230,7 +230,11 @@ func _enter_wrister_aim(skater: Skater, input: InputState) -> void:
 	var blade_world: Vector3 = skater.upper_body_to_global(skater.get_blade_position())
 	var blade_pos_rel_skater: Vector3 = blade_world - skater.global_position
 	blade_pos_rel_skater.y = 0.0
-	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater)
+	# Pin the aim ORIGIN at stroke start (the puck's on-blade contact point, where
+	# the shot will fire from) for the positional-aim wrister — see
+	# SkaterAimingBehavior.wrister_origin_world. Anchoring here, before the blade
+	# sweeps, is what keeps origin→cursor stable through the stroke.
+	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater, skater.get_blade_contact_global())
 
 
 func _cancel_slapper_internal() -> void:

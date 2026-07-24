@@ -536,18 +536,28 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Shot Power Sensitivity setting rather than this raw reference.
 @export var wrister_mouse_speed_full: float = 2500.0
 @export var wrister_mouse_speed_smoothing: float = 14.0
-# PROTOTYPE (aim-model A/B): when true, the wrister's DIRECTION is blade→cursor
-# (the shot fires from the puck toward wherever the cursor is at release) — the
-# SAME positional aim the quick pass already uses — instead of the drag vector
-# (where the cursor was moving). Power is untouched either way: it stays the pure
-# mouse-SPEED model, so this only swaps the direction signal, not the depth.
+# PROTOTYPE (aim-model A/B): when true, the wrister's DIRECTION is PINNED
+# ORIGIN → cursor — the shot fires along the line from where the stroke STARTED
+# (the blade/puck at mouse-down, SkaterAimingBehavior.wrister_origin_world) to
+# the cursor at release. This is the "start at your blade, drag to where you
+# point, and the puck follows that line" model — the endpoint form of the old
+# blade-ROM-sweep aim — and it's the SAME positional family the quick pass uses.
+# When false, the wrister aims along the drag vector (where the cursor was moving
+# at release) — the original gestural aim. Power is untouched either way: it stays
+# the pure mouse-SPEED model, so this only swaps the direction signal.
 # Rationale: the drag-vector wrister and the blade→cursor quick pass are two
 # contradictory aim models, and the quick pass trains the habit (park the cursor
 # on the target) that breaks the gestural wrister. Unifying them makes the quick
 # pass a genuine on-ramp ("a wrister at fixed power") and lets a live aim line be
 # drawn while charging (a drag-vector shot can't be previewed — its direction
-# doesn't exist until release). Flip in the editor to compare feel without a
-# rebuild; if it wins, fold it in and delete the branch.
+# doesn't exist until release). The origin is PINNED at stroke start, not read
+# from the live blade: the live blade leads and arcs to an extreme by release, so
+# a live-blade origin whipped the aim at tight angles / a close cursor.
+# NOTE (netcode): this reintroduces a body/blade-derived aim, the class of signal
+# the original blade-ROM aim was removed for (client/host divergence). The origin
+# is captured and reconcile-restored like the rest of the charge state, so it's
+# deterministic under replay — but validate an online shot before shipping the
+# swap. Flip in the editor to compare feel without a rebuild.
 @export var wrister_positional_aim: bool = true
 # ── Travel-gated ceiling (ShotMechanics.wrister_travel_cap_t) ──
 # The power CEILING must be earned with real blade travel: cursor speed alone
@@ -2167,6 +2177,25 @@ func _get_charge_direction() -> Vector3:
 	# Don't re-flip here — that would invert correct shots.
 	return _aiming.prev_blade_dir
 
+# The wrister's aim DIRECTION (world XZ), chosen by wrister_positional_aim. Shared
+# by the release (_release_wrister) and the every-tick goalie-prediction path
+# (_update_wrister_charge) so the pre-lean predicts exactly the shot that fires.
+#   positional → pinned origin→cursor: from where the stroke STARTED
+#     (SkaterAimingBehavior.wrister_origin_world, captured at mouse-down) toward
+#     the cursor now — the "start at the blade, drag to where you point, the puck
+#     follows that line" model, and the same positional aim the quick pass uses.
+#     Anchoring at stroke start (not the live, swung blade) is what keeps it
+#     stable at tight angles / a close cursor.
+#   gestural → the drag vector (_get_charge_direction) — the original wrister aim.
+# release_wrister falls back to player→cursor if this is degenerate. Backhand is
+# unaffected either way (it's the sweep chirality, not the aim vector).
+func _wrister_aim_dir(input: InputState) -> Vector3:
+	if wrister_positional_aim:
+		var d: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
+		d.y = 0.0
+		return d
+	return _get_charge_direction()
+
 # Forehand/backhand for the wrister, from the swing CHIRALITY — the net
 # rotational sense of the blade's sweep around the player over the stroke
 # (SkaterAimingBehavior.swing_rotation, accumulated by ChargeTracking). Shared
@@ -2189,19 +2218,7 @@ func _release_wrister(input: InputState) -> void:
 		# button (_fire_quick_pass). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
 		last_release_stroke_travel = _wrister_stroke_travel()
-		# Aim signal. release_wrister aims along whatever direction it's handed (and
-		# falls back to player→cursor when it's zero), so the positional/gestural
-		# choice is made HERE by what we feed it:
-		#   positional  → blade→cursor (mouse_world_pos − blade), same as the quick
-		#                 pass: the shot goes from the puck toward where you point.
-		#   gestural    → the drag vector (_get_charge_direction, where the cursor
-		#                 was moving at release) — the original wrister aim.
-		# Backhand is unaffected either way — it comes from the sweep chirality
-		# (_classify_backhand), not the aim vector.
-		var aim_dir: Vector3 = _get_charge_direction()
-		if wrister_positional_aim:
-			aim_dir = input.mouse_world_pos - blade_world
-			aim_dir.y = 0.0
+		var aim_dir: Vector3 = _wrister_aim_dir(input)
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -2354,7 +2371,7 @@ func _update_wrister_charge(input: InputState) -> void:
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level,
-			_wrister_config(), _get_charge_direction(), false,
+			_wrister_config(), _wrister_aim_dir(input), false,
 			_wrister_sweep_speed(input), _wrister_stroke_travel(), _wrister_pred_scratch)
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# shot_charge carries the release-now SPEED (normalized predicted power over
