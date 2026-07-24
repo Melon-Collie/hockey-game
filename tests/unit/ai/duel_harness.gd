@@ -284,6 +284,12 @@ func step() -> void:
 			dekes_by_peer[s.peer_id] = true
 		if s.agent._poke_evade_active_ticks > 0:
 			evades_by_peer[s.peer_id] = true
+	# Collect one-timer readiness into the brains after dispatch — the write moved
+	# off _set_one_timer_ready for threading (AICoordinator does the same on the
+	# host), so the frozen view reflects it next frame.
+	for s: SimSkater in skaters:
+		if s.agent != null:
+			s.agent.push_one_timer_ready()
 	if collect_perf:
 		perf_tick_us.append(tick_ai_us)
 	# Releases (pass/shot fired by the carrier): quick-shot edge, or a held

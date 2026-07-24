@@ -195,6 +195,9 @@ var current_snapshot: WorldSnapshot = null
 # and shared onto current_snapshot.accel_by_peer instead of all 6 bots
 # recomputing the same velocity diff every tick (see AIAccelerationTracker).
 var _accel_tracker: AIAccelerationTracker = AIAccelerationTracker.new()
+# Drives all bot dispatch — inline on the main thread by default, or off a worker
+# thread when AICoordinator.THREADED_AI is enabled (AI threading Phase 3c).
+var _ai_coordinator := AICoordinator.new()
 # Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
 # (on_host_started). Drives the carrier reaction delay applied to current_
 # snapshot below, and is read by PlayerRegistry.spawn_bot to wire each agent's
@@ -538,8 +541,7 @@ func _physics_process(delta: float) -> void:
 				# brain — the seam Phase 3c runs off the physics thread.
 				brain.build_view(current_snapshot)
 		if _registry != null:
-			for ai_ctrl: AIController in _registry.ai_controllers():
-				ai_ctrl.tick_agent(current_snapshot, delta)
+			_ai_coordinator.dispatch(_registry.ai_controllers(), current_snapshot, delta)
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
@@ -4031,6 +4033,9 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_EXIT_TREE:
 		HockeyRink.release_shared_cache()
 		ArenaStands.release_shared_cache()
+		# Join the AI worker thread at app shutdown (no-op unless threaded and
+		# started) so a live Thread is never leaked past exit.
+		_ai_coordinator.shutdown()
 
 
 func on_scene_exit() -> void:
@@ -4068,6 +4073,9 @@ func on_scene_exit() -> void:
 	_state_buffer_manager = null
 	current_snapshot = null
 	team_brains = []
+	# Stop + join the AI worker thread (no-op unless threaded and started), so a
+	# torn-down match never leaves a live thread referencing freed controllers.
+	_ai_coordinator.shutdown()
 	# Null PhaseCoordinator's _state_machine before stopping the driver so
 	# any replay_stopped signal that fires during teardown returns early from
 	# _on_goal_replay_stopped's guard rather than calling handle_phase_entered

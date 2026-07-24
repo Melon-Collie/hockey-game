@@ -201,6 +201,9 @@ func test_no_one_timer_in_the_defensive_zone() -> void:
 	var input := InputState.new()
 	for i: int in 12:
 		sm.dispatch(input, s)
+	# Readiness is set locally during dispatch and synced to the brain by the
+	# post-dispatch collection (AI threading Phase 3c) — mirror it here.
+	sm.push_one_timer_ready()
 	assert_true(_brain.is_one_timer_ready(FINISHER_ID),
 			"camped finisher is one-timer ready in the attacking zone")
 	# Relocate to team 0's own defensive zone (defends +Z) with a loose feed.
@@ -210,6 +213,7 @@ func test_no_one_timer_in_the_defensive_zone() -> void:
 	s.puck_state.carrier_peer_id = -1
 	s.real_puck_carrier_peer_id = -1
 	sm.dispatch(input, s)
+	sm.push_one_timer_ready()
 	assert_ne(sm.get_state(), Agent.State.ONE_TIMER_PRESSED,
 			"a bot in its own defensive zone never winds up a one-timer")
 	assert_false(_brain.is_one_timer_ready(FINISHER_ID),

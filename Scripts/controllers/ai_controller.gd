@@ -173,11 +173,16 @@ func begin_tick(delta: float) -> bool:
 	# scripted shot mini-state-machine still feeds SkaterController, so shot
 	# release matches a human pressing the same buttons.
 	if scripted_mode:
+		# Special (non-agent) mode: drop any stale worker decision so a later
+		# return to normal gameplay idles one frame instead of applying an old
+		# input (matters only on the threaded path; harmless inline).
+		_pending_input = null
 		_build_script_input(delta)
 		_process_input(_script_input, delta)
 		skater.current_shot_state = _sm.get_state() as int
 		return false
 	if _game_state.is_movement_locked():
+		_pending_input = null  # drop stale worker decision (see scripted note)
 		# Faceoff / intro skate-in: the bot glides from its bench / current spot
 		# to the dot while an approach is active, then hands back to the draw-aim
 		# freeze below on arrival (see SkaterController.begin_approach).
@@ -204,6 +209,7 @@ func begin_tick(delta: float) -> bool:
 			apply_blade_aim_only(_faceoff_input, delta)
 		return false
 	if _game_state.is_in_goal_celebration():
+		_pending_input = null  # drop stale worker decision (see scripted note)
 		# Celebration is movement-allowed live gameplay (humans can react), but
 		# bots shouldn't be playing — they'd chase a pickup-locked puck and bunch
 		# at the net. Skip agent input; friction coasts them to a stop.
@@ -237,6 +243,13 @@ func apply_decision(delta: float) -> void:
 	_process_input(_pending_input, delta)
 	skater.current_shot_state = _sm.get_state() as int
 	_refresh_debug_label()
+
+
+# Push the agent's one-timer readiness to its brain — MAIN thread, after dispatch
+# (AI threading Phase 3c), so the worker never writes shared team state.
+func collect_one_timer_ready() -> void:
+	if _agent != null:
+		_agent.push_one_timer_ready()
 
 
 # Blade-aim target for a center's draw during FACEOFF_PREP. Loads the blade on the

@@ -4030,11 +4030,20 @@ func _one_timer_feed_time_s(snapshot: WorldSnapshot, self_pos: Vector3) -> float
 # the opposite side of the brain (well — same brain) can read it via
 # `_team_brain.is_one_timer_ready(peer_id)`.
 func _set_one_timer_ready(ready: bool) -> void:
-	if _is_one_timer_ready == ready:
-		return
+	# Local only — the write to the shared brain is deferred to
+	# push_one_timer_ready(), called on the main thread after dispatch (AI
+	# threading Phase 3c), so the worker never writes team state. The brain read
+	# side is already frozen into the per-frame view, so the cross-agent signal
+	# was one frame late since Phase 3a regardless; the collection preserves that.
 	_is_one_timer_ready = ready
+
+
+# Main-thread collection of this agent's one-timer readiness into the shared
+# brain (called by the AI coordinator / duel harness after dispatch). Idempotent:
+# pushes the current local flag every frame, so a false erases the entry.
+func push_one_timer_ready() -> void:
 	if _team_brain != null:
-		_team_brain.set_one_timer_ready(_peer_id, ready)
+		_team_brain.set_one_timer_ready(_peer_id, _is_one_timer_ready)
 
 
 # The LIVE-line body anchor for a one-timer reception: place the slapper
