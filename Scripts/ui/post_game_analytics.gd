@@ -373,6 +373,11 @@ class RinkMap extends Control:
 	const _BOARDS := Color(0.24, 0.27, 0.33, 1.0)
 	const _RED := Color(0.69, 0.31, 0.35, 0.75)
 	const _BLUE := Color(0.23, 0.44, 0.69, 0.75)
+	# Goal marker ring — the accent, never a jersey colour (see _draw_shot).
+	const _GOAL_RING := MenuStyle.GOLD
+	# Dot radius in rink metres: floor + xG-scaled growth.
+	const _DOT_MIN_M: float = 0.18
+	const _DOT_XG_M: float = 0.55
 
 	var _events: Array[ShotEvent] = []
 	var _colors: Array[Color] = [Color.ORANGE, Color.SKY_BLUE]
@@ -444,12 +449,17 @@ class RinkMap extends Control:
 		var team: int = clampi(e.team_id, 0, 1)
 		var col: Color = _colors[team]
 		var at: Vector2 = _p(e.z, e.x)
-		var r: float = maxf(2.5, (1.4 + e.xg * 7.5) * (_scale / 6.0) * 2.0)
+		# Radius is sized in RINK METRES, then scaled — so the dots keep the same
+		# on-ice footprint at any resolution. (Deriving it from pixel scale made
+		# the slot one blob on a wide screen.)
+		var r: float = maxf(2.0, (_DOT_MIN_M + e.xg * _DOT_XG_M) * _scale)
 		match e.outcome:
 			ShotEvent.Outcome.GOAL:
-				draw_circle(at, r * 1.9, Color(col.r, col.g, col.b, 0.28))
+				draw_circle(at, r * 1.8, Color(col.r, col.g, col.b, 0.26))
 				draw_circle(at, r, col)
-				draw_arc(at, r + 2.0, 0.0, TAU, 24, Color(1, 1, 1, 0.95), 1.6)
+				# Gold, not white: one team's kit IS white, and a white ring on a
+				# white dot made their goals unreadable.
+				draw_arc(at, r + 2.0, 0.0, TAU, 24, _GOAL_RING, 1.8)
 			ShotEvent.Outcome.SAVED:
 				draw_circle(at, r, Color(col.r, col.g, col.b, 0.92))
 			ShotEvent.Outcome.MISSED:
@@ -469,7 +479,7 @@ class LegendDot extends Control:
 		match kind:
 			RinkMap.LEGEND_GOAL:
 				draw_circle(c, r, col)
-				draw_arc(c, r + 1.6, 0.0, TAU, 20, Color(1, 1, 1, 0.95), 1.4)
+				draw_arc(c, r + 1.6, 0.0, TAU, 20, RinkMap._GOAL_RING, 1.6)
 			RinkMap.LEGEND_ON_NET:
 				draw_circle(c, r, col)
 			RinkMap.LEGEND_MISSED:
@@ -483,6 +493,7 @@ class LegendDot extends Control:
 class XGFlow extends Control:
 	const _GRID := Color(0.165, 0.175, 0.22, 1.0)
 	const _AXIS := Color(0.28, 0.30, 0.36, 1.0)
+	const _LABEL := MenuStyle.TEXT_MUTED
 
 	var _events: Array[ShotEvent] = []
 	var _colors: Array[Color] = [Color.ORANGE, Color.SKY_BLUE]
@@ -533,11 +544,16 @@ class XGFlow extends Control:
 		var py := func(v: float) -> float:
 			return h - mb - (h - mt - mb) * clampf(v / top, 0.0, 1.0)
 
-		# Horizontal value gridlines + baseline.
+		# Horizontal value gridlines + baseline, with the xG value on each — the
+		# gridlines were unlabelled, so the curve had no readable magnitude.
+		var font: Font = MenuStyle.UI_FONT
 		var steps: int = int(top)
 		for i: int in range(1, steps + 1):
 			var y: float = py.call(float(i))
 			draw_line(Vector2(ml, y), Vector2(w - mr, y), _GRID, 1.0)
+			if font != null:
+				draw_string(font, Vector2(2.0, y + 3.5), str(i),
+						HORIZONTAL_ALIGNMENT_LEFT, ml - 6.0, 10, _LABEL)
 		draw_line(Vector2(ml, py.call(0.0)), Vector2(w - mr, py.call(0.0)), _AXIS, 1.0)
 		# Period dividers.
 		for p: int in range(1, _periods):
