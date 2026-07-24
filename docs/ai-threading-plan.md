@@ -298,12 +298,13 @@ the worker) — only the per-agent dispatch goes to the worker.
      Suite green (+ a focused mirror test), benchmark flat; the duel harness
      builds views so the behavioral AI tests exercise the frozen path. One
      intended shift: cross-agent one-timer readiness is now seen one frame late.
-   - **3b — Split decide from apply** *(single-threaded, behavior-identical).*
-     Separate `tick_agent` into `decide(snapshot) -> InputState` (worker-safe:
-     only snapshot + frozen brain view + agent state) and `apply(input)`
-     (`_process_input`, main-thread node writes), with the special-mode gate
-     (scripted / faceoff / celebration / movement-lock) resolved on main. Still
-     called back-to-back on main. Gate: suite green, playtest identical.
+   - **3b — Split decide from apply** *(done — committed).* `tick_agent` now
+     orchestrates `begin_tick(delta) -> bool` (main: guards + special modes,
+     stamps rule set + host time), `decide(snapshot, delta)` (worker-safe: agent
+     against the frozen snapshot + view, no autoloads/nodes), and
+     `apply_decision(delta)` (main: `_process_input` + shot state + debug). Called
+     back-to-back on main here; suite green. One residual live-brain write inside
+     the agent (`set_one_timer_ready`) is left for 3c's collection step.
    - **3c — Introduce the worker** *(concurrency goes live).* Persistent
      `Thread` + two `Semaphore`s; kick after building the snapshot + frozen brain
      view, apply last tick's results at the top of the next tick (the 1-tick
