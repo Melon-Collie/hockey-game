@@ -175,10 +175,13 @@ static func is_backhand_from_swing(
 #   - QUICK PASS (the dedicated quick_pass button, via _fire_quick_pass): aims
 #     blade→cursor — from the puck's position (the blade) toward the cursor, so
 #     the pass goes where you point — at the fixed quick/pass power.
-#   - WRISTER (the LMB shoot button, via _release_wrister): aims along the DRAG
-#     (the swept cursor direction) at charged power — the pure mouse-speed model
-#     above (wrister_power_t), fed by sweep_speed. The drag direction IS the aim —
-#     this is the defining mechanic of the shot, so it is never diluted.
+#   - WRISTER (the LMB shoot button, via _release_wrister): aims along the
+#     charge_direction the caller hands in, at charged power — the pure mouse-speed
+#     model above (wrister_power_t), fed by sweep_speed. The controller chooses that
+#     vector: classically the DRAG (swept cursor direction), or — under the
+#     SkaterController.wrister_positional_aim prototype — blade→cursor, unifying the
+#     wrister's aim with the quick pass. Power is the mouse-speed model regardless;
+#     only the direction signal differs. Falls back to player→cursor when zero.
 # The two live on separate buttons precisely so there's no tap-vs-hold guess: the
 # old hold-time classifier made an ordinary tap that lingered a few ticks fire a
 # wrister when the player expected a snap. There is intentionally no blend band:

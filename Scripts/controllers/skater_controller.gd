@@ -536,6 +536,19 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Shot Power Sensitivity setting rather than this raw reference.
 @export var wrister_mouse_speed_full: float = 2500.0
 @export var wrister_mouse_speed_smoothing: float = 14.0
+# PROTOTYPE (aim-model A/B): when true, the wrister's DIRECTION is blade→cursor
+# (the shot fires from the puck toward wherever the cursor is at release) — the
+# SAME positional aim the quick pass already uses — instead of the drag vector
+# (where the cursor was moving). Power is untouched either way: it stays the pure
+# mouse-SPEED model, so this only swaps the direction signal, not the depth.
+# Rationale: the drag-vector wrister and the blade→cursor quick pass are two
+# contradictory aim models, and the quick pass trains the habit (park the cursor
+# on the target) that breaks the gestural wrister. Unifying them makes the quick
+# pass a genuine on-ramp ("a wrister at fixed power") and lets a live aim line be
+# drawn while charging (a drag-vector shot can't be previewed — its direction
+# doesn't exist until release). Flip in the editor to compare feel without a
+# rebuild; if it wins, fold it in and delete the branch.
+@export var wrister_positional_aim: bool = true
 # ── Travel-gated ceiling (ShotMechanics.wrister_travel_cap_t) ──
 # The power CEILING must be earned with real blade travel: cursor speed alone
 # (a wiggle, a short jerk, a cranked Shot Power Sensitivity) caps at the floor
@@ -2176,6 +2189,19 @@ func _release_wrister(input: InputState) -> void:
 		# button (_fire_quick_pass). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
 		last_release_stroke_travel = _wrister_stroke_travel()
+		# Aim signal. release_wrister aims along whatever direction it's handed (and
+		# falls back to player→cursor when it's zero), so the positional/gestural
+		# choice is made HERE by what we feed it:
+		#   positional  → blade→cursor (mouse_world_pos − blade), same as the quick
+		#                 pass: the shot goes from the puck toward where you point.
+		#   gestural    → the drag vector (_get_charge_direction, where the cursor
+		#                 was moving at release) — the original wrister aim.
+		# Backhand is unaffected either way — it comes from the sweep chirality
+		# (_classify_backhand), not the aim vector.
+		var aim_dir: Vector3 = _get_charge_direction()
+		if wrister_positional_aim:
+			aim_dir = input.mouse_world_pos - blade_world
+			aim_dir.y = 0.0
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -2183,7 +2209,7 @@ func _release_wrister(input: InputState) -> void:
 				is_backhand,
 				_elevation_level,
 				_wrister_config(),
-				_get_charge_direction(),
+				aim_dir,
 				false,
 				_wrister_sweep_speed(input),
 				_wrister_stroke_travel())
