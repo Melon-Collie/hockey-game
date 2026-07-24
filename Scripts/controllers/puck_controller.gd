@@ -256,9 +256,9 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 	else:
 		# Phase-3/4b prediction scratch (built once; the loose-puck predictor —
 		# which also carries the shooter's own release via the seed — runs per
-		# physics frame and must allocate nothing). No Jolt contact-signal
-		# wiring: the client puck is frozen in every mode — contacts are
-		# detected analytically inside the prediction loop itself.
+		# physics frame and must allocate nothing). No contact-signal wiring:
+		# the client puck has no physics body (it's a plain Node3D) — contacts
+		# are detected analytically inside the prediction loop itself.
 		_predict_frame_scratch = PuckGeometryCollision.Result.new()
 		_predict_tick_result = PuckAuthorityRules.TickResult.new()
 		_predict_goalie_contact = GoalieContactDetector.Contact.new()
@@ -933,7 +933,7 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 
 # Coulomb ice friction: a puck on ice loses a fixed amount of speed per second
 # (mu*g = GameRules.PUCK_ICE_DECEL_M_S2), independent of speed — matching the host's
-# Jolt physics material. The previous viscous model (speed × factor) decelerated
+# analytic ice friction. The previous viscous model (speed × factor) decelerated
 # ~100x too hard at game speeds, so extrapolated / latency-corrected pucks lagged
 # the host. Horizontal in practice (a grounded puck's velocity is planar).
 func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
@@ -1171,7 +1171,8 @@ func _interpolate(delta: float) -> void:
 		var dt: float = minf(bracket.extrapolation_dt, extrapolation_max_ms / 1000.0)
 		var newest: PuckNetworkState = bracket.to_state
 		# Decay velocity to approximate ice friction so the extrapolated position
-		# matches Jolt's deceleration rather than linear dead-reckoning overshoot.
+		# matches the host's analytic ice-friction deceleration rather than linear
+		# dead-reckoning overshoot.
 		var friction_vel: Vector3 = _ice_friction_velocity(newest.velocity, dt)
 		var projected: Vector3 = newest.position + friction_vel * dt
 		# Smart extrapolation: only dead-reckon forward when the puck won't cross a
@@ -1270,5 +1271,6 @@ func _smooth_damp(current: Vector3, target: Vector3, smooth_time: float, dt: flo
 	return target + (change + temp) * exp_factor
 
 func _apply_state_to_puck(state: PuckNetworkState) -> void:
-	# Position only — puck is frozen during interpolation, Jolt ignores velocity.
+	# Position only — the puck is a plain Node3D with no body, so only its
+	# transform is driven here (velocity lives in the interpolator/predictor).
 	puck.set_puck_position(state.position)
