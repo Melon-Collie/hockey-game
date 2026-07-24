@@ -363,8 +363,13 @@ func apply_upper_body(delta: float) -> void:
 		# doesn't shrink as the body rotates — the old hand-angle approach had a
 		# dampening feedback loop that capped steady-state rotation at ~43% of the
 		# world angle. Now the body tracks 1:1 up to upper_body_max_twist_deg.
-		var blade_world: Vector3 = _skater.upper_body_to_global(_skater.get_blade_position())
-		var to_blade: Vector3 = blade_world - _skater.global_position
+		# FREEZE: the coil normally faces the blade (which tracks the cursor), but a
+		# FROZEN blade can't lead the wind-up — so face the CURSOR directly, keeping
+		# the shoulders rotating toward the aim while the puck sits still.
+		var twist_source: Vector3 = _skater.upper_body_to_global(_skater.get_blade_position())
+		if _sm.get_state() == State.WRISTER_AIM and _controller.wrister_freeze_blade:
+			twist_source = _controller._current_aim_world
+		var to_blade: Vector3 = twist_source - _skater.global_position
 		to_blade.y = 0.0
 		if to_blade.length() > 0.01:
 			var local_dir: Vector3 = _skater.global_transform.basis.inverse() * to_blade.normalized()
