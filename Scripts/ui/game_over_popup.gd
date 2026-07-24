@@ -277,6 +277,12 @@ func present(home_score: int, away_score: int,
 			_star_stripe_styles[rank].bg_color = star_stripes[rank]
 
 	visible = true
+	# Controller: focus the primary action (Rematch, or Lobby when Rematch is
+	# hidden for spectators) so the pad can act on the post-game screen.
+	if _rematch_btn != null and _rematch_btn.visible:
+		ControllerNav.grab_focus(_rematch_btn)
+	elif _lobby_btn != null:
+		ControllerNav.grab_focus(_lobby_btn)
 	if _present_tween != null and _present_tween.is_running():
 		_present_tween.kill()
 	_scrim.modulate.a = 0.0
@@ -350,6 +356,8 @@ func _action_button(label: String) -> Button:
 	btn.add_theme_font_size_override("font_size", 17)
 	MenuStyle.wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
+	if ControllerNav.active():
+		MenuStyle.add_focus_ring(btn)
 	return btn
 
 

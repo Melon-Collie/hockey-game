@@ -87,6 +87,7 @@ const _COLOR_WAITING := Color(0.95, 0.78, 0.22, 1.0)
 # the grid. See _input / focus_first_card.
 var _nav_cards: Array[Control] = []
 var _nav_card_handlers: Array[Callable] = []
+var _nav_card_coords: Array[Vector2i] = []   # (team, slot) per nav card, for the X action
 
 # Per-slot widget caches. Indexed [team_id][slot].
 var _cards:        Array = [[], []]
@@ -172,6 +173,7 @@ func _build_grid() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_nav_cards.clear()
 	_nav_card_handlers.clear()
+	_nav_card_coords.clear()
 
 	# Away on top (team 1), Home on bottom (team 0) — matches rink perspective,
 	# and each team's D pair sits BEHIND its forwards (above for away, below
@@ -494,16 +496,32 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 		var sl: int = slot
 		_nav_cards.append(card)
 		_nav_card_handlers.append(func() -> void: slot_selected.emit(t, sl))
+		_nav_card_coords.append(Vector2i(team_id, slot))
 
 	return card
 
 
-# Controller: A/ui_accept on a focused card selects its slot (joysticks pick the
-# card via focus nav; the primary click is slot_selected). Cards are custom
-# PanelContainers, so ui_accept is routed here rather than through gui_input.
+# Controller card input on the focused card:
+#   * A / ui_accept → select the slot (slot_selected — the primary click). Cards are
+#     custom PanelContainers, so ui_accept is routed here, not via gui_input.
+#   * X → the card's +/X action (add/remove bot, or kick a peer), matching the mouse
+#     action button — only fired when that action is actually shown for the slot.
 func _input(event: InputEvent) -> void:
-	if is_visible_in_tree() and ControllerNav.activate_focused(event, _nav_cards, _nav_card_handlers):
+	if not is_visible_in_tree():
+		return
+	if ControllerNav.activate_focused(event, _nav_cards, _nav_card_handlers):
 		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventJoypadButton and (event as InputEventJoypadButton).pressed \
+			and (event as InputEventJoypadButton).button_index == JOY_BUTTON_X:
+		for i: int in _nav_cards.size():
+			if _nav_cards[i].has_focus():
+				var coord: Vector2i = _nav_card_coords[i]
+				var btn: Button = _action_btn[coord.x][coord.y]
+				if btn != null and btn.visible:
+					_on_action_pressed(coord.x, coord.y)
+					get_viewport().set_input_as_handled()
+				return
 
 
 # Drop controller focus on the first VISIBLE slot card — the Lobby calls this on
