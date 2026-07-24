@@ -178,7 +178,10 @@ const VERSION: String = "dev"
 #      broadcast counters (shot_attempts, shot_attempts_blocked → Corsi/Fenwick),
 #      widening STATS_PLAYER_RECORD_SIZE 15 → 17. A v40 peer would misalign the
 #      stats player-block walk, so mixed builds must be refused.
-const PROTOCOL_VERSION: int = 41
+# v42: analytics A2 — the stats record gains a float xg_for (individual expected
+#      goals), widening STATS_PLAYER_RECORD_SIZE 17 → 18. Same misalignment risk
+#      against a v41 peer, so mixed builds must be refused.
+const PROTOCOL_VERSION: int = 42
 
 
 func _ready() -> void:

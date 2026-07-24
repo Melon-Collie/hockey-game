@@ -915,6 +915,31 @@ static func open_net_danger(
 	# inside _hole_open_angle: HIGH holes fly at the arrival-honest solved pace,
 	# flat bands at the committed full pace; the reach budget divides the
 	# shooter→goalie gap by it.
+	var best_angle: float = best_open_angle(shooter, attacking_goal, goalie_pos,
+			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
+			goalie_five_hole_m, goalie_down,
+			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+	return clampf(
+			best_angle / (2.0 * maxf(aim_spread_rad, MIN_RELEASE_SPREAD_RAD)),
+			0.0, 1.0)
+
+
+# The widest goalie-beating opening (radians) over the five holes — the raw
+# geometry both open_net_danger (bot make-probability) and expected_goals (the xG
+# stat) sit on top of. Pure value-type math, no allocation.
+static func best_open_angle(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0,
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
@@ -924,9 +949,45 @@ static func open_net_danger(
 				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
 		if a > best_angle:
 			best_angle = a
-	return clampf(
-			best_angle / (2.0 * maxf(aim_spread_rad, MIN_RELEASE_SPREAD_RAD)),
-			0.0, 1.0)
+	return best_angle
+
+
+# ── Expected goals (xG) — the analytics stat ─────────────────────────────────
+# The make-probability of a shot, for the analytics layer. Same grounded hole
+# geometry as open_net_danger — the real goalie-beating open net — but built as a
+# STAT, not a bot decision:
+#   • It normalizes by a FIXED reference spread (XG_REFERENCE_SPREAD_RAD), not the
+#     caller's per-build aim_spread, so a career xG number never moves when bot
+#     aim/difficulty is retuned. The reference does double duty exactly as the bot
+#     model does — the release scatter that both insets the clean entry and scales
+#     the make-probability — so xG stays the internally-consistent P(beat the
+#     goalie into open net) for a reference shooter.
+#   • It caps below 1.0 (XG_MAX): even a wide-open Mitts look isn't a literal 100%.
+# MAGNITUDE IS PROVISIONAL. The shape is grounded (open angle, goalie reach, screen
+# — all physical); the two constants are hand-set priors to be FIT against logged
+# shot outcomes via the reliability-plot loop once the Phase-B shot-event log
+# exists (analytics plan §3.3). Passes are already excluded upstream — expected_goals
+# is only ever evaluated for a shot the resolution gate counted.
+const XG_REFERENCE_SPREAD_RAD: float = 0.02
+const XG_MAX: float = 0.90
+
+static func expected_goals(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0,
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false,
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
+	var angle: float = best_open_angle(shooter, attacking_goal, goalie_pos,
+			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
+			goalie_five_hole_m, goalie_down,
+			goalie_post_seal_x, goalie_post_seal_tall, XG_REFERENCE_SPREAD_RAD,
+			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+	return minf(XG_MAX, angle / (2.0 * XG_REFERENCE_SPREAD_RAD))
 
 
 # The LOFT the bot should shoot with, from the same hole geometry that

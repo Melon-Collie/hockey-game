@@ -555,7 +555,7 @@ func test_block_emits_shot_counted_blocked_with_shooter() -> void:
 	watch_signals(tracker)
 	tracker.on_shot_started(10)
 	tracker.on_block(20)
-	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, true])
+	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, true, 0.0])
 
 
 func test_uncredited_block_does_not_emit_shot_counted() -> void:
@@ -578,7 +578,17 @@ func test_on_goal_shot_emits_shot_counted_unblocked() -> void:
 	watch_signals(tracker)
 	tracker.on_shot_started(10)
 	tracker.on_goalie_touch(1)  # saved, on net
-	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false])
+	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false, 0.0])
+
+
+func test_on_goal_shot_carries_its_xg() -> void:
+	# The xG noted at release rides shot_counted through to the accumulator.
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_xg(0.27)
+	tracker.on_goalie_touch(1)
+	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false, 0.27])
 
 
 func test_directed_miss_recovered_by_defender_counts() -> void:
@@ -590,7 +600,7 @@ func test_directed_miss_recovered_by_defender_counts() -> void:
 	tracker.note_trajectory(false)          # missed the net
 	tracker.note_directed_at_net(true)      # but was aimed at it
 	tracker.on_pickup(20)                   # defender recovers
-	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false])
+	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false, 0.0])
 
 
 func test_directed_shot_received_by_teammate_is_a_pass() -> void:
@@ -626,7 +636,7 @@ func test_directed_miss_times_out_as_one_shot() -> void:
 	tracker.note_trajectory(false)
 	tracker.note_directed_at_net(true)
 	tracker.tick(ShotOnGoalTracker.SHOT_ON_GOAL_TIMEOUT + 0.1)
-	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false])
+	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false, 0.0])
 	assert_eq(get_signal_emit_count(tracker, "shot_counted"), 1,
 			"a timed-out miss counts exactly once")
 
@@ -639,7 +649,7 @@ func test_post_hit_is_a_directed_miss() -> void:
 	tracker.on_shot_started(10)
 	tracker.on_post_hit()                   # off net now, but directed
 	tracker.on_pickup(20)
-	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false])
+	assert_signal_emitted_with_parameters(tracker, "shot_counted", [10, false, 0.0])
 
 
 func test_block_by_teammate_does_not_credit() -> void:

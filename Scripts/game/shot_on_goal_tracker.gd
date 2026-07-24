@@ -40,13 +40,13 @@ signal shot_on_goal_recorded(peer_id: int)
 # the save so a rebound stays covered past the shot's flight time.
 signal shot_attempted(peer_id: int)
 # Fires once per resolved shot ATTEMPT (Corsi), carrying the credited shooter
-# (last attacking toucher — tipper on a tip) and whether it was blocked. A "shot
-# attempt" is a puck DIRECTED AT THE NET that resolves as on-goal, missed, or
-# blocked — NOT a pass. AdvancedStatsTracker counts Corsi off this (and Fenwick =
-# attempts − blocked). Unlike a release, this is the pass-filtered event: passes
-# (off-net, or received by a teammate) never emit it. See _resolve_pending_miss
-# for the miss classification.
-signal shot_counted(peer_id: int, blocked: bool)
+# (last attacking toucher — tipper on a tip), whether it was blocked, and the
+# shot's expected-goals value (xg, evaluated at release; 0 for blocked shots,
+# which are excluded from xG). A "shot attempt" is a puck DIRECTED AT THE NET
+# that resolves as on-goal, missed, or blocked — NOT a pass. AdvancedStatsTracker
+# counts Corsi/Fenwick and accumulates xGF off this. Unlike a release, this is the
+# pass-filtered event: passes (off-net, or received by a teammate) never emit it.
+signal shot_counted(peer_id: int, blocked: bool, xg: float)
 
 const SHOT_ON_GOAL_TIMEOUT: float = 5.0
 # A genuine blocked shot happens within a beat of the release — the puck travels
@@ -82,6 +82,10 @@ var _pending_on_net: bool = false
 # current by note_directed_at_net, and forced true on a post (a post is a directed
 # miss). A puck NOT directed at net that clears is a pass/clear, not a Corsi miss.
 var _pending_directed_at_net: bool = false
+# The pending shot's expected-goals value (AIActionScoring.expected_goals),
+# evaluated by the caller at release from the real goalie geometry and carried on
+# shot_counted when the shot resolves. Set via note_xg; 0 until then.
+var _pending_xg: float = 0.0
 # Whether the pending shot was released as a one-timer (wind-up off the puck,
 # fired the instant it entered the shooting zone). Read at goal time for the
 # One-Timer achievement's goal-flavor tag. Set by on_shot_started, cleared with
@@ -144,6 +148,7 @@ func on_deflection(peer_id: int) -> void:
 		_pending_one_timer = false
 		_pending_on_net = true
 		_pending_directed_at_net = true  # re-armed shot; note_directed_at_net corrects
+		_pending_xg = 0.0                # re-armed shot; note_xg re-reads its geometry
 	_record_toucher(peer_id, false)
 
 
@@ -219,6 +224,15 @@ func note_directed_at_net(directed: bool) -> void:
 	_pending_directed_at_net = directed
 
 
+# Records the pending shot's expected-goals value (computed by the caller at
+# release from the real goalie geometry — AIActionScoring.expected_goals). Carried
+# on shot_counted at resolution. No-op without a pending shot.
+func note_xg(xg: float) -> void:
+	if _shooter_peer_id == -1:
+		return
+	_pending_xg = xg
+
+
 # A shot off the pipes is a MISS in NHL scoring — it was never "on goal", so a
 # goalie touch on the ricochet must not confirm a SOG. The pending shot stays
 # alive for goal attribution: a carom that still crosses the line counts via
@@ -266,7 +280,7 @@ func on_block(blocker_peer_id: int) -> bool:
 	# directed at net. Attribute to the shooter; emit before clear_pending() zeroes
 	# _shooter_peer_id, and mark counted so the trailing clear resolves no miss.
 	_shot_on_goal_counted = true
-	shot_counted.emit(_shooter_peer_id, true)
+	shot_counted.emit(_shooter_peer_id, true, 0.0)  # blocked shots carry no xG (Fenwick convention)
 	clear_pending()
 	return true
 
@@ -383,6 +397,7 @@ func clear_pending() -> void:
 	_shot_on_goal_counted = false
 	_pending_on_net = false
 	_pending_directed_at_net = false
+	_pending_xg = 0.0
 	_pending_one_timer = false
 
 
@@ -430,7 +445,7 @@ func _confirm(peer_id: int) -> void:
 	shots_on_goal_changed.emit(
 		_state_machine.team_shots[0], _state_machine.team_shots[1])
 	# A shot on goal is a Corsi/Fenwick attempt (unblocked). Same credited peer.
-	shot_counted.emit(peer_id, false)
+	shot_counted.emit(peer_id, false, _pending_xg)
 
 
 # Resolves a still-pending shot into a MISS (Corsi/Fenwick) or a pass (nothing)
@@ -450,7 +465,7 @@ func _resolve_pending_miss(picker_peer_id: int) -> void:
 		return  # a DIFFERENT teammate received it → completed pass, not a shot
 		# (the shooter recovering their own wide shot is still a missed shot)
 	_shot_on_goal_counted = true  # guard against a re-emit before clear_pending
-	shot_counted.emit(_credit_peer(), false)
+	shot_counted.emit(_credit_peer(), false, _pending_xg)
 
 
 # The peer a resolved shot is attributed to: the last attacking toucher (a

@@ -55,6 +55,12 @@ var ot_goals: int = 0
 #                           (v1: a blocked-off-net shot isn't counted as a block).
 var shot_attempts: int = 0
 var shot_attempts_blocked: int = 0
+# Individual expected goals (ixG, analytics plan A2) — the summed xG of the shot
+# attempts this player took (AIActionScoring.expected_goals, evaluated at release
+# from the real goalie geometry). Host-authoritative and broadcast like the
+# counters above; a float, unlike the integer counters. Blocked attempts are
+# excluded (xG is on unblocked/Fenwick shots). Goals − xg_for is finishing.
+var xg_for: float = 0.0
 # Tracked locally on every peer (game_manager._physics_process) rather than
 # host-authoritative + broadcast like the counters above. Each peer's own
 # value is what ships to Supabase, since report() runs per-peer at game-over.
@@ -69,7 +75,7 @@ func to_array() -> Array:
 	return [goals, assists, shots_on_goal, hits, shots_blocked,
 			hits_taken, takeaways, giveaways, faceoff_wins, faceoff_losses,
 			game_winning_goals, one_timer_goals, tip_goals, ot_goals,
-			shot_attempts, shot_attempts_blocked]
+			shot_attempts, shot_attempts_blocked, xg_for]
 
 static func from_array(a: Array) -> PlayerStats:
 	var s := PlayerStats.new()
@@ -98,6 +104,7 @@ func update_from_array(a: Array) -> void:
 	ot_goals = a[13]
 	shot_attempts = a[14]
 	shot_attempts_blocked = a[15]
+	xg_for = a[16]
 
 func to_dict() -> Dictionary:
 	return {
@@ -113,5 +120,6 @@ func to_dict() -> Dictionary:
 		"faceoff_losses": faceoff_losses,
 		"shot_attempts": shot_attempts,
 		"shot_attempts_blocked": shot_attempts_blocked,
+		"xg_for": snappedf(xg_for, 0.001),
 		"toi_seconds": roundi(toi_seconds),
 	}

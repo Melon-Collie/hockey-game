@@ -41,7 +41,12 @@ create table if not exists public.career_stats (
     shot_attempts         integer default 0 not null,
     shot_attempts_blocked integer default 0 not null,
     team_sog_for          integer default 0 not null,
-    team_sog_against      integer default 0 not null
+    team_sog_against      integer default 0 not null,
+    -- Analytics A2. xg_for = individual expected goals (ixG); team_xg_* are team
+    -- quantities carried on every row, the career xGF% numerator/denominator.
+    xg_for                numeric default 0 not null,
+    team_xg_for           numeric default 0 not null,
+    team_xg_against       numeric default 0 not null
 );
 
 -- Migration for an existing DB (the create above is skipped once the table
@@ -55,6 +60,9 @@ alter table public.career_stats add column if not exists shot_attempts         i
 alter table public.career_stats add column if not exists shot_attempts_blocked integer default 0 not null;
 alter table public.career_stats add column if not exists team_sog_for          integer default 0 not null;
 alter table public.career_stats add column if not exists team_sog_against      integer default 0 not null;
+alter table public.career_stats add column if not exists xg_for                numeric default 0 not null;
+alter table public.career_stats add column if not exists team_xg_for           numeric default 0 not null;
+alter table public.career_stats add column if not exists team_xg_against       numeric default 0 not null;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
@@ -95,6 +103,9 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
     shot_attempts_blocked between 0 and 10000 and
     team_sog_for          between 0 and 10000 and
     team_sog_against      between 0 and 10000 and
+    xg_for                between 0 and 10000 and
+    team_xg_for           between 0 and 10000 and
+    team_xg_against       between 0 and 10000 and
     toi_seconds   between 0 and 100000 and
     goals_for     between 0 and 1000  and
     goals_against between 0 and 1000  and
@@ -149,7 +160,12 @@ with (security_invoker = true) as
     round((
         sum(goals_for)::numeric     / NULLIF(sum(team_sog_for), 0)::numeric
       + 1::numeric - sum(goals_against)::numeric / NULLIF(sum(team_sog_against), 0)::numeric
-    ) * 1000::numeric, 0) AS pdo
+    ) * 1000::numeric, 0) AS pdo,
+    -- Analytics A2: lifetime xG. ixG = summed expected goals; goals − ixG is
+    -- finishing (goals above expected); xGF% is team chance-share.
+    round(sum(xg_for), 2) AS xg_for,
+    round(sum(goals)::numeric - sum(xg_for), 2) AS goals_above_expected,
+    round(sum(team_xg_for) / NULLIF(sum(team_xg_for) + sum(team_xg_against), 0) * 100::numeric, 1) AS xgf_pct
    FROM career_stats
   WHERE steam_id IS NOT NULL
   GROUP BY steam_id;

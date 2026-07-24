@@ -3,10 +3,11 @@ class_name AdvancedStatsTracker extends RefCounted
 ## signals ShotOnGoalTracker already fires into per-player Corsi/Fenwick counters
 ## on PlayerStats, which ride the normal stats broadcast to every peer.
 ##
-## A1 tracks shot-attempt volume off ONE resolution-time signal:
-##   shot_counted(pid, blocked) → shot_attempts++ (individual Corsi, iCF);
-##                                shot_attempts_blocked++ when blocked
-##                                (→ Fenwick = iCF − blocked)
+## Tracks shot-attempt volume and quality off ONE resolution-time signal:
+##   shot_counted(pid, blocked, xg) → shot_attempts++ (individual Corsi, iCF);
+##                                    shot_attempts_blocked++ when blocked
+##                                    (→ Fenwick = iCF − blocked);
+##                                    xg_for += xg for unblocked shots (A2, ixG)
 ##
 ## shot_counted fires only for genuine shot attempts — a puck directed at the net
 ## that resolves as on-goal, missed, or blocked. ShotOnGoalTracker does the
@@ -30,15 +31,18 @@ func setup(registry: PlayerRegistry) -> void:
 	_registry = registry
 
 
-# A resolved shot attempt (ShotOnGoalTracker.shot_counted): Corsi always, plus the
-# blocked subset so Fenwick = shot_attempts − shot_attempts_blocked.
-func on_shot_counted(peer_id: int, blocked: bool) -> void:
+# A resolved shot attempt (ShotOnGoalTracker.shot_counted): Corsi always, the
+# blocked subset so Fenwick = shot_attempts − shot_attempts_blocked, and xGF for
+# unblocked shots (blocked shots carry no xG, matching the Fenwick convention).
+func on_shot_counted(peer_id: int, blocked: bool, xg: float) -> void:
 	var record: PlayerRecord = _record(peer_id)
 	if record == null:
 		return
 	record.stats.shot_attempts += 1
 	if blocked:
 		record.stats.shot_attempts_blocked += 1
+	else:
+		record.stats.xg_for += xg
 
 
 func _record(peer_id: int) -> PlayerRecord:

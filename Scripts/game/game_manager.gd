@@ -3378,18 +3378,56 @@ func _note_shot_trajectory() -> void:
 	var vel: Vector3 = puck.get_release_velocity()
 	var on_net: bool = false
 	var directed: bool = false
+	var directed_line_z: float = 0.0
 	for goal: HockeyGoal in goals:
 		var line_z: float = goal.goal_line_z()
 		if ShotOnNetRules.is_on_net(pos, vel, line_z):
 			on_net = true
 			directed = true
+			directed_line_z = line_z
 			break
 		# Wider Corsi/Fenwick mouth: a shot that misses within the margin is still
 		# an attempt (is_on_net ⊆ is_directed_at_net, so only check when off net).
 		if ShotOnNetRules.is_directed_at_net(pos, vel, line_z):
 			directed = true
+			directed_line_z = line_z
 	_shot_tracker.note_trajectory(on_net)
 	_shot_tracker.note_directed_at_net(directed)
+	# xG (A2): evaluate this shot's expected goals from the REAL goalie geometry at
+	# release, and hold it on the pending shot to commit when it resolves. Only
+	# directed shots can become counted attempts, so only they need an xG.
+	if directed:
+		var xg: float = AIActionScoring.expected_goals(
+				pos, Vector3(0.0, 0.0, directed_line_z),
+				_defending_goalie_pos(directed_line_z),
+				GameRules.NET_HALF_WIDTH, vel.length())
+		_shot_tracker.note_xg(xg)
+
+
+# The position of the goalie defending the net at `line_z` (same end, matched by
+# z-sign), for the release-time xG geometry. Falls back to the goal centre when
+# no goalie is present (drills / degenerate setups).
+func _defending_goalie_pos(line_z: float) -> Vector3:
+	for gc: GoalieController in goalie_controllers:
+		if gc != null and gc.goalie != null \
+				and signf(gc.goalie.global_position.z) == signf(line_z):
+			return gc.goalie.global_position
+	return Vector3(0.0, 0.0, line_z)
+
+
+# Sum of individual xG (PlayerStats.xg_for) over a team's players — the team xGF
+# for a game, and (for the opponent) the team xGA. Read at game-over for the
+# career xGF% columns; every peer has all rows via the stats broadcast.
+func _team_xg_sum(team_id: int) -> float:
+	var total: float = 0.0
+	if _registry == null:
+		return total
+	for peer_id: int in _registry.all():
+		var record: PlayerRecord = _registry.get_record(peer_id)
+		if record != null and record.team != null and record.team.team_id == team_id \
+				and record.stats != null:
+			total += record.stats.xg_for
+	return total
 
 
 # Host-side: a shot off the pipes is a miss in NHL scoring — drop the pending
@@ -3908,7 +3946,8 @@ func _on_game_over() -> void:
 		return
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods,
-			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id])
+			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id],
+			_team_xg_sum(team_id), _team_xg_sum(1 - team_id))
 
 
 # One network-quality row per game, guarded so the game-over and scene-exit

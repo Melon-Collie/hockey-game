@@ -2,7 +2,8 @@ class_name CareerStatsReporter extends RefCounted
 
 func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: String,
 		game_id: String, team_id: int, period_scores: Array, num_periods: int,
-		team_sog_for: int, team_sog_against: int) -> void:
+		team_sog_for: int, team_sog_against: int,
+		team_xg_for: float, team_xg_against: float) -> void:
 	var body: Dictionary = record.stats.to_dict()
 	# steam_id is the career identity (cross-machine). Career stats only write in
 	# online (Steam) sessions, so a valid SteamID64 is always available here.
@@ -21,6 +22,10 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 	# Team quantities like goals_for, so they carry on every player's row.
 	body["team_sog_for"] = team_sog_for
 	body["team_sog_against"] = team_sog_against
+	# Team expected goals for/against this game — the career xGF% numerator/
+	# denominator. Team quantities like team_sog_*, so every player's row carries them.
+	body["team_xg_for"] = snappedf(team_xg_for, 0.001)
+	body["team_xg_against"] = snappedf(team_xg_against, 0.001)
 	_post(SupabaseConfig.URL + "/rest/v1/career_stats", body)
 
 

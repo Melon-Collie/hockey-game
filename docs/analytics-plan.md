@@ -43,8 +43,31 @@ the net** that resolves as **on-goal, missed, or blocked**:
 Accepted v1 edges (documented, minor): a hard backdoor feed a defender blocks
 in the lane reads as a blocked shot (real trackers score it that way too); a shot
 that misses by more than the 1.2 m margin isn't counted. The margins are hand-set
-*reporting* thresholds, tunable in playtest. **A2 (xG) and B (event log) are NOT
-STARTED** — but the directed-at-net gate is exactly A2's "is this a shot?" seam.
+*reporting* thresholds, tunable in playtest.
+
+**A2 IMPLEMENTED** (2026-07-24). Expected goals as a calibration head over the
+shared hole geometry:
+- `AIActionScoring.expected_goals()` — a sibling to `open_net_danger`, both built
+  on the extracted `best_open_angle()` (the widest goalie-beating opening;
+  `open_net_danger` kept bit-identical). It swaps the bot's per-build `aim_spread`
+  for a FIXED `XG_REFERENCE_SPREAD_RAD` (the stat can't move when bot difficulty is
+  retuned) and caps below 1.0 (`XG_MAX`). **Magnitude is provisional** — the shape
+  is grounded (open angle / goalie reach / real goalie position), but the two
+  constants are hand-set priors to be FIT against logged outcomes via the §3.3
+  reliability loop once B's shot-event log exists. The GUT test pins shape, not
+  magnitude (bounded, goalie-aware, decoupled from the aim knob).
+- Computed at **release** from the real goalie geometry (`_note_shot_trajectory`
+  → the directed goal's defending goalie position), held on the pending shot
+  (`note_xg`), and committed at **resolution** on `shot_counted(peer, blocked, xg)`
+  — so xG accrues only for the same shot attempts Corsi counts, and blocked shots
+  carry no xG (Fenwick/unblocked convention).
+- `PlayerStats.xg_for` (float, ixG) broadcast (protocol v42,
+  `STATS_PLAYER_RECORD_SIZE` 17→18); `career_stats` gains `xg_for` +
+  report-time `team_xg_for/against`; `career_totals` derives lifetime ixG,
+  **goals above expected** (finishing), and **xGF%**; Career screen shows all three.
+
+**B (shot-event log + analytics screen + the actual reliability-plot calibration)
+is NOT STARTED.**
 
 ---
 
