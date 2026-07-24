@@ -11,10 +11,13 @@
 # anything the sim reads differently downstream, so it never touches netcode.
 #
 # Two-tier model:
-#   * PlayerPrefs.gamepad_enabled = gamepad ALLOWED (the persistent opt-in; drives
-#     build-time UI like menu focus rings and prompt glyphs). Default off.
+#   * PlayerPrefs.gamepad_allowed() = gamepad ALLOWED (the opt-in pref OR the Steam
+#     Deck; drives build-time menu focus rings). The pref defaults off on desktop
+#     and is flipped by the boot splash's first-pad-input; the Deck is always
+#     allowed (no mouse there) without persisting the pref.
 #   * is_gamepad_active() = gamepad CURRENTLY DRIVING (this tracker; drives the
-#     per-frame gameplay reads — the gatherer's cursor synthesis, the free cam).
+#     per-frame gameplay reads — the gatherer's cursor synthesis, the free cam —
+#     and the device-aware prompts / tutorial copy).
 # So a controller can stay plugged in without stealing the mouse: with gamepad
 # allowed, touch the mouse → KBM drives; push the stick → the pad drives.
 #
@@ -52,7 +55,7 @@ func _ready() -> void:
 # right now? False whenever gamepad isn't allowed, so mouse-only players (the
 # default) are entirely unaffected — the pad is never even consulted.
 func is_gamepad_active() -> bool:
-	return PlayerPrefs.gamepad_enabled and _active == Device.GAMEPAD
+	return PlayerPrefs.gamepad_allowed() and _active == Device.GAMEPAD
 
 
 func active_device() -> int:

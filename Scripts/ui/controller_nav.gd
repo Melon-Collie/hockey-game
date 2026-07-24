@@ -3,8 +3,9 @@ class_name ControllerNav
 # Reusable gamepad menu-navigation helpers. Menus wire focus and input through
 # these calls instead of hand-rolling each one, so making a new menu
 # controller-navigable is a few lines rather than a bespoke pass. Everything here
-# is a no-op when not in controller mode (PlayerPrefs.gamepad_enabled), so mouse
-# play is never affected. Visual styling of focus (the teal ring, the toggle
+# is a no-op when the gamepad isn't allowed (PlayerPrefs.gamepad_allowed() — the
+# opt-in pref OR the Steam Deck), so mouse play is never affected. Visual styling
+# of focus (the teal ring, the toggle
 # focus theme) lives in MenuStyle; this class is the input/focus BEHAVIOR.
 #
 # Three patterns cover every menu:
@@ -18,7 +19,7 @@ class_name ControllerNav
 #   * TABS    — LB / RB cycle a tab bar (bumper_tab_delta), the console convention.
 
 static func active() -> bool:
-	return PlayerPrefs.gamepad_enabled
+	return PlayerPrefs.gamepad_allowed()
 
 
 # --- FOCUS -------------------------------------------------------------------

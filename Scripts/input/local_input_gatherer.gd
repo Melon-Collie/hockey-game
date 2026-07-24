@@ -2,7 +2,8 @@ class_name LocalInputGatherer
 extends Node
 
 # Gathers the local player's per-tick InputState from mouse + keyboard, OR — when
-# PlayerPrefs.gamepad_enabled is on and a pad is connected — from a gamepad.
+# the gamepad is the active device (InputDeviceTracker) and a pad is connected —
+# from a gamepad.
 #
 # The gamepad path is deliberately thin: the right stick drives a SYNTHESIZED
 # screen cursor (GamepadAimRules, an absolute "skill stick" anchored on the

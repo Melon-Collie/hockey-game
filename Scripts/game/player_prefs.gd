@@ -291,6 +291,18 @@ var shot_power_sensitivity: float = 1.0
 # mouse+keyboard — the right stick becomes an absolute "skill stick" driving the
 # blade. Read live by the gatherer, so toggling applies without a respawn.
 var gamepad_enabled: bool = false
+
+
+# Whether the gamepad is ALLOWED to drive — the master gate every "is a pad in
+# play" check reads (menu focus rings, the InputDeviceTracker's active state). The
+# stored pref OR the Steam Deck: the Deck is a gamepad-first device with no mouse,
+# so the pad is always allowed there without persisting the pref (persisting would
+# cloud-sync a forced-on flag to the player's desktop). On desktop this is just the
+# opt-in pref, flipped on by the boot splash's first-pad-input auto-detect.
+func gamepad_allowed() -> bool:
+	return gamepad_enabled or SteamManager.is_steam_deck()
+
+
 # First-run onboarding: false until the player opens the player-settings popup
 # for the first time. Drives the one-time "edit your player here" callout on
 # the SideMenu player card.

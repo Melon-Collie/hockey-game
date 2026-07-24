@@ -119,6 +119,13 @@ func _build_ui() -> void:
 	exit_btn.pressed.connect(_on_exit_pressed)
 	_button_column.add_child(exit_btn)
 
+	# Gamepad-allowed launch (the Deck has no mouse; a returning pad player kept the
+	# pref): prime the menu for the pad now so the first press activates Play. Desktop
+	# mouse launches skip this and stay ring-free; their first pad input primes it via
+	# the splash auto-detect. Deferred so grab_focus lands after this frame's layout.
+	if PlayerPrefs.gamepad_allowed():
+		_prime_title_menu_for_pad.call_deferred()
+
 	# Hidden until Play is pressed before the threaded load finishes. Replaces
 	# the menu so the moment doesn't feel frozen.
 	_loading_label = Label.new()
@@ -245,19 +252,28 @@ func _input(event: InputEvent) -> void:
 
 func _enable_gamepad_from_splash() -> void:
 	_device_detected = true
-	if not PlayerPrefs.gamepad_enabled:
+	# On the Deck the pad is already allowed (SteamManager), so there's nothing to
+	# persist — only a desktop first-pad-input flips and saves the opt-in pref.
+	if not PlayerPrefs.gamepad_allowed():
 		PlayerPrefs.gamepad_enabled = true
 		PlayerPrefs.save()
 		# The allow gate just opened; the tracker already saw this pad press and set
 		# its raw device to GAMEPAD, so re-broadcast now that is_gamepad_active() is
 		# true (device-aware prompts / the tutorial flip to pad without more input).
 		InputDeviceTracker.notify_gamepad_allowed_changed()
-	# The title buttons were built before the pref flipped — give them the focus
-	# ring now and focus the first so the pad can drive the menu immediately.
-	if _button_column != null:
-		for child: Node in _button_column.get_children():
-			if child is Button:
-				MenuStyle.apply_focus_ring(child as Button)
+	_prime_title_menu_for_pad()
+
+
+# Ring the title buttons and focus Play so a pad can drive the menu immediately.
+# Called at build on a gamepad-allowed launch (the Deck, or a returning opted-in
+# player) so the very FIRST button press activates Play, and again from the splash
+# auto-detect when a desktop player's first input is the pad.
+func _prime_title_menu_for_pad() -> void:
+	if _button_column == null:
+		return
+	for child: Node in _button_column.get_children():
+		if child is Button:
+			MenuStyle.apply_focus_ring(child as Button)
 	_focus_title_menu()
 
 

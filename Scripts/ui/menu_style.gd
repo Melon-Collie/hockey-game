@@ -299,7 +299,7 @@ static func popup_button(label: String) -> Button:
 # path rather than a scattered `if ControllerNav.active()` at each call site. The
 # boot splash re-applies it to already-built title buttons once a pad is detected.
 static func apply_focus_ring(btn: Button) -> void:
-	if PlayerPrefs.gamepad_enabled:
+	if PlayerPrefs.gamepad_allowed():
 		btn.add_theme_stylebox_override("focus", focus_ring_box())
 
 
@@ -321,7 +321,7 @@ static func focus_ring_box() -> StyleBoxFlat:
 # it only defines the "focus" stylebox, so every other style falls through to the
 # project theme. A no-op for mouse (returns null so nothing is applied).
 static func controller_focus_theme() -> Theme:
-	if not PlayerPrefs.gamepad_enabled:
+	if not PlayerPrefs.gamepad_allowed():
 		return null
 	var t := Theme.new()
 	for control_type: String in ["CheckButton", "CheckBox", "OptionButton", "Button"]:
