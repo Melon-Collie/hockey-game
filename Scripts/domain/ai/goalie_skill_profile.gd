@@ -22,7 +22,7 @@ extends RefCounted
 #     slower" lever.
 #   • prearmed_reaction_delay_s — the primed (quiet-eye) read after watching a
 #     visible windup. CRITICAL for the lower tiers: beginners telegraph every
-#     shot (slow deliberate wrister drags), which primes the goalie into its
+#     shot (long deliberate wrister coils), which primes the goalie into its
 #     FASTEST read — an untiered prearm makes Easy sharpest against exactly the
 #     shots newcomers take. Higher → a telegraphed shot still beats him.
 #   • butterfly_drop_s       — pads-to-floor time once the drop commits. Higher

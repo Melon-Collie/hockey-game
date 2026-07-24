@@ -117,8 +117,9 @@ extends Node
 @export var drop_max_time_to_impact: float = 0.45
 
 # ── Pre-armed read (quiet-eye anticipation) ──────────────────────────────────
-# A goalie who has been READING a visible windup — wrister drag or slapper charge
-# from a slot shooter (_is_reading_shot_threat) — for `prearm_read_time` has the
+# A goalie who has been READING a visible windup — the wrister's frozen-puck coil
+# or a slapper charge — from a slot shooter (_is_reading_shot_threat) for
+# `prearm_read_time` has the
 # save response pre-programmed during the fixation, so on release both the leg
 # and arm reads start from `prearmed_reaction_delay` instead of the cold-read
 # baseline. GROUNDED (audit F2/F15): quiet-eye research (Panchuk & Vickers) has
@@ -730,16 +731,16 @@ extends Node
 # where the shot is *currently* aimed (predicted via the carrier's published
 # `predicted_shot_velocity`), so a clean shot into the top corner has a shorter
 # arm trip on release. Crucially the lean tracks the LIVE aim every tick — a
-# player who drags one way then flicks the other at release moves the real
-# impact off the lean, so a tricky release still beats the goalie (read vs
+# player who sweeps the cursor one way then swings it back before release moves
+# the real impact off the lean, so a tricky release still beats the goalie (read vs
 # counter-read, not a flat buff). The lean is PARTIAL (`prelean_strength` of the
 # way to the predicted reach) and never adds save speed — it only changes the
 # resting hand position, so the arm-delay / glove-speed caps on the actual
 # reaction still hold. Directional pre-lean needs the shooter's live predicted
 # velocity, which SkaterController publishes every charge tick for BOTH shot types
 # and EVERY shooter — host player, bot, and remote (the host simulates a remote's
-# carry from replicated input, and both the aim and the wrister's world-aligned drag
-# ride the wire). The non-directional "hands up, ready" tell is the fallback only
+# carry from replicated input, and the wrister's origin→cursor aim rides the wire
+# as the replicated cursor). The non-directional "hands up, ready" tell is the fallback only
 # when the current aim isn't at the net, not a remote-shooter limitation. Host-only
 # like all goalie AI — the lean rides the broadcast glove/blocker pose to clients.
 @export var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
@@ -1881,10 +1882,14 @@ func _is_ready_situation() -> bool:
 #
 # We DON'T drop for "controlled stickhandler in tight" — coaches teach
 # staying up against a controlled carrier, forcing them to release. Wrister
-# charge is also intentionally NOT a drop trigger: the player can hold or
-# cancel a wrister indefinitely, and reacting to charge alone commits the
-# goalie prematurely. The actual wrister release fires the existing reaction
-# pipeline, which drops on low projection.
+# charge is also intentionally NOT a drop trigger: it is cancellable (the slap
+# button aborts WRISTER_AIM back to carry), so reacting to the charge alone
+# commits the goalie to a shot that may never come. Note the windup is NOT free
+# for the shooter under the coil-and-release model — it freezes the puck at the
+# shot origin, so the carrier can't dangle or drive while holding it, and a
+# frozen puck at the doorstep sits inside `goalie_poke_radius`. The poke check is
+# the punish here, not an early drop. The actual wrister release fires the
+# existing reaction pipeline, which drops on low projection.
 #
 # Crease scrambles (loose puck or a slow carrier jammed in tight) drop via the
 # separate _should_seal_crease_jam check.
@@ -3658,8 +3663,9 @@ func _update_shot_commit(delta: float, carrier: Skater) -> void:
 	if _is_set_in_slot(carrier):
 		_prime_linger_timer = prearm_linger
 
-# True when an opposing carrier in the slot is winding up a shot (wrister drag or
-# slapshot charge) close enough that the goalie respects it. Drives both the
+# True when an opposing carrier in the slot is winding up a shot (the wrister's
+# frozen-puck coil or a slapshot charge) close enough that the goalie respects
+# it. Drives both the
 # pre-lean pose and the shot-commit window. Upright-only and not while already
 # reacting — once a shot is in flight the reaction pipeline owns the read. Reads
 # only `current_shot_state` (replicated) so it fires for remote shooters too;
