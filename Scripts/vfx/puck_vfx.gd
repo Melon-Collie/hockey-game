@@ -21,6 +21,20 @@ const TRAIL_COLOR_FAST: Color = Color(1.0, 0.45, 0.05, 1.0)
 const TRAIL_SPEED_MIN: float = 3.0   # m/s — at or below this, full slow color
 const TRAIL_SPEED_MAX: float = 18.0  # m/s — at or above this, full fast color
 
+# Both trail GPUParticles3D emit in WORLD space (local_coords = false) but their
+# visibility AABB is measured in the node's LOCAL frame, i.e. centred on the puck.
+# The trail streaks up to ~TRAIL_LIFETIME × puck_speed behind the puck (≈10 m at a
+# hard shot), well outside Godot's default ~±4 m AABB. When the puck leaves the
+# frame edge while trailing dots are still on-screen, the whole system is culled by
+# its puck-centred AABB — and a culled GPUParticles3D also PAUSES processing, so the
+# gap-fill emitter's tracked position goes stale; on re-entry it emits one long
+# streak backward from the puck to where it froze (the "jumps backwards before it
+# appears" artifact when chasing behind the puck). A generous puck-centred AABB that
+# always exceeds the trail's physical reach keeps the system live and un-culled
+# whenever any dot could be on-screen. Half-extents (m) below cover ~80 m/s of trail.
+const TRAIL_AABB_HALF_XZ: float = 20.0
+const TRAIL_AABB_HALF_Y: float = 10.0
+
 # Board impact puff: ice chips kicked up where the puck slams the boards.
 # Amount/velocity scale with impact speed; soft touches get nothing. The
 # cooldown coalesces the per-contact re-fires of a puck grinding along the
@@ -111,6 +125,15 @@ func _process(delta: float) -> void:
 	var t: float = clampf((flat_speed - TRAIL_SPEED_MIN) / (TRAIL_SPEED_MAX - TRAIL_SPEED_MIN), 0.0, 1.0)
 	_trail_mat.color = TRAIL_COLOR_SLOW.lerp(TRAIL_COLOR_FAST, t)
 
+# Puck-centred visibility box, generous enough that it always overlaps the frustum
+# whenever a live trail dot could be on-screen — so the world-space trail is never
+# culled (nor its processing paused) as the puck rides the frame edge. See the
+# TRAIL_AABB_HALF_* doc-block for why the default AABB is too small.
+func _trail_visibility_aabb() -> AABB:
+	return AABB(
+			Vector3(-TRAIL_AABB_HALF_XZ, -TRAIL_AABB_HALF_Y, -TRAIL_AABB_HALF_XZ),
+			Vector3(TRAIL_AABB_HALF_XZ * 2.0, TRAIL_AABB_HALF_Y * 2.0, TRAIL_AABB_HALF_XZ * 2.0))
+
 # The gap-filling parent emitter. One particle lives for the whole game session and
 # tracks the puck's world position in CUSTOM.xyz each frame. When the puck moves more
 # than TRAIL_SPACING meters since the last recorded position, it emits a sub-particle
@@ -126,6 +149,9 @@ func _make_trail_emitter() -> GPUParticles3D:
 	e.fixed_fps = 0
 	e.local_coords = false
 	e.emitting = true
+	# Never let frustum culling pause this tracker: a culled emitter freezes its
+	# CUSTOM.xyz and emits a backward streak on re-entry (see TRAIL_AABB_HALF_XZ).
+	e.visibility_aabb = _trail_visibility_aabb()
 
 	var shader := Shader.new()
 	shader.code = """shader_type particles;
@@ -164,6 +190,9 @@ func _make_trail_sub_emitter() -> GPUParticles3D:
 	e.fixed_fps = 0
 	e.local_coords = false
 	e.emitting = false  # driven exclusively by the parent shader via emit_subparticle
+	# World-space dots trail well past the default AABB; without this the whole trail
+	# is culled (and hidden) the moment the puck-centred box leaves the frame edge.
+	e.visibility_aabb = _trail_visibility_aabb()
 
 	var mat := ParticleProcessMaterial.new()
 	mat.direction = Vector3.ZERO

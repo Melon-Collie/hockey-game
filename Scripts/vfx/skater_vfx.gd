@@ -34,6 +34,16 @@ const BLADE_TRAIL_RADIUS: float = 0.025   # dot radius (smaller than puck's 0.05
 const BLADE_TRAIL_COLOR: Color = Color(0.95, 0.93, 0.88, 0.5)
 const BLADE_X_OFFSET: float = 0.12       # left/right blade separation from center
 const ICE_Y: float = 0.005              # world Y for trail dots (just above ice)
+# Same GPUParticles3D frustum-culling hazard as the puck trail (see PuckVFX): the
+# marks emit in world space but the visibility AABB is measured local to the node,
+# i.e. centred on the skater, and defaults to ~±4 m. A blade trail lingers 1.5 s and
+# streaks BLADE_TRAIL_LIFETIME × skate_speed (~18 m at a hard stride) behind the
+# skater — so when the skater rides the frame edge the whole trail is culled by its
+# skater-centred box, and a culled GPUParticles3D pauses processing, making the
+# gap-fill emitter emit a backward streak on re-entry. A generous skater-centred AABB
+# keeps it live whenever any mark could be on-screen. Half-extents (m) cover ~16 m/s.
+const BLADE_TRAIL_AABB_HALF_XZ: float = 24.0
+const BLADE_TRAIL_AABB_HALF_Y: float = 6.0
 
 # Two GPU trail systems: index 0 = left blade, 1 = right blade
 var _blade_trail_emitters: Array[GPUParticles3D] = []
@@ -173,6 +183,15 @@ func _set_blade_trails_emitting(active: bool) -> void:
 	for emitter: GPUParticles3D in _blade_trail_emitters:
 		emitter.emitting = active
 
+# Skater-centred visibility box, generous enough that it always overlaps the frustum
+# whenever a live blade mark could be on-screen — so the world-space trail is never
+# culled (nor its processing paused) as the skater rides the frame edge. See the
+# BLADE_TRAIL_AABB_HALF_* doc-block for why the default AABB is too small.
+func _blade_trail_visibility_aabb() -> AABB:
+	return AABB(
+			Vector3(-BLADE_TRAIL_AABB_HALF_XZ, -BLADE_TRAIL_AABB_HALF_Y, -BLADE_TRAIL_AABB_HALF_XZ),
+			Vector3(BLADE_TRAIL_AABB_HALF_XZ * 2.0, BLADE_TRAIL_AABB_HALF_Y * 2.0, BLADE_TRAIL_AABB_HALF_XZ * 2.0))
+
 func _make_blade_trail_emitter(index: int) -> GPUParticles3D:
 	var e := GPUParticles3D.new()
 	e.name = "BladeTrailEmitter%d" % index
@@ -183,6 +202,8 @@ func _make_blade_trail_emitter(index: int) -> GPUParticles3D:
 	e.fixed_fps = 0
 	e.local_coords = false
 	e.emitting = false
+	# Never let culling pause this tracker (see BLADE_TRAIL_AABB_HALF_XZ).
+	e.visibility_aabb = _blade_trail_visibility_aabb()
 
 	var shader := Shader.new()
 	shader.code = """shader_type particles;
@@ -217,6 +238,8 @@ func _make_blade_trail_sub_emitter(sub_name: String) -> GPUParticles3D:
 	e.fixed_fps = 0
 	e.local_coords = false
 	e.emitting = false
+	# World-space marks stream well past the default AABB; keep the trail un-culled.
+	e.visibility_aabb = _blade_trail_visibility_aabb()
 
 	var mat := ParticleProcessMaterial.new()
 	mat.direction = Vector3.ZERO
