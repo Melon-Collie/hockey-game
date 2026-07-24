@@ -559,6 +559,30 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # deterministic under replay — but validate an online shot before shipping the
 # swap. Flip in the editor to compare feel without a rebuild.
 @export var wrister_positional_aim: bool = true
+# PROTOTYPE (freeze-blade): when true, the blade+puck STOP chasing the cursor for
+# the duration of a wrister charge and hold at the shot origin — the torso still
+# coils toward the cursor, but the puck sits still where the shot will fire from.
+# This makes the origin visible and turns the charge into a legible "committing
+# to a shot" read (for the goalie and for other players), and makes the pinned
+# origin→cursor aim exact (the puck really is at the origin at release). Release
+# is unchanged — fires instantly, the existing follow-through plays the unwind.
+# Implies positional aim (a frozen blade has no drag/sweep to read). NOTE: with
+# the blade frozen there's no swing chirality, so forehand/backhand is derived
+# from the AIM SIDE while frozen (see _wrister_aim_is_backhand). The travel-gate
+# is deliberately NOT compensated for here — a frozen blade banks no travel, so
+# this prototype ships with the gate effectively off (twitch = max power); a real
+# anti-degeneracy pass comes later if the freeze is worth keeping.
+@export var wrister_freeze_blade: bool = true
+# Sign correction for the frozen-blade aim-side backhand read. Absolute chirality
+# through the handedness/coordinate conventions isn't reliably derivable (same
+# caveat as ShotMechanics.is_backhand_from_swing) — if playtest shows frozen
+# backhands inverted (aiming to the backhand side fires a forehand or vice versa),
+# flip this and nowhere else.
+@export var wrister_freeze_backhand_flip: bool = false
+# Aim-side dead zone (fraction of the aim's horizontal length) for the frozen
+# backhand read: a near-straight-ahead shot stays FOREHAND (the strong side you
+# square up on); a backhand is a deliberate reach across to the off side.
+@export var wrister_freeze_backhand_deadzone: float = 0.2
 # ── Travel-gated ceiling (ShotMechanics.wrister_travel_cap_t) ──
 # The power CEILING must be earned with real blade travel: cursor speed alone
 # (a wiggle, a short jerk, a cranked Shot Power Sensitivity) caps at the floor
@@ -987,6 +1011,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_shot_pose.setup(skater, _sm, _aiming, _ik, self)
 	var _cb := SkaterStateMachine.Callbacks.new()
 	_cb.apply_blade_from_mouse = _ik.apply_blade_from_mouse
+	_cb.apply_wrister_aim_blade = _apply_wrister_aim_blade
 	_cb.apply_slapper_blade_position = _shot_pose.apply_slapper_blade_position
 	_cb.apply_block_blade_position = _shot_pose.apply_block_blade_position
 	_cb.apply_wrister_follow_through = _shot_pose.apply_wrister_follow_through
@@ -2190,11 +2215,35 @@ func _get_charge_direction() -> Vector3:
 # release_wrister falls back to player→cursor if this is degenerate. Backhand is
 # unaffected either way (it's the sweep chirality, not the aim vector).
 func _wrister_aim_dir(input: InputState) -> Vector3:
-	if wrister_positional_aim:
+	# Freeze implies positional: a held blade has no drag/sweep to read.
+	if wrister_positional_aim or wrister_freeze_blade:
 		var d: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
 		d.y = 0.0
 		return d
 	return _get_charge_direction()
+
+# Blade update for the WRISTER_AIM state: hold the blade at the shot origin under
+# wrister_freeze_blade, else chase the cursor exactly like carry. Routed through
+# the state machine's apply_wrister_aim_blade callback.
+func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
+	_ik.apply_blade_from_mouse(input, delta, wrister_freeze_blade)
+
+# Forehand/backhand for a FROZEN wrister, from the AIM SIDE (there's no swing
+# chirality to read — the blade didn't move). Express the aim direction in the
+# upper-body frame; a shot aimed to the stick side is a forehand, one reaching
+# across to the off side is a backhand. Near-straight-ahead stays forehand
+# (the strong side). Sign is empirical — wrister_freeze_backhand_flip corrects it.
+func _wrister_aim_is_backhand(aim_dir_world: Vector3) -> bool:
+	var o: Vector3 = skater.global_position
+	var local: Vector3 = skater.upper_body_to_local(o + aim_dir_world) - skater.upper_body_to_local(o)
+	var horizontal: float = Vector2(local.x, local.z).length()
+	if horizontal < 0.0001:
+		return false
+	if absf(local.x) < wrister_freeze_backhand_deadzone * horizontal:
+		return false
+	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
+	var flip: float = -1.0 if wrister_freeze_backhand_flip else 1.0
+	return signf(local.x) * flip != blade_side_sign
 
 # Forehand/backhand for the wrister, from the swing CHIRALITY — the net
 # rotational sense of the blade's sweep around the player over the stroke
@@ -2211,14 +2260,15 @@ func _classify_backhand() -> bool:
 func _release_wrister(input: InputState) -> void:
 	if has_puck:
 		var blade_world: Vector3 = _ik.last_target_blade_world
-		# Forehand/backhand from the sweep intent — which side of the body the
-		# drag went toward (see _classify_backhand / ShotMechanics.is_backhand_shot).
-		var is_backhand: bool = _classify_backhand()
+		var aim_dir: Vector3 = _wrister_aim_dir(input)
+		# Forehand/backhand. A frozen blade has no swing chirality, so read it from
+		# the AIM SIDE; the live-blade wrister reads the sweep chirality as before.
+		var is_backhand: bool = _wrister_aim_is_backhand(aim_dir) if wrister_freeze_blade \
+				else _classify_backhand()
 		# LMB is always a charged wrister now — the quick pass lives on its own
 		# button (_fire_quick_pass). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
 		last_release_stroke_travel = _wrister_stroke_travel()
-		var aim_dir: Vector3 = _wrister_aim_dir(input)
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -2365,13 +2415,18 @@ func _update_wrister_charge(input: InputState) -> void:
 	# reads) — with the remote's Shot Power Sensitivity from the join payload feeding
 	# _wrister_sweep_speed. Host-only in that it runs on the authoritative sim, not in
 	# that it's limited to host-controlled shooters.
-	var is_backhand: bool = _classify_backhand()
+	# Predict the exact release this tick — direction and backhand both matched to
+	# the release path (aim-side backhand while frozen, sweep chirality otherwise)
+	# so the goalie pre-leans toward the shot that would actually fire.
+	var charge_aim_dir: Vector3 = _wrister_aim_dir(input)
+	var is_backhand: bool = _wrister_aim_is_backhand(charge_aim_dir) if wrister_freeze_blade \
+			else _classify_backhand()
 	# Re-solves every tick while charging (+ per replayed input on reconcile), so
 	# fill a reused scratch instead of allocating a ShotResult each time.
 	var pred := ShotMechanics.release_wrister(
 			skater.global_position, input.mouse_world_pos, blade_world,
 			is_backhand, _elevation_level,
-			_wrister_config(), _wrister_aim_dir(input), false,
+			_wrister_config(), charge_aim_dir, false,
 			_wrister_sweep_speed(input), _wrister_stroke_travel(), _wrister_pred_scratch)
 	skater.predicted_shot_velocity = pred.direction * pred.power
 	# shot_charge carries the release-now SPEED (normalized predicted power over

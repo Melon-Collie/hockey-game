@@ -101,7 +101,7 @@ func seed_blade_smoothing(world_pos: Vector3) -> void:
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
 # Input is treated as a desired blade position. The top hand is solved as a
 # consequence, clamped to an asymmetric ROM. See domain/rules/top_hand_ik.gd.
-func apply_blade_from_mouse(input: InputState, delta: float) -> void:
+func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = false) -> void:
 	var mouse_world: Vector3 = input.mouse_world_pos
 	mouse_world.y = 0.0
 
@@ -118,34 +118,48 @@ func apply_blade_from_mouse(input: InputState, delta: float) -> void:
 	# through center over carry_side_lerp_speed.
 	_skater.update_carry_side(_controller.has_puck, delta)
 
-	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
-	shoulder_world.y = 0.0
-	if (mouse_world - shoulder_world).length() < 0.01:
-		return
+	# FREEZE (SkaterController.wrister_freeze_blade prototype): during a wrister
+	# charge, hold the blade at its current body-local pose instead of chasing the
+	# cursor. The puck pins to this held blade (get_carry_target_global), so it
+	# sits still AT the shot origin while the torso still coils toward the cursor
+	# (apply_upper_body preserves the blade world across the coil). Target ==
+	# current blade → the speed-cap/translation bookkeeping below runs with a
+	# ~zero step, keeping _smoothed_blade coherent so resuming normal tracking
+	# after the shot doesn't pop.
+	var target_blade_world: Vector3
+	if hold_blade:
+		target_blade_world = _skater.upper_body_to_global(_skater.get_blade_position())
+		target_blade_world.y = 0.0
+		last_target_blade_world = target_blade_world
+	else:
+		var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
+		shoulder_world.y = 0.0
+		if (mouse_world - shoulder_world).length() < 0.01:
+			return
 
-	# 1. Resolve the RAW cursor to the blade the player is actually reaching for:
-	#    convert to upper-body-local, apply the carry offset, then ROM-clamp via
-	#    the iterative top-hand IK. This is the TARGET the speed cap chases. ROM
-	#    clamping the target up front (rather than after the cap) is the whole
-	#    point: the cap then limits the speed of the REACHABLE blade, not the
-	#    intent point far out past ROM. A distant cursor maps to a point on the
-	#    ROM boundary, so sweeping it laterally slides the target along that
-	#    boundary at cursor speed — and the cap bounds the blade's actual travel
-	#    rather than being spent dragging the intent through unreachable space.
-	var mouse_local: Vector3 = _skater.upper_body_to_local(mouse_world)
-	var target_blade_xz := Vector2(mouse_local.x, mouse_local.z)
-	target_blade_xz = _apply_carry_offset(target_blade_xz)
-	# Closed-form ROM projection — no iteration, no hand work. Only the blade
-	# position is needed to cap against; the capped result is re-solved at full
-	# precision (hand + lean blade_y) below. Uses rest blade_y for the projection:
-	# the sub-cm lean refinement the iterative solve adds is irrelevant to a point
-	# that's about to be capped and re-solved.
-	var target_blade_local: Vector3 = TopHandIK.project_blade(
-			_skater.shoulder.position, target_blade_xz, blade_side_sign,
-			_ik_config(blade_y_local()))
-	var target_blade_world: Vector3 = _skater.upper_body_to_global(target_blade_local)
-	target_blade_world.y = 0.0
-	last_target_blade_world = target_blade_world
+		# 1. Resolve the RAW cursor to the blade the player is actually reaching for:
+		#    convert to upper-body-local, apply the carry offset, then ROM-clamp via
+		#    the iterative top-hand IK. This is the TARGET the speed cap chases. ROM
+		#    clamping the target up front (rather than after the cap) is the whole
+		#    point: the cap then limits the speed of the REACHABLE blade, not the
+		#    intent point far out past ROM. A distant cursor maps to a point on the
+		#    ROM boundary, so sweeping it laterally slides the target along that
+		#    boundary at cursor speed — and the cap bounds the blade's actual travel
+		#    rather than being spent dragging the intent through unreachable space.
+		var mouse_local: Vector3 = _skater.upper_body_to_local(mouse_world)
+		var target_blade_xz := Vector2(mouse_local.x, mouse_local.z)
+		target_blade_xz = _apply_carry_offset(target_blade_xz)
+		# Closed-form ROM projection — no iteration, no hand work. Only the blade
+		# position is needed to cap against; the capped result is re-solved at full
+		# precision (hand + lean blade_y) below. Uses rest blade_y for the projection:
+		# the sub-cm lean refinement the iterative solve adds is irrelevant to a point
+		# that's about to be capped and re-solved.
+		var target_blade_local: Vector3 = TopHandIK.project_blade(
+				_skater.shoulder.position, target_blade_xz, blade_side_sign,
+				_ik_config(blade_y_local()))
+		target_blade_world = _skater.upper_body_to_global(target_blade_local)
+		target_blade_world.y = 0.0
+		last_target_blade_world = target_blade_world
 
 	# 2. Speed-cap the smoothed blade toward the resolved target, RELATIVE TO THE
 	#    SKATER. max_blade_speed bounds how fast the blade traverses its ROM in
