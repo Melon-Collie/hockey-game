@@ -1490,8 +1490,12 @@ func _wire_subsystems() -> void:
 	# Record period-end markers into the .mreplay event stream (like goals) so the
 	# offline viewer can tick each period boundary. Uses the GameManager-level
 	# phase_changed so it fires on host (via _phase_coord) and client (via the
-	# codec decode path) alike, matching the goal-event recording.
-	phase_changed.connect(_on_phase_changed_for_replay_event)
+	# codec decode path) alike, matching the goal-event recording. Guarded because
+	# phase_changed is GameManager's OWN signal (autoload, persists across
+	# matches), unlike the _phase_coord signals above which are re-created each
+	# _spawn_world — without the guard a second match double-connects.
+	if not phase_changed.is_connected(_on_phase_changed_for_replay_event):
+		phase_changed.connect(_on_phase_changed_for_replay_event)
 	_phase_coord.period_break_started.connect(_on_period_break_for_intermission)
 	_phase_coord.faceoff_prep_announced.connect(_on_faceoff_prep_announced_from_coord)
 	_phase_coord.period_break_started.connect(period_break_started.emit)
@@ -1667,9 +1671,15 @@ func _wire_sound_signals() -> void:
 	# Period-end buzzer fires only when a period actually ends — END_OF_PERIOD for
 	# regulation periods, GAME_OVER for the final one. (Not period_synced, which
 	# re-emits on every FACEOFF_PREP, i.e. every faceoff including post-goal.)
-	phase_changed.connect(func(p: GamePhase.Phase) -> void:
-		if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
-			SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0))
+	# Named + guarded so a rematch doesn't stack a second lambda on GameManager's
+	# persistent phase_changed and double-fire the buzzer (see the note above).
+	if not phase_changed.is_connected(_on_phase_changed_period_buzzer):
+		phase_changed.connect(_on_phase_changed_period_buzzer)
+
+
+func _on_phase_changed_period_buzzer(p: GamePhase.Phase) -> void:
+	if p == GamePhase.Phase.END_OF_PERIOD or p == GamePhase.Phase.GAME_OVER:
+		SoundManager.play_crowd(SoundManager.Sound.PERIOD_BUZZER, -10.0)
 
 
 func _on_local_pickup_sound() -> void:
