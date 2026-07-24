@@ -267,8 +267,7 @@ func _build_fill_bots_row() -> HBoxContainer:
 	_fill_bots_btn.custom_minimum_size = Vector2(0, 28)
 	MenuStyle.wire_hover_scale(_fill_bots_btn)
 	SoundManager.wire_button(_fill_bots_btn)
-	if ControllerNav.active():
-		MenuStyle.add_focus_ring(_fill_bots_btn)
+	MenuStyle.apply_focus_ring(_fill_bots_btn)
 	_fill_bots_btn.pressed.connect(_fill_open_slots_with_bots)
 	row.add_child(_fill_bots_btn)
 	return row
@@ -705,8 +704,7 @@ func _btn(text: String) -> Button:
 	b.custom_minimum_size = Vector2(140, 40)
 	MenuStyle.wire_hover_scale(b)
 	SoundManager.wire_button(b)
-	if ControllerNav.active():
-		MenuStyle.add_focus_ring(b)
+	MenuStyle.apply_focus_ring(b)
 	return b
 
 

@@ -356,8 +356,7 @@ func _action_button(label: String) -> Button:
 	btn.add_theme_font_size_override("font_size", 17)
 	MenuStyle.wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
-	if ControllerNav.active():
-		MenuStyle.add_focus_ring(btn)
+	MenuStyle.apply_focus_ring(btn)
 	return btn
 
 

@@ -156,7 +156,7 @@ func _on_closed_pressed() -> void:
 	if ControllerNav.active() and _popup.get_child_count() > 0:
 		var grid: Node = _popup.get_child(_popup.get_child_count() - 1)
 		if grid.get_child_count() > 0:
-			(grid.get_child(0) as Control).grab_focus.call_deferred()
+			ControllerNav.grab_focus(grid.get_child(0) as Control)
 
 
 func _ensure_popup() -> void:

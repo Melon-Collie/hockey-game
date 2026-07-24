@@ -82,8 +82,7 @@ func _key_button(label: String, min_size: Vector2 = Vector2(44, 44)) -> Button:
 	btn.custom_minimum_size = min_size
 	btn.add_theme_font_size_override("font_size", 18)
 	SoundManager.wire_button(btn)
-	if ControllerNav.active():
-		MenuStyle.add_focus_ring(btn)
+	MenuStyle.apply_focus_ring(btn)
 	return btn
 
 
@@ -92,8 +91,7 @@ func open(initial: String, max_len: int) -> void:
 	_max_len = max_len
 	_update_preview()
 	visible = true
-	if _first_key != null:
-		_first_key.grab_focus.call_deferred()
+	ControllerNav.grab_focus(_first_key)
 
 
 func _on_key(ch: String) -> void:

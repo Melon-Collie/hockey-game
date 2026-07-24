@@ -253,7 +253,7 @@ func _enable_gamepad_from_splash() -> void:
 	if _button_column != null:
 		for child: Node in _button_column.get_children():
 			if child is Button:
-				MenuStyle.add_focus_ring(child as Button)
+				MenuStyle.apply_focus_ring(child as Button)
 	_focus_title_menu()
 
 

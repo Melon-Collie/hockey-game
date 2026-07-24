@@ -253,7 +253,7 @@ static func apply_primary_cta(btn: Button, font_size: int = 20) -> void:
 	btn.text = btn.text.to_upper()
 	btn.add_theme_font_override("font", display_font_spaced())
 	btn.add_theme_font_size_override("font_size", font_size)
-	_apply_focus_ring(btn)
+	apply_focus_ring(btn)
 
 
 # Standard popup-row button: 220×48, font 20, hover-scale tween, click sound.
@@ -262,20 +262,21 @@ static func popup_button(label: String) -> Button:
 	btn.text = label
 	btn.custom_minimum_size = Vector2(220, 48)
 	btn.add_theme_font_size_override("font_size", 20)
-	_apply_focus_ring(btn)
+	apply_focus_ring(btn)
 	wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
 	return btn
 
 
-# Teal focus ring for controller navigation, applied by the button factories —
-# but ONLY in controller mode, so a mouse click never leaves a ring on the button
-# (mouse focus would otherwise show it). The project theme's default focus is
-# invisible, which is what we want for mouse play. Gamepad mode is set on the
-# splash before menus build, so factory-made buttons pick it up.
-static func _apply_focus_ring(btn: Button) -> void:
+# THE focus-ring seam: give a button the teal controller focus ring, but ONLY in
+# controller mode, so a mouse click never leaves a ring (the project theme's
+# default focus is invisibly-styled, which is what we want for mouse). Both the
+# button factories above and hand-built buttons call this, so there's one gated
+# path rather than a scattered `if ControllerNav.active()` at each call site. The
+# boot splash re-applies it to already-built title buttons once a pad is detected.
+static func apply_focus_ring(btn: Button) -> void:
 	if PlayerPrefs.gamepad_enabled:
-		add_focus_ring(btn)
+		btn.add_theme_stylebox_override("focus", focus_ring_box())
 
 
 # The teal focus ring box — transparent fill, teal border, slight outward expand so
@@ -288,13 +289,6 @@ static func focus_ring_box() -> StyleBoxFlat:
 	s.set_border_width_all(2)
 	s.set_expand_margin_all(3)
 	return s
-
-
-# Unconditionally give a button the teal focus ring. Used when controller mode is
-# switched on AFTER a button was built (the boot splash, which builds its buttons
-# before the first-input device detection flips the pref).
-static func add_focus_ring(btn: Button) -> void:
-	btn.add_theme_stylebox_override("focus", focus_ring_box())
 
 
 # A theme that adds the teal focus ring to control types the button factories
