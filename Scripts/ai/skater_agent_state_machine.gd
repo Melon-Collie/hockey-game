@@ -3743,8 +3743,8 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# `_pass_target_peer_id` gets cleared below, and the slot is what
 	# tells the watcher who actually got the puck (e.g. "PASS→Backdoor").
 	var target_slot_label: String = "?"
-	if _team_brain != null and _pass_target_peer_id != -1:
-		target_slot_label = _slot_label(_team_brain.get_slot(_pass_target_peer_id))
+	if _current_strategy != null and _pass_target_peer_id != -1:
+		target_slot_label = _slot_label(_current_strategy.get_slot(_pass_target_peer_id))
 	# Aim point is the receiver's lead — speed-aware via
 	# _pass_aim_point so a charged pass leads less than a quick-shot
 	# (puck arrives sooner, receiver covers less ground in flight) —
@@ -5171,7 +5171,7 @@ func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
 			if snapshot == null or snapshot.puck_state == null:
 				return false
 			return AIZoneCoverage.pressure_owner(
-					_team_brain.strong_x(),
+					_current_strategy.strong_x(),
 					_own_goal_dir * GameRules.GOAL_LINE_Z,
 					snapshot.puck_state.position) == slot
 	return false
@@ -5849,7 +5849,7 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 	# election and the race-lost decline below — an order is an order (the
 	# election override in GameManager._enrich_snapshot_for_ai keeps a second
 	# natural chaser from doubling up).
-	if _team_brain != null and _team_brain.ping_chase_peer() == _peer_id:
+	if _current_strategy != null and _current_strategy.ping_chase_peer() == _peer_id:
 		return true
 	if not _is_closest_teammate_to_puck_at(snapshot, self_pos):
 		return false
