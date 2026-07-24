@@ -3713,8 +3713,12 @@ func _on_body_check_landed(hitter_peer_id: int, victim_peer_id: int,
 	var vfx: SkaterVFX = victim_rec.skater.get_node_or_null("VFX") as SkaterVFX
 	if vfx != null:
 		vfx.fire_body_check_burst(victim_rec.skater, force, hit_dir)
-	SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
-			SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
+	# The burst fires for every credited check, but the thud is reserved for
+	# stagger-class-or-harder hits — a committed bump / board rub bursts faintly
+	# and stays silent (see SkaterVFX.check_sound_audible).
+	if SkaterVFX.check_sound_audible(force):
+		SoundManager.play_world(SoundManager.Sound.BODY_CHECK, victim_rec.skater.global_position,
+				SkaterVFX.check_sound_volume_db(force), 0.08, SkaterVFX.check_sound_pitch_scale(force))
 	body_check_broadcast.emit(force)
 	# The hitter's check-delivery body pose (shoulder drive through the contact)
 	# rides the same broadcast as the burst/thud so all three land the identical
