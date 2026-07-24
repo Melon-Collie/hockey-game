@@ -20,6 +20,13 @@ func is_ai_controlled() -> bool:
 var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
+# Decide→apply split (AI threading Phase 3b/3c): decide() stores the agent's
+# InputState here and apply_decision() feeds it to SkaterController. In Phase 3c
+# the worker fills this and the main thread applies it a tick later.
+# _pending_host_time is captured on the main thread (begin_tick) so decide()
+# reads no autoloads.
+var _pending_input: InputState = null
+var _pending_host_time: float = 0.0
 
 
 # Bots never set deliberate-deflect intent. The agent holds the shoot button
@@ -142,36 +149,49 @@ func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: 
 # entry works off-thread against a handed-off buffer. Host-only; bots don't exist
 # on clients.
 func tick_agent(snapshot: WorldSnapshot, delta: float) -> void:
+	# Single-threaded orchestration (Phase 3b): resolve mode, decide, apply — all
+	# on the main thread, back-to-back. Phase 3c calls begin_tick / decide /
+	# apply_decision separately across the tick boundary (begin_tick + apply on
+	# main, decide on the worker), so keep the three faithful to this order.
+	if not begin_tick(delta):
+		return
+	decide(snapshot, delta)
+	apply_decision(delta)
+
+
+# MAIN-THREAD tick preamble: the guards and the special (non-agent) modes, each
+# of which does its own node writes right here. Returns true ONLY for normal
+# gameplay — where the caller runs decide() then apply_decision(). For a normal
+# tick it also stamps the agent's latched rule set and captures the host time the
+# decision will use, so decide() itself reads no autoloads (worker-safe).
+func begin_tick(delta: float) -> bool:
 	if skater == null or puck == null or _agent == null:
-		return
+		return false
 	if NetworkManager.is_replay_mode():
-		return
-	# Scripted mode bypasses the agent entirely — tutorial owns the inputs.
-	# Movement-lock / celebration / input-blocked checks below assume normal
-	# gameplay and don't apply to scripted tutorial bots (tutorial mode never
-	# triggers a faceoff prep or celebration phase). The scripted shot
-	# mini-state-machine still feeds the SkaterController, so shot release
-	# behaviour matches a human pressing the same buttons.
+		return false
+	# Scripted mode bypasses the agent entirely — tutorial owns the inputs. The
+	# scripted shot mini-state-machine still feeds SkaterController, so shot
+	# release matches a human pressing the same buttons.
 	if scripted_mode:
 		_build_script_input(delta)
 		_process_input(_script_input, delta)
 		skater.current_shot_state = _sm.get_state() as int
-		return
+		return false
 	if _game_state.is_movement_locked():
 		# Faceoff / intro skate-in: the bot glides from its bench / current spot
 		# to the dot while an approach is active, then hands back to the draw-aim
 		# freeze below on arrival (see SkaterController.begin_approach).
 		if tick_faceoff_approach(delta):
 			skater.current_shot_state = _sm.get_state() as int
-			return
+			return false
 		# Mirror LocalController/RemoteController: zero velocity during dead
 		# phases so residual inertia from before the lock can't drift the bot.
 		skater.velocity = Vector3.ZERO
-		# FACEOFF_PREP: keep the stick alive so the bot looks alive during
-		# the countdown and naturally contests the drop. Aim at the puck —
-		# centers clash over the dot, wings/D reach toward it. We don't run
-		# _agent.tick here; the agent's full state machine isn't designed
-		# for the locked phase and could drag in stale carrier / chase intent.
+		# FACEOFF_PREP: keep the stick alive so the bot looks alive during the
+		# countdown and naturally contests the drop. Aim at the puck — centers
+		# clash over the dot, wings/D reach toward it. We don't run the agent
+		# here; its full state machine isn't designed for the locked phase and
+		# could drag in stale carrier / chase intent.
 		if _game_state.allows_blade_aim_during_lock():
 			_faceoff_input.delta = delta
 			_faceoff_input.host_timestamp = NetworkManager.estimated_host_time()
@@ -182,28 +202,39 @@ func tick_agent(snapshot: WorldSnapshot, delta: float) -> void:
 			else:
 				_faceoff_input.mouse_world_pos = puck.global_position
 			apply_blade_aim_only(_faceoff_input, delta)
-		return
+		return false
 	if _game_state.is_in_goal_celebration():
-		# Celebration is movement-allowed live gameplay (humans can react),
-		# but bots shouldn't be playing — they'd try to chase a pickup-locked
-		# puck and bunch around the net. Skip agent input; physics friction
-		# coasts whatever velocity the bot had at the goal moment to a stop.
-		return
+		# Celebration is movement-allowed live gameplay (humans can react), but
+		# bots shouldn't be playing — they'd chase a pickup-locked puck and bunch
+		# at the net. Skip agent input; friction coasts them to a stop.
+		return false
 	# Deliberately NO is_input_blocked() gate here: that flag means the LOCAL
 	# human's menu is open, and bots run only on the host — gating on it froze
-	# every bot when the host paused while the puck, goalies, clock, and remote
-	# players kept going. Host pause matches a client's pause: only the pausing
-	# player's input goes neutral (LocalInputGatherer), the world plays on.
-	# Read the frame's shared snapshot. GameManager publishes it once per
-	# host physics frame after StateBufferManager.capture; reading it here
-	# avoids 6 bots × redundant interpolation passes per frame.
-	perceived_snapshot = snapshot
-	# Latched match rules for the AI's offside-aware reads (cheap int stamp;
-	# the rule set only changes at match config, but the agent must never
-	# carry a previous match's).
+	# every bot when the host paused while the world played on.
+	# Latched match rules for the AI's offside-aware reads (cheap int stamp; the
+	# rule set only changes at match config, but the agent must never carry a
+	# previous match's). Stamped here (main) so decide() reads no autoloads.
 	_agent.set_rule_set(GameManager.get_rule_set())
-	var input: InputState = _agent.tick(perceived_snapshot, delta, NetworkManager.estimated_host_time())
-	_process_input(input, delta)
+	_pending_host_time = NetworkManager.estimated_host_time()
+	return true
+
+
+# WORKER-SAFE decision: run the agent against the frozen snapshot + strategy view
+# and store the resulting InputState for apply_decision(). Touches only the
+# agent, the passed snapshot, and captured scalars — no scene nodes or autoloads.
+# (One residual main-only write remains inside the agent — set_one_timer_ready to
+# the live brain — which Phase 3c routes through a post-dispatch collection.)
+func decide(snapshot: WorldSnapshot, delta: float) -> void:
+	perceived_snapshot = snapshot
+	_pending_input = _agent.tick(snapshot, delta, _pending_host_time)
+
+
+# MAIN-THREAD apply: feed the decided InputState to SkaterController exactly like
+# a human's input, then mirror the shot state and refresh the debug label.
+func apply_decision(delta: float) -> void:
+	if _pending_input == null:
+		return
+	_process_input(_pending_input, delta)
 	skater.current_shot_state = _sm.get_state() as int
 	_refresh_debug_label()
 
