@@ -1882,14 +1882,15 @@ func _is_ready_situation() -> bool:
 #
 # We DON'T drop for "controlled stickhandler in tight" — coaches teach
 # staying up against a controlled carrier, forcing them to release. Wrister
-# charge is also intentionally NOT a drop trigger: it is cancellable (the slap
-# button aborts WRISTER_AIM back to carry), so reacting to the charge alone
-# commits the goalie to a shot that may never come. Note the windup is NOT free
-# for the shooter under the coil-and-release model — it freezes the puck at the
-# shot origin, so the carrier can't dangle or drive while holding it, and a
-# frozen puck at the doorstep sits inside `goalie_poke_radius`. The poke check is
-# the punish here, not an early drop. The actual wrister release fires the
-# existing reaction pipeline, which drops on low projection.
+# charge is also intentionally NOT a drop trigger, and the coil-and-release model
+# makes that MORE true, not less: the wrister freezes the blade BODY-LOCAL (no
+# dangle) but suppresses no locomotion — unlike the slapper, which plants the
+# skater (locomotion suppressed + an active velocity drag). So a wrister windup
+# is a mobile, still-cancellable threat whose shot origin the carrier can keep
+# steering; dropping to it commits the goalie against a shot that may never come
+# from where he committed. The beaten-wide race and the release reaction own this
+# read. The actual wrister release fires the existing reaction pipeline, which
+# drops on low projection.
 #
 # Crease scrambles (loose puck or a slow carrier jammed in tight) drop via the
 # separate _should_seal_crease_jam check.
