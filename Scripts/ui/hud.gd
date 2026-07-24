@@ -654,7 +654,8 @@ func _build_skip_replay_prompt() -> void:
 	_scale_root.add_child(_skip_prompt_label)
 
 func _build_menu_hint() -> void:
-	_menu_hint_label = _lbl("[ESC] MENU", 16, _WHITE)
+	# Pad opens the menu with Start (≡); keyboard with Escape.
+	_menu_hint_label = _lbl("%s MENU" % ControllerGlyphs.prompt("[ESC]", "[≡]"), 16, _WHITE)
 	# Bottom-center: anchored to the bottom edge, horizontally centered (a ~200px
 	# box straddling the 0.5 anchor), sitting 16px above the bottom.
 	_menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

@@ -412,25 +412,8 @@ func _build_footer(parent: VBoxContainer) -> void:
 	hbox.add_theme_constant_override("separation", 8)
 	parent.add_child(hbox)
 
-	var esc_style := StyleBoxFlat.new()
-	esc_style.bg_color = Color(0, 0, 0, 0)
-	esc_style.border_color = MenuStyle.TEXT_SEP
-	esc_style.set_border_width_all(1)
-	esc_style.set_corner_radius_all(3)
-	esc_style.set_content_margin(SIDE_LEFT, 6)
-	esc_style.set_content_margin(SIDE_RIGHT, 6)
-	esc_style.set_content_margin(SIDE_TOP, 2)
-	esc_style.set_content_margin(SIDE_BOTTOM, 2)
-
-	var esc_panel := PanelContainer.new()
-	esc_panel.add_theme_stylebox_override("panel", esc_style)
-	hbox.add_child(esc_panel)
-
-	var esc_label := Label.new()
-	esc_label.text = "ESC"
-	esc_label.add_theme_font_size_override("font_size", 10)
-	esc_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	esc_panel.add_child(esc_label)
+	# Close-hint chip: the active device's back button — B on a pad, ESC on a keyboard.
+	hbox.add_child(ControllerGlyphs.chip(ControllerGlyphs.prompt("ESC", "B")))
 
 	var close_label := Label.new()
 	close_label.text = "Close"
