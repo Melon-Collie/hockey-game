@@ -1223,6 +1223,29 @@ var _dispatch_period_ticks: int = DISPATCH_PERIOD_TICKS
 # model the standard game.
 var rule_set: int = GameRules.DEFAULT_RULE_SET
 var _dispatch_skip_counter: int = 0
+
+# ── Loose-puck reactivity clock ──────────────────────────────────────────────
+# The chase gate reads the REAL carrier (snapshot.real_puck_carrier_peer_id),
+# not the reaction-delayed one on puck_state, and applies its own delay here.
+#
+# Why not just use the delayed carrier: that signal is a single GLOBAL settle
+# timer owned by GameManager whose job is team-shape belief ("are we still on
+# offense?"). Borrowing it as the chase gate conflated two different questions
+# and made puck reactivity hostage to a possession belief that is deliberately
+# slow — during its window no bot chased at all, and because it restarts on
+# every carrier change, a scramble (repeated stick grazes) could defer the
+# chase indefinitely. That is the "bot skates away from a live puck" read.
+#
+# So: team SHAPE keeps the slow, sticky, zone-aware possession belief; puck
+# REACTIVITY gets this clock, which measures how long the puck has genuinely
+# been nobody's. A momentary graze does not reset it — the puck has to be
+# actually CONTROLLED (held CONTROL_CONFIRM_S continuously) to count as
+# possessed again. So the delay stays a real difficulty lever without the
+# unbounded stall.
+const CONTROL_CONFIRM_S: float = 0.08   # continuous carry before a touch counts as control
+var _chase_reaction_delay_s: float = 0.0
+var _loose_elapsed_s: float = 0.0       # how long the puck has been genuinely loose
+var _control_elapsed_s: float = 0.0     # how long the current carrier has held it
 var _cached_move_vector: Vector2 = Vector2.ZERO
 
 # Off-puck role-decision throttle. The role behaviors' positioning argmax
@@ -1550,6 +1573,9 @@ func apply_profile(profile: BotSkillProfile) -> void:
 	_check_aggression = profile.check_aggression
 	_defensive_anticipation_scale = profile.defensive_anticipation_scale
 	_carry_settle_delay_s = profile.carry_settle_delay_s
+	# Same lever the global carrier debounce uses, applied HERE for the chase
+	# gate so puck reactivity has its own bounded clock (see _loose_elapsed_s).
+	_chase_reaction_delay_s = maxf(profile.carrier_reaction_delay_s, 0.0)
 	_reads_goalie_motion = profile.reads_goalie_motion
 	_holds_for_developing_feeds = profile.holds_for_developing_feeds
 	_reads_receiver_commitment = profile.reads_receiver_commitment
@@ -1802,6 +1828,7 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	# else in this SM reads the delayed puck_state.carrier_peer_id so the bot
 	# reacts to OTHERS' possession changes a beat late.
 	var have_puck: bool = (snapshot.real_puck_carrier_peer_id == _peer_id)
+	_update_loose_reaction_clock(snapshot, input.delta)
 	_ticks_in_state += 1
 	_update_engagement_cooldown(snapshot, self_state)
 	# Per-skater acceleration feeds receiver lead in pass scoring + PASS_PRESSED
@@ -5875,11 +5902,33 @@ func _post_puck_lost_state(snapshot: WorldSnapshot) -> State:
 # teammate to it. Used by OFF_PUCK→CHASE_PUCK and CHASE_PUCK exit.
 # Replaces the v1 "is F1?" gate — slot labels don't directly drive
 # chase decisions in v2.
+# Advances the loose-puck reactivity clock. Runs BEFORE the dispatch throttle so
+# a skipped tick can't drop time out of the reaction delay. See the field block.
+func _update_loose_reaction_clock(snapshot: WorldSnapshot, delta: float) -> void:
+	if snapshot == null or delta <= 0.0:
+		return
+	if snapshot.real_puck_carrier_peer_id == -1:
+		_loose_elapsed_s += delta
+		_control_elapsed_s = 0.0
+		return
+	# Someone is touching it — but a graze isn't possession. Only a sustained
+	# carry clears the loose clock, so a scramble's flicker can't keep resetting
+	# the whole team's reaction the way the global debounce does.
+	_control_elapsed_s += delta
+	if _control_elapsed_s >= CONTROL_CONFIRM_S:
+		_loose_elapsed_s = 0.0
+
+
 func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
 	if snapshot == null or snapshot.puck_state == null:
 		return false
-	if snapshot.puck_state.carrier_peer_id != -1:
+	# REAL carrier, not the reaction-delayed one: the delayed signal is the team's
+	# possession BELIEF (deliberately slow, and restart-prone under scramble
+	# noise). Puck reactivity runs on its own bounded clock instead.
+	if snapshot.real_puck_carrier_peer_id != -1:
 		return false  # someone has the puck
+	if _loose_elapsed_s < _chase_reaction_delay_s:
+		return false  # hasn't been loose long enough for us to have reacted
 	# Smart-ping GET_PUCK: an ordered bot chases regardless of the natural
 	# election and the race-lost decline below — an order is an order (the
 	# election override in GameManager._enrich_snapshot_for_ai keeps a second
