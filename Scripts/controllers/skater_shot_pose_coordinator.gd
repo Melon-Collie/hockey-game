@@ -212,7 +212,7 @@ func apply_wrister_follow_through() -> void:
 	# blade BACKWARD as the torso rotated out of the coil before the forward carry
 	# could win. A world-anchored drive has no backward term — reach grows from 0.
 	if _controller.wrister_freeze_blade:
-		_apply_wrister_whip(env, aim_world)
+		_apply_wrister_whip(t, aim_world)
 		return
 
 	# ── Non-frozen (live-blade) wrister: the original torso-local swing ──
@@ -282,7 +282,15 @@ func apply_wrister_follow_through() -> void:
 # old torso-local bridge did. The wall/net clamps match the tracked path. At t=0
 # (env=0) the blade sits exactly at the origin, so the handoff from the frozen
 # pose is seamless with no bridge needed.
-func _apply_wrister_whip(env: float, aim_world: Vector3) -> void:
+func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
+	# Attack-hold-release envelope (NOT a symmetric bell): SNAP the blade to full
+	# extension within attack_frac, HOLD the finish through the middle, then relax
+	# over the last release_frac. The bell eased the blade out of the retracted
+	# origin and pulled it straight back — timid, never committed, read as delayed.
+	# The torso keeps its own bell env (it already reads well).
+	var attack: float = clampf(t / maxf(_controller.wrister_whip_attack_frac, 0.0001), 0.0, 1.0)
+	var release_start: float = 1.0 - clampf(_controller.wrister_whip_release_frac, 0.0, 1.0)
+	var env: float = attack * (1.0 - smoothstep(release_start, 1.0, t)) * _sm.follow_through_power
 	var axis: Vector3 = aim_world
 	if axis.length_squared() < 0.0001:
 		# Whiff / degenerate shot line: fall back to the blade's current bearing so

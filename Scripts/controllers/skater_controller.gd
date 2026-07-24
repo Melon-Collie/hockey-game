@@ -723,7 +723,14 @@ var show_one_timer_indicator: bool = false
 @export var quick_pass_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
 @export var wrister_follow_through_blade_lift: float = 0.55  # high-finish blade height off the ice
-@export var wrister_follow_through_reach: float = 0.85  # forward DRIVE of the blade from the frozen origin along the shot line (the explosive "through the shot")
+@export var wrister_follow_through_reach: float = 1.1  # forward DRIVE of the blade from the frozen origin along the shot line (the explosive "through the shot")
+# Frozen-wrister whip envelope (attack-hold-release, not a symmetric bell): the
+# blade SNAPS to full extension within attack_frac of the follow-through, HOLDS
+# the finish through the middle, then relaxes over the last release_frac. A bell
+# eased the blade out of the retracted origin and pulled it straight back — it
+# never committed to the finish, which read as delayed. Fractions of the FT timer.
+@export var wrister_whip_attack_frac: float = 0.06
+@export var wrister_whip_release_frac: float = 0.45
 @export var wrister_follow_through_twist_deg: float = 45.0   # shoulders explode through the shot (frozen wrister discharges this instantly)
 @export var slapper_follow_through_twist_deg: float = 50.0   # full uncoil past the shot line
 @export var follow_through_lean_deg: float = 8.0             # trunk drives forward over the front foot
