@@ -699,14 +699,19 @@ var show_one_timer_indicator: bool = false
 # fixed low, slapper full) — a soft pass flicks, a full-charge bomb finishes
 # high. Shapes ride sin(PI · t^arc_skew): 1.0 is a symmetric up-down arc, <1
 # peaks earlier so the finish snaps up with the release and settles slowly.
-@export var follow_through_duration: float = 0.35             # wrister
+@export var follow_through_duration: float = 0.22             # wrister — short + front-loaded so the whip fires WITH the release (was 0.35)
 @export var quick_pass_follow_through_duration: float = 0.18  # snap pass flick
 @export var slapper_follow_through_duration: float = 0.5
-@export var follow_through_arc_skew: float = 0.7
+# Lower = the whip peaks EARLIER (0.4 → peak at ~t=0.18 of the timer, ~40 ms after
+# release, then a slow settle). This is what makes the coil discharge explosively
+# with the shot instead of the old mid-timer bell (peak ~130 ms after the puck
+# already left). Shared with the slapper finish.
+@export var follow_through_arc_skew: float = 0.4
 # First fraction of the wrister/quick FT spent blending from the captured
 # release pose onto the authored swing (kills the release-instant teleport
-# to a near-rest pose — the "animation played twice" read).
-@export var follow_through_takeover_frac: float = 0.28
+# to a near-rest pose — the "animation played twice" read). Small so the blade
+# leaves the (now retracted, frozen) origin FAST and whips through the shot.
+@export var follow_through_takeover_frac: float = 0.14
 # Last fraction of the wrister/quick/slapper FT spent easing the finish aim (torso
 # twist + blade) from the shot line back to the LIVE cursor, so the pose ends
 # where the mouse actually is and hands off to blade-tracking without re-rotating
@@ -722,7 +727,7 @@ var show_one_timer_indicator: bool = false
 @export var wrister_follow_through_twist_deg: float = 30.0   # shoulders rotate through the shot (bumped for the frozen-wrister snap read)
 @export var slapper_follow_through_twist_deg: float = 50.0   # full uncoil past the shot line
 @export var follow_through_lean_deg: float = 8.0             # trunk drives forward over the front foot
-@export var follow_through_twist_lerp_speed: float = 9.0
+@export var follow_through_twist_lerp_speed: float = 15.0  # snap the torso from coil through the overshoot fast (was 9.0)
 @export var slapper_follow_through_arc_dist: float = 0.75  # blade XZ travel along the shot line through the finish
 @export var slapper_follow_through_height: float = 0.85    # high-finish blade height off the ice
 @export var slapper_follow_through_hand_y: float = 0.4     # hands rise through the finish
