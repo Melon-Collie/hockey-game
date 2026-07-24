@@ -50,9 +50,62 @@ func test_should_chase_false_when_no_puck_state() -> void:
 func test_should_chase_false_when_puck_is_carried() -> void:
 	var s := _loose_puck_snap(Vector3(5, 0, 0))
 	s.puck_state.carrier_peer_id = OPP_ID
+	s.real_puck_carrier_peer_id = OPP_ID
 	_add_skater(s, SELF_ID, Vector3(4, 0, 0))
 	assert_false(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
 			"a held puck is never chased even if we're nearest")
+
+
+# ── Chase reads the REAL carrier, not the team's delayed belief ──────────────
+# The delayed carrier_peer_id is the TEAM-SHAPE possession belief (GameManager's
+# debounce). Gating chase on it meant that for the whole reaction window — longer
+# under scramble noise, since the old debounce restarted on every carrier change
+# — no bot would chase a puck that was visibly loose, so bots skated off to their
+# role posts past a live puck. Chase now reads the real carrier and applies its
+# own bounded delay (_loose_elapsed_s).
+
+func test_chase_uses_real_carrier_not_the_delayed_belief() -> void:
+	# Puck is genuinely loose; the team still BELIEVES an opponent has it.
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	s.puck_state.carrier_peer_id = OPP_ID   # stale belief, mid-debounce
+	s.real_puck_carrier_peer_id = -1        # truth: nobody has it
+	_add_skater(s, SELF_ID, Vector3(4, 0, 0))
+	assert_true(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
+			"a genuinely loose puck is chased even while the team belief lags")
+
+
+func test_chase_waits_out_the_reaction_delay() -> void:
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	s.real_puck_carrier_peer_id = -1
+	_add_skater(s, SELF_ID, Vector3(4, 0, 0))
+	sm._chase_reaction_delay_s = 0.2
+	sm._loose_elapsed_s = 0.0
+	assert_false(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
+			"no chase before the bot has had time to react")
+	sm._loose_elapsed_s = 0.25
+	assert_true(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
+			"chase once the reaction delay has elapsed")
+
+
+func test_loose_clock_survives_a_scramble_graze() -> void:
+	# The failure the old global debounce had: a puck grazing sticks restarted the
+	# reaction clock every time, so a scramble could defer the chase indefinitely.
+	# A touch shorter than CONTROL_CONFIRM_S must NOT clear the loose clock.
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	s.real_puck_carrier_peer_id = -1
+	for i: int in 30:
+		sm._update_loose_reaction_clock(s, 1.0 / 120.0)
+	var loose_before: float = sm._loose_elapsed_s
+	assert_gt(loose_before, 0.2, "clock accumulated while genuinely loose")
+	# A 4-tick graze (~0.033 s, under CONTROL_CONFIRM_S 0.08).
+	s.real_puck_carrier_peer_id = OPP_ID
+	for i: int in 4:
+		sm._update_loose_reaction_clock(s, 1.0 / 120.0)
+	assert_eq(sm._loose_elapsed_s, loose_before, "a graze does not reset the loose clock")
+	# Sustained control does clear it.
+	for i: int in 12:
+		sm._update_loose_reaction_clock(s, 1.0 / 120.0)
+	assert_eq(sm._loose_elapsed_s, 0.0, "sustained control clears the loose clock")
 
 
 func test_should_chase_true_when_nearest_teammate() -> void:
