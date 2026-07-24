@@ -33,15 +33,13 @@ const _PAD_REBINDABLE: Array = [
 	{"action": "quick_pass",     "label": "Quick Pass"},
 	{"action": "elevation_up",   "label": "Loft Up"},
 	{"action": "elevation_down", "label": "Loft Down"},
+	{"action": "smart_ping",     "label": "Smart Ping"},
 ]
-# Buttons reserved for menu / scoreboard / focus navigation — not bindable to a
-# gameplay action. Pressing one while listening CANCELS the rebind instead, so a
-# pad-only player can always back out (Start / Back / D-pad).
-const _RESERVED_PAD_BUTTONS: Array = [
-	JOY_BUTTON_START, JOY_BUTTON_BACK,
-	JOY_BUTTON_DPAD_UP, JOY_BUTTON_DPAD_DOWN,
-	JOY_BUTTON_DPAD_LEFT, JOY_BUTTON_DPAD_RIGHT,
-]
+# Buttons reserved for menu / scoreboard — not bindable to a gameplay action.
+# Pressing one while listening CANCELS the rebind instead, so a pad-only player
+# can always back out. Kept to Start / Back only: the D-pad is a legal bind
+# target (it hosts the default Smart Ping and is otherwise free during play).
+const _RESERVED_PAD_BUTTONS: Array = [JOY_BUTTON_START, JOY_BUTTON_BACK]
 
 var _shot_power_slider: HSlider = null
 var _shot_power_field: LineEdit = null
@@ -133,7 +131,7 @@ func _build_content() -> void:
 	add_child(_section_spacer())
 	add_child(_section_header("Gamepad Buttons"))
 	var pad_grid_hint := Label.new()
-	pad_grid_hint.text = "Press a button to bind it. Start / Back / D-pad cancel."
+	pad_grid_hint.text = "Press a button to bind it. Start / Back cancel."
 	pad_grid_hint.add_theme_font_size_override("font_size", 13)
 	pad_grid_hint.add_theme_color_override("font_color", _DIM)
 	add_child(pad_grid_hint)

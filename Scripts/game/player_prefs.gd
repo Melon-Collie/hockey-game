@@ -192,7 +192,7 @@ const REBINDABLE_ACTIONS: PackedStringArray = [
 # a rebind applies without a respawn, like the gamepad toggle itself.
 const PAD_REBINDABLE_ACTIONS: PackedStringArray = [
 	"block", "brake", "hit", "stick_lift", "sprint", "quick_pass",
-	"elevation_up", "elevation_down",
+	"elevation_up", "elevation_down", "smart_ping",
 ]
 const PAD_DEFAULT_BUTTONS: Dictionary = {
 	"block": JOY_BUTTON_A,
@@ -203,6 +203,11 @@ const PAD_DEFAULT_BUTTONS: Dictionary = {
 	"quick_pass": JOY_BUTTON_RIGHT_STICK,
 	"elevation_up": JOY_BUTTON_Y,
 	"elevation_down": JOY_BUTTON_X,
+	# Every face/shoulder/stick button is taken by a gameplay input, so the
+	# context ping lands on the otherwise-unused-in-game D-pad. (In menus the
+	# D-pad navigates; there's no focused menu during live play, so a press
+	# reaches the HUD as a ping.)
+	"smart_ping": JOY_BUTTON_DPAD_UP,
 }
 
 var player_name: String = "Player"
@@ -435,6 +440,14 @@ func _ensure_joypad_ui_bindings() -> void:
 	_add_joy_ui_button(&"ui_down", JOY_BUTTON_DPAD_DOWN)
 	_add_joy_ui_button(&"ui_left", JOY_BUTTON_DPAD_LEFT)
 	_add_joy_ui_button(&"ui_right", JOY_BUTTON_DPAD_RIGHT)
+	# Spectator camera controls (CameraDirector, spectator-only) on the pad: Y
+	# cycles the view, D-pad ↑↓ switches the followed skater — mirroring the
+	# keyboard C / ↑↓. Bound here rather than in project.godot for the same reason
+	# as the ui_* binds; safe because these actions aren't in REBINDABLE_ACTIONS,
+	# so apply_bindings() never erases their events.
+	_add_joy_ui_button(&"camera_cycle_mode", JOY_BUTTON_Y)
+	_add_joy_ui_button(&"camera_next_target", JOY_BUTTON_DPAD_UP)
+	_add_joy_ui_button(&"camera_prev_target", JOY_BUTTON_DPAD_DOWN)
 
 
 func _add_joy_ui_button(action: StringName, button: JoyButton) -> void:

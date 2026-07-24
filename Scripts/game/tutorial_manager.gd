@@ -396,7 +396,11 @@ func _exit_tree() -> void:
 # ── Keybinding tokens ─────────────────────────────────────────────────────────
 
 func _build_key_tokens() -> void:
-	_key_tokens = {
+	_key_tokens = _pad_key_tokens() if ControllerNav.active() else _keyboard_key_tokens()
+
+
+func _keyboard_key_tokens() -> Dictionary:
+	return {
 		"move_keys": "%s, %s, %s, %s" % [
 			PlayerPrefs.action_display("move_up"),
 			PlayerPrefs.action_display("move_left"),
@@ -412,6 +416,27 @@ func _build_key_tokens() -> void:
 		"stick_lift":     PlayerPrefs.action_display("stick_lift"),
 		"elevation_up":   PlayerPrefs.action_display("elevation_up"),
 		"elevation_down": PlayerPrefs.action_display("elevation_down"),
+	}
+
+
+# Gamepad token set: the same slots resolved to pad glyphs. Movement is the left
+# stick; aim/shoot are the right stick + triggers (fixed); the discrete actions
+# read the player's live pad binds so a rebind shows here too. (The surrounding
+# step prose still describes the cursor scheme — the pad tutorial copy is a larger
+# follow-up; this at least names the right buttons.)
+func _pad_key_tokens() -> Dictionary:
+	return {
+		"move_keys":      "Left Stick",
+		"sprint":         ControllerGlyphs.joy_label(PlayerPrefs.pad_button("sprint")),
+		"brake":          ControllerGlyphs.joy_label(PlayerPrefs.pad_button("brake")),
+		"hit":            ControllerGlyphs.joy_label(PlayerPrefs.pad_button("hit")),
+		"shoot":          "RT",
+		"quick_pass":     ControllerGlyphs.joy_label(PlayerPrefs.pad_button("quick_pass")),
+		"slapshot":       "LT",
+		"block":          ControllerGlyphs.joy_label(PlayerPrefs.pad_button("block")),
+		"stick_lift":     ControllerGlyphs.joy_label(PlayerPrefs.pad_button("stick_lift")),
+		"elevation_up":   ControllerGlyphs.joy_label(PlayerPrefs.pad_button("elevation_up")),
+		"elevation_down": ControllerGlyphs.joy_label(PlayerPrefs.pad_button("elevation_down")),
 	}
 
 

@@ -207,21 +207,41 @@ func _ready() -> void:
 	GameManager.local_spectator_state_changed.connect(func(is_spec: bool) -> void:
 		_apply_spectator_chrome()
 		if is_spec and _toast_stack != null:
-			_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE))
+			_toast_stack.push(_spectator_controls_hint(), _WHITE))
 	_apply_spectator_chrome()
 	# Catch the case where the local peer entered the scene already a
 	# spectator (lobby-assigned slot) — the signal was emitted before this
 	# HUD's connect, so push the toast inline.
 	if GameManager.is_local_spectator() and _toast_stack != null:
-		_toast_stack.push("C: camera  ·  ↑↓: player  ·  RMB drag: look", _WHITE)
+		_toast_stack.push(_spectator_controls_hint(), _WHITE)
+
+# Spectator camera-control hint, resolved to the active device. Pad: Y cycles the
+# camera mode, D-pad ↑↓ switches the followed player, the right stick free-looks
+# (see CameraDirector's joypad binds + FreeCamera's pad path). Keyboard: C / ↑↓ /
+# RMB-drag.
+func _spectator_controls_hint() -> String:
+	return ControllerGlyphs.prompt(
+			"C: camera  ·  ↑↓: player  ·  RMB drag: look",
+			"Y: camera  ·  ↑↓: player  ·  Right-stick: look")
 
 func _unhandled_input(event: InputEvent) -> void:
+	var menu_open: bool = _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible
+	# Pad ping: the rebindable pad button (D-pad Up by default). Only fires — and
+	# only consumes — when no menu owns the screen, so the D-pad still navigates an
+	# open menu (which the GUI would have consumed before this anyway).
+	var pad_ping: bool = PlayerPrefs.gamepad_enabled and not menu_open \
+			and event is InputEventJoypadButton and event.pressed \
+			and (event as InputEventJoypadButton).button_index == PlayerPrefs.pad_button("smart_ping")
+	if pad_ping:
+		GameManager.try_send_smart_ping()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed(&"smart_ping"):
 		# Context-sensitive team ping (chat bubble + bot directive). Resolution
 		# and all gating (spectator/replay/cooldown/no-op contexts) live in
 		# GameManager.try_send_smart_ping; the HUD only swallows the press when
 		# a menu owns the screen.
-		if not (_confirm_dialog.visible or _pause_menu.visible or _side_menu.visible):
+		if not menu_open:
 			GameManager.try_send_smart_ping()
 		get_viewport().set_input_as_handled()
 		return
