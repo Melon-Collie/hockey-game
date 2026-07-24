@@ -1,13 +1,19 @@
 # AI threading: move bot decisions off the physics thread
 
-Status: **design agreed, Phase 2 (centralize) in progress.** Per CLAUDE.md
-workflow this is the plan of record — ask before deviating. Decisions locked at
-sign-off: **Model A** (whole dispatch on the worker, uniform one-tick staleness,
-Model B held in reserve for the reception re-aim only); **single worker for all
-AI** — skaters + goalies + brains, keeping the shared static registers
-single-threaded; **centralize then thread** — land the single-threaded
-`AICoordinator` as its own reviewable, behavior-identical step before flipping it
-onto the worker.
+Status: **shipped — threading is the only path** (the single-threaded fallback
+has been removed). Bot decisions run on a dedicated AI worker thread
+(`AICoordinator`). The route there: centralize dispatch (2a) → freeze the brain
+view (3a) → split decide/apply (3b) → introduce a **non-blocking** worker (3c).
+The worker handles **skaters + brains**; the **goalie stays on the main thread**
+(non-scaling 2 actors, runs in parallel with the worker). Model A shipped
+(whole-dispatch, decisions applied a frame or more late); Model B (live reception
+re-aim on the main thread) remains the reserve lever if reception feel needs it.
+The worker NEVER blocks the host — a slow batch just makes bots coast on last
+frame's decision, so the frame rate is decoupled from AI cost. Concurrency safety
+uses a mutex on the "batch ready" flag plus per-kick copies of the fields the host
+mutates in place (see *Concurrency notes* below — the earlier "no mutex" note is
+superseded). Perf is validated in a real/Steam build, not the editor (debug +
+editor overhead masks the sim win); watch F3 sim-tick under bot load.
 
 ## The problem
 
@@ -321,18 +327,32 @@ the worker) — only the per-agent dispatch goes to the worker.
 4. **Validate & decide** — if reception aim lag is felt, escalate the reception
    re-aim to Model B. Tune, then flip the flag on by default.
 
-### Concurrency notes for 3c (no mutex / no double-buffer needed)
+### Concurrency notes (as shipped)
 
-- **InputState handoff:** the agent returns its reused `_input` buffer. Main
-  reads it only *after* waiting on `_done` (worker idle) and *before* the next
-  kick; the worker writes it only between wake and done. Read-before-write within
-  a tick, no overlap → safe without a second buffer.
-- **Snapshot handoff:** `get_state_delayed(0.0)` builds a *fresh* WorldSnapshot
-  object each tick; the worker holds its own reference while main builds next
-  tick's into a new object. Main never mutates a handed-off snapshot → safe.
-- **The frozen brain view** (3a) is likewise a fresh plain-data object per tick.
-- The only shared-mutable risk that remains — the `AIActionScoring` static
-  registers — is neutralized by the single sequential worker (unchanged order).
+The worker is non-blocking, so main and worker can touch bot/brain state in
+overlapping frames. Safety comes from confining every worker read to state that
+is stable for the whole batch, and every main write to when the worker is idle:
+
+- **Non-blocking harvest.** A `Mutex` guards a `_result_ready` flag the worker
+  sets on completion; main checks it without blocking. If the batch isn't ready,
+  main reuses last frame's decision and skips the next kick — a slow worker never
+  stalls the host tick. (This supersedes the original blocking `_done.wait()` and
+  the "no mutex needed" claim.)
+- **InputState:** the worker writes each bot's `_pending_input` during its batch;
+  main reads it only in `apply_decision`, which runs only while the worker is idle
+  (harvested, before the next kick). No overlap, so no second buffer.
+- **Agent stamps + brain view are built at kick (worker idle).** Rule set / host
+  time move out of the per-frame `begin_tick` into `prep_for_decide`, and
+  `build_view` runs at kick, not every frame — so nothing the worker reads is
+  rewritten mid-batch. A main-only `_stale_pending` flag (not a `_pending_input`
+  write) handles the special-mode → normal transition.
+- **Snapshot:** fields the host rebuilds fresh each frame (skater_states, the
+  teammate caches) are shared by reference; fields it mutates IN PLACE every frame
+  (the accel-tracker dicts shared onto the snapshot, the reused carrier-debounce
+  puck) are copied into reused per-worker buffers at kick — the worker never reads
+  them mid-mutation.
+- The `AIActionScoring` static registers stay safe by construction — the single
+  sequential worker preserves the one-at-a-time execution order.
 
 ## Validation
 

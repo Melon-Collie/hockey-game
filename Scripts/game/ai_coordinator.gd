@@ -1,20 +1,16 @@
 class_name AICoordinator
 extends RefCounted
 
-# Drives the host's bot-AI decisions, optionally off the physics thread (AI
-# threading Phase 3c; design in docs/ai-threading-plan.md).
+# Drives the host's bot-AI decisions off the physics thread (AI threading; design
+# in docs/ai-threading-plan.md).
 #
-# Two paths, selected by THREADED_AI:
-#   OFF — decisions run inline on the main thread, exactly like Phase 3b:
-#     begin_tick -> decide -> apply per bot, then collect one-timer readiness.
-#   ON — the expensive decide() runs on a persistent worker thread while the main
-#     thread does the rest of the physics tick. The main thread NEVER blocks on
-#     the worker: each frame it harvests a finished batch if one is ready, else
-#     it reuses last frame's decision (bots coast on their retained move intent).
-#     So the frame rate is decoupled from the AI cost — a heavy AI tick lets the
-#     worker fall a frame or two behind instead of stalling the host. Decisions
-#     are applied a frame or more late; a bot's 6-60 Hz decision cadence already
-#     tolerates that.
+# The expensive decide() runs on a persistent worker thread while the main thread
+# does the rest of the physics tick. The main thread NEVER blocks on the worker:
+# each frame it harvests a finished batch if one is ready, else it reuses last
+# frame's decision (bots coast on their retained move intent). So the frame rate
+# is decoupled from the AI cost — a heavy AI tick lets the worker fall a frame or
+# two behind instead of stalling the host. Decisions are applied a frame or more
+# late; a bot's 6-60 Hz decision cadence already tolerates that.
 #
 # Why this is safe to thread (see the plan): decide() reads only the frozen
 # WorldSnapshot + the frozen TeamBrainView + agent-local state and writes only
@@ -27,13 +23,10 @@ extends RefCounted
 # main thread reads a bot's InputState only while the worker is idle (between a
 # harvested batch and the next kick), never while it is being written.
 #
-# Set THREADED_AI to false to fall back to the single-threaded path if the worker
-# ever misbehaves in game. The threaded path can't be exercised by the headless
-# test suite (which bypasses the coordinator), so it's validated in game.
+# The threaded path can't be exercised by the headless test suite (which bypasses
+# the coordinator), so it's validated in game.
 
-const THREADED_AI := true
-
-# ── Worker plumbing (only used when THREADED_AI) ─────────────────────────────
+# ── Worker plumbing ──────────────────────────────────────────────────────────
 var _thread: Thread = null
 var _wake := Semaphore.new()       # main -> worker: "decide the current batch"
 var _mutex := Mutex.new()          # guards _result_ready only
@@ -65,26 +58,6 @@ var last_worker_us: int = 0
 # main thread; `bots` is the live AIController list; `snapshot` is this frame's
 # enriched snapshot.
 func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
-		snapshot: WorldSnapshot, delta: float) -> void:
-	if THREADED_AI:
-		_dispatch_threaded(bots, brains, snapshot, delta)
-	else:
-		_dispatch_inline(bots, brains, snapshot, delta)
-
-
-# ── Inline (single-threaded) path — identical to Phase 3b ────────────────────
-func _dispatch_inline(bots: Array[AIController], brains: Array[TeamBrain],
-		snapshot: WorldSnapshot, delta: float) -> void:
-	for brain: TeamBrain in brains:
-		brain.build_view(snapshot)
-	for b: AIController in bots:
-		b.tick_agent(snapshot, delta)
-	for b: AIController in bots:
-		b.collect_one_timer_ready()
-
-
-# ── Threaded path (non-blocking) ─────────────────────────────────────────────
-func _dispatch_threaded(bots: Array[AIController], brains: Array[TeamBrain],
 		snapshot: WorldSnapshot, delta: float) -> void:
 	if not _thread_started:
 		_start_thread()

@@ -195,8 +195,7 @@ var current_snapshot: WorldSnapshot = null
 # and shared onto current_snapshot.accel_by_peer instead of all 6 bots
 # recomputing the same velocity diff every tick (see AIAccelerationTracker).
 var _accel_tracker: AIAccelerationTracker = AIAccelerationTracker.new()
-# Drives all bot dispatch — inline on the main thread by default, or off a worker
-# thread when AICoordinator.THREADED_AI is enabled (AI threading Phase 3c).
+# Drives all bot dispatch off the AI worker thread (AI threading). See AICoordinator.
 var _ai_coordinator := AICoordinator.new()
 # Bot difficulty knobs for this match, resolved from PlayerPrefs at match start
 # (on_host_started). Drives the carrier reaction delay applied to current_

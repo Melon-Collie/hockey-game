@@ -146,24 +146,12 @@ func setup_agent(peer_id: int, team_id: int, brain: TeamBrain, team_id_by_peer: 
 		skater.add_child(_debug_label)
 
 
-# Per-tick agent dispatch, driven by the host's centralized AI loop
-# (GameManager._physics_process) rather than the node's own _physics_process —
-# so all bots run from one seam that Phase 3 lifts onto a worker thread. The
-# snapshot is passed in (not read from GameManager.current_snapshot) so the same
-# entry works off-thread against a handed-off buffer. Host-only; bots don't exist
-# on clients.
-func tick_agent(snapshot: WorldSnapshot, delta: float) -> void:
-	# Single-threaded orchestration (Phase 3b): resolve mode, decide, apply — all
-	# on the main thread, back-to-back. Phase 3c calls begin_tick / decide /
-	# apply_decision separately across the tick boundary (begin_tick + apply on
-	# main, decide on the worker), so keep the three faithful to this order.
-	if not begin_tick(delta):
-		return
-	prep_for_decide()
-	decide(snapshot, delta)
-	apply_decision(delta)
-
-
+# Per-tick agent dispatch, driven by the host's AI worker (AICoordinator) rather
+# than the node's own _physics_process — all bots run from one seam that runs off
+# the physics thread. The coordinator calls these three across the tick boundary:
+# begin_tick + apply_decision on the main thread, decide on the worker. Host-only;
+# bots don't exist on clients.
+#
 # MAIN-THREAD tick preamble: the guards and the special (non-agent) modes, each
 # of which does its own node writes right here. Returns true ONLY for normal
 # gameplay — where the caller runs decide() then apply_decision(). For a normal
