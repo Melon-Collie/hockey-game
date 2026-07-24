@@ -305,15 +305,19 @@ the worker) — only the per-agent dispatch goes to the worker.
      `apply_decision(delta)` (main: `_process_input` + shot state + debug). Called
      back-to-back on main here; suite green. One residual live-brain write inside
      the agent (`set_one_timer_ready`) is left for 3c's collection step.
-   - **3c — Introduce the worker** *(concurrency goes live).* Persistent
-     `Thread` + two `Semaphore`s; kick after building the snapshot + frozen brain
-     view, apply last tick's results at the top of the next tick (the 1-tick
-     delay that buys full overlap with physics); spike fallback (reuse last
-     input, never stall the host tick); lifecycle teardown on match end / scene
-     exit. Flag-gated (`ai_threaded`, default **off**) so one build A/B-toggles
-     pure-2a vs. threaded. **Gate: the Phase-2 playtest must be clean first;**
-     then suite green, host-frame telemetry shows the main-thread win, playtest
-     confirms no feel regression (especially reception).
+   - **3c — Introduce the worker** *(done — committed, flag default off).*
+     `AICoordinator` owns a persistent `Thread` + two `Semaphore`s.
+     `GameManager` hands it the bot list + frozen snapshot each frame; it kicks
+     the worker to `decide()` this frame's normal bots and applies last frame's
+     decisions (the 1-tick delay buys full overlap with physics). One-timer
+     readiness moved off `_set_one_timer_ready` into a main-thread
+     `push_one_timer_ready()` collection so `decide()` writes no shared state.
+     Worker starts lazily, joined on world teardown + app-exit. No mutex /
+     double-buffer (results read only after `_done`, before the next kick).
+     **Flip `AICoordinator.THREADED_AI` to `true` + rebuild to enable.** Suite
+     green on the inline path; the threaded path compiles but can't be exercised
+     headlessly — needs an in-game playtest with the flag on, watching the F3
+     host-frame telemetry for the main-thread win.
 4. **Validate & decide** — if reception aim lag is felt, escalate the reception
    re-aim to Model B. Tune, then flip the flag on by default.
 
