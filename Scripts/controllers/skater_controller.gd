@@ -723,7 +723,7 @@ var show_one_timer_indicator: bool = false
 @export var quick_pass_follow_through_power: float = 0.5
 @export var wrister_follow_through_hand_y: float = 0.35
 @export var wrister_follow_through_blade_lift: float = 0.55  # high-finish blade height off the ice
-@export var wrister_follow_through_reach: float = 1.1  # forward DRIVE of the blade from the frozen origin along the shot line (the explosive "through the shot")
+@export var wrister_follow_through_reach: float = 0.5  # forward hand CARRY along the shot line (= arm extension; the blade reaches a full stick beyond it)
 # Frozen-wrister whip envelope (attack-hold-release, not a symmetric bell): the
 # blade SNAPS to full extension within attack_frac of the follow-through, HOLDS
 # the finish through the middle, then relaxes over the last release_frac. A bell

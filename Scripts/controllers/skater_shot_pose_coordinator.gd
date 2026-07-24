@@ -43,10 +43,6 @@ func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
 var _ft_start_hand: Vector3 = Vector3.ZERO
 var _ft_start_blade: Vector3 = Vector3.ZERO
 var _ft_start_valid: bool = false
-# World-space blade position at release — the launch point the frozen-wrister
-# whip drives forward FROM along the shot line (see _apply_wrister_whip). World,
-# not local, so the uncoiling torso can't rotate the anchor backward.
-var _ft_origin_world: Vector3 = Vector3.ZERO
 
 
 func begin_follow_through() -> void:
@@ -54,7 +50,6 @@ func begin_follow_through() -> void:
 		return
 	_ft_start_hand = _skater.get_top_hand_position()
 	_ft_start_blade = _skater.get_blade_position()
-	_ft_origin_world = _skater.upper_body_to_global(_skater.get_blade_position())
 	_ft_start_valid = true
 
 # ── Slapper Charge Pose ───────────────────────────────────────────────────────
@@ -272,63 +267,48 @@ func apply_wrister_follow_through() -> void:
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(local_target)
 
-# World-anchored blade whip for the frozen wrister (coil → instant release →
-# blade replays the shot). Blade tip and hand are built as complete WORLD points
-# and driven FORWARD from the release origin (_ft_origin_world) along the shot
-# line — reach grows from 0, so there is no backward term — then converted whole
-# to upper-body-local at the very end (the round-trip is exact, so the follow-
-# through lean can't leak into the horizontal drive). The uncoiling torso only
-# re-expresses the pose; it can't rotate the world anchor backward the way the
-# old torso-local bridge did. The wall/net clamps match the tracked path. At t=0
-# (env=0) the blade sits exactly at the origin, so the handoff from the frozen
-# pose is seamless with no bridge needed.
+# Blade whip for the frozen wrister (coil → instant release → blade replays the
+# shot). ARM-CONTROLLED, same geometry as the tracked follow-through: the hand
+# sits near the shoulder plus a forward carry, and the blade is one stick-length
+# AHEAD along the shot line (whip_local_dir). So the blade extends along the shot
+# vector FROM THE BODY — never radially outward — and the arm stays short (= the
+# carry) so it can't stretch. The frozen-specific parts: the aim points straight
+# down the shot line from t=0 (no coiled-back sweep, no retracted-origin bridge)
+# and the reach rides an attack-hold-release envelope, so the blade SNAPS to the
+# extended finish, HOLDS it, then relaxes — the explosive discharge, committed.
 func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
-	# Attack-hold-release envelope (NOT a symmetric bell): SNAP the blade to full
-	# extension within attack_frac, HOLD the finish through the middle, then relax
-	# over the last release_frac. The bell eased the blade out of the retracted
-	# origin and pulled it straight back — timid, never committed, read as delayed.
-	# The torso keeps its own bell env (it already reads well).
+	# Attack-hold-release (NOT a symmetric bell): SNAP to full extension within
+	# attack_frac, HOLD the finish through the middle, relax over the last
+	# release_frac. A bell eased the blade out and pulled it straight back — timid,
+	# never committed, read as delayed. The torso keeps its own bell env.
 	var attack: float = clampf(t / maxf(_controller.wrister_whip_attack_frac, 0.0001), 0.0, 1.0)
 	var release_start: float = 1.0 - clampf(_controller.wrister_whip_release_frac, 0.0, 1.0)
 	var env: float = attack * (1.0 - smoothstep(release_start, 1.0, t)) * _sm.follow_through_power
 	var axis: Vector3 = aim_world
 	if axis.length_squared() < 0.0001:
-		# Whiff / degenerate shot line: fall back to the blade's current bearing so
-		# the finish still resolves rather than snapping to a default.
-		axis = _skater.upper_body_to_global(_skater.get_blade_position()) - _skater.global_position
+		axis = -_skater.global_transform.basis.z  # whiff: skate-forward, never radial
 		axis.y = 0.0
-		if axis.length_squared() < 0.0001:
-			return
-	axis = axis.normalized()
-	# Build the blade AND hand as complete WORLD points with real heights, then
-	# convert whole points to local at the end. Converting a y=0 point (as a first
-	# pass did) mixed the ~1.2 m torso-to-blade height difference into local X/Z
-	# through the follow-through's pitch+ROLL lean — the blade jumped SIDEWAYS and
-	# the arm stretched. Whole-point conversion round-trips exactly, so the lean is
-	# handled by the transform and never leaks into the horizontal drive.
-	var reach: float = env * _controller.wrister_follow_through_reach
-	# Blade tip: driven forward from the frozen origin along the shot line, lifted
-	# off the release height (the origin already sits on the ice).
-	var blade_world: Vector3 = _ft_origin_world + axis * reach
-	blade_world.y = _ft_origin_world.y + env * _controller.wrister_follow_through_blade_lift
-	# Hand: one stick-length from the blade TOWARD THE SHOULDER — rigid stick, but
-	# the hand rides up near the shoulder (blade low-forward, hands high — the real
-	# follow-through shape) instead of floating a stick-length straight back from the
-	# blade, which pulled the hand away from the shoulder and STRETCHED the arm.
-	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
-	var to_shoulder: Vector3 = shoulder_world - blade_world
-	var hand_world: Vector3
-	if to_shoulder.length() > 0.001:
-		hand_world = blade_world + to_shoulder.normalized() * _controller.stick_length
-	else:
-		hand_world = blade_world - axis * _controller.stick_length
-	var blade_local: Vector3 = _skater.upper_body_to_local(blade_world)
-	var hand_pos: Vector3 = _skater.upper_body_to_local(hand_world)
-	# Wall + net clamps (identical to the tracked path), keeping the hand rigid to
-	# the stick by carrying the same XZ correction.
-	var local_target: Vector3 = _skater.clamp_blade_to_walls(blade_local)
+	var local_dir: Vector3 = ShotMechanics.whip_local_dir(
+			axis, _skater.upper_body.global_transform.basis)
+	if local_dir.length_squared() < 0.0001:
+		return
+	# Hand near the shoulder + a forward carry (arm length = carry, so it can't
+	# stretch); blade one stick-length ahead along the shot line, at ice + lift.
+	var carry: float = env * _controller.wrister_follow_through_reach
+	var hand_pos: Vector3 = _skater.shoulder.position + local_dir * carry
+	hand_pos.y = _controller.hand_rest_y + env * _controller.wrister_follow_through_hand_y
+	var probe: Vector3 = hand_pos + local_dir * _ik.stick_horiz()
+	var blade_y: float = _ik.blade_y_lean_corrected(probe.x, probe.z) \
+			+ env * _controller.wrister_follow_through_blade_lift
+	var drop: float = hand_pos.y - blade_y
+	var horiz: float = sqrt(maxf(
+			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
+	var intended_target: Vector3 = hand_pos + local_dir * horiz
+	intended_target.y = blade_y
+	# Wall + net clamps (identical to the tracked path), hand kept rigid to the stick.
+	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
 	var clamp_delta_xz := Vector3(
-			local_target.x - blade_local.x, 0.0, local_target.z - blade_local.z)
+			local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
 	if clamp_delta_xz.length_squared() > 0.0:
 		hand_pos.x += clamp_delta_xz.x
 		hand_pos.z += clamp_delta_xz.z

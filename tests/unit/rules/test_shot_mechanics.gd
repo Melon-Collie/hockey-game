@@ -667,3 +667,34 @@ func test_roofing_distance_gradient() -> void:
 		var y: float = ShotMechanics.loft_y(boundary_power, _VY_HIGH, t)
 		var vy: float = boundary_power * y / sqrt(1.0 + y * y)
 		assert_almost_eq(vy, _VY_HIGH, 0.01, "full vy exactly at the bind boundary")
+
+# ── Follow-through whip direction (frozen-wrister) ─────────────────────────────
+# The whip builds the stick outward from the shoulder along whip_local_dir. A
+# coiled body (yaw-rotated upper body) must NOT bend the finish off the shot line:
+# B * whip_local_dir(axis, B) has to stay parallel to the shot axis in XZ, or the
+# blade splays radially outward from the body (the reported bug). Repro includes a
+# straight-up ("12 o'clock") shot under a range of coils, both handedness signs.
+func test_whip_local_dir_stays_on_shot_axis_under_coil() -> void:
+	var axes: Array[Vector3] = [
+		Vector3(0.0, 0.0, -1.0),      # straight up / forward
+		Vector3(1.0, 0.0, 0.0),       # hard right
+		Vector3(0.6, 0.0, -0.8),      # forward-right
+		Vector3(-0.35, 0.0, -0.94),   # forward-left (lefty forehand-ish)
+	]
+	var yaws: Array = [-0.9, -0.4, -0.1, 0.0, 0.25, 0.7, 1.2]
+	for axis in axes:
+		for yaw in yaws:
+			var b := Basis(Vector3.UP, yaw)
+			var local_dir: Vector3 = ShotMechanics.whip_local_dir(axis, b)
+			var world_dir: Vector3 = b * local_dir
+			var wd := Vector3(world_dir.x, 0.0, world_dir.z).normalized()
+			var a := Vector3(axis.x, 0.0, axis.z).normalized()
+			assert_almost_eq(wd.dot(a), 1.0, 0.0005,
+					"whip drives along the shot axis (yaw %.2f) — not radially outward" % yaw)
+
+
+func test_whip_local_dir_degenerate_axis_returns_zero() -> void:
+	assert_eq(ShotMechanics.whip_local_dir(Vector3.ZERO, Basis()), Vector3.ZERO,
+			"degenerate shot axis returns ZERO so the caller can fall back")
+	assert_eq(ShotMechanics.whip_local_dir(Vector3(0.0, 1.0, 0.0), Basis()), Vector3.ZERO,
+			"purely vertical axis has no XZ direction → ZERO")

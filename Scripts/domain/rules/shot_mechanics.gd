@@ -338,6 +338,25 @@ static func follow_through_aim(
 	var ang: float = lerp_angle(atan2(sd.x, -sd.z), atan2(cd.x, -cd.z), rt)
 	return Vector3(sin(ang), 0.0, -cos(ang))
 
+# Follow-through blade-extension direction in the upper-body LOCAL frame, for a
+# shot along `axis_world` (world XZ). The frozen-wrister whip builds the stick
+# outward FROM THE SHOULDER along this local direction, so the blade drives along
+# the shot vector regardless of the body's yaw (the coil): for any yaw B,
+# `B * whip_local_dir(A, B)` is parallel to A in XZ. (Body lean — pitch/roll —
+# introduces a small error the vertical solve absorbs; yaw is exact.) This is what
+# keeps the finish on the shot line instead of splaying radially outward from the
+# body. Returns ZERO for a degenerate axis (caller falls back).
+static func whip_local_dir(axis_world: Vector3, upper_body_basis: Basis) -> Vector3:
+	var a := Vector3(axis_world.x, 0.0, axis_world.z)
+	if a.length_squared() < 0.0001:
+		return Vector3.ZERO
+	var local: Vector3 = upper_body_basis.inverse() * a.normalized()
+	var dir := Vector3(local.x, 0.0, local.z)
+	if dir.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return dir.normalized()
+
+
 # Should a blade-in-wall squeeze auto-release the puck? Pure threshold check.
 static func should_release_on_wall_pin(squeeze: float, threshold: float) -> bool:
 	return squeeze > threshold
