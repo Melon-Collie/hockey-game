@@ -21,6 +21,15 @@ const TRAIL_COLOR_FAST: Color = Color(1.0, 0.45, 0.05, 1.0)
 const TRAIL_SPEED_MIN: float = 3.0   # m/s — at or below this, full slow color
 const TRAIL_SPEED_MAX: float = 18.0  # m/s — at or above this, full fast color
 
+# GPU-emitted particles are displayed ~one render frame after the emitter reached
+# their spot, and the lag scales with speed — so the puck (the fastest thing on the
+# ice) sheds a trail whose head detaches from the mesh, each new segment popping in
+# behind it (reads as the trail "jumping backwards"). We cancel it by leading the
+# emission origin one frame of travel ahead (vel * delta), so the newest dot lands
+# where the puck renders THIS frame. Clamped so a faceoff/goal teleport (a one-frame
+# velocity spike) can't fling the emit origin across the rink.
+const TRAIL_LEAD_MAX_M: float = 0.5  # cap on the one-frame lead offset (m)
+
 # Board impact puff: ice chips kicked up where the puck slams the boards.
 # Amount/velocity scale with impact speed; soft touches get nothing. The
 # cooldown coalesces the per-contact re-fires of a puck grinding along the
@@ -104,7 +113,16 @@ func _process(delta: float) -> void:
 	# When grounded, pin the emitter to ice level so trail dots scrape the ice surface.
 	# When airborne, follow the puck's actual Y so the trail goes with it.
 	var target_y: float = curr_pos.y if _puck.is_airborne() else ICE_Y
-	_trail_emitter.position.y = target_y - curr_pos.y  # local offset relative to PuckVFX parent
+
+	# Lead the emission origin one render frame ahead (see TRAIL_LEAD_MAX_M) to cancel
+	# the GPU particle display latency. Horizontal only — the Y stays pinned to the ice
+	# (or the puck's height when airborne); leading is a chase-plane correction. The
+	# puck node keeps an identity basis, so this local offset is also the world offset.
+	var lead: Vector3 = vel * delta
+	var lead_flat := Vector3(lead.x, 0.0, lead.z)
+	if lead_flat.length() > TRAIL_LEAD_MAX_M:
+		lead_flat = lead_flat.normalized() * TRAIL_LEAD_MAX_M
+	_trail_emitter.position = Vector3(lead_flat.x, target_y - curr_pos.y, lead_flat.z)
 
 	# Speed-reactive color: lerp from cream (slow) to hot orange (fast).
 	var flat_speed: float = Vector3(vel.x, 0.0, vel.z).length()
