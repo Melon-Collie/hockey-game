@@ -1064,6 +1064,11 @@ var _read_belief_x: float = 0.0
 var _read_belief_y: float = 0.0
 var _read_blend: float = 1.0
 var _read_hold: float = 0.0
+# The initial ballistic commitment has been made (the first reach deployed), so
+# the read is now being refined from live observation. One-shot: a LATE
+# re-classification re-arms the arm timer, and that must not re-freeze the
+# convergence — he is watching the puck the whole way, not restarting his read.
+var _read_committed: bool = false
 var _read_last_vel: Vector3 = Vector3.ZERO
 # Blocking-drop timer for fully-screened releases (audit F4): >= 0 counts down
 # from the base leg read; on expiry the goalie commits the blocking butterfly
@@ -1514,6 +1519,7 @@ func reset_to_crease() -> void:
 	_aim_history_len = 0
 	_read_blend = 1.0
 	_read_hold = 0.0
+	_read_committed = false
 	_read_last_vel = Vector3.ZERO
 	_screen_block_drop_timer = -1.0
 	_chest_t = 0.0
@@ -3839,6 +3845,7 @@ func _seed_read_belief(truth: GoalieBehaviorRules.ShotResult, screen_d: float) -
 	_read_belief_x = truth.impact_x
 	_read_belief_y = truth.impact_y
 	_read_blend = 1.0 if read_lag <= 0.0 else 0.0
+	_read_committed = false
 	# Convergence cannot start while the puck is still hidden — nothing to see.
 	_read_hold = screen_d
 	_read_last_vel = _loose_puck_velocity()
@@ -3884,13 +3891,18 @@ func _advance_read_convergence(delta: float, truth: GoalieBehaviorRules.ShotResu
 	# read can never bite. Convergence therefore starts only once the reach has
 	# actually deployed, and is held while the puck is screened (you cannot refine
 	# a read you cannot see).
-	if _reaction.arm_pending() or _read_hold > 0.0:
+	if not _read_committed and not _reaction.arm_pending():
+		_read_committed = true
+	if not _read_committed or _read_hold > 0.0:
 		_read_hold = maxf(_read_hold - delta, 0.0)
 	else:
 		_read_blend = minf(_read_blend + delta / maxf(read_lag, 0.001), 1.0)
+	# Re-classify as the read converges: a goalie who was sold a low shot and comes
+	# to see it rising starts the (late) glove reach rather than staying committed.
 	_reaction.update_impact(
 			lerpf(_read_belief_x, truth.impact_x, _read_blend),
-			lerpf(_read_belief_y, truth.impact_y, _read_blend))
+			lerpf(_read_belief_y, truth.impact_y, _read_blend),
+			elevated_threshold, prearmed_reaction_delay)
 
 
 # Universal puck-tracking trigger. Runs each host physics frame on loose

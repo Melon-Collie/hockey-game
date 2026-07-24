@@ -554,6 +554,57 @@ itself: the save is **pre-programmed and executed ballistically, not corrected
 mid-flight**, so convergence must not begin until the reach has actually deployed
 (`_reaction.arm_pending()`), and is likewise held while the puck is screened.
 
+### 5.1c Height deception is a SWITCH, not a slider — open design fork
+
+Asked directly whether the height axis is too powerful, and the honest answer is
+worse than "yes": **`read_lag` is not a dial for it at all.** Same sweep, height
+arm only:
+
+| `read_lag` | height-sold goals | by range (5 m / 7 m / 9 m) |
+|---|---|---|
+| 0.00 (pre-R1) | 6 / 14 | 4 / 2 / 0 |
+| 0.04 | 11 / 14 | 4 / 5 / 2 |
+| 0.07 | 11 / 14 | 4 / 5 / 2 |
+| 0.10 | 11 / 14 | 4 / 5 / 2 |
+| 0.16 | 11 / 14 | 4 / 5 / 2 |
+| 0.24 | 11 / 14 | 4 / 5 / 2 |
+
+It saturates instantly and never moves again. **Why: the butterfly drop is an
+irreversible whole-body commitment.** Any non-zero lag is enough to make the
+goalie wrong at the single instant the leg read fires (~0.07 s primed); once he
+is going down, `butterfly_min_hold_time` (0.35 s) exceeds the entire flight, so
+the outcome is sealed. None of the arm-side machinery participates — which is
+also why fixing the `is_elevated` re-classification artifact (§5.1b) did not
+move the number by a single goal, and why giving the late flip the *primed* read
+instead of a cold one did not either.
+
+What R1 actually opened is the top corner **from 7 m and 9 m** (2→5 and 0→2);
+5 m was already scoreable. That part is a defensible NHL goal.
+
+**The real lever is input cost, and it is inverted.** `SkaterController` assigns
+`_elevation_level = input.elevation_level` every tick with no gate during a
+charge, so selling the wrong height is **one scroll click on the last frame** —
+no aim movement, no risk of missing the net. The aim swing, which costs real
+cursor travel and can miss, pays nothing. The cheap input has the huge payoff and
+the expensive one has none.
+
+Three ways out, materially different games:
+
+- **(a) Lock the loft level at charge start**, mirroring the slapper's
+  `locked_slapper_dir`. Kills the exploit at the source — but also kills height
+  deception entirely, taking R1's only measurable effect with it. Too blunt alone.
+- **(c) Drive the goalie's height belief off something the shooter SHOWS** (blade
+  angle / stick pose, which really does change with loft) rather than off the
+  loft setting. Properly grounded, and it makes the deception a real technique
+  rather than a keystroke — but it is a new perception model, not a tweak.
+- **(e) Let a converging read ARREST an unsealed drop.** ← *recommended.* The drop
+  takes `butterfly_drop_speed` (0.20 s) to seal; a real goalie who starts down and
+  sees the puck rising checks the drop. Today it is unconditional once triggered.
+  Making it abortable turns the switch back into a **race** — convergence vs. drop
+  completion — which restores range falloff *and* makes `read_lag` a genuine dial
+  for the first time. It is also the same grounded shape as everything else in the
+  goalie: a race between two physical clocks.
+
 **Open tuning question for playtest.** 6/14 → 11/14 (43 % → 79 %) is a large jump
 for one perfectly-executed deception off a full 0.5 s wind-up. It is the intended
 *direction*, and the sweep is deliberately hard shots (top corners, 5–9 m), but

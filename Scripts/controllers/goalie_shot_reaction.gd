@@ -151,9 +151,32 @@ func tip_to_low(delay: float) -> void:
 		is_elevated = false
 		shot_timer = delay
 
-func update_impact(x: float, y: float) -> void:
+# Update the predicted impact, RE-CLASSIFYING the save family from the new height.
+#
+# The re-classification matters because the goalie's read can now be wrong from
+# the start (GoalieController.read_lag): a shooter who sells a low shot and fires
+# high has him committed to a non-elevated save, and without this he would stay
+# committed for the whole flight — the arm would never deploy however clearly he
+# came to see the puck rising. That is not a goalie being beaten, it is a goalie
+# who cannot change his mind, and it made height deception unconditionally fatal
+# at every range.
+#
+# A late low→elevated flip costs `late_arm_delay` before the reach engages. The
+# caller passes the PRIMED read, not the cold one: he has had the puck in view the
+# whole flight, so he is re-targeting an ongoing fixation rather than starting a
+# read from nothing — the same credit any fixated goalie gets. In tight he still
+# has no chance, which is the point; from distance he gets the honest late glove
+# attempt a real goalie makes. The elevated→low direction stays owned by `tip_to_low`, which
+# re-arms the leg timer the same way.
+func update_impact(x: float, y: float, elevated_threshold: float = INF,
+		late_arm_delay: float = 0.0) -> void:
 	impact_x = x
 	impact_y = y
+	if is_inf(elevated_threshold):
+		return
+	if y >= elevated_threshold and not is_elevated:
+		is_elevated = true
+		arm_timer = maxf(arm_timer, late_arm_delay)
 
 func arm_pending() -> bool:
 	return arm_timer > 0.0
