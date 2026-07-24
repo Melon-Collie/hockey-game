@@ -74,8 +74,31 @@ head over the shared hole geometry:
   report-time `team_xg_for/against`; `career_totals` derives lifetime ixG,
   **goals above expected** (finishing), and **xGF%**; Career screen shows all three.
 
-**B (shot-event log + analytics screen + the actual reliability-plot calibration)
-is NOT STARTED.**
+**B1 (shot-event data layer) IMPLEMENTED** (2026-07-24). The record behind the
+shot map / xG-flow / heatmap, captured host-side and persisted:
+- `ShotEvent` (`domain/state/shot_event.gd`) — pure data: shooter, team, release
+  x/z, xg, outcome (goal/saved/missed/blocked), type (shot/one_timer/tip), on_net,
+  period, clock. `ShotOnGoalTracker` now emits `shot_resolved(ShotEvent)` (replacing
+  `shot_counted`) — one resolution signal carrying the full event, from which
+  `AdvancedStatsTracker` derives the Corsi/Fenwick/xGF counters AND buffers the
+  event (host-only, fresh per match). Release position/xG are captured via
+  `note_shot_origin` / `note_xg` at the trajectory read.
+- Persistence: `sql/shot_events.sql` (table + RLS anon-insert/select +
+  `shot_events_sane_ranges` + a `shot_heatmap` 1 m-grid aggregation view for the
+  career heatmap). The **host** batch-posts the game's shot log at game-over
+  (`CareerStatsReporter.report_shot_events`, one bulk insert), mapping shooter
+  peer→steam via `NetworkManager.get_peer_steam_id` (0 for bots), under the same
+  online/ranked/share gates as the career row. Host-only avoids per-peer dup.
+- v1 edge (documented): a goal the goalie grazed first can log as SAVED (the SOG
+  dedup guard blocks the GOAL re-label); a clean goal logs GOAL. Minor map mislabel.
+
+**B2 (the screens) NOT STARTED** — the post-game analytics screen (§7.1), the
+career heatmap, the client-delivery RPC that ships the host's shot list for a
+client's post-game view, and the real-game reliability-plot calibration. Godot
+`_draw()` UI that needs in-engine visual verification. **Scope addition (locked in
+chat 2026-07-24): B2 includes a FULL REWRITE of the Career Stats screen**
+(`career_stats_screen.gd`), not just adding charts — the current screen's visual
+design is to be redone wholesale alongside the shot-map/heatmap work.
 
 ---
 

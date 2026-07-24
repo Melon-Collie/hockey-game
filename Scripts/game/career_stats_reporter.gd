@@ -47,11 +47,30 @@ func fetch_totals(callback: Callable) -> void:
 	_fetch(url, callback)
 
 
+# Batch-posts a game's shot log (analytics B1). Host-only: the host holds the
+# authoritative per-game buffer (AdvancedStatsTracker). `peer_steam` maps a
+# shooter peer_id → steam_id (0 for bots); GameManager passes
+# NetworkManager.get_peer_steam_id so this stays transport-agnostic. One bulk
+# INSERT (PostgREST accepts a JSON array), fire-and-forget like the career row.
+func report_shot_events(events: Array[ShotEvent], game_id: String,
+		peer_steam: Callable) -> void:
+	if events.is_empty():
+		return
+	var rows: Array = []
+	for e: ShotEvent in events:
+		var row: Dictionary = e.to_dict()
+		row["game_id"] = game_id
+		row["steam_id"] = int(peer_steam.call(e.shooter_peer))
+		row["game_version"] = BuildInfo.VERSION
+		rows.append(row)
+	_fire(SupabaseConfig.URL + "/rest/v1/shot_events", HTTPClient.METHOD_POST, rows)
+
+
 func _post(url: String, body: Dictionary) -> void:
 	_fire(url, HTTPClient.METHOD_POST, body)
 
 
-func _fire(url: String, method: HTTPClient.Method, body: Dictionary) -> void:
+func _fire(url: String, method: HTTPClient.Method, body: Variant) -> void:
 	var root: Window = (Engine.get_main_loop() as SceneTree).root
 	var req := HTTPRequest.new()
 	root.add_child(req)

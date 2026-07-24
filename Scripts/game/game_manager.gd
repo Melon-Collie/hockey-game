@@ -1400,7 +1400,7 @@ func _wire_subsystems() -> void:
 	# off the same shot-event signals. Counters ride the normal stats broadcast.
 	_advanced_stats_tracker = AdvancedStatsTracker.new()
 	_advanced_stats_tracker.setup(_registry)
-	_shot_tracker.shot_counted.connect(_advanced_stats_tracker.on_shot_counted)
+	_shot_tracker.shot_resolved.connect(_advanced_stats_tracker.on_shot_resolved)
 
 	# Host-only established-possession model (PossessionRules): turnover /
 	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
@@ -3402,6 +3402,7 @@ func _note_shot_trajectory() -> void:
 				_defending_goalie_pos(directed_line_z),
 				GameRules.NET_HALF_WIDTH, vel.length())
 		_shot_tracker.note_xg(xg)
+		_shot_tracker.note_shot_origin(pos)  # release position for the shot map (B1)
 
 
 # The position of the goalie defending the net at `line_z` (same end, matched by
@@ -3948,6 +3949,13 @@ func _on_game_over() -> void:
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods,
 			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id],
 			_team_xg_sum(team_id), _team_xg_sum(1 - team_id))
+	# Shot-event log (B1) — host-only: it holds the authoritative per-game buffer,
+	# so a single batch from the host avoids per-peer duplication. Same online /
+	# ranked / share gates as the career row (already applied above).
+	if NetworkManager.is_host and _advanced_stats_tracker != null:
+		_career_reporter.report_shot_events(
+				_advanced_stats_tracker.get_shot_events(), _game_id,
+				NetworkManager.get_peer_steam_id)
 
 
 # One network-quality row per game, guarded so the game-over and scene-exit
