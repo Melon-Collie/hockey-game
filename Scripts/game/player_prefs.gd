@@ -401,6 +401,30 @@ func _ready() -> void:
 	_sync_from_cloud.call_deferred()
 
 
+# Release the custom mouse cursor before the RenderingServer finalizes on quit.
+# apply_cursor() hands an ImageTexture to Input.set_custom_mouse_cursor, and the
+# Input singleton retains it past SceneTree teardown — so at exit it destructs
+# with a null RenderingServer, logged as "~ImageTexture ... RenderingServer is
+# null" plus a leaked Texture RID. Reverting to the system cursor here drops
+# that reference while the server is still alive. As an autoload, PlayerPrefs's
+# EXIT_TREE fires only at real app shutdown (both the window-close and menu-Quit
+# paths); WM_CLOSE additionally covers the window-close path before the quit
+# cascade. Guarded against a double-release.
+var _cursor_released: bool = false
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_EXIT_TREE:
+		_release_custom_cursor()
+
+
+func _release_custom_cursor() -> void:
+	if _cursor_released:
+		return
+	_cursor_released = true
+	Input.set_custom_mouse_cursor(null)
+
+
 func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("player", "name", player_name)

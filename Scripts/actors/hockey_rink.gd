@@ -249,6 +249,18 @@ func _teardown_render_targets() -> void:
 		_decal_vp.free()
 	_decal_vp = null
 
+
+# Drop the process-lifetime build cache. The cached products include the ice
+# and side-stripe ImageTextures (the ice albedo alone is ~10M pixels), held in
+# a static dict that survives scene changes for perf. A static var is freed at
+# script-unload — AFTER the RenderingServer finalizes — so at exit those
+# textures destruct with a null RenderingServer and their RIDs are reported as
+# leaked. Clearing the dict here, from a real-shutdown hook (GameManager), drops
+# the last reference while the server is still alive so they free cleanly. Only
+# call at app quit — clearing mid-session would just force a rebuild.
+static func release_shared_cache() -> void:
+	_build_cache.clear()
+
 func _rebuild() -> void:
 	if rink_length <= 0 or rink_width <= 0:
 		return
