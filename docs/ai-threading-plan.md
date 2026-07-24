@@ -168,16 +168,28 @@ centralization:
   priority). Model A collapses this asymmetry uniformly in Phase 3; Phase 2 keeps
   it.
 
-- **The goalie is decoupled and deferred.** `GoalieController` reads **live actor
-  state** (`puck.global_position`, live skater positions), not `current_snapshot`,
-  and its decision runs pure `GoalieBehaviorRules` — it **never** calls
-  `AIActionScoring`, so it shares none of the per-tick static scratch. The
-  `set_goalie_profile` statics are set once at match config (`game_manager.gd:860,
-  4347`), read-only during play. Therefore the goalie has **no data-race hazard**
-  and doesn't gate the skater work. But moving it to a worker requires converting
-  its live-state reads to snapshot reads — a real perception-age change. So the
-  goalie is its own step (**Phase 2b / 3b**), sequenced after skaters, landing at
-  the same end state (all AI on the one worker) with its behavior change isolated.
+- **The goalie stays on the main thread (decided).** `GoalieController` reads
+  **live actor state** (`puck.global_position`, live skater positions), not
+  `current_snapshot`, and its decision runs pure `GoalieBehaviorRules` — it
+  **never** calls `AIActionScoring`, so it shares none of the per-tick static
+  scratch. The `set_goalie_profile` statics are set once at match config
+  (`game_manager.gd:860, 4347`), read-only during play. So the goalie has **no
+  data-race hazard** with the worker, and it runs on the main thread in parallel
+  with the worker anyway — its cost is hidden behind the worker just as the
+  worker's is hidden behind physics. Crucially it **does not scale**: always
+  exactly 2 goalies, 3v3 or 5v5, so it is not the "more bots = worse" cost.
+  Converting it would need three replicated-state additions
+  (`PuckNetworkState.pickup_locked`, `SkaterNetworkState.predicted_shot_velocity`
+  + `team_id`), ~100 live-read conversions, and a decision/mutation split (the
+  poke / sweep / cover / `set_puck_*` are physics mutations that can't run on a
+  worker regardless) — a large, feel-critical refactor for a non-scaling,
+  already-overlapped cost. **Not worth it now.** The goalie code is also rough
+  enough that a threading conversion should ride a broader goalie refactor, if
+  one happens before ship. Revisit only if profiling the threaded build shows the
+  goalie is a real main-thread cost. Thread-safety alongside the worker is by
+  construction: the worker reads only its snapshot *copy* (plain
+  `SkaterNetworkState`/`PuckNetworkState` data), never live nodes, so the
+  main-thread goalie mutating live nodes can never collide with it.
 
 ## The prerequisite: centralize dispatch (no threading yet)
 
@@ -248,18 +260,71 @@ the snapshot-age the agents currently read.
   registers — all preserved by the single-worker sequential design. No refactor.
 - Client-side prediction / reconcile / lag-comp — AI is upstream of all of it.
 
+## The brain-state race (Phase 3's one real concurrency hazard)
+
+During dispatch, the agent reads ~10 fields off the live `TeamBrain` in
+`_build_role_context` (`skater_agent_state_machine.gd:2158-2236`): `get_slot`,
+`get_anchor`, `strong_x`, `assigned_threat`, `threat_shoot_base_by_opp`,
+`team_size`, `position_of`, the three ping targets, and `is_one_timer_ready`.
+On the worker, those reads race against **main-thread** brain mutations:
+`apply_ping` (RPC-driven, any time), `_force_retick_team_brains` (on carrier
+flips, mid-sim), and `exclude/include_skater` (on spawn/despawn). Concurrent
+read/write of a Dictionary/field across threads in GDScript is undefined
+behavior — a rare heisenberg crash, unacceptable even if infrequent.
+
+The fix is the world-snapshot principle applied to brain output: **tick the
+brains on the main thread, then freeze everything the agent reads into plain
+data (a per-team/per-peer frozen view) at kick time.** The worker's agents read
+the frozen view, never the live brain, so main can mutate the live brain freely
+during the worker window. This is why brains tick on *main* in Phase 3 (not on
+the worker) — only the per-agent dispatch goes to the worker.
+
 ## Staged implementation
 
-1. **Baseline** *(done)* — benchmark numbers above captured as the before-table.
-2. **Centralize dispatch** — `AICoordinator.tick_all()`, single-threaded,
-   behavior-identical. Gate: full GUT suite green, AI benchmark table unchanged
-   (decision cost is only relocated), user playtest confirms feel is identical.
-3. **Thread it (Model A)** — persistent worker, double-buffered handoff, spike
-   fallback, lifecycle teardown. Flag-gated (`ai_threaded`, default off) so it's
-   A/B-toggleable. Gate: suite green; **host-frame telemetry** (below) shows the
-   main-thread win; playtest confirms no feel regression, especially reception.
+1. **Baseline** *(done)* — 5v5 benchmark table above captured as the before-table.
+2. **Centralize skater dispatch** *(done — committed)* — bots dispatch from one
+   host-driven loop in `GameManager._physics_process` via `tick_agent(snapshot,
+   delta)`; `PlayerRegistry` caches the bot-controller list; brains then bots run
+   against one unified enriched snapshot. Single-threaded, suite green, benchmark
+   flat. Goalie stays self-driven on main (see above — final, not a deferral).
+   **Needs a user playtest** to confirm bot feel before the live-threading step.
+3. **Thread it (Model A), in three sub-steps** so only the last introduces true
+   concurrency:
+   - **3a — Freeze brain outputs** *(single-threaded, behavior-identical).* Tick
+     brains on main, freeze their per-peer output into plain data, redirect
+     `_build_role_context`'s brain reads to the frozen view. Gate: suite green,
+     benchmark flat, playtest identical. De-risks the brain-read redirection with
+     zero threading.
+   - **3b — Split decide from apply** *(single-threaded, behavior-identical).*
+     Separate `tick_agent` into `decide(snapshot) -> InputState` (worker-safe:
+     only snapshot + frozen brain view + agent state) and `apply(input)`
+     (`_process_input`, main-thread node writes), with the special-mode gate
+     (scripted / faceoff / celebration / movement-lock) resolved on main. Still
+     called back-to-back on main. Gate: suite green, playtest identical.
+   - **3c — Introduce the worker** *(concurrency goes live).* Persistent
+     `Thread` + two `Semaphore`s; kick after building the snapshot + frozen brain
+     view, apply last tick's results at the top of the next tick (the 1-tick
+     delay that buys full overlap with physics); spike fallback (reuse last
+     input, never stall the host tick); lifecycle teardown on match end / scene
+     exit. Flag-gated (`ai_threaded`, default **off**) so one build A/B-toggles
+     pure-2a vs. threaded. **Gate: the Phase-2 playtest must be clean first;**
+     then suite green, host-frame telemetry shows the main-thread win, playtest
+     confirms no feel regression (especially reception).
 4. **Validate & decide** — if reception aim lag is felt, escalate the reception
    re-aim to Model B. Tune, then flip the flag on by default.
+
+### Concurrency notes for 3c (no mutex / no double-buffer needed)
+
+- **InputState handoff:** the agent returns its reused `_input` buffer. Main
+  reads it only *after* waiting on `_done` (worker idle) and *before* the next
+  kick; the worker writes it only between wake and done. Read-before-write within
+  a tick, no overlap → safe without a second buffer.
+- **Snapshot handoff:** `get_state_delayed(0.0)` builds a *fresh* WorldSnapshot
+  object each tick; the worker holds its own reference while main builds next
+  tick's into a new object. Main never mutates a handed-off snapshot → safe.
+- **The frozen brain view** (3a) is likewise a fresh plain-data object per tick.
+- The only shared-mutable risk that remains — the `AIActionScoring` static
+  registers — is neutralized by the single sequential worker (unchanged order).
 
 ## Validation
 
