@@ -303,18 +303,17 @@ func _apply_wrister_whip(env: float, aim_world: Vector3) -> void:
 	# off the release height (the origin already sits on the ice).
 	var blade_world: Vector3 = _ft_origin_world + axis * reach
 	blade_world.y = _ft_origin_world.y + env * _controller.wrister_follow_through_blade_lift
-	# Hand: one stick-length BEHIND the blade along the axis (rigid stick_length so
-	# the stick can't stretch), at a natural height — shoulder height minus the rest
-	# drop, plus the finish lift.
+	# Hand: one stick-length from the blade TOWARD THE SHOULDER — rigid stick, but
+	# the hand rides up near the shoulder (blade low-forward, hands high — the real
+	# follow-through shape) instead of floating a stick-length straight back from the
+	# blade, which pulled the hand away from the shoulder and STRETCHED the arm.
 	var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
-	var hand_height: float = shoulder_world.y \
-			- (_skater.shoulder.position.y - _controller.hand_rest_y) \
-			+ env * _controller.wrister_follow_through_hand_y
-	var drop: float = hand_height - blade_world.y
-	var horiz: float = sqrt(maxf(
-			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
-	var hand_world: Vector3 = blade_world - axis * horiz
-	hand_world.y = hand_height
+	var to_shoulder: Vector3 = shoulder_world - blade_world
+	var hand_world: Vector3
+	if to_shoulder.length() > 0.001:
+		hand_world = blade_world + to_shoulder.normalized() * _controller.stick_length
+	else:
+		hand_world = blade_world - axis * _controller.stick_length
 	var blade_local: Vector3 = _skater.upper_body_to_local(blade_world)
 	var hand_pos: Vector3 = _skater.upper_body_to_local(hand_world)
 	# Wall + net clamps (identical to the tracked path), keeping the hand rigid to
