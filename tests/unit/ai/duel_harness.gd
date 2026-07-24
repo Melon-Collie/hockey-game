@@ -255,6 +255,11 @@ func step() -> void:
 			var brain_us: int = Time.get_ticks_usec() - brain_t0
 			perf_brain_us += brain_us
 			tick_ai_us += brain_us
+	# Freeze each brain's strategy view every step (per-frame anchors), matching
+	# GameManager, so the dispatch exercises the same frozen-view path production
+	# uses rather than the live-brain fallback.
+	for tid: int in brains:
+		brains[tid].build_view(snapshot)
 	# Decide.
 	for s: SimSkater in skaters:
 		if s.agent == null:

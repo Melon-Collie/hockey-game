@@ -772,6 +772,21 @@ var _team_id: int = 0
 var _own_goal_dir: float = 1.0
 var _attacking_goal_pos: Vector3 = Vector3.ZERO
 var _team_brain: TeamBrain = null
+# The strategy surface read during this dispatch — set at the top of dispatch()
+# from _strategy(). See the dispatch-site comment and docs/ai-threading-plan.md.
+var _current_strategy: TeamStrategyView = null
+
+
+# The team-strategy surface for the current dispatch: the brain's frozen
+# per-frame view when it exists (the off-thread-safe read path), falling back to
+# the live brain when no view has been built (unit tests that dispatch without
+# GameManager's per-frame build_view — single-threaded, so reading the live brain
+# is safe). Null when no brain is wired.
+func _strategy() -> TeamStrategyView:
+	if _team_brain == null:
+		return null
+	var v: TeamBrainView = _team_brain.get_view()
+	return v if v != null else _team_brain
 # Live peer -> team_id dict owned by PlayerRegistry. Read via
 # `_team_id_by_peer.get(pid, -1)` in hot loops (lane filters,
 # closest-teammate checks). Used to be a Callable; the
@@ -1754,6 +1769,11 @@ func dispatch(input: InputState, snapshot: WorldSnapshot) -> void:
 	_current_self_state = self_state
 	_current_snapshot = snapshot
 	_current_delta = input.delta
+	# Frozen team-strategy view for this dispatch (AI threading Phase 3a): the
+	# brain's per-frame TeamBrainView when built (production / benchmark harness),
+	# else the live brain (single-threaded tests — no race). All dispatch-path
+	# brain reads go through this so Phase 3c can run dispatch off-thread.
+	_current_strategy = _strategy()
 	# Self-possession is instant (proprioception) — read the REAL carrier, not
 	# the reaction-delayed one on puck_state. Otherwise the bot would freeze
 	# holding the puck for the reaction window after receiving it. Everything
@@ -1927,7 +1947,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# cache would strand the bot), and a slot change (a cached target from
 		# the old role must not carry over). ctx (ping/aim reads) is rebuilt
 		# every tick regardless — only _dispatch_role_decision is throttled.
-		var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null \
+		var slot: int = _current_strategy.get_slot(_peer_id) if _current_strategy != null \
 				else AIRoleSlots.Slot.NONE
 		var is_finisher_slot: bool = slot == AIRoleSlots.Slot.FINISHER \
 				or slot == AIRoleSlots.Slot.NET_FRONT
@@ -2166,7 +2186,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.attacking_goal_pos = _attacking_goal_pos
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, _own_goal_dir * GameRules.GOAL_LINE_Z)
 	ctx.own_goal_dir = _own_goal_dir
-	ctx.team_brain = _team_brain
+	ctx.team_brain = _current_strategy
 	ctx.team_id_by_peer = _team_id_by_peer
 	ctx.acceleration_by_peer = _accel_ref
 	ctx.heading_omega_by_peer = _omega_ref
@@ -2214,26 +2234,27 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# until he tags up at the blue line). Latched like the match's other
 	# rules; stamped every build since the ctx instance is reused.
 	ctx.offsides_enforced = rule_set != GameRules.RuleSet.OFF
-	if _team_brain != null:
-		var brain_anchor: Vector3 = _team_brain.get_anchor(_peer_id, snapshot)
+	if _current_strategy != null:
+		var brain_anchor: Vector3 = _current_strategy.get_anchor(_peer_id, snapshot)
 		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
-		ctx.strong_x = _team_brain.strong_x()
-		ctx.assigned_threat_peer = _team_brain.assigned_threat(_peer_id)
-		# Live reference to the brain's shared threat memo (re-stamped every
-		# build — the reused ctx must never carry another brain's dict).
-		ctx.threat_shoot_base_by_opp = _team_brain.threat_shoot_base_by_opp
+		ctx.strong_x = _current_strategy.strong_x()
+		ctx.assigned_threat_peer = _current_strategy.assigned_threat(_peer_id)
+		# The brain's shared threat memo, read off the strategy view (a frozen
+		# copy in production). Re-stamped every build so the reused ctx never
+		# carries another brain's dict.
+		ctx.threat_shoot_base_by_opp = _current_strategy.get_threat_shoot_base_by_opp()
 		# 5v5 position identity (plan §1/§6). Re-stamped every build — the
 		# reused ctx must never carry another match's team size.
-		ctx.team_size = _team_brain.team_size
-		var lobby_slot: int = _team_brain.position_of(_peer_id)
+		ctx.team_size = _current_strategy.get_team_size()
+		var lobby_slot: int = _current_strategy.position_of(_peer_id)
 		ctx.self_is_defense = PlayerRules.is_defense_slot(lobby_slot)
 		ctx.self_home_side = _home_side_of(lobby_slot)
 		# Live smart-ping directives on this bot (see AIPingDirectives). The
 		# reused ctx instance must be re-stamped every build — a stale ping
 		# field would keep obeying an expired order.
-		ctx.ping_move_target = _team_brain.ping_move_target(_peer_id)
-		ctx.ping_shoot_active = _team_brain.ping_shoot(_peer_id)
-		ctx.ping_pass_target_peer = _team_brain.ping_pass_target(_peer_id)
+		ctx.ping_move_target = _current_strategy.ping_move_target(_peer_id)
+		ctx.ping_shoot_active = _current_strategy.ping_shoot(_peer_id)
+		ctx.ping_pass_target_peer = _current_strategy.ping_pass_target(_peer_id)
 	else:
 		ctx.anchor = self_pos
 		# Match RoleContext.new()'s default when no brain is wired (tests),
@@ -2273,7 +2294,7 @@ func _home_side_of(lobby_slot: int) -> float:
 # here for the puck-in-flight case where the brain still has us
 # slotted CARRIER but we don't have the puck.
 func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
-	var slot: int = _team_brain.get_slot(_peer_id) if _team_brain != null else AIRoleSlots.Slot.NONE
+	var slot: int = _current_strategy.get_slot(_peer_id) if _current_strategy != null else AIRoleSlots.Slot.NONE
 	# Target switch-hysteresis input: the target this bot's role chose last
 	# dispatch — INF across a slot change so no role inherits another's
 	# target (see RoleContext.prev_role_target).
@@ -5097,9 +5118,9 @@ func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # zone DZONE, the pressurer is whichever area role currently OWNS the puck —
 # AIZoneCoverage.pressure_owner — so exactly one zone defender ever jabs.)
 func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
-	if _team_brain == null:
+	if _current_strategy == null:
 		return false
-	var slot: int = _team_brain.get_slot(_peer_id)
+	var slot: int = _current_strategy.get_slot(_peer_id)
 	if slot == AIRoleSlots.Slot.PRESSURE \
 			or slot == AIRoleSlots.Slot.F1_PRESSURE \
 			or slot == AIRoleSlots.Slot.CONTAIN:

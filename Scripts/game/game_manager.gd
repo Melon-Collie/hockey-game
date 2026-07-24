@@ -533,6 +533,10 @@ func _physics_process(delta: float) -> void:
 		if not team_brains.is_empty():
 			for brain: TeamBrain in team_brains:
 				brain.tick(delta, current_snapshot)
+				# Freeze the brain's outputs into its per-frame view (AI threading
+				# Phase 3a). The bot dispatch below reads the view, not the live
+				# brain — the seam Phase 3c runs off the physics thread.
+				brain.build_view(current_snapshot)
 		if _registry != null:
 			for ai_ctrl: AIController in _registry.ai_controllers():
 				ai_ctrl.tick_agent(current_snapshot, delta)
