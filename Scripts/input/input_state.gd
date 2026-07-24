@@ -63,6 +63,13 @@ var bot_wrister_power_t: float = 1.0
 # purely cosmetic (the wind-up coil pose). Humans leave aim_dir ZERO → positional.
 var bot_wrister_aim_dir: Vector3 = Vector3.ZERO
 var bot_wrister_backhand: bool = false
+# BOT-ONLY. World XZ offset (from the skater) where the bot wants its puck to
+# FREEZE for the shot — the scored lateral release offset (`_shot_release_offset_locked`).
+# The freeze otherwise pins the puck at the centered carry pose; on a breakaway
+# that rides into the goalie's poke radius and the shot whiffs. Holding the puck
+# at this scored, off-the-poke-line spot (see SkaterController._apply_wrister_aim_blade)
+# restores the offset release the scorer priced. ZERO = centered (human / no offset).
+var bot_wrister_origin_offset: Vector3 = Vector3.ZERO
 
 func to_array() -> Array:
 	return [

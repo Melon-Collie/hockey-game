@@ -3583,6 +3583,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 	# near-body cursor sweep. Set every tick so it's live on the release tick.
 	input.bot_wrister_aim_dir = _shoot_aim_dir_locked
 	input.bot_wrister_backhand = _shoot_side_sign < 0.0
+	# Freeze the puck at the SCORED lateral offset, not the centered carry pose.
+	# The wrister freeze pins the puck where the blade holds it; centered, that
+	# rides into the goalie's poke radius on a breakaway and the shot whiffs.
+	# The scorer priced an offset release (release_pos = anchor + this) — honor it
+	# so the puck freezes off the poke line where the scorer put it.
+	input.bot_wrister_origin_offset = _shot_release_offset_locked
 
 	if _shoot_charge_tick < BOT_WRISTER_CHARGE_TICKS + _shoot_release_hold_ticks:
 		# Still charging (or hanging on the sampled late-release hold —

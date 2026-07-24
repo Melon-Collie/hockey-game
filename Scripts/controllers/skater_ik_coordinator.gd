@@ -101,7 +101,8 @@ func seed_blade_smoothing(world_pos: Vector3) -> void:
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
 # Input is treated as a desired blade position. The top hand is solved as a
 # consequence, clamped to an asymmetric ROM. See domain/rules/top_hand_ik.gd.
-func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = false) -> void:
+func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = false,
+		hold_target_world: Vector3 = Vector3.INF) -> void:
 	var mouse_world: Vector3 = input.mouse_world_pos
 	mouse_world.y = 0.0
 
@@ -128,7 +129,15 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	# after the shot doesn't pop.
 	var target_blade_world: Vector3
 	if hold_blade:
-		target_blade_world = _skater.upper_body_to_global(_skater.get_blade_position())
+		# A finite hold_target_world is a bot's scored release spot: hold the blade
+		# toward it (the speed cap below eases the puck out over the coil) instead of
+		# pinning the centered carry pose. The scored offset is a reachable blade
+		# offset by construction (the scorer models the bot's reach), so it needs no
+		# ROM re-projection. Humans (and uncommitted bots) pass INF → hold current pose.
+		if hold_target_world.is_finite():
+			target_blade_world = hold_target_world
+		else:
+			target_blade_world = _skater.upper_body_to_global(_skater.get_blade_position())
 		target_blade_world.y = 0.0
 		last_target_blade_world = target_blade_world
 	else:

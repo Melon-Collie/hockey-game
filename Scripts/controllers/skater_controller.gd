@@ -2185,7 +2185,18 @@ func _wrister_aim_dir(input: InputState) -> Vector3:
 # puck sits still where the shot fires from while the torso coils toward the
 # cursor. Routed through the state machine's apply_wrister_aim_blade callback.
 func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
-	_ik.apply_blade_from_mouse(input, delta, true)
+	# Bots commit a scored lateral release offset (bot_wrister_origin_offset): freeze
+	# the puck THERE, not at the centered carry pose. A centered freeze rides into the
+	# goalie's poke radius on a breakaway and the shot whiffs; the scorer priced an
+	# off-the-poke-line release (release_pos), so hold the blade toward that world spot
+	# — the speed cap eases the puck out over the coil. Humans (and a bot with no
+	# committed offset) leave it ZERO → freeze at the current blade pose.
+	var hold_target: Vector3 = Vector3.INF
+	var offset: Vector3 = input.bot_wrister_origin_offset
+	if offset.length_squared() > 0.0001:
+		hold_target = skater.global_position + offset
+		hold_target.y = 0.0
+	_ik.apply_blade_from_mouse(input, delta, true, hold_target)
 
 # Player-relative bearing the swing-chirality tracker seeds from at charge start.
 # MUST mirror _update_wrister_charge's chirality_source (the cursor) so the first

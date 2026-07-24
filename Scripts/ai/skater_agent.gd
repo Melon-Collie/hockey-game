@@ -142,3 +142,7 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	# would make the controller read a stale bot aim on an ordinary carry tick.
 	input.bot_wrister_aim_dir = Vector3.ZERO
 	input.bot_wrister_backhand = false
+	# Committed freeze offset defaults to ZERO (centered) every tick: only the
+	# SHOOT press state sets the scored release offset, and a latched value would
+	# pin an ordinary carry tick's puck off to the stale scored spot.
+	input.bot_wrister_origin_offset = Vector3.ZERO
