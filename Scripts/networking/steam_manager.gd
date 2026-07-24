@@ -220,6 +220,34 @@ func get_app_build_id() -> int:
 	return Steam.getAppBuildId()
 
 
+# Steam's gamepad text-input overlay (the Big Picture / Steam Deck on-screen
+# keyboard), so a controller can enter text into a field. Returns false — no
+# overlay — when Steam is unavailable OR the API isn't present (older GodotSteam /
+# headless), in which case the caller keeps the field editable by mouse/keyboard.
+# The result arrives on text_input_dismissed(submitted, text). Guarded by string
+# has_method/has_signal so a missing API degrades instead of crashing.
+signal text_input_dismissed(submitted: bool, text: String)
+
+func show_text_input(existing: String, description: String, max_chars: int) -> bool:
+	if not is_available or not Steam.has_method("showGamepadTextInput"):
+		return false
+	if Steam.has_signal("gamepad_text_input_dismissed") \
+			and not Steam.is_connected("gamepad_text_input_dismissed", _on_gamepad_text_input_dismissed):
+		Steam.connect("gamepad_text_input_dismissed", _on_gamepad_text_input_dismissed)
+	# Dynamic call() so the gamepad-text-input API isn't compile-resolved — the
+	# headless-CI GodotSteam build lacks it, and a direct Steam.foo() would fail to
+	# compile there. Modes 0/0 = normal / single-line (literals dodge enum churn).
+	return bool(Steam.call("showGamepadTextInput", 0, 0, description, max_chars, existing))
+
+
+# GodotSteam passes (submitted, text_length) or (submitted, text) depending on
+# version; we only use `submitted` and re-read the text via a dynamic call, so the
+# second arg is ignored and both signatures work.
+func _on_gamepad_text_input_dismissed(submitted: bool, _second: Variant) -> void:
+	var text: String = str(Steam.call("getEnteredGamepadTextInput")) if submitted else ""
+	text_input_dismissed.emit(submitted, text)
+
+
 func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	if _pending_op != 1:
 		return

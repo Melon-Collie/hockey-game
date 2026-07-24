@@ -31,6 +31,9 @@ var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
 var _name_valid: bool = true
 var _number_valid: bool = true
+# True between opening the Steam text-input overlay for the name and its result,
+# so text_input_dismissed only writes the name when we asked for it.
+var _awaiting_name_input: bool = false
 
 # Snapshot taken on open(). Cancel restores from this.
 var _snapshot: Dictionary = {}
@@ -38,8 +41,57 @@ var _snapshot: Dictionary = {}
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Controller mode: give toggles/dropdowns a visible focus ring (see the Options
+	# panel). Only defines "focus"; everything else falls through to the project theme.
+	var focus_theme: Theme = MenuStyle.controller_focus_theme()
+	if focus_theme != null:
+		theme = focus_theme
 	_build()
+	SteamManager.text_input_dismissed.connect(_on_text_input_dismissed)
 	visible = false
+
+
+# Controller text entry: the number is a D-pad stepper (no keyboard needed), and
+# the name opens Steam's on-screen keyboard on A. Both only when the field is
+# focused in controller mode; handled at _input (ahead of GUI) so ui_left/right
+# don't just move the LineEdit caret. ui_cancel stays in _unhandled_input.
+func _input(event: InputEvent) -> void:
+	if not visible or not ControllerNav.active():
+		return
+	if _number_field != null and _number_field.has_focus():
+		if event.is_action_pressed(&"ui_left"):
+			_step_number(-1)
+			get_viewport().set_input_as_handled()
+		elif event.is_action_pressed(&"ui_right"):
+			_step_number(1)
+			get_viewport().set_input_as_handled()
+	elif _name_field != null and _name_field.has_focus() and event.is_action_pressed(&"ui_accept"):
+		if _open_name_input():
+			get_viewport().set_input_as_handled()
+
+
+func _step_number(delta: int) -> void:
+	var next: int = clampi(_number_field.text.to_int() + delta, 0, 99)
+	_number_field.text = str(next)
+	_on_number_text_changed(_number_field.text)  # programmatic set doesn't emit text_changed
+
+
+# Returns whether the Steam keyboard actually opened (false → no Steam, so the
+# field stays keyboard-editable and we don't consume the press).
+func _open_name_input() -> bool:
+	if SteamManager.show_text_input(_name_field.text, "Player Name", _name_field.max_length):
+		_awaiting_name_input = true
+		return true
+	return false
+
+
+func _on_text_input_dismissed(submitted: bool, text: String) -> void:
+	if not _awaiting_name_input:
+		return
+	_awaiting_name_input = false
+	if submitted:
+		_name_field.text = text
+		_on_name_text_changed(text)  # programmatic set doesn't emit text_changed
 
 
 func _build() -> void:
