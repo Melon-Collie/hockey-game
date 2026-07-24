@@ -265,10 +265,50 @@ Phase B — new `sql/shot_events.sql` (table + RLS anon-insert/select mirroring
 - **Live scoreboard** — add CF% / xGF% (and maybe a live xG readout) to the
   existing team stat row. xG shines *live* as a "the run of play says X" readout.
 - **Career screen** — new advanced-stats columns/tab (CF%, FF%, PDO, xGF/60,
-  G−xG). Aggregate is where these stats are meaningful (§9).
-- **Post-game analytics screen (Phase B)** — shot map / heatmap, xG-vs-actual per
-  team, chance timeline. The marketing beat.
+  G−xG), plus the **individual-player career heatmap** (§7.2). Aggregate is where
+  these stats are meaningful (§9).
+- **Post-game analytics screen (Phase B)** — the three views in §7.1. The
+  marketing beat.
 - All new strings go through `locale/translations.csv` per the i18n recipe.
+
+### 7.1 Post-game analytics screen — the three views (design of record)
+
+Locked in chat 2026-07-23 from a visual mockup (Artifact:
+`claude.ai/code/artifact/31fdd79f-fb2c-454b-8dbf-c71efd24b038`). The *layout and treatment* below are
+agreed; the **exact contents of each view are deliberately left open** — pin them
+down once the data is flowing and we can see real distributions (which stats earn
+a row, how the chart reads, thresholds). All three read from the **same
+per-game shot-event buffer** the `AdvancedStatsTracker` already holds (§4), so
+they share one source of truth — a stat and its position on the map can never
+disagree.
+
+1. **Team shot map (the hero).** Top-down rink, each team's attempts plotted in
+   their attacking end. Encoding: **position + team color** = the differential
+   read, **dot size = xG**, **goals highlighted** (ring + glow). Rendered
+   engine-native (Godot `_draw()` — boards / lines / creases / faceoff circles are
+   cheap vector geometry, no chart lib, confirming §4.2). Team map here; the
+   individual map is the career heatmap (§7.2).
+2. **Tale of the tape.** Head-to-head comparison bars (home ↔ away). The advanced
+   rows — xG, Corsi, Fenwick, PDO — are visually tagged as the differentiator.
+   *Which* rows and their order are TBD until the stats exist.
+3. **Expected-goals flow.** Cumulative xGF over game clock, one line per team,
+   goals marked on the lines — the "run of play" chart. Nearly free once shots
+   carry timestamps; pulled into Phase B alongside the map. Exact display (axes,
+   period markers, interaction) is TBD.
+
+Determinism/networking: the buffer is host-only (§4–5); for an online client to
+render the post-game screen, the host ships the game's shot list at the final horn
+via one reliable RPC (array of shot events — same shape as other end-game data).
+Offline/free-play the host is local, so it is free.
+
+### 7.2 Career heatmap — the individual view
+
+The **individual-player** counterpart to the team map: a smoothed density surface
+(hexbin / KDE) over hundreds of shots — *where this player shoots from and scores
+from* — with a goals overlay. Lives on the career screen (needs the persisted
+`shot_events` table, §6). Heatmap (not scatter) because aggregate volume is what
+makes a density read meaningful; the per-game view stays a scatter for the same
+reason (§9 small-sample caveat).
 
 ---
 
