@@ -569,6 +569,77 @@ Each is individually defensible modern doctrine; the question is whether their
 
 ---
 
+### 5.6 Interaction with the bot AI — R1 is a provable no-op for bots
+
+The bots do not merely coexist with the goalie model, they **mirror it**.
+`AIActionScoring` carries a static copy of the goalie's timing, re-derived per
+tier by `set_goalie_profile` (`:486`):
+
+```
+goalie_leg_delay_s        ← profile.reaction_delay_s
+goalie_arm_delay_s        ← profile.arm_reaction_delay_s
+goalie_butterfly_drop_s   ← profile.butterfly_drop_s
+goalie_lateral_accel_m_s2 ← profile.lateral_accel_mps2
+goalie_arm_deploy_s       ← HOLE_BAND_EXT[HIGH] / profile.glove_react_max_speed_mps
+```
+
+Note what the mirror contains: **latency, drop time, lateral accel, arm deploy**
+— the WHEN and HOW FAST axes, and nothing else. It models zero accuracy, exactly
+like the goalie it mirrors (§5.1). So the natural worry about R1 is that it
+desynchronizes the mirror and invalidates the whole bot calibration web
+(`test_shot_value_calibration.gd`, the `score_shoot` ↔ real-goalie
+reconciliation, the rush-sim rates).
+
+**It does not, and this is provable rather than lucky.** Read lag only produces
+error when the shooter's aim *changes during the windup*. A bot locks
+`_shoot_aim_dir_locked` at **charge tick 0** and merely re-publishes it every
+tick thereafter (`skater_agent_state_machine.gd:3511, :3605`; identically
+`_pass_aim_dir_locked` for passes at `:3844`). Even the bot's execution error is
+folded in *before* the lock (`_committed_aim_error_rad`, `:3505`), and the power
+is likewise committed (`_shot_power_committed`). Therefore, for every bot shot:
+
+```
+predicted_shot_velocity(t − read_lag) == predicted_shot_velocity(t)
+```
+
+so the lagged read equals the true read and **read lag contributes exactly zero
+to bot-vs-goalie outcomes.** No mirror field is needed; no calibration contract
+moves; the rush-sim rates should not shift.
+
+Three consequences worth banking:
+
+1. **The mirror needs no change for R1.** The bot-facing value of read lag is
+   zero while bots hold a locked aim, so `set_goalie_profile` gains nothing. This
+   is the "change both together" contract being satisfied *by construction*
+   rather than by a comment — strictly better than the status quo.
+2. **It is testable as an invariant, not a snapshot.** The bot-vs-goalie rush sim
+   (`test_real_rush_sim.gd` over `duel_harness.gd`, and the scripted-path
+   `rush_sim_harness.gd`) should produce identical outcomes before and after R1.
+   That makes the Tranche B baseline a permanent regression guard: if a bot rate
+   moves, R1 leaked somewhere it shouldn't have.
+3. **The bots are a free control arm.** Measuring R1 needs a zero-disguise
+   control and a late-swing treatment with everything else held constant. The bot
+   *is* the control, by construction. The harness only has to add the treatment
+   arm (a scripted late aim swing) and diff the save rates.
+
+**Known consequence on the defensive side.** Bot *defenders* price "will our
+goalie save this?" through the same mirror (`counter_rush_cost`, the feed-keeper
+pre-arm, CONTAIN's lane model). Against a **human** who disguises, they will
+under-price the danger and defend slightly loose. This is mild and arguably
+correct — a bot cannot respect a skill it has no perception of — but it should be
+a known consequence, not a playtest surprise.
+
+**Open design question (deliberately deferred): should bots learn to disguise?**
+It is a free lever — a late aim swing costs the goalie nothing to model, since
+R1's machinery is symmetric. But it is also where a bot could become *unfun*: a
+bot that disguises perfectly beats the goalie every time. If built, the disguise
+magnitude belongs on `BotSkillProfile` (alongside the existing committed aim
+error — note the project already accepts RNG on skaters and forbids it on
+goalies, §5.3), and the scorer should price the **attempt**, not assume it
+succeeds.
+
+---
+
 ## 6. Refactor plan (#519)
 
 ### 6.1 Why the current shape blocks threading
@@ -678,6 +749,16 @@ the suite green.
   R1/R3. Without it, every item below is a guess, and none of them can be
   playtested by the agent. **It is the single highest-leverage next task.**
 
+- **Step 0b** — record the **bot-vs-goalie** baseline too, from the existing
+  `test_real_rush_sim.gd` / `rush_sim_harness.gd` pair. Per §5.6 these rates must
+  be **unchanged** by R1 (a bot's aim is locked at charge tick 0, so it generates
+  no disguise). Assert that as a regression invariant, not just a snapshot — if a
+  bot rate moves after R1, the lag leaked into a path it shouldn't have.
+
+  The bot arm doubles as R1's zero-disguise **control**; the only new thing the
+  harness needs is a **treatment arm** — a scripted late aim swing during the
+  windup — so the save-rate delta isolates disguise with everything else held.
+
 ### Tranche C — over-performance (the feel work)
 
 Do this *before* the refactor: these items net-*remove* behavior, which makes the
@@ -744,9 +825,12 @@ restructuring anyway, so they ride along rather than being a separate pass:
 
 - **§1.4 W3's** fate depends on R1 — do not build the relocation bound
   speculatively.
-- **The bot-disguise asymmetry** (§5.3) — a real balance consequence of R1.
-  Decide after playtesting whether higher-tier bots should learn a late aim
-  swing.
+- **Should bots learn to disguise?** (§5.6) — a real balance consequence of R1,
+  and a free lever if wanted. Decide after playtesting. If built: magnitude on
+  `BotSkillProfile`, and the scorer prices the *attempt*, not the success.
+- **Bot defenders under-price a disguising human** (§5.6) — same mirror, no
+  perception of disguise. Accept as realistic, or feed a disguise estimate into
+  `counter_rush_cost` later.
 
 ---
 
