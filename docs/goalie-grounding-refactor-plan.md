@@ -195,6 +195,10 @@ today's strength for free. For a skating wrister shooter it shrinks the shade
 automatically. The wrister/slapper difference becomes **emergent from measured
 mobility** rather than a per-shot-type special case — which is the point.
 
+Note this bound belongs on the **shade only**, not on the reaction-delay prime —
+see §2.3 for why the timing credit survives shooter mobility and the positional
+credit does not.
+
 ### 1.5 W4 — the doorstep-drop rationale is wrong, and the conclusion is right
 
 `:1884-1887` justified not dropping for a wrister charge with "the player can
@@ -260,25 +264,39 @@ freeze is the windup), so the continuum has real signal everywhere:
 - quick pass (no aim state, `:E`) → genuinely zero fixation → cold. **Correct**:
   it is a pass, and the goalie should not be primed for it.
 
-**Refinement the wrister forces (and that improves the model):** fixation *time*
-alone overrates a wrister. Quiet eye is about holding a stable read, and a
-wrister shooter keeps full locomotion — the shot origin can be crossing the
-goalie's view the whole windup, which is a materially worse read than a planted
-slapper's stationary one. So accrue fixation **weighted by the stability of the
-shot origin**, not by wall-clock alone:
+### 2.3 Three credits, invalidated differently — keep the timing, bound the cheat
 
-```gdscript
-# credit ∈ [0,1]: 1 when the origin is parked, falling off as it sweeps across
-# the goalie's view. Angular rate, not linear speed — a carrier skating straight
-# AT the goalie barely moves the read, one cutting across it wrecks it.
-fixation_s += delta * origin_stability(origin_angular_rate_rad_s, ref_rate)
-```
+A windup read pays the goalie in three separate currencies, and conflating them
+is what makes "should a mobile wrister prime the goalie?" feel ambiguous:
 
-That is one continuous quantity replacing an enumeration. It makes a planted
-slapper the maximally-readable windup, a stationary wrister nearly as readable, a
-wrister from a skating shooter much less, and a live dangle least — **without the
-goalie ever branching on shot type.** It also subsumes W3's origin-relocation
-bound (§1.4): both are asking "how much can this shot origin still change?"
+| Credit | Mechanism | Spatially specific? | Survives the shooter relocating? |
+|---|---|---|---|
+| **Temporal** — the save is pre-programmed, released ballistically | `leg_delay = min(delay, prearmed_reaction_delay)`; `arm_cut` (`:3847-3849`) | **No** — it's "a shot is coming, now" | **Yes.** Readiness to *go* is direction-agnostic. |
+| **Postural** — resting hands move toward the predicted impact | `prelean_*` (`:3521`) | Yes, but cheap to undo | **Mostly** — re-solved every tick off live `predicted_shot_velocity`, so it tracks a relocating shooter, and it adds no save speed |
+| **Positional** — the *body* shades toward the predicted crossing | `slapper_aim_shade` (`:3129`) | **Yes**, and expensive to undo | **No.** If the origin moves, the goalie moved the wrong way — worse than not shading |
+
+So the answer to "can the goalie still improve reaction time on a wrister
+windup?" is **yes, essentially at full strength.** The temporal credit is what
+quiet-eye research actually describes (the response is programmed during the
+fixation and executed in <200 ms), and nothing about the shooter skating
+invalidates *being ready to move*. It is the **positional** credit — the shade —
+that a mobile shooter should be able to invalidate, which is exactly the bound
+W3 (§1.4) adds. Same predicate, different strength per currency.
+
+**Correction to an earlier draft of this document.** A prior revision proposed
+accruing fixation *weighted by shot-origin stability*, so a skating shooter
+granted less temporal credit. That was **double-counting**, the same defect W1
+flags: a shooter whose motion forces the goalie to keep re-squaring leaves the
+goalie with nonzero planar velocity at release, and `_movement_read_delay()`
+(`:3780`) **already** charges for exactly that, computed from the goalie's own
+`_velocity_x/_velocity_z` at the release tick. Adding a stability weight would
+price the same physical effect twice.
+
+The existing coupling is also more discriminating than the weight would have
+been: a shooter skating *straight at* the goalie is radial motion that needs no
+re-square, so the goalie stays set and correctly pays nothing — while a shooter
+cutting *across* forces the push and correctly pays. Leave the temporal credit on
+wall-clock fixation and let the caught-moving penalty do its job.
 
 Consequences:
 
@@ -479,9 +497,9 @@ told the answer":
    ahead of everything else.
 3. W2 — same predicate for the chest bias during a windup.
 4. W3 — mobility-bounded aim shade; delete `slapper_aim_shade`.
-5. §2 — continuous fixation map (origin-stability weighted); delete
-   `prime_slot_distance`; optionally raise `reaction_delay` to 0.18 behind the
-   skill-profile seam.
+5. §2 — continuous fixation map on wall-clock (§2.3: *not* stability-weighted —
+   the caught-moving penalty already prices that); delete `prime_slot_distance`;
+   optionally raise `reaction_delay` to 0.18 behind the skill-profile seam.
 6. G1 — fold the lateral-pressure curve into the backdoor race solve.
 
 Items 2–6 remove **four** hand-tuned constants and one whole behavior, and every
