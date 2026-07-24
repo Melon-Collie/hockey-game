@@ -478,25 +478,27 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	content.add_child(action)
 	_action_btn[team_id][slot] = action
 
-	# Controller: the card is the focusable nav target and A selects the slot (the
-	# primary click). A focus-ring overlay reads the selection since a PanelContainer
-	# draws no focus of its own. The host's +/X action stays mouse-only in controller
-	# mode so the card is the single target (bots via Fill with Bots; kick via mouse).
-	if ControllerNav.active():
-		action.focus_mode = Control.FOCUS_NONE
-		card.focus_mode = Control.FOCUS_ALL
-		var ring := Panel.new()
-		ring.add_theme_stylebox_override("panel", MenuStyle.focus_ring_box())
-		ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		ring.visible = false
-		card.add_child(ring)
-		card.focus_entered.connect(func() -> void: ring.visible = true)
-		card.focus_exited.connect(func() -> void: ring.visible = false)
-		var t: int = team_id
-		var sl: int = slot
-		_nav_cards.append(card)
-		_nav_card_handlers.append(func() -> void: slot_selected.emit(t, sl))
-		_nav_card_coords.append(Vector2i(team_id, slot))
+	# The card is the focusable nav target and A selects the slot (the primary
+	# click). A focus-ring overlay reads the selection since a PanelContainer draws
+	# no focus of its own. The host's +/X action stays out of the focus order so the
+	# card is the single pad target (bots via Fill with Bots; kick via mouse). Set up
+	# unconditionally — the overlay uses the device-aware focus ring (invisible in
+	# mouse mode), so this also lets a mouse→pad switch land the pad on a card without
+	# rebuilding the grid.
+	action.focus_mode = Control.FOCUS_NONE
+	card.focus_mode = Control.FOCUS_ALL
+	var ring := Panel.new()
+	ring.add_theme_stylebox_override("panel", MenuStyle.focus_ring_box())
+	ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ring.visible = false
+	card.add_child(ring)
+	card.focus_entered.connect(func() -> void: ring.visible = true)
+	card.focus_exited.connect(func() -> void: ring.visible = false)
+	var t: int = team_id
+	var sl: int = slot
+	_nav_cards.append(card)
+	_nav_card_handlers.append(func() -> void: slot_selected.emit(t, sl))
+	_nav_card_coords.append(Vector2i(team_id, slot))
 
 	return card
 

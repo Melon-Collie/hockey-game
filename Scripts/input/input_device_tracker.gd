@@ -120,6 +120,10 @@ func _emit_if_changed() -> void:
 	if now != _emitted_gamepad:
 		_emitted_gamepad = now
 		_restyle_ring()
+		if now:
+			# Pad just took over — if a menu is open, land focus on its remembered
+			# target so the pad can navigate without the menu being reopened.
+			ControllerNav.on_gamepad_activated()
 		device_changed.emit(now)
 
 

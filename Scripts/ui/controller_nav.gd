@@ -25,23 +25,50 @@ static func active() -> bool:
 
 # --- FOCUS -------------------------------------------------------------------
 
-# Grab focus on `control`, deferred so it runs after layout. No-op for mouse.
+# The last focus target a menu requested (weakref so a freed control doesn't
+# resurrect). Grabbed immediately while the pad drives; otherwise remembered so
+# that if the player SWITCHES to the pad with the menu still open, the pad lands
+# on the right control (see on_gamepad_activated). One shared slot — it tracks the
+# most recent focus intent, which is the currently-relevant menu's target.
+static var _pending_focus: WeakRef = null
+
+
+# Grab focus on `control`, deferred so it runs after layout. Remembered even in
+# mouse mode so a later mouse→pad switch can grab it; only actually grabs now while
+# the pad drives (so a mouse click never yanks focus).
 static func grab_focus(control: Control) -> void:
-	if control != null and active():
+	if control == null:
+		return
+	_pending_focus = weakref(control)
+	if active():
 		control.grab_focus.call_deferred()
 
 
 # Focus the first focusable control under `root` (depth-first) — the seam a popup
-# calls in its open() to take control off the menu behind it. No-op for mouse.
+# calls in its open() to take control off the menu behind it. Remembered for a
+# later device switch; only grabs now while the pad drives.
 static func focus_first(root: Node) -> void:
-	if active():
-		_focus_first_deferred.call_deferred(root)
+	_focus_first_deferred.call_deferred(root)
 
 
 static func _focus_first_deferred(root: Node) -> void:
 	var c: Control = _first_focusable(root)
 	if c != null:
-		c.grab_focus()
+		_pending_focus = weakref(c)
+		if active():
+			c.grab_focus()
+
+
+# Called by InputDeviceTracker when the pad becomes the active device: grab the
+# remembered target so a mouse→pad switch with a menu already open lands the pad on
+# it. Guarded on the control still being live + on-screen (a stale/closed menu's
+# target is skipped, so switching to the pad in gameplay grabs nothing).
+static func on_gamepad_activated() -> void:
+	if _pending_focus == null:
+		return
+	var c: Control = _pending_focus.get_ref() as Control
+	if c != null and c.is_inside_tree() and c.is_visible_in_tree():
+		c.grab_focus.call_deferred()
 
 
 static func _first_focusable(node: Node) -> Control:
@@ -56,9 +83,12 @@ static func _first_focusable(node: Node) -> Control:
 	return null
 
 
-# Flip a list of custom Controls focusable (controller) or not (mouse). Call with
-# `on = active()` when a menu opens; passing false keeps mouse mode ring-free.
-static func set_list_focusable(items: Array, on: bool) -> void:
+# Make a list of custom Controls focusable. With the device-aware focus ring, this
+# is unconditional: a mouse click on a focusable row shows no ring (the ring is
+# invisible in mouse mode), and keeping them focusable is what lets a mouse→pad
+# switch land the pad on a row without rebuilding the menu. `on = false` opts back
+# out (kept for symmetry / teardown).
+static func set_list_focusable(items: Array, on: bool = true) -> void:
 	for item: Control in items:
 		item.focus_mode = Control.FOCUS_ALL if on else Control.FOCUS_NONE
 

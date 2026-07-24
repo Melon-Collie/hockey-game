@@ -128,12 +128,13 @@ func open() -> void:
 	opened.emit()
 
 
-# In controller mode, make the nav items focusable and drop focus on the first
-# (the player card) so the pad can drive the menu immediately. Mouse mode leaves
-# them non-focusable so a click never lands a focus ring. Read live each open, so
-# toggling the gamepad pref takes effect the next time the menu is opened.
+# Make the nav items focusable and drop focus on the first (the player card) so the
+# pad can drive the menu. The rows stay focusable in mouse mode too (the focus ring
+# is device-aware, so a mouse click shows nothing) — that's what lets a mouse→pad
+# switch with the menu already open land the pad on a row; ControllerNav.grab_focus
+# only actually grabs while the pad drives.
 func _apply_nav_focus() -> void:
-	ControllerNav.set_list_focusable(_nav_items, ControllerNav.active())
+	ControllerNav.set_list_focusable(_nav_items)
 	if not _nav_items.is_empty():
 		ControllerNav.grab_focus(_nav_items[0])
 
