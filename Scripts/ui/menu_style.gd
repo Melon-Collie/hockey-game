@@ -277,6 +277,7 @@ static func apply_primary_cta(btn: Button, font_size: int = 20) -> void:
 	btn.text = btn.text.to_upper()
 	btn.add_theme_font_override("font", name_font_spaced())
 	btn.add_theme_font_size_override("font_size", font_size)
+	apply_focus_ring(btn)
 
 
 # Standard popup-row button: 220×48, font 20, hover-scale tween, click sound.
@@ -285,6 +286,40 @@ static func popup_button(label: String) -> Button:
 	btn.text = label
 	btn.custom_minimum_size = Vector2(220, 48)
 	btn.add_theme_font_size_override("font_size", 20)
+	apply_focus_ring(btn)
 	wire_hover_scale(btn)
 	SoundManager.wire_button(btn)
 	return btn
+
+
+# THE focus-ring seam: give a button the shared, device-aware focus ring. The ring
+# is ONE stylebox owned by InputDeviceTracker that goes teal while the pad drives
+# and invisible (zero-width) the instant the mouse does — so it's safe to apply
+# unconditionally: a mouse player's clicked button is focused but shows nothing,
+# and a pad player's navigation shows the teal ring. Both the button factories and
+# hand-built buttons call this, so there's one path rather than a scattered
+# `if` at each call site, and every ring follows the active device together.
+static func apply_focus_ring(btn: Button) -> void:
+	btn.add_theme_stylebox_override("focus", focus_ring_box())
+
+
+# The shared device-aware focus ring (see InputDeviceTracker.focus_ring). The SAME
+# instance for every control, so a device handoff restyles them all at once.
+static func focus_ring_box() -> StyleBoxFlat:
+	return InputDeviceTracker.focus_ring()
+
+
+# A theme that puts the shared device-aware ring on control types the button
+# factories can't reach — CheckButtons especially, whose default focus is invisible
+# here. Set as a panel's `theme` to make toggles/dropdowns show focus while the pad
+# drives; it only defines the "focus" stylebox, so every other style falls through
+# to the project theme. Invisible in mouse mode because the shared ring is.
+static func controller_focus_theme() -> Theme:
+	var t := Theme.new()
+	var ring: StyleBoxFlat = focus_ring_box()
+	for control_type: String in ["CheckButton", "CheckBox", "OptionButton", "Button"]:
+		t.set_stylebox("focus", control_type, ring)
+	return t
+
+# Focus-grab / focus-first / list-focus and the input routing live in ControllerNav
+# (the nav BEHAVIOR); MenuStyle keeps only the focus VISUALS above.

@@ -143,6 +143,20 @@ func _ready() -> void:
 	# the host-alone case stays disabled forever.
 	_update_start_btn()
 
+	# Controller: land focus on the slot grid so the pad can drive the lobby
+	# immediately. No-op for mouse. Deferred inside grab_focus so layout settles.
+	if _slot_grid != null:
+		_slot_grid.focus_first_card()
+
+
+# Controller / keyboard: back out of the lobby (to free play) on ui_cancel (B /
+# Escape). A sub-popup open over the lobby consumes ui_cancel first (child-first
+# _unhandled_input), so this only fires on the bare lobby.
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed(&"ui_cancel"):
+		_on_back_pressed()
+		get_viewport().set_input_as_handled()
+
 func _initial_color_preference() -> int:
 	var saved: int = PlayerPrefs.preferred_color_slot
 	if saved < 0:
@@ -253,6 +267,7 @@ func _build_fill_bots_row() -> HBoxContainer:
 	_fill_bots_btn.custom_minimum_size = Vector2(0, 28)
 	MenuStyle.wire_hover_scale(_fill_bots_btn)
 	SoundManager.wire_button(_fill_bots_btn)
+	MenuStyle.apply_focus_ring(_fill_bots_btn)
 	_fill_bots_btn.pressed.connect(_fill_open_slots_with_bots)
 	row.add_child(_fill_bots_btn)
 	return row
@@ -689,6 +704,7 @@ func _btn(text: String) -> Button:
 	b.custom_minimum_size = Vector2(140, 40)
 	MenuStyle.wire_hover_scale(b)
 	SoundManager.wire_button(b)
+	MenuStyle.apply_focus_ring(b)
 	return b
 
 

@@ -21,6 +21,7 @@ run/pause_on_focus_loss=false
 [autoload]
 
 PlayerPrefs="*res://Scripts/game/player_prefs.gd"
+InputDeviceTracker="*res://Scripts/input/input_device_tracker.gd"
 Constants="*res://Scripts/game/constants.gd"
 BuildInfo="*res://Scripts/game/build_info.gd"
 SoundManager="*res://Scripts/game/sound_manager.gd"

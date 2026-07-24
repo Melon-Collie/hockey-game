@@ -89,6 +89,8 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	super.setup(assigned_skater, assigned_puck, game_state)
 	show_one_timer_indicator = true
 	_gatherer = LocalInputGatherer.new(camera)
+	# The gamepad skill-stick cursor anchors on the local skater's screen position.
+	_gatherer.set_aim_skater(assigned_skater)
 	add_child(_gatherer)
 	camera.skater = assigned_skater
 	camera.puck = assigned_puck

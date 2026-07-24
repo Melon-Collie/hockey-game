@@ -82,6 +82,13 @@ const _COLOR_PING_BAD  := Color(0.92, 0.40, 0.40, 1.0)
 const _COLOR_READY   := Color(0.36, 0.85, 0.45, 1.0)
 const _COLOR_WAITING := Color(0.95, 0.78, 0.22, 1.0)
 
+# Controller navigation: the cards as a flat focusable list + parallel A-handlers
+# (each emits slot_selected for its slot — the primary card click). Rebuilt with
+# the grid. See _input / focus_first_card.
+var _nav_cards: Array[Control] = []
+var _nav_card_handlers: Array[Callable] = []
+var _nav_card_coords: Array[Vector2i] = []   # (team, slot) per nav card, for the X action
+
 # Per-slot widget caches. Indexed [team_id][slot].
 var _cards:        Array = [[], []]
 var _stylebox:     Array = [[], []]   # StyleBoxFlat — recolored per refresh
@@ -164,6 +171,9 @@ func _ready() -> void:
 func _build_grid() -> void:
 	add_theme_constant_override("separation", 8)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_nav_cards.clear()
+	_nav_card_handlers.clear()
+	_nav_card_coords.clear()
 
 	# Away on top (team 1), Home on bottom (team 0) — matches rink perspective,
 	# and each team's D pair sits BEHIND its forwards (above for away, below
@@ -468,7 +478,61 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	content.add_child(action)
 	_action_btn[team_id][slot] = action
 
+	# The card is the focusable nav target and A selects the slot (the primary
+	# click). A focus-ring overlay reads the selection since a PanelContainer draws
+	# no focus of its own. The host's +/X action stays out of the focus order so the
+	# card is the single pad target (bots via Fill with Bots; kick via mouse). Set up
+	# unconditionally — the overlay uses the device-aware focus ring (invisible in
+	# mouse mode), so this also lets a mouse→pad switch land the pad on a card without
+	# rebuilding the grid.
+	action.focus_mode = Control.FOCUS_NONE
+	card.focus_mode = Control.FOCUS_ALL
+	var ring := Panel.new()
+	ring.add_theme_stylebox_override("panel", MenuStyle.focus_ring_box())
+	ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ring.visible = false
+	card.add_child(ring)
+	card.focus_entered.connect(func() -> void: ring.visible = true)
+	card.focus_exited.connect(func() -> void: ring.visible = false)
+	var t: int = team_id
+	var sl: int = slot
+	_nav_cards.append(card)
+	_nav_card_handlers.append(func() -> void: slot_selected.emit(t, sl))
+	_nav_card_coords.append(Vector2i(team_id, slot))
+
 	return card
+
+
+# Controller card input on the focused card:
+#   * A / ui_accept → select the slot (slot_selected — the primary click). Cards are
+#     custom PanelContainers, so ui_accept is routed here, not via gui_input.
+#   * X → the card's +/X action (add/remove bot, or kick a peer), matching the mouse
+#     action button — only fired when that action is actually shown for the slot.
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree():
+		return
+	if ControllerNav.activate_focused(event, _nav_cards, _nav_card_handlers):
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventJoypadButton and (event as InputEventJoypadButton).pressed \
+			and (event as InputEventJoypadButton).button_index == JOY_BUTTON_X:
+		for i: int in _nav_cards.size():
+			if _nav_cards[i].has_focus():
+				var coord: Vector2i = _nav_card_coords[i]
+				var btn: Button = _action_btn[coord.x][coord.y]
+				if btn != null and btn.visible:
+					_on_action_pressed(coord.x, coord.y)
+					get_viewport().set_input_as_handled()
+				return
+
+
+# Drop controller focus on the first VISIBLE slot card — the Lobby calls this on
+# open. In 3v3 the D-row cards are hidden, so the first entry may not be visible.
+func focus_first_card() -> void:
+	for card: Control in _nav_cards:
+		if card.is_visible_in_tree():
+			ControllerNav.grab_focus(card)
+			return
 
 
 # ── Refresh ──────────────────────────────────────────────────────────────────

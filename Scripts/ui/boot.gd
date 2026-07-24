@@ -13,6 +13,7 @@ const _HOCKEY_SCENE_PATH := "res://Scenes/Hockey.tscn"
 var _button_column: Control = null
 var _loading_label: Label = null
 var _settings_container: Control = null
+var _settings_panel: OptionsPanel = null  # for controller focus_active_tab on open
 var _input_received: bool = false
 var _transitioned: bool = false
 
@@ -113,6 +114,11 @@ func _build_ui() -> void:
 	exit_btn.pressed.connect(_on_exit_pressed)
 	_button_column.add_child(exit_btn)
 
+	# Focus Play up front so a pad player's very first button press activates it
+	# (rather than merely revealing focus). Safe for a mouse player too: the focus
+	# ring is device-aware (invisible until a pad drives), so they see nothing.
+	_focus_title_menu()
+
 	# Hidden until Play is pressed before the threaded load finishes. Replaces
 	# the menu so the moment doesn't feel frozen.
 	_loading_label = Label.new()
@@ -159,6 +165,7 @@ func _title_button(label: String) -> Button:
 	btn.add_theme_font_override("font", MenuStyle.name_font_spaced())
 	btn.add_theme_font_size_override("font_size", 26)
 	MenuStyle.wire_hover_scale(btn)
+	MenuStyle.apply_focus_ring(btn)
 	SoundManager.wire_button(btn)
 	return btn
 
@@ -180,8 +187,10 @@ func _build_settings_overlay() -> void:
 
 	var options := OptionsPanel.new()
 	options.close_requested.connect(func() -> void:
-		_settings_container.visible = false)
+		_settings_container.visible = false
+		_focus_title_menu())
 	panel.add_child(options)
+	_settings_panel = options
 
 	_settings_container = Control.new()
 	_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -194,6 +203,19 @@ func _build_settings_overlay() -> void:
 func _on_settings_pressed() -> void:
 	if _settings_container != null:
 		_settings_container.visible = true
+		if _settings_panel != null:
+			_settings_panel.focus_active_tab()
+
+
+# Focus the title menu's first button (Play), deferred so it lands after layout.
+# Unconditional (not gated on the active device): the focus ring is device-aware,
+# so a mouse player sees nothing while a pad player's first press activates Play.
+# Used at build and when the settings overlay closes.
+func _focus_title_menu() -> void:
+	if _button_column != null and _button_column.get_child_count() > 0:
+		var first: Control = _button_column.get_child(0) as Control
+		if first != null:
+			first.grab_focus.call_deferred()
 
 
 func _on_play_pressed() -> void:
@@ -216,6 +238,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _settings_container != null and _settings_container.visible:
 		if event.is_action_pressed(&"ui_cancel"):
 			_settings_container.visible = false
+			_focus_title_menu()
 			get_viewport().set_input_as_handled()
 
 

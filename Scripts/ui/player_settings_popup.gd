@@ -31,6 +31,9 @@ var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
 var _name_valid: bool = true
 var _number_valid: bool = true
+# The in-game on-screen keyboard for controller name entry (works on every
+# platform, unlike Steam's Big-Picture-only OSK). Created in _ready.
+var _keyboard: ControllerKeyboard = null
 
 # Snapshot taken on open(). Cancel restores from this.
 var _snapshot: Dictionary = {}
@@ -38,8 +41,48 @@ var _snapshot: Dictionary = {}
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Controller mode: give toggles/dropdowns a visible focus ring (see the Options
+	# panel). Only defines "focus"; everything else falls through to the project theme.
+	var focus_theme: Theme = MenuStyle.controller_focus_theme()
+	if focus_theme != null:
+		theme = focus_theme
 	_build()
+	_keyboard = ControllerKeyboard.new()
+	_keyboard.submitted.connect(_on_keyboard_submitted)
+	_keyboard.cancelled.connect(func() -> void: ControllerNav.grab_focus(_name_field))
+	add_child(_keyboard)
 	visible = false
+
+
+# Controller text entry: the number is a D-pad stepper (no keyboard needed), and
+# the name opens the on-screen keyboard on A. Both only when the field is focused
+# in controller mode; handled at _input (ahead of GUI) so ui_left/right don't just
+# move the LineEdit caret. ui_cancel stays in _unhandled_input.
+func _input(event: InputEvent) -> void:
+	if not visible or not ControllerNav.active():
+		return
+	if _number_field != null and _number_field.has_focus():
+		if event.is_action_pressed(&"ui_left"):
+			_step_number(-1)
+			get_viewport().set_input_as_handled()
+		elif event.is_action_pressed(&"ui_right"):
+			_step_number(1)
+			get_viewport().set_input_as_handled()
+	elif _name_field != null and _name_field.has_focus() and event.is_action_pressed(&"ui_accept"):
+		_keyboard.open(_name_field.text, _name_field.max_length)
+		get_viewport().set_input_as_handled()
+
+
+func _step_number(delta: int) -> void:
+	var next: int = clampi(_number_field.text.to_int() + delta, 0, 99)
+	_number_field.text = str(next)
+	_on_number_text_changed(_number_field.text)  # programmatic set doesn't emit text_changed
+
+
+func _on_keyboard_submitted(text: String) -> void:
+	_name_field.text = text
+	_on_name_text_changed(text)  # programmatic set doesn't emit text_changed
+	ControllerNav.grab_focus(_name_field)
 
 
 func _build() -> void:
@@ -398,6 +441,7 @@ func open() -> void:
 		_attr_panel.snapshot()
 	_restore_from_snapshot()
 	visible = true
+	ControllerNav.focus_first(self)  # controller: take focus off the Side Menu behind
 
 
 func _unhandled_input(event: InputEvent) -> void:

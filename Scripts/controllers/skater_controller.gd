@@ -2725,12 +2725,14 @@ func shot_power_sensitivity() -> float:
 	return 1.0
 
 # The speed signal fed to the wrister power model:
-#   - Bots: the cursor speed equivalent to their committed target power fraction
-#     (deterministic — bots have no measured cursor).
-#   - Humans: the raw cursor speed, scaled by that player's Shot Power
+#   - Bots AND gamepad humans (commit_wrister_power): the cursor speed equivalent
+#     to their committed target power fraction (bot_wrister_power_t) — deterministic,
+#     no measured cursor. A pad parks its cursor while aiming, so its cursor speed is
+#     ~0; the committed magnitude (right-stick push) is the real power signal.
+#   - Mouse humans: the raw cursor speed, scaled by that player's Shot Power
 #     Sensitivity (calibrates the flick-for-power feel to their mouse DPI).
 func _wrister_sweep_speed(input: InputState) -> float:
-	if is_ai_controlled():
+	if is_ai_controlled() or input.commit_wrister_power:
 		return ShotMechanics.wrister_speed_for_power_t(input.bot_wrister_power_t, _wrister_config())
 	return _aiming.cursor_speed_ema * shot_power_sensitivity()
 

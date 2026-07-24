@@ -30,12 +30,30 @@ var _player_popup: PlayerSettingsPopup = null
 var _play_popup: PlayPopup = null
 var _career_screen: CareerStatsScreen = null
 var _options_container: Control = null
+var _options_panel: OptionsPanel = null
 var _exit_container: Control = null
 var _tutorial_container: Control = null
 var _tutorial_rows_vbox: VBoxContainer = null
 var _drills_container: Control = null
 var _drills_rows_vbox: VBoxContainer = null
 var _loading_screen: LoadingScreen = null
+# Footer close-hint chip label — re-resolved to the active device (ESC ↔ back
+# button) on InputDeviceTracker.device_changed so it follows a mid-session swap.
+var _close_hint_label: Label = null
+# Controller navigation: the player card + activity rows, in order. Made focusable
+# (and the first one focused) only in controller mode when the menu opens — see
+# _apply_nav_focus. Mouse mode leaves them FOCUS_NONE so nothing changes.
+var _nav_items: Array[Control] = []
+# Activation callables, parallel to _nav_items. ui_accept (A) is routed here from
+# _unhandled_input rather than the items' gui_input: Godot doesn't deliver joypad
+# button events to a focused custom Control's gui_input (only InputEventKey), so a
+# plain-Control row never sees the A press — only real BaseButtons do.
+var _nav_handlers: Array[Callable] = []
+# The Exit dialog's Cancel button — the default focus target when that modal opens.
+var _exit_cancel_btn: Button = null
+# The nav item the controller last had focus on, so closing a popup returns focus
+# there rather than jumping to the top of the list.
+var _last_nav_focus: Control = null
 
 
 func _ready() -> void:
@@ -59,6 +77,18 @@ func _maybe_offer_reconnect() -> void:
 			func() -> void: _on_join_pressed(lobby_id))
 
 
+# ui_accept (A / Enter) on a focused activity row or the player card. Handled at
+# the _input stage — NOT _unhandled_input — because the GUI focus system consumes
+# ui_accept for a focused control (trying to "press" it; a plain Control does
+# nothing but the event is still eaten), so it never reaches _unhandled_input.
+# A sub-modal's real Buttons DO activate on ui_accept, and no list item has focus
+# while a sub-modal is up — so we only consume it when a main-list item is focused,
+# leaving sub-modal buttons to the GUI system.
+func _input(event: InputEvent) -> void:
+	if visible and ControllerNav.activate_focused(event, _nav_items, _nav_handlers):
+		get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not visible:
 		return
@@ -66,12 +96,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _options_container != null and _options_container.visible:
 		_options_container.visible = false
+		_return_focus_to_menu()
 	elif _exit_container != null and _exit_container.visible:
 		_exit_container.visible = false
+		_return_focus_to_menu()
 	elif _tutorial_container != null and _tutorial_container.visible:
 		_tutorial_container.visible = false
+		_return_focus_to_menu()
 	elif _drills_container != null and _drills_container.visible:
 		_drills_container.visible = false
+		_return_focus_to_menu()
 	elif _player_popup != null and _player_popup.visible:
 		# PlayerSettingsPopup handles its own ui_cancel — let it through.
 		return
@@ -90,7 +124,36 @@ func open() -> void:
 	if visible:
 		return
 	visible = true
+	_apply_nav_focus()
 	opened.emit()
+
+
+# Make the nav items focusable and drop focus on the first (the player card) so the
+# pad can drive the menu. The rows stay focusable in mouse mode too (the focus ring
+# is device-aware, so a mouse click shows nothing) — that's what lets a mouse→pad
+# switch with the menu already open land the pad on a row; ControllerNav.grab_focus
+# only actually grabs while the pad drives.
+func _apply_nav_focus() -> void:
+	ControllerNav.set_list_focusable(_nav_items)
+	if not _nav_items.is_empty():
+		ControllerNav.grab_focus(_nav_items[0])
+
+
+# Restore controller focus to the menu list after a sub-modal or launched popup
+# closes, so the pad can keep navigating instead of being left with nothing
+# focused. Returns to the last-focused row when we have one, else the top.
+func _return_focus_to_menu() -> void:
+	if _last_nav_focus != null and is_instance_valid(_last_nav_focus):
+		ControllerNav.grab_focus(_last_nav_focus)
+	elif not _nav_items.is_empty():
+		ControllerNav.grab_focus(_nav_items[0])
+
+
+# When a launched popup (Player / Play / Career / Options) hides, pull focus back
+# to the menu list. Fires on show too — guarded on the popup being hidden.
+func _on_child_popup_hidden(popup: CanvasItem) -> void:
+	if visible and not popup.visible:
+		_return_focus_to_menu()
 
 
 func close() -> void:
@@ -234,15 +297,24 @@ func _build_player_card(parent: VBoxContainer) -> void:
 	_player_card_edit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(_player_card_edit_icon)
 
+	# Focusable so a controller lands here first; focus_mode is switched on only in
+	# controller mode (in _apply_nav_focus). The card is the first nav item.
+	_player_card_panel.focus_mode = Control.FOCUS_NONE
+	_nav_items.append(_player_card_panel)
+	_nav_handlers.append(_on_player_card_pressed)
+	var card_highlight := func(on: bool) -> void:
+		_player_card_panel.add_theme_stylebox_override("panel",
+				_player_card_hover if on else _player_card_normal)
+		_player_card_edit_icon.modulate = MenuStyle.TEAL_HOVER if on else MenuStyle.TEXT_MUTED
 	_player_card_panel.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_on_player_card_pressed())
-	_player_card_panel.mouse_entered.connect(func() -> void:
-		_player_card_panel.add_theme_stylebox_override("panel", _player_card_hover)
-		_player_card_edit_icon.modulate = MenuStyle.TEAL_HOVER)
-	_player_card_panel.mouse_exited.connect(func() -> void:
-		_player_card_panel.add_theme_stylebox_override("panel", _player_card_normal)
-		_player_card_edit_icon.modulate = MenuStyle.TEXT_MUTED)
+	_player_card_panel.mouse_entered.connect(func() -> void: card_highlight.call(true))
+	_player_card_panel.mouse_exited.connect(func() -> void: card_highlight.call(false))
+	_player_card_panel.focus_entered.connect(func() -> void:
+		_last_nav_focus = _player_card_panel
+		card_highlight.call(true))
+	_player_card_panel.focus_exited.connect(func() -> void: card_highlight.call(false))
 
 	# First-run callout: point new players at the card so they discover the
 	# name / number / handedness / attributes editor. Pulses to draw the eye and
@@ -299,23 +371,34 @@ func _add_row(parent: VBoxContainer, label_text: String, danger: bool, handler: 
 	if danger:
 		label.modulate.a = 0.85
 
-	row.mouse_entered.connect(func() -> void:
-		label.add_theme_color_override("font_color", hover_color)
-		label.offset_left = 18.0
-		accent.modulate.a = 1.0
+	# Shared highlight, driven by both mouse hover and controller focus so the row
+	# reads the same however it's navigated.
+	var highlight := func(on: bool) -> void:
+		label.add_theme_color_override("font_color", hover_color if on else rest_color)
+		label.offset_left = 18.0 if on else 4.0
+		accent.modulate.a = 1.0 if on else 0.0
 		if danger:
-			label.modulate.a = 1.0
-		SoundManager.play_ui(SoundManager.Sound.UI_HOVER))
-	row.mouse_exited.connect(func() -> void:
-		label.add_theme_color_override("font_color", rest_color)
-		label.offset_left = 4.0
-		accent.modulate.a = 0.0
-		if danger:
-			label.modulate.a = 0.85)
+			label.modulate.a = 1.0 if on else 0.85
+		if on:
+			SoundManager.play_ui(SoundManager.Sound.UI_HOVER)
+	row.mouse_entered.connect(func() -> void: highlight.call(true))
+	row.mouse_exited.connect(func() -> void: highlight.call(false))
+	row.focus_entered.connect(func() -> void:
+		_last_nav_focus = row
+		highlight.call(true))
+	row.focus_exited.connect(func() -> void: highlight.call(false))
+	var fire := func() -> void:
+		SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
+		handler.call()
 	row.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
-			handler.call())
+			fire.call())
+	# Focusable so a controller can step the list; focus_mode is switched on only in
+	# controller mode (in _apply_nav_focus). Registered as a nav item + activation
+	# callable (ui_accept is routed from _unhandled_input — see _nav_handlers).
+	row.focus_mode = Control.FOCUS_NONE
+	_nav_items.append(row)
+	_nav_handlers.append(fire)
 	return row
 
 
@@ -333,25 +416,12 @@ func _build_footer(parent: VBoxContainer) -> void:
 	hbox.add_theme_constant_override("separation", 8)
 	parent.add_child(hbox)
 
-	var esc_style := StyleBoxFlat.new()
-	esc_style.bg_color = Color(0, 0, 0, 0)
-	esc_style.border_color = MenuStyle.TEXT_SEP
-	esc_style.set_border_width_all(1)
-	esc_style.set_corner_radius_all(3)
-	esc_style.set_content_margin(SIDE_LEFT, 6)
-	esc_style.set_content_margin(SIDE_RIGHT, 6)
-	esc_style.set_content_margin(SIDE_TOP, 2)
-	esc_style.set_content_margin(SIDE_BOTTOM, 2)
-
-	var esc_panel := PanelContainer.new()
-	esc_panel.add_theme_stylebox_override("panel", esc_style)
-	hbox.add_child(esc_panel)
-
-	var esc_label := Label.new()
-	esc_label.text = "ESC"
-	esc_label.add_theme_font_size_override("font_size", 10)
-	esc_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	esc_panel.add_child(esc_label)
+	# Close-hint chip: the active device's back button — B/○ on a pad, ESC on a
+	# keyboard. The label is kept and re-resolved on a device swap.
+	var close_chip: PanelContainer = ControllerGlyphs.chip(_close_hint_text())
+	_close_hint_label = close_chip.get_child(0) as Label
+	hbox.add_child(close_chip)
+	InputDeviceTracker.device_changed.connect(_refresh_device_prompt)
 
 	var close_label := Label.new()
 	close_label.text = "Close"
@@ -373,6 +443,16 @@ func _build_footer(parent: VBoxContainer) -> void:
 	version_label.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
 	version_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(version_label)
+
+
+# Close-hint label for the active device: keyboard ESC, else the pad's back button
+# (brand-aware — B on Xbox, ○ on PlayStation).
+func _close_hint_text() -> String:
+	return ControllerGlyphs.prompt("ESC", ControllerGlyphs.joy_label(JOY_BUTTON_B))
+
+func _refresh_device_prompt(_is_gamepad: bool) -> void:
+	if _close_hint_label != null:
+		_close_hint_label.text = _close_hint_text()
 
 
 # ── Popups ───────────────────────────────────────────────────────────────────
@@ -400,6 +480,10 @@ func _build_popups() -> void:
 	_build_exit_overlay()
 	_build_tutorial_overlay()
 	_build_drills_overlay()
+
+	# Controller: when a launched popup closes, return focus to the menu list.
+	for popup: CanvasItem in [_player_popup, _play_popup, _career_screen, _options_container]:
+		popup.visibility_changed.connect(_on_child_popup_hidden.bind(popup))
 
 	_loading_screen = LoadingScreen.new()
 	_loading_screen.cancel_pressed.connect(_on_join_cancelled)
@@ -440,6 +524,7 @@ func _build_options_overlay() -> void:
 	options.close_requested.connect(func() -> void:
 		_options_container.visible = false)
 	panel.add_child(options)
+	_options_panel = options
 
 	_options_container = Control.new()
 	_options_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -496,6 +581,7 @@ func _build_exit_overlay() -> void:
 	cancel_btn.custom_minimum_size = Vector2(140, 48)
 	cancel_btn.pressed.connect(func() -> void: _exit_container.visible = false)
 	btn_row.add_child(cancel_btn)
+	_exit_cancel_btn = cancel_btn  # controller default focus (safe default over Exit)
 
 	_exit_container = Control.new()
 	_exit_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -681,6 +767,8 @@ func _on_tutorial_pressed() -> void:
 		return
 	_refresh_tutorial_rows()
 	_tutorial_container.visible = true
+	if _tutorial_rows_vbox.get_child_count() > 0:
+		ControllerNav.grab_focus(_tutorial_rows_vbox.get_child(0) as Control)
 
 
 func _on_drills_pressed() -> void:
@@ -690,6 +778,8 @@ func _on_drills_pressed() -> void:
 		return
 	_refresh_drills_rows()
 	_drills_container.visible = true
+	if _drills_rows_vbox.get_child_count() > 0:
+		ControllerNav.grab_focus(_drills_rows_vbox.get_child(0) as Control)
 
 
 func _launch_tutorial(id: String) -> void:
@@ -717,10 +807,14 @@ func _on_career_pressed() -> void:
 
 func _on_options_pressed() -> void:
 	_options_container.visible = true
+	# Land the pad on the active tab's first control (not the close button).
+	if _options_panel != null:
+		_options_panel.focus_active_tab()
 
 
 func _on_exit_pressed() -> void:
 	_exit_container.visible = true
+	ControllerNav.grab_focus(_exit_cancel_btn)
 
 
 # `lobby_id` comes from the public lobby browser or a Steam friend invite.

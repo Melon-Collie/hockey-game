@@ -28,10 +28,17 @@ var _tabs: Array[OptionsTab] = []
 var _video_tab: OptionsVideoTab = null   # kept typed for the display-revert resync
 var _apply_btn: Button = null
 var _original: Dictionary = {}
+var _active_idx: int = 0  # active tab, for controller bumper switching + focus
 
 func _ready() -> void:
 	add_theme_constant_override("separation", 16)
 	alignment = BoxContainer.ALIGNMENT_CENTER
+	# Controller mode: give toggles/dropdowns a visible focus ring (CheckButton's
+	# default focus is invisible here). Only defines "focus", so all other styling
+	# falls through to the project theme. Null (mouse mode) leaves the theme unset.
+	var focus_theme: Theme = MenuStyle.controller_focus_theme()
+	if focus_theme != null:
+		theme = focus_theme
 
 	var close_row := HBoxContainer.new()
 	var close_spacer := Control.new()
@@ -102,6 +109,7 @@ func _snapshot() -> Dictionary:
 		"master_muted": PlayerPrefs.master_muted,
 		"mute_when_unfocused": PlayerPrefs.mute_when_unfocused,
 		"shot_power_sensitivity": PlayerPrefs.shot_power_sensitivity,
+		"disable_gamepad": PlayerPrefs.disable_gamepad,
 		"confine_mouse": PlayerPrefs.confine_mouse,
 		"cursor_style": PlayerPrefs.cursor_style,
 		"cursor_color": PlayerPrefs.cursor_color,
@@ -123,6 +131,7 @@ func _snapshot() -> Dictionary:
 		"hud_scale": PlayerPrefs.hud_scale,
 		"share_gameplay_stats": PlayerPrefs.share_gameplay_stats,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
+		"pad_bindings": PlayerPrefs.pad_bindings.duplicate(true),
 	}
 
 # The current control state, merged across every tab. Its key set equals
@@ -206,10 +215,39 @@ func _build_tab_switcher() -> Control:
 	return wrapper
 
 func _activate_tab(idx: int) -> void:
+	_active_idx = idx
 	for i: int in _tab_contents.size():
 		_tab_contents[i].visible = (i == idx)
 	for i: int in _tab_btns.size():
 		_apply_tab_style(_tab_btns[i], i == idx)
+
+
+# Controller: put focus on the first control of the active tab's page, so a pad
+# lands in the settings (not on the close button) when Options opens or a tab
+# switches. Called by the Side Menu on open. No-op for mouse (focus_first gates).
+func focus_active_tab() -> void:
+	if _active_idx >= 0 and _active_idx < _tab_contents.size():
+		ControllerNav.focus_first(_tab_contents[_active_idx])
+
+
+# LB / RB cycle tabs — the console convention — so the pad doesn't have to walk
+# the tab bar. Only while the panel is on screen; guarded so it never touches the
+# game's LB (hit) during play. Refocuses the new page's first control.
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree():
+		return
+	var delta: int = ControllerNav.bumper_tab_delta(event)
+	if delta != 0:
+		_cycle_tab(delta)
+		get_viewport().set_input_as_handled()
+
+
+func _cycle_tab(dir: int) -> void:
+	var n: int = _tab_btns.size()
+	if n == 0:
+		return
+	_activate_tab((_active_idx + dir + n) % n)
+	focus_active_tab()
 
 func _apply_tab_style(btn: Button, active: bool) -> void:
 	MenuStyle.apply_tab_button(btn, active)
@@ -255,6 +293,10 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.master_muted = c.master_muted
 	PlayerPrefs.mute_when_unfocused = c.mute_when_unfocused
 	PlayerPrefs.shot_power_sensitivity = c.shot_power_sensitivity
+	PlayerPrefs.disable_gamepad = c.disable_gamepad
+	# The keyboard-only gate may have flipped — re-broadcast so is_gamepad_active()'s
+	# new value reaches the device-aware UI (rings, prompts) without new input.
+	InputDeviceTracker.notify_gate_changed()
 	PlayerPrefs.confine_mouse = c.confine_mouse
 	PlayerPrefs.cursor_style = c.cursor_style
 	PlayerPrefs.cursor_color = c.cursor_color
@@ -276,6 +318,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.hud_scale = c.hud_scale
 	PlayerPrefs.share_gameplay_stats = c.share_gameplay_stats
 	PlayerPrefs.bindings = (c.bindings as Dictionary).duplicate(true)
+	PlayerPrefs.pad_bindings = (c.pad_bindings as Dictionary).duplicate(true)
 	PlayerPrefs.apply_audio()
 	PlayerPrefs.apply_video()
 	PlayerPrefs.apply_input()
@@ -354,6 +397,7 @@ func _defaults() -> Dictionary:
 		"master_muted": false,
 		"mute_when_unfocused": true,
 		"shot_power_sensitivity": 1.0,
+		"disable_gamepad": false,
 		"confine_mouse": true,
 		"cursor_style": PlayerPrefs.CURSOR_STYLE_DOT,
 		"cursor_color": Color(1.0, 0.45, 0.1),
@@ -374,6 +418,7 @@ func _defaults() -> Dictionary:
 		"hud_scale": 1.0,
 		"share_gameplay_stats": true,
 		"bindings": PlayerPrefs.default_bindings.duplicate(true),
+		"pad_bindings": PlayerPrefs.PAD_DEFAULT_BUTTONS.duplicate(true),
 	}
 
 # Pushes a values dictionary (shaped like _snapshot / _read_controls) into every
@@ -397,6 +442,11 @@ func _scroll_wrap(content: Control) -> ScrollContainer:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Controller: keep the focused control in view as focus walks down a tall tab,
+	# so navigating past the visible area scrolls the page instead of focus moving
+	# to off-screen controls the player can't see (it looked like it jumped to the
+	# footer). Harmless for mouse (only acts on focus changes).
+	scroll.follow_focus = true
 
 	var margin := MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL

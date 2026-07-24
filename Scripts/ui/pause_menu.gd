@@ -8,6 +8,8 @@ var _slot_grid_container: Control = null
 var _options_container: Control = null
 var _leave_container: Control = null
 var _slot_grid: SlotGridPanel = null
+var _menu_vbox: VBoxContainer = null      # main button column, for controller focus-on-open
+var _options_panel: OptionsPanel = null   # for focus_active_tab on open
 var _change_position_btn: Button = null
 var _spectate_btn: Button = null
 var _confirm: ConfirmDialog = null
@@ -41,10 +43,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _options_container.visible:
 		_options_container.visible = false
+		ControllerNav.focus_first(_menu_vbox)
 	elif _slot_grid_container.visible:
 		_slot_grid_container.visible = false
+		ControllerNav.focus_first(_menu_vbox)
 	elif _leave_container.visible:
 		_leave_container.visible = false
+		ControllerNav.focus_first(_menu_vbox)
 	else:
 		close()
 	get_viewport().set_input_as_handled()
@@ -54,6 +59,7 @@ func open() -> void:
 	if visible:
 		return
 	visible = true
+	ControllerNav.focus_first(_menu_vbox)  # controller: land on Resume
 	opened.emit()
 
 
@@ -99,6 +105,7 @@ func _build_menu() -> void:
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	vbox.add_theme_constant_override("separation", 16)
 	panel.add_child(vbox)
+	_menu_vbox = vbox
 
 	var resume_btn := MenuStyle.popup_button("Resume")
 	MenuStyle.apply_primary_cta(resume_btn)
@@ -118,11 +125,16 @@ func _build_menu() -> void:
 	vbox.add_child(_spectate_btn)
 
 	var options_btn := MenuStyle.popup_button("Options")
-	options_btn.pressed.connect(func() -> void: _options_container.visible = true)
+	options_btn.pressed.connect(func() -> void:
+		_options_container.visible = true
+		if _options_panel != null:
+			_options_panel.focus_active_tab())
 	vbox.add_child(options_btn)
 
 	var leave_btn := MenuStyle.popup_button("Leave Game")
-	leave_btn.pressed.connect(func() -> void: _leave_container.visible = true)
+	leave_btn.pressed.connect(func() -> void:
+		_leave_container.visible = true
+		ControllerNav.focus_first(_leave_container))
 	vbox.add_child(leave_btn)
 
 	var root := Control.new()
@@ -188,6 +200,7 @@ func _build_options_overlay() -> void:
 	var options := OptionsPanel.new()
 	options.close_requested.connect(func() -> void: _options_container.visible = false)
 	panel.add_child(options)
+	_options_panel = options
 
 	_options_container = Control.new()
 	_options_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -291,6 +304,9 @@ func _on_change_position_pressed() -> void:
 	_slot_grid_container.visible = not _slot_grid_container.visible
 	if _slot_grid_container.visible:
 		_refresh_slot_grid()
+		_slot_grid.focus_first_card()  # controller: land on the grid
+	else:
+		ControllerNav.focus_first(_menu_vbox)
 
 
 func _on_spectate_pressed() -> void:

@@ -182,6 +182,34 @@ const REBINDABLE_ACTIONS: PackedStringArray = [
 	"stick_lift",
 ]
 
+# Gamepad button rebinds. Only the DISCRETE buttons are remappable — the sticks
+# (skate / aim) and analog triggers (wrister / slapshot) are structural to the
+# scheme and stay fixed. Stored separately from the keyboard `bindings` above:
+# the pad scheme reads its buttons directly (not through Godot's InputMap; see
+# LocalInputGatherer), so a JoyButton index is the whole binding and there is no
+# cross-device conflict with a key. pad_bindings is filled with these defaults on
+# load, so pad_button() always resolves, and LocalInputGatherer reads it live —
+# a rebind applies without a respawn, like the gamepad toggle itself.
+const PAD_REBINDABLE_ACTIONS: PackedStringArray = [
+	"block", "brake", "hit", "stick_lift", "sprint", "quick_pass",
+	"elevation_up", "elevation_down", "smart_ping",
+]
+const PAD_DEFAULT_BUTTONS: Dictionary = {
+	"block": JOY_BUTTON_A,
+	"brake": JOY_BUTTON_B,
+	"hit": JOY_BUTTON_LEFT_SHOULDER,
+	"stick_lift": JOY_BUTTON_RIGHT_SHOULDER,
+	"sprint": JOY_BUTTON_LEFT_STICK,
+	"quick_pass": JOY_BUTTON_RIGHT_STICK,
+	"elevation_up": JOY_BUTTON_Y,
+	"elevation_down": JOY_BUTTON_X,
+	# Every face/shoulder/stick button is taken by a gameplay input, so the
+	# context ping lands on the otherwise-unused-in-game D-pad. (In menus the
+	# D-pad navigates; there's no focused menu during live play, so a press
+	# reaches the HUD as a ping.)
+	"smart_ping": JOY_BUTTON_DPAD_UP,
+}
+
 var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
@@ -258,6 +286,13 @@ var anti_aliasing_mode: int = AA_MSAA_2X
 # Higher = shots reach full power with a gentler flick. Local-only (applied by
 # LocalController); does not affect bots or the aim direction.
 var shot_power_sensitivity: float = 1.0
+# Accessibility: force keyboard/mouse only. Off by default (the pad drives on a
+# last-input-wins basis — see InputDeviceTracker). Turning it on makes
+# is_gamepad_active() always false, so a drifting/unwanted controller that can't be
+# unplugged is fully ignored and the game stays pure M+KB.
+var disable_gamepad: bool = false
+
+
 # First-run onboarding: false until the player opens the player-settings popup
 # for the first time. Drives the one-time "edit your player here" callout on
 # the SideMenu player card.
@@ -347,6 +382,7 @@ var hud_scale: float = 1.0
 const HUD_SCALE_MIN: float = 0.80
 const HUD_SCALE_MAX: float = 1.20
 var bindings: Dictionary = {}  # action -> {type, physical_keycode or button_index}
+var pad_bindings: Dictionary = {}  # gamepad action -> JoyButton index (see PAD_DEFAULT_BUTTONS)
 # Project-default key bindings, captured once at load before any saved override
 # is applied — the canonical source for Options' "Reset to Defaults".
 var default_bindings: Dictionary = {}
@@ -394,11 +430,47 @@ func _get_save_path() -> String:
 
 func _ready() -> void:
 	_load()
+	_ensure_joypad_ui_bindings()
 	# Steam Cloud reconcile is deferred: PlayerPrefs is autoload #1 and
 	# SteamManager #7, so Steam isn't initialised yet during the _load() above.
 	# A deferred call runs after every autoload's (synchronous) _ready, by which
 	# point Cloud availability is known. See _sync_from_cloud.
 	_sync_from_cloud.call_deferred()
+
+
+# Bind the standard gamepad buttons onto the built-in ui_* actions so controller
+# menu navigation both MOVES focus and ACTIVATES. In this project the engine
+# defaults left A/B off ui_accept/ui_cancel — focus could move (D-pad → ui_up/
+# down) but A never confirmed and B never backed out. Additive (keyboard bindings
+# are untouched) and idempotent (skips a button already bound), so it's safe to
+# run once at startup regardless of the control scheme.
+func _ensure_joypad_ui_bindings() -> void:
+	_add_joy_ui_button(&"ui_accept", JOY_BUTTON_A)
+	_add_joy_ui_button(&"ui_cancel", JOY_BUTTON_B)
+	_add_joy_ui_button(&"ui_up", JOY_BUTTON_DPAD_UP)
+	_add_joy_ui_button(&"ui_down", JOY_BUTTON_DPAD_DOWN)
+	_add_joy_ui_button(&"ui_left", JOY_BUTTON_DPAD_LEFT)
+	_add_joy_ui_button(&"ui_right", JOY_BUTTON_DPAD_RIGHT)
+	# Spectator camera controls (CameraDirector, spectator-only) on the pad: Y
+	# cycles the view, D-pad ↑↓ switches the followed skater — mirroring the
+	# keyboard C / ↑↓. Bound here rather than in project.godot for the same reason
+	# as the ui_* binds; safe because these actions aren't in REBINDABLE_ACTIONS,
+	# so apply_bindings() never erases their events.
+	_add_joy_ui_button(&"camera_cycle_mode", JOY_BUTTON_Y)
+	_add_joy_ui_button(&"camera_next_target", JOY_BUTTON_DPAD_UP)
+	_add_joy_ui_button(&"camera_prev_target", JOY_BUTTON_DPAD_DOWN)
+
+
+func _add_joy_ui_button(action: StringName, button: JoyButton) -> void:
+	if not InputMap.has_action(action):
+		return
+	for existing: InputEvent in InputMap.action_get_events(action):
+		if existing is InputEventJoypadButton \
+				and (existing as InputEventJoypadButton).button_index == button:
+			return  # already bound — leave it
+	var ev := InputEventJoypadButton.new()
+	ev.button_index = button
+	InputMap.action_add_event(action, ev)
 
 
 # Release the custom mouse cursor before the RenderingServer finalizes on quit.
@@ -477,6 +549,7 @@ func save() -> void:
 	cfg.set_value("video", "render_scale", render_scale)
 	cfg.set_value("video", "anti_aliasing_mode", anti_aliasing_mode)
 	cfg.set_value("input", "shot_power_sensitivity", shot_power_sensitivity)
+	cfg.set_value("input", "disable_gamepad", disable_gamepad)
 	cfg.set_value("input", "confine_mouse", confine_mouse)
 	cfg.set_value("input", "cursor_style", cursor_style)
 	cfg.set_value("input", "cursor_color", cursor_color)
@@ -520,6 +593,9 @@ func save() -> void:
 			cfg.set_value("bindings", action + "_code", b.get("physical_keycode", 0))
 		elif t == "mouse":
 			cfg.set_value("bindings", action + "_code", b.get("button_index", 0))
+	for action: String in PAD_REBINDABLE_ACTIONS:
+		if pad_bindings.has(action):
+			cfg.set_value("pad_bindings", action, int(pad_bindings[action]))
 	# Marks the Hit/Block control-scheme swap applied (see _load's migration), so
 	# a returning config is remapped exactly once and never re-forces Block off a
 	# key the player has since chosen for it.
@@ -607,6 +683,13 @@ func apply_bindings() -> void:
 			var ev := InputEventMouseButton.new()
 			ev.button_index = b.button_index as MouseButton
 			InputMap.action_add_event(action, ev)
+
+# The JoyButton index bound to a gamepad gameplay action, falling back to the
+# scheme default when unset. LocalInputGatherer calls this each frame it reads a
+# pad input, so a rebind takes effect live. Only the discrete-button actions in
+# PAD_REBINDABLE_ACTIONS are looked up here — triggers and sticks are fixed.
+func pad_button(action: String) -> int:
+	return int(pad_bindings.get(action, PAD_DEFAULT_BUTTONS.get(action, -1)))
 
 func _read_current_input_event(action: String) -> Dictionary:
 	if not InputMap.has_action(action):
@@ -1096,6 +1179,7 @@ func _load() -> void:
 		render_scale = clampf(cfg.get_value("video", "render_scale", 1.0), RENDER_SCALE_MIN, RENDER_SCALE_MAX)
 		anti_aliasing_mode = clamp(cfg.get_value("video", "anti_aliasing_mode", AA_MSAA_2X), 0, AA_LABELS.size() - 1)
 		shot_power_sensitivity = clampf(cfg.get_value("input", "shot_power_sensitivity", 1.0), 0.25, 4.0)
+		disable_gamepad = cfg.get_value("input", "disable_gamepad", false)
 		confine_mouse = cfg.get_value("input", "confine_mouse", true)
 		cursor_style = clampi(int(cfg.get_value("input", "cursor_style", CURSOR_STYLE_DOT)), 0, CURSOR_STYLE_LABELS.size() - 1)
 		var raw_cursor_color: Variant = cfg.get_value("input", "cursor_color", cursor_color)
@@ -1158,6 +1242,10 @@ func _load() -> void:
 				bindings[action] = {"type": "key", "physical_keycode": cfg.get_value("bindings", action + "_code", 0)}
 			elif t == "mouse":
 				bindings[action] = {"type": "mouse", "button_index": cfg.get_value("bindings", action + "_code", 0)}
+		for action: String in PAD_REBINDABLE_ACTIONS:
+			var pb: Variant = cfg.get_value("pad_bindings", action, null)
+			if pb != null:
+				pad_bindings[action] = int(pb)
 		# Action rename (quick_shot → quick_pass): the quick-pass action was renamed
 		# off "quick_shot" so it stops reading as a shot. A config predating the
 		# rename stored the bind under the old key — adopt it so a player's custom
@@ -1188,6 +1276,11 @@ func _load() -> void:
 			var b: Dictionary = _read_current_input_event(action)
 			if not b.is_empty():
 				bindings[action] = b
+	# Seed default gamepad button binds for anything the config didn't override,
+	# so pad_bindings always carries a full set (mirrors the keyboard fill above).
+	for action: String in PAD_REBINDABLE_ACTIONS:
+		if not pad_bindings.has(action):
+			pad_bindings[action] = int(PAD_DEFAULT_BUTTONS[action])
 	# Runs whether or not a config file loaded (fresh installs skip the OK block
 	# above entirely), so there is always at least one preset and the flat build
 	# matches the active one.
