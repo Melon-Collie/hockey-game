@@ -225,7 +225,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			GameManager.try_send_smart_ping()
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed(&"skip_replay"):
+	# Skip vote: Space (keyboard) or pad A. A is the pad's block during play, but a
+	# skip is gated on a skippable window (goal cinematic / intermission) where
+	# gameplay input is blocked, so reusing it as the "confirm skip" button is safe
+	# and needs no free button. Hardcoded like the Start menu-open below (an
+	# InputMap joypad bind would be wiped by keyboard-rebind's action_erase_events).
+	var pad_skip: bool = PlayerPrefs.gamepad_enabled and event is InputEventJoypadButton \
+			and event.pressed and (event as InputEventJoypadButton).button_index == JOY_BUTTON_A
+	if event.is_action_pressed(&"skip_replay") or pad_skip:
 		# Gate on the skip-prompt visibility (goal cinematic — HUD's own label;
 		# intermission — the overlay's line) so the (Space-shared) brake key
 		# never accidentally fires a vote outside of a skippable window.
@@ -637,7 +644,8 @@ func _build_bug_icon() -> void:
 # the broadcast chyron itself stays focused on the goal info. The pulse draws
 # the eye to the prompt without yelling.
 func _build_skip_replay_prompt() -> void:
-	_skip_prompt_label = _lbl("[SPACE] TO SKIP", 18, _WHITE)
+	# Pad votes to skip with A; keyboard with Space (see _unhandled_input).
+	_skip_prompt_label = _lbl(ControllerGlyphs.prompt("[SPACE] TO SKIP", "[A] TO SKIP"), 18, _WHITE)
 	_skip_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_skip_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	_skip_prompt_label.anchor_left = 1.0
@@ -1085,10 +1093,12 @@ func _refresh_skip_prompt_text() -> void:
 		_intermission_overlay.set_skip_text(text)
 
 func _skip_prompt_text() -> String:
+	# Device-aware base label (pad A / keyboard Space), see _unhandled_input.
+	var base: String = ControllerGlyphs.prompt("[SPACE] TO SKIP", "[A] TO SKIP")
 	if _skip_vote_total <= 1:
 		# Solo session — no tally, the single press just skips.
-		return "[SPACE] TO SKIP"
-	return "[SPACE] TO SKIP  (%d/%d)" % [_skip_vote_current, _skip_vote_total]
+		return base
+	return "%s  (%d/%d)" % [base, _skip_vote_current, _skip_vote_total]
 
 # ── Intermission (between-periods highlight reel) ────────────────────────────
 
