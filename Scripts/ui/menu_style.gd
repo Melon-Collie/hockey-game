@@ -67,13 +67,17 @@ const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 # gray to match the game's precision-sport character. Tune here to shift
 # the whole HUD warmer/cooler/punchier.
 #
-# Typography is a two-font system, both OFL-licensed:
-#   - DISPLAY_FONT (Big Shoulders Display Black) — heavy condensed sans,
-#     matches the logo's wordmark. Used for scorebug numbers, headers,
-#     player-card identity labels.
+# Typography is a two-font system, both OFL-licensed (so they can be
+# embedded in the exported build — unlike the logo's own wordmark face):
+#   - DISPLAY_FONT (Saira Condensed Bold) — heavy condensed squared sans,
+#     the OFL cousin of the logo's wordmark. The wordmark itself is set in
+#     Kenyan Coffee (Typodermic), whose free license covers the logo/static
+#     art but NOT font embedding in the game, so the in-game display voice
+#     is Saira Condensed — same squared-condensed DNA, embeddable for free.
+#     Used for scorebug numbers, headers, player-card identity labels.
 #   - UI_FONT (Manrope Regular) — humanist sans, neutral body text.
 #     Default font for menu rows, button labels, body copy.
-const DISPLAY_FONT       := preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")  # SIL OFL 1.1
+const DISPLAY_FONT       := preload("res://Assets/Fonts/SairaCondensed-Bold.ttf")  # SIL OFL 1.1
 const UI_FONT            := preload("res://Assets/Fonts/Manrope-Regular.ttf")  # SIL OFL 1.1
 # Dark surface for HUD overlays. Now identical to PANEL_BG so the menu and
 # scorebug share a single dark background — no visible seam between the two

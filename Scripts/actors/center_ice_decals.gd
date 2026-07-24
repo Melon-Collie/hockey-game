@@ -7,7 +7,7 @@ extends Node2D
 # the concrete under the ice, with the same Beer-Lambert fade.
 
 const LOGO_TEX: Texture2D = preload("res://Assets/logos/Mitts_logo_skater.svg")
-const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
+const FONT: Font = preload("res://Assets/Fonts/SairaCondensed-Bold.ttf")
 const TEXT_TOP: String = "MITTS"
 const TEXT_BOTTOM: String = "ARENA"
 

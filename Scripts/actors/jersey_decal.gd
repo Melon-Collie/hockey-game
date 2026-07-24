@@ -17,7 +17,7 @@ extends Node2D
 # outline pass entirely (rather than drawing an outline of equal color,
 # which looks identical but costs draw calls).
 
-const FONT: Font = preload("res://Assets/Fonts/BigShouldersDisplay-Black.ttf")
+const FONT: Font = preload("res://Assets/Fonts/SairaCondensed-Bold.ttf")
 const IMG_W: int = 512
 const IMG_H: int = 256
 const BACK_CENTER_X: int = 128         # paired with uv1_offset.x = 0.25
