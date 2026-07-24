@@ -128,6 +128,7 @@ func _snapshot() -> Dictionary:
 		"hud_scale": PlayerPrefs.hud_scale,
 		"share_gameplay_stats": PlayerPrefs.share_gameplay_stats,
 		"bindings": PlayerPrefs.bindings.duplicate(true),
+		"pad_bindings": PlayerPrefs.pad_bindings.duplicate(true),
 	}
 
 # The current control state, merged across every tab. Its key set equals
@@ -308,6 +309,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.hud_scale = c.hud_scale
 	PlayerPrefs.share_gameplay_stats = c.share_gameplay_stats
 	PlayerPrefs.bindings = (c.bindings as Dictionary).duplicate(true)
+	PlayerPrefs.pad_bindings = (c.pad_bindings as Dictionary).duplicate(true)
 	PlayerPrefs.apply_audio()
 	PlayerPrefs.apply_video()
 	PlayerPrefs.apply_input()
@@ -404,6 +406,7 @@ func _defaults() -> Dictionary:
 		"hud_scale": 1.0,
 		"share_gameplay_stats": true,
 		"bindings": PlayerPrefs.default_bindings.duplicate(true),
+		"pad_bindings": PlayerPrefs.PAD_DEFAULT_BUTTONS.duplicate(true),
 	}
 
 # Pushes a values dictionary (shaped like _snapshot / _read_controls) into every

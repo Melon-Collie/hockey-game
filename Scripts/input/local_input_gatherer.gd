@@ -148,19 +148,19 @@ func _accumulate_gamepad_edges() -> void:
 	if slap_now and not _prev_pad_slap:
 		_pending_slap_pressed = true
 	_prev_pad_slap = slap_now
-	var lift_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
+	var lift_now: bool = _pad_held("stick_lift")
 	if lift_now and not _prev_pad_stick_lift:
 		_pending_stick_lift_pressed = true
 	_prev_pad_stick_lift = lift_now
-	var quick_pass_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_STICK)
+	var quick_pass_now: bool = _pad_held("quick_pass")
 	if quick_pass_now and not _prev_pad_quick_pass:
 		_pending_quick_pass_pressed = true
 	_prev_pad_quick_pass = quick_pass_now
-	var up_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_Y)
+	var up_now: bool = _pad_held("elevation_up")
 	if up_now and not _prev_pad_elev_up:
 		_elevation_level = mini(_elevation_level + 1, InputState.MAX_ELEVATION_LEVEL)
 	_prev_pad_elev_up = up_now
-	var down_now: bool = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_X)
+	var down_now: bool = _pad_held("elevation_down")
 	if down_now and not _prev_pad_elev_down:
 		_elevation_level = maxi(_elevation_level - 1, 0)
 	_prev_pad_elev_down = down_now
@@ -206,11 +206,11 @@ func gather() -> InputState:
 	if pad:
 		state.shoot_held = _pad_trigger(JOY_AXIS_TRIGGER_RIGHT)
 		state.slap_held = _pad_trigger(JOY_AXIS_TRIGGER_LEFT)
-		state.brake = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_B)
-		state.sprint_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_STICK)
-		state.block_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_A)
-		state.stick_lift_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_RIGHT_SHOULDER)
-		state.hit_held = Input.is_joy_button_pressed(_pad_device, JOY_BUTTON_LEFT_SHOULDER)
+		state.brake = _pad_held("brake")
+		state.sprint_held = _pad_held("sprint")
+		state.block_held = _pad_held("block")
+		state.stick_lift_held = _pad_held("stick_lift")
+		state.hit_held = _pad_held("hit")
 		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
 		# direction in _update_pad_cursor → player→cursor is the shot line), power from
 		# how hard the stick is pushed (its magnitude) — no flick, no drag timing, no
@@ -343,3 +343,10 @@ func _screen_to_world(camera: Camera3D, screen: Vector2) -> Vector3:
 
 func _pad_trigger(axis: int) -> bool:
 	return Input.get_joy_axis(_pad_device, axis) >= TRIGGER_THRESHOLD
+
+# Held state of a REBINDABLE pad button, resolved through the player's gamepad
+# binds (PlayerPrefs.pad_button) so an Options rebind applies live with no respawn.
+# The analog triggers and sticks are structural to the scheme and read directly
+# (not through here). Cheap: a Dictionary int lookup, no allocation.
+func _pad_held(action: String) -> bool:
+	return Input.is_joy_button_pressed(_pad_device, PlayerPrefs.pad_button(action))

@@ -182,6 +182,29 @@ const REBINDABLE_ACTIONS: PackedStringArray = [
 	"stick_lift",
 ]
 
+# Gamepad button rebinds. Only the DISCRETE buttons are remappable — the sticks
+# (skate / aim) and analog triggers (wrister / slapshot) are structural to the
+# scheme and stay fixed. Stored separately from the keyboard `bindings` above:
+# the pad scheme reads its buttons directly (not through Godot's InputMap; see
+# LocalInputGatherer), so a JoyButton index is the whole binding and there is no
+# cross-device conflict with a key. pad_bindings is filled with these defaults on
+# load, so pad_button() always resolves, and LocalInputGatherer reads it live —
+# a rebind applies without a respawn, like the gamepad toggle itself.
+const PAD_REBINDABLE_ACTIONS: PackedStringArray = [
+	"block", "brake", "hit", "stick_lift", "sprint", "quick_pass",
+	"elevation_up", "elevation_down",
+]
+const PAD_DEFAULT_BUTTONS: Dictionary = {
+	"block": JOY_BUTTON_A,
+	"brake": JOY_BUTTON_B,
+	"hit": JOY_BUTTON_LEFT_SHOULDER,
+	"stick_lift": JOY_BUTTON_RIGHT_SHOULDER,
+	"sprint": JOY_BUTTON_LEFT_STICK,
+	"quick_pass": JOY_BUTTON_RIGHT_STICK,
+	"elevation_up": JOY_BUTTON_Y,
+	"elevation_down": JOY_BUTTON_X,
+}
+
 var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
@@ -343,6 +366,7 @@ var hud_scale: float = 1.0
 const HUD_SCALE_MIN: float = 0.80
 const HUD_SCALE_MAX: float = 1.20
 var bindings: Dictionary = {}  # action -> {type, physical_keycode or button_index}
+var pad_bindings: Dictionary = {}  # gamepad action -> JoyButton index (see PAD_DEFAULT_BUTTONS)
 # Project-default key bindings, captured once at load before any saved override
 # is applied — the canonical source for Options' "Reset to Defaults".
 var default_bindings: Dictionary = {}
@@ -518,6 +542,9 @@ func save() -> void:
 			cfg.set_value("bindings", action + "_code", b.get("physical_keycode", 0))
 		elif t == "mouse":
 			cfg.set_value("bindings", action + "_code", b.get("button_index", 0))
+	for action: String in PAD_REBINDABLE_ACTIONS:
+		if pad_bindings.has(action):
+			cfg.set_value("pad_bindings", action, int(pad_bindings[action]))
 	# Marks the Hit/Block control-scheme swap applied (see _load's migration), so
 	# a returning config is remapped exactly once and never re-forces Block off a
 	# key the player has since chosen for it.
@@ -605,6 +632,13 @@ func apply_bindings() -> void:
 			var ev := InputEventMouseButton.new()
 			ev.button_index = b.button_index as MouseButton
 			InputMap.action_add_event(action, ev)
+
+# The JoyButton index bound to a gamepad gameplay action, falling back to the
+# scheme default when unset. LocalInputGatherer calls this each frame it reads a
+# pad input, so a rebind takes effect live. Only the discrete-button actions in
+# PAD_REBINDABLE_ACTIONS are looked up here — triggers and sticks are fixed.
+func pad_button(action: String) -> int:
+	return int(pad_bindings.get(action, PAD_DEFAULT_BUTTONS.get(action, -1)))
 
 func _read_current_input_event(action: String) -> Dictionary:
 	if not InputMap.has_action(action):
@@ -1147,6 +1181,10 @@ func _load() -> void:
 				bindings[action] = {"type": "key", "physical_keycode": cfg.get_value("bindings", action + "_code", 0)}
 			elif t == "mouse":
 				bindings[action] = {"type": "mouse", "button_index": cfg.get_value("bindings", action + "_code", 0)}
+		for action: String in PAD_REBINDABLE_ACTIONS:
+			var pb: Variant = cfg.get_value("pad_bindings", action, null)
+			if pb != null:
+				pad_bindings[action] = int(pb)
 		# Action rename (quick_shot → quick_pass): the quick-pass action was renamed
 		# off "quick_shot" so it stops reading as a shot. A config predating the
 		# rename stored the bind under the old key — adopt it so a player's custom
@@ -1177,6 +1215,11 @@ func _load() -> void:
 			var b: Dictionary = _read_current_input_event(action)
 			if not b.is_empty():
 				bindings[action] = b
+	# Seed default gamepad button binds for anything the config didn't override,
+	# so pad_bindings always carries a full set (mirrors the keyboard fill above).
+	for action: String in PAD_REBINDABLE_ACTIONS:
+		if not pad_bindings.has(action):
+			pad_bindings[action] = int(PAD_DEFAULT_BUTTONS[action])
 	# Runs whether or not a config file loaded (fresh installs skip the OK block
 	# above entirely), so there is always at least one preset and the flat build
 	# matches the active one.
