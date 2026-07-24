@@ -41,7 +41,7 @@ func _refresh_pad_device() -> void:
 
 
 func _pad_active() -> bool:
-	return PlayerPrefs.gamepad_enabled and _pad_device >= 0
+	return InputDeviceTracker.is_gamepad_active() and _pad_device >= 0
 
 
 func activate(initial_xform: Transform3D) -> void:

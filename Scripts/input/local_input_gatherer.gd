@@ -87,6 +87,12 @@ func _ready() -> void:
 	# before this node entered the tree.
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	_refresh_pad_device()
+	# When the active device flips to the pad mid-play, re-seed the synthesized
+	# cursor to the skater anchor so it starts fresh rather than resuming a stale
+	# spot from the last time the pad drove (an absolute stick then places it).
+	InputDeviceTracker.device_changed.connect(func(is_gamepad: bool) -> void:
+		if is_gamepad:
+			_pad_cursor_valid = false)
 
 func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
 	_refresh_pad_device()
@@ -105,11 +111,13 @@ func set_local_team_id(team_id: int) -> void:
 func set_aim_skater(skater: Skater) -> void:
 	_aim_skater = skater
 
-# Gamepad drives aim/buttons only when the player opted in AND a pad is present —
-# with no pad the synthesized cursor would freeze on the skater with no mouse
-# fallback. Read live so the Options toggle applies without a respawn.
+# Gamepad drives aim/buttons only when it is the ACTIVE device (last-input-wins,
+# via InputDeviceTracker) AND a pad is present. Using the tracker rather than the
+# raw pref is what lets a controller stay connected without stealing the mouse:
+# touch the mouse → this reads the OS cursor + keyboard; push the stick → the pad
+# takes over. Read live per gather, so the swap needs no respawn.
 func _gamepad_active() -> bool:
-	return PlayerPrefs.gamepad_enabled and _pad_device >= 0
+	return InputDeviceTracker.is_gamepad_active() and _pad_device >= 0
 
 func _process(delta: float) -> void:
 	# Accumulate just_pressed events every frame — unless input is blocked,
