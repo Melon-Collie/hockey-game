@@ -467,10 +467,13 @@ is consumed). Two arms, identical in every other respect, no RNG:
 | | telegraphed | disguised (late swing) |
 |---|---|---|
 | goals | 3 / 14 | 2 / 14 |
-| mean glove reach gap at release | 0.572 m | 0.596 m |
+| mean reach gap at release (nearest arm) | 0.150 m | 0.185 m |
+| mean reach **deficit** | −0.122 m | −0.081 m |
 
-**Selling the goalie the wrong corner for a full 0.5 s of windup buys +0.025 m of
-extra glove travel — 5.0 ms at `glove_react_max_speed`. And zero goals.**
+**Selling the goalie the wrong corner for a full 0.5 s of windup buys +0.034 m of
+extra arm travel — 6.8 ms at `glove_react_max_speed`. And zero goals.** He carries
+~0.12 m of average reach margin; a fully disguised release eats about a third of
+it and never crosses zero, which is precisely why it does not convert.
 
 The 5 ms is the entire current value of deception, and it arrives through the one
 channel that reaches the goalie at all: the **directional pre-lean**, which by
@@ -485,10 +488,32 @@ Two instrument lessons worth keeping:
   nothing — correctly, since a low corner is a PAD save and the pre-lean moves
   the GLOVE. Disguise can only be visible on elevated shots. The instrument uses
   HIGH loft at the top corners.
-- **Use the continuous metric.** Goal counts on the real-goalie instrument are
-  near-binary per scenario, so a 14-shot count swings ±1 on one incidental flip
-  (the first run showed disguise at *−1 goal*, pure artifact). The reach gap is
-  the signal; goals are context.
+- **Measure the nearest ARM, not the glove.** A first metric keyed on the glove
+  alone, which measures glove-side-vs-blocker-side (a ~1 m swing) rather than
+  reach, swamping the ~0.03 m effect — and it predicted outcomes badly, since a
+  shot far from the glove is usually the blocker's easy save.
+- **Use the continuous metric, and it is quantization not variance.** This sweep
+  has NO scatter and NO RNG; it is bit-reproducible. Goal counts are still the
+  wrong acceptance metric because one goal is 7 percentage points and each shot
+  is a deterministic step function — a 0.03 m effect flips a spot only if that
+  spot's margin happens to lie within 0.03 m of the boundary. (The first run read
+  disguise at *−1 goal* for exactly that reason, plus a genuine bug in the
+  diagnostic, which compared positions sampled at different events.)
+
+**The acceptance metric is the reach deficit**, and it is validated rather than
+assumed: in this sweep every GOAL sits at deficit ≥ 0 and every save below, with
+only two straddlers inside ±0.13 m. Its zero-crossing IS the save/goal boundary,
+so it is not a proxy for the outcome — it is the same physics, at full
+resolution, with 14 deterministic shots instead of the hundreds a goal-rate
+measurement would need. It is also range-correct, which raw metres are not:
+0.03 m decides a 0.30 s flight and is irrelevant on a 0.90 s one.
+
+Goals stay in the report and in the post-R1 assertion: once R1's effect is large
+enough to cross zero on several spots, the goal counter becomes meaningful, and
+requiring it to move is what stops "make the goalie worse" passing as "make
+disguise pay." If goal *rates* are ever wanted, the existing seeded-scatter idiom
+(`run_spot` with `rng.seed = SEED`) dithers the step function into a smooth rate
+deterministically — at the cost of many more samples per cell.
 
 ### 5.2 The fix: apply the read latency to WHAT HE KNOWS, not just when he moves
 

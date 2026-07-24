@@ -87,22 +87,33 @@ const CORNER_X: float = 0.72   # inside the post, a real corner but not a miss
 # instrument's outcomes are near-binary per scenario, so a 14-shot goal count
 # swings on one incidental flip):
 #
-#   reach_gap  — CONTINUOUS, the primary signal. At the moment of release, how far
-#                the glove has to travel laterally to meet the shot line. This is
-#                exactly what the pre-lean is for and exactly what disguise should
-#                inflate, so it detects a read effect long before it shows up as a
-#                goal.
-#   goals      — the coarse outcome, reported for context.
+#   deficit    — THE ACCEPTANCE METRIC. Reach gap minus what the arm can physically
+#                cover in the time left. Continuous, zero-variance, and validated:
+#                in this sweep every GOAL sits at deficit >= 0 and every save
+#                below, with only two straddlers inside +/-0.13 m. Its zero
+#                crossing IS the save/goal boundary, so it is not a proxy for the
+#                outcome — it is the same physics at full resolution.
+#   reach_gap   — the raw metres behind the deficit, reported for interpretability.
+#   goals       — the coarse outcome. NOT the acceptance metric, and not because
+#                of variance (this sweep has none — no scatter, no RNG, bit
+#                reproducible) but because of QUANTIZATION: one goal is 7
+#                percentage points, and each shot is a deterministic step
+#                function, so a ~0.03 m effect flips a spot only if that spot's
+#                margin happens to lie within 0.03 m of the boundary. Goals
+#                become meaningful once an effect is large enough to cross zero
+#                on several spots — which is exactly what R1 should do, hence
+#                EXPECT_DISGUISE_PAYS asserting on them too.
 #
-# CAVEAT on reach_gap: its ABSOLUTE value is dominated by glove-side vs
-# blocker-side (the glove sits off-centre, so one corner is ~0.05 m away and the
-# other ~1.0 m). Only the PAIRED DELTA between the two arms is meaningful — the
-# spots are identical in both, so difference-of-means is the paired difference.
+# Both metrics key on the NEAREST ARM (glove or blocker), not the glove alone —
+# see _reach_metrics. Only the PAIRED DELTA between the two sweeps is meaningful
+# anyway: the spots are identical in both, so difference-of-means is the paired
+# difference.
 func _sweep(disguise: bool) -> Dictionary:
 	var goals: int = 0
 	var saves: int = 0
 	var shots: int = 0
 	var gap_sum: float = 0.0
+	var deficit_sum: float = 0.0
 	for spot: Vector2 in SPOTS:
 		for side: int in [-1, 1]:
 			var shooter := Vector3(spot.x, 0.0, GOAL_Z + spot.y)
@@ -113,11 +124,13 @@ func _sweep(disguise: bool) -> Dictionary:
 			_h.hold_windup(shooter, declared, LOFT_HIGH, POWER_T, WINDUP_TICKS)
 			# Where the pre-lean has parked the glove vs. where the shot will cross
 			# the goalie's plane — the travel the arm still owes at release.
-			var gap: float = _reach_gap(shooter, aim)
+			var m: Vector2 = _reach_metrics(shooter, aim)
+			var gap: float = m.x
 			gap_sum += gap
+			deficit_sum += m.y
 			var outcome: int = _h.fire_release(shooter, aim, LOFT_HIGH, POWER_T, 0.0)
-			gut.p("  spot(%+.1f,%.1f) side=%+d  reach_gap=%.3f -> %s" % [
-					spot.x, spot.y, side, gap,
+			gut.p("  spot(%+.1f,%.1f) side=%+d  gap=%.3f deficit=%+.3f -> %s" % [
+					spot.x, spot.y, side, gap, m.y,
 					"GOAL" if outcome == Harness.GOAL else "save"])
 			shots += 1
 			if outcome == Harness.GOAL:
@@ -127,20 +140,50 @@ func _sweep(disguise: bool) -> Dictionary:
 	return {
 		"goals": goals, "saves": saves, "shots": shots,
 		"mean_gap": gap_sum / maxf(float(shots), 1.0),
+		"mean_deficit": deficit_sum / maxf(float(shots), 1.0),
 	}
 
 
-# Lateral distance the glove must still cover at the instant of release: |glove_x
-# now − shot_x where the shot crosses the goalie's depth plane|.
-func _reach_gap(shooter: Vector3, aim: Vector3) -> float:
+# Reach metrics at the instant of release, returned as (gap, deficit):
+#
+#   gap     — lateral distance the glove must still cover: |glove_x now − shot_x
+#             where the shot crosses the goalie's depth plane|.
+#   deficit — gap MINUS what the arm can physically cover in the time left:
+#             glove_react_max_speed × (flight_time − effective_arm_delay). A
+#             positive deficit means the arm cannot get there; the shot beats him
+#             by arm geometry.
+#
+# The deficit is the better instrument, and it is why raw centimetres alone
+# mislead: 0.025 m of extra travel is decisive on a 0.30 s flight and irrelevant
+# on a 0.90 s one. Normalising by the reach budget prices the same displacement
+# correctly at every range, in the goalie's OWN physical units (the same speed cap
+# and arm delay he actually runs), and it is outcome-predictive — so a continuous,
+# zero-variance, 14-shot sweep can say something about goals without needing the
+# goal counter's 1-in-14 resolution.
+#
+# `effective_arm_delay` folds in the pre-arm the way _on_puck_released does
+# (arm_cut = reaction_delay − prearmed_reaction_delay), since every shot in this
+# sweep carries a full windup read.
+func _reach_metrics(shooter: Vector3, aim: Vector3) -> Vector2:
 	var vel: Vector3 = _h.shot_velocity(shooter, aim, LOFT_HIGH, POWER_T, 0.0)
 	if absf(vel.z) < 0.001:
-		return 0.0
+		return Vector2.ZERO
 	var t: float = (_goalie.global_position.z - shooter.z) / vel.z
 	if t <= 0.0:
-		return 0.0
+		return Vector2.ZERO
 	var shot_x: float = shooter.x + vel.x * t
-	return absf(_goalie.get_glove_world_position().x - shot_x)
+	# NEAREST ARM, not the glove alone. The goalie has two, on opposite sides, and
+	# on an elevated shot either can make the save (the pads are out of it). Keying
+	# on the glove alone measures glove-side-vs-blocker-side — a ~1 m swing that
+	# swamps the ~0.03 m disguise effect and predicts outcomes badly, since a
+	# far-from-the-glove shot is usually the blocker's easy save.
+	var gap: float = minf(
+			absf(_goalie.get_glove_world_position().x - shot_x),
+			absf(_goalie.get_blocker_world_position().x - shot_x))
+	var arm_cut: float = maxf(_ctrl.reaction_delay - _ctrl.prearmed_reaction_delay, 0.0)
+	var eff_delay: float = maxf(_ctrl.arm_reaction_delay - arm_cut, 0.0)
+	var budget: float = _ctrl.glove_react_max_speed * maxf(t - eff_delay, 0.0)
+	return Vector2(gap, gap - budget)
 
 
 func test_disguise_delta() -> void:
@@ -166,11 +209,24 @@ func test_disguise_delta() -> void:
 
 	assert_eq(disguised["shots"], shots, "both arms must fire the same shot count")
 
+	gut.p("MEAN REACH DEFICIT  telegraphed=%+.3f m  disguised=%+.3f m  (delta %+.3f m)" % [
+			telegraphed["mean_deficit"], disguised["mean_deficit"],
+			disguised["mean_deficit"] - telegraphed["mean_deficit"]])
+
 	# The continuous signal: a disguised release must leave the glove further from
 	# the shot than a telegraphed one. This holds TODAY (the directional pre-lean
 	# is the one channel disguise already reaches) and must only widen under R1.
 	assert_gt(disguised["mean_gap"], telegraphed["mean_gap"],
 			"a disguised release must leave the glove further from the shot line than a telegraphed one")
+	assert_gt(disguised["mean_deficit"], telegraphed["mean_deficit"],
+			"...and must consume more of the arm's reach budget")
+	# Scale check on today's defect: the goalie carries ~0.12 m of average reach
+	# margin, and disguising him eats well under half of it — never crossing zero,
+	# which is why it converts to no goals. R1's job is to make this cross.
+	assert_true(disguised["mean_deficit"] < 0.0,
+			("TODAY: even a fully disguised release leaves the goalie with reach to " +
+			"spare (mean deficit %.3f m). Disguise moves the arm, not the scoreboard.") % [
+					disguised["mean_deficit"]])
 
 	if EXPECT_DISGUISE_PAYS:
 		# Post-R1 acceptance: selling the wrong corner must actually beat him...
