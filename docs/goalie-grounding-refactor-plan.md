@@ -818,16 +818,69 @@ for depth: a misread at 1.75 m radius is a longer recovery than the same misread
 1.30. Challenge depth was tuned against omniscience and has not been re-examined
 since omniscience was removed.
 
+#### What the Buckley system actually says (sourced)
+
+Looked it up rather than reasoning from the exports. USA Hockey teaches the "ABCs
+of Depth" from the Buckley Positioning System (Mike Buckley, goalie coach,
+Pittsburgh Penguins). The zones are defined **situationally**, not as distance
+bands:
+
+| Zone | When it applies (per the doctrine) |
+|---|---|
+| **A — Aggressive** | *"to address a play when it ENTERS the defensive zone — a quick rush up the ice, a partial break, or a full breakaway."* A transitional/entry depth. |
+| **B — Base** | skate blades **on the top of the crease**; *"the depth where goaltenders should be prior to MOST shot attempts against them."* |
+| **C — Conservative** | *"aware of a potential lateral play, or recovering to be set on a rebound."* |
+| **D — Defensive** | on the post, or tracking the puck behind the net. |
+
+**So the real distance gradient runs the other way from ours.** A is for the puck
+*far and arriving*; the goalie settles to B (crease top) as the play settles, which
+is where most shots are faced. Our chart is most aggressive in the **slot** and
+only reaches B out at 12 m — A is our settled-shot depth and B is our point depth,
+exactly inverted.
+
+**The situational pieces are already correct — that is the real insight.** Every
+BPS zone already exists in the code as a *situational* model, and each one matches
+the doctrine:
+- **A** = the rush backflow (F5): aggressive as the rush enters, crease-top by the
+  hash marks, goal-line at the crease. That IS the taught A→B→D gradient.
+- **C** = the backdoor depth cap — literally *"aware of a potential lateral play"*.
+- **D** = RVH / VH post integration.
+
+Which leaves the static distance chart as a **fifth** mechanism that duplicates
+and contradicts the other four. In BPS terms it should mostly return **B**, and let
+the rush path supply A, the backdoor cap supply C, and the post states supply D.
+The chart's own doc-block already records the doctrine correctly — *"B Base —
+heels at the crease top; where MOST shots are faced"* — and then configures the
+opposite.
+
+**Measured: narrowing `zone_aggressive_z` alone does NOT fix it.** At 8.0 / 4.0 /
+2.0 the settled depth at 2 m stays 1.75 and at 3 m only falls to 1.70, because the
+chart's in-close segment ramps toward `depth_aggressive` at `zone_post_z`
+regardless of the zone width. The plateau *value* is what is wrong, not the zone
+boundary: the chart's target for a settled in-zone threat should be
+`depth_base`, with `depth_aggressive` reachable only through the rush path.
+
 Candidate directions, none committed:
-- **Narrow `zone_aggressive_z`** (8 m → ~4-5 m) so A is a genuine "clean look from
-  distance" depth and the slot settles at B, matching the doc-block.
+- **Make the chart's plateau `depth_base`** and let `depth_aggressive` be reached
+  only via the rush backflow — the change the doctrine actually implies, and the
+  one that removes the duplicate/contradictory fifth mechanism. Measured above:
+  narrowing the zone width instead does not work.
 - **Drop the backflow's speed gate**, or make the engage condition proximity-based
   rather than closing-speed-based, so a settled slot threat also pulls him in.
+  Complementary to the above rather than an alternative.
 - **Leave it** — it may simply read as a confident goalie, and the measured save
   rates (6/14 on top-corner shots from 5–9 m) are not those of a wall.
 
-Wants a playtest read on which of those matches the feel; the instrument is
-committed either way.
+⚠️ **All of these make him DEEPER, i.e. more net to shoot at.** The aggressive
+chart was not an accident — its doc-block justifies it with "at the raised shot
+speeds a slot shot leaves almost no lateral reaction window, so cutting the angle
+is what makes the save, not reflexes." That trade was struck deliberately, and
+against an omniscient goalie it was probably right. Whether it still is, now that
+R1 lets him be wrong, is the open question — and it is a playtest call, not one the
+harness can settle. The instrument is committed either way.
+
+Sources: USA Hockey Goaltending "Positioning"; Seltytending, "The ABCs of Depth in
+Goaltending"; Sherwood Park Minor Hockey, "Positioning".
 
 ### 5.6 Interaction with the bot AI — R1 is a provable no-op for bots
 
