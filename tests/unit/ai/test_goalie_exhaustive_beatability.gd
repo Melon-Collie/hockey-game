@@ -15,9 +15,37 @@ extends GutTest
 # refusing to shoot is correct play, not a modelling bug. If something scores,
 # that cell IS the hole, and the planner should be finding it.
 #
+# ── SHOT SPACE COVERED (and what is NOT) ─────────────────────────────────────
+# power_t 0.2/0.4/0.6/0.8/1.0 over the WRISTER band (GameRules 10-33 m/s):
+#   14.6, 19.2, 23.8, 28.4, 33.0 m/s  =  32.7, 42.9, 53.2, 63.5, 73.8 mph
+# Loft costs a little horizontal pace (HIGH's 4.65 m/s of vertical launch drops
+# vh by ~0.3-0.8 m/s).
+#
+# NOT COVERED: the SLAPSHOT band (20-40 m/s, up to 89.5 mph). The top ~7 m/s of
+# the game's shot power never appears in this sweep, and at 6 m a 40 m/s shot
+# arrives in ~0.15 s — inside the keeper's arm read. Any conclusion here is
+# about WRISTERS only.
+#
 # ── WHAT IT MEASURED (2026-07) ───────────────────────────────────────────────
+# STANDARD SPOT: dead centre between the end-zone faceoff dots, 6.096 m out
+# (GameRules.ICING_FACEOFF_DOT_Z — 20 ft, NHL spec). Picked because a human can
+# stand there and replicate it by feel.
+#
+#   DOT LINE   FLAT |pppsssssssssssssGGpppppp|  2 goals
+#   6.10 m     LOW  |GssssssppppGGGGppppppppp|  9 goals
+#              HIGH |GGbbbbbbbbbcGggggggggggG|  9 goals
+#              -> 20/360 (5.6%)   LIVE rebounds 197 (54.7%)
+#              first contact: PAD 173, STICK 124, BLOCK 18, GLOVE 20, CHEST 5
+#
+# PADS are the top first-contact surface here, with the stick second and the
+# chest almost never — and more than half of all shots leave a live puck. That
+# matches the reported feel from this spot ("saved by the legs and body, but
+# they rattle around a bit"), which is the first independent corroboration these
+# numbers have had.
+#
+# For contrast, either side of it:
 #                     aim x:  -0.84 ....... 0 ....... +0.84
-# slot 3.0 m   FLAT |ssssssssssssssssssssssss|  0 goals
+#   slot 3.0 m FLAT |ssssssssssssssssssssssss|  0 goals
 #              LOW  |ssssssssssssssssssssssss|  0 goals
 #              HIGH |sssssssspppGGGpppppppppp|  3 goals   -> 3/360   (0.8%)
 # slot 5.0 m   FLAT |ppppppsssssssssssssppppp|  0 goals
@@ -94,6 +122,12 @@ extends GutTest
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
 const SETTLE_TICKS: int = 90
+# THE STANDARD SPOT: dead centre between the end-zone faceoff dots. Derived, not
+# picked — the dots sit at GameRules.ICING_FACEOFF_DOT_Z, which is 6.096 m
+# (20 ft, NHL spec) out from the goal line, so x = 0 on that line is the high
+# slot. Chosen because it is a spot a human can stand on and replicate by feel,
+# which is the only way to check these numbers against how he actually plays.
+const SLOT_DIST_M: float = GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z
 const MAX_AIM: float = GameRules.NET_HALF_WIDTH \
 		- GameRules.NET_POST_RADIUS - GameRules.PUCK_COLLISION_RADIUS
 
@@ -167,6 +201,8 @@ func _sweep(spot: Vector3, label: String) -> int:
 			% [label, goals, shots, 100.0 * float(goals) / float(maxi(shots, 1)),
 			live, 100.0 * float(live) / float(maxi(shots, 1)), str(parts)])
 	gut.p("        legend: G=goal  s=stick  p=pad  b=blocker  c=chest  g=glove  x=post/wide")
+	gut.p("        FIRST-CONTACT parts above are what TOUCHES the puck first — the")
+	gut.p("        instrument stops there, so a live rebound still reads as a save.")
 	return goals
 
 
@@ -174,9 +210,11 @@ func test_can_anything_beat_the_set_keeper_from_the_slot() -> void:
 	gut.p("Exhaustive shot space, PERFECT execution, set + squared keeper.")
 	gut.p("Columns are aim x from -0.84 to +0.84 in 7 cm steps; each cell is the")
 	gut.p("best outcome over 5 power levels.")
+	gut.p("STANDARD SPOT: dead centre between the faceoff dots, %.3f m out." % SLOT_DIST_M)
+	_sweep(Vector3(0.0, 0.0, GOAL_Z + SLOT_DIST_M), "DOT LINE %.2f m" % SLOT_DIST_M)
+	# Kept either side of it for context on how fast the picture changes.
 	_sweep(Vector3(0.0, 0.0, GOAL_Z + 3.0), "slot 3.0 m")
-	_sweep(Vector3(0.0, 0.0, GOAL_Z + 5.0), "slot 5.0 m")
-	_sweep(Vector3(3.5, 0.0, GOAL_Z + 4.0), "off-angle 5.3 m")
+	_sweep(Vector3(0.0, 0.0, GOAL_Z + 9.0), "slot 9.0 m")
 	assert_true(true, "report")
 
 
@@ -196,10 +234,8 @@ func test_report_how_much_of_the_wall_is_the_stick() -> void:
 			cs.disabled = true
 			parts.append(cs)
 	gut.p("SAME sweep, STICK BLADE REMOVED (counterfactual, not a proposal).")
-	var a: int = _sweep(Vector3(0.0, 0.0, GOAL_Z + 3.0), "no-stick slot 3.0 m")
-	var b: int = _sweep(Vector3(0.0, 0.0, GOAL_Z + 5.0), "no-stick slot 5.0 m")
-	var c: int = _sweep(Vector3(3.5, 0.0, GOAL_Z + 4.0), "no-stick off-angle 5.3 m")
-	gut.p("NO-STICK TOTAL: %d/1080 beat him (%.1f%%) — with the stick it was 30/1080 (2.8%%)"
-			% [a + b + c, 100.0 * float(a + b + c) / 1080.0])
+	var a: int = _sweep(Vector3(0.0, 0.0, GOAL_Z + SLOT_DIST_M),
+			"no-stick DOT LINE %.2f m" % SLOT_DIST_M)
+	gut.p("NO-STICK at the dot line: %d/360 (%.1f%%)" % [a, 100.0 * float(a) / 360.0])
 	for cs: CollisionShape3D in parts:
 		cs.disabled = false
