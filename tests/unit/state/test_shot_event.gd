@@ -83,3 +83,33 @@ func test_to_dict_row_shape() -> void:
 	# steam_id / game_id are stamped by the poster, not the event.
 	assert_false(d.has("steam_id"))
 	assert_false(d.has("game_id"))
+
+
+# ── Stored-row round trip (Supabase / .mreplay footer -> analytics views) ────
+
+func test_from_row_reads_the_stored_shape() -> void:
+	var stored := ShotEvent.make(5, 1, Vector3(3.5, 0.0, 22.0), 0.31,
+			ShotEvent.Outcome.GOAL, ShotEvent.ShotType.ONE_TIMER, true, 2, 210.0).to_dict()
+	var e := ShotEvent.from_row(stored)
+	assert_eq(e.team_id, 1)
+	assert_almost_eq(e.x, 3.5, 0.0001)
+	assert_almost_eq(e.z, 22.0, 0.0001)
+	assert_almost_eq(e.xg, 0.31, 0.0001)
+	assert_eq(e.outcome, ShotEvent.Outcome.GOAL, "text outcome maps back to the enum")
+	assert_eq(e.shot_type, ShotEvent.ShotType.ONE_TIMER)
+	assert_true(e.on_net)
+	assert_eq(e.period, 2)
+
+
+func test_from_row_defaults_unknown_fields() -> void:
+	# A row written by an older build must still render rather than erroring.
+	var e := ShotEvent.from_row({})
+	assert_eq(e.outcome, ShotEvent.Outcome.MISSED)
+	assert_eq(e.shot_type, ShotEvent.ShotType.SHOT)
+	assert_eq(e.period, 1)
+
+
+func test_decode_rows_skips_non_dictionaries() -> void:
+	var good := ShotEvent.make(1, 0, Vector3.ZERO, 0.2,
+			ShotEvent.Outcome.SAVED, ShotEvent.ShotType.SHOT, true, 1, 0.0).to_dict()
+	assert_eq(ShotEvent.decode_rows([good, "junk", 7, good]).size(), 2)

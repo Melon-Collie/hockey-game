@@ -87,6 +87,17 @@ func fetch_shot_heatmap(steam_id: int, callback: Callable) -> void:
 # career_totals view because the derived columns are RATIOS — per-60, PDO,
 # faceoff%, xGF% — which cannot be summed client-side across modes; they have to
 # be computed inside the filter.
+# Every shot from one past game, for regenerating its analytics views. Calls back
+# with an Array of stored rows (see ShotEvent.decode_rows); empty on error or for
+# a game recorded before shot logging existed.
+func fetch_shot_events(game_id: String, callback: Callable) -> void:
+	if game_id.is_empty():
+		callback.call([])
+		return
+	_fetch_array("%s/rest/v1/shot_events?game_id=eq.%s&order=period,clock_s.desc"
+			% [SupabaseConfig.URL, game_id], callback)
+
+
 func fetch_totals(callback: Callable, team_size: int = 0) -> void:
 	var body: Dictionary = {"player_steam_id": SteamManager.steam_id}
 	if team_size > 0:

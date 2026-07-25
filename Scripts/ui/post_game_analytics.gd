@@ -182,6 +182,12 @@ func _build_footer() -> Control:
 
 func present() -> void:
 	_refresh()
+	_show()
+
+
+# Reveal only — the data is already in place. Kept separate from present() so
+# present_history() can inject its own render without the live path clobbering it.
+func _show() -> void:
 	visible = true
 	_root.modulate.a = 0.0
 	create_tween().tween_property(_root, "modulate:a", 1.0, 0.18)
@@ -198,21 +204,76 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+# Live match just played: everything comes from GameManager.
 func _refresh() -> void:
-	_team_colors = _resolve_team_colors()
-	var events: Array[ShotEvent] = GameManager.get_shot_events()
-	var totals: Array[Dictionary] = _team_totals()
+	_render(GameManager.get_shot_events(), _team_totals(), _resolve_team_colors(),
+			GameManager.get_period_duration(), GameManager.get_num_periods(), "")
 
+
+# A PAST game, from stored shot events (Supabase rows or a .mreplay footer).
+# Nothing about the old match is in memory, so the tape is derived from the
+# events themselves — which is self-consistent, since the map and flow read the
+# same list — except the score, which comes from the authoritative record.
+# `home_goals`/`away_goals` may be -1 when unknown, in which case goals are
+# counted from the events too.
+func present_history(events: Array[ShotEvent], home_goals: int, away_goals: int,
+		label: String) -> void:
+	var totals: Array[Dictionary] = _totals_from_events(events)
+	if home_goals >= 0:
+		totals[0]["goals"] = home_goals
+	if away_goals >= 0:
+		totals[1]["goals"] = away_goals
+	# Clock counts DOWN from the period length, so the longest remaining time seen
+	# is a sound lower bound on it — enough to place events on the flow's axis
+	# without the match config being available.
+	var period_s: float = 1.0
+	var periods: int = 1
+	for e: ShotEvent in events:
+		period_s = maxf(period_s, e.clock_s)
+		periods = maxi(periods, e.period)
+	# Historical palettes aren't recorded, so use the neutral defaults rather than
+	# painting an old game in whatever colours the current session happens to use.
+	_render(events, totals, _team_colors, period_s, periods, label)
+	_show()
+
+
+func _render(events: Array[ShotEvent], totals: Array[Dictionary],
+		colors: Array[Color], period_s: float, periods: int, label: String) -> void:
+	_team_colors = colors
 	totals[0]["xg_base"] = XGBaseline.team_total(events, 0)
 	totals[1]["xg_base"] = XGBaseline.team_total(events, 1)
 
 	_map.configure(events, _team_colors)
-	_flow.configure(events, _team_colors,
-			GameManager.get_period_duration(), GameManager.get_num_periods())
+	_flow.configure(events, _team_colors, period_s, periods)
 	_build_tape_rows(totals)
 
 	var attempts: int = int(totals[0]["corsi"]) + int(totals[1]["corsi"])
-	_subtitle.text = "%d shot attempts · every coordinate recorded by the sim" % attempts
+	var suffix: String = label if not label.is_empty() \
+			else "every coordinate recorded by the sim"
+	_subtitle.text = "%d shot attempts · %s" % [attempts, suffix]
+
+
+# Per-team aggregates derived purely from a shot list — the historical
+# counterpart to _team_totals (which sums the live broadcast counters). Same
+# conventions: Corsi counts every attempt, Fenwick excludes blocks, and xG
+# accrues only on unblocked shots.
+func _totals_from_events(events: Array[ShotEvent]) -> Array[Dictionary]:
+	var out: Array[Dictionary] = [
+		{"goals": 0, "sog": 0, "corsi": 0, "fenwick": 0, "xg": 0.0, "xg_base": 0.0},
+		{"goals": 0, "sog": 0, "corsi": 0, "fenwick": 0, "xg": 0.0, "xg_base": 0.0},
+	]
+	for e: ShotEvent in events:
+		var t: int = clampi(e.team_id, 0, 1)
+		out[t]["corsi"] = int(out[t]["corsi"]) + 1
+		if e.outcome == ShotEvent.Outcome.BLOCKED:
+			continue
+		out[t]["fenwick"] = int(out[t]["fenwick"]) + 1
+		out[t]["xg"] = float(out[t]["xg"]) + e.xg
+		if e.outcome == ShotEvent.Outcome.GOAL:
+			out[t]["goals"] = int(out[t]["goals"]) + 1
+		if e.outcome == ShotEvent.Outcome.GOAL or e.outcome == ShotEvent.Outcome.SAVED:
+			out[t]["sog"] = int(out[t]["sog"]) + 1
+	return out
 
 
 # Per-team aggregates, summed from the broadcast PlayerStats counters — the same

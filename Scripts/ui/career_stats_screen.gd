@@ -53,6 +53,8 @@ const _NARROW_TAB_WIDTH: float = 660.0
 # their own file meta (a different stat set — see _build_replay_file_card).
 var _recent_content: VBoxContainer = null
 var _recent_status: Label = null
+# Analytics viewer for a past game, created on first use (see _show_analytics).
+var _analytics: PostGameAnalytics = null
 
 
 func _ready() -> void:
@@ -731,6 +733,7 @@ func _build_game_card(summary: Dictionary) -> Control:
 	actions.alignment = BoxContainer.ALIGNMENT_CENTER
 	actions.add_theme_constant_override("separation", 8)
 	actions.add_child(_watch_button(String(summary.get("path", ""))))
+	actions.add_child(_analytics_button(summary))
 	vbox.add_child(actions)
 	return card
 
@@ -755,6 +758,11 @@ func _summarise_backend(game: Dictionary) -> Dictionary:
 		"outcome": str(game.get("outcome", "")),
 		"path": path if FileAccess.file_exists(path) else "",
 		"source": "backend",
+		"game_id": gid,
+		# recent_games_for counts the logged shots, so the Analytics action is
+		# enabled only where there is something to draw — games recorded before
+		# shot logging existed report 0 rather than opening an empty screen.
+		"shots": _safe_int(game.get("shot_count", 0)),
 	}
 
 
@@ -774,6 +782,12 @@ func _summarise_replay(path: String, meta: Dictionary) -> Dictionary:
 		"outcome": "",
 		"path": path,
 		"source": "local",
+		"game_id": "",
+		# Footers written before shot logging have no list, so this reads 0 and
+		# the action stays disabled for older files.
+		"shots": (footer.get("shot_events", []) as Array).size() \
+				if footer.get("shot_events") != null else 0,
+		"shot_rows": footer.get("shot_events", []),
 	}
 
 
@@ -834,6 +848,47 @@ func _watch_button(path: String) -> Button:
 	else:
 		btn.pressed.connect(_on_watch_pressed.bind(path))
 	return btn
+
+
+# Opens the post-game analytics views for a PAST game. Local replays carry their
+# shot log in the footer, so they open with no round trip; backend games fetch
+# theirs by game_id. Disabled where nothing was logged (games predating shot
+# logging), which the summary knows without a speculative query.
+func _analytics_button(summary: Dictionary) -> Button:
+	var btn := Button.new()
+	btn.text = "◱  Analytics"
+	btn.custom_minimum_size = Vector2(130, 32)
+	btn.add_theme_font_size_override("font_size", 14)
+	MenuStyle.apply_focus_ring(btn)
+	SoundManager.wire_button(btn)
+	if int(summary.get("shots", 0)) <= 0:
+		btn.disabled = true
+		btn.tooltip_text = "No shot data recorded for this game"
+		return btn
+	btn.pressed.connect(_on_analytics_pressed.bind(summary))
+	return btn
+
+
+func _on_analytics_pressed(summary: Dictionary) -> void:
+	var home: int = int(summary.get("home", -1))
+	var away: int = int(summary.get("away", -1))
+	var label: String = "%s · replayed from the game's shot log" % String(summary.get("date", ""))
+	if String(summary.get("source", "")) == "local":
+		_show_analytics(ShotEvent.decode_list(summary.get("shot_rows", []) as Array),
+				home, away, label)
+		return
+	_reporter.fetch_shot_events(String(summary.get("game_id", "")),
+			func(rows: Array) -> void:
+				_show_analytics(ShotEvent.decode_rows(rows), home, away, label))
+
+
+func _show_analytics(events: Array[ShotEvent], home: int, away: int, label: String) -> void:
+	if _analytics == null:
+		# Created lazily and owned here: the career screen is reachable from the
+		# main menu, where no HUD exists to provide one.
+		_analytics = PostGameAnalytics.new()
+		add_child(_analytics)
+	_analytics.present_history(events, home, away, label)
 
 
 func _on_watch_pressed(path: String) -> void:

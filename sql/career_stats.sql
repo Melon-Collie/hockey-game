@@ -238,7 +238,7 @@ drop function if exists public.recent_games_for(bigint, integer);
 create function public.recent_games_for(player_steam_id bigint, game_limit integer default 20)
  returns table(game_id uuid, ended_at timestamptz, home_score integer, away_score integer,
                num_periods integer, period_scores jsonb, players jsonb, game_version text,
-               team_size integer, outcome text)
+               team_size integer, outcome text, shot_count bigint)
  language sql
  stable
 as $function$
@@ -274,7 +274,11 @@ as $function$
     MAX(cs.team_size)::int                                                          AS team_size,
     -- THIS player's result, for the win/loss badge. max() over a filtered case is
     -- just "the requesting player's row" — every other row's expression is null.
-    MAX(CASE WHEN cs.steam_id = player_steam_id THEN cs.outcome END)                 AS outcome
+    MAX(CASE WHEN cs.steam_id = player_steam_id THEN cs.outcome END)                 AS outcome,
+    -- How many shots were logged for this game, so the browser can enable its
+    -- Analytics action only where there is something to draw. Games recorded
+    -- before shot logging existed return 0 rather than an empty screen.
+    (SELECT count(*) FROM shot_events se WHERE se.game_id = cs.game_id)              AS shot_count
   FROM career_stats cs
   WHERE cs.game_id IN (
     SELECT DISTINCT cs2.game_id FROM career_stats cs2

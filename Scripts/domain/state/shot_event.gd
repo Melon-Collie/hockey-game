@@ -77,6 +77,32 @@ static func from_array(a: Array) -> ShotEvent:
 	return e
 
 
+# Rebuild from a stored row — the Supabase `shot_events` shape (to_dict's keys,
+# where outcome/type are text) rather than the wire array. Used to regenerate the
+# analytics views for a past game. Unknown keys default rather than erroring, so
+# a row written by an older build still renders.
+static func from_row(row: Dictionary) -> ShotEvent:
+	var e := ShotEvent.new()
+	e.team_id = int(row.get("team_id", 0))
+	e.x = float(row.get("x", 0.0))
+	e.z = float(row.get("z", 0.0))
+	e.xg = float(row.get("xg", 0.0))
+	e.outcome = maxi(_OUTCOME_KEY.find(String(row.get("outcome", "missed"))), 0)
+	e.shot_type = maxi(_TYPE_KEY.find(String(row.get("shot_type", "shot"))), 0)
+	e.on_net = bool(row.get("on_net", false))
+	e.period = int(row.get("period", 1))
+	e.clock_s = float(row.get("clock_s", 0.0))
+	return e
+
+
+static func decode_rows(rows: Array) -> Array[ShotEvent]:
+	var out: Array[ShotEvent] = []
+	for r: Variant in rows:
+		if r is Dictionary:
+			out.append(ShotEvent.from_row(r as Dictionary))
+	return out
+
+
 static func encode_list(events: Array[ShotEvent]) -> Array:
 	var out: Array = []
 	for e: ShotEvent in events:
