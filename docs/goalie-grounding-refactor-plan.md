@@ -1004,8 +1004,17 @@ restructure.
      movement, or the puck mutation (the trap is *requested* via `wants_trap` and
      performed by the controller) — the same decision/actuation split
      `GoalieDecision` / `GoalieActuation` generalise in Step 4.
-   - `GoalieCreaseClear` (sweep windup/strike/follow-through + cover + catch) —
-     still to do, ~350 lines / ~12 vars.
+   - ~~`GoalieCreaseClear`~~ ✅ **SHIPPED.** 356-line collaborator; controller
+     4181 → 4138 lines, 92 → 79 member vars (14 timers/flags out).
+     **Split deliberately differently from `GoaliePuckPlay`:** this behaviour is
+     almost entirely *mutation* (`pickup_locked`, `motion_pinned`,
+     `set_puck_velocity`, `set_puck_position`, `apply_goalie_sweep`, the stick
+     collision toggle, the `puck_covered` signal), and those ARE the future
+     `GoalieActuation` layer — pulling them into a behaviour object would just
+     relocate the tangle. So the collaborator takes the **decisions and timers**
+     (dwell / cooldown clocks, the lane-aware corner pick, the
+     windup→strike→follow-through phase machine, the cover race, the catch hold)
+     and every puck write stays in the controller as that layer's nucleus.
 3. **Step 3** — `GoalieWorldView` + `GoaliePerception`.
    **Note the fit: R1's lagged read is a *perception* concern, and this is its
    natural home.** If R1 lands first (recommended), Step 3 is where it stops

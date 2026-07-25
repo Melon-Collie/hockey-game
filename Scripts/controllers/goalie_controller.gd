@@ -984,6 +984,8 @@ var _pose: GoalieBodyConfigBuilder = GoalieBodyConfigBuilder.new()
 var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Inputs.new()
 #   _puck_play — GoaliePuckPlay (behind-net rim-stop trip: decision, geometry, phase)
 var _puck_play: GoaliePuckPlay = GoaliePuckPlay.new()
+#   _clear     — GoalieCreaseClear   (sweep / cover / catch decisions + timers)
+var _clear: GoalieCreaseClear = GoalieCreaseClear.new()
 
 # ── Cached rule configs (built once in setup) ────────────────────────────────
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
@@ -1079,14 +1081,9 @@ var _screen_block_drop_timer: float = -1.0
 # Chest-blend ramp (0 in tight → 1 at range) from the last threat computation;
 # consumed by the tracking lerp to scale the quiet-eye lag with distance.
 var _chest_t: float = 0.0
-# Cover / smother state. `_cover_secured` flips when the glove lands with the
+# Cover / smother state. `_clear.cover_secured` flips when the glove lands with the
 # puck still in the secure radius; the reach timer runs the smother race, the
 # hold timer runs the ARCADE hold-and-release, and the cooldown spaces covers.
-var _cover_secured: bool = false
-var _cover_reach_timer: float = 0.0
-var _cover_hold_timer: float = 0.0
-var _cover_cooldown_timer: float = 0.0
-var _body_rest_dwell_timer: float = 0.0
 # Quiet-eye confirmation accumulators for the two carrier-driven lateral
 # commits (see lateral_commit_confirm_s). Reset whenever their read breaks.
 var _beaten_wide_confirm_timer: float = 0.0
@@ -1094,35 +1091,26 @@ var _slide_coverage_confirm_timer: float = 0.0
 # Reused scratch of opposing skater positions for the sweep-lane check (same
 # no-allocation idiom as _screen_positions).
 var _lane_opponents: PackedVector3Array = PackedVector3Array()
-# Catch-and-hold state. `_catch_secured` flips once the pin (freeze + lock) is
+# Catch-and-hold state. `_clear.catch_secured` flips once the pin (freeze + lock) is
 # applied on the first catching tick — physics writes are deferred out of the
-# contact callback the catch signal fires from. `_catch_pressured` picks the
+# contact callback the catch signal fires from. `_clear.catch_pressured` picks the
 # hold length and whether the freeze resolution (puck_covered) fires.
-var _catch_secured: bool = false
-var _catch_pressured: bool = false
-var _catch_hold_timer: float = 0.0
 # Lunge state: active timer counts down while the blocker is extended;
 # cooldown timer counts down after each lunge before another can fire.
 var _lunge_active_timer: float = 0.0
 var _lunge_cooldown_timer: float = 0.0
 # Loose-puck sweep cooldown — counts down after each crease clear so the goalie
 # sweeps once and lets the puck travel instead of dribbling it tick-by-tick.
-var _clear_cooldown_timer: float = 0.0
 # Counts up while a loose puck sits clearable in front of the goalie; the sweep
 # only fires once it crosses `clear_dwell`. Resets the moment the puck leaves
 # the clearable window so the goalie doesn't bat live/airborne pucks on contact.
-var _clear_dwell_timer: float = 0.0
-# Clear-sweep phases. `_sweep_windup_timer` counts down the backswing; when it
+# Clear-sweep phases. `_clear.windup_timer` counts down the backswing; when it
 # expires _strike_pending_sweep applies the clear velocity (the strike moment —
-# the stick is what clears the puck) and starts `_sweep_anim_timer`, the
-# follow-through swing. `_sweep_anim_dir` is the goalie-local lateral sign of
-# the send. `_pending_sweep_cover_release` marks a windup begun from the
+# the stick is what clears the puck) and starts `_clear.anim_timer`, the
+# follow-through swing. `_clear.anim_dir` is the goalie-local lateral sign of
+# the send. `_clear.pending_cover_release` marks a windup begun from the
 # COVERING hold: its strike also unlocks the pinned puck and stands the goalie
 # up through RECOVERING.
-var _sweep_windup_timer: float = 0.0
-var _pending_sweep_cover_release: bool = false
-var _sweep_anim_timer: float = 0.0
-var _sweep_anim_dir: float = 0.0
 # Blade velocity tracking for the goalie poke check. We need the BLADE's
 # world velocity (not the goalie body's) because the strip-velocity math
 # blends checker blade velocity with carrier blade velocity. Position-
@@ -1410,6 +1398,30 @@ func _configure_collaborators() -> void:
 	_puck_play.direction_sign = _direction_sign
 	_puck_play.net_half_width = net_half_width
 	_puck_play.home_depth = maxf(depth_defensive, 0.2)
+	_clear.reach = clear_reach
+	_clear.max_puck_speed = clear_max_puck_speed
+	_clear.max_height = clear_max_height
+	_clear.dwell = clear_dwell
+	_clear.exit_speed = clear_speed
+	_clear.lateral_weight = clear_lateral_weight
+	_clear.forward_weight = clear_forward_weight
+	_clear.center_deadband = clear_center_deadband
+	_clear.cooldown = clear_cooldown
+	_clear.windup_s = sweep_windup_s
+	_clear.anim_duration = sweep_anim_duration
+	_clear.cover_reach_time = cover_reach_time
+	_clear.cover_secure_radius = cover_secure_radius
+	_clear.cover_hold_s = cover_hold_s
+	_clear.cover_cooldown_s = cover_cooldown_s
+	_clear.cover_escape_height = cover_escape_height
+	_clear.body_rest_dwell_s = cover_body_rest_dwell_s
+	_clear.body_rest_max_height = cover_body_rest_max_height
+	_clear.body_radius = cover_body_radius
+	_clear.catch_quick_drop_s = catch_quick_drop_s
+	_clear.goal_line_z = _goal_line_z
+	_clear.goal_center_x = _goal_center_x
+	_clear.direction_sign = _direction_sign
+	_clear.catches_left = catches_left
 	_build_rule_configs()
 
 # Rule configs are built once and reused — exports don't change at runtime.
@@ -1493,6 +1505,7 @@ func _build_rule_configs() -> void:
 	_rush_cfg.depth_engage = depth_aggressive
 	_rush_cfg.depth_mid = depth_base
 	_rush_cfg.depth_arrive = depth_defensive
+	_clear.lane_cfg = _sweep_lane_cfg
 
 func is_butterfly() -> bool:
 	return _sm.is_butterfly()
@@ -1531,24 +1544,12 @@ func reset_to_crease() -> void:
 	# or the drive would stay frozen after the faceoff drop unlocks pickup.
 	if puck != null:
 		puck.motion_pinned = false
-	_cover_secured = false
-	_cover_reach_timer = 0.0
-	_cover_hold_timer = 0.0
-	_cover_cooldown_timer = 0.0
-	_body_rest_dwell_timer = 0.0
+	_clear.reset()
 	_beaten_wide_confirm_timer = 0.0
 	_slide_coverage_confirm_timer = 0.0
-	_sweep_windup_timer = 0.0
-	_pending_sweep_cover_release = false
 	_puck_play.reset()
-	_catch_secured = false
-	_catch_pressured = false
-	_catch_hold_timer = 0.0
 	_lunge_active_timer = 0.0
 	_lunge_cooldown_timer = 0.0
-	_clear_cooldown_timer = 0.0
-	_sweep_anim_timer = 0.0
-	_sweep_anim_dir = 0.0
 	_move_speed_current = 0.0
 	goalie.set_stick_collision_enabled(true)
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
@@ -1832,8 +1833,8 @@ func _update_state(delta: float) -> void:
 		_reaction.shot_timer = 0.0
 		_reaction.arm_timer = 0.0
 	_slide.tick_cooldown(delta)
-	if _cover_cooldown_timer > 0.0:
-		_cover_cooldown_timer = maxf(_cover_cooldown_timer - delta, 0.0)
+	if _clear.cover_cooldown_timer > 0.0:
+		_clear.cover_cooldown_timer = maxf(_clear.cover_cooldown_timer - delta, 0.0)
 	_puck_play.tick_cooldown(delta)
 	# Convert puck global X into goalie local X. The -Z goal goalie is rotated PI
 	# so its local +X is global -X; multiplying by -_direction_sign corrects for that.
@@ -2227,13 +2228,13 @@ func _update_goalie_poke(delta: float) -> void:
 	_prev_blade_world_pos = current_blade_pos
 	# Windup → strike: the backswing runs down, then the strike applies the
 	# clear velocity as the blade snaps through the puck (host-only path).
-	if _sweep_windup_timer > 0.0:
-		_sweep_windup_timer = maxf(_sweep_windup_timer - delta, 0.0)
-		if _sweep_windup_timer <= 0.0:
+	if _clear.windup_timer > 0.0:
+		_clear.windup_timer = maxf(_clear.windup_timer - delta, 0.0)
+		if _clear.windup_timer <= 0.0:
 			_strike_pending_sweep()
-	if _sweep_anim_timer > 0.0:
-		_sweep_anim_timer = maxf(_sweep_anim_timer - delta, 0.0)
-		if _sweep_anim_timer <= 0.0:
+	if _clear.anim_timer > 0.0:
+		_clear.anim_timer = maxf(_clear.anim_timer - delta, 0.0)
+		if _clear.anim_timer <= 0.0:
 			# Sweep window over — restore the stick's normal save collision.
 			goalie.set_stick_collision_enabled(true)
 	var carrier: Skater = puck.get_carrier()
@@ -2266,20 +2267,20 @@ func _update_goalie_poke(delta: float) -> void:
 # sweep per visit so the goalie shoves the puck clear instead of dribbling it
 # tick-by-tick. Host-only (called from the host-gated _update_goalie_poke).
 func _try_clear_loose_puck(delta: float) -> void:
-	if _sweep_windup_timer > 0.0:
+	if _clear.windup_timer > 0.0:
 		return  # a sweep is already wound up — the strike owns the next beat
-	if _clear_cooldown_timer > 0.0:
-		_clear_cooldown_timer = maxf(_clear_cooldown_timer - delta, 0.0)
+	if _clear.clear_cooldown_timer > 0.0:
+		_clear.clear_cooldown_timer = maxf(_clear.clear_cooldown_timer - delta, 0.0)
 		return
 	if not _is_loose_puck_clearable():
-		_clear_dwell_timer = 0.0
+		_clear.dwell_timer = 0.0
 		return
 	# The puck has to settle on the ice in front of the goalie for a beat before
 	# the sweep fires — otherwise the goalie bats pucks away the instant they
 	# drift into reach. Accumulate dwell while clearable; the predicate already
 	# reset it to zero the moment the puck left the window.
-	_clear_dwell_timer += delta
-	if _clear_dwell_timer < clear_dwell:
+	_clear.dwell_timer += delta
+	if _clear.dwell_timer < clear_dwell:
 		return
 	# Lane-aware clear: pick a corner whose exit lane no opponent can reach. If
 	# BOTH lanes are covered — the situation where a real sweep just feeds an
@@ -2289,7 +2290,7 @@ func _try_clear_loose_puck(delta: float) -> void:
 	# natural-side sweep — a desperation clear beats standing still.
 	var sweep_vel: Vector3 = _pick_clear_velocity()
 	if sweep_vel == Vector3.ZERO:
-		if _cover_cooldown_timer <= 0.0 \
+		if _clear.cover_cooldown_timer <= 0.0 \
 				and _nearest_opposing_skater_dist_to_puck() <= jam_opponent_distance:
 			_enter_cover()
 			return
@@ -2307,13 +2308,10 @@ func _try_clear_loose_puck(delta: float) -> void:
 # picks the windup's visual direction — the strike re-solves the lane-aware
 # exit against the live world.
 func _begin_sweep(planned_vel: Vector3, cover_release: bool) -> void:
-	_pending_sweep_cover_release = cover_release
-	_sweep_windup_timer = sweep_windup_s
-	_clear_dwell_timer = 0.0
-	var send_sign: float = signf(planned_vel.x)
-	if send_sign == 0.0:
-		send_sign = 1.0 if catches_left else -1.0
-	_sweep_anim_dir = send_sign * -_direction_sign
+	_clear.pending_cover_release = cover_release
+	_clear.windup_timer = sweep_windup_s
+	_clear.dwell_timer = 0.0
+	_clear.set_send_dir(planned_vel)
 	goalie.set_stick_collision_enabled(false)
 	if sweep_windup_s <= 0.0:
 		_strike_pending_sweep()
@@ -2327,15 +2325,15 @@ func _begin_sweep(planned_vel: Vector3, cover_release: bool) -> void:
 # got whacked away or grabbed during the windup WHIFFS — the follow-through
 # still plays, an honest missed sweep.
 func _strike_pending_sweep() -> void:
-	var cover_release: bool = _pending_sweep_cover_release
-	_pending_sweep_cover_release = false
-	_sweep_anim_timer = sweep_anim_duration
+	var cover_release: bool = _clear.pending_cover_release
+	_clear.pending_cover_release = false
+	_clear.anim_timer = sweep_anim_duration
 	if cover_release:
 		puck.pickup_locked = false
 		puck.motion_pinned = false  # releasing the pin — the drive owns it again
-		_cover_secured = false
+		_clear.cover_secured = false
 		_apply_strike_velocity()
-		_cover_cooldown_timer = cover_cooldown_s
+		_clear.cover_cooldown_timer = cover_cooldown_s
 		_sm.transition_to(State.RECOVERING)
 		_sm.recovery_timer = 0.0
 		return
@@ -2349,12 +2347,11 @@ func _apply_strike_velocity() -> void:
 	if vel == Vector3.ZERO:
 		vel = _natural_clear_velocity(0.0)
 	puck.apply_goalie_sweep(vel)
-	_clear_cooldown_timer = clear_cooldown
+	_clear.clear_cooldown_timer = clear_cooldown
 	# Re-aim the follow-through at the ACTUAL exit corner (the lane re-solve at
 	# strike time can flip it from the windup's plan).
-	var send_sign: float = signf(vel.x)
-	if send_sign != 0.0:
-		_sweep_anim_dir = send_sign * -_direction_sign
+	if not vel.is_zero_approx():
+		_clear.set_send_dir(vel)
 
 
 # Is the loose puck still there for the strike to hit? Mirrors the clearable
@@ -2363,23 +2360,14 @@ func _apply_strike_velocity() -> void:
 func _puck_strikeable() -> bool:
 	if puck.get_carrier() != null or puck.pickup_locked:
 		return false
-	if (puck.global_position.z - _goal_line_z) * _direction_sign <= 0.0:
-		return false
-	if puck.global_position.y > clear_max_height:
-		return false
-	if puck.linear_velocity.length() > clear_max_puck_speed:
-		return false
-	return goalie.global_position.distance_to(puck.global_position) <= clear_reach + 0.3
+	return _clear.is_strikeable_geometry(
+			puck.global_position, puck.linear_velocity.length(), goalie.global_position)
 
 
 # Natural-side clear velocity (dead-centre pucks default to the stick side);
 # `forced_side` != 0 overrides toward that corner.
 func _natural_clear_velocity(forced_side: float) -> Vector3:
-	var default_side: float = 1.0 if catches_left else -1.0
-	return GoalieBehaviorRules.compute_clear_velocity(
-			puck.global_position, _goal_center_x, _direction_sign,
-			clear_lateral_weight, clear_forward_weight, clear_speed,
-			clear_center_deadband, default_side, forced_side)
+	return _clear.natural_exit(puck.global_position, forced_side)
 
 
 # Lane-aware corner pick: natural side if its exit lane is clear of opposing
@@ -2387,15 +2375,7 @@ func _natural_clear_velocity(forced_side: float) -> Vector3:
 # read). Opponent gather is a scalar loop into a reused packed array.
 func _pick_clear_velocity() -> Vector3:
 	_gather_opposing_positions()
-	var natural: Vector3 = _natural_clear_velocity(0.0)
-	if not GoalieBehaviorRules.sweep_lane_blocked(
-			puck.global_position, natural, _lane_opponents, _sweep_lane_cfg):
-		return natural
-	var other: Vector3 = _natural_clear_velocity(-signf(natural.x))
-	if not GoalieBehaviorRules.sweep_lane_blocked(
-			puck.global_position, other, _lane_opponents, _sweep_lane_cfg):
-		return other
-	return Vector3.ZERO
+	return _clear.pick_exit(puck.global_position, _lane_opponents)
 
 
 func _gather_opposing_positions() -> void:
@@ -2423,19 +2403,11 @@ func _maybe_cover_body_rested_puck(delta: float) -> bool:
 	if _sm.current == State.COVERING or _sm.current == State.PLAYING_PUCK \
 			or _sm.is_catching():
 		return false
-	if _sweep_windup_timer > 0.0 or puck.pickup_locked:
+	if _clear.windup_timer > 0.0 or puck.pickup_locked:
 		return false
-	if not GoalieBehaviorRules.puck_resting_on_goalie(
-			puck.global_position, puck.linear_velocity.length(),
-			goalie.global_position, clear_max_height,
-			cover_body_rest_max_height, cover_body_radius,
-			clear_max_puck_speed):
-		_body_rest_dwell_timer = 0.0
+	if not _clear.tick_body_rest(delta, puck.global_position,
+			puck.linear_velocity.length(), goalie.global_position):
 		return false
-	_body_rest_dwell_timer += delta
-	if _body_rest_dwell_timer < cover_body_rest_dwell_s:
-		return false
-	_body_rest_dwell_timer = 0.0
 	_enter_cover()
 	return true
 
@@ -2443,9 +2415,9 @@ func _maybe_cover_body_rested_puck(delta: float) -> bool:
 # Enter the smother: collapse over the puck and start the reach race. The
 # glove takes `cover_reach_time` to land; until then the puck is still live.
 func _enter_cover() -> void:
-	_cover_secured = false
-	_cover_reach_timer = cover_reach_time
-	_cover_hold_timer = 0.0
+	_clear.cover_secured = false
+	_clear.cover_reach_timer = cover_reach_time
+	_clear.cover_hold_timer = 0.0
 	_move_speed_current = 0.0
 	_sm.transition_to(State.COVERING)
 
@@ -2464,27 +2436,25 @@ func _tick_cover(delta: float) -> void:
 	if puck.get_carrier() != null:
 		_abort_cover()
 		return
-	if not _cover_secured:
+	if not _clear.cover_secured:
 		var dist: float = goalie.global_position.distance_to(puck.global_position)
 		# Height escape is the collapsed-body window (`cover_escape_height`),
 		# NOT the sweep's on-ice ceiling — a body-rested cover starts with the
 		# puck already at pad-top height and must not insta-abort. A real whack
 		# that pops the puck out also gives it speed; the velocity gate reads it.
-		var escaped: bool = dist > cover_secure_radius + 0.3 \
-				or puck.linear_velocity.length() > clear_max_puck_speed \
-				or puck.global_position.y > cover_escape_height
-		if escaped:
+		if _clear.cover_escaped(dist, puck.linear_velocity.length(),
+				puck.global_position.y):
 			_abort_cover()
 			return
-		_cover_reach_timer -= delta
-		if _cover_reach_timer > 0.0:
+		_clear.cover_reach_timer -= delta
+		if _clear.cover_reach_timer > 0.0:
 			return
 		if dist > cover_secure_radius:
 			_abort_cover()
 			return
 		# Glove is down with the puck still under it — secured.
-		_cover_secured = true
-		_cover_hold_timer = cover_hold_s
+		_clear.cover_secured = true
+		_clear.cover_hold_timer = cover_hold_s
 		puck.pickup_locked = true
 		puck.motion_pinned = true  # goalie owns the transform now — freeze the drive
 		puck.set_puck_velocity(Vector3.ZERO)
@@ -2492,10 +2462,10 @@ func _tick_cover(delta: float) -> void:
 		return
 	# Secured: keep the puck dead and run the ARCADE hold-and-release timer.
 	puck.set_puck_velocity(Vector3.ZERO)
-	if _sweep_windup_timer > 0.0:
+	if _clear.windup_timer > 0.0:
 		return  # release windup in flight — the strike unlocks, sweeps, stands up
-	_cover_hold_timer -= delta
-	if _cover_hold_timer <= 0.0:
+	_clear.cover_hold_timer -= delta
+	if _clear.cover_hold_timer <= 0.0:
 		# Hold over — wind up the release sweep while the glove still pins the
 		# puck; the strike (cover_release = true) unlocks it as the blade snaps
 		# through, so the release visibly comes off the stick.
@@ -2521,9 +2491,9 @@ func _on_puck_caught(contacted: Goalie) -> void:
 		return
 	if puck.pickup_locked or puck.get_carrier() != null:
 		return
-	_catch_secured = false
-	_catch_pressured = _nearest_opposing_skater_dist_to_puck() <= catch_hold_pressure_radius
-	_catch_hold_timer = cover_hold_s if _catch_pressured else catch_quick_drop_s
+	_clear.catch_secured = false
+	_clear.catch_pressured = _nearest_opposing_skater_dist_to_puck() <= catch_hold_pressure_radius
+	_clear.catch_hold_timer = cover_hold_s if _clear.catch_pressured else catch_quick_drop_s
 	_sm.transition_to(State.CATCHING_DOWN if _sm.is_down() else State.CATCHING)
 
 
@@ -2536,18 +2506,18 @@ func _on_puck_caught(contacted: Goalie) -> void:
 func _tick_catch(delta: float) -> void:
 	if not is_server:
 		return
-	if not _catch_secured:
-		_catch_secured = true
+	if not _clear.catch_secured:
+		_clear.catch_secured = true
 		# pickup_locked makes the puck dead to blades; motion_pinned parks the
 		# analytic drive so the per-tick glove pin below owns the position.
 		puck.pickup_locked = true
 		puck.motion_pinned = true
 		puck.set_puck_velocity(Vector3.ZERO)
-		if _catch_pressured:
+		if _clear.catch_pressured:
 			puck_covered.emit(team_id)
 	puck.set_puck_position(goalie.get_glove_world_position())
-	_catch_hold_timer -= delta
-	if _catch_hold_timer <= 0.0:
+	_clear.catch_hold_timer -= delta
+	if _clear.catch_hold_timer <= 0.0:
 		_drop_caught_puck()
 
 
@@ -2558,7 +2528,7 @@ func _tick_catch(delta: float) -> void:
 func _drop_caught_puck() -> void:
 	puck.pickup_locked = false
 	puck.motion_pinned = false  # releasing the glove pin — the drive owns it again
-	_catch_secured = false
+	_clear.catch_secured = false
 	puck.set_puck_position(Vector3(
 			goalie.global_position.x, puck.ice_height,
 			goalie.global_position.z + float(_direction_sign) * 0.45))
@@ -2614,18 +2584,18 @@ func _tick_puck_play(delta: float) -> void:
 # or was interrupted — release any lock and eat the scramble recovery. The
 # full cover cooldown applies either way: a failed gamble is still the gamble.
 func _abort_cover() -> void:
-	if _cover_secured:
+	if _clear.cover_secured:
 		puck.pickup_locked = false
 		puck.motion_pinned = false  # cover fell through — hand the puck back to the drive
-		_cover_secured = false
-	if _sweep_windup_timer > 0.0:
+		_clear.cover_secured = false
+	if _clear.windup_timer > 0.0:
 		# A wound-up release dies with the cover; give the stick its collision
 		# back (no strike/follow-through will run the countdown for us).
-		_sweep_windup_timer = 0.0
-		_pending_sweep_cover_release = false
-		if _sweep_anim_timer <= 0.0:
+		_clear.windup_timer = 0.0
+		_clear.pending_cover_release = false
+		if _clear.anim_timer <= 0.0:
 			goalie.set_stick_collision_enabled(true)
-	_cover_cooldown_timer = cover_cooldown_s
+	_clear.cover_cooldown_timer = cover_cooldown_s
 	_sm.transition_to(State.RECOVERING)
 	_sm.recovery_timer = 0.0
 
@@ -2646,16 +2616,8 @@ func _is_loose_puck_clearable() -> bool:
 		return false
 	if _reaction.reacting or _sm.is_post_integrated() or _sm.current == State.COVERING:
 		return false
-	# In front of the goal line only — never sweep a puck behind the net.
-	if (puck.global_position.z - _goal_line_z) * _direction_sign <= 0.0:
-		return false
-	# On the ice only — a puck in the air is a live shot/deflection, not a loose
-	# puck to sweep. Without this the goalie bats airborne pucks out of the air.
-	if puck.global_position.y > clear_max_height:
-		return false
-	if puck.linear_velocity.length() > clear_max_puck_speed:
-		return false
-	return goalie.global_position.distance_to(puck.global_position) <= clear_reach
+	return _clear.is_clearable_geometry(
+			puck.global_position, puck.linear_velocity.length(), goalie.global_position)
 
 
 # Returns the current lunge progress as a sin curve: 0 at start, 1 at peak
@@ -2670,19 +2632,14 @@ func _lunge_progress() -> float:
 
 # Windup (backswing) progress, 0 → 1 as the blade cocks over sweep_windup_s.
 func _sweep_windup_progress() -> float:
-	if _sweep_windup_timer <= 0.0 or sweep_windup_s <= 0.0:
-		return 0.0
-	return clampf(1.0 - _sweep_windup_timer / sweep_windup_s, 0.0, 1.0)
+	return _clear.windup_progress()
 
 
 # Clear-sweep follow-through, sin-curved 0 → 1 (peak) → 0 over sweep_anim_duration.
 # The pose builder scales the blade swing-through by this value. Same shape as
 # the lunge; distinct timer so a clear and a lunge don't fight over one window.
 func _sweep_anim_progress() -> float:
-	if _sweep_anim_timer <= 0.0 or sweep_anim_duration <= 0.0:
-		return 0.0
-	var elapsed: float = clampf((sweep_anim_duration - _sweep_anim_timer) / sweep_anim_duration, 0.0, 1.0)
-	return sin(PI * elapsed)
+	return _clear.anim_progress()
 
 
 # True when the puck has someone who can actually shoot it: either an opposing
@@ -3398,7 +3355,7 @@ func _update_body_parts(delta: float) -> void:
 	_pose_inputs.blade_intent_active = _is_blade_intent_active()
 	_pose_inputs.lunge_progress = _lunge_progress()
 	_pose_inputs.sweep_anim_progress = _sweep_anim_progress()
-	_pose_inputs.sweep_anim_dir = _sweep_anim_dir
+	_pose_inputs.sweep_anim_dir = _clear.anim_dir
 	_pose_inputs.sweep_windup_progress = _sweep_windup_progress()
 	_pose_inputs.paddle_sweep_active = _is_paddle_sweep_active()
 	_pose_inputs.standing_sweep_active = _is_standing_sweep_active()
