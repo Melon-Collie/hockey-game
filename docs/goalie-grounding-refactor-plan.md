@@ -332,7 +332,21 @@ re-balanced without touching the model.
 
 ---
 
-## 3. Composition: the unmodeled layer
+## 3. Composition: the unmodeled layer — depth half ✅ SHIPPED
+
+> **Update.** The DEPTH half of this section is done: `GoalieDepthSolver`
+> (`domain/rules/`, pure + unit-tested, 7 cases) now owns the composition. Every
+> constraint is expressed as a **maximum radius**, the target is the tightest of
+> them (floored), and the approach rate is the rush backflow's when it binds and
+> the settle otherwise — so statement order in `_update_depth` is no longer
+> load-bearing and a ninth constraint is one more field. Isolating the
+> lateral-pressure retreat into `_lateral_pressure_cap` also stages **G1**: swapping
+> its magic slope for the re-square race is now a one-function change.
+>
+> The SAVE-SELECTION half (six butterfly triggers decided by `elif` order) is
+> still open — see below.
+
+
 
 This is the finding with the most leverage and the least visibility.
 

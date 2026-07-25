@@ -988,6 +988,8 @@ var _puck_play: GoaliePuckPlay = GoaliePuckPlay.new()
 var _clear: GoalieCreaseClear = GoalieCreaseClear.new()
 #   _view      — GoalieWorldView     (ONE per-tick skater scan, shared by every read)
 var _view: GoalieWorldView = GoalieWorldView.new()
+# Reused depth-constraint scratch — refilled in place each tick (hot path).
+var _depth_constraints := GoalieDepthSolver.Constraints.new()
 
 # ── Cached rule configs (built once in setup) ────────────────────────────────
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
@@ -1499,6 +1501,9 @@ func _build_rule_configs() -> void:
 	_rush_cfg.depth_mid = depth_base
 	_rush_cfg.depth_arrive = depth_defensive
 	_clear.lane_cfg = _sweep_lane_cfg
+	_depth_constraints.floor_radius = depth_defensive
+	_depth_constraints.settle_speed = depth_speed
+	_depth_constraints.max_speed = depth_max_speed
 
 func is_butterfly() -> bool:
 	return _sm.is_butterfly()
@@ -2790,68 +2795,78 @@ func _update_depth(delta: float) -> void:
 		# Gentle fade back toward defensive crease while standing up.
 		_approach_depth(depth_defensive, delta)
 		return
-	# STANDING / READY: depth chart drives radius. Slapper tell pulls deeper.
+	# STANDING / READY: every constraint below is a MAXIMUM RADIUS; the solver
+	# takes the tightest and picks the approach rate. Composition lives in
+	# GoalieDepthSolver so statement order here is no longer load-bearing.
+	var c := _depth_constraints
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			_tracked_threat_position, _goal_line_z, _goal_center_x)
-	var target_radius: float = GoalieBehaviorRules.target_depth_for_puck_distance(
+	c.chart_radius = GoalieBehaviorRules.target_depth_for_puck_distance(
 			threat_dist, _depth_cfg)
-	# Lateral pressure retreat — when a lateral threat moves faster than the
-	# goalie can t-push, pull depth back toward the goal line so the lateral
-	# distance to cover shrinks. Scales with the velocity deficit so only
-	# overspeed plays trigger meaningful retreat; small lateral motion at
-	# normal carry speeds doesn't move the depth. The lateral speed is read from
-	# the CARRIER's body for a carried puck (audit F7): the raw puck estimate
-	# includes stickhandling, and a stationary dangler's blade routinely beats
-	# t_push_speed — a real goalie doesn't sink on a dangle, only on genuine
-	# carrier / pass lateral motion. Loose pucks (a pass in flight) keep the
-	# puck read.
+	c.lateral_cap = _lateral_pressure_cap(c.chart_radius)
+	# Backdoor-aware cap (anticipatory): with a live one-timer man on the weak
+	# side, don't challenge farther out than the cross-crease re-square race
+	# allows. INF when no threat binds.
+	c.backdoor_cap = _backdoor_depth_cap()
+	_fill_rush_constraint(c)
+	_current_depth = GoalieDepthSolver.solve(_current_depth, delta, c)
+
+
+# Lateral-pressure retreat cap: when a lateral threat moves faster than the goalie
+# can t-push, pull depth back toward the goal line so the lateral distance to cover
+# shrinks. Scales with the velocity deficit, so only genuine overspeed plays move
+# the depth. INF when nothing binds.
+#
+# The lateral speed is read from the CARRIER's body for a carried puck (audit F7):
+# the raw puck estimate includes stickhandling, and a stationary dangler's blade
+# routinely beats t_push_speed — a real goalie doesn't sink on a dangle, only on
+# genuine carrier / pass lateral motion. Loose pucks (a pass in flight) keep the
+# puck read.
+#
+# NOTE (plan doc §4.1, G1): the `pull-per-deficit` slope and its clamp are a shape
+# curve, not a model — the grounded replacement is the same re-square race the
+# backdoor cap already solves, with the carrier's projected lateral position as
+# the shooter. Isolating it here is what makes that swap a one-function change.
+func _lateral_pressure_cap(chart_radius: float) -> float:
 	var lp_carrier: Skater = puck.get_carrier()
 	var lateral_speed_x: float = lp_carrier.velocity.x if lp_carrier != null \
 			else _puck_velocity_est.x
-	var lateral_deficit: float = maxf(absf(lateral_speed_x) - t_push_speed, 0.0)
-	var lateral_pull: float = minf(lateral_deficit * lateral_pressure_depth_pull,
-			lateral_pressure_max_pull)
-	if lateral_pull > 0.0:
-		target_radius = maxf(target_radius - lateral_pull, depth_defensive)
-	# Backdoor-aware cap (anticipatory): with a live one-timer man on the weak
-	# side, don't challenge farther out than the cross-crease re-square race
-	# allows. See the export block for the model; INF when no threat binds.
-	var backdoor_cap: float = _backdoor_depth_cap()
-	if backdoor_cap < target_radius:
-		target_radius = maxf(backdoor_cap, depth_defensive)
-	# Rush backflow (audit F5): a CLOSING opposing carrier inside the engage
-	# range retreats the goalie along the taught curve at a rate matched to the
-	# closing speed — a real backward C-cut retreat instead of lerp lag. Only
-	# ever pulls the target IN (min with the chart/caps above), and only engages
-	# while genuinely closing; a stalled or lateral carrier falls back to the
-	# chart + smoothing below.
-	var rush_rate: float = 0.0
-	var rush_carrier: Skater = puck.get_carrier()
-	if rush_carrier != null and (team_id == -1 or rush_carrier.get_team_id() != team_id):
-		var cdx: float = rush_carrier.global_position.x - _goal_center_x
-		var cdz: float = rush_carrier.global_position.z - _goal_line_z
-		var cdist: float = sqrt(cdx * cdx + cdz * cdz)
-		if cdist < rush_engage_distance and cdist > 0.001:
-			var closing: float = -(rush_carrier.velocity.x * cdx \
-					+ rush_carrier.velocity.z * cdz) / cdist
-			if closing >= rush_min_closing_speed:
-				var rush_target: float = GoalieBehaviorRules.rush_retreat_depth(cdist, _rush_cfg)
-				if rush_target < target_radius:
-					target_radius = rush_target
-					rush_rate = GoalieBehaviorRules.rush_retreat_rate(cdist, closing, _rush_cfg)
-	if rush_rate > 0.0 and target_radius < _current_depth:
-		_current_depth = move_toward(_current_depth, target_radius, rush_rate * delta)
-	else:
-		_approach_depth(target_radius, delta)
+	var deficit: float = maxf(absf(lateral_speed_x) - t_push_speed, 0.0)
+	if deficit <= 0.0:
+		return INF
+	var pull: float = minf(deficit * lateral_pressure_depth_pull, lateral_pressure_max_pull)
+	return chart_radius - pull
+
+
+# Rush backflow (audit F5): a CLOSING opposing carrier inside the engage range
+# retreats the goalie along the taught curve at a rate MATCHED to the closing
+# speed — a real backward C-cut instead of lerp lag. Only engages while genuinely
+# closing; a stalled or lateral carrier leaves the constraint unset (INF) and falls
+# back to the chart plus the ordinary settle.
+func _fill_rush_constraint(c: GoalieDepthSolver.Constraints) -> void:
+	c.rush_radius = INF
+	c.rush_rate = 0.0
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null or (team_id != -1 and carrier.get_team_id() == team_id):
+		return
+	var cdx: float = carrier.global_position.x - _goal_center_x
+	var cdz: float = carrier.global_position.z - _goal_line_z
+	var cdist: float = sqrt(cdx * cdx + cdz * cdz)
+	if cdist >= rush_engage_distance or cdist <= 0.001:
+		return
+	var closing: float = -(carrier.velocity.x * cdx + carrier.velocity.z * cdz) / cdist
+	if closing < rush_min_closing_speed:
+		return
+	c.rush_radius = GoalieBehaviorRules.rush_retreat_depth(cdist, _rush_cfg)
+	c.rush_rate = GoalieBehaviorRules.rush_retreat_rate(cdist, closing, _rush_cfg)
 
 
 # Move `_current_depth` toward `target` with the exponential settle shaped by
 # `depth_speed`, rate-capped at `depth_max_speed` — skating speed in and out
 # of the crease is a physical quantity, not a lerp artifact.
 func _approach_depth(target: float, delta: float) -> void:
-	var next: float = lerpf(_current_depth, target, depth_speed * delta)
-	var max_step: float = depth_max_speed * delta
-	_current_depth += clampf(next - _current_depth, -max_step, max_step)
+	_current_depth = GoalieDepthSolver.approach(
+			_current_depth, target, delta, depth_speed, depth_max_speed)
 
 # Most restrictive backdoor depth cap across the opposing off-puck skaters, or
 # INF when nothing binds. Only meaningful against an opposing carrier — a
