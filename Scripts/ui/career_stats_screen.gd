@@ -1,13 +1,17 @@
 class_name CareerStatsScreen extends Control
 
-# Three-tab career screen: lifetime totals + per-game online history
-# (both Supabase-backed, gated per-tab on share_gameplay_stats) + local
-# replays. The Replays tab lists the .mreplay files on THIS machine and is
-# deliberately NOT gated on stat sharing — watching a replay file you
-# already own is a local action; it has nothing to do with whether you
-# upload career stats. It also includes bot-lobby games, which never appear
-# in the Supabase-backed Recent Games history. All tabs refresh on open()
-# and surface their own loading / empty / gated states.
+# Two-tab career screen:
+#   Career Totals — lifetime aggregates + the career shot map, Supabase-backed
+#     and gated on share_gameplay_stats, sliceable by roster size (All/5v5/3v3).
+#   Games — one chronological list merging backend game history with the
+#     .mreplay files on THIS machine, joined on game_id (a replay file is named
+#     `<game_id>.mreplay`). Replays were a separate tab because they are ungated
+#     while history needed stat sharing, and because bot games never reached the
+#     backend; the latter stopped being true when offline matches started
+#     uploading, and the former is a per-ENTRY difference rather than a
+#     per-tab one — so a game shows whatever it has: full box score, a watchable
+#     local file, or both. Local replays render before the network answers.
+# Both tabs refresh on open() and surface their own loading / empty / gated states.
 
 var _reporter := CareerStatsReporter.new()
 
@@ -17,7 +21,9 @@ var _tab_btns: Array[Button] = []
 var _tab_contents: Array[Control] = []
 var _active_idx: int = 0  # active tab, for controller bumper switching + focus
 
-const _TAB_REPLAYS: int = 2
+# With stat sharing off the Career tab is just a gate notice, so open on Games —
+# local replays are listed regardless of any backend gate.
+const _TAB_GAMES: int = 1
 
 # Career Totals tab.
 var _totals_content: VBoxContainer = null
@@ -37,19 +43,16 @@ const _MODE_LABELS: Array[String] = ["All modes", "5v5", "3v3"]
 # re-renders from memory instead of re-querying.
 var _heat_rows: Array = []
 
-# The Recent Games and Replays tabs were designed for the old narrow column and
-# read fine; the shell is now full-bleed for the Career tab's sake, so those two
-# keep their original measure instead of stretching across the screen.
+# The Games tab's cards were designed for the old narrow column and read fine;
+# the shell is now full-bleed for the Career tab's sake, so that tab keeps its
+# original measure instead of stretching across the screen.
 const _NARROW_TAB_WIDTH: float = 660.0
 
-# Recent Games tab. Each game renders as a card panel with score,
-# period breakdown, team-grouped player rows, and a Watch Replay button.
+# Games tab. Backend-backed games render as a card with score, period breakdown,
+# team-grouped player rows and a Watch button; local-only replays render from
+# their own file meta (a different stat set — see _build_replay_file_card).
 var _recent_content: VBoxContainer = null
 var _recent_status: Label = null
-
-# Replays tab: local .mreplay files (ReplayFileIndex.list + read_meta).
-var _replays_content: VBoxContainer = null
-var _replays_status: Label = null
 
 
 func _ready() -> void:
@@ -158,14 +161,12 @@ func _build_tab_switcher() -> Control:
 	wrapper.add_child(content_margin)
 
 	var totals_tab := _build_totals_tab()
-	var recent_tab := _narrow(_build_recent_games_tab())
-	var replays_tab := _narrow(_build_replays_tab())
-	_tab_contents = [totals_tab, recent_tab, replays_tab]
+	var games_tab := _narrow(_build_games_tab())
+	_tab_contents = [totals_tab, games_tab]
 	content_margin.add_child(totals_tab)
-	content_margin.add_child(recent_tab)
-	content_margin.add_child(replays_tab)
+	content_margin.add_child(games_tab)
 
-	var labels: Array[String] = ["Career Totals", "Recent Games", "Replays"]
+	var labels: Array[String] = ["Career Totals", "Games"]
 	for i: int in labels.size():
 		var btn := Button.new()
 		btn.text = labels[i]
@@ -229,13 +230,12 @@ func open() -> void:
 	show()
 	# With stat sharing off the Supabase tabs are just gate notices, so land
 	# on the one tab with content — the local replays.
-	_activate_tab(_TAB_REPLAYS if not PlayerPrefs.share_gameplay_stats else 0)
+	_activate_tab(_TAB_GAMES if not PlayerPrefs.share_gameplay_stats else 0)
 	# Drop the cached map so a reopen picks up games played since last time;
 	# within one viewing, mode switches re-slice it without refetching.
 	_heat_rows.clear()
 	_refresh_totals()
-	_refresh_recent_games()
-	_refresh_replays()
+	_refresh_games()
 	_focus_active_tab()  # controller: land on the active tab's content, LB/RB switch tabs
 
 
@@ -566,7 +566,17 @@ func _clear_totals_content() -> void:
 
 # ── Recent Games tab ─────────────────────────────────────────────────────────
 
-func _build_recent_games_tab() -> Control:
+# ── Games tab (backend history + local replays, merged) ──────────────────────
+# One chronological list of games rather than two tabs. They split originally
+# because replays are ungated while history needed stat sharing, AND because
+# bot-lobby games never reached the backend — the second reason disappeared when
+# offline matches started uploading. What is left is a per-entry difference, not
+# a per-tab one: a game may have backend stats, a local replay file, or both.
+#
+# The join key is free: replay files are named `<game_id>.mreplay`, the same id
+# the backend rows carry.
+
+func _build_games_tab() -> Control:
 	var tab := VBoxContainer.new()
 	tab.add_theme_constant_override("separation", 6)
 	tab.custom_minimum_size = Vector2(0, 520)
@@ -581,6 +591,7 @@ func _build_recent_games_tab() -> Control:
 	scroll.follow_focus = true  # controller: scroll to keep the focused row in view
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	tab.add_child(scroll)
 
 	_recent_content = VBoxContainer.new()
@@ -590,30 +601,67 @@ func _build_recent_games_tab() -> Control:
 	return tab
 
 
-func _refresh_recent_games() -> void:
+# Local replays render immediately (no gate, no round trip); backend history
+# folds in when it arrives, so the list is useful before the network answers.
+func _refresh_games() -> void:
 	_clear_recent_content()
-	if not PlayerPrefs.share_gameplay_stats:
-		_recent_status.text = _STAT_SHARING_GATE_TEXT
-		_recent_status.visible = true
+	_render_games([])
+	if not PlayerPrefs.share_gameplay_stats or SteamManager.steam_id == 0:
 		return
-	if SteamManager.steam_id == 0:
-		_recent_status.text = "Sign in to Steam to view recent games."
-		_recent_status.visible = true
-		return
-	_recent_status.text = "Loading..."
-	_recent_status.visible = true
-	_reporter.fetch_recent_games(SteamManager.steam_id, 20, _on_recent_received)
+	_reporter.fetch_recent_games(SteamManager.steam_id, 20, _render_games)
 
 
-func _on_recent_received(games: Array) -> void:
-	_recent_status.visible = false
-	if games.is_empty():
-		_recent_status.text = "No recent games yet. Play a multiplayer game to fill this list."
-		_recent_status.visible = true
-		return
+# Union of backend rows and on-disk replays, newest first. A backend row wins
+# where both exist — it carries the full box score, and _build_game_card already
+# enables or disables its own Watch button by testing for the file.
+func _render_games(games: Array) -> void:
 	_clear_recent_content()
+	var entries: Array = []
+	var seen: Dictionary = {}
 	for entry: Variant in games:
-		_recent_content.add_child(_build_game_card(entry as Dictionary))
+		var game: Dictionary = entry as Dictionary
+		var gid: String = str(game.get("game_id", ""))
+		if not gid.is_empty():
+			seen[gid] = true
+		entries.append({
+			"at": _iso_to_unix(str(game.get("ended_at", ""))),
+			"game": game, "path": "",
+		})
+	for path: String in ReplayFileIndex.list():
+		# Filename IS the game_id, so a replay already covered by a backend row
+		# needs no separate card.
+		if seen.has(path.get_file().get_basename()):
+			continue
+		entries.append({
+			"at": FileAccess.get_modified_time(path),
+			"game": {}, "path": path,
+		})
+	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["at"]) > int(b["at"]))
+
+	if entries.is_empty():
+		_recent_status.text = "No games yet. Play a match (online or vs bots) to fill this list."
+		_recent_status.visible = true
+		return
+	_recent_status.visible = false
+	for e: Variant in entries:
+		var row: Dictionary = e as Dictionary
+		var path: String = String(row["path"])
+		if path.is_empty():
+			_recent_content.add_child(_build_game_card(row["game"] as Dictionary))
+			continue
+		var meta: Dictionary = ReplayFileReader.read_meta(path)
+		if not bool(meta.get("ok", false)):
+			continue  # unreadable / wrong-version file — skip silently
+		_recent_content.add_child(_build_replay_file_card(path, meta))
+
+
+# ISO-8601 -> unix seconds, so backend rows sort against replay file mtimes.
+# 0 when absent or unparseable, which sinks the entry rather than crashing.
+func _iso_to_unix(iso: String) -> int:
+	if iso.is_empty():
+		return 0
+	return int(Time.get_unix_time_from_datetime_string(iso))
 
 
 func _clear_recent_content() -> void:
@@ -850,46 +898,6 @@ func _on_watch_pressed(path: String) -> void:
 # gate. Includes bot-lobby games, which Recent Games (online history) never
 # lists. Oldest files are pruned past PlayerPrefs.replay_keep_count, so this
 # is "what you can watch right now", not a permanent record.
-
-func _build_replays_tab() -> Control:
-	var tab := VBoxContainer.new()
-	tab.add_theme_constant_override("separation", 6)
-	tab.custom_minimum_size = Vector2(0, 520)
-
-	_replays_status = Label.new()
-	_replays_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_replays_status.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	tab.add_child(_replays_status)
-
-	var scroll := ScrollContainer.new()
-	scroll.follow_focus = true  # controller: scroll to keep the focused row in view
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	tab.add_child(scroll)
-
-	_replays_content = VBoxContainer.new()
-	_replays_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_replays_content.add_theme_constant_override("separation", 10)
-	scroll.add_child(_replays_content)
-	return tab
-
-
-func _refresh_replays() -> void:
-	for child: Node in _replays_content.get_children():
-		child.queue_free()
-	var paths: Array[String] = ReplayFileIndex.list()
-	if paths.is_empty():
-		_replays_status.text = "No replays on this machine yet. Play a match (online or vs bots) to record one."
-		_replays_status.visible = true
-		return
-	_replays_status.visible = false
-	for path: String in paths:
-		var meta: Dictionary = ReplayFileReader.read_meta(path)
-		if not bool(meta.get("ok", false)):
-			continue  # unreadable / wrong-version file — skip silently
-		_replays_content.add_child(_build_replay_file_card(path, meta))
-
 
 # One card per replay file: date + score headline, per-team box score, Watch
 # button. Box-score columns differ from Recent Games because the .mreplay
