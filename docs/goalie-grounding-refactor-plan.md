@@ -1235,3 +1235,62 @@ roll for it.
 **Standing caveat: none of the feel claims in this document have been verified in
 a running game.** The agent can run the GUT suite and the headless harnesses but
 cannot play the game. Every Tranche C item needs a local playtest.
+
+## §8 — The audit's conclusion, revised by playtest
+
+The measurement thread in this branch kept reporting "the keeper stops 97% of
+the shot space" as though a low beatable fraction were itself the defect. That
+framing was wrong, and playtest corrected it.
+
+**The standard is not how much is beatable, it is whether the beatable set is
+the RIGHT set.** A goalie should make the saves he should and give up the goals
+he should. Measured against that standard, the current keeper is good:
+
+| shot | outcome | correct? |
+|---|---|---|
+| clean set wrister from the dot line | saved | yes |
+| point shot | saved | yes |
+| low, through the pads mid-rotation | goal | yes — the seal is beaten before it lands |
+| deke laterally, he commits and drops, elevate over him | goal | yes — earned |
+
+Those last two were found in play, then reproduced by instrument. They are the
+shots a real NHL goaltender concedes, and he concedes them for the right
+reasons: the grounded ~0.2 s butterfly drop, and an honest lateral commit.
+
+### So the defect is not the goalie — it is the bots' model of him
+
+The planner cannot find any of the three ways he is beatable, and both misses
+have the same root: **it models his POSITION but not his PHASE.**
+
+1. **Mid-drop low seal.** `AIActionScoring._pad_half_extent` is a binary step at
+   45°, and `_hole_open_angle` decays the five-hole monotonically
+   (`gap *= 1.0 - seal`) from max-open standing to zero sealed. Reality is a
+   hump — closed standing (the stick is across it), OPEN mid-rotation, closed
+   sealed — and the window sits exactly on the 45° switch. Needs
+   `(drop_phase, side)`, not a decay. Side matters: measured, the blocker side
+   does NOT leak, because the blade intercepts early (drop 0.12) before the
+   rotation is relevant.
+
+2. **Deke-then-elevate.** The planner samples `goalie_down` as of NOW. It has no
+   model of the keeper's RESPONSE to the carrier's own move, so it cannot plan
+   "commit him laterally, he drops, then go high" — only exploit it after the
+   fact. The HIGH band already concedes the arm extension to a down goalie, so
+   the cover model is right; what is missing is predicting that he WILL be down
+   because of what the carrier is about to do.
+
+### What this cancels
+
+Several proposals made earlier in this branch are withdrawn:
+
+* **"Give the stick a weak side."** He already has one, and it is the right one:
+  low glove side during the drop, blade guarding the other. What looked like
+  symmetric coverage was angle compression in tight funnelling every aim through
+  the blade's central band.
+* **"The keeper has no rebound control."** The pads steer (toe-out works, 60% of
+  pad rebounds leave the danger area) and the stick's angle throws most clear.
+  Confirmed acceptable in play.
+* **`save_deaden_pad_max_speed` sits below the real shot band.** True, but it is
+  a feel tunable, not a defect, and the rebounds it produces are not the
+  problem they looked like on paper.
+
+**Do not change the goalie.** The remaining work is entirely in the planner.
