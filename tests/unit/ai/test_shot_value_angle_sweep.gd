@@ -44,6 +44,32 @@ extends GutTest
 #      open; the disc-tangent cover does not see that. Same signature at
 #      7 m / 30 deg (-0.33).
 #
+# ── METHODOLOGY CORRECTION (2026-07, and it changed the answer) ───────────────
+# The runs above scored through score_shoot's DEFAULTS — no post seal, no
+# replicated pose, no measured five-hole. Gameplay does not: carrier.gd builds
+# _shot_env_* off the live GoalieNetworkState and feeds all of it. So the first
+# measurements compared a degraded model against the full live keeper, i.e. they
+# measured a code path the bots never execute. Both instruments now score
+# through Harness.shot_env(), which mirrors what carrier.gd assembles.
+#
+# Feeding the real read moves the result, and NOT in the flattering direction:
+#
+#   cell          loft  model  measured  saves
+#   3.5 / 4.3 m     0    1.00    0.00    PAD x24
+#   3.5 / 5.3 m     0    1.00    0.00    PAD x24
+#   5.0 m           2    1.00    0.17    STICK x18
+#   7.0 m           0    0.85    0.00    PAD x24
+#
+# The first two cells scored 24/24 GOALS on the default path, shooting HIGH.
+# With the pose fed they pick FLAT and the pad eats all 24. So the pose-fed HIGH
+# cover is OVER-STATED: READY hands parked at (0.42, 0.90) / (-0.44, 0.86) make
+# the model read the top corners as guarded, the flat corner wins the hole
+# compete by default, and the flat corner is exactly what this keeper is best at
+# stopping. The band choice inverts for the second time, from the opposite cause.
+#
+# That is the live target. Note it is NOT the same defect as the stick (the
+# in-tight cells stay 0.00/0.00 either way — that fix holds on both paths).
+
 # Report-only: every cell above is a live disagreement, so there is nothing here
 # worth freezing yet. This is the map, not the guard.
 
@@ -81,15 +107,31 @@ func _cell(spot: Vector3, spread: float) -> Dictionary:
 	_h.settle(spot, 120)
 	var g: Vector3 = _goalie.global_position
 	var speed: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S
+	# THE REPLICATED READ, exactly as gameplay assembles it (carrier.gd's
+	# _shot_env_*): post seal, stance family, five-hole and pose all come off the
+	# live GoalieNetworkState. Scoring against the defaults instead measures the
+	# model in a degraded configuration — no seal, no pose, no five-hole — while
+	# the puck meets the full keeper, which manufactures disagreements that are
+	# instrument error rather than model error.
+	var env: Dictionary = _h.shot_env()
+	var down: bool = env["down"]
+	var five: float = env["five"]
+	var seal_x: float = env["seal_x"]
+	var seal_tall: bool = env["seal_tall"]
+	var hands: Vector4 = env["hands"]
+	var pads: Vector4 = env["pads"]
 	var model: float = AIActionScoring.score_shoot(
 			spot, _goal, g, GameRules.NET_HALF_WIDTH, [], speed, 0.0, [],
-			-1.0, false, 0.0, false, spread)
+			five, down, seal_x, seal_tall, spread, [], hands, pads)
 	var aim: Vector3 = AIActionScoring.best_shot_aim(spot, _goal, g,
-			GameRules.NET_HALF_WIDTH, speed, 0.0, -1.0, false, spread)
+			GameRules.NET_HALF_WIDTH, speed, 0.0, five, down, spread,
+			seal_x, seal_tall, 0.0, hands, pads)
 	var loft: int = AIActionScoring.best_shot_loft(spot, _goal, g,
-			GameRules.NET_HALF_WIDTH, speed, 0.0, -1.0, false, 0.0, false, spread)
+			GameRules.NET_HALF_WIDTH, speed, 0.0, five, down,
+			seal_x, seal_tall, spread, 0.0, hands, pads)
 	var pt: float = AIActionScoring.best_shot_power_t(spot, _goal, g,
-			GameRules.NET_HALF_WIDTH, speed, 0.0, -1.0, false, 0.0, false, spread)
+			GameRules.NET_HALF_WIDTH, speed, 0.0, five, down,
+			seal_x, seal_tall, spread, 0.0, hands, pads)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	var goals: int = 0
@@ -108,22 +150,27 @@ func _cell(spot: Vector3, spread: float) -> Dictionary:
 	return {
 		"model": model, "measured": float(goals) / float(SAMPLES),
 		"gap": Vector2(g.x - spot.x, g.z - spot.z).length(),
-		"loft": loft, "pt": pt, "aim": aim,
+		"gx": g.x, "gz": g.z, "depth": absf(g.z - GOAL_Z),
+		"loft": loft, "pt": pt, "aim": aim, "seal": seal_x, "down": down,
+		"hands": hands, "pads": pads, "five": five,
 	}
 
 
 func test_angle_sweep() -> void:
 	var spread: float = BotSkillProfile.hard().shot_aim_error_rad
 	gut.p("Distance to goal held constant; only BEARING varies.")
-	gut.p(" r    bearing  model  measured   delta | G  S  P  W | aimx  loft  saves")
+	gut.p(" r    bearing  model  measured   delta | G  S  P  W | keeper x/depth seal | aimx loft")
 	for r: float in [5.0, 7.0]:
 		for deg: float in [0.0, 15.0, 30.0, 45.0, 60.0]:
 			var t: float = deg_to_rad(deg)
 			var spot := Vector3(r * sin(t), 0.0, GOAL_Z + r * cos(t))
 			var c: Dictionary = _cell(spot, spread)
+			if deg == 0.0:
+				gut.p("      pose: hands=%s pads=%s five=%.3f down=%s"
+						% [str(c["hands"]), str(c["pads"]), c["five"], str(c["down"])])
 			var a: Vector3 = c["aim"]
-			gut.p("%4.1f  %5.0f deg  %5.2f   %5.2f   %+5.2f |%2d %2d %2d %2d | %+5.2f  %d   %s"
+			gut.p("%4.1f  %5.0f deg  %5.2f   %5.2f   %+5.2f |%2d %2d %2d %2d | %+5.2f / %4.2f  | %+5.2f  %d  %s"
 					% [r, deg, c["model"], c["measured"], c["model"] - c["measured"],
 					_out[Harness.GOAL], _out[Harness.SAVE], _out[Harness.POST],
-					_out[Harness.WIDE], a.x, c["loft"], str(_parts)])
+					_out[Harness.WIDE], c["gx"], c["depth"], a.x, c["loft"], str(_parts)])
 	assert_true(true)

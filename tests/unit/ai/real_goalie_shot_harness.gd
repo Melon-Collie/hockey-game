@@ -63,6 +63,27 @@ func setup(goalie: Node, puck: Node, ctrl: GoalieController, shooter: Skater) ->
 	_ctrl.setup(_goalie, _puck, _goal_z, true)
 
 
+# THE REPLICATED GOALIE READ the shot model is fed in gameplay — the same fields
+# carrier.gd assembles into its _shot_env_* (post seal, stance family, five-hole
+# gap, hand/pad pose). Instruments MUST score through this rather than leaning on
+# score_shoot's defaults: the defaults describe a DEGRADED keeper (no seal, no
+# pose, no measured five-hole), so scoring against them measures a code path the
+# bots never execute while the puck meets the full live goalie. Every
+# disagreement found that way is partly instrument error.
+func shot_env() -> Dictionary:
+	var gs := GoalieNetworkState.new()
+	_ctrl.fill_state(gs)
+	var down: bool = gs.is_down()
+	return {
+		"down": down,
+		"five": GoalieBehaviorRules.five_hole_gap_m(down, gs.five_hole_openness),
+		"seal_x": gs.post_seal_x_sign(_goal_z),
+		"seal_tall": gs.is_post_seal_tall(),
+		"hands": gs.hands_read(_goal_z),
+		"pads": gs.pads_read(_goal_z),
+	}
+
+
 # Drive the goalie to its set pose for a shooter at `shooter`, holding the puck
 # there. `ticks` long enough to settle (challenge depth + square-up).
 func settle(shooter: Vector3, ticks: int) -> void:

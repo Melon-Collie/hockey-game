@@ -38,6 +38,32 @@ extends GutTest
 # is a coincidence rather than calibration. And one inversion — off-angle
 # 9.7 m reads 0.00 but measures 0.33, a real chance the model is blind to.
 #
+# ── METHODOLOGY CORRECTION (2026-07, and it changed the answer) ───────────────
+# The runs above scored through score_shoot's DEFAULTS — no post seal, no
+# replicated pose, no measured five-hole. Gameplay does not: carrier.gd builds
+# _shot_env_* off the live GoalieNetworkState and feeds all of it. So the first
+# measurements compared a degraded model against the full live keeper, i.e. they
+# measured a code path the bots never execute. Both instruments now score
+# through Harness.shot_env(), which mirrors what carrier.gd assembles.
+#
+# Feeding the real read moves the result, and NOT in the flattering direction:
+#
+#   cell          loft  model  measured  saves
+#   3.5 / 4.3 m     0    1.00    0.00    PAD x24
+#   3.5 / 5.3 m     0    1.00    0.00    PAD x24
+#   5.0 m           2    1.00    0.17    STICK x18
+#   7.0 m           0    0.85    0.00    PAD x24
+#
+# The first two cells scored 24/24 GOALS on the default path, shooting HIGH.
+# With the pose fed they pick FLAT and the pad eats all 24. So the pose-fed HIGH
+# cover is OVER-STATED: READY hands parked at (0.42, 0.90) / (-0.44, 0.86) make
+# the model read the top corners as guarded, the flat corner wins the hole
+# compete by default, and the flat corner is exactly what this keeper is best at
+# stopping. The band choice inverts for the second time, from the opposite cause.
+#
+# That is the live target. Note it is NOT the same defect as the stick (the
+# in-tight cells stay 0.00/0.00 either way — that fix holds on both paths).
+
 # Report-only ON PURPOSE. Every cell is currently wrong, so there is nothing
 # here worth freezing; asserting the present surface would cement the bug.
 # This is the measuring stick for the fix, not a guard on it.
@@ -93,15 +119,19 @@ func _settled_keeper(spot: Vector3) -> Vector3:
 # independent; the scatter draw is the bot's release error.
 func _measured(spot: Vector3, keeper: Vector3, spread: float) -> float:
 	var speed: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S
+	var env: Dictionary = _h.shot_env()
 	var aim: Vector3 = AIActionScoring.best_shot_aim(
 			spot, _goal, keeper, GameRules.NET_HALF_WIDTH, speed,
-			0.0, -1.0, false, spread)
+			0.0, env["five"], env["down"], spread,
+			env["seal_x"], env["seal_tall"], 0.0, env["hands"], env["pads"])
 	var loft: int = AIActionScoring.best_shot_loft(
 			spot, _goal, keeper, GameRules.NET_HALF_WIDTH, speed,
-			0.0, -1.0, false, 0.0, false, spread)
+			0.0, env["five"], env["down"], env["seal_x"], env["seal_tall"],
+			spread, 0.0, env["hands"], env["pads"])
 	var power_t: float = AIActionScoring.best_shot_power_t(
 			spot, _goal, keeper, GameRules.NET_HALF_WIDTH, speed,
-			0.0, -1.0, false, 0.0, false, spread)
+			0.0, env["five"], env["down"], env["seal_x"], env["seal_tall"],
+			spread, 0.0, env["hands"], env["pads"])
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	_last_counts = {Harness.GOAL: 0, Harness.SAVE: 0, Harness.POST: 0, Harness.WIDE: 0}
@@ -120,10 +150,12 @@ func _measured(spot: Vector3, keeper: Vector3, spread: float) -> float:
 
 
 func _model(spot: Vector3, keeper: Vector3, spread: float) -> float:
+	var env: Dictionary = _h.shot_env()
 	return AIActionScoring.score_shoot(
 			spot, _goal, keeper, GameRules.NET_HALF_WIDTH, [],
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [],
-			-1.0, false, 0.0, false, spread)
+			env["five"], env["down"], env["seal_x"], env["seal_tall"],
+			spread, [], env["hands"], env["pads"])
 
 
 func _spots() -> Array[Vector3]:
