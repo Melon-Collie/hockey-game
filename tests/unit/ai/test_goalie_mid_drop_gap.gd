@@ -26,6 +26,26 @@ extends GutTest
 # drop is documented as the reason clean low shots beat a purely reactive
 # goalie, and this is a human finding that counter.
 #
+# ── THE GAP IS ONE-SIDED, AND THAT IS CORRECT ────────────────────────────────
+# Predicted from play before measuring: the blocker side does NOT leak the same
+# way, because the stick rides up during the drop but stays on the ice longer,
+# so it covers that gap. Measured across both sides:
+#
+#   BLOCKER  -0.50 .. -0.10   all STICK saves,  drop@end 0.12
+#   GLOVE    +0.30 .. +0.42   GOAL,             drop@end 0.50
+#
+# The mechanism is in the drop column. Blocker-side saves all end at drop 0.12:
+# the blade INTERCEPTS EARLY, before the rotation has gone anywhere, so the drop
+# never becomes relevant. Glove side has nothing to meet the puck early, so it
+# travels on while the pad rotates through 0.50 and slips under.
+#
+# So the keeper ALREADY HAS A WEAK SIDE, and it is the one a real goalie has:
+# low glove side, during the drop, with the stick guarding the other. An earlier
+# note on this branch proposed "give the stick a weak side" on the theory that it
+# covered both sides symmetrically — that theory was wrong. The stick is properly
+# one-sided; what looked symmetric was angle compression in tight funnelling
+# every aim through its central band.
+#
 # THE MODEL GAP: AIActionScoring._pad_half_extent is a BINARY STEP —
 # |sin(roll)| > 0.707 returns the splayed half-length, otherwise the narrow box
 # half-width. There is no intermediate pad state, and the switch sits at 45 deg,
@@ -63,8 +83,9 @@ func before_each() -> void:
 func test_drop_state_across_the_glove_window() -> void:
 	var spot := Vector3(0.0, 0.0, GOAL_Z + SLOT)
 	gut.p("HELD 0.25s, FLAT, 78 mph. drop_progress: 0 = standing, 1 = sealed.")
-	gut.p(" aim_x  state@release  drop@rel  drop@end  outcome  part")
-	for a: float in [0.10, 0.20, 0.26, 0.30, 0.34, 0.38, 0.42, 0.50]:
+	gut.p(" aim_x  side     state@rel  drop@rel  drop@end  outcome  part")
+	for a: float in [-0.50, -0.42, -0.38, -0.34, -0.30, -0.26, -0.20, -0.10,
+			0.10, 0.20, 0.26, 0.30, 0.34, 0.38, 0.42, 0.50]:
 		var aim := Vector3(a, 0.0, GOAL_Z)
 		_ctrl.reset_to_crease()
 		_h.settle(spot, 90)
@@ -72,8 +93,9 @@ func test_drop_state_across_the_glove_window() -> void:
 		var st_rel: int = _ctrl._sm.current
 		var dp_rel: float = _ctrl._slide.drop_progress
 		var o: int = _h.fire_release_at(spot, aim, ShotMechanics.ELEVATION_FLAT, MPH, 0.0)
-		gut.p("%+5.2f   %-12s  %6.2f    %6.2f    %-6s  %s"
-				% [a, GoalieStateMachine.State.keys()[st_rel], dp_rel,
+		var side: String = "BLOCKER" if a < 0.0 else "GLOVE  "
+		gut.p("%+5.2f %s  %-9s  %6.2f    %6.2f    %-6s  %s"
+				% [a, side, GoalieStateMachine.State.keys()[st_rel], dp_rel,
 				_ctrl._slide.drop_progress,
 				"GOAL" if o == Harness.GOAL else "save",
 				PART[_h.last_part] if _h.last_part >= 0 else "-"])
