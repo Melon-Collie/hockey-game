@@ -123,6 +123,38 @@ func shot_velocity(shooter: Vector3, aim: Vector3, loft_level: int, power_t: flo
 	return Vector3(hdir.x * v_h, loft_vy, hdir.y * v_h)
 
 
+# Launch velocity at an EXPLICIT speed (m/s) rather than a power fraction, so an
+# instrument can sweep the speeds people actually shoot instead of a normalized
+# band. Same loft split as shot_velocity: the loft's fixed vertical launch comes
+# out of the total, the rest is horizontal.
+func shot_velocity_at(shooter: Vector3, aim: Vector3, loft_level: int,
+		speed_m_s: float, err_rad: float) -> Vector3:
+	var to_aim := Vector2(aim.x - shooter.x, aim.z - shooter.z)
+	if to_aim.length() < 0.001:
+		return Vector3.ZERO
+	var ang: float = to_aim.angle() + err_rad
+	var hdir := Vector2(cos(ang), sin(ang))
+	var loft_vy: float = ShotMechanics._loft_vy(loft_level,
+			GameRules.DEFAULT_LOFT_VY_LOW_M_S, GameRules.DEFAULT_LOFT_VY_HIGH_M_S)
+	var v_h: float = sqrt(maxf(speed_m_s * speed_m_s - loft_vy * loft_vy, 1.0))
+	return Vector3(hdir.x * v_h, loft_vy, hdir.y * v_h)
+
+
+# fire() at an explicit speed. Mirrors fire()'s bookkeeping exactly.
+func fire_at(shooter: Vector3, aim: Vector3, loft_level: int, speed_m_s: float,
+		err_rad: float) -> int:
+	var vel: Vector3 = shot_velocity_at(shooter, aim, loft_level, speed_m_s, err_rad)
+	if vel == Vector3.ZERO:
+		return WIDE
+	_shooter.global_position = shooter
+	_puck.clear_carrier()
+	last_part = -1
+	last_contact_pos = Vector3.INF
+	last_cross = Vector3.INF
+	last_goalie_pos = Vector3.INF
+	return _march(shooter, vel)
+
+
 func fire(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
 		err_rad: float) -> int:
 	var vel: Vector3 = shot_velocity(shooter, aim, loft_level, power_t, err_rad)

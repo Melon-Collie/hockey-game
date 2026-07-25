@@ -9,7 +9,7 @@ extends GutTest
 #
 # aim x   — every 7 cm across the mouth, post to post
 # loft    — FLAT / LOW / HIGH
-# power   — the full wrister band
+# speed   — 65 / 70 / 75 mph (see SHOT_MPH)
 #
 # If nothing scores, the keeper is genuinely unbeatable when set and the bots
 # refusing to shoot is correct play, not a modelling bug. If something scores,
@@ -26,52 +26,36 @@ extends GutTest
 # arrives in ~0.15 s — inside the keeper's arm read. Any conclusion here is
 # about WRISTERS only.
 #
-# ── WHAT IT MEASURED (2026-07) ───────────────────────────────────────────────
+# ── WHAT IT MEASURED (2026-07, at 65/70/75/80 mph) ───────────────────────────
 # STANDARD SPOT: dead centre between the end-zone faceoff dots, 6.096 m out
 # (GameRules.ICING_FACEOFF_DOT_Z — 20 ft, NHL spec). Picked because a human can
 # stand there and replicate it by feel.
 #
-#   DOT LINE   FLAT |pppsssssssssssssGGpppppp|  2 goals
-#   6.10 m     LOW  |GssssssppppGGGGppppppppp|  9 goals
-#              HIGH |GGbbbbbbbbbcGggggggggggG|  9 goals
-#              -> 20/360 (5.6%)   LIVE rebounds 197 (54.7%)
-#              first contact: PAD 173, STICK 124, BLOCK 18, GLOVE 20, CHEST 5
+#   DOT LINE   FLAT |pppppppssssssssssssppppp|   0 goals
+#   6.10 m     LOW  |Gppppssssssssssssspppppp|   1 goal
+#              HIGH |GGsssssspppGGppppppppppG|  15 goals
+#              -> 16/288 (5.6%)   LIVE rebounds 270 (93.8%)
+#              first contact: PAD 147, STICK 123, CHEST 2, GLOVE 0
 #
-# PADS are the top first-contact surface here, with the stick second and the
-# chest almost never — and more than half of all shots leave a live puck. That
-# matches the reported feel from this spot ("saved by the legs and body, but
-# they rattle around a bit"), which is the first independent corroboration these
-# numbers have had.
+#   slot 3.0 m  all three rows solid stick -> 0/288 (0.0%)
+#              LIVE rebounds 288 (100.0%), first contact STICK 288
+#   slot 9.0 m  -> 38/288 (13.2%), LIVE rebounds 216 (75.0%)
 #
-# For contrast, either side of it:
-#                     aim x:  -0.84 ....... 0 ....... +0.84
-#   slot 3.0 m FLAT |ssssssssssssssssssssssss|  0 goals
-#              LOW  |ssssssssssssssssssssssss|  0 goals
-#              HIGH |sssssssspppGGGpppppppppp|  3 goals   -> 3/360   (0.8%)
-# slot 5.0 m   FLAT |ppppppsssssssssssssppppp|  0 goals
-#              LOW  |ppppsssssspGGGppppsppppp|  4 goals
-#              HIGH |GbbbbbbppppGGpppppgggggG|  8 goals   -> 12/360  (3.3%)
-# off-angle    FLAT |ssssssssssssssssssGppppp|  1 goal
-#   5.3 m      LOW  |ssssssspGGGGGppppspppppp|  9 goals
-#              HIGH |bbpppppppGGppppppggggggG|  5 goals   -> 15/360  (4.2%)
+# THREE THINGS, once the unrealistically slow shots are dropped:
 #
-# So he is NOT literally unbeatable — but only 0.8-4.2% of the shot space beats
-# him with PERFECT execution, which a bot carrying ~0.05 rad of aim spread
-# cannot reliably find. "The bots will not shoot at a set keeper" is therefore
-# correct play, and matches what the calibrated shot surface says.
+#  1. ONLY HIGH WORKS from the dot line — 15 of the 16 goals. FLAT scores zero
+#     and LOW scores once. At real pace the low game is completely shut.
 #
-# THE MECHANISM IS THE STICK. 344 of 360 saves at 3 m are STICK. The derived
-# paddle reach is 0.64 m half-width and the keeper stands 1.32 m away there, so
-# projected to the goal line it spans 0.64 * 3/1.32 = 1.45 m against a 0.915 m
-# net half-width: the stick ALONE covers the entire low net from the slot — and
-# it does so on BOTH sides at once, because yaw_to_target swings the blade onto
-# the puck line from either direction. A real goalie's paddle guards one side.
-# That symmetry is the wall, and it is where the weak side goes.
+#  2. 93.8% OF SHOTS LEAVE A LIVE PUCK, and from 3 m it is 100%. Every speed
+#     swept is above Puck.save_deaden_pad_max_speed (28.0 m/s = 62.6 mph), the
+#     threshold under which a pad/blocker save is deadened — its comment reads
+#     "above a solid wrister, below hard shots/slappers", but real shots START
+#     at 65. So no pad save ever deadens, and the keeper has effectively NO
+#     rebound control at the speeds the game is actually played at. Glove and
+#     chest — the two surfaces that deaden at any speed — are 2 of 288 here.
 #
-# The windows that DO work are the honest ones: HIGH dead centre in tight (over
-# the shoulder) and HIGH at both posts from range — the shots players actually
-# score. Re-run this after any change to the keeper's coverage; the beatable
-# fraction and WHERE it sits are the two numbers that matter.
+#  3. From 3 m nothing goes in at all, at any legal speed, and all 288 first
+#     contacts are STICK.
 #
 # ── THE SCOPE THAT MATTERED MOST: rebounds are TERMINAL here ─────────────────
 # This instrument stops at FIRST goalie contact, so every rebound goal in a real
@@ -128,6 +112,20 @@ const SETTLE_TICKS: int = 90
 # slot. Chosen because it is a spot a human can stand on and replicate by feel,
 # which is the only way to check these numbers against how he actually plays.
 const SLOT_DIST_M: float = GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z
+# Speeds people actually shoot at, in mph — the units the game reports back, so
+# these can be matched by hand. The slow end of a normalized power band (a
+# 33 mph wrister) is not a shot anybody takes and only pollutes the picture.
+# 75 and 80 mph are above the NEUTRAL wrister ceiling (DEFAULT_WRISTER_POWER_MAX
+# = 33.0 m/s = 73.8 mph) but are reachable on a wrister with height / weight /
+# stick-flex modifiers, so the whole band is wrister-legal on some build. 69 mph
+# is the reference build being played against.
+#
+# EVERY speed here is above Puck.save_deaden_pad_max_speed (28.0 m/s = 62.6 mph),
+# the threshold under which a pad/blocker save is deadened. Its comment reads
+# "above a solid wrister, below hard shots/slappers" — but real shots start at
+# 65, so in practice NO pad save ever deadens and every one kicks a live puck.
+const SHOT_MPH: Array[float] = [65.0, 70.0, 75.0, 80.0]
+const MPH_TO_MS: float = 0.44704
 const MAX_AIM: float = GameRules.NET_HALF_WIDTH \
 		- GameRules.NET_POST_RADIUS - GameRules.PUCK_COLLISION_RADIUS
 
@@ -172,10 +170,11 @@ func _sweep(spot: Vector3, label: String) -> int:
 		var a: float = -MAX_AIM
 		while a <= MAX_AIM + 0.001:
 			var best: String = "."
-			for pt: float in [0.2, 0.4, 0.6, 0.8, 1.0]:
+			for mph: float in SHOT_MPH:
 				_ctrl.reset_to_crease()
 				_h.settle(spot, SETTLE_TICKS)
-				var o: int = _h.fire(spot, Vector3(a, 0.0, GOAL_Z), lofts[li], pt, 0.0)
+				var o: int = _h.fire_at(
+						spot, Vector3(a, 0.0, GOAL_Z), lofts[li], mph * MPH_TO_MS, 0.0)
 				shots += 1
 				if o == Harness.GOAL:
 					goals += 1
@@ -209,7 +208,7 @@ func _sweep(spot: Vector3, label: String) -> int:
 func test_can_anything_beat_the_set_keeper_from_the_slot() -> void:
 	gut.p("Exhaustive shot space, PERFECT execution, set + squared keeper.")
 	gut.p("Columns are aim x from -0.84 to +0.84 in 7 cm steps; each cell is the")
-	gut.p("best outcome over 5 power levels.")
+	gut.p("best outcome over 65/70/75/80 mph.")
 	gut.p("STANDARD SPOT: dead centre between the faceoff dots, %.3f m out." % SLOT_DIST_M)
 	_sweep(Vector3(0.0, 0.0, GOAL_Z + SLOT_DIST_M), "DOT LINE %.2f m" % SLOT_DIST_M)
 	# Kept either side of it for context on how fast the picture changes.
@@ -236,6 +235,7 @@ func test_report_how_much_of_the_wall_is_the_stick() -> void:
 	gut.p("SAME sweep, STICK BLADE REMOVED (counterfactual, not a proposal).")
 	var a: int = _sweep(Vector3(0.0, 0.0, GOAL_Z + SLOT_DIST_M),
 			"no-stick DOT LINE %.2f m" % SLOT_DIST_M)
-	gut.p("NO-STICK at the dot line: %d/360 (%.1f%%)" % [a, 100.0 * float(a) / 360.0])
+	var n: int = 24 * 3 * SHOT_MPH.size()
+	gut.p("NO-STICK at the dot line: %d/%d (%.1f%%)" % [a, n, 100.0 * float(a) / float(n)])
 	for cs: CollisionShape3D in parts:
 		cs.disabled = false
