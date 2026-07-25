@@ -1,6 +1,6 @@
 class_name InputState
 
-const BYTES_SIZE: int = 23
+const BYTES_SIZE: int = 24
 # Layout: u32 timestamp@0.1ms(0) f32 delta(4) s16 move.x(8) s16 move.y(10)
 #         s16 mwp.x(12) s8 mwp.y(14) s16 mwp.z(15) s16 msp.x(17) s16 msp.y(19)
 #         u16 flags(21)  flags: shoot_pressed[0] shoot_held[1] slap_pressed[2]
@@ -45,11 +45,17 @@ var quick_pass_pressed: bool = false
 # lives here rather than as a loose local key read. Not yet consumed by any
 # behavior — the button is wired ahead of the hit-system redesign.
 var hit_held: bool = false
-# Runtime, NOT serialized. Committed wrister power fraction (0..1): the controller
-# converts it to the equivalent cursor speed (ShotMechanics.wrister_speed_for_power_t)
-# so a committed shooter drives the SAME pure-mouse power model deterministically.
-# Set by bots at their shot/pass windup, and by the gamepad path from the right-stick
-# push magnitude. Mouse humans leave it at the default (unused — they read real cursor speed).
+# Committed wrister power fraction (0..1): the controller converts it to the
+# equivalent cursor speed (ShotMechanics.wrister_speed_for_power_t) so a committed
+# shooter drives the SAME pure-mouse power model deterministically. Set by bots at
+# their shot/pass windup, and by the gamepad path from the right-stick push
+# magnitude. Mouse humans leave it at the default (unused — they read real cursor speed).
+#
+# SERIALIZED as a u8 (see to_bytes) for the gamepad path — bots are host-simulated
+# and never cross the wire, but a pad CLIENT's power has to reach the host or the
+# host re-derives it from a parked (≈0 speed) cursor and fires a floater while the
+# client predicted a full shot. Senders quantize to the wire grid BEFORE predicting
+# (LocalInputGatherer / quantize_power_t) so prediction and host agree bit-exactly.
 var bot_wrister_power_t: float = 1.0
 # Runtime, NOT serialized. True when the wrister POWER is COMMITTED rather than
 # measured from cursor motion: power comes from bot_wrister_power_t (with the travel
@@ -57,8 +63,21 @@ var bot_wrister_power_t: float = 1.0
 # RT is held — the pad has no meaningful cursor speed, so the right-stick push
 # magnitude is the whole power signal (aim still flows through the positional
 # origin→cursor model, since the gamepad parks the cursor in the stick direction).
-# NOTE: not on the wire yet — drives offline / host play; online pad clients are a follow-up.
+# Serialized as flag bit [13] (see to_bytes) so a pad CLIENT's committed power
+# reaches the host instead of the host falling back to the parked cursor's speed.
 var commit_wrister_power: bool = false
+
+# Snap a power fraction to the u8 wire grid. Senders MUST run their value through
+# this before predicting with it: the client predicts on the raw InputState object
+# (LocalController._process_input) and serializes separately, so an unquantized
+# value would have the client predict full precision while the host decodes 1/255
+# steps — a divergence on the one tick that sets the whole shot's launch velocity.
+# Power is committed once per shot (not per tick, like position), so quantizing at
+# the source is cheap here and buys an exact match rather than a tolerance.
+# Bots skip this deliberately — host-simulated, never serialized, so they keep
+# full precision.
+static func quantize_power_t(v: float) -> float:
+	return float(roundi(clampf(v, 0.0, 1.0) * 255.0)) / 255.0
 # BOT-ONLY, runtime, NOT serialized. The bot's committed shot DIRECTION (world XZ,
 # normalized) for a charged wrister/pass, and its committed forehand/backhand.
 # Bots have no real cursor, and the human wrister now aims POSITIONALLY (origin→
@@ -101,6 +120,8 @@ func to_array() -> Array:
 		stick_lift_pressed,
 		quick_pass_pressed,
 		hit_held,
+		commit_wrister_power,
+		bot_wrister_power_t,
 	]
 
 func to_bytes() -> PackedByteArray:
@@ -130,8 +151,13 @@ func to_bytes() -> PackedByteArray:
 		((clampi(elevation_level, 0, MAX_ELEVATION_LEVEL) & 0x3) << 6) |
 		(0x100 if block_held     else 0) | (0x200 if stick_lift_held else 0) |
 		(0x400 if stick_lift_pressed else 0) | (0x800 if quick_pass_pressed else 0) |
-		(0x1000 if hit_held else 0))
+		(0x1000 if hit_held else 0) | (0x2000 if commit_wrister_power else 0))
 	b.encode_u16(21, flags)
+	# Committed wrister power as a u8 (0..1 in 1/255 steps). Only meaningful while
+	# the commit flag above is set; a mouse sender leaves the default and the host
+	# ignores the byte. u8 caps the decode at 1.0 by construction, so a forged
+	# payload can't buy a shot above the ceiling.
+	b.encode_u8(23, roundi(clampf(bot_wrister_power_t, 0.0, 1.0) * 255.0))
 	return b
 
 
@@ -164,6 +190,8 @@ static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:
 	s.stick_lift_pressed = (flags & 0x400) != 0
 	s.quick_pass_pressed = (flags & 0x800) != 0
 	s.hit_held           = (flags & 0x1000) != 0
+	s.commit_wrister_power = (flags & 0x2000) != 0
+	s.bot_wrister_power_t = float(b.decode_u8(offset + 23)) / 255.0
 	return s
 
 
@@ -191,4 +219,7 @@ static func from_array(data: Array) -> InputState:
 		state.quick_pass_pressed = data[19]
 	if data.size() > 20:
 		state.hit_held = data[20]
+	if data.size() > 22:
+		state.commit_wrister_power = data[21]
+		state.bot_wrister_power_t = clampf(data[22], 0.0, 1.0)
 	return state

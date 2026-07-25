@@ -10,8 +10,18 @@ class_name AIRoleFlank
 # hysteresis); each role behavior just receives the lateral sign
 # and computes the target.
 #
-# No utility AI — there's nothing to score against in NEUTRAL play
-# beyond "stand near the puck on this side."
+# Not quite "no utility AI": the shape above is pure PUCKWATCHING — the
+# target is a rigid offset off the puck, so both flanks follow the puck
+# wherever it goes, including up-ice past everyone. That is what produced the
+# last man back stepping to his own blue line while an opponent lurked behind
+# him: a stand nobody can recover from is not a stand, and NEUTRAL was the one
+# game state whose off-puck shape never asked the question. So the flank stand
+# is bounded by the same race-home read every other defensive station uses
+# (CONTAIN, the D pair's line hold, the points, the valve): hold the puck-side
+# shape while the counter-attack channels are containable, sag down the retreat
+# line exactly as far as they demand when they aren't. Contained counters leave
+# the shape untouched, so ordinary loose-puck play is unchanged — the bound only
+# bites on the guaranteed-breakaway geometry it exists to refuse.
 
 # Lateral offset from puck X axis. Sampling parameter — the
 # defensive "shape" the team holds during loose-puck play.
@@ -31,8 +41,17 @@ static func decide(ctx: RoleContext, lateral_sign: float) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 	var puck_pos: Vector3 = ctx.snapshot.puck_state.position
-	d.target_position = Vector3(
+	var stand := Vector3(
 			puck_pos.x + lateral_sign * FLANK_LATERAL_M,
 			0.0,
 			puck_pos.z + ctx.own_goal_dir * FLANK_DEPTH_M)
+	# Race-home bound (see the header doc). Channels are built off the full
+	# opponent list, memoized per snapshot — the second flank's fill is a
+	# cache hit.
+	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
+	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, ctx.defending_goal_pos)
+	d.target_position = AIRoleHelpers.most_forward_feasible(
+			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	return d

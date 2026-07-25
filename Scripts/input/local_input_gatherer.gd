@@ -225,8 +225,12 @@ func gather() -> InputState:
 		# how hard the stick is pushed (its magnitude) — no flick, no drag timing, no
 		# travel gate. Latch the power while RT is held and keep commit true one frame
 		# into the release so the shot (fired on RT-up) reads the held power.
+		# Snapped to the wire grid HERE, not at send: we predict locally on this
+		# same object, so an unquantized latch would have us predict a power the
+		# host can't reproduce from the u8 it receives (see InputState.quantize_power_t).
 		if state.shoot_held:
-			_committed_wrister_power = _pad_right_stick_dz().length()
+			_committed_wrister_power = InputState.quantize_power_t(
+					_pad_right_stick_dz().length())
 		state.commit_wrister_power = state.shoot_held or _prev_gather_rt
 		state.bot_wrister_power_t = _committed_wrister_power
 		_prev_gather_rt = state.shoot_held

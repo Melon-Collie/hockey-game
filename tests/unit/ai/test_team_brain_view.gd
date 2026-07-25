@@ -70,6 +70,69 @@ func test_view_is_reused_across_builds() -> void:
 	assert_same(first, brain.get_view(), "same view instance is refilled, not replaced")
 
 
+func test_view_mirrors_ping_chase_peer() -> void:
+	# GET_PUCK is team-scoped (one ordered chaser), so it freezes as a scalar
+	# rather than a per-peer dict. It was the one ping type the original freeze
+	# missed, leaving _should_chase_loose_puck reading the live brain from the
+	# worker while main-thread apply_ping / advance mutated the same dictionary.
+	var brain := _make_brain()
+	var snap := _make_snapshot(Vector3(1.0, 0.0, 2.0))
+	brain.build_view(snap)
+	assert_eq(brain.get_view().ping_chase_peer(), -1, "no order -> -1")
+
+	brain.apply_ping(PingRules.Type.GET_PUCK, P2, P1, P1, Vector3.ZERO)
+	brain.build_view(snap)
+	assert_eq(brain.get_view().ping_chase_peer(), brain.ping_chase_peer(),
+			"chase order frozen to match the live brain")
+	assert_eq(brain.get_view().ping_chase_peer(), P1, "P1 is the ordered chaser")
+
+
+# Lines in the agent state machine that touch the LIVE TeamBrain. Every one of
+# these must be main-thread-only, because the AI worker runs dispatch() against
+# the frozen TeamBrainView while the main thread freely mutates the live brain
+# (pings, force-retick, spawn/despawn) — see docs/ai-threading-plan.md.
+#
+#   team_brain.gd:788   _strategy() — reads the view POINTER; build_view only
+#                       swaps it while the worker is idle (AICoordinator).
+#   1592 / 1625         debug_role / debug_pass_slot — called only from
+#                       AIController._refresh_debug_label, on the main thread.
+#   4046                push_one_timer_ready — main-thread collection step.
+#
+# If you are adding a line here, prove it cannot run on the worker. Reads
+# reachable from dispatch() belong on TeamStrategyView and must be frozen into
+# TeamBrainView by TeamBrain.build_view instead.
+const _SM_PATH := "res://Scripts/ai/skater_agent_state_machine.gd"
+const _ALLOWED_LIVE_BRAIN_LINES: Array[String] = [
+	"var v: TeamBrainView = _team_brain.get_view()",
+	'return "%s: %s" % [_team_state_label(_team_brain.state), _slot_label(_team_brain.get_slot(_peer_id))]',
+	"return _slot_label(_team_brain.get_slot(debug_pass_peer_id))",
+	"_team_brain.set_one_timer_ready(_peer_id, _is_one_timer_ready)",
+]
+
+
+func test_agent_never_reads_live_brain_off_thread() -> void:
+	var f: FileAccess = FileAccess.open(_SM_PATH, FileAccess.READ)
+	assert_not_null(f, "opened the agent state machine source")
+	if f == null:
+		return
+	var unexpected: Array[String] = []
+	var line_no: int = 0
+	while not f.eof_reached():
+		line_no += 1
+		var raw: String = f.get_line()
+		var line: String = raw.strip_edges()
+		if line.begins_with("#") or not line.contains("_team_brain."):
+			continue
+		if _ALLOWED_LIVE_BRAIN_LINES.has(line):
+			continue
+		unexpected.append("%d: %s" % [line_no, line])
+	f.close()
+	assert_eq(unexpected, [] as Array[String],
+			"new live-TeamBrain read(s) in the agent SM — these race the AI worker. "
+			+ "Freeze the field into TeamBrainView, or add the line to "
+			+ "_ALLOWED_LIVE_BRAIN_LINES with proof it is main-thread-only.")
+
+
 func test_stale_slot_cleared_on_rebuild() -> void:
 	# A peer that loses its slot must drop out of the frozen view's ping/anchor
 	# maps (those are cleared and refilled from the current slot set each build).

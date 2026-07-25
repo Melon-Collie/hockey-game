@@ -1193,12 +1193,17 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# early enough beats the push, late enough meets a square goalie.
 		# Windows the median release can't hit score ~0 through the hole
 		# geometry and lose the compete on their own.
+		# The shooter's own netward pace backs the keeper in over the wind-up +
+		# flight (the planning depth model) — a release taken while driving
+		# meets a retreating keeper, a standstill one meets the chart.
+		var shot_closing: float = AIActionScoring.closing_toward(
+				ctx.self_pos, ctx.self_velocity, attacking_goal)
 		var sample_goalie: Vector3 = goalie_now if _shot_env_seal_x != 0.0 \
 				else AIActionScoring.predict_goalie_pos(
 						goalie_now, attacking_goal,
 						SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + shift_s
 								+ flight_s + ctx.shot_timing_error_s * 0.5,
-						release)
+						release, shot_closing)
 		# Own traffic screens: the in-zone teammates (_scratch_option_receiver_pos,
 		# filled above) ride along as sightline bodies — the net-front man parked
 		# in the goalie's eyes is what makes the point blast a real chance.
@@ -2020,10 +2025,14 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			AIActionScoring.release_point_toward(self_pos, receiver_spot),
 			_scratch_opponents, _scratch_opponent_caps)
 	_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
+	# A receiver streaking netward backs the keeper in over the feed's flight,
+	# same planning depth model the carrier's own reads use.
+	var receiver_closing: float = AIActionScoring.closing_toward(
+			receiver_spot, receiver_vel, ctx.attacking_goal_pos)
 	var receiver_goalie: Vector3 = _predict_goalie_at(
-			ctx, receiver_release_t, receiver_spot)
+			ctx, receiver_release_t, receiver_spot, receiver_closing)
 	var receiver_unsettled: float = _goalie_unsettled_at(
-			ctx, receiver_release_t, receiver_spot)
+			ctx, receiver_release_t, receiver_spot, receiver_closing)
 	# Score the receiver's shot at ITS real release speed (Shot) — a high-Shot
 	# teammate one-times harder, beating the goalie more, so it's a better feed.
 	var receiver_shot_speed: float = receiver_caps.wrister_shot_speed if receiver_caps != null \
@@ -2186,6 +2195,45 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 #
 # `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
 # stand-still's shot branch shares it verbatim — see the stand-still block.
+# Is a carry candidate on ice this bot can legally stand and handle on?
+#
+# The front-of-net rule is the old inline clamp verbatim: rink side of both goal
+# lines, a body's width off the boards. What changed is the `allow_behind` case.
+#
+# A carrier BEHIND a net used to have almost no representable move set: every
+# local candidate back there failed the goal-line clamp, and the ones aimed out
+# front pruned on carry_path_blocked_by_net, which left the two post walkouts,
+# the zone exits and stand-still. Under any real pressure both walkouts read
+# unsafe, so the compete fell through to stand-still — the bot planted itself on
+# the end wall with the puck and got stripped, and every attempt to work out of
+# there had to be a single all-or-nothing walkout. That is the "bots get stuck
+# behind the net and turn it over" failure: not a bad evaluation, a missing
+# REPRESENTATION. There is no move in the search for the ones a real player
+# makes back there — reverse off the wall, slide across the back of the cage,
+# hold at the far post and wait for a lane.
+#
+# So a carrier already behind a goal line keeps its local candidates in that
+# ice, subject only to what is genuinely illegal there: off the playing surface
+# (the end boards, corners included), and inside the cage itself. The route to
+# each candidate is still checked against the net by _score_move_candidate_base,
+# so a step that would drag the puck through the mesh still prunes — the bot
+# gains the lateral walk it was missing, not a licence to skate through the net.
+func _candidate_ice_legal(candidate: Vector3, allow_behind: bool) -> bool:
+	if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+		return false
+	if absf(candidate.z) <= GameRules.GOAL_LINE_Z - AIRoleHelpers.GOAL_LINE_BUFFER_M:
+		return true
+	if not allow_behind:
+		return false
+	# On the surface (rounded corners honoured) with a body's clearance.
+	var xz := Vector2(candidate.x, candidate.z)
+	if not GameRules.clamp_to_rink_inner(xz, AIRoleHelpers.RINK_INSET_M) \
+			.is_equal_approx(xz):
+		return false
+	# Outside the cage (the same exclusion box the skater body is held clear of).
+	return GameRules.push_out_of_net(xz).is_equal_approx(xz)
+
+
 func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		directed_seam: Vector3, current_safety: float) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
@@ -2264,6 +2312,10 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	_beam_tracked_goalie.clear()
 	_beam_prune_bound = cont_bound
 
+	# Behind-the-net ice is playable ice for a carrier ALREADY back there — see
+	# _candidate_ice_legal. Resolved once; every candidate ring below shares it.
+	var behind_net: bool = absf(self_pos.z) > GameRules.GOAL_LINE_Z
+
 	# 8 polar cardinals at CARRY_SEARCH_STEP_M. Forward = toward slot;
 	# rotate by 0°, 45°, ..., 315° to span all directions.
 	for angle: float in _POLAR_ANGLES:
@@ -2274,9 +2326,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		var candidate := Vector3(
 				self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
 				self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
-		if absf(candidate.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
-			continue
-		if absf(candidate.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+		if not _candidate_ice_legal(candidate, behind_net):
 			continue
 		_beam_score_base(ctx, candidate, our_goalie, false)
 
@@ -2293,9 +2343,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			var retreat := Vector3(
 					self_pos.x + (fwd_x * rc - fwd_z * rs) * CARRY_RETREAT_STEP_M, 0.0,
 					self_pos.z + (fwd_x * rs + fwd_z * rc) * CARRY_RETREAT_STEP_M)
-			if absf(retreat.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
-				continue
-			if absf(retreat.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+			if not _candidate_ice_legal(retreat, behind_net):
 				continue
 			_beam_score_base(ctx, retreat, our_goalie, false)
 
@@ -2311,9 +2359,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			var cut := Vector3(
 					self_pos.x + (fwd_x * cc - fwd_z * cs) * CARRY_RETREAT_STEP_M, 0.0,
 					self_pos.z + (fwd_x * cs + fwd_z * cc) * CARRY_RETREAT_STEP_M)
-			if absf(cut.z) > absf(attacking_goal.z) - AIRoleHelpers.GOAL_LINE_BUFFER_M:
-				continue
-			if absf(cut.x) > GameRules.RINK_HALF_WIDTH - AIRoleHelpers.RINK_INSET_M:
+			if not _candidate_ice_legal(cut, behind_net):
 				continue
 			_beam_score_base(ctx, cut, our_goalie, false)
 
@@ -2738,8 +2784,16 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 		# travel model, capped at this bot's real top end.
 		var arrive_speed: float = minf(cand_dist / local_time, ctx.self_max_speed)
 		arrive_vel = to_cand * (arrive_speed / cand_dist)
+	# The keeper backs in as the carry closes on him (AIActionScoring's planning
+	# depth model): over the carry his depth follows the chart / rush-backflow
+	# curve, so a candidate deeper in the zone meets a keeper who has retreated,
+	# not one frozen out at challenge depth swallowing the whole net. Closing is
+	# the rate this carry shortens the puck's distance to the goal.
+	var carry_closing: float = (self_pos.distance_to(ctx.attacking_goal_pos)
+			- candidate.distance_to(ctx.attacking_goal_pos)) / maxf(local_time, 0.001)
 	var tracked_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos, local_time, candidate)
+			_goalie_now(ctx), ctx.attacking_goal_pos, local_time, candidate,
+			carry_closing)
 	var cand_release: Vector3 = AIActionScoring.release_ahead_of_goalie(
 			candidate + arrive_vel * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
 			ctx.attacking_goal_pos, tracked_goalie)
@@ -2750,18 +2804,22 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	# its median release, so building a lateral cut toward a thin-but-real
 	# window keeps its gradient — the executed release then converts it or
 	# gets robbed, it isn't pruned at the plan stage.
+	# Final-race closing: the release is fired while still carrying the arrival
+	# pace, so the keeper is still backing in over the wind-up + flight.
+	var release_closing: float = AIActionScoring.closing_toward(
+			candidate, arrive_vel, ctx.attacking_goal_pos)
 	var cand_goalie: Vector3 = AIActionScoring.predict_goalie_pos(
 			tracked_goalie, ctx.attacking_goal_pos,
 			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + cand_flight
 					+ ctx.shot_timing_error_s * 0.5,
-			cand_release)
+			cand_release, release_closing)
 	var cand_unsettled: float = 0.0
 	if ctx.reads_goalie_motion:
 		cand_unsettled = AIActionScoring.goalie_unsettled(
 				tracked_goalie, ctx.attacking_goal_pos,
 				SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 						+ cand_flight + ctx.shot_timing_error_s * 0.5,
-				cand_release)
+				cand_release, release_closing)
 	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,
 			ctx.self_wrister_shot_speed, cand_unsettled, ctx.self_aim_spread_rad)
@@ -3163,8 +3221,10 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 	var dist2: float = sqrt(dist2_sq)
 	var arrive_speed2: float = minf(dist2 / maxf(t2, 0.001), ctx.self_max_speed)
 	var arrive_vel2 := Vector3(to_slot_x, 0.0, to_slot_z) * (arrive_speed2 / dist2)
+	var leg2_closing: float = (candidate.distance_to(ctx.attacking_goal_pos)
+			- slot.distance_to(ctx.attacking_goal_pos)) / maxf(t2, 0.001)
 	var tracked2: Vector3 = AIActionScoring.predict_goalie_pos(
-			tracked_goalie, ctx.attacking_goal_pos, t2, slot)
+			tracked_goalie, ctx.attacking_goal_pos, t2, slot, leg2_closing)
 	var release2: Vector3 = AIActionScoring.release_ahead_of_goalie(
 			slot + arrive_vel2 * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
 			ctx.attacking_goal_pos, tracked2)
@@ -3174,7 +3234,8 @@ func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
 			tracked2, ctx.attacking_goal_pos,
 			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + flight2
 					+ ctx.shot_timing_error_s * 0.5,
-			release2)
+			release2,
+			AIActionScoring.closing_toward(slot, arrive_vel2, ctx.attacking_goal_pos))
 	# Lane and arrival pressure read at slot arrival (both legs elapsed,
 	# defense re-setting onto the slot the whole way).
 	_project_opponents_collapsing(
@@ -3258,8 +3319,13 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 			else AIActionScoring.time_to_arrive(
 					receiver_spot, reached, receiver_vel, recv_speed, recv_accel)
 	_project_opponents_to(ctx, t, _scratch_opponents_pass)
+	# The keeper backs in over the receiver's drive exactly as he does over the
+	# carrier's own (planning depth model) — both sides of the carry-vs-pass
+	# compete must read the same keeper, or the feed inherits a phantom wall.
 	var goalie: Vector3 = AIActionScoring.goalie_squared_pos(
-			_goalie_now(ctx), ctx.attacking_goal_pos, reached)
+			_goalie_now(ctx), ctx.attacking_goal_pos, reached, t,
+			(receiver_spot.distance_to(ctx.attacking_goal_pos)
+					- reached.distance_to(ctx.attacking_goal_pos)) / maxf(t, 0.001))
 	# score_at, not score_shoot: OZ → goalie-aware shot from the reached spot; NZ/DZ →
 	# position potential of the reached spot (advanced toward the zone). Same regime
 	# the carrier's own carry candidates use, so the ahead man on the clear path is
@@ -3515,10 +3581,10 @@ func _goalie_now(ctx: RoleContext) -> Vector3:
 # `release_time_s` is the time from now until the bot fires (e.g.,
 # wrister charge time + any path/flight time before the fire).
 func _predict_goalie_at(ctx: RoleContext, release_time_s: float,
-		puck_pos_at_release: Vector3) -> Vector3:
+		puck_pos_at_release: Vector3, closing_speed_m_s: float = 0.0) -> Vector3:
 	return AIActionScoring.predict_goalie_pos(
 			_goalie_now(ctx), ctx.attacking_goal_pos,
-			release_time_s, puck_pos_at_release)
+			release_time_s, puck_pos_at_release, closing_speed_m_s)
 
 
 # Companion to _predict_goalie_at: how unsettled [0,1] the goalie is at that same
@@ -3529,9 +3595,9 @@ func _predict_goalie_at(ctx: RoleContext, release_time_s: float,
 # invisible to it, so it stops manufacturing cross-crease chaos on purpose.
 # The evaluator itself is untouched; the bot just loses the input.
 func _goalie_unsettled_at(ctx: RoleContext, release_time_s: float,
-		puck_pos_at_release: Vector3) -> float:
+		puck_pos_at_release: Vector3, closing_speed_m_s: float = 0.0) -> float:
 	if not ctx.reads_goalie_motion:
 		return 0.0
 	return AIActionScoring.goalie_unsettled(
 			_goalie_now(ctx), ctx.attacking_goal_pos,
-			release_time_s, puck_pos_at_release)
+			release_time_s, puck_pos_at_release, closing_speed_m_s)

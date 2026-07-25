@@ -308,3 +308,31 @@ func test_weak_point_ignores_a_rim_on_the_far_wall() -> void:
 	ctx.snapshot.puck_state.velocity = Vector3(0.2, 0.0, 10.5)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.POINT_WEAK)
 	assert_lt(d.target_position.x, 0.0, "the weak point holds his own side")
+
+
+# ── DBACK: the blue-line stand is race-home bounded like every other station ──
+# It was the one D station that held its line no matter what was behind it —
+# the puckwatching last man standing at his own blue line into a guaranteed
+# breakaway.
+
+func test_dback_holds_the_line_when_the_counter_is_contained() -> void:
+	# The only opponent is deep in his own end with the whole rink to cover:
+	# the stand is untouched, so ordinary NZ shape is unchanged.
+	var ctx: RoleContext = _make_ctx(Vector3(-4.0, 0.0, 6.0),
+			[[2, 1 - TEAM_ID, Vector3(2.0, 0.0, -22.0)]],
+			-1, Vector3(0.0, 0.0, -2.0))
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DBACK_L)
+	assert_almost_eq(d.target_position.z, GameRules.BLUE_LINE_Z, 0.1,
+			"a contained counter leaves the blue-line stand alone")
+
+
+func test_dback_sags_off_the_line_against_a_threat_already_behind_it() -> void:
+	# A stretch man level with the pair and already flying — legally onside, so
+	# no offside clamp saves us — with the puck up ice behind him. Holding the
+	# line here IS the breakaway; the stand gives ground down the retreat line.
+	var ctx: RoleContext = _make_ctx(Vector3(-4.0, 0.0, 6.0),
+			[[2, 1 - TEAM_ID, Vector3(2.0, 0.0, 6.5), Vector3(0.0, 0.0, 8.0)]],
+			-1, Vector3(0.0, 0.0, -8.0))
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DBACK_L)
+	assert_gt(d.target_position.z, GameRules.BLUE_LINE_Z + 0.5,
+			"the back pair sags home rather than stand into a breakaway")

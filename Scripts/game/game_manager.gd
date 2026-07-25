@@ -207,13 +207,12 @@ var bot_skill_profile: BotSkillProfile = BotSkillProfile.hard()
 # so like bot difficulty it's a host-local PlayerPrefs preference re-read each
 # match. Defaults to Hard so any pre-resolution spawn matches today's goalie.
 var goalie_skill_profile: GoalieSkillProfile = GoalieSkillProfile.hard()
-# Debounce state for the bots' discrete-event reaction delay (see
-# _apply_bot_carrier_reaction_delay). `_perceived_carrier_peer_id` is the
-# delayed belief written onto the AI snapshot; the others track the pending
-# real change. Reset at match start.
-var _perceived_carrier_peer_id: int = -1
-var _real_carrier_last: int = -1
-var _carrier_reaction_timer: float = 0.0
+# The TEAM's lagged possession belief, written onto the AI snapshot each frame
+# (see _apply_bot_carrier_reaction_delay). Drives team SHAPE only — individual
+# puck reactivity runs on the agent's own clock against the REAL carrier
+# (SkaterAgentStateMachine._loose_elapsed_s), so a slow possession belief can no
+# longer stall bots off a live puck. Rules + rationale on CarrierBelief.
+var _carrier_belief := CarrierBelief.new()
 # Private puck-state copy for the AI snapshot. The interpolated snapshot's
 # puck_state is frequently the live ring-buffer object (see
 # _apply_bot_carrier_reaction_delay), so the debounced carrier is written into
@@ -873,9 +872,7 @@ func on_host_started() -> void:
 	# Sync the bots' shot model to the tier — otherwise they score their shots
 	# against a Hard goalie's reads and pass up looks that beat a weaker one.
 	AIActionScoring.set_goalie_profile(goalie_skill_profile)
-	_perceived_carrier_peer_id = -1
-	_real_carrier_last = -1
-	_carrier_reaction_timer = 0.0
+	_carrier_belief.reset()
 	_spawn_world()
 	if not NetworkManager.pending_lobby_slots.is_empty():
 		var my_slot: Dictionary = NetworkManager.pending_lobby_slots.get(1, {})
@@ -3697,14 +3694,16 @@ func _on_hit_landed(hitter_peer_id: int, victim: Skater, impulse_magnitude: floa
 	# and this signal fires on the deliverer's machine, so gate on local peer.
 	if hitter_peer_id == NetworkManager.local_peer_id():
 		local_player_landed_hit.emit(impulse_magnitude)
-		# impact_force scale = weight × closing speed: a check REGISTERS at ~3
-		# (MIN_HIT_IMPULSE), a one-sided full-strength check lands ~4, a knockdown
-		# ~5.5, and a hard head-on mutual collision ~12-14. Kick the camera along
-		# the direction you drove the hit (follow-through), from a light kick at a
-		# bare check up to full by a knockdown-class hit — so an ordinary lined-up
-		# check kicks, not only head-on collisions (the old 6.0/14 floor missed
-		# every one-sided check).
-		local_player_impact.emit(hit_dir, clampf((impulse_magnitude - 3.0) / 4.0, 0.0, 1.0))
+		# Kick the camera along the direction you drove the hit (follow-through),
+		# ramping from nothing at the register-a-hit floor to full one span above
+		# it — so an ordinary lined-up check kicks, not only head-on collisions
+		# (the old 6.0/14 floor missed every one-sided check). The impact_force
+		# scale's landmarks live on HitRules. The span is a hand-set camera FEEL
+		# value, not a landmark: it tops out a bit past KNOCKDOWN_IMPULSE so only
+		# the hardest hits max the kick.
+		const KICK_FULL_SPAN: float = 4.0
+		local_player_impact.emit(hit_dir, clampf(
+				(impulse_magnitude - HitRules.MIN_HIT_IMPULSE) / KICK_FULL_SPAN, 0.0, 1.0))
 		# Live achievement — excluded in free play / drills (no achievements there).
 		if _achievements != null and _achievements_active():
 			_achievements.on_local_hit(impulse_magnitude)
@@ -4650,12 +4649,15 @@ func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
 # snapshot so a bot reads its OWN possession instantly (see SkaterAgentState-
 # Machine have_puck).
 #
-# The debounce: a real carrier change (re)starts a timer; the perceived value
-# commits to the real one only after `delay` of no further change, so a blip
-# that reverts within the window (e.g. a puck grazing a stick) causes no
-# twitch. Shared across all bots — difficulty is a global match setting and a
-# possession change affects both teams symmetrically (matching how the team
-# brains are reticked together).
+# The commit rule (and why it is bounded rather than restart-on-change) lives on
+# CarrierBelief. Shared across all bots — difficulty is a global match setting
+# and a possession change affects both teams symmetrically (matching how the
+# team brains are reticked together).
+#
+# This belief is TEAM SHAPE only. Whether a bot goes and gets a live puck is
+# individual reactivity and reads the REAL carrier on its own clock
+# (SkaterAgentStateMachine._loose_elapsed_s) — gating that on this lagged belief
+# is what used to freeze the whole team off a loose puck for the full window.
 func _apply_bot_carrier_reaction_delay(snap: WorldSnapshot, delta: float) -> void:
 	if snap.puck_state == null:
 		return
@@ -4669,19 +4671,7 @@ func _apply_bot_carrier_reaction_delay(snap: WorldSnapshot, delta: float) -> voi
 	_ai_puck_scratch.copy_from(snap.puck_state)
 	snap.puck_state = _ai_puck_scratch
 	var delay: float = bot_skill_profile.carrier_reaction_delay_s if bot_skill_profile != null else 0.0
-	if delay <= 0.0:
-		_perceived_carrier_peer_id = real_carrier
-		_real_carrier_last = real_carrier
-		_carrier_reaction_timer = 0.0
-		return
-	if real_carrier != _real_carrier_last:
-		_carrier_reaction_timer = delay
-		_real_carrier_last = real_carrier
-	if _perceived_carrier_peer_id != real_carrier:
-		_carrier_reaction_timer -= delta
-		if _carrier_reaction_timer <= 0.0:
-			_perceived_carrier_peer_id = real_carrier
-	snap.puck_state.carrier_peer_id = _perceived_carrier_peer_id
+	snap.puck_state.carrier_peer_id = _carrier_belief.update(real_carrier, delay, delta)
 
 
 func _collect_existing_player_data() -> Array[Array]:

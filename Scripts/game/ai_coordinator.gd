@@ -111,13 +111,23 @@ func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 		_wake.post()
 
 
-# Fill _worker_snapshot with a race-safe view of this frame's snapshot. Fields
-# the host builds fresh each frame (skater_states, goalie_states, the teammate
-# caches, the scalars) are shared by reference — a new snapshot object next frame
-# leaves this one untouched. Fields the host mutates IN PLACE every frame — the
-# accel-tracker dicts shared onto the snapshot, and the reused carrier-debounce
-# puck scratch — are copied into reused buffers, since the worker reads them
-# across the frame while the host would otherwise overwrite them.
+# Fill _worker_snapshot with a race-safe view of this frame's snapshot. Three
+# different safety arguments, one per field class — don't collapse them:
+#
+#  1. Genuinely fresh each frame: the teammate caches (GameManager._enrich_snapshot_for_ai
+#     clears + refills dicts that belong to that frame's own WorldSnapshot) and the
+#     scalars. Sharing by reference is safe — next frame builds a new object.
+#  2. Reused ring slots: skater_states / goalie_states entries. StateBufferManager
+#     hands back the LIVE ring slot by reference on its no-interpolation path
+#     (_interpolate_skater's `t < 0.0` branch), and capture() overwrites ring slots
+#     in place. These are safe only because the ring is BUFFER_SIZE = 3 s deep and
+#     capture advances one slot per frame, so the host cannot wrap back onto the
+#     worker's slot until the worker is ~360 frames behind. That margin — NOT object
+#     freshness — is what makes the by-reference share sound. Shrinking BUFFER_SIZE,
+#     or pointing the AI query at a delayed timestamp, would narrow it.
+#  3. Mutated in place every frame: the accel-tracker dicts shared onto the snapshot
+#     and the reused carrier-debounce puck scratch. No margin at all, so these are
+#     copied into reused buffers below.
 func _stabilize_snapshot(src: WorldSnapshot) -> void:
 	var ws: WorldSnapshot = _worker_snapshot
 	ws.skater_states = src.skater_states
