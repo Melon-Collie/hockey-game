@@ -127,3 +127,31 @@ func test_approach_is_symmetric_in_and_out() -> void:
 	var in_step: float = 0.0 - GoalieDepthSolver.approach(10.0, 0.0, DT, 4.0, 2.2) + 10.0
 	assert_almost_eq(out_step, in_step, 0.0001,
 			"the rate cap applies equally to challenging out and retreating in")
+
+
+# ── Lateral tracking cap (the deke / walkout answer) ─────────────────────────
+
+func test_lateral_tracking_cap_is_a_rate_constraint() -> void:
+	# r <= push * d / v. A carrier 4 m out moving the puck across at exactly the
+	# goalie's push speed means he can only hold 4 m — nothing binds in practice.
+	assert_almost_eq(
+			GoalieBehaviorRules.lateral_tracking_cap(4.0, 3.8, 3.8), 4.0, 0.001,
+			"at v == push speed the cap equals the threat distance")
+	# Twice his push speed halves the depth he can afford.
+	assert_almost_eq(
+			GoalieBehaviorRules.lateral_tracking_cap(4.0, 7.6, 3.8), 2.0, 0.001,
+			"doubling the carrier's lateral speed halves the affordable depth")
+
+
+func test_lateral_tracking_cap_tightens_as_the_carrier_closes() -> void:
+	# The same lateral pace is far more dangerous in tight, because the ANGULAR
+	# rate the goalie has to match scales with 1/distance. This is what stops him
+	# challenging into a walkout.
+	var far: float = GoalieBehaviorRules.lateral_tracking_cap(6.0, 5.0, 3.8)
+	var near: float = GoalieBehaviorRules.lateral_tracking_cap(2.0, 5.0, 3.8)
+	assert_gt(far, near, "the same deke pace caps him harder the closer it happens")
+
+
+func test_a_stationary_carrier_does_not_bind() -> void:
+	assert_eq(GoalieBehaviorRules.lateral_tracking_cap(4.0, 0.0, 3.8), INF,
+			"a carrier not moving the puck across imposes no depth cost")

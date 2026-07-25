@@ -823,6 +823,35 @@ static func rush_retreat_rate(
 	return absf(slope) * closing_speed
 
 
+# ── Lateral tracking cap (the deke / walkout answer) ────────────────────────
+# The deepest challenge radius from which the goalie can still STAY SQUARE to a
+# carrier moving the puck laterally — the anticipatory answer to "how far out dare
+# I come against someone who can take it around me?"
+#
+# This is a RATE constraint, not a race, and that distinction is the whole model.
+# A pass is a discrete event: it happens, then the goalie reacts, so the backdoor
+# cap prices it as react-delay + travel (see backdoor_depth_cap). A deke or walkout
+# is CONTINUOUS — the goalie tracks it the whole way — so there is no reaction
+# delay to pay, only the question of whether he can turn as fast as the puck.
+#
+# Geometry: staying square to a threat `d` away moving laterally at `v` means
+# holding an angular rate of v/d. At challenge radius r that costs a linear
+# push of r·v/d, so the constraint is
+#     r · v / d  <=  push_speed        =>     r <= push_speed · d / v
+# which says exactly what it should: the closer the carrier and the faster he moves
+# it across, the less depth you can afford. Coming out is a bet that he shoots
+# rather than moves — and this is the price of that bet.
+#
+# Returns INF when nothing binds (a stationary or slow carrier). Replaces the old
+# `pull-per-m/s-of-deficit` curve, which was a shape parameter standing in for this.
+static func lateral_tracking_cap(
+		threat_dist: float, lateral_speed: float, push_speed: float) -> float:
+	var v: float = absf(lateral_speed)
+	if v < 0.001 or threat_dist <= 0.0 or push_speed <= 0.0:
+		return INF
+	return push_speed * threat_dist / v
+
+
 # ── Cross-crease save-selection fork ─────────────────────────────────────────
 # Real save selection on a cross-crease pass is a time race (audit F3): stay on
 # your FEET when the push can arrive set before the one-timer; go PADS-FIRST

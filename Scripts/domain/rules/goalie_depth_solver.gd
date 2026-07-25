@@ -55,8 +55,9 @@ class Constraints:
 	# what "the goalie is right on top of me" felt like. Not a tuning curve: it is
 	# body half-depth plus stick clearance.
 	var standoff_cap: float = INF
-	# Lateral-pressure retreat: the chart radius already reduced by the pull.
-	# INF when no lateral overspeed binds.
+	# Lateral TRACKING cap — the deepest radius from which he can still stay square
+	# to a carrier moving the puck across (the anticipatory deke / walkout answer).
+	# INF when nothing binds.
 	var lateral_cap: float = INF
 	# Backdoor re-square race cap (GoalieBehaviorRules.backdoor_depth_cap).
 	# INF when no weak-side one-timer threat binds.
