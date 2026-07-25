@@ -234,9 +234,11 @@ grant select on public.career_totals to anon;
 -- ── Per-game history (career screen, Recent Games tab) ───────────────────────
 -- Returns the games a given player appeared in, newest first, each with the
 -- full per-player roster as nested JSON.
-create or replace function public.recent_games_for(player_steam_id bigint, game_limit integer default 20)
+drop function if exists public.recent_games_for(bigint, integer);
+create function public.recent_games_for(player_steam_id bigint, game_limit integer default 20)
  returns table(game_id uuid, ended_at timestamptz, home_score integer, away_score integer,
-               num_periods integer, period_scores jsonb, players jsonb, game_version text)
+               num_periods integer, period_scores jsonb, players jsonb, game_version text,
+               team_size integer, outcome text)
  language sql
  stable
 as $function$
@@ -267,7 +269,12 @@ as $function$
       )
       ORDER BY cs.team_id, cs.player_name
     )                                                                              AS players,
-    MAX(cs.game_version)                                                            AS game_version
+    MAX(cs.game_version)                                                            AS game_version,
+    -- Roster size, so the browser can badge 3v3 vs 5v5 without a second query.
+    MAX(cs.team_size)::int                                                          AS team_size,
+    -- THIS player's result, for the win/loss badge. max() over a filtered case is
+    -- just "the requesting player's row" — every other row's expression is null.
+    MAX(CASE WHEN cs.steam_id = player_steam_id THEN cs.outcome END)                 AS outcome
   FROM career_stats cs
   WHERE cs.game_id IN (
     SELECT DISTINCT cs2.game_id FROM career_stats cs2

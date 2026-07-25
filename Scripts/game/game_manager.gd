@@ -2453,6 +2453,17 @@ func _build_replay_footer() -> Dictionary:
 				"toi_seconds": roundi(r.stats.toi_seconds),
 			})
 	footer["players"] = players
+	# Shot log (analytics B1), so a .mreplay is SELF-CONTAINED for the post-game
+	# analytics views — shot map, xG flow, and the advanced half of the tape all
+	# regenerate from this without any backend. That matters most exactly where
+	# the backend isn't available: stat sharing off, Steam signed out, or a game
+	# that simply failed to upload. Host-only, like the Supabase batch.
+	var shot_rows: Array = []
+	if _advanced_stats_tracker != null:
+		shot_rows = ShotEvent.encode_list(_advanced_stats_tracker.get_shot_events())
+	footer["shot_events"] = shot_rows
+	# Roster size, so the browser can badge the mode without the backend.
+	footer["team_size"] = _state_machine.team_size if _state_machine != null else 0
 	footer["ended_at"] = Time.get_unix_time_from_system()
 	return footer
 

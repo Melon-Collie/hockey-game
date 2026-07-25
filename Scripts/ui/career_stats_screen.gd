@@ -648,12 +648,13 @@ func _render_games(games: Array) -> void:
 		var row: Dictionary = e as Dictionary
 		var path: String = String(row["path"])
 		if path.is_empty():
-			_recent_content.add_child(_build_game_card(row["game"] as Dictionary))
+			_recent_content.add_child(
+					_build_game_card(_summarise_backend(row["game"] as Dictionary)))
 			continue
 		var meta: Dictionary = ReplayFileReader.read_meta(path)
 		if not bool(meta.get("ok", false)):
 			continue  # unreadable / wrong-version file — skip silently
-		_recent_content.add_child(_build_replay_file_card(path, meta))
+		_recent_content.add_child(_build_game_card(_summarise_replay(path, meta)))
 
 
 # ISO-8601 -> unix seconds, so backend rows sort against replay file mtimes.
@@ -671,219 +672,167 @@ func _clear_recent_content() -> void:
 
 # Card layout: date · score line | period breakdown | separator |
 # home roster grid | away roster grid | Watch Replay button.
-func _build_game_card(game: Dictionary) -> Control:
-	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", MenuStyle.panel(4, 12))
+# ── The game card ────────────────────────────────────────────────────────────
+# ONE card style for every entry. Both sources normalise into the same summary
+# (see _summarise_backend / _summarise_replay), so a game looks the same whether
+# its data came from the backend, a local .mreplay, or both — only the badges and
+# the enabled actions differ.
+#
+# Deliberately AT A GLANCE: date, mode, result, score, period line, actions. The
+# old cards embedded full per-team box-score tables, which made the list
+# something you read rather than scanned — and the deep numbers already live on
+# the Career tab and the analytics screen.
+
+func _build_game_card(summary: Dictionary) -> Control:
+	var card := _broadcast_panel()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 8)
 	card.add_child(vbox)
 
-	vbox.add_child(_build_score_line(game))
+	# Top line: date on the left, badges on the right.
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 6)
+	var date := _ui_label(String(summary.get("date", "")), 12, MenuStyle.TEXT_MUTED)
+	date.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	date.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top.add_child(date)
+	var team_size: int = int(summary.get("team_size", 0))
+	if team_size > 0:
+		top.add_child(_badge("%dv%d" % [team_size, team_size], MenuStyle.TEXT_DIM))
+	var outcome: String = String(summary.get("outcome", ""))
+	if not outcome.is_empty():
+		top.add_child(_badge(outcome.to_upper(), _outcome_color(outcome)))
+	if String(summary.get("source", "")) == "local":
+		top.add_child(_badge("LOCAL", MenuStyle.TEXT_MUTED))
+	vbox.add_child(top)
 
-	var period_line: Control = _build_period_breakdown(game)
-	if period_line != null:
-		vbox.add_child(period_line)
+	# Score line: the headline, and the only thing in a large size.
+	var score := HBoxContainer.new()
+	score.alignment = BoxContainer.ALIGNMENT_CENTER
+	score.add_theme_constant_override("separation", 12)
+	score.add_child(_ui_label("HOME", 12, MenuStyle.TEXT_DIM))
+	score.add_child(_display_label(str(int(summary.get("home", 0))), 30,
+			MenuStyle.BROADCAST_CREAM))
+	score.add_child(_display_label("—", 18, MenuStyle.TEXT_MUTED))
+	score.add_child(_display_label(str(int(summary.get("away", 0))), 30,
+			MenuStyle.BROADCAST_CREAM))
+	score.add_child(_ui_label("AWAY", 12, MenuStyle.TEXT_DIM))
+	vbox.add_child(score)
 
-	var sep := HSeparator.new()
-	sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
-	vbox.add_child(sep)
+	var periods: String = _period_line(summary.get("periods", []) as Array)
+	if not periods.is_empty():
+		var pl := _ui_label(periods, 11, MenuStyle.TEXT_MUTED)
+		pl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vbox.add_child(pl)
 
-	var players: Array = game.get("players", []) as Array
-	var home_players: Array = []
-	var away_players: Array = []
-	for p_var: Variant in players:
-		var p: Dictionary = p_var as Dictionary
-		if _safe_int(p.get("team_id", 0)) == 0:
-			home_players.append(p)
-		else:
-			away_players.append(p)
-	if not home_players.is_empty():
-		vbox.add_child(_build_player_table(home_players, "HOME"))
-	if not away_players.is_empty():
-		vbox.add_child(_build_player_table(away_players, "AWAY"))
-	# Bots don't record stats; mention it so the screen doesn't look broken.
-	if home_players.is_empty() or away_players.is_empty():
-		var note := Label.new()
-		note.text = "Bot opponents — no individual stats recorded."
-		note.add_theme_font_size_override("font_size", 11)
-		note.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-		vbox.add_child(note)
-
-	var bottom := HBoxContainer.new()
-	bottom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bottom.add_child(spacer)
-	bottom.add_child(_build_replay_button(game))
-	vbox.add_child(bottom)
-
+	var actions := HBoxContainer.new()
+	actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	actions.add_theme_constant_override("separation", 8)
+	actions.add_child(_watch_button(String(summary.get("path", ""))))
+	vbox.add_child(actions)
 	return card
 
 
-func _build_score_line(game: Dictionary) -> Control:
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 12)
-
-	var date_label := Label.new()
-	date_label.text = _format_date(str(game.get("ended_at", "")))
-	date_label.add_theme_font_size_override("font_size", 12)
-	date_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	date_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hbox.add_child(date_label)
-
-	# Derive final score from period_scores rather than the RPC's home_score/
-	# away_score columns: the period breakdown rendered just below is the
-	# authoritative per-game record, so summing it guarantees the headline
-	# score and the grid totals can't disagree.
-	var score_label := Label.new()
-	var home_score: int = 0
-	var away_score: int = 0
-	var ps: Variant = game.get("period_scores", null)
-	if ps is Array and (ps as Array).size() >= 2:
-		var ps_arr: Array = ps as Array
-		for g: Variant in ps_arr[0] as Array:
-			home_score += _safe_int(g)
-		for g: Variant in ps_arr[1] as Array:
-			away_score += _safe_int(g)
-	else:
-		home_score = _safe_int(game.get("home_score", 0))
-		away_score = _safe_int(game.get("away_score", 0))
-	score_label.text = "%d — %d" % [home_score, away_score]
-	score_label.add_theme_font_size_override("font_size", 18)
-	score_label.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
-	hbox.add_child(score_label)
-
-	return hbox
+# Backend history row -> card summary.
+func _summarise_backend(game: Dictionary) -> Dictionary:
+	var gid: String = str(game.get("game_id", ""))
+	var path: String = "user://replays/%s.mreplay" % gid
+	# Score comes from period_scores when present: the period line rendered just
+	# below is summed from it, so deriving the total the same way keeps the two
+	# from ever disagreeing.
+	var periods: Array = (game.get("period_scores", []) as Array) if game.get("period_scores") != null else []
+	var home: int = _safe_int(game.get("home_score", 0))
+	var away: int = _safe_int(game.get("away_score", 0))
+	if periods.size() >= 2:
+		home = _sum_periods(periods[0])
+		away = _sum_periods(periods[1])
+	return {
+		"date": _format_date(str(game.get("ended_at", ""))),
+		"home": home, "away": away, "periods": periods,
+		"team_size": _safe_int(game.get("team_size", 0)),
+		"outcome": str(game.get("outcome", "")),
+		"path": path if FileAccess.file_exists(path) else "",
+		"source": "backend",
+	}
 
 
-# Period breakdown grid mirroring the in-game tab scoreboard: a row per team
-# (AWAY on top to match rink-perspective convention), columns for each
-# regulation + OT period, plus a T column for totals. Period headers label
-# OT periods correctly when num_periods is known. Returns null on missing
-# or malformed period_scores.
-#
-# Plain HOME/AWAY text labels (no colored badges) — career_stats doesn't
-# store the resolved home/away color IDs today; adding them is a small
-# follow-up if we want the badges to match the in-game look.
-func _build_period_breakdown(game: Dictionary) -> Control:
-	var ps: Variant = game.get("period_scores", null)
-	if not ps is Array or (ps as Array).size() < 2:
-		return null
-	var ps_arr: Array = ps as Array
-	var team0: Array = ps_arr[0] as Array
-	var team1: Array = ps_arr[1] as Array
-	if team0.is_empty() or team0.size() != team1.size():
-		return null
-	var total_periods: int = team0.size()
-	var num_periods: int = _safe_int(game.get("num_periods", 0))
-
-	var center := HBoxContainer.new()
-	center.alignment = BoxContainer.ALIGNMENT_CENTER
-
-	var grid := GridContainer.new()
-	grid.columns = 2 + total_periods  # row label + periods + total
-	grid.add_theme_constant_override("h_separation", 8)
-	grid.add_theme_constant_override("v_separation", 3)
-	center.add_child(grid)
-
-	var col_min: Vector2 = Vector2(28, 0)
-	var label_min: Vector2 = Vector2(48, 0)
-
-	# Header row: blank + period labels + T
-	var blank := Control.new()
-	blank.custom_minimum_size = label_min
-	grid.add_child(blank)
-	for p: int in total_periods:
-		var period_num: int = p + 1
-		var header_text: String
-		if num_periods > 0 and period_num > num_periods:
-			header_text = "OT%d" % (period_num - num_periods)
-		else:
-			header_text = str(period_num)
-		grid.add_child(_grid_cell(header_text, col_min, true))
-	grid.add_child(_grid_cell("T", col_min, true))
-
-	# AWAY row first (team 1), then HOME (team 0) — matches in-game convention.
-	for team_id: int in [1, 0]:
-		var team_label: String = "AWAY" if team_id == 1 else "HOME"
-		grid.add_child(_grid_cell(team_label, label_min, false, HORIZONTAL_ALIGNMENT_LEFT))
-		var team_scores: Array = team1 if team_id == 1 else team0
-		var total: int = 0
-		for p: int in total_periods:
-			var goals: int = _safe_int(team_scores[p])
-			total += goals
-			grid.add_child(_grid_cell(str(goals), col_min, false))
-		grid.add_child(_grid_cell(str(total), col_min, false))
-
-	return center
+# Local .mreplay meta -> card summary. No outcome badge: the file records the
+# match, not which side was yours.
+func _summarise_replay(path: String, meta: Dictionary) -> Dictionary:
+	var footer: Dictionary = meta.get("footer", {})
+	var ended: float = float(footer.get("ended_at", 0.0))
+	var date: String = Time.get_datetime_string_from_unix_time(int(ended)).replace("T", " ").substr(0, 16) \
+			if ended > 0.0 else "Local replay"
+	return {
+		"date": date,
+		"home": _safe_int(footer.get("final_score_home", 0)),
+		"away": _safe_int(footer.get("final_score_away", 0)),
+		"periods": (footer.get("period_scores", []) as Array) if footer.get("period_scores") != null else [],
+		"team_size": _safe_int(footer.get("team_size", 0)),
+		"outcome": "",
+		"path": path,
+		"source": "local",
+	}
 
 
-func _grid_cell(text: String, min_size: Vector2, is_header: bool,
-		align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_CENTER) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", 12 if is_header else 13)
-	l.add_theme_color_override("font_color", MenuStyle.TEXT_DIM if is_header else MenuStyle.TEXT_BODY)
-	l.custom_minimum_size = min_size
-	l.horizontal_alignment = align
-	return l
+func _sum_periods(row: Variant) -> int:
+	var total: int = 0
+	if row is Array:
+		for v: Variant in row as Array:
+			total += _safe_int(v)
+	return total
 
 
-# Compact 7-column grid: HOME/AWAY tag · player name · G · A · P · SOG · +/-.
-# Header row uses dim text; player rows use body text.
-func _build_player_table(players: Array, side_label: String) -> Control:
-	var grid := GridContainer.new()
-	grid.columns = 7
-	grid.add_theme_constant_override("h_separation", 14)
-	grid.add_theme_constant_override("v_separation", 2)
-
-	var headers: PackedStringArray = PackedStringArray([side_label, "Player", "G", "A", "P", "SOG", "+/-"])
-	for h: String in headers:
-		grid.add_child(_table_cell(h, true))
-
-	for p_var: Variant in players:
-		var p: Dictionary = p_var as Dictionary
-		grid.add_child(_table_cell(""))  # blank under side tag
-		grid.add_child(_table_cell(str(p.get("player_name", "Player"))))
-		var goals: int = _safe_int(p.get("goals", 0))
-		var assists: int = _safe_int(p.get("assists", 0))
-		grid.add_child(_table_cell(str(goals)))
-		grid.add_child(_table_cell(str(assists)))
-		grid.add_child(_table_cell(str(goals + assists)))
-		grid.add_child(_table_cell(str(_safe_int(p.get("shots_on_goal", 0)))))
-		grid.add_child(_table_cell("%+d" % _safe_int(p.get("plus_minus", 0))))
-
-	return grid
+# "1-1 · 2-1 · 1-1" — compact enough to sit under the score without competing.
+func _period_line(periods: Array) -> String:
+	if periods.size() < 2 or not (periods[0] is Array) or not (periods[1] is Array):
+		return ""
+	var home: Array = periods[0] as Array
+	var away: Array = periods[1] as Array
+	var parts: PackedStringArray = PackedStringArray()
+	for i: int in mini(home.size(), away.size()):
+		parts.append("%d-%d" % [_safe_int(home[i]), _safe_int(away[i])])
+	return " · ".join(parts)
 
 
-func _table_cell(text: String, is_header: bool = false) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", 11 if is_header else 12)
-	l.add_theme_color_override("font_color", MenuStyle.TEXT_DIM if is_header else MenuStyle.TEXT_BODY)
-	return l
+func _badge(text: String, color: Color) -> Control:
+	var panel := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(color.r, color.g, color.b, 0.14)
+	style.set_corner_radius_all(4)
+	style.set_content_margin_all(4)
+	style.content_margin_left = 7.0
+	style.content_margin_right = 7.0
+	panel.add_theme_stylebox_override("panel", style)
+	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	panel.add_child(_ui_label(text, 10, color))
+	return panel
 
 
-# Watch button enabled iff the .mreplay file is on this machine. Otherwise
-# disabled with an explanatory tooltip — covers games played from another
-# machine or a re-installed OS.
-func _build_replay_button(game: Dictionary) -> Button:
+func _outcome_color(outcome: String) -> Color:
+	match outcome:
+		"win":
+			return MenuStyle.GOLD
+		"loss":
+			return MenuStyle.TEXT_MUTED
+		_:
+			return MenuStyle.TEXT_DIM
+
+
+func _watch_button(path: String) -> Button:
 	var btn := Button.new()
 	btn.text = "▶  Watch Replay"
-	btn.custom_minimum_size = Vector2(150, 32)
-	var game_id: String = str(game.get("game_id", ""))
-	if game_id.is_empty():
-		btn.disabled = true
-		btn.tooltip_text = "Replay not available"
-		return btn
-	var path: String = "user://replays/%s.mreplay" % game_id
-	if FileAccess.file_exists(path):
-		btn.pressed.connect(_on_watch_pressed.bind(path))
-	else:
+	btn.custom_minimum_size = Vector2(160, 32)
+	btn.add_theme_font_size_override("font_size", 14)
+	MenuStyle.apply_focus_ring(btn)
+	SoundManager.wire_button(btn)
+	if path.is_empty():
 		btn.disabled = true
 		btn.tooltip_text = "Replay not on this machine"
+	else:
+		btn.pressed.connect(_on_watch_pressed.bind(path))
 	return btn
 
 
@@ -893,138 +842,6 @@ func _on_watch_pressed(path: String) -> void:
 	get_tree().change_scene_to_file(Constants.SCENE_REPLAY_VIEWER)
 
 
-# ── Replays tab ──────────────────────────────────────────────────────────────
-# Local .mreplay files, read entirely off disk — no Supabase, no stat-sharing
-# gate. Includes bot-lobby games, which Recent Games (online history) never
-# lists. Oldest files are pruned past PlayerPrefs.replay_keep_count, so this
-# is "what you can watch right now", not a permanent record.
-
-# One card per replay file: date + score headline, per-team box score, Watch
-# button. Box-score columns differ from Recent Games because the .mreplay
-# footer records a different stat set (hits/blocks, no plus-minus).
-func _build_replay_file_card(path: String, meta: Dictionary) -> Control:
-	var header: Dictionary = meta.get("header", {})
-	var footer: Dictionary = meta.get("footer", {})
-	var truncated: bool = bool(meta.get("truncated", false))
-
-	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", MenuStyle.panel(4, 12))
-	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
-	card.add_child(vbox)
-
-	vbox.add_child(_build_replay_headline(header, footer, truncated))
-
-	# peer_id -> display name, from the header roster.
-	var names: Dictionary = {}
-	for r_var: Variant in (header.get("roster", []) as Array):
-		var r: Dictionary = r_var as Dictionary
-		names[_safe_int(r.get("peer_id", 0))] = str(r.get("player_name", "Player"))
-
-	var players: Array = footer.get("players", []) as Array
-	if not players.is_empty():
-		var sep := HSeparator.new()
-		sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
-		vbox.add_child(sep)
-		var home: Array = []
-		var away: Array = []
-		for p_var: Variant in players:
-			var p: Dictionary = p_var as Dictionary
-			if _safe_int(p.get("team_id", 0)) == 0:
-				home.append(p)
-			else:
-				away.append(p)
-		if not home.is_empty():
-			vbox.add_child(_build_replay_player_table(home, names, "HOME"))
-		if not away.is_empty():
-			vbox.add_child(_build_replay_player_table(away, names, "AWAY"))
-
-	var bottom := HBoxContainer.new()
-	bottom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bottom.add_child(spacer)
-	var watch := Button.new()
-	watch.text = "▶  Watch Replay"
-	watch.custom_minimum_size = Vector2(150, 32)
-	watch.pressed.connect(_on_watch_pressed.bind(path))
-	bottom.add_child(watch)
-	vbox.add_child(bottom)
-
-	return card
-
-
-func _build_replay_headline(header: Dictionary, footer: Dictionary, truncated: bool) -> Control:
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 12)
-
-	var when: int = _safe_int(footer.get("ended_at", header.get("started_at", 0)))
-	var date_label := Label.new()
-	date_label.text = "—" if when <= 0 else Time.get_datetime_string_from_unix_time(when, true).substr(0, 16)
-	date_label.add_theme_font_size_override("font_size", 12)
-	date_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	date_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hbox.add_child(date_label)
-
-	var score := Label.new()
-	if truncated or not footer.has("final_score_home"):
-		score.text = "Unfinished"
-		score.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	else:
-		score.text = "%d — %d" % [_safe_int(footer.get("final_score_home", 0)),
-				_safe_int(footer.get("final_score_away", 0))]
-		score.add_theme_color_override("font_color", MenuStyle.TEAL_HOVER)
-	score.add_theme_font_size_override("font_size", 18)
-	hbox.add_child(score)
-
-	return hbox
-
-
-func _build_replay_player_table(players: Array, names: Dictionary, side_label: String) -> Control:
-	var grid := GridContainer.new()
-	grid.columns = 6
-	grid.add_theme_constant_override("h_separation", 14)
-	grid.add_theme_constant_override("v_separation", 2)
-
-	for h: String in PackedStringArray([side_label, "G", "A", "SOG", "Hits", "Blk"]):
-		grid.add_child(_table_cell(h, true))
-
-	for p_var: Variant in players:
-		var p: Dictionary = p_var as Dictionary
-		grid.add_child(_table_cell(str(names.get(_safe_int(p.get("peer_id", 0)), "Player"))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("goals", 0)))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("assists", 0)))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("shots_on_goal", 0)))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("hits", 0)))))
-		grid.add_child(_table_cell(str(_safe_int(p.get("shots_blocked", 0)))))
-
-	return grid
-
-
-# Supabase fields can come back as null (e.g. MAX() FILTER with no matching
-# rows, or columns that were NULL on the row). int(null) errors out with
-# "Nonexistent 'int' constructor", so route every JSON-derived integer
-# through this helper.
-static func _safe_int(v: Variant, default: int = 0) -> int:
-	if v is int:
-		return v
-	if v is float:
-		return int(v)
-	return default
-
-
-static func _safe_float(v: Variant, default: float = 0.0) -> float:
-	if v is float:
-		return v
-	if v is int:
-		return float(v)
-	return default
-
-
-# Supabase returns ISO-8601 like "2026-04-28T15:30:45.123+00:00". Trim to
-# "YYYY-MM-DD HH:MM" for compactness.
 func _format_date(ended_at_iso: String) -> String:
 	if ended_at_iso.is_empty():
 		return "—"
@@ -1032,6 +849,30 @@ func _format_date(ended_at_iso: String) -> String:
 	if no_tz.length() >= 16:
 		return no_tz.substr(0, 16)
 	return no_tz
+
+
+# Supabase returns numerics as strings or floats depending on the column, and a
+# missing key as null — these coerce whatever arrives without erroring.
+static func _safe_int(value: Variant) -> int:
+	match typeof(value):
+		TYPE_INT:
+			return value
+		TYPE_FLOAT:
+			return int(value)
+		TYPE_STRING:
+			return int(str(value).to_float())
+		_:
+			return 0
+
+
+static func _safe_float(value: Variant) -> float:
+	match typeof(value):
+		TYPE_INT, TYPE_FLOAT:
+			return float(value)
+		TYPE_STRING:
+			return str(value).to_float()
+		_:
+			return 0.0
 
 
 static func _format_toi(seconds: Variant) -> String:
