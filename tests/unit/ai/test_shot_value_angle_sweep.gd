@@ -1,4 +1,11 @@
 extends GutTest
+# ⚠️ NUMBERS BELOW WERE MEASURED WITH THE PLANNER WORK APPLIED, WHICH THIS
+# BRANCH NO LONGER CARRIES. The stick/anatomy/arrival-height changes to
+# AIActionScoring were split out to `claude/goalie-planner-calibration` because
+# they broke 48 bot-side tests that cannot be re-pinned until the model settles.
+# Re-run this instrument here and it will report the PRE-fix surface. The
+# recorded findings stay because they are what the fix has to reproduce.
+#
 
 # ── score_shoot vs the live goalie, by BEARING ───────────────────────────────
 # The companion to test_slot_shot_value_truth (which sweeps RANGE). Distance to
