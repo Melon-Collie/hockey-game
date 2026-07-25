@@ -45,6 +45,33 @@ extends GutTest
 # score. Re-run this after any change to the keeper's coverage; the beatable
 # fraction and WHERE it sits are the two numbers that matter.
 #
+# ── THE SCOPE THAT MATTERED MOST: rebounds are TERMINAL here ─────────────────
+# This instrument stops at FIRST goalie contact, so every rebound goal in a real
+# game reads as a save. That is not a footnote — it inverts the conclusion:
+#
+#   slot 3.0 m        0.8% scored  |  LIVE rebounds 95.6% of all shots
+#   slot 5.0 m        3.3%         |  63.1%
+#   off-angle 5.3 m   4.2%         |  65.0%
+#
+# GoalieSaveRules.is_controlled_save returns FALSE for STICK unconditionally — a
+# stick save NEVER deadens — and PAD/BLOCKER only eat shots under the deaden
+# threshold. So the keeper who stops 99.2% of in-tight shots leaves the puck
+# LOOSE on 95.6% of them. He is a wall to the first shot and a rebound machine
+# on the same play, which is exactly why he plays differently than these numbers
+# read.
+#
+# TWO CONSEQUENCES:
+#   * "bots refusing to shoot at a set keeper is correct play" — stated earlier
+#     in this branch — is WRONG. Shooting to generate a second chance is the
+#     dominant in-tight play, and score_shoot prices only the FIRST shot, so it
+#     under-values shooting by whatever the rebound is worth.
+#   * Our stick is the inverse of a real one. Real goaltending uses the stick to
+#     STEER rebounds to the corners and into the chest; ours stops everything and
+#     controls nothing, because the rules exempt STICK from deadening entirely.
+#
+# Note the counterfactual inverts too: without the stick, live rebounds FALL to
+# ~28-34%, because the pads deaden what the stick was kicking loose.
+#
 # ── COUNTERFACTUAL: how much of the wall IS the stick ────────────────────────
 # Same sweep with all three stick colliders disabled:
 #
@@ -100,7 +127,10 @@ func _sweep(spot: Vector3, label: String) -> int:
 	var loft_names: Array[String] = ["FLAT", "LOW ", "HIGH"]
 	var shots: int = 0
 	var goals: int = 0
+	var live: int = 0     # saves that leave the puck LOOSE (a second chance)
 	var parts: Dictionary = {}
+	var cfg := GoalieSaveRules.DeadenConfig.new()
+	cfg.pad_max_incoming_speed = _puck.save_deaden_pad_max_speed
 	# Per-loft goal map, so a hole shows up as a REGION rather than a count.
 	for li: int in lofts.size():
 		var row: String = ""
@@ -120,6 +150,12 @@ func _sweep(spot: Vector3, label: String) -> int:
 				elif o == Harness.SAVE:
 					var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
 					parts[k] = int(parts.get(k, 0)) + 1
+					# Did that save actually END the play? STICK never deadens, and
+					# PAD/BLOCKER only eat shots under the deaden threshold — above
+					# it the puck kicks out live and the slot is a scramble.
+					if not GoalieSaveRules.is_controlled_save(
+							_h.last_shot_speed, _h.last_part, cfg):
+						live += 1
 					if best == ".":
 						best = k.substr(0, 1).to_lower()
 				elif best == ".":
@@ -127,8 +163,9 @@ func _sweep(spot: Vector3, label: String) -> int:
 			row += best
 			a += 0.07
 		gut.p("   %s |%s| %d goals" % [loft_names[li], row, row_goals])
-	gut.p("%s: %d/%d scored (%.1f%%)   saves:%s"
-			% [label, goals, shots, 100.0 * float(goals) / float(maxi(shots, 1)), str(parts)])
+	gut.p("%s: %d/%d scored (%.1f%%)   LIVE rebounds %d (%.1f%% of all shots)   saves:%s"
+			% [label, goals, shots, 100.0 * float(goals) / float(maxi(shots, 1)),
+			live, 100.0 * float(live) / float(maxi(shots, 1)), str(parts)])
 	gut.p("        legend: G=goal  s=stick  p=pad  b=blocker  c=chest  g=glove  x=post/wide")
 	return goals
 

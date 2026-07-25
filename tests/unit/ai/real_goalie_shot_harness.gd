@@ -42,6 +42,11 @@ var last_part: int = -1              # SavePart of the contact that ended it, or
 var last_contact_pos: Vector3 = Vector3.INF   # where the save contact happened
 var last_cross: Vector3 = Vector3.INF         # net-plane crossing (x, y) if it got there
 var last_goalie_pos: Vector3 = Vector3.INF    # goalie world pos at the decisive moment
+# Puck speed at the moment of goalie contact. Lets a caller ask
+# GoalieSaveRules.is_controlled_save whether that save actually ENDED the play
+# or kicked a live puck back into the slot — this instrument stops at first
+# contact, so without it every rebound goal silently reads as a save.
+var last_shot_speed: float = 0.0
 
 # Reused per-march scratch (allocation-free like the production loop).
 var _scratch: SweptDiscOBB.Result = SweptDiscOBB.Result.new()
@@ -161,6 +166,7 @@ func _march(shooter: Vector3, vel_in: Vector3) -> int:
 		# out of this instrument's scope (mirrors shot_sim_harness's terminal-save
 		# scope). So any contact classifies SAVE.
 		if GoalieContactDetector.nearest([_goalie], prev, pos, RADIUS, _scratch, _contact):
+			last_shot_speed = vel.length()
 			var g3: Node3D = _contact.goalie as Node3D
 			last_part = _classify_part(_contact.part as Node3D)
 			last_contact_pos = _contact.point
