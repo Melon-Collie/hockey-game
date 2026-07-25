@@ -140,6 +140,50 @@ func test_a_tip_threat_blocks_a_shot_he_can_otherwise_see() -> void:
 			"a stick that can touch it in flight makes the read worthless")
 
 
+func test_a_net_front_tip_leaves_him_nothing() -> void:
+	# "You cannot react to a tip" — and the arithmetic says how true that is.
+	# Answering costs reaction + drop = 0.33 s, so a tip would have to happen
+	# more than 0.33 s of flight away to leave a FULL answer. At 30 m/s that is
+	# ~9.9 m, which is not a tip, it is a different play.
+	#
+	# Inside genuine net-front range he has literally nothing. Further out he
+	# gets a sliver — enough to begin moving, not enough to be a save — which
+	# matches the fact that mid-slot deflections occasionally get a piece of a
+	# goalie while doorstep tips never do. The model is left to say exactly how
+	# much rather than being forced to a verdict.
+	var shot_speed: float = 30.0
+	var shooter_dist: float = 15.0
+	var arrival: float = shooter_dist / shot_speed
+	for tip_dist: float in [1.0, 2.0, 3.0]:
+		var tip_at: float = (shooter_dist - tip_dist) / shot_speed
+		var s := _s(arrival, tip_at)
+		assert_eq(GoalieSaveSelection.answer_fraction(s), 0.0,
+				"a tip %.0f m out leaves no answer at all" % tip_dist)
+		assert_true(GoalieSaveSelection.should_block(s),
+				"so he blocks rather than reading a shot he cannot answer")
+	# The fade, not a cliff: a deflection out at mid-slot leaves a fraction of a
+	# drop. Still not a save, but he is moving, and pretending otherwise would be
+	# the same binary thinking the pad model already suffers from.
+	for tip_dist: float in [4.0, 5.0]:
+		var tip_at: float = (shooter_dist - tip_dist) / shot_speed
+		var f: float = GoalieSaveSelection.answer_fraction(_s(arrival, tip_at))
+		assert_true(f > 0.0 and f < 0.25,
+				"a %.0f m deflection leaves a sliver, not a save (got %.2f)"
+				% [tip_dist, f])
+
+
+func test_a_tip_threat_blocks_him_before_the_shot_is_taken() -> void:
+	# The consequence that matters in 5v5: because time_to_arrival is the worst
+	# case — the point man shoots this instant — a live tip threat in the lane
+	# drops him while the puck is still on the blue line. That is what a real
+	# goalie does against a screen-and-tip look, and it falls out of the same
+	# inequality rather than needing a "there is traffic" rule.
+	var arrival: float = 15.0 / 30.0        # if he shoots right now
+	var tip_at: float = 12.0 / 30.0         # tipper 3 m off the goalie
+	assert_true(GoalieSaveSelection.should_block(_s(arrival, tip_at)),
+			"a tip threat is a block decision before the release, not after")
+
+
 # ── The middle: caught mid-drop is real, not a rounding error ────────────────
 
 func test_the_mid_drop_state_is_represented() -> void:
