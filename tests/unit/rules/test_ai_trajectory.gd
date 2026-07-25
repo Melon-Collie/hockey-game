@@ -278,3 +278,101 @@ func test_step_puck_3d_reflects_off_boards_while_airborne() -> void:
 	assert_lt(stepped.basis.x.x, 0.0, "airborne puck reflected off the +X board")
 	assert_lte(stepped.origin.x, GameRules.INNER_HALF_WIDTH + 0.001, "stays inside the boards")
 	assert_lt(stepped.basis.x.y, 1.0, "gravity still acting on the vertical channel")
+
+
+# ── Board-aware reception gate ──────────────────────────────────────────────
+# solve_reception_gate: where a loose puck comes into a receiver's reach, on
+# the puck's REAL path rather than the straight ray off its current velocity.
+# The two agree in open ice; on a rim they do not, and the difference is what
+# decides whether a bot is set for the carom or a corner late.
+
+const _GATE_REACH: float = 1.4
+const _GATE_HORIZON_S: float = 2.0
+const _GATE_STEPS: int = 20
+
+
+func test_gate_matches_the_straight_ray_in_open_ice() -> void:
+	# Puck through centre ice at pass pace, receiver a metre off its line. No
+	# boards involved, so the board-aware solve must land on the same entry
+	# point the straight-line geometry gives: reach from the body, on the line.
+	var from_pos := Vector3(0, 0, 1)
+	var found: bool = AITrajectory.solve_reception_gate(
+			Vector3(-8, 0, 0), Vector3(18, 0, 0), from_pos,
+			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
+	assert_true(found, "a feed crossing our level is gateable")
+	assert_almost_eq(AITrajectory.gate_point.z, 0.0, 0.05,
+			"the gate sits on the puck's travel line")
+	assert_almost_eq(from_pos.distance_to(AITrajectory.gate_point), _GATE_REACH,
+			0.05, "…at the blade's comfortable extension")
+	assert_gt(AITrajectory.gate_time_s, 0.0)
+
+
+func test_a_corner_rim_is_timed_around_the_carom_not_across_it() -> void:
+	# Rim fired down the wall into the corner, receiver waiting up the far side
+	# of it. The straight ray leaves the rink mid-corner, so a ray-based read
+	# has to invent a clamped point and times the arrival along a chord. The
+	# path solve walks the carom: the gate must land on the puck's real route
+	# and be timed later than the straight-line crossing, because going around
+	# is farther than going through.
+	var puck_pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.3, 0,
+			GameRules.CORNER_CENTER_Z - 4.0)
+	var puck_vel := Vector3(0, 0, 16)
+	# Receiver waiting up the end wall past the corner, where the rim comes out.
+	var from_pos := Vector3(2.0, 0, GameRules.INNER_HALF_LENGTH - 1.24)
+	var found: bool = AITrajectory.solve_reception_gate(
+			puck_pos, puck_vel, from_pos, _GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
+	assert_true(found, "the rim comes around into reach")
+	var gate: Vector2 = Vector2(AITrajectory.gate_point.x, AITrajectory.gate_point.z)
+	assert_true(GameRules.clamp_to_rink_inner(gate).is_equal_approx(gate),
+			"the gate is on the playing surface, not a phantom point past the glass")
+	var straight_t: float = (from_pos.z - puck_pos.z) / puck_vel.z
+	assert_gt(AITrajectory.gate_time_s, straight_t,
+			"around the corner takes longer than the straight-line chord")
+	# And it arrives running ALONG the end boards, ~90° off the line it left on
+	# — the whole reason the stance has to be built from the path.
+	assert_lt(AITrajectory.gate_velocity.x, -5.0,
+			"the rim arrives travelling down the end wall, not up the side one")
+
+
+func test_the_gate_direction_is_the_post_carom_travel() -> void:
+	# The blade squares to the direction the puck is travelling WHEN it arrives.
+	# Off a wall that is the reflected direction, not the one it left on — a
+	# receiver squared to the pre-carom line has his face open to nothing.
+	var puck_pos := Vector3(GameRules.INNER_HALF_WIDTH - 2.0, 0, 0)
+	AITrajectory.solve_reception_gate(
+			puck_pos, Vector3(14, 0, 6), Vector3(GameRules.INNER_HALF_WIDTH - 3.0, 0, 4),
+			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
+	assert_lt(AITrajectory.gate_velocity.x, 0.0,
+			"after the wall the puck is coming back off it")
+
+
+func test_a_puck_that_never_closes_reports_no_gate() -> void:
+	# Running for the far end with the whole rink to cross: nothing inside the
+	# horizon brings it closer than it already is, so there is nothing to set up
+	# for and gate_closes says so.
+	AITrajectory.solve_reception_gate(
+			Vector3(0, 0, 5), Vector3(0, 0, 20), Vector3.ZERO,
+			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
+	assert_false(AITrajectory.gate_in_reach)
+	assert_false(AITrajectory.gate_closes, "a departing puck is not a reception")
+
+
+func test_a_puck_ringing_off_the_near_wall_does_close() -> void:
+	# Same "moving away from me" dot product, opposite answer: the wall is right
+	# there and it comes straight back. This is the case the straight-ray test
+	# got wrong, and why the closing read has to be path-based.
+	AITrajectory.solve_reception_gate(
+			Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, 0), Vector3(20, 0, 0),
+			Vector3(GameRules.INNER_HALF_WIDTH - 2.5, 0, 1),
+			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
+	assert_true(AITrajectory.gate_closes,
+			"a carom back toward us is a puck that closes")
+
+
+func test_a_puck_already_on_the_blade_gates_at_itself() -> void:
+	var puck_pos := Vector3(0, 0, 0)
+	var found: bool = AITrajectory.solve_reception_gate(
+			puck_pos, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
+	assert_true(found)
+	assert_eq(AITrajectory.gate_point, puck_pos)

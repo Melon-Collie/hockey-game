@@ -94,19 +94,31 @@ func test_gap_matches_the_rush_pace() -> void:
 	# clean); a gliding one is met tight — "gapping up", which the old
 	# distance-fraction gap never did (six metres off any blue-line carrier
 	# however slowly the rush came on).
+	#
+	# Each defender is staged ON the gap its pace earns, so this reads the
+	# steady-state cushion (does CONTAIN HOLD the right gap?) rather than the
+	# approach to it — the last-man step-up clamp governs how fast a defender
+	# still up-ice of its stand may close on it, and would otherwise be what
+	# these numbers measured. The approach is pinned by its own tests below.
 	var carrier := Vector3(0, 0, 4)
+	var charge_stand := Vector3(0, 0, carrier.z
+			+ 9.0 * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S
+			+ AIRoleContain.gap_for_pace(9.0))
+	var glide_stand := Vector3(0, 0, carrier.z
+			+ 2.0 * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S
+			+ AIRoleContain.gap_for_pace(2.0))
 	var charging: Array = [
-		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
+		[1, TEAM_ID, charge_stand, Vector3.ZERO],
 		[200, 1 - TEAM_ID, carrier, Vector3(0, 0, 9)],
 	]
 	var gliding: Array = [
-		[1, TEAM_ID, Vector3(0, 0, 18), Vector3.ZERO],
+		[1, TEAM_ID, glide_stand, Vector3.ZERO],
 		[200, 1 - TEAM_ID, carrier, Vector3(0, 0, 2)],
 	]
 	var charge_t: Vector3 = AIRoleContain.decide(
-			_make_ctx(Vector3(0, 0, 18), charging, 200)).target_position
+			_make_ctx(charge_stand, charging, 200)).target_position
 	var glide_t: Vector3 = AIRoleContain.decide(
-			_make_ctx(Vector3(0, 0, 18), gliding, 200)).target_position
+			_make_ctx(glide_stand, gliding, 200)).target_position
 	var charge_gap: float = carrier.distance_to(charge_t)
 	var glide_gap: float = carrier.distance_to(glide_t)
 	assert_lt(glide_gap, charge_gap - 2.0,
@@ -472,18 +484,27 @@ func test_gaps_up_when_it_has_beaten_the_rush_home() -> void:
 	# it's already this far ahead of can't burn it. Contrast: the same carrier with
 	# the trailer PAST it (a doorstep cherry-picker) is a genuinely contested race,
 	# so the conservative sag stands.
+	#
+	# Both defenders stand on the tight (won-race) cushion, so this reads which
+	# gap each READ earns — the challenge cushion vs. the trailer sag — instead
+	# of the last-man step-up clamp's approach budget (see
+	# test_gap_matches_the_rush_pace).
 	var carrier := Vector3(0, 0, 10.0)
 	var cvel := Vector3(0, 0, 5.0)              # driving our net
+	var stand := Vector3(0, 0, carrier.z
+			+ cvel.z * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S
+			+ AIRoleContain.GAP_MIN_M
+			+ cvel.z * AIRoleContain.WON_RACE_CUSHION_REACT_S)
 	# Won the race: trailer up-ice, CONTAIN goal-side of both.
-	var won := _make_ctx(Vector3(0, 0, 16.0), [
-			[1, TEAM_ID, Vector3(0, 0, 16.0)],
+	var won := _make_ctx(stand, [
+			[1, TEAM_ID, stand],
 			[200, 1, carrier, cvel],
 			[210, 1, Vector3(4, 0, 7.0), Vector3(3, 0, 6)],   # unmarked trailer, UP-ICE
 	], 200)
 	won.offsides_enforced = false
 	# Contested: same, but the trailer is a doorstep man DEEPER than CONTAIN.
-	var contested := _make_ctx(Vector3(0, 0, 16.0), [
-			[1, TEAM_ID, Vector3(0, 0, 16.0)],
+	var contested := _make_ctx(stand, [
+			[1, TEAM_ID, stand],
 			[200, 1, carrier, cvel],
 			[210, 1, Vector3(1, 0, 24.0), Vector3.ZERO],      # doorstep cherry-picker
 	], 200)
@@ -503,14 +524,108 @@ func test_gaps_up_when_it_has_beaten_the_rush_home() -> void:
 func test_lone_charger_still_gets_the_full_pace_standoff() -> void:
 	# The gap-up is trailer-earned: with NO trailer (a pure 1-on-1), a charging
 	# carrier CONTAIN has beaten home still gets the full pace cushion — you don't
-	# lunge at a lone rusher just because you have inside position.
+	# lunge at a lone rusher just because you have inside position. Staged ON that
+	# cushion (see test_gap_matches_the_rush_pace) so this reads the standing gap,
+	# not the clamped approach to it.
 	var carrier := Vector3(0, 0, 6.0)
-	var charging := _make_ctx(Vector3(0, 0, 18.0), [
-			[1, TEAM_ID, Vector3(0, 0, 18.0)],
+	var stand_z: float = carrier.z + 9.0 * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S \
+			+ AIRoleContain.gap_for_pace(9.0)
+	var charging := _make_ctx(Vector3(0, 0, stand_z), [
+			[1, TEAM_ID, Vector3(0, 0, stand_z)],
 			[200, 1, carrier, Vector3(0, 0, 9.0)],   # flying in, no trailer
 	], 200)
 	var t: Vector3 = AIRoleContain.decide(charging).target_position
 	var led_carrier_z: float = carrier.z + 9.0 * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S
 	assert_almost_eq(t.z - led_carrier_z, AIRoleContain.gap_for_pace(9.0), 0.3,
 			"a lone charger keeps the full pace standoff (no trailer to recover from);"
+			+ " got gap=%f" % (t.z - led_carrier_z))
+
+
+# ── Last-man step-up: arrive set, never lunge ───────────────────────────────
+
+func test_last_man_does_not_charge_up_ice_at_a_rush_at_pace() -> void:
+	# THE failure this clamp exists for. CONTAIN is home in front of its net; the
+	# carrier is flying at it from centre ice, 20 m away. The pace gap alone puts
+	# the stand ~14 m up-ice, and charging it means arriving with up-ice momentum
+	# into a head-on carrier — the reversal is the whole rush (measured in the
+	# duel harness: walked around, then trailing the play into its own net from
+	# behind). As the last man back CONTAIN instead holds its ground and makes
+	# the rush come to it: the step-up it takes now is a fraction of the raw gap
+	# point's, and it never crosses to the carrier's side of the eventual stand.
+	var carrier := Vector3(0, 0, -6.0)
+	var self_pos := Vector3(0, 0, 14.0)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[200, 1, carrier, Vector3(0, 0, 8.0)],   # flying in, no support home
+	], 200)
+	ctx.plays_rush_pass_lanes = false
+	var t: Vector3 = AIRoleContain.decide(ctx).target_position
+	var raw_gap_point_z: float = carrier.z \
+			+ 8.0 * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S \
+			+ AIRoleContain.gap_for_pace(8.0)
+	assert_lt(self_pos.z - t.z, (self_pos.z - raw_gap_point_z) * 0.5,
+			"the last man takes well under half the raw step-up at rush pace;"
+			+ " target z=%f raw gap point z=%f" % [t.z, raw_gap_point_z])
+	assert_gt(t.z, raw_gap_point_z,
+			"…and never past the stand the rush is skating into; got z=%f" % t.z)
+
+
+func test_last_man_closes_all_the_way_on_a_stalled_carrier() -> void:
+	# The other end of the same bound: a carrier who isn't closing has a stand
+	# that isn't going anywhere, so there is no rendezvous to lose and the budget
+	# is unbounded — CONTAIN closes right up to poke range. This is the "gap up"
+	# the clamp must not cost: it only ever prices a step-up against a rush
+	# whose stand is sweeping away from it.
+	var carrier := Vector3(0, 0, -6.0)
+	var self_pos := Vector3(0, 0, 14.0)
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[200, 1, carrier, Vector3.ZERO],   # stalled / regrouping
+	], 200)
+	ctx.plays_rush_pass_lanes = false
+	var t: Vector3 = AIRoleContain.decide(ctx).target_position
+	assert_almost_eq(t.z - carrier.z, AIRoleContain.GAP_MIN_M, 0.3,
+			"a stalled carrier is met tight — the full step-up, no clamp;"
+			+ " got gap=%f" % (t.z - carrier.z))
+
+
+func test_step_up_clamp_yields_to_a_safety_layer_behind() -> void:
+	# The clamp is the last man's discipline, gated exactly like the blue-line
+	# stand: with a teammate home behind us a beaten challenge costs a chance
+	# somebody can still answer, so the aggressive step-up stays available.
+	var carrier := Vector3(0, 0, -6.0)
+	var self_pos := Vector3(0, 0, 14.0)
+	var last_man := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[200, 1, carrier, Vector3(0, 0, 8.0)],
+	], 200)
+	last_man.plays_rush_pass_lanes = false
+	var supported := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(0, 0, 22.0)],   # safety home behind CONTAIN
+			[200, 1, carrier, Vector3(0, 0, 8.0)],
+	], 200)
+	supported.plays_rush_pass_lanes = false
+	var last_man_z: float = AIRoleContain.decide(last_man).target_position.z
+	var supported_z: float = AIRoleContain.decide(supported).target_position.z
+	assert_lt(supported_z, last_man_z - 2.0,
+			"backed by a safety layer CONTAIN steps up meaningfully further;"
+			+ " supported z=%f last man z=%f" % [supported_z, last_man_z])
+
+
+func test_step_up_clamp_never_pushes_the_stand_up_ice() -> void:
+	# The clamp is a bound on the step-up, not a mover: a stand already goal-side
+	# of us is a retreat (it costs no reversal) and must come through untouched,
+	# or CONTAIN would refuse to give ground it has to give.
+	var carrier := Vector3(0, 0, 6.0)
+	var self_pos := Vector3(0, 0, 10.0)          # still up-ice OF the gap point
+	var ctx := _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[200, 1, carrier, Vector3(0, 0, 8.0)],
+	], 200)
+	ctx.plays_rush_pass_lanes = false
+	var t: Vector3 = AIRoleContain.decide(ctx).target_position
+	var led_carrier_z: float = carrier.z + 8.0 * AIRoleHelpers.DEFENSIVE_ANTICIPATION_S
+	assert_almost_eq(t.z - led_carrier_z, AIRoleContain.gap_for_pace(8.0), 0.3,
+			"a retreat to the pace gap is untouched by the step-up clamp;"
 			+ " got gap=%f" % (t.z - led_carrier_z))

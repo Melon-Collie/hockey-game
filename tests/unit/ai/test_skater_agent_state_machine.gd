@@ -50,9 +50,62 @@ func test_should_chase_false_when_no_puck_state() -> void:
 func test_should_chase_false_when_puck_is_carried() -> void:
 	var s := _loose_puck_snap(Vector3(5, 0, 0))
 	s.puck_state.carrier_peer_id = OPP_ID
+	s.real_puck_carrier_peer_id = OPP_ID
 	_add_skater(s, SELF_ID, Vector3(4, 0, 0))
 	assert_false(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
 			"a held puck is never chased even if we're nearest")
+
+
+# ── Chase reads the REAL carrier, not the team's delayed belief ──────────────
+# The delayed carrier_peer_id is the TEAM-SHAPE possession belief (GameManager's
+# debounce). Gating chase on it meant that for the whole reaction window — longer
+# under scramble noise, since the old debounce restarted on every carrier change
+# — no bot would chase a puck that was visibly loose, so bots skated off to their
+# role posts past a live puck. Chase now reads the real carrier and applies its
+# own bounded delay (_loose_elapsed_s).
+
+func test_chase_uses_real_carrier_not_the_delayed_belief() -> void:
+	# Puck is genuinely loose; the team still BELIEVES an opponent has it.
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	s.puck_state.carrier_peer_id = OPP_ID   # stale belief, mid-debounce
+	s.real_puck_carrier_peer_id = -1        # truth: nobody has it
+	_add_skater(s, SELF_ID, Vector3(4, 0, 0))
+	assert_true(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
+			"a genuinely loose puck is chased even while the team belief lags")
+
+
+func test_chase_waits_out_the_reaction_delay() -> void:
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	s.real_puck_carrier_peer_id = -1
+	_add_skater(s, SELF_ID, Vector3(4, 0, 0))
+	sm._chase_reaction_delay_s = 0.2
+	sm._loose_elapsed_s = 0.0
+	assert_false(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
+			"no chase before the bot has had time to react")
+	sm._loose_elapsed_s = 0.25
+	assert_true(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)),
+			"chase once the reaction delay has elapsed")
+
+
+func test_loose_clock_survives_a_scramble_graze() -> void:
+	# The failure the old global debounce had: a puck grazing sticks restarted the
+	# reaction clock every time, so a scramble could defer the chase indefinitely.
+	# A touch shorter than CONTROL_CONFIRM_S must NOT clear the loose clock.
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	s.real_puck_carrier_peer_id = -1
+	for i: int in 30:
+		sm._update_loose_reaction_clock(s, 1.0 / 120.0)
+	var loose_before: float = sm._loose_elapsed_s
+	assert_gt(loose_before, 0.2, "clock accumulated while genuinely loose")
+	# A 4-tick graze (~0.033 s, under CONTROL_CONFIRM_S 0.08).
+	s.real_puck_carrier_peer_id = OPP_ID
+	for i: int in 4:
+		sm._update_loose_reaction_clock(s, 1.0 / 120.0)
+	assert_eq(sm._loose_elapsed_s, loose_before, "a graze does not reset the loose clock")
+	# Sustained control does clear it.
+	for i: int in 12:
+		sm._update_loose_reaction_clock(s, 1.0 / 120.0)
+	assert_eq(sm._loose_elapsed_s, 0.0, "sustained control clears the loose clock")
 
 
 func test_should_chase_true_when_nearest_teammate() -> void:
@@ -789,6 +842,38 @@ func test_man_to_beat_is_sticky_across_the_contest_boundary() -> void:
 	assert_false(sm._has_man_to_beat(s, self_pos), "past the widened band: man beaten")
 
 
+func test_man_to_beat_reads_the_closing_rate_not_a_freeze_frame() -> void:
+	# "Have I beaten him?" is a question about the CLOSING RATE — the same two
+	# bodies in the same spots answer it differently depending on where they're
+	# going, so both are projected to the evasion horizon. Team 0 attacks −z.
+	# One geometry, a checker level with the carrier on his hip, three futures.
+	var self_pos := Vector3.ZERO
+	var s := WorldSnapshot.new()
+	_add_skater(s, SELF_ID, self_pos)
+	_add_skater(s, OPP_ID, Vector3(1.2, 0, 0.0))
+	s.skater_states[SELF_ID].velocity = Vector3(0, 0, -9.0)   # carrier at full stride
+
+	# Static freeze-frame (both velocities zero) — the level checker is a man.
+	s.skater_states[SELF_ID].velocity = Vector3.ZERO
+	assert_true(sm._has_man_to_beat(s, self_pos),
+			"level on the hip and nobody moving: still a man to beat")
+
+	# The carrier pulls away: same spots, but the checker is 2 m behind by the
+	# horizon and falling — beaten, so the O-zone square is free to fire.
+	sm._carry_has_man = false
+	s.skater_states[SELF_ID].velocity = Vector3(0, 0, -9.0)
+	s.skater_states[OPP_ID].velocity = Vector3(0, 0, -4.0)
+	assert_false(sm._has_man_to_beat(s, self_pos),
+			"a chaser losing ground from the same spot is beaten, not a man to beat")
+
+	# The checker is FASTER: same spots, but he pulls even and ahead over the
+	# horizon — a back-checker running the carrier down is still the man.
+	sm._carry_has_man = false
+	s.skater_states[OPP_ID].velocity = Vector3(0, 0, -12.0)
+	assert_true(sm._has_man_to_beat(s, self_pos),
+			"a chaser gaining from the same spot is very much still the man")
+
+
 func test_threat_facing_fallback_is_debounced() -> void:
 	# _face_threat_or_current holds facing when the puck is inside a geometry
 	# floor (too close to aim by). A bare threshold flipped the ready-stance aim
@@ -1432,13 +1517,34 @@ func test_blade_gate_reaches_toward_the_line_when_still_closing() -> void:
 			"out-of-reach line → aim at its nearest point while closing")
 
 
-func test_blade_gate_chases_a_puck_already_past() -> void:
-	# Puck at x=15 moving +X; bot at x=10 is BEHIND its travel — no gate exists
-	# ahead, so fall back to the puck itself (chase from behind).
-	var puck_pos := Vector3(15, 0, 0)
+func test_blade_gate_chases_a_puck_that_is_genuinely_leaving() -> void:
+	# Puck 5 m up-ice of the bot and running for the far end at pace: nothing on
+	# its board-aware path comes back inside the horizon, so there is no gate to
+	# park at and the fallback is the puck itself (chase from behind).
+	#
+	# "Past our level" is NOT the test — that was the straight-ray model's
+	# version of this invariant, and inside a closed rink it is simply false: a
+	# puck ringing off the wall a metre away is past our level and coming
+	# straight back to us, which is a gate, not a chase. What still means "gone"
+	# is a path that never closes.
+	var puck_pos := Vector3(0, 0, 5)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			Vector3(10, 0, 1), puck_pos, Vector3(20, 0, 0))
-	assert_eq(gate, puck_pos, "a puck already past our level is chased, not gated")
+			Vector3.ZERO, puck_pos, Vector3(0, 0, 20))
+	assert_eq(gate, puck_pos, "a puck genuinely leaving is chased, not gated")
+
+
+func test_blade_gate_parks_for_a_puck_ringing_back_off_the_boards() -> void:
+	# The other half of the invariant above, and the reason it had to change: a
+	# puck heading INTO the near boards a couple of metres away caroms straight
+	# back through the bot's reach. Board-aware, that is the most gateable puck
+	# on the ice — park the blade and let it come.
+	var self_pos := Vector3(GameRules.INNER_HALF_WIDTH - 2.5, 0, 1)
+	var puck_pos := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, 0)
+	var gate: Vector3 = sm._blade_gate_on_puck_line(
+			self_pos, puck_pos, Vector3(20, 0, 0))
+	assert_ne(gate, puck_pos, "the carom back into reach is gated, not chased")
+	assert_lt(self_pos.distance_to(gate), _gate_reach() + 0.001,
+			"and the gate sits inside the blade's comfortable extension")
 
 
 func test_blade_gate_clamps_a_corner_rim_line_into_the_rink() -> void:
@@ -2118,3 +2224,54 @@ func test_carry_freezes_shot_aim_after_commit() -> void:
 	assert_eq(sm.get_state(), Agent.State.CARRY, "still pre-aiming")
 	assert_eq(sm._shot_aim_locked, Vector3(0, 0, -20),
 			"the committed shot aim is frozen — it stops tracking the carrier post-commit")
+
+
+# ── Wall kill: the blade goes ON the glass, not out on the puck's line ───────
+
+func test_wall_kill_puts_the_blade_on_the_boards_for_a_rim() -> void:
+	# A gate riding the boards is played by sealing the blade against the glass
+	# — a blade parked on the path line leaves exactly the gap the puck squirts
+	# through, which is the "can't retrieve off the boards" failure.
+	var on_path := Vector3(GameRules.INNER_HALF_WIDTH - 0.35, 0, 4.0)
+	var aim: Vector3 = SkaterAgentStateMachine._wall_kill_aim(on_path)
+	assert_almost_eq(aim.x, GameRules.INNER_HALF_WIDTH, 0.01,
+			"the blade target seals against the inner wall")
+	assert_almost_eq(aim.z, on_path.z, 0.01, "…without sliding along it")
+
+
+func test_wall_kill_honours_the_rounded_corners() -> void:
+	# In the corner the "wall" is an arc, so a straight per-axis distance would
+	# push the aim to the wrong place. Radially out from the corner centre is
+	# what the clamp gives us.
+	var centre := Vector2(GameRules.CORNER_CENTER_X, GameRules.CORNER_CENTER_Z)
+	var dir: Vector2 = Vector2(1, 1).normalized()
+	var on_path: Vector2 = centre + dir * (GameRules.INNER_CORNER_RADIUS - 0.4)
+	var aim: Vector3 = SkaterAgentStateMachine._wall_kill_aim(
+			Vector3(on_path.x, 0, on_path.y))
+	assert_almost_eq(Vector2(aim.x, aim.z).distance_to(centre),
+			GameRules.INNER_CORNER_RADIUS, 0.01,
+			"the corner aim lands on the arc, not on a phantom straight wall")
+
+
+func test_wall_kill_leaves_open_ice_alone() -> void:
+	var mid := Vector3(0, 0, 0)
+	assert_eq(SkaterAgentStateMachine._wall_kill_aim(mid), mid,
+			"nothing to seal against in open ice")
+
+
+func test_wall_kill_band_catches_a_puck_riding_exactly_on_the_boards() -> void:
+	# The band test must not be inferred from "did the aim move" — a rim already
+	# flush against the glass has zero gap, moves nowhere, and is the MOST
+	# boards-hugging case there is. It still has to read as a wall play.
+	var flush := Vector2(GameRules.INNER_HALF_WIDTH, 3.0)
+	assert_true(SkaterAgentStateMachine._in_wall_band(flush),
+			"a puck flush on the boards is a wall kill")
+	assert_false(SkaterAgentStateMachine._in_wall_band(Vector2(0.0, 0.0)),
+			"centre ice is not")
+
+
+func test_board_normal_points_into_the_rink() -> void:
+	var board: Vector3 = SkaterAgentStateMachine._board_normal_and_gap(
+			Vector2(GameRules.INNER_HALF_WIDTH - 0.4, 3.0))
+	assert_almost_eq(board.y, 0.4, 0.01, "gap to the wall")
+	assert_almost_eq(board.x, -1.0, 0.01, "normal points back toward centre ice")

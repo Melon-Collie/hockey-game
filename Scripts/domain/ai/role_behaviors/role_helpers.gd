@@ -969,28 +969,130 @@ static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void
 		return
 	_race_key_speed = self_max_speed
 	_race_key_accel = self_max_accel
-	var v_me: float = maxf(self_max_speed, 1.0)
-	var brake_decel: float = AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
-	var a_net: float = maxf(
-			self_max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
-	var k_set: float = a_net * brake_decel / (a_net + brake_decel)
-	var t_tri_max: float = v_me / a_net + v_me / brake_decel
-	var d_ramp: float = v_me * v_me / (2.0 * a_net)
-	var d_brake: float = v_me * v_me / (2.0 * brake_decel)
 	var n_fracs: int = RACE_PATH_FRACTIONS.size()
 	_race_reach_sq.clear()
 	var total: int = _race_channel_count * n_fracs
 	for idx: int in total:
 		var avail: float = _race_station_ts[idx]
-		var r: float
 		if avail < 0.0:
-			r = -1.0
-		elif avail <= t_tri_max:
-			r = reach + 0.5 * k_set * avail * avail
+			_race_reach_sq.append(-1.0)
+			continue
+		var r: float = reach + set_arrival_distance(
+				avail, self_max_speed, self_max_accel)
+		_race_reach_sq.append(r * r)
+
+
+# ── Last-man step-up discipline ──────────────────────────────────────────────
+# Shared by the two roles that stand in front of a rush — CONTAIN through the
+# neutral zone and PRESSURE once the zone is gained — so the handoff between
+# them at the blue line doesn't change how aggressively the same body steps up.
+#
+# True when a teammate is home BEHIND us — deeper toward our net (larger
+# own_goal_dir * z) than we are — i.e. there's a safety layer that can pick the
+# carrier up if our challenge gets beaten. When false we are the genuine last
+# man back, and a beaten challenge is a breakaway. Depth-axis read (not a race):
+# the risk being priced is specifically "beaten wide, nobody home", which is a
+# positional question. Excludes self.
+static func has_support_behind(ctx: RoleContext) -> bool:
+	if ctx.snapshot == null:
+		return false
+	var my_depth: float = ctx.own_goal_dir * ctx.self_pos.z
+	for pid: int in ctx.snapshot.skater_states:
+		if pid == ctx.peer_id:
+			continue
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+			continue
+		if ctx.own_goal_dir * ctx.snapshot.skater_states[pid].position.z > my_depth:
+			return true
+	return false
+
+
+# The shallowest stand depth — metres goal-side of `threat_pos` along `dir_net`
+# — the last man may take THIS dispatch, given that it wants to stand at
+# `desired_depth` and the threat is closing on our net at `closing` m/s.
+#
+# A defensive stand is not a parked spot: it sweeps toward our net at the rush's
+# own pace. A defender who charges the stand as it is TODAY arrives where the
+# rush already was, carrying up-ice momentum into a carrier closing head-on, and
+# the reversal costs him the rush — he gets walked around and trails the play
+# home from behind. So the step-up is bounded by the RENDEZVOUS: cover only what
+# can be covered and still be TRAVELLING WITH THE RUSH by the time the sweeping
+# stand meets us there. A step-up of `s` leaves the stand `step_needed - s` of
+# ice to cover at `closing`, and the budget that buys is charged twice:
+#   • the trip itself, priced as a set arrival (set_arrival_distance — up to
+#     speed and back down, since a stand overrun at pace is no stand);
+#   • the PIVOT out of it, `closing / accel` — the time to spin the body back up
+#     to the rush's own speed going the other way. Being merely stopped when the
+#     carrier arrives is not gap control: a stationary defender is beaten by any
+#     lateral cut, so the posture the step-up has to leave time for is matching
+#     his pace goal-side. Charging it is also what makes the bound stable under
+#     re-planning — without it the budget only shrinks as fast as the carrier
+#     closes, so a defender re-granted a fresh step every dispatch never gets
+#     around to executing the braking half and creeps into a lunge anyway.
+# Feasibility is monotone in `s` (a longer step costs more ground AND leaves less
+# time for it), so one bisection lands the largest one.
+#
+# The shape falls out at both ends by construction: a stalled or regrouping
+# carrier's stand isn't going anywhere, so the budget is unbounded and the
+# defender closes right up (gapping up); a carrier flying in leaves almost no
+# budget, so the defender holds his ground and makes the rush come to him.
+# Returns `desired_depth` unchanged whenever no bound applies — a stand already
+# goal-side of us is a retreat, which costs no reversal.
+static func settable_stand_depth(ctx: RoleContext, threat_pos: Vector3,
+		dir_net: Vector3, desired_depth: float, closing: float) -> float:
+	var self_along: float = (ctx.self_pos.x - threat_pos.x) * dir_net.x \
+			+ (ctx.self_pos.z - threat_pos.z) * dir_net.z
+	var step_needed: float = self_along - desired_depth
+	if step_needed <= 0.0 or closing <= 0.01:
+		return desired_depth
+	var v_max: float = self_race_vmax(ctx)
+	if _step_arrives_set(step_needed, step_needed, closing, v_max, ctx.self_max_accel):
+		return desired_depth
+	var lo: float = 0.0
+	var hi: float = step_needed
+	for _i: int in 6:
+		var mid: float = (lo + hi) * 0.5
+		if _step_arrives_set(mid, step_needed, closing, v_max, ctx.self_max_accel):
+			lo = mid
 		else:
-			r = reach + d_ramp + d_brake + v_me * (avail - t_tri_max)
-		_race_reach_sq.append(r * r if r > 0.0 else -1.0)
+			hi = mid
+	return self_along - lo
+
+
+# Can we cover a step-up of `s` and be back up to the rush's pace going the other
+# way by the time the stand — still `step_needed - s` of ice away, sweeping at
+# that pace — gets there? The pivot out of the step-up is charged off the top of
+# the budget; what's left has to pay for the trip as a set arrival.
+static func _step_arrives_set(s: float, step_needed: float, closing: float,
+		v_max: float, max_accel: float) -> bool:
+	var pivot_s: float = closing / maxf(
+			max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
+	return set_arrival_distance(
+			(step_needed - s) / closing - pivot_s, v_max, max_accel) >= s
+
+
+# How far a skater can travel in `t` seconds from a standing start and still
+# arrive SET — closing speed already killed. The shared home of the set-arrival
+# profile described above (_prepare_reach's containment radii and CONTAIN's
+# step-up clamp both ask "can I be there, stopped, in time?"):
+#   short budget — triangular: accelerate then brake to zero inside `t`; the
+#     covered ground is ½·k·t² with k = a·B/(a+B), the effective accel of an
+#     accelerate-brake round trip (B = the arrival brake decel);
+#   long budget — trapezoidal: full ramp (v²/2a) + brake run (v²/2B) + cruise
+#     for whatever time remains.
+static func set_arrival_distance(t: float, v_max: float,
+		max_accel: float) -> float:
+	if t <= 0.0:
+		return 0.0
+	var v: float = maxf(v_max, 1.0)
+	var brake_decel: float = AISteering.ARRIVAL_BRAKE_DECEL_M_S2
+	var a_net: float = maxf(max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
+	var t_tri_max: float = v / a_net + v / brake_decel
+	if t <= t_tri_max:
+		return 0.5 * (a_net * brake_decel / (a_net + brake_decel)) * t * t
+	return v * v / (2.0 * a_net) + v * v / (2.0 * brake_decel) \
+			+ v * (t - t_tri_max)
 
 
 static func _append_channel(gain_pt: Vector3, t_gain: float,

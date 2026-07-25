@@ -1242,10 +1242,12 @@ func _load() -> void:
 				bindings[action] = {"type": "key", "physical_keycode": cfg.get_value("bindings", action + "_code", 0)}
 			elif t == "mouse":
 				bindings[action] = {"type": "mouse", "button_index": cfg.get_value("bindings", action + "_code", 0)}
+		# Probe with has_section_key rather than a null default: ConfigFile errors
+		# ("no default was given") when the key is missing and the default is NIL,
+		# which is every unset pad action on a config predating the pad binds.
 		for action: String in PAD_REBINDABLE_ACTIONS:
-			var pb: Variant = cfg.get_value("pad_bindings", action, null)
-			if pb != null:
-				pad_bindings[action] = int(pb)
+			if cfg.has_section_key("pad_bindings", action):
+				pad_bindings[action] = int(cfg.get_value("pad_bindings", action, -1))
 		# Action rename (quick_shot → quick_pass): the quick-pass action was renamed
 		# off "quick_shot" so it stops reading as a shot. A config predating the
 		# rename stored the bind under the old key — adopt it so a player's custom
