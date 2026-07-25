@@ -4,7 +4,7 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 		game_id: String, team_id: int, period_scores: Array, num_periods: int,
 		team_sog_for: int, team_sog_against: int,
 		team_xg_for: float, team_xg_against: float,
-		is_online: bool, is_ranked: bool) -> void:
+		is_online: bool, human_players: int) -> void:
 	var body: Dictionary = record.stats.to_dict()
 	# steam_id is the career identity (cross-machine). Offline matches upload too,
 	# so this is no longer guaranteed by the session type — the caller drops the
@@ -30,11 +30,13 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 	body["team_xg_against"] = snappedf(team_xg_against, 0.001)
 	# Offline (vs bots) games count toward the career the same as online ones;
 	# these record WHAT a row was, so the kinds can still be told apart later
-	# (e.g. a human-only leaderboard) without having gated the upload.
-	# is_online = the session used the network at all; is_ranked = two or more
-	# humans actually shared the match, which is the stronger of the two.
+	# without having gated the upload. `is_online` is the session type;
+	# `human_players` is the peak human headcount, which is the stronger signal
+	# (an online lobby nobody joined is a bot game with extra steps). A count, not
+	# a "ranked" flag — Mitts has no ranked mode, and a count lets a later query
+	# pick its own threshold rather than inheriting one baked in here.
 	body["is_online"] = is_online
-	body["is_ranked"] = is_ranked
+	body["human_players"] = human_players
 	_post(SupabaseConfig.URL + "/rest/v1/career_stats", body)
 
 

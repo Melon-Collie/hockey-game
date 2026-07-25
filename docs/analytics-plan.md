@@ -128,9 +128,12 @@ shot map / xG-flow / heatmap, captured host-side and persisted:
   `share_gameplay_stats`, and a signed-in Steam identity (a row with no
   `steam_id` is unreadable by the career screen, so it's dropped rather than
   written). The distinction survives as *data* — `is_online` (session used the
-  network) and `is_ranked` (2+ humans actually shared the match, the stronger
-  signal and the one a human-only leaderboard would filter on) — so nothing is
-  foreclosed by counting bot games. `network_sessions` stays online-only; an
+  network) and `human_players` (PEAK human headcount, the stronger signal, since
+  an online lobby nobody joined is a bot game with extra steps) — so nothing is
+  foreclosed by counting bot games. Deliberately a **count, not a "ranked" flag**:
+  Mitts has no ranked mode, and a count lets a later query choose its own bar
+  (1 = solo, >= 2 = a real opponent) instead of inheriting one baked in at write
+  time. `network_sessions` stays online-only; an
   offline match has no link quality to report.
 - Client delivery: the host pushes the whole log once at game-over
   (`send_shot_events_to_all` / `receive_shot_events`, protocol v43 — a new `@rpc`

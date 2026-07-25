@@ -53,11 +53,16 @@ create table if not exists public.career_stats (
     -- (a human-only leaderboard, say) without having gated the upload. Older rows
     -- predate offline uploads and are all online, hence the `true` default.
     is_online             boolean default true not null,
-    -- Stronger than is_online: two or more humans actually shared the match (an
-    -- online lobby nobody joined is a bot game with extra steps). This is what a
-    -- human-only leaderboard would filter on. Older rows all met the old
-    -- two-human upload gate, hence the `true` default.
-    is_ranked             boolean default true not null
+    -- Peak human headcount in the match — stronger than is_online, since an
+    -- online lobby nobody joined is a bot game with extra steps. A COUNT rather
+    -- than a "ranked" flag: Mitts has no ranked mode, and a count lets a later
+    -- query pick its own bar (1 = solo vs bots, >= 2 = a real opponent, 6 = a
+    -- full lobby) instead of inheriting a threshold baked in at write time.
+    -- Backfilled to 2 for pre-existing rows: they all passed the old two-human
+    -- upload gate, so >= 2 is known true for them, though the exact count is
+    -- unrecoverable. Peak, not final, so someone who drops before the horn still
+    -- counts.
+    human_players         integer default 2 not null
 );
 
 -- Migration for an existing DB (the create above is skipped once the table
@@ -75,7 +80,9 @@ alter table public.career_stats add column if not exists xg_for                n
 alter table public.career_stats add column if not exists team_xg_for           numeric default 0 not null;
 alter table public.career_stats add column if not exists team_xg_against       numeric default 0 not null;
 alter table public.career_stats add column if not exists is_online             boolean default true not null;
-alter table public.career_stats add column if not exists is_ranked             boolean default true not null;
+-- Default 2 backfills existing rows honestly: every one of them passed the old
+-- two-human upload gate (see the column comment above).
+alter table public.career_stats add column if not exists human_players         integer default 2 not null;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
@@ -119,6 +126,7 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
     xg_for                between 0 and 10000 and
     team_xg_for           between 0 and 10000 and
     team_xg_against       between 0 and 10000 and
+    human_players         between 0 and 64 and
     toi_seconds   between 0 and 100000 and
     goals_for     between 0 and 1000  and
     goals_against between 0 and 1000  and

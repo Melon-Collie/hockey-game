@@ -360,6 +360,10 @@ var _game_id: String = ""
 # bot) makes the game ranked from then on, but players leaving before the
 # horn don't un-rank it. Reset at world spawn and recomputed on rematch.
 var _ranked_match: bool = false
+# Peak human headcount seen this match (see _refresh_ranked_match). Stored on the
+# career row so a future filter can pick its own bar instead of inheriting the
+# latch's arbitrary 2.
+var _peak_humans: int = 0
 
 # Sound wiring is split between persistent (NetworkManager autoload, GameManager
 # self-signals — wire once for the lifetime of the process) and per-game (puck /
@@ -1202,6 +1206,7 @@ func _spawn_world() -> void:
 	_last_phys_tick_us = 0
 	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
 	_ranked_match = false  # re-latches as players spawn (_on_registry_player_added)
+	_peak_humans = 0
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -4070,15 +4075,16 @@ func _on_game_over() -> void:
 	# is unreadable by the career screen and pure pollution — so skip it.
 	if SteamManager.steam_id == 0:
 		return
-	# Two archival flags, not gates. `is_online` is the session type; `_ranked_match`
-	# is the stronger signal (two or more humans actually shared the match — an
-	# online lobby nobody joined is a bot game with extra steps), and it's what a
-	# human-only leaderboard would filter on.
+	# Archival, not gates. `is_online` is the session type; `_peak_humans` is the
+	# stronger signal — an online lobby nobody joined is a bot game with extra
+	# steps. Stored as a COUNT rather than a "was it ranked" flag: Mitts has no
+	# ranked mode, and a count lets a future filter choose its own bar (1 = solo,
+	# 2+ = a real opponent, 6 = a full lobby) instead of inheriting this one.
 	var is_online: bool = not NetworkManager.is_offline_mode
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods,
 			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id],
-			_team_xg_sum(team_id), _team_xg_sum(1 - team_id), is_online, _ranked_match)
+			_team_xg_sum(team_id), _team_xg_sum(1 - team_id), is_online, _peak_humans)
 	# Shot-event log (B1) — host-only: it holds the authoritative per-game buffer,
 	# so a single batch from the host avoids per-peer duplication. Offline the
 	# local player IS the host, so bot games log their shots too (which is what
@@ -4127,16 +4133,23 @@ func notify_tutorial_completed() -> void:
 	_achievements.on_tutorials_complete()
 
 
-# Latches _ranked_match (see its doc) once two humans share the match. Called
-# from _on_registry_player_added so both the initial roster population and a
-# mid-match join re-evaluate it; _apply_reset re-runs it for rematches.
+# Latches _ranked_match (see its doc) once two humans share the match, and tracks
+# the PEAK human headcount for the career row. Called from
+# _on_registry_player_added so both the initial roster population and a mid-match
+# join re-evaluate it; _apply_reset re-runs it for rematches.
+# Peak rather than final: someone who plays three periods and drops before the
+# horn still made it a human game, and a headcount taken at game-over would miss
+# them. Counted offline too (the local player is a human), where it reads 1.
 func _refresh_ranked_match() -> void:
-	if _ranked_match or _registry == null or NetworkManager.is_offline_mode:
+	if _registry == null:
 		return
 	var humans: int = 0
 	for record: PlayerRecord in _registry.all().values():
 		if not record.is_bot:
 			humans += 1
+	_peak_humans = maxi(_peak_humans, humans)
+	if _ranked_match or NetworkManager.is_offline_mode:
+		return
 	_ranked_match = humans >= 2
 
 
@@ -4335,6 +4348,7 @@ func _apply_reset() -> void:
 	# A rematch is a fresh match for ranking purposes: re-derive the two-human
 	# latch from who's actually still here.
 	_ranked_match = false
+	_peak_humans = 0
 	_refresh_ranked_match()
 
 
