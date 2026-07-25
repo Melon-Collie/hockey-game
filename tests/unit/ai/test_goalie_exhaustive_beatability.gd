@@ -44,6 +44,25 @@ extends GutTest
 # the shoulder) and HIGH at both posts from range — the shots players actually
 # score. Re-run this after any change to the keeper's coverage; the beatable
 # fraction and WHERE it sits are the two numbers that matter.
+#
+# ── COUNTERFACTUAL: how much of the wall IS the stick ────────────────────────
+# Same sweep with all three stick colliders disabled:
+#
+#   with stick     30/1080   ( 2.8%)
+#   without stick 226/1080   (20.9%)
+#
+# A 7.5x swing. The stick is not a garnish on this keeper, it is the majority of
+# him. And note WHERE the goals appear without it: dead centre, every loft — the
+# five-hole and the low middle. That part is realistic (guarding the slot IS the
+# stick blade's job). What is not realistic is that with the stick ON, the low
+# corners are shut too: at 3 m the FLAT and LOW rows are stick-saves at EVERY
+# aim point out to both posts.
+#
+# Goalie.tscn carries THREE stick colliders — shaft (0.03 x 0.50), PADDLE
+# (0.10 x 0.66) and blade (0.38 x 0.07). GoalieStickRules models only the blade,
+# so the planner's "stick" is the smallest of the three; the paddle is the long
+# surface doing much of this work. Disabling the blade alone still left 14.2%
+# (STICK saves persisted) — it took all three to reach 20.9%.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
@@ -72,7 +91,7 @@ func before_each() -> void:
 	_h.setup(_goalie, _puck, _ctrl, _shooter)
 
 
-func _sweep(spot: Vector3, label: String) -> void:
+func _sweep(spot: Vector3, label: String) -> int:
 	var lofts: Array[int] = [
 		ShotMechanics.ELEVATION_FLAT,
 		ShotMechanics.ELEVATION_LOW,
@@ -111,6 +130,7 @@ func _sweep(spot: Vector3, label: String) -> void:
 	gut.p("%s: %d/%d scored (%.1f%%)   saves:%s"
 			% [label, goals, shots, 100.0 * float(goals) / float(maxi(shots, 1)), str(parts)])
 	gut.p("        legend: G=goal  s=stick  p=pad  b=blocker  c=chest  g=glove  x=post/wide")
+	return goals
 
 
 func test_can_anything_beat_the_set_keeper_from_the_slot() -> void:
@@ -121,3 +141,28 @@ func test_can_anything_beat_the_set_keeper_from_the_slot() -> void:
 	_sweep(Vector3(0.0, 0.0, GOAL_Z + 5.0), "slot 5.0 m")
 	_sweep(Vector3(3.5, 0.0, GOAL_Z + 4.0), "off-angle 5.3 m")
 	assert_true(true, "report")
+
+
+# COUNTERFACTUAL: the same sweep with the blade collider switched off. Not a
+# proposal — a measurement of how much of the wall the stick actually is, which
+# is the number that says whether a weak side is a tweak or a rewrite.
+func test_report_how_much_of_the_wall_is_the_stick() -> void:
+	# ALL THREE stick colliders — Goalie.tscn carries a shaft (0.03 x 0.50), a
+	# PADDLE (0.10 x 0.66) and the blade (0.38 x 0.07). GoalieStickRules models
+	# only the blade, so "stick" in the planner is the smallest of the three; the
+	# paddle is the long surface that lies across the ice.
+	var parts: Array[CollisionShape3D] = []
+	for n: String in ["StickShaftCollider", "StickPaddleCollier", "StickBladeCollider"]:
+		var cs: CollisionShape3D = _goalie.find_child(n, true, false) as CollisionShape3D
+		assert_not_null(cs, "found %s" % n)
+		if cs != null:
+			cs.disabled = true
+			parts.append(cs)
+	gut.p("SAME sweep, STICK BLADE REMOVED (counterfactual, not a proposal).")
+	var a: int = _sweep(Vector3(0.0, 0.0, GOAL_Z + 3.0), "no-stick slot 3.0 m")
+	var b: int = _sweep(Vector3(0.0, 0.0, GOAL_Z + 5.0), "no-stick slot 5.0 m")
+	var c: int = _sweep(Vector3(3.5, 0.0, GOAL_Z + 4.0), "no-stick off-angle 5.3 m")
+	gut.p("NO-STICK TOTAL: %d/1080 beat him (%.1f%%) — with the stick it was 30/1080 (2.8%%)"
+			% [a + b + c, 100.0 * float(a + b + c) / 1080.0])
+	for cs: CollisionShape3D in parts:
+		cs.disabled = false
