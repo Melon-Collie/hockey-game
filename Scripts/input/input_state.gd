@@ -89,6 +89,15 @@ static func quantize_power_t(v: float) -> float:
 # purely cosmetic (the wind-up coil pose). Humans leave aim_dir ZERO → positional.
 var bot_wrister_aim_dir: Vector3 = Vector3.ZERO
 var bot_wrister_backhand: bool = false
+# BOT-ONLY, runtime, NOT serialized. The bot's committed SLAPPER direction (world
+# XZ, normalized), read at the press tick and locked for the wind-up (see
+# SkaterController._enter_slapper_charge). The human lock is measured BLADE→cursor,
+# and the blade's world point is a shoulder-anchored, attribute-scaled offset ~1 m
+# off the body that a bot can't reproduce from the snapshot — a cursor placed to
+# cancel it parallel-shifts the locked line by about a net width (see
+# ShotMechanics.slapper_aim_dir). Bots have exactly one slapper — the one-timer —
+# so this is set by ONE_TIMER_PRESSED and nothing else. Humans leave it ZERO.
+var bot_slapper_aim_dir: Vector3 = Vector3.ZERO
 # BOT-ONLY. World XZ offset (from the skater) where the bot wants its puck to
 # FREEZE for the shot — the scored lateral release offset (`_shot_release_offset_locked`).
 # The freeze otherwise pins the puck at the centered carry pose; on a breakaway
