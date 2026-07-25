@@ -83,16 +83,9 @@ class Constraints:
 # explicit so a future edit to the backflow anchors does not silently gain the
 # ability to bury the goalie.
 static func solve(current: float, delta: float, c: Constraints) -> float:
-	var target: float = c.ceiling_radius
-	if c.standoff_cap < target:
-		target = maxf(c.standoff_cap, c.floor_radius)
-	if c.lateral_cap < target:
-		target = maxf(c.lateral_cap, c.floor_radius)
-	if c.backdoor_cap < target:
-		target = maxf(c.backdoor_cap, c.floor_radius)
+	var target: float = solve_target(c)
 	var rate: float = 0.0
-	if c.rush_radius < target:
-		target = c.rush_radius
+	if c.rush_radius < solve_caps(c):
 		rate = c.rush_rate
 	# The backflow is RATE-MATCHED to the attacker's closing speed, so while it is
 	# retreating him it owns the motion and bypasses both the settle and the rate
@@ -101,6 +94,36 @@ static func solve(current: float, delta: float, c: Constraints) -> float:
 	if rate > 0.0 and target < current:
 		return move_toward(current, target, rate * delta)
 	return approach(current, target, delta, c.settle_speed, c.max_speed)
+
+
+# The caps alone — everything except the rush backflow. Split out so `solve` can
+# ask whether the backflow is the binding constraint (and therefore owns the rate)
+# without recomputing.
+static func solve_caps(c: Constraints) -> float:
+	var target: float = c.ceiling_radius
+	if c.standoff_cap < target:
+		target = maxf(c.standoff_cap, c.floor_radius)
+	if c.lateral_cap < target:
+		target = maxf(c.lateral_cap, c.floor_radius)
+	if c.backdoor_cap < target:
+		target = maxf(c.backdoor_cap, c.floor_radius)
+	return target
+
+
+# THE settled depth for a set of constraints — the tightest cap, floored, with the
+# rush backflow applied. This is the SHARED model: the live controller integrates
+# toward it via `solve`, and the bot planner reads it directly
+# (AIActionScoring.planned_goalie_depth) so the two cannot drift.
+#
+# Keeping this a separate entry point matters. The planner has no per-tick state
+# to integrate and wants the STEADY-STATE answer; the controller needs the
+# approach rate as well. Sharing `solve_target` means a change to the depth model
+# reaches both by construction instead of by a comment asking someone to remember.
+static func solve_target(c: Constraints) -> float:
+	var target: float = solve_caps(c)
+	if c.rush_radius < target:
+		target = c.rush_radius
+	return target
 
 
 # Move toward `target` with an exponential settle shaped by `settle_speed`, rate

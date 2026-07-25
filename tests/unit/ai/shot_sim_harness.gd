@@ -17,7 +17,7 @@ extends RefCounted
 #   - Execution scatter: one uniform ±shot_aim_error_rad sample per shot (the
 #     production per-release model), seeded for determinism.
 #   - Goalie SET position: GoalieBehaviorRules.compute_threat_position +
-#     target_depth_for_puck_distance (the real depth chart) + target_arc_position
+#     GoalieDepthSolver.solve_target (the real depth model) + target_arc_position
 #     — the goalie squared on the challenge arc for that shooter, INDEPENDENT of
 #     the shot score's own cover model (the point of the "real goalie" choice).
 #   - Goalie REACH: GoalieBehaviorRules.reachable_lateral_distance with the real
@@ -96,17 +96,21 @@ const SHOOT_MIN: float = 0.08
 enum { GOAL, SAVE, POST, WIDE, NO_SHOT }
 
 
-# Depth chart config from the controller's real defaults.
-static func _depth_cfg() -> GoalieBehaviorRules.DepthConfig:
-	var c := GoalieBehaviorRules.DepthConfig.new()
-	c.zone_post_z = 2.0
-	c.zone_aggressive_z = 8.0
-	c.zone_base_z = 12.0
-	c.zone_conservative_z = 20.0
-	c.depth_aggressive = 1.75
-	c.depth_base = 1.30
-	c.depth_conservative = 0.70
-	c.depth_defensive = 0.10
+# Depth constraints from the controller's real defaults, solved by the SAME
+# GoalieDepthSolver the live goalie uses — so this instrument cannot drift from
+# the keeper it is modelling. (It previously mirrored the retired Buckley distance
+# chart, which stopped being the live model when depth became a solve.)
+#
+# Only the constraints a SET, unpressured shooter implies are supplied: the
+# ceiling (gated on the play being in-zone) and the physical standoff. The lateral
+# tracking cap, the backdoor re-square race and the rush backflow all need a
+# moving carrier or a live receiver, neither of which this instrument stages.
+static func _depth_constraints(threat_dist: float) -> GoalieDepthSolver.Constraints:
+	var c := GoalieDepthSolver.Constraints.new()
+	c.ceiling_radius = 1.75 if threat_dist <= AIActionScoring.GOALIE_ZONE_DEPTH_M \
+			else AIActionScoring.GOALIE_RESTING_DEPTH_M
+	c.standoff_cap = threat_dist - AIActionScoring.GOALIE_CHALLENGE_STANDOFF_M
+	c.floor_radius = 0.10
 	return c
 
 
@@ -116,7 +120,7 @@ static func goalie_set_pos(shooter: Vector3, goal: Vector3) -> Vector3:
 	var dir_sign: int = int(signf(-goal.z))
 	var threat: Vector3 = shooter   # carrier ≈ puck for a set-up shooter
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(threat, goal.z, goal.x)
-	var radius: float = GoalieBehaviorRules.target_depth_for_puck_distance(threat_dist, _depth_cfg())
+	var radius: float = GoalieDepthSolver.solve_target(_depth_constraints(threat_dist))
 	var xz: Vector2 = GoalieBehaviorRules.target_arc_position(
 			threat, goal.z, goal.x, dir_sign, radius, NET_HW)
 	return Vector3(xz.x, 0.0, xz.y)
