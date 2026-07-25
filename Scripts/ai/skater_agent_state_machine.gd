@@ -4034,24 +4034,33 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 	# geometry matches the spot the puck leaves from.
 	var net_hole: Vector3 = _shot_aim_point(snapshot, release_point,
 			_one_timer_feed_time_s(snapshot, self_pos))
-	# The controller locks the direction from the current blade→mouse line, so
-	# translate the release-point shot vector back onto the body: a cursor at
-	# self_pos + (net_hole − release_point) locks the exact line the shot needs
-	# when it eventually fires from release_point, cancelling the parallel shift.
-	# Rotated by this release's committed execution error (shot budget, sampled at
-	# press entry; constant through the wait).
+	# COMMIT the direction (input.bot_slapper_aim_dir), like every other bot
+	# release: release_point → net_hole, rotated by this release's committed
+	# execution error (shot budget, sampled at press entry; constant through the
+	# wait). The controller's human lock measures BLADE→cursor, and the blade's
+	# world point is a shoulder-anchored, attribute-scaled offset ~1 m off the body
+	# — no cursor the bot can place cancels it, so aiming through the cursor
+	# parallel-shifted every one-timer by about a net width, and swung it wildly in
+	# tight where the shot vector is shorter than the offset itself.
+	# The cursor stays pure pointing intent, aimed along the same committed line
+	# from the body — which is exactly what the press-tick facing snap wants.
 	var shot_vec: Vector3 = net_hole - release_point
 	var clean_aim: Vector3 = _apply_committed_aim_error(self_pos, self_pos + shot_vec)
+	var committed_dir := Vector3(
+			clean_aim.x - self_pos.x, 0.0, clean_aim.z - self_pos.z)
+	if committed_dir.length_squared() > 0.0001:
+		input.bot_slapper_aim_dir = committed_dir.normalized()
 	input.mouse_world_pos = _step_mouse_face(clean_aim)
 
-	# The controller LOCKS the slapper direction from the mouse at the press
-	# tick, so the press waits until the aim has actually settled into the reach
-	# cone — otherwise the shot fires wherever the bot happened to be LOOKING
-	# (a late-ready commit / zone-fallback trigger enters still watching the
-	# play). If it NEVER squares up within the wind-up (the net aim stays beyond
-	# the reach cone), the locked line would sail WIDE of the net: don't fire it
-	# into the corner — abort and catch the feed instead (the "worried about
-	# missing the net" guard). Degenerate facing reads as settled (nothing to
+	# The controller LOCKS the direction at the press tick and never re-steers, so
+	# the press waits until the aim has actually settled into the reach cone. A
+	# late-ready commit / zone-fallback trigger enters still watching the play, and
+	# a bot that can't swing through the shot line has no business firing it: the
+	# cursor is cone-clamped, so the press-tick facing snap would put the body on
+	# the cone edge while the committed line went at the net — a shot fired
+	# sideways out of the stance. If it NEVER squares up within the wind-up, don't
+	# fire it into the corner — abort and catch the feed instead (the "worried
+	# about missing the net" guard). Degenerate facing reads as settled (nothing to
 	# rotate), so it presses cleanly rather than false-aborting.
 	if not _one_timer_slap_down:
 		if _one_timer_aim_settled(snapshot, self_pos, clean_aim):

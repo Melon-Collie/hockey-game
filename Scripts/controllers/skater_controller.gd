@@ -2127,16 +2127,20 @@ func _enter_slapper_charge(input: InputState) -> void:
 	skater.set_upper_body_lean(0.0)
 	skater.set_lower_body_lean(0.0, 0.0)
 	skater.set_lower_body_lag(0.0)
-	# Lock aim direction from the squared blade-side release point → mouse.
+	# Lock aim direction from the squared blade-side release point → mouse. BOTS
+	# commit the direction instead (input.bot_slapper_aim_dir): the blade point
+	# below is a shoulder-anchored, attribute-scaled, facing-rotated offset roughly
+	# a metre off the body, and a synthesized cursor can't cancel it — see
+	# ShotMechanics.slapper_aim_dir.
 	var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
 	var blade_local := Vector3(
 		skater.shoulder.position.x + blade_side_sign * slapper_blade_x,
 		_ik.blade_y_local(),
 		skater.shoulder.position.z + slapper_blade_z)
 	var blade_world: Vector3 = skater.upper_body_to_global(blade_local)
-	var to_mouse_from_blade := Vector2(
-		input.mouse_world_pos.x - blade_world.x,
-		input.mouse_world_pos.z - blade_world.z)
+	var aim_dir: Vector3 = ShotMechanics.slapper_aim_dir(
+		input.bot_slapper_aim_dir, input.mouse_world_pos, blade_world)
+	var to_mouse_from_blade := Vector2(aim_dir.x, aim_dir.z)
 	_sm.locked_slapper_dir = to_mouse_from_blade.normalized() if to_mouse_from_blade.length() > move_deadzone else _pose.facing
 	skater.slapper_aim_dir = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 	if has_puck:
