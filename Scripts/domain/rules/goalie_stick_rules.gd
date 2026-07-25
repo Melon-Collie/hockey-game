@@ -25,10 +25,22 @@ class_name GoalieStickRules
 # So the stick — not the pads — is the primary LOW surface while he is upright.
 # The pad column alone is 0.36 m; the stick takes the silhouette to ~0.64 m.
 #
-# It is also SYMMETRIC, unlike a real goalie's. `yaw_to_target` swings the
-# paddle onto the wrist→puck line, so it tracks the threat to either side
-# rather than guarding the stick side. That is a real (and slightly unrealistic)
-# property of this keeper, and the cover model is symmetric to match it.
+# WHERE it covers, measured from real contact positions (not derived): the blade
+# takes a FIXED band of roughly +/-0.22 m in the goalie's local x, straddling the
+# midline, at every range tested. It does not range out to the posts — the outer
+# aim points are PAD saves. That matches the reported feel ("five-hole-ish and to
+# the blocker side"), with one caveat: the measured band reaches ~0.22 m onto the
+# GLOVE side of centre, which is further across the body than a real paddle held
+# in the blocker hand should reach. The blade sits closer to centred than
+# blocker-side.
+#
+# NOTE the goalie is rotated ~180 deg, so local +x (blocker side) is world -x.
+# Any table of world-frame contact positions reads mirrored.
+#
+# A caution on the reach number below: an apparent full-width wall in tight is
+# ANGLE COMPRESSION, not stick reach. From 3 m the keeper stands 1.68 m out, so
+# every aim from post to post crosses his plane inside +/-0.20 m and meets the
+# same fixed band.
 #
 # ── The reach is DERIVED, not declared ───────────────────────────────────────
 # `standing_lateral_reach()` falls out of the blade's own geometry: where the

@@ -55,7 +55,13 @@ extends GutTest
 #     chest — the two surfaces that deaden at any speed — are 2 of 288 here.
 #
 #  3. From 3 m nothing goes in at all, at any legal speed, and all 288 first
-#     contacts are STICK.
+#     contacts are STICK — but that is ANGLE COMPRESSION, not stick reach.
+#     Measured contact positions show the blade covering a FIXED band of about
+#     +/-0.22 m in the goalie's local x at BOTH 3 m and 6.1 m; it never widens.
+#     From 3 m he stands 1.68 m out of a 3 m shot, so every aim from post to
+#     post crosses his plane inside +/-0.20 m and funnels through that band. At
+#     the dot line the same band only takes the middle half of the aim points
+#     and the outer ones are PAD.
 #
 # ── THE SCOPE THAT MATTERED MOST: rebounds are TERMINAL here ─────────────────
 # This instrument stops at FIRST goalie contact, so every rebound goal in a real
