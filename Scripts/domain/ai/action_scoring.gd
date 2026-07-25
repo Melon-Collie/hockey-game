@@ -176,13 +176,26 @@ const SLOT_RADIUS_M: float = 6.0
 # saves with. The old 0.60 undersold the live splay by 0.24 m and left the
 # planning model phantom low-corner windows the real keeper closes.
 const HOLE_BAND_CORE: Array[float] = [0.84, 0.40]
-# Standing LOW core: the pad column a standing goalie covers with NO reaction —
-# stance pad center + half a pad box, mirrored from the live goalie's stance
-# anatomy (GoalieBehaviorRules). Everything between this and HOLE_BAND_CORE[LOW]
-# only exists once the butterfly drop lands.
-const LOW_CORE_STANDING_M: float = (
+# Standing LOW core: the widest thing a standing goalie covers along the ice
+# with NO reaction. Two surfaces are in play and the OUTER one owns the
+# silhouette:
+#   * the pad column — stance pad centre + half a pad box (0.36 m);
+#   * the STICK BLADE — the paddle on the ice in front of the pads (0.60 m),
+#     which the blade-aim solve actively swings to the threat side.
+#
+# The stick used to be missing entirely: every `stick` elsewhere in this file is
+# LANE_DEFENDER_REACH_M, a SKATER's blade in a passing lane, and the goalie's
+# own paddle was not modelled at any band. So the planner read the low corners
+# and the five-hole off pad geometry alone, found daylight, and rated a flat
+# corner shot near-certain — while the live keeper stick-saved 24/24 of them in
+# tight and pad-saved the rest (tests/unit/ai/test_slot_shot_value_truth.gd,
+# which measured a +1.00 over-estimate across the entire slot before this).
+#
+# Not a tuning constant — a surface the model could not previously see.
+static var LOW_CORE_STANDING_M: float = maxf(
 		GoalieBehaviorRules.STANDING_PAD_CENTER_X_M
-		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5)
+		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5,
+		GoalieBehaviorRules.STANDING_STICK_REACH_X_M)
 # Reaction-gated extension to the placement. LOW has none of its own any more:
 # the pad column's widening IS the butterfly drop (core lerp), and everything
 # beyond it is the real lateral push (_goalie_lateral_reach in _band_cover) —
@@ -1432,9 +1445,7 @@ static func _hole_open_angle(
 			# HIM (t_reach) — so only an in-tight release beats the drop (the
 			# shot the model used to score zero). Down, the residual gap (slide
 			# leak) is already the measurement and there is nothing left to
-			# drop. The stick blade parked in the slot is deliberately
-			# unmodeled: active-blade intent yaws it toward the puck, vacating
-			# the slot exactly when the shooter is off-center.
+			# drop. Down, the residual gap IS the slide leak.
 			var gap: float = goalie_five_hole_m
 			if not goalie_down:
 				var seal: float = clampf(
@@ -1442,6 +1453,24 @@ static func _hole_open_angle(
 							/ goalie_butterfly_drop_s,
 						0.0, 1.0)
 				gap *= 1.0 - seal
+				# THE STICK BLADE, which used to be deliberately unmodeled on the
+				# reasoning that active-blade intent yaws it toward the puck and so
+				# vacates the slot for an off-centre shooter. The measurement inverts
+				# that reasoning: the cells this got wrong are DEAD-CENTRE releases,
+				# which is exactly when the paddle sits IN the slot rather than
+				# vacating it — and the off-centre look the exemption protected is the
+				# one `centrality` below already kills. A five-hole shot is by
+				# definition FLAT, so it has to beat the blade lying across the slot
+				# at ice level, not just the pads (GoalieBehaviorRules' five-hole
+				# note: standing, the slot is "guarded only by the stick blade").
+				#
+				# The blade is wider than the slot (0.38 vs ~0.20 m) and stays over
+				# its centre even yawed to the active-blade cap, so standing this
+				# closes it outright — leaving the five-hole as what the comment above
+				# already calls it: the DOWN goalie's slide leak. Measured: a
+				# dead-centre flat release at 2.5-4.0 m is stick-saved 24/24
+				# (tests/unit/ai/test_slot_shot_value_truth.gd).
+				gap = maxf(0.0, gap - GoalieBehaviorRules.STICK_BLADE_WIDTH_M)
 			var gap_angle: float = maxf(0.0, gap - puck_diameter) / maxf(dist, 0.5)
 			return gap_angle * centrality
 		# Legacy proxy (no replicated stance in scope — threat surfaces, tests):
@@ -1454,6 +1483,13 @@ static func _hole_open_angle(
 				(t_read - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
 				0.0, 1.0)
 		proxy_gap *= 1.0 - proxy_seal
+		# Same stick blade as the measured branch — the paddle across the slot at
+		# ice level. Kept in BOTH branches deliberately: this proxy is what the
+		# threat surfaces and the calibration instruments run, so letting it keep a
+		# phantom standing five-hole would have the bots planning a shot the live
+		# keeper stick-saves, exactly the divergence measuring against the real
+		# goalie exposed.
+		proxy_gap = maxf(0.0, proxy_gap - GoalieBehaviorRules.STICK_BLADE_WIDTH_M)
 		var proxy_angle: float = maxf(0.0, proxy_gap - puck_diameter) / maxf(dist, 0.5)
 		return proxy_angle * centrality
 
