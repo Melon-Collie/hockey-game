@@ -181,7 +181,15 @@ const VERSION: String = "dev"
 #      it from the pad's PARKED cursor (~0 speed) and fired at the floor — a
 #      predicted snipe vs. an authoritative floater on every pad wrister online.
 #      Both the size change and the new flag semantics make mixed builds unsafe.
-const PROTOCOL_VERSION: int = 41
+# v42: the skater block grows 41 -> 43 bytes, adding the knockdown ragdoll seed:
+#      knockdown_total (u8 @ 0.01 s) and knockdown_hit_angle (u8 over TAU). A
+#      downed player is now simulated (RagdollRules) rather than posed by a fixed
+#      crumple, and both fields are what let a machine that never saw the impulse
+#      reproduce the fall — the duration gives elapsed (total - timer) and the hit
+#      strength, the angle gives the direction. Before this, remotes had only the
+#      timer, so a checked opponent folded generically backward everywhere but on
+#      the host. The block size change alone makes mixed builds undecodable.
+const PROTOCOL_VERSION: int = 42
 
 
 func _ready() -> void:

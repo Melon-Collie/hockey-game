@@ -476,6 +476,29 @@ func test_skater_knockdown_round_trips() -> void:
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.knockdown_timer, v, 0.01, "knockdown %f round-trips within u8 @0.01s" % v)
 
+func test_skater_knockdown_ragdoll_seed_round_trips() -> void:
+	# v42: the ragdoll seed. knockdown_total rides the same u8 @0.01s rail as the
+	# timer (it gives a late-observing peer elapsed = total - timer, and doubles as
+	# the hit-strength encoding); the hit angle is u8 over TAU. Both are constant
+	# for the whole down window, so any single snapshot reconstructs the fall.
+	for v: float in [0.0, 0.7, 1.5, 2.5]:
+		var s := SkaterNetworkState.new()
+		s.knockdown_total = v
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		assert_almost_eq(dec.knockdown_total, v, 0.01,
+				"knockdown_total %f round-trips within u8 @0.01s" % v)
+	# Angle resolution is TAU/256 ≈ 1.4°, so allow half a step either way. The
+	# wrap point matters: a fall direction that decodes to the opposite side would
+	# throw the victim the wrong way.
+	for a: float in [0.0, PI * 0.5, PI, PI * 1.5, TAU - 0.05]:
+		var s := SkaterNetworkState.new()
+		s.knockdown_hit_angle = a
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		var err: float = absf(angle_difference(a, dec.knockdown_hit_angle))
+		assert_lt(err, TAU / 256.0, "hit angle %f round-trips inside one quantization step" % a)
+
 func test_goalie_glove_above_crossbar_not_clipped() -> void:
 	# Regression: glove/blocker Y reach (react_hand_y_max 1.55) exceeded the old s8
 	# ±1.27 m range and clipped ~28 cm low. The s16-wide encoding preserves it.

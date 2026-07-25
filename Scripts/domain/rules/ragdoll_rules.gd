@@ -304,18 +304,6 @@ static func torso_lean(body: Body, body_basis: Basis) -> Vector2:
 	return Vector2(pitch, roll)
 
 
-# Torso twist for Skater.set_upper_body_rotation — the shoulders' yaw about the
-# body's own up axis, taken from the hip line so a rag-dolled skater's chest can
-# rotate away from its pelvis instead of staying square through a tumble.
-static func torso_twist(body: Body, body_basis: Basis) -> float:
-	var hips: Vector3 = body.pos[KNEE_R] - body.pos[KNEE_L]
-	if hips.length_squared() < 0.000001:
-		return 0.0
-	var d: Vector3 = body_basis.inverse() * hips
-	# Rest hip line is +X. Yaw is its rotation in the XZ plane.
-	return -atan2(d.z, d.x)
-
-
 # Per-leg angles for Skater.set_leg_swing(pitch, roll, knee).
 #
 # The rig applies rotation = (pitch, 0, roll) to a leg whose rest direction is

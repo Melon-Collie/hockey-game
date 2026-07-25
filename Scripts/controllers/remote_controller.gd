@@ -101,6 +101,10 @@ func _physics_process(delta: float) -> void:
 func _render_pose_update(delta: float) -> void:
 	if skater == null or _self_posing:
 		return
+	# Same ordering contract as the base pass — the ragdoll solves before the rig
+	# writers consume it. A client-rendered remote seeds from the wire fields
+	# (knockdown_total + hit angle) rather than from an impulse it never sees.
+	_ragdoll.update()
 	_skating.apply(delta)
 	if _is_host:
 		_pose.apply_head_tracking_aim(_current_aim_world, delta)
@@ -398,6 +402,11 @@ func _interpolate(delta: float) -> void:
 		interpolated.shot_charge = lerpf(from_state.shot_charge, to_state.shot_charge, t)
 		interpolated.stagger_timer = lerpf(from_state.stagger_timer, to_state.stagger_timer, t)
 		interpolated.knockdown_timer = lerpf(from_state.knockdown_timer, to_state.knockdown_timer, t)
+		# The ragdoll seed is a discrete fact about one hit, not a continuous
+		# quantity — take the newest sample rather than interpolating (lerping an
+		# angle through the wrap point would swing the fall the wrong way).
+		interpolated.knockdown_total = to_state.knockdown_total
+		interpolated.knockdown_hit_angle = to_state.knockdown_hit_angle
 		interpolated.move_intent = to_state.move_intent
 		interpolated.brake_intent = to_state.brake_intent
 		interpolated.hit_committed = to_state.hit_committed
@@ -541,6 +550,11 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# and the skater flag so the down pose (later) and any is_knocked_down read
 	# reflect a checked opponent on every machine, not just the host.
 	knockdown_timer = state.knockdown_timer
+	# Seed the ragdoll from the wire — a client-rendered remote never sees the
+	# impulse that _on_body_check_received would have carried.
+	knockdown_total = state.knockdown_total
+	if knockdown_total > 0.0:
+		_ragdoll.apply_wire_seed(state.knockdown_hit_angle, knockdown_total)
 	skater.is_knocked_down = knockdown_timer > 0.0
 	# Bottom hand is purely reactive to top_hand + blade and needs no network
 	# state of its own; it's posed once per rendered frame in _render_pose_update

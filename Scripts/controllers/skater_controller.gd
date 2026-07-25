@@ -154,15 +154,25 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
 @export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
 @export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
-# Knockdown pose (cosmetic): a downed player crumples — the body drops toward the
-# ice, the legs go limp, and the torso reels hard in the hit direction (an
-# amplified stagger recoil). All driven off the replicated knockdown_timer, so it
-# renders identically on every machine and through reconcile, like the stagger
-# stumble. knockdown_getup_seconds is the tail window over which the pose eases back
-# up (the get-up) — the pose holds full while more than this much time remains.
-@export var knockdown_pose_drop_m: float = 0.85    # how far the body sinks while down
-@export var knockdown_fold_deg: float = 50.0       # peak torso reel (added onto the recoil) while down
+# Knockdown pose (cosmetic): a downed player is RAGDOLLED, not posed. A verlet
+# chain (SkaterRagdollCoordinator over RagdollRules) is seeded from the hit —
+# direction, strength, and the victim's own momentum — and the rig's drop, leg
+# angles, and torso lean are read back off it. That replaced a fixed drop plus
+# limp legs driven by the timer alone, which played the identical fall for every
+# knockdown; the fall is now a function of the hit, on the same impulse continuum
+# that sizes the down time above.
+# knockdown_getup_seconds is the tail over which the ragdoll pose blends back to
+# the live skating pose (the get-up) — it holds full while more time remains.
 @export var knockdown_getup_seconds: float = 0.4   # tail over which the down pose eases back up
+# Ragdoll feel. These are legitimately hand-set feel tunables (how a fall should
+# LOOK), not evaluator constants — hit_contact_height excepted, which is a real
+# measurement: a shoulder check lands at chest height, and it is what turns a
+# linear shove into rotation over the planted skates.
+@export var ragdoll_hit_speed: float = 6.5       # m/s imparted to the trunk by a maximal hit
+@export var ragdoll_hit_lift: float = 2.2        # m/s upward by a maximal hit (feet leave the ice)
+@export var ragdoll_leg_drag_frac: float = 0.25  # fraction of the trunk kick the skates receive
+@export var ragdoll_ice_friction: float = 0.16   # tangential speed shed per ice contact
+@export var ragdoll_damping: float = 0.012       # per-step velocity loss (air/body damping)
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -841,6 +851,7 @@ var _pose: SkaterPoseCoordinator = SkaterPoseCoordinator.new()
 var _shot_pose: SkaterShotPoseCoordinator = SkaterShotPoseCoordinator.new()
 var _skating: SkaterSkatingCoordinator = SkaterSkatingCoordinator.new()
 var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
+var _ragdoll: SkaterRagdollCoordinator = SkaterRagdollCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
 var is_replaying: bool = false
@@ -874,6 +885,15 @@ var stagger_timer: float = 0.0
 # knockdown threshold; while > 0 the skater is down (no input, sliding, no puck).
 # Replicated / snapped / decayed exactly like stagger_timer.
 var knockdown_timer: float = 0.0
+# Full duration of the CURRENT knockdown (seconds), constant while it runs and 0
+# otherwise. Replicated alongside the timer because the ragdoll needs to know how
+# far through the fall a peer is joining — elapsed = total − timer — and because
+# it doubles as the hit-strength encoding (knockdown_seconds_from_impulse maps
+# impulse linearly onto [min, max] seconds, so the duration IS the strength, and
+# the wire never has to carry the impulse separately). Being constant for the
+# whole window makes it robust to packet loss: any single snapshot reconstructs
+# the fall.
+var knockdown_total: float = 0.0
 # Body-frame direction the last check shoved this skater (x = right, y = forward
 # in the (x, z) plane). Drives the recoil lean in SkaterPoseCoordinator; set on
 # the local victim / host from the transfer impulse, left at the default (0, 1 =
@@ -1004,6 +1024,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_sm.setup(_cb, _aiming)
 	_pose.setup(skater, _sm, _aiming, self, _skating)
 	_skating.setup(skater, _sm, self)
+	_ragdoll.setup(skater, self)
 	# Cosmetic pose (leg gait / head / off-hand IK) now runs at render rate in
 	# Skater._process instead of every physics tick — it feeds only meshes, not
 	# the blade world frame. RemoteController overrides _render_pose_update to
@@ -1133,6 +1154,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# shifty without owning the top gear, and a big weak-skater feel bad in the
 	# TURN rather than glued to the ice.
 	var m_agility: float = attrs.agility_mult()
+	# The ragdoll's segment lengths are read from the (now rescaled) leg pivots,
+	# so its config must be rebuilt whenever the build changes — otherwise a tall
+	# skater's knockdown would be solved on a neutral-height skeleton and the
+	# pose would detach from the mesh.
+	_ragdoll.invalidate_config(m_height)
 	max_speed = _base_max_speed * attrs.speed_mult()
 	thrust    = _base_thrust    * attrs.accel_mult()
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
@@ -1393,9 +1419,9 @@ func _on_body_check_received(impulse: Vector3) -> void:
 		if skater.is_local_skater:
 			stagger_timer = maxf(stagger_timer,
 					BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg))
-			knockdown_timer = maxf(knockdown_timer, knockdown_add)
+			_note_knockdown(knockdown_add, recoil_xz)
 		return
-	knockdown_timer = maxf(knockdown_timer, knockdown_add)
+	_note_knockdown(knockdown_add, recoil_xz)
 	var add: float = BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg)
 	# Only extend (never shorten) the stagger window, and only bite stamina when
 	# this hit is harder than the residual — incremental_stamina_drain handles the
@@ -1404,6 +1430,26 @@ func _on_body_check_received(impulse: Vector3) -> void:
 		return
 	stamina = maxf(stamina - BodyCheckRules.incremental_stamina_drain(stagger_timer, impulse_magnitude, cfg), 0.0)
 	stagger_timer = add
+
+
+# Extend (never shorten) the knockdown and hand the ragdoll its seed, keeping the
+# timer, the duration, and the fall that renders from them in lockstep. A weaker
+# follow-up hit during an existing knockdown leaves all three alone rather than
+# restarting the fall from standing.
+# Read-only access for the two rig writers that consume the solved knockdown pose
+# without owning it: SkaterSkatingCoordinator's crumple branch (drop + leg angles)
+# and SkaterPoseCoordinator._apply_lean (torso lean + twist). Both stay the single
+# writer of their own rig channel — they just read this instead of a fixed pose.
+func ragdoll() -> SkaterRagdollCoordinator:
+	return _ragdoll
+
+
+func _note_knockdown(seconds: float, recoil_body: Vector2) -> void:
+	if seconds <= 0.0 or seconds <= knockdown_timer:
+		return
+	knockdown_timer = seconds
+	knockdown_total = seconds
+	_ragdoll.note_hit(recoil_body, seconds)
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
@@ -1551,6 +1597,11 @@ func _process_input(input: InputState, delta: float) -> void:
 func _render_pose_update(delta: float) -> void:
 	if skater == null or _self_posing:
 		return
+	# Advance the knockdown ragdoll BEFORE the rig writers so the gait's crumple
+	# branch and _apply_lean's recoil channel both read this frame's solve. Its
+	# step count comes from the replicated knockdown_timer, not from delta, so
+	# polling here (render rate) is still frame-rate independent.
+	_ragdoll.update()
 	_skating.apply(delta)
 	_pose.apply_head_tracking_aim(_current_aim_world, delta)
 	# During a goal celebration the physics tick places the off-hand fist pump
@@ -1630,6 +1681,12 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	state.sprint_locked = _sprint_locked
 	state.stagger_timer = stagger_timer
 	state.knockdown_timer = knockdown_timer
+	# Ragdoll seed: constant for the whole down window, so a peer that first sees
+	# the fall mid-flight can still reproduce it. The angle is the body-frame hit
+	# direction the coordinator was seeded with (same frame as stagger_recoil_dir).
+	state.knockdown_total = knockdown_total
+	var kd_dir: Vector2 = _ragdoll.hit_dir_body()
+	state.knockdown_hit_angle = atan2(kd_dir.y, kd_dir.x)
 	state.move_intent = skater.move_intent
 	state.brake_intent = skater.brake_intent
 	state.hit_committed = skater.hit_committed
@@ -1688,10 +1745,19 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	sprint_active = state.sprint_active
 	stagger_timer = state.stagger_timer
 	knockdown_timer = state.knockdown_timer
+	knockdown_total = state.knockdown_total
+	if knockdown_total > 0.0:
+		_ragdoll.apply_wire_seed(state.knockdown_hit_angle, knockdown_total)
 	skater.is_knocked_down = knockdown_timer > 0.0
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
+	# Advance the knockdown ragdoll here too: this path poses itself (_self_posing
+	# suppresses the render hook), so without it a replayed knockdown would seed
+	# but never step, and the victim would stand upright through their own fall.
+	# Placed after set_facing so the solve maps into the correct body frame, and
+	# before the two writers below that consume it.
+	_ragdoll.update()
 	# Re-derive lean from velocity + hand reach so the upper body leans before
 	# the blade marker is placed (host's lean-compensated blade_y needs the
 	# matching upper-body rotation to land at the ice in world space).
@@ -1855,6 +1921,8 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	skater.hit_committed = false
 	stagger_timer = 0.0
 	knockdown_timer = 0.0
+	knockdown_total = 0.0
+	_ragdoll.reset()
 	skater.is_knocked_down = false
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
@@ -2530,6 +2598,9 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	# puck pickup (Skater.is_knocked_down).
 	knockdown_timer = maxf(knockdown_timer - delta, 0.0)
 	skater.is_knocked_down = knockdown_timer > 0.0
+	if not skater.is_knocked_down:
+		# Back on the feet — drop the seed so the next hit starts a fresh fall.
+		knockdown_total = 0.0
 	if skater.is_knocked_down:
 		sprint_active = false
 		hit_active = false

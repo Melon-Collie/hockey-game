@@ -80,6 +80,13 @@ static func apply_interpolated_snapshot(
 		interp.stamina = lerpf(fs.stamina, ts.stamina, t)
 		interp.stagger_timer = lerpf(fs.stagger_timer, ts.stagger_timer, t)
 		interp.knockdown_timer = lerpf(fs.knockdown_timer, ts.knockdown_timer, t)
+		# The ragdoll seed must ride along or the replay re-seeds from nothing and
+		# shows a generic backward crumple instead of the fall that was just
+		# watched live. Taken from the newest sample rather than interpolated —
+		# it's a discrete fact about one hit, and lerping the angle across the
+		# wrap point would throw the body the wrong way.
+		interp.knockdown_total = ts.knockdown_total
+		interp.knockdown_hit_angle = ts.knockdown_hit_angle
 		record.controller.apply_replay_state(interp, sim_delta)
 
 	var fp: PuckNetworkState = from_snap.puck

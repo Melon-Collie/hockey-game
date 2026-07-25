@@ -1037,18 +1037,27 @@ func apply(delta: float) -> void:
 		trunk_pitch_add += wobble_amp * sin(wobble_phase)
 		trunk_roll_add += wobble_amp * 0.7 * sin(wobble_phase * 1.31)
 
-	# Knockdown crumple: sink the body toward the ice and let the stride swing go
-	# limp, blended by kd_t so a downed body doesn't keep pumping strides while it
-	# slides. The torso fold is layered in SkaterPoseCoordinator._apply_lean (the
-	# recoil channel); here it's the drop + limp legs. Both ease back over the get-up.
+	# Knockdown crumple: the drop and the leg angles come straight off the ragdoll
+	# solve (SkaterRagdollCoordinator, advanced earlier this frame in
+	# _render_pose_update), blended by kd_t so the pose eases back to the live
+	# skating stance over the get-up tail. This used to be a fixed drop plus legs
+	# lerped limp, which played the identical crumple for every knockdown; the
+	# limbs now land where the fall actually put them. The torso half is layered in
+	# SkaterPoseCoordinator._apply_lean (the recoil channel); here it's the drop
+	# and the legs. Blending rather than overwriting is what makes the get-up a
+	# cross-fade back to the gait instead of a pop.
 	if kd_t > 0.0:
-		drop = lerpf(drop, _controller.knockdown_pose_drop_m, kd_t)
-		l_pitch = lerpf(l_pitch, 0.0, kd_t)
-		r_pitch = lerpf(r_pitch, 0.0, kd_t)
-		l_roll = lerpf(l_roll, 0.0, kd_t)
-		r_roll = lerpf(r_roll, 0.0, kd_t)
-		l_knee = lerpf(l_knee, 0.0, kd_t)
-		r_knee = lerpf(r_knee, 0.0, kd_t)
+		var rag: SkaterRagdollCoordinator = _controller.ragdoll()
+		if rag.is_active():
+			var rag_l: Vector3 = rag.leg_left()
+			var rag_r: Vector3 = rag.leg_right()
+			drop = lerpf(drop, rag.body_drop(), kd_t)
+			l_pitch = lerpf(l_pitch, rag_l.x, kd_t)
+			r_pitch = lerpf(r_pitch, rag_r.x, kd_t)
+			l_roll = lerpf(l_roll, rag_l.y, kd_t)
+			r_roll = lerpf(r_roll, rag_r.y, kd_t)
+			l_knee = lerpf(l_knee, rag_l.z, kd_t)
+			r_knee = lerpf(r_knee, rag_r.z, kd_t)
 
 	# Commit stance: holding the Hit button loads the skater up for the check — lean
 	# forward into it, drop the leading shoulder toward travel, and sink a touch. Off

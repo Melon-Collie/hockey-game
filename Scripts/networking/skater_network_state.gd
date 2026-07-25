@@ -37,6 +37,17 @@ var stagger_timer: float = 0.0
 # the same reason as stagger_timer — the local victim's reconcile snaps it to the
 # host baseline and it decays deterministically forward. Host-authoritative.
 var knockdown_timer: float = 0.0
+# Full duration of the current knockdown (seconds), and the body-frame direction
+# the hit shoved the victim (radians; x = right, y = forward, matching
+# stagger_recoil_dir). Both are CONSTANT for the whole knockdown window, which is
+# what makes them robust to loss — any single snapshot during the fall lets a peer
+# reconstruct it. They exist so the ragdoll (SkaterRagdollCoordinator) can seed
+# and catch up on machines that never saw the impulse: elapsed = total − timer,
+# and the duration doubles as the hit-strength encoding. Before these, remotes had
+# only the timer, so a checked opponent folded generically backward on every
+# screen but the host's.
+var knockdown_total: float = 0.0
+var knockdown_hit_angle: float = 0.0
 # Movement INTENT: the raw WASD vector (world frame, 8-way quantized on the
 # wire) and the brake hold. Originally cosmetic-only (the gait reads what the
 # player is TRYING to do — crossover intent, deliberate hockey stop, no-keys
@@ -93,6 +104,8 @@ func to_array() -> Array:
 		sprint_active,
 		knockdown_timer,
 		hit_committed,
+		knockdown_total,
+		knockdown_hit_angle,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -114,6 +127,8 @@ func copy_from(s: SkaterNetworkState) -> void:
 	sprint_locked = s.sprint_locked
 	stagger_timer = s.stagger_timer
 	knockdown_timer = s.knockdown_timer
+	knockdown_total = s.knockdown_total
+	knockdown_hit_angle = s.knockdown_hit_angle
 	move_intent = s.move_intent
 	brake_intent = s.brake_intent
 	sprint_active = s.sprint_active
@@ -154,4 +169,7 @@ static func from_array(data: Array) -> SkaterNetworkState:
 		state.knockdown_timer = data[20]
 	if data.size() > 21:
 		state.hit_committed = data[21]
+	if data.size() > 23:
+		state.knockdown_total = data[22]
+		state.knockdown_hit_angle = data[23]
 	return state

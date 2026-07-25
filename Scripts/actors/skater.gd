@@ -1240,6 +1240,16 @@ func set_skating_crouch_drop(drop: float) -> void:
 # (FACEOFF_SPAWN_HEIGHT, Y-axis-locked) never has to move. Routed through
 # _apply_body_height so this composes with the crouch/block drops instead of
 # fighting them for the same property.
+#
+# The BASE (pre-scale, pre-crouch) root offset, for callers that need to derive
+# a rig dimension without picking up the live crouch drop. SkaterRagdollCoordinator
+# uses it to compute the standing hip height: reading lower_body.position.y
+# directly would fold in the crouch — which the ragdoll itself drives, so the
+# config would chase its own output.
+func base_lower_body_y() -> float:
+	return _default_lower_body_y
+
+
 func set_skeleton_root_offset(offset: float) -> void:
 	if is_equal_approx(_skeleton_root_offset, offset):
 		return

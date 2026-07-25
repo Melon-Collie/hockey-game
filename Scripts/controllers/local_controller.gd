@@ -564,6 +564,12 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# per-tick decay + lock. is_knocked_down follows so the replay's _apply_movement
 	# gates correctly from the first replayed tick.
 	knockdown_timer = server_state.knockdown_timer
+	# The ragdoll seed rides the same snap: the sim is advanced to
+	# (total - timer), so restoring both fields re-targets an in-flight fall
+	# instead of leaving replay to re-derive ragdoll state it doesn't own.
+	knockdown_total = server_state.knockdown_total
+	if knockdown_total > 0.0:
+		_ragdoll.apply_wire_seed(server_state.knockdown_hit_angle, knockdown_total)
 	skater.is_knocked_down = knockdown_timer > 0.0
 	# Snap facing for replay accuracy — facing drives move_and_slide direction,
 	# so the replay must start from the server's facing to reproduce the trajectory.

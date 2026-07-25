@@ -171,19 +171,42 @@ func _apply_lean() -> void:
 	var recoil_roll: float = 0.0
 	var recoil_t: float = clampf(
 			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
-	# Knockdown reels the torso far harder than a stagger — the fold that sells being
-	# floored. It rides the SAME recoil direction (fall the way you were hit) and the
-	# same deterministic/replicated timer, layered on top of the stagger recoil. kd_t
-	# holds full while more than knockdown_getup_seconds remains, then eases to 0 (the
-	# get-up). Remotes reel generically backward (default recoil dir), like stagger.
-	var kd_t: float = clampf(
-			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
-	var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t \
-			+ deg_to_rad(_controller.knockdown_fold_deg) * kd_t
+	var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t
 	if mag > 0.0:
 		var d: Vector2 = _controller.stagger_recoil_dir
 		recoil_pitch = mag * d.y
 		recoil_roll = -mag * d.x
+	# Knockdown: the torso is RAGDOLLED rather than folded by a fixed angle. The
+	# solved spine direction (SkaterRagdollCoordinator, advanced earlier this frame)
+	# replaces the whole lean — reach and velocity lean included, since a downed
+	# body isn't reaching or skating — blended by kd_t so it eases back to the live
+	# pose over the get-up tail. Previously this was knockdown_fold_deg along the
+	# stagger recoil direction, which reeled every knockdown identically and, on
+	# client-rendered remotes (which never received the direction), always backward.
+	#
+	# This branch deliberately takes the frame-rate exemption the note below denies
+	# the gait: the ragdoll is polled at render rate, so the torso rotation it
+	# writes moves the blade's world position per rendered frame. That is safe
+	# ONLY here, because is_knocked_down gates the skater out of every blade-based
+	# gameplay path for exactly this window (see SkaterRagdollCoordinator's doc
+	# block). The blade's LOCAL transform — the part that reaches the wire — is
+	# untouched.
+	var kd_t: float = clampf(
+			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
+	var rag: SkaterRagdollCoordinator = _controller.ragdoll()
+	if kd_t > 0.0 and rag.is_active():
+		var rag_lean: Vector2 = rag.torso_lean()
+		_skater.set_upper_body_lean(
+				lerpf(upper_body_lean + velocity_lean_x + recoil_pitch, rag_lean.x, kd_t),
+				lerpf(upper_body_lean_roll + velocity_lean_z + recoil_roll, rag_lean.y, kd_t))
+		# Carry a fraction of the same tilt into the hips so the pelvis follows the
+		# trunk over instead of staying planted square while the legs splay — the
+		# lower body's own segment angles come from the solve in the gait's crumple
+		# branch, this is just the root it hangs from.
+		_skater.set_lower_body_lean(
+				lerpf(velocity_lean_x * _controller.lower_body_pitch_follow, rag_lean.x * 0.5, kd_t),
+				lerpf(velocity_lean_z, rag_lean.y * 0.5, kd_t))
+		return
 	# The gait's per-stride trunk texture is deliberately NOT folded in here: the
 	# blade markers hang under upper_body, so anything added to its rotation moves
 	# the blade's WORLD position (pickup / poke geometry, which must match across
