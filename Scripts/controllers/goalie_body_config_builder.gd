@@ -72,16 +72,18 @@ var pad_toe_out_butterfly: float = 18.0
 # Blocker assembly forward tilt per state (X rotation puts the blade on the
 # ice in front of the pads — pad and stick are rigidly attached at the wrist
 # so they rotate together).
-const STICK_TILT_STANDING: float = 22.0
-const STICK_TILT_READY: float = 22.0
-const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
-const STICK_TILT_RVH: float = 65.0
+# Aliases onto GoalieStickRules, which owns the stick's geometry so the POSED
+# blade and the blade the bot planner models cannot drift apart.
+const STICK_TILT_STANDING: float = GoalieStickRules.TILT_STANDING_DEG
+const STICK_TILT_READY: float = GoalieStickRules.TILT_READY_DEG
+const STICK_TILT_BUTTERFLY: float = GoalieStickRules.TILT_BUTTERFLY_DEG
+const STICK_TILT_RVH: float = GoalieStickRules.TILT_RVH_DEG
 
 # Active blade intent: max yaw on the blocker assembly to point the blade
 # toward a close-range threat. Smaller cap than the elevated-shot reach yaw
 # because the blocker pad is rigidly attached — swinging too far moves the
 # whole pad off the right side of the body.
-var active_blade_max_yaw_deg: float = 25.0
+var active_blade_max_yaw_deg: float = GoalieStickRules.ACTIVE_YAW_CAP_DEG
 # Blade offset from the BlockArm assembly origin, BlockArm-local (keep in sync
 # with Goalie.tscn: Stick at y −0.25, StickBladeCollider at (−0.15, −0.67, 0)
 # inside Stick → blade centre ≈ (−0.15, −0.92, 0) below the wrist). The
@@ -91,8 +93,8 @@ var active_blade_max_yaw_deg: float = 25.0
 # the wrist→puck line, so the BLADE lands on the puck instead of the assembly
 # merely pointing puck-side (the old fixed-lookahead heuristic ignored both
 # the puck's depth and this geometry).
-const BLADE_ASSEMBLY_X: float = -0.15
-const BLADE_ASSEMBLY_DROP: float = 0.92
+const BLADE_ASSEMBLY_X: float = GoalieStickRules.ASSEMBLY_LATERAL_M
+const BLADE_ASSEMBLY_DROP: float = GoalieStickRules.ASSEMBLY_DROP_M
 # Lunge forward extension at peak. Pushes c.blocker_pos forward (in goalie-
 # local -Z, the slot direction). Sin-curved by the controller's
 # lunge_progress so it reads as a quick jab.
@@ -665,17 +667,8 @@ func _blade_yaw_to_puck(
 		c: GoalieBodyConfig, inputs: Inputs, max_yaw_deg: float) -> float:
 	var px: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
 	var pz: float = (inputs.puck_position.z - inputs.goalie_z) * -inputs.direction_sign
-	var tx: float = px - c.blocker_pos.x
-	var tz: float = pz - c.blocker_pos.z
-	if tx * tx + tz * tz < 0.0004:
-		return 0.0  # puck at the wrist — direction undefined, hold neutral
-	var bx: float = BLADE_ASSEMBLY_X
-	var bz: float = -BLADE_ASSEMBLY_DROP * sin(deg_to_rad(c.blocker_rot.x))
-	if bx * bx + bz * bz < 0.0004:
-		return 0.0  # blade directly under the wrist (no tilt) — yaw does nothing
-	var desired: float = atan2(-tx, -tz)
-	var base: float = atan2(-bx, -bz)
-	return clampf(rad_to_deg(angle_difference(base, desired)), -max_yaw_deg, max_yaw_deg)
+	return GoalieStickRules.yaw_to_target(
+			c.blocker_pos.x, c.blocker_pos.z, px, pz, c.blocker_rot.x, max_yaw_deg)
 
 
 # Active blade intent: when an opposing shooter is close, yaw the blocker

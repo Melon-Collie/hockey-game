@@ -991,32 +991,10 @@ static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: Mo
 const PAD_BOX_WIDTH_M: float = 0.28
 const STANDING_PAD_CENTER_X_M: float = 0.22
 
-# ── Stick blade lateral reach, standing/ready stance ─────────────────────────
-# The paddle lying on the ice in front of the pads. This is the surface that
-# actually guards the five-hole and the low corners BEFORE the butterfly lands
-# (see the five-hole note above: standing, the slot is "guarded only by the
-# stick blade at ice level"), and it reaches materially wider than the pad
-# column does.
-#
-# Mirrors the live blade assembly (GoalieBodyConfigBuilder): the blocker wrist
-# sits at local x 0.44 in the READY stance, the blade assembly hangs
-# BLADE_ASSEMBLY_DROP (0.92) below it with a BLADE_ASSEMBLY_X (0.15) lateral
-# offset and STICK_TILT_STANDING (22°) of forward tilt, and the blade-aim solve
-# rotates that offset onto the wrist→puck line under the
-# active_blade_max_yaw_deg (25°) cap — so the paddle actively swings to the
-# threat side rather than guarding one side like a real goalie's.
-#
-# PINNED BY MEASUREMENT, exactly like the pad span it sits beside: sweeping the
-# aim of flat shots at the live goalie for the point where saves stop brackets
-# the standing reach at 0.59–0.64 m (tests/unit/ai/test_goalie_low_cover.gd).
-# Re-measure with that instrument before changing this number.
-const STANDING_STICK_REACH_X_M: float = 0.60
-
-# Blade width (m) — Goalie.tscn StickBladeCollider, a 0.38 x 0.07 x 0.03 box.
-# Nearly twice the standing five-hole slot (~0.20 m), so the paddle lying across
-# the slot closes it outright: even yawed to the active-blade cap (25°, shifting
-# the blade centre ~0.16 m) its 0.19 m half-width still spans the slot centre.
-const STICK_BLADE_WIDTH_M: float = 0.38
+# Stick geometry, aim and cover now live in GoalieStickRules — the blade is a
+# body part with its own model, not a footnote on the pads. See that file for
+# why (it was absent from the planning model entirely) and for the measured
+# standing reach the pad column above does NOT account for.
 
 static func five_hole_gap_m(is_down: bool, openness: float) -> float:
 	var op: float = maxf(openness, 0.0)

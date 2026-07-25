@@ -180,8 +180,9 @@ const HOLE_BAND_CORE: Array[float] = [0.84, 0.40]
 # with NO reaction. Two surfaces are in play and the OUTER one owns the
 # silhouette:
 #   * the pad column — stance pad centre + half a pad box (0.36 m);
-#   * the STICK BLADE — the paddle on the ice in front of the pads (0.60 m),
-#     which the blade-aim solve actively swings to the threat side.
+#   * the STICK BLADE — the paddle on the ice in front of the pads (~0.64 m),
+#     which the blade-aim solve actively swings to the threat side. Derived from
+#     the blade's own geometry by GoalieStickRules, so it tracks the collider.
 #
 # The stick used to be missing entirely: every `stick` elsewhere in this file is
 # LANE_DEFENDER_REACH_M, a SKATER's blade in a passing lane, and the goalie's
@@ -195,7 +196,7 @@ const HOLE_BAND_CORE: Array[float] = [0.84, 0.40]
 static var LOW_CORE_STANDING_M: float = maxf(
 		GoalieBehaviorRules.STANDING_PAD_CENTER_X_M
 		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5,
-		GoalieBehaviorRules.STANDING_STICK_REACH_X_M)
+		GoalieStickRules.standing_lateral_reach())
 # Reaction-gated extension to the placement. LOW has none of its own any more:
 # the pad column's widening IS the butterfly drop (core lerp), and everything
 # beyond it is the real lateral push (_goalie_lateral_reach in _band_cover) —
@@ -1470,7 +1471,7 @@ static func _hole_open_angle(
 				# already calls it: the DOWN goalie's slide leak. Measured: a
 				# dead-centre flat release at 2.5-4.0 m is stick-saved 24/24
 				# (tests/unit/ai/test_slot_shot_value_truth.gd).
-				gap = maxf(0.0, gap - GoalieBehaviorRules.STICK_BLADE_WIDTH_M)
+				gap = GoalieStickRules.five_hole_gap_after_blade(gap)
 			var gap_angle: float = maxf(0.0, gap - puck_diameter) / maxf(dist, 0.5)
 			return gap_angle * centrality
 		# Legacy proxy (no replicated stance in scope — threat surfaces, tests):
@@ -1489,7 +1490,7 @@ static func _hole_open_angle(
 		# phantom standing five-hole would have the bots planning a shot the live
 		# keeper stick-saves, exactly the divergence measuring against the real
 		# goalie exposed.
-		proxy_gap = maxf(0.0, proxy_gap - GoalieBehaviorRules.STICK_BLADE_WIDTH_M)
+		proxy_gap = GoalieStickRules.five_hole_gap_after_blade(proxy_gap)
 		var proxy_angle: float = maxf(0.0, proxy_gap - puck_diameter) / maxf(dist, 0.5)
 		return proxy_angle * centrality
 
