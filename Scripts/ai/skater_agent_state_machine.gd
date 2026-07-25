@@ -1183,6 +1183,21 @@ var _one_timer_slap_down: bool = false
 # geometry — press anyway rather than eat the whole feed flight un-wound.
 const ONE_TIMER_AIM_WAIT_MAX_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 5   # ~0.2 s
 
+# How square to the shot line the stance must ALREADY be for the wind-up to
+# start. The blade-reach cone (_aim_needs_no_rotation, ~132°) is the right gate
+# for a CARRIED shot — the blade swings to the aim while the body holds its
+# heading — but a one-timer has no carry: SkaterController._enter_slapper_charge
+# SNAPS facing to the aim at the press tick, so committing from a wide stance
+# whips the body a third of a turn in a single tick. A real one-timer is a stance
+# you're already in — you open up to the seam BEFORE the feed arrives, not on the
+# swing. A wide stance isn't rejected outright: the bot holds in ONE_TIMER_PRESSED
+# with the cursor on the net, facing rotates toward it at facing_drag, and the
+# press fires the moment it lands inside this angle; only a stance that can't
+# square within ONE_TIMER_AIM_WAIT_MAX_TICKS bails to a catch. FEEL, so hand-set
+# — widen if bots pass up one-timers they could have opened up for, tighten if the
+# wind-up still reads as a body-whip.
+const ONE_TIMER_SQUARE_UP_MAX_RAD: float = deg_to_rad(45.0)
+
 # Cap on the feed-arrival lookahead the one-timer aim reads the goalie at —
 # past this the feed is a long cross-ice saucer and the prediction is noise.
 const ONE_TIMER_FEED_LOOKAHEAD_MAX_S: float = 1.2
@@ -4114,17 +4129,22 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 		_set_state(_post_puck_lost_state(snapshot))
 
 
-# True when the one-timer's committed aim can fire from the current stance —
-# inside the blade reach cone (with the commit margin), so the press-tick
-# lock captures a real at-the-net direction. Unreadable facing (degenerate
-# state) never blocks: missing data must not starve the wind-up.
+# True when the one-timer's committed aim can fire from the current STANCE: the
+# body is already square to the shot line within ONE_TIMER_SQUARE_UP_MAX_RAD, and
+# (belt-and-braces for an unusually narrow build) the aim is inside the blade
+# reach cone with the commit margin. Unreadable facing (degenerate state) never
+# blocks: missing data must not starve the wind-up.
 func _one_timer_aim_settled(snapshot: WorldSnapshot, self_pos: Vector3,
 		aim: Vector3) -> bool:
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if self_state == null or self_state.facing.length_squared() < 0.0001:
 		return true
-	return _aim_needs_no_rotation(self_state.facing,
-			Vector2(aim.x - self_pos.x, aim.z - self_pos.z))
+	var aim_dir := Vector2(aim.x - self_pos.x, aim.z - self_pos.z)
+	if aim_dir.length_squared() < 0.0001:
+		return false
+	var gate: float = minf(ONE_TIMER_SQUARE_UP_MAX_RAD,
+			maxf(_self_reach_cone_half_angle - AIM_COMMIT_CONE_MARGIN_RAD, 0.0))
+	return absf(self_state.facing.angle_to(aim_dir)) <= gate
 
 
 # Remaining feed-flight time: the distance along the puck's live line to my
