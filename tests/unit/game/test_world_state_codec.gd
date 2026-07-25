@@ -498,6 +498,13 @@ func test_skater_knockdown_ragdoll_seed_round_trips() -> void:
 				WorldStateCodec._encode_skater_quantized(s))
 		var err: float = absf(angle_difference(a, dec.knockdown_hit_angle))
 		assert_lt(err, TAU / 256.0, "hit angle %f round-trips inside one quantization step" % a)
+	for h: float in [0.0, 0.45, 1.15, 1.55, 2.5]:
+		var s := SkaterNetworkState.new()
+		s.knockdown_contact_height = h
+		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
+				WorldStateCodec._encode_skater_quantized(s))
+		assert_almost_eq(dec.knockdown_contact_height, h, 0.01,
+				"contact height %f round-trips within u8 @0.01m" % h)
 
 func test_goalie_glove_above_crossbar_not_clipped() -> void:
 	# Regression: glove/blocker Y reach (react_hand_y_max 1.55) exceeded the old s8

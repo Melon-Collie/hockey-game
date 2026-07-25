@@ -48,6 +48,11 @@ var knockdown_timer: float = 0.0
 # screen but the host's.
 var knockdown_total: float = 0.0
 var knockdown_hit_angle: float = 0.0
+# World Y the check landed at (the attacker's shoulder at contact). The moment arm
+# between it and the victim's centre of mass is what rotates the ragdoll, so this
+# is what makes a tall-on-short check fold someone forward and a hip check sweep
+# their legs out. Without it remotes would render every fall with the same lever.
+var knockdown_contact_height: float = 0.0
 # Movement INTENT: the raw WASD vector (world frame, 8-way quantized on the
 # wire) and the brake hold. Originally cosmetic-only (the gait reads what the
 # player is TRYING to do — crossover intent, deliberate hockey stop, no-keys
@@ -106,6 +111,7 @@ func to_array() -> Array:
 		hit_committed,
 		knockdown_total,
 		knockdown_hit_angle,
+		knockdown_contact_height,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -129,6 +135,7 @@ func copy_from(s: SkaterNetworkState) -> void:
 	knockdown_timer = s.knockdown_timer
 	knockdown_total = s.knockdown_total
 	knockdown_hit_angle = s.knockdown_hit_angle
+	knockdown_contact_height = s.knockdown_contact_height
 	move_intent = s.move_intent
 	brake_intent = s.brake_intent
 	sprint_active = s.sprint_active
@@ -172,4 +179,6 @@ static func from_array(data: Array) -> SkaterNetworkState:
 	if data.size() > 23:
 		state.knockdown_total = data[22]
 		state.knockdown_hit_angle = data[23]
+	if data.size() > 24:
+		state.knockdown_contact_height = data[24]
 	return state

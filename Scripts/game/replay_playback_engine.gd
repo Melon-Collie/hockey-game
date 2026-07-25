@@ -87,6 +87,7 @@ static func apply_interpolated_snapshot(
 		# wrap point would throw the body the wrong way.
 		interp.knockdown_total = ts.knockdown_total
 		interp.knockdown_hit_angle = ts.knockdown_hit_angle
+		interp.knockdown_contact_height = ts.knockdown_contact_height
 		record.controller.apply_replay_state(interp, sim_delta)
 
 	var fp: PuckNetworkState = from_snap.puck

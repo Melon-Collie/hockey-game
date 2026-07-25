@@ -43,11 +43,13 @@ var _controller: SkaterController = null
 var _body: RagdollRules.Body = null
 var _cfg: RagdollRules.Config = null
 var _height_mult: float = 1.0
+var _nominal_contact_height: float = 0.0  # config default, restored when a hit carries no measurement
 
 # Seed inputs. Constant for the whole knockdown window, which is what lets a
 # late-observing peer reproduce the fall from any single packet.
 var _hit_dir_body: Vector2 = Vector2(0.0, 1.0)  # x = right, y = forward (matches stagger_recoil_dir)
 var _total: float = 0.0                          # full down duration of the current knockdown
+var _contact_height: float = 0.0                 # world Y the check landed at (0 = use the config default)
 var _elapsed: float = 0.0                        # seconds already simulated
 
 # Cached solved pose, refreshed by update(). Read by the rig writers.
@@ -103,7 +105,7 @@ func _config() -> RagdollRules.Config:
 	# standalone).
 	cfg.hit_speed = _controller.ragdoll_hit_speed
 	cfg.hit_lift = _controller.ragdoll_hit_lift
-	cfg.leg_drag_frac = _controller.ragdoll_leg_drag_frac
+	cfg.hit_angular_gain = _controller.ragdoll_angular_gain
 	cfg.ice_friction = _controller.ragdoll_ice_friction
 	cfg.linear_damping = _controller.ragdoll_damping
 	_cfg = cfg
@@ -114,7 +116,7 @@ func _config() -> RagdollRules.Config:
 # Recorded by SkaterController._on_body_check_received on the host and the local
 # victim. hit_dir_body matches stagger_recoil_dir's frame (x = right, y = forward)
 # so the two always reel the same way.
-func note_hit(hit_dir_body: Vector2, total_seconds: float) -> void:
+func note_hit(hit_dir_body: Vector2, total_seconds: float, contact_height: float) -> void:
 	if total_seconds <= 0.0:
 		return
 	# Extend-never-shorten, mirroring knockdown_timer: a weaker follow-up hit
@@ -123,17 +125,19 @@ func note_hit(hit_dir_body: Vector2, total_seconds: float) -> void:
 		return
 	_hit_dir_body = hit_dir_body if hit_dir_body.length_squared() > 0.0001 else Vector2(0.0, 1.0)
 	_total = total_seconds
+	_contact_height = contact_height
 	_restart()
 
 
 # Fed from the wire on client-rendered remotes, which never see the impulse.
-func apply_wire_seed(hit_angle: float, total_seconds: float) -> void:
+func apply_wire_seed(hit_angle: float, total_seconds: float, contact_height: float) -> void:
 	if total_seconds <= 0.0:
 		return
 	if total_seconds <= _total and _body != null and _body.active:
 		return
 	_hit_dir_body = Vector2(cos(hit_angle), sin(hit_angle))
 	_total = total_seconds
+	_contact_height = contact_height
 	_restart()
 
 
@@ -162,6 +166,7 @@ func update() -> void:
 		# the default backward recoil, so the player still goes down.
 		_total = timer
 		_hit_dir_body = Vector2(0.0, 1.0)
+		_contact_height = 0.0
 		_restart()
 	var cfg: RagdollRules.Config = _config()
 	if not _body.active:
@@ -179,6 +184,11 @@ func _seed(cfg: RagdollRules.Config) -> void:
 	var basis: Basis = _skater.global_transform.basis
 	var facing_world: Vector3 = -basis.z
 	var hit_world: Vector3 = basis * Vector3(_hit_dir_body.x, 0.0, _hit_dir_body.y)
+	# A measured contact height overrides the config's nominal one — it is what
+	# gives each fall its own rotation (see RagdollRules.seed_body). 0 means the
+	# hit arrived without one (the no-seed fallback); restore the nominal rather
+	# than leaving the previous hit's measurement on the cached config.
+	cfg.hit_contact_height = _contact_height if _contact_height > 0.0 else _nominal_contact_height
 	RagdollRules.seed_body(_body, cfg, facing_world, _skater.velocity, hit_world, _strength())
 	_elapsed = 0.0
 
@@ -238,6 +248,7 @@ func reset() -> void:
 	_total = 0.0
 	_elapsed = 0.0
 	_hit_dir_body = Vector2(0.0, 1.0)
+	_contact_height = 0.0
 	_torso_lean = Vector2.ZERO
 	_leg_l = Vector3.ZERO
 	_leg_r = Vector3.ZERO

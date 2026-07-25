@@ -568,8 +568,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# (total - timer), so restoring both fields re-targets an in-flight fall
 	# instead of leaving replay to re-derive ragdoll state it doesn't own.
 	knockdown_total = server_state.knockdown_total
+	knockdown_contact_height = server_state.knockdown_contact_height
 	if knockdown_total > 0.0:
-		_ragdoll.apply_wire_seed(server_state.knockdown_hit_angle, knockdown_total)
+		_ragdoll.apply_wire_seed(server_state.knockdown_hit_angle, knockdown_total,
+				knockdown_contact_height)
 	skater.is_knocked_down = knockdown_timer > 0.0
 	# Snap facing for replay accuracy — facing drives move_and_slide direction,
 	# so the replay must start from the server's facing to reproduce the trajectory.

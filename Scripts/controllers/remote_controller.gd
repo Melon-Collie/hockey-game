@@ -407,6 +407,7 @@ func _interpolate(delta: float) -> void:
 		# angle through the wrap point would swing the fall the wrong way).
 		interpolated.knockdown_total = to_state.knockdown_total
 		interpolated.knockdown_hit_angle = to_state.knockdown_hit_angle
+		interpolated.knockdown_contact_height = to_state.knockdown_contact_height
 		interpolated.move_intent = to_state.move_intent
 		interpolated.brake_intent = to_state.brake_intent
 		interpolated.hit_committed = to_state.hit_committed
@@ -553,8 +554,10 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# Seed the ragdoll from the wire — a client-rendered remote never sees the
 	# impulse that _on_body_check_received would have carried.
 	knockdown_total = state.knockdown_total
+	knockdown_contact_height = state.knockdown_contact_height
 	if knockdown_total > 0.0:
-		_ragdoll.apply_wire_seed(state.knockdown_hit_angle, knockdown_total)
+		_ragdoll.apply_wire_seed(state.knockdown_hit_angle, knockdown_total,
+				knockdown_contact_height)
 	skater.is_knocked_down = knockdown_timer > 0.0
 	# Bottom hand is purely reactive to top_hand + blade and needs no network
 	# state of its own; it's posed once per rendered frame in _render_pose_update

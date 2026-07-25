@@ -29,7 +29,8 @@ extends RefCounted
 #                      flags u8 (shot_state[2:0]+elevation_level[4:3]+ghost[5]+blade_up[6]+sprint_locked[7]),
 #                      shot_charge u8, stamina u8, stagger_timer u8@0.01s,
 #                      knockdown_timer u8@0.01s,
-#                      knockdown_total u8@0.01s, knockdown_hit_angle u8@TAU/256 (v42),
+#                      knockdown_total u8@0.01s, knockdown_hit_angle u8@TAU/256,
+#                      knockdown_contact_height u8@0.01m (v42),
 #                      intent u8 (move octant[2:0]+moving[3]+brake[4] v15, sprint[5] v16, hit_commit[6] v28)
 #      Puck    (13 B): pos s16/s16/s16@1cm, vel 3×s16@0.02m/s, carrier_idx u8 (0xFF=none)
 #      Goalie  (43 B): root (12 B) + pose (31 B). Root:
@@ -62,11 +63,12 @@ signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal queue_depth_feedback(depth: int)
 
 const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + u32 host_capture_time in 0.1ms units (4) + u8 num_skaters (1)
-const SKATER_STATE_BYTES: int = 43  # inner skater state block (was hardcoded 39 at two
+const SKATER_STATE_BYTES: int = 44  # inner skater state block (was hardcoded 39 at two
                                     # decode sites and silently truncated on the v15 grow;
                                     # 40->41 adds knockdown_timer u8@0.01s;
-                                    # 41->43 adds the knockdown ragdoll seed —
-                                    # knockdown_total u8@0.01s + hit angle u8@TAU/256)
+                                    # 41->44 adds the knockdown ragdoll seed —
+                                    # knockdown_total u8@0.01s + hit angle u8@TAU/256
+                                    # + contact height u8@0.01m)
 const SKATER_BLOCK_SIZE: int = SKATER_STATE_BYTES + 5  # + u32 peer_id + u8 queue_depth
 const PUCK_BLOCK_SIZE: int = 13    # 12B pos+vel + 1B carrier_idx
 const GOALIE_BLOCK_SIZE: int = 43  # 12 root + 31 pose (glove/blocker offsets are s16-wide)
@@ -390,11 +392,11 @@ func decode_stats(data: Array) -> void:
 
 # ── Quantization helpers ──────────────────────────────────────────────────────
 
-# Skater: SKATER_STATE_BYTES (43) bytes
+# Skater: SKATER_STATE_BYTES (44) bytes
 # Offsets: pos(0..4) vel(5..10) blade(11..16) top_hand(17..22)
 #          facing(23..24) ubrot(25..26) fav(27..28) ubav(29..30) lp_ts(31..34)
 #          flags(35) charge(36) stamina(37) stagger(38) knockdown(39)
-#          kd_total(40) kd_hit_angle(41) intent(42)
+#          kd_total(40) kd_hit_angle(41) kd_contact_h(42) intent(43)
 static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	var b := PackedByteArray()
 	b.resize(SKATER_STATE_BYTES)
@@ -451,6 +453,8 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 	# backward on every screen but the host's.
 	b.encode_u8(o, clampi(roundi(s.knockdown_total * 100.0), 0, 255)); o += 1
 	b.encode_u8(o, wrapi(roundi(s.knockdown_hit_angle / TAU * 256.0), 0, 256)); o += 1
+	# Contact height, u8 @ 0.01 m (0..2.55 m spans every reachable shoulder height).
+	b.encode_u8(o, clampi(roundi(s.knockdown_contact_height * 100.0), 0, 255)); o += 1
 	# Movement-intent byte (v15): bits [0..2] move-direction octant, bit [3]
 	# moving, bit [4] brake held, bit [5] sprint active (v16), bit [6] hit-commit
 	# (v28, the body-check brace/delivery signal). WASD is 8-way, so the octant
@@ -520,6 +524,7 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 	s.knockdown_timer = b.decode_u8(o) / 100.0; o += 1
 	s.knockdown_total = b.decode_u8(o) / 100.0; o += 1
 	s.knockdown_hit_angle = float(b.decode_u8(o)) / 256.0 * TAU; o += 1
+	s.knockdown_contact_height = b.decode_u8(o) / 100.0; o += 1
 	var intent: int = b.decode_u8(o)
 	if intent & 0x08:
 		var a: float = float(intent & 0x07) * (PI / 4.0)

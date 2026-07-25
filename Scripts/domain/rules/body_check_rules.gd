@@ -42,8 +42,8 @@ class Config:
 	# head-on/sprint collision — not the default result of every check.
 	var knockdown_impulse: float = 1.8         # m/s victim impulse above which a hit knocks down (0 disables)
 	var knockdown_ref_impulse: float = 3.1     # m/s impulse of a maximal (longest) knockdown
-	var min_knockdown_seconds: float = 0.7     # down time of a just-barely knockdown
-	var max_knockdown_seconds: float = 1.5     # down time of a maximal hit
+	var min_knockdown_seconds: float = 1.2     # down time of a just-barely knockdown
+	var max_knockdown_seconds: float = 2.2     # down time of a maximal hit
 
 
 # 0..1 hit hardness from the victim impulse magnitude.

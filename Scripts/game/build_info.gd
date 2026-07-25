@@ -181,8 +181,10 @@ const VERSION: String = "dev"
 #      it from the pad's PARKED cursor (~0 speed) and fired at the floor — a
 #      predicted snipe vs. an authoritative floater on every pad wrister online.
 #      Both the size change and the new flag semantics make mixed builds unsafe.
-# v42: the skater block grows 41 -> 43 bytes, adding the knockdown ragdoll seed:
-#      knockdown_total (u8 @ 0.01 s) and knockdown_hit_angle (u8 over TAU). A
+# v42: the skater block grows 41 -> 44 bytes, adding the knockdown ragdoll seed:
+#      knockdown_total (u8 @ 0.01 s), knockdown_hit_angle (u8 over TAU), and
+#      knockdown_contact_height (u8 @ 0.01 m — the moment arm that decides whether
+#      the victim folds forward or gets their legs swept). A
 #      downed player is now simulated (RagdollRules) rather than posed by a fixed
 #      crumple, and both fields are what let a machine that never saw the impulse
 #      reproduce the fall — the duration gives elapsed (total - timer) and the hit

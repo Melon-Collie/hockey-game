@@ -56,14 +56,14 @@ func test_round_trip_preserves_all_wire_fields() -> void:
 func test_array_length_sentinel() -> void:
 	# Field-count sentinel — if a field is added without updating to_array /
 	# from_array, this catches the mismatch before it becomes a silent bug.
-	# 24: position, velocity, blade_position, top_hand_position,
+	# 25: position, velocity, blade_position, top_hand_position,
 	# upper_body_rotation_y, facing, last_processed_host_timestamp,
 	# is_ghost, shot_state, shot_charge, facing_angular_velocity,
 	# upper_body_angular_velocity, elevation_level, blade_up, stamina, sprint_locked,
 	# stagger_timer, move_intent, brake_intent, sprint_active, knockdown_timer,
-	# hit_committed, knockdown_total, knockdown_hit_angle.
+	# hit_committed, knockdown_total, knockdown_hit_angle, knockdown_contact_height.
 	var s := SkaterNetworkState.new()
-	assert_eq(s.to_array().size(), 24)
+	assert_eq(s.to_array().size(), 25)
 
 
 func test_blade_up_back_compat_defaults_false() -> void:

@@ -90,10 +90,10 @@ class Config:
 	# lands at chest height — not a shape parameter; it is what converts a linear
 	# shove into rotation about the planted skates, which is the whole reason a
 	# hard hit puts someone over instead of just sliding them.
-	var hit_speed: float = 6.5        # m/s imparted to the trunk at strength 1
+	var hit_speed: float = 6.5        # m/s imparted at strength 1
 	var hit_lift: float = 2.2         # m/s upward at strength 1 (feet leave the ice)
-	var hit_contact_height: float = 1.15  # world Y the check lands at
-	var leg_drag_frac: float = 0.25   # fraction of the trunk kick the skates receive
+	var hit_contact_height: float = 1.40  # world Y the check lands at
+	var hit_angular_gain: float = 3.0 # how strongly the contact lever rotates the body
 
 
 # ── Body ──────────────────────────────────────────────────────────────────────
@@ -142,32 +142,60 @@ static func seed_body(body: Body, cfg: Config, facing_world: Vector3,
 	body.pos[SKATE_L] = body.pos[KNEE_L] - Vector3.UP * cfg.shin_len
 	body.pos[SKATE_R] = body.pos[KNEE_R] - Vector3.UP * cfg.shin_len
 
-	# Launch. Everything inherits the skater's own momentum; the hit is then
-	# applied FULL to the trunk and only leg_drag_frac to the skates, so the
-	# upper body outruns the feet and the whole rig rotates over them — that
-	# asymmetry is where the tumble comes from, not a scripted spin.
+	# Launch. Everything inherits the skater's own momentum, then the hit is
+	# resolved as a real rigid-body impulse: a LINEAR part every particle takes
+	# equally, plus an ANGULAR part from the moment arm between the contact
+	# height and the body's centre of mass. Particles above the CoM get more of
+	# the hit than those below (or the reverse, for a check that lands low), so
+	# the body rotates about its own CoM instead of translating.
+	#
+	# That lever is what makes falls differ. A tall attacker's shoulder catching
+	# a short victim high folds them forward over their skates; a hit landing at
+	# or below the CoM — a hip check — sweeps the legs out ahead and drops them
+	# on their back. Both come out of the same equation, and the input is real
+	# geometry (see SkaterController._on_body_check_received, which measures it
+	# from the two bodies), so no per-fall randomness or archetype table is
+	# needed to keep knockdowns from looking stamped.
 	var dir: Vector3 = hit_dir_world
 	dir.y = 0.0
 	if dir.length_squared() < 0.0001:
 		dir = -fwd
 	dir = dir.normalized()
 	var s: float = clampf(strength, 0.0, 1.0)
-	var kick: Vector3 = dir * (cfg.hit_speed * s) + Vector3.UP * (cfg.hit_lift * s)
-	var leg_kick: Vector3 = kick * cfg.leg_drag_frac
+	var com_y: float = center_of_mass_y(body)
+	# Normalising the lever and the radius by body height keeps the angular term
+	# dimensionally consistent with the linear one, so hit_angular_gain means the
+	# same thing across builds instead of scaling with height².
+	var span: float = maxf(body.pos[HEAD].y - body.pos[SKATE_L].y, 0.001)
+	var lever: float = (cfg.hit_contact_height - com_y) / span
+	var linear: Vector3 = dir * (cfg.hit_speed * s)
+	var lift: Vector3 = Vector3.UP * (cfg.hit_lift * s)
 	for i: int in PARTICLE_COUNT:
-		var v: Vector3 = velocity + (leg_kick if _is_leg(i) else kick)
-		body.prev[i] = body.pos[i] - v * _SEED_DT
+		var radius: float = (body.pos[i].y - com_y) / span
+		var angular: Vector3 = dir * (cfg.hit_speed * s * cfg.hit_angular_gain * lever * radius)
+		body.prev[i] = body.pos[i] - (velocity + linear + lift + angular) * _SEED_DT
 	body.active = true
+
+
+# Mass-weighted centroid height of the seeded pose. Derived from the same inverse
+# masses the solver relaxes with, so the rotation pivots about the body's actual
+# centre rather than a hand-placed one.
+static func center_of_mass_y(body: Body) -> float:
+	var total: float = 0.0
+	var weighted: float = 0.0
+	for i: int in PARTICLE_COUNT:
+		var m: float = 1.0 / maxf(_INV_MASS[i], 0.0001)
+		total += m
+		weighted += m * body.pos[i].y
+	if total <= 0.0:
+		return 0.0
+	return weighted / total
 
 
 # Seed velocities are converted to a previous-position offset over this step, so
 # the very first step() reproduces them exactly. Matches the 120 Hz tick the
 # solver is advanced at.
 const _SEED_DT: float = 1.0 / 120.0
-
-
-static func _is_leg(i: int) -> bool:
-	return i == KNEE_L or i == KNEE_R or i == SKATE_L or i == SKATE_R
 
 
 # Height of the skate particle in the neutral standing pose. Derived from the

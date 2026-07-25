@@ -61,15 +61,50 @@ func test_unhit_seed_is_a_true_rest_state() -> void:
 	assert_almost_eq(body.pos[RagdollRules.PELVIS].y, pelvis_y, 0.02,
 			"an unhit ragdoll stands still instead of collapsing")
 
-func test_seed_launches_the_trunk_harder_than_the_legs() -> void:
-	# The asymmetry between trunk and skate kick IS the tumble: without it a hit
-	# would translate the whole body and never rotate it over the feet.
+func test_high_contact_rotates_the_body_over_its_feet() -> void:
+	# A check landing above the centre of mass drives the trunk faster than the
+	# skates, so the body folds forward over them instead of translating.
+	_cfg.hit_contact_height = 1.40
 	var body := _fresh(1.0, Vector3.ZERO, Vector3.BACK)
 	var trunk_v: Vector3 = body.pos[RagdollRules.CHEST] - body.prev[RagdollRules.CHEST]
 	var skate_v: Vector3 = body.pos[RagdollRules.SKATE_L] - body.prev[RagdollRules.SKATE_L]
-	assert_gt(trunk_v.z, skate_v.z, "the trunk is shoved harder than the skates")
-	assert_almost_eq(skate_v.z / trunk_v.z, _cfg.leg_drag_frac, 0.0001,
-			"the skates receive exactly leg_drag_frac of the trunk kick")
+	assert_gt(trunk_v.z, skate_v.z, "a shoulder-height check outruns the skates")
+
+func test_low_contact_sweeps_the_legs_out_instead() -> void:
+	# The same equation with the contact BELOW the centre of mass reverses the
+	# lever: the skates get driven out ahead of the trunk — a hip check putting
+	# someone on their back rather than folding them forward. This is the whole
+	# reason falls stop looking stamped, so it is pinned rather than eyeballed.
+	_cfg.hit_contact_height = 0.45
+	var body := _fresh(1.0, Vector3.ZERO, Vector3.BACK)
+	var trunk_v: Vector3 = body.pos[RagdollRules.CHEST] - body.prev[RagdollRules.CHEST]
+	var skate_v: Vector3 = body.pos[RagdollRules.SKATE_L] - body.prev[RagdollRules.SKATE_L]
+	assert_gt(skate_v.z, trunk_v.z, "a low check drives the skates out ahead of the trunk")
+
+func test_contact_at_the_centre_of_mass_is_pure_translation() -> void:
+	# Zero moment arm -> no rotation, every particle takes the same kick.
+	var probe := RagdollRules.Body.new()
+	RagdollRules.seed_body(probe, _cfg, Vector3.FORWARD, Vector3.ZERO, Vector3.BACK, 0.0)
+	_cfg.hit_contact_height = RagdollRules.center_of_mass_y(probe)
+	var body := _fresh(1.0, Vector3.ZERO, Vector3.BACK)
+	var trunk_v: Vector3 = body.pos[RagdollRules.CHEST] - body.prev[RagdollRules.CHEST]
+	var skate_v: Vector3 = body.pos[RagdollRules.SKATE_L] - body.prev[RagdollRules.SKATE_L]
+	assert_almost_eq(trunk_v.z, skate_v.z, 0.00001,
+			"a hit through the centre of mass imparts no rotation")
+
+func test_contact_height_changes_the_resulting_fall() -> void:
+	# End-to-end: the lever must still be visible in the pose a second later, not
+	# just in the seed velocities.
+	_cfg.hit_contact_height = 1.40
+	var high := _fresh(1.0, Vector3.ZERO, Vector3.BACK)
+	_cfg.hit_contact_height = 0.45
+	var low := _fresh(1.0, Vector3.ZERO, Vector3.BACK)
+	_run(high, 1.0)
+	_run(low, 1.0)
+	var high_lead: float = high.pos[RagdollRules.CHEST].z - high.pos[RagdollRules.SKATE_L].z
+	var low_lead: float = low.pos[RagdollRules.CHEST].z - low.pos[RagdollRules.SKATE_L].z
+	assert_gt(high_lead, low_lead,
+			"the high check ends with the trunk further downrange of the skates than the low one")
 
 func test_seed_inherits_the_victims_own_momentum() -> void:
 	var moving := _fresh(0.5, Vector3(4.0, 0.0, 0.0), Vector3.BACK)

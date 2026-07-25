@@ -289,7 +289,13 @@ signal body_check_impulse_applied(impulse: Vector3)
 # the stagger/stamina debuff without mistaking a delivered hit's bounce-back for
 # being hit. Host-authoritative consumers gate on is_host; see
 # SkaterController._on_body_check_received.
-signal body_check_received(impulse: Vector3)
+# contact_height is the world Y the check landed at, measured from the ATTACKER's
+# shoulder (clamped into the victim's own body span). It drives the knockdown
+# ragdoll's rotation: the moment arm between it and the victim's centre of mass
+# decides whether they fold forward over their skates or get their legs swept out
+# from under them. Measured rather than assumed so a tall-on-short check and a
+# hip check produce visibly different falls with no per-fall randomness.
+signal body_check_received(impulse: Vector3, contact_height: float)
 # Fired at the END of _physics_process, AFTER move_and_slide + collision
 # resolution + rink clamp have settled this tick's position and velocity. The
 # local player's controller uses it to capture its reconcile prediction snapshot
@@ -851,7 +857,14 @@ func _resolve_player_collisions() -> void:
 			var other_delta: Vector3 = other.velocity - other_vel_before
 			if other_delta.length_squared() > 0.0001:
 				other.body_check_impulse_applied.emit(other_delta)
-				other.body_check_received.emit(other_delta)
+				# Where the hit landed on the victim: this attacker's shoulder,
+				# clamped so it stays somewhere on the victim's body however
+				# mismatched the two builds are. A crouched (hit-committed)
+				# attacker naturally lands lower, which is correct — that is the
+				# real difference between a shoulder check and a hip check.
+				var contact_y: float = clampf(shoulder.global_position.y,
+						0.3, other.helmet.global_position.y)
+				other.body_check_received.emit(other_delta, contact_y)
 		# Credit / claim path — only on a real (closing) hit, NOT gated by authority
 		# (must fire on the attacker's own machine and the host for lag-comp
 		# validation, Lever A). impact_force keeps the weight × closing convention
