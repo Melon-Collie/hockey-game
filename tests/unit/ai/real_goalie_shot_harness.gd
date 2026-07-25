@@ -262,6 +262,111 @@ func _net_verdict(cross_x: float, cross_y: float) -> int:
 	return GOAL
 
 
+# ── REBOUND tracking ─────────────────────────────────────────────────────────
+# `fire`/`fire_at` stop at first contact, which is right for measuring reach but
+# silently scores every rebound goal as a save. This variant applies the REAL
+# save response (GoalieSaveRules.resolve_contact + the flush eject, the exact
+# pair Puck._physics_process runs) and keeps marching, so it can answer the
+# question that actually matters: where does the puck END UP.
+#
+# "Live vs deadened" is NOT that question. A hard shot off a toed-out pad is
+# live AND safe — the pose angle sends it to the corner. A chest save is
+# deadened and DANGEROUS — GoalieSaveRules zeroes its goalward and vertical
+# motion so it settles dead in front of him, in the paint. Destination is the
+# measurement; restitution is not.
+#
+# Fills `last_part` with the FIRST contact as usual, plus:
+#   rebound_pos    where the puck was when it settled / left the danger area
+#   rebound_speed  its speed there
+#   rebound_goal   true if it eventually went in (first shot OR rebound)
+var rebound_pos: Vector3 = Vector3.INF
+var rebound_speed: float = 0.0
+var rebound_goal: bool = false
+var _deaden: GoalieSaveRules.DeadenConfig = null
+var _save_res: GoalieSaveRules.ContactResult = GoalieSaveRules.ContactResult.new()
+
+const REBOUND_TRACK_S: float = 1.5
+const PLAYABLE_SPEED_M_S: float = 8.0   # slow enough for a skater to actually play it
+
+
+func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
+		speed_m_s: float, err_rad: float) -> int:
+	if _deaden == null:
+		_deaden = GoalieSaveRules.DeadenConfig.new()
+		_deaden.pad_max_incoming_speed = _puck.save_deaden_pad_max_speed
+		_deaden.drop_speed = _puck.save_deaden_drop_speed
+		_deaden.glove_retain = _puck.save_deaden_glove_retain
+		_deaden.chest_retain = _puck.save_deaden_chest_retain
+		_deaden.pad_steer_speed = _puck.save_steer_speed
+		_deaden.steer_lateral_weight = _puck.save_steer_lateral_weight
+		_deaden.steer_forward_weight = _puck.save_steer_forward_weight
+	var vel: Vector3 = shot_velocity_at(shooter, aim, loft_level, speed_m_s, err_rad)
+	if vel == Vector3.ZERO:
+		return WIDE
+	last_part = -1
+	rebound_pos = Vector3.INF
+	rebound_speed = 0.0
+	rebound_goal = false
+	_shooter.global_position = shooter
+	_puck.clear_carrier()
+	var goal := Vector3(0.0, 0.0, _goal_z)
+	var pos: Vector3 = shooter
+	pos.y = _puck.ice_height
+	var goal_dir: float = signf(goal.z - shooter.z)
+	var touched: bool = false
+	var outcome: int = WIDE
+	var steps: int = int(REBOUND_TRACK_S / DT)
+	for _step: int in steps:
+		var prev: Vector3 = pos
+		_puck.global_position = pos
+		_puck.linear_velocity = vel
+		_ctrl._physics_process(DT)
+		_tick.touched_post = false
+		_tick.touched_net = false
+		PuckAuthorityRules.step_frame_substep(pos, vel, DT, RADIUS,
+				_puck.max_speed, _puck.ice_height, _puck.max_height, _frame, _tick)
+		pos = _tick.position
+		vel = _tick.velocity
+		if GoalieContactDetector.nearest([_goalie], prev, pos, RADIUS, _scratch, _contact):
+			var part: int = _classify_part(_contact.part as Node3D)
+			if not touched:
+				last_part = part
+				last_shot_speed = vel.length()
+				touched = true
+				outcome = SAVE
+			var g3: Node3D = _contact.goalie as Node3D
+			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
+			var dir_sign: int = int(signf(-g3.global_position.z)) if g3 != null else 0
+			GoalieSaveRules.resolve_contact(
+					vel, part, _contact.normal, side, dir_sign, _deaden, _save_res)
+			vel = _save_res.velocity
+			pos = _contact.point + _contact.normal * _contact.depth
+			# A caught puck is dead and held — the play stops there.
+			if _save_res.caught:
+				rebound_pos = pos
+				rebound_speed = 0.0
+				return SAVE
+		elif (pos.z - goal.z) * goal_dir >= 0.0 and not touched:
+			var seg: float = pos.z - prev.z
+			var f: float = clampf((goal.z - prev.z) / seg, 0.0, 1.0) if absf(seg) > 1e-6 else 1.0
+			outcome = _net_verdict(prev.x + (pos.x - prev.x) * f,
+					prev.y + (pos.y - prev.y) * f)
+			if outcome == GOAL:
+				rebound_goal = true
+			rebound_pos = pos
+			rebound_speed = vel.length()
+			return outcome
+		# After a save, the first moment it is slow enough to be played is where
+		# the second chance lives.
+		if touched and vel.length() <= PLAYABLE_SPEED_M_S:
+			rebound_pos = pos
+			rebound_speed = vel.length()
+			return outcome
+	rebound_pos = pos
+	rebound_speed = vel.length()
+	return outcome
+
+
 # ── Windup → release path (the DISGUISE instrument) ──────────────────────────
 # `settle` + `fire` above never exercise the RELEASE event: the puck simply
 # appears in flight and the goalie picks it up through the universal-reaction
