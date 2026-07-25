@@ -1358,6 +1358,48 @@ the BPS zones became consequences of the depth solve. Readability keys on
 TRAFFIC, not on who holds the puck — `GoalieWorldView` already carries
 `screeners`, `nearest_opponent_dist` and `nearest_teammate_dist`.
 
+### It is SIX mechanisms, not three
+
+A full count of the paths into butterfly:
+
+| # | mechanism | what it is |
+|---|---|---|
+| 1 | `_is_carrier_at_doorstep` | slapshot windup point-blank |
+| 2 | `_should_seal_crease_jam` | net-front battle |
+| 3 | `_confirmed_beaten_wide` | lateral race lost |
+| 4 | `_screen_block_drop_timer` | fully-screened release (audit F4) |
+| 5 | `_on_puck_contact` | post-save rebound posture |
+| 6 | the reactive low read | shot detected low |
+
+**Number 4 is the blocking save itself.** Its own comment calls it a
+"Blocking-drop timer", it carries its own state variable and countdown, and it
+is exactly the doctrine's primary block trigger — *the goalie cannot see it, so
+he blocks instead of reacting*. The codebase independently rediscovered the rule
+and filed it as one more special case beside the others.
+
+That is the clearest possible argument for the refactor: when the general rule
+shows up as a bespoke timer next to five siblings, the abstraction is missing,
+not the logic.
+
+### 5v5 raises the stakes
+
+Same goalie serves 3v3 and 5v5, and 5v5 is heading toward being the primary
+mode. That matters here more than anywhere else in the goalie:
+
+* **Traffic is the norm, not the exception.** Net-front presence, screens and
+  deflections are core 5v5 structure. The readability term stops being an edge
+  case and becomes the dominant input.
+* **The current thresholds were almost certainly calibrated against a 3v3
+  crease** — usually one or two bodies. Four distance constants tuned in a
+  sparse crease will not generalise to a crowded one, and there is no reason to
+  expect them to.
+* **The reported stand-up bug gets much worse.** If a loose puck plus nearby
+  traffic already stands him up in 3v3, 5v5 supplies that situation constantly.
+* **Screening currently only delays his READ** (`screen_occlusion_delay`) except
+  for the one bespoke full-screen timer. Under the doctrine a screen should
+  change his SAVE SELECTION, which is a posture decision — so unifying it is
+  also what makes him play 5v5 correctly.
+
 ### Two corroborations that this is one model
 
 1. The measured beaten-wide boundary is 4-6 m/s of lateral drive at 2 m
