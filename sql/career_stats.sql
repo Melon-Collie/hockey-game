@@ -156,58 +156,78 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
 );
 
 -- ── Lifetime totals (career screen, Career Totals tab) ───────────────────────
--- DROP + CREATE (not CREATE OR REPLACE): replacing a view can only APPEND
--- trailing columns, never reorder, so adding columns anywhere but the very end
--- of the live view's existing order errors ("cannot change name of view column
--- ..."). Dropping first sidesteps that regardless of the current column order.
--- Nothing depends on career_totals (the anon client just SELECTs it), so no
--- cascade; the grant below restores the anon read the drop removes.
+-- The aggregation lives in ONE place: career_totals_for(). The career screen
+-- calls it as an RPC with whatever mode filter the player picked; the
+-- career_totals view delegates to it unfiltered. Adding a career stat therefore
+-- means editing the function and nothing else.
+--
+-- p_team_size NULL pools every mode; 3 or 5 restricts to that roster size. This
+-- is a FUNCTION rather than a view grouped by team_size because the derived
+-- columns are RATIOS — per-60, PDO, faceoff%, xGF% — and a client cannot sum
+-- those across modes to get the "all modes" answer. They have to be computed
+-- inside the filter.
 drop view if exists public.career_totals;
+drop function if exists public.career_totals_for(bigint, integer);
+
+create function public.career_totals_for(player_steam_id bigint,
+                                         p_team_size integer default null)
+ returns table(
+    steam_id bigint, player_name text, games_played bigint,
+    goals bigint, assists bigint, points bigint, shots_on_goal bigint,
+    hits bigint, shots_blocked bigint, toi_seconds bigint,
+    goals_for bigint, goals_against bigint, plus_minus bigint,
+    wins bigint, losses bigint,
+    goals_per_60 numeric, assists_per_60 numeric, points_per_60 numeric,
+    hits_taken bigint, takeaways bigint, giveaways bigint,
+    faceoff_wins bigint, faceoff_losses bigint, faceoff_pct numeric,
+    shot_attempts bigint, fenwick bigint, pdo numeric,
+    xg_for numeric, goals_above_expected numeric, xgf_pct numeric)
+ language sql
+ stable
+as $function$
+  SELECT cs.steam_id,
+    (array_agg(cs.player_name ORDER BY cs.played_at DESC NULLS LAST))[1],
+    count(*),
+    sum(cs.goals), sum(cs.assists), sum(cs.goals + cs.assists),
+    sum(cs.shots_on_goal), sum(cs.hits), sum(cs.shots_blocked),
+    sum(cs.toi_seconds), sum(cs.goals_for), sum(cs.goals_against),
+    sum(cs.goals_for - cs.goals_against),
+    sum(CASE WHEN cs.outcome = 'win'::text  THEN 1 ELSE 0 END),
+    sum(CASE WHEN cs.outcome = 'loss'::text THEN 1 ELSE 0 END),
+    round(sum(cs.goals)::numeric   / NULLIF(sum(cs.toi_seconds), 0)::numeric * 3600::numeric, 2),
+    round(sum(cs.assists)::numeric / NULLIF(sum(cs.toi_seconds), 0)::numeric * 3600::numeric, 2),
+    round(sum(cs.goals + cs.assists)::numeric / NULLIF(sum(cs.toi_seconds), 0)::numeric * 3600::numeric, 2),
+    sum(cs.hits_taken), sum(cs.takeaways), sum(cs.giveaways),
+    sum(cs.faceoff_wins), sum(cs.faceoff_losses),
+    round(sum(cs.faceoff_wins)::numeric
+          / NULLIF(sum(cs.faceoff_wins) + sum(cs.faceoff_losses), 0)::numeric * 100::numeric, 1),
+    -- Analytics A1: iCF = shot attempts; Fenwick = attempts − blocked.
+    -- PDO = on-ice shooting% + save%, ×1000.
+    sum(cs.shot_attempts),
+    sum(cs.shot_attempts - cs.shot_attempts_blocked),
+    round((
+        sum(cs.goals_for)::numeric / NULLIF(sum(cs.team_sog_for), 0)::numeric
+      + 1::numeric - sum(cs.goals_against)::numeric / NULLIF(sum(cs.team_sog_against), 0)::numeric
+    ) * 1000::numeric, 0),
+    -- Analytics A2: ixG; goals − ixG is finishing; xGF% is team chance-share.
+    round(sum(cs.xg_for), 2),
+    round(sum(cs.goals)::numeric - sum(cs.xg_for), 2),
+    round(sum(cs.team_xg_for) / NULLIF(sum(cs.team_xg_for) + sum(cs.team_xg_against), 0) * 100::numeric, 1)
+  FROM career_stats cs
+  WHERE cs.steam_id = player_steam_id
+    AND (p_team_size IS NULL OR cs.team_size = p_team_size)
+  GROUP BY cs.steam_id;
+$function$;
+
+grant execute on function public.career_totals_for(bigint, integer) to anon;
+
+-- Unfiltered totals for every player, delegating to the function above so the
+-- aggregation is defined once.
 create view public.career_totals
 with (security_invoker = true) as
- SELECT steam_id,
-    (array_agg(player_name ORDER BY played_at DESC NULLS LAST))[1] AS player_name,
-    count(*) AS games_played,
-    sum(goals) AS goals,
-    sum(assists) AS assists,
-    sum(goals + assists) AS points,
-    sum(shots_on_goal) AS shots_on_goal,
-    sum(hits) AS hits,
-    sum(shots_blocked) AS shots_blocked,
-    sum(toi_seconds) AS toi_seconds,
-    sum(goals_for) AS goals_for,
-    sum(goals_against) AS goals_against,
-    sum(goals_for - goals_against) AS plus_minus,
-    sum(CASE WHEN outcome = 'win'::text THEN 1 ELSE 0 END) AS wins,
-    sum(CASE WHEN outcome = 'loss'::text THEN 1 ELSE 0 END) AS losses,
-    round(sum(goals)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS goals_per_60,
-    round(sum(assists)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS assists_per_60,
-    round(sum(goals + assists)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS points_per_60,
-    -- New sums appended at the END: CREATE OR REPLACE VIEW can only add trailing
-    -- columns, never reorder existing ones (else it errors renaming a column).
-    sum(hits_taken) AS hits_taken,
-    sum(takeaways) AS takeaways,
-    sum(giveaways) AS giveaways,
-    sum(faceoff_wins) AS faceoff_wins,
-    sum(faceoff_losses) AS faceoff_losses,
-    round(sum(faceoff_wins)::numeric / NULLIF(sum(faceoff_wins) + sum(faceoff_losses), 0)::numeric * 100::numeric, 1) AS faceoff_pct,
-    -- Analytics A1: lifetime advanced stats. iCF = shot attempts; Fenwick =
-    -- attempts − blocked. PDO = on-ice shooting% + save%, ×1000 (SH% from the
-    -- player's team goals/SOG, SV% from goals-against / SOG-against).
-    sum(shot_attempts) AS shot_attempts,
-    sum(shot_attempts - shot_attempts_blocked) AS fenwick,
-    round((
-        sum(goals_for)::numeric     / NULLIF(sum(team_sog_for), 0)::numeric
-      + 1::numeric - sum(goals_against)::numeric / NULLIF(sum(team_sog_against), 0)::numeric
-    ) * 1000::numeric, 0) AS pdo,
-    -- Analytics A2: lifetime xG. ixG = summed expected goals; goals − ixG is
-    -- finishing (goals above expected); xGF% is team chance-share.
-    round(sum(xg_for), 2) AS xg_for,
-    round(sum(goals)::numeric - sum(xg_for), 2) AS goals_above_expected,
-    round(sum(team_xg_for) / NULLIF(sum(team_xg_for) + sum(team_xg_against), 0) * 100::numeric, 1) AS xgf_pct
-   FROM career_stats
-  WHERE steam_id IS NOT NULL
-  GROUP BY steam_id;
+  SELECT t.*
+    FROM (SELECT DISTINCT steam_id FROM career_stats WHERE steam_id IS NOT NULL) s,
+         LATERAL public.career_totals_for(s.steam_id, NULL) t;
 
 grant select on public.career_totals to anon;
 

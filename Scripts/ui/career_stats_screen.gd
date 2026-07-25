@@ -26,6 +26,16 @@ var _identity_label: Label = null
 var _hero_row: HBoxContainer = null
 var _heat_map: CareerHeatMap = null
 var _map_note: Label = null
+# Roster-size filter for the Career tab: 0 = every mode pooled, else 3 or 5.
+# 3v3 and 5v5 aren't comparable (3v3 has far more space — more attempts, higher
+# xG per shot; 5v5 has traffic and point shots), so pooling them is informative
+# only as a headline.
+var _mode_filter: int = 0
+const _MODE_VALUES: Array[int] = [0, 5, 3]
+const _MODE_LABELS: Array[String] = ["All modes", "5v5", "3v3"]
+# Raw heatmap rows as fetched (every mode). Cached so flipping the filter
+# re-renders from memory instead of re-querying.
+var _heat_rows: Array = []
 
 # The Recent Games and Replays tabs were designed for the old narrow column and
 # read fine; the shell is now full-bleed for the Career tab's sake, so those two
@@ -220,6 +230,9 @@ func open() -> void:
 	# With stat sharing off the Supabase tabs are just gate notices, so land
 	# on the one tab with content — the local replays.
 	_activate_tab(_TAB_REPLAYS if not PlayerPrefs.share_gameplay_stats else 0)
+	# Drop the cached map so a reopen picks up games played since last time;
+	# within one viewing, mode switches re-slice it without refetching.
+	_heat_rows.clear()
 	_refresh_totals()
 	_refresh_recent_games()
 	_refresh_replays()
@@ -242,6 +255,27 @@ func _build_totals_tab() -> Control:
 	var tab := VBoxContainer.new()
 	tab.add_theme_constant_override("separation", 12)
 	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	# Mode filter. Everything on this tab — the hero figures, the stat groups, and
+	# the shot map — reads the same selection, so the numbers and the map can
+	# never disagree about which games they describe.
+	var filter_row := HBoxContainer.new()
+	filter_row.alignment = BoxContainer.ALIGNMENT_END
+	filter_row.add_theme_constant_override("separation", 8)
+	var filter_label := _ui_label("SHOWING", 11, MenuStyle.TEXT_MUTED)
+	filter_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	filter_row.add_child(filter_label)
+	var mode_picker := OptionButton.new()
+	mode_picker.custom_minimum_size = Vector2(140, 32)
+	mode_picker.add_theme_font_size_override("font_size", 14)
+	for i: int in _MODE_LABELS.size():
+		mode_picker.add_item(_MODE_LABELS[i], i)
+	mode_picker.selected = 0
+	MenuStyle.apply_focus_ring(mode_picker)
+	SoundManager.wire_button(mode_picker)
+	mode_picker.item_selected.connect(_on_mode_selected)
+	filter_row.add_child(mode_picker)
+	tab.add_child(filter_row)
 
 	_totals_status = Label.new()
 	_totals_status.text = "Loading..."
@@ -324,14 +358,68 @@ func _refresh_totals() -> void:
 		return
 	_totals_status.text = "Loading..."
 	_totals_status.visible = true
-	_reporter.fetch_totals(_on_totals_received)
-	_reporter.fetch_shot_heatmap(SteamManager.steam_id, _on_heatmap_received)
+	_reporter.fetch_totals(_on_totals_received, _mode_filter)
+	# The map is fetched once per screen-open and re-sliced locally thereafter,
+	# so switching modes costs no round trip.
+	if _heat_rows.is_empty():
+		_reporter.fetch_shot_heatmap(SteamManager.steam_id, _on_heatmap_received)
+	else:
+		_apply_heatmap_filter()
+
+
+# Flipping the mode refetches the TOTALS (their ratios have to be recomputed
+# server-side inside the filter) but re-renders the MAP from the cached rows —
+# bucket counts are additive, so the client can slice them itself.
+func _on_mode_selected(index: int) -> void:
+	var next: int = _MODE_VALUES[index] if index >= 0 and index < _MODE_VALUES.size() else 0
+	if next == _mode_filter:
+		return
+	_mode_filter = next
+	_refresh_totals()
 
 
 func _on_heatmap_received(buckets: Array) -> void:
+	_heat_rows = buckets
+	_apply_heatmap_filter()
+
+
+# The view returns one row per (bucket, team_size), so an unfiltered map has the
+# same square once per mode. Fold them together: drawing both would double the
+# cell's alpha and skew the peak the ramp normalises against.
+func _merged_buckets(rows: Array) -> Array:
+	var by_cell: Dictionary = {}
+	for b: Variant in rows:
+		var d: Dictionary = b as Dictionary
+		var key: String = "%d,%d" % [int(d.get("bucket_x", 0)), int(d.get("bucket_z", 0))]
+		if by_cell.has(key):
+			var acc: Dictionary = by_cell[key]
+			acc["shots"] = int(acc["shots"]) + int(d.get("shots", 0))
+			acc["goals"] = int(acc["goals"]) + int(d.get("goals", 0))
+			acc["xg"] = float(acc["xg"]) + float(d.get("xg", 0.0))
+		else:
+			by_cell[key] = {
+				"bucket_x": int(d.get("bucket_x", 0)),
+				"bucket_z": int(d.get("bucket_z", 0)),
+				"shots": int(d.get("shots", 0)),
+				"goals": int(d.get("goals", 0)),
+				"xg": float(d.get("xg", 0.0)),
+			}
+	return by_cell.values()
+
+
+func _apply_heatmap_filter() -> void:
 	if _heat_map == null:
 		return
-	_heat_map.configure(buckets)
+	var rows: Array = _heat_rows
+	if _mode_filter > 0:
+		rows = []
+		for b: Variant in _heat_rows:
+			var d: Dictionary = b as Dictionary
+			if int(d.get("team_size", 0)) == _mode_filter:
+				rows.append(d)
+	else:
+		rows = _merged_buckets(_heat_rows)
+	_heat_map.configure(rows)
 	# Shots taken from outside the offensive zone aren't drawn (clamping them to
 	# the top row would invent a hot band on the blue line), so say so rather
 	# than quietly losing them from the total.

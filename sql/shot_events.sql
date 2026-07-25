@@ -72,14 +72,15 @@ alter table public.shot_events add constraint shot_events_sane_ranges check (
 -- left/right handedness relative to the direction of attack — so a player's
 -- off-wing tendency survives the fold instead of cancelling itself out.
 --
--- Deliberately NOT grouped by team_size: the career map shows a player's whole
--- body of work by default. The raw column lives on shot_events, so slicing 3v3
--- from 5v5 is a query away once there's a filter to drive it — grouping here
--- would only hand the screen duplicate buckets it would have to merge back.
+-- Grouped by team_size so the career screen's mode filter can slice the map the
+-- same way it slices the stats. Unlike the career totals (whose derived columns
+-- are ratios and must be aggregated server-side), these are COUNTS and sums —
+-- additive — so the screen can safely merge modes itself for the "all" view.
 drop view if exists public.shot_heatmap;
 create view public.shot_heatmap
 with (security_invoker = true) as
  SELECT steam_id,
+    team_size,
     round(CASE WHEN team_id = 1 THEN -x ELSE x END)::int AS bucket_x,
     round(CASE WHEN team_id = 1 THEN -z ELSE z END)::int AS bucket_z,
     count(*) AS shots,
@@ -87,7 +88,7 @@ with (security_invoker = true) as
     sum(CASE WHEN outcome = 'goal'::text THEN 1 ELSE 0 END) AS goals
    FROM shot_events
   WHERE steam_id IS NOT NULL
-  GROUP BY steam_id,
+  GROUP BY steam_id, team_size,
     round(CASE WHEN team_id = 1 THEN -x ELSE x END)::int,
     round(CASE WHEN team_id = 1 THEN -z ELSE z END)::int;
 

@@ -82,11 +82,17 @@ func fetch_shot_heatmap(steam_id: int, callback: Callable) -> void:
 	_fetch_array(url, callback)
 
 
-func fetch_totals(callback: Callable) -> void:
-	var url: String = "%s/rest/v1/career_totals?steam_id=eq.%d" % [
-		SupabaseConfig.URL, SteamManager.steam_id
-	]
-	_fetch(url, callback)
+# Lifetime totals, optionally restricted to one roster size (`team_size` 3 or 5;
+# 0 = every mode pooled). Goes through the career_totals_for RPC rather than the
+# career_totals view because the derived columns are RATIOS — per-60, PDO,
+# faceoff%, xGF% — which cannot be summed client-side across modes; they have to
+# be computed inside the filter.
+func fetch_totals(callback: Callable, team_size: int = 0) -> void:
+	var body: Dictionary = {"player_steam_id": SteamManager.steam_id}
+	if team_size > 0:
+		body["p_team_size"] = team_size
+	_call_rpc("career_totals_for", body, func(rows: Array) -> void:
+		callback.call((rows[0] as Dictionary) if not rows.is_empty() else {}))
 
 
 # Batch-posts a game's shot log (analytics B1). Host-only: the host holds the
