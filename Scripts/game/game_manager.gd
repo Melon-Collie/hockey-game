@@ -3465,9 +3465,29 @@ func _note_shot_trajectory() -> void:
 		var xg: float = AIActionScoring.expected_goals(
 				pos, Vector3(0.0, 0.0, directed_line_z),
 				_defending_goalie_pos(directed_line_z),
-				GameRules.NET_HALF_WIDTH, vel.length())
+				GameRules.NET_HALF_WIDTH, vel.length(),
+				0.0, -1.0, false, 0.0, false, 0.0,
+				Vector4.INF, Vector4.INF, 1.0, _shot_release_spread())
 		_shot_tracker.note_xg(xg)
 		_shot_tracker.note_shot_origin(pos)  # release position for the shot map (B1)
+
+
+# The pending shot's release-difficulty spread — the "can you hit it" half of the
+# xG model. Reads the shot's CONTEXT (which hand, how fast the shooter is moving),
+# never the shooter's skill: a weaker player drawing lower xG on an identical
+# chance would make goals-above-expected circular. Falls back to the settled
+# reference when the shooter's actors aren't resolvable.
+# v1 note: on a mid-flight tip this still reads the ORIGINAL shooter's hand — the
+# tipper's own release context isn't captured. Minor; tips carry their own tag.
+func _shot_release_spread() -> float:
+	if _shot_tracker == null or _registry == null:
+		return AIActionScoring.XG_BASE_SPREAD_RAD
+	var rec: PlayerRecord = _registry.get_record(_shot_tracker.get_shooter_peer_id())
+	if rec == null or rec.skater == null or rec.controller == null:
+		return AIActionScoring.XG_BASE_SPREAD_RAD
+	var horizontal := Vector3(rec.skater.velocity.x, 0.0, rec.skater.velocity.z)
+	return AIActionScoring.xg_release_spread(
+			rec.controller.last_release_hand == "BH", horizontal.length())
 
 
 # The position of the goalie defending the net at `line_z` (same end, matched by

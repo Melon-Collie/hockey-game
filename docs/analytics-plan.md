@@ -55,15 +55,46 @@ head over the shared hole geometry:
   (`XG_ENTRY_SPREAD_RAD`, so the stat never moves when bot difficulty is retuned),
   then a saturating **calibration head** (Michaelis–Menten, `XG_ANGLE_HALF` /
   `XG_MAX`) maps the open angle to a probability.
-- **Calibrated against the shot-outcome sim** — the same `shot_sim_harness`
-  instrument `open_net_danger` was tuned to. `test_expected_goals_calibration.gd`
-  pins that xG tracks the measured goal fraction of a reference shooter across the
-  shot grid (loose bands, per the irreducible hole-model-vs-flat-sim scatter on
-  angled shots — same as the shot-value contract). So the magnitude is
-  measurement-grounded now, not hand-set. (The §3.3 reliability loop against
-  real-game logged outcomes stays a future refinement once B's shot-event log
-  exists — it re-fits the same two head constants.) A separate shape test pins
-  bounded / goalie-aware / spread-decoupled.
+- **REBUILT 2026-07-25 after playtest.** The sim-calibrated version was wrong in
+  three linked ways: ~3.6× hot (18.25 xG against 5 actual goals), non-monotonic
+  (peaked at 6 m), and returning HARD ZERO both in tight and from the point. Root
+  cause: it asked only "is a hole open?" — a max over binary reachability tests,
+  which is a cliff rather than a probability — and treated *hitting* that hole as
+  free. Beating a goalie is two things and it priced one:
+
+  **xG = P(placement lands in the open window) + P(miss it) × P(goalie leaks)**
+
+  - **Geometry** (`best_open_angle`, measured with a sharp hand): what's open is a
+    question about the goalie, not the shooter. Charging the release spread here
+    too would double-count it — and at range the spread×distance entry inset would
+    exceed the net and zero every point shot.
+  - **Execution** (`xg_release_spread`): a Gaussian placement distribution over
+    that window. Reads the shot's **context** — backhand (×1.6), speed (up to
+    ×2.2) — and deliberately **never the shooter's skill**, since a weaker player
+    drawing lower xG on an identical chance makes goals-above-expected circular.
+    Fed from `last_release_hand` + skater velocity at the shot seam.
+  - **Leak and ceiling** (`XG_COVERED_LEAK` 0.04, `XG_MAX` 0.95): a covered shot
+    still scores sometimes (screen, tip, rebound, misplay), and an open net is
+    never certain. These remove the false zeros at both ends.
+
+  Result: monotonic beaten-goalie curve, no hard zeros, and the deke case — a
+  yawning net off an awkward release — drops from ~0.83 to ~0.38 at 5 m, which is
+  the playtest complaint expressed as math.
+- **The sim reference was RETIRED as the calibration target**, which is the
+  substantive lesson: `shot_sim_harness`'s own header says to trust *relative*
+  deltas over absolute rates, and fitting an absolute scale to it is what produced
+  the 3.6× error. It also answers a different question (a bot firing with the bot's
+  own uniform ±spread — self-consistent for the bot's decision, not a general
+  shooter). `test_expected_goals_calibration.gd` now pins structural properties
+  plus a sanity band against `XGBaseline`; the magnitude fit belongs to §3.3
+  against logged outcomes.
+- **`XGBaseline`** (`domain/rules/xg_baseline.gd`) — an independent location-only
+  public-style model (logistic in log-distance + angle + type, solved to NHL
+  aggregates): the cross-check we lacked. It brackets from the low side
+  (NHL-calibrated, so it under-reads arcade Mitts) while the geometric model
+  brackets from the high side. Shown beside the goalie-aware number on the
+  post-game tape. Pure function of data already on `ShotEvent` — no capture, wire,
+  or schema change.
 - Computed at **release** from the real goalie geometry (`_note_shot_trajectory`
   → the directed goal's defending goalie position), held on the pending shot
   (`note_xg`), and committed at **resolution** on `shot_counted(peer, blocked, xg)`

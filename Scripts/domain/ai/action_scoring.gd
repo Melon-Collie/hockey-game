@@ -953,27 +953,80 @@ static func best_open_angle(
 
 
 # ── Expected goals (xG) — the analytics stat ─────────────────────────────────
-# The make-probability of a shot, for the analytics layer. Same grounded hole
-# geometry as open_net_danger — the real goalie-beating open net — but built as a
-# STAT, not a bot decision. The bot's open_net_danger fuses the geometry and the
-# shooter's precision into ONE spread (window / 2·spread), which is right for a
-# decision but wrong for a stat: a sharp spread saturates every decent look to
-# ~1.0, and the number would move whenever bot aim is retuned. So xG SEPARATES the
-# two jobs:
-#   1. The GEOMETRY — best_open_angle at a fixed sharp-hand spread
-#      (XG_ENTRY_SPREAD_RAD) — the raw open net past the real goalie, in radians.
-#      Fixed, so xG never moves when bot difficulty is retuned.
-#   2. A CALIBRATION HEAD — a saturating map (Michaelis–Menten) from that open
-#      angle to a goal probability, capped at XG_MAX. XG_ANGLE_HALF is the opening
-#      at which xG reaches half the cap; it sets where the gradient sits.
-# The head's two constants are CALIBRATED against the shot-outcome sim (the same
-# instrument open_net_danger was tuned to — tests/unit/ai/test_expected_goals_
-# calibration.gd), so xG tracks the measured goal fraction across the shot grid.
-# Passes are already excluded upstream — expected_goals is only ever evaluated for
-# a shot the resolution gate counted.
-const XG_ENTRY_SPREAD_RAD: float = MIN_RELEASE_SPREAD_RAD  # sharp-hand geometry (skill lives in the head)
-const XG_ANGLE_HALF: float = 0.045
-const XG_MAX: float = 0.97
+# Beating a goalie is TWO things: getting net open, and putting the puck in it.
+# This model prices both, which is what separates it from the bot's
+# open_net_danger (that one fuses geometry and the bot's own precision into a
+# single spread — correct for a decision the bot then executes with exactly that
+# precision, wrong for a stat about arbitrary shooters).
+#
+#   xG = P(placement lands in the open window) + P(miss it) × P(goalie leaks)
+#
+#   1. GEOMETRY — best_open_angle: the real open net past the real goalie, in
+#      radians. Measured with a SHARP hand (XG_ENTRY_SPREAD_RAD): "what is open"
+#      is a question about the goalie, not the shooter, and charging the release
+#      spread here too would double-count it (at range, spread × distance would
+#      exceed the net and zero every point shot).
+#   2. EXECUTION — the release spread, as a Gaussian placement distribution over
+#      that window. This is the half the old model gave away for free, which is
+#      why a deke that yawned the net open read ~0.9 however brutal the actual
+#      shot was, why the curve was non-monotonic (a max over binary hole tests is
+#      a cliff, not a probability), and why it returned HARD ZERO both in tight
+#      and from the point.
+#
+# Passes are excluded upstream — expected_goals only ever sees a shot the
+# resolution gate counted.
+const XG_ENTRY_SPREAD_RAD: float = MIN_RELEASE_SPREAD_RAD
+# Release scatter (radians, 1σ) for a reference shooter taking a SETTLED shot.
+# Calibrated against the observed on-net fraction: every missed shot is direct
+# evidence about this number, and a game has far more misses than goals.
+const XG_BASE_SPREAD_RAD: float = 0.12
+# A backhand is materially harder to place than a forehand.
+const XG_BACKHAND_SPREAD_MULT: float = 1.6
+# Shooting on the move — across the body, in transition, out of a deke — widens
+# the release, scaled by speed against a reference clip.
+const XG_MOTION_SPREAD_GAIN: float = 0.6
+const XG_MOTION_REFERENCE_M_S: float = 8.0
+# A shot the goalie can physically cover still goes in sometimes: a misplay, a
+# five-hole leak, a deflection off traffic, a rebound he can't smother. Without
+# this term the model floors at exactly zero for every point shot and every
+# in-tight look at a square goalie — the false zeros at both ends of the curve.
+const XG_COVERED_LEAK: float = 0.04
+# Nothing is a certain goal — you can still fan on it or ring it off the iron
+# with the net empty. Mirrors the leak at the other end of the range.
+const XG_MAX: float = 0.95
+
+
+# Release scatter for a shot's CONTEXT — never for the shooter's skill. A weaker
+# player drawing lower xG on an identical chance would make goals-above-expected
+# circular, so this reads the situation (hand, motion) and nothing about who is
+# holding the stick.
+static func xg_release_spread(is_backhand: bool, skater_speed_m_s: float) -> float:
+	var spread: float = XG_BASE_SPREAD_RAD
+	if is_backhand:
+		spread *= XG_BACKHAND_SPREAD_MULT
+	spread *= 1.0 + XG_MOTION_SPREAD_GAIN \
+			* clampf(skater_speed_m_s / XG_MOTION_REFERENCE_M_S, 0.0, 2.0)
+	return spread
+
+
+# Fraction of a Gaussian release distribution landing inside a window of
+# `window_rad` TOTAL angular width, aimed at its centre.
+static func _placement_probability(window_rad: float, spread_rad: float) -> float:
+	if window_rad <= 0.0:
+		return 0.0
+	if spread_rad <= 0.0001:
+		return 1.0
+	return _erf(window_rad * 0.5 / (spread_rad * sqrt(2.0)))
+
+
+# erf via Abramowitz & Stegun 7.1.26 (|error| < 1.5e-7) — GDScript has no erf.
+static func _erf(x: float) -> float:
+	var ax: float = absf(x)
+	var t: float = 1.0 / (1.0 + 0.3275911 * ax)
+	var poly: float = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741
+			+ t * (-1.453152027 + t * 1.061405429))))
+	return signf(x) * (1.0 - poly * exp(-ax * ax))
+
 
 static func expected_goals(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
@@ -985,13 +1038,16 @@ static func expected_goals(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
-	var angle: float = best_open_angle(shooter, attacking_goal, goalie_pos,
+		loft_tan: float = 1.0,
+		release_spread_rad: float = XG_BASE_SPREAD_RAD) -> float:
+	var window: float = best_open_angle(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, XG_ENTRY_SPREAD_RAD,
 			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
-	return XG_MAX * angle / (angle + XG_ANGLE_HALF)
+	var placed: float = _placement_probability(window, release_spread_rad)
+	# Miss the open window and the goalie still has to actually stop it.
+	return minf(XG_MAX, placed + (1.0 - placed) * XG_COVERED_LEAK)
 
 
 # The LOFT the bot should shoot with, from the same hole geometry that
