@@ -1,14 +1,15 @@
 extends GutTest
 
 # ── CHARACTERISATION: when does he drop, and why? ────────────────────────────
-# Pins the CURRENT butterfly decision before it is replaced by a model, exactly
-# as test_goalie_depth_curve pinned the Buckley chart before the depth solve.
-# Nothing here asserts that the behaviour is right — it asserts what it IS, so a
-# model can be measured against it and the differences argued one at a time.
+# Pinned the butterfly decision before it was replaced by a model, exactly as
+# test_goalie_depth_curve pinned the Buckley chart before the depth solve.
+# Nothing here asserts that the behaviour is right — it reports what it IS, so
+# the model could be measured against it and the differences argued one at a
+# time. Both surfaces are recorded below; the model has since landed.
 #
-# ── THE DECISION TODAY ───────────────────────────────────────────────────────
-# GoalieController._update_state's STANDING/READY arm is a hand-ordered elif
-# chain, and three of its branches produce the SAME action:
+# ── THE DECISION BEFORE ──────────────────────────────────────────────────────
+# GoalieController._update_state's STANDING/READY arm was a hand-ordered elif
+# chain, and three of its branches produced the SAME action:
 #
 #   if   _should_play_rim()           -> PLAYING_PUCK
 #   elif _is_puck_in_defensive_zone() -> VH / RVH
@@ -17,8 +18,10 @@ extends GutTest
 #   elif _confirmed_beaten_wide()     -> _enter_butterfly()
 #   else                              -> STANDING <-> READY
 #
-# Whichever fires FIRST wins, and the order was never chosen deliberately —
-# the same latent fragility the depth chart had before it became a solve.
+# Whichever fired FIRST won, and the order was never chosen deliberately — the
+# same latent fragility the depth chart had before it became a solve. The three
+# drop branches are now one `_should_block(delta)`, which asks
+# GoalieSaveSelection whether an answer still fits in the time available.
 #
 # ── THE RULE THE CARVE-OUTS ARE APPROXIMATING ────────────────────────────────
 # Real goaltending splits every save into BLOCKING or REACTING:
@@ -73,10 +76,47 @@ extends GutTest
 #    (stay up, force the dangler to declare) and is the behaviour any model must
 #    preserve — it is the patience half of react-vs-block.
 #
-# LIMITATION: the "+contested" column never fires because is_crease_jam requires
+# LIMITATION: the "+contested" column never fired because is_crease_jam required
 # a DEFENDING teammate and this fixture leaves team_id at -1, where the carrier
-# branch is unreachable by design. Exercising it needs team assignment; the
-# column is retained so the gap is visible rather than silently absent.
+# branch was unreachable by design. It still reads "up" under the model, for a
+# different and now-correct reason: with no teams, the extra body is an OPPONENT,
+# and an opposing carrier who has declared nothing is readable no matter how much
+# company he has. The column is retained so the case stays visible.
+#
+# ── MEASURED SURFACE (2026-07, GoalieSaveSelection driving) ──────────────────
+#  dist |  idle carry | slapper windup | +contested | loose+opp
+#   1.0 |          up |           DOWN |         up |      DOWN
+#   1.5 |          up |           DOWN |         up |      DOWN
+#   2.0 |          up |           DOWN |         up |      DOWN
+#   2.6 |          up |           DOWN |         up |      DOWN
+#   3.0 |          up |           DOWN |         up |      DOWN
+#   4.0 |          up |           DOWN |         up |      DOWN
+#   6.0 |          up |             up |         up |        up
+#
+#  Lateral drive, carrier 2.0 m out:  0/2/4 m/s -> up,  6/8 m/s -> DOWN
+#
+# The two things worth keeping, kept:
+#   * idle carry is up at EVERY range, unchanged — the patience half survives.
+#   * the beaten-wide boundary is still between 4 and 6 m/s, unchanged, because
+#     `_confirmed_beaten_wide` moved in as an INPUT rather than being re-derived.
+#
+# What moved, and why. Both drop columns now cut in the same place (between 4 and
+# 6 m) instead of at 2.0 m and 3.0 m respectively — which is the whole point:
+# they were one rule wearing two thresholds. The new boundary is where the puck's
+# flight stops covering the read: 33 m/s against a 0.13 s low-band read is ~4.3 m
+# of gap, and the goalie challenges ~1.5 m out, so a carrier past ~6 m is
+# answerable and one inside ~5.5 m is not. Nothing hand-picked it.
+#
+# loose+opp also gains the 4.0 m cell. Reported from play: he stood up early into
+# traffic and gave up rebounds through the five-hole. He now stays sealed while a
+# stick that is not his can reach the puck first — and, unlike the threshold pair
+# it replaced, it no longer needs a DEFENDING teammate to notice the traffic.
+#
+# The windup column is still SLAPPER only. A wrister wind-up pins the puck too,
+# so it was briefly counted as a declaration; test_goalie_disguise_read measured
+# the cost and vetoed it — blocking through the slot made deception worth nothing
+# (4/14 on all three arms, vs 6/14 telegraphed and 11/14 wrong-height under the
+# read). The declaration is the PLANT, not the pin. See _build_save_situation.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z

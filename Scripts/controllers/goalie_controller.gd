@@ -430,30 +430,12 @@ extends Node
 # cross-crease one-timer seal keeps its zero-hesitation commit.
 @export var lateral_commit_confirm_s: float = 0.15
 
-# Close-crease auto-butterfly. When an opposing carrier is at the doorstep
-# the goalie can't track laterally fast enough; better to commit butterfly
-# and slide-react. Different from the old `is_under_pressure` (2.5 m + 1 m/s)
-# which fired far enough out to be exploitable — this only fires inside the
-# crease where dropping is the correct read regardless of follow-up play.
-@export var close_crease_butterfly_distance: float = 1.5
-
-# Crease-jam butterfly. A net-front BATTLE in the goalie's lap — a loose puck
-# with an opponent on it, or a slow carrier with a defender's stick in the
-# fight — drops the goalie to seal the ice even though nobody's "shooting"
-# yet (a scrum bangs pucks through the standing 5-hole). A battle always has
-# two parties: an UNCONTESTED slow carrier in tight is the penalty-style 1v1
-# dangler and deliberately does NOT jam — dropping early is what the dangle
-# is fishing for, and the standing goalie has real answers now (active blade,
-# lunge, doorstep windup read, the beaten-wide race, the release reaction).
-# (This trigger's original rationale — "a crease dangler keeps the goalie
-# upright indefinitely" — predates those tools, when upright meant helpless.)
-@export var jam_puck_distance: float = 2.0    # m — puck-to-goalie threshold
-@export var jam_opponent_distance: float = 1.5 # m — contestant-to-puck battle range
-# An opposing carrier can only jam when moving slower than this — a faster
-# carrier is driving the net (an attack), and coaches teach staying up to
-# force the release. Set to 0 to seal only on loose pucks (never for a
-# carried puck).
-@export var jam_carrier_max_speed: float = 3.0 # m/s — carrier above this is attacking, not jamming
+# "An opposing stick is on this puck" — a poke-range radius, used by the cover
+# read to tell a loose puck he can safely sweep from one he has to smother.
+# (Was `puck_contest_radius`, shared with the crease-jam butterfly trigger;
+# that trigger is now GoalieSaveSelection's time race and this is its only
+# remaining reader.)
+@export var puck_contest_radius: float = 1.5 # m
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
@@ -1005,7 +987,6 @@ var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 var _screen_cfg: GoalieBehaviorRules.ScreenConfig
 var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
-var _crease_jam_cfg: GoalieBehaviorRules.CreaseJamConfig
 var _beaten_wide_cfg: GoalieBehaviorRules.BeatenWideConfig
 var _backdoor_cfg: GoalieBehaviorRules.BackdoorThreatConfig
 var _rush_cfg: GoalieBehaviorRules.RushRetreatConfig
@@ -1159,6 +1140,9 @@ var _scratch_shot := GoalieBehaviorRules.ShotResult.new()
 # Separate scratch for the per-tick pre-lean prediction so it never races the
 # reaction re-projection scratch within a tick (both can run the same frame).
 var _scratch_prelean_shot := GoalieBehaviorRules.ShotResult.new()
+# Reused per-tick Situation for the block-or-react decision (hot path: this runs
+# every tick for both goalies and again per replayed input in reconcile).
+var _save_situation := GoalieSaveSelection.Situation.new()
 # Scratch for the read-belief solve at release (see _seed_read_belief).
 var _scratch_belief := GoalieBehaviorRules.ShotResult.new()
 # Mid-flight velocity change (m/s) that counts as a REDIRECT rather than the
@@ -1457,10 +1441,6 @@ func _build_rule_configs() -> void:
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
 	_move_read_cfg.reference_speed = move_read_reference_speed
 	_move_read_cfg.max_delay = move_read_max_delay
-	_crease_jam_cfg = GoalieBehaviorRules.CreaseJamConfig.new()
-	_crease_jam_cfg.puck_distance = jam_puck_distance
-	_crease_jam_cfg.opponent_distance = jam_opponent_distance
-	_crease_jam_cfg.carrier_max_speed = jam_carrier_max_speed
 	_universal_reaction_cfg = GoalieBehaviorRules.UniversalReactionConfig.new()
 	_universal_reaction_cfg.min_speed = universal_react_min_speed
 	_universal_reaction_cfg.max_time_to_impact = universal_react_max_time_to_impact
@@ -1562,6 +1542,14 @@ func _physics_process(delta: float) -> void:
 			_rejoin_blend_elapsed += delta
 		_interpolate_and_apply()
 		return
+	# A physics tick IS a new view by definition. The frame stamp inside the view
+	# only has to catch RE-reads within one tick (the puck_released signal handler
+	# fires outside _physics_process and must not rebuild what this tick already
+	# scanned); it is not a reliable "has the world moved" test on its own, since
+	# a harness that drives _physics_process directly never advances the engine's
+	# frame counter and would silently read the first tick's skater positions
+	# forever.
+	_view.invalidate()
 	_update_tracking(delta)
 	_update_shot_timer(delta)
 	_update_state(delta)
@@ -1856,28 +1844,18 @@ func _update_state(delta: float) -> void:
 					_sm.transition_to(State.VH_LEFT if puck_local_x < 0.0 else State.VH_RIGHT)
 				else:
 					_sm.transition_to(State.RVH_LEFT if puck_local_x < 0.0 else State.RVH_RIGHT)
-			elif _is_carrier_at_doorstep() and not _reaction.reacting:
-				# Slapshot windup at point-blank range — close-range slapshots
-				# travel faster than the goalie can react after release, so the
-				# drop has to happen during the windup. A controlled stickhandler
-				# in space still keeps the goalie up (force the release); the
-				# net-front JAM below is the separate scramble trigger.
-				_enter_butterfly()
-			elif _should_seal_crease_jam() and not _reaction.reacting:
-				# Net-front jam: a loose-puck scramble, a slow carrier BATTLING a
-				# defender at the doorstep, or a teammate corralling a contested
-				# puck in the crease. Seal the ice low so a stick battle can't be
-				# banged through the STANDING 5-hole. Controlled possession never
-				# jams: a fast carrier and an uncontested 1v1 dangler both keep
-				# the goalie up (force the release / make them commit first).
-				_enter_butterfly()
-			elif _confirmed_beaten_wide(delta) and not _reaction.reacting:
-				# Beaten wide (confirmed): the carrier's SUSTAINED lateral drive
-				# wins the race to the post — standing tracking is unwinnable,
-				# so drop now; the _try_commit_slide pad-coverage check seals
-				# the post from butterfly. Around-the-pad tucks die here; the
-				# counter is a fake committed long enough to pass the quiet-eye
-				# confirmation, then pulling back up (recovery window).
+			elif _should_block(delta) and not _reaction.reacting:
+				# ONE decision, replacing three hand-ordered predicates that all landed
+				# here: the point-blank slapshot windup, the net-front jam, and the lost
+				# lateral race. See GoalieSaveSelection — reacting is preferred and
+				# blocking is for when reacting is impossible, where "impossible" is a
+				# race he can actually run rather than four distance thresholds.
+				#
+				# The three cases still happen, they are just no longer authored: a
+				# doorstep windup leaves no time to answer, a scramble can change the
+				# puck before he can answer, and a lost lateral race is coverage the
+				# seal alone provides. A controlled dangler in space still keeps him UP,
+				# because there the answer fits.
 				_enter_butterfly()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
@@ -1967,43 +1945,111 @@ func _is_ready_situation() -> bool:
 		return false
 	return true
 
-# True when an opposing carrier at point-blank range is loading a SLAPSHOT.
-# This is the only carrier-state that drops a goalie proactively in coaching:
-# slapshot windup is an unambiguous commit (no cancel-and-deke option from
-# SLAPPER_CHARGE_WITH_PUCK), so the goalie reads it and drops early —
-# tracking a close-range slapshot from standing is a losing battle.
+# ── Block or react ────────────────────────────────────────────────────────────
+# Gathers the scene inputs for GoalieSaveSelection, which owns the decision. See
+# that file for the doctrine; the short version is that reacting is preferred and
+# blocking is for when reacting is impossible, and "impossible" is a race the
+# goalie can actually run: can I still complete an answer before the puck is on
+# me, given what can still change it?
 #
-# We DON'T drop for "controlled stickhandler in tight" — coaches teach
-# staying up against a controlled carrier, forcing them to release. Wrister
-# charge is also intentionally NOT a drop trigger, and the coil-and-release model
-# makes that MORE true, not less: the wrister freezes the blade BODY-LOCAL (no
-# dangle) but suppresses no locomotion — unlike the slapper, which plants the
-# skater (locomotion suppressed + an active velocity drag). So a wrister windup
-# is a mobile, still-cancellable threat whose shot origin the carrier can keep
-# steering; dropping to it commits the goalie against a shot that may never come
-# from where he committed. The beaten-wide race and the release reaction own this
-# read. The actual wrister release fires the existing reaction pipeline, which
-# drops on low projection.
-#
-# Crease scrambles (loose puck or a slow carrier jammed in tight) drop via the
-# separate _should_seal_crease_jam check.
-func _is_carrier_at_doorstep() -> bool:
-	# Lunge precedence — give the stick first.
+# This replaces three separate entry predicates (doorstep windup, crease jam,
+# and — via _is_threat_pressing — the stand-up hold), each with its own hand
+# picked distance threshold. `_confirmed_beaten_wide` survives as an INPUT
+# rather than a branch, because a lost lateral race is a coverage fact, not a
+# timing one.
+func _build_save_situation(delta: float) -> GoalieSaveSelection.Situation:
+	var s := _save_situation
+	var puck_pos: Vector3 = puck.global_position
+	var gap: float = goalie.global_position.distance_to(puck_pos)
+	var vel: Vector3 = puck.linear_velocity
+	var speed: float = vel.length()
+	# Soonest a stick that is not his can reach the puck and change it. Opponents
+	# only: a teammate touching the puck does not make it unpredictable, but an
+	# opponent reaching a teammate's puck does — which is why this is a race to
+	# the PUCK rather than a possession check.
+	_ensure_view()
+	s.time_to_contest = GoalieSaveSelection.contest_time(
+			_view.nearest_opponent_dist, GameRules.DEFAULT_STICK_LENGTH_M,
+			GameRules.DEFAULT_SKATER_MAX_SPEED_M_S)
+	# Soonest the puck can be ON him: when it can next be LAUNCHED, plus the
+	# flight from where it sits. Three launch cases, and the middle one is the
+	# patience half of react-vs-block:
+	#
+	#   in flight            it is already launched — real pace, real flight.
+	#   hostile carrier      he has declared nothing yet. A controlled puck on an
+	#     with no windup     attacker's blade is READABLE: the body and stick will
+	#                        tell him before it comes. No timing pressure at all,
+	#                        so he stays up and makes the dangler declare.
+	#   anything else        the next hostile touch IS the release — a loose puck
+	#                        in a scramble, or a teammate corralling one with an
+	#                        opponent arriving. Nothing telegraphs a whack, so the
+	#                        contest clock is the launch clock.
+	#
+	# The middle case is load-bearing. Pricing every carrier at the worst case
+	# ("he could shoot this instant") makes nothing answerable anywhere inside the
+	# slot — a 6 m release is 0.18 s of flight against a 0.13 s read — and he
+	# drops on everything, losing the patience entirely. Being unable to FULLY
+	# react does not make blocking better, because blocking concedes the top of
+	# the net; he reacts to what the shooter declares.
+	# "Declared" is the PLANT, not the pin. Both wind-ups pin the puck to the body
+	# (state_pins_puck), but only SLAPPER_CHARGE_WITH_PUCK also suppresses
+	# locomotion and drags the shooter's velocity to zero. The pin says a shot is
+	# loaded; the plant says it is loaded FROM HERE, and pre-committing needs the
+	# second one — dropping to a threat whose origin is still skating commits the
+	# goalie against a shot that will not come from where he committed. Same split
+	# the tracking read already makes (_reading_pinned_windup vs
+	# _reading_planted_windup).
+	#
+	# Measured, not assumed. Counting WRISTER_AIM as a declaration made him block
+	# through the whole slot, and test_goalie_disguise_read showed the cost: with
+	# the block replacing the read, selling the wrong corner or the wrong height
+	# stopped paying anything (4/14 across all three arms, against 6/14 telegraphed
+	# and 11/14 wrong-height under the read). A goalie who pre-commits cannot be
+	# deceived, and the in-tight aim duel is the skill this game wants there.
+	var carrier: Skater = puck.get_carrier()
+	var hostile_carrier: bool = carrier != null \
+			and (team_id == -1 or carrier.get_team_id() != team_id)
+	var in_flight: bool = speed >= shot_speed_threshold
+	var launch: float = 0.0
+	if hostile_carrier and carrier.current_shot_state \
+			!= SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
+		launch = INF
+	elif not hostile_carrier:
+		launch = s.time_to_contest
+	if in_flight:
+		s.time_to_arrival = gap / maxf(speed, 0.001)
+	elif is_inf(launch):
+		s.time_to_arrival = INF
+	else:
+		s.time_to_arrival = launch \
+				+ gap / GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	# Occlusion along the line the puck would actually travel. In flight that is
+	# its velocity; from a declared windup it is the puck→goalie line at the
+	# declared pace (screen delay is `along / speed`, so both terms matter).
+	var sight_vel: Vector3 = vel
+	if not in_flight:
+		var to_goalie: Vector3 = goalie.global_position - puck_pos
+		to_goalie.y = 0.0
+		sight_vel = to_goalie.normalized() * GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	s.sight_delay = _screen_delay(sight_vel)
+	s.reaction_delay = reaction_delay
+	s.drop_time = butterfly_drop_speed
+	s.lateral_race_lost = _confirmed_beaten_wide(delta)
+	return s
+
+
+# Should he be sealing the ice rather than reading? One question for going down
+# AND for staying down, so he cannot pop up into a situation he would have
+# dropped for.
+func _should_block(delta: float) -> bool:
+	# Lunge precedence, carried over from the doorstep predicate this replaced: a
+	# committed poke IS a save selection, already made. Dropping out of it would
+	# be a free undo of the gamble, and the gamble is the point — a beaten lunge
+	# is supposed to concede (see _movement_read_delay).
 	if _lunge_active_timer > 0.0:
 		return false
-	var carrier: Skater = puck.get_carrier()
-	if carrier == null:
-		return false
-	if carrier.get_team_id() == team_id and team_id != -1:
-		return false
-	# Slapshot windup is the only drop tell from a single carrier.
-	if carrier.current_shot_state != SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
-		return false
-	# "In front of goalie" — carrier on the slot side relative to the goalie,
-	# not behind or even with them. RVH handles behind-net plays.
-	if (carrier.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
-		return false
-	return goalie.global_position.distance_to(carrier.global_position) < close_crease_butterfly_distance
+	return GoalieSaveSelection.should_block(_build_save_situation(delta))
+
 
 # Beaten-wide with the quiet-eye confirmation: the race verdict must hold
 # continuously for `lateral_commit_confirm_s` before the standing goalie
@@ -2036,58 +2082,12 @@ func _is_beaten_wide() -> bool:
 			goalie.global_position, _goal_line_z, _goal_center_x,
 			_direction_sign, net_half_width, _beaten_wide_cfg)
 
-# True when there's a net-front JAM the goalie should seal. A jam is a BATTLE —
-# it always has two parties: a loose-puck scramble in the crease (puck close,
-# no carrier, an opposing skater on it), a slow opposing carrier at the
-# doorstep WITH a defending teammate in the fight, or a teammate corralling a
-# CONTESTED puck on the doorstep (opponent within poke range — one strip from
-# a goal). The two controlled-possession cases stay OUT by design: a fast
-# carrier is attacking (stay up, force the release), and a slow UNCONTESTED
-# carrier is the penalty-style 1v1 dangler (stay up, stay patient — dropping
-# early is exactly what the dangle is fishing for). The pure threshold
-# decision lives in GoalieBehaviorRules.is_crease_jam; this method gathers the
-# scene inputs. Drives both the proactive butterfly entry in _update_state and
-# the recovery hold in _is_threat_pressing, so the goalie seals a contested
-# crease and stays sealed rather than popping up into a poke-check-and-bang-
-# it-in.
-func _should_seal_crease_jam() -> bool:
-	# Cheap reject before any skater scan — a jam only matters in the goalie's lap.
-	if goalie.global_position.distance_to(puck.global_position) > jam_puck_distance:
-		return false
-	var carrier: Skater = puck.get_carrier()
-	if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
-		# Opposing carrier → jam only if slow AND contested (a defending
-		# teammate's stick in the battle). Slow-but-uncontested is the
-		# penalty-style 1v1 dangler: stay up, force the first move — the
-		# beaten-wide race, the doorstep windup read, and the release
-		# reaction own the commit from here.
-		return GoalieBehaviorRules.is_crease_jam(
-				puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
-				true, carrier.velocity.length(),
-				_nearest_defending_skater_dist_to_puck(), _crease_jam_cfg)
-	# Loose puck, or a teammate-controlled puck: a jam when an opponent is within
-	# poke range of the puck in the goalie's lap.
-	var nearest_opp: float = _nearest_opposing_skater_dist_to_puck()
-	return GoalieBehaviorRules.is_crease_jam(
-			puck.global_position, goalie.global_position, _goal_line_z, _direction_sign,
-			false, 0.0, nearest_opp, _crease_jam_cfg)
-
 # Distance from the nearest non-ghost opposing skater to the puck, or INF if
 # there are none (or no skater getter wired). Ghosted players (offside / icing)
-# can't play the puck, so they don't make a jam.
+# can't play the puck, so they don't count as pressure.
 func _nearest_opposing_skater_dist_to_puck() -> float:
 	_ensure_view()
 	return _view.nearest_opponent_dist
-
-
-# Mirror of the above for the goalie's OWN team: distance from the nearest
-# non-ghost defending skater to the puck, or INF. This is the "is the carrier
-# contested?" read for the jam seal — a battle needs a defender in it. With no
-# team assigned (team_id == -1) there are no teammates, so a carrier is never
-# contested and the carrier-jam branch never fires — correct for teamless play.
-func _nearest_defending_skater_dist_to_puck() -> float:
-	_ensure_view()
-	return _view.nearest_teammate_dist
 
 # True when an opposing shooter is close enough to the goalie that the stick
 # blade should actively point at the puck side. Carrier within
@@ -2266,7 +2266,7 @@ func _try_clear_loose_puck(delta: float) -> void:
 	var sweep_vel: Vector3 = _pick_clear_velocity()
 	if sweep_vel == Vector3.ZERO:
 		if _clear.cover_cooldown_timer <= 0.0 \
-				and _nearest_opposing_skater_dist_to_puck() <= jam_opponent_distance:
+				and _nearest_opposing_skater_dist_to_puck() <= puck_contest_radius:
 			_enter_cover()
 			return
 		sweep_vel = _natural_clear_velocity(0.0)
@@ -2715,14 +2715,17 @@ func _maybe_arrest_drop() -> bool:
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Hold conditions, in priority:
-#   1. Puck is CLOSE (within recovery_proximity_threshold)  → hold
-#      Catches the rebound-stays-in-front case: a deflection bouncing back
-#      toward the shooter (any speed, any direction) is still a threat
-#      because the goalie can't usefully recover before a follow-up shot
-#      or a teammate's pickup.
-#   2. Puck is fast AND approaching                         → hold (active shot)
-#   3. Otherwise                                            → release (cleared)
-# Pressure detection is one-way: it only HOLDS butterfly, never triggers entry.
+#   1. A hostile CARRIER is inside recovery_proximity_threshold  → hold
+#      The rebound-stays-in-front case: a deflection bouncing back toward the
+#      shooter is still a threat because he can't usefully recover before a
+#      follow-up shot.
+#   2. The situation would BLOCK a standing goalie                → hold
+#      Standing up into a play he would have dropped for is the bug this fixes;
+#      see below.
+#   3. Puck is fast AND approaching                               → hold
+#   4. Otherwise                                                  → release
+# Pressure detection is one-way: it only HOLDS butterfly, never triggers entry —
+# entry is _update_state's own `_should_block` branch, asking the same question.
 func _is_threat_pressing() -> bool:
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			puck.global_position, _goal_line_z, _goal_center_x)
@@ -2735,12 +2738,17 @@ func _is_threat_pressing() -> bool:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
-	# Crease jam: hold butterfly through a net-front scramble — the same gate that
-	# triggers the proactive drop in _update_state (no pop-up mid-battle). Covers a
-	# loose puck, a slow opposing carrier, and a teammate corralling a contested
-	# puck on the doorstep (poke-checked loose and banged in through a goalie
-	# standing back up).
-	if _should_seal_crease_jam():
+	# THE SAME DECISION THAT PUT HIM DOWN. Going down and staying down are one
+	# question — if the situation would drop a standing goalie, a down one has no
+	# business standing into it.
+	#
+	# This is the reported bug. The proximity hold above only fires for a hostile
+	# CARRIER, so a slow loose rebound at his feet had no carrier, fell through to
+	# the speed check below, and `return not speed_low` stood him up into the
+	# scramble — unearned rebounds through the five-hole. Possession never made
+	# that play readable; a stick that can reach the puck before he can answer is
+	# what makes it unreadable, and that is what the model asks.
+	if _should_block(0.0):
 		return true
 	var speed_low: bool
 	var moving_away: bool

@@ -1414,3 +1414,87 @@ mode. That matters here more than anywhere else in the goalie:
 Beaten-wide dropping him is NOT a bug. Playtest calls the resulting
 lateral-beat-then-elevate goal a fair chance an NHL goalie concedes. The model
 keeps it as a BLOCK cause.
+
+### Shipped (2026-07)
+
+`Scripts/domain/rules/goalie_save_selection.gd` + the `_should_block(delta)`
+seam in `GoalieController`. What actually landed, and where it differs from the
+sketch above:
+
+**The decision is threshold-free.** The sketch above wrote "time to answer <
+react budget", which needs a budget constant. The shipped form is
+`answer_fraction` — how much of one answer fits in the time available:
+
+```
+available       = time_to_arrival - max(sight_delay, contest) - reaction_delay
+answer_fraction = clamp(available / drop_time, 0, 1)
+block           = lateral_race_lost or answer_fraction <= 0
+```
+
+No threshold anywhere: `<= 0` is "the read cannot even begin". The `0..1`
+interior is not a modelling gap, it is the measured mid-drop seam
+(`test_goalie_mid_drop_gap`) — the pads sweeping from vertical to flat neither
+block the standing lane nor seal the ice, which is exactly how a human beats him
+low. The model reproduces it rather than pretending the drop is instant.
+
+**Readability is `time_to_contest`, a stick race.** "Traffic" from the sketch
+became *how soon can any stick that is not his reach the puck and change it*.
+A contest does not shorten the flight — a tipped puck does not arrive sooner —
+it **restarts the read**, so it enters as `max(sight_delay, contest)` rather
+than `min(arrival, contest)`. That makes the doctrine's third block trigger
+(deflection risk) fall out instead of being added, and it covers the loose
+rebound, the pressured teammate and the 5v5 net-front crowd with one quantity.
+
+**The declaration is the PLANT, not the pin.** An opposing carrier who has
+declared nothing contributes no timing pressure at all — that is the patience
+half, and pricing every carrier at "he could shoot this instant" makes nothing
+answerable inside the slot and drops him on everything. WRISTER_AIM pins the
+puck exactly as the slapper does, so it was tried as a declaration;
+`test_goalie_disguise_read` vetoed it — with a block replacing the read,
+deception stopped paying anything (4/14 across all three arms, against 6/14
+telegraphed and 11/14 wrong-height under the read). A goalie who pre-commits
+cannot be deceived. Only SLAPPER_CHARGE_WITH_PUCK declares, matching the split
+the tracking read already makes (`_reading_pinned_windup` vs
+`_reading_planted_windup`).
+
+**Measured before/after** (`test_goalie_drop_decision_curve`):
+
+| dist | idle carry | slapper windup | loose+opp |
+|---|---|---|---|
+| 1.0–2.0 | up → up | DOWN → DOWN | DOWN → DOWN |
+| 2.6–3.0 | up → up | up → **DOWN** | DOWN → DOWN |
+| 4.0 | up → up | up → **DOWN** | up → **DOWN** |
+| 6.0 | up → up | up → up | up → up |
+
+Beaten-wide boundary unchanged between 4 and 6 m/s. Idle carry never drops him
+at any range, unchanged. Both drop columns now cut in the same place instead of
+at 2.0 m and 3.0 m — the point of the exercise. The new boundary is where flight
+stops covering the read (33 m/s against a 0.13 s low-band read ≈ 4.3 m of gap);
+nothing hand-picked it. The shot-facing instruments (`exhaustive_beatability`,
+`five_hole_window`) are bit-identical, so only the selection moved.
+
+**Deleted:** `_is_carrier_at_doorstep`, `_should_seal_crease_jam`,
+`_nearest_defending_skater_dist_to_puck`, `GoalieBehaviorRules.is_crease_jam` +
+`CreaseJamConfig`, and the exports `close_crease_butterfly_distance`,
+`jam_puck_distance`, `jam_carrier_max_speed` (`jam_opponent_distance` survives,
+renamed `puck_contest_radius`, as the cover read's "a stick is on this puck").
+Ten tests of the deleted rule were replaced by one that pins the same doctrine —
+seal a contested puck, stay up for the 1v1 dangler — through the model that now
+owns it.
+
+**Not yet folded in:** mechanism 4 (`_screen_block_drop_timer`) and mechanism 5
+(`_on_puck_contact`). For 4 the obstacle is plumbing, not doctrine: it must fire
+while `_reaction` is already engaged, and the block branch is gated on `not
+_reaction.reacting`. `sight_delay` is the same quantity it keys on, so a
+screened threat he has not yet been forced to react to already routes through
+the model; only the in-flight case still needs its own path.
+
+**Fixed in passing:** `GoalieWorldView` is frame-stamped on
+`Engine.get_physics_frames()`, which never advances in a harness that drives
+`_physics_process` directly — so every such test was reading the FIRST tick's
+skater positions forever. `_physics_process` now invalidates the view at the
+top (a tick is a new view by definition; the stamp only has to catch re-reads
+within one tick, i.e. the `puck_released` signal handler). This was silently
+degrading the goalie instruments. `test_real_goalie_headless` was also feeding
+bare `Vector3`s to the skater getter, which the typed scan cannot consume; it
+now uses a real `Skater`.

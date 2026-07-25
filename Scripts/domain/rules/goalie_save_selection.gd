@@ -26,6 +26,14 @@ class_name GoalieSaveSelection
 # "Blocking-drop timer". The general rule was already in the codebase, filed as
 # a special case beside its siblings.
 #
+# WIRED SO FAR: the first three (doorstep, jam, beaten-wide) are one
+# `_should_block`, and so is the stand-up hold. The screened-release timer is
+# NOT yet folded in, and the obstacle is plumbing rather than doctrine — it has
+# to fire while `_reaction` is already engaged, and the block branch is gated on
+# `not _reaction.reacting`. `sight_delay` below is the same quantity that timer
+# keys on, so a screened threat the goalie has not yet been forced to react to
+# already routes through here; only the in-flight case still needs its own path.
+#
 # ── The model ────────────────────────────────────────────────────────────────
 # An "answer" is: SEE the puck, DECIDE, then MOVE the pads to the floor. So the
 # time an answer costs is
