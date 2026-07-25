@@ -221,6 +221,33 @@ const RECEIVE_TIMING_MARGIN: float = 0.9
 # boards-hugging rim line would push the stance into the wall.
 const RECEIVE_BODY_WALL_MARGIN_M: float = 0.5
 
+# ── Board-aware reception path (rims) ────────────────────────────────────────
+# The reception stance and the blade gate are solved on the puck's REAL path
+# (AITrajectory.solve_reception_gate — friction, board caroms and all) rather
+# than the straight ray off its current velocity. See that function's doc for
+# why the straight ray specifically breaks on rims: the arrival time is measured
+# along a chord instead of around the carom arc, and the blade squares to the
+# pre-carom direction. Horizon covers a full corner wrap at rim pace; the step
+# count is what a segment-entry solve needs (not point sampling), so this is a
+# ~20-step scalar walk per receiving bot.
+const RECEIVE_PATH_HORIZON_S: float = 2.0
+const RECEIVE_PATH_STEPS: int = 20
+
+# ── Wall kill (trapping a rim against the boards) ────────────────────────────
+# A puck riding the boards is caught by putting the STICK ON THE GLASS and
+# letting it come into the blade — there is no gap for it to slip through, and
+# the wall does half the work of killing it. A blade parked out on the puck's
+# line with daylight behind it just gets beaten by any bounce off the kickplate,
+# which is the "bots can't retrieve off the boards" failure.
+#
+# Two things follow when the gate sits in the wall band, and both are geometry,
+# not preference: the body must stand on the RINK side of the puck's line (the
+# other side is inside the boards, so half the stance choices aren't real), and
+# the blade target belongs ON the inner wall surface rather than on the path —
+# a blade aimed at the path line leaves exactly the gap the puck squirts
+# through. Outside the band nothing changes and the ordinary side-stand runs.
+const WALL_KILL_BAND_M: float = 1.0
+
 # ── Shot-aware reception (catch WITH shot intent) ─────────────────────────────
 # When a pass is incoming and a shot from the reception area is on, the bot
 # either ONE-TIMES it (redirect on contact, no possession) or catches it in a
@@ -2682,41 +2709,58 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	var puck_speed_sq: float = puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z
 	if puck_speed_sq < RECEIVE_TRIGGER_PUCK_SPEED_M_S * RECEIVE_TRIGGER_PUCK_SPEED_M_S:
 		return false
-	var puck_speed: float = sqrt(puck_speed_sq)
-	var puck_dir: Vector3 = Vector3(puck_vel.x / puck_speed, 0.0, puck_vel.z / puck_speed)
 	var puck_pos: Vector3 = snapshot.puck_state.position
-	# Signed distance from puck along its travel direction to the foot
-	# of perpendicular from self_pos. t > 0: foot is ahead of the puck
-	# (puck still has to travel to reach our level). t <= 0: puck has
-	# already passed us — chase from behind instead.
-	var to_self: Vector3 = self_pos - puck_pos
-	to_self.y = 0.0
-	var t: float = to_self.dot(puck_dir)
-	if t <= 0.0:
+	# Meet the puck on its REAL path, not on the straight ray off its current
+	# velocity (see RECEIVE_PATH_* / AITrajectory.solve_reception_gate): the
+	# crossing point, WHEN it gets there, and the direction it is travelling
+	# THEN all come off the same board-aware walk, so a rim is set up for
+	# around the carom instead of along a chord that leaves the rink.
+	AITrajectory.solve_reception_gate(puck_pos, puck_vel, self_pos,
+			_receive_gate_reach(), RECEIVE_PATH_HORIZON_S, RECEIVE_PATH_STEPS)
+	# Nothing to set up for when the path never brings it closer than it
+	# already is. Path-based, not a dot product against the current velocity:
+	# a rim running away down the far wall IS coming to us, it just has a
+	# corner to turn first, and the old along-the-ray test bailed on exactly
+	# that — which is why bots started their rim setup a corner too late.
+	if not AITrajectory.gate_closes:
 		return false
-	var perp_foot: Vector3 = puck_pos + puck_dir * t
-	# A rimmed puck rides the wall (and curls the corner arc), so the straight
-	# continuation of its velocity can leave the rink entirely — mid-corner it
-	# points at the glass. Clamp the line geometry onto the rink inner surface
-	# (rounded corners included) so the stance is built where the puck can
-	# physically travel, not on the phantom straight line.
-	var foot_xz: Vector2 = GameRules.clamp_to_rink_inner(
-			Vector2(perp_foot.x, perp_foot.z))
-	perp_foot = Vector3(foot_xz.x, 0.0, foot_xz.y)
+	var perp_foot: Vector3 = AITrajectory.gate_point
+	var gate_vel: Vector3 = AITrajectory.gate_velocity
+	var gate_speed: float = sqrt(gate_vel.x * gate_vel.x + gate_vel.z * gate_vel.z)
+	if gate_speed < 0.001:
+		return false
+	var puck_dir: Vector3 = Vector3(gate_vel.x / gate_speed, 0.0, gate_vel.z / gate_speed)
+	# The puck must still be coming TO us. A gate at t≈0 means it is already on
+	# the blade (nothing to set up for); the walk finding nothing but a receding
+	# closest approach means it is going away — chase from behind instead.
+	var puck_eta: float = AITrajectory.gate_time_s
+	if puck_eta <= 0.0:
+		return false
 	var perp_off: Vector3 = self_pos - perp_foot
 	perp_off.y = 0.0
 	var perp_dist: float = perp_off.length()
 	if perp_dist > RECEIVE_TRIGGER_LATERAL_M:
 		return false
-	# Lateral direction: which side of the line the bot is on. Picking
-	# the bot's current side minimizes skating distance. Degenerate
-	# case (bot exactly on the line) — pick an arbitrary perpendicular
-	# so the body still steps off the path for a clean stick angle.
+	# Lateral direction: which side of the path the bot stands on. Its own side
+	# minimizes skating distance. Degenerate case (bot on the path) — any
+	# perpendicular, so the body still steps off it for a clean stick angle.
 	var lateral: Vector3
 	if perp_dist > 0.001:
 		lateral = perp_off / perp_dist
 	else:
 		lateral = Vector3(-puck_dir.z, 0.0, puck_dir.x)
+	# WALL KILL (see WALL_KILL_BAND_M): against the boards only one side of the
+	# path is real ice, so the stance side is forced inward — standing "on our
+	# side" of a rim line can mean standing in the glass, and the clamp that
+	# used to rescue that put the body on the puck's line with the blade
+	# swinging out over it. Inward is where a player takes a rim from.
+	var wall_gate: Vector3 = perp_foot
+	var board: Vector3 = _board_normal_and_gap(Vector2(perp_foot.x, perp_foot.z))
+	if board.y <= WALL_KILL_BAND_M:
+		wall_gate = Vector3(perp_foot.x - board.x * board.y, 0.0,
+				perp_foot.z - board.z * board.y)
+		lateral = Vector3(board.x, 0.0, board.z)
+		perp_foot = wall_gate
 	var body_anchor: Vector3 = perp_foot + lateral * _receive_body_offset
 	# Wall reception: the side-stand offset from a boards-hugging line can
 	# push the body target into/through the wall — keep the body's center a
@@ -2726,9 +2770,9 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 			Vector2(body_anchor.x, body_anchor.z), RECEIVE_BODY_WALL_MARGIN_M)
 	body_anchor = Vector3(anchor_xz.x, 0.0, anchor_xz.y)
 	# Timing gate: do we have time to reach body_anchor before the puck
-	# arrives at perp_foot? If not, default lead-intercept will get us
-	# closer (even if at a worse angle) — bail and let it run.
-	var puck_eta: float = t / puck_speed
+	# arrives at perp_foot? (puck_eta came off the path walk above — timed
+	# around the carom, not along a chord.) If not, default lead-intercept
+	# gets us closer even at a worse angle — bail and let it run.
 	var self_vel: Vector3 = Vector3.ZERO
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if self_state != null:
@@ -2750,9 +2794,7 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	# then stopping square at the gate is the correct wait. A near-stationary bot
 	# has an effectively unbounded window (nothing carries it past the line).
 	var self_speed: float = sqrt(self_vel.x * self_vel.x + self_vel.z * self_vel.z)
-	var gate_reach: float = maxf(
-			_blade_reach - BLADE_REACH_BUFFER_M - RECEIVE_BODY_INSET_M, 0.4)
-	var blade_window: float = 2.0 * gate_reach / maxf(self_speed, 0.001)
+	var blade_window: float = 2.0 * _receive_gate_reach() / maxf(self_speed, 0.001)
 	_apply_steering(input, snapshot, self_pos, body_anchor,
 			puck_eta > bot_eta + blade_window)
 	# GIVE WITH THE PUCK: the catch gate judges the puck in OUR frame, and a
@@ -2763,15 +2805,16 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	if Vector2(puck_vel.x - self_vel.x, puck_vel.z - self_vel.z) \
 			.length_squared() > RECEIVE_GIVE_CEILING_M_S * RECEIVE_GIVE_CEILING_M_S:
 		input.brake = true
-	# Aim: PARK the blade at the gate — the point where the puck's line meets our
-	# reach — and let the puck arrive into it. Tracking the puck's position (the
+	# Aim: PARK the blade at the gate — the point where the puck's path meets our
+	# reach — and let the puck arrive into it. Reuses `wall_gate` from the stance
+	# solve above rather than re-walking the path for the same answer. Tracking
+	# the puck's position (the
 	# old aim) failed two ways: the cursor (capped at Hands blade speed ~10 m/s)
 	# can't keep up with a ~20 m/s puck near the crossing, and pointing at a far
 	# puck lays the stick SHAFT along the line, so the face is square to the
 	# approach only in the last few ticks of a rate-limited swing. Parked at the
 	# gate the shaft spans perpendicular and the face is square the whole way in.
-	input.mouse_world_pos = _step_mouse_toward(
-			_blade_gate_on_puck_line(self_pos, puck_pos, puck_vel))
+	input.mouse_world_pos = _step_mouse_toward(wall_gate)
 	return true
 
 
@@ -2790,41 +2833,70 @@ func _blade_gate_on_puck_line(
 	var speed_sq: float = puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z
 	if speed_sq < 0.0001:
 		return puck_pos
-	var speed: float = sqrt(speed_sq)
-	var dir := Vector3(puck_vel.x / speed, 0.0, puck_vel.z / speed)
-	var to_self := Vector3(self_pos.x - puck_pos.x, 0.0, self_pos.z - puck_pos.z)
-	var t: float = to_self.dot(dir)
-	if t <= 0.0:
-		return puck_pos
-	var foot := Vector3(puck_pos.x + dir.x * t, 0.0, puck_pos.z + dir.z * t)
-	# Rim/board pucks: the straight continuation exits the rink mid-corner —
-	# clamp the line point onto the inner surface (rounded corners included)
-	# so the blade parks where the rimming puck actually comes through, not
-	# on a phantom point past the glass.
-	var foot_clamped: Vector2 = GameRules.clamp_to_rink_inner(
-			Vector2(foot.x, foot.z))
-	foot = Vector3(foot_clamped.x, 0.0, foot_clamped.y)
-	var perp_dx: float = self_pos.x - foot.x
-	var perp_dz: float = self_pos.z - foot.z
-	var perp_sq: float = perp_dx * perp_dx + perp_dz * perp_dz
-	# Comfortable extension: blade span minus the same inset the side-stand
-	# reception uses, so the parked blade isn't pinned at the IK ROM clamp
-	# (_blade_reach carries the outward pickup-check buffer — strip it back off).
-	var reach: float = maxf(
-			_blade_reach - BLADE_REACH_BUFFER_M - RECEIVE_BODY_INSET_M, 0.4)
-	var reach_sq: float = reach * reach
-	if perp_sq >= reach_sq:
-		# Line still outside comfortable reach — hold the blade toward its nearest
-		# point while the body keeps closing; the entry point exists once inside.
-		return foot
-	# Entry point: the front edge of the reach circle along the puck's travel —
-	# the earliest touchable spot, leaving the rest of the reach as margin.
-	# Clamped like the foot: on a wall line the un-clamped entry can back off
-	# the line through the boards.
-	var gate: Vector3 = foot - dir * sqrt(reach_sq - perp_sq)
-	var gate_clamped: Vector2 = GameRules.clamp_to_rink_inner(
-			Vector2(gate.x, gate.z))
-	return Vector3(gate_clamped.x, 0.0, gate_clamped.y)
+	# Solve the gate on the puck's REAL path (caroms and friction included) —
+	# see RECEIVE_PATH_* / AITrajectory.solve_reception_gate. Where the path is
+	# straight this lands on the same point the old ray solve did; on a rim it
+	# lands where the puck actually comes through instead of on a phantom line.
+	if not AITrajectory.solve_reception_gate(puck_pos, puck_vel, self_pos,
+			_receive_gate_reach(), RECEIVE_PATH_HORIZON_S, RECEIVE_PATH_STEPS):
+		# No touchable point on the path. If the puck is moving AWAY right now
+		# there is nothing to park for — chase it from behind, the same fallback
+		# the straight-ray solve made on a negative along-distance. Otherwise
+		# hold the blade toward the path's closest approach while the body
+		# closes; the entry point appears once we are near enough.
+		var to_self_x: float = self_pos.x - puck_pos.x
+		var to_self_z: float = self_pos.z - puck_pos.z
+		if puck_vel.x * to_self_x + puck_vel.z * to_self_z <= 0.0:
+			return puck_pos
+	# Wall kill: a gate against the boards is played with the blade ON the
+	# glass, not out on the path line — see the WALL_KILL_BAND_M doc.
+	return _wall_kill_aim(AITrajectory.gate_point)
+
+
+# Comfortable blade extension for a parked reception: the blade span minus the
+# same inset the side-stand stance uses, so the waiting blade isn't pinned at
+# the IK ROM clamp (_blade_reach carries the outward pickup-check buffer —
+# strip it back off).
+func _receive_gate_reach() -> float:
+	return maxf(_blade_reach - BLADE_REACH_BUFFER_M - RECEIVE_BODY_INSET_M, 0.4)
+
+
+# The boards at `xz`: the unit INWARD normal packed in x/z, and the gap to the
+# wall in y (negative off the surface). INF.y when the point is deeper in than
+# the probe reaches — i.e. open ice, no wall to play.
+#
+# Geometry via the rink clamp rather than a per-wall distance formula, so the
+# ROUNDED CORNERS come along for free — which is the half of the rink this
+# matters most in. Clamping with a margin wider than the band projects the point
+# onto the shrunk surface; that displacement IS the inward normal, and its
+# length is (margin − gap), so one clamp call yields both. Packed into a Vector3
+# because this runs on the per-tick reception path — value type, no allocation.
+static func _board_normal_and_gap(xz: Vector2) -> Vector3:
+	var probe_margin: float = WALL_KILL_BAND_M + 0.5
+	var inward: Vector2 = GameRules.clamp_to_rink_inner(xz, probe_margin) - xz
+	var inset: float = inward.length()
+	if inset < 0.000001:
+		return Vector3(0.0, INF, 0.0)
+	return Vector3(inward.x / inset, probe_margin - inset, inward.y / inset)
+
+
+# Is this point close enough to the boards that the rim is played against them?
+static func _in_wall_band(xz: Vector2) -> bool:
+	return _board_normal_and_gap(xz).y <= WALL_KILL_BAND_M
+
+
+# Pushes a boards-hugging aim point out ONTO the inner wall surface, so the
+# blade seals against the glass instead of leaving the puck a gap behind it.
+# Returns `point` untouched when it isn't inside WALL_KILL_BAND_M.
+static func _wall_kill_aim(point: Vector3) -> Vector3:
+	var xz := Vector2(point.x, point.z)
+	var board: Vector3 = _board_normal_and_gap(xz)
+	if board.y > WALL_KILL_BAND_M:
+		return point
+	# Off the surface entirely (a phantom sample) → gap < 0 → this pulls the aim
+	# back onto the wall, which is exactly where the blade belongs anyway.
+	var on_wall: Vector2 = xz - Vector2(board.x, board.z) * board.y
+	return Vector3(on_wall.x, 0.0, on_wall.y)
 
 
 # Anticipation: is a fast loose puck (a pass) heading toward us right now? Same

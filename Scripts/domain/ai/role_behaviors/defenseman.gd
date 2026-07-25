@@ -266,6 +266,12 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 
 
 # ── NEUTRAL: the goal-side back pair ─────────────────────────────────────────
+# The blue-line stand is race-home bounded like every other station in this
+# file. Without it this was the one D station that would hold its line no
+# matter what was behind it — the puckwatching last man who stands at his own
+# blue line into a guaranteed breakaway. A contained counter leaves the stand
+# exactly where it was, so the NZ back wall is unchanged in ordinary play; a
+# stretch threat already past the pair sags them down the retreat line instead.
 static func _decide_back(ctx: RoleContext, side: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var own_dir: float = ctx.own_goal_dir
@@ -275,5 +281,11 @@ static func _decide_back(ctx: RoleContext, side: float) -> RoleDecision:
 		# doesn't chase.
 		x += clampf(ctx.snapshot.puck_state.position.x * DBACK_PUCK_SHADE,
 				-DBACK_SHADE_MAX_M, DBACK_SHADE_MAX_M)
-	d.target_position = Vector3(x, 0.0, own_dir * GameRules.BLUE_LINE_Z)
+	var stand := Vector3(x, 0.0, own_dir * GameRules.BLUE_LINE_Z)
+	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
+	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
+	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, ctx.defending_goal_pos)
+	d.target_position = AIRoleHelpers.most_forward_feasible(
+			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
 	return d

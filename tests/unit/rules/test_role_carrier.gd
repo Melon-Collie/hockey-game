@@ -2731,3 +2731,50 @@ func test_in_front_shot_still_scores_through_the_gate() -> void:
 	assert_gt(c.debug_shoot_score, 0.0,
 			"an in-tight look at a beaten keeper still scores a shot; got %f" \
 			% c.debug_shoot_score)
+
+
+# ── Behind the net: a carrier back there needs moves to choose between ───────
+# The candidate rings used to prune everything past the goal line, which left a
+# carrier behind the cage with two post walkouts and stand-still. Under pressure
+# both walkouts read unsafe and the compete fell to stand-still — the bot planted
+# itself on the end wall and got stripped. These pin the representation, not a
+# preference: the lateral walk back there exists, and the cage is still a wall.
+
+func test_behind_net_candidates_exist_for_a_carrier_behind_the_goal_line() -> void:
+	# Behind the opposing cage: |z| is BEYOND the goal line, so z is more
+	# negative than OPP_NET_Z.
+	var behind := Vector3(3.0, 0.0, OPP_NET_Z - 1.6)
+	var c := AIRoleCarrier.new()
+	assert_true(c._candidate_ice_legal(
+			Vector3(-3.0, 0.0, behind.z), true),
+			"the walk across the back of the cage is a representable move")
+	assert_true(c._candidate_ice_legal(
+			Vector3(6.0, 0.0, behind.z + 1.0), true),
+			"so is working out toward the corner")
+
+
+func test_the_cage_itself_is_still_not_a_place_to_stand() -> void:
+	var c := AIRoleCarrier.new()
+	assert_false(c._candidate_ice_legal(
+			Vector3(0.0, 0.0, OPP_NET_Z - GameRules.NET_DEPTH * 0.5), true),
+			"inside the goal frame is not ice")
+
+
+func test_behind_net_candidates_stay_on_the_playing_surface() -> void:
+	var c := AIRoleCarrier.new()
+	assert_false(c._candidate_ice_legal(
+			Vector3(3.0, 0.0, -(GameRules.INNER_HALF_LENGTH + 0.5)), true),
+			"through the end boards is not ice")
+	assert_false(c._candidate_ice_legal(
+			Vector3(GameRules.CORNER_CENTER_X + GameRules.INNER_CORNER_RADIUS,
+					0.0, GameRules.CORNER_CENTER_Z + 3.0), true),
+			"and the rounded corner is honoured, not a bounding box")
+
+
+func test_a_carrier_out_front_keeps_the_old_goal_line_clamp() -> void:
+	# Scoped change: nothing about front-of-net carrying moves.
+	var c := AIRoleCarrier.new()
+	assert_false(c._candidate_ice_legal(
+			Vector3(3.0, 0.0, OPP_NET_Z - 1.6), false),
+			"a carrier in front never plans a step past the goal line")
+	assert_true(c._candidate_ice_legal(Vector3(3.0, 0.0, -18.0), false))
