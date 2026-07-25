@@ -75,6 +75,14 @@ class_name GoalieSaveSelection
 # and a 5v5 net-front crowd with one quantity, and it uses the same clock as
 # everything else.
 #
+# ── Scope: in front of the net only ──────────────────────────────────────────
+# A puck BEHIND the goal line is not a block-or-react question, it is a STANCE
+# question — RVH seals at/below the goal line, VH takes the in-front sharp
+# angle. That decision stays where it is (`_is_puck_in_defensive_zone` →
+# VH/RVH) and is deliberately not folded in here. One model per question: this
+# one answers "can I still answer this puck from my feet", and post integration
+# answers "which post stance covers this angle".
+#
 # Pure/static and engine-free. Callers own the Situation (rebuilt in place each
 # tick) so the hot path allocates nothing.
 

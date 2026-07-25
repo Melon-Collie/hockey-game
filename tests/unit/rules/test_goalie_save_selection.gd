@@ -184,6 +184,44 @@ func test_a_tip_threat_blocks_him_before_the_shot_is_taken() -> void:
 			"a tip threat is a block decision before the release, not after")
 
 
+func test_a_pass_he_can_see_resets_the_read_but_leaves_him_time() -> void:
+	# D-to-D at the blue line. A pass is a CONTEST — the puck's path changes, so
+	# the read he had is void and restarts at the reception. Same mechanism as a
+	# tip; the difference is that it happens far out and he sees it coming, so
+	# the restarted read still has a full flight to work with.
+	#
+	# Passes and deflections are therefore one concept in this model, separated
+	# only by where they happen and whether sight is blocked.
+	var pass_at: float = 0.35                 # reception, well out
+	var arrival: float = pass_at + 0.50       # then a shot from the far point
+	assert_false(GoalieSaveSelection.should_block(_s(arrival, pass_at)),
+			"a pass he sees resets the read and he still has time to answer")
+	# The same pass with his eyes blocked is a different play: the read cannot
+	# restart until he picks the puck up again.
+	assert_true(GoalieSaveSelection.should_block(_s(arrival, pass_at, arrival - 0.10)),
+			"screened through the reception, the reset never happens in time")
+
+
+func test_a_loose_rebound_with_bodies_converging_stays_sealed() -> void:
+	# UNVALIDATED — recorded as the model's answer, not as a known-good one.
+	# Nobody has confirmed by play what he SHOULD do here, and it is a hard
+	# read even for a person.
+	#
+	# What the model says: a rebound at his feet with sticks converging has a
+	# contest time near zero and an arrival right behind it, so there is no
+	# answer to be had and he stays sealed. That direction is at least
+	# consistent with the reported complaint — he currently pops UP into this
+	# situation and concedes through the five-hole — so the model moving the
+	# other way is a point in its favour, but it is not evidence.
+	#
+	# If play shows him staying down too long here and getting beaten high
+	# instead, that is the signal, and it would mean the arrival term needs to
+	# distinguish "a stick can touch it" from "a stick can SHOOT it".
+	var contest: float = GoalieSaveSelection.contest_time(0.4, STICK, 4.0)
+	assert_true(GoalieSaveSelection.should_block(_s(contest + 0.03, contest)),
+			"a converging scramble at his feet reads as unanswerable")
+
+
 # ── The middle: caught mid-drop is real, not a rounding error ────────────────
 
 func test_the_mid_drop_state_is_represented() -> void:
