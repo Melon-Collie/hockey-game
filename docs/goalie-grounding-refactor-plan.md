@@ -1294,3 +1294,81 @@ Several proposals made earlier in this branch are withdrawn:
   problem they looked like on paper.
 
 **Do not change the goalie.** The remaining work is entirely in the planner.
+
+## §9 — The butterfly decision: react vs block
+
+Second application of the depth-solve pattern. The target is
+`_update_state`'s STANDING/READY arm, where three predicates
+(`_is_carrier_at_doorstep`, `_should_seal_crease_jam`, `_confirmed_beaten_wide`)
+all produce `_enter_butterfly()`, ordered by an `elif` chain nobody chose.
+
+### The rule, from real goaltending
+
+Every save is **BLOCKING** or **REACTING**.
+
+* **Reacting is preferred.** Stay patient, let the shooter's body and stick
+  declare the puck's path, then respond.
+* **Blocking** is for when reacting is *impossible*: the puck is too close to
+  answer, the goalie is screened, a deflection is live, or the play is an
+  unpredictable scramble.
+* Rule of thumb: beyond about **two stick lengths**, use the reaction butterfly.
+
+Our three predicates are all instances of "reacting is impossible here", and the
+four thresholds (`lunge_trigger_distance` 1.2, `close_crease_butterfly_distance`
+1.5, `jam_puck_distance` 2.0, `active_blade_carrier_radius` 2.5) all sit just
+under 2 x `DEFAULT_STICK_LENGTH_M` = 2.6 m. Four hand-picked numbers straddling
+one boundary — the Buckley signature.
+
+### It must govern GETTING UP too
+
+Reported from play: the keeper stands up too early into traffic and concedes
+unearned rebounds through the five-hole. The cause is explicit in
+`_is_threat_pressing()`, which decides whether to HOLD the butterfly:
+
+```gdscript
+if threat_dist < recovery_proximity_threshold:
+    var carrier: Skater = puck.get_carrier()
+    if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
+        return true          # hold — only for a HOSTILE CARRIER
+```
+
+A slow loose rebound at his feet has no carrier, so it fails that test, falls
+through to the speed check, and `return not speed_low` sends him UP — into the
+scramble. `_should_seal_crease_jam()` is supposed to catch it but only fires
+with an opponent inside the jam radius; traffic just outside it, or a teammate
+corralling in traffic, stands him up.
+
+**Possession does not make a play readable.** "Is there a hostile carrier" was
+standing in for readability, and it is the wrong proxy: a controlled puck in
+traffic is still unpredictable, which is exactly when blocking is correct.
+
+So the model is a per-tick POSTURE decision covering both directions, replacing
+the entry chain AND `_is_threat_pressing`:
+
+```
+BLOCK when any of:
+  * time to answer  <  react budget      (reaction_delay + butterfly_drop_speed)
+  * the play is not READABLE             (screened, or traffic around the puck)
+  * the lateral race is already lost     (beaten wide — only the seal covers)
+otherwise REACT (stay up).
+```
+
+Doorstep, jam and beaten-wide stop being cases and become consequences, the way
+the BPS zones became consequences of the depth solve. Readability keys on
+TRAFFIC, not on who holds the puck — `GoalieWorldView` already carries
+`screeners`, `nearest_opponent_dist` and `nearest_teammate_dist`.
+
+### Two corroborations that this is one model
+
+1. The measured beaten-wide boundary is 4-6 m/s of lateral drive at 2 m
+   (`test_goalie_drop_decision_curve`). The lateral tracking cap built for the
+   DEPTH solve gives `push * d / r = 3.8 * 2 / 1.75 = 4.34 m/s` at the same
+   distance. Two independently authored mechanisms on one boundary.
+2. An idle carry never drops him at any range — already correct doctrine, and
+   the patience half the model must preserve.
+
+### Explicitly preserved
+
+Beaten-wide dropping him is NOT a bug. Playtest calls the resulting
+lateral-beat-then-elevate goal a fair chance an NHL goalie concedes. The model
+keeps it as a BLOCK cause.
