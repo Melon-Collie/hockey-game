@@ -389,6 +389,50 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 # measurement.
 
 
+# Speed-explicit windup/release pair — the HUMAN mechanism. A player skates in,
+# holds LMB (which freezes the blade and publishes predicted_shot_velocity, so
+# the goalie pre-leans and builds his pre-arm read), then releases at the target.
+# `fire`/`fire_at` model none of that: the puck simply appears in flight and the
+# keeper picks it up cold. Any sweep that wants to match what a human actually
+# executes has to come through here.
+# NOTE: no reset_to_crease here, deliberately. A human skates in and sets up
+# BEFORE pulling the trigger, so the keeper is already square and at challenge
+# depth when the windup starts. Resetting inside the windup measures a keeper
+# caught mid-transition, which reads as "the pre-arm made him worse" when really
+# he never got set. Callers do reset + settle first, then hold.
+func hold_windup_at(shooter: Vector3, declared_aim: Vector3, loft_level: int,
+		speed_m_s: float, ticks: int) -> void:
+	_shooter.global_position = shooter
+	_shooter.velocity = Vector3.ZERO
+	_shooter.current_shot_state = SkaterStateMachine.State.WRISTER_AIM
+	_shooter.predicted_shot_velocity = shot_velocity_at(
+			shooter, declared_aim, loft_level, speed_m_s, 0.0)
+	_puck.set_carrier(_shooter)
+	for _i: int in ticks:
+		_puck.global_position = shooter
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+
+
+func fire_release_at(shooter: Vector3, aim: Vector3, loft_level: int,
+		speed_m_s: float, err_rad: float) -> int:
+	var vel: Vector3 = shot_velocity_at(shooter, aim, loft_level, speed_m_s, err_rad)
+	if vel == Vector3.ZERO:
+		return WIDE
+	last_part = -1
+	last_contact_pos = Vector3.INF
+	last_cross = Vector3.INF
+	last_goalie_pos = Vector3.INF
+	_shooter.current_shot_state = SkaterStateMachine.State.FOLLOW_THROUGH
+	_puck.clear_carrier()
+	var pos: Vector3 = shooter
+	pos.y = _puck.ice_height
+	_puck.global_position = pos
+	_puck.apply_release_velocity(vel)
+	_puck.puck_released.emit()
+	return _march(shooter, vel)
+
+
 # Hold a wrister windup aimed at `declared_aim` for `ticks`, with the goalie
 # tracking it live. Puck stays pinned on the carrier (the body-local freeze).
 func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,

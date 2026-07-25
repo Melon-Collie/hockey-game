@@ -63,6 +63,34 @@ extends GutTest
 #     the dot line the same band only takes the middle half of the aim points
 #     and the outer ones are PAD.
 #
+# ── THE HUMAN MECHANISM CHANGES THE ANSWER ───────────────────────────────────
+# The sweeps above fire COLD: the puck appears already in flight, so the keeper
+# gets no windup to read — no pre-lean, no pre-arm. That is not what a player
+# executes. A human skates in, holds LMB (which freezes the blade and publishes
+# predicted_shot_velocity for the goalie to lean on), then releases.
+#
+# Same grid through the real charge/release path, settled first so he is square
+# before the trigger is pulled:
+#
+#   cold fire (no windup)   16/288  ( 5.6%)
+#   held windup 0.25 s      28/288  ( 9.7%)
+#   held windup 0.50 s      25/288  ( 8.7%)
+#
+# HOLDING THE WINDUP MAKES HIM EASIER TO BEAT, and it is not a settling
+# artifact — he is fully set in both. The pre-lean COMMITS him, and on an honest
+# shot that commitment costs more than the early read gains:
+#
+#   cold   FLAT |pppppppssssssssssssppppp|   0 goals
+#   held   FLAT |ppsssssssssssssGGGGppppp|  13 goals
+#
+# Thirteen FLAT goals open at aim x +0.21..+0.42 — his GLOVE side, low (recall
+# the 180 deg rotation: world +x is local -x, the glove). A low glove-side
+# window exists against a held windup that does not exist against a cold shot.
+#
+# This is the honest-shot case. The disguise instrument
+# (test_goalie_disguise_read.gd) covers what happens when the declared aim and
+# the real one DISAGREE, which should widen the same seam further.
+#
 # ── THE SCOPE THAT MATTERED MOST: rebounds are TERMINAL here ─────────────────
 # This instrument stops at FIRST goalie contact, so every rebound goal in a real
 # game reads as a save. That is not a footnote — it inverts the conclusion:
@@ -220,6 +248,61 @@ func test_can_anything_beat_the_set_keeper_from_the_slot() -> void:
 	# Kept either side of it for context on how fast the picture changes.
 	_sweep(Vector3(0.0, 0.0, GOAL_Z + 3.0), "slot 3.0 m")
 	_sweep(Vector3(0.0, 0.0, GOAL_Z + 9.0), "slot 9.0 m")
+	assert_true(true, "report")
+
+
+# THE HUMAN MECHANISM: skate in, hold LMB (goalie pre-leans off the declared
+# aim and builds his pre-arm read), release at the target without deceiving.
+# The sweeps above fire cold — no windup, so no pre-arm — which is NOT what a
+# player executes. This runs the identical grid through the real charge/release
+# path so the keeper gets everything he gets against a human.
+func test_report_the_sweep_a_human_can_actually_execute() -> void:
+	var spot := Vector3(0.0, 0.0, GOAL_Z + SLOT_DIST_M)
+	var max_aim: float = GameRules.NET_HALF_WIDTH \
+			- GameRules.NET_POST_RADIUS - GameRules.PUCK_COLLISION_RADIUS
+	var lofts: Array[int] = [
+		ShotMechanics.ELEVATION_FLAT,
+		ShotMechanics.ELEVATION_LOW,
+		ShotMechanics.ELEVATION_HIGH,
+	]
+	var names: Array[String] = ["FLAT", "LOW ", "HIGH"]
+	gut.p("HELD WINDUP -> honest release (declared aim == real aim), dot line.")
+	for hold_ticks: int in [30, 60]:
+		gut.p("  hold %.2f s:" % (float(hold_ticks) / 120.0))
+		var total: int = 0
+		var shots: int = 0
+		var parts: Dictionary = {}
+		for li: int in lofts.size():
+			var row: String = ""
+			var g: int = 0
+			var a: float = -max_aim
+			while a <= max_aim + 0.001:
+				var best: String = "."
+				for mph: float in SHOT_MPH:
+					var aim := Vector3(a, 0.0, GOAL_Z)
+					# Set up FIRST, exactly as a player does, then hold.
+					_ctrl.reset_to_crease()
+					_h.settle(spot, SETTLE_TICKS)
+					_h.hold_windup_at(spot, aim, lofts[li], mph * MPH_TO_MS, hold_ticks)
+					var o: int = _h.fire_release_at(
+							spot, aim, lofts[li], mph * MPH_TO_MS, 0.0)
+					shots += 1
+					if o == Harness.GOAL:
+						g += 1
+						total += 1
+						best = "G"
+					elif o == Harness.SAVE:
+						var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+						parts[k] = int(parts.get(k, 0)) + 1
+						if best == ".":
+							best = k.substr(0, 1).to_lower()
+					elif best == ".":
+						best = "x"
+				row += best
+				a += 0.07
+			gut.p("     %s |%s| %d goals" % [names[li], row, g])
+		gut.p("     -> %d/%d (%.1f%%)   %s"
+				% [total, shots, 100.0 * float(total) / float(maxi(shots, 1)), str(parts)])
 	assert_true(true, "report")
 
 
