@@ -34,6 +34,14 @@ extends Node
 @export var depth_base: float = 1.30
 @export var depth_conservative: float = 0.70
 @export var depth_defensive: float = 0.10
+# Minimum gap (m) the goalie keeps between himself and the threat while
+# challenging. PHYSICAL, not a feel dial: his torso and pads have real depth, and
+# standing level with the puck means the carrier simply walks around a body that
+# has already committed forward — plus it puts the puck inside his own poke reach,
+# where a whiffed jab leaves the net empty. Replaces the old `zone_post_z` ramp,
+# which produced the same in-close pull-back as a hand-authored curve instead of
+# as a consequence of the goalie having a body.
+@export var challenge_standoff: float = 0.60
 @export var zone_post_z: float = 2.0
 @export var zone_aggressive_z: float = 8.0
 @export var zone_base_z: float = 12.0
@@ -2801,9 +2809,12 @@ func _update_depth(delta: float) -> void:
 	var c := _depth_constraints
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			_tracked_threat_position, _goal_line_z, _goal_center_x)
-	c.chart_radius = GoalieBehaviorRules.target_depth_for_puck_distance(
-			threat_dist, _depth_cfg)
-	c.lateral_cap = _lateral_pressure_cap(c.chart_radius)
+	# Ceiling, not a curve — see GoalieDepthSolver's header. He challenges as far
+	# out as the races allow, and this is the furthest that is ever worth going.
+	c.ceiling_radius = depth_aggressive
+	# Physical: never stand on (or past) the puck.
+	c.standoff_cap = threat_dist - challenge_standoff
+	c.lateral_cap = _lateral_pressure_cap(c.ceiling_radius)
 	# Backdoor-aware cap (anticipatory): with a live one-timer man on the weak
 	# side, don't challenge farther out than the cross-crease re-square race
 	# allows. INF when no threat binds.

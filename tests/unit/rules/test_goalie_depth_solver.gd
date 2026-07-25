@@ -13,7 +13,7 @@ const DT: float = 1.0 / 120.0
 
 func _cfg() -> GoalieDepthSolver.Constraints:
 	var c := GoalieDepthSolver.Constraints.new()
-	c.chart_radius = 1.30
+	c.ceiling_radius = 1.75
 	c.floor_radius = 0.10
 	c.settle_speed = 4.0
 	c.max_speed = 2.2
@@ -23,8 +23,8 @@ func _cfg() -> GoalieDepthSolver.Constraints:
 func test_unconstrained_settles_toward_the_chart() -> void:
 	var c := _cfg()
 	var next: float = GoalieDepthSolver.solve(0.10, DT, c)
-	assert_gt(next, 0.10, "with nothing binding, depth advances toward the chart radius")
-	assert_lt(next, c.chart_radius, "and it settles rather than snapping")
+	assert_gt(next, 0.10, "with nothing binding, he challenges out toward the ceiling")
+	assert_lt(next, c.ceiling_radius, "and it settles rather than snapping")
 
 
 func test_tightest_cap_wins_regardless_of_which_one() -> void:
@@ -73,10 +73,50 @@ func test_rush_rate_does_not_apply_when_not_retreating() -> void:
 			"and that direction obeys the physical rate cap")
 
 
+func test_standoff_keeps_him_off_the_puck() -> void:
+	# The in-close case. A threat 1.5 m out with a 0.6 m standoff caps him at 0.9,
+	# well inside the 1.75 ceiling — he stops short of the puck instead of standing
+	# on it. This replaces the old hand-authored `zone_post_z` ramp with a
+	# consequence of the goalie having a body.
+	var c := _cfg()
+	c.standoff_cap = 1.5 - 0.60
+	var settled: float = 0.90
+	for _i: int in 600:
+		settled = GoalieDepthSolver.solve(settled, DT, c)
+	assert_almost_eq(settled, 0.90, 0.01,
+			"the standoff, not the ceiling, decides depth against an in-tight threat")
+
+
+func test_a_clean_1v0_is_still_challenged_aggressively() -> void:
+	# Nothing binding — no receiver, no rush, threat far enough that the standoff
+	# is slack — is a genuine 1v0, and challenging it hard is correct: there is no
+	# lateral option to punish the depth.
+	var c := _cfg()
+	c.standoff_cap = 8.0 - 0.60
+	var settled: float = 0.10
+	for _i: int in 600:
+		settled = GoalieDepthSolver.solve(settled, DT, c)
+	assert_almost_eq(settled, c.ceiling_radius, 0.01,
+			"with no lateral option live, depth solves to the ceiling")
+
+
+func test_a_live_receiver_pulls_him_off_the_ceiling() -> void:
+	# The same 1v0 geometry, but now a weak-side receiver makes the re-square race
+	# bind. This is BPS "C" appearing without anyone authoring a C zone.
+	var c := _cfg()
+	c.standoff_cap = 8.0 - 0.60
+	c.backdoor_cap = 0.85
+	var settled: float = 0.10
+	for _i: int in 600:
+		settled = GoalieDepthSolver.solve(settled, DT, c)
+	assert_almost_eq(settled, 0.85, 0.01,
+			"a live lateral option caps the challenge — the C zone, emergent")
+
+
 func test_settle_is_rate_capped() -> void:
 	# A big gap would open faster than a real telescoping push; the cap holds it.
 	var c := _cfg()
-	c.chart_radius = 10.0
+	c.ceiling_radius = 10.0
 	var next: float = GoalieDepthSolver.solve(0.0, DT, c)
 	assert_almost_eq(next, c.max_speed * DT, 0.0001,
 			"a large depth change is limited to max_speed, not the raw lerp")

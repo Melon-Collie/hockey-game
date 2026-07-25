@@ -860,14 +860,62 @@ regardless of the zone width. The plateau *value* is what is wrong, not the zone
 boundary: the chart's target for a settled in-zone threat should be
 `depth_base`, with `depth_aggressive` reachable only through the rush path.
 
+#### ✅ SHIPPED — depth is now solved, not charted
+
+The static distance chart is gone from the live goalie. Depth is
+`min(ceiling, standoff, lateral caps, backdoor cap, rush backflow)`, floored —
+"as far out as the races allow."
+
+**Crucially it is NOT "sit deeper".** At this game's shot speeds the flight time
+inside ~7 m is *shorter than the arm read* (0.108 s at 5 m vs 0.18 s cold), so
+depth cannot buy usable reaction time in the slot — the old chart's *"cutting the
+angle is what makes the save, not reflexes"* reasoning is correct **for this
+game**, even though its zone LAYOUT was inverted. Flipping the plateau to B would
+have made him strictly worse for nothing.
+
+What changed instead, measured:
+
+| threat | old radius (gap) | new radius (gap) |
+|---|---|---|
+| 1.0 m | 0.93 (**+0.07**) | 0.40 (**+0.60**) |
+| 1.5 m | 1.34 (+0.16) | 0.90 (+0.60) |
+| 2.0 m | 1.75 (+0.25) | 1.40 (+0.60) |
+| 3–8 m | 1.75 | 1.75 (unchanged) |
+| 12 m | 1.30 | 1.75 |
+
+**In tight the gap is now a constant 0.60 m** — the standoff — instead of
+collapsing to 7 cm. That is the "he's right on top of me" symptom, and it is fixed
+by giving him a *body* rather than by authoring a ramp.
+
+The BPS zones are now emergent: nothing binding → challenge (A); a live receiver
+makes the re-square race bind → deeper (C); a closing rush hands him to the
+backflow (A→B→D); behind the line → post states (D). Six hand-tuned constants
+(`zone_post_z`, `zone_aggressive_z`, `zone_base_z`, `zone_conservative_z`,
+`depth_base`, `depth_conservative`) stop driving live depth — `depth_base` and
+`depth_conservative` survive only as the rush-backflow anchors and the skill
+profile's tier dial.
+
+⚠️ **One consequence the harness CANNOT show.** `test_real_goalie_shot_outcomes`
+and the disguise sweep are **1v0** — no receivers — so they measure the
+*unconstrained* case, which is now maximally aggressive at every range (12 m went
+1.30 → 1.75). In a real 3v3/5v5 there is usually a net-front or weak-side man, so
+the backdoor cap should bind and pull him in. **If it does not, point shots will be
+faced more aggressively than before.** Watch for that in playtest; if it reads
+wrong the fix is the backdoor cap's eligibility (`backdoor_max_shooter_distance`,
+currently 9 m), not the ceiling.
+
+Bot calibration survived unchanged (`test_shot_value_calibration` 3/3,
+`test_real_rush_sim` 4/4) — but note `shot_sim_harness` still models the OLD chart
+for its band cover, so the band instrument and the live goalie have diverged in
+the 1v0 case. Worth reconciling if that instrument is used for tuning again.
+
 Candidate directions, none committed:
-- **Make the chart's plateau `depth_base`** and let `depth_aggressive` be reached
-  only via the rush backflow — the change the doctrine actually implies, and the
-  one that removes the duplicate/contradictory fifth mechanism. Measured above:
-  narrowing the zone width instead does not work.
+- ~~Make the chart's plateau `depth_base`~~ — **rejected on measurement**: the
+  reaction time it would buy is unusable inside 7 m (see above). Replaced by the
+  solved model, which removes the chart entirely.
 - **Drop the backflow's speed gate**, or make the engage condition proximity-based
   rather than closing-speed-based, so a settled slot threat also pulls him in.
-  Complementary to the above rather than an alternative.
+  Still open, and now the main remaining lever if he still reads as too aggressive.
 - **Leave it** — it may simply read as a confident goalie, and the measured save
   rates (6/14 on top-corner shots from 5–9 m) are not those of a wall.
 

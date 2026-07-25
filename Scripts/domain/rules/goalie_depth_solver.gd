@@ -21,12 +21,40 @@ class_name GoalieDepthSolver
 #     ordinary settle.
 # Ordering stops being load-bearing, and a ninth constraint is one more field.
 #
+# ── Why there is no distance CURVE any more ──────────────────────────────────
+# The Buckley A/B/C/D zones are defined SITUATIONALLY, not by distance: A is for a
+# play entering the zone, B for a settled shot, C when a lateral play is live, D on
+# the post. The old static chart tried to reproduce them from threat distance
+# alone, which put A (the most aggressive depth) in the slot and B out at the
+# points — inverted, and a fifth mechanism contradicting the four situational
+# models that already existed (rush backflow = A, backdoor cap = C, RVH/VH = D).
+#
+# Depth is now the SOLVE those models were already describing: go as far out as
+# the races allow. The zones stop being authored and become emergent — nothing
+# binding means a genuine 1v0 gets challenged aggressively (correct: there is no
+# lateral option to punish it), a live receiver pulls him back via the re-square
+# race, a closing rush hands him to the backflow, and the standoff keeps him off
+# the puck in tight.
+#
+# NOT changed: he is not simply parked deeper. At this game's shot speeds the
+# flight time inside ~7 m is SHORTER than the arm read (0.108 s at 5 m vs 0.18 s
+# cold), so depth cannot buy usable reaction time in the slot — the original
+# chart's "cutting the angle is what makes the save, not reflexes" reasoning holds
+# for the game even though the chart's zone LAYOUT did not.
+#
 # Pure/static, engine-free, unit-testable. Callers own the Constraints instance
 # (rebuilt in place each tick) so the hot path allocates nothing.
 
 class Constraints:
-	# Buckley depth-chart radius for the current threat distance — the baseline.
-	var chart_radius: float = 0.0
+	# CEILING — as far out as the goalie will ever challenge. No longer a distance
+	# curve: depth is now solved as "the deepest radius the races allow", and this
+	# is simply the upper bound on that solve (BPS "A", the aggressive depth).
+	var ceiling_radius: float = 0.0
+	# PHYSICAL STANDOFF — he must stay goal-side of the puck. Without this the
+	# solve happily puts him level with (or past) an in-tight threat, which is
+	# what "the goalie is right on top of me" felt like. Not a tuning curve: it is
+	# body half-depth plus stick clearance.
+	var standoff_cap: float = INF
 	# Lateral-pressure retreat: the chart radius already reduced by the pull.
 	# INF when no lateral overspeed binds.
 	var lateral_cap: float = INF
@@ -54,7 +82,9 @@ class Constraints:
 # explicit so a future edit to the backflow anchors does not silently gain the
 # ability to bury the goalie.
 static func solve(current: float, delta: float, c: Constraints) -> float:
-	var target: float = c.chart_radius
+	var target: float = c.ceiling_radius
+	if c.standoff_cap < target:
+		target = maxf(c.standoff_cap, c.floor_radius)
 	if c.lateral_cap < target:
 		target = maxf(c.lateral_cap, c.floor_radius)
 	if c.backdoor_cap < target:
