@@ -32,11 +32,18 @@ class_name GoalieSaveSelection
 #
 #     sight_delay + reaction_delay + drop_time
 #
-# and the time available is however long until the puck's state can change out
-# from under him — the sooner of it ARRIVING and it being TOUCHED by someone who
-# can redirect it:
+# and the time available is measured from the LAST MOMENT the puck's path
+# becomes knowable. Two things can delay that: not being able to SEE it, and
+# something still being able to CHANGE it.
 #
-#     available = min(time_to_arrival, time_to_contest)
+#     available = time_to_arrival - max(sight_delay, contest) - reaction_delay
+#
+# A contest does NOT shorten the flight — a tipped puck does not arrive sooner.
+# It RESTARTS the read: the direction he had been tracking is gone and he must
+# answer a new one from the moment of the touch. That is precisely why a
+# net-front tip is lethal on a shot he can otherwise see comfortably, and it is
+# the doctrine's third block trigger (proximity, screens, and DEFLECTION RISK)
+# falling out rather than being added.
 #
 # `answer_fraction` is how much of the answer fits in the time available. And
 # the useful thing is that it needs NO THRESHOLD:
@@ -72,9 +79,12 @@ class_name GoalieSaveSelection
 # tick) so the hot path allocates nothing.
 
 class Situation:
-	# Seconds until the puck could be ON his body if it were released or
-	# redirected right now. For a shot in flight this is the real flight time;
-	# for a carrier it is the worst case — they shoot this instant.
+	# Seconds until the puck could be ON his body BY ANY ROUTE — including via a
+	# redirect. For a shot in flight this is the real flight time; for a carrier
+	# it is the worst case, they shoot this instant; for a loose puck in the
+	# crease it is the touch plus the (tiny) flight from there. The caller owns
+	# that geometry, and getting it wrong here is what makes a scramble read as
+	# safe.
 	var time_to_arrival: float = INF
 	# Seconds until any stick that is not his can reach the puck and change it.
 	# INF when nobody is close enough to matter. This is the readability term:
@@ -103,8 +113,12 @@ static func answer_fraction(s: Situation) -> float:
 	if s.drop_time <= 0.0:
 		# Degenerate config: an instantaneous drop always "fits".
 		return 1.0
-	var available: float = minf(s.time_to_arrival, s.time_to_contest) \
-			- s.sight_delay - s.reaction_delay
+	# A contest that lands after the puck does never happens, so it delays
+	# nothing. Otherwise the read restarts at the touch.
+	var contest: float = s.time_to_contest if s.time_to_contest < s.time_to_arrival \
+			else 0.0
+	var known_at: float = maxf(s.sight_delay, contest)
+	var available: float = s.time_to_arrival - known_at - s.reaction_delay
 	return clampf(available / s.drop_time, 0.0, 1.0)
 
 

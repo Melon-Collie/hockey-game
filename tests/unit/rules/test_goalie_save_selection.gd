@@ -75,7 +75,8 @@ func test_a_loose_rebound_at_his_feet_keeps_him_down() -> void:
 	# five-hole. Nobody possesses it; that is not the point. Something can change
 	# it before he can answer, so it is unreadable, so he stays sealed.
 	var contest: float = GoalieSaveSelection.contest_time(0.5, STICK, 3.0)
-	assert_true(GoalieSaveSelection.should_block(_s(INF, contest)),
+	# Arrival is the touch plus the flight from half a metre — effectively now.
+	assert_true(GoalieSaveSelection.should_block(_s(contest + 0.02, contest)),
 			"a puck a stick can already touch keeps him down regardless of possession")
 
 
@@ -83,7 +84,7 @@ func test_a_teammate_corralling_under_pressure_is_still_traffic() -> void:
 	# His own defenceman has it, but an opponent is a stick away. Possession does
 	# not make it readable — one poke and it is a shot from two metres.
 	var contest: float = GoalieSaveSelection.contest_time(1.4, STICK, 4.0)
-	assert_true(GoalieSaveSelection.should_block(_s(INF, contest)),
+	assert_true(GoalieSaveSelection.should_block(_s(contest + 0.05, contest)),
 			"a contested puck in the crease is a block regardless of who holds it")
 
 
@@ -91,7 +92,7 @@ func test_a_teammate_with_the_puck_and_no_pressure_lets_him_up() -> void:
 	# The other half of that: uncontested possession in the crease is not a
 	# scramble, and holding the butterfly forever would be wrong.
 	var contest: float = GoalieSaveSelection.contest_time(6.0, STICK, 4.0)
-	assert_false(GoalieSaveSelection.should_block(_s(INF, contest)),
+	assert_false(GoalieSaveSelection.should_block(_s(contest + 0.40, contest)),
 			"an uncontested puck lets him stand back up")
 
 
@@ -102,6 +103,41 @@ func test_beaten_laterally_is_a_block_even_with_all_the_time_in_the_world() -> v
 	# this stays.
 	assert_true(GoalieSaveSelection.should_block(_s(1.0, INF, 0.0, true)),
 			"a lost lateral race is sealed, not read")
+
+
+func test_a_screened_point_shot_is_blocked_but_a_clean_one_is_read() -> void:
+	# The 5v5 bread-and-butter. Point shot ~15 m, 30 m/s, so the puck is on him
+	# in ~0.44 s and an answer costs 0.33 s. Clean, he reads it. With a wall in
+	# front the puck only EMERGES about 3 m out, leaving ~0.10 s of sight — the
+	# reaction no longer exists, so he blocks: drop, take the ice, concede the top
+	# corner he could not have reacted to anyway.
+	var flight: float = 0.44
+	var clean := _s(flight)
+	var walled := _s(flight, INF, flight - 0.10)
+	assert_false(GoalieSaveSelection.should_block(clean),
+			"a clean point shot is read")
+	assert_true(GoalieSaveSelection.should_block(walled),
+			"a screened point shot is blocked")
+
+
+func test_a_tip_threat_blocks_a_shot_he_can_otherwise_see() -> void:
+	# The third block trigger in the doctrine, alongside proximity and screens:
+	# RISK OF A DEFLECTION. A net-front stick in the lane does not have to hide
+	# the puck to ruin the read — it only has to be able to touch it in flight,
+	# because a tip changes the puck's direction inside his answer time.
+	#
+	# This is why time_to_contest must be computed over bodies in the SHOT LANE,
+	# not only bodies near the puck's current position: for a net-front tipper
+	# the puck travels TO the stick, so the contest time is when the flight
+	# reaches them.
+	var flight: float = 0.44
+	# A tipper 3 m off his body: the puck arrives at their stick well before it
+	# arrives at him, and before he could complete an answer.
+	var tip_at: float = 0.34
+	assert_false(GoalieSaveSelection.should_block(_s(flight)),
+			"unobstructed, he reads it")
+	assert_true(GoalieSaveSelection.should_block(_s(flight, tip_at)),
+			"a stick that can touch it in flight makes the read worthless")
 
 
 # ── The middle: caught mid-drop is real, not a rounding error ────────────────
