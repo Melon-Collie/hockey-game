@@ -158,13 +158,23 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the pelvis still at 80% of standing height.
 @export var knockdown_min_seconds: float = 1.2     # down time of a just-barely knockdown
 @export var knockdown_max_seconds: float = 2.2     # down time of a maximal hit
-# A body sliding on ice decelerates at roughly mu*g. The old 8.0 m/s² implied a
-# friction coefficient near 0.8 — rubber on asphalt — and stopped a maximal
-# knockback dead in 0.39 s after only 0.6 m, so a hit that visually threw someone
-# barely moved them. 2.5 m/s² (mu ~ 0.25, generous for pads and a digging skate)
-# gives ~1.9 m over ~1.2 s, which both matches the ragdoll's own travel and lasts
-# about as long as the victim is down.
-@export var knockdown_friction: float = 2.5        # m/s² the downed body sheds speed while sliding
+# Friction is what a hit FEELS like: the thud is the sharp deceleration, not the
+# distance covered. Dropping this to 2.5 to buy travel was a mistake — it bought
+# 1.9 m of drift but turned every check into a shove, because the victim floated
+# away instead of absorbing anything. Travel is bought with launch speed below;
+# this stays high enough to keep the bite. (A pure-ice mu would be far lower, but
+# a tumbling body digs shoulders, elbows and skate blades in — and the crisp stop
+# is the read that sells contact.)
+@export var knockdown_friction: float = 6.5        # m/s² the downed body sheds speed while sliding
+# Launch: a knockdown adds speed ALONG the hit, on top of the collision's own
+# transfer. This is what "getting blown up" means — the victim leaves faster,
+# rather than leaving at the same speed and taking longer to stop. Keeping the
+# two separate means travel and impact are independent dials instead of trading
+# against each other: at the range below a maximal hit throws ~3.4 m in ~1.0 s
+# while still decelerating hard. Only knockdowns launch; the stagger ladder and
+# every impulse threshold that feeds it are untouched.
+@export var knockdown_launch_min: float = 1.5      # m/s added at a just-barely knockdown
+@export var knockdown_launch_max: float = 3.5      # m/s added at a maximal hit
 # Knockdown pose (cosmetic): a downed player is RAGDOLLED, not posed. A verlet
 # chain (SkaterRagdollCoordinator over RagdollRules) is seeded from the hit —
 # direction, strength, and the victim's own momentum — and the rig's drop, leg
@@ -1468,6 +1478,19 @@ func _note_knockdown(seconds: float, recoil_body: Vector2, contact_height: float
 	knockdown_timer = seconds
 	knockdown_total = seconds
 	knockdown_contact_height = contact_height
+	# Throw the victim along the hit. Applied once per escalating knockdown (the
+	# guard above), on whichever machine authoritatively simulates this body — the
+	# host, or the local victim predicting its own knockdown — so reconcile snaps
+	# it like any other velocity. The ragdoll seeds from skater.velocity on the
+	# next frame, so it inherits this automatically and the pose keeps agreeing
+	# with where the body is actually going.
+	var span: float = maxf(knockdown_max_seconds - knockdown_min_seconds, 0.001)
+	var strength_t: float = clampf((seconds - knockdown_min_seconds) / span, 0.0, 1.0)
+	var launch_dir: Vector3 = skater.global_transform.basis \
+			* Vector3(recoil_body.x, 0.0, recoil_body.y)
+	if launch_dir.length_squared() > 0.0001:
+		skater.velocity += launch_dir.normalized() \
+				* lerpf(knockdown_launch_min, knockdown_launch_max, strength_t)
 	_ragdoll.note_hit(recoil_body, seconds, contact_height)
 
 
