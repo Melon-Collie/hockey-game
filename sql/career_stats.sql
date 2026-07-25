@@ -62,7 +62,17 @@ create table if not exists public.career_stats (
     -- upload gate, so >= 2 is known true for them, though the exact count is
     -- unrecoverable. Peak, not final, so someone who drops before the horn still
     -- counts.
-    human_players         integer default 2 not null
+    human_players         integer default 2 not null,
+    -- Match FORMAT. 3v3 and 5v5 are not the same sport statistically (3v3 has far
+    -- more space — more attempts, higher xG per shot; 5v5 has traffic, point
+    -- shots, real blocks), so every rate stat has to be sliced by team_size to
+    -- mean anything. rule_set and period_seconds confound the same way, and
+    -- num_periods was already stored without its duration — only half the clock.
+    -- Older rows predate 5v5 and the mode selector, hence the 3 / 'arcade'
+    -- defaults; period_seconds is nullable because it genuinely isn't recoverable.
+    team_size             integer default 3 not null,
+    rule_set              text default 'arcade' not null,
+    period_seconds        integer
 );
 
 -- Migration for an existing DB (the create above is skipped once the table
@@ -83,6 +93,11 @@ alter table public.career_stats add column if not exists is_online             b
 -- Default 2 backfills existing rows honestly: every one of them passed the old
 -- two-human upload gate (see the column comment above).
 alter table public.career_stats add column if not exists human_players         integer default 2 not null;
+-- Match format. Pre-5v5 rows were all 3v3 on the default ruleset, so those
+-- defaults are factual; period length isn't recoverable, so it stays null.
+alter table public.career_stats add column if not exists team_size             integer default 3 not null;
+alter table public.career_stats add column if not exists rule_set              text default 'arcade' not null;
+alter table public.career_stats add column if not exists period_seconds        integer;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
@@ -127,6 +142,9 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
     team_xg_for           between 0 and 10000 and
     team_xg_against       between 0 and 10000 and
     human_players         between 0 and 64 and
+    team_size             between 1 and 10 and
+    (period_seconds is null or period_seconds between 0 and 100000) and
+    (rule_set is null or rule_set in ('off', 'arcade', 'nhl')) and
     toi_seconds   between 0 and 100000 and
     goals_for     between 0 and 1000  and
     goals_against between 0 and 1000  and

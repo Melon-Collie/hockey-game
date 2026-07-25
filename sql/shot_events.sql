@@ -21,8 +21,16 @@ create table if not exists public.shot_events (
     period       smallint,
     clock_s      numeric,         -- period time remaining at the shot
     game_version text,
+    -- Roster size the shot was taken under. Shot LOCATIONS differ structurally
+    -- by mode — 3v3 spreads shooters out, 5v5 packs the slot and adds point
+    -- shots — so a heatmap pooling both reads as neither. Stored per shot so the
+    -- map can be sliced without joining back to career_stats. Older rows predate
+    -- 5v5, hence the 3 default.
+    team_size    integer default 3 not null,
     created_at   timestamptz not null default now()
 );
+
+alter table public.shot_events add column if not exists team_size integer default 3 not null;
 
 create index if not exists shot_events_game_id_idx on public.shot_events (game_id);
 create index if not exists shot_events_steam_id_idx on public.shot_events (steam_id);
@@ -48,6 +56,7 @@ alter table public.shot_events add constraint shot_events_sane_ranges check (
     (clock_s is null or clock_s between 0 and 100000) and
     (outcome   is null or outcome   in ('goal', 'saved', 'missed', 'blocked')) and
     (shot_type is null or shot_type in ('shot', 'one_timer', 'tip')) and
+    team_size between 1 and 10 and
     (game_version is null or length(game_version) <= 64)
 );
 
@@ -62,6 +71,11 @@ alter table public.shot_events add constraint shot_events_sane_ranges check (
 -- 180° ((x,z) -> (-x,-z)) into team 0's attacking frame, which preserves
 -- left/right handedness relative to the direction of attack — so a player's
 -- off-wing tendency survives the fold instead of cancelling itself out.
+--
+-- Deliberately NOT grouped by team_size: the career map shows a player's whole
+-- body of work by default. The raw column lives on shot_events, so slicing 3v3
+-- from 5v5 is a query away once there's a filter to drive it — grouping here
+-- would only hand the screen duplicate buckets it would have to merge back.
 drop view if exists public.shot_heatmap;
 create view public.shot_heatmap
 with (security_invoker = true) as

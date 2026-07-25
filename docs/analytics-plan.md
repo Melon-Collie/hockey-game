@@ -135,6 +135,16 @@ shot map / xG-flow / heatmap, captured host-side and persisted:
   (1 = solo, >= 2 = a real opponent) instead of inheriting one baked in at write
   time. `network_sessions` stays online-only; an
   offline match has no link quality to report.
+- **Match FORMAT is recorded** (2026-07-25) so stats stay sliceable: `team_size`
+  — 3v3 and 5v5 are not the same sport statistically (3v3 has far more space, so
+  more attempts and higher xG per shot; 5v5 has traffic, point shots, and real
+  blocks), and pooling them makes every rate stat meaningless — plus `rule_set`
+  and `period_seconds`, which confound the same way (`num_periods` was already
+  stored without its duration, i.e. only half the clock). `shot_events` carries
+  `team_size` too, since shot LOCATIONS differ structurally by mode; the
+  `shot_heatmap` view deliberately does NOT group by it — the career map shows a
+  player's whole body of work by default, and grouping would hand the screen
+  duplicate buckets to merge back together.
 - Client delivery: the host pushes the whole log once at game-over
   (`send_shot_events_to_all` / `receive_shot_events`, protocol v43 — a new `@rpc`
   shifts the config hash), wired ungated ahead of the Supabase gates (those govern

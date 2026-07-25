@@ -4084,7 +4084,9 @@ func _on_game_over() -> void:
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods,
 			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id],
-			_team_xg_sum(team_id), _team_xg_sum(1 - team_id), is_online, _peak_humans)
+			_team_xg_sum(team_id), _team_xg_sum(1 - team_id), is_online, _peak_humans,
+			_state_machine.team_size, _state_machine.rule_set,
+			roundi(_state_machine.period_duration))
 	# Shot-event log (B1) — host-only: it holds the authoritative per-game buffer,
 	# so a single batch from the host avoids per-peer duplication. Offline the
 	# local player IS the host, so bot games log their shots too (which is what
@@ -4092,7 +4094,7 @@ func _on_game_over() -> void:
 	if NetworkManager.is_host and _advanced_stats_tracker != null:
 		_career_reporter.report_shot_events(
 				_advanced_stats_tracker.get_shot_events(), _game_id,
-				NetworkManager.get_peer_steam_id)
+				NetworkManager.get_peer_steam_id, _state_machine.team_size)
 
 
 # One network-quality row per game, guarded so the game-over and scene-exit

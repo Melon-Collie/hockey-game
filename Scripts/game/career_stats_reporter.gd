@@ -1,10 +1,21 @@
 class_name CareerStatsReporter extends RefCounted
 
+# GameRules.RuleSet -> the text stored in career_stats.rule_set. Text rather than
+# the raw enum int so the column stays readable in a SQL console and survives an
+# enum being reordered.
+const _RULE_SET_KEYS: Array[String] = ["off", "arcade", "nhl"]
+
+
+static func rule_set_key(rule_set: int) -> String:
+	return _RULE_SET_KEYS[rule_set] if rule_set >= 0 \
+			and rule_set < _RULE_SET_KEYS.size() else "arcade"
+
 func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: String,
 		game_id: String, team_id: int, period_scores: Array, num_periods: int,
 		team_sog_for: int, team_sog_against: int,
 		team_xg_for: float, team_xg_against: float,
-		is_online: bool, human_players: int) -> void:
+		is_online: bool, human_players: int,
+		team_size: int, rule_set: int, period_seconds: int) -> void:
 	var body: Dictionary = record.stats.to_dict()
 	# steam_id is the career identity (cross-machine). Offline matches upload too,
 	# so this is no longer guaranteed by the session type — the caller drops the
@@ -37,6 +48,16 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 	# pick its own threshold rather than inheriting one baked in here.
 	body["is_online"] = is_online
 	body["human_players"] = human_players
+	# Match FORMAT. 3v3 and 5v5 are not the same sport statistically — 3v3 has far
+	# more space (more attempts, higher xG per shot) while 5v5 has traffic, point
+	# shots, and real blocks — so pooling them makes every rate stat meaningless.
+	# rule_set and period length confound the same way (offsides/icing change how
+	# play flows; a 3-minute period and a 10-minute one aren't comparable per-game),
+	# and num_periods was already stored without its duration, which is only half
+	# the clock. Recorded so any query can slice by format.
+	body["team_size"] = team_size
+	body["rule_set"] = rule_set_key(rule_set)
+	body["period_seconds"] = period_seconds
 	_post(SupabaseConfig.URL + "/rest/v1/career_stats", body)
 
 
@@ -74,7 +95,7 @@ func fetch_totals(callback: Callable) -> void:
 # NetworkManager.get_peer_steam_id so this stays transport-agnostic. One bulk
 # INSERT (PostgREST accepts a JSON array), fire-and-forget like the career row.
 func report_shot_events(events: Array[ShotEvent], game_id: String,
-		peer_steam: Callable) -> void:
+		peer_steam: Callable, team_size: int) -> void:
 	if events.is_empty():
 		return
 	var rows: Array = []
@@ -83,6 +104,11 @@ func report_shot_events(events: Array[ShotEvent], game_id: String,
 		row["game_id"] = game_id
 		row["steam_id"] = int(peer_steam.call(e.shooter_peer))
 		row["game_version"] = BuildInfo.VERSION
+		# Shot LOCATIONS differ structurally by mode — 3v3 spreads shooters out,
+		# 5v5 packs the slot and adds point shots — so a heatmap pooling both
+		# reads as neither. Stored per shot so the map can be sliced by mode
+		# without joining back to career_stats.
+		row["team_size"] = team_size
 		rows.append(row)
 	_fire(SupabaseConfig.URL + "/rest/v1/shot_events", HTTPClient.METHOD_POST, rows)
 
