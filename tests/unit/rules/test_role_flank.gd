@@ -1,7 +1,7 @@
 extends GutTest
 
-# AIRoleFlank — NEUTRAL only. Trivial: target = puck position
-# offset laterally (sign per L/R) and slightly back toward our net.
+# AIRoleFlank — NEUTRAL only. Target = puck position offset laterally (sign
+# per L/R) and slightly back toward our net, bounded by the race home.
 
 const TEAM_ID: int = 0
 const OUR_NET_Z: float = 26.65
@@ -62,3 +62,43 @@ func test_falls_back_to_self_pos_when_no_puck_state() -> void:
 	var d: RoleDecision = AIRoleFlank.decide(ctx, -1.0)
 	assert_eq(d.target_position, self_pos,
 			"null puck_state → fall back to self_pos")
+
+
+# ── Race-home bound: the flank is a shape, not a puck magnet ─────────────────
+
+func _with_opponent(ctx: RoleContext, pos: Vector3, vel: Vector3) -> void:
+	var opp := SkaterNetworkState.new()
+	opp.position = pos
+	opp.velocity = vel
+	ctx.snapshot.skater_states[2] = opp
+	ctx.team_id_by_peer[2] = 1 - TEAM_ID
+
+
+func test_flank_holds_its_puck_side_shape_when_the_counter_is_contained() -> void:
+	# Loose puck at centre with the only opponent stationary deep in HIS end,
+	# and us goal-side of the play: his counter has the length of the rink to
+	# run and we are home the whole way, so the shape is exactly the
+	# puck-relative stand — the bound must not perturb ordinary play.
+	var puck_pos := Vector3(0, 0, -2)
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 8), puck_pos)
+	_with_opponent(ctx, Vector3(1, 0, -22), Vector3.ZERO)
+	var d: RoleDecision = AIRoleFlank.decide(ctx, 1.0)
+	assert_almost_eq(d.target_position.x,
+			puck_pos.x + AIRoleFlank.FLANK_LATERAL_M, 0.01)
+	assert_almost_eq(d.target_position.z,
+			puck_pos.z + AIRoleFlank.FLANK_DEPTH_M, 0.01,
+			"a contained counter leaves the flank shape untouched")
+
+
+func test_flank_refuses_to_step_up_into_a_guaranteed_breakaway() -> void:
+	# The reported puckwatching failure. Puck is deep in the attacking end, so
+	# the raw shape puts this flank up past centre — while an opponent sits
+	# BEHIND him, a stretch pass away from a clean run at our net. The old
+	# target was the puck offset and nothing else, so he stepped up regardless.
+	var puck_pos := Vector3(0, 0, -22)
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, -18), puck_pos)
+	_with_opponent(ctx, Vector3(1, 0, 14), Vector3(0, 0, 6))
+	var raw_z: float = puck_pos.z + AIRoleFlank.FLANK_DEPTH_M
+	var d: RoleDecision = AIRoleFlank.decide(ctx, 1.0)
+	assert_gt(d.target_position.z, raw_z,
+			"the last man sags home instead of following the puck up-ice")

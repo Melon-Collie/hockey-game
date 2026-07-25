@@ -226,6 +226,113 @@ static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
 
 
+# ── Board-aware reception gate ──────────────────────────────────────────────
+# Where a loose puck comes into a receiver's reach, solved on the puck's REAL
+# path instead of the straight ray off its current velocity.
+#
+# For a puck in open ice the two agree, which is why the straight-ray read
+# survived so long. On a RIM they don't agree at all: the puck's path bends
+# through the board carom and bleeds speed to board friction, so the straight
+# continuation of its velocity leaves the rink entirely somewhere mid-corner.
+# Clamping that phantom line back onto the ice (the old fix) puts the point
+# roughly on the boards but keeps two lies that decide the play — the ARRIVAL
+# TIME is measured along the chord instead of around the arc, and the INCOMING
+# DIRECTION is the pre-carom one, so the receiver squares his blade to a line
+# the puck is no longer travelling. That is why bots misjudge rims and rim
+# retrievals specifically: not a missing behaviour, a wrong path.
+#
+# Walks the same friction + rounded-corner-carom integration everything else
+# already trusts and reports the first sample that enters `reach` of `from_pos`
+# — the earliest touchable point, i.e. the gate the blade should wait at. With
+# no sample in reach it reports the closest approach instead, so a receiver
+# still has somewhere honest to aim while the body keeps closing.
+#
+# Results land in statics (single-threaded AI tick, same convention as
+# AIActionScoring.resolve_feed_keeper): one solve serves the stance, the timing
+# gate and the blade aim, with no per-call allocation on a per-tick path.
+static var gate_point: Vector3 = Vector3.INF   # where the puck meets the reach
+static var gate_velocity: Vector3 = Vector3.ZERO   # its travel there (post-carom)
+static var gate_time_s: float = 0.0            # when it gets there
+static var gate_in_reach: bool = false         # true = a real entry, not just closest
+# Does the path bring the puck CLOSER than it is right now? The board-aware
+# answer to "is this coming to me", which a dot product against the current
+# velocity gets wrong on exactly the play that matters: a rim heading away
+# down the far wall is closing on the receiver, it just has a corner to turn
+# first. False means the puck is genuinely leaving and there is nothing to set
+# up for.
+static var gate_closes: bool = false
+
+
+# Returns gate_in_reach. `reach` is the receiver's comfortable blade extension.
+#
+# Each walk step is tested as a SEGMENT, not a sample point: a 20 m/s feed
+# crosses metres per step, so a point-sampled walk fine enough to never skip
+# through a ~1 m reach circle would cost several times the steps. Segment entry
+# is exact at any step size (the ray/circle root gives the sub-step crossing),
+# which keeps the walk coarse enough to run per-tick per-receiver.
+static func solve_reception_gate(puck_pos: Vector3, puck_vel: Vector3,
+		from_pos: Vector3, reach: float,
+		horizon_s: float, steps: int) -> bool:
+	gate_point = puck_pos
+	gate_velocity = puck_vel
+	gate_time_s = 0.0
+	gate_in_reach = false
+	gate_closes = false
+	if steps <= 0 or horizon_s <= 0.0:
+		return false
+	var reach_sq: float = reach * reach
+	var dt: float = horizon_s / float(steps)
+	var p: Vector3 = puck_pos
+	var v: Vector3 = puck_vel
+	# Already on the blade — the gate is the puck itself.
+	var ax: float = p.x - from_pos.x
+	var az: float = p.z - from_pos.z
+	var start_sq: float = ax * ax + az * az
+	if start_sq <= reach_sq:
+		gate_in_reach = true
+		gate_closes = true
+		return true
+	var best_sq: float = INF
+	for i: int in steps:
+		var stepped: Transform3D = step_puck(p, v, dt)
+		var q: Vector3 = stepped.origin
+		var qv: Vector3 = stepped.basis.x
+		# Segment a→q against the reach circle around from_pos.
+		var dx: float = q.x - p.x
+		var dz: float = q.z - p.z
+		var aa: float = dx * dx + dz * dz
+		var u_near: float = 0.0
+		if aa > 1e-9:
+			var fx: float = p.x - from_pos.x
+			var fz: float = p.z - from_pos.z
+			var b: float = fx * dx + fz * dz
+			var c: float = fx * fx + fz * fz - reach_sq
+			var disc: float = b * b - aa * c
+			if disc >= 0.0:
+				var u: float = (-b - sqrt(disc)) / aa
+				if u >= 0.0 and u <= 1.0:
+					gate_point = Vector3(p.x + dx * u, 0.0, p.z + dz * u)
+					gate_velocity = v.lerp(qv, u)
+					gate_time_s = (float(i) + u) * dt
+					gate_in_reach = true
+					gate_closes = true
+					return true
+			# Closest approach on this segment, for the no-entry fallback.
+			u_near = clampf(-b / aa, 0.0, 1.0)
+		var nx: float = p.x + dx * u_near - from_pos.x
+		var nz: float = p.z + dz * u_near - from_pos.z
+		var n_sq: float = nx * nx + nz * nz
+		if n_sq < best_sq:
+			best_sq = n_sq
+			gate_point = Vector3(p.x + dx * u_near, 0.0, p.z + dz * u_near)
+			gate_velocity = v.lerp(qv, u_near)
+			gate_time_s = (float(i) + u_near) * dt
+		p = q
+		v = qv
+	gate_closes = best_sq < start_sq
+	return false
+
+
 # Puck rest height on the ice — disc bottom on y=0, cylinder half-height above (matches
 # Puck.ice_height / GameRules.PUCK_START_POS.y). A puck at this height with no vertical
 # speed is grounded; anything higher or moving vertically is airborne (ballistic).

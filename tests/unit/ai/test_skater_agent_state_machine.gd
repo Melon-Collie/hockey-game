@@ -1517,13 +1517,34 @@ func test_blade_gate_reaches_toward_the_line_when_still_closing() -> void:
 			"out-of-reach line → aim at its nearest point while closing")
 
 
-func test_blade_gate_chases_a_puck_already_past() -> void:
-	# Puck at x=15 moving +X; bot at x=10 is BEHIND its travel — no gate exists
-	# ahead, so fall back to the puck itself (chase from behind).
-	var puck_pos := Vector3(15, 0, 0)
+func test_blade_gate_chases_a_puck_that_is_genuinely_leaving() -> void:
+	# Puck 5 m up-ice of the bot and running for the far end at pace: nothing on
+	# its board-aware path comes back inside the horizon, so there is no gate to
+	# park at and the fallback is the puck itself (chase from behind).
+	#
+	# "Past our level" is NOT the test — that was the straight-ray model's
+	# version of this invariant, and inside a closed rink it is simply false: a
+	# puck ringing off the wall a metre away is past our level and coming
+	# straight back to us, which is a gate, not a chase. What still means "gone"
+	# is a path that never closes.
+	var puck_pos := Vector3(0, 0, 5)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			Vector3(10, 0, 1), puck_pos, Vector3(20, 0, 0))
-	assert_eq(gate, puck_pos, "a puck already past our level is chased, not gated")
+			Vector3.ZERO, puck_pos, Vector3(0, 0, 20))
+	assert_eq(gate, puck_pos, "a puck genuinely leaving is chased, not gated")
+
+
+func test_blade_gate_parks_for_a_puck_ringing_back_off_the_boards() -> void:
+	# The other half of the invariant above, and the reason it had to change: a
+	# puck heading INTO the near boards a couple of metres away caroms straight
+	# back through the bot's reach. Board-aware, that is the most gateable puck
+	# on the ice — park the blade and let it come.
+	var self_pos := Vector3(GameRules.INNER_HALF_WIDTH - 2.5, 0, 1)
+	var puck_pos := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, 0)
+	var gate: Vector3 = sm._blade_gate_on_puck_line(
+			self_pos, puck_pos, Vector3(20, 0, 0))
+	assert_ne(gate, puck_pos, "the carom back into reach is gated, not chased")
+	assert_lt(self_pos.distance_to(gate), _gate_reach() + 0.001,
+			"and the gate sits inside the blade's comfortable extension")
 
 
 func test_blade_gate_clamps_a_corner_rim_line_into_the_rink() -> void:
@@ -2203,3 +2224,54 @@ func test_carry_freezes_shot_aim_after_commit() -> void:
 	assert_eq(sm.get_state(), Agent.State.CARRY, "still pre-aiming")
 	assert_eq(sm._shot_aim_locked, Vector3(0, 0, -20),
 			"the committed shot aim is frozen — it stops tracking the carrier post-commit")
+
+
+# ── Wall kill: the blade goes ON the glass, not out on the puck's line ───────
+
+func test_wall_kill_puts_the_blade_on_the_boards_for_a_rim() -> void:
+	# A gate riding the boards is played by sealing the blade against the glass
+	# — a blade parked on the path line leaves exactly the gap the puck squirts
+	# through, which is the "can't retrieve off the boards" failure.
+	var on_path := Vector3(GameRules.INNER_HALF_WIDTH - 0.35, 0, 4.0)
+	var aim: Vector3 = SkaterAgentStateMachine._wall_kill_aim(on_path)
+	assert_almost_eq(aim.x, GameRules.INNER_HALF_WIDTH, 0.01,
+			"the blade target seals against the inner wall")
+	assert_almost_eq(aim.z, on_path.z, 0.01, "…without sliding along it")
+
+
+func test_wall_kill_honours_the_rounded_corners() -> void:
+	# In the corner the "wall" is an arc, so a straight per-axis distance would
+	# push the aim to the wrong place. Radially out from the corner centre is
+	# what the clamp gives us.
+	var centre := Vector2(GameRules.CORNER_CENTER_X, GameRules.CORNER_CENTER_Z)
+	var dir: Vector2 = Vector2(1, 1).normalized()
+	var on_path: Vector2 = centre + dir * (GameRules.INNER_CORNER_RADIUS - 0.4)
+	var aim: Vector3 = SkaterAgentStateMachine._wall_kill_aim(
+			Vector3(on_path.x, 0, on_path.y))
+	assert_almost_eq(Vector2(aim.x, aim.z).distance_to(centre),
+			GameRules.INNER_CORNER_RADIUS, 0.01,
+			"the corner aim lands on the arc, not on a phantom straight wall")
+
+
+func test_wall_kill_leaves_open_ice_alone() -> void:
+	var mid := Vector3(0, 0, 0)
+	assert_eq(SkaterAgentStateMachine._wall_kill_aim(mid), mid,
+			"nothing to seal against in open ice")
+
+
+func test_wall_kill_band_catches_a_puck_riding_exactly_on_the_boards() -> void:
+	# The band test must not be inferred from "did the aim move" — a rim already
+	# flush against the glass has zero gap, moves nowhere, and is the MOST
+	# boards-hugging case there is. It still has to read as a wall play.
+	var flush := Vector2(GameRules.INNER_HALF_WIDTH, 3.0)
+	assert_true(SkaterAgentStateMachine._in_wall_band(flush),
+			"a puck flush on the boards is a wall kill")
+	assert_false(SkaterAgentStateMachine._in_wall_band(Vector2(0.0, 0.0)),
+			"centre ice is not")
+
+
+func test_board_normal_points_into_the_rink() -> void:
+	var board: Vector3 = SkaterAgentStateMachine._board_normal_and_gap(
+			Vector2(GameRules.INNER_HALF_WIDTH - 0.4, 3.0))
+	assert_almost_eq(board.y, 0.4, 0.01, "gap to the wall")
+	assert_almost_eq(board.x, -1.0, 0.01, "normal points back toward centre ice")
