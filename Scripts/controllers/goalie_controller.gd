@@ -35,6 +35,14 @@ extends Node
 # `depth_conservative` survive only as rush-backflow anchors and tier dials.
 @export var depth_aggressive: float = 1.75
 @export var depth_base: float = 1.30
+# RESTING depth — middle of the blue paint, held while the play has not entered
+# the zone. BPS "C". Depth is otherwise solved from the races, but the races only
+# describe how far out a THREAT lets him come; a puck still up the ice is not a
+# threat, and pure angle geometry would happily park him at the ceiling forever
+# (challenging a puck 35 m away buys essentially no coverage, since the net
+# subtends almost nothing from there). Real goalies rest in the paint and watch.
+# The gate is a real rink landmark rather than a tuned distance — see
+# `_threat_is_in_zone`.
 @export var depth_conservative: float = 0.70
 @export var depth_defensive: float = 0.10
 # Minimum gap (m) the goalie keeps between himself and the threat while
@@ -46,9 +54,6 @@ extends Node
 # as a consequence of the goalie having a body.
 @export var challenge_standoff: float = 0.60
 @export var zone_post_z: float = 2.0
-@export var zone_aggressive_z: float = 8.0
-@export var zone_base_z: float = 12.0
-@export var zone_conservative_z: float = 20.0
 # How fast `_current_depth` lerps toward the depth-chart target — the
 # exponential settle that shapes ARRIVAL near the target. Big moves are
 # rate-capped by `depth_max_speed` below, and fast retreats under a genuine
@@ -997,7 +1002,6 @@ var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 # tricklers / board bounces must classify even below shot_speed_threshold).
 var _universal_shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
-var _depth_cfg: GoalieBehaviorRules.DepthConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 var _screen_cfg: GoalieBehaviorRules.ScreenConfig
 var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
@@ -1465,15 +1469,6 @@ func _build_rule_configs() -> void:
 	_zone_cfg = GoalieBehaviorRules.DefensiveZoneConfig.new()
 	_zone_cfg.zone_post_z = zone_post_z
 	_zone_cfg.rvh_early_angle = rvh_early_angle
-	_depth_cfg = GoalieBehaviorRules.DepthConfig.new()
-	_depth_cfg.zone_post_z = zone_post_z
-	_depth_cfg.zone_aggressive_z = zone_aggressive_z
-	_depth_cfg.zone_base_z = zone_base_z
-	_depth_cfg.zone_conservative_z = zone_conservative_z
-	_depth_cfg.depth_aggressive = depth_aggressive
-	_depth_cfg.depth_base = depth_base
-	_depth_cfg.depth_conservative = depth_conservative
-	_depth_cfg.depth_defensive = depth_defensive
 	_beaten_wide_cfg = GoalieBehaviorRules.BeatenWideConfig.new()
 	_beaten_wide_cfg.goalie_lateral_speed = t_push_speed
 	_beaten_wide_cfg.goalie_lateral_accel = lateral_accel
@@ -2803,7 +2798,8 @@ func _update_depth(delta: float) -> void:
 			_tracked_threat_position, _goal_line_z, _goal_center_x)
 	# Ceiling, not a curve — see GoalieDepthSolver's header. He challenges as far
 	# out as the races allow, and this is the furthest that is ever worth going.
-	c.ceiling_radius = depth_aggressive
+	c.ceiling_radius = depth_aggressive if _threat_is_in_zone(threat_dist) \
+			else depth_conservative
 	# Physical: never stand on (or past) the puck.
 	c.standoff_cap = threat_dist - challenge_standoff
 	c.lateral_cap = _lateral_tracking_cap(threat_dist)
@@ -2813,6 +2809,15 @@ func _update_depth(delta: float) -> void:
 	c.backdoor_cap = _backdoor_depth_cap()
 	_fill_rush_constraint(c)
 	_current_depth = GoalieDepthSolver.solve(_current_depth, delta, c)
+
+
+# Has the play actually entered the zone? Depth is solved from the races, but the
+# races only bound how far out a THREAT lets him come — they say nothing about a
+# puck that is not one yet, and geometry alone would hold him at the ceiling for a
+# puck at the far blue line. Gated on the real rink landmark (goal line to blue
+# line) rather than an authored distance, so it means "the play is in my end".
+func _threat_is_in_zone(threat_dist: float) -> bool:
+	return threat_dist <= GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
 
 
 # Lateral tracking cap — the anticipatory deke / walkout answer. How far out can

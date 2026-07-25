@@ -30,7 +30,7 @@ func test_bps_depth_anchors_match_real_crease_geometry() -> void:
 	assert_between(gc.depth_base, crease_top - 0.2, crease_top + 0.1,
 			"B depth = heels at the crease top")
 	assert_between(gc.depth_conservative, 0.4, 0.9,
-			"C depth = middle of the paint")
+			"C depth = middle of the paint (now the out-of-zone resting depth)")
 	assert_gt(gc.depth_aggressive, crease_top,
 			"A depth challenges past the crease top")
 	assert_lt(gc.depth_aggressive, crease_top + 0.7,
@@ -42,19 +42,18 @@ func test_bps_depth_anchors_match_real_crease_geometry() -> void:
 func test_long_range_depth_never_sinks_to_the_goal_line() -> void:
 	# A puck far away IN FRONT leaves a real goalie resting in the paint
 	# watching the play — D depth is behind-net/post play only (USA Hockey).
+	# Re-expressed against the LIVE model: depth is solved from the races now, and
+	# the races say nothing about a puck that is not yet a threat — so the ceiling
+	# is gated on the play having entered the zone, and outside it he rests in the
+	# paint. Asserts the two ends: resting outside, challenging inside.
 	var gc: GoalieController = _gc()
-	var cfg := GoalieBehaviorRules.DepthConfig.new()
-	cfg.zone_post_z = gc.zone_post_z
-	cfg.zone_aggressive_z = gc.zone_aggressive_z
-	cfg.zone_base_z = gc.zone_base_z
-	cfg.zone_conservative_z = gc.zone_conservative_z
-	cfg.depth_aggressive = gc.depth_aggressive
-	cfg.depth_base = gc.depth_base
-	cfg.depth_conservative = gc.depth_conservative
-	cfg.depth_defensive = gc.depth_defensive
-	var far: float = GoalieBehaviorRules.target_depth_for_puck_distance(35.0, cfg)
-	assert_almost_eq(far, gc.depth_conservative, 0.001,
-			"far-away puck in front → rest at conservative depth, not the goal line")
+	var zone_depth: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
+	assert_false(gc._threat_is_in_zone(35.0),
+			"a puck 35 m out has not entered the zone")
+	assert_true(gc._threat_is_in_zone(zone_depth - 1.0),
+			"a puck inside the blue line has")
+	assert_between(gc.depth_conservative, 0.4, 0.9,
+			"and the resting depth is the middle of the paint, not the goal line")
 
 
 # ── Rush retreat: speed-matched backflow (USA Hockey / Edge Ice Academy) ──────

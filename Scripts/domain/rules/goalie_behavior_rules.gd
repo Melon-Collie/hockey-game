@@ -134,8 +134,21 @@ static func is_puck_in_defensive_zone(
 	return puck_angle >= deg_to_rad(cfg.rvh_early_angle)
 
 # Buckley-chart target depth given horizontal distance from the goal line.
-# Piecewise-linear interpolation across four zones. Callers smooth toward
-# this target with their own lerp speed.
+# Piecewise-linear interpolation across four zones.
+#
+# ⚠️ NO LONGER THE LIVE GOALIE'S DEPTH MODEL. GoalieController solves depth from
+# the races instead (GoalieDepthSolver): a ceiling, a physical standoff, the
+# lateral tracking cap, the backdoor re-square race and the rush backflow. The
+# Buckley letters are emergent there rather than authored, because the real zones
+# are situational — A is a play ENTERING the zone, B a settled shot, C a live
+# lateral play, D the post — and reproducing them from distance alone put A in the
+# slot and B at the points, inverted (plan doc §5.7).
+#
+# Retained because `tests/unit/ai/shot_sim_harness.gd` still models the goalie
+# this way for its lateral-reach BAND instrument, which the bots' score_shoot is
+# calibrated against. That means the band instrument and the live goalie have
+# DIVERGED for the unconstrained (1v0) case; reconcile before using the band for
+# tuning again.
 static func target_depth_for_puck_distance(puck_z_dist: float, cfg: DepthConfig) -> float:
 	var t: float
 	if puck_z_dist <= cfg.zone_post_z:
