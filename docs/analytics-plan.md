@@ -119,7 +119,19 @@ shot map / xG-flow / heatmap, captured host-side and persisted:
   career heatmap). The **host** batch-posts the game's shot log at game-over
   (`CareerStatsReporter.report_shot_events`, one bulk insert), mapping shooter
   peer→steam via `NetworkManager.get_peer_steam_id` (0 for bots), under the same
-  online/ranked/share gates as the career row. Host-only avoids per-peer dup.
+  gates as the career row. Host-only avoids per-peer dup — and offline the local
+  player IS the host, so bot games log their shots too, which is what fills the
+  career heatmap for a mostly-offline player.
+- **Offline matches count the same as online ones** (decided 2026-07-25). The
+  upload gate is no longer session type: every real match posts, gated only on
+  `_achievements_active()` (excludes free play / tutorial / drills),
+  `share_gameplay_stats`, and a signed-in Steam identity (a row with no
+  `steam_id` is unreadable by the career screen, so it's dropped rather than
+  written). The distinction survives as *data* — `is_online` (session used the
+  network) and `is_ranked` (2+ humans actually shared the match, the stronger
+  signal and the one a human-only leaderboard would filter on) — so nothing is
+  foreclosed by counting bot games. `network_sessions` stays online-only; an
+  offline match has no link quality to report.
 - Client delivery: the host pushes the whole log once at game-over
   (`send_shot_events_to_all` / `receive_shot_events`, protocol v43 — a new `@rpc`
   shifts the config hash), wired ungated ahead of the Supabase gates (those govern

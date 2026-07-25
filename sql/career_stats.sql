@@ -46,7 +46,18 @@ create table if not exists public.career_stats (
     -- quantities carried on every row, the career xGF% numerator/denominator.
     xg_for                numeric default 0 not null,
     team_xg_for           numeric default 0 not null,
-    team_xg_against       numeric default 0 not null
+    team_xg_against       numeric default 0 not null,
+    -- Offline (vs bots) matches count toward the career exactly like online ones
+    -- — most play happens offline and a career that ignores it isn't the player's
+    -- career. This records which a row WAS, so the two remain separable later
+    -- (a human-only leaderboard, say) without having gated the upload. Older rows
+    -- predate offline uploads and are all online, hence the `true` default.
+    is_online             boolean default true not null,
+    -- Stronger than is_online: two or more humans actually shared the match (an
+    -- online lobby nobody joined is a bot game with extra steps). This is what a
+    -- human-only leaderboard would filter on. Older rows all met the old
+    -- two-human upload gate, hence the `true` default.
+    is_ranked             boolean default true not null
 );
 
 -- Migration for an existing DB (the create above is skipped once the table
@@ -63,6 +74,8 @@ alter table public.career_stats add column if not exists team_sog_against      i
 alter table public.career_stats add column if not exists xg_for                numeric default 0 not null;
 alter table public.career_stats add column if not exists team_xg_for           numeric default 0 not null;
 alter table public.career_stats add column if not exists team_xg_against       numeric default 0 not null;
+alter table public.career_stats add column if not exists is_online             boolean default true not null;
+alter table public.career_stats add column if not exists is_ranked             boolean default true not null;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 

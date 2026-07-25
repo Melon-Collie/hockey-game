@@ -3,10 +3,12 @@ class_name CareerStatsReporter extends RefCounted
 func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: String,
 		game_id: String, team_id: int, period_scores: Array, num_periods: int,
 		team_sog_for: int, team_sog_against: int,
-		team_xg_for: float, team_xg_against: float) -> void:
+		team_xg_for: float, team_xg_against: float,
+		is_online: bool, is_ranked: bool) -> void:
 	var body: Dictionary = record.stats.to_dict()
-	# steam_id is the career identity (cross-machine). Career stats only write in
-	# online (Steam) sessions, so a valid SteamID64 is always available here.
+	# steam_id is the career identity (cross-machine). Offline matches upload too,
+	# so this is no longer guaranteed by the session type — the caller drops the
+	# row when Steam isn't signed in, since an unattributed row is unreadable.
 	body["steam_id"] = SteamManager.steam_id
 	body["player_name"] = record.display_name()
 	body["game_version"] = BuildInfo.VERSION
@@ -26,6 +28,13 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 	# denominator. Team quantities like team_sog_*, so every player's row carries them.
 	body["team_xg_for"] = snappedf(team_xg_for, 0.001)
 	body["team_xg_against"] = snappedf(team_xg_against, 0.001)
+	# Offline (vs bots) games count toward the career the same as online ones;
+	# these record WHAT a row was, so the kinds can still be told apart later
+	# (e.g. a human-only leaderboard) without having gated the upload.
+	# is_online = the session used the network at all; is_ranked = two or more
+	# humans actually shared the match, which is the stronger of the two.
+	body["is_online"] = is_online
+	body["is_ranked"] = is_ranked
 	_post(SupabaseConfig.URL + "/rest/v1/career_stats", body)
 
 

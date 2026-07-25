@@ -4043,17 +4043,15 @@ func _on_game_over() -> void:
 				_stat_recorder.record_game(local.stats, outcome)
 				if _achievements != null:
 					_achievements.evaluate_career(_stat_recorder.totals())
-	# Supabase career row + network telemetry: online, shared-stats games only.
-	# Offline (Play vs Bots + free play) and tutorial don't upload — backend
-	# cost, and no cross-machine opponent pool worth ranking. (Bot-lobby games
-	# DO have a game_id and record local replays; they just stay off the
-	# backend.)
-	if NetworkManager.is_offline_mode:
-		return
-	# An online-VISIBLE lobby can still produce a solo-vs-bots match (nobody
-	# joined before the horn). Same no-real-opponent reasoning as above —
-	# ranked rows require the two-human latch.
-	if not _ranked_match:
+	# Supabase career row: EVERY real match counts, offline vs bots exactly like
+	# online. Most play happens offline, and a career page that ignores it isn't
+	# the player's career. The online/offline distinction is preserved as a column
+	# (`is_online`) rather than as an upload gate, so a human-only leaderboard
+	# stays possible later without having thrown the data away.
+	# Free play, tutorial, and drills are still excluded — game_over doesn't fire
+	# in those lobby-less modes, and `_achievements_active` is the established
+	# "this was a real match" predicate, so state it rather than rely on that.
+	if not _achievements_active():
 		return
 	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
 	# The Career screen's history reads from that backend data, so it stays empty by
@@ -4061,20 +4059,30 @@ func _on_game_over() -> void:
 	# Steam achievements/stats above are unaffected — they never touch the backend.
 	if not PlayerPrefs.share_gameplay_stats:
 		return
-	# Network-quality row: shares the offline + privacy gates (re-checked inside
-	# the helper) but not the career-specific team/score plumbing below, so
-	# report it here. Both roles are worth collecting (client = link quality,
-	# host = frame/input health).
-	_report_net_session("completed")
+	# Network-quality row: online only — an offline match has no link to measure.
+	# (The helper re-checks its own gates.)
+	if not NetworkManager.is_offline_mode:
+		_report_net_session("completed")
 	if local == null or local.team == null:
 		return
+	# Every backend row keys on steam_id. Online sessions always have one; an
+	# offline session without Steam running does not, and a row we can't attribute
+	# is unreadable by the career screen and pure pollution — so skip it.
+	if SteamManager.steam_id == 0:
+		return
+	# Two archival flags, not gates. `is_online` is the session type; `_ranked_match`
+	# is the stronger signal (two or more humans actually shared the match — an
+	# online lobby nobody joined is a bot game with extra steps), and it's what a
+	# human-only leaderboard would filter on.
+	var is_online: bool = not NetworkManager.is_offline_mode
 	_career_reporter.report(local, gf, ga, outcome,
 			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods,
 			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id],
-			_team_xg_sum(team_id), _team_xg_sum(1 - team_id))
+			_team_xg_sum(team_id), _team_xg_sum(1 - team_id), is_online, _ranked_match)
 	# Shot-event log (B1) — host-only: it holds the authoritative per-game buffer,
-	# so a single batch from the host avoids per-peer duplication. Same online /
-	# ranked / share gates as the career row (already applied above).
+	# so a single batch from the host avoids per-peer duplication. Offline the
+	# local player IS the host, so bot games log their shots too (which is what
+	# fills the career heatmap). Same share gate as the career row, applied above.
 	if NetworkManager.is_host and _advanced_stats_tracker != null:
 		_career_reporter.report_shot_events(
 				_advanced_stats_tracker.get_shot_events(), _game_id,
