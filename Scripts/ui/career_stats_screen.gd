@@ -25,6 +25,7 @@ var _totals_status: Label = null
 var _identity_label: Label = null
 var _hero_row: HBoxContainer = null
 var _heat_map: CareerHeatMap = null
+var _map_note: Label = null
 
 # The Recent Games and Replays tabs were designed for the old narrow column and
 # read fine; the shell is now full-bleed for the Career tab's sake, so those two
@@ -278,7 +279,8 @@ func _build_totals_tab() -> Control:
 	var map_spacer := Control.new()
 	map_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_head.add_child(map_spacer)
-	map_head.add_child(_ui_label("all games · brighter = more shots", 11, MenuStyle.TEXT_MUTED))
+	_map_note = _ui_label("offensive zone · brighter = more shots", 11, MenuStyle.TEXT_MUTED)
+	map_head.add_child(_map_note)
 	right_col.add_child(map_head)
 	_heat_map = CareerHeatMap.new()
 	_heat_map.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -327,8 +329,16 @@ func _refresh_totals() -> void:
 
 
 func _on_heatmap_received(buckets: Array) -> void:
-	if _heat_map != null:
-		_heat_map.configure(buckets)
+	if _heat_map == null:
+		return
+	_heat_map.configure(buckets)
+	# Shots taken from outside the offensive zone aren't drawn (clamping them to
+	# the top row would invent a hot band on the blue line), so say so rather
+	# than quietly losing them from the total.
+	if _map_note != null:
+		var outside: int = _heat_map.outside_zone_shots()
+		_map_note.text = "offensive zone · brighter = more shots" if outside == 0 \
+				else "offensive zone · brighter = more shots · %d outside" % outside
 
 
 func _on_totals_received(totals: Dictionary) -> void:
@@ -956,23 +966,43 @@ class CareerHeatMap extends Control:
 	const _HEAT_HIGH := Color(0.42, 0.83, 0.95, 1.0)
 	const _GOAL := Color(1.00, 0.85, 0.20, 1.0)
 
+	# The drawn region is the OFFENSIVE ZONE only, not the attacking half: shots
+	# from outside the blue line are rare, so half the panel was empty neutral-zone
+	# ice. Cropping to the zone is ~1.3x zoom where every cluster actually lives.
+	# One metre of lead-in above the line keeps the blue line itself visible as a
+	# reference edge rather than sitting exactly on the boundary.
+	const _LEAD_IN_M: float = 1.0
+
 	var _buckets: Array = []
 	var _peak: float = 1.0
 	var _scale: float = 1.0
 	var _origin := Vector2.ZERO
+	# Shots from outside the zone are counted rather than drawn — clamping them
+	# to the top row would invent a hot band along the blue line.
+	var _outside: int = 0
 
 	func configure(buckets: Array) -> void:
 		_buckets = buckets
 		_peak = 1.0
+		_outside = 0
 		for b: Variant in buckets:
 			var d: Dictionary = b as Dictionary
+			if float(d.get("bucket_z", 0)) > _top_z():
+				_outside += int(d.get("shots", 0))
+				continue
 			_peak = maxf(_peak, float(d.get("shots", 0)))
 		queue_redraw()
 
-	# Attacking-half rink (z in [-30, 0], x in [-13, 13]) -> local pixels, goal
+	func outside_zone_shots() -> int:
+		return _outside
+
+	static func _top_z() -> float:
+		return -(GameRules.BLUE_LINE_Z - _LEAD_IN_M)
+
+	# Offensive zone (z in [-30, top_z], x in [-13, 13]) -> local pixels, goal
 	# at the bottom.
 	func _p(rx: float, rz: float) -> Vector2:
-		return _origin + Vector2(rx * _scale, (-rz) * _scale)
+		return _origin + Vector2(rx * _scale, (_top_z() - rz) * _scale)
 
 	func _draw() -> void:
 		var w: float = size.x
@@ -980,20 +1010,41 @@ class CareerHeatMap extends Control:
 		if w <= 8.0 or h <= 8.0:
 			return
 		var half_w: float = GameRules.RINK_HALF_WIDTH
-		var half_l: float = GameRules.RINK_HALF_LENGTH
-		_scale = minf(w / (half_w * 2.0 + 1.0), h / (half_l + 1.0))
-		_origin = Vector2(w * 0.5, (h - half_l * _scale) * 0.5)
-		_draw_ice(half_w, half_l)
+		var depth: float = GameRules.RINK_HALF_LENGTH + _top_z()
+		_scale = minf(w / (half_w * 2.0 + 1.0), h / (depth + 1.0))
+		_origin = Vector2(w * 0.5, (h - depth * _scale) * 0.5)
+		_draw_ice(half_w)
 		_draw_buckets()
 		if _buckets.is_empty():
 			_draw_empty_note(w, h)
 
-	func _draw_ice(half_w: float, half_l: float) -> void:
-		var tl: Vector2 = _p(-half_w, 0.0)
-		var br: Vector2 = _p(half_w, -half_l)
-		draw_rect(Rect2(Vector2(tl.x, tl.y), Vector2(br.x - tl.x, br.y - tl.y)), _ICE, true)
-		draw_rect(Rect2(Vector2(tl.x, tl.y), Vector2(br.x - tl.x, br.y - tl.y)),
-				_BOARDS, false, 1.4)
+	# The zone outline carries the real rounded end boards (CORNER_RADIUS), so
+	# corner shots read as being in the corner rather than in a boxed-off square.
+	func _zone_outline(half_w: float) -> PackedVector2Array:
+		var far_z: float = -GameRules.RINK_HALF_LENGTH
+		var r: float = GameRules.CORNER_RADIUS
+		var pts := PackedVector2Array()
+		pts.append(_p(-half_w, _top_z()))
+		pts.append(_p(half_w, _top_z()))
+		pts.append(_p(half_w, far_z + r))
+		var steps: int = 10
+		var cx: float = half_w - r
+		var cz: float = far_z + r
+		for i: int in range(steps + 1):  # right corner, sweeping to the end boards
+			var a: float = -PI * 0.5 * (float(i) / float(steps))
+			pts.append(_p(cx + r * cos(a), cz + r * sin(a)))
+		for i: int in range(steps + 1):  # left corner, back up the far side
+			var a: float = -PI * 0.5 - PI * 0.5 * (float(i) / float(steps))
+			pts.append(_p(-cx + r * cos(a), cz + r * sin(a)))
+		pts.append(_p(-half_w, far_z + r))
+		return pts
+
+	func _draw_ice(half_w: float) -> void:
+		var outline: PackedVector2Array = _zone_outline(half_w)
+		draw_colored_polygon(outline, _ICE)
+		var closed := outline.duplicate()
+		closed.append(outline[0])
+		draw_polyline(closed, _BOARDS, 1.4)
 		# Blue line, goal line, and the net mouth — enough reference to read
 		# where a cluster sits without drawing a full rink diagram.
 		var blue_z: float = -GameRules.BLUE_LINE_Z
@@ -1002,9 +1053,10 @@ class CareerHeatMap extends Control:
 		draw_line(_p(-half_w, goal_z), _p(half_w, goal_z), _RED, 1.2)
 		var nhw: float = GameRules.NET_HALF_WIDTH
 		draw_line(_p(-nhw, goal_z), _p(nhw, goal_z), _GOAL, 2.4)
-		# Faceoff dots for scale.
+		# Zone faceoff circles for scale.
 		for fx: float in [-6.5, 6.5]:
 			draw_arc(_p(fx, -20.0), 4.5 * _scale, 0.0, TAU, 28, _RED, 0.8)
+			draw_circle(_p(fx, -20.0), maxf(1.2, 0.16 * _scale), _RED)
 
 	func _draw_buckets() -> void:
 		var cell: float = _scale  # buckets are 1 m
@@ -1015,10 +1067,9 @@ class CareerHeatMap extends Control:
 				continue
 			var bx: float = float(d.get("bucket_x", 0))
 			var bz: float = float(d.get("bucket_z", 0))
-			# Normalised buckets sit in the -Z attacking half; anything on the
-			# far side is stale data from before the view normalised, so skip it
-			# rather than drawing it off the panel.
-			if bz > 0.0:
+			# Outside the drawn zone (or, for stale pre-normalisation rows, the
+			# wrong end entirely) — counted in _outside, not drawn.
+			if bz > _top_z():
 				continue
 			var t: float = clampf(shots / _peak, 0.0, 1.0)
 			# sqrt keeps the low end visible — most buckets are one or two shots,
