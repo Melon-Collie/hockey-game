@@ -22,6 +22,14 @@ const _TAB_REPLAYS: int = 2
 # Career Totals tab.
 var _totals_content: VBoxContainer = null
 var _totals_status: Label = null
+var _identity_label: Label = null
+var _hero_row: HBoxContainer = null
+var _heat_map: CareerHeatMap = null
+
+# The Recent Games and Replays tabs were designed for the old narrow column and
+# read fine; the shell is now full-bleed for the Career tab's sake, so those two
+# keep their original measure instead of stretching across the screen.
+const _NARROW_TAB_WIDTH: float = 660.0
 
 # Recent Games tab. Each game renders as a card panel with score,
 # period breakdown, team-grouped player rows, and a Watch Replay button.
@@ -37,46 +45,83 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
+	# Full-bleed reading surface rather than a narrow centred card: the career
+	# page carries a shot map and wide stat groups, and the old 640 px column
+	# forced everything into a single cramped list. Same broadcast language as
+	# the post-game analytics screen.
 	var overlay := ColorRect.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.color = MenuStyle.SCRIM
+	overlay.color = Color(0.024, 0.039, 0.071, 0.96)
 	add_child(overlay)
 
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(center)
-
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(640.0, 0.0)
-	panel.add_theme_stylebox_override("panel", MenuStyle.panel(8, 32))
-	center.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 56)
+	margin.add_theme_constant_override("margin_right", 56)
+	margin.add_theme_constant_override("margin_top", 26)
+	margin.add_theme_constant_override("margin_bottom", 22)
+	add_child(margin)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 14)
-	panel.add_child(vbox)
+	vbox.add_theme_constant_override("separation", 12)
+	margin.add_child(vbox)
 
-	# Mirrors the options header: the close button sits in its own row, pushed
-	# right by an expanding spacer, and the title is a separate full-width
-	# centered label — so it centers against the panel, not against the button.
-	var close_row := HBoxContainer.new()
-	var close_spacer := Control.new()
-	close_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	close_row.add_child(close_spacer)
+	# Header row: title on the left, player identity centre, close on the right.
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
+	vbox.add_child(head)
+
+	var title := _display_label("CAREER", 30, MenuStyle.BROADCAST_CREAM)
+	head.add_child(title)
+
+	_identity_label = _ui_label("", 13, MenuStyle.TEXT_MUTED)
+	_identity_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_identity_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_identity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	head.add_child(_identity_label)
+
 	var close_btn: Button = MenuStyle.close_button()
 	close_btn.pressed.connect(hide)
 	SoundManager.wire_button(close_btn)
-	close_row.add_child(close_btn)
-	vbox.add_child(close_row)
-
-	var title := Label.new()
-	title.text = "Career"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	MenuStyle.apply_heading(title)
-	vbox.add_child(title)
+	head.add_child(close_btn)
 
 	vbox.add_child(_build_tab_switcher())
 
 	hide()
+
+
+# ── Shared visual language (mirrors PostGameAnalytics) ───────────────────────
+
+func _display_label(text: String, size: int, color: Color) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", color)
+	return l
+
+
+func _ui_label(text: String, size: int, color: Color) -> Label:
+	var l := _display_label(text, size, color)
+	l.add_theme_font_override("font", MenuStyle.UI_FONT)
+	return l
+
+
+func _broadcast_panel() -> PanelContainer:
+	var p := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = MenuStyle.BROADCAST_BG
+	style.set_corner_radius_all(8)
+	style.set_border_width_all(1)
+	style.border_color = MenuStyle.BROADCAST_SEP
+	style.set_content_margin_all(14)
+	p.add_theme_stylebox_override("panel", style)
+	return p
+
+
+func _section_title(text: String) -> Label:
+	var l := _ui_label(text.to_upper(), 12, MenuStyle.TEXT_MUTED)
+	return l
 
 
 # Mirrors OptionsPanel._build_tab_switcher: a horizontal Button bar tagged
@@ -98,11 +143,12 @@ func _build_tab_switcher() -> Control:
 	var content_margin := MarginContainer.new()
 	content_margin.add_theme_constant_override("margin_top", 16)
 	content_margin.add_theme_constant_override("margin_bottom", 8)
+	content_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	wrapper.add_child(content_margin)
 
 	var totals_tab := _build_totals_tab()
-	var recent_tab := _build_recent_games_tab()
-	var replays_tab := _build_replays_tab()
+	var recent_tab := _narrow(_build_recent_games_tab())
+	var replays_tab := _narrow(_build_replays_tab())
 	_tab_contents = [totals_tab, recent_tab, replays_tab]
 	content_margin.add_child(totals_tab)
 	content_margin.add_child(recent_tab)
@@ -122,6 +168,23 @@ func _build_tab_switcher() -> Control:
 
 	_activate_tab(0)
 	return wrapper
+
+
+# Holds a tab to its original measure inside the full-bleed shell, centred.
+func _narrow(tab: Control) -> Control:
+	var holder := HBoxContainer.new()
+	holder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var left := Control.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.add_child(left)
+	tab.custom_minimum_size = Vector2(_NARROW_TAB_WIDTH, tab.custom_minimum_size.y)
+	tab.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	holder.add_child(tab)
+	var right := Control.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.add_child(right)
+	return holder
 
 
 func _activate_tab(idx: int) -> void:
@@ -170,9 +233,14 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # ── Totals tab ───────────────────────────────────────────────────────────────
 
+# Layout: a hero row of headline figures across the top, then two columns —
+# grouped stat cards on the left, the career shot map on the right. The old
+# version was a single flat list of ~20 label/value rows, which buried the
+# numbers that matter and had nowhere to put the shot data.
 func _build_totals_tab() -> Control:
 	var tab := VBoxContainer.new()
-	tab.add_theme_constant_override("separation", 6)
+	tab.add_theme_constant_override("separation", 12)
+	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	_totals_status = Label.new()
 	_totals_status.text = "Loading..."
@@ -180,10 +248,62 @@ func _build_totals_tab() -> Control:
 	_totals_status.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	tab.add_child(_totals_status)
 
+	_hero_row = HBoxContainer.new()
+	_hero_row.add_theme_constant_override("separation", 10)
+	tab.add_child(_hero_row)
+
+	var body := HBoxContainer.new()
+	body.add_theme_constant_override("separation", 12)
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tab.add_child(body)
+
+	# Left: the stat groups.
+	var left := _broadcast_panel()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_stretch_ratio = 1.25
 	_totals_content = VBoxContainer.new()
-	_totals_content.add_theme_constant_override("separation", 6)
-	tab.add_child(_totals_content)
+	_totals_content.add_theme_constant_override("separation", 10)
+	left.add_child(_totals_content)
+	body.add_child(left)
+
+	# Right: the career shot map.
+	var right := _broadcast_panel()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.size_flags_stretch_ratio = 1.0
+	var right_col := VBoxContainer.new()
+	right_col.add_theme_constant_override("separation", 8)
+	right.add_child(right_col)
+	var map_head := HBoxContainer.new()
+	map_head.add_child(_section_title("Shot Map"))
+	var map_spacer := Control.new()
+	map_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_head.add_child(map_spacer)
+	map_head.add_child(_ui_label("all games · brighter = more shots", 11, MenuStyle.TEXT_MUTED))
+	right_col.add_child(map_head)
+	_heat_map = CareerHeatMap.new()
+	_heat_map.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_heat_map.custom_minimum_size = Vector2(0, 300)
+	right_col.add_child(_heat_map)
+	right_col.add_child(_build_heat_legend())
+	body.add_child(right)
 	return tab
+
+
+func _build_heat_legend() -> Control:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	var ramp := HeatRamp.new()
+	ramp.custom_minimum_size = Vector2(110, 10)
+	ramp.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(ramp)
+	row.add_child(_ui_label("shot volume", 11, MenuStyle.TEXT_MUTED))
+	var goal_dot := GoalDot.new()
+	goal_dot.custom_minimum_size = Vector2(12, 12)
+	goal_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(goal_dot)
+	row.add_child(_ui_label("goals scored", 11, MenuStyle.TEXT_MUTED))
+	return row
 
 
 const _STAT_SHARING_GATE_TEXT: String = \
@@ -203,6 +323,12 @@ func _refresh_totals() -> void:
 	_totals_status.text = "Loading..."
 	_totals_status.visible = true
 	_reporter.fetch_totals(_on_totals_received)
+	_reporter.fetch_shot_heatmap(SteamManager.steam_id, _on_heatmap_received)
+
+
+func _on_heatmap_received(buckets: Array) -> void:
+	if _heat_map != null:
+		_heat_map.configure(buckets)
 
 
 func _on_totals_received(totals: Dictionary) -> void:
@@ -212,40 +338,107 @@ func _on_totals_received(totals: Dictionary) -> void:
 		_totals_status.visible = true
 		return
 	_clear_totals_content()
-	_add_totals_row("Games Played",  str(_safe_int(totals.get("games_played", 0))))
-	_add_totals_row("Record (W-L)",  "%d-%d" % [_safe_int(totals.get("wins", 0)), _safe_int(totals.get("losses", 0))])
-	_add_totals_separator()
-	_add_totals_row("Goals",         str(_safe_int(totals.get("goals", 0))))
-	_add_totals_row("Assists",       str(_safe_int(totals.get("assists", 0))))
-	_add_totals_row("Points",        str(_safe_int(totals.get("points", 0))))
-	_add_totals_row("Shots on Goal", str(_safe_int(totals.get("shots_on_goal", 0))))
-	_add_totals_row("Hits",          str(_safe_int(totals.get("hits", 0))))
-	_add_totals_row("Hits Taken",    str(_safe_int(totals.get("hits_taken", 0))))
-	_add_totals_row("Shots Blocked", str(_safe_int(totals.get("shots_blocked", 0))))
-	_add_totals_row("Takeaways",     str(_safe_int(totals.get("takeaways", 0))))
-	_add_totals_row("Giveaways",     str(_safe_int(totals.get("giveaways", 0))))
-	var faceoff_taken: int = _safe_int(totals.get("faceoff_wins", 0)) + _safe_int(totals.get("faceoff_losses", 0))
-	_add_totals_row("Faceoff %", "%.1f%%" % _safe_float(totals.get("faceoff_pct", 0.0)) if faceoff_taken > 0 else "—")
-	_add_totals_separator()
-	# Advanced stats (analytics A1). PDO is null until games with tracked
-	# shots-on-goal exist (pre-A1 rows have zero SOG denominators) — show "—".
-	_add_totals_row("Shot Attempts (Corsi)", str(_safe_int(totals.get("shot_attempts", 0))))
-	_add_totals_row("Fenwick",       str(_safe_int(totals.get("fenwick", 0))))
+
+	var games: int = _safe_int(totals.get("games_played", 0))
+	var wins: int = _safe_int(totals.get("wins", 0))
+	var losses: int = _safe_int(totals.get("losses", 0))
+	var toi: int = _safe_int(totals.get("toi_seconds", 0))
+	_identity_label.text = "%s · %d game%s · %s on ice" % [
+		String(totals.get("player_name", "")), games,
+		"" if games == 1 else "s", _format_toi(toi)]
+
+	# Hero figures: the five numbers a player actually looks for.
+	_clear_children(_hero_row)
+	_add_hero("POINTS", str(_safe_int(totals.get("points", 0))), MenuStyle.GOLD)
+	_add_hero("GOALS", str(_safe_int(totals.get("goals", 0))), MenuStyle.BROADCAST_CREAM)
+	_add_hero("ASSISTS", str(_safe_int(totals.get("assists", 0))), MenuStyle.BROADCAST_CREAM)
+	_add_hero("RECORD", "%d-%d" % [wins, losses], MenuStyle.BROADCAST_CREAM)
+	_add_hero("P/60", "%.2f" % _safe_float(totals.get("points_per_60", 0.0)),
+			MenuStyle.BROADCAST_CREAM)
+
+	# Grouped cards rather than one 20-row list.
+	var faceoff_taken: int = _safe_int(totals.get("faceoff_wins", 0)) \
+			+ _safe_int(totals.get("faceoff_losses", 0))
+	_add_stat_group("Scoring", [
+		["Shots on goal", str(_safe_int(totals.get("shots_on_goal", 0)))],
+		["Shooting %", "%.1f%%" % (100.0 * float(_safe_int(totals.get("goals", 0)))
+				/ maxf(float(_safe_int(totals.get("shots_on_goal", 0))), 1.0))
+				if _safe_int(totals.get("shots_on_goal", 0)) > 0 else "—"],
+		["G/60", "%.2f" % _safe_float(totals.get("goals_per_60", 0.0))],
+		["A/60", "%.2f" % _safe_float(totals.get("assists_per_60", 0.0))],
+	])
+	# Advanced group. PDO / xGF% are null until games with the tracked columns
+	# exist (older rows carry zero denominators) — show an em dash, not a zero.
 	var pdo: Variant = totals.get("pdo", null)
-	_add_totals_row("PDO", "%d" % _safe_int(pdo) if pdo != null else "—")
-	_add_totals_row("Expected Goals (xG)", "%.2f" % _safe_float(totals.get("xg_for", 0.0)))
-	_add_totals_row("Goals Above Expected", "%+.2f" % _safe_float(totals.get("goals_above_expected", 0.0)))
 	var xgf: Variant = totals.get("xgf_pct", null)
-	_add_totals_row("xGF %", "%.1f%%" % _safe_float(xgf) if xgf != null else "—")
-	_add_totals_separator()
-	_add_totals_row("+/-",           "%+d" % _safe_int(totals.get("plus_minus", 0)))
-	_add_totals_row("Goals For",     str(_safe_int(totals.get("goals_for", 0))))
-	_add_totals_row("Goals Against", str(_safe_int(totals.get("goals_against", 0))))
-	_add_totals_separator()
-	_add_totals_row("Time on Ice",   _format_toi(totals.get("toi_seconds", 0)))
-	_add_totals_row("G/60",          "%.2f" % _safe_float(totals.get("goals_per_60", 0.0)))
-	_add_totals_row("A/60",          "%.2f" % _safe_float(totals.get("assists_per_60", 0.0)))
-	_add_totals_row("P/60",          "%.2f" % _safe_float(totals.get("points_per_60", 0.0)))
+	_add_stat_group("Chances", [
+		["Shot attempts (Corsi)", str(_safe_int(totals.get("shot_attempts", 0)))],
+		["Fenwick", str(_safe_int(totals.get("fenwick", 0)))],
+		["Expected goals", "%.2f" % _safe_float(totals.get("xg_for", 0.0))],
+		["Goals above expected", "%+.2f" % _safe_float(totals.get("goals_above_expected", 0.0))],
+		["xGF %", "%.1f%%" % _safe_float(xgf) if xgf != null else "—"],
+		["PDO", "%d" % _safe_int(pdo) if pdo != null else "—"],
+	], true)
+	_add_stat_group("Two-way", [
+		["+/-", "%+d" % _safe_int(totals.get("plus_minus", 0))],
+		["Takeaways", str(_safe_int(totals.get("takeaways", 0)))],
+		["Giveaways", str(_safe_int(totals.get("giveaways", 0)))],
+		["Faceoff %", "%.1f%%" % _safe_float(totals.get("faceoff_pct", 0.0))
+				if faceoff_taken > 0 else "—"],
+	])
+	_add_stat_group("Physical", [
+		["Hits", str(_safe_int(totals.get("hits", 0)))],
+		["Hits taken", str(_safe_int(totals.get("hits_taken", 0)))],
+		["Shots blocked", str(_safe_int(totals.get("shots_blocked", 0)))],
+	])
+
+
+# One headline figure: big value over a small caps label.
+func _add_hero(label_text: String, value_text: String, color: Color) -> void:
+	var tile := _broadcast_panel()
+	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 0)
+	tile.add_child(col)
+	var value := _display_label(value_text, 38, color)
+	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(value)
+	var caption := _ui_label(label_text, 10, MenuStyle.TEXT_MUTED)
+	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(caption)
+	_hero_row.add_child(tile)
+
+
+# A titled group of label/value rows. `advanced` tags the group with the
+# analytics accent — these are the stats no other hockey game surfaces.
+func _add_stat_group(title: String, rows: Array, advanced: bool = false) -> void:
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	head.add_child(_section_title(title))
+	if advanced:
+		var tag := _ui_label("ADVANCED", 9, MenuStyle.GOLD)
+		tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		head.add_child(tag)
+	_totals_content.add_child(head)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 4)
+	_totals_content.add_child(grid)
+	for row: Variant in rows:
+		var pair: Array = row as Array
+		var lbl := _ui_label(String(pair[0]), 13, MenuStyle.TEXT_DIM)
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(lbl)
+		var val := _display_label(String(pair[1]), 16, MenuStyle.BROADCAST_CREAM)
+		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		grid.add_child(val)
+
+
+func _clear_children(node: Node) -> void:
+	for child: Node in node.get_children():
+		child.queue_free()
 
 
 func _add_totals_row(label_text: String, value_text: String) -> void:
@@ -739,3 +932,128 @@ static func _format_toi(seconds: Variant) -> String:
 	var s: int = _safe_int(seconds)
 	var minutes: int = s / 60
 	return "%d:%02d" % [minutes, s % 60]
+
+
+# ── Career shot map ──────────────────────────────────────────────────────────
+
+# Attacking-end shot density over a player's whole career. The buckets arrive
+# already normalised to one attacking end by the shot_heatmap view (team 1's
+# shots are rotated 180°), so a player who has skated both ends still reads as
+# one coherent map — and their off-wing tendency survives the fold rather than
+# cancelling itself out.
+#
+# Drawn goal-at-the-bottom: the attacking half is ~26 m wide by ~30 m deep, which
+# fills a portrait panel far better than the landscape full-rink view the
+# post-game map uses.
+class CareerHeatMap extends Control:
+	const _ICE := Color(0.075, 0.098, 0.141, 1.0)
+	const _BOARDS := Color(0.24, 0.27, 0.33, 1.0)
+	const _RED := Color(0.69, 0.31, 0.35, 0.70)
+	const _BLUE := Color(0.23, 0.44, 0.69, 0.70)
+	# Sequential ramp: one hue, dim -> bright. On a dark surface brightness is
+	# the magnitude channel (the inverse of light-mode's light -> dark).
+	const _HEAT_LOW := Color(0.13, 0.28, 0.52, 1.0)
+	const _HEAT_HIGH := Color(0.42, 0.83, 0.95, 1.0)
+	const _GOAL := Color(1.00, 0.85, 0.20, 1.0)
+
+	var _buckets: Array = []
+	var _peak: float = 1.0
+	var _scale: float = 1.0
+	var _origin := Vector2.ZERO
+
+	func configure(buckets: Array) -> void:
+		_buckets = buckets
+		_peak = 1.0
+		for b: Variant in buckets:
+			var d: Dictionary = b as Dictionary
+			_peak = maxf(_peak, float(d.get("shots", 0)))
+		queue_redraw()
+
+	# Attacking-half rink (z in [-30, 0], x in [-13, 13]) -> local pixels, goal
+	# at the bottom.
+	func _p(rx: float, rz: float) -> Vector2:
+		return _origin + Vector2(rx * _scale, (-rz) * _scale)
+
+	func _draw() -> void:
+		var w: float = size.x
+		var h: float = size.y
+		if w <= 8.0 or h <= 8.0:
+			return
+		var half_w: float = GameRules.RINK_HALF_WIDTH
+		var half_l: float = GameRules.RINK_HALF_LENGTH
+		_scale = minf(w / (half_w * 2.0 + 1.0), h / (half_l + 1.0))
+		_origin = Vector2(w * 0.5, (h - half_l * _scale) * 0.5)
+		_draw_ice(half_w, half_l)
+		_draw_buckets()
+		if _buckets.is_empty():
+			_draw_empty_note(w, h)
+
+	func _draw_ice(half_w: float, half_l: float) -> void:
+		var tl: Vector2 = _p(-half_w, 0.0)
+		var br: Vector2 = _p(half_w, -half_l)
+		draw_rect(Rect2(Vector2(tl.x, tl.y), Vector2(br.x - tl.x, br.y - tl.y)), _ICE, true)
+		draw_rect(Rect2(Vector2(tl.x, tl.y), Vector2(br.x - tl.x, br.y - tl.y)),
+				_BOARDS, false, 1.4)
+		# Blue line, goal line, and the net mouth — enough reference to read
+		# where a cluster sits without drawing a full rink diagram.
+		var blue_z: float = -GameRules.BLUE_LINE_Z
+		draw_line(_p(-half_w, blue_z), _p(half_w, blue_z), _BLUE, 2.0)
+		var goal_z: float = -GameRules.GOAL_LINE_Z
+		draw_line(_p(-half_w, goal_z), _p(half_w, goal_z), _RED, 1.2)
+		var nhw: float = GameRules.NET_HALF_WIDTH
+		draw_line(_p(-nhw, goal_z), _p(nhw, goal_z), _GOAL, 2.4)
+		# Faceoff dots for scale.
+		for fx: float in [-6.5, 6.5]:
+			draw_arc(_p(fx, -20.0), 4.5 * _scale, 0.0, TAU, 28, _RED, 0.8)
+
+	func _draw_buckets() -> void:
+		var cell: float = _scale  # buckets are 1 m
+		for b: Variant in _buckets:
+			var d: Dictionary = b as Dictionary
+			var shots: float = float(d.get("shots", 0))
+			if shots <= 0.0:
+				continue
+			var bx: float = float(d.get("bucket_x", 0))
+			var bz: float = float(d.get("bucket_z", 0))
+			# Normalised buckets sit in the -Z attacking half; anything on the
+			# far side is stale data from before the view normalised, so skip it
+			# rather than drawing it off the panel.
+			if bz > 0.0:
+				continue
+			var t: float = clampf(shots / _peak, 0.0, 1.0)
+			# sqrt keeps the low end visible — most buckets are one or two shots,
+			# and a linear ramp renders them almost invisible next to a hot slot.
+			var col: Color = _HEAT_LOW.lerp(_HEAT_HIGH, sqrt(t))
+			col.a = 0.30 + 0.65 * sqrt(t)
+			var top_left: Vector2 = _p(bx - 0.5, bz + 0.5)
+			draw_rect(Rect2(top_left, Vector2(cell, cell)), col, true)
+			var goals: int = int(d.get("goals", 0))
+			if goals > 0:
+				var centre: Vector2 = _p(bx, bz)
+				draw_circle(centre, maxf(2.0, cell * 0.28), _GOAL)
+
+	func _draw_empty_note(w: float, h: float) -> void:
+		var font: Font = MenuStyle.UI_FONT
+		if font == null:
+			return
+		draw_string(font, Vector2(0.0, h * 0.5), "No shots recorded yet",
+				HORIZONTAL_ALIGNMENT_CENTER, w, 13, MenuStyle.TEXT_MUTED)
+
+
+# Legend swatch: the density ramp as a horizontal gradient.
+class HeatRamp extends Control:
+	func _draw() -> void:
+		var steps: int = 24
+		var step_w: float = size.x / float(steps)
+		for i: int in steps:
+			var t: float = float(i) / float(steps - 1)
+			var col: Color = CareerHeatMap._HEAT_LOW.lerp(CareerHeatMap._HEAT_HIGH, t)
+			col.a = 0.30 + 0.65 * t
+			draw_rect(Rect2(Vector2(float(i) * step_w, 0.0),
+					Vector2(step_w + 1.0, size.y)), col, true)
+
+
+# Legend swatch: a goal marker.
+class GoalDot extends Control:
+	func _draw() -> void:
+		draw_circle(Vector2(size.x * 0.5, size.y * 0.5), 4.0, CareerHeatMap._GOAL)

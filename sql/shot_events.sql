@@ -55,17 +55,26 @@ alter table public.shot_events add constraint shot_events_sane_ranges check (
 -- Per-player shot density on a 1 m grid: count, summed xG, and goals per bucket.
 -- The career heatmap reads this filtered by steam_id (bots, steam_id 0, are their
 -- own harmless bucket the screen ignores). DROP + CREATE per the career_stats note.
+--
+-- ATTACKING-END NORMALISED. Team 0 attacks -Z and team 1 attacks +Z, so raw
+-- coordinates put a player's shots in two mirrored clusters and a career heatmap
+-- of someone who has played both sides is meaningless. Team 1's shots are rotated
+-- 180° ((x,z) -> (-x,-z)) into team 0's attacking frame, which preserves
+-- left/right handedness relative to the direction of attack — so a player's
+-- off-wing tendency survives the fold instead of cancelling itself out.
 drop view if exists public.shot_heatmap;
 create view public.shot_heatmap
 with (security_invoker = true) as
  SELECT steam_id,
-    round(x)::int AS bucket_x,
-    round(z)::int AS bucket_z,
+    round(CASE WHEN team_id = 1 THEN -x ELSE x END)::int AS bucket_x,
+    round(CASE WHEN team_id = 1 THEN -z ELSE z END)::int AS bucket_z,
     count(*) AS shots,
     round(sum(xg), 3) AS xg,
     sum(CASE WHEN outcome = 'goal'::text THEN 1 ELSE 0 END) AS goals
    FROM shot_events
   WHERE steam_id IS NOT NULL
-  GROUP BY steam_id, round(x)::int, round(z)::int;
+  GROUP BY steam_id,
+    round(CASE WHEN team_id = 1 THEN -x ELSE x END)::int,
+    round(CASE WHEN team_id = 1 THEN -z ELSE z END)::int;
 
 grant select on public.shot_heatmap to anon;

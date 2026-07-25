@@ -40,6 +40,16 @@ func fetch_recent_games(steam_id: int, limit: int, callback: Callable) -> void:
 	}, callback)
 
 
+# Career shot heatmap: the player's 1 m-grid shot buckets, already normalised to
+# one attacking end by the shot_heatmap view. Calls back with an Array of
+# {bucket_x, bucket_z, shots, xg, goals}; empty on error or no shots.
+func fetch_shot_heatmap(steam_id: int, callback: Callable) -> void:
+	var url: String = "%s/rest/v1/shot_heatmap?steam_id=eq.%d" % [
+		SupabaseConfig.URL, steam_id
+	]
+	_fetch_array(url, callback)
+
+
 func fetch_totals(callback: Callable) -> void:
 	var url: String = "%s/rest/v1/career_totals?steam_id=eq.%d" % [
 		SupabaseConfig.URL, SteamManager.steam_id
@@ -107,6 +117,28 @@ func _call_rpc(name: String, body: Dictionary, callback: Callable) -> void:
 	var err: Error = req.request(url, _write_headers(), HTTPClient.METHOD_POST, JSON.stringify(body))
 	if err != OK:
 		push_warning("CareerStatsReporter: RPC %s failed: %s" % [name, error_string(err)])
+		req.queue_free()
+		callback.call([])
+
+
+# Like _fetch, but hands the caller the whole result array rather than its first
+# row (the heatmap is many rows per player).
+func _fetch_array(url: String, callback: Callable) -> void:
+	var root: Window = (Engine.get_main_loop() as SceneTree).root
+	var req := HTTPRequest.new()
+	root.add_child(req)
+	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, body_bytes: PackedByteArray) -> void:
+		if code == 200:
+			var parsed: Variant = JSON.parse_string(body_bytes.get_string_from_utf8())
+			callback.call((parsed as Array) if parsed is Array else [])
+		else:
+			push_warning("CareerStatsReporter: GET returned HTTP %d%s" % [code, _body_detail(body_bytes)])
+			callback.call([])
+		req.queue_free()
+	)
+	var err: Error = req.request(url, _read_headers())
+	if err != OK:
+		push_warning("CareerStatsReporter: GET failed: %s" % error_string(err))
 		req.queue_free()
 		callback.call([])
 
