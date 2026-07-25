@@ -780,6 +780,55 @@ Each is individually defensible modern doctrine; the question is whether their
 
 ---
 
+### 5.7 The whole slot sits at maximum challenge depth — open question
+
+Prompted by "is the goalie too far out when players are in close?". Measured
+against the live controller, stationary threat, dead centre
+(`tests/unit/ai/test_goalie_depth_curve.gd`):
+
+| threat dist | settled radius | gap to threat |
+|---|---|---|
+| 1.0 m | 0.93 | +0.07 |
+| 2.0 m | 1.75 | +0.25 |
+| 3.0 m | **1.75** | +1.25 |
+| 5.0 m | **1.75** | +3.25 |
+| 8.0 m | **1.75** | +6.25 |
+| 12.0 m | 1.30 | +10.70 |
+
+Crease top is **1.37 m**; `depth_aggressive` is **1.75 m**. Two observations:
+
+1. **The chart holds FULL aggressive depth flat from 2 m to 8 m** — the entire
+   slot — so the goalie is ~0.38 m *outside his crease* for every dangerous shot.
+   The chart's own doc-block describes B (crease top, `depth_base` 1.30) as *"where
+   MOST shots are faced"*, but B is not reached until `zone_base_z` = 12 m, out
+   past the top of the circles. **The configuration inverts the documented
+   intent:** A is the slot depth and B is the point depth.
+2. **Only the rush backflow ever pulls him in**, and it is gated on
+   `rush_min_closing_speed` = 1.5 m/s. So a fast rush retreats him correctly, but a
+   carrier who **cuts into the slot and stops**, **dangles in tight**, or **moves
+   laterally** gets no backflow at all — flat 1.75 m. That is exactly the
+   "he's still way out and I'm right on top of him" case.
+
+**R1 changes the calculus here, which is why this is worth revisiting now.** The
+aggressive chart is justified in its doc-block by "at these shot speeds a slot shot
+leaves almost no lateral reaction window, so cutting the angle is what makes the
+save, not reflexes" — reasoning written for a goalie who is *never wrong about
+where the shot is going*. A goalie who can now be deceived (§5.1b) pays a new cost
+for depth: a misread at 1.75 m radius is a longer recovery than the same misread at
+1.30. Challenge depth was tuned against omniscience and has not been re-examined
+since omniscience was removed.
+
+Candidate directions, none committed:
+- **Narrow `zone_aggressive_z`** (8 m → ~4-5 m) so A is a genuine "clean look from
+  distance" depth and the slot settles at B, matching the doc-block.
+- **Drop the backflow's speed gate**, or make the engage condition proximity-based
+  rather than closing-speed-based, so a settled slot threat also pulls him in.
+- **Leave it** — it may simply read as a confident goalie, and the measured save
+  rates (6/14 on top-corner shots from 5–9 m) are not those of a wall.
+
+Wants a playtest read on which of those matches the feel; the instrument is
+committed either way.
+
 ### 5.6 Interaction with the bot AI — R1 is a provable no-op for bots
 
 The bots do not merely coexist with the goalie model, they **mirror it**.
