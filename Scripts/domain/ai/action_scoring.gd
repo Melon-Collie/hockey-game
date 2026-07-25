@@ -175,7 +175,22 @@ const SLOT_RADIUS_M: float = 6.0
 # (GoalieController's pose), the exact span the shot-outcome sim measures
 # saves with. The old 0.60 undersold the live splay by 0.24 m and left the
 # planning model phantom low-corner windows the real keeper closes.
-const HOLE_BAND_CORE: Array[float] = [0.84, 0.40]
+# DERIVED from GoalieAnatomy, not copied from it — change a collider or a pose
+# offset and the planner's cover follows without anyone remembering to.
+#   LOW  = the butterfly's splayed pad edge (PAD_LOCAL_OFFSET + the rotated pad
+#          half-width). Reproduces the previous 0.84 exactly.
+#   HIGH = the TORSO half-width. The previous 0.40 claimed to be the "stance
+#          core" but matched nothing in the body: the torso is 0.26 and a
+#          resting glove's outer edge is 0.545, so 0.40 sat between two real
+#          quantities and equalled neither. The torso is the honest zero-reaction
+#          floor — it is what is covered no matter where the hands are — and the
+#          hands are already modelled ON TOP of it, per-side and from their
+#          replicated positions, by _band_cover's hand race. Anything the resting
+#          glove adds is that race's job, not a constant's.
+static var HOLE_BAND_CORE: Array[float] = [
+		GoalieAnatomy.butterfly_pad_edge_half_width(),
+		GoalieAnatomy.torso_half_width(),
+]
 # Standing LOW core: the widest thing a standing goalie covers along the ice
 # with NO reaction. Two surfaces are in play and the OUTER one owns the
 # silhouette:
@@ -194,14 +209,19 @@ const HOLE_BAND_CORE: Array[float] = [0.84, 0.40]
 #
 # Not a tuning constant — a surface the model could not previously see.
 static var LOW_CORE_STANDING_M: float = maxf(
-		GoalieBehaviorRules.STANDING_PAD_CENTER_X_M
-		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5,
+		GoalieAnatomy.standing_pad_column_half_width(),
 		GoalieStickRules.standing_lateral_reach())
 # Reaction-gated extension to the placement. LOW has none of its own any more:
 # the pad column's widening IS the butterfly drop (core lerp), and everything
 # beyond it is the real lateral push (_goalie_lateral_reach in _band_cover) —
 # the old 0.15 "pad push" was a stand-in for the push term that now exists.
-const HOLE_BAND_EXT: Array[float] = [0.0, 0.45]
+# HIGH's reaction-gated extension: everything between the always-covered torso
+# and a fully deployed glove. Derived, so CORE + EXT is the real reach by
+# construction rather than by two numbers happening to sum to it.
+static var HOLE_BAND_EXT: Array[float] = [
+		0.0,
+		GoalieAnatomy.deployed_hand_half_width() - GoalieAnatomy.torso_half_width(),
+]
 const HOLE_BAND_LOFT: Array[int] = [                       # loft the band's hole is shot with
 		ShotMechanics.ELEVATION_FLAT,   # LOW  → flat
 		ShotMechanics.ELEVATION_HIGH,   # HIGH → roof it
@@ -393,6 +413,19 @@ static func _band_cover(band: int, t_read: float, goalie_down: bool,
 		var d_left: float = goalie_pads.x * float(side) + _pad_half_extent(goalie_pads.y)
 		var d_right: float = goalie_pads.z * float(side) + _pad_half_extent(goalie_pads.w)
 		var measured: float = maxf(maxf(d_left, d_right), 0.0)
+		# THE STICK, which reaches wider than the pads do and is the surface
+		# actually making these saves. The declared branch below gets it through
+		# LOW_CORE_STANDING_M; this branch — the POSE-FED one, which is the path
+		# gameplay actually runs (carrier.gd feeds the replicated pads) — was
+		# still pads-only, so the stick fix reached the fallback and missed the
+		# live path. Measured: the flat corner reads 0.62-1.00 here while the
+		# keeper saves it 24/24 with PAD/STICK
+		# (tests/unit/ai/test_slot_shot_value_truth.gd).
+		#
+		# maxf, because these are two surfaces and the silhouette is the OUTER
+		# one — the splayed butterfly pad (0.84) already exceeds the paddle, so
+		# this only binds while he is upright, which is exactly when it should.
+		measured = maxf(measured, GoalieStickRules.standing_lateral_reach())
 		if goalie_down:
 			return measured + edge
 		var drop_rate: float = (HOLE_BAND_CORE[HOLE_BAND_LOW] - LOW_CORE_STANDING_M) \
@@ -1369,6 +1402,29 @@ static func _hole_open_angle(
 	var u: float = goalie_pos.x - shooter.x
 	var dv: float = forward - (goalie_pos.z - attacking_goal.z) * net_normal_z
 	var t_reach: float = sqrt(u * u + dv * dv) / pace
+	# ARRIVAL HEIGHT AT HIS BODY. The pace above is solved so the arc clears the
+	# pad-top seam AT THE GOAL LINE, which is what makes it a top-corner shot. But
+	# the SAVE happens here, at t_reach, and a still-rising arc is lower here than
+	# at the line — so a look scored as a top-corner target can meet him at pad
+	# height. Measured: a 3 m HIGH pick fires at pt 0.12, arrives ~0.45 m at a
+	# keeper 1.32 m away, and is stick-saved 24/24; the 5 m pick arrives ~0.64 m
+	# and is pad-saved 22/24 (tests/unit/ai/test_slot_shot_value_truth.gd).
+	#
+	# So the band that CONTESTS a shot follows its height where it meets him, not
+	# the hole it was aimed at. Below the seam it is a LOW-band shot into the pads
+	# and stick, and it is not a top-corner target at all.
+	#
+	# NOTE this is deliberately a REJECTION, not a change to the pace. Re-solving
+	# the pace against the goalie gap was tried and reverted: it slows the shot
+	# enough for his glove to deploy and kills the HIGH band everywhere, including
+	# looks that genuinely score. The shot must stay fast; only the claim that it
+	# arrives high is withdrawn.
+	if band == HOLE_BAND_HIGH:
+		var vy_high: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+		var y_at_body: float = vy_high * t_reach \
+				- 0.5 * GRAVITY_M_S2 * t_reach * t_reach
+		if y_at_body < GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M:
+			return 0.0
 	# Delayed read: the goalie can't start reacting until he SEES the release
 	# — the puck must EMERGE past the worst screener (screen_dist_m / pace,
 	# the same sightline occlusion the live goalie suffers), and a

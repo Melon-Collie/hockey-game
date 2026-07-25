@@ -988,7 +988,10 @@ static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: Mo
 #     residual gap is the openness alone (≈ 0 set, up to ~0.36 mid-slide).
 # `openness` is GoalieNetworkState.five_hole_openness; `is_down` is its
 # is_down() stance family.
-const PAD_BOX_WIDTH_M: float = 0.28
+# Aliases onto GoalieAnatomy, which owns the goalie's dimensions. STANDING pad
+# CENTRE is inboard of the butterfly offset: upright, the pads sit tucked under
+# him; the butterfly is what splays them out to PAD_LOCAL_OFFSET_M.
+const PAD_BOX_WIDTH_M: float = GoalieAnatomy.PAD_BOX_WIDTH_M
 const STANDING_PAD_CENTER_X_M: float = 0.22
 
 # Stick geometry, aim and cover now live in GoalieStickRules — the blade is a
