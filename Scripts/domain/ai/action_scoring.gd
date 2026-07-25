@@ -2058,10 +2058,11 @@ static func goalie_arc_match_x(
 	return attacking_goal.x + clampf(arc_x, -radius, radius)
 
 
-# The goalie SQUARED to a puck at `puck_pos` — arc-matched and set, no forced
-# motion. This is the right model for a CARRY destination: the keeper tracks the
-# puck continuously as the bot skates there (gradual move, not a relocation it
-# reacts to from a standstill), so on arrival it is square, full stop. Using the
+# The goalie squared to a puck at `puck_pos` AS FAR AS HIS PUSH RATE ALLOWS —
+# arc-matched, no reaction delay, but not teleported. The keeper tracks the puck
+# continuously as the bot skates there (gradual move, not a relocation he reacts
+# to from a standstill), so he is granted no reaction delay; he is still bounded
+# by how fast he can actually skate sideways. Using the
 # react-then-slide predict_goalie_pos for a carry under-tracks the keeper —
 # especially at a short release lookahead, where it is predicted to fall short of
 # arc-matching a diagonal step and leak the far side, which had the bot chasing an
@@ -2076,8 +2077,34 @@ static func goalie_squared_pos(
 	# time in scope keep the pure square.
 	var based: Vector3 = _at_depth(goalie_now, attacking_goal, planned_goalie_depth(
 			goalie_now, attacking_goal, puck_pos, travel_time_s, closing_speed_m_s))
-	return Vector3(goalie_arc_match_x(based, attacking_goal, puck_pos),
-			based.y, based.z)
+	var target_x: float = goalie_arc_match_x(based, attacking_goal, puck_pos)
+	# RATE BOUND. "Square on arrival, full stop" is only true if he can physically
+	# get there: staying arc-matched to a carrier costs him lateral travel, and
+	# the deeper he is COMMITTED the more travel the same drive costs him (the
+	# arc-x he chases scales with his own depth). A keeper challenging at 1.75 m
+	# cannot re-square to a hard cut in tight, which is precisely why driving at
+	# an aggressive goalie is the real answer to one — and the un-bounded model
+	# made that play worth nothing, so bots bailed to a teammate instead.
+	#
+	# This is the DUAL of the cap the goalie already applies to himself
+	# (GoalieBehaviorRules.lateral_tracking_cap, r <= push*d/v): he refuses depth
+	# he cannot track from, and here the carrier reads the same race from the
+	# other side.
+	#
+	# NO reaction delay is subtracted, and that is the whole difference from
+	# predict_goalie_pos. Using the react-then-slide model here made bots chase
+	# an ever-receding "one more cut catches him moving" into the crease, because
+	# re-evaluating each tick RE-GRANTED the delay and promised fresh
+	# caught-moving credit that never arrived. A pure rate bound grants nothing to
+	# re-grant: it is anchored on the keeper's OBSERVED x, so as the carrier
+	# drives, real lag accumulates in `goalie_now` while the remaining travel
+	# shrinks. The sum is conserved and there is no carrot.
+	if travel_time_s > 0.0:
+		var max_move: float = _goalie_lateral_reach(travel_time_s)
+		var dx: float = target_x - goalie_now.x
+		if absf(dx) > max_move:
+			target_x = goalie_now.x + signf(dx) * max_move
+	return Vector3(target_x, based.y, based.z)
 
 
 # Predicts the goalie's position at a future moment (shot release).
