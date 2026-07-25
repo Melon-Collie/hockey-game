@@ -1015,7 +1015,14 @@ restructure.
      (dwell / cooldown clocks, the lane-aware corner pick, the
      windup→strike→follow-through phase machine, the cover race, the catch hold)
      and every puck write stays in the controller as that layer's nucleus.
-3. **Step 3** — `GoalieWorldView` + `GoaliePerception`.
+3. **Step 3** — `GoalieWorldView` + `GoaliePerception`. **First half shipped:**
+   `GoalieWorldView` (90 lines) collapses the controller's **six independent
+   per-tick skater scans** into one frame-stamped, lazily-rebuilt view —
+   `_skater_getter.call()` now appears exactly **once** in the controller
+   (4138 → 4084 lines, 79 → 76 vars). Both a refactor step and a real hot-path win
+   (12 registry walks per frame across two goalies → 2). Remaining: funnel the
+   `puck.*` / `goalie.*` live reads through the same seam, which is what makes the
+   decision layer testable without a scene.
    **Note the fit: R1's lagged read is a *perception* concern, and this is its
    natural home.** If R1 lands first (recommended), Step 3 is where it stops
    being a special case and becomes just how perception works.

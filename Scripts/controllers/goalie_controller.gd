@@ -986,6 +986,8 @@ var _pose_inputs: GoalieBodyConfigBuilder.Inputs = GoalieBodyConfigBuilder.Input
 var _puck_play: GoaliePuckPlay = GoaliePuckPlay.new()
 #   _clear     — GoalieCreaseClear   (sweep / cover / catch decisions + timers)
 var _clear: GoalieCreaseClear = GoalieCreaseClear.new()
+#   _view      — GoalieWorldView     (ONE per-tick skater scan, shared by every read)
+var _view: GoalieWorldView = GoalieWorldView.new()
 
 # ── Cached rule configs (built once in setup) ────────────────────────────────
 var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
@@ -1002,9 +1004,6 @@ var _beaten_wide_cfg: GoalieBehaviorRules.BeatenWideConfig
 var _backdoor_cfg: GoalieBehaviorRules.BackdoorThreatConfig
 var _rush_cfg: GoalieBehaviorRules.RushRetreatConfig
 var _sweep_lane_cfg: GoalieBehaviorRules.SweepLaneConfig
-# Reused scratch for the per-shot screen scan so a read doesn't allocate a fresh
-# array. PackedVector3Array.clear() keeps capacity across shots.
-var _screen_positions: PackedVector3Array = PackedVector3Array()
 
 # ── Runtime (controller-local) ────────────────────────────────────────────────
 var _current_depth: float = 0.1
@@ -1088,9 +1087,6 @@ var _chest_t: float = 0.0
 # commits (see lateral_commit_confirm_s). Reset whenever their read breaks.
 var _beaten_wide_confirm_timer: float = 0.0
 var _slide_coverage_confirm_timer: float = 0.0
-# Reused scratch of opposing skater positions for the sweep-lane check (same
-# no-allocation idiom as _screen_positions).
-var _lane_opponents: PackedVector3Array = PackedVector3Array()
 # Catch-and-hold state. `_clear.catch_secured` flips once the pin (freeze + lock) is
 # applied on the first catching tick — physics writes are deferred out of the
 # contact callback the catch signal fires from. `_clear.catch_pressured` picks the
@@ -1163,9 +1159,6 @@ var _scratch_belief := GoalieBehaviorRules.ShotResult.new()
 # analytic step's own drag/bounce jitter — a blade tip changes the line by far
 # more than a tick of friction does.
 const _DEFLECTION_DELTA_M_S: float = 3.0
-# Per-physics-frame memo for _opposing_shooter_near_puck (host hot path).
-var _shooter_near_memo_frame: int = -1
-var _shooter_near_memo: bool = false
 var is_extrapolating: bool = false
 # Rejoin blend (root translation only): on the extrapolation→interpolation seam
 # the dead-reckoned root position is smoothstepped back to the authoritative
@@ -2083,17 +2076,8 @@ func _should_seal_crease_jam() -> bool:
 # there are none (or no skater getter wired). Ghosted players (offside / icing)
 # can't play the puck, so they don't make a jam.
 func _nearest_opposing_skater_dist_to_puck() -> float:
-	if not _skater_getter.is_valid():
-		return INF
-	var skaters: Array = _skater_getter.call()
-	var nearest: float = INF
-	for skater: Skater in skaters:
-		if skater == null or skater.is_ghost:
-			continue
-		if team_id != -1 and skater.get_team_id() == team_id:
-			continue
-		nearest = minf(nearest, skater.global_position.distance_to(puck.global_position))
-	return nearest
+	_ensure_view()
+	return _view.nearest_opponent_dist
 
 
 # Mirror of the above for the goalie's OWN team: distance from the nearest
@@ -2102,17 +2086,8 @@ func _nearest_opposing_skater_dist_to_puck() -> float:
 # team assigned (team_id == -1) there are no teammates, so a carrier is never
 # contested and the carrier-jam branch never fires — correct for teamless play.
 func _nearest_defending_skater_dist_to_puck() -> float:
-	if not _skater_getter.is_valid() or team_id == -1:
-		return INF
-	var skaters: Array = _skater_getter.call()
-	var nearest: float = INF
-	for skater: Skater in skaters:
-		if skater == null or skater.is_ghost:
-			continue
-		if skater.get_team_id() != team_id:
-			continue
-		nearest = minf(nearest, skater.global_position.distance_to(puck.global_position))
-	return nearest
+	_ensure_view()
+	return _view.nearest_teammate_dist
 
 # True when an opposing shooter is close enough to the goalie that the stick
 # blade should actively point at the puck side. Carrier within
@@ -2374,21 +2349,21 @@ func _natural_clear_velocity(forced_side: float) -> Vector3:
 # reach, else the far corner, else ZERO (no safe sweep exists — the cover
 # read). Opponent gather is a scalar loop into a reused packed array.
 func _pick_clear_velocity() -> Vector3:
-	_gather_opposing_positions()
-	return _clear.pick_exit(puck.global_position, _lane_opponents)
+	_ensure_view()
+	return _clear.pick_exit(puck.global_position, _view.opponents)
 
 
-func _gather_opposing_positions() -> void:
-	_lane_opponents.clear()
+# Refresh the shared per-tick skater view. Every read that needs other skaters
+# goes through this — ONE scan per frame instead of the six independent walks the
+# controller used to run. Frame-stamped and lazy, so it is also correct when
+# called from the puck_released SIGNAL handler, which fires outside the physics
+# tick and would otherwise read a stale or unbuilt view.
+func _ensure_view() -> void:
 	if not _skater_getter.is_valid():
+		_view.invalidate()
 		return
-	var skaters: Array = _skater_getter.call()
-	for skater: Skater in skaters:
-		if skater == null or skater.is_ghost:
-			continue
-		if team_id != -1 and skater.get_team_id() == team_id:
-			continue
-		_lane_opponents.append(skater.global_position)
+	_view.ensure(Engine.get_physics_frames(), _skater_getter.call(),
+			team_id, puck.global_position, puck.get_carrier())
 
 
 # ── Cover / smother lifecycle ─────────────────────────────────────────────────
@@ -2550,9 +2525,9 @@ func _should_play_rim() -> bool:
 	var vel: Vector3 = _loose_puck_velocity()
 	if not _puck_play.may_consider(puck.global_position, vel):
 		return false
-	_gather_opposing_positions()
+	_ensure_view()
 	return _puck_play.should_go(
-			puck.global_position, vel, goalie.global_position, _lane_opponents)
+			puck.global_position, vel, goalie.global_position, _view.opponents)
 
 
 func _enter_puck_play() -> void:
@@ -2564,9 +2539,9 @@ func _enter_puck_play() -> void:
 func _tick_puck_play(delta: float) -> void:
 	if not is_server:
 		return
-	_gather_opposing_positions()
+	_ensure_view()
 	_puck_play.advance(delta, goalie.global_position, puck.global_position,
-			_loose_puck_velocity().length(), puck.get_carrier() != null, _lane_opponents)
+			_loose_puck_velocity().length(), puck.get_carrier() != null, _view.opponents)
 	if _puck_play.wants_trap:
 		# The trap: kill the rim dead at the paddle. Physics write, so it is the
 		# controller's to perform — the collaborator only asks.
@@ -2647,36 +2622,18 @@ func _sweep_anim_progress() -> float:
 # `loose_puck_radius`. Own-team possession / own-team retrieves don't count
 # as shooting threats.
 func _opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
-	# Per-tick memo: five predicates call this every _physics_process with the
-	# same radius, and nothing it reads changes within a tick. Only the common
-	# radius is memoized so an unusual caller still computes exactly.
-	var frame: int = Engine.get_physics_frames()
-	var memoizable: bool = loose_puck_radius == slide_loose_puck_shooter_radius
-	if memoizable and frame == _shooter_near_memo_frame:
-		return _shooter_near_memo
-	var result: bool = _compute_opposing_shooter_near_puck(loose_puck_radius)
-	if memoizable:
-		_shooter_near_memo_frame = frame
-		_shooter_near_memo = result
-	return result
-
-func _compute_opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
+	# The per-tick memo this used to carry is gone: GoalieWorldView is already
+	# frame-stamped, so the shared scan does the memoising for every reader.
+	#
+	# NOTE the loose-puck distance comes from `nearest_opponent_dist_any`, which
+	# INCLUDES ghosted players — see the quirk documented on GoalieWorldView. Kept
+	# bit-identical to the pre-extraction behaviour and flagged there, rather than
+	# silently corrected inside a refactor.
 	var carrier: Skater = puck.get_carrier()
 	if carrier != null:
-		if team_id != -1 and carrier.get_team_id() == team_id:
-			return false
-		return true
-	if not _skater_getter.is_valid():
-		return false
-	var skaters: Array = _skater_getter.call()
-	for skater: Skater in skaters:
-		if skater == null:
-			continue
-		if team_id != -1 and skater.get_team_id() == team_id:
-			continue
-		if skater.global_position.distance_to(puck.global_position) < loose_puck_radius:
-			return true
-	return false
+		return team_id == -1 or carrier.get_team_id() != team_id
+	_ensure_view()
+	return _view.nearest_opponent_dist_any < loose_puck_radius
 
 func _enter_butterfly() -> void:
 	_beaten_wide_confirm_timer = 0.0
@@ -2907,18 +2864,12 @@ func _backdoor_depth_cap() -> float:
 		return INF
 	if team_id != -1 and carrier.get_team_id() == team_id:
 		return INF
-	if not _skater_getter.is_valid():
-		return INF
-	var skaters: Array = _skater_getter.call()
+	_ensure_view()
 	var cap: float = INF
-	for skater: Skater in skaters:
-		if skater == null or skater == carrier or skater.is_ghost:
-			continue
-		if team_id != -1 and skater.get_team_id() == team_id:
-			continue
+	for pos in _view.off_puck_opponents:
 		cap = minf(cap, GoalieBehaviorRules.backdoor_depth_cap(
 				puck.global_position, _tracked_threat_position,
-				skater.global_position, _goal_line_z, _goal_center_x,
+				pos, _goal_line_z, _goal_center_x,
 				_direction_sign, _backdoor_cfg))
 	return cap
 
@@ -3812,19 +3763,14 @@ func _maybe_arm_screen_block_drop(screen_d: float, move_d: float, back_date: flo
 # `screen_max_extra_delay`. The shooter self-excludes geometrically (they sit at
 # the release point, along ≈ 0 < min_along).
 func _screen_delay(shot_velocity: Vector3) -> float:
-	if screen_max_extra_delay <= 0.0 or not _skater_getter.is_valid():
+	if screen_max_extra_delay <= 0.0:
 		return 0.0
-	var skaters: Array = _skater_getter.call()
-	_screen_positions.clear()
-	for skater: Skater in skaters:
-		if skater == null or skater.is_ghost:
-			continue
-		_screen_positions.append(skater.global_position)
-	if _screen_positions.is_empty():
+	_ensure_view()
+	if _view.screeners.is_empty():
 		return 0.0
 	var delay: float = GoalieBehaviorRules.screen_occlusion_delay(
 			puck.global_position, shot_velocity, goalie.global_position,
-			_screen_positions, _screen_cfg)
+			_view.screeners, _screen_cfg)
 	return minf(delay, screen_max_extra_delay)
 
 
