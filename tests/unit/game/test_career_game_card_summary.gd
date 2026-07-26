@@ -55,7 +55,9 @@ func test_roster_reads_the_headers_roster_key() -> void:
 	var roster: Dictionary = _screen._roster_from_meta(_meta(2, 1))
 	assert_eq((roster[0] as Array).size(), 2, "home side should list both its skaters")
 	assert_eq((roster[1] as Array).size(), 1, "away side should list its skater")
-	assert_has(roster[0] as Array, "Melon (you)", "the local player is marked")
+	# Bare names — the local player carries no "(you)" tag; the YOU statline
+	# below the roster is what identifies them.
+	assert_has(roster[0] as Array, "Melon")
 	assert_has(roster[0] as Array, "Rook")
 	assert_has(roster[1] as Array, "Gunner")
 

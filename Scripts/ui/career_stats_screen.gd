@@ -151,6 +151,11 @@ func _section_title(text: String) -> Label:
 func _build_tab_switcher() -> Control:
 	var wrapper := VBoxContainer.new()
 	wrapper.add_theme_constant_override("separation", 0)
+	# Claims the whole remaining height under the header. Without this the parent
+	# VBox hands the wrapper only its MINIMUM size, so every tab — and the Games
+	# tab's ScrollContainer with it — is squeezed into a short band and the list
+	# clips mid-card with nothing below it to scroll into.
+	wrapper.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", 0)
@@ -586,7 +591,10 @@ func _clear_totals_content() -> void:
 func _build_games_tab() -> Control:
 	var tab := VBoxContainer.new()
 	tab.add_theme_constant_override("separation", 6)
-	tab.custom_minimum_size = Vector2(0, 520)
+	# No fixed minimum height: the tab fills whatever the switcher gives it, so a
+	# floor here would only ever fight that (it was what pinned the list to a
+	# 520 px band that clipped instead of scrolling).
+	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	_recent_status = Label.new()
 	_recent_status.text = "Loading..."
@@ -897,8 +905,9 @@ func _outcome_from_meta(meta: Dictionary) -> String:
 
 
 # team_id -> display names, from the .mreplay header's full registry (bots
-# included). The local player is marked so you can spot yourself in a lobby of
-# similar names.
+# included). Names only — the local player is NOT marked: you know your own
+# name, and the tag made one side's line longer than the other's for no gain.
+# The YOU line below the roster is what actually points you out.
 func _roster_from_meta(meta: Dictionary) -> Dictionary:
 	var out: Dictionary = {0: [], 1: []}
 	for entry: Variant in _header_roster(meta):
@@ -907,8 +916,6 @@ func _roster_from_meta(meta: Dictionary) -> Dictionary:
 		var display: String = String(p.get("player_name", ""))
 		if display.is_empty():
 			continue
-		if bool(p.get("is_local", false)):
-			display += " (you)"
 		(out[team_id] as Array).append(display)
 	return out
 
