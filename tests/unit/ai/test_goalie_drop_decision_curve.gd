@@ -112,6 +112,11 @@ extends GutTest
 # stick that is not his can reach the puck first — and, unlike the threshold pair
 # it replaced, it no longer needs a DEFENDING teammate to notice the traffic.
 #
+# UNCHANGED by the round-2 model work (closing-speed arrival + the commit
+# deadline, plan doc §9 "Shipped, round 2"). Every cell held, which is the point
+# of having pinned it: both fixes target situations this grid does not contain (a
+# puck moving away or across, and a threat whose clock has not run out yet).
+#
 # The windup column is still SLAPPER only. A wrister wind-up pins the puck too,
 # so it was briefly counted as a declaration; test_goalie_disguise_read measured
 # the cost and vetoed it — blocking through the slot made deception worth nothing

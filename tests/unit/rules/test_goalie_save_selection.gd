@@ -26,6 +26,27 @@ func _s(arrival: float, contest: float = INF, sight: float = 0.0,
 	return s
 
 
+# The same play, `dt` seconds later. Every clock on a Situation is measured from
+# NOW, so advancing time shrinks them together — moving `time_to_arrival` alone
+# silently turns a tip into a non-tip (a contest that lands after the puck cannot
+# happen, so it stops counting).
+func _advance(s: GoalieSaveSelection.Situation,
+		dt: float) -> GoalieSaveSelection.Situation:
+	var out := GoalieSaveSelection.Situation.new()
+	out.time_to_arrival = s.time_to_arrival - dt
+	out.time_to_contest = s.time_to_contest - dt if is_finite(s.time_to_contest) \
+			else INF
+	out.reaction_delay = s.reaction_delay
+	out.drop_time = s.drop_time
+	out.sight_delay = maxf(s.sight_delay - dt, 0.0)
+	out.lateral_race_lost = s.lateral_race_lost
+	return out
+
+
+# The same play at the last instant the drop can still start and finish in time.
+func _at_deadline(s: GoalieSaveSelection.Situation) -> GoalieSaveSelection.Situation:
+	return _advance(s, s.time_to_arrival - s.drop_time)
+
 # ── Patience: the half that is easy to lose in a refactor ────────────────────
 
 func test_a_dangler_in_space_does_not_get_a_free_drop() -> void:
@@ -134,10 +155,18 @@ func test_a_tip_threat_blocks_a_shot_he_can_otherwise_see() -> void:
 	# A tipper 3 m off his body: the puck arrives at their stick well before it
 	# arrives at him, and before he could complete an answer.
 	var tip_at: float = 0.34
-	assert_false(GoalieSaveSelection.should_block(_s(flight)),
-			"unobstructed, he reads it")
-	assert_true(GoalieSaveSelection.should_block(_s(flight, tip_at)),
+	assert_gt(GoalieSaveSelection.answer_fraction(_s(flight)), 0.0,
+			"unobstructed, he has a read to work with")
+	assert_eq(GoalieSaveSelection.answer_fraction(_s(flight, tip_at)), 0.0,
 			"a stick that can touch it in flight makes the read worthless")
+	# ...but "no read" is not "go now". He can still SEE the puck, so he can time
+	# the seal, and standing is worth keeping until the deadline. He blocks once
+	# the drop can no longer wait — same sealed posture, later, with the extra
+	# tenth spent on his feet. See must_commit_now.
+	assert_false(GoalieSaveSelection.should_block(_s(flight, tip_at)),
+			"he does not flop at the release — he can time this one")
+	assert_true(GoalieSaveSelection.should_block(_at_deadline(_s(flight, tip_at))),
+			"and he seals when the drop can no longer be deferred")
 
 
 func test_a_net_front_tip_leaves_him_nothing() -> void:
@@ -159,8 +188,10 @@ func test_a_net_front_tip_leaves_him_nothing() -> void:
 		var s := _s(arrival, tip_at)
 		assert_eq(GoalieSaveSelection.answer_fraction(s), 0.0,
 				"a tip %.0f m out leaves no answer at all" % tip_dist)
-		assert_true(GoalieSaveSelection.should_block(s),
-				"so he blocks rather than reading a shot he cannot answer")
+		# No answer, so when he goes down he is BLOCKING, not reacting — but the
+		# moment is set by the deadline, not by the tip. Unscreened he can time it.
+		assert_true(GoalieSaveSelection.should_block(_at_deadline(s)),
+				"so the save he makes is a block, taken at the deadline")
 	# The fade, not a cliff: a deflection out at mid-slot leaves a fraction of a
 	# drop. Still not a save, but he is moving, and pretending otherwise would be
 	# the same binary thinking the pad model already suffers from.
@@ -180,8 +211,30 @@ func test_a_tip_threat_blocks_him_before_the_shot_is_taken() -> void:
 	# inequality rather than needing a "there is traffic" rule.
 	var arrival: float = 15.0 / 30.0        # if he shoots right now
 	var tip_at: float = 12.0 / 30.0         # tipper 3 m off the goalie
-	assert_true(GoalieSaveSelection.should_block(_s(arrival, tip_at)),
-			"a tip threat is a block decision before the release, not after")
+	assert_eq(GoalieSaveSelection.answer_fraction(_s(arrival, tip_at)), 0.0,
+			"a live tip threat voids the read before the puck is even released")
+	# ⚠️ DOCTRINE, CHANGED DELIBERATELY. This used to assert that he goes DOWN
+	# here — pre-committed while the puck is still on the blue line. He does not
+	# any more, and the reason is that "cannot react" and "must go now" turned out
+	# to be two questions (must_commit_now). A tip ruins his read of DIRECTION; it
+	# does nothing to his read of TIMING, and deferring costs him nothing because
+	# he ends up sealed at the same instant either way.
+	#
+	# The 5v5 argument is what settled it: in net-front traffic "a stick can reach
+	# the puck first" is close to always true, so blocking on it alone means
+	# pre-dropping through most of a shift. That is the same failure the
+	# WRISTER_AIM experiment measured — a goalie who pre-commits stops being
+	# readable, and deception stops paying.
+	#
+	# A SCREEN still commits him early, because you cannot count down to a puck
+	# you cannot see (test_a_screened_point_shot_is_blocked_but_a_clean_one_is_read).
+	# To restore the old behaviour, drop the `must_commit_now` conjunct from
+	# should_block; the answer_fraction assertions above are the part that is not
+	# a judgment call.
+	assert_false(GoalieSaveSelection.should_block(_s(arrival, tip_at)),
+			"but an unscreened tip does not put him down early — he can time it")
+	assert_true(GoalieSaveSelection.should_block(_s(arrival, tip_at, arrival)),
+			"add a screen and he must commit blind, because now he cannot time it")
 
 
 func test_a_pass_he_can_see_resets_the_read_but_leaves_him_time() -> void:

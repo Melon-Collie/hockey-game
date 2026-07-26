@@ -1504,3 +1504,74 @@ within one tick, i.e. the `puck_released` signal handler). This was silently
 degrading the goalie instruments. `test_real_goalie_headless` was also feeding
 bare `Vector3`s to the skater getter, which the typed scan cannot consume; it
 now uses a real `Skater`.
+
+### Shipped, round 2 (2026-07) — the deferral, and two defects it exposed
+
+Going after mechanisms 4-7 started by re-counting the `_enter_butterfly()` call
+sites, which found the table above was wrong (six → seven). Probing the newly
+folded model then found two real defects in what round 1 shipped.
+
+**Defect 1: `time_to_arrival` ignored direction.** It was `gap / speed`, so a
+loose puck flying AWAY from the goalie at 20 m/s read exactly like one flying at
+him, and blocked him for both. Now the closing (radial) component decides
+whether the puck's own flight reaches him at all:
+
+```
+arriving = speed >= shot_speed_threshold and closing > 0
+arrival  = gap / closing            if arriving
+         = launch + gap / pace      otherwise
+```
+
+That is also the cross-crease fold, for free and in the honest direction: a pass
+crossing the crease is not arriving on the GOALIE, it is arriving at a RECEIVER,
+so the clock that matters is the receiver's stick plus the one-timer from there —
+which is the launch route. `_commit_cross_crease_response` keeps owning WHERE to
+seal; the model answers whether the ice needs sealing.
+
+**Defect 2: the model never asked whether it was TIME to go.** `should_block`
+was `answer_fraction <= 0`, a statement about the whole play, with nothing about
+this instant. A puck sitting in his lap with an opponent FOUR SECONDS away came
+out as a block — correct that he could never react to the eventual whack, absurd
+as an instruction to lie down for four seconds. The fix is `must_commit_now`,
+and it needs no new constant:
+
+```
+deadline        = time_to_arrival - drop_time     # when the drop must start
+must_commit_now = deadline <= 0 or sight_delay > deadline
+should_block    = lateral_race_lost or (answer_fraction <= 0 and must_commit_now)
+```
+
+The second clause is the load-bearing one and it is what separates a SCREEN from
+a TIP. Deferring means counting down to a moment, and you cannot count down to a
+puck you cannot see — so a screen that outlasts the deadline forces a blind early
+commit (this is the screened blocking save, arrived at from the general rule). A
+tipper does not stop him timing the seal, only knowing where it goes, and timing
+is the only thing deferral needs.
+
+**Doctrine changed, deliberately.** Three situations in
+`test_goalie_save_selection` asserted that a live tip threat puts him down
+*before the release*. It no longer does. Their `answer_fraction == 0` claims are
+untouched — "you cannot react to a tip" is still exactly true — but "cannot
+react" and "must go now" turned out to be two questions, and only the first is
+about the tip. The 5v5 argument settled it: in net-front traffic "a stick can
+reach the puck first" is close to always true, so blocking on it alone means
+pre-dropping through most of a shift, which is the same failure the WRISTER_AIM
+experiment measured (a goalie who pre-commits stops being readable and deception
+stops paying). To restore the old behaviour, drop the `must_commit_now` conjunct.
+
+**Mechanism 6 (`_on_puck_contact`) now asks instead of always dropping.** It was
+unconditional, which made it a reflex rather than a save selection: a chest
+absorb that deadens the puck at his feet with nobody within five metres put him
+on the ice exactly as hard as a pad rebound kicked into a crowd. `_should_block`
+prices both with what it already has.
+
+**Measured:** the drop-decision surface is unchanged in every cell, and the
+shot-facing instruments (`exhaustive_beatability` 16/288 and 0/288,
+`five_hole_window` 0.30..0.40 and -0.15..-0.01) are bit-identical. Suite green.
+
+**Still not folded in:** mechanism 5 (`_screen_block_drop_timer`). The model now
+expresses its rule exactly — a screen that outlasts the deadline is a blind
+commit — so what remains is purely plumbing: it fires while `_reaction` is
+engaged and the block branch is gated on `not _reaction.reacting`. Mechanism 7
+(the reactive low read) is deliberately left alone: that is the REACT branch
+working, not a block.

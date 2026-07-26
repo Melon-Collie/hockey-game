@@ -138,12 +138,43 @@ static func answer_fraction(s: Situation) -> float:
 	return clampf(available / s.drop_time, 0.0, 1.0)
 
 
-# THE decision. Block when reacting cannot buy anything, or when reacting
-# cannot cover the threat at all.
+# True once the drop can no longer be deferred.
+#
+# This is the second half of the decision and it is easy to miss. "Reacting is
+# impossible" is a statement about the WHOLE play; it says nothing about whether
+# NOW is the moment to go, and standing is not free to give up — a goalie on his
+# feet can still push, track and cut angles, and a sealed one cannot. Without
+# this, a puck sitting in his lap with an opponent FOUR SECONDS away read as a
+# block: perfectly true that he could never react to the eventual whack, and
+# absurd as an instruction to lie down for four seconds.
+#
+# The drop must START by `time_to_arrival - drop_time` or the pads are still
+# rotating when the puck lands. So there are two ways it can be time to go:
+#
+#   1. THE DEADLINE IS HERE. `arrival - drop_time <= 0`.
+#   2. HE CANNOT SEE THE DEADLINE COMING. Deferring means counting down to a
+#      moment, and you cannot count down to a puck you cannot see. If the screen
+#      outlasts the deadline he has to commit blind and early rather than
+#      discover he is late. This is the screened blocking save, and it is why a
+#      screen is a different kind of block trigger from a tip: a tipper does not
+#      stop him TIMING the seal, only knowing where it goes — and the timing is
+#      the only thing deferral needs.
+#
+# No new constant — the drop time and the sight delay are both already inputs.
+# "Start the drop no earlier than you must, unless you cannot tell when that is."
+static func must_commit_now(s: Situation) -> bool:
+	var deadline: float = s.time_to_arrival - s.drop_time
+	return deadline <= 0.0 or s.sight_delay > deadline
+
+
+# THE decision. Block when reacting cannot cover the threat at all, or when it
+# cannot complete AND the drop can no longer wait.
 static func should_block(s: Situation) -> bool:
+	# Coverage, not timing: a lost lateral race is not answered by waiting, so it
+	# does not get the deferral. Only the seal covers it, and late is worse.
 	if s.lateral_race_lost:
 		return true
-	return answer_fraction(s) <= 0.0
+	return answer_fraction(s) <= 0.0 and must_commit_now(s)
 
 
 # Seconds until a body `dist` metres from the puck, whose stick reaches

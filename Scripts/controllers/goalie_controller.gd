@@ -2009,28 +2009,41 @@ func _build_save_situation(delta: float) -> GoalieSaveSelection.Situation:
 	var carrier: Skater = puck.get_carrier()
 	var hostile_carrier: bool = carrier != null \
 			and (team_id == -1 or carrier.get_team_id() != team_id)
-	var in_flight: bool = speed >= shot_speed_threshold
 	var launch: float = 0.0
 	if hostile_carrier and carrier.current_shot_state \
 			!= SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
 		launch = INF
 	elif not hostile_carrier:
 		launch = s.time_to_contest
-	if in_flight:
-		s.time_to_arrival = gap / maxf(speed, 0.001)
+	# CLOSING speed, not raw speed. A puck's own flight only puts it on him if it
+	# is coming at him: `gap / speed` treats a puck flying AWAY at 20 m/s exactly
+	# like one flying at him, and dropped him for both. It also mis-times the
+	# cross-crease pass, which is the case that matters — a pass crossing the
+	# crease is not arriving on the goalie at all, it is arriving at a RECEIVER,
+	# and the clock that matters is the receiver's stick plus the one-timer from
+	# there. That falls out of the launch route below with no extra machinery,
+	# and it is the same fact `cross_crease_race_lost` computes for the
+	# drop-and-slide (which still owns WHERE to seal — this only answers whether
+	# the ice needs sealing at all).
+	var to_goalie: Vector3 = goalie.global_position - puck_pos
+	to_goalie.y = 0.0
+	var toward: Vector3 = to_goalie.normalized()
+	var closing: float = vel.x * toward.x + vel.z * toward.z
+	var arriving: bool = speed >= shot_speed_threshold and closing > 0.001
+	if arriving:
+		s.time_to_arrival = gap / closing
 	elif is_inf(launch):
 		s.time_to_arrival = INF
 	else:
 		s.time_to_arrival = launch \
 				+ gap / GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-	# Occlusion along the line the puck would actually travel. In flight that is
-	# its velocity; from a declared windup it is the puck→goalie line at the
-	# declared pace (screen delay is `along / speed`, so both terms matter).
+	# Occlusion along the line the puck would actually travel: its own velocity
+	# when that is what reaches him, otherwise the puck→goalie line at the pace a
+	# touch would put on it (screen delay is `along / speed`, so both terms
+	# matter).
 	var sight_vel: Vector3 = vel
-	if not in_flight:
-		var to_goalie: Vector3 = goalie.global_position - puck_pos
-		to_goalie.y = 0.0
-		sight_vel = to_goalie.normalized() * GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	if not arriving:
+		sight_vel = toward * GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 	s.sight_delay = _screen_delay(sight_vel)
 	s.reaction_delay = reaction_delay
 	s.drop_time = butterfly_drop_speed
@@ -3913,14 +3926,23 @@ func _on_puck_released() -> void:
 	_maybe_arm_screen_block_drop(screen_d, move_d, back_date)
 
 # Puck just hit a goalie body part. Re-arms the slide lockout so deflections
-# don't trigger spurious slides, starts the reaction clear delay, and drops
-# the goalie into butterfly if they were still upright — modern butterfly is
-# the rebound-control posture (Hockey Canada / OMHA coaching). After a
-# high-shot save off the chest/glove the goalie should be sealing the ice
-# while the rebound resolves, not still standing. The existing recovery gate
-# then decides standing back up based on whether the rebound is still close.
-# Filters by identity since `Puck.puck_touched_goalie` fires on either
-# net's goalie.
+# don't trigger spurious slides, starts the reaction clear delay, and seals the
+# ice if the rebound warrants it — modern butterfly is the rebound-control
+# posture (Hockey Canada / OMHA coaching), so after a save off the chest or
+# glove the goalie should be down while a live rebound resolves.
+#
+# ASKS, rather than always dropping. This used to be unconditional, which made it
+# a reflex rather than a save selection: a chest absorb that deadens the puck at
+# his feet with nobody within five metres put him on the ice exactly as hard as a
+# pad rebound kicked into a crowd. The first is not a threat and being down for it
+# is pure cost — that is the same posture the recovery gate then has to undo, and
+# the stand-up out of it is where the reported five-hole rebounds come from.
+# `_should_block` prices both correctly with what it already has: a live rebound
+# closing on him arrives fast, a loose one with an opponent arriving gets the
+# contest clock, and a dead puck with nobody near gets neither.
+#
+# The existing recovery gate still decides standing back up. Filters by identity
+# since `Puck.puck_touched_goalie` fires on either net's goalie.
 func _on_puck_contact(contacted: Goalie) -> void:
 	if contacted != goalie:
 		return
@@ -3930,7 +3952,7 @@ func _on_puck_contact(contacted: Goalie) -> void:
 	# slot. (The slide event-lockout above still gives a beat before a committed
 	# slide, so the goalie doesn't chase an unpredictable fresh deflection.)
 	_reaction.arm_clear(true)
-	if is_server and _sm.is_upright():
+	if is_server and _sm.is_upright() and _should_block(0.0):
 		_enter_butterfly()
 
 # Resolving events (boards / post / net) that aren't goalie-specific. Any of
