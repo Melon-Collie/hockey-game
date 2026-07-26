@@ -12,12 +12,14 @@ class_name GamepadAimRules
 ## WHICH anchor is the whole trick, and it differs by mode:
 ##   * STICKHANDLE: anchored on the BODY, proportional — precise blade placement;
 ##     the gatherer eases the cursor to a forward rest when the stick is released.
-##   * SHOOT (RT held): anchored on the PUCK (the blade contact point), parked at
-##     the reach radius in the stick DIRECTION. The shot line is origin→cursor from
-##     that same puck, so anchoring there is what makes the shot go exactly where
-##     the stick points — a held aim, decoupled from motion and from camera zoom.
-##     Power is committed separately from the stick magnitude, so shooting needs no
-##     flick, drag timing, or travel gate.
+##   * SHOOT (RT held): anchored on the PUCK (the blade contact point, pinned at
+##     the trigger edge), parked at the reach radius in the stick DIRECTION. The
+##     shot line is origin→cursor from that same puck, so anchoring there is what
+##     makes the shot go exactly where the stick points — a held aim, decoupled
+##     from motion and from camera zoom — and what makes the stick's bearing the
+##     shot line's bearing, so the swing-chirality forehand/backhand read needs no
+##     gamepad branch. Power is committed separately from the stick magnitude, so
+##     shooting needs no flick, drag timing, or travel gate.
 
 # Radial deadzone with edge rescale. Below `deadzone` the stick reads dead-zero
 # (so a resting stick holds the cursor and can't drift it); from the deadzone edge

@@ -986,7 +986,6 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_blade_from_mouse = _ik.apply_blade_from_mouse
 	_cb.apply_wrister_aim_blade = _apply_wrister_aim_blade
 	_cb.wrister_chirality_seed = _wrister_chirality_seed
-	_cb.wrister_blade_backhand = _wrister_blade_backhand
 	_cb.apply_slapper_blade_position = _shot_pose.apply_slapper_blade_position
 	_cb.apply_block_blade_position = _shot_pose.apply_block_blade_position
 	_cb.apply_wrister_follow_through = _shot_pose.apply_wrister_follow_through
@@ -2194,43 +2193,29 @@ func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
 		hold_target.y = 0.0
 	_ik.apply_blade_from_mouse(input, delta, true, hold_target)
 
-# Player-relative bearing the swing-chirality tracker seeds from at charge start.
-# MUST mirror _update_wrister_charge's chirality_source (the cursor) so the first
-# swing_step is cursor-to-cursor and banks no spurious rotation from a bearing jump.
-func _wrister_chirality_seed(input: InputState) -> Vector3:
-	var bearing: Vector3 = input.mouse_world_pos - skater.global_position
+# Bearing the swing-chirality tracker seeds from at charge start: origin→cursor,
+# the SHOT LINE. MUST mirror _update_wrister_charge's chirality source so the first
+# swing_step is source-to-source and banks no spurious rotation from a bearing jump.
+# The origin is passed in (rather than read off _aiming) because the state machine
+# captures it on this same edge, a line before reset_wrister stores it.
+func _wrister_chirality_seed(input: InputState, origin_world: Vector3) -> Vector3:
+	var bearing: Vector3 = input.mouse_world_pos - origin_world
 	bearing.y = 0.0
 	return bearing
 
-# Is the blade on the BACKHAND side right now? Pinned at charge start
-# (SkaterAimingBehavior.wrister_origin_backhand) as the forehand/backhand read for
-# absolute-aim devices — see ShotMechanics.is_backhand_from_blade_side. Shares
-# wrister_backhand_deadband with the swing read: both are "how far off dead-ahead
-# before this stops defaulting to forehand", in radians.
-func _wrister_blade_backhand() -> bool:
-	return ShotMechanics.is_backhand_from_blade_side(
-			_ik.blade_backhand_angle(), wrister_backhand_deadband)
-
 # Forehand/backhand for the wrister.
 #   - BOTS commit it (bot_wrister_backhand): the fake cursor is now purely cosmetic.
-#   - GAMEPAD humans (commit_wrister_power — the same flag that marks the pad's
-#     committed-power path, and already on the wire, so a pad CLIENT resolves the
-#     same hand the host does): the PINNED blade side. An absolute skill stick has
-#     no swept gesture — the cursor's bearing rotation is just whichever way around
-#     the rim the thumb travelled — so chirality there is noise, and a coin-flip
-#     backhand silently costs 25% of the shot. See
-#     ShotMechanics.is_backhand_from_blade_side.
-#   - MOUSE humans read the swing CHIRALITY — the net rotational sense of the
-#     CURSOR's bearing sweep around the player over the stroke (the blade is
-#     frozen, so the cursor is the only sweep). is_backhand_from_swing over
-#     swing_rotation, which is saved/restored across reconcile so the
-#     classification is deterministic. Shared by the release and goalie-prediction
-#     paths.
+#   - HUMANS read the swing CHIRALITY — the net rotational sense of the SHOT LINE's
+#     sweep (origin→cursor) over the stroke; the blade is frozen, so the cursor is
+#     the only sweep. is_backhand_from_swing over swing_rotation, which is
+#     saved/restored across reconcile so the classification is deterministic.
+#     Device-agnostic: a mouse sweeps that line by moving the cursor, a pad by
+#     rotating the stick (its cursor is anchored on the puck, so stick bearing IS
+#     the shot line's bearing). Shared by the release and goalie-prediction paths.
 func _wrister_is_backhand(input: InputState) -> bool:
 	return ShotMechanics.wrister_is_backhand(
 			input.bot_wrister_aim_dir, input.bot_wrister_backhand,
-			_aiming.swing_rotation, skater.is_left_handed, wrister_backhand_deadband,
-			input.commit_wrister_power, _aiming.wrister_origin_backhand)
+			_aiming.swing_rotation, skater.is_left_handed, wrister_backhand_deadband)
 
 func _release_wrister(input: InputState) -> void:
 	if has_puck:
@@ -2364,20 +2349,27 @@ func _update_wrister_charge(input: InputState) -> void:
 	# zero delta) while staying deterministic, so host and client agree on charge.
 	var blade_world: Vector3 = _ik.last_target_blade_world
 	# Chirality (forehand/backhand) source for HUMANS: the signed angular sweep of
-	# the CURSOR's bearing around the player over the stroke (ChargeTracking.
-	# swing_step). The blade is frozen and can't sweep, so the cursor is the only
-	# sweep — the same clockwise check, sourced from mouse movement, so "bring the
-	# puck back on the forehand and shoot forward" classifies as a forehand by its
-	# net rotation (not by which side it started on). (Bots commit their hand
-	# directly — see _wrister_is_backhand — so this is cosmetic for them.)
-	var blade_pos_rel_skater: Vector3 = input.mouse_world_pos - skater.global_position
-	blade_pos_rel_skater.y = 0.0
+	# the SHOT LINE — origin→cursor — over the stroke (ChargeTracking.swing_step,
+	# the clockwise check). The blade is frozen and can't sweep, so the cursor is
+	# the only sweep, and "bring the puck back on the forehand and shoot forward"
+	# classifies as a forehand by its net rotation (not by which side it started
+	# on). (Bots commit their hand directly — see _wrister_is_backhand — so this is
+	# cosmetic for them.)
+	#
+	# The rotation is measured about the pinned ORIGIN, not about the body. That is
+	# the vector the shot actually fires along (_wrister_aim_dir), so its sweep is
+	# the wrist roll being classified; a body-relative bearing rotates differently
+	# by the ~1 m blade parallax, and for a gamepad — whose cursor is anchored on
+	# the puck so the stick bearing IS the shot line's bearing — measuring about
+	# the body would re-introduce that parallax as swing the player never made.
+	var swing_bearing: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
+	swing_bearing.y = 0.0
 	# The stroke-travel accumulator's per-tick step is bounded by the on-axis
 	# blade-speed budget × delta: the target is a closed-form ROM clamp (not
 	# the speed-capped smoothed blade), so a forged/teleporting cursor could
 	# otherwise bank a whole arc of travel in one tick.
 	_aiming.tick_wrister_charge(
-			intent_pos, blade_pos_rel_skater,
+			intent_pos, swing_bearing,
 			max_charge_direction_variance,
 			input.delta,
 			wrister_mouse_speed_smoothing,

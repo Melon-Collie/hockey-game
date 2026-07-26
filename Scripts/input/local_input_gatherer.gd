@@ -78,6 +78,19 @@ var _pad_cursor_valid: bool = false
 # all is a full rip along the held aim, not the softest shot in the game.
 var _committed_wrister_power: float = 1.0
 var _prev_gather_rt: bool = false
+# World point the SHOT cursor is anchored to, PINNED at the trigger edge (the blade
+# contact point, flattened to the ice). The sim pins the same point one physics tick
+# later as the wrister's aim origin (SkaterAimingBehavior.wrister_origin_world), and
+# the shot fires along origin→cursor — so anchoring the cursor here makes that line
+# the stick direction exactly, for the whole hold.
+#
+# It must be PINNED and not re-read live: the blade travels with the body while the
+# origin stays put, so a live anchor would swing origin→cursor as the player skates
+# (a perpendicular 4 m of travel against a ~6 m cursor is ~33° of aim drift), and
+# that drift also banks into the swing-chirality accumulator as rotation nobody
+# gestured. Vector3.ZERO / invalid falls back to the body anchor.
+var _pad_shot_anchor_world: Vector3 = Vector3.ZERO
+var _pad_shot_anchor_valid: bool = false
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
 # input-frame cadence with the same pending-flag latch the mouse actions use.
@@ -165,6 +178,9 @@ func _accumulate_gamepad_edges() -> void:
 		# stick is live, so a shot aimed and fired without ever dialling the
 		# magnitude back is a real shot rather than the min-power floor.
 		_committed_wrister_power = 1.0
+		_pin_shot_anchor()
+	elif not shoot_now and _prev_pad_shoot:
+		_pad_shot_anchor_valid = false
 	_prev_pad_shoot = shoot_now
 	var slap_now: bool = _pad_trigger(JOY_AXIS_TRIGGER_LEFT)
 	if slap_now and not _prev_pad_slap:
@@ -356,8 +372,20 @@ func _facing_rest_screen(anchor: Vector2) -> Vector2:
 		return anchor
 	return _camera.unproject_position(rest_world)
 
-# On-screen anchor for the gamepad SHOT cursor: the puck's on-blade contact point,
-# flattened to the ice plane and projected.
+# Pin the shot cursor's world anchor at the trigger edge — the puck's on-blade
+# contact point, flattened to the ice plane (the aim is pure XZ and _screen_to_world
+# projects onto y = 0, so anchoring at the blade's real height would reintroduce a
+# small offset). See _pad_shot_anchor_world for why it's pinned rather than live.
+func _pin_shot_anchor() -> void:
+	_pad_shot_anchor_valid = false
+	if _aim_skater == null:
+		return
+	var contact: Vector3 = _aim_skater.get_blade_contact_global()
+	contact.y = 0.0
+	_pad_shot_anchor_world = contact
+	_pad_shot_anchor_valid = true
+
+# On-screen anchor for the gamepad SHOT cursor: the pinned puck point, projected.
 #
 # The wrister aims POSITIONALLY — origin→cursor, where the origin is the blade/puck
 # frozen at charge start (ShotMechanics.wrister_aim_dir). Parking the cursor a fixed
@@ -368,19 +396,18 @@ func _facing_rest_screen(anchor: Vector2) -> Vector2:
 # ice under a fixed 480 px), so the bias ran ~4°–15°, flipping sign with the carry
 # side and changing with the zoom — about a net width at slot range, and
 # unlearnable because it never held still. Anchoring the cursor on the puck instead
-# makes origin→cursor the stick direction by construction, at any zoom.
+# makes origin→cursor the stick direction by construction, at any zoom — which is
+# also what makes the swing-chirality read work on a pad, since the stick's bearing
+# then IS the shot line's bearing.
 #
-# Flattened to y = 0 because the aim is pure XZ and _screen_to_world projects onto
-# that plane — anchoring at the blade's real height would reintroduce a small
-# offset. Falls back to the passed body anchor with no skater or behind the camera.
+# Falls back to the passed body anchor with no pin (no skater at the edge) or when
+# the pinned point is behind the camera.
 func _shot_anchor_screen(body_anchor: Vector2) -> Vector2:
-	if _aim_skater == null or _camera == null:
+	if not _pad_shot_anchor_valid or _camera == null:
 		return body_anchor
-	var contact: Vector3 = _aim_skater.get_blade_contact_global()
-	contact.y = 0.0
-	if _camera.is_position_behind(contact):
+	if _camera.is_position_behind(_pad_shot_anchor_world):
 		return body_anchor
-	return _camera.unproject_position(contact)
+	return _camera.unproject_position(_pad_shot_anchor_world)
 
 # On-screen anchor for the gamepad cursor: the skater's projected position, so the
 # reach disc tracks the player as the camera follows. Falls back to the viewport

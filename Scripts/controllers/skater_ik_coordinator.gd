@@ -587,15 +587,12 @@ func _bottom_hand_ik_config() -> BottomHandIK.Config:
 		_cached_bottom_cfg.hand_y = _controller.bh_hand_y
 		_cached_bottom_cfg.release_angle_max = deg_to_rad(_controller.bh_release_angle_deg)
 		_cached_bottom_cfg.release_angle_band = deg_to_rad(_controller.bh_release_angle_band_deg)
-	_cached_bottom_cfg.backhand_angle = blade_backhand_angle()
+	_cached_bottom_cfg.backhand_angle = _bh_backhand_angle()
 	return _cached_bottom_cfg
 
 # Blade world angle toward the backhand side, in the skater's body frame.
 # Returns a positive value when the blade is on the backhand side; 0 on forehand.
-# Public because the wrister's forehand/backhand read for an ABSOLUTE-AIM device
-# (gamepad) is pinned from this at charge start — see
-# SkaterController._wrister_blade_backhand.
-func blade_backhand_angle() -> float:
+func _bh_backhand_angle() -> float:
 	var blade_world: Vector3 = _skater.upper_body_to_global(_skater.get_blade_position())
 	var to_blade: Vector3 = blade_world - _skater.global_position
 	to_blade.y = 0.0
