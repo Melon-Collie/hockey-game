@@ -118,6 +118,12 @@ func encode_world_state() -> PackedByteArray:
 		var depth: int = 0
 		if record != null and not record.is_local:
 			depth = record.controller.get_queue_depth()
+			# Host-side telemetry of its own pending-input depth (the client echo
+			# folds 0 on host rows). Read with input_drains_per_sec: draining a
+			# DEEP queue means the drain is eating the lead servo's cushion;
+			# draining a SHALLOW one means inputs genuinely arrive late.
+			# Bots are local-driven and never queue, so they can't skew the max.
+			NetworkTelemetry.record_host_queue_depth(depth)
 		var id_bytes := PackedByteArray(); id_bytes.resize(4)
 		# encode_s32 (not u32) so negative AI bot peer_ids round-trip correctly.
 		# For real ENet peer ids (always positive) the encoded bytes are

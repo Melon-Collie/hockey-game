@@ -319,10 +319,13 @@ func test_one_timer_aim_is_locked_from_the_release_point_not_the_body() -> void:
 	sm.dispatch(input, s)
 	assert_true(input.slap_pressed, "the squared one-timer presses this tick")
 
-	# The direction the controller will lock: current blade→cursor ≈ self→cursor.
-	var dir := Vector2(
-			input.mouse_world_pos.x - self_pos.x,
-			input.mouse_world_pos.z - self_pos.z).normalized()
+	# The direction the controller locks — the bot COMMITS it (the cursor can't
+	# express it: the human lock measures blade→cursor and the blade sits ~1 m off
+	# the body). Feeding it through the same helper the controller calls, with a
+	# deliberately absurd cursor/blade pair, pins that the commit wins.
+	var locked: Vector3 = ShotMechanics.slapper_aim_dir(
+			input.bot_slapper_aim_dir, Vector3(30.0, 0.0, 30.0), Vector3.ZERO)
+	var dir := Vector2(locked.x, locked.z).normalized()
 	var release_point: Vector3 = sm._slapper_zone_center(
 			sm._one_timer_line_anchor(s, self_pos))
 	assert_true(release_point.is_finite(),
@@ -339,3 +342,99 @@ func test_one_timer_aim_is_locked_from_the_release_point_not_the_body() -> void:
 	var x_from_body: float = _x_at_net_plane(self_pos, dir, net_z)
 	assert_gt(absf(x_from_body), GameRules.NET_HALF_WIDTH,
 			"a body-relative lock would parallel-shift the shot wide of the net")
+
+
+# Fixture for the square-up gate: a live cross-seam feed at a camped finisher,
+# with `facing` rotated `off_rad` off the committed shot line. Returns the
+# dispatched [input, state_machine].
+func _dispatch_with_facing_off_line(off_rad: float) -> Array:
+	var self_pos := Vector3(-2.4, 0.0, -22.0)
+	var s: WorldSnapshot = _cycle_snap(self_pos)
+	s.puck_state.position = Vector3(5.0, 0.0, -19.0)
+	s.puck_state.velocity = Vector3(-17.0, 0.0, -6.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	# The committed line is facing-independent (release point on the feed's line →
+	# the net hole), so read it once from a squared stance and rotate off THAT.
+	s.skater_states[FINISHER_ID].facing = Vector2(0.0, -1.0)
+	var probe: SkaterAgentStateMachine = Agent.new()
+	probe.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	probe._state = Agent.State.ONE_TIMER_PRESSED
+	var probe_input := InputState.new()
+	probe.dispatch(probe_input, s)
+	var shot_line := Vector2(
+			probe_input.bot_slapper_aim_dir.x, probe_input.bot_slapper_aim_dir.z)
+	s.skater_states[FINISHER_ID].facing = shot_line.rotated(off_rad)
+
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	return [input, sm]
+
+
+func test_one_timer_waits_for_a_squared_stance_before_winding_up() -> void:
+	# _enter_slapper_charge SNAPS facing to the aim at the press tick, so a bot
+	# committing from a wide stance whips its body around in one tick. The gate is
+	# the stance, not the blade cone: 30° off the line presses, 90° holds — and
+	# holding is a WAIT (cursor on the net, facing rotating toward it), not a bail.
+	var squared: Array = _dispatch_with_facing_off_line(deg_to_rad(30.0))
+	assert_true((squared[0] as InputState).slap_pressed,
+			"a stance already inside the square-up angle winds up now")
+
+	var wide: Array = _dispatch_with_facing_off_line(deg_to_rad(90.0))
+	assert_false((wide[0] as InputState).slap_pressed,
+			"a stance 90° off the shot line does not start the wind-up")
+	assert_eq((wide[1] as SkaterAgentStateMachine).get_state(),
+			Agent.State.ONE_TIMER_PRESSED,
+			"…it holds the one-timer and squares up instead of bailing on tick 0")
+
+
+func test_one_timer_commits_the_release_point_line_not_a_cursor_offset() -> void:
+	# The bot's cursor is placed one shot-vector out from the BODY, but the
+	# controller's human lock measures BLADE→cursor, and the blade is a
+	# shoulder-anchored offset ~1 m to the blade side. Reading the cursor would
+	# rotate the locked line by roughly that offset over the shot distance —
+	# around a net width at one-timer range. The commit must carry the exact
+	# release_point → aim_point direction instead.
+	var self_pos := Vector3(-2.4, 0.0, -22.0)
+	var s: WorldSnapshot = _cycle_snap(self_pos)
+	s.puck_state.position = Vector3(5.0, 0.0, -19.0)
+	s.puck_state.velocity = Vector3(-17.0, 0.0, -6.0)
+	s.puck_state.carrier_peer_id = -1
+	s.real_puck_carrier_peer_id = -1
+	s.skater_states[FINISHER_ID].facing = Vector2(0.0, -1.0)
+	var sm: SkaterAgentStateMachine = Agent.new()
+	sm.setup(FINISHER_ID, 0, _brain, _team_map, false)
+	sm._state = Agent.State.ONE_TIMER_PRESSED
+	var input := InputState.new()
+	sm.dispatch(input, s)
+	assert_true(input.slap_pressed, "the squared one-timer presses this tick")
+	assert_almost_eq(input.bot_slapper_aim_dir.length(), 1.0, 0.001,
+			"the committed direction is normalized")
+
+	var release_point: Vector3 = sm._slapper_zone_center(
+			sm._one_timer_line_anchor(s, self_pos))
+	assert_true(release_point.is_finite(), "the feed yields a settled release point")
+	var net_z: float = -GameRules.GOAL_LINE_Z  # team 0 attacks -Z
+
+	# The committed line, fired from where the puck actually leaves: on the net.
+	var committed := Vector2(
+			input.bot_slapper_aim_dir.x, input.bot_slapper_aim_dir.z).normalized()
+	assert_lt(absf(_x_at_net_plane(release_point, committed, net_z)),
+			GameRules.NET_HALF_WIDTH,
+			"the committed line crosses inside the posts from the release point")
+
+	# What reading the CURSOR would have locked: the controller measures from the
+	# blade, which sits roughly SkaterController.slapper_blade_x to the blade side
+	# of the body (right-handed here → +X of facing, ≈ +X of world with the bot
+	# squared to the net). Same cursor, one metre of anchor offset — and it sails
+	# outside the post. That gap IS the bug this commit closes.
+	var blade_world := Vector3(self_pos.x + 1.0, 0.0, self_pos.z - 0.5)
+	var from_cursor := Vector2(
+			input.mouse_world_pos.x - blade_world.x,
+			input.mouse_world_pos.z - blade_world.z).normalized()
+	assert_gt(absf(_x_at_net_plane(release_point, from_cursor, net_z)),
+			GameRules.NET_HALF_WIDTH,
+			"a cursor-derived lock parallel-shifts the one-timer off the net")

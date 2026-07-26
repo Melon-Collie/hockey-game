@@ -720,6 +720,24 @@ func test_wrister_aim_dir_human_positional() -> void:
 			"human wrister aims origin→cursor (Y flattened)")
 
 
+func test_slapper_aim_dir_bot_commit_wins() -> void:
+	var bot_dir := Vector3(0.6, 0.0, -0.8)
+	# The bot's cursor sits ~1.3 m off its body and the blade anchor ~1 m to the
+	# blade side, so blade→cursor is a garbage vector for a bot — the committed
+	# direction must be returned verbatim.
+	var got: Vector3 = ShotMechanics.slapper_aim_dir(
+			bot_dir, Vector3(1.0, 0.0, 1.0), Vector3(0.9, 0.0, 1.1))
+	assert_eq(got, bot_dir, "a committed bot slapper dir is used verbatim, not blade→cursor")
+
+
+func test_slapper_aim_dir_human_blade_to_cursor() -> void:
+	# No bot commit (ZERO) → the human lock: mouse − blade, Y flattened.
+	var got: Vector3 = ShotMechanics.slapper_aim_dir(
+			Vector3.ZERO, Vector3(5.0, 2.0, 3.0), Vector3(1.0, 0.5, 1.0))
+	assert_almost_eq(got, Vector3(4.0, 0.0, 2.0), Vector3(0.001, 0.001, 0.001),
+			"human slapper locks blade→cursor (Y flattened)")
+
+
 func test_wrister_is_backhand_bot_commit_wins() -> void:
 	var bot_dir := Vector3(0.0, 0.0, -1.0)
 	# swing_rotation would say forehand, but the bot committed backhand → backhand.

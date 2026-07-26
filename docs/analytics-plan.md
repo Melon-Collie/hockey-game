@@ -15,7 +15,7 @@ and tuned/calibrated against logged data (see §3.3).
 
 Status: **A1 IMPLEMENTED** (2026-07-24). Per-player Corsi/Fenwick counters
 (`shot_attempts`, `shot_attempts_blocked` on `PlayerStats`) via a new host-only
-`AdvancedStatsTracker`; broadcast (protocol v41, `STATS_PLAYER_RECORD_SIZE`
+`AdvancedStatsTracker`; broadcast (protocol v43, `STATS_PLAYER_RECORD_SIZE`
 15→17); persisted to `career_stats` with report-time team-SOG columns for PDO;
 `career_totals` derives lifetime iCF / Fenwick / PDO; Career screen shows all
 three.
@@ -100,7 +100,7 @@ head over the shared hole geometry:
   (`note_xg`), and committed at **resolution** on `shot_counted(peer, blocked, xg)`
   — so xG accrues only for the same shot attempts Corsi counts, and blocked shots
   carry no xG (Fenwick/unblocked convention).
-- `PlayerStats.xg_for` (float, ixG) broadcast (protocol v42,
+- `PlayerStats.xg_for` (float, ixG) broadcast (protocol v44,
   `STATS_PLAYER_RECORD_SIZE` 17→18); `career_stats` gains `xg_for` +
   report-time `team_xg_for/against`; `career_totals` derives lifetime ixG,
   **goals above expected** (finishing), and **xGF%**; Career screen shows all three.
@@ -146,7 +146,7 @@ shot map / xG-share / heatmap, captured host-side and persisted:
   player's whole body of work by default, and grouping would hand the screen
   duplicate buckets to merge back together.
 - Client delivery: the host pushes the whole log once at game-over
-  (`send_shot_events_to_all` / `receive_shot_events`, protocol v43 — a new `@rpc`
+  (`send_shot_events_to_all` / `receive_shot_events`, protocol v45 — a new `@rpc`
   shifts the config hash), wired ungated ahead of the Supabase gates (those govern
   what leaves the machine, not what a peer sees of its own match).
   `ShotEvent.encode_list` / `decode_list` are the wire format (malformed rows
