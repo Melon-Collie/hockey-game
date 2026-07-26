@@ -37,7 +37,7 @@ const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to 
 const _CURVE_LABELS: Array[String] = ["Closed", "Balanced", "Open"]
 const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
 const _FLEX_LABELS: Array[String] = ["Whippy", "Medium", "Stiff"]
-const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
+const _PROFILE_TOOLTIP: String = "Blade profile — how much steel is on the ice.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
 const _PROFILE_LABELS: Array[String] = ["Agility", "Balanced", "Power"]
 
 # Working copy: Array of {"name": String, "levels": Array[int]} in canonical
