@@ -1,3 +1,7 @@
+-- APPLY ORDER: run sql/shot_events.sql FIRST. recent_games_for() below counts
+-- rows in shot_events for its shot_count column, so this file does not stand
+-- alone on a fresh database.
+--
 -- career_stats — one row per player per online game, posted at game-over by
 -- CareerStatsReporter (Scripts/game/career_stats_reporter.gd). The Career screen
 -- reads lifetime totals from the career_totals view and per-game history from
@@ -34,7 +38,45 @@ create table if not exists public.career_stats (
     takeaways      integer default 0 not null,
     giveaways      integer default 0 not null,
     faceoff_wins   integer default 0 not null,
-    faceoff_losses integer default 0 not null
+    faceoff_losses integer default 0 not null,
+    -- Analytics A1. Per-player shot-attempt volume (individual Corsi/Fenwick);
+    -- team_sog_* are team quantities carried on every row (like goals_for), the
+    -- PDO denominators. Fenwick = shot_attempts − shot_attempts_blocked.
+    shot_attempts         integer default 0 not null,
+    shot_attempts_blocked integer default 0 not null,
+    team_sog_for          integer default 0 not null,
+    team_sog_against      integer default 0 not null,
+    -- Analytics A2. xg_for = individual expected goals (ixG); team_xg_* are team
+    -- quantities carried on every row, the career xGF% numerator/denominator.
+    xg_for                numeric default 0 not null,
+    team_xg_for           numeric default 0 not null,
+    team_xg_against       numeric default 0 not null,
+    -- Offline (vs bots) matches count toward the career exactly like online ones
+    -- — most play happens offline and a career that ignores it isn't the player's
+    -- career. This records which a row WAS, so the two remain separable later
+    -- (a human-only leaderboard, say) without having gated the upload. Older rows
+    -- predate offline uploads and are all online, hence the `true` default.
+    is_online             boolean default true not null,
+    -- Peak human headcount in the match — stronger than is_online, since an
+    -- online lobby nobody joined is a bot game with extra steps. A COUNT rather
+    -- than a "ranked" flag: Mitts has no ranked mode, and a count lets a later
+    -- query pick its own bar (1 = solo vs bots, >= 2 = a real opponent, 6 = a
+    -- full lobby) instead of inheriting a threshold baked in at write time.
+    -- Backfilled to 2 for pre-existing rows: they all passed the old two-human
+    -- upload gate, so >= 2 is known true for them, though the exact count is
+    -- unrecoverable. Peak, not final, so someone who drops before the horn still
+    -- counts.
+    human_players         integer default 2 not null,
+    -- Match FORMAT. 3v3 and 5v5 are not the same sport statistically (3v3 has far
+    -- more space — more attempts, higher xG per shot; 5v5 has traffic, point
+    -- shots, real blocks), so every rate stat has to be sliced by team_size to
+    -- mean anything. rule_set and period_seconds confound the same way, and
+    -- num_periods was already stored without its duration — only half the clock.
+    -- Older rows predate 5v5 and the mode selector, hence the 3 / 'arcade'
+    -- defaults; period_seconds is nullable because it genuinely isn't recoverable.
+    team_size             integer default 3 not null,
+    rule_set              text default 'arcade' not null,
+    period_seconds        integer
 );
 
 -- Migration for an existing DB (the create above is skipped once the table
@@ -44,6 +86,22 @@ alter table public.career_stats add column if not exists takeaways      integer 
 alter table public.career_stats add column if not exists giveaways      integer default 0 not null;
 alter table public.career_stats add column if not exists faceoff_wins   integer default 0 not null;
 alter table public.career_stats add column if not exists faceoff_losses integer default 0 not null;
+alter table public.career_stats add column if not exists shot_attempts         integer default 0 not null;
+alter table public.career_stats add column if not exists shot_attempts_blocked integer default 0 not null;
+alter table public.career_stats add column if not exists team_sog_for          integer default 0 not null;
+alter table public.career_stats add column if not exists team_sog_against      integer default 0 not null;
+alter table public.career_stats add column if not exists xg_for                numeric default 0 not null;
+alter table public.career_stats add column if not exists team_xg_for           numeric default 0 not null;
+alter table public.career_stats add column if not exists team_xg_against       numeric default 0 not null;
+alter table public.career_stats add column if not exists is_online             boolean default true not null;
+-- Default 2 backfills existing rows honestly: every one of them passed the old
+-- two-human upload gate (see the column comment above).
+alter table public.career_stats add column if not exists human_players         integer default 2 not null;
+-- Match format. Pre-5v5 rows were all 3v3 on the default ruleset, so those
+-- defaults are factual; period length isn't recoverable, so it stays null.
+alter table public.career_stats add column if not exists team_size             integer default 3 not null;
+alter table public.career_stats add column if not exists rule_set              text default 'arcade' not null;
+alter table public.career_stats add column if not exists period_seconds        integer;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
 
@@ -80,6 +138,17 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
     giveaways     between 0 and 5000  and
     faceoff_wins  between 0 and 5000  and
     faceoff_losses between 0 and 5000  and
+    shot_attempts         between 0 and 10000 and
+    shot_attempts_blocked between 0 and 10000 and
+    team_sog_for          between 0 and 10000 and
+    team_sog_against      between 0 and 10000 and
+    xg_for                between 0 and 10000 and
+    team_xg_for           between 0 and 10000 and
+    team_xg_against       between 0 and 10000 and
+    human_players         between 0 and 64 and
+    team_size             between 1 and 10 and
+    (period_seconds is null or period_seconds between 0 and 100000) and
+    (rule_set is null or rule_set in ('off', 'arcade', 'nhl')) and
     toi_seconds   between 0 and 100000 and
     goals_for     between 0 and 1000  and
     goals_against between 0 and 1000  and
@@ -91,53 +160,89 @@ alter table public.career_stats add constraint career_stats_sane_ranges check (
 );
 
 -- ── Lifetime totals (career screen, Career Totals tab) ───────────────────────
--- DROP + CREATE (not CREATE OR REPLACE): replacing a view can only APPEND
--- trailing columns, never reorder, so adding columns anywhere but the very end
--- of the live view's existing order errors ("cannot change name of view column
--- ..."). Dropping first sidesteps that regardless of the current column order.
--- Nothing depends on career_totals (the anon client just SELECTs it), so no
--- cascade; the grant below restores the anon read the drop removes.
+-- The aggregation lives in ONE place: career_totals_for(). The career screen
+-- calls it as an RPC with whatever mode filter the player picked; the
+-- career_totals view delegates to it unfiltered. Adding a career stat therefore
+-- means editing the function and nothing else.
+--
+-- p_team_size NULL pools every mode; 3 or 5 restricts to that roster size. This
+-- is a FUNCTION rather than a view grouped by team_size because the derived
+-- columns are RATIOS — per-60, PDO, faceoff%, xGF% — and a client cannot sum
+-- those across modes to get the "all modes" answer. They have to be computed
+-- inside the filter.
 drop view if exists public.career_totals;
+drop function if exists public.career_totals_for(bigint, integer);
+
+create function public.career_totals_for(player_steam_id bigint,
+                                         p_team_size integer default null)
+ returns table(
+    steam_id bigint, player_name text, games_played bigint,
+    goals bigint, assists bigint, points bigint, shots_on_goal bigint,
+    hits bigint, shots_blocked bigint, toi_seconds bigint,
+    goals_for bigint, goals_against bigint, plus_minus bigint,
+    wins bigint, losses bigint,
+    goals_per_60 numeric, assists_per_60 numeric, points_per_60 numeric,
+    hits_taken bigint, takeaways bigint, giveaways bigint,
+    faceoff_wins bigint, faceoff_losses bigint, faceoff_pct numeric,
+    shot_attempts bigint, fenwick bigint, pdo numeric,
+    xg_for numeric, goals_above_expected numeric, xgf_pct numeric)
+ language sql
+ stable
+as $function$
+  SELECT cs.steam_id,
+    (array_agg(cs.player_name ORDER BY cs.played_at DESC NULLS LAST))[1],
+    count(*),
+    sum(cs.goals), sum(cs.assists), sum(cs.goals + cs.assists),
+    sum(cs.shots_on_goal), sum(cs.hits), sum(cs.shots_blocked),
+    sum(cs.toi_seconds), sum(cs.goals_for), sum(cs.goals_against),
+    sum(cs.goals_for - cs.goals_against),
+    sum(CASE WHEN cs.outcome = 'win'::text  THEN 1 ELSE 0 END),
+    sum(CASE WHEN cs.outcome = 'loss'::text THEN 1 ELSE 0 END),
+    round(sum(cs.goals)::numeric   / NULLIF(sum(cs.toi_seconds), 0)::numeric * 3600::numeric, 2),
+    round(sum(cs.assists)::numeric / NULLIF(sum(cs.toi_seconds), 0)::numeric * 3600::numeric, 2),
+    round(sum(cs.goals + cs.assists)::numeric / NULLIF(sum(cs.toi_seconds), 0)::numeric * 3600::numeric, 2),
+    sum(cs.hits_taken), sum(cs.takeaways), sum(cs.giveaways),
+    sum(cs.faceoff_wins), sum(cs.faceoff_losses),
+    round(sum(cs.faceoff_wins)::numeric
+          / NULLIF(sum(cs.faceoff_wins) + sum(cs.faceoff_losses), 0)::numeric * 100::numeric, 1),
+    -- Analytics A1: iCF = shot attempts; Fenwick = attempts − blocked.
+    -- PDO = on-ice shooting% + save%, ×1000.
+    sum(cs.shot_attempts),
+    sum(cs.shot_attempts - cs.shot_attempts_blocked),
+    round((
+        sum(cs.goals_for)::numeric / NULLIF(sum(cs.team_sog_for), 0)::numeric
+      + 1::numeric - sum(cs.goals_against)::numeric / NULLIF(sum(cs.team_sog_against), 0)::numeric
+    ) * 1000::numeric, 0),
+    -- Analytics A2: ixG; goals − ixG is finishing; xGF% is team chance-share.
+    round(sum(cs.xg_for), 2),
+    round(sum(cs.goals)::numeric - sum(cs.xg_for), 2),
+    round(sum(cs.team_xg_for) / NULLIF(sum(cs.team_xg_for) + sum(cs.team_xg_against), 0) * 100::numeric, 1)
+  FROM career_stats cs
+  WHERE cs.steam_id = player_steam_id
+    AND (p_team_size IS NULL OR cs.team_size = p_team_size)
+  GROUP BY cs.steam_id;
+$function$;
+
+grant execute on function public.career_totals_for(bigint, integer) to anon;
+
+-- Unfiltered totals for every player, delegating to the function above so the
+-- aggregation is defined once.
 create view public.career_totals
 with (security_invoker = true) as
- SELECT steam_id,
-    (array_agg(player_name ORDER BY played_at DESC NULLS LAST))[1] AS player_name,
-    count(*) AS games_played,
-    sum(goals) AS goals,
-    sum(assists) AS assists,
-    sum(goals + assists) AS points,
-    sum(shots_on_goal) AS shots_on_goal,
-    sum(hits) AS hits,
-    sum(shots_blocked) AS shots_blocked,
-    sum(toi_seconds) AS toi_seconds,
-    sum(goals_for) AS goals_for,
-    sum(goals_against) AS goals_against,
-    sum(goals_for - goals_against) AS plus_minus,
-    sum(CASE WHEN outcome = 'win'::text THEN 1 ELSE 0 END) AS wins,
-    sum(CASE WHEN outcome = 'loss'::text THEN 1 ELSE 0 END) AS losses,
-    round(sum(goals)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS goals_per_60,
-    round(sum(assists)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS assists_per_60,
-    round(sum(goals + assists)::numeric / NULLIF(sum(toi_seconds), 0)::numeric * 3600::numeric, 2) AS points_per_60,
-    -- New sums appended at the END: CREATE OR REPLACE VIEW can only add trailing
-    -- columns, never reorder existing ones (else it errors renaming a column).
-    sum(hits_taken) AS hits_taken,
-    sum(takeaways) AS takeaways,
-    sum(giveaways) AS giveaways,
-    sum(faceoff_wins) AS faceoff_wins,
-    sum(faceoff_losses) AS faceoff_losses,
-    round(sum(faceoff_wins)::numeric / NULLIF(sum(faceoff_wins) + sum(faceoff_losses), 0)::numeric * 100::numeric, 1) AS faceoff_pct
-   FROM career_stats
-  WHERE steam_id IS NOT NULL
-  GROUP BY steam_id;
+  SELECT t.*
+    FROM (SELECT DISTINCT steam_id FROM career_stats WHERE steam_id IS NOT NULL) s,
+         LATERAL public.career_totals_for(s.steam_id, NULL) t;
 
 grant select on public.career_totals to anon;
 
 -- ── Per-game history (career screen, Recent Games tab) ───────────────────────
 -- Returns the games a given player appeared in, newest first, each with the
 -- full per-player roster as nested JSON.
-create or replace function public.recent_games_for(player_steam_id bigint, game_limit integer default 20)
+drop function if exists public.recent_games_for(bigint, integer);
+create function public.recent_games_for(player_steam_id bigint, game_limit integer default 20)
  returns table(game_id uuid, ended_at timestamptz, home_score integer, away_score integer,
-               num_periods integer, period_scores jsonb, players jsonb, game_version text)
+               num_periods integer, period_scores jsonb, players jsonb, game_version text,
+               team_size integer, outcome text, shot_count bigint)
  language sql
  stable
 as $function$
@@ -168,7 +273,16 @@ as $function$
       )
       ORDER BY cs.team_id, cs.player_name
     )                                                                              AS players,
-    MAX(cs.game_version)                                                            AS game_version
+    MAX(cs.game_version)                                                            AS game_version,
+    -- Roster size, so the browser can badge 3v3 vs 5v5 without a second query.
+    MAX(cs.team_size)::int                                                          AS team_size,
+    -- THIS player's result, for the win/loss badge. max() over a filtered case is
+    -- just "the requesting player's row" — every other row's expression is null.
+    MAX(CASE WHEN cs.steam_id = player_steam_id THEN cs.outcome END)                 AS outcome,
+    -- How many shots were logged for this game, so the browser can enable its
+    -- Analytics action only where there is something to draw. Games recorded
+    -- before shot logging existed return 0 rather than an empty screen.
+    (SELECT count(*) FROM shot_events se WHERE se.game_id = cs.game_id)              AS shot_count
   FROM career_stats cs
   WHERE cs.game_id IN (
     SELECT DISTINCT cs2.game_id FROM career_stats cs2

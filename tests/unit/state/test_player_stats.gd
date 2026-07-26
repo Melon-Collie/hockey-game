@@ -20,13 +20,16 @@ func _full() -> PlayerStats:
 	s.one_timer_goals = 11
 	s.tip_goals = 12
 	s.ot_goals = 13
+	s.shot_attempts = 14
+	s.shot_attempts_blocked = 15
+	s.xg_for = 2.5
 	s.toi_seconds = 123.4
 	return s
 
 
-func test_to_array_has_fourteen_fields_in_order() -> void:
+func test_to_array_has_seventeen_fields_in_order() -> void:
 	var a := _full().to_array()
-	assert_eq(a, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 11, 12, 13])
+	assert_eq(a, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 11, 12, 13, 14, 15, 2.5])
 
 
 func test_round_trip_preserves_broadcast_counters() -> void:
@@ -42,18 +45,24 @@ func test_round_trip_preserves_broadcast_counters() -> void:
 	assert_eq(restored.one_timer_goals, 11)
 	assert_eq(restored.tip_goals, 12)
 	assert_eq(restored.ot_goals, 13)
+	assert_eq(restored.shot_attempts, 14)
+	assert_eq(restored.shot_attempts_blocked, 15)
+	assert_almost_eq(restored.xg_for, 2.5, 0.0001)
 
 
 func test_update_from_array_preserves_local_toi() -> void:
 	# toi_seconds never crosses the wire; a decode must not zero a client's count.
 	var s := PlayerStats.new()
 	s.toi_seconds = 42.0
-	s.update_from_array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 2, 3, 4])
+	s.update_from_array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 2, 3, 4, 16, 5, 1.75])
 	assert_eq(s.faceoff_wins, 9)
 	assert_eq(s.faceoff_losses, 10)
 	assert_eq(s.one_timer_goals, 2)
 	assert_eq(s.tip_goals, 3)
 	assert_eq(s.ot_goals, 4)
+	assert_eq(s.shot_attempts, 16)
+	assert_eq(s.shot_attempts_blocked, 5)
+	assert_almost_eq(s.xg_for, 1.75, 0.0001)
 	assert_almost_eq(s.toi_seconds, 42.0, 0.001)
 
 
@@ -64,4 +73,7 @@ func test_to_dict_includes_new_stats() -> void:
 	assert_eq(d["giveaways"], 8)
 	assert_eq(d["faceoff_wins"], 9)
 	assert_eq(d["faceoff_losses"], 10)
+	assert_eq(d["shot_attempts"], 14)
+	assert_eq(d["shot_attempts_blocked"], 15)
+	assert_almost_eq(d["xg_for"], 2.5, 0.0001)
 	assert_eq(d["toi_seconds"], 123)  # rounded

@@ -77,6 +77,9 @@ signal offside_called_received
 signal faceoff_positions_received(positions: Array)
 signal game_reset_received(new_game_id: String)
 signal stats_received(data: Array)
+# The host's per-game shot log, pushed once at game-over (analytics B1) so a
+# client can render its own post-game shot map. Payload is ShotEvent.encode_list.
+signal shot_events_received(data: Array)
 signal slot_swap_requested(peer_id: int, new_team_id: int, new_slot: int)
 signal slot_swap_confirmed(peer_id: int, old_team_id: int, old_slot: int, new_team_id: int, new_slot: int, jersey: Color, helmet: Color, pants: Color)
 signal game_started(config: Dictionary)
@@ -1140,6 +1143,15 @@ func get_peer_number(peer_id: int) -> int:
 	return _peer_numbers.get(peer_id, 10)
 
 func get_peer_steam_id(peer_id: int) -> int:
+	# `_peer_steam_ids` is filled in the request_join handler, which only ever runs
+	# for REMOTE joiners — the local player never joins itself, so the map has no
+	# entry for it. Resolve that one from SteamManager instead of reporting 0,
+	# which otherwise makes the local player indistinguishable from a bot to
+	# anything keying on Steam identity (the career shot map read empty for
+	# exactly this reason: every shot the local player took was logged under 0).
+	# Offline is the worst case — the local player is the ONLY human there.
+	if peer_id == local_peer_id():
+		return SteamManager.steam_id
 	return _peer_steam_ids.get(peer_id, 0)
 
 # True if the host kicked this peer (vs. a voluntary/network drop). Valid only
@@ -1925,6 +1937,18 @@ func send_stats_to_all(data: Array) -> void:
 @rpc("authority", "call_remote", "reliable")
 func receive_stats(data: Array) -> void:
 	stats_received.emit(data)
+
+# The game's shot log (analytics B1), shipped once at game-over. Only the host
+# accumulates it (AdvancedStatsTracker), so clients need it pushed to render
+# their own post-game shot map / xG-flow. One reliable send, not a per-tick
+# broadcast — it's a few dozen records once per match.
+func send_shot_events_to_all(data: Array) -> void:
+	for peer_id in connected_peer_ids():
+		receive_shot_events.rpc_id(peer_id, data)
+
+@rpc("authority", "call_remote", "reliable")
+func receive_shot_events(data: Array) -> void:
+	shot_events_received.emit(data)
 
 @rpc("any_peer", "reliable")
 func request_slot_swap(new_team_id: int, new_slot: int) -> void:

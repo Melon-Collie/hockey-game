@@ -188,7 +188,18 @@ const VERSION: String = "dev"
 #      claim-carried interp-delay plausibility ceiling all derive from it. A
 #      mixed pair would size its cushion and validate claims against the wrong
 #      interval, so the lobby must be rate-homogeneous.
-const PROTOCOL_VERSION: int = 42
+# v43: analytics A1 — the per-player stats record gains two host-authoritative
+#      broadcast counters (shot_attempts, shot_attempts_blocked → Corsi/Fenwick),
+#      widening STATS_PLAYER_RECORD_SIZE 15 → 17. A v42 peer would misalign the
+#      stats player-block walk, so mixed builds must be refused.
+# v44: analytics A2 — the stats record gains a float xg_for (individual expected
+#      goals), widening STATS_PLAYER_RECORD_SIZE 17 → 18. Same misalignment risk
+#      against a v43 peer, so mixed builds must be refused.
+# v45: analytics B1 — new authority RPC receive_shot_events: the host pushes the
+#      game's shot log at game-over so clients can render their own post-game
+#      shot map. Adding an @rpc method shifts the rpc-config ordering both peers
+#      hash, so mixed builds must be refused.
+const PROTOCOL_VERSION: int = 45
 
 
 func _ready() -> void:
