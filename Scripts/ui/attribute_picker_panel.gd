@@ -22,10 +22,9 @@ extends VBoxContainer
 # preserves the build's FRAME (its position in the BMI band) and recomputes
 # pounds, so a lean build stays lean as it grows.
 #
-# Gear slots ride through the preset levels; each gains its selector when its
-# gameplay stage lands. Live: STICK LENGTH (levels[5]), BLADE CURVE
-# (levels[3]) and STICK FLEX (levels[4]) — three-way exclusive rows sharing
-# one builder. Skate profile (levels[2]) is stored but not yet editable.
+# Gear slots ride through the preset levels. All four are live and editable —
+# STICK LENGTH (levels[5]), BLADE CURVE (levels[3]), STICK FLEX (levels[4])
+# and SKATE PROFILE (levels[2]) — three-way exclusive rows sharing one builder.
 
 signal changed
 
