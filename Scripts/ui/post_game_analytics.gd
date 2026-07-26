@@ -223,7 +223,7 @@ func _refresh() -> void:
 # `home_goals`/`away_goals` may be -1 when unknown, in which case goals are
 # counted from the events too.
 func present_history(events: Array[ShotEvent], home_goals: int, away_goals: int,
-		label: String) -> void:
+		label: String, colors: Array[Color] = []) -> void:
 	var totals: Array[Dictionary] = _totals_from_events(events)
 	if home_goals >= 0:
 		totals[0]["goals"] = home_goals
@@ -237,9 +237,12 @@ func present_history(events: Array[ShotEvent], home_goals: int, away_goals: int,
 	for e: ShotEvent in events:
 		period_s = maxf(period_s, e.clock_s)
 		periods = maxi(periods, e.period)
-	# Historical palettes aren't recorded, so use the neutral defaults rather than
-	# painting an old game in whatever colours the current session happens to use.
-	_render(events, totals, _team_colors, period_s, periods, label)
+	# The match's real palette when the caller could recover it (the .mreplay
+	# header records both colour slots); the neutral defaults otherwise — never
+	# the CURRENT session's colours, which would paint an old game in a palette
+	# it was never played in.
+	_render(events, totals, colors if colors.size() == 2 else _team_colors,
+			period_s, periods, label)
 	_show()
 
 

@@ -48,6 +48,11 @@ var _heat_rows: Array = []
 # original measure instead of stretching across the screen.
 const _NARROW_TAB_WIDTH: float = 660.0
 
+# Fallback palette for a game whose colours can't be recovered (a backend row
+# with no local .mreplay). Matches PostGameAnalytics' own defaults.
+const _NEUTRAL_HOME := Color(0.85, 0.35, 0.15)
+const _NEUTRAL_AWAY := Color(0.22, 0.53, 0.90)
+
 # Games tab. Backend-backed games render as a card with score, period breakdown,
 # team-grouped player rows and a Watch button; local-only replays render from
 # their own file meta (a different stat set — see _build_replay_file_card).
@@ -625,9 +630,11 @@ func _render_games(games: Array) -> void:
 		var gid: String = str(game.get("game_id", ""))
 		if not gid.is_empty():
 			seen[gid] = true
+		var gpath: String = "user://replays/%s.mreplay" % gid
 		entries.append({
 			"at": _iso_to_unix(str(game.get("ended_at", ""))),
-			"game": game, "path": "",
+			"game": game,
+			"path": gpath if FileAccess.file_exists(gpath) else "",
 		})
 	for path: String in ReplayFileIndex.list():
 		# Filename IS the game_id, so a replay already covered by a backend row
@@ -649,14 +656,22 @@ func _render_games(games: Array) -> void:
 	for e: Variant in entries:
 		var row: Dictionary = e as Dictionary
 		var path: String = String(row["path"])
+		# The palette a match was played in lives only in the .mreplay header
+		# (career_stats has no colour columns), so read it whenever the file is
+		# here — including for backend-backed games, which then get their real
+		# colours instead of the neutral fallback.
+		var meta: Dictionary = ReplayFileReader.read_meta(path) if not path.is_empty() else {}
 		if path.is_empty():
 			_recent_content.add_child(
-					_build_game_card(_summarise_backend(row["game"] as Dictionary)))
+					_build_game_card(_summarise_backend(row["game"] as Dictionary, {})))
 			continue
-		var meta: Dictionary = ReplayFileReader.read_meta(path)
 		if not bool(meta.get("ok", false)):
 			continue  # unreadable / wrong-version file — skip silently
-		_recent_content.add_child(_build_game_card(_summarise_replay(path, meta)))
+		if row["game"] != null and not (row["game"] as Dictionary).is_empty():
+			_recent_content.add_child(
+					_build_game_card(_summarise_backend(row["game"] as Dictionary, meta)))
+		else:
+			_recent_content.add_child(_build_game_card(_summarise_replay(path, meta)))
 
 
 # ISO-8601 -> unix seconds, so backend rows sort against replay file mtimes.
@@ -703,6 +718,8 @@ func _build_game_card(summary: Dictionary) -> Control:
 	var team_size: int = int(summary.get("team_size", 0))
 	if team_size > 0:
 		top.add_child(_badge("%dv%d" % [team_size, team_size], MenuStyle.TEXT_DIM))
+	# Result and origin are independent — a local game can also be a win, and
+	# showing only one of the two made the badge row look like it was picking.
 	var outcome: String = String(summary.get("outcome", ""))
 	if not outcome.is_empty():
 		top.add_child(_badge(outcome.to_upper(), _outcome_color(outcome)))
@@ -711,23 +728,27 @@ func _build_game_card(summary: Dictionary) -> Control:
 	vbox.add_child(top)
 
 	# Score line: the headline, and the only thing in a large size.
+	# Score line, in the match's own colours — the same identity channel the
+	# scorebug and the analytics screen use, so a game reads the same everywhere.
+	var colors: Array = summary.get("colors", []) as Array
+	var home_col: Color = colors[0] if colors.size() == 2 else _NEUTRAL_HOME
+	var away_col: Color = colors[1] if colors.size() == 2 else _NEUTRAL_AWAY
 	var score := HBoxContainer.new()
 	score.alignment = BoxContainer.ALIGNMENT_CENTER
-	score.add_theme_constant_override("separation", 12)
+	score.add_theme_constant_override("separation", 10)
+	score.add_child(_team_swatch(home_col))
 	score.add_child(_ui_label("HOME", 12, MenuStyle.TEXT_DIM))
-	score.add_child(_display_label(str(int(summary.get("home", 0))), 30,
-			MenuStyle.BROADCAST_CREAM))
+	score.add_child(_display_label(str(int(summary.get("home", 0))), 30, home_col))
 	score.add_child(_display_label("—", 18, MenuStyle.TEXT_MUTED))
-	score.add_child(_display_label(str(int(summary.get("away", 0))), 30,
-			MenuStyle.BROADCAST_CREAM))
+	score.add_child(_display_label(str(int(summary.get("away", 0))), 30, away_col))
 	score.add_child(_ui_label("AWAY", 12, MenuStyle.TEXT_DIM))
+	score.add_child(_team_swatch(away_col))
 	vbox.add_child(score)
 
-	var periods: String = _period_line(summary.get("periods", []) as Array)
-	if not periods.is_empty():
-		var pl := _ui_label(periods, 11, MenuStyle.TEXT_MUTED)
-		pl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		vbox.add_child(pl)
+	var periods: Control = _period_grid(summary.get("periods", []) as Array,
+			home_col, away_col)
+	if periods != null:
+		vbox.add_child(periods)
 
 	var actions := HBoxContainer.new()
 	actions.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -739,7 +760,7 @@ func _build_game_card(summary: Dictionary) -> Control:
 
 
 # Backend history row -> card summary.
-func _summarise_backend(game: Dictionary) -> Dictionary:
+func _summarise_backend(game: Dictionary, meta: Dictionary) -> Dictionary:
 	var gid: String = str(game.get("game_id", ""))
 	var path: String = "user://replays/%s.mreplay" % gid
 	# Score comes from period_scores when present: the period line rendered just
@@ -759,6 +780,7 @@ func _summarise_backend(game: Dictionary) -> Dictionary:
 		"path": path if FileAccess.file_exists(path) else "",
 		"source": "backend",
 		"game_id": gid,
+		"colors": _colors_from_meta(meta),
 		# recent_games_for counts the logged shots, so the Analytics action is
 		# enabled only where there is something to draw — games recorded before
 		# shot logging existed report 0 rather than opening an empty screen.
@@ -779,16 +801,56 @@ func _summarise_replay(path: String, meta: Dictionary) -> Dictionary:
 		"away": _safe_int(footer.get("final_score_away", 0)),
 		"periods": (footer.get("period_scores", []) as Array) if footer.get("period_scores") != null else [],
 		"team_size": _safe_int(footer.get("team_size", 0)),
-		"outcome": "",
+		"outcome": _outcome_from_meta(meta),
 		"path": path,
 		"source": "local",
 		"game_id": "",
+		"colors": _colors_from_meta(meta),
 		# Footers written before shot logging have no list, so this reads 0 and
 		# the action stays disabled for older files.
 		"shots": (footer.get("shot_events", []) as Array).size() \
 				if footer.get("shot_events") != null else 0,
 		"shot_rows": footer.get("shot_events", []),
 	}
+
+
+# The match's real palette, from the .mreplay header's colour slots. career_stats
+# has no colour columns, so a backend game with no local file falls back to the
+# neutral pair rather than borrowing the current session's colours — which would
+# paint an old game in a palette it was never played in.
+func _colors_from_meta(meta: Dictionary) -> Array[Color]:
+	var header: Dictionary = meta.get("header", {})
+	if not header.has("home_color_slot"):
+		return [_NEUTRAL_HOME, _NEUTRAL_AWAY]
+	var out: Array[Color] = []
+	for team_id: int in 2:
+		var slot: int = _safe_int(header.get(
+				"home_color_slot" if team_id == 0 else "away_color_slot", 0))
+		out.append(TeamColorRegistry.get_colors(slot, team_id).jersey)
+	return out
+
+
+# Win/loss for a LOCAL-only game. The footer records the score but not whose it
+# was; the header's roster does, via the is_local flag on the recording peer's
+# entry. Empty when the roster can't answer (a spectator recording, say).
+func _outcome_from_meta(meta: Dictionary) -> String:
+	var header: Dictionary = meta.get("header", {})
+	var footer: Dictionary = meta.get("footer", {})
+	var my_team: int = -1
+	for entry: Variant in (header.get("players", []) as Array):
+		var p: Dictionary = entry as Dictionary
+		if bool(p.get("is_local", false)):
+			my_team = _safe_int(p.get("team_id", -1))
+			break
+	if my_team < 0:
+		return ""
+	var home: int = _safe_int(footer.get("final_score_home", 0))
+	var away: int = _safe_int(footer.get("final_score_away", 0))
+	var mine: int = home if my_team == 0 else away
+	var theirs: int = away if my_team == 0 else home
+	if mine > theirs:
+		return "win"
+	return "loss" if mine < theirs else "draw"
 
 
 func _sum_periods(row: Variant) -> int:
@@ -799,16 +861,58 @@ func _sum_periods(row: Variant) -> int:
 	return total
 
 
-# "1-1 · 2-1 · 1-1" — compact enough to sit under the score without competing.
-func _period_line(periods: Array) -> String:
+# Period scoring as a real grid — a header row of period numbers over one row
+# per team — matching how period scores are laid out everywhere else in the game.
+# The previous run-together string ("1-1 · 2-1 · 1-1") gave no column alignment
+# and no way to see which side a number belonged to. Null when there is nothing
+# to show.
+func _period_grid(periods: Array, home_col: Color, away_col: Color) -> Control:
 	if periods.size() < 2 or not (periods[0] is Array) or not (periods[1] is Array):
-		return ""
+		return null
 	var home: Array = periods[0] as Array
 	var away: Array = periods[1] as Array
-	var parts: PackedStringArray = PackedStringArray()
-	for i: int in mini(home.size(), away.size()):
-		parts.append("%d-%d" % [_safe_int(home[i]), _safe_int(away[i])])
-	return " · ".join(parts)
+	var count: int = mini(home.size(), away.size())
+	if count <= 0:
+		return null
+
+	var grid := GridContainer.new()
+	grid.columns = count + 1
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 2)
+	grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+
+	grid.add_child(_period_cell("", MenuStyle.TEXT_MUTED, 10))
+	for i: int in count:
+		# OT periods carry on past the configured regulation count; label them as
+		# such rather than as "P4".
+		var label: String = "P%d" % (i + 1) if i < 3 else "OT"
+		grid.add_child(_period_cell(label, MenuStyle.TEXT_MUTED, 10))
+	for row: int in 2:
+		var side: Array = home if row == 0 else away
+		var col: Color = home_col if row == 0 else away_col
+		grid.add_child(_period_cell("H" if row == 0 else "A", col, 11))
+		for i: int in count:
+			grid.add_child(_period_cell(str(_safe_int(side[i])),
+					MenuStyle.BROADCAST_CREAM, 12))
+	return grid
+
+
+func _period_cell(text: String, color: Color, size: int) -> Label:
+	var l := _ui_label(text, size, color)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.custom_minimum_size = Vector2(22, 0)
+	return l
+
+
+func _team_swatch(color: Color) -> Control:
+	var p := Panel.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.set_corner_radius_all(2)
+	p.add_theme_stylebox_override("panel", style)
+	p.custom_minimum_size = Vector2(4, 24)
+	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return p
 
 
 func _badge(text: String, color: Color) -> Control:
@@ -873,22 +977,26 @@ func _on_analytics_pressed(summary: Dictionary) -> void:
 	var home: int = int(summary.get("home", -1))
 	var away: int = int(summary.get("away", -1))
 	var label: String = "%s · replayed from the game's shot log" % String(summary.get("date", ""))
+	var colors: Array[Color] = []
+	for c: Variant in (summary.get("colors", []) as Array):
+		colors.append(c as Color)
 	if String(summary.get("source", "")) == "local":
 		_show_analytics(ShotEvent.decode_list(summary.get("shot_rows", []) as Array),
-				home, away, label)
+				home, away, label, colors)
 		return
 	_reporter.fetch_shot_events(String(summary.get("game_id", "")),
 			func(rows: Array) -> void:
-				_show_analytics(ShotEvent.decode_rows(rows), home, away, label))
+				_show_analytics(ShotEvent.decode_rows(rows), home, away, label, colors))
 
 
-func _show_analytics(events: Array[ShotEvent], home: int, away: int, label: String) -> void:
+func _show_analytics(events: Array[ShotEvent], home: int, away: int, label: String,
+		colors: Array[Color]) -> void:
 	if _analytics == null:
 		# Created lazily and owned here: the career screen is reachable from the
 		# main menu, where no HUD exists to provide one.
 		_analytics = PostGameAnalytics.new()
 		add_child(_analytics)
-	_analytics.present_history(events, home, away, label)
+	_analytics.present_history(events, home, away, label, colors)
 
 
 func _on_watch_pressed(path: String) -> void:
