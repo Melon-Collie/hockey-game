@@ -255,6 +255,89 @@ func test_disguise_delta() -> void:
 			"...and selling the wrong corner must at least cost him reach margin")
 
 
+# ── SWEPT look-off: the arm the step-disguise cannot measure ─────────────────
+# `_sweep`'s disguise is a STEP — the declared aim is parked on the decoy for the
+# whole wind-up and jumps to the real corner at release. That shape cannot
+# distinguish a goalie reading the LIVE aim from one reading a stale sample,
+# because an aim that never moves makes stale == live by construction.
+#
+# This is the human gesture instead: hold LMB, coil toward the decoy, then drag
+# the cursor across and release. Now the two differ — a live read follows the
+# cursor over and arrives re-aimed; a stale read is still parked `read_lag`
+# behind it.
+#
+# ── MEASURED (2026-07) ───────────────────────────────────────────────────────
+# Built to test a hypothesis: that the pre-lean reading the LIVE aim was eating
+# the payoff for corner deception (wrong corner buys reach margin but converts no
+# goals, while wrong height converts). It is not.
+#
+#   swept        live pre-lean     stale pre-lean (`_lagged_aim`)
+#   ticks        lag .05 / .13     lag .05      lag .13
+#     6          -0.1514 (both)    -0.1486      -0.1493
+#    12          -0.1529 (both)    -0.1436      -0.1496
+#    24          -0.1515 (both)    -0.1411      -0.1388
+#    48          -0.1621 (both)    -0.1521      -0.1348
+#
+# Goals identical in every cell. The live column is lag-INVARIANT, which is the
+# defect stated plainly: `read_lag` never reached the hands. Feeding the lean the
+# stale sample connects them, and the effect grows with the lag as it should — but
+# it is 1-3 cm on a ~15 cm gap and flips nothing.
+#
+# So the real answer to "why doesn't wrong-corner convert at 5-9 m" is the one
+# already in test_disguise_delta's comment: the arm's reach budget is big enough
+# to re-aim. The disguised deficit is -0.15 m — the arm covers the gap with 15 cm
+# to spare, and deception buys 8. The lever is the budget, not the read.
+#
+# Report-only. `deficit` is the metric that matters here: the existing test notes
+# it is sampled at release and therefore "sees only the pre-lean", which is
+# exactly the channel under examination. Higher (less negative) = the arm owes
+# more travel than it can cover = the deception bought something.
+func _swept(sweep_ticks: int) -> Dictionary:
+	var goals: int = 0
+	var shots: int = 0
+	var deficit_sum: float = 0.0
+	for spot: Vector2 in SPOTS:
+		for side: int in [-1, 1]:
+			var shooter := Vector3(spot.x, 0.0, GOAL_Z + spot.y)
+			var aim := Vector3(float(side) * CORNER_X, 0.0, GOAL_Z)
+			var decoy := Vector3(float(-side) * CORNER_X, 0.0, GOAL_Z)
+			_h.sweep_windup(shooter, decoy, aim, LOFT_HIGH, POWER_T,
+					WINDUP_TICKS, sweep_ticks)
+			deficit_sum += _reach_metrics(shooter, aim).y
+			if _h.fire_release(shooter, aim, LOFT_HIGH, POWER_T, 0.0) == Harness.GOAL:
+				goals += 1
+			shots += 1
+	return {
+		"goals": goals, "shots": shots,
+		"mean_deficit": deficit_sum / maxf(float(shots), 1.0),
+	}
+
+
+func test_report_swept_look_off() -> void:
+	# Both lags: HARD's (the sharpest goalie, shortest lag) and the controller's
+	# authored default, which the easier profiles sit at or above. If the stale
+	# pre-lean were going to matter anywhere it would be at the LONGER lag, where
+	# a live read and a stale one are furthest apart.
+	for lag: float in [GoalieSkillProfile.hard().read_lag_s,
+			GoalieController.new().read_lag]:
+		_ctrl.read_lag = lag
+		var tele: Dictionary = _sweep(false)
+		var step: Dictionary = _sweep(true)
+		gut.p("read_lag = %.2f s (%d ticks). Sweep = cursor dragged decoy → real corner"
+				% [lag, int(round(lag * 120.0))])
+		gut.p("  %-26s goals=%2d/%d  mean deficit=%+.4f m"
+				% ["telegraphed", tele["goals"], tele["shots"], tele["mean_deficit"]])
+		gut.p("  %-26s goals=%2d/%d  mean deficit=%+.4f m"
+				% ["step look-off (existing)", step["goals"], step["shots"],
+				step["mean_deficit"]])
+		for ticks: int in [6, 12, 24, 48]:
+			var d: Dictionary = _swept(ticks)
+			gut.p("  swept %2d ticks (%.2f s)  goals=%2d/%d  deficit=%+.4f m  (vs tele %+.4f)"
+					% [ticks, float(ticks) / 120.0, d["goals"], d["shots"],
+					d["mean_deficit"], d["mean_deficit"] - float(tele["mean_deficit"])])
+	assert_true(true, "report")
+
+
 # The pre-arm is what makes the disguise test sharp: the goalie must actually be
 # fixating on the declared aim, or "disguise" would be measuring nothing. Pins the
 # read pipeline the instrument depends on.

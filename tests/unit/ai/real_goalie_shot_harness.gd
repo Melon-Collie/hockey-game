@@ -454,6 +454,26 @@ func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 		_ctrl._physics_process(DT)
 
 
+# Hold a wrister windup that SWEEPS: `hold_ticks` parked on `from_aim`, then
+# `sweep_ticks` walking the declared aim linearly to `to_aim`. This is the
+# human-executable look-off — hold LMB, coil toward the decoy, drag the cursor
+# across, release — and it is the only shape that separates a goalie reading the
+# LIVE aim from one reading a stale sample. `hold_windup`'s step-at-release
+# disguise cannot: an aim that never moves during the wind-up makes stale and
+# live identical by construction.
+func sweep_windup(shooter: Vector3, from_aim: Vector3, to_aim: Vector3,
+		loft_level: int, power_t: float, hold_ticks: int,
+		sweep_ticks: int) -> void:
+	hold_windup(shooter, from_aim, loft_level, power_t, hold_ticks)
+	for i: int in sweep_ticks:
+		var t: float = float(i + 1) / float(maxi(sweep_ticks, 1))
+		_shooter.predicted_shot_velocity = shot_velocity(
+				shooter, from_aim.lerp(to_aim, t), loft_level, power_t, 0.0)
+		_puck.global_position = shooter
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+
+
 # Release toward `aim` through the real puck_released event and march it.
 func fire_release(shooter: Vector3, aim: Vector3, loft_level: int,
 		power_t: float, err_rad: float) -> int:

@@ -3432,10 +3432,33 @@ func _set_pad_toe_out_inputs() -> void:
 
 # Populate the pose builder's pre-lean fields. The goalie leans toward a charging
 # shot's predicted impact while reading the windup (see _is_reading_shot_threat).
-# Directional lean needs the shooter's live predicted velocity, which SkaterController
+# Directional lean needs the shooter's predicted velocity, which SkaterController
 # publishes for both shot types and every shooter including remotes (the host
-# simulates a remote's carry from replicated input). Re-solved every tick off the
-# LIVE aim, so a late release moves the impact off the lean.
+# simulates a remote's carry from replicated input).
+#
+# ONE BELIEF. The lean uses `_lagged_aim()` — the SAME stale sample the release
+# read commits to — not the live value. Reading the live aim here made the goalie
+# hold two contradictory ideas about the same shot: at release he believed the aim
+# from `read_lag` ago, while his hands were already parked on the current one. A
+# pre-lean is a read of the shooter's body developing, and a body read lags for
+# the same reason the release read does. The concrete symptom was that
+# `read_lag` — the dial that governs how WRONG he can be, and the one difficulty
+# varies (GoalieSkillProfile.read_lag_s) — did not reach his hands at all.
+#
+# A stable aim through the wind-up leans exactly where it always did (stale ==
+# truth), so this costs a telegraphed shooter nothing.
+#
+# ⚠️ SMALL. Measured on the swept look-off in test_goalie_disguise_read (hold on
+# the decoy, drag the cursor across, release — the shape that separates live from
+# stale; the step disguise cannot, since an aim that never moves makes them
+# identical). It buys the shooter ~1 cm of extra reach deficit at read_lag 0.05
+# and ~3 cm at 0.13, on a ~15 cm gap, and flips ZERO outcomes. It was tried on the
+# hypothesis that the live lean was eating the payoff for corner deception; the
+# measurement says it was not. The reason wrong-corner costs reach without
+# converting at 5-9 m is simply that the arm's budget there is large — the
+# disguised deficit sits at -0.15 m, so the arm covers the gap with 15 cm to
+# spare while deception buys 8. If corner deception should pay more, the lever is
+# the reach budget, not the read. Kept for consistency, not for effect.
 func _set_prelean_inputs() -> void:
 	_pose_inputs.prelean_active = false
 	_pose_inputs.prelean_directional = false
@@ -3447,7 +3470,13 @@ func _set_prelean_inputs() -> void:
 	if not _is_reading_shot_threat(carrier):
 		return
 	_pose_inputs.prelean_active = true
-	var vel: Vector3 = carrier.predicted_shot_velocity
+	# Falls back to the live aim only when there is no history at all (read_lag
+	# disabled, or the wind-up is younger than one sample) — otherwise
+	# `_lagged_aim` already returns the oldest sample it holds, which is the
+	# honest answer for a short wind-up: he can only be as stale as what he saw.
+	var vel: Vector3 = _lagged_aim()
+	if vel.length_squared() < 0.01:
+		vel = carrier.predicted_shot_velocity
 	if vel.length_squared() < 0.01:
 		return  # not yet published this charge (freshness guard) — non-directional tell
 	var res: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot_into(
