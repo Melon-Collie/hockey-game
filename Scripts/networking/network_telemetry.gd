@@ -257,6 +257,14 @@ var bytes_received_per_sec: float = 0.0
 # _puck_hard_snap_count). Near-zero in healthy play.
 var puck_hard_snap_per_sec: float = 0.0
 var input_queue_depth_median: int = 0
+# HOST-side: the deepest remote input queue seen this window (the host's own view
+# of its pending client inputs — input_queue_depth above is the client's echo and
+# folds 0 on host rows). This is the discriminator for drain-driven reconcile
+# churn: drains firing while the queue is DEEP means the drain is eating a
+# cushion the lead servo deliberately built (raise the drain trigger); drains
+# while it is SHALLOW (0-1) means inputs genuinely arrive late and the lead /
+# clock is the problem. Without it the two are indistinguishable in a session row.
+var host_input_queue_depth_max: int = 0
 var input_lead_avg_ms: float = 0.0
 var input_starvations_per_sec: float = 0.0
 var input_drains_per_sec: float = 0.0
@@ -265,6 +273,7 @@ var puck_predict_residual_max_m: float = 0.0
 var remote_correction_avg_m: float = 0.0
 var remote_correction_max_m: float = 0.0
 var _queue_depth_window: Array[int] = []
+var _host_queue_depth_window_max: int = 0
 var packet_loss_pct: float = 0.0
 var jitter_p95_ms: float = 0.0
 var puck_mode: String = "—"
@@ -321,6 +330,16 @@ static func record_queue_depth(depth: int) -> void:
 	instance._queue_depth_window.append(depth)
 	if instance._queue_depth_window.size() > QUEUE_DEPTH_WINDOW:
 		instance._queue_depth_window.pop_front()
+
+# Host-side per-peer pending input depth, sampled once per broadcast per remote
+# skater (see host_input_queue_depth_max). Keeps the window maximum — a median
+# would hide the burst depth that precedes a drain, which is the whole signal.
+static func record_host_queue_depth(depth: int) -> void:
+	if instance == null:
+		return
+	if depth > instance._host_queue_depth_window_max:
+		instance._host_queue_depth_window_max = depth
+
 
 static func record_packet_loss(pct: float) -> void:
 	if instance: instance.packet_loss_pct = pct
@@ -635,6 +654,7 @@ func tick(delta: float) -> void:
 	remote_correction_avg_m = (_remote_correction_sum / _remote_correction_n) \
 			if _remote_correction_n > 0 else 0.0
 	remote_correction_max_m = _remote_correction_max
+	host_input_queue_depth_max = _host_queue_depth_window_max
 	if not _queue_depth_window.is_empty():
 		var sorted := _queue_depth_window.duplicate()
 		sorted.sort()
@@ -714,6 +734,7 @@ func tick(delta: float) -> void:
 	_input_lead_n = 0
 	_starvation_count = 0
 	_input_drain_count = 0
+	_host_queue_depth_window_max = 0
 	_puck_predict_residual_sum = 0.0
 	_puck_predict_residual_n = 0
 	_puck_predict_residual_max = 0.0
@@ -796,6 +817,10 @@ func _fold_session_sample() -> void:
 		"delay_clamps": float(_delay_clamp_count),
 		"delay_clamp_excess_ms": _delay_clamp_excess_max_ms,
 		"input_queue_depth": float(input_queue_depth_median),
+		# Host-only (clients fold 0): deepest pending remote input queue this
+		# window. Read WITH input_drains_per_sec — deep+draining = the drain is
+		# eating the servo's cushion; shallow+draining = inputs really are late.
+		"host_input_queue_depth": float(host_input_queue_depth_max),
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,
 		"host_stalls": float(_host_stall_count),

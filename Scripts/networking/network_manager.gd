@@ -1389,10 +1389,33 @@ func get_input_lead_ms() -> float:
 # acks) don't skew the mean; the servo itself range-guards phase artifacts.
 var _last_sampled_ack: float = 0.0
 
+# A DRAIN acks several inputs in one tick (RemoteController._drain_backlog pops
+# from >_DRAIN_TRIGGER_S overdue down to _DRAIN_TARGET_S), so the ack jumps by
+# at least trigger − target ≈ 25 ms in a single snapshot, and the last drained
+# stamp reads hugely overdue. Feeding that to the servo is a double response:
+# the drain ALREADY cleared the backlog, so the extra lead buys nothing and is
+# charged straight to this player's input latency. Two playtest client rows
+# showed the servo pinned at its 50 ms ceiling all game on 20 ms links with the
+# host draining ~4/s — the signature of exactly this loop.
+#
+# Detected client-side with no wire change: the host pops one input per tick and
+# broadcasts every _state_tick_divisor ticks, so a healthy ack advances by
+# ~1/STATE_RATE per snapshot. Anything at drain scale is a drain (or a burst of
+# consecutive lost snapshots, which is equally not a lead problem). Constraint:
+# the normal advance must stay under this bound — true while STATE_RATE ≥ 40.
+const _ACK_DRAIN_ADVANCE_S: float = 3.0 * _ClockSyncScript.TICK_DURATION
+
 func record_input_ack(host_ts: float, ack_ts: float) -> void:
 	if is_host or _clock_sync == null or ack_ts <= _last_sampled_ack:
 		return
+	var first_sample: bool = _last_sampled_ack <= 0.0
+	var ack_advance: float = ack_ts - _last_sampled_ack
 	_last_sampled_ack = ack_ts
+	# The first sample has no previous ack to difference against (and a session's
+	# opening ack legitimately jumps from 0), so it can't be classified — skip the
+	# servo rather than mistake it for a drain.
+	if first_sample or ack_advance >= _ACK_DRAIN_ADVANCE_S:
+		return
 	_clock_sync.record_ack_overdue(host_ts - ack_ts)
 
 
