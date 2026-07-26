@@ -1,8 +1,27 @@
 # Transition defense (TRANS_OD) — reground
 
-Status: **design, not yet implemented.** Supersedes the TRANS_OD sections of
+Status: **agreed design, in implementation.** Supersedes the TRANS_OD sections of
 `docs/5v5-ai-plan.md` (§2 TRANS_OD, and the defensive half of §5); the O-zone,
-forecheck, breakout and D-zone designs in that doc are unchanged.
+forecheck and breakout designs in that doc are unchanged, and its D-zone design is
+unchanged *in content* but now gated on coverage readiness (§9).
+
+**Scope: 5v5 first.** 5v5 is the hard problem and the one with a real structure to get
+right; 3v3 keeps its current TRANS_OD path verbatim until 5v5 is proven, exactly as the
+5v5 plan's "additive, mode-latched" constraint did. See §5.2.
+
+### Decisions banked
+
+- **`TRACK_PUCK` may body check** — same commit logic as every other checker
+  (`AIBodyCheck.evaluate`, only genuinely separating hits), with the extra gate that it
+  must already be goal-side of the carrier. A backchecker who catches a carrier from
+  behind is a legitimate hit; hunting one from up-ice is not.
+- **5v5 first, 3v3 deferred.** Whether 3v3 wants a dedicated `RUSH_D2` or the compressed
+  three-role set is left open until 5v5 is playing well.
+- **`numbers` gets hysteresis** — enter/hold margins on the same pattern as
+  `AIPossessionState.retrieval_read`, so one body crossing the puck line can't flip the
+  whole team's aggression mid-rush.
+- **DZONE entry is gated on coverage readiness** (§9) — the team stays in the rush /
+  recovery shape until the coverage it would switch to actually makes sense.
 
 Research appendix at the bottom. The uncomfortable finding up front: the rush-defense
 doctrine in `docs/5v5-ai-plan.md:542` is **already correct and already in the repo** —
@@ -205,17 +224,19 @@ TRANS_OD's slot set becomes layers. Branching 3v3 / 5v5, with precedent
 Election targets are lane recovery points, not men. Group-scoped as today, with the same
 cross-fill for a short group.
 
-### 3v3 — the same three layers, compressed
+### 5.2 3v3 — deferred
 
-| Slot | Job |
-|---|---|
-| `RUSH_D1` | Owns the carrier. Same behavior module as 5v5. |
-| `TRACK_PUCK` | The backchecker who can catch the carrier — attacks from behind. If nobody can catch him, degrades to `TRACK_MID`. |
-| `TRACK_MID` | Middle lane, circle tops. The second man / trailer. |
+**3v3 keeps its existing TRANS_OD path (CONTAIN + MARK×2) verbatim for now.** 5v5 is the
+hard problem, it has the real structure, and it is where the symptoms bite hardest; the
+5v5 plan's additive/mode-latched precedent (`AIRoleSlots` untouched while `AIRoleSlots5`
+was built) applies directly.
 
-3v3 has no D pair, so `RUSH_D2`'s mid-ice job collapses into `TRACK_MID`, and on a
-`DOWN_ONE` read `RUSH_D1` itself plays the pass (which is what the existing lane fan
-already does well — see §8).
+The likely 3v3 shape, when we get to it, is the same three layers compressed —
+`RUSH_D1` / `TRACK_PUCK` / `TRACK_MID`, with `RUSH_D2`'s mid-ice job folding into
+`TRACK_MID` and `RUSH_D1` itself playing the pass on a `DOWN_ONE`. Whether that holds
+with only three skaters, or whether 3v3 wants a dedicated second layer, is left open
+until 5v5 is playing well. The behavior modules are written team-size-agnostic so the
+3v3 slot set is a table change, not a rewrite.
 
 ### Why lanes beat men here
 
@@ -332,20 +353,86 @@ change; it is a good pinch evaluator and a bad positioning primitive.
 
 ---
 
-## 9. Rush continuation across the blue line
+## 9. Coverage readiness — the transition → DZONE handoff
 
-The rush does not end at the blue line. `RUSH_D1` **keeps the carrier** until a
-rush-over predicate fires:
+The current handoff is **a line on the ice**. `AIPossessionState.compute` flips to DZONE
+the instant the puck crosses our blue line with the opponent carrying, and
+`AIRoleSlots5` immediately re-slots all five bots into the five zone areas.
 
-- the puck goes below our goal line, **or**
-- we gain possession (PossessionTracker's ESTABLISHED bar, same one offside voiding uses),
-  **or**
-- the attack stalls — carrier closing speed ≈ 0 on the threat axis for a confirmation
-  beat.
+That means three bots who are 25 m up-ice, mid-backcheck, stop backchecking and start
+skating to **zone posts**. The structure they're joining assumes five bodies are home; it
+is being run by two. This is a large part of symptoms 2 and 4 — the backcheck visibly
+dissolves at the blue line, and the bots that *are* home get no help because their
+teammates are filling formation anchors instead of coming back through the middle.
 
-Then the team hands to DZONE zone coverage and `RUSH_D1` becomes the strong-side zone D.
-No re-election at the line, no target discontinuity, and the rendezvous clamp in
-`pressure.gd` loses the failure it was patching.
+Real hockey has an explicit readiness concept: *get back, get set, then take your man.*
+Coverage is something you're **in** or **not in**, and it isn't decided by where the puck
+is.
+
+### The predicate
+
+Coverage is set when **every attacker is accounted for and the puck has a pressurer**:
+
+- each `AIRushRead.attackers` entry has one of our peers **goal-side of him** and within
+  a coverage envelope of his lead point, **and**
+- the carrier has a defender engaged or within about a stick of engaging.
+
+That is the coaching read ("everybody's got a man, somebody's on the puck") and it is the
+exact shape of the already-proven `AIRoleContain._teammate_home_on` primitive — which
+gets promoted out of `contain.gd` into `AIRushRead` and reused for both purposes.
+
+### The gate
+
+The brain **upgrades** its raw possession-state result, same seam and same shape as the
+existing `RETRIEVAL` upgrade (`team_brain.gd:186–211`, `retrieval_read`):
+
+```
+if raw_state == DZONE and not coverage_read(rush_read, was_set):
+    state = <rush/recovery shape>       # stay in transition
+```
+
+with enter/hold margins so the boundary can't flicker (`COVERAGE_SET_ENTER` /
+`COVERAGE_SET_HOLD`, hysteresis in the same direction as `retrieval_read`: harder to
+declare set than to stay set).
+
+Symmetrically, once set the team **holds** coverage until the rush-over conditions
+genuinely fail — a re-entering rush after a failed clear shouldn't dump a set structure
+back into scramble mode over one bad read.
+
+### What runs while not set
+
+Not a separate state — the same layered roles from §5, with their depth allowance
+tightened because the puck is already in our zone: `TRACK_*` sprint their lanes to the
+house rather than to the circle tops, and `RUSH_D1` keeps the carrier. This is
+recovery/scramble defense, and it is genuinely the same structure as rush defense with a
+shorter field, which is why it does not need its own state.
+
+### Rush continuation falls out of this
+
+The original §9 concern — `RUSH_D1` keeping the carrier across the blue line rather than
+being re-elected into PRESSURE — is now just a consequence: while coverage isn't set, the
+state never flips, so nothing re-elects and there is no target discontinuity. When it
+does flip, `RUSH_D1` becomes the strong-side zone D (the `_hysteresis_class` continuity
+map already pairs those two, `role_slots_5v5.gd:536`), so the same body keeps the same
+man through the rename.
+
+The rush-over predicate still exists for the *other* direction — deciding the rush is
+dead when the puck goes below our goal line, we establish possession, or the attack
+stalls — because those are what let a set structure stay set.
+
+### Risk to watch
+
+The gate can, in principle, latch: if coverage never reads "set," the team never runs
+zone defense at all and a sustained cycle is defended by rush roles. Two guards:
+
+1. the predicate is about *accounting for men*, not about being in formation — a settled
+   cycle satisfies it easily;
+2. a **time floor**: after N seconds of the opponent possessing in our zone without the
+   read clearing, force the upgrade and let zone coverage sort it out. A stale scramble
+   posture is worse than an imperfect zone.
+
+Instrument both — this is the highest-risk piece of the design and the one most likely to
+need a tuning pass against the rush harness.
 
 ---
 
@@ -381,44 +468,45 @@ No re-election at the line, no target discontinuity, and the rendezvous clamp in
 
 ## 11. Phasing
 
-Each phase is independently shippable and independently testable against
-`tests/unit/ai/rush_sim_harness.gd`, which already exists.
+The full rewrite is committed to; the phases are implementation order, not a menu. Each
+is independently testable against `tests/unit/ai/rush_sim_harness.gd`, which already
+exists, and each ends at a green suite so a regression is bisectable to one phase.
 
-- **A — `AIRushRead`, published but unread.** Pure module + tests. No behavior change.
-  Lets us assert the read is right (numbers, attacker filtering, tracking classification)
-  before anything depends on it.
-- **B — Retreat floors + attacker filtering.** Raise the floors (§8), restrict the threat
-  set. Smallest diff, and it should visibly fix symptom 1 on its own. Ship and playtest
-  before continuing.
-- **C — Gap ladder + gap-up + angling** on the existing CONTAIN. Fixes symptom 3 without
-  restructuring roles yet.
-- **D — Layered roles + tracking mode.** The structural change; fixes symptom 2.
-  3v3 and 5v5 land together (they share the behavior modules).
-- **E — Rush continuation** across the blue line. Fixes the residue of symptom 4.
+- **A — `AIRushRead`.** Pure module + GUT tests, published on the brain and `TeamBrainView`
+  but read by nobody. Asserts the perception (attacker filtering, numbers + hysteresis,
+  tracking classification, coverage predicate) before anything depends on it. No behavior
+  change.
+- **B — Retreat floors + attacker filtering.** Raise the floors (§8), restrict the
+  counter-channel threat set to `AIRushRead.attackers`. Smallest behavioral diff; targets
+  symptom 1 including its offensive half.
+- **C — Gap ladder + gap-up + angling.** Lands on `RUSH_D1`'s new module. Targets
+  symptom 3.
+- **D — Layered roles + tracking mode.** 5v5 slot set, `rush_d.gd` / `track.gd`, the
+  tracking dispatch branch, `TRACK_PUCK`'s goal-side-gated check. Targets symptom 2.
+  3v3 keeps its existing path (§5.2).
+- **E — Coverage readiness gate** (§9) + the rush-over predicate. Targets symptom 4 and
+  the backcheck-dissolves-at-the-blue-line failure.
 
-B and C are worth playtesting on their own — if the floors and the ladder land most of
-the feel, D can be scoped down.
+Playtest checkpoints after **B** and after **D** — those are the two points where the
+feel should visibly move, and E's gate is the piece most likely to need tuning against
+what the first two reveal.
 
 ---
 
 ## 12. Open questions
 
+Resolved items moved to **Decisions banked** at the top.
+
 1. **`DOWN_ONE` lateral concession vs. the existing lane fan.** The fan already finds the
    pass lane from evaluators. Does the numbers read *gate* it (cheap, explicit) or just
    *bias* it (keeps everything emergent)? Leaning gate — the research is unambiguous that
-   this is a mode switch, not a gradient.
-2. **Does `TRACK_PUCK` get body checks?** Recommend yes; it is the most satisfying
-   backcheck outcome in hockey and currently structurally impossible. Risk is bots taking
-   run-at-the-carrier angles instead of tracking lanes — mitigate by requiring goal-side
-   before the check commit is allowed.
-3. **3v3 `RUSH_D2`.** Currently folded into `TRACK_MID`. With only three skaters, is a
-   dedicated second layer worth it, or does the compressed three-role set hold?
-4. **Cognition tiers.** Which of these become difficulty knobs? `backpressure_s` awareness
+   this is a mode switch, not a gradient. Decide during phase C against the harness.
+2. **Cognition tiers.** Which of these become difficulty knobs? `backpressure_s` awareness
    and the gap-up trigger are natural Easy/Hard splits (`plays_rush_pass_lanes` is the
-   precedent).
-5. **Does `numbers` want hysteresis?** It is a discrete count driving a discrete posture,
-   so a body crossing the puck line could flip the whole team's aggression mid-rush.
-   Probably needs the same enter/hold margin pattern as `retrieval_read`.
+   precedent). Deferred to after the structure is playing well.
+3. **Coverage-gate latch risk** (§9). The time-floor guard is specified but its value is a
+   guess until instrumented.
+4. **3v3.** Deferred wholesale (§5.2) — revisit once 5v5 is proven.
 
 ---
 
