@@ -138,6 +138,28 @@ var five_hole_base_m: float
 # wrong read and more staleness buys the shooter nothing. Values above the band
 # are not "harder to beat", they are just indistinguishable.
 var read_lag_s: float
+# READ RE-SOLVE TIME (s) — how long it takes him to correct a WRONG belief once
+# the puck is in flight and he can watch it. Split out of `read_lag_s`, which
+# used to set both: how stale the pre-read is AND how fast it converges. Those
+# are physically different — one is the age of a wind-up read, the other is how
+# quickly a goalie re-solves a live puck he is now tracking — and tying them
+# together meant you could not lengthen the deception window without also making
+# the pre-read staler.
+#
+# It is the term that decides whether LATERAL deception pays. The belief is only
+# wrong for this long, and the arms recover in whatever is left of the flight:
+# at 0.05 s against a 0.21 s flight from 7 m he is wrong for under a quarter of
+# it and a 5 m/s arm covers the rest easily.
+#
+# ANCHORED, not tuned: each tier re-solves in its own `reaction_delay_s`. Reading
+# a line you got WRONG is a fresh read, not a refinement — you are not adjusting
+# an estimate, you are discovering the estimate was of a different shot. So the
+# cost is a full cold read, and a slower goalie stays wrong longer. That lands
+# where the measurement saturates anyway: on the corner-deception sweep
+# (test_goalie_disguise_read) goals out of 14 go 7 -> 8 -> 9 -> 10 across
+# 0.05 / 0.08 / 0.10 / 0.13 s and are flat above, with the TELEGRAPHED control
+# pinned at 7 throughout.
+var read_converge_s: float
 
 
 func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
@@ -148,7 +170,8 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 		p_lateral_accel_mps2: float, p_puck_play_go_margin_s: float,
 		p_reaction_delay_s: float, p_prearmed_reaction_delay_s: float,
 		p_butterfly_drop_s: float, p_five_hole_base_m: float,
-		p_read_lag_s: float = 0.13) -> void:
+		p_read_lag_s: float = 0.13,
+		p_read_converge_s: float = 0.13) -> void:
 	arm_reaction_delay_s = p_arm_reaction_delay_s
 	cross_crease_react_delay_s = p_cross_crease_react_delay_s
 	poke_radius_m = p_poke_radius_m
@@ -161,6 +184,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 	pad_toe_out_butterfly_deg = p_pad_toe_out_butterfly_deg
 	lateral_accel_mps2 = p_lateral_accel_mps2
 	read_lag_s = p_read_lag_s
+	read_converge_s = p_read_converge_s
 	puck_play_go_margin_s = p_puck_play_go_margin_s
 	reaction_delay_s = p_reaction_delay_s
 	prearmed_reaction_delay_s = p_prearmed_reaction_delay_s
@@ -173,7 +197,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 static func hard() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
 			1.75, 1.30, 5.0, 5.0, 18.0, 14.0, 0.9,
-			0.13, 0.07, 0.20, 0.02, 0.05)
+			0.13, 0.07, 0.20, 0.02, 0.05, 0.13)
 
 
 # Normal is the middle tier: enough goalie to punish a lazy shot, soft enough
@@ -186,7 +210,7 @@ static func hard() -> GoalieSkillProfile:
 static func normal() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.28, 0.22, 0.16, 0.45, 0.20,
 			1.35, 0.95, 3.8, 3.8, 11.0, 10.0, INF,
-			0.18, 0.10, 0.25, 0.035, 0.10)
+			0.18, 0.10, 0.25, 0.035, 0.10, 0.18)
 
 
 # Easy is the newcomer floor, tuned so ANY decently-aimed shot scores: he sits
@@ -199,7 +223,7 @@ static func normal() -> GoalieSkillProfile:
 static func easy() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.45, 0.40, 0.08, 0.70, 0.35,
 			0.90, 0.60, 2.4, 2.4, 5.0, 6.0, INF,
-			0.30, 0.16, 0.32, 0.06, 0.16)
+			0.30, 0.16, 0.32, 0.06, 0.16, 0.30)
 
 
 static func for_difficulty(difficulty: int) -> GoalieSkillProfile:

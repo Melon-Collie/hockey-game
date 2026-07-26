@@ -859,12 +859,23 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	# because the arm doesn't start moving in time.
 	if inputs.arm_reaction_pending:
 		return
+	# WHERE HE BELIEVES IT IS GOING, not where it is actually going. `shot_impact_x`
+	# is the converging read belief (GoalieController._read_belief_x blended toward
+	# truth over `read_converge_time`), and aiming the arms at it is what makes a
+	# late change of aim pay. This used to be overwritten with the live puck
+	# trajectory, which made the hands clairvoyant: the whole read-staleness model
+	# was computed, replicated, converged — and then discarded for the one limb it
+	# most needed to reach. Height deception still worked because it rides the LEG
+	# drop, which reads the belief; lateral deception measured at exactly zero.
+	#
+	# The VERTICAL intercept stays on the live ballistic solve. Selling the wrong
+	# height is a scroll-wheel input rather than a gesture, so it does not deserve
+	# a second channel, and the leg drop already prices it.
 	var intercept_x: float = inputs.shot_impact_x
 	var intercept_y: float = inputs.shot_impact_y
 	if absf(inputs.puck_velocity_est.z) > 0.001:
 		var dt_to_plane: float = (inputs.goalie_z - inputs.puck_position.z) / inputs.puck_velocity_est.z
 		if dt_to_plane > 0.0:
-			intercept_x = inputs.puck_position.x + inputs.puck_velocity_est.x * dt_to_plane
 			intercept_y = maxf(inputs.puck_position.y + inputs.puck_velocity_est.y * dt_to_plane \
 					- 0.5 * 9.8 * dt_to_plane * dt_to_plane, 0.0)
 	# Convert world X into goalie-local X (the +Z-defending goalie is rotated

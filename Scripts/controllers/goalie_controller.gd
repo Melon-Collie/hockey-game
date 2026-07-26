@@ -183,6 +183,10 @@ extends Node
 # Zero disables it entirely (belief == truth, exactly the pre-R1 goalie).
 # Difficulty-varied via GoalieSkillProfile.read_lag_s.
 @export var read_lag: float = 0.13
+# How long it takes him to CORRECT a wrong belief once the puck is in flight and
+# he can watch it. Split out of `read_lag`, which used to set both — see
+# GoalieSkillProfile.read_converge_s for why they are different quantities.
+@export var read_converge_time: float = 0.13
 @export var prearmed_reaction_delay: float = 0.07
 @export var prearm_read_time: float = 0.40
 @export var prearm_linger: float = 0.25
@@ -1224,6 +1228,7 @@ func _apply_skill_profile(profile: GoalieSkillProfile) -> void:
 	reaction_delay = profile.reaction_delay_s
 	prearmed_reaction_delay = profile.prearmed_reaction_delay_s
 	read_lag = profile.read_lag_s
+	read_converge_time = profile.read_converge_s
 	butterfly_drop_speed = profile.butterfly_drop_s
 	five_hole_base = profile.five_hole_base_m
 
@@ -3779,7 +3784,7 @@ func _advance_read_convergence(delta: float, truth: GoalieBehaviorRules.ShotResu
 	if not _read_committed or _read_hold > 0.0:
 		_read_hold = maxf(_read_hold - delta, 0.0)
 	else:
-		_read_blend = minf(_read_blend + delta / maxf(read_lag, 0.001), 1.0)
+		_read_blend = minf(_read_blend + delta / maxf(read_converge_time, 0.001), 1.0)
 	# Re-classify as the read converges: a goalie who was sold a low shot and comes
 	# to see it rising starts the (late) glove reach rather than staying committed.
 	_reaction.update_impact(

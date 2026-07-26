@@ -240,7 +240,31 @@ func test_disguise_delta() -> void:
 	#    a real property of the model, not an instrument artifact: committing your
 	#    legs to the wrong read is far more expensive than committing your glove.
 	#
-	#    The reach DEFICIT cannot measure R1 at all — it is sampled at the instant
+	#    ── UPDATE: WRONG CORNER NOW CONVERTS TOO (2026-07) ─────────────────────
+#    It used to cost reach without converting, and the cause was not the arm's
+#    budget: _apply_elevated_shot_reaction OVERWROTE the read belief with the
+#    live puck trajectory, so the hands went to the true intercept every tick
+#    while the legs used the belief. Lateral deception measured at exactly zero
+#    — telegraphed, step look-off and swept look-off gave identical goals AND
+#    identical save parts. Height worked only because it rides the leg drop.
+#
+#    Two changes fixed it: the arms now aim at the belief, and `read_lag` was
+#    split from `read_converge_time` (it used to set both, so the deception
+#    window could not be lengthened without also making the pre-read staler).
+#    Measured across converge time, with the telegraphed CONTROL pinned at 7
+#    throughout — honest shots never get easier:
+#
+#        converge   telegraph   wrongCorner   swept   wrongHeight
+#          0.05 s        7            7         7          7
+#          0.10 s        7            9         8         11
+#          0.13 s        7           10         8         11
+#          0.20 s        7           10         8         11
+#
+#    The swept arm saturates lower than the step arm, correctly: a sweep that
+#    FINISHES on the true corner leaves the belief nearly right at release, so
+#    it deceives less than one that never moves off the decoy.
+#
+#    The reach DEFICIT cannot measure R1 at all — it is sampled at the instant
 	#    of release, before the read has been acted on, so it sees only the
 	#    pre-lean. It was the right instrument for the PRE-R1 defect (where the
 	#    pre-lean was the only channel deception reached); goals are the right one
