@@ -88,7 +88,6 @@ power, an aim direction — is wire data. Keep that line clean in the input stru
 | **Shoot** (hold) | Enter gather with shot intent; release fires. |
 | **Pass** (hold) | Enter gather with pass intent; release fires. Direction from left stick. |
 | **Jump** | Leave your feet. Hop step, rebound, block, contest. |
-| **Survey** (hold) | Pull the camera back and up. Does not change facing. |
 | **Loft** (3-level dial) | Arc level for every release — shots and passes alike. |
 | **Sprint** | Stamina-gated top-speed burst with a widened turn radius. |
 
@@ -119,7 +118,7 @@ It produces, contextually, with no modes:
 
 | Context | Result |
 |---|---|
-| No contact | Facing freezes. The lock. Stay square on a baseline drive; hold an angle while surveying; keep your shoulder while recovering on defense. |
+| No contact | Facing freezes. The lock. Stay square on a baseline drive; hold an angle while you look for a read; keep your shoulder while recovering on defense. |
 | Dribbling into contact | You don't get turned → shield, back-down, retreat dribble. |
 | Gathered | Feet are set, left stick rotates you → **pivot**. |
 | Gathered with a body on you | → **post-up**; analog depth is how hard you're backing him down. |
@@ -152,8 +151,7 @@ Basketball has a fixed hoop and a halfcourt possession structure. There is alway
 forward. So facing is composed from three things you already control:
 
 1. **Attractor.** On offense, torso pulls toward the hoop. On defense, toward your man. That
-   is where a real player is squared roughly ninety percent of the time, and it's stable
-   enough to hang a camera on.
+   is where a real player is squared roughly ninety percent of the time.
 2. **Momentum perturbs it.** As you build speed your torso leans toward your movement vector.
    The drive shoulder emerges from the fact that you're driving. This also makes shooting off
    a hard drive naturally off-balance, which is the accuracy model doing its job for free.
@@ -166,32 +164,74 @@ mistake.
 
 ### 3.6 Camera
 
-**Over-the-shoulder, third person, fully derived from facing.**
+**Elevated wide, roughly 50°, framed from behind the offensive end looking at the rim. Static
+or near-static in halfcourt 3v3.**
 
-The controller argument is real but secondary. The primary argument:
+Not over-the-shoulder, and not a steep Mitts-style tilt. The number is the design.
 
-> **Over-the-shoulder is the only camera where shot arc is readable.**
+#### Why ~50°
 
-A steeply-tilted top-down camera — correct for hockey, where puck height is decoration —
-flattens a basketball's trajectory into nothing. You would have no idea whether a shot was a
-line drive or a rainbow until it arrived. From behind and low, arc reads in profile.
-Verticality is what basketball adds, and top-down is the one angle that cannot see it.
+For a camera at elevation θ, a vertical meter projects to screen at `cos θ` and a meter of
+depth at `sin θ`:
 
-Consequences:
+| Elevation | Vertical retained | Depth retained |
+|---|---|---|
+| 25° (broadcast) | 91% | 42% |
+| **50°** | **64%** | **77%** |
+| 70° (Mitts) | 34% | 94% |
 
-- **The camera follows torso facing.** Which means posting up literally turns the camera away
-  from the hoop — you feel the rim behind you rather than seeing it, and the spin move is a
-  camera event. That's a feature; it makes the facing model legible instead of confusing.
-- **The camera has no stick.** The right stick is the hands. So the camera cannot be
-  free-look — it must be fully derived. This is good (one less thing to manage) but it makes
-  the survey modifier mandatory rather than optional.
-- **Survey is a first-class mechanic, not a camera tweak.** Held, it pulls the camera back and
-  up to show the floor. It does not change your facing. Its cost is that you are not watching
-  your defender while you use it — which is exactly what surveying costs in the real sport.
-- **Auto-widen on the gather.** You've stopped and you're looking to make a play. Give the
-  floor back for free at the moment passing matters most, without spending an input.
-- **Off-screen teammate indicators at the frame edge** are required — not for targeting (there
-  is no auto-aim) but for awareness that someone is there at all.
+At 70° a 1.1 m shot apex reads as ~37 cm of screen movement — marginal, and arc is a real dial
+here (floater over the big, lob, bounce pass under the hands). At 50° the same apex reads as
+~70 cm while retaining most of the floor. That's the tradeoff this game wants: enough
+verticality to read arc, enough floor to read spacing.
+
+**Consequence: the ball's floor shadow is mandatory, not polish.** 50° is very close to the
+angle where a meter of height and a meter of depth project to the same screen size
+(`cot 50° ≈ 0.84`). Position alone therefore cannot tell you whether the ball is high or
+merely far — this is the maximum depth-confusion elevation. The shadow-to-ball gap *is* height
+and is the only thing that disambiguates it. The angle also guarantees you can see plenty of
+floor for the shadow to land on.
+
+#### What a wide camera buys
+
+- **The skip pass stops being blind.** Directional passing with no auto-aim (§8) only works if
+  you can see the target. This resolves the one place where the camera and the 5-out spacing
+  premise were pulling against each other.
+- **Survey is deleted as a mechanic.** You already have the floor. One fewer input.
+- **Off-ball becomes visible**, which matters enormously when you are one of three and off-ball
+  is most of your time.
+- **Facing stops driving the camera**, decoupling it further. The attractor model in §3.5
+  survives unchanged; it simply has no camera consequence.
+
+#### Static camera in halfcourt 3v3
+
+At 50° a halfcourt (47 × 50 ft) fits comfortably in frame, which means the 3v3 camera can be
+static or nearly so. This is only available because halfcourt is the first mode, and it's
+worth a lot for a skill game:
+
+- **Landmarks live at fixed screen positions.** You learn where the three-point line, the
+  elbows, and the corners *are* on screen, the way you learn a fighting game stage. Shot
+  distance becomes something you read instantly rather than estimate.
+- **Push up is always toward the rim.** No camera-relative remapping ever, for movement or for
+  the dribble stick. Push right, the ball goes screen-right. Completely stable muscle memory.
+- **The camera never flips.** Both teams attack the same basket, so a possession change
+  reorients nothing.
+- **The backboard faces you**, which makes bank shots readable as a real option rather than an
+  accident.
+
+5v5 fullcourt has to follow the ball. That's a later mode — and starting halfcourt buys a
+static camera for the entire period when feel is actually being tuned.
+
+#### The open tension: 1v1 pixel budget
+
+Framing a full halfcourt puts a player at roughly 10% of screen height and a hand at ~1%. The
+marquee mechanic is hand-versus-ball at 30 cm of scale. 2K survives this because its dribble
+moves are **discrete animations** — you only need to see *that* a move fired. Continuous
+control raises the legibility bar.
+
+Working answer: frame somewhat tighter than the whole halfcourt with a gentle pan, hold 50°,
+and tighten further during an isolation. That sacrifices some of the static-landmark benefit to
+keep most of it. Whether it's enough is a prototype answer, not an argument. See §16.
 
 ---
 
@@ -421,12 +461,13 @@ things in basketball and something no basketball game asks you to do.
 - **Catching** reads relative speed and hand angle at contact — a feed to a receiver moving
   away arrives soft, charging into the same feed makes it harder. Bobbles are real.
 
-### The known tension: the skip pass is blind
+### Why this needs the wide camera
 
-With a camera that cannot see weak side and no auto-aim, the skip to the weak-side corner —
-the single most valuable pass in the 5-out spacing every team runs — is a blind directional
-throw. Mitigations, in order of importance: survey as a first-class mechanic, auto-widen on
-the gather, off-screen teammate indicators. Flagged as a live risk in §14.
+Directional passing with no assist only works if you can see the target. The skip to the
+weak-side corner is the most valuable pass in 5-out spacing, and under an over-the-shoulder
+camera it would be a blind throw — which was the strongest argument against that camera and
+part of why §3.6 settled where it did. With the floor visible, the skill is aiming and leading,
+which is the intent.
 
 ---
 
@@ -657,9 +698,13 @@ RPCs. This is the single largest body of proven work being carried over.
 ### Readability
 
 **A hard floor shadow under the ball is not polish, it's a core system.** Reading a small fast
-ball in 3D from a third-person camera is genuinely hard — depth perception for "will this pass
-get picked" and "where is this rebound landing" is the make-or-break. The floor is always right
-there: shadow position gives exact XY, shadow size gives height. Prototype it early.
+ball in 3D is genuinely hard — depth perception for "will this pass get picked" and "where is
+this rebound landing" is the make-or-break. The floor is always right there: shadow position
+gives exact XY, shadow size gives height.
+
+At the chosen 50° elevation this is load-bearing rather than merely helpful, because that angle
+projects height and depth at nearly the same screen scale and the shadow is what separates
+them (§3.6). Prototype it early — alongside rim physics, not after.
 
 ### Procedural locomotion
 
@@ -734,8 +779,11 @@ ball gets away from your body, killing your drive and letting the defender re-se
 usually recover it. The steal must be *earned by the defender's hand being in the right
 place*, never granted by the handler's mistake.
 
-**The skip pass being blind.** §8. Directly in tension with the 5-out spacing premise. Watch
-whether survey plus auto-widen is actually enough, or whether the game drifts toward pure iso.
+**1v1 legibility at camera distance.** §3.6. The whole game is hand-versus-ball at ~30 cm of
+scale, viewed from a camera framing most of a halfcourt. 2K tolerates this because its dribble
+moves are discrete animations you only need to *notice*; continuous control has to be
+*read*. If the defender's hand position isn't legible, the momentum-shed race degrades into
+guesswork and the marquee mechanic dies. Watch it the moment the 1v1 is playable.
 
 ---
 
