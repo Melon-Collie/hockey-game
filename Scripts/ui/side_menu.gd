@@ -75,6 +75,7 @@ func _ready() -> void:
 func _wire_focus_wall() -> void:
 	for c: Control in _modal_layers():
 		c.visibility_changed.connect(_sync_nav_focus_wall)
+	_loading_screen.visibility_changed.connect(_sync_nav_focus_wall)
 
 
 func _modal_layers() -> Array[Control]:
@@ -83,9 +84,14 @@ func _modal_layers() -> Array[Control]:
 
 
 func _sync_nav_focus_wall() -> void:
-	var covered: bool = false
+	# The loading screen is opaque and sits above everything (layer 100), so it
+	# walls off every layer including the modals; otherwise it's just the nav
+	# panel, walled while any one modal is up.
+	var loading: bool = _loading_screen != null and _loading_screen.visible
+	var covered: bool = loading
 	for c: Control in _modal_layers():
 		covered = covered or c.visible
+		ControllerNav.set_subtree_focusable(c, not loading)
 	ControllerNav.set_subtree_focusable(_panel, not covered)
 
 

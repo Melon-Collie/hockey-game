@@ -44,7 +44,20 @@ static func grab_focus(control: Control) -> void:
 		return
 	_pending_focus = weakref(control)
 	if active():
-		control.grab_focus.call_deferred()
+		_grab_deferred.call_deferred(control)
+
+
+# The actual grab, one frame later. Re-checked against the live focus state
+# because the world can change in between: a modal opening walls the target's
+# subtree off (see open_modal), and grab_focus on a walled control is a no-op the
+# engine warns about. Remembering it in _pending_focus is still right — the wall
+# lifts when the modal closes.
+static func _grab_deferred(control: Control) -> void:
+	if control == null or not is_instance_valid(control) or not control.is_inside_tree():
+		return
+	if control.get_focus_mode_with_override() == Control.FOCUS_NONE:
+		return
+	control.grab_focus()
 
 
 # Focus the first focusable control under `root` (depth-first) — the seam a popup
@@ -71,7 +84,7 @@ static func on_gamepad_activated() -> void:
 		return
 	var c: Control = _pending_focus.get_ref() as Control
 	if c != null and c.is_inside_tree() and c.is_visible_in_tree():
-		c.grab_focus.call_deferred()
+		_grab_deferred.call_deferred(c)
 
 
 static func _first_focusable(node: Node) -> Control:

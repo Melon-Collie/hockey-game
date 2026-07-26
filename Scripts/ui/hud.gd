@@ -127,6 +127,9 @@ func _ready() -> void:
 	_game_over_popup.analytics_pressed.connect(_on_game_over_analytics)
 	add_child(_game_over_popup)
 	_post_game_analytics = PostGameAnalytics.new()
+	# Controller: the analytics reader covers the game-over screen, so focus is
+	# walled off from its buttons and handed back when the reader closes.
+	_post_game_analytics.set_focus_background(_game_over_popup.focus_root())
 	add_child(_post_game_analytics)
 	_intermission_overlay = IntermissionOverlay.new()
 	add_child(_intermission_overlay)

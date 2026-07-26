@@ -69,7 +69,9 @@ func _input(event: InputEvent) -> void:
 			_step_number(1)
 			get_viewport().set_input_as_handled()
 	elif _name_field != null and _name_field.has_focus() and event.is_action_pressed(&"ui_accept"):
-		_keyboard.open(_name_field.text, _name_field.max_length)
+		# `self` as the background: the key grid covers this form, and focus has to
+		# stay on the grid until it's dismissed.
+		_keyboard.open(_name_field.text, _name_field.max_length, self)
 		get_viewport().set_input_as_handled()
 
 

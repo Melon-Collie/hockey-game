@@ -1101,6 +1101,9 @@ func _show_analytics(events: Array[ShotEvent], home: int, away: int, label: Stri
 		# Created lazily and owned here: the career screen is reachable from the
 		# main menu, where no HUD exists to provide one.
 		_analytics = PostGameAnalytics.new()
+		# Controller: it covers this screen, so wall focus off from the tabs/rows
+		# behind it and hand focus back to the Watch row on close.
+		_analytics.set_focus_background(self)
 		add_child(_analytics)
 	_analytics.present_history(events, home, away, label, colors)
 

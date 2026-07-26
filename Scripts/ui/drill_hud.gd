@@ -275,6 +275,9 @@ func show_results(makes: int, total: int) -> void:
 	# The results card owns Try Again / Exit; the in-play Skip would just clutter.
 	if _skip_btn != null:
 		_skip_btn.visible = false
+	# Controller: land on Try Again (the card's first focusable). Skip is hidden
+	# above, so nothing behind the card can take focus and no wall is needed.
+	ControllerNav.focus_first(_results_panel)
 
 
 func hide_results() -> void:
