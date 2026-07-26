@@ -750,6 +750,26 @@ func _build_game_card(summary: Dictionary) -> Control:
 	if periods != null:
 		vbox.add_child(periods)
 
+	# Who played — the strongest recognition cue on the card, which is what this
+	# list is for. Names only; the per-player stat tables that used to live here
+	# made the list something you read rather than scanned.
+	var roster: Dictionary = summary.get("roster", {}) as Dictionary
+	for team_id: int in 2:
+		var names: Array = roster.get(team_id, []) as Array
+		if names.is_empty():
+			continue
+		var line := _ui_label(" · ".join(PackedStringArray(names)), 11,
+				home_col if team_id == 0 else away_col)
+		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vbox.add_child(line)
+
+	var you: String = String(summary.get("you", ""))
+	if not you.is_empty():
+		var mine := _ui_label(you, 11, MenuStyle.GOLD)
+		mine.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vbox.add_child(mine)
+
 	var actions := HBoxContainer.new()
 	actions.alignment = BoxContainer.ALIGNMENT_CENTER
 	actions.add_theme_constant_override("separation", 8)
@@ -781,6 +801,13 @@ func _summarise_backend(game: Dictionary, meta: Dictionary) -> Dictionary:
 		"source": "backend",
 		"game_id": gid,
 		"colors": _colors_from_meta(meta),
+		# Prefer the replay's roster: career_stats rows exist per HUMAN, so the
+		# backend's player list omits bots entirely — a solo bot game would name
+		# only you, which is the opposite of recognisable. The file's roster is
+		# the full registry.
+		"roster": _roster_from_meta(meta) if meta.has("header") \
+				else _roster_from_backend(game),
+		"you": _you_line_from_meta(meta),
 		# recent_games_for counts the logged shots, so the Analytics action is
 		# enabled only where there is something to draw — games recorded before
 		# shot logging existed report 0 rather than opening an empty screen.
@@ -806,6 +833,8 @@ func _summarise_replay(path: String, meta: Dictionary) -> Dictionary:
 		"source": "local",
 		"game_id": "",
 		"colors": _colors_from_meta(meta),
+		"roster": _roster_from_meta(meta),
+		"you": _you_line_from_meta(meta),
 		# Footers written before shot logging have no list, so this reads 0 and
 		# the action stays disabled for older files.
 		"shots": (footer.get("shot_events", []) as Array).size() \
@@ -851,6 +880,64 @@ func _outcome_from_meta(meta: Dictionary) -> String:
 	if mine > theirs:
 		return "win"
 	return "loss" if mine < theirs else "draw"
+
+
+# team_id -> display names, from the .mreplay header's full registry (bots
+# included). The local player is marked so you can spot yourself in a lobby of
+# similar names.
+func _roster_from_meta(meta: Dictionary) -> Dictionary:
+	var out: Dictionary = {0: [], 1: []}
+	var header: Dictionary = meta.get("header", {})
+	for entry: Variant in (header.get("players", []) as Array):
+		var p: Dictionary = entry as Dictionary
+		var team_id: int = clampi(_safe_int(p.get("team_id", 0)), 0, 1)
+		var display: String = String(p.get("player_name", ""))
+		if display.is_empty():
+			continue
+		if bool(p.get("is_local", false)):
+			display += " (you)"
+		(out[team_id] as Array).append(display)
+	return out
+
+
+# Fallback for a backend game with no local file: humans only, since that is all
+# career_stats records.
+func _roster_from_backend(game: Dictionary) -> Dictionary:
+	var out: Dictionary = {0: [], 1: []}
+	for entry: Variant in (game.get("players", []) as Array):
+		var p: Dictionary = entry as Dictionary
+		var team_id: int = clampi(_safe_int(p.get("team_id", 0)), 0, 1)
+		var display: String = String(p.get("player_name", ""))
+		if not display.is_empty():
+			(out[team_id] as Array).append(display)
+	return out
+
+
+# "YOU · 2G 1A · 5 SOG" — your own line, which is what actually makes a game
+# memorable ("the one where I had a hat trick"). Built from the replay footer's
+# box score, joined to the header's is_local flag by peer_id. Empty when there is
+# no local file: the backend's player JSON carries no steam_id, so there is no
+# way to tell which of its rows is yours.
+func _you_line_from_meta(meta: Dictionary) -> String:
+	var header: Dictionary = meta.get("header", {})
+	var footer: Dictionary = meta.get("footer", {})
+	var my_peer: int = -1
+	for entry: Variant in (header.get("players", []) as Array):
+		var p: Dictionary = entry as Dictionary
+		if bool(p.get("is_local", false)):
+			my_peer = _safe_int(p.get("peer_id", -1))
+			break
+	if my_peer < 0:
+		return ""
+	for entry: Variant in (footer.get("players", []) as Array):
+		var p: Dictionary = entry as Dictionary
+		if _safe_int(p.get("peer_id", -2)) != my_peer:
+			continue
+		var goals: int = _safe_int(p.get("goals", 0))
+		var assists: int = _safe_int(p.get("assists", 0))
+		var sog: int = _safe_int(p.get("shots_on_goal", 0))
+		return "YOU · %dG %dA · %d SOG" % [goals, assists, sog]
+	return ""
 
 
 func _sum_periods(row: Variant) -> int:
