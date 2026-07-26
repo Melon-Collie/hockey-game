@@ -150,7 +150,7 @@ const BRAKE_PIVOT_RELEASE_ANGLE_DEG: float = 100.0
 const BRAKE_PIVOT_MIN_SPEED: float = 3.0
 
 # Arrival brake. Station-keeping bots (off-puck role destinations: a
-# FINISHER staging spot, a cover point, CONTAIN's gap point) approach a
+# FINISHER staging spot, a cover point, RUSH_D1's gap point) approach a
 # POINT that can stop moving — and nothing in the field slowed them
 # down: the anchor attraction is full-strength until a 0.5 m deadband,
 # and at 9 m/s friction alone needs ~11 m to stop, so a bot whose

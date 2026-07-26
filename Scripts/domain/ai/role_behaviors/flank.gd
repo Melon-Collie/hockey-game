@@ -17,7 +17,7 @@ class_name AIRoleFlank
 # him: a stand nobody can recover from is not a stand, and NEUTRAL was the one
 # game state whose off-puck shape never asked the question. So the flank stand
 # is bounded by the same race-home read every other defensive station uses
-# (CONTAIN, the D pair's line hold, the points, the valve): hold the puck-side
+# (RUSH_D1, the D pair's line hold, the points, the valve): hold the puck-side
 # shape while the counter-attack channels are containable, sag down the retreat
 # line exactly as far as they demand when they aren't. Contained counters leave
 # the shape untouched, so ordinary loose-puck play is unchanged — the bound only

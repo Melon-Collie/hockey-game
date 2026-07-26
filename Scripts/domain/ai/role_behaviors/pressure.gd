@@ -48,8 +48,9 @@ class_name AIRolePressure
 # One bound on that pressure: when NOBODY is home behind us (we are the last man
 # back, the normal case once a rush gains the zone and the markers are still
 # recovering), the cut-off is only taken as fast as it can be taken SET — the
-# shared last-man rendezvous clamp CONTAIN uses on the other side of the blue
-# line (AIRoleHelpers.settable_stand_depth). A lunge into a rush at pace ends
+# last-man rendezvous clamp (AIRoleHelpers.settable_stand_depth). Note the rush
+# side of the blue line no longer uses it: RUSH_D1's gap comes from the ladder
+# (AIRoleRushD), which is bounded by construction. A lunge into a rush at pace ends
 # with the pressurer's momentum pointing the wrong way and the carrier walking
 # around him, which is worse than the space the clamp concedes.
 
@@ -85,8 +86,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# Commit to a body check on the carrier when it's a real, reachable,
 	# separating hit (AIBodyCheck). PRESSURE always has support behind it —
 	# the MARK pair in DZONE, F2/F3 on the forecheck (F1 dispatches here) — so
-	# the commit risk is acceptable; the last-man gap defender (CONTAIN) never
-	# hunts hits. When committed, drive at the body intercept; the state machine
+	# the commit risk is acceptable. (The transition gap defender, RUSH_D1, never
+	# hunts hits either; only TRACK_PUCK does, once it is goal-side.) When committed, drive at the body intercept; the state machine
 	# forces sprint so the closing collision delivers the hit.
 	var check: AIBodyCheck.Result = AIRoleHelpers.evaluate_body_check(ctx)
 	if check.commit:
@@ -141,13 +142,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# position, and the right one while there's a layer home behind us to answer
 	# a beaten challenge. As the genuine last man it is also a step-up, and a
 	# rush at pace is exactly when that step-up can't be made: measured in the
-	# harness, a properly-gapped defender took the CONTAIN → PRESSURE handoff at
+	# harness, a properly-gapped defender took the transition → PRESSURE handoff at
 	# the blue line, saw the cut-off jump 6 m up-ice, charged it at 6 m/s, met
 	# the carrier once, and was then blown by and left 10 m behind the play. So
 	# bound the step-up to the rendezvous the last man can actually arrive SET at
-	# (AIRoleHelpers.settable_stand_depth — the same bound CONTAIN takes on the
-	# other side of the handoff, so the blue line doesn't change how hard the
-	# same body steps up). Inert whenever it should be: a carrier who isn't
+	# (AIRoleHelpers.settable_stand_depth). Inert whenever it should be: a carrier who isn't
 	# closing on our net (a cycle, a walk-out, an in-zone battle) leaves the
 	# budget unbounded, and any teammate home behind us skips it entirely — which
 	# is every forecheck (F2/F3 are between F1 and our net by construction) and

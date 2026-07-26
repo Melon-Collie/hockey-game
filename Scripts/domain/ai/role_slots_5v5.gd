@@ -178,8 +178,8 @@ static func assign(
 	# beaten forecheck line — can chase the rush forever without ever getting
 	# goal-side, and handing him RUSH_D1 anyway is how "everyone marked a man
 	# but nobody picked up the carrier" happened: the threat partition excludes
-	# the carrier because CONTAIN nominally owns him. With the deadline, an
-	# infeasible D group defers CONTAIN to the cross-fill pass, where the
+	# the carrier because RUSH_D1 nominally owns him. With the deadline, an
+	# infeasible D group defers RUSH_D1 to the cross-fill pass, where the
 	# deepest feasible body — the classic backchecking third-man-high — picks
 	# the rush up instead, and the caught D fall to MARK duty on the trailers.
 	if state == AIPossessionState.State.TRANS_OD and carrier_pid != -1 \
@@ -600,8 +600,7 @@ static func _group_of(pid: int, position_by_peer: Dictionary) -> int:
 static func _hysteresis_class(slot: int) -> int:
 	match slot:
 		AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.POINT_STRONG, \
-		AIRoleSlots.Slot.DP_STRONG, AIRoleSlots.Slot.CONTAIN, \
-		AIRoleSlots.Slot.RUSH_D1:
+		AIRoleSlots.Slot.DP_STRONG, AIRoleSlots.Slot.RUSH_D1:
 			return AIRoleSlots.Slot.ZONE_D_STRONG        # strong/engaged D
 		AIRoleSlots.Slot.ZONE_D_WEAK, AIRoleSlots.Slot.POINT_WEAK, \
 		AIRoleSlots.Slot.DP_WEAK, AIRoleSlots.Slot.BREAKOUT_D2, \

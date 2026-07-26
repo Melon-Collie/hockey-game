@@ -1337,7 +1337,7 @@ var full_dispatch_count: int = 0
 func _is_reactive_slot(slot: int, snapshot: WorldSnapshot) -> bool:
 	match slot:
 		AIRoleSlots.Slot.PRESSURE, AIRoleSlots.Slot.F1_PRESSURE, \
-		AIRoleSlots.Slot.CONTAIN, AIRoleSlots.Slot.MARK, \
+		AIRoleSlots.Slot.MARK, \
 		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
 		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2, \
 		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
@@ -1403,7 +1403,7 @@ var _holds_for_developing_feeds: bool = true
 # turning players.
 var _reads_receiver_commitment: bool = true
 var _angles_the_chase: bool = true
-# _plays_rush_pass_lanes rides RoleContext into CONTAIN's odd-man lane fan.
+# _plays_rush_pass_lanes rides RoleContext into RUSH_D1's odd-man lane fan.
 var _plays_rush_pass_lanes: bool = true
 # _protects_the_puck gates the carrier's blade-level puck shielding (the carry
 # mouse blends toward the carrier's protect seam under pressure) and the
@@ -1770,8 +1770,6 @@ func _slot_label(slot: int) -> String:
 			return "Pressure"
 		AIRoleSlots.Slot.MARK:
 			return "Mark"
-		AIRoleSlots.Slot.CONTAIN:
-			return "Contain"
 		AIRoleSlots.Slot.RUSH_D1:
 			return "RushD1"
 		AIRoleSlots.Slot.RUSH_D2:
@@ -2447,8 +2445,6 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			decision = AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.MARK:
 			decision = AIRoleMark.decide(ctx)
-		AIRoleSlots.Slot.CONTAIN:
-			decision = AIRoleContain.decide(ctx)
 		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2:
 			decision = AIRoleRushD.decide(ctx, slot)
 		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
@@ -5317,7 +5313,7 @@ func _deke_mouse_target(self_pos: Vector3) -> Vector3:
 #   - cooldown > 0: decrement, no jab (commit back to gap control).
 #   - both 0: trigger a fresh jab iff we're an on-puck defensive role and
 #     within reach of an opposing carrier's puck.
-# Only the puck-pressurer slots jab (PRESSURE / F1_PRESSURE / CONTAIN) —
+# Only the puck-pressurer slots jab (PRESSURE / F1_PRESSURE / the rush pair) —
 # the backside roles keep pure positioning, so the team doesn't collapse
 # two bots onto the puck.
 func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
@@ -5363,7 +5359,6 @@ func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
 	var slot: int = _current_strategy.get_slot(_peer_id)
 	if slot == AIRoleSlots.Slot.PRESSURE \
 			or slot == AIRoleSlots.Slot.F1_PRESSURE \
-			or slot == AIRoleSlots.Slot.CONTAIN \
 			or slot == AIRoleSlots.Slot.RUSH_D1 \
 			or slot == AIRoleSlots.Slot.TRACK_PUCK:
 		return true

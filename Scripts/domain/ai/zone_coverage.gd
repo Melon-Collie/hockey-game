@@ -178,7 +178,7 @@ static func anchor_of(slot: int, strong_x: float, own_goal_z: float,
 # The most dangerous opponent inside `slot`'s area — the soft-lock target.
 # Danger is the finish-if-fed read (score_shoot from the man's spot, goalie
 # where it is, no field defenders — the same measurement the house pin and
-# CONTAIN's lane gate use). `incumbent_pid` (last dispatch's man, -1 none)
+# RUSH_D1's lane gate use). `incumbent_pid` (last dispatch's man, -1 none)
 # is tested against the area + release margin and wins ties, so the lock
 # holds until the man genuinely leaves the ice this role owns. The carrier
 # (`carrier_pid`) is excluded — pressure handles him.

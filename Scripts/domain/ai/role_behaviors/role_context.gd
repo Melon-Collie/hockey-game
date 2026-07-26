@@ -191,10 +191,10 @@ var holds_for_developing_feeds: bool = true
 # players (a newcomer-beatable flaw). True = it reads the receiver's turn and
 # waits for the settle before feeding (the Normal / Hard read).
 var reads_receiver_commitment: bool = true
-# COGNITION gate: false = the rush gap defender (CONTAIN) sees only the
+# COGNITION gate: false = the rush gap defender (RUSH_D1) sees only the
 # carrier and retreats on the carrier→net line; true = it reads the carrier's
 # passing options and splits toward an uncovered receiver's feed lane — the
-# 2-on-1 "play the pass" doctrine (AIRoleContain's lane fan).
+# 2-on-1 "play the pass" doctrine (AIRoleRushD's lane fan).
 var plays_rush_pass_lanes: bool = true
 # COGNITION gate: true = the carrier shields the puck with its body — under
 # pressure the blade pulls the puck to the protected side of the reachable-set

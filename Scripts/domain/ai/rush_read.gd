@@ -162,7 +162,7 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 
 	# How fast the rush is actually coming at us, along its own attack line.
 	# Lateral drift buys no threat — the turn radius pays for that conversion
-	# before it becomes a danger (same read CONTAIN's pace term used).
+	# before it becomes a danger (the same read the rush gap's pace term makes).
 	var closing: float = maxf(
 			origin_vel.x * threat_axis.x + origin_vel.z * threat_axis.z, 0.0)
 

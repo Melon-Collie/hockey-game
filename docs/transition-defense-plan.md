@@ -464,13 +464,21 @@ need a tuning pass against the rush harness.
 
 ## 10. Ledger
 
-**Dies**
-- `AIRoleContain` — replaced by `RUSH_D1`'s behavior module.
-- `gap_for_pace` and the pace-driven gap.
-- `has_support_behind` as a positioning gate (superseded by `numbers`; may survive as a
-  tiebreak).
-- TRANS_OD's dependence on the threat partition.
+**Died** (deleted)
+- `AIRoleContain` + `test_role_contain.gd` — replaced by `AIRoleRushD`. `Slot.CONTAIN`
+  is gone from the enum, along with its dispatch case, reactive-slot entry, poke-gate
+  entry and debug label.
+- `gap_for_pace` and the pace-driven gap — replaced by `AIRoleRushD.ladder_gap_m`, which
+  `AIRoleChase`'s lost-race pre-contain shares (that sharing is deliberate: the declining
+  chaser plants where `RUSH_D1` will want him).
+- `ThreatSet.CONTAIN_TRAILERS` — `contain.gd` was its only producer.
+- TRANS_OD's dependence on the threat partition (still live for DZONE).
 - The crease-top retreat floor.
+
+**Survived, contrary to the original plan**
+- `has_support_behind` and `settable_stand_depth` — still `PRESSURE`'s own last-man
+  step-up discipline once the zone is gained. The rush side no longer needs them because
+  the gap ladder is bounded by construction, but the in-zone cut-off still is not.
 
 **Reused as-is**
 - The soonest-to-arrive election machinery + hysteresis, both files.

@@ -8,7 +8,7 @@ class_name AIRoleSlots
 # state — the bot whose body is already in (or genuinely moving into) the
 # right place gets the role, so roles "stick" naturally as long as nothing
 # kinematic reshuffles. Raw distance was the original metric; it handed
-# PRESSURE/CONTAIN to a nearer bot coasting AWAY over a teammate already
+# PRESSURE/RUSH_D1 to a nearer bot coasting AWAY over a teammate already
 # skating at the carrier — the brake-pivot turnaround read as "the wrong
 # man went".
 #
@@ -18,20 +18,26 @@ class_name AIRoleSlots
 # which marker sits net-front vs. weak-side is emergent from WHICH man
 # the optimal matcher hands each, not a fixed slot.
 #
-# TRANS_OD uses {CONTAIN, MARK×2}: defending a rush, CONTAIN plays
-# gap control on the carrier (stay goal-side, hold a controlled gap,
-# don't lunge) and goes to the LAST MAN BACK — the peer soonest to our
-# OWN NET (momentum-aware), i.e. the deepest line of defense. The other
-# two MARK home to pick up the carrier's receivers (a distinct man each,
-# same threat partition). This
-# is the 3v3 "one contains, two mark through" structure: exactly ONE
-# peer engages the carrier. Replaces the old PRESSURE+BACKCHECK+CONTAIN
-# triad, where TWO peers engaged the carrier forward (overcommit / bad
-# angle / breakaways) and the backchecker raced to an empty spot.
+# TRANS_OD uses {RUSH_D1, TRACK_PUCK, TRACK_MID} — the layered rush
+# defense (docs/transition-defense-plan.md §5.2), NOT man coverage.
+# RUSH_D1 goes to the LAST MAN BACK (the peer soonest to our OWN NET,
+# momentum-aware) and owns the carrier on the gap ladder; TRACK_PUCK runs
+# the carrier down from behind; TRACK_MID owns the middle lane. Two bodies
+# on the puck is correct here — one in front holding a gap, one behind
+# running him down — and it is affordable because transition is BOUNDED:
+# once the attack becomes a settled three-man threat needing a body on each
+# man, the puck is in our zone and DZONE's coverage takes over (the
+# readiness gate, plan §9).
+#
+# This replaced {CONTAIN, MARK×2}, which man-marked through transition and
+# so had markers running cover-position argmaxes from 20 m up-ice
+# mid-backcheck — the "lazy escorting, no urgency" failure. That in turn had
+# replaced a PRESSURE+BACKCHECK+CONTAIN triad where TWO peers engaged the
+# carrier FORWARD (overcommit / bad angle / breakaways).
 #
 # MARK unifies the old DZONE ANCHOR/COVER and TRANS_OD BACKCHECK, which
 # had converged to identical man-marking in the assigned-man path (see
-# AIRoleMark) — one off-puck-marker role, one behavior, in both states.
+# AIRoleMark). It is now a DZONE-only role.
 #
 # OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_DO-only
 # role. BACKDOOR was renamed to FINISHER (more descriptive of the
@@ -46,14 +52,12 @@ enum Slot {
 	# Shared by multiple states.
 	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
 	# Defensive: PRESSURE closes the carrier in DZONE (also reused as
-	# FORECHECK's F1). CONTAIN is TRANS_OD's single carrier-engager (the
-	# closest goal-side peer gap-controlling the carrier). MARK is the
-	# off-puck man-marker shared by DZONE and TRANS_OD — the defenders NOT
-	# on the puck each cover a distinct assigned opponent (threat partition).
-	# NEUTRAL has no carrier and uses CHASE + FLANK_L + FLANK_R below.
+	# FORECHECK's F1). MARK is the off-puck man-marker — the DZONE defenders
+	# NOT on the puck each cover a distinct assigned opponent (threat
+	# partition). Transition uses the rush layers at the bottom of this enum,
+	# never these two. NEUTRAL has no carrier and uses CHASE + FLANK below.
 	PRESSURE,   # DZONE: puck pressurer, closes the carrier.
-	MARK,       # DZONE + TRANS_OD: covers an assigned man (threat partition).
-	CONTAIN,    # TRANS_OD: closest goal-side peer; gap control on the carrier.
+	MARK,       # DZONE: covers an assigned man (threat partition).
 	# Offensive roles.
 	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
 	OUTLET,     # TRANS_DO: stretch-pass option at opp blue line.
@@ -100,7 +104,9 @@ enum Slot {
 	DBACK_L,        # D: left goal-side hold inside the dots.
 	DBACK_R,        # D: right goal-side hold.
 	# TRANS_OD rush defense — the layered replacement for CONTAIN + MARK
-	# (docs/transition-defense-plan.md §5). 5v5 only; 3v3 keeps CONTAIN/MARK.
+	# (docs/transition-defense-plan.md §5). Both team sizes; 3v3 uses
+	# RUSH_D1 / TRACK_PUCK / TRACK_MID, 5v5 adds RUSH_D2 and splits the mid
+	# trackers strong/weak.
 	RUSH_D1,          # D: strong-side D. Owns the carrier — gap ladder + angling.
 	RUSH_D2,          # D: weak-side D. Holds mid-ice, takes the mid-lane drive.
 	TRACK_PUCK,       # F: F1 back. Runs the carrier down through mid-ice.
@@ -137,8 +143,8 @@ const HYSTERESIS_PENALTY_M: float = 1.0
 # TRANS_DO: OUTLET + SUPPORT also own their own targets — anchor
 # formulas deleted.
 
-# TRANS_OD: CONTAIN + MARK own their positional
-# targets in their role behaviors. No TRANS_OD-specific anchor
+# TRANS_OD: the rush layers own their positional targets in their role
+# behaviors (AIRoleRushD / AIRoleTrack). No TRANS_OD-specific anchor
 # constants left.
 
 # NEUTRAL: CHASE + FLANK_L/R. Roles own their positional
@@ -185,16 +191,16 @@ static func slot_anchor(slot: Slot, carrier_pos: Vector3) -> Vector3:
 #   DZONE     PRESSURE = soonest to puck;  MARK = remaining two (a man each)
 #   OZONE     CARRIER fixed;  FINISHER = soonest to opp net;  SUPPORT = remaining
 #   TRANS_DO  CARRIER fixed;  OUTLET = soonest to opp net;  SUPPORT = remaining
-#   TRANS_OD  CONTAIN = last man back (peer soonest to OUR net, momentum-aware);
-#             MARK = the remaining two (sprint home, cover a man each)
+#   TRANS_OD  RUSH_D1 = last man back (peer soonest to OUR net, momentum-aware);
+#             TRACK_PUCK = soonest to the puck of the rest; TRACK_MID = leftover
 #   NEUTRAL   CHASE = soonest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
-# TRANS_OD encodes the 3v3 "one contains, two mark through"
-# read: CONTAIN goes to the last man back — the peer soonest to our own
-# net (momentum-aware), the deepest line of defense — and the other two
-# MARK home to pick up the carrier's receivers (a distinct man each, via
-# TeamBrain's threat partition). Exactly one peer engages the carrier —
-# no double-team.
+# TRANS_OD encodes the compressed three-layer rush defense: RUSH_D1 goes to
+# the last man back — the peer soonest to our own net (momentum-aware), the
+# deepest line of defense — and owns the carrier on the gap ladder; whoever of
+# the remaining two reaches the puck soonest takes TRACK_PUCK and runs the
+# carrier down from behind; the leftover owns the middle lane. Exactly one peer
+# stands in FRONT of the carrier, so the gap is never double-manned.
 #
 # Hysteresis: each soonest-to-X query adds HYSTERESIS_PENALTY_S to the
 # effective arrival time for peers who didn't hold the slot last tick,
@@ -384,7 +390,7 @@ static func _hysteresis_class(slot: int) -> int:
 			return Slot.OUTLET       # up-ice attacking option
 		Slot.BREAKOUT_WEAK, Slot.SUPPORT:
 			return Slot.SUPPORT      # trailing support / reverse valve
-		Slot.RUSH_D1, Slot.PRESSURE, Slot.CONTAIN:
+		Slot.RUSH_D1, Slot.PRESSURE:
 			return Slot.PRESSURE     # the body that owns the carrier
 		Slot.TRACK_MID, Slot.MARK:
 			return Slot.MARK         # off-puck coverage

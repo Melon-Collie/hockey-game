@@ -2,7 +2,7 @@ class_name AIRoleHelpers
 
 # Shared helpers for off-puck role behaviors. Every role that picks
 # a position via candidate-set argmax (SUPPORT, OUTLET, FINISHER, and
-# the upcoming defensive roles PRESSURE / MARK / CONTAIN) uses the
+# the defensive roles PRESSURE / MARK / the rush layers) uses the
 # same candidate generation, legality / anti-crowding filters, and
 # context resolution. The role-specific differentiator is the
 # scoring function — everything else lives here.
@@ -314,7 +314,7 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 # Computes the opposing carrier's best option — shoot at our net, or pass to
 # any of `opp_teammates` — with our hypothetical defender position `candidate`
 # appended to the carrier's view of the defenders. The on-puck / rush
-# defensive roles (PRESSURE's cut-off argmax, CONTAIN's odd-man lane fan)
+# defensive roles (PRESSURE's cut-off argmax, RUSH_D1's odd-man lane fan)
 # argmax the NEGATION of this over their candidate sets: the spot that most
 # deflates the carrier's best option wins.
 #
@@ -422,7 +422,7 @@ static func carrier_best_option(
 	return maxf(shoot_value, pass_value)
 
 
-# Rush variant of carrier_best_option, for CONTAIN's odd-man lane fan: RAW xG
+# Rush variant of carrier_best_option, for RUSH_D1's odd-man lane fan: RAW xG
 # threats (no position_potential floor) with each pass modeled as a ONE-TIMER
 # feed — the goalie must traverse to the receiver's line over the pass flight
 # and reads the release late (predict_goalie_pos + goalie_unsettled), which is
@@ -432,13 +432,13 @@ static func carrier_best_option(
 # shooter, the doctrine's other half.
 #
 # Why not the surfaced variant above: its position_potential floor exists to
-# give PRESSURE close-in gradients, but across CONTAIN's gap-distance fan the
+# give PRESSURE close-in gradients, but across RUSH_D1's gap-distance fan the
 # floor flattens (every candidate sits outside the pressure cone) and masks
 # the reducible-threat comparison entirely; and a set-goalie pass read scores
 # the one-timer feed near zero, hiding the very threat the fan exists to
 # take away. Raw xG also ties at ~0 far from the net, so the fan's hold
 # margin keeps the classic retreat line out there — the correct far-out read.
-# `abort_above`: exact argmin pruning for CONTAIN's lane fan — the caller
+# `abort_above`: exact argmin pruning for RUSH_D1's lane fan — the caller
 # MINIMIZES this value across candidates, so once the running best exceeds the
 # incumbent's, the exact value cannot matter and the remaining (expensive,
 # score_pass-heavy) receiver evaluations are skipped. Default INF evaluates
@@ -453,7 +453,7 @@ static func carrier_live_option(
 		abort_above: float = INF) -> float:
 	# Defenders = our team + me at the candidate. Append-and-restore the caller's
 	# array in place instead of duplicating it — called once per candidate in
-	# CONTAIN's lane fan (up to ~13×/decide), so a fresh Array per call was pure
+	# RUSH_D1's lane fan (up to ~13×/decide), so a fresh Array per call was pure
 	# churn. The array is left exactly as passed; capacity is retained across the
 	# push/pop so steady-state calls allocate nothing.
 	our_team_excluding_self.push_back(candidate)
@@ -639,7 +639,7 @@ static func resolve_offensive_play_ref(ctx: RoleContext) -> Vector3:
 	return Vector3.INF
 
 
-# Defensive roles (PRESSURE, CONTAIN, MARK): prefer whoever carries the
+# Defensive roles (PRESSURE, MARK, the rush layers): prefer whoever carries the
 # puck (an opp by definition in their states); else orient off the puck.
 static func resolve_defensive_play_ref(ctx: RoleContext) -> Vector3:
 	var carrier: Vector3 = resolve_any_carrier_pos(ctx)
@@ -756,8 +756,8 @@ static func collect_counter_threats(ctx: RoleContext,
 # ── The race-home read: puck-path intercept model ───────────────────────────
 #
 # Every "am I recoverable / can I hold this forward stand?" question (the
-# points' keep-in bound, the forecheck line holds, DVALVE, CONTAIN's advance
-# clamp, SUPPORT's exposure) races the defender against a hypothetical
+# points' keep-in bound, the forecheck line holds, DVALVE, SUPPORT's exposure)
+# races the defender against a hypothetical
 # counter-attack. Two grounded facts the old beat-them-to-our-net radius
 # missed, both of which made it unsatisfiable from any forward stand against
 # an opponent of equal top speed (the pacing-between-the-blue-lines bug):
@@ -811,8 +811,9 @@ static var _race_net: Vector3 = Vector3.ZERO
 static var _race_home_stand: Vector3 = Vector3.ZERO
 # Memo key: every full-opponent-list consumer of the same team on the same
 # snapshot builds IDENTICAL channels (points, high slot, valve, line holds all
-# fill right after collect_opponents) — one fill serves them all. CONTAIN's
-# filtered trailer list differs in COUNT, which the key catches. Speed/accel
+# fill right after collect_opponents) — one fill serves them all. The
+# attacker-filtered counter list is tagged by `variant`, which the key catches
+# even when it happens to be the same SIZE. Speed/accel
 # key the reach radii (different bots re-derive only those, keeping the
 # stations).
 static var _race_key_snapshot_id: int = 0
@@ -830,10 +831,10 @@ static var _race_key_accel: float = -1.0
 
 
 # Threat-list variants, for the memo key. Two callers can legitimately pass
-# DIFFERENT lists of the SAME size on one snapshot (the attacker-filtered set vs
-# CONTAIN's teammate-filtered trailers), which a size-only key would silently
-# alias into one station grid.
-enum ThreatSet { ALL_OPPONENTS, COUNTER_ATTACKERS, CONTAIN_TRAILERS }
+# DIFFERENT lists of the SAME size on one snapshot (the full opponent list vs the
+# attacker-filtered counter set), which a size-only key would silently alias into
+# one station grid.
+enum ThreatSet { ALL_OPPONENTS, COUNTER_ATTACKERS }
 
 
 # Build the counter-attack channels for a turnover-now hypothesis and
@@ -1032,9 +1033,10 @@ static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void
 
 
 # ── Last-man step-up discipline ──────────────────────────────────────────────
-# Shared by the two roles that stand in front of a rush — CONTAIN through the
-# neutral zone and PRESSURE once the zone is gained — so the handoff between
-# them at the blue line doesn't change how aggressively the same body steps up.
+# PRESSURE's last-man step-up bound. RUSH_D1 no longer uses it — the rush gap
+# is the ladder now (AIRoleRushD), which is bounded by design rather than by a
+# rendezvous clamp — so this is the in-zone pressurer's own discipline: don't
+# lunge a cut-off you cannot arrive at set.
 #
 # True when a teammate is home BEHIND us — deeper toward our net (larger
 # own_goal_dir * z) than we are — i.e. there's a safety layer that can pick the

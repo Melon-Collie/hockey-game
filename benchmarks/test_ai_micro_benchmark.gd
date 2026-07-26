@@ -105,7 +105,14 @@ func test_evaluator_costs() -> void:
 	memo_brain.tick(1.0, memo_ctx.snapshot)
 	memo_ctx.threat_shoot_base_by_opp = memo_brain.threat_shoot_base_by_opp
 	_bench("MARK (fallback, brain memo)", func() -> void: AIRoleMark.decide(memo_ctx))
-	_bench("CONTAIN", func() -> void: AIRoleContain.decide(d_ctx))
+	_bench("RUSH_D1", func() -> void:
+			AIRoleRushD.decide(d_ctx, AIRoleSlots.Slot.RUSH_D1))
+	_bench("RUSH_D2", func() -> void:
+			AIRoleRushD.decide(d_ctx, AIRoleSlots.Slot.RUSH_D2))
+	_bench("TRACK_PUCK", func() -> void:
+			AIRoleTrack.decide(d_ctx, AIRoleSlots.Slot.TRACK_PUCK))
+	_bench("TRACK_MID", func() -> void:
+			AIRoleTrack.decide(d_ctx, AIRoleSlots.Slot.TRACK_MID))
 
 	# Off-puck offensive reads (our carrier deep in THEIR end).
 	var o_ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, -17.0), 2)

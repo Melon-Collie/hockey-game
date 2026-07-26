@@ -342,8 +342,9 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 # carries a stale assignment.
 #
 # Backline = our peers slotted MARK (DZONE and TRANS_OD).
-# The carrier is owned separately — PRESSURE in DZONE, the CONTAIN gap defender
-# in TRANS_OD — so it's excluded; the men are the opposing carrier's potential
+# The carrier is owned separately — PRESSURE in DZONE (transition no longer
+# man-marks at all, so this partition is DZONE-only in practice) — so it's
+# excluded; the men are the opposing carrier's potential
 # receivers (every opponent except the carrier). Each man's value is the raw
 # pass-threat surface (no defenders in the view), so AIThreatAssignment pairs
 # the most dangerous men with the best-positioned defenders. `prev` is last

@@ -26,7 +26,7 @@ class_name AIRoleForecheck
 # stays in the zone — and keeping it in the zone IS the goal. So F1 and
 # F2 press freely with no offside concern; there's no penalty for being
 # deep here. If the forecheck fails and the puck leaves the zone, the
-# possession state flips to TRANS_OD, whose MARK/CONTAIN pull
+# possession state flips to TRANS_OD, whose rush layers pull
 # everyone home — any brief delayed-offside ghost self-clears on that
 # retreat (tag up at the line, re-engage). The risk is accepted, not
 # avoided: keeping possession in their end is worth a few bots being

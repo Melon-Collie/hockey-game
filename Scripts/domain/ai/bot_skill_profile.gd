@@ -161,7 +161,7 @@ extends RefCounted
 #   • plays_rush_pass_lanes — the last man back on a rush reading the carrier's
 #     PASSING options and splitting toward an uncovered receiver's feed lane
 #     ("play the pass, the goalie takes the shooter" — the 2-on-1 doctrine;
-#     AIRoleContain's lane fan). False = CONTAIN sees only the carrier and
+#     AIRoleRushD's lane fan). False = RUSH_D1 sees only the carrier and
 #     retreats on the carrier→net line, so a human's odd-man cross-crease
 #     feed connects — the classic newcomer glory play.
 #   • protects_the_puck — shielding the puck with the body is taught skill: a
@@ -277,7 +277,7 @@ var reads_receiver_commitment: bool
 # carrier to the boards. False = straight-line chase, cutbacks work.
 var angles_the_chase: bool
 
-# COGNITION: the rush gap defender (CONTAIN) reads the carrier's passing
+# COGNITION: the rush gap defender (RUSH_D1) reads the carrier's passing
 # options and splits toward an uncovered receiver's feed lane — the 2-on-1
 # "play the pass" doctrine. False = it retreats purely on the carrier→net
 # line, conceding the odd-man cross-crease feed.

@@ -1,9 +1,11 @@
 class_name AIRoleMark
 
-# MARK role behavior — the off-puck man-marker. Used by DZONE and TRANS_OD:
-# the defenders NOT engaging the puck carrier (PRESSURE in DZONE, CONTAIN on a
-# rush) each MARK a distinct assigned opponent — pick up a MAN, not a patch of
-# ice.
+# MARK role behavior — the off-puck man-marker. DZONE only: the defenders NOT
+# engaging the puck carrier (PRESSURE has him) each MARK a distinct assigned
+# opponent — pick up a MAN, not a patch of ice. Transition defense deliberately
+# does NOT man-mark (docs/transition-defense-plan.md §5); it runs lanes and
+# layers, and MARK survives only as the extra-body fallback in the 5v5
+# election's remainder.
 #
 # Unifies the old ANCHOR / COVER (DZONE) and BACKCHECK (TRANS_OD) roles, which
 # had converged: when TeamBrain's threat partition assigns a man (the normal
