@@ -133,8 +133,15 @@ const BMI_MEDIUM: float = 26.5   # neutral frame
 const BMI_HEAVY: float = 29.0
 
 # Absolute lower bound on a playable body, in pounds — the floor that the BMI
-# ratio cannot express. Binds only at 5'8"–5'10", where BMI 22.5 would allow a
-# body lighter than anyone who has ever held an NHL job.
+# ratio cannot express. Binds at 5'7"–5'10", where BMI 22.5 would allow a body
+# lighter than anyone who has ever held an NHL job (144 lb at 5'7").
+#
+# 160 is chosen against the league's actual lower tail, and it is close to the
+# only defensible round number: Lane Hutson (5'9"/162) is the lightest player
+# in the NHL, so 165 would exclude him outright and 162 would land the band
+# edge exactly on one man. 160 admits him with 2 lb of headroom. The rest of
+# the sub-170 cluster (Stankoven 5'8"/165, Garland 5'10"/165, Spurgeon
+# 5'9"/166, Chibrikov & Girard 5'10"/170) clears it comfortably.
 const MIN_PLAYABLE_LBS: int = 160
 
 # Neutral mass reference (lbs): BMI 26.5 at 73" → round(26.5·73²/703) = 201.
