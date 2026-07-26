@@ -35,6 +35,8 @@ const _SCRIPTS: Array[String] = [
 	"res://Scripts/ui/replay_viewer_hud.gd",
 	"res://Scripts/ui/player_settings_popup.gd",
 	"res://Scripts/ui/play_popup.gd",
+	"res://Scripts/ui/bug_report_dialog.gd",
+	"res://Scripts/ui/controller_keyboard.gd",
 ]
 
 

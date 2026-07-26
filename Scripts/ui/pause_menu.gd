@@ -3,6 +3,8 @@ extends CanvasLayer
 
 signal opened
 signal closed
+# Raised by the Report Bug button; the HUD owns the dialog. See SideMenu's.
+signal bug_report_requested
 
 var _slot_grid_container: Control = null
 var _options_container: Control = null
@@ -61,6 +63,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	else:
 		close()
 	get_viewport().set_input_as_handled()
+
+
+# The button column, handed to a dialog that opens OVER this menu (the bug
+# reporter) so it can wall focus off from the buttons behind it.
+func focus_root() -> Control:
+	return _menu_root
 
 
 func _sync_menu_focus_wall() -> void:
@@ -144,6 +152,13 @@ func _build_menu() -> void:
 		if _options_panel != null:
 			_options_panel.focus_active_tab())
 	vbox.add_child(options_btn)
+
+	# The pad's route to the bug reporter mid-match — the HUD's bug icon is a
+	# mouse affordance, and the side menu (which has its own entry) is free-play
+	# only, so without this a controller player can't report the bug they just hit.
+	var bug_btn := MenuStyle.popup_button("Report Bug")
+	bug_btn.pressed.connect(func() -> void: bug_report_requested.emit())
+	vbox.add_child(bug_btn)
 
 	var leave_btn := MenuStyle.popup_button("Leave Game")
 	leave_btn.pressed.connect(func() -> void:
