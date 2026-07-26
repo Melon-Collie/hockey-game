@@ -259,6 +259,15 @@ func test_wraparound_graze_resolves_outward_never_inward() -> void:
 		assert_gte(res.velocity.x, 0.0, "and is never redirected into the cage")
 
 
+# Depth of the slanted back twine at height `y`, and the exterior-face rest depth
+# for a puck's CENTER there — the plane's own depth plus the perpendicular puck
+# radius, projected back onto z. Mirrors PuckGeometryCollision's plane so the
+# expectations below are geometry, not copied outputs.
+func _twine_depth(y: float) -> float:
+	return lerpf(GameRules.NET_DEPTH, GameRules.NET_TOP_DEPTH,
+			clampf(y / GameRules.NET_HEIGHT, 0.0, 1.0))
+
+
 func test_exterior_back_press_reflects_away_not_through() -> void:
 	# A puck behind the net pressing toward the goal line must bounce off the BACK
 	# of the mesh (away from the goal), not be pulled through into the cavity.
@@ -268,7 +277,11 @@ func test_exterior_back_press_reflects_away_not_through() -> void:
 	var res := PuckGeometryCollision.Result.new()
 	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, -6), R, res)
 	assert_true(hit, "pressing the back mesh from behind is a contact")
-	assert_gte(absf(res.position.z), back_z + R, "ejected to the exterior face, not inside")
+	# The exterior face is the twine's own slanted plane, so the rest depth is the
+	# plane at this height (a hair under NET_DEPTH just off the ice) plus the puck's
+	# perpendicular radius — not a vertical wall at the full NET_DEPTH.
+	assert_gte(absf(res.position.z), GameRules.GOAL_LINE_Z + _twine_depth(0.0175),
+			"ejected to the exterior face, not inside")
 	assert_gt(res.velocity.z, 0.0, "rebounds away from the goal (+z at the +z end)")
 
 
@@ -329,3 +342,62 @@ func test_scored_puck_entering_through_mouth_still_plays_interior() -> void:
 	assert_true(hit, "a scored puck reaching the back mesh contacts the interior face")
 	assert_lt(res.velocity.z, 0.0, "rebounds back toward the mouth")
 	assert_lt(absf(res.position.z), back_z, "held inside the cavity")
+
+
+# ── The wedge above the slant is OUTSIDE the cage ─────────────────────────────
+# The interior clamp is the slanted twine (shallow at the top shelf) but the
+# exterior face used to be a vertical wall at the full NET_DEPTH, so the wedge
+# between them — depth NET_TOP_DEPTH..NET_DEPTH, below the crossbar — was real ice
+# behind the net that classified as CAVITY. Nothing guards it from above (the top
+# panel's rear edge is the slant's top edge), so a puck descending into it was
+# clamped forward THROUGH the twine and ended up sitting inside the net. Both
+# faces are now the same plane.
+
+func _descend_into_wedge(depth: float, y_from: float, y_to: float) -> PuckGeometryCollision.Result:
+	var prev := Vector3(0.2, y_from, GameRules.GOAL_LINE_Z + depth)
+	var pos := Vector3(0.2, y_to, GameRules.GOAL_LINE_Z + depth)
+	var res := PuckGeometryCollision.Result.new()
+	PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, -4, 0), R, res)
+	return res
+
+
+func test_puck_descending_into_the_wedge_is_never_pulled_into_the_cage() -> void:
+	# Sweep the wedge's whole depth span. Each sample descends past the crossbar
+	# height at a depth where the slanted twine is well in FRONT of it — i.e. it is
+	# outside the cage — and must not be moved inside.
+	for depth in [0.62, 0.70, 0.80, 0.90, 1.00]:
+		var res: PuckGeometryCollision.Result = _descend_into_wedge(depth, 1.24, 1.18)
+		var out_depth: float = absf(res.position.z) - GameRules.GOAL_LINE_Z
+		assert_gte(out_depth, _twine_depth(res.position.y),
+				"at depth %.2f the puck stays behind the twine at its own height" % depth)
+		assert_lte(res.velocity.y, 0.0,
+				"absorbed, never flung up the slope and over the bar (depth %.2f)" % depth)
+
+
+func test_puck_trickling_off_the_net_roof_lands_behind_the_cage() -> void:
+	# The likeliest real-play trigger: a puck dies on the net roof, then slides
+	# backward off its rear edge into the wedge.
+	var rear_edge: float = GameRules.GOAL_LINE_Z + GameRules.NET_TOP_DEPTH
+	var prev := Vector3(0.1, 1.23, rear_edge + 0.02)
+	var pos := Vector3(0.1, 1.20, rear_edge + 0.05)
+	var res := PuckGeometryCollision.Result.new()
+	PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, -1.5, 1.0), R, res)
+	assert_gte(absf(res.position.z) - GameRules.GOAL_LINE_Z, _twine_depth(res.position.y),
+			"stays on the outside of the twine")
+
+
+func test_high_drive_into_the_back_dies_on_the_visible_twine() -> void:
+	# A rim/clear driven at the back of the cage at height must stop ON the mesh at
+	# that height, not on an invisible vertical wall ~0.45 m behind it.
+	var y: float = 1.00
+	var twine_z: float = GameRules.GOAL_LINE_Z + _twine_depth(y)
+	var prev := Vector3(0.0, y, twine_z + 0.10)
+	var pos := Vector3(0.0, y, twine_z + 0.02)
+	var res := PuckGeometryCollision.Result.new()
+	var hit: bool = PuckGeometryCollision.resolve_net_panels(prev, pos, Vector3(0, 0, -12), R, res)
+	assert_true(hit, "the exterior of the slanted back is a contact at height too")
+	assert_lt(absf(res.position.z), twine_z + R + 0.01,
+			"dies on the twine at its own height, not the deep vertical wall")
+	assert_gt(res.velocity.z, 0.0, "absorbed back away from the cage")
+	assert_almost_eq(res.velocity.y, 0.0, 0.001,
+			"and is not launched up the slope by the rebound")

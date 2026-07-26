@@ -41,6 +41,26 @@ var game_winning_goals: int = 0
 var one_timer_goals: int = 0
 var tip_goals: int = 0
 var ot_goals: int = 0
+# Advanced-stat shot-attempt counters (analytics plan A1), host-authoritative and
+# broadcast like the counters above. Individual Corsi/Fenwick; team CF%/FF% and
+# PDO derive from these + the existing goals/SOG at display time.
+#   shot_attempts         — individual Corsi (iCF): every shot RELEASE this player
+#                           took (on goal, missed, or blocked). Off ShotOnGoalTracker's
+#                           shot_attempted, so one per release (rebound re-shots and
+#                           mid-flight tips don't re-count in v1).
+#   shot_attempts_blocked — of those attempts, the ones a defender blocked, so
+#                           Fenwick (iFF) = shot_attempts − shot_attempts_blocked.
+#                           Off ShotOnGoalTracker's shot_attempt_blocked, which fires
+#                           on the same on-net-blocked set as the shots_blocked stat
+#                           (v1: a blocked-off-net shot isn't counted as a block).
+var shot_attempts: int = 0
+var shot_attempts_blocked: int = 0
+# Individual expected goals (ixG, analytics plan A2) — the summed xG of the shot
+# attempts this player took (AIActionScoring.expected_goals, evaluated at release
+# from the real goalie geometry). Host-authoritative and broadcast like the
+# counters above; a float, unlike the integer counters. Blocked attempts are
+# excluded (xG is on unblocked/Fenwick shots). Goals − xg_for is finishing.
+var xg_for: float = 0.0
 # Tracked locally on every peer (game_manager._physics_process) rather than
 # host-authoritative + broadcast like the counters above. Each peer's own
 # value is what ships to Supabase, since report() runs per-peer at game-over.
@@ -54,7 +74,8 @@ var toi_seconds: float = 0.0
 func to_array() -> Array:
 	return [goals, assists, shots_on_goal, hits, shots_blocked,
 			hits_taken, takeaways, giveaways, faceoff_wins, faceoff_losses,
-			game_winning_goals, one_timer_goals, tip_goals, ot_goals]
+			game_winning_goals, one_timer_goals, tip_goals, ot_goals,
+			shot_attempts, shot_attempts_blocked, xg_for]
 
 static func from_array(a: Array) -> PlayerStats:
 	var s := PlayerStats.new()
@@ -81,6 +102,9 @@ func update_from_array(a: Array) -> void:
 	one_timer_goals = a[11]
 	tip_goals = a[12]
 	ot_goals = a[13]
+	shot_attempts = a[14]
+	shot_attempts_blocked = a[15]
+	xg_for = a[16]
 
 func to_dict() -> Dictionary:
 	return {
@@ -94,5 +118,8 @@ func to_dict() -> Dictionary:
 		"giveaways": giveaways,
 		"faceoff_wins": faceoff_wins,
 		"faceoff_losses": faceoff_losses,
+		"shot_attempts": shot_attempts,
+		"shot_attempts_blocked": shot_attempts_blocked,
+		"xg_for": snappedf(xg_for, 0.001),
 		"toi_seconds": roundi(toi_seconds),
 	}

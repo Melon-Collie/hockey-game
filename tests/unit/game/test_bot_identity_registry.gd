@@ -112,7 +112,7 @@ func test_normalize_migrates_tier_era_entry() -> void:
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
 			"name": "OldPohl", "height": 5, "skating": 1, "skill": 2, "checking": 3})
 	assert_eq(int(norm.height), 79, "legacy 1..5 step → inches")
-	assert_eq(int(norm.weight), PlayerAttributes.weight_for_bmi(79, 27.75))
+	assert_eq(int(norm.weight), PlayerAttributes.weight_for_frame_t(79, 0.75))
 	assert_eq(int(norm.length), PlayerAttributes.LENGTH_LONG)
 
 

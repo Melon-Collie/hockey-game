@@ -67,7 +67,25 @@ const PORT: int = 7777
 # derives BATCH_INTERVAL from this constant) — at 60 Hz the worst-case wait was
 # a full 16.7 ms of client→host latency on every input.
 const INPUT_RATE: int = 120
-const STATE_RATE: int = 120
+# World-state broadcast rate. 60, NOT the 120 that INPUT_RATE runs at — the
+# determinism work (shared analytic puck step + predict-to-host-present, and
+# render == rewind) decoupled how fresh a client FEELS from how often packets
+# arrive, so the extra 60 Hz was paying host cost and bandwidth for very little:
+#   • The loose puck re-predicts from the newest snapshot to host-present every
+#     frame on the shared solver, so a sparser snapshot stream costs only a
+#     slightly larger residual when a host-side event (bounce, save, deflect)
+#     lands between packets — not staleness.
+#   • The local player is predicted + reconciled on acks, so it is rate-free.
+#   • Remote skaters interpolate, and their cushion follows automatically:
+#     _compute_target_interpolation_delay includes one broadcast_interval, so
+#     the delay grows ~8.3 ms and render == rewind still holds (the claim
+#     rewinds read the same adapted delay).
+# What it buys: host per-tick encode/send cost and upload both halve (a 3-human
+# playtest measured ~140 KB/s at 2 peers, over the ~60 KB/s-per-peer guide), and
+# 5v5 stops needing ~5 Mbps of host upload. The host stalls that drive input
+# backlog → drains → client reconcile churn are exactly the per-tick cost this
+# relieves. PHYSICS_TICK must stay an integer multiple (_state_tick_divisor).
+const STATE_RATE: int = 60
 # Rate at which world-state snapshots are written to the .mreplay file, well
 # below STATE_RATE: the replay viewer interpolates between snapshots (see
 # ReplayPlaybackEngine), so recording every 120 Hz broadcast is ~4x redundant on

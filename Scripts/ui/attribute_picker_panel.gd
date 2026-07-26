@@ -14,13 +14,13 @@ extends VBoxContainer
 # The panel emits `changed` on every edit so the host can refresh its Apply
 # button; the host gates Apply on panel.is_dirty() and panel.is_valid().
 #
-# A build is two continuous body dials: HEIGHT (5'8"..6'7", every inch) and
-# WEIGHT (lbs, bounded per height by the single BMI band — see
-# PlayerAttributes.weight_min/max). Every slider position is a legal build —
-# there is no power economy and no shape to validate, so is_valid() is always
-# true and preset switching is never blocked. Moving the height slider
-# preserves the build's FRAME (its position in the BMI band) and recomputes
-# pounds, so a lean build stays lean as it grows.
+# A build is two continuous body dials: HEIGHT (5'7"..6'8", every inch) and
+# WEIGHT (lbs, bounded per height by the BMI band and the absolute playable-
+# mass floor — see PlayerAttributes.weight_min/max). Every slider position is
+# a legal build — there is no power economy and no shape to validate, so
+# is_valid() is always true and preset switching is never blocked. Moving the
+# height slider preserves the build's FRAME (its frame-t position in the band)
+# and recomputes pounds, so a lean build stays lean as it grows.
 #
 # Gear slots ride through the preset levels; each gains its selector when its
 # gameplay stage lands. Live: STICK LENGTH (levels[5]), BLADE CURVE
@@ -64,6 +64,15 @@ var _chip_buttons: Array[Button] = []
 var _new_btn: Button = null
 var _delete_btn: Button = null
 var _name_field: LineEdit = null
+# Pad text entry for the preset name — the same on-screen keyboard the player-name
+# field uses. Owned here rather than by the host popup because this panel ships in
+# two of them (free-play settings and the lobby's Edit Build), and only one of
+# those has a keyboard of its own.
+var _keyboard: ControllerKeyboard = null
+# The host popup, walled off while the key grid is up. Set via
+# set_keyboard_background; the grid is a CanvasLayer, so walling the host (which
+# contains this panel) never reaches the keys themselves.
+var _keyboard_background: Control = null
 var _status_label: Label = null
 var _lock_label: Label = null
 var _height_slider: HSlider = null
@@ -112,6 +121,39 @@ func _build() -> void:
 	_build_gear_row("Curve", _CURVE_TOOLTIP, _CURVE_LABELS, 3)
 	_build_gear_row("Flex", _FLEX_TOOLTIP, _FLEX_LABELS, 4)
 	_build_gear_row("Skates", _PROFILE_TOOLTIP, _PROFILE_LABELS, 2)
+
+
+# The host popup this panel sits in, so the on-screen keyboard can wall focus off
+# from it (Apply / Cancel / the sliders) while the key grid is up.
+func set_keyboard_background(background: Control) -> void:
+	_keyboard_background = background
+
+
+# A on the focused preset-name field raises the on-screen keyboard. Handled at
+# _input, ahead of the GUI, so ui_accept doesn't just land in the LineEdit.
+# Mirrors PlayerSettingsPopup's player-name field; skipped while locked, since
+# the field isn't editable then.
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree() or not ControllerNav.active():
+		return
+	if _name_field == null or not _name_field.has_focus() or not _name_field.editable:
+		return
+	if event.is_action_pressed(&"ui_accept"):
+		_keyboard.open(_name_field.text, _name_field.max_length, _keyboard_background)
+		get_viewport().set_input_as_handled()
+
+
+func _on_keyboard_submitted(text: String) -> void:
+	_name_field.text = text
+	_on_name_text_changed(text)  # programmatic set doesn't emit text_changed
+	ControllerNav.grab_focus(_name_field)
+
+
+# Where a modal wrapping this panel should land controller focus: the height
+# slider — the primary dial — rather than whatever the tree happens to hold first
+# (a preset chip, or the wrapper's close X).
+func first_focus_target() -> Control:
+	return _height_slider
 
 
 func _build_preset_row() -> void:
@@ -169,6 +211,11 @@ func _build_name_row() -> void:
 	_name_field.add_theme_font_size_override("font_size", 16)
 	_name_field.text_changed.connect(_on_name_text_changed)
 	row.add_child(_name_field)
+
+	_keyboard = ControllerKeyboard.new()
+	_keyboard.submitted.connect(_on_keyboard_submitted)
+	_keyboard.cancelled.connect(func() -> void: ControllerNav.grab_focus(_name_field))
+	add_child(_keyboard)
 
 
 func _build_height_row() -> void:
@@ -342,11 +389,14 @@ func _on_height_changed(value: float) -> void:
 	var levels: Array = _working[_active]["levels"]
 	var old_h: int = int(levels[0])
 	var old_w: int = int(levels[1])
-	var bmi: float = 703.0 * float(old_w) / float(old_h * old_h)
+	# Ride FRAME-T, not raw BMI: the band's lean half is truncated by the
+	# absolute playable-mass floor at the short heights, so equal BMI is not
+	# equal frame there — carrying the frame position is what keeps a lean
+	# build lean (and pins a neutral build to neutral) across the whole range.
+	var frame: float = PlayerAttributes.frame_t_for(old_h, old_w)
 	var new_h: int = int(value)
 	levels[0] = new_h
-	levels[1] = PlayerAttributes.coerce_weight(new_h,
-			PlayerAttributes.weight_for_bmi(new_h, bmi))
+	levels[1] = PlayerAttributes.weight_for_frame_t(new_h, frame)
 	_refresh()
 	changed.emit()
 

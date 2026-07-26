@@ -79,6 +79,14 @@ func _build_ui() -> void:
 	cancel_container.add_child(_cancel_btn)
 	vbox.add_child(cancel_container)
 
+# Controller: land on the action the player is most likely to want — Reconnect
+# when it's offered, Cancel otherwise. Without this the pad has nothing focused
+# on a full-screen opaque overlay, so a connection-lost prompt is a dead end
+# (there is nothing else on screen to navigate to).
+func _focus_primary() -> void:
+	ControllerNav.grab_focus(_reconnect_btn if _reconnect_btn.visible else _cancel_btn)
+
+
 func _on_reconnect_pressed() -> void:
 	if _reconnect_cb.is_valid():
 		_reconnect_cb.call()
@@ -101,6 +109,7 @@ func show_joining_lobby() -> void:
 	set_status("Connecting")
 	_shown_at = Time.get_ticks_msec() / 1000.0
 	visible = true
+	_focus_primary()
 
 # Surface a lobby/connection failure in place; the Cancel button dismisses it
 # (wired to the same cancel handler that resets network state).
@@ -112,6 +121,7 @@ func show_error(message: String) -> void:
 	_base_status = message
 	_status_label.text = message
 	visible = true
+	_focus_primary()
 
 # Connection-lost variant: same as show_error but adds a Reconnect button that
 # invokes `on_reconnect`. Used when the host may still be holding the player's
@@ -126,6 +136,7 @@ func show_reconnect(message: String, on_reconnect: Callable) -> void:
 	_base_status = message
 	_status_label.text = message
 	visible = true
+	_focus_primary()
 
 func close_when_ready(callback: Callable) -> void:
 	var remaining: float = MIN_DISPLAY_SECS - (Time.get_ticks_msec() / 1000.0 - _shown_at)

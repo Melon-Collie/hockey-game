@@ -181,7 +181,29 @@ const VERSION: String = "dev"
 #      it from the pad's PARKED cursor (~0 speed) and fired at the floor — a
 #      predicted snipe vs. an authoritative floater on every pad wrister online.
 #      Both the size change and the new flag semantics make mixed builds unsafe.
-const PROTOCOL_VERSION: int = 41
+# v42: world-state broadcast rate 120 -> 60 Hz (Constants.STATE_RATE). No packet
+#      layout change, but STATE_RATE is a shared TIMING convention baked into
+#      both sides: the interpolation-delay target (rtt/2 + broadcast_interval +
+#      PDV), the client's arrival-jitter expected_interval, and the host's
+#      claim-carried interp-delay plausibility ceiling all derive from it. A
+#      mixed pair would size its cushion and validate claims against the wrong
+#      interval, so the lobby must be rate-homogeneous.
+# v43: analytics A1 — the per-player stats record gains two host-authoritative
+#      broadcast counters (shot_attempts, shot_attempts_blocked → Corsi/Fenwick),
+#      widening STATS_PLAYER_RECORD_SIZE 15 → 17. A v42 peer would misalign the
+#      stats player-block walk, so mixed builds must be refused.
+# v44: analytics A2 — the stats record gains a float xg_for (individual expected
+#      goals), widening STATS_PLAYER_RECORD_SIZE 17 → 18. Same misalignment risk
+#      against a v43 peer, so mixed builds must be refused.
+# v45: analytics B1 — new authority RPC receive_shot_events: the host pushes the
+#      game's shot log at game-over so clients can render their own post-game
+#      shot map. Adding an @rpc method shifts the rpc-config ordering both peers
+#      hash, so mixed builds must be refused.
+# v46: the height dial extends to 6'8" (80"). Height already rode the wire as a
+#      plain int, but the VALUE 80 is new: an older peer coerces it back to 79
+#      and would then simulate a different mass, top speed and reach than the
+#      host, diverging prediction. Mixed builds must be refused.
+const PROTOCOL_VERSION: int = 46
 
 
 func _ready() -> void:

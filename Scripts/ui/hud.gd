@@ -30,6 +30,7 @@ var _assist_tag_label: Label
 var _assist_label: Label
 var _phase_style: StyleBoxFlat
 var _game_over_popup: GameOverPopup = null
+var _post_game_analytics: PostGameAnalytics = null
 var _intermission_overlay: IntermissionOverlay = null
 var _matchup_overlay: MatchupIntroOverlay = null
 var _pause_menu: PauseMenu = null
@@ -123,7 +124,13 @@ func _ready() -> void:
 	_game_over_popup.lobby_vote_toggled.connect(_on_lobby_vote_pressed)
 	_game_over_popup.free_play_pressed.connect(_on_game_over_free_play)
 	_game_over_popup.exit_pressed.connect(_on_game_over_exit)
+	_game_over_popup.analytics_pressed.connect(_on_game_over_analytics)
 	add_child(_game_over_popup)
+	_post_game_analytics = PostGameAnalytics.new()
+	# Controller: the analytics reader covers the game-over screen, so focus is
+	# walled off from its buttons and handed back when the reader closes.
+	_post_game_analytics.set_focus_background(_game_over_popup.focus_root())
+	add_child(_post_game_analytics)
 	_intermission_overlay = IntermissionOverlay.new()
 	add_child(_intermission_overlay)
 	_matchup_overlay = MatchupIntroOverlay.new()
@@ -131,10 +138,16 @@ func _ready() -> void:
 	_pause_menu = PauseMenu.new()
 	_pause_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
 	_pause_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
+	# Both menus route their Report Bug entry through the HUD's single dialog,
+	# handing over their own content root so focus is walled off behind it.
+	_pause_menu.bug_report_requested.connect(func() -> void:
+		_on_bug_report_pressed(_pause_menu.focus_root()))
 	add_child(_pause_menu)
 	_side_menu = SideMenu.new()
 	_side_menu.opened.connect(func() -> void: GameManager.set_input_blocked(true))
 	_side_menu.closed.connect(func() -> void: GameManager.set_input_blocked(false))
+	_side_menu.bug_report_requested.connect(func() -> void:
+		_on_bug_report_pressed(_side_menu.focus_root()))
 	add_child(_side_menu)
 	# Free play IS the main menu, so land with the SideMenu open (it's obvious
 	# one exists) and keep a pulsing "[ESC] MENU" affordance up whenever it's
@@ -651,6 +664,11 @@ func _build_bug_icon() -> void:
 	btn.add_theme_color_override("icon_hover_color", Color(1.0, 1.0, 1.0, 0.90))
 	btn.add_theme_color_override("icon_pressed_color", Color(1.0, 1.0, 1.0, 0.70))
 	btn.tooltip_text = "Report Bug"
+	# Mouse affordance only: its focus stylebox is deliberately transparent, so if
+	# it stayed focusable the D-pad could wander onto it out of an open menu and
+	# the ring would simply vanish. The pad reaches the reporter through the side
+	# menu footer / pause menu instead.
+	btn.focus_mode = Control.FOCUS_NONE
 	btn.anchor_left = 1.0
 	btn.anchor_right = 1.0
 	btn.anchor_top = 1.0
@@ -1562,6 +1580,8 @@ func _on_game_reset() -> void:
 		_game_over_present_tween.kill()
 	_game_over_present_tween = null
 	_game_over_popup.hide_popup()
+	if _post_game_analytics != null:
+		_post_game_analytics.close()
 	if _pause_menu != null:
 		_pause_menu.close()
 	if _side_menu != null:
@@ -1629,6 +1649,14 @@ func _on_game_over_free_play() -> void:
 		await NetworkManager.announce_match_end()
 		GameManager.return_to_free_play())
 
+# Opens the post-game analytics views (shot map / tale of the tape / xG flow)
+# over the game-over screen. Reads only local per-game data, so it works
+# identically offline and online.
+func _on_game_over_analytics() -> void:
+	if _post_game_analytics != null:
+		_post_game_analytics.present()
+
+
 func _on_game_over_exit() -> void:
 	_show_confirm("Exit game?", func() -> void:
 		await NetworkManager.announce_match_end()
@@ -1645,8 +1673,10 @@ func _check_rematch_unanimous() -> void:
 		RematchVoteRules.Choice.LOBBY:
 			GameManager.return_to_lobby()
 
-func _on_bug_report_pressed() -> void:
-	_bug_dialog.open()
+# `background` is the menu that raised it (null for the mouse-only HUD icon,
+# which has no menu behind it) — walled off so the pad stays in the dialog.
+func _on_bug_report_pressed(background: Control = null) -> void:
+	_bug_dialog.open(background)
 
 func _on_local_player_hit(magnitude: float) -> void:
 	if magnitude < 3.0:

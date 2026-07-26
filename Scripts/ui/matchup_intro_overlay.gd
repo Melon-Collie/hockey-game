@@ -149,9 +149,9 @@ func hide_overlay() -> void:
 # Roster rebuilt per present(): once per match, a handful of rows. Each row:
 # a position badge, jersey number, name. Records arrive slot-sorted (see
 # hud.gd._show_matchup_overlay), so in 5v5 the forward group (C/LW/RW) always
-# precedes defense (LD/RD) — a thin "DEFENSE" divider marks the seam so the
-# matchup reads at a glance instead of five undifferentiated names (3v3 has
-# no such split, so no divider).
+# precedes defense (LD/RD) — thin "FORWARDS" / "DEFENSE" dividers label both
+# groups so the matchup reads at a glance instead of five undifferentiated
+# names (3v3 is position-free rovers, so it gets no dividers at all).
 func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 		team_id: int) -> void:
 	for child: Node in rows.get_children():
@@ -160,16 +160,20 @@ func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 	var labels: Array = _POSITION_LABEL_AWAY if team_id == 1 else _POSITION_LABEL
 	if is_5v5:
 		labels = _POSITION_LABEL_5V5_AWAY if team_id == 1 else _POSITION_LABEL_5V5
+	var open_group: int = -1  # -1 = none yet, 0 = forwards, 1 = defense
 	for record: PlayerRecord in records:
-		if is_5v5 and record.team_slot == PlayerRules.FIRST_DEFENSE_SLOT:
-			var spacer := Control.new()
-			spacer.custom_minimum_size = Vector2(0, 6)
-			rows.add_child(spacer)
-			rows.add_child(_lbl("DEFENSE", 12, _DIM))
+		var group: int = 1 if PlayerRules.is_defense_slot(record.team_slot) else 0
+		if is_5v5 and group != open_group:
+			_add_group_header(rows, "DEFENSE" if group == 1 else "FORWARDS",
+					open_group != -1)
+			open_group = group
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 12)
+		# Badge left-aligned in its cell so C / LW / LD share a left rail with
+		# the group headers above them; the jersey numbers keep the right
+		# alignment that lines up 7 with 71.
 		var pos := _lbl(labels[record.team_slot], 14, _DIM)
-		pos.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		pos.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		pos.custom_minimum_size = Vector2(28, 0)
 		pos.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(pos)
@@ -182,6 +186,20 @@ func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 		name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(name_label)
 		rows.add_child(row)
+
+
+# A group divider over the rows that follow it, flush with the column's left
+# edge (the same rail as the color stripe, the HOME/AWAY header, and the
+# position badges). `lead_gap` opens a little air above a group that follows
+# another one; the first group sits tight under the team header.
+func _add_group_header(rows: VBoxContainer, text: String, lead_gap: bool) -> void:
+	if lead_gap:
+		var spacer := Control.new()
+		spacer.custom_minimum_size = Vector2(0, 6)
+		rows.add_child(spacer)
+	var head := _lbl(text, 12, _DIM)
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	rows.add_child(head)
 
 
 func _stripe_style() -> StyleBoxFlat:

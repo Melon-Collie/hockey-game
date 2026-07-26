@@ -1,9 +1,20 @@
 class_name BugReportDialog extends Control
 
+# Pad text entry goes through the same on-screen keyboard PlayerSettingsPopup
+# uses (Steam's own keyboard only exists in Big Picture / on Deck). The grid
+# produces one flat string, so a pad report is a single paragraph — well under
+# BugReporter.MAX_DESCRIPTION_CHARS, which the mouse path can still fill.
+const _PAD_ENTRY_MAX_CHARS: int = 500
+
 var _description: TextEdit
 var _submit_button: Button
 var _status_label: Label
+var _pad_hint: Label
+var _keyboard: ControllerKeyboard
 var _bug_reporter := BugReporter.new()
+# The menu that opened this, walled off while we're up; focus returns to it.
+var _focus_background: Control = null
+var _focus_restore: Control = null
 
 
 func _ready() -> void:
@@ -53,6 +64,16 @@ func _ready() -> void:
 	_description.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	vbox.add_child(_description)
 
+	# Device-aware entry hint: the pad can't type into a TextEdit, so it says how
+	# to open the on-screen keyboard. Rebuilt on a device swap like every other
+	# persistent prompt.
+	_pad_hint = Label.new()
+	_pad_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+	_pad_hint.add_theme_font_size_override("font_size", 12)
+	vbox.add_child(_pad_hint)
+	InputDeviceTracker.device_changed.connect(_refresh_pad_hint)
+	_refresh_pad_hint(InputDeviceTracker.is_gamepad_active())
+
 	_status_label = Label.new()
 	_status_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	_status_label.add_theme_font_size_override("font_size", 12)
@@ -79,24 +100,61 @@ func _ready() -> void:
 	# runs on the main thread.
 	_bug_reporter.submit_completed.connect(_on_submit_completed)
 
+	_keyboard = ControllerKeyboard.new()
+	_keyboard.submitted.connect(_on_keyboard_submitted)
+	_keyboard.cancelled.connect(func() -> void: ControllerNav.grab_focus(_description))
+	add_child(_keyboard)
+
 	hide()
 
 
-func open() -> void:
+func _refresh_pad_hint(is_gamepad: bool) -> void:
+	_pad_hint.visible = is_gamepad
+	if is_gamepad:
+		_pad_hint.text = "Press %s on the box above to type." % ControllerGlyphs.joy_label(JOY_BUTTON_A)
+
+
+# `background` is the menu that opened this — walled off so the pad can't step
+# out of the dialog and back onto it.
+func open(background: Control = null) -> void:
 	_description.text = ""
 	_status_label.text = ""
 	_submit_button.disabled = false
+	_focus_background = background
+	_focus_restore = ControllerNav.focus_owner(self)
 	show()
-	# grab_focus errors ("!is_inside_tree()") if the dialog was never parented;
-	# only grab once it's actually in the tree.
+	# Land on the description either way: it's the field a keyboard player types
+	# into, and the one a pad player presses A on to raise the on-screen keyboard.
+	# (grab_focus errors if the dialog was never parented, hence the tree check.)
 	if _description.is_inside_tree():
+		ControllerNav.open_modal(_focus_background, self, _description)
 		_description.grab_focus()
+
+
+# A on the focused description raises the on-screen keyboard. Handled at _input,
+# ahead of the GUI, so ui_accept doesn't just insert a newline in the TextEdit.
+func _input(event: InputEvent) -> void:
+	if not visible or not ControllerNav.active():
+		return
+	if _description.has_focus() and event.is_action_pressed(&"ui_accept"):
+		_keyboard.open(_description.text, _PAD_ENTRY_MAX_CHARS, self)
+		get_viewport().set_input_as_handled()
+
+
+func _on_keyboard_submitted(text: String) -> void:
+	_description.text = text
+	ControllerNav.grab_focus(_description)
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if visible and event.is_action_pressed(&"ui_cancel"):
-		hide()
+		_close()
 		get_viewport().set_input_as_handled()
+
+
+func _close() -> void:
+	hide()
+	ControllerNav.close_modal(_focus_background, _focus_restore)
 
 
 func _on_submit_pressed() -> void:
@@ -132,4 +190,4 @@ func _on_submit_completed(result: BugReporter.Result, _http_code: int) -> void:
 
 
 func _on_cancel_pressed() -> void:
-	hide()
+	_close()

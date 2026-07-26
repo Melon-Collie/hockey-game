@@ -182,18 +182,66 @@ static func _back_depth_at_height(y: float) -> float:
 	return lerpf(GameRules.NET_DEPTH, GameRules.NET_TOP_DEPTH, t)
 
 
+# ── The back mesh as ONE plane, resolved from BOTH sides ──────────────────────
+# Because the taper above is linear, the back twine is a single plane leaning
+# ~21° off vertical: in the (depth, y) half-plane of either end it runs from
+# NET_DEPTH at the ice to NET_TOP_DEPTH under the crossbar.
+#
+# Interior and exterior MUST come from that one plane. They used not to: the
+# interior clamp was the slant (above) while the exterior face was a vertical
+# wall at the full NET_DEPTH, and the wedge between them — depth NET_TOP_DEPTH..
+# NET_DEPTH, below the crossbar — is real ice OUTSIDE the cage that
+# `_interior_or_mouth` nonetheless called cavity. Nothing guards that wedge from
+# ABOVE (the top panel's rear edge IS the slant's top edge), so a puck DESCENDING
+# into it — one trickling off the back of the net roof, a deflection dropping
+# steeply behind the cage — was classified interior on the next sub-step and
+# clamped forward THROUGH the twine, ending up sitting inside the net (no goal:
+# GoalDetectionRules sees no fresh goal-line crossing, so the puck just sat there
+# and play rolled on). The same mismatch stopped a puck driven at the back of the
+# net at height dead in mid-air, up to ~0.45 m behind the visible mesh.
+#
+# Slope is negative — the twine gets shallower as it rises.
+const _BACK_SLOPE: float = (GameRules.NET_TOP_DEPTH - GameRules.NET_DEPTH) / GameRules.NET_HEIGHT
+
+
+# Signed PERPENDICULAR distance from `p` to this end's back-mesh plane, in metres,
+# positive on the EXTERIOR (behind the twine) side. Sign alone classifies which
+# face a puck is on — robust where the old depth-shell comparison sat on a knife
+# edge with the ejection point it had to agree with.
+static func _back_plane_distance(p: Vector3) -> float:
+	var depth: float = absf(p.z) - GameRules.GOAL_LINE_Z
+	return (depth - GameRules.NET_DEPTH - _BACK_SLOPE * p.y) / _back_plane_norm()
+
+
+# Length of the (depth, y) plane normal (1, -_BACK_SLOPE) — the divisor that turns
+# the plane equation into a true distance. Constant; a couple of multiplies and a
+# sqrt, only reached inside the near-net band.
+static func _back_plane_norm() -> float:
+	return sqrt(1.0 + _BACK_SLOPE * _BACK_SLOPE)
+
+
+# Unit outward normal of the back mesh at the end whose depth grows along
+# `end_sign` * +z. It leans back AND UP, since the twine leans back as it drops.
+static func _back_plane_normal(end_sign: float) -> Vector3:
+	var inv: float = 1.0 / _back_plane_norm()
+	return Vector3(0.0, -_BACK_SLOPE * inv, end_sign * inv)
+
+
 # True when a puck at `p` is on the INTERIOR side of the netting — inside the cavity, or in
 # front of the goal line within the open mouth (about to enter the way a scored puck does).
 # The sub-stepped drive keeps the previous sample within ~4 cm of any crossing, so this
 # local classification of the segment START decides which face of the twine the puck is on.
-static func _interior_or_mouth(p: Vector3, puck_radius: float) -> bool:
+#
+# The back test is the SLANT's own plane (_back_plane_distance), not a depth box: the wedge
+# above the slant is behind the twine and must classify EXTERIOR however shallow it is.
+static func _interior_or_mouth(p: Vector3) -> bool:
 	if p.y > GameRules.NET_HEIGHT:
 		return false
 	var az: float = absf(p.z)
 	if az <= GameRules.GOAL_LINE_Z:
 		# In front of the goal-line plane: the only interior entry is the open mouth.
 		return absf(p.x) <= GameRules.NET_HALF_WIDTH
-	if az >= GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH + puck_radius:
+	if _back_plane_distance(p) >= 0.0:
 		return false
 	return absf(p.x) < _cavity_half_width()
 
@@ -226,15 +274,15 @@ static func resolve_net_panels(prev: Vector3, pos: Vector3, vel: Vector3,
 	var v: Vector3 = vel
 	var hit: bool = false
 	var end_sign: float = signf(pos.z)
-	if _interior_or_mouth(prev, puck_radius):
+	if _interior_or_mouth(prev):
 		# INTERIOR faces (a puck that came in through the mouth). The back mesh is
 		# a slanted plane, shallow at the top shelf — clamp to its depth AT THIS
 		# HEIGHT (_back_depth_at_height) so a top-corner goal dies on the twine
 		# instead of sailing through it into the deep cavity. The rebound stays a
-		# horizontal −z absorb: at NET_RESTITUTION the puck barely bounces and
-		# then drops, so the plane's gentle y-tilt isn't worth reflecting through
-		# (and a low puck, where the twine is near-vertical, still kicks straight
-		# back out toward the mouth).
+		# horizontal −z absorb rather than the plane's true normal (which the
+		# exterior face below does use): at NET_RESTITUTION the puck barely bounces
+		# and then drops, so the ~21° lean isn't worth reflecting through, and a
+		# scored puck kicks straight back out toward the mouth.
 		var back_limit: float = GameRules.GOAL_LINE_Z + _back_depth_at_height(p.y) - puck_radius
 		if absf(p.z) > back_limit:
 			p.z = end_sign * back_limit
@@ -250,11 +298,22 @@ static func resolve_net_panels(prev: Vector3, pos: Vector3, vel: Vector3,
 		# EXTERIOR faces (a puck outside the netting). Resolve the face whose plane
 		# the segment is crossing from ITS side; a diagonal corner case resolves one
 		# face now and the other on the next ≤4 cm sub-step.
-		var back_plane: float = GameRules.GOAL_LINE_Z + GameRules.NET_DEPTH
-		if absf(prev.z) >= back_plane and az < back_plane + puck_radius:
-			# Behind the back mesh, pressing toward the goal line: reflect off the
-			# exterior back face.
-			p.z = end_sign * (back_plane + puck_radius)
+		var back_dist: float = _back_plane_distance(p)
+		if _back_plane_distance(prev) >= 0.0 and back_dist < puck_radius:
+			# Behind the back twine and pressing on it — a rim into the back of the
+			# cage, or a puck dropping into the wedge above the slant. Eject flush
+			# along the mesh's own normal (back AND up), so the puck dies on the
+			# VISIBLE mesh at its own height and then tracks down the outside instead
+			# of being pulled through into the cavity. Starting from `prev`'s side
+			# (rather than the position alone) keeps a puck BESIDE the cage — in front
+			# of this plane but laterally outside — on the side face below.
+			#
+			# GEOMETRY uses the slant's normal; the RESPONSE stays a horizontal absorb,
+			# like the interior face. Rebounding along the true normal instead sends the
+			# tangential component UP the 21° slope — a hard rim into the back climbed
+			# the twine and popped over the crossbar (from where it could drop into the
+			# cavity through the open top), which is worse than the bug being fixed.
+			p += _back_plane_normal(end_sign) * (puck_radius - back_dist)
 			v = reflect_3d(v, Vector3(0.0, 0.0, end_sign), NET_RESTITUTION)
 			hit = true
 		else:

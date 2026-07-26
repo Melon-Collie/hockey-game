@@ -181,6 +181,23 @@ static func wrister_aim_dir(bot_aim_dir: Vector3, mouse_world: Vector3,
 		return bot_aim_dir
 	return Vector3(mouse_world.x - origin_world.x, 0.0, mouse_world.z - origin_world.z)
 
+# The slapper's aim DIRECTION (world XZ, un-normalized — the caller normalizes),
+# measured at the press tick and then LOCKED for the whole wind-up.
+# BOTS commit their direction directly (bot_aim_dir non-ZERO), for the same reason
+# the wrister does and one more: the human lock is measured from the BLADE's world
+# point (a shoulder-anchored, attribute-scaled, facing-rotated offset ~1 m off the
+# body), which a bot has no way to reproduce from the state snapshot. Placing a
+# cursor "the right distance out" to cancel that offset parallel-shifts the locked
+# line by roughly the blade offset — around a net width at one-timer range, and
+# worse than that in tight where the shot vector is shorter than the offset itself.
+# HUMANS aim blade→cursor: the puck fires from the blade toward where you point.
+# See SkaterController._enter_slapper_charge.
+static func slapper_aim_dir(bot_aim_dir: Vector3, mouse_world: Vector3,
+		blade_world: Vector3) -> Vector3:
+	if bot_aim_dir.length_squared() > 0.0001:
+		return bot_aim_dir
+	return Vector3(mouse_world.x - blade_world.x, 0.0, mouse_world.z - blade_world.z)
+
 # Wrister forehand/backhand. BOTS commit the hand (paired with a committed
 # bot_aim_dir); HUMANS read the CURSOR-sweep chirality (is_backhand_from_swing;
 # the blade is frozen so the cursor is the only sweep). See

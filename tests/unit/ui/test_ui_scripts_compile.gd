@@ -20,6 +20,23 @@ const _SCRIPTS: Array[String] = [
 	"res://Scripts/ui/slot_grid_panel.gd",
 	"res://Scripts/ui/options_panel.gd",
 	"res://Scripts/ui/options/controls_tab.gd",
+	"res://Scripts/ui/lobby_manager.gd",
+	"res://Scripts/ui/lobby_build_popup.gd",
+	"res://Scripts/ui/attribute_picker_panel.gd",
+	"res://Scripts/ui/pause_menu.gd",
+	"res://Scripts/ui/confirm_dialog.gd",
+	"res://Scripts/ui/display_revert_dialog.gd",
+	"res://Scripts/ui/loading_screen.gd",
+	"res://Scripts/ui/post_game_analytics.gd",
+	"res://Scripts/ui/game_over_popup.gd",
+	"res://Scripts/ui/career_stats_screen.gd",
+	"res://Scripts/ui/tutorial_hud.gd",
+	"res://Scripts/ui/drill_hud.gd",
+	"res://Scripts/ui/replay_viewer_hud.gd",
+	"res://Scripts/ui/player_settings_popup.gd",
+	"res://Scripts/ui/play_popup.gd",
+	"res://Scripts/ui/bug_report_dialog.gd",
+	"res://Scripts/ui/controller_keyboard.gd",
 ]
 
 

@@ -253,6 +253,11 @@ var _shot_tracker: ShotOnGoalTracker = null
 var _hit_tracker: HitTracker = null
 var _turnover_tracker: TurnoverTracker = null
 var _possession_tracker: PossessionTracker = null
+var _advanced_stats_tracker: AdvancedStatsTracker = null
+# A CLIENT's copy of the game's shot log, pushed by the host at game-over
+# (analytics B1). The host reads its own live buffer off _advanced_stats_tracker
+# instead — get_shot_events() picks the right one. Cleared per match.
+var _client_shot_events: Array[ShotEvent] = []
 var _pickup_claim: PickupClaimResolver = null
 var _poke_claim: PokeClaimResolver = null
 var _stick_lift_claim: StickLiftClaimResolver = null
@@ -355,6 +360,10 @@ var _game_id: String = ""
 # bot) makes the game ranked from then on, but players leaving before the
 # horn don't un-rank it. Reset at world spawn and recomputed on rematch.
 var _ranked_match: bool = false
+# Peak human headcount seen this match (see _refresh_ranked_match). Stored on the
+# career row so a future filter can pick its own bar instead of inheriting the
+# latch's arbitrary 2.
+var _peak_humans: int = 0
 
 # Sound wiring is split between persistent (NetworkManager autoload, GameManager
 # self-signals — wire once for the lifetime of the process) and per-game (puck /
@@ -428,6 +437,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.faceoff_positions_received.connect(_on_faceoff_positions_received)
 	NetworkManager.game_reset_received.connect(on_game_reset)
 	NetworkManager.stats_received.connect(_on_stats_received)
+	NetworkManager.shot_events_received.connect(_on_shot_events_received)
 	NetworkManager.slot_swap_requested.connect(_on_slot_swap_requested)
 	NetworkManager.slot_swap_confirmed.connect(_on_slot_swap_confirmed)
 	NetworkManager.return_to_lobby_received.connect(_on_return_to_lobby)
@@ -1196,6 +1206,7 @@ func _spawn_world() -> void:
 	_last_phys_tick_us = 0
 	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
 	_ranked_match = false  # re-latches as players spawn (_on_registry_player_added)
+	_peak_humans = 0
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -1406,6 +1417,15 @@ func _wire_subsystems() -> void:
 	_turnover_tracker.setup(_registry)
 	_shot_tracker.shot_attempted.connect(_turnover_tracker.note_shot)
 	_shot_tracker.shot_on_goal_recorded.connect(_turnover_tracker.note_shot)
+
+	# Host-only advanced-stat attribution (analytics A1): per-player Corsi/Fenwick
+	# off the same shot-event signals. Counters ride the normal stats broadcast.
+	_advanced_stats_tracker = AdvancedStatsTracker.new()
+	_advanced_stats_tracker.setup(_registry)
+	_shot_tracker.shot_resolved.connect(_advanced_stats_tracker.on_shot_resolved)
+	# A client's pushed copy belongs to the PREVIOUS match — drop it alongside the
+	# fresh host-side buffer this re-wire creates.
+	_client_shot_events.clear()
 
 	# Host-only established-possession model (PossessionRules): turnover /
 	# faceoff-win crediting and assist-chain breaks key off ESTABLISHMENT
@@ -2433,6 +2453,17 @@ func _build_replay_footer() -> Dictionary:
 				"toi_seconds": roundi(r.stats.toi_seconds),
 			})
 	footer["players"] = players
+	# Shot log (analytics B1), so a .mreplay is SELF-CONTAINED for the post-game
+	# analytics views — shot map, xG flow, and the advanced half of the tape all
+	# regenerate from this without any backend. That matters most exactly where
+	# the backend isn't available: stat sharing off, Steam signed out, or a game
+	# that simply failed to upload. Host-only, like the Supabase batch.
+	var shot_rows: Array = []
+	if _advanced_stats_tracker != null:
+		shot_rows = ShotEvent.encode_list(_advanced_stats_tracker.get_shot_events())
+	footer["shot_events"] = shot_rows
+	# Roster size, so the browser can badge the mode without the backend.
+	footer["team_size"] = _state_machine.team_size if _state_machine != null else 0
 	footer["ended_at"] = Time.get_unix_time_from_system()
 	return footer
 
@@ -3424,11 +3455,92 @@ func _note_shot_trajectory() -> void:
 	# returns live linear_velocity.
 	var vel: Vector3 = puck.get_release_velocity()
 	var on_net: bool = false
+	var directed: bool = false
+	var directed_line_z: float = 0.0
 	for goal: HockeyGoal in goals:
-		if ShotOnNetRules.is_on_net(pos, vel, goal.goal_line_z()):
+		var line_z: float = goal.goal_line_z()
+		if ShotOnNetRules.is_on_net(pos, vel, line_z):
 			on_net = true
+			directed = true
+			directed_line_z = line_z
 			break
+		# Wider Corsi/Fenwick mouth: a shot that misses within the margin is still
+		# an attempt (is_on_net ⊆ is_directed_at_net, so only check when off net).
+		if ShotOnNetRules.is_directed_at_net(pos, vel, line_z):
+			directed = true
+			directed_line_z = line_z
 	_shot_tracker.note_trajectory(on_net)
+	_shot_tracker.note_directed_at_net(directed)
+	# xG (A2): evaluate this shot's expected goals from the REAL goalie geometry at
+	# release, and hold it on the pending shot to commit when it resolves. Only
+	# directed shots can become counted attempts, so only they need an xG.
+	if directed:
+		var xg: float = AIActionScoring.expected_goals(
+				pos, Vector3(0.0, 0.0, directed_line_z),
+				_defending_goalie_pos(directed_line_z),
+				GameRules.NET_HALF_WIDTH, vel.length(),
+				0.0, -1.0, false, 0.0, false, 0.0,
+				Vector4.INF, Vector4.INF, 1.0, _shot_release_spread())
+		_shot_tracker.note_xg(xg)
+		_shot_tracker.note_shot_origin(pos)  # release position for the shot map (B1)
+
+
+# The pending shot's release-difficulty spread — the "can you hit it" half of the
+# xG model. Reads the shot's CONTEXT (which hand, how fast the shooter is moving),
+# never the shooter's skill: a weaker player drawing lower xG on an identical
+# chance would make goals-above-expected circular. Falls back to the settled
+# reference when the shooter's actors aren't resolvable.
+# v1 note: on a mid-flight tip this still reads the ORIGINAL shooter's hand — the
+# tipper's own release context isn't captured. Minor; tips carry their own tag.
+func _shot_release_spread() -> float:
+	if _shot_tracker == null or _registry == null:
+		return AIActionScoring.XG_BASE_SPREAD_RAD
+	var rec: PlayerRecord = _registry.get_record(_shot_tracker.get_shooter_peer_id())
+	if rec == null or rec.skater == null or rec.controller == null:
+		return AIActionScoring.XG_BASE_SPREAD_RAD
+	var horizontal := Vector3(rec.skater.velocity.x, 0.0, rec.skater.velocity.z)
+	return AIActionScoring.xg_release_spread(
+			rec.controller.last_release_hand == "BH", horizontal.length())
+
+
+# The position of the goalie defending the net at `line_z` (same end, matched by
+# z-sign), for the release-time xG geometry. Falls back to the goal centre when
+# no goalie is present (drills / degenerate setups).
+func _defending_goalie_pos(line_z: float) -> Vector3:
+	for gc: GoalieController in goalie_controllers:
+		if gc != null and gc.goalie != null \
+				and signf(gc.goalie.global_position.z) == signf(line_z):
+			return gc.goalie.global_position
+	return Vector3(0.0, 0.0, line_z)
+
+
+# Sum of individual xG (PlayerStats.xg_for) over a team's players — the team xGF
+# for a game, and (for the opponent) the team xGA. Read at game-over for the
+# career xGF% columns; every peer has all rows via the stats broadcast.
+# The host pushed its per-game shot log at game-over (analytics B1). Clients keep
+# it so the post-game analytics views read from the same list the host has.
+func _on_shot_events_received(data: Array) -> void:
+	_client_shot_events = ShotEvent.decode_list(data)
+
+
+# The game's shot log, whichever role this peer is: the host's live buffer, or a
+# client's pushed copy. The seam the post-game shot map / xG-flow read from.
+func get_shot_events() -> Array[ShotEvent]:
+	if NetworkManager.is_host and _advanced_stats_tracker != null:
+		return _advanced_stats_tracker.get_shot_events()
+	return _client_shot_events
+
+
+func _team_xg_sum(team_id: int) -> float:
+	var total: float = 0.0
+	if _registry == null:
+		return total
+	for peer_id: int in _registry.all():
+		var record: PlayerRecord = _registry.get_record(peer_id)
+		if record != null and record.team != null and record.team.team_id == team_id \
+				and record.stats != null:
+			total += record.stats.xg_for
+	return total
 
 
 # Host-side: a shot off the pipes is a miss in NHL scoring — drop the pending
@@ -3907,6 +4019,14 @@ func _on_game_over() -> void:
 	# Highlight reel runs for every game-over (online + Play vs Bots), so it's
 	# scheduled before the career/telemetry early-returns below.
 	_schedule_post_game_replay()
+	# Ship the game's shot log to clients (analytics B1) — same reasoning: the
+	# post-game analytics views are a LOCAL view of the match everyone just
+	# played, so this rides ahead of the Supabase upload gates below (those gate
+	# what leaves the machine, not what a peer sees of its own game). No-op with
+	# no peers, so offline / Play vs Bots costs nothing.
+	if NetworkManager.is_host and _advanced_stats_tracker != null:
+		NetworkManager.send_shot_events_to_all(
+				ShotEvent.encode_list(_advanced_stats_tracker.get_shot_events()))
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
 	var local: PlayerRecord = _registry.get_local()
@@ -3939,17 +4059,15 @@ func _on_game_over() -> void:
 				_stat_recorder.record_game(local.stats, outcome)
 				if _achievements != null:
 					_achievements.evaluate_career(_stat_recorder.totals())
-	# Supabase career row + network telemetry: online, shared-stats games only.
-	# Offline (Play vs Bots + free play) and tutorial don't upload — backend
-	# cost, and no cross-machine opponent pool worth ranking. (Bot-lobby games
-	# DO have a game_id and record local replays; they just stay off the
-	# backend.)
-	if NetworkManager.is_offline_mode:
-		return
-	# An online-VISIBLE lobby can still produce a solo-vs-bots match (nobody
-	# joined before the horn). Same no-real-opponent reasoning as above —
-	# ranked rows require the two-human latch.
-	if not _ranked_match:
+	# Supabase career row: EVERY real match counts, offline vs bots exactly like
+	# online. Most play happens offline, and a career page that ignores it isn't
+	# the player's career. The online/offline distinction is preserved as a column
+	# (`is_online`) rather than as an upload gate, so a human-only leaderboard
+	# stays possible later without having thrown the data away.
+	# Free play, tutorial, and drills are still excluded — game_over doesn't fire
+	# in those lobby-less modes, and `_achievements_active` is the established
+	# "this was a real match" predicate, so state it rather than rely on that.
+	if not _achievements_active():
 		return
 	# Privacy opt-out: with stat sharing off, no career row is uploaded to Supabase.
 	# The Career screen's history reads from that backend data, so it stays empty by
@@ -3957,15 +4075,37 @@ func _on_game_over() -> void:
 	# Steam achievements/stats above are unaffected — they never touch the backend.
 	if not PlayerPrefs.share_gameplay_stats:
 		return
-	# Network-quality row: shares the offline + privacy gates (re-checked inside
-	# the helper) but not the career-specific team/score plumbing below, so
-	# report it here. Both roles are worth collecting (client = link quality,
-	# host = frame/input health).
-	_report_net_session("completed")
+	# Network-quality row: online only — an offline match has no link to measure.
+	# (The helper re-checks its own gates.)
+	if not NetworkManager.is_offline_mode:
+		_report_net_session("completed")
 	if local == null or local.team == null:
 		return
+	# Every backend row keys on steam_id. Online sessions always have one; an
+	# offline session without Steam running does not, and a row we can't attribute
+	# is unreadable by the career screen and pure pollution — so skip it.
+	if SteamManager.steam_id == 0:
+		return
+	# Archival, not gates. `is_online` is the session type; `_peak_humans` is the
+	# stronger signal — an online lobby nobody joined is a bot game with extra
+	# steps. Stored as a COUNT rather than a "was it ranked" flag: Mitts has no
+	# ranked mode, and a count lets a future filter choose its own bar (1 = solo,
+	# 2+ = a real opponent, 6 = a full lobby) instead of inheriting this one.
+	var is_online: bool = not NetworkManager.is_offline_mode
 	_career_reporter.report(local, gf, ga, outcome,
-			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods)
+			_game_id, team_id, _state_machine.period_scores, _state_machine.num_periods,
+			_state_machine.team_shots[team_id], _state_machine.team_shots[1 - team_id],
+			_team_xg_sum(team_id), _team_xg_sum(1 - team_id), is_online, _peak_humans,
+			_state_machine.team_size, _state_machine.rule_set,
+			roundi(_state_machine.period_duration))
+	# Shot-event log (B1) — host-only: it holds the authoritative per-game buffer,
+	# so a single batch from the host avoids per-peer duplication. Offline the
+	# local player IS the host, so bot games log their shots too (which is what
+	# fills the career heatmap). Same share gate as the career row, applied above.
+	if NetworkManager.is_host and _advanced_stats_tracker != null:
+		_career_reporter.report_shot_events(
+				_advanced_stats_tracker.get_shot_events(), _game_id,
+				NetworkManager.get_peer_steam_id, _state_machine.team_size)
 
 
 # One network-quality row per game, guarded so the game-over and scene-exit
@@ -4006,16 +4146,23 @@ func notify_tutorial_completed() -> void:
 	_achievements.on_tutorials_complete()
 
 
-# Latches _ranked_match (see its doc) once two humans share the match. Called
-# from _on_registry_player_added so both the initial roster population and a
-# mid-match join re-evaluate it; _apply_reset re-runs it for rematches.
+# Latches _ranked_match (see its doc) once two humans share the match, and tracks
+# the PEAK human headcount for the career row. Called from
+# _on_registry_player_added so both the initial roster population and a mid-match
+# join re-evaluate it; _apply_reset re-runs it for rematches.
+# Peak rather than final: someone who plays three periods and drops before the
+# horn still made it a human game, and a headcount taken at game-over would miss
+# them. Counted offline too (the local player is a human), where it reads 1.
 func _refresh_ranked_match() -> void:
-	if _ranked_match or _registry == null or NetworkManager.is_offline_mode:
+	if _registry == null:
 		return
 	var humans: int = 0
 	for record: PlayerRecord in _registry.all().values():
 		if not record.is_bot:
 			humans += 1
+	_peak_humans = maxi(_peak_humans, humans)
+	if _ranked_match or NetworkManager.is_offline_mode:
+		return
 	_ranked_match = humans >= 2
 
 
@@ -4214,6 +4361,7 @@ func _apply_reset() -> void:
 	# A rematch is a fresh match for ranking purposes: re-derive the two-human
 	# latch from who's actually still here.
 	_ranked_match = false
+	_peak_humans = 0
 	_refresh_ranked_match()
 
 

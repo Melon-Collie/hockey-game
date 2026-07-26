@@ -69,7 +69,9 @@ func _input(event: InputEvent) -> void:
 			_step_number(1)
 			get_viewport().set_input_as_handled()
 	elif _name_field != null and _name_field.has_focus() and event.is_action_pressed(&"ui_accept"):
-		_keyboard.open(_name_field.text, _name_field.max_length)
+		# `self` as the background: the key grid covers this form, and focus has to
+		# stay on the grid until it's dismissed.
+		_keyboard.open(_name_field.text, _name_field.max_length, self)
 		get_viewport().set_input_as_handled()
 
 
@@ -120,6 +122,9 @@ func _build() -> void:
 	_attr_panel = AttributePickerPanel.new()
 	_attr_panel.changed.connect(_update_apply_state)
 	vbox.add_child(_attr_panel)
+	# The panel brings its own on-screen keyboard for the preset name (this
+	# popup's is for the player name); hand it this form as the wall target.
+	_attr_panel.set_keyboard_background(self)
 	_build_action_row(vbox)
 
 

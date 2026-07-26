@@ -547,6 +547,139 @@ func test_block_by_defender_credits_shots_blocked() -> void:
 			"defender intercept ends the shot — pending state cleared")
 
 
+func _last_event() -> ShotEvent:
+	var params: Array = get_signal_parameters(tracker, "shot_resolved")
+	return params[0] if params != null and not params.is_empty() else null
+
+
+func test_block_emits_blocked_event_with_shooter() -> void:
+	# Corsi/Fenwick: a credited block is a blocked attempt (Corsi yes, Fenwick no),
+	# attributed to the SHOOTER (peer 10), not the blocker.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.on_block(20)
+	assert_signal_emitted(tracker, "shot_resolved")
+	var e := _last_event()
+	assert_eq(e.shooter_peer, 10)
+	assert_eq(e.outcome, ShotEvent.Outcome.BLOCKED)
+
+
+func test_uncredited_block_does_not_emit_event() -> void:
+	# An off-net "block" is a takeaway, not a blocked shot — no Corsi event here.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)
+	tracker.note_directed_at_net(false)
+	tracker.on_block(20)
+	assert_signal_not_emitted(tracker, "shot_resolved")
+
+
+# ── Corsi/Fenwick shot-vs-pass classification (shot_resolved) ────────────────
+
+func test_on_goal_shot_emits_saved_event() -> void:
+	_add_player(10, 0)
+	_add_player(99, 1)  # opposing goalie's team
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.on_goalie_touch(1)  # saved, on net
+	assert_signal_emitted(tracker, "shot_resolved")
+	var e := _last_event()
+	assert_eq(e.shooter_peer, 10)
+	assert_eq(e.outcome, ShotEvent.Outcome.SAVED)
+
+
+func test_on_goal_shot_carries_its_xg_and_origin() -> void:
+	# The xG + release position noted at release ride the resolved event.
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_xg(0.27)
+	tracker.note_shot_origin(Vector3(1.5, 0.0, -20.0))
+	tracker.on_goalie_touch(1)
+	var e := _last_event()
+	assert_almost_eq(e.xg, 0.27, 0.0001)
+	assert_almost_eq(e.x, 1.5, 0.0001)
+	assert_almost_eq(e.z, -20.0, 0.0001)
+
+
+func test_confirmed_goal_logs_goal_outcome() -> void:
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.on_goal_confirmed(10)
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.GOAL)
+
+
+func test_directed_miss_recovered_by_defender_counts() -> void:
+	# Directed at net, missed wide, a defender retrieves it → a missed shot (Corsi).
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)          # missed the net
+	tracker.note_directed_at_net(true)      # but was aimed at it
+	tracker.on_pickup(20)                   # defender recovers
+	assert_signal_emitted(tracker, "shot_resolved")
+	var e := _last_event()
+	assert_eq(e.shooter_peer, 10)
+	assert_eq(e.outcome, ShotEvent.Outcome.MISSED)
+
+
+func test_directed_shot_received_by_teammate_is_a_pass() -> void:
+	# A backdoor feed / saucer: directed at the goal mouth, but the teammate
+	# receives it → a pass, not a shot. No shot_resolved.
+	_add_player(10, 0)
+	_add_player(11, 0)  # teammate at the net
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)
+	tracker.note_directed_at_net(true)
+	tracker.on_pickup(11)                   # teammate collects it → pass
+	assert_signal_not_emitted(tracker, "shot_resolved")
+
+
+func test_undirected_release_recovered_is_not_a_shot() -> void:
+	# A pass into space / clear: not directed at net, so recovering it is not a
+	# missed shot.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)
+	tracker.note_directed_at_net(false)     # aimed at a teammate / into space
+	tracker.on_pickup(20)
+	assert_signal_not_emitted(tracker, "shot_resolved")
+
+
+func test_directed_miss_times_out_as_one_shot() -> void:
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)
+	tracker.note_directed_at_net(true)
+	tracker.tick(ShotOnGoalTracker.SHOT_ON_GOAL_TIMEOUT + 0.1)
+	assert_signal_emitted(tracker, "shot_resolved")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.MISSED)
+	assert_eq(get_signal_emit_count(tracker, "shot_resolved"), 1,
+			"a timed-out miss counts exactly once")
+
+
+func test_post_hit_is_a_directed_miss() -> void:
+	# A post is a miss but stays a shot attempt even after on_net flips off.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.on_post_hit()                   # off net now, but directed
+	tracker.on_pickup(20)
+	assert_signal_emitted(tracker, "shot_resolved")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.MISSED)
+
+
 func test_block_by_teammate_does_not_credit() -> void:
 	_add_player(10, 0)
 	var teammate := _add_player(11, 0)

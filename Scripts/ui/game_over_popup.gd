@@ -17,6 +17,7 @@ signal rematch_toggled
 signal lobby_vote_toggled
 signal free_play_pressed
 signal exit_pressed
+signal analytics_pressed
 
 const _GOLD := MenuStyle.GOLD
 const _WHITE := MenuStyle.BROADCAST_CREAM
@@ -40,6 +41,7 @@ const _RANK_ROW_HEIGHTS: Array[int] = [50, 32, 32]
 # Gap between the center stripe column and the tag / name on either side.
 const _STRIPE_GUTTER: float = 16.0
 
+var _root: Control = null
 var _scrim: ColorRect = null
 var _top_block: VBoxContainer = null
 var _stars_block: VBoxContainer = null
@@ -66,10 +68,17 @@ func _ready() -> void:
 	visible = false
 
 
+# The popup's content root, handed to a screen that opens OVER this one (the
+# analytics reader) so focus can be walled off from these buttons while it's up.
+func focus_root() -> Control:
+	return _root
+
+
 func _build_ui() -> void:
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(root)
+	_root = root
 
 	# Scrim dims the highlight reel behind the presentation and makes this
 	# modal — same dim every popup uses.
@@ -212,6 +221,12 @@ func _build_bottom_block(root: Control) -> void:
 	actions.alignment = BoxContainer.ALIGNMENT_CENTER
 	actions.add_theme_constant_override("separation", 12)
 	_bottom_block.add_child(actions)
+
+	# Leads the strip: the analytics screen is a VIEW of the game just played,
+	# so it sits ahead of the what-next actions rather than among them.
+	var analytics_btn := _action_button("Game Analytics")
+	analytics_btn.pressed.connect(func() -> void: analytics_pressed.emit())
+	actions.add_child(analytics_btn)
 
 	_rematch_btn = _action_button("Rematch")
 	_rematch_btn.pressed.connect(func() -> void: rematch_toggled.emit())
