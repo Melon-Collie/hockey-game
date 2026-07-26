@@ -86,17 +86,37 @@ extends GutTest
 # where the chest anchor is whatever the pose in play already authored (READY
 # 1.06, STANDING 1.22, BUTTERFLY 0.40). 1.06 + 0.49 = 1.55 — the old flat
 # ceiling — so upright reach is unchanged BY CONSTRUCTION and only the down
-# postures give anything up. The trade now exists:
+# postures give anything up.
 #
-#   16 m @ 75 mph, arrives 1.10 m    UPRIGHT 0 goals -> BUTTERFLY 6 goals
-#    5 m @ 25 mph, arrives 1.10 m    UPRIGHT 0 goals -> BUTTERFLY 3 goals
-#    9 m @ 65 mph, arrives 0.98 m    UPRIGHT 1 goal  -> BUTTERFLY 0 goals
-#    7 m HIGH, arrives 0.76 m        UPRIGHT 4 goals -> BUTTERFLY 1 goal
-#    7 m FLAT                        UPRIGHT 1 goal  -> BUTTERFLY 0 goals
+# WHAT THE FIX ACTUALLY MOVED — exactly two cells, both BUTTERFLY, both with the
+# puck arriving high. Everything else in this instrument is identical:
 #
-# Better low, worse high — seal the ice, concede the top. The soft in-tight roof
-# (5 m @ 25 mph) is the counter a real shooter has against a goalie who drops
-# early, and it now works.
+#   cell (butterfly)                   before   after
+#   16 m @ 75 mph, arrives 1.10 m         0       6
+#    5 m @ 25 mph, arrives 1.10 m         1       3
+#    9 m @ 65 mph, arrives 0.98 m         0       0
+#    7 m HIGH,     arrives 0.76 m         1       1
+#    7 m FLAT                             0       0
+#   every UPRIGHT cell                    —   unchanged
+#
+# ⚠️ Read that as a BEFORE/AFTER table and the UPRIGHT-vs-BUTTERFLY rows below as
+# a WITHIN-BUILD contrast. They are different comparisons and conflating them is
+# an easy mistake to make (it was made once already). In particular the butterfly
+# being better LOW is not something this fix created — it was always true, it is
+# the lateral splay, and the fix does not touch it. The fix removed the seal's
+# HIGH-side advantage and nothing else.
+#
+#   UPRIGHT vs BUTTERFLY, after the fix:
+#     16 m @ 75 mph, arrives 1.10 m    UPRIGHT 0 goals   BUTTERFLY 6 goals
+#      5 m @ 25 mph, arrives 1.10 m    UPRIGHT 0 goals   BUTTERFLY 3 goals
+#      9 m @ 65 mph, arrives 0.98 m    UPRIGHT 1 goal    BUTTERFLY 0 goals
+#      7 m HIGH, arrives 0.76 m        UPRIGHT 4 goals   BUTTERFLY 1 goal
+#      7 m FLAT                        UPRIGHT 1 goal    BUTTERFLY 0 goals
+#
+# So the butterfly is better low and worse high — seal the ice, concede the top —
+# and only the second half of that is new. The soft in-tight roof (5 m @ 25 mph)
+# is the counter a real shooter has against a goalie who drops early, and it went
+# from a single edge cell to a real window.
 #
 # Everything that shoots at a SETTLED UPRIGHT keeper is bit-identical:
 # exhaustive 16/288 and 0/288, five-hole windows, and the disguise arms
