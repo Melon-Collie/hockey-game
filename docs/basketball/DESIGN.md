@@ -128,9 +128,10 @@ It produces, contextually, with no modes:
 
 Two guardrails, non-negotiable:
 
-- **Hold, never toggle.** A held brace is self-correcting — release and the facing attractor
-  takes you back to square. A toggle strands players facing the wrong way and they will blame
-  the game. This is the entire reason a lock is safe where an aim axis was not.
+- **Hold, never toggle.** A held brace is self-correcting — release it and facing goes back to
+  following your movement, so the way out is simply to move. A toggle strands players facing a
+  direction with no obvious way to fix it, and they will blame the game. This is the entire
+  reason a lock is safe where an aim axis was not.
 - **Brace must never cancel momentum drift on a shot.** Facing determines whether you can get
   a clean release off at all; *velocity* determines lateral error. If brace canceled drift it
   becomes a mandatory hold-always button and the footwork skill evaporates. Braced and
@@ -147,20 +148,62 @@ The diagnosis matters: hockey has no persistent threat direction. The net is beh
 the time, play flows both ways continuously, the puck is everywhere. There is nothing for
 facing to *default* to, so it had to be manually driven, so it fought the hands.
 
-Basketball has a fixed hoop and a halfcourt possession structure. There is always an obvious
-forward. So facing is composed from three things you already control:
+Two rules replace it:
 
-1. **Attractor.** On offense, torso pulls toward the hoop. On defense, toward your man. That
-   is where a real player is squared roughly ninety percent of the time.
-2. **Momentum perturbs it.** As you build speed your torso leans toward your movement vector.
-   The drive shoulder emerges from the fact that you're driving. This also makes shooting off
-   a hard drive naturally off-balance, which is the accuracy model doing its job for free.
-3. **Brace overrides it.** §3.4.
+1. **Facing follows movement, inside a forward cone only.**
+2. **Brace locks it.** §3.4.
 
-**Defensive stance angle gets no input either.** Forcing baseline versus forcing middle is
-real defensive skill, but positioning *is* the force — shade a shoulder to his left and you've
-geometrically taken away his left. Adding a stance-angle control would repeat the Mitts
-mistake.
+That's the whole model. There is no attractor, no auto-square, no torso magnetism toward the
+hoop or toward your man. **The game never decides where you are looking.** An earlier version
+of this design had the torso pull toward the threat; it was the one place in the whole game
+where the system made a decision on the player's behalf, which is the same species of thing as
+a canned animation — quieter, but the same. It's gone.
+
+#### Why unbraced facing can be this simple
+
+Look at what facing actually feeds: shield geometry, screen angle, post seal, legal guarding
+position, whether your body blocks the dribble line. **Almost all of it routes through brace.**
+So facing while unbraced does not need to be *correct* — it needs to be *predictable and
+undistracting*, and movement gives you that for free without ever surprising you.
+
+It also makes brace the only means of controlling facing at all, which is good economy: a
+situational trigger becomes a permanently relevant one.
+
+#### The forward cone is load-bearing
+
+**Lateral and backward movement must not rotate you.** You strafe, keeping your current facing.
+This is not a polish detail — without it the model collapses:
+
+- **Defense breaks outright.** Defensive sliding is lateral movement *while facing your man*.
+  If moving left turns you to face left, you play defense with your shoulder to the ball
+  handler, and the only remedy is holding brace permanently — which directly contradicts brace
+  costing you the ability to slide.
+- **The retreat dribble breaks.** Backpedaling would spin you around.
+
+It also matches how bodies work. You don't pivot to take two steps sideways.
+
+#### How the cases land
+
+| Situation | Facing |
+|---|---|
+| Driving | Moving forward hard → facing where you're going. |
+| Sliding on defense | Lateral → no rotation → still facing your man. |
+| Perimeter dribbling across the top | You face wherever you last drove. Want to be square to the rim? Brace. Which is what players actually do. |
+| Catch and shoot on the move | You catch facing your cut and brace to square up before releasing. Real footwork, and it makes the jump-stop-and-square an action rather than an assumption. |
+| Recovering on defense | You face where you're sprinting, and have to turn to pick your man back up. Also real. |
+
+#### Known consequence to watch
+
+Facing becomes **history-dependent** — stand still long enough and you're facing whatever
+direction you last happened to drive, which could read as unmoored. Ship with no idle
+correction and see whether it actually bothers anyone. A slow idle settle toward the ball is
+the fallback, but that is an attractor sneaking back in, so it needs evidence first.
+
+#### Defensive stance angle gets no input either
+
+Forcing baseline versus forcing middle is real defensive skill, but positioning *is* the
+force — shade a shoulder to his left and you've geometrically taken away his left. Adding a
+stance-angle control would repeat the Mitts mistake.
 
 ### 3.6 Camera
 
@@ -200,8 +243,8 @@ floor for the shadow to land on.
 - **Survey is deleted as a mechanic.** You already have the floor. One fewer input.
 - **Off-ball becomes visible**, which matters enormously when you are one of three and off-ball
   is most of your time.
-- **Facing stops driving the camera**, decoupling it further. The attractor model in §3.5
-  survives unchanged; it simply has no camera consequence.
+- **Facing stops driving the camera**, decoupling it further. The movement-driven facing model
+  in §3.5 is unaffected; it simply has no camera consequence.
 
 #### Static camera in halfcourt 3v3
 
