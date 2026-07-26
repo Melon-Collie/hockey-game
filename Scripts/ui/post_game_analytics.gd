@@ -42,7 +42,13 @@ var _team_colors: Array[Color] = [Color(0.85, 0.35, 0.15), Color(0.22, 0.53, 0.9
 
 
 func _ready() -> void:
-	layer = 16  # above GameOverPopup (5) and the Tab scoreboard (10)
+	# Above the whole menu stack, not just the game-over screen: this opens from
+	# the career screen too, which is reached through the side menu / pause menu
+	# (both layer 20) and can sit under ConfirmDialog (22) and DisplayRevert (23).
+	# Below ControllerKeyboard (40) and LoadingScreen (100), which must never be
+	# occluded. Escape still closes this first — it consumes ui_cancel in
+	# _unhandled_input, so the pause menu doesn't open behind it.
+	layer = 24
 	_build_ui()
 	visible = false
 
