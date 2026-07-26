@@ -986,6 +986,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.apply_blade_from_mouse = _ik.apply_blade_from_mouse
 	_cb.apply_wrister_aim_blade = _apply_wrister_aim_blade
 	_cb.wrister_chirality_seed = _wrister_chirality_seed
+	_cb.wrister_blade_backhand = _wrister_blade_backhand
 	_cb.apply_slapper_blade_position = _shot_pose.apply_slapper_blade_position
 	_cb.apply_block_blade_position = _shot_pose.apply_block_blade_position
 	_cb.apply_wrister_follow_through = _shot_pose.apply_wrister_follow_through
@@ -2201,17 +2202,35 @@ func _wrister_chirality_seed(input: InputState) -> Vector3:
 	bearing.y = 0.0
 	return bearing
 
+# Is the blade on the BACKHAND side right now? Pinned at charge start
+# (SkaterAimingBehavior.wrister_origin_backhand) as the forehand/backhand read for
+# absolute-aim devices — see ShotMechanics.is_backhand_from_blade_side. Shares
+# wrister_backhand_deadband with the swing read: both are "how far off dead-ahead
+# before this stops defaulting to forehand", in radians.
+func _wrister_blade_backhand() -> bool:
+	return ShotMechanics.is_backhand_from_blade_side(
+			_ik.blade_backhand_angle(), wrister_backhand_deadband)
+
 # Forehand/backhand for the wrister.
 #   - BOTS commit it (bot_wrister_backhand): the fake cursor is now purely cosmetic.
-#   - HUMANS read the swing CHIRALITY — the net rotational sense of the CURSOR's
-#     bearing sweep around the player over the stroke (the blade is frozen, so
-#     the cursor is the only sweep). is_backhand_from_swing over swing_rotation,
-#     which is saved/restored across reconcile so the classification is
-#     deterministic. Shared by the release and goalie-prediction paths.
+#   - GAMEPAD humans (commit_wrister_power — the same flag that marks the pad's
+#     committed-power path, and already on the wire, so a pad CLIENT resolves the
+#     same hand the host does): the PINNED blade side. An absolute skill stick has
+#     no swept gesture — the cursor's bearing rotation is just whichever way around
+#     the rim the thumb travelled — so chirality there is noise, and a coin-flip
+#     backhand silently costs 25% of the shot. See
+#     ShotMechanics.is_backhand_from_blade_side.
+#   - MOUSE humans read the swing CHIRALITY — the net rotational sense of the
+#     CURSOR's bearing sweep around the player over the stroke (the blade is
+#     frozen, so the cursor is the only sweep). is_backhand_from_swing over
+#     swing_rotation, which is saved/restored across reconcile so the
+#     classification is deterministic. Shared by the release and goalie-prediction
+#     paths.
 func _wrister_is_backhand(input: InputState) -> bool:
 	return ShotMechanics.wrister_is_backhand(
 			input.bot_wrister_aim_dir, input.bot_wrister_backhand,
-			_aiming.swing_rotation, skater.is_left_handed, wrister_backhand_deadband)
+			_aiming.swing_rotation, skater.is_left_handed, wrister_backhand_deadband,
+			input.commit_wrister_power, _aiming.wrister_origin_backhand)
 
 func _release_wrister(input: InputState) -> void:
 	if has_puck:

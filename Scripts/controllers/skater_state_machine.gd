@@ -31,6 +31,7 @@ class Callbacks:
 	var apply_blade_from_mouse: Callable          # (input: InputState, delta: float)
 	var apply_wrister_aim_blade: Callable         # (input: InputState, delta: float) — holds the blade at the shot origin while the torso coils
 	var wrister_chirality_seed: Callable          # (input: InputState) -> Vector3 — player-relative bearing the swing tracker seeds from; MUST match the source _update_wrister_charge feeds (cursor when frozen, blade when live)
+	var wrister_blade_backhand: Callable          # () -> bool — is the blade on the backhand side RIGHT NOW; pinned at charge start as the absolute-aim (gamepad) hand read
 	var apply_slapper_blade_position: Callable    # ()
 	var apply_block_blade_position: Callable      # ()
 	var apply_wrister_follow_through: Callable    # ()
@@ -247,7 +248,14 @@ func _enter_wrister_aim(skater: Skater, input: InputState) -> void:
 	# the shot will fire from) for the positional-aim wrister — see
 	# SkaterAimingBehavior.wrister_origin_world. Anchoring here, before the blade
 	# sweeps, is what keeps origin→cursor stable through the stroke.
-	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater, skater.get_blade_contact_global())
+	# The HAND pins with it, read off the side the blade is on as it freezes: the
+	# absolute-aim (gamepad) forehand/backhand source, which needs no sweep. See
+	# SkaterAimingBehavior.wrister_origin_backhand.
+	var origin_backhand: bool = false
+	if _cb.wrister_blade_backhand.is_valid():
+		origin_backhand = bool(_cb.wrister_blade_backhand.call())
+	_aiming.reset_wrister(intent_pos, blade_pos_rel_skater,
+			skater.get_blade_contact_global(), origin_backhand)
 
 
 func _cancel_slapper_internal() -> void:

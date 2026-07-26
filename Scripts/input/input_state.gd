@@ -65,6 +65,12 @@ var bot_wrister_power_t: float = 1.0
 # origin→cursor model, since the gamepad parks the cursor in the stick direction).
 # Serialized as flag bit [13] (see to_bytes) so a pad CLIENT's committed power
 # reaches the host instead of the host falling back to the parked cursor's speed.
+#
+# It also marks the input as coming from an ABSOLUTE-AIM device, which selects the
+# forehand/backhand source: a parked stick has no swept gesture, so the hand comes
+# from the blade side pinned at charge start rather than the cursor's bearing
+# chirality (SkaterController._wrister_is_backhand). Being on the wire already is
+# what lets a pad client and the host resolve the same hand.
 var commit_wrister_power: bool = false
 
 # Snap a power fraction to the u8 wire grid. Senders MUST run their value through

@@ -754,3 +754,38 @@ func test_wrister_is_backhand_human_reads_swing() -> void:
 			"human: righty negative swing past deadband = backhand")
 	assert_false(ShotMechanics.wrister_is_backhand(Vector3.ZERO, false, 0.1, false, 0.35),
 			"human: near-straight drag inside the deadband defaults forehand")
+
+
+func test_is_backhand_from_blade_side() -> void:
+	# The absolute-aim (gamepad) hand read: positive angle = blade on the backhand
+	# side. Handedness is already folded into the angle by the caller
+	# (SkaterIKCoordinator.blade_backhand_angle), so this rule is a pure threshold.
+	assert_true(ShotMechanics.is_backhand_from_blade_side(0.6, 0.35),
+			"blade well onto the backhand side = backhand")
+	assert_false(ShotMechanics.is_backhand_from_blade_side(-0.6, 0.35),
+			"blade on the forehand side = forehand")
+	assert_false(ShotMechanics.is_backhand_from_blade_side(0.2, 0.35),
+			"blade inside the deadband of dead-ahead defaults forehand")
+	assert_false(ShotMechanics.is_backhand_from_blade_side(0.0, 0.35),
+			"blade dead-ahead defaults forehand")
+
+
+func test_wrister_is_backhand_absolute_aim_uses_pinned_hand() -> void:
+	# GAMEPAD path: an absolute skill stick has no swept gesture, so the cursor's
+	# bearing rotation is thumb-path noise — the pinned blade side must win over it
+	# entirely, in BOTH directions. Otherwise which way around the rim the thumb
+	# travelled silently decides a 25%-power backhand.
+	assert_true(ShotMechanics.wrister_is_backhand(
+			Vector3.ZERO, false, 5.0, false, 0.35, true, true),
+			"pad: pinned backhand wins over a swing that would read forehand")
+	assert_false(ShotMechanics.wrister_is_backhand(
+			Vector3.ZERO, false, -5.0, false, 0.35, true, false),
+			"pad: pinned forehand wins over a swing that would read backhand")
+	# The bot commit still outranks it — a bot never sets the pinned-hand flag, but
+	# the precedence is what keeps the three sources unambiguous.
+	assert_false(ShotMechanics.wrister_is_backhand(
+			Vector3(0.0, 0.0, -1.0), false, 0.0, false, 0.35, true, true),
+			"bot commit outranks the pinned hand")
+	# And the mouse path is untouched by the new parameters' defaults.
+	assert_true(ShotMechanics.wrister_is_backhand(Vector3.ZERO, false, -1.0, false, 0.35),
+			"mouse: default args still read the swing chirality")

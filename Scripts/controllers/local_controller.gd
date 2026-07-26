@@ -541,6 +541,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# Pinned at stroke start; set once on the WRISTER_AIM entry edge. Restored so a
 	# replay that re-crosses that edge can't re-anchor the live origin.
 	var pre_charge_origin_world: Vector3 = _aiming.wrister_origin_world
+	var pre_charge_origin_backhand: bool = _aiming.wrister_origin_backhand
 	# shot_charge is re-derived from the (restored) charge timers / swing state on
 	# every live tick, but _update_slapper_charge / _update_wrister_charge also
 	# rewrite it during replay from the unconfirmed window. Save/restore it with its
@@ -667,6 +668,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir
 	_aiming.wrister_origin_world = pre_charge_origin_world
+	_aiming.wrister_origin_backhand = pre_charge_origin_backhand
 	skater.shot_charge = pre_shot_charge
 	# Server authority on shot state — but never revert past a release transition.
 	# If the client is in FOLLOW_THROUGH and the server is still in an aim state,

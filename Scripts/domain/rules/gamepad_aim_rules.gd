@@ -4,18 +4,20 @@ class_name GamepadAimRules
 ##
 ## The whole sim reads the blade target from InputState.mouse_world_pos /
 ## mouse_screen_pos (a screen cursor ray-projected onto the ice), and the wrister
-## reads that cursor's screen-space SPEED for power and its drag DIRECTION for aim.
-## Feeding a synthesized cursor back through those fields means blade IK, the
-## charge tracker and its travel gate run unchanged — no controller branch below
-## the input gatherer. See CLAUDE.md → "How It Plays".
+## aims POSITIONALLY along origin→cursor. Feeding a synthesized cursor back through
+## those fields means blade IK and the charge tracker run unchanged — no controller
+## branch below the input gatherer. See CLAUDE.md → "How It Plays".
 ##
-## The gatherer maps the stick to a cursor with `absolute_cursor` (anchor + offset):
-##   * STICKHANDLE: proportional, precise blade placement; the gatherer eases the
-##     cursor to a forward rest when the stick is released.
-##   * SHOOT (RT held): the cursor is parked at the reach radius in the stick
-##     DIRECTION, so the shot line (player→cursor) points where the stick points —
-##     a held aim, decoupled from motion. Power is committed separately from the
-##     stick magnitude, so shooting needs no flick, drag timing, or travel gate.
+## The gatherer maps the stick to a cursor with `absolute_cursor` (anchor + offset).
+## WHICH anchor is the whole trick, and it differs by mode:
+##   * STICKHANDLE: anchored on the BODY, proportional — precise blade placement;
+##     the gatherer eases the cursor to a forward rest when the stick is released.
+##   * SHOOT (RT held): anchored on the PUCK (the blade contact point), parked at
+##     the reach radius in the stick DIRECTION. The shot line is origin→cursor from
+##     that same puck, so anchoring there is what makes the shot go exactly where
+##     the stick points — a held aim, decoupled from motion and from camera zoom.
+##     Power is committed separately from the stick magnitude, so shooting needs no
+##     flick, drag timing, or travel gate.
 
 # Radial deadzone with edge rescale. Below `deadzone` the stick reads dead-zero
 # (so a resting stick holds the cursor and can't drift it); from the deadzone edge

@@ -169,6 +169,32 @@ static func is_backhand_from_swing(
 	var handed: float = -1.0 if is_left_handed else 1.0
 	return swing_rotation * handed < -deadband
 
+# Forehand vs backhand for an ABSOLUTE-AIM device (the gamepad's skill stick).
+#
+# The chirality read above needs a SWEPT gesture: on a mouse the cursor's bearing
+# rotation over the stroke IS the player's deliberate wrist roll. A gamepad has no
+# sweep — its stick is an absolute POSITION, so the cursor's bearing rotation is
+# just whichever way around the rim the thumb happened to travel to reach the aim
+# point. Reading chirality there classifies the hand from thumb path noise, and
+# since a backhand costs backhand_power_coefficient (25% of the shot), the pad
+# player gets random pace with no tell.
+#
+# The grounded read for an absolute device is the physical one: the blade is
+# FROZEN through the wrister, so the hand is simply which FACE of the blade the
+# puck is sitting on when the stroke starts — i.e. which side of the body the
+# blade is on. Carry on your forehand and shoot = forehand; drag the puck across
+# to your backhand side and shoot = backhand. That's controllable (the stick
+# places the blade before the trigger), stable through the stroke, and needs no
+# wire field — the host re-derives it from its own simulation of the same freeze.
+#
+# `backhand_angle` is the blade's body-frame bearing toward the backhand side,
+# positive on the backhand (SkaterIKCoordinator.blade_backhand_angle). `deadband`
+# (radians) keeps a blade near dead-ahead defaulting to FOREHAND, mirroring the
+# swing read's forehand default.
+static func is_backhand_from_blade_side(
+		backhand_angle: float, deadband: float = 0.0) -> bool:
+	return backhand_angle > deadband
+
 # The wrister's aim DIRECTION (world XZ, un-normalized — release_wrister normalizes).
 # BOTS commit their direction directly (bot_aim_dir non-ZERO — they have no cursor,
 # and their cosmetic near-body wind-up cursor would make origin→cursor garbage);
@@ -198,14 +224,22 @@ static func slapper_aim_dir(bot_aim_dir: Vector3, mouse_world: Vector3,
 		return bot_aim_dir
 	return Vector3(mouse_world.x - blade_world.x, 0.0, mouse_world.z - blade_world.z)
 
-# Wrister forehand/backhand. BOTS commit the hand (paired with a committed
-# bot_aim_dir); HUMANS read the CURSOR-sweep chirality (is_backhand_from_swing;
-# the blade is frozen so the cursor is the only sweep). See
-# SkaterController._wrister_is_backhand.
+# Wrister forehand/backhand, by aim device:
+#   - BOTS commit the hand (paired with a committed bot_aim_dir).
+#   - ABSOLUTE-AIM humans (gamepad — `use_pinned_hand`, set from the same
+#     committed-power flag that marks the pad path): the hand pinned at charge
+#     start from the frozen blade's side (is_backhand_from_blade_side). A stick
+#     has no sweep to read chirality from.
+#   - MOUSE humans: the CURSOR-sweep chirality (is_backhand_from_swing; the blade
+#     is frozen so the cursor is the only sweep).
+# See SkaterController._wrister_is_backhand.
 static func wrister_is_backhand(bot_aim_dir: Vector3, bot_backhand: bool,
-		swing_rotation: float, is_left_handed: bool, deadband: float) -> bool:
+		swing_rotation: float, is_left_handed: bool, deadband: float,
+		use_pinned_hand: bool = false, pinned_hand: bool = false) -> bool:
 	if bot_aim_dir.length_squared() > 0.0001:
 		return bot_backhand
+	if use_pinned_hand:
+		return pinned_hand
 	return is_backhand_from_swing(swing_rotation, is_left_handed, deadband)
 
 # Wrister release. HARD BINARY — a quick pass and a charged wrister are two

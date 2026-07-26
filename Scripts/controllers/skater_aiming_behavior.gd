@@ -44,6 +44,13 @@ var stroke_travel: float = 0.0
 # move as the stick sweeps. Saved/restored across reconcile like the rest of the
 # charge state (set once on the entry edge; restored so replay can't re-perturb).
 var wrister_origin_world: Vector3 = Vector3.ZERO
+# Forehand/backhand PINNED at the same moment as the origin, from which side of
+# the body the (about-to-freeze) blade is on. This is the hand read used by
+# ABSOLUTE-AIM devices — the gamepad's skill stick, which has no swept gesture for
+# the cursor-chirality read to classify. See
+# ShotMechanics.is_backhand_from_blade_side. Saved/restored across reconcile like
+# wrister_origin_world (set once on the entry edge).
+var wrister_origin_backhand: bool = false
 # Reused output for ChargeTracking.accumulate_into — a per-controller scratch so
 # the per-tick charge update never allocates. Pure output (fully overwritten each
 # call), so it needs no reconcile save/restore.
@@ -56,7 +63,8 @@ var one_timer_window_timer: float = 0.0
 # ── Wrister ───────────────────────────────────────────────────────────────────
 
 func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Vector3,
-		initial_origin_world: Vector3 = Vector3.ZERO) -> void:
+		initial_origin_world: Vector3 = Vector3.ZERO,
+		initial_origin_backhand: bool = false) -> void:
 	swing_rotation = 0.0
 	cursor_speed_ema = 0.0
 	stroke_travel = 0.0
@@ -64,6 +72,7 @@ func reset_wrister(initial_intent_pos: Vector3, initial_blade_pos_rel_skater: Ve
 	prev_intent_pos = initial_intent_pos
 	prev_blade_pos_rel_skater = initial_blade_pos_rel_skater
 	wrister_origin_world = initial_origin_world
+	wrister_origin_backhand = initial_origin_backhand
 
 
 func tick_wrister_charge(
