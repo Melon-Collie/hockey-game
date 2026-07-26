@@ -258,3 +258,58 @@ func test_unwired_read_holds_the_shape() -> void:
 	ctx.own_goal_dir = 1.0
 	assert_false(ctx.rush_read.is_live)
 	assert_eq(AIRoleHelpers.offensive_station_target(ctx, stand, false), stand)
+
+
+# ── Who is the back layer ────────────────────────────────────────────────────
+
+func test_a_lone_back_layer_retreats_to_the_defenseman_post() -> void:
+	# 3v3 has no lobby positions, so every peer reads "forward" — but F3_HIGH with
+	# three skaters and no D pair IS the whole back layer. He must floor on the D
+	# post (the dot lane AT our blue line), not the shallower forward post 4 m
+	# up-ice of it.
+	var stand := Vector3(9.0, 0.0, OPP_BLUE_Z)
+	var ctx: RoleContext = _ctx(stand, [], [[10, Vector3(0.0, 0.0, -20.0),
+			Vector3(0.0, 0.0, 7.0)]], 10, false)
+	var as_forward: Vector3 = AIRoleHelpers.station_retreat_floor(ctx, stand)
+	var as_back: Vector3 = AIRoleHelpers.station_retreat_floor(ctx, stand, true)
+	var net := Vector3(0.0, 0.0, OUR_NET_Z)
+	assert_lt(as_back.distance_to(net), as_forward.distance_to(net) - 2.0,
+			"the back layer floors deeper than a forward; back=%s fwd=%s"
+			% [as_back, as_forward])
+	assert_almost_eq(as_back.z, GameRules.BLUE_LINE_Z, 0.01,
+			"and that is the dot lane at our own blue line")
+
+
+func test_the_high_slot_holds_while_two_points_are_behind_it() -> void:
+	# The 5v5 O-zone shape is 3 low / 2 high: the POINTS are the insurance, so F3
+	# in the high slot is an attacking body, not a defensive layer. Verified rather
+	# than assumed — with both points home he holds his float even with a man
+	# behind him, because has_support_behind is true.
+	var hs_stand := Vector3(0.0, 0.0, -OUR_NET_Z + 9.5)
+	var ctx: RoleContext = _ctx(hs_stand, [
+				[2, Vector3(8.0, 0.0, -22.0)],       # our carrier, cycling low
+				[3, Vector3(6.7, 0.0, -9.29)],       # strong point
+				[4, Vector3(-3.0, 0.0, -9.29)],      # weak point
+			], [[10, Vector3(0.0, 0.0, 2.0), Vector3(0.0, 0.0, 7.0)]], 2, false)
+	assert_true(AIRoleHelpers.has_support_behind(ctx),
+			"scenario check: the points are genuinely behind the high slot")
+	var t: Vector3 = AIRoleHelpers.offensive_station_target(ctx, hs_stand, true)
+	assert_almost_eq(t.z, hs_stand.z, 0.5,
+			"with two points home the high slot keeps attacking; got %s" % t)
+
+
+func test_the_high_slot_does_back_off_once_both_points_activate() -> void:
+	# The other side of it: if both points have gone deep, the high slot IS the
+	# rearmost body and the read has to fire. Keeping it turnover-aware costs
+	# nothing in normal play (above) and closes this hole.
+	var hs_stand := Vector3(0.0, 0.0, -OUR_NET_Z + 9.5)
+	var ctx: RoleContext = _ctx(hs_stand, [
+				[2, Vector3(8.0, 0.0, -22.0)],
+				[3, Vector3(7.0, 0.0, -21.0)],       # point activated deep
+				[4, Vector3(-6.0, 0.0, -20.0)],      # point activated deep
+			], [[10, Vector3(0.0, 0.0, 2.0), Vector3(0.0, 0.0, 7.0)]], 2, false)
+	assert_false(AIRoleHelpers.has_support_behind(ctx),
+			"scenario check: nobody is behind the high slot now")
+	var t: Vector3 = AIRoleHelpers.offensive_station_target(ctx, hs_stand, true)
+	assert_gt(t.z, hs_stand.z,
+			"as the rearmost body it does back off; got %s" % t)

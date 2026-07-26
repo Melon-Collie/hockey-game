@@ -910,7 +910,7 @@ static func pull_into_play(ctx: RoleContext, target: Vector3) -> Vector3:
 # consistently: hold the forward stand while the read allows it, else back off to
 # the numbers layer — and either way stay inside feedable range of the puck.
 static func offensive_station_target(ctx: RoleContext, stand: Vector3,
-		was_holding: bool) -> Vector3:
+		was_holding: bool, as_back_layer: bool = false) -> Vector3:
 	if may_hold_forward_stand(ctx, was_holding, stand):
 		# Holding: the only bound is staying a live passing option.
 		return pull_into_play(ctx, stand)
@@ -924,7 +924,7 @@ static func offensive_station_target(ctx: RoleContext, stand: Vector3,
 	# They have it (or it is loose): this is no longer a pinch decision. Retreat to
 	# structure. The play-connection leash does NOT apply — it is about being a
 	# passing option for OUR carrier, and there isn't one.
-	return station_retreat_floor(ctx, stand)
+	return station_retreat_floor(ctx, stand, as_back_layer)
 
 
 # Is any attacker currently deeper (nearer our net) than `stand`?
@@ -1406,10 +1406,16 @@ const HOME_FLOOR_BIND_MARGIN_M: float = 1.0
 #     flanks) can't be bounded by it, so it floors at the HOUSE GATE — the top of
 #     the circles, the depth the research names as where backcheckers stop. Still
 #     never the crease.
-static func station_retreat_floor(ctx: RoleContext, fwd: Vector3) -> Vector3:
+# `as_back_layer` forces the DEFENSEMAN's home post regardless of lobby identity.
+# ctx.self_is_defense is a lobby fact, and 3v3 has no lobby positions — every peer
+# reads "forward" — so a role that IS its team's whole back layer would otherwise
+# floor 4 m too shallow (the F post at our blue line minus 4 m, instead of the D
+# post on it). 3v3's F3_HIGH is exactly that role.
+static func station_retreat_floor(ctx: RoleContext, fwd: Vector3,
+		as_back_layer: bool = false) -> Vector3:
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var home: Vector3 = AIZoneCoverage.defensive_anchor(
-			ctx.self_is_defense, ctx.self_home_side, our_net.z)
+			ctx.self_is_defense or as_back_layer, ctx.self_home_side, our_net.z)
 	if ctx.own_goal_dir * home.z > ctx.own_goal_dir * fwd.z + HOME_FLOOR_BIND_MARGIN_M:
 		return home
 	return house_gate_floor(our_net, fwd)

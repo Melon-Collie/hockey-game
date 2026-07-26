@@ -93,8 +93,13 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	# the hold down the retreat line toward home — sag-to-even, exactly as
 	# far as the developing counter demands.
 	var line_stand := Vector3(wall_x, 0.0, blue_z)
+	# F3_HIGH exists only in the 3v3 slot table (5v5's forecheck uses the DP pair
+	# plus F2_STRONG/_WEAK), and with three skaters and no D pair he IS the team's
+	# entire back layer — the designated first man back. So he retreats to the
+	# DEFENSEMAN's home post, not the shallower forward one his (absent) lobby
+	# identity would otherwise pick.
 	d.target_position = AIRoleHelpers.offensive_station_target(
-			ctx, line_stand, ctx.prev_held_forward_stand)
+			ctx, line_stand, ctx.prev_held_forward_stand, true)
 	d.held_forward_stand = d.target_position.distance_to(line_stand) < 0.5
 	return d
 
