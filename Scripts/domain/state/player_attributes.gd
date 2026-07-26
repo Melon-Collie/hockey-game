@@ -10,11 +10,12 @@ extends RefCounted
 #     are authored at 5 anchor heights and interpolate. Height decides reach,
 #     the speed↔agility baseline fork (speed hump peaks at 6'1", agility
 #     small-favored) and the shot-power baseline (big-favored).
-#   • WEIGHT — a free CONTINUOUS dial in pounds, bounded per height by ONE
-#     authored BMI band (24.0 LEAN .. 29.0 HEAVY, neutral 26.5): a single
-#     interval generates a plausible pounds range at every inch, so implausible
-#     bodies (6'6"/160) are unrepresentable by construction. Weight decides
-#     mass (linearly — mass IS the physical/checking system now), the
+#   • WEIGHT — a free CONTINUOUS dial in pounds, bounded per height by an
+#     authored BMI band (22.5 LEAN .. 29.0 HEAVY, neutral 26.5) floored by an
+#     absolute playable mass (160 lb): together they generate a plausible
+#     pounds range at every inch, so implausible bodies (6'6"/160) are
+#     unrepresentable by construction. Weight decides mass (linearly — mass IS
+#     the physical/checking system now), the
 #     accel↔momentum fork (lean = first-step burst; momentum is mass-emergent),
 #     an agility bite (F = mv²/r — heavy turns wide and stops long, the
 #     counterweight that makes the dial a real seesaw; glide is exempt so the
@@ -68,16 +69,53 @@ const HEIGHT_MAX: int = 79     # 6'7"
 # mesh-native anchor where the reach/height multiplier is exactly 1.0.
 const ANCHOR_INCHES: Array[int] = [68, 70, 73, 76, 79]  # 5'8"..6'7"
 
-# ── Weight band (single BMI interval — see plan doc §3.2) ─────────────────────
+# ── Weight band (BMI interval + absolute floor — see plan doc §3.2) ───────────
 # One authored band generates the per-height pounds range: lbs = BMI·in²/703.
-# Anchors are equally spaced (1.25 BMI) so frame interpolation is uniform.
+#
+# CALIBRATION (2026-07, against a 46-player listed-height/weight sample of the
+# current NHL). Two things the sample settles:
+#
+#   • BMI IS the right normalizer. Regressing ln(weight) on ln(height) over the
+#     sample gives an exponent of 2.01 — h² on the nose — and BMI itself has no
+#     usable drift with height (+0.007 BMI/inch). So the band is a horizontal
+#     interval, NOT a height-tilted one: mean BMI 26.05, SD 1.61.
+#
+#   • The LEAN edge was the bug, and it bit tall builds hardest. A flat 24.0
+#     floor is set by what SHORT players can get away with, because their lower
+#     tail is truncated by an ABSOLUTE mass floor (~160 lb — Lane Hutson at
+#     5'9"/162 is the lightest body in the league) rather than by a ratio: you
+#     have to survive contact against 200-lb bodies, and that bound is in
+#     pounds, not in BMI. Tall players are nowhere near that floor, so their
+#     real lower tail runs much leaner — and a flat 24.0 forbade it. At 6'4"
+#     the old floor was 197 lb, which excludes two actual 6'4" NHL defensemen
+#     (Noah Dobson 195, Sam Rinzel 194). The model now says the same thing the
+#     bodies do: a RATIO ceiling (carrying fat costs skating) and an ABSOLUTE
+#     floor (you cannot be too light to play), and the band is their overlap.
+#
+# Coverage: 42 of the 43 sampled players inside 5'8"–6'7" are representable
+# (only Ovechkin, the single most extreme BMI in the league at 29.7, sits 6 lb
+# over the 6'3" ceiling). Under the old flat band six were unbuildable, four of
+# them 6'2"+.
+#
+# The band is deliberately ASYMMETRIC about MEDIUM (4.0 BMI lean-side vs 2.5
+# heavy-side): the empirical center sits at 26.05, but MEDIUM is pinned to the
+# canonical 6'1"/201 NHL-average frame because that is the game's neutral
+# identity — every @export default is authored there. frame_t() is piecewise
+# about MEDIUM so the neutral still lands on exactly 0.5 and the frame anchors
+# stay evenly spaced in frame-t (which is the axis the _f() tables index).
+#
 # Calibration namechecks: neutral = 6'1"/201 (NHL-average build); McDavid
-# (6'1"/194) lean-mid; DeBrincat (5'8"/180) ≈ SOLID; Ovechkin (6'3"/238) =
-# 6'4"-HEAVY exactly; Tage Thompson (6'6"/218) ≈ tall-LEAN.
-const BMI_LEAN: float = 24.0
+# (6'1"/194) lean-mid; Dobson/Rinzel (6'4"/195, 194) ≈ 6'4"-LEAN; DeBrincat
+# (5'8"/180) ≈ SOLID; Kaprizov (5'10"/202) = 5'10"-HEAVY exactly; Tage Thompson
+# (6'6"/218) lean-mid; Oleksiak (6'7"/255) ≈ 6'7"-HEAVY.
+const BMI_LEAN: float = 22.5
 const BMI_MEDIUM: float = 26.5   # neutral frame
 const BMI_HEAVY: float = 29.0
-const BMI_ANCHOR_STEP: float = 1.25  # anchor spacing: 24.0 .. 29.0 in 5 rows
+
+# Absolute lower bound on a playable body, in pounds — the floor that the BMI
+# ratio cannot express. Binds only at 5'8"–5'10", where BMI 22.5 would allow a
+# body lighter than anyone who has ever held an NHL job.
+const MIN_PLAYABLE_LBS: int = 160
 
 # Neutral mass reference (lbs): BMI 26.5 at 73" → round(26.5·73²/703) = 201.
 # mass_mult is LINEAR in displayed weight — deliberately wider than v3's
@@ -292,8 +330,10 @@ static func weight_for_bmi(inches: int, bmi: float) -> int:
 	return int(roundf(bmi * float(h * h) / 703.0))
 
 
+# The leaner of the two bounds never wins: the ratio floor and the absolute
+# playable-mass floor are both real, so the band starts at whichever is higher.
 static func weight_min(inches: int) -> int:
-	return weight_for_bmi(inches, BMI_LEAN)
+	return maxi(weight_for_bmi(inches, BMI_LEAN), MIN_PLAYABLE_LBS)
 
 
 static func weight_max(inches: int) -> int:
@@ -321,9 +361,35 @@ static func coerce_weight(inches: int, lbs: int) -> int:
 # 0.5, so the rounded display weight can't nudge a neutral build off the 1.0
 # multipliers (raw BMI of 201 lbs is 26.515, a ~0.3% lerp leak).
 func frame_t() -> float:
-	var lo: float = float(weight_min(height))
-	var hi: float = float(weight_max(height))
-	return clampf((float(weight) - lo) / maxf(hi - lo, 1.0), 0.0, 1.0)
+	return frame_t_for(height, weight)
+
+
+# PIECEWISE about MEDIUM — each half of the band maps onto half of frame-t. The
+# band is asymmetric (the lean side is wider, see the band block above), so a
+# single lerp across [min, max] would slide the neutral build off 0.5 and cost
+# it its 1.0 multipliers. Splitting at MEDIUM pins all three anchors exactly
+# (min → 0, neutral → 0.5, max → 1) at every height, including the heights
+# where MIN_PLAYABLE_LBS truncates the lean half.
+static func frame_t_for(inches: int, lbs: int) -> float:
+	var mid: float = float(weight_neutral(inches))
+	var w: float = float(lbs)
+	if w <= mid:
+		var lo: float = float(weight_min(inches))
+		return clampf(0.5 * (w - lo) / maxf(mid - lo, 1.0), 0.0, 0.5)
+	var hi: float = float(weight_max(inches))
+	return clampf(0.5 + 0.5 * (w - mid) / maxf(hi - mid, 1.0), 0.5, 1.0)
+
+
+# Inverse of frame_t_for: the displayed pounds at a frame position. This is the
+# frame-anchor constructor — LEAN/LIGHT/MEDIUM/SOLID/HEAVY are t = 0/.25/.5/
+# .75/1 — and what the picker rides when the height slider moves, so a lean
+# build stays lean as it grows.
+static func weight_for_frame_t(inches: int, t: float) -> int:
+	var mid: float = float(weight_neutral(inches))
+	var f: float = clampf(t, 0.0, 1.0)
+	if f <= 0.5:
+		return int(roundf(lerpf(float(weight_min(inches)), mid, f / 0.5)))
+	return int(roundf(lerpf(mid, float(weight_max(inches)), (f - 0.5) / 0.5)))
 
 
 func height_inches() -> int:
@@ -499,11 +565,11 @@ static func from_dict(d: Dictionary) -> PlayerAttributes:
 static func migrate_tiers(p_height: int, skating: int, skill: int,
 		checking: int) -> PlayerAttributes:
 	var h: int = coerce_height(p_height)
-	var frame_bmi: float = BMI_MEDIUM
+	var frame: float = 0.5
 	if checking >= 3:
-		frame_bmi = BMI_MEDIUM + BMI_ANCHOR_STEP
+		frame = 0.75
 	elif checking <= 1:
-		frame_bmi = BMI_MEDIUM - BMI_ANCHOR_STEP
+		frame = 0.25
 	var p_profile: int = GEAR_BALANCED
 	if skating >= 3:
 		p_profile = PROFILE_POWER if h >= HEIGHT_MEDIUM else PROFILE_AGILITY
@@ -513,7 +579,7 @@ static func migrate_tiers(p_height: int, skating: int, skill: int,
 		p_length = LENGTH_LONG
 	elif skill >= 3 and h < HEIGHT_MEDIUM:
 		p_length = LENGTH_SHORT
-	return PlayerAttributes.new(h, weight_for_bmi(h, frame_bmi),
+	return PlayerAttributes.new(h, weight_for_frame_t(h, frame),
 			p_profile, p_curve, GEAR_BALANCED, p_length)
 
 
@@ -566,8 +632,9 @@ static func _h(table: Array[float], inches: int) -> float:
 	return lerpf(table[a[0]], table[a[1]], a[2])
 
 
-# 5-vec lookup interpolated by frame position (BMI anchors are equally spaced,
-# so frame_t maps linearly onto the row axis).
+# 5-vec lookup interpolated by frame position. The anchors are evenly spaced in
+# FRAME-T (0/.25/.5/.75/1) — not in BMI, which the asymmetric band leaves
+# uneven — so frame_t maps linearly onto the row axis.
 func _f(table: Array[float]) -> float:
 	var pos: float = frame_t() * float(table.size() - 1)
 	var lo: int = clampi(int(floorf(pos)), 0, table.size() - 2)

@@ -122,26 +122,67 @@ geometric — §4).
 
 ### 3.2 Weight (new dial)
 
-**Frame-relative via a single BMI band** — one authored interval generates a
-plausible pounds range at every height, so implausible bodies (6'6"/160,
-BMI ~18.5) are unrepresentable by construction rather than by rule. Band:
-**BMI 24.0 (LEAN) → 29.0 (HEAVY)**, five frame anchors interpolated with the
-same machinery as height, neutral = 26.5 (the real NHL-average build:
-6'1"/201). Displayed lbs = BMI × inches² / 703:
+**Frame-relative via a BMI band plus an absolute floor** — together they
+generate a plausible pounds range at every height, so implausible bodies
+(6'6"/160, BMI ~18.5) are unrepresentable by construction rather than by rule.
+Band: **BMI 22.5 (LEAN) → 29.0 (HEAVY)**, floored at an absolute
+**160 lb**, five frame anchors interpolated with the same machinery as height,
+neutral = 26.5 (the real NHL-average build: 6'1"/201). Displayed lbs =
+BMI × inches² / 703, and the frame anchors sit at frame-t 0/.25/.5/.75/1:
 
-| height | LEAN 24.0 | LIGHT 25.25 | MEDIUM 26.5 | SOLID 27.75 | HEAVY 29.0 |
-|--------|-----------|-------------|-------------|-------------|------------|
-| 5'8"   | 158 | 166 | 174 | 183 | 191 |
-| 5'10"  | 167 | 176 | 185 | 193 | 202 |
-| 6'1"   | 182 | 191 | **201** | 210 | 220 |
-| 6'4"   | 197 | 207 | 218 | 228 | 238 |
-| 6'7"   | 213 | 224 | 235 | 246 | 257 |
+| height | LEAN | LIGHT | MEDIUM | SOLID | HEAVY |
+|--------|------|-------|--------|-------|-------|
+| 5'8"   | 160\* | 167 | 174 | 183 | 191 |
+| 5'10"  | 160\* | 173 | 185 | 194 | 202 |
+| 6'1"   | 171 | 186 | **201** | 211 | 220 |
+| 6'4"   | 185 | 202 | 218 | 228 | 238 |
+| 6'7"   | 200 | 218 | 235 | 246 | 257 |
 
-Calibration namechecks: McDavid (6'1"/194) = lean-mid; Gaudreau ≈ small-
-LIGHT; DeBrincat (5'8"/180) ≈ SOLID; Ovechkin (6'3"/238) = 6'4"-HEAVY
-exactly; Chara between SOLID and HEAVY; Tage Thompson (6'6"/218) ≈
-tall-LEAN. Floor 24.0 deliberately excludes rare sub-24 outliers; one
-const if it ever widens.
+\* the absolute playable-mass floor, not the ratio floor.
+
+**Recalibrated 2026-07** against a 46-player sample of current listed NHL
+height/weight cards. Two findings drove it:
+
+- **BMI is the right normalizer.** Regressing ln(weight) on ln(height) over
+  the sample gives an exponent of **2.01** (BMI assumes 2.00), and BMI has no
+  usable drift with height (+0.007/inch). So the band stays a horizontal
+  interval — no height tilt, no allometric exponent change. Sample mean BMI
+  26.05, SD 1.61.
+- **The lean edge was wrong, and it bit tall builds hardest.** The old flat
+  24.0 floor was set by what *short* players can get away with, because their
+  lower tail is truncated by an **absolute** mass floor (~160 lb — Lane
+  Hutson at 5'9"/162 is the lightest body in the league) rather than by a
+  ratio: surviving contact against 200-lb bodies is a bound in pounds, not in
+  BMI. Tall players are nowhere near that floor, so their real lower tail runs
+  far leaner — and 24.0 forbade it. At 6'4" the old minimum was **197 lb**,
+  which excludes two actual 6'4" NHL defensemen (Noah Dobson 195, Sam Rinzel
+  194). The model now states both bounds separately — a **ratio ceiling**
+  (carrying fat costs skating) and an **absolute floor** (you cannot be too
+  light to play) — and the band is their overlap.
+
+Coverage: 42 of the 43 sampled players inside 5'8"–6'7" are representable
+(only Ovechkin, the league's most extreme BMI at 29.7, sits 6 lb over the 6'3"
+ceiling). Under the old flat band six were unbuildable, four of them 6'2"+.
+
+The band is deliberately **asymmetric** about MEDIUM (4.0 BMI lean-side vs 2.5
+heavy-side). The empirical center is 26.05, but MEDIUM stays pinned to the
+canonical 6'1"/201 frame because that is the game's neutral identity — every
+`@export` default is authored there, and moving it would re-baseline
+`mass_mult` for every build. `frame_t()` is therefore **piecewise** about
+MEDIUM: each half of the band maps onto half of frame-t, so min/neutral/max
+land on exactly 0/0.5/1 at every height (including the heights where the
+absolute floor truncates the lean half) and the frame anchors stay evenly
+spaced on the axis the `_f()` tables actually index. `weight_for_frame_t` is
+its inverse and is what the picker rides when the height slider moves.
+
+Calibration namechecks: McDavid (6'1"/194) = lean-mid; Dobson/Rinzel
+(6'4"/195, 194) ≈ 6'4"-LEAN; DeBrincat (5'8"/180) ≈ SOLID; Kaprizov
+(5'10"/202) = 5'10"-HEAVY exactly; Tage Thompson (6'6"/218) lean-mid;
+Oleksiak (6'7"/255) ≈ 6'7"-HEAVY.
+
+Mass envelope is unchanged by the recalibration (0.796–1.279 vs the previous
+0.786–1.279): the lean BMI edge dropped, but the absolute floor took over
+below 5'11", so the body-check calibration below still holds.
 
 **Storage**: weight in lbs (int) on the wire, like height in inches — the
 identity stays human-readable and the bot roster reads like hockey cards.
@@ -496,7 +537,8 @@ curve, (4) skate profile, (5) AI/goalie calibration pass.
 
 ## 10. Open questions (user decides before implementation)
 
-1. ~~Frame band width~~ — RESOLVED: single BMI band 24.0–29.0, see §3.2.
+1. ~~Frame band width~~ — RESOLVED: BMI band 22.5–29.0 floored at an absolute
+   160 lb playable mass (recalibrated 2026-07 against listed NHL cards), see §3.2.
 2. Starting `k` for the inertia exponent, and the initial reversal spread.
 3. Runway numbers: ceiling ramp floor (~60%?), neutral runway length in ROM
    terms, and the compress/extend deltas per gear option.

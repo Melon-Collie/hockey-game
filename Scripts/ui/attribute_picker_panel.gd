@@ -15,12 +15,12 @@ extends VBoxContainer
 # button; the host gates Apply on panel.is_dirty() and panel.is_valid().
 #
 # A build is two continuous body dials: HEIGHT (5'8"..6'7", every inch) and
-# WEIGHT (lbs, bounded per height by the single BMI band — see
-# PlayerAttributes.weight_min/max). Every slider position is a legal build —
-# there is no power economy and no shape to validate, so is_valid() is always
-# true and preset switching is never blocked. Moving the height slider
-# preserves the build's FRAME (its position in the BMI band) and recomputes
-# pounds, so a lean build stays lean as it grows.
+# WEIGHT (lbs, bounded per height by the BMI band and the absolute playable-
+# mass floor — see PlayerAttributes.weight_min/max). Every slider position is
+# a legal build — there is no power economy and no shape to validate, so
+# is_valid() is always true and preset switching is never blocked. Moving the
+# height slider preserves the build's FRAME (its frame-t position in the band)
+# and recomputes pounds, so a lean build stays lean as it grows.
 #
 # Gear slots ride through the preset levels; each gains its selector when its
 # gameplay stage lands. Live: STICK LENGTH (levels[5]), BLADE CURVE
@@ -342,11 +342,14 @@ func _on_height_changed(value: float) -> void:
 	var levels: Array = _working[_active]["levels"]
 	var old_h: int = int(levels[0])
 	var old_w: int = int(levels[1])
-	var bmi: float = 703.0 * float(old_w) / float(old_h * old_h)
+	# Ride FRAME-T, not raw BMI: the band's lean half is truncated by the
+	# absolute playable-mass floor at the short heights, so equal BMI is not
+	# equal frame there — carrying the frame position is what keeps a lean
+	# build lean (and pins a neutral build to neutral) across the whole range.
+	var frame: float = PlayerAttributes.frame_t_for(old_h, old_w)
 	var new_h: int = int(value)
 	levels[0] = new_h
-	levels[1] = PlayerAttributes.coerce_weight(new_h,
-			PlayerAttributes.weight_for_bmi(new_h, bmi))
+	levels[1] = PlayerAttributes.weight_for_frame_t(new_h, frame)
 	_refresh()
 	changed.emit()
 
