@@ -69,6 +69,49 @@ static func retrieval_read(our_best_t: float, opp_best_t: float,
 			else RETRIEVAL_ENTER_MARGIN_S
 	return our_best_t + margin <= opp_best_t
 
+# ── Coverage readiness (docs/transition-defense-plan.md §9) ──────────────────
+# DZONE is a SHAPE, not a location. The raw table above flips to it the instant
+# the puck crosses our blue line with the opponent carrying — which re-slots all
+# five bots into zone areas even when three of them are 25 m up-ice, mid-
+# backcheck. The structure they're joining assumes five bodies are home; it was
+# being run by two, and the backcheck visibly dissolved at the line.
+#
+# Real hockey has the readiness concept explicitly: get back, get set, THEN take
+# your man. So the brain upgrades its raw DZONE result the same way it upgrades
+# to RETRIEVAL — the team stays in the rush/recovery shape until the coverage it
+# would switch into actually makes sense.
+#
+# The asymmetry that matters: it is EASY to become set and HARD to stop being
+# set. Becoming unset is the reading that fixes the reported bug (a rush arriving
+# must not re-slot the backcheck onto zone posts), and that reading is available
+# instantly — the accounting is false the moment men are unaccounted for. Going
+# the other way, a settled structure must not be dumped back into scramble mode
+# by one bad tick, so leaving coverage takes a sustained stretch of failed
+# accounting.
+const COVERAGE_HOLD_TICKS: int = 6
+
+# Latch guard. If the accounting never clears, the team would defend a settled
+# cycle with rush roles forever. After this long with the opponent possessing in
+# our zone, force the upgrade and let zone coverage sort it out — a stale
+# scramble posture is worse than an imperfect zone. Sized well past any honest
+# recovery: even a full-length backcheck is home inside ~3 s.
+const COVERAGE_FORCE_AFTER_S: float = 4.0
+
+
+# True when the team should be running D-zone COVERAGE rather than the rush /
+# recovery shape. `accounted` is AIRushRead.coverage_accounted (every attacker
+# owned goal-side, somebody containing the puck); `unaccounted_ticks` counts
+# consecutive brain ticks the accounting has FAILED; `was_set` is last tick's
+# answer; `held_s` is how long the opponent has possessed in our zone.
+static func coverage_read(accounted: bool, unaccounted_ticks: int,
+		was_set: bool, held_s: float) -> bool:
+	if held_s >= COVERAGE_FORCE_AFTER_S:
+		return true   # latch guard — never defend a cycle as a rush forever
+	if was_set:
+		return unaccounted_ticks < COVERAGE_HOLD_TICKS
+	return accounted
+
+
 class Result:
 	var state: int           # AIPossessionState.State enum value
 	var carrier_team: int    # -1 if no carrier ever seen

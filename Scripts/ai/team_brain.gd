@@ -88,6 +88,19 @@ var _last_carrier_team: int = -1
 var _strong_x: float = 1.0
 
 var _accumulator: float = 0.0
+# Real host seconds since the previous _compute_tick. The coverage latch guard
+# ages in WALL CLOCK, not tick count — force_retick makes the cadence irregular,
+# and a timer counted in ticks would run fast during a possession-event burst.
+var _tick_span_s: float = 0.0
+
+# ── Coverage readiness state (docs/transition-defense-plan.md §9) ────────────
+# Whether the team is currently running D-zone COVERAGE rather than the rush /
+# recovery shape, how many consecutive ticks the accounting has agreed with that
+# posture (the enter/hold hysteresis), and how long the opponent has possessed in
+# our zone (the latch guard).
+var _coverage_was_set: bool = false
+var _coverage_unaccounted_ticks: int = 0
+var _coverage_held_s: float = 0.0
 # Cadence phase offset (seconds): team 1's natural ticks run half a period
 # out of phase with team 0's, so the two brains' per-tick computes never land
 # on the same physics frame (host FPS is set by the worst tick, and the two
@@ -142,6 +155,7 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	# before the rate-limit gate so expiry never stretches with the cadence.
 	ping_directives.advance(delta)
 	_accumulator += delta
+	_tick_span_s += delta
 	if _accumulator < TICK_PERIOD and not _force_tick_pending:
 		return
 	# Natural cadence: drain one tick's worth of accumulator. Forced
@@ -158,6 +172,7 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	else:
 		_accumulator -= TICK_PERIOD
 	_compute_tick(snapshot)
+	_tick_span_s = 0.0
 
 
 # Schedules an immediate re-tick on the next physics frame, bypassing
@@ -231,6 +246,37 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		_prev_recovery[pid] = rush_read.recovery_by_peer[pid]
 	rush_read.fill(snapshot, team_id, _own_goal_z, _team_id_by_peer,
 			_caps_by_peer, _prev_recovery)
+
+	# 1.85 COVERAGE READINESS (docs/transition-defense-plan.md §9). DZONE is a
+	#      shape, not a location: the raw table flips to it the moment the puck
+	#      crosses our blue line, which used to re-slot three still-backchecking
+	#      forwards onto zone posts and dissolve the backcheck at the line. Hold
+	#      the rush/recovery shape until the coverage we'd switch into actually
+	#      makes sense. Same upgrade seam as RETRIEVAL above, opposite direction.
+	#      5v5 only — 3v3's TRANS_OD path is unchanged by construction.
+	#      Only while an OPPONENT actually carries: a loose or dead puck in our
+	#      zone is not a rush being defended, it's DZONE's (or RETRIEVAL's)
+	#      business, and holding the rush shape over it would just stop the team
+	#      setting up around a puck nobody has.
+	if team_size >= 5 and state == AIPossessionState.State.DZONE \
+			and rush_read.carrier_peer != -1:
+		_coverage_held_s += _tick_span_s
+		if rush_read.coverage_accounted:
+			_coverage_unaccounted_ticks = 0
+		else:
+			_coverage_unaccounted_ticks += 1
+		var set_now: bool = AIPossessionState.coverage_read(
+				rush_read.coverage_accounted, _coverage_unaccounted_ticks,
+				_coverage_was_set, _coverage_held_s)
+		_coverage_was_set = set_now
+		if not set_now:
+			state = AIPossessionState.State.TRANS_OD
+	else:
+		# Left the zone (or we got it back): the next entry starts fresh, so a
+		# stale "we were set" can't wave a new rush straight into coverage.
+		_coverage_was_set = false
+		_coverage_unaccounted_ticks = 0
+		_coverage_held_s = 0.0
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:

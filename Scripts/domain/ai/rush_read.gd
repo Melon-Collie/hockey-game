@@ -318,9 +318,16 @@ static func cover_envelope_m() -> float:
 	return AIThreatAssignment.COVER_DEPTH_M + SkaterAgentStateMachine.BLADE_REACH_M
 
 
-# Engage range for the man on the puck: on him, or one stride from being on him.
+# Range at which a defender counts as HAVING the carrier for readiness purposes.
+# This is containment range, not contact range: a D sitting goal-side a couple of
+# stick lengths off a carrier on the half-wall is covering him — that is what
+# D-zone coverage looks like, and demanding he be within poking distance would
+# mean a settled zone never reads as "set". The bar is the rush gap ladder's
+# widest gap plus a stick (you are within a stick of your own gap point), so the
+# same physical quantity the gap control uses decides when the gap counts as
+# established. Beyond it the carrier is genuinely unpressured.
 static func pressure_engage_m() -> float:
-	return SkaterAgentStateMachine.BLADE_REACH_M * 2.0
+	return SkaterAgentStateMachine.BLADE_REACH_M * (AIRoleRushD.GAP_MAX_STICKS + 1.0)
 
 
 # "Everybody's got a man, somebody's on the puck" — the coaching read for whether
@@ -343,17 +350,11 @@ func _accounted_for(snapshot: WorldSnapshot, team_id: int,
 			return false
 	if not opp_carries:
 		return true
-	# Somebody on the puck.
-	var engage_sq: float = pressure_engage_m() * pressure_engage_m()
-	for pid: int in snapshot.skater_states:
-		if team_id_by_peer.get(pid, -1) != team_id:
-			continue
-		var p: Vector3 = snapshot.skater_states[pid].position
-		var dx: float = p.x - rush_origin.x
-		var dz: float = p.z - rush_origin.z
-		if dx * dx + dz * dz <= engage_sq:
-			return true
-	return false
+	# Somebody has the carrier: goal-side of him and inside containment range.
+	# Goal-side matters — a defender trailing the carrier from up-ice is chasing,
+	# not covering, and counting him would declare a beaten team "set".
+	return _has_owner(snapshot, team_id, team_id_by_peer, our_net,
+			rush_origin, pressure_engage_m() * pressure_engage_m())
 
 
 # True when one of our peers is goal-side of `man_lead` (nearer our net along the

@@ -511,6 +511,29 @@ static func slot_anchor(slot: int, own_goal_z: float, strong_x: float,
 			return Vector3(-_DBACK_X_M, 0.0, our_blue_z)
 		AIRoleSlots.Slot.DBACK_R:
 			return Vector3(_DBACK_X_M, 0.0, our_blue_z)
+		# TRANS_OD rush layers. All four have real behavior modules, so these are
+		# the skeleton fallback only — but they must still be REAL ice: an
+		# unmapped slot falls through to Vector3.ZERO, which is centre ice, and a
+		# rush defender standing at centre ice is the exact failure this whole
+		# design exists to remove.
+		AIRoleSlots.Slot.RUSH_D1:
+			# The gap point on the carrier→net line, one stick off him.
+			var to_net: Vector3 = Vector3(0.0, 0.0, own_goal_z) - puck_pos
+			var d: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
+			if d < 0.001:
+				return puck_pos
+			return puck_pos + to_net * (minf(SkaterAgentStateMachine.BLADE_REACH_M, d) / d)
+		AIRoleSlots.Slot.RUSH_D2:
+			return Vector3(-strong_x * 2.0, 0.0,
+					own_goal_z - own_dir * AIRoleRushD.D2_MID_DEPTH_M)
+		AIRoleSlots.Slot.TRACK_PUCK:
+			return puck_pos
+		AIRoleSlots.Slot.TRACK_MID_STRONG:
+			return Vector3(strong_x * _TRACK_MID_SPLIT_M, 0.0,
+					own_goal_z - own_dir * AIZoneCoverage.HOUSE_TOP_DEPTH_M)
+		AIRoleSlots.Slot.TRACK_MID_WEAK:
+			return Vector3(-strong_x * _TRACK_MID_SPLIT_M, 0.0,
+					own_goal_z - own_dir * AIZoneCoverage.HOUSE_TOP_DEPTH_M)
 		_:
 			return Vector3.ZERO
 

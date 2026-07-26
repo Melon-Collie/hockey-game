@@ -1,6 +1,7 @@
 # Transition defense (TRANS_OD) — reground
 
-Status: **agreed design, in implementation.** Supersedes the TRANS_OD sections of
+Status: **implemented** (5v5; 3v3 deferred — see §5.2). Phases A–E landed;
+playtest pending. Supersedes the TRANS_OD sections of
 `docs/5v5-ai-plan.md` (§2 TRANS_OD, and the defensive half of §5); the O-zone,
 forecheck and breakout designs in that doc are unchanged, and its D-zone design is
 unchanged *in content* but now gated on coverage readiness (§9).
