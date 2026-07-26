@@ -1113,21 +1113,35 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	_pred_cue_net_prev = span_net
 	_pred_cue_boards_prev = span_boards
 	_pred_cue_goalie_prev = span_goalie
-	if not stopped:
-		pos += vel * maxf(frac, 0.0)
-		# The remainder bypasses the step's board carom, so a fast puck could
-		# render up to ~25 cm past a board plane on approach frames. Clamp the
-		# center back inside the rink — the next whole tick reflects properly;
-		# this only keeps the rendered position contained meanwhile.
-		var contained: Vector2 = GameRules.clamp_to_rink_inner(
-				Vector2(pos.x, pos.z), radius)
-		pos.x = contained.x
-		pos.z = contained.y
+	if not stopped and frac > 0.0:
+		# The sub-tick remainder runs through the SAME solver as the whole ticks,
+		# sub-stepped the same way — it is just a partial tick. It used to be a raw
+		# `pos += vel * frac` lead with an after-the-fact rink clamp, which bypassed
+		# every collision the step resolves: at 33 m/s the remainder is ~0.28 m, so
+		# an approach frame could render the puck through a board (clamped back, but
+		# only for the boards) or inside a post / the net panels.
+		var rem_steps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), frac)
+		var rem_dt: float = frac / float(rem_steps)
+		for _r in rem_steps:
+			PuckAuthorityRules.step_frame_substep(pos, vel, rem_dt, radius,
+					puck.max_speed, puck.ice_height, puck.max_height,
+					_predict_frame_scratch, _predict_tick_result)
+			pos = _predict_tick_result.position
+			vel = _predict_tick_result.velocity
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
 	# goal line inside the posts and let the authoritative outcome arrive (the
 	# goal horn is a host decision, like the save).
-	if absf(pos.z) >= GameRules.GOAL_LINE_Z and pos.z * vel.z > 0.0 \
-			and absf(pos.x) <= GameRules.NET_HALF_WIDTH:
+	#
+	# Gated on the predicted center actually being INSIDE THE NET (_inside_net — the
+	# shared GoalDetectionRules cavity definition), not merely "past the goal line
+	# within the post width". That laxer test also matched the whole band BEHIND the
+	# net (the back frame sits only NET_DEPTH past the line; there is ~2.2 m of ice
+	# from there to the end boards, at every x), so a puck rimmed, dumped or carried
+	# behind the cage with any outbound z-component got teleported forward onto the
+	# goal line INSIDE the mouth: on clients only, the rendered puck jumped into the
+	# net — past _SMOOTH_SNAP_DIST it hard-snapped there — and sat in it while the
+	# host had it behind the net and awarded nothing.
+	if pos.z * vel.z > 0.0 and _inside_net(pos):
 		pos.z = GameRules.GOAL_LINE_Z * signf(pos.z)
 		vel = Vector3.ZERO
 	_sim_pos = pos
@@ -1181,9 +1195,17 @@ func _interpolate(delta: float) -> void:
 		# bounce client-side would risk disagreeing with the host's authoritative
 		# restitution/angle, so instead we just stop leading when a board is in the
 		# way — hold at the newest authoritative position until the post-bounce
-		# trajectory streams in. Boards only; goalie/net/skater bounces still lean
-		# on the SmoothDamp below.
-		if stop_extrapolation_at_boards and _crosses_board(projected):
+		# trajectory streams in. Goalie/skater bounces still lean on the SmoothDamp
+		# below.
+		#
+		# The NET gets the same treatment, and unconditionally: a straight lead of up
+		# to extrapolation_max_ms (~1.5 m at 30 m/s) can put the rendered puck in the
+		# cage while the host has it hitting the frame or going wide, which reads as a
+		# goal that never happened. Leading INTO the net is never ours to draw — the
+		# goal is a host decision — so hold at the authoritative position instead.
+		# (A real goal still renders: the held position IS the host's, and its
+		# post-crossing samples stream in behind it.)
+		if (stop_extrapolation_at_boards and _crosses_board(projected)) or _inside_net(projected):
 			# Hold at the last authoritative spot and report zero velocity so the
 			# feed-forward smoother below doesn't nudge the held puck on toward the board.
 			interpolated.position = newest.position
@@ -1255,6 +1277,22 @@ func _smooth_apply_and_prune(target_pos: Vector3, vel: Vector3, delta: float,
 func _crosses_board(p: Vector3) -> bool:
 	var xz := Vector2(p.x, p.z)
 	return GameRules.clamp_to_rink_inner(xz).distance_squared_to(xz) > 1e-6
+
+
+# True when world position `p` sits inside a goal's net cavity: THE render-side
+# "never draw the puck in the net on our own initiative" predicate, shared by the
+# prediction park and the extrapolation guard. Routes through GoalDetectionRules so
+# it is the same "inside the net" live goal detection uses — in particular the ice
+# BEHIND the net (past the back frame) is not in it.
+func _inside_net(p: Vector3) -> bool:
+	var end_sign: float = signf(p.z)
+	if end_sign == 0.0:
+		return false
+	return GoalDetectionRules.center_inside_net(
+			p, GameRules.GOAL_LINE_Z * end_sign, end_sign,
+			GameRules.NET_HALF_WIDTH, GameRules.NET_HEIGHT, GameRules.NET_POST_RADIUS,
+			GameRules.PUCK_COLLISION_RADIUS, GameRules.PUCK_COLLISION_HALF_HEIGHT,
+			GameRules.NET_DEPTH)
 
 
 # Unity-style critically damped smoothing toward a (possibly moving) target.

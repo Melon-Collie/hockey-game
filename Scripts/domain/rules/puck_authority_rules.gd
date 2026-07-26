@@ -16,8 +16,11 @@ class_name PuckAuthorityRules
 # ice friction, gravity, board caroms, and land-and-slide; this wraps it with the SAME
 # post-integration safety clamps _integrate_forces enforces for a free puck — max speed and
 # max height — so the analytic authority path is behaviourally identical to the Jolt path it
-# replaces. (The goal-line clamp is NOT here — Puck._drive_analytic applies it after the
-# sub-step pass, re-homed from _integrate_forces like the rest; there is no Jolt net zone.)
+# replaces. (No goal-line clamp here OR in Puck._drive_analytic: the legacy _integrate_forces
+# clamp was opt-in CLIENT-only render suppression — it lives on the client's prediction path
+# as PuckController._run_prediction's "no goal prediction" park. The host's puck is never
+# clamped at the line; its authority is the real swept crossing, GoalDetectionRules. There is
+# no Jolt net zone.)
 # Returns (pos, vel) packed into a Transform3D (origin = pos, basis.x = vel).
 static func advance_loose_puck(pos: Vector3, vel: Vector3, dt: float,
 		max_speed: float, ice_height: float, max_height: float) -> Transform3D:

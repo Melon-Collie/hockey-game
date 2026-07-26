@@ -116,8 +116,9 @@ static func crossed_into_net(
 			net_height, post_radius, puck_radius, puck_half_height, net_depth)
 
 
-# Whether a puck CENTER (already known to be >= puck_radius past the line —
-# `depth` is the caller's signed depth) sits unambiguously INSIDE the net
+# Whether a puck CENTER already known to be past the line (`depth` is the
+# caller's signed depth — `crossed_into_net` passes >= puck_radius, the public
+# `center_inside_net` any >= 0) sits unambiguously INSIDE the net
 # cavity: clear of the side panels (which stand at the post centerline),
 # below the crossbar/top netting, and in front of the back mesh. The bounds
 # are deliberately conservative — a puck embedded in a panel or resting
@@ -140,6 +141,35 @@ static func _center_inside_cavity(
 	if center.y < 0.0:
 		return false
 	return true
+
+
+# PUBLIC form of the cavity test, for callers holding a single world position
+# instead of a swept segment: is this puck center unambiguously inside the net of
+# the goal at `goal_z` / `facing`? Same bounds as the crossing rule's fallback, so
+# "inside the net" has ONE definition across the codebase.
+#
+# The client's render-side "don't draw a predicted goal" park
+# (PuckController._run_prediction) gates on this. It matters that the test is the
+# real cavity and not just "past the goal line, within the post width": the ice
+# BEHIND the net — from the back frame (goal line + net_depth) out to the end
+# boards, ~2.2 m of it — is past the line at every x, so a laxer test caught
+# ordinary behind-the-net traffic (rims, dump-ins, wraparound carries) and
+# teleported the rendered puck forward into the goal mouth.
+static func center_inside_net(
+		center: Vector3,
+		goal_z: float,
+		facing: float,
+		half_width: float,
+		net_height: float,
+		post_radius: float,
+		puck_radius: float,
+		puck_half_height: float,
+		net_depth: float) -> bool:
+	var depth: float = (center.z - goal_z) * facing
+	if depth < 0.0:
+		return false
+	return _center_inside_cavity(center, depth, half_width, net_height,
+			post_radius, puck_radius, puck_half_height, net_depth)
 
 
 # Whether a puck CENTER at (cross_x, cross_y) on the goal-line plane sits fully
