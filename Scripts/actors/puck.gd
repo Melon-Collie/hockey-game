@@ -733,8 +733,12 @@ func _drive_analytic(dt: float) -> void:
 			var g3: Node3D = _goalie_contact.goalie as Node3D
 			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
 			var dir_sign: int = int(signf(-g3.global_position.z)) if g3 != null else 0
+			# Facing gates the controlled save — he can only smother/catch what his
+			# chest is pointed at. Local -Z is forward for the goalie rig.
+			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
 			GoalieSaveRules.resolve_contact(
-					vel, part, _goalie_contact.normal, side, dir_sign, _deaden_cfg, _save_result)
+					vel, part, _goalie_contact.normal, side, dir_sign, _deaden_cfg,
+					_save_result, fwd)
 			vel = _save_result.velocity
 			# Eject the disc flush off the contacted face. `point` is the sphere
 			# CENTRE at toi — already `radius` off the real face via the

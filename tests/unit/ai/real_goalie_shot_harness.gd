@@ -337,8 +337,11 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 			var g3: Node3D = _contact.goalie as Node3D
 			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
 			var dir_sign: int = int(signf(-g3.global_position.z)) if g3 != null else 0
+			# Mirror Puck._physics_process exactly, facing included — the
+			# controlled save is gated on the face he is presenting.
+			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
 			GoalieSaveRules.resolve_contact(
-					vel, part, _contact.normal, side, dir_sign, _deaden, _save_res)
+					vel, part, _contact.normal, side, dir_sign, _deaden, _save_res, fwd)
 			vel = _save_res.velocity
 			pos = _contact.point + _contact.normal * _contact.depth
 			# A caught puck is dead and held — the play stops there.

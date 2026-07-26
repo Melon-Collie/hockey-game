@@ -80,8 +80,10 @@ class ContactResult:
 # client-predicted puck and the host agree before reconciliation.
 static func resolve_contact(
 		incoming: Vector3, part: int, contact_normal: Vector3,
-		contact_side: float, direction_sign: int, cfg: DeadenConfig, result: ContactResult) -> void:
-	if is_controlled_save(incoming.length(), part, cfg):
+		contact_side: float, direction_sign: int, cfg: DeadenConfig,
+		result: ContactResult, goalie_forward: Vector3 = Vector3.ZERO) -> void:
+	if is_face_presented(contact_normal, goalie_forward) \
+			and is_controlled_save(incoming.length(), part, cfg):
 		result.velocity = deadened_velocity(incoming, part, contact_side, direction_sign, cfg)
 		result.deadened = true
 		result.caught = part == SavePart.GLOVE
@@ -98,7 +100,46 @@ static func resolve_contact(
 	result.caught = false
 
 
+# Is the struck surface one the goalie is actually PRESENTING to the puck?
+#
+# `contact_normal` points outward, from the goalie's surface toward the puck, so
+# a normal aligned with the direction he FACES was struck on his front, and one
+# pointing behind him was struck on his back.
+#
+# Facing, not the net. The first cut of this tested the normal against
+# `direction_sign` — is the contact on the play-side hemisphere — which is wrong
+# for exactly the plays that produce the bug: a goalie tracking a wraparound or
+# out playing a rim is turned, so the surface nearest his own goal can be the one
+# his chest is pointed at, and the surface facing up-ice can be his shoulder.
+# What he can absorb is what he is looking at.
+#
+# Why it gates the controlled save. Absorbing a puck dead into the chest or
+# gloving it are things a goalie DOES, and he has to be facing the puck to do
+# them. Without this the classification was orientation-blind — the torso collider
+# reads as CHEST from any direction — so a puck into his back was a "chest save":
+# deadened, goalward velocity zeroed, stopped on his spine. Reported from play as
+# looking absolutely bizarre, and it was a free save on exactly the plays he
+# should be beaten on. Same for a pad struck from behind, which got the
+# cornerward steer and was actively pushed away from the net.
+#
+# Not presented -> fall through to the live-rebound reflection, which is already
+# the right physics for a puck caroming off a body. A gate, not new behaviour.
+# Threshold-free: a face is presented or it is not, and a contact exactly side-on
+# is not — you cannot smother with your shoulder either.
+#
+# A zero `goalie_forward` means the caller has no facing to offer, in which case
+# every face counts as presented and behaviour is exactly as it was before.
+static func is_face_presented(contact_normal: Vector3, goalie_forward: Vector3) -> bool:
+	if goalie_forward.length_squared() < 0.000001:
+		return true
+	return contact_normal.x * goalie_forward.x + contact_normal.z * goalie_forward.z > 0.0
+
+
 # True when the save should be deadened (rebound killed) rather than left live.
+# ORIENTATION-BLIND BY DESIGN — it answers "is this surface capable of a
+# controlled save", not "was it struck on the right face". `resolve_contact`
+# pairs it with `is_face_presented`; callers asking whether a save ended the play
+# (the shot instruments) want this looser question and should keep using it.
 static func is_controlled_save(incoming_speed: float, part: int, cfg: DeadenConfig) -> bool:
 	match part:
 		SavePart.STICK:
