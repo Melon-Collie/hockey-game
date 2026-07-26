@@ -8,7 +8,8 @@ extends CanvasLayer
 #      goals ringed. Position + team colour is the differential read.
 #   2. Tale of the tape — head-to-head bars, the advanced rows (Corsi / Fenwick /
 #      xG) tagged as the ones no other hockey game shows.
-#   3. Expected-goals flow — cumulative xGF over the game clock, goals marked.
+#   3. Expected-goals share — the home team's running share of all chance
+#      quality created, against an even-game midline, goals marked.
 #
 # Data is entirely LOCAL: GameManager.get_shot_events() (the host's buffer, or a
 # client's pushed copy) plus the broadcast PlayerStats counters. No Supabase, no
@@ -35,7 +36,7 @@ const _CORNER_R: float = GameRules.CORNER_RADIUS
 
 var _root: Control = null
 var _map: RinkMap = null
-var _flow: XGFlow = null
+var _share: XGShareChart = null
 var _tape: VBoxContainer = null
 var _subtitle: Label = null
 var _team_colors: Array[Color] = [Color(0.85, 0.35, 0.15), Color(0.22, 0.53, 0.90)]
@@ -154,17 +155,18 @@ func _build_lower_row() -> Control:
 	tape_col.add_child(_tape)
 	row.add_child(tape_panel)
 
-	var flow_panel := _panel()
-	flow_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	flow_panel.size_flags_stretch_ratio = 1.15
-	var flow_col := VBoxContainer.new()
-	flow_col.add_theme_constant_override("separation", 6)
-	flow_panel.add_child(flow_col)
-	flow_col.add_child(_section_title("EXPECTED-GOALS FLOW", "cumulative xG · ● = goal"))
-	_flow = XGFlow.new()
-	_flow.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	flow_col.add_child(_flow)
-	row.add_child(flow_panel)
+	var share_panel := _panel()
+	share_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	share_panel.size_flags_stretch_ratio = 1.15
+	var share_col := VBoxContainer.new()
+	share_col.add_theme_constant_override("separation", 6)
+	share_panel.add_child(share_col)
+	share_col.add_child(_section_title("EXPECTED-GOALS SHARE",
+			"share of chance quality · ● = goal"))
+	_share = XGShareChart.new()
+	_share.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	share_col.add_child(_share)
+	row.add_child(share_panel)
 	return row
 
 
@@ -253,7 +255,7 @@ func _render(events: Array[ShotEvent], totals: Array[Dictionary],
 	totals[1]["xg_base"] = XGBaseline.team_total(events, 1)
 
 	_map.configure(events, _team_colors)
-	_flow.configure(events, _team_colors, period_s, periods)
+	_share.configure(events, _team_colors, period_s, periods)
 	_build_tape_rows(totals)
 
 	var attempts: int = int(totals[0]["corsi"]) + int(totals[1]["corsi"])
@@ -574,12 +576,25 @@ class LegendDot extends Control:
 				draw_circle(c, r * 0.85, Color(col.r, col.g, col.b, 0.34))
 
 
-# ── Cumulative expected-goals flow ───────────────────────────────────────────
+# ── Expected-goals share ─────────────────────────────────────────────────────
+# Replaces the old two-curve cumulative-xG flow. That chart plotted each team's
+# running xG total, which meant the thing you actually wanted — who is winning
+# the game on chances — was the GAP between two lines, and a gap is something you
+# measure rather than something you see. It also duplicated a number the tape
+# already states outright.
+#
+# This plots one quantity instead: the home team's running share of all the
+# chance quality created (XGShare). The midline is an even game, the band fills
+# toward whoever is ahead, and the curve's distance from centre IS how lopsided
+# the game has been — no arithmetic in the reader's head. Absolute xG totals
+# haven't gone anywhere; they're the tape's xG row.
 
-class XGFlow extends Control:
+class XGShareChart extends Control:
 	const _GRID := Color(0.165, 0.175, 0.22, 1.0)
 	const _AXIS := Color(0.28, 0.30, 0.36, 1.0)
 	const _LABEL := MenuStyle.TEXT_MUTED
+	const _LINE := MenuStyle.BROADCAST_CREAM
+	const _FILL_ALPHA: float = 0.30
 
 	var _events: Array[ShotEvent] = []
 	var _colors: Array[Color] = [Color.ORANGE, Color.SKY_BLUE]
@@ -594,72 +609,98 @@ class XGFlow extends Control:
 		_periods = maxi(periods, 1)
 		queue_redraw()
 
-	# Absolute elapsed seconds for an event (period is 1-based, clock counts down).
-	func _elapsed(e: ShotEvent) -> float:
-		return float(maxi(e.period - 1, 0)) * _period_s + (_period_s - e.clock_s)
-
 	func _draw() -> void:
 		var w: float = size.x
 		var h: float = size.y
 		if w <= 8.0 or h <= 8.0:
 			return
-		var ml: float = 26.0
-		var mr: float = 34.0
-		var mt: float = 8.0
-		var mb: float = 18.0
+		var ml: float = 30.0
+		var mr: float = 46.0   # room for the final-share callout
+		var mt: float = 10.0
+		var mb: float = 16.0
 		var total_s: float = maxf(float(_periods) * _period_s, 1.0)
-		# Series: cumulative xG per team, in chronological order. Blocked shots
-		# carry no xG (Fenwick convention), matching the xGF counter.
-		var series: Array = [[], []]
-		var order: Array[ShotEvent] = _events.duplicate()
-		order.sort_custom(func(a: ShotEvent, b: ShotEvent) -> bool:
-				return _elapsed(a) < _elapsed(b))
-		var acc: Array[float] = [0.0, 0.0]
-		for e: ShotEvent in order:
-			var t: int = clampi(e.team_id, 0, 1)
-			if e.outcome == ShotEvent.Outcome.BLOCKED:
-				continue
-			acc[t] += e.xg
-			(series[t] as Array).append([_elapsed(e), acc[t],
-					e.outcome == ShotEvent.Outcome.GOAL])
-		var peak: float = maxf(maxf(acc[0], acc[1]), 1.0)
-		var top: float = ceilf(peak)
+		var font: Font = MenuStyle.UI_FONT
 
 		var px := func(t: float) -> float:
 			return ml + (w - ml - mr) * clampf(t / total_s, 0.0, 1.0)
+		# share 1.0 (all home) at the top, 0.0 (all away) at the bottom.
 		var py := func(v: float) -> float:
-			return h - mb - (h - mt - mb) * clampf(v / top, 0.0, 1.0)
+			return h - mb - (h - mt - mb) * clampf(v, 0.0, 1.0)
+		var mid: float = py.call(XGShare.EVEN)
 
-		# Horizontal value gridlines + baseline, with the xG value on each — the
-		# gridlines were unlabelled, so the curve had no readable magnitude.
-		var font: Font = MenuStyle.UI_FONT
-		var steps: int = int(top)
-		for i: int in range(1, steps + 1):
-			var y: float = py.call(float(i))
+		# Gridlines at the quarters. 50% is the axis — the whole chart is read
+		# against it — so it gets the brighter stroke and the only label with a
+		# sign attached.
+		for frac: float in [0.25, 0.75]:
+			var y: float = py.call(frac)
 			draw_line(Vector2(ml, y), Vector2(w - mr, y), _GRID, 1.0)
-			if font != null:
-				draw_string(font, Vector2(2.0, y + 3.5), str(i),
-						HORIZONTAL_ALIGNMENT_LEFT, ml - 6.0, 10, _LABEL)
-		draw_line(Vector2(ml, py.call(0.0)), Vector2(w - mr, py.call(0.0)), _AXIS, 1.0)
-		# Period dividers.
 		for p: int in range(1, _periods):
 			var x: float = px.call(float(p) * _period_s)
 			draw_line(Vector2(x, mt), Vector2(x, h - mb), _GRID, 1.0)
 
-		for t: int in 2:
-			var pts: Array = series[t] as Array
-			if pts.is_empty():
+		var data: Dictionary = XGShare.series(_events, _period_s)
+		var ts: PackedFloat32Array = data["t"]
+		var shares: PackedFloat32Array = data["share"]
+		var goals: PackedInt32Array = data["goal_team"]
+
+		# Step fill: the share only moves AT a shot, so each segment is a flat
+		# hold from one event to the next, drawn as a band between the midline and
+		# the held value in the leading team's colour. Drawn before the line so the
+		# line reads on top of it.
+		var prev_x: float = px.call(0.0)
+		var prev_share: float = XGShare.EVEN
+		for i: int in ts.size() + 1:
+			var seg_end: float = px.call(ts[i] if i < ts.size() else total_s)
+			if seg_end > prev_x and not is_equal_approx(prev_share, XGShare.EVEN):
+				var y: float = py.call(prev_share)
+				var col: Color = _colors[0] if prev_share > XGShare.EVEN else _colors[1]
+				draw_rect(Rect2(prev_x, minf(y, mid), seg_end - prev_x, absf(mid - y)),
+						Color(col.r, col.g, col.b, _FILL_ALPHA), true)
+			if i < ts.size():
+				prev_x = seg_end
+				prev_share = shares[i]
+
+		# The step line itself, in cream: the fill already carries team identity,
+		# so the line only has to carry the value.
+		var line := PackedVector2Array()
+		line.append(Vector2(px.call(0.0), mid))
+		var run_share: float = XGShare.EVEN
+		for i: int in ts.size():
+			var x: float = px.call(ts[i])
+			line.append(Vector2(x, py.call(run_share)))   # hold…
+			line.append(Vector2(x, py.call(shares[i])))   # …then step
+			run_share = shares[i]
+		line.append(Vector2(px.call(total_s), py.call(run_share)))
+		if line.size() >= 2:
+			draw_polyline(line, _LINE, 1.8, true)
+
+		draw_line(Vector2(ml, mid), Vector2(w - mr, mid), _AXIS, 1.0)
+
+		# Goals, at the share the game stood at when they went in.
+		for i: int in ts.size():
+			if goals[i] < 0:
 				continue
-			var line := PackedVector2Array()
-			line.append(Vector2(px.call(0.0), py.call(0.0)))
-			for row: Array in pts:
-				line.append(Vector2(px.call(float(row[0])), py.call(float(row[1]))))
-			# Hold the final value to the end of the game.
-			line.append(Vector2(px.call(total_s), py.call(acc[t])))
-			if line.size() >= 2:
-				draw_polyline(line, _colors[t], 2.0, true)
-			for row: Array in pts:
-				if bool(row[2]):
-					var at := Vector2(px.call(float(row[0])), py.call(float(row[1])))
-					draw_circle(at, 3.6, _colors[t])
-					draw_arc(at, 3.6, 0.0, TAU, 18, Color(1, 1, 1, 0.9), 1.2)
+			var at := Vector2(px.call(ts[i]), py.call(shares[i]))
+			draw_circle(at, 3.6, _colors[goals[i]])
+			draw_arc(at, 3.6, 0.0, TAU, 18, Color(1, 1, 1, 0.9), 1.2)
+
+		if font == null:
+			return
+		# Axis labels. The top and bottom are named for the SIDE they belong to,
+		# not just "100%" — without that the reader has to remember which way is up.
+		draw_string(font, Vector2(2.0, py.call(1.0) + 8.0), "HOME",
+				HORIZONTAL_ALIGNMENT_LEFT, ml - 4.0, 9, _colors[0])
+		draw_string(font, Vector2(2.0, mid + 3.5), "50%",
+				HORIZONTAL_ALIGNMENT_LEFT, ml - 4.0, 9, _LABEL)
+		draw_string(font, Vector2(2.0, py.call(0.0) - 2.0), "AWAY",
+				HORIZONTAL_ALIGNMENT_LEFT, ml - 4.0, 9, _colors[1])
+
+		# Final share, called out where the curve ends — the number the whole
+		# chart is building toward. Shown for whichever side won it, so it reads
+		# as a statement rather than as a home-relative figure.
+		var final_share: float = run_share
+		var lead: int = 0 if final_share >= XGShare.EVEN else 1
+		var lead_pct: float = final_share if lead == 0 else 1.0 - final_share
+		draw_string(font, Vector2(w - mr + 4.0, py.call(final_share) + 4.0),
+				"%d%%" % roundi(lead_pct * 100.0),
+				HORIZONTAL_ALIGNMENT_LEFT, mr - 6.0, 13, _colors[lead])

@@ -106,7 +106,7 @@ head over the shared hole geometry:
   **goals above expected** (finishing), and **xGF%**; Career screen shows all three.
 
 **B1 (shot-event data layer) IMPLEMENTED** (2026-07-24). The record behind the
-shot map / xG-flow / heatmap, captured host-side and persisted:
+shot map / xG-share / heatmap, captured host-side and persisted:
 - `ShotEvent` (`domain/state/shot_event.gd`) — pure data: shooter, team, release
   x/z, xg, outcome (goal/saved/missed/blocked), type (shot/one_timer/tip), on_net,
   period, clock. `ShotOnGoalTracker` now emits `shot_resolved(ShotEvent)` (replacing
@@ -441,10 +441,30 @@ disagree.
 2. **Tale of the tape.** Head-to-head comparison bars (home ↔ away). The advanced
    rows — xG, Corsi, Fenwick, PDO — are visually tagged as the differentiator.
    *Which* rows and their order are TBD until the stats exist.
-3. **Expected-goals flow.** Cumulative xGF over game clock, one line per team,
-   goals marked on the lines — the "run of play" chart. Nearly free once shots
-   carry timestamps; pulled into Phase B alongside the map. Exact display (axes,
-   period markers, interaction) is TBD.
+3. **Expected-goals share.** *(Shipped as a cumulative-xG flow first; replaced
+   2026-07-26.)* The home team's running **share** of all the chance quality
+   created — `home_xg(t) / (home_xg(t) + away_xg(t))` — plotted against a 50%
+   midline, the band filled toward whoever leads, goals marked on the curve.
+   Math is `domain/rules/xg_share.gd` (`XGShare`), chart is `XGShareChart`.
+
+   The two-line flow chart it replaces put the answer to "who is winning this
+   game on chances" in the *gap* between two curves, which is something you
+   measure rather than something you see, and it restated a number the tape
+   already gives outright. One curve against a midline makes the lopsidedness
+   the shape itself. Absolute xG totals are unaffected — they're the tape's xG
+   row.
+
+   Cumulative rather than rolling, deliberately: "who deserved to win" is a
+   whole-game claim, so it has to be settled by everything that happened; a
+   rolling window answers the different question of who is pushing right now.
+   The curve is honestly volatile in the opening minutes (one good look really
+   is 100% of the danger so far) and is not damped — the flat lead-in and the
+   event spacing are what show the reader how thin the sample still is.
+
+   **Not a win probability**, though it reads like one. P(win) from a share
+   needs a fit against real outcomes; every finished match already stores its
+   team xG and its result, so that fit is a query rather than a guess whenever
+   we want it. Until then this stays a measurement rather than a claim.
 
 Determinism/networking: the buffer is host-only (§4–5); for an online client to
 render the post-game screen, the host ships the game's shot list at the final horn
