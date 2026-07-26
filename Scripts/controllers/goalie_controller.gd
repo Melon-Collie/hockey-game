@@ -1851,6 +1851,29 @@ func _update_state(delta: float) -> void:
 				# blocking is for when reacting is impossible, where "impossible" is a
 				# race he can actually run rather than four distance thresholds.
 				#
+				# ⚠️ `not _reaction.reacting` IS LOAD-BEARING — it looks inherited from
+				# the branches above (whose comment justifies it for post stances) and
+				# it is not. Once a shot is READ, the reaction pipeline knows something
+				# this model does not: the shot's HEIGHT. Blocking concedes the top of
+				# the net, so blocking a shot already read as elevated is strictly
+				# wrong, and `_should_block` has no impact_y to check.
+				#
+				# Measured, by removing it: every unscreened shot inside ~3.9 m starts
+				# blocking regardless of height (arrival <= reaction_delay), and the
+				# keeper falls apart in the way that looks like a buff and is not —
+				# dot-line beatability 16/288 -> 25/288, a COLD five-hole window opening
+				# from nothing to 17 cm, and test_goalie_disguise_read's wrong-HEIGHT
+				# arm dropping to 4/14 from a 6/14 baseline. Deception paying NEGATIVELY
+				# is the tell, and it is the third time that exact signature has come
+				# from making him pre-commit (see _build_save_situation on WRISTER_AIM,
+				# and the tip doctrine in GoalieSaveSelection). A goalie who blocks
+				# cannot be read, and being readable is the game.
+				#
+				# So mechanism 5 (`_screen_block_drop_timer`) STAYS. Its case is
+				# genuinely special: a fully-screened release is the one time the
+				# height read is itself untrustworthy, which is exactly why it can act
+				# during a reaction when this branch must not.
+				#
 				# The three cases still happen, they are just no longer authored: a
 				# doorstep windup leaves no time to answer, a scramble can change the
 				# puck before he can answer, and a lost lateral race is coverage the

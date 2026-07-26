@@ -1575,3 +1575,53 @@ commit — so what remains is purely plumbing: it fires while `_reaction` is
 engaged and the block branch is gated on `not _reaction.reacting`. Mechanism 7
 (the reactive low read) is deliberately left alone: that is the REACT branch
 working, not a block.
+
+### Mechanism 5 stays — a measured negative result
+
+`_screen_block_drop_timer` was the last fold, and the plan above called its
+obstacle "plumbing, not doctrine": it fires while `_reaction` is engaged and the
+block branch is gated on `not _reaction.reacting`. That reading was wrong, and
+removing the gate is what proved it.
+
+The gate is an INFORMATION BOUNDARY. Once a shot is read, `_reaction` knows the
+shot's HEIGHT (`impact_y`); `GoalieSaveSelection` does not and cannot — nothing
+on `Situation` describes where in the net the puck is going. Blocking concedes
+the top of the net, so blocking a shot already read as elevated is strictly
+wrong, and the gate is what prevents it.
+
+Removed, the damage is large and one-directional:
+
+| instrument | with gate | gate removed |
+|---|---|---|
+| exhaustive, dot line 6.10 m | 16/288 (5.6%) | 25/288 (8.7%) |
+| exhaustive, slot 3.0 m | 0/288 | 4/288 |
+| five-hole COLD FLAT window | none in ±0.40 m | 17 cm at 0.02..0.18 |
+| disguise, wrong HEIGHT | 11/14 | **4/14** (baseline 6/14) |
+
+Every unscreened shot inside ~3.9 m starts blocking regardless of height
+(`arrival <= reaction_delay`). The first three rows look like the beatability
+the design wants; the fourth says what it actually is. **Deception paying
+NEGATIVELY is the tell** — the goalie is not being beaten by a better read, he
+has stopped reading. That is the third appearance of this exact signature:
+
+1. counting WRISTER_AIM as a declaration (§9, round 1),
+2. pre-dropping on a live tip threat (§9, round 2),
+3. blocking during a reaction (here).
+
+All three are "make him pre-commit", all three measure as more goals AND less
+skill expression, and `test_goalie_disguise_read` caught all three. It is the
+sharpest instrument in the goalie suite for exactly this reason: a goalie who
+pre-commits cannot be deceived, so the disguise delta goes to zero or negative
+before anything else visibly breaks.
+
+The screened release is genuinely a special case, and now for a stated reason:
+it is the one situation where the height read is ITSELF untrustworthy, so acting
+without it costs nothing. That is why it can drop during a reaction when the
+general branch must not. Mechanism 5 is correctly factored where it is; what it
+gained from this exercise is a comment saying why.
+
+**Butterfly refactor: done.** Five of seven entries are one model, one (5) is
+deliberately separate with a reason, and one (7, the reactive low read) was never
+a block. The remaining thresholds the plan flagged — `lunge_trigger_distance`
+1.2 m and `active_blade_carrier_radius` 2.5 m — belong to the STICK, which is the
+next candidate.
