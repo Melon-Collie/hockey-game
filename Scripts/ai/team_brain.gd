@@ -253,12 +253,22 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#      forwards onto zone posts and dissolve the backcheck at the line. Hold
 	#      the rush/recovery shape until the coverage we'd switch into actually
 	#      makes sense. Same upgrade seam as RETRIEVAL above, opposite direction.
-	#      5v5 only — 3v3's TRANS_OD path is unchanged by construction.
+	#
+	#      BOTH TEAM SIZES. The gate does not create a shape that under-covers:
+	#      it holds the rush shape exactly while somebody is unaccounted for, and
+	#      in that state the zone's nominal coverage is a fiction anyway — MARK
+	#      computes a cover position from 20 m up-ice and escorts. Sprinting home
+	#      strictly beats walking to a post. And the shapes converge by
+	#      construction: RUSH_D1 is home already, TRACK_PUCK chases to the net,
+	#      the mid trackers stop at the circle tops — so the rush roles themselves
+	#      bring everyone into the house, satisfy the predicate, and hand off to
+	#      man coverage. The latch guard bounds the worst case regardless.
+	#
 	#      Only while an OPPONENT actually carries: a loose or dead puck in our
 	#      zone is not a rush being defended, it's DZONE's (or RETRIEVAL's)
 	#      business, and holding the rush shape over it would just stop the team
 	#      setting up around a puck nobody has.
-	if team_size >= 5 and state == AIPossessionState.State.DZONE \
+	if state == AIPossessionState.State.DZONE \
 			and rush_read.carrier_peer != -1:
 		_coverage_held_s += _tick_span_s
 		if rush_read.coverage_accounted:

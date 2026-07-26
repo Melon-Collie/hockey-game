@@ -67,6 +67,10 @@ func _brain() -> TeamBrain:
 	return TeamBrain.new(0, team_map, {}, 5, positions)
 
 
+func _brain_3v3() -> TeamBrain:
+	return TeamBrain.new(0, {100: 0, 110: 0, 120: 0, 200: 1, 210: 1, 220: 1})
+
+
 func test_backcheck_is_not_dissolved_at_the_blue_line() -> void:
 	# The reported failure: the puck crosses into our zone with three of ours
 	# still up-ice. The old code re-slotted all five into zone areas — a
@@ -138,3 +142,49 @@ func _slot_of(brain: TeamBrain, slot: int) -> int:
 		if brain.slot_assignments[pid] == slot:
 			return pid
 	return -1
+
+
+# ── Both team sizes ──────────────────────────────────────────────────────────
+
+func test_the_gate_applies_to_3v3_too() -> void:
+	# The gate is NOT 5v5-only. It holds the rush shape exactly while somebody is
+	# unaccounted for, and in that state the zone's nominal coverage is a fiction
+	# anyway — a MARK 20 m up-ice computes a cover position and escorts. Sprinting
+	# home strictly beats walking to a post, at any team size.
+	var brain: TeamBrain = _brain_3v3()
+	brain.force_retick()
+	brain.tick(0.001, _snapshot([
+		[100, Vector3(0.0, 0.0, -10.0), Vector3(0.0, 0.0, 7.0)],   # backchecking
+		[110, Vector3(-5.0, 0.0, -12.0), Vector3(0.0, 0.0, 7.0)],  # backchecking
+		[120, Vector3(-2.0, 0.0, 20.0)],
+	], [
+		[200, Vector3(0.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],     # carrier, entering
+		[210, Vector3(-7.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],
+		[220, Vector3(7.0, 0.0, 10.0), Vector3(0.0, 0.0, 7.0)],
+	], 200))
+	assert_eq(brain.state, AIPossessionState.State.TRANS_OD,
+			"3v3 holds the rush shape through an unaccounted-for entry")
+	assert_ne(_slot_of(brain, AIRoleSlots.Slot.RUSH_D1), -1,
+			"and runs the 3v3 rush layers")
+
+
+func test_3v3_converges_into_man_coverage_once_set() -> void:
+	# The other half of the argument for gating 3v3: the rush roles themselves
+	# bring everyone into the house — RUSH_D1 is home already, TRACK_PUCK chases
+	# to the net, TRACK_MID stops at the circle tops — so the shapes converge and
+	# the gate hands off to man coverage rather than latching.
+	var brain: TeamBrain = _brain_3v3()
+	brain.force_retick()
+	brain.tick(0.001, _snapshot([
+		[100, Vector3(0.0, 0.0, 22.5)],     # containing the carrier
+		[110, Vector3(-4.5, 0.0, 21.5)],    # fronting 210
+		[120, Vector3(4.5, 0.0, 21.5)],     # fronting 220
+	], [
+		[200, Vector3(0.0, 0.0, 20.0)],
+		[210, Vector3(-6.0, 0.0, 18.0)],
+		[220, Vector3(6.0, 0.0, 18.0)],
+	], 200))
+	assert_eq(brain.state, AIPossessionState.State.DZONE,
+			"a set 3v3 structure runs man coverage")
+	assert_false(brain.threat_assignments.is_empty(),
+			"and the threat partition takes over the men")

@@ -249,11 +249,20 @@ becomes a settled three-man threat needing a body on each man, the puck is in ou
 zone and DZONE's coverage owns it. TRANS_OD's job is to kill the rush, not to solve
 coverage.
 
-**That is also why the coverage gate (§9) stays 5v5-only.** Ungating it would make
-TRANS_OD persist into our zone, and *that* is where two-on-the-puck with one man on
-two attackers would actually bite. The 3v3 model wants the flip at the blue line.
-If the backcheck-dissolves-at-the-line problem shows up in 3v3 DZONE, ungating is a
-one-word change — but it is a trade, not a free win.
+**The coverage gate (§9) applies to 3v3 as well.** The worry that it would leave
+two-on-the-puck under-covering inside our own zone compares TRANS_OD's three roles
+against DZONE's *nominal* coverage (PRESSURE + MARK×2 = all three men). But that
+coverage is the very fiction §9 exists to expose: with the bodies not home, a MARK
+computes a cover position from 20 m up-ice and escorts. The gate holds the rush
+shape exactly while somebody is unaccounted for, and in that state sprinting home
+strictly beats walking to a post.
+
+And the shapes **converge by construction**: RUSH_D1 is home already, TRACK_PUCK
+chases to the net, TRACK_MID stops at the circle tops — so the rush roles themselves
+bring all three into the house, satisfy the predicate, and hand off to man coverage.
+There is no state where a defender double-covers the puck while a man he owns is
+threatening: a threatening man in 3v3 is central, and the lone mid tracker owns the
+whole middle. Both team sizes behave the same way.
 
 ### Why lanes beat men here
 
@@ -523,9 +532,9 @@ Resolved items moved to **Decisions banked** at the top.
    precedent). Deferred to after the structure is playing well.
 3. **Coverage-gate latch risk** (§9). The time-floor guard is specified but its value is a
    guess until instrumented.
-4. **Should 3v3's DZONE also be readiness-gated?** Currently 5v5 only (§5.2). It is a
-   trade: gating stops the backcheck dissolving at the line, but keeps two bodies on the
-   puck inside our own zone. Playtest call.
+4. **Latch risk at 3v3 specifically.** The readiness predicate needs all three attackers
+   owned with only three defenders and no spare, so the 4 s guard may fire more often
+   than at 5v5. Instrument before tuning.
 
 ---
 
