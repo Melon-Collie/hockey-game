@@ -439,14 +439,15 @@ func fire_release_at(shooter: Vector3, aim: Vector3, loft_level: int,
 # Hold a wrister windup aimed at `declared_aim` for `ticks`, with the goalie
 # tracking it live. Puck stays pinned on the carrier (the body-local freeze).
 func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
-		power_t: float, ticks: int) -> void:
+		power_t: float, ticks: int,
+		shot_state: int = SkaterStateMachine.State.WRISTER_AIM) -> void:
 	# Clean slate. Without this the goalie carries pose, depth, reaction and
 	# butterfly state from the PREVIOUS shot, so consecutive trials are not
 	# comparable — the dominant error term when sweeping arms against each other.
 	_ctrl.reset_to_crease()
 	_shooter.global_position = shooter
 	_shooter.velocity = Vector3.ZERO
-	_shooter.current_shot_state = SkaterStateMachine.State.WRISTER_AIM
+	_shooter.current_shot_state = shot_state
 	# What the goalie can read off the windup: the shot that would fire right now.
 	_shooter.predicted_shot_velocity = shot_velocity(
 			shooter, declared_aim, loft_level, power_t, 0.0)

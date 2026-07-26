@@ -3097,11 +3097,19 @@ func _move_along_arc(delta: float) -> Vector2:
 		var shade_carrier: Skater = puck.get_carrier()
 		if shade_carrier != null:
 			var shade_vel: Vector3 = shade_carrier.predicted_shot_velocity
-			if shade_vel.length_squared() >= 0.01 and absf(shade_vel.z) >= 0.001:
+			if shade_vel.length_squared() >= 0.01 and absf(shade_vel.z) >= 0.001 \
+					and _declared_shot_is_on_net(shade_vel):
 				var goalie_plane_z: float = _goal_line_z + _direction_sign * _current_depth
 				var t_cross: float = (goalie_plane_z - puck.global_position.z) / shade_vel.z
 				if t_cross > 0.0:
-					var shot_x_at_depth: float = puck.global_position.x + shade_vel.x * t_cross
+					# Cover TO the post and no further. Even on a genuine corner
+					# aim there is no goaltending reason to travel past the mouth,
+					# and the projection is taken at the goalie's depth plane where
+					# an aim just inside the post can still solve wide of it.
+					var shot_x_at_depth: float = clampf(
+							puck.global_position.x + shade_vel.x * t_cross,
+							_goal_center_x - net_half_width,
+							_goal_center_x + net_half_width)
 					var shade_t: float = clampf(
 							_shot_read_timer / maxf(prearm_read_time, 0.001), 0.0, 1.0) * slapper_aim_shade
 					target_xz.x = lerpf(target_xz.x, shot_x_at_depth, shade_t)
@@ -3444,6 +3452,36 @@ func _update_body_parts(delta: float) -> void:
 			glove_max_step = glove_react_max_speed * delta
 			blocker_max_step = blocker_react_max_speed * delta
 	goalie.apply_body_config(config, lerp_t, glove_max_step, blocker_max_step)
+
+# Would the declared shot actually hit the net? The aim shade is a POSITIONAL
+# commit — the goalie physically travels toward a predicted crossing — so it has
+# to be spent on a shot that is going in.
+#
+# Without this the shade had no notion of the net existing (#552): aim a slapper
+# wind-up deliberately WIDE of the post and the goalie shades up to
+# `slapper_aim_shade` (0.7) of the way toward a puck that was never a threat,
+# leaving the cage open for the carrier to coast into. The intended counter-play
+# — fake him with the declared aim — degenerated into "point at the corner flag
+# and walk it in".
+#
+# Reading a shot heading wide and LETTING IT GO is one of the easiest reads in
+# the game, not one of the hardest, so an off-net declaration earns no shade at
+# all rather than a reduced one.
+#
+# Solved at the GOAL LINE, which is where "on net" is a question about. The
+# shade's own projection is taken at the goalie's depth plane and cannot answer
+# it: a shot crossing his plane inside the posts can still be drifting wide by
+# the time it reaches the line.
+func _declared_shot_is_on_net(shot_velocity: Vector3) -> bool:
+	if absf(shot_velocity.z) < 0.001:
+		return false
+	var t: float = (_goal_line_z - puck.global_position.z) / shot_velocity.z
+	if t <= 0.0:
+		return false   # heading away from this net
+	var x_at_line: float = puck.global_position.x + shot_velocity.x * t
+	return absf(x_at_line - _goal_center_x) \
+			<= net_half_width + GameRules.PUCK_COLLISION_RADIUS
+
 
 # Desired head yaw (degrees, goalie-ROOT-local) toward the raw puck — the head
 # tracks the puck itself even when the body plays the smoothed threat; the
