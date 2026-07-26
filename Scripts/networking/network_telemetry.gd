@@ -322,7 +322,7 @@ static func record_bytes_sent(n: int) -> void:
 static func record_bytes_received(n: int) -> void:
 	if instance: instance._bytes_received_window += n
 
-const QUEUE_DEPTH_WINDOW: int = 240  # 2 s at the 120 Hz broadcast rate
+const QUEUE_DEPTH_WINDOW: int = 240  # samples, ~4 s at the 60 Hz broadcast rate
 
 static func record_queue_depth(depth: int) -> void:
 	if instance == null:

@@ -181,7 +181,14 @@ const VERSION: String = "dev"
 #      it from the pad's PARKED cursor (~0 speed) and fired at the floor — a
 #      predicted snipe vs. an authoritative floater on every pad wrister online.
 #      Both the size change and the new flag semantics make mixed builds unsafe.
-const PROTOCOL_VERSION: int = 41
+# v42: world-state broadcast rate 120 -> 60 Hz (Constants.STATE_RATE). No packet
+#      layout change, but STATE_RATE is a shared TIMING convention baked into
+#      both sides: the interpolation-delay target (rtt/2 + broadcast_interval +
+#      PDV), the client's arrival-jitter expected_interval, and the host's
+#      claim-carried interp-delay plausibility ceiling all derive from it. A
+#      mixed pair would size its cushion and validate claims against the wrong
+#      interval, so the lobby must be rate-homogeneous.
+const PROTOCOL_VERSION: int = 42
 
 
 func _ready() -> void:

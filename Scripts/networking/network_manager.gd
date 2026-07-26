@@ -2348,18 +2348,20 @@ func adapt_interpolation_delay(current: float) -> float:
 	var target: float = get_target_interpolation_delay()
 	var change: float = lerpf(current, target, 0.15) - current
 	# Asymmetric clamp: react fast to sustained jitter, relax gently from one-offs.
-	# Effective recovery rate = per-packet × broadcast rate. At the current 120Hz:
-	#   +10ms/packet up: 1200ms/sec, catches a 150ms sustained RTT spike in ~125ms.
-	#     Without this aggressive up-rate, extrapolation fires every ~50ms on
-	#     all remote skaters during the catch-up window (visible micro-stutter).
-	#   -1.5ms/packet down: 180ms/sec, recovers a 60ms buffer over-inflation in
-	#     ~330ms. The two earlier-shipped tunings here were sized for different
-	#     broadcast rates and don't carry forward: the original -1ms/packet was
-	#     40ms/sec at 40Hz (slow — buffer stayed inflated ~10s); the interim
-	#     -3ms/packet became 360ms/sec at 120Hz (too aggressive, risks
-	#     undershoot if jitter returns inside the window). -1.5ms/packet at
-	#     120Hz lands at 180ms/sec — slightly faster than the original 40Hz
-	#     target (120ms/sec) and well clear of industry norms (~80-150 ms/sec).
+	# Effective recovery rate = per-packet × broadcast rate. At the current 60Hz:
+	#   +10ms/packet up: 600ms/sec, catches a 150ms sustained RTT spike in ~250ms.
+	#     Without this aggressive up-rate, extrapolation fires repeatedly on all
+	#     remote skaters during the catch-up window (visible micro-stutter).
+	#   -1.5ms/packet down: 90ms/sec, recovers a 60ms buffer over-inflation in
+	#     ~660ms — inside the industry norm band (~80-150 ms/sec). Earlier
+	#     tunings were sized for other broadcast rates and don't carry forward:
+	#     the original -1ms/packet was 40ms/sec at 40Hz (slow — buffer stayed
+	#     inflated ~10s); the interim -3ms/packet was 360ms/sec at 120Hz (too
+	#     aggressive, risks undershoot if jitter returns inside the window).
+	# NOTE: these are PER-PACKET steps, so halving STATE_RATE halves both rates.
+	# If the 60Hz up-rate proves too slow on a jittery link the canary is
+	# extrapolation_pct climbing after RTT spikes — raise the up-clamp, don't
+	# re-raise the broadcast rate.
 	return current + clampf(change, -0.0015, 0.010)
 
 # ── Shared interpolation delay ──────────────────────────────────────────────
