@@ -1126,9 +1126,25 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
 	# goal line inside the posts and let the authoritative outcome arrive (the
 	# goal horn is a host decision, like the save).
-	if absf(pos.z) >= GameRules.GOAL_LINE_Z and pos.z * vel.z > 0.0 \
-			and absf(pos.x) <= GameRules.NET_HALF_WIDTH:
-		pos.z = GameRules.GOAL_LINE_Z * signf(pos.z)
+	#
+	# Gated on the predicted center actually being INSIDE THE NET — the shared
+	# GoalDetectionRules cavity definition — not merely "past the goal line within
+	# the post width". That laxer test also matched the whole band BEHIND the net
+	# (the back frame sits only NET_DEPTH past the line; there is ~2.2 m of ice
+	# from there to the end boards, at every x), so a puck rimmed, dumped or
+	# carried behind the cage with any outbound z-component got teleported forward
+	# onto the goal line INSIDE the mouth: on clients only, the rendered puck
+	# jumped into the net — past _SMOOTH_SNAP_DIST it hard-snapped there — and sat
+	# in it while the host had it behind the net and awarded nothing. The cavity
+	# test excludes behind-the-net (deeper than the back frame) and beside-the-net
+	# (outside the posts) by construction, and a loose puck can only reach the
+	# cavity through the mouth because the step resolves the solid panels.
+	var end_sign: float = signf(pos.z)
+	if end_sign != 0.0 and pos.z * vel.z > 0.0 and GoalDetectionRules.center_inside_net(
+			pos, GameRules.GOAL_LINE_Z * end_sign, end_sign,
+			GameRules.NET_HALF_WIDTH, GameRules.NET_HEIGHT, GameRules.NET_POST_RADIUS,
+			radius, GameRules.PUCK_COLLISION_HALF_HEIGHT, GameRules.NET_DEPTH):
+		pos.z = GameRules.GOAL_LINE_Z * end_sign
 		vel = Vector3.ZERO
 	_sim_pos = pos
 	_sim_vel = vel

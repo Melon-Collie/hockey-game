@@ -319,3 +319,56 @@ func test_diagonal_entry_uses_the_interpolated_crossing_point() -> void:
 	assert_true(_crossed(
 			Vector3(1.0, ICE_Y, GOAL_Z - 0.3),
 			Vector3(0.2, ICE_Y, GOAL_Z + 0.3)))
+
+
+# ── Shared "inside the net" predicate (client render park) ────────────────────
+# center_inside_net is the position-only form of the cavity test. The client's
+# prediction uses it to decide whether to park a puck at the mouth instead of
+# rendering it inside the net; the band BEHIND the net must never qualify.
+
+func _inside_net(center: Vector3, facing: float = 1.0) -> bool:
+	return GoalDetectionRules.center_inside_net(
+			center, GOAL_Z * signf(facing), facing,
+			HALF_W, NET_H, POST_R, R, HH, DEPTH)
+
+
+func test_inside_net_center_of_the_cavity() -> void:
+	assert_true(_inside_net(Vector3(0.0, ICE_Y, GOAL_Z + 0.3)))
+
+
+func test_inside_net_just_past_the_line() -> void:
+	# The park's whole point is catching the puck as it enters — depth need only
+	# be >= 0 here (the crossing rule's own freshness bound is separate).
+	assert_true(_inside_net(Vector3(0.0, ICE_Y, GOAL_Z + 0.01)))
+
+
+func test_inside_net_deep_but_in_front_of_the_back_frame() -> void:
+	assert_true(_inside_net(Vector3(0.0, ICE_Y, GOAL_Z + DEPTH - R - 0.01)))
+
+
+func test_inside_net_rejects_behind_the_net() -> void:
+	# THE client phantom-goal regression: puck rimmed/dumped behind the cage, so
+	# past the goal line and within the post width, but beyond the back frame.
+	# Parking this at the mouth is what rendered a puck sitting in the net on
+	# clients while the host had it behind the net (and scored nothing).
+	assert_false(_inside_net(Vector3(0.3, ICE_Y, GOAL_Z + DEPTH + 0.2)))
+	assert_false(_inside_net(Vector3(0.0, ICE_Y, GOAL_Z + 2.0)))
+	# Same at the -Z end.
+	assert_false(_inside_net(Vector3(0.3, ICE_Y, -GOAL_Z - DEPTH - 0.2), -1.0))
+
+
+func test_inside_net_rejects_beside_the_net() -> void:
+	assert_false(_inside_net(Vector3(1.0, ICE_Y, GOAL_Z + 0.3)))
+
+
+func test_inside_net_rejects_over_the_crossbar() -> void:
+	assert_false(_inside_net(Vector3(0.0, 1.25, GOAL_Z + 0.3)))
+
+
+func test_inside_net_rejects_in_front_of_the_line() -> void:
+	assert_false(_inside_net(Vector3(0.0, ICE_Y, GOAL_Z - 0.05)))
+
+
+func test_inside_net_rejects_wrong_end() -> void:
+	# A puck deep in the +Z net is not inside the -Z net.
+	assert_false(_inside_net(Vector3(0.0, ICE_Y, GOAL_Z + 0.3), -1.0))
