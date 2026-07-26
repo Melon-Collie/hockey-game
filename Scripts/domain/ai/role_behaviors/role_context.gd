@@ -135,6 +135,10 @@ var self_stagger_timer: float = 0.0
 # This bot's own Hands-scaled carry-handle reach — how tight an evasion seam it
 # can thread (best_evade_point). League default when unwired.
 var self_handle_reach: float = 0.9
+# This bot's real blade reach (stick + blade, attribute-scaled) — the physical
+# "one stick length" unit the rush gap ladder is expressed in, so a long-stick
+# defenseman legitimately plays a hair wider gap.
+var self_blade_reach: float = SkaterAgentStateMachine.BLADE_REACH_M
 # This bot's blade reach cone half-angle (ROM + torso twist) and Agility-scaled
 # facing turn rate — how the carrier prices the rotation an out-of-cone aim costs
 # (_facing_rotation_time). A shot/pass anywhere inside the cone is free (no body

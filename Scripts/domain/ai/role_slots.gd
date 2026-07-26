@@ -99,6 +99,13 @@ enum Slot {
 	# NEUTRAL back shape (CHASE/FLANK reused).
 	DBACK_L,        # D: left goal-side hold inside the dots.
 	DBACK_R,        # D: right goal-side hold.
+	# TRANS_OD rush defense — the layered replacement for CONTAIN + MARK
+	# (docs/transition-defense-plan.md §5). 5v5 only; 3v3 keeps CONTAIN/MARK.
+	RUSH_D1,          # D: strong-side D. Owns the carrier — gap ladder + angling.
+	RUSH_D2,          # D: weak-side D. Holds mid-ice, takes the mid-lane drive.
+	TRACK_PUCK,       # F: F1 back. Runs the carrier down through mid-ice.
+	TRACK_MID_STRONG, # F: F2. Back through mid-ice, stops at the circle tops.
+	TRACK_MID_WEAK,   # F: F3. Same, weak side.
 }
 
 # Hysteresis for the soonest-to-arrive elections: a peer that didn't

@@ -1338,7 +1338,10 @@ func _is_reactive_slot(slot: int, snapshot: WorldSnapshot) -> bool:
 	match slot:
 		AIRoleSlots.Slot.PRESSURE, AIRoleSlots.Slot.F1_PRESSURE, \
 		AIRoleSlots.Slot.CONTAIN, AIRoleSlots.Slot.MARK, \
-		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG:
+		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
+		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2, \
+		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
+		AIRoleSlots.Slot.TRACK_MID_WEAK:
 			return true
 		AIRoleSlots.Slot.FINISHER, AIRoleSlots.Slot.NET_FRONT:
 			# The one-timer camp's fast cadence buys a live seam read — which
@@ -2162,7 +2165,16 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# racing home, forecheck closing from depth, breakout up-ice. The gap
 			# gate keeps a bot camped near its anchor (or a pre-aimed FINISHER) off
 			# the throttle; the turn gate keeps it from sprinting into a sharp cut.
-			_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
+			#
+			# A tracking role overrides both gates (RoleDecision.sprint_override):
+			# a backchecker is behind the play by definition and the entire job is
+			# closing that distance, so easing off as the gap narrows — or as the
+			# recovery lane bends — is precisely wrong. The hard exhaustion lockout
+			# still applies, so this can never sprint a gassed bot.
+			if decision.sprint_override:
+				input.sprint_held = self_state != null and not self_state.sprint_locked
+			else:
+				_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
 		# Deflection routine: FINISHER raises its blade to tip an incoming
 		# ELEVATED on-net shot (a grounded blade flies under it). Off-puck
 		# only — the controller ignores voluntary lifts while carrying.
@@ -2304,6 +2316,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
 	ctx.self_handle_reach = _self_handle_reach
+	ctx.self_blade_reach = _blade_reach
 	ctx.self_reach_cone_half_angle = _self_reach_cone_half_angle
 	ctx.self_facing_turn_rate = _self_facing_turn_rate
 	ctx.self_blade_speed = _self_blade_speed
@@ -2427,6 +2440,11 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			decision = AIRoleMark.decide(ctx)
 		AIRoleSlots.Slot.CONTAIN:
 			decision = AIRoleContain.decide(ctx)
+		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2:
+			decision = AIRoleRushD.decide(ctx, slot)
+		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
+		AIRoleSlots.Slot.TRACK_MID_WEAK:
+			decision = AIRoleTrack.decide(ctx, slot)
 		AIRoleSlots.Slot.CHASE:
 			decision = AIRoleChase.decide(ctx)
 		AIRoleSlots.Slot.FLANK_L:
