@@ -777,8 +777,19 @@ static func collect_counter_threats(ctx: RoleContext,
 #                  unread here rather than mis-wired.
 #   2. SUPPORT   — "a defenceman can only pinch when they have a supporting
 #                  player in position to back them up should the puck/player get
-#                  past them"; reading whether there is an F3 HIGH is what
-#                  alters the decision.              → has_support_behind
+#                  past them."                       → has_support_behind
+#
+#                  Which body that IS falls out of the geometry, and it is not
+#                  the one the phrase "F3 high" suggests. During an O-zone cycle
+#                  the POINTS are the rearmost bodies (~9 m from our blue line);
+#                  F3's high-slot float sits ~8 m further UP-ice. So:
+#                    · the points read no support and therefore respect any man
+#                      who gets behind them — correct, they ARE the last layer;
+#                    · F3 reads the points as support and holds his float —
+#                      correct, the layer behind him is home.
+#                  The D-vs-forward asymmetry the doctrine describes therefore
+#                  emerges from who is physically rearmost, which is why no
+#                  per-position appetite scalar is needed.
 #   3. NUMBERS   — "the first rule defensemen are taught is to count numbers —
 #                  how many opponents are in front of them and if any are
 #                  behind them."                     → an attacker behind my stand

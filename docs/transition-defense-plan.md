@@ -649,8 +649,17 @@ to lose the forward stand, and neither is "control is contested":
 
 - they have it **and** it is coming at us (`Mode.RUSH` — a bottled carrier reads REGROUP,
   and forechecking a bottled carrier is exactly right), or
-- somebody is **behind** us and nobody is covering for us (`has_support_behind`, the
-  F3-high primitive that survived §10).
+- somebody is **behind** us and nobody is covering for us (`has_support_behind`, which
+  survived §10).
+
+Which body counts as "support behind" falls out of the geometry rather than being named.
+During an O-zone cycle the **points are the rearmost bodies** (~9 m off our blue line);
+F3's high-slot float sits ~8 m further up-ice. So the points read no support and respect
+any man who gets behind them (correct — they *are* the last layer), while F3 reads the
+points as his support and holds his float (correct — the layer behind him is home). The
+turnover-conscious forward is `HIGH_SLOT` / `F3_HIGH`, the designated first man back;
+`SUPPORT` / `TRAILER` already prices turnover risk natively via `counter_rush_cost` and is
+untouched by §13.
 
 *Contested control deliberately does not send a station home on its own.* Backing off with
 nobody behind you is precisely the out-of-the-play failure being fixed — the retreat buys
@@ -684,10 +693,9 @@ expression of that; a separate margin would be a second mechanism for one job.
 
 ### 13.6 Open
 
-- **Appetite split — not implemented.** The hold read came out categorical (numbers +
-  support + whether their puck is coming), with no continuous quantity left for a D-vs-F
-  scalar to scale. If D and F need different conservatism it will have to attach to
-  something else; revisit after playtest rather than inventing a knob for it now.
+- **Appetite split — not needed.** The D-vs-forward asymmetry the doctrine describes
+  emerges from geometry: the points are the rearmost layer so they read no support and
+  respect men behind them, while F3 reads the points as support and holds. No scalar.
 - **Pressure-dependent support distance.** `pressure_eta_s` is published and unread. The
   natural home is SUPPORT's own positioning, which already prices pressure via
   `turnover_prior`; the stations are the wrong consumer.
