@@ -92,19 +92,10 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	# the line; a breakout threat or a stretch man lurking behind it sags
 	# the hold down the retreat line toward home — sag-to-even, exactly as
 	# far as the developing counter demands.
-	var our_net: Vector3 = ctx.defending_goal_pos
-	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
-	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
-	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	AIRoleHelpers.collect_counter_threats(
-			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
-	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
-			ctx.scratch_counter_caps, our_net,
-			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
 	var line_stand := Vector3(wall_x, 0.0, blue_z)
-	d.target_position = AIRoleHelpers.most_forward_feasible(
-			line_stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
-			AIRoleHelpers.station_retreat_floor(ctx, line_stand))
+	d.target_position = AIRoleHelpers.offensive_station_target(
+			ctx, line_stand, ctx.prev_held_forward_stand)
+	d.held_forward_stand = d.target_position.distance_to(line_stand) < 0.5
 	return d
 
 

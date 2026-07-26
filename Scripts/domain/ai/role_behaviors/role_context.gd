@@ -49,6 +49,10 @@ var threat_shoot_base_by_opp: Dictionary[int, float] = {}
 # TeamStrategyView, which reports Mode.NONE and no attackers, so behavior with
 # no brain is exactly what it was before the read existed.
 var rush_read: AIRushRead = TeamStrategyView.new().get_rush_read()
+# Last dispatch's answer to "did I hold my forward stand?" — the incumbent side
+# of the pinch read's control hysteresis (AIRoleHelpers.may_hold_forward_stand).
+# Reset across a slot change, same contract as prev_role_target.
+var prev_held_forward_stand: bool = false
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
 # owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
 # be a `Callable`; downgraded to a Dictionary because role decide() and

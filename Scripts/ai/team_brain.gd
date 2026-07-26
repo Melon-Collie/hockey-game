@@ -37,6 +37,10 @@ var team_id: int = 0
 # legacy AIRoleSlots election (verbatim), 5 → AIRoleSlots5's position-aware
 # group-scoped election. Set once at construction from the state machine.
 var team_size: int = GameRules.DEFAULT_TEAM_SIZE
+# Latched match ruleset — the shared read needs it for the offside-aware attacker
+# filter (an illegally-positioned opponent is not a counter threat). Set by
+# GameManager alongside the agents' own copy.
+var rule_set: int = GameRules.DEFAULT_RULE_SET
 var state: int = AIPossessionState.State.DZONE
 # Live smart-ping directives for this team's bots (host-only AI bookkeeping,
 # same shape as _one_timer_ready_by_peer). GameManager routes a validated
@@ -245,7 +249,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	for pid: int in rush_read.recovery_by_peer:
 		_prev_recovery[pid] = rush_read.recovery_by_peer[pid]
 	rush_read.fill(snapshot, team_id, _own_goal_z, _team_id_by_peer,
-			_caps_by_peer, _prev_recovery)
+			_caps_by_peer, _prev_recovery, rule_set != GameRules.RuleSet.OFF)
 
 	# 1.85 COVERAGE READINESS (docs/transition-defense-plan.md §9). DZONE is a
 	#      shape, not a location: the raw table flips to it the moment the puck

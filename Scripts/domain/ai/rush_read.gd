@@ -116,13 +116,32 @@ var numbers: int = Numbers.EVEN_OR_UP
 var backpressure_s: float = INF
 # Every attacker accounted for and somebody on the puck (see coverage_read).
 var coverage_accounted: bool = false
+# Seconds until the puck is CONTESTED — the nearest opponent's momentum-aware ETA
+# to it (docs/transition-defense-plan.md §13). 0.0 when it is already theirs or
+# loose; INF when nobody can get to it.
+#
+# This is the offensive counterpart of everything above, and the coaching read is
+# the SAME quantity for two different jobs — "the only time a defenseman should be
+# standing on the offensive blue line is when his team has complete control of the
+# puck", and "give close support to a teammate if they are under heavy pressure" —
+# so it is computed once here rather than derived twice and allowed to disagree.
+#
+# Published as a TIME rather than a 0..1 probability on purpose. The obvious
+# candidate was 1 - carry_safety, which SUPPORT already uses; measured, that is
+# effectively a STEP function ("will an opponent be on the puck inside the evade
+# horizon?"), because it answers the CARRIER's question — can I be poked right
+# now. There is no gradient in it to threshold, and its 0.4 s horizon is far too
+# late for a defenseman 40 m away who needs a head start to back off. A time lets
+# each station compare against its own notice period, which is where that
+# threshold belongs.
+var pressure_eta_s: float = 0.0
 
 
 # Fills this read from the snapshot. `prev` is last tick's read (may be null /
 # self on the first tick) — consulted only for the recovery-race hysteresis.
 func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 		team_id_by_peer: Dictionary, caps_by_peer: Dictionary,
-		prev_recovery: Dictionary) -> void:
+		prev_recovery: Dictionary, offsides_enforced: bool = true) -> void:
 	_reset()
 	if snapshot == null or snapshot.puck_state == null:
 		return
@@ -143,6 +162,13 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 	var we_carry: bool = pid_carrier != -1 \
 			and team_id_by_peer.get(pid_carrier, -1) == team_id
 	is_live = true
+	# Possession security (see pressure_eta_s). Only OUR carrier can be "secure";
+	# anything else is already contested by definition.
+	pressure_eta_s = 0.0
+	if we_carry:
+		pressure_eta_s = _pressure_eta(
+				snapshot, team_id, team_id_by_peer, caps_by_peer,
+				snapshot.skater_states[pid_carrier].position)
 
 	carrier_peer = pid_carrier if opp_carries else -1
 	var origin_vel := Vector3.ZERO
@@ -170,7 +196,9 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 			our_net, opp_carries, pid_carrier)
 	entry_eta_s = _entry_eta(own_dir, axis_len, closing)
 
-	_fill_attackers(snapshot, team_id, team_id_by_peer, caps_by_peer, our_net)
+	_fill_attackers(snapshot, team_id, team_id_by_peer, caps_by_peer, our_net,
+			offsides_enforced and own_dir * puck_pos.z <= GameRules.BLUE_LINE_Z,
+			own_dir)
 	if we_carry:
 		# Turnover hypothesis only — see the `we_carry` note above.
 		return
@@ -197,12 +225,21 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 # standing at his own blue line came to justify our whole team collapsing.
 func _fill_attackers(snapshot: WorldSnapshot, team_id: int,
 		team_id_by_peer: Dictionary, caps_by_peer: Dictionary,
-		our_net: Vector3) -> void:
+		our_net: Vector3, offside_reads: bool, own_dir: float) -> void:
 	var bar: float = rush_eta_s + LATE_MAN_WINDOW_S
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		# Offside-positioned bodies are not attackers. An opponent already inside
+		# his attacking zone (our defensive zone) while the puck is not there
+		# cannot legally receive where he stands — ARCADE ghosts him, NHL whistles
+		# the touch. Counting him is how an illegal cherry-picker drags a station
+		# out of the play. (The counter-channel model read this; the shared read
+		# has to as well.)
+		if offside_reads and pid != carrier_peer \
+				and own_dir * s.position.z > GameRules.BLUE_LINE_Z:
+			continue
 		if pid == carrier_peer:
 			attackers.append(pid)
 			attacker_leads.append(_lead(s.position, s.velocity))
@@ -465,6 +502,7 @@ func is_attacker(pid: int) -> bool:
 func copy_from(other: AIRushRead) -> void:
 	mode = other.mode
 	is_live = other.is_live
+	pressure_eta_s = other.pressure_eta_s
 	threat_axis = other.threat_axis
 	rush_origin = other.rush_origin
 	carrier_peer = other.carrier_peer
@@ -488,6 +526,26 @@ func copy_from(other: AIRushRead) -> void:
 		recovery_by_peer[pid] = other.recovery_by_peer[pid]
 
 
+# Time until the nearest opponent is on our carrier — momentum-aware, at his real
+# Speed cap, so a body already skating at the puck registers sooner than a nearer
+# one standing still. INF with no opponents on the ice (nothing can contest it).
+func _pressure_eta(snapshot: WorldSnapshot, team_id: int,
+		team_id_by_peer: Dictionary, caps_by_peer: Dictionary,
+		carrier_pos: Vector3) -> float:
+	var best: float = INF
+	for pid: int in snapshot.skater_states:
+		if team_id_by_peer.get(pid, -1) == team_id:
+			continue
+		var s: SkaterNetworkState = snapshot.skater_states[pid]
+		var caps: AISkaterCaps = caps_by_peer.get(pid)
+		var t: float = AIActionScoring.time_to_arrive(
+				s.position, carrier_pos, s.velocity,
+				caps.max_speed if caps != null else AIActionScoring.SKATER_REF_SPEED_M_S)
+		if t < best:
+			best = t
+	return best
+
+
 func _xz_dist(a: Vector3, b: Vector3) -> float:
 	var dx: float = b.x - a.x
 	var dz: float = b.z - a.z
@@ -497,6 +555,7 @@ func _xz_dist(a: Vector3, b: Vector3) -> float:
 func _reset() -> void:
 	mode = Mode.NONE
 	is_live = false
+	pressure_eta_s = 0.0
 	threat_axis = Vector3.ZERO
 	rush_origin = Vector3.ZERO
 	carrier_peer = -1

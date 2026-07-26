@@ -875,6 +875,9 @@ var _prev_role_target: Vector3 = Vector3.INF
 # Zone soft-lock incumbent from the last dispatch (RoleDecision.
 # locked_man_pid) — feeds RoleContext.prev_locked_man, reset on slot change.
 var _prev_locked_man_pid: int = -1
+# Incumbent for the offensive stations' control hysteresis (see
+# RoleDecision.held_forward_stand).
+var _prev_held_forward_stand: bool = false
 
 # Per-peer velocity history for acceleration estimation. Each bot
 # maintains its own cache because dispatch runs per-bot — the
@@ -2420,6 +2423,9 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	ctx.prev_role_target = _prev_role_target if slot == _prev_role_slot else Vector3.INF
 	# Zone soft-lock incumbent, same reset-across-slot-change contract.
 	ctx.prev_locked_man = _prev_locked_man_pid if slot == _prev_role_slot else -1
+	# Pinch-read hysteresis incumbent, same reset-across-slot-change contract.
+	ctx.prev_held_forward_stand = _prev_held_forward_stand \
+			if slot == _prev_role_slot else false
 	var decision: RoleDecision
 	match slot:
 		AIRoleSlots.Slot.FINISHER:
@@ -2496,6 +2502,7 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	_prev_role_slot = slot
 	_prev_role_target = decision.target_position
 	_prev_locked_man_pid = decision.locked_man_pid
+	_prev_held_forward_stand = decision.held_forward_stand
 	return decision
 
 

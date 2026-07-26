@@ -630,32 +630,67 @@ the formalization: **you are in the play iff the carrier could feed you.** Measu
 
 ### 13.5 Design
 
-**A. `turnover_imminence` on `AIRushRead`** (0..1), computed once per brain tick:
-`1 - carry_safety` while we carry, 1.0 for a loose or in-flight puck. One number, shared,
-so the D's hold and the supporters' spacing cannot disagree.
+**A. `pressure_eta_s` on `AIRushRead`** — seconds until the puck is contested (the
+nearest opponent's momentum-aware ETA to it; 0 when it is already theirs or loose).
 
-**B. Offensive stations replace the race-home bound with the real pinch read.** Hold the
-forward stand unless *(control is lost or contested)* **and** *(no support behind)* **and**
-*(the numbers say we are exposed)*. `has_support_behind` — which survived §10 — is the
-F3-high primitive; `AIRushRead.numbers` is the count.
+*Revised during implementation.* The plan called for `1 - carry_safety` as a 0..1
+imminence. Measured, that is a **step function**, not a gradient: it answers the
+CARRIER's question ("can I be poked right now?") over a 0.4 s evade horizon, reading 0
+until an opponent is ~1 m away and 1 after. There is nothing in it to threshold, and its
+horizon is far too late for a defenseman 40 m away. Publishing a TIME instead lets each
+consumer compare against its own notice period, which is where a threshold belongs.
+
+Second revision: `pressure_eta_s` drives **neither** the hold decision nor the leash — see
+the note in §13.5 B/D. It is published and currently unread. That is deliberate rather
+than an oversight; the two places it seemed to belong both turned out to misbehave.
+
+**B. Offensive stations replace the race-home bound with the real pinch read.** Two ways
+to lose the forward stand, and neither is "control is contested":
+
+- they have it **and** it is coming at us (`Mode.RUSH` — a bottled carrier reads REGROUP,
+  and forechecking a bottled carrier is exactly right), or
+- somebody is **behind** us and nobody is covering for us (`has_support_behind`, the
+  F3-high primitive that survived §10).
+
+*Contested control deliberately does not send a station home on its own.* Backing off with
+nobody behind you is precisely the out-of-the-play failure being fixed — the retreat buys
+no coverage and costs the attack a body.
+
+"Behind me" needs real separation: a defending winger *covering* the point sits level with
+a D and must not read as a man who has beaten him. The grounded span is the **cover
+envelope** (a goal-side stand plus a stick), with an extra stick of hysteresis while
+holding.
 
 **C. The retreat floor becomes numbers-restoring, not home.** Back off only as far as
 restores the numbers layer, then stop. Replaces `station_retreat_floor` on the offensive
 stations (it stays correct for the NZ ones).
 
 **D. A play-connection bound — the forward floor that does not exist today.** No offensive
-station may sit outside feedable range of the puck. This is the explicit "nobody completely
-out of the play", and it is the bound that makes the triangle contract under pressure
-rather than stretch.
+station may sit outside feedable range of the puck (a pass flight time, not an invented
+radius). This is the explicit "nobody completely out of the play".
 
-**E. The points get an above-the-puck-style discipline.** `HIGH_SLOT` has
-`ABOVE_PUCK_MARGIN_M` (real F3 doctrine); the points have no equivalent, which is part of
-why they are the bodies that end up stranded.
+Two scoping rules, both learned the hard way:
+- It applies only while **we** possess — the leash is about being a live passing OPTION,
+  and there is none when the puck is theirs or loose. A forechecker standing off a bottled
+  carrier is doing his job.
+- It applies only to a **holding** station, never to a retreat. Clamping a recovery back
+  up-ice toward the puck undoes the coverage the numbers read just called for.
+- It is a hard OUTER bound and nothing else. Shrinking it under pressure (to express
+  "close support") converts it into an attractor that drags a point into the corner.
+
+**E. ~~The points get an above-the-puck-style discipline.~~** Subsumed by D. The points'
+problem is being too far BEHIND the puck, and the feedability bound is the correct
+expression of that; a separate margin would be a second mechanism for one job.
 
 ### 13.6 Open
 
-- **Appetite split.** D vs F conservatism — reuse `EXPOSURE_APPETITE_DEFENSE` /
-  `_FORWARD`, the existing hand-set feel scalars, rather than a new knob.
+- **Appetite split — not implemented.** The hold read came out categorical (numbers +
+  support + whether their puck is coming), with no continuous quantity left for a D-vs-F
+  scalar to scale. If D and F need different conservatism it will have to attach to
+  something else; revisit after playtest rather than inventing a knob for it now.
+- **Pressure-dependent support distance.** `pressure_eta_s` is published and unread. The
+  natural home is SUPPORT's own positioning, which already prices pressure via
+  `turnover_prior`; the stations are the wrong consumer.
 - **"Take the player or take the puck."** The pinch's own success condition (*"if a chip or
   middle-bump pass beats you easily, a pinch is a poor option"*) is a further read we do
   not model at all. Out of scope here; worth noting as the next layer of pinch quality.

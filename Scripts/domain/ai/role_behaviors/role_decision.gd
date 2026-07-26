@@ -71,3 +71,9 @@ var arrive_at_speed: bool = false
 # tracking roles (docs/transition-defense-plan.md §7); the hard exhaustion
 # lockout still applies, so this can never sprint a gassed bot.
 var sprint_override: bool = false
+
+# An offensive station kept its forward stand this dispatch (the pinch read said
+# we have control). Round-tripped into RoleContext.prev_held_forward_stand so the
+# control threshold gets enter/hold hysteresis — a station flickering between the
+# blue line and a sag is worse than either choice.
+var held_forward_stand: bool = false

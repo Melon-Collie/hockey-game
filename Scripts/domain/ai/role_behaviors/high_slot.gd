@@ -36,14 +36,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var teammates: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammates)
-	var our_net: Vector3 = ctx.defending_goal_pos
-	# First-man-back bound: never float where the counter paths aren't
-	# contained (fill_counter_channels — the path-intercept race-home read).
-	AIRoleHelpers.collect_counter_threats(
-			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
-	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
-			ctx.scratch_counter_caps, our_net,
-			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
+	# First-man-back discipline is now the pinch read (plan §13): hold the float
+	# while we have control, back off only to the numbers layer when we don't, and
+	# never float outside feedable range of the puck. F3's job is to be the seam
+	# option AND the first man back — the old race-home bound made him only the
+	# second of those.
 
 	# Far from the band, skate at the CALCULATED float spot directly — the
 	# seam argmax refines a look that gets re-read from closer before arrival
@@ -53,9 +50,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var band_center := Vector3(
 			0.0, 0.0, opp_net.z + own_dir * BAND_DEPTHS_M[1])
 	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, band_center):
-		d.target_position = AIRoleHelpers.most_forward_feasible(
-				band_center, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
-				AIRoleHelpers.station_retreat_floor(ctx, band_center))
+		d.target_position = AIRoleHelpers.offensive_station_target(
+				ctx, band_center, ctx.prev_held_forward_stand)
+		d.held_forward_stand = d.target_position.distance_to(band_center) < 0.5
 		return d
 
 	var pass_speed_ref: float = AIActionScoring.expected_pass_speed(
@@ -70,9 +67,6 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			if own_dir * c.z < own_dir * carrier_pos.z + ABOVE_PUCK_MARGIN_M:
 				continue
 			if not AIRoleHelpers.is_legal_position(c):
-				continue
-			if not AIRoleHelpers.race_home_feasible(
-					c, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel):
 				continue
 			if AIRoleHelpers.too_close_to_teammate(c, teammates):
 				continue
@@ -90,10 +84,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# Whole band filtered (deep carrier + heavy counter threat): sag from
 		# the top of the zone down the retreat line as far as the counter
 		# paths demand.
-		var sag_from := Vector3(0.0, 0.0,
+		best_pos = Vector3(0.0, 0.0,
 				opp_net.z + own_dir * (GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z - 1.0))
-		best_pos = AIRoleHelpers.most_forward_feasible(
-				sag_from, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
-				AIRoleHelpers.station_retreat_floor(ctx, sag_from))
-	d.target_position = best_pos
+	d.target_position = AIRoleHelpers.offensive_station_target(
+			ctx, best_pos, ctx.prev_held_forward_stand)
+	d.held_forward_stand = d.target_position.distance_to(best_pos) < 0.5
 	return d

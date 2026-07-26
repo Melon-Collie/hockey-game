@@ -44,6 +44,15 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int, skaters: Array,
 	ctx.own_goal_dir = 1.0
 	ctx.team_id_by_peer = team_map
 	ctx.strong_x = strong_x
+	# A LIVE transition read, built from this fixture's own snapshot — exactly
+	# what the brain hands production dispatch. The offensive stations' pinch read
+	# (AIRoleHelpers.may_hold_forward_stand) needs real perception: possession
+	# security and who is behind the stand. An unwired read reports "no
+	# perception" and the stations then just hold their geometry, so a fixture
+	# that wants to exercise the read has to supply it.
+	var read := AIRushRead.new()
+	read.fill(snap, TEAM_ID, OUR_NET_Z, team_map, {}, {})
+	ctx.rush_read = read
 	return ctx
 
 

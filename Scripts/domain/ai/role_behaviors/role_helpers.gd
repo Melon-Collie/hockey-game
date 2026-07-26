@@ -753,6 +753,188 @@ static func collect_counter_threats(ctx: RoleContext,
 		out_caps.append(ctx.caps_by_peer.get(pid))
 
 
+# ── Offensive stations: the pinch read (plan §13) ────────────────────────────
+#
+# Replaces the counter-channel race for every station that holds forward ice
+# while WE have the puck (the O-zone points, the forecheck line pair, F3 / the
+# high slot, the trailing valve). The race model is not how the decision is
+# actually made, and it is systematically more pessimistic than the real read —
+# which is what stranded these bodies 30 m from the play.
+#
+# The doctrine's read is three coarse, categorical facts:
+#
+#   1. CONTROL   — "the only time a defenseman should be standing on the
+#                  offensive blue line is when his team has complete control of
+#                  the puck."          → AIRushRead.pressure_eta_s
+#                  In practice this drives NEITHER the hold decision nor the
+#                  station leash. Contested control with nobody behind you gives
+#                  a retreat nothing to cover, so it must not send bodies home;
+#                  and shrinking the leash under pressure turns an outer bound
+#                  into an attractor that drags a POINT into the corner. The
+#                  pressure-dependent "give close support under heavy pressure"
+#                  belongs to the SUPPORT role's own positioning, which already
+#                  prices pressure — not to the stations. Left published and
+#                  unread here rather than mis-wired.
+#   2. SUPPORT   — "a defenceman can only pinch when they have a supporting
+#                  player in position to back them up should the puck/player get
+#                  past them"; reading whether there is an F3 HIGH is what
+#                  alters the decision.              → has_support_behind
+#   3. NUMBERS   — "the first rule defensemen are taught is to count numbers —
+#                  how many opponents are in front of them and if any are
+#                  behind them."                     → an attacker behind my stand
+#
+# And when the read says back off, the target is NOT home. "It's better to stay
+# safe with a 3 on 2, rather than pinch and end up with a 3 on 1, 2 on 0 or
+# breakaway": backing off restores a NUMBERS LAYER and then stops.
+
+# While HOLDING, a station demands this much extra separation before it accepts
+# that a man has got behind it — anti-flicker on the numbers read, in the physical
+# unit (one more stick beyond the cover envelope).
+const BEHIND_HOLD_EXTRA_M: float = 1.8
+
+# How long a feed may be in flight and still make you a live passing option.
+# The literature defines support by whether A PASS IS ON, never in feet — the
+# triangle "contracts or expands" — so the play-connection bound is a flight
+# time, not an invented radius. Sized on how long a carrier holds the puck in the
+# offensive zone before he must move it.
+const PLAY_CONNECTION_FLIGHT_S: float = 1.1
+
+
+# True when a station may keep its forward stand.
+#
+# Two ways to lose it, and NEITHER is "control is contested":
+#   · they have it and it is coming at us (their breakout is under way), or
+#   · somebody is behind us and nobody is covering for us.
+#
+# Contested control deliberately does NOT send a station home on its own. Backing
+# off with nobody behind you is precisely the "out of the play" failure this
+# replaces — there is nothing to restore, so the retreat buys no coverage and
+# costs the attack a body. What contested control legitimately changes is how
+# CLOSE the support plays (pull_into_play, "give close support to a teammate under
+# heavy pressure"), which is the job the research actually assigns it.
+static func may_hold_forward_stand(ctx: RoleContext, was_holding: bool,
+		stand: Vector3) -> bool:
+	var read: AIRushRead = ctx.rush_read
+	# An unwired read knows nothing; the honest default is to hold the shape, so
+	# the station's own geometry is the only thing positioning it.
+	if not read.is_live:
+		return true
+	if not _we_possess(ctx) and read.mode == AIRushRead.Mode.RUSH:
+		# THEIR puck: forechecking is aggressive by design, so possession alone is
+		# no reason to bail — a bottled carrier with nowhere to go is exactly who
+		# you pinch on. The doctrine's trigger is that they are "moving out of the
+		# zone", which is what Mode.RUSH measures (advancing on our net, or already
+		# in our zone). Still bottled or turning back reads REGROUP: hold.
+		return false
+	# The numbers half: nobody behind us, or somebody covering for us if we get
+	# beaten. `was_holding` makes it hysteretic — see _attacker_behind.
+	return has_support_behind(ctx) or not _attacker_behind(ctx, stand, was_holding)
+
+
+# True when the puck is genuinely ours right now — the branch that decides whether
+# a station is making a PINCH decision at all. Once the opponent has it (or it is
+# loose), there is nothing to pinch on: the answer is the ordinary retreat to
+# structure, and TRANS_OD takes over as soon as the puck reaches the neutral zone.
+static func _we_possess(ctx: RoleContext) -> bool:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return false
+	var pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	return pid != -1 and ctx.team_id_by_peer.get(pid, -1) == ctx.team_id
+
+
+# The numbers-restoring retreat: only as far back as puts us goal-side of the
+# deepest attacker who is currently behind our stand — "count numbers, and if any
+# are behind you, deal with it". When nobody is behind the stand there is nothing
+# to restore and the stand itself is the floor, so this never walks a station home
+# for a threat that does not exist.
+static func numbers_floor(ctx: RoleContext, stand: Vector3) -> Vector3:
+	var read: AIRushRead = ctx.rush_read
+	var our_net: Vector3 = ctx.defending_goal_pos
+	var stand_d: float = _xz_distance(stand, our_net)
+	var deepest: float = stand_d
+	for lead: Vector3 in read.attacker_leads:
+		var d: float = _xz_distance(lead, our_net)
+		if d < deepest:
+			deepest = d
+	if deepest >= stand_d:
+		return stand   # nobody behind us — hold
+	# Goal-side of him by a cover depth, along our own retreat line.
+	var target_d: float = maxf(deepest - AIThreatAssignment.COVER_DEPTH_M, 0.0)
+	var dx: float = stand.x - our_net.x
+	var dz: float = stand.z - our_net.z
+	var len_s: float = sqrt(dx * dx + dz * dz)
+	if len_s < 0.001:
+		return stand
+	return Vector3(our_net.x + dx * (target_d / len_s), 0.0,
+			our_net.z + dz * (target_d / len_s))
+
+
+# Pull a station's target back INTO the play if it has drifted outside feedable
+# range of the puck. The bound nothing had: every other bound pulls toward home,
+# so there was no term that could ever say "you have left the attack". This is
+# what makes the support triangle CONTRACT under pressure instead of stretching —
+# and it is the direct answer to "float far away from the puck in an effort to be
+# open instead of finding angles of support".
+static func pull_into_play(ctx: RoleContext, target: Vector3) -> Vector3:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return target
+	# Only meaningful while WE have it: the leash is about being a live passing
+	# OPTION, and there is no option to be when the puck is theirs or loose. A
+	# forechecking station standing off a bottled carrier is doing its job, not
+	# drifting out of an attack that isn't happening.
+	if not _we_possess(ctx):
+		return target
+	var puck: Vector3 = ctx.snapshot.puck_state.position
+	var reach: float = AIActionScoring.expected_pass_speed(puck, target) \
+			* PLAY_CONNECTION_FLIGHT_S
+	var dx: float = target.x - puck.x
+	var dz: float = target.z - puck.z
+	var d: float = sqrt(dx * dx + dz * dz)
+	if d <= reach or d < 0.001:
+		return target
+	return Vector3(puck.x + dx * (reach / d), 0.0, puck.z + dz * (reach / d))
+
+
+# The whole offensive-station decision in one seam, so all five stations behave
+# consistently: hold the forward stand while the read allows it, else back off to
+# the numbers layer — and either way stay inside feedable range of the puck.
+static func offensive_station_target(ctx: RoleContext, stand: Vector3,
+		was_holding: bool) -> Vector3:
+	if may_hold_forward_stand(ctx, was_holding, stand):
+		# Holding: the only bound is staying a live passing option.
+		return pull_into_play(ctx, stand)
+	if _we_possess(ctx):
+		# We still have it, but somebody is behind us with no cover — restore the
+		# numbers layer and no further. The play-connection leash deliberately does
+		# NOT apply to a retreat: it exists to stop a HOLDING station drifting out
+		# of the attack, and clamping a legitimate recovery back up-ice toward the
+		# puck would undo the very coverage the read just called for.
+		return numbers_floor(ctx, stand)
+	# They have it (or it is loose): this is no longer a pinch decision. Retreat to
+	# structure. The play-connection leash does NOT apply — it is about being a
+	# passing option for OUR carrier, and there isn't one.
+	return station_retreat_floor(ctx, stand)
+
+
+# Is any attacker currently deeper (nearer our net) than `stand`?
+static func _attacker_behind(ctx: RoleContext, stand: Vector3,
+		was_holding: bool = false) -> bool:
+	var our_net: Vector3 = ctx.defending_goal_pos
+	var stand_d: float = _xz_distance(stand, our_net)
+	# "Behind me" means MEANINGFULLY behind, not merely a metre nearer the net: a
+	# defending winger covering the point sits LEVEL with a D and must not read as
+	# a man who has beaten him. The grounded span for "same layer" is the cover
+	# envelope — the distance within which one body owns another (a goal-side stand
+	# plus a stick). Past it he is genuinely behind the play.
+	var margin: float = AIRushRead.cover_envelope_m()
+	if was_holding:
+		margin += BEHIND_HOLD_EXTRA_M
+	for lead: Vector3 in ctx.rush_read.attacker_leads:
+		if _xz_distance(lead, our_net) < stand_d - margin:
+			return true
+	return false
+
+
 # ── The race-home read: puck-path intercept model ───────────────────────────
 #
 # Every "am I recoverable / can I hold this forward stand?" question (the
