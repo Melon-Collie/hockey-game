@@ -10,42 +10,61 @@ extends GutTest
 # broken test.
 #
 # ── WHAT IT MEASURED (2026-07) ───────────────────────────────────────────────
-# 1. A goalie forced DOWN saves MORE than one left upright, at every height
-#    reachable from 7 m:
+# THE HEADLINE: the butterfly covers the SAME VERTICAL ENVELOPE as standing. A
+# goalie flat on the ice gloves a puck arriving 5 cm under the crossbar, with
+# essentially the same hand distribution as an upright one:
 #
-#      HIGH loft, 75 mph, aim x -0.80..+0.80    UPRIGHT 4 goals -> DOWN 1 goal
-#      FLAT loft, 75 mph, same sweep            UPRIGHT 1 goal  -> DOWN 0 goals
+#   16 m @ 75 mph, puck arrives y = 1.10 m (crossbar inner ~1.17), aim sweep
+#     UPRIGHT     0 goals   GLOVE 11  BLOCK 10
+#     BUTTERFLY   0 goals   GLOVE 11  BLOCK  9  stick 1   (down at release 21/21)
 #
-#    (down at release in 21/21 cells, so this is not the drop being arrested).
-#    The upright goals are the extreme corners; the splayed butterfly covers
-#    them laterally, and nothing above it is reachable to punish the seal.
+#   5 m @ 25 mph — the soft in-tight roof, y = 1.10 m
+#     UPRIGHT     0 goals   GLOVE 10  BLOCK 10  chest 1
+#     BUTTERFLY   0 goals   GLOVE 11  BLOCK 10
 #
-# 2. Because a HIGH shot cannot arrive high from in tight. Arrival height at the
-#    net, HIGH loft (crossbar inner edge ~1.17 m):
+# That is a code fact, not an emergent one. GoalieBodyConfigBuilder._reach_glove
+# and _reach_blocker end with
 #
-#       dist   65 mph   75 mph   85 mph
-#        3.0     0.43     0.38     0.34
-#        5.0     0.66     0.59     0.53
-#        7.0     0.84     0.76     0.69
-#       12.0     1.09     1.04     0.98
-#       16.0     1.07     1.10     1.09
+#     c.glove_pos = Vector3(glove_x, target_y, glove_z)
 #
-#    Loft is a fixed vertical LAUNCH SPEED, not a solved arc (by design — it is
-#    what stops a hard shot sailing over the net), so in tight the puck simply
-#    has not climbed yet. A max-power shot from 3 m arrives at 0.38 m.
+# where `target_y = clampf(intercept_y, react_hand_y_min, react_hand_y_max)` —
+# 0.50 to 1.55 m, with NO arm-length constraint and NO shoulder anchor. The hand
+# is placed in goalie-ROOT-local space and the root does not drop when he does,
+# so y = 1.55 is reachable from the butterfly exactly as it is from the feet.
+# `_apply_elevated_shot_reaction` is called identically from STANDING, READY,
+# BUTTERFLY, COILING and SLIDING.
 #
-# 3. The roofing counter exists, but it costs PACE, and it has a minimum range.
-#    Arrival height vs power, HIGH loft:
+# The ONLY cost of being down is that the resting glove sits lower (0.90 m
+# upright, 0.44 m in the butterfly, per _set_butterfly_pose), so the reach has
+# 0.46 m further to travel under `glove_react_max_speed`. At any range with time
+# to spare that costs nothing at all.
 #
-#       dist   25mph   35mph   45mph   55mph   65mph   75mph
-#        2.0    0.73    0.53    0.42    0.35    0.30    0.26
-#        3.0    0.95    0.74    0.60    0.50    0.43    0.38
-#        5.0    1.10    1.01    0.87    0.75    0.66    0.59
-#        7.0    0.88    1.10    1.04    0.94    0.84    0.76
+# SECOND, COMPOUNDING FACT: in tight there is nothing above him to shoot at
+# anyway. Being down therefore also gains lateral coverage for free —
 #
-#    Bar height is reachable from ~4 m out on a soft release and not at all
-#    inside ~3 m at any power — which matches the documented design intent
-#    (CLAUDE.md: min bar-height roofing distance ~3.7 m on a balanced blade).
+#   HIGH loft, 75 mph, 7 m, aim x -0.80..+0.80    UPRIGHT 4 goals -> DOWN 1 goal
+#   FLAT loft, 75 mph, same sweep                 UPRIGHT 1 goal  -> DOWN 0 goals
+#
+#   arrival height at the net, HIGH loft (crossbar inner ~1.17 m):
+#      dist   65 mph   75 mph   85 mph
+#       3.0     0.43     0.38     0.34
+#       5.0     0.66     0.59     0.53
+#       7.0     0.84     0.76     0.69
+#      12.0     1.09     1.04     0.98
+#      16.0     1.07     1.10     1.09
+#
+# Loft is a fixed vertical LAUNCH SPEED, not a solved arc (by design — it is what
+# stops a hard shot sailing over the net), so in tight the puck has not climbed
+# yet. The roofing counter costs pace and has a floor: bar height is reachable
+# from ~4 m on a soft release and not at all inside ~3 m at any power, matching
+# the documented intent (CLAUDE.md: ~3.7 m on a balanced blade).
+#
+#   arrival height vs power, HIGH loft:
+#      dist   25mph   35mph   45mph   55mph   65mph   75mph
+#       2.0    0.73    0.53    0.42    0.35    0.30    0.26
+#       3.0    0.95    0.74    0.60    0.50    0.43    0.38
+#       5.0    1.10    1.01    0.87    0.75    0.66    0.59
+#       7.0    0.88    1.10    1.04    0.94    0.84    0.76
 #
 # ── WHY THIS MATTERS ─────────────────────────────────────────────────────────
 # Three separate experiments made the goalie pre-commit and all three measured
@@ -57,13 +76,10 @@ extends GutTest
 # butterfly gives up nothing: there is only one plane to shoot at, so there is
 # nothing for a height fake to choose between. Deception needs two live options.
 #
-# A contributing gap: GoalieBodyConfigBuilder._apply_elevated_shot_reaction runs
-# IDENTICALLY in STANDING, READY, BUTTERFLY, COILING and SLIDING. The resting
-# glove drops (0.90 m upright -> 0.44 m down) so the reach has further to travel
-# under `glove_react_max_speed`, but the reach TARGET and the speed cap are the
-# same. A down goalie in this model has the same upper-net envelope as a standing
-# one; only the trip is longer, and the measurement above says that cost is
-# smaller than the lateral coverage the splay buys.
+# But the envelope is the deeper cause, and it bites at MEDIUM range too, where
+# elevation IS achievable — which is exactly where a height fake ought to pay.
+# A seal that concedes nothing above it cannot be punished for sealing, so
+# committing is never a trade and deception has no lever anywhere.
 #
 # Report-only. Nothing here is a decision — it is the evidence for one.
 
@@ -78,6 +94,14 @@ var _puck: Node = null
 var _shooter: Skater = null
 var _ctrl: GoalieController = null
 var _h: RefCounted = null
+var _parts: Dictionary = {}
+const PART_NAME: Dictionary = {
+	GoalieSaveRules.SavePart.PAD: "pad",
+	GoalieSaveRules.SavePart.GLOVE: "GLOVE",
+	GoalieSaveRules.SavePart.BLOCKER: "BLOCK",
+	GoalieSaveRules.SavePart.CHEST: "chest",
+	GoalieSaveRules.SavePart.STICK: "stick",
+}
 
 
 func before_each() -> void:
@@ -103,12 +127,14 @@ func _arrival_y(d: float, mph: float, loft: int) -> float:
 
 
 # Sweep the mouth from a settled keeper, optionally forcing him down first.
-func _sweep(force_down: bool, loft: int) -> String:
-	var spot := Vector3(0.0, 0.0, GOAL_Z + 7.0)
+func _sweep(force_down: bool, loft: int, dist: float = 7.0,
+		mph: float = 75.0) -> String:
+	var spot := Vector3(0.0, 0.0, GOAL_Z + dist)
 	var row: String = ""
 	var goals: int = 0
 	var still_down: int = 0
 	var cells: int = 0
+	_parts = {}
 	var a: float = -0.80
 	while a <= 0.801:
 		_ctrl.reset_to_crease()
@@ -120,19 +146,21 @@ func _sweep(force_down: bool, loft: int) -> String:
 			if _ctrl._sm.is_down():
 				still_down += 1
 		cells += 1
-		var o: int = _h.fire_at(spot, Vector3(a, 0.0, GOAL_Z), loft, 75.0 * MPH, 0.0)
+		var o: int = _h.fire_at(spot, Vector3(a, 0.0, GOAL_Z), loft, mph * MPH, 0.0)
 		if o == Harness.GOAL:
 			row += "G"
 			goals += 1
 		elif o == Harness.SAVE:
 			row += "s"
+			var k: String = PART_NAME.get(_h.last_part, "?")
+			_parts[k] = int(_parts.get(k, 0)) + 1
 		else:
 			row += "x"
 		a += 0.08
 	var held: String = ""
 	if force_down:
 		held = "  (down at release %d/%d)" % [still_down, cells]
-	return "%s  %d goals%s" % [row, goals, held]
+	return "%s  %d goals%s  %s" % [row, goals, held, str(_parts)]
 
 
 func test_report_whether_going_down_gives_anything_up() -> void:
@@ -157,4 +185,16 @@ func test_report_whether_going_down_gives_anything_up() -> void:
 		var nm: String = "HIGH" if loft == ShotMechanics.ELEVATION_HIGH else "FLAT"
 		gut.p("  %s UPRIGHT  |%s" % [nm, _sweep(false, loft)])
 		gut.p("  %s BUTTERFLY|%s" % [nm, _sweep(true, loft)])
+	gut.p("")
+	gut.p("THE CASE THAT SHOULD PUNISH THE SEAL — medium range, puck arriving high:")
+	for cell: Vector2 in [Vector2(9.0, 65.0), Vector2(12.0, 65.0),
+			Vector2(16.0, 75.0), Vector2(5.0, 25.0)]:
+		var d: float = cell.x
+		var mph: float = cell.y
+		gut.p("  %.0f m @ %.0f mph  (arrives y=%.2f m)"
+				% [d, mph, _arrival_y(d, mph, ShotMechanics.ELEVATION_HIGH)])
+		gut.p("     UPRIGHT  |%s"
+				% _sweep(false, ShotMechanics.ELEVATION_HIGH, d, mph))
+		gut.p("     BUTTERFLY|%s"
+				% _sweep(true, ShotMechanics.ELEVATION_HIGH, d, mph))
 	assert_true(true, "report")
