@@ -292,8 +292,20 @@ extends Node
 # Stickhandle jitter is absorbed TEMPORALLY instead: the tracking lerp slows
 # with distance (`tracking_speed_far` — the quiet-eye lag), low-passing the
 # dangle wiggle without moving the goalie's set point off the puck.
-@export var shooter_weight_standing: float = 0.25
-@export var shooter_weight_butterfly: float = 0.30
+# ONE VALUE, measured. This was four constants — standing 0.25, butterfly 0.30,
+# far 0.10, and a pinned-windup override — blended by stance and distance. The
+# whole system turns out to move the goalie a few CENTIMETRES: for a carrier with
+# the puck 0.6 m to the side, the entire span from w=0 to w=0.30 is ~10 cm at
+# 3 m, ~5 cm at 6 m and ~3 cm at 9 m, because his lateral target is an arc
+# position that is damped and geometrically compressed, not a raw lerp.
+#
+# So a flat 0.20 reproduces the old lookup to within ~1 cm at every range
+# (3 m: 0.272 vs 0.261, 6 m: 0.138 vs 0.149, 9 m: 0.093 vs 0.104) — against a
+# 3.8 cm puck and a 1.83 m net. The stance split was 0.05 apart with no stated
+# rationale, and the distance fade's justification is angular, which cancels: the
+# jitter and the offset both scale with 1/distance, so the ratio the fade was
+# reasoning about does not actually change with range.
+@export var shooter_weight: float = 0.20
 # PINNED-WINDUP override — applies to BOTH shot wind-ups
 # (SkaterStateMachine.state_pins_puck). While a carrier winds one up the puck is
 # rigidly pinned to the body and does NOT jitter: the slapper pins it at a fixed
@@ -307,6 +319,16 @@ extends Node
 # side" seam: the shot leaves from the pinned puck ~1 m over, but the goalie set his
 # angle 0.25 m closer to center. Track the pinned puck itself (weight → 0) so the
 # goalie squares to where the shot actually comes from.
+# The one exception that survives, and it is a ZERO rather than a different
+# weight. Worth ~3.5 cm of squaring at 3 m on a 1 m pin — small, but it is free
+# (a pinned puck has no jitter to reject, so the bias has no job) and it is the
+# only case with a reported exploit behind it.
+#
+# ⚠️ The prose above overstated it: it argued the bias moves him ~offset·(1-w),
+# i.e. ~25 cm on a 1 m pin. Measured, the real positional consequence is 3.5 cm,
+# because the arc solve compresses lateral target changes. The reasoning still
+# holds — track the pinned puck, it IS the shot origin — but the magnitude does
+# not, so do not reach for this lever expecting it to move him far.
 @export var shooter_weight_pinned_windup: float = 0.0
 # Slapper aim shade (anticipatory read): squaring to the pinned puck alone leaves
 # the against-the-grain corner of a committed slot slapshot open by ~1 m — the
@@ -334,15 +356,13 @@ extends Node
 # _is_reading_shot_threat: readiness to move is direction-agnostic, so relocating
 # doesn't invalidate it.
 @export_range(0.0, 1.0, 0.05) var slapper_aim_shade: float = 0.7
-# Distance ramp for the body-bias fade, the puck-lead fade, and the tracking-lag
-# scale. Between `chest_track_near_distance` and `chest_track_far_distance` the
-# effective shooter weight lerps toward `shooter_weight_far` (DOWN — the goalie
-# is puck-squared at range), the jittery puck-velocity lead fades to zero, and
-# the tracking lerp slows toward `tracking_speed_far`. Distances are Euclidean
-# carrier→goal-center.
+# Distance ramp for the puck-lead fade and the tracking-lag scale. Between
+# `chest_track_near_distance` and `chest_track_far_distance` the jittery
+# puck-velocity lead fades to zero and the tracking lerp slows toward
+# `tracking_speed_far`. Distances are Euclidean carrier→goal-center. (It no
+# longer ramps the body bias — see `shooter_weight`, now one flat value.)
 @export var chest_track_near_distance: float = 2.5
 @export var chest_track_far_distance: float = 7.0
-@export var shooter_weight_far: float = 0.10
 # Lead-the-target time. Threat position projects forward by
 # `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
 # toward where the carrier WILL be — the realistic answer to "skater is
@@ -1685,7 +1705,8 @@ func _compute_threat_position() -> Vector3:
 		return puck.global_position + puck_lead
 	# COILING and SLIDING share the down-state chest weight (they're part of
 	# the butterfly cycle, just at different points in the motion).
-	var base_w: float = shooter_weight_butterfly if _sm.is_down() else shooter_weight_standing
+	# One flat weight — see the `shooter_weight` doc-block for the measurement
+	# that collapsed the stance split and the distance fade into it.
 	# Distance-scaled chest tracking: far out, play the shooter's chest almost
 	# entirely (the dangle is irrelevant until it's in tight) and fade the puck
 	# lead to zero so forehand-backhand jitter stops wobbling the body; in tight,
@@ -1695,13 +1716,11 @@ func _compute_threat_position() -> Vector3:
 	var chest_t: float = GoalieBehaviorRules.chest_tracking_factor(
 			carrier_dist, chest_track_near_distance, chest_track_far_distance)
 	_chest_t = chest_t
-	# Body bias fades OUT with distance (shooter_weight_far < base): the goalie
-	# squares to the puck at range and keeps only a small in-tight body dash.
 	# EITHER shot windup is the exception: the puck is pinned to the body (no
 	# jitter to reject) and IS the shot origin at every range, so square to it
-	# directly — no body bias, no distance blend. See shooter_weight_pinned_windup.
+	# directly — no body bias at all. See shooter_weight_pinned_windup.
 	var w: float = shooter_weight_pinned_windup if _reading_pinned_windup \
-			else lerpf(base_w, shooter_weight_far, chest_t)
+			else shooter_weight
 	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
 			puck.global_position, carrier.global_position, true, w)
 	# Two leads: CARRIER velocity captures body motion (sustained skating) and is
