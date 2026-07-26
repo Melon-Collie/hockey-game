@@ -264,6 +264,17 @@ func test_disguise_delta() -> void:
 #    FINISHES on the true corner leaves the belief nearly right at release, so
 #    it deceives less than one that never moves off the decoy.
 #
+#    ARM INERTIA WAS TRIED AND DOES NOTHING — recorded so it is not retried. A
+#    second-order servo on the reach (acceleration cap instead of a pure speed
+#    clamp, the shape SkaterController.max_blade_accel uses) was built and swept
+#    from 80 down to 18 m/s²; every column was identical to the first-order
+#    version at every value. The reason is the same one that makes reach SPEED
+#    irrelevant here: the distances are short next to the arm's capability. The
+#    reach to a corner is ~0.26 m, about 0.05 s of a 0.21 s flight, so the arm
+#    arrives and PARKS. When the belief converges it starts again from rest, and
+#    a servo that models momentum has no momentum to bite on. The binding
+#    constraint in this whole system is the BELIEF, not the arm's kinematics.
+#
 #    The reach DEFICIT cannot measure R1 at all — it is sampled at the instant
 	#    of release, before the read has been acted on, so it sees only the
 	#    pre-lean. It was the right instrument for the PRE-R1 defect (where the
