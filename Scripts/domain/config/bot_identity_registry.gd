@@ -21,7 +21,8 @@ class_name BotIdentityRegistry
 # fields an impossible frame. A super-bot is unrepresentable by construction.
 #
 # JSON schema (attributes v4, body + gear). Height may be a raw inches value
-# (68..79 = 5'8"..6'7") or a legacy 1..5 step (mapped onto the anchor heights);
+# (67..80 = 5'7"..6'8") or a legacy 1..5 step (mapped onto the frozen v3
+# heights, which still top out at 6'7" so migrated bots keep their body);
 # weight is lbs inside the height's band (omit for the height's neutral frame);
 # gear slots are 0/1/2 with 1 = balanced (profile: 0 agility / 2 power;
 # curve: 0 closed / 2 open; flex: 0 whippy / 2 stiff; length: 0 short / 2 long

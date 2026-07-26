@@ -255,7 +255,7 @@ func test_parse_migrates_tier_era_preset() -> void:
 	])
 	assert_eq(parsed.size(), 1)
 	assert_eq(parsed[0]["attrs"].height, 79)
-	assert_eq(parsed[0]["attrs"].weight, PlayerAttributes.weight_for_bmi(79, 27.75),
+	assert_eq(parsed[0]["attrs"].weight, PlayerAttributes.weight_for_frame_t(79, 0.75),
 			"strong Checking → SOLID frame")
 	assert_eq(parsed[0]["attrs"].length, PlayerAttributes.LENGTH_LONG)
 

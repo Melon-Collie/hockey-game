@@ -216,7 +216,7 @@ var is_left_handed: bool = true
 var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
 
 # Per-player build (attributes v4, body + gear): a free HEIGHT in inches
-# (5'8"..6'7"), a free WEIGHT in lbs (clamped to the height's BMI band), and
+# (5'7"..6'8"), a free WEIGHT in lbs (clamped to the height's BMI band), and
 # four gear slots (0/1/2, 1 = balanced). Every axis is lateral — validation is
 # coercion, not rejection. Default is the neutral build (6'1"/201, balanced)
 # so a fresh install plays identically to the shipped baseline.

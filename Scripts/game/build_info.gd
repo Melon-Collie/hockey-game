@@ -199,7 +199,11 @@ const VERSION: String = "dev"
 #      game's shot log at game-over so clients can render their own post-game
 #      shot map. Adding an @rpc method shifts the rpc-config ordering both peers
 #      hash, so mixed builds must be refused.
-const PROTOCOL_VERSION: int = 45
+# v46: the height dial extends to 6'8" (80"). Height already rode the wire as a
+#      plain int, but the VALUE 80 is new: an older peer coerces it back to 79
+#      and would then simulate a different mass, top speed and reach than the
+#      host, diverging prediction. Mixed builds must be refused.
+const PROTOCOL_VERSION: int = 46
 
 
 func _ready() -> void:

@@ -6,15 +6,16 @@ extends RefCounted
 # Per-skater build on the v4 BODY + GEAR model (docs/attributes-v4-plan.md).
 # A build is:
 #
-#   • HEIGHT — a free CONTINUOUS dial in inches (every inch 5'8"..6'7"). Tables
+#   • HEIGHT — a free CONTINUOUS dial in inches (every inch 5'7"..6'8"). Tables
 #     are authored at 5 anchor heights and interpolate. Height decides reach,
 #     the speed↔agility baseline fork (speed hump peaks at 6'1", agility
 #     small-favored) and the shot-power baseline (big-favored).
-#   • WEIGHT — a free CONTINUOUS dial in pounds, bounded per height by ONE
-#     authored BMI band (24.0 LEAN .. 29.0 HEAVY, neutral 26.5): a single
-#     interval generates a plausible pounds range at every inch, so implausible
-#     bodies (6'6"/160) are unrepresentable by construction. Weight decides
-#     mass (linearly — mass IS the physical/checking system now), the
+#   • WEIGHT — a free CONTINUOUS dial in pounds, bounded per height by an
+#     authored BMI band (22.5 LEAN .. 29.0 HEAVY, neutral 26.5) floored by an
+#     absolute playable mass (160 lb): together they generate a plausible
+#     pounds range at every inch, so implausible bodies (6'6"/160) are
+#     unrepresentable by construction. Weight decides mass (linearly — mass IS
+#     the physical/checking system now), the
 #     accel↔momentum fork (lean = first-step burst; momentum is mass-emergent),
 #     an agility bite (F = mv²/r — heavy turns wide and stops long, the
 #     counterweight that makes the dial a real seesaw; glide is exempt so the
@@ -58,26 +59,107 @@ extends RefCounted
 # NetworkManager peer table (6 ints replicated at join, PROTOCOL v36).
 
 # Height is stored in INCHES and is a free CONTINUOUS dial: every inch from
-# 5'8" (68) to 6'7" (79) is playable. Tables are authored at 5 anchor heights
+# 5'7" (67) to 6'8" (80) is playable. Tables are authored at 5 anchor heights
 # (ANCHOR_INCHES); heights in between linearly interpolate the adjacent rows.
-const HEIGHT_MIN: int = 68     # 5'8"
+const HEIGHT_MIN: int = 67     # 5'7"
 const HEIGHT_MEDIUM: int = 73  # 6'1"  (neutral)
-const HEIGHT_MAX: int = 79     # 6'7"
+const HEIGHT_MAX: int = 80     # 6'8"
 
 # The 5 height table rows sit at these heights (inches). 5'10" (row 1) is the
 # mesh-native anchor where the reach/height multiplier is exactly 1.0.
-const ANCHOR_INCHES: Array[int] = [68, 70, 73, 76, 79]  # 5'8"..6'7"
+#
+# BOTH END ANCHORS MOVED when the range was extended (6'7"→6'8" at the top,
+# 5'8"→5'7" at the bottom) rather than adding sixth/seventh rows, which would
+# have left anchors one inch apart at the ends. Each end row was rebalanced so
+# the outermost segment's line still passes through the OLD end value — i.e.
+# that segment's per-inch slope simply continues for one more inch:
+#
+#     V80 = V79 + (V79 − V76)/3        V67 = V68 − (V70 − V68)/2
+#
+# So every previously-playable height (5'8"–6'7") keeps the values it had (the
+# bottom end exactly; the top end within 0.00025, pure constant-rounding), and
+# the two new heights are real extensions of each curve rather than copies of
+# their neighbours. The four 4-decimal constants below are the bottom-row
+# halvings — carried to 4 places precisely so 5'8" and 5'9" stay bit-exact.
+const ANCHOR_INCHES: Array[int] = [67, 70, 73, 76, 80]  # 5'7"..6'8"
 
-# ── Weight band (single BMI interval — see plan doc §3.2) ─────────────────────
+# The legacy 1..5 height STEP mapping is frozen at the v3 height set, which
+# ran 5'8"–6'7". It deliberately does NOT track ANCHOR_INCHES: a saved tier-era
+# build should keep the body it had, not gain or lose an inch because the range
+# was extended later.
+const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
+
+# ── Weight band (BMI interval + absolute floor — see plan doc §3.2) ───────────
 # One authored band generates the per-height pounds range: lbs = BMI·in²/703.
-# Anchors are equally spaced (1.25 BMI) so frame interpolation is uniform.
+#
+# CALIBRATION (2026-07, against a 46-player listed-height/weight sample of the
+# current NHL). Two things the sample settles:
+#
+#   • BMI IS the right normalizer. Regressing ln(weight) on ln(height) over the
+#     sample gives an exponent of 2.01 — h² on the nose — and BMI itself has no
+#     usable drift with height (+0.007 BMI/inch). So the band is a horizontal
+#     interval, NOT a height-tilted one: mean BMI 26.05, SD 1.61.
+#
+#   • The LEAN edge was the bug, and it bit tall builds hardest. A flat 24.0
+#     floor is set by what SHORT players can get away with, because their lower
+#     tail is truncated by an ABSOLUTE mass floor (~160 lb — Lane Hutson at
+#     5'9"/162 is the lightest body in the league) rather than by a ratio: you
+#     have to survive contact against 200-lb bodies, and that bound is in
+#     pounds, not in BMI. Tall players are nowhere near that floor, so their
+#     real lower tail runs much leaner — and a flat 24.0 forbade it. At 6'4"
+#     the old floor was 197 lb, which excludes two actual 6'4" NHL defensemen
+#     (Noah Dobson 195, Sam Rinzel 194). The model now says the same thing the
+#     bodies do: a RATIO ceiling (carrying fat costs skating) and an ABSOLUTE
+#     floor (you cannot be too light to play), and the band is their overlap.
+#
+# WHERE THE TWO FLOORS SIT. They are independent levers covering different
+# heights, and each is fitted to the tail it actually governs:
+#
+#   • The RATIO floor (23.0) governs 5'11" and up, and is set just under the
+#     leanest real bodies there — Reichel (6'0"/170 = 23.05) and Ehlers
+#     (6'0"/172 = 23.32) at the low end, then a dense 23.6–23.9 cluster
+#     (Rinzel, Dobson, K. Johnson, Pettersson, Edvinsson). It puts 6'4" at
+#     189, clearing Dobson 195 / Rinzel 194.
+#   • The ABSOLUTE floor (162) governs 5'7"–5'10", where the ratio floor falls
+#     to 147–160 and stops meaning anything. 162 IS the lightest player in the
+#     NHL (Lane Hutson, 5'9"), i.e. "you cannot be lighter than the lightest
+#     man who has ever held the job." The lightest bodies at the neighbouring
+#     short heights — Stankoven 5'8"/165, Garland 5'10"/165 — clear it by 3.
+#
+# The band edge landing exactly on one player is the shape of a fitted edge,
+# not a defect: the 29.0 ceiling lands exactly on Kaprizov (5'10"/202) the
+# same way.
+#
+# Two earlier passes got the lean edge wrong in the same direction. 22.5 was
+# chasing a stale card — Elias Pettersson's 6'2"/176 (BMI 22.59) looked like a
+# lone outlier, but that is his draft era (he measured 164 lb at the 2017
+# combine) and he is listed 185 today, BMI 23.75, comfortably inside. 23.5
+# then over-corrected past Reichel and Ehlers. The lesson both times: fit the
+# edge to the tail's SHAPE, and when the short heights misbehave reach for the
+# absolute floor rather than bending the ratio, because the thing that bounds
+# a small player is pounds, not a ratio.
+#
+# The band is deliberately ASYMMETRIC about MEDIUM (3.0 BMI lean-side vs 2.5
+# heavy-side): the empirical center sits at 26.05, but MEDIUM is pinned to the
+# canonical 6'1"/201 NHL-average frame because that is the game's neutral
+# identity — every @export default is authored there. frame_t() is piecewise
+# about MEDIUM so the neutral still lands on exactly 0.5 and the frame anchors
+# stay evenly spaced in frame-t (which is the axis the _f() tables index).
+#
 # Calibration namechecks: neutral = 6'1"/201 (NHL-average build); McDavid
-# (6'1"/194) lean-mid; DeBrincat (5'8"/180) ≈ SOLID; Ovechkin (6'3"/238) =
-# 6'4"-HEAVY exactly; Tage Thompson (6'6"/218) ≈ tall-LEAN.
-const BMI_LEAN: float = 24.0
+# (6'1"/194) lean-mid; Dobson/Rinzel (6'4"/195, 194) ≈ 6'4"-LEAN; DeBrincat
+# (5'8"/180) ≈ SOLID; Kaprizov (5'10"/202) = 5'10"-HEAVY exactly; Tage Thompson
+# (6'6"/218) lean-mid; Oleksiak (6'7"/252) ≈ 6'7"-HEAVY.
+const BMI_LEAN: float = 23.0
 const BMI_MEDIUM: float = 26.5   # neutral frame
 const BMI_HEAVY: float = 29.0
-const BMI_ANCHOR_STEP: float = 1.25  # anchor spacing: 24.0 .. 29.0 in 5 rows
+
+# Absolute lower bound on a playable body, in pounds — the floor that the BMI
+# ratio cannot express. Binds at 5'7"–5'10", where the 23.0 ratio floor falls
+# to 147–160 and would allow bodies lighter than anyone who has ever held an
+# NHL job; from 5'11" up the ratio floor is the higher of the two. See the
+# band block above for why 162 and not 160.
+const MIN_PLAYABLE_LBS: int = 162
 
 # Neutral mass reference (lbs): BMI 26.5 at 73" → round(26.5·73²/703) = 201.
 # mass_mult is LINEAR in displayed weight — deliberately wider than v3's
@@ -116,17 +198,17 @@ const LENGTH_LONG: int = 2       # +reach / tip speed / contest momentum, +inert
 # re-widens the spread laterally.
 
 # Speed baseline (max_speed). The hump: top speed peaks at medium height.
-const _SPEED_H: Array[float] = [0.990, 0.995, 1.000, 0.995, 0.990]
+const _SPEED_H: Array[float] = [0.9875, 0.995, 1.000, 0.995, 0.988]
 
 # Agility baseline (turn rate / brake / facing / lateral). Small-favored.
-const _AGILITY_H: Array[float] = [1.050, 1.020, 1.000, 0.960, 0.930]
+const _AGILITY_H: Array[float] = [1.065, 1.020, 1.000, 0.960, 0.920]
 
 # Shot-power baseline (charged wrister/slapper ceiling). Big-favored — the
 # leverage a long frame loads into a shot. Wind-up derives inversely.
-const _SHOT_H: Array[float] = [0.900, 0.940, 1.000, 1.050, 1.090]
+const _SHOT_H: Array[float] = [0.880, 0.940, 1.000, 1.050, 1.103]
 
 # Hitbox cylinder radius — frame width. Height sets the skeleton's breadth…
-const _RADIUS: Array[float] = [0.95, 0.975, 1.00, 1.05, 1.10]
+const _RADIUS: Array[float] = [0.9375, 0.975, 1.00, 1.05, 1.117]
 # …and the frame widens it (a heavy body IS wider — matches the visual frame
 # bulk, so the hitbox tracks the silhouette): bigger poke target and net-front
 # screen for the heavy build, slimmer profile for the lean one.
@@ -134,11 +216,11 @@ const _RADIUS_F: Array[float] = [0.96, 0.98, 1.00, 1.03, 1.06]
 
 # Body height (mesh Y-scale, arm/ROM length, hand heights). Mesh-native 5'10"
 # is row 1, so the 1.0 identity sits there (NOT the 6'1" gameplay neutral).
-const _HEIGHT: Array[float] = [0.971, 1.000, 1.043, 1.086, 1.129]
+const _HEIGHT: Array[float] = [0.9565, 1.000, 1.043, 1.086, 1.143]
 
 # Stick length — equipment, ~0.65× the height deviation from mesh-native 5'10".
 # Height sets the BAND CENTER (real sticks are cut to the body)…
-const _STICK_LEN: Array[float] = [0.981, 1.000, 1.028, 1.056, 1.084]
+const _STICK_LEN: Array[float] = [0.9715, 1.000, 1.028, 1.056, 1.093]
 # …and the LENGTH gear slot leans it — THE FIRST LIVE GEAR SLOT. A lean on
 # your height's stick, not an absolute pick, so max-height + LONG can't stack
 # reach beyond the tuned corner. Symmetric ±4% to start (whether LONG should
@@ -156,9 +238,9 @@ const _LENGTH_LEAN: Array[float] = [0.960, 1.000, 1.040]  # SHORT / STANDARD / L
 # step and +cornering, −top speed. The speed lean is what re-widens the
 # sprint band the body plane deliberately compressed (~20.5–24 mph across
 # profiles, approaching the v3 20–25 target). STACKED AGILITY CORNERS
-# (body × gear, pinned by test): best 5'8"-lean-agility ≈ 1.14, worst
-# 6'7"-heavy-power ≈ 0.85 — a self-chosen extreme, deliberately below the
-# involuntary body floor (~0.89).
+# (body × gear, pinned by test): best 5'7"-lean-agility ≈ 1.15, worst
+# 6'8"-heavy-power ≈ 0.84 — a self-chosen extreme, deliberately outside the
+# involuntary body floor/ceiling (~0.88 / ~1.10).
 const _PROFILE_SPEED_LEAN: Array[float] = [0.96, 1.00, 1.04]    # agility / balanced / power
 const _PROFILE_AGILITY_LEAN: Array[float] = [1.05, 1.00, 0.95]
 const _PROFILE_ACCEL_LEAN: Array[float] = [1.04, 1.00, 0.98]
@@ -204,8 +286,8 @@ const _ACCEL_F: Array[float] = [1.080, 1.040, 1.000, 0.980, 0.970]
 # Grounded in F = mv²/r: at fixed leg strength more mass means a wider arc and
 # a longer stop. This is the counterweight that makes the weight dial a real
 # seesaw (mass 1.28 is a big buy; without this its only tax was mild accel).
-# CORNER BUDGET (body-only): best 5'8"-lean 1.05·1.03 ≈ 1.08, worst 6'7"-heavy
-# 0.93·0.96 ≈ 0.89 — pinned just under the v3 "feels bad but playable" floor;
+# CORNER BUDGET (body-only): best 5'7"-lean 1.065·1.03 ≈ 1.10, worst 6'8"-heavy
+# 0.92·0.96 ≈ 0.88 — pinned just under the v3 "feels bad but playable" floor;
 # the skate-profile gear lean stacks on top later, so re-check the stacked
 # corners when that slot lands. Deliberately NOT applied to edge glide — see
 # agility_glide_mult.
@@ -223,8 +305,8 @@ const _STAMINA_REGEN_F: Array[float] = [1.25, 1.12, 1.00, 0.90, 0.82]
 # Silhouette = body (v4): height drives overall scale + torso/head; frame
 # drives uniform limb/shoulder bulk (replacing the v3 per-tier limb tells).
 # Gear reads from the rendered equipment itself, not the body.
-const _TORSO_BULK: Array[float] = [0.90, 0.96, 1.00, 1.07, 1.14]  # height
-const _HEAD_BULK: Array[float] = [0.95, 0.98, 1.00, 1.03, 1.06]   # height
+const _TORSO_BULK: Array[float] = [0.87, 0.96, 1.00, 1.07, 1.163]  # height
+const _HEAD_BULK: Array[float] = [0.935, 0.98, 1.00, 1.03, 1.07]   # height
 const _FRAME_BULK: Array[float] = [0.90, 0.95, 1.00, 1.07, 1.14]  # frame lean→heavy
 
 # ── Sprint / carry constants ──────────────────────────────────────────────────
@@ -292,8 +374,10 @@ static func weight_for_bmi(inches: int, bmi: float) -> int:
 	return int(roundf(bmi * float(h * h) / 703.0))
 
 
+# The leaner of the two bounds never wins: the ratio floor and the absolute
+# playable-mass floor are both real, so the band starts at whichever is higher.
 static func weight_min(inches: int) -> int:
-	return weight_for_bmi(inches, BMI_LEAN)
+	return maxi(weight_for_bmi(inches, BMI_LEAN), MIN_PLAYABLE_LBS)
 
 
 static func weight_max(inches: int) -> int:
@@ -321,9 +405,35 @@ static func coerce_weight(inches: int, lbs: int) -> int:
 # 0.5, so the rounded display weight can't nudge a neutral build off the 1.0
 # multipliers (raw BMI of 201 lbs is 26.515, a ~0.3% lerp leak).
 func frame_t() -> float:
-	var lo: float = float(weight_min(height))
-	var hi: float = float(weight_max(height))
-	return clampf((float(weight) - lo) / maxf(hi - lo, 1.0), 0.0, 1.0)
+	return frame_t_for(height, weight)
+
+
+# PIECEWISE about MEDIUM — each half of the band maps onto half of frame-t. The
+# band is asymmetric (the lean side is wider, see the band block above), so a
+# single lerp across [min, max] would slide the neutral build off 0.5 and cost
+# it its 1.0 multipliers. Splitting at MEDIUM pins all three anchors exactly
+# (min → 0, neutral → 0.5, max → 1) at every height, including the heights
+# where MIN_PLAYABLE_LBS truncates the lean half.
+static func frame_t_for(inches: int, lbs: int) -> float:
+	var mid: float = float(weight_neutral(inches))
+	var w: float = float(lbs)
+	if w <= mid:
+		var lo: float = float(weight_min(inches))
+		return clampf(0.5 * (w - lo) / maxf(mid - lo, 1.0), 0.0, 0.5)
+	var hi: float = float(weight_max(inches))
+	return clampf(0.5 + 0.5 * (w - mid) / maxf(hi - mid, 1.0), 0.5, 1.0)
+
+
+# Inverse of frame_t_for: the displayed pounds at a frame position. This is the
+# frame-anchor constructor — LEAN/LIGHT/MEDIUM/SOLID/HEAVY are t = 0/.25/.5/
+# .75/1 — and what the picker rides when the height slider moves, so a lean
+# build stays lean as it grows.
+static func weight_for_frame_t(inches: int, t: float) -> int:
+	var mid: float = float(weight_neutral(inches))
+	var f: float = clampf(t, 0.0, 1.0)
+	if f <= 0.5:
+		return int(roundf(lerpf(float(weight_min(inches)), mid, f / 0.5)))
+	return int(roundf(lerpf(mid, float(weight_max(inches)), (f - 0.5) / 0.5)))
 
 
 func height_inches() -> int:
@@ -499,11 +609,11 @@ static func from_dict(d: Dictionary) -> PlayerAttributes:
 static func migrate_tiers(p_height: int, skating: int, skill: int,
 		checking: int) -> PlayerAttributes:
 	var h: int = coerce_height(p_height)
-	var frame_bmi: float = BMI_MEDIUM
+	var frame: float = 0.5
 	if checking >= 3:
-		frame_bmi = BMI_MEDIUM + BMI_ANCHOR_STEP
+		frame = 0.75
 	elif checking <= 1:
-		frame_bmi = BMI_MEDIUM - BMI_ANCHOR_STEP
+		frame = 0.25
 	var p_profile: int = GEAR_BALANCED
 	if skating >= 3:
 		p_profile = PROFILE_POWER if h >= HEIGHT_MEDIUM else PROFILE_AGILITY
@@ -513,7 +623,7 @@ static func migrate_tiers(p_height: int, skating: int, skill: int,
 		p_length = LENGTH_LONG
 	elif skill >= 3 and h < HEIGHT_MEDIUM:
 		p_length = LENGTH_SHORT
-	return PlayerAttributes.new(h, weight_for_bmi(h, frame_bmi),
+	return PlayerAttributes.new(h, weight_for_frame_t(h, frame),
 			p_profile, p_curve, GEAR_BALANCED, p_length)
 
 
@@ -566,19 +676,21 @@ static func _h(table: Array[float], inches: int) -> float:
 	return lerpf(table[a[0]], table[a[1]], a[2])
 
 
-# 5-vec lookup interpolated by frame position (BMI anchors are equally spaced,
-# so frame_t maps linearly onto the row axis).
+# 5-vec lookup interpolated by frame position. The anchors are evenly spaced in
+# FRAME-T (0/.25/.5/.75/1) — not in BMI, which the asymmetric band leaves
+# uneven — so frame_t maps linearly onto the row axis.
 func _f(table: Array[float]) -> float:
 	var pos: float = frame_t() * float(table.size() - 1)
 	var lo: int = clampi(int(floorf(pos)), 0, table.size() - 2)
 	return lerpf(table[lo], table[lo + 1], pos - float(lo))
 
 
-# Accept a legacy 1..5 step (maps onto the anchor heights) OR a raw inches
-# value. No real hockey height falls in 6..67, so the split is unambiguous.
+# Accept a legacy 1..5 step (maps onto LEGACY_HEIGHT_STEPS, frozen at the v3
+# heights so a migrated build keeps its body) OR a raw inches value. No real
+# hockey height falls in 6..67, so the split is unambiguous.
 static func coerce_height(v: int) -> int:
-	if v <= ANCHOR_INCHES.size():
-		return ANCHOR_INCHES[clampi(v, 1, ANCHOR_INCHES.size()) - 1]
+	if v <= LEGACY_HEIGHT_STEPS.size():
+		return LEGACY_HEIGHT_STEPS[clampi(v, 1, LEGACY_HEIGHT_STEPS.size()) - 1]
 	return clampi(v, HEIGHT_MIN, HEIGHT_MAX)
 
 
