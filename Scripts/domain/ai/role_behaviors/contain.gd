@@ -260,7 +260,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		opp_states.append(s)
 		opp_caps.append(ctx.caps_by_peer.get(pid))
 		receivers.append(lead)
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	AIRoleHelpers.fill_counter_channels(ctx, opp_states, opp_caps, our_net,
+			AIRoleHelpers.ThreatSet.CONTAIN_TRAILERS)
 	var dir_net: Vector3 = to_net / dist
 	# Have we clearly beaten the whole rush home? "Deeper toward our net" is
 	# own_goal_dir·z (larger = closer to our net = more goal-side). CONTAIN is set

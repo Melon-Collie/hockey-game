@@ -863,6 +863,9 @@ var _role_ctx := RoleContext.new()
 # Never-written stand-in for the brainless ctx build (no per-build literal —
 # a {} in the hot path would allocate every dispatch).
 var _empty_threat_memo: Dictionary[int, float] = {}
+# Inert transition read for the no-brain path (tests, unwired agents): Mode.NONE
+# with no attackers, so every consumer behaves as it did before the read existed.
+var _inert_rush_read := AIRushRead.new()
 
 # The slot + target this bot's role chose on the previous role dispatch —
 # feeds RoleContext.prev_role_target for argmax switch-hysteresis (INF is
@@ -2334,6 +2337,10 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		# copy in production). Re-stamped every build so the reused ctx never
 		# carries another brain's dict.
 		ctx.threat_shoot_base_by_opp = _current_strategy.get_threat_shoot_base_by_opp()
+		# The team's shared transition read. Re-stamped every build for the same
+		# reason as the memo above — the reused ctx must never carry another
+		# brain's (or another tick's) read.
+		ctx.rush_read = _current_strategy.get_rush_read()
 		# 5v5 position identity (plan §1/§6). Re-stamped every build — the
 		# reused ctx must never carry another match's team size.
 		ctx.team_size = _current_strategy.get_team_size()
@@ -2353,6 +2360,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.strong_x = 1.0
 		ctx.assigned_threat_peer = -1
 		ctx.threat_shoot_base_by_opp = _empty_threat_memo
+		ctx.rush_read = _inert_rush_read
 		ctx.ping_move_target = Vector3.INF
 		ctx.ping_shoot_active = false
 		ctx.ping_pass_target_peer = -1

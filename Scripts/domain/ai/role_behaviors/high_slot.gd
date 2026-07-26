@@ -39,7 +39,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var our_net: Vector3 = ctx.defending_goal_pos
 	# First-man-back bound: never float where the counter paths aren't
 	# contained (fill_counter_channels — the path-intercept race-home read).
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	AIRoleHelpers.collect_counter_threats(
+			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
+	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
+			ctx.scratch_counter_caps, our_net,
+			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
 
 	# Far from the band, skate at the CALCULATED float spot directly — the
 	# seam argmax refines a look that gets re-read from closer before arrival
@@ -50,7 +54,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			0.0, 0.0, opp_net.z + own_dir * BAND_DEPTHS_M[1])
 	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, band_center):
 		d.target_position = AIRoleHelpers.most_forward_feasible(
-				band_center, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+				band_center, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+				AIRoleHelpers.station_retreat_floor(ctx, band_center))
 		return d
 
 	var pass_speed_ref: float = AIActionScoring.expected_pass_speed(
@@ -85,9 +90,10 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# Whole band filtered (deep carrier + heavy counter threat): sag from
 		# the top of the zone down the retreat line as far as the counter
 		# paths demand.
+		var sag_from := Vector3(0.0, 0.0,
+				opp_net.z + own_dir * (GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z - 1.0))
 		best_pos = AIRoleHelpers.most_forward_feasible(
-				Vector3(0.0, 0.0,
-						opp_net.z + own_dir * (GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z - 1.0)),
-				AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+				sag_from, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+				AIRoleHelpers.station_retreat_floor(ctx, sag_from))
 	d.target_position = best_pos
 	return d

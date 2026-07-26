@@ -194,12 +194,27 @@ func test_rush_when_they_come_at_us() -> void:
 	assert_eq(r.mode, AIRushRead.Mode.RUSH, "a carrier closing on us is a rush")
 
 
-func test_our_possession_reads_nothing() -> void:
+func test_our_possession_reads_no_rush_but_still_prices_the_counter() -> void:
+	# We have the puck, so there is no rush to defend — but the pinch stations
+	# still need to know who would burn us on a turnover here. That hypothesis
+	# is exactly a turnover at the puck, so `attackers` stays populated while
+	# everything about defending a live rush stays inert.
 	var theirs := {11: [Vector3(0.0, 0.0, 0.0), Vector3.ZERO]}
 	var ours := {1: [Vector3(0.0, 0.0, 16.0), Vector3.ZERO]}
 	var r: AIRushRead = _read(ours, theirs, 1)
 	assert_eq(r.mode, AIRushRead.Mode.NONE, "no rush to read when we have it")
-	assert_true(r.attackers.is_empty(), "no attackers when we possess")
+	assert_true(r.is_live, "the read still ran — consumers must not see it as unwired")
+	assert_true(11 in r.attackers, "a turnover here would be countered by him")
+	assert_eq(r.numbers, AIRushRead.Numbers.EVEN_OR_UP,
+			"numbers are inert while we possess")
+	assert_eq(r.backpressure_s, INF, "backpressure is inert while we possess")
+
+
+func test_unwired_read_is_not_mistaken_for_a_clear_coast() -> void:
+	# The inert instance every brainless context gets must report is_live false,
+	# so collect_counter_threats falls back to all opponents instead of silently
+	# disabling every race-home bound in the game.
+	assert_false(AIRushRead.new().is_live)
 
 
 func test_in_our_zone_is_a_rush_even_when_stalled() -> void:

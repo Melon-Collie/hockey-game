@@ -7,9 +7,15 @@ const TEAM_ID: int = 0
 const OUR_NET_Z: float = 26.65
 
 
+# `home_side` is the D's lobby home side (-1 = LD, +1 = RD), which sets his
+# defensive home post and therefore the line his station retreats down
+# (AIRoleHelpers.station_retreat_floor). Defaults to the right-side D, matching
+# the strong-side stations most of these cases exercise. Leaving it at
+# RoleContext's 0 default would put the post dead centre — a body no real 5v5
+# defenseman has — and make every retreat artificially central.
 func _make_ctx(self_pos: Vector3, skaters: Array = [],
 		carrier_pid: int = -1, puck_pos: Vector3 = Vector3.ZERO,
-		strong_x: float = 1.0) -> RoleContext:
+		strong_x: float = 1.0, home_side: float = 1.0) -> RoleContext:
 	var snap := WorldSnapshot.new()
 	var have_self: bool = false
 	for entry: Array in skaters:
@@ -48,6 +54,7 @@ func _make_ctx(self_pos: Vector3, skaters: Array = [],
 	ctx.strong_x = strong_x
 	ctx.team_size = 5
 	ctx.self_is_defense = true
+	ctx.self_home_side = home_side
 	return ctx
 
 

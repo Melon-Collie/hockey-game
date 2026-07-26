@@ -96,9 +96,15 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	AIRoleHelpers.collect_counter_threats(
+			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
+	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
+			ctx.scratch_counter_caps, our_net,
+			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
+	var line_stand := Vector3(wall_x, 0.0, blue_z)
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			Vector3(wall_x, 0.0, blue_z), AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+			line_stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+			AIRoleHelpers.station_retreat_floor(ctx, line_stand))
 	return d
 
 

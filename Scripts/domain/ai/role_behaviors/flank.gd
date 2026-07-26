@@ -51,7 +51,12 @@ static func decide(ctx: RoleContext, lateral_sign: float) -> RoleDecision:
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, ctx.defending_goal_pos)
+	AIRoleHelpers.collect_counter_threats(
+			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
+	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
+			ctx.scratch_counter_caps, ctx.defending_goal_pos,
+			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+			AIRoleHelpers.station_retreat_floor(ctx, stand))
 	return d

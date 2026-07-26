@@ -103,6 +103,12 @@ var tracking: Array[int] = []
 var beaten: Array[int] = []
 var recovery_by_peer: Dictionary[int, int] = {}
 
+# True once fill() has run against a real snapshot. Consumers must distinguish
+# "no attackers, because nobody is a threat" from "no attackers, because nobody
+# has told me anything" — an unwired context (tests, a brainless agent) reads
+# the inert instance, and treating that as "the coast is clear" would silently
+# disable every race-home bound in the game.
+var is_live: bool = false
 var numbers: int = Numbers.EVEN_OR_UP
 # ETA of the nearest peer coming from BEHIND onto the carrier's hip. The repo's
 # own doctrine (docs/5v5-ai-plan.md:548): a backchecker within ~1-2 s lets the D
@@ -128,10 +134,15 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 	var opp_carries: bool = pid_carrier != -1 \
 			and team_id_by_peer.get(pid_carrier, -1) != team_id \
 			and snapshot.skater_states.has(pid_carrier)
-	# We possess → nothing to read. A loose puck still reads (a rush develops out
-	# of a missed pass), so only OUR carrier voids it.
-	if pid_carrier != -1 and team_id_by_peer.get(pid_carrier, -1) == team_id:
-		return
+	# WE possess → there is no rush to defend, but there is still a counter to
+	# price: the pinch/activation stations ask "if I lose it HERE, who burns me?",
+	# and that hypothesis is exactly a turnover at the puck. So `attackers` stays
+	# well-defined (the same premise counter_rush_cost uses) while everything
+	# about defending a live rush — recovery, numbers, backpressure, coverage —
+	# does not apply and is left at its inert default.
+	var we_carry: bool = pid_carrier != -1 \
+			and team_id_by_peer.get(pid_carrier, -1) == team_id
+	is_live = true
 
 	carrier_peer = pid_carrier if opp_carries else -1
 	var origin_vel := Vector3.ZERO
@@ -160,6 +171,9 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 	entry_eta_s = _entry_eta(own_dir, axis_len, closing)
 
 	_fill_attackers(snapshot, team_id, team_id_by_peer, caps_by_peer, our_net)
+	if we_carry:
+		# Turnover hypothesis only — see the `we_carry` note above.
+		return
 	_fill_recovery(snapshot, team_id, team_id_by_peer, caps_by_peer,
 			our_net, axis_len, prev_recovery)
 	_fill_numbers()
@@ -436,6 +450,43 @@ func _lead(pos: Vector3, vel: Vector3) -> Vector3:
 	return Vector3(pos.x + dx, 0.0, pos.z + dz)
 
 
+# True when `pid` is an opponent genuinely involved in the counter. The single
+# question the offensive stations' race-home bound should be asking about a
+# body: is he actually coming, or is he furniture?
+func is_attacker(pid: int) -> bool:
+	return pid in attackers
+
+
+# Refills this instance from `other` — the freeze seam for TeamBrainView (same
+# contract as the view's dict copies: main refills only after the worker has
+# finished reading last tick's copy, so no lock is needed). Arrays are cleared
+# and refilled, never reallocated.
+func copy_from(other: AIRushRead) -> void:
+	mode = other.mode
+	is_live = other.is_live
+	threat_axis = other.threat_axis
+	rush_origin = other.rush_origin
+	carrier_peer = other.carrier_peer
+	rush_eta_s = other.rush_eta_s
+	entry_eta_s = other.entry_eta_s
+	numbers = other.numbers
+	backpressure_s = other.backpressure_s
+	coverage_accounted = other.coverage_accounted
+	attackers.clear()
+	attackers.append_array(other.attackers)
+	attacker_leads.clear()
+	attacker_leads.append_array(other.attacker_leads)
+	inside.clear()
+	inside.append_array(other.inside)
+	tracking.clear()
+	tracking.append_array(other.tracking)
+	beaten.clear()
+	beaten.append_array(other.beaten)
+	recovery_by_peer.clear()
+	for pid: int in other.recovery_by_peer:
+		recovery_by_peer[pid] = other.recovery_by_peer[pid]
+
+
 func _xz_dist(a: Vector3, b: Vector3) -> float:
 	var dx: float = b.x - a.x
 	var dz: float = b.z - a.z
@@ -444,6 +495,7 @@ func _xz_dist(a: Vector3, b: Vector3) -> float:
 
 func _reset() -> void:
 	mode = Mode.NONE
+	is_live = false
 	threat_axis = Vector3.ZERO
 	rush_origin = Vector3.ZERO
 	carrier_peer = -1

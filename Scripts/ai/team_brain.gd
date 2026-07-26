@@ -66,6 +66,17 @@ var threat_shoot_base_by_opp: Dictionary[int, float] = {}
 # Scratch defender list for the memo fill (reused per tick, no allocation).
 var _memo_defenders: Array[Vector3] = []
 
+# The team's shared transition-defense read (docs/transition-defense-plan.md
+# §4): who is genuinely attacking, who is back, the numbers, backpressure, and
+# whether coverage is accounted for. Computed ONCE per brain tick and consumed
+# by every transition-facing role, in place of each defender independently
+# racing a worst-case counter and independently concluding it is the last man
+# back. Refilled in place, never reallocated.
+var rush_read := AIRushRead.new()
+# Last tick's recovery classification, threaded back in for the enter/hold
+# hysteresis on the recovery race (see AIRushRead.TRACK_ENTER_MARGIN_S).
+var _prev_recovery: Dictionary[int, int] = {}
+
 # True while last tick's state was RETRIEVAL — feeds the enter/hold
 # hysteresis in AIPossessionState.retrieval_read so the DZONE ↔ RETRIEVAL
 # boundary can't flicker at the race margin.
@@ -209,6 +220,17 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		if AIPossessionState.retrieval_read(our_t, opp_t, _was_retrieval):
 			state = AIPossessionState.State.RETRIEVAL
 	_was_retrieval = state == AIPossessionState.State.RETRIEVAL
+
+	# 1.75 The shared transition read. Computed before the slot elections so
+	#      everything downstream — the offensive stations' counter-threat set
+	#      today, the transition roles and the DZONE readiness gate as the
+	#      later phases land — reads ONE answer instead of each bot deriving
+	#      its own. Cheap: one pass over ≤10 skaters at the 6 Hz brain tick.
+	_prev_recovery.clear()
+	for pid: int in rush_read.recovery_by_peer:
+		_prev_recovery[pid] = rush_read.recovery_by_peer[pid]
+	rush_read.fill(snapshot, team_id, _own_goal_z, _team_id_by_peer,
+			_caps_by_peer, _prev_recovery)
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:
@@ -511,6 +533,10 @@ func get_threat_shoot_base_by_opp() -> Dictionary[int, float]:
 	return threat_shoot_base_by_opp
 
 
+func get_rush_read() -> AIRushRead:
+	return rush_read
+
+
 # ── Frozen strategy view (AI threading, Phase 3a) ────────────────────────────
 # A plain-data snapshot of this brain's outputs, rebuilt every host frame by
 # GameManager (and the duel harness) AFTER the brain tick, and read by the agent
@@ -538,6 +564,7 @@ func build_view(snapshot: WorldSnapshot) -> void:
 	_freeze_int_dict(_position_by_peer, v.position_by_peer)
 	_freeze_bool_dict(_one_timer_ready_by_peer, v.one_timer_ready_by_peer)
 	_freeze_float_dict(threat_shoot_base_by_opp, v.threat_shoot_base)
+	v.rush.copy_from(rush_read)
 	# Per-slotted-peer reads: the anchor (recomputed here against the live frame
 	# so it stays per-frame fresh) and the resolved ping directives.
 	v.anchor_by_peer.clear()

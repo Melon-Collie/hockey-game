@@ -42,6 +42,13 @@ var assigned_threat_peer: int = -1
 # instead of recomputing them per decide. Live reference to the brain's dict;
 # empty = no memo (no brain, or no MARK slot live) — compute exactly.
 var threat_shoot_base_by_opp: Dictionary[int, float] = {}
+# The team's shared transition read (docs/transition-defense-plan.md §4) — who
+# is genuinely attacking, who is back, the numbers, backpressure, coverage
+# accounting. Live reference to the brain's instance (a frozen copy in
+# production dispatch). Never null: an unwired context gets the inert read from
+# TeamStrategyView, which reports Mode.NONE and no attackers, so behavior with
+# no brain is exactly what it was before the read existed.
+var rush_read: AIRushRead = TeamStrategyView.new().get_rush_read()
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
 # owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
 # be a `Callable`; downgraded to a Dictionary because role decide() and
@@ -264,6 +271,13 @@ var scratch_opp_caps: Array[AISkaterCaps] = []
 var scratch_opp_ids: Array[int] = []
 var scratch_teammates: Array[Vector3] = []
 var scratch_opp_receivers: Array[Vector3] = []
+# Counter-threat states + index-matched caps for fill_counter_channels — the
+# ATTACKER-FILTERED subset of the opponents (AIRoleHelpers.collect_counter_threats).
+# Separate from scratch_opp_* because the O-zone stations need both at once: the
+# full opponent list for their shot-lane reads, the filtered one for their
+# race-home bound.
+var scratch_counter_states: Array[SkaterNetworkState] = []
+var scratch_counter_caps: Array[AISkaterCaps] = []
 # Per-decide option-value upper bounds for the pruned carrier_best_option
 # (see AIRoleHelpers.carrier_option_bases).
 var scratch_option_bases: Array[float] = []

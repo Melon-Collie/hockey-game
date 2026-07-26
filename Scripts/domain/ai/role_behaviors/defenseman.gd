@@ -123,7 +123,11 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	# the spot. Path-intercept read (see fill_counter_channels): puckless
 	# high coverage doesn't chase the point off the line, a genuine stretch
 	# threat still does.
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	AIRoleHelpers.collect_counter_threats(
+			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
+	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
+			ctx.scratch_counter_caps, our_net,
+			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
 
 	# The strong point sinks a row down his wall when the cycle is low —
 	# puck depth measured off the ATTACKED goal line (depth_of takes the
@@ -164,7 +168,8 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 		# behind the line): sag down the retreat line only as far as the
 		# counter paths demand — sag-to-even, not sag-to-center-ice.
 		best_pos = AIRoleHelpers.most_forward_feasible(
-				base_stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+				base_stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+				AIRoleHelpers.station_retreat_floor(ctx, base_stand))
 	d.target_position = best_pos
 	return d
 
@@ -231,9 +236,15 @@ static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var our_net: Vector3 = ctx.defending_goal_pos
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	AIRoleHelpers.collect_counter_threats(
+			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
+	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
+			ctx.scratch_counter_caps, our_net,
+			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
+	var pinch_stand := Vector3(lane_x, 0.0, pinch_z)
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			Vector3(lane_x, 0.0, pinch_z), AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+			pinch_stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+			AIRoleHelpers.station_retreat_floor(ctx, pinch_stand))
 	return d
 
 
@@ -256,9 +267,14 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var our_net: Vector3 = ctx.defending_goal_pos
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, our_net)
+	AIRoleHelpers.collect_counter_threats(
+			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
+	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
+			ctx.scratch_counter_caps, our_net,
+			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
 	target = AIRoleHelpers.most_forward_feasible(
-			target, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+			target, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+			AIRoleHelpers.station_retreat_floor(ctx, target))
 	d.target_position = target
 	# The rush advances every tick — pace the waypoint, don't brake at it.
 	d.arrive_at_speed = true
@@ -285,7 +301,12 @@ static func _decide_back(ctx: RoleContext, side: float) -> RoleDecision:
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	AIRoleHelpers.fill_counter_channels(ctx, opp_states, ctx.defending_goal_pos)
+	AIRoleHelpers.collect_counter_threats(
+			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
+	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
+			ctx.scratch_counter_caps, ctx.defending_goal_pos,
+			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
 	d.target_position = AIRoleHelpers.most_forward_feasible(
-			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel)
+			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
+			AIRoleHelpers.station_retreat_floor(ctx, stand))
 	return d

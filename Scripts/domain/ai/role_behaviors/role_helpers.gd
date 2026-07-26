@@ -720,6 +720,39 @@ static func collect_opponents(ctx: RoleContext,
 			ctx.scratch_opp_ids.append(pid)
 
 
+# Fills `out_states` (+ index-matched `out_caps`) with the opponents genuinely
+# involved in a counter-attack — AIRushRead.attackers — rather than every body
+# on the ice. This is the threat set fill_counter_channels should race against.
+#
+# The unfiltered list is why the race-home bound over-retreated: it priced the
+# opposing team's stay-home defenseman, 40 m away behind his own blue line, as a
+# live counter threat receiving the hardest legal feed on the rink, and since
+# feasibility is a conjunction over every channel, that one phantom collapsed
+# the stand and bisected the defender toward his own crease. A body who cannot
+# be at our net within the late-man window of the puck is furniture; the pinch
+# read should not see him at all.
+#
+# An UNWIRED read (no brain — unit tests, a brainless agent) falls back to every
+# opponent. "No attackers" from a read that was never filled means "nobody told
+# me anything", not "the coast is clear", and treating those the same would
+# silently disable every race-home bound in the game. A LIVE read reporting no
+# attackers is believed.
+static func collect_counter_threats(ctx: RoleContext,
+		out_states: Array[SkaterNetworkState],
+		out_caps: Array[AISkaterCaps]) -> void:
+	out_states.clear()
+	out_caps.clear()
+	var read: AIRushRead = ctx.rush_read
+	var live: bool = read.is_live
+	for pid: int in ctx.snapshot.skater_states:
+		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
+			continue
+		if live and not read.is_attacker(pid):
+			continue
+		out_states.append(ctx.snapshot.skater_states[pid])
+		out_caps.append(ctx.caps_by_peer.get(pid))
+
+
 # ── The race-home read: puck-path intercept model ───────────────────────────
 #
 # Every "am I recoverable / can I hold this forward stand?" question (the
@@ -785,6 +818,9 @@ static var _race_home_stand: Vector3 = Vector3.ZERO
 static var _race_key_snapshot_id: int = 0
 static var _race_key_net_z: float = 0.0
 static var _race_key_count: int = -1
+# Which threat list built the current grid (see ThreatSet) — same-size lists
+# from different callers must not alias.
+static var _race_key_variant: int = -1
 # The channel build reads ctx.offsides_enforced (blue-line gain clamps), so
 # the memo must key on it — match-global in play, but tests flip it between
 # calls on one snapshot.
@@ -793,25 +829,37 @@ static var _race_key_speed: float = -1.0
 static var _race_key_accel: float = -1.0
 
 
+# Threat-list variants, for the memo key. Two callers can legitimately pass
+# DIFFERENT lists of the SAME size on one snapshot (the attacker-filtered set vs
+# CONTAIN's teammate-filtered trailers), which a size-only key would silently
+# alias into one station grid.
+enum ThreatSet { ALL_OPPONENTS, COUNTER_ATTACKERS, CONTAIN_TRAILERS }
+
+
 # Build the counter-attack channels for a turnover-now hypothesis and
 # precompute the puck's arrival time at every path station. One call per
 # decide(), before any race_home_feasible / most_forward_feasible queries.
-# `opp_states` is the caller's threat list (CONTAIN legitimately excludes the
-# carrier it already gap-controls); caps are read from ctx.scratch_opp_caps,
-# index-aligned by collect_opponents. Memoized per (snapshot, net, list size):
-# repeat fills for the same team on the same tick reuse the station grid and
-# only re-derive the caller-build reach radii when the bot differs.
+# `opp_states` is the caller's threat list with `opp_caps` index-aligned to it;
+# `variant` tags which list it is (see ThreatSet). Memoized per (snapshot, net,
+# list size, variant): repeat fills for the same team on the same tick reuse the
+# station grid and only re-derive the caller-build reach radii when the bot
+# differs.
 static func fill_counter_channels(ctx: RoleContext,
-		opp_states: Array[SkaterNetworkState], our_net: Vector3) -> void:
+		opp_states: Array[SkaterNetworkState],
+		opp_caps: Array[AISkaterCaps],
+		our_net: Vector3,
+		variant: int = ThreatSet.ALL_OPPONENTS) -> void:
 	var snap_id: int = ctx.snapshot.get_instance_id() if ctx.snapshot != null else 0
 	if snap_id == _race_key_snapshot_id and our_net.z == _race_key_net_z \
 			and opp_states.size() == _race_key_count \
+			and variant == _race_key_variant \
 			and int(ctx.offsides_enforced) == _race_key_offsides and snap_id != 0:
 		_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
 		return
 	_race_key_snapshot_id = snap_id
 	_race_key_net_z = our_net.z
 	_race_key_count = opp_states.size()
+	_race_key_variant = variant
 	_race_key_offsides = int(ctx.offsides_enforced)
 	_race_station_pts.clear()
 	_race_station_ts.clear()
@@ -836,14 +884,14 @@ static func fill_counter_channels(ctx: RoleContext,
 	var own_dir: float = signf(our_net.z)
 	var offside_reads: bool = ctx.offsides_enforced and puck_pos.is_finite() \
 			and own_dir * puck_pos.z <= GameRules.BLUE_LINE_Z
-	var has_caps: bool = ctx.scratch_opp_caps.size() == opp_states.size()
+	var has_caps: bool = opp_caps.size() == opp_states.size()
 	for i: int in opp_states.size():
 		var s: SkaterNetworkState = opp_states[i]
 		var speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
 		var accel: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2
 		var sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 		if has_caps:
-			var caps: AISkaterCaps = ctx.scratch_opp_caps[i]
+			var caps: AISkaterCaps = opp_caps[i]
 			if caps != null:
 				speed = caps.max_speed
 				accel = caps.max_accel
@@ -1137,30 +1185,92 @@ static func race_home_feasible(c: Vector3,
 	return true
 
 
-# The most forward point on the `fwd` → net-front segment that is still
+# A station's home post has to be meaningfully deeper than the stand it is
+# bounding to be a retreat at all — one stride, so a station already standing on
+# its own post doesn't read as "retreat zero metres" and lose its bound entirely.
+const HOME_FLOOR_BIND_MARGIN_M: float = 1.0
+
+
+# The deepest a station may sag (see most_forward_feasible's `floor_point`).
+#
+# The principle: an OFF-PUCK STATION's retreat is about repositioning for a
+# possible turnover, not about defending an actual rush. Defending an actual
+# rush is transition defense's job — a different possession state with different
+# roles. So when a station's forward stand stops being recoverable, the answer is
+# "get back to your post", not "keep skating to the crease". Bisecting to the
+# net-front stand is how a defenseman ended up parked on his own goal line while
+# the play was still in the offensive zone (docs/transition-defense-plan.md §2.1).
+#
+# Two tiers, and which applies falls out of the geometry rather than a per-caller
+# decision:
+#   • a station that plays UP-ICE of home (the points, the forecheck line pair,
+#     F3, the high slot, the trailing valve) floors at its own defensive home
+#     post — the dot lane at its blue line for a D, the high ice just up-ice of
+#     it for a forward (AIZoneCoverage.defensive_anchor);
+#   • a station whose stand already IS its home (the NEUTRAL back pair, the
+#     flanks) can't be bounded by it, so it floors at the HOUSE GATE — the top of
+#     the circles, the depth the research names as where backcheckers stop. Still
+#     never the crease.
+static func station_retreat_floor(ctx: RoleContext, fwd: Vector3) -> Vector3:
+	var our_net: Vector3 = ctx.defending_goal_pos
+	var home: Vector3 = AIZoneCoverage.defensive_anchor(
+			ctx.self_is_defense, ctx.self_home_side, our_net.z)
+	if ctx.own_goal_dir * home.z > ctx.own_goal_dir * fwd.z + HOME_FLOOR_BIND_MARGIN_M:
+		return home
+	return house_gate_floor(our_net, fwd)
+
+
+# The point on the net → `fwd` ray at the top of the circles: the deepest a field
+# skater should ever be pushed by a race-home bound. Below it he duplicates the
+# goalie, fights his own crease repel, and overshoots behind the goal line.
+static func house_gate_floor(our_net: Vector3, fwd: Vector3) -> Vector3:
+	var dx: float = fwd.x - our_net.x
+	var dz: float = fwd.z - our_net.z
+	var d: float = sqrt(dx * dx + dz * dz)
+	if d < 0.001 or d <= AIZoneCoverage.HOUSE_TOP_DEPTH_M:
+		return fwd
+	var k: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M / d
+	return Vector3(our_net.x + dx * k, 0.0, our_net.z + dz * k)
+
+
+# The most forward point on the `fwd` → floor segment that is still
 # race-home feasible: `fwd` itself when the stand holds, else a bisection
 # down the retreat line — the sag-to-even that replaces the old radius
-# clamp. When nothing on the line contains (a threat already behind
-# everyone), the honest floor is the NET-FRONT STAND (_race_home_stand),
-# not the net point: a skater on the goal line duplicates the goalie,
-# fights his own crease repel, and overshoots behind the line — the
-# "defenders skating behind their own goal line" failure. A `fwd` already
-# deeper than the floor (doorstep containment) is untouched — the floor
-# only binds the retreat endpoint.
+# clamp.
+#
+# `floor_point` is the deepest the retreat may go. Callers that own a defensive
+# post pass station_retreat_floor(ctx); the default (INF) keeps the legacy
+# NET-FRONT STAND (_race_home_stand), which is still the right floor for a body
+# genuinely defending the doorstep — but is far too deep for an off-puck station,
+# and passing it there is what produced the parked-on-the-goal-line failure.
+# Never the net point itself: a skater on the goal line duplicates the goalie,
+# fights his own crease repel, and overshoots behind the line.
+#
+# A `fwd` already at or deeper than the floor is returned untouched — the station
+# is by definition already home, so there is nothing left to concede.
 static func most_forward_feasible(fwd: Vector3,
-		self_max_speed: float, self_max_accel: float) -> Vector3:
+		self_max_speed: float, self_max_accel: float,
+		floor_point: Vector3 = Vector3.INF) -> Vector3:
 	if race_home_feasible(fwd, self_max_speed, self_max_accel):
 		return fwd
+	var floor_pt: Vector3 = _race_home_stand
+	if floor_point.is_finite():
+		# Only binds when it is genuinely a RETREAT (nearer our net than the
+		# stand we're giving up on); otherwise the bisection would push the
+		# station the wrong way, away from its own goal.
+		if _xz_distance(floor_point, _race_net) >= _xz_distance(fwd, _race_net):
+			return fwd
+		floor_pt = floor_point
 	var lo: float = 0.0
 	var hi: float = 1.0
 	for _i: int in 6:
 		var mid: float = (lo + hi) * 0.5
-		if race_home_feasible(_race_home_stand.lerp(fwd, mid),
+		if race_home_feasible(floor_pt.lerp(fwd, mid),
 				self_max_speed, self_max_accel):
 			lo = mid
 		else:
 			hi = mid
-	return _race_home_stand.lerp(fwd, lo)
+	return floor_pt.lerp(fwd, lo)
 
 
 static func _xz_distance(a: Vector3, b: Vector3) -> float:
