@@ -113,17 +113,17 @@ func _ready() -> void:
 
 # ── Shared visual language (mirrors PostGameAnalytics) ───────────────────────
 
-func _display_label(text: String, size: int, color: Color) -> Label:
+func _display_label(text: String, font_size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
-	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_font_size_override("font_size", font_size)
 	l.add_theme_color_override("font_color", color)
 	return l
 
 
-func _ui_label(text: String, size: int, color: Color) -> Label:
-	var l := _display_label(text, size, color)
+func _ui_label(text: String, font_size: int, color: Color) -> Label:
+	var l := _display_label(text, font_size, color)
 	l.add_theme_font_override("font", MenuStyle.UI_FONT)
 	return l
 
@@ -984,8 +984,8 @@ func _period_grid(periods: Array, home_col: Color, away_col: Color) -> Control:
 	return grid
 
 
-func _period_cell(text: String, color: Color, size: int) -> Label:
-	var l := _ui_label(text, size, color)
+func _period_cell(text: String, color: Color, font_size: int) -> Label:
+	var l := _ui_label(text, font_size, color)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.custom_minimum_size = Vector2(22, 0)
 	return l

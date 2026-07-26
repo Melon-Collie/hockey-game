@@ -28,19 +28,22 @@ var period: int = 1
 var clock_s: float = 0.0    # period time remaining at the shot (for the xG-flow x-axis)
 
 
-static func make(shooter_peer: int, team_id: int, pos: Vector3, xg: float,
-		outcome: int, shot_type: int, on_net: bool, period: int, clock_s: float) -> ShotEvent:
+# Params carry the p_ prefix so they don't shadow the fields they assign (the
+# engine analyser flags that; gdlint doesn't see it).
+static func make(p_shooter_peer: int, p_team_id: int, pos: Vector3, p_xg: float,
+		p_outcome: int, p_shot_type: int, p_on_net: bool, p_period: int,
+		p_clock_s: float) -> ShotEvent:
 	var e := ShotEvent.new()
-	e.shooter_peer = shooter_peer
-	e.team_id = team_id
+	e.shooter_peer = p_shooter_peer
+	e.team_id = p_team_id
 	e.x = pos.x
 	e.z = pos.z
-	e.xg = xg
-	e.outcome = outcome
-	e.shot_type = shot_type
-	e.on_net = on_net
-	e.period = period
-	e.clock_s = clock_s
+	e.xg = p_xg
+	e.outcome = p_outcome
+	e.shot_type = p_shot_type
+	e.on_net = p_on_net
+	e.period = p_period
+	e.clock_s = p_clock_s
 	return e
 
 

@@ -10,19 +10,19 @@ extends GutTest
 
 
 func test_post_game_analytics_compiles() -> void:
-	var script: GDScript = load("res://Scripts/ui/post_game_analytics.gd")
-	assert_not_null(script, "post_game_analytics.gd failed to compile")
+	var gd: GDScript = load("res://Scripts/ui/post_game_analytics.gd")
+	assert_not_null(gd, "post_game_analytics.gd failed to compile")
 
 
 func test_game_over_popup_compiles() -> void:
 	# Carries the Analytics button that opens the screen above.
-	var script: GDScript = load("res://Scripts/ui/game_over_popup.gd")
-	assert_not_null(script, "game_over_popup.gd failed to compile")
+	var gd: GDScript = load("res://Scripts/ui/game_over_popup.gd")
+	assert_not_null(gd, "game_over_popup.gd failed to compile")
 
 
 func test_career_stats_screen_compiles() -> void:
 	# Same shape: nested CareerHeatMap / HeatRamp / GoalDot Controls with _draw
 	# overrides, and the legend swatches reach across into the map's ramp
 	# constants — all runtime-only failures otherwise.
-	var script: GDScript = load("res://Scripts/ui/career_stats_screen.gd")
-	assert_not_null(script, "career_stats_screen.gd failed to compile")
+	var gd: GDScript = load("res://Scripts/ui/career_stats_screen.gd")
+	assert_not_null(gd, "career_stats_screen.gd failed to compile")
