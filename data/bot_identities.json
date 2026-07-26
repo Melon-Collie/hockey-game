@@ -11,7 +11,7 @@
     {"name": "Boyd", "number": 33, "is_left_handed": false, "height": 79, "weight": 230, "profile": 2, "position": "RD"},
     {"name": "Foley", "number": 19, "is_left_handed": true, "height": 68, "weight": 162, "flex": 0, "length": 0, "position": "LW"},
     {"name": "Kovac", "number": 22, "is_left_handed": true, "height": 76, "weight": 233, "length": 2, "position": "RW"},
-    {"name": "Pruitt", "number": 24, "is_left_handed": false, "height": 68, "weight": 160, "profile": 0, "position": "RW"},
+    {"name": "Pruitt", "number": 24, "is_left_handed": false, "height": 68, "weight": 162, "profile": 0, "position": "RW"},
     {"name": "Rask", "number": 26, "is_left_handed": false, "height": 76, "weight": 218, "position": "RD"},
     {"name": "Halloran", "number": 27, "is_left_handed": false, "height": 76, "weight": 207, "profile": 2, "position": "C"},
     {"name": "Vasko", "number": 28, "is_left_handed": false, "height": 73, "weight": 191, "curve": 2, "position": "LW"},

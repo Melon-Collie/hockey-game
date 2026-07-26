@@ -55,14 +55,14 @@ func test_neutral_matches_v3_average_derived_levers() -> void:
 # ── Weight band (BMI interval + absolute playable-mass floor) ─────────────────
 func test_weight_band_pounds_table() -> void:
 	# Spot-check the authored table: lbs = BMI·in²/703, floored at 160.
-	assert_eq(PlayerAttributes.weight_min(68), 160)       # ratio floor 148 → absolute
+	assert_eq(PlayerAttributes.weight_min(68), 162)       # ratio floor 151 → absolute
 	assert_eq(PlayerAttributes.weight_max(68), 191)
 	assert_eq(PlayerAttributes.weight_neutral(70), 185)
-	assert_eq(PlayerAttributes.weight_min(73), 178)
+	assert_eq(PlayerAttributes.weight_min(73), 174)
 	assert_eq(PlayerAttributes.weight_neutral(73), 201)  # the NHL-average build
 	assert_eq(PlayerAttributes.weight_max(73), 220)
 	assert_eq(PlayerAttributes.weight_max(76), 238)
-	assert_eq(PlayerAttributes.weight_min(79), 209)
+	assert_eq(PlayerAttributes.weight_min(79), 204)
 	assert_eq(PlayerAttributes.weight_max(79), 257)
 
 
@@ -72,7 +72,8 @@ func test_weight_band_covers_real_tall_lean_bodies() -> void:
 	# defensemen. These are listed cards, not invented bodies.
 	assert_true(PlayerAttributes.weight_min(76) <= 194,
 			"6'4 floor (%d lb) must reach Rinzel/Dobson" % PlayerAttributes.weight_min(76))
-	for card: Array in [[76, 195], [76, 194], [78, 207], [69, 162], [70, 165], [72, 175], [74, 185]]:
+	for card: Array in [[76, 195], [76, 194], [78, 207], [69, 162], [70, 165], [72, 175],
+			[74, 185], [72, 170], [72, 172], [68, 165]]:
 		var h: int = card[0]
 		var w: int = card[1]
 		assert_eq(_body(h, w).weight, w,
@@ -81,17 +82,17 @@ func test_weight_band_covers_real_tall_lean_bodies() -> void:
 	assert_eq(_body(68, 140).weight, PlayerAttributes.MIN_PLAYABLE_LBS)
 
 
-func test_band_edges_exclude_the_tails_symmetrically() -> void:
-	# Both edges are set at the shape of the distribution, not its most extreme
-	# member, and they exclude alike: the leanest sampled bodies (Reichel
-	# 6'0"/170, Ehlers 6'0"/172) sit under the floor exactly as the heaviest
-	# (Ovechkin 6'3"/238, Zadorov 6'6"/255) sit over the ceiling.
-	assert_gt(_body(72, 170).weight, 170, "Reichel — accepted lean exclusion")
-	assert_gt(_body(72, 172).weight, 172, "Ehlers — accepted lean exclusion")
+func test_band_edges_are_fitted_to_their_tails() -> void:
+	# The lean side reaches every sampled body (see the card list above); the
+	# heavy side accepts two exclusions, the league's two most extreme BMIs.
 	assert_lt(_body(75, 238).weight, 238, "Ovechkin — accepted heavy exclusion")
 	assert_lt(_body(78, 255).weight, 255, "Zadorov — accepted heavy exclusion")
-	# …and the edge must not reopen the bodies that motivated raising it off
-	# 22.5: no 6'4" player has ever been 185 lb, nor a 5'10" player 160.
+	# The absolute floor IS the lightest player in the NHL — Hutson, 5'9"/162.
+	assert_eq(PlayerAttributes.MIN_PLAYABLE_LBS, 162)
+	assert_eq(_body(69, 162).weight, 162, "the lightest real body is buildable")
+	assert_gt(_body(69, 155).weight, 155, "…and nothing under it is")
+	# Neither floor may reopen the bodies that are past the tail everywhere:
+	# no 6'4" player has ever been 185 lb, nor a 5'10" player 160.
 	assert_gt(PlayerAttributes.weight_min(76), 185)
 	assert_gt(PlayerAttributes.weight_min(70), 160)
 
@@ -154,7 +155,7 @@ func test_zero_weight_coerces_to_neutral_frame() -> void:
 
 
 func test_frame_t_spans_band() -> void:
-	assert_almost_eq(_body(H_MED, 178).frame_t(), 0.0, 0.01, "lean edge")
+	assert_almost_eq(_body(H_MED, 174).frame_t(), 0.0, 0.01, "lean edge")
 	assert_almost_eq(_body(H_MED, 201).frame_t(), 0.5, 0.01, "neutral mid")
 	assert_almost_eq(_body(H_MED, 220).frame_t(), 1.0, 0.01, "heavy edge")
 
@@ -227,7 +228,7 @@ func test_legacy_1to5_height_maps_to_anchor_inches() -> void:
 
 # ── Weight: accel fork, stamina metabolism, linear mass ───────────────────────
 func test_accel_lean_favored() -> void:
-	var lean := _body(H_MED, 178)
+	var lean := _body(H_MED, 174)
 	var heavy := _body(H_MED, 220)
 	assert_true(lean.accel_mult() > heavy.accel_mult(), "lean gets the first step")
 	assert_almost_eq(lean.accel_mult(), 1.08, 0.001)
@@ -237,7 +238,7 @@ func test_accel_lean_favored() -> void:
 func test_stamina_metabolism_by_frame() -> void:
 	# Lean = fast metabolism (drains AND regens faster); heavy = deep pool,
 	# slow refill — the fork moved off height onto weight in v4.
-	var lean := _body(H_MED, 178)
+	var lean := _body(H_MED, 174)
 	var heavy := _body(H_MED, 220)
 	assert_true(lean.stamina_drain_mult() > heavy.stamina_drain_mult(), "lean drains faster")
 	assert_true(lean.stamina_regen_mult() > heavy.stamina_regen_mult(), "lean recovers faster")
@@ -256,16 +257,17 @@ func test_mass_linear_in_displayed_weight() -> void:
 	# edge: with no Checking stat, mass carries the physical game. The 2026-07
 	# band recalibration left this envelope intact (it dropped the lean BMI edge
 	# but the absolute playable-mass floor took over below 5'11").
-	var ratio: float = _body(H_MAX, 257).mass_mult() / _body(H_MIN, 160).mass_mult()
+	var ratio: float = _body(H_MAX, PlayerAttributes.weight_max(H_MAX)).mass_mult() \
+			/ _body(H_MIN, PlayerAttributes.weight_min(H_MIN)).mass_mult()
 	assert_between(ratio, 1.55, 1.70)
 
 
 func test_frame_interpolates_between_anchors() -> void:
 	# A weight between two frame anchors lerps the frame tables continuously.
-	var lo := _body(H_MED, 178).accel_mult()   # LEAN anchor (frame-t 0.0)
-	var hi := _body(H_MED, 190).accel_mult()   # LIGHT anchor (frame-t 0.25)
-	var mid := _body(H_MED, 184).accel_mult()
-	assert_true(mid < lo and mid > hi, "184 lbs falls between the LEAN and LIGHT rows")
+	var lo := _body(H_MED, 174).accel_mult()   # LEAN anchor (frame-t 0.0)
+	var hi := _body(H_MED, 188).accel_mult()   # LIGHT anchor (frame-t 0.25)
+	var mid := _body(H_MED, 181).accel_mult()
+	assert_true(mid < lo and mid > hi, "181 lbs falls between the LEAN and LIGHT rows")
 
 
 # ── The constitution: no fidelity scaling, checking is mass-emergent ──────────
@@ -281,7 +283,7 @@ func test_hands_never_scaled_by_any_build() -> void:
 func test_checking_accessors_neutral_mass_carries_it() -> void:
 	# Delivery/brace have no attribute term — the collision resolver reads mass.
 	var tank := _body(H_MAX, 257)
-	var waterbug := _body(H_MIN, 160)
+	var waterbug := _body(H_MIN, PlayerAttributes.weight_min(H_MIN))
 	assert_almost_eq(tank.check_delivery_mult(), 1.0, 0.0)
 	assert_almost_eq(tank.brace_mult(), 1.0, 0.0)
 	assert_true(tank.mass_mult() > waterbug.mass_mult(),
@@ -291,7 +293,7 @@ func test_checking_accessors_neutral_mass_carries_it() -> void:
 func test_agility_bites_with_weight() -> void:
 	# F = mv²/r: heavy turns wide and stops long. Frame term multiplies the
 	# height baseline.
-	var lean := _body(H_MED, 178)
+	var lean := _body(H_MED, 174)
 	var heavy := _body(H_MED, 220)
 	assert_almost_eq(lean.agility_mult(), 1.03, 0.001, "lean agility bonus")
 	assert_almost_eq(heavy.agility_mult(), 0.96, 0.001, "heavy agility tax")
@@ -307,7 +309,7 @@ func test_agility_bites_with_weight() -> void:
 func test_glide_ignores_weight_tank_still_coasts() -> void:
 	# Glide derives from the HEIGHT-ONLY agility component: a heavy build turns
 	# wide but must NOT bleed speed while coasting — momentum is his identity.
-	var lean := _body(H_MED, 178)
+	var lean := _body(H_MED, 174)
 	var heavy := _body(H_MED, 220)
 	assert_almost_eq(lean.agility_glide_mult(), heavy.agility_glide_mult(), 0.0001,
 			"weight never enters glide")
@@ -316,7 +318,7 @@ func test_glide_ignores_weight_tank_still_coasts() -> void:
 
 func test_radius_widens_with_frame() -> void:
 	# Hitbox tracks the silhouette: same height, heavier = wider.
-	assert_true(_body(H_MED, 220).radius_mult() > _body(H_MED, 178).radius_mult())
+	assert_true(_body(H_MED, 220).radius_mult() > _body(H_MED, 174).radius_mult())
 	assert_almost_eq(_body(H_MED, 201).radius_mult(), 1.0, 0.0001, "neutral radius")
 
 
@@ -426,7 +428,7 @@ func test_legacy_six_attr_migration_dangler() -> void:
 func test_visual_tells_map_to_body() -> void:
 	# Silhouette = body: frame drives uniform bulk, height drives torso/scale.
 	var heavy := _body(H_MED, 220)
-	var lean := _body(H_MED, 178)
+	var lean := _body(H_MED, 174)
 	assert_true(heavy.shoulder_bulk_mult() > lean.shoulder_bulk_mult(), "shoulders read frame")
 	assert_true(heavy.thigh_mult() > lean.thigh_mult(), "legs read frame")
 	assert_true(heavy.forearm_bulk_mult() > lean.forearm_bulk_mult(), "arms read frame")

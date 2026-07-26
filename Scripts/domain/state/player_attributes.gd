@@ -112,25 +112,32 @@ const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
 #     bodies do: a RATIO ceiling (carrying fat costs skating) and an ABSOLUTE
 #     floor (you cannot be too light to play), and the band is their overlap.
 #
-# WHERE THE LEAN EDGE SITS, and why not lower. Both edges are set at the SHAPE
-# of the distribution, not at its most extreme member, and they exclude the
-# same way: 2 of the 7 sampled heavy-tail bodies sit over 29.0 (Ovechkin 29.7,
-# Zadorov 29.5), and 2 of the 12 lean-tail bodies sit under 23.5 (Reichel
-# 6'0"/170 = 23.05, Ehlers 6'0"/172 = 23.32). 23.5 is also a natural break:
-# the rest of the lean tail is a dense cluster from 23.61 to 23.92 (Rinzel,
-# Garland, Dobson, K. Johnson, Pettersson, Edvinsson, Hutson) with a visible
-# gap below it, and the floor sits in that gap. The tightest cases that DO
-# bind are Dobson 195 / Rinzel 194 against the 193 floor at 6'4" — the same
-# 1–2 lb margin the ceiling leaves on Kaprizov and Protas.
+# WHERE THE TWO FLOORS SIT. They are independent levers covering different
+# heights, and each is fitted to the tail it actually governs:
 #
-# An earlier pass put this edge at 22.5, which was wrong twice over. It was
-# chasing a stale card: Elias Pettersson at 6'2"/176 (BMI 22.59) looked like a
-# lone outlier 0.6 SD past the next-leanest body, but that is his draft-era
-# listing — he measured 164 lb at the 2017 combine and is listed 185 today
-# (BMI 23.75, comfortably inside). And even had it been current, buying one
-# body by opening 6'4"/185 and 5'10"/160 — past the tail at every OTHER
-# height — is exactly the trade that was correctly refused at the top when
-# Ovechkin argued for a higher ceiling.
+#   • The RATIO floor (23.0) governs 5'11" and up, and is set just under the
+#     leanest real bodies there — Reichel (6'0"/170 = 23.05) and Ehlers
+#     (6'0"/172 = 23.32) at the low end, then a dense 23.6–23.9 cluster
+#     (Rinzel, Dobson, K. Johnson, Pettersson, Edvinsson). It puts 6'4" at
+#     189, clearing Dobson 195 / Rinzel 194.
+#   • The ABSOLUTE floor (162) governs 5'7"–5'10", where the ratio floor falls
+#     to 147–160 and stops meaning anything. 162 IS the lightest player in the
+#     NHL (Lane Hutson, 5'9"), i.e. "you cannot be lighter than the lightest
+#     man who has ever held the job." The lightest bodies at the neighbouring
+#     short heights — Stankoven 5'8"/165, Garland 5'10"/165 — clear it by 3.
+#
+# The band edge landing exactly on one player is the shape of a fitted edge,
+# not a defect: the 29.0 ceiling lands exactly on Kaprizov (5'10"/202) the
+# same way.
+#
+# Two earlier passes got the lean edge wrong in the same direction. 22.5 was
+# chasing a stale card — Elias Pettersson's 6'2"/176 (BMI 22.59) looked like a
+# lone outlier, but that is his draft era (he measured 164 lb at the 2017
+# combine) and he is listed 185 today, BMI 23.75, comfortably inside. 23.5
+# then over-corrected past Reichel and Ehlers. The lesson both times: fit the
+# edge to the tail's SHAPE, and when the short heights misbehave reach for the
+# absolute floor rather than bending the ratio, because the thing that bounds
+# a small player is pounds, not a ratio.
 #
 # The band is deliberately ASYMMETRIC about MEDIUM (3.0 BMI lean-side vs 2.5
 # heavy-side): the empirical center sits at 26.05, but MEDIUM is pinned to the
@@ -143,22 +150,16 @@ const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
 # (6'1"/194) lean-mid; Dobson/Rinzel (6'4"/195, 194) ≈ 6'4"-LEAN; DeBrincat
 # (5'8"/180) ≈ SOLID; Kaprizov (5'10"/202) = 5'10"-HEAVY exactly; Tage Thompson
 # (6'6"/218) lean-mid; Oleksiak (6'7"/252) ≈ 6'7"-HEAVY.
-const BMI_LEAN: float = 23.5
+const BMI_LEAN: float = 23.0
 const BMI_MEDIUM: float = 26.5   # neutral frame
 const BMI_HEAVY: float = 29.0
 
 # Absolute lower bound on a playable body, in pounds — the floor that the BMI
-# ratio cannot express. Binds at 5'7"–5'9", where even the 23.5 ratio floor
-# would allow a body lighter than anyone who has ever held an NHL job (150 lb
-# at 5'7"); from 5'10" up the ratio floor is the higher of the two.
-#
-# 160 is chosen against the league's actual lower tail, and it is close to the
-# only defensible round number: Lane Hutson (5'9"/162) is the lightest player
-# in the NHL, so 165 would exclude him outright and 162 would land the band
-# edge exactly on one man. 160 admits him with 2 lb of headroom. The rest of
-# the sub-170 cluster (Stankoven 5'8"/165, Garland 5'10"/165, Spurgeon
-# 5'9"/166, Chibrikov & Girard 5'10"/170) clears it comfortably.
-const MIN_PLAYABLE_LBS: int = 160
+# ratio cannot express. Binds at 5'7"–5'10", where the 23.0 ratio floor falls
+# to 147–160 and would allow bodies lighter than anyone who has ever held an
+# NHL job; from 5'11" up the ratio floor is the higher of the two. See the
+# band block above for why 162 and not 160.
+const MIN_PLAYABLE_LBS: int = 162
 
 # Neutral mass reference (lbs): BMI 26.5 at 73" → round(26.5·73²/703) = 201.
 # mass_mult is LINEAR in displayed weight — deliberately wider than v3's
