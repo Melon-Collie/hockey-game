@@ -1341,7 +1341,7 @@ func _is_reactive_slot(slot: int, snapshot: WorldSnapshot) -> bool:
 		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
 		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2, \
 		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
-		AIRoleSlots.Slot.TRACK_MID_WEAK:
+		AIRoleSlots.Slot.TRACK_MID_WEAK, AIRoleSlots.Slot.TRACK_MID:
 			return true
 		AIRoleSlots.Slot.FINISHER, AIRoleSlots.Slot.NET_FRONT:
 			# The one-timer camp's fast cadence buys a live seam read — which
@@ -1772,6 +1772,15 @@ func _slot_label(slot: int) -> String:
 			return "Mark"
 		AIRoleSlots.Slot.CONTAIN:
 			return "Contain"
+		AIRoleSlots.Slot.RUSH_D1:
+			return "RushD1"
+		AIRoleSlots.Slot.RUSH_D2:
+			return "RushD2"
+		AIRoleSlots.Slot.TRACK_PUCK:
+			return "TrackPuck"
+		AIRoleSlots.Slot.TRACK_MID, AIRoleSlots.Slot.TRACK_MID_STRONG, \
+		AIRoleSlots.Slot.TRACK_MID_WEAK:
+			return "TrackMid"
 		AIRoleSlots.Slot.FINISHER:
 			return "Finisher"
 		AIRoleSlots.Slot.OUTLET:
@@ -2443,7 +2452,7 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2:
 			decision = AIRoleRushD.decide(ctx, slot)
 		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
-		AIRoleSlots.Slot.TRACK_MID_WEAK:
+		AIRoleSlots.Slot.TRACK_MID_WEAK, AIRoleSlots.Slot.TRACK_MID:
 			decision = AIRoleTrack.decide(ctx, slot)
 		AIRoleSlots.Slot.CHASE:
 			decision = AIRoleChase.decide(ctx)
@@ -5342,7 +5351,10 @@ func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 # True if our current brain slot is an on-puck defensive pressurer —
 # the only roles that actively jab. (PRESSURE is DZONE; F1_PRESSURE is
-# FORECHECK; CONTAIN is the TRANS_OD gap defender on the carrier. In 5v5's
+# FORECHECK; RUSH_D1 is the transition gap defender on the carrier and
+# TRACK_PUCK is the backchecker running him down — both are on the puck by
+# definition, and a backchecker who catches a carrier without being allowed to
+# poke at him is just escorting. In 5v5's
 # zone DZONE, the pressurer is whichever area role currently OWNS the puck —
 # AIZoneCoverage.pressure_owner — so exactly one zone defender ever jabs.)
 func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
@@ -5351,7 +5363,9 @@ func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
 	var slot: int = _current_strategy.get_slot(_peer_id)
 	if slot == AIRoleSlots.Slot.PRESSURE \
 			or slot == AIRoleSlots.Slot.F1_PRESSURE \
-			or slot == AIRoleSlots.Slot.CONTAIN:
+			or slot == AIRoleSlots.Slot.CONTAIN \
+			or slot == AIRoleSlots.Slot.RUSH_D1 \
+			or slot == AIRoleSlots.Slot.TRACK_PUCK:
 		return true
 	match slot:
 		AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.ZONE_D_WEAK, \

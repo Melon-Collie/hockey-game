@@ -161,3 +161,32 @@ func test_no_puck_at_all_leaves_the_tracker_in_place() -> void:
 	ctx.snapshot.puck_state = null
 	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_PUCK)
 	assert_eq(d.target_position, Vector3(0.0, 0.0, 10.0))
+
+
+# ── The lone 3v3 mid tracker ─────────────────────────────────────────────────
+
+func test_lone_mid_tracker_holds_the_centre_lane() -> void:
+	# 3v3 has no D pair to split around, so the single mid tracker sits dead
+	# centre rather than on a side of it.
+	var ctx: RoleContext = _ctx(Vector3(1.0, 0.0, 20.0),
+			[[10, 1, Vector3(0.0, 0.0, 10.0), Vector3(0.0, 0.0, 6.0)]], 10)
+	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_MID)
+	assert_almost_eq(d.target_position.x, 0.0, 0.6,
+			"the lone mid tracker holds centre; got %s" % d.target_position)
+
+
+func test_lone_mid_tracker_owns_both_halves() -> void:
+	# The 5v5 pair filters to its own half and hands off at the seam. With only
+	# one body in the middle there is nobody to hand off TO, so he must pick up a
+	# man on either side — filtering him to half the ice would leave the other
+	# half uncovered.
+	var carrier := Vector3(0.0, 0.0, 12.0)
+	for man_x: float in [-4.0, 4.0]:
+		var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0), [
+			[10, 1, carrier, Vector3(0.0, 0.0, 6.0)],
+			[11, 1, Vector3(man_x, 0.0, 14.0), Vector3(0.0, 0.0, 6.0)],
+		], 10)
+		var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_MID)
+		assert_lt(absf(d.target_position.x - man_x), 5.0,
+				("a man at x=%.1f must be picked up by the lone tracker; got %s")
+				% [man_x, d.target_position])

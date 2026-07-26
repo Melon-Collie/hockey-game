@@ -141,16 +141,39 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
+# The BASE ladder, in stick lengths: ice remaining to OUR blue line gives 3
+# sticks at their blue line, 2 at the red line, 1 at ours. Zero ice left (he is
+# in the zone) means you are on him.
+static func _ladder_sticks(threat_pos: Vector3, own_goal_dir: float) -> float:
+	var ice_to_line: float = maxf(
+			GameRules.BLUE_LINE_Z - own_goal_dir * threat_pos.z, 0.0)
+	return clampf(GAP_MIN_STICKS + ice_to_line / (GameRules.BLUE_LINE_Z * 2.0),
+			GAP_MIN_STICKS, GAP_MAX_STICKS)
+
+
+# The pace correction, in stick lengths — capped, so it can never be the driver.
+static func _pace_sticks(closing: float) -> float:
+	return PACE_CORRECTION_MAX_STICKS * clampf(closing / PACE_FULL_M_S, 0.0, 1.0)
+
+
+# The ladder gap in metres WITHOUT the shared read's numbers/backpressure rungs.
+# Public so AIRoleChase's lost-race pre-contain can stand where RUSH_D1 is going
+# to want it: the chaser who declines a lost race retreats into the gap stand,
+# and if the two read different formulas he plants somewhere the gap defender
+# then has to correct off the moment possession flips. (The old
+# AIRoleContain.gap_for_pace served exactly this shared purpose; the ladder
+# replaces it.) The rungs are deliberately excluded — a NEUTRAL chaser has no
+# rush posture to read yet.
+static func ladder_gap_m(threat_pos: Vector3, own_goal_dir: float,
+		stick: float, closing: float) -> float:
+	return (_ladder_sticks(threat_pos, own_goal_dir) + _pace_sticks(closing)) \
+			* maxf(stick, 0.5)
+
+
 # The gap ladder plus its modifiers, in metres.
 static func _gap_for(ctx: RoleContext, read: AIRushRead, carrier_pos: Vector3,
 		closing: float) -> float:
-	# Ice remaining to OUR blue line: 3 sticks at their blue line, 2 at the red
-	# line, 1 at ours. Zero once he's in the zone — you are on him.
-	var ice_to_line: float = maxf(
-			GameRules.BLUE_LINE_Z - ctx.own_goal_dir * carrier_pos.z, 0.0)
-	var sticks: float = clampf(
-			GAP_MIN_STICKS + ice_to_line / (GameRules.BLUE_LINE_Z * 2.0),
-			GAP_MIN_STICKS, GAP_MAX_STICKS)
+	var sticks: float = _ladder_sticks(carrier_pos, ctx.own_goal_dir)
 
 	# Numbers. EVEN_OR_UP is licence to challenge; DOWN_TWO_PLUS buys time for
 	# the backcheck. DOWN_ONE deliberately does NOT widen — an odd-man
@@ -166,9 +189,7 @@ static func _gap_for(ctx: RoleContext, read: AIRushRead, carrier_pos: Vector3,
 		sticks -= GAP_RUNG_STICKS
 
 	sticks = clampf(sticks, GAP_MIN_STICKS, GAP_MAX_STICKS)
-	# Pace correction, capped at half a stick.
-	sticks += PACE_CORRECTION_MAX_STICKS * clampf(closing / PACE_FULL_M_S, 0.0, 1.0)
-	return sticks * _stick(ctx)
+	return (sticks + _pace_sticks(closing)) * _stick(ctx)
 
 
 # Is his speed advantage gone? Any of the three observable triggers.

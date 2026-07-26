@@ -1,14 +1,13 @@
 # Transition defense (TRANS_OD) — reground
 
-Status: **implemented** (5v5; 3v3 deferred — see §5.2). Phases A–E landed;
-playtest pending. Supersedes the TRANS_OD sections of
+Status: **implemented** for 5v5 and 3v3. Phases A–E landed; playtest pending. Supersedes the TRANS_OD sections of
 `docs/5v5-ai-plan.md` (§2 TRANS_OD, and the defensive half of §5); the O-zone,
 forecheck and breakout designs in that doc are unchanged, and its D-zone design is
 unchanged *in content* but now gated on coverage readiness (§9).
 
-**Scope: 5v5 first.** 5v5 is the hard problem and the one with a real structure to get
-right; 3v3 keeps its current TRANS_OD path verbatim until 5v5 is proven, exactly as the
-5v5 plan's "additive, mode-latched" constraint did. See §5.2.
+**Scope.** 5v5 was built first (the hard problem, and the one with a real structure to
+get right); 3v3 then reused the same behavior modules with a three-slot election, and
+needed no changes to them. See §5.2.
 
 ### Decisions banked
 
@@ -16,8 +15,9 @@ right; 3v3 keeps its current TRANS_OD path verbatim until 5v5 is proven, exactly
   (`AIBodyCheck.evaluate`, only genuinely separating hits), with the extra gate that it
   must already be goal-side of the carrier. A backchecker who catches a carrier from
   behind is a legitimate hit; hunting one from up-ice is not.
-- **5v5 first, 3v3 deferred.** Whether 3v3 wants a dedicated `RUSH_D2` or the compressed
-  three-role set is left open until 5v5 is playing well.
+- **3v3 runs the compressed three-role set** (`RUSH_D1` / `TRACK_PUCK` / `TRACK_MID`),
+  no dedicated `RUSH_D2`. Two bodies on the puck is affordable because transition is
+  bounded — see §5.2.
 - **`numbers` gets hysteresis** — enter/hold margins on the same pattern as
   `AIPossessionState.retrieval_read`, so one body crossing the puck line can't flip the
   whole team's aggression mid-rush.
@@ -225,19 +225,35 @@ TRANS_OD's slot set becomes layers. Branching 3v3 / 5v5, with precedent
 Election targets are lane recovery points, not men. Group-scoped as today, with the same
 cross-fill for a short group.
 
-### 5.2 3v3 — deferred
+### 5.2 3v3 — the same three layers, compressed
 
-**3v3 keeps its existing TRANS_OD path (CONTAIN + MARK×2) verbatim for now.** 5v5 is the
-hard problem, it has the real structure, and it is where the symptoms bite hardest; the
-5v5 plan's additive/mode-latched precedent (`AIRoleSlots` untouched while `AIRoleSlots5`
-was built) applies directly.
+3v3 runs the **same behavior modules**, elected into three slots:
 
-The likely 3v3 shape, when we get to it, is the same three layers compressed —
-`RUSH_D1` / `TRACK_PUCK` / `TRACK_MID`, with `RUSH_D2`'s mid-ice job folding into
-`TRACK_MID` and `RUSH_D1` itself playing the pass on a `DOWN_ONE`. Whether that holds
-with only three skaters, or whether 3v3 wants a dedicated second layer, is left open
-until 5v5 is playing well. The behavior modules are written team-size-agnostic so the
-3v3 slot set is a table change, not a rewrite.
+| Slot | Job |
+|---|---|
+| `RUSH_D1` | Owns the carrier — soonest to our net, the same metric CONTAIN used. |
+| `TRACK_PUCK` | Runs the carrier down from behind. |
+| `TRACK_MID` | The centre lane (no side split — there is no pair to split around). |
+
+`RUSH_D2`'s mid-ice layer folds into `TRACK_MID`. The modules needed no changes:
+they read only universal context (`rush_read`, `strong_x`, `self_blade_reach`,
+`defending_goal_pos`) — the F/D split lives entirely in the 5v5 *election*, never in
+the behavior.
+
+**Two bodies on the puck is correct here.** It is not the old "PRESSURE +
+BACKCHECK both engage forward" failure `role_slots.gd`'s header warns about:
+`RUSH_D1` is in FRONT holding a gap and `TRACK_PUCK` is BEHIND running him down —
+one rush defended from both ends, not two bodies taking bad angles from the same
+side. And it is affordable because **transition is bounded**: the moment the attack
+becomes a settled three-man threat needing a body on each man, the puck is in our
+zone and DZONE's coverage owns it. TRANS_OD's job is to kill the rush, not to solve
+coverage.
+
+**That is also why the coverage gate (§9) stays 5v5-only.** Ungating it would make
+TRANS_OD persist into our zone, and *that* is where two-on-the-puck with one man on
+two attackers would actually bite. The 3v3 model wants the flip at the blue line.
+If the backcheck-dissolves-at-the-line problem shows up in 3v3 DZONE, ungating is a
+one-word change — but it is a trade, not a free win.
 
 ### Why lanes beat men here
 
@@ -507,7 +523,9 @@ Resolved items moved to **Decisions banked** at the top.
    precedent). Deferred to after the structure is playing well.
 3. **Coverage-gate latch risk** (§9). The time-floor guard is specified but its value is a
    guess until instrumented.
-4. **3v3.** Deferred wholesale (§5.2) — revisit once 5v5 is proven.
+4. **Should 3v3's DZONE also be readiness-gated?** Currently 5v5 only (§5.2). It is a
+   trade: gating stops the backcheck dissolving at the line, but keeps two bodies on the
+   puck inside our own zone. Playtest call.
 
 ---
 

@@ -106,6 +106,7 @@ enum Slot {
 	TRACK_PUCK,       # F: F1 back. Runs the carrier down through mid-ice.
 	TRACK_MID_STRONG, # F: F2. Back through mid-ice, stops at the circle tops.
 	TRACK_MID_WEAK,   # F: F3. Same, weak side.
+	TRACK_MID,        # The single mid tracker (3v3) — centre lane, no side split.
 }
 
 # Hysteresis for the soonest-to-arrive elections: a peer that didn't
@@ -160,7 +161,7 @@ static func slots_for_state(state: int) -> Array[int]:
 		AIPossessionState.State.FORECHECK:
 			return [Slot.F1_PRESSURE, Slot.F2_MID, Slot.F3_HIGH]
 		AIPossessionState.State.TRANS_OD:
-			return [Slot.CONTAIN, Slot.MARK]
+			return [Slot.RUSH_D1, Slot.TRACK_PUCK, Slot.TRACK_MID]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
 		_:
@@ -249,21 +250,31 @@ static func assign(
 					Slot.MARK, caps_by_peer)
 
 		AIPossessionState.State.TRANS_OD:
-			# Defending a rush: CONTAIN gap-controls the carrier — stay
-			# goal-side, hold a controlled gap, never lunge. It goes to the
-			# last man back: the peer soonest to our OWN net (momentum-aware ETA
-			# at its real Speed cap), i.e. the deepest line of defense already in
-			# front of the rush. The other two MARK: they sprint home and pick up
-			# the carrier's receivers (a distinct man each, via TeamBrain's threat
-			# partition). Electing by race-home (not race-to-carrier) keeps the man
-			# genuinely in front of the rush ON the rush, instead of handing CONTAIN
-			# to a shallower peer nearer the carrier and yanking the true last man
-			# up-ice onto a receiver. Replaces the old PRESSURE+BACKCHECK+CONTAIN
-			# triad, where TWO peers engaged the carrier forward (overcommit / bad
-			# angle / breakaways) and the backchecker raced to an empty slot point.
-			_assign_gap_then_mark(
+			# The layered rush defense, compressed to three bodies
+			# (docs/transition-defense-plan.md §5.2). Same modules 5v5 runs; the
+			# only difference is that with three skaters there is no D pair, so
+			# RUSH_D2's mid-ice layer folds into the single mid tracker.
+			#
+			# TWO bodies on the puck is correct here, and it is not the old
+			# "PRESSURE + BACKCHECK both engage forward" failure this file's
+			# header warns about: RUSH_D1 is in FRONT of the carrier holding a
+			# gap and TRACK_PUCK is BEHIND him running him down, which is one
+			# rush being defended from both ends rather than two bodies taking
+			# bad angles from the same side. It is affordable because transition
+			# is BOUNDED — the moment the attack becomes a settled three-man
+			# threat that needs a body on each man, the puck is in our zone and
+			# DZONE's coverage takes over. TRANS_OD's job is to kill the rush,
+			# not to solve coverage.
+			#
+			# RUSH_D1 elects first (most structurally important): the peer
+			# soonest to OUR NET, momentum-aware — the last man back, already in
+			# front of the rush. TRACK_PUCK is then whoever of the remaining two
+			# gets to the puck soonest, and the leftover takes the middle lane.
+			_assign_pair_then_remainder(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
-					puck_pos, our_net, caps_by_peer)
+					Slot.RUSH_D1, our_net,
+					Slot.TRACK_PUCK, puck_pos,
+					Slot.TRACK_MID, caps_by_peer)
 
 		AIPossessionState.State.OZONE:
 			_assign_one_then_remainder(
@@ -373,6 +384,10 @@ static func _hysteresis_class(slot: int) -> int:
 			return Slot.OUTLET       # up-ice attacking option
 		Slot.BREAKOUT_WEAK, Slot.SUPPORT:
 			return Slot.SUPPORT      # trailing support / reverse valve
+		Slot.RUSH_D1, Slot.PRESSURE, Slot.CONTAIN:
+			return Slot.PRESSURE     # the body that owns the carrier
+		Slot.TRACK_MID, Slot.MARK:
+			return Slot.MARK         # off-puck coverage
 		_:
 			return slot
 
@@ -406,58 +421,6 @@ static func _assign_pair_then_remainder(
 	for pid: int in teammates:
 		if not fixed_peers.has(pid):
 			result[pid] = slot_remainder
-
-
-# TRANS_OD: CONTAIN to the gap defender (see _pick_gap_defender), remainder to
-# MARK. Exactly one peer engages the carrier; the rest sprint home to a man.
-static func _assign_gap_then_mark(
-		snapshot: WorldSnapshot,
-		teammates: Array,
-		fixed_peers: Dictionary,
-		prev_assignments: Dictionary,
-		result: Dictionary,
-		carrier_pos: Vector3,
-		our_net: Vector3,
-		caps_by_peer: Dictionary) -> void:
-	var gap_pid: int = _pick_gap_defender(
-			snapshot, teammates, fixed_peers, prev_assignments, carrier_pos,
-			our_net, caps_by_peer)
-	if gap_pid != -1:
-		result[gap_pid] = Slot.CONTAIN
-		fixed_peers[gap_pid] = true
-
-	for pid: int in teammates:
-		if not fixed_peers.has(pid):
-			result[pid] = Slot.MARK
-
-
-# Picks the gap-control defender for TRANS_OD: the LAST MAN BACK — the peer that
-# would ARRIVE at OUR NET soonest (momentum-aware ETA at its real Speed cap),
-# with hysteresis. This is the "who's the last line of defense?" read, not a
-# race to the carrier: the deepest peer (already goal-side, between the rush and
-# our cage) recovers into the gap fastest and stays home to contain, while the
-# peers further up-ice fall to MARK and pick up the carrier's receivers.
-#
-# The old metric — soonest to arrive at the CARRIER'S body among goal-side peers
-# — was a chase read that mis-elected on a rush: a shallower peer nearer the
-# carrier beat the truly-deepest peer on ETA-to-carrier, so CONTAIN went to
-# someone who could never actually seal the net and the real last man back got
-# yanked up-ice onto a receiver by the threat partition (the "last man leaves,
-# nobody picks up the carrier" failure). Racing home instead keeps the man who's
-# genuinely in front of the rush on the rush, and subsumes the old
-# caught-up-ice fallback for free (when everyone's beaten up the ice, the peer
-# nearest home still wins and recovers into the gap).
-static func _pick_gap_defender(
-		snapshot: WorldSnapshot,
-		teammates: Array,
-		fixed_peers: Dictionary,
-		prev_assignments: Dictionary,
-		_carrier_pos: Vector3,
-		our_net: Vector3,
-		caps_by_peer: Dictionary) -> int:
-	return _pick_soonest_with_hysteresis(
-			snapshot, teammates, fixed_peers, prev_assignments, our_net,
-			Slot.CONTAIN, caps_by_peer)
 
 
 # Assigns slot1 to soonest-to-target1 peer, then dumps any remainder

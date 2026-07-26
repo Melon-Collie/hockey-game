@@ -9,6 +9,9 @@ class_name AIRoleTrack
 #   TRACK_MID_STRONG / _WEAK — F2 and F3. Come back through MID-ICE and stop
 #     just inside the tops of the circles, sticks on the ice, then pick up
 #     whoever enters their lane.
+#   TRACK_MID — the same job with only ONE mid tracker (3v3, where there is no D
+#     pair to split around): he holds the CENTRE lane rather than a side of it,
+#     and owns whoever enters the middle from either half.
 #
 # ── Why this is a MODE, not just another position ────────────────────────────
 # The old TRANS_OD had two MARK defenders running a cover-position argmax from
@@ -53,7 +56,16 @@ const CHECK_GOAL_SIDE_MARGIN_M: float = 0.5
 static func decide(ctx: RoleContext, slot: int) -> RoleDecision:
 	if slot == AIRoleSlots.Slot.TRACK_PUCK:
 		return _decide_puck(ctx)
-	return _decide_mid(ctx, slot == AIRoleSlots.Slot.TRACK_MID_STRONG)
+	# Side sign of this tracker's recovery lane: +1 / -1 for the 5v5 pair,
+	# 0 for the lone 3v3 tracker (dead centre, and no half-ice filter on the
+	# man he picks up — with one body in the middle, everyone in the middle is
+	# his).
+	var side: float = 0.0
+	if slot == AIRoleSlots.Slot.TRACK_MID_STRONG:
+		side = ctx.strong_x
+	elif slot == AIRoleSlots.Slot.TRACK_MID_WEAK:
+		side = -ctx.strong_x
+	return _decide_mid(ctx, side)
 
 
 # ── TRACK_PUCK: run the carrier down ─────────────────────────────────────────
@@ -104,11 +116,9 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 
 # ── TRACK_MID: back through the middle, stop at the circle tops ──────────────
 
-static func _decide_mid(ctx: RoleContext, is_strong: bool) -> RoleDecision:
+static func _decide_mid(ctx: RoleContext, side: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var read: AIRushRead = ctx.rush_read
-	var our_net: Vector3 = ctx.defending_goal_pos
-	var side: float = ctx.strong_x if is_strong else -ctx.strong_x
 
 	# RECOVERING: no argmax, no post — just get back through the middle, hard.
 	# This is the whole of the urgency fix (§7).
@@ -177,7 +187,10 @@ static func _man_in_my_lane(ctx: RoleContext, read: AIRushRead,
 		if read.attackers[i] == read.carrier_peer:
 			continue
 		var lead: Vector3 = read.attacker_leads[i]
-		if lead.x * side < 0.0:
+		# Half-ice filter — but only when there IS a neighbour to hand off to.
+		# A lone mid tracker (side 0) owns the whole middle; filtering him to
+		# half of it would leave the other half to nobody.
+		if side != 0.0 and lead.x * side < 0.0:
 			continue  # other half of the ice — the neighbour's man
 		var depth: float = lead.distance_to(our_net)
 		if depth < best_depth:
