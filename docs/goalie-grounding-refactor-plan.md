@@ -1625,3 +1625,49 @@ deliberately separate with a reason, and one (7, the reactive low read) was neve
 a block. The remaining thresholds the plan flagged — `lunge_trigger_distance`
 1.2 m and `active_blade_carrier_radius` 2.5 m — belong to the STICK, which is the
 next candidate.
+
+### The two vetoes, re-run against a goalie that can be punished (2026-07)
+
+#558 (the chest-anchored reach) was fixed specifically to un-confound these. Both
+were originally rejected on the same evidence — "more saves AND deception stops
+paying" — which turned out to be an artifact of a seal that cost nothing. With
+the trade real, the two separate cleanly and the answers are different.
+
+**A — counting WRISTER_AIM as a shot declaration.** Goals /14:
+
+| arm | shipped | with A |
+|---|---|---|
+| telegraphed | 7 | 5 |
+| wrong corner | 10 | 8 |
+| wrong height | 11 | 8 |
+
+The deception DELTAS now survive (corner +3 both ways, height +4 → +3) instead
+of collapsing to zero — the fix did its job. What is left is a flat difficulty
+increase: every arm loses two goals. So A is no longer a correctness failure, it
+is a tuning choice, and the answer is still no — it makes him harder without
+opening a read, and the original doctrinal objection stands unchanged (a wrister
+origin is still steerable, so pre-committing bets against a shot that may not
+come from where he committed).
+
+**B — letting the block model act during a reaction.** Goals /14, and the sweeps:
+
+| measure | shipped | with B |
+|---|---|---|
+| telegraphed | 7 | 7 |
+| wrong corner | 10 | 10 |
+| wrong height | 11 | **8** |
+| exhaustive, dot line | 16/288 | 25/288 |
+| exhaustive, slot 3.0 m | 0/288 | 4/288 |
+| five-hole COLD FLAT | none in ±0.40 | 17 cm window |
+
+Telegraphed and corner are now untouched — the earlier "everything collapses"
+picture is gone. What B eats is precisely the HEIGHT channel (+4 → +1), which is
+structurally what it must: blocking during a reaction pre-empts the leg read, and
+the leg read IS the height channel. Still no. The extra beatability is the goalie
+flopping rather than a skill window opening, and a COLD five-hole window appearing
+from nothing means a set keeper is beatable with no wind-up at all — which is the
+opposite of the commit-and-get-punished loop we are building.
+
+Both stand. The value of the re-run is that the reasons are now specific and
+separable instead of one confounded signal, and that the instrument can referee
+a commit decision again.
