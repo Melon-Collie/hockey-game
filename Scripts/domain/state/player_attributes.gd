@@ -6,7 +6,7 @@ extends RefCounted
 # Per-skater build on the v4 BODY + GEAR model (docs/attributes-v4-plan.md).
 # A build is:
 #
-#   • HEIGHT — a free CONTINUOUS dial in inches (every inch 5'8"..6'7"). Tables
+#   • HEIGHT — a free CONTINUOUS dial in inches (every inch 5'7"..6'8"). Tables
 #     are authored at 5 anchor heights and interpolate. Height decides reach,
 #     the speed↔agility baseline fork (speed hump peaks at 6'1", agility
 #     small-favored) and the shot-power baseline (big-favored).
@@ -59,15 +59,35 @@ extends RefCounted
 # NetworkManager peer table (6 ints replicated at join, PROTOCOL v36).
 
 # Height is stored in INCHES and is a free CONTINUOUS dial: every inch from
-# 5'8" (68) to 6'7" (79) is playable. Tables are authored at 5 anchor heights
+# 5'7" (67) to 6'8" (80) is playable. Tables are authored at 5 anchor heights
 # (ANCHOR_INCHES); heights in between linearly interpolate the adjacent rows.
-const HEIGHT_MIN: int = 68     # 5'8"
+const HEIGHT_MIN: int = 67     # 5'7"
 const HEIGHT_MEDIUM: int = 73  # 6'1"  (neutral)
-const HEIGHT_MAX: int = 79     # 6'7"
+const HEIGHT_MAX: int = 80     # 6'8"
 
 # The 5 height table rows sit at these heights (inches). 5'10" (row 1) is the
 # mesh-native anchor where the reach/height multiplier is exactly 1.0.
-const ANCHOR_INCHES: Array[int] = [68, 70, 73, 76, 79]  # 5'8"..6'7"
+#
+# BOTH END ANCHORS MOVED when the range was extended (6'7"→6'8" at the top,
+# 5'8"→5'7" at the bottom) rather than adding sixth/seventh rows, which would
+# have left anchors one inch apart at the ends. Each end row was rebalanced so
+# the outermost segment's line still passes through the OLD end value — i.e.
+# that segment's per-inch slope simply continues for one more inch:
+#
+#     V80 = V79 + (V79 − V76)/3        V67 = V68 − (V70 − V68)/2
+#
+# So every previously-playable height (5'8"–6'7") keeps the values it had (the
+# bottom end exactly; the top end within 0.00025, pure constant-rounding), and
+# the two new heights are real extensions of each curve rather than copies of
+# their neighbours. The four 4-decimal constants below are the bottom-row
+# halvings — carried to 4 places precisely so 5'8" and 5'9" stay bit-exact.
+const ANCHOR_INCHES: Array[int] = [67, 70, 73, 76, 80]  # 5'7"..6'8"
+
+# The legacy 1..5 height STEP mapping is frozen at the v3 height set, which
+# ran 5'8"–6'7". It deliberately does NOT track ANCHOR_INCHES: a saved tier-era
+# build should keep the body it had, not gain or lose an inch because the range
+# was extended later.
+const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
 
 # ── Weight band (BMI interval + absolute floor — see plan doc §3.2) ───────────
 # One authored band generates the per-height pounds range: lbs = BMI·in²/703.
@@ -154,17 +174,17 @@ const LENGTH_LONG: int = 2       # +reach / tip speed / contest momentum, +inert
 # re-widens the spread laterally.
 
 # Speed baseline (max_speed). The hump: top speed peaks at medium height.
-const _SPEED_H: Array[float] = [0.990, 0.995, 1.000, 0.995, 0.990]
+const _SPEED_H: Array[float] = [0.9875, 0.995, 1.000, 0.995, 0.988]
 
 # Agility baseline (turn rate / brake / facing / lateral). Small-favored.
-const _AGILITY_H: Array[float] = [1.050, 1.020, 1.000, 0.960, 0.930]
+const _AGILITY_H: Array[float] = [1.065, 1.020, 1.000, 0.960, 0.920]
 
 # Shot-power baseline (charged wrister/slapper ceiling). Big-favored — the
 # leverage a long frame loads into a shot. Wind-up derives inversely.
-const _SHOT_H: Array[float] = [0.900, 0.940, 1.000, 1.050, 1.090]
+const _SHOT_H: Array[float] = [0.880, 0.940, 1.000, 1.050, 1.103]
 
 # Hitbox cylinder radius — frame width. Height sets the skeleton's breadth…
-const _RADIUS: Array[float] = [0.95, 0.975, 1.00, 1.05, 1.10]
+const _RADIUS: Array[float] = [0.9375, 0.975, 1.00, 1.05, 1.117]
 # …and the frame widens it (a heavy body IS wider — matches the visual frame
 # bulk, so the hitbox tracks the silhouette): bigger poke target and net-front
 # screen for the heavy build, slimmer profile for the lean one.
@@ -172,11 +192,11 @@ const _RADIUS_F: Array[float] = [0.96, 0.98, 1.00, 1.03, 1.06]
 
 # Body height (mesh Y-scale, arm/ROM length, hand heights). Mesh-native 5'10"
 # is row 1, so the 1.0 identity sits there (NOT the 6'1" gameplay neutral).
-const _HEIGHT: Array[float] = [0.971, 1.000, 1.043, 1.086, 1.129]
+const _HEIGHT: Array[float] = [0.9565, 1.000, 1.043, 1.086, 1.143]
 
 # Stick length — equipment, ~0.65× the height deviation from mesh-native 5'10".
 # Height sets the BAND CENTER (real sticks are cut to the body)…
-const _STICK_LEN: Array[float] = [0.981, 1.000, 1.028, 1.056, 1.084]
+const _STICK_LEN: Array[float] = [0.9715, 1.000, 1.028, 1.056, 1.093]
 # …and the LENGTH gear slot leans it — THE FIRST LIVE GEAR SLOT. A lean on
 # your height's stick, not an absolute pick, so max-height + LONG can't stack
 # reach beyond the tuned corner. Symmetric ±4% to start (whether LONG should
@@ -194,9 +214,9 @@ const _LENGTH_LEAN: Array[float] = [0.960, 1.000, 1.040]  # SHORT / STANDARD / L
 # step and +cornering, −top speed. The speed lean is what re-widens the
 # sprint band the body plane deliberately compressed (~20.5–24 mph across
 # profiles, approaching the v3 20–25 target). STACKED AGILITY CORNERS
-# (body × gear, pinned by test): best 5'8"-lean-agility ≈ 1.14, worst
-# 6'7"-heavy-power ≈ 0.85 — a self-chosen extreme, deliberately below the
-# involuntary body floor (~0.89).
+# (body × gear, pinned by test): best 5'7"-lean-agility ≈ 1.15, worst
+# 6'8"-heavy-power ≈ 0.84 — a self-chosen extreme, deliberately outside the
+# involuntary body floor/ceiling (~0.88 / ~1.10).
 const _PROFILE_SPEED_LEAN: Array[float] = [0.96, 1.00, 1.04]    # agility / balanced / power
 const _PROFILE_AGILITY_LEAN: Array[float] = [1.05, 1.00, 0.95]
 const _PROFILE_ACCEL_LEAN: Array[float] = [1.04, 1.00, 0.98]
@@ -242,8 +262,8 @@ const _ACCEL_F: Array[float] = [1.080, 1.040, 1.000, 0.980, 0.970]
 # Grounded in F = mv²/r: at fixed leg strength more mass means a wider arc and
 # a longer stop. This is the counterweight that makes the weight dial a real
 # seesaw (mass 1.28 is a big buy; without this its only tax was mild accel).
-# CORNER BUDGET (body-only): best 5'8"-lean 1.05·1.03 ≈ 1.08, worst 6'7"-heavy
-# 0.93·0.96 ≈ 0.89 — pinned just under the v3 "feels bad but playable" floor;
+# CORNER BUDGET (body-only): best 5'7"-lean 1.065·1.03 ≈ 1.10, worst 6'8"-heavy
+# 0.92·0.96 ≈ 0.88 — pinned just under the v3 "feels bad but playable" floor;
 # the skate-profile gear lean stacks on top later, so re-check the stacked
 # corners when that slot lands. Deliberately NOT applied to edge glide — see
 # agility_glide_mult.
@@ -261,8 +281,8 @@ const _STAMINA_REGEN_F: Array[float] = [1.25, 1.12, 1.00, 0.90, 0.82]
 # Silhouette = body (v4): height drives overall scale + torso/head; frame
 # drives uniform limb/shoulder bulk (replacing the v3 per-tier limb tells).
 # Gear reads from the rendered equipment itself, not the body.
-const _TORSO_BULK: Array[float] = [0.90, 0.96, 1.00, 1.07, 1.14]  # height
-const _HEAD_BULK: Array[float] = [0.95, 0.98, 1.00, 1.03, 1.06]   # height
+const _TORSO_BULK: Array[float] = [0.87, 0.96, 1.00, 1.07, 1.163]  # height
+const _HEAD_BULK: Array[float] = [0.935, 0.98, 1.00, 1.03, 1.07]   # height
 const _FRAME_BULK: Array[float] = [0.90, 0.95, 1.00, 1.07, 1.14]  # frame lean→heavy
 
 # ── Sprint / carry constants ──────────────────────────────────────────────────
@@ -641,11 +661,12 @@ func _f(table: Array[float]) -> float:
 	return lerpf(table[lo], table[lo + 1], pos - float(lo))
 
 
-# Accept a legacy 1..5 step (maps onto the anchor heights) OR a raw inches
-# value. No real hockey height falls in 6..67, so the split is unambiguous.
+# Accept a legacy 1..5 step (maps onto LEGACY_HEIGHT_STEPS, frozen at the v3
+# heights so a migrated build keeps its body) OR a raw inches value. No real
+# hockey height falls in 6..67, so the split is unambiguous.
 static func coerce_height(v: int) -> int:
-	if v <= ANCHOR_INCHES.size():
-		return ANCHOR_INCHES[clampi(v, 1, ANCHOR_INCHES.size()) - 1]
+	if v <= LEGACY_HEIGHT_STEPS.size():
+		return LEGACY_HEIGHT_STEPS[clampi(v, 1, LEGACY_HEIGHT_STEPS.size()) - 1]
 	return clampi(v, HEIGHT_MIN, HEIGHT_MAX)
 
 

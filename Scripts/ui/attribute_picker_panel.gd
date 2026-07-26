@@ -14,7 +14,7 @@ extends VBoxContainer
 # The panel emits `changed` on every edit so the host can refresh its Apply
 # button; the host gates Apply on panel.is_dirty() and panel.is_valid().
 #
-# A build is two continuous body dials: HEIGHT (5'8"..6'7", every inch) and
+# A build is two continuous body dials: HEIGHT (5'7"..6'8", every inch) and
 # WEIGHT (lbs, bounded per height by the BMI band and the absolute playable-
 # mass floor — see PlayerAttributes.weight_min/max). Every slider position is
 # a legal build — there is no power economy and no shape to validate, so

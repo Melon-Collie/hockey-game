@@ -1,7 +1,7 @@
 extends GutTest
 
 # PlayerAttributes — v4 BODY + GEAR model (docs/attributes-v4-plan.md). A build
-# is two continuous body dials — HEIGHT (inches, 5'8"..6'7") and WEIGHT (lbs,
+# is two continuous body dials — HEIGHT (inches, 5'7"..6'8") and WEIGHT (lbs,
 # bounded per height by a BMI band 22.5..29.0 floored at an absolute 160 lb) —
 # plus four lateral gear slots (stored, zero gameplay effect in step 1).
 # Neutral is 6'1" / 201 lbs / all-balanced, where every canonical multiplier
@@ -11,9 +11,9 @@ extends GutTest
 # player_attributes.gd, including the constitution guarantee: no build scales
 # blade fidelity (hands) and no attribute term feeds checking (mass-emergent).
 
-const H_MIN: int = PlayerAttributes.HEIGHT_MIN     # 5'8" (68")
+const H_MIN: int = PlayerAttributes.HEIGHT_MIN     # 5'7" (67")
 const H_MED: int = PlayerAttributes.HEIGHT_MEDIUM  # 6'1" (73")
-const H_MAX: int = PlayerAttributes.HEIGHT_MAX     # 6'7" (79")
+const H_MAX: int = PlayerAttributes.HEIGHT_MAX     # 6'8" (80")
 
 const BASE_MAX_SPEED: float = 9.0  # GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 const MS_TO_MPH: float = 2.23694
@@ -95,13 +95,30 @@ func test_frame_t_pins_all_three_anchors_at_every_height() -> void:
 
 
 func test_weight_for_frame_t_round_trips() -> void:
-	# The picker rides this when the height slider moves — a lean build must
-	# stay lean as it grows, including across the floor-truncated heights.
-	for h: int in [68, 70, 73, 76, 79]:
-		for t: float in [0.0, 0.25, 0.5, 0.75, 1.0]:
-			var w: int = PlayerAttributes.weight_for_frame_t(h, t)
-			assert_almost_eq(PlayerAttributes.frame_t_for(h, w), t, 0.02,
-					"frame %.2f round-trips at %d\" (%d lb)" % [t, h, w])
+	# The picker's actual guarantee: drag the height slider away and back and
+	# you land on the SAME pound. That is the pounds round-trip w → t → w, and
+	# it must be exact at every height and every legal weight.
+	#
+	# Note this is the right way to state it — a frame-t round-trip (t → w → t)
+	# cannot be exact, because weight is quantized to integer pounds. At 5'7"
+	# the lean half of the band is only 9 lb wide (the absolute playable-mass
+	# floor at 160 sits just under the 169 neutral), so one pound is 0.056 of
+	# frame-t and half-pound rounding alone costs 0.028. Asserting pounds
+	# instead of frame-t tests the invariant that matters and stays honest at
+	# the squeezed heights.
+	var misses: Array[String] = []
+	for h: int in range(PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MAX + 1):
+		for w: int in range(PlayerAttributes.weight_min(h), PlayerAttributes.weight_max(h) + 1):
+			var back: int = PlayerAttributes.weight_for_frame_t(
+					h, PlayerAttributes.frame_t_for(h, w))
+			if back != w:
+				misses.append("%d\"/%d lb → %d lb" % [h, w, back])
+	assert_eq(misses.size(), 0, "pounds must round-trip exactly: %s" % ", ".join(misses))
+	# And the frame anchors still land on the band's named rows, to the pound.
+	for h: int in [67, 68, 70, 73, 76, 79, 80]:
+		assert_eq(PlayerAttributes.weight_for_frame_t(h, 0.0), PlayerAttributes.weight_min(h))
+		assert_eq(PlayerAttributes.weight_for_frame_t(h, 0.5), PlayerAttributes.weight_neutral(h))
+		assert_eq(PlayerAttributes.weight_for_frame_t(h, 1.0), PlayerAttributes.weight_max(h))
 
 
 func test_implausible_bodies_unrepresentable() -> void:
@@ -116,9 +133,9 @@ func test_implausible_bodies_unrepresentable() -> void:
 func test_zero_weight_coerces_to_neutral_frame() -> void:
 	# A pre-v5 save / defaulted wire arg (weight 0) lands on the height's
 	# neutral frame, keeping legacy identities' silhouettes.
-	assert_eq(_body(H_MIN, 0).weight, 174)
+	assert_eq(_body(H_MIN, 0).weight, 169)   # 5'7"
 	assert_eq(_body(H_MED, 0).weight, 201)
-	assert_eq(_body(H_MAX, 0).weight, 235)
+	assert_eq(_body(H_MAX, 0).weight, 241)   # 6'8"
 
 
 func test_frame_t_spans_band() -> void:
@@ -140,8 +157,11 @@ func test_speed_peaks_at_medium_height() -> void:
 func test_agility_small_favored() -> void:
 	# Neutral-frame builds. The piecewise frame_t pins every height's neutral to
 	# exactly 0.5, so the frame term is exactly 1.0 and these are pure height.
-	assert_almost_eq(_body(H_MIN, 0).agility_mult(), 1.05, 0.0001)
-	assert_almost_eq(_body(H_MAX, 0).agility_mult(), 0.93, 0.0001)
+	assert_almost_eq(_body(H_MIN, 0).agility_mult(), 1.065, 0.0001)
+	assert_almost_eq(_body(H_MAX, 0).agility_mult(), 0.920, 0.0001)
+	# The old end heights kept their values when the anchors moved out.
+	assert_almost_eq(_body(68, 0).agility_mult(), 1.050, 0.0001, "5'8\" unchanged")
+	assert_almost_eq(_body(79, 0).agility_mult(), 0.930, 0.0001, "6'7\" unchanged")
 	assert_true(_body(H_MIN, 0).agility_mult() > _body(H_MED, 0).agility_mult())
 
 
@@ -149,8 +169,8 @@ func test_shot_big_favored_and_nhl_anchored() -> void:
 	assert_true(_body(H_MAX, 0).shot_power_mult() > _body(H_MIN, 0).shot_power_mult())
 	# League average = neutral (~89.5 mph slapper on the 40 m/s base).
 	assert_almost_eq(40.0 * _body(H_MED, 0).shot_power_mult() * MS_TO_MPH, 89.5, 1.0)
-	# Body-only ceiling ≈ 97.5 mph (the flex gear stage re-widens the top end).
-	assert_between(40.0 * _body(H_MAX, 0).shot_power_mult() * MS_TO_MPH, 96.0, 99.0)
+	# Body-only ceiling ≈ 98.7 mph at 6'8" (the flex gear slot re-widens it further).
+	assert_between(40.0 * _body(H_MAX, 0).shot_power_mult() * MS_TO_MPH, 97.5, 100.0)
 
 
 func test_continuous_height_interpolates_between_anchors() -> void:
@@ -161,6 +181,27 @@ func test_continuous_height_interpolates_between_anchors() -> void:
 	var mid := _body(71, 0).shot_power_mult()
 	assert_true(mid > lo and mid < hi, "71\" shot falls between the 70\" and 73\" rows")
 	assert_almost_eq(mid, lerpf(lo, hi, 1.0 / 3.0), 0.0001, "linear between anchors")
+
+
+func test_extended_range_preserves_the_old_heights() -> void:
+	# The end anchors moved out (5'8"→5'7", 6'7"→6'8") rather than gaining rows.
+	# Every height that was playable before must keep the values it had.
+	assert_eq(PlayerAttributes.HEIGHT_MIN, 67)
+	assert_eq(PlayerAttributes.HEIGHT_MAX, 80)
+	var expected_shot: Dictionary = {68: 0.900, 70: 0.940, 73: 1.000, 76: 1.050, 79: 1.090}
+	for h: int in expected_shot:
+		assert_almost_eq(_body(h, 0).shot_power_mult(), float(expected_shot[h]), 0.0005,
+				"%d\" shot power unchanged" % h)
+	# …and the new ends genuinely extend each curve rather than copying a neighbour.
+	assert_lt(_body(67, 0).shot_power_mult(), _body(68, 0).shot_power_mult())
+	assert_gt(_body(80, 0).shot_power_mult(), _body(79, 0).shot_power_mult())
+	assert_gt(_body(67, 0).agility_mult(), _body(68, 0).agility_mult())
+	assert_lt(_body(80, 0).agility_mult(), _body(79, 0).agility_mult())
+	# The new heights' weight bands, and that they cover the bodies they exist for.
+	assert_eq(PlayerAttributes.weight_max(67), 185)   # Caufield 5'7"/174 fits
+	assert_eq(_body(67, 174).weight, 174)
+	assert_eq(PlayerAttributes.weight_max(80), 264)   # Rempe 6'8"/261 fits
+	assert_eq(_body(80, 261).weight, 261)
 
 
 func test_legacy_1to5_height_maps_to_anchor_inches() -> void:
@@ -239,11 +280,13 @@ func test_agility_bites_with_weight() -> void:
 	var heavy := _body(H_MED, 220)
 	assert_almost_eq(lean.agility_mult(), 1.03, 0.001, "lean agility bonus")
 	assert_almost_eq(heavy.agility_mult(), 0.96, 0.001, "heavy agility tax")
-	# Corner budget: the worst body corner (6'7"/257) stays at/above ~0.89 —
-	# just under the v3 "feels bad but playable" floor; the best (5'8"/160)
-	# stays under the old 1.11 ceiling, leaving the profile gear room to lean.
-	assert_between(_body(H_MAX, 257).agility_mult(), 0.885, 0.90, "worst corner")
-	assert_between(_body(H_MIN, 160).agility_mult(), 1.07, 1.10, "best corner")
+	# Corner budget, re-pinned at the extended range: the worst body corner
+	# (6'8"/264) sits ~0.88 and the best (5'7"/160) ~1.10 — one inch further out
+	# at each end than the old 0.89/1.08, leaving the profile gear room to lean.
+	assert_between(_body(H_MAX, PlayerAttributes.weight_max(H_MAX)).agility_mult(),
+			0.875, 0.89, "worst corner")
+	assert_between(_body(H_MIN, PlayerAttributes.weight_min(H_MIN)).agility_mult(),
+			1.09, 1.11, "best corner")
 
 
 func test_glide_ignores_weight_tank_still_coasts() -> void:
@@ -267,7 +310,7 @@ func test_glide_and_charge_are_inverse_of_partner() -> void:
 	# Glide mirrors the height-only agility (weight exempt — see above): at the
 	# height's neutral frame the frame term is ~1, so glide ≈ 2 − agility there.
 	var a := _body(H_MIN, 0)
-	assert_almost_eq(a.agility_glide_mult(), 2.0 - 1.05, 0.0001, "height-only inverse")
+	assert_almost_eq(a.agility_glide_mult(), 2.0 - 1.065, 0.0001, "height-only inverse")
 	assert_almost_eq(a.shot_charge_mult(), 2.0 - a.shot_power_mult(), 0.0001)
 
 
@@ -350,7 +393,9 @@ func test_migrate_tiers_mapping() -> void:
 func test_legacy_six_attr_migration_enforcer() -> void:
 	# A legacy size-5 / physical-5 enforcer → tall, heavy frame, long stick.
 	var a := PlayerAttributes.migrate_legacy(2, 1, 2, 5, 5, 4)
-	assert_eq(a.height, H_MAX)  # size 5 -> 6'7"
+	# The legacy 1..5 step table is FROZEN at the v3 heights, so size 5 stays
+	# 6'7" — a migrated save must not gain an inch because the range grew.
+	assert_eq(a.height, 79)
 	assert_true(a.weight > PlayerAttributes.weight_neutral(H_MAX), "checking-strong → heavier")
 	assert_eq(a.length, PlayerAttributes.LENGTH_LONG)
 
@@ -409,13 +454,13 @@ func test_profile_is_a_topend_burst_seesaw() -> void:
 
 
 func test_stacked_agility_corners_budgeted() -> void:
-	# Body × gear extremes, pinned: the involuntary body floor stays ~0.89;
-	# the self-chosen worst (heavy tank on power skates) may dip below it but
-	# never under 0.84, and the shiftiest possible build stays under 1.15.
-	var worst := PlayerAttributes.new(79, 257, PlayerAttributes.PROFILE_POWER, 1, 1, 1)
-	var best := PlayerAttributes.new(68, 160, PlayerAttributes.PROFILE_AGILITY, 1, 1, 1)
-	assert_between(worst.agility_mult(), 0.84, 0.90, "worst stacked corner")
-	assert_between(best.agility_mult(), 1.10, 1.15, "best stacked corner")
+	# Body × gear extremes, pinned at the extended range: the involuntary body
+	# corners are ~0.88/~1.10, and the self-chosen extremes (heavy tank on power
+	# skates / small build on rockers) push one gear lean outside them.
+	var worst := PlayerAttributes.new(80, 264, PlayerAttributes.PROFILE_POWER, 1, 1, 1)
+	var best := PlayerAttributes.new(67, 160, PlayerAttributes.PROFILE_AGILITY, 1, 1, 1)
+	assert_between(worst.agility_mult(), 0.83, 0.85, "worst stacked corner")
+	assert_between(best.agility_mult(), 1.14, 1.16, "best stacked corner")
 
 
 # ── Flex + curve: the shot gear slots ────────────────────────────────────────

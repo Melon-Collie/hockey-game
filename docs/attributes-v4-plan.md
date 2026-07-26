@@ -107,8 +107,25 @@ identical to shipped `@export` defaults (same anchoring pattern as v3).
 
 ### 3.1 Height (unchanged mechanism, narrower scope)
 
-Continuous in inches, 5'8"–6'7", 5 anchor rows + interpolation — the existing
+Continuous in inches, 5'7"–6'8", 5 anchor rows + interpolation — the existing
 `_anchor`/`_h`/`_ht` machinery survives as-is.
+
+**Range extended 2026-07** (5'8"–6'7" → 5'7"–6'8"), by MOVING both end anchors
+out rather than adding a sixth/seventh row — extra rows would have left anchors
+one inch apart at the ends. Each end row was rebalanced so the outermost
+segment's line still passes through the OLD end value, i.e. that segment's
+per-inch slope simply continues for one more inch:
+
+    V80 = V79 + (V79 − V76)/3          V67 = V68 − (V70 − V68)/2
+
+Every previously-playable height therefore keeps the values it had — the bottom
+end exactly (the four 4-decimal constants exist for this), the top end within
+0.00025 of constant-rounding — and the two new heights are real extensions of
+each curve rather than copies of their neighbours. The legacy 1..5 height STEP
+mapping (`LEGACY_HEIGHT_STEPS`) was split off from `ANCHOR_INCHES` and frozen at
+the v3 heights, so a migrated tier-era save keeps its body instead of gaining an
+inch. `PROTOCOL_VERSION` v46: height already rode the wire as an int, but the
+value 80 is new and an older peer would coerce it back to 79 and diverge.
 
 Keeps: reach / mesh scale / arm ROM (and via ROM, wrister runway
 availability — §6), hitbox radius, speed↔agility baseline fork
@@ -132,13 +149,16 @@ BMI × inches² / 703, and the frame anchors sit at frame-t 0/.25/.5/.75/1:
 
 | height | LEAN | LIGHT | MEDIUM | SOLID | HEAVY |
 |--------|------|-------|--------|-------|-------|
+| 5'7"   | 160\* | 165 | 169 | 177 | 185 |
 | 5'8"   | 160\* | 167 | 174 | 183 | 191 |
 | 5'10"  | 160\* | 173 | 185 | 194 | 202 |
 | 6'1"   | 171 | 186 | **201** | 211 | 220 |
 | 6'4"   | 185 | 202 | 218 | 228 | 238 |
 | 6'7"   | 200 | 218 | 235 | 246 | 257 |
+| 6'8"   | 205 | 223 | 241 | 253 | 264 |
 
-\* the absolute playable-mass floor, not the ratio floor.
+\* the absolute playable-mass floor, not the ratio floor. It binds at
+5'7"–5'10"; above that the BMI 22.5 ratio floor is the higher of the two.
 
 **Recalibrated 2026-07** against a 46-player sample of current listed NHL
 height/weight cards. Two findings drove it:
@@ -217,8 +237,8 @@ instead of height/tier — values `TBD`, anchored to v3 spreads):
 - **Agility bite** (`_AGILITY_F`, lean-favored, multiplies the height
   baseline) — F = mv²/r: heavy turns wide and stops long. This is the
   counterweight that makes the dial a real seesaw (mass 1.28 is a big buy;
-  accel alone was too mild a tax). Corner budget (body-only): best 5'8"-lean
-  ≈ 1.08, worst 6'7"-heavy ≈ 0.89 — re-check stacked corners when the
+  accel alone was too mild a tax). Corner budget (body-only): best 5'7"-lean
+  ≈ 1.10, worst 6'8"-heavy ≈ 0.88 — re-check stacked corners when the
   skate-profile gear lean lands. **Glide is exempt**: `agility_glide_mult`
   derives from the height-only agility component, so the tank turns wide but
   still coasts like his mass says he should (top speed also stays
