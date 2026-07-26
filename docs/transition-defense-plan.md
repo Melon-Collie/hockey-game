@@ -546,6 +546,122 @@ Resolved items moved to **Decisions banked** at the top.
 
 ---
 
+## 13. Offensive positioning — the other half of symptom 1
+
+Symptom 1 has two halves. §8 fixed the neutral-zone stations; the O-zone half is
+still live, and the reported behavior is exactly the two failure modes the coaching
+literature names: **"too spread out leads to isolated puck carriers"** and **"a common
+mistake is to float far away from the puck in an effort to be 'open' instead of finding
+angles of support."**
+
+### 13.1 Root causes
+
+**(a) The bound is applied at P(turnover) = 1.** `race_home_feasible` answers a
+conditional — *"if the puck were turned over right now, could I contain the counter?"* —
+and the offensive stations treat `false` as binding. A D holding the offensive blue line
+with clean possession 40 m away retreats as though the puck were already lost.
+
+The grounded turnover read **already exists and is already used**: `support.gd:123`
+computes `turnover_prior = 1.0 - AIActionScoring.carry_safety(...)`. SUPPORT prices its
+counter risk by the real probability; the points, the DP pair, HIGH_SLOT and DVALVE never
+consult it. That asymmetry is the bug.
+
+**(b) §8's attacker filter is inert during offensive possession.** An opponent is admitted
+if he reaches our net within `rush_eta + LATE_MAN_WINDOW_S`; with the puck deep in their
+end `rush_eta` is the ~6 s hypothetical lug the length of the ice, so essentially every
+opponent qualifies. §8 helped the short-`rush_eta` neutral-zone stations and did nothing
+for the O-zone points. (Correcting the claim in §11 phase B.)
+
+**(c) The floor is far too deep.** `station_retreat_floor` for a D is the dot lane at his
+OWN blue line — from a point stand at the offensive blue line, a ~17 m retreat landing him
+30+ m from the play.
+
+**(d) Nothing bounds a station from being too far from the play.** Every bound pulls
+toward home; there is no forward bound anywhere in the role behaviors.
+
+**(e) "Struggles to pick up a man" follows from (a)–(d)**, plus an interaction with §9: a
+body stranded in the NZ during a cycle is neither in the rush structure nor in coverage
+when possession flips, and the readiness gate correctly holds the whole team in the rush
+shape while he is unaccounted for. One stranded bot prolongs the scramble for everyone.
+
+### 13.2 The real pinch read is not a race simulation
+
+This is the finding that changes the design. The counter-channel model was retained in §8
+on the grounds that it is "a good pinch evaluator." The research says the pinch is read
+from three coarse, categorical facts — none of which is a counter-path simulation:
+
+1. **Control.** *"The only time a defenseman should be standing on the offensive blue line
+   is when his team has complete control of the puck."*
+2. **Support behind.** *"A defenceman can only pinch when they have a supporting player in
+   position to back them up should the puck/player get past them"* — reading whether there
+   is an **F3 high** is what alters the decision.
+3. **Numbers.** *"The first rule defensemen are taught is to count numbers — how many
+   opponents are in front of them and if any are behind them."*
+
+And the retreat **trigger** is *"the other team gains clear possession and is moving out of
+the zone with multiple passing options."* Not "I might theoretically be beaten home."
+
+So the fine-grained race simulation is not just expensive here — it is **systematically
+more pessimistic than the read coaches actually teach**, which is why it strands bodies.
+Offensive stations stop calling it.
+
+### 13.3 The retreat target is numbers, not home
+
+*"It's better to stay safe with a 3 on 2, rather than pinch and end up with a 3 on 1, 2 on
+0 or breakaway."*
+
+The accepted outcome of backing off is **3-on-2 — a preserved numbers layer, not arrival at
+your own net.** That is the direct grounding for (c): the deep end of the retreat is the
+position that restores the numbers, and `AIRushRead.numbers` already measures exactly that.
+A D who has restored even-ish numbers has done his job and must stop retreating.
+
+### 13.4 Support distance is pressure-dependent, and defined by passing options
+
+*"Give close support to a teammate if they are under heavy pressure."* Support distance is
+a function of pressure on the carrier — **the same input as the turnover read**, so one
+perception drives both the D's hold/bail and the supporters' spacing.
+
+The literature expresses support geometrically, not numerically: the **triangle** —
+*"forwards should work to maintain a triangle, which provides multiple passing options with
+multiple angles on the net"*, a *"framework flexible to contract or expand."* No source
+gives a distance in feet. Support is defined by **whether a pass is on**, which validates
+the formalization: **you are in the play iff the carrier could feed you.** Measurable from
+`expected_pass_speed` / the launch ceiling, no invented radius.
+
+### 13.5 Design
+
+**A. `turnover_imminence` on `AIRushRead`** (0..1), computed once per brain tick:
+`1 - carry_safety` while we carry, 1.0 for a loose or in-flight puck. One number, shared,
+so the D's hold and the supporters' spacing cannot disagree.
+
+**B. Offensive stations replace the race-home bound with the real pinch read.** Hold the
+forward stand unless *(control is lost or contested)* **and** *(no support behind)* **and**
+*(the numbers say we are exposed)*. `has_support_behind` — which survived §10 — is the
+F3-high primitive; `AIRushRead.numbers` is the count.
+
+**C. The retreat floor becomes numbers-restoring, not home.** Back off only as far as
+restores the numbers layer, then stop. Replaces `station_retreat_floor` on the offensive
+stations (it stays correct for the NZ ones).
+
+**D. A play-connection bound — the forward floor that does not exist today.** No offensive
+station may sit outside feedable range of the puck. This is the explicit "nobody completely
+out of the play", and it is the bound that makes the triangle contract under pressure
+rather than stretch.
+
+**E. The points get an above-the-puck-style discipline.** `HIGH_SLOT` has
+`ABOVE_PUCK_MARGIN_M` (real F3 doctrine); the points have no equivalent, which is part of
+why they are the bodies that end up stranded.
+
+### 13.6 Open
+
+- **Appetite split.** D vs F conservatism — reuse `EXPOSURE_APPETITE_DEFENSE` /
+  `_FORWARD`, the existing hand-set feel scalars, rather than a new knob.
+- **"Take the player or take the puck."** The pinch's own success condition (*"if a chip or
+  middle-bump pass beats you easily, a pinch is a poor option"*) is a further read we do
+  not model at all. Out of scope here; worth noting as the next layer of pinch quality.
+
+---
+
 ## Appendix — research
 
 Extends the rush-defense section of `docs/5v5-ai-plan.md:542`, which was already correct.
@@ -597,3 +713,47 @@ Sources:
 - [Let's Play Hockey — Russo: Golden Rules for Defensemen](https://letsplayhockey.com/russo-golden-rules-for-defensemen/)
 </content>
 </invoke>
+
+### Offensive positioning (drives §13)
+
+**The pinch / hold-the-line read**
+- *"The only time a defenseman should be standing on the offensive blue line is when his
+  team has complete control of the puck."*
+- *"As a general rule, a defenceman can only pinch when they have a supporting player in
+  position to back them up should the puck/player get past them"*; reading whether there is
+  an **F3 high** alters the decision, and with F3 support *"there is a lower risk if the
+  pinch down does not work."*
+- *"The first rule defensemen are taught is to count numbers — how many opponents are in
+  front of them and if any are behind them."*
+- Retreat trigger: *"if the other team gains clear possession of the puck, and is moving out
+  of the zone with multiple passing options — retreat."*
+- Retreat outcome: *"better to stay safe with a 3 on 2, rather than pinch and end up with a
+  3 on 1, 2 on 0 or breakaway."* — the target is a preserved numbers layer, not reaching
+  your own net.
+- Pinch success condition: *"take the player or take the puck"*; if a chip or middle-bump
+  pass beats you easily, the pinch is a poor option.
+- **F3 fills**: F3 stays high above the circles to back up a pinching D; if the D goes in,
+  the forward covering that point goes with him.
+
+**Support and spacing**
+- Named failure modes: *"too spread out leads to isolated puck carriers"*; *"a common
+  mistake is to float far away from the puck in an effort to be 'open' instead of finding
+  angles of support"*; *"players hurry up the ice and end up in there all by themselves."*
+- *"Give close support to a teammate if they are under heavy pressure"* — support distance
+  is pressure-dependent.
+- The **triangle**: winger on the wall, centre in the slot, D at the line; *"multiple
+  passing options with multiple angles on the net"*, a framework that **contracts or
+  expands** with the situation.
+- No source specifies support distance in feet — support is defined by whether a **pass is
+  on**, which is why §13.4 formalizes "in the play" as feedability rather than a radius.
+
+Sources:
+- [How To Hockey — Defensemen's Guide to the Pinch](https://howtohockey.com/defensemens-guide-to-the-pinch/)
+- [How To Hockey — How to Play Defense: Roles and Responsibilities](https://howtohockey.com/how-to-play-defense-roles-responsibilities/)
+- [Hockey IQ Newsletter — Defense: How to Read the Pinch](https://hockeysarsenal.substack.com/p/how-to-reach-the-pinch)
+- [Ice Hockey Systems — Establish Puck Possession in the Offensive Zone](https://www.icehockeysystems.com/blog/coaching-tips/establish-puck-possession-offensive-zone)
+- [USA Hockey — Creating Offense with Zone Entries and Puck Support](https://www.usahockey.com/news_article/show/775908-creating-offense-with-zone-entries-and-puck-support)
+- [The Coaches Site — Triangulation: Complete the Triangle to Support the Puck](https://members.thecoachessite.com/video/triangulation-complete-the-triangle-to-support-the-puck)
+- [Ice Hockey Systems — Offensive Zone: Low-to-High Rotating Triangle](https://www.icehockeysystems.com/hockey-systems/offensive-zone-low-high-rotating-triangle)
+- [Beer League Tips — Basic Offensive Zone Structure](https://beerleaguetips.com/article/offensive-zone-structure/)
+- [Ice Hockey Systems — 2-1-2 Forecheck with F3 High (Buffalo Sabres)](https://www.icehockeysystems.com/coaching-clip/2-1-2-forecheck-f3-high-buffalo-sabres)
