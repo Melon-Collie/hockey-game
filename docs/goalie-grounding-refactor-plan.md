@@ -1358,18 +1358,24 @@ the BPS zones became consequences of the depth solve. Readability keys on
 TRAFFIC, not on who holds the puck — `GoalieWorldView` already carries
 `screeners`, `nearest_opponent_dist` and `nearest_teammate_dist`.
 
-### It is SIX mechanisms, not three
+### It is SEVEN mechanisms, not three
 
-A full count of the paths into butterfly:
+A full count of the `_enter_butterfly()` call sites:
 
 | # | mechanism | what it is |
 |---|---|---|
 | 1 | `_is_carrier_at_doorstep` | slapshot windup point-blank |
 | 2 | `_should_seal_crease_jam` | net-front battle |
-| 3 | `_confirmed_beaten_wide` | lateral race lost |
-| 4 | `_screen_block_drop_timer` | fully-screened release (audit F4) |
-| 5 | `_on_puck_contact` | post-save rebound posture |
-| 6 | the reactive low read | shot detected low |
+| 3 | `_confirmed_beaten_wide` | lateral race lost (carrier's body) |
+| 4 | `_commit_cross_crease_response` | lateral race lost (puck in flight) |
+| 5 | `_screen_block_drop_timer` | fully-screened release (audit F4) |
+| 6 | `_on_puck_contact` | post-save rebound posture |
+| 7 | the reactive low read | shot detected low |
+
+(Counted as six on the first pass — 4 was missed, which is itself the point:
+`cross_crease_race_lost` and `is_beaten_wide` ask the same question, "can
+standing tracking still cover this or does only the seal", and differ only in
+whether the lateral threat is a body or a pass. Two race predicates, one fact.)
 
 **Number 4 is the blocking save itself.** Its own comment calls it a
 "Blocking-drop timer", it carries its own state variable and countdown, and it
