@@ -122,6 +122,9 @@ func _build() -> void:
 	_attr_panel = AttributePickerPanel.new()
 	_attr_panel.changed.connect(_update_apply_state)
 	vbox.add_child(_attr_panel)
+	# The panel brings its own on-screen keyboard for the preset name (this
+	# popup's is for the player name); hand it this form as the wall target.
+	_attr_panel.set_keyboard_background(self)
 	_build_action_row(vbox)
 
 

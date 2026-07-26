@@ -65,6 +65,9 @@ func _build() -> void:
 	_panel = AttributePickerPanel.new()
 	_panel.changed.connect(_update_apply_state)
 	vbox.add_child(_panel)
+	# Pad text entry for the preset name: the key grid walls this popup off while
+	# it's up, so the D-pad can't step off the keys onto Apply/Cancel.
+	_panel.set_keyboard_background(self)
 
 	var action_row := HBoxContainer.new()
 	action_row.alignment = BoxContainer.ALIGNMENT_CENTER
