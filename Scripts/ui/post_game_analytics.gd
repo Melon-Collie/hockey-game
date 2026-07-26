@@ -392,13 +392,19 @@ func _bar_segment(color: Color, ratio: float, leading: bool) -> Control:
 	return seg
 
 
+# Each team wears its own PRIMARY here, via the same score-stripe rule the
+# scorebug and the box score's period summary use — a team's colour has to be
+# the same on every score surface or the identity channel stops being one. The
+# jersey/* keys are the 3D uniform's colours (and away's is near-white), which
+# read as muddy or invisible in flat UI; see TeamColorRegistry's doc-block.
 func _resolve_team_colors() -> Array[Color]:
 	var out: Array[Color] = [_team_colors[0], _team_colors[1]]
-	for t: int in 2:
-		if GameManager.teams.size() > t and GameManager.teams[t] != null:
-			var slot: int = GameManager.teams[t].color_slot
-			var colors: Dictionary = TeamColorRegistry.get_colors(slot, t)
-			out[t] = colors.jersey
+	if GameManager.teams.size() > 1 and GameManager.teams[0] != null \
+			and GameManager.teams[1] != null:
+		var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(
+				GameManager.teams[0].color_slot, GameManager.teams[1].color_slot)
+		out[0] = pair.home
+		out[1] = pair.away
 	return out
 
 

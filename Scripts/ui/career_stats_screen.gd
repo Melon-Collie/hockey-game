@@ -53,9 +53,9 @@ const _NARROW_TAB_WIDTH: float = 660.0
 const _NEUTRAL_HOME := Color(0.85, 0.35, 0.15)
 const _NEUTRAL_AWAY := Color(0.22, 0.53, 0.90)
 
-# Games tab. Backend-backed games render as a card with score, period breakdown,
-# team-grouped player rows and a Watch button; local-only replays render from
-# their own file meta (a different stat set — see _build_replay_file_card).
+# Games tab. Every entry — backend row, local .mreplay, or both — normalises into
+# one summary and renders through the same _build_game_card; only the badges and
+# which actions are enabled differ.
 var _recent_content: VBoxContainer = null
 var _recent_status: Label = null
 # Analytics viewer for a past game, created on first use (see _show_analytics).
@@ -687,8 +687,6 @@ func _clear_recent_content() -> void:
 		child.queue_free()
 
 
-# Card layout: date · score line | period breakdown | separator |
-# home roster grid | away roster grid | Watch Replay button.
 # ── The game card ────────────────────────────────────────────────────────────
 # ONE card style for every entry. Both sources normalise into the same summary
 # (see _summarise_backend / _summarise_replay), so a game looks the same whether
@@ -727,21 +725,25 @@ func _build_game_card(summary: Dictionary) -> Control:
 		top.add_child(_badge("LOCAL", MenuStyle.TEXT_MUTED))
 	vbox.add_child(top)
 
-	# Score line: the headline, and the only thing in a large size.
-	# Score line, in the match's own colours — the same identity channel the
-	# scorebug and the analytics screen use, so a game reads the same everywhere.
+	# Score line: the headline, and the only thing in a large size. Treated like
+	# the in-game scorebug and the box score's period summary — the team's colour
+	# is a BAND beside white lettering, never the lettering itself. Colouring the
+	# digits made the score hard to read (a dark primary on the dark card) and
+	# made two different-coloured numbers look like two different kinds of thing.
 	var colors: Array = summary.get("colors", []) as Array
 	var home_col: Color = colors[0] if colors.size() == 2 else _NEUTRAL_HOME
 	var away_col: Color = colors[1] if colors.size() == 2 else _NEUTRAL_AWAY
 	var score := HBoxContainer.new()
 	score.alignment = BoxContainer.ALIGNMENT_CENTER
-	score.add_theme_constant_override("separation", 10)
+	score.add_theme_constant_override("separation", 8)
 	score.add_child(_team_swatch(home_col))
-	score.add_child(_ui_label("HOME", 12, MenuStyle.TEXT_DIM))
-	score.add_child(_display_label(str(int(summary.get("home", 0))), 30, home_col))
+	score.add_child(_ui_label("HOME", 12, MenuStyle.BROADCAST_CREAM))
+	score.add_child(_display_label(str(int(summary.get("home", 0))), 30,
+			MenuStyle.BROADCAST_CREAM))
 	score.add_child(_display_label("—", 18, MenuStyle.TEXT_MUTED))
-	score.add_child(_display_label(str(int(summary.get("away", 0))), 30, away_col))
-	score.add_child(_ui_label("AWAY", 12, MenuStyle.TEXT_DIM))
+	score.add_child(_display_label(str(int(summary.get("away", 0))), 30,
+			MenuStyle.BROADCAST_CREAM))
+	score.add_child(_ui_label("AWAY", 12, MenuStyle.BROADCAST_CREAM))
 	score.add_child(_team_swatch(away_col))
 	vbox.add_child(score)
 
@@ -805,7 +807,7 @@ func _summarise_backend(game: Dictionary, meta: Dictionary) -> Dictionary:
 		# backend's player list omits bots entirely — a solo bot game would name
 		# only you, which is the opposite of recognisable. The file's roster is
 		# the full registry.
-		"roster": _roster_from_meta(meta) if meta.has("header") \
+		"roster": _roster_from_meta(meta) if not _header_roster(meta).is_empty() \
 				else _roster_from_backend(game),
 		"you": _you_line_from_meta(meta),
 		# recent_games_for counts the logged shots, so the Analytics action is
@@ -847,26 +849,38 @@ func _summarise_replay(path: String, meta: Dictionary) -> Dictionary:
 # has no colour columns, so a backend game with no local file falls back to the
 # neutral pair rather than borrowing the current session's colours — which would
 # paint an old game in a palette it was never played in.
+#
+# Each team's own PRIMARY, via the score-stripe rule the scorebug and the box
+# score's period summary already use — these cards are score surfaces, so they
+# have to agree with the in-game ones. Not the jersey/* keys: those mirror the
+# 3D uniform (away's is near-white) and read muddy or invisible in flat UI.
 func _colors_from_meta(meta: Dictionary) -> Array[Color]:
 	var header: Dictionary = meta.get("header", {})
 	if not header.has("home_color_slot"):
 		return [_NEUTRAL_HOME, _NEUTRAL_AWAY]
-	var out: Array[Color] = []
-	for team_id: int in 2:
-		var slot: int = _safe_int(header.get(
-				"home_color_slot" if team_id == 0 else "away_color_slot", 0))
-		out.append(TeamColorRegistry.get_colors(slot, team_id).jersey)
-	return out
+	var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(
+			_safe_int(header.get("home_color_slot", 0)),
+			_safe_int(header.get("away_color_slot", 1)))
+	return [pair.home, pair.away]
 
 
 # Win/loss for a LOCAL-only game. The footer records the score but not whose it
 # was; the header's roster does, via the is_local flag on the recording peer's
 # entry. Empty when the roster can't answer (a spectator recording, say).
-func _outcome_from_meta(meta: Dictionary) -> String:
+# The .mreplay header calls its player list `roster`; the FOOTER calls its box
+# score `players`. Two different keys for two different payloads — reading
+# `players` off the header silently yields an empty list (which is exactly how
+# the names, the local win/loss badge, and the YOU line all went missing), so
+# every header read goes through here.
+func _header_roster(meta: Dictionary) -> Array:
 	var header: Dictionary = meta.get("header", {})
+	return (header.get("roster", []) as Array) if header.get("roster") != null else []
+
+
+func _outcome_from_meta(meta: Dictionary) -> String:
 	var footer: Dictionary = meta.get("footer", {})
 	var my_team: int = -1
-	for entry: Variant in (header.get("players", []) as Array):
+	for entry: Variant in _header_roster(meta):
 		var p: Dictionary = entry as Dictionary
 		if bool(p.get("is_local", false)):
 			my_team = _safe_int(p.get("team_id", -1))
@@ -887,8 +901,7 @@ func _outcome_from_meta(meta: Dictionary) -> String:
 # similar names.
 func _roster_from_meta(meta: Dictionary) -> Dictionary:
 	var out: Dictionary = {0: [], 1: []}
-	var header: Dictionary = meta.get("header", {})
-	for entry: Variant in (header.get("players", []) as Array):
+	for entry: Variant in _header_roster(meta):
 		var p: Dictionary = entry as Dictionary
 		var team_id: int = clampi(_safe_int(p.get("team_id", 0)), 0, 1)
 		var display: String = String(p.get("player_name", ""))
@@ -919,10 +932,9 @@ func _roster_from_backend(game: Dictionary) -> Dictionary:
 # no local file: the backend's player JSON carries no steam_id, so there is no
 # way to tell which of its rows is yours.
 func _you_line_from_meta(meta: Dictionary) -> String:
-	var header: Dictionary = meta.get("header", {})
 	var footer: Dictionary = meta.get("footer", {})
 	var my_peer: int = -1
-	for entry: Variant in (header.get("players", []) as Array):
+	for entry: Variant in _header_roster(meta):
 		var p: Dictionary = entry as Dictionary
 		if bool(p.get("is_local", false)):
 			my_peer = _safe_int(p.get("peer_id", -1))
@@ -997,7 +1009,7 @@ func _team_swatch(color: Color) -> Control:
 	style.bg_color = color
 	style.set_corner_radius_all(2)
 	p.add_theme_stylebox_override("panel", style)
-	p.custom_minimum_size = Vector2(4, 24)
+	p.custom_minimum_size = Vector2(5, 30)
 	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	return p
 
