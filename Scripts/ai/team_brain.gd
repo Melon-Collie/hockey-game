@@ -32,6 +32,23 @@ const TICK_PERIOD: float = 1.0 / 6.0
 # a corner-to-corner cycle and bots try to switch sides every brain tick.
 const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
+# Playtest instrumentation for the coverage-readiness latch guard
+# (AIPossessionState.COVERAGE_FORCE_AFTER_S, plan §9). OFF by default; flip it to
+# see one `[cov-latch]` line per zone possession where the guard had to force the
+# handoff to D-zone coverage. Off there is NO observable difference between "the
+# guard fired" and "the team honestly became set" — both end in coverage — which is
+# exactly why the flag exists. The line names the man the accounting failed on:
+#   * a NON-carrier peer  → a real attacker nobody covered. The predicate was
+#     right and the roles didn't get there; look at that bot's route, not the bar.
+#   * the CARRIER         → nobody was inside pressure_engage_m() of the puck for
+#     four straight seconds. During a settled cycle that means the engage bar (or
+#     its goal-side requirement) is too strict, not that the team is lost.
+#   * -1                  → accounted at the moment it tripped, i.e. the enter
+#     hysteresis alone was holding it out. Suspect COVERAGE_HOLD_TICKS.
+# Routine firing means the predicate is wrong. 3v3 is the likelier offender: all
+# three attackers must be owned with no spare body to own them with.
+const DEBUG_COVERAGE: bool = false
+
 var team_id: int = 0
 # Latched match team size (3 or 5). Selects the role-slot path: 3 → the
 # legacy AIRoleSlots election (verbatim), 5 → AIRoleSlots5's position-aware
@@ -105,6 +122,9 @@ var _tick_span_s: float = 0.0
 var _coverage_was_set: bool = false
 var _coverage_unaccounted_ticks: int = 0
 var _coverage_held_s: float = 0.0
+# Edge latch for the diagnostic below — the guard, once tripped, stays tripped for
+# the rest of the zone possession, so the readout has to fire on the transition.
+var _coverage_latch_logged: bool = false
 # Cadence phase offset (seconds): team 1's natural ticks run half a period
 # out of phase with team 0's, so the two brains' per-tick computes never land
 # on the same physics frame (host FPS is set by the worst tick, and the two
@@ -282,6 +302,13 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		var set_now: bool = AIPossessionState.coverage_read(
 				rush_read.coverage_accounted, _coverage_unaccounted_ticks,
 				_coverage_was_set, _coverage_held_s)
+		if DEBUG_COVERAGE and not _coverage_latch_logged:
+			# Log only the tick the GUARD is what flipped it — a long cycle the team
+			# legitimately settled into isn't news. The counterfactual (same read
+			# with the timer zeroed) is honest here and only here: on later ticks
+			# _coverage_was_set has already been overwritten by the guard's own
+			# answer, which is why this is edge-triggered rather than sampled.
+			_log_coverage_latch(set_now)
 		_coverage_was_set = set_now
 		if not set_now:
 			state = AIPossessionState.State.TRANS_OD
@@ -291,6 +318,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		_coverage_was_set = false
 		_coverage_unaccounted_ticks = 0
 		_coverage_held_s = 0.0
+		_coverage_latch_logged = false
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:
@@ -339,6 +367,29 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	if snapshot != null and snapshot.puck_state != null:
 		ping_carrier = snapshot.puck_state.carrier_peer_id
 	ping_directives.apply_overrides(slot_assignments, threat_assignments, ping_carrier)
+
+
+# One `[cov-latch]` line the first tick the readiness guard is what forced the
+# handoff to coverage (see DEBUG_COVERAGE for how to read it). `set_now` is the
+# gate's answer WITH the guard; re-running the read with the timer zeroed asks what
+# it would have said without one — if that agrees, the team settled honestly and
+# there is nothing to report. Behind the flag and edge-triggered, so the string
+# build is off the hot path in shipped builds and rare even with it on.
+func _log_coverage_latch(set_now: bool) -> void:
+	if not set_now or _coverage_held_s < AIPossessionState.COVERAGE_FORCE_AFTER_S:
+		return
+	if AIPossessionState.coverage_read(rush_read.coverage_accounted,
+			_coverage_unaccounted_ticks, _coverage_was_set, 0.0):
+		return  # would have been set anyway — not the guard's doing
+	_coverage_latch_logged = true
+	var culprit: String = "-1 (hysteresis only)"
+	if rush_read.unaccounted_peer != -1:
+		culprit = "%d (%s)" % [rush_read.unaccounted_peer,
+				"CARRIER unengaged" if rush_read.unaccounted_peer == rush_read.carrier_peer
+				else "man uncovered"]
+	print("[cov-latch] team=%d size=%d forced coverage after %.1fs; unaccounted=%s attackers=%s unacct_ticks=%d"
+			% [team_id, team_size, _coverage_held_s, culprit,
+			rush_read.attackers, _coverage_unaccounted_ticks])
 
 
 # Builds the backline man-on-threat partition for the current tick. Defensive

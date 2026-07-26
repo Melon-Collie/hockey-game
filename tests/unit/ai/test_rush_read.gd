@@ -293,6 +293,54 @@ func test_coverage_not_accounted_with_nobody_on_the_puck() -> void:
 			"an unpressured carrier means coverage is not set")
 
 
+# ── Which man the accounting failed on (the latch diagnostic) ────────────────
+# `unaccounted_peer` steers nothing; it exists so the [cov-latch] readout can tell
+# "a real attacker went uncovered" from "the engage bar is too strict", which look
+# identical from outside. Pinned because a diagnostic that names the wrong culprit
+# is worse than none — it sends the tuning at the wrong constant.
+
+func test_the_uncovered_man_is_named() -> void:
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
+		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
+	}
+	var ours := {1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO]}  # on the puck, 12 free
+	var r: AIRushRead = _read(ours, theirs, 11)
+	assert_false(r.coverage_accounted)
+	assert_eq(r.unaccounted_peer, 12,
+			"the loose man is the culprit, not the covered carrier")
+
+
+func test_an_unengaged_carrier_names_the_carrier() -> void:
+	# The lone defender is fronting the wide man out by the boards — far enough off
+	# the puck to be outside containment range of it, so the carrier is the failure.
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
+		12: [Vector3(-11.0, 0.0, 22.0), Vector3.ZERO],
+	}
+	var ours := {1: [Vector3(-10.5, 0.0, 23.8), Vector3.ZERO]}  # owns 12, not the puck
+	var r: AIRushRead = _read(ours, theirs, 11)
+	assert_false(r.coverage_accounted,
+			"scenario check: nobody is inside containment range of the carrier")
+	assert_eq(r.unaccounted_peer, r.carrier_peer,
+			"every man owned but nobody on the puck points at the engage bar")
+
+
+func test_accounted_coverage_names_nobody() -> void:
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
+		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
+	}
+	var ours := {
+		1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO],
+		2: [Vector3(-5.0, 0.0, 23.5), Vector3.ZERO],
+	}
+	var r: AIRushRead = _read(ours, theirs, 11)
+	assert_true(r.coverage_accounted)
+	assert_eq(r.unaccounted_peer, -1,
+			"a set structure leaves no stale culprit for the next failure to inherit")
+
+
 # ── Hysteresis ───────────────────────────────────────────────────────────────
 
 func test_tracking_is_sticky_across_the_boundary() -> void:

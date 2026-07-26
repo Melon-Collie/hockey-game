@@ -539,10 +539,17 @@ Resolved items moved to **Decisions banked** at the top.
    and the gap-up trigger are natural Easy/Hard splits (`plays_rush_pass_lanes` is the
    precedent). Deferred to after the structure is playing well.
 3. **Coverage-gate latch risk** (§9). The time-floor guard is specified but its value is a
-   guess until instrumented.
+   guess until measured. **Instrumented:** flip `TeamBrain.DEBUG_COVERAGE` and each zone
+   possession where the guard is load-bearing prints one `[cov-latch]` line naming the man
+   the accounting failed on. It has to name him, because "the predicate is too strict" and
+   "our bodies genuinely aren't home" have the same observable — a team stuck in the rush
+   shape — and they call for opposite fixes. The culprit disambiguates: a non-carrier peer
+   is an honest miss (fix the route), the carrier means `pressure_engage_m()` or its
+   goal-side requirement is the wrong bar, `-1` means `COVERAGE_HOLD_TICKS` alone was
+   holding it out. Routine firing = the predicate is wrong, not the guard.
 4. **Latch risk at 3v3 specifically.** The readiness predicate needs all three attackers
    owned with only three defenders and no spare, so the 4 s guard may fire more often
-   than at 5v5. Instrument before tuning.
+   than at 5v5. Same instrumentation; the `size=` field in the line separates the two.
 
 ---
 

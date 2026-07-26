@@ -116,6 +116,15 @@ var numbers: int = Numbers.EVEN_OR_UP
 var backpressure_s: float = INF
 # Every attacker accounted for and somebody on the puck (see coverage_read).
 var coverage_accounted: bool = false
+# DIAGNOSTIC ONLY (nothing steers off it). When the accounting fails, the peer it
+# failed on — the first attacker found with no owner, or `carrier_peer` when the
+# failure was the carrier-engage bar rather than a loose man. -1 when accounted.
+# It exists because "the readiness predicate is too strict" and "our bodies really
+# aren't home" produce the SAME observable (a team stuck in the rush shape), and
+# only the culprit distinguishes them: a named man nobody covers is honest, the
+# carrier repeatedly unengaged during a settled cycle means pressure_engage_m() is
+# the wrong bar. See TeamBrain.DEBUG_COVERAGE.
+var unaccounted_peer: int = -1
 # Seconds until the puck is CONTESTED — the nearest opponent's momentum-aware ETA
 # to it (docs/transition-defense-plan.md §13). 0.0 when it is already theirs or
 # loose; INF when nobody can get to it.
@@ -384,14 +393,18 @@ func _accounted_for(snapshot: WorldSnapshot, team_id: int,
 			continue
 		if not _has_owner(snapshot, team_id, team_id_by_peer, our_net,
 				attacker_leads[i], envelope_sq):
+			unaccounted_peer = attackers[i]
 			return false
 	if not opp_carries:
 		return true
 	# Somebody has the carrier: goal-side of him and inside containment range.
 	# Goal-side matters — a defender trailing the carrier from up-ice is chasing,
 	# not covering, and counting him would declare a beaten team "set".
-	return _has_owner(snapshot, team_id, team_id_by_peer, our_net,
-			rush_origin, pressure_engage_m() * pressure_engage_m())
+	if _has_owner(snapshot, team_id, team_id_by_peer, our_net,
+			rush_origin, pressure_engage_m() * pressure_engage_m()):
+		return true
+	unaccounted_peer = carrier_peer
+	return false
 
 
 # True when one of our peers is goal-side of `man_lead` (nearer our net along the
@@ -511,6 +524,7 @@ func copy_from(other: AIRushRead) -> void:
 	numbers = other.numbers
 	backpressure_s = other.backpressure_s
 	coverage_accounted = other.coverage_accounted
+	unaccounted_peer = other.unaccounted_peer
 	attackers.clear()
 	attackers.append_array(other.attackers)
 	attacker_leads.clear()
@@ -570,3 +584,4 @@ func _reset() -> void:
 	numbers = Numbers.EVEN_OR_UP
 	backpressure_s = INF
 	coverage_accounted = false
+	unaccounted_peer = -1
