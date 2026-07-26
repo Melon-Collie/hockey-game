@@ -1143,6 +1143,15 @@ func get_peer_number(peer_id: int) -> int:
 	return _peer_numbers.get(peer_id, 10)
 
 func get_peer_steam_id(peer_id: int) -> int:
+	# `_peer_steam_ids` is filled in the request_join handler, which only ever runs
+	# for REMOTE joiners — the local player never joins itself, so the map has no
+	# entry for it. Resolve that one from SteamManager instead of reporting 0,
+	# which otherwise makes the local player indistinguishable from a bot to
+	# anything keying on Steam identity (the career shot map read empty for
+	# exactly this reason: every shot the local player took was logged under 0).
+	# Offline is the worst case — the local player is the ONLY human there.
+	if peer_id == local_peer_id():
+		return SteamManager.steam_id
 	return _peer_steam_ids.get(peer_id, 0)
 
 # True if the host kicked this peer (vs. a voluntary/network drop). Valid only
