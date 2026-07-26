@@ -103,3 +103,49 @@ func test_degenerate_inputs_hold_neutral() -> void:
 	# exactly on the wrist, which the real geometry never produces.)
 	assert_ne(GoalieStickRules.yaw_to_target(0.44, -0.32, 0.0, -2.0, 0.0, 25.0), 0.0,
 			"a flat stick still has a lateral lever for yaw to act on")
+
+
+# ── The lunge is a strike, so it is the last resort ──────────────────────────
+# Three physical numbers, no threshold: where the blade is, how far it affects
+# the puck, and how far the jab extends it.
+
+const POKE: float = 0.25
+const EXTENSION: float = 0.35
+
+
+func test_no_jab_when_the_blade_is_already_on_it() -> void:
+	# THE MEASURED BUG. The blade sat 0.15-0.24 m from the puck — inside poke
+	# range — in every case the old distance trigger fired, so he paid the
+	# fully-unset read penalty for a jab that bought nothing.
+	assert_false(GoalieStickRules.lunge_is_the_only_reach(0.19, POKE, EXTENSION))
+	assert_false(GoalieStickRules.lunge_is_the_only_reach(0.24, POKE, EXTENSION))
+	assert_false(GoalieStickRules.lunge_is_the_only_reach(0.0, POKE, EXTENSION),
+			"a blade on top of the puck least of all")
+
+
+func test_he_jabs_when_the_jab_is_what_closes_the_gap() -> void:
+	# Just outside poke range, inside poke + extension: this is the whole case
+	# the lunge exists for.
+	assert_true(GoalieStickRules.lunge_is_the_only_reach(0.27, POKE, EXTENSION))
+	assert_true(GoalieStickRules.lunge_is_the_only_reach(0.57, POKE, EXTENSION))
+
+
+func test_no_jab_at_a_puck_the_jab_cannot_reach_either() -> void:
+	# Past poke + extension the jab does not get there, so it is pure cost — a
+	# goalie flailing at a puck he was never going to touch, and unset for it.
+	assert_false(GoalieStickRules.lunge_is_the_only_reach(0.61, POKE, EXTENSION))
+	assert_false(GoalieStickRules.lunge_is_the_only_reach(1.04, POKE, EXTENSION))
+
+
+func test_the_window_is_exactly_the_extension() -> void:
+	# It opens where the blade stops reaching and closes where the jab stops
+	# reaching — so the lever that sets the jab's length sets its trigger too,
+	# and they cannot drift apart.
+	assert_false(GoalieStickRules.lunge_is_the_only_reach(POKE, POKE, EXTENSION),
+			"closed at the poke radius")
+	assert_true(GoalieStickRules.lunge_is_the_only_reach(POKE + 0.001, POKE, EXTENSION),
+			"open just past it")
+	assert_true(GoalieStickRules.lunge_is_the_only_reach(POKE + EXTENSION, POKE, EXTENSION),
+			"open out to full extension")
+	assert_false(GoalieStickRules.lunge_is_the_only_reach(
+			POKE + EXTENSION + 0.001, POKE, EXTENSION), "closed past it")

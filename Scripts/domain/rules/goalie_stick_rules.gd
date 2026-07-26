@@ -141,6 +141,39 @@ static func standing_lateral_reach() -> float:
 	return best + BLADE_WIDTH_M * 0.5
 
 
+# ── The lunge: a STRIKE, and therefore the last resort ───────────────────────
+# Is the forward jab the only thing that gets the blade to the puck?
+#
+# The three stick actions differ by how much of himself the goalie commits, not
+# by distance: the mild yaw is free, a sweep extends the arm and is recoverable,
+# and the lunge throws the whole assembly forward and leaves him FULLY UNSET
+# while extended (GoalieController._movement_read_delay prices exactly that,
+# modelling the coaching heuristic that a missed committed poke concedes roughly
+# two goals per save). So the lunge is a gamble, and a gamble is only worth
+# taking when the alternative is not reaching at all.
+#
+# It was gated on `lunge_trigger_distance` (1.2 m, goalie-to-puck) instead, and
+# the characterisation shows what that produced: the BLADE was already 0.15-0.24
+# m from the puck — inside the 0.25 m poke radius — in every case where the lunge
+# fired (tests/unit/ai/test_goalie_stick_engagement_curve.gd). He was spending
+# his most expensive action precisely where his cheapest one was already touching
+# the puck, and paying the unset-read penalty for nothing.
+#
+# Two physical quantities, no threshold: he jabs when the blade cannot reach from
+# where it is, and CAN reach if it commits. Beyond that the jab does not get
+# there either, so it is pure cost — a goalie flailing at a puck he was never
+# going to touch.
+#
+# Distances are BLADE-to-puck, which is also the boundary a shooter actually
+# feels. The old constant measured goalie-to-puck while he was challenging out,
+# so its effective range was roughly double and slid with his depth.
+static func lunge_is_the_only_reach(blade_to_puck_m: float, poke_radius_m: float,
+		lunge_extension_m: float) -> bool:
+	if blade_to_puck_m <= poke_radius_m:
+		return false   # already on it — the jab buys nothing and costs the read
+	return blade_to_puck_m <= poke_radius_m + lunge_extension_m
+
+
 # What is left of a five-hole slot `gap_m` wide once the paddle is lying across
 # it. The blade is nearly twice the standing slot (0.38 vs ~0.20 m) and stays
 # over the slot centre even yawed to the cap, so standing this closes outright —

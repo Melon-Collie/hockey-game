@@ -518,12 +518,17 @@ extends Node
 # (The old fixed-lookahead yaw heuristic is gone: blade aim is now a
 # closed-loop solve in GoalieBodyConfigBuilder._blade_yaw_to_puck that lands
 # the blade on the wrist→puck line using the actual stick geometry.)
-# Lunge: when an opposing threat is right at the doorstep, the blocker
-# assembly briefly extends forward — the stick blade jabs at the puck. Brief
-# active window with a cooldown so the goalie can't spam-stick into every
-# carrier. The user spec'd this as "lunge"; mechanically it's just a quick
-# forward push on c.blocker_pos.z, sin-curved over the active window.
-@export var lunge_trigger_distance: float = 1.2  # m — puck-to-goalie radius
+# Lunge: the blocker assembly briefly extends forward — the stick blade jabs at
+# the puck. Brief active window with a cooldown so the goalie can't spam-stick
+# into every carrier. Mechanically a quick forward push on c.blocker_pos.z,
+# sin-curved over the active window.
+#
+# WHEN it fires is not a distance any more. `lunge_extension` IS the trigger
+# geometry: he jabs only when the blade cannot reach the puck from where it is
+# and can if it extends by this much (GoalieStickRules.lunge_is_the_only_reach).
+# The old `lunge_trigger_distance` (1.2 m, goalie-to-puck) is gone — measured, it
+# fired while the blade was already inside `goalie_poke_radius` of the puck, so
+# he paid the fully-unset read penalty for a jab he did not need.
 @export var lunge_extension: float = 0.35        # m — forward push at peak
 @export var lunge_duration: float = 0.15         # s — active window (0→peak→0 sin curve)
 @export var lunge_cooldown: float = 0.60         # s — minimum gap between lunges
@@ -2225,7 +2230,13 @@ func _should_lunge() -> bool:
 		return false
 	if _sm.is_post_integrated():
 		return false
-	if goalie.global_position.distance_to(puck.global_position) > lunge_trigger_distance:
+	# THE JAB IS THE LAST RESORT, not the first. He commits only when the blade
+	# cannot reach the puck from where it is and can if it extends — see
+	# GoalieStickRules.lunge_is_the_only_reach for why, and for what the old
+	# `lunge_trigger_distance` was actually doing.
+	if not GoalieStickRules.lunge_is_the_only_reach(
+			goalie.get_blade_world_position().distance_to(puck.global_position),
+			goalie_poke_radius, lunge_extension):
 		return false
 	if (puck.global_position.z - goalie.global_position.z) * _direction_sign <= 0.0:
 		return false

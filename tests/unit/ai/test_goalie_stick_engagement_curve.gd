@@ -78,6 +78,36 @@ extends GutTest
 # dropped and the paddle sweep is the down-state action. They agree with the
 # forced-butterfly rows below, which is the consistency check.
 
+# ── AFTER the lunge model (2026-07) ──────────────────────────────────────────
+#  dist  goalie blade | UPRIGHT, carrier still  | carrier 5 m/s     | loose puck
+#   0.8   0.08  0.27 | mild stand   .   LUNGE  | mild  .  .  LUNGE | mild . paddle LUNGE
+#   1.0   0.69  0.20 | mild stand   .     .    | mild  .  .  LUNGE | mild . paddle  .
+#   1.2   0.74  0.19 | mild stand   .     .    | mild  .  .  LUNGE | mild . paddle  .
+#   1.5   0.83  0.20 | mild stand   .     .    | mild  .  .  LUNGE | mild . paddle LUNGE
+#   1.8   1.08  0.27 | mild stand   .   LUNGE  | mild  .  .  LUNGE |  .   .   .     .
+#   2.0   1.28  0.57 | mild stand   .   LUNGE  | mild  .  .    .   |  .   .   .     .
+#   2.5   1.78  1.04 | mild stand   .     .    | mild  .  .    .   |  .   .   .     .
+#   3.0   2.28  1.55 | mild   .     .     .    | mild  .  .    .   |  .   .   .     .
+#
+# The lunge now tracks the BLADE gap against the poke radius (0.25) and the jab's
+# own extension (0.35), so it fires in exactly one band: 0.25 < gap <= 0.60.
+#   * 1.0-1.5 m: blade at 0.19-0.20, INSIDE poke range — no jab. He does not need
+#     one; the per-tick poke check is already stripping from there. This is the
+#     defect the characterisation found, gone.
+#   * 1.8-2.0 m: blade at 0.27-0.57, just out of reach — jab. What it is for.
+#   * 2.5 m+:    blade at 1.04+, out of reach even extended — no jab. Flailing at
+#     a puck he was never going to touch is pure cost.
+#
+# NOT MONOTONIC in carrier distance, deliberately. The blade gap is not monotonic
+# either — it moves with his challenge depth and pose — and "can my stick reach
+# you" is the honest question, not "how far away are you". A shooter feels the
+# blade, which is why the trigger is measured there.
+#
+# The two sweeps are UNCHANGED and that is on purpose. They are COVERAGE (extend
+# the paddle, widen the low silhouette) rather than a strike, so "does it reach
+# the puck" is the wrong test for them; they are still worth doing when they do
+# not touch it. Only the lunge is a gamble that pays nothing unless it connects.
+
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
 const DT: float = 1.0 / 120.0
