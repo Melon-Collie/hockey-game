@@ -61,7 +61,32 @@ func _ready() -> void:
 	visible = false
 	_build_panel()
 	_build_popups()
+	_wire_focus_wall()
 	_maybe_offer_reconnect()
+
+
+# Controller: while any sub-modal is up, wall focus off from the nav panel so the
+# D-pad can't step out of the modal and back onto an activity row behind the
+# scrim (the ring ping-ponging between the two, and A firing the row behind).
+# Driven off visibility_changed rather than the individual open/close sites so no
+# close path — X button, Escape, a launched popup hiding itself — can forget to
+# lift it. It is also what makes _input's "no list item has focus while a
+# sub-modal is up" assumption true by construction rather than by convention.
+func _wire_focus_wall() -> void:
+	for c: Control in _modal_layers():
+		c.visibility_changed.connect(_sync_nav_focus_wall)
+
+
+func _modal_layers() -> Array[Control]:
+	return [_options_container, _exit_container, _tutorial_container, _drills_container,
+			_player_popup, _play_popup, _career_screen]
+
+
+func _sync_nav_focus_wall() -> void:
+	var covered: bool = false
+	for c: Control in _modal_layers():
+		covered = covered or c.visible
+	ControllerNav.set_subtree_focusable(_panel, not covered)
 
 
 # A mid-match connection loss returns the player to free play (rebuilding this
@@ -134,6 +159,10 @@ func open() -> void:
 # switch with the menu already open land the pad on a row; ControllerNav.grab_focus
 # only actually grabs while the pad drives.
 func _apply_nav_focus() -> void:
+	# Re-derive the wall first: the menu can be reopened with a launched popup
+	# still up (it owns its own dismissal), and the rows must stay unreachable
+	# until it closes.
+	_sync_nav_focus_wall()
 	ControllerNav.set_list_focusable(_nav_items)
 	if not _nav_items.is_empty():
 		ControllerNav.grab_focus(_nav_items[0])

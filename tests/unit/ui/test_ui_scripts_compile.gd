@@ -20,6 +20,12 @@ const _SCRIPTS: Array[String] = [
 	"res://Scripts/ui/slot_grid_panel.gd",
 	"res://Scripts/ui/options_panel.gd",
 	"res://Scripts/ui/options/controls_tab.gd",
+	"res://Scripts/ui/lobby_manager.gd",
+	"res://Scripts/ui/lobby_build_popup.gd",
+	"res://Scripts/ui/attribute_picker_panel.gd",
+	"res://Scripts/ui/pause_menu.gd",
+	"res://Scripts/ui/confirm_dialog.gd",
+	"res://Scripts/ui/display_revert_dialog.gd",
 ]
 
 

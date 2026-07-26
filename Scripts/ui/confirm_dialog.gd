@@ -5,6 +5,11 @@ signal confirmed
 signal cancelled
 
 var _label: Label = null
+var _cancel_btn: Button = null
+# Controller focus scope, captured per open(): the menu behind us (focus is
+# walled off there while we're up) and the control focus returns to on close.
+var _focus_background: Control = null
+var _focus_restore: Control = null
 
 
 func _ready() -> void:
@@ -60,6 +65,7 @@ func _build_ui() -> void:
 	cancel_btn.custom_minimum_size = Vector2(140, 48)
 	cancel_btn.pressed.connect(_on_cancel)
 	btn_row.add_child(cancel_btn)
+	_cancel_btn = cancel_btn  # controller default focus (safe default over Confirm)
 
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -68,9 +74,16 @@ func _build_ui() -> void:
 	add_child(root)
 
 
-func open(message: String) -> void:
+# `background` is the menu this dialog covers; pass it so the D-pad can't walk
+# out of the dialog and onto the buttons behind the scrim. Focus lands on Cancel
+# (the safe default, matching Escape/B) and returns to whatever was focused when
+# the dialog opened — usually the button that raised it.
+func open(message: String, background: Control = null) -> void:
 	_label.text = message
+	_focus_background = background
+	_focus_restore = ControllerNav.focus_owner(self)
 	visible = true
+	ControllerNav.open_modal(_focus_background, self, _cancel_btn)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -80,10 +93,17 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _on_confirm() -> void:
-	visible = false
+	_close()
 	confirmed.emit()
 
 
 func _on_cancel() -> void:
-	visible = false
+	_close()
 	cancelled.emit()
+
+
+func _close() -> void:
+	visible = false
+	ControllerNav.close_modal(_focus_background, _focus_restore)
+	_focus_background = null
+	_focus_restore = null

@@ -15,6 +15,16 @@ var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
 var _backdrop: LobbyArenaBackdrop = null
+# The lobby content panel. Held so a modal opened over it (Edit Build, the
+# confirm dialogs) can wall controller focus off from it — see
+# ControllerNav.open_modal.
+var _panel: PanelContainer = null
+# Latches once a teardown starts — leaving for free play, or the match starting.
+# Both end this scene, and the node stays alive until the deferred scene change
+# lands, so without this a second B press (or Back click) in that window kicks
+# off an overlapping teardown. One-way, matching PauseMenu._leaving.
+var _leaving: bool = false
+var _leave_confirm: ConfirmDialog = null
 # Host-only convenience: one press fills every open player slot with a bot.
 # Deliberately a one-shot button, not a persistent auto-fill — slots that
 # open later just leave the button pressable again, and it greys out when
@@ -111,6 +121,9 @@ func _ready() -> void:
 	_kick_confirm.confirmed.connect(_on_kick_confirmed)
 	_kick_confirm.cancelled.connect(func() -> void: _kick_pending_peer = -1)
 	add_child(_kick_confirm)
+	_leave_confirm = ConfirmDialog.new()
+	_leave_confirm.confirmed.connect(_leave_to_free_play)
+	add_child(_leave_confirm)
 	NetworkManager.peer_joined.connect(_on_peer_joined)
 	NetworkManager.peer_disconnected.connect(_on_peer_disconnected)
 	NetworkManager.slot_swap_requested.connect(_on_slot_swap_requested)
@@ -143,15 +156,24 @@ func _ready() -> void:
 	# the host-alone case stays disabled forever.
 	_update_start_btn()
 
-	# Controller: land focus on the slot grid so the pad can drive the lobby
-	# immediately. No-op for mouse. Deferred inside grab_focus so layout settles.
-	if _slot_grid != null:
+	# Controller: land focus on the primary action (Start for the host, Ready for
+	# a client) so the pad's first press does the thing the player came here to
+	# do; the slot grid is one D-pad move away. A disabled Start still takes focus
+	# in Godot, so the host alone in a fresh lobby lands there too and the button
+	# simply lights up when it becomes pressable. No-op for mouse (the focus ring
+	# is device-aware); deferred inside grab_focus so layout settles.
+	var cta: Button = _start_btn if _start_btn != null else _ready_btn
+	if cta != null:
+		ControllerNav.grab_focus(cta)
+	elif _slot_grid != null:
 		_slot_grid.focus_first_card()
 
 
-# Controller / keyboard: back out of the lobby (to free play) on ui_cancel (B /
-# Escape). A sub-popup open over the lobby consumes ui_cancel first (child-first
-# _unhandled_input), so this only fires on the bare lobby.
+# Controller / keyboard: back out of the lobby on ui_cancel (B / Escape). A
+# sub-popup open over the lobby consumes ui_cancel first (child-first
+# _unhandled_input), so this only fires on the bare lobby. Leaving is the same
+# path as the Back button — including its confirmation — so a stray B press can
+# never silently drop an online player out of the session.
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"ui_cancel"):
 		_on_back_pressed()
@@ -191,6 +213,7 @@ func _build_ui() -> void:
 	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	panel.custom_minimum_size = Vector2(960, 0)
 	root.add_child(panel)
+	_panel = panel
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 20)
@@ -247,6 +270,9 @@ func _build_ui() -> void:
 
 	_build_popup = LobbyBuildPopup.new()
 	root.add_child(_build_popup)
+	# Controller: while the build editor is up, focus is walled off from the lobby
+	# behind it and returns to Edit Build on close.
+	_build_popup.set_focus_scope(panel, build_btn)
 
 	_refresh_grid()
 	_refresh_spectator_panel()
@@ -1063,7 +1089,7 @@ func _on_kick_requested(peer_id: int, player_name: String) -> void:
 	if not NetworkManager.is_host:
 		return
 	_kick_pending_peer = peer_id
-	_kick_confirm.open("Remove %s from the lobby?" % player_name)
+	_kick_confirm.open("Remove %s from the lobby?" % player_name, _panel)
 
 func _on_kick_confirmed() -> void:
 	if _kick_pending_peer > 0:
@@ -1147,6 +1173,9 @@ func _apply_team_size(team_size: int) -> void:
 func _on_game_started(config: Dictionary) -> void:
 	NetworkManager.pending_game_config = config
 	NetworkManager.pending_lobby_slots = _build_pending_slots()
+	# The match is on its way in: a Back press during the scene-change window
+	# must not tear the session down out from under it.
+	_leaving = true
 	get_tree().change_scene_to_file(Constants.SCENE_HOCKEY)
 
 func _build_pending_slots() -> Dictionary:
@@ -1189,5 +1218,25 @@ func _on_start_pressed() -> void:
 	}
 	NetworkManager.send_game_start(config)
 
+# Back / B / Escape. Offline the lobby is the local player's own, so leaving is
+# instant. Online it disconnects them — and for the host it closes the lobby for
+# everyone — so it goes through a confirm first, the same bar PauseMenu holds
+# "Return to Free Play" to. That's what keeps a stray B press in the lobby from
+# reading as "the game exited".
 func _on_back_pressed() -> void:
+	if _leaving or _leave_confirm.visible:
+		return
+	if NetworkManager.is_offline_mode:
+		_leave_to_free_play()
+		return
+	var msg: String = "Leave this lobby?"
+	if NetworkManager.is_host:
+		msg = "Leave this lobby? It closes for everyone."
+	_leave_confirm.open(msg, _panel)
+
+
+func _leave_to_free_play() -> void:
+	if _leaving:
+		return
+	_leaving = true
 	GameManager.return_to_free_play()

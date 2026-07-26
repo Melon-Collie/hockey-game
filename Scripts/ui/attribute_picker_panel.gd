@@ -114,6 +114,13 @@ func _build() -> void:
 	_build_gear_row("Skates", _PROFILE_TOOLTIP, _PROFILE_LABELS, 2)
 
 
+# Where a modal wrapping this panel should land controller focus: the height
+# slider — the primary dial — rather than whatever the tree happens to hold first
+# (a preset chip, or the wrapper's close X).
+func first_focus_target() -> Control:
+	return _height_slider
+
+
 func _build_preset_row() -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
