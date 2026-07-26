@@ -112,12 +112,27 @@ const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
 #     bodies do: a RATIO ceiling (carrying fat costs skating) and an ABSOLUTE
 #     floor (you cannot be too light to play), and the band is their overlap.
 #
-# Coverage: 42 of the 43 sampled players inside 5'8"–6'7" are representable
-# (only Ovechkin, the single most extreme BMI in the league at 29.7, sits 6 lb
-# over the 6'3" ceiling). Under the old flat band six were unbuildable, four of
-# them 6'2"+.
+# WHERE THE LEAN EDGE SITS, and why not lower. Both edges are set at the SHAPE
+# of the distribution, not at its most extreme member, and they exclude the
+# same way: 2 of the 7 sampled heavy-tail bodies sit over 29.0 (Ovechkin 29.7,
+# Zadorov 29.5), and 2 of the 12 lean-tail bodies sit under 23.5 (Reichel
+# 6'0"/170 = 23.05, Ehlers 6'0"/172 = 23.32). 23.5 is also a natural break:
+# the rest of the lean tail is a dense cluster from 23.61 to 23.92 (Rinzel,
+# Garland, Dobson, K. Johnson, Pettersson, Edvinsson, Hutson) with a visible
+# gap below it, and the floor sits in that gap. The tightest cases that DO
+# bind are Dobson 195 / Rinzel 194 against the 193 floor at 6'4" — the same
+# 1–2 lb margin the ceiling leaves on Kaprizov and Protas.
 #
-# The band is deliberately ASYMMETRIC about MEDIUM (4.0 BMI lean-side vs 2.5
+# An earlier pass put this edge at 22.5, which was wrong twice over. It was
+# chasing a stale card: Elias Pettersson at 6'2"/176 (BMI 22.59) looked like a
+# lone outlier 0.6 SD past the next-leanest body, but that is his draft-era
+# listing — he measured 164 lb at the 2017 combine and is listed 185 today
+# (BMI 23.75, comfortably inside). And even had it been current, buying one
+# body by opening 6'4"/185 and 5'10"/160 — past the tail at every OTHER
+# height — is exactly the trade that was correctly refused at the top when
+# Ovechkin argued for a higher ceiling.
+#
+# The band is deliberately ASYMMETRIC about MEDIUM (3.0 BMI lean-side vs 2.5
 # heavy-side): the empirical center sits at 26.05, but MEDIUM is pinned to the
 # canonical 6'1"/201 NHL-average frame because that is the game's neutral
 # identity — every @export default is authored there. frame_t() is piecewise
@@ -127,14 +142,15 @@ const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
 # Calibration namechecks: neutral = 6'1"/201 (NHL-average build); McDavid
 # (6'1"/194) lean-mid; Dobson/Rinzel (6'4"/195, 194) ≈ 6'4"-LEAN; DeBrincat
 # (5'8"/180) ≈ SOLID; Kaprizov (5'10"/202) = 5'10"-HEAVY exactly; Tage Thompson
-# (6'6"/218) lean-mid; Oleksiak (6'7"/255) ≈ 6'7"-HEAVY.
-const BMI_LEAN: float = 22.5
+# (6'6"/218) lean-mid; Oleksiak (6'7"/252) ≈ 6'7"-HEAVY.
+const BMI_LEAN: float = 23.5
 const BMI_MEDIUM: float = 26.5   # neutral frame
 const BMI_HEAVY: float = 29.0
 
 # Absolute lower bound on a playable body, in pounds — the floor that the BMI
-# ratio cannot express. Binds at 5'7"–5'10", where BMI 22.5 would allow a body
-# lighter than anyone who has ever held an NHL job (144 lb at 5'7").
+# ratio cannot express. Binds at 5'7"–5'9", where even the 23.5 ratio floor
+# would allow a body lighter than anyone who has ever held an NHL job (150 lb
+# at 5'7"); from 5'10" up the ratio floor is the higher of the two.
 #
 # 160 is chosen against the league's actual lower tail, and it is close to the
 # only defensible round number: Lane Hutson (5'9"/162) is the lightest player

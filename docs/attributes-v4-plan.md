@@ -142,7 +142,7 @@ geometric — §4).
 **Frame-relative via a BMI band plus an absolute floor** — together they
 generate a plausible pounds range at every height, so implausible bodies
 (6'6"/160, BMI ~18.5) are unrepresentable by construction rather than by rule.
-Band: **BMI 22.5 (LEAN) → 29.0 (HEAVY)**, floored at an absolute
+Band: **BMI 23.5 (LEAN) → 29.0 (HEAVY)**, floored at an absolute
 **160 lb**, five frame anchors interpolated with the same machinery as height,
 neutral = 26.5 (the real NHL-average build: 6'1"/201). Displayed lbs =
 BMI × inches² / 703, and the frame anchors sit at frame-t 0/.25/.5/.75/1:
@@ -151,14 +151,14 @@ BMI × inches² / 703, and the frame anchors sit at frame-t 0/.25/.5/.75/1:
 |--------|------|-------|--------|-------|-------|
 | 5'7"   | 160\* | 165 | 169 | 177 | 185 |
 | 5'8"   | 160\* | 167 | 174 | 183 | 191 |
-| 5'10"  | 160\* | 173 | 185 | 194 | 202 |
-| 6'1"   | 171 | 186 | **201** | 211 | 220 |
-| 6'4"   | 185 | 202 | 218 | 228 | 238 |
-| 6'7"   | 200 | 218 | 235 | 246 | 257 |
-| 6'8"   | 205 | 223 | 241 | 253 | 264 |
+| 5'10"  | 164 | 175 | 185 | 194 | 202 |
+| 6'1"   | 178 | 190 | **201** | 211 | 220 |
+| 6'4"   | 193 | 206 | 218 | 228 | 238 |
+| 6'7"   | 209 | 222 | 235 | 246 | 257 |
+| 6'8"   | 214 | 228 | 241 | 253 | 264 |
 
 \* the absolute playable-mass floor, not the ratio floor. It binds at
-5'7"–5'10"; above that the BMI 22.5 ratio floor is the higher of the two.
+5'7"–5'9"; from 5'10" up the BMI 23.5 ratio floor is the higher of the two.
 
 **Recalibrated 2026-07** against a 46-player sample of current listed NHL
 height/weight cards. Two findings drove it:
@@ -180,9 +180,21 @@ height/weight cards. Two findings drove it:
   (carrying fat costs skating) and an **absolute floor** (you cannot be too
   light to play) — and the band is their overlap.
 
-Coverage: 42 of the 43 sampled players inside 5'8"–6'7" are representable
-(only Ovechkin, the league's most extreme BMI at 29.7, sits 6 lb over the 6'3"
-ceiling). Under the old flat band six were unbuildable, four of them 6'2"+.
+Both edges are set at the SHAPE of the distribution rather than its most
+extreme member, and they exclude alike: 2 of the 7 sampled heavy-tail bodies
+sit over 29.0 (Ovechkin 29.7, Zadorov 29.5) and 2 of the 12 lean-tail bodies
+sit under 23.5 (Reichel 6'0"/170 = 23.05, Ehlers 6'0"/172 = 23.32). 23.5 is
+also a natural break — the rest of the lean tail is a dense 23.61–23.92
+cluster (Rinzel, Garland, Dobson, K. Johnson, Pettersson, Edvinsson, Hutson)
+with a visible gap below it. Under the old flat 24.0 floor, Dobson, Rinzel,
+Edvinsson and Hutson were all unbuildable.
+
+A first pass put the lean edge at **22.5**, chasing Elias Pettersson's
+6'2"/176 card (BMI 22.59). That card is his draft era — he measured 164 lb at
+the 2017 combine and is listed **185** today (23.75, comfortably inside). Even
+had it been current, buying one body by opening 6'4"/185 and 5'10"/160 — past
+the tail at every other height — is the same trade that was correctly refused
+at the top when Ovechkin argued for a higher ceiling.
 
 The band is deliberately **asymmetric** about MEDIUM (4.0 BMI lean-side vs 2.5
 heavy-side). The empirical center is 26.05, but MEDIUM stays pinned to the
