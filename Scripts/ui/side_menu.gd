@@ -12,6 +12,10 @@ extends CanvasLayer
 
 signal opened
 signal closed
+# Raised by the footer's Report Bug button. The HUD owns the dialog (it's also
+# reachable from the pause menu and the mouse-only HUD icon), so this is a
+# request, not an open.
+signal bug_report_requested
 
 const _PANEL_WIDTH: float = 340.0
 
@@ -61,7 +65,38 @@ func _ready() -> void:
 	visible = false
 	_build_panel()
 	_build_popups()
+	_wire_focus_wall()
 	_maybe_offer_reconnect()
+
+
+# Controller: while any sub-modal is up, wall focus off from the nav panel so the
+# D-pad can't step out of the modal and back onto an activity row behind the
+# scrim (the ring ping-ponging between the two, and A firing the row behind).
+# Driven off visibility_changed rather than the individual open/close sites so no
+# close path — X button, Escape, a launched popup hiding itself — can forget to
+# lift it. It is also what makes _input's "no list item has focus while a
+# sub-modal is up" assumption true by construction rather than by convention.
+func _wire_focus_wall() -> void:
+	for c: Control in _modal_layers():
+		c.visibility_changed.connect(_sync_nav_focus_wall)
+	_loading_screen.visibility_changed.connect(_sync_nav_focus_wall)
+
+
+func _modal_layers() -> Array[Control]:
+	return [_options_container, _exit_container, _tutorial_container, _drills_container,
+			_player_popup, _play_popup, _career_screen]
+
+
+func _sync_nav_focus_wall() -> void:
+	# The loading screen is opaque and sits above everything (layer 100), so it
+	# walls off every layer including the modals; otherwise it's just the nav
+	# panel, walled while any one modal is up.
+	var loading: bool = _loading_screen != null and _loading_screen.visible
+	var covered: bool = loading
+	for c: Control in _modal_layers():
+		covered = covered or c.visible
+		ControllerNav.set_subtree_focusable(c, not loading)
+	ControllerNav.set_subtree_focusable(_panel, not covered)
 
 
 # A mid-match connection loss returns the player to free play (rebuilding this
@@ -134,6 +169,10 @@ func open() -> void:
 # switch with the menu already open land the pad on a row; ControllerNav.grab_focus
 # only actually grabs while the pad drives.
 func _apply_nav_focus() -> void:
+	# Re-derive the wall first: the menu can be reopened with a launched popup
+	# still up (it owns its own dismissal), and the rows must stay unreachable
+	# until it closes.
+	_sync_nav_focus_wall()
 	ControllerNav.set_list_focusable(_nav_items)
 	if not _nav_items.is_empty():
 		ControllerNav.grab_focus(_nav_items[0])
@@ -434,6 +473,20 @@ func _build_footer(parent: VBoxContainer) -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(spacer)
 
+	# Report Bug: a real Button (not a nav row) so ui_accept activates it
+	# natively. This is the pad's ONLY route to the reporter — the HUD's bug icon
+	# is a mouse affordance with a deliberately invisible focus ring.
+	var bug_btn := Button.new()
+	bug_btn.text = "Report Bug"
+	bug_btn.flat = true
+	bug_btn.add_theme_font_size_override("font_size", 12)
+	bug_btn.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+	bug_btn.add_theme_color_override("font_hover_color", MenuStyle.TEAL_HOVER)
+	bug_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bug_btn.pressed.connect(func() -> void: bug_report_requested.emit())
+	SoundManager.wire_button(bug_btn)
+	hbox.add_child(bug_btn)
+
 	# Version label. The update-checker alert dot will land here in a follow-up
 	# pass; for now we just show the build version so players know what they
 	# have.
@@ -443,6 +496,12 @@ func _build_footer(parent: VBoxContainer) -> void:
 	version_label.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
 	version_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hbox.add_child(version_label)
+
+
+# The nav panel, handed to a dialog that opens OVER this menu (the bug reporter)
+# so it can wall focus off from the rows behind it.
+func focus_root() -> Control:
+	return _panel
 
 
 # Close-hint label for the active device: keyboard ESC, else the pad's back button

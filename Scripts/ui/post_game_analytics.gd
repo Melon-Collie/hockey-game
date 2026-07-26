@@ -39,6 +39,11 @@ var _map: RinkMap = null
 var _share: XGShareChart = null
 var _tape: VBoxContainer = null
 var _subtitle: Label = null
+var _close_btn: Button = null
+# Controller focus scope: the screen underneath (game-over popup / career
+# screen), walled off while this is up. Set by the opener via set_focus_scope.
+var _focus_background: Control = null
+var _focus_restore: Control = null
 var _team_colors: Array[Color] = [Color(0.85, 0.35, 0.15), Color(0.22, 0.53, 0.90)]
 
 
@@ -183,6 +188,7 @@ func _build_footer() -> Control:
 	MenuStyle.apply_focus_ring(close_btn)
 	close_btn.pressed.connect(close)
 	row.add_child(close_btn)
+	_close_btn = close_btn  # the screen's only control — the pad's focus target
 	return row
 
 
@@ -193,16 +199,28 @@ func present() -> void:
 	_show()
 
 
+# `background` is the screen this covers (the game-over popup's content root, or
+# the career screen); focus is walled off there while this is up and handed back
+# to whatever held it when this opened.
+func set_focus_background(background: Control) -> void:
+	_focus_background = background
+
+
 # Reveal only — the data is already in place. Kept separate from present() so
 # present_history() can inject its own render without the live path clobbering it.
 func _show() -> void:
 	visible = true
 	_root.modulate.a = 0.0
 	create_tween().tween_property(_root, "modulate:a", 1.0, 0.18)
+	# Close is the only control here, so without this the pad has nothing focused
+	# on a near-opaque full-screen reader.
+	_focus_restore = ControllerNav.focus_owner(self)
+	ControllerNav.open_modal(_focus_background, self, _close_btn)
 
 
 func close() -> void:
 	visible = false
+	ControllerNav.close_modal(_focus_background, _focus_restore)
 	closed.emit()
 
 

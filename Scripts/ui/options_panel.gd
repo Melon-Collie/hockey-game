@@ -352,7 +352,7 @@ func _show_display_revert_dialog(prev_mode: int, prev_res: Vector2i, prev_mon: i
 			_original = _read_controls()
 			_update_apply_state()
 	get_tree().root.add_child(dialog)
-	dialog.open(15.0, revert)
+	dialog.open(15.0, revert, self)
 
 func _on_cancel_pressed() -> void:
 	_apply_values_to_controls(_original)

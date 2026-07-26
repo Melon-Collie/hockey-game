@@ -203,6 +203,9 @@ func _build_settings_overlay() -> void:
 func _on_settings_pressed() -> void:
 	if _settings_container != null:
 		_settings_container.visible = true
+		# Controller: the settings overlay covers the title buttons, so wall focus
+		# off from them; the pad lands on the active tab's first control.
+		ControllerNav.set_subtree_focusable(_button_column, false)
 		if _settings_panel != null:
 			_settings_panel.focus_active_tab()
 
@@ -212,6 +215,9 @@ func _on_settings_pressed() -> void:
 # so a mouse player sees nothing while a pad player's first press activates Play.
 # Used at build and when the settings overlay closes.
 func _focus_title_menu() -> void:
+	# Lifts the settings-overlay focus wall as well — every path back to the title
+	# menu goes through here, so the two can't drift apart.
+	ControllerNav.set_subtree_focusable(_button_column, true)
 	if _button_column != null and _button_column.get_child_count() > 0:
 		var first: Control = _button_column.get_child(0) as Control
 		if first != null:

@@ -17,6 +17,8 @@ var _text: String = ""
 var _max_len: int = 12
 var _preview: Label = null
 var _first_key: Button = null
+# The form behind this overlay, walled off while the key grid is up.
+var _focus_background: Control = null
 
 
 func _ready() -> void:
@@ -86,12 +88,15 @@ func _key_button(label: String, min_size: Vector2 = Vector2(44, 44)) -> Button:
 	return btn
 
 
-func open(initial: String, max_len: int) -> void:
+# `background` is the popup this covers (the name field and its neighbours), so
+# the D-pad can't fall off the key grid and into the form behind it.
+func open(initial: String, max_len: int, background: Control = null) -> void:
 	_text = initial
 	_max_len = max_len
+	_focus_background = background
 	_update_preview()
 	visible = true
-	ControllerNav.grab_focus(_first_key)
+	ControllerNav.open_modal(_focus_background, self, _first_key)
 
 
 func _on_key(ch: String) -> void:
@@ -107,8 +112,13 @@ func _backspace() -> void:
 
 
 func _done() -> void:
-	visible = false
+	_close()
 	submitted.emit(_text)
+
+
+func _close() -> void:
+	visible = false
+	ControllerNav.close_modal(_focus_background)
 
 
 func _update_preview() -> void:
@@ -117,6 +127,6 @@ func _update_preview() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if visible and event.is_action_pressed(&"ui_cancel"):
-		visible = false
+		_close()
 		cancelled.emit()
 		get_viewport().set_input_as_handled()

@@ -3,12 +3,15 @@ extends CanvasLayer
 
 signal opened
 signal closed
+# Raised by the Report Bug button; the HUD owns the dialog. See SideMenu's.
+signal bug_report_requested
 
 var _slot_grid_container: Control = null
 var _options_container: Control = null
 var _leave_container: Control = null
 var _slot_grid: SlotGridPanel = null
 var _menu_vbox: VBoxContainer = null      # main button column, for controller focus-on-open
+var _menu_root: Control = null            # main menu layer, walled off while a sub-overlay is up
 var _options_panel: OptionsPanel = null   # for focus_active_tab on open
 var _change_position_btn: Button = null
 var _spectate_btn: Button = null
@@ -30,6 +33,13 @@ func _ready() -> void:
 	_confirm.confirmed.connect(_on_confirm_confirmed)
 	_confirm.cancelled.connect(_on_confirm_cancelled)
 	add_child(_confirm)
+	# Controller: the three sub-overlays sit on a higher CanvasLayer than the
+	# button column, so without a focus wall the D-pad steps straight out of an
+	# overlay and onto Resume behind it. Driven off visibility_changed rather than
+	# the individual show/hide sites so no close path (X button, Escape, close(),
+	# a toggle) can forget to lift it.
+	for c: Control in [_options_container, _slot_grid_container, _leave_container]:
+		c.visibility_changed.connect(_sync_menu_focus_wall)
 	GameManager.stats_updated.connect(_on_stats_updated)
 	visible = false
 
@@ -53,6 +63,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	else:
 		close()
 	get_viewport().set_input_as_handled()
+
+
+# The button column, handed to a dialog that opens OVER this menu (the bug
+# reporter) so it can wall focus off from the buttons behind it.
+func focus_root() -> Control:
+	return _menu_root
+
+
+func _sync_menu_focus_wall() -> void:
+	var covered: bool = _options_container.visible or _slot_grid_container.visible \
+			or _leave_container.visible
+	ControllerNav.set_subtree_focusable(_menu_root, not covered)
 
 
 func open() -> void:
@@ -131,6 +153,13 @@ func _build_menu() -> void:
 			_options_panel.focus_active_tab())
 	vbox.add_child(options_btn)
 
+	# The pad's route to the bug reporter mid-match — the HUD's bug icon is a
+	# mouse affordance, and the side menu (which has its own entry) is free-play
+	# only, so without this a controller player can't report the bug they just hit.
+	var bug_btn := MenuStyle.popup_button("Report Bug")
+	bug_btn.pressed.connect(func() -> void: bug_report_requested.emit())
+	vbox.add_child(bug_btn)
+
 	var leave_btn := MenuStyle.popup_button("Leave Game")
 	leave_btn.pressed.connect(func() -> void:
 		_leave_container.visible = true
@@ -142,6 +171,7 @@ func _build_menu() -> void:
 	root.add_child(overlay)
 	root.add_child(panel)
 	add_child(root)
+	_menu_root = root
 
 
 func _build_slot_grid_overlay() -> void:
@@ -349,7 +379,20 @@ func _get_team_colors() -> Array[Dictionary]:
 
 func _show_confirm(message: String, callback: Callable) -> void:
 	_confirm_callback = callback
-	_confirm.open(message)
+	_confirm.open(message, _covered_layer())
+
+
+# The layer a confirm dialog covers — whichever sub-overlay raised it, else the
+# button column. Handed to ConfirmDialog so the pad can't step off Confirm/Cancel
+# and back onto the button that opened it.
+func _covered_layer() -> Control:
+	if _leave_container.visible:
+		return _leave_container
+	if _slot_grid_container.visible:
+		return _slot_grid_container
+	if _options_container.visible:
+		return _options_container
+	return _menu_root
 
 
 func _on_confirm_confirmed() -> void:

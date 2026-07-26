@@ -14,8 +14,13 @@ signal reverted
 const _REVERT_DEFAULT_SECONDS: float = 15.0
 
 var _label: Label = null
+var _keep_btn: Button = null
 var _remaining: float = 0.0
 var _on_revert: Callable = Callable()
+# Controller focus scope: the Options panel underneath (walled off while we're
+# up) and the control focus returns to once we resolve.
+var _focus_background: Control = null
+var _focus_restore: Control = null
 
 
 func _ready() -> void:
@@ -58,6 +63,7 @@ func _build_ui() -> void:
 	keep_btn.pressed.connect(_on_keep)
 	SoundManager.wire_button(keep_btn)
 	btn_row.add_child(keep_btn)
+	_keep_btn = keep_btn  # controller default focus — B/Escape/timeout still revert
 
 	var revert_btn := MenuStyle.popup_button("Revert Now")
 	revert_btn.custom_minimum_size = Vector2(150, 48)
@@ -72,12 +78,19 @@ func _build_ui() -> void:
 	add_child(root)
 
 
-func open(seconds: float, on_revert: Callable) -> void:
+# `background` is the Options panel this covers; pass it so the pad lands on Keep
+# and can't step back onto the options behind — a display change the player can
+# only confirm with the mouse is a trap on a controller (the timeout would revert
+# a setting they actually wanted).
+func open(seconds: float, on_revert: Callable, background: Control = null) -> void:
 	_remaining = seconds if seconds > 0.0 else _REVERT_DEFAULT_SECONDS
 	_on_revert = on_revert
+	_focus_background = background
+	_focus_restore = ControllerNav.focus_owner(self)
 	_update_label()
 	visible = true
 	set_process(true)
+	ControllerNav.open_modal(_focus_background, self, _keep_btn)
 
 
 func _process(delta: float) -> void:
@@ -101,16 +114,20 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _on_keep() -> void:
-	set_process(false)
-	visible = false
+	_close()
 	kept.emit()
 	queue_free()
 
 
 func _do_revert() -> void:
-	set_process(false)
-	visible = false
+	_close()
 	if _on_revert.is_valid():
 		_on_revert.call()
 	reverted.emit()
 	queue_free()
+
+
+func _close() -> void:
+	set_process(false)
+	visible = false
+	ControllerNav.close_modal(_focus_background, _focus_restore)

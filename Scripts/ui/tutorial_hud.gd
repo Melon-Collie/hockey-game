@@ -17,6 +17,10 @@ var _complete_flash: ColorRect = null
 var _complete_label: Label = null
 var _complete_panel: Control = null
 var _exit_confirm_panel: Control = null
+# The always-on step card (Reset / Skip / Exit buttons). Focus is walled off
+# there while either modal below is up, so the pad can't step out of the modal
+# and onto Skip behind it.
+var _chrome_panel: PanelContainer = null
 
 # Set by TutorialManager._ready() so the HUD knows which id to mark complete
 # when the player hits the "Exit Tutorial" button. Defaults to the first
@@ -53,6 +57,7 @@ func _build() -> void:
 	panel.offset_top    = 12.0
 	panel.custom_minimum_size = Vector2(360.0, 0.0)
 	add_child(panel)
+	_chrome_panel = panel
 
 	var inner := MarginContainer.new()
 	inner.add_theme_constant_override("margin_left",   14)
@@ -376,6 +381,9 @@ func hide_complete_flash() -> void:
 
 func show_tutorial_complete() -> void:
 	_complete_panel.visible = true
+	# Controller: land on the primary CTA (Continue, or Free Play on the last
+	# part) — the panel's first focusable.
+	ControllerNav.open_modal(_chrome_panel, _complete_panel)
 
 
 # ── Button handlers ───────────────────────────────────────────────────────────
@@ -404,11 +412,14 @@ func _on_continue_to_tutorial(next_id: String) -> void:
 func _show_exit_confirm() -> void:
 	if _exit_confirm_panel != null:
 		_exit_confirm_panel.visible = true
+		# Lands on Keep Learning — the panel's first focusable, and the safe default.
+		ControllerNav.open_modal(_chrome_panel, _exit_confirm_panel)
 
 
 func _on_keep_learning() -> void:
 	if _exit_confirm_panel != null:
 		_exit_confirm_panel.visible = false
+		ControllerNav.close_modal(_chrome_panel, _exit_btn)
 
 
 func _on_exit_confirmed() -> void:

@@ -41,6 +41,11 @@ var _camera_label: Label = null
 var _seeking_user: bool = false
 var _pause_menu_container: Control = null
 var _pause_options_container: Control = null
+# The viewer chrome (transport bar, back button, seek slider) — all real
+# focusable controls, so it's walled off while the pause menu is up.
+var _chrome_root: Control = null
+var _pause_menu_vbox: VBoxContainer = null
+var _pause_options_panel: OptionsPanel = null
 # Full Tab scoreboard overlay — reuses the live game's Scoreboard, fed
 # replay-derived data through provider Callables supplied by ReplayViewer.
 var _scoreboard: Scoreboard = null
@@ -89,6 +94,7 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
+	_chrome_root = root
 
 	_build_scoreboard(root)
 	_build_back_button(root)
@@ -223,6 +229,7 @@ func _build_pause_menu() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 12)
 	panel.add_child(vbox)
+	_pause_menu_vbox = vbox
 
 	var title := Label.new()
 	title.text = "Paused"
@@ -271,6 +278,7 @@ func _build_pause_options_overlay() -> void:
 	var options := OptionsPanel.new()
 	options.close_requested.connect(_close_pause_options)
 	panel.add_child(options)
+	_pause_options_panel = options
 	_pause_options_container.add_child(panel)
 
 	var canvas_layer := CanvasLayer.new()
@@ -553,12 +561,16 @@ func _open_pause_menu() -> void:
 		_driver.pause()
 		_update_play_pause_text()
 	_pause_menu_container.visible = true
+	# Controller: land on Resume and wall the transport chrome off, so the D-pad
+	# can't step out of the menu and onto the seek slider behind it.
+	ControllerNav.open_modal(_chrome_root, _pause_menu_vbox)
 
 
 func _close_pause_menu() -> void:
 	if _pause_menu_container == null:
 		return
 	_pause_menu_container.visible = false
+	ControllerNav.close_modal(_chrome_root)
 	# Only auto-resume if the user wasn't paused before opening the menu.
 	# Otherwise they'd have to re-pause on every escape press.
 	if _driver != null and not _was_paused_before_menu:
@@ -569,11 +581,16 @@ func _close_pause_menu() -> void:
 func _open_pause_options() -> void:
 	if _pause_options_container != null:
 		_pause_options_container.visible = true
+		ControllerNav.set_subtree_focusable(_pause_menu_container, false)
+		if _pause_options_panel != null:
+			_pause_options_panel.focus_active_tab()
 
 
 func _close_pause_options() -> void:
 	if _pause_options_container != null:
 		_pause_options_container.visible = false
+		ControllerNav.set_subtree_focusable(_pause_menu_container, true)
+		ControllerNav.focus_first(_pause_menu_vbox)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

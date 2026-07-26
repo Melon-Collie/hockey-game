@@ -13,6 +13,11 @@ extends Control
 
 var _panel: AttributePickerPanel = null
 var _apply_btn: Button = null
+# Controller focus scope: the lobby content behind this popup (focus is walled
+# off there while we're open) and the control focus returns to on close. Set by
+# LobbyManager via set_focus_scope; null-safe if it never is.
+var _focus_background: Control = null
+var _focus_restore: Control = null
 
 
 func _ready() -> void:
@@ -60,6 +65,9 @@ func _build() -> void:
 	_panel = AttributePickerPanel.new()
 	_panel.changed.connect(_update_apply_state)
 	vbox.add_child(_panel)
+	# Pad text entry for the preset name: the key grid walls this popup off while
+	# it's up, so the D-pad can't step off the keys onto Apply/Cancel.
+	_panel.set_keyboard_background(self)
 
 	var action_row := HBoxContainer.new()
 	action_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -83,6 +91,13 @@ func _build() -> void:
 	action_row.add_child(cancel_btn)
 
 
+# `background` is the lobby content this popup covers; `restore` the button that
+# opens it. Together they scope controller focus — see ControllerNav.open_modal.
+func set_focus_scope(background: Control, restore: Control) -> void:
+	_focus_background = background
+	_focus_restore = restore
+
+
 func open() -> void:
 	# Editing is always allowed in the lobby (pre-match); the match-lock only
 	# applies once play has started, which is a different scene.
@@ -90,6 +105,9 @@ func open() -> void:
 	_panel.snapshot()
 	_update_apply_state()
 	visible = true
+	# Land on the height slider rather than the tree-first control (the close X),
+	# and wall focus off from the lobby behind so the D-pad stays in the popup.
+	ControllerNav.open_modal(_focus_background, self, _panel.first_focus_target())
 
 
 func _update_apply_state() -> void:
@@ -104,12 +122,17 @@ func _apply() -> void:
 	var new_attrs: PlayerAttributes = _panel.commit()
 	PlayerPrefs.save()
 	NetworkManager.update_lobby_attributes(new_attrs)
-	visible = false
+	_close()
 
 
 func _cancel() -> void:
 	_panel.restore()
+	_close()
+
+
+func _close() -> void:
 	visible = false
+	ControllerNav.close_modal(_focus_background, _focus_restore)
 
 
 func _on_overlay_clicked(event: InputEvent) -> void:
