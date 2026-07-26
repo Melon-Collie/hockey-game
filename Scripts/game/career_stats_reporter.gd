@@ -230,6 +230,13 @@ func _body_detail(bytes: PackedByteArray) -> String:
 		return ""
 	if detail.length() > 500:
 		detail = detail.substr(0, 500) + "…"
+	# PGRST204 is always the same story: the client is posting a column the live
+	# database doesn't have yet. Say so, because the raw message ("could not find
+	# the 'x' column ... in the schema cache") reads like a client bug and sends
+	# you looking in the wrong place.
+	if detail.contains("PGRST204"):
+		detail += "  [schema out of date — apply sql/shot_events.sql then" \
+				+ " sql/career_stats.sql in the Supabase SQL editor]"
 	return " — " + detail
 
 

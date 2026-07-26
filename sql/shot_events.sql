@@ -1,3 +1,6 @@
+-- APPLY ORDER: run this file BEFORE sql/career_stats.sql — that one's
+-- recent_games_for() counts rows here.
+--
 -- shot_events — one row per resolved shot attempt (analytics plan B1). Posted in
 -- a single batch by the HOST at game-over (CareerStatsReporter.report_shot_events),
 -- since the host holds the authoritative per-game shot log (AdvancedStatsTracker).

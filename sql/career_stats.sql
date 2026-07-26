@@ -1,3 +1,7 @@
+-- APPLY ORDER: run sql/shot_events.sql FIRST. recent_games_for() below counts
+-- rows in shot_events for its shot_count column, so this file does not stand
+-- alone on a fresh database.
+--
 -- career_stats — one row per player per online game, posted at game-over by
 -- CareerStatsReporter (Scripts/game/career_stats_reporter.gd). The Career screen
 -- reads lifetime totals from the career_totals view and per-game history from
