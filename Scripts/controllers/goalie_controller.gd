@@ -883,6 +883,13 @@ extends Node
 @export var elevated_threshold: float = 0.45
 @export var react_hand_y_min: float = 0.50
 @export var react_hand_y_max: float = 1.55
+# Reach height ABOVE THE CHEST ANCHOR — the posture cost of being down. Each
+# pose authors a `body_pos.y` (READY 1.06, STANDING 1.22, BUTTERFLY 0.40), and
+# the hand ceiling is that plus this, capped by `react_hand_y_max`. DERIVED, not
+# chosen: 1.06 + 0.49 = 1.55, the flat ceiling this replaced, so upright reach is
+# bit-identical and only the down postures give anything up. See
+# GoalieBodyConfigBuilder._reachable_hand_y.
+@export var arm_reach_above_chest: float = 0.49
 @export var react_hand_z: float = -0.28
 # Glove arm reach. The glove (in `_apply_elevated_shot_reaction`) moves
 # toward the shot's lateral impact point clamped within these bounds, so
@@ -1361,6 +1368,7 @@ func _configure_collaborators() -> void:
 	_pose.shoulder_pitch_y_range = shoulder_pitch_y_range
 	_pose.react_hand_y_min = react_hand_y_min
 	_pose.react_hand_y_max = react_hand_y_max
+	_pose.arm_reach_above_chest = arm_reach_above_chest
 	_pose.react_hand_z = react_hand_z
 	_pose.slide_pushoff_lift = slide_pushoff_lift
 	_pose.slide_pushoff_rot_deg = slide_pushoff_rot_deg

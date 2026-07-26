@@ -52,6 +52,11 @@ var shoulder_pitch_y_range: float = 0.55
 # Reach height clamp + rest Z for the glove/blocker target.
 var react_hand_y_min: float = 0.50
 var react_hand_y_max: float = 1.55
+# How far above the CHEST ANCHOR (`body_pos.y` of the pose in play) either hand
+# can be raised. This is what makes going down cost something: the butterfly's
+# chest sits at 0.40 against READY's 1.06, so the same arm reaches 0.66 m lower
+# from the ice than from the feet. See GoalieController.arm_reach_above_chest.
+var arm_reach_above_chest: float = 0.49
 var react_hand_z: float = -0.28
 
 # Slide pose tuning (push-off pad lift/rot, body lean into slide direction).
@@ -835,7 +840,7 @@ func _apply_prelean(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	# Convert predicted world impact into goalie-local X (+Z-defending goalie is
 	# rotated PI in world, so local +X is global -X — same as the reach math).
 	var impact_local_x: float = (inputs.prelean_impact_x - inputs.current_x) * -inputs.direction_sign
-	var target_y: float = clampf(inputs.prelean_impact_y, react_hand_y_min, react_hand_y_max)
+	var target_y: float = _reachable_hand_y(inputs.prelean_impact_y, c)
 	# Partial body lean toward the reach side (same sign convention as the reach).
 	var lean_factor: float = clampf(absf(impact_local_x) / maxf(body_lean_reach_norm, 0.001), 0.0, 1.0)
 	var lean_sign: float = signf(-impact_local_x)
@@ -881,7 +886,7 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	# Convert world X into goalie-local X (the +Z-defending goalie is rotated
 	# PI in world, so its local +X is global -X).
 	var impact_local_x: float = (intercept_x - inputs.current_x) * -inputs.direction_sign
-	var target_y: float = clampf(intercept_y, react_hand_y_min, react_hand_y_max)
+	var target_y: float = _reachable_hand_y(intercept_y, c)
 	# Body lean toward the reach side. Magnitude scales with reach distance,
 	# capped at `body_lean_max_deg`. +Z rotation tilts top toward -X (lean
 	# left for glove side); -Z tilts toward +X (lean right for blocker side).
@@ -907,6 +912,28 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 		_reach_glove(c, impact_local_x, target_y)
 	else:
 		_reach_blocker(c, impact_local_x, target_y)
+
+# How high a hand can actually be put, for the pose currently in `c`.
+#
+# THE COST OF GOING DOWN. The ceiling used to be a flat `react_hand_y_max` with
+# no posture term, so a goalie flat in the butterfly gloved pucks 5 cm under the
+# crossbar exactly as well as a standing one — measured, with the same hand
+# distribution (tests/unit/ai/test_goalie_butterfly_tradeoff.gd). That made the
+# butterfly a strict upgrade (it also adds lateral width via the splay), so
+# committing to the seal was never a trade, and the whole block-vs-react model
+# had nothing to balance.
+#
+# Real goaltending's trade is "seal the ice, concede the top". Here it falls out
+# of the chest anchor each pose already authors: READY sits at 1.06 and the
+# butterfly at 0.40, so the same arm reaches 0.66 m lower from the ice.
+#
+# `arm_reach_above_chest` is DERIVED, not chosen — 1.06 + 0.49 = 1.55, the old
+# flat ceiling, so upright reach is unchanged by construction and only the down
+# postures lose anything. The absolute cap stays as a hard limit on top.
+func _reachable_hand_y(intercept_y: float, c: GoalieBodyConfig) -> float:
+	var ceiling: float = minf(react_hand_y_max, c.body_pos.y + arm_reach_above_chest)
+	return clampf(intercept_y, react_hand_y_min, maxf(ceiling, react_hand_y_min))
+
 
 # Glove reach: extend toward impact_local_x, clamped to arm reach; Z extends
 # forward with reach distance (real goalies thrust the glove out to meet the

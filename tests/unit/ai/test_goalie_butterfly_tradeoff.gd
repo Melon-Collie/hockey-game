@@ -81,6 +81,27 @@ extends GutTest
 # A seal that concedes nothing above it cannot be punished for sealing, so
 # committing is never a trade and deception has no lever anywhere.
 #
+# ── FIXED (2026-07): the reach ceiling is now chest-anchored ─────────────────
+# `_reachable_hand_y` caps the hand at `body_pos.y + arm_reach_above_chest`,
+# where the chest anchor is whatever the pose in play already authored (READY
+# 1.06, STANDING 1.22, BUTTERFLY 0.40). 1.06 + 0.49 = 1.55 — the old flat
+# ceiling — so upright reach is unchanged BY CONSTRUCTION and only the down
+# postures give anything up. The trade now exists:
+#
+#   16 m @ 75 mph, arrives 1.10 m    UPRIGHT 0 goals -> BUTTERFLY 6 goals
+#    5 m @ 25 mph, arrives 1.10 m    UPRIGHT 0 goals -> BUTTERFLY 3 goals
+#    9 m @ 65 mph, arrives 0.98 m    UPRIGHT 1 goal  -> BUTTERFLY 0 goals
+#    7 m HIGH, arrives 0.76 m        UPRIGHT 4 goals -> BUTTERFLY 1 goal
+#    7 m FLAT                        UPRIGHT 1 goal  -> BUTTERFLY 0 goals
+#
+# Better low, worse high — seal the ice, concede the top. The soft in-tight roof
+# (5 m @ 25 mph) is the counter a real shooter has against a goalie who drops
+# early, and it now works.
+#
+# Everything that shoots at a SETTLED UPRIGHT keeper is bit-identical:
+# exhaustive 16/288 and 0/288, five-hole windows, and the disguise arms
+# (7 / 10 / 11). The change reaches only a down goalie playing the top.
+#
 # Report-only. Nothing here is a decision — it is the evidence for one.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
