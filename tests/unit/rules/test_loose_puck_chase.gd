@@ -437,3 +437,62 @@ func test_reach_band_covers_a_settled_puck_at_your_feet() -> void:
 			Vector3(8, 0, 0), Vector3.ZERO,
 			Vector3.ZERO, Vector3.ZERO, REF, 1.8)
 	assert_false(far, "a dead puck 8 m away is the election's business")
+
+
+# ── Containment gate (losing a race is only a reason to STOP if it buys something)
+
+func test_lost_race_is_still_run_when_a_teammate_is_home() -> void:
+	# Puck dumped deep into the attacking corner, an opponent clearly winning
+	# it. Our chaser loses the race — but two teammates sit goal-side of the
+	# pickup, so there is no counter to pre-contain and giving up buys nothing.
+	# That is the forecheck, and refusing it measured as a dump-in that the
+	# dumping team never chased at all.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-6, 0, -24)
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(-4, 0, -14))            # us, chasing
+	snap.skater_states[2] = _skater(Vector3(0, 0, 2))               # teammate, home
+	snap.skater_states[11] = _skater(Vector3(-6, 0, -22),
+			Vector3(0, 0, -4))                                      # opponent, winning
+	var teams := {1: 0, 2: 0, 11: 1}
+	# own_goal_dir +1 → our net at +Z, so the teammate at z=2 is goal-side of
+	# a pickup at z=-24.
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-4, 0, -14), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_false(lost, "a lost race with support behind us is a forecheck, not a stop")
+
+
+func test_last_man_still_declines_a_lost_race() -> void:
+	# Same race, but now the only teammate is UP-ice of the pickup: we are the
+	# last man, and pushing after a puck we cannot win is the "third man keeps
+	# chasing while the counter develops" failure the decline exists for.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-6, 0, -24)
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(-4, 0, -14))            # us
+	snap.skater_states[2] = _skater(Vector3(2, 0, -26))             # teammate, deeper
+	snap.skater_states[11] = _skater(Vector3(-6, 0, -22),
+			Vector3(0, 0, -4))                                      # opponent, winning
+	var teams := {1: 0, 2: 0, 11: 1}
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-4, 0, -14), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_true(lost, "the last man with nobody home still pre-contains")
+
+
+func test_a_ghosted_teammate_is_not_containment() -> void:
+	# A teammate serving an offside ghost can't play the puck or the body, so
+	# he can't be the reason we stop chasing.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-6, 0, -24)
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(-4, 0, -14))
+	snap.skater_states[2] = _skater(Vector3(0, 0, 2))
+	snap.skater_states[2].is_ghost = true
+	snap.skater_states[11] = _skater(Vector3(-6, 0, -22), Vector3(0, 0, -4))
+	var teams := {1: 0, 2: 0, 11: 1}
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-4, 0, -14), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_true(lost, "a ghosted teammate contains nothing")

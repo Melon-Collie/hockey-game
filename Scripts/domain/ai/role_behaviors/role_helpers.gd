@@ -1490,10 +1490,16 @@ static func _xz_distance(a: Vector3, b: Vector3) -> float:
 # to defending the pickup instead of pushing (the missed-pass "third man keeps
 # chasing while the counter develops" failure). False when no opponent
 # threatens the puck.
+#
+# `own_goal_dir` (+1 = our net at +Z) enables the CONTAINMENT read below, which
+# is what keeps the decline from becoming "the bots stopped trying". Pass 0.0
+# only where the geometry genuinely isn't available (unit tests) — both
+# production call sites pass the real value.
 static func loose_puck_race_lost(
 		snapshot: WorldSnapshot, self_pos: Vector3, self_vel: Vector3,
 		self_max_speed: float, team_id: int, team_id_by_peer: Dictionary,
-		caps_by_peer: Dictionary, self_pid: int = -1) -> bool:
+		caps_by_peer: Dictionary, self_pid: int = -1,
+		own_goal_dir: float = 0.0) -> bool:
 	if snapshot == null or snapshot.puck_state == null:
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
@@ -1528,6 +1534,7 @@ static func loose_puck_race_lost(
 		my_eta = AILoosePuckChase.path_intercept_time(
 				traj, step_dt, self_pos, self_vel, self_vmax)
 	var best_opp_eta: float = INF
+	var best_opp_meet: Vector3 = puck_pos
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
@@ -1551,22 +1558,63 @@ static func loose_puck_race_lost(
 				s, caps_by_peer.get(pid), puck_pos)
 		var t: float
 		var committed: bool
+		var meet: Vector3 = puck_pos
 		if traj.is_empty():
 			t = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)
 			committed = AILoosePuckChase.committed_to_race(s, puck_pos)
 		else:
 			t = AILoosePuckChase.path_intercept_time(
 					traj, step_dt, s.position, s.velocity, speed)
+			meet = AILoosePuckChase.path_intercept_point(traj, step_dt, t)
 			committed = AILoosePuckChase.path_enters_band(traj, puck_pos,
 					s.position, AIActionScoring.CHASE_CONTEST_MARGIN_M) \
-					or AILoosePuckChase.committed_to_point(s,
-							AILoosePuckChase.path_intercept_point(traj, step_dt, t))
+					or AILoosePuckChase.committed_to_point(s, meet)
 		if not committed:
 			continue
 		if t < best_opp_eta:
 			best_opp_eta = t
+			best_opp_meet = meet
 	if best_opp_eta == INF:
 		return false
 	var contest_window: float = AIActionScoring.CHASE_CONTEST_MARGIN_M \
 			/ maxf(self_max_speed, 1.0)
-	return my_eta > best_opp_eta + contest_window
+	if my_eta <= best_opp_eta + contest_window:
+		return false
+	# Losing the race is only a reason to STOP if stopping buys something. The
+	# decline exists to pre-contain the collector so the counter meets a body —
+	# which is worth a chaser only when there is not already one behind the
+	# play. With a teammate goal-side of the pickup the counter is contained
+	# without me and the honest read on a lost puck is to keep skating: that is
+	# the forecheck, and refusing it is why a dumped-in puck got collected with
+	# nobody within 20 m of it (measured: our team had NOBODY chasing for 53% of
+	# the loose window on a routine dump-in).
+	#
+	# Naturally zone-aware, so no zone gate is needed: a puck dumped into the
+	# attacking corner has our whole team goal-side of it and gets forechecked,
+	# while a puck lost behind our own D — the last man with nobody home, the
+	# geometry the decline was actually built for — still declines and
+	# pre-contains. Goal-side is the plain support read ("is anyone behind the
+	# puck") rather than a full can-he-hold model: cheap, and it errs toward
+	# racing, which is the side of this trade-off that reads as hockey.
+	return not _has_containment_behind(snapshot, team_id, team_id_by_peer,
+			self_pid, best_opp_meet, own_goal_dir)
+
+
+# Is a live teammate (not me, not ghosted) at least a stride goal-side of the
+# pickup point? own_goal_dir 0.0 means the caller has no rink geometry to give
+# us, so no containment can be claimed.
+static func _has_containment_behind(snapshot: WorldSnapshot, team_id: int,
+		team_id_by_peer: Dictionary, self_pid: int, pickup: Vector3,
+		own_goal_dir: float) -> bool:
+	if own_goal_dir == 0.0:
+		return false
+	for pid: int in snapshot.skater_states:
+		if pid == self_pid or team_id_by_peer.get(pid, -1) != team_id:
+			continue
+		var mate: SkaterNetworkState = snapshot.skater_states[pid]
+		if mate.is_ghost:
+			continue
+		if own_goal_dir * (mate.position.z - pickup.z) \
+				> AIActionScoring.CHASE_CONTEST_MARGIN_M:
+			return true
+	return false

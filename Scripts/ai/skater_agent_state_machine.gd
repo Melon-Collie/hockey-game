@@ -6104,7 +6104,7 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 	var self_vel: Vector3 = self_state.velocity if self_state != null else Vector3.ZERO
 	return not AIRoleHelpers.loose_puck_race_lost(
 			snapshot, self_pos, self_vel, _self_max_speed,
-			_team_id, _team_id_by_peer, _caps_by_peer, _peer_id)
+			_team_id, _team_id_by_peer, _caps_by_peer, _peer_id, _own_goal_dir)
 
 
 # Does the loose puck's own path cross inside our reach band? The incidental

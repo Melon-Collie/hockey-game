@@ -26,7 +26,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var puck_pos: Vector3 = ctx.snapshot.puck_state.position
 	if AIRoleHelpers.loose_puck_race_lost(
 			ctx.snapshot, ctx.self_pos, ctx.self_velocity, ctx.self_max_speed,
-			ctx.team_id, ctx.team_id_by_peer, ctx.caps_by_peer, ctx.peer_id):
+			ctx.team_id, ctx.team_id_by_peer, ctx.caps_by_peer, ctx.peer_id,
+			ctx.own_goal_dir):
 		# Pre-contain the collector: the RUSH GAP LADDER on the pickup spot —
 		# the puck's closing speed toward our net stands in for the rush pace
 		# until the collector actually carries (a dead settle is met tight, a
