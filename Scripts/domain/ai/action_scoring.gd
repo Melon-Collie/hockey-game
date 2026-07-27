@@ -4107,6 +4107,190 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 	return mid if c_mid <= c_end else to
 
 
+# ── Controlled space: how much room a carrier has to OPERATE ─────────────────
+# "How much space do I have" as a measured quantity rather than a corridor test.
+#
+# THE MODEL. Space is the fraction of the ice ahead that this carrier can
+# actually reach WITH THE PUCK. Not "is anyone standing in my lane" — that is a
+# geometry question and it has no clock in it — but "of the destinations in
+# front of me, how many survive the race?" A fan of carry paths is sampled
+# across the forward cone, each priced by the SAME carry_safety the real carry
+# candidates use (crossing band + transit mid + arrival lunge, escape gate on),
+# reached at the SAME momentum-honest time_to_arrive. The result is the
+# area-weighted mean of those keep probabilities, in [0, 1]: 1 = every forward
+# destination is mine, 0 = none of them are.
+#
+# WHY A FAN AND NOT A RAY. A single netward ray is a corridor-occupancy test:
+# it cannot tell a defender you will skate past from a wall, it answers the
+# same for a man 3 m ahead and one 8 m ahead (no clock), and it has a hard cliff
+# at the reach boundary — one measured at 0.556 for a defender 1.0 m off the
+# ray and 1.000 at 2.0 m, a 45 cm difference deciding the puck. Sampling an
+# AREA cannot cliff: a defender leaving one path still covers its neighbours in
+# proportion to how much ice he actually takes away.
+#
+# WHY PATHS AND NOT POINTS. Each sample is a carry FROM the carrier TO the
+# destination, so a defender sitting between two rays is not a blind spot — he
+# is met en route by both, and carry_safety's crossing band prices exactly that
+# meeting. This is what lets the fan stay coarse (SPACE_SAMPLE_ANGLES) without
+# leaking coverage between samples.
+#
+# WHAT MOMENTUM BUYS, FOR FREE. time_to_arrive is momentum-honest, so a carrier
+# in stride reaches the far ring sooner, gives the defenders less window, and
+# reads more space than the same carrier standing still — while one skating the
+# other way pays the reversal. Nothing here is a momentum term; it falls out of
+# using the honest arrival time. The escape gate (apply_escape) is what keeps a
+# man the carrier is out-skating from reading as a wall.
+#
+# WEIGHTING. Each sample carries the area it stands for (polar element ∝ r)
+# projected onto the objective direction (max(0, cos θ) — the same
+# foreshortening projection position_potential uses, so lateral ice counts for
+# what it advances). Samples off the playing surface are DROPPED from both
+# sums, not zeroed: a wall does not strip the puck, it removes options, and
+# pricing the boards as pressure here would discount a clean wall carry as if
+# it were covered. (Boards-as-defender is a real read, but it belongs to the
+# option model, not the pressure one.)
+#
+# FAN DENSITY. Measured against a 5×9 reference fan: ANGULAR resolution buys
+# accuracy and radial resolution does not. Three angles alias badly enough to
+# miss a defender 3 m off the ray entirely (reads a clean 1.000); dropping the
+# middle ring costs almost nothing. So the budget goes to angles: 2×7 is one
+# sample CHEAPER than the 3×5 first shipped here and materially closer to the
+# reference (worst-case error 0.076 → 0.043 at rest, and the defender-dead-
+# ahead-at-speed case −0.079 → +0.015).
+#
+# Known residual: a two-man wall met at speed reads ~0.2 high on any fan this
+# coarse — the samples thread between the pair. That is the asymmetric model's
+# structural blind spot (a min over defenders cannot count bodies), not a
+# density problem: the dense reference is only 0.04 better there.
+#
+# Allocation-free: value-type math over two const tables.
+const SPACE_SAMPLE_RINGS: Array[float] = [0.5, 1.0]
+# ±70° in 23° steps. Coarse by design — see "why paths and not points".
+const SPACE_SAMPLE_ANGLES: Array[float] = [
+		-1.2217, -0.8145, -0.4072, 0.0, 0.4072, 0.8145, 1.2217]
+# Rings are STAGGERED by half an angular step, so the two rings sample 14
+# distinct bearings instead of the same 7 twice. Free anti-aliasing: a defender
+# between two rays used to degrade both of them on both rings, which made the
+# sweep wobble ±0.07 and could read a man 1.5 m off the ray as taking MORE space
+# than one dead centre (dead centre blocks one bearing; off-centre blocks two).
+# Half-step offset halves that beat frequency at identical cost.
+const SPACE_RING_STAGGER_RAD: float = 0.2036
+
+
+# One sample: the keep probability of carrying from `from` to `sample`, reached
+# at this build's honest momentum-aware arrival time. The per-point control
+# read — exported because the carry candidate scoring and the off-puck roles
+# want the same number for a single spot.
+static func control_at(sample: Vector3, from: Vector3, from_vel: Vector3,
+		from_caps: AISkaterCaps, opponents: Array[Vector3],
+		opponent_vels: Array[Vector3], opponent_caps: Array = []) -> float:
+	var speed: float = SKATER_REF_SPEED_M_S
+	var accel: float = MANEUVER_ACCEL_M_S2
+	var grip: float = 1.0
+	if from_caps != null:
+		speed = from_caps.max_speed
+		accel = from_caps.max_accel
+		grip = from_caps.lateral_grip
+	var t: float = time_to_arrive(from, sample, from_vel, speed, accel, grip)
+	return carry_safety(from, sample, t, opponents, opponent_vels,
+			opponent_caps, true)
+
+
+# The area-weighted controlled fraction of the forward cone (see the block
+# doc). `toward` is the objective the cone points at (the attacking net for the
+# carrier's forward-pressure read); `horizon_m` how far ahead space is felt.
+# Returns 1.0 when the objective is degenerate or every sample is off-ice.
+# `out_bearing_control`, when sized to SPACE_SAMPLE_ANGLES, is filled with the
+# mean control along each BEARING of the fan (averaged over the rings, off-ice
+# samples skipped, 1.0 where a bearing has no legal sample). That per-bearing
+# profile is the fan's directional shape — which way out of here is open — and
+# it is a free by-product of a read the carrier already pays for every re-eval.
+# AIRoleCarrier generates its forward carry candidates from it instead of from
+# a fixed ring of cardinals; every other caller passes nothing and it costs one
+# untaken branch per sample.
+static func controlled_space(from: Vector3, from_vel: Vector3,
+		from_caps: AISkaterCaps, toward: Vector3, horizon_m: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = [],
+		out_bearing_control: Array[float] = []) -> float:
+	var want_bearings: bool = out_bearing_control.size() == SPACE_SAMPLE_ANGLES.size()
+	if want_bearings:
+		out_bearing_control.fill(1.0)
+	var fx: float = toward.x - from.x
+	var fz: float = toward.z - from.z
+	var flen: float = sqrt(fx * fx + fz * fz)
+	if flen < 0.001 or horizon_m <= 0.0 or opponents.is_empty():
+		return 1.0
+	fx /= flen
+	fz /= flen
+	# The cone never reaches past the objective itself — closing on the net, the
+	# space that matters is the ice up to it, not behind it.
+	var reach: float = minf(horizon_m, flen)
+	var weighted: float = 0.0
+	var total: float = 0.0
+	for bi: int in SPACE_SAMPLE_ANGLES.size():
+		var bearing_sum: float = 0.0
+		var bearing_n: int = 0
+		# PREFIX IMPLICATION. Rings are walked OUTERMOST FIRST, and when the
+		# outer path along a bearing comes back fully controlled, the inner
+		# samples on that same bearing are credited 1.0 without being priced.
+		# They are a strict PREFIX of a path already proven clean: the inner
+		# destination lies on the outer route, reached sooner, so every defender
+		# has strictly less time to get to it, and the outer read's own mid
+		# sample and crossing band already swept the ice between. This is where
+		# the fan's cost actually lives — open ice is the expensive case, because
+		# nothing there trips carry_safety's zero early-outs — so skipping it is
+		# worth more than trimming traffic, where the early-outs already fire.
+		# (The one approximation: the outer read's END sample uses the arrival
+		# lunge window while a priced inner sample would use its own. It can only
+		# make the skip more conservative than the real inner value, never less.)
+		var outer_full: bool = false
+		for k: int in SPACE_SAMPLE_RINGS.size():
+			var ri: int = SPACE_SAMPLE_RINGS.size() - 1 - k
+			var r: float = reach * SPACE_SAMPLE_RINGS[ri]
+			# Alternate rings ride half an angular step over (see the stagger doc).
+			var stagger: float = SPACE_RING_STAGGER_RAD if ri % 2 == 1 else 0.0
+			var angle: float = SPACE_SAMPLE_ANGLES[bi] + stagger
+			var ca: float = cos(angle)
+			# Forward projection: the same cos foreshortening position_potential
+			# uses. Straight ahead counts fully, ±70° counts about a third.
+			if ca <= 0.0:
+				continue
+			var sa: float = sin(angle)
+			var dir_x: float = fx * ca - fz * sa
+			var dir_z: float = fx * sa + fz * ca
+			var sample := Vector3(
+					from.x + dir_x * r, 0.0, from.z + dir_z * r)
+			if absf(sample.x) > GameRules.INNER_HALF_WIDTH \
+					or absf(sample.z) > GameRules.INNER_HALF_LENGTH:
+				continue   # off the playing surface — see the WEIGHTING note
+			# A sample whose straight path runs through a cage is not ice this
+			# carrier can take, so it leaves both sums exactly like an off-surface
+			# one. Dropping it also keeps the fan off time_to_arrive's around-the-
+			# net routing, which prices four waypoints on two legs each — an 8x
+			# per-sample cost that fired on the whole fan whenever the carrier
+			# worked near a goal line, and was the fan's worst-tick spike.
+			if carry_path_blocked_by_net(from, sample):
+				continue
+			var c: float = 1.0
+			if not outer_full:
+				c = control_at(sample, from, from_vel, from_caps,
+						opponents, opponent_vels, opponent_caps)
+				if k == 0 and c >= 1.0:
+					outer_full = true   # prefix implication — see the block above
+			# Polar area element ∝ r, so the outer ring stands for more ice.
+			var w: float = r * ca
+			total += w
+			weighted += w * c
+			bearing_sum += c
+			bearing_n += 1
+		if want_bearings and bearing_n > 0:
+			out_bearing_control[bi] = bearing_sum / float(bearing_n)
+	if total <= 0.0:
+		return 1.0
+	return weighted / total
+
+
 # The carrier's best evasion target — the point in his handling envelope (where he
 # can put/protect the puck over EVADE_HORIZON_S) with the most clearance from
 # every defender: the SEAM. `handle_reach` is how far he holds the puck off his

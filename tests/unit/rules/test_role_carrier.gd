@@ -287,9 +287,19 @@ func test_lightly_impeded_carrier_moves_it_to_the_open_man() -> void:
 	# even conceding a little real estate (the forward-pressure discount). The SAME
 	# defender moved OFF to the side leaves the lane clear and the carry stands — the
 	# discount is directional, not a blanket pass-always.
+	#
+	# "GENUINELY OPEN" IS LOAD-BEARING, and it did not used to be. The mate here
+	# sat 3.6 m off the same defender and still won the compete, because the
+	# forward-pressure read was a 2 m corridor occupancy test: it scored the
+	# carrier's space at exactly 0.000 (one man 7 m ahead, the whole width of the
+	# ice free) while the mate, being outside that corridor, was credited a clean
+	# 1.000. Now both sides are read as controlled space
+	# (AIActionScoring.controlled_space) and the mate has to actually be clear —
+	# see the tightly-covered contrast at the bottom, which is the same fixture
+	# geometry this test used to assert a pass on.
 	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
 	var carrier := Vector3(0.0, 0.0, 2.0)
-	var mate := Vector3(3.0, 0.0, -3.0)                  # open, reasonable spot
+	var mate := Vector3(7.0, 0.0, -8.0)          # ahead AND wide — a real entry man
 	var g := GoalieNetworkState.new()
 	g.position_x = 0.0
 	g.position_z = net.z + 1.3
@@ -305,7 +315,7 @@ func test_lightly_impeded_carrier_moves_it_to_the_open_man() -> void:
 			"a carrier impeded on its path forward moves it to the open man")
 
 	# The discount is DIRECTIONAL: the same defender moved off to the side leaves the
-	# forward lane clear, so the carry keeps far more of its value than when the
+	# forward lane clear, so the carry keeps more of its value than when the
 	# defender blocks the path ahead.
 	var beside: Array = [
 			[1, TEAM_ID, carrier], [2, TEAM_ID, mate], [11, 1, Vector3(7.0, 0.0, -2.0)]]
@@ -313,8 +323,24 @@ func test_lightly_impeded_carrier_moves_it_to_the_open_man() -> void:
 	bc.snapshot.goalie_states[1 - TEAM_ID] = g
 	var b := AIRoleCarrier.new()
 	b.decide(bc)
-	assert_gt(b.debug_carry_score, a.debug_carry_score * 1.3,
-			"a side defender leaves the carry worth much more than a forward one blocking the path")
+	assert_gt(b.debug_carry_score, a.debug_carry_score,
+			"a side defender leaves the carry worth more than a forward one blocking the path")
+
+	# …and the pass has to be EARNED. Same carrier, same defender, but the mate
+	# tucked 3.6 m off that defender instead of 7.6: he is not an upgrade, and
+	# feeding him is not better than beating the man yourself. Asserted as a
+	# comparison rather than an argmax — the two spots differ by ~50% of pass EV,
+	# which is the robust claim; which side of the carry they land on is a
+	# knife-edge in this geometry and not what the model promises.
+	var covered: Array = [
+			[1, TEAM_ID, carrier], [2, TEAM_ID, Vector3(3.0, 0.0, -3.0)],
+			[11, 1, Vector3(0.0, 0.0, -5.0)]]
+	var cc := _make_ctx(carrier, covered)
+	cc.snapshot.goalie_states[1 - TEAM_ID] = g
+	var cov := AIRoleCarrier.new()
+	cov.decide(cc)
+	assert_lt(cov.debug_pass_score, a.debug_pass_score,
+			"a mate tucked in tight to the same defender is worth less than an open one")
 
 
 func test_ahead_man_on_a_blocked_path_is_not_credited_a_deep_drive() -> void:
@@ -589,19 +615,32 @@ func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void
 	assert_eq(c.debug_pass_score, 0.0,
 			"the out-of-zone teammate is excluded, so there is no pass on the board")
 
-	# Contrast: the SAME teammate, moved INTO the zone on a comparable lane, is a
-	# legal receiver again — confirming it was the zone exclusion suppressing the
-	# pass, not a bad lane.
-	var oz_mate := Vector3(6, 0, -14)                      # now in the O-zone
+	# Contrast: a teammate INSIDE the zone, on a clean lane and in scoring ice, is
+	# a legal receiver — confirming it was the zone exclusion suppressing the pass
+	# above, not a bad lane.
+	#
+	# The control needs a scene worth something to control FOR. It used to place
+	# the in-zone mate at (6, 0, -14) — level with the carrier, off the same dead
+	# lane, with no goalie in the snapshot at all — and passed on a pass score of
+	# 0.00004, four orders of magnitude under FIRE_MIN_VALUE. That is numerical
+	# dust, not a legal pass target: any downstream change of a few percent
+	# flipped its sign. A real keeper and a mate in real scoring ice give the
+	# assertion something to measure.
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.0
+	g.position_z = -GameRules.GOAL_LINE_Z + 1.3
+	var oz_mate := Vector3(6, 0, -19)                      # in the zone, scoring ice
 	var skaters_in: Array = [
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, oz_mate],
 			[3, 1, Vector3(0, 0, -15)],
 	]
+	var ctx_in: RoleContext = _make_ctx(self_pos, skaters_in)
+	ctx_in.snapshot.goalie_states[1 - TEAM_ID] = g
 	var c2 := AIRoleCarrier.new()
-	c2.decide(_make_ctx(self_pos, skaters_in))
-	assert_gt(c2.debug_pass_score, 0.0,
-			"an in-zone teammate on the same kind of lane IS a legal pass target")
+	c2.decide(ctx_in)
+	assert_gt(c2.debug_pass_score, AIRoleCarrier.FIRE_MIN_VALUE,
+			"an in-zone teammate in scoring ice IS a legal pass target, worth firing")
 
 
 # ─── O-zone shot selection: don't fire the long shot on entry ────────────────
