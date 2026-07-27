@@ -898,24 +898,58 @@ static func backdoor_depth_cap(
 	return coverable / sin_theta
 
 
-# ── Movement read penalty ─────────────────────────────────────────────────────
-# A goalie is only sharp when set — square and stopped. Caught mid-push, sliding,
-# or standing back up, they read the shot late. Returns extra read latency in
-# seconds, scaled by how unset the goalie is: `planar_speed` (lateral/depth
-# motion) ramps it toward `max_delay` at `reference_speed`, and `scrambling`
-# (recovering / mid-slide posture) floors the unset-ness at `scramble_unset`.
-# This only ever ADDS delay while the goalie is in motion — a set goalie reads
-# at the base delay — so it opens scoring windows without buffing the save.
+# ── Unset-ness ────────────────────────────────────────────────────────────────
+# How unset the goalie is, 0 (square and stopped) → 1 (fully in motion).
+# `planar_speed` (lateral + depth) ramps it to 1 at `reference_speed`, and
+# `scrambling` (recovering / committed lunge) floors it at `scramble_unset`
+# because those are posture problems no amount of standing still fixes.
+#
+# ONE definition, two consumers: the read penalty below and the controller's
+# quiet-eye prime gate. They must agree — a goalie the prime calls "set" while
+# the read penalty calls him moving is two models of the same body.
 class MovementReadConfig:
 	var reference_speed: float = 2.5    # m/s — planar speed that counts as fully moving
-	var max_delay: float = 0.12         # s — read latency when fully unset
+	var speed_delay: float = 0.04       # s — read latency when fully moving but on his feet
+	var scramble_delay: float = 0.12    # s — read latency while recovering / mid-lunge
 	var scramble_unset: float = 1.0     # unset floor (0..1) while recovering / scrambling
 
-static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
+static func unset_fraction(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
 	var unset: float = clampf(planar_speed / maxf(cfg.reference_speed, 0.0001), 0.0, 1.0)
 	if scrambling:
 		unset = maxf(unset, cfg.scramble_unset)
-	return unset * cfg.max_delay
+	return unset
+
+
+# Extra read latency (s) from being caught unset. TWO different costs, because
+# "moving" and "scrambling" fail for different physical reasons and pricing them
+# with one number gets both wrong:
+#
+#   TRAVELLING ON HIS FEET (`speed_delay`, small) — perception latency is a CNS
+#   property and barely moves with body state; the measured expert/novice split in
+#   keeper decision time (~250-260 ms vs ~320 ms) is an expertise gap, not a
+#   posture gap. A goalie mid-push saw the release fine. What he cannot do is
+#   cancel his momentum, and THAT cost is paid as drift carried through the
+#   reaction freeze (GoalieController._reaction_drift_x), not as latency here.
+#   This is only the residual for an off-balance body firing a response it has
+#   already chosen.
+#
+#   SCRAMBLING (`scramble_delay`, larger) — standing up out of a butterfly or
+#   sitting on a committed lunge is not a perception problem either, but the
+#   response genuinely is not AVAILABLE yet: the limbs are travelling back under
+#   him, so there is nothing to fire until they arrive. There is no lateral
+#   momentum in that failure for the drift to model, which is why it keeps a real
+#   latency cost where the travelling case does not.
+#
+# Loading the whole caught-moving cost onto one latency (the pre-drift model) made
+# the penalty binary in RANGE rather than proportional: absorbed entirely by a
+# point shot's ~0.57 s flight, and larger than a 5 m slot shot's ~0.20 s flight,
+# so against a moving goalie in tight the shooter did not face a late read — he
+# faced a statue.
+static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
+	var delay: float = unset_fraction(planar_speed, false, cfg) * cfg.speed_delay
+	if scrambling:
+		delay = maxf(delay, cfg.scramble_delay)
+	return delay
 
 
 # ── Five-hole gap ─────────────────────────────────────────────────────────────

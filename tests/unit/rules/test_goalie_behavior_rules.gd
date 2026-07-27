@@ -568,14 +568,16 @@ func test_screen_stationary_puck_no_delay() -> void:
 		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
 	assert_eq(d, 0.0)
 
-# ── movement_read_penalty ─────────────────────────────────────────────────────
+# ── unset_fraction / movement_read_penalty ────────────────────────────────────
 # A set (stopped) goalie reads at the base delay; a moving / scrambling one reads
-# late. reference_speed 2.5, max_delay 0.12, scramble_unset 1.0.
+# late — and the two pay DIFFERENT costs (see movement_read_penalty). Test-local
+# config: reference_speed 2.5, speed_delay 0.12, scramble_delay 0.12.
 
 func _move_read_cfg() -> GoalieBehaviorRules.MovementReadConfig:
 	var cfg := GoalieBehaviorRules.MovementReadConfig.new()
 	cfg.reference_speed = 2.5
-	cfg.max_delay = 0.12
+	cfg.speed_delay = 0.12
+	cfg.scramble_delay = 0.12
 	cfg.scramble_unset = 1.0
 	return cfg
 
@@ -589,19 +591,45 @@ func test_move_read_scales_with_speed() -> void:
 	assert_almost_eq(d, 0.06, 0.001)
 
 func test_move_read_caps_at_max() -> void:
-	# Well over reference speed → clamped to max_delay.
+	# Well over reference speed → clamped to speed_delay.
 	var d: float = GoalieBehaviorRules.movement_read_penalty(6.0, false, _move_read_cfg())
 	assert_almost_eq(d, 0.12, 0.001)
 
 func test_move_read_scrambling_floors_unset() -> void:
-	# Standing-up posture: full penalty even when barely moving.
+	# Standing-up posture: full scramble penalty even when barely moving.
 	var d: float = GoalieBehaviorRules.movement_read_penalty(0.1, true, _move_read_cfg())
 	assert_almost_eq(d, 0.12, 0.001)
+
+func test_move_read_scramble_and_speed_are_separate_costs() -> void:
+	# A goalie travelling on his feet pays the (small) speed residual; one standing
+	# up pays the scramble cost, which the drift model can't carry for him.
+	var cfg: GoalieBehaviorRules.MovementReadConfig = _move_read_cfg()
+	cfg.speed_delay = 0.04
+	cfg.scramble_delay = 0.12
+	assert_almost_eq(GoalieBehaviorRules.movement_read_penalty(6.0, false, cfg),
+			0.04, 0.001, "fully travelling, on his feet")
+	assert_almost_eq(GoalieBehaviorRules.movement_read_penalty(0.0, true, cfg),
+			0.12, 0.001, "scrambling from a standstill")
+	assert_almost_eq(GoalieBehaviorRules.movement_read_penalty(6.0, true, cfg),
+			0.12, 0.001, "the larger of the two wins, they don't stack")
 
 func test_move_read_faster_is_later() -> void:
 	var slow: float = GoalieBehaviorRules.movement_read_penalty(0.5, false, _move_read_cfg())
 	var fast: float = GoalieBehaviorRules.movement_read_penalty(2.0, false, _move_read_cfg())
 	assert_gt(fast, slow)
+
+func test_unset_fraction_is_the_normalized_penalty() -> void:
+	# The travelling penalty is unset_fraction scaled by speed_delay — one shared
+	# definition, so the prime gate and the read penalty can't disagree about the
+	# same body.
+	var cfg: GoalieBehaviorRules.MovementReadConfig = _move_read_cfg()
+	assert_eq(GoalieBehaviorRules.unset_fraction(0.0, false, cfg), 0.0)
+	assert_almost_eq(GoalieBehaviorRules.unset_fraction(1.25, false, cfg), 0.5, 0.001)
+	assert_eq(GoalieBehaviorRules.unset_fraction(6.0, false, cfg), 1.0)
+	assert_eq(GoalieBehaviorRules.unset_fraction(0.1, true, cfg), 1.0)
+	assert_almost_eq(
+			GoalieBehaviorRules.unset_fraction(1.25, false, cfg) * cfg.speed_delay,
+			GoalieBehaviorRules.movement_read_penalty(1.25, false, cfg), 0.0001)
 
 # ── chest_tracking_factor ─────────────────────────────────────────────────────
 

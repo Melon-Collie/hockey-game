@@ -33,7 +33,7 @@ func test_hard_matches_controller_defaults() -> void:
 	assert_eq(hard.cross_crease_react_delay_s, 0.12)
 	assert_eq(hard.poke_radius_m, 0.25)
 	assert_eq(hard.screen_max_extra_delay_s, 0.30)
-	assert_eq(hard.move_read_max_delay_s, 0.12)
+	assert_eq(hard.move_read_scramble_delay_s, 0.12)
 	assert_eq(hard.depth_aggressive_m, 1.75)
 	assert_eq(hard.depth_base_m, 1.30)
 	assert_eq(hard.glove_react_max_speed_mps, 5.0)
@@ -73,7 +73,7 @@ func _assert_strictly_softer(softer: GoalieSkillProfile, tougher: GoalieSkillPro
 			"%s reads the back door later than %s" % [soft_name, tough_name])
 	assert_gt(softer.screen_max_extra_delay_s, tougher.screen_max_extra_delay_s,
 			"%s loses screened shots more than %s" % [soft_name, tough_name])
-	assert_gt(softer.move_read_max_delay_s, tougher.move_read_max_delay_s,
+	assert_gt(softer.move_read_scramble_delay_s, tougher.move_read_scramble_delay_s,
 			"%s is punished harder for being caught moving than %s" % [soft_name, tough_name])
 	# Lower = weaker = softer.
 	assert_lt(softer.poke_radius_m, tougher.poke_radius_m,
@@ -123,7 +123,7 @@ func test_all_values_stay_physical() -> void:
 		assert_gt(profile.cross_crease_react_delay_s, 0.0)
 		assert_gt(profile.poke_radius_m, 0.0)
 		assert_gte(profile.screen_max_extra_delay_s, 0.0)
-		assert_gte(profile.move_read_max_delay_s, 0.0)
+		assert_gte(profile.move_read_scramble_delay_s, 0.0)
 		assert_gt(profile.depth_aggressive_m, 0.0)
 		assert_gt(profile.depth_base_m, 0.0)
 		assert_gt(profile.glove_react_max_speed_mps, 0.0)

@@ -172,8 +172,83 @@ func test_lunge_is_a_committed_gamble() -> void:
 	assert_almost_eq(gc._movement_read_delay(), 0.0, 0.0001,
 			"a set goalie reads at the base delay")
 	gc._lunge_active_timer = 0.1
-	assert_almost_eq(gc._movement_read_delay(), gc.move_read_max_delay, 0.0001,
-			"mid-lunge the goalie is out of the play — fully unset read")
+	assert_almost_eq(gc._movement_read_delay(), gc.move_read_scramble_delay, 0.0001,
+			"mid-lunge the goalie is out of the play — full scramble read")
+
+
+func test_travelling_goalie_can_still_start_his_response_in_tight() -> void:
+	# Keeper decision-time research splits on EXPERTISE (~250-260 ms expert vs
+	# ~320 ms novice), not posture, so a goalie travelling on his feet has no
+	# grounded reason to read a shot 100+ ms later than a set one — and pricing him
+	# that way stops being "reads late" and becomes "does not react at all". At 5 m
+	# and 25 m/s the puck arrives in 0.20 s, so a PRIMED goalie caught travelling
+	# has to still get both limbs moving inside it.
+	#
+	# BOUNDED FROM BELOW TOO, and that is the live constraint: this residual is
+	# measurably load-bearing for readability (tests/unit/ai/test_goalie_disguise_
+	# read.gd — the goalie is in motion at release far more often than the "set
+	# goalie" framing suggests). Below ~0.08 s height deception starts paying
+	# NEGATIVELY, which the beatable-realism doctrine names as the tell for a wrong
+	# change. Do not cut it further without giving deception a mechanism that does
+	# not run through this number.
+	var gc: GoalieController = _gc()
+	var slot_flight: float = 5.0 / 25.0
+	var primed_arm: float = maxf(
+			gc.arm_reaction_delay - (gc.reaction_delay - gc.prearmed_reaction_delay), 0.0)
+	assert_lt(gc.prearmed_reaction_delay + gc.move_read_speed_delay, slot_flight,
+			"a primed goalie caught travelling must still START the drop in tight")
+	assert_lte(primed_arm + gc.move_read_speed_delay, slot_flight,
+			"...and must still get the arm moving rather than watching it go by")
+	assert_lt(gc.move_read_speed_delay, gc.move_read_scramble_delay,
+			"scrambling has no momentum for the drift to carry, so it keeps the "
+			+ "larger latency — the response is not available yet, not merely late")
+
+
+func test_unset_goalie_carries_momentum_through_the_freeze() -> void:
+	# The real cost of being caught moving is mechanical: momentum you cannot
+	# cancel and no loaded edge to cancel it with. Coaching doctrine is "be
+	# stopped before the release" precisely because the body keeps going.
+	var gc: GoalieController = _gc()
+	var delta: float = 1.0 / 120.0
+	gc._reaction_drift_vx = gc.t_push_speed
+	var x: float = 0.0
+	var elapsed: float = 0.0
+	for _i in range(240):
+		x = gc._reaction_drift_x(delta, x)
+		if gc._reaction_drift_vx == 0.0:
+			break
+		elapsed += delta
+	assert_between(x, 0.25, 0.8,
+			"a full T-push carries the body a real fraction of a metre past the commit")
+	assert_between(elapsed, 0.2, 0.7,
+			"and takes a few tenths to kill — the window a shooter can exploit")
+
+
+func test_drift_stopping_is_harder_than_pushing() -> void:
+	# Stopping is the harder half of the edge: pushing loads an edge, arresting
+	# momentum happens on an unloaded leg that has not re-planted yet.
+	var gc: GoalieController = _gc()
+	assert_lt(gc.unset_drift_decel_ratio, 1.0,
+			"killing momentum must be slower than generating it")
+	assert_gt(gc.unset_drift_decel_ratio, 0.0)
+
+
+func test_prime_and_read_penalty_share_one_definition_of_set() -> void:
+	# The quiet-eye credit is premised on being coiled and settled. A goalie the
+	# read penalty is calling unset must not simultaneously collect it, so both
+	# go through _unset_fraction and the prime gate sits inside its range.
+	var gc: GoalieController = _gc()
+	gc._build_rule_configs()
+	assert_almost_eq(gc._unset_fraction(), 0.0, 0.0001, "stopped goalie is set")
+	gc._velocity_x = gc.t_push_speed
+	assert_gt(gc._unset_fraction(), gc.set_unset_max,
+			"a goalie mid-T-push does not collect the primed read")
+	gc._velocity_x = 0.0
+	gc._lunge_active_timer = 0.1
+	assert_gt(gc._unset_fraction(), gc.set_unset_max,
+			"nor does one with a committed jab extended")
+	assert_between(gc.set_unset_max, 0.0, 0.5,
+			"the set band is a settling shuffle, not a push")
 
 
 func test_movement_penalty_is_additive_only() -> void:
@@ -181,12 +256,13 @@ func test_movement_penalty_is_additive_only() -> void:
 	# never buffed past the base read.
 	var cfg := GoalieBehaviorRules.MovementReadConfig.new()
 	cfg.reference_speed = 2.5
-	cfg.max_delay = 0.12
+	cfg.speed_delay = 0.12
+	cfg.scramble_delay = 0.12
 	cfg.scramble_unset = 1.0
 	assert_almost_eq(GoalieBehaviorRules.movement_read_penalty(0.0, false, cfg),
 			0.0, 0.0001)
 	assert_almost_eq(GoalieBehaviorRules.movement_read_penalty(99.0, false, cfg),
-			cfg.max_delay, 0.0001, "penalty caps at max_delay")
+			cfg.speed_delay, 0.0001, "penalty caps at speed_delay")
 
 
 func test_glove_speed_cap_in_human_hand_speed_band() -> void:
