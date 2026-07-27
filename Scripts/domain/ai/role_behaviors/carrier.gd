@@ -292,9 +292,14 @@ const OUTLET_DEVELOP_WINDOW_S: float = 1.2
 const OUTLET_DEVELOP_MIN_SPEED_M_S: float = 1.0
 
 # Pre-baked rotations for the 8 polar cardinal carry candidates.
-const _POLAR_ANGLES: Array[float] = [
-		0.0, PI * 0.25, PI * 0.5, PI * 0.75,
-		PI, -PI * 0.75, -PI * 0.5, -PI * 0.25,
+# REARWARD cardinals — lateral and back, the arc the forward space fan does not
+# span (it looks only where the carrier is trying to go, ±70°). These stay a
+# fixed local ring on purpose: they are escape/reset moves whose value is
+# "somewhere other than here", not destinations worth planning a route to. The
+# forward half of the old 8-spoke ring is gone — see the field-derived block in
+# _best_carry.
+const _REAR_ANGLES: Array[float] = [
+		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
 
 # RETREAT ring — a second, deeper candidate arc across the back half (lateral
@@ -310,18 +315,21 @@ const CARRY_RETREAT_STEP_M: float = CARRY_SEARCH_STEP_M * 2.0
 const _RETREAT_ANGLES: Array[float] = [
 		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
-# COMMITTED-CUT ring — the retreat ring's forward twin: five samples across
-# the FRONT arc at double the local step. The local 3 m cardinals are too
-# tight to change the attack angle (still inside the goalie's tracked-square
-# dead zone) and the far anchors (slot, exits) cross traffic — so the natural
-# curl endpoints, the arc a full-speed cut actually lands on (deep AND
-# across), fell between samples and a wing carrier had no representable
-# "curl to the net" move: it glided the wall to the goal line and turned at
-# 90° (the felt bug). Same clamps and uniform scoring as everything else;
-# bound-pruned, so open ice pays almost nothing for the extra five.
-const _CUT_ANGLES: Array[float] = [
-		-0.9, -0.45, 0.0, 0.45, 0.9,
-]
+# FIELD-DERIVED FORWARD CANDIDATES (see the generator in _best_carry).
+# BEARINGS: how many of the space fan's bearings become carry candidates. The
+# fan has 7; taking the best 3 by control × forward projection covers the open
+# side and the seam without re-scoring spokes the field already reported walled.
+# RADII: fractions of the planning beat. Two of them, so the near gradient a
+# standstill carrier steers on survives when the beat stretches out at speed.
+# PLAN_BEAT_S: the horizon a carry candidate is a PLAN over rather than a
+# steering nudge — one second of travel, which reduces to the old 3 m local
+# step at a standstill and reaches ~9 m (the blue line, from mid-neutral-zone)
+# at a full stride. Physical: it is how far ahead the carrier commits, and the
+# whole point is that it moves with his real pace instead of being pinned at a
+# radius chosen for a stationary bot.
+const CARRY_FIELD_BEARINGS: int = 3
+const CARRY_FIELD_RADII: Array[float] = [0.5, 1.0]
+const CARRY_PLAN_BEAT_S: float = 1.0
 # Deke engagement gates (the cheap pre-filters before the manufactured-opening
 # math runs — see AIActionScoring.deke_cut_side). ENGAGE_RANGE: the containing
 # defender must be close enough that the duel is live but the fake still has
@@ -622,6 +630,11 @@ var _last_flat_variant_lane: float = 0.0
 # the flat and saucer variants of one feed share a single solve (see the lazy
 # note in _compute_best_pass). Reset to -1 before each receiver's first variant.
 var _last_receiver_space: float = -1.0
+# Per-bearing control from the carrier's own forward-space read, filled once per
+# re-eval by _carrier_forward_clearance and consumed by _best_carry's candidate
+# generator. Sized once to the fan's bearing count; the generator overwrites
+# entries as it consumes them, so it is rebuilt (not appended to) every read.
+var _scratch_bearing_control: Array[float] = []
 # Counter-threat memo by covering-body count (see counter_rush_cost) —
 # -1-seeded alongside the ETAs each compete.
 var _scratch_exposure_threat_memo: Array[float] = []
@@ -1302,6 +1315,13 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	if ctx.ping_shoot_active and shoot_score > 0.0:
 		shoot_score *= PING_SHOOT_EV_MULT
 
+	# The forward-space read runs BEFORE the carry search, because the search
+	# feeds on its by-product: the per-bearing control profile
+	# (_scratch_bearing_control) is where the forward carry candidates come from
+	# (see _best_carry). One read, two consumers — the discount below and the
+	# candidate generator — so the profile costs nothing extra.
+	var forward_space: float = _carrier_forward_clearance(ctx)
+
 	var carry_result: Array = _best_carry(
 			ctx, raw_shoot_score, directed_seam, current_safety)
 	var carry_score: float = carry_result[0]
@@ -1311,7 +1331,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# so a lightly-impeded carrier moves the puck to an unimpeded teammate rather than
 	# grinding forward (even giving up some real estate). Only the fire-vs-carry
 	# compete sees this — the dump still judges against the honest raw carry.
-	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, _carrier_forward_clearance(ctx))
+	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, forward_space)
 	# …but judge SELF by the same currency a pass receiver gets: _pass_ev credits
 	# a receiver with the best shot he can REACH by driving in (drive-in credit).
 	# Without the mirror, two equally-covered wingers at the blue line each rated
@@ -2352,9 +2372,66 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# _candidate_ice_legal. Resolved once; every candidate ring below shares it.
 	var behind_net: bool = absf(self_pos.z) > GameRules.GOAL_LINE_Z
 
-	# 8 polar cardinals at CARRY_SEARCH_STEP_M. Forward = toward slot;
-	# rotate by 0°, 45°, ..., 315° to span all directions.
-	for angle: float in _POLAR_ANGLES:
+	# FORWARD candidates — generated from the space field's per-bearing profile
+	# (_scratch_bearing_control, filled by the forward-space read in
+	# _pick_commit_phase), not from a fixed ring. Replaces the forward half of
+	# the old 8 polar cardinals AND the whole committed-cut ring.
+	#
+	# Two defects it retires. (1) FIXED RADIUS: candidates sat 3 m out (6 m for
+	# the cut ring) no matter how fast the carrier was moving, so a bot at 9 m/s
+	# was choosing between spots 0.33 s away while re-deciding every 33 ms — a
+	# steering question dressed as a plan, with nothing sampled at the range
+	# where a zone entry is actually decided. The radius is now one PLANNING
+	# BEAT of travel at the carrier's real speed, which reduces to the old 3 m
+	# step at a standstill and reaches the blue line at a full stride — the same
+	# geometry the cut ring was hand-placed to catch. (2) BLIND BEARINGS: eight
+	# fixed spokes spend most of their samples on directions the field already
+	# knows are walled, and none on the seam between two of them.
+	#
+	# The profile is ranked by control × forward projection — control alone would
+	# rate a wide-open sideways bearing above a merely-good netward one, and the
+	# cos is the same foreshortening the space aggregate itself weights by. Top
+	# CARRY_FIELD_BEARINGS bearings are taken, each at the full beat and at half
+	# it, so the near gradient a standstill carrier needs survives at speed.
+	var beat_r: float = clampf(
+			ctx.self_max_speed * CARRY_PLAN_BEAT_S,
+			CARRY_SEARCH_STEP_M, FORWARD_PRESSURE_HORIZON_M)
+	if ctx.self_velocity.length_squared() > 1.0:
+		beat_r = clampf(
+				sqrt(ctx.self_velocity.x * ctx.self_velocity.x
+						+ ctx.self_velocity.z * ctx.self_velocity.z) * CARRY_PLAN_BEAT_S,
+				CARRY_SEARCH_STEP_M, FORWARD_PRESSURE_HORIZON_M)
+	for _rank: int in CARRY_FIELD_BEARINGS:
+		var best_bi: int = -1
+		var best_w: float = -1.0
+		for bi: int in _scratch_bearing_control.size():
+			var ang: float = AIActionScoring.SPACE_SAMPLE_ANGLES[bi]
+			var wgt: float = _scratch_bearing_control[bi] * cos(ang)
+			if wgt > best_w:
+				best_w = wgt
+				best_bi = bi
+		if best_bi < 0:
+			break
+		var angle: float = AIActionScoring.SPACE_SAMPLE_ANGLES[best_bi]
+		# Consume it so the next rank picks a different bearing.
+		_scratch_bearing_control[best_bi] = -1.0
+		var c: float = cos(angle)
+		var s_a: float = sin(angle)
+		var dir_x: float = fwd_x * c - fwd_z * s_a
+		var dir_z: float = fwd_x * s_a + fwd_z * c
+		for frac: float in CARRY_FIELD_RADII:
+			var r: float = maxf(beat_r * frac, CARRY_SEARCH_STEP_M * 0.5)
+			var candidate := Vector3(
+					self_pos.x + dir_x * r, 0.0, self_pos.z + dir_z * r)
+			if not _candidate_ice_legal(candidate, behind_net):
+				continue
+			_beam_score_base(ctx, candidate, our_goalie, false)
+
+	# REARWARD cardinals — the half of the old polar ring the forward cone does
+	# not span (lateral and back). Kept fixed and local: these are escape moves,
+	# not plans, and the space field deliberately looks only where the carrier is
+	# trying to GO. The committed peel-out is the retreat ring below.
+	for angle: float in _REAR_ANGLES:
 		var c: float = cos(angle)
 		var s_a: float = sin(angle)
 		var dir_x: float = fwd_x * c - fwd_z * s_a
@@ -2382,22 +2459,6 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			if not _candidate_ice_legal(retreat, behind_net):
 				continue
 			_beam_score_base(ctx, retreat, our_goalie, false)
-
-	# COMMITTED-CUT ring (see _CUT_ANGLES): the curl candidates between the
-	# local cardinals and the far anchors. Attacking half only — the curl is
-	# an attack shape (bend the approach while there's angle to use); in our
-	# half the exits, slot anchor, and retreat ring already span the moves,
-	# and the five extra scored candidates are pure hot-path cost there.
-	if ctx.own_goal_dir * self_pos.z < 1.0:
-		for angle: float in _CUT_ANGLES:
-			var cc: float = cos(angle)
-			var cs: float = sin(angle)
-			var cut := Vector3(
-					self_pos.x + (fwd_x * cc - fwd_z * cs) * CARRY_RETREAT_STEP_M, 0.0,
-					self_pos.z + (fwd_x * cs + fwd_z * cc) * CARRY_RETREAT_STEP_M)
-			if not _candidate_ice_legal(cut, behind_net):
-				continue
-			_beam_score_base(ctx, cut, our_goalie, false)
 
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
@@ -3376,8 +3437,15 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 # 1.0 when the ice ahead is his, dropping toward 0 as defenders take it away.
 # Feeds the carry's pass-first discount (see FORWARD_PRESSURE_*).
 func _carrier_forward_clearance(ctx: RoleContext) -> float:
-	return _forward_clearance_at(ctx, ctx.self_pos, ctx.self_velocity,
-			ctx.caps_by_peer.get(ctx.peer_id))
+	# Size once, then reuse: controlled_space refills every entry each call.
+	if _scratch_bearing_control.size() != AIActionScoring.SPACE_SAMPLE_ANGLES.size():
+		_scratch_bearing_control.resize(
+				AIActionScoring.SPACE_SAMPLE_ANGLES.size())
+	return AIActionScoring.controlled_space(
+			ctx.self_pos, ctx.self_velocity, ctx.caps_by_peer.get(ctx.peer_id),
+			ctx.attacking_goal_pos, FORWARD_PRESSURE_HORIZON_M,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+			_scratch_bearing_control)
 
 
 # Forward-pressure read for ANY spot: the space available to a carrier standing

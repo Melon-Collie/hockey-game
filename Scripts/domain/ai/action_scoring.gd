@@ -4209,10 +4209,22 @@ static func control_at(sample: Vector3, from: Vector3, from_vel: Vector3,
 # doc). `toward` is the objective the cone points at (the attacking net for the
 # carrier's forward-pressure read); `horizon_m` how far ahead space is felt.
 # Returns 1.0 when the objective is degenerate or every sample is off-ice.
+# `out_bearing_control`, when sized to SPACE_SAMPLE_ANGLES, is filled with the
+# mean control along each BEARING of the fan (averaged over the rings, off-ice
+# samples skipped, 1.0 where a bearing has no legal sample). That per-bearing
+# profile is the fan's directional shape — which way out of here is open — and
+# it is a free by-product of a read the carrier already pays for every re-eval.
+# AIRoleCarrier generates its forward carry candidates from it instead of from
+# a fixed ring of cardinals; every other caller passes nothing and it costs one
+# untaken branch per sample.
 static func controlled_space(from: Vector3, from_vel: Vector3,
 		from_caps: AISkaterCaps, toward: Vector3, horizon_m: float,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> float:
+		opponent_caps: Array = [],
+		out_bearing_control: Array[float] = []) -> float:
+	var want_bearings: bool = out_bearing_control.size() == SPACE_SAMPLE_ANGLES.size()
+	if want_bearings:
+		out_bearing_control.fill(1.0)
 	var fx: float = toward.x - from.x
 	var fz: float = toward.z - from.z
 	var flen: float = sqrt(fx * fx + fz * fz)
@@ -4225,12 +4237,14 @@ static func controlled_space(from: Vector3, from_vel: Vector3,
 	var reach: float = minf(horizon_m, flen)
 	var weighted: float = 0.0
 	var total: float = 0.0
-	for ri: int in SPACE_SAMPLE_RINGS.size():
-		var r: float = reach * SPACE_SAMPLE_RINGS[ri]
-		# Alternate rings ride half an angular step over (see the stagger doc).
-		var stagger: float = SPACE_RING_STAGGER_RAD if ri % 2 == 1 else 0.0
-		for base_angle: float in SPACE_SAMPLE_ANGLES:
-			var angle: float = base_angle + stagger
+	for bi: int in SPACE_SAMPLE_ANGLES.size():
+		var bearing_sum: float = 0.0
+		var bearing_n: int = 0
+		for ri: int in SPACE_SAMPLE_RINGS.size():
+			var r: float = reach * SPACE_SAMPLE_RINGS[ri]
+			# Alternate rings ride half an angular step over (see the stagger doc).
+			var stagger: float = SPACE_RING_STAGGER_RAD if ri % 2 == 1 else 0.0
+			var angle: float = SPACE_SAMPLE_ANGLES[bi] + stagger
 			var ca: float = cos(angle)
 			# Forward projection: the same cos foreshortening position_potential
 			# uses. Straight ahead counts fully, ±70° counts about a third.
@@ -4244,11 +4258,16 @@ static func controlled_space(from: Vector3, from_vel: Vector3,
 			if absf(sample.x) > GameRules.INNER_HALF_WIDTH \
 					or absf(sample.z) > GameRules.INNER_HALF_LENGTH:
 				continue   # off the playing surface — see the WEIGHTING note
+			var c: float = control_at(sample, from, from_vel, from_caps,
+					opponents, opponent_vels, opponent_caps)
 			# Polar area element ∝ r, so the outer ring stands for more ice.
 			var w: float = r * ca
 			total += w
-			weighted += w * control_at(sample, from, from_vel, from_caps,
-					opponents, opponent_vels, opponent_caps)
+			weighted += w * c
+			bearing_sum += c
+			bearing_n += 1
+		if want_bearings and bearing_n > 0:
+			out_bearing_control[bi] = bearing_sum / float(bearing_n)
 	if total <= 0.0:
 		return 1.0
 	return weighted / total
