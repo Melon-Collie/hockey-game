@@ -4240,7 +4240,22 @@ static func controlled_space(from: Vector3, from_vel: Vector3,
 	for bi: int in SPACE_SAMPLE_ANGLES.size():
 		var bearing_sum: float = 0.0
 		var bearing_n: int = 0
-		for ri: int in SPACE_SAMPLE_RINGS.size():
+		# PREFIX IMPLICATION. Rings are walked OUTERMOST FIRST, and when the
+		# outer path along a bearing comes back fully controlled, the inner
+		# samples on that same bearing are credited 1.0 without being priced.
+		# They are a strict PREFIX of a path already proven clean: the inner
+		# destination lies on the outer route, reached sooner, so every defender
+		# has strictly less time to get to it, and the outer read's own mid
+		# sample and crossing band already swept the ice between. This is where
+		# the fan's cost actually lives — open ice is the expensive case, because
+		# nothing there trips carry_safety's zero early-outs — so skipping it is
+		# worth more than trimming traffic, where the early-outs already fire.
+		# (The one approximation: the outer read's END sample uses the arrival
+		# lunge window while a priced inner sample would use its own. It can only
+		# make the skip more conservative than the real inner value, never less.)
+		var outer_full: bool = false
+		for k: int in SPACE_SAMPLE_RINGS.size():
+			var ri: int = SPACE_SAMPLE_RINGS.size() - 1 - k
 			var r: float = reach * SPACE_SAMPLE_RINGS[ri]
 			# Alternate rings ride half an angular step over (see the stagger doc).
 			var stagger: float = SPACE_RING_STAGGER_RAD if ri % 2 == 1 else 0.0
@@ -4266,8 +4281,12 @@ static func controlled_space(from: Vector3, from_vel: Vector3,
 			# worked near a goal line, and was the fan's worst-tick spike.
 			if carry_path_blocked_by_net(from, sample):
 				continue
-			var c: float = control_at(sample, from, from_vel, from_caps,
-					opponents, opponent_vels, opponent_caps)
+			var c: float = 1.0
+			if not outer_full:
+				c = control_at(sample, from, from_vel, from_caps,
+						opponents, opponent_vels, opponent_caps)
+				if k == 0 and c >= 1.0:
+					outer_full = true   # prefix implication — see the block above
 			# Polar area element ∝ r, so the outer ring stands for more ice.
 			var w: float = r * ca
 			total += w
