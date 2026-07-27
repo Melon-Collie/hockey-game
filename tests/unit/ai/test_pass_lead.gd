@@ -144,9 +144,9 @@ func test_lead_caps_projected_speed_to_receiver_top_speed() -> void:
 
 
 func test_lead_caps_accel_to_receiver_thrust() -> void:
-	# Same observed accel, but a low-Agility receiver can't sustain it — its
+	# Same observed accel, but a low-accel-cap receiver can't sustain it — its
 	# along-travel accel is clamped to its real thrust, so it's led less far than a
-	# high-Agility receiver. Speed cap held equal so only the accel cap differs.
+	# higher-accel receiver. Speed cap held equal so only the accel cap differs.
 	var receiver := _receiver(Vector3(0, 0, 6), Vector3(0, 0, 3))
 	var accel := Vector3(0, 0, 30)  # a spike well above any real thrust
 	var sluggish := AIPassLead.lead_point(Vector3.ZERO, receiver, accel, 20.0, 0.6, _caps(20.0, 6.0))

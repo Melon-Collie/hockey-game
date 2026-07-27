@@ -17,13 +17,12 @@ extends RefCounted
 #       shaft by the carrier's forward-predicted displacement
 #       (LagCompRewind.forward_predict_skater — the claimant rendered the
 #       carrier intent-integrated toward present, and the shaft rides the
-#       carrier's body); reach-clamp the CLIENT-sent attacker blade to that
-#       body — never rtt/2 (the blade is client-authoritative aim, like
-#       PickupClaimResolver; see LagCompRewind)
+#       carrier's body); reach-clamp the CLIENT-sent attacker blade to that body
 #     → reject if PuckInteractionRules.check_blade_under_stick fails against that
 #       geometry (attacker's blade within radius of the shaft AND below it)
-#     → apply_lag_comp_stick_lift (idempotent — re-checks carrier on apply so a
-#       concurrent host-side detection that already stripped doesn't double-apply).
+#     → apply_lag_comp_stick_lift (idempotent)
+#
+# The shared claim-resolver contract is in Scripts/game/CLAUDE.md.
 #
 # Geometry is an instantaneous point-vs-segment test (the attacker's blade vs.
 # the victim's hand→blade shaft), so — unlike poke's swept test — it needs no

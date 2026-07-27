@@ -6,15 +6,15 @@ extends RefCounted
 # RNG) so it stays unit-testable and replay-safe. GoalieController.setup() reads
 # a profile and writes these onto its @exports before building its cached rule
 # configs; HARD leaves every value at the controller's authored default, so Hard
-# is *exactly* today's goalie by construction and carries zero regression risk.
+# is *exactly* the authored goalie by construction.
 #
-# ── Why these knobs, and which are deliberately ABSENT ───────────────────────
+# ── Why these knobs ──────────────────────────────────────────────────────────
 # A lesser goalie must play like a WEAKER goalie, not a dumb one — every lever
 # here is a trait a real weaker goalie actually has, so every tier still reads as
 # a goalie (tracks the play, squares up, drops butterfly; he just gives up the
 # net and can't rob you). Two groups:
 #
-# Read-latency / stick group (Normal already eased these; Easy eases them more):
+# Read-latency / stick group:
 #   • reaction_delay_s       — the reflexive leg-drop read latency, the goalie's
 #     CORE save mechanism (it gates the butterfly drop that seals the five-hole
 #     and the low corners). Higher → in-tight and quick-release low shots land
@@ -40,8 +40,8 @@ extends RefCounted
 #   • move_read_max_delay_s  — extra read latency when caught moving / unset.
 #     Higher → he is punished harder for shots taken while he is still sliding.
 #
-# Positioning / save group (the "give up the net" levers — added so the scale is
-# a real ladder, not just reaction latency):
+# Positioning / save group (the "give up the net" levers, so the scale is a real
+# ladder rather than reaction latency alone):
 #   • depth_aggressive_m / depth_base_m — challenge depth on the depth chart.
 #     Lower → the goalie sits DEEPER, cutting less angle, so there's more net to
 #     shoot at from everywhere. The strongest "beatable but realistic" lever — a
@@ -57,20 +57,20 @@ extends RefCounted
 #     active blade); the drop still seals it, just later on the lower tiers.
 #
 # AI MIRROR: the bots' shot/pass scoring predicts the live goalie with the same
-# read model (leg/arm delays, drop time, lateral accel ramp, arm deploy). Those
-# used to be compile-time constants — which is why the leg-drop read could not
-# vary per tier — and are now static vars on AIActionScoring, synced from the
-# match's profile via AIActionScoring.set_goalie_profile(profile) wherever
-# GameManager selects goalie_skill_profile. Their defaults are the Hard/authored
-# baselines, so unwired contexts (unit tests) score exactly today's goalie.
-# STILL FIXED ACROSS TIERS: t_push_speed (the lateral slide TOP speed) — no tier
-# varies it, so the scorer keeps it as a const (GOALIE_MAX_LATERAL_SPEED_MPS).
-# Add it here only together with a set_goalie_profile field for it.
+# read model (leg/arm delays, drop time, lateral accel ramp, arm deploy), held as
+# static vars on AIActionScoring and synced from the match's profile via
+# set_goalie_profile wherever GameManager selects goalie_skill_profile. Their
+# defaults are the authored Hard baselines, so unwired contexts (unit tests)
+# score against the Hard goalie.
+#
+# FIXED ACROSS TIERS: t_push_speed, the lateral slide TOP speed — no tier varies
+# it, so the scorer keeps it as a const (GOALIE_MAX_LATERAL_SPEED_MPS). Add it
+# here only together with a set_goalie_profile field for it.
 #
 # To add a tier: add a Difficulty enum value, a factory, and a for_difficulty arm.
 # To add a knob: add a field + _init param, set it in all three factories, and
 # consume it in GoalieController._apply_skill_profile. If the bots' shot model
-# reads the same quantity (see AI MIRROR above), also sync it in
+# reads the same quantity (see AI MIRROR), also sync it in
 # AIActionScoring.set_goalie_profile — otherwise the bots keep scoring against
 # the Hard goalie's version of it.
 

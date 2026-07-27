@@ -4,7 +4,7 @@ Status: **design agreed, staged implementation in progress.** This doc is the
 agreed design (per CLAUDE.md workflow — treat it as the plan; ask before
 deviating). It captures the target the netcode is moving toward and the order
 we get there. Deep invariants for the *current* system live in
-`ARCHITECTURE.md` → **Networking Invariants**; this doc is where we're going and
+`Scripts/networking/CLAUDE.md`; this doc is where we're going and
 why, not a re-description of what's shipped.
 
 ## The problem we're solving

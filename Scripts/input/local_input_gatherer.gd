@@ -13,7 +13,7 @@ extends Node
 # targeting — reads those two fields, so it runs byte-identically for pad and
 # mouse with no controller branch in the sim. The pad's buttons/triggers are read
 # directly here (contained behind the pref) and mapped onto the existing input
-# flags. See CLAUDE.md → "How It Plays" for the mapping rationale.
+# flags. See docs/gameplay-design.md for the mapping rationale.
 
 # Reach disc: how far the cursor can sit from the anchor on screen. The blade IK
 # ROM-clamps beyond this, so it just bounds the cursor to reachable ice. Also the

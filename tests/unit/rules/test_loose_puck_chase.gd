@@ -41,7 +41,7 @@ func test_stationary_puck_picks_closest() -> void:
 
 func test_faster_skater_wins_the_race_from_further_out() -> void:
 	# A nearer slow skater vs a further fast one, both stationary. With league
-	# speeds the nearer wins; giving the far skater a real top-speed edge (Speed)
+	# speeds the nearer wins; giving the far skater a real top-speed edge
 	# flips the race — a burner genuinely gets to a loose puck first. The race
 	# must be LONG enough for top speed to engage: the calibrated ETA charges
 	# both builds the same standing-start ramp, so acceleration decides short

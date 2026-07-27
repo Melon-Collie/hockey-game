@@ -6,7 +6,7 @@ class_name GamepadAimRules
 ## mouse_screen_pos (a screen cursor ray-projected onto the ice), and the wrister
 ## aims POSITIONALLY along origin→cursor. Feeding a synthesized cursor back through
 ## those fields means blade IK and the charge tracker run unchanged — no controller
-## branch below the input gatherer. See CLAUDE.md → "How It Plays".
+## branch below the input gatherer. See docs/gameplay-design.md.
 ##
 ## The gatherer maps the stick to a cursor with `absolute_cursor` (anchor + offset).
 ## WHICH anchor is the whole trick, and it differs by mode:

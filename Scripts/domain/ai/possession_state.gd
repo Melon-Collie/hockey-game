@@ -1,9 +1,8 @@
 class_name AIPossessionState
 
-# Pure-function team possession state. Returns one of four states based on
-# current puck zone + possession. Replaces the F1/F2/F3 closest-to-puck
-# role assignment with a possession-state-driven model, following the
-# three principles: sprint-by, play off heels, simple 2v1.
+# Pure-function team possession state, from puck zone × possession. Roles are
+# driven by this state rather than by closest-to-puck, following the three
+# principles: sprint-by, play off heels, simple 2v1.
 #
 # State table (per team) — symmetric in puck zone × possession:
 #                  we possess        opp possesses
@@ -18,19 +17,19 @@ class_name AIPossessionState
 #   BREAKOUT  — we possess in our DZ (break it out)
 #   DZONE     — opp possesses in our DZ (in-zone defense)
 #
-# FORECHECK vs TRANS_OD: both are "opp possesses, not in our DZ", split
-# by where the puck is. Deep in their end the job is to forecheck (pin
-# them, force a turnover); once the puck reaches the NZ it's a retreat
-# (TRANS_OD's Sprinting-Through backcheck). The old single TRANS_OD
-# bucket held both, so it retreated even when the opp was sloppy deep in
-# their own zone — the exact opposite of a forecheck.
+# Both splits exist because possession alone doesn't name the job — puck
+# position decides it, and collapsing either pair inverts the behavior:
 #
-# BREAKOUT vs TRANS_DO: both are "we possess, not in their DZ", split by
-# where the puck is. Deep in our own end the job is to break out safely
-# (the supports present strong-side-wall + weak-side-reverse outlets);
-# once the puck reaches the NZ it's a rush and TRANS_DO's stretch OUTLET
-# at the far blue line makes sense. The old single TRANS_DO bucket held
-# both, which is why its OUTLET misfired from deep in our zone.
+#   FORECHECK vs TRANS_OD — both are "opp possesses, not in our DZ". Deep in
+#     their end the job is to forecheck (pin them, force a turnover); once the
+#     puck reaches the NZ it's a retreat (TRANS_OD's Sprinting-Through
+#     backcheck). One bucket for both retreats from a sloppy opponent deep in
+#     his own zone — the exact opposite of a forecheck.
+#   BREAKOUT vs TRANS_DO — both are "we possess, not in their DZ". Deep in our
+#     own end the job is to break out safely (supports present strong-side-wall
+#     + weak-side-reverse outlets); in the NZ it's a rush, where TRANS_DO's
+#     stretch OUTLET at the far blue line makes sense. One bucket for both fires
+#     that OUTLET from deep in our own zone.
 #
 # Loose-puck handling: possession is sticky. `prev_carrier_team` carries
 # over until a new carrier sets it. The 6 Hz brain tick smooths sub-tick
