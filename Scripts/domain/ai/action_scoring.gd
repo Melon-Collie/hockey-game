@@ -156,17 +156,22 @@ const SLOT_RADIUS_M: float = 6.0
 # constant — it's just where the goalie actually is, fed in as goalie_pos.
 #
 # The band cores/reaches are grounded, not fitted:
-#  · LOW  — legs/pads. STANDING, the instant core is only the pad column
-#           (LOW_CORE_STANDING_M, from the live stance anatomy); the 0.60
-#           butterfly core exists only after the leg read + pads-to-floor
-#           drop (GOALIE_BUTTERFLY_DROP_S — the same gate the five-hole seal
-#           runs), so an in-tight low shot beats the drop exactly as it does
-#           against the live keeper. A DOWN goalie is already sealed at 0.60.
+#  · LOW  — legs/pads AND the stick. STANDING, the pad column alone is only
+#           LOW_CORE_STANDING_M (from the live stance anatomy) and the wider
+#           butterfly core exists only after the leg read + pads-to-floor drop
+#           (GOALIE_BUTTERFLY_DROP_S — the same gate the five-hole seal runs),
+#           so an in-tight low shot beats the DROP exactly as it does against
+#           the live keeper. What it does not beat is the paddle already lying
+#           on the ice: stick_low_reach() floors the band at ~0.64 m from the
+#           first frame, un-raced, which is why the standing keeper's low net
+#           measures shut inside 7 m. A DOWN goalie's splayed pads exceed it.
 #  · HIGH — glove/blocker, NARROWEST core (held up they leave the top corners)
 #           but the longest reach (out to 0.85 m ≈ glove_max_x_outward) on a slow
 #           ARM reaction. In tight the glove can't extend → roof it; at range it
 #           gets there → top corners shut. This is the over-the-shoulder read.
-# Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's glove_max_x_outward.
+# Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's
+# glove_max_x_outward. The stick is deliberately absent from HIGH — the blade
+# is 0.07 m tall, so an elevated puck clears it (GoalieStickRules).
 # (There is no MID/armpit band — with the replicated pose (goalie_hands, v3)
 # the body-side seam emerges through the per-side hand race instead: a hand
 # caught low/wide leaves its high side at the torso core, which IS the seam.)
@@ -183,6 +188,41 @@ const HOLE_BAND_CORE: Array[float] = [0.84, 0.40]
 const LOW_CORE_STANDING_M: float = (
 		GoalieBehaviorRules.STANDING_PAD_CENTER_X_M
 		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5)
+
+# ── The keeper's STICK, the LOW band's primary surface while he is upright ───
+# The paddle lying across the ice was the model's missing body part: every
+# `stick` in this file is LANE_DEFENDER_REACH_M, a SKATER's blade in a passing
+# lane, so the planner scored the low net off pad geometry alone. Measured
+# against the live keeper (tests/unit/ai/test_goalie_low_cover.gd): inside 7 m
+# NOTHING scores at any aim point out to either post, and backing the reaction
+# push out brackets the true standing half-width at 0.59-0.64 m — against the
+# 0.36 m pad column the planner was using. That gap is the +1.00 slot error in
+# test_slot_shot_value_truth.gd, where the keeper stick-saved 24/24 of the
+# flat corners the model rated near-certain.
+#
+# Three properties decide how it enters, and all three are measured, not chosen:
+#   · SYMMETRIC — the blade-aim solve yaws the paddle toward the threat, so
+#     both sides measure identically. This keeper's stick is not the stick-side
+#     -only asset a real goalie's is.
+#   · NOT reaction-gated — it is already lying on the ice in the stance, which
+#     is exactly why it eats the in-tight shot the pads have no time to drop
+#     for. It floors the CORE; the lateral push still adds on top.
+#   · LOW BAND ONLY — the blade is GoalieStickRules.BLADE_HEIGHT_M (0.07 m)
+#     tall, so an elevated puck clears it entirely. Adding it here and NOT to
+#     HIGH is the whole point: it does not make every shot worse, it makes the
+#     flat shot worse and leaves the roof alone, which is the band choice the
+#     live keeper's save distribution actually rewards.
+#
+# Derived from the blade's own geometry in GoalieStickRules (the same source
+# the POSED stick reads), so the planned stick and the posed stick cannot
+# drift apart. Cached because it is pure trig on a per-hole hot path.
+static var _stick_reach_m: float = -1.0
+
+
+static func stick_low_reach() -> float:
+	if _stick_reach_m < 0.0:
+		_stick_reach_m = GoalieStickRules.standing_lateral_reach()
+	return _stick_reach_m
 # Reaction-gated extension to the placement. LOW has none of its own any more:
 # the pad column's widening IS the butterfly drop (core lerp), and everything
 # beyond it is the real lateral push (_goalie_lateral_reach in _band_cover) —
@@ -375,21 +415,25 @@ static func _band_cover(band: int, t_read: float, goalie_down: bool,
 	# the declared-stance lerp implied. Mid-drop, mid-slide, and the
 	# asymmetric post stances all read as the pads actually sit; a DOWN
 	# goalie's measurement IS the truth (nothing left to drop).
+	# The stick is on the ice from the first frame, so it FLOORS whatever the
+	# pads have managed — it is not raced, and it applies down as well as up
+	# (the splayed pads simply exceed it). See stick_low_reach.
+	var stick: float = stick_low_reach()
 	if side != 0 and goalie_pads.is_finite():
 		var d_left: float = goalie_pads.x * float(side) + _pad_half_extent(goalie_pads.y)
 		var d_right: float = goalie_pads.z * float(side) + _pad_half_extent(goalie_pads.w)
 		var measured: float = maxf(maxf(d_left, d_right), 0.0)
 		if goalie_down:
-			return measured + edge
+			return maxf(measured, stick) + edge
 		var drop_rate: float = (HOLE_BAND_CORE[HOLE_BAND_LOW] - LOW_CORE_STANDING_M) \
 				/ maxf(goalie_butterfly_drop_s, 0.001)
-		return minf(measured + drop_rate * t_move,
-				maxf(HOLE_BAND_CORE[HOLE_BAND_LOW], measured)) + edge
+		return maxf(minf(measured + drop_rate * t_move,
+				maxf(HOLE_BAND_CORE[HOLE_BAND_LOW], measured)), stick) + edge
 	var core: float = HOLE_BAND_CORE[HOLE_BAND_LOW]
 	if not goalie_down:
 		var drop: float = clampf(t_move / goalie_butterfly_drop_s, 0.0, 1.0)
 		core = lerpf(LOW_CORE_STANDING_M, HOLE_BAND_CORE[HOLE_BAND_LOW], drop)
-	return core + edge
+	return maxf(core, stick) + edge
 
 # Loft choice prefers the LOWEST-risk shot among comparable openings: a flat shot
 # is easier to execute than roofing it (you can sail a high shot over the bar). So
@@ -1745,9 +1789,17 @@ static func _hole_margin(
 			# HIM (t_reach) — so only an in-tight release beats the drop (the
 			# shot the model used to score zero). Down, the residual gap (slide
 			# leak) is already the measurement and there is nothing left to
-			# drop. The stick blade parked in the slot is deliberately
-			# unmodeled: active-blade intent yaws it toward the puck, vacating
-			# the slot exactly when the shooter is off-center.
+			# drop. The paddle lying ACROSS the slot is charged too, while he
+			# is upright: the blade is nearly twice the standing slot (0.38 m
+			# vs ~0.20 m) and stays over the centre even yawed to the cap, so
+			# standing it shuts the five outright. That was once deliberately
+			# unmodeled on the grounds that active-blade intent yaws it away
+			# from an off-centre shooter — but that is exactly what `centrality`
+			# already prices, and the measurement is unambiguous: the live
+			# keeper stick-saves 24/24 of the straight-on in-tight looks the
+			# unmodeled slot rated ~0.9 (test_slot_shot_value_truth.gd). DOWN is
+			# left alone — the residual there is the slide leak between sprawled
+			# pads, not the slot the paddle lies over.
 			var gap: float = goalie_five_hole_m
 			if not goalie_down:
 				var seal: float = clampf(
@@ -1755,6 +1807,7 @@ static func _hole_margin(
 							/ goalie_butterfly_drop_s,
 						0.0, 1.0)
 				gap *= 1.0 - seal
+				gap = GoalieStickRules.five_hole_gap_after_blade(gap)
 			# Centrality narrows the SLOT (off-axis you see less daylight
 			# between the pads) rather than scaling the finished margin —
 			# scaling a NEGATIVE margin by a small centrality would push it
@@ -1770,6 +1823,8 @@ static func _hole_margin(
 				(t_read - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
 				0.0, 1.0)
 		proxy_gap *= 1.0 - proxy_seal
+		if not goalie_down:
+			proxy_gap = GoalieStickRules.five_hole_gap_after_blade(proxy_gap)
 		return _five_hole_margin(proxy_gap * centrality, dist)
 
 	# Band cover raced against the read budget (t_reach less screen occlusion
