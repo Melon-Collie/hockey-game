@@ -109,6 +109,19 @@ load on demand from the area doc; a 200-line header essay is paid for by every
 reader of that file. If a comment is explaining the *system* rather than the
 *code beneath it*, move it.
 
+**Deferred work does not live in the code — it gets a GitHub issue.** No `TODO`,
+`FIXME`, `HACK`, or "NOT YET WIRED" comments. A note in a file header is invisible
+to planning, has no owner, and goes stale silently: three `TODO(per-player attrs)`
+comments sat in the tree waiting for an API (`attribute_resolver`) that was never
+built, long after the feature they were blocked on had shipped under a different
+name. File the issue with enough context to act on — mechanism, fix sketch, which
+tests move — then delete the comment.
+
+What *may* stay at the call site is a present-tense statement of what the code
+does and does not model ("league default rather than the defender's own stick
+length"), because that is a fact about the code as it stands. The plan to change
+it belongs in the issue.
+
 ## Layer Architecture
 
 Three layers; dependencies always flow downward:

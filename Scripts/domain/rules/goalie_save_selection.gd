@@ -66,13 +66,6 @@ class_name GoalieSaveSelection
 # answer this puck from my feet", post integration answers "which post stance
 # covers this angle".
 #
-# NOT YET WIRED: the screened-release blocking-drop timer in GoalieController
-# still runs its own path. The obstacle is plumbing, not doctrine — it has to
-# fire while `_reaction` is already engaged, and the block branch here is gated
-# on `not _reaction.reacting`. `sight_delay` is the same quantity that timer
-# keys on, so a screened threat he has not yet been forced to react to already
-# routes through here; only the in-flight case still needs its own path.
-#
 # Pure/static and engine-free. Callers own the Situation (rebuilt in place each
 # tick) so the hot path allocates nothing.
 

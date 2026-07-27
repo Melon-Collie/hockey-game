@@ -934,11 +934,9 @@ static func expected_pass_speed(shooter: Vector3, receiver: Vector3) -> float:
 # SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
 # Used by time_to_arrive() for momentum-aware ETAs across every role
 # behavior + chase intercept lookahead.
-#
-# TODO(per-player attrs): when SkaterAttributes lands, swap call
-# sites for `attribute_resolver.call(peer_id).max_speed` so an
-# evaluator reasoning about a fast/slow opponent uses the right
-# top speed. This const becomes the league-average fallback.
+# League-average fallback: a bot resolves its OWN top speed through
+# AISkaterCaps, but several call sites still price opponents at this
+# reference rather than their real build.
 const SKATER_REF_SPEED_M_S: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # Approximate kinematic stopping time for a skater steering against

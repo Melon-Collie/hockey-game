@@ -600,9 +600,8 @@ const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 8   # ~12
 # converts to the equivalent cursor speed (pure mouse-speed model). Charged
 # PASSES instead derive their power fraction per-pass from the distance-adaptive
 # _pass_target_speed (see _state_pass_pressed) rather than a fixed fraction.
-# TODO(threat-aware): shots could vary their target by time-until-pressured
-# instead of always going full — the existing bail-on-close-opponent path
-# in _state_shoot_pressed is the safety hatch for now.
+# Flat full power: the only response to pressure is the bail-on-close-opponent
+# path in _state_shoot_pressed.
 const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
 # Straight-line span (m) of the synthesized wind-up gesture — how far the bot's
 # fake cursor sweeps from wind-up start to release. Purely COSMETIC now that
@@ -669,10 +668,8 @@ const BOT_WRISTER_SIDE_OFFSET_M: float = 0.15
 # (stick + small overhang). The lateral threshold ensures we only
 # flip when the defender is laterally on the forehand side, not
 # directly in front (where the forehand still clears their stick).
-#
-# TODO(per-player attrs): when SkaterAttributes lands, this should
-# read the threatening defender's own stick_length, not the league
-# default. Bigger defender = longer reach = wider flip radius.
+# League default rather than the threatening defender's own stick length,
+# so a long-stick defender's real reach is not modelled here.
 const BOT_POKE_REACH_BUFFER_M: float = 0.2
 const BOT_FOREHAND_STICK_REACH_M: float = (
 		GameRules.DEFAULT_STICK_LENGTH_M + BOT_POKE_REACH_BUFFER_M)

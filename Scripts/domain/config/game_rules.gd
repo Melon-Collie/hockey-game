@@ -421,11 +421,8 @@ const SLOT_DIST_M: float = 5.0
 # Defaults shared between the live SkaterController @export and AI scoring /
 # state-machine references. Single source of truth so the AI never reasons
 # about a different "league average" than the controllers actually run.
-#
-# TODO(per-player attrs): when SkaterAttributes lands, the AI should query
-# `attribute_resolver.call(peer_id).max_speed` (or .stick_length, etc.)
-# instead of these defaults. They become "league average" fallbacks only
-# used when an attribute isn't resolvable.
+# Per-bot builds resolve through AISkaterCaps; these are the league-average
+# fallback for an unresolvable peer.
 # Base (Speed-2) skater top speed. 9.0 m/s ≈ 20 mph ≈ 32 km/h — a solid NHL
 # stride. This is the *cruising* cap; the Sprint burst (sprint_max_speed_multiplier
 # on SkaterController) lifts it to ~25 mph, the real elite top speed. Tuned so
