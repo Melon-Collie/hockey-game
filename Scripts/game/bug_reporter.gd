@@ -10,7 +10,8 @@ class_name BugReporter extends RefCounted
 # defense-in-depth against a buggy build or a hostile client spamming the
 # table — the publishable Supabase key only authorizes INSERT on bug_reports
 # (no SELECT/UPDATE/DELETE), so spam can't be cleaned up server-side. A
-# server-side CHECK constraint (sql/bug_reports.sql) caps row size as a backstop;
+# server-side CHECK constraint (supabase/migrations/*_bug_reports.sql) caps row
+# size as a backstop;
 # RLS still has to be correctly configured on the table (verify in dashboard).
 
 const RATE_LIMIT_SEC: float = 60.0

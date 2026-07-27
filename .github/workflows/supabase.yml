@@ -1,0 +1,220 @@
+name: Supabase
+
+# Schema CI for the Supabase backend. Three jobs:
+#   verify — every push/PR touching supabase/: build a database from the
+#            migrations in a throwaway Postgres container and exercise it. No
+#            secrets, so it runs on forks and on a repo with nothing configured.
+#   push   — merges to main only: apply pending migrations to the hosted project.
+#            Inert until SUPABASE_DB_URL exists; it reports and exits 0.
+#   drift  — weekly: rebuild from the migrations and diff that schema against the
+#            live one, catching anything applied by hand in the SQL editor.
+#
+# The migrations are all idempotent DDL (`create ... if not exists`, drop-then-
+# create for views/policies/constraints). That is what let the pre-existing,
+# hand-applied schema be adopted as the baseline without a `migration repair`:
+# the first push replays them onto a database that already has the objects, and
+# every statement is a no-op. `verify` pins that property (see "Replay" below) so
+# it cannot rot.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/supabase.yml'
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/supabase.yml'
+  schedule:
+    - cron: '17 9 * * 1'  # Mondays, 09:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List the migrations that would apply, without applying them'
+        type: boolean
+        default: true
+
+# Never let two runs apply migrations to the same project at once. Not cancelling
+# in progress: a half-cancelled push is worse than a queued one.
+concurrency:
+  group: supabase-apply
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Migrations build a working database
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI_DB: postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Install psql
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      # The hosted project already owns `anon` et al; a bare container does not,
+      # and the migrations GRANT to them.
+      - name: Bootstrap Supabase roles
+        run: psql "$CI_DB" -v ON_ERROR_STOP=1 -q -f supabase/ci/roles.sql
+
+      - name: Build the schema from scratch
+        run: supabase db push --db-url "$CI_DB" --yes
+
+      # Version-independent check that every migration ran and was recorded —
+      # more robust than parsing the CLI's summary output.
+      - name: Every migration is recorded as applied
+        run: |
+          set -euo pipefail
+          on_disk=$(ls supabase/migrations/*.sql | wc -l)
+          applied=$(psql "$CI_DB" -tAc \
+            "select count(*) from supabase_migrations.schema_migrations;")
+          echo "on disk: $on_disk · applied: $applied"
+          [ "$on_disk" -eq "$applied" ]
+
+      # The DDL parsing clean proves little: what breaks when a column moves is
+      # the RPC bodies and view expressions, and nothing else in CI runs them.
+      - name: Exercise the views and RPCs
+        run: psql "$CI_DB" -v ON_ERROR_STOP=1 -q -f supabase/ci/smoke.sql
+
+      # Re-apply every migration over the database it just built. This is exactly
+      # what the hosted project sees on a first push (objects already present),
+      # and it keeps future migrations re-runnable, so a half-applied one can be
+      # recovered by running it again. A migration that cannot be written
+      # idempotently needs a DO-block guard, not an exemption.
+      - name: Replay onto the populated database
+        run: |
+          set -euo pipefail
+          for f in supabase/migrations/*.sql; do
+            echo "replay $(basename "$f")"
+            psql "$CI_DB" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+  push:
+    name: Apply to the hosted project
+    needs: verify
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Check for credentials
+        id: guard
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$DB_URL" ]; then
+            echo "::notice title=Supabase::SUPABASE_DB_URL is not set, so nothing was applied. Add the repo secret (Settings -> Secrets and variables -> Actions) to enable schema pushes; see supabase/README.md."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A manual run defaults to a dry run; a merge to main applies for real.
+      - name: Push migrations
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "DRY RUN — nothing will be applied."
+            supabase db push --db-url "$DB_URL" --dry-run
+          else
+            supabase db push --db-url "$DB_URL" --yes
+          fi
+
+  drift:
+    name: Live schema matches the migrations
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI_DB: postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Install psql
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Check for credentials
+        id: guard
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$DB_URL" ]; then
+            echo "::notice title=Supabase::SUPABASE_DB_URL is not set — drift check skipped."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebuild from the migrations
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          psql "$CI_DB" -v ON_ERROR_STOP=1 -q -f supabase/ci/roles.sql
+          supabase db push --db-url "$CI_DB" --yes
+
+      # dump_schema.sql reconstructs the whole public schema as ordered DDL text.
+      # Two dumps of the same schema are byte-identical (its ORDER BY breaks every
+      # tie), so a plain diff IS the drift report.
+      - name: Diff the live schema against it
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$CI_DB"  -tA -v ON_ERROR_STOP=1 -f supabase/dump_schema.sql > expected.sql
+          psql "$DB_URL" -tA -v ON_ERROR_STOP=1 -f supabase/dump_schema.sql > live.sql
+          if diff -u expected.sql live.sql; then
+            echo "Live schema matches the migrations."
+          else
+            echo "::error title=Schema drift::The hosted schema differs from what supabase/migrations/ builds. '<' is expected (from the migrations), '>' is live. Fold the difference into a new migration, or revert the out-of-band change."
+            exit 1
+          fi
+
+      - name: Upload both schemas
+        if: always() && steps.guard.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-dumps
+          path: |
+            expected.sql
+            live.sql
+          if-no-files-found: ignore

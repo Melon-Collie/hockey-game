@@ -238,8 +238,8 @@ func _body_detail(bytes: PackedByteArray) -> String:
 	# serves its cached shape, so the column can already exist in the database and
 	# this still fires. Applying the SQL without reloading leaves you here.
 	if detail.contains("PGRST204"):
-		detail += "  [schema out of date — apply sql/shot_events.sql then" \
-				+ " sql/career_stats.sql, then run: notify pgrst, 'reload schema';]"
+		detail += "  [schema out of date — merge the migration (CI applies it via" \
+				+ " supabase db push), then run: notify pgrst, 'reload schema';]"
 	return " — " + detail
 
 
