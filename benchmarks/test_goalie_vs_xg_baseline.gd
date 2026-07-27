@@ -106,11 +106,46 @@ extends GutTest
 #
 # THE SHARP-ANGLE ROWS DO NOT EXPLAIN FINDING 1, and the ratio is misleading
 # there — read it as an upper bound. It assumes he is centred on the sightline,
-# which is true straight on and false once the depth chart pins him to the post
-# (goalie x 0.92, depth 1.00). Nominal coverage RISES with angle (170-229%) while
-# measured beatability rises too, so the two disagree: the sharp-angle softness is
-# not a coverage hole, it is the post-sealed pose failing dynamically. That is the
-# open question this instrument raises and does not answer.
+# which is true straight on and false once the arc solver pins him to the post
+# (goalie x 0.92). Nominal coverage RISES with angle while measured beatability
+# rises too, so the two disagree. The boundary sweep below resolves it.
+#
+# ── FINDING 1 RESOLVED: the hole is the band BELOW post integration ──────────
+# Conversion (goals / shots that reached him) swept through the RVH/VH trigger:
+#
+#   dist angle |  stance | goal save |  conv%
+#      5    40 |   READY |   23  127 |  15.3%
+#      5    50 |   READY |   24  125 |  16.1%
+#      5    60 |   READY |   29  120 |  19.5%
+#      5    70 |   READY |   45  104 |  30.2%   <- peak
+#      5    75 |   READY |   38  111 |  25.5%
+#      5    80 |    VH_L |    0  150 |   0.0%   <- post integration engages
+#      5    85 |    VH_L |    0  150 |   0.0%
+#      8    70 |   READY |   37  113 |  24.7%
+#      8    80 |    VH_L |    0  150 |   0.0%
+#
+# It is a CLIFF, not a gradient: 30% to 0% across the `rvh_early_angle` (80 deg)
+# trigger, with 300 shots at 80-85 deg conceding nothing at all. The softness is
+# entirely in the 60-79 deg band, where he is neither squared usefully nor
+# post-integrated.
+#
+# WHY, from the aim maps (shooter at +x, so aim -0.8 is the FAR side):
+#
+#   5 m @ 60 |  x=0.92 depth=0.86 READY | flat  |sssssssssGGGGGGGGGGGGssss|
+#   5 m @ 70 |  x=0.92 depth=0.53 READY | flat  |GGGGGGGGGGGGGGGGGGGGsssss|
+#   5 m @ 75 |  x=0.92 depth=0.40 READY | flat  |GGGGGGGGGGGGGGGGGssssssss|
+#   5 m @ 80 |  x=0.54 depth=0.10  VH_L | flat  |sssssssssssssssssssssssss|
+#
+# In the squared stance the arc solver clamps his lateral target to
+# `net_half_width` and his depth collapses as the angle sharpens (0.86 -> 0.53 ->
+# 0.40), so he ends up STANDING ON THE NEAR POST — covering the post he is
+# already touching while four fifths of the mouth sits open along the ice on the
+# far side. VH fixes it by moving him INBOARD (x 0.54, i.e. 0.38 inside the post)
+# and onto his line (depth 0.10), where his body spans the mouth.
+#
+# Only the FLAT loft scores; LOW and HIGH are saved almost everywhere in the
+# band. So this is specifically a low, far-side, along-the-ice hole — the shot a
+# player describes as "beating him around the side".
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
@@ -261,4 +296,73 @@ func test_report_goalie_angular_coverage() -> void:
 			gut.p("%5.0f %6.0f | %8.2f %7.2f | %9.3f %11.3f | %5.0f%%" % [
 					dist, angle, gx, absf(gz - GOAL_Z), net_subt, g_subt,
 					100.0 * g_subt / maxf(net_subt, 0.0001)])
+	assert_true(true, "report")
+
+
+# ── THE POST-STANCE BOUNDARY: where does the angled softness actually live? ──
+# The grid above stops at 50 deg, which is entirely inside the SQUARED stance —
+# RVH/VH needs `rvh_early_angle` (80 deg) AND the puck within `zone_post_z` (2 m)
+# of the goal line, so nothing above was ever post-integrated. This sweeps the
+# angle axis THROUGH that boundary at fixed range and reports the stance the
+# goalie is actually holding at release, so the softness can be located relative
+# to it rather than inferred.
+#
+# Two rates, because they answer different questions at sharp angles:
+#   aim%   goals as a fraction of the whole aim space — deflated at high angles
+#          because the near post geometrically eats aim points (they read POST,
+#          not SAVE), so it understates how open he is.
+#   conv%  goals / (goals + saves) — conversion among shots that actually reached
+#          him. Post-blocking drops out, so this is the comparable number across
+#          the angle axis and the one to read.
+const BOUNDARY_DISTANCES: Array[float] = [5.0, 8.0]
+const BOUNDARY_ANGLES_DEG: Array[float] = [40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0]
+const BOUNDARY_POWERS: Array[float] = [0.8, 1.0]
+
+const _STANCE_NAME: Array[String] = [
+	"STANDING", "BUTTERFLY", "RECOVERING", "RVH_L", "RVH_R", "READY", "SLIDING",
+	"COILING", "VH_L", "VH_R", "COVERING", "PLAY_PUCK", "CATCHING", "CATCH_DN",
+]
+
+
+func test_report_angled_softness_vs_post_stance() -> void:
+	var hw: float = GameRules.NET_HALF_WIDTH - GameRules.NET_POST_RADIUS \
+			- GameRules.PUCK_COLLISION_RADIUS
+	gut.p("Stance is read AFTER the settle+windup, i.e. what he holds at release.")
+	gut.p("conv%% = goals/(goals+saves) — the angle-comparable rate. See the note.")
+	gut.p("%5s %6s | %10s | %5s %5s %5s %5s | %6s %6s"
+			% ["dist", "angle", "stance", "goal", "save", "post", "wide", "aim%", "conv%"])
+	for dist: float in BOUNDARY_DISTANCES:
+		for angle: float in BOUNDARY_ANGLES_DEG:
+			var shooter: Vector3 = _spot(dist, angle)
+			if absf(shooter.x) > GameRules.INNER_HALF_WIDTH:
+				continue
+			var goals: int = 0
+			var saves: int = 0
+			var posts: int = 0
+			var wides: int = 0
+			var stance: int = -1
+			for power: float in BOUNDARY_POWERS:
+				for loft: int in LOFTS:
+					for i: int in AIM_STEPS:
+						var t: float = float(i) / float(AIM_STEPS - 1)
+						var aim := Vector3(lerpf(-hw, hw, t), 0.0, GOAL_Z)
+						_ctrl.reset_to_crease()
+						_h.settle(shooter, SETTLE_TICKS)
+						_h.hold_windup(shooter, aim, loft, power, WINDUP_TICKS)
+						stance = _ctrl._sm.current as int
+						match _h.fire_release(shooter, aim, loft, power, 0.0):
+							Harness.GOAL:
+								goals += 1
+							Harness.SAVE:
+								saves += 1
+							Harness.POST:
+								posts += 1
+							_:
+								wides += 1
+			var shots: int = goals + saves + posts + wides
+			var reached: int = goals + saves
+			gut.p("%5.0f %6.0f | %10s | %5d %5d %5d %5d | %5.1f%% %5.1f%%"
+					% [dist, angle, _STANCE_NAME[stance], goals, saves, posts, wides,
+					100.0 * float(goals) / float(maxi(shots, 1)),
+					100.0 * float(goals) / float(maxi(reached, 1))])
 	assert_true(true, "report")
