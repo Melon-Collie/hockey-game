@@ -371,7 +371,7 @@ static func _band_cover(band: int, t_read: float, goalie_down: bool,
 		side: int = 0, goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF) -> float:
 	var t_move: float = maxf(0.0, t_read - _band_delay(band))
-	var push: float = _goalie_lateral_reach(t_move)
+	var push: float = goalie_lateral_reach(t_move)
 	# The puck's own radius rides on the cover edge: a puck whose CENTER
 	# passes within a radius of the pad/glove edge is clipped — the exact
 	# mirror of the clean-entry inset the post side already charges. Without
@@ -760,7 +760,7 @@ static func _at_depth(goalie_now: Vector3, attacking_goal: Vector3,
 # Lateral distance a goalie push covers in `move_time` (post-reaction), on the
 # accelerate-then-cruise profile: ½·a·t² until the push reaches t_push speed,
 # linear after. The inverse of _goalie_lateral_time.
-static func _goalie_lateral_reach(move_time: float) -> float:
+static func goalie_lateral_reach(move_time: float) -> float:
 	if move_time <= 0.0:
 		return 0.0
 	var t_ramp: float = GOALIE_MAX_LATERAL_SPEED_MPS / goalie_lateral_accel_m_s2
@@ -1828,7 +1828,7 @@ static func _hole_margin(
 	if goalie_post_seal_x != 0.0 \
 			and absf(attacking_goal.x + signf(goalie_post_seal_x)
 					* GameRules.NET_HALF_WIDTH - goalie_pos.x) \
-				<= LOW_CORE_STANDING_M + _goalie_lateral_reach(maxf(t_read, 0.0)):
+				<= LOW_CORE_STANDING_M + goalie_lateral_reach(maxf(t_read, 0.0)):
 		if kind == HOLE_KIND_FIVE:
 			return HOLE_STRUCTURALLY_CLOSED_RAD
 		if float(side) == signf(goalie_post_seal_x) \
@@ -2646,7 +2646,7 @@ static func predict_goalie_pos(
 			release_time_s, closing_speed_m_s))
 	var target_x: float = goalie_arc_match_x(based, attacking_goal, puck_pos_at_release)
 	var move_time: float = maxf(0.0, release_time_s - goalie_leg_delay_s)
-	var max_move: float = _goalie_lateral_reach(move_time)
+	var max_move: float = goalie_lateral_reach(move_time)
 	var dx: float = target_x - based.x
 	var dist_to_target: float = absf(dx)
 	if dist_to_target < 0.001 or max_move <= 0.0:
@@ -2700,7 +2700,7 @@ static func goalie_unsettled(
 	if need < 0.001:
 		return 0.0  # already squared — no forced motion, fully set
 	var move_time: float = maxf(0.0, release_time_s - goalie_leg_delay_s)
-	var max_move: float = _goalie_lateral_reach(move_time)
+	var max_move: float = goalie_lateral_reach(move_time)
 	if need >= max_move:
 		return 1.0  # still sliding at release (or hasn't even reacted) — caught moving
 	# Reached the target with time to spare; ramps back to 0 as it re-sets.

@@ -57,6 +57,17 @@ static func attacking_goal_z(team_id: int) -> float:
 # Expected goals for a shot released at (x, z) by `team_id`, of `shot_type`
 # (ShotEvent.ShotType). Returns a probability in (0, 1).
 static func for_shot(x: float, z: float, team_id: int, shot_type: int) -> float:
+	return sigmoid(logit_for_shot(x, z, team_id, shot_type))
+
+
+# The LOG-ODDS behind for_shot, exposed so a model can extend this form with
+# extra features instead of re-declaring its coefficients. AIShotValue adds a
+# keeper-displacement term to exactly this logit, which is what makes "the
+# public form plus one feature" a structural fact rather than a comment: at
+# zero displacement the two are identical by construction, and the unit tests
+# assert it.
+static func logit_for_shot(x: float, z: float, team_id: int,
+		shot_type: int) -> float:
 	var goal_z: float = attacking_goal_z(team_id)
 	var along: float = absf(z - goal_z)          # straight-out distance from the line
 	var across: float = absf(x)                  # lateral offset from the mouth's centre
@@ -69,6 +80,10 @@ static func for_shot(x: float, z: float, team_id: int, shot_type: int) -> float:
 			logit += ONE_TIMER_BONUS
 		ShotEvent.ShotType.TIP:
 			logit += TIP_BONUS
+	return logit
+
+
+static func sigmoid(logit: float) -> float:
 	return 1.0 / (1.0 + exp(-logit))
 
 
