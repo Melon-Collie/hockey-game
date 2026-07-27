@@ -194,9 +194,10 @@ func test_trans_do_trailer_is_the_activating_d_when_a_forward_carries() -> void:
 
 # ── TRANS_OD: contain from the D group, everyone else marks ──────────────────
 
-func test_trans_od_contain_is_a_defenseman() -> void:
-	# Rush against us: a backchecking forward is nearer our net, but the
-	# gap-control job belongs to the D group.
+func test_trans_od_is_the_layered_rush_shape() -> void:
+	# The 5v5 rush structure (docs/transition-defense-plan.md §5): a D pair in
+	# front of the play, three forwards tracking back. Replaces the old
+	# CONTAIN + MARK x4, which had one body defending and four escorting men.
 	var skaters: Array = [
 		[1, 0, Vector3(0, 0, 18)],     # C already home
 		[2, 0, Vector3(-4, 0, -4)],
@@ -206,50 +207,66 @@ func test_trans_od_contain_is_a_defenseman() -> void:
 		[10, 1, Vector3(0, 0, -2)],    # opp carrier at center
 	]
 	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
-	var contain: int = _slot_of(a, AIRoleSlots.Slot.CONTAIN)
-	assert_true(contain in [4, 5], "CONTAIN is D-scoped, got peer %d" % contain)
-	var marks: int = 0
+	for slot: int in [AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2,
+			AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG,
+			AIRoleSlots.Slot.TRACK_MID_WEAK]:
+		assert_ne(_slot_of(a, slot), -1,
+				"every layer is filled; missing slot %d" % slot)
+	# Nobody is left marking a man — the structure is lanes, not men.
 	for pid: int in a:
-		if a[pid] == AIRoleSlots.Slot.MARK:
-			marks += 1
-	assert_eq(marks, 4, "the other four all mark a man")
+		assert_ne(a[pid], AIRoleSlots.Slot.MARK,
+				"peer %d fell through to man-marking" % pid)
 
 
-func test_trans_od_contain_cross_fills_when_both_d_are_caught() -> void:
-	# Forecheck turnover: both D are caught at the opponent blue line while
-	# the carrier breaks out through the NZ at full flight. Neither D can
-	# beat the carrier home (raw race + set margin), so the D-scoping must
-	# yield — CONTAIN cross-fills to the deepest backchecker (the C), and
-	# the caught D fall to MARK duty on the trailers. Regression for the
-	# "everyone marked a man but nobody picked up the carrier" bug: the
-	# threat partition excludes the carrier because CONTAIN owns him, so a
-	# hopeless CONTAIN means the rush walks in unopposed.
-	#
-	# Kinematics (calibrated time_to_arrive, league caps): carrier home in
-	# ~3.0 s → deadline ~2.1 s; the caught D need ~4.4 s (infeasible), the
-	# backchecking C ~2.9 s — soonest of anyone, so the cross-fill pass
-	# hands him the pickup.
+func test_trans_od_d_pair_is_d_scoped() -> void:
+	# The two front layers belong to the D group even though a backchecking
+	# forward is nearer our net — the F/D split is the identity layer.
+	var skaters: Array = [
+		[1, 0, Vector3(0, 0, 18)],     # C already home, deepest body
+		[2, 0, Vector3(-4, 0, -4)],
+		[3, 0, Vector3(4, 0, -4)],
+		[4, 0, Vector3(-2, 0, 10)],    # LD
+		[5, 0, Vector3(2, 0, 8)],      # RD
+		[10, 1, Vector3(0, 0, -2)],
+	]
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
+	assert_true(_slot_of(a, AIRoleSlots.Slot.RUSH_D1) in [4, 5],
+			"RUSH_D1 is D-scoped")
+	assert_true(_slot_of(a, AIRoleSlots.Slot.RUSH_D2) in [4, 5],
+			"RUSH_D2 is D-scoped")
+
+
+func test_trans_od_rush_d1_cross_fills_when_both_d_are_caught() -> void:
+	# Forecheck turnover: both D are caught at the opponent blue line while the
+	# carrier breaks out through the NZ at full flight. Neither D can beat him
+	# home (raw race + set margin), so the D-scoping must yield — RUSH_D1
+	# cross-fills to the deepest backchecker, and the caught D fall to the
+	# tracking jobs. Regression for "everyone marked a man but nobody picked up
+	# the carrier": a hopeless front layer means the rush walks in unopposed.
 	var skaters: Array = [
 		[1, 0, Vector3(0, 0, 5)],        # C backchecking, deepest man back
 		[2, 0, Vector3(-6, 0, -10)],     # LW deep on the dead forecheck
 		[3, 0, Vector3(6, 0, -10)],      # RW deep
 		[4, 0, Vector3(-5, 0, -7.8)],    # LD caught at their blue line
 		[5, 0, Vector3(5, 0, -7.8)],     # RD caught at their blue line
-		[10, 1, Vector3(0, 0, 0), Vector3(0, 0, 8.0)],  # carrier at center, flying at our net
+		[10, 1, Vector3(0, 0, 0), Vector3(0, 0, 8.0)],  # carrier flying at our net
 	]
 	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
-	assert_eq(a[1], AIRoleSlots.Slot.CONTAIN,
+	assert_eq(a[1], AIRoleSlots.Slot.RUSH_D1,
 			"the feasible backchecker picks up the carrier, not a caught D")
-	assert_eq(a[4], AIRoleSlots.Slot.MARK, "caught LD backchecks a trailer")
-	assert_eq(a[5], AIRoleSlots.Slot.MARK, "caught RD backchecks a trailer")
+	for caught: int in [4, 5]:
+		assert_true(a[caught] in [AIRoleSlots.Slot.TRACK_PUCK,
+				AIRoleSlots.Slot.TRACK_MID_STRONG,
+				AIRoleSlots.Slot.TRACK_MID_WEAK,
+				AIRoleSlots.Slot.RUSH_D2],
+				"caught D %d takes a recovery job, got %d" % [caught, a[caught]])
 
 
-func test_trans_od_contain_stays_d_scoped_when_a_d_can_beat_the_rush_home() -> void:
+func test_trans_od_rush_d1_stays_d_scoped_when_a_d_can_beat_the_rush_home() -> void:
 	# Same rush, but the valve D is home at center ice: he beats the carrier
-	# back with the set margin in hand, so the D group keeps the gap job even
-	# though the backchecking C is nearer our net. The deadline is a
-	# feasibility floor, not a proximity contest — position identity still
-	# decides whenever the D can physically do the job.
+	# back with the set margin in hand, so the D group keeps the front layer
+	# even though the backchecking C is nearer our net. The deadline is a
+	# feasibility floor, not a proximity contest.
 	var skaters: Array = [
 		[1, 0, Vector3(0, 0, 14)],       # C even deeper than the valve D
 		[2, 0, Vector3(-6, 0, -10)],
@@ -259,8 +276,8 @@ func test_trans_od_contain_stays_d_scoped_when_a_d_can_beat_the_rush_home() -> v
 		[10, 1, Vector3(0, 0, -6), Vector3(0, 0, 7.0)],  # carrier entering the NZ
 	]
 	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
-	assert_eq(a[4], AIRoleSlots.Slot.CONTAIN,
-			"a feasible D keeps CONTAIN over a deeper forward")
+	assert_eq(a[4], AIRoleSlots.Slot.RUSH_D1,
+			"a feasible D keeps the front layer over a deeper forward")
 
 
 # ── NEUTRAL: global chase, D shape behind ────────────────────────────────────

@@ -83,12 +83,17 @@ func test_natural_cadence_resumes_after_forced_tick() -> void:
 # our three (100/110/120) fill PRESSURE + MARK×2. The two MARKs should be
 # partitioned across the two NON-carrier opponents — distinct men, neither
 # assigned the carrier, and PRESSURE left unassigned.
+# SET coverage, not merely "the puck is in our zone": DZONE is now gated on
+# coverage readiness (docs/transition-defense-plan.md §9), so a fixture that
+# wants the zone shape has to actually look like an established structure —
+# a body containing the carrier and each receiver fronted goal-side inside the
+# cover envelope. A loose shape correctly reads as a rush still being defended.
 func _make_dzone_3v3() -> WorldSnapshot:
 	var snap := WorldSnapshot.new()
 	for entry: Array in [
-			[100, 0, Vector3(0.0, 0.0, 18.0)],     # us
-			[110, 0, Vector3(-3.0, 0.0, 23.0)],    # us
-			[120, 0, Vector3(3.0, 0.0, 23.0)],     # us
+			[100, 0, Vector3(0.0, 0.0, 22.5)],     # us — on the carrier
+			[110, 0, Vector3(-4.5, 0.0, 21.5)],    # us — fronting 210
+			[120, 0, Vector3(4.5, 0.0, 21.5)],     # us — fronting 220
 			[200, 1, Vector3(0.0, 0.0, 20.0)],     # opp carrier
 			[210, 1, Vector3(-6.0, 0.0, 18.0)],    # opp receiver
 			[220, 1, Vector3(6.0, 0.0, 18.0)]]:    # opp receiver

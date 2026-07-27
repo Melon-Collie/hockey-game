@@ -52,8 +52,9 @@ func test_falls_back_to_self_pos_when_no_puck_state() -> void:
 func test_lost_race_retreats_to_the_pre_contain_point() -> void:
 	# Missed pass running away up-ice: an opponent is right on the puck while
 	# we're 12 m behind the race. Pushing is skating out of the play — the
-	# chaser retreats to CONTAIN's gap point on the imminent pickup instead,
-	# so the TRANS_OD structure is already standing when possession flips.
+	# chaser retreats to the RUSH GAP LADDER's point on the imminent pickup
+	# instead (the same formula RUSH_D1 holds — AIRoleRushD.ladder_gap_m), so the
+	# TRANS_OD structure is already standing when possession flips.
 	var puck_pos := Vector3(0, 0, -14)          # up-ice (we defend +Z)
 	var self_pos := Vector3(0, 0, -2)
 	var ctx: RoleContext = _make_ctx(self_pos, puck_pos)
@@ -62,7 +63,8 @@ func test_lost_race_retreats_to_the_pre_contain_point() -> void:
 	ctx.snapshot.skater_states[200] = opp
 	ctx.team_id_by_peer[200] = 1
 	var d: RoleDecision = AIRoleChase.decide(ctx)
-	assert_gt(d.target_position.z, puck_pos.z + AIRoleContain.GAP_MIN_M - 0.01,
+	assert_gt(d.target_position.z,
+			puck_pos.z + AIRoleRushD.GAP_MIN_STICKS * SkaterAgentStateMachine.BLADE_REACH_M - 0.01,
 			"lost race → the target is goal-side of the pickup, not the puck;"
 			+ " got %s" % str(d.target_position))
 

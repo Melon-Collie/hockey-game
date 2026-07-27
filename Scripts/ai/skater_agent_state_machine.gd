@@ -863,6 +863,9 @@ var _role_ctx := RoleContext.new()
 # Never-written stand-in for the brainless ctx build (no per-build literal —
 # a {} in the hot path would allocate every dispatch).
 var _empty_threat_memo: Dictionary[int, float] = {}
+# Inert transition read for the no-brain path (tests, unwired agents): Mode.NONE
+# with no attackers, so every consumer behaves as it did before the read existed.
+var _inert_rush_read := AIRushRead.new()
 
 # The slot + target this bot's role chose on the previous role dispatch —
 # feeds RoleContext.prev_role_target for argmax switch-hysteresis (INF is
@@ -872,6 +875,9 @@ var _prev_role_target: Vector3 = Vector3.INF
 # Zone soft-lock incumbent from the last dispatch (RoleDecision.
 # locked_man_pid) — feeds RoleContext.prev_locked_man, reset on slot change.
 var _prev_locked_man_pid: int = -1
+# Incumbent for the offensive stations' control hysteresis (see
+# RoleDecision.held_forward_stand).
+var _prev_held_forward_stand: bool = false
 
 # Per-peer velocity history for acceleration estimation. Each bot
 # maintains its own cache because dispatch runs per-bot — the
@@ -1334,8 +1340,11 @@ var full_dispatch_count: int = 0
 func _is_reactive_slot(slot: int, snapshot: WorldSnapshot) -> bool:
 	match slot:
 		AIRoleSlots.Slot.PRESSURE, AIRoleSlots.Slot.F1_PRESSURE, \
-		AIRoleSlots.Slot.CONTAIN, AIRoleSlots.Slot.MARK, \
-		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG:
+		AIRoleSlots.Slot.MARK, \
+		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
+		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2, \
+		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
+		AIRoleSlots.Slot.TRACK_MID_WEAK, AIRoleSlots.Slot.TRACK_MID:
 			return true
 		AIRoleSlots.Slot.FINISHER, AIRoleSlots.Slot.NET_FRONT:
 			# The one-timer camp's fast cadence buys a live seam read — which
@@ -1397,7 +1406,7 @@ var _holds_for_developing_feeds: bool = true
 # turning players.
 var _reads_receiver_commitment: bool = true
 var _angles_the_chase: bool = true
-# _plays_rush_pass_lanes rides RoleContext into CONTAIN's odd-man lane fan.
+# _plays_rush_pass_lanes rides RoleContext into RUSH_D1's odd-man lane fan.
 var _plays_rush_pass_lanes: bool = true
 # _protects_the_puck gates the carrier's blade-level puck shielding (the carry
 # mouse blends toward the carrier's protect seam under pressure) and the
@@ -1764,8 +1773,15 @@ func _slot_label(slot: int) -> String:
 			return "Pressure"
 		AIRoleSlots.Slot.MARK:
 			return "Mark"
-		AIRoleSlots.Slot.CONTAIN:
-			return "Contain"
+		AIRoleSlots.Slot.RUSH_D1:
+			return "RushD1"
+		AIRoleSlots.Slot.RUSH_D2:
+			return "RushD2"
+		AIRoleSlots.Slot.TRACK_PUCK:
+			return "TrackPuck"
+		AIRoleSlots.Slot.TRACK_MID, AIRoleSlots.Slot.TRACK_MID_STRONG, \
+		AIRoleSlots.Slot.TRACK_MID_WEAK:
+			return "TrackMid"
 		AIRoleSlots.Slot.FINISHER:
 			return "Finisher"
 		AIRoleSlots.Slot.OUTLET:
@@ -2159,7 +2175,16 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			# racing home, forecheck closing from depth, breakout up-ice. The gap
 			# gate keeps a bot camped near its anchor (or a pre-aimed FINISHER) off
 			# the throttle; the turn gate keeps it from sprinting into a sharp cut.
-			_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
+			#
+			# A tracking role overrides both gates (RoleDecision.sprint_override):
+			# a backchecker is behind the play by definition and the entire job is
+			# closing that distance, so easing off as the gap narrows — or as the
+			# recovery lane bends — is precisely wrong. The hard exhaustion lockout
+			# still applies, so this can never sprint a gassed bot.
+			if decision.sprint_override:
+				input.sprint_held = self_state != null and not self_state.sprint_locked
+			else:
+				_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
 		# Deflection routine: FINISHER raises its blade to tip an incoming
 		# ELEVATED on-net shot (a grounded blade flies under it). Off-puck
 		# only — the controller ignores voluntary lifts while carrying.
@@ -2301,6 +2326,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_weight = _self_weight
 	ctx.self_body_check_transfer = _self_body_check_transfer
 	ctx.self_handle_reach = _self_handle_reach
+	ctx.self_blade_reach = _blade_reach
 	ctx.self_reach_cone_half_angle = _self_reach_cone_half_angle
 	ctx.self_facing_turn_rate = _self_facing_turn_rate
 	ctx.self_blade_speed = _self_blade_speed
@@ -2334,6 +2360,10 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		# copy in production). Re-stamped every build so the reused ctx never
 		# carries another brain's dict.
 		ctx.threat_shoot_base_by_opp = _current_strategy.get_threat_shoot_base_by_opp()
+		# The team's shared transition read. Re-stamped every build for the same
+		# reason as the memo above — the reused ctx must never carry another
+		# brain's (or another tick's) read.
+		ctx.rush_read = _current_strategy.get_rush_read()
 		# 5v5 position identity (plan §1/§6). Re-stamped every build — the
 		# reused ctx must never carry another match's team size.
 		ctx.team_size = _current_strategy.get_team_size()
@@ -2353,6 +2383,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.strong_x = 1.0
 		ctx.assigned_threat_peer = -1
 		ctx.threat_shoot_base_by_opp = _empty_threat_memo
+		ctx.rush_read = _inert_rush_read
 		ctx.ping_move_target = Vector3.INF
 		ctx.ping_shoot_active = false
 		ctx.ping_pass_target_peer = -1
@@ -2392,6 +2423,9 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	ctx.prev_role_target = _prev_role_target if slot == _prev_role_slot else Vector3.INF
 	# Zone soft-lock incumbent, same reset-across-slot-change contract.
 	ctx.prev_locked_man = _prev_locked_man_pid if slot == _prev_role_slot else -1
+	# Pinch-read hysteresis incumbent, same reset-across-slot-change contract.
+	ctx.prev_held_forward_stand = _prev_held_forward_stand \
+			if slot == _prev_role_slot else false
 	var decision: RoleDecision
 	match slot:
 		AIRoleSlots.Slot.FINISHER:
@@ -2417,8 +2451,11 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			decision = AIRolePressure.decide(ctx)
 		AIRoleSlots.Slot.MARK:
 			decision = AIRoleMark.decide(ctx)
-		AIRoleSlots.Slot.CONTAIN:
-			decision = AIRoleContain.decide(ctx)
+		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2:
+			decision = AIRoleRushD.decide(ctx, slot)
+		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
+		AIRoleSlots.Slot.TRACK_MID_WEAK, AIRoleSlots.Slot.TRACK_MID:
+			decision = AIRoleTrack.decide(ctx, slot)
 		AIRoleSlots.Slot.CHASE:
 			decision = AIRoleChase.decide(ctx)
 		AIRoleSlots.Slot.FLANK_L:
@@ -2465,6 +2502,7 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 	_prev_role_slot = slot
 	_prev_role_target = decision.target_position
 	_prev_locked_man_pid = decision.locked_man_pid
+	_prev_held_forward_stand = decision.held_forward_stand
 	return decision
 
 
@@ -5282,7 +5320,7 @@ func _deke_mouse_target(self_pos: Vector3) -> Vector3:
 #   - cooldown > 0: decrement, no jab (commit back to gap control).
 #   - both 0: trigger a fresh jab iff we're an on-puck defensive role and
 #     within reach of an opposing carrier's puck.
-# Only the puck-pressurer slots jab (PRESSURE / F1_PRESSURE / CONTAIN) —
+# Only the puck-pressurer slots jab (PRESSURE / F1_PRESSURE / the rush pair) —
 # the backside roles keep pure positioning, so the team doesn't collapse
 # two bots onto the puck.
 func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
@@ -5316,7 +5354,10 @@ func _poke_jab_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 
 # True if our current brain slot is an on-puck defensive pressurer —
 # the only roles that actively jab. (PRESSURE is DZONE; F1_PRESSURE is
-# FORECHECK; CONTAIN is the TRANS_OD gap defender on the carrier. In 5v5's
+# FORECHECK; RUSH_D1 is the transition gap defender on the carrier and
+# TRACK_PUCK is the backchecker running him down — both are on the puck by
+# definition, and a backchecker who catches a carrier without being allowed to
+# poke at him is just escorting. In 5v5's
 # zone DZONE, the pressurer is whichever area role currently OWNS the puck —
 # AIZoneCoverage.pressure_owner — so exactly one zone defender ever jabs.)
 func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
@@ -5325,7 +5366,8 @@ func _is_puck_pressurer_slot(snapshot: WorldSnapshot) -> bool:
 	var slot: int = _current_strategy.get_slot(_peer_id)
 	if slot == AIRoleSlots.Slot.PRESSURE \
 			or slot == AIRoleSlots.Slot.F1_PRESSURE \
-			or slot == AIRoleSlots.Slot.CONTAIN:
+			or slot == AIRoleSlots.Slot.RUSH_D1 \
+			or slot == AIRoleSlots.Slot.TRACK_PUCK:
 		return true
 	match slot:
 		AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.ZONE_D_WEAK, \

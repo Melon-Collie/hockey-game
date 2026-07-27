@@ -75,15 +75,19 @@ func test_slots_for_breakout() -> void:
 
 
 func test_slots_for_trans_od() -> void:
-	# TRANS_OD uses {CONTAIN, MARK×2}: the goal-side peer gap-controls the
-	# carrier (CONTAIN), the other two sprint home to cover a man each (MARK).
-	# PRESSURE is no longer a transition role — exactly one peer (CONTAIN)
-	# engages the carrier.
+	# TRANS_OD is the layered rush defense compressed to three bodies
+	# (docs/transition-defense-plan.md §5.2): RUSH_D1 in front of the carrier
+	# holding a gap, TRACK_PUCK behind him running him down, TRACK_MID owning
+	# the middle lane. Man-marking is gone from transition — the structure is
+	# lanes and layers, and DZONE's coverage owns the settled three-man problem.
 	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_OD)
-	assert_true(slots.has(AIRoleSlots.Slot.CONTAIN))
-	assert_true(slots.has(AIRoleSlots.Slot.MARK))
+	assert_true(slots.has(AIRoleSlots.Slot.RUSH_D1))
+	assert_true(slots.has(AIRoleSlots.Slot.TRACK_PUCK))
+	assert_true(slots.has(AIRoleSlots.Slot.TRACK_MID))
+	assert_false(slots.has(AIRoleSlots.Slot.MARK),
+			"transition no longer man-marks")
 	assert_false(slots.has(AIRoleSlots.Slot.PRESSURE),
-			"PRESSURE is no longer assigned in transition")
+			"PRESSURE is not a transition role")
 
 
 func test_slots_for_neutral() -> void:
@@ -268,18 +272,20 @@ func test_assign_trans_od_contain_is_last_man_back() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[120], AIRoleSlots.Slot.CONTAIN,
-			"the last man back (soonest to our net) contains the carrier")
-	assert_eq(assignments[100], AIRoleSlots.Slot.MARK,
-			"up-ice peer marks home to a man")
-	assert_eq(assignments[110], AIRoleSlots.Slot.MARK,
-			"the peer nearer the carrier marks (it is NOT the last man back)")
-	# Exactly one engager — no double-team.
-	var contain_count: int = 0
+	assert_eq(assignments[120], AIRoleSlots.Slot.RUSH_D1,
+			"the last man back (soonest to our net) owns the carrier")
+	# The other two take the recovery jobs — whichever reaches the puck soonest
+	# runs it down, the leftover takes the middle.
+	for pid: int in [100, 110]:
+		assert_true(assignments[pid] in [
+				AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID],
+				"peer %d recovers, it is not the last man back" % pid)
+	# Exactly one body in FRONT of the carrier — the gap is never double-manned.
+	var front_count: int = 0
 	for pid: int in [100, 110, 120]:
-		if assignments[pid] == AIRoleSlots.Slot.CONTAIN:
-			contain_count += 1
-	assert_eq(contain_count, 1, "exactly one CONTAIN")
+		if assignments[pid] == AIRoleSlots.Slot.RUSH_D1:
+			front_count += 1
+	assert_eq(front_count, 1, "exactly one RUSH_D1")
 
 
 func test_assign_trans_od_contain_is_momentum_aware() -> void:
@@ -297,7 +303,7 @@ func test_assign_trans_od_contain_is_momentum_aware() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[110], AIRoleSlots.Slot.CONTAIN,
+	assert_eq(assignments[110], AIRoleSlots.Slot.RUSH_D1,
 			"the peer genuinely arriving home soonest (momentum) contains, not the nearer coaster")
 
 
@@ -317,10 +323,12 @@ func test_assign_trans_od_contain_when_whole_team_caught_up_ice() -> void:
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
 			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
 			_resolver(skaters), {})
-	assert_eq(assignments[100], AIRoleSlots.Slot.CONTAIN,
+	assert_eq(assignments[100], AIRoleSlots.Slot.RUSH_D1,
 			"peer nearest our net recovers as the last man back")
-	assert_eq(assignments[110], AIRoleSlots.Slot.MARK)
-	assert_eq(assignments[120], AIRoleSlots.Slot.MARK)
+	for pid: int in [110, 120]:
+		assert_true(assignments[pid] in [
+				AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID],
+				"peer %d takes a recovery job" % pid)
 
 
 func test_assign_hysteresis_keeps_prev_when_close() -> void:

@@ -37,6 +37,10 @@ var team_id: int = 0
 # legacy AIRoleSlots election (verbatim), 5 → AIRoleSlots5's position-aware
 # group-scoped election. Set once at construction from the state machine.
 var team_size: int = GameRules.DEFAULT_TEAM_SIZE
+# Latched match ruleset — the shared read needs it for the offside-aware attacker
+# filter (an illegally-positioned opponent is not a counter threat). Set by
+# GameManager alongside the agents' own copy.
+var rule_set: int = GameRules.DEFAULT_RULE_SET
 var state: int = AIPossessionState.State.DZONE
 # Live smart-ping directives for this team's bots (host-only AI bookkeeping,
 # same shape as _one_timer_ready_by_peer). GameManager routes a validated
@@ -66,6 +70,17 @@ var threat_shoot_base_by_opp: Dictionary[int, float] = {}
 # Scratch defender list for the memo fill (reused per tick, no allocation).
 var _memo_defenders: Array[Vector3] = []
 
+# The team's shared transition-defense read (docs/transition-defense-plan.md
+# §4): who is genuinely attacking, who is back, the numbers, backpressure, and
+# whether coverage is accounted for. Computed ONCE per brain tick and consumed
+# by every transition-facing role, in place of each defender independently
+# racing a worst-case counter and independently concluding it is the last man
+# back. Refilled in place, never reallocated.
+var rush_read := AIRushRead.new()
+# Last tick's recovery classification, threaded back in for the enter/hold
+# hysteresis on the recovery race (see AIRushRead.TRACK_ENTER_MARGIN_S).
+var _prev_recovery: Dictionary[int, int] = {}
+
 # True while last tick's state was RETRIEVAL — feeds the enter/hold
 # hysteresis in AIPossessionState.retrieval_read so the DZONE ↔ RETRIEVAL
 # boundary can't flicker at the race margin.
@@ -77,6 +92,13 @@ var _last_carrier_team: int = -1
 var _strong_x: float = 1.0
 
 var _accumulator: float = 0.0
+
+# ── Coverage readiness state (docs/transition-defense-plan.md §9) ────────────
+# Whether the team is currently running D-zone COVERAGE rather than the rush /
+# recovery shape, and how many consecutive ticks the readiness read has disagreed
+# with that posture (the leave-coverage hysteresis).
+var _coverage_was_set: bool = false
+var _coverage_unready_ticks: int = 0
 # Cadence phase offset (seconds): team 1's natural ticks run half a period
 # out of phase with team 0's, so the two brains' per-tick computes never land
 # on the same physics frame (host FPS is set by the worst tick, and the two
@@ -104,6 +126,11 @@ var _caps_by_peer: Dictionary = {}
 # the F/D group split and the home-side rest bias in AIRoleSlots5. Empty in
 # 3v3 / tests (the legacy path never reads it).
 var _position_by_peer: Dictionary = {}
+# Live set of BOT peers from PlayerRegistry. The coverage-readiness read gates on
+# whether the bodies the shape depends on are home, and a human is not one the
+# bots can wait on (see AIRushRead._coverage_ready). Empty when unwired (tests) →
+# every teammate counts, which is the stricter reading.
+var _bot_peers: Dictionary = {}
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
 var _own_goal_z: float = 0.0
@@ -111,12 +138,14 @@ var _own_goal_z: float = 0.0
 
 func _init(t: int, team_id_by_peer: Dictionary, caps_by_peer: Dictionary = {},
 		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE,
-		position_by_peer: Dictionary = {}) -> void:
+		position_by_peer: Dictionary = {},
+		bot_peers: Dictionary = {}) -> void:
 	team_id = t
 	_team_id_by_peer = team_id_by_peer
 	_caps_by_peer = caps_by_peer
 	team_size = p_team_size
 	_position_by_peer = position_by_peer
+	_bot_peers = bot_peers
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
 	_cadence_offset_s = TICK_PERIOD * 0.5 if t == 1 else 0.0
 	_accumulator = _cadence_offset_s
@@ -210,6 +239,58 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 			state = AIPossessionState.State.RETRIEVAL
 	_was_retrieval = state == AIPossessionState.State.RETRIEVAL
 
+	# 1.75 The shared transition read. Computed before the slot elections so
+	#      everything downstream — the offensive stations' counter-threat set
+	#      today, the transition roles and the DZONE readiness gate as the
+	#      later phases land — reads ONE answer instead of each bot deriving
+	#      its own. Cheap: one pass over ≤10 skaters at the 6 Hz brain tick.
+	_prev_recovery.clear()
+	for pid: int in rush_read.recovery_by_peer:
+		_prev_recovery[pid] = rush_read.recovery_by_peer[pid]
+	rush_read.fill(snapshot, team_id, _own_goal_z, _team_id_by_peer,
+			_caps_by_peer, _prev_recovery, rule_set != GameRules.RuleSet.OFF,
+			_bot_peers)
+
+	# 1.85 COVERAGE READINESS (docs/transition-defense-plan.md §9). DZONE is a
+	#      shape, not a location: the raw table flips to it the moment the puck
+	#      crosses our blue line, which used to re-slot three still-backchecking
+	#      forwards onto zone posts and dissolve the backcheck at the line. Hold
+	#      the rush/recovery shape until the coverage we'd switch into actually
+	#      makes sense. Same upgrade seam as RETRIEVAL above, opposite direction.
+	#
+	#      BOTH TEAM SIZES. The gate does not create a shape that under-covers:
+	#      it holds the rush shape exactly while somebody is still on the way home,
+	#      and in that state the zone's nominal coverage is a fiction anyway — MARK
+	#      computes a cover position from 20 m up-ice and escorts. Sprinting home
+	#      strictly beats walking to a post. And the shapes converge by
+	#      construction: RUSH_D1 is home already, TRACK_PUCK chases to the net,
+	#      the mid trackers stop at the circle tops — so the rush roles themselves
+	#      bring everyone home, satisfy the predicate, and hand off. That
+	#      convergence is why no fallback timer is needed: the predicate is
+	#      monotone in the recovery it is waiting on.
+	#
+	#      Only while an OPPONENT actually carries: a loose or dead puck in our
+	#      zone is not a rush being defended, it's DZONE's (or RETRIEVAL's)
+	#      business, and holding the rush shape over it would just stop the team
+	#      setting up around a puck nobody has.
+	if state == AIPossessionState.State.DZONE \
+			and rush_read.carrier_peer != -1:
+		if rush_read.coverage_ready:
+			_coverage_unready_ticks = 0
+		else:
+			_coverage_unready_ticks += 1
+		var set_now: bool = AIPossessionState.coverage_read(
+				rush_read.coverage_ready, _coverage_unready_ticks,
+				_coverage_was_set)
+		_coverage_was_set = set_now
+		if not set_now:
+			state = AIPossessionState.State.TRANS_OD
+	else:
+		# Left the zone (or we got it back): the next entry starts fresh, so a
+		# stale "we were set" can't wave a new rush straight into coverage.
+		_coverage_was_set = false
+		_coverage_unready_ticks = 0
+
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:
 		var puck_x: float = snapshot.puck_state.position.x
@@ -264,8 +345,9 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 # carries a stale assignment.
 #
 # Backline = our peers slotted MARK (DZONE and TRANS_OD).
-# The carrier is owned separately — PRESSURE in DZONE, the CONTAIN gap defender
-# in TRANS_OD — so it's excluded; the men are the opposing carrier's potential
+# The carrier is owned separately — PRESSURE in DZONE (transition no longer
+# man-marks at all, so this partition is DZONE-only in practice) — so it's
+# excluded; the men are the opposing carrier's potential
 # receivers (every opponent except the carrier). Each man's value is the raw
 # pass-threat surface (no defenders in the view), so AIThreatAssignment pairs
 # the most dangerous men with the best-positioned defenders. `prev` is last
@@ -511,6 +593,10 @@ func get_threat_shoot_base_by_opp() -> Dictionary[int, float]:
 	return threat_shoot_base_by_opp
 
 
+func get_rush_read() -> AIRushRead:
+	return rush_read
+
+
 # ── Frozen strategy view (AI threading, Phase 3a) ────────────────────────────
 # A plain-data snapshot of this brain's outputs, rebuilt every host frame by
 # GameManager (and the duel harness) AFTER the brain tick, and read by the agent
@@ -538,6 +624,7 @@ func build_view(snapshot: WorldSnapshot) -> void:
 	_freeze_int_dict(_position_by_peer, v.position_by_peer)
 	_freeze_bool_dict(_one_timer_ready_by_peer, v.one_timer_ready_by_peer)
 	_freeze_float_dict(threat_shoot_base_by_opp, v.threat_shoot_base)
+	v.rush.copy_from(rush_read)
 	# Per-slotted-peer reads: the anchor (recomputed here against the live frame
 	# so it stays per-frame fresh) and the resolved ping directives.
 	v.anchor_by_peer.clear()

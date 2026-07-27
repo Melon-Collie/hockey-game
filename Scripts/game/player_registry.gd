@@ -48,6 +48,12 @@ var caps_by_peer: Dictionary[int, AISkaterCaps] = {}
 # TeamBrain reads this by reference for the F/D group split and home-side
 # rest bias. Same maintenance contract as team_id_by_peer.
 var position_by_peer: Dictionary[int, int] = {}
+# Live set of peers that are BOTS (value always true; a Dictionary for O(1) `has`).
+# Same maintenance contract as team_id_by_peer. Exists so the domain layer can ask
+# "is this body one the AI actually steers?" without reaching for NetworkManager:
+# TeamBrain's coverage-readiness read gates on whether the bodies the shape depends
+# on are home, and a human's whereabouts are not something the bots can wait on.
+var bot_peers: Dictionary[int, bool] = {}
 # Flat skater list for the per-tick scan loops (puck interactions, goalie
 # crease-jam checks). Rebuilt on spawn/remove; consumers read the live
 # reference through their skater-getter Callable and must not mutate it.
@@ -165,6 +171,8 @@ func spawn(
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
 	position_by_peer[peer_id] = record.team_slot
+	if record.is_bot:
+		bot_peers[peer_id] = true
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
 	refresh_caps(peer_id)
@@ -256,6 +264,8 @@ func spawn_bot(
 	_players[peer_id] = record
 	team_id_by_peer[peer_id] = team.team_id
 	position_by_peer[peer_id] = record.team_slot
+	if record.is_bot:
+		bot_peers[peer_id] = true
 	team_id_by_skater[spawned.skater] = team.team_id
 	peer_id_by_skater[spawned.skater] = peer_id
 	refresh_caps(peer_id)
@@ -283,6 +293,7 @@ func remove(peer_id: int) -> PlayerRecord:
 	team_id_by_peer.erase(peer_id)
 	caps_by_peer.erase(peer_id)
 	position_by_peer.erase(peer_id)
+	bot_peers.erase(peer_id)
 	if record.skater != null:
 		team_id_by_skater.erase(record.skater)
 		peer_id_by_skater.erase(record.skater)
@@ -445,6 +456,7 @@ func clear_state() -> void:
 	_players.clear()
 	team_id_by_peer.clear()
 	position_by_peer.clear()
+	bot_peers.clear()
 	team_id_by_skater.clear()
 	peer_id_by_skater.clear()
 	_skaters_cache.clear()

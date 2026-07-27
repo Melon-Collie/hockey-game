@@ -62,6 +62,7 @@ const _WIDE_LANE_INSET_M: float = 4.0        # rush wide lanes
 const _DBACK_X_M: float = 5.0            # NZ back pair, inside the dots
 const _FLANK_SPREAD_M: float = 6.0       # NEUTRAL flank race offsets
 const _FLANK_TRAIL_M: float = 4.0
+const _TRACK_MID_SPLIT_M: float = 2.5    # F2/F3 recovery lanes off centre
 
 # Group tags. F = lobby C/LW/RW, D = LD/RD.
 enum Group { ANY, F, D }
@@ -118,7 +119,10 @@ static func slots_for_state(state: int) -> Array[int]:
 					AIRoleSlots.Slot.DP_WEAK, AIRoleSlots.Slot.F2_STRONG,
 					AIRoleSlots.Slot.F2_WEAK]
 		AIPossessionState.State.TRANS_OD:
-			return [AIRoleSlots.Slot.CONTAIN, AIRoleSlots.Slot.MARK]
+			return [AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2,
+					AIRoleSlots.Slot.TRACK_PUCK,
+					AIRoleSlots.Slot.TRACK_MID_STRONG,
+					AIRoleSlots.Slot.TRACK_MID_WEAK]
 		AIPossessionState.State.NEUTRAL:
 			return [AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.DBACK_L,
 					AIRoleSlots.Slot.DBACK_R, AIRoleSlots.Slot.FLANK_L,
@@ -166,16 +170,16 @@ static func assign(
 	var specs: Array[SlotSpec] = _specs_for_state(
 			state, own_goal_z, strong_x, puck_pos)
 
-	# TRANS_OD gap feasibility: CONTAIN's D-scoping only holds while a
+	# TRANS_OD gap feasibility: RUSH_D1's D-scoping only holds while a
 	# defenseman can actually do the job — beat the carrier home with enough
 	# time in hand to arrive SET (the brake margin: the seconds a skater at
 	# league top speed needs to shed it, the same set-arrival quantity the
 	# race-home primitives use). A D who is caught up-ice — pinched point,
 	# beaten forecheck line — can chase the rush forever without ever getting
-	# goal-side, and handing him CONTAIN anyway is how "everyone marked a man
+	# goal-side, and handing him RUSH_D1 anyway is how "everyone marked a man
 	# but nobody picked up the carrier" happened: the threat partition excludes
-	# the carrier because CONTAIN nominally owns him. With the deadline, an
-	# infeasible D group defers CONTAIN to the cross-fill pass, where the
+	# the carrier because RUSH_D1 nominally owns him. With the deadline, an
+	# infeasible D group defers RUSH_D1 to the cross-fill pass, where the
 	# deepest feasible body — the classic backchecking third-man-high — picks
 	# the rush up instead, and the caught D fall to MARK duty on the trailers.
 	if state == AIPossessionState.State.TRANS_OD and carrier_pid != -1 \
@@ -190,7 +194,7 @@ static func assign(
 		var set_margin_s: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S \
 				/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 		for spec: SlotSpec in specs:
-			if spec.slot == AIRoleSlots.Slot.CONTAIN:
+			if spec.slot == AIRoleSlots.Slot.RUSH_D1:
 				spec.deadline_s = maxf(t_carrier - set_margin_s, 0.0)
 
 	# Pass 1 — group-scoped elections in priority order. A slot whose group
@@ -199,6 +203,16 @@ static func assign(
 	for spec: SlotSpec in specs:
 		var pid: int = _pick_soonest(snapshot, teammates, assigned,
 				prev_assignments, spec, caps_by_peer, position_by_peer, true)
+		if pid == -1 and spec.deadline_s < INF:
+			# INFEASIBILITY deferral, not an empty group: the group had bodies,
+			# none of them can do the job in time. That slot needs the best
+			# available body AT ITS OWN PRIORITY — waiting for the pass-2
+			# cross-fill would let every lower-priority slot consume the forwards
+			# first, and the only peer left to pick up the carrier would be one of
+			# the very defensemen just ruled out. (Empty-group deferrals still
+			# wait for pass 2: there the slot genuinely wants whoever is spare.)
+			pid = _pick_soonest(snapshot, teammates, assigned,
+					prev_assignments, spec, caps_by_peer, position_by_peer, false)
 		if pid == -1:
 			deferred.append(spec)
 			continue
@@ -318,10 +332,27 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 			return specs
 
 		AIPossessionState.State.TRANS_OD:
+			# The layered rush defense (docs/transition-defense-plan.md §5): a D
+			# pair in front, three forwards tracking back through mid-ice. Race
+			# targets are LANE points, not men — the structure is lanes and
+			# layers, and which man each body ends up on falls out of whose ice
+			# he skates into.
+			var mid_gate: Vector3 = our_net - _rush_axis(our_net, puck_pos) \
+					* AIZoneCoverage.HOUSE_TOP_DEPTH_M
 			return [
-				# The deepest D gap-controls the carrier (race home, D-scoped);
-				# everyone else falls to the MARK remainder (threat partition).
-				SlotSpec.make(AIRoleSlots.Slot.CONTAIN, Group.D, our_net),
+				# D1 races home (the gap he holds sweeps toward our net); D2
+				# races the mid-ice layer behind him.
+				SlotSpec.make(AIRoleSlots.Slot.RUSH_D1, Group.D, our_net),
+				SlotSpec.make(AIRoleSlots.Slot.RUSH_D2, Group.D, mid_gate),
+				# F1 back races the CARRIER — the only man-shaped target here,
+				# because running the puck down is a man-shaped job.
+				SlotSpec.make(AIRoleSlots.Slot.TRACK_PUCK, Group.F, puck_pos),
+				SlotSpec.make(AIRoleSlots.Slot.TRACK_MID_STRONG, Group.F,
+						mid_gate + Vector3(strong_x * _TRACK_MID_SPLIT_M, 0.0, 0.0),
+						_side_home_f(strong_x)),
+				SlotSpec.make(AIRoleSlots.Slot.TRACK_MID_WEAK, Group.F,
+						mid_gate - Vector3(strong_x * _TRACK_MID_SPLIT_M, 0.0, 0.0),
+						_side_home_f(-strong_x)),
 			]
 
 		AIPossessionState.State.TRANS_DO:
@@ -376,6 +407,18 @@ static func _breakout_post_specs(own_goal_z: float, own_dir: float,
 				Vector3(-strong_x * (half_w - _STRETCH_WALL_INSET_M), 0.0, 0.0),
 				_side_home_f(-strong_x)),
 	]
+
+
+# Unit vector from the rush origin toward our net — the axis the TRANS_OD lane
+# targets lay out along, so the whole structure rotates with a rush coming up a
+# wall instead of assuming it comes down the middle.
+static func _rush_axis(our_net: Vector3, puck_pos: Vector3) -> Vector3:
+	var dx: float = our_net.x - puck_pos.x
+	var dz: float = our_net.z - puck_pos.z
+	var d: float = sqrt(dx * dx + dz * dz)
+	if d < 0.001:
+		return Vector3(0.0, 0.0, signf(our_net.z))
+	return Vector3(dx / d, 0.0, dz / d)
 
 
 # Home identity for a side-signed D slot: LD (lobby slot 3) rests on the -X
@@ -468,6 +511,29 @@ static func slot_anchor(slot: int, own_goal_z: float, strong_x: float,
 			return Vector3(-_DBACK_X_M, 0.0, our_blue_z)
 		AIRoleSlots.Slot.DBACK_R:
 			return Vector3(_DBACK_X_M, 0.0, our_blue_z)
+		# TRANS_OD rush layers. All four have real behavior modules, so these are
+		# the skeleton fallback only — but they must still be REAL ice: an
+		# unmapped slot falls through to Vector3.ZERO, which is centre ice, and a
+		# rush defender standing at centre ice is the exact failure this whole
+		# design exists to remove.
+		AIRoleSlots.Slot.RUSH_D1:
+			# The gap point on the carrier→net line, one stick off him.
+			var to_net: Vector3 = Vector3(0.0, 0.0, own_goal_z) - puck_pos
+			var d: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
+			if d < 0.001:
+				return puck_pos
+			return puck_pos + to_net * (minf(SkaterAgentStateMachine.BLADE_REACH_M, d) / d)
+		AIRoleSlots.Slot.RUSH_D2:
+			return Vector3(-strong_x * 2.0, 0.0,
+					own_goal_z - own_dir * AIRoleRushD.D2_MID_DEPTH_M)
+		AIRoleSlots.Slot.TRACK_PUCK:
+			return puck_pos
+		AIRoleSlots.Slot.TRACK_MID_STRONG:
+			return Vector3(strong_x * _TRACK_MID_SPLIT_M, 0.0,
+					own_goal_z - own_dir * AIZoneCoverage.HOUSE_TOP_DEPTH_M)
+		AIRoleSlots.Slot.TRACK_MID_WEAK:
+			return Vector3(-strong_x * _TRACK_MID_SPLIT_M, 0.0,
+					own_goal_z - own_dir * AIZoneCoverage.HOUSE_TOP_DEPTH_M)
 		_:
 			return Vector3.ZERO
 
@@ -534,20 +600,21 @@ static func _group_of(pid: int, position_by_peer: Dictionary) -> int:
 static func _hysteresis_class(slot: int) -> int:
 	match slot:
 		AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.POINT_STRONG, \
-		AIRoleSlots.Slot.DP_STRONG, AIRoleSlots.Slot.CONTAIN:
+		AIRoleSlots.Slot.DP_STRONG, AIRoleSlots.Slot.RUSH_D1:
 			return AIRoleSlots.Slot.ZONE_D_STRONG        # strong/engaged D
 		AIRoleSlots.Slot.ZONE_D_WEAK, AIRoleSlots.Slot.POINT_WEAK, \
 		AIRoleSlots.Slot.DP_WEAK, AIRoleSlots.Slot.BREAKOUT_D2, \
-		AIRoleSlots.Slot.DVALVE:
+		AIRoleSlots.Slot.DVALVE, AIRoleSlots.Slot.RUSH_D2:
 			return AIRoleSlots.Slot.ZONE_D_WEAK          # safety/net-front D
 		AIRoleSlots.Slot.ZONE_W_STRONG, AIRoleSlots.Slot.F2_STRONG, \
-		AIRoleSlots.Slot.BREAKOUT_STRONG:
+		AIRoleSlots.Slot.BREAKOUT_STRONG, AIRoleSlots.Slot.TRACK_MID_STRONG:
 			return AIRoleSlots.Slot.ZONE_W_STRONG        # strong-wall F
 		AIRoleSlots.Slot.ZONE_W_WEAK, AIRoleSlots.Slot.F2_WEAK, \
-		AIRoleSlots.Slot.BREAKOUT_STRETCH, AIRoleSlots.Slot.HIGH_SLOT:
+		AIRoleSlots.Slot.BREAKOUT_STRETCH, AIRoleSlots.Slot.HIGH_SLOT, \
+		AIRoleSlots.Slot.TRACK_MID_WEAK:
 			return AIRoleSlots.Slot.ZONE_W_WEAK          # weak-side/high F
 		AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.BREAKOUT_C, \
-		AIRoleSlots.Slot.TRAILER:
+		AIRoleSlots.Slot.TRAILER, AIRoleSlots.Slot.TRACK_PUCK:
 			return AIRoleSlots.Slot.ZONE_C               # middle-support F
 		AIRoleSlots.Slot.NET_FRONT, AIRoleSlots.Slot.FINISHER:
 			return AIRoleSlots.Slot.FINISHER             # net-front scorer

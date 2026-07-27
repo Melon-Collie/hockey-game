@@ -63,3 +63,17 @@ var locked_man_pid: int = -1
 # blue line in stride rather than parked. (The body-level offside brake still
 # applies, so arriving at speed never carries the bot offside.)
 var arrive_at_speed: bool = false
+
+# FORCE the sprint on, bypassing the state machine's gap gate. The gate exists
+# to keep a bot camped near its station off the throttle; a backchecker is the
+# opposite case — he is behind the play and the whole job is closing that
+# distance, so easing off as the gap narrows is exactly wrong. Set by the
+# tracking roles (docs/transition-defense-plan.md §7); the hard exhaustion
+# lockout still applies, so this can never sprint a gassed bot.
+var sprint_override: bool = false
+
+# An offensive station kept its forward stand this dispatch (the pinch read said
+# we have control). Round-tripped into RoleContext.prev_held_forward_stand so the
+# control threshold gets enter/hold hysteresis — a station flickering between the
+# blue line and a sag is worse than either choice.
+var held_forward_stand: bool = false

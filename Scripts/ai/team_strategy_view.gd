@@ -51,3 +51,12 @@ func get_team_size() -> int:
 
 func get_threat_shoot_base_by_opp() -> Dictionary[int, float]:
 	return {}
+
+# The team's shared transition read (docs/transition-defense-plan.md §4). The
+# neutral default is an inert read — Mode.NONE, no attackers — so an unwired
+# context behaves exactly as it did before the read existed. Shared and never
+# mutated (the same pattern as AIZoneCoverage._scratch_no_defenders).
+static var _inert_rush_read := AIRushRead.new()
+
+func get_rush_read() -> AIRushRead:
+	return _inert_rush_read

@@ -1238,9 +1238,11 @@ func _spawn_world() -> void:
 		AIDangerField.reset()
 		team_brains = [
 				TeamBrain.new(0, _registry.team_id_by_peer, _registry.caps_by_peer,
-						_state_machine.team_size, _registry.position_by_peer),
+						_state_machine.team_size, _registry.position_by_peer,
+						_registry.bot_peers),
 				TeamBrain.new(1, _registry.team_id_by_peer, _registry.caps_by_peer,
-						_state_machine.team_size, _registry.position_by_peer),
+						_state_machine.team_size, _registry.position_by_peer,
+						_registry.bot_peers),
 		]
 		_connect_goal_signals()
 

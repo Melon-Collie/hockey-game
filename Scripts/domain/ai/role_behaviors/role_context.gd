@@ -42,6 +42,17 @@ var assigned_threat_peer: int = -1
 # instead of recomputing them per decide. Live reference to the brain's dict;
 # empty = no memo (no brain, or no MARK slot live) — compute exactly.
 var threat_shoot_base_by_opp: Dictionary[int, float] = {}
+# The team's shared transition read (docs/transition-defense-plan.md §4) — who
+# is genuinely attacking, who is back, the numbers, backpressure, coverage
+# accounting. Live reference to the brain's instance (a frozen copy in
+# production dispatch). Never null: an unwired context gets the inert read from
+# TeamStrategyView, which reports Mode.NONE and no attackers, so behavior with
+# no brain is exactly what it was before the read existed.
+var rush_read: AIRushRead = TeamStrategyView.new().get_rush_read()
+# Last dispatch's answer to "did I hold my forward stand?" — the incumbent side
+# of the pinch read's control hysteresis (AIRoleHelpers.may_hold_forward_stand).
+# Reset across a slot change, same contract as prev_role_target.
+var prev_held_forward_stand: bool = false
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
 # owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
 # be a `Callable`; downgraded to a Dictionary because role decide() and
@@ -128,6 +139,10 @@ var self_stagger_timer: float = 0.0
 # This bot's own Hands-scaled carry-handle reach — how tight an evasion seam it
 # can thread (best_evade_point). League default when unwired.
 var self_handle_reach: float = 0.9
+# This bot's real blade reach (stick + blade, attribute-scaled) — the physical
+# "one stick length" unit the rush gap ladder is expressed in, so a long-stick
+# defenseman legitimately plays a hair wider gap.
+var self_blade_reach: float = SkaterAgentStateMachine.BLADE_REACH_M
 # This bot's blade reach cone half-angle (ROM + torso twist) and Agility-scaled
 # facing turn rate — how the carrier prices the rotation an out-of-cone aim costs
 # (_facing_rotation_time). A shot/pass anywhere inside the cone is free (no body
@@ -180,10 +195,10 @@ var holds_for_developing_feeds: bool = true
 # players (a newcomer-beatable flaw). True = it reads the receiver's turn and
 # waits for the settle before feeding (the Normal / Hard read).
 var reads_receiver_commitment: bool = true
-# COGNITION gate: false = the rush gap defender (CONTAIN) sees only the
+# COGNITION gate: false = the rush gap defender (RUSH_D1) sees only the
 # carrier and retreats on the carrier→net line; true = it reads the carrier's
 # passing options and splits toward an uncovered receiver's feed lane — the
-# 2-on-1 "play the pass" doctrine (AIRoleContain's lane fan).
+# 2-on-1 "play the pass" doctrine (AIRoleRushD's lane fan).
 var plays_rush_pass_lanes: bool = true
 # COGNITION gate: true = the carrier shields the puck with its body — under
 # pressure the blade pulls the puck to the protected side of the reachable-set
@@ -264,6 +279,13 @@ var scratch_opp_caps: Array[AISkaterCaps] = []
 var scratch_opp_ids: Array[int] = []
 var scratch_teammates: Array[Vector3] = []
 var scratch_opp_receivers: Array[Vector3] = []
+# Counter-threat states + index-matched caps for fill_counter_channels — the
+# ATTACKER-FILTERED subset of the opponents (AIRoleHelpers.collect_counter_threats).
+# Separate from scratch_opp_* because the O-zone stations need both at once: the
+# full opponent list for their shot-lane reads, the filtered one for their
+# race-home bound.
+var scratch_counter_states: Array[SkaterNetworkState] = []
+var scratch_counter_caps: Array[AISkaterCaps] = []
 # Per-decide option-value upper bounds for the pruned carrier_best_option
 # (see AIRoleHelpers.carrier_option_bases).
 var scratch_option_bases: Array[float] = []

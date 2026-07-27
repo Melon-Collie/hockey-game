@@ -24,6 +24,9 @@ var ping_move_by_peer: Dictionary[int, Vector3] = {}
 var ping_shoot_by_peer: Dictionary[int, bool] = {}
 var ping_pass_by_peer: Dictionary[int, int] = {}
 var threat_shoot_base: Dictionary[int, float] = {}
+# The frozen transition read. Refilled in place by TeamBrain.build_view via
+# AIRushRead.copy_from — never reallocated, same as the dicts above.
+var rush: AIRushRead = AIRushRead.new()
 
 
 func get_slot(peer_id: int) -> int:
@@ -74,3 +77,7 @@ func get_team_size() -> int:
 
 func get_threat_shoot_base_by_opp() -> Dictionary[int, float]:
 	return threat_shoot_base
+
+
+func get_rush_read() -> AIRushRead:
+	return rush

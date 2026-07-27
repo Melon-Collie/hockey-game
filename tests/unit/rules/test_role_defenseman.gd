@@ -7,9 +7,15 @@ const TEAM_ID: int = 0
 const OUR_NET_Z: float = 26.65
 
 
+# `home_side` is the D's lobby home side (-1 = LD, +1 = RD), which sets his
+# defensive home post and therefore the line his station retreats down
+# (AIRoleHelpers.station_retreat_floor). Defaults to the right-side D, matching
+# the strong-side stations most of these cases exercise. Leaving it at
+# RoleContext's 0 default would put the post dead centre — a body no real 5v5
+# defenseman has — and make every retreat artificially central.
 func _make_ctx(self_pos: Vector3, skaters: Array = [],
 		carrier_pid: int = -1, puck_pos: Vector3 = Vector3.ZERO,
-		strong_x: float = 1.0) -> RoleContext:
+		strong_x: float = 1.0, home_side: float = 1.0) -> RoleContext:
 	var snap := WorldSnapshot.new()
 	var have_self: bool = false
 	for entry: Array in skaters:
@@ -48,6 +54,16 @@ func _make_ctx(self_pos: Vector3, skaters: Array = [],
 	ctx.strong_x = strong_x
 	ctx.team_size = 5
 	ctx.self_is_defense = true
+	ctx.self_home_side = home_side
+	# A LIVE transition read, built from this fixture's own snapshot — exactly
+	# what the brain hands production dispatch. The offensive stations' pinch read
+	# (AIRoleHelpers.may_hold_forward_stand) needs real perception: possession
+	# security and who is behind the stand. An unwired read reports "no
+	# perception" and the stations then just hold their geometry, so a fixture
+	# that wants to exercise the read has to supply it.
+	var read := AIRushRead.new()
+	read.fill(snap, TEAM_ID, OUR_NET_Z, team_map, {}, {})
+	ctx.rush_read = read
 	return ctx
 
 
@@ -121,11 +137,14 @@ func test_point_does_not_pace_the_neutral_zone_as_coverage_jitters() -> void:
 
 
 func test_point_sags_when_the_race_home_is_lost() -> void:
-	# A stretch opponent already behind our point pair, burning for our net:
-	# the keep-in bound must pull the stand out of the deep zone entirely.
+	# A stretch opponent already behind our point pair, burning for our net: the
+	# stand must be pulled out of the deep zone. He sits at centre ice rather than
+	# past our blue line — inside our zone ahead of the puck he would be
+	# offside-positioned, and an illegal outlet is deliberately NOT a counter
+	# threat (see test_offside_cherry_picker_does_not_drag_the_valve_home).
 	var ctx: RoleContext = _make_ctx(Vector3(6.0, 0.0, -8.0), [
 			[2, TEAM_ID, Vector3(8.0, 0.0, -22.0)],
-			[10, 1, Vector3(0.0, 0.0, 8.0), Vector3(0.0, 0.0, 8.0)],
+			[10, 1, Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 8.0)],
 	], 2)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.POINT_STRONG)
 	var stand_dist_home: float = d.target_position.distance_to(Vector3(0, 0, OUR_NET_Z))
@@ -232,6 +251,11 @@ func test_off_ruleset_plays_the_cherry_picker_as_live() -> void:
 			[10, 1, Vector3(1.0, 0.0, 14.0), Vector3(0.0, 0.0, 7.0)],
 	], 2)
 	ctx.offsides_enforced = false
+	# The read is built inside _make_ctx, before this flip — refill it so the
+	# attacker filter sees the OFF ruleset too (production rebuilds it every brain
+	# tick from the latched rule set).
+	ctx.rush_read.fill(ctx.snapshot, TEAM_ID, OUR_NET_Z, ctx.team_id_by_peer,
+			{}, {}, false)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DVALVE)
 	assert_gt(d.target_position.z, 5.0,
 			"with no offside rule the lurker is real and pulls the valve home; got %s"

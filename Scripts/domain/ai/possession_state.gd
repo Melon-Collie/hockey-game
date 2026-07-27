@@ -69,6 +69,45 @@ static func retrieval_read(our_best_t: float, opp_best_t: float,
 			else RETRIEVAL_ENTER_MARGIN_S
 	return our_best_t + margin <= opp_best_t
 
+# ── Coverage readiness (docs/transition-defense-plan.md §9) ──────────────────
+# DZONE is a SHAPE, not a location. The raw table above flips to it the instant
+# the puck crosses our blue line with the opponent carrying — which re-slots all
+# five bots into zone areas even when three of them are 25 m up-ice, mid-
+# backcheck. The structure they're joining assumes five bodies are home; it was
+# being run by two, and the backcheck visibly dissolved at the line.
+#
+# Real hockey has the readiness concept explicitly: get back, get set, THEN take
+# your man. So the brain upgrades its raw DZONE result the same way it upgrades
+# to RETRIEVAL — the team stays in the rush/recovery shape until the bodies the
+# coverage assumes have actually arrived (AIRushRead.coverage_ready).
+#
+# The asymmetry that matters: it is EASY to become set and HARD to stop being
+# set. Becoming unset is the reading that fixes the reported bug (a rush arriving
+# must not re-slot the backcheck onto zone posts), and that reading is available
+# instantly — the accounting is false the moment men are unaccounted for. Going
+# the other way, a settled structure must not be dumped back into scramble mode
+# by one bad tick — a body straddling the blue line to pressure the point is not
+# a broken structure — so leaving coverage takes a sustained stretch.
+#
+# There is deliberately NO time-floor fallback. An earlier version had one, on the
+# theory that the predicate might never clear; that was true of the man-coverage
+# predicate it guarded (see AIRushRead._coverage_ready for the measurement) and it
+# made the guard the only path into the zone. A home-ness predicate is monotone in
+# recovering bodies, so it clears on its own — nothing to bound.
+const COVERAGE_HOLD_TICKS: int = 6
+
+
+# True when the team should be running D-zone COVERAGE rather than the rush /
+# recovery shape. `ready` is AIRushRead.coverage_ready (the backcheck is home);
+# `unready_ticks` counts consecutive brain ticks it has been FALSE; `was_set` is
+# last tick's answer.
+static func coverage_read(ready: bool, unready_ticks: int,
+		was_set: bool) -> bool:
+	if was_set:
+		return unready_ticks < COVERAGE_HOLD_TICKS
+	return ready
+
+
 class Result:
 	var state: int           # AIPossessionState.State enum value
 	var carrier_team: int    # -1 if no carrier ever seen
