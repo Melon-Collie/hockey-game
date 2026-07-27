@@ -717,7 +717,7 @@ const LANE_DEFENDER_REACH_M: float = GameRules.DEFAULT_STICK_LENGTH_M
 const LANE_REACTION_DELAY_S: float = 0.08
 # Fraction of top skating speed a defender covers LATERALLY sliding into a lane
 # (you close a passing lane sideways, not at full straight-line speed). Per-
-# defender close speed is this × the defender's real max_speed (Speed).
+# defender close speed is this × the defender's real max_speed.
 const LANE_LATERAL_FRACTION: float = 0.5
 const LANE_DEFENDER_CLOSE_SPEED_M_S: float = LANE_LATERAL_FRACTION * GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
@@ -1843,7 +1843,7 @@ static func tip_ev(
 	if along <= SCREEN_MIN_ALONG_M or along >= line_len - 0.3:
 		return 0.0
 	var tip_pt := Vector3(release.x + hx * along, 0.0, release.z + hz * along)
-	# P(blade contacts): the tipper's real stick reach (Size) + lateral close.
+	# P(blade contacts): the tipper's real stick reach + lateral close.
 	var stick: float = LANE_DEFENDER_REACH_M
 	var close: float = LANE_DEFENDER_CLOSE_SPEED_M_S
 	if tip_caps != null:
@@ -2568,7 +2568,7 @@ static func _lane_block_at(
 		stick_reach: float = LANE_DEFENDER_REACH_M,
 		close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S) -> float:
 	var miss: float = _lane_miss_at(fx, fz, pvx, pvz, t, px, pz, vx, vz)
-	# reach = this defender's stick (Size) + how far it slides into the lane after
+	# reach = this defender's stick + how far it slides into the lane after
 	# its read delay (Speed × the ~0.5 lateral factor); normalised by its own stick
 	# so "one full stick inside reach ⇒ certain block" scales with the defender.
 	var reach: float = stick_reach + close_speed * maxf(0.0, t - LANE_REACTION_DELAY_S)
@@ -2705,7 +2705,7 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		if i < vel_count:
 			vx = opponent_vels[i].x
 			vz = opponent_vels[i].z
-		# This defender's real stick reach (Size) and lateral close speed (Speed).
+		# This defender's real stick reach and lateral close speed.
 		var stick_reach: float = LANE_DEFENDER_REACH_M
 		var close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S
 		if has_caps:

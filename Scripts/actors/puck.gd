@@ -440,9 +440,9 @@ func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_dir
 	if checker.is_ghost or victim.is_ghost:
 		return
 	# Gate on the impulse actually DELIVERED to the victim (folds in the attacker's
-	# Physical/transfer, both skaters' mass, and the closing speed) rather than the
-	# raw attacker-weight × speed impact_force — so the same hit dislodges the puck
-	# for an enforcer but not for a low-Physical player. Matches the stagger's
+	# transfer, both skaters' mass, and the closing speed) rather than the raw
+	# attacker-weight × speed impact_force — so the same hit dislodges the puck for
+	# an enforcer but not for a lighter player. Matches the stagger's
 	# hardness measure; see BodyCheckRules.puck_strip_impulse.
 	#
 	# The attacker's transfer is commit-gated by the Hit button, the SAME way the

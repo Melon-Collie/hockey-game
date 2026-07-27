@@ -127,7 +127,7 @@ static func assign(
 	for d: int in open_defenders:
 		var d_pos: Vector3 = defender_pos.get(d, Vector3.ZERO)
 		var d_vel: Vector3 = defender_vel.get(d, Vector3.ZERO)
-		# This defender covers at ITS real top speed (Speed) — a fast defender
+		# This defender covers at ITS real top speed — a fast defender
 		# reaches a further man in time, so it's assigned the harder cover.
 		var d_caps: AISkaterCaps = defender_caps.get(d)
 		var d_speed: float = d_caps.max_speed if d_caps != null \

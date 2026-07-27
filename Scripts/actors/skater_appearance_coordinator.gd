@@ -111,7 +111,7 @@ func apply(attrs: PlayerAttributes) -> void:
 	# height for everything (the torso cylinder's center rises with its
 	# stretch, the shoulder balls sit at its top, the helmet above them).
 	# Shoulder-ball X rides TORSO bulk — the deltoid sits on the torso
-	# surface, so it's the torso's width (Size) that pushes it out, while
+	# surface, so it's the torso's width that pushes it out, while
 	# the ball's own size keeps reading Physical via _apply_scale above.
 	for path: String in _TORSO_PATHS:
 		_apply_position(path, 1.0, m_height)
