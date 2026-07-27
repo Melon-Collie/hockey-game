@@ -110,42 +110,55 @@ extends GutTest
 # (goalie x 0.92). Nominal coverage RISES with angle while measured beatability
 # rises too, so the two disagree. The boundary sweep below resolves it.
 #
-# ── FINDING 1 RESOLVED: the hole is the band BELOW post integration ──────────
-# Conversion (goals / shots that reached him) swept through the RVH/VH trigger:
+# ── FINDING 1: the angled hole is REAL but WINDUP-LENGTH DEPENDENT ──────────
+# Conversion (goals / shots that reached him) swept through the RVH/VH trigger,
+# at two windup lengths. They do not measure the same goalie:
 #
-#   dist angle |  stance | goal save |  conv%
-#      5    40 |   READY |   23  127 |  15.3%
-#      5    50 |   READY |   24  125 |  16.1%
-#      5    60 |   READY |   29  120 |  19.5%
-#      5    70 |   READY |   45  104 |  30.2%   <- peak
-#      5    75 |   READY |   38  111 |  25.5%
-#      5    80 |    VH_L |    0  150 |   0.0%   <- post integration engages
-#      5    85 |    VH_L |    0  150 |   0.0%
-#      8    70 |   READY |   37  113 |  24.7%
-#      8    80 |    VH_L |    0  150 |   0.0%
+#   dist angle |  stance | 0.20 s windup | 0.60 s windup
+#      5    40 |   READY |        15.3%  |         2.7%
+#      5    50 |   READY |        16.1%  |        10.0%
+#      5    60 |   READY |        19.5%  |        12.0%
+#      5    70 |   READY |        30.2%  |        10.9%
+#      5    75 |   READY |        25.5%  |        28.2%   <- robust
+#      5    80 |    VH_L |         0.0%  |         0.0%
+#      8    50 |   READY |        14.0%  |         2.0%
+#      8    60 |   READY |        19.3%  |         0.0%
+#      8    70 |   READY |        24.7%  |         0.0%
+#      8    75 |   READY |        20.7%  |         0.0%
+#      8    80 |    VH_L |         0.0%  |         0.0%
 #
-# It is a CLIFF, not a gradient: 30% to 0% across the `rvh_early_angle` (80 deg)
-# trigger, with 300 shots at 80-85 deg conceding nothing at all. The softness is
-# entirely in the 60-79 deg band, where he is neither squared usefully nor
-# post-integrated.
+# TWO SEPARATE THINGS, and an early pass here conflated them:
 #
-# WHY, from the aim maps (shooter at +x, so aim -0.8 is the FAR side):
+#  (a) A TRANSIENT. Reading a shot windup at a sharp angle collapses the depth
+#      SOLVER's radius hard — measured 1.55 -> 0.54 at 5 m / 70 deg — and the
+#      lateral position chases it down, overshooting to x=0.25 before recovering
+#      toward its 0.51 target. A quick release lands inside that transit. Give
+#      him 0.6 s and the whole 8 m band from 50-75 deg goes to ZERO. This is the
+#      larger effect and it is a SETTLING problem, not a positioning one.
+#  (b) A RESIDUAL at 5 m / 75 deg, ~26-28% at BOTH windup lengths. That one is
+#      not a transient and is the real angled hole.
 #
-#   5 m @ 60 |  x=0.92 depth=0.86 READY | flat  |sssssssssGGGGGGGGGGGGssss|
-#   5 m @ 70 |  x=0.92 depth=0.53 READY | flat  |GGGGGGGGGGGGGGGGGGGGsssss|
-#   5 m @ 75 |  x=0.92 depth=0.40 READY | flat  |GGGGGGGGGGGGGGGGGssssssss|
-#   5 m @ 80 |  x=0.54 depth=0.10  VH_L | flat  |sssssssssssssssssssssssss|
+# The post-integration cliff is real either way: 80 deg concedes nothing at any
+# windup length, on 600 perfect-execution shots.
 #
-# In the squared stance the arc solver clamps his lateral target to
-# `net_half_width` and his depth collapses as the angle sharpens (0.86 -> 0.53 ->
-# 0.40), so he ends up STANDING ON THE NEAR POST — covering the post he is
-# already touching while four fifths of the mouth sits open along the ice on the
-# far side. VH fixes it by moving him INBOARD (x 0.54, i.e. 0.38 inside the post)
-# and onto his line (depth 0.10), where his body spans the mouth.
+# ── AN ATTEMPTED FIX AND WHY IT DID NOT LAND (recorded so it is not retried) ──
+# `target_arc_position` clamps x to the post while keeping the arc's z, so past
+# the exit angle it returns a point that is not on the squaring line at all.
+# That IS a real bug, and correcting it — converging continuously on the post-
+# seal spot instead — measurably moves the SETTLED position at 5 m / 70 deg from
+# (x 0.92, depth 0.53) to (0.62, 0.20), i.e. onto the seal.
 #
-# Only the FLAT loft scores; LOW and HIGH are saved almost everywhere in the
-# band. So this is specifically a low, far-side, along-the-ice hole — the shot a
-# player describes as "beating him around the side".
+# It changed the table above by exactly nothing, at every cell. The reason is
+# (a): at the moment of release the goalie is not at the settled arc position,
+# because the windup already collapsed his depth radius to 0.54 — which is
+# INSIDE the mouth, so the clamp never engages and the corrected branch is dead
+# code on this path. Fixing the clamp without fixing the depth transient moves a
+# position nobody shoots at.
+#
+# It also cost a cell in tests/unit/ai/test_shot_value_calibration.gd: a ~1 cm
+# move at (4, 7.2 m) swung score_shoot 0.661 -> 0.484 against a band-sim measured
+# 1.00. The scorer is knife-edge there and already disagreed with the sim by
+# 0.34 before the change; worth its own look.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
@@ -317,6 +330,12 @@ func test_report_goalie_angular_coverage() -> void:
 const BOUNDARY_DISTANCES: Array[float] = [5.0, 8.0]
 const BOUNDARY_ANGLES_DEG: Array[float] = [40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0]
 const BOUNDARY_POWERS: Array[float] = [0.8, 1.0]
+# Windup lengths to sweep the boundary at, in ticks (120 Hz). THIS TURNS OUT TO
+# BE THE DECIDING VARIABLE, so it is swept rather than fixed: reading a windup at
+# a sharp angle collapses the goalie's depth radius, and the move takes longer
+# than a quick release. 24 ticks (0.2 s) fires DURING that transit; 72 (0.6 s)
+# fires after he has arrived. They do not measure the same goalie.
+const BOUNDARY_WINDUPS: Array[int] = [24, 72]
 
 const _STANCE_NAME: Array[String] = [
 	"STANDING", "BUTTERFLY", "RECOVERING", "RVH_L", "RVH_R", "READY", "SLIDING",
@@ -331,6 +350,13 @@ func test_report_angled_softness_vs_post_stance() -> void:
 	gut.p("conv%% = goals/(goals+saves) — the angle-comparable rate. See the note.")
 	gut.p("%5s %6s | %10s | %5s %5s %5s %5s | %6s %6s"
 			% ["dist", "angle", "stance", "goal", "save", "post", "wide", "aim%", "conv%"])
+	for windup: int in BOUNDARY_WINDUPS:
+		gut.p("-- windup %d ticks (%.2f s) --" % [windup, float(windup) / 120.0])
+		_boundary_pass(hw, windup)
+	assert_true(true, "report")
+
+
+func _boundary_pass(hw: float, windup: int) -> void:
 	for dist: float in BOUNDARY_DISTANCES:
 		for angle: float in BOUNDARY_ANGLES_DEG:
 			var shooter: Vector3 = _spot(dist, angle)
@@ -348,7 +374,7 @@ func test_report_angled_softness_vs_post_stance() -> void:
 						var aim := Vector3(lerpf(-hw, hw, t), 0.0, GOAL_Z)
 						_ctrl.reset_to_crease()
 						_h.settle(shooter, SETTLE_TICKS)
-						_h.hold_windup(shooter, aim, loft, power, WINDUP_TICKS)
+						_h.hold_windup(shooter, aim, loft, power, windup)
 						stance = _ctrl._sm.current as int
 						match _h.fire_release(shooter, aim, loft, power, 0.0):
 							Harness.GOAL:
@@ -365,4 +391,3 @@ func test_report_angled_softness_vs_post_stance() -> void:
 					% [dist, angle, _STANCE_NAME[stance], goals, saves, posts, wides,
 					100.0 * float(goals) / float(maxi(shots, 1)),
 					100.0 * float(goals) / float(maxi(reached, 1))])
-	assert_true(true, "report")
