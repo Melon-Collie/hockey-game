@@ -27,7 +27,7 @@ class_name SkaterCollisionRules
 #                     what fixes the "skate into someone and your momentum just
 #                     stops" feel that move_and_slide produced.
 # Drive-through vs. grind is thus emergent from the mass ratio (Δv = J/m), NOT a
-# hand-shaped restitution curve — the grounded-model discipline (see CLAUDE.md).
+# hand-shaped restitution curve — the grounded-model discipline (see Scripts/domain/ai/CLAUDE.md).
 #
 # The victim's own Δv magnitude (|dvel_b|) is the "how hard did it land" number the
 # stagger / knockdown / puck-strip all key off downstream, exactly as before.

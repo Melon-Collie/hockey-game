@@ -427,7 +427,7 @@ Fixed in the audit commits:
   missing knockdown/intent bytes); `input_state.gd` layout ("f32 timestamp"
   → u32 @0.1 ms); `network_manager.gd` `update_lobby_attributes` (referenced
   the removed v3 point-buy budget).
-- ARCHITECTURE.md → Networking Invariants: "Two symmetric guards" → three
+- Scripts/networking/CLAUDE.md: "Two symmetric guards" → three
   (the `SLAPPER_CHARGE_WITHOUT_PUCK` guard was undocumented); the
   mouse-position-seeding invariant described deleted machinery (superseded
   by the swing-state save/restore); "the resolvers send
