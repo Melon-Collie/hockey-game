@@ -64,7 +64,8 @@ func _snapshot(ours: Array, opp: Array, carrier: int) -> WorldSnapshot:
 
 
 func _brain() -> TeamBrain:
-	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 130: 0, 140: 0, 200: 1, 210: 1}
+	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 130: 0, 140: 0,
+			200: 1, 210: 1, 220: 1}
 	var positions: Dictionary = {100: 0, 110: 1, 120: 2, 130: 3, 140: 4}
 	return TeamBrain.new(0, team_map, {}, 5, positions)
 
@@ -74,10 +75,10 @@ func _brain_3v3() -> TeamBrain:
 
 
 func test_backcheck_is_not_dissolved_at_the_blue_line() -> void:
-	# The reported failure: the puck crosses into our zone with three of ours
-	# still up-ice. The old code re-slotted all five into zone areas — a
-	# structure that assumes five bodies are home, being run by two. The team
-	# must stay in the rush shape until the coverage makes sense.
+	# The reported failure: the puck crosses into our zone OUTNUMBERED — three
+	# attackers, two of ours home. The old code re-slotted all five into zone areas,
+	# a five-body structure being run by two. The team must stay in the rush shape
+	# until the numbers are there.
 	var brain: TeamBrain = _brain()
 	brain.tick(1.0, _snapshot([
 		[100, Vector3(0.0, 0.0, -10.0), Vector3(0.0, 0.0, 7.0)],   # backchecking
@@ -88,9 +89,10 @@ func test_backcheck_is_not_dissolved_at_the_blue_line() -> void:
 	], [
 		[200, Vector3(0.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],     # carrier, entering
 		[210, Vector3(-7.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],    # unmarked
+		[220, Vector3(7.0, 0.0, 9.5), Vector3(0.0, 0.0, 7.0)],     # unmarked
 	], 200))
 	assert_eq(brain.state, AIPossessionState.State.TRANS_OD,
-			"an unaccounted-for entry stays in the rush shape, not zone coverage")
+			"an outnumbered entry stays in the rush shape, not zone coverage")
 	# And the shape is the layered rush, not zone posts.
 	assert_ne(_slot_of(brain, AIRoleSlots.Slot.RUSH_D1), -1,
 			"the rush layers are live")
@@ -100,6 +102,27 @@ func test_backcheck_is_not_dissolved_at_the_blue_line() -> void:
 				AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.ZONE_W_STRONG,
 				AIRoleSlots.Slot.ZONE_W_WEAK],
 				"peer %d must not be holding a zone post mid-backcheck" % pid)
+
+
+func test_parity_releases_the_late_men_into_coverage() -> void:
+	# The change the doctrine forced: the SAME entry with even numbers must NOT hold
+	# the home bodies in the rush shape. Two attackers, two of ours home, three still
+	# coming — the home pair sets up and the stragglers join as layers. Requiring
+	# every body was the mirror image of the bug the rush read exists to fix: four
+	# home bots waiting on a late fifth instead of five each claiming last-man-back.
+	var brain: TeamBrain = _brain()
+	brain.tick(1.0, _snapshot([
+		[100, Vector3(0.0, 0.0, -10.0), Vector3(0.0, 0.0, 7.0)],
+		[110, Vector3(-5.0, 0.0, -12.0), Vector3(0.0, 0.0, 7.0)],
+		[120, Vector3(5.0, 0.0, -12.0), Vector3(0.0, 0.0, 7.0)],
+		[130, Vector3(-3.0, 0.0, 20.0)],
+		[140, Vector3(3.0, 0.0, 20.0)],
+	], [
+		[200, Vector3(0.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],
+		[210, Vector3(-7.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],
+	], 200))
+	assert_eq(brain.state, AIPossessionState.State.DZONE,
+			"even numbers hand off to coverage; the late men are layers, not a gate")
 
 
 func test_a_set_structure_does_run_zone_coverage() -> void:

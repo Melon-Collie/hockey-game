@@ -114,8 +114,10 @@ var numbers: int = Numbers.EVEN_OR_UP
 # own doctrine (docs/5v5-ai-plan.md:548): a backchecker within ~1-2 s lets the D
 # tighten the gap and stand up. INF = no backpressure, default conservative.
 var backpressure_s: float = INF
-# The backcheck is complete — every body the shape depends on has arrived in our
-# defensive zone (see _coverage_ready). What the DZONE readiness gate consumes.
+# The structure is manned — as many of our bodies have arrived in our defensive
+# zone as there are attackers to cover (capped at the bodies we have). What the
+# DZONE readiness gate consumes; see _coverage_ready for why parity and not
+# everybody.
 var coverage_ready: bool = false
 # Seconds until the puck is CONTESTED — the nearest opponent's momentum-aware ETA
 # to it (docs/transition-defense-plan.md §13). 0.0 when it is already theirs or
@@ -360,50 +362,67 @@ static func cover_envelope_m() -> float:
 # ── Coverage readiness (the DZONE handoff gate — plan §9) ────────────────────
 #
 # "Get back, get set, THEN take your man." This answers the FIRST clause only:
-# has the backcheck finished? Every body the shape depends on is inside our
-# defensive zone.
+# is the structure manned? It deliberately does NOT ask whether men are already
+# covered — that was the original predicate, and it was a MAN-coverage test used to
+# gate entry into a ZONE, which covers ice rather than bodies by definition. A
+# perfectly executed zone failed it: measured against AIZoneCoverage's own anchors
+# for a settled cycle, ZONE_W_WEAK sags to the high slot ~8 m off the weak-side
+# winger (4 m envelope), and the strong-side pressure comes from up-ice of the puck
+# — correct hockey, and not "goal-side". The gate could never be satisfied by the
+# shape it gated, so a time-floor guard was doing all the real work: every cycle
+# entered the zone when a timer expired rather than when the team was set. Both the
+# clause and the guard are gone.
 #
-# It deliberately does NOT ask whether men are already covered. The predicate
-# used to: every attacker needed one of ours goal-side within a cover envelope,
-# plus a body engaged on the carrier. That is a description of MAN coverage, and
-# 5v5 DZONE runs a hybrid ZONE — which covers ice, not bodies, by definition. A
-# perfectly executed zone therefore FAILED it: measured against AIZoneCoverage's
-# own anchors for a settled cycle, ZONE_W_WEAK sags to the high slot ~8 m off the
-# weak-side winger (4 m envelope), and the strong-side pressure comes from up-ice
-# of the puck — correct hockey, and not "goal-side". So the gate could never be
-# satisfied by the shape it gates entry into, and a time-floor guard was doing all
-# the real work: every cycle spent its first seconds in the rush shape and entered
-# the zone only when the timer expired. The guard is gone with the predicate that
-# needed it.
+# TWO PARTS, and doctrine sets each one.
 #
-# Home-ness is the honest reading of "set", and it is MONOTONE in the thing that is
-# actually happening: recovering bodies only get deeper, so it clears on its own
-# and cannot be permanently false while the team is doing the right thing. That
-# property is what makes a fallback timer unnecessary rather than load-bearing.
+# WHERE: the blue line. "The transition from backcheck to defensive zone coverage
+# happens at the blue line — as you enter your defensive zone, you identify your
+# coverage responsibility." It is also the structure's own footprint (every zone
+# anchor sits ≤11 m off the goal line, well inside our zone's ~19 m), so a correct
+# shape satisfies it by construction rather than by tuning.
 #
-# The bar is the blue line — the structure's own footprint, not a tuned number.
-# Every zone anchor sits at most ~11 m off the goal line, well inside our zone's
-# ~19 m, so a correct shape satisfies this by construction; a backchecker still in
-# the neutral zone has not arrived, which is the reported bug.
+# HOW MANY: parity, not everybody. Doctrine keys the end of backcheck urgency on
+# NUMBERS — F2 "backchecks aggressively until numerical parity is achieved, and then
+# protects the house"; F3 "skates hard to even the numbers if the team is
+# outnumbered". Requiring EVERY body was the mirror image of the bug this whole read
+# was written to fix: instead of five bots each deciding it was the last man back, it
+# made four home bots wait on a fifth who was late. A team-level all-or-nothing
+# driven by the worst individual, either way. Once the numbers are even the home
+# bodies set up and the late man joins as a layer — which the soonest-to-arrive
+# election delivers for free, since the bodies already home win the important jobs
+# and the straggler inherits the leftover.
 #
-# BOTS ONLY (`bot_peers`; empty = count everyone, the stricter fail-safe). Humans
-# are elected into the shape but obey nothing, so a teammate who refuses to come
-# back would hold the predicate false forever — the one genuinely unclearable case,
-# and the case the old guard was really insuring against. Gating the bots' shape on
-# a body they cannot steer is the same "wait on someone else" reasoning this whole
-# read replaced; their structure is ready when THEIR bodies are home.
+# The requirement is capped at the bodies we HAVE (`mini`): you cannot be asked to
+# produce a defender that does not exist. Without the cap, being genuinely a man
+# short — a human who will not backcheck, a ghosted bot — makes parity unreachable
+# and the predicate permanently false, which is the failure the deleted guard
+# existed for. With it, a short-handed team reads "set" once everyone it controls is
+# home, and defends with layers instead of scrambling forever.
+#
+# So the read stays MONOTONE in the recovery it waits on — arrivals only raise the
+# count, and the bar never rises — which is what makes a fallback timer unnecessary
+# rather than load-bearing.
+#
+# BOTS ONLY (`bot_peers`; empty = count every teammate). This is load-bearing in
+# BOTH terms: a loafing human must not inflate the requirement he is not going to
+# satisfy, and must not count toward the bodies-we-have cap either. Gating the bots'
+# shape on a body they cannot steer is the same "wait on someone else" reasoning
+# this whole read replaced; their structure is ready when THEIR bodies are home.
 func _coverage_ready(snapshot: WorldSnapshot, team_id: int,
 		team_id_by_peer: Dictionary, own_dir: float,
 		bot_peers: Dictionary) -> bool:
 	var check_all: bool = bot_peers.is_empty()
+	var home: int = 0
+	var ours: int = 0
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) != team_id:
 			continue
 		if not check_all and not bot_peers.has(pid):
 			continue
-		if own_dir * snapshot.skater_states[pid].position.z < GameRules.BLUE_LINE_Z:
-			return false
-	return true
+		ours += 1
+		if own_dir * snapshot.skater_states[pid].position.z >= GameRules.BLUE_LINE_Z:
+			home += 1
+	return home >= mini(attackers.size(), ours)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

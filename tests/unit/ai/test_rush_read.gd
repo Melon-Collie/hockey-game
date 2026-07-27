@@ -286,16 +286,94 @@ func test_coverage_ready_once_everyone_is_home() -> void:
 	assert_true(r.coverage_ready, "every body inside our blue line is set")
 
 
-func test_one_body_short_of_the_line_is_not_ready() -> void:
-	# The bar is the blue line itself, so the failing case is a metre the wrong
-	# side of it — not an arbitrary distance from a post.
-	var theirs := {11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO]}
-	var ours := {
+func test_the_bar_is_the_blue_line() -> void:
+	# The bar is the blue line itself, so the deciding case is a metre either side
+	# of it — not an arbitrary distance from a post. Two attackers, so parity needs
+	# both of ours and the straggler is the body that decides it.
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
+		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
+	}
+	var short := {
 		1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO],
 		2: [Vector3(2.0, 0.0, GameRules.BLUE_LINE_Z - 1.0), Vector3.ZERO],
 	}
+	assert_false(_read(short, theirs, 11).coverage_ready,
+			"a body a metre outside our zone has not arrived")
+	var home := {
+		1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO],
+		2: [Vector3(2.0, 0.0, GameRules.BLUE_LINE_Z + 1.0), Vector3.ZERO],
+	}
+	assert_true(_read(home, theirs, 11).coverage_ready,
+			"a metre the other side of it has")
+
+
+# ── Parity, not everybody ────────────────────────────────────────────────────
+# Doctrine keys the end of backcheck urgency on NUMBERS ("backcheck aggressively
+# until numerical parity is achieved, then protect the house"), not on the whole
+# group being home. Requiring every body was the mirror image of the bug this read
+# exists to fix — four home bots waiting on a late fifth instead of five bots each
+# deciding it was the last man back.
+
+func test_a_late_man_does_not_hold_the_rest_out() -> void:
+	# Three attackers, three of ours home, two still coming. The structure is
+	# manned: the home bodies set up and the stragglers join as layers.
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
+		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
+		13: [Vector3(7.0, 0.0, 19.0), Vector3.ZERO],
+	}
+	var ours := {
+		1: [Vector3(0.0, 0.0, 24.0), Vector3.ZERO],
+		2: [Vector3(-5.0, 0.0, 23.0), Vector3.ZERO],
+		3: [Vector3(5.0, 0.0, 21.0), Vector3.ZERO],
+		4: [Vector3(-2.0, 0.0, -6.0), Vector3.ZERO],    # still up-ice
+		5: [Vector3(3.0, 0.0, -9.0), Vector3.ZERO],     # still up-ice
+	}
 	var r: AIRushRead = _read(ours, theirs, 11)
-	assert_false(r.coverage_ready, "a body still outside our zone has not arrived")
+	assert_eq(r.attackers.size(), 3, "scenario check: three attackers")
+	assert_true(r.coverage_ready, "parity is the bar, not a full house")
+
+
+func test_short_of_parity_is_still_the_rush_shape() -> void:
+	# The original bug, which parity must still catch: the puck enters with three
+	# attackers and only one of ours home.
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 10.0), Vector3(0.0, 0.0, 6.0)],
+		12: [Vector3(-6.0, 0.0, 9.0), Vector3(0.0, 0.0, 6.0)],
+		13: [Vector3(6.0, 0.0, 8.0), Vector3(0.0, 0.0, 6.0)],
+	}
+	var ours := {
+		1: [Vector3(0.0, 0.0, 22.0), Vector3.ZERO],
+		2: [Vector3(0.0, 0.0, -8.0), Vector3(0.0, 0.0, 6.0)],
+		3: [Vector3(4.0, 0.0, -10.0), Vector3(0.0, 0.0, 6.0)],
+	}
+	assert_false(_read(ours, theirs, 11).coverage_ready,
+			"one body home against three attackers is not a manned structure")
+
+
+func test_the_requirement_is_capped_at_the_bodies_we_have() -> void:
+	# You cannot be asked to produce a defender that does not exist. Three attackers
+	# but only two bots on the ice: once both are home the structure is as manned as
+	# it can be, and they defend with layers rather than scrambling forever. Without
+	# the cap this is unreachable — exactly the permanently-false case the deleted
+	# time floor was insuring against.
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
+		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
+		13: [Vector3(7.0, 0.0, 19.0), Vector3.ZERO],
+	}
+	var ours := {
+		1: [Vector3(0.0, 0.0, 24.0), Vector3.ZERO],
+		2: [Vector3(-5.0, 0.0, 23.0), Vector3.ZERO],
+		9: [Vector3(0.0, 0.0, -2.0), Vector3.ZERO],     # human, not coming back
+	}
+	var r := AIRushRead.new()
+	r.fill(_snapshot(ours, theirs, 11), 0, OUR_NET_Z,
+			_team_map(ours, theirs), {}, {}, true, {1: true, 2: true})
+	assert_eq(r.attackers.size(), 3, "scenario check: outnumbered three to two")
+	assert_true(r.coverage_ready,
+			"a short-handed team sets up once every body it steers is home")
 
 
 func test_a_real_zone_shape_reads_as_set() -> void:
@@ -343,9 +421,30 @@ func test_a_loafing_human_does_not_hold_the_bots_out() -> void:
 			_team_map(ours, theirs), {}, {}, true, bots)
 	assert_true(r.coverage_ready,
 			"the bots' shape is ready when THEIR bodies are home")
-	# Unwired (empty set) counts everyone — the stricter fail-safe.
+
+
+func test_a_human_cannot_inflate_the_requirement() -> void:
+	# Where the bot filter earns its keep, now that parity replaced the universal.
+	# Three attackers, two bots home, one human parked up-ice. Counted as one of
+	# ours he raises the bodies-we-have cap to 3, so the team owes a third defender
+	# it will never get and the read is permanently false — the exact failure the
+	# deleted time floor existed for. Excluded, the two bots are a manned structure.
+	var theirs := {
+		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
+		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
+		13: [Vector3(7.0, 0.0, 19.0), Vector3.ZERO],
+	}
+	var ours := {
+		1: [Vector3(0.0, 0.0, 24.0), Vector3.ZERO],
+		2: [Vector3(-5.0, 0.0, 23.0), Vector3.ZERO],
+		9: [Vector3(0.0, 0.0, -2.0), Vector3.ZERO],
+	}
 	assert_false(_read(ours, theirs, 11).coverage_ready,
-			"with no bot set every teammate counts, which is the safe direction")
+			"counted as one of ours, the loafer owes a body he will never deliver")
+	var r2 := AIRushRead.new()
+	r2.fill(_snapshot(ours, theirs, 11), 0, OUR_NET_Z,
+			_team_map(ours, theirs), {}, {}, true, {1: true, 2: true})
+	assert_true(r2.coverage_ready, "excluded, the two bots are a manned structure")
 
 
 # ── Hysteresis ───────────────────────────────────────────────────────────────

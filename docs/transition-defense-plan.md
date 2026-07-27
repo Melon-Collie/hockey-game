@@ -464,24 +464,51 @@ The gate could never be satisfied by the shape it gates entry into, which made t
 floor below the *only* path into the zone: every cycle spent its first 4 s in the rush
 shape and entered coverage when the timer expired, not when the team was set.
 
-The predicate is now **home-ness**: every body the shape depends on is inside our
-defensive zone (`AIRushRead._coverage_ready`). Three properties earn it:
+The predicate is now **home-ness at parity** (`AIRushRead._coverage_ready`): as many of
+our bodies have arrived inside our defensive zone as there are attackers to cover, capped
+at the bodies we have. Doctrine sets both halves.
 
-- **Satisfiable by construction.** Every zone anchor sits ≤11 m off the goal line, well
-  inside our zone's ~19 m, so a correct shape passes. Pinned by
-  `test_a_real_zone_shape_reads_as_set`, which stands the bots on the real anchors.
-- **Monotone** in the thing actually happening — recovering bodies only get deeper — so it
-  clears on its own and cannot be permanently false while the team is doing the right
-  thing. **This is what makes the time floor unnecessary rather than load-bearing, and it
-  is deleted.** `test_there_is_no_time_fallback` pins that no elapsed time overrides it.
-- **Bar is geometry, not tuning** — the blue line, the structure's own footprint.
+**Where — the blue line.** "The transition from backcheck to defensive zone coverage
+happens at the blue line — as you enter your defensive zone you identify your coverage
+responsibility." It is also the structure's own footprint: every zone anchor sits ≤11 m
+off the goal line, well inside our zone's ~19 m, so a correct shape passes by construction
+rather than by tuning. Pinned by `test_a_real_zone_shape_reads_as_set`, which stands the
+bots on the real anchors.
 
-**Bots only** (`bot_peers`; an empty set counts everyone, the stricter fail-safe). Humans
-are elected into the shape but obey nothing, so a teammate who refuses to backcheck would
-hold the predicate false forever — the one genuinely unclearable case, and what the time
-floor was really insuring against. Waiting on a body you cannot steer is the same
-"individual worst-case" reasoning this whole read replaced; the bots' structure is ready
-when *their* bodies are home.
+**How many — parity, not everybody.** Doctrine keys the end of backcheck urgency on
+NUMBERS: F2 "backchecks aggressively until numerical parity is achieved, and then protects
+the house"; F3 "skates hard to even the numbers if the team is outnumbered". The first
+implementation required EVERY body, which was **the mirror image of the bug this document
+exists to fix** — instead of five bots each concluding it was the last man back, it made
+four home bots wait on a late fifth. A team-level all-or-nothing driven by the worst
+individual, either way. Once the numbers are even the home bodies set up and the late man
+joins as a layer, which the soonest-to-arrive election delivers for free: the bodies
+already home win the important jobs and the straggler inherits the leftover.
+
+**Capped at the bodies we have.** You cannot be asked to produce a defender that does not
+exist. Without the cap, being genuinely a man short makes parity unreachable and the read
+permanently false — the failure the deleted guard existed for.
+
+Those two together keep the read **monotone** in the recovery it waits on: arrivals only
+raise the count and the bar never rises. That is what makes the time floor unnecessary
+rather than load-bearing. `test_there_is_no_time_fallback` pins that no elapsed time
+overrides it.
+
+**Bots only** (`bot_peers`; empty counts every teammate). Load-bearing in *both* terms
+now: a loafing human must not inflate the requirement he will not satisfy, nor raise the
+bodies-we-have cap. Waiting on a body you cannot steer is the same "individual worst-case"
+reasoning this whole read replaced.
+
+### Residual risk from parity (watch in playtest)
+
+Parity releases bodies into coverage while some are still 20 m up-ice, so their *route*
+now matters. Measured: 5v5 is fine — `ZONE_W_STRONG` / `ZONE_W_WEAK` anchor at depth
+9.9 / 10.2 m, i.e. the tops of the circles, which is exactly where doctrine parks a
+returning F2/F3, and the zone's soft-lock only claims men inside its own area. **3v3 is
+the exposure**: DZONE there is `PRESSURE + MARK`, and a MARK 20 m up-ice steers to a cover
+position beside his man rather than home through mid-ice (root cause §2.3). Sprint itself
+is not the issue — `BotSprintRules` gates on gap (`GAP_ENGAGE_M` 6 m), so a distant bot
+sprints either way. If symptom 2 resurfaces in 3v3, the fix is MARK's route, not the gate.
 
 Retained: the leave-coverage hysteresis (`COVERAGE_HOLD_TICKS`), instant on the way in.
 A body straddling the blue line to pressure the point is not a broken structure.
