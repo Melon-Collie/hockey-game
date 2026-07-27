@@ -8,7 +8,8 @@ extends RefCounted
 #
 # Two wire formats are defined here:
 #
-# 1. World state  (120 Hz, unreliable_ordered) — single flat PackedByteArray:
+# 1. World state  (STATE_RATE = 60 Hz, unreliable_ordered) — single flat
+#    PackedByteArray, sized once and written at offsets (see encode_world_state):
 #      u16 ws_sequence, u32 host_capture_time (0.1ms units), u8 num_skaters
 #      [u32 peer_id, skater_bytes(40), u8 queue_depth] × num_skaters
 #      puck_bytes(13)
@@ -99,21 +100,49 @@ func setup(
 
 # ── World state ──────────────────────────────────────────────────────────────
 
+# Peer-id list rebuilt per broadcast (clear+append reuses capacity, unlike the
+# old `Array(_registry.all().keys())`, which allocated a fresh array per call).
+# Also the carrier index space — carrier_idx is a position in THIS list. Safe to
+# reuse because it never leaves the codec (unlike the packet — see below).
+var _peers_scratch: Array[int] = []
+
+
+# The packet is sized ONCE and written at offsets, instead of the old
+# assemble-by-append that allocated a throwaway PackedByteArray per BLOCK —
+# header, per-skater id, per-skater state, puck, per-goalie, game-state — i.e.
+# ~26 per packet at 5v5 (~3.1k/s at 120 Hz). That churn lands on the host's
+# PHYSICS thread, and host stalls are what back up the client input queue into
+# the drain → reconcile chain (a 5v5 playtest logged 73 stalls in 13 min while
+# rendering at 157 fps — the allocator-pause signature). One allocation per
+# broadcast now, down from ~26.
+#
+# The buffer is allocated FRESH each call and deliberately NOT reused across
+# frames: consumers RETAIN the returned packet (the goal-replay recorder rings
+# it, the .mreplay writer queues it), and a retained reference to a rewritten
+# buffer is NOT copy-on-write protected — rewriting it in place silently
+# rewrites every retained frame. Pinned by
+# test_retained_reference_to_a_rewritten_buffer_is_not_protected.
 func encode_world_state() -> PackedByteArray:
 	if _state_buffer == null or not _state_buffer.is_ready() or _state_machine == null:
 		return PackedByteArray()
-	var peers: Array = Array(_registry.all().keys())
+	_peers_scratch.clear()
+	for peer_id: int in _registry.all():
+		_peers_scratch.append(peer_id)
 	var goalie_controllers: Array = _goalie_controllers_getter.call()
+	var num_skaters: int = _peers_scratch.size()
+	var num_goalies: int = goalie_controllers.size()
 	var b := PackedByteArray()
+	b.resize(WS_HEADER_SIZE + num_skaters * SKATER_BLOCK_SIZE
+			+ PUCK_BLOCK_SIZE + 1 + num_goalies * GOALIE_BLOCK_SIZE
+			+ GAME_STATE_BLOCK_SIZE)
 	# Header: u16 sequence + u32 host_capture_time (0.1ms units) + u8 skater count
-	var hdr := PackedByteArray(); hdr.resize(WS_HEADER_SIZE)
-	hdr.encode_u16(0, _ws_sequence)
+	b.encode_u16(0, _ws_sequence)
 	_ws_sequence = (_ws_sequence + 1) & 0xFFFF
-	hdr.encode_u32(2, roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
-	hdr.encode_u8(6, peers.size())
-	b.append_array(hdr)
-	# Skaters: u32 peer_id + 40B state + u8 queue_depth
-	for peer_id: int in peers:
+	b.encode_u32(2, roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
+	b.encode_u8(6, num_skaters)
+	var o: int = WS_HEADER_SIZE
+	# Skaters: u32 peer_id + SKATER_STATE_BYTES state + u8 queue_depth
+	for peer_id: int in _peers_scratch:
 		var record: PlayerRecord = _registry.get_record(peer_id)
 		var depth: int = 0
 		if record != null and not record.is_local:
@@ -124,37 +153,33 @@ func encode_world_state() -> PackedByteArray:
 			# draining a SHALLOW one means inputs genuinely arrive late.
 			# Bots are local-driven and never queue, so they can't skew the max.
 			NetworkTelemetry.record_host_queue_depth(depth)
-		var id_bytes := PackedByteArray(); id_bytes.resize(4)
 		# encode_s32 (not u32) so negative AI bot peer_ids round-trip correctly.
 		# For real ENet peer ids (always positive) the encoded bytes are
 		# identical to u32, so this is wire-compatible with existing builds.
-		id_bytes.encode_s32(0, peer_id)
-		b.append_array(id_bytes)
-		b.append_array(_encode_skater_quantized(_state_buffer.latest_skater_state(peer_id)))
-		b.append(clampi(depth, 0, 255))
+		b.encode_s32(o, peer_id); o += 4
+		o = _write_skater_quantized(b, o, _state_buffer.latest_skater_state(peer_id))
+		b.encode_u8(o, clampi(depth, 0, 255)); o += 1
 	# Puck: 12B pos+vel + 1B carrier index (0xFF = no carrier).
 	# Carrier is encoded as the index of the carrier's peer_id in the peers array
 	# above so the client can resolve it without a separate peer_id lookup.
 	var puck_state := _state_buffer.latest_puck_state()
-	b.append_array(_encode_puck_quantized(puck_state))
+	o = _write_puck_quantized(b, o, puck_state)
 	var carrier_idx: int = 0xFF
 	if puck_state.carrier_peer_id != -1:
-		var idx: int = peers.find(puck_state.carrier_peer_id)
+		var idx: int = _peers_scratch.find(puck_state.carrier_peer_id)
 		if idx >= 0:
 			carrier_idx = idx
-	b.append(carrier_idx)
+	b.encode_u8(o, carrier_idx); o += 1
 	# Goalies: u8 count + n × GOALIE_BLOCK_SIZE (43B)
-	b.append(goalie_controllers.size())
+	b.encode_u8(o, num_goalies); o += 1
 	for gc: GoalieController in goalie_controllers:
-		b.append_array(_encode_goalie_quantized(_state_buffer.latest_goalie_state(gc.team_id)))
+		o = _write_goalie_quantized(b, o, _state_buffer.latest_goalie_state(gc.team_id))
 	# Game state: 4×u8 + u16
-	var gs := PackedByteArray(); gs.resize(GAME_STATE_BLOCK_SIZE)
-	gs.encode_u8(0, clampi(_state_machine.scores[0], 0, 255))
-	gs.encode_u8(1, clampi(_state_machine.scores[1], 0, 255))
-	gs.encode_u8(2, _state_machine.current_phase)
-	gs.encode_u8(3, clampi(_state_machine.current_period, 0, 255))
-	gs.encode_u16(4, clampi(int(ceil(_state_machine.time_remaining)), 0, 65535))
-	b.append_array(gs)
+	b.encode_u8(o, clampi(_state_machine.scores[0], 0, 255))
+	b.encode_u8(o + 1, clampi(_state_machine.scores[1], 0, 255))
+	b.encode_u8(o + 2, _state_machine.current_phase)
+	b.encode_u8(o + 3, clampi(_state_machine.current_period, 0, 255))
+	b.encode_u16(o + 4, clampi(int(ceil(_state_machine.time_remaining)), 0, 65535))
 	return b
 
 
@@ -397,10 +422,11 @@ func decode_stats(data: Array) -> void:
 # Offsets: pos(0..4) vel(5..10) blade(11..16) top_hand(17..22)
 #          facing(23..24) ubrot(25..26) fav(27..28) ubav(29..30) lp_ts(31..34)
 #          flags(35) charge(36) stamina(37) stagger(38) knockdown(39) intent(40)
-static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
-	var b := PackedByteArray()
-	b.resize(SKATER_STATE_BYTES)
-	var o: int = 0
+# Writes the skater block into `b` at `o`, returning the next offset. Godot 4
+# passes Packed arrays to functions BY REFERENCE, so these writes land in the
+# caller's buffer — that is what lets the hot path fill one pre-sized packet
+# instead of allocating a block per actor.
+static func _write_skater_quantized(b: PackedByteArray, o: int, s: SkaterNetworkState) -> int:
 	b.encode_s16(o, clampi(roundi(s.position.x * 100.0), -32768, 32767)); o += 2
 	b.encode_s8(o, clampi(roundi(s.position.y * 100.0), -128, 127)); o += 1
 	b.encode_s16(o, clampi(roundi(s.position.z * 100.0), -32768, 32767)); o += 2
@@ -457,7 +483,16 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 		intent |= 0x20
 	if s.hit_committed:
 		intent |= 0x40
-	b.encode_u8(o, intent)
+	b.encode_u8(o, intent); o += 1
+	return o
+
+
+# Allocating wrapper: the standalone round-trip API the codec tests drive. The
+# broadcast path uses _write_skater_quantized directly (see _encode_buf).
+static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.resize(SKATER_STATE_BYTES)
+	_write_skater_quantized(b, 0, s)
 	return b
 
 
@@ -523,10 +558,9 @@ static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
 
 # Puck: 12 bytes (pos + vel only; carrier index handled separately in encode/decode_world_state)
 # Offsets: pos(0..5) vel(6..11)
-static func _encode_puck_quantized(s: PuckNetworkState) -> PackedByteArray:
-	var b := PackedByteArray()
-	b.resize(12)
-	var o: int = 0
+# Offset writer (see _write_skater_quantized). Writes the 12 B pos+vel block;
+# the trailing carrier_idx byte is written by encode_world_state.
+static func _write_puck_quantized(b: PackedByteArray, o: int, s: PuckNetworkState) -> int:
 	b.encode_s16(o, clampi(roundi(s.position.x * 100.0), -32768, 32767)); o += 2
 	# s16 (not s8) on Y: elevated/saucer shots exceed the s8 ±1.27 m range and
 	# would clip flat on the wire. s16 @1cm covers the puck's ~3 m max_height.
@@ -535,6 +569,14 @@ static func _encode_puck_quantized(s: PuckNetworkState) -> PackedByteArray:
 	b.encode_s16(o, clampi(roundi(s.velocity.x * 50.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.velocity.y * 50.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.velocity.z * 50.0), -32768, 32767)); o += 2
+	return o
+
+
+# Allocating wrapper for the codec tests (see _encode_skater_quantized).
+static func _encode_puck_quantized(s: PuckNetworkState) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.resize(12)
+	_write_puck_quantized(b, 0, s)
 	return b
 
 
@@ -567,10 +609,8 @@ static func _decode_puck_quantized(b: PackedByteArray) -> PuckNetworkState:
 const _POSE_OFFSET_SCALE: float = 100.0
 const _POSE_ANGLE_SCALE: float = 127.0 / PI
 
-static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
-	var b := PackedByteArray()
-	b.resize(GOALIE_BLOCK_SIZE)
-	var o: int = 0
+# Offset writer (see _write_skater_quantized).
+static func _write_goalie_quantized(b: PackedByteArray, o: int, s: GoalieNetworkState) -> int:
 	b.encode_s16(o, clampi(roundi(s.position_x * 100.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.position_z * 100.0), -32768, 32767)); o += 2
 	# Wrap into (-PI, PI] BEFORE quantizing: the -Z goalie's facing lerps around
@@ -601,7 +641,15 @@ static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
 	o = _encode_offset_wide(b, o, s.blocker_offset)
 	b.encode_s8(o, _quant_angle(s.blocker_yaw)); o += 1
 	b.encode_s8(o, _quant_angle(s.blocker_pitch)); o += 1
-	b.encode_s8(o, _quant_angle(s.head_yaw))
+	b.encode_s8(o, _quant_angle(s.head_yaw)); o += 1
+	return o
+
+
+# Allocating wrapper for the codec tests (see _encode_skater_quantized).
+static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.resize(GOALIE_BLOCK_SIZE)
+	_write_goalie_quantized(b, 0, s)
 	return b
 
 
