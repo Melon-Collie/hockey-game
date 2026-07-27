@@ -496,3 +496,89 @@ func test_a_ghosted_teammate_is_not_containment() -> void:
 	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
 			snap, Vector3(-4, 0, -14), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
 	assert_true(lost, "a ghosted teammate contains nothing")
+
+
+# ── Teammate yield (don't stab at your own teammate's puck) ──────────────────
+# The contest rule stays symmetric — a real jam should leave the puck loose.
+# What we stop is our own two bots MANUFACTURING a jam.
+
+func _blade(pos: Vector3, blade: Vector3) -> SkaterNetworkState:
+	var s := _skater(pos)
+	s.blade_contact_world = blade
+	return s
+
+
+func test_yields_when_a_teammates_blade_is_clearly_first() -> void:
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.5), Vector3(0, 0, 0.6)),   # us, blade 0.6 out
+		101: _blade(Vector3(0, 0, -1.0), Vector3(0, 0, -0.1)),  # mate, blade 0.1 out
+	}
+	assert_true(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"a teammate with his stick on it gets it — we don't stab")
+
+
+func test_does_not_yield_when_we_are_first() -> void:
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.0), Vector3(0, 0, 0.1)),
+		101: _blade(Vector3(0, 0, -1.5), Vector3(0, 0, -0.6)),
+	}
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"the nearer blade takes it")
+
+
+func test_yield_is_deadlock_free() -> void:
+	# Both bots run the read; at most one can yield, or a puck between two
+	# teammates would sit there forever. True at a dead tie AND at any gap.
+	var puck := Vector3.ZERO
+	for gap: float in [0.0, 0.05, 0.2, 0.26, 0.5]:
+		var states := {
+			100: _blade(Vector3(0, 0, 1), Vector3(0, 0, 0.1)),
+			101: _blade(Vector3(0, 0, -1), Vector3(0, 0, -(0.1 + gap))),
+		}
+		var a: bool = AILoosePuckChase.teammate_first_to_puck(
+				states, [100, 101], 100, states[100].blade_contact_world, puck)
+		var b: bool = AILoosePuckChase.teammate_first_to_puck(
+				states, [100, 101], 101, states[101].blade_contact_world, puck)
+		assert_false(a and b, "both yielded at gap %.2f — the puck would sit" % gap)
+
+
+func test_a_distant_teammate_blade_does_not_make_us_yield() -> void:
+	# His blade is nearer than ours, but neither is on the puck — nobody is
+	# about to take anything, so there is nothing to yield to.
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 6), Vector3(0, 0, 5.0)),
+		101: _blade(Vector3(0, 0, -4), Vector3(0, 0, -3.0)),
+	}
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"a blade 3 m off the puck isn't first to anything")
+
+
+func test_a_ghosted_teammate_is_not_yielded_to() -> void:
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.5), Vector3(0, 0, 0.6)),
+		101: _blade(Vector3(0, 0, -1.0), Vector3(0, 0, -0.1)),
+	}
+	states[101].is_ghost = true
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"a ghosted teammate can't play the puck, so he isn't first to it")
+
+
+func test_missing_blade_field_does_not_yield() -> void:
+	# blade_contact_world is host-only; an absent value must not be read as a
+	# blade parked at the origin (which would sit on a puck at the origin).
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.5), Vector3(0, 0, 0.6)),
+		101: _skater(Vector3(0, 0, -1.0)),
+	}
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"an absent blade field is not a blade on the puck")

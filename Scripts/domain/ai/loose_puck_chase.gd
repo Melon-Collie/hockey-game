@@ -229,6 +229,59 @@ static func puck_comes_to_reach(
 	return false
 
 
+# ── Teammate yield (don't stab at your own teammate's puck) ──────────────────
+# A contested pickup is a possession FIGHT, and it is symmetric by design: two
+# blades on the same loose puck, nobody awarded it, the puck squirting free
+# biased toward the stronger blade. That is right for opponents and right for a
+# genuine jam — three sticks whacking at a puck in the crease SHOULD leave it
+# loose. What it is not right for is our own two bots converging and mutually
+# denying each other: that isn't a jam, it's a coordination failure, and it read
+# in-game as two players arriving together and both missing.
+#
+# So the fix belongs upstream of the contest, not in it. Don't put your blade in
+# when a teammate's blade is already first to the puck — he takes it, you
+# support, which is what the players would do. The contest rule is untouched and
+# still fires on every real jam, faceoff draws included.
+#
+# Deadlock-free by construction: yielding requires the OTHER blade to be nearer
+# the puck by more than YIELD_MARGIN_M, and that relation cannot hold in both
+# directions at once, so two bots can never both yield and leave the puck.
+const YIELD_MARGIN_M: float = 0.25
+# How near a teammate's blade must be to the puck to be "on it" at all. Outside
+# this he isn't about to take anything, so he can't make anyone yield. Sized
+# just past the pickup radius (PuckController.PICKUP_RADIUS, 0.5 m) so it covers
+# the blade that is about to make contact and nothing further out.
+const YIELD_CONTEST_M: float = 0.7
+
+
+# Is a teammate's blade clearly first to this loose puck? Reads the host-only
+# `blade_contact_world` (the AI runs host-side, so it is populated); a zero
+# blade means the field is absent and we simply don't yield.
+static func teammate_first_to_puck(
+		skater_states: Dictionary, teammate_ids: Array, self_pid: int,
+		self_blade: Vector3, puck_pos: Vector3) -> bool:
+	var mine: float = _xz_dist(self_blade, puck_pos)
+	for pid: int in teammate_ids:
+		if pid == self_pid:
+			continue
+		var s: SkaterNetworkState = skater_states.get(pid)
+		if s == null or s.is_ghost:
+			continue
+		var blade: Vector3 = s.blade_contact_world
+		if blade == Vector3.ZERO:
+			continue
+		var theirs: float = _xz_dist(blade, puck_pos)
+		if theirs <= YIELD_CONTEST_M and theirs < mine - YIELD_MARGIN_M:
+			return true
+	return false
+
+
+static func _xz_dist(a: Vector3, b: Vector3) -> float:
+	var dx: float = a.x - b.x
+	var dz: float = a.z - b.z
+	return sqrt(dx * dx + dz * dz)
+
+
 # Geometry only: does the walk ever bring the puck inside `band` of `pos`?
 # The "does he even have to MOVE to play this?" half of puck_comes_to_reach,
 # without the timing test — which is the right question for a body whose

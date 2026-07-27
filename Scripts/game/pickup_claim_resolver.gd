@@ -142,8 +142,7 @@ func arbitrate_present_grab(grabber: Skater, grabber_peer_id: int,
 	var pc: PuckController = _puck_controller_getter.call() as PuckController
 	if pc == null:
 		return false
-	if classify_present_grab(_pending_host_timestamp, now) == PresentGrab.CONTESTED \
-			and not _same_team(grabber_peer_id, _pending_peer_id):
+	if classify_present_grab(_pending_host_timestamp, now) == PresentGrab.CONTESTED:
 		# Genuine 50/50 — live grabber's kinematics vs the pending claimant's
 		# stored client-reported blade (its authoritative aim at its view-time),
 		# exactly mirroring the claim-vs-claim contest resolution. The claimant
@@ -313,10 +312,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 		# fairness model is "two players reaching for the puck at roughly the
 		# same client-time," which is what host_timestamp captures.
 		var claim_delta: float = absf(host_timestamp - _pending_host_timestamp)
-		# Teammates never contest each other for a loose puck — see _same_team.
-		# Falling through to the else branch grants the earlier stamp, which is
-		# what would have happened on an ideal network anyway.
-		if claim_delta < CONTEST_WINDOW_S and not _same_team(peer_id, _pending_peer_id):
+		if claim_delta < CONTEST_WINDOW_S:
 			# Genuine contest — both claims stamped within window.
 			# Resolve the prior claimant at contest time. If they've disconnected
 			# or demoted in the contest window, treat the new claim as uncontested.
@@ -356,23 +352,6 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 				NetworkManager.send_pickup_claim_nack(peer_id)
 	else:
 		_arm_pending(peer_id, host_timestamp, blade_curr, blade_prev)
-
-
-# Are these two claimants on the SAME team? A contested pickup models a
-# possession fight — two opponents reaching the same loose puck, nobody awarded
-# it, the puck squirting free biased toward the stronger blade. Between
-# teammates there is no fight: the team gains possession whichever stick gets
-# there, so the squirt only served to take the puck away from a team for the
-# crime of converging on it. Unknown teams (missing record) fall back to
-# contesting, which is the pre-existing behavior and the safe side — it can
-# only ever produce a loose puck, never a wrong grant.
-func _same_team(peer_a: int, peer_b: int) -> bool:
-	if _registry == null or peer_a == -1 or peer_b == -1:
-		return false
-	var team_a: int = _registry.team_id_by_peer.get(peer_a, -1)
-	if team_a == -1:
-		return false
-	return _registry.team_id_by_peer.get(peer_b, -1) == team_a
 
 
 # Arm the contest window for a claimant, stashing the (reach-clamped) client blade

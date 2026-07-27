@@ -2528,6 +2528,14 @@ func _chase_reception_aim_target(snapshot: WorldSnapshot, self_pos: Vector3) -> 
 	if _engagement_cooldown > 0:
 		return Vector3(self_pos.x, 0.0, self_pos.z)
 	var puck_pos: Vector3 = snapshot.puck_state.position
+	# A teammate's blade is already first to it — take the stick OFF the puck
+	# (same pull-back the engagement cooldown uses). Two of our blades on the
+	# same puck is a contested pickup, and the contest is symmetric: it squirts
+	# free and cools both blades down, so jamming a puck our own man already has
+	# is a pure giveaway. He takes it, we support. The contest rule itself is
+	# deliberately untouched — a real jam should still leave the puck loose.
+	if _teammate_first_to_puck(snapshot, puck_pos):
+		return Vector3(self_pos.x, 0.0, self_pos.z)
 	# Inside reach: aim at the puck's ACTUAL position (leading here would put the
 	# blade past a puck already on the stick).
 	if self_pos.distance_to(puck_pos) <= _blade_reach:
@@ -6127,9 +6135,33 @@ func _loose_puck_in_reach_band(snapshot: WorldSnapshot, self_pos: Vector3) -> bo
 	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 	if self_state == null or self_state.is_ghost:
 		return false
+	# Never let the band walk us into a contested pickup with our own man: if a
+	# teammate's blade is already first to it, the puck is his.
+	if _teammate_first_to_puck(snapshot, snapshot.puck_state.position):
+		return false
 	return AILoosePuckChase.puck_comes_to_reach(
 			snapshot.puck_state.position, snapshot.puck_state.velocity,
 			self_pos, self_state.velocity, _self_max_speed, _blade_reach)
+
+
+# Is a teammate's blade clearly first to this puck? See
+# AILoosePuckChase.teammate_first_to_puck — deadlock-free, so we can never both
+# yield and leave the puck sitting.
+func _teammate_first_to_puck(snapshot: WorldSnapshot, puck_pos: Vector3) -> bool:
+	# has()+index, not get(_team_id, []): GDScript builds the default eagerly, so
+	# the literal would heap-allocate an Array on EVERY call — and this runs per
+	# tick while chasing (the live aim refresh re-derives on skipped ticks too).
+	if not snapshot.teammate_ids_by_team.has(_team_id):
+		return false
+	var mates: Array = snapshot.teammate_ids_by_team[_team_id]
+	if mates.is_empty():
+		return false
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return false
+	return AILoosePuckChase.teammate_first_to_puck(
+			snapshot.skater_states, mates, _peer_id,
+			self_state.blade_contact_world, puck_pos)
 
 
 # Returns true if this bot is the closest teammate to the current
