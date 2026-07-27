@@ -1839,12 +1839,20 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# lane, own-slot crossing, dead lane) reject a receiver before his value
 		# is ever priced — a covered man must not be paid for.
 		_last_receiver_space = -1.0
+		# Exact prune floor for this receiver: the running best, un-scaled by any
+		# bonus applied to him AFTER scoring. A ping target's EV is multiplied by
+		# PING_PASS_EV_MULT below, so pruning him at the raw best would discard a
+		# feed that goes on to win — divide the floor by the same factor and the
+		# bound stays sound.
+		var prune_floor: float = best_pass_score
+		if peer_id == ctx.ping_pass_target_peer:
+			prune_floor /= PING_PASS_EV_MULT
 		# Flat feed at the magnet pace.
 		_last_flat_variant_lane = 0.0
 		var s: float = _pass_variant_ev(
 				ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 				pass_origin, pass_speed, false, receiver_is_one_timer,
-				self_facing_xz, our_goalie, carrier_in_oz, -1.0)
+				self_facing_xz, our_goalie, carrier_in_oz, -1.0, prune_floor)
 		var receiver_space: float = _last_receiver_space
 		var use_saucer: bool = false
 		# Saucer variant: the fastest RECEIVABLE flip — the magnet pace when
@@ -1868,7 +1876,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			var s_saucer: float = _pass_variant_ev(
 					ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 					pass_origin, saucer_speed, true, receiver_is_one_timer,
-					self_facing_xz, our_goalie, carrier_in_oz, receiver_space)
+					self_facing_xz, our_goalie, carrier_in_oz, receiver_space,
+					maxf(prune_floor, s))
 			if s_saucer > s:
 				s = s_saucer
 				use_saucer = true
@@ -1909,7 +1918,8 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 		pass_origin: Vector3, pass_speed: float, saucer: bool,
 		receiver_is_one_timer: bool, self_facing_xz: Vector2,
 		our_goalie: Vector3, carrier_in_oz: bool,
-		receiver_space: float = -1.0) -> float:
+		receiver_space: float = -1.0,
+		useless_below: float = -INF) -> float:
 	# Intercept-aware lead, shared with the state machine's firing aim.
 	# flight_t is the SOLVED time (refined against the predicted
 	# intercept), used downstream for opponent/goalie projection and
@@ -1976,7 +1986,7 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 	return _pass_ev(ctx, receiver, pass_speed, flight_t,
 			receiver_release_t, flight_t + rotation_time, our_goalie,
 			receiver_caps, lane, miss_prob, receiver_state.velocity,
-			receiver_space)
+			receiver_space, useless_below)
 
 
 # Expected value of firing a pass from our current position to
@@ -2032,7 +2042,8 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		lane: float = -1.0,
 		miss_prob: float = AIActionScoring.PASS_MISS_BASE_PROB,
 		receiver_vel: Vector3 = Vector3.ZERO,
-		receiver_space: float = -1.0) -> float:
+		receiver_space: float = -1.0,
+		useless_below: float = -INF) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# The pass flies from the PUCK (the blade), not the body — judge the lane
 	# the puck actually travels. From behind the net the two differ by up to a
@@ -2098,28 +2109,6 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# _scratch_opponents_pass, now free — the instant value above already consumed it.)
 	receiver_value = maxf(receiver_value, _receiver_drive_in_value(
 			ctx, receiver_spot, receiver_shot_speed, receiver_caps, receiver_vel))
-	# The receiver pays the SAME forward-pressure toll the carrier's own score
-	# does: his value is what he can do with the puck from HIS spot, and a mate
-	# whose netward path is just as clogged as ours is not an upgrade. Without
-	# the mirror, two equally-covered wingers at the blue line each rated the
-	# other man's future above their own discounted present, and the puck
-	# ping-ponged along the line (an offside factory) instead of entering the
-	# zone. Symmetric coverage → symmetric discount → the man ALREADY holding
-	# the puck keeps it; the pass wins only when the mate is genuinely clearer.
-	# Priced at the receiver's OWN velocity and build, exactly as the carrier's
-	# side is (see _forward_clearance_at): a mate curling back into the play
-	# reads less space than one in stride through the same ice, and a lateral
-	# feed can no longer beat a carry by being credited with momentum it does
-	# not have while the carrier's is thrown away.
-	# `receiver_space` is solved once per receiver by _compute_best_pass and
-	# shared across its variants; < 0 means "compute it here" (the developing-
-	# outlet feed, which prices a single hypothetical spot).
-	if receiver_space < 0.0:
-		receiver_space = _forward_clearance_at(
-				ctx, receiver_spot, receiver_vel, receiver_caps)
-	# Published for the caller's per-receiver reuse (see _compute_best_pass).
-	_last_receiver_space = receiver_space
-	receiver_value *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, receiver_space)
 	var time_decay: float = AIActionScoring.delay_discount(delay_s)
 	# Reception pressure — "how pressured is the receiver," from the same
 	# reachable-set model the carrier reads on ITSELF (current_safety). A defender
@@ -2145,6 +2134,38 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# miss, but a stick on the catch).
 	var clean_lane: float = lane * (1.0 - miss_prob)   # reaches the tape, in flight
 	var completion: float = release_clean * clean_lane * reception_safety
+	# CEILING PRUNE (exact). The space toll and every turnover cost below can only
+	# LOWER this feed's EV — space multiplies by at most 1.0, costs subtract — so
+	# the undiscounted benefit is a hard upper bound. A receiver who cannot beat
+	# the best feed found so far even at full marks is decided, and pricing him
+	# further is pure hot-path cost. This matters because the space read is the
+	# dominant term here and it runs PER TEAMMATE: in 5v5 the carrier was paying
+	# for four of them every re-eval to use one. Same exact-bound pattern as
+	# _score_move_candidate_base's prune ladder.
+	if receiver_value * completion * time_decay <= useless_below:
+		return 0.0
+	# The receiver pays the SAME forward-pressure toll the carrier's own score
+	# does: his value is what he can do with the puck from HIS spot, and a mate
+	# whose netward path is just as clogged as ours is not an upgrade. Without
+	# the mirror, two equally-covered wingers at the blue line each rated the
+	# other man's future above their own discounted present, and the puck
+	# ping-ponged along the line (an offside factory) instead of entering the
+	# zone. Symmetric coverage → symmetric discount → the man ALREADY holding
+	# the puck keeps it; the pass wins only when the mate is genuinely clearer.
+	# Priced at the receiver's OWN velocity and build, exactly as the carrier's
+	# side is (see _forward_clearance_at): a mate curling back into the play
+	# reads less space than one in stride through the same ice, and a lateral
+	# feed can no longer beat a carry by being credited with momentum it does
+	# not have while the carrier's is thrown away.
+	# Solved once per receiver by _compute_best_pass and shared across its
+	# variants; < 0 means "compute it here" (the developing-outlet feed, which
+	# prices a single hypothetical spot).
+	if receiver_space < 0.0:
+		receiver_space = _forward_clearance_at(
+				ctx, receiver_spot, receiver_vel, receiver_caps)
+	# Published for the caller's per-receiver reuse (see _compute_best_pass).
+	_last_receiver_space = receiver_space
+	receiver_value *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, receiver_space)
 	# Clean per-action EV: prob(complete) × value(teammate has puck at receiver)
 	# minus the turnover cost of each loss mode. The pressure the
 	# carrier is under is priced by the CARRY/HOLD alternatives' own strip cost

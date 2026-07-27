@@ -4258,6 +4258,14 @@ static func controlled_space(from: Vector3, from_vel: Vector3,
 			if absf(sample.x) > GameRules.INNER_HALF_WIDTH \
 					or absf(sample.z) > GameRules.INNER_HALF_LENGTH:
 				continue   # off the playing surface — see the WEIGHTING note
+			# A sample whose straight path runs through a cage is not ice this
+			# carrier can take, so it leaves both sums exactly like an off-surface
+			# one. Dropping it also keeps the fan off time_to_arrive's around-the-
+			# net routing, which prices four waypoints on two legs each — an 8x
+			# per-sample cost that fired on the whole fan whenever the carrier
+			# worked near a goal line, and was the fan's worst-tick spike.
+			if carry_path_blocked_by_net(from, sample):
+				continue
 			var c: float = control_at(sample, from, from_vel, from_caps,
 					opponents, opponent_vels, opponent_caps)
 			# Polar area element ∝ r, so the outer ring stands for more ice.
