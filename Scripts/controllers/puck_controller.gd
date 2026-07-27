@@ -474,8 +474,17 @@ func _contest_blade_velocity(skater: Skater, raw_blade_vel: Vector3) -> Vector3:
 # Host present-time only, and only invoked at the rare instant a pickup is about
 # to be granted, so it adds no per-tick cost on the common no-pickup path.
 func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3, puck_airborne: bool) -> Skater:
+	var first_team: int = _team_id_by_skater.get(first, -1)
 	for skater: Skater in skaters:
 		if skater == first or skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
+			continue
+		# A possession contest is between OPPONENTS. Two teammates reaching the
+		# same loose puck are not fighting over it — the team gains possession
+		# either way, and whoever's blade got there takes it. Squirting it out
+		# from between them (and cooling both blades down) denied a team the
+		# puck for converging on it, which is what a scramble IS: it read as
+		# two players arriving and both missing.
+		if first_team != -1 and _team_id_by_skater.get(skater, -1) == first_team:
 			continue
 		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 				or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:

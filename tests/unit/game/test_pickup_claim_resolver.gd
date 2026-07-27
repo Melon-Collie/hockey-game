@@ -147,3 +147,30 @@ func test_arbitrate_despawned_claimant_clears_and_proceeds() -> void:
 	assert_false(resolver.arbitrate_present_grab(null, 5, Vector3.ZERO, Vector3.ZERO, 10.0),
 			"despawned claimant -> grab proceeds")
 	assert_eq(resolver._pending_peer_id, -1, "stale pending cleared")
+
+
+# ── Teammates never contest each other for a loose puck ──────────────────────
+# A contested pickup models a possession FIGHT — two opponents reaching the
+# same puck, nobody awarded it, the puck squirting free. Between teammates
+# there is no fight: the team gains possession whichever stick gets there, so
+# squirting it away only denied a team the puck for converging on it. That read
+# in-game as two players arriving together and both missing.
+
+func test_same_team_is_not_a_contest() -> void:
+	registry.team_id_by_peer[1] = 0
+	registry.team_id_by_peer[2] = 0
+	assert_true(resolver._same_team(1, 2), "two peers on team 0 are teammates")
+
+
+func test_opponents_are_a_contest() -> void:
+	registry.team_id_by_peer[1] = 0
+	registry.team_id_by_peer[2] = 1
+	assert_false(resolver._same_team(1, 2), "opposing peers still contest")
+
+
+func test_unknown_team_falls_back_to_contesting() -> void:
+	# A missing registry entry must not silently grant a pickup — contesting is
+	# the safe side, since its only outcome is a loose puck.
+	registry.team_id_by_peer[1] = 0
+	assert_false(resolver._same_team(1, 99), "unknown peer is not a known teammate")
+	assert_false(resolver._same_team(-1, 1), "no claimant is not a teammate")
