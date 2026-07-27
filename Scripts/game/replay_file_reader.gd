@@ -13,6 +13,15 @@ extends RefCounted
 const _MAX_FILE_BYTES: int = 200 * 1024 * 1024  # 200 MB
 const _MAX_HEADER_BYTES: int = 64 * 1024        # 64 KB
 const _MAX_FRAME_BYTES: int = 64 * 1024         # 64 KB
+
+# read_meta memo, keyed on "path|modified_time" — a .mreplay is immutable once
+# its footer is written, and the filename IS the game_id, so a completed file
+# can never change under the key. Static (survives scene changes, like
+# HockeyRink._build_cache) because the career screen is rebuilt with the HUD.
+# Bounded by the replay purge (20 files on disk) plus stale mtime keys; the cap
+# is a backstop, and clearing wholesale is fine — the cost of a miss is one walk.
+static var _meta_cache: Dictionary = {}
+const _META_CACHE_MAX: int = 64
 #
 # Returns:
 #   {
@@ -167,7 +176,47 @@ static func read_header_only(path: String) -> Dictionary:
 # Returns { ok, header, footer, truncated, error }. `truncated` is true (and
 # footer empty) when the file has no END_OF_RECORDS sentinel — a recording that
 # crashed mid-game; the header is still valid, so the browser can list it.
+#
+# MEMOIZED (see _meta_cache): the seek walk is cheap per frame but there are tens
+# of thousands of them, and the career screen re-reads every listed replay on
+# every open — twice, since it renders local files first and again when the
+# backend history lands.
 static func read_meta(path: String) -> Dictionary:
+	var key: String = _meta_cache_key(path)
+	if not key.is_empty():
+		var cached: Variant = _meta_cache.get(key)
+		if cached is Dictionary:
+			return cached as Dictionary
+	var meta: Dictionary = _read_meta_uncached(path)
+	# Only a COMPLETE file is immutable, so only that is safe to memoize: a
+	# recording still in progress (truncated, no footer yet) grows under us — and
+	# the career screen is reachable from the in-game side menu, mid-match. A
+	# failed read isn't cached either, so a transient error retries.
+	if not key.is_empty() and bool(meta.get("ok", false)) \
+			and not bool(meta.get("truncated", true)):
+		if _meta_cache.size() >= _META_CACHE_MAX:
+			_meta_cache.clear()  # bounded; the next open just re-walks
+		_meta_cache[key] = meta
+	return meta
+
+
+# Identity of the bytes behind `path`: mtime AND length, since mtime alone is
+# second-granular. In the wild a replay's filename is its game_id (a UUID), so
+# path alone already identifies a completed file — the other two terms are what
+# keep a REUSED path (the GUT fixture writes several files to one) honest.
+# Empty string when the file can't be opened: don't look up, don't store.
+static func _meta_cache_key(path: String) -> String:
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var key: String = "%s|%d|%d" % [path, FileAccess.get_modified_time(path), file.get_length()]
+	file.close()
+	return key
+
+
+# Callers only ever READ the returned dictionary; it is handed out by reference
+# rather than duplicated, so a mutation would poison the cache.
+static func _read_meta_uncached(path: String) -> Dictionary:
 	var failure := func(msg: String) -> Dictionary:
 		return {"ok": false, "header": {}, "footer": {}, "truncated": false, "error": msg}
 

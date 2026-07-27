@@ -133,6 +133,33 @@ func test_read_meta_returns_header_and_footer_without_frames() -> void:
 	assert_false(meta.has("frames"))
 
 
+# read_meta memoizes on (path, mtime, length) — the frame walk is tens of
+# thousands of seek steps and the career screen re-reads every listed replay on
+# every open. The memo must be keyed on the BYTES, not the path: rewriting the
+# same path has to read fresh, or the Games list would show a stale card.
+func test_read_meta_memo_serves_the_same_file_and_refreshes_a_rewritten_one() -> void:
+	var writer := ReplayFileWriter.new()
+	assert_true(writer.open(TEST_PATH, {"game_id": "memo-1"}))
+	writer.enqueue_frame(0.0, PackedByteArray([1, 2, 3]))
+	writer.close_async({"final_score_home": 4, "final_score_away": 1})
+
+	var first: Dictionary = ReplayFileReader.read_meta(TEST_PATH)
+	var second: Dictionary = ReplayFileReader.read_meta(TEST_PATH)
+	assert_eq(second.header.game_id, "memo-1")
+	assert_eq(int(second.footer.final_score_home), 4)
+	assert_true(first == second, "a re-read of the same bytes must match")
+
+	# Same path, different game — a length change alone must invalidate.
+	var rewriter := ReplayFileWriter.new()
+	assert_true(rewriter.open(TEST_PATH, {"game_id": "memo-2-with-a-longer-header"}))
+	rewriter.enqueue_frame(0.0, PackedByteArray([9]))
+	rewriter.close_async({"final_score_home": 0, "final_score_away": 7})
+
+	var fresh: Dictionary = ReplayFileReader.read_meta(TEST_PATH)
+	assert_eq(fresh.header.game_id, "memo-2-with-a-longer-header")
+	assert_eq(int(fresh.footer.final_score_away), 7)
+
+
 func test_read_meta_on_truncated_file_yields_header_no_footer() -> void:
 	# A recording with no END_OF_RECORDS (crash) still lists: header valid,
 	# footer empty, truncated true.
