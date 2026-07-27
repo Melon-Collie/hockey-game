@@ -1226,6 +1226,17 @@ static func open_net_danger(
 	# dial: a wider hand made the fuzzed window wider too, so a covered shot
 	# scored HIGHER the worse you shot. Nothing the shooter does may ever
 	# improve the geometry.
+	return danger_from_margin(shooter, goalie_pos, margin, aim_spread_rad)
+
+
+# The margin -> make-probability mapping, split out so it has exactly one
+# implementation. AIDangerField needs it separately because interpolating the
+# MARGIN and mapping afterwards is far more accurate than interpolating the
+# mapped value: the margin is smooth geometry, while the mapping is a sigmoid
+# whose knee is the steepest feature on the whole surface. Same lattice, most
+# of the error gone.
+static func danger_from_margin(shooter: Vector3, goalie_pos: Vector3,
+		margin: float, aim_spread_rad: float = 0.0) -> float:
 	return clampf(_placement_probability(
 			_softplus(margin, goalie_edge_spread(shooter, goalie_pos)),
 			placement_spread(aim_spread_rad)), 0.0, 1.0)

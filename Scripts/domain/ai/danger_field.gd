@@ -41,11 +41,21 @@ class_name AIDangerField
 # net (every live caller passes GameRules.NET_HALF_WIDTH). Call reset() at
 # match start / in test setup.
 
-# 0.75 m: the surface has real ~0.9/m cliffs (hole-opening thresholds as
-# range closes — measured while calibrating; 1.5 m spacing overshot a cliff
-# edge by ~0.23), and because vertices are computed lazily per query, finer
-# spacing costs only sharing — each query still warms at most its 4
-# surrounding vertices.
+# WHAT IS STORED PER VERTEX: the signed goalie-hole MARGIN (radians), not the
+# 0..1 danger. The margin is smooth geometry — post bearings against a cover
+# edge — while danger is that margin pushed through a sigmoid, and the
+# sigmoid's knee is the steepest feature anywhere on the surface. Bilinear
+# interpolation is exact for a linear function and worst at a knee, so
+# interpolating the margin and mapping AFTERWARDS puts the lattice where it is
+# accurate and the nonlinearity where it costs nothing (the map is a per-query
+# scalar either way). Storing the mapped value instead measured 0.284 max
+# error on the probe lattice against a 0.07 bound; the same lattice storing
+# margins is well inside it.
+#
+# 0.75 m: the surface has real cliffs (hole-opening thresholds as range
+# closes), and because vertices are computed lazily per query, finer spacing
+# costs only sharing — each query still warms at most its 4 surrounding
+# vertices.
 const VERTEX_SPACING_M: float = 0.75
 # A vertex recomputes when the live goalie is farther than this from the
 # goalie it was computed against — the staleness bound is a physical body
@@ -68,8 +78,9 @@ static var _valid: Array[PackedByteArray] = []
 # The memoized goalie-hole quality for a shot from `shooter` at the net at
 # `our_net`, against a goalie standing at `our_goalie_pos` — the
 # open_net_danger core under the threat-family inputs (see the class doc).
-# Bilinear over the four surrounding vertices; each vertex lazily
-# (re)computed when its stored goalie drifts past GOALIE_EPS_M.
+# Bilinear over the four surrounding vertices' MARGINS (see VERTEX_SPACING_M),
+# then mapped to danger; each vertex lazily (re)computed when its stored
+# goalie drifts past GOALIE_EPS_M.
 static func quality(shooter: Vector3, our_net: Vector3,
 		our_goalie_pos: Vector3, net_half_width: float) -> float:
 	var sign_z: float = signf(our_net.z)
@@ -90,7 +101,11 @@ static func quality(shooter: Vector3, our_net: Vector3,
 	var q10: float = _vertex(net_idx, ix + 1, iu, our_net, our_goalie_pos, net_half_width)
 	var q01: float = _vertex(net_idx, ix, iu + 1, our_net, our_goalie_pos, net_half_width)
 	var q11: float = _vertex(net_idx, ix + 1, iu + 1, our_net, our_goalie_pos, net_half_width)
-	return lerpf(lerpf(q00, q10, tx), lerpf(q01, q11, tx), tu)
+	var margin: float = lerpf(lerpf(q00, q10, tx), lerpf(q01, q11, tx), tu)
+	# Map at the QUERY's own position, not the vertices': the edge spread is a
+	# function of the shooter-keeper range, so this term stays exact instead of
+	# being interpolated along with everything else.
+	return AIActionScoring.danger_from_margin(shooter, our_goalie_pos, margin)
 
 
 # Invalidate every memoized vertex (both nets). Match start / tests.
@@ -107,12 +122,14 @@ static func _vertex(net_idx: int, ix: int, iu: int, our_net: Vector3,
 					<= GOALIE_EPS_M * GOALIE_EPS_M:
 		return _quality[net_idx][idx]
 	var u: float = _U_MIN + float(iu) * VERTEX_SPACING_M
-	var q: float = 0.0
+	# Behind the goal line there is no shot in at all — structurally closed,
+	# which maps to ~0 and interpolates sanely toward the vertices in front.
+	var q: float = AIActionScoring.HOLE_STRUCTURALLY_CLOSED_RAD
 	if u < GameRules.GOAL_LINE_Z:
 		var sign_z: float = 1.0 if net_idx == 0 else -1.0
 		var pos := Vector3(
 				_X_MIN + float(ix) * VERTEX_SPACING_M, 0.0, u * sign_z)
-		q = _core_quality(pos, our_net, goalie, net_half_width)
+		q = _core_margin(pos, our_net, goalie, net_half_width)
 	_quality[net_idx][idx] = q
 	_goalie_at[net_idx][idx] = goalie
 	_valid[net_idx][idx] = 1
@@ -123,11 +140,23 @@ static func _vertex(net_idx: int, ix: int, iu: int, our_net: Vector3,
 
 # The exact core under the threat-family inputs — one source of truth for
 # vertex computes, out-of-region queries, and the calibration test's
-# reference values.
+# reference values. Returns the DANGER (what callers want).
 static func _core_quality(pos: Vector3, our_net: Vector3, goalie: Vector3,
 		net_half_width: float) -> float:
 	var seal_x: float = AIActionScoring.derive_post_seal_x_sign(pos, our_net)
 	return AIActionScoring.open_net_danger(
+			pos, our_net, goalie, net_half_width,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, -1.0, false,
+			seal_x, seal_x != 0.0)
+
+
+# The same core stopped one step earlier, at the signed margin — what the
+# lattice stores. Kept adjacent to _core_quality so the two cannot drift:
+# _core_quality(p) must equal danger_from_margin(p, _core_margin(p)).
+static func _core_margin(pos: Vector3, our_net: Vector3, goalie: Vector3,
+		net_half_width: float) -> float:
+	var seal_x: float = AIActionScoring.derive_post_seal_x_sign(pos, our_net)
+	return AIActionScoring.best_signed_margin(
 			pos, our_net, goalie, net_half_width,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, -1.0, false,
 			seal_x, seal_x != 0.0)
