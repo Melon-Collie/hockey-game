@@ -52,15 +52,27 @@ class_name AIDangerField
 # error on the probe lattice against a 0.07 bound; the same lattice storing
 # margins is well inside it.
 #
-# 0.75 m: the surface has real cliffs (hole-opening thresholds as range
-# closes), and because vertices are computed lazily per query, finer spacing
-# costs only sharing — each query still warms at most its 4 surrounding
-# vertices.
+# 0.75 m: away from the keeper the margin is a smooth, near-linear function of
+# position and bilinear interpolation is accurate at this spacing. Vertices are
+# computed lazily per query, so spacing costs only sharing.
+#
+# Refining it does NOT help near the keeper, and briefly made things far worse
+# (0.111 -> 0.504 at half the spacing): the geometry is genuinely SINGULAR at
+# his body — the cover's tangent cone opens toward a right angle as the shooter
+# closes on him, and inside it _hole_margin returns the structural sentinel,
+# which is not a physical margin and must never be interpolated against a real
+# one. Finer spacing just walks more vertices into that neighbourhood. The
+# region is excluded from the memo instead (EXACT_RADIUS_M).
 const VERTEX_SPACING_M: float = 0.75
 # A vertex recomputes when the live goalie is farther than this from the
 # goalie it was computed against — the staleness bound is a physical body
 # displacement, not a time.
 const GOALIE_EPS_M: float = 0.25
+# Radius around the keeper inside which queries bypass the lattice entirely.
+# Covers the widest band cover (~0.85 m) plus the puck and a margin, i.e. the
+# whole region where the shooter is close enough that his body geometry — and
+# the smother sentinel — dominate.
+const EXACT_RADIUS_M: float = 2.0
 
 const _U_MIN: float = GameRules.BLUE_LINE_Z
 const _U_MAX: float = GameRules.RINK_HALF_LENGTH
@@ -83,6 +95,15 @@ static var _valid: Array[PackedByteArray] = []
 # goalie drifts past GOALIE_EPS_M.
 static func quality(shooter: Vector3, our_net: Vector3,
 		our_goalie_pos: Vector3, net_half_width: float) -> float:
+	# Singular neighbourhood: within a body's-length of the keeper the tangent
+	# cone opens fast and the structural sentinel appears, so no lattice
+	# represents it. Compute exactly — these queries are a handful per tick
+	# (a threat read of a shooter already on top of our goalie) and the exact
+	# core is the same call the vertices make.
+	var gdx: float = shooter.x - our_goalie_pos.x
+	var gdz: float = shooter.z - our_goalie_pos.z
+	if gdx * gdx + gdz * gdz < EXACT_RADIUS_M * EXACT_RADIUS_M:
+		return _core_quality(shooter, our_net, our_goalie_pos, net_half_width)
 	var sign_z: float = signf(our_net.z)
 	var u: float = shooter.z * sign_z   # depth axis: + toward the net's end wall
 	var fx: float = (shooter.x - _X_MIN) / VERTEX_SPACING_M

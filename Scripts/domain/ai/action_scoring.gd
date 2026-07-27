@@ -508,24 +508,28 @@ const MIN_RELEASE_SPREAD_RAD: float = 0.010
 
 # ── The cover edge is not a knife-edge ───────────────────────────────────────
 # 1σ of WHERE the goal/save boundary actually falls, measured laterally at the
-# keeper's body. The hole geometry below computes one exact edge from one
-# predicted pose; the real edge is a distribution, and this is its width. It
-# is not a shape parameter — it is the sum of things the single-pose read
-# cannot resolve:
-#   · the pad-edge lottery — a puck grazing the edge deflects, and whether
-#     that deflection stays out is not decided by the bearing alone, so the
-#     outcome is unresolved across roughly the puck's own radius;
-#   · tracking lag — he is still settling inside the read quantum, so his
-#     centre at arrival is not exactly where the prediction put it (a t-push
-#     at 3.8 m/s covers a few cm inside one).
-# Deliberately NOT the pad's full stance-to-splay swing (~0.20 m): the
-# butterfly drop RACE in _band_cover already resolves where in that swing he
-# is, and charging it again here would double-count.
-# Consumed by boundary_spread (open_net_danger), which foreshortens it to an
-# angle at the shooter's range. This is the number the instruments calibrate:
-# it sets how much range the decision currency has, so
-# test_shot_currency_saturation.gd is the readout when it moves.
-const GOALIE_EDGE_SOFTNESS_M: float = 0.07
+# keeper's body. The hole geometry computes one exact edge from one predicted
+# pose; the real edge is a distribution, and this is its width.
+#
+# Derived by ELIMINATION rather than picked, because most of what looks like
+# edge uncertainty is already charged somewhere else:
+#   · pose — a pad's x-extent swings ~0.20 m between the stance column and the
+#     splayed butterfly edge, but the DROP RACE in _band_cover already resolves
+#     where in that swing he is;
+#   · the puck's own radius — a puck whose centre passes within a radius of the
+#     edge is clipped, and _band_cover ALREADY adds PUCK_COLLISION_RADIUS to
+#     the cover for exactly that. Charging it again here was a double-count,
+#     and it is where most of the original 0.07 came from;
+#   · the lateral push — explicit and kinematic (_goalie_lateral_reach).
+# What is left is the timing residual the push model cannot resolve: his
+# position at arrival versus the prediction, within one read quantum. At the
+# t-push speed that is about a tick's worth of travel, ~0.03 m.
+#
+# Consumed by goalie_edge_spread, which foreshortens it to an angle at the
+# shooter's range. It sets how much range the decision currency has, so
+# test_shot_currency_saturation.gd and the real-goalie calibration are the
+# readouts whenever it moves.
+const GOALIE_EDGE_SOFTNESS_M: float = 0.03
 
 # 1σ of a well-aimed shot's arrival scatter BEYOND the shooter's aim error, in
 # radians. ZERO, and that is a measurement rather than a default: the release
@@ -1233,9 +1237,48 @@ static func open_net_danger(
 # of the error gone.
 static func danger_from_margin(shooter: Vector3, goalie_pos: Vector3,
 		margin: float, aim_spread_rad: float = 0.0) -> float:
-	return clampf(_placement_probability(
-			_softplus(margin, goalie_edge_spread(shooter, goalie_pos)),
-			placement_spread(aim_spread_rad)), 0.0, 1.0)
+	return _make_probability(margin, placement_spread(aim_spread_rad),
+			goalie_edge_spread(shooter, goalie_pos))
+
+
+# Half-normal moments of |placement error| in units of its own σ:
+# E = √(2/π), Var = 1 − 2/π. Properties of the distribution, not tunables.
+const _HALFNORM_MEAN: float = 0.7978845608
+const _HALFNORM_VAR: float = 0.3633802276
+
+
+# P(goal) for a signed `margin`, a shooter whose placement scatters by
+# `sigma_p`, and a cover edge uncertain by `sigma_e` — all radians at the eye.
+#
+# The shot beats him iff the puck lands inside the window, and the window's
+# half-width is itself uncertain: |X| < margin/2 + ε, with X the placement
+# error and ε the edge error. Rearranged, that is a single CDF —
+#
+#     P = P(|X| − ε < margin/2)
+#
+# — of a half-normal minus a normal, evaluated here at its first two moments.
+# Max error 0.075 against a dense numerical reference across the whole
+# (margin, σ_p, σ_e) operating grid, mean 0.014, at the cost of one erf.
+#
+# HOW THEY COMPOSE MATTERS, and the first version got it wrong. Softening the
+# window by σ_e and then hitting that softened window with precision σ_p
+# treats edge uncertainty as extra window the shooter can reliably exploit:
+# the tail came out proportional to σ_e/σ_p, so an identical shot — the same
+# number of edge sigmas inside the cover — scored 0.041 against a distant
+# keeper and 0.343 against a near one. Nothing physical says how covered you
+# are should depend on his range once you have measured it in his own
+# uncertainty. Composing them as independent variances removes that
+# (max error against the reference 0.654 → 0.075), and it also makes the
+# scatter dial monotone: a wider hand raises the mean penalty AND the spread,
+# so it can only ever lower the value.
+static func _make_probability(margin: float, sigma_p: float,
+		sigma_e: float) -> float:
+	var spread: float = sqrt(
+			_HALFNORM_VAR * sigma_p * sigma_p + sigma_e * sigma_e)
+	if spread <= 0.000001:
+		return 1.0 if margin > 0.0 else 0.0
+	var z: float = (margin * 0.5 - _HALFNORM_MEAN * sigma_p) / spread
+	return clampf(0.5 * (1.0 + _erf(z / sqrt(2.0))), 0.0, 1.0)
 
 
 # 1σ of the keeper's cover EDGE for this look, in radians at the shooter's eye.
@@ -1257,21 +1300,6 @@ static func goalie_edge_spread(shooter: Vector3, goalie_pos: Vector3) -> float:
 static func placement_spread(aim_spread_rad: float) -> float:
 	var aim: float = maxf(aim_spread_rad, MIN_RELEASE_SPREAD_RAD)
 	return sqrt(aim * aim + PLACEMENT_DISPERSION_RAD * PLACEMENT_DISPERSION_RAD)
-
-
-# Smooth max(0, x) with knee width `s` — the effective window left once the
-# cover edge is allowed to be fuzzy by `s`. Identity for x >> s (an open
-# window is its own width), s·ln2 at x = 0, and an exponential tail below,
-# which is the gradient the hard clamp destroyed. Guarded against overflow.
-static func _softplus(x: float, s: float) -> float:
-	if s <= 0.0001:
-		return maxf(x, 0.0)
-	var t: float = x / s
-	if t > 30.0:
-		return x
-	if t < -30.0:
-		return 0.0
-	return s * log(1.0 + exp(t))
 
 
 # The best signed margin (radians) over the five holes — how far the widest
