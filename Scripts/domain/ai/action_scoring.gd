@@ -443,6 +443,43 @@ const UNSETTLE_READ_PENALTY_S: float = 0.15
 # collapsing every sliver to a certainty.
 const MIN_RELEASE_SPREAD_RAD: float = 0.010
 
+# ── The cover edge is not a knife-edge ───────────────────────────────────────
+# 1σ of WHERE the goal/save boundary actually falls, measured laterally at the
+# keeper's body. The hole geometry below computes one exact edge from one
+# predicted pose; the real edge is a distribution, and this is its width. It
+# is not a shape parameter — it is the sum of things the single-pose read
+# cannot resolve:
+#   · the pad-edge lottery — a puck grazing the edge deflects, and whether
+#     that deflection stays out is not decided by the bearing alone, so the
+#     outcome is unresolved across roughly the puck's own radius;
+#   · tracking lag — he is still settling inside the read quantum, so his
+#     centre at arrival is not exactly where the prediction put it (a t-push
+#     at 3.8 m/s covers a few cm inside one).
+# Deliberately NOT the pad's full stance-to-splay swing (~0.20 m): the
+# butterfly drop RACE in _band_cover already resolves where in that swing he
+# is, and charging it again here would double-count.
+# Consumed by boundary_spread (open_net_danger), which foreshortens it to an
+# angle at the shooter's range. This is the number the instruments calibrate:
+# it sets how much range the decision currency has, so
+# test_shot_currency_saturation.gd is the readout when it moves.
+const GOALIE_EDGE_SOFTNESS_M: float = 0.07
+
+# 1σ of a well-aimed shot's arrival scatter, in radians — the dispersion left
+# once aim is perfect: blade contact point, puck roll off the toe, release
+# timing against a moving body. Combined in quadrature with the shooter's aim
+# error by placement_spread. This is the OTHER number the instruments
+# calibrate: with the tier dial alone (0.01 rad on Hard) the make-probability
+# saturates at a 0.02 rad window and the decision currency loses its range.
+# Kept well under the tier dial's own span (0.01 Hard → 0.055 Easy) so the
+# difficulty knob still dominates its own axis.
+const PLACEMENT_DISPERSION_RAD: float = 0.030
+
+# What _hole_margin returns for a hole that is not a target at all — behind the
+# goal line, a band no legal power reaches, a deployed post seal, a release
+# already inside his body. Structurally impossible rather than merely covered,
+# so it must sit far below any softness width and never read as "nearly open".
+const HOLE_STRUCTURALLY_CLOSED_RAD: float = -1.0
+
 # Goalie position prediction. React-then-push: react delay first, then move
 # toward the puck-at-release X — ACCELERATING onto the edge (the live keeper's
 # lateral_accel ramp) up to max push speed, never snapping to it. The ramp is
@@ -1040,18 +1077,55 @@ static func delay_discount(delay_s: float) -> float:
 # Shot value in [0, 1] — the MAKE PROBABILITY of firing at the best goalie
 # hole, seen from the shooter's eye, with the goalie a body that occludes part
 # of the net. Distance, angle, squareness, and reaction all emerge from the
-# geometry — no curves. Each hole is scored by _hole_open_angle (its effective
-# opening in radians); the value maps the widest opening through the shooter's
-# own release scatter: the bot aims the window CENTRE and its release lands
-# uniformly within ±spread, so P(make) = window / (2·spread), clamped — exact
-# for the release model the bots actually execute, and CALIBRATED against the
-# shot-outcome sim (tests/unit/ai/test_shot_sim.gd family): an in-tight clean
-# look measures ~100% goals and now reads ~1.0 (the old ×gain currency priced
-# it 0.10, which is why "lose it at their doorstep" out-competed real plays —
-# the O-zone value-flatness Known Issue). The spread is floored at the
-# sharpest real hand (MIN_RELEASE_SPREAD_RAD) so perfect-aim agents keep a
-# width gradient. best_shot_loft returns the same winner's elevation class so
-# the shot's loft matches where it's aimed.
+# geometry — no curves. best_shot_loft returns the same winner's elevation
+# class so the shot's loft matches where it's aimed.
+#
+# ── The SOFT EDGE, and why the old ramp had no range ─────────────────────────
+# This used to be clamp(window / (2·spread), 0, 1) — a ramp on the bot's own
+# release scatter, treating the goalie's cover edge as a knife-edge: one side
+# certain goal, the other certain save. Two properties made it unusable as the
+# value a carry beam maximises (measured in test_shot_currency_saturation.gd):
+#
+#   CEILING — spread is 0.01 rad on Hard and floored there for everyone, so
+#     the ramp saturated at a 0.020 rad window. The whole empty net subtends
+#     0.298 rad from the dot line, so an opening one-fifteenth of an open net
+#     already read 1.000. Most of the dangerous ice pinned at exactly 1.000,
+#     which means NOTHING could out-score a set keeper — and so the carry
+#     planner's unsettle read (carrier.gd's cand_unsettled, which fires
+#     correctly at 1.00 on a cross-slot drive) bought precisely zero. There
+#     was no headroom above "set goalie" for moving him to pay into.
+#
+#   FLOOR — everything the cover overlapped read exactly 0.000, with the
+#     overlap DEPTH thrown away by _hole_open_angle's clamp. A dead-flat zero
+#     has no gradient, so "he covers this now, but two strides left opens him"
+#     was indistinguishable from hopeless. Those zeros sat exactly on the
+#     walk-out ice, which is where making him move is easiest.
+#
+# Both come from the same fiction. The boundary between goal and save is not a
+# line: the keeper's edge moves with pose (stance vs. mid-drop vs. splayed),
+# with tracking lag inside the read quantum, and with the deflection-vs-clean
+# -miss lottery at the pad edge; the puck's arrival is scattered by more than
+# the release angle. So the model now carries ONE uncertainty for that whole
+# boundary (GOALIE_EDGE_SOFTNESS_M, in metres at the keeper, combined in
+# quadrature with the shooter's release scatter) and applies it consistently:
+#
+#   margin  = best_signed_margin — how far the net clears his cover edge,
+#             NEGATIVE by the overlap depth when he has it covered
+#   w_eff   = softplus(margin, σ) — the effective window, which decays
+#             smoothly toward zero instead of clamping to it
+#   P(make) = _placement_probability(w_eff, σ)
+#
+# For a genuinely open window (margin ≫ σ) softplus is the identity and this
+# is the old geometry unchanged. What it adds is gradient at both ends: a
+# covered look is small-but-ordered by HOW covered, and an open one keeps
+# climbing instead of pinning. That is what lets "carry left and make him
+# track" out-score "pass it back and let him re-square".
+#
+# NOTE this is the BOT'S decision currency and nothing else. expected_goals
+# (the post-game analytic) is a separate function on the same geometry with a
+# deliberately different input — a context-only spread, never the shooter's
+# skill, so goals-above-expected cannot be circular. It reads the CLAMPED
+# best_open_angle and is untouched by any of the above.
 static func open_net_danger(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
@@ -1064,24 +1138,97 @@ static func open_net_danger(
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
 		loft_tan: float = 1.0) -> float:
-	# Best of the holes. Pure value-type math, no allocation — safe to run
-	# per carry candidate at tick rate (see _hole_open_angle). Pace is per-band
-	# inside _hole_open_angle: HIGH holes fly at the arrival-honest solved pace,
+	# Best of the holes, SIGNED. Pure value-type math, no allocation — safe to
+	# run per carry candidate at tick rate (see _hole_margin). Pace is per-band
+	# inside _hole_margin: HIGH holes fly at the arrival-honest solved pace,
 	# flat bands at the committed full pace; the reach budget divides the
 	# shooter→goalie gap by it.
-	var best_angle: float = best_open_angle(shooter, attacking_goal, goalie_pos,
+	var margin: float = best_signed_margin(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
 			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
-	return clampf(
-			best_angle / (2.0 * maxf(aim_spread_rad, MIN_RELEASE_SPREAD_RAD)),
-			0.0, 1.0)
+	# The two spreads are kept SEPARATE, and the distinction is load-bearing.
+	# The keeper's edge fuzziness widens the effective WINDOW (his wall is not
+	# a line); the shooter's dispersion decides whether the puck lands in it.
+	# Fusing them into one sigma — as this first did — inverts the scatter
+	# dial: a wider hand made the fuzzed window wider too, so a covered shot
+	# scored HIGHER the worse you shot. Nothing the shooter does may ever
+	# improve the geometry.
+	return clampf(_placement_probability(
+			_softplus(margin, goalie_edge_spread(shooter, goalie_pos)),
+			placement_spread(aim_spread_rad)), 0.0, 1.0)
 
 
-# The widest goalie-beating opening (radians) over the five holes — the raw
-# geometry both open_net_danger (bot make-probability) and expected_goals (the xG
-# stat) sit on top of. Pure value-type math, no allocation.
+# 1σ of the keeper's cover EDGE for this look, in radians at the shooter's eye.
+# GOALIE_EDGE_SOFTNESS_M is a linear figure at his body, so it foreshortens
+# with range exactly like every other target: the same physical fuzziness is a
+# wide uncertainty from in tight and a narrow one from the point.
+static func goalie_edge_spread(shooter: Vector3, goalie_pos: Vector3) -> float:
+	var dx: float = goalie_pos.x - shooter.x
+	var dz: float = goalie_pos.z - shooter.z
+	return GOALIE_EDGE_SOFTNESS_M / maxf(sqrt(dx * dx + dz * dz), 0.5)
+
+
+# 1σ of where the shot actually ARRIVES, in radians: the shooter's aim error
+# (the tier dial / the bot's own hand) in quadrature with the dispersion every
+# release carries however well aimed — blade contact, puck roll, release
+# timing. Without that floor the dial alone governs saturation, and at the
+# Hard hand's 0.01 rad the currency pins at a 0.02 rad window, which is the
+# no-range failure this whole model exists to fix.
+static func placement_spread(aim_spread_rad: float) -> float:
+	var aim: float = maxf(aim_spread_rad, MIN_RELEASE_SPREAD_RAD)
+	return sqrt(aim * aim + PLACEMENT_DISPERSION_RAD * PLACEMENT_DISPERSION_RAD)
+
+
+# Smooth max(0, x) with knee width `s` — the effective window left once the
+# cover edge is allowed to be fuzzy by `s`. Identity for x >> s (an open
+# window is its own width), s·ln2 at x = 0, and an exponential tail below,
+# which is the gradient the hard clamp destroyed. Guarded against overflow.
+static func _softplus(x: float, s: float) -> float:
+	if s <= 0.0001:
+		return maxf(x, 0.0)
+	var t: float = x / s
+	if t > 30.0:
+		return x
+	if t < -30.0:
+		return 0.0
+	return s * log(1.0 + exp(t))
+
+
+# The best signed margin (radians) over the five holes — how far the widest
+# hole clears the keeper's cover edge, NEGATIVE by the overlap depth when he
+# has every hole covered. The raw geometry open_net_danger (the bot's decision
+# currency) sits on. Pure value-type math, no allocation.
+static func best_signed_margin(
+		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float,
+		goalie_unsettled_factor: float = 0.0,
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
+	var best: float = HOLE_STRUCTURALLY_CLOSED_RAD
+	for i: int in HOLE_COUNT:
+		var m: float = _hole_margin(i, shooter, attacking_goal, goalie_pos,
+				net_half_width, shot_speed_m_s, goalie_unsettled_factor,
+				goalie_five_hole_m, goalie_down,
+				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
+				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+		if m > best:
+			best = m
+	return best
+
+
+# The widest goalie-beating opening (radians) over the five holes, CLAMPED at
+# zero — the "is there a window, and how wide" read. expected_goals (the
+# post-game analytic) sits on this; so do the aim / loft / power choosers,
+# which only ever target a hole that is genuinely open. Pure value-type math,
+# no allocation.
 static func best_open_angle(
 		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float,
@@ -1438,14 +1585,59 @@ static func _shadow_x(shooter: Vector3, px: float, pz: float, net_z: float) -> f
 
 
 # RAW open angle (radians, from the shooter's eye) of hole `i` — 0 if the
-# goalie covers it. Corners measure the net cleared past the reaction-gated
-# cover edge; the five-hole is a central gap that opens with the goalie's
-# unsettle. All openings are computed on the net plane so foreshortening is
-# automatic. The shooter's execution spread does NOT enter here (the
-# make-probability mapping in open_net_danger owns it, exactly once); the
-# `_aim_spread_rad` slot is kept so the chooser/aim/score call chain stays
-# positionally aligned with _hole_aim_x, which does consume it.
+# goalie covers it. The CLAMPED view of _hole_margin, for the consumers that
+# only care whether a hole is a target at all: the aim / loft / power choosers
+# and expected_goals. open_net_danger reads the signed margin instead, because
+# HOW covered a covered hole is is exactly the gradient it needs (see there).
 static func _hole_open_angle(
+		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
+		net_half_width: float, shot_speed_m_s: float, unsettled: float,
+		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
+		goalie_post_seal_x: float = 0.0,
+		goalie_post_seal_tall: bool = false,
+		aim_spread_rad: float = 0.0,
+		screen_dist_m: float = 0.0,
+		goalie_hands: Vector4 = Vector4.INF,
+		goalie_pads: Vector4 = Vector4.INF,
+		loft_tan: float = 1.0) -> float:
+	return maxf(0.0, _hole_margin(i, shooter, attacking_goal, goalie_pos,
+			net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m,
+			goalie_down, goalie_post_seal_x, goalie_post_seal_tall,
+			aim_spread_rad, screen_dist_m, goalie_hands, goalie_pads, loft_tan))
+
+
+# The five-hole's SIGNED margin from an effective slot width. The puck either
+# fits between his pads or it does not, and that verdict does NOT foreshorten:
+# a slot at half a puck-width is equally unthreadable from 5 m and from 25 m.
+# Dividing the shortfall by range (the way an open window's angular size
+# legitimately shrinks) made a fully SEALED slot read as "a hair closed" from
+# distance, which the soft edge then paid out on — a 32 m point shot scoring
+# 0.20 off a five-hole that is physically shut. So a slot the puck cannot pass
+# is structurally closed; only a real opening is measured as an angle. The
+# unsettle gradient is upstream of this, in `slot` itself (the drop race), so
+# catching him moving still opens the hole — it just has to open it for real.
+static func _five_hole_margin(slot: float, dist: float) -> float:
+	var clearance: float = slot - 2.0 * GameRules.PUCK_COLLISION_RADIUS
+	if clearance <= 0.0:
+		return HOLE_STRUCTURALLY_CLOSED_RAD
+	return clearance / maxf(dist, 0.5)
+
+
+# SIGNED margin (radians, from the shooter's eye) of hole `i`: how much net
+# clears the reaction-gated cover edge, going NEGATIVE by the overlap depth
+# when the keeper has the hole covered. The five-hole is a central gap that
+# opens with the goalie's unsettle, signed by how far the slot falls short of
+# the puck's own diameter. All openings are computed on the net plane so
+# foreshortening is automatic. The shooter's execution spread does NOT enter
+# here (the make-probability mapping in open_net_danger owns it, exactly once);
+# the `_aim_spread_rad` slot is kept so the chooser/aim/score call chain stays
+# positionally aligned with _hole_aim_x, which does consume it.
+#
+# Holes that are not targets at all — behind the goal line, an unreachable
+# band, a deployed post seal, a release inside his body — return
+# HOLE_STRUCTURALLY_CLOSED_RAD rather than a near-zero negative, so the
+# softness tail in open_net_danger never reads them as nearly open.
+static func _hole_margin(
 		i: int, shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
 		net_half_width: float, shot_speed_m_s: float, unsettled: float,
 		goalie_five_hole_m: float = -1.0, goalie_down: bool = false,
@@ -1459,7 +1651,8 @@ static func _hole_open_angle(
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
-		return 0.0  # on/behind the goal line — no shot in
+		# On/behind the goal line — no shot in.
+		return HOLE_STRUCTURALLY_CLOSED_RAD
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
@@ -1468,7 +1661,7 @@ static func _hole_open_angle(
 	# power gets there, so the hole isn't a target at all.
 	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan)
 	if pace <= 0.0:
-		return 0.0
+		return HOLE_STRUCTURALLY_CLOSED_RAD
 	# Reach budget: the puck crosses the goalie's reach envelope at HIS body —
 	# the shooter→goalie gap at the band's pace — not at the goal line. This is
 	# what range genuinely buys him; in tight it's a fraction of the flight, and
@@ -1517,10 +1710,10 @@ static func _hole_open_angle(
 					* GameRules.NET_HALF_WIDTH - goalie_pos.x) \
 				<= LOW_CORE_STANDING_M + _goalie_lateral_reach(maxf(t_read, 0.0)):
 		if kind == HOLE_KIND_FIVE:
-			return 0.0
+			return HOLE_STRUCTURALLY_CLOSED_RAD
 		if float(side) == signf(goalie_post_seal_x) \
 				and (goalie_post_seal_tall or HOLE_BAND[i] == HOLE_BAND_LOW):
-			return 0.0
+			return HOLE_STRUCTURALLY_CLOSED_RAD
 	if kind == HOLE_KIND_FIVE:
 		# Jam smother: a release already inside the goalie's standing pad
 		# column (a behind-the-goalie release clamped to his toes) has no
@@ -1528,7 +1721,7 @@ static func _hole_open_angle(
 		# corner branch's release-inside-the-body smother.
 		var jam_r: float = LOW_CORE_STANDING_M + GameRules.PUCK_COLLISION_RADIUS
 		if u * u + dv * dv <= jam_r * jam_r:
-			return 0.0
+			return HOLE_STRUCTURALLY_CLOSED_RAD
 		# Between-the-legs gap, foreshortened with range (gap / distance); only a
 		# roughly head-on look can thread the legs (centrality). The puck has to
 		# FIT here too: what scores is the gap's CLEARANCE past the puck's own
@@ -1540,7 +1733,6 @@ static func _hole_open_angle(
 		var centrality: float = clampf(
 				1.0 - absf(shooter.x - goalie_pos.x) / FIVE_CENTER_REF_M, 0.0, 1.0)
 		var dist: float = shooter.distance_to(attacking_goal)
-		var puck_diameter: float = 2.0 * GameRules.PUCK_COLLISION_RADIUS
 		# The shooter's execution spread eats the slot exactly as it eats a
 		# corner window (the corners subtract it via fit_angle below): a
 		# razor-thin five-hole a noisy hand can't actually thread must not
@@ -1563,8 +1755,11 @@ static func _hole_open_angle(
 							/ goalie_butterfly_drop_s,
 						0.0, 1.0)
 				gap *= 1.0 - seal
-			var gap_angle: float = maxf(0.0, gap - puck_diameter) / maxf(dist, 0.5)
-			return gap_angle * centrality
+			# Centrality narrows the SLOT (off-axis you see less daylight
+			# between the pads) rather than scaling the finished margin —
+			# scaling a NEGATIVE margin by a small centrality would push it
+			# toward zero, i.e. read a hopeless off-axis look as nearly open.
+			return _five_hole_margin(gap * centrality, dist)
 		# Legacy proxy (no replicated stance in scope — threat surfaces, tests):
 		# the nominal standing slot raced against the same read-delayed
 		# butterfly seal the measured branch runs — a set goalie seals it, a
@@ -1575,8 +1770,7 @@ static func _hole_open_angle(
 				(t_read - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
 				0.0, 1.0)
 		proxy_gap *= 1.0 - proxy_seal
-		var proxy_angle: float = maxf(0.0, proxy_gap - puck_diameter) / maxf(dist, 0.5)
-		return proxy_angle * centrality
+		return _five_hole_margin(proxy_gap * centrality, dist)
 
 	# Band cover raced against the read budget (t_reach less screen occlusion
 	# and caught-moving lateness) — standing pad column widened by the
@@ -1610,19 +1804,22 @@ static func _hole_open_angle(
 	else:
 		var d_sq: float = u * u + dv * dv
 		if d_sq <= cover * cover:
-			return 0.0  # release inside the goalie's body — smothered
+			# Release inside the goalie's body — smothered.
+			return HOLE_STRUCTURALLY_CLOSED_RAD
 		var alpha: float = atan2(u, dv)
 		var beta: float = asin(clampf(cover / sqrt(d_sq), 0.0, 1.0))
-		covb_lo = clampf(alpha - beta, net_lo, net_hi)
-		covb_hi = clampf(alpha + beta, net_lo, net_hi)
+		# Bounded ABOVE by the far post (a keeper entirely off the net can only
+		# open the net's own width) but NOT below: clamping the near side to the
+		# post is what threw the overlap depth away and flat-lined the covered
+		# region at exactly 0.
+		covb_lo = minf(alpha - beta, net_hi)
+		covb_hi = maxf(alpha + beta, net_lo)
 
 	var open_angle: float
 	if side < 0:
-		open_angle = maxf(0.0, minf(covb_lo, net_hi) - net_lo)   # left post → cover's left edge
+		open_angle = covb_lo - net_lo   # left post → cover's left edge
 	else:
-		open_angle = maxf(0.0, net_hi - maxf(covb_hi, net_lo))   # cover's right edge → right post
-	if open_angle <= 0.0:
-		return 0.0
+		open_angle = net_hi - covb_hi   # cover's right edge → right post
 	# The puck has to FIT: a corner only scores by what remains after the puck's
 	# clean-entry inset off the pipe — post radius + puck radius, the exact
 	# GameRules.NET_ENTRY_HALF_WIDTH inset _hole_aim_x buys the aim point. This is a
@@ -1635,7 +1832,7 @@ static func _hole_open_angle(
 	# make-probability mapping (window / 2·spread), never here.
 	var pipe_clearance: float = (GameRules.NET_POST_RADIUS + GameRules.PUCK_COLLISION_RADIUS) \
 			/ maxf(shooter.distance_to(attacking_goal), 0.5)
-	return maxf(0.0, open_angle - pipe_clearance)
+	return maxf(open_angle - pipe_clearance, HOLE_STRUCTURALLY_CLOSED_RAD)
 
 
 # ── Screen perception (sightline occlusion) ──────────────────────────────────

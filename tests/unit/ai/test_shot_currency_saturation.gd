@@ -1,8 +1,11 @@
 extends GutTest
 
-# ── Why the carrier back-passes out of the slot: the currency has no range ────
-# REPORT-ONLY. This is a measuring stick for a known defect, not a guard on one
-# — asserting the present surface would cement it.
+# ── Why the carrier back-passed out of the slot: the currency had no range ────
+# REPORT-ONLY, and the readout for the soft-edge rework in
+# AIActionScoring.open_net_danger. The three reports below are the before/after
+# for that change; the commentary describes the defect they were written to
+# expose. Still report-only: the post-fix surface is not calibrated yet, so
+# asserting it would cement a number nobody has playtested.
 #
 # The bots do NOT decide on `expected_goals`. They decide on `open_net_danger`,
 # and the two are different functions living twenty lines apart:
@@ -127,9 +130,11 @@ func test_report_the_decision_currency_saturates() -> void:
 	gut.p("  %d/%d cells pinned at 1.000, %d/%d at exactly 0.000 — %d%% of the"
 			% [pinned, total, zeroed, total,
 				roundi(100.0 * float(pinned + zeroed) / float(total))])
-	gut.p("  surface carries no gradient at all. Note the non-monotonicity: at")
-	gut.p("  x=1.5 the value DIPS to 0.455 at 4 m and recovers to 1.000 at 6 m —")
-	gut.p("  a teammate further out literally scores better than the slot.")
+	gut.p("  surface carrying no gradient at all. Every such cell is a spot the")
+	gut.p("  carry beam cannot rank against its neighbours.")
+	gut.p("  (Pre-fix baseline, for comparison: 9/32 pinned and 14/32 dead, 72%,")
+	gut.p("   non-monotonic — x=1.5 dipped to 0.455 at 4 m and recovered to 1.000")
+	gut.p("   at 6 m, i.e. a teammate further out scored better than the slot.)")
 	assert_true(true, "report")
 
 
