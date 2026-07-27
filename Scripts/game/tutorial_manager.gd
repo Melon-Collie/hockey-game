@@ -453,7 +453,7 @@ func _fmt(text: String) -> String:
 # position + drag-speed wrister vs. the pad's right-stick aim + push-magnitude
 # commit. Both variants still run through _fmt, so their {token}s resolve to the
 # active device's button labels. Steps that read the same on both devices keep a
-# single string. (See CLAUDE.md → "How It Plays" for the two schemes.)
+# single string. (See docs/gameplay-design.md for the two schemes.)
 func _pick(keyboard_copy: String, pad_copy: String) -> String:
 	return pad_copy if InputDeviceTracker.is_gamepad_active() else keyboard_copy
 

@@ -42,7 +42,7 @@ extends RefCounted
 #                      so no separate stick fields on the wire. The broadcast
 #                      pose is authoritative: clients render the goalie purely
 #                      from the interpolated host pose (no client-side goalie
-#                      AI — see ARCHITECTURE.md Networking Invariants).
+#                      AI — see Scripts/networking/CLAUDE.md).
 #
 # 2. Stats  (reliable, event-driven):
 #      [pid, G, A, SOG, HITS, BLK] × N players

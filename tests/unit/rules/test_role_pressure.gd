@@ -59,7 +59,7 @@ func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 # ── Body check commit ────────────────────────────────────────────────────────
 
 func test_commits_body_check_on_reachable_hard_hit() -> void:
-	# Carrier 2 m away, head-on; a high-Physical pressurer predicts a separating
+	# Carrier 2 m away, head-on; a heavy pressurer predicts a separating
 	# hit and commits — steering at the body intercept, not the cutoff point.
 	var self_pos := Vector3(0, 0, 18)
 	var skaters: Array = [
@@ -70,13 +70,13 @@ func test_commits_body_check_on_reachable_hard_hit() -> void:
 	ctx.self_max_speed = 9.0
 	ctx.self_body_check_transfer = 0.61   # ~ +36% Physical
 	var d: RoleDecision = AIRolePressure.decide(ctx)
-	assert_true(d.commit_check, "high-Physical pressurer commits to a reachable hit")
+	assert_true(d.commit_check, "heavy pressurer commits to a reachable hit")
 	assert_almost_eq(d.check_target.z, 20.0, 0.5, "drives at the carrier's body")
 	assert_eq(d.target_position, d.check_target, "steering target is the body intercept")
 
 
 func test_no_body_check_when_hit_is_soft() -> void:
-	# Same geometry, low-Physical pressurer: the hit wouldn't separate, so it
+	# Same geometry, light pressurer: the hit wouldn't separate, so it
 	# falls through to normal cutoff positioning instead of committing.
 	var self_pos := Vector3(0, 0, 18)
 	var skaters: Array = [
@@ -87,7 +87,7 @@ func test_no_body_check_when_hit_is_soft() -> void:
 	ctx.self_max_speed = 9.0
 	ctx.self_body_check_transfer = 0.29   # ~ -36% Physical
 	var d: RoleDecision = AIRolePressure.decide(ctx)
-	assert_false(d.commit_check, "low-Physical pressurer doesn't commit to a soft hit")
+	assert_false(d.commit_check, "light pressurer doesn't commit to a soft hit")
 
 
 func test_no_body_check_on_loose_puck() -> void:

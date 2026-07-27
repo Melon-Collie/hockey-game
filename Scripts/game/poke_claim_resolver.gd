@@ -18,12 +18,13 @@ extends RefCounted
 #       displacement (LagCompRewind.forward_predict_skater — the claimant
 #       rendered the carrier intent-integrated toward present, and the carried
 #       puck rides the carrier's blade);
-#       reach-clamp the CLIENT-sent attacker blade to that body — never rtt/2
-#       (the blade is client-authoritative aim, like PickupClaimResolver)
+#       reach-clamp the CLIENT-sent attacker blade to that body
 #     → reject if PuckInteractionRules.check_poke fails against that geometry
-#     → apply_lag_comp_poke (idempotent — re-checks carrier on apply path
-#       so a concurrent host-side _check_interactions detection that already
-#       cleared the carrier doesn't get double-applied).
+#     → apply_lag_comp_poke (idempotent)
+#
+# The shared claim-resolver contract — the interp-delay bound, the two view
+# times, why the clamp is never rtt/2, idempotent apply — is in
+# Scripts/game/CLAUDE.md.
 
 const MAX_CLAIM_AGE_S: float = 0.2
 

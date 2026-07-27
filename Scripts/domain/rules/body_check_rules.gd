@@ -100,9 +100,9 @@ static func thrust_mult(stagger_timer: float, cfg: Config) -> float:
 
 # The victim transfer-impulse the puck-strip / pickup-denial decision keys off —
 # the SAME "how hard did it land on the victim" magnitude the stagger uses (the
-# actually-applied |Δv|), so a hit's Physical (transfer), both skaters' Size
-# (attacker + victim mass), and the closing Speed all decide whether the puck
-# comes loose. A low-Physical shove barely jars it; an enforcer strips it clean.
+# actually-applied |Δv|), so the transfer coefficient, both skaters' mass, and the
+# closing speed all decide whether the puck comes loose. A glancing shove barely
+# jars it; an enforcer strips it clean.
 #
 # Reconstructed from impact_force = attacker_weight × approach (what the
 # body_checked_player signal carries): closing = impact_force / attacker_weight,

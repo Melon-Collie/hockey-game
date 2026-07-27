@@ -44,7 +44,7 @@ const ELEVATION_HIGH: int = 2
 # toward vertical as power approaches the level's launch speed. At 45° it
 # binds only below ~6.6 m/s at HIGH loft (v_y·√2). Since the wrister floor dropped to
 # 10 m/s (soft touch passes), the very softest release — a min-power backhand
-# from a low-Hands skater, ~6.4 m/s — can now reach the cap, flattening that
+# from a slow-bladed skater, ~6.4 m/s — can now reach the cap, flattening that
 # flip to 45° instead of running vertical: exactly the intended behavior (a
 # soft chip over a sprawled goalie stays possible, never a straight-up pop).
 # Every other release gets its full level v_y. Keeps every legit direction

@@ -12,8 +12,8 @@ extends Node
 # snapshot paid one tick (~8.3 ms) of departure latency, skater velocity
 # (updated at −1) was captured one phase ahead of position, and the label
 # overstated the content's age by a tick — which the client input-lead servo
-# measured as "overdue" and silently padded lead over. See ARCHITECTURE.md →
-# Networking Invariants (host capture/broadcast timing).
+# measured as "overdue" and silently padded lead over. See Scripts/networking/CLAUDE.md
+# (host capture / broadcast timing).
 
 var callback: Callable = Callable()
 

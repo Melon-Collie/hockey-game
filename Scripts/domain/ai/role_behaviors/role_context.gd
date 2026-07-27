@@ -130,7 +130,7 @@ var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # This bot's blade face-angle cap (tan — curve gear), so its own HIGH-hole
 # pricing knows its real minimum roofing distance (AISkaterCaps.loft_tan_max).
 var self_loft_tan: float = 1.0
-# This bot's body-check delivery (Size + Physical) and current stagger, so the
+# This bot's body-check delivery (mass-emergent) and current stagger, so the
 # on-puck defensive roles (PRESSURE / FORECHECK F1) can decide whether a check
 # is worth committing to via AIBodyCheck. League baselines / 0 when unwired.
 var self_weight: float = 1.0

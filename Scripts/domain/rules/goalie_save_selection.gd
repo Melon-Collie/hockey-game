@@ -13,27 +13,6 @@ class_name GoalieSaveSelection
 # reaction butterfly", but distance is a PROXY. The real quantity is time: can
 # I still complete an answer before the puck is on me?
 #
-# ── What this replaces ───────────────────────────────────────────────────────
-# GoalieController had SIX independent paths into butterfly — a doorstep
-# slapshot check, a crease-jam check, a beaten-wide race, a bespoke
-# "Blocking-drop timer" for screened releases, a post-save rebound drop, and the
-# reactive low read — plus a SEPARATE decision (`_is_threat_pressing`) for
-# standing back up. Four hand-picked distance thresholds (1.2 / 1.5 / 2.0 /
-# 2.5 m) all sat just under two stick lengths (2.6 m), which is what four
-# approximations of one boundary look like.
-#
-# The screened-release timer is the tell: its own comment calls it a
-# "Blocking-drop timer". The general rule was already in the codebase, filed as
-# a special case beside its siblings.
-#
-# WIRED SO FAR: the first three (doorstep, jam, beaten-wide) are one
-# `_should_block`, and so is the stand-up hold. The screened-release timer is
-# NOT yet folded in, and the obstacle is plumbing rather than doctrine — it has
-# to fire while `_reaction` is already engaged, and the block branch is gated on
-# `not _reaction.reacting`. `sight_delay` below is the same quantity that timer
-# keys on, so a screened threat the goalie has not yet been forced to react to
-# already routes through here; only the in-flight case still needs its own path.
-#
 # ── The model ────────────────────────────────────────────────────────────────
 # An "answer" is: SEE the puck, DECIDE, then MOVE the pads to the floor. So the
 # time an answer costs is
@@ -48,13 +27,13 @@ class_name GoalieSaveSelection
 #
 # A contest does NOT shorten the flight — a tipped puck does not arrive sooner.
 # It RESTARTS the read: the direction he had been tracking is gone and he must
-# answer a new one from the moment of the touch. That is precisely why a
-# net-front tip is lethal on a shot he can otherwise see comfortably, and it is
-# the doctrine's third block trigger (proximity, screens, and DEFLECTION RISK)
-# falling out rather than being added.
+# answer a new one from the moment of the touch. That is why a net-front tip is
+# lethal on a shot he can otherwise see comfortably, and it is the doctrine's
+# third block trigger (proximity, screens, DEFLECTION RISK) falling out of the
+# model rather than being added to it.
 #
-# `answer_fraction` is how much of the answer fits in the time available. And
-# the useful thing is that it needs NO THRESHOLD:
+# `answer_fraction` is how much of the answer fits in the time available, and it
+# needs NO THRESHOLD:
 #
 #     <= 0  reacting buys literally nothing — the read cannot even start, so
 #           pre-commit: BLOCK.
@@ -67,29 +46,25 @@ class_name GoalieSaveSelection
 #     >= 1  a full reaction fits: stay up and READ.
 #
 # The one case that is not about time is coverage: if the lateral race is
-# already lost, no amount of reacting covers the far side, and only the seal
+# already lost, no amount of reacting covers the far side and only the seal
 # does. That stays an explicit input because it is a different question.
 #
-# ── Why contest time, not "is there a carrier" ───────────────────────────────
-# The old stand-up rule held the butterfly only for a HOSTILE CARRIER inside a
-# proximity threshold, so a slow loose rebound at his feet — no carrier — fell
-# through and stood him up into the scramble. Reported from play as "he gets up
-# early and gives up unearned rebounds through his five-hole".
-#
+# ── Time-to-contest, not "is there a carrier" ────────────────────────────────
 # Possession does not make a play readable. A controlled puck in traffic is
-# still unpredictable, which is exactly when blocking is correct. So the input
-# is TIME-TO-CONTEST: how soon can any stick that is not his reach the puck and
-# change it. That covers a loose rebound, a teammate corralling under pressure,
-# and a 5v5 net-front crowd with one quantity, and it uses the same clock as
-# everything else.
+# still unpredictable, which is exactly when blocking is correct — and a slow
+# loose rebound at his feet is no more answerable for having no carrier. So the
+# input is TIME-TO-CONTEST: how soon can any stick that is not his reach the
+# puck and change it. One quantity covers a loose rebound, a teammate corralling
+# under pressure, and a 5v5 net-front crowd, on the same clock as everything
+# else. Gating on carrier proximity instead stands him up into scrambles.
 #
 # ── Scope: in front of the net only ──────────────────────────────────────────
 # A puck BEHIND the goal line is not a block-or-react question, it is a STANCE
 # question — RVH seals at/below the goal line, VH takes the in-front sharp
-# angle. That decision stays where it is (`_is_puck_in_defensive_zone` →
-# VH/RVH) and is deliberately not folded in here. One model per question: this
-# one answers "can I still answer this puck from my feet", and post integration
-# answers "which post stance covers this angle".
+# angle. That stays in `_is_puck_in_defensive_zone` → VH/RVH and is deliberately
+# not folded in here. One model per question: this one answers "can I still
+# answer this puck from my feet", post integration answers "which post stance
+# covers this angle".
 #
 # Pure/static and engine-free. Callers own the Situation (rebuilt in place each
 # tick) so the hot path allocates nothing.
