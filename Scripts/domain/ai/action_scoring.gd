@@ -980,8 +980,9 @@ const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # CONSTANT-HAZARD process — at each instant a fixed probability the read stops
 # holding — so it is exactly geometric, exp(-t / τ). It is NOT a shaped curve; the
 # ONLY free parameter is the hazard timescale τ = READ_VALIDITY_TAU_S, the mean
-# time a read stays roughly valid. (The old per-second form pow(0.7, t) was the
-# same model written the opaque way — 0.7/s is exp(-1/2.8 s), i.e. τ ≈ 2.8 s.)
+# time a read stays roughly valid. (A per-second form like pow(0.8, t) is the same
+# model written opaquely: 0.8/s is exp(-1/4.5 s). Prefer the τ form — it names the
+# physical quantity.)
 #
 # τ is an honest AGGREGATE, not a derived quantity: plausible physical
 # decorrelation times span ~0.4 s (a defender closing a stick-width) to a
@@ -999,27 +1000,25 @@ const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # is free") — but whether a longer τ PLAYS better is a feel judgment, a playtest
 # call the suite can't settle.
 #
-# ACTION_HYSTERESIS_MARGIN_FRAC — once a fire intent is set, that
-# intent's (positive) score is scaled by (1 + this) when re-scored: a
-# challenger must beat the committed intent by 15%, not by a flat
-# margin. Prevents flicker between two close-scoring fire options
-# during pre-aim. PROPORTIONAL rather than additive because utility
-# scores span ~0.02 (deep-DZ escape reads) to ~0.7 (slot chances): the
-# old flat +0.05 was ~10% of a typical OZ score but could exceed the
-# ENTIRE gap between options in the defensive zone, making stale
-# intents disproportionately sticky exactly where scores are small.
-# Matches the proportional pattern already used by
-# AIThreatAssignment.HYSTERESIS_MARGIN_FRAC. Applied only to POSITIVE
-# scores — a committed intent that has decayed to worthless (or
-# negative EV) earns no stickiness. Only applies to fire intents
-# (SHOOT, QUICK_PASS, PASS) — CARRY doesn't get a bonus, so the bot is
-# free to switch to fire as soon as fire scores higher. Raise toward
-# 0.30 if intent flickers visibly; lower toward 0.05 if intent feels
-# too sticky.
+# ACTION_HYSTERESIS_MARGIN_FRAC — once a fire intent is set, that intent's
+# (positive) score is scaled by (1 + this) when re-scored, so a challenger must
+# beat the committed intent by 15% rather than by a flat margin. Prevents flicker
+# between two close-scoring fire options during pre-aim.
+#
+# PROPORTIONAL, not additive, because utility scores span ~0.02 (deep-DZ escape
+# reads) to ~0.7 (slot chances): a flat margin that is a sane ~10% of a typical OZ
+# score can exceed the ENTIRE gap between options in the defensive zone, making
+# stale intents disproportionately sticky exactly where scores are smallest. Same
+# pattern as AIThreatAssignment.HYSTERESIS_MARGIN_FRAC.
+#
+# Applied only to POSITIVE scores — a committed intent decayed to worthless (or
+# negative EV) earns no stickiness — and only to fire intents (SHOOT, QUICK_PASS,
+# PASS), so the bot may switch to fire the moment fire scores higher. Raise toward
+# 0.30 if intent flickers visibly; lower toward 0.05 if it feels too sticky.
 # Mean seconds a tactical read stays roughly valid (the hazard timescale above).
-# τ ≈ 4.5 s ↔ a ~0.80 per-second discount — raised from the prior τ ≈ 2.8 s
-# (0.70/s) toward more patient, developing-play-friendly carrying. See the sweep
-# caveat above: this is the patient side, judged by feel, not by the suite.
+# τ ≈ 4.5 s ↔ a ~0.80 per-second discount — the patient end of the range, favouring
+# developing plays. See the sweep caveat above: this side is judged by feel, not by
+# the suite.
 const READ_VALIDITY_TAU_S: float = 4.5
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 
@@ -3430,22 +3429,20 @@ static func counter_rush_cost(
 # ── Pass execution risk ──────────────────────────────────────────────────────
 # Even a clear-lane pass isn't a sure thing: leads run long, receptions
 # fumble off an unsquared blade, a bouncing puck skips the tape. The lane
-# model prices INTERCEPTION only, so before this constant existed a 5 m
-# clear-lane backpass deep in our own zone scored as risk-free — and since
-# fire wins ties against carry, bots eagerly dumped the puck backward for
-# near-zero gain, and the occasional real-world miss surrendered all the
-# ice behind them. PASS_MISS_PROB is the residual chance a lane-clear pass
-# still fails on execution; the puck ends up loose PAST the receiver
-# (overled / through the blade), PASS_MISS_OVERSHOOT_M beyond them along
-# the pass line. Feeding that loss point to turnover_cost makes the risk
-# self-localize exactly like interception risk does: an OZ miss costs ~0
-# (loose puck in their end), a DZ backpass miss prices the opponent's
-# chance in front of our net. No zone flag, no backpass heuristic — the
-# geometry does it.
+# model prices INTERCEPTION only, so without this a clear-lane backpass deep
+# in our own zone scores as risk-free — and since fire wins ties against
+# carry, that alone is enough to make bots dump the puck backward for
+# near-zero gain and surrender all the ice behind them on the occasional
+# real miss. PASS_MISS_PROB is the residual chance a lane-clear pass still
+# fails on execution; the puck ends up loose PAST the receiver (overled /
+# through the blade), PASS_MISS_OVERSHOOT_M beyond them along the pass line.
+# Feeding that loss point to turnover_cost makes the risk self-localize
+# exactly like interception risk does: an OZ miss costs ~0 (loose puck in
+# their end), a DZ backpass miss prices the opponent's chance in front of our
+# net. No zone flag, no backpass heuristic — the geometry does it.
 #
-# NOT a flat rate — pass_miss_prob() DERIVES it (the flat constant was a magic
-# number in an evaluator, exactly what the shot window model avoids). Two
-# grounded parts:
+# NOT a flat rate — pass_miss_prob() DERIVES it, since a bare constant here
+# would be a magic number in an evaluator. Two grounded parts:
 #   · The bot solves its LAUNCH so the puck ARRIVES catchable (at
 #     PASS_TARGET_CLOSING_M_S, under the any-angle reception ceiling), so
 #     reception DIFFICULTY (closing speed vs blade angle) is designed OUT of its
@@ -3457,12 +3454,11 @@ static func counter_rush_cost(
 #     distance, which misses when that lateral spread exceeds the receiver's
 #     catch envelope (its Hands handle reach). Same uniform-error model the shot
 #     window uses.
-# So miss now scales with the passer's Hands-tier AND the pass length — a Hard
-# bot's short feed sits at the base, an Easy bot's cross-ice stretch is genuinely
-# risky — instead of one flat rate for every pass at every tier, and the
-# backpass suppression survives via the base floor (even a perfect short feed
-# keeps a small DZ miss cost). OVERSHOOT is the physical "how far past the
-# receiver does a missed pass die" scale, not a knob.
+# So miss scales with the passer's Hands tier AND the pass length: a Hard bot's
+# short feed sits at the base, an Easy bot's cross-ice stretch is genuinely risky.
+# The backpass suppression rides the base floor, so even a perfect short feed
+# keeps a small DZ miss cost. OVERSHOOT is the physical "how far past the receiver
+# does a missed pass die" scale, not a knob.
 const PASS_MISS_BASE_PROB: float = 0.04
 const PASS_MISS_OVERSHOOT_M: float = 3.0
 
