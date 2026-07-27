@@ -65,6 +65,48 @@ static func deflect_velocity(
 		e = lerpf(normal_restitution, normal_restitution_min, hard)
 	return v_tangent * tangential_retain - v_normal * e
 
+# Signed vertical launch speed for a deliberate deflect's redirect (fed to
+# ShotMechanics.loft_y by Puck.apply_blade_deflect). Positive lifts, negative
+# drives the puck down, zero keeps it flat.
+#
+# On the GROUNDED plane (FLAT / LOW) the level names the direction outright:
+# a blade on the ice can keep a puck flat or lean it up, and "down" is
+# meaningless for a puck already on the ice.
+#
+# On the LIFTED plane (HIGH) the direction is not a choice — it's geometry.
+# You can only bat down what your blade is ABOVE, and only lift what it's
+# UNDER, so the sign comes from the puck's height relative to the blade's own
+# contact point. This is what restores the airborne up-tip that collapsed when
+# the stick-lift and deflect buttons merged: one 3-state level can't encode
+# plane × direction, but the plane can supply the direction itself.
+#
+# `deadband` is a physical measurement, not a feel knob: the blade face's
+# half-height plus the puck's half-thickness — the band over which the two are
+# level and the puck glances straight through with no vertical bias.
+#
+# Anti-degeneracy is preserved by the pivot's HEIGHT rather than by a gate: a
+# saucer pass tops out well below a lifted blade, so it never reaches the
+# "above the blade" band and a player camping HIGH still only ever swats
+# saucers down. Getting under a puck to lift it means the puck is genuinely
+# high — a real shot, not a pass being squatted on.
+static func deflect_loft_speed(
+		elevation_level: int,
+		puck_y: float,
+		blade_y: float,
+		up_speed: float,
+		down_speed: float,
+		deadband: float) -> float:
+	if elevation_level <= ShotMechanics.ELEVATION_FLAT:
+		return 0.0
+	if elevation_level == ShotMechanics.ELEVATION_LOW:
+		return up_speed
+	var offset: float = puck_y - blade_y
+	if offset > deadband:
+		return up_speed
+	if offset < -deadband:
+		return -down_speed
+	return 0.0
+
 # Analytic board-containment rescue: the velocity for a puck the engine let
 # slip past the inner board boundary (trimesh facet-seam escape — the wall
 # triangles are zero-thickness, so a center that crosses a facet plane can be

@@ -190,7 +190,22 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # forced pop from an opponent's stick lift). A lifted blade clears grounded
 # pucks and sticks — it only meets airborne pucks, to tip them. Eased in via
 # Skater._blade_lift_blend and consumed by SkaterIKCoordinator.blade_y_local().
-@export var blade_lift_height: float = 0.35
+#
+# LOAD-BEARING, and pinned between two hard walls — it is the pivot that decides
+# up-tip vs. knock-down (PuckCollisionRules.deflect_loft_speed), and it sets how
+# high a lifted blade can reach. Contact point = blade_height + this.
+#   FLOOR (~0.30): must clear a LOW saucer's apex (~0.26 m, fixed — loft is a
+#     fixed launch speed). Drop below it and camping HIGH starts ROOFING saucer
+#     passes instead of swatting them.
+#   CEILING (0.5675): contact point − PuckController.PICKUP_RADIUS must stay at
+#     or below the airborne threshold (GameRules.PUCK_AIRBORNE_HEIGHT_M + a
+#     resting puck's centre = 0.0675). Above that, pucks between the threshold
+#     and the lifted blade's downward reach are touchable by NEITHER plane — a
+#     dead zone where saucers become untouchable.
+# 0.52 (contact point 0.55) sits at the top of that range, which is where the
+# tips that matter live: a HIGH feed arriving at a net-front player sits at
+# 0.9–1.1 m, and the reach ceiling only gets there at the top of the band.
+@export var blade_lift_height: float = 0.52
 # Fixed, rigid shaft length (hand to blade heel). Baseline 1.30 m ≈ adult
 # senior stick shaft (butt-to-heel). The blade mesh extends forward from the
 # heel; see Skater.blade_length. Total hand-to-toe is stick_length + blade_length.
