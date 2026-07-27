@@ -536,7 +536,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	var pre_charge_cursor_speed: float = _aiming.cursor_speed_ema
 	var pre_charge_stroke_travel: float = _aiming.stroke_travel
 	var pre_charge_prev_intent_pos: Vector3 = _aiming.prev_intent_pos
-	var pre_charge_prev_blade_pos: Vector3 = _aiming.prev_blade_pos_rel_skater
+	var pre_charge_prev_swing_bearing: Vector3 = _aiming.prev_swing_bearing
 	var pre_charge_prev_blade_dir: Vector3 = _aiming.prev_blade_dir
 	# Pinned at stroke start; set once on the WRISTER_AIM entry edge. Restored so a
 	# replay that re-crosses that edge can't re-anchor the live origin.
@@ -664,7 +664,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_aiming.cursor_speed_ema = pre_charge_cursor_speed
 	_aiming.stroke_travel = pre_charge_stroke_travel
 	_aiming.prev_intent_pos = pre_charge_prev_intent_pos
-	_aiming.prev_blade_pos_rel_skater = pre_charge_prev_blade_pos
+	_aiming.prev_swing_bearing = pre_charge_prev_swing_bearing
 	_aiming.prev_blade_dir = pre_charge_prev_blade_dir
 	_aiming.wrister_origin_world = pre_charge_origin_world
 	skater.shot_charge = pre_shot_charge

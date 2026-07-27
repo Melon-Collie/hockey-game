@@ -21,23 +21,26 @@ class_name ChargeTracking
 # than max_direction_variance_deg — models the player "setting up" the shot:
 # a straight drag holds one swing; a zig-zag starts a fresh one.
 #
-# SWING ROTATION: the signed angular sweep of the blade AROUND THE PLAYER,
-# accumulated in radians over the stroke (blade positions are passed relative
-# to the skater, so the player is the rotation center). Each tick adds the
-# signed angle from the previous blade bearing to the current one
-# (atan2(cross.y, dot) — the standard clockwise-vs-counter-clockwise test).
+# SWING ROTATION: the signed angular sweep of the SHOT LINE about its anchor,
+# accumulated in radians over the stroke. The caller passes bearings measured
+# from a fixed anchor (SkaterController feeds cursor − pinned wrister origin, so
+# the origin — where the puck sits and the shot leaves from — is the rotation
+# center; the anchor must not be the body, or the ~1 m blade parallax shows up as
+# swing the player never made). Each tick adds the signed angle from the previous
+# bearing to the current one (atan2(cross.y, dot) — the standard
+# clockwise-vs-counter-clockwise test).
 # The SIGN of the accumulated total is the forehand/backhand chirality: a
-# forehand and a backhand sweep the blade in opposite rotational senses, and
+# forehand and a backhand sweep in opposite rotational senses, and
 # unlike a travel-direction read this correctly classifies a cross-body
 # backhand (off-side start, stick-side finish) by the net rotation. Resets to
 # zero on a variance break, so the live stroke's rotation classifies. A purely
-# radial push (straight out from the body) contributes ~0 — the ambiguous
+# radial push (straight out along the shot line) contributes ~0 — the ambiguous
 # straight-ahead shot, which the caller's deadband defaults to forehand.
 #
-# STROKE TRAVEL: the blade's accumulated XZ path length (meters) over the
-# stroke — the "did you actually sweep" signal that gates the wrister power
-# ceiling. Measured on the player-relative blade positions (same frame as the
-# rotation), so locomotion doesn't bank travel; like rotation, it only accrues
+# STROKE TRAVEL: the accumulated XZ path length (meters) of that same bearing
+# over the stroke — the "did you actually sweep" signal that gates the wrister
+# power ceiling. Measured in the same anchored frame as the rotation, so
+# locomotion doesn't bank travel; like rotation, it only accrues
 # on ticks with real cursor intent and resets to zero on a variance break.
 # Each tick's contribution is capped at max_travel_step: the blade TARGET is a
 # closed-form ROM clamp (not the speed-capped smoothed blade), so a forged or
@@ -53,8 +56,8 @@ class_name ChargeTracking
 #     swing started.
 #   - rotation: accumulated signed angular sweep (radians); classify FH/BH by
 #     its sign at release (ShotMechanics.is_backhand_from_swing).
-#   - travel: accumulated blade XZ path length (meters) over the stroke; feed
-#     to ShotMechanics.wrister_travel_cap_t at release.
+#   - travel: accumulated XZ path length (meters) of the anchored bearing over
+#     the stroke; feed to ShotMechanics.wrister_travel_cap_t at release.
 class Result:
 	var direction: Vector3 = Vector3.ZERO
 	var reset: bool = false
@@ -102,9 +105,10 @@ static func accumulate_into(
 			new_travel = 0.0
 			was_reset = true
 
-	# Signed angular step of the blade around the player (radians). Both
-	# positions are player-relative (translation removed), so a near-zero
-	# bearing (blade over the player — never happens in practice) is guarded.
+	# Signed angular step of the shot line about its anchor (radians). Both
+	# bearings are anchor-relative, so a near-zero bearing (the cursor sitting on
+	# the anchor — a degenerate aim the release already falls back out of) is
+	# guarded.
 	new_rotation += swing_step(prev_blade_pos, current_blade_pos)
 	new_travel += travel_step(prev_blade_pos, current_blade_pos, max_travel_step)
 

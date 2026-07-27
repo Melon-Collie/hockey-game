@@ -26,7 +26,7 @@ func test_initial_state() -> void:
 	assert_almost_eq(ab.swing_rotation, 0.0, 0.001)
 	assert_almost_eq(ab.stroke_travel, 0.0, 0.001)
 	assert_eq(ab.prev_intent_pos, Vector3.ZERO)
-	assert_eq(ab.prev_blade_pos_rel_skater, Vector3.ZERO)
+	assert_eq(ab.prev_swing_bearing, Vector3.ZERO)
 	assert_eq(ab.prev_blade_dir, Vector3.ZERO)
 	assert_almost_eq(ab.slapper_charge_timer, 0.0, 0.001)
 	assert_almost_eq(ab.one_timer_window_timer, 0.0, 0.001)
@@ -71,7 +71,7 @@ func test_stationary_cursor_decays_speed_ema() -> void:
 func test_tick_updates_prev_positions() -> void:
 	ab.tick_wrister_charge(Vector3(0.3, 0.0, 0.1), Vector3(0.25, 0.0, 0.05), VARIANCE_DEG, DT, SMOOTHING)
 	assert_eq(ab.prev_intent_pos, Vector3(0.3, 0.0, 0.1))
-	assert_eq(ab.prev_blade_pos_rel_skater, Vector3(0.25, 0.0, 0.05))
+	assert_eq(ab.prev_swing_bearing, Vector3(0.25, 0.0, 0.05))
 
 func test_direction_comes_from_cursor_not_blade() -> void:
 	# Cursor moves +X (clear drag direction); blade sits elsewhere. The recorded
@@ -98,7 +98,7 @@ func test_reset_wrister_zeroes_state_and_seeds_pos() -> void:
 	assert_almost_eq(ab.stroke_travel, 0.0, 0.001)
 	assert_eq(ab.prev_blade_dir, Vector3.ZERO)
 	assert_eq(ab.prev_intent_pos, Vector3(0.2, 0.0, 0.1))
-	assert_eq(ab.prev_blade_pos_rel_skater, Vector3(0.25, 0.0, 0.05))
+	assert_eq(ab.prev_swing_bearing, Vector3(0.25, 0.0, 0.05))
 
 # ── Stroke travel (the power-ceiling gate signal) ─────────────────────────────
 

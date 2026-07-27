@@ -17,8 +17,9 @@ extends Node
 
 # Reach disc: how far the cursor can sit from the anchor on screen. The blade IK
 # ROM-clamps beyond this, so it just bounds the cursor to reachable ice. Also the
-# radius the cursor is placed at while aiming a shot (so blade→cursor is a clean
-# stick-direction line). Feel tunable.
+# radius the cursor is placed at while aiming a shot — there it only sets how far
+# out the aim point sits; the DIRECTION is exact at any radius because the shot
+# cursor anchors on the puck (see _shot_anchor_screen). Feel tunable.
 const AIM_RADIUS_PX: float = 480.0
 # Stickhandle rest: when the stick is released, the cursor eases to a point this
 # many METERS ahead of the body along the facing, so the blade settles into a
@@ -66,9 +67,30 @@ var _pad_cursor_valid: bool = false
 # RT is held so the shot reads the held power even on the release frame. Aim is the
 # stick DIRECTION, power the MAGNITUDE. _prev_gather_rt keeps commit_wrister_power
 # true for that one release frame (RT already read as up) so the shot fired on RT-up
-# still routes through the committed-power / player→cursor-aim path.
-var _committed_wrister_power: float = 0.0
+# still routes through the committed-power / origin→cursor-aim path.
+#
+# The latch HOLDS on a centered stick, exactly like the aim does: a stick inside the
+# deadzone carries no aim and no power, so re-sampling it there would collapse a
+# lined-up shot to the 10 m/s floor. That fires on the thumb relaxing a tick before
+# (or with) the trigger — the same digit-independent release that should have ripped
+# it — and on the "just pull RT" shot, which used to be a dribbler in a stale
+# direction. Seeded full at the press edge so a shot taken with no stick input at
+# all is a full rip along the held aim, not the softest shot in the game.
+var _committed_wrister_power: float = 1.0
 var _prev_gather_rt: bool = false
+# World point the SHOT cursor is anchored to, PINNED at the trigger edge (the blade
+# contact point, flattened to the ice). The sim pins the same point one physics tick
+# later as the wrister's aim origin (SkaterAimingBehavior.wrister_origin_world), and
+# the shot fires along origin→cursor — so anchoring the cursor here makes that line
+# the stick direction exactly, for the whole hold.
+#
+# It must be PINNED and not re-read live: the blade travels with the body while the
+# origin stays put, so a live anchor would swing origin→cursor as the player skates
+# (a perpendicular 4 m of travel against a ~6 m cursor is ~33° of aim drift), and
+# that drift also banks into the swing-chirality accumulator as rotation nobody
+# gestured. Vector3.ZERO / invalid falls back to the body anchor.
+var _pad_shot_anchor_world: Vector3 = Vector3.ZERO
+var _pad_shot_anchor_valid: bool = false
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
 # input-frame cadence with the same pending-flag latch the mouse actions use.
@@ -152,6 +174,13 @@ func _accumulate_gamepad_edges() -> void:
 	var shoot_now: bool = _pad_trigger(JOY_AXIS_TRIGGER_RIGHT)
 	if shoot_now and not _prev_pad_shoot:
 		_pending_shoot_pressed = true
+		# Fresh stroke: default to a full rip. The latch only moves again while the
+		# stick is live, so a shot aimed and fired without ever dialling the
+		# magnitude back is a real shot rather than the min-power floor.
+		_committed_wrister_power = 1.0
+		_pin_shot_anchor()
+	elif not shoot_now and _prev_pad_shoot:
+		_pad_shot_anchor_valid = false
 	_prev_pad_shoot = shoot_now
 	var slap_now: bool = _pad_trigger(JOY_AXIS_TRIGGER_LEFT)
 	if slap_now and not _prev_pad_slap:
@@ -221,16 +250,20 @@ func gather() -> InputState:
 		state.stick_lift_held = _pad_held("stick_lift")
 		state.hit_held = _pad_held("hit")
 		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
-		# direction in _update_pad_cursor → player→cursor is the shot line), power from
+		# direction in _update_pad_cursor → origin→cursor is the shot line), power from
 		# how hard the stick is pushed (its magnitude) — no flick, no drag timing, no
 		# travel gate. Latch the power while RT is held and keep commit true one frame
 		# into the release so the shot (fired on RT-up) reads the held power.
+		# A stick inside the deadzone HOLDS the latch (see _committed_wrister_power) —
+		# the same hold the aim gets, so aim and pace can't be knocked out by the
+		# thumb coming home.
 		# Snapped to the wire grid HERE, not at send: we predict locally on this
 		# same object, so an unquantized latch would have us predict a power the
 		# host can't reproduce from the u8 it receives (see InputState.quantize_power_t).
 		if state.shoot_held:
-			_committed_wrister_power = InputState.quantize_power_t(
-					_pad_right_stick_dz().length())
+			var power_stick: Vector2 = _pad_right_stick_dz()
+			if not power_stick.is_zero_approx():
+				_committed_wrister_power = InputState.quantize_power_t(power_stick.length())
 		state.commit_wrister_power = state.shoot_held or _prev_gather_rt
 		state.bot_wrister_power_t = _committed_wrister_power
 		_prev_gather_rt = state.shoot_held
@@ -286,13 +319,14 @@ func _screen_cursor(pad: bool) -> Vector2:
 
 # Update the gamepad cursor. Two modes, chosen on the shoot trigger:
 #   * STICKHANDLE (RT up): absolute proportional placement — the stick maps to a
-#     blade offset from the anchor. Releasing the stick eases the cursor to a rest
-#     just ahead of the body along the facing, so the blade settles into a natural
-#     forward carry that tracks where you're pointed.
+#     blade offset from the BODY anchor. Releasing the stick eases the cursor to a
+#     rest just ahead of the body along the facing, so the blade settles into a
+#     natural forward carry that tracks where you're pointed.
 #   * SHOOT (RT held): the cursor is parked at the reach radius in the stick
-#     DIRECTION, so the shot line (player→cursor, the release fallback used when the
-#     committed path zeroes the drag direction) is exactly where the stick points —
-#     a clean, held aim. Power is how hard the stick is pushed (committed in gather).
+#     DIRECTION, from the PUCK's anchor — see _shot_anchor_screen. The shot line is
+#     origin→cursor (the frozen blade toward the cursor), so anchoring the cursor on
+#     the puck is what makes that line the stick direction. Power is how hard the
+#     stick is pushed (committed in gather).
 func _update_pad_cursor(delta: float) -> void:
 	var anchor: Vector2 = _aim_anchor_screen()
 	if not _pad_cursor_valid:
@@ -303,7 +337,8 @@ func _update_pad_cursor(delta: float) -> void:
 		# Aim = stick direction only (a full radius out). A centered stick during RT
 		# holds the last aim so a shot already lined up doesn't drift to center.
 		if not stick.is_zero_approx():
-			_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick.normalized(), AIM_RADIUS_PX)
+			_pad_cursor = GamepadAimRules.absolute_cursor(
+					_shot_anchor_screen(anchor), stick.normalized(), AIM_RADIUS_PX)
 	elif not stick.is_zero_approx():
 		_pad_cursor = GamepadAimRules.absolute_cursor(anchor, stick, AIM_RADIUS_PX)
 	else:
@@ -336,6 +371,43 @@ func _facing_rest_screen(anchor: Vector2) -> Vector2:
 	if _camera.is_position_behind(rest_world):
 		return anchor
 	return _camera.unproject_position(rest_world)
+
+# Pin the shot cursor's world anchor at the trigger edge — the puck's on-blade
+# contact point, flattened to the ice plane (the aim is pure XZ and _screen_to_world
+# projects onto y = 0, so anchoring at the blade's real height would reintroduce a
+# small offset). See _pad_shot_anchor_world for why it's pinned rather than live.
+func _pin_shot_anchor() -> void:
+	_pad_shot_anchor_valid = false
+	if _aim_skater == null:
+		return
+	var contact: Vector3 = _aim_skater.get_blade_contact_global()
+	contact.y = 0.0
+	_pad_shot_anchor_world = contact
+	_pad_shot_anchor_valid = true
+
+# On-screen anchor for the gamepad SHOT cursor: the pinned puck point, projected.
+#
+# The wrister aims POSITIONALLY — origin→cursor, where the origin is the blade/puck
+# frozen at charge start (ShotMechanics.wrister_aim_dir). Parking the cursor a fixed
+# 480 px from the BODY therefore did NOT put the shot where the stick pointed: the
+# blade sits ~1 m off the body, so origin→cursor was that line parallel-shifted by
+# the carry offset. The error is asin(offset / cursor_distance), and the cursor's
+# WORLD distance rides the dynamic zoom (10–32 m camera height ⇒ roughly 4–13 m of
+# ice under a fixed 480 px), so the bias ran ~4°–15°, flipping sign with the carry
+# side and changing with the zoom — about a net width at slot range, and
+# unlearnable because it never held still. Anchoring the cursor on the puck instead
+# makes origin→cursor the stick direction by construction, at any zoom — which is
+# also what makes the swing-chirality read work on a pad, since the stick's bearing
+# then IS the shot line's bearing.
+#
+# Falls back to the passed body anchor with no pin (no skater at the edge) or when
+# the pinned point is behind the camera.
+func _shot_anchor_screen(body_anchor: Vector2) -> Vector2:
+	if not _pad_shot_anchor_valid or _camera == null:
+		return body_anchor
+	if _camera.is_position_behind(_pad_shot_anchor_world):
+		return body_anchor
+	return _camera.unproject_position(_pad_shot_anchor_world)
 
 # On-screen anchor for the gamepad cursor: the skater's projected position, so the
 # reach disc tracks the player as the camera follows. Falls back to the viewport

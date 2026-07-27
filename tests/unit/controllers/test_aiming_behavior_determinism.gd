@@ -43,8 +43,8 @@ func test_wrister_charge_deterministic_from_neutral_start() -> void:
 			"prev_blade_dir must match")
 	assert_eq(a.prev_intent_pos, b.prev_intent_pos,
 			"prev_intent_pos must match")
-	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater,
-			"prev_blade_pos_rel_skater must match")
+	assert_eq(a.prev_swing_bearing, b.prev_swing_bearing,
+			"prev_swing_bearing must match")
 
 
 func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
@@ -58,13 +58,13 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 	a.stroke_travel = 0.4
 	a.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
 	a.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
-	a.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
+	a.prev_swing_bearing = Vector3(0.3, 0.0, 0.2)
 	b.cursor_speed_ema = 700.0
 	b.swing_rotation = 0.3
 	b.stroke_travel = 0.4
 	b.prev_blade_dir = Vector3(0.6, 0.0, 0.8)
 	b.prev_intent_pos = Vector3(0.3, 0.0, 0.2)
-	b.prev_blade_pos_rel_skater = Vector3(0.3, 0.0, 0.2)
+	b.prev_swing_bearing = Vector3(0.3, 0.0, 0.2)
 	var sweep: Array[Vector3] = [
 		Vector3(0.35, 0.0, 0.22), Vector3(0.4, 0.0, 0.25), Vector3(0.45, 0.0, 0.28), Vector3(0.5, 0.0, 0.32),
 	]
@@ -76,7 +76,7 @@ func test_wrister_charge_deterministic_from_mid_charge_start() -> void:
 	assert_eq(a.stroke_travel, b.stroke_travel)
 	assert_eq(a.prev_blade_dir, b.prev_blade_dir)
 	assert_eq(a.prev_intent_pos, b.prev_intent_pos)
-	assert_eq(a.prev_blade_pos_rel_skater, b.prev_blade_pos_rel_skater)
+	assert_eq(a.prev_swing_bearing, b.prev_swing_bearing)
 
 
 # ── Slapper charge — timer accumulation is pure delta sum ────────────────────
