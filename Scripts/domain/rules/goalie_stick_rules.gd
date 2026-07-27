@@ -54,11 +54,30 @@ class_name GoalieStickRules
 
 # ── Geometry (mirrors Goalie.tscn) ───────────────────────────────────────────
 # StickBladeCollider is a 0.38 x 0.07 x 0.03 box. The width is what closes the
-# five-hole; the height is why a stick save is an ICE-LEVEL event (a lifted puck
-# clears it entirely, which is why the fix flipped the planner's band choice
-# from flat to HIGH rather than simply making every shot worse).
+# five-hole; the height is why a BLADE save is an ice-level event. Note the
+# paddle below, though: a lifted puck clears the blade but not necessarily the
+# assembly, which stands 0.66 m. Lifting beats the stick only once the puck is
+# genuinely above that by the time it reaches him.
 const BLADE_WIDTH_M: float = 0.38
 const BLADE_HEIGHT_M: float = 0.07
+
+# The PADDLE — the shaft's lower section, StickPaddleCollier, a 0.10 x 0.66
+# box standing between the wrist and the blade. Narrow, so it adds nothing to
+# the lateral cover the blade already sets; what it adds is HEIGHT, and that
+# is not cosmetic. It means the stick is NOT the ice-level-only surface the
+# blade alone suggests: there is two thirds of a metre of it in the way, all
+# of it below the 0.86 m pad-top seam and therefore inside the planner's LOW
+# band.
+#
+# The consequence is a timing one, which is why it is recorded here rather
+# than turned into a cover term. A lofted arc solved to clear the seam AT THE
+# GOAL LINE is still climbing when it passes the keeper metres earlier — at
+# 4 m it crosses his plane around 0.57 m, i.e. inside this box — so it reads
+# as a top-corner shot and arrives as a stick save. AIActionScoring's
+# _high_band_horizontal_speed therefore takes the band clearance at the
+# KEEPER'S plane, not the net's.
+const PADDLE_WIDTH_M: float = 0.10
+const PADDLE_HEIGHT_M: float = 0.66
 
 # Blade offset from the BlockArm assembly origin, assembly-local (keep in sync
 # with Goalie.tscn: Stick at y −0.25, StickBladeCollider at (−0.15, −0.67, 0)

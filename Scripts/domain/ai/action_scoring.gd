@@ -269,7 +269,7 @@ const GRAVITY_M_S2: float = 9.8   # engine default the airborne puck falls under
 #   · in tight, even the min-power arc hasn't risen to the floor yet;
 #   · at long range, every legal arc has fallen back below it.
 static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float,
-		loft_tan: float = 1.0) -> float:
+		loft_tan: float = 1.0, goalie_dist: float = -1.0) -> float:
 	var vy: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
 	var disc: float = vy * vy - 2.0 * GRAVITY_M_S2 * GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M
 	if disc <= 0.0:
@@ -280,6 +280,25 @@ static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float,
 	if t_first <= 0.0001:
 		return 0.0
 	var v_h_ceiling: float = dist / t_first    # any faster arrives below the band
+	# …and it has to get OVER HIM on the way, which is a different height at a
+	# different plane. Budgeting only the net let through the arc that crosses
+	# the seam exactly at the goal line while passing the keeper, metres
+	# earlier, at barely half that — into the stick. But the surface it has to
+	# clear at his plane is the STICK's height, not the pad-top seam: the
+	# assembly stands GoalieStickRules.PADDLE_HEIGHT_M (0.66 m), and the band
+	# between that and the 0.86 m seam is a real gap where only the pads reach.
+	# Clearing the seam at his plane would be the wrong bar — it forbids the
+	# soft in-tight roof that measurably beats him 24/24.
+	# (Same correction t_reach already makes for the reaction race: the save
+	# happens at his body, so that is where the read is taken.)
+	if goalie_dist > 0.0:
+		var stick_disc: float = vy * vy \
+				- 2.0 * GRAVITY_M_S2 * GoalieStickRules.PADDLE_HEIGHT_M
+		if stick_disc <= 0.0:
+			return 0.0  # this loft never clears the stick at all
+		var t_clear_stick: float = (vy - sqrt(stick_disc)) / GRAVITY_M_S2
+		if t_clear_stick > 0.0001:
+			v_h_ceiling = minf(v_h_ceiling, goalie_dist / t_clear_stick)
 	var v_h_floor_geom: float = dist / t_last  # any slower has already sagged back
 	var v_h_full: float = sqrt(maxf(shot_speed_m_s * shot_speed_m_s - vy * vy, 0.0))
 	var v_h_min_power: float = sqrt(maxf(
@@ -303,9 +322,10 @@ static func _high_band_horizontal_speed(dist: float, shot_speed_m_s: float,
 # unreachable), FLAT bands at the committed full pace. The five-hole rides the
 # LOW band. Divides the shooter→goalie gap for the reach budget (t_reach).
 static func _band_pace(band: int, dist: float, shot_speed_m_s: float,
-		loft_tan: float = 1.0) -> float:
+		loft_tan: float = 1.0, goalie_dist: float = -1.0) -> float:
 	if band == HOLE_BAND_HIGH:
-		return _high_band_horizontal_speed(dist, shot_speed_m_s, loft_tan)
+		return _high_band_horizontal_speed(dist, shot_speed_m_s, loft_tan,
+				goalie_dist)
 	return maxf(shot_speed_m_s, 1.0)
 
 
@@ -1456,7 +1476,8 @@ static func best_shot_power_t(
 	if hole < 0 or HOLE_BAND[hole] != HOLE_BAND_HIGH:
 		return 1.0
 	var v_h: float = _high_band_horizontal_speed(
-			shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan)
+			shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan,
+			_xz_dist(shooter, goalie_pos))
 	if v_h <= 0.0:
 		return 1.0  # unreachable band can't be the chosen hole; defensive only
 	var vy: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
@@ -1568,11 +1589,12 @@ static func _hole_aim_x(
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
-	# Same per-band pace the opening was scored with (_hole_open_angle), so
-	# aim and score read the same reaction-gated cover. A chosen hole is never
-	# band-unreachable (its opening would have scored 0), so the fallback to
-	# full pace is belt-and-braces.
-	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan)
+	# Same per-band pace the opening was scored with (_hole_margin), so aim and
+	# score read the same reaction-gated cover — the keeper-plane clearance
+	# included. A chosen hole is never band-unreachable (its opening would have
+	# scored 0), so the fallback to full pace is belt-and-braces.
+	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal),
+			shot_speed_m_s, loft_tan, _xz_dist(shooter, goalie_pos))
 	if pace <= 0.0:
 		pace = maxf(shot_speed_m_s, 1.0)
 	var net_z: float = attacking_goal.z
@@ -1721,7 +1743,8 @@ static func _hole_margin(
 	# Per-band pace: HIGH holes fly at the arrival-honest solved pace (the arc
 	# must physically reach the top band — see _band_pace); 0 = no legal
 	# power gets there, so the hole isn't a target at all.
-	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal), shot_speed_m_s, loft_tan)
+	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal),
+			shot_speed_m_s, loft_tan, _xz_dist(shooter, goalie_pos))
 	if pace <= 0.0:
 		return HOLE_STRUCTURALLY_CLOSED_RAD
 	# Reach budget: the puck crosses the goalie's reach envelope at HIS body —
