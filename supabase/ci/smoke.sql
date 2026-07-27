@@ -85,4 +85,63 @@ begin
 end
 $$;
 
+-- ── Security posture ─────────────────────────────────────────────────────────
+-- Two classes of view, and the difference is deliberate:
+--   career_totals / shot_heatmap    — readable with the anon key (leaderboard).
+--   network_session_health / match_health — NOT readable; telemetry is for the
+--       dashboard and service-role only (see the network_sessions migration).
+-- Both classes must be invoker-rights. A SECURITY DEFINER view runs as its owner
+-- and bypasses the underlying RLS entirely, which is how the telemetry views
+-- leaked until 20260727181500 — the Supabase advisor flags it, and by then it is
+-- already live. These are catalog assertions rather than role-switching queries,
+-- so they hold no matter which superuser CI connects as.
+do $$
+declare
+    v text;
+begin
+    foreach v in array array[
+        'network_session_health', 'match_health', 'career_totals', 'shot_heatmap'
+    ] loop
+        if not exists (
+            select 1 from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relname = v
+              and c.reloptions @> array['security_invoker=true']
+        ) then
+            raise exception
+                'view public.% is not security_invoker — it would bypass RLS', v;
+        end if;
+    end loop;
+
+    -- Telemetry stays unreadable with the publishable key, which ships in every
+    -- client binary.
+    foreach v in array array['network_session_health', 'match_health'] loop
+        if has_table_privilege('anon', 'public.' || v, 'SELECT') then
+            raise exception
+                'anon can SELECT public.% — telemetry is not world-readable', v;
+        end if;
+    end loop;
+
+    -- ...and the public ones stay public, so a blanket revoke never silently
+    -- breaks the career screen.
+    foreach v in array array['career_totals', 'shot_heatmap'] loop
+        if not has_table_privilege('anon', 'public.' || v, 'SELECT') then
+            raise exception 'anon cannot SELECT public.% — the career screen reads it', v;
+        end if;
+    end loop;
+
+    -- The tables the client posts to: RLS on, and no anon SELECT on telemetry.
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                   where n.nspname = 'public' and c.relname = 'network_sessions'
+                     and c.relrowsecurity) then
+        raise exception 'RLS is not enabled on network_sessions';
+    end if;
+    if exists (select 1 from pg_policies where schemaname = 'public'
+               and tablename = 'network_sessions' and cmd = 'SELECT'
+               and 'anon' = any(roles)) then
+        raise exception 'network_sessions has an anon SELECT policy — it is INSERT-only';
+    end if;
+end
+$$;
+
 rollback;

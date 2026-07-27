@@ -116,6 +116,13 @@ only sequence-backed defaults show. That is a known blind spot in the diff.
   via `steam_id = null`, wipe) every row. Do not re-add one; a stat merge that
   needs it must go through a service-role RPC. Reads for analysis go through the
   dashboard or a service-role key, which bypasses RLS.
+- **Every view needs `with (security_invoker = true)`.** Postgres defaults a view
+  to DEFINER rights, so it runs as its owner and bypasses the underlying table's
+  RLS — which silently undoes the policies above. `network_session_health` and
+  `match_health` shipped without it and were readable with the publishable key
+  until `20260727181500`. `ci/smoke.sql` now asserts the option on every view, and
+  asserts which of them `anon` may read, so the posture is tested rather than
+  reviewed. Supabase's advisor catches this too, but only once it is already live.
 - **Never commit the service/secret key**, and keep `SUPABASE_DB_URL` a repo
   secret — it carries the database password. Only the publishable key belongs in
   `SupabaseConfig`.
