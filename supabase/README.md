@@ -50,9 +50,8 @@ need `notify pgrst, 'reload schema';` before the client sees it.
 CI ships **inert**. The `push` and `drift` jobs look for one repo secret and
 report-and-exit when it is missing, so nothing touches the live database until:
 
-- **`SUPABASE_DB_URL`** — the **session pooler** URI, from the dashboard's
-  **Connect** button (or Project Settings → Database → Connection string), with
-  `[YOUR-PASSWORD]` replaced. It looks like:
+- **`SUPABASE_DB_URL`** — the **session pooler** URI, from the **Connect** button
+  in the dashboard header, with `[YOUR-PASSWORD]` replaced. It looks like:
 
   ```
   postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
@@ -68,9 +67,18 @@ report-and-exit when it is missing, so nothing touches the live database until:
     are IPv4-only. Both pooler endpoints are IPv4. A direct URL fails in CI with
     a connection error that looks nothing like an addressing problem.
 
-  The password is the database password from project creation; it is never shown
-  again. If it is lost, reset it at Project Settings → Database — which
-  invalidates anything else using it. Prefer a generated alphanumeric password:
+  This is **not** an API key. The publishable/secret API keys authenticate HTTP
+  requests to PostgREST (that is what `SupabaseConfig.ANON_KEY` holds); this is
+  the Postgres password, because `db push` speaks the database wire protocol.
+  Neither substitutes for the other, and the secret key belongs in the repo even
+  less than this does.
+
+  The password is the one set at project creation; it is never shown again (the
+  connection string carries a `[YOUR-PASSWORD]` placeholder). If it is lost,
+  reset it under the **Database** section's settings —
+  `dashboard/project/<ref>/database/settings`, which is NOT under Project
+  Settings — and note that resetting invalidates anything else using it. Prefer
+  a generated alphanumeric password:
   the URL has to be percent-encoded, so a literal `@`, `:`, `/`, `#` or `?` in
   the password will break the connection string unless escaped.
 
