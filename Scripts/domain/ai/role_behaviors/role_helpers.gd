@@ -228,20 +228,19 @@ const COVER_GOAL_SIDE_TOLERANCE_M: float = 0.5
 # man→net lane (AIThreatAssignment.cover_anchor, COVER_DEPTH_M goal-side of
 # him) — i.e. set up ON the man, in the feed lane, to kill the one-timer.
 #
-# The search center used to be the midpoint between the man and our net,
-# which sagged the whole candidate set: a man 12 m out was "covered" from
-# ~6 m away, and because a midpoint moves at HALF the man's speed, a
-# cutting man walked away from his check every time ("bots lose their
-# man"). Anchoring on cover_anchor keeps the defender attached (it tracks
-# the man 1:1) and matches the anchor the partition already scored
-# reachability against, so the pairing and the coverage agree. The ±3 m
-# candidate ring still lets the argmax shade off the body and into the
-# carrier→man lane when that deflates the threat more.
+# The anchor must track the man 1:1. Centering the search anywhere that moves
+# SLOWER than he does — a man/net midpoint being the tempting one — lets a
+# cutting man walk away from his check every time, and sags the whole candidate
+# set besides (a man 12 m out gets "covered" from 6 m away). cover_anchor is
+# also the anchor the threat partition already scored reachability against, so
+# the pairing and the coverage agree. The ±3 m candidate ring still lets the
+# argmax shade off the body into the carrier→man lane when that deflates the
+# threat more.
 #
-# This replaces the legacy "minimize the MAX threat over ALL opponents" scoring
-# for the assigned-man case: because each backline defender gets a DISTINCT man,
-# two defenders no longer collapse onto the single most dangerous opponent.
-# Roles fall back to their all-opponents behavior when unassigned (man_pid -1).
+# Scoring the ASSIGNED man (rather than minimizing the max threat over ALL
+# opponents) is what stops two defenders collapsing onto the single most
+# dangerous opponent, since each gets a distinct man. Roles fall back to their
+# all-opponents behavior when unassigned (man_pid -1).
 static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 		carrier_pos: Vector3) -> Vector3:
 	var our_net: Vector3 = ctx.defending_goal_pos
@@ -502,7 +501,7 @@ static func evaluate_body_check(ctx: RoleContext) -> AIBodyCheck.Result:
 		return AIBodyCheck.Result.new()
 	var commit_threshold: float = AIBodyCheck.COMMIT_IMPULSE_M_S / ctx.check_aggression
 	var carrier: SkaterNetworkState = ctx.snapshot.skater_states[carrier_pid]
-	# The victim's real mass (Size) — don't leave your feet for a hit you'd bounce
+	# The victim's real mass (weight-derived) — don't leave your feet for a hit you'd bounce
 	# off a heavy carrier with. League default when the build isn't wired.
 	var victim_caps: AISkaterCaps = ctx.caps_by_peer.get(carrier_pid)
 	var victim_weight: float = victim_caps.weight if victim_caps != null \
@@ -1184,8 +1183,7 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 # radius of every station: reach (blade span) + the run a standing start
 # covers in the time the puck needs to get there (same capped ramp the
 # calibrated time_to_arrive charges), minus the SET margin at every station.
-# Exact inversion of the per-station race race_home_feasible used to solve
-# candidate-by-candidate.
+# An exact inversion of the per-station race, solved for all stations at once.
 #
 # SET ARRIVAL at every station — containment is not presence. A defender who
 # merely GETS to a mid-path station as the rush arrives is screaming through
@@ -1197,15 +1195,15 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 #   short budget — triangular: accelerate then brake to zero inside `avail`;
 #     covered ground is ½·k·avail² with k = a·B/(a+B) (the effective accel of
 #     an accelerate-brake round trip; B = the arrival brake decel);
-#   long budget — trapezoidal: full ramp (d_ramp) + brake run (v²/2B, the
-#     braking DISTANCE the old net-only margin forgot to credit) + cruise for
+#   long budget — trapezoidal: full ramp (d_ramp) + brake run (v²/2B — the
+#     braking DISTANCE must be credited, not just the ramp) + cruise for
 #     whatever time remains.
 # A station already under the blade needs no travel and stays contained at
 # any budget — the camped line stand still stuffs the man who skates into
-# it. Charging the set profile everywhere collapses feasibility while a
-# breakout is still FORMING (the carrier gathering speed deep in his zone),
-# which is what starts the back-off early enough to gap up, instead of after
-# the race is already lost. (Replaces the old net-station-only brake margin.)
+# it. Charging the set profile at EVERY station (not just the net) collapses
+# feasibility while a breakout is still FORMING — the carrier gathering speed
+# deep in his zone — which is what starts the back-off early enough to gap up
+# instead of after the race is already lost.
 static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void:
 	if self_max_speed == _race_key_speed and self_max_accel == _race_key_accel:
 		return
@@ -1490,10 +1488,16 @@ static func _xz_distance(a: Vector3, b: Vector3) -> float:
 # to defending the pickup instead of pushing (the missed-pass "third man keeps
 # chasing while the counter develops" failure). False when no opponent
 # threatens the puck.
+#
+# `own_goal_dir` (+1 = our net at +Z) enables the CONTAINMENT read below, which
+# is what keeps the decline from becoming "the bots stopped trying". Pass 0.0
+# only where the geometry genuinely isn't available (unit tests) — both
+# production call sites pass the real value.
 static func loose_puck_race_lost(
 		snapshot: WorldSnapshot, self_pos: Vector3, self_vel: Vector3,
 		self_max_speed: float, team_id: int, team_id_by_peer: Dictionary,
-		caps_by_peer: Dictionary, self_pid: int = -1) -> bool:
+		caps_by_peer: Dictionary, self_pid: int = -1,
+		own_goal_dir: float = 0.0) -> bool:
 	if snapshot == null or snapshot.puck_state == null:
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
@@ -1528,32 +1532,87 @@ static func loose_puck_race_lost(
 		my_eta = AILoosePuckChase.path_intercept_time(
 				traj, step_dt, self_pos, self_vel, self_vmax)
 	var best_opp_eta: float = INF
+	var best_opp_meet: Vector3 = puck_pos
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
-		# A SLOW puck's race is only lost to an opponent actually running it
-		# (on the puck, or genuinely closing — committed_to_race). The ETA
-		# model prices his hypothetical sprint-from-now; declining on a body
-		# that is NOT going for the puck left it sitting between two staring
-		# teams (both sides declined on hypothetical winners). Fast pucks
-		# keep the pure path race: momentum already encodes commitment
-		# there, and a downstream interceptor legitimately waits still.
-		if traj.is_empty() \
-				and not AILoosePuckChase.committed_to_race(s, puck_pos):
-			continue
+		# The race is only lost to an opponent actually RUNNING it — on the
+		# intercept point already (standing there is the play, no motion
+		# needed), or genuinely closing on it. The ETA model prices his
+		# hypothetical sprint-from-now; declining on a body that is not going
+		# for the puck left it sitting between two staring teams, both sides
+		# having declined on hypothetical winners.
+		#
+		# For a MOVING puck the question is per-path, not per-position: a rim's
+		# downstream interceptor legitimately waits still, and he reads as
+		# committed because the rim's own line runs through his contest band —
+		# he makes the play without moving. What no longer counts is the body
+		# 15 m off that line, or drifting away from it, whose "win" is a sprint
+		# he was never running: that phantom veto is what talked our chaser off
+		# a rim and sent him retreating to the pre-contain point while the puck
+		# rode the whole zone untouched.
 		var speed: float = AILoosePuckChase.race_vmax(
 				s, caps_by_peer.get(pid), puck_pos)
 		var t: float
+		var committed: bool
+		var meet: Vector3 = puck_pos
 		if traj.is_empty():
 			t = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)
+			committed = AILoosePuckChase.committed_to_race(s, puck_pos)
 		else:
 			t = AILoosePuckChase.path_intercept_time(
 					traj, step_dt, s.position, s.velocity, speed)
+			meet = AILoosePuckChase.path_intercept_point(traj, step_dt, t)
+			committed = AILoosePuckChase.path_enters_band(traj, puck_pos,
+					s.position, AIActionScoring.CHASE_CONTEST_MARGIN_M) \
+					or AILoosePuckChase.committed_to_point(s, meet)
+		if not committed:
+			continue
 		if t < best_opp_eta:
 			best_opp_eta = t
+			best_opp_meet = meet
 	if best_opp_eta == INF:
 		return false
 	var contest_window: float = AIActionScoring.CHASE_CONTEST_MARGIN_M \
 			/ maxf(self_max_speed, 1.0)
-	return my_eta > best_opp_eta + contest_window
+	if my_eta <= best_opp_eta + contest_window:
+		return false
+	# Losing the race is only a reason to STOP if stopping buys something. The
+	# decline exists to pre-contain the collector so the counter meets a body —
+	# which is worth a chaser only when there is not already one behind the
+	# play. With a teammate goal-side of the pickup the counter is contained
+	# without me and the honest read on a lost puck is to keep skating: that is
+	# the forecheck, and refusing it is why a dumped-in puck got collected with
+	# nobody within 20 m of it (measured: our team had NOBODY chasing for 53% of
+	# the loose window on a routine dump-in).
+	#
+	# Naturally zone-aware, so no zone gate is needed: a puck dumped into the
+	# attacking corner has our whole team goal-side of it and gets forechecked,
+	# while a puck lost behind our own D — the last man with nobody home, the
+	# geometry the decline was actually built for — still declines and
+	# pre-contains. Goal-side is the plain support read ("is anyone behind the
+	# puck") rather than a full can-he-hold model: cheap, and it errs toward
+	# racing, which is the side of this trade-off that reads as hockey.
+	return not _has_containment_behind(snapshot, team_id, team_id_by_peer,
+			self_pid, best_opp_meet, own_goal_dir)
+
+
+# Is a live teammate (not me, not ghosted) at least a stride goal-side of the
+# pickup point? own_goal_dir 0.0 means the caller has no rink geometry to give
+# us, so no containment can be claimed.
+static func _has_containment_behind(snapshot: WorldSnapshot, team_id: int,
+		team_id_by_peer: Dictionary, self_pid: int, pickup: Vector3,
+		own_goal_dir: float) -> bool:
+	if own_goal_dir == 0.0:
+		return false
+	for pid: int in snapshot.skater_states:
+		if pid == self_pid or team_id_by_peer.get(pid, -1) != team_id:
+			continue
+		var mate: SkaterNetworkState = snapshot.skater_states[pid]
+		if mate.is_ghost:
+			continue
+		if own_goal_dir * (mate.position.z - pickup.z) \
+				> AIActionScoring.CHASE_CONTEST_MARGIN_M:
+			return true
+	return false

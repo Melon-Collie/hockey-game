@@ -495,9 +495,18 @@ func _build_snapshot() -> WorldSnapshot:
 		var arr: Array = snap.teammate_ids_by_team.get_or_add(s.team_id, [])
 		arr.append(s.peer_id)
 	for tid: int in snap.teammate_ids_by_team:
+		# The camper filter is part of that enrichment too: a one-timer-ready
+		# bot has opted out of loose-puck work, so electing him froze the whole
+		# team (he refuses the chase, nobody else is elected). Omitting it here
+		# ran every loose-puck scenario on an election production never makes.
+		var camped: Array = []
+		for pid: int in snap.teammate_ids_by_team[tid]:
+			if brains[tid].is_one_timer_ready(pid):
+				camped.append(pid)
 		var elected: int = AILoosePuckChase.elect(
 				snap.skater_states, snap.teammate_ids_by_team[tid],
-				puck_pos, puck_vel, int(_prev_chase_by_team.get(tid, -1)))
+				puck_pos, puck_vel, int(_prev_chase_by_team.get(tid, -1)),
+				{}, true, [], camped)
 		snap.closest_to_puck_by_team[tid] = elected
 		_prev_chase_by_team[tid] = elected
 	# Static home keepers so shot scoring sees someone in each net (goalie

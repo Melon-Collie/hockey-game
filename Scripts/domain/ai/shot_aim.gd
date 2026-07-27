@@ -36,20 +36,17 @@ class_name AIShotAim
 
 # Default corner bias — where in the open lane the bot aims. 0 = the arc
 # MIDPOINT (max clearance from both the post and the goalie's cover edge), +1 =
-# the open POST, −1 = the goalie's cover edge.
+# the open POST, -1 = the goalie's cover edge.
 #
-# 0.0 (the honest best spot). The shot SCORE prices a shot by its partial make
-# probability with the aim assumed at the window CENTRE (AIActionScoring.
-# the make-probability mapping), so the aim must sit there too or score and release desync.
-# Centring it also makes the execution wobble symmetric: a taken shot's scatter
-# splits into goals AND goalie saves AND posts, instead of the old +0.3 post-bias
-# that threw the whole wobble tail onto the IRON (so the bot's misses were posts
-# and narrow-wide misses and the keeper almost never got a save — the shot was
-# aimed away from him). Aiming at max clearance is also simply optimal: it
-# maximises the makeable window the score is integrating over. Tune by feel:
-# POSITIVE re-introduces the old post-snipe (prettier corners, more clanks/wides,
-# fewer saves); NEGATIVE aims into the goalie (more saves, fewer goals) but
-# desyncs from the centred-aim score.
+# Keep this at 0.0. The shot SCORE prices a shot by its partial make probability
+# with the aim assumed at the window CENTRE, so the aim must sit there too or
+# score and release desync. Centring also makes the execution wobble symmetric —
+# scatter splits into goals AND saves AND posts — where a post bias throws the
+# whole wobble tail onto the IRON, aiming the shot away from the keeper so he
+# never gets a save. And it is simply optimal: it maximises the makeable window
+# the score integrates over. Tune by feel: POSITIVE gives prettier corners with
+# more clanks and wides and fewer saves; NEGATIVE aims into the goalie (more
+# saves, fewer goals). Both desync from the centred-aim score.
 const DEFAULT_CORNER_BIAS: float = 0.0
 
 # How far ahead to project the goalie's shadow when goalie_velocity_x

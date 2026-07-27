@@ -1,9 +1,20 @@
 name: Test
 
+# push is scoped to main rather than "**" so a PR commit is tested ONCE. With
+# both triggers open to every branch, each push to a branch with an open PR ran
+# the suite twice — once for the push, once for the pull_request — on the same
+# code, doubling the CI minutes for no extra signal. The pull_request run is the
+# better of the two anyway: it tests the merge commit (branch + base), not the
+# branch in isolation.
+#
+# Trade-off: a branch with no PR open now gets no CI. Open the PR early (draft is
+# fine) if you want the suite running while you iterate.
+#
+# workflow_call is how deploy.yml / deploy-steam.yml gate a release on the suite.
 on:
   push:
     branches:
-      - "**"
+      - main
   pull_request:
     branches:
       - main

@@ -1,32 +1,29 @@
 class_name AIRoleRushD
 
 # RUSH_D1 / RUSH_D2 — the two defensemen defending a rush (5v5 TRANS_OD).
-# Replaces AIRoleContain. Design: docs/transition-defense-plan.md §5–§6.
+# Design: docs/transition-defense-plan.md §5–§6.
 #
 #   RUSH_D1 — the strong-side D. He OWNS THE CARRIER: hold a gap sized by the
 #     ice remaining, angle him off the middle, and attack the moment his speed
 #     advantage is gone. He keeps the carrier across the blue line (the state
-#     no longer flips there — see the coverage gate), so there is no handoff and
+#     does not flip there — see the coverage gate), so there is no handoff and
 #     no target discontinuity mid-rush.
 #   RUSH_D2 — the weak-side D. He holds MID-ICE and takes the mid-lane drive
 #     ("the mid-lane drive is fed to D2"). On a DOWN_ONE read he is the man in
 #     the passing lane; with only one D back, RUSH_D1 inherits that job.
 #
-# ── Gap control (the part that was most wrong) ───────────────────────────────
-# The old gap was a function of the carrier's PACE: 1.6 m + closing × 0.5,
-# capped at 6.0. Doctrine is a LADDER ON ICE REMAINING — ~3 stick lengths at the
-# offensive blue line, 2 at the red line, 1 stick at your own blue line — and
-# 6.0 m is almost exactly 3 sticks, so the old model held the OFFENSIVE blue
-# line's gap all the way to its own net. That is the sag.
+# ── Gap control ──────────────────────────────────────────────────────────────
+# The gap is a LADDER ON ICE REMAINING — doctrine is ~3 stick lengths at the
+# offensive blue line, 2 at the red line, 1 stick at your own blue line. The
+# ladder is the driver and pace is a small correction, NOT the other way around:
+# sizing the gap off the carrier's pace alone holds the offensive blue line's
+# gap all the way back to your own net, which is the sag.
 #
-# Every modifier also ran one way. The blue-line stand was gated off whenever
-# nobody was home behind (which on a rush is everybody, since has_support_behind
-# was a raw depth scan), the rendezvous clamp could only widen the gap, and the
-# won-race tightening required being ahead of the carrier AND every trailer. So
-# there was no term anywhere that said CLOSE THE GAP.
-#
-# Here the ladder is the driver, pace is a small correction, and the modifiers
-# read the team's shared numbers rather than each defender's private paranoia.
+# Modifiers must be able to run BOTH ways — something has to be able to say
+# CLOSE THE GAP, not just widen it — and they read the team's shared numbers
+# (`has_support_behind` and the rendezvous read) rather than each defender's
+# private depth scan, which on a rush sees nobody home and disables the
+# blue-line stand for everyone.
 
 # The gap ladder, in stick lengths (BLADE_REACH_M — the honest physical unit,
 # already attribute-scaled, so a long-stick D legitimately plays a hair wider).

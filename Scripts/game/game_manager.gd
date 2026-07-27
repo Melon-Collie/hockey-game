@@ -3456,10 +3456,24 @@ func _note_shot_trajectory() -> void:
 	# Mid-flight (deflection re-reads) the pending vector is spent and this
 	# returns live linear_velocity.
 	var vel: Vector3 = puck.get_release_velocity()
+	# A shot attempt is a puck directed at the OPPONENT'S net — Corsi/Fenwick/xG
+	# only ever count attacking-net attempts. Both mouths pass the same ballistic
+	# test (it only requires the puck to travel toward that end), so without this
+	# gate a D-zone clearing whack or a breakout pass that happened to line up with
+	# the shooter's OWN net logged a shot attempt for the DEFENDING team, priced its
+	# xG off that net's geometry, and painted a point-blank chance at the wrong end
+	# of the shot map. Falls back to reading both goals when the shooter's team
+	# can't be resolved (drills, unassigned goals) — over-crediting beats swallowing
+	# real shots.
+	var shooter_team: int = -1
+	if _registry != null:
+		shooter_team = _registry.resolve_team_id_for_peer(_shot_tracker.get_shooter_peer_id())
 	var on_net: bool = false
 	var directed: bool = false
 	var directed_line_z: float = 0.0
 	for goal: HockeyGoal in goals:
+		if shooter_team != -1 and goal.defending_team_id == shooter_team:
+			continue  # the shooter's own net — never an attempt for their team
 		var line_z: float = goal.goal_line_z()
 		if ShotOnNetRules.is_on_net(pos, vel, line_z):
 			on_net = true
@@ -3473,9 +3487,15 @@ func _note_shot_trajectory() -> void:
 			directed_line_z = line_z
 	_shot_tracker.note_trajectory(on_net)
 	_shot_tracker.note_directed_at_net(directed)
+	# Release position for the shot map (B1). Noted UNCONDITIONALLY: an undirected
+	# release still resolves into a plotted event when it goes in off someone (an
+	# own goal is credited to the other team via on_goal_confirmed), and gating this
+	# on `directed` parked those dots at centre ice.
+	_shot_tracker.note_shot_origin(pos)
 	# xG (A2): evaluate this shot's expected goals from the REAL goalie geometry at
 	# release, and hold it on the pending shot to commit when it resolves. Only
-	# directed shots can become counted attempts, so only they need an xG.
+	# directed shots can become counted attempts, so only they need an xG — an
+	# undirected release keeps xG 0, which is honest: we never evaluated it.
 	if directed:
 		var xg: float = AIActionScoring.expected_goals(
 				pos, Vector3(0.0, 0.0, directed_line_z),
@@ -3484,7 +3504,6 @@ func _note_shot_trajectory() -> void:
 				0.0, -1.0, false, 0.0, false, 0.0,
 				Vector4.INF, Vector4.INF, 1.0, _shot_release_spread())
 		_shot_tracker.note_xg(xg)
-		_shot_tracker.note_shot_origin(pos)  # release position for the shot map (B1)
 
 
 # The pending shot's release-difficulty spread — the "can you hit it" half of the

@@ -104,6 +104,13 @@ alter table public.career_stats add column if not exists rule_set              t
 alter table public.career_stats add column if not exists period_seconds        integer;
 
 create index if not exists career_stats_game_id_idx on public.career_stats (game_id);
+-- steam_id is the filter on BOTH career-screen reads — career_totals_for()'s
+-- WHERE and recent_games_for()'s inner "which games was this player in" scan —
+-- so without this every career open seq-scanned the whole table (every player's
+-- rows, every game, one row per participant). game_id alone doesn't help either:
+-- recent_games_for's outer lookup uses it, but the inner one that FINDS the game
+-- ids filters on steam_id.
+create index if not exists career_stats_steam_id_idx on public.career_stats (steam_id);
 
 -- RLS: the publishable (anon) key may INSERT and SELECT only. There is NO update
 -- policy — the anon key ships in every client binary, so an anon UPDATE grant let

@@ -611,21 +611,9 @@ static func reachable_lateral_distance(max_speed: float, accel: float, t: float)
 	return max_speed * t - 0.5 * max_speed * t_ramp
 
 
-# ── Behind-net puck play (tier-1 conservative rim stop) ──────────────────────
-# The goalie leaves the net ONLY to stop a rim behind it — "stop it, leave it,
-# get back" — never to carry or pass (the misplay-prone tiers of real puck
-# handling are deliberately absent: an AI turnover behind the net is the most
-# frustrating failure a goalie AI can produce, and a pure stop has no turnover
-# mode; the only failure is a bad GO decision, which is what these races pin).
-# Everything is deliberately conservative:
-#   - the forechecker is modeled at FULL SPRINT from the first instant (no
-#     reaction delay, no acceleration ramp) — the fastest opponent physics
-#     allows, so the pressure clock always under-estimates the available time;
-#   - the goalie's clock counts the WHOLE trip — out, the stop beat, and the
-#     return to his post — before pressure arrives, not just the touch;
-#   - callers re-run the race mid-trip with a stricter margin (abort
-#     hysteresis): a conservative goalie visibly bails early rather than ever
-#     getting caught out.
+# ── Behind-net puck play: the race primitives ────────────────────────────────
+# Doctrine (why the GO decision is this conservative, and why he never carries
+# or passes) is in Scripts/controllers/CLAUDE.md. These are the clocks it needs.
 
 # Travel time from rest over `dist` with an accel ramp to `max_speed` — the
 # inverse of reachable_lateral_distance, for the skate out/back legs.

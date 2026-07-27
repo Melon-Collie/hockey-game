@@ -116,12 +116,11 @@ var _shot_sample_is_tip: bool = false
 # Lateral envelope usable for a release offset: the handling reach less the
 # forward carry the frozen blade still holds the puck out at (half the wind-up
 # span ≈ the controllable carry distance), so a puck relocated laterally by this
-# much stays inside ROM. The wrister's blade FREEZES at the release offset now —
-# it no longer sweeps out to a side-offset endpoint — so the old BOT_WRISTER_
-# SIDE_OFFSET_M reservation (ROM the cosmetic sweep used to consume) is gone:
-# that side offset is purely the fake wind-up cursor's, not the blade's, so it
-# must not shrink the lateral the scorer can price. Dropping it widened the
-# priced release ~0.15 m — the frozen mechanic can genuinely reach it, so the
+# much stays inside ROM. The wrister's blade FREEZES at the release offset rather
+# than sweeping out to a side-offset endpoint, so no ROM is reserved for
+# BOT_WRISTER_SIDE_OFFSET_M: that side offset belongs to the fake wind-up cursor,
+# not the blade, and must not shrink the lateral the scorer can price. Reserving
+# it costs ~0.15 m of priced release the frozen mechanic can genuinely reach, so
 # breakaway shot is scored (and executed) from the wider, honest angle.
 # Pure geometry of real gesture measurements, not a knob.
 static func _usable_release_offset(reach: float) -> float:
@@ -282,19 +281,24 @@ const CARRY_EXIT_NZ_LEAD_M: float = 3.0
 # "the spot they're getting open at," not a long-horizon prophecy.
 # 1.2 s ≈ the drive a carrier genuinely holds for at a zone entry (the
 # finisher's next two strides), still inside the pass-lead horizon by
-# release time; the delay discount prices the wait. The old 0.7 s window
-# couldn't see past the calibrated surface's dead mid-band, so a fresh
-# entry read "nothing developing" while the house drive was one stride
-# from being the best play on the ice.
+# release time; the delay discount prices the wait. Much shorter (~0.7 s) and the
+# window cannot see past the calibrated surface's dead mid-band, so a fresh entry
+# reads "nothing developing" while the house drive is one stride from being the
+# best play on the ice.
 const OUTLET_DEVELOP_WINDOW_S: float = 1.2
 # Below this speed the outlet isn't going anywhere — the spot it offers
 # is the spot it's at, and the live pass scoring already prices that.
 const OUTLET_DEVELOP_MIN_SPEED_M_S: float = 1.0
 
 # Pre-baked rotations for the 8 polar cardinal carry candidates.
-const _POLAR_ANGLES: Array[float] = [
-		0.0, PI * 0.25, PI * 0.5, PI * 0.75,
-		PI, -PI * 0.75, -PI * 0.5, -PI * 0.25,
+# REARWARD cardinals — lateral and back, the arc the forward space fan does not
+# span (it looks only where the carrier is trying to go, ±70°). These stay a
+# fixed local ring on purpose: they are escape/reset moves whose value is
+# "somewhere other than here", not destinations worth planning a route to. The
+# forward half of the old 8-spoke ring is gone — see the field-derived block in
+# _best_carry.
+const _REAR_ANGLES: Array[float] = [
+		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
 
 # RETREAT ring — a second, deeper candidate arc across the back half (lateral
@@ -310,18 +314,21 @@ const CARRY_RETREAT_STEP_M: float = CARRY_SEARCH_STEP_M * 2.0
 const _RETREAT_ANGLES: Array[float] = [
 		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
-# COMMITTED-CUT ring — the retreat ring's forward twin: five samples across
-# the FRONT arc at double the local step. The local 3 m cardinals are too
-# tight to change the attack angle (still inside the goalie's tracked-square
-# dead zone) and the far anchors (slot, exits) cross traffic — so the natural
-# curl endpoints, the arc a full-speed cut actually lands on (deep AND
-# across), fell between samples and a wing carrier had no representable
-# "curl to the net" move: it glided the wall to the goal line and turned at
-# 90° (the felt bug). Same clamps and uniform scoring as everything else;
-# bound-pruned, so open ice pays almost nothing for the extra five.
-const _CUT_ANGLES: Array[float] = [
-		-0.9, -0.45, 0.0, 0.45, 0.9,
-]
+# FIELD-DERIVED FORWARD CANDIDATES (see the generator in _best_carry).
+# BEARINGS: how many of the space fan's bearings become carry candidates. The
+# fan has 7; taking the best 3 by control × forward projection covers the open
+# side and the seam without re-scoring spokes the field already reported walled.
+# RADII: fractions of the planning beat. Two of them, so the near gradient a
+# standstill carrier steers on survives when the beat stretches out at speed.
+# PLAN_BEAT_S: the horizon a carry candidate is a PLAN over rather than a
+# steering nudge — one second of travel, which reduces to the old 3 m local
+# step at a standstill and reaches ~9 m (the blue line, from mid-neutral-zone)
+# at a full stride. Physical: it is how far ahead the carrier commits, and the
+# whole point is that it moves with his real pace instead of being pinned at a
+# radius chosen for a stationary bot.
+const CARRY_FIELD_BEARINGS: int = 3
+const CARRY_FIELD_RADII: Array[float] = [0.5, 1.0]
+const CARRY_PLAN_BEAT_S: float = 1.0
 # Deke engagement gates (the cheap pre-filters before the manufactured-opening
 # math runs — see AIActionScoring.deke_cut_side). ENGAGE_RANGE: the containing
 # defender must be close enough that the duel is live but the fake still has
@@ -533,8 +540,8 @@ var _ticks_since_pick: int = 0
 # the fire scores are one dispatch (~2 ticks at the perfect-bot 60 Hz) old —
 # well inside the ~135 ms windup the fired-puck lanes are already priced
 # across — and the post-commit cooldown is shortened by the dispatch the
-# commit phase consumed, so commits land at the same wall-clock cadence as
-# the old single-call evals. Single-call full evals still run for:
+# commit phase consumed, so commits land at the same wall-clock cadence a
+# single-call eval would. Single-call full evals still run for:
 #   - the FIRST eval of a possession (reset()) and the first after a
 #     press-state bail (clear_intent()): no cached plan exists yet, and the
 #     fresh touch / bail is the contested moment where a dispatch of commit
@@ -618,6 +625,15 @@ var _scratch_exposure_mate_etas: Array[float] = []
 # Lane of the last FLAT _pass_variant_ev (0.0 when the variant filtered out
 # before its lane solve). The saucer gate reads it — see _compute_best_pass.
 var _last_flat_variant_lane: float = 0.0
+# The forward-space read _pass_ev resolved for the receiver it just priced, so
+# the flat and saucer variants of one feed share a single solve (see the lazy
+# note in _compute_best_pass). Reset to -1 before each receiver's first variant.
+var _last_receiver_space: float = -1.0
+# Per-bearing control from the carrier's own forward-space read, filled once per
+# re-eval by _carrier_forward_clearance and consumed by _best_carry's candidate
+# generator. Sized once to the fan's bearing count; the generator overwrites
+# entries as it consumes them, so it is rebuilt (not appended to) every read.
+var _scratch_bearing_control: Array[float] = []
 # Counter-threat memo by covering-body count (see counter_rush_cost) —
 # -1-seeded alongside the ETAs each compete.
 var _scratch_exposure_threat_memo: Array[float] = []
@@ -716,8 +732,8 @@ var debug_dump_score: float = 0.0
 # `RoleDecision` per call. The state machine's live path drives the carrier
 # through this object's public fields and discards the return, but the return
 # contract is kept (sibling roles and the test `_CarrierStub` share the
-# `decide() -> RoleDecision` shape). Reusing one instance removes the per-carry-
-# dispatch RefCounted allocation the old `RoleDecision.new()` here churned.
+# `decide() -> RoleDecision` shape). Reusing one instance keeps a `RoleDecision.new()`
+# off the per-carry-dispatch path — see CLAUDE.md -> hot-path discipline.
 func decide(ctx: RoleContext) -> RoleDecision:
 	# decide() is called once per AI dispatch; each call spans this many physics
 	# ticks (1 at the perfect-bot default). Draining the cooldown by the real span
@@ -1009,9 +1025,9 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# makes the puck. Positive only under genuine coverage (necessity: the
 		# forward puck is inside a stick's reach) AND with somewhere safer to hide it
 		# (ability: the seam clears more), zero the instant either is missing — the
-		# grounded replacement for the old pressure floor, which gated a raw coverage
-		# read by a hand-picked number and so shielded pre-emptively against near
-		# defenders who weren't actually threatening the puck.
+		# grounded alternative to a pressure floor, which would gate a raw coverage
+		# read by a hand-picked number and shield pre-emptively against near
+		# defenders who aren't actually threatening the puck.
 		var seam_world: Vector3 = self_pos + ctx.self_velocity * horizon + protect_offset
 		var seam_safety: float = AIActionScoring.clearance_to_safety(
 				AIActionScoring.reach_clearance(seam_world, horizon,
@@ -1161,7 +1177,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# shortfall IS the caught-moving effect, expressed positionally.
 	# _scratch_opponent_caps is index-matched to _scratch_opponents (and thus to
 	# _scratch_opponents_release, built in the same order), so a lane defender's
-	# real Size/Speed reach prices the shot lane.
+	# real reach and speed price the shot lane.
 	var shot_dir: Vector3 = attacking_goal - wrister_base_release
 	shot_dir.y = 0.0
 	shot_dir = shot_dir.normalized() if shot_dir.length_squared() > 0.0001 \
@@ -1298,6 +1314,13 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	if ctx.ping_shoot_active and shoot_score > 0.0:
 		shoot_score *= PING_SHOOT_EV_MULT
 
+	# The forward-space read runs BEFORE the carry search, because the search
+	# feeds on its by-product: the per-bearing control profile
+	# (_scratch_bearing_control) is where the forward carry candidates come from
+	# (see _best_carry). One read, two consumers — the discount below and the
+	# candidate generator — so the profile costs nothing extra.
+	var forward_space: float = _carrier_forward_clearance(ctx)
+
 	var carry_result: Array = _best_carry(
 			ctx, raw_shoot_score, directed_seam, current_safety)
 	var carry_score: float = carry_result[0]
@@ -1307,7 +1330,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# so a lightly-impeded carrier moves the puck to an unimpeded teammate rather than
 	# grinding forward (even giving up some real estate). Only the fire-vs-carry
 	# compete sees this — the dump still judges against the honest raw carry.
-	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, _carrier_forward_clearance(ctx))
+	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, forward_space)
 	# …but judge SELF by the same currency a pass receiver gets: _pass_ev credits
 	# a receiver with the best shot he can REACH by driving in (drive-in credit).
 	# Without the mirror, two equally-covered wingers at the blue line each rated
@@ -1317,9 +1340,15 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# same formula on MY OWN spot floors the carry: a symmetric mate can never
 	# out-score me by proxy, so the pass only wins when he is GENUINELY more
 	# open, and a free entry gets taken by the man who already has the puck.
+	# Priced at our OWN velocity, exactly as the receiver's is (_pass_ev passes
+	# receiver_vel): the drive-in's whole point is that it is momentum-honest —
+	# a man in stride carries his pace into the drive while one curling back
+	# must brake it out first — and omitting it here priced every carrier as if
+	# he were standing still, so a gliding mate was credited with momentum the
+	# man actually holding the puck was denied.
 	carry_score = maxf(carry_score, _receiver_drive_in_value(
 			ctx, self_pos, ctx.self_wrister_shot_speed,
-			ctx.caps_by_peer.get(ctx.peer_id)))
+			ctx.caps_by_peer.get(ctx.peer_id), ctx.self_velocity))
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
 	# close-scoring fire options during pre-aim. Proportional (×(1 +
@@ -1346,9 +1375,9 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	debug_carry_pos = last_carry_anchor
 
 	# The wrister is the only shot type — a paced release covers everything from a
-	# soft in-tight roof to a full-power rip (see #363), so the separate no-charge
-	# quick snap was retired (the fast ~125 ms wrister out-scores it even into a set
-	# goalie point-blank).
+	# soft in-tight roof to a full-power rip (see #363). A separate no-charge quick
+	# snap earns nothing: the fast ~125 ms wrister out-scores it even into a set
+	# goalie point-blank.
 	var best_shot_score: float = shoot_score
 	var best_shot_intent: int = INTENT_SHOOT
 
@@ -1364,24 +1393,21 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 		fire_score = best_pass_score
 		fire_intent = INTENT_PASS
 
-	# Compete fire vs carry. FIRE WINS TIES — when a fire option scores
-	# the same as the best carry candidate (typically stand-still, whose
-	# shot branch is the shoot-now score itself), we want to fire. The
-	# only case where carry should
-	# beat fire is when a movement candidate has a STRICTLY better
-	# future-action value, which means there's a real reason to keep
-	# moving instead of firing now.
+	# Compete fire vs carry. FIRE WINS TIES — when a fire option scores the same as
+	# the best carry candidate (typically stand-still, whose shot branch is the
+	# shoot-now score itself), fire. Carry should only beat fire when a movement
+	# candidate has a STRICTLY better future-action value, i.e. there is a real
+	# reason to keep moving instead of firing now.
 	#
-	# EXCEPT: fire must clear a NOISE FLOOR to win. Firing surrenders the puck
-	# (shot up-ice, or a pass); holding/carrying retains it and its optionality. So
-	# a near-worthless fire must not beat a collapsing hold — a carrier swarmed deep
-	# in its own zone (pass = 0 all lanes covered, carry collapsing toward 0) must
-	# skate clear, not fling a hopeless shot away. This used to be a hard `> 0`:
-	# score_shoot returned exactly 0 out of range. The fit insets zero most
-	# hopeless looks now, but tiny residuals still survive some geometries (deep
-	# keeper at extreme range, off-centre slivers), so the gate stays a small
-	# tactical floor (FIRE_MIN_VALUE), the least shot value worth giving up
-	# possession for. A real in-range shot scores well above it and still wins ties.
+	# EXCEPT: fire must clear a NOISE FLOOR to win. Firing surrenders the puck (shot
+	# up-ice, or a pass); holding/carrying retains it and its optionality. So a
+	# near-worthless fire must not beat a collapsing hold — a carrier swarmed deep in
+	# its own zone (pass = 0, all lanes covered, carry collapsing toward 0) must skate
+	# clear, not fling a hopeless shot away. A bare `> 0` is not enough of a gate:
+	# the clean-entry fit zeroes most hopeless looks, but tiny residuals survive some
+	# geometries (deep keeper at extreme range, off-centre slivers). FIRE_MIN_VALUE is
+	# the least shot value worth giving up possession for; a real in-range shot scores
+	# well above it and still wins ties.
 	#
 	# ALSO: don't START a fire while staggered. A body check knocks the
 	# bot off-balance (thrust penalty on stagger_timer); winding up a
@@ -1399,8 +1425,8 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# a fresh carrier composes an outlet before it can move it, and pressuring one
 	# is a real defensive play. The SHOOT beat is PRESSURE-SCALED (shot_settling)
 	# — poise under pressure: an UNPRESSURED carrier (pos_safety ≈ 1) may finish
-	# the instant it gains the puck (the open backdoor tap-in the flat beat used to
-	# swallow), while a HOUNDED one (a stick on the puck, pos_safety → 0) pays the
+	# the instant it gains the puck (a flat beat here swallows the open backdoor
+	# tap-in), while a HOUNDED one (a stick on the puck, pos_safety → 0) pays the
 	# full beat because rushed hands can't calmly settle-and-snipe. pos_safety is
 	# the clearance right where the carrier STANDS (see _phase_pos_safety) — NOT
 	# the evade-seam safety: a shooter isn't fleeing, so "a lane exists" is the
@@ -1716,9 +1742,9 @@ func _project_opponents_collapsing(ctx: RoleContext, time_s: float,
 #                          × lane_clear(self → receiver_lead, pass_speed)
 #                          × pow(decay, pass_flight_time)
 #
-# score_at recursively considers what the receiver could do (shoot,
-# pass to others, carry to slot) — replaces the old receiver_quality
-# bundle with a real future-action eval.
+# score_at recursively considers what the receiver could do (shoot, pass to
+# others, carry to slot) — a real future-action eval rather than a bundle of
+# receiver-quality heuristics.
 #
 # Filters:
 #   - Skip ghosted teammates (puck passes through them).
@@ -1730,7 +1756,8 @@ func _project_opponents_collapsing(ctx: RoleContext, time_s: float,
 #   - Behind-the-back receivers are NOT skipped: an aim inside the real
 #     ±157° reach cone fires with no body turn, and only the narrow back
 #     wedge pays — as rotation time priced into the EV's delay via
-#     _facing_rotation_time (the old hard ROM-skip predates that model).
+#     _facing_rotation_time. A hard ROM skip would discard feeds the cone
+#     genuinely covers.
 #   - Hard zero for net-blocker (segment crosses net body) and
 #     own-DZ slot crossing (intercepted = goal-against).
 #
@@ -1798,12 +1825,32 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		var receiver_omega: float = ctx.heading_omega_by_peer.get(peer_id, 0.0) \
 				if ctx.reads_receiver_commitment else 0.0
 		var receiver_caps: AISkaterCaps = ctx.caps_by_peer.get(peer_id)
+		# How much room this MAN has — solved AT MOST ONCE per receiver, and only
+		# if a variant actually gets far enough to need it. Space is a property of
+		# the receiver and the ice around him, not of the pass that reaches him
+		# (the flat and saucer leads differ by well under a stick's reach, and the
+		# read is a smooth field), so computing it per variant paid for the same
+		# answer twice on the hottest path in the compete and let the two variants
+		# disagree about how open the same teammate was. It stays LAZY because
+		# it is the dominant cost here and _pass_ev's hard-zero gates (net-blocked
+		# lane, own-slot crossing, dead lane) reject a receiver before his value
+		# is ever priced — a covered man must not be paid for.
+		_last_receiver_space = -1.0
+		# Exact prune floor for this receiver: the running best, un-scaled by any
+		# bonus applied to him AFTER scoring. A ping target's EV is multiplied by
+		# PING_PASS_EV_MULT below, so pruning him at the raw best would discard a
+		# feed that goes on to win — divide the floor by the same factor and the
+		# bound stays sound.
+		var prune_floor: float = best_pass_score
+		if peer_id == ctx.ping_pass_target_peer:
+			prune_floor /= PING_PASS_EV_MULT
 		# Flat feed at the magnet pace.
 		_last_flat_variant_lane = 0.0
 		var s: float = _pass_variant_ev(
 				ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 				pass_origin, pass_speed, false, receiver_is_one_timer,
-				self_facing_xz, our_goalie, carrier_in_oz)
+				self_facing_xz, our_goalie, carrier_in_oz, -1.0, prune_floor)
+		var receiver_space: float = _last_receiver_space
 		var use_saucer: bool = false
 		# Saucer variant: the fastest RECEIVABLE flip — the magnet pace when
 		# the feed is long enough to land with runway, a genuinely soft flip
@@ -1826,7 +1873,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 			var s_saucer: float = _pass_variant_ev(
 					ctx, receiver_state, receiver_accel, receiver_omega, receiver_caps,
 					pass_origin, saucer_speed, true, receiver_is_one_timer,
-					self_facing_xz, our_goalie, carrier_in_oz)
+					self_facing_xz, our_goalie, carrier_in_oz, receiver_space,
+					maxf(prune_floor, s))
 			if s_saucer > s:
 				s = s_saucer
 				use_saucer = true
@@ -1866,7 +1914,9 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 		receiver_accel: Vector3, receiver_omega: float, receiver_caps: AISkaterCaps,
 		pass_origin: Vector3, pass_speed: float, saucer: bool,
 		receiver_is_one_timer: bool, self_facing_xz: Vector2,
-		our_goalie: Vector3, carrier_in_oz: bool) -> float:
+		our_goalie: Vector3, carrier_in_oz: bool,
+		receiver_space: float = -1.0,
+		useless_below: float = -INF) -> float:
 	# Intercept-aware lead, shared with the state machine's firing aim.
 	# flight_t is the SOLVED time (refined against the predicted
 	# intercept), used downstream for opponent/goalie projection and
@@ -1932,7 +1982,8 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 			ctx.self_reach_cone_half_angle, ctx.self_facing_turn_rate)
 	return _pass_ev(ctx, receiver, pass_speed, flight_t,
 			receiver_release_t, flight_t + rotation_time, our_goalie,
-			receiver_caps, lane, miss_prob, receiver_state.velocity)
+			receiver_caps, lane, miss_prob, receiver_state.velocity,
+			receiver_space, useless_below)
 
 
 # Expected value of firing a pass from our current position to
@@ -1965,10 +2016,10 @@ func _pass_variant_ev(ctx: RoleContext, receiver_state: SkaterNetworkState,
 # advanced by the commit→release windup), not the geometric carry-path check.
 # A pass is a fired puck that leaves the blade ~135 ms after the intent commits
 # (every bot pass is a charged wrister), so a forechecker actively skating into
-# the lane has closed real ground before the puck is even released; pricing the
-# lane at present-time spots read those breakout feeds as open and shipped them
-# straight into the closing stick. lane_clear then models the further closing
-# over the flight from that release-time start, scaled by the actual pass speed.
+# the lane has closed real ground before the puck is even released. Price the lane
+# at PRESENT-time spots and those breakout feeds read as open, shipping the puck
+# straight into the closing stick. lane_clear then models the further closing over
+# the flight from that release-time start, scaled by the actual pass speed.
 # Opponents are projected to flight time for the receiver's inner score_at
 # (lanes/pressure when the puck arrives).
 # `lane` may be precomputed by the caller (the variant scorer computes
@@ -1987,7 +2038,9 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 		our_goalie: Vector3, receiver_caps: AISkaterCaps = null,
 		lane: float = -1.0,
 		miss_prob: float = AIActionScoring.PASS_MISS_BASE_PROB,
-		receiver_vel: Vector3 = Vector3.ZERO) -> float:
+		receiver_vel: Vector3 = Vector3.ZERO,
+		receiver_space: float = -1.0,
+		useless_below: float = -INF) -> float:
 	var self_pos: Vector3 = ctx.self_pos
 	# The pass flies from the PUCK (the blade), not the body — judge the lane
 	# the puck actually travels. From behind the net the two differ by up to a
@@ -2033,7 +2086,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			ctx, receiver_release_t, receiver_spot, receiver_closing)
 	var receiver_unsettled: float = _goalie_unsettled_at(
 			ctx, receiver_release_t, receiver_spot, receiver_closing)
-	# Score the receiver's shot at ITS real release speed (Shot) — a high-Shot
+	# Score the receiver's shot at ITS real release speed — a hard-shooting
 	# teammate one-times harder, beating the goalie more, so it's a better feed.
 	var receiver_shot_speed: float = receiver_caps.wrister_shot_speed if receiver_caps != null \
 			else AIActionScoring.WRISTER_SHOT_SPEED_M_S
@@ -2053,17 +2106,6 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# _scratch_opponents_pass, now free — the instant value above already consumed it.)
 	receiver_value = maxf(receiver_value, _receiver_drive_in_value(
 			ctx, receiver_spot, receiver_shot_speed, receiver_caps, receiver_vel))
-	# The receiver pays the SAME forward-pressure toll the carrier's own score
-	# does: his value is what he can do with the puck from HIS spot, and a mate
-	# whose netward path is just as clogged as ours is not an upgrade. Without
-	# the mirror, two equally-covered wingers at the blue line each rated the
-	# other man's future above their own discounted present, and the puck
-	# ping-ponged along the line (an offside factory) instead of entering the
-	# zone. Symmetric coverage → symmetric discount → the man ALREADY holding
-	# the puck keeps it; the pass wins only when the mate is genuinely clearer.
-	var receiver_speed: float = receiver_caps.max_speed if receiver_caps != null 			else AIActionScoring.SKATER_REF_SPEED_M_S
-	receiver_value *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0,
-			_forward_clearance_at(ctx, receiver_spot, receiver_speed))
 	var time_decay: float = AIActionScoring.delay_discount(delay_s)
 	# Reception pressure — "how pressured is the receiver," from the same
 	# reachable-set model the carrier reads on ITSELF (current_safety). A defender
@@ -2089,6 +2131,38 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# miss, but a stick on the catch).
 	var clean_lane: float = lane * (1.0 - miss_prob)   # reaches the tape, in flight
 	var completion: float = release_clean * clean_lane * reception_safety
+	# CEILING PRUNE (exact). The space toll and every turnover cost below can only
+	# LOWER this feed's EV — space multiplies by at most 1.0, costs subtract — so
+	# the undiscounted benefit is a hard upper bound. A receiver who cannot beat
+	# the best feed found so far even at full marks is decided, and pricing him
+	# further is pure hot-path cost. This matters because the space read is the
+	# dominant term here and it runs PER TEAMMATE: in 5v5 the carrier was paying
+	# for four of them every re-eval to use one. Same exact-bound pattern as
+	# _score_move_candidate_base's prune ladder.
+	if receiver_value * completion * time_decay <= useless_below:
+		return 0.0
+	# The receiver pays the SAME forward-pressure toll the carrier's own score
+	# does: his value is what he can do with the puck from HIS spot, and a mate
+	# whose netward path is just as clogged as ours is not an upgrade. Without
+	# the mirror, two equally-covered wingers at the blue line each rated the
+	# other man's future above their own discounted present, and the puck
+	# ping-ponged along the line (an offside factory) instead of entering the
+	# zone. Symmetric coverage → symmetric discount → the man ALREADY holding
+	# the puck keeps it; the pass wins only when the mate is genuinely clearer.
+	# Priced at the receiver's OWN velocity and build, exactly as the carrier's
+	# side is (see _forward_clearance_at): a mate curling back into the play
+	# reads less space than one in stride through the same ice, and a lateral
+	# feed can no longer beat a carry by being credited with momentum it does
+	# not have while the carrier's is thrown away.
+	# Solved once per receiver by _compute_best_pass and shared across its
+	# variants; < 0 means "compute it here" (the developing-outlet feed, which
+	# prices a single hypothetical spot).
+	if receiver_space < 0.0:
+		receiver_space = _forward_clearance_at(
+				ctx, receiver_spot, receiver_vel, receiver_caps)
+	# Published for the caller's per-receiver reuse (see _compute_best_pass).
+	_last_receiver_space = receiver_space
+	receiver_value *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, receiver_space)
 	# Clean per-action EV: prob(complete) × value(teammate has puck at receiver)
 	# minus the turnover cost of each loss mode. The pressure the
 	# carrier is under is priced by the CARRY/HOLD alternatives' own strip cost
@@ -2197,18 +2271,18 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 # stand-still's shot branch shares it verbatim — see the stand-still block.
 # Is a carry candidate on ice this bot can legally stand and handle on?
 #
-# The front-of-net rule is the old inline clamp verbatim: rink side of both goal
-# lines, a body's width off the boards. What changed is the `allow_behind` case.
+# The front-of-net rule is the plain clamp: rink side of both goal lines, a body's
+# width off the boards. The interesting case is `allow_behind`.
 #
-# A carrier BEHIND a net used to have almost no representable move set: every
-# local candidate back there failed the goal-line clamp, and the ones aimed out
-# front pruned on carry_path_blocked_by_net, which left the two post walkouts,
-# the zone exits and stand-still. Under any real pressure both walkouts read
-# unsafe, so the compete fell through to stand-still — the bot planted itself on
-# the end wall with the puck and got stripped, and every attempt to work out of
-# there had to be a single all-or-nothing walkout. That is the "bots get stuck
-# behind the net and turn it over" failure: not a bad evaluation, a missing
-# REPRESENTATION. There is no move in the search for the ones a real player
+# Without it a carrier BEHIND a net has almost no representable move set: every
+# local candidate back there fails the goal-line clamp, and the ones aimed out
+# front prune on carry_path_blocked_by_net, leaving only the two post walkouts,
+# the zone exits and stand-still. Under real pressure both walkouts read unsafe,
+# so the compete falls through to stand-still — the bot plants itself on the end
+# wall with the puck and gets stripped, and every attempt to work out of there has
+# to be a single all-or-nothing walkout. That is the "bots get stuck behind the
+# net and turn it over" failure, and it is a missing REPRESENTATION rather than a
+# bad evaluation. There is no move in the search for the ones a real player
 # makes back there — reverse off the wall, slide across the back of the cage,
 # hold at the far post and wait for a lane.
 #
@@ -2316,9 +2390,66 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# _candidate_ice_legal. Resolved once; every candidate ring below shares it.
 	var behind_net: bool = absf(self_pos.z) > GameRules.GOAL_LINE_Z
 
-	# 8 polar cardinals at CARRY_SEARCH_STEP_M. Forward = toward slot;
-	# rotate by 0°, 45°, ..., 315° to span all directions.
-	for angle: float in _POLAR_ANGLES:
+	# FORWARD candidates — generated from the space field's per-bearing profile
+	# (_scratch_bearing_control, filled by the forward-space read in
+	# _pick_commit_phase), not from a fixed ring. Replaces the forward half of
+	# the old 8 polar cardinals AND the whole committed-cut ring.
+	#
+	# Two defects it retires. (1) FIXED RADIUS: candidates sat 3 m out (6 m for
+	# the cut ring) no matter how fast the carrier was moving, so a bot at 9 m/s
+	# was choosing between spots 0.33 s away while re-deciding every 33 ms — a
+	# steering question dressed as a plan, with nothing sampled at the range
+	# where a zone entry is actually decided. The radius is now one PLANNING
+	# BEAT of travel at the carrier's real speed, which reduces to the old 3 m
+	# step at a standstill and reaches the blue line at a full stride — the same
+	# geometry the cut ring was hand-placed to catch. (2) BLIND BEARINGS: eight
+	# fixed spokes spend most of their samples on directions the field already
+	# knows are walled, and none on the seam between two of them.
+	#
+	# The profile is ranked by control × forward projection — control alone would
+	# rate a wide-open sideways bearing above a merely-good netward one, and the
+	# cos is the same foreshortening the space aggregate itself weights by. Top
+	# CARRY_FIELD_BEARINGS bearings are taken, each at the full beat and at half
+	# it, so the near gradient a standstill carrier needs survives at speed.
+	var beat_r: float = clampf(
+			ctx.self_max_speed * CARRY_PLAN_BEAT_S,
+			CARRY_SEARCH_STEP_M, FORWARD_PRESSURE_HORIZON_M)
+	if ctx.self_velocity.length_squared() > 1.0:
+		beat_r = clampf(
+				sqrt(ctx.self_velocity.x * ctx.self_velocity.x
+						+ ctx.self_velocity.z * ctx.self_velocity.z) * CARRY_PLAN_BEAT_S,
+				CARRY_SEARCH_STEP_M, FORWARD_PRESSURE_HORIZON_M)
+	for _rank: int in CARRY_FIELD_BEARINGS:
+		var best_bi: int = -1
+		var best_w: float = -1.0
+		for bi: int in _scratch_bearing_control.size():
+			var ang: float = AIActionScoring.SPACE_SAMPLE_ANGLES[bi]
+			var wgt: float = _scratch_bearing_control[bi] * cos(ang)
+			if wgt > best_w:
+				best_w = wgt
+				best_bi = bi
+		if best_bi < 0:
+			break
+		var angle: float = AIActionScoring.SPACE_SAMPLE_ANGLES[best_bi]
+		# Consume it so the next rank picks a different bearing.
+		_scratch_bearing_control[best_bi] = -1.0
+		var c: float = cos(angle)
+		var s_a: float = sin(angle)
+		var dir_x: float = fwd_x * c - fwd_z * s_a
+		var dir_z: float = fwd_x * s_a + fwd_z * c
+		for frac: float in CARRY_FIELD_RADII:
+			var r: float = maxf(beat_r * frac, CARRY_SEARCH_STEP_M * 0.5)
+			var candidate := Vector3(
+					self_pos.x + dir_x * r, 0.0, self_pos.z + dir_z * r)
+			if not _candidate_ice_legal(candidate, behind_net):
+				continue
+			_beam_score_base(ctx, candidate, our_goalie, false)
+
+	# REARWARD cardinals — the half of the old polar ring the forward cone does
+	# not span (lateral and back). Kept fixed and local: these are escape moves,
+	# not plans, and the space field deliberately looks only where the carrier is
+	# trying to GO. The committed peel-out is the retreat ring below.
+	for angle: float in _REAR_ANGLES:
 		var c: float = cos(angle)
 		var s_a: float = sin(angle)
 		var dir_x: float = fwd_x * c - fwd_z * s_a
@@ -2346,22 +2477,6 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			if not _candidate_ice_legal(retreat, behind_net):
 				continue
 			_beam_score_base(ctx, retreat, our_goalie, false)
-
-	# COMMITTED-CUT ring (see _CUT_ANGLES): the curl candidates between the
-	# local cardinals and the far anchors. Attacking half only — the curl is
-	# an attack shape (bend the approach while there's angle to use); in our
-	# half the exits, slot anchor, and retreat ring already span the moves,
-	# and the five extra scored candidates are pure hot-path cost there.
-	if ctx.own_goal_dir * self_pos.z < 1.0:
-		for angle: float in _CUT_ANGLES:
-			var cc: float = cos(angle)
-			var cs: float = sin(angle)
-			var cut := Vector3(
-					self_pos.x + (fwd_x * cc - fwd_z * cs) * CARRY_RETREAT_STEP_M, 0.0,
-					self_pos.z + (fwd_x * cs + fwd_z * cc) * CARRY_RETREAT_STEP_M)
-			if not _candidate_ice_legal(cut, behind_net):
-				continue
-			_beam_score_base(ctx, cut, our_goalie, false)
 
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
@@ -2524,7 +2639,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	for c: Vector3 in _scratch_our_chasers:
 		nearest_our = minf(nearest_our, c.distance_to(target))
 	# Whoever meets the cleared/dumped puck races it at our own top speed
-	# (Speed) — a faster chaser reaches it sooner, so the decay bites less.
+	# — a faster chaser reaches it sooner, so the decay bites less.
 	var chase_decay: float = AIActionScoring.delay_discount(
 			nearest_our / maxf(ctx.self_max_speed, 0.001))
 	var value: float = AIActionScoring.position_potential(
@@ -2647,7 +2762,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 #
 # Time uses momentum-aware effective speed, so reverse candidates
 # self-discount via longer arrival. Returns -INF when the path is
-# fully blocked (candidate unusable, matching the old skip).
+# fully blocked (candidate unusable).
 #
 # `safety` is the reachable carry_clearance over the PUCK's path from our current
 # spot to the candidate spot across the arrival time: the tightest point where a
@@ -2753,12 +2868,12 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	#      race the top-level shoot-now scoring runs, which a hard lateral cut
 	#      in tight genuinely wins (his reaction + push ramp cover ~0.2 m in
 	#      the ~0.28 s the shot gives him).
-	# Phase 2 is what lets a STANDSTILL 1v1 price "skate the cut, then fire"
-	# as one candidate: under the old static-release read, every one-step spot
-	# against a set keeper honestly scored ~0 (he arrives square over any
-	# carry), so a flat-footed carrier had no gradient toward building the
-	# lateral speed that opens the window — it dithered instead of winding up
-	# the cut. The ever-receding-cut pathology stays dead: the keeper is
+	# Phase 2 is what lets a STANDSTILL 1v1 price "skate the cut, then fire" as
+	# one candidate. Read the release as STATIC instead and every one-step spot
+	# against a set keeper honestly scores ~0 (he arrives square over any carry),
+	# so a flat-footed carrier has no gradient toward building the lateral speed
+	# that opens the window and dithers instead of winding up the cut. The
+	# ever-receding-cut pathology stays dead regardless: the keeper is
 	# assumed SQUARE at every candidate before the final race, so each further
 	# cut prices only the honest last-quarter-second window, which shrinks as
 	# the angle forecloses.
@@ -2771,10 +2886,10 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	# arrive_vel × windup past the square he tracked to, and at short range
 	# that lateral jump outruns his push — the hard cut in tight scores its
 	# real window. A slow straight drive leaves ~zero (he tracked it all the
-	# way in), so crease-smother drives earn nothing — measuring from the
-	# goalie's CURRENT position over the whole carry instead double-charges
-	# him for a swing his tracking already covers and turns every doorstep
-	# drive into a phantom caught-moving goalie.
+	# way in), so crease-smother drives earn nothing. Measuring from the goalie's
+	# CURRENT position over the whole carry instead double-charges him for a swing
+	# his tracking already covers, turning every doorstep drive into a phantom
+	# caught-moving goalie.
 	var to_cand: Vector3 = candidate - self_pos
 	to_cand.y = 0.0
 	var cand_dist: float = to_cand.length()
@@ -3034,11 +3149,10 @@ func _score_wheel_candidate(ctx: RoleContext, dest: Vector3,
 # The potential branch pays the realization discount (see
 # AIActionScoring.potential_realization_discount): potential is future
 # value that still has to be skated to the slot, so it decays over that
-# remaining travel exactly like every other future action. This is what
-# stops stand-still (whose potential used to be undecayed) from
-# strictly beating a step toward the net in open ice — the blue-line
-# freeze. Applied uniformly here so carry candidates, stand-still, and
-# pass receivers all price potential in the same currency.
+# remaining travel exactly like every other future action. Leave stand-still's
+# potential undecayed and it strictly beats a step toward the net in open ice —
+# the blue-line freeze. Applied uniformly here so carry candidates, stand-still,
+# and pass receivers all price potential in the same currency.
 #
 # `opps` should already be projected to the time the actor will be
 # at `pos` (caller's responsibility — score_pass does this for
@@ -3056,7 +3170,7 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	# All the carrier's opponent arrays (path / pass / stand projections) are built
 	# in the same snapshot order as _scratch_opponent_caps, so the defenders in the
-	# shot lane are priced at their real Size/Speed reach. (lane_clear falls back to
+	# shot lane are priced at their real reach and speed. (lane_clear falls back to
 	# league defaults if a count ever mismatches, so this is safe regardless.)
 	# `aim_spread_rad` is the SHOOTER's execution wobble: self-evals (carry/stand)
 	# pass this bot's own spread so a noisy hand demands wider windows in shot
@@ -3292,11 +3406,10 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	# MOMENTUM-HONEST drive time (the calibrated phase model): a receiver
 	# already streaking netward carries his pace into the drive; one
 	# RETREATING must brake the retreat out and ramp from rest, paying the
-	# reversal in real time (and thus decay). Before this, `reach /
-	# max_speed` credited a receiver back-pedalling out of the zone with the
-	# same instant full-speed drive as a streaker — the over-valued backpass
-	# to a retreating man, and the under-valued stretch feed to one in
-	# stride, were both this one blindness.
+	# reversal in real time (and thus decay). A plain `reach / max_speed` credits a
+	# receiver back-pedalling out of the zone with the same instant full-speed drive
+	# as a streaker — one blindness that both over-values the backpass to a
+	# retreating man and under-values the stretch feed to one in stride.
 	var reach_time: float = AIActionScoring.time_to_arrive(
 			receiver_spot, target, receiver_vel, recv_speed, recv_accel)
 	# Reachable-set safety + strip point over the drive, using the SAME current-opponent
@@ -3335,54 +3448,44 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	return advanced * keep * AIActionScoring.delay_discount(t)
 
 
-# How clear the carrier's OWN path toward the attacking objective is — the reachable
-# safety of carrying straight at the net over FORWARD_PRESSURE_HORIZON_M. 1.0 when the
-# lane ahead is open, dropping toward 0 as a defender sits in it. Feeds the carry's
-# pass-first discount (see FORWARD_PRESSURE_*): the model already prices a defender
-# ON the puck, but not one the carrier must still beat to advance — this reads that
-# impending contest with the same reachable-set model the carry candidates use, so a
-# defender only counts when it's genuinely in the forward lane (one off to the side
-# leaves the path clear and the carry undiscounted).
+# How much room the carrier has to OPERATE toward the attacking objective —
+# the controlled fraction of the forward cone over FORWARD_PRESSURE_HORIZON_M.
+# 1.0 when the ice ahead is his, dropping toward 0 as defenders take it away.
+# Feeds the carry's pass-first discount (see FORWARD_PRESSURE_*).
 func _carrier_forward_clearance(ctx: RoleContext) -> float:
-	return _forward_clearance_at(ctx, ctx.self_pos, ctx.self_max_speed)
+	# Size once, then reuse: controlled_space refills every entry each call.
+	if _scratch_bearing_control.size() != AIActionScoring.SPACE_SAMPLE_ANGLES.size():
+		_scratch_bearing_control.resize(
+				AIActionScoring.SPACE_SAMPLE_ANGLES.size())
+	return AIActionScoring.controlled_space(
+			ctx.self_pos, ctx.self_velocity, ctx.caps_by_peer.get(ctx.peer_id),
+			ctx.attacking_goal_pos, FORWARD_PRESSURE_HORIZON_M,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
+			_scratch_bearing_control)
 
 
-# Forward-pressure read for ANY spot: how clear the netward path out of `pos`
-# is over the pressure horizon. Shared by the carrier's own discount and the
-# pass receiver's (see _pass_ev) so both sides of a carry-vs-pass compete pay
-# the same toll for the same clogged ice.
+# Forward-pressure read for ANY spot: the space available to a carrier standing
+# at `pos` with velocity `vel` and build `caps`. Shared by the carrier's own
+# discount and the pass receiver's (see _pass_ev) so both sides of a
+# carry-vs-pass compete pay the same toll for the same clogged ice.
 #
-# Same two-sample reachable-set read as carry_clearance (the carrier drives the
-# path at `speed`, defenders ride their momentum, tightest of mid/end wins) with
-# ONE addition: an ESCAPE-SPEED gate on each defender's lunge. A defender's body
-# rides its own velocity (a man the carrier out-skates falls behind on his own),
-# but its STICK only lunges with the acceleration it has left AFTER trying to
-# match the carrier's net-ward drive: a chaser near the carrier's pace is
-# committed to keeping up and can't also reach across (surplus → 0); a stationary
-# gap-controller or a man set AHEAD in the lane isn't chasing (surplus = 1, full
-# lunge) so a genuine wall is unchanged. This is the "if I keep driving I've
-# beaten him" read the plain reach model lacked — without it, the momentary
-# proximity of driving PAST a man read as a permanent wall and pushed a carrier
-# who was winning the 1-on-1 to pass out instead of finishing the beat.
-func _forward_clearance_at(ctx: RoleContext, pos: Vector3, speed: float) -> float:
-	var to_net_x: float = ctx.attacking_goal_pos.x - pos.x
-	var to_net_z: float = ctx.attacking_goal_pos.z - pos.z
-	var d: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
-	if d < 0.5:
-		return 1.0
-	var reach: float = minf(FORWARD_PRESSURE_HORIZON_M, d)
-	var inv: float = 1.0 / d
-	var target := Vector3(
-			pos.x + to_net_x * inv * reach, 0.0,
-			pos.z + to_net_z * inv * reach)
-	var t: float = reach / maxf(speed, 1.0)
-	# Same time-consistent read the carry candidates use (carry_lane_clearance): a
-	# defender the carrier has beaten and is out-skating exerts no forward pressure,
-	# so the pass-first discount and the carry candidates it competes against price
-	# the same ice the same way — a carrier who's won his 1-on-1 isn't pushed to
-	# pass. A man ahead / matching pace still reads as pressure (never shed).
-	return AIActionScoring.carry_lane_clearance(pos, target, t,
-			_scratch_opponents, _scratch_opponent_vels, speed)
+# The read is AIActionScoring.controlled_space — a fan of carry paths across the
+# forward cone, each priced by the same carry_safety the real carry candidates
+# use, area-weighted (see that block doc for the model). It replaced a single
+# netward ray through carry_lane_clearance, which was a corridor-occupancy test
+# with three defects this discount could not tolerate: no clock (a defender 3 m
+# ahead and one 8 m ahead read identically, and the carrier's own pace changed
+# nothing), a hard cliff at the reach boundary (measured 0.556 at 1.0 m off the
+# ray vs 1.000 at 2.0 m — 45 cm deciding whether the puck went cross-ice), and
+# it judged ONE straight path while discounting a carry search that spans eight
+# directions, so open ice beside a gap-controller still read as a wall. The fan
+# fixes all three at once, and the momentum credit is not a term — it falls out
+# of pricing each sample at its honest time_to_arrive.
+func _forward_clearance_at(ctx: RoleContext, pos: Vector3, vel: Vector3,
+		caps: AISkaterCaps) -> float:
+	return AIActionScoring.controlled_space(
+			pos, vel, caps, ctx.attacking_goal_pos, FORWARD_PRESSURE_HORIZON_M,
+			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 
 
 # Value (EV) of the best DEVELOPING feed — a play a teammate is still

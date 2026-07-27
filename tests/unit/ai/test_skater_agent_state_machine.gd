@@ -116,10 +116,23 @@ func test_should_chase_true_when_nearest_teammate() -> void:
 
 
 func test_should_chase_false_when_teammate_is_nearer() -> void:
+	# Both outside the incidental reach band, so this is purely the election's
+	# call — the teammate owns the race and we hold our station.
+	var s := _loose_puck_snap(Vector3(15, 0, 0))
+	_add_skater(s, SELF_ID, Vector3(0, 0, 0))         # 15 m away
+	_add_skater(s, TEAMMATE_ID, Vector3(8, 0, 0))     # 7 m away
+	assert_false(sm._should_chase_loose_puck(s, Vector3(0, 0, 0)))
+
+
+func test_should_chase_a_puck_inside_our_reach_even_when_teammate_is_nearer() -> void:
+	# The election picks ONE chaser, which is right for a race across the zone
+	# and wrong for a puck sitting a metre from this bot's stick: losing the
+	# election is no reason to watch it slide by. Inside the reach band the
+	# puck is played by whoever it came to.
 	var s := _loose_puck_snap(Vector3(5, 0, 0))
 	_add_skater(s, SELF_ID, Vector3(4, 0, 0))         # 1.0 m away
-	_add_skater(s, TEAMMATE_ID, Vector3(4.5, 0, 0))   # 0.5 m away
-	assert_false(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)))
+	_add_skater(s, TEAMMATE_ID, Vector3(4.5, 0, 0))   # 0.5 m away — elected
+	assert_true(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)))
 
 
 # ── _is_closest_teammate_to_puck_at: cache vs. live scan ─────────────────────
@@ -2275,3 +2288,13 @@ func test_board_normal_points_into_the_rink() -> void:
 			Vector2(GameRules.INNER_HALF_WIDTH - 0.4, 3.0))
 	assert_almost_eq(board.y, 0.4, 0.01, "gap to the wall")
 	assert_almost_eq(board.x, -1.0, 0.01, "normal points back toward centre ice")
+
+
+func test_reach_band_yields_to_a_dead_puck() -> void:
+	# A goalie smother / phase lock publishes a -1 election for the team. The
+	# reach band bypasses the election, so it has to honor that veto itself —
+	# otherwise the whole team crowds a puck nobody can legally touch.
+	var s := _loose_puck_snap(Vector3(5, 0, 0))
+	_add_skater(s, SELF_ID, Vector3(4, 0, 0))         # 1.0 m away
+	s.closest_to_puck_by_team[0] = -1
+	assert_false(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)))

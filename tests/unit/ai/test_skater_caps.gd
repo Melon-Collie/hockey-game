@@ -124,7 +124,7 @@ func test_apply_capabilities_threads_aim_geometry() -> void:
 func test_apply_capabilities_sets_aim_slew_to_real_blade_speed() -> void:
 	# Aiming is bounded by the bot's own Hands blade speed, not a per-difficulty
 	# slew — the aim cursor slews at exactly caps.blade_speed, and the arc rate +
-	# pre-aim timeout derive from that so a slower (low-Hands) blade still resolves
+	# pre-aim timeout derive from that so a slower blade still resolves
 	# a back-pass swing before bailing.
 	var sm := SkaterAgentStateMachine.new()
 	var caps := _caps(2.0, 10.5, 13.0, 27.0)

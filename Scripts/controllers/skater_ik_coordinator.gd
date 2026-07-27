@@ -194,7 +194,7 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 		# wind-back-and-snap that makes the shot feel responsive regardless of
 		# Hands — while keeping the PERPENDICULAR component capped at the normal
 		# dangle budget (max_step). Lateral blade sweep IS dangling; capping only
-		# that axis fixes low-Hands shot feel without letting "shoot mode" become
+		# that axis fixes slow-blade shot feel without letting "shoot mode" become
 		# a way to dangle at full blade speed. The axis is skater→smoothed-blade
 		# (the current aim line). Reading the LAGGED smoothed blade (not the raw
 		# target) self-stabilizes the split: a fast lateral whip can't drag the

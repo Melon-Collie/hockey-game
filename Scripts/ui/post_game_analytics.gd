@@ -523,10 +523,13 @@ class RinkMap extends Control:
 		for z: float in [-_BLUE_LINE, _BLUE_LINE]:
 			draw_line(_p(z, -_HALF_WID), _p(z, _HALF_WID), _BLUE, 2.0)
 		draw_line(_p(0.0, -_HALF_WID), _p(0.0, _HALF_WID), _RED, 2.0)
-		# Creases: a half-disc opening toward centre ice at each goal line.
+		# Creases: a half-disc opening toward centre ice at each goal line. Angle 0
+		# is +screen-x = +rink-z, so the arc must START at -90° for the -Z crease
+		# (bulging toward +z) and at +90° for the +Z one — i.e. it swings with
+		# `inward`. A fixed start bulged the far crease out through the end boards.
 		for z: float in [-_GOAL_LINE, _GOAL_LINE]:
 			var inward: float = 1.0 if z < 0.0 else -1.0
-			var start: float = -PI * 0.5
+			var start: float = -PI * 0.5 * inward
 			draw_arc(_p(z, 0.0), 1.8 * _scale,
 					start, start + PI, 24, _BLUE, 1.0)
 			# Net footprint just outside the goal line.

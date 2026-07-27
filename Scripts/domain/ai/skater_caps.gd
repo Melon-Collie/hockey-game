@@ -21,7 +21,8 @@ extends RefCounted
 # perfect-bot path before any attributes apply) reproduces the prior behaviour
 # exactly — the consumers seed their values from these defaults.
 
-# Top skating speed (Speed). Drives chase-intercept reach, momentum-aware ETA,
+# Top skating speed (height-derived, leaned by the skate profile). Drives
+# chase-intercept reach, momentum-aware ETA,
 # and the post-engagement blade-reset cooldown scaling.
 var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
@@ -47,7 +48,8 @@ var max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # by adding its own ± buffers to this.
 var blade_span: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M
 
-# Stick length ALONE (Size). The lane-interception model uses stick reach (not the
+# Stick length ALONE (height + the stick-length gear slot). The lane-interception
+# model uses stick reach (not the
 # full stick+blade span) for a defender's blade in a pass/shot lane.
 var stick_reach: float = GameRules.DEFAULT_STICK_LENGTH_M
 
@@ -62,8 +64,9 @@ var stick_reach: float = GameRules.DEFAULT_STICK_LENGTH_M
 # not a tuned margin. Default = league stick + blade + baseline backhand ROM reach.
 var max_blade_reach: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M + 0.46
 
-# Charged wrister release speed (Shot). Feeds shot-quality eval (score_shoot) — a
-# high-Shot player's shot reaches the net faster, leaving defenders less reaction
+# Charged wrister release speed (height-derived, leaned by stick flex and blade
+# curve). Feeds shot-quality eval (score_shoot) — a
+# hard-shooting player's shot reaches the net faster, leaving defenders less reaction
 # time. Also the upper clamp on the player's distance-adaptive pass launch speed
 # (its hardest possible pass) — see AIActionScoring.pass_launch_speed.
 var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
@@ -97,14 +100,14 @@ var lateral_grip: float = 1.0
 # it. Default mirrors the controller's 0.75.
 var backhand_power_coefficient: float = 0.75
 
-# Body-check delivery (Size + Physical): the attacker impulse coefficient. The
-# victim impulse is `approach × (attacker_weight / victim_weight) × transfer` (see
-# Skater._resolve_player_collisions) — a high-Size/Physical player predicts harder
-# hits and commits to checks more readily.
+# Body-check delivery: the attacker impulse coefficient. The victim impulse is
+# `approach × (attacker_weight / victim_weight) × transfer` (see
+# Skater._resolve_player_collisions), so delivery is mass-emergent — a heavier
+# player predicts harder hits and commits to checks more readily.
 var weight: float = 1.0
 var body_check_transfer: float = 0.45
 
-# Active brace against being put down (Physical). The live collision multiplies a
+# Active brace against being put down. The live collision multiplies a
 # braced victim's absorbed transfer by this; the AI reads it to model how hard a
 # specific OPPONENT is to knock off the puck.
 var body_check_brace: float = 0.4

@@ -27,13 +27,13 @@ class_name AIBodyCheck
 #      the physics are one formula by construction: a soft bump that won't
 #      separate man from puck isn't worth leaving position for.
 #
-# Attribute expression falls out of (3): a high-Size/Physical bot's predicted
-# impulse clears the bar at lower closing speeds, so it hunts hits; a
-# light/low-Physical bot rarely clears it and won't whiff checks it'd bounce off.
+# Build expression falls out of (3): a heavy bot's predicted impulse clears the
+# bar at lower closing speeds, so it hunts hits; a light one rarely clears it and
+# won't whiff checks it'd bounce off.
 # A carrier skating TOWARD the checker raises the closing speed (bigger hit, more
 # likely to commit); one skating away lowers it. No RNG — replay-safe.
 #
-# Victim weight is the CARRIER's real mass (Size) when its build is known — a
+# Victim weight is the CARRIER's real mass (weight-derived) when its build is known — a
 # light checker won't leave its feet for a hit it'd bounce off a heavy target
 # with. Defaults to the league baseline when unwired. (The victim's active BRACE
 # — Physical, now on the Hit button — only bites when the victim is committing a
@@ -115,7 +115,7 @@ static func evaluate(
 	# bring driving at the intercept, through the resolver's OWN delivery
 	# function (SkaterCollisionRules.victim_kick — the same code path
 	# resolve() applies on contact, so this prediction can never drift from
-	# the physics again). The victim's REAL mass (Size) is in the reduced-mass
+	# the physics again). The victim's REAL mass is in the reduced-mass
 	# denominator, so a heavy carrier moves less for the same hit and a light
 	# checker correctly predicts bouncing off — it won't leave its feet for it.
 	var approach: float = _predicted_approach(self_pos, self_max_speed, intercept, carrier_vel)

@@ -108,57 +108,50 @@ const SLOT_RADIUS_M: float = 6.0
 
 # ── Shot danger: hole-based open-net model ───────────────────────────────────
 # score_shoot rates a shot by evaluating the classic goalie "holes" as separate
-# targets, taking the BEST one. The score is that hole's opening; which hole it is
-# decides the LOFT the bot shoots (best_shot_loft). This is pure geometry from the
-# shooter's eye — distance, angle, and coverage all EMERGE (see _hole_open_angle)
-# — with the goalie a body that occludes part of the net.
+# targets, taking the BEST one. The score is that hole's opening; which hole it
+# is decides the LOFT the bot shoots (best_shot_loft). This is pure geometry
+# from the shooter's eye — distance, angle, and coverage all EMERGE (see
+# _hole_open_angle) — with the goalie a body that occludes part of the net.
 #
-#   1,2  top corners      → HIGH loft (over the glove/blocker held up in stance)
-#   3,4  bottom corners    → FLAT      (beside the pads)
-#   5    five-hole         → FLAT      (between the legs — opens when he's moving)
+#   1,2  top corners     -> HIGH loft (over the glove/blocker held up in stance)
+#   3,4  bottom corners  -> FLAT      (beside the pads)
+#   5    five-hole       -> FLAT      (between the legs — opens when he's moving)
 #
 # HIGH holes are ARRIVAL-HONEST: the loft is a fixed vertical launch speed, so
 # whether the arc physically reaches the top band at the net is a range × pace
 # fact. They're evaluated (and fired — best_shot_power_t) at the fastest pace
-# whose arc still arrives above the pad-top seam, and zeroed where no
-# legal power gets there — see the block at _high_band_horizontal_speed. A DOWN
-# goalie concedes the top band's arm extension (the butterfly's defining
-# trade); a standing set goalie's glove has the whole soft-arc flight to
-# deploy, which is what actually shuts the top shelf against a set keeper.
-#
-# (The armpit / body-side seam has no STATIC hole — it only opens when the
-# goalie commits his arm elsewhere. With the replicated pose in scope
-# (goalie_hands — hole-model v3), that condition is now SEEN: the HIGH cover
-# races from where each hand actually is (_band_cover's per-side hand read),
-# so the seam emerges exactly when a hand is genuinely caught low or wide,
-# and never as a phantom the resting stance covers.)
+# whose arc still arrives above the pad-top seam, and zeroed where no legal
+# power gets there — see the block at _high_band_horizontal_speed. A DOWN goalie
+# concedes the top band's arm extension (the butterfly's defining trade); a
+# standing set goalie's glove has the whole soft-arc flight to deploy, which is
+# what shuts the top shelf against a set keeper.
 #
 # The goalie FREEZES on the shot (he can't slide into it), so the only thing
 # range buys him is REACTION time to extend the relevant body part to the
-# placement. The reaction budget is the puck's travel time to the GOALIE'S
-# BODY (t_reach — the shooter→goalie gap at the band's pace), NOT the flight
-# to the goal line: the save happens where the puck crosses his reach
-# envelope, which a challenging keeper puts a large fraction of the flight
-# closer to the shooter. Budgeting on flight-to-net silently handed him the
-# whole flight to deploy — from 4 m a top-band arc that passes him at 0.14 s
-# (before his 0.18 s arm read even fires) was scored against a 0.25 s
-# flight-to-net and read as glove-covered; that error is what made a set
-# keeper an unbeatable wall from everywhere. Each hole reads its own height
-# BAND, and the bands differ in exactly the two ways a real goalie's do — a
-# wider always-covered CORE and a slower REACTION — which is what makes the
-# loft choice fall out of the same geometry:
+# placement. The reaction budget is the puck's travel time to the GOALIE'S BODY
+# (t_reach — the shooter→goalie gap at the band's pace), NOT the flight to the
+# goal line: the save happens where the puck crosses his reach envelope, which a
+# challenging keeper puts a large fraction of the flight closer to the shooter.
+# Budget on flight-to-net instead and he is silently handed the whole flight to
+# deploy — from 4 m a top-band arc passes him at 0.14 s, before his 0.18 s arm
+# read even fires, yet scores against a 0.25 s flight and reads as glove-covered.
+# That single error is enough to make a set keeper an unbeatable wall.
+#
+# Each hole reads its own height BAND, and the bands differ in exactly the two
+# ways a real goalie's do — a wider always-covered CORE and a slower REACTION —
+# which is what makes the loft choice fall out of the same geometry:
 #   cover = CORE + EXT × reaction ;  reaction = clamp((t_reach − DELAY)/DEPLOY,0,1)
 #   openness = the net bearing interval the hole clears past the cover's BODY-DISC
 #              tangent cone (he squares to the puck, so the cover half-width faces
 #              every sightline — sharp angles are walled by his depth), minus the
 #              puck's clean-entry fit inset and the shooter's execution spread
-# Aggressive angle-challenging (the goalie plays OUT for a longer shot) is not a
-# constant — it's just where the goalie actually is, fed in as goalie_pos.
+# Aggressive angle-challenging (the goalie playing OUT for a longer shot) is not
+# a constant — it's just where the goalie actually is, fed in as goalie_pos.
 #
 # The band cores/reaches are grounded, not fitted:
-#  · LOW  — legs/pads AND the stick. STANDING, the pad column alone is only
-#           LOW_CORE_STANDING_M (from the live stance anatomy) and the wider
-#           butterfly core exists only after the leg read + pads-to-floor drop
+#  · LOW  — legs/pads AND the stick. The pad column alone is only
+#           LOW_CORE_STANDING_M standing, and the wider butterfly core exists
+#           only after the leg read + pads-to-floor drop
 #           (GOALIE_BUTTERFLY_DROP_S — the same gate the five-hole seal runs),
 #           so an in-tight low shot beats the DROP exactly as it does against
 #           the live keeper. What it does not beat is the paddle already lying
@@ -167,19 +160,25 @@ const SLOT_RADIUS_M: float = 6.0
 #           measures shut inside 7 m. A DOWN goalie's splayed pads exceed it.
 #  · HIGH — glove/blocker, NARROWEST core (held up they leave the top corners)
 #           but the longest reach (out to 0.85 m ≈ glove_max_x_outward) on a slow
-#           ARM reaction. In tight the glove can't extend → roof it; at range it
-#           gets there → top corners shut. This is the over-the-shoulder read.
-# Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's
-# glove_max_x_outward. The stick is deliberately absent from HIGH — the blade
-# is 0.07 m tall, so an elevated puck clears it (GoalieStickRules).
-# (There is no MID/armpit band — with the replicated pose (goalie_hands, v3)
-# the body-side seam emerges through the per-side hand race instead: a hand
-# caught low/wide leaves its high side at the torso core, which IS the seam.)
-# [LOW, HIGH] half-width, fully deployed. LOW is the live butterfly's real
-# splayed pad edge — pad_local_offset 0.42 + butterfly_pad_half_width 0.42
-# (GoalieController's pose), the exact span the shot-outcome sim measures
-# saves with. The old 0.60 undersold the live splay by 0.24 m and left the
-# planning model phantom low-corner windows the real keeper closes.
+#           ARM reaction. In tight the glove can't extend -> roof it; at range it
+#           gets there -> top corners shut. This is the over-the-shoulder read.
+# Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's glove_max_x_outward.
+# The stick is deliberately absent from HIGH: the blade is 0.07 m tall, so an
+# elevated puck clears it. Adding it to LOW and NOT to HIGH is the point — it
+# makes the flat shot worse and leaves the roof alone, which is the band choice
+# the live keeper's save distribution rewards (GoalieStickRules).
+#
+# There is no MID/armpit band and no STATIC body-side hole: that seam only opens
+# when the goalie commits an arm elsewhere. The replicated pose (goalie_hands)
+# makes that condition visible, so HIGH cover races from where each hand actually
+# is (_band_cover's per-side hand read) and the seam emerges exactly when a hand
+# is genuinely caught low or wide — never as a phantom the resting stance covers.
+#
+# [LOW, HIGH] half-width, fully deployed. LOW must track the live butterfly's
+# real splayed pad edge — pad_local_offset 0.42 + butterfly_pad_half_width 0.42
+# (GoalieController's pose), the exact span the shot-outcome sim measures saves
+# with. Undersell the splay and the planning model invents low-corner windows
+# the real keeper closes.
 const HOLE_BAND_CORE: Array[float] = [0.84, 0.40]
 # Standing LOW core: the pad column a standing goalie covers with NO reaction —
 # stance pad center + half a pad box, mirrored from the live goalie's stance
@@ -828,7 +827,7 @@ const LANE_DEFENDER_REACH_M: float = GameRules.DEFAULT_STICK_LENGTH_M
 const LANE_REACTION_DELAY_S: float = 0.08
 # Fraction of top skating speed a defender covers LATERALLY sliding into a lane
 # (you close a passing lane sideways, not at full straight-line speed). Per-
-# defender close speed is this × the defender's real max_speed (Speed).
+# defender close speed is this × the defender's real max_speed.
 const LANE_LATERAL_FRACTION: float = 0.5
 const LANE_DEFENDER_CLOSE_SPEED_M_S: float = LANE_LATERAL_FRACTION * GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
@@ -1045,11 +1044,9 @@ static func expected_pass_speed(shooter: Vector3, receiver: Vector3) -> float:
 # SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
 # Used by time_to_arrive() for momentum-aware ETAs across every role
 # behavior + chase intercept lookahead.
-#
-# TODO(per-player attrs): when SkaterAttributes lands, swap call
-# sites for `attribute_resolver.call(peer_id).max_speed` so an
-# evaluator reasoning about a fast/slow opponent uses the right
-# top speed. This const becomes the league-average fallback.
+# League-average fallback: a bot resolves its OWN top speed through
+# AISkaterCaps, but several call sites still price opponents at this
+# reference rather than their real build.
 const SKATER_REF_SPEED_M_S: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # Approximate kinematic stopping time for a skater steering against
@@ -1093,8 +1090,9 @@ const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # CONSTANT-HAZARD process — at each instant a fixed probability the read stops
 # holding — so it is exactly geometric, exp(-t / τ). It is NOT a shaped curve; the
 # ONLY free parameter is the hazard timescale τ = READ_VALIDITY_TAU_S, the mean
-# time a read stays roughly valid. (The old per-second form pow(0.7, t) was the
-# same model written the opaque way — 0.7/s is exp(-1/2.8 s), i.e. τ ≈ 2.8 s.)
+# time a read stays roughly valid. (A per-second form like pow(0.8, t) is the same
+# model written opaquely: 0.8/s is exp(-1/4.5 s). Prefer the τ form — it names the
+# physical quantity.)
 #
 # τ is an honest AGGREGATE, not a derived quantity: plausible physical
 # decorrelation times span ~0.4 s (a defender closing a stick-width) to a
@@ -1112,27 +1110,25 @@ const SHED_ACCEL_DEFAULT_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # is free") — but whether a longer τ PLAYS better is a feel judgment, a playtest
 # call the suite can't settle.
 #
-# ACTION_HYSTERESIS_MARGIN_FRAC — once a fire intent is set, that
-# intent's (positive) score is scaled by (1 + this) when re-scored: a
-# challenger must beat the committed intent by 15%, not by a flat
-# margin. Prevents flicker between two close-scoring fire options
-# during pre-aim. PROPORTIONAL rather than additive because utility
-# scores span ~0.02 (deep-DZ escape reads) to ~0.7 (slot chances): the
-# old flat +0.05 was ~10% of a typical OZ score but could exceed the
-# ENTIRE gap between options in the defensive zone, making stale
-# intents disproportionately sticky exactly where scores are small.
-# Matches the proportional pattern already used by
-# AIThreatAssignment.HYSTERESIS_MARGIN_FRAC. Applied only to POSITIVE
-# scores — a committed intent that has decayed to worthless (or
-# negative EV) earns no stickiness. Only applies to fire intents
-# (SHOOT, QUICK_PASS, PASS) — CARRY doesn't get a bonus, so the bot is
-# free to switch to fire as soon as fire scores higher. Raise toward
-# 0.30 if intent flickers visibly; lower toward 0.05 if intent feels
-# too sticky.
+# ACTION_HYSTERESIS_MARGIN_FRAC — once a fire intent is set, that intent's
+# (positive) score is scaled by (1 + this) when re-scored, so a challenger must
+# beat the committed intent by 15% rather than by a flat margin. Prevents flicker
+# between two close-scoring fire options during pre-aim.
+#
+# PROPORTIONAL, not additive, because utility scores span ~0.02 (deep-DZ escape
+# reads) to ~0.7 (slot chances): a flat margin that is a sane ~10% of a typical OZ
+# score can exceed the ENTIRE gap between options in the defensive zone, making
+# stale intents disproportionately sticky exactly where scores are smallest. Same
+# pattern as AIThreatAssignment.HYSTERESIS_MARGIN_FRAC.
+#
+# Applied only to POSITIVE scores — a committed intent decayed to worthless (or
+# negative EV) earns no stickiness — and only to fire intents (SHOOT, QUICK_PASS,
+# PASS), so the bot may switch to fire the moment fire scores higher. Raise toward
+# 0.30 if intent flickers visibly; lower toward 0.05 if it feels too sticky.
 # Mean seconds a tactical read stays roughly valid (the hazard timescale above).
-# τ ≈ 4.5 s ↔ a ~0.80 per-second discount — raised from the prior τ ≈ 2.8 s
-# (0.70/s) toward more patient, developing-play-friendly carrying. See the sweep
-# caveat above: this is the patient side, judged by feel, not by the suite.
+# τ ≈ 4.5 s ↔ a ~0.80 per-second discount — the patient end of the range, favouring
+# developing plays. See the sweep caveat above: this side is judged by feel, not by
+# the suite.
 const READ_VALIDITY_TAU_S: float = 4.5
 const ACTION_HYSTERESIS_MARGIN_FRAC: float = 0.15
 
@@ -2153,7 +2149,7 @@ static func tip_ev(
 	if along <= SCREEN_MIN_ALONG_M or along >= line_len - 0.3:
 		return 0.0
 	var tip_pt := Vector3(release.x + hx * along, 0.0, release.z + hz * along)
-	# P(blade contacts): the tipper's real stick reach (Size) + lateral close.
+	# P(blade contacts): the tipper's real stick reach + lateral close.
 	var stick: float = LANE_DEFENDER_REACH_M
 	var close: float = LANE_DEFENDER_CLOSE_SPEED_M_S
 	if tip_caps != null:
@@ -2878,7 +2874,7 @@ static func _lane_block_at(
 		stick_reach: float = LANE_DEFENDER_REACH_M,
 		close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S) -> float:
 	var miss: float = _lane_miss_at(fx, fz, pvx, pvz, t, px, pz, vx, vz)
-	# reach = this defender's stick (Size) + how far it slides into the lane after
+	# reach = this defender's stick + how far it slides into the lane after
 	# its read delay (Speed × the ~0.5 lateral factor); normalised by its own stick
 	# so "one full stick inside reach ⇒ certain block" scales with the defender.
 	var reach: float = stick_reach + close_speed * maxf(0.0, t - LANE_REACTION_DELAY_S)
@@ -3015,7 +3011,7 @@ static func lane_clear(from: Vector3, to: Vector3, opponents: Array[Vector3],
 		if i < vel_count:
 			vx = opponent_vels[i].x
 			vz = opponent_vels[i].z
-		# This defender's real stick reach (Size) and lateral close speed (Speed).
+		# This defender's real stick reach and lateral close speed.
 		var stick_reach: float = LANE_DEFENDER_REACH_M
 		var close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S
 		if has_caps:
@@ -3739,22 +3735,20 @@ static func counter_rush_cost(
 # ── Pass execution risk ──────────────────────────────────────────────────────
 # Even a clear-lane pass isn't a sure thing: leads run long, receptions
 # fumble off an unsquared blade, a bouncing puck skips the tape. The lane
-# model prices INTERCEPTION only, so before this constant existed a 5 m
-# clear-lane backpass deep in our own zone scored as risk-free — and since
-# fire wins ties against carry, bots eagerly dumped the puck backward for
-# near-zero gain, and the occasional real-world miss surrendered all the
-# ice behind them. PASS_MISS_PROB is the residual chance a lane-clear pass
-# still fails on execution; the puck ends up loose PAST the receiver
-# (overled / through the blade), PASS_MISS_OVERSHOOT_M beyond them along
-# the pass line. Feeding that loss point to turnover_cost makes the risk
-# self-localize exactly like interception risk does: an OZ miss costs ~0
-# (loose puck in their end), a DZ backpass miss prices the opponent's
-# chance in front of our net. No zone flag, no backpass heuristic — the
-# geometry does it.
+# model prices INTERCEPTION only, so without this a clear-lane backpass deep
+# in our own zone scores as risk-free — and since fire wins ties against
+# carry, that alone is enough to make bots dump the puck backward for
+# near-zero gain and surrender all the ice behind them on the occasional
+# real miss. PASS_MISS_PROB is the residual chance a lane-clear pass still
+# fails on execution; the puck ends up loose PAST the receiver (overled /
+# through the blade), PASS_MISS_OVERSHOOT_M beyond them along the pass line.
+# Feeding that loss point to turnover_cost makes the risk self-localize
+# exactly like interception risk does: an OZ miss costs ~0 (loose puck in
+# their end), a DZ backpass miss prices the opponent's chance in front of our
+# net. No zone flag, no backpass heuristic — the geometry does it.
 #
-# NOT a flat rate — pass_miss_prob() DERIVES it (the flat constant was a magic
-# number in an evaluator, exactly what the shot window model avoids). Two
-# grounded parts:
+# NOT a flat rate — pass_miss_prob() DERIVES it, since a bare constant here
+# would be a magic number in an evaluator. Two grounded parts:
 #   · The bot solves its LAUNCH so the puck ARRIVES catchable (at
 #     PASS_TARGET_CLOSING_M_S, under the any-angle reception ceiling), so
 #     reception DIFFICULTY (closing speed vs blade angle) is designed OUT of its
@@ -3766,12 +3760,11 @@ static func counter_rush_cost(
 #     distance, which misses when that lateral spread exceeds the receiver's
 #     catch envelope (its Hands handle reach). Same uniform-error model the shot
 #     window uses.
-# So miss now scales with the passer's Hands-tier AND the pass length — a Hard
-# bot's short feed sits at the base, an Easy bot's cross-ice stretch is genuinely
-# risky — instead of one flat rate for every pass at every tier, and the
-# backpass suppression survives via the base floor (even a perfect short feed
-# keeps a small DZ miss cost). OVERSHOOT is the physical "how far past the
-# receiver does a missed pass die" scale, not a knob.
+# So miss scales with the passer's Hands tier AND the pass length: a Hard bot's
+# short feed sits at the base, an Easy bot's cross-ice stretch is genuinely risky.
+# The backpass suppression rides the base floor, so even a perfect short feed
+# keeps a small DZ miss cost. OVERSHOOT is the physical "how far past the receiver
+# does a missed pass die" scale, not a knob.
 const PASS_MISS_BASE_PROB: float = 0.04
 const PASS_MISS_OVERSHOOT_M: float = 3.0
 
@@ -4418,6 +4411,190 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 		return to    # clear mid-route, covered at the destination
 	# Neither covered (a low strip probability anyway): the tighter of the two.
 	return mid if c_mid <= c_end else to
+
+
+# ── Controlled space: how much room a carrier has to OPERATE ─────────────────
+# "How much space do I have" as a measured quantity rather than a corridor test.
+#
+# THE MODEL. Space is the fraction of the ice ahead that this carrier can
+# actually reach WITH THE PUCK. Not "is anyone standing in my lane" — that is a
+# geometry question and it has no clock in it — but "of the destinations in
+# front of me, how many survive the race?" A fan of carry paths is sampled
+# across the forward cone, each priced by the SAME carry_safety the real carry
+# candidates use (crossing band + transit mid + arrival lunge, escape gate on),
+# reached at the SAME momentum-honest time_to_arrive. The result is the
+# area-weighted mean of those keep probabilities, in [0, 1]: 1 = every forward
+# destination is mine, 0 = none of them are.
+#
+# WHY A FAN AND NOT A RAY. A single netward ray is a corridor-occupancy test:
+# it cannot tell a defender you will skate past from a wall, it answers the
+# same for a man 3 m ahead and one 8 m ahead (no clock), and it has a hard cliff
+# at the reach boundary — one measured at 0.556 for a defender 1.0 m off the
+# ray and 1.000 at 2.0 m, a 45 cm difference deciding the puck. Sampling an
+# AREA cannot cliff: a defender leaving one path still covers its neighbours in
+# proportion to how much ice he actually takes away.
+#
+# WHY PATHS AND NOT POINTS. Each sample is a carry FROM the carrier TO the
+# destination, so a defender sitting between two rays is not a blind spot — he
+# is met en route by both, and carry_safety's crossing band prices exactly that
+# meeting. This is what lets the fan stay coarse (SPACE_SAMPLE_ANGLES) without
+# leaking coverage between samples.
+#
+# WHAT MOMENTUM BUYS, FOR FREE. time_to_arrive is momentum-honest, so a carrier
+# in stride reaches the far ring sooner, gives the defenders less window, and
+# reads more space than the same carrier standing still — while one skating the
+# other way pays the reversal. Nothing here is a momentum term; it falls out of
+# using the honest arrival time. The escape gate (apply_escape) is what keeps a
+# man the carrier is out-skating from reading as a wall.
+#
+# WEIGHTING. Each sample carries the area it stands for (polar element ∝ r)
+# projected onto the objective direction (max(0, cos θ) — the same
+# foreshortening projection position_potential uses, so lateral ice counts for
+# what it advances). Samples off the playing surface are DROPPED from both
+# sums, not zeroed: a wall does not strip the puck, it removes options, and
+# pricing the boards as pressure here would discount a clean wall carry as if
+# it were covered. (Boards-as-defender is a real read, but it belongs to the
+# option model, not the pressure one.)
+#
+# FAN DENSITY. Measured against a 5×9 reference fan: ANGULAR resolution buys
+# accuracy and radial resolution does not. Three angles alias badly enough to
+# miss a defender 3 m off the ray entirely (reads a clean 1.000); dropping the
+# middle ring costs almost nothing. So the budget goes to angles: 2×7 is one
+# sample CHEAPER than the 3×5 first shipped here and materially closer to the
+# reference (worst-case error 0.076 → 0.043 at rest, and the defender-dead-
+# ahead-at-speed case −0.079 → +0.015).
+#
+# Known residual: a two-man wall met at speed reads ~0.2 high on any fan this
+# coarse — the samples thread between the pair. That is the asymmetric model's
+# structural blind spot (a min over defenders cannot count bodies), not a
+# density problem: the dense reference is only 0.04 better there.
+#
+# Allocation-free: value-type math over two const tables.
+const SPACE_SAMPLE_RINGS: Array[float] = [0.5, 1.0]
+# ±70° in 23° steps. Coarse by design — see "why paths and not points".
+const SPACE_SAMPLE_ANGLES: Array[float] = [
+		-1.2217, -0.8145, -0.4072, 0.0, 0.4072, 0.8145, 1.2217]
+# Rings are STAGGERED by half an angular step, so the two rings sample 14
+# distinct bearings instead of the same 7 twice. Free anti-aliasing: a defender
+# between two rays used to degrade both of them on both rings, which made the
+# sweep wobble ±0.07 and could read a man 1.5 m off the ray as taking MORE space
+# than one dead centre (dead centre blocks one bearing; off-centre blocks two).
+# Half-step offset halves that beat frequency at identical cost.
+const SPACE_RING_STAGGER_RAD: float = 0.2036
+
+
+# One sample: the keep probability of carrying from `from` to `sample`, reached
+# at this build's honest momentum-aware arrival time. The per-point control
+# read — exported because the carry candidate scoring and the off-puck roles
+# want the same number for a single spot.
+static func control_at(sample: Vector3, from: Vector3, from_vel: Vector3,
+		from_caps: AISkaterCaps, opponents: Array[Vector3],
+		opponent_vels: Array[Vector3], opponent_caps: Array = []) -> float:
+	var speed: float = SKATER_REF_SPEED_M_S
+	var accel: float = MANEUVER_ACCEL_M_S2
+	var grip: float = 1.0
+	if from_caps != null:
+		speed = from_caps.max_speed
+		accel = from_caps.max_accel
+		grip = from_caps.lateral_grip
+	var t: float = time_to_arrive(from, sample, from_vel, speed, accel, grip)
+	return carry_safety(from, sample, t, opponents, opponent_vels,
+			opponent_caps, true)
+
+
+# The area-weighted controlled fraction of the forward cone (see the block
+# doc). `toward` is the objective the cone points at (the attacking net for the
+# carrier's forward-pressure read); `horizon_m` how far ahead space is felt.
+# Returns 1.0 when the objective is degenerate or every sample is off-ice.
+# `out_bearing_control`, when sized to SPACE_SAMPLE_ANGLES, is filled with the
+# mean control along each BEARING of the fan (averaged over the rings, off-ice
+# samples skipped, 1.0 where a bearing has no legal sample). That per-bearing
+# profile is the fan's directional shape — which way out of here is open — and
+# it is a free by-product of a read the carrier already pays for every re-eval.
+# AIRoleCarrier generates its forward carry candidates from it instead of from
+# a fixed ring of cardinals; every other caller passes nothing and it costs one
+# untaken branch per sample.
+static func controlled_space(from: Vector3, from_vel: Vector3,
+		from_caps: AISkaterCaps, toward: Vector3, horizon_m: float,
+		opponents: Array[Vector3], opponent_vels: Array[Vector3],
+		opponent_caps: Array = [],
+		out_bearing_control: Array[float] = []) -> float:
+	var want_bearings: bool = out_bearing_control.size() == SPACE_SAMPLE_ANGLES.size()
+	if want_bearings:
+		out_bearing_control.fill(1.0)
+	var fx: float = toward.x - from.x
+	var fz: float = toward.z - from.z
+	var flen: float = sqrt(fx * fx + fz * fz)
+	if flen < 0.001 or horizon_m <= 0.0 or opponents.is_empty():
+		return 1.0
+	fx /= flen
+	fz /= flen
+	# The cone never reaches past the objective itself — closing on the net, the
+	# space that matters is the ice up to it, not behind it.
+	var reach: float = minf(horizon_m, flen)
+	var weighted: float = 0.0
+	var total: float = 0.0
+	for bi: int in SPACE_SAMPLE_ANGLES.size():
+		var bearing_sum: float = 0.0
+		var bearing_n: int = 0
+		# PREFIX IMPLICATION. Rings are walked OUTERMOST FIRST, and when the
+		# outer path along a bearing comes back fully controlled, the inner
+		# samples on that same bearing are credited 1.0 without being priced.
+		# They are a strict PREFIX of a path already proven clean: the inner
+		# destination lies on the outer route, reached sooner, so every defender
+		# has strictly less time to get to it, and the outer read's own mid
+		# sample and crossing band already swept the ice between. This is where
+		# the fan's cost actually lives — open ice is the expensive case, because
+		# nothing there trips carry_safety's zero early-outs — so skipping it is
+		# worth more than trimming traffic, where the early-outs already fire.
+		# (The one approximation: the outer read's END sample uses the arrival
+		# lunge window while a priced inner sample would use its own. It can only
+		# make the skip more conservative than the real inner value, never less.)
+		var outer_full: bool = false
+		for k: int in SPACE_SAMPLE_RINGS.size():
+			var ri: int = SPACE_SAMPLE_RINGS.size() - 1 - k
+			var r: float = reach * SPACE_SAMPLE_RINGS[ri]
+			# Alternate rings ride half an angular step over (see the stagger doc).
+			var stagger: float = SPACE_RING_STAGGER_RAD if ri % 2 == 1 else 0.0
+			var angle: float = SPACE_SAMPLE_ANGLES[bi] + stagger
+			var ca: float = cos(angle)
+			# Forward projection: the same cos foreshortening position_potential
+			# uses. Straight ahead counts fully, ±70° counts about a third.
+			if ca <= 0.0:
+				continue
+			var sa: float = sin(angle)
+			var dir_x: float = fx * ca - fz * sa
+			var dir_z: float = fx * sa + fz * ca
+			var sample := Vector3(
+					from.x + dir_x * r, 0.0, from.z + dir_z * r)
+			if absf(sample.x) > GameRules.INNER_HALF_WIDTH \
+					or absf(sample.z) > GameRules.INNER_HALF_LENGTH:
+				continue   # off the playing surface — see the WEIGHTING note
+			# A sample whose straight path runs through a cage is not ice this
+			# carrier can take, so it leaves both sums exactly like an off-surface
+			# one. Dropping it also keeps the fan off time_to_arrive's around-the-
+			# net routing, which prices four waypoints on two legs each — an 8x
+			# per-sample cost that fired on the whole fan whenever the carrier
+			# worked near a goal line, and was the fan's worst-tick spike.
+			if carry_path_blocked_by_net(from, sample):
+				continue
+			var c: float = 1.0
+			if not outer_full:
+				c = control_at(sample, from, from_vel, from_caps,
+						opponents, opponent_vels, opponent_caps)
+				if k == 0 and c >= 1.0:
+					outer_full = true   # prefix implication — see the block above
+			# Polar area element ∝ r, so the outer ring stands for more ice.
+			var w: float = r * ca
+			total += w
+			weighted += w * c
+			bearing_sum += c
+			bearing_n += 1
+		if want_bearings and bearing_n > 0:
+			out_bearing_control[bi] = bearing_sum / float(bearing_n)
+	if total <= 0.0:
+		return 1.0
+	return weighted / total
 
 
 # The carrier's best evasion target — the point in his handling envelope (where he

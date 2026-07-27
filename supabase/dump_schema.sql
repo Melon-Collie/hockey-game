@@ -17,7 +17,16 @@ with table_ddl as (
             '    ' || a.attname || ' ' || pg_catalog.format_type(a.atttypid, a.atttypmod)
             || coalesce(' default ' || pg_get_expr(ad.adbin, ad.adrelid), '')
             || case when a.attnotnull then ' not null' else '' end,
-            E',\n' order by a.attnum
+            -- BY NAME, not attnum. attnum is the order columns were physically
+            -- added, which is history rather than schema: a table built in one
+            -- shot from the migration's CREATE lists its columns in declared
+            -- order, while the same logical table grown by `add column if not
+            -- exists` has the late arrivals at the end. Both are the same schema
+            -- — Postgres attaches no meaning to column order and nothing here
+            -- selects positionally — but attnum order made them diff, so the
+            -- drift check failed permanently against any historically-migrated
+            -- database. Sorting by name makes the dump canonical.
+            E',\n' order by a.attname
         ) || E'\n);' as ddl
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
@@ -82,4 +91,9 @@ from (
     union all select * from rls_ddl
     union all select * from policy_ddl
 ) x
-order by sort, obj;
+-- `ddl` breaks the tie. Without it, objects sharing a (sort, obj) — a table's
+-- several constraints or indexes — come back in whatever order the catalog scan
+-- produced, so two dumps of the SAME schema could differ by line order alone.
+-- The drift check in .github/workflows/supabase.yml diffs two of these against
+-- each other, and a hand reconcile is no easier against a shuffled file.
+order by sort, obj, ddl;
