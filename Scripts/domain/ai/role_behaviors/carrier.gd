@@ -53,32 +53,6 @@ const FIRE_MIN_VALUE: float = 0.02
 # gate; a walk-out shooter is genuinely in front (well past this) by release.
 const SHOT_MIN_FORWARD_OF_LINE_M: float = 0.3
 
-# Small ANTI-NOISE floor under the offensive-zone shot value — NOT a position
-# map. The O-zone prices candidates by real shot danger alone (score_shoot — xG
-# is the best read of a spot; position_potential is deliberately absent in the
-# zone), and that gradient already climbs strongly toward the slot on its own
-# (in-tight ≫ mid ≫ top/dead-angle), so a pinned carrier is pulled to the slot by
-# xG itself — no positional proxy needed.
-#
-# This floor exists only to stop the carrier chasing the MICROSCOPIC residual xG
-# (a thin five-hole leak, a deep-angle sliver — hundredths or less) into the
-# crease when the zone is genuinely shot-dead: with every real shot covered,
-# flooring those noise values to one flat number makes the spots read equal, so
-# the caller's safety / decay / turnover terms decide (the carrier CYCLES) rather
-# than crawling toward whichever noise spot scored 0.001 higher. It is set BELOW
-# real shot xG (the slot reads ~0.15–0.20 against a set goalie) so it never
-# flattens that gradient. The earlier, higher flat value did exactly that — it
-# floored the safe dead-angle ice up near the mid-slot value, so a pinned carrier
-# saw the safest deep ice as no worse than working the slot and drifted to the
-# goal line to park; dropping it to a noise epsilon fixed that with pure xG.
-#
-# Floored under the shot branch for MOVEMENT candidates and receiver evals (never
-# stand-still, so ties keep resolving toward movement and fire — no corner
-# camping). RINK SIDE of the goal line only: behind the cage a spot can't
-# generate a chance without first coming out, so the possession value there
-# belongs to the POST WALKOUT (and the behind-net feed, whose receiver is floored
-# out front), not the spot.
-const OZ_POSSESSION_VALUE: float = 0.01
 
 # ── Release-offset sampling (shoot-now eval) ─────────────────────────────────
 # The shot originates at the PUCK, and the carrier can put the puck anywhere in
@@ -1223,13 +1197,24 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# Own traffic screens: the in-zone teammates (_scratch_option_receiver_pos,
 		# filled above) ride along as sightline bodies — the net-front man parked
 		# in the goalie's eyes is what makes the point blast a real chance.
-		var s: float = AIActionScoring.score_shoot(
-				release, attacking_goal, sample_goalie,
+		# THE SEAM, same as the carry and pass legs. The fire-vs-carry-vs-pass
+		# compete is a comparison, so all three sides have to be denominated in
+		# the same currency — leaving the shoot leg on the saturating hole model
+		# while the others moved to NHL-calibrated xG made SHOOT win outright
+		# (a 1.0 ceiling against a 0.4 one), which is exactly what the
+		# backdoor-feed and peel-out tests caught.
+		#
+		# The replicated pose (_shot_env_hands / _pads / _five_hole) drops out
+		# of the GATE and stays where it is truth: picking aim / loft / power
+		# once SHOOT has won, below.
+		var shot_disp: float = AIShotValue.displacement_deficit_m(
+				goalie_now, attacking_goal, release,
+				SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+						+ flight_s + ctx.shot_timing_error_s * 0.5)
+		var s: float = AIActionScoring.score_shoot_value(
+				release, attacking_goal, sample_goalie, shot_disp,
 				GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
-				sample_speed, _shot_env_unsettled, _scratch_opponent_caps,
-				_shot_env_five_hole, _shot_env_goalie_down,
-				_shot_env_seal_x, _shot_env_seal_tall, ctx.self_aim_spread_rad,
-				_scratch_option_receiver_pos, _shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
+				sample_speed, _scratch_opponent_caps)
 		if s > _phase_shoot_score:
 			_phase_shoot_score = s
 			_shot_sample_release = release
@@ -2090,9 +2075,19 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# teammate one-times harder, beating the goalie more, so it's a better feed.
 	var receiver_shot_speed: float = receiver_caps.wrister_shot_speed if receiver_caps != null \
 			else AIActionScoring.WRISTER_SHOT_SPEED_M_S
+	# The feed's whole edge, measured: the puck relocates the shot origin at
+	# ~25 m/s while the keeper re-squares at 3.8. Over the flight plus the
+	# receiver's release, how much of the arc-match demand can he actually
+	# cover? What he cannot is the seam. This is the same quantity the carry
+	# leg reads, and it is why a cross-crease feed and a back pass score so
+	# differently without a rule saying so.
+	var receiver_displacement: float = AIShotValue.displacement_deficit_m(
+			_goalie_now(ctx), ctx.attacking_goal_pos, receiver_spot,
+			receiver_release_t)
 	var receiver_value: float = _score_at(ctx, receiver_spot, self_pos,
 			_scratch_opponents_pass, receiver_goalie,
-			receiver_shot_speed, receiver_unsettled)
+			receiver_shot_speed, receiver_unsettled, 0.0,
+			receiver_displacement)
 	# An OPEN receiver isn't limited to a one-timer from where they catch it — they
 	# can carry into a better look, exactly like the carrier's own best_carry. In the
 	# offensive zone the plain score_at above is shot-ONLY (xG's domain), so a
@@ -2935,9 +2930,26 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 				SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 						+ cand_flight + ctx.shot_timing_error_s * 0.5,
 				cand_release, release_closing)
+	# How far off his square he still is when this release happens, measured
+	# from where he is NOW over everything the play gives him — the carry, the
+	# wind-up and the flight. That total is the honest budget: he tracks
+	# throughout, so what matters is the residual at the moment of release.
+	#
+	# KNOWN LIMITATION of this first cut: measured at the DESTINATION only, and
+	# against a tracking keeper the residual at the end of a traverse is close
+	# to zero — he has had the whole carry to re-square. The deficit actually
+	# peaks EARLY (roughly 0.6 m a third of the way through a 0.75 s cross-slot
+	# drive, against ~0.1 m on arrival), which is why real releases come
+	# mid-traverse. Sampling the route rather than its endpoint is the next
+	# step; until it lands, lateral drives are under-valued here.
+	var release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S \
+			+ cand_flight + ctx.shot_timing_error_s * 0.5
+	var cand_displacement: float = AIShotValue.displacement_deficit_m(
+			_goalie_now(ctx), ctx.attacking_goal_pos, cand_release, release_t)
 	var dest_score: float = _score_at(ctx, cand_release, self_pos,
 			_scratch_opponents_path, cand_goalie,
-			ctx.self_wrister_shot_speed, cand_unsettled, ctx.self_aim_spread_rad)
+			ctx.self_wrister_shot_speed, cand_unsettled, ctx.self_aim_spread_rad,
+			cand_displacement)
 	var keep_prob: float = safety
 	var cost: float = 0.0
 	# A fully safe route pays no turnover cost at all — skip localizing a
@@ -3166,7 +3178,8 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		predicted_goalie_pos: Vector3,
 		shot_speed_m_s: float = AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 		goalie_unsettled_factor: float = 0.0,
-		aim_spread_rad: float = 0.0) -> float:
+		_aim_spread_rad: float = 0.0,
+		keeper_displacement_m: float = 0.0) -> float:
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	# All the carrier's opponent arrays (path / pass / stand projections) are built
 	# in the same snapshot order as _scratch_opponent_caps, so the defenders in the
@@ -3201,35 +3214,39 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 				pos, attacking_goal, opps)
 		return potential_nz * AIActionScoring.potential_realization_discount(
 				pos, attacking_goal)
-	var seal_x: float = AIActionScoring.derive_post_seal_x_sign(pos, attacking_goal)
-	# Pass the shared read-only empty for `screeners` rather than omitting it: this
-	# is the per-candidate scorer (~40-60 calls per carrier compete), and an omitted
-	# `screeners` default-allocates a fresh empty Array[Vector3] on every one.
-	var shoot_s: float = AIActionScoring.score_shoot(
-			pos, attacking_goal, predicted_goalie_pos,
+	# THE SEAM (AIShotValue): the public xG form plus a keeper-displacement
+	# term, in place of the five-hole geometry. The hole model is not gone — it
+	# still picks aim / loft / power once SHOOT wins — but it no longer prices
+	# the ranking decisions, because a max over five holes with structural
+	# cliffs cannot supply the small, meaningful DIFFERENCES a carry beam
+	# consumes. Displacement arrives as a measured metre figure rather than the
+	# 0..1 unsettled scalar, which saturated the moment he was caught moving at
+	# all and so could not say HOW beaten he was.
+	#
+	# KNOWN CONSEQUENCE, deliberately left standing for the experiment:
+	# `_aim_spread_rad` is now unused. xG is a property of the chance, not of
+	# who is shooting — correct for a stat, but it means the per-tier scatter
+	# dial stops acting as the SELECTIVITY lever BotSkillProfile documents it
+	# to be. A wobblier hand should decline marginal shots; on this path it no
+	# longer does. If the switchover holds, that comes back as a term on the
+	# shoot/don't gate rather than baked into the spot's value.
+	var shoot_s: float = AIActionScoring.score_shoot_value(
+			pos, attacking_goal, predicted_goalie_pos, keeper_displacement_m,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
-			goalie_unsettled_factor, _scratch_opponent_caps,
-			-1.0, false, seal_x, seal_x != 0.0, aim_spread_rad,
-			AIActionScoring.EMPTY_VEC3)
+			_scratch_opponent_caps)
 	if AIActionScoring.in_offensive_zone(from_pos, attacking_goal):
 		# PURE xG in the offensive zone — position_potential (the progression
-		# value map) is deliberately NOT used here; the O-zone is xG's domain, a
-		# strictly better read of a spot than any positional proxy. The only
-		# non-xG term is OZ_POSSESSION_VALUE, a small ANTI-NOISE floor (see its
-		# doc): score_shoot's real gradient already climbs strongly toward the
-		# slot (in-tight ≫ mid ≫ top/dead-angle), so a pinned carrier is pulled to
-		# the slot by that gradient alone — the floor only keeps the microscopic
-		# five-hole/deep-angle xG NOISE from reading as a gradient and luring the
-		# carrier into the crease when the zone is genuinely dead (all spots ~
-		# equal → the safety / decay / turnover terms decide, i.e. cycle). It must
-		# stay BELOW real shot xG so it never flattens that gradient — the old
-		# higher flat floor did exactly that (flooring the safe dead-angle ice up
-		# to the mid-slot value), which is what let a pinned carrier drift to the
-		# goal line and park. Behind the goal line the floor is withheld (see the
-		# const doc): the walkout and the behind-net feed carry the possession's
-		# value out front.
-		if absf(pos.z) < GameRules.GOAL_LINE_Z:
-			return maxf(shoot_s, OZ_POSSESSION_VALUE)
+		# value map) is not consulted here; once a goalie is in play a real shot
+		# probability is the better read of a spot.
+		#
+		# The OZ_POSSESSION_VALUE floor that used to sit here is GONE, and that
+		# is the point of the switchover rather than a side effect. It existed
+		# because the old currency went dead-FLAT when no shot was available —
+		# every candidate returning exactly 0.01, so the argmax fell through to
+		# turnover cost and the carrier orbited the perimeter. A smooth xG
+		# surface does not go flat: a spot with no shot right now still scores
+		# by its distance and angle, so there is a gradient to climb without
+		# needing an anti-noise constant to stand in for one.
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)

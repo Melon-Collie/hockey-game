@@ -2285,6 +2285,46 @@ static func score_shoot(
 	return minf(shot_quality + second_chance, 1.0) * lane * pressure_factor
 
 
+# ── The SEAM's composed counterpart ──────────────────────────────────────────
+# score_shoot's structure with AIShotValue supplying the shot quality instead
+# of the five-hole geometry. Same guards, same release clamp, same defender
+# terms — a lane the puck has to survive and a release the shooter has to get
+# off are facts about DEFENDERS, and swapping the goalie model says nothing
+# about them.
+#
+# What changes is the quality term: a smooth, monotone, goalie-displacement-
+# aware probability rather than a max over five holes with structural cliffs.
+# The rebound second-chance term is deliberately dropped here — it is priced
+# off `shot_quality < 1.0`, which meant something on a currency that saturated
+# at 1.0 and means very little on one calibrated to NHL rates. It comes back
+# as its own term if the switchover holds.
+static func score_shoot_value(
+		shooter: Vector3,
+		attacking_goal: Vector3,
+		predicted_goalie_pos: Vector3,
+		keeper_displacement_m: float,
+		net_half_width: float,
+		opponents: Array[Vector3],
+		shot_speed_m_s: float = WRISTER_SHOT_SPEED_M_S,
+		opponent_caps: Array = [],
+		shot_type: int = ShotEvent.ShotType.SHOT) -> float:
+	if (shooter.z - attacking_goal.z) * -signf(attacking_goal.z) < 0.001:
+		return 0.0
+	shooter = release_ahead_of_goalie(shooter, attacking_goal, predicted_goalie_pos)
+	var quality: float = AIShotValue.for_release(
+			shooter, attacking_goal, keeper_displacement_m, shot_type)
+	if quality <= 0.0:
+		return 0.0
+	var aim: Vector3 = AIShotAim.compute_open_net_aim(
+			shooter, predicted_goalie_pos, attacking_goal.z,
+			net_half_width, GOALIE_SHADOW_HALF_M)
+	var lane: float = lane_clear(shooter, aim, opponents, shot_speed_m_s,
+			EMPTY_VEC3, opponent_caps)
+	var pressure: float = release_contest_clean(
+			release_point_toward(shooter, attacking_goal), opponents, opponent_caps)
+	return quality * lane * pressure
+
+
 # FIELDED twin of score_shoot for the threat-surface consumer family
 # (threat_surface_shoot / threat_local_shoot / the zone soft-lock read):
 # the goalie-hole core comes from AIDangerField's memoized surface — league
