@@ -132,6 +132,51 @@ jobs:
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # `supabase db push` reports every connection problem as the same opaque
+      # "failed to connect to postgres", which says nothing about WHICH of the
+      # several easy-to-get-wrong things is wrong. Classify the URL's shape first
+      # so the log names the actual mistake.
+      #
+      # This step reports CLASSIFICATIONS ONLY and never echoes the string or any
+      # substring of it: Actions masks the secret's exact value in logs, but not
+      # fragments of it, so printing "the host is X" could leak part of a
+      # credential.
+      - name: Preflight the connection string
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=SUPABASE_DB_URL::$1"; exit 1; }
+
+          case "$DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) fail "Not a postgres:// URI. Copy the Session pooler string from the dashboard's Connect button." ;;
+          esac
+
+          case "$DB_URL" in
+            *'[YOUR-PASSWORD]'*|*'[your-password]'*|*'<password>'*)
+              fail "The password placeholder is still in the string — replace it with the real database password (reset it at dashboard/project/<ref>/database/settings if it is lost)." ;;
+          esac
+
+          # Transaction mode cannot run DDL in a transaction, so migrations fail
+          # there even though the connection itself succeeds.
+          case "$DB_URL" in
+            *:6543/*|*:6543)
+              fail "Port 6543 is the TRANSACTION pooler, which cannot run DDL in a transaction. Use the SESSION pooler (port 5432)." ;;
+          esac
+
+          # Not fatal: direct connections do work if the project has bought the
+          # IPv4 add-on. Without it this is the likeliest cause of a connect
+          # failure on a GitHub-hosted runner, so say so before we try.
+          case "$DB_URL" in
+            *@db.*.supabase.co*)
+              echo "::warning title=SUPABASE_DB_URL::This is the DIRECT connection endpoint, which is IPv6-only unless the project has the IPv4 add-on — and GitHub-hosted runners are IPv4-only. If the push below fails to connect, this is why: switch to the Session pooler URI (Connect -> Session pooler, port 5432)." ;;
+            *pooler.supabase.com*)
+              echo "Session-pooler endpoint — IPv4-reachable from the runner." ;;
+          esac
+          echo "Connection string shape checks passed."
+
       # A manual run defaults to a dry run; a merge to main applies for real.
       - name: Push migrations
         if: steps.guard.outputs.ready == 'true'
