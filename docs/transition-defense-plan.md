@@ -254,8 +254,8 @@ two-on-the-puck under-covering inside our own zone compares TRANS_OD's three rol
 against DZONE's *nominal* coverage (PRESSURE + MARK×2 = all three men). But that
 coverage is the very fiction §9 exists to expose: with the bodies not home, a MARK
 computes a cover position from 20 m up-ice and escorts. The gate holds the rush
-shape exactly while somebody is unaccounted for, and in that state sprinting home
-strictly beats walking to a post.
+shape exactly while somebody is still on the way home, and in that state sprinting
+home strictly beats walking to a post.
 
 And the shapes **converge by construction**: RUSH_D1 is home already, TRACK_PUCK
 chases to the net, TRACK_MID stops at the circle tops — so the rush roles themselves
@@ -446,19 +446,45 @@ The rush-over predicate still exists for the *other* direction — deciding the 
 dead when the puck goes below our goal line, we establish possession, or the attack
 stalls — because those are what let a set structure stay set.
 
-### Risk to watch
+### The predicate: home-ness, not man-coverage (revised)
 
-The gate can, in principle, latch: if coverage never reads "set," the team never runs
-zone defense at all and a sustained cycle is defended by rush roles. Two guards:
+**As first shipped this was wrong, and the risk below is exactly how it went wrong.** The
+predicate asked "does every attacker have one of ours goal-side within a cover envelope,
+and is somebody engaged on the carrier?" That is a description of **man** coverage — and
+5v5 DZONE runs a hybrid **zone**, which covers ice rather than bodies by definition. So a
+*correctly executed* zone failed the gate. Measured against `AIZoneCoverage`'s own anchors
+for a settled cycle (carrier on the strong half-wall):
 
-1. the predicate is about *accounting for men*, not about being in formation — a settled
-   cycle satisfies it easily;
-2. a **time floor**: after N seconds of the opponent possessing in our zone without the
-   read clearing, force the upgrade and let zone coverage sort it out. A stale scramble
-   posture is worse than an imperfect zone.
+| clause | what the zone actually does | verdict |
+|---|---|---|
+| a body ≤4 m goal-side of every man | `ZONE_W_WEAK` sags to the high slot, ~8 m off the weak winger | fails |
+| a body engaged on the carrier | `ZONE_W_STRONG` pressures the half-wall from **up-ice** — correct hockey, not "goal-side" | fails |
 
-Instrument both — this is the highest-risk piece of the design and the one most likely to
-need a tuning pass against the rush harness.
+The gate could never be satisfied by the shape it gates entry into, which made the time
+floor below the *only* path into the zone: every cycle spent its first 4 s in the rush
+shape and entered coverage when the timer expired, not when the team was set.
+
+The predicate is now **home-ness**: every body the shape depends on is inside our
+defensive zone (`AIRushRead._coverage_ready`). Three properties earn it:
+
+- **Satisfiable by construction.** Every zone anchor sits ≤11 m off the goal line, well
+  inside our zone's ~19 m, so a correct shape passes. Pinned by
+  `test_a_real_zone_shape_reads_as_set`, which stands the bots on the real anchors.
+- **Monotone** in the thing actually happening — recovering bodies only get deeper — so it
+  clears on its own and cannot be permanently false while the team is doing the right
+  thing. **This is what makes the time floor unnecessary rather than load-bearing, and it
+  is deleted.** `test_there_is_no_time_fallback` pins that no elapsed time overrides it.
+- **Bar is geometry, not tuning** — the blue line, the structure's own footprint.
+
+**Bots only** (`bot_peers`; an empty set counts everyone, the stricter fail-safe). Humans
+are elected into the shape but obey nothing, so a teammate who refuses to backcheck would
+hold the predicate false forever — the one genuinely unclearable case, and what the time
+floor was really insuring against. Waiting on a body you cannot steer is the same
+"individual worst-case" reasoning this whole read replaced; the bots' structure is ready
+when *their* bodies are home.
+
+Retained: the leave-coverage hysteresis (`COVERAGE_HOLD_TICKS`), instant on the way in.
+A body straddling the blue line to pressure the point is not a broken structure.
 
 ---
 
@@ -538,18 +564,15 @@ Resolved items moved to **Decisions banked** at the top.
 2. **Cognition tiers.** Which of these become difficulty knobs? `backpressure_s` awareness
    and the gap-up trigger are natural Easy/Hard splits (`plays_rush_pass_lanes` is the
    precedent). Deferred to after the structure is playing well.
-3. **Coverage-gate latch risk** (§9). The time-floor guard is specified but its value is a
-   guess until measured. **Instrumented:** flip `TeamBrain.DEBUG_COVERAGE` and each zone
-   possession where the guard is load-bearing prints one `[cov-latch]` line naming the man
-   the accounting failed on. It has to name him, because "the predicate is too strict" and
-   "our bodies genuinely aren't home" have the same observable — a team stuck in the rush
-   shape — and they call for opposite fixes. The culprit disambiguates: a non-carrier peer
-   is an honest miss (fix the route), the carrier means `pressure_engage_m()` or its
-   goal-side requirement is the wrong bar, `-1` means `COVERAGE_HOLD_TICKS` alone was
-   holding it out. Routine firing = the predicate is wrong, not the guard.
-4. **Latch risk at 3v3 specifically.** The readiness predicate needs all three attackers
-   owned with only three defenders and no spare, so the 4 s guard may fire more often
-   than at 5v5. Same instrumentation; the `size=` field in the line separates the two.
+3. ~~**Coverage-gate latch risk**~~ — **resolved, see §9.** The gate was unsatisfiable by
+   the zone it gated and the time floor was carrying it. Predicate regrounded on
+   home-ness; the floor is deleted. Nothing here is left to tune: the bar is the blue
+   line, and the two properties that replaced the guard (satisfiable, monotone) are
+   pinned by test rather than watched in play.
+4. ~~**Latch risk at 3v3 specifically**~~ — moot with the latch gone, and the premise was
+   backwards anyway: 3v3 DZONE is `[PRESSURE, MARK]`, real man coverage, so the *old*
+   man-shaped predicate matched 3v3's shape honestly and it was **5v5** that could never
+   satisfy it.
 
 ---
 
@@ -589,7 +612,7 @@ toward home; there is no forward bound anywhere in the role behaviors.
 **(e) "Struggles to pick up a man" follows from (a)–(d)**, plus an interaction with §9: a
 body stranded in the NZ during a cycle is neither in the rush structure nor in coverage
 when possession flips, and the readiness gate correctly holds the whole team in the rush
-shape while he is unaccounted for. One stranded bot prolongs the scramble for everyone.
+shape while he is still on the way home. One stranded bot prolongs the scramble for everyone.
 
 ### 13.2 The real pinch read is not a race simulation
 

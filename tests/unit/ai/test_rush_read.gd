@@ -250,10 +250,14 @@ func test_backpressure_measured_from_a_trailing_teammate() -> void:
 			"a backchecker on the carrier's hip is live backpressure")
 
 
-# ── Coverage accounting (the DZONE gate — plan §9) ───────────────────────────
+# ── Coverage readiness (the DZONE gate — plan §9) ────────────────────────────
+# "Set" means the backcheck is HOME, not that men are already covered. The
+# distinction is the whole point: 5v5 DZONE runs a zone, which covers ice rather
+# than bodies, so a man-coverage predicate could never be satisfied by the shape it
+# gates. test_a_real_zone_shape_reads_as_set is the regression that pins that.
 
-func test_coverage_not_accounted_mid_backcheck() -> void:
-	# The puck has just crossed into our zone with three of ours still up-ice.
+func test_coverage_not_ready_mid_backcheck() -> void:
+	# The puck has just crossed into our zone with two of ours still up-ice.
 	# This is exactly the moment the old code switched everyone into zone posts.
 	var theirs := {
 		11: [Vector3(0.0, 0.0, 10.0), Vector3(0.0, 0.0, 6.0)],
@@ -265,80 +269,83 @@ func test_coverage_not_accounted_mid_backcheck() -> void:
 		3: [Vector3(4.0, 0.0, -10.0), Vector3(0.0, 0.0, 6.0)],
 	}
 	var r: AIRushRead = _read(ours, theirs, 11)
-	assert_false(r.coverage_accounted,
-			"coverage is not set while men are unaccounted for")
+	assert_false(r.coverage_ready,
+			"coverage is not set while bodies are still in the neutral zone")
 
 
-func test_coverage_accounted_when_everyone_is_picked_up() -> void:
-	# Set structure: a body on the puck, and the second attacker fronted
-	# goal-side inside the cover envelope.
-	var theirs := {
-		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
-		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
-	}
-	var ours := {
-		1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO],           # on the puck
-		2: [Vector3(-5.0, 0.0, 23.5), Vector3.ZERO],          # goal-side of 12
-	}
-	var r: AIRushRead = _read(ours, theirs, 11)
-	assert_true(r.coverage_accounted,
-			"every man owned and somebody on the puck is set coverage")
-
-
-func test_coverage_not_accounted_with_nobody_on_the_puck() -> void:
-	var theirs := {11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO]}
-	var ours := {1: [Vector3(-10.0, 0.0, 24.0), Vector3.ZERO]}
-	var r: AIRushRead = _read(ours, theirs, 11)
-	assert_false(r.coverage_accounted,
-			"an unpressured carrier means coverage is not set")
-
-
-# ── Which man the accounting failed on (the latch diagnostic) ────────────────
-# `unaccounted_peer` steers nothing; it exists so the [cov-latch] readout can tell
-# "a real attacker went uncovered" from "the engage bar is too strict", which look
-# identical from outside. Pinned because a diagnostic that names the wrong culprit
-# is worse than none — it sends the tuning at the wrong constant.
-
-func test_the_uncovered_man_is_named() -> void:
-	var theirs := {
-		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
-		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
-	}
-	var ours := {1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO]}  # on the puck, 12 free
-	var r: AIRushRead = _read(ours, theirs, 11)
-	assert_false(r.coverage_accounted)
-	assert_eq(r.unaccounted_peer, 12,
-			"the loose man is the culprit, not the covered carrier")
-
-
-func test_an_unengaged_carrier_names_the_carrier() -> void:
-	# The lone defender is fronting the wide man out by the boards — far enough off
-	# the puck to be outside containment range of it, so the carrier is the failure.
-	var theirs := {
-		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
-		12: [Vector3(-11.0, 0.0, 22.0), Vector3.ZERO],
-	}
-	var ours := {1: [Vector3(-10.5, 0.0, 23.8), Vector3.ZERO]}  # owns 12, not the puck
-	var r: AIRushRead = _read(ours, theirs, 11)
-	assert_false(r.coverage_accounted,
-			"scenario check: nobody is inside containment range of the carrier")
-	assert_eq(r.unaccounted_peer, r.carrier_peer,
-			"every man owned but nobody on the puck points at the engage bar")
-
-
-func test_accounted_coverage_names_nobody() -> void:
+func test_coverage_ready_once_everyone_is_home() -> void:
 	var theirs := {
 		11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO],
 		12: [Vector3(-6.0, 0.0, 22.0), Vector3.ZERO],
 	}
 	var ours := {
 		1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO],
-		2: [Vector3(-5.0, 0.0, 23.5), Vector3.ZERO],
+		2: [Vector3(-9.0, 0.0, 14.0), Vector3.ZERO],
 	}
 	var r: AIRushRead = _read(ours, theirs, 11)
-	assert_true(r.coverage_accounted)
-	assert_eq(r.unaccounted_peer, -1,
-			"a set structure leaves no stale culprit for the next failure to inherit")
+	assert_true(r.coverage_ready, "every body inside our blue line is set")
+
+
+func test_one_body_short_of_the_line_is_not_ready() -> void:
+	# The bar is the blue line itself, so the failing case is a metre the wrong
+	# side of it — not an arbitrary distance from a post.
+	var theirs := {11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO]}
+	var ours := {
+		1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO],
+		2: [Vector3(2.0, 0.0, GameRules.BLUE_LINE_Z - 1.0), Vector3.ZERO],
+	}
+	var r: AIRushRead = _read(ours, theirs, 11)
+	assert_false(r.coverage_ready, "a body still outside our zone has not arrived")
+
+
+func test_a_real_zone_shape_reads_as_set() -> void:
+	# THE regression. Five bots standing on the anchors AIZoneCoverage itself
+	# produces for a settled cycle must read as set. The previous predicate failed
+	# this — it wanted a body within ~4 m goal-side of every man, which a zone
+	# deliberately does not provide (ZONE_W_WEAK sags to the high slot ~8 m off the
+	# weak winger; the strong-side pressure comes from UP-ICE of the puck, correct
+	# hockey and not "goal-side"). That made a 4 s fallback timer the only way into
+	# the zone. If this ever fails again, the gate is unsatisfiable, not strict.
+	var carrier := Vector3(8.0, 0.0, 19.5)          # strong half-wall, depth ~7
+	var theirs := {
+		11: [carrier, Vector3.ZERO],
+		12: [Vector3(1.0, 0.0, 23.5), Vector3.ZERO],    # net front
+		13: [Vector3(-8.0, 0.0, 19.0), Vector3.ZERO],   # weak half-wall
+		14: [Vector3(6.0, 0.0, 12.0), Vector3.ZERO],    # strong point
+		15: [Vector3(-6.0, 0.0, 12.0), Vector3.ZERO],   # weak point
+	}
+	var ours := {}
+	var pid: int = 1
+	for slot: int in [AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.ZONE_D_WEAK,
+			AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.ZONE_W_STRONG,
+			AIRoleSlots.Slot.ZONE_W_WEAK]:
+		ours[pid] = [AIZoneCoverage.anchor_of(slot, 1.0, OUR_NET_Z, carrier),
+				Vector3.ZERO]
+		pid += 1
+	var r: AIRushRead = _read(ours, theirs, 11)
+	assert_true(r.coverage_ready,
+			"a correctly executed hybrid zone must satisfy the gate it feeds")
+
+
+func test_a_loafing_human_does_not_hold_the_bots_out() -> void:
+	# Humans are elected into the shape but obey nothing, so gating the bots'
+	# structure on one would be unclearable — the single case the deleted fallback
+	# timer was really insuring against. Peer 9 is the human, parked at center ice.
+	var theirs := {11: [Vector3(0.0, 0.0, 20.0), Vector3.ZERO]}
+	var ours := {
+		1: [Vector3(0.0, 0.0, 21.2), Vector3.ZERO],
+		2: [Vector3(-9.0, 0.0, 14.0), Vector3.ZERO],
+		9: [Vector3(0.0, 0.0, -2.0), Vector3.ZERO],
+	}
+	var bots: Dictionary = {1: true, 2: true}
+	var r := AIRushRead.new()
+	r.fill(_snapshot(ours, theirs, 11), 0, OUR_NET_Z,
+			_team_map(ours, theirs), {}, {}, true, bots)
+	assert_true(r.coverage_ready,
+			"the bots' shape is ready when THEIR bodies are home")
+	# Unwired (empty set) counts everyone — the stricter fail-safe.
+	assert_false(_read(ours, theirs, 11).coverage_ready,
+			"with no bot set every teammate counts, which is the safe direction")
 
 
 # ── Hysteresis ───────────────────────────────────────────────────────────────
@@ -371,4 +378,4 @@ func test_empty_snapshot_is_inert() -> void:
 	r.fill(null, 0, OUR_NET_Z, {}, {}, {})
 	assert_eq(r.mode, AIRushRead.Mode.NONE)
 	assert_true(r.attackers.is_empty())
-	assert_true(r.coverage_accounted == false)
+	assert_true(r.coverage_ready == false)

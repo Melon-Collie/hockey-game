@@ -12,35 +12,37 @@ const OUR_NET_Z: float = 26.65
 
 # ── The pure predicate ───────────────────────────────────────────────────────
 
-func test_unset_coverage_keeps_the_rush_shape() -> void:
-	assert_false(AIPossessionState.coverage_read(false, 1, false, 0.5),
-			"men unaccounted for means we are not in coverage")
+func test_unready_coverage_keeps_the_rush_shape() -> void:
+	assert_false(AIPossessionState.coverage_read(false, 1, false),
+			"bodies still on the way home means we are not in coverage")
 
 
 func test_set_coverage_enters_immediately() -> void:
 	# Becoming set is the cheap direction — there is nothing to protect against
 	# by delaying it, and the expensive reading (a rush arriving) is instant.
-	assert_true(AIPossessionState.coverage_read(true, 0, false, 0.5),
-			"accounted coverage enters on the tick it is true")
+	assert_true(AIPossessionState.coverage_read(true, 0, false),
+			"a home team enters coverage on the tick it is true")
 
 
 func test_a_single_bad_tick_does_not_break_a_set_structure() -> void:
-	assert_true(AIPossessionState.coverage_read(false, 1, true, 1.0),
-			"one failed accounting tick must not dump a set zone into scramble")
+	assert_true(AIPossessionState.coverage_read(false, 1, true),
+			"one unready tick must not dump a set zone into scramble")
 
 
 func test_sustained_failure_leaves_coverage() -> void:
 	assert_false(AIPossessionState.coverage_read(
-			false, AIPossessionState.COVERAGE_HOLD_TICKS, true, 1.0),
+			false, AIPossessionState.COVERAGE_HOLD_TICKS, true),
 			"a sustained breakdown does return the team to the rush shape")
 
 
-func test_latch_guard_forces_coverage_eventually() -> void:
-	# The failure mode the guard exists for: if the accounting never clears, the
-	# team would defend a settled cycle with rush roles forever.
-	assert_true(AIPossessionState.coverage_read(
-			false, 99, false, AIPossessionState.COVERAGE_FORCE_AFTER_S + 0.1),
-			"a long possession in our zone forces the zone shape regardless")
+func test_there_is_no_time_fallback() -> void:
+	# The predicate is monotone in the recovery it waits on (bodies coming home
+	# only get deeper), so an unready read must NEVER be overridden by elapsed
+	# time. A fallback here would be papering over an unsatisfiable predicate,
+	# which is exactly what the deleted 4 s guard turned out to be doing.
+	for tick: int in [1, 6, 60, 600]:
+		assert_false(AIPossessionState.coverage_read(false, tick, false),
+				"unready stays unready at %d ticks — no timer rescues it" % tick)
 
 
 # ── Brain wiring ─────────────────────────────────────────────────────────────

@@ -114,17 +114,9 @@ var numbers: int = Numbers.EVEN_OR_UP
 # own doctrine (docs/5v5-ai-plan.md:548): a backchecker within ~1-2 s lets the D
 # tighten the gap and stand up. INF = no backpressure, default conservative.
 var backpressure_s: float = INF
-# Every attacker accounted for and somebody on the puck (see coverage_read).
-var coverage_accounted: bool = false
-# DIAGNOSTIC ONLY (nothing steers off it). When the accounting fails, the peer it
-# failed on — the first attacker found with no owner, or `carrier_peer` when the
-# failure was the carrier-engage bar rather than a loose man. -1 when accounted.
-# It exists because "the readiness predicate is too strict" and "our bodies really
-# aren't home" produce the SAME observable (a team stuck in the rush shape), and
-# only the culprit distinguishes them: a named man nobody covers is honest, the
-# carrier repeatedly unengaged during a settled cycle means pressure_engage_m() is
-# the wrong bar. See TeamBrain.DEBUG_COVERAGE.
-var unaccounted_peer: int = -1
+# The backcheck is complete — every body the shape depends on has arrived in our
+# defensive zone (see _coverage_ready). What the DZONE readiness gate consumes.
+var coverage_ready: bool = false
 # Seconds until the puck is CONTESTED — the nearest opponent's momentum-aware ETA
 # to it (docs/transition-defense-plan.md §13). 0.0 when it is already theirs or
 # loose; INF when nobody can get to it.
@@ -150,7 +142,8 @@ var pressure_eta_s: float = 0.0
 # self on the first tick) — consulted only for the recovery-race hysteresis.
 func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 		team_id_by_peer: Dictionary, caps_by_peer: Dictionary,
-		prev_recovery: Dictionary, offsides_enforced: bool = true) -> void:
+		prev_recovery: Dictionary, offsides_enforced: bool = true,
+		bot_peers: Dictionary = {}) -> void:
 	_reset()
 	if snapshot == null or snapshot.puck_state == null:
 		return
@@ -215,8 +208,8 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 			our_net, axis_len, prev_recovery)
 	_fill_numbers()
 	_fill_backpressure(snapshot, caps_by_peer)
-	coverage_accounted = _accounted_for(snapshot, team_id, team_id_by_peer,
-			our_net, opp_carries)
+	coverage_ready = _coverage_ready(snapshot, team_id, team_id_by_peer,
+			own_dir, bot_peers)
 
 	# In our own zone the attack is on regardless of an instantaneous stall (a
 	# cycle is not a regroup). Outside it, closing speed is the honest read.
@@ -364,72 +357,53 @@ static func cover_envelope_m() -> float:
 	return AIThreatAssignment.COVER_DEPTH_M + SkaterAgentStateMachine.BLADE_REACH_M
 
 
-# Range at which a defender counts as HAVING the carrier for readiness purposes.
-# This is containment range, not contact range: a D sitting goal-side a couple of
-# stick lengths off a carrier on the half-wall is covering him — that is what
-# D-zone coverage looks like, and demanding he be within poking distance would
-# mean a settled zone never reads as "set". The bar is the rush gap ladder's
-# widest gap plus a stick (you are within a stick of your own gap point), so the
-# same physical quantity the gap control uses decides when the gap counts as
-# established. Beyond it the carrier is genuinely unpressured.
-static func pressure_engage_m() -> float:
-	return SkaterAgentStateMachine.BLADE_REACH_M * (AIRoleRushD.GAP_MAX_STICKS + 1.0)
-
-
-# "Everybody's got a man, somebody's on the puck" — the coaching read for whether
-# a defensive structure is actually established. Every attacker needs one of our
-# bodies goal-side of his lead point and inside the cover envelope, AND the
-# carrier needs someone engaged. This is what the DZONE gate consumes (§9): the
-# team stays in the rush/recovery shape until the coverage it would switch into
-# actually makes sense.
-func _accounted_for(snapshot: WorldSnapshot, team_id: int,
-		team_id_by_peer: Dictionary, our_net: Vector3,
-		opp_carries: bool) -> bool:
-	if attackers.is_empty():
-		return true
-	var envelope_sq: float = cover_envelope_m() * cover_envelope_m()
-	for i: int in attackers.size():
-		if attackers[i] == carrier_peer:
-			continue
-		if not _has_owner(snapshot, team_id, team_id_by_peer, our_net,
-				attacker_leads[i], envelope_sq):
-			unaccounted_peer = attackers[i]
-			return false
-	if not opp_carries:
-		return true
-	# Somebody has the carrier: goal-side of him and inside containment range.
-	# Goal-side matters — a defender trailing the carrier from up-ice is chasing,
-	# not covering, and counting him would declare a beaten team "set".
-	if _has_owner(snapshot, team_id, team_id_by_peer, our_net,
-			rush_origin, pressure_engage_m() * pressure_engage_m()):
-		return true
-	unaccounted_peer = carrier_peer
-	return false
-
-
-# True when one of our peers is goal-side of `man_lead` (nearer our net along the
-# man→net line) and within the cover envelope of it.
-func _has_owner(snapshot: WorldSnapshot, team_id: int,
-		team_id_by_peer: Dictionary, our_net: Vector3, man_lead: Vector3,
-		envelope_sq: float) -> bool:
-	var to_net_x: float = our_net.x - man_lead.x
-	var to_net_z: float = our_net.z - man_lead.z
-	var len_n: float = sqrt(to_net_x * to_net_x + to_net_z * to_net_z)
-	if len_n < 0.001:
-		return true
-	to_net_x /= len_n
-	to_net_z /= len_n
+# ── Coverage readiness (the DZONE handoff gate — plan §9) ────────────────────
+#
+# "Get back, get set, THEN take your man." This answers the FIRST clause only:
+# has the backcheck finished? Every body the shape depends on is inside our
+# defensive zone.
+#
+# It deliberately does NOT ask whether men are already covered. The predicate
+# used to: every attacker needed one of ours goal-side within a cover envelope,
+# plus a body engaged on the carrier. That is a description of MAN coverage, and
+# 5v5 DZONE runs a hybrid ZONE — which covers ice, not bodies, by definition. A
+# perfectly executed zone therefore FAILED it: measured against AIZoneCoverage's
+# own anchors for a settled cycle, ZONE_W_WEAK sags to the high slot ~8 m off the
+# weak-side winger (4 m envelope), and the strong-side pressure comes from up-ice
+# of the puck — correct hockey, and not "goal-side". So the gate could never be
+# satisfied by the shape it gates entry into, and a time-floor guard was doing all
+# the real work: every cycle spent its first seconds in the rush shape and entered
+# the zone only when the timer expired. The guard is gone with the predicate that
+# needed it.
+#
+# Home-ness is the honest reading of "set", and it is MONOTONE in the thing that is
+# actually happening: recovering bodies only get deeper, so it clears on its own
+# and cannot be permanently false while the team is doing the right thing. That
+# property is what makes a fallback timer unnecessary rather than load-bearing.
+#
+# The bar is the blue line — the structure's own footprint, not a tuned number.
+# Every zone anchor sits at most ~11 m off the goal line, well inside our zone's
+# ~19 m, so a correct shape satisfies this by construction; a backchecker still in
+# the neutral zone has not arrived, which is the reported bug.
+#
+# BOTS ONLY (`bot_peers`; empty = count everyone, the stricter fail-safe). Humans
+# are elected into the shape but obey nothing, so a teammate who refuses to come
+# back would hold the predicate false forever — the one genuinely unclearable case,
+# and the case the old guard was really insuring against. Gating the bots' shape on
+# a body they cannot steer is the same "wait on someone else" reasoning this whole
+# read replaced; their structure is ready when THEIR bodies are home.
+func _coverage_ready(snapshot: WorldSnapshot, team_id: int,
+		team_id_by_peer: Dictionary, own_dir: float,
+		bot_peers: Dictionary) -> bool:
+	var check_all: bool = bot_peers.is_empty()
 	for pid: int in snapshot.skater_states:
 		if team_id_by_peer.get(pid, -1) != team_id:
 			continue
-		var p: Vector3 = snapshot.skater_states[pid].position
-		var dx: float = p.x - man_lead.x
-		var dz: float = p.z - man_lead.z
-		if dx * to_net_x + dz * to_net_z <= 0.0:
-			continue  # up-ice of the man — not covering him
-		if dx * dx + dz * dz <= envelope_sq:
-			return true
-	return false
+		if not check_all and not bot_peers.has(pid):
+			continue
+		if own_dir * snapshot.skater_states[pid].position.z < GameRules.BLUE_LINE_Z:
+			return false
+	return true
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -523,8 +497,7 @@ func copy_from(other: AIRushRead) -> void:
 	entry_eta_s = other.entry_eta_s
 	numbers = other.numbers
 	backpressure_s = other.backpressure_s
-	coverage_accounted = other.coverage_accounted
-	unaccounted_peer = other.unaccounted_peer
+	coverage_ready = other.coverage_ready
 	attackers.clear()
 	attackers.append_array(other.attackers)
 	attacker_leads.clear()
@@ -583,5 +556,4 @@ func _reset() -> void:
 	recovery_by_peer.clear()
 	numbers = Numbers.EVEN_OR_UP
 	backpressure_s = INF
-	coverage_accounted = false
-	unaccounted_peer = -1
+	coverage_ready = false

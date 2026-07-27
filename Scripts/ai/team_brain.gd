@@ -32,23 +32,6 @@ const TICK_PERIOD: float = 1.0 / 6.0
 # a corner-to-corner cycle and bots try to switch sides every brain tick.
 const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
-# Playtest instrumentation for the coverage-readiness latch guard
-# (AIPossessionState.COVERAGE_FORCE_AFTER_S, plan §9). OFF by default; flip it to
-# see one `[cov-latch]` line per zone possession where the guard had to force the
-# handoff to D-zone coverage. Off there is NO observable difference between "the
-# guard fired" and "the team honestly became set" — both end in coverage — which is
-# exactly why the flag exists. The line names the man the accounting failed on:
-#   * a NON-carrier peer  → a real attacker nobody covered. The predicate was
-#     right and the roles didn't get there; look at that bot's route, not the bar.
-#   * the CARRIER         → nobody was inside pressure_engage_m() of the puck for
-#     four straight seconds. During a settled cycle that means the engage bar (or
-#     its goal-side requirement) is too strict, not that the team is lost.
-#   * -1                  → accounted at the moment it tripped, i.e. the enter
-#     hysteresis alone was holding it out. Suspect COVERAGE_HOLD_TICKS.
-# Routine firing means the predicate is wrong. 3v3 is the likelier offender: all
-# three attackers must be owned with no spare body to own them with.
-const DEBUG_COVERAGE: bool = false
-
 var team_id: int = 0
 # Latched match team size (3 or 5). Selects the role-slot path: 3 → the
 # legacy AIRoleSlots election (verbatim), 5 → AIRoleSlots5's position-aware
@@ -109,22 +92,13 @@ var _last_carrier_team: int = -1
 var _strong_x: float = 1.0
 
 var _accumulator: float = 0.0
-# Real host seconds since the previous _compute_tick. The coverage latch guard
-# ages in WALL CLOCK, not tick count — force_retick makes the cadence irregular,
-# and a timer counted in ticks would run fast during a possession-event burst.
-var _tick_span_s: float = 0.0
 
 # ── Coverage readiness state (docs/transition-defense-plan.md §9) ────────────
 # Whether the team is currently running D-zone COVERAGE rather than the rush /
-# recovery shape, how many consecutive ticks the accounting has agreed with that
-# posture (the enter/hold hysteresis), and how long the opponent has possessed in
-# our zone (the latch guard).
+# recovery shape, and how many consecutive ticks the readiness read has disagreed
+# with that posture (the leave-coverage hysteresis).
 var _coverage_was_set: bool = false
-var _coverage_unaccounted_ticks: int = 0
-var _coverage_held_s: float = 0.0
-# Edge latch for the diagnostic below — the guard, once tripped, stays tripped for
-# the rest of the zone possession, so the readout has to fire on the transition.
-var _coverage_latch_logged: bool = false
+var _coverage_unready_ticks: int = 0
 # Cadence phase offset (seconds): team 1's natural ticks run half a period
 # out of phase with team 0's, so the two brains' per-tick computes never land
 # on the same physics frame (host FPS is set by the worst tick, and the two
@@ -152,6 +126,11 @@ var _caps_by_peer: Dictionary = {}
 # the F/D group split and the home-side rest bias in AIRoleSlots5. Empty in
 # 3v3 / tests (the legacy path never reads it).
 var _position_by_peer: Dictionary = {}
+# Live set of BOT peers from PlayerRegistry. The coverage-readiness read gates on
+# whether the bodies the shape depends on are home, and a human is not one the
+# bots can wait on (see AIRushRead._coverage_ready). Empty when unwired (tests) →
+# every teammate counts, which is the stricter reading.
+var _bot_peers: Dictionary = {}
 # Cached own-goal Z derived from team_id at construction. Team 0
 # defends +GOAL_LINE_Z, Team 1 defends -GOAL_LINE_Z.
 var _own_goal_z: float = 0.0
@@ -159,12 +138,14 @@ var _own_goal_z: float = 0.0
 
 func _init(t: int, team_id_by_peer: Dictionary, caps_by_peer: Dictionary = {},
 		p_team_size: int = GameRules.DEFAULT_TEAM_SIZE,
-		position_by_peer: Dictionary = {}) -> void:
+		position_by_peer: Dictionary = {},
+		bot_peers: Dictionary = {}) -> void:
 	team_id = t
 	_team_id_by_peer = team_id_by_peer
 	_caps_by_peer = caps_by_peer
 	team_size = p_team_size
 	_position_by_peer = position_by_peer
+	_bot_peers = bot_peers
 	_own_goal_z = GameRules.GOAL_LINE_Z if t == 0 else -GameRules.GOAL_LINE_Z
 	_cadence_offset_s = TICK_PERIOD * 0.5 if t == 1 else 0.0
 	_accumulator = _cadence_offset_s
@@ -179,7 +160,6 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	# before the rate-limit gate so expiry never stretches with the cadence.
 	ping_directives.advance(delta)
 	_accumulator += delta
-	_tick_span_s += delta
 	if _accumulator < TICK_PERIOD and not _force_tick_pending:
 		return
 	# Natural cadence: drain one tick's worth of accumulator. Forced
@@ -196,7 +176,6 @@ func tick(delta: float, snapshot: WorldSnapshot) -> void:
 	else:
 		_accumulator -= TICK_PERIOD
 	_compute_tick(snapshot)
-	_tick_span_s = 0.0
 
 
 # Schedules an immediate re-tick on the next physics frame, bypassing
@@ -269,7 +248,8 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	for pid: int in rush_read.recovery_by_peer:
 		_prev_recovery[pid] = rush_read.recovery_by_peer[pid]
 	rush_read.fill(snapshot, team_id, _own_goal_z, _team_id_by_peer,
-			_caps_by_peer, _prev_recovery, rule_set != GameRules.RuleSet.OFF)
+			_caps_by_peer, _prev_recovery, rule_set != GameRules.RuleSet.OFF,
+			_bot_peers)
 
 	# 1.85 COVERAGE READINESS (docs/transition-defense-plan.md §9). DZONE is a
 	#      shape, not a location: the raw table flips to it the moment the puck
@@ -279,14 +259,15 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#      makes sense. Same upgrade seam as RETRIEVAL above, opposite direction.
 	#
 	#      BOTH TEAM SIZES. The gate does not create a shape that under-covers:
-	#      it holds the rush shape exactly while somebody is unaccounted for, and
-	#      in that state the zone's nominal coverage is a fiction anyway — MARK
+	#      it holds the rush shape exactly while somebody is still on the way home,
+	#      and in that state the zone's nominal coverage is a fiction anyway — MARK
 	#      computes a cover position from 20 m up-ice and escorts. Sprinting home
 	#      strictly beats walking to a post. And the shapes converge by
 	#      construction: RUSH_D1 is home already, TRACK_PUCK chases to the net,
 	#      the mid trackers stop at the circle tops — so the rush roles themselves
-	#      bring everyone into the house, satisfy the predicate, and hand off to
-	#      man coverage. The latch guard bounds the worst case regardless.
+	#      bring everyone home, satisfy the predicate, and hand off. That
+	#      convergence is why no fallback timer is needed: the predicate is
+	#      monotone in the recovery it is waiting on.
 	#
 	#      Only while an OPPONENT actually carries: a loose or dead puck in our
 	#      zone is not a rush being defended, it's DZONE's (or RETRIEVAL's)
@@ -294,21 +275,13 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#      setting up around a puck nobody has.
 	if state == AIPossessionState.State.DZONE \
 			and rush_read.carrier_peer != -1:
-		_coverage_held_s += _tick_span_s
-		if rush_read.coverage_accounted:
-			_coverage_unaccounted_ticks = 0
+		if rush_read.coverage_ready:
+			_coverage_unready_ticks = 0
 		else:
-			_coverage_unaccounted_ticks += 1
+			_coverage_unready_ticks += 1
 		var set_now: bool = AIPossessionState.coverage_read(
-				rush_read.coverage_accounted, _coverage_unaccounted_ticks,
-				_coverage_was_set, _coverage_held_s)
-		if DEBUG_COVERAGE and not _coverage_latch_logged:
-			# Log only the tick the GUARD is what flipped it — a long cycle the team
-			# legitimately settled into isn't news. The counterfactual (same read
-			# with the timer zeroed) is honest here and only here: on later ticks
-			# _coverage_was_set has already been overwritten by the guard's own
-			# answer, which is why this is edge-triggered rather than sampled.
-			_log_coverage_latch(set_now)
+				rush_read.coverage_ready, _coverage_unready_ticks,
+				_coverage_was_set)
 		_coverage_was_set = set_now
 		if not set_now:
 			state = AIPossessionState.State.TRANS_OD
@@ -316,9 +289,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		# Left the zone (or we got it back): the next entry starts fresh, so a
 		# stale "we were set" can't wave a new rush straight into coverage.
 		_coverage_was_set = false
-		_coverage_unaccounted_ticks = 0
-		_coverage_held_s = 0.0
-		_coverage_latch_logged = false
+		_coverage_unready_ticks = 0
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:
@@ -367,29 +338,6 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	if snapshot != null and snapshot.puck_state != null:
 		ping_carrier = snapshot.puck_state.carrier_peer_id
 	ping_directives.apply_overrides(slot_assignments, threat_assignments, ping_carrier)
-
-
-# One `[cov-latch]` line the first tick the readiness guard is what forced the
-# handoff to coverage (see DEBUG_COVERAGE for how to read it). `set_now` is the
-# gate's answer WITH the guard; re-running the read with the timer zeroed asks what
-# it would have said without one — if that agrees, the team settled honestly and
-# there is nothing to report. Behind the flag and edge-triggered, so the string
-# build is off the hot path in shipped builds and rare even with it on.
-func _log_coverage_latch(set_now: bool) -> void:
-	if not set_now or _coverage_held_s < AIPossessionState.COVERAGE_FORCE_AFTER_S:
-		return
-	if AIPossessionState.coverage_read(rush_read.coverage_accounted,
-			_coverage_unaccounted_ticks, _coverage_was_set, 0.0):
-		return  # would have been set anyway — not the guard's doing
-	_coverage_latch_logged = true
-	var culprit: String = "-1 (hysteresis only)"
-	if rush_read.unaccounted_peer != -1:
-		culprit = "%d (%s)" % [rush_read.unaccounted_peer,
-				"CARRIER unengaged" if rush_read.unaccounted_peer == rush_read.carrier_peer
-				else "man uncovered"]
-	print("[cov-latch] team=%d size=%d forced coverage after %.1fs; unaccounted=%s attackers=%s unacct_ticks=%d"
-			% [team_id, team_size, _coverage_held_s, culprit,
-			rush_read.attackers, _coverage_unaccounted_ticks])
 
 
 # Builds the backline man-on-threat partition for the current tick. Defensive
