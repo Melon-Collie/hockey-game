@@ -3580,13 +3580,17 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 			var pass_speed: float = AIActionScoring.pass_launch_speed(
 					dist, ctx.self_wrister_shot_speed, ctx.pass_speed_scale)
 			var flight_t: float = clampf(dist / pass_speed, 0.0, PASS_LEAD_MAX_S)
-			var feed_goalie: Vector3 = _predict_goalie_at(ctx, flight_t, spot)
-			var feed_unsettled: float = _goalie_unsettled_at(ctx, flight_t, spot)
 			_project_opponents_to(ctx, flight_t, _scratch_opponents_pass)
-			feed = AIActionScoring.score_pass(
-					self_pos, spot, ctx.attacking_goal_pos, feed_goalie,
-					GameRules.NET_HALF_WIDTH, _scratch_opponents_pass,
-					pass_speed, feed_unsettled)
+			# On the seam, like the live pass leg — this value is compared
+			# directly against fire_score (see score_pass_value). The keeper
+			# gets the flight AND the driving finisher's wrister charge to
+			# re-square, the same clock _pass_ev bills a non-one-timer.
+			feed = AIActionScoring.score_pass_value(
+					self_pos, spot, ctx.attacking_goal_pos,
+					AIShotValue.displacement_deficit_m(
+							_goalie_now(ctx), ctx.attacking_goal_pos, spot,
+							flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S),
+					_scratch_opponents_pass, pass_speed)
 		elif slot == AIRoleSlots.Slot.BREAKOUT_STRONG \
 				or slot == AIRoleSlots.Slot.OUTLET \
 				or slot == AIRoleSlots.Slot.BREAKOUT_D2:

@@ -2330,6 +2330,35 @@ static func score_shoot_value(
 	return quality * lane * pressure
 
 
+# score_pass's twin on the seam — lane × the receiver's shot value from where
+# he catches it, with the keeper's displacement at the receiver's release the
+# one goalie term (score_pass reads the whole pose instead).
+#
+# Exists so the DEVELOPING-feed hold can be compared with the fire it competes
+# against. That compete is `fire_score >= hold_value`, a straight numeric test,
+# and the two models do not share a range: the hole geometry reaches 1.0 while
+# this form tops out near 0.45 from any real spot. Feeding it a score_pass hold
+# is not a mispriced hold, it is a permanent veto on shooting.
+static func score_pass_value(
+		shooter: Vector3,
+		receiver: Vector3,
+		attacking_goal: Vector3,
+		keeper_displacement_m: float,
+		opponents: Array[Vector3],
+		pass_speed_m_s: float = PASS_SPEED_M_S,
+		shot_type: int = ShotEvent.ShotType.SHOT) -> float:
+	if _is_past_goal_line(receiver, attacking_goal):
+		return 0.0
+	if pass_lane_blocked_by_net(shooter, receiver):
+		return 0.0
+	var lane: float = lane_clear(shooter, receiver, opponents, pass_speed_m_s)
+	if lane <= 0.0:
+		return 0.0
+	return lane * AIShotValue.for_release(
+			receiver, attacking_goal, keeper_displacement_m, shot_type,
+			derive_post_seal_x_sign(receiver, attacking_goal) != 0.0)
+
+
 # FIELDED twin of score_shoot for the threat-surface consumer family
 # (threat_surface_shoot / threat_local_shoot / the zone soft-lock read):
 # the goalie-hole core comes from AIDangerField's memoized surface — league
