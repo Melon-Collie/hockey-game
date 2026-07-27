@@ -184,13 +184,10 @@ func test_travelling_goalie_can_still_start_his_response_in_tight() -> void:
 	# and 25 m/s the puck arrives in 0.20 s, so a PRIMED goalie caught travelling
 	# has to still get both limbs moving inside it.
 	#
-	# BOUNDED FROM BELOW TOO, and that is the live constraint: this residual is
-	# measurably load-bearing for readability (tests/unit/ai/test_goalie_disguise_
-	# read.gd — the goalie is in motion at release far more often than the "set
-	# goalie" framing suggests). Below ~0.08 s height deception starts paying
-	# NEGATIVELY, which the beatable-realism doctrine names as the tell for a wrong
-	# change. Do not cut it further without giving deception a mechanism that does
-	# not run through this number.
+	# The residual sits at the model's own value rather than a measured floor.
+	# Height disguise DOES fall off below ~0.08 s here, but that mechanic is
+	# deliberately not a design goal (see test_goalie_disguise_read.gd), and the
+	# lateral axis — the one the design does care about — still pays.
 	var gc: GoalieController = _gc()
 	var slot_flight: float = 5.0 / 25.0
 	var primed_arm: float = maxf(

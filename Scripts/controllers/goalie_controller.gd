@@ -243,7 +243,7 @@ extends Node
 # no lateral momentum for (1) to carry, so the drift cannot model it — and the
 # failure there is that the response is not AVAILABLE yet, not that it starts
 # late. That is a real latency, and it is the one a rebound converts on.
-@export var move_read_speed_delay: float = 0.08    # s — read latency when moving on his feet
+@export var move_read_speed_delay: float = 0.04    # s — read latency when moving on his feet
 @export var move_read_scramble_delay: float = 0.12 # s — read latency while recovering / mid-lunge
 @export var move_read_reference_speed: float = 2.5 # m/s — planar speed counted as fully moving
 # Unset fraction (0..1) at or below which the goalie still counts as SET for the
