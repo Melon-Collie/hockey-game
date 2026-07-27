@@ -1321,9 +1321,15 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# same formula on MY OWN spot floors the carry: a symmetric mate can never
 	# out-score me by proxy, so the pass only wins when he is GENUINELY more
 	# open, and a free entry gets taken by the man who already has the puck.
+	# Priced at our OWN velocity, exactly as the receiver's is (_pass_ev passes
+	# receiver_vel): the drive-in's whole point is that it is momentum-honest —
+	# a man in stride carries his pace into the drive while one curling back
+	# must brake it out first — and omitting it here priced every carrier as if
+	# he were standing still, so a gliding mate was credited with momentum the
+	# man actually holding the puck was denied.
 	carry_score = maxf(carry_score, _receiver_drive_in_value(
 			ctx, self_pos, ctx.self_wrister_shot_speed,
-			ctx.caps_by_peer.get(ctx.peer_id)))
+			ctx.caps_by_peer.get(ctx.peer_id), ctx.self_velocity))
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
 	# close-scoring fire options during pre-aim. Proportional (×(1 +
