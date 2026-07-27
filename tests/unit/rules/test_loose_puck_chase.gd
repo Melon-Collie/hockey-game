@@ -357,3 +357,228 @@ func test_race_not_lost_to_an_opponent_ignoring_the_puck() -> void:
 			snap, Vector3(0, 0, 8), Vector3.ZERO, REF,
 			0, {1: 0, 2: 1}, {})
 	assert_true(lost_live, "a committed nearer opponent honestly wins the race")
+
+
+func test_rim_race_not_lost_to_an_opponent_off_the_rim_line() -> void:
+	# The fast-puck twin of the test above, and the one the user actually sees:
+	# a puck rimming the wall at 8 m/s with an opponent parked 12 m away in the
+	# middle of the ice, flat-footed and nowhere near the rim's line. His
+	# path-race ETA "wins" (the horizon fallback), but he is running no race —
+	# and declining on him sent our chaser RETREATING to the pre-contain point
+	# while the rim rode the whole zone untouched.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-10, 0, -12.5)
+	snap.puck_state.velocity = Vector3(8, 0, 0)
+	snap.skater_states[1] = _skater(Vector3(-12, 0, -11))    # us, trailing it
+	snap.skater_states[2] = _skater(Vector3(4, 0, -1))       # idle, mid-ice
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-12, 0, -11), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_false(lost, "a body off the rim's line and standing still is no veto")
+	# Control: an opponent parked ON the rim's line downstream IS committed —
+	# standing where the puck is coming to you is the whole play.
+	snap.skater_states[2] = _skater(Vector3(4, 0, -12.5))
+	var lost_on_line: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-12, 0, -11), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_true(lost_on_line, "an opponent standing in the rim's path honestly wins it")
+
+
+# ── Incidental reach (a free puck at your feet is yours) ─────────────────────
+
+func test_puck_sliding_through_reach_is_played_by_whoever_it_reaches() -> void:
+	# 6 m/s puck whose line passes 1 m off a parked bot's skates. The election
+	# is not the question here — the puck comes to HIM, so the reach read fires
+	# regardless of who owns the chase.
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(-6, 0, 0), Vector3(6, 0, 0),
+			Vector3(0, 0, 1.0), Vector3.ZERO, REF, 1.8)
+	assert_true(comes, "a puck sliding a metre off the stick is inside the band")
+
+
+func test_reach_band_ignores_a_puck_that_never_comes_near() -> void:
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(-6, 0, 0), Vector3(6, 0, 0),
+			Vector3(0, 0, 9.0), Vector3.ZERO, REF, 1.8)
+	assert_false(comes, "a puck passing 9 m away is somebody else's race")
+
+
+func test_reach_band_is_not_tripped_by_a_puck_too_fast_to_meet() -> void:
+	# A 30 m/s slapper up the length of the rink whose line runs 3 m off a
+	# STANDING bot: geometrically inside the band, but he cannot get his body
+	# there in the ~0.1 s the puck takes to cross. The timing gate is what keeps
+	# the band from becoming a flat radius — it self-narrows with puck speed.
+	# (Down the LENGTH so the end-board bounce can't carry it back inside the
+	# 3 s horizon and legitimately re-offer the puck.)
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(0, 0, -25), Vector3(0, 0, 30),
+			Vector3(3.0, 0, -22), Vector3.ZERO, REF, 1.8)
+	assert_false(comes, "no body gets 3 m sideways inside a slapshot's flight")
+
+
+func test_reach_band_survives_a_coarse_walk_step() -> void:
+	# At 15 m/s the path walk samples every 3.75 m, so a point-sampled band test
+	# steps clean OVER a bot the puck passes a metre from. The segment-wise read
+	# catches the crossing between samples. (Puck seeded a half-step back so the
+	# crossing lands mid-segment.)
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(-1.9, 0, 0), Vector3(15, 0, 0),
+			Vector3(0, 0, 1.0), Vector3.ZERO, REF, 1.8)
+	assert_true(comes, "the crossing is found between walk samples, not just on them")
+
+
+func test_reach_band_covers_a_settled_puck_at_your_feet() -> void:
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(1.0, 0, 0.5), Vector3.ZERO,
+			Vector3.ZERO, Vector3.ZERO, REF, 1.8)
+	assert_true(comes, "a dead puck inside the stick is picked up, election or not")
+	var far: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(8, 0, 0), Vector3.ZERO,
+			Vector3.ZERO, Vector3.ZERO, REF, 1.8)
+	assert_false(far, "a dead puck 8 m away is the election's business")
+
+
+# ── Containment gate (losing a race is only a reason to STOP if it buys something)
+
+func test_lost_race_is_still_run_when_a_teammate_is_home() -> void:
+	# Puck dumped deep into the attacking corner, an opponent clearly winning
+	# it. Our chaser loses the race — but two teammates sit goal-side of the
+	# pickup, so there is no counter to pre-contain and giving up buys nothing.
+	# That is the forecheck, and refusing it measured as a dump-in that the
+	# dumping team never chased at all.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-6, 0, -24)
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(-4, 0, -14))            # us, chasing
+	snap.skater_states[2] = _skater(Vector3(0, 0, 2))               # teammate, home
+	snap.skater_states[11] = _skater(Vector3(-6, 0, -22),
+			Vector3(0, 0, -4))                                      # opponent, winning
+	var teams := {1: 0, 2: 0, 11: 1}
+	# own_goal_dir +1 → our net at +Z, so the teammate at z=2 is goal-side of
+	# a pickup at z=-24.
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-4, 0, -14), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_false(lost, "a lost race with support behind us is a forecheck, not a stop")
+
+
+func test_last_man_still_declines_a_lost_race() -> void:
+	# Same race, but now the only teammate is UP-ice of the pickup: we are the
+	# last man, and pushing after a puck we cannot win is the "third man keeps
+	# chasing while the counter develops" failure the decline exists for.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-6, 0, -24)
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(-4, 0, -14))            # us
+	snap.skater_states[2] = _skater(Vector3(2, 0, -26))             # teammate, deeper
+	snap.skater_states[11] = _skater(Vector3(-6, 0, -22),
+			Vector3(0, 0, -4))                                      # opponent, winning
+	var teams := {1: 0, 2: 0, 11: 1}
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-4, 0, -14), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_true(lost, "the last man with nobody home still pre-contains")
+
+
+func test_a_ghosted_teammate_is_not_containment() -> void:
+	# A teammate serving an offside ghost can't play the puck or the body, so
+	# he can't be the reason we stop chasing.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-6, 0, -24)
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(-4, 0, -14))
+	snap.skater_states[2] = _skater(Vector3(0, 0, 2))
+	snap.skater_states[2].is_ghost = true
+	snap.skater_states[11] = _skater(Vector3(-6, 0, -22), Vector3(0, 0, -4))
+	var teams := {1: 0, 2: 0, 11: 1}
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-4, 0, -14), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_true(lost, "a ghosted teammate contains nothing")
+
+
+# ── Teammate yield (don't stab at your own teammate's puck) ──────────────────
+# The contest rule stays symmetric — a real jam should leave the puck loose.
+# What we stop is our own two bots MANUFACTURING a jam.
+
+func _blade(pos: Vector3, blade: Vector3) -> SkaterNetworkState:
+	var s := _skater(pos)
+	s.blade_contact_world = blade
+	return s
+
+
+func test_yields_when_a_teammates_blade_is_clearly_first() -> void:
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.5), Vector3(0, 0, 0.6)),   # us, blade 0.6 out
+		101: _blade(Vector3(0, 0, -1.0), Vector3(0, 0, -0.1)),  # mate, blade 0.1 out
+	}
+	assert_true(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"a teammate with his stick on it gets it — we don't stab")
+
+
+func test_does_not_yield_when_we_are_first() -> void:
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.0), Vector3(0, 0, 0.1)),
+		101: _blade(Vector3(0, 0, -1.5), Vector3(0, 0, -0.6)),
+	}
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"the nearer blade takes it")
+
+
+func test_yield_is_deadlock_free() -> void:
+	# Both bots run the read; at most one can yield, or a puck between two
+	# teammates would sit there forever. True at a dead tie AND at any gap.
+	var puck := Vector3.ZERO
+	for gap: float in [0.0, 0.05, 0.2, 0.26, 0.5]:
+		var states := {
+			100: _blade(Vector3(0, 0, 1), Vector3(0, 0, 0.1)),
+			101: _blade(Vector3(0, 0, -1), Vector3(0, 0, -(0.1 + gap))),
+		}
+		var a: bool = AILoosePuckChase.teammate_first_to_puck(
+				states, [100, 101], 100, states[100].blade_contact_world, puck)
+		var b: bool = AILoosePuckChase.teammate_first_to_puck(
+				states, [100, 101], 101, states[101].blade_contact_world, puck)
+		assert_false(a and b, "both yielded at gap %.2f — the puck would sit" % gap)
+
+
+func test_a_distant_teammate_blade_does_not_make_us_yield() -> void:
+	# His blade is nearer than ours, but neither is on the puck — nobody is
+	# about to take anything, so there is nothing to yield to.
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 6), Vector3(0, 0, 5.0)),
+		101: _blade(Vector3(0, 0, -4), Vector3(0, 0, -3.0)),
+	}
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"a blade 3 m off the puck isn't first to anything")
+
+
+func test_a_ghosted_teammate_is_not_yielded_to() -> void:
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.5), Vector3(0, 0, 0.6)),
+		101: _blade(Vector3(0, 0, -1.0), Vector3(0, 0, -0.1)),
+	}
+	states[101].is_ghost = true
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"a ghosted teammate can't play the puck, so he isn't first to it")
+
+
+func test_missing_blade_field_does_not_yield() -> void:
+	# blade_contact_world is host-only; an absent value must not be read as a
+	# blade parked at the origin (which would sit on a puck at the origin).
+	var puck := Vector3.ZERO
+	var states := {
+		100: _blade(Vector3(0, 0, 1.5), Vector3(0, 0, 0.6)),
+		101: _skater(Vector3(0, 0, -1.0)),
+	}
+	assert_false(AILoosePuckChase.teammate_first_to_puck(
+			states, [100, 101], 100, states[100].blade_contact_world, puck),
+			"an absent blade field is not a blade on the puck")
