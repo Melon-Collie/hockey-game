@@ -144,20 +144,15 @@ class-responsibility detail.
 
 ## Autoloads
 
-Initialized in order: `PlayerPrefs` → `Constants` → `BuildInfo` → `SoundManager`
-→ `NetworkManager` → `NetworkSimManager` → `SteamManager` → `GameManager`.
-`NetworkManager._ready()` is a no-op; the menu drives initialization.
-`SteamManager` owns every GodotSteam (`Steam` singleton) call and degrades to a
-no-op (`is_available = false`) when Steam isn't running or the GDExtension is
-absent (headless CI), so offline/free-play/tutorial and the GUT suite are
-unaffected. `SoundManager` exposes `play_ui` / `play_world`.
+The list and its initialization order live in `project.godot → [autoload]`. What
+that file can't tell you:
 
-## Tech Stack
-
-- **Engine:** Godot 4.6.2 (Jolt Physics) · **Language:** GDScript · **Physics tick:** 120 Hz
-- **Testing:** GUT v9.6.0 under `addons/gut/`; tests in `tests/unit/` (rules/, state/, game/)
-- **CI:** `.github/workflows/test.yml` runs GUT on every push and PR; `deploy.yml`'s export job gates on tests passing
-- **Deployment:** GitHub Actions → Windows + Linux export → GitHub Releases (tag `latest`); Steam (SteamPipe) handles beta distribution and auto-updates
+- `NetworkManager._ready()` is a no-op — the menu drives initialization.
+- `SteamManager` owns every GodotSteam (`Steam` singleton) call and degrades to a
+  no-op (`is_available = false`) when Steam isn't running or the GDExtension is
+  absent (headless CI), so offline / free play / tutorial and the GUT suite are
+  unaffected.
+- `SoundManager` exposes `play_ui` / `play_world`.
 
 ## Where New Code Goes
 

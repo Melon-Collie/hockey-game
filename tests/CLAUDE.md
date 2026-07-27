@@ -1,8 +1,7 @@
 # Test suite
 
-GUT v9.6.0 (`addons/gut/`). ~3,180 tests across `tests/unit/`, mirroring the
-source layout: `rules/` (212 files), `game/` (98), `ai/` (88), `state/` (20),
-`controllers/` (10), `ui/` (6), `input/` (2).
+GUT (`addons/gut/`). Tests live under `tests/unit/`, mirroring the source layout
+— `rules/`, `game/`, `ai/`, `state/`, `controllers/`, `ui/`, `input/`.
 
 ## Running
 
