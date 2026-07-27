@@ -508,15 +508,22 @@ const MIN_RELEASE_SPREAD_RAD: float = 0.010
 # test_shot_currency_saturation.gd is the readout when it moves.
 const GOALIE_EDGE_SOFTNESS_M: float = 0.07
 
-# 1σ of a well-aimed shot's arrival scatter, in radians — the dispersion left
-# once aim is perfect: blade contact point, puck roll off the toe, release
-# timing against a moving body. Combined in quadrature with the shooter's aim
-# error by placement_spread. This is the OTHER number the instruments
-# calibrate: with the tier dial alone (0.01 rad on Hard) the make-probability
-# saturates at a 0.02 rad window and the decision currency loses its range.
-# Kept well under the tier dial's own span (0.01 Hard → 0.055 Easy) so the
-# difficulty knob still dominates its own axis.
-const PLACEMENT_DISPERSION_RAD: float = 0.030
+# 1σ of a well-aimed shot's arrival scatter BEYOND the shooter's aim error, in
+# radians. ZERO, and that is a measurement rather than a default: the release
+# applies exactly the aim angle plus the tier's error and the puck then flies
+# deterministic analytic physics, so in THIS game a well-aimed shot goes
+# exactly where it was aimed (real_goalie_shot_harness.shot_velocity_at is the
+# same launch the bots execute).
+#
+# It was briefly 0.030 — invented to buy the currency some range back when the
+# ramp saturated at a 0.02 rad window. That was a shape parameter dressed as
+# physics, and it cost exactly what the grounded-models rule says it would:
+# the model under-read every real chance by a third, because it was charging
+# shots for a scatter the simulation does not produce. The range came from the
+# goalie's stick instead — real geometry, which shrinks the in-tight windows
+# that were saturating. Kept as a named zero so the seam is visible if the
+# shot ever DOES gain dispersion (a wobbling puck, a contested release).
+const PLACEMENT_DISPERSION_RAD: float = 0.0
 
 # What _hole_margin returns for a hole that is not a target at all — behind the
 # goal line, a band no legal power reaches, a deployed post seal, a release
@@ -1505,26 +1512,37 @@ static func _choose_shot_hole(
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
 		loft_tan: float = 1.0) -> int:
-	var best_angle: float = 0.0
+	# Chosen on the SIGNED margin, not the clamped opening, so the hole the bot
+	# aims at is the hole open_net_danger scored. With a soft cover edge a
+	# marginally-covered corner still carries real value; the clamped chooser
+	# saw every such hole as 0.0, found "nothing open", and fell back to dead
+	# centre — so the bot fired a goal-crest shot while the compete had priced
+	# a corner. Now it targets the LEAST-BAD hole and the two agree. Only a
+	# structurally impossible hole (behind the line, unreachable band, sealed
+	# post, smothered release) is off the table.
+	var best_margin: float = HOLE_STRUCTURALLY_CLOSED_RAD
 	for i: int in HOLE_COUNT:
-		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+		var a: float = _hole_margin(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
 				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
-		if a > best_angle:
-			best_angle = a
-	if best_angle <= 0.0:
+		if a > best_margin:
+			best_margin = a
+	if best_margin <= HOLE_STRUCTURALLY_CLOSED_RAD:
 		return -1
-	var threshold: float = best_angle * LOFT_TIE_FRAC
+	# Same "within LOFT_TIE_FRAC of the best" slack, written so it also means
+	# something for a negative best: identical to best × LOFT_TIE_FRAC whenever
+	# best is positive, and a symmetric widening below zero.
+	var threshold: float = best_margin - (1.0 - LOFT_TIE_FRAC) * absf(best_margin)
 	var chosen: int = -1
 	var chosen_loft: int = ShotMechanics.ELEVATION_HIGH + 1
-	var chosen_angle: float = 0.0
+	var chosen_angle: float = HOLE_STRUCTURALLY_CLOSED_RAD
 	for i: int in HOLE_COUNT:
-		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
+		var a: float = _hole_margin(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
 				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
-		if a < threshold:
+		if a < threshold or a <= HOLE_STRUCTURALLY_CLOSED_RAD:
 			continue
 		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
 		if band_loft < chosen_loft or (band_loft == chosen_loft and a > chosen_angle):
