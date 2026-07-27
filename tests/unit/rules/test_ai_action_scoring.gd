@@ -72,7 +72,7 @@ func test_shoot_score_reduced_by_mid_lane_defender() -> void:
 
 
 func test_shot_lane_defender_reach_scales_with_build() -> void:
-	# A defender partially in the shot lane. A longer-reach (Size), faster (Speed)
+	# A defender partially in the shot lane. A longer-reach, faster
 	# defender blocks more of a shot; a short, slow one blocks less. Empty caps sits
 	# at the league default between them. (Goalie offset so the open-net aim runs to
 	# a predictable side that the defender contests.)
@@ -1098,7 +1098,7 @@ func test_pass_launch_speed_rises_slightly_with_distance() -> void:
 
 
 func test_pass_launch_speed_clamps_to_passer_max() -> void:
-	# A low-Shot passer (low max wrister) can't reach the magnet pace — the launch
+	# A soft-shooting passer (low max wrister) can't reach the magnet pace — the launch
 	# clamps to its own ceiling.
 	var weak_max: float = 16.0
 	assert_almost_eq(AIActionScoring.pass_launch_speed(40.0, weak_max), weak_max, 0.001)
@@ -1238,7 +1238,7 @@ func test_lane_clear_reduced_by_mid_lane_defender() -> void:
 
 func test_lane_block_scales_with_defender_reach_and_speed() -> void:
 	# A defender 2.5 m off the pass line — a partial block at league reach. A
-	# longer-stick (Size), faster (Speed) defender slides further into the lane and
+	# longer-stick, faster defender slides further into the lane and
 	# reaches the puck → blocks more (lower clearance); a short, slow one blocks
 	# less. Empty caps sits at the league default between them.
 	var from := Vector3(0, 0, 0)

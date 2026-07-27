@@ -800,19 +800,9 @@ extends Node
 @export var prelean_commit_window: float = 0.25
 
 # ── Behind-net puck play (tier-1 conservative rim stop) ──────────────────────
-# "Stop it, leave it, get back" — the goalie leaves the net ONLY to trap a rim
-# behind it, never carries or passes (the misplay-prone tiers of real puck
-# handling are deliberately absent — an AI turnover behind the net is the most
-# frustrating failure a goalie can produce, and a pure stop has none). The GO
-# decision is an ultra-conservative race (GoalieBehaviorRules.puck_play_race_
-# clear): the nearest opponent is modeled at full sprint from the first
-# instant, the goalie's clock counts the whole out + stop + return trip, a fat
-# margin sits on top, and any opponent near the net front vetoes outright. The
-# race is re-run every tick of the trip with a stricter margin (abort
-# hysteresis) — a conservative goalie visibly bails early rather than getting
-# caught out. Skill tiers: `puck_play_go_margin` is INF below HARD (timid puck
-# play is a real weaker-goalie trait), so only the top tier ever leaves.
-# The trip routes around the post via a waypoint — never through the net.
+# Tuning for the trip. Doctrine and the GO race's conservatism are in
+# Scripts/controllers/CLAUDE.md; the race itself is
+# GoalieBehaviorRules.puck_play_race_clear, driven by GoaliePuckPlay.
 @export var puck_play_skate_speed: float = 4.2      # m/s — goalies skate slower than skaters
 @export var puck_play_skate_accel: float = 8.0      # m/s² — out/back push ramp
 @export var puck_play_go_margin: float = 0.9        # s — surplus required to GO (INF = never)

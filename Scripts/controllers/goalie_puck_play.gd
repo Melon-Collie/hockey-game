@@ -1,23 +1,10 @@
 class_name GoaliePuckPlay
 extends RefCounted
 
-# Behind-net puck play — the tier-1 conservative rim stop, extracted from
-# GoalieController (#519). "Stop it, leave it, get back": the goalie leaves the
-# net ONLY to trap a rim behind it, never to carry or pass. The misplay-prone
-# tiers of real puck handling are deliberately absent — an AI turnover behind the
-# net is the most frustrating failure a goalie AI can produce, and a pure stop has
-# no turnover mode. The only failure available is a bad GO decision, which is
-# exactly what the races here pin.
-#
-# Everything is deliberately conservative:
-#   - the forechecker is modelled at FULL SPRINT from the first instant (no
-#     reaction delay, no acceleration ramp) — the fastest opponent physics allows,
-#     so the pressure clock always UNDER-estimates the time available;
-#   - the goalie's clock counts the WHOLE trip — out, the stop beat, and the
-#     return to his post — before pressure arrives, not just the touch;
-#   - the race is re-run every tick of the trip with a STRICTER margin (abort
-#     hysteresis), so a conservative goalie visibly bails early rather than ever
-#     getting caught out.
+# Behind-net puck play — the tier-1 conservative rim stop (extracted from
+# GoalieController, #519). Doctrine — "stop it, leave it, get back", and why the
+# GO race is this conservative — is in Scripts/controllers/CLAUDE.md. This object
+# implements it.
 #
 # ── Boundary ─────────────────────────────────────────────────────────────────
 # This object owns the trip's DECISION, GEOMETRY and PHASE. It deliberately does
