@@ -357,3 +357,83 @@ func test_race_not_lost_to_an_opponent_ignoring_the_puck() -> void:
 			snap, Vector3(0, 0, 8), Vector3.ZERO, REF,
 			0, {1: 0, 2: 1}, {})
 	assert_true(lost_live, "a committed nearer opponent honestly wins the race")
+
+
+func test_rim_race_not_lost_to_an_opponent_off_the_rim_line() -> void:
+	# The fast-puck twin of the test above, and the one the user actually sees:
+	# a puck rimming the wall at 8 m/s with an opponent parked 12 m away in the
+	# middle of the ice, flat-footed and nowhere near the rim's line. His
+	# path-race ETA "wins" (the horizon fallback), but he is running no race —
+	# and declining on him sent our chaser RETREATING to the pre-contain point
+	# while the rim rode the whole zone untouched.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(-10, 0, -12.5)
+	snap.puck_state.velocity = Vector3(8, 0, 0)
+	snap.skater_states[1] = _skater(Vector3(-12, 0, -11))    # us, trailing it
+	snap.skater_states[2] = _skater(Vector3(4, 0, -1))       # idle, mid-ice
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-12, 0, -11), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_false(lost, "a body off the rim's line and standing still is no veto")
+	# Control: an opponent parked ON the rim's line downstream IS committed —
+	# standing where the puck is coming to you is the whole play.
+	snap.skater_states[2] = _skater(Vector3(4, 0, -12.5))
+	var lost_on_line: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(-12, 0, -11), Vector3.ZERO, REF,
+			0, {1: 0, 2: 1}, {})
+	assert_true(lost_on_line, "an opponent standing in the rim's path honestly wins it")
+
+
+# ── Incidental reach (a free puck at your feet is yours) ─────────────────────
+
+func test_puck_sliding_through_reach_is_played_by_whoever_it_reaches() -> void:
+	# 6 m/s puck whose line passes 1 m off a parked bot's skates. The election
+	# is not the question here — the puck comes to HIM, so the reach read fires
+	# regardless of who owns the chase.
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(-6, 0, 0), Vector3(6, 0, 0),
+			Vector3(0, 0, 1.0), Vector3.ZERO, REF, 1.8)
+	assert_true(comes, "a puck sliding a metre off the stick is inside the band")
+
+
+func test_reach_band_ignores_a_puck_that_never_comes_near() -> void:
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(-6, 0, 0), Vector3(6, 0, 0),
+			Vector3(0, 0, 9.0), Vector3.ZERO, REF, 1.8)
+	assert_false(comes, "a puck passing 9 m away is somebody else's race")
+
+
+func test_reach_band_is_not_tripped_by_a_puck_too_fast_to_meet() -> void:
+	# A 30 m/s slapper up the length of the rink whose line runs 3 m off a
+	# STANDING bot: geometrically inside the band, but he cannot get his body
+	# there in the ~0.1 s the puck takes to cross. The timing gate is what keeps
+	# the band from becoming a flat radius — it self-narrows with puck speed.
+	# (Down the LENGTH so the end-board bounce can't carry it back inside the
+	# 3 s horizon and legitimately re-offer the puck.)
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(0, 0, -25), Vector3(0, 0, 30),
+			Vector3(3.0, 0, -22), Vector3.ZERO, REF, 1.8)
+	assert_false(comes, "no body gets 3 m sideways inside a slapshot's flight")
+
+
+func test_reach_band_survives_a_coarse_walk_step() -> void:
+	# At 15 m/s the path walk samples every 3.75 m, so a point-sampled band test
+	# steps clean OVER a bot the puck passes a metre from. The segment-wise read
+	# catches the crossing between samples. (Puck seeded a half-step back so the
+	# crossing lands mid-segment.)
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(-1.9, 0, 0), Vector3(15, 0, 0),
+			Vector3(0, 0, 1.0), Vector3.ZERO, REF, 1.8)
+	assert_true(comes, "the crossing is found between walk samples, not just on them")
+
+
+func test_reach_band_covers_a_settled_puck_at_your_feet() -> void:
+	var comes: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(1.0, 0, 0.5), Vector3.ZERO,
+			Vector3.ZERO, Vector3.ZERO, REF, 1.8)
+	assert_true(comes, "a dead puck inside the stick is picked up, election or not")
+	var far: bool = AILoosePuckChase.puck_comes_to_reach(
+			Vector3(8, 0, 0), Vector3.ZERO,
+			Vector3.ZERO, Vector3.ZERO, REF, 1.8)
+	assert_false(far, "a dead puck 8 m away is the election's business")

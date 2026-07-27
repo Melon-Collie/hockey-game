@@ -73,15 +73,21 @@ const RACE_STEPS: int = 12
 const RACE_COMMIT_MIN_CLOSING_M_S: float = 1.0
 
 
-# On the puck (inside the physical contest band) or genuinely closing on it.
-static func committed_to_race(s: SkaterNetworkState, puck_pos: Vector3) -> bool:
-	var dx: float = puck_pos.x - s.position.x
-	var dz: float = puck_pos.z - s.position.z
+# On the point (inside the physical contest band — standing there IS the play,
+# no motion needed) or genuinely closing on it.
+static func committed_to_point(s: SkaterNetworkState, point: Vector3) -> bool:
+	var dx: float = point.x - s.position.x
+	var dz: float = point.z - s.position.z
 	var d: float = sqrt(dx * dx + dz * dz)
 	if d <= AIActionScoring.CHASE_CONTEST_MARGIN_M:
 		return true
 	return (s.velocity.x * dx + s.velocity.z * dz) / d \
 			>= RACE_COMMIT_MIN_CLOSING_M_S
+
+
+# On the puck (inside the physical contest band) or genuinely closing on it.
+static func committed_to_race(s: SkaterNetworkState, puck_pos: Vector3) -> bool:
+	return committed_to_point(s, puck_pos)
 # Arrival slack a fast-puck intercept must clear: the reception setup time
 # (swing the blade to the gate on the puck's line and get set — a body
 # arriving dead-even with a rim at pace corrals nothing). A zero-slack
@@ -163,6 +169,93 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 	var horizon: float = traj.size() * step_dt
 	return maxf(horizon, AIActionScoring.time_to_arrive(
 			skater_pos, traj[-1], skater_vel, max_speed))
+
+
+# The path point a path_intercept_time result names — the spot on the walk the
+# skater actually meets the puck at. Callers that need to ask something ABOUT
+# the intercept (is that body committed to going there?) map the quantized time
+# back through this so they can never disagree with the race read that produced
+# it. Times past the horizon resolve at the settled end of the walk.
+static func path_intercept_point(traj: Array[Vector3], step_dt: float,
+		t: float) -> Vector3:
+	if traj.is_empty():
+		return Vector3.INF
+	return traj[clampi(int(round(t / step_dt)) - 1, 0, traj.size() - 1)]
+
+
+# ── Incidental reach (a free puck at your feet is yours) ─────────────────────
+# One stride beyond the blade. The election answers "who runs the RACE", which
+# is the right question for a puck 15 m away and the wrong one for a puck
+# rolling past a defenceman's skates: he watched it go by because a teammate
+# owned a better ETA to it, and nobody plays a puck they could have reached
+# without moving. This is the band inside which the election doesn't apply —
+# whoever the puck comes to plays it. Bounded to reach + a stride so it stays
+# "extend the stick", never a second chaser abandoning his job.
+const INCIDENTAL_STRIDE_M: float = 1.5
+
+
+# True when the loose puck's own predicted path crosses inside this skater's
+# reach band early enough for him to meet it there. Two physical quantities and
+# nothing else: the band is his blade reach plus one stride, and the timing test
+# is his calibrated ETA against the puck's own time to the crossing point.
+#
+# Segment-wise (closest approach along each step of the walk, not the sampled
+# endpoints): at rim speeds the puck covers ~3.75 m per 0.25 s step, so a
+# point-sampled band test would step clean OVER a skater the puck passes a
+# metre from. No KILL_SETUP_MARGIN_S here — that margin buys the setup skate for
+# a kill you have to travel to, and a puck arriving inside your own reach needs
+# no travel, just the stick out.
+static func puck_comes_to_reach(
+		puck_pos: Vector3, puck_vel: Vector3,
+		self_pos: Vector3, self_vel: Vector3,
+		max_speed: float, reach: float) -> bool:
+	var band: float = reach + INCIDENTAL_STRIDE_M
+	var band2: float = band * band
+	var traj: Array[Vector3] = race_trajectory(puck_pos, puck_vel)
+	var step_dt: float = RACE_LOOKAHEAD_S / float(RACE_STEPS)
+	var prev: Vector3 = puck_pos
+	for i: int in traj.size():
+		var f: float = _segment_meet_fraction(prev, traj[i], self_pos)
+		var meet := Vector3(prev.x + (traj[i].x - prev.x) * f, 0.0,
+				prev.z + (traj[i].z - prev.z) * f)
+		prev = traj[i]
+		var dx: float = meet.x - self_pos.x
+		var dz: float = meet.z - self_pos.z
+		if dx * dx + dz * dz > band2:
+			continue
+		if AIActionScoring.time_to_arrive(self_pos, meet, self_vel, max_speed) \
+				<= (i + f) * step_dt:
+			return true
+	return false
+
+
+# Geometry only: does the walk ever bring the puck inside `band` of `pos`?
+# The "does he even have to MOVE to play this?" half of puck_comes_to_reach,
+# without the timing test — which is the right question for a body whose
+# commitment we're judging rather than our own arrival.
+static func path_enters_band(traj: Array[Vector3], puck_pos: Vector3,
+		pos: Vector3, band: float) -> bool:
+	var band2: float = band * band
+	var prev: Vector3 = puck_pos
+	for i: int in traj.size():
+		var f: float = _segment_meet_fraction(prev, traj[i], pos)
+		var dx: float = prev.x + (traj[i].x - prev.x) * f - pos.x
+		var dz: float = prev.z + (traj[i].z - prev.z) * f - pos.z
+		prev = traj[i]
+		if dx * dx + dz * dz <= band2:
+			return true
+	return false
+
+
+# Fraction along segment a→b (clamped to the segment) closest to `pos`, XZ only.
+static func _segment_meet_fraction(a: Vector3, b: Vector3, pos: Vector3) -> float:
+	var seg_x: float = b.x - a.x
+	var seg_z: float = b.z - a.z
+	var seg_len2: float = seg_x * seg_x + seg_z * seg_z
+	if seg_len2 <= 0.000001:
+		return 0.0
+	return clampf(((pos.x - a.x) * seg_x + (pos.z - a.z) * seg_z) / seg_len2,
+			0.0, 1.0)
 
 
 # Returns the peer_id that should chase the loose puck for this team, or

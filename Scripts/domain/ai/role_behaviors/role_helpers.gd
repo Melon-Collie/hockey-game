@@ -1532,24 +1532,37 @@ static func loose_puck_race_lost(
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
-		# A SLOW puck's race is only lost to an opponent actually running it
-		# (on the puck, or genuinely closing — committed_to_race). The ETA
-		# model prices his hypothetical sprint-from-now; declining on a body
-		# that is NOT going for the puck left it sitting between two staring
-		# teams (both sides declined on hypothetical winners). Fast pucks
-		# keep the pure path race: momentum already encodes commitment
-		# there, and a downstream interceptor legitimately waits still.
-		if traj.is_empty() \
-				and not AILoosePuckChase.committed_to_race(s, puck_pos):
-			continue
+		# The race is only lost to an opponent actually RUNNING it — on the
+		# intercept point already (standing there is the play, no motion
+		# needed), or genuinely closing on it. The ETA model prices his
+		# hypothetical sprint-from-now; declining on a body that is not going
+		# for the puck left it sitting between two staring teams, both sides
+		# having declined on hypothetical winners.
+		#
+		# For a MOVING puck the question is per-path, not per-position: a rim's
+		# downstream interceptor legitimately waits still, and he reads as
+		# committed because the rim's own line runs through his contest band —
+		# he makes the play without moving. What no longer counts is the body
+		# 15 m off that line, or drifting away from it, whose "win" is a sprint
+		# he was never running: that phantom veto is what talked our chaser off
+		# a rim and sent him retreating to the pre-contain point while the puck
+		# rode the whole zone untouched.
 		var speed: float = AILoosePuckChase.race_vmax(
 				s, caps_by_peer.get(pid), puck_pos)
 		var t: float
+		var committed: bool
 		if traj.is_empty():
 			t = AIActionScoring.time_to_arrive(s.position, puck_pos, s.velocity, speed)
+			committed = AILoosePuckChase.committed_to_race(s, puck_pos)
 		else:
 			t = AILoosePuckChase.path_intercept_time(
 					traj, step_dt, s.position, s.velocity, speed)
+			committed = AILoosePuckChase.path_enters_band(traj, puck_pos,
+					s.position, AIActionScoring.CHASE_CONTEST_MARGIN_M) \
+					or AILoosePuckChase.committed_to_point(s,
+							AILoosePuckChase.path_intercept_point(traj, step_dt, t))
+		if not committed:
+			continue
 		if t < best_opp_eta:
 			best_opp_eta = t
 	if best_opp_eta == INF:

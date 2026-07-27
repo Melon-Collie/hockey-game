@@ -2270,15 +2270,21 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# stays as the fallback trigger for feeds too soft/close to read as a
 		# live line (and rebounds squirting through the stance).
 		_set_state(State.ONE_TIMER_PRESSED)
-	elif _is_one_timer_ready:
+	elif _is_one_timer_ready and not _loose_puck_in_reach_band(snapshot, self_pos):
 		# Stay camped + pre-aimed even if the brain says we're closest
 		# to a loose puck. Chasing would re-aim mouse toward the puck
 		# and the FINISHER would lose the goal-aim lock; staying in
 		# OFF_PUCK keeps facing + blade pointed at the net so the
-		# press on feed release starts from a clean stance. Risk: we
-		# never pick up a loose puck that's drifting nearby. Acceptable
-		# tradeoff — that's another teammate's job and we're committed
-		# to being the trigger.
+		# press on feed release starts from a clean stance. Racing a
+		# puck across the zone is another teammate's job — we're
+		# committed to being the trigger.
+		#
+		# The reach band is the one exception, and it's not a tradeoff:
+		# a puck arriving inside the camper's own stick is a puck he
+		# takes without leaving the spot he's camped on, and standing
+		# frozen while it slides through the crease is the single most
+		# visible way this bot looks broken. Losing the one-timer to
+		# gain the puck is a trade you always make.
 		pass
 	elif _should_chase_loose_puck(snapshot, self_pos) \
 			or _incoming_pass_to_me(snapshot, self_pos):
@@ -6078,6 +6084,16 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 	# natural chaser from doubling up).
 	if _current_strategy != null and _current_strategy.ping_chase_peer() == _peer_id:
 		return true
+	# A free puck at your feet is yours, election or not. The election picks ONE
+	# chaser per team, which is right for a race across the zone and wrong for a
+	# puck whose own path runs through this bot's reach: he'd hold his station
+	# and let it slide past his stick because a teammate scored a better ETA to
+	# it. Bounded to the reach band (see AILoosePuckChase.puck_comes_to_reach),
+	# so this can't turn into a second bot abandoning his job to converge.
+	# Placed above the election AND the race-lost decline: inside your own reach
+	# there is no race to lose — you contest it, and that contest is the 50/50.
+	if _loose_puck_in_reach_band(snapshot, self_pos):
+		return true
 	if not _is_closest_teammate_to_puck_at(snapshot, self_pos):
 		return false
 	# A race an opponent has already won isn't worth running: pushing after a
@@ -6089,6 +6105,31 @@ func _should_chase_loose_puck(snapshot: WorldSnapshot, self_pos: Vector3) -> boo
 	return not AIRoleHelpers.loose_puck_race_lost(
 			snapshot, self_pos, self_vel, _self_max_speed,
 			_team_id, _team_id_by_peer, _caps_by_peer, _peer_id)
+
+
+# Does the loose puck's own path cross inside our reach band? The incidental
+# pickup read — see AILoosePuckChase.puck_comes_to_reach for the model. False
+# whenever the puck isn't genuinely loose, so a teammate's carry can never trip
+# it. Cheap enough for the OFF_PUCK dispatch: the path walk is memoized on the
+# puck state, so the whole team shares one walk per tick.
+func _loose_puck_in_reach_band(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
+	if snapshot == null or snapshot.puck_state == null \
+			or snapshot.real_puck_carrier_peer_id != -1:
+		return false
+	# A DEAD loose puck (goalie smother / phase lock) publishes a -1 election
+	# for every team — see AILoosePuckChase.elect's puck_playable. The band
+	# bypasses the election, so it has to honor that veto itself or the whole
+	# team crowds a puck nobody can legally touch. An EMPTY cache means the
+	# snapshot was never enriched (unit tests), not a dead puck.
+	if not snapshot.closest_to_puck_by_team.is_empty() \
+			and snapshot.closest_to_puck_by_team.get(_team_id, -1) == -1:
+		return false
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null or self_state.is_ghost:
+		return false
+	return AILoosePuckChase.puck_comes_to_reach(
+			snapshot.puck_state.position, snapshot.puck_state.velocity,
+			self_pos, self_state.velocity, _self_max_speed, _blade_reach)
 
 
 # Returns true if this bot is the closest teammate to the current
