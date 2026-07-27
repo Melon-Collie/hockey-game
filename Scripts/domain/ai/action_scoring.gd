@@ -2311,8 +2311,13 @@ static func score_shoot_value(
 	if (shooter.z - attacking_goal.z) * -signf(attacking_goal.z) < 0.001:
 		return 0.0
 	shooter = release_ahead_of_goalie(shooter, attacking_goal, predicted_goalie_pos)
+	# The seal is derived from the same geometric trigger the live keeper uses
+	# (derive_post_seal_x_sign — inside the post zone AND past the bearing), so
+	# predictive and shoot-now paths agree about it without threading state.
+	var seal_x: float = derive_post_seal_x_sign(shooter, attacking_goal)
 	var quality: float = AIShotValue.for_release(
-			shooter, attacking_goal, keeper_displacement_m, shot_type)
+			shooter, attacking_goal, keeper_displacement_m, shot_type,
+			seal_x != 0.0)
 	if quality <= 0.0:
 		return 0.0
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(

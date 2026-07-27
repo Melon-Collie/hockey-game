@@ -2930,18 +2930,17 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 				SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 						+ cand_flight + ctx.shot_timing_error_s * 0.5,
 				cand_release, release_closing)
-	# How far off his square he still is when this release happens, measured
-	# from where he is NOW over everything the play gives him — the carry, the
-	# wind-up and the flight. That total is the honest budget: he tracks
-	# throughout, so what matters is the residual at the moment of release.
+	# Displacement at the release: from where he is NOW over everything the
+	# play gives him — carry, wind-up and flight. He tracks throughout, so the
+	# residual at release is the honest budget.
 	#
-	# KNOWN LIMITATION of this first cut: measured at the DESTINATION only, and
-	# against a tracking keeper the residual at the end of a traverse is close
-	# to zero — he has had the whole carry to re-square. The deficit actually
-	# peaks EARLY (roughly 0.6 m a third of the way through a 0.75 s cross-slot
-	# drive, against ~0.1 m on arrival), which is why real releases come
-	# mid-traverse. Sampling the route rather than its endpoint is the next
-	# step; until it lands, lateral drives are under-valued here.
+	# Measured at the DESTINATION, deliberately. Sampling the route and taking
+	# the max was tried and reverted — see the note on _score_at. The carrier
+	# re-decides at ~30 Hz, so it already walks the route one tick at a time
+	# and re-prices the shot at every point on it; pricing the future shot INTO
+	# the carry as well double-counts that loop, and a max over K samples is
+	# optimistically biased against the shoot and pass legs, which get one
+	# estimate each.
 	var release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S \
 			+ cand_flight + ctx.shot_timing_error_s * 0.5
 	var cand_displacement: float = AIShotValue.displacement_deficit_m(

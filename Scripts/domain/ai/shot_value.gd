@@ -39,11 +39,12 @@ class_name AIShotValue
 # tie-breakers are left. Displacement is what makes "make him move" scoreable,
 # and it is measurable rather than assumed — see displacement_deficit_m.
 #
-# Deliberately NOT modelled yet, in rough order of how much I expect them to
-# matter: the DOWN (butterfly) state, the RVH/VH post seal, and screens. All
-# three are whole-goalie states rather than body parts, so they fit this
-# model's grain and can be added as further logit terms. They are out of v1
-# because the point of v1 is to find out whether the simple thing suffices.
+# Deliberately NOT modelled yet: the DOWN (butterfly) state and screens. Both
+# are whole-goalie states rather than body parts, so they fit this model's
+# grain and drop in as further logit terms when something measures them. The
+# post seal started on that list and came off it — see POST_SEAL_LOGIT — after
+# the switchover showed a VH-sealed dead angle reading as an ordinary angled
+# shot.
 #
 # Pure/static and engine-free, like every other domain evaluator.
 
@@ -64,6 +65,23 @@ const DISPLACEMENT_LOGIT_PER_M: float = 1.3
 # actually deliver.
 const MAX_USEFUL_DISPLACEMENT_M: float = GameRules.NET_HALF_WIDTH
 
+# A post seal (RVH/VH) walls the NEAR half of the mouth: the keeper is already
+# deployed against the post the shot has to beat, with no reaction left to
+# race. Only the far half is a target.
+#
+# The coefficient is ln(2) and it is geometry rather than a tunable: to a first
+# approximation a shot's chance scales with the target width available to it,
+# so removing half the mouth halves the odds, and halved odds is exactly
+# -ln(2) of logit. No fitting, nothing to tune.
+#
+# v1 does not distinguish VH from RVH. VH stands the near column ice-to-
+# shoulder while RVH stays compressed and concedes the short-side high — so
+# the true RVH penalty is smaller than a full halving. Treating both as half
+# the mouth is a known over-penalty on RVH, deferred rather than guessed,
+# because splitting them needs the band structure this model deliberately
+# does not carry.
+const POST_SEAL_LOGIT: float = -0.6931472
+
 
 # THE ENTRY POINT. Probability that a shot released at `release` toward
 # `attacking_goal` beats a keeper displaced `displacement_m` off his square.
@@ -71,7 +89,8 @@ const MAX_USEFUL_DISPLACEMENT_M: float = GameRules.NET_HALF_WIDTH
 # its bump here too.
 static func for_release(release: Vector3, attacking_goal: Vector3,
 		displacement_m: float,
-		shot_type: int = ShotEvent.ShotType.SHOT) -> float:
+		shot_type: int = ShotEvent.ShotType.SHOT,
+		into_post_seal: bool = false) -> float:
 	# No shot exists from on or behind the goal line — the mouth faces away, and
 	# every downstream consumer relies on this being hard zero rather than a
 	# small number the argmax can be lured by.
@@ -82,6 +101,8 @@ static func for_release(release: Vector3, attacking_goal: Vector3,
 			release.x, release.z, team_id, shot_type)
 	logit += DISPLACEMENT_LOGIT_PER_M * clampf(
 			displacement_m, 0.0, MAX_USEFUL_DISPLACEMENT_M)
+	if into_post_seal:
+		logit += POST_SEAL_LOGIT
 	return XGBaseline.sigmoid(logit)
 
 
