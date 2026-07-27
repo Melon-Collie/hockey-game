@@ -1,25 +1,21 @@
 class_name AILoosePuckChase
 
-# Pure-function election of which teammate should chase a loose puck.
-# Replaces the raw straight-line "closest_to_puck_by_team" computation
-# (formerly inline in GameManager._enrich_snapshot_for_ai) and fixes
-# two failure modes that made bots late to loose pucks:
+# Pure-function election of which teammate should chase a loose puck. Two
+# things it must get right, both of which a raw closest-to-puck distance gets
+# wrong and both of which read as "bots are late to loose pucks":
 #
-#   - Velocity / facing blindness: a bot nearer the puck but coasting
-#     AWAY used to win the chase over a teammate already skating toward
-#     it. Election now uses AIActionScoring.time_to_arrive, which folds
-#     the bot's momentum into the estimate, so the teammate genuinely
-#     arriving first gets the role.
+#   - Velocity / facing. A bot nearer the puck but coasting AWAY is not the one
+#     arriving first. Election uses AIActionScoring.time_to_arrive, which folds
+#     momentum into the estimate.
 #
-#   - Flip-flop hesitation: with no stickiness, two near-equidistant
-#     bots swapped "closest" every frame and each flickered
-#     CHASE_PUCK <-> OFF_PUCK, so neither committed and the puck sat
-#     loose. Incumbent hysteresis pins the role to the current chaser
+#   - Flip-flop hesitation. Two near-equidistant bots will swap "closest" every
+#     frame and each flicker CHASE_PUCK <-> OFF_PUCK, so neither commits and the
+#     puck sits loose. Incumbent hysteresis pins the role to the current chaser
 #     unless a challenger beats them by HYSTERESIS_S.
 #
-# Stateless: the caller owns the per-team `prev_elected` and feeds it
-# back each frame for the hysteresis term. Lives in the domain layer so
-# it's GUT-testable without the engine.
+# Stateless: the caller owns the per-team `prev_elected` and feeds it back each
+# frame for the hysteresis term. Lives in the domain layer so it's GUT-testable
+# without the engine.
 
 # Incumbent keeps the chase unless a challenger's intercept time beats
 # it by more than this margin. Units are seconds so it composes with

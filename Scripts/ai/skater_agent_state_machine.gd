@@ -49,28 +49,19 @@ const RINK_Z_INSET: float = 1.0
 # from CARRY's previous target, so the quick-shot pass direction
 # ends up at whatever angle the mouse happened to be at.
 #
-# AIM_CONVERGED_DIST_M is the distance threshold treated as
-# "converged" — historically had to clear the per-tick step plus the
-# old per-tick cursor noise so the bot didn't oscillate just inside
-# the threshold. At perfect-bot settings (MAX_SPEED = 100, no noise)
-# convergence is near-instant; this stays as a small slop budget for
-# moving aim targets (receiver leads, goalie shadow drift). It lives on
-# the CARRY_BLADE_AIM_FORWARD_M ring, so what it really gates is an
-# ANGLE — 0.10 at the 1.3 m ring is the same ~±4.4° the old 0.15
-# allowed at the 2 m ring.
+# AIM_CONVERGED_DIST_M is the distance treated as "converged" — a
+# small slop budget for moving aim targets (receiver leads, goalie
+# shadow drift). It lives on the CARRY_BLADE_AIM_FORWARD_M ring, so
+# what it really gates is an ANGLE: 0.10 at the 1.3 m ring is ~±4.4°.
 #
-# INTENT_MAX_WAIT_TICKS is a safety timeout against convergence
-# never landing (a receiver who keeps moving past the lead point,
-# or numerical drift). Sized to cover the worst case under the
-# arc-step model: a 180° swing at MOUSE_ARC_RATE_RAD_S = 7.5 rad/s
-# takes π / 7.5 ≈ 420 ms before the mouse reaches the final target,
-# so 120 ticks (500 ms) leaves a small margin and then bails. In
-# normal play aim_converged fires far earlier — typical 30-60°
-# swings hit convergence in 60-120 ms — so this is just an edge
-# guard, not the dominant timing path. The arc-step in
-# _step_mouse_aim is what guarantees the body-aim angle stays
-# inside the blade ROM during the swing, which removed the need
-# for the old facing-alignment gate.
+# INTENT_MAX_WAIT_TICKS is a safety timeout against convergence never
+# landing (a receiver who keeps moving past the lead point, or
+# numerical drift). Sized for the worst case under the arc-step model:
+# a 180° swing at MOUSE_ARC_RATE_RAD_S = 7.5 rad/s takes π / 7.5 ≈
+# 420 ms, so 120 ticks (500 ms) leaves a margin and then bails. Typical
+# 30-60° swings converge in 60-120 ms, so this is an edge guard, not
+# the dominant timing path. The arc-step in _step_mouse_aim is what
+# keeps the body-aim angle inside the blade ROM during the swing.
 const AIM_CONVERGED_DIST_M: float = 0.10
 
 # Commit-then-aim safety margin (Aim-B2). The blade physically reaches anywhere

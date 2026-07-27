@@ -2,19 +2,15 @@ class_name AIAccelerationTracker
 extends RefCounted
 
 # Global per-skater acceleration read for the bot AI. Each skater's
-# frame-over-frame velocity delta, low-passed into a smoothed XZ
-# acceleration, is a GLOBAL quantity — identical for every bot that
-# looks at it — so it is computed ONCE per host physics frame here and
-# shared (by reference) through WorldSnapshot.accel_by_peer, rather than
-# every bot recomputing the same diff over every skater each tick. See
-# CLAUDE.md → hot-path discipline / "memoize at the seam".
+# frame-over-frame velocity delta, low-passed into a smoothed XZ acceleration,
+# is a GLOBAL quantity — identical for every bot that looks at it — so it is
+# computed ONCE per host physics frame here and shared by reference through
+# WorldSnapshot.accel_by_peer, rather than every bot recomputing the same diff
+# over every skater each tick. See CLAUDE.md -> hot-path discipline,
+# "memoize at the seam".
 #
-# Stateful (holds the previous-velocity and smoothed-accel dicts across
-# frames), so it is a RefCounted the host owns and ticks — mirrors how
-# TeamBrain is host-owned. Constants match the old per-bot cache exactly
-# so the shared value is bit-for-bit what the bots used to compute
-# themselves (SMOOTH_ALPHA / CLAMP were ACCEL_SMOOTH_ALPHA /
-# ACCEL_CLAMP_M_S2 on SkaterAgentStateMachine).
+# Stateful (holds the previous-velocity and smoothed-accel dicts across frames),
+# so it is a RefCounted the host owns and ticks — mirroring TeamBrain.
 
 # Low-pass on the raw per-frame velocity diff. The raw diff is noisy at
 # 120 Hz (a one-tick velocity blip reads as a huge accel); the lerp

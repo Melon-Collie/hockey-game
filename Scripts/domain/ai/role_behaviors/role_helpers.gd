@@ -228,20 +228,19 @@ const COVER_GOAL_SIDE_TOLERANCE_M: float = 0.5
 # man→net lane (AIThreatAssignment.cover_anchor, COVER_DEPTH_M goal-side of
 # him) — i.e. set up ON the man, in the feed lane, to kill the one-timer.
 #
-# The search center used to be the midpoint between the man and our net,
-# which sagged the whole candidate set: a man 12 m out was "covered" from
-# ~6 m away, and because a midpoint moves at HALF the man's speed, a
-# cutting man walked away from his check every time ("bots lose their
-# man"). Anchoring on cover_anchor keeps the defender attached (it tracks
-# the man 1:1) and matches the anchor the partition already scored
-# reachability against, so the pairing and the coverage agree. The ±3 m
-# candidate ring still lets the argmax shade off the body and into the
-# carrier→man lane when that deflates the threat more.
+# The anchor must track the man 1:1. Centering the search anywhere that moves
+# SLOWER than he does — a man/net midpoint being the tempting one — lets a
+# cutting man walk away from his check every time, and sags the whole candidate
+# set besides (a man 12 m out gets "covered" from 6 m away). cover_anchor is
+# also the anchor the threat partition already scored reachability against, so
+# the pairing and the coverage agree. The ±3 m candidate ring still lets the
+# argmax shade off the body into the carrier→man lane when that deflates the
+# threat more.
 #
-# This replaces the legacy "minimize the MAX threat over ALL opponents" scoring
-# for the assigned-man case: because each backline defender gets a DISTINCT man,
-# two defenders no longer collapse onto the single most dangerous opponent.
-# Roles fall back to their all-opponents behavior when unassigned (man_pid -1).
+# Scoring the ASSIGNED man (rather than minimizing the max threat over ALL
+# opponents) is what stops two defenders collapsing onto the single most
+# dangerous opponent, since each gets a distinct man. Roles fall back to their
+# all-opponents behavior when unassigned (man_pid -1).
 static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 		carrier_pos: Vector3) -> Vector3:
 	var our_net: Vector3 = ctx.defending_goal_pos
@@ -1184,8 +1183,7 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 # radius of every station: reach (blade span) + the run a standing start
 # covers in the time the puck needs to get there (same capped ramp the
 # calibrated time_to_arrive charges), minus the SET margin at every station.
-# Exact inversion of the per-station race race_home_feasible used to solve
-# candidate-by-candidate.
+# An exact inversion of the per-station race, solved for all stations at once.
 #
 # SET ARRIVAL at every station — containment is not presence. A defender who
 # merely GETS to a mid-path station as the rush arrives is screaming through
@@ -1197,15 +1195,15 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 #   short budget — triangular: accelerate then brake to zero inside `avail`;
 #     covered ground is ½·k·avail² with k = a·B/(a+B) (the effective accel of
 #     an accelerate-brake round trip; B = the arrival brake decel);
-#   long budget — trapezoidal: full ramp (d_ramp) + brake run (v²/2B, the
-#     braking DISTANCE the old net-only margin forgot to credit) + cruise for
+#   long budget — trapezoidal: full ramp (d_ramp) + brake run (v²/2B — the
+#     braking DISTANCE must be credited, not just the ramp) + cruise for
 #     whatever time remains.
 # A station already under the blade needs no travel and stays contained at
 # any budget — the camped line stand still stuffs the man who skates into
-# it. Charging the set profile everywhere collapses feasibility while a
-# breakout is still FORMING (the carrier gathering speed deep in his zone),
-# which is what starts the back-off early enough to gap up, instead of after
-# the race is already lost. (Replaces the old net-station-only brake margin.)
+# it. Charging the set profile at EVERY station (not just the net) collapses
+# feasibility while a breakout is still FORMING — the carrier gathering speed
+# deep in his zone — which is what starts the back-off early enough to gap up
+# instead of after the race is already lost.
 static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void:
 	if self_max_speed == _race_key_speed and self_max_accel == _race_key_accel:
 		return
