@@ -82,4 +82,9 @@ from (
     union all select * from rls_ddl
     union all select * from policy_ddl
 ) x
-order by sort, obj;
+-- `ddl` breaks the tie. Without it, objects sharing a (sort, obj) — a table's
+-- several constraints or indexes — come back in whatever order the catalog scan
+-- produced, so two dumps of the SAME schema could differ by line order alone.
+-- The drift check in .github/workflows/supabase.yml diffs two of these against
+-- each other, and a hand reconcile is no easier against a shuffled file.
+order by sort, obj, ddl;

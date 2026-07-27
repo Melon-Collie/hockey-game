@@ -162,7 +162,7 @@ that file can't tell you:
 | New pure stateless math or rule | New file in `domain/rules/` + GUT test |
 | New domain state type | New file in `domain/state/` + GUT test |
 | New per-player stat | `PlayerStats` → wire format → `WorldStateCodec` → `PlayerStats.to_dict()` for Supabase |
-| New career stat column | Update `sql/career_stats.sql` (table + `career_totals` view) → apply in the Supabase SQL editor → add to `PlayerStats.to_dict()` → add row in `CareerStatsScreen._on_totals_received` |
+| New career stat column | New `supabase/migrations/<timestamp>_*.sql` (column + `career_totals_for()`) → `PlayerStats.to_dict()` → row in `CareerStatsScreen._on_totals_received`. CI applies it on merge to `main`; never edit an existing migration |
 | Submit bug report from UI | Instantiate `BugReportDialog`, `add_child` it, call `.open()` on button press |
 | New RPC | `NetworkManager` (define) → emit a signal → `GameManager._wire_network_signals()` (connect) |
 | New phase-entry side effect | `PhaseCoordinator` |
