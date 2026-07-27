@@ -186,6 +186,13 @@ func get_blocker_position() -> Vector3:
 func get_glove_world_position() -> Vector3:
 	return _glove.global_position
 
+# Blocker-assembly world position — the glove's opposite number. Read by the
+# shot-read instrumentation, which has to ask "how far is the NEAREST arm from
+# this shot" (on an elevated shot either arm can make the save, so keying on the
+# glove alone measures glove-side-vs-blocker-side rather than reach).
+func get_blocker_world_position() -> Vector3:
+	return _block_arm.global_position
+
 # Pose accessors used by goalie_controller.get_state() to fill the
 # authoritative socket transforms broadcast in the world snapshot. All values
 # returned in goalie-local space; rotations in radians.

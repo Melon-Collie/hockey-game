@@ -52,6 +52,11 @@ var shoulder_pitch_y_range: float = 0.55
 # Reach height clamp + rest Z for the glove/blocker target.
 var react_hand_y_min: float = 0.50
 var react_hand_y_max: float = 1.55
+# How far above the CHEST ANCHOR (`body_pos.y` of the pose in play) either hand
+# can be raised. This is what makes going down cost something: the butterfly's
+# chest sits at 0.40 against READY's 1.06, so the same arm reaches 0.66 m lower
+# from the ice than from the feet. See GoalieController.arm_reach_above_chest.
+var arm_reach_above_chest: float = 0.49
 var react_hand_z: float = -0.28
 
 # Slide pose tuning (push-off pad lift/rot, body lean into slide direction).
@@ -72,16 +77,18 @@ var pad_toe_out_butterfly: float = 18.0
 # Blocker assembly forward tilt per state (X rotation puts the blade on the
 # ice in front of the pads — pad and stick are rigidly attached at the wrist
 # so they rotate together).
-const STICK_TILT_STANDING: float = 22.0
-const STICK_TILT_READY: float = 22.0
-const STICK_TILT_BUTTERFLY: float = 72.0   # hand y=0.49 → ~72°, near-flat
-const STICK_TILT_RVH: float = 65.0
+# Aliases onto GoalieStickRules, which owns the stick's geometry so the POSED
+# blade and the blade the bot planner models cannot drift apart.
+const STICK_TILT_STANDING: float = GoalieStickRules.TILT_STANDING_DEG
+const STICK_TILT_READY: float = GoalieStickRules.TILT_READY_DEG
+const STICK_TILT_BUTTERFLY: float = GoalieStickRules.TILT_BUTTERFLY_DEG
+const STICK_TILT_RVH: float = GoalieStickRules.TILT_RVH_DEG
 
 # Active blade intent: max yaw on the blocker assembly to point the blade
 # toward a close-range threat. Smaller cap than the elevated-shot reach yaw
 # because the blocker pad is rigidly attached — swinging too far moves the
 # whole pad off the right side of the body.
-var active_blade_max_yaw_deg: float = 25.0
+var active_blade_max_yaw_deg: float = GoalieStickRules.ACTIVE_YAW_CAP_DEG
 # Blade offset from the BlockArm assembly origin, BlockArm-local (keep in sync
 # with Goalie.tscn: Stick at y −0.25, StickBladeCollider at (−0.15, −0.67, 0)
 # inside Stick → blade centre ≈ (−0.15, −0.92, 0) below the wrist). The
@@ -91,8 +98,8 @@ var active_blade_max_yaw_deg: float = 25.0
 # the wrist→puck line, so the BLADE lands on the puck instead of the assembly
 # merely pointing puck-side (the old fixed-lookahead heuristic ignored both
 # the puck's depth and this geometry).
-const BLADE_ASSEMBLY_X: float = -0.15
-const BLADE_ASSEMBLY_DROP: float = 0.92
+const BLADE_ASSEMBLY_X: float = GoalieStickRules.ASSEMBLY_LATERAL_M
+const BLADE_ASSEMBLY_DROP: float = GoalieStickRules.ASSEMBLY_DROP_M
 # Lunge forward extension at peak. Pushes c.blocker_pos forward (in goalie-
 # local -Z, the slot direction). Sin-curved by the controller's
 # lunge_progress so it reads as a quick jab.
@@ -130,7 +137,7 @@ var sweep_windup_max_yaw_deg: float = 25.0
 class Inputs:
 	var state: int  # GoalieStateMachine.State
 	var five_hole_openness: float = 0.0
-	var reading_slapper_tell: bool = false
+	var reading_pinned_windup: bool = false
 	var reacting_to_shot: bool = false
 	var shot_is_elevated: bool = false
 	var shot_impact_x: float = 0.0
@@ -357,9 +364,11 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.blocker_rot   = Vector3(STICK_TILT_STANDING, 0.0, -20.0)
 	c.glove_pos     = Vector3(-0.35, 1.19, -0.18)
 	c.glove_rot     = Vector3.ZERO
-	if inputs.reading_slapper_tell:
-		# Pose-only slapper tell: hands lifted to half-ready. Runs before the
-		# elevated-shot reach so a real elevated shot can still override.
+	if inputs.reading_pinned_windup:
+		# Pose-only windup tell: hands lifted to half-ready. Fires for EITHER shot
+		# wind-up (SkaterStateMachine.state_pins_puck) — a goalie reads a wrister
+		# coil the same way he reads a slapper load. Runs before the elevated-shot
+		# reach so a real elevated shot can still override.
 		c.glove_pos.y += 0.06
 		c.blocker_pos.y += 0.06
 
@@ -386,7 +395,7 @@ func _set_ready_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.blocker_rot   = Vector3(STICK_TILT_READY, 0.0, -20.0)
 	c.glove_pos     = Vector3(-0.42, 0.90, -0.32)
 	c.glove_rot     = Vector3.ZERO
-	if inputs.reading_slapper_tell:
+	if inputs.reading_pinned_windup:
 		c.glove_pos.y += 0.06
 		c.blocker_pos.y += 0.06
 
@@ -663,17 +672,8 @@ func _blade_yaw_to_puck(
 		c: GoalieBodyConfig, inputs: Inputs, max_yaw_deg: float) -> float:
 	var px: float = (inputs.puck_position.x - inputs.current_x) * -inputs.direction_sign
 	var pz: float = (inputs.puck_position.z - inputs.goalie_z) * -inputs.direction_sign
-	var tx: float = px - c.blocker_pos.x
-	var tz: float = pz - c.blocker_pos.z
-	if tx * tx + tz * tz < 0.0004:
-		return 0.0  # puck at the wrist — direction undefined, hold neutral
-	var bx: float = BLADE_ASSEMBLY_X
-	var bz: float = -BLADE_ASSEMBLY_DROP * sin(deg_to_rad(c.blocker_rot.x))
-	if bx * bx + bz * bz < 0.0004:
-		return 0.0  # blade directly under the wrist (no tilt) — yaw does nothing
-	var desired: float = atan2(-tx, -tz)
-	var base: float = atan2(-bx, -bz)
-	return clampf(rad_to_deg(angle_difference(base, desired)), -max_yaw_deg, max_yaw_deg)
+	return GoalieStickRules.yaw_to_target(
+			c.blocker_pos.x, c.blocker_pos.z, px, pz, c.blocker_rot.x, max_yaw_deg)
 
 
 # Active blade intent: when an opposing shooter is close, yaw the blocker
@@ -840,7 +840,7 @@ func _apply_prelean(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	# Convert predicted world impact into goalie-local X (+Z-defending goalie is
 	# rotated PI in world, so local +X is global -X — same as the reach math).
 	var impact_local_x: float = (inputs.prelean_impact_x - inputs.current_x) * -inputs.direction_sign
-	var target_y: float = clampf(inputs.prelean_impact_y, react_hand_y_min, react_hand_y_max)
+	var target_y: float = _reachable_hand_y(inputs.prelean_impact_y, c)
 	# Partial body lean toward the reach side (same sign convention as the reach).
 	var lean_factor: float = clampf(absf(impact_local_x) / maxf(body_lean_reach_norm, 0.001), 0.0, 1.0)
 	var lean_sign: float = signf(-impact_local_x)
@@ -864,18 +864,29 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	# because the arm doesn't start moving in time.
 	if inputs.arm_reaction_pending:
 		return
+	# WHERE HE BELIEVES IT IS GOING, not where it is actually going. `shot_impact_x`
+	# is the converging read belief (GoalieController._read_belief_x blended toward
+	# truth over `read_converge_time`), and aiming the arms at it is what makes a
+	# late change of aim pay. This used to be overwritten with the live puck
+	# trajectory, which made the hands clairvoyant: the whole read-staleness model
+	# was computed, replicated, converged — and then discarded for the one limb it
+	# most needed to reach. Height deception still worked because it rides the LEG
+	# drop, which reads the belief; lateral deception measured at exactly zero.
+	#
+	# The VERTICAL intercept stays on the live ballistic solve. Selling the wrong
+	# height is a scroll-wheel input rather than a gesture, so it does not deserve
+	# a second channel, and the leg drop already prices it.
 	var intercept_x: float = inputs.shot_impact_x
 	var intercept_y: float = inputs.shot_impact_y
 	if absf(inputs.puck_velocity_est.z) > 0.001:
 		var dt_to_plane: float = (inputs.goalie_z - inputs.puck_position.z) / inputs.puck_velocity_est.z
 		if dt_to_plane > 0.0:
-			intercept_x = inputs.puck_position.x + inputs.puck_velocity_est.x * dt_to_plane
 			intercept_y = maxf(inputs.puck_position.y + inputs.puck_velocity_est.y * dt_to_plane \
 					- 0.5 * 9.8 * dt_to_plane * dt_to_plane, 0.0)
 	# Convert world X into goalie-local X (the +Z-defending goalie is rotated
 	# PI in world, so its local +X is global -X).
 	var impact_local_x: float = (intercept_x - inputs.current_x) * -inputs.direction_sign
-	var target_y: float = clampf(intercept_y, react_hand_y_min, react_hand_y_max)
+	var target_y: float = _reachable_hand_y(intercept_y, c)
 	# Body lean toward the reach side. Magnitude scales with reach distance,
 	# capped at `body_lean_max_deg`. +Z rotation tilts top toward -X (lean
 	# left for glove side); -Z tilts toward +X (lean right for blocker side).
@@ -901,6 +912,28 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 		_reach_glove(c, impact_local_x, target_y)
 	else:
 		_reach_blocker(c, impact_local_x, target_y)
+
+# How high a hand can actually be put, for the pose currently in `c`.
+#
+# THE COST OF GOING DOWN. The ceiling used to be a flat `react_hand_y_max` with
+# no posture term, so a goalie flat in the butterfly gloved pucks 5 cm under the
+# crossbar exactly as well as a standing one — measured, with the same hand
+# distribution (tests/unit/ai/test_goalie_butterfly_tradeoff.gd). That made the
+# butterfly a strict upgrade (it also adds lateral width via the splay), so
+# committing to the seal was never a trade, and the whole block-vs-react model
+# had nothing to balance.
+#
+# Real goaltending's trade is "seal the ice, concede the top". Here it falls out
+# of the chest anchor each pose already authors: READY sits at 1.06 and the
+# butterfly at 0.40, so the same arm reaches 0.66 m lower from the ice.
+#
+# `arm_reach_above_chest` is DERIVED, not chosen — 1.06 + 0.49 = 1.55, the old
+# flat ceiling, so upright reach is unchanged by construction and only the down
+# postures lose anything. The absolute cap stays as a hard limit on top.
+func _reachable_hand_y(intercept_y: float, c: GoalieBodyConfig) -> float:
+	var ceiling: float = minf(react_hand_y_max, c.body_pos.y + arm_reach_above_chest)
+	return clampf(intercept_y, react_hand_y_min, maxf(ceiling, react_hand_y_min))
+
 
 # Glove reach: extend toward impact_local_x, clamped to arm reach; Z extends
 # forward with reach distance (real goalies thrust the glove out to meet the

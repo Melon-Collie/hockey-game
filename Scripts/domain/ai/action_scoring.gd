@@ -509,7 +509,10 @@ static var goalie_arm_deploy_s: float = GOALIE_ARM_DEPLOY_S
 #
 # Values mirror GoalieController's export defaults (cited per field); the two
 # tier-varied depths ride set_goalie_profile like every other synced read.
-static var _depth_cfg_planning: GoalieBehaviorRules.DepthConfig = _build_planning_depth_cfg()
+static var _depth_cfg_planning: GoalieDepthSolver.Constraints = _build_planning_depth_cfg()
+# The tier's challenge ceiling, held separately because the reused Constraints has
+# its `ceiling_radius` overwritten per call by the in-zone gate.
+static var _planning_ceiling: float = 1.75
 static var _rush_cfg_planning: GoalieBehaviorRules.RushRetreatConfig = _build_planning_rush_cfg()
 # Closing speed below which the live keeper keeps his challenge instead of
 # backing in (`rush_min_closing_speed` export default) — a stalled or lateral
@@ -521,17 +524,26 @@ const GOALIE_RUSH_MIN_CLOSING_M_S: float = 1.5
 const GOALIE_DEPTH_MAX_SPEED_M_S: float = 2.2
 
 
-static func _build_planning_depth_cfg() -> GoalieBehaviorRules.DepthConfig:
-	var cfg := GoalieBehaviorRules.DepthConfig.new()
-	cfg.zone_post_z = 2.0             # zone_post_z export default
-	cfg.zone_aggressive_z = 8.0       # zone_aggressive_z
-	cfg.zone_base_z = 12.0            # zone_base_z
-	cfg.zone_conservative_z = 20.0    # zone_conservative_z
-	cfg.depth_aggressive = 1.75       # depth_aggressive (tier-varied)
-	cfg.depth_base = 1.30             # depth_base (tier-varied)
-	cfg.depth_conservative = 0.70     # depth_conservative
-	cfg.depth_defensive = 0.10        # depth_defensive
+# The planner's copy of the live keeper's depth CONSTRAINTS. Reused in place (this
+# is read from the per-tick planning path), and fed to the same
+# GoalieDepthSolver.solve_target the live GoalieController integrates toward — so
+# the planner cannot drift from the keeper it is predicting.
+static func _build_planning_depth_cfg() -> GoalieDepthSolver.Constraints:
+	var cfg := GoalieDepthSolver.Constraints.new()
+	cfg.ceiling_radius = 1.75         # depth_aggressive export default (tier-varied)
+	cfg.floor_radius = 0.10           # depth_defensive
 	return cfg
+
+
+# Resting depth (BPS "C", middle of the paint) held while the play has not entered
+# the zone — `depth_conservative` export default.
+const GOALIE_RESTING_DEPTH_M: float = 0.70
+# Gap the keeper keeps between himself and the threat while challenging —
+# `challenge_standoff` export default. Physical (body depth + stick clearance).
+const GOALIE_CHALLENGE_STANDOFF_M: float = 0.60
+# Depth of the offensive zone; beyond it the play has not entered and the keeper
+# rests instead of challenging (GoalieController._threat_is_in_zone).
+const GOALIE_ZONE_DEPTH_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
 
 
 static func _build_planning_rush_cfg() -> GoalieBehaviorRules.RushRetreatConfig:
@@ -556,8 +568,7 @@ static func set_goalie_profile(profile: GoalieSkillProfile) -> void:
 	goalie_arm_deploy_s = HOLE_BAND_EXT[HOLE_BAND_HIGH] / profile.glove_react_max_speed_mps
 	# Depth chart + backflow anchors — the tier's challenge depth (the live
 	# controller feeds these same two profile fields into its own configs).
-	_depth_cfg_planning.depth_aggressive = profile.depth_aggressive_m
-	_depth_cfg_planning.depth_base = profile.depth_base_m
+	_planning_ceiling = profile.depth_aggressive_m
 	_rush_cfg_planning.depth_engage = profile.depth_aggressive_m
 	_rush_cfg_planning.depth_mid = profile.depth_base_m
 
@@ -602,8 +613,16 @@ static func planned_goalie_depth(
 	var dx: float = puck_pos_at_release.x - attacking_goal.x
 	var dz: float = puck_pos_at_release.z - attacking_goal.z
 	var dist: float = sqrt(dx * dx + dz * dz)
-	var target: float = minf(now_depth, GoalieBehaviorRules.target_depth_for_puck_distance(
-			dist, _depth_cfg_planning))
+	# Same model the live keeper solves — ceiling gated on the play being in-zone,
+	# floored, and bounded by the physical standoff. The caps the planner cannot
+	# see (the lateral tracking cap, the backdoor re-square race) only ever pull
+	# him DEEPER, and the retreat-only `minf` below already means this never
+	# challenges him out, so omitting them stays on the conservative side.
+	var c := _depth_cfg_planning
+	c.ceiling_radius = _planning_ceiling if dist <= GOALIE_ZONE_DEPTH_M \
+			else GOALIE_RESTING_DEPTH_M
+	c.standoff_cap = dist - GOALIE_CHALLENGE_STANDOFF_M
+	var target: float = minf(now_depth, GoalieDepthSolver.solve_target(c))
 	var rate: float = GOALIE_DEPTH_MAX_SPEED_M_S
 	if dist < _rush_cfg_planning.engage_distance \
 			and closing_speed_m_s >= GOALIE_RUSH_MIN_CLOSING_M_S:

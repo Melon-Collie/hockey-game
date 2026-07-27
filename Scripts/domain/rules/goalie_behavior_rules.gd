@@ -134,8 +134,21 @@ static func is_puck_in_defensive_zone(
 	return puck_angle >= deg_to_rad(cfg.rvh_early_angle)
 
 # Buckley-chart target depth given horizontal distance from the goal line.
-# Piecewise-linear interpolation across four zones. Callers smooth toward
-# this target with their own lerp speed.
+# Piecewise-linear interpolation across four zones.
+#
+# ⚠️ NO LONGER THE LIVE GOALIE'S DEPTH MODEL. GoalieController solves depth from
+# the races instead (GoalieDepthSolver): a ceiling, a physical standoff, the
+# lateral tracking cap, the backdoor re-square race and the rush backflow. The
+# Buckley letters are emergent there rather than authored, because the real zones
+# are situational — A is a play ENTERING the zone, B a settled shot, C a live
+# lateral play, D the post — and reproducing them from distance alone put A in the
+# slot and B at the points, inverted (plan doc §5.7).
+#
+# Retained because `tests/unit/ai/shot_sim_harness.gd` still models the goalie
+# this way for its lateral-reach BAND instrument, which the bots' score_shoot is
+# calibrated against. That means the band instrument and the live goalie have
+# DIVERGED for the unconstrained (1v0) case; reconcile before using the band for
+# tuning again.
 static func target_depth_for_puck_distance(puck_z_dist: float, cfg: DepthConfig) -> float:
 	var t: float
 	if puck_z_dist <= cfg.zone_post_z:
@@ -521,52 +534,6 @@ static func puck_resting_on_goalie(
 	return dx * dx + dz * dz <= body_radius * body_radius
 
 
-# ── Net-front jam (seal the ice) ─────────────────────────────────────────────
-# Should the goalie drop to butterfly to SEAL a net-front scramble? A doorstep
-# jam is a BATTLE — a loose puck with an opponent on it, or a slow opposing
-# carrier with a defender's stick in the fight — sealed low so pucks don't go
-# through the STANDING 5-hole during the chaos (Hockey Canada: a puck within
-# ~2 stick lengths in a battle gets the blocking butterfly). A jam always has
-# two parties; that's what separates it from the two controlled-possession
-# cases coaches teach staying up against: a carrier ATTACKING with speed
-# (above `carrier_max_speed` — force the release), and an UNCONTESTED slow
-# carrier in tight — the penalty-shot-style 1v1, where the goalie stays up,
-# stays patient, and makes the shooter commit first (the deke-breaks-wide
-# race and the release reaction own the commit; carrier speed alone can't
-# tell a dangler choosing to be slow from a carrier pinned in a scrum).
-#
-# `nearest_contestant_dist_to_puck` is the other party of the would-be battle:
-# for a loose puck, the nearest OPPOSING skater (someone to whack it); for an
-# opposing carrier, the nearest DEFENDING skater (someone fighting him for
-# it). INF means nobody is contesting.
-class CreaseJamConfig:
-	var puck_distance: float = 2.0       # m — puck-to-goalie threshold
-	var opponent_distance: float = 1.5   # m — contestant-to-puck battle range
-	var carrier_max_speed: float = 3.0   # m/s — above this a carrier is attacking, not jamming
-
-static func is_crease_jam(
-		puck_position: Vector3,
-		goalie_position: Vector3,
-		goal_line_z: float,
-		direction_sign: int,
-		has_opposing_carrier: bool,
-		carrier_speed: float,
-		nearest_contestant_dist_to_puck: float,
-		cfg: CreaseJamConfig) -> bool:
-	# In front of the goal line only — behind-net plays are RVH's job.
-	if (puck_position.z - goal_line_z) * direction_sign <= 0.0:
-		return false
-	if goalie_position.distance_to(puck_position) > cfg.puck_distance:
-		return false
-	if has_opposing_carrier:
-		# A slow carrier is only a jam when a defender is IN the battle. Slow
-		# and uncontested is the 1v1 dangler → stay up, force the first move.
-		return carrier_speed <= cfg.carrier_max_speed \
-				and nearest_contestant_dist_to_puck <= cfg.opponent_distance
-	# Loose puck — needs an opponent close enough to whack it for it to be a jam.
-	return nearest_contestant_dist_to_puck <= cfg.opponent_distance
-
-
 # ── Screen occlusion (grounded sightline model) ──────────────────────────────
 # A body between the shooter and the goalie hides the puck: the goalie can't start
 # their read until they SEE the puck leave the shadow of the screener. This returns
@@ -823,6 +790,35 @@ static func rush_retreat_rate(
 	return absf(slope) * closing_speed
 
 
+# ── Lateral tracking cap (the deke / walkout answer) ────────────────────────
+# The deepest challenge radius from which the goalie can still STAY SQUARE to a
+# carrier moving the puck laterally — the anticipatory answer to "how far out dare
+# I come against someone who can take it around me?"
+#
+# This is a RATE constraint, not a race, and that distinction is the whole model.
+# A pass is a discrete event: it happens, then the goalie reacts, so the backdoor
+# cap prices it as react-delay + travel (see backdoor_depth_cap). A deke or walkout
+# is CONTINUOUS — the goalie tracks it the whole way — so there is no reaction
+# delay to pay, only the question of whether he can turn as fast as the puck.
+#
+# Geometry: staying square to a threat `d` away moving laterally at `v` means
+# holding an angular rate of v/d. At challenge radius r that costs a linear
+# push of r·v/d, so the constraint is
+#     r · v / d  <=  push_speed        =>     r <= push_speed · d / v
+# which says exactly what it should: the closer the carrier and the faster he moves
+# it across, the less depth you can afford. Coming out is a bet that he shoots
+# rather than moves — and this is the price of that bet.
+#
+# Returns INF when nothing binds (a stationary or slow carrier). Replaces the old
+# `pull-per-m/s-of-deficit` curve, which was a shape parameter standing in for this.
+static func lateral_tracking_cap(
+		threat_dist: float, lateral_speed: float, push_speed: float) -> float:
+	var v: float = absf(lateral_speed)
+	if v < 0.001 or threat_dist <= 0.0 or push_speed <= 0.0:
+		return INF
+	return push_speed * threat_dist / v
+
+
 # ── Cross-crease save-selection fork ─────────────────────────────────────────
 # Real save selection on a cross-crease pass is a time race (audit F3): stay on
 # your FEET when the push can arrive set before the one-timer; go PADS-FIRST
@@ -946,8 +942,16 @@ static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: Mo
 #     residual gap is the openness alone (≈ 0 set, up to ~0.36 mid-slide).
 # `openness` is GoalieNetworkState.five_hole_openness; `is_down` is its
 # is_down() stance family.
-const PAD_BOX_WIDTH_M: float = 0.28
+# Aliases onto GoalieAnatomy, which owns the goalie's dimensions. STANDING pad
+# CENTRE is inboard of the butterfly offset: upright, the pads sit tucked under
+# him; the butterfly is what splays them out to PAD_LOCAL_OFFSET_M.
+const PAD_BOX_WIDTH_M: float = GoalieAnatomy.PAD_BOX_WIDTH_M
 const STANDING_PAD_CENTER_X_M: float = 0.22
+
+# Stick geometry, aim and cover now live in GoalieStickRules — the blade is a
+# body part with its own model, not a footnote on the pads. See that file for
+# why (it was absent from the planning model entirely) and for the measured
+# standing reach the pad column above does NOT account for.
 
 static func five_hole_gap_m(is_down: bool, openness: float) -> float:
 	var op: float = maxf(openness, 0.0)

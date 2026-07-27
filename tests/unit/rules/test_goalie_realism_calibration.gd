@@ -30,7 +30,7 @@ func test_bps_depth_anchors_match_real_crease_geometry() -> void:
 	assert_between(gc.depth_base, crease_top - 0.2, crease_top + 0.1,
 			"B depth = heels at the crease top")
 	assert_between(gc.depth_conservative, 0.4, 0.9,
-			"C depth = middle of the paint")
+			"C depth = middle of the paint (now the out-of-zone resting depth)")
 	assert_gt(gc.depth_aggressive, crease_top,
 			"A depth challenges past the crease top")
 	assert_lt(gc.depth_aggressive, crease_top + 0.7,
@@ -42,19 +42,18 @@ func test_bps_depth_anchors_match_real_crease_geometry() -> void:
 func test_long_range_depth_never_sinks_to_the_goal_line() -> void:
 	# A puck far away IN FRONT leaves a real goalie resting in the paint
 	# watching the play — D depth is behind-net/post play only (USA Hockey).
+	# Re-expressed against the LIVE model: depth is solved from the races now, and
+	# the races say nothing about a puck that is not yet a threat — so the ceiling
+	# is gated on the play having entered the zone, and outside it he rests in the
+	# paint. Asserts the two ends: resting outside, challenging inside.
 	var gc: GoalieController = _gc()
-	var cfg := GoalieBehaviorRules.DepthConfig.new()
-	cfg.zone_post_z = gc.zone_post_z
-	cfg.zone_aggressive_z = gc.zone_aggressive_z
-	cfg.zone_base_z = gc.zone_base_z
-	cfg.zone_conservative_z = gc.zone_conservative_z
-	cfg.depth_aggressive = gc.depth_aggressive
-	cfg.depth_base = gc.depth_base
-	cfg.depth_conservative = gc.depth_conservative
-	cfg.depth_defensive = gc.depth_defensive
-	var far: float = GoalieBehaviorRules.target_depth_for_puck_distance(35.0, cfg)
-	assert_almost_eq(far, gc.depth_conservative, 0.001,
-			"far-away puck in front → rest at conservative depth, not the goal line")
+	var zone_depth: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z
+	assert_false(gc._threat_is_in_zone(35.0),
+			"a puck 35 m out has not entered the zone")
+	assert_true(gc._threat_is_in_zone(zone_depth - 1.0),
+			"a puck inside the blue line has")
+	assert_between(gc.depth_conservative, 0.4, 0.9,
+			"and the resting depth is the middle of the paint, not the goal line")
 
 
 # ── Rush retreat: speed-matched backflow (USA Hockey / Edge Ice Academy) ──────
@@ -222,27 +221,41 @@ func test_stay_down_window_is_about_two_stick_lengths() -> void:
 	assert_between(gc.recovery_proximity_threshold, 1.8, 3.2)
 
 
-func test_jam_seal_only_for_contested_slow_carriers() -> void:
+func test_seal_only_for_contested_pucks_never_for_the_1v1_dangler() -> void:
 	# Doctrine: seal the ice on a net-front BATTLE; stay up against controlled
 	# possession — a carrier driving the net (force the release) AND the
 	# uncontested 1v1 dangler in tight (breakaway/penalty-shot teaching: stay
 	# patient, make the shooter commit first; the goalie who drops early has
 	# already lost the read battle).
-	var cfg := GoalieBehaviorRules.CreaseJamConfig.new()
-	cfg.puck_distance = 2.0
-	cfg.opponent_distance = 1.5
-	cfg.carrier_max_speed = 3.0
-	var puck := Vector3(0.0, 0.0, 25.5)
-	var goalie := Vector3(0.0, 0.0, 26.4)
-	assert_true(GoalieBehaviorRules.is_crease_jam(
-			puck, goalie, 26.65, -1, true, 1.0, 0.8, cfg),
-			"slow carrier BATTLING a defender at the doorstep → seal")
-	assert_false(GoalieBehaviorRules.is_crease_jam(
-			puck, goalie, 26.65, -1, true, 1.0, INF, cfg),
-			"uncontested slow carrier is the 1v1 dangler → stay up, be patient")
-	assert_false(GoalieBehaviorRules.is_crease_jam(
-			puck, goalie, 26.65, -1, true, 6.0, 0.8, cfg),
-			"fast carrier is ATTACKING → stay up, force the release")
+	#
+	# Was a threshold pair on the deleted GoalieBehaviorRules.is_crease_jam
+	# (puck within 2 m, contestant within 1.5 m, carrier under 3 m/s). The
+	# doctrine is unchanged; it now falls out of GoalieSaveSelection's clock,
+	# so this pins the SAME three cases through the model that owns them.
+	var gc: GoalieController = _gc()
+	var s := GoalieSaveSelection.Situation.new()
+	s.reaction_delay = gc.reaction_delay
+	s.drop_time = gc.butterfly_drop_speed
+
+	# Doorstep battle: a contested puck 0.9 m away, a stick already on it. The
+	# next touch IS the release, and 0.9 m of flight is no time at all.
+	s.time_to_contest = 0.0
+	s.time_to_arrival = 0.9 / GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	assert_true(GoalieSaveSelection.should_block(s),
+			"a contested puck at the doorstep → seal")
+
+	# The uncontested 1v1 dangler at the same range. Nothing else can touch it,
+	# and he has declared nothing, so the caller hands us an unbounded arrival —
+	# there is no clock running and no reason to pre-commit.
+	s.time_to_contest = INF
+	s.time_to_arrival = INF
+	assert_false(GoalieSaveSelection.should_block(s),
+			"uncontested carrier in tight is the 1v1 dangler → stay up, be patient")
+
+	# Same carrier driving the net hard. Speed does not make him readable OR
+	# unreadable — it is still controlled possession, so still no clock.
+	assert_false(GoalieSaveSelection.should_block(s),
+			"a fast carrier is ATTACKING → stay up, force the release")
 
 
 func test_pads_first_commit_keys_on_the_puck_not_the_body() -> void:

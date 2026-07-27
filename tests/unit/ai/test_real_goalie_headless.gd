@@ -27,13 +27,22 @@ const GOAL_Z: float = -GameRules.GOAL_LINE_Z   # goalie defends the -Z net
 var _goalie: Node = null
 var _puck: Node = null
 var _ctrl: GoalieController = null
+# A REAL Skater for the goalie's world view. This used to be a bare Vector3 in
+# the skater getter, which the view's typed scan cannot consume — so the view
+# stayed empty and every read that needs other bodies (screens, the backdoor cap,
+# contest pressure) silently saw nobody.
+var _shooter: Skater = null
 
 
 func before_each() -> void:
 	_goalie = load("res://Scenes/Goalie.tscn").instantiate()
 	_puck = load("res://Scenes/Puck.tscn").instantiate()
+	_shooter = load("res://Scenes/Skater.tscn").instantiate() as Skater
 	add_child_autofree(_goalie)
 	add_child_autofree(_puck)
+	add_child_autofree(_shooter)
+	_shooter.set_physics_process(false)
+	_shooter.set_process(false)
 	_ctrl = GoalieController.new()
 	add_child_autofree(_ctrl)
 
@@ -43,6 +52,7 @@ func _tick_with_puck_at(puck_pos: Vector3, ticks: int) -> Vector3:
 	# controller; return the goalie's resulting world position.
 	for _i: int in ticks:
 		_puck.global_position = puck_pos
+		_shooter.global_position = puck_pos
 		_ctrl._physics_process(1.0 / 120.0)
 	return _goalie.global_position
 
@@ -52,7 +62,8 @@ func test_real_goalie_ticks_and_challenges() -> void:
 	# (challenge) toward it rather than sit on the goal line.
 	var shooter := Vector3(0.0, 0.0, GOAL_Z + 7.0)
 	_puck.global_position = shooter
-	_ctrl.set_skater_getter(func() -> Array: return [shooter])
+	_shooter.global_position = shooter
+	_ctrl.set_skater_getter(func() -> Array: return [_shooter])
 	_ctrl.setup(_goalie, _puck, GOAL_Z, true)
 
 	var settled: Vector3 = _tick_with_puck_at(shooter, 240)   # 2 s to settle
@@ -75,8 +86,7 @@ func test_carrier_shoots_more_against_a_challenging_goalie() -> void:
 	agent.setup(1, 0, brain, team_map, false)
 	agent.apply_profile(BotSkillProfile.hard())
 	# Real challenging goalie in the -Z net, fed the carrier as its threat.
-	var carrier_ref := {"pos": Vector3.ZERO}
-	_ctrl.set_skater_getter(func() -> Array: return [carrier_ref["pos"]])
+	_ctrl.set_skater_getter(func() -> Array: return [_shooter])
 	_puck.global_position = Vector3(0.0, 0.0, GOAL_Z + 6.0)
 	_ctrl.setup(_goalie, _puck, GOAL_Z, true)
 
@@ -91,7 +101,8 @@ func test_carrier_shoots_more_against_a_challenging_goalie() -> void:
 	var goalie_at: Vector3 = Vector3.ZERO
 	for t: int in int(1.4 / DT):
 		pos += vel * DT
-		carrier_ref["pos"] = pos
+		_shooter.global_position = pos
+		_shooter.velocity = vel
 		_puck.global_position = pos
 		_ctrl._physics_process(DT)
 		var g: Vector3 = _goalie.global_position

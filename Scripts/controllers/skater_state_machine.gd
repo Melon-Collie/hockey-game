@@ -23,6 +23,29 @@ static func state_has_puck(state: int) -> bool:
 			or state == State.WRISTER_AIM \
 			or state == State.SLAPPER_CHARGE_WITH_PUCK
 
+# States in which the puck is RIGIDLY PINNED to the carrier's body rather than
+# riding a live, sweeping blade — the two shot wind-ups. WRISTER_AIM freezes the
+# blade at its body-local pose (SkaterIKCoordinator.apply_blade_from_mouse under
+# hold_blade, which also carries the smoothed blade along with skater
+# translation); SLAPPER_CHARGE_WITH_PUCK pins to a fixed skater-local offset
+# (Skater.enter_slapshot_pinning). Either way there is NO independent puck motion
+# left: the puck's world velocity IS the carrier's, and a position-derived puck
+# velocity estimate double-counts the body if it's added on top of a carrier lead.
+#
+# Distinct from state_has_puck (which includes ordinary carry, where the blade
+# genuinely dangles independently of the body — the motion the puck lead exists
+# to catch). Consumed by the goalie's threat tracking; pure/static so it reads
+# identically from a replicated shot_state with no live carrier reference.
+#
+# NOTE this says nothing about the carrier's MOBILITY, which differs sharply
+# between the two: the slapper suppresses locomotion and actively drags velocity
+# to zero (a plant), while the wrister suppresses nothing and stays fully
+# steerable. Reads that depend on the shooter being planted must test for that
+# separately — see GoalieController._reading_planted_windup.
+static func state_pins_puck(state: int) -> bool:
+	return state == State.WRISTER_AIM \
+			or state == State.SLAPPER_CHARGE_WITH_PUCK
+
 # Controller operations injected at setup. All methods that need @export params
 # or actor/puck references stay on SkaterController and are wired as Callables
 # so the state machine only owns transition logic.

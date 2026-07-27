@@ -155,6 +155,100 @@ func test_resolve_contact_stick_is_always_a_live_redirect() -> void:
 			"redirects at STICK_RESTITUTION (0.4)")
 
 
+# ── Presented face: he has to be FACING it to absorb it (#556) ───────────────
+# `contact_normal` points outward from his surface toward the puck, so a normal
+# aligned with his facing was struck on the front and one opposed to it on the
+# back. FACING, not the net — a goalie tracking a wraparound is turned, and the
+# surface nearest his own goal can be the one his chest is pointed at.
+# Local -Z is forward for the rig, so a goalie facing up-ice at the -Z net has
+# world forward +z.
+
+const FACING_UPICE := Vector3(0, 0, 1)
+
+
+func test_a_shot_into_his_back_does_not_deaden() -> void:
+	# The reported bug. The torso classifies as CHEST from any direction, so a
+	# puck onto his back used to be absorbed dead — stopping on his spine instead
+	# of caroming. He never saw it; it is not a save he made.
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, 12.0), GoalieSaveRules.SavePart.CHEST,
+			Vector3(0, 0, -1), 0.0, 1, _cfg(), res, FACING_UPICE)
+	assert_false(res.deadened, "a puck off his back is a carom, not a chest save")
+	assert_false(res.caught)
+	assert_gt(res.velocity.length(), 1.0, "and it keeps real pace, rather than dying")
+
+
+func test_a_shot_into_his_chest_still_deadens() -> void:
+	# The guard on the above: the real chest absorb must survive untouched.
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, -30.0), GoalieSaveRules.SavePart.CHEST,
+			Vector3(0, 0, 1), 0.0, 1, _cfg(), res, FACING_UPICE)
+	assert_true(res.deadened, "front-on chest contact absorbs, as it always did")
+
+
+func test_a_glove_struck_from_behind_is_not_a_catch() -> void:
+	# A catch freezes the play, so a back-side glove contact granting one is the
+	# most expensive version of this bug.
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, 15.0), GoalieSaveRules.SavePart.GLOVE,
+			Vector3(0, 0, -1), 1.0, 1, _cfg(), res, FACING_UPICE)
+	assert_false(res.caught, "he cannot catch what he is not facing")
+	assert_false(res.deadened)
+
+
+func test_a_pad_struck_from_behind_is_not_steered_out() -> void:
+	# The pad steer fires the puck cornerward with an out-of-crease bias off
+	# `direction_sign` alone, so a back-struck pad used to invent a save out of
+	# geometry — pushing the puck away from the net whichever way it was going.
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, 8.0), GoalieSaveRules.SavePart.PAD,
+			Vector3(0, 0, -1), 1.0, 1, _cfg(), res, FACING_UPICE)
+	assert_false(res.deadened, "no cornerward steer off the back of a pad")
+	assert_almost_eq(res.velocity.length(), 8.0 * GoalieSaveRules.PAD_RESTITUTION,
+			0.01, "it reflects at PAD_RESTITUTION like any other live carom")
+
+
+func test_a_turned_goalie_absorbs_what_he_is_looking_at() -> void:
+	# The case that made "facing" the right test rather than "play side". He has
+	# rotated to play a puck behind his net, so his chest points at his own goal
+	# line. A puck into that chest is a real smother even though the normal points
+	# the "wrong" way relative to the rink.
+	var facing_own_goal := Vector3(0, 0, -1)
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, 20.0), GoalieSaveRules.SavePart.CHEST,
+			Vector3(0, 0, -1), 0.0, 1, _cfg(), res, facing_own_goal)
+	assert_true(res.deadened, "turned toward it, that IS his chest")
+	# ...and the same contact with him facing up-ice is his back.
+	var res2 := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, 20.0), GoalieSaveRules.SavePart.CHEST,
+			Vector3(0, 0, -1), 0.0, 1, _cfg(), res2, FACING_UPICE)
+	assert_false(res2.deadened, "same contact, turned away — a carom")
+
+
+func test_a_side_on_contact_is_not_a_controlled_save() -> void:
+	# Exactly perpendicular to his facing — his shoulder. You cannot smother with
+	# a shoulder.
+	var res := GoalieSaveRules.ContactResult.new()
+	GoalieSaveRules.resolve_contact(
+			Vector3(-20.0, 0.0, 0.0), GoalieSaveRules.SavePart.CHEST,
+			Vector3(1, 0, 0), 1.0, 1, _cfg(), res, FACING_UPICE)
+	assert_false(res.deadened, "side-on is a carom")
+
+
+func test_no_facing_supplied_keeps_the_old_behaviour() -> void:
+	# The parameter defaults to zero for callers that have no facing to offer, and
+	# a zero facing must not silently disable every controlled save.
+	assert_true(GoalieSaveRules.is_face_presented(Vector3(0, 0, -1), Vector3.ZERO))
+	assert_true(GoalieSaveRules.is_face_presented(Vector3(0, 0, 1), FACING_UPICE))
+	assert_false(GoalieSaveRules.is_face_presented(Vector3(0, 0, -1), FACING_UPICE))
+
+
 func test_resolve_contact_live_glance_keeps_tangential_pace() -> void:
 	# A hard puck glancing off the pad at an angle keeps its along-face pace (a live rebound
 	# to the corner, not a dead stop).
