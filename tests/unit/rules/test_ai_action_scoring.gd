@@ -205,10 +205,10 @@ func test_shoot_score_negligible_at_moderate_angle_vs_squared_goalie() -> void:
 	# the challenge arc toward them, 0.6 m out) — how a real goalie plays it.
 	# From the angle the net foreshortens and the squared body-depth covers the
 	# cross-net lane. With the reach budget run to the goalie's BODY a thin
-	# residual sliver survives, but it stays under the carrier's fire floor
-	# (FIRE_MIN_VALUE 0.02) — still a shot no bot takes. A deep-holding goalie
-	# concedes a real low look to the CENTER shooter — the keeper's depth, not
-	# the shooter's range, buys openings.
+	# residual sliver survives. A deep-holding goalie concedes a real low look
+	# to the CENTER shooter — the keeper's depth, not the shooter's range, buys
+	# openings. (No cross-reference to the carrier's fire floor: that gate is
+	# denominated in the SEAM's currency, and these are hole-model scores.)
 	var shooter := Vector3(5.0, 0.0, 23.65)
 	var goalie_angle := Vector3(0.86, 0.0, 26.34)   # squared to the 59° shooter
 	var center := Vector3(0.0, 0.0, 21.0)
@@ -2126,8 +2126,8 @@ func test_aim_spread_pulls_a_degenerate_corner_aim_off_the_post() -> void:
 # body around the sightline; they pass it through `screeners` (the shooter's
 # own traffic) so lane/pressure stay constant and the sightline effect is
 # isolated. Magnitudes probed on the calibrated model: clean ≈ 0.002,
-# net-front screened ≈ 0.078 (~real screened-point-shot xG), which straddles
-# the carrier's FIRE_MIN_VALUE (0.02) — exactly the behavior flip the model
+# net-front screened ≈ 0.078 (~real screened-point-shot xG) — a fortyfold
+# swing on the one thing that changed, which is the behavior flip the model
 # exists to produce.
 func _screened_point_shot(screeners: Array[Vector3]) -> float:
 	var shooter := Vector3(0.0, 0.0, 10.0)   # 16.65 m out — the point

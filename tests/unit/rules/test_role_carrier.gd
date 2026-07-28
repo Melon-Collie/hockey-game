@@ -622,7 +622,7 @@ func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void
 	# The control needs a scene worth something to control FOR. It used to place
 	# the in-zone mate at (6, 0, -14) — level with the carrier, off the same dead
 	# lane, with no goalie in the snapshot at all — and passed on a pass score of
-	# 0.00004, four orders of magnitude under FIRE_MIN_VALUE. That is numerical
+	# 0.00004, four orders of magnitude under PASS_MIN_VALUE. That is numerical
 	# dust, not a legal pass target: any downstream change of a few percent
 	# flipped its sign. A real keeper and a mate in real scoring ice give the
 	# assertion something to measure.
@@ -639,7 +639,7 @@ func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void
 	ctx_in.snapshot.goalie_states[1 - TEAM_ID] = g
 	var c2 := AIRoleCarrier.new()
 	c2.decide(ctx_in)
-	assert_gt(c2.debug_pass_score, AIRoleCarrier.FIRE_MIN_VALUE,
+	assert_gt(c2.debug_pass_score, AIRoleCarrier.PASS_MIN_VALUE,
 			"an in-zone teammate in scoring ice IS a legal pass target, worth firing")
 
 
@@ -955,7 +955,7 @@ func test_release_sampling_finds_the_backhand_tuck_beside_the_net() -> void:
 			"…moving the release out in front of the crease")
 	assert_lt(c._shot_sample_speed, ctx.self_wrister_shot_speed - 0.01,
 			"…priced at the backhand's penalized pace")
-	assert_gt(c.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE,
+	assert_gt(c.debug_shoot_score, AIRoleCarrier.SHOT_MIN_VALUE,
 			"…and it turns a nothing angle into a committable look; got %f"
 			% c.debug_shoot_score)
 

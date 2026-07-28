@@ -37,13 +37,32 @@ const INTENT_PASS: int = 3
 # maps it onto a PASS_PRESSED release aimed at `dump_target`.
 const INTENT_DUMP: int = 5
 
-# Least fire value (shot/pass EV) worth giving up possession for — the noise floor
-# below which "firing" is really a giveaway, so the bot keeps the puck instead.
-# A tactical floor, not an evaluation curve: the fit insets zero most hopeless
-# looks outright now, but tiny residuals still survive some geometries (a deep
-# keeper at extreme range, an off-centre sliver, a thin five-hole leak) and none
-# of them are worth the puck. A real in-range shot scores far above it.
-const FIRE_MIN_VALUE: float = 0.02
+# ── Giveaway floors: least value worth releasing the puck for ────────────────
+# Tactical floors, not evaluation curves. Both are DENOMINATED IN THE SEAM'S
+# CURRENCY (AIShotValue → XGBaseline): an honest NHL-calibrated goal
+# probability, where a clean mid-slot look is ~0.12 and no real spot reaches
+# 0.5. They are scale-bound to that model and move if it does — neither is
+# transferable to the hole-geometry score, which saturates at 1.0 and would
+# read these as a twentieth as strict.
+#
+# There are TWO because a shot and a pass forfeit different things.
+#
+# A SHOT hands the puck to the other team unless it goes in, so what it must
+# out-value is the possession itself. Read the number through the baseline to
+# see what it bans: a clear-lane shot straight on reaches 0.05 at about 14 m,
+# so this is "nothing from beyond the top of the circles unless traffic, a
+# screen, or a displaced keeper lifts it". Both halves matter — the distance
+# bound stops a CONTAINED carrier trading the puck for a point shot instead of
+# working it, and the lift keeps a genuine point blast through a screen legal.
+const SHOT_MIN_VALUE: float = 0.05
+# A PASS that connects KEEPS possession — it changes whose stick, not whose
+# team — and the odds of it not connecting are already priced by the lane term
+# inside the pass score. So the possession is not what a pass is spending, and
+# holding a pass to the shot's bar would veto every breakout and regroup feed
+# (a receiver at centre ice is worth ~0.017 as a shooter and is still the right
+# play). This bar only rejects a release into nothing: a numerical residual on
+# a dead lane, never a real outlet.
+const PASS_MIN_VALUE: float = 0.02
 
 # Minimum forward distance (m) the PUCK must sit in front of the goal-line plane
 # for a direct shot to be scored at all — below it (on/behind the line, or right
@@ -107,9 +126,9 @@ static func _usable_release_offset(reach: float) -> float:
 # tactical ORDER (legitimately hand-set, like the blue-line valve), not an
 # evaluation curve. A bias rather than a hard force on purpose: the grounded
 # models still veto a hopeless order (a SHOOT ping never fires a zero-value
-# look from behind the net, PASS_TO_ME never threads a dead lane — the
-# FIRE_MIN_VALUE giveaway floor still applies), but any remotely reasonable
-# read now wins the compete, so the bot visibly obeys.
+# look from behind the net, PASS_TO_ME never threads a dead lane — the giveaway
+# floors still apply), but any remotely reasonable read now wins the compete, so
+# the bot visibly obeys.
 const PING_SHOOT_EV_MULT: float = 3.0
 const PING_PASS_EV_MULT: float = 3.0
 
@@ -1352,15 +1371,18 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	var best_shot_score: float = shoot_score
 	var best_shot_intent: int = INTENT_SHOOT
 
-	# Best fire option. No noise-floor threshold against CARRY — a weak
-	# fire loses to any stronger carry candidate on its own (and
-	# stand-still's shot branch is the shoot-now score itself, so the
-	# hold never under-prices the shot it protects). The one hard floor
-	# is the positive-value gate in the fire-vs-carry compete below: a
-	# ZERO fire can't win, so the puck is never given away for nothing.
-	var fire_score: float = best_shot_score
+	# Best fire option — the best of those that clear their OWN giveaway bar
+	# (SHOT_MIN_VALUE / PASS_MIN_VALUE). Qualifying each option before the max
+	# rather than after it is what keeps the two bars independent: taking the
+	# max first would let a mediocre shot mask a perfectly legal outlet pass and
+	# veto the whole fire leg, so raising the shot's bar would silently suppress
+	# passing too. Nothing qualifying leaves fire at -INF, which loses every
+	# compete below — the puck is never given away for nothing.
+	var fire_score: float = -INF
 	var fire_intent: int = best_shot_intent
-	if best_pass_score > fire_score:
+	if best_shot_score > SHOT_MIN_VALUE:
+		fire_score = best_shot_score
+	if best_pass_score > PASS_MIN_VALUE and best_pass_score > fire_score:
 		fire_score = best_pass_score
 		fire_intent = INTENT_PASS
 
@@ -1370,15 +1392,16 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# candidate has a STRICTLY better future-action value, i.e. there is a real
 	# reason to keep moving instead of firing now.
 	#
-	# EXCEPT: fire must clear a NOISE FLOOR to win. Firing surrenders the puck (shot
-	# up-ice, or a pass); holding/carrying retains it and its optionality. So a
-	# near-worthless fire must not beat a collapsing hold — a carrier swarmed deep in
+	# EXCEPT: fire must clear the GIVEAWAY FLOOR to win. Firing surrenders the puck
+	# (shot up-ice, or a pass); holding/carrying retains it and its optionality. So a
+	# low-value fire must not beat a collapsing hold — a carrier swarmed deep in
 	# its own zone (pass = 0, all lanes covered, carry collapsing toward 0) must skate
-	# clear, not fling a hopeless shot away. A bare `> 0` is not enough of a gate:
-	# the clean-entry fit zeroes most hopeless looks, but tiny residuals survive some
-	# geometries (deep keeper at extreme range, off-centre slivers). FIRE_MIN_VALUE is
-	# the least shot value worth giving up possession for; a real in-range shot scores
-	# well above it and still wins ties.
+	# clear, not fling a hopeless shot away, and a CONTAINED one must work the puck
+	# rather than trade it for a point shot. A bare `> 0` is nowhere near enough: on
+	# the seam's NHL-calibrated scale a long clear-lane look still scores a real few
+	# percent, which beats a contained carry's own honest value. SHOT_MIN_VALUE is
+	# what a possession is worth, PASS_MIN_VALUE only rejects a release into
+	# nothing; a genuine in-range shot scores well above its bar and still wins ties.
 	#
 	# ALSO: don't START a fire while staggered. A body check knocks the
 	# bot off-balance (thrust penalty on stagger_timer); winding up a
@@ -1450,10 +1473,12 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	var retention_hopeless: bool = dump_score > raw_carry_score
 	# Fire if it beats retention (carrying + holding for the developing play) —
 	# or, when retention is hopeless anyway, if it beats the dump about to
-	# happen (the hold gate drops there too: holding IS retention).
+	# happen (the hold gate drops there too: holding IS retention). The giveaway
+	# bar was already applied when fire_intent was picked, so an unqualified
+	# fire arrives here as -INF and loses both branches.
 	if ((fire_score >= carry_score and fire_score >= hold_value)
 			or (retention_hopeless and fire_score >= dump_score)) \
-			and fire_score > FIRE_MIN_VALUE and not staggered and not fire_settle_blocked:
+			and not staggered and not fire_settle_blocked:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:

@@ -18,7 +18,12 @@ extends GutTest
 # (the lane/pressure terms are audited elsewhere) — pure keeper-vs-shooter.
 
 const NET := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
-const FIRE_FLOOR: float = 0.02   # AIRoleCarrier.FIRE_MIN_VALUE — the commit gate
+# "Committable" bar for THIS audit's hole-geometry scores. Deliberately NOT
+# AIRoleCarrier.SHOT_MIN_VALUE: that gate is denominated in the seam's
+# NHL-calibrated currency and this file scores with AIActionScoring.score_shoot,
+# which saturates at 1.0 — the two numbers are not comparable and coupling them
+# would make this tripwire move whenever the carrier's tactics are retuned.
+const FIRE_FLOOR: float = 0.02
 
 var _shooters: Array[Vector3] = []
 
