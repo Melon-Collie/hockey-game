@@ -1298,8 +1298,15 @@ func test_decide_re_evaluates_after_cooldown_expires() -> void:
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, -22.0))
 
 	c.decide(ctx)  # tick 0: runs _pick_action (first eval = single-call)
-	# Drain the cooldown.
-	for i in range(AIRoleCarrier.PICK_ACTION_PERIOD_TICKS):
+	# Drain the cooldown the code actually ARMS, not the nominal period. This
+	# fixture is an empty rink and the compete resolves to CARRY, which is the
+	# open-ice LOD case in _arm_pick_cooldown: with no opponent inside
+	# OPEN_ICE_LOD_RADIUS_M and the argmax answering CARRY, the re-eval is
+	# re-armed at a third of the rate. Draining only the nominal period leaves
+	# the carrier still in cooldown and the flip below survives — which reads
+	# as "the re-eval never ran" when the truth is "it was not due yet".
+	for i in range(AIRoleCarrier.PICK_ACTION_PERIOD_TICKS
+			* AIRoleCarrier.OPEN_ICE_LOD_PERIOD_MULT):
 		c.decide(ctx)
 	# Force-flip and run the sliced re-eval to its commit: fire phase on the
 	# first call, carry + commit (which overwrites our flip) on the second.
