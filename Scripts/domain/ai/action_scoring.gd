@@ -4515,6 +4515,37 @@ static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
 	return mid if c_mid <= c_end else to
 
 
+
+# How far along `bearing` this body can actually get within `horizon_s`.
+#
+# From the double-integrator reachable set: with bounded acceleration, the
+# positions reachable at time T form a disc centred on the MOMENTUM-PROJECTED
+# point (pos + v*T) with radius 0.5*a*T^2 — the deviation the thrust can buy
+# off the ballistic path. Intersecting the bearing ray with that disc gives the
+# farthest point in that direction which is a real destination rather than a
+# wish.
+#
+# Returns a NEGATIVE value when the ray misses the disc entirely: at that speed
+# the direction is simply not available. That is the formal statement of
+# "travelling quickly forward, the only place you can go is forward", and it
+# falls out of the geometry rather than being asserted — at a standstill the
+# disc is centred on the body and every bearing reaches 0.5*a*T^2, while at
+# pace the centre slides downrange until the rearward and then the lateral
+# bearings fall outside it altogether.
+static func beat_reach_along(velocity: Vector3, bearing_x: float,
+		bearing_z: float, accel_m_s2: float, horizon_s: float) -> float:
+	var cx: float = velocity.x * horizon_s
+	var cz: float = velocity.z * horizon_s
+	var r: float = 0.5 * accel_m_s2 * horizon_s * horizon_s
+	# Split the momentum offset into along-bearing and perpendicular parts; the
+	# perpendicular part is what can push the ray clear of the disc.
+	var along: float = bearing_x * cx + bearing_z * cz
+	var perp_sq: float = maxf(0.0, cx * cx + cz * cz - along * along)
+	var disc: float = r * r - perp_sq
+	if disc <= 0.0:
+		return -1.0
+	return along + sqrt(disc)
+
 # ── Controlled space: how much room a carrier has to OPERATE ─────────────────
 # "How much space do I have" as a measured quantity rather than a corridor test.
 #

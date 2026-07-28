@@ -159,7 +159,7 @@ func test_evaluator_costs() -> void:
 		open_carrier._compute_best_pass(open_ctx, Vector2(0, -1),
 				open_carrier._scratch_teammate_ids))
 	_bench("open ice: best carry (candidates)", func() -> void:
-		open_carrier._best_carry(open_ctx, 0.1, open_ctx.self_pos, 0.9))
+		open_carrier._best_carry(open_ctx, 0.1, open_ctx.self_pos))
 
 	# Exposure-term share: same compete with the 5v5 gate closed.
 	var carrier3 := AIRoleCarrier.new()
@@ -187,7 +187,7 @@ func test_evaluator_costs() -> void:
 		var t1: int = Time.get_ticks_usec()
 		cinst._compute_best_pass(cx, self_facing, cinst._scratch_teammate_ids)
 		var t2: int = Time.get_ticks_usec()
-		cinst._best_carry(cx, 0.1, cx.self_pos, 0.7)
+		cinst._best_carry(cx, 0.1, cx.self_pos)
 		var t3: int = Time.get_ticks_usec()
 		cinst._best_developing_feed(cx)
 		var t4: int = Time.get_ticks_usec()
@@ -203,7 +203,7 @@ func test_evaluator_costs() -> void:
 	# _best_carry dominates the compete, so break IT down: how many candidates
 	# the beam actually scores, and what one candidate's primitives cost. The
 	# beam is left populated by the _best_carry call above.
-	cinst._best_carry(cx, 0.1, cx.self_pos, 0.7)
+	cinst._best_carry(cx, 0.1, cx.self_pos)
 	_results.append({"label": "  [beam rows scored]",
 			"us": float(cinst._beam_total.size())})
 	_results.append({"label": "  [beam width (pass-2 upgrades)]",

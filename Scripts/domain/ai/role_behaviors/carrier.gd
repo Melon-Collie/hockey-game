@@ -271,29 +271,35 @@ const OUTLET_DEVELOP_MIN_SPEED_M_S: float = 1.0
 # "somewhere other than here", not destinations worth planning a route to. The
 # forward half of the old 8-spoke ring is gone — see the field-derived block in
 # _best_carry.
-# Straight back (PI) is deliberately absent. It never won an argmax in any
-# benchmark scenario (0 for 82 rows) and it structurally cannot: a candidate
-# directly away from the objective is multiplied by a dest_score that reads it
-# as further from the net on the seam and lower on the closeness gradient. The
-# genuine straight-back peel-out is the retreat ring, at double the step, where
-# the separation actually buys something.
+# REAR/LATERAL ring angles, relative to the carry direction — the half of the
+# bearing circle the space fan does not span (it looks only +/-70 degrees, and
+# only where the carrier is trying to GO).
+#
+# ONE ring, not two. This used to be a local 3 m arc plus a separate 6 m
+# "retreat" arc over the same five angles, both at fixed radii. The radii now
+# come from each bearing's own beat reach at two fractions, exactly as the
+# forward candidates take theirs — which merges the two: the near fraction IS
+# the local reposition, the far one IS the committed peel-out, both sized to
+# what the carrier can actually cover instead of to two hand-picked distances.
+#
+# Straight back (PI) is included. It was briefly dropped for going 0-for-82 at
+# a fixed 3 m, but that was an artefact of the placement rather than a fact
+# about the angle: a 3 m reverse is a shuffle inside the defender's re-close
+# radius, and the committed version of the same move is exactly why the old
+# retreat arc existed. Beat-scaled placement offers both, so the angle no
+# longer needs a hand-set distance to be representable.
 const _REAR_ANGLES: Array[float] = [
-		PI * 0.5, PI * 0.75, -PI * 0.75, -PI * 0.5,
-]
-
-# RETREAT ring — a second, deeper candidate arc across the back half (lateral
-# through dead-back), at double the local step. Creating real separation from
-# a containing defender is a committed peel-out, not a 3 m shuffle: the local
-# cardinals only reposition inside his re-close radius, the seam is body-scale
-# and the wall exits are own-half-only, so a contained carrier had no
-# representable "back out and open the ice" move — it ground on the defender
-# instead (pacified). These are valued like every other candidate; with the
-# pass-OPTION branch (see _candidate_pass_option) they win exactly when the
-# space they buy reopens a lane worth using.
-const CARRY_RETREAT_STEP_M: float = CARRY_SEARCH_STEP_M * 2.0
-const _RETREAT_ANGLES: Array[float] = [
 		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
+
+# A rear candidate below this displacement is not a distinct plan — the
+# carrier's blade already reaches there without moving, and the directed
+# evasion seam (also a candidate) covers body-scale repositioning properly,
+# with real clearance math behind it. Grounded in the stick rather than picked:
+# inside one stick length, "skate there" and "stand still and reach" are the
+# same play, and stand-still is always in the compete.
+const CARRY_REAR_MIN_STEP_M: float = AIActionScoring.EVADE_STICK_REACH_M
+
 # FIELD-DERIVED FORWARD CANDIDATES (see the generator in _best_carry).
 # BEARINGS: how many of the space fan's bearings become carry candidates. The
 # fan has 7; taking the best 3 by control × forward projection covers the open
@@ -319,13 +325,6 @@ const CARRY_PLAN_BEAT_S: float = 1.0
 const DEKE_ENGAGE_RANGE_M: float = 3.5
 const DEKE_CONTAIN_MAX_CLOSING_M_S: float = 2.0
 
-# Evadability (current_safety) above which the retreat ring is skipped
-# entirely: the peel-out is an answer to CONTAINMENT, and with no defender
-# able to reach the puck the forward gradient owns the compete anyway —
-# pricing five extra 6 m candidates every re-eval in open ice was pure
-# hot-path waste (~0.5 ms/re-eval). Generously high so any real pressure
-# keeps the ring live; a hot-path gate, not a tactical choice.
-const CARRY_RETREAT_SAFETY_SKIP: float = 0.85
 
 # Haircut on the pass-OPTION value a carry candidate inherits (see
 # _candidate_pass_option): the option is a coarse read — receiver valued at
@@ -1294,7 +1293,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	var forward_space: float = _carrier_forward_clearance(ctx)
 
 	var carry_result: Array = _best_carry(
-			ctx, raw_shoot_score, directed_seam, current_safety)
+			ctx, raw_shoot_score, directed_seam)
 	var carry_score: float = carry_result[0]
 	last_carry_anchor = carry_result[1]
 	var raw_carry_score: float = carry_result[2]
@@ -2200,10 +2199,11 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 
 # Returns [best_score, best_pos] across all carry candidates:
 #   - Stand-still (current position, encodes patience)
-#   - 8 polar cardinals at CARRY_SEARCH_STEP_M, oriented so "forward"
-#     = direction toward slot
-#   - 5 retreat-ring candidates across the back arc at 2× the step
-#     (see CARRY_RETREAT_* — the committed peel-out)
+#   - Up to 6 field-derived FORWARD candidates: the space fan's best bearings
+#     at two fractions of the planning beat (see CARRY_FIELD_*)
+#   - Up to 10 REAR/LATERAL candidates: the five bearings the fan does not
+#     span, each at two fractions of that bearing's OWN beat reach, so an
+#     unavailable direction produces none (see _REAR_ANGLES)
 #   - The OZ slot anchor (long-range "drive at slot")
 #   - Two zone-exit wall routes when in our own half (see CARRY_EXIT_*)
 #   - Two post walkouts when behind either goal line (see WALKOUT_*)
@@ -2259,7 +2259,7 @@ func _candidate_ice_legal(candidate: Vector3, allow_behind: bool) -> bool:
 
 
 func _best_carry(ctx: RoleContext, shoot_now_score: float,
-		directed_seam: Vector3, current_safety: float) -> Array:
+		directed_seam: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var own_goal_dir: float = ctx.own_goal_dir
@@ -2392,64 +2392,41 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				continue
 			_beam_score_base(ctx, candidate, our_goalie, false)
 
-	# REARWARD cardinals — the half of the old polar ring the forward cone does
-	# not span (lateral and back). Kept fixed and local: these are escape moves,
-	# not plans, and the space field deliberately looks only where the carrier is
-	# trying to GO. The committed peel-out is the retreat ring below.
+	# REAR/LATERAL ring — the bearings the forward fan does not span, at two
+	# fractions of each bearing's OWN beat reach (see _REAR_ANGLES). This is the
+	# merged local-plus-retreat arc: one pass over five angles.
 	#
-	# Gated on MOMENTUM, not on pressure. Travelling forward at pace, a spot a
-	# local step behind or beside you is not somewhere you can go: reaching it
-	# means shedding the cross-speed, braking out the reversal and re-
-	# accelerating, which at a full stride costs multiples of the planning beat.
-	# So the ring is skipped per angle whenever the honest momentum-aware
-	# arrival time exceeds one beat — the same horizon the forward candidates
-	# are plans over. At a standstill every angle passes and the ring is whole;
-	# at speed it narrows toward the directions the carrier can actually take.
+	# The radius is per BEARING, not the shared forward beat_r. beat_r is how
+	# far this carrier travels forward in a beat, so reusing it back here would
+	# grow the rear radii with speed — precisely backwards. Travelling forward
+	# at pace, a spot behind you is not somewhere you can go: reaching it means
+	# shedding cross-speed, braking out the reversal and re-accelerating. The
+	# old fixed radii ignored that entirely and offered the same five spots at
+	# 9 m/s as at a standstill, paying full candidate cost for every one.
 	#
-	# This is a physical reachability bound, not a tactical choice, which is
-	# what makes it the right gate here. An earlier version gated on
-	# current_safety by analogy with the retreat ring, and that was wrong: the
-	# space fan spans only +/-70 degrees, so this ring is the carrier's ONLY
-	# representable lateral move, and the +/-90 angles took 18 of its 22 wins.
-	# Suppressing those in open ice removed a playmaking option (swinging wide
-	# to open an angle) on the grounds that it was not an escape.
-	#
-	# The arrival time is recomputed by the candidate scorer, but at ~4% of a
-	# full candidate it is far cheaper than scoring one that cannot be reached.
-	# (_score_move_candidate_base's own decay prune cannot do this job: it
-	# compares a discount factor against a running TOTAL, so it never fires.)
+	# beat_reach_along returns negative when the bearing is off the reachable
+	# disc altogether, so an unavailable direction simply produces no candidate
+	# — the filtering is geometry rather than a gate bolted on afterwards, and
+	# what the ring offers narrows and stretches with the carrier's real state.
 	for angle: float in _REAR_ANGLES:
 		var c: float = cos(angle)
 		var s_a: float = sin(angle)
 		var dir_x: float = fwd_x * c - fwd_z * s_a
 		var dir_z: float = fwd_x * s_a + fwd_z * c
-		var candidate := Vector3(
-				self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
-				self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
-		if not _candidate_ice_legal(candidate, behind_net):
+		var reach: float = AIActionScoring.beat_reach_along(
+				ctx.self_velocity, dir_x, dir_z, ctx.self_max_accel,
+				CARRY_PLAN_BEAT_S)
+		if reach < CARRY_REAR_MIN_STEP_M:
 			continue
-		if AIActionScoring.time_to_arrive(
-				self_pos, candidate, ctx.self_velocity, ctx.self_max_speed,
-				ctx.self_max_accel, ctx.self_lateral_grip) > CARRY_PLAN_BEAT_S:
-			continue
-		_beam_score_base(ctx, candidate, our_goalie, false)
-
-	# RETREAT ring — see CARRY_RETREAT_* doc: the committed peel-out arc across
-	# the back half at double the local step, the move that creates REAL
-	# separation from a containing defender. Same clamps and scoring as the
-	# cardinals; with the pass-option branch these win exactly when the space
-	# they buy reopens a lane worth using. Priced only under real pressure
-	# (CARRY_RETREAT_SAFETY_SKIP — a hot-path gate; open ice never needs it).
-	if current_safety < CARRY_RETREAT_SAFETY_SKIP:
-		for angle: float in _RETREAT_ANGLES:
-			var rc: float = cos(angle)
-			var rs: float = sin(angle)
-			var retreat := Vector3(
-					self_pos.x + (fwd_x * rc - fwd_z * rs) * CARRY_RETREAT_STEP_M, 0.0,
-					self_pos.z + (fwd_x * rs + fwd_z * rc) * CARRY_RETREAT_STEP_M)
-			if not _candidate_ice_legal(retreat, behind_net):
+		for frac: float in CARRY_FIELD_RADII:
+			var step: float = reach * frac
+			if step < CARRY_REAR_MIN_STEP_M:
 				continue
-			_beam_score_base(ctx, retreat, our_goalie, false)
+			var candidate := Vector3(
+					self_pos.x + dir_x * step, 0.0, self_pos.z + dir_z * step)
+			if not _candidate_ice_legal(candidate, behind_net):
+				continue
+			_beam_score_base(ctx, candidate, our_goalie, false)
 
 	# Slot anchor — long-range candidate, valid from anywhere on the
 	# rink. NZ bots reach the slot via this; OZ bots near the slot
