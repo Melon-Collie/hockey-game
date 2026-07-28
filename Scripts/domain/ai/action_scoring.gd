@@ -1895,7 +1895,20 @@ static func _hole_margin(
 							/ goalie_butterfly_drop_s,
 						0.0, 1.0)
 				gap *= 1.0 - seal
-				gap = GoalieStickRules.five_hole_gap_after_blade(gap)
+			# The PADDLE is deliberately not subtracted here, though
+			# GoalieStickRules.five_hole_gap_after_blade exists to do it and
+			# claims a standing keeper "closes outright". It takes the blade's
+			# 0.38 m WIDTH off a ~0.20 m slot, so it clamps to zero and the
+			# five-hole dies for every standing keeper at every range and every
+			# timing — the butterfly-drop race just above stops mattering. The
+			# blade is 0.07 m TALL: a lifted wrister clears it and goes through
+			# the legs, which is the five-hole goal players actually score. This
+			# model has no height resolution inside the LOW band, so it cannot
+			# represent "over the blade, between the pads" as a distinct hole;
+			# given that, keeping the slot open and letting the drop race decide
+			# is the branch that matches both the live keeper and the shipped
+			# behaviour on main, which defines that helper and never calls it.
+			#
 			# Centrality narrows the SLOT (off-axis you see less daylight
 			# between the pads) rather than scaling the finished margin —
 			# scaling a NEGATIVE margin by a small centrality would push it
@@ -1911,8 +1924,6 @@ static func _hole_margin(
 				(t_read - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
 				0.0, 1.0)
 		proxy_gap *= 1.0 - proxy_seal
-		if not goalie_down:
-			proxy_gap = GoalieStickRules.five_hole_gap_after_blade(proxy_gap)
 		return _five_hole_margin(proxy_gap * centrality, dist)
 
 	# Band cover raced against the read budget (t_reach less screen occlusion
