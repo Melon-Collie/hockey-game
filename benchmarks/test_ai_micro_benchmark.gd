@@ -207,6 +207,26 @@ func test_evaluator_costs() -> void:
 	_bench("carrier: one pass-option read", func() -> void:
 		cinst._candidate_pass_option(cx, one_cand))
 
+	# The space fan on its own. Only the carrier reads it today; this line
+	# exists so the cost of giving it to another role is a number rather than
+	# a guess. Both forms: without the bearing profile (what an off-puck role
+	# would want — just "how much room is there") and with it (the carrier's
+	# form, which also generates its forward candidates).
+	var bearing_out: Array[float] = []
+	bearing_out.resize(AIActionScoring.SPACE_SAMPLE_ANGLES.size())
+	_bench("controlled_space (fan only)", func() -> void:
+		AIActionScoring.controlled_space(
+				cx.self_pos, cx.self_velocity, null, cx.attacking_goal_pos,
+				AIRoleCarrier.FORWARD_PRESSURE_HORIZON_M,
+				cinst._scratch_opponents, cinst._scratch_opponent_vels,
+				cinst._scratch_opponent_caps))
+	_bench("controlled_space (fan + bearing profile)", func() -> void:
+		AIActionScoring.controlled_space(
+				cx.self_pos, cx.self_velocity, null, cx.attacking_goal_pos,
+				AIRoleCarrier.FORWARD_PRESSURE_HORIZON_M,
+				cinst._scratch_opponents, cinst._scratch_opponent_vels,
+				cinst._scratch_opponent_caps, bearing_out))
+
 	# The per-dispatch baseline every off-puck bot pays at 60 Hz regardless
 	# of the 30 Hz argmax: ctx build + predicates + steering on cached-
 	# decision ticks vs the full role re-eval tick.
