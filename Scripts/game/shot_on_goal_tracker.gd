@@ -89,6 +89,11 @@ var _pending_xg: float = 0.0
 # The pending shot's release position (rink coordinates), set by the caller at
 # release for the shot map. Set via note_shot_origin.
 var _pending_origin: Vector3 = Vector3.ZERO
+# Release context for the shot log — the defending goalie's situation and the
+# shooter's, sampled on the release tick. Held on the pending shot the same way
+# _pending_xg is, and committed when the shot resolves. See ShotEvent's
+# release-context block for why location alone is not comparable to a public xG.
+var _pending_ctx: Array = []
 # Whether the pending shot was released as a one-timer (wind-up off the puck,
 # fired the instant it entered the shooting zone). Read at goal time for the
 # One-Timer achievement's goal-flavor tag. Set by on_shot_started, cleared with
@@ -153,6 +158,7 @@ func on_deflection(peer_id: int) -> void:
 		_pending_directed_at_net = true  # re-armed shot; note_directed_at_net corrects
 		_pending_xg = 0.0                # re-armed shot; note_xg re-reads its geometry
 		_pending_origin = Vector3.ZERO   # re-armed shot; note_shot_origin re-reads
+		_pending_ctx = []                # re-armed shot; note_goalie_context re-reads
 	_record_toucher(peer_id, false)
 
 
@@ -235,6 +241,17 @@ func note_xg(xg: float) -> void:
 	if _shooter_peer_id == -1:
 		return
 	_pending_xg = xg
+
+
+# Records the release CONTEXT for the shot log: the defending goalie's stance,
+# how unset he was, where he stood, how long the shot was hidden from him, plus
+# the shooter's speed and the release's lateral pace. No-op without a pending
+# shot; an empty array leaves ShotEvent's neutral defaults, which is what a drill
+# or an empty net should read as.
+func note_goalie_context(ctx: Array) -> void:
+	if _shooter_peer_id == -1:
+		return
+	_pending_ctx = ctx
 
 
 # Records the pending shot's release position (rink coordinates) for the shot map.
@@ -516,7 +533,17 @@ func _build_event(credit_peer: int, outcome: int) -> ShotEvent:
 		shot_type = ShotEvent.ShotType.TIP
 	var period: int = _state_machine.current_period if _state_machine != null else 1
 	var clock_s: float = _state_machine.time_remaining if _state_machine != null else 0.0
-	return ShotEvent.make(
+	var e: ShotEvent = ShotEvent.make(
 			credit_peer, _registry.resolve_team_id_for_peer(credit_peer),
 			_pending_origin, _pending_xg, outcome, shot_type,
 			_pending_on_net, period, clock_s)
+	if _pending_ctx.size() == 8:
+		e.goalie_stance = _pending_ctx[0]
+		e.goalie_unset = _pending_ctx[1]
+		e.goalie_radius = _pending_ctx[2]
+		e.goalie_x = _pending_ctx[3]
+		e.screen_delay = _pending_ctx[4]
+		e.shooter_speed = _pending_ctx[5]
+		e.since_last_save_s = _pending_ctx[6]
+		e.puck_lateral_speed = _pending_ctx[7]
+	return e

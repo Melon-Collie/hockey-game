@@ -1057,6 +1057,10 @@ var _move_speed_current: float = 0.0
 # Lateral only: depth is a committed, chart-driven quantity and east-west
 # momentum is the whole of the caught-moving story.
 var _reaction_drift_vx: float = 0.0
+# Wall-clock of the last puck contact on this goalie, for the shot log's
+# second-chance discriminator. Analytics only — nothing in the tick reads it, so
+# it stays off the replay-determinism surface.
+var _last_save_time: float = -1.0
 var _five_hole_openness: float = 0.0
 var _tracked_threat_position: Vector3 = Vector3.ZERO
 # Position-derived puck velocity, for intercept math during elevated shots.
@@ -4105,6 +4109,42 @@ func _movement_read_delay() -> float:
 			_planar_speed(), _is_scrambling(), _move_read_cfg)
 
 
+# ── Release context for the shot log ─────────────────────────────────────────
+# Read once per resolved shot by GameManager, never per tick. Everything here is
+# already computed for the goalie's own read; these only stop it being discarded,
+# so a logged shot carries the situation that produced it and an empirical xG can
+# be fitted from real play (see ShotEvent's release-context block).
+func stance() -> int:
+	return _sm.current as int
+
+
+func unset_fraction() -> float:
+	return _unset_fraction()
+
+
+func challenge_radius() -> float:
+	return _current_depth
+
+
+func lateral_x() -> float:
+	return _current_x
+
+
+# How long this shot was hidden from him, at the shot's own pace and geometry.
+# Same call his read uses, so the logged value is the one he actually paid.
+func screen_delay_for(shot_velocity: Vector3) -> float:
+	return _screen_delay(shot_velocity)
+
+
+# Seconds since the puck last touched him, or -1 if it has not this game. The
+# rebound / second-chance discriminator: the logged 0-3 m band is dominated by
+# second touches, and without this they are indistinguishable from clean looks.
+func seconds_since_last_save() -> float:
+	if _last_save_time < 0.0:
+		return -1.0
+	return maxf(float(Time.get_ticks_msec()) * 0.001 - _last_save_time, 0.0)
+
+
 # ── Shot Detection ────────────────────────────────────────────────────────────
 func _on_puck_released() -> void:
 	# Consume any pending lag-comp back-date up front so an early `_sm.is_post_integrated()`
@@ -4192,6 +4232,7 @@ func _on_puck_contact(contacted: Goalie) -> void:
 	if contacted != goalie:
 		return
 	_slide.arm_event_lockout()
+	_last_save_time = float(Time.get_ticks_msec()) * 0.001
 	# A save resolves the read immediately — clear the freeze fast so the goalie
 	# can track / slide to the rebound rather than sit frozen while it's in the
 	# slot. (The slide event-lockout above still gives a beat before a committed
