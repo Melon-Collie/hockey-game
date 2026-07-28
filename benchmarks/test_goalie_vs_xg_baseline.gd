@@ -213,6 +213,63 @@ extends GutTest
 # unlikely. Whether this is reachable in play is a question for the ice, not the
 # instrument. Confirm it live before adding hysteresis for it.
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── GROUND TRUTH: 233 LOGGED SHOTS FROM REAL GAMES (2026-07) ────────────────
+# Supplied from the `shot_events` table — 7 games, 233 attempts, 117 on net, 39
+# goals, mixed bot and human shooters. Small, one human, but it is the only
+# measurement here taken from the game actually being played, and it settles two
+# of this file's claims in opposite directions.
+#
+# ── THE DISTANCE FINDING ABOVE IS WRONG. Do not act on it. ──────────────────
+#   band     onNet goals   rate
+#   0-3 m       43    22   0.512
+#   3-5 m       21     6   0.286
+#   5-7 m       31     6   0.194
+#   15+ m        5     0   0.000
+#
+# In play the doorstep is the MOST dangerous place on the ice and the surface
+# rises monotonically as the shooter closes — xG's shape, and the exact opposite
+# of the 0.000 this instrument reports at 3 m across the static grid, the rush
+# sweep and the deke sweep alike.
+#
+# The instrument is what is wrong, and the caveat that does it is REBOUNDS ARE
+# TERMINAL. A rebound is logged as its own shot event at its own close-range
+# position, so the 0-3 m band is largely second chances — while here, first
+# goalie contact ends the trial and every one of those scores as a save.
+# test_goalie_exhaustive_beatability already measured the other half of this:
+# 95.6% of in-tight shots leave a LIVE rebound. He is a wall to the first shot
+# and a rebound machine on the same play, and the rebounds are what go in.
+#
+# So "he is too big in tight" was an artifact of excluding the mechanism that
+# actually scores there. The in-tight problem is REBOUND CONTROL, not coverage —
+# which also joins up with the no-stick counterfactual below: the stick is what
+# shuts the low corners at 3 m, and GoalieSaveRules.is_controlled_save returns
+# FALSE for STICK unconditionally, so the surface doing the covering is the one
+# surface that never deadens anything.
+#
+# ── THE ANGLE FINDING IS CONFIRMED, and it is the one worth acting on. ──────
+#   0-20 deg   44 onNet   7 goals  0.159
+#   20-40 deg  26 onNet   9 goals  0.346
+#   40-60 deg  36 onNet  17 goals  0.472
+#   60-91 deg  11 onNet   6 goals  0.545
+#
+# Danger RISES 3.4x with angle in real games, and it holds inside 5 m on its own
+# (0.286 / 0.370 / 0.609 across the same bands). Real hockey runs the other way:
+# cutting the angle down is supposed to leave the shooter nothing. This is not an
+# instrument artifact — the live sweeps and the logged games agree.
+#
+# ── Two smaller things the data says ────────────────────────────────────────
+# The game's own stored `xg` tracks well in tight (0.479 vs 0.512 actual at
+# 0-3 m; 0.283 vs 0.286 at 3-5 m) and UNDER-predicts badly from mid-range
+# (0.084 vs 0.308 at 7-10 m, 0.085 vs 0.250 at 10-15 m, n=13 and n=4). Same
+# direction as the band-instrument divergence flagged on
+# test_shot_value_calibration.
+#
+# Overall save percentage is 0.667. Arcade by design, but it is the number any
+# future "is the goalie too strong" question should be measured against, not the
+# aim-space fractions in this file.
+# ══════════════════════════════════════════════════════════════════════════════
+
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
 
