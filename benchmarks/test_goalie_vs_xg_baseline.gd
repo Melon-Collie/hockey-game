@@ -116,9 +116,9 @@ extends GutTest
 # hand-picked hold lengths — see the WIND-UPS block below for why that matters.
 #
 #   dist angle |   quick wrister (0.125 s) |   full slapper (0.70 s)
-#      5    40 |    READY          8.7%    |   SLIDING        30.2%
-#      5    50 |    READY          8.1%    |   SLIDING        22.8%
-#      5    60 |    READY         10.0%    |   SLIDING        17.5%
+#      5    40 |    READY          8.7%    | BUTTERFLY        11.1%
+#      5    50 |    READY          8.1%    | BUTTERFLY         8.1%
+#      5    60 |    READY         10.0%    |   READY           9.2%
 #      5    70 |    READY          8.2%    |   READY           5.0%
 #      5    75 |    READY         21.5%    |   READY          14.7%
 #      5    80 |     VH_L          0.0%    |    VH_L           0.0%
@@ -128,18 +128,22 @@ extends GutTest
 #      8    75 |    READY         16.0%    |   READY           7.6%
 #      8    80 |     VH_L          0.0%    |    VH_L           0.0%
 #
+# The slapper column is POST-FIX (see the slide note below); before it those
+# three 5 m cells read SLIDING at 30.2 / 22.8 / 17.5%.
+#
 # ON THE WRISTER the angle axis is now FLAT from 40-70 deg (8.7 / 8.1 / 10.0 /
 # 8.2) where it used to climb 2x, and what remains is a spike at 75 deg alone —
 # the last step before post integration, where the arc solve already has him at
 # the seal spot but he is STANDING there instead of in VH's vertical pad. That
 # residual is the pose, not the position.
 #
-# ON THE SLAPPER the angle axis runs the RIGHT way — 30.2% at 40 deg falling to
-# 5.0% at 70 deg, which is xG's direction — and the most dangerous cell in the
-# whole grid is a full slapper from 5 m nearly straight on.
+# ON THE SLAPPER the angle axis runs the RIGHT way — 11.1% at 40 deg falling to
+# 5.0% at 70 deg, which is xG's direction. Before the slide fix that column read
+# 30.2% at 40 deg and was the most dangerous cell in the whole grid.
 #
-# ── AND THAT WORST CELL IS SELF-INFLICTED: read the STANCE column ────────────
-# At 5 m / 40-60 deg against a full slapper charge he is SLIDING at the release.
+# ── AND THAT WORST CELL WAS SELF-INFLICTED: read the STANCE column ───────────
+# BEFORE THE FIX, at 5 m / 40-60 deg against a full slapper charge he was SLIDING
+# at the release.
 # Nothing moved: the shooter is stationary and only charging. He reads the loaded
 # slapper, `_should_block` decides to drop, and from the butterfly he commits a
 # slide — so by the time the puck leaves he is caught mid-translation, which is
@@ -173,6 +177,37 @@ extends GutTest
 # Real goaltending does not work this way: a butterfly drop does not relocate
 # you, you drop where you stand. Some settling back is honest; 1.35 m of it is
 # what manufactures the slide.
+#
+# FIXED — but the cause was the SLIDE'S COVERAGE TEST, not the radius. It asked
+# |puck.x - goalie.x|, which for a shooter out at an angle reads a 2.3 m breach
+# against a keeper who is already square. Now measured off his angle instead.
+# The radius mismatch above is real and still there; it just was not what fired
+# the seal.
+#
+# ── RESIDUAL, UNRESOLVED: a drop <-> recover oscillation under shooter motion ─
+# On post-fix code, holding a slapper charge while the shooter MOVES walks him
+# into a stand-up/drop cycle. Stationary he drops once and stays down; add
+# motion and he does not:
+#
+#   HARD, stationary        BUTTERFLY at 0.00 s, holds
+#   HARD, 8 cm blade jitter BUTTERFLY 0.00 -> RECOVERING 1.09 -> READY 1.44 -> BUTTERFLY 1.69
+#   HARD, 0.5 m/s drift     BUTTERFLY 0.00 -> RECOVERING 0.57 -> READY 0.92, stays up
+#   EASY / NORMAL           no oscillation at either
+#
+# The mechanism is that `should_block` is knife-edge here — `answer_fraction`'s
+# `available` term is about -0.02 s at this spot — and it has no hysteresis, so a
+# few centimetres of jitter flips the verdict and the state machine turns each
+# flip into a full recovery cycle. `_is_threat_pressing` already routes staying-
+# down through the same `_should_block` ("going down and staying down are one
+# question"), which is the right structure; what is missing is that abandoning a
+# committed seal should need the verdict to HOLD, not to flicker — the file's own
+# `lateral_commit_confirm_s` idiom.
+#
+# NOT FIXED, deliberately: `max_slapper_charge_time` is 0.7 s, so the jitter case
+# (1.09 s) is out of reach of a real charge and only the drift case (0.57 s) is
+# inside it — and a slapper PLANTS the shooter, which is what makes drift
+# unlikely. Whether this is reachable in play is a question for the ice, not the
+# instrument. Confirm it live before adding hysteresis for it.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
