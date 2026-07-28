@@ -4043,7 +4043,14 @@ func _log_stance(prev: State, new_state: State) -> void:
 	var puck_pos: Vector3 = puck.global_position
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			puck_pos, _goal_line_z, _goal_center_x)
-	print("[goalie] %s -> %s | block=%s pressing=%s canRec=%s || arrival=%.3f contest=%.3f sight=%.3f react=%.3f drop=%.3f lateralLost=%s answer=%.3f commitNow=%s || gap=%.2f threatDist=%.2f puckSpd=%.2f carrierState=%s carrierVel=%.2f || gX=%.2f perp=%.2f radius=%.2f unset=%.2f" % [
+	# WORLD POSITIONS AND A CLOCK ARE THE POINT. The first pass logged only
+	# derived scalars (gap, threat distance), which showed the puck 1.19 m further
+	# out at the recover than at the drop but could not say WHAT moved or over how
+	# long — and the orbit mechanism inferred from that turned out to be
+	# impossible (apply_facing early-outs during a slapper charge, so the root
+	# never yaws and the pin cannot swing). Log the raw positions and the tick.
+	print("[goalie] t=%.3f %s -> %s | block=%s pressing=%s canRec=%s || arrival=%.3f contest=%.3f sight=%.3f react=%.3f drop=%.3f lateralLost=%s answer=%.3f commitNow=%s || puck=(%.2f,%.2f) carrier=(%.2f,%.2f) carrierYaw=%.1f goalie=(%.2f,%.2f) || gap=%.2f threatDist=%.2f puckSpd=%.2f carrierState=%s carrierVel=%.2f || radius=%.2f unset=%.2f" % [
+			float(Time.get_ticks_msec()) * 0.001,
 			_STATE_NAMES[prev as int], _STATE_NAMES[new_state as int],
 			str(_should_block(0.0)), str(_is_threat_pressing()),
 			str(_slide.can_recover()),
@@ -4051,11 +4058,15 @@ func _log_stance(prev: State, new_state: State) -> void:
 			sit.reaction_delay, sit.drop_time, str(sit.lateral_race_lost),
 			GoalieSaveSelection.answer_fraction(sit),
 			str(GoalieSaveSelection.must_commit_now(sit)),
+			puck_pos.x, puck_pos.z,
+			(0.0 if carrier == null else carrier.global_position.x),
+			(0.0 if carrier == null else carrier.global_position.z),
+			(0.0 if carrier == null else rad_to_deg(carrier.rotation.y)),
+			goalie.global_position.x, goalie.global_position.z,
 			goalie.global_position.distance_to(puck_pos), threat_dist,
 			puck.linear_velocity.length(),
 			("none" if carrier == null else str(carrier.current_shot_state)),
 			(0.0 if carrier == null else carrier.velocity.length()),
-			_current_x, absf(goalie.global_position.z - _goal_line_z),
 			_current_depth, _unset_fraction()])
 
 const _STATE_NAMES: Array[String] = [
