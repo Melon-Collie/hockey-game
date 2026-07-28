@@ -278,6 +278,21 @@ func test_evaluator_costs() -> void:
 	_bench("threat_surface_pass (5 def)", func() -> void:
 		AIActionScoring.threat_surface_pass(from, Vector3(-4, 0, -19), net, goalie,
 				GameRules.NET_HALF_WIDTH, opps))
+	_bench("threat_surface_shoot (5 def)", func() -> void:
+		AIActionScoring.threat_surface_shoot(from, net, goalie,
+				GameRules.NET_HALF_WIDTH, opps))
+	# What AIDangerField buys: the fielded core vs the exact five-hole one.
+	_bench("score_shoot_threat_fielded (5 def)", func() -> void:
+		AIActionScoring.score_shoot_threat_fielded(from, net, goalie,
+				GameRules.NET_HALF_WIDTH, opps))
+	# PRESSURE's per-candidate unit: the carrier's whole best-option argmax,
+	# re-run with us standing at the candidate. This is the inner loop of the
+	# outer 18-candidate argmax.
+	var opp_mates: Array[Vector3] = [
+			Vector3(-4, 0, -19), Vector3(3, 0, -14), Vector3(-1, 0, -8)]
+	_bench("carrier_best_option (PRESSURE per candidate)", func() -> void:
+		AIRoleHelpers.carrier_best_option(
+				from, Vector3(2, 0, -17), net, goalie, opps, opp_mates))
 	var opp_vels: Array[Vector3] = []
 	var opp_caps: Array = []
 	for _i: int in opps.size():
