@@ -1596,7 +1596,13 @@ func test_fresh_entry_holds_for_the_driving_finisher_over_the_top_shot() -> void
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(0.8, 0, -7.5)],
 			[3, TEAM_ID, Vector3(6, 0, -6.3)],       # support high at the line
-			[11, 1, Vector3(-0.5, 0, -20.5)],        # set D box
+			# Set D box, strong side. He is deliberately NOT in the cross-seam
+			# lane: at (-0.5, -20.5) he sat 1.11 m off the carrier -> driving-
+			# finisher line at 57% of the flight, which is a 3.7% pass. The
+			# test would then be asking whether a feed it has parked a
+			# defender in front of beats a marginal shot, and the honest
+			# answer to that is no.
+			[11, 1, Vector3(1.5, 0, -20.5)],
 			[12, 1, Vector3(2.5, 0, -19.0)],
 			[13, 1, Vector3(0.5, 0, -11.3)],         # high man choking the carry
 	]
