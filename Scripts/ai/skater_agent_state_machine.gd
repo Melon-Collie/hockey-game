@@ -164,20 +164,21 @@ const ACCEL_CLAMP_M_S2: float = 14.0
 # intercept point, so the stick stays on the puck's path. The catch is decided by
 # blade squareness + the puck's RELATIVE speed — its speed in the RECEIVER'S frame
 # (puck − skater velocity; #373), the blade's own velocity still ignored. The bot
-# collects a fast puck by settling square on the line (see _pass_receive_aim_and_steer):
-# the arrival brake drops its own velocity to ~0 at contact, so relative ≈ world
-# there and squaring the blade is what collects it. Actively GIVING with the puck
-# (retreating to cut the closing speed under the catch ceiling) is a skating read the
-# relative model now allows but the bot doesn't yet exploit.
+# collects a fast puck by squaring on the line (see _pass_receive_aim_and_steer),
+# IN STRIDE by default — the arrival brake is only forced when the bot would
+# otherwise arrive early enough to carry its blade past the line before the puck
+# shows up, or when its own closing speed would stack over the catch ceiling.
+# Squaring is what collects it; stopping is a wait, not a technique.
 const LOOSE_PUCK_TRACK_SPEED_M_S: float = 8.0
 
 # Pass-receive setup. When a fast loose puck (~pass) is heading near
 # us along a straight trajectory, we stand offset to the SIDE of the
 # puck's path so the stick spans perpendicular to the puck's velocity,
 # putting the blade face square to the incoming line. Squaring is judged
-# in the RECEIVER's frame (#373), but the arrival brake settles the bot
-# to ~zero velocity at contact, so its frame ≈ the world frame there and
-# squaring to the world line is correct. That maximizes PuckReceptionRules'
+# in the RECEIVER's frame (#373) — a receiver taking the feed in stride
+# carries its own velocity into that frame, which is why the closing-speed
+# ceiling is a separate check and not something squaring alone covers.
+# That maximizes PuckReceptionRules'
 # alignment bonus (up to +8 m/s at head-on), letting bots collect hard
 # feeds that would otherwise bounce. See _pass_receive_aim_and_steer.
 #
