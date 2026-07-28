@@ -497,3 +497,131 @@ func test_goalie_rotation_y_wraps_past_pi() -> void:
 			WorldStateCodec._encode_goalie_quantized(s))
 	assert_almost_eq(cos(dec.rotation_y), cos(PI + 1.0), 0.002, "wrapped facing same direction (cos)")
 	assert_almost_eq(sin(dec.rotation_y), sin(PI + 1.0), 0.002, "wrapped facing same direction (sin)")
+
+
+# ── Offset writers (allocation-free encode path) ─────────────────────────────
+# encode_world_state fills ONE pre-sized packet via _write_*_quantized instead
+# of allocating a PackedByteArray per block. Two load-bearing assumptions get
+# pinned here, because a silent break in either corrupts every broadcast:
+#   1. Godot 4 passes Packed arrays to functions BY REFERENCE — if that ever
+#      became by-value the writers would fill a throwaway copy and the packet
+#      would ship as zeros.
+#   2. Copy-on-write protects a RETAINED reference (the replay recorder keeps
+#      last frame's packet) when the reused buffer is rewritten next frame.
+
+func _sample_skater() -> SkaterNetworkState:
+	var s := SkaterNetworkState.new()
+	s.position = Vector3(1.5, 0.25, -3.25)
+	s.velocity = Vector3(2.0, 0.0, -1.5)
+	s.blade_position = Vector3(1.9, 0.1, -3.0)
+	s.top_hand_position = Vector3(1.6, 1.0, -3.1)
+	s.facing = Vector2(0.0, 1.0)
+	s.upper_body_rotation_y = 0.5
+	s.shot_charge = 0.5
+	s.stamina = 0.75
+	s.stagger_timer = 0.2
+	s.knockdown_timer = 0.1
+	s.move_intent = Vector2(0.0, 1.0)
+	s.sprint_active = true
+	return s
+
+
+func _sample_goalie() -> GoalieNetworkState:
+	var g := GoalieNetworkState.new()
+	g.position_x = 0.4
+	g.position_z = -27.0
+	g.rotation_y = 0.3
+	g.five_hole_openness = 0.5
+	g.glove_offset = Vector3(0.3, 1.4, 0.1)
+	g.blocker_offset = Vector3(-0.3, 0.9, 0.1)
+	return g
+
+
+func _sample_puck() -> PuckNetworkState:
+	var p := PuckNetworkState.new()
+	p.position = Vector3(2.0, 0.5, -8.0)
+	p.velocity = Vector3(-4.0, 1.0, 12.0)
+	return p
+
+
+func test_write_skater_matches_allocating_encoder_and_advances_block_size() -> void:
+	var s := _sample_skater()
+	var buf := PackedByteArray()
+	buf.resize(WorldStateCodec.SKATER_STATE_BYTES)
+	var end_o: int = WorldStateCodec._write_skater_quantized(buf, 0, s)
+	assert_eq(end_o, WorldStateCodec.SKATER_STATE_BYTES, "advances exactly one block")
+	# By-reference check: the CALLER's buffer holds the bytes.
+	assert_eq(buf, WorldStateCodec._encode_skater_quantized(s), "byte-identical to the allocating encoder")
+
+
+func test_write_puck_matches_allocating_encoder() -> void:
+	var p := _sample_puck()
+	var buf := PackedByteArray()
+	buf.resize(12)
+	assert_eq(WorldStateCodec._write_puck_quantized(buf, 0, p), 12, "advances the 12 B pos+vel block")
+	assert_eq(buf, WorldStateCodec._encode_puck_quantized(p), "byte-identical to the allocating encoder")
+
+
+func test_write_goalie_matches_allocating_encoder() -> void:
+	var g := _sample_goalie()
+	var buf := PackedByteArray()
+	buf.resize(WorldStateCodec.GOALIE_BLOCK_SIZE)
+	assert_eq(WorldStateCodec._write_goalie_quantized(buf, 0, g), WorldStateCodec.GOALIE_BLOCK_SIZE,
+			"advances exactly one goalie block")
+	assert_eq(buf, WorldStateCodec._encode_goalie_quantized(g), "byte-identical to the allocating encoder")
+
+
+func test_writers_pack_back_to_back_without_gap_or_overlap() -> void:
+	# The real packet layout: two skaters then a goalie, written at running
+	# offsets into one buffer, must equal the concatenation of the standalone
+	# blocks. Catches an off-by-one in any writer's returned offset.
+	var s := _sample_skater()
+	var g := _sample_goalie()
+	var total: int = WorldStateCodec.SKATER_STATE_BYTES * 2 + WorldStateCodec.GOALIE_BLOCK_SIZE
+	var buf := PackedByteArray()
+	buf.resize(total)
+	var o: int = 0
+	o = WorldStateCodec._write_skater_quantized(buf, o, s)
+	o = WorldStateCodec._write_skater_quantized(buf, o, s)
+	o = WorldStateCodec._write_goalie_quantized(buf, o, g)
+	assert_eq(o, total, "running offset lands exactly at the end")
+	var expected := PackedByteArray()
+	expected.append_array(WorldStateCodec._encode_skater_quantized(s))
+	expected.append_array(WorldStateCodec._encode_skater_quantized(s))
+	expected.append_array(WorldStateCodec._encode_goalie_quantized(g))
+	assert_eq(buf, expected, "offset-packed buffer equals concatenated blocks")
+
+
+func test_retained_reference_to_a_rewritten_buffer_is_not_protected() -> void:
+	# WHY encode_world_state allocates a fresh packet each frame instead of
+	# reusing one. Consumers RETAIN the returned packet (goal-replay recorder
+	# ring, .mreplay writer). A retained reference is NOT copy-on-write
+	# protected against an in-place rewrite of the same buffer — it sees the new
+	# bytes. Reusing a member buffer would therefore have silently rewritten
+	# every recorded replay frame to the newest packet.
+	#
+	# This asserts the HAZARD, deliberately: if a Godot version ever made this
+	# CoW-safe, this test fails and the reuse optimisation becomes available.
+	var first := _sample_skater()
+	var reused := PackedByteArray()
+	reused.resize(WorldStateCodec.SKATER_STATE_BYTES)
+	WorldStateCodec._write_skater_quantized(reused, 0, first)
+	var retained: PackedByteArray = reused  # what a recorder would keep
+	var second := _sample_skater()
+	second.position = Vector3(-9.0, 0.0, 12.0)
+	WorldStateCodec._write_skater_quantized(reused, 0, second)
+	assert_eq(retained, WorldStateCodec._encode_skater_quantized(second),
+			"retained reference followed the rewrite — reuse is unsafe, allocate fresh")
+
+
+func test_each_encode_returns_an_independent_packet() -> void:
+	# The safety property the codec actually relies on: separately-encoded
+	# packets never alias, so a retained frame keeps its own bytes.
+	var a := _sample_skater()
+	var packet_a: PackedByteArray = WorldStateCodec._encode_skater_quantized(a)
+	var snapshot: PackedByteArray = packet_a.duplicate()
+	var b_state := _sample_skater()
+	b_state.position = Vector3(5.0, 0.0, -5.0)
+	var packet_b: PackedByteArray = WorldStateCodec._encode_skater_quantized(b_state)
+	assert_eq(packet_a, snapshot, "the first packet is untouched by encoding a second")
+	assert_ne(packet_a, packet_b, "distinct states produce distinct packets")
