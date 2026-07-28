@@ -717,3 +717,102 @@ func test_report_rush_beatability_vs_xg() -> void:
 				% [parts[0], parts[1], m, m / m_avg, b, b / b_avg,
 				(m / m_avg) / maxf(b / b_avg, 0.0001)])
 	assert_true(true, "report")
+
+
+# ── THE DEKE — the mechanism that actually beats a goalie in tight ───────────
+# The rush sweep leaves one question standing: our keeper reads 0.000 at 3 m
+# where xG peaks, and the coverage geometry says he is simply bigger than the
+# mouth from there. But a real 3 m chance is almost never a clean shot — it is a
+# lateral MOVE. So before concluding "he is too big", measure the thing that is
+# supposed to beat him and see whether it does.
+#
+# The comparison is deliberately paired: the SAME release point and the SAME
+# aim x loft space, reached two ways.
+#   STATIC — settled there, goalie settled with him. The static grid's case.
+#   DEKE   — arrives there via a lateral cut at `speed`, goalie tracking the
+#            whole way, so `lateral_tracking_cap` and `is_beaten_wide` are live.
+# The difference between the two columns IS what the move bought. If the deke
+# column is also ~0, he is too big and no amount of playmaking opens him. If it
+# converts, then 0.000 on a stationary 3 m shot is a statement about a shot
+# nobody takes, not about the keeper.
+const DEKE_APPROACH_DIST: float = 8.0
+const DEKE_CUT_FROM_DIST: float = 4.0
+const DEKE_RELEASE_DIST: float = 3.0
+const DEKE_LATERAL_M: float = 1.5
+const DEKE_SPEEDS: Array[float] = [2.0, 4.0, 6.0]
+const DEKE_AIMS: int = 13
+
+
+# Cut laterally from the centre line to (side * DEKE_LATERAL_M, DEKE_RELEASE_DIST)
+# at `speed`, closing as it goes. Returns the release position.
+func _deke_to(side: float, speed: float) -> Vector3:
+	_skate_in(0.0, 6.0, DEKE_CUT_FROM_DIST, true)
+	var from := Vector3(0.0, 0.0, GOAL_Z + DEKE_CUT_FROM_DIST)
+	var to := Vector3(side * DEKE_LATERAL_M, 0.0, GOAL_Z + DEKE_RELEASE_DIST)
+	var span: float = from.distance_to(to)
+	var dir: Vector3 = (to - from) / maxf(span, 0.0001)
+	var vel: Vector3 = dir * speed
+	var dt: float = 1.0 / 120.0
+	var travelled: float = 0.0
+	var guard: int = 0
+	while travelled < span and guard < 2000:
+		travelled += speed * dt
+		var pos: Vector3 = from + dir * minf(travelled, span)
+		_shooter_ref().global_position = pos
+		_shooter_ref().velocity = vel
+		_puck_ref().global_position = pos
+		_puck_ref().linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(dt)
+		guard += 1
+	return to
+
+
+# Fire the whole aim x loft space from `spot` and return the scoring fraction.
+# `deke_speed` <= 0 means the static arm (settle there instead of cutting to it).
+func _release_fraction(spot: Vector3, side: float, deke_speed: float,
+		stick: bool = true) -> float:
+	var hw: float = GameRules.NET_HALF_WIDTH - GameRules.NET_POST_RADIUS \
+			- GameRules.PUCK_COLLISION_RADIUS
+	var goals: int = 0
+	var shots: int = 0
+	for loft: int in LOFTS:
+		for i: int in DEKE_AIMS:
+			var t: float = float(i) / float(DEKE_AIMS - 1)
+			var aim := Vector3(lerpf(-hw, hw, t), 0.0, GOAL_Z)
+			var release: Vector3 = spot
+			if deke_speed > 0.0:
+				release = _deke_to(side, deke_speed)
+			else:
+				_h.settle_ready(spot)
+			_h.publish_windup(release, aim, loft, 0.9, WRISTER_WINDUP_TICKS)
+			_goalie.set_stick_collision_enabled(stick)
+			if _h.fire_release(release, aim, loft, 0.9, 0.0) == Harness.GOAL:
+				goals += 1
+			_goalie.set_stick_collision_enabled(true)
+			shots += 1
+	return float(goals) / float(maxi(shots, 1))
+
+
+func test_report_deke_vs_static_in_tight() -> void:
+	var spot_l := Vector3(-DEKE_LATERAL_M, 0.0, GOAL_Z + DEKE_RELEASE_DIST)
+	var spot_r := Vector3(DEKE_LATERAL_M, 0.0, GOAL_Z + DEKE_RELEASE_DIST)
+	gut.p("Paired at the SAME release point (%.1f m lateral, %.1f m out)."
+			% [DEKE_LATERAL_M, DEKE_RELEASE_DIST])
+	gut.p("static = settled there. deke = arrived via a lateral cut from %.1f m."
+			% [DEKE_CUT_FROM_DIST])
+	gut.p("no-stick repeats the 6 m/s cut with the three stick colliders off —")
+	gut.p("the counterfactual test_goalie_exhaustive_beatability already uses.")
+	gut.p("%6s | %8s | %8s %8s %8s | %10s"
+			% ["side", "static", "cut 2", "cut 4", "cut 6", "cut 6 no-stick"])
+	for pair: Array in [["left", -1.0, spot_l], ["right", 1.0, spot_r]]:
+		var side: float = pair[1]
+		var spot: Vector3 = pair[2]
+		var stat: float = _release_fraction(spot, side, -1.0)
+		var got: Array[float] = []
+		for sp: float in DEKE_SPEEDS:
+			got.append(_release_fraction(spot, side, sp))
+		var nostick: float = _release_fraction(spot, side, 6.0, false)
+		gut.p("%6s | %7.1f%% | %7.1f%% %7.1f%% %7.1f%% | %9.1f%%"
+				% [pair[0], 100.0 * stat, 100.0 * got[0], 100.0 * got[1],
+				100.0 * got[2], 100.0 * nostick])
+	assert_true(true, "report")
