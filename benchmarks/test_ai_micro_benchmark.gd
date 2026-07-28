@@ -199,6 +199,45 @@ func test_evaluator_costs() -> void:
 	_results.append({"label": "carrier: best pass (receivers)", "us": float(t_pass) / REPS})
 	_results.append({"label": "carrier: best carry (candidates)", "us": float(t_carry) / REPS})
 	_results.append({"label": "carrier: developing-feed hold read", "us": float(t_feed) / REPS})
+	# ── Carrier anatomy ──────────────────────────────────────────────────────
+	# _best_carry dominates the compete, so break IT down: how many candidates
+	# the beam actually scores, and what one candidate's primitives cost. The
+	# beam is left populated by the _best_carry call above.
+	cinst._best_carry(cx, 0.1, cx.self_pos, 0.7)
+	_results.append({"label": "  [beam rows scored]",
+			"us": float(cinst._beam_total.size())})
+	_results.append({"label": "  [beam width (pass-2 upgrades)]",
+			"us": float(AIRoleCarrier.CARRY_BEAM_WIDTH)})
+
+	var cand: Vector3 = cx.self_pos + Vector3(1.5, 0.0, -2.5)
+	var cur_puck: Vector3 = cinst._puck_pos_at(cx.self_pos, cx.attacking_goal_pos)
+	var cand_puck: Vector3 = cinst._puck_pos_at(cand, cx.attacking_goal_pos)
+	var t_arr: float = AIActionScoring.time_to_arrive(
+			cx.self_pos, cand, cx.self_velocity, cx.self_max_speed,
+			cx.self_max_accel, cx.self_lateral_grip)
+	var keeper: Vector3 = Vector3(0.0, 0.0, -(GameRules.GOAL_LINE_Z - 1.3))
+	_bench("  cand: carry_safety", func() -> void:
+		AIActionScoring.carry_safety(cur_puck, cand_puck, t_arr,
+				cinst._scratch_opponents, cinst._scratch_opponent_vels,
+				cinst._scratch_opponent_caps, true))
+	_bench("  cand: carry_lane_clearance", func() -> void:
+		AIActionScoring.carry_lane_clearance(cur_puck, cand_puck, t_arr,
+				cinst._scratch_opponents, cinst._scratch_opponent_vels))
+	_bench("  cand: carry_strip_point", func() -> void:
+		AIActionScoring.carry_strip_point(cur_puck, cand_puck, t_arr,
+				cinst._scratch_opponents, cinst._scratch_opponent_vels,
+				cinst._scratch_opponent_caps, true))
+	_bench("  cand: predict_goalie_pos", func() -> void:
+		AIActionScoring.predict_goalie_pos(keeper, cx.attacking_goal_pos,
+				t_arr, cand))
+	_bench("  cand: turnover_cost", func() -> void:
+		AIActionScoring.turnover_cost(cand_puck, 0.4, cx.defending_goal_pos,
+				Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 1.3),
+				GameRules.NET_HALF_WIDTH, cinst._scratch_our_defenders))
+	_bench("  cand: _score_at (the seam)", func() -> void:
+		cinst._score_at(cx, cand, cx.self_pos, cinst._scratch_opponents,
+				keeper, cx.self_wrister_shot_speed, 0.0, cx.self_aim_spread_rad))
+
 	# One carry candidate in isolation.
 	var one_cand: Vector3 = cx.self_pos + Vector3(2.0, 0.0, 2.0)
 	var goalie_pos := Vector3(0.0, 0.0, -(GameRules.GOAL_LINE_Z - 0.8))
