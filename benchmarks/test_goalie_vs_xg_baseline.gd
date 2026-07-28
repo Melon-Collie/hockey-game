@@ -97,12 +97,16 @@ extends GutTest
 # xG model is a statement about GEOMETRY, so its shape cannot be reproduced by a
 # keeper whose geometry is effectively constant.
 #
-# It also gives the distance gradient its sign. His depth is ~1.46-1.55 m from
-# 3 m out to 15 m — nearly FIXED in absolute terms — so as the shooter closes,
-# the goalie (the nearer object) grows in angular terms FASTER than the net does,
-# and coverage climbs from 99% at the point to 177% at the doorstep. Distance
-# then only changes flight TIME, which helps him. Hence a danger surface that
-# falls too steeply with range and bottoms out at exactly zero.
+# It also gives the distance gradient its sign. Against a STANDING shooter his
+# depth is ~1.46-1.55 m from 3 m out to 15 m — nearly fixed — so as the shooter
+# closes, the goalie (the nearer object) grows in angular terms FASTER than the
+# net does, and coverage climbs from 99% at the point to 177% at the doorstep.
+#
+# THAT FLATNESS IS AN ARTIFACT OF THE STANDING SHOOTER, not the depth model.
+# `_fill_rush_constraint` needs closing >= rush_min_closing_speed and
+# `lateral_tracking_cap` returns INF at zero lateral speed, so a stationary
+# shooter binds neither and the solve falls through to the ceiling. Skate him in
+# and the retreat is textbook — see the closing-rush reports at the bottom.
 #
 # THE SHARP-ANGLE ROWS DO NOT EXPLAIN FINDING 1, and the ratio is misleading
 # there — read it as an upper bound. It assumes he is centred on the sightline,
@@ -251,6 +255,14 @@ func before_each() -> void:
 
 # Shooter world position at `dist` from the goal mouth's centre, `angle_deg` off
 # the centre line. Positive angle puts him to +x.
+func _shooter_ref() -> Skater:
+	return _shooter
+
+
+func _puck_ref() -> Node:
+	return _puck
+
+
 func _spot(dist: float, angle_deg: float) -> Vector3:
 	var a: float = deg_to_rad(angle_deg)
 	return Vector3(dist * sin(a), 0.0, GOAL_Z + dist * cos(a))
@@ -530,4 +542,178 @@ func test_report_held_wrister_hold_sweep() -> void:
 			gut.p("%5.0f %6.0f %7.3f | %10s | %5d %5d | %5.1f%%"
 					% [spot2.x, spot2.y, float(hold) / 120.0, _STANCE_NAME[stance],
 					goals, saves, 100.0 * float(goals) / float(maxi(goals + saves, 1))])
+	assert_true(true, "report")
+
+
+# ── THE CLOSING RUSH — and why this, not the grid above, is the real read ────
+# Everything above fires from a STANDSTILL. Players almost never do: barring a
+# one-timer, a shot comes off a moving body. That makes the static grid an edge
+# case being used as a reference, and it never exercises half the depth model —
+# `_fill_rush_constraint` needs closing >= rush_min_closing_speed, and
+# `lateral_tracking_cap` returns INF at zero lateral speed, so against a standing
+# shooter neither binds and the solve falls through to the depth ceiling.
+#
+# It also explains the static grid's doorstep result (exactly 0.000 at 3 m). NHL
+# shots from 3 m are overwhelmingly rebounds, deflections and scrambles, so xG's
+# 0.40 there is fitted on chaos this instrument deliberately excludes. A clean,
+# unscreened, stationary 3 m shot at a set goalie SHOULD be stopped nearly
+# always; that cell is not evidence of a defect.
+#
+# So: skate him in and shoot on the move.
+
+# ── WHAT THE RUSH MEASURED (2026-07) ─────────────────────────────────────────
+# DEPTH TRACKS DOCTRINE, at every closing speed. `taught` is
+# GoalieBehaviorRules.rush_retreat_depth; the live radius sits on it within a
+# couple of centimetres from 12 m all the way to the crease:
+#
+#   dist |  taught |  4 m/s  6 m/s  8 m/s
+#   12.0 |    1.75 |   1.75   1.74   1.74
+#    8.0 |    1.75 |   1.75   1.75   1.74
+#    6.0 |    1.49 |   1.49   1.49   1.48
+#    4.5 |    1.30 |   1.29   1.30   1.29     <- crease top at the hash marks
+#    3.0 |    0.70 |   0.69   0.70   0.67
+#    2.0 |    0.30 |   0.29   0.30   0.27     <- goal line at the crease
+#
+# So the depth model is NOT the problem, and any claim that he "never backs in"
+# is a claim about the static grid only.
+#
+# BUT THE DISTANCE AXIS IS STILL INVERTED, now with the confound removed.
+# Shooting on the move off a 6 m/s rush, quick wrister:
+#
+#   relD lane |   live  liveN |     xG   xgN |  rel
+#     10    0 |  0.000   0.00 |  0.083  0.45 | 0.00
+#      8    0 |  0.026   0.71 |  0.116  0.63 | 1.13
+#      6    0 |  0.077   2.14 |  0.174  0.95 | 2.26   <- our peak
+#      4    0 |  0.026   0.71 |  0.292  1.59 | 0.45
+#      3    0 |  0.000   0.00 |  0.398  2.17 | 0.00   <- xG's peak, our zero
+#     10   30 |  0.051   1.43 |  0.056  0.31 | 4.66
+#      3   30 |  0.026   0.71 |  0.303  1.65 | 0.43
+#
+# xG rises monotonically as the shooter closes; ours peaks at 6 m and FALLS to
+# zero at 3 m. Closing in makes him harder, not easier.
+#
+# AND IT IS NO LONGER DEPTH. The retreat does its job — coverage at the doorstep
+# drops from 177% (standing shooter, parked at 1.55 m) to ~118% (rush, retreated
+# to 0.70 m). It simply never drops BELOW 100%: his blocking body still subtends
+# more than the mouth at every range on the rush, so proximity never buys the
+# shooter any angle. The remaining inversion is a SIZE relationship between the
+# goalie's blocking geometry and the goal mouth, not a positioning error, which
+# makes it a much larger question than anything the depth chart can answer.
+#
+# Caveats that still apply and are load-bearing in tight: no screens, no dekes,
+# and rebounds terminal. Real 3 m chances are largely those three things, so
+# xG's 0.40 there is fitted on a population this instrument excludes by
+# construction — the gap is real but it is not 5x real.
+
+const RUSH_START_DIST: float = 14.0
+const RUSH_SPEEDS: Array[float] = [4.0, 6.0, 8.0]
+const RUSH_RELEASE_DISTS: Array[float] = [10.0, 8.0, 6.0, 4.0, 3.0]
+const RUSH_LANES_DEG: Array[float] = [0.0, 30.0]
+const RUSH_AIMS: int = 13
+
+
+# Drive the shooter from RUSH_START_DIST down the `lane_deg` bearing toward the
+# goal mouth at `speed`, carrying, until he reaches `until_dist`. Returns his
+# final world position. The goalie is settled against the START of the lane
+# first, so what follows is a genuine approach rather than a spawn.
+func _skate_in(lane_deg: float, speed: float, until_dist: float, seed_settle: bool) -> Vector3:
+	var a: float = deg_to_rad(lane_deg)
+	var dir := Vector3(sin(a), 0.0, cos(a))
+	var start: Vector3 = Vector3(0.0, 0.0, GOAL_Z) + dir * RUSH_START_DIST
+	if seed_settle:
+		_h.settle_ready(start)
+	_shooter_ref().current_shot_state = SkaterStateMachine.State.SKATING_WITH_PUCK
+	_shooter_ref().predicted_shot_velocity = Vector3.ZERO
+	_puck_ref().set_carrier(_shooter_ref())
+	var d: float = RUSH_START_DIST
+	var dt: float = 1.0 / 120.0
+	# Closing straight at the mouth, so |velocity| is the closing speed the rush
+	# constraint reads, and its x component is what the lateral cap reads.
+	var vel: Vector3 = -dir * speed
+	var guard: int = 0
+	while d > until_dist and guard < 2000:
+		d -= speed * dt
+		var pos: Vector3 = Vector3(0.0, 0.0, GOAL_Z) + dir * d
+		_shooter_ref().global_position = pos
+		_shooter_ref().velocity = vel
+		_puck_ref().global_position = pos
+		_puck_ref().linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(dt)
+		guard += 1
+	return Vector3(0.0, 0.0, GOAL_Z) + dir * until_dist
+
+
+func test_report_rush_depth_vs_doctrine() -> void:
+	var cfg := GoalieBehaviorRules.RushRetreatConfig.new()
+	cfg.engage_distance = _ctrl.rush_engage_distance
+	cfg.mid_distance = _ctrl.rush_mid_distance
+	cfg.arrive_distance = _ctrl.rush_arrive_distance
+	cfg.depth_engage = _ctrl.depth_aggressive
+	cfg.depth_mid = _ctrl.depth_base
+	cfg.depth_arrive = _ctrl.depth_defensive
+	gut.p("Goalie challenge radius through a closing rush, straight-on lane.")
+	gut.p("`taught` is GoalieBehaviorRules.rush_retreat_depth — crease-top depth")
+	gut.p("at the hash marks (%.1f m), goal-line depth at the crease (%.1f m)."
+			% [_ctrl.rush_mid_distance, _ctrl.rush_arrive_distance])
+	gut.p("%6s | %8s | %8s %8s %8s" % ["dist", "taught", "4 m/s", "6 m/s", "8 m/s"])
+	var rows := {}
+	for speed: float in RUSH_SPEEDS:
+		for d: float in [12.0, 10.0, 8.0, 6.0, 4.5, 3.0, 2.0]:
+			_skate_in(0.0, speed, d, true)
+			var key: String = "%.1f" % d
+			if not rows.has(key):
+				rows[key] = []
+			(rows[key] as Array).append(_ctrl._current_depth)
+	for d: float in [12.0, 10.0, 8.0, 6.0, 4.5, 3.0, 2.0]:
+		var got: Array = rows["%.1f" % d]
+		gut.p("%6.1f | %8.2f | %8.2f %8.2f %8.2f"
+				% [d, GoalieBehaviorRules.rush_retreat_depth(d, cfg),
+				got[0], got[1], got[2]])
+	assert_true(true, "report")
+
+
+func test_report_rush_beatability_vs_xg() -> void:
+	var hw: float = GameRules.NET_HALF_WIDTH - GameRules.NET_POST_RADIUS \
+			- GameRules.PUCK_COLLISION_RADIUS
+	var keys: Array[String] = []
+	var measured := {}
+	var baseline := {}
+	for lane: float in RUSH_LANES_DEG:
+		for rel: float in RUSH_RELEASE_DISTS:
+			var goals: int = 0
+			var shots: int = 0
+			var spot := Vector3.ZERO
+			for loft: int in LOFTS:
+				for i: int in RUSH_AIMS:
+					var t: float = float(i) / float(RUSH_AIMS - 1)
+					var aim := Vector3(lerpf(-hw, hw, t), 0.0, GOAL_Z)
+					spot = _skate_in(lane, 6.0, rel, true)
+					# Quick wrister off the rush — the bots' own charge length.
+					_h.publish_windup(spot, aim, loft, 0.9, WRISTER_WINDUP_TICKS)
+					if _h.fire_release(spot, aim, loft, 0.9, 0.0) == Harness.GOAL:
+						goals += 1
+					shots += 1
+			var key: String = "%.0f|%.0f" % [rel, lane]
+			keys.append(key)
+			measured[key] = float(goals) / float(maxi(shots, 1))
+			baseline[key] = XGBaseline.for_shot(
+					spot.x, spot.z, 0, ShotEvent.ShotType.SHOT)
+	var m_sum: float = 0.0
+	var b_sum: float = 0.0
+	for key: String in keys:
+		m_sum += measured[key]
+		b_sum += baseline[key]
+	var m_avg: float = maxf(m_sum / float(maxi(keys.size(), 1)), 0.0001)
+	var b_avg: float = maxf(b_sum / float(maxi(keys.size(), 1)), 0.0001)
+	gut.p("Shooting ON THE MOVE off a 6 m/s rush, quick wrister. Columns match the")
+	gut.p("static grid's: each normalised by its own mean, so only shape compares.")
+	gut.p("%6s %6s | %7s %7s | %7s %7s | %6s"
+			% ["relD", "lane", "live", "liveN", "xG", "xgN", "rel"])
+	for key: String in keys:
+		var parts: PackedStringArray = key.split("|")
+		var m: float = measured[key]
+		var b: float = baseline[key]
+		gut.p("%6s %6s | %7.3f %7.2f | %7.3f %7.2f | %6.2f"
+				% [parts[0], parts[1], m, m / m_avg, b, b / b_avg,
+				(m / m_avg) / maxf(b / b_avg, 0.0001)])
 	assert_true(true, "report")
