@@ -2011,83 +2011,6 @@ static func _hole_margin(
 const SCREEN_BODY_HALF_WIDTH_M: float = 0.6
 const SCREEN_MIN_ALONG_M: float = 0.6
 
-# ── Rebound second chance (a save is not terminal) ───────────────────────────
-# Mirrors GoalieSaveRules.DeadenConfig.pad_max_incoming_speed: pad/blocker
-# saves ABOVE this incoming pace kick a live physics rebound; at/under it the
-# save is controlled (chest/glove absorb dead, pads steer cornerward out of
-# the slot) and there is no second chance to price.
-const REBOUND_PAD_KICK_MIN_SPEED_M_S: float = 28.0
-# Where the live kick lands: a hard pad save's restitution sends the puck
-# back toward the play, settling within a couple of metres of the crease —
-# the real scramble radius. Measured off the keeper toward the shooter.
-const REBOUND_KICK_DIST_M: float = 2.0
-# The kick carries the pad's incidence angle — it lands a stride to a SIDE of
-# the keeper, not in his chest (which is what makes the put-back a live look
-# at a down body instead of a smother).
-const REBOUND_KICK_LATERAL_M: float = 1.0
-# …but WHICH side is contact geometry the shooter doesn't control: the
-# net-front man converts the kicks that come to his side. An even split.
-const REBOUND_SIDE_UNCERTAINTY: float = 0.5
-
-
-# P(the shooter's net-front man converts the live kick): the crease scramble
-# — a proximity race for the rebound spot (an even race is the game's own
-# 50/50 contested-pickup doctrine; a full stick-length of positioning wins
-# it), times the put-back's value at a DOWN, just-saved keeper (the model's
-# own read from the rebound spot: five sealed, glove extension conceded,
-# read late — priced by the same hole geometry as every other shot, with the
-# box-out defenders contesting the put-back through the release-contest
-# term). No screeners are passed to the inner read, so the recursion is one
-# level deep by construction.
-static func _rebound_conversion(
-		shooter: Vector3, attacking_goal: Vector3, goalie_pos: Vector3,
-		net_half_width: float, opponents: Array[Vector3],
-		screeners: Array[Vector3]) -> float:
-	var away: Vector3 = shooter - goalie_pos
-	away.y = 0.0
-	var away_len: float = away.length()
-	if away_len < 0.001:
-		return 0.0
-	away /= away_len
-	var spot: Vector3 = goalie_pos + away * REBOUND_KICK_DIST_M
-	# The kick lands a stride to the side of the keeper (pad incidence). The
-	# net-front man plays the kicks to HIS side of the shot axis; the side
-	# uncertainty is priced by REBOUND_SIDE_UNCERTAINTY below.
-	var perp := Vector3(away.z, 0.0, -away.x)
-	var d_ref: float = INF
-	var tm_side: float = 1.0
-	for s: Vector3 in screeners:
-		var d: float = _xz_dist(s, spot)
-		if d < d_ref:
-			d_ref = d
-			var side: float = (s.x - spot.x) * perp.x + (s.z - spot.z) * perp.z
-			tm_side = signf(side) if absf(side) > 0.001 else 1.0
-	spot += perp * (REBOUND_KICK_LATERAL_M * tm_side)
-	var d_tm: float = INF
-	for s: Vector3 in screeners:
-		var d: float = _xz_dist(s, spot)
-		if d < d_tm:
-			d_tm = d
-	var d_opp: float = INF
-	for o: Vector3 in opponents:
-		var d: float = _xz_dist(o, spot)
-		if d < d_opp:
-			d_opp = d
-	# Nobody parked near the scramble — a body two sticks away isn't a
-	# rebound man, whatever the race says.
-	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
-	if d_tm > 2.0 * reach + REBOUND_KICK_DIST_M:
-		return 0.0
-	var p_first: float = clampf(
-			(d_opp - d_tm) / (2.0 * reach) + 0.5, 0.0, 1.0)
-	if p_first <= 0.0:
-		return 0.0
-	var put_back: float = score_shoot(
-			spot, attacking_goal, goalie_pos, net_half_width, opponents,
-			WRISTER_SHOT_SPEED_M_S, 1.0, EMPTY_CAPS, 0.0, true)
-	return REBOUND_SIDE_UNCERTAINTY * p_first * put_back
-
-
 static func _xz_dist(a: Vector3, b: Vector3) -> float:
 	var dx: float = a.x - b.x
 	var dz: float = a.z - b.z
@@ -2290,22 +2213,7 @@ static func score_shoot(
 	# NEAR the shooter don't; bodies on the shot line are the lane's job).
 	var pressure_factor: float = release_contest_clean(
 			release_point_toward(shooter, attacking_goal), opponents, opponent_caps)
-	# Second chance: a save is not terminal. The saved mass (1 − quality) of a
-	# rip hard enough to beat the pads (GoalieSaveRules: pad/blocker saves
-	# above the pad threshold kick a LIVE rebound; softer shots are absorbed
-	# or steered cornerward by doctrine) becomes a crease scramble that the
-	# shooter's own net-front traffic (`screeners` — the same parked body
-	# that screens and tips) can win and put back at a DOWN, just-saved
-	# keeper. This is why "get pucks to the net" is a real play: without a
-	# net-front man the term is zero and the honest mid-percentage shot stays
-	# declined; with one, the rip carries goal + rebound value together.
-	var second_chance: float = 0.0
-	if not screeners.is_empty() and shot_quality < 1.0 \
-			and shot_speed_m_s > REBOUND_PAD_KICK_MIN_SPEED_M_S:
-		second_chance = (1.0 - shot_quality) * _rebound_conversion(
-				shooter, attacking_goal, predicted_goalie_pos, net_half_width,
-				opponents, screeners)
-	return minf(shot_quality + second_chance, 1.0) * lane * pressure_factor
+	return shot_quality * lane * pressure_factor
 
 
 # ── The SEAM's composed counterpart ──────────────────────────────────────────
@@ -2317,10 +2225,6 @@ static func score_shoot(
 #
 # What changes is the quality term: a smooth, monotone, goalie-displacement-
 # aware probability rather than a max over five holes with structural cliffs.
-# The rebound second-chance term is deliberately dropped here — it is priced
-# off `shot_quality < 1.0`, which meant something on a currency that saturated
-# at 1.0 and means very little on one calibrated to NHL rates. It comes back
-# as its own term if the switchover holds.
 static func score_shoot_value(
 		shooter: Vector3,
 		attacking_goal: Vector3,
