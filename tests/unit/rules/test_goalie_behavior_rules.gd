@@ -276,11 +276,19 @@ func test_threat_weight_zero_returns_puck_even_with_carrier() -> void:
 # Conventions: goal at +Z (goal_line_z=26.6), direction_sign=-1 means goalie
 # stands on the negative-Z side of the goal line (in front of the net).
 
+func _arc_cfg() -> GoalieBehaviorRules.ArcConfig:
+	var cfg := GoalieBehaviorRules.ArcConfig.new()
+	cfg.net_half_width = 0.915
+	cfg.seal_inset = 0.38
+	cfg.seal_depth = 0.10
+	cfg.post_integration_angle_deg = 80.0
+	return cfg
+
 func test_arc_centered_threat_places_goalie_dead_center() -> void:
 	# Threat directly in front of net at z=20. Arc puts goalie at depth=radius
 	# perpendicular to goal line, centered.
 	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
-		Vector3(0, 0, 20), 26.6, 0.0, -1, 0.6, 0.915)
+		Vector3(0, 0, 20), 26.6, 0.0, -1, 0.6, _arc_cfg())
 	assert_almost_eq(p.x, 0.0, 0.001)
 	assert_almost_eq(p.y, 26.0, 0.001)  # 26.6 - 0.6
 
@@ -289,7 +297,7 @@ func test_arc_wide_threat_pulls_goalie_off_center_and_back() -> void:
 	# side and at a perpendicular depth shallower than the radius (because
 	# the radius is consumed by lateral motion).
 	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
-		Vector3(5, 0, 21.6), 26.6, 0.0, -1, 1.2, 0.915)
+		Vector3(5, 0, 21.6), 26.6, 0.0, -1, 1.2, _arc_cfg())
 	assert_true(p.x > 0.0, "goalie should be on right side, got x=%f" % p.x)
 	# perp depth = 26.6 - p.y; should be < radius (1.2) because the arc
 	# spends some of the radius on lateral position.
@@ -297,24 +305,55 @@ func test_arc_wide_threat_pulls_goalie_off_center_and_back() -> void:
 	assert_true(perp_depth < 1.2, "perp depth=%f should be shallower than radius 1.2" % perp_depth)
 	assert_true(perp_depth > 0.0, "perp depth=%f should still be in front of goal" % perp_depth)
 
-func test_arc_clamps_x_to_post_on_extreme_angle() -> void:
-	# Threat at the goal line, way to the right. Direction is purely lateral,
-	# arc would put goalie at x=radius which exceeds net half-width — clamp.
+func test_arc_converges_on_the_post_seal_past_the_exit_angle() -> void:
+	# Threat on the goal line, way to the right: purely lateral, so the challenge
+	# line left the mouth long ago. He must be AT the post-seal spot — inboard of
+	# the pipe and on his line — which is exactly where post integration parks
+	# him, so the handoff at the trigger angle is continuous.
+	var cfg: GoalieBehaviorRules.ArcConfig = _arc_cfg()
 	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
-		Vector3(20, 0, 26.6), 26.6, 0.0, -1, 1.5, 0.915)
-	assert_almost_eq(p.x, 0.915, 0.001)  # clamped to right post
+		Vector3(20, 0, 26.6), 26.6, 0.0, -1, 1.5, cfg)
+	assert_almost_eq(p.x, 0.915 - 0.38, 0.001, "inboard of the post, not on it")
+	assert_almost_eq(26.6 - p.y, 0.10, 0.001, "on his line at the seal depth")
+	assert_almost_eq(cfg.out_seal_blend, 1.0, 0.001)
+
+func test_arc_never_leaves_the_mouth_and_blend_is_monotonic() -> void:
+	# Sweeping the angle from straight on to the post: he stays inside the pipes
+	# at every angle, and the seal blend only ever increases.
+	var cfg: GoalieBehaviorRules.ArcConfig = _arc_cfg()
+	var prev_blend: float = -1.0
+	for i: int in 19:
+		var theta: float = deg_to_rad(float(i) * 5.0)
+		var threat := Vector3(6.0 * sin(theta), 0.0, 26.6 - 6.0 * cos(theta))
+		var p: Vector2 = GoalieBehaviorRules.target_arc_position(
+			threat, 26.6, 0.0, -1, 1.5, cfg)
+		assert_lte(absf(p.x), 0.915 + 0.001,
+				"goalie outside the post at %.0f deg (x=%f)" % [rad_to_deg(theta), p.x])
+		assert_gte(cfg.out_seal_blend, prev_blend - 0.001,
+				"seal blend went backwards at %.0f deg" % [rad_to_deg(theta)])
+		prev_blend = cfg.out_seal_blend
+
+func test_arc_inside_the_mouth_is_the_untouched_challenge_arc() -> void:
+	# Below the exit angle nothing changes: the blend stays at zero and the point
+	# is the plain radius-along-the-ray solve.
+	var cfg: GoalieBehaviorRules.ArcConfig = _arc_cfg()
+	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
+		Vector3(0.5, 0, 21.6), 26.6, 0.0, -1, 1.2, cfg)
+	assert_almost_eq(cfg.out_seal_blend, 0.0, 0.0001)
+	assert_almost_eq(Vector2(p.x, 26.6 - p.y).length(), 1.2, 0.001,
+			"still exactly `radius` from goal centre")
 
 func test_arc_threat_behind_goal_flattens_to_goal_line() -> void:
 	# Threat behind the net at z > goal_line_z. The arc would put the goalie
 	# behind the goal line; flatten z to the goal line itself.
 	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
-		Vector3(0, 0, 28.0), 26.6, 0.0, -1, 0.5, 0.915)
+		Vector3(0, 0, 28.0), 26.6, 0.0, -1, 0.5, _arc_cfg())
 	assert_almost_eq(p.y, 26.6, 0.001)
 
 func test_arc_negative_z_goal_orientation() -> void:
 	# Opposite-side goalie: defends -Z, direction_sign = +1. Threat at z=-20.
 	var p: Vector2 = GoalieBehaviorRules.target_arc_position(
-		Vector3(0, 0, -20), -26.6, 0.0, 1, 0.6, 0.915)
+		Vector3(0, 0, -20), -26.6, 0.0, 1, 0.6, _arc_cfg())
 	assert_almost_eq(p.x, 0.0, 0.001)
 	assert_almost_eq(p.y, -26.0, 0.001)  # -26.6 + 0.6
 
@@ -325,9 +364,9 @@ func test_slide_destination_matches_arc_at_butterfly_depth() -> void:
 	# radius (currently a thin alias).
 	var threat := Vector3(2, 0, 22)
 	var slide: Vector2 = GoalieBehaviorRules.compute_slide_destination(
-		threat, 26.6, 0.0, -1, 0.4, 0.915)
+		threat, 26.6, 0.0, -1, 0.4, _arc_cfg())
 	var arc: Vector2 = GoalieBehaviorRules.target_arc_position(
-		threat, 26.6, 0.0, -1, 0.4, 0.915)
+		threat, 26.6, 0.0, -1, 0.4, _arc_cfg())
 	assert_almost_eq(slide.x, arc.x, 0.001)
 	assert_almost_eq(slide.y, arc.y, 0.001)
 

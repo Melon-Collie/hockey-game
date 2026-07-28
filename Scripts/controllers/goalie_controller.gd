@@ -288,6 +288,11 @@ extends Node
 @export var debug_goalie_reads: bool = false
 
 @export var rvh_depth: float = 0.1
+# How far INBOARD of the post the post-seal spot sits. Shared by the VH/RVH
+# stance position and by the arc solver's sharp-angle convergence target, so the
+# squared stance hands off to post integration at the same place rather than
+# teleporting. (= outer pad reach 0.88 - 0.50 body inset toward post.)
+@export var post_seal_inset: float = 0.38
 @export var rvh_early_angle: float = 80.0
 @export var rvh_post_pad_angle: float = 15.0
 
@@ -1028,6 +1033,7 @@ var _shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 # tricklers / board bounces must classify even below shot_speed_threshold).
 var _universal_shot_cfg: GoalieBehaviorRules.ShotDetectionConfig
 var _zone_cfg: GoalieBehaviorRules.DefensiveZoneConfig
+var _arc_cfg: GoalieBehaviorRules.ArcConfig
 var _universal_reaction_cfg: GoalieBehaviorRules.UniversalReactionConfig
 var _screen_cfg: GoalieBehaviorRules.ScreenConfig
 var _move_read_cfg: GoalieBehaviorRules.MovementReadConfig
@@ -1500,6 +1506,11 @@ func _build_rule_configs() -> void:
 	_universal_reaction_cfg.net_margin = net_margin
 	_zone_cfg = GoalieBehaviorRules.DefensiveZoneConfig.new()
 	_zone_cfg.zone_post_z = zone_post_z
+	_arc_cfg = GoalieBehaviorRules.ArcConfig.new()
+	_arc_cfg.net_half_width = net_half_width
+	_arc_cfg.seal_inset = post_seal_inset
+	_arc_cfg.seal_depth = rvh_depth
+	_arc_cfg.post_integration_angle_deg = rvh_early_angle
 	_zone_cfg.rvh_early_angle = rvh_early_angle
 	_beaten_wide_cfg = GoalieBehaviorRules.BeatenWideConfig.new()
 	_beaten_wide_cfg.goalie_lateral_speed = t_push_speed
@@ -3034,7 +3045,7 @@ func _update_position(delta: float) -> void:
 			elif _sm.current == State.BUTTERFLY and _slide.drop_progress >= 1.0:
 				var knee_target: Vector2 = GoalieBehaviorRules.target_arc_position(
 						_tracked_threat_position, _goal_line_z, _goal_center_x,
-						_direction_sign, butterfly_radius, net_half_width)
+						_direction_sign, butterfly_radius, _arc_cfg)
 				_current_x = move_toward(_current_x, knee_target.x, knee_shuffle_speed * delta)
 			new_z = _goal_line_z + _direction_sign * _current_depth
 		State.COILING:
@@ -3074,13 +3085,13 @@ func _update_position(delta: float) -> void:
 			_current_x = pp_next.x
 			new_z = pp_next.y
 		State.RVH_LEFT, State.VH_LEFT:
-			# 0.38 = outer pad reach (0.88) - 0.50 body inset toward post.
 			# VH hugs the same post spot — the stance differs (vertical pad,
-			# taller body), not the position.
-			_current_x = move_toward(_current_x, _goal_center_x + (net_half_width - 0.38) * _direction_sign, rvh_transition_speed * delta)
+			# taller body), not the position. `post_seal_inset` is shared with the
+			# arc solver so the squared stance converges here rather than jumping.
+			_current_x = move_toward(_current_x, _goal_center_x + (net_half_width - post_seal_inset) * _direction_sign, rvh_transition_speed * delta)
 			new_z = _goal_line_z + _direction_sign * _current_depth
 		State.RVH_RIGHT, State.VH_RIGHT:
-			_current_x = move_toward(_current_x, _goal_center_x - (net_half_width - 0.38) * _direction_sign, rvh_transition_speed * delta)
+			_current_x = move_toward(_current_x, _goal_center_x - (net_half_width - post_seal_inset) * _direction_sign, rvh_transition_speed * delta)
 			new_z = _goal_line_z + _direction_sign * _current_depth
 		_:
 			new_z = _goal_line_z + _direction_sign * _current_depth
@@ -3095,9 +3106,15 @@ func _update_position(delta: float) -> void:
 # the line is wrong call this; post-integrated / slide-seal / behind-net play
 # never does (see the export doc-block).
 func _front_of_line_z(z: float) -> float:
+	# The floor exists for a goalie OUT challenging. Once the arc solve has given
+	# up the challenge and converged on the post seal (out_seal_blend -> 1) the
+	# correct depth is the seal's own, so fade the floor to it rather than holding
+	# him off his line at exactly the angle where sitting on it is the play.
+	var floor_depth: float = lerpf(
+			min_challenge_depth, minf(rvh_depth, min_challenge_depth), _arc_cfg.out_seal_blend)
 	var perp: float = (z - _goal_line_z) * _direction_sign
-	if perp < min_challenge_depth:
-		return _goal_line_z + _direction_sign * min_challenge_depth
+	if perp < floor_depth:
+		return _goal_line_z + _direction_sign * floor_depth
 	return z
 
 # 2D arc tracing for STANDING/RECOVERING. Target is the arc point at the
@@ -3200,7 +3217,7 @@ func _move_along_arc(delta: float) -> Vector2:
 func _arc_target_xz() -> Vector2:
 	return GoalieBehaviorRules.target_arc_position(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
-			_direction_sign, _current_depth, net_half_width)
+			_direction_sign, _current_depth, _arc_cfg)
 
 # Advance the caught-moving drift one tick and return the new lateral position.
 # A goalie caught mid-push at the release does not stop dead to make the save —
