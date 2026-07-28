@@ -3492,6 +3492,12 @@ func _note_shot_trajectory() -> void:
 	# own goal is credited to the other team via on_goal_confirmed), and gating this
 	# on `directed` parked those dots at centre ice.
 	_shot_tracker.note_shot_origin(pos)
+	# Release CONTEXT for the shot log (the defending goalie's situation plus the
+	# shooter's). Location alone cannot be compared to a public xG model, because a
+	# fitted model has the context baked into its location term — see ShotEvent.
+	# Sampled here because this is the release tick and everything below is already
+	# computed for the goalie's own read.
+	_note_shot_context(vel, shooter_team)
 	# xG (A2): evaluate this shot's expected goals from the REAL goalie geometry at
 	# release, and hold it on the pending shot to commit when it resolves. Only
 	# directed shots can become counted attempts, so only they need an xG — an
@@ -5354,3 +5360,28 @@ func get_period_scores() -> Array:
 
 func apply_stats(data: Array) -> void:
 	_on_stats_received(data)
+
+
+# Gathers the release context for the shot log. The defending goalie is the one
+# whose net the shooter is attacking; an unresolved team or a goalie-less mode
+# (drills, tutorial) leaves the array empty, which keeps ShotEvent's neutral
+# defaults rather than logging a fabricated set keeper.
+func _note_shot_context(vel: Vector3, shooter_team: int) -> void:
+	if shooter_team != 0 and shooter_team != 1:
+		return
+	var defending: int = 1 - shooter_team
+	if defending >= teams.size():
+		return
+	var gc: GoalieController = teams[defending].goalie_controller
+	if gc == null:
+		return
+	var shooter_speed: float = 0.0
+	if _registry != null:
+		var rec: PlayerRecord = _registry.get_record(_shot_tracker.get_shooter_peer_id())
+		if rec != null and rec.skater != null:
+			shooter_speed = Vector2(rec.skater.velocity.x, rec.skater.velocity.z).length()
+	_shot_tracker.note_goalie_context([
+		gc.stance(), gc.unset_fraction(), gc.challenge_radius(), gc.lateral_x(),
+		gc.screen_delay_for(vel), shooter_speed, gc.seconds_since_last_save(),
+		absf(vel.x),
+	])

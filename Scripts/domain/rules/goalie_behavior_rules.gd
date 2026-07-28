@@ -247,15 +247,49 @@ static func compute_threat_position(
 #
 # `radius` is the distance from goal center; callers compute it with the
 # existing depth chart against `threat_distance_to_goal`.
-# Returns (x, z) world position. Clamps x to within the posts so the goalie
-# never strays outside the net width on extreme angles.
+#
+# ── PAST THE POST THE ARC IS NOT AVAILABLE, AND CLAMPING IS NOT THE ANSWER ───
+# Beyond a certain angle the challenge line leaves the mouth entirely: standing
+# square at the chart's radius would put the goalie OUTSIDE his own post. The old
+# behaviour clamped `x` back inside while keeping the arc's `z`, which is the
+# worst of both — the resulting point is no longer on the squaring line at all,
+# and it strands him on the near post at challenge depth.
+#
+# That is not a small positional error, because the goalie is a WALL, not a disc.
+# His pads splay perpendicular to his facing, so squaring to a sharp-angle
+# shooter rotates that wall until it runs nearly PARALLEL to the shot lane —
+# pointing out of the net instead of across it. Measured at 5 m / 70 deg the
+# clamped position conceded the far four fifths of the mouth along the ice with
+# the puck never touching him (benchmarks/test_goalie_vs_xg_baseline.gd).
+#
+# So past the exit angle he gives up challenge depth continuously and converges
+# on the post-seal spot — the SAME position post-integration puts him in, so the
+# handoff at `post_integration_angle_deg` is continuous by construction and there
+# is no cliff at the trigger. The blend endpoints are both physical (where the
+# line exits the mouth; where the seal sits), so nothing here is a shaped curve.
+class ArcConfig:
+	var net_half_width: float = 0.915
+	# The post-seal spot the challenge line converges on, as perpendicular depth
+	# and inset INBOARD of the post. Must match where post integration parks him
+	# or the handoff reopens the cliff this exists to close.
+	var seal_inset: float = 0.38
+	var seal_depth: float = 0.10
+	# Angle (deg off the perpendicular) at which post integration takes over.
+	var post_integration_angle_deg: float = 80.0
+	# Filled by target_arc_position: 0 = on the pure challenge arc, 1 = fully at
+	# the seal spot. Callers use it to fade constraints that only make sense while
+	# he is genuinely out challenging (see GoalieController._front_of_line_z).
+	var out_seal_blend: float = 0.0
+
+# Returns (x, z) world position.
 static func target_arc_position(
 		threat_position: Vector3,
 		goal_line_z: float,
 		goal_center_x: float,
 		direction_sign: int,
 		radius: float,
-		net_half_width: float) -> Vector2:
+		cfg: ArcConfig) -> Vector2:
+	cfg.out_seal_blend = 0.0
 	var dx: float = threat_position.x - goal_center_x
 	var dz: float = threat_position.z - goal_line_z
 	var d: float = sqrt(dx * dx + dz * dz)
@@ -271,8 +305,34 @@ static func target_arc_position(
 	var perp_depth: float = (goalie_z - goal_line_z) * direction_sign
 	if perp_depth < 0.0:
 		goalie_z = goal_line_z
-	goalie_x = clampf(goalie_x, goal_center_x - net_half_width, goal_center_x + net_half_width)
-	return Vector2(goalie_x, goalie_z)
+	var hw: float = cfg.net_half_width
+	if absf(goalie_x - goal_center_x) <= hw:
+		return Vector2(goalie_x, goalie_z)
+	# The challenge line has left the mouth. Blend between two physical endpoints:
+	#   EXIT  — the arc pinned to the pipe, which is what the old clamp produced
+	#           and is exactly the unclamped arc AT the exit angle, so the join is
+	#           continuous and everything shallower than the exit angle is
+	#           untouched. Deliberately the s=0 end: the clamp is only badly wrong
+	#           once it has been extrapolated well past the pipe, and re-deriving
+	#           the near-boundary position would move the goalie in a band that
+	#           measures fine.
+	#   SEAL  — where post integration would put him on this side.
+	var side: float = signf(goalie_x - goal_center_x)
+	var sin_theta: float = absf(ux)
+	var exit_x: float = goal_center_x + side * hw
+	var exit_perp: float = absf(goalie_z - goal_line_z)
+	var seal_x: float = goal_center_x + side * maxf(hw - cfg.seal_inset, 0.0)
+	# Blend across the band between the angle where the line exits the mouth and
+	# the angle where post integration takes over. Both ends are given, not tuned.
+	var theta: float = atan2(sin_theta, absf(uz))
+	var exit_theta: float = asin(clampf(hw / maxf(radius, 0.0001), 0.0, 1.0))
+	var post_theta: float = deg_to_rad(cfg.post_integration_angle_deg)
+	var span: float = post_theta - exit_theta
+	var s: float = 1.0 if span <= 0.0001 else clampf((theta - exit_theta) / span, 0.0, 1.0)
+	cfg.out_seal_blend = s
+	return Vector2(
+			lerpf(exit_x, seal_x, s),
+			goal_line_z + direction_sign * lerpf(exit_perp, cfg.seal_depth, s))
 
 
 # Euclidean distance from threat to goal center (XZ plane). Drives the depth
@@ -331,10 +391,10 @@ static func compute_slide_destination(
 		goal_center_x: float,
 		direction_sign: int,
 		butterfly_radius: float,
-		net_half_width: float) -> Vector2:
+		cfg: ArcConfig) -> Vector2:
 	return target_arc_position(
 			threat_position, goal_line_z, goal_center_x,
-			direction_sign, butterfly_radius, net_half_width)
+			direction_sign, butterfly_radius, cfg)
 
 
 
@@ -898,24 +958,58 @@ static func backdoor_depth_cap(
 	return coverable / sin_theta
 
 
-# ── Movement read penalty ─────────────────────────────────────────────────────
-# A goalie is only sharp when set — square and stopped. Caught mid-push, sliding,
-# or standing back up, they read the shot late. Returns extra read latency in
-# seconds, scaled by how unset the goalie is: `planar_speed` (lateral/depth
-# motion) ramps it toward `max_delay` at `reference_speed`, and `scrambling`
-# (recovering / mid-slide posture) floors the unset-ness at `scramble_unset`.
-# This only ever ADDS delay while the goalie is in motion — a set goalie reads
-# at the base delay — so it opens scoring windows without buffing the save.
+# ── Unset-ness ────────────────────────────────────────────────────────────────
+# How unset the goalie is, 0 (square and stopped) → 1 (fully in motion).
+# `planar_speed` (lateral + depth) ramps it to 1 at `reference_speed`, and
+# `scrambling` (recovering / committed lunge) floors it at `scramble_unset`
+# because those are posture problems no amount of standing still fixes.
+#
+# ONE definition, two consumers: the read penalty below and the controller's
+# quiet-eye prime gate. They must agree — a goalie the prime calls "set" while
+# the read penalty calls him moving is two models of the same body.
 class MovementReadConfig:
 	var reference_speed: float = 2.5    # m/s — planar speed that counts as fully moving
-	var max_delay: float = 0.12         # s — read latency when fully unset
+	var speed_delay: float = 0.04       # s — read latency when fully moving but on his feet
+	var scramble_delay: float = 0.12    # s — read latency while recovering / mid-lunge
 	var scramble_unset: float = 1.0     # unset floor (0..1) while recovering / scrambling
 
-static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
+static func unset_fraction(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
 	var unset: float = clampf(planar_speed / maxf(cfg.reference_speed, 0.0001), 0.0, 1.0)
 	if scrambling:
 		unset = maxf(unset, cfg.scramble_unset)
-	return unset * cfg.max_delay
+	return unset
+
+
+# Extra read latency (s) from being caught unset. TWO different costs, because
+# "moving" and "scrambling" fail for different physical reasons and pricing them
+# with one number gets both wrong:
+#
+#   TRAVELLING ON HIS FEET (`speed_delay`, small) — perception latency is a CNS
+#   property and barely moves with body state; the measured expert/novice split in
+#   keeper decision time (~250-260 ms vs ~320 ms) is an expertise gap, not a
+#   posture gap. A goalie mid-push saw the release fine. What he cannot do is
+#   cancel his momentum, and THAT cost is paid as drift carried through the
+#   reaction freeze (GoalieController._reaction_drift_x), not as latency here.
+#   This is only the residual for an off-balance body firing a response it has
+#   already chosen.
+#
+#   SCRAMBLING (`scramble_delay`, larger) — standing up out of a butterfly or
+#   sitting on a committed lunge is not a perception problem either, but the
+#   response genuinely is not AVAILABLE yet: the limbs are travelling back under
+#   him, so there is nothing to fire until they arrive. There is no lateral
+#   momentum in that failure for the drift to model, which is why it keeps a real
+#   latency cost where the travelling case does not.
+#
+# Loading the whole caught-moving cost onto one latency (the pre-drift model) made
+# the penalty binary in RANGE rather than proportional: absorbed entirely by a
+# point shot's ~0.57 s flight, and larger than a 5 m slot shot's ~0.20 s flight,
+# so against a moving goalie in tight the shooter did not face a late read — he
+# faced a statue.
+static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
+	var delay: float = unset_fraction(planar_speed, false, cfg) * cfg.speed_delay
+	if scrambling:
+		delay = maxf(delay, cfg.scramble_delay)
+	return delay
 
 
 # ── Five-hole gap ─────────────────────────────────────────────────────────────

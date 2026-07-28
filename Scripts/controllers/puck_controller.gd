@@ -656,6 +656,10 @@ func _check_body_blocks(skaters: Array, puck_curr: Vector3) -> bool:
 
 # ── Local Prediction ──────────────────────────────────────────────────────────
 func notify_local_pickup(local_skater: Skater) -> void:
+	# Fresh attach re-arms the slapshot-pin snap (see _pin_puck_to_carrier):
+	# a one-timer is picked up straight INTO the charge, with no ordinary carry
+	# tick in between to clear the latch.
+	_was_slapshot_pinned = false
 	_local_carrier_skater = local_skater
 	_remote_carrier_skater = null
 	_client_carrier_peer_id = NetworkManager.local_peer_id()
@@ -674,6 +678,10 @@ func notify_local_pickup(local_skater: Skater) -> void:
 # interpolating from its own buffer. Mirrors notify_local_pickup. GameManager
 # only calls this for non-local carriers whose skater is spawned on this client.
 func notify_remote_pickup(remote_skater: Skater, carrier_peer_id: int) -> void:
+	# Fresh attach re-arms the slapshot-pin snap (see _pin_puck_to_carrier):
+	# a one-timer is picked up straight INTO the charge, with no ordinary carry
+	# tick in between to clear the latch.
+	_was_slapshot_pinned = false
 	_remote_carrier_skater = remote_skater
 	_local_carrier_skater = null
 	_client_carrier_peer_id = carrier_peer_id
@@ -843,6 +851,12 @@ func _estimated_puck_speed() -> float:
 	return _state_buffer.back().state.velocity.length()
 
 
+# Rising-edge latch for the slapshot pin, so the carry smoother is reseeded once
+# on entry instead of filtering across a discrete relocation. See
+# _pin_puck_to_carrier.
+var _was_slapshot_pinned: bool = false
+
+
 func _clear_provisional() -> void:
 	_provisional_carrier_skater = null
 	_provisional_deadline = -1.0
@@ -863,7 +877,29 @@ func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:
 	# it cleanly reduces to the interpolated blade contact.
 	var contact: Vector3 = carrier.get_carry_target_global()
 	contact.y = puck.ice_height
-	puck.set_puck_position(puck.get_puck_position().lerp(contact, carry_smoothing_speed * delta))
+	# SNAP ON THE SLAPSHOT PIN, don't smooth into it. Entering a slapper charge
+	# relocates the carry target ~1.2 m in one tick — from the blade contact to the
+	# fixed slapper-zone offset — and that is a discrete MODE CHANGE, not the rapid
+	# blade movement this smoother exists to damp. Filtered, the puck instead
+	# SLIDES across the ice on its own for a few tenths while the shooter stands
+	# still, and every consumer reading puck position during the wind-up sees a
+	# threat that is moving when nothing is.
+	#
+	# The goalie is the one that showed it: he reads `puck.global_position` to
+	# price whether a shot is answerable, and his block threshold sits at
+	# gap > 4.9 m. Measured live, the transit walked the gap 4.33 -> 5.64 m, so he
+	# dropped on the pre-pin position, watched the puck drift past his threshold,
+	# and stood back out of a committed butterfly — "he drops, backs up a bit, then
+	# gets back up", from a standstill. The puck also never fires from any of those
+	# intermediate spots: Puck.release reads the pin itself.
+	#
+	# Same convention the loose-mode smoother already follows (reseed on every
+	# fresh mode entry rather than filtering across it).
+	if carrier.is_slapshot_pinning() and not _was_slapshot_pinned:
+		puck.set_puck_position(contact)
+	else:
+		puck.set_puck_position(puck.get_puck_position().lerp(contact, carry_smoothing_speed * delta))
+	_was_slapshot_pinned = carrier.is_slapshot_pinning()
 
 # ── Server Signals ────────────────────────────────────────────────────────────
 # Run on host only (connected in setup() when is_server). Each resolves the

@@ -196,3 +196,10 @@ here whenever you bump, in the same format.
 #      plain int, but the VALUE 80 is new: an older peer coerces it back to 79
 #      and would then simulate a different mass, top speed and reach than the
 #      host, diverging prediction. Mixed builds must be refused.
+# v47: shot_events carries the release CONTEXT — the defending goalie's stance,
+#      unset fraction, challenge radius, lateral position and screen delay, plus
+#      the shooter's speed, seconds since the goalie's last save, and the
+#      release's lateral pace. ShotEvent.WIRE_SIZE 10 -> 18, which
+#      receive_shot_events ships host->client at game-over. A v46 client size-
+#      checks each record in from_array and would silently drop every one,
+#      rendering an empty post-game shot map. Mixed builds must be refused.

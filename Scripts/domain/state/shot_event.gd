@@ -27,6 +27,27 @@ var on_net: bool = false
 var period: int = 1
 var clock_s: float = 0.0    # period time remaining at the shot (for the xG-flow x-axis)
 
+# ── Release CONTEXT (the goalie's situation, sampled at the release tick) ─────
+# Location alone cannot be compared to a public xG model, because a fitted model
+# has the context baked INTO its location term: an NHL shot from 3 m is mostly
+# rebounds and scrambles, so "3 m" silently carries "chaos". Stripping that out
+# and comparing the residue measures nothing. These columns put it back, so an
+# empirical model can be fitted from our own play and the comparison becomes
+# like-for-like by construction.
+#
+# All of it is already computed at release for the goalie's own read; this only
+# stops throwing it away. Defaults are the "no goalie resolved" case (drills,
+# empty net), which reads as a set, unscreened keeper — deliberately the neutral
+# assumption rather than a missing-data sentinel a query would have to know about.
+var goalie_stance: int = -1        # GoalieStateMachine.State, -1 when unresolved
+var goalie_unset: float = 0.0      # 0 square and stopped … 1 fully in motion
+var goalie_radius: float = 0.0     # challenge radius from goal centre (m)
+var goalie_x: float = 0.0          # lateral position (rink coords)
+var screen_delay: float = 0.0      # s the shot was hidden from him, 0 = clear sight
+var shooter_speed: float = 0.0     # m/s at release — a stationary shot is rare in play
+var since_last_save_s: float = -1.0  # s since this goalie's last save, -1 = none yet
+var puck_lateral_speed: float = 0.0  # |vx| of the release — deke / cross-seam finish
+
 
 # Params carry the p_ prefix so they don't shadow the fields they assign (the
 # engine analyser flags that; gdlint doesn't see it).
@@ -53,12 +74,13 @@ static func make(p_shooter_peer: int, p_team_id: int, pos: Vector3, p_xg: float,
 # fixed-size arrays (one per event) — the payload is a few dozen events once per
 # match, so compactness matters less than being obviously correct.
 
-const WIRE_SIZE: int = 10
+const WIRE_SIZE: int = 18
 
 
 func to_array() -> Array:
 	return [shooter_peer, team_id, x, z, xg, outcome, shot_type, on_net,
-			period, clock_s]
+			period, clock_s, goalie_stance, goalie_unset, goalie_radius, goalie_x,
+			screen_delay, shooter_speed, since_last_save_s, puck_lateral_speed]
 
 
 # Returns null on a malformed record (version skew / forged payload) so the
@@ -77,6 +99,14 @@ static func from_array(a: Array) -> ShotEvent:
 	e.on_net = a[7]
 	e.period = a[8]
 	e.clock_s = a[9]
+	e.goalie_stance = a[10]
+	e.goalie_unset = a[11]
+	e.goalie_radius = a[12]
+	e.goalie_x = a[13]
+	e.screen_delay = a[14]
+	e.shooter_speed = a[15]
+	e.since_last_save_s = a[16]
+	e.puck_lateral_speed = a[17]
 	return e
 
 
@@ -95,6 +125,14 @@ static func from_row(row: Dictionary) -> ShotEvent:
 	e.on_net = bool(row.get("on_net", false))
 	e.period = int(row.get("period", 1))
 	e.clock_s = float(row.get("clock_s", 0.0))
+	e.goalie_stance = int(row.get("goalie_stance", -1))
+	e.goalie_unset = float(row.get("goalie_unset", 0.0))
+	e.goalie_radius = float(row.get("goalie_radius", 0.0))
+	e.goalie_x = float(row.get("goalie_x", 0.0))
+	e.screen_delay = float(row.get("screen_delay", 0.0))
+	e.shooter_speed = float(row.get("shooter_speed", 0.0))
+	e.since_last_save_s = float(row.get("since_last_save_s", -1.0))
+	e.puck_lateral_speed = float(row.get("puck_lateral_speed", 0.0))
 	return e
 
 
@@ -145,4 +183,12 @@ func to_dict() -> Dictionary:
 		"on_net": on_net,
 		"period": period,
 		"clock_s": snappedf(clock_s, 0.1),
+		"goalie_stance": goalie_stance,
+		"goalie_unset": snappedf(goalie_unset, 0.01),
+		"goalie_radius": snappedf(goalie_radius, 0.01),
+		"goalie_x": snappedf(goalie_x, 0.01),
+		"screen_delay": snappedf(screen_delay, 0.001),
+		"shooter_speed": snappedf(shooter_speed, 0.01),
+		"since_last_save_s": snappedf(since_last_save_s, 0.01),
+		"puck_lateral_speed": snappedf(puck_lateral_speed, 0.01),
 	}

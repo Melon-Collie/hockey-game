@@ -232,13 +232,10 @@ func test_disguise_delta() -> void:
 	assert_almost_eq(on_tele["mean_deficit"], off_tele["mean_deficit"], 0.01,
 			"...and must leave the goalie the same reach margin at release")
 
-	# 2. Deception must pay. NOTE WHICH AXIS PAYS: selling the wrong HEIGHT
-	#    misleads the LEG read — the butterfly drop, a whole-body commitment that
-	#    is expensive to undo — and converts hard (+5 goals here). Selling the
-	#    wrong CORNER misleads only the ARM read, and at 5-9 m the arm has enough
-	#    margin to re-aim, so it costs reach without converting. That asymmetry is
-	#    a real property of the model, not an instrument artifact: committing your
-	#    legs to the wrong read is far more expensive than committing your glove.
+	# 2. Deception must pay, on the LATERAL axis. Selling the wrong CORNER
+	#    misleads the ARM read; selling the wrong HEIGHT misleads the LEG read
+	#    (the butterfly drop) and is reported below but deliberately unpinned —
+	#    see the note there.
 	#
 	#    ── UPDATE: WRONG CORNER NOW CONVERTS TOO (2026-07) ─────────────────────
 #    It used to cost reach without converting, and the cause was not the arm's
@@ -281,13 +278,26 @@ func test_disguise_delta() -> void:
 	#    pre-lean was the only channel deception reached); goals are the right one
 	#    for R1, and they work here precisely because the effect is now large
 	#    enough to cross the save/goal boundary on several spots.
-	assert_gt(on_high["goals"], off_high["goals"],
-			"selling the wrong HEIGHT must beat the goalie more often than it did pre-R1")
-	# 3. And deception must be worth more than honesty, under R1.
-	assert_gt(on_high["goals"], on_tele["goals"],
-			"a disguised release must beat the goalie more often than a telegraphed one")
+	# 3. And deception must be worth more than honesty, under R1. LATERAL ONLY.
 	assert_gt(on_lat["mean_deficit"], on_tele["mean_deficit"],
-			"...and selling the wrong corner must at least cost him reach margin")
+			"selling the wrong corner must at least cost him reach margin")
+
+	# ── HEIGHT DISGUISE IS REPORTED, NOT ASSERTED (2026-07) ──────────────────
+	# Selling a flat shot and firing high is a DEGENERATE mechanic and is
+	# deliberately not a design goal, so the wrong-height arm above is kept as a
+	# measurement and nothing keys on it. It used to assert, and what those
+	# assertions actually pinned was an artifact: this sweep never re-settles
+	# between shots, so the goalie is at exactly shuffle_speed with an unset
+	# fraction of 0.80 at EVERY release, and the height result tracked the
+	# caught-moving read latency rather than read_lag. Settle him properly and
+	# the pre-existing effect was 3 goals vs 2 — inside the sweep's own stated
+	# 1-in-14 quantization. Do not re-add an assertion here without first fixing
+	# the instrument's set-goalie premise.
+	#
+	# The LATERAL arm above is the axis the design cares about, and it is the one
+	# with a mechanism behind it (arms aim at the belief; see the UPDATE block).
+	# It is measured through the same unsettled goalie, so its magnitude carries
+	# the same caveat — hence the deficit assertion rather than a goal count.
 
 
 # ── SWEPT look-off: the arm the step-disguise cannot measure ─────────────────

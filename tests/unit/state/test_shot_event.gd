@@ -113,3 +113,62 @@ func test_decode_rows_skips_non_dictionaries() -> void:
 	var good := ShotEvent.make(1, 0, Vector3.ZERO, 0.2,
 			ShotEvent.Outcome.SAVED, ShotEvent.ShotType.SHOT, true, 1, 0.0).to_dict()
 	assert_eq(ShotEvent.decode_rows([good, "junk", 7, good]).size(), 2)
+
+
+# ── Release context ──────────────────────────────────────────────────────────
+# The goalie-situation columns exist so an EMPIRICAL xG can be fitted from our
+# own logged play — location alone is not comparable to a public model, which
+# has the context baked into its location term. These pin the two things a
+# consumer relies on: the context survives both round trips, and a row written
+# before the columns existed still decodes to the neutral "set, unscreened
+# keeper" defaults rather than erroring or reading as missing.
+
+func _with_context() -> ShotEvent:
+	var e := ShotEvent.make(7, 1, Vector3(2.5, 0.0, -20.0), 0.31,
+			ShotEvent.Outcome.GOAL, ShotEvent.ShotType.SHOT, true, 2, 88.5)
+	e.goalie_stance = 5
+	e.goalie_unset = 0.62
+	e.goalie_radius = 1.41
+	e.goalie_x = -0.33
+	e.screen_delay = 0.125
+	e.shooter_speed = 5.75
+	e.since_last_save_s = 0.84
+	e.puck_lateral_speed = 3.20
+	return e
+
+
+func test_context_survives_the_wire_round_trip() -> void:
+	var r := ShotEvent.from_array(_with_context().to_array())
+	assert_not_null(r, "a full-width record decodes")
+	assert_eq(r.goalie_stance, 5)
+	assert_almost_eq(r.goalie_unset, 0.62, 0.0001)
+	assert_almost_eq(r.goalie_radius, 1.41, 0.0001)
+	assert_almost_eq(r.goalie_x, -0.33, 0.0001)
+	assert_almost_eq(r.screen_delay, 0.125, 0.0001)
+	assert_almost_eq(r.shooter_speed, 5.75, 0.0001)
+	assert_almost_eq(r.since_last_save_s, 0.84, 0.0001)
+	assert_almost_eq(r.puck_lateral_speed, 3.20, 0.0001)
+
+
+func test_context_survives_the_stored_row_round_trip() -> void:
+	var e := ShotEvent.from_row(_with_context().to_dict())
+	assert_eq(e.goalie_stance, 5)
+	assert_almost_eq(e.goalie_unset, 0.62, 0.01)
+	assert_almost_eq(e.screen_delay, 0.125, 0.001)
+	assert_almost_eq(e.shooter_speed, 5.75, 0.01)
+	assert_almost_eq(e.since_last_save_s, 0.84, 0.01)
+	assert_almost_eq(e.puck_lateral_speed, 3.20, 0.01)
+
+
+func test_pre_context_row_decodes_to_neutral_defaults() -> void:
+	# A row stored before the migration. It must read as a set, unscreened keeper
+	# with no prior save, not as missing data a query has to special-case.
+	var old_row := {
+		"team_id": 0, "x": 1.0, "z": -20.0, "xg": 0.1, "outcome": "saved",
+		"shot_type": "shot", "on_net": true, "period": 1, "clock_s": 30.0,
+	}
+	var e := ShotEvent.from_row(old_row)
+	assert_eq(e.goalie_stance, -1, "no goalie resolved")
+	assert_eq(e.goalie_unset, 0.0, "reads as set")
+	assert_eq(e.screen_delay, 0.0, "reads as clear sight")
+	assert_eq(e.since_last_save_s, -1.0, "no prior save this game")

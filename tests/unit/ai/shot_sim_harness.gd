@@ -115,6 +115,16 @@ static func _depth_constraints(threat_dist: float) -> GoalieDepthSolver.Constrai
 
 
 # Goalie set position (x on the challenge arc, z from the depth chart) for a
+# AI MIRROR: the arc solver's sharp-angle convergence is part of where the live
+# goalie stands, so the band model has to see the same one or the bots score
+# against a keeper who is not there. Defaults track GoalieController's authored
+# values (Hard); rebuilt per call, which is fine off the hot path.
+static func _arc_cfg() -> GoalieBehaviorRules.ArcConfig:
+	var cfg := GoalieBehaviorRules.ArcConfig.new()
+	cfg.net_half_width = NET_HW
+	return cfg
+
+
 # shooter carrying the puck. Attacking goal at -Z (shooter shoots toward -Z).
 static func goalie_set_pos(shooter: Vector3, goal: Vector3) -> Vector3:
 	var dir_sign: int = int(signf(-goal.z))
@@ -122,7 +132,7 @@ static func goalie_set_pos(shooter: Vector3, goal: Vector3) -> Vector3:
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(threat, goal.z, goal.x)
 	var radius: float = GoalieDepthSolver.solve_target(_depth_constraints(threat_dist))
 	var xz: Vector2 = GoalieBehaviorRules.target_arc_position(
-			threat, goal.z, goal.x, dir_sign, radius, NET_HW)
+			threat, goal.z, goal.x, dir_sign, radius, _arc_cfg())
 	return Vector3(xz.x, 0.0, xz.y)
 
 

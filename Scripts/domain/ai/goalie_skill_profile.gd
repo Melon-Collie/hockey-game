@@ -37,8 +37,14 @@ extends RefCounted
 #     delay (how long a body hides the puck from the goalie — see GoalieBehavior
 #     Rules.screen_occlusion_delay). Higher → point shots through traffic beat him
 #     more (a weaker goalie loses a screened puck for longer).
-#   • move_read_max_delay_s  — extra read latency when caught moving / unset.
-#     Higher → he is punished harder for shots taken while he is still sliding.
+#   • move_read_scramble_delay_s — extra read latency while SCRAMBLING (standing
+#     up out of a butterfly, or riding a committed lunge). Higher → rebounds and
+#     second chances convert harder against him. Deliberately the only tiered
+#     caught-unset latency: a goalie merely travelling on his feet pays the small
+#     untiered `move_read_speed_delay` instead, because his real cost is the
+#     momentum he carries through the reaction freeze — and THAT tier-varies for
+#     free off lateral_accel_mps2 (worse edges take longer to kill, so he drifts
+#     further past the puck). See GoalieController.unset_drift_decel_ratio.
 #
 # Positioning / save group (the "give up the net" levers, so the scale is a real
 # ladder rather than reaction latency alone):
@@ -89,8 +95,10 @@ var poke_radius_m: float
 # Cap (s) on the grounded screen-occlusion pickup delay (worst-case time a body
 # can hide the puck from the goalie before the read starts).
 var screen_max_extra_delay_s: float
-# Extra read latency (s) when fully unset / caught moving.
-var move_read_max_delay_s: float
+# Extra read latency (s) while scrambling — standing up out of a butterfly, or
+# out of the play on a committed lunge. Merely travelling on his feet is priced
+# separately and untiered (GoalieController.move_read_speed_delay).
+var move_read_scramble_delay_s: float
 # Challenge depth (m) at the doorstep / mid-range on the depth chart. Lower sits
 # the goalie deeper in the net, giving up shooting angle.
 var depth_aggressive_m: float
@@ -164,7 +172,7 @@ var read_converge_s: float
 
 func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 		p_poke_radius_m: float, p_screen_max_extra_delay_s: float,
-		p_move_read_max_delay_s: float, p_depth_aggressive_m: float,
+		p_move_read_scramble_delay_s: float, p_depth_aggressive_m: float,
 		p_depth_base_m: float, p_glove_react_max_speed_mps: float,
 		p_blocker_react_max_speed_mps: float, p_pad_toe_out_butterfly_deg: float,
 		p_lateral_accel_mps2: float, p_puck_play_go_margin_s: float,
@@ -176,7 +184,7 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 	cross_crease_react_delay_s = p_cross_crease_react_delay_s
 	poke_radius_m = p_poke_radius_m
 	screen_max_extra_delay_s = p_screen_max_extra_delay_s
-	move_read_max_delay_s = p_move_read_max_delay_s
+	move_read_scramble_delay_s = p_move_read_scramble_delay_s
 	depth_aggressive_m = p_depth_aggressive_m
 	depth_base_m = p_depth_base_m
 	glove_react_max_speed_mps = p_glove_react_max_speed_mps
