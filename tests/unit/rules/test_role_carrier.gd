@@ -1775,9 +1775,11 @@ func test_swarmed_own_zone_carrier_squeezes_out_with_possession() -> void:
 
 
 func test_best_dump_geometry_in_own_zone_is_a_hard_rim_out() -> void:
-	# Direct pin on the DZ clear's GEOMETRY (the compete around it is covered
-	# above): from our own zone the dump is a hard flat fling off the
-	# strong-side boards, out of the zone.
+	# Direct pin on what the DZ clear ACHIEVES, not on the bearing it picks.
+	# The clear is a searched release now, so the side it comes off is an
+	# outcome of the icing constraint and the ice in front of the carrier, not
+	# a formula — what has to hold is that the puck leaves our end and stays in
+	# play. dump[4] is the resting spot; dump[1] is only where the stick points.
 	var self_pos := Vector3(6, 0, 24)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
@@ -1787,11 +1789,15 @@ func test_best_dump_geometry_in_own_zone_is_a_hard_rim_out() -> void:
 	var c := AIRoleCarrier.new()
 	c._build_action_opponents_lists(ctx)
 	var dump: Array = c._best_dump(ctx, AIRoleHelpers.resolve_our_goalie_pos(ctx))
-	assert_false(dump[2], "a DZ clear is a hard flat fling, not a soft flip")
-	assert_gt(dump[1].x, 0.0, "cleared off the strong-side boards (carrier's side)")
+	assert_false(dump[2], "a DZ clear is a chip out, not a soft corner flip")
+	var settle: Vector3 = dump[4]
+	gut.p("  DZ clear from %s settles at %s" % [self_pos, settle])
 	assert_false(
-			AIActionScoring.in_offensive_zone(dump[1], ctx.defending_goal_pos),
+			AIActionScoring.in_offensive_zone(settle, ctx.defending_goal_pos),
 			"the clear takes the puck out of our defensive zone")
+	# And it does not ice: the release never reaches their goal line.
+	assert_lt(absf(settle.z), GameRules.GOAL_LINE_Z,
+			"the clear stays in play — no goal-line crossing")
 
 
 func test_contained_past_center_with_open_backfield_regroups() -> void:
@@ -1851,11 +1857,15 @@ func test_best_dump_geometry_past_center_is_a_soft_flip_to_the_far_corner() -> v
 	var c := AIRoleCarrier.new()
 	c._build_action_opponents_lists(ctx)
 	var dump: Array = c._best_dump(ctx, AIRoleHelpers.resolve_our_goalie_pos(ctx))
-	assert_true(dump[2], "a dump-in is a soft flip to the corner")
+	assert_true(dump[2], "a dump-in is a soft flip")
+	# The dump-in is a searched release scored on the race to where the puck
+	# STOPS, so which corner it picks is an outcome of who is closer to what,
+	# not a formula. What must hold is that it puts the puck deep.
+	var settle: Vector3 = dump[4]
+	gut.p("  dump-in from %s settles at %s" % [self_pos, settle])
 	assert_true(
-			AIActionScoring.in_offensive_zone(dump[1], ctx.attacking_goal_pos),
-			"the dump target is in the offensive zone")
-	assert_lt(dump[1].x, 0.0, "the FAR corner, opposite the carrier's side")
+			AIActionScoring.in_offensive_zone(settle, ctx.attacking_goal_pos),
+			"the dump-in comes to rest in the offensive zone")
 
 
 func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
@@ -2696,30 +2706,45 @@ func _rim_ctx(team_size: int, wall_lane_blocked: bool) -> RoleContext:
 	return ctx
 
 
-func test_own_zone_clear_is_a_flat_rim_when_the_wall_lane_is_open() -> void:
+func test_own_zone_clear_is_worth_more_with_a_winger_posted_to_win_it() -> void:
+	# The clear is not a pure concession: what it is worth is what we are likely
+	# to win back. A teammate posted where the puck comes to rest turns it into
+	# a completed breakout, and the value has to see that.
+	#
+	# This replaces a pin on the retired FLAT-rim delivery flag. The rim/chip
+	# choice no longer exists as a branch — a launch angled into the near boards
+	# IS the rim, and the landing solver walks its real carom — so what is
+	# assertable is the consequence, not the label. It is also no longer 5v5-only:
+	# the delivery value comes from the race, which every roster size runs.
 	var ctx := _rim_ctx(5, false)
 	var c := AIRoleCarrier.new()
 	c._build_action_opponents_lists(ctx)
-	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
-	assert_true(r[3], "open wall lane + posted winger → the clear is the FLAT rim")
-	# The delivery out-prices the shipped zero-gain concession (3v3 shape).
-	var ctx3 := _rim_ctx(3, false)
-	var c3 := AIRoleCarrier.new()
-	c3._build_action_opponents_lists(ctx3)
-	var r3: Array = c3._best_dump(ctx3, ctx3.defending_goal_pos)
-	assert_gt(r[0], r3[0],
-			"a manned wall post makes the clear worth more than a giveaway")
-	assert_false(r3[3], "3v3 keeps the shipped chip — no rim delivery")
+	var with_winger: Array = c._best_dump(ctx, ctx.defending_goal_pos)
+	# Same scene with the wall post unmanned.
+	var bare := _make_ctx(Vector3(10.5, 0, 24.0), [
+			[1, TEAM_ID, Vector3(10.5, 0, 24.0)],
+			[3, 1, Vector3(8.8, 0, 23.0)],
+			[4, 1, Vector3(9.0, 0, 25.8)],
+			[5, 1, Vector3(0.0, 0, 15.0)]])
+	bare.team_size = 5
+	var c_bare := AIRoleCarrier.new()
+	c_bare._build_action_opponents_lists(bare)
+	var without: Array = c_bare._best_dump(bare, bare.defending_goal_pos)
+	gut.p("  clear value: winger posted %.4f vs unmanned %.4f"
+			% [with_winger[0], without[0]])
+	assert_gt(with_winger[0], without[0],
+			"a manned post makes the clear worth more than an unmanned one")
 
 
-func test_behind_net_clear_rides_the_boards_not_the_chord() -> void:
+func test_behind_net_clear_is_a_real_play_under_a_committed_forecheck() -> void:
 	# Retriever picks up BEHIND our net with the forecheck committed — the
-	# breakout harness's compete moment. The chord from there to the
-	# center-boards clear target threads the middle of our own zone
-	# (blocked by the forecheck, loss point in front of our net) and
-	# priced the clear at ~−0.4 exactly when doctrine says it's the right
-	# play; the real rim rides the boards out of the corner. The routed
-	# delivery must read as the good play it is: clearly positive.
+	# breakout harness's compete moment. Doctrine says clearing is the right
+	# play here, and it has to price that way.
+	#
+	# The old failure was a model/execution split: the clear was PRICED along a
+	# boards route out of the corner but FIRED at the chord, which threads the
+	# middle of our own zone. Searching releases removes the split — the priced
+	# path is the flown path — so what is left to assert is the verdict.
 	var self_pos := Vector3(2.0, 0, 28.2)
 	var ctx := _make_ctx(self_pos, [
 			[1, TEAM_ID, self_pos],
@@ -2731,18 +2756,33 @@ func test_behind_net_clear_rides_the_boards_not_the_chord() -> void:
 	var c := AIRoleCarrier.new()
 	c._build_action_opponents_lists(ctx)
 	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
-	assert_gt(r[0], 0.0,
-			"the boards-routed clear reads positive under a committed forecheck")
-	assert_true(r[3], "and it is the flat rim — the wall path is the protected lane")
+	gut.p("  behind-net clear settles at %s, value %.4f" % [r[4], r[0]])
+	# A clear is priced as a concession, so its value is <= 0 by construction;
+	# what doctrine demands here is that it is a CHEAP one — the puck leaves our
+	# end alive rather than being surrendered in front of our own net.
+	assert_gt(r[0], -0.1,
+			"the clear is a cheap concession under a committed forecheck")
+	assert_false(
+			AIActionScoring.in_offensive_zone(r[4], ctx.defending_goal_pos),
+			"and it actually leaves our zone")
 
 
-func test_rim_falls_back_to_the_chip_over_a_camped_wall_lane() -> void:
+func test_a_camped_wall_lane_makes_the_clear_worth_less() -> void:
+	# A body sitting where the clear comes to rest is priced by the race, not by
+	# a lane test on a modelled route: he is simply nearer the resting puck, so
+	# our recovery odds drop and the clear is worth less. Same scene, one
+	# opponent added to the wall lane.
+	var open_ctx := _rim_ctx(5, false)
+	var c_open := AIRoleCarrier.new()
+	c_open._build_action_opponents_lists(open_ctx)
+	var open_r: Array = c_open._best_dump(open_ctx, open_ctx.defending_goal_pos)
 	var ctx := _rim_ctx(5, true)
 	var c := AIRoleCarrier.new()
 	c._build_action_opponents_lists(ctx)
 	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
-	assert_false(r[3],
-			"a stick camped on the wall lane kills the rim — chip over everything")
+	gut.p("  clear value: open lane %.4f vs camped %.4f" % [open_r[0], r[0]])
+	assert_lt(r[0], open_r[0],
+			"a body camped where the clear lands lowers our odds of winning it")
 
 
 func test_developing_feed_watches_the_over_valve_in_5v5() -> void:

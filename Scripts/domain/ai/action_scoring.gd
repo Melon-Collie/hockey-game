@@ -5452,3 +5452,126 @@ static func _segment_crosses_aabb_xz(
 		if t_min > t_max:
 			return false
 	return true
+
+
+# ── Dump delivery search ─────────────────────────────────────────────────────
+# A dump is a RELEASE, not a spot: the puck goes where its launch and the boards
+# send it. Both dumps are therefore chosen by searching launches and reading
+# where each one actually ends up (AITrajectory.puck_release_landing), rather
+# than by aiming at a hand-placed target and pricing the concession there.
+#
+# The two dumps want opposite things and are scored separately:
+#   DZ CLEAR — get it out, and do not ice it. Hybrid icing is a race timed from
+#     the goal-line crossing, so a delivery that never reaches the line cannot
+#     be iced at all; a steep bank into the near boards buys that, because the
+#     contact sheds 37-60% where a glancing rim sheds ~5% AND the carom bends
+#     the path. Legality is bought by the PATH, which matters because the
+#     wrister floor means no release the bot can make dies inside the rink.
+#   NZ DUMP-IN — the opposite errand entirely. It is an offensive play (get it
+#     deep, forecheck it back), it cannot be icing by construction (it is only
+#     offered past the red line, and icing requires a release from our own
+#     half), so it is scored purely on winning the race to wherever the puck
+#     comes to rest.
+
+# Launch bearings tried per dump, as offsets from the aim axis. Spread wide
+# enough to include the steep bank into the near boards — the delivery that
+# makes a DZ clear legal — and dense enough that the corner it wraps into is
+# resolved. Each bearing is one closed-form landing solve.
+const DUMP_SEARCH_BEARINGS_RAD: Array = [
+	-1.20, -0.90, -0.60, -0.30, 0.0, 0.30, 0.60, 0.90, 1.20,
+]
+
+
+# Hang time of a release at `loft_level` and `launch_speed` — the airborne
+# window, 2*vy/g. Airborne carry costs no runout, which is why loft moves WHERE
+# a dump lands without slowing WHEN it arrives.
+static func dump_loft_hang_s(loft_level: int) -> float:
+	var vy: float = 0.0
+	if loft_level == ShotMechanics.ELEVATION_LOW:
+		vy = GameRules.DEFAULT_LOFT_VY_LOW_M_S
+	elif loft_level == ShotMechanics.ELEVATION_HIGH:
+		vy = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+	return 2.0 * vy / GameRules.GRAVITY_M_S2
+
+
+# The DZ clear: search launches and take the one that comes to rest NEAREST
+# neutral ice, without ever reaching their goal line.
+#
+# The objective is a target depth, not "as far as possible". Maximising up-ice
+# progress subject to the icing constraint picks, every time, the launch that
+# stops a metre short of their goal line — the puck ends up on their end wall
+# with our whole team behind it, which is the "clear went way too far" failure
+# made systematic. Neutral ice is what a clear actually wants: past our blue
+# line so the pressure is relieved, short of theirs so nobody is handed a free
+# regroup deep in our attacking end. Anything short of that is less relief,
+# anything past it is a giveaway, and one distance-to-target objective says
+# both.
+#
+# Deliberately not an EV read — a clear has no offensive ambition, and pricing a
+# turnover surface over it was what made it read as a large concession exactly
+# when it is the right play.
+#
+# Returns the chosen launch VELOCITY (xz, at `launch_speed`); zero when every
+# bearing ices, which leaves the caller to decide what to do with a puck that
+# cannot legally be cleared.
+static func solve_dump_clear(origin: Vector3, up_ice_dir: float,
+		launch_speed: float, loft_level: int) -> Vector3:
+	var hang_s: float = dump_loft_hang_s(loft_level)
+	# Their goal line is the one icing is judged at: up-ice of us.
+	var their_line_z: float = up_ice_dir * GameRules.GOAL_LINE_Z
+	var axis := Vector3(0.0, 0.0, up_ice_dir)
+	# The sweet spot: their blue line. The far edge of neutral ice — maximum
+	# relief that still leaves the puck contestable rather than gifted.
+	var target_z: float = up_ice_dir * GameRules.BLUE_LINE_Z
+	var best_vel: Vector3 = Vector3.ZERO
+	var best_miss: float = INF
+	for offset: float in DUMP_SEARCH_BEARINGS_RAD:
+		var vel: Vector3 = axis.rotated(Vector3.UP, offset) * launch_speed
+		var landing: Transform3D = AITrajectory.puck_release_landing(
+				origin, vel, hang_s, their_line_z, up_ice_dir)
+		if landing.basis.x.x > 0.5:
+			continue  # reaches their goal line — an icing race we need not run
+		var miss: float = absf(landing.origin.z - target_z)
+		if miss < best_miss:
+			best_miss = miss
+			best_vel = vel
+	return best_vel
+
+
+# The NZ dump-in: search launches and take the one whose RESTING spot we are
+# most likely to win. `out_landing` receives the chosen spot (caller-owned, so
+# the search allocates nothing on the compete path).
+#
+# Scored as recovery x position value: the race is the play. There is no
+# icing branch — this dump is only offered past the red line, and icing
+# requires a release from our own half, so the two are mutually exclusive.
+static func solve_dump_in(origin: Vector3, attacking_goal: Vector3,
+		launch_speed: float, loft_level: int,
+		our_chasers: Array[Vector3], opp_chasers: Array[Vector3],
+		out_landing: Array[Vector3]) -> Vector3:
+	var hang_s: float = dump_loft_hang_s(loft_level)
+	var goal_dir: float = signf(attacking_goal.z)
+	var axis := Vector3(0.0, 0.0, goal_dir)
+	var best_vel: Vector3 = Vector3.ZERO
+	var best_score: float = -INF
+	var best_spot: Vector3 = origin
+	for offset: float in DUMP_SEARCH_BEARINGS_RAD:
+		var vel: Vector3 = axis.rotated(Vector3.UP, offset) * launch_speed
+		var landing: Transform3D = AITrajectory.puck_release_landing(
+				origin, vel, hang_s)
+		var spot: Vector3 = landing.origin
+		# A dump-in that does not get the puck deeper than we already are is not
+		# a dump-in; it is a giveaway in the neutral zone.
+		if goal_dir * (spot.z - origin.z) <= 0.0:
+			continue
+		# The race is run to where the puck STOPS, over the time the puck spends
+		# getting there — chasers are not frozen while it travels, and a longer
+		# flight is exactly what a forecheck converts into position.
+		var recovery: float = chase_recovery(spot, our_chasers, opp_chasers)
+		var score: float = recovery * position_potential(spot, attacking_goal, opp_chasers)
+		if score > best_score:
+			best_score = score
+			best_spot = spot
+			best_vel = vel
+	out_landing[0] = best_spot
+	return best_vel
