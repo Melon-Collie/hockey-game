@@ -358,6 +358,28 @@ func test_evaluator_costs() -> void:
 	_bench("time_to_arrive", func() -> void:
 		AIActionScoring.time_to_arrive(from, net, Vector3(2, 0, -4)))
 
+	# Puck-path integration, at the horizons a settle-point read would need. The
+	# dump prices its concession at an AIM point today; walking to where the puck
+	# actually stops is the honest read, and these say what that walk costs. Step
+	# counts are the whole runout at the two paces that matter: a quick-pass rim
+	# (14 m/s, ~200 m of runout under PUCK_ICE_DECEL_M_S2 — it never stops on this
+	# rink, so it is bounded by board contacts) and an icing-legal pace whose
+	# runout dies inside the rink. dt matches solve_reception_gate's walk.
+	var rim_vel := Vector3(0.0, 0.0, -14.0)
+	var legal_vel := Vector3(0.0, 0.0, -6.6)
+	_bench("predict_final (puck, 40 steps @ 50ms = 2.0 s)", func() -> void:
+		AITrajectory.predict_final(from, rim_vel, 40, 0.05,
+				GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
+				Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION))
+	_bench("predict_final (puck, 120 steps @ 50ms = 6.0 s)", func() -> void:
+		AITrajectory.predict_final(from, rim_vel, 120, 0.05,
+				GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
+				Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION))
+	_bench("predict_final (puck, 270 steps @ 50ms = full runout)", func() -> void:
+		AITrajectory.predict_final(from, legal_vel, 270, 0.05,
+				GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
+				Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION))
+
 	gut.p("")
 	gut.p("=== Evaluator micro-benchmark (µs per call, %d reps) ===" % REPS)
 	var sorted_rows: Array[Dictionary] = _results.duplicate()
