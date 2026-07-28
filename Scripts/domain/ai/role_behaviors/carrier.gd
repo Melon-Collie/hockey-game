@@ -271,8 +271,14 @@ const OUTLET_DEVELOP_MIN_SPEED_M_S: float = 1.0
 # "somewhere other than here", not destinations worth planning a route to. The
 # forward half of the old 8-spoke ring is gone — see the field-derived block in
 # _best_carry.
+# Straight back (PI) is deliberately absent. It never won an argmax in any
+# benchmark scenario (0 for 82 rows) and it structurally cannot: a candidate
+# directly away from the objective is multiplied by a dest_score that reads it
+# as further from the net on the seam and lower on the closeness gradient. The
+# genuine straight-back peel-out is the retreat ring, at double the step, where
+# the separation actually buys something.
 const _REAR_ANGLES: Array[float] = [
-		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
+		PI * 0.5, PI * 0.75, -PI * 0.75, -PI * 0.5,
 ]
 
 # RETREAT ring — a second, deeper candidate arc across the back half (lateral
@@ -2391,27 +2397,42 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# not plans, and the space field deliberately looks only where the carrier is
 	# trying to GO. The committed peel-out is the retreat ring below.
 	#
-	# Gated on the SAME evadability threshold as that retreat ring, and for the
-	# same reason its doc gives: an escape move answers containment, and with no
-	# defender able to reach the puck the forward gradient owns the compete
-	# anyway. Measured over the benchmark scenarios, this ring was 21% of all
-	# candidate rows and 6.7% of argmax wins — and every one of those wins came
-	# from the open-ice side of the gate, i.e. the carrier electing a lateral
-	# shuffle with nobody near it. Gated, those decisions go to the slot drive
-	# and the directed seam instead, the suite is bit-identical, and the open-ice
-	# carry search costs a third less. A hot-path gate, not a tactical choice.
-	if current_safety < CARRY_RETREAT_SAFETY_SKIP:
-		for angle: float in _REAR_ANGLES:
-			var c: float = cos(angle)
-			var s_a: float = sin(angle)
-			var dir_x: float = fwd_x * c - fwd_z * s_a
-			var dir_z: float = fwd_x * s_a + fwd_z * c
-			var candidate := Vector3(
-					self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
-					self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
-			if not _candidate_ice_legal(candidate, behind_net):
-				continue
-			_beam_score_base(ctx, candidate, our_goalie, false)
+	# Gated on MOMENTUM, not on pressure. Travelling forward at pace, a spot a
+	# local step behind or beside you is not somewhere you can go: reaching it
+	# means shedding the cross-speed, braking out the reversal and re-
+	# accelerating, which at a full stride costs multiples of the planning beat.
+	# So the ring is skipped per angle whenever the honest momentum-aware
+	# arrival time exceeds one beat — the same horizon the forward candidates
+	# are plans over. At a standstill every angle passes and the ring is whole;
+	# at speed it narrows toward the directions the carrier can actually take.
+	#
+	# This is a physical reachability bound, not a tactical choice, which is
+	# what makes it the right gate here. An earlier version gated on
+	# current_safety by analogy with the retreat ring, and that was wrong: the
+	# space fan spans only +/-70 degrees, so this ring is the carrier's ONLY
+	# representable lateral move, and the +/-90 angles took 18 of its 22 wins.
+	# Suppressing those in open ice removed a playmaking option (swinging wide
+	# to open an angle) on the grounds that it was not an escape.
+	#
+	# The arrival time is recomputed by the candidate scorer, but at ~4% of a
+	# full candidate it is far cheaper than scoring one that cannot be reached.
+	# (_score_move_candidate_base's own decay prune cannot do this job: it
+	# compares a discount factor against a running TOTAL, so it never fires.)
+	for angle: float in _REAR_ANGLES:
+		var c: float = cos(angle)
+		var s_a: float = sin(angle)
+		var dir_x: float = fwd_x * c - fwd_z * s_a
+		var dir_z: float = fwd_x * s_a + fwd_z * c
+		var candidate := Vector3(
+				self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
+				self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
+		if not _candidate_ice_legal(candidate, behind_net):
+			continue
+		if AIActionScoring.time_to_arrive(
+				self_pos, candidate, ctx.self_velocity, ctx.self_max_speed,
+				ctx.self_max_accel, ctx.self_lateral_grip) > CARRY_PLAN_BEAT_S:
+			continue
+		_beam_score_base(ctx, candidate, our_goalie, false)
 
 	# RETREAT ring — see CARRY_RETREAT_* doc: the committed peel-out arc across
 	# the back half at double the local step, the move that creates REAL
