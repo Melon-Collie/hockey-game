@@ -158,6 +158,13 @@ func _reaches_far_goal_line(origin: Vector3, vel: Vector3, hang_s: float = 0.0) 
 			origin, vel, hang_s, -GameRules.GOAL_LINE_Z, -1.0).basis.x.x > 0.5
 
 
+# Seconds until the release reaches the far goal line; INF if it never does.
+func _time_to_far_goal_line(origin: Vector3, vel: Vector3, hang_s: float = 0.0) -> float:
+	var r: Vector3 = AITrajectory.puck_release_landing(
+			origin, vel, hang_s, -GameRules.GOAL_LINE_Z, -1.0).basis.x
+	return INF if r.x < 0.5 else r.y
+
+
 func test_a_hard_clear_from_our_own_end_reaches_their_goal_line() -> void:
 	# The whole icing problem in one assertion: quick-pass pace, fired up the
 	# wall from our own corner, arrives behind their net.
@@ -181,3 +188,76 @@ func test_the_crossing_read_is_direction_aware() -> void:
 	assert_false(_reaches_far_goal_line(
 			Vector3(0.0, 0.0, 22.0), Vector3(0.0, 0.0, 3.0)),
 			"a puck driven deeper into our own end never reaches their line")
+
+
+# ── The crossing CLOCK ───────────────────────────────────────────────────────
+# Hybrid icing is a race judged when the puck reaches the goal line, so what
+# decides a clear's legality is how long it takes to get there — not how far it
+# goes. These pin the clock the dump eval races against.
+
+func test_the_crossing_clock_is_reported_with_the_crossing() -> void:
+	var t: float = _time_to_far_goal_line(Vector3(12.0, 0.0, 22.0), Vector3(0.0, 0.0, -14.0))
+	assert_true(is_finite(t), "a crossing release reports when it crosses")
+	# 48.65 m at 14 m/s shedding 0.49 m/s^2 — a shade over the constant-speed 3.48 s.
+	assert_almost_eq(t, 3.6, 0.2, "straight-line crossing clock is the slide solve")
+
+
+func test_a_release_that_never_crosses_reports_no_clock() -> void:
+	assert_eq(_time_to_far_goal_line(Vector3(0.0, 0.0, 22.0), Vector3(0.0, 0.0, 3.0)), INF,
+			"no crossing, no clock")
+
+
+func test_total_settle_time_is_reported() -> void:
+	# A slow straight slide: v/a, the whole runout.
+	var r: Vector3 = AITrajectory.puck_release_landing(
+			Vector3(0.0, 0.0, 10.0), Vector3(0.0, 0.0, -3.0), 0.0).basis.x
+	assert_almost_eq(r.z, 3.0 / GameRules.PUCK_ICE_DECEL_M_S2, 0.05,
+			"an unobstructed slide settles in v/a")
+
+
+# ── Does a banked delivery actually buy the race? ────────────────────────────
+# The design question this file was extended to answer. A forechecker covers
+# roughly SKATER_PACE m/s; the race is won by being nearer the end-zone dot in
+# z when the puck arrives, so every extra second of puck flight is ground the
+# forecheck gains. Compare the deliveries available from the same spot.
+
+const SKATER_PACE_M_S: float = 8.0
+
+func test_banking_off_the_near_boards_buys_crossing_time() -> void:
+	var origin := Vector3(10.0, 0.0, 20.0)
+	var speed: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
+	# Straight up the wall — the delivery the DZ clear fires today.
+	var rim: float = _time_to_far_goal_line(origin, Vector3(0.0, 0.0, -speed))
+	# Angled INTO the near boards: a steep first contact sheds speed and the
+	# carom lengthens the path, both of which push the clock out.
+	var banked: float = _time_to_far_goal_line(
+			origin, Vector3(0.85, 0.0, -0.53).normalized() * speed)
+	gut.p("  straight rim reaches their goal line in %.2f s" % rim)
+	gut.p("  banked off the near boards: %s"
+			% ("never" if is_inf(banked) else "%.2f s" % banked))
+	assert_true(is_finite(rim), "the straight rim is the delivery that ices")
+	if is_inf(banked):
+		# The strongest form of the result: the steep first contact sheds enough
+		# and bends the path enough that the puck never reaches the line, so
+		# there is no race to lose.
+		gut.p("  banked delivery never reaches the line — no icing race exists")
+	else:
+		assert_gt(banked, rim,
+				"a banked delivery reaches the goal line later than a straight rim")
+		gut.p("  forecheck ground gained by banking: %.1f m at %.0f m/s"
+				% [(banked - rim) * SKATER_PACE_M_S, SKATER_PACE_M_S])
+
+
+func test_loft_does_not_by_itself_slow_the_crossing() -> void:
+	# Worth pinning because it is the intuitive-but-wrong half: a chip's hang
+	# time is FRICTIONLESS, so lofting the same launch speed reaches the line
+	# no later than a flat release — it is the PATH that buys the clock, not the
+	# height. (Loft earns its keep by clearing sticks, which is a different job.)
+	var origin := Vector3(10.0, 0.0, 20.0)
+	var vel := Vector3(0.0, 0.0, -GameRules.DEFAULT_QUICK_PASS_POWER_M_S)
+	var hang_s: float = 2.0 * GameRules.DEFAULT_LOFT_VY_HIGH_M_S / GameRules.GRAVITY_M_S2
+	var flat: float = _time_to_far_goal_line(origin, vel, 0.0)
+	var lofted: float = _time_to_far_goal_line(origin, vel, hang_s)
+	gut.p("  flat %.2f s vs lofted (%.2f s hang) %.2f s" % [flat, hang_s, lofted])
+	assert_lte(lofted, flat + 0.01,
+			"loft does not delay the crossing — the airborne leg spends no friction")

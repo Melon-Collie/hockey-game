@@ -506,26 +506,42 @@ static func _bounce_velocity(v: Vector2, inward_normal: Vector2) -> Vector2:
 	return out
 
 
-# Where a release comes to rest. `hang_s` is airborne time (a chip / saucer):
-# during it the puck carries its launch speed with NO ice friction — height is
-# why a flip covers ground a slide cannot — and only then begins to run out.
+# Where a release comes to rest, and WHEN it reaches a given line.
 #
-# `out_crossed_z` reports whether the path ever reached `ice_line_z` on the
-# `ice_line_dir` side (+1 = the line is at greater z). That is the icing test,
-# and it rides along here rather than in its own walk because it is answered by
-# the same legs. Pass ice_line_dir = 0.0 to skip it.
+# `hang_s` is airborne time (a chip / saucer): during it the puck carries its
+# launch speed with NO ice friction — height is why a flip covers ground a slide
+# cannot — and only then begins to run out.
+#
+# Returns a Transform3D (a value type, so nothing allocates on the compete path
+# — the same packing rationale as _step's return):
+#   origin   — the settle point
+#   basis.x  — (crossed, time_to_cross_s, total_time_s)
+#
+# `ice_line_z` / `ice_line_dir` (+1 = the line sits at greater z) name a line to
+# time the crossing of; pass dir = 0.0 to skip it. TIME is the point of this,
+# not the bare fact of crossing: hybrid icing is a RACE judged at the moment the
+# puck crosses the goal line (GameStateMachine.check_icing_for_loose_puck —
+# each team's closest body to the end-zone dot, ties to the defence). A puck
+# that takes long enough to get there is one the forecheck wins, and a won race
+# is not an infraction at all, it is a dump-in with pressure arriving. So what
+# the dump eval needs is the clock, and a delivery earns its legality by taking
+# a longer PATH rather than by being weaker.
 static func puck_release_landing(origin: Vector3, vel: Vector3, hang_s: float,
 		ice_line_z: float = 0.0, ice_line_dir: float = 0.0) -> Transform3D:
 	var p := Vector2(origin.x, origin.z)
 	var v := Vector2(vel.x, vel.z)
-	var crossed: bool = false
+	var cross_t: float = INF
+	var elapsed: float = 0.0
 	# Airborne leg: straight and frictionless, boards ignored (the puck is above
 	# the kickplate and the glass is not modelled as a carom surface here).
 	if hang_s > 0.0 and v.length() > _RELEASE_MIN_SPEED_M_S:
 		var air_end: Vector2 = p + v * hang_s
-		if ice_line_dir != 0.0 and not crossed:
-			crossed = _segment_reaches_z(p, air_end, ice_line_z, ice_line_dir)
+		if ice_line_dir != 0.0:
+			var f: float = _segment_line_fraction(p, air_end, ice_line_z, ice_line_dir)
+			if f >= 0.0:
+				cross_t = elapsed + hang_s * f
 		p = GameRules.clamp_to_rink_inner(air_end)
+		elapsed += hang_s
 	for _leg: int in _RELEASE_MAX_LEGS:
 		var speed: float = v.length()
 		if speed <= _RELEASE_MIN_SPEED_M_S:
@@ -535,9 +551,15 @@ static func puck_release_landing(origin: Vector3, vel: Vector3, hang_s: float,
 		var hit: Vector3 = _first_board_hit(p, dir, runout)
 		var leg_len: float = runout if is_inf(hit.x) else hit.x
 		var leg_end: Vector2 = p + dir * leg_len
-		if ice_line_dir != 0.0 and not crossed:
-			crossed = _segment_reaches_z(p, leg_end, ice_line_z, ice_line_dir)
+		# Time to slide leg_len under constant decel: the root of
+		# leg_len = v*t - a*t^2/2 . A full runout leg simply takes v/a.
+		var leg_t: float = _slide_time(speed, leg_len)
+		if ice_line_dir != 0.0 and is_inf(cross_t):
+			var f: float = _segment_line_fraction(p, leg_end, ice_line_z, ice_line_dir)
+			if f >= 0.0:
+				cross_t = elapsed + _slide_time(speed, leg_len * f)
 		p = leg_end
+		elapsed += leg_t
 		if is_inf(hit.x):
 			v = Vector2.ZERO
 			break
@@ -550,17 +572,47 @@ static func puck_release_landing(origin: Vector3, vel: Vector3, hang_s: float,
 	# Legs exhausted with the puck still alive (a corner walker): finish it as a
 	# straight slide clamped to the surface rather than stranding it at the last
 	# contact, which would report a puck still doing several m/s as settled.
-	if v.length() > _RELEASE_MIN_SPEED_M_S:
-		var tail: Vector2 = p + v.normalized() * puck_runout_m(v.length())
-		if ice_line_dir != 0.0 and not crossed:
-			crossed = _segment_reaches_z(p, tail, ice_line_z, ice_line_dir)
+	var tail_speed: float = v.length()
+	if tail_speed > _RELEASE_MIN_SPEED_M_S:
+		var tail: Vector2 = p + v / tail_speed * puck_runout_m(tail_speed)
+		if ice_line_dir != 0.0 and is_inf(cross_t):
+			var f: float = _segment_line_fraction(p, tail, ice_line_z, ice_line_dir)
+			if f >= 0.0:
+				cross_t = elapsed + _slide_time(tail_speed, p.distance_to(tail) * f)
+		elapsed += tail_speed / GameRules.PUCK_ICE_DECEL_M_S2
 		p = GameRules.clamp_to_rink_inner(tail)
-	# basis.x.x carries the crossing flag — a value type, no allocation on the
-	# compete path (same packing rationale as _step's Transform3D return).
 	return Transform3D(
-			Basis(Vector3(1.0 if crossed else 0.0, 0.0, 0.0), Vector3.ZERO, Vector3.ZERO),
+			Basis(Vector3(0.0 if is_inf(cross_t) else 1.0,
+					0.0 if is_inf(cross_t) else cross_t, elapsed),
+					Vector3.ZERO, Vector3.ZERO),
 			Vector3(p.x, 0.0, p.y))
 
 
-static func _segment_reaches_z(a: Vector2, b: Vector2, line_z: float, dir: float) -> bool:
-	return maxf(a.y * dir, b.y * dir) >= line_z * dir
+# Time to slide `dist` starting at `speed` under the ice decel — the root of
+# dist = speed*t - a*t^2/2. Clamped at the stopping time, so asking for the
+# whole runout (or beyond) returns speed/a rather than a NaN off a negative
+# discriminant.
+static func _slide_time(speed: float, dist: float) -> float:
+	var a: float = GameRules.PUCK_ICE_DECEL_M_S2
+	var stop_t: float = speed / a
+	if dist <= 0.0:
+		return 0.0
+	var disc: float = speed * speed - 2.0 * a * dist
+	if disc <= 0.0:
+		return stop_t
+	return minf((speed - sqrt(disc)) / a, stop_t)
+
+
+# Fraction along segment a->b at which it first reaches `line_z` on the `dir`
+# side, or -1.0 if it never does. 0.0 when `a` is already past the line.
+static func _segment_line_fraction(a: Vector2, b: Vector2,
+		line_z: float, dir: float) -> float:
+	var a_past: float = a.y * dir - line_z * dir
+	var b_past: float = b.y * dir - line_z * dir
+	if a_past >= 0.0:
+		return 0.0
+	if b_past < 0.0:
+		return -1.0
+	return a_past / (a_past - b_past)
+
+
