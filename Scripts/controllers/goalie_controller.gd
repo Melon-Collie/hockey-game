@@ -3284,23 +3284,50 @@ func _try_commit_slide(delta: float) -> void:
 			puck.global_position, _goal_line_z, _goal_center_x)
 	if puck_dist_to_goal > slide_threat_max_distance:
 		return
-	# Pad-coverage check. The lateral reference differs by whether the puck is
-	# carried or loose:
+	# Pad-coverage check — "is there net open to my side that I cannot cover from
+	# here", measured as HOW FAR OFF HIS ANGLE HE IS, not how far the puck is to
+	# his side. Those are the same thing only for a puck near the net, and wildly
+	# different for a shooter out at an angle: raw |puck.x - goalie.x| reads 2.3 m
+	# for a stationary shooter 3.2 m off centre whom the goalie is already square
+	# to, so it fired the slide on nothing. That is the bug behind the slot-slapper
+	# "he drops and slides away from the post during the wind-up" — the drop makes
+	# _try_commit_slide reachable, this test then reports a breach that is really
+	# just the shooter's angle, and the seal commits.
+	#
+	# The honest reference is the arc position the threat implies AT THE GOALIE'S
+	# OWN RADIUS: square to the threat means zero offset by construction, whatever
+	# angle he is being attacked from, and a genuine lateral play (cross-crease
+	# feed, walkout, sustained drag) swings that target across the crease and
+	# breaches the pad edge exactly as before.
+	#
+	# Radius comes from his ACTUAL world position rather than `_current_depth`,
+	# which carries perpendicular depth in this state and radius in the standing
+	# ones — passing it straight to an arc solve is the unit bug `butterfly_radius`
+	# exists to sidestep.
+	#
+	# The carried/loose split below is unchanged in intent:
 	#   Carried — use the quiet-eye-smoothed tracked threat, NOT the raw dangled
 	#     puck. A stickhandle wiggle swings the puck past the pad edge on every
 	#     deke; keying the slide off it made the goalie re-commit little slides
-	#     and skate back and forth across the crease chasing jitter. The tracked
-	#     threat (temporally low-passed, small in-tight body dash) only crosses
-	#     the pad edge on a sustained drag or a genuine cross-crease drive, which
-	#     is the slide we actually want.
+	#     and skate back and forth across the crease chasing jitter.
 	#   Loose — project the puck forward via its velocity so a cross-crease pass /
 	#     rebound in flight commits the slide early (the back-door seal).
-	var coverage_x: float
 	var carried: bool = puck.get_carrier() != null
+	var reference: Vector3
 	if carried:
-		coverage_x = _tracked_threat_position.x
+		reference = _tracked_threat_position
 	else:
-		coverage_x = puck.global_position.x + _loose_puck_velocity().x * slide_anticipation_time
+		reference = puck.global_position
+		reference.x += _loose_puck_velocity().x * slide_anticipation_time
+	var body_dx: float = _current_x - _goal_center_x
+	var body_dz: float = goalie.global_position.z - _goal_line_z
+	var body_radius: float = sqrt(body_dx * body_dx + body_dz * body_dz)
+	var square: Vector2 = GoalieBehaviorRules.target_arc_position(
+			reference, _goal_line_z, _goal_center_x, _direction_sign,
+			body_radius, _arc_cfg)
+	# Still the world X the slide commits TOWARD — _commit_slide_toward only reads
+	# its sign to pick the post side, and the seal target is solved there.
+	var coverage_x: float = square.x
 	var lateral_offset: float = coverage_x - _current_x
 	if absf(lateral_offset) <= pad_edge + slide_coverage_buffer:
 		_slide_coverage_confirm_timer = 0.0
