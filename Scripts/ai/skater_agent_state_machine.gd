@@ -3382,9 +3382,13 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 # `self_pos` heading toward `aim_world`. Used
 # to put the mouse close to the bot in the correct DIRECTION for an
 # upcoming shot/pass, so it converges quickly under the motion model.
-# Distance to the actual aim point doesn't matter — the shot direction
-# at fire time depends on (mouse - shoulder) or (mouse - blade), which
-# is a unit direction.
+# This is a PRE-AIM target only. It is safe to collapse the distance here
+# because the charged release rebuilds its own cursor from the wind-up
+# endpoints and takes its direction from the charge drag — but it is NOT a
+# usable release cursor: release_wrister's is_quick_pass branch aims
+# blade→cursor, and the blade is the ROM-projection of that same cursor, so
+# a cursor this close to the body carries no direction at all (see the snap
+# in _state_pass_pressed's one-tick branch).
 #
 # Returns the FINAL aim point — the pre-aim convergence check
 # (`_state_carry`) compares the mouse against this to decide when to
@@ -3877,12 +3881,14 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		return
 
 	# Dump override: a last-resort fling at a LOCATION, not a receiver. Force the
-	# one-tick quick release (fixed ~14 m/s — well short of the ~50 m an icing
-	# clear needs, so it settles in the neutral zone, not down the ice) and lift
-	# it by kind: HIGH to chip the DZ clear over sticks into the neutral zone, LOW
-	# to flip a dump-in into the corner. Elevation is set directly here (not via
-	# the saucer flag) so the quick release below reads it; done in the press
-	# state, after _state_carry has stopped clobbering the pass fields.
+	# one-tick quick release (fixed quick-pass pace) and lift it by kind: HIGH to
+	# chip the DZ clear over sticks into the neutral zone, LOW to flip a dump-in
+	# into the corner. Elevation is set directly here (not via the saucer flag) so
+	# the quick release below reads it; done in the press state, after _state_carry
+	# has stopped clobbering the pass fields.
+	# `_dump_target` is an AIM point, not where the puck stops: at the quick-pass
+	# pace the puck's runout under PUCK_ICE_DECEL_M_S2 exceeds the rink, so a dump
+	# runs until the boards take the speed out of it.
 	var is_dump: bool = _dump_target.is_finite()
 	if is_dump:
 		_pass_should_charge = false
@@ -3928,6 +3934,32 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# fights itself (_mouse_pos walks halfway to each in turn) and
 		# produces noisy cursor deltas, which the charge tracker reads as
 		# bizarre release directions on long charged passes.
+		#
+		# SNAP the cursor ONTO the aim before firing, the same reset
+		# SHOOT_PRESSED and the charged pass do at press entry — this
+		# release happens on the tick it is decided, so a motion-limited
+		# step (MOUSE_MAX_SPEED_M_S, ~0.83 m per tick) would fire from
+		# wherever the carry left the cursor. Two things break without it,
+		# and a dump is the only release that takes this path:
+		#   DIRECTION — the carry cursor sits on the CARRY_BLADE_AIM_FORWARD_M
+		#     ring at the protect seam, so the release left on the puck's
+		#     shielding side rather than the scored line (worst exactly when
+		#     it matters: a dump commits under pressure, which is when the
+		#     protect swing is widest). Pre-aim can't cover this — Aim-B2's
+		#     reach-cone shortcut commits on the first dispatch, by design.
+		#   CONDITIONING — release_wrister's is_quick_pass branch aims
+		#     blade→cursor, and apply_blade_from_mouse resolves the blade by
+		#     ROM-projecting that same cursor on the same tick. A cursor
+		#     inside the stick's reach projects to ~itself, collapsing the
+		#     difference onto the blade's lateral carry offset, so the
+		#     direction stopped depending on the target at all. This is why
+		#     the aim must land on the TARGET and not on the aim ring, which
+		#     is well inside that degenerate band.
+		# The step call stays so _step_mouse_internal's cache (the
+		# skipped-tick re-shape path) still sees this target; post-snap it
+		# resolves to the aim exactly.
+		_mouse_pos = Vector3(clean_pass_aim.x, 0.0, clean_pass_aim.z)
+		_mouse_pos_initialized = true
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 		if DEBUG_DECISIONS:
 			debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft
