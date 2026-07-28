@@ -438,6 +438,30 @@ func fire_release_at(shooter: Vector3, aim: Vector3, loft_level: int,
 
 # Hold a wrister windup aimed at `declared_aim` for `ticks`, with the goalie
 # tracking it live. Puck stays pinned on the carrier (the body-local freeze).
+#
+# ⚠️ `ticks` SELECTS WHICH GOALIE YOU MEASURE. This resets to the crease first
+# (see below) and does NOT settle, so the hold is also his entire recovery from
+# the goal line — and that recovery takes ~1.7 s. Measured challenge radius by
+# hold length, centred shooter at 5 m:
+#
+#     0.10 s -> 0.32    0.20 s -> 0.54    0.40 s -> 0.98
+#     0.60 s -> 1.38    1.00 s -> 1.68    1.67 s -> 1.75 (settled)
+#
+# So a 24-tick hold fires at a keeper 31% of the way out to his depth, and two
+# tests holding for different lengths are not comparing the same keeper at all.
+# Numbers from this path are about a goalie STILL COMING OUT unless the hold is
+# long — which is a legitimate thing to measure, but say which one you meant.
+#
+# SETTLING FIRST IS NOT A FREE FIX, so it is deliberately not done here: against
+# a stationary carrier he drops to idle BUTTERFLY at ~1.0 s of hold, and while
+# down he stops reading the wind-up entirely (`_is_reading_shot_threat` is
+# upright-only) — the shot-read timer resets, the slapper aim shade switches off,
+# and he re-centres. Measured with a slapper wind-up declared at a corner from
+# 6 m: shade 0.38 m held at 0.75 s, exactly 0.00 by 1.0 s. There is a usable
+# window around 0.25-0.75 s and cliffs on both sides of it.
+#
+# The sibling `hold_windup_at` does NOT reset, and its callers do reset+settle by
+# hand. The two are not interchangeable.
 func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 		power_t: float, ticks: int,
 		shot_state: int = SkaterStateMachine.State.WRISTER_AIM) -> void:
