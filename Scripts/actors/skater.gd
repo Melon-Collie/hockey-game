@@ -1335,8 +1335,7 @@ func update_carry_side(has_puck: bool, delta: float) -> void:
 # ice position rather than from the elevated blade tip.
 func get_carry_target_global() -> Vector3:
 	if _slapshot_pin_active:
-		var local := Vector3(_slapshot_pin_local.x, 0.0, _slapshot_pin_local.y)
-		return global_position + global_transform.basis * local
+		return global_position + _slapshot_pin_world_offset
 	var contact: Vector3 = get_blade_contact_global()
 	if top_hand == null:
 		return contact
@@ -1353,13 +1352,31 @@ func get_carry_target_global() -> Vector3:
 
 
 # Slapshot pin state — set by SkaterController._enter_slapper_charge when the
-# carrier commits to a slap, cleared in _transition_to_skating. The pin offset
-# is XZ in skater-local space (already includes blade_side_sign).
+# carrier commits to a slap, cleared in _transition_to_skating. The offset is
+# given in skater-local XZ (already including blade_side_sign) and RESOLVED TO
+# WORLD ONCE, at the moment the charge is entered.
+#
+# ROTATION IS DELIBERATELY NOT TRACKED. The wind-up is a body animation — the
+# slapper aim is locked at press (_enter_slapper_charge), so nothing the player
+# does during the charge is steering it — and the offset is 1.08 m long, so
+# re-resolving it through the live basis every frame swung the puck around the
+# shooter on a 1.08 m radius as the coil played. Up to 2.15 m of travel from a
+# body that never moved, and it was not cosmetic: `Puck.release` fires the
+# slapshot from this exact point, and the goalie reads the puck's world position
+# to decide whether a shot is answerable. Measured from a live session, a ~67 deg
+# coil walked the puck 1.2 m further from the net mid-charge, which crossed the
+# goalie's block/react threshold and made him stand out of a committed butterfly
+# — "he drops, backs up a bit, then gets back up" from a standstill.
+#
+# TRANSLATION IS still tracked (`global_position` is read live), which is the
+# property the pin exists for: coasting and braking during the wind-up keep the
+# puck with the player.
 var _slapshot_pin_active: bool = false
-var _slapshot_pin_local: Vector2 = Vector2.ZERO
+var _slapshot_pin_world_offset: Vector3 = Vector3.ZERO
 
 func enter_slapshot_pinning(local_offset_x: float, local_offset_z: float) -> void:
-	_slapshot_pin_local = Vector2(local_offset_x, local_offset_z)
+	_slapshot_pin_world_offset = global_transform.basis \
+			* Vector3(local_offset_x, 0.0, local_offset_z)
 	_slapshot_pin_active = true
 
 func exit_slapshot_pinning() -> void:
