@@ -286,6 +286,17 @@ extends Node
 # target in (i.e. the clamp changed the value, not a no-op). Host-only so the
 # log isn't doubled. Leave off in normal play.
 @export var debug_goalie_reads: bool = false
+# TEMPORARY DIAGNOSTIC (issue: "he drops, backs up, then gets back up" while a
+# slapshot is charged from a standstill). Logs every stance transition with the
+# block decision's inputs, host-side. The harness cannot reproduce the report —
+# a faithful planted slapper (puck stepping to the 1 m pin, aiming rotation, or
+# fully still) drops once and holds — so this exists to read the real numbers out
+# of a live session instead of guessing a fifth mechanism.
+#
+# Flip to `true` in source to arm it — the controller is code-instantiated, so
+# its exports are not scene-editable. Off by default so it does not spam the test
+# suite. REMOVE once the cause is identified.
+@export var debug_stance_log: bool = false
 
 @export var rvh_depth: float = 0.1
 # How far INBOARD of the post the post-seal spot sits. Shared by the VH/RVH
@@ -2744,6 +2755,8 @@ func _enter_butterfly() -> void:
 # different units per state (radius in STANDING/READY/RECOVERING; perpendicular
 # depth in BUTTERFLY/RVH) and the wrong unit on entry teleports the goalie.
 func _on_sm_transitioned(prev: State, new_state: State) -> void:
+	if debug_stance_log and is_server:
+		_log_stance(prev, new_state)
 	match new_state:
 		State.BUTTERFLY:
 			# Fresh butterfly entry resets timers + snaps depth. Returning
@@ -4018,6 +4031,37 @@ func _maybe_arm_screen_block_drop(screen_d: float, move_d: float, back_date: flo
 	if not _sm.is_upright():
 		return
 	_screen_block_drop_timer = maxf(reaction_delay + move_d - back_date, 0.0)
+
+
+# TEMPORARY DIAGNOSTIC — see debug_stance_log. Dumps the block decision's whole
+# input vector at each stance change so a live repro can be read directly instead
+# of inferred. Allocates and formats strings, so it is NOT hot-path safe; it only
+# fires on transitions, and it comes out with the flag.
+func _log_stance(prev: State, new_state: State) -> void:
+	var carrier: Skater = puck.get_carrier()
+	var sit: GoalieSaveSelection.Situation = _build_save_situation(0.0)
+	var puck_pos: Vector3 = puck.global_position
+	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
+			puck_pos, _goal_line_z, _goal_center_x)
+	print("[goalie] %s -> %s | block=%s pressing=%s canRec=%s || arrival=%.3f contest=%.3f sight=%.3f react=%.3f drop=%.3f lateralLost=%s answer=%.3f commitNow=%s || gap=%.2f threatDist=%.2f puckSpd=%.2f carrierState=%s carrierVel=%.2f || gX=%.2f perp=%.2f radius=%.2f unset=%.2f" % [
+			_STATE_NAMES[prev as int], _STATE_NAMES[new_state as int],
+			str(_should_block(0.0)), str(_is_threat_pressing()),
+			str(_slide.can_recover()),
+			sit.time_to_arrival, sit.time_to_contest, sit.sight_delay,
+			sit.reaction_delay, sit.drop_time, str(sit.lateral_race_lost),
+			GoalieSaveSelection.answer_fraction(sit),
+			str(GoalieSaveSelection.must_commit_now(sit)),
+			goalie.global_position.distance_to(puck_pos), threat_dist,
+			puck.linear_velocity.length(),
+			("none" if carrier == null else str(carrier.current_shot_state)),
+			(0.0 if carrier == null else carrier.velocity.length()),
+			_current_x, absf(goalie.global_position.z - _goal_line_z),
+			_current_depth, _unset_fraction()])
+
+const _STATE_NAMES: Array[String] = [
+	"STANDING", "BUTTERFLY", "RECOVERING", "RVH_L", "RVH_R", "READY", "SLIDING",
+	"COILING", "VH_L", "VH_R", "COVERING", "PLAYING_PUCK", "CATCHING", "CATCHING_DOWN",
+]
 
 
 # Screen contribution: gather every body that could hide the puck from the goalie
