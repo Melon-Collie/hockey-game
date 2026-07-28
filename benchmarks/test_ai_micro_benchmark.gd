@@ -220,6 +220,18 @@ func test_evaluator_costs() -> void:
 				AIRoleCarrier.FORWARD_PRESSURE_HORIZON_M,
 				cinst._scratch_opponents, cinst._scratch_opponent_vels,
 				cinst._scratch_opponent_caps))
+	# The fan's two cheaper granularities, for sizing an off-puck consumer:
+	# one whole carry-safety sample (what the fan does 14 times), and the bare
+	# reachable-set read at a point (one defender loop instead of three).
+	_bench("control_at (one sample)", func() -> void:
+		AIActionScoring.control_at(
+				one_cand, cx.self_pos, cx.self_velocity, null,
+				cinst._scratch_opponents, cinst._scratch_opponent_vels,
+				cinst._scratch_opponent_caps))
+	_bench("reach_clearance (one point)", func() -> void:
+		AIActionScoring.reach_clearance(
+				one_cand, 0.8, cinst._scratch_opponents,
+				cinst._scratch_opponent_vels, cinst._scratch_opponent_caps))
 	_bench("controlled_space (fan + bearing profile)", func() -> void:
 		AIActionScoring.controlled_space(
 				cx.self_pos, cx.self_velocity, null, cx.attacking_goal_pos,
