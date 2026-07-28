@@ -199,14 +199,11 @@ func test_evaluator_costs() -> void:
 	_results.append({"label": "carrier: best pass (receivers)", "us": float(t_pass) / REPS})
 	_results.append({"label": "carrier: best carry (candidates)", "us": float(t_carry) / REPS})
 	_results.append({"label": "carrier: developing-feed hold read", "us": float(t_feed) / REPS})
-	# One carry candidate, and its two-ply continuation read, in isolation.
+	# One carry candidate in isolation.
 	var one_cand: Vector3 = cx.self_pos + Vector3(2.0, 0.0, 2.0)
 	var goalie_pos := Vector3(0.0, 0.0, -(GameRules.GOAL_LINE_Z - 0.8))
 	_bench("carrier: one carry candidate", func() -> void:
 		cinst._score_move_candidate(cx, one_cand, goalie_pos))
-	_bench("carrier: one continuation read", func() -> void:
-		cinst._carry_continuation_value(cx, one_cand, Vector3(0, 0, -3.0), 0.6,
-				goalie_pos))
 	_bench("carrier: one pass-option read", func() -> void:
 		cinst._candidate_pass_option(cx, one_cand))
 

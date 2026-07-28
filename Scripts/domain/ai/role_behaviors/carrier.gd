@@ -333,23 +333,6 @@ const CARRY_RETREAT_SAFETY_SKIP: float = 0.85
 # option value only where it genuinely reopens something.
 const PASS_OPTION_DISCOUNT: float = 0.8
 
-# A candidate this close to the slot anchor IS the continuation — its own
-# arrival shot already prices it, so it earns no extra continuation credit
-# (see _carry_continuation_value).
-const CONTINUATION_MIN_DIST_M: float = 1.5
-
-# Haircut on the carry-CONTINUATION value a candidate inherits — the
-# counterpart of PASS_OPTION_DISCOUNT, cut deeper because the continuation
-# STACKS two coarse plan legs (reach the candidate, then drive the slot),
-# each paying the pass option's ~0.8 coarseness (0.8² ≈ 0.6): its defenders
-# are linear projections, which can't see the defense RE-ROUTING to deny the
-# slot over the whole second leg. So a solo plan two clean legs deep must
-# beat a live one-leg play (a feed to an open finisher NOW) by a real margin
-# — the backdoor pin in test_role_carrier is the calibration. Tactical
-# haircut, not an evaluation curve — the grounded terms (tracked keeper,
-# reach safety, lane, decay) are all inside the continuation itself.
-const CONTINUATION_DISCOUNT: float = 0.6
-
 # ── Puck-protect directionality (see the protect block in _pick_action) ──────
 # A carrier driving at the net already screens the forward-held puck from a
 # defender BEHIND it with its own body — no shield turn is needed to keep it
@@ -584,9 +567,9 @@ var _scratch_opponent_stamina: Array[float] = []
 var _scratch_opponents_release: Array[Vector3] = []
 var _scratch_opponents_pass: Array[Vector3] = []
 var _scratch_opponents_path: Array[Vector3] = []
-# Continuation-leg projections (see _carry_continuation_value): filled at the
-# candidate's arrival time for the second leg's reach read, then refilled at
-# slot arrival for that leg's lane/pressure read.
+# Two-leg (wheel/apex) projections: filled at the apex arrival time for the
+# second leg's reach read, then refilled at destination arrival for that
+# leg's lane/pressure read.
 var _scratch_opponents_cont: Array[Vector3] = []
 var _scratch_teammate_ids: Array[int] = []
 # Our skaters excluding the carrier — the defenders that reduce the
@@ -672,8 +655,6 @@ var _beam_decay: Array[float] = []
 var _beam_safety: Array[float] = []
 var _beam_cost: Array[float] = []
 var _beam_time: Array[float] = []
-var _beam_arrive_vel: Array[Vector3] = []
-var _beam_tracked_goalie: Array[Vector3] = []
 # Pass-1 running prune bound: stand-still's secured total, tightened to the
 # BEST one-ply total seen so far. Exact for the argmax even though it can
 # prune candidates out of the beam: a candidate whose ceiling ≤ the best
@@ -1683,38 +1664,6 @@ func _project_opponents_to(ctx: RoleContext, time_s: float,
 			out_buf.append(AITrajectory.predict_at(s.position, s.velocity, time_s))
 
 
-# The RE-SET projection for continuation pricing: each opponent gets the
-# BETTER of riding his momentum or redirecting toward the dangerous ice the
-# plan is headed for (`toward`, the slot anchor) at the calibrated pursuit
-# kinematics (reaction-gated capped ramp; league build — the collapse is a
-# team-shape prior, not a per-build duel). A ballistic projection lets a
-# static defender stand still forever, which priced a two-leg plan's dwell
-# as free — the continuation inherited the slot's value as if the coverage
-# never re-set onto it (the corner-waypoint park). Zone defenders granted
-# time converge on the house; this charges the plan for exactly the time
-# its first leg hands them.
-func _project_opponents_collapsing(ctx: RoleContext, time_s: float,
-		toward: Vector3, out_buf: Array[Vector3]) -> void:
-	out_buf.clear()
-	var d_max: float = AIActionScoring.pursuit_ramp_distance(
-			maxf(0.0, time_s - AIActionScoring.EVADE_REACTION_S))
-	for peer_id: int in ctx.snapshot.skater_states:
-		if ctx.team_id_by_peer.get(peer_id, -1) != ctx.team_id and peer_id != ctx.peer_id:
-			var s: SkaterNetworkState = ctx.snapshot.skater_states[peer_id]
-			var ballistic: Vector3 = AITrajectory.predict_at(
-					s.position, s.velocity, time_s)
-			var to_t: Vector3 = toward - s.position
-			to_t.y = 0.0
-			var d: float = to_t.length()
-			if d > 0.001:
-				var collapsed: Vector3 = s.position + to_t * (minf(d_max, d) / d)
-				if collapsed.distance_squared_to(toward) \
-						< ballistic.distance_squared_to(toward):
-					out_buf.append(collapsed)
-					continue
-			out_buf.append(ballistic)
-
-
 # Loops every legal pass target and returns [best_pid, best_score]. A
 # pass takes 0.5–1.1 s of flight time, so the receiver and every
 # defender are projected forward by that flight time for the receiver's
@@ -2363,7 +2312,6 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	stand_cost += _counter_exposure_cost(ctx, stand_puck_pos,
 			1.0 - stand_safety, self_pos, our_goalie)
 	var stand_total: float = stand_score * stand_safety - stand_cost
-	var cont_bound: float = stand_total
 
 	# ── Pass 1 (beam base): one-ply rows for every legal candidate ───────────
 	# Candidates stay ordered forward-first: the prune bound tightens to the
@@ -2377,9 +2325,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	_beam_safety.clear()
 	_beam_cost.clear()
 	_beam_time.clear()
-	_beam_arrive_vel.clear()
-	_beam_tracked_goalie.clear()
-	_beam_prune_bound = cont_bound
+	_beam_prune_bound = stand_total
 
 	# Behind-the-net ice is playable ice for a carrier ALREADY back there — see
 	# _candidate_ice_legal. Resolved once; every candidate ring below shares it.
@@ -2523,8 +2469,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				bi = j
 		if bi == -1:
 			break
-		var up_total: float = _upgrade_candidate_two_ply(
-				ctx, bi, maxf(best_score, cont_bound))
+		var up_total: float = _upgrade_candidate_two_ply(ctx, bi)
 		if up_total > best_score:
 			best_score = up_total
 			best_pos = _beam_pos[bi]
@@ -2545,7 +2490,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 			if not AIActionScoring.carry_path_blocked_by_net(self_pos, wheel):
 				continue
 			var wheel_total: float = _score_wheel_candidate(
-					ctx, wheel, our_goalie, maxf(best_score, cont_bound))
+					ctx, wheel, our_goalie, maxf(best_score, stand_total))
 			if wheel_total > best_score:
 				best_score = wheel_total
 				best_pos = wheel
@@ -2824,7 +2769,7 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	# product of the ≤-1 factors is a hard upper bound, checked in cost
 	# order: decay alone (free) before the opponent projection, lane × decay
 	# before the safety read, lane × decay × safety before the arrival-shot /
-	# continuation / strip machinery. Candidates are ordered forward-first,
+	# strip machinery. Candidates are ordered forward-first,
 	# so a strong early spot prunes the tail; under pressure SAFETY is the
 	# killer, and pruning on it before the goalie block is what keeps a
 	# swarmed carrier's compete from paying full price for doomed spots.
@@ -2982,8 +2927,6 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	_beam_safety.append(safety)
 	_beam_cost.append(cost)
 	_beam_time.append(local_time)
-	_beam_arrive_vel.append(arrive_vel)
-	_beam_tracked_goalie.append(tracked_goalie)
 	return total
 
 
@@ -3004,15 +2947,17 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 # at_self, so when even that can't raise dest_score the per-receiver lane
 # loop is already decided and skips wholesale.
 #
-# The carry CONTINUATION it opens (see _carry_continuation_value — the pass
-# option's skating twin): the two-ply read that lets a spot be worth what it
-# enables NEXT. It can only RAISE dest_score, and its value is capped at
-# CONTINUATION_DISCOUNT (shot2/lane2/safety2/decay all ≤ 1) — so when even
-# that ceiling times this row's lane/decay/safety can't beat the incumbent
-# (cost only subtracts further), the argmax is already decided and the read
-# is skipped. Exact by the same argument as the threat-surface bound pruning.
-func _upgrade_candidate_two_ply(ctx: RoleContext, i: int,
-		best_so_far: float) -> float:
+# A carry CONTINUATION credit used to be maxf'd in here too — a second
+# speculative leg from the candidate to the slot, priced with the first
+# leg's physics and haircut for stacking two coarse plans. It is gone. It
+# existed only because the five-hole currency went FLAT in the offensive
+# zone: with every candidate returning nearly the same number, the two-ply
+# read was the only thing that could separate "cut in behind the beaten
+# man" from "orbit the perimeter". On the value seam that separation is
+# already in the one-ply surface, measured rather than manufactured — the
+# same cut-in/escape fixture that needed the continuation to open a 2.1x
+# margin now opens 2.2x without it.
+func _upgrade_candidate_two_ply(ctx: RoleContext, i: int) -> float:
 	var candidate: Vector3 = _beam_pos[i]
 	var dest_score: float = _beam_dest[i]
 	var lane: float = _beam_lane[i]
@@ -3022,23 +2967,6 @@ func _upgrade_candidate_two_ply(ctx: RoleContext, i: int,
 		dest_score = maxf(dest_score, maxf(
 				0.0, _candidate_pass_option(ctx, candidate,
 						dest_score + _pass_option_at_self) - _pass_option_at_self))
-	if safety > 0.0 and dest_score < CONTINUATION_DISCOUNT \
-			and maxf(dest_score, CONTINUATION_DISCOUNT) * lane * decay * safety \
-					> best_so_far \
-			and AIActionScoring.in_offensive_zone(ctx.self_pos, ctx.attacking_goal_pos):
-		# Tighten the ceiling with the SECOND leg's own decay before paying
-		# for the full read: t2 is one calibrated-ETA call (~1 µs) against a
-		# ~180 µs continuation, and a candidate arriving facing away from the
-		# slot carries a t2 decay that often decides the argmax by itself.
-		var slot_t2: float = AIActionScoring.time_to_arrive(
-				candidate, _slot_anchor(ctx.own_goal_dir), _beam_arrive_vel[i],
-				ctx.self_max_speed, ctx.self_max_accel, ctx.self_lateral_grip)
-		var cont_ceiling: float = CONTINUATION_DISCOUNT \
-				* AIActionScoring.delay_discount(slot_t2)
-		if maxf(dest_score, cont_ceiling) * lane * decay * safety > best_so_far:
-			dest_score = maxf(dest_score, _carry_continuation_value(
-					ctx, candidate, _beam_arrive_vel[i], _beam_time[i],
-					_beam_tracked_goalie[i], slot_t2))
 	return dest_score * lane * decay * safety - _beam_cost[i]
 
 
@@ -3055,7 +2983,7 @@ func _score_move_candidate(ctx: RoleContext, candidate: Vector3,
 			ctx, candidate, our_goalie, is_post_walkout, best_so_far)
 	if _beam_total.size() == rows_before:
 		return base   # ceiling-pruned — no row to upgrade
-	return _upgrade_candidate_two_ply(ctx, _beam_total.size() - 1, best_so_far)
+	return _upgrade_candidate_two_ply(ctx, _beam_total.size() - 1)
 
 
 # EV of a WHEEL candidate (see the WHEEL_* doc): the two-leg carry around
@@ -3311,77 +3239,6 @@ func _candidate_pass_option(ctx: RoleContext, candidate: Vector3,
 # maxf like the pass option, so a spot's value is the best thing it lets the
 # carrier DO next. OZ regime only: outside the zone position_potential's
 # whole-rink gradient already pulls net-ward.
-func _carry_continuation_value(ctx: RoleContext, candidate: Vector3,
-		arrive_vel: Vector3, first_leg_s: float,
-		tracked_goalie: Vector3, t2_precomputed: float = -1.0) -> float:
-	if not AIActionScoring.in_offensive_zone(ctx.self_pos, ctx.attacking_goal_pos):
-		return 0.0
-	var slot: Vector3 = _slot_anchor(ctx.own_goal_dir)
-	var to_slot_x: float = slot.x - candidate.x
-	var to_slot_z: float = slot.z - candidate.z
-	var dist2_sq: float = to_slot_x * to_slot_x + to_slot_z * to_slot_z
-	# The candidate IS the slot — its own arrival shot already prices it.
-	if dist2_sq < CONTINUATION_MIN_DIST_M * CONTINUATION_MIN_DIST_M:
-		return 0.0
-	if AIActionScoring.carry_path_blocked_by_net(candidate, slot):
-		return 0.0
-	# Momentum-aware second leg: arriving at the candidate moving AWAY from
-	# the slot pays the turn in honest time (and thus decay) — the rotation
-	# cost of a spot that faces the wrong way enters here. The caller's gate
-	# may have already solved it (t2_precomputed — the ceiling check).
-	var t2: float = t2_precomputed if t2_precomputed >= 0.0 \
-			else AIActionScoring.time_to_arrive(
-					candidate, slot, arrive_vel, ctx.self_max_speed, ctx.self_max_accel, ctx.self_lateral_grip)
-	# Second-leg reach safety: defenders start the leg where the first leg's
-	# time has taken them — including the RE-SET (see
-	# _project_opponents_collapsing): the first leg's dwell is time the
-	# defense spends collapsing onto the slot this plan is headed for, so a
-	# long ride to a dead waypoint pays for the coverage it hands them —
-	# then they sweep their reach over t2.
-	_project_opponents_collapsing(ctx, first_leg_s, slot, _scratch_opponents_cont)
-	var safety2: float = AIActionScoring.carry_safety(
-			_puck_pos_at(candidate, ctx.attacking_goal_pos),
-			_puck_pos_at(slot, ctx.attacking_goal_pos), t2,
-			_scratch_opponents_cont, _scratch_opponent_vels,
-			_scratch_opponent_caps)
-	if safety2 <= 0.0:
-		return 0.0
-	# Shot on slot arrival AT PACE against the keeper tracked over both legs —
-	# the same two-phase read the first leg's arrival shot ran.
-	var dist2: float = sqrt(dist2_sq)
-	var arrive_speed2: float = minf(dist2 / maxf(t2, 0.001), ctx.self_max_speed)
-	var arrive_vel2 := Vector3(to_slot_x, 0.0, to_slot_z) * (arrive_speed2 / dist2)
-	var leg2_closing: float = (candidate.distance_to(ctx.attacking_goal_pos)
-			- slot.distance_to(ctx.attacking_goal_pos)) / maxf(t2, 0.001)
-	var tracked2: Vector3 = AIActionScoring.predict_goalie_pos(
-			tracked_goalie, ctx.attacking_goal_pos, t2, slot, leg2_closing)
-	var release2: Vector3 = AIActionScoring.release_ahead_of_goalie(
-			slot + arrive_vel2 * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S,
-			ctx.attacking_goal_pos, tracked2)
-	var flight2: float = release2.distance_to(ctx.attacking_goal_pos) \
-			/ maxf(ctx.self_wrister_shot_speed, 1.0)
-	var goalie2: Vector3 = AIActionScoring.predict_goalie_pos(
-			tracked2, ctx.attacking_goal_pos,
-			SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + flight2
-					+ ctx.shot_timing_error_s * 0.5,
-			release2,
-			AIActionScoring.closing_toward(slot, arrive_vel2, ctx.attacking_goal_pos))
-	# Lane and arrival pressure read at slot arrival (both legs elapsed,
-	# defense re-setting onto the slot the whole way).
-	_project_opponents_collapsing(
-			ctx, first_leg_s + t2, slot, _scratch_opponents_cont)
-	var lane2: float = AIActionScoring.path_clearance(
-			candidate, slot, _scratch_opponents_cont)
-	if lane2 <= 0.0:
-		return 0.0
-	var shot2: float = _score_at(ctx, release2, ctx.self_pos,
-			_scratch_opponents_cont, goalie2,
-			ctx.self_wrister_shot_speed, 0.0, ctx.self_aim_spread_rad)
-	return shot2 * lane2 * safety2 \
-			* AIActionScoring.delay_discount(t2) \
-			* CONTINUATION_DISCOUNT
-
-
 # The value of an open pass receiver DRIVING IN: the best value they can reach by
 # carrying toward the net, not just a one-timer / potential from where they catch it.
 # Models "a wide-open man walks into a better chance" (OZ) and "an ahead man with a

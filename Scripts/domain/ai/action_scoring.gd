@@ -5166,23 +5166,6 @@ const REVERSAL_BRAKE_DECEL_M_S2: float = 10.5
 const RAMP_EFFICIENCY: float = 0.84
 
 
-# Distance a defender covers on a standing redirect over `tau` seconds
-# (post-reaction): the calibrated capped ramp — net accel after friction
-# losses up to top speed, cruise after. The ZONE-COLLAPSE prior for
-# continuation pricing: how far the defense re-sets toward the dangerous ice
-# while a multi-leg plan dwells on its first leg.
-static func pursuit_ramp_distance(tau: float,
-		vmax: float = SKATER_REF_SPEED_M_S,
-		accel: float = SHED_ACCEL_DEFAULT_M_S2) -> float:
-	if tau <= 0.0:
-		return 0.0
-	var a_net: float = accel * RAMP_EFFICIENCY
-	var t_ramp: float = vmax / a_net
-	if tau <= t_ramp:
-		return 0.5 * a_net * tau * tau
-	return 0.5 * a_net * t_ramp * t_ramp + vmax * (tau - t_ramp)
-
-
 # `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
 # thrust (Acceleration-scaled) — both default to league references so cross-player
 # callers (opponent / teammate ETA, the loose-puck election that must stay
