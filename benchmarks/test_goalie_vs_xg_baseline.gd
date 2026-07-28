@@ -90,12 +90,18 @@ extends GutTest
 #     15     0 |     0.11   1.46 |    0.122        0.124 |  102%
 #     20     0 |     0.12   1.46 |    0.091        0.091 |   99%
 #
-# ON THE CENTRE LINE THIS IS EXACT — he is on that sightline — and it explains
-# findings 2 and 3 outright. There is no open net to shoot at from anywhere in
-# the slot: goals are won purely by DYNAMICS (beating the read, the drop timing,
-# the arm), never by finding net he is not standing in front of. A location-based
-# xG model is a statement about GEOMETRY, so its shape cannot be reproduced by a
-# keeper whose geometry is effectively constant.
+# ⚠️ RETRACTED — DO NOT REASON FROM THE RATIOS ABOVE. They model the goalie as a
+# solid DISC of `pad_local_offset + butterfly_pad_half_width` (0.84 m) half-width.
+# He is not one. The live collision geometry is discrete posed boxes — pads,
+# glove, blocker, chest, stick — sized to an average NHL goalie with realistic
+# pads, and his arms and lower body carry NO hitboxes at all, so the real covered
+# fraction is LESS than these numbers, with gaps between the boxes this model
+# cannot see. Anything in this file that concluded "he is geometrically too big
+# to beat in tight" rests on that approximation and is unsupported.
+#
+# What survives is the weaker, still-useful statement: coverage varies far less
+# with location than a location-based xG model assumes, so a geometric xG shape
+# was never going to be reproducible from these sweeps alone.
 #
 # It also gives the distance gradient its sign. Against a STANDING shooter his
 # depth is ~1.46-1.55 m from 3 m out to 15 m — nearly fixed — so as the shooter
@@ -268,6 +274,43 @@ extends GutTest
 # Overall save percentage is 0.667. Arcade by design, but it is the number any
 # future "is the goalie too strong" question should be measured against, not the
 # aim-space fractions in this file.
+#
+# ── AND THE INSTRUMENT CANNOT MEASURE THE IN-TIGHT CASE AT ALL ──────────────
+# Running the same sweep with rebounds LIVE (fire_tracking_rebound, the real save
+# response marched for 1.5 s) does not close the gap either:
+#
+#   dist angle |  first    +reb | live reb%
+#      3     0 |   0.0%    0.0% |    100.0%
+#      3    30 |   0.0%    0.0% |    100.0%
+#      5     0 |   2.6%    2.6% |    100.0%
+#      8     0 |   3.8%    3.8% |     82.1%
+#
+# `+reb` never exceeds `first` — yet 100% of in-tight shots leave a live puck.
+# The rebounds are all there; nothing shoots them, because the harness has one
+# skater and he has just released. The real 0.512 from inside 3 m is a TWO-TOUCH
+# sequence (save, then someone buries the loose puck) and every arm in this file
+# is single-touch.
+#
+# So: the numbers here describe FIRST-SHOT beatability and nothing else, and the
+# doorstep is not where they are informative. The in-tight goalie question is
+# rebound DESTINATION and control — GoalieSaveRules, pad_toe_out_butterfly_deg,
+# is_controlled_save, and test_goalie_rebound_destination — not coverage. That
+# 100% live-rebound rate against a logged 0.512 conversion is the whole loop.
+#
+# ── FOREHAND-BACKHAND DEKE (the move players actually score with) ───────────
+# Puck swung across the body while driving 5 m -> 3 m, paired against the same
+# finish position parked. No wind-up on either arm.
+#
+#   amp   side | parked | 0.15 s  0.25 s  0.40 s
+#   0.5 fh->bh |   0.0% |   0.0%    0.0%    0.0%
+#   0.8 fh->bh |   0.0% |   7.7%    2.6%    0.0%
+#   0.8 bh->fh |   0.0% |   7.7%    0.0%    0.0%
+#
+# The swing DOES beat him, and it scales the way the model predicts: wide and
+# fast outruns the `tracking_speed` lerp on a `shooter_weight`-blended threat,
+# narrow or slow does not. Body translation (the cut sweep) cannot do this at all
+# — the blend follows the body. 7.7% is small next to the logged 0.512, which is
+# the rebound gap above rather than a contradiction.
 # ══════════════════════════════════════════════════════════════════════════════
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
@@ -872,4 +915,150 @@ func test_report_deke_vs_static_in_tight() -> void:
 		gut.p("%6s | %7.1f%% | %7.1f%% %7.1f%% %7.1f%% | %9.1f%%"
 				% [pair[0], 100.0 * stat, 100.0 * got[0], 100.0 * got[1],
 				100.0 * got[2], 100.0 * nostick])
+	assert_true(true, "report")
+
+
+# ── THE FOREHAND-BACKHAND DEKE — the move that actually scores ───────────────
+# The cut sweep above moved the BODY and dragged the puck along with it. That is
+# not the move players score with. A forehand-backhand (or backhand-forehand)
+# deke swings the PUCK ACROSS THE BODY while the body drives the net, and it
+# attacks a completely different part of the model: the threat the goalie tracks
+# is `shooter_weight`-blended between puck and body (0.20, so mostly puck) and
+# chased through a lerp at `tracking_speed`, so a fast enough swing leaves his
+# squaring behind the puck. Body translation cannot do that — the blend moves
+# with it.
+#
+# Reported as a paired difference again, both arms releasing from the SAME final
+# puck position:
+#   parked — puck sitting at the finish offset, goalie settled on it.
+#   deke   — puck swung there across the body over `dur`, goalie tracking live.
+# The gap between them is what the SWING bought, with position held constant.
+#
+# No wind-up on either arm: a deke finish is a quick release off the blade, not a
+# charge. Release position is the PUCK, which is also what the game logs into
+# shot_events (GameManager passes puck.get_puck_position()).
+const FHBH_AMPLITUDES: Array[float] = [0.5, 0.8]
+const FHBH_DURATIONS: Array[float] = [0.15, 0.25, 0.40]
+const FHBH_BODY_FROM: float = 5.0
+const FHBH_BODY_TO: float = 3.0
+const FHBH_AIMS: int = 13
+
+
+# Swing the puck from +amp to -amp in the goalie's lateral axis while the body
+# drives from FHBH_BODY_FROM to FHBH_BODY_TO. Returns the final PUCK position.
+func _fhbh_swing(amp: float, dur: float, side: float) -> Vector3:
+	_skate_in(0.0, 6.0, FHBH_BODY_FROM, true)
+	var dt: float = 1.0 / 120.0
+	var steps: int = maxi(int(dur / dt), 1)
+	var body_v: float = (FHBH_BODY_FROM - FHBH_BODY_TO) / dur
+	var puck := Vector3.ZERO
+	for i: int in steps:
+		var t: float = float(i + 1) / float(steps)
+		var bz: float = GOAL_Z + lerpf(FHBH_BODY_FROM, FHBH_BODY_TO, t)
+		var body := Vector3(0.0, 0.0, bz)
+		# Puck sweeps forehand -> backhand across the body.
+		puck = Vector3(side * lerpf(amp, -amp, t), 0.0, bz)
+		_shooter_ref().global_position = body
+		_shooter_ref().velocity = Vector3(0.0, 0.0, -body_v * signf(GOAL_Z))
+		_shooter_ref().current_shot_state = SkaterStateMachine.State.SKATING_WITH_PUCK
+		_puck_ref().global_position = puck
+		_puck_ref().linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(dt)
+	return puck
+
+
+func _fhbh_fraction(amp: float, dur: float, side: float, swing: bool) -> float:
+	var hw: float = GameRules.NET_HALF_WIDTH - GameRules.NET_POST_RADIUS \
+			- GameRules.PUCK_COLLISION_RADIUS
+	var finish := Vector3(side * -amp, 0.0, GOAL_Z + FHBH_BODY_TO)
+	var goals: int = 0
+	var shots: int = 0
+	for loft: int in LOFTS:
+		for i: int in FHBH_AIMS:
+			var t: float = float(i) / float(FHBH_AIMS - 1)
+			var aim := Vector3(lerpf(-hw, hw, t), 0.0, GOAL_Z)
+			var release: Vector3 = finish
+			if swing:
+				release = _fhbh_swing(amp, dur, side)
+			else:
+				_h.settle_ready(finish)
+			if _h.fire_release(release, aim, loft, 0.9, 0.0) == Harness.GOAL:
+				goals += 1
+			shots += 1
+	return float(goals) / float(maxi(shots, 1))
+
+
+func test_report_forehand_backhand_deke() -> void:
+	gut.p("Puck swung across the body (+amp -> -amp) while driving %.0f m -> %.0f m."
+			% [FHBH_BODY_FROM, FHBH_BODY_TO])
+	gut.p("parked = same finish position, goalie settled on it. No wind-up either arm.")
+	gut.p("%5s %6s | %8s | %8s %8s %8s"
+			% ["amp", "side", "parked", "0.15 s", "0.25 s", "0.40 s"])
+	for amp: float in FHBH_AMPLITUDES:
+		for side: float in [1.0, -1.0]:
+			var parked: float = _fhbh_fraction(amp, 0.25, side, false)
+			var got: Array[float] = []
+			for dur: float in FHBH_DURATIONS:
+				got.append(_fhbh_fraction(amp, dur, side, true))
+			gut.p("%5.1f %6s | %7.1f%% | %7.1f%% %7.1f%% %7.1f%%"
+					% [amp, "fh->bh" if side > 0.0 else "bh->fh", 100.0 * parked,
+					100.0 * got[0], 100.0 * got[1], 100.0 * got[2]])
+	assert_true(true, "report")
+
+
+# ── WITH REBOUNDS LIVE — the only arm comparable to the logged games ─────────
+# Every other report here stops at first goalie contact, which is why they all
+# read 0.000 at the doorstep while the real shot_events log 0.512 from inside
+# 3 m. Rebounds are not a footnote in tight, they are the mechanism: the
+# exhaustive sweep measured 95.6% of in-tight shots leaving a LIVE puck, and the
+# logged data records each of those second chances as its own close-range event.
+#
+# `Harness.fire_tracking_rebound` applies the real save response
+# (GoalieSaveRules.resolve_contact + the flush eject, the pair Puck runs on the
+# host) and keeps marching for REBOUND_TRACK_S, so `rebound_goal` answers "did
+# this attempt eventually end up in the net". Reported beside the first-shot
+# number so the gap between them IS the rebound contribution.
+#
+# NOTE this is not identical to the logged rate: the log scores a rebound as a
+# separate shot-on-goal, so its denominator differs. Read the two columns
+# against each other, and the rebound column against the logged 0.512 only as an
+# order-of-magnitude check.
+const REB_SPOTS: Array[Vector2] = [
+	Vector2(3.0, 0.0), Vector2(3.0, 30.0), Vector2(5.0, 0.0),
+	Vector2(5.0, 30.0), Vector2(8.0, 0.0),
+]
+const REB_SPEEDS: Array[float] = [24.0, 30.0]
+const REB_AIMS: int = 13
+
+
+func test_report_rebound_inclusive_conversion() -> void:
+	var hw: float = GameRules.NET_HALF_WIDTH - GameRules.NET_POST_RADIUS \
+			- GameRules.PUCK_COLLISION_RADIUS
+	gut.p("first = shot beats him outright. +reb = shot OR its rebound went in.")
+	gut.p("Logged real games for reference: 0-3 m 0.512, 3-5 m 0.286, 5-7 m 0.194.")
+	gut.p("%5s %6s | %8s %8s | %8s" % ["dist", "angle", "first", "+reb", "live reb%"])
+	for spot2: Vector2 in REB_SPOTS:
+		var shooter: Vector3 = _spot(spot2.x, spot2.y)
+		var first: int = 0
+		var any_goal: int = 0
+		var live: int = 0
+		var shots: int = 0
+		for pace: float in REB_SPEEDS:
+			for loft: int in LOFTS:
+				for i: int in REB_AIMS:
+					var t: float = float(i) / float(REB_AIMS - 1)
+					var aim := Vector3(lerpf(-hw, hw, t), 0.0, GOAL_Z)
+					_h.settle_ready(shooter)
+					var o: int = _h.fire_tracking_rebound(shooter, aim, loft, pace, 0.0)
+					if o == Harness.GOAL:
+						first += 1
+					if _h.rebound_goal:
+						any_goal += 1
+					if _h.rebound_speed > 0.5:
+						live += 1
+					shots += 1
+		gut.p("%5.0f %6.0f | %7.1f%% %7.1f%% | %7.1f%%"
+				% [spot2.x, spot2.y, 100.0 * float(first) / float(shots),
+				100.0 * float(any_goal) / float(shots),
+				100.0 * float(live) / float(shots)])
 	assert_true(true, "report")
