@@ -844,9 +844,13 @@ func test_standstill_1v1_winds_up_the_cut() -> void:
 	cf.decide(far)
 	assert_eq(cf.intended_action, AIRoleCarrier.INTENT_CARRY,
 			"at range vs a set keeper the play is still the carry")
-	assert_lt(cf.debug_shoot_score, 0.05,
-			"…because range opens no real direct window; got %f"
-			% cf.debug_shoot_score)
+	# Compared to the SAME release in tight, above — not to an absolute bar.
+	# The currency's ceiling is a property of whichever shot model is wired in;
+	# "no real window at range" is a statement about range, so it has to be
+	# measured against a range that DOES open one.
+	assert_lt(cf.debug_shoot_score, c.debug_shoot_score * 0.5,
+			"…because range opens a fraction of the window 3 m does; %f vs %f"
+			% [cf.debug_shoot_score, c.debug_shoot_score])
 	assert_gt(cf.debug_carry_score, cf.debug_shoot_score,
 			"…and the priced plan (drive to the shooting band) beats flinging it")
 	assert_lt(cf.last_carry_anchor.z, far_pos.z,
@@ -924,8 +928,12 @@ func test_release_sampling_relocates_toward_the_open_side() -> void:
 	assert_gt(c._shot_sample_offset.x, 0.3,
 			"the winning sample relocates the release toward the open (forehand) side")
 	assert_false(c._shot_sample_backhand, "…on the forehand, at full pace")
-	assert_gt(c.debug_shoot_score, 0.5,
-			"…and the relocated look is a genuine chance; got %f" % c.debug_shoot_score)
+	# "A genuine chance" stated as behaviour rather than as a number: the
+	# relocated look has to WIN the compete against every carry and pass
+	# alternative from this spot. That is the same claim, and it survives the
+	# shot model being swapped underneath it.
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"…and the relocated look is a genuine chance — it is taken")
 
 
 
@@ -1003,16 +1011,18 @@ func test_slot_look_is_calibrated_and_displacement_beats_the_set_keeper() -> voi
 	sctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(slot, net, 1.3)
 	var sc := AIRoleCarrier.new()
 	sc.decide(sctx)
-	assert_gt(sc.debug_shoot_score, 0.8,
-			"the slot quick release beats the standing keeper; got %f"
-			% sc.debug_shoot_score)
-
 	var band := Vector3(0.0, 0.0, -18.15)               # the 8.5 m gradient band
 	var wide := Vector3(9.0, 0.0, -22.0)
 	var bctx := _make_ctx(band)
 	bctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(band, net, 1.3)
 	var bc := AIRoleCarrier.new()
 	bc.decide(bctx)
+	# "First-class look, not a modest window" against the 8.5 m band this test
+	# already scores — a RATIO, so it says something about the shape of the
+	# surface rather than about where the currency happens to top out.
+	assert_gt(sc.debug_shoot_score, bc.debug_shoot_score * 2.0,
+			"the dead slot is worth multiples of the mid-range band; %f vs %f"
+			% [sc.debug_shoot_score, bc.debug_shoot_score])
 	var dctx := _make_ctx(band)
 	dctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(wide, net, 1.3)
 	var dc := AIRoleCarrier.new()
@@ -2560,8 +2570,13 @@ func test_spun_off_carrier_attacks_the_opening() -> void:
 	var cut_score: float = c._score_move_candidate(ctx, cut_in, our_goalie)
 	assert_gt(cut_score, c._score_move_candidate(ctx, lateral, our_goalie),
 			"the cut-in's continuation beats the lateral escape's marginal safety")
-	assert_gt(cut_score, 0.08,
-			"…and it is a real plan, not argmax-over-noise; got %f" % cut_score)
+	# "Not argmax-over-noise" means the plan has to beat DOING NOTHING by a
+	# real margin — stand-still is the noise floor, and it is in the compete
+	# already. An absolute bar could only ever encode the currency's scale.
+	var stand_score: float = c._score_move_candidate(ctx, self_pos, our_goalie)
+	assert_gt(cut_score, stand_score * 2.0,
+			"…and it is a real plan, not argmax-over-noise — multiples of standing still; %f vs %f"
+			% [cut_score, stand_score])
 
 
 func test_continuation_credit_respects_live_containment() -> void:
