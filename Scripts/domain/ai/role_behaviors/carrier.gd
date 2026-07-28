@@ -207,10 +207,10 @@ const CARRY_SEARCH_STEP_M: float = 3.0
 # other candidate's straight route crosses the cage there (pruned by the
 # net-path check), so without these a behind-the-net carrier had no
 # representable way out and ground on the frame. Scored by the same EV
-# pipeline as everything else — in the OZ the possession floor gives the
-# walkout its value (behind the line every shot is honestly 0) and the two
-# sides compete on safety, which is also the natural wraparound setup (the
-# goalie's RVH/VH post seals are the counter). The lateral clearance is
+# pipeline as everything else: a walkout spot is rink-side, so it carries a
+# real shot value of its own (behind the line every shot is honestly 0), and
+# the two sides then compete on safety — which is also the natural wraparound
+# setup (the goalie's RVH/VH post seals are the counter). The lateral clearance is
 # physical: post half-span + a carried body's half-width + blade slop.
 const WALKOUT_POST_CLEARANCE_M: float = 0.9
 const WALKOUT_FRONT_M: float = 0.7
@@ -3304,7 +3304,7 @@ func _candidate_pass_option(ctx: RoleContext, candidate: Vector3,
 # through both legs, the keeper tracked over the whole route, second-leg
 # reach-safety and lane, time decay. This is the two-ply read that separates
 # "cut in behind the beaten man" from "orbit the perimeter": one step deep,
-# against a set goalie, both spots read ≈ the possession floor and the safety
+# against a set goalie, both spots read nearly the same and the safety
 # gradient alone picks the orbit — the transient opening a beaten defender
 # concedes only prices in on the step AFTER the cut, exactly when he can no
 # longer recover into it (calibration in test_role_carrier). Credited via
