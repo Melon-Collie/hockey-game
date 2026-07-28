@@ -142,6 +142,32 @@ static func must_commit_now(s: Situation) -> bool:
 	return deadline <= 0.0 or s.sight_delay > deadline
 
 
+# STAYING down, as opposed to going down. Same model and the same inputs — a
+# goalie has no business standing into a situation he would have dropped for —
+# but deliberately NOT the same threshold, because the two are not equally
+# expensive to get wrong. Entering the seal is free; leaving it costs a full
+# `recovery_duration` and then the climb back out to challenge depth, most of a
+# second during which he is neither down nor set.
+#
+# WITHOUT THE ASYMMETRY THIS OSCILLATES, and not because of noisy inputs. The
+# goalie's own depth feeds `time_to_arrival` (the puck's flight to WHERE HE IS),
+# so the decision's input depends on the decision's output: at challenge depth
+# the gap is inside the block threshold, he drops, recovering retreats him toward
+# his goal line, the longer gap says he can react after all, he stands, the climb
+# back out shortens the gap, and he drops again. Measured in play against a
+# completely stationary puck — the gap cycling 4.87 / 4.92 / 5.62 / 4.86 m across
+# a threshold at 4.884 m while the puck sat at one spot the entire time.
+#
+# So he abandons the seal only when the react response is FULLY available again
+# (a whole drop's worth of time on top of the read), never on the hair's breadth
+# that his own retreat just bought him. No tuned constant: `answer_fraction` is
+# already normalised by the drop, so "fully answerable" is its own ceiling.
+static func should_hold_seal(s: Situation) -> bool:
+	if s.lateral_race_lost:
+		return true
+	return answer_fraction(s) < 1.0
+
+
 # THE decision. Block when reacting cannot cover the threat at all, or when it
 # cannot complete AND the drop can no longer wait.
 static func should_block(s: Situation) -> bool:

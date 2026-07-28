@@ -2049,6 +2049,28 @@ func _is_ready_situation() -> bool:
 func _build_save_situation(delta: float) -> GoalieSaveSelection.Situation:
 	var s := _save_situation
 	var puck_pos: Vector3 = puck.global_position
+	# PRICE THE SHOT FROM WHERE IT WILL ACTUALLY BE RELEASED. A slapper charge
+	# relocates the carried puck to a fixed skater-local spot the instant it is
+	# entered — across the body for a left-hander, ~1.65 m measured — and
+	# `Puck.release` fires the shot from that pin, never from where the puck was
+	# being carried. Reading the live position therefore prices a release point
+	# that will not exist by the time anything is shot.
+	#
+	# It is not a rounding error. Host-side the relocation lands in ONE tick
+	# (Puck._physics_process assigns the carry target outright), so a goalie who
+	# evaluates on the tick before it lands commits to a butterfly for a gap of
+	# 5.29 m and finds himself at 6.62 m the next frame — the block verdict
+	# reverses, but butterfly_min_hold_time pins him down for 0.35 s first, so it
+	# reads in game as "he drops, backs up a bit, then gets back up and resets to
+	# his aggressive depth" against a shooter who never moved.
+	#
+	# Only for the PINNED wind-up: that is exactly the case where the release
+	# origin is a known fixed point rather than a guess.
+	var pinning_carrier: Skater = puck.get_carrier()
+	if pinning_carrier != null and pinning_carrier.is_slapshot_pinning():
+		var pin: Vector3 = pinning_carrier.get_carry_target_global()
+		pin.y = puck_pos.y
+		puck_pos = pin
 	var gap: float = goalie.global_position.distance_to(puck_pos)
 	var vel: Vector3 = puck.linear_velocity
 	var speed: float = vel.length()
@@ -2143,6 +2165,15 @@ func _build_save_situation(delta: float) -> GoalieSaveSelection.Situation:
 # Should he be sealing the ice rather than reading? One question for going down
 # AND for staying down, so he cannot pop up into a situation he would have
 # dropped for.
+# The staying-down twin of `_should_block`, sharing its lunge precedence: a
+# committed poke is a save selection already made, and the seal must not undo it
+# either.
+func _should_hold_seal() -> bool:
+	if _lunge_active_timer > 0.0:
+		return false
+	return GoalieSaveSelection.should_hold_seal(_build_save_situation(0.0))
+
+
 func _should_block(delta: float) -> bool:
 	# Lunge precedence, carried over from the doorstep predicate this replaced: a
 	# committed poke IS a save selection, already made. Dropping out of it would
@@ -2848,9 +2879,10 @@ func _is_threat_pressing() -> bool:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
-	# THE SAME DECISION THAT PUT HIM DOWN. Going down and staying down are one
-	# question — if the situation would drop a standing goalie, a down one has no
-	# business standing into it.
+	# THE SAME DECISION THAT PUT HIM DOWN — same model, same inputs — but through
+	# `should_hold_seal`, which applies the asymmetric threshold. Going down and
+	# staying down are one question and not one bar; see the rule for why the
+	# symmetric version self-oscillates off the goalie's own depth.
 	#
 	# This is the reported bug. The proximity hold above only fires for a hostile
 	# CARRIER, so a slow loose rebound at his feet had no carrier, fell through to
@@ -2858,7 +2890,7 @@ func _is_threat_pressing() -> bool:
 	# scramble — unearned rebounds through the five-hole. Possession never made
 	# that play readable; a stick that can reach the puck before he can answer is
 	# what makes it unreadable, and that is what the model asks.
-	if _should_block(0.0):
+	if _should_hold_seal():
 		return true
 	var speed_low: bool
 	var moving_away: bool
