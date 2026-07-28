@@ -33,8 +33,8 @@ extends GutTest
 #    for a per-shot comparison — a real xG model scores the rebound as its own
 #    separate shot event — but see the rebound note in the exhaustive sweep for
 #    why it flatters this keeper in tight.
-#  * WRISTER BAND ONLY. No slapshots, so the top ~7 m/s of the game's pace is
-#    absent from the long cells, where it matters most.
+#  * THE SHAPE GRID IS WRISTER-ONLY. The boundary sweep below covers both
+#    mechanisms at their real durations; the distance x angle grid above does not.
 #  * STATIONARY SHOOTER, SET GOALIE. The single most goalie-flattering choice
 #    here: nothing in this grid gets him moving, and xG's fitted average very
 #    much includes plays that do.
@@ -110,53 +110,45 @@ extends GutTest
 # (goalie x 0.92). Nominal coverage RISES with angle while measured beatability
 # rises too, so the two disagree. The boundary sweep below resolves it.
 #
-# ── FINDING 1: the angled hole is REAL, and peaks at 75 deg ─────────────────
-# Conversion (goals / shots that reached him), from the REFERENCE POSE
-# (Harness.settle_ready: converged on challenge depth, square, on his feet) at
-# two windup lengths. An earlier pass measured this through `hold_windup`, which
-# resets to the crease and does not settle — those numbers were of a keeper still
-# climbing out and are superseded.
+# ── FINDING 1: the angled hole survives, isolated to 75 deg ─────────────────
+# Conversion (goals / shots that reached him) from the REFERENCE POSE
+# (Harness.settle_ready), with the wind-ups the GAME produces rather than
+# hand-picked hold lengths — see the WIND-UPS block below for why that matters.
 #
-#   dist angle |  stance | 0.20 s windup | 0.60 s windup
-#      5    40 |   READY |        10.0%  |         7.3%
-#      5    50 |   READY |        14.8%  |        15.4%
-#      5    60 |   READY |        15.5%  |        15.5%
-#      5    70 |   READY |        20.0%  |        21.3%
-#      5    75 |   READY |        29.3%  |        29.3%   <- peak, both
-#      5    80 |    VH_L |         0.0%  |         0.0%
-#      8    40 |   READY |         9.3%  |         8.0%
-#      8    60 |   READY |        11.4%  |         0.7%
-#      8    70 |   READY |        14.7%  |         0.0%
-#      8    75 |   READY |        19.3%  |         0.0%
-#      8    80 |    VH_L |         0.0%  |         0.0%
+#   dist angle |   quick wrister (0.125 s) |   full slapper (0.70 s)
+#      5    40 |    READY          8.7%    |   SLIDING        30.2%
+#      5    50 |    READY          8.1%    |   SLIDING        22.8%
+#      5    60 |    READY         10.0%    |   SLIDING        17.5%
+#      5    70 |    READY          8.2%    |   READY           5.0%
+#      5    75 |    READY         21.5%    |   READY          14.7%
+#      5    80 |     VH_L          0.0%    |    VH_L           0.0%
+#      8    40 |    READY          7.3%    |   READY           3.6%
+#      8    60 |    READY          6.7%    |   READY           3.1%
+#      8    70 |    READY          8.7%    |   READY           3.1%
+#      8    75 |    READY         16.0%    |   READY           7.6%
+#      8    80 |     VH_L          0.0%    |    VH_L           0.0%
 #
-# AT 5 m THE INVERSION IS ROBUST AND WINDUP-INDEPENDENT: 10% at 40 deg rising
-# monotonically to 29% at 75 deg, essentially identical at both hold lengths.
-# XGBaseline over the same span goes the other way — 0.140 at 40 deg down to
-# 0.091 at 75 deg, a 35% FALL against our 193% rise. That is a ~4.5x shape error
-# and it is the real angled hole.
+# ON THE WRISTER the angle axis is now FLAT from 40-70 deg (8.7 / 8.1 / 10.0 /
+# 8.2) where it used to climb 2x, and what remains is a spike at 75 deg alone —
+# the last step before post integration, where the arc solve already has him at
+# the seal spot but he is STANDING there instead of in VH's vertical pad. That
+# residual is the pose, not the position.
 #
-# AT 8 m IT IS A QUICK-RELEASE PHENOMENON: the same rise on a 0.20 s hold, but
-# give him 0.60 s and the whole 60-75 deg band collapses to zero. The extra beat
-# of read is enough at 8 m and is not at 5 m.
+# ON THE SLAPPER the angle axis runs the RIGHT way — 30.2% at 40 deg falling to
+# 5.0% at 70 deg, which is xG's direction — and the most dangerous cell in the
+# whole grid is a full slapper from 5 m nearly straight on.
 #
-# The post-integration cliff holds at both: 80 deg concedes nothing anywhere.
-# `down@settle 150` on those rows is the instrument working, not failing —
-# settle_ready reports that he leaves his feet during the settle at 80+ deg,
-# which is `_is_puck_in_defensive_zone` handing him to VH, so those cells are
-# measuring a post-integrated keeper by construction.
+# ── AND THAT WORST CELL IS SELF-INFLICTED: read the STANCE column ────────────
+# At 5 m / 40-60 deg against a full slapper charge he is SLIDING at the release.
+# Nothing moved: the shooter is stationary and only charging. He reads the loaded
+# slapper, `_should_block` decides to drop, and from the butterfly he commits a
+# slide — so by the time the puck leaves he is caught mid-translation, which is
+# exactly the state the caught-moving model prices as most beatable. The keeper
+# beats himself. Compare 70 deg on the same row: he stays READY and concedes 5%.
 #
-# ── AN ATTEMPTED FIX AND WHY IT DID NOT LAND FIRST TIME ──────────────────────
-# `target_arc_position` clamps x to the post while keeping the arc's z, so past
-# the exit angle it returns a point that is not on the squaring line at all. That
-# IS a real bug, and correcting it — converging continuously on the post-seal
-# spot — moves the SETTLED position at 5 m / 70 deg from (x 0.92, depth 0.53) to
-# (0.62, 0.20), i.e. onto the seal.
-#
-# Measured through the old `hold_windup` path it changed nothing, because at
-# release the keeper was at radius 0.54 — inside the mouth, so the clamp never
-# engaged and the corrected branch was dead code. From the reference pose he is
-# at 1.75, where the clamp does bind, so the fix is worth re-measuring here.
+# This only became visible once the wind-up was modelled as the game produces it
+# — 0.7 s of SLAPPER_CHARGE_WITH_PUCK in the slapper power band. A 0.125 s
+# wrister hold never gives him time to make the decision.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
@@ -326,12 +318,36 @@ func test_report_goalie_angular_coverage() -> void:
 const BOUNDARY_DISTANCES: Array[float] = [5.0, 8.0]
 const BOUNDARY_ANGLES_DEG: Array[float] = [40.0, 50.0, 60.0, 70.0, 75.0, 80.0, 85.0]
 const BOUNDARY_POWERS: Array[float] = [0.8, 1.0]
-# Windup lengths to sweep the boundary at, in ticks (120 Hz). THIS TURNS OUT TO
-# BE THE DECIDING VARIABLE, so it is swept rather than fixed: reading a windup at
-# a sharp angle collapses the goalie's depth radius, and the move takes longer
-# than a quick release. 24 ticks (0.2 s) fires DURING that transit; 72 (0.6 s)
-# fires after he has arrived. They do not measure the same goalie.
-const BOUNDARY_WINDUPS: Array[int] = [24, 72]
+
+# ── THE WIND-UPS ARE THE GAME'S, NOT HAND-PICKED ─────────────────────────────
+# Wind-up length is the deciding variable for what the goalie has read by the
+# release, so it must not be a free parameter of the instrument. Both arms below
+# are the mechanisms the game actually produces, at their real durations and in
+# their real states — a wrister and a slapper are DIFFERENT reads for the goalie
+# (WRISTER_AIM vs SLAPPER_CHARGE_WITH_PUCK gates the pre-lean, the pinned-windup
+# squaring override and the slapper aim shade), not one knob with two settings.
+#
+#   QUICK WRISTER — SkaterAgentStateMachine.BOT_WRISTER_CHARGE_TICKS, the charge
+#   every bot in the game actually holds. 15 ticks / 125 ms, which is SHORTER
+#   than either length an earlier pass swept by hand, so the quick-release case
+#   was never actually measured.
+#
+#   FULL SLAPPER — SkaterController.max_slapper_charge_time, the full charge at
+#   0.7 s, fired in the SLAPPER power band. This is also the only place
+#   slapshots enter this instrument at all; everything else here is wrister pace,
+#   and the top ~7 m/s of the game's shot power is exactly what the long cells
+#   live on.
+#
+# A human wrister has no canonical duration — power comes from cursor-stroke
+# speed, not a timer — so the bot charge stands in for the quick release and the
+# slapper covers the long-hold end.
+const WRISTER_WINDUP_TICKS: int = 15          # bot wrister charge, ~0.125 s
+const SLAPPER_WINDUP_TICKS: int = 84          # max_slapper_charge_time 0.7 s
+const SLAPPER_SPEEDS_M_S: Array[float] = [
+	GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S,
+	0.5 * (GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S + GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S),
+	GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S,
+]
 
 const _STANCE_NAME: Array[String] = [
 	"STANDING", "BUTTERFLY", "RECOVERING", "RVH_L", "RVH_R", "READY", "SLIDING",
@@ -346,13 +362,22 @@ func test_report_angled_softness_vs_post_stance() -> void:
 	gut.p("conv%% = goals/(goals+saves) — the angle-comparable rate. See the note.")
 	gut.p("%5s %6s | %10s | %5s %5s %5s %5s | %6s %6s"
 			% ["dist", "angle", "stance", "goal", "save", "post", "wide", "aim%", "conv%"])
-	for windup: int in BOUNDARY_WINDUPS:
-		gut.p("-- windup %d ticks (%.2f s) --" % [windup, float(windup) / 120.0])
-		_boundary_pass(hw, windup)
+	gut.p("-- QUICK WRISTER: %d ticks (%.3f s), wrister band --"
+			% [WRISTER_WINDUP_TICKS, float(WRISTER_WINDUP_TICKS) / 120.0])
+	_boundary_pass(hw, false)
+	gut.p("-- FULL SLAPPER: %d ticks (%.2f s), slapper band --"
+			% [SLAPPER_WINDUP_TICKS, float(SLAPPER_WINDUP_TICKS) / 120.0])
+	_boundary_pass(hw, true)
 	assert_true(true, "report")
 
 
-func _boundary_pass(hw: float, windup: int) -> void:
+# `slapper` picks the whole mechanism, not just the hold: charge state, duration
+# and power band all move together, because that is how the game produces them.
+func _boundary_pass(hw: float, slapper: bool) -> void:
+	var windup: int = SLAPPER_WINDUP_TICKS if slapper else WRISTER_WINDUP_TICKS
+	var state: int = SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK if slapper \
+			else SkaterStateMachine.State.WRISTER_AIM
+	var paces: Array = SLAPPER_SPEEDS_M_S if slapper else BOUNDARY_POWERS
 	for dist: float in BOUNDARY_DISTANCES:
 		for angle: float in BOUNDARY_ANGLES_DEG:
 			var shooter: Vector3 = _spot(dist, angle)
@@ -364,7 +389,7 @@ func _boundary_pass(hw: float, windup: int) -> void:
 			var wides: int = 0
 			var stance: int = -1
 			var down_at_settle: int = 0
-			for power: float in BOUNDARY_POWERS:
+			for pace: float in paces:
 				for loft: int in LOFTS:
 					for i: int in AIM_STEPS:
 						var t: float = float(i) / float(AIM_STEPS - 1)
@@ -372,9 +397,15 @@ func _boundary_pass(hw: float, windup: int) -> void:
 						_h.settle_ready(shooter)
 						if _h.last_settle_went_down:
 							down_at_settle += 1
-						_h.publish_windup(shooter, aim, loft, power, windup)
+						var outcome: int
+						if slapper:
+							_h.publish_windup_at(shooter, aim, loft, pace, windup, state)
+							outcome = _h.fire_release_at(shooter, aim, loft, pace, 0.0)
+						else:
+							_h.publish_windup(shooter, aim, loft, pace, windup, state)
+							outcome = _h.fire_release(shooter, aim, loft, pace, 0.0)
 						stance = _ctrl._sm.current as int
-						match _h.fire_release(shooter, aim, loft, power, 0.0):
+						match outcome:
 							Harness.GOAL:
 								goals += 1
 							Harness.SAVE:

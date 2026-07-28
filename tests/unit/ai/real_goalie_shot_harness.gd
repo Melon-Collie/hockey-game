@@ -103,6 +103,25 @@ func settle(shooter: Vector3, ticks: int) -> void:
 		_ctrl._physics_process(DT)
 
 
+# Speed-explicit twin of `publish_windup`, for wind-ups whose power band is not
+# the wrister's — a slapper charge fires 20-40 m/s, so publishing its declared
+# velocity through the wrister band would have the goalie reading a shot nobody
+# is about to take.
+func publish_windup_at(shooter: Vector3, declared_aim: Vector3, loft_level: int,
+		speed_m_s: float, ticks: int,
+		shot_state: int = SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK) -> void:
+	_shooter.global_position = shooter
+	_shooter.velocity = Vector3.ZERO
+	_shooter.current_shot_state = shot_state
+	_shooter.predicted_shot_velocity = shot_velocity_at(
+			shooter, declared_aim, loft_level, speed_m_s, 0.0)
+	_puck.set_carrier(_shooter)
+	for _i: int in ticks:
+		_puck.global_position = shooter
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+
+
 # ── THE REFERENCE POSE ───────────────────────────────────────────────────────
 # Settle the goalie to a REPEATABLE, comparable starting state: square, converged
 # on his challenge depth, and still on his feet. Use this instead of `settle` with
