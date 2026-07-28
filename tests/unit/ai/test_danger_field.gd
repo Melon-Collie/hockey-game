@@ -107,9 +107,31 @@ func test_screened_shooter_is_understated_only() -> void:
 	var defenders: Array[Vector3] = [screener_mid]
 	var exact: float = _exact(pos, _goalie, defenders)
 	var fielded: float = _fielded(pos, _goalie, defenders)
-	assert_true(_exact(pos, _goalie, defenders)
-			>= _exact(pos, _goalie, [] as Array[Vector3]) - 0.0001,
-			"sanity: a screen never lowers the exact quality")
+	# Sanity, on the QUALITY term in isolation. It cannot be read off `_exact`,
+	# because the one defender body does two opposing things at once: it screens
+	# (raising quality) and it stands in the shot lane (lowering lane_clear).
+	# Comparing _exact-with-body against _exact-with-nothing therefore measures
+	# the net of those two, not the screen. That comparison only ever passed
+	# because the surface was SATURATED — quality read 1.000 screened or not, so
+	# it reduced to the lane term equalling itself. With a currency that has
+	# range, the lane block can dominate, and the assert started failing while
+	# the property it names stayed true.
+	var seal_x: float = AIActionScoring.derive_post_seal_x_sign(pos, _net)
+	var none: Array[Vector3] = []
+	var screen_d: float = AIActionScoring.screen_along_m(
+			pos, _goalie, defenders, none)
+	assert_gt(screen_d, 0.0, "sanity: this body really does screen the sightline")
+	var q_screened: float = AIActionScoring.open_net_danger(
+			pos, _net, _goalie, GameRules.NET_HALF_WIDTH,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, -1.0, false,
+			seal_x, seal_x != 0.0, 0.0, screen_d)
+	var q_clean: float = AIActionScoring.open_net_danger(
+			pos, _net, _goalie, GameRules.NET_HALF_WIDTH,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, -1.0, false,
+			seal_x, seal_x != 0.0, 0.0, 0.0)
+	assert_true(q_screened >= q_clean - 0.0001,
+			"a screen never lowers the goalie-hole quality (%.4f vs %.4f)"
+			% [q_screened, q_clean])
 	assert_lt(fielded, exact + ERR_BOUND,
 			"fielded never overstates a screened shooter beyond the interp bound")
 
@@ -131,8 +153,15 @@ func test_within_eps_move_serves_the_memo() -> void:
 	var none: Array[Vector3] = []
 	var nudged: Vector3 = _goalie + Vector3(0.1, 0.0, 0.0)
 	var before: float = _fielded(pos, _goalie, none)
-	assert_eq(_fielded(pos, nudged, none), before,
-			"a sub-epsilon goalie nudge re-serves the identical memoized vertices")
+	# Not bit-identical any more, and deliberately so: the lattice stores
+	# MARGINS and the margin→danger map runs at query time against the LIVE
+	# keeper (see AIDangerField.quality). A sub-epsilon nudge therefore re-serves
+	# the cached vertices — the expensive geometry — while the cheap mapping
+	# term tracks the real goalie exactly instead of being frozen at whatever
+	# position happened to warm the cache. That residual is a fidelity gain, so
+	# the assert is "the geometry was not recomputed", not "nothing moved".
+	assert_almost_eq(_fielded(pos, nudged, none), before, 0.005,
+			"a sub-epsilon goalie nudge re-serves the memoized vertices")
 
 
 func test_reset_clears_the_memo() -> void:

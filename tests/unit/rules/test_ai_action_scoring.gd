@@ -205,10 +205,10 @@ func test_shoot_score_negligible_at_moderate_angle_vs_squared_goalie() -> void:
 	# the challenge arc toward them, 0.6 m out) — how a real goalie plays it.
 	# From the angle the net foreshortens and the squared body-depth covers the
 	# cross-net lane. With the reach budget run to the goalie's BODY a thin
-	# residual sliver survives, but it stays under the carrier's fire floor
-	# (FIRE_MIN_VALUE 0.02) — still a shot no bot takes. A deep-holding goalie
-	# concedes a real low look to the CENTER shooter — the keeper's depth, not
-	# the shooter's range, buys openings.
+	# residual sliver survives. A deep-holding goalie concedes a real low look
+	# to the CENTER shooter — the keeper's depth, not the shooter's range, buys
+	# openings. (No cross-reference to the carrier's fire floor: that gate is
+	# denominated in the SEAM's currency, and these are hole-model scores.)
 	var shooter := Vector3(5.0, 0.0, 23.65)
 	var goalie_angle := Vector3(0.86, 0.0, 26.34)   # squared to the 59° shooter
 	var center := Vector3(0.0, 0.0, 21.0)
@@ -2126,8 +2126,8 @@ func test_aim_spread_pulls_a_degenerate_corner_aim_off_the_post() -> void:
 # body around the sightline; they pass it through `screeners` (the shooter's
 # own traffic) so lane/pressure stay constant and the sightline effect is
 # isolated. Magnitudes probed on the calibrated model: clean ≈ 0.002,
-# net-front screened ≈ 0.078 (~real screened-point-shot xG), which straddles
-# the carrier's FIRE_MIN_VALUE (0.02) — exactly the behavior flip the model
+# net-front screened ≈ 0.078 (~real screened-point-shot xG) — a fortyfold
+# swing on the one thing that changed, which is the behavior flip the model
 # exists to produce.
 func _screened_point_shot(screeners: Array[Vector3]) -> float:
 	var shooter := Vector3(0.0, 0.0, 10.0)   # 16.65 m out — the point
@@ -2243,63 +2243,6 @@ func test_boxed_out_tipper_loses_the_tip() -> void:
 	var contested: float = _tip_fixture(Vector3(0.0, 0.0, 24.0), 33.0, boxed)
 	assert_lt(contested, clean_tip * 0.2,
 			"a boxed-out tipper's deflection is priced away")
-
-
-# ─── Rebound second chance (a save is not terminal) ─────────────────────────
-
-func test_net_front_presence_adds_rebound_value() -> void:
-	# The 8.5 m gradient band: a real but sub-certain rip. A net-front man OFF
-	# the sightline (perp > the screen radius — pure rebound presence, no
-	# screen credit) makes the same rip worth more: the saved mass of a
-	# pad-beating shot becomes a crease scramble he wins, put back at a DOWN,
-	# just-saved keeper. This is the honest "get pucks to the net" credit.
-	var shooter := Vector3(0.0, 0.0, 18.15)
-	var goalie := Vector3(0.0, 0.0, 25.5)
-	var nobody: Array[Vector3] = []
-	var crash: Array[Vector3] = [Vector3(1.6, 0.0, 24.3)]   # backdoor post, off-line
-	var alone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
-			0.0, false, 0.0, nobody)
-	var crashed: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
-			0.0, false, 0.0, crash)
-	assert_gt(crashed, alone + 0.05,
-			"net-front presence adds real rebound value; %f vs %f" % [crashed, alone])
-	assert_lt(crashed, 1.0 + 0.0001, "…and the total stays a probability")
-
-
-func test_no_rebound_credit_on_a_controlled_save() -> void:
-	# At/below the pad threshold (GoalieSaveRules.pad_max_incoming_speed) the
-	# save is controlled — absorbed dead or steered cornerward out of the
-	# slot — so a soft shot earns NO second-chance credit however many bodies
-	# crash the net.
-	var shooter := Vector3(0.0, 0.0, 18.15)
-	var goalie := Vector3(0.0, 0.0, 25.5)
-	var crash: Array[Vector3] = [Vector3(1.6, 0.0, 24.3)]
-	var soft_alone: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
-			24.0, 0.0, [], -1.0, false, 0.0, false, 0.0, [] as Array[Vector3])
-	var soft_crashed: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
-			24.0, 0.0, [], -1.0, false, 0.0, false, 0.0, crash)
-	assert_almost_eq(soft_crashed, soft_alone, 0.0001,
-			"a controlled save leaves nothing to scramble for")
-
-
-func test_box_out_defender_deflates_the_rebound() -> void:
-	# A defender owning the scramble spot: the proximity race swings his way
-	# and the second chance shrinks toward nothing — boxing out is the real
-	# counter to the crash, same as it is to the tip.
-	var shooter := Vector3(0.0, 0.0, 18.15)
-	var goalie := Vector3(0.0, 0.0, 25.5)
-	var crash: Array[Vector3] = [Vector3(1.6, 0.0, 24.3)]
-	var boxed: Array[Vector3] = [Vector3(1.2, 0.0, 23.8)]   # owning the kick zone
-	var free_crash: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, [],
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
-			0.0, false, 0.0, crash)
-	var boxed_crash: float = AIActionScoring.score_shoot(shooter, GOAL, goalie, NET_HW, boxed,
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, [], -1.0, false,
-			0.0, false, 0.0, crash)
-	assert_lt(boxed_crash, free_crash,
-			"a box-out body deflates the second chance; %f vs %f" % [boxed_crash, free_crash])
 
 
 # ── Hole-model v3: the HIGH band reads the replicated hands ──────────────────

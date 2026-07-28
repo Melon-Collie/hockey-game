@@ -622,7 +622,7 @@ func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void
 	# The control needs a scene worth something to control FOR. It used to place
 	# the in-zone mate at (6, 0, -14) — level with the carrier, off the same dead
 	# lane, with no goalie in the snapshot at all — and passed on a pass score of
-	# 0.00004, four orders of magnitude under FIRE_MIN_VALUE. That is numerical
+	# 0.00004, four orders of magnitude under PASS_MIN_VALUE. That is numerical
 	# dust, not a legal pass target: any downstream change of a few percent
 	# flipped its sign. A real keeper and a mate in real scoring ice give the
 	# assertion something to measure.
@@ -639,7 +639,7 @@ func test_carrier_in_ozone_never_passes_out_to_a_neutral_zone_teammate() -> void
 	ctx_in.snapshot.goalie_states[1 - TEAM_ID] = g
 	var c2 := AIRoleCarrier.new()
 	c2.decide(ctx_in)
-	assert_gt(c2.debug_pass_score, AIRoleCarrier.FIRE_MIN_VALUE,
+	assert_gt(c2.debug_pass_score, AIRoleCarrier.PASS_MIN_VALUE,
 			"an in-zone teammate in scoring ice IS a legal pass target, worth firing")
 
 
@@ -844,9 +844,13 @@ func test_standstill_1v1_winds_up_the_cut() -> void:
 	cf.decide(far)
 	assert_eq(cf.intended_action, AIRoleCarrier.INTENT_CARRY,
 			"at range vs a set keeper the play is still the carry")
-	assert_lt(cf.debug_shoot_score, 0.05,
-			"…because range opens no real direct window; got %f"
-			% cf.debug_shoot_score)
+	# Compared to the SAME release in tight, above — not to an absolute bar.
+	# The currency's ceiling is a property of whichever shot model is wired in;
+	# "no real window at range" is a statement about range, so it has to be
+	# measured against a range that DOES open one.
+	assert_lt(cf.debug_shoot_score, c.debug_shoot_score * 0.5,
+			"…because range opens a fraction of the window 3 m does; %f vs %f"
+			% [cf.debug_shoot_score, c.debug_shoot_score])
 	assert_gt(cf.debug_carry_score, cf.debug_shoot_score,
 			"…and the priced plan (drive to the shooting band) beats flinging it")
 	assert_lt(cf.last_carry_anchor.z, far_pos.z,
@@ -924,8 +928,12 @@ func test_release_sampling_relocates_toward_the_open_side() -> void:
 	assert_gt(c._shot_sample_offset.x, 0.3,
 			"the winning sample relocates the release toward the open (forehand) side")
 	assert_false(c._shot_sample_backhand, "…on the forehand, at full pace")
-	assert_gt(c.debug_shoot_score, 0.5,
-			"…and the relocated look is a genuine chance; got %f" % c.debug_shoot_score)
+	# "A genuine chance" stated as behaviour rather than as a number: the
+	# relocated look has to WIN the compete against every carry and pass
+	# alternative from this spot. That is the same claim, and it survives the
+	# shot model being swapped underneath it.
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"…and the relocated look is a genuine chance — it is taken")
 
 
 
@@ -947,7 +955,7 @@ func test_release_sampling_finds_the_backhand_tuck_beside_the_net() -> void:
 			"…moving the release out in front of the crease")
 	assert_lt(c._shot_sample_speed, ctx.self_wrister_shot_speed - 0.01,
 			"…priced at the backhand's penalized pace")
-	assert_gt(c.debug_shoot_score, AIRoleCarrier.FIRE_MIN_VALUE,
+	assert_gt(c.debug_shoot_score, AIRoleCarrier.SHOT_MIN_VALUE,
 			"…and it turns a nothing angle into a committable look; got %f"
 			% c.debug_shoot_score)
 
@@ -1003,16 +1011,18 @@ func test_slot_look_is_calibrated_and_displacement_beats_the_set_keeper() -> voi
 	sctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(slot, net, 1.3)
 	var sc := AIRoleCarrier.new()
 	sc.decide(sctx)
-	assert_gt(sc.debug_shoot_score, 0.8,
-			"the slot quick release beats the standing keeper; got %f"
-			% sc.debug_shoot_score)
-
 	var band := Vector3(0.0, 0.0, -18.15)               # the 8.5 m gradient band
 	var wide := Vector3(9.0, 0.0, -22.0)
 	var bctx := _make_ctx(band)
 	bctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(band, net, 1.3)
 	var bc := AIRoleCarrier.new()
 	bc.decide(bctx)
+	# "First-class look, not a modest window" against the 8.5 m band this test
+	# already scores — a RATIO, so it says something about the shape of the
+	# surface rather than about where the currency happens to top out.
+	assert_gt(sc.debug_shoot_score, bc.debug_shoot_score * 2.0,
+			"the dead slot is worth multiples of the mid-range band; %f vs %f"
+			% [sc.debug_shoot_score, bc.debug_shoot_score])
 	var dctx := _make_ctx(band)
 	dctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(wide, net, 1.3)
 	var dc := AIRoleCarrier.new()
@@ -1288,8 +1298,15 @@ func test_decide_re_evaluates_after_cooldown_expires() -> void:
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, -22.0))
 
 	c.decide(ctx)  # tick 0: runs _pick_action (first eval = single-call)
-	# Drain the cooldown.
-	for i in range(AIRoleCarrier.PICK_ACTION_PERIOD_TICKS):
+	# Drain the cooldown the code actually ARMS, not the nominal period. This
+	# fixture is an empty rink and the compete resolves to CARRY, which is the
+	# open-ice LOD case in _arm_pick_cooldown: with no opponent inside
+	# OPEN_ICE_LOD_RADIUS_M and the argmax answering CARRY, the re-eval is
+	# re-armed at a third of the rate. Draining only the nominal period leaves
+	# the carrier still in cooldown and the flip below survives — which reads
+	# as "the re-eval never ran" when the truth is "it was not due yet".
+	for i in range(AIRoleCarrier.PICK_ACTION_PERIOD_TICKS
+			* AIRoleCarrier.OPEN_ICE_LOD_PERIOD_MULT):
 		c.decide(ctx)
 	# Force-flip and run the sliced re-eval to its commit: fire phase on the
 	# first call, carry + commit (which overwrites our flip) on the second.
@@ -1579,7 +1596,13 @@ func test_fresh_entry_holds_for_the_driving_finisher_over_the_top_shot() -> void
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, Vector3(-5, 0, -15.0), false, Vector3(0.8, 0, -7.5)],
 			[3, TEAM_ID, Vector3(6, 0, -6.3)],       # support high at the line
-			[11, 1, Vector3(-0.5, 0, -20.5)],        # set D box
+			# Set D box, strong side. He is deliberately NOT in the cross-seam
+			# lane: at (-0.5, -20.5) he sat 1.11 m off the carrier -> driving-
+			# finisher line at 57% of the flight, which is a 3.7% pass. The
+			# test would then be asking whether a feed it has parked a
+			# defender in front of beats a marginal shot, and the honest
+			# answer to that is no.
+			[11, 1, Vector3(1.5, 0, -20.5)],
 			[12, 1, Vector3(2.5, 0, -19.0)],
 			[13, 1, Vector3(0.5, 0, -11.3)],         # high man choking the carry
 	]
@@ -2402,8 +2425,16 @@ func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],        # open man out wide
-			[3, 1, Vector3(-0.9, 0.0, -19.6)],              # tight wall dead center —
-			[4, 1, Vector3(0.9, 0.0, -19.6)],               # no seam to split to the slot
+			# TIGHT wall dead centre — a 1.0 m gap between them, which is no
+			# seam for a body AND none for a puck. At the +/-0.9 they used to
+			# sit, the 1.8 m gap was a real shooting lane (a puck is 0.13 m):
+			# the shot lane read 0.604 and snapping it between two converging
+			# defenders correctly beat feeding a man at 11.9 m and 36 deg. The
+			# scenario is about a pinch with NO way through, so the wall has to
+			# actually be one — see the splittable-gap contrast test below,
+			# which this fixture is the tight end of.
+			[3, 1, Vector3(-0.5, 0.0, -19.6)],
+			[4, 1, Vector3(0.5, 0.0, -19.6)],
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
@@ -2560,8 +2591,13 @@ func test_spun_off_carrier_attacks_the_opening() -> void:
 	var cut_score: float = c._score_move_candidate(ctx, cut_in, our_goalie)
 	assert_gt(cut_score, c._score_move_candidate(ctx, lateral, our_goalie),
 			"the cut-in's continuation beats the lateral escape's marginal safety")
-	assert_gt(cut_score, 0.08,
-			"…and it is a real plan, not argmax-over-noise; got %f" % cut_score)
+	# "Not argmax-over-noise" means the plan has to beat DOING NOTHING by a
+	# real margin — stand-still is the noise floor, and it is in the compete
+	# already. An absolute bar could only ever encode the currency's scale.
+	var stand_score: float = c._score_move_candidate(ctx, self_pos, our_goalie)
+	assert_gt(cut_score, stand_score * 2.0,
+			"…and it is a real plan, not argmax-over-noise — multiples of standing still; %f vs %f"
+			% [cut_score, stand_score])
 
 
 func test_continuation_credit_respects_live_containment() -> void:
