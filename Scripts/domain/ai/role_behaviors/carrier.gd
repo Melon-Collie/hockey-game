@@ -2390,17 +2390,28 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# not span (lateral and back). Kept fixed and local: these are escape moves,
 	# not plans, and the space field deliberately looks only where the carrier is
 	# trying to GO. The committed peel-out is the retreat ring below.
-	for angle: float in _REAR_ANGLES:
-		var c: float = cos(angle)
-		var s_a: float = sin(angle)
-		var dir_x: float = fwd_x * c - fwd_z * s_a
-		var dir_z: float = fwd_x * s_a + fwd_z * c
-		var candidate := Vector3(
-				self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
-				self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
-		if not _candidate_ice_legal(candidate, behind_net):
-			continue
-		_beam_score_base(ctx, candidate, our_goalie, false)
+	#
+	# Gated on the SAME evadability threshold as that retreat ring, and for the
+	# same reason its doc gives: an escape move answers containment, and with no
+	# defender able to reach the puck the forward gradient owns the compete
+	# anyway. Measured over the benchmark scenarios, this ring was 21% of all
+	# candidate rows and 6.7% of argmax wins — and every one of those wins came
+	# from the open-ice side of the gate, i.e. the carrier electing a lateral
+	# shuffle with nobody near it. Gated, those decisions go to the slot drive
+	# and the directed seam instead, the suite is bit-identical, and the open-ice
+	# carry search costs a third less. A hot-path gate, not a tactical choice.
+	if current_safety < CARRY_RETREAT_SAFETY_SKIP:
+		for angle: float in _REAR_ANGLES:
+			var c: float = cos(angle)
+			var s_a: float = sin(angle)
+			var dir_x: float = fwd_x * c - fwd_z * s_a
+			var dir_z: float = fwd_x * s_a + fwd_z * c
+			var candidate := Vector3(
+					self_pos.x + dir_x * CARRY_SEARCH_STEP_M, 0.0,
+					self_pos.z + dir_z * CARRY_SEARCH_STEP_M)
+			if not _candidate_ice_legal(candidate, behind_net):
+				continue
+			_beam_score_base(ctx, candidate, our_goalie, false)
 
 	# RETREAT ring — see CARRY_RETREAT_* doc: the committed peel-out arc across
 	# the back half at double the local step, the move that creates REAL
