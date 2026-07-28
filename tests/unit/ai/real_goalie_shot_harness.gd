@@ -103,6 +103,82 @@ func settle(shooter: Vector3, ticks: int) -> void:
 		_ctrl._physics_process(DT)
 
 
+# ── THE REFERENCE POSE ───────────────────────────────────────────────────────
+# Settle the goalie to a REPEATABLE, comparable starting state: square, converged
+# on his challenge depth, and still on his feet. Use this instead of `settle` with
+# a hand-picked tick count whenever two measurements need to be compared, because
+# a fixed count does not mean the same thing at every spot or after every prior
+# trial.
+#
+# Two things it fixes over a raw `settle`:
+#
+#   CONVERGENCE IS DETECTED, NOT ASSUMED. Recovery from the goal line to challenge
+#   depth takes ~1.7 s, so any fixed count below ~200 ticks silently measures a
+#   keeper still on his way out (radius 0.54 at 0.2 s vs 1.75 settled). This ticks
+#   until the challenge radius and lateral position both stop moving.
+#
+#   THE SHOOTER IS PUT IN A NON-WINDUP STATE FIRST. `settle` leaves
+#   `current_shot_state` at whatever the previous trial set, and a wind-up left
+#   published makes the goalie read a shot threat during the settle — he decides
+#   to block, drops to butterfly, and then stops reading the wind-up entirely
+#   (`_is_reading_shot_threat` is upright-only). That is real behaviour, but it is
+#   not a reference pose, and inheriting it from the previous trial is a
+#   test-order dependency.
+#
+# Returns the ticks used. Sets `last_settle_went_down` if he dropped anyway —
+# check it rather than assuming, since a spot that blocks on its own is a finding.
+var last_settle_went_down: bool = false
+
+func settle_ready(shooter: Vector3, max_ticks: int = 400, tol: float = 0.0015) -> int:
+	last_settle_went_down = false
+	_ctrl.reset_to_crease()
+	_shooter.global_position = shooter
+	_shooter.velocity = Vector3.ZERO
+	# Carrying, but not winding up: nothing for the goalie to read as a threat.
+	_shooter.current_shot_state = SkaterStateMachine.State.SKATING_WITH_PUCK
+	_shooter.predicted_shot_velocity = Vector3.ZERO
+	_puck.set_carrier(_shooter)
+	var prev_depth: float = -1.0
+	var prev_x: float = INF
+	var stable: int = 0
+	for i: int in max_ticks:
+		_puck.global_position = shooter
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+		if not _ctrl._sm.is_upright():
+			last_settle_went_down = true
+			return i + 1
+		var d: float = _ctrl._current_depth
+		var x: float = _ctrl._current_x
+		if absf(d - prev_depth) < tol and absf(x - prev_x) < tol:
+			stable += 1
+			if stable >= 10:
+				return i + 1
+		else:
+			stable = 0
+		prev_depth = d
+		prev_x = x
+	return max_ticks
+
+
+# Publish a wind-up for `ticks` WITHOUT resetting or settling — the caller owns
+# the starting pose (use `settle_ready`). This is the composable half of
+# `hold_windup`, which bundles a reset and is documented as a trap.
+func publish_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
+		power_t: float, ticks: int,
+		shot_state: int = SkaterStateMachine.State.WRISTER_AIM) -> void:
+	_shooter.global_position = shooter
+	_shooter.velocity = Vector3.ZERO
+	_shooter.current_shot_state = shot_state
+	_shooter.predicted_shot_velocity = shot_velocity(
+			shooter, declared_aim, loft_level, power_t, 0.0)
+	_puck.set_carrier(_shooter)
+	for _i: int in ticks:
+		_puck.global_position = shooter
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+
+
 # Launch velocity for a shot from `shooter` toward the net-plane `aim`: horizontal
 # heading toward the aim (+ scatter), pace split into the horizontal component and
 # the loft's fixed vertical launch (same model as ShotMechanics / shot_sim_harness
