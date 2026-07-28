@@ -149,6 +149,30 @@ extends GutTest
 # This only became visible once the wind-up was modelled as the game produces it
 # — 0.7 s of SLAPPER_CHARGE_WITH_PUCK in the slapper power band. A 0.125 s
 # wrister hold never gives him time to make the decision.
+#
+# ── IT IS SLAPPER-ONLY: A HELD WRIST SHOT DOES NOT DO THIS ──────────────────
+# A human wrister has no duration cap, so the obvious worry is that sitting on
+# WRISTER_AIM walks him into the same trap on the shot players take most. It does
+# not. Held out to 1.5 s (the hold sweep below) he stays READY at every duration
+# and conversion is FLAT — 2.7% at 5 m centred, 6.8-8.1% at 5 m / 40 deg, 4.0% at
+# 8 m centred, unchanged from 0.125 s to 1.5 s. The block decision distinguishes
+# the two wind-ups deliberately: you block a loaded slapshot, you stay up and
+# react to a wrister. So the exploit is not available on the wrister.
+#
+# ── WHY THE SLAPPER ENDS IN A SLIDE: THE DROP RELOCATES HIM ─────────────────
+# At 5 m / 40 and 60 deg he is SLIDING on EVERY shot (225/225 and 217/217 — the
+# instrument has no RNG, so the stance is deterministic per cell), and at 70 deg
+# he never drops at all.
+#
+# The cause is a radius mismatch, not the slide logic. Standing, he holds the
+# challenge radius (~1.75 m); `butterfly_radius` is 0.40. So the ACT OF DROPPING
+# moves his arc target 1.35 m back along the ray, which at 40 deg swings his
+# lateral target from ~0.88 to ~0.26 — and he then slides ~0.6 m to fix an angle
+# that was correct until he dropped. The puck leaves while he is still travelling.
+#
+# Real goaltending does not work this way: a butterfly drop does not relocate
+# you, you drop where you stand. Some settling back is honest; 1.35 m of it is
+# what manufactures the slide.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
@@ -420,3 +444,55 @@ func _boundary_pass(hw: float, slapper: bool) -> void:
 					% [dist, angle, _STANCE_NAME[stance], goals, saves, posts, wides,
 					100.0 * float(goals) / float(maxi(shots, 1)),
 					100.0 * float(goals) / float(maxi(reached, 1)), down_at_settle])
+
+
+# ── DOES A HELD WRIST SHOT SELF-DEFEAT THE SAME WAY? ─────────────────────────
+# The slapper result above is driven by the goalie's own block-and-slide response
+# to a wind-up he has read for 0.7 s. A wrister publishes a DIFFERENT state
+# (WRISTER_AIM, not SLAPPER_CHARGE_WITH_PUCK) but `_should_block` reads both, and
+# a human wrister has NO duration cap — power comes from cursor-stroke speed, not
+# a timer, so a player can sit on WRISTER_AIM as long as they like. The bots' own
+# 0.125 s charge is the short end of that range, not the whole of it.
+#
+# So: sweep the hold and watch the stance. If holding a wrister walks him into
+# the same drop-then-slide, the exploit is available on the shot players take
+# most, not just on the slapper.
+const HOLD_SWEEP_TICKS: Array[int] = [15, 36, 60, 84, 120, 180]
+const HOLD_SWEEP_SPOTS: Array[Vector2] = [
+	Vector2(5.0, 0.0), Vector2(5.0, 40.0), Vector2(8.0, 0.0),
+]
+const HOLD_SWEEP_POWER: float = 0.9
+
+
+func test_report_held_wrister_hold_sweep() -> void:
+	var hw: float = GameRules.NET_HALF_WIDTH - GameRules.NET_POST_RADIUS \
+			- GameRules.PUCK_COLLISION_RADIUS
+	gut.p("Held WRISTER_AIM, wrister band, power_t %.2f. Stance is at release."
+			% [HOLD_SWEEP_POWER])
+	gut.p("%5s %6s %7s | %10s | %5s %5s | %6s"
+			% ["dist", "angle", "hold s", "stance", "goal", "save", "conv%"])
+	for spot2: Vector2 in HOLD_SWEEP_SPOTS:
+		for hold: int in HOLD_SWEEP_TICKS:
+			var shooter: Vector3 = _spot(spot2.x, spot2.y)
+			var goals: int = 0
+			var saves: int = 0
+			var stance: int = -1
+			for loft: int in LOFTS:
+				for i: int in AIM_STEPS:
+					var t: float = float(i) / float(AIM_STEPS - 1)
+					var aim := Vector3(lerpf(-hw, hw, t), 0.0, GOAL_Z)
+					_h.settle_ready(shooter)
+					_h.publish_windup(shooter, aim, loft, HOLD_SWEEP_POWER, hold,
+							SkaterStateMachine.State.WRISTER_AIM)
+					stance = _ctrl._sm.current as int
+					match _h.fire_release(shooter, aim, loft, HOLD_SWEEP_POWER, 0.0):
+						Harness.GOAL:
+							goals += 1
+						Harness.SAVE:
+							saves += 1
+						_:
+							pass
+			gut.p("%5.0f %6.0f %7.3f | %10s | %5d %5d | %5.1f%%"
+					% [spot2.x, spot2.y, float(hold) / 120.0, _STANCE_NAME[stance],
+					goals, saves, 100.0 * float(goals) / float(maxi(goals + saves, 1))])
+	assert_true(true, "report")
