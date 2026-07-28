@@ -2425,8 +2425,16 @@ func test_pinched_carrier_peels_out_to_reopen_the_ice() -> void:
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
 			[2, TEAM_ID, Vector3(-7.0, 0.0, -17.0)],        # open man out wide
-			[3, 1, Vector3(-0.9, 0.0, -19.6)],              # tight wall dead center —
-			[4, 1, Vector3(0.9, 0.0, -19.6)],               # no seam to split to the slot
+			# TIGHT wall dead centre — a 1.0 m gap between them, which is no
+			# seam for a body AND none for a puck. At the +/-0.9 they used to
+			# sit, the 1.8 m gap was a real shooting lane (a puck is 0.13 m):
+			# the shot lane read 0.604 and snapping it between two converging
+			# defenders correctly beat feeding a man at 11.9 m and 36 deg. The
+			# scenario is about a pinch with NO way through, so the wall has to
+			# actually be one — see the splittable-gap contrast test below,
+			# which this fixture is the tight end of.
+			[3, 1, Vector3(-0.5, 0.0, -19.6)],
+			[4, 1, Vector3(0.5, 0.0, -19.6)],
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(
