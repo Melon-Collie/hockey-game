@@ -309,10 +309,40 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
+	# RUSH DEPTH GATE — doctrine, and deliberately not a perception.
+	#
+	# Fired at the live goalie from this fixture's four stations, the net crash
+	# (2.7 m), the backdoor (2.8 m), the bumper (5.1 m) and the high slot
+	# (9.6 m) ALL convert 24/24 while he is still square to the carrier, and
+	# ALL convert 0/24 once he has re-squared. Location does not enter it; the
+	# only variable is whether he has recovered. So no shot-value model can
+	# order these spots, because on the shot alone they are the same spot —
+	# and an argmax over near-identical values just picks whichever noise is
+	# highest, which is how the finisher ended up staged 9.5 m out on a rush.
+	#
+	# What actually makes the net the right station on a rush is the second
+	# chance and the body: rebounds, tips, and a keeper who has to respect a
+	# man at the post. The rebound term is gone (see #577) and the tip term
+	# only fires for a body on the shot line, so nothing in the scoring
+	# represents it. Rather than invent a value that makes the model appear to
+	# discriminate, this states the coaching decision directly: on a rush the
+	# second attacker drives the net, and perimeter stations are not his.
+	# CLAUDE.md names staging offsets as a legitimate feel tunable — the line
+	# is evaluation vs. feel, and this is feel.
+	#
+	# The cap IS stage_dist, with no margin, because there is no number to add:
+	# stage_dist is already the code's own statement of how deep the finisher
+	# belongs at this rush factor. A candidate deeper than it contradicts the
+	# staging decision that was just made. At a standstill that is SLOT_DIST_M
+	# — the slot, which a net-front role should not be behind either — and it
+	# tightens to the crease exactly as the rush develops.
+	var depth_cap: float = stage_dist
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
+			continue
+		if absf(c.z - goal_z) > depth_cap:
 			continue
 		# Match the speed our carrier would actually fire at — long
 		# passes get the charged-wrister speed, short ones the quick-
