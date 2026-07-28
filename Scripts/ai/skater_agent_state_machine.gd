@@ -3810,6 +3810,23 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# Release this tick: shoot_held drops, SkaterStateMachine's
 		# _state_wrister_aim sees not shoot_held → release_wrister fires
 		# with the committed power and sweep direction.
+		#
+		# RE-DERIVE the direction from where the puck ACTUALLY is. The aim was
+		# locked at press entry against a PREDICTED release (the projected body
+		# plus the scored offset) while the puck leaves from the live blade, and
+		# the two disagree in two ways that both put shots off the net:
+		#   - with no committed release offset the blade is frozen at the CURRENT
+		#     carry pose, most of a stick off-centre (measured 1.2-1.8 m from the
+		#     assumed release, against 0.12-0.72 m when an offset was committed);
+		#   - on a sharp-angle look the shot runs nearly parallel to the goal
+		#     line, so even 15 cm of release DEPTH error swings the crossing
+		#     point over half a metre (measured: a 0.16 m gap became a 0.64 m
+		#     miss from the side of the net).
+		# This is not re-deciding: the aim POINT and the committed execution
+		# error both stay locked, so a shuffling goalie still cannot flip the
+		# chosen arc mid-swing. It aims at the same target from where the puck
+		# actually sits, which is what the wind-up was supposed to deliver.
+		_retarget_release_dir(input, snapshot, self_pos)
 		if DEBUG_SHOT_RELEASE:
 			_log_shot_release(snapshot, self_pos)
 		input.shoot_held = false
@@ -3857,6 +3874,32 @@ func _wind_up_endpoint_offsets(aim_dir: Vector3, aim_distance_m: float, wind_up_
 		"start":  -compensated * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
 		"target": +compensated * half + perp * BOT_WRISTER_SIDE_OFFSET_M,
 	}
+
+
+# Re-points the committed release direction from the live blade to the locked
+# aim point, carrying the same per-release execution error the press sampled.
+# No-op when no aim was locked (the continuous-geometry fallback path) or the
+# blade is unavailable, so those keep the press-entry direction.
+func _retarget_release_dir(input: InputState, snapshot: WorldSnapshot,
+		self_pos: Vector3) -> void:
+	if not _shot_aim_locked.is_finite():
+		return
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return
+	var blade: Vector3 = self_state.blade_contact_world
+	if blade == Vector3.ZERO:
+		blade = self_pos
+	var aim_vec := Vector3(
+			_shot_aim_locked.x - blade.x, 0.0, _shot_aim_locked.z - blade.z)
+	if aim_vec.length_squared() < 0.0001:
+		return
+	# The SAME committed error the press drew — re-aiming must not re-roll the
+	# execution dice, or the tier's spread would be sampled twice per shot.
+	if _committed_aim_error_rad != 0.0:
+		aim_vec = aim_vec.rotated(Vector3.UP, _committed_aim_error_rad)
+	_shoot_aim_dir_locked = aim_vec.normalized()
+	input.bot_wrister_aim_dir = _shoot_aim_dir_locked
 
 
 # Logs one shot release: intended aim vs. where the committed line really goes.

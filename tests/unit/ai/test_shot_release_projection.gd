@@ -41,6 +41,8 @@ const D2 := 12
 
 class Probe:
 	var fired: bool = false
+	var blade: Vector3 = Vector3.ZERO
+	var released_dir: Vector3 = Vector3.ZERO
 	var assumed_release: Vector3 = Vector3.ZERO
 	var aim_dir: Vector3 = Vector3.ZERO
 	var aim_point: Vector3 = Vector3.INF
@@ -86,6 +88,8 @@ func _measure(shooter_pos: Vector3, shooter_vel: Vector3,
 		# Release edge: the charge was held and has now dropped.
 		if armed and held_before and not s.input.shoot_held:
 			probe.actual_body = s.pos
+			probe.blade = s.blade
+			probe.released_dir = agent._shoot_aim_dir_locked
 			probe.fired = true
 			return probe
 	return probe
@@ -162,3 +166,70 @@ func test_a_lateral_cut_keeps_its_release_line() -> void:
 		return
 	assert_lt(absf(_lateral_gap(p)), 0.15,
 			"a cutting shooter still leaves within 15 cm of its projected release")
+
+
+# ── Where the shot line actually crosses the goal ────────────────────────────
+# The body projection above is honest, but the puck leaves from the BLADE, and
+# the aim was computed against an assumed release. Live-game instrumentation
+# measured that gap at 1.2-1.8 m whenever no release offset was committed (the
+# blade freezes at the current carry pose), and showed a 0.16 m gap turning into
+# a 0.64 m miss on a sharp-angle look, where the shot runs nearly parallel to the
+# goal line and the crossing point is hypersensitive to release DEPTH.
+#
+# The release now re-derives its direction from the live blade to the locked aim
+# point, so the line has to arrive where it was aimed regardless of either.
+
+# Where the released line crosses the goal plane, fired from the real blade —
+# the same solve the DEBUG_SHOT_RELEASE log prints.
+func _crossing_x(p: Probe, goal_z: float) -> float:
+	if absf(p.released_dir.z) < 0.001:
+		return INF
+	return p.blade.x + p.released_dir.x * ((goal_z - p.blade.z) / p.released_dir.z)
+
+
+# Tolerance note: the harness models the blade as the cursor clamped to the
+# reach ring and rate-limited, not the real ROM solve, so a couple of centimetres
+# of blade disagreement is instrument error rather than model error — and the
+# same lever that makes a sharp-angle shot sensitive to release depth amplifies
+# it there too. The bound is set to admit that and nothing near the failure it
+# replaces: the live log had these at 0.25-0.71 m, and 0.64 m on the sharp-angle
+# shot this is derived from.
+func _assert_lands_on_its_aim(label: String, p: Probe, aim: Vector3,
+		tol: float = 0.05) -> void:
+	var cross: float = _crossing_x(p, aim.z)
+	gut.p("  %s: aim_x %+.3f, crossing %+.3f (miss %+.3f)"
+			% [label, aim.x, cross, cross - aim.x])
+	assert_lt(absf(cross - aim.x), tol,
+			"%s: the released line crosses where it was aimed" % label)
+
+
+func test_the_released_line_arrives_where_it_was_aimed() -> void:
+	# Straight-on. The easy case, and the control for the two below.
+	var p: Probe = _measure(Vector3(0.0, 0.0, -12.0), Vector3(0.0, 0.0, -7.0), [])
+	if not p.fired or not p.aim_point.is_finite():
+		pending("no shot with a locked aim in the head-on fixture")
+		return
+	_assert_lands_on_its_aim("head-on", p, p.aim_point)
+
+
+func test_a_sharp_angle_shot_arrives_where_it_was_aimed() -> void:
+	# The failure mode from the live log: out to the side with little depth left,
+	# so the shot runs nearly parallel to the goal line. Here a small release
+	# error used to swing the crossing point by half a metre or more.
+	var p: Probe = _measure(Vector3(-6.5, 0.0, -22.0), Vector3(1.0, 0.0, -3.0),
+			[Vector3(-3.0, 0.0, -24.0)])
+	if not p.fired or not p.aim_point.is_finite():
+		pending("no shot with a locked aim in the sharp-angle fixture")
+		return
+	_assert_lands_on_its_aim("sharp angle", p, p.aim_point, 0.08)
+
+
+func test_a_doorstep_shot_arrives_where_it_was_aimed() -> void:
+	# Short range beside the net — the other shape that went wide in the log
+	# (several of the misses were inside 3 m).
+	var p: Probe = _measure(Vector3(1.4, 0.0, -24.6), Vector3(0.5, 0.0, -2.0),
+			[Vector3(-1.0, 0.0, -25.2)])
+	if not p.fired or not p.aim_point.is_finite():
+		pending("no shot with a locked aim in the doorstep fixture")
+		return
+	_assert_lands_on_its_aim("doorstep", p, p.aim_point)
