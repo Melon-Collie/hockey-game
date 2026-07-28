@@ -2435,11 +2435,19 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# already cover it via local polar candidates.
 	_beam_score_base(ctx, slot_pos, our_goalie, false)
 
-	# Zone-exit wall routes — see CARRY_EXIT_* doc. Only generated in
-	# our own half: an exit route is meaningless once the puck is
-	# across center, and down there the slot anchor + local candidates
-	# already cover the up-ice gradient.
-	if own_goal_dir * self_pos.z > 0.0:
+	# Zone-exit wall routes — see CARRY_EXIT_* doc. Only generated in our own
+	# DEFENSIVE ZONE: an exit route is meaningless once the puck is out, and
+	# out there the slot anchor + local candidates already cover the up-ice
+	# gradient.
+	#
+	# The gate used to be own HALF, which included the near half of the neutral
+	# zone — where the route is not merely redundant but backwards: the exit
+	# target sits just inside the blue line, so a carrier already past that line
+	# is being offered a spot BEHIND itself. Measured over the benchmark
+	# scenarios, every one of this ring's argmax wins came from inside the
+	# defensive zone (10 DZ / 0 NZ / 0 OZ), so the neutral-zone half of its
+	# generations was pure cost.
+	if own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z:
 		var exit_x: float = GameRules.RINK_HALF_WIDTH - CARRY_EXIT_WALL_INSET_M
 		var exit_z: float = own_goal_dir * (GameRules.BLUE_LINE_Z - CARRY_EXIT_NZ_LEAD_M)
 		_beam_score_base(ctx, Vector3(exit_x, 0.0, exit_z), our_goalie, false)
