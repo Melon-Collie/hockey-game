@@ -175,6 +175,10 @@ func _physics_process(delta: float) -> void:
 	_snapshot_pending = false
 	if NetworkManager.is_replay_mode():
 		return
+	# Blade history for this tick, before any path below can move the stick — the
+	# aim-only prep path and the skate-in glide both do, and neither runs
+	# _process_input. See Skater.capture_prev_blade_contact.
+	skater.capture_prev_blade_contact()
 	if not skater.visual_offset.is_zero_approx():
 		# Per-tick decay: (1 - alpha) is the factor at the nominal 120 Hz tick.
 		# Godot reports a CONSTANT physics delta (1/120) even when the sim

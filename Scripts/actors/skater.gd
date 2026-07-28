@@ -693,7 +693,7 @@ func _rig_pose_changed() -> bool:
 
 
 func _physics_process(delta: float) -> void:
-	# _prev_blade_contact is captured by SkaterController._process_input before
+	# _prev_blade_contact is captured at the top of each controller's tick, before
 	# the per-tick IK update runs (see Skater.capture_prev_blade_contact()).
 	# Capturing it here would read post-IK and miss the swing within the tick.
 	var blade_world_pos: Vector3 = upper_body.to_global(blade.position)
@@ -1450,14 +1450,32 @@ func _update_draw_peak(delta: float) -> void:
 
 # Snapshot the blade's current world contact point as "previous" for the
 # swept-segment pickup/poke test that runs later in the same physics tick.
-# Called from SkaterController._process_input *before* the IK update mutates
-# blade.position, so the resulting (prev, curr) pair brackets both the
-# IK sweep and the move_and_slide body motion within the tick. Capturing
-# this from Skater._physics_process (which runs at priority 0, after the
-# controller's priority -1 IK update) misses the IK delta — segment would
-# only span body motion, and fast stick movements wouldn't register.
+# Called once per tick from each controller's tick entry point *before* any
+# path that mutates blade.position (input processing, blade-aim-only during a
+# faceoff prep, the skate-in pose), so the resulting (prev, curr) pair brackets
+# both the IK sweep and the body motion within the tick. Capturing this from
+# Skater._physics_process (which runs at priority 0, after the controller's
+# priority -1 IK update) misses the IK delta — segment would only span body
+# motion, and fast stick movements wouldn't register.
+#
+# It must run on EVERY tick, not only on ticks that process an input: the
+# blade keeps moving during a faceoff prep (aim-only IK, the skate-in glide)
+# and on bot ticks that skip apply_decision, and a prev left behind by even a
+# few of those ticks makes the swept segment span the gap.
 func capture_prev_blade_contact() -> void:
 	_prev_blade_contact = get_blade_contact_global()
+
+
+# Re-anchor both blade histories to the blade's CURRENT world pose. Call after
+# any discontinuous move of the body — a faceoff staging jump, respawn, slot
+# swap. blade_world_velocity and the swept-segment pickup/poke tests are both
+# first differences of these anchors, so carrying them across a teleport
+# reports a blade that covered the whole jump in one tick: thousands of m/s
+# into the faceoff draw's retained crest, and a segment that sweeps the rink.
+func reseed_blade_history() -> void:
+	_prev_blade_contact = get_blade_contact_global()
+	_prev_blade_world_pos = upper_body.to_global(blade.position)
+	blade_world_velocity = Vector3.ZERO
 
 
 # Horizontal unit vector perpendicular to the stick shaft, picking the face

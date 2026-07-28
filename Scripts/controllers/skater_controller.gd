@@ -1451,13 +1451,6 @@ func _process_input(input: InputState, delta: float) -> void:
 	skater.move_intent = input.move_vector \
 			if input.move_vector.length() > move_deadzone else Vector2.ZERO
 	skater.brake_intent = input.brake
-	# Snapshot the blade's current contact point before any IK mutation runs
-	# this tick. The host's swept-segment pickup/poke test (PuckController._check_interactions,
-	# priority 1) reads this later in the tick as `blade_prev`; combined with the
-	# post-IK + post-move_and_slide `blade_curr`, the segment spans both the IK
-	# sweep and the body motion. Capturing here in every controller path
-	# (Local / Remote / AI) keeps the test consistent across input sources.
-	skater.capture_prev_blade_contact()
 	# Feed the shared host-clock stamp to an active faceoff draw so its timing is
 	# judged ping-neutrally (see Skater.set_draw_input_time). Only during a draw.
 	if skater.is_draw_tracking():
@@ -1884,6 +1877,13 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 		# signal latency; larger on clients) would otherwise freeze through
 		# the replay and fire the raised-stick pose AT the next faceoff.
 		_celebration_timer = 0.0
+	# The body (and with it the blade) just jumped, and the pose resets above
+	# moved the stick again. Re-anchor the blade histories to where the stick
+	# actually is now, or the next tick differences them across the whole jump:
+	# a blade "velocity" of thousands of m/s feeding the faceoff draw's retained
+	# crest, and a swept pickup/poke segment spanning the rink. See
+	# Skater.reseed_blade_history.
+	skater.reseed_blade_history()
 
 # ── Faceoff / intro skate-in approach ─────────────────────────────────────────
 
