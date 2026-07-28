@@ -155,9 +155,11 @@ const SLOT_RADIUS_M: float = 6.0
 #           (GOALIE_BUTTERFLY_DROP_S — the same gate the five-hole seal runs),
 #           so an in-tight low shot beats the DROP exactly as it does against
 #           the live keeper. What it does not beat is the paddle already lying
-#           on the ice: stick_low_reach() floors the band at ~0.64 m from the
-#           first frame, un-raced, which is why the standing keeper's low net
-#           measures shut inside 7 m. A DOWN goalie's splayed pads exceed it.
+#           on the ice: stick_low_cover() floors the band by the BLADE'S OWN
+#           WIDTH from the first frame, un-raced, which is why the standing
+#           keeper's low net measures shut in tight — where angle compression
+#           makes even that narrow blade span most of the mouth. A DOWN
+#           goalie's splayed pads exceed it.
 #  · HIGH — glove/blocker, NARROWEST core (held up they leave the top corners)
 #           but the longest reach (out to 0.85 m ≈ glove_max_x_outward) on a slow
 #           ARM reaction. In tight the glove can't extend -> roof it; at range it
@@ -199,7 +201,7 @@ const LOW_CORE_STANDING_M: float = (
 # test_slot_shot_value_truth.gd, where the keeper stick-saved 24/24 of the
 # flat corners the model rated near-certain.
 #
-# Three properties decide how it enters, and all three are measured, not chosen:
+# Four properties decide how it enters, and all four are measured, not chosen:
 #   · SYMMETRIC — the blade-aim solve yaws the paddle toward the threat, so
 #     both sides measure identically. This keeper's stick is not the stick-side
 #     -only asset a real goalie's is.
@@ -211,17 +213,27 @@ const LOW_CORE_STANDING_M: float = (
 #     HIGH is the whole point: it does not make every shot worse, it makes the
 #     flat shot worse and leaves the roof alone, which is the band choice the
 #     live keeper's save distribution actually rewards.
+#   · ITS OWN WIDTH, NOT ITS REACH. This is the one that was wrong at first,
+#     and the distinction is easy to lose. standing_lateral_reach() is a
+#     PLACEMENT ENVELOPE — the furthest off centre the blade can be swung. The
+#     band cover it feeds is consumed as a DISC half-width by the tangent-cone
+#     occlusion, i.e. as surface the keeper presents everywhere at once. Using
+#     the envelope there gives him a 0.64 m solid disc instead of a 0.38 m
+#     blade, and projected to the net plane that covers 84-100% of the mouth at
+#     EVERY range: 0.83 m of a 0.91 m half at 7.8 m, 0.76 m at 11 m. Every flat
+#     hole read shut everywhere, so the model roofed instead — and against the
+#     live keeper the roof scored 0% at 7.8 m where the flat shot scored 50%
+#     (tests/unit/ai/test_real_goalie_shot_outcomes.gd). Racing the envelope
+#     does not fix it either: at 7.8 m the flight gives him 0.25 s against a
+#     0.09 s deploy, so any reaction ramp saturates straight back to 0.64. The
+#     error is geometric, not temporal. The blade covers the width it HAS,
+#     where it is; the envelope is where it can be PUT, and a per-hole
+#     placement race is what would price that — not a floor.
 #
-# Derived from the blade's own geometry in GoalieStickRules (the same source
-# the POSED stick reads), so the planned stick and the posed stick cannot
-# drift apart. Cached because it is pure trig on a per-hole hot path.
-static var _stick_reach_m: float = -1.0
-
-
-static func stick_low_reach() -> float:
-	if _stick_reach_m < 0.0:
-		_stick_reach_m = GoalieStickRules.standing_lateral_reach()
-	return _stick_reach_m
+# Read from the blade's own box in GoalieStickRules (the same source the POSED
+# stick reads), so the planned stick and the posed stick cannot drift apart.
+static func stick_low_cover() -> float:
+	return GoalieStickRules.BLADE_WIDTH_M * 0.5
 # Reaction-gated extension to the placement. LOW has none of its own any more:
 # the pad column's widening IS the butterfly drop (core lerp), and everything
 # beyond it is the real lateral push (_goalie_lateral_reach in _band_cover) —
@@ -436,8 +448,8 @@ static func _band_cover(band: int, t_read: float, goalie_down: bool,
 	# goalie's measurement IS the truth (nothing left to drop).
 	# The stick is on the ice from the first frame, so it FLOORS whatever the
 	# pads have managed — it is not raced, and it applies down as well as up
-	# (the splayed pads simply exceed it). See stick_low_reach.
-	var stick: float = stick_low_reach()
+	# (the splayed pads simply exceed it). See stick_low_cover.
+	var stick: float = stick_low_cover()
 	if side != 0 and goalie_pads.is_finite():
 		var d_left: float = goalie_pads.x * float(side) + _pad_half_extent(goalie_pads.y)
 		var d_right: float = goalie_pads.z * float(side) + _pad_half_extent(goalie_pads.w)
