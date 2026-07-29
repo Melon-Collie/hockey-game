@@ -124,16 +124,18 @@ func _build() -> void:
 	vbox.add_child(title)
 
 	# Two columns: identity (name / number / hands / team) on the left,
-	# the build (attributes + stick) on the right. The identity column is
-	# much shorter, so it centers vertically against the tall picker.
+	# the build (attributes + stick) on the right.
 	var columns := HBoxContainer.new()
 	columns.alignment = BoxContainer.ALIGNMENT_CENTER
 	columns.add_theme_constant_override("separation", 48)
 	vbox.add_child(columns)
 
+	# Fixed column widths keep the popup from breathing as content changes
+	# (the preset chips wrap inside the picker instead of widening it).
+	# Both columns top-align so the two headings sit on the same line.
 	var identity_col := VBoxContainer.new()
 	identity_col.add_theme_constant_override("separation", 16)
-	identity_col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	identity_col.custom_minimum_size = Vector2(300, 0)
 	columns.add_child(identity_col)
 
 	var build_col := VBoxContainer.new()
@@ -219,18 +221,30 @@ func _add_close_row(vbox: VBoxContainer) -> void:
 	vbox.add_child(row)
 
 
+# Identity rows share a fixed right-aligned label gutter so the fields line
+# up down the column (centered rows made each field start wherever its label
+# ended).
+const _IDENTITY_LABEL_W: float = 92.0
+
+
+func _make_identity_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.custom_minimum_size = Vector2(_IDENTITY_LABEL_W, 0)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	label.add_theme_font_size_override("font_size", 20)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return label
+
+
 func _build_name_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var name_label := Label.new()
-	name_label.text = "Name:"
-	name_label.add_theme_font_size_override("font_size", 20)
-	name_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(name_label)
+	row.add_child(_make_identity_label("Name:"))
 
 	_name_field = LineEdit.new()
 	_name_field.placeholder_text = "Player"
@@ -281,16 +295,11 @@ func _on_name_text_changed(t: String) -> void:
 
 func _build_number_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var label := Label.new()
-	label.text = "Number:"
-	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
+	row.add_child(_make_identity_label("Number:"))
 
 	_number_field = LineEdit.new()
 	_number_field.placeholder_text = "10"
@@ -329,16 +338,11 @@ func _on_number_text_changed(t: String) -> void:
 
 func _build_handedness_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var label := Label.new()
-	label.text = "Shoots:"
-	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
+	row.add_child(_make_identity_label("Shoots:"))
 
 	_left_btn = Button.new()
 	_left_btn.text = "Left"
@@ -376,16 +380,11 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 
 func _build_team_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var label := Label.new()
-	label.text = "Team:"
-	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
+	row.add_child(_make_identity_label("Team:"))
 
 	var initial_slot: int = PlayerPrefs.preferred_color_slot
 	if initial_slot < 0:

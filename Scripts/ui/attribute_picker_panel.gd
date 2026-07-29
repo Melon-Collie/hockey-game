@@ -58,7 +58,7 @@ var _locked: bool = false
 var _refreshing: bool = false
 
 # Controls.
-var _chip_row: HBoxContainer = null
+var _chip_row: HFlowContainer = null
 var _chip_buttons: Array[Button] = []
 var _new_btn: Button = null
 var _delete_btn: Button = null
@@ -85,6 +85,9 @@ var _gear_buttons: Dictionary = {}
 func _ready() -> void:
 	alignment = BoxContainer.ALIGNMENT_CENTER
 	add_theme_constant_override("separation", 10)
+	# Fixed width so hosts don't resize as presets come and go — the chip row
+	# wraps inside this instead of widening the popup.
+	custom_minimum_size = Vector2(520, 0)
 	_build()
 
 
@@ -165,8 +168,12 @@ func _build_preset_row() -> void:
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(label)
 
-	_chip_row = HBoxContainer.new()
-	_chip_row.add_theme_constant_override("separation", 6)
+	# Flow, not HBox: chips WRAP within the panel's fixed width as presets are
+	# added or renamed, so the host popup never changes size.
+	_chip_row = HFlowContainer.new()
+	_chip_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chip_row.add_theme_constant_override("h_separation", 6)
+	_chip_row.add_theme_constant_override("v_separation", 6)
 	row.add_child(_chip_row)
 
 	_new_btn = Button.new()
