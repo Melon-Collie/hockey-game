@@ -19,9 +19,9 @@ extends Control
 
 signal stick_edited(curve: int, flex: int, length: int, tape_code: int)
 
-# Gear tooltips (headline effects only, same prose the attribute panel used).
+# Gear tooltips (headline effects only).
 const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
-const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to elevate.\nOpen = easy elevation & quick release, weak backhand."
+const _CURVE_TOOLTIP: String = "Blade pattern.\nM88 mid curve = best backhand & slappers, catches the hardest passes, flattest face.\nM92 mid-toe = the no-weakness all-rounder.\nM28 toe hook = easiest lift in tight; weakest backhand & slappers, hard passes bounce off."
 const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
 
 # Preview geometry mirrors the Skater defaults (blade_lie_deg,
@@ -44,7 +44,7 @@ const _TURNTABLE_RAD_PER_S: float = 0.7
 const _LENGTH_KEYS: Array[StringName] = [
 	&"STICK_LENGTH_SHORT", &"STICK_LENGTH_STANDARD", &"STICK_LENGTH_LONG"]
 const _CURVE_KEYS: Array[StringName] = [
-	&"STICK_CURVE_CLOSED", &"STICK_CURVE_BALANCED", &"STICK_CURVE_OPEN"]
+	&"STICK_CURVE_M88", &"STICK_CURVE_M92", &"STICK_CURVE_M28"]
 const _FLEX_KEYS: Array[StringName] = [
 	&"STICK_FLEX_WHIPPY", &"STICK_FLEX_MEDIUM", &"STICK_FLEX_STIFF"]
 const _SPAN_OPTIONS: Array[int] = [
@@ -518,10 +518,13 @@ func _refresh() -> void:
 func _rebuild_preview() -> void:
 	if _blade == null or _body == null:
 		return
+	var g: int = clampi(_curve, 0, 2)
 	var p := StickBladeMeshBuilder.Params.new()
 	p.length = GameRules.DEFAULT_BLADE_LENGTH_M
-	p.curve_depth = Skater.BLADE_PATTERN_DEPTH[clampi(_curve, 0, 2)]
-	p.curve_power = Skater.BLADE_PATTERN_POWER[clampi(_curve, 0, 2)]
+	p.curve_depth = Skater.BLADE_PATTERN_DEPTH[g]
+	p.curve_power = Skater.BLADE_PATTERN_POWER[g]
+	p.face_open_deg = Skater.BLADE_PATTERN_FACE_DEG[g]
+	p.toe_round_m = Skater.BLADE_PATTERN_TOE_ROUND[g]
 	p.curve_sign = 1.0 if PlayerPrefs.is_left_handed else -1.0
 	p.hosel_length = _HOSEL_LEN_M
 	p.hosel_angle_deg = _LIE_DEG
@@ -531,6 +534,8 @@ func _rebuild_preview() -> void:
 	tape_p.length = p.length
 	tape_p.curve_depth = p.curve_depth
 	tape_p.curve_power = p.curve_power
+	tape_p.face_open_deg = p.face_open_deg
+	tape_p.toe_round_m = p.toe_round_m
 	tape_p.curve_sign = p.curve_sign
 	_tape_mesh.mesh = StickBladeMeshBuilder.build_tape(tape_p, _tape.span_range()) \
 			if _tape.has_blade_tape() else null

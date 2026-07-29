@@ -137,6 +137,31 @@ func test_curve_eases_in_from_a_straight_heel() -> void:
 	assert_lt(_bow_at(verts, -p.length / 3.0), toe_bow * 0.15, "heel third stays near-straight")
 
 
+func test_face_open_twist_leans_the_top_edge_only() -> void:
+	# The face-open twist (the visual half of a pattern's face angle) leans
+	# the TOP corners toward the convex side, pivoting on the bottom edge —
+	# the sole must stay exactly where the untwisted blade put it, and the
+	# heel ring must not move at all (the hosel welds to it).
+	var flat_p := StickBladeMeshBuilder.Params.new()
+	var open_p := StickBladeMeshBuilder.Params.new()
+	open_p.face_open_deg = 12.0
+	var flat_verts: PackedVector3Array = _verts(StickBladeMeshBuilder.build(flat_p))
+	var open_verts: PackedVector3Array = _verts(StickBladeMeshBuilder.build(open_p))
+	assert_eq(flat_verts.size(), open_verts.size(), "same topology")
+	var max_top_shift: float = 0.0
+	for i: int in flat_verts.size():
+		var f: Vector3 = flat_verts[i]
+		var o: Vector3 = open_verts[i]
+		if absf(f.z) < 0.001:
+			assert_almost_eq(o.x, f.x, 0.0001, "heel ring pinned (hosel weld)")
+		if f.y < -0.02:  # bottom-edge verts
+			assert_almost_eq(o.x, f.x, 0.0001, "sole corners never move")
+			assert_almost_eq(o.y, f.y, 0.0001, "sole height never moves")
+		elif f.y > 0.01 and f.z < -0.2:  # top edge in the toe half
+			max_top_shift = maxf(max_top_shift, (o.x - f.x) * signf(flat_p.curve_sign))
+	assert_gt(max_top_shift, 0.004, "toe-half top edge leans toward the convex side")
+
+
 func test_curve_bows_with_handedness_sign() -> void:
 	# Deep-toe vertices sit on the bowed centerline; sign +1 (lefty) bows +X.
 	assert_gt(_mean_x(_verts(_build(1.0)), -0.27), 0.008, "lefty curve bows +X")

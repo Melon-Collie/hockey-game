@@ -49,6 +49,12 @@ class Params:
 	# and turns late (a toe curve). 3 is a mid pattern.
 	var curve_power: float = 3.0
 	var toe_round_m: float = 0.028     # top-corner radius closing the toe
+	# Face-open twist at the toe (degrees): the top edge leans toward the
+	# CONVEX side, pivoting on the bottom edge so the sole stays on the ice,
+	# ramping in with the same u^curve_power profile as the bow — the visual
+	# half of a pattern's open face (the gameplay face angle is
+	# PlayerAttributes' own table).
+	var face_open_deg: float = 0.0
 	# Bottom edge: dead flat from the heel through the contact zone, then the
 	# toe lifts off the ice. A blade rockered along its whole length reads as a
 	# rocking chair; real ones sit flat and kick at the toe.
@@ -176,6 +182,15 @@ static func _emit_band(st: SurfaceTool, p: Params) -> void:
 			var x: float = p.toe_round_m - d_toe
 			top_y -= p.toe_round_m - sqrt(maxf(p.toe_round_m * p.toe_round_m - x * x, 0.0))
 			top_y = maxf(top_y, bottom_y + 0.002)
+		# Face-open twist: lean the TOP corners toward the convex side about
+		# the bottom edge (the sole never leaves the ice), growing with the
+		# bow profile so the face rolls open where the pattern bends.
+		var top_lean: float = 0.0
+		if p.face_open_deg != 0.0:
+			var face_h: float = top_y - bottom_y
+			var theta: float = deg_to_rad(p.face_open_deg) * pow(uc, p.curve_power)
+			top_lean = face_h * sin(theta) * p.curve_sign
+			top_y = bottom_y + face_h * cos(theta)
 		# The rotated cross-section pivots about the centerline, so the outer
 		# corner at the bowed toe would land a couple of mm past −length —
 		# clamp so no part of the mesh ever exceeds the gameplay heel→toe span.
@@ -184,8 +199,10 @@ static func _emit_band(st: SurfaceTool, p: Params) -> void:
 		var front_x: float = bend + lateral.x * half_th
 		var back_x: float = bend - lateral.x * half_th
 		fb[i] = Vector3(front_x, bottom_y, front_z)
-		ft[i] = Vector3(front_x, top_y, front_z)
-		bt[i] = Vector3(back_x, top_y, back_z)
+		ft[i] = Vector3(front_x + lateral.x * top_lean, top_y,
+				maxf(front_z + lateral.y * top_lean, -p.length))
+		bt[i] = Vector3(back_x + lateral.x * top_lean, top_y,
+				maxf(back_z + lateral.y * top_lean, -p.length))
 		bb[i] = Vector3(back_x, bottom_y, back_z)
 
 	for i in n:

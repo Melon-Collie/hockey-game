@@ -67,13 +67,15 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 @export var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
 # Cosmetic blade-mesh geometry (StickBladeMeshBuilder): how deep the curve
 # bows, how late along the blade it turns (higher = toe curve, lower = heel
-# curve), and the radius of the rounded toe corner. Pure visuals — contact math
-# reads the Blade marker + blade_length only. A future gear system makes these
-# per-player (the stick "pattern"); until then they're one house pattern for
-# everyone.
+# curve), the radius of the rounded toe corner, and how far the face twists
+# open toward the toe. Pure visuals — contact math reads the Blade marker +
+# blade_length only; the gameplay face angle is PlayerAttributes' own table.
+# Defaults are the M92 pattern; apply_blade_pattern swaps the set per the
+# CURVE gear.
 @export var blade_curve_depth: float = 0.022
 @export var blade_curve_power: float = 3.0
 @export var blade_toe_round_m: float = 0.028
+@export var blade_face_twist_deg: float = 7.0
 # Length of the hosel — the tapered throat carrying the heel cross-section up
 # the shaft line (the shaft-follow tilt keeps the blade rigidly at
 # blade_lie_deg to the shaft, so fixed blade-local hosel geometry stays glued
@@ -85,6 +87,14 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # sqrt(1.30² − 0.87²) ≈ 0.97 m horizontal run → atan ≈ 42°, i.e. about a
 # real lie 5.5). The shaft-follow pitch reads deviation from this angle.
 @export var blade_lie_deg: float = 42.0
+# Reception ceiling lean from the blade-curve gear (attributes v4): the
+# reception decision sites scale the puck's league deflect ceiling + squared
+# bonus by this — a flatter pattern soaks a harder feed. Set by
+# SkaterController.apply_attributes; never touches pickup_max_speed (the
+# always-catches floor stays build-independent, which keeps the client's
+# provisional-pickup gate exact).
+var reception_ceiling_mult: float = 1.0
+
 # The player's tape job (blade wrap color + coverage, knob color). Cosmetic —
 # set by PlayerRegistry from the replicated per-peer tape code before the
 # uniform is applied; SkaterUniformCoordinator resolves the palette picks
@@ -1081,6 +1091,7 @@ func blade_mesh_params(inflate: float, u_start: float, u_end: float,
 	p.curve_depth = blade_curve_depth
 	p.curve_power = blade_curve_power
 	p.toe_round_m = blade_toe_round_m
+	p.face_open_deg = blade_face_twist_deg
 	p.curve_sign = 1.0 if is_left_handed else -1.0
 	p.inflate = inflate
 	p.u_start = u_start
@@ -1118,23 +1129,34 @@ func notify_shaft_material_rebuilt() -> void:
 	_flex_sent = 0.0
 
 
-# Blade pattern per CURVE gear (closed / balanced / open) — the visual half of
-# the gear whose gameplay half lives in PlayerAttributes (loft, backhand). The
-# balanced row is the shipped house pattern; closed straightens and delays the
-# bow, open deepens and advances it. Called from
-# SkaterController.apply_attributes, so the rendered blade matches the pick.
-# Public: StickEditorPopup builds its preview blade from the same rows.
-const BLADE_PATTERN_DEPTH: Array[float] = [0.014, 0.022, 0.030]
-const BLADE_PATTERN_POWER: Array[float] = [3.5, 3.0, 2.6]
+# Blade pattern per CURVE gear — the visual half of the gear whose gameplay
+# half lives in PlayerAttributes (loft / backhand / slap / reception).
+# Modeled on the real patterns the gear names: M88 (mid curve — moderate
+# depth spread through the middle, near-flat face, round toe), M92 (mid-toe
+# all-rounder — the shipped house pattern, the middle row), M28 (toe hook —
+# flat through the heel then a late deep bend with a visibly open toe face,
+# slightly pointier toe). Depth and POWER place the bend (low power = early
+# mid-blade bend, high = late toe hook); FACE_DEG twists the face open toward
+# the toe (builder face_open_deg); TOE_ROUND is the corner radius. Called
+# from SkaterController.apply_attributes, so the rendered blade matches the
+# pick. Public: StickEditorPopup builds its preview blade from the same rows.
+const BLADE_PATTERN_DEPTH: Array[float] = [0.018, 0.022, 0.030]
+const BLADE_PATTERN_POWER: Array[float] = [2.2, 3.0, 4.6]
+const BLADE_PATTERN_FACE_DEG: Array[float] = [3.0, 7.0, 12.0]
+const BLADE_PATTERN_TOE_ROUND: Array[float] = [0.030, 0.028, 0.024]
 
 
 func apply_blade_pattern(curve_gear: int) -> void:
 	var g: int = clampi(curve_gear, 0, BLADE_PATTERN_DEPTH.size() - 1)
 	if is_equal_approx(blade_curve_depth, BLADE_PATTERN_DEPTH[g]) \
-			and is_equal_approx(blade_curve_power, BLADE_PATTERN_POWER[g]):
+			and is_equal_approx(blade_curve_power, BLADE_PATTERN_POWER[g]) \
+			and is_equal_approx(blade_face_twist_deg, BLADE_PATTERN_FACE_DEG[g]) \
+			and is_equal_approx(blade_toe_round_m, BLADE_PATTERN_TOE_ROUND[g]):
 		return
 	blade_curve_depth = BLADE_PATTERN_DEPTH[g]
 	blade_curve_power = BLADE_PATTERN_POWER[g]
+	blade_face_twist_deg = BLADE_PATTERN_FACE_DEG[g]
+	blade_toe_round_m = BLADE_PATTERN_TOE_ROUND[g]
 	_rebuild_blade_mesh()
 
 

@@ -92,6 +92,13 @@ var loft_tan_max: float = 1.0
 # — grip never limits parallel drive, in planning or in physics.
 var lateral_grip: float = 1.0
 
+# Reception ceiling lean (= Skater.reception_ceiling_mult, from the blade
+# curve): scales the deflect ceiling + squared bonus this receiver's blade can
+# soak. Carried per-peer so pass pricing CAN read a teammate's real catchable
+# ceiling; the pass-speed solver still prices the league constant today
+# (conservative — see the GitHub issue on pricing reception per receiver).
+var reception_ceiling_mult: float = 1.0
+
 # Backhand power coefficient (= SkaterController.backhand_power_coefficient,
 # a flat mechanic under attributes v4 — backhand technique is the human,
 # leaned only by the blade-curve gear). The release-offset sampler
