@@ -63,3 +63,8 @@ TAPE_COLOR_ORANGE,Orange,Naranja
 TAPE_COLOR_PURPLE,Purple,Morado
 TAPE_COLOR_PINK,Pink,Rosa
 TAPE_COLOR_TEAL,Teal,Turquesa
+TAPE_HANDLE_LABEL,Handle,Mango
+TAPE_HANDLE_KNOB,Knob only,Solo pomo
+TAPE_HANDLE_CANDY,Candy cane,Espiral
+TAPE_HANDLE_FULL,Full grip,Empuñadura completa
+STICK_GAMEPLAY_LEGEND,* affects gameplay,* afecta a la jugabilidad

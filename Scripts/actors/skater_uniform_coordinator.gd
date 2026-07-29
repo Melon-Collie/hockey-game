@@ -452,7 +452,19 @@ func _make_stick_shaft_mat() -> ShaderMaterial:
 	mat.shader = _STICK_FLEX_SHADER
 	mat.set_shader_parameter(&"albedo", _STICK_SHAFT_COLOR)
 	mat.set_shader_parameter(&"roughness", _ROUGH_STICK)
+	_write_grip_uniforms(mat)
+	# Fresh material, default uniforms — the skater's dirty guards must
+	# forget their last-written flex/length or they never re-send.
+	_skater.notify_shaft_material_rebuilt()
 	return mat
+
+
+# The handle wrap (candy-cane / full grip) is painted by the flex shader from
+# the tape job; the wrap color is the knob palette pick.
+func _write_grip_uniforms(mat: ShaderMaterial) -> void:
+	mat.set_shader_parameter(&"grip_mode", _skater.tape_config.knob_style)
+	mat.set_shader_parameter(&"grip_color",
+			TapeColorRegistry.resolve(_skater.tape_config.knob_color, _team_accent))
 
 
 # Paints the blade matte black and (re)builds the tape wrap the skater's tape
@@ -481,12 +493,18 @@ func _rebuild_blade() -> void:
 	_blade_mesh.add_child(_blade_tape)
 
 
-# Re-renders the tape-colored pieces (blade wrap + knob) for a live tape-job
-# change without touching the rest of the uniform. Safe before the first
-# apply_uniform — the accent default just gets repainted when it lands.
+# Re-renders the tape-colored pieces (blade wrap, knob, handle-wrap paint) for
+# a live tape-job change without touching the rest of the uniform. Safe before
+# the first apply_uniform — the accent default just gets repainted when it
+# lands. The shaft write skips the ghost window (a plain translucent standard
+# mat holds the override there); un-ghost rebuilds the shader mat from the
+# live config anyway.
 func refresh_tape() -> void:
 	_rebuild_blade()
 	_rebuild_stick_knob()
+	var shaft_mat: ShaderMaterial = _skater.stick_mesh.material_override as ShaderMaterial
+	if shaft_mat != null:
+		_write_grip_uniforms(shaft_mat)
 
 
 # (Re)builds the butt-end knob cylinder, stored on the skater so update_stick_mesh

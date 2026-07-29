@@ -336,6 +336,7 @@ var _stick_whip_t: float = -1.0        # seconds since whip start; <0 = idle
 var _slap_spike_t: float = -1.0        # seconds into the slap contact spike; <0 = idle
 var _flex_prev_state: int = 0
 var _flex_sent: float = 0.0            # last uniform written (dirty guard)
+var _shaft_len_sent: float = 0.0       # last shaft_len_m uniform written (dirty guard)
 
 # ── Cosmetic Rig Dirty-Flag (mirrors Goalie._connectors_pose_changed) ─────────
 # The stick/arm/cuff/sphere rebuild in update_stick_mesh / update_arm_mesh /
@@ -1109,6 +1110,14 @@ func set_tape_config(config: StickTapeConfig) -> void:
 		_uniform.refresh_tape()
 
 
+# The uniform pass installs a fresh shaft ShaderMaterial (uniform apply,
+# un-ghost); its uniforms are back at defaults, so the dirty guards must
+# forget their last-written values or an unchanged flex/length never re-sends.
+func notify_shaft_material_rebuilt() -> void:
+	_shaft_len_sent = 0.0
+	_flex_sent = 0.0
+
+
 # Blade pattern per CURVE gear (closed / balanced / open) — the visual half of
 # the gear whose gameplay half lives in PlayerAttributes (loft, backhand). The
 # balanced row is the shipped house pattern; closed straightens and delays the
@@ -1617,6 +1626,14 @@ func update_stick_mesh() -> void:
 	stick_mesh.position = stick_origin + to_blade / 2.0
 	stick_mesh.scale.z = to_blade.length()
 	stick_mesh.look_at(upper_body.to_global(blade.position), Vector3.UP)
+	# The handle-wrap paint (grip/candy-cane) measures real metres down the
+	# shaft, so the shader needs the live rendered length — node scale never
+	# reaches object space. Dirty-guarded like flex_m.
+	if not is_equal_approx(to_blade.length(), _shaft_len_sent):
+		_shaft_len_sent = to_blade.length()
+		var shaft_mat: ShaderMaterial = stick_mesh.material_override as ShaderMaterial
+		if shaft_mat != null:
+			shaft_mat.set_shader_parameter(&"shaft_len_m", _shaft_len_sent)
 	_update_stick_knob(stick_origin, to_blade)
 	# The shaft-follow pitch reads the same hand/blade markers that dirtied
 	# this rebuild, so the blade mesh re-orients here at render rate too.

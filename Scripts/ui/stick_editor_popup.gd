@@ -3,22 +3,23 @@ extends Control
 
 # The stick workbench: every stick-related pick in one modal — the three gear
 # slots (LENGTH / CURVE / FLEX, the stick rows that used to sit in
-# AttributePickerPanel) and the tape job (blade tape color, coverage, knob
-# color) — arranged around a live turntable preview assembled from the real
-# in-game pieces: the procedural blade mesh at the picked pattern, the wrapped
-# tape band, the flex shader pulsing a load-and-release bow scaled by the
-# picked flex, and the shaft cut to the picked length.
+# AttributePickerPanel) and the tape job (blade tape color + coverage, knob
+# color, handle wrap style) — arranged as compact dropdown rows around a live
+# turntable preview assembled from the real in-game pieces: the procedural
+# blade mesh at the picked pattern, the wrapped tape band, the flex shader
+# pulsing a load-and-release bow scaled by the picked flex (and painting the
+# picked handle wrap), and the shaft cut to the picked length.
 #
-# A sub-editor, not a committer: opened by PlayerSettingsPopup or
-# LobbyBuildPopup over their own modal, it edits pending values and hands them
-# back through `stick_edited` on Done — the HOST owns snapshot/commit/revert,
-# so Cancel here just discards this dialog's edits and the host's Cancel still
-# reverts an applied Done. Gear can be locked (online match) while tape stays
-# editable — tape is cosmetic and never gameplay-locked.
+# Rows whose pick changes gameplay (the gear) carry a gold asterisk; tape rows
+# are cosmetic and never lock. A sub-editor, not a committer: opened by
+# PlayerSettingsPopup or LobbyBuildPopup over their own modal, it edits
+# pending values and hands them back through `stick_edited` on Done — the HOST
+# owns snapshot/commit/revert, so Cancel here just discards this dialog's
+# edits and the host's Cancel still reverts an applied Done.
 
 signal stick_edited(curve: int, flex: int, length: int, tape_code: int)
 
-# Gear rows (labels match the old AttributePickerPanel rows).
+# Gear tooltips (headline effects only, same prose the attribute panel used).
 const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
 const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to elevate.\nOpen = easy elevation & quick release, weak backhand."
 const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
@@ -39,7 +40,13 @@ const _FLEX_PULSE_AMP_M: Array[float] = [0.085, 0.060, 0.040]
 const _FLEX_PULSE_PERIOD_S: float = 1.6
 const _TURNTABLE_RAD_PER_S: float = 0.7
 
-# Tape coverage buttons, in display order (wire values from StickTapeConfig.Span).
+# Dropdown option tables: display order + the wire value each row maps to.
+const _LENGTH_KEYS: Array[StringName] = [
+	&"STICK_LENGTH_SHORT", &"STICK_LENGTH_STANDARD", &"STICK_LENGTH_LONG"]
+const _CURVE_KEYS: Array[StringName] = [
+	&"STICK_CURVE_CLOSED", &"STICK_CURVE_BALANCED", &"STICK_CURVE_OPEN"]
+const _FLEX_KEYS: Array[StringName] = [
+	&"STICK_FLEX_WHIPPY", &"STICK_FLEX_MEDIUM", &"STICK_FLEX_STIFF"]
 const _SPAN_OPTIONS: Array[int] = [
 	StickTapeConfig.Span.FULL,
 	StickTapeConfig.Span.HEEL_TO_MID,
@@ -50,6 +57,14 @@ const _SPAN_OPTIONS: Array[int] = [
 const _SPAN_KEYS: Array[StringName] = [
 	&"TAPE_SPAN_FULL", &"TAPE_SPAN_HEEL_TO_MID", &"TAPE_SPAN_MID",
 	&"TAPE_SPAN_TOE", &"TAPE_SPAN_NONE",
+]
+const _STYLE_OPTIONS: Array[int] = [
+	StickTapeConfig.KnobStyle.KNOB,
+	StickTapeConfig.KnobStyle.CANDY_CANE,
+	StickTapeConfig.KnobStyle.FULL,
+]
+const _STYLE_KEYS: Array[StringName] = [
+	&"TAPE_HANDLE_KNOB", &"TAPE_HANDLE_CANDY", &"TAPE_HANDLE_FULL",
 ]
 
 # Pending picks (working state between open() and Done).
@@ -62,10 +77,13 @@ var _gear_locked: bool = false
 var _team_accent: Color = Color.WHITE
 
 # Controls.
-var _gear_buttons: Dictionary = {}          # row key → Array[Button]
-var _blade_swatches: Array[Button] = []
-var _knob_swatches: Array[Button] = []
-var _span_buttons: Array[Button] = []
+var _length_btn: OptionButton = null
+var _curve_btn: OptionButton = null
+var _flex_btn: OptionButton = null
+var _span_btn: OptionButton = null
+var _style_btn: OptionButton = null
+var _blade_color_dd: SwatchDropdown = null
+var _knob_color_dd: SwatchDropdown = null
 var _lock_label: Label = null
 
 # Preview scene.
@@ -151,16 +169,30 @@ func _build() -> void:
 	_lock_label.visible = false
 	vbox.add_child(_lock_label)
 
-	_build_gear_row(vbox, "length", tr(&"STICK_GEAR_LENGTH"), _LENGTH_TOOLTIP,
-			[tr(&"STICK_LENGTH_SHORT"), tr(&"STICK_LENGTH_STANDARD"), tr(&"STICK_LENGTH_LONG")])
-	_build_gear_row(vbox, "curve", tr(&"STICK_GEAR_CURVE"), _CURVE_TOOLTIP,
-			[tr(&"STICK_CURVE_CLOSED"), tr(&"STICK_CURVE_BALANCED"), tr(&"STICK_CURVE_OPEN")])
-	_build_gear_row(vbox, "flex", tr(&"STICK_GEAR_FLEX"), _FLEX_TOOLTIP,
-			[tr(&"STICK_FLEX_WHIPPY"), tr(&"STICK_FLEX_MEDIUM"), tr(&"STICK_FLEX_STIFF")])
+	_length_btn = _make_option_btn(_LENGTH_KEYS, _LENGTH_TOOLTIP, _on_length_selected)
+	_add_row(vbox, tr(&"STICK_GEAR_LENGTH"), _length_btn, true, _LENGTH_TOOLTIP)
+	_curve_btn = _make_option_btn(_CURVE_KEYS, _CURVE_TOOLTIP, _on_curve_selected)
+	_add_row(vbox, tr(&"STICK_GEAR_CURVE"), _curve_btn, true, _CURVE_TOOLTIP)
+	_flex_btn = _make_option_btn(_FLEX_KEYS, _FLEX_TOOLTIP, _on_flex_selected)
+	_add_row(vbox, tr(&"STICK_GEAR_FLEX"), _flex_btn, true, _FLEX_TOOLTIP)
 
-	_blade_swatches = _build_swatch_row(vbox, tr(&"TAPE_BLADE_LABEL"), _on_blade_swatch_pressed)
-	_build_span_row(vbox)
-	_knob_swatches = _build_swatch_row(vbox, tr(&"TAPE_KNOB_LABEL"), _on_knob_swatch_pressed)
+	_blade_color_dd = SwatchDropdown.new()
+	_blade_color_dd.selected.connect(_on_blade_color_selected)
+	_add_row(vbox, tr(&"TAPE_BLADE_LABEL"), _blade_color_dd, false, "")
+	_span_btn = _make_option_btn(_SPAN_KEYS, "", _on_span_selected)
+	_add_row(vbox, tr(&"TAPE_COVERAGE_LABEL"), _span_btn, false, "")
+	_knob_color_dd = SwatchDropdown.new()
+	_knob_color_dd.selected.connect(_on_knob_color_selected)
+	_add_row(vbox, tr(&"TAPE_KNOB_LABEL"), _knob_color_dd, false, "")
+	_style_btn = _make_option_btn(_STYLE_KEYS, "", _on_style_selected)
+	_add_row(vbox, tr(&"TAPE_HANDLE_LABEL"), _style_btn, false, "")
+
+	var legend := Label.new()
+	legend.text = tr(&"STICK_GAMEPLAY_LEGEND")
+	legend.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	legend.add_theme_color_override("font_color", MenuStyle.GOLD)
+	legend.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(legend)
 
 	var action_row := HBoxContainer.new()
 	action_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -182,6 +214,51 @@ func _build() -> void:
 	cancel_btn.pressed.connect(_cancel)
 	SoundManager.wire_button(cancel_btn)
 	action_row.add_child(cancel_btn)
+
+
+func _make_option_btn(keys: Array[StringName], tooltip: String,
+		handler: Callable) -> OptionButton:
+	var btn := OptionButton.new()
+	btn.custom_minimum_size = Vector2(180, 36)
+	btn.add_theme_font_size_override("font_size", 15)
+	btn.tooltip_text = tooltip
+	for i: int in keys.size():
+		btn.add_item(tr(keys[i]), i)
+	SoundManager.wire_button(btn)
+	btn.item_selected.connect(handler)
+	return btn
+
+
+# One labelled row. `gameplay` rows carry the gold asterisk the legend
+# explains — the pick changes on-ice behavior, not just paint.
+func _add_row(vbox: VBoxContainer, label_text: String, control: Control,
+		gameplay: bool, tooltip: String) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size = Vector2(110, 0)
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_STOP
+	label.tooltip_text = tooltip
+	row.add_child(label)
+
+	var star := Label.new()
+	star.text = "*" if gameplay else " "
+	star.custom_minimum_size = Vector2(14, 0)
+	star.add_theme_font_size_override("font_size", 20)
+	star.add_theme_color_override("font_color", MenuStyle.GOLD)
+	star.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	star.tooltip_text = tr(&"STICK_GAMEPLAY_LEGEND") if gameplay else ""
+	star.mouse_filter = Control.MOUSE_FILTER_STOP if gameplay else Control.MOUSE_FILTER_IGNORE
+	row.add_child(star)
+
+	row.add_child(control)
 
 
 # The turntable viewport: its own 3D world so the stick renders over the menu
@@ -248,97 +325,6 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_turntable.add_child(_knob)
 
 
-func _build_gear_row(vbox: VBoxContainer, key: String, label_text: String,
-		tooltip: String, option_labels: Array[String]) -> void:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-	vbox.add_child(row)
-
-	var label := Label.new()
-	label.text = label_text
-	label.custom_minimum_size = Vector2(96, 0)
-	label.add_theme_font_size_override("font_size", 18)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.mouse_filter = Control.MOUSE_FILTER_STOP
-	label.tooltip_text = tooltip
-	row.add_child(label)
-
-	var buttons: Array[Button] = []
-	for i: int in option_labels.size():
-		var btn := Button.new()
-		btn.text = option_labels[i]
-		btn.custom_minimum_size = Vector2(92, 40)
-		btn.add_theme_font_size_override("font_size", 15)
-		btn.tooltip_text = tooltip
-		SoundManager.wire_button(btn)
-		btn.pressed.connect(_on_gear_pressed.bind(key, i))
-		row.add_child(btn)
-		buttons.append(btn)
-	_gear_buttons[key] = buttons
-	# Controller: D-pad left/right cycles within the row, wrapping at the ends
-	# (same as the attribute panel's gear rows).
-	if ControllerNav.active() and buttons.size() > 1:
-		for i: int in buttons.size():
-			buttons[i].focus_neighbor_left = buttons[(i - 1 + buttons.size()) % buttons.size()].get_path()
-			buttons[i].focus_neighbor_right = buttons[(i + 1) % buttons.size()].get_path()
-
-
-# A row of small color-swatch buttons over the tape palette. TEAM (index 0)
-# shows the live team accent.
-func _build_swatch_row(vbox: VBoxContainer, label_text: String,
-		handler: Callable) -> Array[Button]:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 6)
-	vbox.add_child(row)
-
-	var label := Label.new()
-	label.text = label_text
-	label.custom_minimum_size = Vector2(96, 0)
-	label.add_theme_font_size_override("font_size", 18)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
-
-	var swatches: Array[Button] = []
-	for i: int in TapeColorRegistry.count():
-		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(30, 30)
-		btn.tooltip_text = tr(TapeColorRegistry.NAME_KEYS[i])
-		SoundManager.wire_button(btn)
-		btn.pressed.connect(handler.bind(i))
-		row.add_child(btn)
-		swatches.append(btn)
-	return swatches
-
-
-func _build_span_row(vbox: VBoxContainer) -> void:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 8)
-	vbox.add_child(row)
-
-	var label := Label.new()
-	label.text = tr(&"TAPE_COVERAGE_LABEL")
-	label.custom_minimum_size = Vector2(96, 0)
-	label.add_theme_font_size_override("font_size", 18)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
-
-	for i: int in _SPAN_OPTIONS.size():
-		var btn := Button.new()
-		btn.text = tr(_SPAN_KEYS[i])
-		btn.custom_minimum_size = Vector2(0, 36)
-		btn.add_theme_font_size_override("font_size", 14)
-		SoundManager.wire_button(btn)
-		btn.pressed.connect(_on_span_pressed.bind(_SPAN_OPTIONS[i]))
-		row.add_child(btn)
-		_span_buttons.append(btn)
-
-
 # ── Host API ─────────────────────────────────────────────────────────────────
 
 func set_focus_scope(background: Control, restore: Control) -> void:
@@ -361,12 +347,7 @@ func open(attrs: PlayerAttributes, tape_code: int, gear_locked: bool,
 	_refresh()
 	_rebuild_preview()
 	visible = true
-	ControllerNav.open_modal(_focus_background, self, _first_focus_target())
-
-
-func _first_focus_target() -> Control:
-	var buttons: Array[Button] = _gear_buttons.get("length", [] as Array[Button])
-	return buttons[0] if not buttons.is_empty() else null
+	ControllerNav.open_modal(_focus_background, self, _length_btn)
 
 
 func _done() -> void:
@@ -396,73 +377,78 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # ── Interaction ──────────────────────────────────────────────────────────────
 
-func _on_gear_pressed(key: String, option: int) -> void:
-	if _gear_locked:
-		return
-	match key:
-		"curve":
-			_curve = option
-		"flex":
-			_flex = option
-		"length":
-			_length = option
+func _on_length_selected(option: int) -> void:
+	if not _gear_locked:
+		_length = option
 	_refresh()
 	_rebuild_preview()
 
 
-func _on_blade_swatch_pressed(index: int) -> void:
-	_tape = StickTapeConfig.new(index, _tape.span, _tape.knob_color)
+func _on_curve_selected(option: int) -> void:
+	if not _gear_locked:
+		_curve = option
 	_refresh()
 	_rebuild_preview()
 
 
-func _on_knob_swatch_pressed(index: int) -> void:
-	_tape = StickTapeConfig.new(_tape.blade_color, _tape.span, index)
+func _on_flex_selected(option: int) -> void:
+	if not _gear_locked:
+		_flex = option
 	_refresh()
 	_rebuild_preview()
 
 
-func _on_span_pressed(span: int) -> void:
-	_tape = StickTapeConfig.new(_tape.blade_color, span, _tape.knob_color)
-	_refresh()
+func _on_blade_color_selected(index: int) -> void:
+	_tape = StickTapeConfig.new(index, _tape.span, _tape.knob_color, _tape.knob_style)
+	_rebuild_preview()
+
+
+func _on_knob_color_selected(index: int) -> void:
+	_tape = StickTapeConfig.new(_tape.blade_color, _tape.span, index, _tape.knob_style)
+	_rebuild_preview()
+
+
+func _on_span_selected(option: int) -> void:
+	_tape = StickTapeConfig.new(_tape.blade_color, _SPAN_OPTIONS[option],
+			_tape.knob_color, _tape.knob_style)
+	_rebuild_preview()
+
+
+func _on_style_selected(option: int) -> void:
+	_tape = StickTapeConfig.new(_tape.blade_color, _tape.span,
+			_tape.knob_color, _STYLE_OPTIONS[option])
 	_rebuild_preview()
 
 
 # ── Rendering ────────────────────────────────────────────────────────────────
 
 func _refresh() -> void:
-	var picks: Dictionary = {"curve": _curve, "flex": _flex, "length": _length}
-	for key: String in _gear_buttons:
-		var buttons: Array[Button] = _gear_buttons[key]
-		var opt: int = clampi(int(picks[key]), 0, buttons.size() - 1)
-		for i: int in buttons.size():
-			MenuStyle.apply_tab_button(buttons[i], i == opt)
-			buttons[i].disabled = _gear_locked and i != opt
+	_length_btn.select(clampi(_length, 0, _LENGTH_KEYS.size() - 1))
+	_curve_btn.select(clampi(_curve, 0, _CURVE_KEYS.size() - 1))
+	_flex_btn.select(clampi(_flex, 0, _FLEX_KEYS.size() - 1))
+	for btn: OptionButton in [_length_btn, _curve_btn, _flex_btn]:
+		btn.disabled = _gear_locked
 	_lock_label.visible = _gear_locked
-	_paint_swatches(_blade_swatches, _tape.blade_color)
-	_paint_swatches(_knob_swatches, _tape.knob_color)
-	for i: int in _span_buttons.size():
-		MenuStyle.apply_tab_button(_span_buttons[i], _SPAN_OPTIONS[i] == _tape.span)
 
-
-func _paint_swatches(swatches: Array[Button], selected: int) -> void:
-	for i: int in swatches.size():
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = TapeColorRegistry.resolve(i, _team_accent)
-		sb.set_corner_radius_all(4)
-		if i == selected:
-			sb.set_border_width_all(3)
-			sb.border_color = MenuStyle.TEXT_BODY
-		swatches[i].add_theme_stylebox_override("normal", sb)
-		swatches[i].add_theme_stylebox_override("hover", sb)
-		swatches[i].add_theme_stylebox_override("pressed", sb)
+	var colors: Array[Color] = []
+	var names: Array[String] = []
+	for i: int in TapeColorRegistry.count():
+		colors.append(TapeColorRegistry.resolve(i, _team_accent))
+		names.append(tr(TapeColorRegistry.NAME_KEYS[i]))
+	_blade_color_dd.set_palette(colors, names)
+	_blade_color_dd.set_selected(_tape.blade_color)
+	_knob_color_dd.set_palette(colors, names)
+	_knob_color_dd.set_selected(_tape.knob_color)
+	_span_btn.select(maxi(_SPAN_OPTIONS.find(_tape.span), 0))
+	_style_btn.select(maxi(_STYLE_OPTIONS.find(_tape.knob_style), 0))
 
 
 # Reassembles the turntable stick from the current picks: blade at the picked
-# pattern, tape at the picked span/color, shaft cut by the picked length, knob
-# in the picked knob color. Heel-origin blade frame (the builder's): the shaft
-# climbs from the heel at the lie angle; the whole assembly is then centered
-# so the turntable spins about the stick's middle.
+# pattern, tape at the picked span/color, shaft cut by the picked length with
+# the picked handle wrap painted on, knob in the picked knob color.
+# Heel-origin blade frame (the builder's): the shaft climbs from the heel at
+# the lie angle; the whole assembly is then centered so the turntable spins
+# about the stick's middle.
 func _rebuild_preview() -> void:
 	if _blade == null or _body == null:
 		return
@@ -498,14 +484,17 @@ func _rebuild_preview() -> void:
 	_shaft.transform = Transform3D(
 			Basis.looking_at(-axis, Vector3.UP) * Basis.from_scale(Vector3(1.0, 1.0, stick_len)),
 			axis * (stick_len * 0.5))
+	var knob_color: Color = TapeColorRegistry.resolve(_tape.knob_color, _team_accent)
+	_shaft_mat.set_shader_parameter(&"grip_mode", _tape.knob_style)
+	_shaft_mat.set_shader_parameter(&"grip_color", knob_color)
+	_shaft_mat.set_shader_parameter(&"shaft_len_m", stick_len)
 
 	# Same composition as Skater._update_stick_knob: cylinder long axis onto
 	# the shaft line, taper end toward the blade.
 	_knob.transform = Transform3D(
 			Basis.looking_at(axis, Vector3.UP) * Basis(Vector3.RIGHT, PI * 0.5),
 			axis * (stick_len + _KNOB_HEIGHT_M * 0.5))
-	_knob.material_override = _make_mat(
-			TapeColorRegistry.resolve(_tape.knob_color, _team_accent), 0.9)
+	_knob.material_override = _make_mat(knob_color, 0.9)
 
 	# Center the assembly on the turntable pivot: midpoint of butt and toe.
 	# Positions were all just set absolutely above (blade at the origin), so

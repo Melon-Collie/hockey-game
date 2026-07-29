@@ -14,17 +14,20 @@ func test_default_is_code_zero() -> void:
 	assert_eq(config.blade_color, TapeColorRegistry.TEAM_INDEX)
 	assert_eq(config.span, StickTapeConfig.Span.HEEL_TO_MID)
 	assert_eq(config.knob_color, TapeColorRegistry.TEAM_INDEX)
+	assert_eq(config.knob_style, StickTapeConfig.KnobStyle.KNOB)
 
 
 func test_every_legal_pick_round_trips() -> void:
 	for blade_color: int in TapeColorRegistry.count():
 		for span: int in StickTapeConfig.Span.size():
 			for knob_color: int in TapeColorRegistry.count():
-				var config := StickTapeConfig.new(blade_color, span, knob_color)
-				var back: StickTapeConfig = StickTapeConfig.from_code(config.to_code())
-				assert_eq(back.blade_color, blade_color)
-				assert_eq(back.span, span)
-				assert_eq(back.knob_color, knob_color)
+				for style: int in StickTapeConfig.KnobStyle.size():
+					var config := StickTapeConfig.new(blade_color, span, knob_color, style)
+					var back: StickTapeConfig = StickTapeConfig.from_code(config.to_code())
+					assert_eq(back.blade_color, blade_color)
+					assert_eq(back.span, span)
+					assert_eq(back.knob_color, knob_color)
+					assert_eq(back.knob_style, style)
 
 
 func test_garbage_codes_coerce_to_legal_jobs() -> void:
@@ -33,6 +36,7 @@ func test_garbage_codes_coerce_to_legal_jobs() -> void:
 		assert_true(TapeColorRegistry.is_valid(config.blade_color), "blade color legal")
 		assert_true(TapeColorRegistry.is_valid(config.knob_color), "knob color legal")
 		assert_between(config.span, 0, StickTapeConfig.Span.size() - 1, "span legal")
+		assert_between(config.knob_style, 0, StickTapeConfig.KnobStyle.size() - 1, "style legal")
 		# And the coerced job re-packs stably (idempotent coercion).
 		var code2: int = config.to_code()
 		assert_eq(StickTapeConfig.from_code(code2).to_code(), code2)

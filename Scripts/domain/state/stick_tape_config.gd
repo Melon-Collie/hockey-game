@@ -28,26 +28,37 @@ const _SPAN_RANGES: Array[Vector2] = [
 	Vector2(0.0, 0.0),              # NONE — no band at all
 ]
 
-# The all-default packed code (blade TEAM, span HEEL_TO_MID, knob TEAM) — the
-# wire default for every payload that carries a tape code.
+# Handle wrap style: just the butt knob, a candy-cane spiral running down the
+# upper shaft from it, or a full grip section (knob included in all three).
+# WIRE VALUES — append only. KNOB at 0 keeps the all-default code at 0.
+enum KnobStyle { KNOB, CANDY_CANE, FULL }
+
+# The all-default packed code (blade TEAM, span HEEL_TO_MID, knob TEAM, style
+# KNOB) — the wire default for every payload that carries a tape code.
 const DEFAULT_CODE: int = 0
 
-# Code packing: 5 bits per color index (palette growth headroom), 3 bits span.
+# Code packing: 5 bits per color index (palette growth headroom), 3 bits span,
+# 2 bits handle style.
 const _COLOR_BITS: int = 5
 const _COLOR_MASK: int = (1 << _COLOR_BITS) - 1
 const _SPAN_MASK: int = 0x7
+const _STYLE_SHIFT: int = _COLOR_BITS + 3 + _COLOR_BITS
+const _STYLE_MASK: int = 0x3
 
 var blade_color: int = TapeColorRegistry.TEAM_INDEX
 var span: int = Span.HEEL_TO_MID
 var knob_color: int = TapeColorRegistry.TEAM_INDEX
+var knob_style: int = KnobStyle.KNOB
 
 
 func _init(p_blade_color: int = TapeColorRegistry.TEAM_INDEX,
 		p_span: int = Span.HEEL_TO_MID,
-		p_knob_color: int = TapeColorRegistry.TEAM_INDEX) -> void:
+		p_knob_color: int = TapeColorRegistry.TEAM_INDEX,
+		p_knob_style: int = KnobStyle.KNOB) -> void:
 	blade_color = _clamp_color(p_blade_color)
 	span = clampi(p_span, 0, Span.size() - 1)
 	knob_color = _clamp_color(p_knob_color)
+	knob_style = clampi(p_knob_style, 0, KnobStyle.size() - 1)
 
 
 static func _clamp_color(index: int) -> int:
@@ -66,11 +77,13 @@ func span_range() -> Vector2:
 
 func to_code() -> int:
 	return blade_color | (span << _COLOR_BITS) \
-			| (knob_color << (_COLOR_BITS + 3))
+			| (knob_color << (_COLOR_BITS + 3)) \
+			| (knob_style << _STYLE_SHIFT)
 
 
 static func from_code(code: int) -> StickTapeConfig:
 	return StickTapeConfig.new(
 			code & _COLOR_MASK,
 			(code >> _COLOR_BITS) & _SPAN_MASK,
-			(code >> (_COLOR_BITS + 3)) & _COLOR_MASK)
+			(code >> (_COLOR_BITS + 3)) & _COLOR_MASK,
+			(code >> _STYLE_SHIFT) & _STYLE_MASK)
