@@ -99,6 +99,11 @@ var _accumulator: float = 0.0
 # with that posture (the leave-coverage hysteresis).
 var _coverage_was_set: bool = false
 var _coverage_unready_ticks: int = 0
+# Published for instrumentation only (AIPossessionShapeTally): true while the
+# raw read said DZONE but this brain held the rush shape instead because the
+# backcheck wasn't home. Nothing reads it back into a decision — without it,
+# a suppressed D-zone coverage is indistinguishable from an ordinary rush.
+var coverage_downgraded: bool = false
 # Cadence phase offset (seconds): team 1's natural ticks run half a period
 # out of phase with team 0's, so the two brains' per-tick computes never land
 # on the same physics frame (host FPS is set by the worst tick, and the two
@@ -283,6 +288,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 				rush_read.coverage_ready, _coverage_unready_ticks,
 				_coverage_was_set)
 		_coverage_was_set = set_now
+		coverage_downgraded = not set_now
 		if not set_now:
 			state = AIPossessionState.State.TRANS_OD
 	else:
@@ -290,6 +296,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		# stale "we were set" can't wave a new rush straight into coverage.
 		_coverage_was_set = false
 		_coverage_unready_ticks = 0
+		coverage_downgraded = false
 
 	# 2. Strong-side X with hysteresis (see STRONG_SIDE_HYSTERESIS_M).
 	if snapshot != null and snapshot.puck_state != null:

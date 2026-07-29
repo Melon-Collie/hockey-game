@@ -269,6 +269,11 @@ var _telemetry: NetworkTelemetry = null
 # the GamePhase.Phase.keys() name lookup only runs on an actual transition.
 var _last_telemetry_phase_id: int = -1
 var _debug_overlay: NetworkDebugOverlay = null
+var _shape_overlay: ShapeDebugOverlay = null
+# Shape-occupancy debug tally (F6 overlay). Host-only — it samples the
+# team brains, which only exist where the bots are simulated. Public so the
+# overlay can read it without a setter chain.
+var shape_tally := AIPossessionShapeTally.new()
 var _state_buffer_manager: StateBufferManager = null
 # Per-team last-elected loose-puck chaser, fed back into
 # AILoosePuckChase.elect each frame for incumbent hysteresis.
@@ -544,6 +549,15 @@ func _physics_process(delta: float) -> void:
 		if not team_brains.is_empty():
 			for brain: TeamBrain in team_brains:
 				brain.tick(delta, current_snapshot)
+			# Shape-occupancy sample (debug instrument, F6). Sampled against the
+			# PUBLISHED state so it measures the shape actually being run, and
+			# only during live play — shares should describe hockey, not the
+			# stoppages between it.
+			if _state_machine != null \
+					and _state_machine.current_phase == GamePhase.Phase.PLAYING:
+				for brain: TeamBrain in team_brains:
+					shape_tally.accumulate(brain.team_id, brain.state, delta,
+							brain.coverage_downgraded)
 		if _registry != null:
 			# The coordinator freezes each brain's view (build_view) at the point it
 			# hands work to the worker — only while the worker is idle, so the view
@@ -1536,6 +1550,9 @@ func _wire_subsystems() -> void:
 	_net_session_reported = false
 	_debug_overlay = NetworkDebugOverlay.new()
 	add_child(_debug_overlay)
+	shape_tally.reset()
+	_shape_overlay = ShapeDebugOverlay.new()
+	add_child(_shape_overlay)
 
 	var _home_c := TeamColorRegistry.get_colors(teams[0].color_slot, 0)
 	var _away_c := TeamColorRegistry.get_colors(teams[1].color_slot, 1)
