@@ -169,30 +169,47 @@ func _build() -> void:
 	_lock_label.visible = false
 	vbox.add_child(_lock_label)
 
-	_length_btn = _make_option_btn(_LENGTH_KEYS, _LENGTH_TOOLTIP, _on_length_selected)
-	_add_row(vbox, tr(&"STICK_GEAR_LENGTH"), _length_btn, true, _LENGTH_TOOLTIP)
-	_curve_btn = _make_option_btn(_CURVE_KEYS, _CURVE_TOOLTIP, _on_curve_selected)
-	_add_row(vbox, tr(&"STICK_GEAR_CURVE"), _curve_btn, true, _CURVE_TOOLTIP)
-	_flex_btn = _make_option_btn(_FLEX_KEYS, _FLEX_TOOLTIP, _on_flex_selected)
-	_add_row(vbox, tr(&"STICK_GEAR_FLEX"), _flex_btn, true, _FLEX_TOOLTIP)
+	# Two columns under the preview: gameplay gear (asterisked) on the left,
+	# tape (cosmetic) on the right — the split itself reinforces the legend.
+	var columns := HBoxContainer.new()
+	columns.alignment = BoxContainer.ALIGNMENT_CENTER
+	columns.add_theme_constant_override("separation", 40)
+	vbox.add_child(columns)
 
-	_blade_color_dd = SwatchDropdown.new()
-	_blade_color_dd.selected.connect(_on_blade_color_selected)
-	_add_row(vbox, tr(&"TAPE_BLADE_LABEL"), _blade_color_dd, false, "")
-	_span_btn = _make_option_btn(_SPAN_KEYS, "", _on_span_selected)
-	_add_row(vbox, tr(&"TAPE_COVERAGE_LABEL"), _span_btn, false, "")
-	_knob_color_dd = SwatchDropdown.new()
-	_knob_color_dd.selected.connect(_on_knob_color_selected)
-	_add_row(vbox, tr(&"TAPE_KNOB_LABEL"), _knob_color_dd, false, "")
-	_style_btn = _make_option_btn(_STYLE_KEYS, "", _on_style_selected)
-	_add_row(vbox, tr(&"TAPE_HANDLE_LABEL"), _style_btn, false, "")
+	var gear_col := VBoxContainer.new()
+	gear_col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	gear_col.add_theme_constant_override("separation", 12)
+	columns.add_child(gear_col)
+
+	var tape_col := VBoxContainer.new()
+	tape_col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	tape_col.add_theme_constant_override("separation", 12)
+	columns.add_child(tape_col)
+
+	_length_btn = _make_option_btn(_LENGTH_KEYS, _LENGTH_TOOLTIP, _on_length_selected)
+	_add_row(gear_col, tr(&"STICK_GEAR_LENGTH"), _length_btn, true, _LENGTH_TOOLTIP)
+	_curve_btn = _make_option_btn(_CURVE_KEYS, _CURVE_TOOLTIP, _on_curve_selected)
+	_add_row(gear_col, tr(&"STICK_GEAR_CURVE"), _curve_btn, true, _CURVE_TOOLTIP)
+	_flex_btn = _make_option_btn(_FLEX_KEYS, _FLEX_TOOLTIP, _on_flex_selected)
+	_add_row(gear_col, tr(&"STICK_GEAR_FLEX"), _flex_btn, true, _FLEX_TOOLTIP)
 
 	var legend := Label.new()
 	legend.text = tr(&"STICK_GAMEPLAY_LEGEND")
 	legend.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	legend.add_theme_color_override("font_color", MenuStyle.GOLD)
 	legend.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(legend)
+	gear_col.add_child(legend)
+
+	_blade_color_dd = SwatchDropdown.new()
+	_blade_color_dd.selected.connect(_on_blade_color_selected)
+	_add_row(tape_col, tr(&"TAPE_BLADE_LABEL"), _blade_color_dd, false, "")
+	_span_btn = _make_option_btn(_SPAN_KEYS, "", _on_span_selected)
+	_add_row(tape_col, tr(&"TAPE_COVERAGE_LABEL"), _span_btn, false, "")
+	_knob_color_dd = SwatchDropdown.new()
+	_knob_color_dd.selected.connect(_on_knob_color_selected)
+	_add_row(tape_col, tr(&"TAPE_KNOB_LABEL"), _knob_color_dd, false, "")
+	_style_btn = _make_option_btn(_STYLE_KEYS, "", _on_style_selected)
+	_add_row(tape_col, tr(&"TAPE_HANDLE_LABEL"), _style_btn, false, "")
 
 	var action_row := HBoxContainer.new()
 	action_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -230,11 +247,12 @@ func _make_option_btn(keys: Array[StringName], tooltip: String,
 
 
 # One labelled row. `gameplay` rows carry the gold asterisk the legend
-# explains — the pick changes on-ice behavior, not just paint.
+# explains — the pick changes on-ice behavior, not just paint. Rows lead-align
+# so the label column lines up within each side of the two-column layout.
 func _add_row(vbox: VBoxContainer, label_text: String, control: Control,
 		gameplay: bool, tooltip: String) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
@@ -432,12 +450,17 @@ func _refresh() -> void:
 
 	var colors: Array[Color] = []
 	var names: Array[String] = []
+	var chip_labels: Array[String] = []
 	for i: int in TapeColorRegistry.count():
 		colors.append(TapeColorRegistry.resolve(i, _team_accent))
 		names.append(tr(TapeColorRegistry.NAME_KEYS[i]))
-	_blade_color_dd.set_palette(colors, names)
+		# The TEAM chip says so — it tracks the kit rather than being one
+		# more fixed color.
+		chip_labels.append(tr(&"TAPE_COLOR_TEAM_SHORT")
+				if i == TapeColorRegistry.TEAM_INDEX else "")
+	_blade_color_dd.set_palette(colors, names, chip_labels)
 	_blade_color_dd.set_selected(_tape.blade_color)
-	_knob_color_dd.set_palette(colors, names)
+	_knob_color_dd.set_palette(colors, names, chip_labels)
 	_knob_color_dd.set_selected(_tape.knob_color)
 	_span_btn.select(maxi(_SPAN_OPTIONS.find(_tape.span), 0))
 	_style_btn.select(maxi(_STYLE_OPTIONS.find(_tape.knob_style), 0))

@@ -20,6 +20,10 @@ const _POPUP_SEPARATION: int = 6
 
 var _colors: Array[Color] = []
 var _names: Array[String] = []
+# Short text drawn ON a chip (closed state and popup swatch alike). Empty =
+# color only; the tape palette labels its TEAM entry so players know that
+# chip tracks the team color rather than being one more fixed pick.
+var _chip_labels: Array[String] = []
 var _selected_index: int = 0
 var _disabled: bool = false
 var _closed_btn: Button = null
@@ -56,11 +60,15 @@ func _init(min_size: Vector2 = Vector2(96, 36)) -> void:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-# `names` are tooltip strings, index-aligned with `colors`. Re-supply whenever
-# a live entry (the TEAM accent) may have changed.
-func set_palette(colors: Array[Color], names: Array[String]) -> void:
+# `names` are tooltip strings, index-aligned with `colors`; `chip_labels`
+# (optional, same alignment) draw short text on a chip — empty string for
+# color-only entries. Re-supply whenever a live entry (the TEAM accent) may
+# have changed.
+func set_palette(colors: Array[Color], names: Array[String],
+		chip_labels: Array[String] = []) -> void:
 	_colors = colors
 	_names = names
+	_chip_labels = chip_labels
 	_selected_index = clampi(_selected_index, 0, maxi(colors.size() - 1, 0))
 	_apply_closed_chip()
 
@@ -85,6 +93,24 @@ func _apply_closed_chip() -> void:
 		return
 	_closed_style.bg_color = _colors[_selected_index]
 	_closed_btn.tooltip_text = _names[_selected_index] if _selected_index < _names.size() else ""
+	_set_chip_text(_closed_btn, _selected_index, 14)
+
+
+func _chip_label(index: int) -> String:
+	return _chip_labels[index] if index < _chip_labels.size() else ""
+
+
+# Draws an entry's short label on a chip button in whichever of black/white
+# reads against that chip's color.
+func _set_chip_text(btn: Button, index: int, font_size: int) -> void:
+	btn.text = _chip_label(index)
+	if btn.text.is_empty():
+		return
+	btn.add_theme_font_size_override("font_size", font_size)
+	var text_color: Color = Color.BLACK if _colors[index].get_luminance() > 0.55 else Color.WHITE
+	for state: String in ["font_color", "font_hover_color", "font_pressed_color",
+			"font_focus_color"]:
+		btn.add_theme_color_override(state, text_color)
 
 
 # ── Popup ────────────────────────────────────────────────────────────────────
@@ -147,6 +173,7 @@ func _build_swatch(index: int) -> Button:
 	btn.tooltip_text = _names[index] if index < _names.size() else ""
 	btn.pressed.connect(_on_swatch_pressed.bind(index))
 	SoundManager.wire_button(btn)
+	_set_chip_text(btn, index, 12)
 	var style := StyleBoxFlat.new()
 	style.bg_color = _colors[index]
 	style.set_corner_radius_all(_CHIP_CORNER)
