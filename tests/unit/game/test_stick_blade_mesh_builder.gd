@@ -62,6 +62,81 @@ func test_heel_origin_bounds() -> void:
 	assert_lt(absf(mesh_aabb.end.x), x_limit, "lateral bound (front)")
 
 
+# Face height at the station ring nearest a depth. The ring's four corners
+# straddle that depth by the half-thickness (cross-sections rotate with the
+# bow), hence the window rather than an exact match.
+func _face_height_at(verts: PackedVector3Array, z: float) -> float:
+	var lo: float = INF
+	var hi: float = -INF
+	for v: Vector3 in verts:
+		if absf(v.z - z) > 0.004:
+			continue
+		lo = minf(lo, v.y)
+		hi = maxf(hi, v.y)
+	assert_true(is_finite(lo), "expected a station near z = %.3f" % z)
+	return hi - lo
+
+
+# Centerline bow at the station ring nearest a depth: the mean of the front and
+# back faces, so the half-thickness cancels out.
+func _bow_at(verts: PackedVector3Array, z: float) -> float:
+	var total: float = 0.0
+	var count: int = 0
+	for v: Vector3 in verts:
+		if absf(v.z - z) > 0.004:
+			continue
+		total += v.x
+		count += 1
+	assert_gt(count, 0, "expected a station near z = %.3f" % z)
+	return total / float(count)
+
+
+func test_toe_keeps_most_of_the_blade_height() -> void:
+	# The blade tapers heel→toe and closes on a rounded corner; it does NOT
+	# collapse into a fin. Measured just behind the corner arc, where the taper
+	# is all that has acted.
+	var p := StickBladeMeshBuilder.Params.new()
+	var verts: PackedVector3Array = _verts(StickBladeMeshBuilder.build(p))
+	var heel_h: float = _face_height_at(verts, 0.0)
+	var toe_h: float = _face_height_at(verts, -(p.length - p.toe_round_m))
+	assert_almost_eq(toe_h / heel_h, p.height_toe_frac, 0.04, "height taper holds to the corner")
+	# The corner then closes on a cap tall enough to read as a blade end rather
+	# than a knife point.
+	assert_gt(_face_height_at(verts, -p.length), p.height * 0.28, "toe cap keeps a face")
+
+
+func test_bottom_edge_is_flat_until_the_toe_kick() -> void:
+	# A blade rockered end to end rocks on its middle; a real one lies on the
+	# ice through the contact zone and lifts only at the toe.
+	var p := StickBladeMeshBuilder.Params.new()
+	var verts: PackedVector3Array = _verts(StickBladeMeshBuilder.build(p))
+	var sole: float = -p.height * 0.5
+	var flat_z: float = -p.length * p.toe_kick_start_frac
+	var seen: int = 0
+	for v: Vector3 in verts:
+		if v.z < flat_z or v.y > 0.0:
+			continue
+		seen += 1
+		assert_almost_eq(v.y, sole, 0.0002, "sole is one plane from heel to the kick")
+	assert_gt(seen, 8, "sampled the bottom edge over the contact zone")
+	# …and the toe lifts clear of it by the kick, no more.
+	var toe_bottom: float = INF
+	for v: Vector3 in verts:
+		if absf(v.z + p.length) < 0.004:
+			toe_bottom = minf(toe_bottom, v.y)
+	assert_almost_eq(toe_bottom, sole + p.toe_kick_m, 0.0003, "toe kicks off the ice")
+
+
+func test_curve_eases_in_from_a_straight_heel() -> void:
+	# Curvature ramps from zero at the heel, so there is no kink where the bow
+	# starts: a third of the way out the centerline has barely left the axis.
+	var p := StickBladeMeshBuilder.Params.new()
+	var verts: PackedVector3Array = _verts(StickBladeMeshBuilder.build(p))
+	var toe_bow: float = _bow_at(verts, -p.length)
+	assert_gt(toe_bow, p.curve_depth * 0.8, "toe carries the full bow")
+	assert_lt(_bow_at(verts, -p.length / 3.0), toe_bow * 0.15, "heel third stays near-straight")
+
+
 func test_curve_bows_with_handedness_sign() -> void:
 	# Deep-toe vertices sit on the bowed centerline; sign +1 (lefty) bows +X.
 	assert_gt(_mean_x(_verts(_build(1.0)), -0.27), 0.008, "lefty curve bows +X")
@@ -159,9 +234,9 @@ func test_hosel_extends_up_the_shaft_line() -> void:
 		y_max = maxf(y_max, v.y)
 	assert_gt(z_max, 0.04, "hosel reaches behind the heel along the shaft")
 	assert_gt(y_max, 0.05, "hosel climbs above the blade's top edge")
-	# Base ring center: the heel cross-section's midpoint (rocker lifts the
-	# bottom edge, so mid sits at rocker/2 above zero).
-	var base_center := Vector3(0.0, p.rocker_m * 0.5, 0.0)
+	# Base ring center: the heel cross-section's midpoint. The bottom edge is
+	# flat at the heel (the kick is at the toe), so mid sits on the origin.
+	var base_center := Vector3.ZERO
 	var seen_tip_cap: bool = false
 	var tri_count: int = int(verts.size() / 3.0)
 	for t in tri_count:

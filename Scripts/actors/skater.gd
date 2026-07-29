@@ -66,13 +66,14 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # — the BoxMesh in Scenes/Skater.tscn is only a pre-_ready placeholder.
 @export var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
 # Cosmetic blade-mesh geometry (StickBladeMeshBuilder): how deep the curve
-# bows, where along the blade it starts, and how much of the toe rounds off.
-# Pure visuals — contact math reads the Blade marker + blade_length only. A
-# future gear system makes these per-player (the stick "pattern"); until then
-# they're one house pattern for everyone.
+# bows, how late along the blade it turns (higher = toe curve, lower = heel
+# curve), and the radius of the rounded toe corner. Pure visuals — contact math
+# reads the Blade marker + blade_length only. A future gear system makes these
+# per-player (the stick "pattern"); until then they're one house pattern for
+# everyone.
 @export var blade_curve_depth: float = 0.022
-@export var blade_curve_start_frac: float = 0.35
-@export var blade_toe_round_frac: float = 0.24
+@export var blade_curve_power: float = 3.0
+@export var blade_toe_round_m: float = 0.028
 # Length of the hosel — the tapered throat carrying the heel cross-section up
 # the shaft line (the shaft-follow tilt keeps the blade rigidly at
 # blade_lie_deg to the shaft, so fixed blade-local hosel geometry stays glued
@@ -1078,8 +1079,8 @@ func blade_mesh_params(inflate: float, u_start: float, u_end: float,
 	var p := StickBladeMeshBuilder.Params.new()
 	p.length = blade_length
 	p.curve_depth = blade_curve_depth
-	p.curve_start_frac = blade_curve_start_frac
-	p.toe_round_frac = blade_toe_round_frac
+	p.curve_power = blade_curve_power
+	p.toe_round_m = blade_toe_round_m
 	p.curve_sign = 1.0 if is_left_handed else -1.0
 	p.inflate = inflate
 	p.u_start = u_start
