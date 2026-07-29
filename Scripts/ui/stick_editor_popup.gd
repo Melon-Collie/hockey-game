@@ -200,8 +200,10 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	container.add_child(_viewport)
 
 	var camera := Camera3D.new()
-	camera.position = Vector3(0.0, 0.1, 1.9)
-	camera.fov = 42.0
+	# Far enough that the whole diagonal (butt to toe ≈ 1.55 m, spinning about
+	# its midpoint) stays inside the vertical frustum at every rotation angle.
+	camera.position = Vector3(0.0, 0.0, 2.6)
+	camera.fov = 45.0
 	_viewport.add_child(camera)
 
 	var light := DirectionalLight3D.new()
@@ -485,18 +487,23 @@ func _rebuild_preview() -> void:
 
 	# Shaft: heel → butt along the lie axis, cut to the picked length (the
 	# same stick_len_mult the rink uses, so LONG visibly outreaches SHORT).
+	# LOCAL transforms only — look_at_from_position places in GLOBAL space,
+	# which fought the turntable's live rotation: the shaft snapped back to
+	# the world frame on every option change while the blade stayed rotated.
 	var attrs := PlayerAttributes.new(_body.height, _body.weight, _body.profile,
 			_curve, _flex, _length)
 	var stick_len: float = GameRules.DEFAULT_STICK_LENGTH_M * attrs.stick_len_mult()
 	var lie: float = deg_to_rad(_LIE_DEG)
 	var axis := Vector3(0.0, sin(lie), cos(lie))
-	_shaft.position = axis * (stick_len * 0.5)
-	_shaft.look_at_from_position(_shaft.position, _shaft.position - axis, Vector3.UP)
-	_shaft.scale = Vector3(1.0, 1.0, stick_len)
+	_shaft.transform = Transform3D(
+			Basis.looking_at(-axis, Vector3.UP) * Basis.from_scale(Vector3(1.0, 1.0, stick_len)),
+			axis * (stick_len * 0.5))
 
-	_knob.position = axis * (stick_len + _KNOB_HEIGHT_M * 0.5)
-	_knob.look_at_from_position(_knob.position, _knob.position + axis, Vector3.UP)
-	_knob.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	# Same composition as Skater._update_stick_knob: cylinder long axis onto
+	# the shaft line, taper end toward the blade.
+	_knob.transform = Transform3D(
+			Basis.looking_at(axis, Vector3.UP) * Basis(Vector3.RIGHT, PI * 0.5),
+			axis * (stick_len + _KNOB_HEIGHT_M * 0.5))
 	_knob.material_override = _make_mat(
 			TapeColorRegistry.resolve(_tape.knob_color, _team_accent), 0.9)
 
