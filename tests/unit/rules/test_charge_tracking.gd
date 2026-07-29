@@ -169,6 +169,61 @@ func test_travel_step_capped_in_accumulate() -> void:
 		Vector3.ZERO, VARIANCE_DEG, 0.0, 0.0, 0.25)
 	assert_almost_eq(result.travel, 0.25, 0.001, "per-tick travel bounded by max_travel_step")
 
+# ── Swing anchor (locomotion compensation for camera-framed cursors) ─────────
+
+func test_swing_anchor_world_pinned_for_world_anchored_cursor() -> void:
+	# Gamepad shot cursor: re-anchored on the pin's projection every frame, so
+	# the world-pinned origin already isolates the gesture.
+	var anchor: Vector3 = ChargeTracking.swing_anchor(
+		Vector3(2, 0, 3), Vector3(10, 0, -4), Vector3(1, 0, 2), true)
+	assert_eq(anchor, Vector3(2, 0, 3), "world-anchored cursor keeps the pinned origin")
+
+func test_swing_anchor_tracks_skater_for_camera_cursor() -> void:
+	# Mouse: the anchor translates with the skater since the pin; y flattened.
+	var anchor: Vector3 = ChargeTracking.swing_anchor(
+		Vector3(2, 0, 3), Vector3(1, 0.5, 6), Vector3(1, 0, 2), false)
+	assert_eq(anchor, Vector3(2, 0, 7), "anchor rides the skater's XZ translation")
+
+func test_retreating_forehand_drag_reads_forehand_with_compensated_anchor() -> void:
+	# Regression: a mouse forehand misread as a backhand while skating backwards.
+	# The mouse's WORLD point rides the skater-following camera, so a retreat
+	# dragged it toward and past a world-pinned anchor — the shrinking bearing
+	# radius turned pure camera drift into a large backhand-sense rotation. The
+	# compensated anchor cancels the drift and reads only the gesture.
+	var origin := Vector3.ZERO                      # pinned at charge start
+	var skater_at_pin := Vector3(0, 0, 0.9)
+	var ticks: int = 30
+	var deadband: float = 0.35                      # wrister_backhand_deadband
+	var pinned_rot: float = 0.0
+	var compensated_rot: float = 0.0
+	var prev_pinned := Vector3.ZERO
+	var prev_comp := Vector3.ZERO
+	for i in range(ticks + 1):
+		var t: float = float(i) / float(ticks)
+		# Gesture in the player's (camera) frame: a lateral forehand drag across
+		# the aim, 1.5 m out in front (RH positive rotation ≈ +0.47 rad net).
+		var gesture := Vector3(0.9 - 0.8 * t, 0.0, -1.5)
+		# Retreat: 3 m away from the aim over the stroke; camera tracks skater,
+		# so the cursor's world point carries the same drift.
+		var drift := Vector3(0, 0, 3.0 * t)
+		var cursor_world: Vector3 = origin + gesture + drift
+		var skater_pos: Vector3 = skater_at_pin + drift
+		var pinned_bearing: Vector3 = cursor_world - ChargeTracking.swing_anchor(
+			origin, skater_pos, skater_at_pin, true)
+		var comp_bearing: Vector3 = cursor_world - ChargeTracking.swing_anchor(
+			origin, skater_pos, skater_at_pin, false)
+		if i > 0:
+			pinned_rot += ChargeTracking.swing_step(prev_pinned, pinned_bearing)
+			compensated_rot += ChargeTracking.swing_step(prev_comp, comp_bearing)
+		prev_pinned = pinned_bearing
+		prev_comp = comp_bearing
+	assert_almost_eq(compensated_rot, 0.474, 0.01,
+		"compensated rotation is the pure gesture sweep (atan(0.9/1.5) − atan(0.1/1.5))")
+	assert_false(ShotMechanics.is_backhand_from_swing(compensated_rot, false, deadband),
+		"compensated anchor classifies the RH forehand as a forehand")
+	assert_true(ShotMechanics.is_backhand_from_swing(pinned_rot, false, deadband),
+		"world-pinned anchor banked the retreat as a backhand — the bug this guards against")
+
 func test_swing_direction_classifies_forehand_vs_backhand() -> void:
 	# End-to-end: a two-tick arc one way vs the other yields opposite net
 	# rotation, which ShotMechanics.is_backhand_from_swing reads as FH vs BH.

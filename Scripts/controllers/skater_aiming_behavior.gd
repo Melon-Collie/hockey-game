@@ -16,8 +16,10 @@ var swing_rotation: float = 0.0
 # Public (no underscore): LocalController saves and restores it across
 # reconcile() replay alongside the rest of the charge state.
 var prev_intent_pos: Vector3 = Vector3.ZERO
-# Previous SHOT-LINE bearing: cursor minus the pinned wrister origin, the exact
-# vector the release fires along (SkaterController._wrister_aim_dir). Its signed
+# Previous SHOT-LINE bearing: cursor minus the swing anchor (the pinned wrister
+# origin, locomotion-compensated for a camera-framed cursor —
+# ChargeTracking.swing_anchor), matching the vector the release fires along
+# (SkaterController._wrister_aim_dir). Its signed
 # rotation between ticks is the swing chirality the forehand/backhand read
 # classifies (ChargeTracking.swing_step), and its path length is the stroke travel.
 # Measured about the ORIGIN rather than the body: the origin is where the puck sits
@@ -47,6 +49,12 @@ var stroke_travel: float = 0.0
 # move as the stick sweeps. Saved/restored across reconcile like the rest of the
 # charge state (set once on the entry edge; restored so replay can't re-perturb).
 var wrister_origin_world: Vector3 = Vector3.ZERO
+# Skater world position (XZ, y = 0) at that same charge-start moment. A mouse
+# cursor's world point rides the skater-following camera, so the chirality /
+# travel bearings measure about the origin translated by the skater's motion
+# since the pin (ChargeTracking.swing_anchor) — this is the pin's reference
+# point. Saved/restored across reconcile alongside wrister_origin_world.
+var wrister_origin_skater_pos: Vector3 = Vector3.ZERO
 # Reused output for ChargeTracking.accumulate_into — a per-controller scratch so
 # the per-tick charge update never allocates. Pure output (fully overwritten each
 # call), so it needs no reconcile save/restore.
@@ -59,7 +67,8 @@ var one_timer_window_timer: float = 0.0
 # ── Wrister ───────────────────────────────────────────────────────────────────
 
 func reset_wrister(initial_intent_pos: Vector3, initial_swing_bearing: Vector3,
-		initial_origin_world: Vector3 = Vector3.ZERO) -> void:
+		initial_origin_world: Vector3 = Vector3.ZERO,
+		initial_origin_skater_pos: Vector3 = Vector3.ZERO) -> void:
 	swing_rotation = 0.0
 	cursor_speed_ema = 0.0
 	stroke_travel = 0.0
@@ -67,6 +76,7 @@ func reset_wrister(initial_intent_pos: Vector3, initial_swing_bearing: Vector3,
 	prev_intent_pos = initial_intent_pos
 	prev_swing_bearing = initial_swing_bearing
 	wrister_origin_world = initial_origin_world
+	wrister_origin_skater_pos = initial_origin_skater_pos
 
 
 func tick_wrister_charge(
