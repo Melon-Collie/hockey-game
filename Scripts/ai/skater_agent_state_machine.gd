@@ -1489,21 +1489,6 @@ var debug_last_decision: String = ""
 # flip it here to turn the labels back on.
 const DEBUG_DECISIONS: bool = false
 
-# Per-release shot instrumentation. Prints, on the tick the wrister lets go,
-# what the shot was AIMED at against where its line actually crosses the goal
-# plane — the one number that separates "the bot picked a bad target" from "the
-# bot missed the target it picked".
-#
-# The direction is committed at press entry against an ASSUMED release
-# (_shoot_release_anchor + _shot_release_offset_locked) while the puck leaves
-# from the live blade, so the two can disagree; blade_contact_world is the same
-# host-side field the puck's release reads, which is what makes this the actual
-# release point rather than another model of it.
-#
-# tests/unit/ai/test_shot_release_projection.gd already pins the BODY half of
-# that projection as honest (<= 4 cm). This covers the half that test cannot
-# see: the blade's offset from the body at the moment of release.
-const DEBUG_SHOT_RELEASE: bool = false
 
 # Per-tick decision-scoring readout for the floating debug label.
 # Populated by `_pick_action` every tick; AIController polls and
@@ -3827,8 +3812,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# chosen arc mid-swing. It aims at the same target from where the puck
 		# actually sits, which is what the wind-up was supposed to deliver.
 		_retarget_release_dir(input, snapshot, self_pos)
-		if DEBUG_SHOT_RELEASE:
-			_log_shot_release(snapshot, self_pos)
 		input.shoot_held = false
 		_set_state(State.CARRY)
 
@@ -3900,39 +3883,6 @@ func _retarget_release_dir(input: InputState, snapshot: WorldSnapshot,
 		aim_vec = aim_vec.rotated(Vector3.UP, _committed_aim_error_rad)
 	_shoot_aim_dir_locked = aim_vec.normalized()
 	input.bot_wrister_aim_dir = _shoot_aim_dir_locked
-
-
-# Logs one shot release: intended aim vs. where the committed line really goes.
-# Only called behind DEBUG_SHOT_RELEASE, so the string work never runs in play.
-func _log_shot_release(snapshot: WorldSnapshot, self_pos: Vector3) -> void:
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state == null or not _shot_aim_locked.is_finite():
-		return
-	var blade: Vector3 = self_state.blade_contact_world
-	if blade == Vector3.ZERO:
-		blade = self_pos
-	var assumed: Vector3 = _shoot_release_anchor + _shot_release_offset_locked
-	var dir: Vector3 = _shoot_aim_dir_locked
-	if dir.length_squared() < 0.0001:
-		return
-	# Where the committed line crosses the goal plane, fired from the REAL
-	# release point. Flat-plane solve: the loft only changes height.
-	var goal_z: float = _shot_aim_locked.z
-	var dz: float = goal_z - blade.z
-	var cross_x: float = INF
-	if absf(dir.z) > 0.001:
-		cross_x = blade.x + dir.x * (dz / dir.z)
-	var half: float = GameRules.NET_HALF_WIDTH
-	var verdict: String = "?"
-	if is_finite(cross_x):
-		verdict = "ON-NET" if absf(cross_x) <= half else "WIDE"
-	print("[SHOT] aim_x=%+.3f cross_x=%+.3f miss=%+.3f %s | blade=(%+.2f,%+.2f) assumed=(%+.2f,%+.2f) blade-assumed=%+.3f | offset=(%+.2f,%+.2f) range=%.1f" % [
-			_shot_aim_locked.x, cross_x,
-			(cross_x - _shot_aim_locked.x) if is_finite(cross_x) else 0.0, verdict,
-			blade.x, blade.z, assumed.x, assumed.z,
-			Vector2(blade.x - assumed.x, blade.z - assumed.z).length(),
-			_shot_release_offset_locked.x, _shot_release_offset_locked.z,
-			blade.distance_to(_shot_aim_locked)])
 
 
 # Pre-tilts aim_dir to compensate for the wind-up's lateral release
