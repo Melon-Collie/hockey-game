@@ -31,9 +31,6 @@ const _LIE_DEG: float = 42.0
 const _HOSEL_LEN_M: float = 0.085
 const _SHAFT_CROSS := Vector2(0.04, 0.05)
 const _KNOB_HEIGHT_M: float = 0.05
-const _STICK_FLEX_SHADER: Shader = preload("res://Shaders/stick_flex.gdshader")
-const _SHAFT_COLOR := Color(0.06, 0.06, 0.07)
-const _BLADE_COLOR := Color(0.05, 0.05, 0.05)
 # Load-and-release pulse amplitude per FLEX gear (whippy bows deepest) — the
 # preview's stand-in for charging a shot.
 const _FLEX_PULSE_AMP_M: Array[float] = [0.085, 0.060, 0.040]
@@ -362,15 +359,14 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	shaft_box.size = Vector3(_SHAFT_CROSS.x, _SHAFT_CROSS.y, 1.0)
 	shaft_box.subdivide_depth = 12  # the flex shader needs length-wise vertices
 	_shaft.mesh = shaft_box
-	_shaft_mat = ShaderMaterial.new()
-	_shaft_mat.shader = _STICK_FLEX_SHADER
-	_shaft_mat.set_shader_parameter(&"albedo", _SHAFT_COLOR)
-	_shaft_mat.set_shader_parameter(&"roughness", 0.4)
+	# The house design (paint + wordmark / carbon weave) comes from the same
+	# factory the rink uses, so the preview IS the in-game stick.
+	_shaft_mat = StickStyle.make_shaft_material()
 	_shaft.material_override = _shaft_mat
 	_turntable.add_child(_shaft)
 
 	_blade = MeshInstance3D.new()
-	_blade.material_override = _make_mat(_BLADE_COLOR, 0.5)
+	_blade.material_override = StickStyle.make_blade_material()
 	_turntable.add_child(_blade)
 
 	_tape_mesh = MeshInstance3D.new()

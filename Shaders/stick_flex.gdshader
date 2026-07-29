@@ -34,8 +34,22 @@ uniform vec4 grip_color : source_color = vec4(1.0);
 uniform float grip_len_m = 0.45;                         // wrap reach below the hand
 uniform float shaft_len_m = 1.3;                         // live rendered shaft length
 
+// Brand wordmark on the two wide (±X) faces, sampled by object-space position
+// like the grip — the box has no authored UVs and stretches per pose, so
+// texture placement is in real metres down the shaft. brand_len_m should be
+// height × texture aspect so the mark isn't stretched (StickStyle sets it).
+// Tape (grip paint) always wins where the two would overlap.
+uniform sampler2D brand_tex : source_color, filter_linear_mipmap;
+uniform vec4 brand_color : source_color = vec4(1.0);
+uniform float brand_from_hand_m = 0.5;
+uniform float brand_len_m = 0.163;
+
 // Candy-cane pitch: one full turn per this much shaft, half tape half bare.
 const float CANDY_PERIOD_M = 0.075;
+// Shaft cross-section half-extents (the 0.04 × 0.05 BoxMesh) — the side-face
+// test and the brand's vertical mapping read them.
+const float HALF_W = 0.02;
+const float HALF_H = 0.025;
 
 varying vec3 obj_pos;                                    // pre-flex object-space position
 
@@ -49,8 +63,9 @@ void fragment() {
 	vec3 col = albedo.rgb;
 	float rough = roughness;
 	float from_hand = (0.5 - obj_pos.z) * shaft_len_m;
+	bool taped = false;
 	if (grip_mode != 0 && from_hand < grip_len_m) {
-		bool taped = true;
+		taped = true;
 		if (grip_mode == 1) {
 			// Barber-pole spiral: tape band advances one turn per period.
 			float ang = atan(obj_pos.y, obj_pos.x) / (2.0 * PI);
@@ -59,6 +74,19 @@ void fragment() {
 		if (taped) {
 			col = grip_color.rgb;
 			rough = 0.9;  // cloth over composite
+		}
+	}
+	if (!taped && abs(obj_pos.x) > HALF_W * 0.98) {
+		float u = (from_hand - brand_from_hand_m) / brand_len_m;
+		if (u >= 0.0 && u <= 1.0) {
+			// Mirror on the −X face so the mark reads left-to-right from
+			// both sides of the stick.
+			if (obj_pos.x < 0.0) {
+				u = 1.0 - u;
+			}
+			float v = clamp(0.5 - obj_pos.y / (2.0 * HALF_H), 0.0, 1.0);
+			vec4 b = texture(brand_tex, vec2(u, v));
+			col = mix(col, brand_color.rgb, b.a);
 		}
 	}
 	ALBEDO = col;
