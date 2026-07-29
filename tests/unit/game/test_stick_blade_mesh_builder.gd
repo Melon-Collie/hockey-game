@@ -5,7 +5,7 @@ extends GutTest
 # the correct side per handedness, outward-facing winding on every strip
 # (an inverted quad order renders as a hole — generate_normals derives the
 # normals from the winding, so asserting normal direction pins both), and
-# the tape-band variant staying a proud heel→mid slice of the same curve.
+# the wrapped tape band staying a ribbed skin of the same curve.
 #
 # Plus the Skater rig integration: the scene's placeholder BoxMesh is
 # replaced with the generated mesh at the marker origin, a handedness flip
@@ -191,30 +191,62 @@ func test_winding_outward_every_strip() -> void:
 	assert_true(seen_heel_cap and seen_toe_cap, "both end caps sampled")
 
 
-func test_tape_band_is_proud_heel_slice() -> void:
+func _tape_mesh(span: Vector2) -> ArrayMesh:
+	return StickBladeMeshBuilder.build_tape(StickBladeMeshBuilder.Params.new(), span)
+
+
+func test_tape_wraps_hug_the_blade() -> void:
+	# The wrapped band stays a tight skin: proud of the blade face by at most
+	# the proud-wrap inflate, and never hanging below the sole by more than
+	# the sole cap (the old single inflated shell hung 4 mm under the blade
+	# and the blade rode on a tape shelf).
 	var p := StickBladeMeshBuilder.Params.new()
+	var span: Vector2 = StickTapeConfig.new().span_range()  # heel→mid default
 	var blade_verts: PackedVector3Array = _verts(StickBladeMeshBuilder.build(p))
-	var tape_verts: PackedVector3Array = _verts(_build(1.0, 0.004, -0.02, 0.62))
-	var blade_top: float = -INF
+	var tape_verts: PackedVector3Array = _verts(_tape_mesh(span))
 	var blade_x: float = 0.0
+	var blade_top: float = -INF
 	for v: Vector3 in blade_verts:
 		blade_top = maxf(blade_top, v.y)
 		if v.z > -0.09:
 			blade_x = maxf(blade_x, v.x)
-	var tape_top: float = -INF
 	var tape_x: float = 0.0
+	var tape_bottom: float = INF
+	var tape_top: float = -INF
 	var tape_z_min: float = INF
 	var tape_z_max: float = -INF
 	for v: Vector3 in tape_verts:
+		tape_bottom = minf(tape_bottom, v.y)
 		tape_top = maxf(tape_top, v.y)
 		tape_z_min = minf(tape_z_min, v.z)
 		tape_z_max = maxf(tape_z_max, v.z)
 		if v.z > -0.09:
 			tape_x = maxf(tape_x, v.x)
-	assert_gt(tape_top, blade_top + 0.002, "tape sits proud of the blade top")
-	assert_gt(tape_x, blade_x + 0.002, "tape sits proud of the blade face")
-	assert_gt(tape_z_max, 0.001, "tape overhangs the heel cap (no coplanar z-fight)")
-	assert_between(tape_z_min, -0.20, -0.17, "tape ends around 62% of the blade")
+	assert_gt(tape_x, blade_x + 0.0005, "tape sits proud of the blade face")
+	assert_lt(tape_x, blade_x + 0.0022, "…but stays a skin, not a shell")
+	assert_gt(tape_top, blade_top + 0.0005, "tape shows over the top edge")
+	assert_gt(tape_bottom, -p.height * 0.5 - 0.0008, "sole projection capped")
+	assert_gt(tape_z_max, 0.001, "heel span overhangs the heel cap (no z-fight)")
+	assert_between(tape_z_min, -0.20, -0.17, "band ends around 62% of the blade")
+
+
+func test_tape_renders_discrete_wraps() -> void:
+	# Each wrap band carries its own end caps, so a wrapped span shows ribbed
+	# seams instead of one smooth strip: many more ±Z-facing triangles than
+	# the two caps a single band would have.
+	var mesh: ArrayMesh = _tape_mesh(Vector2(-0.02, 1.0))  # FULL span
+	var verts: PackedVector3Array = _verts(mesh)
+	var norms: PackedVector3Array = _norms(mesh)
+	var cap_tris: int = 0
+	var tri_count: int = int(verts.size() / 3.0)
+	for t in tri_count:
+		if absf(norms[t * 3].z) > 0.9:
+			cap_tris += 1
+	assert_gt(cap_tris, 20, "many wrap-edge caps across the span")
+
+
+func test_tape_span_none_returns_null() -> void:
+	assert_null(_tape_mesh(Vector2(0.0, 0.0)), "degenerate span builds nothing")
 
 
 func test_hosel_extends_up_the_shaft_line() -> void:
@@ -285,6 +317,22 @@ func test_handedness_flip_regenerates_opposite_curve() -> void:
 	skater.is_left_handed = false
 	assert_lt(_mean_x(_verts(blade_mesh.mesh as ArrayMesh), -0.27), -0.008,
 			"flip to righty regenerates the -X curve")
+
+
+func test_tape_config_drives_the_tape_node() -> void:
+	var skater: Skater = _make_skater()
+	var blade_mesh: MeshInstance3D = skater.blade.get_node("MeshInstance3D") as MeshInstance3D
+	# A toe-span job builds a wrap over the toe half only.
+	skater.set_tape_config(StickTapeConfig.new(1, StickTapeConfig.Span.TOE, 1))
+	var tape: MeshInstance3D = blade_mesh.get_node_or_null("BladeTape") as MeshInstance3D
+	assert_not_null(tape, "tape node exists for a taped span")
+	var z_max: float = -INF
+	for v: Vector3 in _verts(tape.mesh as ArrayMesh):
+		z_max = maxf(z_max, v.z)
+	assert_lt(z_max, -0.14, "toe-span tape stays on the toe half")
+	# A bare job removes the node outright.
+	skater.set_tape_config(StickTapeConfig.new(1, StickTapeConfig.Span.NONE, 1))
+	assert_null(blade_mesh.get_node_or_null("BladeTape"), "bare blade has no tape node")
 
 
 func test_shaft_follow_pitch_tips_blade_with_raised_shaft() -> void:

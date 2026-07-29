@@ -60,6 +60,9 @@ var _player_name: String = ""
 var _jersey_number: int = 0
 var _text_color: Color = Color.BLACK
 var _text_outline_color: Color = Color.BLACK
+# Team accent (colors.primary) from the last apply_uniform — what TEAM-palette
+# tape picks resolve to, cached so a live tape change repaints without one.
+var _team_accent: Color = Color.WHITE
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
 var _shoulder_viewport: SubViewport
@@ -191,9 +194,10 @@ func apply_uniform(colors: Dictionary) -> void:
 	# Helmet — glossy hard plastic.
 	_helmet.material_override = _make_solid_mat(uniform.helmet, _ROUGH_HELMET)
 
-	# Blade — matte black with a team-colored tape band (colors.primary carries
-	# the team accent onto the tape) plus the cosmetic handed tilt.
-	_rebuild_blade(colors.primary)
+	# Blade — matte black with the player's tape job riding it (palette picks
+	# resolve against colors.primary, so TEAM picks track the kit).
+	_team_accent = colors.primary
+	_rebuild_blade()
 
 	# Stick shaft — near-black composite, satin finish, on the flex vertex
 	# shader (Shaders/stick_flex.gdshader). A ShaderMaterial PER SKATER, so
@@ -203,8 +207,8 @@ func apply_uniform(colors: Dictionary) -> void:
 	# rebuilds it on un-ghost — see apply_ghost's stick special case.
 	_skater.stick_mesh.material_override = _make_stick_shaft_mat()
 
-	# Butt-end knob — team accent, recreated here so the color tracks the kit.
-	_rebuild_stick_knob(colors.primary)
+	# Butt-end knob — recreated here so the tape color tracks the kit.
+	_rebuild_stick_knob()
 
 	# Gloves (hand spheres + cuffs, single solid color).
 	var gloves_mat: StandardMaterial3D = _make_solid_mat(uniform.gloves)
@@ -451,31 +455,46 @@ func _make_stick_shaft_mat() -> ShaderMaterial:
 	return mat
 
 
-# Paints the blade matte black and (re)builds the team-colored tape band wrapped
-# around the heel→mid of the blade, leaving the toe end bare black. The band's
-# geometry comes from the skater (Skater.build_blade_tape_mesh — a slightly
-# inflated heel→mid slice of the same procedural curved-blade mesh), so it hugs
-# the curve; on a handedness flip Skater._rebuild_blade_mesh regenerates the
-# band mesh in place. The cosmetic tilt lives on the rig
-# (Skater._apply_blade_tilt); the tape, being a child of the blade mesh,
-# inherits it.
-func _rebuild_blade(tape_color: Color) -> void:
+# Paints the blade matte black and (re)builds the tape wrap the skater's tape
+# job describes (Skater.tape_config: palette color + coverage span). The wrap
+# geometry comes from the skater (Skater.build_blade_tape_mesh — overlapping
+# wrap bands of the same procedural curved-blade mesh), so it hugs the curve;
+# on a handedness flip Skater._rebuild_blade_mesh regenerates the band mesh in
+# place. The cosmetic tilt lives on the rig (Skater._apply_blade_tilt); the
+# tape, being a child of the blade mesh, inherits it.
+func _rebuild_blade() -> void:
 	_blade_mesh.material_override = _make_solid_mat(_BLADE_COLOR, _ROUGH_BLADE)
 
 	if _blade_tape != null and is_instance_valid(_blade_tape):
 		_blade_mesh.remove_child(_blade_tape)
 		_blade_tape.queue_free()
+	_blade_tape = null
+	var tape_mesh: ArrayMesh = _skater.build_blade_tape_mesh()
+	if tape_mesh == null:
+		return  # bare blade — no tape node at all
 	_blade_tape = MeshInstance3D.new()
 	_blade_tape.name = "BladeTape"
-	_blade_tape.mesh = _skater.build_blade_tape_mesh()
-	_blade_tape.material_override = _make_solid_mat(tape_color, _ROUGH_CLOTH)
+	_blade_tape.mesh = tape_mesh
+	_blade_tape.material_override = _make_solid_mat(
+			TapeColorRegistry.resolve(_skater.tape_config.blade_color, _team_accent),
+			_ROUGH_CLOTH)
 	_blade_mesh.add_child(_blade_tape)
 
 
+# Re-renders the tape-colored pieces (blade wrap + knob) for a live tape-job
+# change without touching the rest of the uniform. Safe before the first
+# apply_uniform — the accent default just gets repainted when it lands.
+func refresh_tape() -> void:
+	_rebuild_blade()
+	_rebuild_stick_knob()
+
+
 # (Re)builds the butt-end knob cylinder, stored on the skater so update_stick_mesh
-# rides it on the shaft each tick. Recreated per uniform so the team accent color
+# rides it on the shaft each tick. Recreated per uniform so the knob's tape color
 # tracks kit changes — same pattern as the glove cuffs.
-func _rebuild_stick_knob(color: Color) -> void:
+func _rebuild_stick_knob() -> void:
+	var color: Color = TapeColorRegistry.resolve(
+			_skater.tape_config.knob_color, _team_accent)
 	if _skater.stick_knob_mesh != null and is_instance_valid(_skater.stick_knob_mesh):
 		_skater.upper_body.remove_child(_skater.stick_knob_mesh)
 		_skater.stick_knob_mesh.queue_free()

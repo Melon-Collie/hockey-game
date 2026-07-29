@@ -565,10 +565,11 @@ bottom-up.
 - **Picker rebuild**: two sliders (height, frame) + four 3-way gear
   selectors; presets keep working; legality UI simplifies away.
 - **Visual**: weight-driven bulk replaces tier limb tells; stick mesh
-  renders length + curve — the curve seam **already exists**:
-  `StickBladeMeshBuilder.Params` (curve_depth / curve_power /
-  toe_round_m, on main) declares itself the gear hook; open/closed
-  curves are a Params preset per option.
+  renders length + curve — the curve seam is **wired**:
+  `Skater.apply_blade_pattern` maps the CURVE gear to a
+  `StickBladeMeshBuilder.Params` preset (depth + power per option) from
+  `SkaterController.apply_attributes`, so the rendered blade matches the
+  pick on every peer.
 
 Suggested landing order: (1) body-plane rework with gear slots stubbed at
 balanced (neutral-identity test green end-to-end, protocol + prefs + bots

@@ -443,6 +443,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.return_to_lobby_received.connect(_on_return_to_lobby)
 	NetworkManager.local_identity_changed.connect(_on_local_identity_changed)
 	NetworkManager.local_attributes_changed.connect(_on_local_attributes_changed)
+	NetworkManager.local_tape_changed.connect(_on_local_tape_changed)
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.pickup_claim_rejected_received.connect(_on_pickup_claim_rejected)
@@ -1153,6 +1154,8 @@ func sync_existing_players(player_data: Array) -> void:
 					int(entry[12]), int(entry[13]), int(entry[14]))
 		else:
 			attrs = PlayerAttributes.all_average()
+		var tape_code: int = int(entry[15]) if entry.size() > 15 else StickTapeConfig.DEFAULT_CODE
+		NetworkManager.set_peer_tape_code(peer_id, tape_code)
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 		_registry.spawn(peer_id, team_slot, teams[team_id],
@@ -4450,6 +4453,19 @@ func _on_local_identity_changed(p_name: String, p_number: int, p_is_left: bool) 
 		record.skater.is_left_handed = p_is_left
 
 
+# Repaints the local skater's tape job live. Cosmetic and local-only — remote
+# peers keep rendering the tape code from this session's join handshake.
+func _on_local_tape_changed(tape_code: int) -> void:
+	if _registry == null:
+		return
+	var record: PlayerRecord = _registry.get_local()
+	if record == null:
+		return
+	record.tape_code = tape_code
+	if record.skater != null:
+		record.skater.set_tape_config(StickTapeConfig.from_code(tape_code))
+
+
 # Pushes new attribute multipliers into the live local controller. Always
 # updates the record (so the next respawn lands the new values), but only
 # touches the running controller when we're not in an active online match —
@@ -4858,7 +4874,8 @@ func _collect_existing_player_data() -> Array[Array]:
 				r.jersey_color, r.helmet_color, r.pants_color,
 				r.is_left_handed, r.player_name, r.jersey_number,
 				attrs.height, attrs.weight, attrs.profile,
-				attrs.curve, attrs.flex, attrs.length])
+				attrs.curve, attrs.flex, attrs.length,
+				r.tape_code])
 	return existing
 
 

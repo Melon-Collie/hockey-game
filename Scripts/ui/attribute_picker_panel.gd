@@ -22,22 +22,18 @@ extends VBoxContainer
 # height slider preserves the build's FRAME (its frame-t position in the band)
 # and recomputes pounds, so a lean build stays lean as it grows.
 #
-# Gear slots ride through the preset levels; each gains its selector when its
-# gameplay stage lands. Live: STICK LENGTH (levels[5]), BLADE CURVE
-# (levels[3]) and STICK FLEX (levels[4]) — three-way exclusive rows sharing
-# one builder. Skate profile (levels[2]) is stored but not yet editable.
+# Gear slots ride through the preset levels. SKATE PROFILE (levels[2]) is the
+# one gear row built here; the stick gear — CURVE (levels[3]), FLEX
+# (levels[4]), LENGTH (levels[5]) — is edited by StickEditorPopup, which the
+# host popup opens over this panel and funnels back into the working model via
+# get/set_pending_stick_gear, so stick edits share the same snapshot / commit
+# / revert cycle as everything else.
 
 signal changed
 
 # Hover tooltips. Headline effects only.
 const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the speed/agility/shot baselines.\nSmall = shiftier with quicker turns; big = longer reach & harder shot."
 const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = quicker first step, fast stamina recovery, easier to move.\nHeavy = harder hits & harder to move, deep but slow-refilling tank."
-const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
-const _LENGTH_LABELS: Array[String] = ["Short", "Standard", "Long"]
-const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to elevate.\nOpen = easy elevation & quick release, weak backhand."
-const _CURVE_LABELS: Array[String] = ["Closed", "Balanced", "Open"]
-const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
-const _FLEX_LABELS: Array[String] = ["Whippy", "Medium", "Stiff"]
 const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
 const _PROFILE_LABELS: Array[String] = ["Agility", "Balanced", "Power"]
 
@@ -79,8 +75,7 @@ var _height_slider: HSlider = null
 var _height_value_label: Label = null
 var _weight_slider: HSlider = null
 var _weight_value_label: Label = null
-# Gear selector button rows, keyed by the levels index they edit
-# (3 = curve, 4 = flex, 5 = length).
+# Gear selector button rows, keyed by the levels index they edit (2 = skates).
 var _gear_buttons: Dictionary = {}
 
 
@@ -115,11 +110,9 @@ func _build() -> void:
 
 	_build_height_row()
 	_build_weight_row()
-	# The four gear slots — all live. Each is a three-way exclusive choice
-	# (the loft-level pattern — discrete and chunky, never a slider).
-	_build_gear_row("Stick", _LENGTH_TOOLTIP, _LENGTH_LABELS, 5)
-	_build_gear_row("Curve", _CURVE_TOOLTIP, _CURVE_LABELS, 3)
-	_build_gear_row("Flex", _FLEX_TOOLTIP, _FLEX_LABELS, 4)
+	# Skates is the one gear row here — a three-way exclusive choice (the
+	# loft-level pattern, discrete and chunky, never a slider). The stick
+	# gear rows live in StickEditorPopup (see the header).
 	_build_gear_row("Skates", _PROFILE_TOOLTIP, _PROFILE_LABELS, 2)
 
 
@@ -377,6 +370,32 @@ func is_dirty() -> bool:
 # so there is nothing to gate. Kept for the host-API contract.
 func is_valid() -> bool:
 	return true
+
+
+# The active pending build's full attributes — what the stick editor previews
+# (its stick gear rides real height, so the popup needs the body too).
+func get_pending_attributes() -> PlayerAttributes:
+	if _active < 0 or _active >= _working.size():
+		return PlayerPrefs.get_player_attributes()
+	var levels: Array = _working[_active]["levels"]
+	return PlayerAttributes.new(int(levels[0]), int(levels[1]), int(levels[2]),
+			int(levels[3]), int(levels[4]), int(levels[5]))
+
+
+# Writes the stick editor's gear picks back into the active pending build —
+# same working-model edit as a gear button press, so is_dirty()/restore()
+# see it like any other change.
+func set_pending_stick_gear(curve: int, flex: int, length: int) -> void:
+	if _locked or _active < 0 or _active >= _working.size():
+		return
+	var levels: Array = _working[_active]["levels"]
+	if int(levels[3]) == curve and int(levels[4]) == flex and int(levels[5]) == length:
+		return
+	levels[3] = curve
+	levels[4] = flex
+	levels[5] = length
+	_refresh()
+	changed.emit()
 
 
 # ── Interaction ──────────────────────────────────────────────────────────────

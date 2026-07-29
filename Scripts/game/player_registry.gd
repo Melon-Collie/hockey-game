@@ -160,6 +160,10 @@ func spawn(
 	spawned.skater.set_skater_collision_provider(skaters)
 	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(player_name)
+	# Tape before uniform: the uniform paint resolves the tape job's palette
+	# picks, so it must find the replicated config already installed.
+	record.tape_code = NetworkManager.get_peer_tape_code(peer_id)
+	spawned.skater.set_tape_config(StickTapeConfig.from_code(record.tape_code))
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(player_name, jersey_number)
 	# Square the skater up to the puck on initial spawn — without this they

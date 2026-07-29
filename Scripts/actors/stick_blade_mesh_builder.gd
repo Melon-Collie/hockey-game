@@ -56,6 +56,10 @@ class Params:
 	var toe_kick_start_frac: float = 0.66
 	var curve_sign: float = 1.0        # +1 lefty, −1 righty (see doc block)
 	var inflate: float = 0.0           # grow the cross-section (tape band)
+	# How far the cross-section may grow BELOW the sole plane. Tape bands cap
+	# this near zero so the wrap hugs the bottom edge instead of hanging the
+	# whole inflate below the blade (the blade would ride on a tape shelf).
+	var sole_inflate_cap: float = INF
 	var u_start: float = 0.0           # span start, fraction heel→toe
 	var u_end: float = 1.0             # span end, fraction heel→toe
 	var segments: int = 16
@@ -92,24 +96,43 @@ const _HOSEL_SEGMENTS: int = 5
 
 
 # Station u values, heel→toe. Uniform across the body, then the toe-corner arc
-# gets its own stations (a span that stops short of the corner — the tape band —
-# never reaches them).
+# gets its own stations (a span that stops short of the corner — a heelward
+# tape wrap — never reaches them). A span living entirely inside the corner
+# arc collapses the body to its single start station.
 static func _stations(p: Params) -> PackedFloat32Array:
 	var n: int = maxi(p.segments, 2)
 	var us := PackedFloat32Array()
 	var corner_u: float = 1.0 - clampf(p.toe_round_m / maxf(p.length, 0.001), 0.0, 0.5)
 	var body_end: float = minf(p.u_end, corner_u)
-	for i in n + 1:
-		us.append(lerpf(p.u_start, body_end, float(i) / float(n)))
+	if body_end > p.u_start + 0.0001:
+		for i in n + 1:
+			us.append(lerpf(p.u_start, body_end, float(i) / float(n)))
+	else:
+		us.append(p.u_start)
 	for k in range(1, _TOE_ARC_SEGMENTS + 1):
 		var phi: float = (PI * 0.5) * float(k) / float(_TOE_ARC_SEGMENTS)
 		var u: float = 1.0 - p.toe_round_m * (1.0 - sin(phi)) / maxf(p.length, 0.001)
-		if u > body_end and u <= p.u_end:
+		if u > us[us.size() - 1] and u <= p.u_end:
 			us.append(u)
 	return us
 
 
 static func build(p: Params) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Flat shading: without this, generate_normals() averages normals across
+	# every shared corner position (default smooth group), blurring the top /
+	# face / cap directions into meaningless diagonals. Flat faces also match
+	# the game's low-poly box-and-cylinder art.
+	st.set_smooth_group(-1)
+	_emit_band(st, p)
+	st.generate_normals()
+	return st.commit()
+
+
+# One capped band of blade-shaped geometry into a caller-owned SurfaceTool —
+# the whole blade when the span is [0, 1], a single tape wrap otherwise.
+static func _emit_band(st: SurfaceTool, p: Params) -> void:
 	var us: PackedFloat32Array = _stations(p)
 	var n: int = us.size() - 1
 	# Station corner rings, heel→toe: front (+lateral) / back (−lateral),
@@ -142,10 +165,12 @@ static func build(p: Params) -> ArrayMesh:
 			half_th *= maxf(sqrt(maxf(1.0 - xp * xp, 0.0)), _TOE_TIP_WIDTH_FRAC)
 		# Vertical profile: flat bottom edge with a toe kick, a linear height
 		# taper heel→toe, and the top edge falling away on the toe-corner arc.
+		# The bottom edge only carries inflate down to the sole cap.
 		var half_h: float = p.height * 0.5 + p.inflate
 		var kick_t: float = clampf(
 				(uc - p.toe_kick_start_frac) / maxf(1.0 - p.toe_kick_start_frac, 0.001), 0.0, 1.0)
-		var bottom_y: float = -half_h + p.toe_kick_m * kick_t * kick_t
+		var bottom_y: float = -(p.height * 0.5 + minf(p.inflate, p.sole_inflate_cap)) \
+				+ p.toe_kick_m * kick_t * kick_t
 		var top_y: float = bottom_y + (half_h - bottom_y) * lerpf(1.0, p.height_toe_frac, uc)
 		if d_toe < p.toe_round_m and p.toe_round_m > 0.0:
 			var x: float = p.toe_round_m - d_toe
@@ -163,13 +188,6 @@ static func build(p: Params) -> ArrayMesh:
 		bt[i] = Vector3(back_x, top_y, back_z)
 		bb[i] = Vector3(back_x, bottom_y, back_z)
 
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Flat shading: without this, generate_normals() averages normals across
-	# every shared corner position (default smooth group), blurring the top /
-	# face / cap directions into meaningless diagonals. Flat faces also match
-	# the game's low-poly box-and-cylinder art.
-	st.set_smooth_group(-1)
 	for i in n:
 		_quad(st, bt[i], bt[i + 1], ft[i + 1], ft[i])  # top (+Y)
 		_quad(st, fb[i], fb[i + 1], bb[i + 1], bb[i])  # bottom (−Y)
@@ -180,6 +198,46 @@ static func build(p: Params) -> ArrayMesh:
 	else:
 		_quad(st, fb[0], bb[0], bt[0], ft[0])          # heel cap (+Z)
 	_quad(st, bb[n], fb[n], ft[n], bt[n])              # toe cap (−Z)
+
+
+# ── Tape ──────────────────────────────────────────────────────────────────────
+# Real cloth-tape proportions: ~2.4 cm-wide wraps laid heel→toe, each
+# overlapping the last by about half. Rendered as alternating snug/proud bands
+# so flat shading draws the wrap ridges; the proud radius (1.6 mm) is the
+# tape's whole projection off the blade face, and the sole cap keeps the
+# bottom edge within a taped-blade's real skim of the ice instead of a shelf
+# the blade rides on.
+const TAPE_WRAP_WIDTH_M: float = 0.024
+const _TAPE_WRAP_STEP_FRAC: float = 0.6    # advance per wrap, in wrap widths
+const _TAPE_INFLATE_SNUG_M: float = 0.0010
+const _TAPE_INFLATE_PROUD_M: float = 0.0016
+const _TAPE_SOLE_CAP_M: float = 0.0006
+const _TAPE_SEGMENTS: int = 2
+
+
+# The wrapped tape band over `span` (heel→toe u range, e.g.
+# StickTapeConfig.span_range()). `p` carries the blade geometry the wraps
+# follow — its inflate/u fields are overwritten per wrap. Returns null for a
+# degenerate span so callers can clear the tape node.
+static func build_tape(p: Params, span: Vector2) -> ArrayMesh:
+	var span_len: float = span.y - span.x
+	if span_len <= 0.001:
+		return null
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see build()
+	var width_u: float = TAPE_WRAP_WIDTH_M / maxf(p.length, 0.001)
+	var count: int = maxi(1, int(ceilf((span_len - width_u) / (width_u * _TAPE_WRAP_STEP_FRAC))) + 1)
+	# Even re-spacing so the last wrap ends exactly at span.y.
+	var step: float = (span_len - width_u) / float(count - 1) if count > 1 else 0.0
+	p.segments = _TAPE_SEGMENTS
+	p.sole_inflate_cap = _TAPE_SOLE_CAP_M
+	p.hosel_length = 0.0
+	for i in count:
+		p.u_start = span.x + step * float(i)
+		p.u_end = minf(p.u_start + width_u, span.y)
+		p.inflate = _TAPE_INFLATE_SNUG_M if i % 2 == 0 else _TAPE_INFLATE_PROUD_M
+		_emit_band(st, p)
 	st.generate_normals()
 	return st.commit()
 

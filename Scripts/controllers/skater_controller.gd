@@ -1235,6 +1235,9 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# the arm bone wrappers recompute visuals from these every frame, so no
 	# separate visual pass is needed.
 	stick_length              = _base_stick_length              * attrs.stick_len_mult()
+	# The CURVE gear's visual half — regenerates the blade mesh to the picked
+	# pattern (gameplay half is PlayerAttributes' loft/backhand leans).
+	skater.apply_blade_pattern(attrs.curve)
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
 	# Shoulder anchors track the visual shoulder balls, which the appearance

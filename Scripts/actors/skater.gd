@@ -85,12 +85,11 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # sqrt(1.30² − 0.87²) ≈ 0.97 m horizontal run → atan ≈ 42°, i.e. about a
 # real lie 5.5). The shaft-follow pitch reads deviation from this angle.
 @export var blade_lie_deg: float = 42.0
-# Tape band geometry: cross-section growth over the blade, heel overhang (the
-# band's heel cap sits proud of the blade's own — coplanar caps z-fight), and
-# where along the blade the bare toe starts.
-const _BLADE_TAPE_INFLATE_M: float = 0.004
-const _BLADE_TAPE_HEEL_OVERHANG_FRAC: float = -0.02
-const _BLADE_TAPE_END_FRAC: float = 0.62
+# The player's tape job (blade wrap color + coverage, knob color). Cosmetic —
+# set by PlayerRegistry from the replicated per-peer tape code before the
+# uniform is applied; SkaterUniformCoordinator resolves the palette picks
+# against the team accent when it paints. Never null after _init.
+var tape_config: StickTapeConfig = StickTapeConfig.new()
 @export var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
@@ -1090,11 +1089,44 @@ func blade_mesh_params(inflate: float, u_start: float, u_end: float,
 	return p
 
 
-# Tape-band mesh for the current blade geometry, heel-origin like the blade
-# mesh itself (the band node sits at the blade mesh's origin, untransformed).
+# Tape-band mesh for the current blade geometry and tape job, heel-origin like
+# the blade mesh itself (the band node sits at the blade mesh's origin,
+# untransformed). Null when the tape job leaves the blade bare.
 func build_blade_tape_mesh() -> ArrayMesh:
-	return StickBladeMeshBuilder.build(blade_mesh_params(
-			_BLADE_TAPE_INFLATE_M, _BLADE_TAPE_HEEL_OVERHANG_FRAC, _BLADE_TAPE_END_FRAC))
+	if not tape_config.has_blade_tape():
+		return null
+	return StickBladeMeshBuilder.build_tape(
+			blade_mesh_params(0.0, 0.0, 1.0), tape_config.span_range())
+
+
+# Installs a new tape job and refreshes the rendered tape (geometry here,
+# color via the uniform coordinator's tape repaint).
+func set_tape_config(config: StickTapeConfig) -> void:
+	if config == null:
+		return
+	tape_config = config
+	if _uniform != null:
+		_uniform.refresh_tape()
+
+
+# Blade pattern per CURVE gear (closed / balanced / open) — the visual half of
+# the gear whose gameplay half lives in PlayerAttributes (loft, backhand). The
+# balanced row is the shipped house pattern; closed straightens and delays the
+# bow, open deepens and advances it. Called from
+# SkaterController.apply_attributes, so the rendered blade matches the pick.
+# Public: StickEditorPopup builds its preview blade from the same rows.
+const BLADE_PATTERN_DEPTH: Array[float] = [0.014, 0.022, 0.030]
+const BLADE_PATTERN_POWER: Array[float] = [3.5, 3.0, 2.6]
+
+
+func apply_blade_pattern(curve_gear: int) -> void:
+	var g: int = clampi(curve_gear, 0, BLADE_PATTERN_DEPTH.size() - 1)
+	if is_equal_approx(blade_curve_depth, BLADE_PATTERN_DEPTH[g]) \
+			and is_equal_approx(blade_curve_power, BLADE_PATTERN_POWER[g]):
+		return
+	blade_curve_depth = BLADE_PATTERN_DEPTH[g]
+	blade_curve_power = BLADE_PATTERN_POWER[g]
+	_rebuild_blade_mesh()
 
 
 # Eases the elevation blend toward the loft level each tick and re-tilts the

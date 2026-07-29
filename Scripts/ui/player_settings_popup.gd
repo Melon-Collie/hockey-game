@@ -23,12 +23,17 @@ var _apply_btn: Button = null
 # its own snapshot/restore/commit; the popup just wires its `changed` signal
 # into _update_apply_state and gates Apply on its is_dirty()/is_valid().
 var _attr_panel: AttributePickerPanel = null
+# The stick workbench (gear + tape + live preview), opened over this popup by
+# the Edit Stick button. Its Done lands in the pending state here; this
+# popup's Apply/Cancel commit or discard it with everything else.
+var _stick_popup: StickEditorPopup = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
+var _pending_tape_code: int = StickTapeConfig.DEFAULT_CODE
 var _name_valid: bool = true
 var _number_valid: bool = true
 # The in-game on-screen keyboard for controller name entry (works on every
@@ -125,7 +130,42 @@ func _build() -> void:
 	# The panel brings its own on-screen keyboard for the preset name (this
 	# popup's is for the player name); hand it this form as the wall target.
 	_attr_panel.set_keyboard_background(self)
+	_build_stick_row(vbox)
 	_build_action_row(vbox)
+
+	_stick_popup = StickEditorPopup.new()
+	_stick_popup.stick_edited.connect(_on_stick_edited)
+	add_child(_stick_popup)
+
+
+func _build_stick_row(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(row)
+	var edit_btn := Button.new()
+	edit_btn.text = tr(&"STICK_EDIT_BUTTON")
+	edit_btn.custom_minimum_size = Vector2(180, 44)
+	edit_btn.add_theme_font_size_override("font_size", 17)
+	MenuStyle.wire_hover_scale(edit_btn)
+	SoundManager.wire_button(edit_btn)
+	edit_btn.pressed.connect(_open_stick_editor)
+	row.add_child(edit_btn)
+
+
+func _open_stick_editor() -> void:
+	# TEAM tape swatches resolve against the pending team pick, so the swatch
+	# previews the kit the player is about to wear.
+	var accent: Color = TeamColorRegistry.get_colors(
+			maxi(_pending_color_slot, 0), 0).primary
+	_stick_popup.set_focus_scope(self, null)
+	_stick_popup.open(_attr_panel.get_pending_attributes(), _pending_tape_code,
+			NetworkManager.is_in_online_match(), accent)
+
+
+func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> void:
+	_attr_panel.set_pending_stick_gear(curve, flex, length)
+	_pending_tape_code = tape_code
+	_update_apply_state()
 
 
 func _add_close_row(vbox: VBoxContainer) -> void:
@@ -351,6 +391,7 @@ func _update_apply_state() -> void:
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
 		or _pending_color_slot != _snapshot.get("color_slot", -1)
+		or _pending_tape_code != _snapshot.get("tape_code", StickTapeConfig.DEFAULT_CODE)
 		or attrs_dirty)
 	# The picker panel owns attribute validity (full budget on any touched build);
 	# name/number/etc. can apply on their own.
@@ -385,6 +426,11 @@ func _apply() -> void:
 		# the home team's actors and re-roll away if the new home collides.
 		NetworkManager.apply_preferred_color(_pending_color_slot)
 		preferred_color_changed.emit(_pending_color_slot)
+	if _pending_tape_code != _snapshot.get("tape_code", StickTapeConfig.DEFAULT_CODE):
+		PlayerPrefs.stick_tape_code = _pending_tape_code
+		# Updates the local peer's map entry and repaints the live skater via
+		# GameManager's local_tape_changed handler.
+		NetworkManager.apply_local_tape(_pending_tape_code)
 	if _attr_panel != null and _attr_panel.is_dirty():
 		# commit() writes the working presets + active index back into PlayerPrefs
 		# (which syncs the flat build) and returns the active PlayerAttributes.
@@ -413,6 +459,7 @@ func _restore_from_snapshot() -> void:
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
 	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
+	_pending_tape_code = _snapshot.get("tape_code", StickTapeConfig.DEFAULT_CODE)
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
@@ -440,6 +487,7 @@ func open() -> void:
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
 		"color_slot": saved_slot,
+		"tape_code": PlayerPrefs.stick_tape_code,
 	}
 	if _attr_panel != null:
 		_attr_panel.set_locked(NetworkManager.is_in_online_match())
