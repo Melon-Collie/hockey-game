@@ -28,9 +28,9 @@ const BLADE_COLOR := Color(0.05, 0.05, 0.05)
 const _BRAND_COLOR := Color(1.0, 1.0, 1.0)
 # Wordmark top edge sits below the deepest grip-tape reach (0.45 m), and its
 # length preserves the baked texture's aspect over the 0.05 m shaft height:
-# 0.05 × (512 / 157) ≈ 0.163.
+# 0.05 × (512 / 132) ≈ 0.194.
 const _BRAND_FROM_HAND_M: float = 0.5
-const _BRAND_LEN_M: float = 0.163
+const _BRAND_LEN_M: float = 0.194
 
 
 # The flex-shader shaft material with the house branding applied. Callers

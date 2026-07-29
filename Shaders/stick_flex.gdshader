@@ -42,7 +42,7 @@ uniform float shaft_len_m = 1.3;                         // live rendered shaft 
 uniform sampler2D brand_tex : source_color, filter_linear_mipmap;
 uniform vec4 brand_color : source_color = vec4(1.0);
 uniform float brand_from_hand_m = 0.5;
-uniform float brand_len_m = 0.163;
+uniform float brand_len_m = 0.194;
 
 // Candy-cane pitch: one full turn per this much shaft, half tape half bare.
 const float CANDY_PERIOD_M = 0.075;
