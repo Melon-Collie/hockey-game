@@ -72,3 +72,5 @@ TAPE_COLOR_TEAM_SHORT,Team,Equipo
 STICK_COL_GEAR,GEAR,EQUIPAMIENTO
 STICK_COL_TAPE,TAPE,CINTA
 STICK_PENDING_NOTE,Unapplied stick changes,Cambios del palo sin aplicar
+PLAYER_IDENTITY_HEADING,Identity,Identidad
+ATTRIBUTES_HEADING,Attributes,Atributos

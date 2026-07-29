@@ -90,7 +90,7 @@ func _ready() -> void:
 
 func _build() -> void:
 	var heading := Label.new()
-	heading.text = "Attributes"
+	heading.text = tr(&"ATTRIBUTES_HEADING")
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	MenuStyle.apply_heading(heading, 22)
 	add_child(heading)

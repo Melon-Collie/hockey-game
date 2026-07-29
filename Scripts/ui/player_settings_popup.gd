@@ -140,6 +140,14 @@ func _build() -> void:
 	build_col.add_theme_constant_override("separation", 16)
 	columns.add_child(build_col)
 
+	# Column heading mirroring the attribute panel's own "Attributes" one, so
+	# the two sides read as siblings.
+	var identity_heading := Label.new()
+	identity_heading.text = tr(&"PLAYER_IDENTITY_HEADING")
+	identity_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	MenuStyle.apply_heading(identity_heading, 22)
+	identity_col.add_child(identity_heading)
+
 	_build_name_section(identity_col)
 	_build_number_section(identity_col)
 	_build_handedness_section(identity_col)
