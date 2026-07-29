@@ -381,7 +381,7 @@ static func _pick_soonest_with_hysteresis(
 # (BREAKOUT_STRONG / OUTLET / FINISHER) and the trailing support
 # (BREAKOUT_WEAK / SUPPORT) — lets the peer that was the up-ice guy stay the
 # up-ice guy (and the trailer stay the trailer) through the rename. The bonus
-# is only HYSTERESIS_PENALTY_S (0.12 s), so a genuine kinematic advantage still
+# is only HYSTERESIS_PENALTY_S, so a genuine kinematic advantage still
 # swaps them; it only settles the near-ties that used to flicker. Every other
 # slot maps to itself (exact-match, unchanged).
 static func _hysteresis_class(slot: int) -> int:

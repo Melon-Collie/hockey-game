@@ -9,13 +9,13 @@ class_name AIRoleDefenseman
 #     and WALK IT: a small lateral argmax opens a shooting lane (lane_clear
 #     toward the net — the "walking the line" technique: move to open the
 #     lane, don't stand in cover). The strong point sinks down his wall as
-#     the cycle goes low (the researched staggered pair); every candidate is
-#     hard-bounded by the race home (never pinned so deep a counter beats
-#     you back — the keep-in insurance).
-#   FORECHECK line pair (DP_STRONG / DP_WEAK) — hold the offensive blue line
-#     inside the dots, per lane, sagging down the NZ exactly like the 3v3
-#     forecheck's F3 when the race home stops being winnable (a stretch
-#     threat lurking behind the line pulls the pair off it).
+#     the cycle goes low (the researched staggered pair); the chosen stand is
+#     then bounded by the shared pinch read (never held with a man behind you
+#     and nobody covering — the keep-in insurance).
+#   FORECHECK line pair (DP_STRONG / DP_WEAK) — pinch to the top of the
+#     end-zone circles, per lane, and abandon it for the defensive home post
+#     the moment their breakout is genuinely under way — exactly like the 3v3
+#     forecheck's F3, which runs the same read.
 #   TRANS_DO safety valve (DVALVE) — trail the rush centrally about a zone
 #     behind the play, capped by the race-home radius: always the reset
 #     option, never beaten home.
@@ -43,11 +43,10 @@ const POINT_WEAK_LANES_U: Array[float] = [6.0, 4.5, 3.0, 1.5, 0.0]
 # Forecheck line pair lanes (world-x magnitude, inside the dots).
 const DP_STRONG_LANE_X_M: float = 6.7
 const DP_WEAK_LANE_X_M: float = 5.0
-# Deepest pinch of the forecheck line pair: the top of the end-zone circles
+# Pinch stand of the forecheck line pair: the top of the end-zone circles
 # (dots 6.1 m off the goal line + the 4.57 m circle radius) — the standard
-# forecheck-D pinch depth. The line pair PLAYS between here and its own
-# blue-line/NZ sag; where on that lane it actually stands is decided by the
-# race-home feasibility each tick, never by this cap.
+# forecheck-D pinch depth, and the stand the pair holds whenever the pinch read
+# lets it (see _decide_line_hold).
 const DP_PINCH_DEPTH_M: float = 10.7
 # DVALVE: how far behind the play the valve trails, and its goal-line cap.
 const DVALVE_TRAIL_M: float = 10.0
@@ -116,13 +115,10 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var teammates: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammates)
-	var our_net: Vector3 = ctx.defending_goal_pos
-	# Keep-in insurance: every stand must contain the counter-attack paths —
-	# a pinned point that can't recover is the odd-man rush factory the
-	# exposure term prices for the carrier (§6); off-puck we simply refuse
-	# the spot. Path-intercept read (see fill_counter_channels): puckless
-	# high coverage doesn't chase the point off the line, a genuine stretch
-	# threat still does.
+	# Keep-in insurance is NOT in this argmax: the walk picks the best shot
+	# lane, and offensive_station_target below decides whether that stand is
+	# holdable at all (puckless high coverage doesn't chase the point off the
+	# line; a man genuinely behind it, with nobody covering, does).
 	# The strong point sinks a row down his wall when the cycle is low —
 	# puck depth measured off the ATTACKED goal line (depth_of takes the
 	# reference net's z; opp_net is the net whose zone we're cycling).
@@ -203,22 +199,14 @@ static func _wall_rim_keepin(ctx: RoleContext, side: float) -> Vector3:
 	return stand
 
 
-# ── FORECHECK: play the lane between the pinch and the sag ──────────────────
-# The 3v3 forecheck-F3 bounded hold, applied per lane for the D pair — but
-# the stand is no longer glued to the blue line. The lane's FORWARD CAP is
-# the pinch depth (top of the end-zone circles); where the D actually stands
-# is the most forward race-home-feasible point on his lane, re-read every
-# tick:
-#   · opponents collapsed low with no breakout forming → their counter
-#     channels are slow → the whole lane is feasible → the D pinches to the
-#     circle top, real pressure instead of blue-line statuary;
-#   · a live wall battle → the channels bind mid-lane → the classic line
-#     stand emerges at the feasibility boundary;
-#   · a breakout FORMING (carrier gathering speed, still in his zone) → the
-#     set-arrival margin collapses the radii while the puck is still exiting
-#     → the stand sags down the NZ toward home — the early back-off that
-#     lets the pair gap up instead of holding the line until beaten (the
-#     retreat collapses toward the middle, where a sagging D belongs).
+# ── FORECHECK: pinch on the lane, or go home ────────────────────────────────
+# The shared offensive-station pinch read (offensive_station_target), applied
+# per lane for the D pair — the stand is not glued to the blue line. While the
+# read allows the pinch the D stands at DP_PINCH_DEPTH_M on his lane (the circle
+# top — real pressure instead of blue-line statuary); the moment their breakout
+# is genuinely under way (Mode.RUSH with the puck theirs) he abandons it for his
+# defensive home post. There is no intermediate stand on the lane: the pinch
+# read is categorical, so the pair either presses or backs out.
 static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var own_dir: float = ctx.own_goal_dir

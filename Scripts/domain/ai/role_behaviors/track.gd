@@ -175,9 +175,9 @@ static func _post(ctx: RoleContext, read: AIRushRead, side: float) -> Vector3:
 	return p if AIRoleHelpers.is_legal_position(p) else our_net - axis * depth
 
 
-# The most dangerous attacker (excluding the carrier) on my side of centre and
-# not already owned goal-side by a teammate. Lane ownership, not man-marking:
-# whoever enters my ice is mine while he is in it.
+# The attacker (excluding the carrier) nearest our net on my side of centre.
+# Lane ownership, not man-marking: whoever enters my ice is mine while he is in
+# it, and the deepest man in it is the one who gets covered.
 static func _man_in_my_lane(ctx: RoleContext, read: AIRushRead,
 		side: float) -> Vector3:
 	var best: Vector3 = Vector3.INF

@@ -13,13 +13,12 @@ class_name AIRoleForecheck
 #     would concede it.
 #   F3 (is_high = true)  — high safety, strong side. The one conservative
 #     role: the designated first-man-back if the forecheck fails. Holds the
-#     opp blue line ONLY while it can still win the race home — the real
-#     "can I pinch?" read a defenseman makes. A stretch opponent lurking
-#     behind the line, or any opponent whose momentum beats F3's
-#     standing-start sprint to our net, sags the hold point back down the
-#     wall until the race is winnable again (see _decide_high). A fixed
-#     blue-line anchor was a permanent pinch: one chip past it was a
-#     breakaway with only the goalie home.
+#     opp blue line only while the shared pinch read allows it — the real
+#     "can I pinch?" read a defenseman makes. A man genuinely behind the line
+#     with nobody covering, or their breakout actually under way, drops him to
+#     his defensive home post instead (see _decide_high). A fixed blue-line
+#     anchor was a permanent pinch: one chip past it was a breakaway with only
+#     the goalie home.
 #
 # Nobody is offside during a forecheck. We turned the puck over after a
 # legal zone entry, so the whole team is onside as long as the puck
@@ -86,12 +85,9 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 	var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
 	var wall_x: float = ctx.strong_x * (GameRules.RINK_HALF_WIDTH - F3_WALL_INSET_M)
 
-	# The pinch read: hold the blue-line stand while it contains every
-	# counter path (fill_counter_channels — outlet flight + carry, raced to
-	# the first path station F3 can reach set). Opponents bottled deep keep
-	# the line; a breakout threat or a stretch man lurking behind it sags
-	# the hold down the retreat line toward home — sag-to-even, exactly as
-	# far as the developing counter demands.
+	# The pinch read (AIRoleHelpers.may_hold_forward_stand): opponents bottled
+	# deep keep the line; their breakout genuinely under way, or a man behind
+	# the stand with nobody covering, sends F3 back to his home post.
 	var line_stand := Vector3(wall_x, 0.0, blue_z)
 	# F3_HIGH exists only in the 3v3 slot table (5v5's forecheck uses the DP pair
 	# plus F2_STRONG/_WEAK), and with three skaters and no D pair he IS the team's
