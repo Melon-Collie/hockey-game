@@ -164,20 +164,21 @@ const ACCEL_CLAMP_M_S2: float = 14.0
 # intercept point, so the stick stays on the puck's path. The catch is decided by
 # blade squareness + the puck's RELATIVE speed — its speed in the RECEIVER'S frame
 # (puck − skater velocity; #373), the blade's own velocity still ignored. The bot
-# collects a fast puck by settling square on the line (see _pass_receive_aim_and_steer):
-# the arrival brake drops its own velocity to ~0 at contact, so relative ≈ world
-# there and squaring the blade is what collects it. Actively GIVING with the puck
-# (retreating to cut the closing speed under the catch ceiling) is a skating read the
-# relative model now allows but the bot doesn't yet exploit.
+# collects a fast puck by squaring on the line (see _pass_receive_aim_and_steer),
+# IN STRIDE by default — the arrival brake is only forced when the bot would
+# otherwise arrive early enough to carry its blade past the line before the puck
+# shows up, or when its own closing speed would stack over the catch ceiling.
+# Squaring is what collects it; stopping is a wait, not a technique.
 const LOOSE_PUCK_TRACK_SPEED_M_S: float = 8.0
 
 # Pass-receive setup. When a fast loose puck (~pass) is heading near
 # us along a straight trajectory, we stand offset to the SIDE of the
 # puck's path so the stick spans perpendicular to the puck's velocity,
 # putting the blade face square to the incoming line. Squaring is judged
-# in the RECEIVER's frame (#373), but the arrival brake settles the bot
-# to ~zero velocity at contact, so its frame ≈ the world frame there and
-# squaring to the world line is correct. That maximizes PuckReceptionRules'
+# in the RECEIVER's frame (#373) — a receiver taking the feed in stride
+# carries its own velocity into that frame, which is why the closing-speed
+# ceiling is a separate check and not something squaring alone covers.
+# That maximizes PuckReceptionRules'
 # alignment bonus (up to +8 m/s at head-on), letting bots collect hard
 # feeds that would otherwise bounce. See _pass_receive_aim_and_steer.
 #
@@ -1487,6 +1488,7 @@ var debug_last_decision: String = ""
 # AIController.SHOW_DEBUG_LABEL derives from this so the flag lives in ONE place —
 # flip it here to turn the labels back on.
 const DEBUG_DECISIONS: bool = false
+
 
 # Per-tick decision-scoring readout for the floating debug label.
 # Populated by `_pick_action` every tick; AIController polls and
@@ -3382,9 +3384,13 @@ func _aim_target_for_intent(snapshot: WorldSnapshot, self_pos: Vector3) -> Vecto
 # `self_pos` heading toward `aim_world`. Used
 # to put the mouse close to the bot in the correct DIRECTION for an
 # upcoming shot/pass, so it converges quickly under the motion model.
-# Distance to the actual aim point doesn't matter — the shot direction
-# at fire time depends on (mouse - shoulder) or (mouse - blade), which
-# is a unit direction.
+# This is a PRE-AIM target only. It is safe to collapse the distance here
+# because the charged release rebuilds its own cursor from the wind-up
+# endpoints and takes its direction from the charge drag — but it is NOT a
+# usable release cursor: release_wrister's is_quick_pass branch aims
+# blade→cursor, and the blade is the ROM-projection of that same cursor, so
+# a cursor this close to the body carries no direction at all (see the snap
+# in _state_pass_pressed's one-tick branch).
 #
 # Returns the FINAL aim point — the pre-aim convergence check
 # (`_state_carry`) compares the mouse against this to decide when to
@@ -3789,6 +3795,23 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		# Release this tick: shoot_held drops, SkaterStateMachine's
 		# _state_wrister_aim sees not shoot_held → release_wrister fires
 		# with the committed power and sweep direction.
+		#
+		# RE-DERIVE the direction from where the puck ACTUALLY is. The aim was
+		# locked at press entry against a PREDICTED release (the projected body
+		# plus the scored offset) while the puck leaves from the live blade, and
+		# the two disagree in two ways that both put shots off the net:
+		#   - with no committed release offset the blade is frozen at the CURRENT
+		#     carry pose, most of a stick off-centre (measured 1.2-1.8 m from the
+		#     assumed release, against 0.12-0.72 m when an offset was committed);
+		#   - on a sharp-angle look the shot runs nearly parallel to the goal
+		#     line, so even 15 cm of release DEPTH error swings the crossing
+		#     point over half a metre (measured: a 0.16 m gap became a 0.64 m
+		#     miss from the side of the net).
+		# This is not re-deciding: the aim POINT and the committed execution
+		# error both stay locked, so a shuffling goalie still cannot flip the
+		# chosen arc mid-swing. It aims at the same target from where the puck
+		# actually sits, which is what the wind-up was supposed to deliver.
+		_retarget_release_dir(input, snapshot, self_pos)
 		input.shoot_held = false
 		_set_state(State.CARRY)
 
@@ -3836,6 +3859,32 @@ func _wind_up_endpoint_offsets(aim_dir: Vector3, aim_distance_m: float, wind_up_
 	}
 
 
+# Re-points the committed release direction from the live blade to the locked
+# aim point, carrying the same per-release execution error the press sampled.
+# No-op when no aim was locked (the continuous-geometry fallback path) or the
+# blade is unavailable, so those keep the press-entry direction.
+func _retarget_release_dir(input: InputState, snapshot: WorldSnapshot,
+		self_pos: Vector3) -> void:
+	if not _shot_aim_locked.is_finite():
+		return
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state == null:
+		return
+	var blade: Vector3 = self_state.blade_contact_world
+	if blade == Vector3.ZERO:
+		blade = self_pos
+	var aim_vec := Vector3(
+			_shot_aim_locked.x - blade.x, 0.0, _shot_aim_locked.z - blade.z)
+	if aim_vec.length_squared() < 0.0001:
+		return
+	# The SAME committed error the press drew — re-aiming must not re-roll the
+	# execution dice, or the tier's spread would be sampled twice per shot.
+	if _committed_aim_error_rad != 0.0:
+		aim_vec = aim_vec.rotated(Vector3.UP, _committed_aim_error_rad)
+	_shoot_aim_dir_locked = aim_vec.normalized()
+	input.bot_wrister_aim_dir = _shoot_aim_dir_locked
+
+
 # Pre-tilts aim_dir to compensate for the wind-up's lateral release
 # offset. With symmetric perp offsets on both endpoints (start and
 # target both at +perp*SIDE_OFFSET), the puck releases SIDE_OFFSET meters
@@ -3877,12 +3926,14 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		return
 
 	# Dump override: a last-resort fling at a LOCATION, not a receiver. Force the
-	# one-tick quick release (fixed ~14 m/s — well short of the ~50 m an icing
-	# clear needs, so it settles in the neutral zone, not down the ice) and lift
-	# it by kind: HIGH to chip the DZ clear over sticks into the neutral zone, LOW
-	# to flip a dump-in into the corner. Elevation is set directly here (not via
-	# the saucer flag) so the quick release below reads it; done in the press
-	# state, after _state_carry has stopped clobbering the pass fields.
+	# one-tick quick release (fixed quick-pass pace) and lift it by kind: HIGH to
+	# chip the DZ clear over sticks into the neutral zone, LOW to flip a dump-in
+	# into the corner. Elevation is set directly here (not via the saucer flag) so
+	# the quick release below reads it; done in the press state, after _state_carry
+	# has stopped clobbering the pass fields.
+	# `_dump_target` is an AIM point, not where the puck stops: at the quick-pass
+	# pace the puck's runout under PUCK_ICE_DECEL_M_S2 exceeds the rink, so a dump
+	# runs until the boards take the speed out of it.
 	var is_dump: bool = _dump_target.is_finite()
 	if is_dump:
 		_pass_should_charge = false
@@ -3928,6 +3979,32 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		# fights itself (_mouse_pos walks halfway to each in turn) and
 		# produces noisy cursor deltas, which the charge tracker reads as
 		# bizarre release directions on long charged passes.
+		#
+		# SNAP the cursor ONTO the aim before firing, the same reset
+		# SHOOT_PRESSED and the charged pass do at press entry — this
+		# release happens on the tick it is decided, so a motion-limited
+		# step (MOUSE_MAX_SPEED_M_S, ~0.83 m per tick) would fire from
+		# wherever the carry left the cursor. Two things break without it,
+		# and a dump is the only release that takes this path:
+		#   DIRECTION — the carry cursor sits on the CARRY_BLADE_AIM_FORWARD_M
+		#     ring at the protect seam, so the release left on the puck's
+		#     shielding side rather than the scored line (worst exactly when
+		#     it matters: a dump commits under pressure, which is when the
+		#     protect swing is widest). Pre-aim can't cover this — Aim-B2's
+		#     reach-cone shortcut commits on the first dispatch, by design.
+		#   CONDITIONING — release_wrister's is_quick_pass branch aims
+		#     blade→cursor, and apply_blade_from_mouse resolves the blade by
+		#     ROM-projecting that same cursor on the same tick. A cursor
+		#     inside the stick's reach projects to ~itself, collapsing the
+		#     difference onto the blade's lateral carry offset, so the
+		#     direction stopped depending on the target at all. This is why
+		#     the aim must land on the TARGET and not on the aim ring, which
+		#     is well inside that degenerate band.
+		# The step call stays so _step_mouse_internal's cache (the
+		# skipped-tick re-shape path) still sees this target; post-snap it
+		# resolves to the aim exactly.
+		_mouse_pos = Vector3(clean_pass_aim.x, 0.0, clean_pass_aim.z)
+		_mouse_pos_initialized = true
 		input.mouse_world_pos = _step_mouse_toward(clean_pass_aim)
 		if DEBUG_DECISIONS:
 			debug_last_decision = ("DUMP%s" % ("↝corner" if _dump_is_soft

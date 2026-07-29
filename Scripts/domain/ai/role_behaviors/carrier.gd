@@ -455,6 +455,13 @@ var shot_release_offset: Vector3 = Vector3.ZERO
 # state machine to drive steering during CARRY.
 var last_carry_anchor: Vector3 = Vector3.ZERO
 
+# How far down the chosen launch line the dump's aim point is placed. Distance
+# is not direction, but it has to clear the blade: the quick release aims
+# blade->cursor and the blade is the ROM-projection of that same cursor, so a
+# cursor inside the stick's reach carries no direction at all. Comfortably
+# outside any reach.
+const DUMP_AIM_STANDOFF_M: float = 20.0
+
 # Set when intent commits to DUMP: the world spot to fire the puck at (no
 # receiver), and the delivery kind — a soft flip (dump-and-chase into the OZ
 # corner), a FLAT rim up our own wall (5v5 — the bank-pass delivery the wall
@@ -600,6 +607,9 @@ var _scratch_teammate_ids: Array[int] = []
 # opponent's threat in the turnover-cost term (the carrier just got
 # beat, so they don't count). Rebuilt once per _pick_action.
 var _scratch_our_defenders: Array[Vector3] = []
+# Caller-owned out-param for the dump-in landing solve, so the release search
+# returns its resting spot without allocating on the compete path.
+var _scratch_dump_landing: Array[Vector3] = [Vector3.ZERO]
 # Teammate ETAs to the counter point (transition exposure, 5v5) — rebuilt
 # with _scratch_our_defenders, candidate-invariant across one compete.
 var _scratch_exposure_mate_etas: Array[float] = []
@@ -2567,172 +2577,120 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	return [maxf(best_score, 0.0), best_pos, best_score]
 
 
-# Last-resort DUMP, zone-gated. Returns [dump_value, target, is_soft]; -INF when no
-# dump applies here (own-side neutral zone, or already in the OZ):
-#   - In our own DZ → clear out to the neutral-zone strong-side boards (hard rim).
-#   - Past centre (non-icing) but short of the blue line → dump-and-chase into the
-#     far offensive corner (soft flip), when the chase is winnable.
+# Last-resort DUMP, zone-gated. Returns
+# [dump_value, aim_point, is_soft, is_rim, settle_point]; -INF when no dump
+# applies here (own-side neutral zone, or already in the OZ).
 #
-# dump_value (absolute, same currency as carry) = gain − concede:
-#   - concede = turnover_cost(target, 1−recovery), the danger handed over at the safe
-#     dump spot (≈0 deep in their end, small at centre). recovery is the race to the
-#     dumped puck, so a dump self-suppresses when the chase isn't winnable.
-#   - gain = offensive upside, dump-in ONLY: recovery × position_potential(corner) ×
-#     chase_decay (winning the zone). A clear gains nothing, so its value is just
-#     −concede, a small negative.
-# It competes against the RAW carry — now honest, since carry candidates price their
-# strip at the tight point ON the route (carry_strip_point), so a doomed carry reads
-# honestly negative and an escapable one positive. The dump wins exactly when even
-# the best carry is worse than conceding at a safe spot AND no qualified fire
-# out-values the concession (see the retention_hopeless compete in _pick_action):
-# a last resort, no threshold.
+# The aim point and the settle point are DIFFERENT and both are returned. The
+# aim is where the stick points (a standoff down the launch line); the settle is
+# where the puck ends up, which is what every EV term below is priced at. They
+# used to be the same number doing both jobs, which is the defect this rewrite
+# exists to remove.
+#
+# Both dumps are chosen by SEARCHING RELEASES (AIActionScoring.solve_dump_clear /
+# solve_dump_in) and pricing where the puck actually comes to rest, not by aiming
+# at a hand-placed spot and pricing the concession there. A dump at any pace the
+# bot can produce out-slides the rink several times over, so the aim point is a
+# place the puck passes through at speed — pricing the giveaway there understated
+# it wherever the aim was far from our net, which is why a clear read cheap enough
+# to beat carries that had real space.
+#
+# The two dumps are different errands and are priced as such:
+#   DZ CLEAR — aimed at neutral ice and refused outright if it would reach their
+#     goal line, so a clear that exists is one that stays in play.
+#   NZ DUMP-IN — an offensive play. Get it deep, win it back, forecheck. Its
+#     gain is the race, and it cannot be icing by construction (offered only
+#     past the red line; icing needs a release from our own half).
+#
+# The 5v5 two-leg rim pricing this replaced is gone rather than ported. It
+# existed to price a bank the release could not actually execute — the route was
+# scored out to a wall waypoint and down it while the puck was fired at the
+# chord — and a searched release makes the distinction meaningless: a launch
+# angled into the near boards IS the rim, and the landing solver walks the real
+# carom instead of a modelled one.
 func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
 	var defending_goal: Vector3 = ctx.defending_goal_pos
-	var target: Vector3
-	var is_soft: bool
 	var in_own_zone: bool = AIActionScoring.in_offensive_zone(self_pos, defending_goal)
-	if in_own_zone:
-		target = AIActionScoring.dump_clear_target(
-				self_pos, -ctx.own_goal_dir, ctx.self_velocity)
-		is_soft = false
-	elif AIActionScoring.past_center_toward_attack(self_pos, attacking_goal) \
-			and not AIActionScoring.in_offensive_zone(self_pos, attacking_goal):
-		target = AIActionScoring.dump_in_target(
-				self_pos, attacking_goal, ctx.self_velocity)
-		is_soft = true
-	else:
-		return [-INF, Vector3.INF, false, false]
+	var past_center: bool = AIActionScoring.past_center_toward_attack(
+			self_pos, attacking_goal)
+	if not in_own_zone and not (past_center
+			and not AIActionScoring.in_offensive_zone(self_pos, attacking_goal)):
+		return [-INF, Vector3.INF, false, false, Vector3.INF]
 
+	var origin: Vector3 = _pass_origin(ctx)
 	# Our chasers = teammates + ourselves; theirs = the opponents already gathered.
 	_scratch_our_chasers.clear()
 	for d: Vector3 in _scratch_our_defenders:
 		_scratch_our_chasers.append(d)
 	_scratch_our_chasers.append(self_pos)
+
+	var launch: Vector3
+	var settle: Vector3
+	var is_soft: bool
+	if in_own_zone:
+		# HIGH is doctrine here rather than a searched axis: the clear's job is to
+		# leave the zone, and the loft is what carries it over the sticks between
+		# us and the blue line. It buys no time (an airborne leg spends no
+		# friction) — it buys passage.
+		is_soft = false
+		launch = AIActionScoring.solve_dump_clear(
+				origin, -ctx.own_goal_dir, AIActionScoring.PASS_SPEED_M_S,
+				ShotMechanics.ELEVATION_HIGH)
+		if launch == Vector3.ZERO:
+			# Every launch reaches their goal line: there is no legal clear from
+			# here. Decline rather than ice it — the carry/pass compete is a
+			# better place to lose the puck than a whistle in our own end.
+			return [-INF, Vector3.INF, false, false, Vector3.INF]
+		settle = AITrajectory.puck_release_landing(origin, launch,
+				AIActionScoring.dump_loft_hang_s(ShotMechanics.ELEVATION_HIGH)).origin
+	else:
+		is_soft = true
+		_scratch_dump_landing[0] = origin
+		launch = AIActionScoring.solve_dump_in(
+				origin, attacking_goal, AIActionScoring.PASS_SPEED_M_S,
+				ShotMechanics.ELEVATION_LOW,
+				_scratch_our_chasers, _scratch_opponents, _scratch_dump_landing)
+		if launch == Vector3.ZERO:
+			return [-INF, Vector3.INF, false, false, Vector3.INF]
+		settle = _scratch_dump_landing[0]
+
+	# Everything below prices the RESTING spot.
 	var recovery: float = AIActionScoring.chase_recovery(
-			target, _scratch_our_chasers, _scratch_opponents)
+			settle, _scratch_our_chasers, _scratch_opponents)
 	var concede: float = AIActionScoring.turnover_cost(
-			target, 1.0 - recovery, defending_goal, our_goalie,
+			settle, 1.0 - recovery, defending_goal, our_goalie,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
-	concede += _counter_exposure_cost(ctx, target, 1.0 - recovery,
+	concede += _counter_exposure_cost(ctx, settle, 1.0 - recovery,
 			ctx.self_pos, our_goalie)
-	var nearest_our: float = INF
-	for c: Vector3 in _scratch_our_chasers:
-		nearest_our = minf(nearest_our, c.distance_to(target))
-	# Whoever meets the cleared/dumped puck races it at our own top speed
-	# — a faster chaser reaches it sooner, so the decay bites less.
-	var chase_decay: float = AIActionScoring.delay_discount(
-			nearest_our / maxf(ctx.self_max_speed, 0.001))
-	var value: float = AIActionScoring.position_potential(
-			target, attacking_goal, _scratch_opponents)
+	# Only the DUMP-IN earns a gain. It is an offensive errand — get it deep, win
+	# it back — so it is paid for the race it is trying to win.
+	#
+	# The CLEAR is left as a pure concession, and the recovery race reaches its
+	# value through `concede` instead: a winger posted where the puck comes to
+	# rest raises recovery, which lowers what we hand over. Paying the clear a
+	# gain term as well was measured to break the compete — it made a clear score
+	# positive outright, so it beat CARRYING in situations with a clean regroup
+	# available, which is the dump-with-space failure in reverse. What a
+	# recovered clear is worth in the carry's own currency is a live calibration
+	# question, not something to settle with a term that happens to balance.
 	var gain: float = 0.0
 	if is_soft:
-		# Dump-and-CHASE into the OZ corner.
-		gain = recovery * value * chase_decay
-	elif ctx.team_size >= 5 and in_own_zone:
-		# The rim family (5v5 — breakout plan §B): the own-zone clear is a
-		# DELIVERY, not a pure concession — the wall target is exactly where
-		# the half-wall winger posts (Phase A guarantees the post is manned
-		# through the retrieval), and chase_recovery already races OUR bodies
-		# against theirs at the exit. Two deliveries compete:
-		#   RIM — flat and hard along the wall to the target. Receivable at
-		#     pace by the posted winger, but a stick in the wall lane picks
-		#     it off: completion = the lane model over the actual flight.
-		#   CHIP — the HIGH flip over every stick into the same ice. Nothing
-		#     intercepts it in flight (it clears blades the way the saucer
-		#     does, higher), but nobody can PLAY it in flight either, and it
-		#     lands as a bouncing 50/50 — the receiving side pays the HIGH
-		#     loft's full hang time (2·vy/g, the airborne+settle window the
-		#     rim's on-the-tape arrival never pays) before the race even
-		#     starts. That measured time cost is the honest rim-vs-chip
-		#     trade: a mostly-clear wall lane beats it, a camped one doesn't.
-		# 3v3 keeps the shipped zero-gain clear (5v5-exclusive by decision,
-		# plan §5): possession is the whole game there, and the panic chip's
-		# last-resort ordering must not move.
-		var origin: Vector3 = _pass_origin(ctx)
-		# The rim RIDES THE BOARDS: from a corner or behind-net origin the
-		# real delivery goes out to the near wall and wraps down it to the
-		# target — two legs through a wall waypoint at the origin's depth.
-		# An origin already on the wall degenerates to the straight line.
-		# Pricing the chord instead threaded a behind-net "rim" through the
-		# middle of our own zone — lane blocked by the forecheck, loss point
-		# in front of our net — which buried the clear at ~−0.4 exactly when
-		# it's the right play (breakout plan, iteration 5). Same fix family
-		# as the net-aware time_to_arrive: price the route, not the fiction.
-		var wall_wp := Vector3(target.x, 0.0, origin.z)
-		var leg1_len: float = absf(wall_wp.x - origin.x)
-		var leg1_lane: float = 1.0
-		if leg1_len > 0.5:
-			leg1_lane = AIActionScoring.lane_clear(
-					origin, wall_wp, _scratch_opponents,
-					AIActionScoring.PASS_SPEED_M_S,
-					_scratch_opponent_vels, _scratch_opponent_caps, true)
-		var leg2_lane: float = AIActionScoring.lane_clear(
-				wall_wp, target, _scratch_opponents,
-				AIActionScoring.PASS_SPEED_M_S,
-				_scratch_opponent_vels, _scratch_opponent_caps, true)
-		var rim_lane: float = leg1_lane * leg2_lane
-		var flight_t: float = (leg1_len + wall_wp.distance_to(target)) \
-				/ maxf(AIActionScoring.PASS_SPEED_M_S, 1.0)
-		var rim_gain: float = rim_lane * recovery * value \
-				* AIActionScoring.delay_discount(flight_t) * chase_decay
-		# The clear's concessions are priced LOCAL + counter-rush (see
-		# threat_local_shoot): the gradient surface's positional floor made
-		# conceding at center-ice boards read like half a slot chance, which
-		# buried the clear at ~−0.5 under exactly the committed forecheck it
-		# should relieve. The immediate danger at each loss point is the
-		# local shot threat; the future carry-in danger is the
-		# counter-exposure term, which sees the covering set our breakout
-		# posts provide. 5v5-scoped with the rest of this branch — the 3v3
-		# panic-chip ordering keeps the shipped pricing.
-		# An intercepted rim dies on whichever leg is weaker — price the
-		# loss where the pick actually happens, replacing the share of the
-		# target-spot concession the interception forecloses.
-		var loss_leg_from: Vector3 = origin
-		var loss_leg_to: Vector3 = wall_wp
-		if leg1_len <= 0.5 or leg2_lane < leg1_lane:
-			loss_leg_from = wall_wp
-			loss_leg_to = target
-		# Every loss mode pays BOTH halves — local shot threat at the loss
-		# spot + the possession's counter/cycle value from there. A pinch
-		# pick on our wall is locally cheap (sharp angle) but hands them a
-		# live in-zone possession; pricing only the local half made rimming
-		# into a camped lane read acceptable.
-		var rim_loss_point: Vector3 = AIActionScoring.lane_loss_point(
-				loss_leg_from, loss_leg_to, _scratch_opponents,
-				AIActionScoring.PASS_SPEED_M_S, _scratch_opponent_vels)
-		var rim_concede: float = AIActionScoring.turnover_cost_local(
-				rim_loss_point, 1.0 - rim_lane, defending_goal, our_goalie,
-				GameRules.NET_HALF_WIDTH, _scratch_our_defenders) \
-				+ _counter_exposure_cost(ctx, rim_loss_point, 1.0 - rim_lane,
-						ctx.self_pos, our_goalie) \
-				+ AIActionScoring.turnover_cost_local(
-						target, rim_lane * (1.0 - recovery), defending_goal,
-						our_goalie, GameRules.NET_HALF_WIDTH,
-						_scratch_our_defenders) \
-				+ _counter_exposure_cost(ctx, target,
-						rim_lane * (1.0 - recovery), ctx.self_pos, our_goalie)
-		var chip_concede: float = AIActionScoring.turnover_cost_local(
-				target, 1.0 - recovery, defending_goal, our_goalie,
-				GameRules.NET_HALF_WIDTH, _scratch_our_defenders) \
-				+ _counter_exposure_cost(ctx, target, 1.0 - recovery,
-						ctx.self_pos, our_goalie)
-		# The chip's whole airborne + landing-bounce window (2·vy/g at the
-		# HIGH loft's launch speed) is dead time nobody can play the puck
-		# through — the rim's on-the-tape arrival never pays it. The chip
-		# flies the CHORD (air ignores boards).
-		var chip_hang_s: float = 2.0 * GameRules.DEFAULT_LOFT_VY_HIGH_M_S \
-				/ AIActionScoring.GRAVITY_M_S2
-		var chip_flight_t: float = origin.distance_to(target) \
-				/ maxf(AIActionScoring.PASS_SPEED_M_S, 1.0)
-		var chip_gain: float = recovery * value \
-				* AIActionScoring.delay_discount(chip_flight_t + chip_hang_s) \
-				* chase_decay
-		if rim_gain - rim_concede > chip_gain - chip_concede:
-			return [rim_gain - rim_concede, target, false, true]
-		return [chip_gain - chip_concede, target, false, false]
-	return [gain - concede, target, is_soft, false]
+		var nearest_our: float = INF
+		for c: Vector3 in _scratch_our_chasers:
+			nearest_our = minf(nearest_our, c.distance_to(settle))
+		var chase_decay: float = AIActionScoring.delay_discount(
+				nearest_our / maxf(ctx.self_max_speed, 0.001))
+		gain = recovery * AIActionScoring.position_potential(
+				settle, attacking_goal, _scratch_opponents) * chase_decay
+
+	# The aim handed to the release is a point far down the chosen launch line,
+	# NOT the resting spot: the quick release takes its direction blade->cursor,
+	# and a cursor near the body has no direction in it (see the snap in
+	# SkaterAgentStateMachine._state_pass_pressed).
+	var aim: Vector3 = origin + launch.normalized() * DUMP_AIM_STANDOFF_M
+	return [gain - concede, aim, is_soft, false, settle]
 
 
 # EV of one movement carry candidate — the uniform scoring every

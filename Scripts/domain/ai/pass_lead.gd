@@ -21,9 +21,24 @@ class_name AIPassLead
 #      never enters ("pass to nobody"). Keeping only the speeding-up /
 #      slowing-down component leads the cut without the overshoot.
 #
-# The receiver is aimed at via `blade_contact_world` (where the stick is,
-# not body center), with a body-position fallback for the degenerate
-# unpopulated case.
+# The lead is measured from the receiver's BODY, not its current blade.
+#
+# Aiming at `blade_contact_world` and then extrapolating it by the body's
+# velocity stacks two unrelated things: where the stick happens to be pointing
+# right now, plus the travel the body will do in flight. The first is not a
+# prediction. An off-puck bot's cursor is its ready stance, which points the
+# stick along its travel direction whenever it is skating to its anchor — so the
+# stance offset and the travel lead always ADD, never cancel, and the aim lands a
+# full stick reach past where the receiver will be. Measured at a flat 1.60 m at
+# every speed, with stick pose alone swinging the aim point 3.43 m for an
+# identical body state (tests/unit/ai/test_pass_lead_blade_base.gd).
+#
+# "Pass to the stick, not the chest" is still right — it is just not answerable
+# from the CURRENT pose, because the receiver does not hold it. On an incoming
+# feed `_pass_receive_aim_and_steer` stands the body aside from the puck's path
+# and parks the blade ON the line, wherever that line ends up. Leading the body
+# and letting the reception geometry place the stick is the division of labour
+# the receiving half already assumes.
 
 # Below this speed there's no reliable travel direction to project
 # acceleration onto (you can't be mid-turn while standing still), so the
@@ -43,12 +58,7 @@ const MIN_SPEED_FOR_PROJECTION: float = 0.5
 static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
 		accel: Vector3, launch_speed: float, max_lead_s: float,
 		receiver_caps: AISkaterCaps = null) -> Array:
-	var blade_world: Vector3 = receiver.blade_contact_world
-	# Defensive fallback: blade_contact_world is a host-only field that
-	# should always be populated on the host, but aim at body center is
-	# vastly better than aim at center ice if it ever isn't.
-	if blade_world == Vector3.ZERO:
-		blade_world = receiver.position
+	var body_world: Vector3 = receiver.position
 	var a: Vector3 = along_velocity_component(accel, receiver.velocity)
 	# A receiver can't out-accelerate its own thrust (Acceleration). Observed accel
 	# is low-passed and can spike above what the body can pull, which over-leads a
@@ -71,12 +81,12 @@ static func lead(shooter_pos: Vector3, receiver: SkaterNetworkState,
 	# implies). Distance to the receiver's current blade is a fine proxy for the
 	# pass length (the intercept iteration then refines against receiver motion).
 	var eff_speed: float = effective_flight_speed(
-			launch_speed, shooter_pos.distance_to(blade_world))
+			launch_speed, shooter_pos.distance_to(body_world))
 	var flight_t: float = AITrajectory.intercept_time(
-			shooter_pos, blade_world, receiver.velocity, a,
+			shooter_pos, body_world, receiver.velocity, a,
 			eff_speed, max_lead_s, 6, speed_cap)
 	var point: Vector3 = AITrajectory.predict_at(
-			blade_world, receiver.velocity, flight_t, 6, a, speed_cap)
+			body_world, receiver.velocity, flight_t, 6, a, speed_cap)
 	return [point, flight_t]
 
 
