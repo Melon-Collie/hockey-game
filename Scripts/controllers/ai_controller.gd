@@ -165,6 +165,14 @@ func begin_tick(delta: float) -> bool:
 		return false
 	if NetworkManager.is_replay_mode():
 		return false
+	# Blade history for this tick, before any path below can move the stick.
+	# begin_tick is the one hook that runs for every bot on every tick, so this is
+	# the only place that holds: apply_decision is skipped whenever the AI worker
+	# is still in flight or the pending decision is stale (the first live tick
+	# after a faceoff prep is always one of those), and the prep's aim-only draw
+	# swing never routes through _process_input at all. See
+	# Skater.capture_prev_blade_contact.
+	skater.capture_prev_blade_contact()
 	# Scripted mode bypasses the agent entirely — tutorial owns the inputs. The
 	# scripted shot mini-state-machine still feeds SkaterController, so shot
 	# release matches a human pressing the same buttons.

@@ -1,9 +1,8 @@
 extends GutTest
 
-# PuckAuthorityRules.advance_loose_puck — the analytic loose-puck integration core the
-# determinism migration installs in place of Jolt. It wraps step_puck_3d (tested
-# separately) with the same post-integration safety clamps _integrate_forces enforces for a
-# free puck: max speed and max height. These tests pin those clamps and the delegation.
+# PuckAuthorityRules.advance_loose_puck — the analytic loose-puck integration core. It wraps
+# step_puck_3d (tested separately) with the two post-integration safety clamps a free puck
+# needs: max speed and max height. These tests pin those clamps and the delegation.
 
 const DT: float = 1.0 / 120.0
 const ICE: float = 0.0175
@@ -32,7 +31,7 @@ func test_max_speed_clamps_an_overspeed_puck() -> void:
 
 func test_max_height_clamps_and_kills_upward_velocity() -> void:
 	# A puck already above the ceiling with upward velocity is pinned at the ceiling and its
-	# climb killed (mirrors _integrate_forces' max_height clamp).
+	# climb killed.
 	var pos := Vector3(0, ICE + MAX_HEIGHT + 0.5, 0)
 	var vel := Vector3(4, 3, 0)  # rising
 	var got: Transform3D = PuckAuthorityRules.advance_loose_puck(pos, vel, DT, MAX_SPEED, ICE, MAX_HEIGHT)

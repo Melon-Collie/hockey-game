@@ -1004,11 +1004,12 @@ func _build_perimeter_collision_shape(stations: Array,
 	# triangle (CCD glance, reconcile nudge, numerical penetration) still
 	# generates contacts instead of falling through the band unopposed. Note
 	# this is best-effort, not a guarantee: the triangles are zero-thickness
-	# surfaces, so once a sliding puck's center crosses a facet plane the
-	# nearest-side depenetration can just as well push it OUTWARD. The hard
-	# containment guarantee is analytic — Puck._integrate_forces clamps any
-	# escaped puck back inside GameRules.clamp_to_rink_inner (the same
-	# boundary this collider is built on) and reflects its outward velocity.
+	# surfaces, so once a sliding body's center crosses a facet plane the
+	# nearest-side depenetration can just as well push it OUTWARD. The puck
+	# doesn't rely on this collider at all — it never touches the physics
+	# engine; its containment is the per-sub-step clamp to
+	# GameRules.clamp_to_rink_inner (the same boundary this collider is built
+	# on) inside the analytic drive.
 	shape.backface_collision = true
 	return shape
 

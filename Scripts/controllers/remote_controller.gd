@@ -70,6 +70,11 @@ func _physics_process(delta: float) -> void:
 		return
 	if NetworkManager.is_replay_mode():
 		return
+	# Blade history for this tick, before any path below can move the stick. On
+	# the host that includes the faceoff-prep aim-only sync and the skate-in
+	# glide, neither of which runs _process_input, yet both feed the host's
+	# swept-segment pickup/poke test. See Skater.capture_prev_blade_contact.
+	skater.capture_prev_blade_contact()
 	if _is_host:
 		_drive_from_input(delta)
 	else:
