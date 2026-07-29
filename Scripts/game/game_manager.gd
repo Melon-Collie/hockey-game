@@ -130,15 +130,15 @@ var _has_prev_puck_pos: bool = false
 # moves the puck discontinuously (pickup snap to blade / release), so the tracker
 # reseeds across it instead of spanning the jump.
 var _puck_was_carried: bool = false
-# Any single-tick puck travel beyond this (metres) is a reset/reposition, not a
-# real crossing — the tracker reseeds and skips it. Far above any shot or blade
-# speed at 120 Hz (~2 m/tick = 240 m/s); a faceoff/OOB reset jumps much further.
 # The AI goalies' fixed identities, indexed by team_id — spawned onto the
 # jerseys and reused by the Three Stars podium when a goalie stars. Same on
 # every machine, so a goalie star candidate needs no wire traffic.
 const GOALIE_NAMES: Array[String] = ["WALL", "WARD"]
 const GOALIE_NUMBERS: Array[int] = [31, 35]
 
+# Any single-tick puck travel beyond this (metres) is a reset/reposition, not a
+# real crossing — the tracker reseeds and skips it. Far above any shot or blade
+# speed at 120 Hz (~2 m/tick = 240 m/s); a faceoff/OOB reset jumps much further.
 const _GOAL_MAX_TICK_TRAVEL: float = 2.0
 # Tighter bound for a puck that was PINNED on both ends of the segment. A
 # carried puck teleports to the carry target every tick, and that target can
@@ -608,12 +608,12 @@ func _check_puck_out_of_bounds(delta: float) -> void:
 		_puck_oob_timer += delta
 		if _puck_oob_timer >= GameRules.PUCK_OOB_GRACE_DURATION:
 			_puck_oob_timer = 0.0
-			# Escape diagnostics — every whistle here means the puck got past
-			# BOTH the boards' collision AND the analytic containment backstop
-			# in Puck._integrate_forces (which rescues any center < 2 m past
-			# the boundary), so it should now be near-unreachable outside a
-			# far teleport. Rare event, so the log string build is fine;
-			# playtest logs pinpoint where/how it got out.
+			# Escape diagnostics. The analytic drive clamps the puck's center to
+			# the rink's rounded rectangle on every sub-step, so a loose puck
+			# cannot walk out — reaching here means something PLACED it outside
+			# (and by less than Puck.CONTAINMENT_TELEPORT_SKIP, or the drive
+			# would have left it parked). Rare event, so the log string build is
+			# fine; playtest logs pinpoint where/how it got out.
 			print("[puck-oob] whistle: pos=%.2v vel=%.1v height=%.2f xz_outside=%.3f" % [
 					pos, puck.linear_velocity, pos.y - puck.ice_height, xz_outside])
 			# Use the boundary projection — how far past the boards the puck

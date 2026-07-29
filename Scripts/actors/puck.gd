@@ -676,8 +676,8 @@ func _drive_analytic(dt: float) -> void:
 		_contact_latch_net = false
 		_contact_latch_boards = false
 		return
-	# Deliberate far teleport (drills stash the puck off-rink between reps): leave it parked,
-	# matching the CONTAINMENT_TELEPORT_SKIP guard in the Jolt path.
+	# Deliberate far teleport (drills stash the puck off-rink between reps): leave it parked —
+	# the drill owns placement. See CONTAINMENT_TELEPORT_SKIP.
 	var here := Vector2(global_position.x, global_position.z)
 	if here.distance_to(GameRules.clamp_to_rink_inner(here)) > CONTAINMENT_TELEPORT_SKIP:
 		return
