@@ -94,6 +94,7 @@ var _shaft_mat: ShaderMaterial = null
 var _blade: MeshInstance3D = null
 var _tape_mesh: MeshInstance3D = null
 var _knob: MeshInstance3D = null
+var _floor_disc: MeshInstance3D = null
 var _pulse_t: float = 0.0
 
 # Focus scope (see LobbyBuildPopup.set_focus_scope).
@@ -180,11 +181,13 @@ func _build() -> void:
 	gear_col.alignment = BoxContainer.ALIGNMENT_BEGIN
 	gear_col.add_theme_constant_override("separation", 12)
 	columns.add_child(gear_col)
+	gear_col.add_child(_make_column_header(tr(&"STICK_COL_GEAR")))
 
 	var tape_col := VBoxContainer.new()
 	tape_col.alignment = BoxContainer.ALIGNMENT_BEGIN
 	tape_col.add_theme_constant_override("separation", 12)
 	columns.add_child(tape_col)
+	tape_col.add_child(_make_column_header(tr(&"STICK_COL_TAPE")))
 
 	_length_btn = _make_option_btn(_LENGTH_KEYS, _LENGTH_TOOLTIP, _on_length_selected)
 	_add_row(gear_col, tr(&"STICK_GEAR_LENGTH"), _length_btn, true, _LENGTH_TOOLTIP)
@@ -233,6 +236,15 @@ func _build() -> void:
 	action_row.add_child(cancel_btn)
 
 
+# Small muted all-caps column caption (the CSV rows are stored uppercase).
+func _make_column_header(text: String) -> Label:
+	var header := Label.new()
+	header.text = text
+	header.add_theme_font_size_override("font_size", 13)
+	header.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+	return header
+
+
 func _make_option_btn(keys: Array[StringName], tooltip: String,
 		handler: Callable) -> OptionButton:
 	var btn := OptionButton.new()
@@ -279,14 +291,26 @@ func _add_row(vbox: VBoxContainer, label_text: String, control: Control,
 	row.add_child(control)
 
 
-# The turntable viewport: its own 3D world so the stick renders over the menu
-# scrim, lit by a single key light. All meshes are the real in-game pieces.
+# The turntable viewport in a "display case": an inset well with a soft ice
+# disc the stick stands on (and casts a real shadow onto — the grounding is
+# what keeps the spin from reading flat). Own 3D world so the stick renders
+# over the menu scrim. All meshes are the real in-game pieces.
 func _build_preview(vbox: VBoxContainer) -> void:
+	var case_panel := PanelContainer.new()
+	var case_style := StyleBoxFlat.new()
+	case_style.bg_color = MenuStyle.SURFACE_INPUT
+	case_style.set_corner_radius_all(6)
+	case_style.set_border_width_all(1)
+	case_style.border_color = MenuStyle.TEAL_DIM
+	case_style.set_content_margin_all(4)
+	case_panel.add_theme_stylebox_override("panel", case_style)
+	case_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vbox.add_child(case_panel)
+
 	var container := SubViewportContainer.new()
 	container.stretch = true
-	container.custom_minimum_size = Vector2(360, 240)
-	container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	vbox.add_child(container)
+	container.custom_minimum_size = Vector2(420, 250)
+	case_panel.add_child(container)
 
 	_viewport = SubViewport.new()
 	_viewport.own_world_3d = true
@@ -296,20 +320,39 @@ func _build_preview(vbox: VBoxContainer) -> void:
 
 	var camera := Camera3D.new()
 	# Far enough that the whole diagonal (butt to toe ≈ 1.55 m, spinning about
-	# its midpoint) stays inside the vertical frustum at every rotation angle.
-	camera.position = Vector3(0.0, 0.0, 2.6)
+	# its midpoint) stays inside the vertical frustum at every rotation angle;
+	# raised and pitched a touch so the ice disc reads as a ground plane.
+	camera.position = Vector3(0.0, 0.35, 2.6)
+	camera.rotation_degrees = Vector3(-7.7, 0.0, 0.0)
 	camera.fov = 45.0
 	_viewport.add_child(camera)
 
 	var light := DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-35.0, 35.0, 0.0)
+	light.rotation_degrees = Vector3(-42.0, 35.0, 0.0)
 	light.light_energy = 1.3
+	light.shadow_enabled = true
 	_viewport.add_child(light)
 
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-15.0, -140.0, 0.0)
 	fill.light_energy = 0.5
 	_viewport.add_child(fill)
+
+	# Ice puddle under the stick. Outside the turntable (a spinning circle is
+	# invisible motion anyway); _rebuild_preview seats it just under the sole,
+	# which moves with the picked stick length.
+	_floor_disc = MeshInstance3D.new()
+	var disc := CylinderMesh.new()
+	disc.top_radius = 0.85
+	disc.bottom_radius = 0.85
+	disc.height = 0.02
+	disc.radial_segments = 48
+	_floor_disc.mesh = disc
+	var disc_mat := StandardMaterial3D.new()
+	disc_mat.albedo_color = MenuStyle.SURFACE_ELEV
+	disc_mat.roughness = 0.35
+	_floor_disc.material_override = disc_mat
+	_viewport.add_child(_floor_disc)
 
 	_turntable = Node3D.new()
 	_viewport.add_child(_turntable)
@@ -529,6 +572,10 @@ func _rebuild_preview() -> void:
 	_shaft.position -= center
 	_knob.position -= center
 	# (_tape_mesh rides _blade.)
+	# Seat the ice disc just under the blade sole (which moves with the
+	# centering as the picked length changes), so the stick stands ON it.
+	if _floor_disc != null:
+		_floor_disc.position = Vector3(0.0, -center.y - 0.042, 0.0)
 
 
 static func _make_mat(color: Color, roughness: float) -> StandardMaterial3D:

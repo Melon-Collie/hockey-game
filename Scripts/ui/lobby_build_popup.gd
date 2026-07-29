@@ -18,6 +18,8 @@ var _apply_btn: Button = null
 # Stick workbench (gear + tape + preview) opened over this popup; its Done
 # lands in the panel's pending working model (tape rides each build preset).
 var _stick_popup: StickEditorPopup = null
+# Gold "unapplied stick changes" note beside the Edit Stick button.
+var _stick_pending_label: Label = null
 # Controller focus scope: the lobby content behind this popup (focus is walled
 # off there while we're open) and the control focus returns to on close. Set by
 # LobbyManager via set_focus_scope; null-safe if it never is.
@@ -76,6 +78,7 @@ func _build() -> void:
 
 	var stick_row := HBoxContainer.new()
 	stick_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	stick_row.add_theme_constant_override("separation", 12)
 	vbox.add_child(stick_row)
 	var edit_stick_btn := Button.new()
 	edit_stick_btn.text = tr(&"STICK_EDIT_BUTTON")
@@ -85,6 +88,14 @@ func _build() -> void:
 	SoundManager.wire_button(edit_stick_btn)
 	edit_stick_btn.pressed.connect(_open_stick_editor)
 	stick_row.add_child(edit_stick_btn)
+	# Pending stick edits hide behind the button — this note surfaces them.
+	_stick_pending_label = Label.new()
+	_stick_pending_label.text = tr(&"STICK_PENDING_NOTE")
+	_stick_pending_label.add_theme_color_override("font_color", MenuStyle.GOLD)
+	_stick_pending_label.add_theme_font_size_override("font_size", 13)
+	_stick_pending_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_stick_pending_label.visible = false
+	stick_row.add_child(_stick_pending_label)
 
 	_stick_popup = StickEditorPopup.new()
 	_stick_popup.stick_edited.connect(_on_stick_edited)
@@ -150,6 +161,8 @@ func _update_apply_state() -> void:
 	if _apply_btn == null:
 		return
 	_apply_btn.disabled = not (_panel.is_dirty() and _panel.is_valid())
+	if _stick_pending_label != null:
+		_stick_pending_label.visible = _panel.is_stick_dirty()
 
 
 func _apply() -> void:

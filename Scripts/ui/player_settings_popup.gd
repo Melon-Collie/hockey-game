@@ -28,6 +28,9 @@ var _attr_panel: AttributePickerPanel = null
 # working model (the tape job is part of each build preset); this popup's
 # Apply/Cancel commit or discard it with everything else.
 var _stick_popup: StickEditorPopup = null
+# Gold "unapplied stick changes" note beside the Edit Stick button — pending
+# stick edits are otherwise invisible until Apply.
+var _stick_pending_label: Label = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
@@ -120,17 +123,34 @@ func _build() -> void:
 	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
-	_build_name_section(vbox)
-	_build_number_section(vbox)
-	_build_handedness_section(vbox)
-	_build_team_section(vbox)
+	# Two columns: identity (name / number / hands / team) on the left,
+	# the build (attributes + stick) on the right. The identity column is
+	# much shorter, so it centers vertically against the tall picker.
+	var columns := HBoxContainer.new()
+	columns.alignment = BoxContainer.ALIGNMENT_CENTER
+	columns.add_theme_constant_override("separation", 48)
+	vbox.add_child(columns)
+
+	var identity_col := VBoxContainer.new()
+	identity_col.add_theme_constant_override("separation", 16)
+	identity_col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	columns.add_child(identity_col)
+
+	var build_col := VBoxContainer.new()
+	build_col.add_theme_constant_override("separation", 16)
+	columns.add_child(build_col)
+
+	_build_name_section(identity_col)
+	_build_number_section(identity_col)
+	_build_handedness_section(identity_col)
+	_build_team_section(identity_col)
 	_attr_panel = AttributePickerPanel.new()
 	_attr_panel.changed.connect(_update_apply_state)
-	vbox.add_child(_attr_panel)
+	build_col.add_child(_attr_panel)
 	# The panel brings its own on-screen keyboard for the preset name (this
 	# popup's is for the player name); hand it this form as the wall target.
 	_attr_panel.set_keyboard_background(self)
-	_build_stick_row(vbox)
+	_build_stick_row(build_col)
 	_build_action_row(vbox)
 
 	_stick_popup = StickEditorPopup.new()
@@ -141,6 +161,7 @@ func _build() -> void:
 func _build_stick_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 	var edit_btn := Button.new()
 	edit_btn.text = tr(&"STICK_EDIT_BUTTON")
@@ -150,6 +171,15 @@ func _build_stick_row(vbox: VBoxContainer) -> void:
 	SoundManager.wire_button(edit_btn)
 	edit_btn.pressed.connect(_open_stick_editor)
 	row.add_child(edit_btn)
+	# Pending stick edits hide behind the button — this note is what makes
+	# them visible before Apply.
+	_stick_pending_label = Label.new()
+	_stick_pending_label.text = tr(&"STICK_PENDING_NOTE")
+	_stick_pending_label.add_theme_color_override("font_color", MenuStyle.GOLD)
+	_stick_pending_label.add_theme_font_size_override("font_size", 13)
+	_stick_pending_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_stick_pending_label.visible = false
+	row.add_child(_stick_pending_label)
 
 
 func _open_stick_editor() -> void:
@@ -397,6 +427,8 @@ func _update_apply_state() -> void:
 	# name/number/etc. can apply on their own.
 	var attrs_ok: bool = _attr_panel == null or _attr_panel.is_valid()
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid or not attrs_ok
+	if _stick_pending_label != null and _attr_panel != null:
+		_stick_pending_label.visible = _attr_panel.is_stick_dirty()
 
 
 func _apply() -> void:

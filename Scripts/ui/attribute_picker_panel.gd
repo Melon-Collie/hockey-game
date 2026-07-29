@@ -421,6 +421,22 @@ func set_pending_tape_code(tape_code: int) -> void:
 	changed.emit()
 
 
+# Whether the stick the player would get on Apply (active pending build's
+# gear + tape) differs from the stick they have now (the snapshot-time active
+# preset — what the rink is showing). Lets host popups flag pending stick
+# edits, which are otherwise invisible behind the Edit Stick button.
+func is_stick_dirty() -> bool:
+	if _active < 0 or _active >= _working.size():
+		return false
+	if _snapshot_active < 0 or _snapshot_active >= _snapshot_working.size():
+		return false
+	var lv: Array = _working[_active]["levels"]
+	var sv: Array = _snapshot_working[_snapshot_active]["levels"]
+	return int(lv[3]) != int(sv[3]) or int(lv[4]) != int(sv[4]) \
+			or int(lv[5]) != int(sv[5]) \
+			or int(_working[_active]["tape"]) != int(_snapshot_working[_snapshot_active]["tape"])
+
+
 # ── Interaction ──────────────────────────────────────────────────────────────
 
 func _on_height_changed(value: float) -> void:
