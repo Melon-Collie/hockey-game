@@ -16,10 +16,8 @@ extends Control
 var _panel: AttributePickerPanel = null
 var _apply_btn: Button = null
 # Stick workbench (gear + tape + preview) opened over this popup; its Done
-# lands in the panel's pending gear + _pending_tape_code here.
+# lands in the panel's pending working model (tape rides each build preset).
 var _stick_popup: StickEditorPopup = null
-var _pending_tape_code: int = StickTapeConfig.DEFAULT_CODE
-var _snapshot_tape_code: int = StickTapeConfig.DEFAULT_CODE
 # Controller focus scope: the lobby content behind this popup (focus is walled
 # off there while we're open) and the control focus returns to on close. Set by
 # LobbyManager via set_focus_scope; null-safe if it never is.
@@ -126,8 +124,6 @@ func open() -> void:
 	# applies once play has started, which is a different scene.
 	_panel.set_locked(false)
 	_panel.snapshot()
-	_pending_tape_code = PlayerPrefs.stick_tape_code
-	_snapshot_tape_code = _pending_tape_code
 	_update_apply_state()
 	visible = true
 	# Land on the height slider rather than the tree-first control (the close X),
@@ -140,38 +136,38 @@ func _open_stick_editor() -> void:
 	var accent: Color = TeamColorRegistry.get_colors(
 			maxi(NetworkManager.pending_home_color_slot, 0), 0).primary
 	_stick_popup.set_focus_scope(self, null)
-	_stick_popup.open(_panel.get_pending_attributes(), _pending_tape_code, false, accent)
+	_stick_popup.open(_panel.get_pending_attributes(),
+			_panel.get_pending_tape_code(), false, accent)
 
 
 func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> void:
 	_panel.set_pending_stick_gear(curve, flex, length)
-	_pending_tape_code = tape_code
+	_panel.set_pending_tape_code(tape_code)
 	_update_apply_state()
 
 
 func _update_apply_state() -> void:
 	if _apply_btn == null:
 		return
-	var dirty: bool = _panel.is_dirty() or _pending_tape_code != _snapshot_tape_code
-	_apply_btn.disabled = not (dirty and _panel.is_valid())
+	_apply_btn.disabled = not (_panel.is_dirty() and _panel.is_valid())
 
 
 func _apply() -> void:
-	if not _panel.is_valid():
+	if not _panel.is_dirty() or not _panel.is_valid():
 		return
-	if _panel.is_dirty():
-		var new_attrs: PlayerAttributes = _panel.commit()
-		NetworkManager.update_lobby_attributes(new_attrs)
-	if _pending_tape_code != _snapshot_tape_code:
-		PlayerPrefs.stick_tape_code = _pending_tape_code
-		NetworkManager.update_lobby_tape(_pending_tape_code)
+	var old_tape: int = PlayerPrefs.stick_tape_code
+	# commit() syncs the flat build AND tape mirror from the active preset —
+	# a preset switch alone can change both.
+	var new_attrs: PlayerAttributes = _panel.commit()
 	PlayerPrefs.save()
+	NetworkManager.update_lobby_attributes(new_attrs)
+	if PlayerPrefs.stick_tape_code != old_tape:
+		NetworkManager.update_lobby_tape(PlayerPrefs.stick_tape_code)
 	_close()
 
 
 func _cancel() -> void:
 	_panel.restore()
-	_pending_tape_code = _snapshot_tape_code
 	_close()
 
 

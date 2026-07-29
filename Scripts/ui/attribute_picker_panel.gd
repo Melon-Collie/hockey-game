@@ -37,9 +37,12 @@ const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = qui
 const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
 const _PROFILE_LABELS: Array[String] = ["Agility", "Balanced", "Power"]
 
-# Working copy: Array of {"name": String, "levels": Array[int]} in canonical
-# order [height_in, weight_lbs, profile, curve, flex, length]. The UI edits
-# only height/weight; gear carries through.
+# Working copy: Array of {"name": String, "levels": Array[int], "tape": int}
+# — levels in canonical order [height_in, weight_lbs, profile, curve, flex,
+# length], tape the preset's packed StickTapeConfig code. The tape job rides
+# the build preset (cosmetic, but switching builds swaps the whole loadout —
+# most consistent feel); the stick editor edits it via
+# get/set_pending_tape_code.
 var _working: Array[Dictionary] = []
 var _active: int = 0
 # Deep copy taken on snapshot(); restore() reverts to it and is_dirty()
@@ -363,6 +366,8 @@ func is_dirty() -> bool:
 			return true
 		if not _levels_equal(_working[i]["levels"], _snapshot_working[i]["levels"]):
 			return true
+		if int(_working[i]["tape"]) != int(_snapshot_working[i]["tape"]):
+			return true
 	return false
 
 
@@ -395,6 +400,24 @@ func set_pending_stick_gear(curve: int, flex: int, length: int) -> void:
 	levels[4] = flex
 	levels[5] = length
 	_refresh()
+	changed.emit()
+
+
+# The active pending build's tape job (packed code). Part of the preset like
+# the gear, but cosmetic — so unlike set_pending_stick_gear it is NOT gated on
+# the online-match lock.
+func get_pending_tape_code() -> int:
+	if _active < 0 or _active >= _working.size():
+		return PlayerPrefs.stick_tape_code
+	return int(_working[_active]["tape"])
+
+
+func set_pending_tape_code(tape_code: int) -> void:
+	if _active < 0 or _active >= _working.size():
+		return
+	if int(_working[_active]["tape"]) == tape_code:
+		return
+	_working[_active]["tape"] = tape_code
 	changed.emit()
 
 
@@ -453,7 +476,8 @@ func _on_new_pressed() -> void:
 	if _working.size() >= PlayerPrefs.MAX_PRESETS or _locked:
 		return
 	var copy_levels: Array[int] = _dup_levels(_working[_active]["levels"])
-	_working.append({"name": _default_preset_name(), "levels": copy_levels})
+	_working.append({"name": _default_preset_name(), "levels": copy_levels,
+			"tape": int(_working[_active]["tape"])})
 	_active = _working.size() - 1
 	_rebuild_chips()
 	_load_active_into_name_field()
@@ -557,14 +581,16 @@ func _read_prefs_working() -> Array[Dictionary]:
 	for p: Dictionary in PlayerPrefs.get_presets():
 		var a: PlayerAttributes = p["attrs"]
 		var levels: Array[int] = [a.height, a.weight, a.profile, a.curve, a.flex, a.length]
-		out.append({"name": String(p["name"]), "levels": levels})
+		out.append({"name": String(p["name"]), "levels": levels,
+				"tape": int(p.get("tape", StickTapeConfig.DEFAULT_CODE))})
 	return out
 
 
 func _dup_working(src: Array[Dictionary]) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for e: Dictionary in src:
-		out.append({"name": String(e["name"]), "levels": _dup_levels(e["levels"])})
+		out.append({"name": String(e["name"]), "levels": _dup_levels(e["levels"]),
+				"tape": int(e.get("tape", StickTapeConfig.DEFAULT_CODE))})
 	return out
 
 
