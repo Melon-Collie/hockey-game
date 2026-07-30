@@ -40,9 +40,12 @@ extends RefCounted
 # so the local-axis mapping doesn't match the simple rule. The feet are
 # small and mostly hidden under the skates, so dropping them from the
 # rig doesn't read.
-# Torso/head read Size (frame/mass); shoulders read Physical (the grinder yoke),
-# so a small-but-strong build reads broad-shouldered and a big-but-soft one
-# narrow. Both groups still take the height multiplier on Y.
+# Every lateral group reads the one grounded girth multiplier (PlayerAttributes
+# .girth_mult — sqrt(mass/height)); body parts additionally take the height
+# multiplier on Y. The helmet/head unit is the exception: it scales uniformly
+# by its own mild table and never stretches with height — real adult heads are
+# nearly constant across statures, and the constancy is what sells a tall
+# build as big rather than zoomed.
 const _TORSO_PATHS: Array[String] = [
 	"UpperBody/UpperBodyMesh",
 ]
@@ -102,7 +105,7 @@ func apply(attrs: PlayerAttributes) -> void:
 		_apply_scale(path, m_torso, m_height, m_torso)
 	for path: String in _SHOULDER_PATHS:
 		_apply_scale(path, m_shoulder, m_height, m_shoulder)
-	_apply_scale(_HELMET_PATH, m_head, m_height, m_head)
+	_apply_scale(_HELMET_PATH, m_head, m_head, m_head)
 	for path: String in _THIGH_PATHS:
 		_apply_scale(path, m_thigh, m_height, m_thigh)
 	for path: String in _CALF_PATHS:
