@@ -46,6 +46,8 @@ const _ELBOW_SPHERE_RADIUS: float = 0.08
 
 var _uniform_coordinator: GoalieUniformCoordinator
 # Dynamic visual nodes — public for GoalieUniformCoordinator access.
+# Pants/hips block under the chest protector (GoalieMeshBuilder._ensure_pants).
+var pants_mesh: MeshInstance3D = null
 var left_hip_connector: MeshInstance3D = null
 var right_hip_connector: MeshInstance3D = null
 var glove_upper_arm: Node3D = null

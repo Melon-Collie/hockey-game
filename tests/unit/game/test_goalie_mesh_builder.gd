@@ -25,6 +25,7 @@ func _parts() -> Dictionary:
 		"blocker": [GoalieMeshBuilder._build_blocker(), Vector3(0.20, 0.30, 0.05)],
 		"blocker_hand": [GoalieMeshBuilder._build_blocker_hand(), Vector3(0.10, 0.10, 0.10)],
 		"connector": [GoalieMeshBuilder.shared_connector_tube(), Vector3(0.16, 1.0, 0.16)],
+		"pants": [GoalieMeshBuilder._build_pants(), Vector3(0.46, 0.24, 0.28)],
 	}
 
 

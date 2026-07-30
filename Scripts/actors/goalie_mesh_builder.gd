@@ -100,6 +100,18 @@ const _BLOCKER_HAND_R: float = 0.05
 # per-frame stretch in Goalie._point_connector scales the basis Y column only.
 const HIP_CONNECTOR_RADIUS: float = 0.08
 
+# Pants/hips block: a visual-only child of the Body node (rides every lean
+# and drop of the chest), hanging below the chest protector so the leg pads
+# stop sprouting straight out of the torso — the hip connectors now emerge
+# from under it. Stations are (y, half_w, half_d) in body-local space (box
+# bottom −0.36); kept short so a butterfly body drop doesn't push it through
+# the ice. Painted the kit's pants base color by the uniform coordinator.
+const _PANTS_STATIONS: Array[Vector3] = [
+	Vector3(-0.33, 0.215, 0.125),   # tucked up inside the chest bottom
+	Vector3(-0.44, 0.225, 0.135),   # hip bulge
+	Vector3(-0.56, 0.195, 0.115),   # taper toward the thighs
+]
+
 
 # Swaps every scene-primitive goalie part for its cached low-poly build.
 # Idempotent; the uniform coordinator's material_override painting and the
@@ -116,6 +128,7 @@ static func apply_goalie(goalie: Goalie) -> void:
 	_swap_instance(goalie.glove_detail_mesh, "goalie_glove_cuff", _build_glove_cuff)
 	_swap_instance(goalie.blocker_mesh, "goalie_blocker", _build_blocker)
 	_swap_instance(goalie.blocker_hand_mesh, "goalie_blocker_hand", _build_blocker_hand)
+	_ensure_pants(goalie)
 
 
 # Unit-radius, unit-height straight tube for the hip connectors (the arm
@@ -266,6 +279,34 @@ static func _build_glove_pocket() -> ArrayMesh:
 
 static func _build_blocker_hand() -> ArrayMesh:
 	return _build_ball(_BLOCKER_HAND_R, 8, 4, 1.0)
+
+
+static func _build_pants() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see SkaterMeshBuilder doc block
+	var loops: Array[PackedVector3Array] = []
+	for s: Vector3 in _PANTS_STATIONS:
+		loops.append(_octagon_loop(s.x, s.y, s.z, 0.62, 0.5))
+	_sweep_loops(st, loops)
+	_loop_cap(st, loops[0], Vector3(0.0, _PANTS_STATIONS[0].x, 0.0), true)
+	_loop_cap(st, loops[loops.size() - 1],
+			Vector3(0.0, _PANTS_STATIONS[_PANTS_STATIONS.size() - 1].x, 0.0), false)
+	st.generate_normals()
+	return st.commit()
+
+
+# Created (not swapped — no scene node exists for it) as a child of the body
+# mesh so it rides the chest's transform; stamped onto the goalie's field so
+# GoalieUniformCoordinator can paint it without a node lookup.
+static func _ensure_pants(goalie: Goalie) -> void:
+	if goalie.body_mesh == null or goalie.body_mesh.get_node_or_null("Pants") != null:
+		return
+	var pants := MeshInstance3D.new()
+	pants.name = "Pants"
+	pants.mesh = _shared("goalie_pants", _build_pants)
+	goalie.body_mesh.add_child(pants)
+	goalie.pants_mesh = pants
 
 
 # Chamfered wrist block on the unrotated glove-origin node (parent frame:

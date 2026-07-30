@@ -93,6 +93,11 @@ func apply_uniform(colors: Dictionary) -> void:
 	_paint_mesh_h(_goalie.left_hip_connector, uniform.pants)
 	_paint_mesh_h(_goalie.right_hip_connector, uniform.pants)
 
+	# Pants block — solid base color (its sweep UVs are nominal, so the
+	# stripe texture pipeline would smear; the connectors carry the stripes).
+	if _goalie.pants_mesh != null:
+		_goalie.pants_mesh.material_override = _make_solid_mat(uniform.pants.base)
+
 	# Stick — the house design's goalie colorway (#586): all-white composite,
 	# shaft through blade, the real-world goalie norm. The white tape knob is
 	# geometry-side (Goalie._init_stick_knob) and never repaints.
