@@ -174,6 +174,12 @@ const _BLADE_STEEL_COLOR := Color(0.82, 0.85, 0.88)
 # extreme builds — visually nil.
 const SKATE_LIFT_M: float = 0.04
 const _BLADE_ICE_Z: float = 0.080 + SKATE_LIFT_M
+# Skate accent stripe (see shared_skate_stripe): band height, its center on
+# the collar's local Y, and a radius just proud of the collar's sidewall at
+# that height (~0.085) so the band never z-fights the lathe under it.
+const SKATE_STRIPE_HEIGHT_M: float = 0.04
+const _SKATE_STRIPE_Y: float = 0.045
+const _SKATE_STRIPE_RADIUS: float = 0.092
 
 # Neck: skin tube from chin to collar, a child of the Helmet node like the
 # head so it rides the same head-bulk scaling and skeleton offsets. Stations
@@ -206,6 +212,7 @@ static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
 		_swap(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side], "skate", _build_skate)
 		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side], "boot", _build_boot)
 		_ensure_blade(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
+		_ensure_skate_stripe(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side])
 
 
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
@@ -338,6 +345,17 @@ static func shared_boot() -> ArrayMesh:
 
 static func shared_skate_collar() -> ArrayMesh:
 	return _shared("skate", _build_skate)
+
+
+# Skate accent stripe: a thin unit-radius band that rings the collar proud of
+# its sidewall — the one piece the skate-color cosmetic paints (the boot and
+# collar themselves stay dark). Unit radius like the glove cuff; the creation
+# site scales it to sit just off the collar.
+static func shared_skate_stripe() -> ArrayMesh:
+	return _shared("skate_stripe", func() -> ArrayMesh:
+		var h: float = SKATE_STRIPE_HEIGHT_M * 0.5
+		var profile: Array[Vector2] = [Vector2(h, 1.0), Vector2(-h, 1.0)]
+		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
 
 
 static func shared_skate_blade() -> ArrayMesh:
@@ -607,6 +625,26 @@ static func _build_skate_blade() -> ArrayMesh:
 			Vector3(0.0035, 0.098, _BLADE_ICE_Z))                            # steel runner
 	st.generate_normals()
 	return st.commit()
+
+
+# The accent stripe is a CHILD of the collar mesh so it rides the same node
+# scaling and stride animation. Default-painted boot-dark (the classic look);
+# SkaterUniformCoordinator repaints it with the player's skate-color pick.
+static func _ensure_skate_stripe(lower_body: Node3D, skate_path: String) -> void:
+	var collar: MeshInstance3D = lower_body.get_node_or_null(skate_path) as MeshInstance3D
+	if collar == null or collar.get_node_or_null("Stripe") != null:
+		return
+	var stripe := MeshInstance3D.new()
+	stripe.name = "Stripe"
+	stripe.mesh = shared_skate_stripe()
+	stripe.position = Vector3(0.0, _SKATE_STRIPE_Y, 0.0)
+	stripe.scale = Vector3(_SKATE_STRIPE_RADIUS, 1.0, _SKATE_STRIPE_RADIUS)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.08, 0.08, 0.08)
+	mat.roughness = 0.42
+	BodyRim.apply(mat)
+	stripe.material_override = mat
+	collar.add_child(stripe)
 
 
 # The steel is a CHILD of the foot's boot mesh with its own bright material —

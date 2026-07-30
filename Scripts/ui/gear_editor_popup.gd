@@ -2,10 +2,13 @@ class_name GearEditorPopup
 extends Control
 
 # The gear workbench: the equipment picks that live below the stick — SKATE
-# PROFILE (the blade grind, the one gameplay row) and the skate / glove colors
-# — arranged as compact rows around a live turntable preview assembled from
-# the skater's own shared meshes (boot on steel with its ankle collar, gloved
-# fist with its cuff ring), painted with the picked colors.
+# PROFILE (the blade grind, the one gameplay row) and the skate / glove
+# accent colors — arranged as compact rows around a live turntable preview
+# assembled from the skater's own shared meshes (boot on steel with its ankle
+# collar, gloved fist with its cuff ring). The color picks paint ACCENT
+# STRIPES, not the whole piece: the skate pick colors the band ringing the
+# collar (boot stays dark), the glove pick colors the wrist cuff (the hand
+# stays kit-colored) — exactly what the rink renders.
 #
 # Same sub-editor contract as StickEditorPopup: opened by PlayerSettingsPopup
 # over its own modal, it edits pending values and hands them back through
@@ -53,6 +56,7 @@ var _viewport: SubViewport = null
 var _turntable: Node3D = null
 var _boot: MeshInstance3D = null
 var _collar: MeshInstance3D = null
+var _skate_stripe: MeshInstance3D = null
 var _fist: MeshInstance3D = null
 var _cuff: MeshInstance3D = null
 
@@ -294,6 +298,14 @@ func _build_preview(vbox: VBoxContainer) -> void:
 			skate_at + Vector3(0.075, 0.10, 0.0))
 	_turntable.add_child(_collar)
 
+	# The accent stripe band, seated on the collar exactly as the rink's
+	# creation site places it (SkaterMeshBuilder._ensure_skate_stripe).
+	_skate_stripe = MeshInstance3D.new()
+	_skate_stripe.mesh = SkaterMeshBuilder.shared_skate_stripe()
+	_skate_stripe.position = Vector3(0.0, 0.045, 0.0)
+	_skate_stripe.scale = Vector3(0.092, 1.0, 0.092)
+	_collar.add_child(_skate_stripe)
+
 	# Glove: fist standing fingers-down (station order runs wrist → fingers
 	# along −Y) with the cuff ring at the wrist above it.
 	_fist = MeshInstance3D.new()
@@ -415,18 +427,27 @@ func _refresh() -> void:
 	_glove_dd.set_selected(_glove_color)
 
 
-# Repaints the turntable pieces with the current picks — same finishes the
-# rink uses (skate leather 0.42, glove cloth 0.9; the steel stays steel).
+# Repaints the turntable pieces with the current picks — same finishes and
+# stripe semantics as the rink (skate leather 0.42, glove cloth 0.9; the
+# steel stays steel): the picks color only the collar band and the wrist
+# cuff, while boot, collar, and fist keep the kit look.
 func _repaint_preview() -> void:
 	if _boot == null:
 		return
-	var skate_mat := StandardMaterial3D.new()
-	skate_mat.albedo_color = _resolved_skate()
-	skate_mat.roughness = 0.42
-	_boot.material_override = skate_mat
-	_collar.material_override = skate_mat.duplicate()
-	var glove_mat := StandardMaterial3D.new()
-	glove_mat.albedo_color = _resolved_glove()
-	glove_mat.roughness = 0.9
-	_fist.material_override = glove_mat
-	_cuff.material_override = glove_mat.duplicate()
+	var boot_mat := StandardMaterial3D.new()
+	boot_mat.albedo_color = Color(0.08, 0.08, 0.08)
+	boot_mat.roughness = 0.42
+	_boot.material_override = boot_mat
+	_collar.material_override = boot_mat.duplicate()
+	var stripe_mat := StandardMaterial3D.new()
+	stripe_mat.albedo_color = _resolved_skate()
+	stripe_mat.roughness = 0.42
+	_skate_stripe.material_override = stripe_mat
+	var fist_mat := StandardMaterial3D.new()
+	fist_mat.albedo_color = _kit_gloves
+	fist_mat.roughness = 0.9
+	_fist.material_override = fist_mat
+	var cuff_mat := StandardMaterial3D.new()
+	cuff_mat.albedo_color = _resolved_glove()
+	cuff_mat.roughness = 0.9
+	_cuff.material_override = cuff_mat
