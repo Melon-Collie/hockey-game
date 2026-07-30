@@ -67,10 +67,20 @@ const _TORSO_Z_SCALE: float = 0.88
 const _TORSO_SIDES: int = 10   # back number spans ~3 facets — creased, still legible
 const _LEG_SIDES: int = 8
 
-# Helmet: faceted ball truncated at the jaw line (v is the equirect latitude
-# fraction, so 0.82 cuts just below the chin) with a flat underside cap.
+# Head + helmet. The scene's Helmet node carries the helmet SHELL (painted
+# the kit's helmet color, scaled by the appearance rig); the builder parents
+# a "Head" MeshInstance3D under it so both share the node's transform. The
+# shell's lower edge varies with azimuth — brow-high at the face (−Z,
+# leaving the head visible), ear-low on the sides, lowest at the back — via
+# cut_v(θ) = CUT_BASE + CUT_BACK_BIAS·cos(θ) in equirect latitude fractions
+# (θ = 0 is +Z, the back).
 const _HELMET_RADIUS: float = 0.155
-const _HELMET_CUT_V: float = 0.82
+const _HELMET_CUT_BASE: float = 0.69
+const _HELMET_CUT_BACK_BIAS: float = 0.11
+const HEAD_RADIUS: float = 0.135
+# Placeholder skin — deliberately shocking pink so the head/helmet split is
+# unmistakable in playtests until real skin tones arrive.
+const HEAD_COLOR := Color(1.0, 0.2, 0.75)
 
 # Shoulder cap: a prolate deltoid pad, elongated along its local +Y pole. The
 # pole is NOT static — Skater._orient_shoulder_cap leans it toward the arm's
@@ -122,6 +132,7 @@ static var _cache: Dictionary = {}
 static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
 	_swap(upper_body, "UpperBodyMesh", "torso", _build_torso)
 	_swap(upper_body, "Helmet", "helmet", _build_helmet)
+	_ensure_head(upper_body)
 	_swap(upper_body, "ShoulderL", "shoulder", _build_shoulder)
 	_swap(upper_body, "ShoulderR", "shoulder", _build_shoulder)
 	for side: String in ["L", "R"]:
@@ -202,8 +213,67 @@ static func _build_torso() -> ArrayMesh:
 	return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE)
 
 
+# Helmet shell: lat/long bands whose bottom latitude follows the per-azimuth
+# cut (see the constants' doc), closed by a fan from the rim to an interior
+# center — those closure faces hide inside the head ball, and closing keeps
+# the solid's winding testable. Same ring orientation as _build_ball, so the
+# shared quad ordering stays outward.
 static func _build_helmet() -> ArrayMesh:
-	return _build_ball(_HELMET_RADIUS, 10, 6, _HELMET_CUT_V)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see class doc block
+	var lon: int = 10
+	var lat: int = 4
+	var rings: Array[PackedVector3Array] = []
+	for j in lat + 1:
+		var ring := PackedVector3Array()
+		ring.resize(lon + 1)
+		for k in lon + 1:
+			var theta: float = TAU * float(k) / float(lon)
+			var cut_v: float = _HELMET_CUT_BASE + _HELMET_CUT_BACK_BIAS * cos(theta)
+			var v: float = cut_v * float(j) / float(lat)
+			var y: float = _HELMET_RADIUS * cos(PI * v)
+			var ring_r: float = _HELMET_RADIUS * sin(PI * v)
+			ring[k] = Vector3(sin(theta) * ring_r, y, cos(theta) * ring_r)
+		rings.append(ring)
+	for j in lat:
+		for k in lon:
+			_uv_quad(st,
+					rings[j][k], Vector2.ZERO,
+					rings[j][k + 1], Vector2(0.1, 0.0),
+					rings[j + 1][k + 1], Vector2(0.1, 0.1),
+					rings[j + 1][k], Vector2(0.0, 0.1))
+	var rim: PackedVector3Array = rings[lat]
+	var center := Vector3.ZERO
+	for k in lon:
+		center += rim[k]
+	center /= float(lon)
+	center.x = 0.0
+	center.z = 0.0
+	_cap(st, rim, center, Vector2(0.5, 0.9), false, 0.05)
+	st.generate_normals()
+	return st.commit()
+
+
+# The pink head ball under the helmet shell. Created (not swapped — no scene
+# node exists for it) as a child of the Helmet MeshInstance3D so it rides the
+# same appearance-rig scaling and skeleton offsets. SkaterUniformCoordinator
+# resolves it by name for ghost fades; the placeholder material lives here
+# because no kit color paints skin.
+static func _ensure_head(upper_body: Node3D) -> void:
+	var helmet: MeshInstance3D = upper_body.get_node_or_null("Helmet") as MeshInstance3D
+	if helmet == null or helmet.get_node_or_null("Head") != null:
+		return
+	var head := MeshInstance3D.new()
+	head.name = "Head"
+	head.mesh = _shared("head", func() -> ArrayMesh:
+		return _build_ball(HEAD_RADIUS, 10, 5, 1.0))
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = HEAD_COLOR
+	mat.roughness = 0.85
+	BodyRim.apply(mat)
+	head.material_override = mat
+	helmet.add_child(head)
 
 
 static func _build_shoulder() -> ArrayMesh:

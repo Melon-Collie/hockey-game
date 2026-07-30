@@ -46,6 +46,9 @@ func _parts() -> Array[PartSpec]:
 				Vector3(0.47, 0.55, 0.44), true),
 		PartSpec.new("helmet", SkaterMeshBuilder._build_helmet(),
 				Vector3(0.31, 0.31, 0.31), false),
+		PartSpec.new("head", SkaterMeshBuilder._build_ball(
+				SkaterMeshBuilder.HEAD_RADIUS, 10, 5, 1.0),
+				Vector3(0.27, 0.27, 0.27), false),
 		PartSpec.new("shoulder", SkaterMeshBuilder._build_shoulder(),
 				Vector3(0.21, 0.28, 0.21), false),
 		PartSpec.new("arm_bone", SkaterMeshBuilder.shared_arm_bone(),
@@ -135,6 +138,24 @@ func test_arm_rig_meshes_keep_their_placement_dimensions() -> void:
 	assert_almost_eq(SkaterMeshBuilder.shared_knob().get_aabb().size.y,
 			SkaterMeshBuilder.KNOB_HEIGHT_M, 0.001,
 			"knob mesh height must match KNOB_HEIGHT_M")
+
+
+func test_helmet_opens_at_the_face() -> void:
+	# The helmet shell's rim must sit brow-high at the front (−Z, exposing
+	# the head ball's face) and reach lower at the back — the asymmetry that
+	# makes it read as a helmet over a head rather than a full ball. Compare
+	# the lowest vertex on each half.
+	var mesh: ArrayMesh = SkaterMeshBuilder._build_helmet()
+	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var front_min_y: float = INF
+	var back_min_y: float = INF
+	for v: Vector3 in verts:
+		if v.z < -0.05:
+			front_min_y = minf(front_min_y, v.y)
+		elif v.z > 0.05:
+			back_min_y = minf(back_min_y, v.y)
+	assert_gt(front_min_y, back_min_y + 0.03,
+			"the helmet rim should sit meaningfully higher at the face than the back")
 
 
 func test_boot_blade_reaches_the_replaced_spheres_ice_depth() -> void:

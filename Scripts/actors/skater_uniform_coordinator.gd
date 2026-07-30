@@ -32,6 +32,7 @@ var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
 var _blade_tape: MeshInstance3D                    # team-colored tape band, child of _blade_mesh
 var _helmet: MeshInstance3D
+var _head: MeshInstance3D                          # pink head ball under the helmet shell
 var _shoulder_l: MeshInstance3D
 var _shoulder_r: MeshInstance3D
 var _hip_l: MeshInstance3D
@@ -75,6 +76,9 @@ func setup(skater: Skater) -> void:
 	_upper_body_mesh = skater.upper_body.get_node("UpperBodyMesh") as MeshInstance3D
 	_blade_mesh = skater.blade.get_node("MeshInstance3D") as MeshInstance3D
 	_helmet = skater.upper_body.get_node("Helmet") as MeshInstance3D
+	# Created by SkaterMeshBuilder._ensure_head before this setup runs. Never
+	# painted (skin, not kit) — resolved only so ghost fades reach it.
+	_head = _helmet.get_node_or_null("Head") as MeshInstance3D
 	_shoulder_l = skater.upper_body.get_node("ShoulderL") as MeshInstance3D
 	_shoulder_r = skater.upper_body.get_node("ShoulderR") as MeshInstance3D
 	# Leg meshes live under per-leg pivot chains: LowerBody/Leg{L,R} carries the
@@ -583,7 +587,7 @@ func apply_ghost(ghost: bool) -> void:
 			_skater.bone_visual(_skater.bottom_forearm_mesh),
 			_skater.top_elbow_sphere, _skater.top_hand_sphere,
 			_skater.bottom_elbow_sphere, _skater.bottom_hand_sphere,
-			_helmet, _shoulder_l, _shoulder_r,
+			_helmet, _head, _shoulder_l, _shoulder_r,
 			_hip_l, _hip_r, _thigh_l, _thigh_r,
 			_knee_l, _knee_r, _sock_l, _sock_r,
 			_skate_l, _skate_r, _foot_l, _foot_r,
