@@ -29,10 +29,10 @@ extends SkaterMeshBuilder
 const _BODY_HALF_W: float = 0.26
 const _BODY_HALF_D: float = 0.14
 const _BODY_STATIONS: Array[Vector2] = [
-	Vector2(0.36, 0.94),    # shoulder line
-	Vector2(0.18, 0.965),   # chest
+	Vector2(0.36, 1.0),     # shoulder line — chest-protector caps carry the widest read
+	Vector2(0.18, 0.98),    # chest
 	Vector2(-0.02, 0.93),   # waist pinch
-	Vector2(-0.16, 1.0),    # hip crest — pants bulk out-thicks the chest
+	Vector2(-0.16, 1.0),    # hip crest — pants bulk back out to the yoke's width
 	Vector2(-0.36, 0.97),
 ]
 
@@ -70,20 +70,21 @@ const _MASK_STATIONS: Array[Vector4] = [
 ]
 const _MASK_SEGS: int = 10
 
-# The mask's two fixed-color children (created once by apply_goalie, parented
-# to the head mesh so they ride every stance's head placement; the uniform
-# coordinator paints the mask shell only, never these):
-#   - NECK guard tube. The head-to-body offset is ~0.57 in every stance
-#     (STANDING 1.79/1.22, READY 1.62/1.06, BUTTERFLY 0.97/0.40), so one
-#     fixed tube under the chin bridges the gap the mask otherwise floats
-#     over — the goalie has no skater-style neck mesh.
-#   - CAGE plate, proud of the face station's front reach so the mask reads
-#     as a mask instead of a painted ball (the sculpted cage plane alone
-#     vanishes under same-color flat shading).
-const _NECK_TOP_Y: float = -0.10
-const _NECK_BOT_Y: float = -0.32
-const _NECK_RADIUS_TOP: float = 0.080
-const _NECK_RADIUS_BOT: float = 0.070
+# Two fixed-color children (created once by apply_goalie; the uniform
+# coordinator repaints only the meshes it owns, never these):
+#   - NECK guard tube, a child of the BODY mesh so it tilts with the trunk's
+#     per-stance pitch/lean instead of hanging plumb under a head that never
+#     pitches. The body's local +Y axis passes within a few centimetres of
+#     the head center in every stance (STANDING 1.79/1.22 @ −4°, READY
+#     1.62/1.06 @ −14°, BUTTERFLY 0.97/0.40 @ −10°), so one fixed body-local
+#     tube runs shoulders → mask chin everywhere.
+#   - CAGE plate, a child of the head mesh, proud of the face station's
+#     front reach so the mask reads as a mask instead of a painted ball
+#     (the sculpted cage plane alone vanishes under same-color flat shading).
+const _NECK_TOP_Y: float = 0.50    # body-local; buries into the mask chin
+const _NECK_BOT_Y: float = 0.30    # below the body top (0.36) — no visible seam
+const _NECK_RADIUS_TOP: float = 0.070
+const _NECK_RADIUS_BOT: float = 0.080  # flares toward the shoulders
 const _NECK_COLOR := Color(0.10, 0.10, 0.11)
 const _CAGE_COLOR := Color(0.16, 0.17, 0.18)
 
@@ -131,7 +132,7 @@ const HIP_CONNECTOR_RADIUS: float = 0.08
 static func apply_goalie(goalie: Goalie) -> void:
 	_swap_instance(goalie.body_mesh, "goalie_body", _build_body)
 	_swap_instance(goalie.head_mesh, "goalie_mask", _build_mask)
-	_ensure_mask_extras(goalie.head_mesh)
+	_ensure_extras(goalie)
 	_swap_instance(goalie.left_pad_mesh, "goalie_pad", _build_pad)
 	_swap_instance(goalie.right_pad_mesh, "goalie_pad", _build_pad)
 	_swap_instance(goalie.glove_ring_mesh, "goalie_glove_ring", _build_glove_ring)
@@ -218,8 +219,10 @@ static func _build_blocker() -> ArrayMesh:
 	return st.commit()
 
 
-static func _ensure_mask_extras(head: MeshInstance3D) -> void:
-	if head == null or head.get_node_or_null("Neck") != null:
+static func _ensure_extras(goalie: Goalie) -> void:
+	var body: MeshInstance3D = goalie.body_mesh
+	var head: MeshInstance3D = goalie.head_mesh
+	if body == null or head == null or body.get_node_or_null("Neck") != null:
 		return
 	var neck := MeshInstance3D.new()
 	neck.name = "Neck"
@@ -233,7 +236,7 @@ static func _ensure_mask_extras(head: MeshInstance3D) -> void:
 	neck_mat.roughness = 0.9
 	BodyRim.apply(neck_mat)
 	neck.material_override = neck_mat
-	head.add_child(neck)
+	body.add_child(neck)
 
 	var cage := MeshInstance3D.new()
 	cage.name = "Cage"
