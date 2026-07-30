@@ -145,7 +145,8 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 			# lane_clear from the candidate to the net at this D's real shot
 			# speed, i.e. "could I get my point shot through from here?".
 			var lane: float = AIActionScoring.lane_clear(
-					c, opp_net, opp_positions, shot_speed)
+					c, opp_net, opp_positions, shot_speed,
+					AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)
 			var score: float = lane + AIRoleHelpers.incumbent_bonus(ctx, c)
 			if score > best_score:
 				best_score = score

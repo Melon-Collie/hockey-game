@@ -283,13 +283,16 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 		# c to the shared teammates scratch in place and pop it after scoring —
 		# a duplicate() per candidate (10×/decide) was pure hot-path churn. The
 		# array is restored exactly, and too_close_to_teammate above already read
-		# it candidate-free this iteration.
+		# it candidate-free this iteration. The hypothetical body carries OUR
+		# real caps so the threat prices this defender's actual blade.
 		teammates.push_back(c)
+		ctx.scratch_teammate_caps.push_back(ctx.caps_by_peer.get(ctx.peer_id))
 		# Minimize the carrier's threat of feeding THIS man (lane × his shot).
 		var threat: float = AIActionScoring.threat_surface_pass(
 				carrier_pos, man_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, teammates)
+				GameRules.NET_HALF_WIDTH, teammates, ctx.scratch_teammate_caps)
 		teammates.pop_back()
+		ctx.scratch_teammate_caps.pop_back()
 		var score: float = -threat + incumbent_bonus(ctx, c)
 		# Stay on the defensive side of the man: positive projection onto
 		# the man→our-net line (see COVER_GOAL_SIDE_TOLERANCE_M). A man on
@@ -343,15 +346,16 @@ static func carrier_option_bases(
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
 		opp_teammates: Array[Vector3],
-		out_bases: Array[float]) -> void:
+		out_bases: Array[float],
+		our_team_caps: Array = []) -> void:
 	out_bases.clear()
 	out_bases.append(AIActionScoring.threat_surface_shoot(
 			carrier_pos, our_net, our_goalie_pos,
-			GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+			GameRules.NET_HALF_WIDTH, our_team_excluding_self, our_team_caps))
 	for opp_pos: Vector3 in opp_teammates:
 		out_bases.append(AIActionScoring.threat_surface_pass(
 				carrier_pos, opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self, our_team_caps))
 
 
 static func carrier_best_option(
@@ -361,14 +365,22 @@ static func carrier_best_option(
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
 		opp_teammates: Array[Vector3],
-		bases: Array[float] = []) -> float:
+		bases: Array[float] = [],
+		our_team_caps: Array = [],
+		self_caps: AISkaterCaps = null) -> float:
 	# Carrier's view of defenders = our team + me at the candidate. This helper
 	# is called once per candidate in PRESSURE's argmax (up to ~19×/decide), so
 	# duplicating the array every call was pure hot-path churn. Append the
 	# candidate to the caller's array in place and pop it before returning — the
 	# array is left exactly as passed, and after the first call the backing
-	# store keeps its capacity so the push/pop allocates nothing.
+	# store keeps its capacity so the push/pop allocates nothing. The caps ride
+	# alongside only when the caller supplied a matched array (the hypothetical
+	# body carries OUR caps) — a mismatched/empty caps array stays untouched and
+	# the surfaces fall back to league.
+	var caps_matched: bool = our_team_caps.size() == our_team_excluding_self.size()
 	our_team_excluding_self.push_back(candidate)
+	if caps_matched:
+		our_team_caps.push_back(self_caps)
 	var best: float = 0.0
 
 	if bases.size() == opp_teammates.size() + 1:
@@ -390,21 +402,25 @@ static func carrier_best_option(
 			if bi == 0:
 				v = AIActionScoring.threat_surface_shoot(
 						carrier_pos, our_net, our_goalie_pos,
-						GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+						GameRules.NET_HALF_WIDTH, our_team_excluding_self,
+						our_team_caps)
 			else:
 				v = AIActionScoring.threat_surface_pass(
 						carrier_pos, opp_teammates[bi - 1], our_net, our_goalie_pos,
-						GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+						GameRules.NET_HALF_WIDTH, our_team_excluding_self,
+						our_team_caps)
 			if v > best:
 				best = v
 		our_team_excluding_self.pop_back()
+		if caps_matched:
+			our_team_caps.pop_back()
 		return best
 
 	# Exact/unpruned path (no bases supplied — one-shot callers).
 	# Carrier's best shot at our net (with positional fallback floor).
 	var shoot_value: float = AIActionScoring.threat_surface_shoot(
 			carrier_pos, our_net, our_goalie_pos,
-			GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+			GameRules.NET_HALF_WIDTH, our_team_excluding_self, our_team_caps)
 
 	# Carrier's best pass to any teammate (with positional fallback).
 	# `our_net` is the attacking goal from the carrier's perspective, so the
@@ -413,11 +429,13 @@ static func carrier_best_option(
 	for opp_pos: Vector3 in opp_teammates:
 		var pass_score: float = AIActionScoring.threat_surface_pass(
 				carrier_pos, opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self, our_team_caps)
 		if pass_score > pass_value:
 			pass_value = pass_score
 
 	our_team_excluding_self.pop_back()
+	if caps_matched:
+		our_team_caps.pop_back()
 	return maxf(shoot_value, pass_value)
 
 
@@ -449,16 +467,24 @@ static func carrier_live_option(
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
 		opp_teammates: Array[Vector3],
-		abort_above: float = INF) -> float:
+		abort_above: float = INF,
+		our_team_caps: Array = [],
+		self_caps: AISkaterCaps = null) -> float:
 	# Defenders = our team + me at the candidate. Append-and-restore the caller's
 	# array in place instead of duplicating it — called once per candidate in
 	# RUSH_D1's lane fan (up to ~13×/decide), so a fresh Array per call was pure
 	# churn. The array is left exactly as passed; capacity is retained across the
-	# push/pop so steady-state calls allocate nothing.
+	# push/pop so steady-state calls allocate nothing. Caps ride alongside only
+	# when the caller supplied a matched array (the hypothetical body carries OUR
+	# caps); otherwise the reads fall back to league.
+	var caps_matched: bool = our_team_caps.size() == our_team_excluding_self.size()
 	our_team_excluding_self.push_back(candidate)
+	if caps_matched:
+		our_team_caps.push_back(self_caps)
 	var best: float = AIActionScoring.score_shoot(
 			carrier_pos, our_net, our_goalie_pos,
-			GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+			GameRules.NET_HALF_WIDTH, our_team_excluding_self,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0, our_team_caps)
 	for receiver: Vector3 in opp_teammates:
 		if best >= abort_above:
 			break
@@ -470,10 +496,13 @@ static func carrier_live_option(
 				our_goalie_pos, our_net, flight_s, receiver)
 		var pass_value: float = AIActionScoring.score_pass(
 				carrier_pos, receiver, our_net, pred_goalie,
-				GameRules.NET_HALF_WIDTH, our_team_excluding_self, pass_speed, unsettled)
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self, pass_speed,
+				unsettled, -1.0, Vector4.INF, Vector4.INF, our_team_caps)
 		if pass_value > best:
 			best = pass_value
 	our_team_excluding_self.pop_back()
+	if caps_matched:
+		our_team_caps.pop_back()
 	return best
 
 
@@ -683,16 +712,20 @@ static func collect_opp_team_excluding_carrier(ctx: RoleContext,
 				if anticipate else s.position)
 
 
-# Fills `out` with the positions of teammates excluding self. Used as the
-# anti-crowd filter input. Caller-owned scratch (see collect_opponents).
+# Fills `out` with the positions of teammates excluding self — the anti-crowd
+# filter input and the defender set of the threat-surface reads. Also fills
+# ctx.scratch_teammate_caps index-matched, so those reads price each defending
+# teammate's real blade/pace. Caller-owned scratch (see collect_opponents).
 static func collect_teammates_excluding_self(ctx: RoleContext,
 		out: Array[Vector3]) -> void:
 	out.clear()
+	ctx.scratch_teammate_caps.clear()
 	for pid: int in ctx.snapshot.skater_states:
 		if pid == ctx.peer_id:
 			continue
 		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
 			out.append(ctx.snapshot.skater_states[pid].position)
+			ctx.scratch_teammate_caps.append(ctx.caps_by_peer.get(pid))
 
 
 # Returns parallel arrays of opponent positions and full state refs.

@@ -167,6 +167,10 @@ signal replay_mode_changed(active: bool)
 # without a respawn.
 signal local_identity_changed(player_name: String, jersey_number: int, is_left_handed: bool)
 
+# Fires after a local tape-job edit lands in the peer map (apply_local_tape).
+# Cosmetic — carries the packed StickTapeConfig code.
+signal local_tape_changed(tape_code: int)
+
 # Local player picked a different attribute spread (Speed/Agility/Size/Skill).
 # Fires after the new picks land in PlayerPrefs and _peer_attributes[1] is
 # updated. GameManager listens and re-applies the multipliers to the local
@@ -265,6 +269,10 @@ var _peer_attributes: Dictionary[int, PlayerAttributes] = {}
 # reads it for a remote human's RemoteController so their authoritative wrister
 # power matches what the client predicted with its own sensitivity.
 var _peer_shot_sensitivity: Dictionary[int, float] = {}
+# peer_id -> packed StickTapeConfig code (cosmetic tape job). Same population
+# pattern as _peer_attributes; absent peers (bots, older payloads) read as the
+# default team-taped look.
+var _peer_tape_codes: Dictionary[int, int] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
 # Host-only: EMA of the host's OWN round-trip measurement to each peer
 # (host_ping/host_pong). Backs _peer_ping_ms on the host — the trusted RTT that
@@ -406,6 +414,7 @@ func _ready() -> void:
 	local_jersey_number = PlayerPrefs.jersey_number
 	local_is_left_handed = PlayerPrefs.is_left_handed
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
+	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
 
 # ── Connection ────────────────────────────────────────────────────────────────
 func start_offline() -> void:
@@ -416,6 +425,7 @@ func start_offline() -> void:
 	_peer_names[1] = local_player_name
 	_peer_numbers[1] = local_jersey_number
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
+	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
 			"rule_set": GameRules.DEFAULT_RULE_SET,
 			"team_size": GameRules.DEFAULT_TEAM_SIZE}
@@ -656,6 +666,7 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_names.erase(id)
 	_peer_numbers.erase(id)
 	_peer_attributes.erase(id)
+	_peer_tape_codes.erase(id)
 	pending_color_votes.erase(id)
 	# NOTE: _peer_steam_ids is deliberately NOT erased before the emit below —
 	# GameManager.on_player_disconnected (a synchronous listener) reads
@@ -691,11 +702,13 @@ func _on_connected_to_server() -> void:
 	# local-prediction build showed defaults while every host-sourced view was
 	# correct. Valid here — the unique id is assigned before connected_to_server.
 	_peer_attributes[local_peer_id()] = local_attrs
+	_peer_tape_codes[local_peer_id()] = PlayerPrefs.stick_tape_code
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.height, local_attrs.weight, local_attrs.profile,
 			local_attrs.curve, local_attrs.flex, local_attrs.length,
 			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
-			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity)
+			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity,
+			PlayerPrefs.stick_tape_code)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -797,6 +810,8 @@ func reset() -> void:
 	_kicked_peers.clear()
 	_peer_attributes.clear()
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
+	_peer_tape_codes.clear()
+	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
 	pending_game_config = {}
 	pending_lobby_slots = {}
 	pending_lobby_roster = []
@@ -1038,7 +1053,8 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_flex: int = PlayerAttributes.GEAR_BALANCED,
 		attr_length: int = PlayerAttributes.GEAR_BALANCED,
 		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0,
-		shot_power_sensitivity: float = 1.0) -> void:
+		shot_power_sensitivity: float = 1.0,
+		tape_code: int = StickTapeConfig.DEFAULT_CODE) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -1080,6 +1096,8 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_weight,
 			attr_profile, attr_curve, attr_flex, attr_length)
 	_peer_shot_sensitivity[sender_id] = clampf(shot_power_sensitivity, 0.25, 4.0)
+	# Cosmetic tape job — round-trip coerces a forged code to a legal one.
+	_peer_tape_codes[sender_id] = StickTapeConfig.from_code(tape_code).to_code()
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	# Seed the host-measured RTT immediately instead of waiting up to a full
@@ -1178,6 +1196,26 @@ func get_peer_attributes(peer_id: int) -> PlayerAttributes:
 func get_peer_shot_sensitivity(peer_id: int) -> float:
 	return _peer_shot_sensitivity.get(peer_id, 1.0)
 
+# A peer's replicated tape job (packed StickTapeConfig code). Bots and absent
+# peers read as the default team-taped look.
+func get_peer_tape_code(peer_id: int) -> int:
+	return _peer_tape_codes.get(peer_id, StickTapeConfig.DEFAULT_CODE)
+
+# Client-side stash of a roster-synced peer's tape code (the host's own path
+# is request_join). Coerced like every other wire entry point.
+func set_peer_tape_code(peer_id: int, tape_code: int) -> void:
+	_peer_tape_codes[peer_id] = StickTapeConfig.from_code(tape_code).to_code()
+
+# Single entry point for in-session tape edits, mirroring apply_local_identity:
+# writes the local peer's map entry and lets GameManager repaint the live
+# skater. Cosmetic-only, so there is no runtime peer-broadcast — other peers
+# pick the new job up at the next session's join handshake.
+func apply_local_tape(tape_code: int) -> void:
+	var coerced: int = StickTapeConfig.from_code(tape_code).to_code()
+	_peer_tape_codes[1] = coerced
+	_peer_tape_codes[local_peer_id()] = coerced
+	local_tape_changed.emit(coerced)
+
 # Host-side override of a peer's locked attributes. Used by the reconnect path
 # to restore the build the player held at their original join, so a mid-match
 # drop + prefs edit + rejoin can't swap to a different attribute spread.
@@ -1238,6 +1276,31 @@ func request_update_attributes(attr_height: int, attr_weight: int, attr_profile:
 	# Coerce-construct — same lateral-axes validation as request_join.
 	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_weight,
 			attr_profile, attr_curve, attr_flex, attr_length)
+
+
+# Lobby-time tape edit, mirroring update_lobby_attributes: stamp the local
+# entry the spawn path reads, and forward to the host (which coerces) when
+# we're a client — the join handshake already carried the old code.
+func update_lobby_tape(tape_code: int) -> void:
+	var coerced: int = StickTapeConfig.from_code(tape_code).to_code()
+	_peer_tape_codes[local_peer_id()] = coerced
+	if is_host:
+		_peer_tape_codes[1] = coerced
+	else:
+		request_update_tape.rpc_id(1, coerced)
+
+
+# Client → host: update the sender's tape job from the lobby. Cosmetic;
+# consulted only at spawn, so no match-in-progress gate is needed (see
+# request_update_attributes).
+@rpc("any_peer", "reliable")
+func request_update_tape(tape_code: int) -> void:
+	if not is_host:
+		return
+	var sender_id: int = multiplayer.get_remote_sender_id()
+	if not _peer_names.has(sender_id):
+		return
+	_peer_tape_codes[sender_id] = StickTapeConfig.from_code(tape_code).to_code()
 
 # Cap on inputs per RPC. Matches the host queue depth in RemoteController so a
 # malicious peer can't force the loop into hundreds of failed decode iterations
@@ -1746,10 +1809,12 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_colo
 		attr_profile: int = PlayerAttributes.GEAR_BALANCED,
 		attr_curve: int = PlayerAttributes.GEAR_BALANCED,
 		attr_flex: int = PlayerAttributes.GEAR_BALANCED,
-		attr_length: int = PlayerAttributes.GEAR_BALANCED) -> void:
+		attr_length: int = PlayerAttributes.GEAR_BALANCED,
+		tape_code: int = StickTapeConfig.DEFAULT_CODE) -> void:
 	var attrs := PlayerAttributes.new(attr_height, attr_weight,
 			attr_profile, attr_curve, attr_flex, attr_length)
 	_peer_attributes[peer_id] = attrs
+	_peer_tape_codes[peer_id] = StickTapeConfig.from_code(tape_code).to_code()
 	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number, attrs)
 
 @rpc("authority", "reliable")
@@ -1975,7 +2040,8 @@ func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey
 		return
 	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_average()
 	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number,
-			attrs.height, attrs.weight, attrs.profile, attrs.curve, attrs.flex, attrs.length)
+			attrs.height, attrs.weight, attrs.profile, attrs.curve, attrs.flex, attrs.length,
+			get_peer_tape_code(peer_id))
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:
 	sync_existing_players.rpc_id(peer_id, player_data)

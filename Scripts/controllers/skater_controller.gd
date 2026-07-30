@@ -1105,6 +1105,7 @@ func build_ai_caps() -> AISkaterCaps:
 	caps.loft_tan_max = loft_tan_max
 	caps.lateral_grip = lateral_grip
 	caps.backhand_power_coefficient = backhand_power_coefficient
+	caps.reception_ceiling_mult = skater.reception_ceiling_mult
 	# Handle reach scales with the blade lever: max_blade_speed / its base is
 	# exactly the lever ratio (attributes v4 — reach + stick length), so a
 	# longer lever protects the puck further out. _base is captured on the
@@ -1189,9 +1190,13 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# release math (ShotMechanics.loft_y), never a lean on the loft speeds —
 	# so at pace every curve reaches the same per-level apex (the crossbar
 	# ceiling holds for all blades) while the soft in-tight roof is
-	# face-gated. Open (45°) equals the universal MAX_LOFT_RATIO cap, i.e.
+	# face-gated. The M28's 45° equals the universal MAX_LOFT_RATIO cap, i.e.
 	# the pre-curve shipped behavior bit-exact.
 	loft_tan_max = attrs.curve_loft_tan()
+	# Reception ceiling rides the skater body — the reception decision sites
+	# (PuckController contact scan + the lag-comp pickup resolver) scale the
+	# puck's league deflect thresholds by the RECEIVER's blade shape.
+	skater.reception_ceiling_mult = attrs.reception_ceiling_mult()
 	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
 	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_pass
 	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
@@ -1203,8 +1208,10 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	min_wrister_power = _base_min_wrister_power              # baseline floor (= snap)
 	max_wrister_power = _base_max_wrister_power * m_shot_ceil
 	quick_pass_power  = _base_quick_pass_power               # baseline — also the pass speed
-	min_slapper_power = _base_min_slapper_power * m_shot_ceil
-	max_slapper_power = _base_max_slapper_power * m_shot_ceil
+	# Slapper carries the curve's contact lean on top of the flex/height
+	# ceiling — the one shot where the pattern shape meets the ice.
+	min_slapper_power = _base_min_slapper_power * m_shot_ceil * attrs.curve_slap_mult()
+	max_slapper_power = _base_max_slapper_power * m_shot_ceil * attrs.curve_slap_mult()
 	# Slapper wind-up time keeps the gentler shot_charge curve. (Wrister power is
 	# pure mouse speed — no charge distance — so Shot only scales its ceiling.)
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
@@ -1235,6 +1242,9 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# the arm bone wrappers recompute visuals from these every frame, so no
 	# separate visual pass is needed.
 	stick_length              = _base_stick_length              * attrs.stick_len_mult()
+	# The CURVE gear's visual half — regenerates the blade mesh to the picked
+	# pattern (gameplay half is PlayerAttributes' loft/backhand leans).
+	skater.apply_blade_pattern(attrs.curve)
 	skater.upper_arm_length   = _base_skater_upper_arm_length   * m_height
 	skater.forearm_length     = _base_skater_forearm_length     * m_height
 	# Shoulder anchors track the visual shoulder balls, which the appearance
@@ -2211,6 +2221,8 @@ func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
 # Bearing the swing-chirality tracker seeds from at charge start: origin→cursor,
 # the SHOT LINE. MUST mirror _update_wrister_charge's chirality source so the first
 # swing_step is source-to-source and banks no spurious rotation from a bearing jump.
+# (At the pin the swing_anchor translation is zero, so raw origin→cursor IS that
+# source for both anchor frames.)
 # The origin is passed in (rather than read off _aiming) because the state machine
 # captures it on this same edge, a line before reset_wrister stores it.
 func _wrister_chirality_seed(input: InputState, origin_world: Vector3) -> Vector3:
@@ -2377,7 +2389,19 @@ func _update_wrister_charge(input: InputState) -> void:
 	# by the ~1 m blade parallax, and for a gamepad — whose cursor is anchored on
 	# the puck so the stick bearing IS the shot line's bearing — measuring about
 	# the body would re-introduce that parallax as swing the player never made.
-	var swing_bearing: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
+	#
+	# For a MOUSE the anchor additionally tracks the skater's translation since the
+	# pin (ChargeTracking.swing_anchor): the mouse's world point rides the skater-
+	# following camera, so about a world-pinned anchor mere skating read as swing —
+	# retreating dragged the cursor toward/past the origin, where the shrinking
+	# bearing radius amplified the drift into forehand→backhand misreads. The pad's
+	# shot cursor is world-anchored on the pin itself and needs no compensation;
+	# commit_wrister_power (its wire-visible marker) picks the frame, so host
+	# replay of a remote shooter classifies identically.
+	var swing_anchor: Vector3 = ChargeTracking.swing_anchor(
+			_aiming.wrister_origin_world, skater.global_position,
+			_aiming.wrister_origin_skater_pos, input.commit_wrister_power)
+	var swing_bearing: Vector3 = input.mouse_world_pos - swing_anchor
 	swing_bearing.y = 0.0
 	# The stroke-travel accumulator's per-tick step is bounded by the on-axis
 	# blade-speed budget × delta: the target is a closed-form ROM clamp (not

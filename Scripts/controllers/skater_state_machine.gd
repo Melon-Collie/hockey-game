@@ -259,6 +259,10 @@ func _enter_wrister_aim(skater: Skater, input: InputState) -> void:
 	# SkaterAimingBehavior.wrister_origin_world. Anchoring here, before the blade
 	# sweeps, is what keeps origin→cursor stable through the stroke.
 	var origin_world: Vector3 = skater.get_blade_contact_global()
+	# Skater position at the pin (XZ): the reference the chirality read's
+	# locomotion compensation measures translation from (ChargeTracking.swing_anchor).
+	var origin_skater_pos: Vector3 = skater.global_position
+	origin_skater_pos.y = 0.0
 	# Chirality (FH/BH) baseline: seed from the SAME vector the charge tick will
 	# feed — origin→cursor, the shot line itself — so the first swing_step is
 	# source-to-source and doesn't bank a spurious rotation from a bearing jump.
@@ -270,7 +274,7 @@ func _enter_wrister_aim(skater: Skater, input: InputState) -> void:
 	else:
 		swing_bearing = input.mouse_world_pos - origin_world
 	swing_bearing.y = 0.0
-	_aiming.reset_wrister(intent_pos, swing_bearing, origin_world)
+	_aiming.reset_wrister(intent_pos, swing_bearing, origin_world, origin_skater_pos)
 
 
 func _cancel_slapper_internal() -> void:

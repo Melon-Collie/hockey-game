@@ -324,10 +324,12 @@ static func _lane_fan_target(ctx: RoleContext, read: AIRushRead,
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammates)
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 
+	var self_caps: AISkaterCaps = ctx.caps_by_peer.get(ctx.peer_id)
 	var on_line: Vector3 = carrier_pos + dir_net * gap
 	var best_pos: Vector3 = on_line
 	var best_score: float = LINE_HOLD_MARGIN - AIRoleHelpers.carrier_live_option(
-			on_line, carrier_pos, our_net, our_goalie_pos, teammates, receivers)
+			on_line, carrier_pos, our_net, our_goalie_pos, teammates, receivers,
+			INF, ctx.scratch_teammate_caps, self_caps)
 
 	var no_defenders: Array[Vector3] = []
 	var a_net: float = atan2(dir_net.z, dir_net.x)
@@ -371,7 +373,7 @@ static func _lane_fan_target(ctx: RoleContext, read: AIRushRead,
 				continue
 			var score: float = -AIRoleHelpers.carrier_live_option(
 					c, carrier_pos, our_net, our_goalie_pos, teammates, receivers,
-					-best_score)
+					-best_score, ctx.scratch_teammate_caps, self_caps)
 			if score > best_score:
 				best_score = score
 				best_pos = c

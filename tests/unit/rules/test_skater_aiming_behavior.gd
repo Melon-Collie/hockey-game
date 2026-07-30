@@ -8,8 +8,9 @@ extends GutTest
 #   - intent_pos: cursor position (screen-space in prod — packed (x, 0, y)),
 #     drives the DIRECTION / variance check AND the cursor-speed power signal
 #     (cursor_speed_ema). Camera-immune.
-#   - blade_pos: blade position in skater-translation-subtracted world XZ —
-#     drives the swing ROTATION (signed angular step around the player).
+#   - swing_bearing: cursor − swing anchor (world XZ; ChargeTracking.swing_anchor)
+#     — drives the swing ROTATION (signed angular step about the anchor) and the
+#     stroke travel.
 # Power is the pure cursor speed, not a drag distance.
 
 const VARIANCE_DEG: float = 35.0
@@ -99,6 +100,12 @@ func test_reset_wrister_zeroes_state_and_seeds_pos() -> void:
 	assert_eq(ab.prev_blade_dir, Vector3.ZERO)
 	assert_eq(ab.prev_intent_pos, Vector3(0.2, 0.0, 0.1))
 	assert_eq(ab.prev_swing_bearing, Vector3(0.25, 0.0, 0.05))
+
+func test_reset_wrister_pins_origin_and_skater_pos() -> void:
+	ab.reset_wrister(Vector3.ZERO, Vector3.ZERO, Vector3(1.0, 0.0, 2.0), Vector3(0.5, 0.0, 1.5))
+	assert_eq(ab.wrister_origin_world, Vector3(1.0, 0.0, 2.0), "aim origin pinned at charge start")
+	assert_eq(ab.wrister_origin_skater_pos, Vector3(0.5, 0.0, 1.5),
+			"skater pin position captured for the swing anchor's locomotion compensation")
 
 # ── Stroke travel (the power-ceiling gate signal) ─────────────────────────────
 

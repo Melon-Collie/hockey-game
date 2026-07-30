@@ -257,23 +257,38 @@ const _FLEX_SHOT_LEAN: Array[float] = [0.94, 1.00, 1.06]    # whippy / medium / 
 const _FLEX_CHARGE_LEAN: Array[float] = [0.92, 1.00, 1.10]  # wind-up time, with power
 const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-stroke travel
 
-# BLADE CURVE — the FACE ANGLE ↔ backhand. The face angle caps the shot's
-# LAUNCH ANGLE (ShotMechanics.loft_y's ratio is tan(launch angle); the curve
-# tightens the pre-existing universal 45° cap, MAX_LOFT_RATIO): a shot can
-# never leave the blade steeper than the face. Loft levels stay fixed
-# vertical speeds, so at PACE every curve still reaches the same apex — the
-# crossbar ceiling holds for all blades — but the SOFT steep shot that roofs
-# in tight is face-gated: min bar-height roofing distance emerges at ~2.2 m
-# (open, 45° = today's global cap, bit-identical) / ~3.7 m (balanced, 31°) /
-# ~5.2 m (closed, 23°), and the standstill saucer flip flattens on a closed
-# blade the same way. Trajectory is a pure function of (power, level, face) —
-# never of where the net is. OPEN also shortens the wrister runway (quick
-# release) but deepens the backhand penalty; CLOSED is the honest-both-ways
-# blade. Backhand relief approaches but never reaches forehand parity
-# (0.75 base × 1.08 = 0.81).
-const _CURVE_FACE_ANGLE_DEG: Array[float] = [23.0, 31.0, 45.0]  # closed / balanced / open
+# BLADE CURVE — three house patterns modeled on hockey's most-played real
+# blades: M88 (closed slot — the P88-like mid curve), M92 (balanced — the
+# P92-like mid-toe all-rounder, the neutral row), M28 (open — the P28-like
+# open toe hook). The FACE ANGLE caps the shot's LAUNCH ANGLE
+# (ShotMechanics.loft_y's ratio is tan(launch angle); the curve tightens the
+# pre-existing universal 45° cap, MAX_LOFT_RATIO): a shot can never leave the
+# blade steeper than the face. Loft levels stay fixed vertical speeds, so at
+# PACE every curve still reaches the same apex — the crossbar ceiling holds
+# for all blades — but the SOFT steep shot that roofs in tight is face-gated:
+# min bar-height roofing distance emerges at ~2.2 m (M28, 45° = today's
+# global cap, bit-identical) / ~3.7 m (M92, 31°) / ~4.5 m (M88, 26°), and the
+# standstill saucer flip flattens on the M88 the same way. Trajectory is a
+# pure function of (power, level, face) — never of where the net is.
+#
+# The rest of the identity triangle, all lateral trades about the M92:
+#   M88 — the playmaker/point blade: best backhand, +3% slapper (a flatter
+#         face stays square through the heel-contact sweep), and catches the
+#         hardest feeds (+7% reception ceiling — the flat blade cradles).
+#   M28 — the in-tight blade: the open toe face is its whole (large) upside;
+#         it pays the deepest backhand penalty, −3% slapper, and hard feeds
+#         bounce off (−7% reception). Its stored quick-release runway lean
+#         goes live when the wrister travel gate unfreezes.
+# Backhand relief approaches but never reaches forehand parity
+# (0.75 base × 1.08 = 0.81). Reception lean scales the deflect ceiling +
+# alignment bonus at the decision sites (PuckReceptionRules callers) — never
+# pickup_max_speed, so soft passes settle on every blade and the client's
+# provisional-pickup gate stays build-independent.
+const _CURVE_FACE_ANGLE_DEG: Array[float] = [26.0, 31.0, 45.0]  # M88 / M92 / M28
 const _CURVE_RUNWAY_LEAN: Array[float] = [1.00, 1.00, 0.90]
-const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.92]
+const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.90]
+const _CURVE_SLAP_LEAN: Array[float] = [1.03, 1.00, 0.97]
+const _CURVE_RECEPTION_LEAN: Array[float] = [1.07, 1.00, 0.93]
 
 # ── Gameplay tables — frame-indexed (5 rows lean→heavy at the BMI anchors) ────
 
@@ -520,6 +535,16 @@ func wrister_runway_mult() -> float:
 # human; hands_backhand_mult stays 1.0 by constitution — this is the BLADE's
 # shape, not the player's skill).
 func curve_backhand_mult() -> float: return _CURVE_BACKHAND_LEAN[curve]
+
+# Slapper-only power lean — how square the pattern keeps the blade through
+# the heel-contact sweep (see the _CURVE_* doc). Multiplies with the flex
+# shot lean on the slapper min/max; wristers deliberately stay flex-only.
+func curve_slap_mult() -> float: return _CURVE_SLAP_LEAN[curve]
+
+# Reception ceiling lean — scales the deflect ceiling + squared-up bonus a
+# receiver's blade can soak (PuckReceptionRules decision sites). Physical
+# framing: the blown-open force limit of the blade shape, not a hands stat.
+func reception_ceiling_mult() -> float: return _CURVE_RECEPTION_LEAN[curve]
 
 # tan(face angle) — the launch-angle cap the release math applies (see the
 # _CURVE_FACE_ANGLE_DEG doc). Open's 45° equals ShotMechanics.MAX_LOFT_RATIO,

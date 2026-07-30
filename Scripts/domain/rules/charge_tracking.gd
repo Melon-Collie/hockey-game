@@ -23,10 +23,11 @@ class_name ChargeTracking
 #
 # SWING ROTATION: the signed angular sweep of the SHOT LINE about its anchor,
 # accumulated in radians over the stroke. The caller passes bearings measured
-# from a fixed anchor (SkaterController feeds cursor − pinned wrister origin, so
-# the origin — where the puck sits and the shot leaves from — is the rotation
-# center; the anchor must not be the body, or the ~1 m blade parallax shows up as
-# swing the player never made). Each tick adds the signed angle from the previous
+# from a fixed anchor (SkaterController feeds cursor − swing anchor: the pinned
+# wrister origin — where the puck sits and the shot leaves from — locomotion-
+# compensated for a camera-framed cursor via swing_anchor below; the anchor must
+# not be the body, or the ~1 m blade parallax shows up as swing the player never
+# made). Each tick adds the signed angle from the previous
 # bearing to the current one (atan2(cross.y, dot) — the standard
 # clockwise-vs-counter-clockwise test).
 # The SIGN of the accumulated total is the forehand/backhand chirality: a
@@ -138,6 +139,30 @@ static func accumulate(
 			current_travel, max_travel_step)
 	return {"direction": r.direction, "reset": r.reset, "rotation": r.rotation,
 			"travel": r.travel}
+
+
+# Anchor the swing/travel bearings are measured from this tick. The wrister's
+# aim origin is pinned in WORLD space, but the chirality read wants the player's
+# GESTURE, and the right frame depends on where the device's cursor lives:
+#   - cursor_world_anchored (the gamepad shot cursor, re-anchored every frame on
+#     the pinned origin's screen projection): the world-pinned origin already
+#     isolates the gesture — returned unchanged.
+#   - camera-framed cursor (the mouse: a screen point ray-projected through a
+#     camera that follows the skater): locomotion translates the cursor's world
+#     point while a world-pinned anchor stays put, so skating reads as swing
+#     nobody gestured — worst when retreating, which drags the cursor toward or
+#     past the anchor, where the shrinking bearing radius amplifies the drift
+#     into forehand→backhand misreads. Translating the anchor by the skater's
+#     motion since the pin (the camera tracks the skater) cancels the drift and
+#     leaves only the gesture.
+# XZ only (drift y flattened), like the bearings it anchors.
+static func swing_anchor(origin_world: Vector3, skater_pos: Vector3,
+		skater_pos_at_pin: Vector3, cursor_world_anchored: bool) -> Vector3:
+	if cursor_world_anchored:
+		return origin_world
+	var drift := skater_pos - skater_pos_at_pin
+	drift.y = 0.0
+	return origin_world + drift
 
 
 # Signed angle (radians, +/-) swept from bearing `prev_rel` to `curr_rel`

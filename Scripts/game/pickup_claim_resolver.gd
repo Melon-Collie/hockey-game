@@ -295,7 +295,9 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 			Vector3(skater_snap.facing.x, 0.0, skater_snap.facing.y))
 	if not PuckReceptionRules.should_receive(
 			puck_vel, skater_snap.velocity, face_normal,
-			puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
+			puck.pickup_max_speed,
+			puck.deflect_min_speed * record.skater.reception_ceiling_mult,
+			puck.alignment_receive_bonus * record.skater.reception_ceiling_mult):
 		# Deflect verdict: redirect the puck instead of granting possession. Not a
 		# contested action (no carrier change), so it fires immediately rather than
 		# arming the contest window. Counts as a claim outcome (geometry hit, but the

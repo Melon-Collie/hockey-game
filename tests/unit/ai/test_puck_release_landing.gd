@@ -198,8 +198,9 @@ func test_the_crossing_read_is_direction_aware() -> void:
 func test_the_crossing_clock_is_reported_with_the_crossing() -> void:
 	var t: float = _time_to_far_goal_line(Vector3(12.0, 0.0, 22.0), Vector3(0.0, 0.0, -14.0))
 	assert_true(is_finite(t), "a crossing release reports when it crosses")
-	# 48.65 m at 14 m/s shedding 0.49 m/s^2 — a shade over the constant-speed 3.48 s.
-	assert_almost_eq(t, 3.6, 0.2, "straight-line crossing clock is the slide solve")
+	# 48.65 m at 14 m/s shedding 0.49 m/s^2 is a 3.72 s slide; the line grazes
+	# the far corner arc first, and the board-friction bleed there costs a beat.
+	assert_almost_eq(t, 3.8, 0.2, "crossing clock is the slide solve plus the corner graze")
 
 
 func test_a_release_that_never_crosses_reports_no_clock() -> void:

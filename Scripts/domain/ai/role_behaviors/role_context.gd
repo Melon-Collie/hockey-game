@@ -278,6 +278,10 @@ var scratch_opp_caps: Array[AISkaterCaps] = []
 # collect_opponents (MARK's fallback keys the brain's threat memo by pid).
 var scratch_opp_ids: Array[int] = []
 var scratch_teammates: Array[Vector3] = []
+# AISkaterCaps index-matched to scratch_teammates (entries may be null), filled
+# by collect_teammates_excluding_self — the defender set of the threat-surface
+# reads, priced at each teammate's real blade/pace instead of league.
+var scratch_teammate_caps: Array[AISkaterCaps] = []
 var scratch_opp_receivers: Array[Vector3] = []
 # Counter-threat states + index-matched caps for fill_counter_channels — the
 # ATTACKER-FILTERED subset of the opponents (AIRoleHelpers.collect_counter_threats).

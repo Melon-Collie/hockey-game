@@ -23,6 +23,14 @@ var _apply_btn: Button = null
 # its own snapshot/restore/commit; the popup just wires its `changed` signal
 # into _update_apply_state and gates Apply on its is_dirty()/is_valid().
 var _attr_panel: AttributePickerPanel = null
+# The stick workbench (gear + tape + live preview), opened over this popup by
+# the Edit Stick button. Its Done lands in the attribute panel's pending
+# working model (the tape job is part of each build preset); this popup's
+# Apply/Cancel commit or discard it with everything else.
+var _stick_popup: StickEditorPopup = null
+# Gold "unapplied stick changes" note beside the Edit Stick button — pending
+# stick edits are otherwise invisible until Apply.
+var _stick_pending_label: Label = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
@@ -115,17 +123,90 @@ func _build() -> void:
 	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
-	_build_name_section(vbox)
-	_build_number_section(vbox)
-	_build_handedness_section(vbox)
-	_build_team_section(vbox)
+	# Two columns: identity (name / number / hands / team) on the left,
+	# the build (attributes + stick) on the right.
+	var columns := HBoxContainer.new()
+	columns.alignment = BoxContainer.ALIGNMENT_CENTER
+	columns.add_theme_constant_override("separation", 48)
+	vbox.add_child(columns)
+
+	# Fixed column widths keep the popup from breathing as content changes
+	# (the preset chips wrap inside the picker instead of widening it).
+	# Both columns top-align so the two headings sit on the same line.
+	var identity_col := VBoxContainer.new()
+	identity_col.add_theme_constant_override("separation", 16)
+	identity_col.custom_minimum_size = Vector2(300, 0)
+	columns.add_child(identity_col)
+
+	var build_col := VBoxContainer.new()
+	build_col.add_theme_constant_override("separation", 16)
+	columns.add_child(build_col)
+
+	# Column heading mirroring the attribute panel's own "Attributes" one, so
+	# the two sides read as siblings.
+	var identity_heading := Label.new()
+	identity_heading.text = tr(&"PLAYER_IDENTITY_HEADING")
+	identity_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	MenuStyle.apply_heading(identity_heading, 22)
+	identity_col.add_child(identity_heading)
+
+	_build_name_section(identity_col)
+	_build_number_section(identity_col)
+	_build_handedness_section(identity_col)
+	_build_team_section(identity_col)
 	_attr_panel = AttributePickerPanel.new()
 	_attr_panel.changed.connect(_update_apply_state)
-	vbox.add_child(_attr_panel)
+	build_col.add_child(_attr_panel)
 	# The panel brings its own on-screen keyboard for the preset name (this
 	# popup's is for the player name); hand it this form as the wall target.
 	_attr_panel.set_keyboard_background(self)
+	_build_stick_row(build_col)
 	_build_action_row(vbox)
+
+	_stick_popup = StickEditorPopup.new()
+	_stick_popup.stick_edited.connect(_on_stick_edited)
+	add_child(_stick_popup)
+
+
+func _build_stick_row(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+	var edit_btn := Button.new()
+	edit_btn.text = tr(&"STICK_EDIT_BUTTON")
+	edit_btn.custom_minimum_size = Vector2(180, 44)
+	edit_btn.add_theme_font_size_override("font_size", 17)
+	MenuStyle.wire_hover_scale(edit_btn)
+	SoundManager.wire_button(edit_btn)
+	edit_btn.pressed.connect(_open_stick_editor)
+	row.add_child(edit_btn)
+	# Pending stick edits hide behind the button — this note is what makes
+	# them visible before Apply.
+	_stick_pending_label = Label.new()
+	_stick_pending_label.text = tr(&"STICK_PENDING_NOTE")
+	_stick_pending_label.add_theme_color_override("font_color", MenuStyle.GOLD)
+	_stick_pending_label.add_theme_font_size_override("font_size", 13)
+	_stick_pending_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_stick_pending_label.visible = false
+	row.add_child(_stick_pending_label)
+
+
+func _open_stick_editor() -> void:
+	# TEAM tape swatches resolve against the pending team pick, so the swatch
+	# previews the kit the player is about to wear.
+	var accent: Color = TeamColorRegistry.get_colors(
+			maxi(_pending_color_slot, 0), 0).primary
+	_stick_popup.set_focus_scope(self, null)
+	_stick_popup.open(_attr_panel.get_pending_attributes(),
+			_attr_panel.get_pending_tape_code(),
+			NetworkManager.is_in_online_match(), accent)
+
+
+func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> void:
+	_attr_panel.set_pending_stick_gear(curve, flex, length)
+	_attr_panel.set_pending_tape_code(tape_code)
+	_update_apply_state()
 
 
 func _add_close_row(vbox: VBoxContainer) -> void:
@@ -140,18 +221,30 @@ func _add_close_row(vbox: VBoxContainer) -> void:
 	vbox.add_child(row)
 
 
+# Identity rows share a fixed right-aligned label gutter so the fields line
+# up down the column (centered rows made each field start wherever its label
+# ended).
+const _IDENTITY_LABEL_W: float = 92.0
+
+
+func _make_identity_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.custom_minimum_size = Vector2(_IDENTITY_LABEL_W, 0)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	label.add_theme_font_size_override("font_size", 20)
+	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return label
+
+
 func _build_name_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var name_label := Label.new()
-	name_label.text = "Name:"
-	name_label.add_theme_font_size_override("font_size", 20)
-	name_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(name_label)
+	row.add_child(_make_identity_label("Name:"))
 
 	_name_field = LineEdit.new()
 	_name_field.placeholder_text = "Player"
@@ -202,16 +295,11 @@ func _on_name_text_changed(t: String) -> void:
 
 func _build_number_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var label := Label.new()
-	label.text = "Number:"
-	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
+	row.add_child(_make_identity_label("Number:"))
 
 	_number_field = LineEdit.new()
 	_number_field.placeholder_text = "10"
@@ -250,16 +338,11 @@ func _on_number_text_changed(t: String) -> void:
 
 func _build_handedness_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var label := Label.new()
-	label.text = "Shoots:"
-	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
+	row.add_child(_make_identity_label("Shoots:"))
 
 	_left_btn = Button.new()
 	_left_btn.text = "Left"
@@ -297,16 +380,11 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 
 func _build_team_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
 
-	var label := Label.new()
-	label.text = "Team:"
-	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(label)
+	row.add_child(_make_identity_label("Team:"))
 
 	var initial_slot: int = PlayerPrefs.preferred_color_slot
 	if initial_slot < 0:
@@ -356,6 +434,8 @@ func _update_apply_state() -> void:
 	# name/number/etc. can apply on their own.
 	var attrs_ok: bool = _attr_panel == null or _attr_panel.is_valid()
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid or not attrs_ok
+	if _stick_pending_label != null and _attr_panel != null:
+		_stick_pending_label.visible = _attr_panel.is_stick_dirty()
 
 
 func _apply() -> void:
@@ -386,8 +466,10 @@ func _apply() -> void:
 		NetworkManager.apply_preferred_color(_pending_color_slot)
 		preferred_color_changed.emit(_pending_color_slot)
 	if _attr_panel != null and _attr_panel.is_dirty():
+		var old_tape: int = PlayerPrefs.stick_tape_code
 		# commit() writes the working presets + active index back into PlayerPrefs
-		# (which syncs the flat build) and returns the active PlayerAttributes.
+		# (which syncs the flat build AND the flat tape mirror — the tape job
+		# rides each preset) and returns the active PlayerAttributes.
 		var new_attrs: PlayerAttributes = _attr_panel.commit()
 		# Update NetworkManager._peer_attributes[1] so the next spawn picks
 		# the new values up. The emitted signal also re-applies the multipliers
@@ -395,6 +477,10 @@ func _apply() -> void:
 		# GameManager's handler is the gate).
 		NetworkManager.apply_local_attributes(new_attrs)
 		attributes_changed.emit(new_attrs)
+		# Tape can change through a stick edit OR just by switching presets;
+		# the committed flat mirror is the single truth for both.
+		if PlayerPrefs.stick_tape_code != old_tape:
+			NetworkManager.apply_local_tape(PlayerPrefs.stick_tape_code)
 	PlayerPrefs.save()
 	visible = false
 

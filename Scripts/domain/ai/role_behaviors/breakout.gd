@@ -154,9 +154,10 @@ static func decide(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 			continue
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		var lane: float = AIActionScoring.lane_clear(
-				carrier_pos, c, opp_positions, pass_speed)
+				carrier_pos, c, opp_positions, pass_speed,
+				AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)
 		var potential: float = AIActionScoring.position_potential(
-				c, ctx.attacking_goal_pos, opp_positions)
+				c, ctx.attacking_goal_pos, opp_positions, ctx.scratch_opp_caps)
 		# Floored lane (see BLOCKED_LANE_FLOOR): dead lanes still rank by
 		# potential so the outlet keeps skating its route instead of
 		# freezing when the carrier is draped / the column is covered.

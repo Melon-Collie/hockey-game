@@ -66,13 +66,16 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # — the BoxMesh in Scenes/Skater.tscn is only a pre-_ready placeholder.
 @export var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
 # Cosmetic blade-mesh geometry (StickBladeMeshBuilder): how deep the curve
-# bows, where along the blade it starts, and how much of the toe rounds off.
-# Pure visuals — contact math reads the Blade marker + blade_length only. A
-# future gear system makes these per-player (the stick "pattern"); until then
-# they're one house pattern for everyone.
+# bows, how late along the blade it turns (higher = toe curve, lower = heel
+# curve), the radius of the rounded toe corner, and how far the face twists
+# open toward the toe. Pure visuals — contact math reads the Blade marker +
+# blade_length only; the gameplay face angle is PlayerAttributes' own table.
+# Defaults are the M92 pattern; apply_blade_pattern swaps the set per the
+# CURVE gear.
 @export var blade_curve_depth: float = 0.022
-@export var blade_curve_start_frac: float = 0.35
-@export var blade_toe_round_frac: float = 0.24
+@export var blade_curve_power: float = 3.0
+@export var blade_toe_round_m: float = 0.028
+@export var blade_face_twist_deg: float = 7.0
 # Length of the hosel — the tapered throat carrying the heel cross-section up
 # the shaft line (the shaft-follow tilt keeps the blade rigidly at
 # blade_lie_deg to the shaft, so fixed blade-local hosel geometry stays glued
@@ -84,12 +87,19 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # sqrt(1.30² − 0.87²) ≈ 0.97 m horizontal run → atan ≈ 42°, i.e. about a
 # real lie 5.5). The shaft-follow pitch reads deviation from this angle.
 @export var blade_lie_deg: float = 42.0
-# Tape band geometry: cross-section growth over the blade, heel overhang (the
-# band's heel cap sits proud of the blade's own — coplanar caps z-fight), and
-# where along the blade the bare toe starts.
-const _BLADE_TAPE_INFLATE_M: float = 0.004
-const _BLADE_TAPE_HEEL_OVERHANG_FRAC: float = -0.02
-const _BLADE_TAPE_END_FRAC: float = 0.62
+# Reception ceiling lean from the blade-curve gear (attributes v4): the
+# reception decision sites scale the puck's league deflect ceiling + squared
+# bonus by this — a flatter pattern soaks a harder feed. Set by
+# SkaterController.apply_attributes; never touches pickup_max_speed (the
+# always-catches floor stays build-independent, which keeps the client's
+# provisional-pickup gate exact).
+var reception_ceiling_mult: float = 1.0
+
+# The player's tape job (blade wrap color + coverage, knob color). Cosmetic —
+# set by PlayerRegistry from the replicated per-peer tape code before the
+# uniform is applied; SkaterUniformCoordinator resolves the palette picks
+# against the team accent when it paints. Never null after _init.
+var tape_config: StickTapeConfig = StickTapeConfig.new()
 @export var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
@@ -336,6 +346,7 @@ var _stick_whip_t: float = -1.0        # seconds since whip start; <0 = idle
 var _slap_spike_t: float = -1.0        # seconds into the slap contact spike; <0 = idle
 var _flex_prev_state: int = 0
 var _flex_sent: float = 0.0            # last uniform written (dirty guard)
+var _shaft_len_sent: float = 0.0       # last shaft_len_m uniform written (dirty guard)
 
 # ── Cosmetic Rig Dirty-Flag (mirrors Goalie._connectors_pose_changed) ─────────
 # The stick/arm/cuff/sphere rebuild in update_stick_mesh / update_arm_mesh /
@@ -1078,8 +1089,9 @@ func blade_mesh_params(inflate: float, u_start: float, u_end: float,
 	var p := StickBladeMeshBuilder.Params.new()
 	p.length = blade_length
 	p.curve_depth = blade_curve_depth
-	p.curve_start_frac = blade_curve_start_frac
-	p.toe_round_frac = blade_toe_round_frac
+	p.curve_power = blade_curve_power
+	p.toe_round_m = blade_toe_round_m
+	p.face_open_deg = blade_face_twist_deg
 	p.curve_sign = 1.0 if is_left_handed else -1.0
 	p.inflate = inflate
 	p.u_start = u_start
@@ -1089,23 +1101,77 @@ func blade_mesh_params(inflate: float, u_start: float, u_end: float,
 	return p
 
 
-# Tape-band mesh for the current blade geometry, heel-origin like the blade
-# mesh itself (the band node sits at the blade mesh's origin, untransformed).
+# Tape-band mesh for the current blade geometry and tape job, heel-origin like
+# the blade mesh itself (the band node sits at the blade mesh's origin,
+# untransformed). Null when the tape job leaves the blade bare.
 func build_blade_tape_mesh() -> ArrayMesh:
-	return StickBladeMeshBuilder.build(blade_mesh_params(
-			_BLADE_TAPE_INFLATE_M, _BLADE_TAPE_HEEL_OVERHANG_FRAC, _BLADE_TAPE_END_FRAC))
+	if not tape_config.has_blade_tape():
+		return null
+	return StickBladeMeshBuilder.build_tape(
+			blade_mesh_params(0.0, 0.0, 1.0), tape_config.span_range())
+
+
+# Installs a new tape job and refreshes the rendered tape (geometry here,
+# color via the uniform coordinator's tape repaint).
+func set_tape_config(config: StickTapeConfig) -> void:
+	if config == null:
+		return
+	tape_config = config
+	if _uniform != null:
+		_uniform.refresh_tape()
+
+
+# The uniform pass installs a fresh shaft ShaderMaterial (uniform apply,
+# un-ghost); its uniforms are back at defaults, so the dirty guards must
+# forget their last-written values or an unchanged flex/length never re-sends.
+func notify_shaft_material_rebuilt() -> void:
+	_shaft_len_sent = 0.0
+	_flex_sent = 0.0
+
+
+# Blade pattern per CURVE gear — the visual half of the gear whose gameplay
+# half lives in PlayerAttributes (loft / backhand / slap / reception).
+# Modeled on the real patterns the gear names: M88 (mid curve — moderate
+# depth spread through the middle, near-flat face, round toe), M92 (mid-toe
+# all-rounder — the shipped house pattern, the middle row), M28 (toe hook —
+# flat through the heel then a late deep bend with a visibly open toe face,
+# slightly pointier toe). Depth and POWER place the bend (low power = early
+# mid-blade bend, high = late toe hook); FACE_DEG twists the face open toward
+# the toe (builder face_open_deg); TOE_ROUND is the corner radius. Called
+# from SkaterController.apply_attributes, so the rendered blade matches the
+# pick. Public: StickEditorPopup builds its preview blade from the same rows.
+const BLADE_PATTERN_DEPTH: Array[float] = [0.018, 0.022, 0.030]
+const BLADE_PATTERN_POWER: Array[float] = [2.2, 3.0, 4.6]
+const BLADE_PATTERN_FACE_DEG: Array[float] = [3.0, 7.0, 12.0]
+const BLADE_PATTERN_TOE_ROUND: Array[float] = [0.030, 0.028, 0.024]
+
+
+func apply_blade_pattern(curve_gear: int) -> void:
+	var g: int = clampi(curve_gear, 0, BLADE_PATTERN_DEPTH.size() - 1)
+	if is_equal_approx(blade_curve_depth, BLADE_PATTERN_DEPTH[g]) \
+			and is_equal_approx(blade_curve_power, BLADE_PATTERN_POWER[g]) \
+			and is_equal_approx(blade_face_twist_deg, BLADE_PATTERN_FACE_DEG[g]) \
+			and is_equal_approx(blade_toe_round_m, BLADE_PATTERN_TOE_ROUND[g]):
+		return
+	blade_curve_depth = BLADE_PATTERN_DEPTH[g]
+	blade_curve_power = BLADE_PATTERN_POWER[g]
+	blade_face_twist_deg = BLADE_PATTERN_FACE_DEG[g]
+	blade_toe_round_m = BLADE_PATTERN_TOE_ROUND[g]
+	_rebuild_blade_mesh()
 
 
 # Eases the elevation blend toward the loft level each tick and re-tilts the
 # blade only while transitioning (move_toward lands exactly on the target, after
 # which the early-out stops the per-tick basis churn). Called from _physics_process.
+# Runs the full stick pass, not just the tilt — the tilt moves the hosel tip
+# the shaft is aimed at, so the shaft must follow or the joint opens.
 func _update_blade_elevation(delta: float) -> void:
 	var target: float = float(elevation_level) * 0.5
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(
 			_blade_elevation_blend, target, _BLADE_ELEVATION_BLEND_SPEED * delta)
-	_apply_blade_tilt()
+	update_stick_mesh()
 
 
 # Blend units/sec for the blade-lift ease (~0.08 s for a full lift). Snappier
@@ -1578,31 +1644,77 @@ func get_blade_wall_normal() -> Vector3:
 
 
 # ── Stick Mesh ────────────────────────────────────────────────────────────────
+# The rendered shaft runs from the top hand to the HOSEL TIP, not the heel.
+# The hosel is fixed blade-local geometry ascending in the blade's own
+# vertical plane at the lie — but the hand is rarely in that plane (the blade
+# yaws with the cursor while the hand stays by the body), so a heel-aimed
+# shaft crossed the hosel at an angle over their whole overlap and the
+# junction read as a broken elbow. Ending the shaft at the tip makes the
+# connection point-exact in every pose; the residual angular mismatch shows
+# only as a slight bend at a joint where the two cross-sections nearly match.
+# A small overrun keeps the hosel's tip cap buried inside the shaft.
+const _SHAFT_TIP_OVERRUN_M: float = 0.03
+# The butt end extends past the TOP HAND so the knob rides visibly above the
+# fist — a real grip holds the shaft just below the knob, not on top of it.
+# Sized so the whole knob clears the glove sphere (hand_sphere_radius 0.06)
+# with a finger's width of wrapped shaft showing between fist and knob.
+# Public: the workbench preview extends its shaft to match.
+const SHAFT_BUTT_EXTEND_M: float = 0.13
+# The knob's cap sits slightly proud of the shaft's butt end (wrapped tape).
+const _KNOB_PROUD_M: float = 0.01
+
+
 func update_stick_mesh() -> void:
-	var stick_origin: Vector3 = top_hand.position
-	var to_blade: Vector3 = blade.position - stick_origin
-	stick_mesh.position = stick_origin + to_blade / 2.0
-	stick_mesh.scale.z = to_blade.length()
-	stick_mesh.look_at(upper_body.to_global(blade.position), Vector3.UP)
-	_update_stick_knob(stick_origin, to_blade)
-	# The shaft-follow pitch reads the same hand/blade markers that dirtied
-	# this rebuild, so the blade mesh re-orients here at render rate too.
+	# Tilt before aim — the hosel tip rides the blade's cosmetic pitch.
 	_apply_blade_tilt()
+	var stick_origin: Vector3 = top_hand.position
+	var to_tip: Vector3 = _hosel_tip_upper_body() - stick_origin
+	if to_tip.length_squared() < 0.0001:
+		return
+	var dir: Vector3 = to_tip.normalized()
+	var butt_start: Vector3 = stick_origin - dir * SHAFT_BUTT_EXTEND_M
+	var shaft_len: float = to_tip.length() + SHAFT_BUTT_EXTEND_M + _SHAFT_TIP_OVERRUN_M
+	stick_mesh.position = butt_start + dir * (shaft_len * 0.5)
+	stick_mesh.scale.z = shaft_len
+	stick_mesh.look_at(upper_body.to_global(stick_origin + to_tip), Vector3.UP)
+	# The handle-wrap paint (grip/candy-cane) measures real metres down the
+	# shaft, so the shader needs the live rendered length — node scale never
+	# reaches object space. Dirty-guarded like flex_m.
+	if not is_equal_approx(shaft_len, _shaft_len_sent):
+		_shaft_len_sent = shaft_len
+		var shaft_mat: ShaderMaterial = stick_mesh.material_override as ShaderMaterial
+		if shaft_mat != null:
+			shaft_mat.set_shader_parameter(&"shaft_len_m", _shaft_len_sent)
+	_update_stick_knob(stick_origin, to_tip)
 
 
-# Rides the knob just past the top hand, along the shaft away from the blade,
-# with its CylinderMesh long axis (local Y) aligned to the shaft — same look_at +
-# rotate_object_local(X, 90°) trick as the glove cuffs.
-func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
+# The hosel throat's tip in upper-body space: the fixed blade-local tip (the
+# lie axis × hosel length off the heel) carried through the blade mesh's
+# cosmetic tilt and the marker's live orientation.
+func _hosel_tip_upper_body() -> Vector3:
+	var lie: float = deg_to_rad(blade_lie_deg)
+	var tip_local: Vector3 = Vector3(0.0, sin(lie), cos(lie)) * blade_hosel_length
+	if _blade_mesh_instance != null and is_instance_valid(_blade_mesh_instance):
+		tip_local = _blade_mesh_instance.transform * tip_local
+	return blade.transform * tip_local
+
+
+# Caps the extended butt end with the knob, its CylinderMesh long axis (local
+# Y) aligned to the shaft — same look_at + rotate_object_local(X, 90°) trick
+# as the glove cuffs. `to_shaft_end` is the hand→hosel-tip vector the shaft
+# itself was aimed with, so the knob and the shaft always share one axis; the
+# knob wraps the top of the butt extension, slightly proud of its end.
+func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 	if stick_knob_mesh == null or not is_instance_valid(stick_knob_mesh):
 		return
-	if to_blade.length_squared() < 0.0001:
+	if to_shaft_end.length_squared() < 0.0001:
 		return
 	var hand_w: Vector3 = upper_body.to_global(stick_origin)
-	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(blade.position)).normalized()
+	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(stick_origin + to_shaft_end)).normalized()
 	var cyl: CylinderMesh = stick_knob_mesh.mesh as CylinderMesh
 	var knob_h: float = cyl.height if cyl != null else 0.05
-	var knob_center_w: Vector3 = hand_w + up_shaft_w * (knob_h * 0.5)
+	var butt_w: Vector3 = hand_w + up_shaft_w * SHAFT_BUTT_EXTEND_M
+	var knob_center_w: Vector3 = butt_w - up_shaft_w * (knob_h * 0.5 - _KNOB_PROUD_M)
 	stick_knob_mesh.position = upper_body.to_local(knob_center_w)
 	stick_knob_mesh.look_at(knob_center_w + up_shaft_w, _up_for_look_at(up_shaft_w))
 	stick_knob_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
