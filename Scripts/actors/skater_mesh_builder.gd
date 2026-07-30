@@ -70,18 +70,21 @@ const _LEG_SIDES: int = 8
 # Head + helmet. The scene's Helmet node carries the helmet SHELL (painted
 # the kit's helmet color, scaled by the appearance rig); the builder parents
 # a "Head" MeshInstance3D under it so both share the node's transform. The
-# shell's lower edge varies with azimuth — brow-high at the face (−Z,
-# leaving the head visible), ear-low on the sides, lowest at the back — via
-# cut_v(θ) = CUT_BASE + CUT_BACK_BIAS·cos(θ) in equirect latitude fractions
-# (θ = 0 is +Z, the back).
+# shell's lower edge varies with azimuth — flat at brow height around the
+# face and temples, dropping to the nape over the back arc — see the rim
+# profile constants below (latitudes are equirect fractions; θ = 0 is +Z,
+# the back).
 const _HELMET_RADIUS: float = 0.155
-# Rim latitudes anchored to head anatomy (head r 0.135, eye line ≈ the
-# equator): front (base − bias) = 0.40 puts the brow rim at y ≈ +0.048 —
-# ABOVE the eye line, a forehead-covering helmet, not a face-swallowing one;
-# sides (= base) 0.58 reach y ≈ −0.039, ear-top coverage; back (base + bias)
-# = 0.76 drops to y ≈ −0.118 at the nape.
-const _HELMET_CUT_BASE: float = 0.58
-const _HELMET_CUT_BACK_BIAS: float = 0.18
+# Rim profile, anchored to head anatomy (head r 0.135, eye line ≈ the
+# equator): the rim holds FLAT at the brow latitude (y ≈ +0.048, above the
+# eye line) from the face around the temples, then smoothsteps down over the
+# back arc to the nape — the hockey-helmet shape, rather than a cosine that
+# starts sinking immediately off the brow. The drop engages where cos(θ)
+# (−1 at the face, +1 at the back) crosses _HELMET_DROP_START_C — about 70°
+# either side of dead back.
+const _HELMET_FRONT_CUT: float = 0.40
+const _HELMET_BACK_CUT: float = 0.76
+const _HELMET_DROP_START_C: float = 0.34
 # The shell closes with a fan to an apex HIGH inside the dome (this fraction
 # of the radius up), not a floor at rim height — a low floor reads as a
 # helmet-colored lid across the face opening from the top-down camera,
@@ -246,7 +249,10 @@ static func _build_helmet() -> ArrayMesh:
 		ring.resize(lon + 1)
 		for k in lon + 1:
 			var theta: float = TAU * float(k) / float(lon)
-			var cut_v: float = _HELMET_CUT_BASE + _HELMET_CUT_BACK_BIAS * cos(theta)
+			var t: float = clampf((cos(theta) - _HELMET_DROP_START_C)
+					/ (1.0 - _HELMET_DROP_START_C), 0.0, 1.0)
+			var cut_v: float = lerpf(_HELMET_FRONT_CUT, _HELMET_BACK_CUT,
+					t * t * (3.0 - 2.0 * t))
 			var v: float = cut_v * float(j) / float(lat)
 			var y: float = _HELMET_RADIUS * cos(PI * v)
 			var ring_r: float = _HELMET_RADIUS * sin(PI * v)
