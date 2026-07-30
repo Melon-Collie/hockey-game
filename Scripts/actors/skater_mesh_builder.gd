@@ -53,10 +53,14 @@ const _SOCK_PROFILE: Array[Vector2] = [
 	Vector2(-0.040, 0.086),
 	Vector2(-0.150, 0.076),  # ankle
 ]
+# The collar ENDS just below its node origin: the scene seats that origin at
+# the boot's heel-top line, so the cuff perches ON the boot with ~1 cm of
+# overlap seal instead of dropping past the heel as a column (the old -0.100
+# bottom reached blade-holder depth and swallowed the boot's silhouette).
 const _SKATE_PROFILE: Array[Vector2] = [
 	Vector2(0.100, 0.090),   # boot collar
-	Vector2(0.020, 0.083),
-	Vector2(-0.100, 0.075),
+	Vector2(0.020, 0.082),
+	Vector2(-0.010, 0.078),
 ]
 
 # Chest reads wider than deep — lateral/depth scale on the torso lathe. The
@@ -152,7 +156,10 @@ const _KNOB_BOTTOM_RADIUS: float = 0.03
 # (down). Envelope matches the prolate foot sphere it replaces (r 0.08, half
 # length 0.125).
 const _BOOT_STATIONS: Array[Vector4] = [
-	Vector4(0.115, 0.052, -0.040, 0.045),   # heel
+	# Heel top rises toward the collar like a real boot's quarter (was -0.040,
+	# which left the cuff floating over a low heel), meeting the collar's
+	# bottom so ankle and boot read as one piece from the side.
+	Vector4(0.115, 0.052, -0.070, 0.045),   # heel
 	Vector4(0.045, 0.060, -0.072, 0.046),   # instep rise
 	Vector4(-0.045, 0.058, -0.048, 0.046),  # forefoot
 	Vector4(-0.115, 0.040, -0.012, 0.040),  # toe
@@ -186,7 +193,7 @@ const _SKATE_STRIPE_RADIUS: float = 0.092
 # crosses (ankle → forefoot). _LACE_COLOR is only the pre-uniform placeholder;
 # the gear style's lace pick repaints them (SkaterUniformCoordinator).
 const _LACE_RUNGS: Array[Vector2] = [
-	Vector2(0.070, -0.0606),
+	Vector2(0.070, -0.0711),
 	Vector2(0.035, -0.0693),
 	Vector2(0.000, -0.0600),
 	Vector2(-0.035, -0.0507),
