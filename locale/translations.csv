@@ -71,7 +71,7 @@ STICK_GAMEPLAY_LEGEND,* affects gameplay,* afecta a la jugabilidad
 TAPE_COLOR_TEAM_SHORT,Team,Equipo
 STICK_COL_GEAR,GEAR,EQUIPAMIENTO
 STICK_COL_TAPE,TAPE,CINTA
-STICK_PENDING_NOTE,Unapplied stick changes,Cambios del palo sin aplicar
+EDIT_PENDING_NOTE,Unapplied changes,Cambios sin aplicar
 PLAYER_SKIN_LABEL,Skin:,Piel:
 PLAYER_POSITION_LABEL,Position:,Posición:
 POSITION_LW,LW — Left Wing,LW — Ala izquierda
@@ -80,7 +80,6 @@ POSITION_RW,RW — Right Wing,RW — Ala derecha
 POSITION_LD,LD — Left Defense,LD — Defensa izquierda
 POSITION_RD,RD — Right Defense,RD — Defensa derecha
 GEAR_EDIT_BUTTON,Edit Gear,Editar equipamiento
-GEAR_PENDING_NOTE,Unapplied gear changes,Cambios del equipamiento sin aplicar
 GEAR_EDITOR_TITLE,Gear,Equipamiento
 GEAR_LOCKED_NOTE,Profile is locked during online play — colors can still change.,El perfil está bloqueado en partidas en línea — los colores aún pueden cambiar.
 GEAR_PROFILE_LABEL,Profile:,Perfil:

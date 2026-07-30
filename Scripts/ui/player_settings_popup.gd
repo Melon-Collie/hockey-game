@@ -171,11 +171,12 @@ func _build() -> void:
 	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
-	# One column, every row on the shared label gutter. Fixed width so the
-	# panel doesn't breathe as warnings and pending notes come and go.
+	# One column, every row on the shared label gutter. Fixed width (gutter +
+	# separation + field) so the panel doesn't breathe as warnings and pending
+	# notes come and go.
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 12)
-	col.custom_minimum_size = Vector2(420, 0)
+	col.custom_minimum_size = Vector2(_IDENTITY_LABEL_W + 12.0 + _FIELD_W, 0)
 	vbox.add_child(col)
 
 	_build_name_section(col)
@@ -208,18 +209,24 @@ func _build() -> void:
 
 
 # The two workbench launchers side by side — the buttons name themselves, so
-# the row carries no gutter label. Each button's gold "unapplied changes"
-# note sits beneath it (pending workbench edits are otherwise invisible
-# until Apply); the notes reserve their line so the column doesn't jump.
+# the gutter stays empty (a spacer keeps the pair on the field column's
+# edges). Each button's gold "unapplied changes" note sits beneath it
+# (pending workbench edits are otherwise invisible until Apply); the notes
+# reserve their line so the column doesn't jump.
 func _build_workbench_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 16)
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
+	var gutter := Control.new()
+	gutter.custom_minimum_size = Vector2(_IDENTITY_LABEL_W, 0)
+	row.add_child(gutter)
+	# One shared note string — sitting under its own button makes "whose
+	# changes" unambiguous, and the short form fits the half-field button.
 	_stick_pending_label = _add_workbench_launcher(
-			row, tr(&"STICK_EDIT_BUTTON"), tr(&"STICK_PENDING_NOTE"), _open_stick_editor)
+			row, tr(&"STICK_EDIT_BUTTON"), tr(&"EDIT_PENDING_NOTE"), _open_stick_editor)
 	_gear_pending_label = _add_workbench_launcher(
-			row, tr(&"GEAR_EDIT_BUTTON"), tr(&"GEAR_PENDING_NOTE"), _open_gear_editor)
+			row, tr(&"GEAR_EDIT_BUTTON"), tr(&"EDIT_PENDING_NOTE"), _open_gear_editor)
 
 
 # One launcher: the Edit button with its pending note reserved beneath.
@@ -231,7 +238,7 @@ func _add_workbench_launcher(row: HBoxContainer, button_text: String,
 	row.add_child(box)
 	var edit_btn := Button.new()
 	edit_btn.text = button_text
-	edit_btn.custom_minimum_size = Vector2(180, 44)
+	edit_btn.custom_minimum_size = Vector2(_PAIR_W, 48)
 	edit_btn.add_theme_font_size_override("font_size", 17)
 	MenuStyle.wire_hover_scale(edit_btn)
 	SoundManager.wire_button(edit_btn)
@@ -295,9 +302,15 @@ func _add_close_row(vbox: VBoxContainer) -> void:
 	vbox.add_child(row)
 
 
-# Rows share a fixed right-aligned label gutter so the fields line up down
-# each column (centered rows made each field start wherever its label ended).
+# Rows share a fixed right-aligned label gutter, and every control region
+# fills the same _FIELD_W (the number field is the one deliberate exception —
+# two digits in a 260px box read wrong), so both column edges run straight
+# top to bottom. Paired controls (Shoots, the workbench buttons) split the
+# width; the sliders' 60px value label counts inside it.
 const _IDENTITY_LABEL_W: float = 92.0
+const _FIELD_W: float = 260.0
+const _FIELD_VALUE_W: float = 60.0
+const _PAIR_W: float = (_FIELD_W - 12.0) / 2.0
 
 
 func _make_identity_label(text: String, tooltip: String = "") -> Label:
@@ -328,7 +341,7 @@ func _build_name_section(vbox: VBoxContainer) -> void:
 	# back-center seam (jersey_decal.gd centers the name in ~256px of room),
 	# and the lobby slot cards shrink-to-fit anything up to it.
 	_name_field.max_length = 12
-	_name_field.custom_minimum_size = Vector2(200, 48)
+	_name_field.custom_minimum_size = Vector2(_FIELD_W, 48)
 	_name_field.add_theme_font_size_override("font_size", 18)
 	row.add_child(_name_field)
 
@@ -423,7 +436,7 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 	_left_btn = Button.new()
 	_left_btn.text = "Left"
 	_left_btn.toggle_mode = true
-	_left_btn.custom_minimum_size = Vector2(90, 48)
+	_left_btn.custom_minimum_size = Vector2(_PAIR_W, 48)
 	_left_btn.add_theme_font_size_override("font_size", 18)
 	MenuStyle.wire_hover_scale(_left_btn)
 	SoundManager.wire_button(_left_btn)
@@ -432,7 +445,7 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 	_right_btn = Button.new()
 	_right_btn.text = "Right"
 	_right_btn.toggle_mode = true
-	_right_btn.custom_minimum_size = Vector2(90, 48)
+	_right_btn.custom_minimum_size = Vector2(_PAIR_W, 48)
 	_right_btn.add_theme_font_size_override("font_size", 18)
 	MenuStyle.wire_hover_scale(_right_btn)
 	SoundManager.wire_button(_right_btn)
@@ -465,7 +478,7 @@ func _build_position_section(vbox: VBoxContainer) -> void:
 	row.add_child(_make_identity_label(tr(&"PLAYER_POSITION_LABEL"), _POSITION_TOOLTIP))
 
 	_position_btn = OptionButton.new()
-	_position_btn.custom_minimum_size = Vector2(200, 44)
+	_position_btn.custom_minimum_size = Vector2(_FIELD_W, 48)
 	_position_btn.add_theme_font_size_override("font_size", 16)
 	_position_btn.tooltip_text = _POSITION_TOOLTIP
 	for i: int in _POSITION_KEYS.size():
@@ -495,14 +508,18 @@ func _build_skin_section(vbox: VBoxContainer) -> void:
 
 	row.add_child(_make_identity_label(tr(&"PLAYER_SKIN_LABEL")))
 
+	# The swatch strip fills the shared field width — each swatch takes an
+	# equal share of it rather than a fixed size.
 	var swatches := HBoxContainer.new()
 	swatches.add_theme_constant_override("separation", 6)
+	swatches.custom_minimum_size = Vector2(_FIELD_W, 0)
 	row.add_child(swatches)
 	_skin_buttons.clear()
 	for i: int in SkinToneRegistry.TONES.size():
 		var btn := Button.new()
 		btn.toggle_mode = true
-		btn.custom_minimum_size = Vector2(28, 48)
+		btn.custom_minimum_size = Vector2(0, 48)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var plain := StyleBoxFlat.new()
 		plain.bg_color = SkinToneRegistry.TONES[i]
 		plain.set_corner_radius_all(6)
@@ -539,7 +556,7 @@ func _build_height_section(vbox: VBoxContainer) -> void:
 	_height_slider.min_value = PlayerAttributes.HEIGHT_MIN
 	_height_slider.max_value = PlayerAttributes.HEIGHT_MAX
 	_height_slider.step = 1
-	_height_slider.custom_minimum_size = Vector2(200, 36)
+	_height_slider.custom_minimum_size = Vector2(_FIELD_W - _FIELD_VALUE_W - 12.0, 36)
 	_height_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_height_slider.set_value_no_signal(PlayerAttributes.HEIGHT_MEDIUM)
 	_height_slider.tooltip_text = _HEIGHT_TOOLTIP
@@ -547,7 +564,7 @@ func _build_height_section(vbox: VBoxContainer) -> void:
 	row.add_child(_height_slider)
 
 	_height_value_label = Label.new()
-	_height_value_label.custom_minimum_size = Vector2(60, 0)
+	_height_value_label.custom_minimum_size = Vector2(_FIELD_VALUE_W, 0)
 	_height_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_height_value_label.add_theme_font_size_override("font_size", 18)
 	_height_value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
@@ -565,14 +582,14 @@ func _build_weight_section(vbox: VBoxContainer) -> void:
 
 	_weight_slider = HSlider.new()
 	_weight_slider.step = 1
-	_weight_slider.custom_minimum_size = Vector2(200, 36)
+	_weight_slider.custom_minimum_size = Vector2(_FIELD_W - _FIELD_VALUE_W - 12.0, 36)
 	_weight_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_weight_slider.tooltip_text = _WEIGHT_TOOLTIP
 	_weight_slider.value_changed.connect(_on_weight_changed)
 	row.add_child(_weight_slider)
 
 	_weight_value_label = Label.new()
-	_weight_value_label.custom_minimum_size = Vector2(60, 0)
+	_weight_value_label.custom_minimum_size = Vector2(_FIELD_VALUE_W, 0)
 	_weight_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_weight_value_label.add_theme_font_size_override("font_size", 18)
 	_weight_value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
@@ -613,7 +630,7 @@ func _build_team_section(vbox: VBoxContainer) -> void:
 	var initial_slot: int = PlayerPrefs.preferred_color_slot
 	if initial_slot < 0:
 		initial_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
-	_color_dropdown = PaletteDropdown.new(initial_slot, Vector2(200, 48))
+	_color_dropdown = PaletteDropdown.new(initial_slot, Vector2(_FIELD_W, 48))
 	row.add_child(_color_dropdown)
 
 	_color_dropdown.selected.connect(func(slot: int) -> void:
