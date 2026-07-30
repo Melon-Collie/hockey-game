@@ -301,6 +301,45 @@ static func _build_torso() -> ArrayMesh:
 # center — those closure faces hide inside the head ball, and closing keeps
 # the solid's winding testable. Same ring orientation as _build_ball, so the
 # shared quad ordering stays outward.
+static func _build_head() -> ArrayMesh:
+	return _build_ball(HEAD_RADIUS, 10, 5, 1.0)
+
+
+# Shared part accessors for out-of-game figures (the lobby's bench dummies)
+# so every rendered player body — live or furniture — wears the same faceted
+# set from the same cache.
+static func shared_torso() -> ArrayMesh:
+	return _shared("torso", _build_torso)
+
+
+static func shared_helmet_shell() -> ArrayMesh:
+	return _shared("helmet", _build_helmet)
+
+
+static func shared_head_ball() -> ArrayMesh:
+	return _shared("head", _build_head)
+
+
+static func shared_shoulder_cap() -> ArrayMesh:
+	return _shared("shoulder", _build_shoulder)
+
+
+static func shared_thigh() -> ArrayMesh:
+	return _shared("thigh", _build_thigh)
+
+
+static func shared_sock() -> ArrayMesh:
+	return _shared("sock", _build_sock)
+
+
+static func shared_boot() -> ArrayMesh:
+	return _shared("boot", _build_boot)
+
+
+static func shared_skate_blade() -> ArrayMesh:
+	return _shared("skate_blade", _build_skate_blade)
+
+
 static func _build_helmet() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -349,8 +388,7 @@ static func _ensure_head(upper_body: Node3D) -> void:
 	var head := MeshInstance3D.new()
 	head.name = "Head"
 	head.position = Vector3(0.0, 0.0, -_HEAD_FORWARD_M)
-	head.mesh = _shared("head", func() -> ArrayMesh:
-		return _build_ball(HEAD_RADIUS, 10, 5, 1.0))
+	head.mesh = _shared("head", _build_head)
 	head.material_override = _make_skin_mat()
 	helmet.add_child(head)
 	var neck := MeshInstance3D.new()
