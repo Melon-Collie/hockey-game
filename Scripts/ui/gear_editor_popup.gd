@@ -45,6 +45,9 @@ var _lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
 var _gear_locked: bool = false
 var _team_accent: Color = Color.WHITE
 var _kit_gloves: Color = Color.BLACK
+# Boot-node seat on the turntable, kept so open() can re-seat the collar
+# against it per build.
+var _skate_at: Vector3 = Vector3.ZERO
 
 # Controls.
 var _profile_btn: OptionButton = null
@@ -281,9 +284,9 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_viewport.add_child(_turntable)
 
 	# Skate: boot + steel share the rotated boot frame, seated so the runner
-	# stands on the disc; the ankle collar rises off the heel with a slight
-	# backward lean, like the real boot line.
+	# stands on the disc.
 	var skate_at := Vector3(-0.16, _BLADE_ICE_M, 0.0)
+	_skate_at = skate_at
 	_boot = MeshInstance3D.new()
 	_boot.mesh = SkaterMeshBuilder.shared_boot()
 	_boot.transform = Transform3D(_BOOT_ROT, skate_at)
@@ -303,15 +306,14 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_laces.transform = Transform3D(_BOOT_ROT, skate_at)
 	_turntable.add_child(_laces)
 
-	# Collar seat relative to the boot: same height as the rink's arrangement
-	# (Skater.tscn — SkateL 0.04 above the FootL origin), but staged 0.05
-	# toe-ward of the in-game 0.10 heel-ward seat. On the skater the shin
-	# column rises through the cuff, so its rear overhang reads as ankle; the
-	# shelf item has no leg, and at the true seat the cuff's underside floats
-	# bare behind the heel.
+	# Collar seat relative to the boot — the rink's own arrangement
+	# (Skater.tscn, Shin-local: SkateL y −0.41 vs FootL (−0.45, −0.1) → 0.04
+	# above and 0.10 heel-ward of the boot origin). Scale and the height-scaled
+	# seat are applied per open() from the pending build, mirroring the
+	# appearance rig, so the preview skate IS your on-ice skate.
 	_collar = MeshInstance3D.new()
 	_collar.mesh = SkaterMeshBuilder.shared_skate_collar()
-	_collar.position = skate_at + Vector3(0.05, 0.04, 0.0)
+	_collar.position = skate_at + Vector3(0.10, 0.04, 0.0)
 	_turntable.add_child(_collar)
 
 	# The accent stripe band, seated on the collar exactly as the rink's
@@ -349,9 +351,13 @@ func set_focus_scope(background: Control, restore: Control) -> void:
 # `profile`/colors are the host's PENDING picks; `gear_locked` mirrors the
 # online-match attribute lock (colors stay live). TEAM color chips resolve
 # against `team_accent` (skates) and `kit_gloves` (gloves) so the swatches
-# preview the kit the player is about to wear.
+# preview the kit the player is about to wear. `attrs` is the pending BODY —
+# the preview collar takes the same scale the appearance rig gives SkateL
+# (calf girth laterally, height vertically; the boot deliberately never
+# scales), so the preview skate is the one this build wears on the ice.
 func open(profile: int, skate_color: int, glove_color: int, lace_color: int,
-		gear_locked: bool, team_accent: Color, kit_gloves: Color) -> void:
+		gear_locked: bool, team_accent: Color, kit_gloves: Color,
+		attrs: PlayerAttributes = null) -> void:
 	_profile = clampi(profile, 0, _PROFILE_KEYS.size() - 1)
 	_skate_color = skate_color
 	_glove_color = glove_color
@@ -359,6 +365,12 @@ func open(profile: int, skate_color: int, glove_color: int, lace_color: int,
 	_gear_locked = gear_locked
 	_team_accent = team_accent
 	_kit_gloves = kit_gloves
+	var m_height: float = attrs.height_mult() if attrs != null else 1.0
+	var m_calf: float = attrs.calf_mult() if attrs != null else 1.0
+	_collar.scale = Vector3(m_calf, m_height, m_calf)
+	# The seat's vertical gap rides height like the shin chain does; the
+	# heel-ward offset is a Shin-frame Z position the rig never scales.
+	_collar.position = _skate_at + Vector3(0.10, 0.04 * m_height, 0.0)
 	_refresh()
 	_repaint_preview()
 	visible = true

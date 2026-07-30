@@ -281,7 +281,8 @@ func _open_gear_editor() -> void:
 	var team_colors: Dictionary = _pending_team_colors()
 	_gear_popup.set_focus_scope(self, null)
 	_gear_popup.open(_pending_profile, _pending_skate_color, _pending_glove_color,
-			_pending_lace_color, _build_locked, team_colors.primary, team_colors.gloves)
+			_pending_lace_color, _build_locked, team_colors.primary, team_colors.gloves,
+			_pending_attributes())
 
 
 func _on_gear_edited(profile: int, skate_color: int, glove_color: int,
