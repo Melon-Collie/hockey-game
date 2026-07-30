@@ -1068,7 +1068,6 @@ var _tracked_threat_position: Vector3 = Vector3.ZERO
 # during interpolation). Updated each tick from the puck position delta.
 var _puck_velocity_est: Vector3 = Vector3.ZERO
 var _prev_puck_position: Vector3 = Vector3.ZERO
-var _puck_approach_velocity: float = 0.0
 # Windup reads, split by what they license. `_reading_pinned_windup` is true for
 # EITHER wind-up (SkaterStateMachine.state_pins_puck) — the puck is rigidly pinned
 # to the body, so the goalie squares to the pinned puck and must not add a puck
@@ -1560,7 +1559,6 @@ func reset_to_crease() -> void:
 	_five_hole_openness = 0.0
 	_reading_pinned_windup = false
 	_reading_planted_windup = false
-	_puck_approach_velocity = 0.0
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
 	_prev_puck_position = _tracked_threat_position
 	_cross_crease_react_timer = 0.0
@@ -1635,11 +1633,10 @@ func _physics_process(delta: float) -> void:
 func _update_tracking(delta: float) -> void:
 	# Position-derived puck velocity. Works on both host and client (the
 	# client's `linear_velocity` is unreliable during interpolation). Used
-	# for both the approach-velocity threat-pressing check and the
-	# intercept-at-goalie-plane glove targeting.
+	# for the threat-pressing closing check and the intercept-at-goalie-plane
+	# glove targeting.
 	var inv_dt: float = 1.0 / maxf(delta, 0.0001)
 	_puck_velocity_est = (puck.global_position - _prev_puck_position) * inv_dt
-	_puck_approach_velocity = -_puck_velocity_est.z * _direction_sign
 	_prev_puck_position = puck.global_position
 	# Detect a shot windup on the carrier — stance tell, not a butterfly drop.
 	# PINNED covers both wind-ups (the puck is body-rigid in either, so the
@@ -2164,7 +2161,8 @@ func _build_save_situation(delta: float) -> GoalieSaveSelection.Situation:
 func _should_hold_seal() -> bool:
 	if _lunge_active_timer > 0.0:
 		return false
-	return GoalieSaveSelection.should_hold_seal(_build_save_situation(0.0))
+	return GoalieSaveSelection.should_hold_seal(
+			_build_save_situation(0.0), recovery_duration)
 
 
 func _should_block(delta: float) -> bool:
@@ -2847,6 +2845,15 @@ func _maybe_arrest_drop() -> bool:
 
 # Should the goalie keep holding butterfly because the puck is still a threat?
 # Hold conditions, in priority:
+#   0. Puck is BEHIND the goal line                               → release
+#      A stance question, not a save question (GoalieSaveSelection's scope
+#      note): nothing arrives on net from back there, and every hold below
+#      prices a front-of-net threat — the carrier hold's radial distance
+#      counts a wraparound carrier and the seal model prices a flight through
+#      the net frame, both of which pinned him sealed facing the wrong way on
+#      back-wall bounces. Butterfly cannot reach RVH directly, so releasing
+#      here is what routes him through RECOVERING to the post seal — the
+#      vulnerable window wraparounds are designed to exploit.
 #   1. A hostile CARRIER is inside recovery_proximity_threshold  → hold
 #      The rebound-stays-in-front case: a deflection bouncing back toward the
 #      shooter is still a threat because he can't usefully recover before a
@@ -2854,46 +2861,47 @@ func _maybe_arrest_drop() -> bool:
 #   2. The situation would BLOCK a standing goalie                → hold
 #      Standing up into a play he would have dropped for is the bug this fixes;
 #      see below.
-#   3. Puck is fast AND approaching                               → hold
+#   3. Puck's flight is closing on him at shot pace               → hold
 #   4. Otherwise                                                  → release
 # Pressure detection is one-way: it only HOLDS butterfly, never triggers entry —
 # entry is _update_state's own `_should_block` branch, asking the same question.
 func _is_threat_pressing() -> bool:
+	if _puck_front_of_goal_m() <= 0.0:
+		return false
 	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
 			puck.global_position, _goal_line_z, _goal_center_x)
 	# Proximity-stay only applies when a hostile carrier is in the
 	# butterfly zone — they could shoot at any moment, hold the seal.
 	# Loose pucks (no carrier) skip this and fall through to the
-	# speed/direction check; a slow rebound sitting in the crease
-	# doesn't keep the goalie pinned in butterfly forever.
+	# contest race inside `should_hold_seal`; a slow rebound sitting in
+	# the crease doesn't keep the goalie pinned in butterfly forever.
 	if threat_dist < recovery_proximity_threshold:
 		var carrier: Skater = puck.get_carrier()
 		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
 			return true
 	# THE SAME DECISION THAT PUT HIM DOWN — same model, same inputs — but through
-	# `should_hold_seal`, which applies the asymmetric threshold. Going down and
-	# staying down are one question and not one bar; see the rule for why the
-	# symmetric version self-oscillates off the goalie's own depth.
-	#
-	# This is the reported bug. The proximity hold above only fires for a hostile
-	# CARRIER, so a slow loose rebound at his feet had no carrier, fell through to
-	# the speed check below, and `return not speed_low` stood him up into the
-	# scramble — unearned rebounds through the five-hole. Possession never made
-	# that play readable; a stick that can reach the puck before he can answer is
-	# what makes it unreadable, and that is what the model asks.
+	# `should_hold_seal`, which applies the asymmetric threshold (and the
+	# stand-up race that releases him when nothing can touch the puck before he
+	# is back on his feet). Going down and staying down are one question and not
+	# one bar; see the rule for why the symmetric version self-oscillates off
+	# the goalie's own depth. Possession never made a loose puck readable; a
+	# stick that can reach it before he can answer is what makes it unreadable,
+	# and that is what the model asks.
 	if _should_hold_seal():
 		return true
-	var speed_low: bool
-	var moving_away: bool
-	if is_server:
-		speed_low = puck.linear_velocity.length() < shot_speed_threshold
-		moving_away = puck.linear_velocity.z * _direction_sign > 0.0
-	else:
-		speed_low = absf(_puck_approach_velocity) < shot_speed_threshold
-		moving_away = _puck_approach_velocity < 0.0
-	if moving_away:
-		return false
-	return not speed_low
+	# A live shot's flight: standing up into a puck flying at him opens the
+	# five-hole exactly as it arrives. CLOSING speed on his body — not raw
+	# speed with an approach sign read off the z-axis alone, which held him
+	# down under a rebound rocketing laterally to the corner (fast, not
+	# incoming) until friction bled it below the threshold.
+	var vel: Vector3 = puck.linear_velocity if is_server else _puck_velocity_est
+	var to_goalie: Vector3 = goalie.global_position - puck.global_position
+	to_goalie.y = 0.0
+	var gap: float = to_goalie.length()
+	if gap < 0.001:
+		return true
+	var closing: float = (vel.x * to_goalie.x + vel.z * to_goalie.z) / gap
+	return closing >= shot_speed_threshold
 
 # ── Depth ─────────────────────────────────────────────────────────────────────
 # Standing depth is the "challenge angle" arc radius from goal center. The
