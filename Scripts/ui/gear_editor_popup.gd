@@ -17,7 +17,7 @@ extends Control
 # applied Done. The profile row locks during online play; colors are cosmetic
 # and never lock.
 
-signal gear_edited(profile: int, skate_color: int, glove_color: int)
+signal gear_edited(profile: int, skate_color: int, glove_color: int, lace_color: int)
 
 const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
 const _PROFILE_KEYS: Array[StringName] = [
@@ -41,6 +41,7 @@ const _CUFF_RADIUS: float = 0.065
 var _profile: int = PlayerAttributes.GEAR_BALANCED
 var _skate_color: int = GearStyleConfig.SKATE_DEFAULT_INDEX
 var _glove_color: int = TapeColorRegistry.TEAM_INDEX
+var _lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
 var _gear_locked: bool = false
 var _team_accent: Color = Color.WHITE
 var _kit_gloves: Color = Color.BLACK
@@ -49,6 +50,7 @@ var _kit_gloves: Color = Color.BLACK
 var _profile_btn: OptionButton = null
 var _skate_dd: SwatchDropdown = null
 var _glove_dd: SwatchDropdown = null
+var _lace_dd: SwatchDropdown = null
 var _lock_label: Label = null
 
 # Preview scene.
@@ -57,6 +59,7 @@ var _turntable: Node3D = null
 var _boot: MeshInstance3D = null
 var _collar: MeshInstance3D = null
 var _skate_stripe: MeshInstance3D = null
+var _laces: MeshInstance3D = null
 var _fist: MeshInstance3D = null
 var _cuff: MeshInstance3D = null
 
@@ -148,6 +151,10 @@ func _build() -> void:
 	_glove_dd = SwatchDropdown.new(Vector2(180, 36))
 	_glove_dd.selected.connect(_on_glove_color_selected)
 	_add_row(rows, tr(&"GEAR_GLOVES_LABEL"), _glove_dd, false, "")
+
+	_lace_dd = SwatchDropdown.new(Vector2(180, 36))
+	_lace_dd.selected.connect(_on_lace_color_selected)
+	_add_row(rows, tr(&"GEAR_LACES_LABEL"), _lace_dd, false, "")
 
 	var legend := Label.new()
 	legend.text = tr(&"STICK_GAMEPLAY_LEGEND")
@@ -291,14 +298,10 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	steel.transform = Transform3D(_BOOT_ROT, skate_at)
 	_turntable.add_child(steel)
 
-	var laces := MeshInstance3D.new()
-	laces.mesh = SkaterMeshBuilder.shared_laces()
-	var laces_mat := StandardMaterial3D.new()
-	laces_mat.albedo_color = Color(0.88, 0.88, 0.86)
-	laces_mat.roughness = 0.9
-	laces.material_override = laces_mat
-	laces.transform = Transform3D(_BOOT_ROT, skate_at)
-	_turntable.add_child(laces)
+	_laces = MeshInstance3D.new()
+	_laces.mesh = SkaterMeshBuilder.shared_laces()
+	_laces.transform = Transform3D(_BOOT_ROT, skate_at)
+	_turntable.add_child(_laces)
 
 	_collar = MeshInstance3D.new()
 	_collar.mesh = SkaterMeshBuilder.shared_skate_collar()
@@ -343,11 +346,12 @@ func set_focus_scope(background: Control, restore: Control) -> void:
 # online-match attribute lock (colors stay live). TEAM color chips resolve
 # against `team_accent` (skates) and `kit_gloves` (gloves) so the swatches
 # preview the kit the player is about to wear.
-func open(profile: int, skate_color: int, glove_color: int, gear_locked: bool,
-		team_accent: Color, kit_gloves: Color) -> void:
+func open(profile: int, skate_color: int, glove_color: int, lace_color: int,
+		gear_locked: bool, team_accent: Color, kit_gloves: Color) -> void:
 	_profile = clampi(profile, 0, _PROFILE_KEYS.size() - 1)
 	_skate_color = skate_color
 	_glove_color = glove_color
+	_lace_color = lace_color
 	_gear_locked = gear_locked
 	_team_accent = team_accent
 	_kit_gloves = kit_gloves
@@ -358,7 +362,7 @@ func open(profile: int, skate_color: int, glove_color: int, gear_locked: bool,
 
 
 func _done() -> void:
-	gear_edited.emit(_profile, _skate_color, _glove_color)
+	gear_edited.emit(_profile, _skate_color, _glove_color, _lace_color)
 	_close()
 
 
@@ -400,6 +404,11 @@ func _on_glove_color_selected(index: int) -> void:
 	_repaint_preview()
 
 
+func _on_lace_color_selected(index: int) -> void:
+	_lace_color = index
+	_repaint_preview()
+
+
 # ── Rendering ────────────────────────────────────────────────────────────────
 
 func _resolved_skate() -> Color:
@@ -410,6 +419,10 @@ func _resolved_glove() -> Color:
 	if _glove_color == TapeColorRegistry.TEAM_INDEX:
 		return _kit_gloves
 	return TapeColorRegistry.resolve(_glove_color, _kit_gloves)
+
+
+func _resolved_lace() -> Color:
+	return TapeColorRegistry.resolve(_lace_color, _team_accent)
 
 
 func _refresh() -> void:
@@ -434,6 +447,9 @@ func _refresh() -> void:
 	_skate_dd.set_selected(_skate_color)
 	_glove_dd.set_palette(glove_colors, names, chip_labels)
 	_glove_dd.set_selected(_glove_color)
+	# Laces share the skate palette (TEAM resolves to the accent).
+	_lace_dd.set_palette(skate_colors, names, chip_labels)
+	_lace_dd.set_selected(_lace_color)
 
 
 # Repaints the turntable pieces with the current picks — same finishes and
@@ -452,6 +468,10 @@ func _repaint_preview() -> void:
 	stripe_mat.albedo_color = _resolved_skate()
 	stripe_mat.roughness = 0.42
 	_skate_stripe.material_override = stripe_mat
+	var laces_mat := StandardMaterial3D.new()
+	laces_mat.albedo_color = _resolved_lace()
+	laces_mat.roughness = 0.9
+	_laces.material_override = laces_mat
 	var fist_mat := StandardMaterial3D.new()
 	fist_mat.albedo_color = _kit_gloves
 	fist_mat.roughness = 0.9

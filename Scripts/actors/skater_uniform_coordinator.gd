@@ -112,8 +112,8 @@ func setup(skater: Skater) -> void:
 	_foot_r = skater.lower_body.get_node("LegR/ShinR/FootR") as MeshInstance3D
 	_blade_steel_l = _foot_l.get_node_or_null("Blade") as MeshInstance3D
 	_blade_steel_r = _foot_r.get_node_or_null("Blade") as MeshInstance3D
-	# Fixed lace-white from the builder, never repainted — resolved only so
-	# ghost fades reach them, like the head/neck skin.
+	# Created by SkaterMeshBuilder with a placeholder white; repainted with
+	# the gear style's lace pick on every uniform apply.
 	_laces_l = _foot_l.get_node_or_null("Laces") as MeshInstance3D
 	_laces_r = _foot_r.get_node_or_null("Laces") as MeshInstance3D
 	_create_jersey_viewport()
@@ -289,6 +289,7 @@ func apply_uniform(colors: Dictionary) -> void:
 	_foot_l.material_override = skate_mat.duplicate()
 	_foot_r.material_override = skate_mat.duplicate()
 	_repaint_skate_stripes()
+	_repaint_laces()
 
 
 # Repaints the jersey + shoulder decals with the new name/number using the
@@ -530,6 +531,10 @@ func _resolve_skate_color() -> Color:
 	return TapeColorRegistry.resolve(_skater.gear_style.skate_color, _team_accent)
 
 
+func _resolve_lace_color() -> Color:
+	return TapeColorRegistry.resolve(_skater.gear_style.lace_color, _team_accent)
+
+
 func _repaint_skate_stripes() -> void:
 	var stripe_mat: StandardMaterial3D = _make_solid_mat(_resolve_skate_color(), _ROUGH_SKATE)
 	if _skate_stripe_l != null:
@@ -538,12 +543,21 @@ func _repaint_skate_stripes() -> void:
 		_skate_stripe_r.material_override = stripe_mat.duplicate()
 
 
-# Repaints the gear-style accent stripes (glove cuff rings, skate collar
-# bands) for a live gear-color change without touching the rest of the
+func _repaint_laces() -> void:
+	var lace_mat: StandardMaterial3D = _make_solid_mat(_resolve_lace_color())
+	if _laces_l != null:
+		_laces_l.material_override = lace_mat.duplicate()
+	if _laces_r != null:
+		_laces_r.material_override = lace_mat.duplicate()
+
+
+# Repaints the gear-style accents (glove cuff rings, skate collar bands,
+# laces) for a live gear-color change without touching the rest of the
 # uniform. Same live-cosmetic contract as refresh_tape below.
 func refresh_gear_style() -> void:
 	_rebuild_glove_cuffs(_resolve_glove_color())
 	_repaint_skate_stripes()
+	_repaint_laces()
 
 
 # Re-renders the tape-colored pieces (blade wrap, knob, handle-wrap paint) for

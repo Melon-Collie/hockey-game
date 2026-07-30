@@ -183,7 +183,8 @@ const _SKATE_STRIPE_RADIUS: float = 0.092
 # Skate laces, drawn-on as geometry: thin rungs laid across the instep, each
 # (y, z) pair the rung's center on the boot's top line — z interpolated from
 # the _BOOT_STATIONS top_z at that y, so every rung seats on the surface it
-# crosses (ankle → forefoot). Fixed lace-white; not a cosmetic slot.
+# crosses (ankle → forefoot). _LACE_COLOR is only the pre-uniform placeholder;
+# the gear style's lace pick repaints them (SkaterUniformCoordinator).
 const _LACE_RUNGS: Array[Vector2] = [
 	Vector2(0.070, -0.0606),
 	Vector2(0.035, -0.0693),
@@ -678,7 +679,7 @@ static func _ensure_skate_stripe(lower_body: Node3D, skate_path: String) -> void
 
 
 # The laces are a CHILD of the boot mesh (same frame, like the blade steel),
-# in fixed lace-white — nothing repaints them.
+# placeholder-white until the uniform pass paints the lace pick.
 static func _ensure_laces(lower_body: Node3D, foot_path: String) -> void:
 	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
 	if foot == null or foot.get_node_or_null("Laces") != null:

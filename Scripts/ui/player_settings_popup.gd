@@ -77,6 +77,7 @@ var _pending_length: int = PlayerAttributes.GEAR_BALANCED
 var _pending_tape: int = StickTapeConfig.DEFAULT_CODE
 var _pending_skate_color: int = GearStyleConfig.SKATE_DEFAULT_INDEX
 var _pending_glove_color: int = TapeColorRegistry.TEAM_INDEX
+var _pending_lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
 var _name_valid: bool = true
 var _number_valid: bool = true
 # Online matches lock the build (attributes replicate at join); cosmetics stay
@@ -276,18 +277,20 @@ func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> voi
 
 func _open_gear_editor() -> void:
 	# TEAM color chips resolve against the pending team pick — accent for the
-	# skates, the kit's glove color for the gloves.
+	# skates and laces, the kit's glove color for the gloves.
 	var team_colors: Dictionary = _pending_team_colors()
 	_gear_popup.set_focus_scope(self, null)
 	_gear_popup.open(_pending_profile, _pending_skate_color, _pending_glove_color,
-			_build_locked, team_colors.primary, team_colors.gloves)
+			_pending_lace_color, _build_locked, team_colors.primary, team_colors.gloves)
 
 
-func _on_gear_edited(profile: int, skate_color: int, glove_color: int) -> void:
+func _on_gear_edited(profile: int, skate_color: int, glove_color: int,
+		lace_color: int) -> void:
 	if not _build_locked:
 		_pending_profile = profile
 	_pending_skate_color = skate_color
 	_pending_glove_color = glove_color
+	_pending_lace_color = lace_color
 	_update_apply_state()
 
 
@@ -677,7 +680,8 @@ func _pending_team_colors() -> Dictionary:
 
 
 func _pending_gear_code() -> int:
-	return GearStyleConfig.new(_pending_skate_color, _pending_glove_color).to_code()
+	return GearStyleConfig.new(_pending_skate_color, _pending_glove_color,
+			_pending_lace_color).to_code()
 
 
 # Whether the stick the player would get on Apply differs from the one the rink
@@ -810,6 +814,7 @@ func _restore_from_snapshot() -> void:
 			int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE)))
 	_pending_skate_color = gear.skate_color
 	_pending_glove_color = gear.glove_color
+	_pending_lace_color = gear.lace_color
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
