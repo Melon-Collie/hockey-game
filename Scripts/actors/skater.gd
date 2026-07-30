@@ -1654,6 +1654,13 @@ func get_blade_wall_normal() -> Vector3:
 # only as a slight bend at a joint where the two cross-sections nearly match.
 # A small overrun keeps the hosel's tip cap buried inside the shaft.
 const _SHAFT_TIP_OVERRUN_M: float = 0.03
+# The butt end extends past the TOP HAND so the knob rides visibly above the
+# fist — a real grip holds the shaft just below the knob, not on top of it.
+# Sized to clear the glove sphere (hand_sphere_radius 0.06) with most of the
+# knob showing. Public: the workbench preview extends its shaft to match.
+const SHAFT_BUTT_EXTEND_M: float = 0.09
+# The knob's cap sits slightly proud of the shaft's butt end (wrapped tape).
+const _KNOB_PROUD_M: float = 0.01
 
 
 func update_stick_mesh() -> void:
@@ -1663,8 +1670,10 @@ func update_stick_mesh() -> void:
 	var to_tip: Vector3 = _hosel_tip_upper_body() - stick_origin
 	if to_tip.length_squared() < 0.0001:
 		return
-	var shaft_len: float = to_tip.length() + _SHAFT_TIP_OVERRUN_M
-	stick_mesh.position = stick_origin + to_tip.normalized() * (shaft_len * 0.5)
+	var dir: Vector3 = to_tip.normalized()
+	var butt_start: Vector3 = stick_origin - dir * SHAFT_BUTT_EXTEND_M
+	var shaft_len: float = to_tip.length() + SHAFT_BUTT_EXTEND_M + _SHAFT_TIP_OVERRUN_M
+	stick_mesh.position = butt_start + dir * (shaft_len * 0.5)
 	stick_mesh.scale.z = shaft_len
 	stick_mesh.look_at(upper_body.to_global(stick_origin + to_tip), Vector3.UP)
 	# The handle-wrap paint (grip/candy-cane) measures real metres down the
@@ -1689,11 +1698,11 @@ func _hosel_tip_upper_body() -> Vector3:
 	return blade.transform * tip_local
 
 
-# Rides the knob just past the top hand, along the shaft away from the blade,
-# with its CylinderMesh long axis (local Y) aligned to the shaft — same look_at +
-# rotate_object_local(X, 90°) trick as the glove cuffs. `to_shaft_end` is the
-# hand→hosel-tip vector the shaft itself was aimed with, so the knob and the
-# shaft always share one axis.
+# Caps the extended butt end with the knob, its CylinderMesh long axis (local
+# Y) aligned to the shaft — same look_at + rotate_object_local(X, 90°) trick
+# as the glove cuffs. `to_shaft_end` is the hand→hosel-tip vector the shaft
+# itself was aimed with, so the knob and the shaft always share one axis; the
+# knob wraps the top of the butt extension, slightly proud of its end.
 func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 	if stick_knob_mesh == null or not is_instance_valid(stick_knob_mesh):
 		return
@@ -1703,7 +1712,8 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(stick_origin + to_shaft_end)).normalized()
 	var cyl: CylinderMesh = stick_knob_mesh.mesh as CylinderMesh
 	var knob_h: float = cyl.height if cyl != null else 0.05
-	var knob_center_w: Vector3 = hand_w + up_shaft_w * (knob_h * 0.5)
+	var butt_w: Vector3 = hand_w + up_shaft_w * SHAFT_BUTT_EXTEND_M
+	var knob_center_w: Vector3 = butt_w - up_shaft_w * (knob_h * 0.5 - _KNOB_PROUD_M)
 	stick_knob_mesh.position = upper_body.to_local(knob_center_w)
 	stick_knob_mesh.look_at(knob_center_w + up_shaft_w, _up_for_look_at(up_shaft_w))
 	stick_knob_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)

@@ -539,13 +539,15 @@ func _rebuild_preview() -> void:
 			TapeColorRegistry.resolve(_tape.blade_color, _team_accent), 0.9)
 
 	# Shaft: heel → butt along the lie axis, cut to the picked length (the
-	# same stick_len_mult the rink uses, so LONG visibly outreaches SHORT).
+	# same stick_len_mult the rink uses, so LONG visibly outreaches SHORT)
+	# plus the butt extension the rink renders above the top hand.
 	# LOCAL transforms only — look_at_from_position places in GLOBAL space,
 	# which fought the turntable's live rotation: the shaft snapped back to
 	# the world frame on every option change while the blade stayed rotated.
 	var attrs := PlayerAttributes.new(_body.height, _body.weight, _body.profile,
 			_curve, _flex, _length)
-	var stick_len: float = GameRules.DEFAULT_STICK_LENGTH_M * attrs.stick_len_mult()
+	var stick_len: float = GameRules.DEFAULT_STICK_LENGTH_M * attrs.stick_len_mult() \
+			+ Skater.SHAFT_BUTT_EXTEND_M
 	var lie: float = deg_to_rad(_LIE_DEG)
 	var axis := Vector3(0.0, sin(lie), cos(lie))
 	_shaft.transform = Transform3D(
@@ -557,10 +559,11 @@ func _rebuild_preview() -> void:
 	_shaft_mat.set_shader_parameter(&"shaft_len_m", stick_len)
 
 	# Same composition as Skater._update_stick_knob: cylinder long axis onto
-	# the shaft line, taper end toward the blade.
+	# the shaft line, taper end toward the blade, capping the butt slightly
+	# proud like the rink's knob.
 	_knob.transform = Transform3D(
 			Basis.looking_at(axis, Vector3.UP) * Basis(Vector3.RIGHT, PI * 0.5),
-			axis * (stick_len + _KNOB_HEIGHT_M * 0.5))
+			axis * (stick_len - _KNOB_HEIGHT_M * 0.5 + 0.01))
 	_knob.material_override = _make_mat(knob_color, 0.9)
 
 	# Center the assembly on the turntable pivot: midpoint of butt and toe.

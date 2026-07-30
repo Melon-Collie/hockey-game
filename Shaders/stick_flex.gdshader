@@ -21,9 +21,10 @@ shader_type spatial;
 // the shaft is one stretched box, so separate wrap geometry would need
 // per-frame placement AND its own copy of the flex bow. Fragment paint gets
 // both for free. grip_mode 0 = bare, 1 = candy-cane spiral, 2 = full grip;
-// the wrap hangs down grip_len_m of REAL shaft from the hand end (object z =
-// +0.5), which needs shaft_len_m because node scale never reaches object
-// space — update_stick_mesh feeds the live hand→blade length.
+// the wrap hangs down grip_len_m of REAL shaft from the BUTT end (object z =
+// +0.5 — the shaft extends past the top hand and the knob caps it), which
+// needs shaft_len_m because node scale never reaches object space —
+// update_stick_mesh feeds the live rendered length.
 
 uniform vec4 albedo : source_color = vec4(0.06, 0.06, 0.07, 1.0);
 uniform float roughness : hint_range(0.0, 1.0) = 0.4;
@@ -31,7 +32,7 @@ uniform float flex_m = 0.0;                              // signed mid-shaft bow
 uniform float kick_point : hint_range(0.3, 2.0) = 0.75;  // <1 = bulge toward the blade
 uniform int grip_mode = 0;                               // StickTapeConfig.KnobStyle
 uniform vec4 grip_color : source_color = vec4(1.0);
-uniform float grip_len_m = 0.45;                         // wrap reach below the hand
+uniform float grip_len_m = 0.5;                          // wrap reach down from the butt
 uniform float shaft_len_m = 1.3;                         // live rendered shaft length
 
 // Brand wordmark on the two wide (±X) faces, sampled by object-space position
@@ -41,7 +42,7 @@ uniform float shaft_len_m = 1.3;                         // live rendered shaft 
 // Tape (grip paint) always wins where the two would overlap.
 uniform sampler2D brand_tex : source_color, filter_linear_mipmap;
 uniform vec4 brand_color : source_color = vec4(1.0);
-uniform float brand_from_hand_m = 0.5;
+uniform float brand_from_butt_m = 0.55;
 uniform float brand_len_m = 0.194;
 
 // Candy-cane pitch: one full turn per this much shaft, half tape half bare.
@@ -62,14 +63,14 @@ void vertex() {
 void fragment() {
 	vec3 col = albedo.rgb;
 	float rough = roughness;
-	float from_hand = (0.5 - obj_pos.z) * shaft_len_m;
+	float from_butt = (0.5 - obj_pos.z) * shaft_len_m;
 	bool taped = false;
-	if (grip_mode != 0 && from_hand < grip_len_m) {
+	if (grip_mode != 0 && from_butt < grip_len_m) {
 		taped = true;
 		if (grip_mode == 1) {
 			// Barber-pole spiral: tape band advances one turn per period.
 			float ang = atan(obj_pos.y, obj_pos.x) / (2.0 * PI);
-			taped = fract(from_hand / CANDY_PERIOD_M + ang) < 0.5;
+			taped = fract(from_butt / CANDY_PERIOD_M + ang) < 0.5;
 		}
 		if (taped) {
 			col = grip_color.rgb;
@@ -77,7 +78,7 @@ void fragment() {
 		}
 	}
 	if (!taped && abs(obj_pos.x) > HALF_W * 0.98) {
-		float u = (from_hand - brand_from_hand_m) / brand_len_m;
+		float u = (from_butt - brand_from_butt_m) / brand_len_m;
 		if (u >= 0.0 && u <= 1.0) {
 			// Mirror on the −X face so the mark reads left-to-right from
 			// both sides of the stick.

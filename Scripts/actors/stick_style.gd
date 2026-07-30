@@ -11,8 +11,9 @@ extends RefCounted
 #
 # Shaft: near-black composite with the white MITTS wordmark on both wide
 # faces (mirrored so each reads left-to-right), placed in real metres below
-# the hand so it sits under the grip-tape region. Blade: carbon-weave checker
-# (blade_carbon.gdshader) — position-keyed, so it survives pattern rebuilds.
+# the butt end so it sits under the grip-tape region. Blade: carbon-weave
+# checker (blade_carbon.gdshader) — position-keyed, so it survives pattern
+# rebuilds.
 
 const _FLEX_SHADER: Shader = preload("res://Shaders/stick_flex.gdshader")
 const _CARBON_SHADER: Shader = preload("res://Shaders/blade_carbon.gdshader")
@@ -26,10 +27,10 @@ const SHAFT_ROUGHNESS: float = 0.4
 const BLADE_COLOR := Color(0.05, 0.05, 0.05)
 
 const _BRAND_COLOR := Color(1.0, 1.0, 1.0)
-# Wordmark top edge sits below the deepest grip-tape reach (0.45 m), and its
-# length preserves the baked texture's aspect over the 0.05 m shaft height:
-# 0.05 × (512 / 132) ≈ 0.194.
-const _BRAND_FROM_HAND_M: float = 0.5
+# Wordmark start sits below the deepest grip-tape reach (0.5 m from the butt
+# end), and its length preserves the baked texture's aspect over the 0.05 m
+# shaft height: 0.05 × (512 / 132) ≈ 0.194.
+const _BRAND_FROM_BUTT_M: float = 0.55
 const _BRAND_LEN_M: float = 0.194
 
 
@@ -43,7 +44,7 @@ static func make_shaft_material() -> ShaderMaterial:
 	mat.set_shader_parameter(&"roughness", SHAFT_ROUGHNESS)
 	mat.set_shader_parameter(&"brand_tex", _BRAND_TEX)
 	mat.set_shader_parameter(&"brand_color", _BRAND_COLOR)
-	mat.set_shader_parameter(&"brand_from_hand_m", _BRAND_FROM_HAND_M)
+	mat.set_shader_parameter(&"brand_from_butt_m", _BRAND_FROM_BUTT_M)
 	mat.set_shader_parameter(&"brand_len_m", _BRAND_LEN_M)
 	return mat
 
