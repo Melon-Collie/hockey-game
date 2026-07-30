@@ -374,11 +374,12 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 				carrier_pos, c, ctx.attacking_goal_pos,
 				AIActionScoring.feed_keeper_pos, GameRules.NET_HALF_WIDTH,
 				opp_positions, pass_speed, AIActionScoring.feed_keeper_unsettled,
-				-1.0, AIActionScoring.feed_keeper_hands)
+				-1.0, AIActionScoring.feed_keeper_hands, Vector4.INF,
+				ctx.scratch_opp_caps)
 		var tip: float = AIActionScoring.tip_ev(
 				carrier_release, c, ctx.attacking_goal_pos, goalie_pos,
 				GameRules.NET_HALF_WIDTH, opp_positions,
-				carrier_shot_speed, [], self_caps)
+				carrier_shot_speed, ctx.scratch_opp_caps, self_caps)
 		var score: float = maxf(feed, tip) + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score

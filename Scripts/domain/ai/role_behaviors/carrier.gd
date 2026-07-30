@@ -2160,7 +2160,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 			GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
 	var loss_point: Vector3 = AIActionScoring.lane_loss_point(
 			self_pos, receiver_spot, _scratch_opponents_release, pass_speed,
-			_scratch_opponent_vels)
+			_scratch_opponent_vels, _scratch_opponent_caps)
 	cost += AIActionScoring.turnover_cost(
 			loss_point, release_clean * (1.0 - lane), ctx.defending_goal_pos,
 			our_goalie, GameRules.NET_HALF_WIDTH, _scratch_our_defenders)
@@ -3447,7 +3447,7 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 					AIShotValue.displacement_deficit_m(
 							_goalie_now(ctx), ctx.attacking_goal_pos, spot,
 							flight_t + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S),
-					_scratch_opponents_pass, pass_speed)
+					_scratch_opponents_pass, pass_speed, _scratch_opponent_caps)
 		elif slot == AIRoleSlots.Slot.BREAKOUT_STRONG \
 				or slot == AIRoleSlots.Slot.OUTLET \
 				or slot == AIRoleSlots.Slot.BREAKOUT_D2:

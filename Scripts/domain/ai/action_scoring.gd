@@ -1060,9 +1060,12 @@ static func expected_pass_speed(shooter: Vector3, receiver: Vector3) -> float:
 # SkaterController.max_speed via GameRules.DEFAULT_SKATER_MAX_SPEED_M_S.
 # Used by time_to_arrive() for momentum-aware ETAs across every role
 # behavior + chase intercept lookahead.
-# League-average fallback: a bot resolves its OWN top speed through
-# AISkaterCaps, but several call sites still price opponents at this
-# reference rather than their real build.
+# League-average FALLBACK: any read with a peer in view resolves that
+# player's real top speed through AISkaterCaps (caps_by_peer) and only
+# falls back here for unresolvable peers. The sites that price at this
+# reference by design are the genuinely cross-player ones — the
+# realization discount and the counter-cover teammate races — each
+# documented at its site.
 const SKATER_REF_SPEED_M_S: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 
 # Approximate kinematic stopping time for a skater steering against
@@ -2273,12 +2276,14 @@ static func score_pass_value(
 		keeper_displacement_m: float,
 		opponents: Array[Vector3],
 		pass_speed_m_s: float = PASS_SPEED_M_S,
+		opponent_caps: Array = EMPTY_CAPS,
 		shot_type: int = ShotEvent.ShotType.SHOT) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
 		return 0.0
-	var lane: float = lane_clear(shooter, receiver, opponents, pass_speed_m_s)
+	var lane: float = lane_clear(shooter, receiver, opponents, pass_speed_m_s,
+			EMPTY_VEC3, opponent_caps)
 	if lane <= 0.0:
 		return 0.0
 	return lane * AIShotValue.for_release(
@@ -2733,7 +2738,8 @@ static func score_pass(
 		goalie_unsettled_factor: float = 0.0,
 		precomputed_lane: float = -1.0,
 		goalie_hands: Vector4 = Vector4.INF,
-		goalie_pads: Vector4 = Vector4.INF) -> float:
+		goalie_pads: Vector4 = Vector4.INF,
+		opponent_caps: Array = EMPTY_CAPS) -> float:
 	if _is_past_goal_line(receiver, attacking_goal):
 		return 0.0
 	if pass_lane_blocked_by_net(shooter, receiver):
@@ -2745,8 +2751,11 @@ static func score_pass(
 	# when the distance gate is appropriate. `precomputed_lane` (>= 0)
 	# lets a caller that already ran the identical lane_clear (see
 	# threat_surface_pass) hand it in instead of paying for it twice.
+	# `opponent_caps` (index-matched to `opponents`) prices each lane
+	# defender's real stick reach and closing pace; empty = league.
 	var lane: float = precomputed_lane if precomputed_lane >= 0.0 \
-			else lane_clear(shooter, receiver, opponents, pass_speed_m_s)
+			else lane_clear(shooter, receiver, opponents, pass_speed_m_s,
+					EMPTY_VEC3, opponent_caps)
 	if lane <= 0.0:
 		return 0.0
 	# Receiver's value as a shooter from where they are. Caller is
@@ -2765,7 +2774,7 @@ static func score_pass(
 	var seal_x: float = derive_post_seal_x_sign(receiver, attacking_goal)
 	var receiver_shot: float = score_shoot(
 			receiver, attacking_goal, predicted_goalie_pos, net_half_width, opponents,
-			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor, EMPTY_CAPS, -1.0, false,
+			WRISTER_SHOT_SPEED_M_S, goalie_unsettled_factor, opponent_caps, -1.0, false,
 			seal_x, seal_x != 0.0, 0.0, EMPTY_VEC3, goalie_hands, goalie_pads)
 	return lane * receiver_shot
 
@@ -3166,7 +3175,8 @@ static func lane_clear_saucer(from: Vector3, to: Vector3, opponents: Array[Vecto
 # the two agree on which defender is worst by construction.
 static func lane_loss_point(from: Vector3, to: Vector3,
 		opponents: Array[Vector3], puck_speed_m_s: float,
-		opponent_vels: Array[Vector3] = []) -> Vector3:
+		opponent_vels: Array[Vector3] = [],
+		opponent_caps: Array = []) -> Vector3:
 	var dx: float = to.x - from.x
 	var dz: float = to.z - from.z
 	var line_len_sq: float = dx * dx + dz * dz
@@ -3179,6 +3189,7 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 	var pvx: float = dx * inv_len * speed
 	var pvz: float = dz * inv_len * speed
 	var vel_count: int = opponent_vels.size()
+	var has_caps: bool = opponent_caps.size() == opponents.size()
 	var max_block: float = 0.0
 	var best_point: Vector3 = Vector3.INF
 	for i: int in opponents.size():
@@ -3193,8 +3204,18 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 		if t_raw > seg_time:
 			continue  # trailing the play — never closest in flight
 		var t: float = maxf(t_raw, 0.0)
+		# Same per-defender build resolution as lane_clear, so the two keep
+		# agreeing on which defender is worst when the caller threads caps.
+		var stick_reach: float = LANE_DEFENDER_REACH_M
+		var close_speed: float = LANE_DEFENDER_CLOSE_SPEED_M_S
+		if has_caps:
+			var caps: AISkaterCaps = opponent_caps[i]
+			if caps != null:
+				stick_reach = caps.stick_reach
+				close_speed = LANE_LATERAL_FRACTION * caps.max_speed
 		var block: float = _lane_block_at(
-				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz)
+				from.x, from.z, pvx, pvz, t, p.x, p.z, vx, vz,
+				stick_reach, close_speed)
 		if block > max_block:
 			max_block = block
 			# Puck position at the defender's closest approach = the pick spot.
@@ -3237,7 +3258,8 @@ static func in_offensive_zone(pos: Vector3, attacking_goal: Vector3,
 static func position_potential(
 		pos: Vector3,
 		attacking_goal: Vector3,
-		opponents: Array[Vector3]) -> float:
+		opponents: Array[Vector3],
+		opponent_caps: Array = EMPTY_CAPS) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (pos.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
@@ -3267,7 +3289,7 @@ static func position_potential(
 	# release-contest read score_shoot uses, raced to the puck a carry-handle
 	# ahead of the body toward the net.
 	var openness: float = release_contest_clean(
-			release_point_toward(pos, attacking_goal), opponents)
+			release_point_toward(pos, attacking_goal), opponents, opponent_caps)
 	return closeness * angle_factor * openness
 
 
@@ -3505,6 +3527,9 @@ static func turnover_cost_local(
 # receiver (position_potential.openness ↓).
 #
 # Used by PRESSURE / FORECHECK for inverse pass-threat scoring across opp teammates.
+# Defenders stay at league reach/pace by design: they are OUR skaters priced from
+# hypothetical spots (with-self-at sets), positions-only at every caller — a
+# cross-player perception simplification, not a per-build gap.
 static func threat_surface_pass(
 		carrier_pos: Vector3,
 		receiver_pos: Vector3,
@@ -3710,7 +3735,10 @@ static func counter_rush_cost(
 	# Covering set: bodies that beat the counter home WITH TIME TO SET —
 	# the same brake-to-arrive margin race_home_radius charges (a defender
 	# racing stride-for-stride beside the rush is chasing, not covering).
-	# Standing-start straight-line races (positions only — see header).
+	# Standing-start straight-line races (positions only — see header), so
+	# the brake-out margin is the league one by design: the mate ETAs it
+	# pads are themselves league-paced, and a per-build margin on a
+	# league-paced race would be false precision.
 	var setup_margin: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S \
 			/ AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 	var cover_anchor: Vector3 = AIThreatAssignment.cover_anchor(

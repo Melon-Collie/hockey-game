@@ -1259,6 +1259,96 @@ func test_lane_block_scales_with_defender_reach_and_speed() -> void:
 	assert_gt(vs_small, league, "a shorter, slower defender lets more through")
 
 
+func test_pass_score_prices_lane_defender_by_build() -> void:
+	# The #567 calibration case: the SAME feed scored against a lane defender
+	# whose build differs. A long-stick, fast defender covers the thread his
+	# real reach buys (lower pass score); a short, slow one concedes it.
+	# League (no caps) sits strictly between — empty caps reproduce the
+	# constants exactly, so the ordering table only moves where an opponent
+	# is non-neutral.
+	var shooter := Vector3(0.0, 0.0, 8.0)
+	var receiver := Vector3(0.0, 0.0, 22.0)
+	var goalie := Vector3(0.5, 0.0, 26.0)
+	var off_lane: Array[Vector3] = [Vector3(2.5, 0.0, 15.0)]
+	var league: float = AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, NET_HW, off_lane)
+	var long_stick := AISkaterCaps.new()
+	long_stick.stick_reach = 1.6
+	long_stick.max_speed = 12.0
+	var vs_long: float = AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, NET_HW, off_lane,
+			AIActionScoring.PASS_SPEED_M_S, 0.0, -1.0, Vector4.INF, Vector4.INF,
+			[long_stick])
+	var short_stick := AISkaterCaps.new()
+	short_stick.stick_reach = 1.1
+	short_stick.max_speed = 6.0
+	var vs_short: float = AIActionScoring.score_pass(
+			shooter, receiver, GOAL, goalie, NET_HW, off_lane,
+			AIActionScoring.PASS_SPEED_M_S, 0.0, -1.0, Vector4.INF, Vector4.INF,
+			[short_stick])
+	assert_lt(vs_long, league,
+			"the long-stick defender's real reach covers the same feed")
+	assert_gt(vs_short, league,
+			"the short-stick defender concedes the same feed")
+
+
+func test_lane_loss_point_follows_the_caps_aware_worst_defender() -> void:
+	# lane_loss_point shares the per-defender block helpers with lane_clear so
+	# the two agree on which defender is worst BY CONSTRUCTION — including when
+	# builds decide it: a near short-stick man is league's worst blocker, but a
+	# long-stick fast man deeper down the lane out-blocks him on real caps, and
+	# the predicted pick spot must move to HIS crossing.
+	var from := Vector3(0.0, 0.0, 0.0)
+	var to := Vector3(0.0, 0.0, 16.0)
+	# Near man 2.0 m off the lane at z=5; deep man 4.3 m off at z=10 — outside
+	# league reach there, inside a long-stick sprinter's.
+	var opps: Array[Vector3] = [Vector3(2.0, 0.0, 5.0), Vector3(4.3, 0.0, 10.0)]
+	var vels: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
+	var league_p: Vector3 = AIActionScoring.lane_loss_point(
+			from, to, opps, AIActionScoring.PASS_SPEED_M_S, vels)
+	assert_lt(absf(league_p.z - 5.0), absf(league_p.z - 10.0),
+			"at league reach the near defender is the interceptor")
+	var short_slow := AISkaterCaps.new()
+	short_slow.stick_reach = 1.05
+	short_slow.max_speed = 5.0
+	var long_fast := AISkaterCaps.new()
+	long_fast.stick_reach = 1.6
+	long_fast.max_speed = 12.0
+	var caps_p: Vector3 = AIActionScoring.lane_loss_point(
+			from, to, opps, AIActionScoring.PASS_SPEED_M_S, vels,
+			[short_slow, long_fast])
+	assert_lt(absf(caps_p.z - 10.0), absf(caps_p.z - 5.0),
+			"on real builds the long-stick man deeper in the lane is the pick spot")
+
+
+func test_position_potential_prices_contester_by_build() -> void:
+	# Openness is the same release contest score_shoot runs, so a contesting
+	# body's real blade decides how covered the spot reads: a long-stick fast
+	# contester closes more of the windup than the league read, a short slow
+	# one less.
+	# The release point sits a carry-handle toward the goal (z = 15.9); the
+	# windup window is short (~135 ms), so the build split lives in a narrow
+	# ring: inside the league blade's contest reach (~1.55 m) but outside the
+	# short stick's (~1.19 m).
+	var pos := Vector3(0.0, 0.0, 15.0)
+	var contester: Array[Vector3] = [Vector3(1.4, 0.0, 15.9)]
+	var league: float = AIActionScoring.position_potential(pos, GOAL, contester)
+	var long_fast := AISkaterCaps.new()
+	long_fast.stick_reach = 1.6
+	long_fast.max_speed = 12.0
+	var vs_long: float = AIActionScoring.position_potential(
+			pos, GOAL, contester, [long_fast])
+	var short_slow := AISkaterCaps.new()
+	short_slow.stick_reach = 1.05
+	short_slow.max_speed = 5.0
+	var vs_short: float = AIActionScoring.position_potential(
+			pos, GOAL, contester, [short_slow])
+	assert_lt(vs_long, league,
+			"a long-stick fast contester covers more of the spot's release")
+	assert_gt(vs_short, league,
+			"a short slow contester covers less of it")
+
+
 func test_lane_clear_blocks_close_on_line_defender() -> void:
 	# THE breakout-turnover regression. A defender 1 m in front of the
 	# passer, dead on the line — a man in the slot the pass would go

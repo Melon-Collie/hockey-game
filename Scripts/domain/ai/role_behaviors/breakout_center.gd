@@ -43,9 +43,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var pass_speed_mid: float = AIActionScoring.expected_pass_speed(carrier_pos, mid)
 	var pass_speed_circle: float = AIActionScoring.expected_pass_speed(carrier_pos, circle)
 	var lane_mid: float = AIActionScoring.lane_clear(
-			carrier_pos, mid, opp_positions, pass_speed_mid)
+			carrier_pos, mid, opp_positions, pass_speed_mid,
+			AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)
 	var lane_circle: float = AIActionScoring.lane_clear(
-			carrier_pos, circle, opp_positions, pass_speed_circle)
+			carrier_pos, circle, opp_positions, pass_speed_circle,
+			AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)
 	var target: Vector3 = mid if lane_mid >= lane_circle else circle
 	if not AIRoleHelpers.is_legal_position(target):
 		target = mid if target == circle else circle
