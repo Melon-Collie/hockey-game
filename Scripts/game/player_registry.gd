@@ -164,6 +164,8 @@ func spawn(
 	# picks, so it must find the replicated config already installed.
 	record.tape_code = NetworkManager.get_peer_tape_code(peer_id)
 	spawned.skater.set_tape_config(StickTapeConfig.from_code(record.tape_code))
+	record.skin_tone = NetworkManager.get_peer_skin_tone(peer_id)
+	spawned.skater.set_skin_tone(record.skin_tone)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(player_name, jersey_number)
 	# Square the skater up to the puck on initial spawn — without this they
@@ -239,6 +241,12 @@ func spawn_bot(
 		# height/weight/gear keys; from_dict also migrates tier-era and legacy
 		# six-attribute roster on the fly.
 		record.attributes = PlayerAttributes.from_dict(identity)
+	# Skin: the roster may pin one ("skin"); otherwise a stable tone from the
+	# bot's name hash, so the roster shows variety and each bot keeps their
+	# look across sessions. Host-resolved — clients receive the final index
+	# through the spawn broadcast (GameManager seeds the peer map).
+	record.skin_tone = SkinToneRegistry.clamp_index(int(identity.get("skin",
+			record.player_name.hash() % SkinToneRegistry.TONES.size())))
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
@@ -257,6 +265,7 @@ func spawn_bot(
 	spawned.skater.set_skater_collision_provider(skaters)
 	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(record.player_name)
+	spawned.skater.set_skin_tone(record.skin_tone)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number)
 	# Same initial-facing fix as spawn() — and through the CONTROLLER for the

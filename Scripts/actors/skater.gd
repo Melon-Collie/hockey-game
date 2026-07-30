@@ -2134,6 +2134,21 @@ func set_jersey_info(p_name: String, number: int) -> void:
 	_uniform.apply_jersey_info(p_name, number)
 
 
+# Repaints the skin parts (head + neck, created by SkaterMeshBuilder) to the
+# player's identity tone. Albedo only, preserving the current alpha so a
+# repaint landing mid-ghost doesn't snap the skin opaque.
+func set_skin_tone(index: int) -> void:
+	var skin: Color = SkinToneRegistry.color_for(index)
+	for part_name: String in ["Head", "Neck"]:
+		var mi: MeshInstance3D = helmet.get_node_or_null(part_name) as MeshInstance3D
+		if mi == null:
+			continue
+		var mat: StandardMaterial3D = mi.material_override as StandardMaterial3D
+		if mat == null:
+			continue
+		mat.albedo_color = Color(skin.r, skin.g, skin.b, mat.albedo_color.a)
+
+
 # ── HUD (delegate to SkaterHUDCoordinator) ────────────────────────────────────
 func set_player_name(p_name: String) -> void:
 	_hud.set_player_name(p_name)

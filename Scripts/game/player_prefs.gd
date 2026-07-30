@@ -213,6 +213,9 @@ const PAD_DEFAULT_BUTTONS: Dictionary = {
 var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
+# Index into SkinToneRegistry.TONES — identity next to name/number, picked in
+# the edit-player popup and carried through the join handshake like the rest.
+var skin_tone: int = SkinToneRegistry.DEFAULT_INDEX
 var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
 # Packed StickTapeConfig code (blade tape color + coverage + knob color +
 # handle style). Rides the build presets — each preset carries its own tape
@@ -509,6 +512,7 @@ func save() -> void:
 	cfg.set_value("player", "left_handed", is_left_handed)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
 	cfg.set_value("player", "stick_tape", stick_tape_code)
+	cfg.set_value("player", "skin_tone", skin_tone)
 	cfg.set_value("player", "attr_height",  attr_height)
 	cfg.set_value("player", "attr_weight",  attr_weight)
 	cfg.set_value("player", "attr_profile", attr_profile)
@@ -1095,6 +1099,8 @@ func _load() -> void:
 		# code coerces to a legal tape job instead of riding raw into the wire.
 		stick_tape_code = StickTapeConfig.from_code(int(cfg.get_value(
 				"player", "stick_tape", StickTapeConfig.DEFAULT_CODE))).to_code()
+		skin_tone = SkinToneRegistry.clamp_index(int(cfg.get_value(
+				"player", "skin_tone", SkinToneRegistry.DEFAULT_INDEX)))
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
 		if attr_ver >= 5:
 			# Native v4 body+gear model. Funnel through set_player_attributes so

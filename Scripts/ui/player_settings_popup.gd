@@ -18,6 +18,7 @@ var _number_warning: Label = null
 var _left_btn: Button = null
 var _right_btn: Button = null
 var _color_dropdown: PaletteDropdown = null
+var _skin_buttons: Array[Button] = []
 var _apply_btn: Button = null
 # Attribute editing + presets live in a reusable child panel that self-manages
 # its own snapshot/restore/commit; the popup just wires its `changed` signal
@@ -37,6 +38,7 @@ var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
+var _pending_skin: int = SkinToneRegistry.DEFAULT_INDEX
 var _name_valid: bool = true
 var _number_valid: bool = true
 # The in-game on-screen keyboard for controller name entry (works on every
@@ -153,6 +155,7 @@ func _build() -> void:
 	_build_name_section(identity_col)
 	_build_number_section(identity_col)
 	_build_handedness_section(identity_col)
+	_build_skin_section(identity_col)
 	_build_team_section(identity_col)
 	_attr_panel = AttributePickerPanel.new()
 	_attr_panel.changed.connect(_update_apply_state)
@@ -378,6 +381,49 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 		_update_apply_state())
 
 
+# One toggle swatch per palette tone; the picked one wears a white ring.
+# Selection is exclusive-managed by _select_skin (set_pressed_no_signal on
+# the rest) so a swatch can never be un-picked into "no skin".
+func _build_skin_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	row.add_child(_make_identity_label(tr(&"PLAYER_SKIN_LABEL")))
+
+	var swatches := HBoxContainer.new()
+	swatches.add_theme_constant_override("separation", 6)
+	row.add_child(swatches)
+	_skin_buttons.clear()
+	for i: int in SkinToneRegistry.TONES.size():
+		var btn := Button.new()
+		btn.toggle_mode = true
+		btn.custom_minimum_size = Vector2(28, 48)
+		var plain := StyleBoxFlat.new()
+		plain.bg_color = SkinToneRegistry.TONES[i]
+		plain.set_corner_radius_all(6)
+		var ringed := plain.duplicate() as StyleBoxFlat
+		ringed.border_color = Color.WHITE
+		ringed.set_border_width_all(3)
+		btn.add_theme_stylebox_override("normal", plain)
+		btn.add_theme_stylebox_override("hover", ringed)
+		btn.add_theme_stylebox_override("pressed", ringed)
+		btn.add_theme_stylebox_override("hover_pressed", ringed)
+		SoundManager.wire_button(btn)
+		var index: int = i
+		btn.pressed.connect(func() -> void: _select_skin(index))
+		swatches.add_child(btn)
+		_skin_buttons.append(btn)
+
+
+func _select_skin(index: int) -> void:
+	_pending_skin = SkinToneRegistry.clamp_index(index)
+	for i: int in _skin_buttons.size():
+		_skin_buttons[i].set_pressed_no_signal(i == _pending_skin)
+	_update_apply_state()
+
+
 func _build_team_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -429,6 +475,7 @@ func _update_apply_state() -> void:
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
 		or _pending_color_slot != _snapshot.get("color_slot", -1)
+		or _pending_skin != int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX))
 		or attrs_dirty)
 	# The picker panel owns attribute validity (full budget on any touched build);
 	# name/number/etc. can apply on their own.
@@ -459,6 +506,11 @@ func _apply() -> void:
 		# local_identity_changed signal that GameManager listens to so the
 		# live skater updates without a respawn.
 		NetworkManager.apply_local_identity(_pending_name, _pending_number, _pending_is_left)
+	if _pending_skin != int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX)):
+		PlayerPrefs.skin_tone = _pending_skin
+		# Writes the peer map and emits local_skin_changed so GameManager
+		# repaints the live skater — same live-cosmetic path as the tape job.
+		NetworkManager.apply_local_skin(_pending_skin)
 	if color_changed_b:
 		# apply_preferred_color writes PlayerPrefs.preferred_color_slot and
 		# emits local_preferred_color_changed so GameManager can re-tint
@@ -499,6 +551,7 @@ func _restore_from_snapshot() -> void:
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
 	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
+	_select_skin(int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX)))
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
@@ -526,6 +579,7 @@ func open() -> void:
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
 		"color_slot": saved_slot,
+		"skin": SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone),
 	}
 	if _attr_panel != null:
 		_attr_panel.set_locked(NetworkManager.is_in_online_match())

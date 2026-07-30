@@ -103,9 +103,6 @@ const HEAD_RADIUS: float = 0.135
 # the rim. Capped by clearance: forward offset + HEAD_RADIUS must stay under
 # _HELMET_RADIUS or the face pokes through the shell at the front equator.
 const _HEAD_FORWARD_M: float = 0.015
-# Placeholder skin — deliberately shocking pink so the head/helmet split is
-# unmistakable in playtests until real skin tones arrive.
-const HEAD_COLOR := Color(1.0, 0.2, 0.75)
 
 # Shoulder cap: an asymmetric deltoid pad. The +Y end — which
 # Skater._orient_shoulder_cap points INTO the trap/chest (away from the arm)
@@ -339,11 +336,12 @@ static func _build_helmet() -> ArrayMesh:
 	return st.commit()
 
 
-# The pink head ball and neck under the helmet shell. Created (not swapped —
-# no scene nodes exist for them) as children of the Helmet MeshInstance3D so
+# The head ball and neck under the helmet shell. Created (not swapped — no
+# scene nodes exist for them) as children of the Helmet MeshInstance3D so
 # they ride the same appearance-rig scaling and skeleton offsets.
-# SkaterUniformCoordinator resolves both by name for ghost fades; the
-# placeholder material lives here because no kit color paints skin.
+# SkaterUniformCoordinator resolves both by name for ghost fades; the skin
+# material lives here because no kit color paints skin — the player's
+# identity tone does (Skater.set_skin_tone).
 static func _ensure_head(upper_body: Node3D) -> void:
 	var helmet: MeshInstance3D = upper_body.get_node_or_null("Helmet") as MeshInstance3D
 	if helmet == null or helmet.get_node_or_null("Head") != null:
@@ -366,9 +364,11 @@ static func _build_neck() -> ArrayMesh:
 	return _build_lathe(_NECK_PROFILE, 8, 1.0, 1.0)
 
 
+# Default-tone skin material — Skater.set_skin_tone repaints the albedo to
+# the player's identity pick at spawn (and live from the edit-player popup).
 static func _make_skin_mat() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = HEAD_COLOR
+	mat.albedo_color = SkinToneRegistry.color_for(SkinToneRegistry.DEFAULT_INDEX)
 	mat.roughness = 0.85
 	BodyRim.apply(mat)
 	return mat
