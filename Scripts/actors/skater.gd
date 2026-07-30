@@ -573,6 +573,12 @@ func _ready() -> void:
 		shaft.subdivide_depth = _STICK_FLEX_SEGMENTS
 		stick_mesh.mesh = shaft
 
+	# Swap the scene's primitive part meshes for the shared low-poly faceted
+	# set. Order-free relative to the coordinators below — the uniform painter
+	# overrides materials on these nodes and the appearance rig scales the
+	# nodes, so mesh identity is free to change here.
+	SkaterMeshBuilder.apply(upper_body, lower_body)
+
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
 		top_hand = Marker3D.new()
