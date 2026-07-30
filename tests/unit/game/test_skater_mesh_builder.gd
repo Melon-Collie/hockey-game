@@ -34,9 +34,12 @@ class PartSpec:
 
 
 # Envelopes come from the primitives in Scenes/Skater.tscn: torso cylinder
-# r 0.22 h 0.55, helmet sphere r 0.155, shoulder r 0.11, hip r 0.13, knee
-# r 0.095, thigh cylinder r 0.14 h 0.3, sock r 0.09 h 0.3, skate r 0.09
-# h 0.2, foot prolate sphere r 0.08 half-length 0.125.
+# r 0.22 h 0.55, helmet sphere r 0.155, hip r 0.13, knee r 0.095, thigh
+# cylinder r 0.14 h 0.3, sock r 0.09 h 0.3, skate r 0.09 h 0.2, foot prolate
+# sphere r 0.08 half-length 0.125. Two deliberate exceptions: the shoulder cap
+# is prolate along its pole (it leans along the arm, high on the torso — no
+# ice/boards to poke), and the arm-rig meshes are unit-sized (node scale is
+# the real dimension), so their bounds are the nominal unit envelopes.
 func _parts() -> Array[PartSpec]:
 	return [
 		PartSpec.new("torso", SkaterMeshBuilder._build_torso(),
@@ -44,7 +47,15 @@ func _parts() -> Array[PartSpec]:
 		PartSpec.new("helmet", SkaterMeshBuilder._build_helmet(),
 				Vector3(0.31, 0.31, 0.31), false),
 		PartSpec.new("shoulder", SkaterMeshBuilder._build_shoulder(),
-				Vector3(0.22, 0.22, 0.22), false),
+				Vector3(0.21, 0.28, 0.21), false),
+		PartSpec.new("arm_bone", SkaterMeshBuilder.shared_arm_bone(),
+				Vector3(2.0, 1.0, 2.0), true),
+		PartSpec.new("joint_ball", SkaterMeshBuilder.shared_joint_ball(),
+				Vector3(2.0, 2.0, 2.0), false),
+		PartSpec.new("cuff", SkaterMeshBuilder.shared_cuff(),
+				Vector3(2.0, SkaterMeshBuilder.CUFF_HEIGHT_M, 2.0), true),
+		PartSpec.new("knob", SkaterMeshBuilder.shared_knob(),
+				Vector3(0.07, SkaterMeshBuilder.KNOB_HEIGHT_M, 0.07), true),
 		PartSpec.new("hip", SkaterMeshBuilder._build_hip(),
 				Vector3(0.26, 0.26, 0.26), false),
 		PartSpec.new("knee", SkaterMeshBuilder._build_knee(),
@@ -108,6 +119,22 @@ func test_every_part_stays_inside_its_primitive_envelope() -> void:
 			assert_lt(size[axis], part.max_size[axis] + _EPS,
 					"%s axis %d should stay inside the replaced primitive's envelope"
 					% [part.label, axis])
+
+
+func test_arm_rig_meshes_keep_their_placement_dimensions() -> void:
+	# These heights are PLACEMENT inputs, not just looks: the bone wrapper's
+	# per-frame Z scale assumes a unit-height prism, and the cuff/knob sit
+	# offset along their bone by half their baked height (Skater reads the
+	# CUFF_HEIGHT_M / KNOB_HEIGHT_M constants). A drifted mesh height slides
+	# every cuff off the wrist silently.
+	assert_almost_eq(SkaterMeshBuilder.shared_arm_bone().get_aabb().size.y, 1.0, 0.001,
+			"bone prism must be unit height")
+	assert_almost_eq(SkaterMeshBuilder.shared_cuff().get_aabb().size.y,
+			SkaterMeshBuilder.CUFF_HEIGHT_M, 0.001,
+			"cuff mesh height must match CUFF_HEIGHT_M")
+	assert_almost_eq(SkaterMeshBuilder.shared_knob().get_aabb().size.y,
+			SkaterMeshBuilder.KNOB_HEIGHT_M, 0.001,
+			"knob mesh height must match KNOB_HEIGHT_M")
 
 
 func test_boot_blade_reaches_the_replaced_spheres_ice_depth() -> void:

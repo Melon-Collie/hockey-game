@@ -1,13 +1,17 @@
 class_name SkaterMeshBuilder
 extends RefCounted
 
-# Low-poly faceted replacements for the skater's scene-primitive part meshes:
-# shaped torso, helmeted head, shoulder/hip/knee balls, thighs, socks, skate
-# cuffs, and boots with a blade runner. Swapped in during Skater._ready().
-# Cosmetic only — gameplay reads the Marker3D anchors and collision shapes,
-# never these meshes. The code-created arm rig (bone cylinders, joint spheres,
-# cuffs, knob) stays on engine primitives because SkaterAppearanceCoordinator
-# resizes those by mutating CylinderMesh/SphereMesh radii.
+# Low-poly faceted replacements for the skater's part meshes: shaped torso,
+# helmeted head, deltoid shoulder caps, hip/knee balls, thighs, socks, skate
+# cuffs, and boots with a blade runner (swapped in during Skater._ready()),
+# plus the shared_* meshes the code-created arm rig builds from (bone prisms,
+# joint balls, glove cuffs, stick knob). Cosmetic only — gameplay reads the
+# Marker3D anchors and collision shapes, never these meshes.
+#
+# The arm-rig meshes are baked at UNIT radius and resized by node scale
+# (creation sites in Skater, per-attribute resizing in
+# SkaterAppearanceCoordinator) — never by mesh mutation, so every skater can
+# share one cached mesh.
 #
 # UV layouts replicate the Godot primitives they replace, because
 # SkaterUniformCoordinator paints against those exact conventions:
@@ -29,8 +33,8 @@ extends RefCounted
 # from Scenes/Skater.tscn) so nothing pokes through ice, boards, or gear that
 # was tuned around the primitive silhouettes.
 const _TORSO_PROFILE: Array[Vector2] = [
-	Vector2(0.275, 0.150),   # shoulder-line taper
-	Vector2(0.230, 0.196),
+	Vector2(0.275, 0.158),   # trap line — stays wide so the deltoid caps emerge from it
+	Vector2(0.245, 0.198),
 	Vector2(0.130, 0.208),   # chest
 	Vector2(0.000, 0.196),   # waist tuck
 	Vector2(-0.150, 0.204),
@@ -68,9 +72,25 @@ const _LEG_SIDES: int = 8
 const _HELMET_RADIUS: float = 0.155
 const _HELMET_CUT_V: float = 0.82
 
-const _SHOULDER_RADIUS: float = 0.11
+# Shoulder cap: a prolate deltoid pad, elongated along its local +Y pole. The
+# pole is NOT static — Skater._orient_shoulder_cap leans it toward the arm's
+# live upper-arm direction each rig update, so the elongation must read as
+# "along the arm", not "tall". Slightly narrower than the ball it replaced;
+# the length makes up the presence.
+const _SHOULDER_RADIUS: float = 0.105
+const _SHOULDER_Y_SCALE: float = 1.3
+
 const _HIP_RADIUS: float = 0.13
 const _KNEE_RADIUS: float = 0.095
+
+# Arm-rig fixed dimensions. The cuff/knob heights are placement inputs on the
+# skater side (_update_cuff_transform / _update_stick_knob offset along the
+# bone by half the height), so they live here with the geometry they measure.
+const _ARM_TAPER: float = 0.88   # distal end radius fraction (top of mesh = proximal)
+const CUFF_HEIGHT_M: float = 0.06
+const KNOB_HEIGHT_M: float = 0.05
+const _KNOB_TOP_RADIUS: float = 0.035
+const _KNOB_BOTTOM_RADIUS: float = 0.03
 
 # Boot stations heel→toe in the Foot node's local frame. That node's scene
 # transform is rotated: local −Y is the toe direction, local +Z is DOWN, X is
@@ -117,16 +137,59 @@ static func _swap(root: Node3D, path: String, key: String, builder: Callable) ->
 	var mi: MeshInstance3D = root.get_node_or_null(path) as MeshInstance3D
 	if mi == null:
 		return
-	var built: ArrayMesh = _cache.get(key)
-	if built == null:
-		built = builder.call()
-		_cache[key] = built
+	var built: ArrayMesh = _shared(key, builder)
 	# Carry the scene primitive's material onto the shared build so the part
 	# keeps its editor default color until apply_uniform overrides it.
 	var prim: PrimitiveMesh = mi.mesh as PrimitiveMesh
 	if prim != null and prim.material != null and built.surface_get_material(0) == null:
 		built.surface_set_material(0, prim.material)
 	mi.mesh = built
+
+
+static func _shared(key: String, builder: Callable) -> ArrayMesh:
+	var built: ArrayMesh = _cache.get(key)
+	if built == null:
+		built = builder.call()
+		_cache[key] = built
+	return built
+
+
+# ── Arm-rig meshes (unit radius — size with node scale, never mesh mutation) ──
+
+
+# Bone prism for the arm wrappers: unit height (the wrapper's per-frame Z
+# scale stretches it to the bone length), unit proximal radius (the visual's
+# X/Z scale sets thickness), tapering toward the distal end — look_at points
+# both bones' mesh-top at the proximal joint. Side UVs follow the cylinder
+# convention because _paint_cylinder_h wraps stripe textures on it.
+static func shared_arm_bone() -> ArrayMesh:
+	return _shared("arm_bone", func() -> ArrayMesh:
+		var profile: Array[Vector2] = [Vector2(0.5, 1.0), Vector2(-0.5, _ARM_TAPER)]
+		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
+
+
+# Elbow/hand ball, unit radius.
+static func shared_joint_ball() -> ArrayMesh:
+	return _shared("joint_ball", func() -> ArrayMesh:
+		return _build_ball(1.0, 8, 4, 1.0))
+
+
+# Glove cuff ring: unit radius, CUFF_HEIGHT_M tall (real height baked — the
+# cuff's along-bone placement offsets by it, only the radius scales).
+static func shared_cuff() -> ArrayMesh:
+	return _shared("cuff", func() -> ArrayMesh:
+		var h: float = CUFF_HEIGHT_M * 0.5
+		var profile: Array[Vector2] = [Vector2(h, 1.0), Vector2(-h, 1.0)]
+		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
+
+
+# Butt-end knob at its real dimensions (never rescaled).
+static func shared_knob() -> ArrayMesh:
+	return _shared("knob", func() -> ArrayMesh:
+		var h: float = KNOB_HEIGHT_M * 0.5
+		var profile: Array[Vector2] = [
+			Vector2(h, _KNOB_TOP_RADIUS), Vector2(-h, _KNOB_BOTTOM_RADIUS)]
+		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
 
 
 # ── Part builders ─────────────────────────────────────────────────────────────
@@ -141,7 +204,7 @@ static func _build_helmet() -> ArrayMesh:
 
 
 static func _build_shoulder() -> ArrayMesh:
-	return _build_ball(_SHOULDER_RADIUS, 10, 5, 1.0)
+	return _build_ball(_SHOULDER_RADIUS, 10, 5, 1.0, _SHOULDER_Y_SCALE)
 
 
 static func _build_hip() -> ArrayMesh:
@@ -237,10 +300,13 @@ static func _cap_uv_offset(k: int, sides: int) -> Vector2:
 
 # Faceted lat/long ball with equirect UVs. v_end < 1 truncates the bottom at
 # that latitude fraction and closes it with a flat cap (the helmet's jaw cut);
-# v_end == 1 closes at the bottom pole. Pole stations collapse their band
+# v_end == 1 closes at the bottom pole. y_scale stretches along the pole axis
+# (a prolate ball — same latitude-scaling SphereMesh's height param does, so
+# the equirect painting convention holds). Pole stations collapse their band
 # quads to triangles via the degenerate half of _uv_quad — zero-area triangles
 # are invisible and flat shading gives every real face its own normal anyway.
-static func _build_ball(radius: float, lon: int, lat: int, v_end: float) -> ArrayMesh:
+static func _build_ball(radius: float, lon: int, lat: int, v_end: float,
+		y_scale: float = 1.0) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_smooth_group(-1)  # flat shading — see class doc block
@@ -248,7 +314,7 @@ static func _build_ball(radius: float, lon: int, lat: int, v_end: float) -> Arra
 	var vs := PackedFloat32Array()
 	for j in lat + 1:
 		var v: float = v_end * float(j) / float(lat)
-		var y: float = radius * cos(PI * v)
+		var y: float = radius * cos(PI * v) * y_scale
 		var ring_r: float = radius * sin(PI * v)
 		rings.append(_ring(y, ring_r, 1.0, 1.0, lon))
 		vs.append(v)
@@ -262,7 +328,7 @@ static func _build_ball(radius: float, lon: int, lat: int, v_end: float) -> Arra
 					rings[j + 1][k + 1], Vector2(u1, vs[j + 1]),
 					rings[j + 1][k], Vector2(u0, vs[j + 1]))
 	if v_end < 1.0:
-		var y_cut: float = radius * cos(PI * v_end)
+		var y_cut: float = radius * cos(PI * v_end) * y_scale
 		_cap(st, rings[rings.size() - 1], Vector3(0.0, y_cut, 0.0), Vector2(0.5, 0.92), false, 0.07)
 	st.generate_normals()
 	return st.commit()

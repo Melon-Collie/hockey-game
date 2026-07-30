@@ -516,12 +516,7 @@ func _rebuild_stick_knob() -> void:
 	_skater.stick_knob_mesh = null
 	var m := MeshInstance3D.new()
 	m.name = "StickKnob"
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.035
-	cyl.bottom_radius = 0.03
-	cyl.height = 0.05
-	cyl.radial_segments = 12
-	m.mesh = cyl
+	m.mesh = SkaterMeshBuilder.shared_knob()
 	m.material_override = _make_solid_mat(color, _ROUGH_CLOTH)
 	_skater.stick_knob_mesh = m
 	_skater.upper_body.add_child(m)
@@ -539,21 +534,20 @@ func _rebuild_glove_cuffs(gloves_color: Color) -> void:
 	# Scaled by the Hands forearm bulk so the cuff stays proud of the forearm
 	# cylinder it wraps — equal radii z-fight (see Skater.forearm_visual_mult).
 	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * _skater.forearm_visual_mult
-	_skater.top_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffTop")
+	_skater.top_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, gloves_color, "CuffTop")
 	_skater.upper_body.add_child(_skater.top_cuff_mesh)
-	_skater.bot_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffBot")
+	_skater.bot_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, gloves_color, "CuffBot")
 	_skater.upper_body.add_child(_skater.bot_cuff_mesh)
 
 
-func _make_glove_cuff_mesh(radius: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
+# The shared cuff ring is unit-radius with its height baked (the wrist
+# placement in Skater._update_cuff_transform reads CUFF_HEIGHT_M), so the
+# radius rides node scale — same contract as the rest of the arm rig.
+func _make_glove_cuff_mesh(radius: float, color: Color, mesh_name: String) -> MeshInstance3D:
 	var m := MeshInstance3D.new()
 	m.name = mesh_name
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
-	cyl.height = height
-	cyl.radial_segments = 16
-	m.mesh = cyl
+	m.mesh = SkaterMeshBuilder.shared_cuff()
+	m.scale = Vector3(radius, 1.0, radius)
 	m.material_override = _make_solid_mat(color)
 	return m
 
