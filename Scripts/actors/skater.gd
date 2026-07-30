@@ -148,14 +148,17 @@ var tape_config: StickTapeConfig = StickTapeConfig.new()
 # and slightly behind the chest line, not pinned against the ribs.
 @export var arm_pole_local: Vector3 = Vector3(0.55, -1.0, 0.1)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
-# actual length; X/Y control arm thickness.
-@export var arm_mesh_thickness: float = 0.11
+# actual length; X/Y control arm thickness. Sized as a padded JERSEY SLEEVE
+# (elbow pad + liner under cloth), not a bare arm — bare-arm 0.055 radius
+# read skinny next to the 0.09 socks.
+@export var arm_mesh_thickness: float = 0.13
 # Radius of the elbow joint spheres positioned per-tick at the IK elbow.
-# Kept a touch larger than arm_mesh_thickness * 0.5 so the joint reads as a
-# distinct bulge between the upper-arm and forearm cylinders.
-@export var elbow_sphere_radius: float = 0.065
-# Radius of the hand spheres positioned per-tick at the IK hand.
-@export var hand_sphere_radius: float = 0.06
+# Well proud of arm_mesh_thickness * 0.5 so the joint reads as the elbow
+# PAD bulging under the sleeve, the arm's answer to the deltoid caps.
+@export var elbow_sphere_radius: float = 0.082
+# Radius of the hand spheres positioned per-tick at the IK hand — gloved
+# fists, so slightly thicker than the sleeve they hang from.
+@export var hand_sphere_radius: float = 0.07
 # Gap (along the bone direction, toward the elbow) between the hand-sphere
 # center and the forward face of the glove cuff cylinder. Without this the
 # cuff sits flush against the hand sphere and visually swallows it; a small
