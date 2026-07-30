@@ -48,12 +48,22 @@ const _PAD_STATIONS: Array[Vector2] = [
 	Vector2(-0.42, 0.90),   # boot channel
 ]
 
-# Mask (replaces the oblate head sphere, r 0.17 × height 0.26): faceted
-# oblate ball with a chin cut — reads as a goalie mask shell, not a beach
-# ball. y scale is the original sphere's height/diameter ratio.
-const _MASK_RADIUS: float = 0.17
-const _MASK_Y_SCALE: float = 0.7647
-const _MASK_CUT_V: float = 0.88
+# Mask (replaces the oblate head sphere, r 0.17 × height 0.26). Front/back
+# asymmetric, so it's a loop sweep rather than a lathe: a round cranium, a
+# cage plane that pushes slightly proud at face level, and a chin guard that
+# holds its depth low down while the back tucks in at the neck. The goalie
+# faces −Z, so "front" is the −Z half; the head node's own rotation carries
+# the mask's facing. Stations are (y, lateral rx, back +Z reach, front −Z
+# reach), inside the sphere's envelope.
+const _MASK_STATIONS: Array[Vector4] = [
+	Vector4(0.128, 0.055, 0.055, 0.055),   # crown
+	Vector4(0.090, 0.125, 0.115, 0.115),
+	Vector4(0.030, 0.160, 0.145, 0.150),   # cranium max
+	Vector4(-0.040, 0.150, 0.135, 0.160),  # face — the cage sits proud here
+	Vector4(-0.090, 0.115, 0.100, 0.150),  # jaw: neck tucks, chin guard holds
+	Vector4(-0.130, 0.070, 0.060, 0.115),  # chin rim
+]
+const _MASK_SEGS: int = 10
 
 # Catch glove — a trapper built from the scene's three glove nodes. Frame
 # note: Ring/Main sit in a rotated frame (local −Y faces the shooter, local
@@ -206,7 +216,32 @@ static func _octagon_loop(y: float, hw: float, hd: float,
 
 
 static func _build_mask() -> ArrayMesh:
-	return _build_ball(_MASK_RADIUS, 10, 6, _MASK_CUT_V, _MASK_Y_SCALE)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see SkaterMeshBuilder doc block
+	var loops: Array[PackedVector3Array] = []
+	for s: Vector4 in _MASK_STATIONS:
+		loops.append(_mask_loop(s.x, s.y, s.z, s.w))
+	_sweep_loops(st, loops)
+	_loop_cap(st, loops[0], Vector3(0.0, _MASK_STATIONS[0].x, 0.0), true)
+	_loop_cap(st, loops[loops.size() - 1],
+			Vector3(0.0, _MASK_STATIONS[_MASK_STATIONS.size() - 1].x, 0.0), false)
+	st.generate_normals()
+	return st.commit()
+
+
+# Egg-shaped cross-section: _ring's trig (θ = 0 at +Z, CCW from +Y — same
+# winding) with the Z reach split per half so the front can differ from the
+# back.
+static func _mask_loop(y: float, rx: float, back_z: float, front_z: float) -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	pts.resize(_MASK_SEGS)
+	for k in _MASK_SEGS:
+		var theta: float = TAU * float(k) / float(_MASK_SEGS)
+		var cz: float = cos(theta)
+		var rz: float = back_z if cz >= 0.0 else front_z
+		pts[k] = Vector3(sin(theta) * rx, y, cz * rz)
+	return pts
 
 
 # Faceted oval hoop, axis local +Y like the TorusMesh it replaces (the Glove
