@@ -156,7 +156,8 @@ static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
 	for opp_pos: Vector3 in opp_teammates:
 		bases.append(AIActionScoring.threat_surface_pass(
 				carrier_pos, opp_pos, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, our_team_excluding_self))
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self,
+				ctx.scratch_teammate_caps))
 
 	var best_pos: Vector3 = search_center
 	var best_score: float = -INF
@@ -176,7 +177,8 @@ static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
 			continue
 		var threat: float = _max_pass_threat(
 				c, carrier_pos, opp_teammates, our_net, our_goalie_pos,
-				our_team_excluding_self, bases)
+				our_team_excluding_self, bases, ctx.scratch_teammate_caps,
+				ctx.caps_by_peer.get(ctx.peer_id))
 		var score: float = -threat + AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
 			best_score = score
@@ -215,12 +217,18 @@ static func _max_pass_threat(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
-		bases: Array[float]) -> float:
+		bases: Array[float],
+		our_team_caps: Array = [],
+		self_caps: AISkaterCaps = null) -> float:
 	# Carrier's view of defenders = our team + me at c. Append-and-restore the
 	# caller's array in place instead of duplicating it per candidate (10×/decide
 	# in F2's positioning argmax); the array is left exactly as passed and keeps
 	# its capacity across the push/pop, so steady-state calls don't alloc.
+	# The hypothetical body carries our real caps (matched caps array only).
+	var caps_matched: bool = our_team_caps.size() == our_team_excluding_self.size()
 	our_team_excluding_self.push_back(candidate)
+	if caps_matched:
+		our_team_caps.push_back(self_caps)
 
 	var max_threat: float = 0.0
 	var used: int = 0
@@ -236,8 +244,10 @@ static func _max_pass_threat(
 		used |= 1 << bi
 		var threat: float = AIActionScoring.threat_surface_pass(
 				carrier_pos, opp_teammates[bi], our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self, our_team_caps)
 		if threat > max_threat:
 			max_threat = threat
 	our_team_excluding_self.pop_back()
+	if caps_matched:
+		our_team_caps.pop_back()
 	return max_threat

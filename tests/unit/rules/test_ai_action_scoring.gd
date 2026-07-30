@@ -1321,6 +1321,66 @@ func test_lane_loss_point_follows_the_caps_aware_worst_defender() -> void:
 			"on real builds the long-stick man deeper in the lane is the pick spot")
 
 
+func test_threat_surface_pass_prices_defenders_by_build() -> void:
+	# The defensive mirror of the per-build lane read: OUR defender's real
+	# blade decides how much of the opponent's hypothetical feed we cover.
+	# A long-stick fast defender deflates the threat below the league read;
+	# a short slow one concedes more of it.
+	# 2.0 m off the lane: partially inside the league blade's closing reach at
+	# this feed's charged pace (the threat read must sit strictly below its
+	# 1.0 saturation for the short stick to have headroom above it).
+	var opp_carrier := Vector3(0.0, 0.0, 8.0)
+	var opp_receiver := Vector3(0.0, 0.0, 22.0)
+	var our_goalie := Vector3(0.5, 0.0, 26.0)
+	var our_defender: Array[Vector3] = [Vector3(2.0, 0.0, 15.0)]
+	var league: float = AIActionScoring.threat_surface_pass(
+			opp_carrier, opp_receiver, GOAL, our_goalie, NET_HW, our_defender)
+	var long_stick := AISkaterCaps.new()
+	long_stick.stick_reach = 1.6
+	long_stick.max_speed = 12.0
+	var vs_long: float = AIActionScoring.threat_surface_pass(
+			opp_carrier, opp_receiver, GOAL, our_goalie, NET_HW, our_defender,
+			[long_stick])
+	var short_stick := AISkaterCaps.new()
+	short_stick.stick_reach = 1.1
+	short_stick.max_speed = 6.0
+	var vs_short: float = AIActionScoring.threat_surface_pass(
+			opp_carrier, opp_receiver, GOAL, our_goalie, NET_HW, our_defender,
+			[short_stick])
+	assert_lt(vs_long, league,
+			"a long-stick defender covers more of the opponent's feed")
+	assert_gt(vs_short, league,
+			"a short-stick defender concedes more of it")
+
+
+func test_turnover_cost_prices_defenders_by_build() -> void:
+	# Conceding the puck next to a long-stick defender costs less than the
+	# league read says — his real blade contests the opponent's release and
+	# lane; a short slow defender's does not.
+	var loss_point := Vector3(0.0, 0.0, 20.0)
+	var our_goalie := Vector3(0.0, 0.0, 25.9)
+	# Inside the league blade's contest ring at the opponent's release point
+	# (a carry-handle net-ward of the loss), outside the short stick's — the
+	# same narrow ring the position_potential case pins.
+	var our_defender: Array[Vector3] = [Vector3(1.4, 0.0, 20.9)]
+	var league: float = AIActionScoring.turnover_cost(
+			loss_point, 1.0, GOAL, our_goalie, NET_HW, our_defender)
+	var long_fast := AISkaterCaps.new()
+	long_fast.stick_reach = 1.6
+	long_fast.max_speed = 12.0
+	var vs_long: float = AIActionScoring.turnover_cost(
+			loss_point, 1.0, GOAL, our_goalie, NET_HW, our_defender, [long_fast])
+	var short_slow := AISkaterCaps.new()
+	short_slow.stick_reach = 1.05
+	short_slow.max_speed = 5.0
+	var vs_short: float = AIActionScoring.turnover_cost(
+			loss_point, 1.0, GOAL, our_goalie, NET_HW, our_defender, [short_slow])
+	assert_lt(vs_long, league,
+			"losing it next to a long-stick defender is cheaper than league")
+	assert_gt(vs_short, league,
+			"losing it next to a short-stick defender is dearer than league")
+
+
 func test_position_potential_prices_contester_by_build() -> void:
 	# Openness is the same release contest score_shoot runs, so a contesting
 	# body's real blade decides how covered the spot reads: a long-stick fast

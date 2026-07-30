@@ -2310,7 +2310,8 @@ static func score_shoot_threat_fielded(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		net_half_width: float,
-		defenders: Array[Vector3]) -> float:
+		defenders: Array[Vector3],
+		defender_caps: Array = EMPTY_CAPS) -> float:
 	if (shooter.z - our_net.z) * -signf(our_net.z) < 0.001:
 		return 0.0
 	var clamped: Vector3 = release_ahead_of_goalie(shooter, our_net, our_goalie_pos)
@@ -2321,9 +2322,10 @@ static func score_shoot_threat_fielded(
 	var aim: Vector3 = AIShotAim.compute_open_net_aim(
 			clamped, our_goalie_pos, our_net.z,
 			net_half_width, GOALIE_SHADOW_HALF_M)
-	var lane: float = lane_clear(clamped, aim, defenders, WRISTER_SHOT_SPEED_M_S)
+	var lane: float = lane_clear(clamped, aim, defenders, WRISTER_SHOT_SPEED_M_S,
+			EMPTY_VEC3, defender_caps)
 	var pressure: float = release_contest_clean(
-			release_point_toward(clamped, our_net), defenders)
+			release_point_toward(clamped, our_net), defenders, defender_caps)
 	return q * lane * pressure
 
 
@@ -3451,8 +3453,10 @@ static func threat_surface_shoot(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		net_half_width: float,
-		defenders: Array[Vector3]) -> float:
-	var positional: float = position_potential(opp_pos, our_net, defenders)
+		defenders: Array[Vector3],
+		defender_caps: Array = EMPTY_CAPS) -> float:
+	var positional: float = position_potential(opp_pos, our_net, defenders,
+			defender_caps)
 	# Hot-path skip, not a shaping choice: with the goalie HOME, a direct shot
 	# from outside the attacking zone is dead by score_shoot's own coverage
 	# math (the arrival-honest race hands any beyond-the-blue-line look to a
@@ -3471,7 +3475,8 @@ static func threat_surface_shoot(
 	# from the memoized surface; only the lane / release-contest terms run
 	# against `defenders` live.
 	var shoot: float = score_shoot_threat_fielded(
-			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
+			defender_caps)
 	return maxf(shoot, positional)
 
 
@@ -3491,14 +3496,16 @@ static func threat_local_shoot(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		net_half_width: float,
-		defenders: Array[Vector3]) -> float:
+		defenders: Array[Vector3],
+		defender_caps: Array = EMPTY_CAPS) -> float:
 	if not in_offensive_zone(opp_pos, our_net) \
 			and our_goalie_pos.distance_to(our_net) < THREAT_GOALIE_HOME_M:
 		return 0.0
 	# FIELDED read — same memoized core as threat_surface_shoot (seal derived
 	# inside the field), live lane/contest terms.
 	return score_shoot_threat_fielded(
-			opp_pos, our_net, our_goalie_pos, net_half_width, defenders)
+			opp_pos, our_net, our_goalie_pos, net_half_width, defenders,
+			defender_caps)
 
 
 # turnover_cost with the LOCAL threat surface (see threat_local_shoot) —
@@ -3510,13 +3517,15 @@ static func turnover_cost_local(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		net_half_width: float,
-		our_defenders: Array[Vector3]) -> float:
+		our_defenders: Array[Vector3],
+		defender_caps: Array = EMPTY_CAPS) -> float:
 	if not loss_point.is_finite():
 		return 0.0
 	if loss_prob <= 0.0:
 		return 0.0
 	return loss_prob * threat_local_shoot(
-			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
+			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders,
+			defender_caps)
 
 
 # Pass-threat surface — score_pass with a positional fallback for
@@ -3527,16 +3536,17 @@ static func turnover_cost_local(
 # receiver (position_potential.openness ↓).
 #
 # Used by PRESSURE / FORECHECK for inverse pass-threat scoring across opp teammates.
-# Defenders stay at league reach/pace by design: they are OUR skaters priced from
-# hypothetical spots (with-self-at sets), positions-only at every caller — a
-# cross-player perception simplification, not a per-build gap.
+# `defender_caps` (index-matched to `defenders` — OUR skaters, plus the caller's
+# hypothetical self-at-candidate body carrying its own caps) prices each
+# defending blade's real reach and closing pace; empty = league.
 static func threat_surface_pass(
 		carrier_pos: Vector3,
 		receiver_pos: Vector3,
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		net_half_width: float,
-		defenders: Array[Vector3]) -> float:
+		defenders: Array[Vector3],
+		defender_caps: Array = EMPTY_CAPS) -> float:
 	if pass_lane_blocked_by_net(carrier_pos, receiver_pos):
 		return 0.0
 	# Assume the opponent would fire this hypothetical pass at the
@@ -3549,11 +3559,14 @@ static func threat_surface_pass(
 	# identical lane_clear internally, and it's the same call feeding the
 	# positional floor below — a doubled, now-heavier (#427 survival/friction
 	# model) lane solve on a per-candidate defensive read.
-	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed)
+	var lane: float = lane_clear(carrier_pos, receiver_pos, defenders, pass_speed,
+			EMPTY_VEC3, defender_caps)
 	var pass_score: float = score_pass(
 			carrier_pos, receiver_pos, our_net, our_goalie_pos,
-			net_half_width, defenders, pass_speed, 0.0, lane)
-	var positional: float = position_potential(receiver_pos, our_net, defenders)
+			net_half_width, defenders, pass_speed, 0.0, lane,
+			Vector4.INF, Vector4.INF, defender_caps)
+	var positional: float = position_potential(receiver_pos, our_net, defenders,
+			defender_caps)
 	return maxf(pass_score, lane * positional)
 
 
@@ -3586,13 +3599,15 @@ static func turnover_cost(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		net_half_width: float,
-		our_defenders: Array[Vector3]) -> float:
+		our_defenders: Array[Vector3],
+		defender_caps: Array = EMPTY_CAPS) -> float:
 	if not loss_point.is_finite():
 		return 0.0
 	if loss_prob <= 0.0:
 		return 0.0
 	return loss_prob * threat_surface_shoot(
-			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders)
+			loss_point, our_net, our_goalie_pos, net_half_width, our_defenders,
+			defender_caps)
 
 
 # ── Transition-exposure: the counter-rush cost (5v5-gated at the caller) ─────
