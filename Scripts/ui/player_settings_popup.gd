@@ -302,11 +302,14 @@ func _add_close_row(vbox: VBoxContainer) -> void:
 	vbox.add_child(row)
 
 
-# Rows share a fixed right-aligned label gutter, and every control region
-# fills the same _FIELD_W (the number field is the one deliberate exception —
-# two digits in a 260px box read wrong), so both column edges run straight
-# top to bottom. Paired controls (Shoots, the workbench buttons) split the
-# width; the sliders' 60px value label counts inside it.
+# Rows share a fixed label gutter — labels LEFT-aligned so they all start on
+# the same edge (right-aligned labels left the block's left side ragged and
+# the card read off-center) — and every control region fills the same
+# _FIELD_W (the number field is the one deliberate exception — two digits in
+# a 260px box read wrong), so the card is a clean rectangle: label starts,
+# field left edges, and field right edges each run straight top to bottom.
+# Paired controls (Shoots, the workbench buttons) split the width; the
+# sliders' 60px value label counts inside it.
 const _IDENTITY_LABEL_W: float = 92.0
 const _FIELD_W: float = 260.0
 const _FIELD_VALUE_W: float = 60.0
@@ -317,7 +320,7 @@ func _make_identity_label(text: String, tooltip: String = "") -> Label:
 	var label := Label.new()
 	label.text = text
 	label.custom_minimum_size = Vector2(_IDENTITY_LABEL_W, 0)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
