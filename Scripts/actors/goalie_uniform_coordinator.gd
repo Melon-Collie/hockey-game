@@ -21,6 +21,12 @@ const _MAX_STRIPES: int = 5
 
 const _JERSEY_SHADER: Shader = preload("res://Assets/Shaders/goalie_jersey.gdshader")
 
+# Where the jersey ends and the pants band begins on the body solid, in the
+# shader's normalized height (0 = collar, 1 = bottom). 0.72 lands just above
+# the mesh's hip-crest station (body-local y −0.16) so the color split rides
+# the silhouette split.
+const _PANTS_START_NORM_Y: float = 0.72
+
 const _CYLINDER_SIDE_V_FRACTION: float = 0.5
 const _STRIPE_TEX_HEIGHT_PX: int = 128
 const _STRIPE_TEX_WIDTH_PX: int = 4
@@ -93,10 +99,11 @@ func apply_uniform(colors: Dictionary) -> void:
 	_paint_mesh_h(_goalie.left_hip_connector, uniform.pants)
 	_paint_mesh_h(_goalie.right_hip_connector, uniform.pants)
 
-	# Pants block — solid base color (its sweep UVs are nominal, so the
-	# stripe texture pipeline would smear; the connectors carry the stripes).
-	if _goalie.pants_mesh != null:
-		_goalie.pants_mesh.material_override = _make_solid_mat(uniform.pants.base)
+	# The body solid is torso THROUGH hips — its lower band paints as the
+	# kit's pants (the mesh's hip flare marks the same line in silhouette;
+	# see GoalieMeshBuilder._BODY_STATIONS).
+	_jersey_mat.set_shader_parameter("pants_color", uniform.pants.base)
+	_jersey_mat.set_shader_parameter("pants_start", _PANTS_START_NORM_Y)
 
 	# Stick — the house design's goalie colorway (#586): all-white composite,
 	# shaft through blade, the real-world goalie norm. The white tape knob is
