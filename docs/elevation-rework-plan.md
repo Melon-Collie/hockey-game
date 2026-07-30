@@ -45,7 +45,7 @@ snap, mid-blade rolls go medium, toe shots go upstairs (on an open toe,
 | Level | Contact | Behavior |
 |---|---|---|
 | FLAT | heel | unchanged — along the ice, the hard easy release |
-| LOW | mid-blade, partial roll | a **set launch angle** `θ_low ≈ 8°` — the saucer at pass pace, a mid-net rising shot at pace |
+| LOW | mid-blade, partial roll | a **set launch angle** `θ_low = 8.5°` (ceilinged, §2.3) — the saucer at pass pace, a mid-net rising shot at pace |
 | HIGH | toe | an **adaptive solve**: launch angle chosen so the arc crosses the attacking goal plane at target height `H ≈ 1.05 m` (top shelf), clamped to the blade's **toe cap** |
 
 This models the shooter's calibration skill (a real shooter solves the angle
@@ -99,25 +99,29 @@ from the current model:
   arrives at `H` whenever solvable, at any charge — pace buys flight time
   against the goalie's deploy, not height. LOW's fixed roll is the level
   where "where does this arrive" remains a range/charge read (at full charge
-  from the point an 8° LOW arc arrives top-shelf-ish itself; backed off, mid
+  from the point the LOW arc arrives top-shelf-ish itself; backed off, mid
   net; soft, a saucer). The old model's celebrated skill lives on in LOW.
 
-### 2.3 LOW as a set angle
+### 2.3 LOW as a set angle, with a lift ceiling
 
-`θ_low = 8°` (tan ≈ 0.1405):
+`θ_low = 8.5°` (tan ≈ 0.149), and LOW's vertical launch speed is ceilinged at
+`LOW_VY_CAP = 4.85 m/s` (`v_y = min(p·sin θ_low, 4.85)`):
 
-- At pass pace (14 m/s): apex ~0.21 m — the saucer, marginally flatter than
-  today's 0.26 m; still clears stick blades (0.07 m), still lands and slides,
-  still far below the lifted-blade pivot (0.55 m) so the deflect anti-cheese
-  argument and `blade_lift_height`'s floor (`skater_controller.gd:189-208`)
-  hold.
+- At pass pace (14 m/s): apex ~0.24 m — the saucer, nearly today's 0.26 m;
+  still clears stick blades (0.07 m), still lands and slides, still far below
+  the lifted-blade pivot (0.55 m) so the deflect anti-cheese argument and
+  `blade_lift_height`'s floor (`skater_controller.gd:189-208`) hold.
 - At pace: a mid-net rising shot (over the pads from the slot) — the third
   band between FLAT and HIGH that the fixed 2.2 m/s never was (a full-power
   LOW today arrives essentially flat).
-- **8° is chosen so LOW can never sail**: apex at max wrister power (33) is
-  ~1.09 m, under the bar. The alternative 9° matches today's saucer apex
-  exactly but opens an 11–23 m over-the-bar band at full charge — see open
-  question 1.
+- **The ceiling is what makes LOW un-sailable for both shot types.** The
+  angle alone is safe for wristers (apex at the 33 m/s max ≈ 1.23 m — the
+  crossbar's pipe band, so a truly max-charged LOW wrister from ~13–19 m
+  rings iron or skims under, never cleanly over) but slappers reach 40 m/s,
+  where any reasonable set angle sails from mid-range. The cap binds only
+  above ~33 m/s — the passing game and the whole wrister band never feel
+  it — and pins the apex at "can ping the iron, never over the glass" for
+  the top half of the slapper band. One `minf()` in the solve.
 
 ### 2.4 Quick passes stay on the fixed-speed table
 
@@ -134,9 +138,9 @@ and slappers get the new model; quick passes are bit-exact.
 
 - **Missing high on an on-net HIGH shot mostly disappears** (the solve
   targets under the bar). The risk outcome moves to: in-tight steep misses
-  flying up the glass, toe-cap lobs from unreachable range, and (if 9° is
-  chosen) full-charge LOW from the point. Accepted: the substance of #585
-  was that roofing didn't exist, not that sailing didn't.
+  flying up the glass, toe-cap lobs from unreachable range, and max-charge
+  LOW crossbar pings. Accepted: the substance of #585 was that roofing
+  didn't exist, not that sailing didn't.
 - **Trajectory stops being position-free.** Position enters *only* as
   distance-to-goal-plane along the shot direction. Deterministic from
   replicated release state on every peer; the "same gesture, same arc,
@@ -178,7 +182,7 @@ at hardware — is the design.
 
 - `loft_y` is superseded for wristers/slappers by a solve taking
   `(power, level, toe_tan, dist_to_goal_plane)`; quick passes keep the
-  `_loft_vy` fixed-speed path. Configs gain `loft_tan_low`, `toe_tan_max`;
+  `_loft_vy` fixed-speed path. Configs gain `loft_tan_low`, `loft_vy_low_cap`, `toe_tan_max`;
   `H` is a `GameRules` constant beside the net geometry it references.
 - The release seam gains one input: the caller supplies the distance to the
   faced goal plane (`SkaterController` at release; bots from their state).
@@ -219,7 +223,7 @@ answers by construction.
   (`saucer_hang_time_s`, `lane_clear_saucer`) key off the quick-pass fixed
   table — unchanged.
 - `trajectory.gd:338-379` (`is_puck_airborne`, gate "launch vy ≥ ~2 m/s"):
-  a soft-sweep LOW wrister at 8° launches below 2 m/s — re-derive the gate
+  a soft-sweep LOW wrister at 8.5° launches below 2 m/s — re-derive the gate
   from launch angle × pace or lower the threshold; verify reception/deflect
   planning against it.
 - `finisher.gd:161-196` keys off `elevation_level > 0` — unchanged.
@@ -275,12 +279,12 @@ implementation commits state that the new numbers are intended.
   - `test_shot_mechanics.gd:649-669` (roofing gradient) → re-pinned at the
     new gradient (~1.1 / 3.0 / 6.4 m @ 18 m/s).
   - `test_blade_lever_calibration.gd:148-167` (crossbar ceiling pinned for
-    every curve) → new invariants: LOW's 8° apex stays under the bar at max
-    power for every gear; the HIGH solve never targets above the cavity;
+    every curve) → new invariants: LOW never crosses cleanly over the bar at
+    max power for either shot type, any gear (the 4.85 ceiling); the HIGH solve never targets above the cavity;
     toe caps ordered; quick-pass table gear-invariant.
 - **New pins**: max honest `direction.y` < 0.75 across the gear × power ×
   level × distance grid; goalie over-bar gate; `is_puck_airborne` under the
-  8° soft saucer; "position enters only via d" (two releases at equal d,
+  8.5° soft saucer; "position enters only via d" (two releases at equal d,
   different world positions, identical `ShotResult`).
 - **Re-pins**: high-band reachability tests (`test_ai_action_scoring.gd:
   601-628` — both are statements about the deleted pace solve), beatability
@@ -325,14 +329,15 @@ proposed as a follow-up issue rather than part of the core rework.
 3. **Goalie + world** — over-bar gate, the high-game retune against the
    sweeps, net-stuck/behind-net feel check, (optional) crossbar corner arcs.
 4. **Docs + drills audit + tuning** — tutorial HIGH prompts, accuracy-drill
-   targets (LOW-calibrated, re-verify against 8°), per-gear cap tuning pass.
+   targets (LOW-calibrated, re-verify against 8.5°), per-gear cap tuning pass.
 
 ## 7. Open questions (for review before phase 1)
 
-1. **θ_low = 8° vs 9°**: 8° (recommended) keeps LOW un-sailable at any
-   charge, saucer apex drops 0.26 → ~0.21 m. 9° preserves today's saucer
-   exactly but a full-charge LOW sails from 11–23 m — arguably a fair risk
-   read on a chosen-elevation shot; it does reintroduce #363-style surprise.
+1. **θ_low = 8.5° + the 4.85 m/s ceiling** (settled in review): the saucer
+   stays near today's (~0.24 m), max-charge LOW tops out at crossbar pings
+   for both wristers and slappers, and clean sails are impossible. The
+   ceiling exists because slappers reach 40 m/s, where a pure set angle
+   sails from mid-range.
 2. **Toe caps 15° / 22° / 45°**: sets the roofing gradient at pace
    (~6.4 / 3.0 / 1.1 m @ 40 mph). Playtest lever.
 3. **H = 1.05 m**: how tight under the cavity top (~1.18 m) the solve aims.
