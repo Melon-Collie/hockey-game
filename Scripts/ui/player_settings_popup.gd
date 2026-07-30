@@ -22,6 +22,7 @@ extends Control
 signal name_changed(new_name: String)
 signal jersey_number_changed(new_number: int)
 signal handedness_changed(is_left: bool)
+signal position_changed(position: int)
 signal preferred_color_changed(color_slot: int)
 signal attributes_changed(attrs: PlayerAttributes)
 
@@ -749,8 +750,9 @@ func _apply() -> void:
 	if _pending_position != int(_snapshot.get("position", 0)):
 		PlayerPrefs.preferred_position = _pending_position
 		# Peer-map mirror only — the preference is read at the next lobby
-		# seat, never live.
+		# seat, never live. The signal is for menu chrome (the player card).
 		NetworkManager.apply_local_position(_pending_position)
+		position_changed.emit(_pending_position)
 	if _pending_skin != int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX)):
 		PlayerPrefs.skin_tone = _pending_skin
 		# Writes the peer map and emits local_skin_changed so GameManager

@@ -23,6 +23,7 @@ var _root: Control = null
 var _panel: PanelContainer = null
 var _player_card_name: Label = null
 var _player_card_number: Label = null
+var _player_card_position: Label = null
 var _player_card_hand: Label = null
 var _player_card_panel: PanelContainer = null
 var _player_card_normal: StyleBoxFlat = null
@@ -272,6 +273,15 @@ func _build_panel() -> void:
 	_build_footer(vbox)
 
 
+# Dim separator dot for the player card's detail line.
+func _make_detail_dot() -> Label:
+	var dot := Label.new()
+	dot.text = "·"
+	dot.add_theme_font_size_override("font_size", 14)
+	dot.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+	return dot
+
+
 func _build_player_card(parent: VBoxContainer) -> void:
 	_player_card_normal = StyleBoxFlat.new()
 	_player_card_normal.bg_color = MenuStyle.PANEL_BG
@@ -313,12 +323,26 @@ func _build_player_card(parent: VBoxContainer) -> void:
 	detail_row.add_theme_constant_override("separation", 10)
 	vbox.add_child(detail_row)
 
+	# Hockey-card detail line: "#13 · C · Shoots L". Number and position share
+	# the display font (both are jersey identity marks); the dots keep the
+	# abbreviation from mushing into the number.
 	_player_card_number = Label.new()
 	_player_card_number.text = "#%d" % PlayerPrefs.jersey_number
 	_player_card_number.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
 	_player_card_number.add_theme_font_size_override("font_size", 18)
 	_player_card_number.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	detail_row.add_child(_player_card_number)
+
+	detail_row.add_child(_make_detail_dot())
+
+	_player_card_position = Label.new()
+	_player_card_position.text = PlayerRules.position_name(PlayerPrefs.preferred_position)
+	_player_card_position.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
+	_player_card_position.add_theme_font_size_override("font_size", 18)
+	_player_card_position.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	detail_row.add_child(_player_card_position)
+
+	detail_row.add_child(_make_detail_dot())
 
 	_player_card_hand = Label.new()
 	_player_card_hand.text = "Shoots %s" % ("L" if PlayerPrefs.is_left_handed else "R")
@@ -521,6 +545,7 @@ func _build_popups() -> void:
 	_player_popup.name_changed.connect(_on_player_name_changed)
 	_player_popup.jersey_number_changed.connect(_on_player_number_changed)
 	_player_popup.handedness_changed.connect(_on_player_handedness_changed)
+	_player_popup.position_changed.connect(_on_player_position_changed)
 	add_child(_player_popup)
 
 	_play_popup = PlayPopup.new()
@@ -800,6 +825,11 @@ func _on_player_number_changed(new_number: int) -> void:
 func _on_player_handedness_changed(is_left: bool) -> void:
 	if _player_card_hand != null:
 		_player_card_hand.text = "Shoots %s" % ("L" if is_left else "R")
+
+
+func _on_player_position_changed(position: int) -> void:
+	if _player_card_position != null:
+		_player_card_position.text = PlayerRules.position_name(position)
 
 
 func _on_play_pressed() -> void:
