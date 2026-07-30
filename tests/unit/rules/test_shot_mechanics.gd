@@ -22,8 +22,6 @@ func _slapper_cfg() -> ShotMechanics.SlapperConfig:
 	cfg.min_slapper_power = 20.0
 	cfg.max_slapper_power = 40.0
 	cfg.max_slapper_charge_time = 1.0
-	cfg.loft_vy_low = 2.2
-	cfg.loft_vy_high = 5.4
 	return cfg
 
 # ── Wrister: quick pass branch ───────────────────────────────────────────────
@@ -396,38 +394,141 @@ func test_slapper_loft() -> void:
 	assert_almost_eq(flat.direction.y, 0.0, 0.001)
 	assert_gt(high.direction.y, 0.0)
 
-# ── Loft physics: fixed vertical launch speed ────────────────────────────────
+# ── Loft physics: the contact-point model ────────────────────────────────────
+# docs/elevation-rework-plan.md — FLAT = heel, LOW = mid-blade set angle with
+# a vertical-speed ceiling, HIGH = toe, solved to arrive at the target height
+# on the faced goal plane and clamped by the curve gear's toe cap.
 
-# The defining property of the loft system: a level's vertical launch speed is
-# CONSTANT across shot power — charge buys pace, not height, so the apex is the
-# same for a soft and a hard shot at the same level.
-func test_loft_vertical_speed_fixed_across_power() -> void:
+# Crossing height (m above launch) of a released shot `dist` meters along its
+# own line, from the ShotResult alone.
+func _crossing_height(r: ShotMechanics.ShotResult, dist: float) -> float:
+	var v_y: float = r.power * r.direction.y
+	var v_h: float = r.power * Vector2(r.direction.x, r.direction.z).length()
+	var t: float = dist / v_h
+	return v_y * t - 0.5 * GameRules.GRAVITY_M_S2 * t * t
+
+
+# The defining property of HIGH: the arc crosses the goal plane at the target
+# height regardless of charge — pace buys flight time, the solve buys the
+# arrival. (The old fixed-vy model made arrival height a range × pace fact.)
+func test_high_arrives_at_target_height_across_charge() -> void:
+	var cfg := _wrister_cfg()
+	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 8.0)
+	for sweep: float in [4.0, FULL_SWEEP]:
+		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+			blade, blade + Vector3(0, 0, 5), blade,
+			false, 2, cfg,
+			Vector3(0, 0, 1), false, sweep)
+		assert_almost_eq(_crossing_height(r, 8.0), cfg.loft_target_height, 0.01,
+			"top-shelf arrival at sweep %.1f" % sweep)
+
+
+func test_high_toe_cap_clamps_the_roof_in_tight() -> void:
+	# From 2 m at full power the solve wants ~29°; a closed toe (M88's 15°)
+	# pins there and the shot arrives well under the top shelf — the roofing
+	# gradient IS this clamp.
+	var cfg := _wrister_cfg()
+	cfg.loft_tan_max = 0.26795  # tan 15°
+	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 2.0)
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		blade, blade + Vector3(0, 0, 5), blade,
+		false, 2, cfg,
+		Vector3(0, 0, 1), false, FULL_SWEEP)
+	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
+	assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_max, 0.0001,
+		"launch pins at the toe cap")
+	assert_lt(_crossing_height(r, 2.0), cfg.loft_target_height - 0.3,
+		"a closed toe cannot roof from the doorstep")
+
+
+func test_high_open_toe_roofs_in_tight_at_pace() -> void:
+	# The same shot on the open toe (45°) arrives at the target — the M28's
+	# identity, at a real shot pace instead of the old 15 mph muffin.
+	var cfg := _wrister_cfg()
+	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 2.0)
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		blade, blade + Vector3(0, 0, 5), blade,
+		false, 2, cfg,
+		Vector3(0, 0, 1), false, FULL_SWEEP)
+	assert_almost_eq(_crossing_height(r, 2.0), cfg.loft_target_height, 0.01,
+		"open toe roofs from the doorstep at full pace")
+
+
+func test_high_unreachable_range_is_the_toe_cap_lob() -> void:
+	# A minimum-power release 20 m out can't arrive at the target at all —
+	# the solve falls to the toe-cap lob (the flip clear).
+	var cfg := _wrister_cfg()
+	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 20.0)
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		blade, blade + Vector3(0, 0, 5), blade,
+		false, 2, cfg,
+		Vector3(0, 0, 1), false, 0.0)
+	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
+	assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_max, 0.0001,
+		"unreachable target -> max lob at the toe cap")
+
+
+func test_high_cross_ice_is_the_toe_cap_lob() -> void:
+	# No goal plane ahead of a z-parallel line — HIGH means "flip it high".
+	var cfg := _wrister_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+		false, 2, cfg,
+		Vector3(1, 0, 0), false, FULL_SWEEP)
+	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
+	assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_max, 0.0001,
+		"cross-ice HIGH lobs at the toe cap")
+
+
+func test_high_position_enters_only_via_distance() -> void:
+	# Two releases the same distance from their respective goal planes — from
+	# opposite ends, different lateral spots — fly the identical arc. The one
+	# positional input is d (the purity contract of the contact-point model).
+	var cfg := _wrister_cfg()
+	var a_blade := Vector3(3.0, 0.0, GameRules.GOAL_LINE_Z - 8.0)
+	var a: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		a_blade, a_blade + Vector3(0, 0, 5), a_blade,
+		false, 2, cfg, Vector3(0, 0, 1), false, FULL_SWEEP)
+	var b_blade := Vector3(-5.0, 0.0, -(GameRules.GOAL_LINE_Z - 8.0))
+	var b: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		b_blade, b_blade + Vector3(0, 0, -5), b_blade,
+		false, 2, cfg, Vector3(0, 0, -1), false, FULL_SWEEP)
+	assert_almost_eq(a.direction.y, b.direction.y, 0.0001,
+		"same distance-to-plane -> same arc, anywhere on the ice")
+
+
+func test_low_is_a_set_angle_across_charge() -> void:
+	# LOW is the mid-blade partial roll: a fixed launch angle at every charge
+	# (the ceiling never binds inside the wrister band), so where the arc
+	# arrives stays the range/charge read.
 	var cfg := _wrister_cfg()
 	for sweep: float in [2.0, FULL_SWEEP]:
 		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-			Vector3.ZERO, Vector3(0, 0, 10),
-			Vector3(0.5, 0, 0),
-			false, 2, cfg,
+			Vector3.ZERO, Vector3(0, 0, 10), Vector3(0.5, 0, 0),
+			false, 1, cfg,
 			Vector3(0, 0, 1), false, sweep)
-		var v_y: float = r.power * r.direction.y
-		assert_almost_eq(v_y, cfg.loft_vy_high, 0.01,
-			"vertical launch speed is the level constant at sweep %.1f" % sweep)
+		var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
+		assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_low, 0.0001,
+			"LOW launches at the set angle at sweep %.1f" % sweep)
 
 
-func test_loft_low_level_uses_low_vy() -> void:
-	var cfg := _wrister_cfg()
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		Vector3(0.5, 0, 0),
-		false, 1, cfg,
-		Vector3(0, 0, 1), false, FULL_SWEEP)
-	assert_almost_eq(r.power * r.direction.y, cfg.loft_vy_low, 0.01)
+func test_low_ceiling_binds_at_the_top_of_the_slapper_band() -> void:
+	# A max slapper (40 m/s) at the raw set angle would apex ~1.6 m — over
+	# the bar. The vy ceiling flattens the angle just enough that LOW pings
+	# the crossbar band instead of sailing: the no-sail property of LOW.
+	var cfg := _slapper_cfg()
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+		Vector3.ZERO, Vector3(0, 0, 10), 1, 1.0, cfg, Vector3(0, 0, 1))
+	var v_y: float = r.power * r.direction.y
+	assert_almost_eq(v_y, cfg.loft_vy_low_cap, 0.01,
+		"LOW vertical speed pins at the ceiling on a max bomb")
+	var apex: float = v_y * v_y / (2.0 * GameRules.GRAVITY_M_S2)
+	assert_lt(apex, 1.25, "LOW's apex stays inside the crossbar pipe band")
 
 
-# Loft is direction-agnostic — a backward flip clear and a toward-net shot get
-# the identical y. (The old system classified toward-net vs away and used a
-# different fallback loft, which made toward-net saucer passes impossible.)
-func test_loft_direction_agnostic() -> void:
+# LOW is direction-agnostic — a backward flip clear and a toward-net saucer
+# get the identical y (no solve, no plane: the set angle is the whole model).
+func test_low_direction_agnostic() -> void:
 	var cfg := _wrister_cfg()
 	var toward: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, 10),
@@ -443,8 +544,8 @@ func test_loft_direction_agnostic() -> void:
 		"same loft level and power -> same y, regardless of direction")
 
 
-# Quick passes ride the same loft table — LOW at pass power IS the saucer pass,
-# in any direction including toward the net.
+# Quick passes ride the fixed-speed loft table — LOW at pass power IS the
+# saucer pass, in any direction including toward the net.
 func test_quick_pass_loft_uses_level_table() -> void:
 	var cfg := _wrister_cfg()
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
@@ -459,10 +560,26 @@ func test_quick_pass_loft_uses_level_table() -> void:
 		"quick-shot saucer launches at the LOW level vertical speed")
 
 
+func test_quick_pass_high_ignores_the_solve() -> void:
+	# A HIGH quick pass is the flip — the fixed table, even released in tight
+	# where a charged HIGH would solve steep. Passes never aim at a net that
+	# isn't their target (the failure that killed the original adaptive model).
+	var cfg := _wrister_cfg()
+	var blade := Vector3(0.5, 0.0, GameRules.GOAL_LINE_Z - 2.0)
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+		blade, blade + Vector3(0, 0, 5), blade,
+		false, 2, cfg,
+		Vector3.ZERO,
+		true)                           # is_quick_pass
+	var v_y: float = r.power * r.direction.y
+	assert_almost_eq(v_y, cfg.loft_vy_high, 0.01,
+		"the flip pass launches at the fixed HIGH speed, position-free")
+
+
 func test_loft_ratio_capped_for_soft_shot() -> void:
-	# Min-power backhand wrister (8.0 * 0.75 = 6.0 m/s) can't meaningfully
-	# exceed the HIGH launch speed (5.4) — the y ratio caps at MAX_LOFT_RATIO
-	# instead of running toward vertical.
+	# Min-power backhand wrister (8.0 * 0.75 = 6.0 m/s) can't reach the
+	# target height from range — the toe-cap lob — and the open toe's 45°
+	# stays inside the host's forged-direction clamp.
 	var cfg := _wrister_cfg()
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 		Vector3.ZERO, Vector3(0, 0, 10),
@@ -477,16 +594,48 @@ func test_loft_ratio_capped_for_soft_shot() -> void:
 		"capped loft never trips ShotReleaseRules.sanitize_direction")
 
 
+func test_direction_y_under_host_clamp_everywhere() -> void:
+	# The host's forged-direction clamp (MAX_DIRECTION_Y) must never touch an
+	# honest shot: sweep level × charge × toe cap × range.
+	var cfg := _wrister_cfg()
+	for cap: float in [0.26795, 0.40403, 1.0]:
+		cfg.loft_tan_max = cap
+		for level: int in [0, 1, 2]:
+			for sweep: float in [0.0, 4.0, FULL_SWEEP]:
+				for dist: float in [1.0, 5.0, 15.0, 40.0]:
+					var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - dist)
+					var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+						blade, blade + Vector3(0, 0, 5), blade,
+						false, level, cfg,
+						Vector3(0, 0, 1), false, sweep)
+					assert_lt(r.direction.y, ShotReleaseRules.MAX_DIRECTION_Y,
+						"honest shot under the clamp (cap %.2f lvl %d)" % [cap, level])
+
+
 func test_loft_y_zero_for_flat() -> void:
 	assert_almost_eq(ShotMechanics.loft_y(20.0, 0.0), 0.0, 0.000001)
 
 
 func test_loft_y_exact_solution() -> void:
-	# y = vy / sqrt(p^2 - vy^2): launching at power 20 with the HIGH vy of 5.4
-	# must give a vertical speed of exactly 5.4 after normalization.
+	# y = vy / sqrt(p^2 - vy^2): launching at power 20 with a fixed vy of 5.4
+	# must give a vertical speed of exactly 5.4 after normalization. (The
+	# fixed-speed path serves quick passes and the puck's deflect-tip solve.)
 	var y: float = ShotMechanics.loft_y(20.0, 5.4)
 	var v_y: float = 20.0 * y / sqrt(1.0 + y * y)
 	assert_almost_eq(v_y, 5.4, 0.0001)
+
+
+func test_shot_loft_y_exact_arrival() -> void:
+	# The solve's contract, checked directly: at p=20 from 10 m the returned
+	# tan puts the parabola through (d, H) exactly.
+	var h_target: float = GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M
+	var y: float = ShotMechanics.shot_loft_y(20.0, 2, 10.0,
+			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
+			1.0, h_target)
+	var v_y: float = 20.0 * y / sqrt(1.0 + y * y)
+	var v_h: float = 20.0 / sqrt(1.0 + y * y)
+	var t: float = 10.0 / v_h
+	assert_almost_eq(v_y * t - 0.5 * GameRules.GRAVITY_M_S2 * t * t, h_target, 0.001)
 
 
 # ── Wall-pin release ─────────────────────────────────────────────────────────
@@ -603,70 +752,58 @@ func test_follow_through_aim_ignores_degenerate_cursor() -> void:
 	assert_almost_eq(aim.z, -1.0, 0.0001, "degenerate cursor holds shot line")
 
 
-# ── Blade face angle (curve gear): the launch-angle cap ──────────────────────
-# The loft_y ratio IS tan(launch angle); the curve's face angle caps it.
-# Face tans (from PlayerAttributes._CURVE_FACE_ANGLE_DEG): closed 23°,
-# balanced 31°, open 45° (= MAX_LOFT_RATIO, the pre-curve universal cap).
+# ── Blade toe caps (curve gear): the roofing gradient ────────────────────────
+# The toe cap clamps HIGH's solved launch angle; each gear's minimum
+# top-shelf roofing distance emerges from where the solve first fits under
+# its cap. Toe tans (from PlayerAttributes._CURVE_TOE_ANGLE_DEG): M88 15°,
+# M92 22°, M28 45° (= MAX_LOFT_RATIO, the universal cap).
 
-const _TAN_CLOSED: float = 0.42447  # tan 23°
-const _TAN_BALANCED: float = 0.60086  # tan 31°
-const _TAN_OPEN: float = 1.0        # tan 45°
-const _VY_HIGH: float = 4.65        # GameRules.DEFAULT_LOFT_VY_HIGH_M_S
-
-
-func test_face_angle_never_binds_at_pace() -> void:
-	# A full-power HIGH shot launches well under every face angle, so all
-	# three curves produce the IDENTICAL arc — the crossbar apex ceiling is
-	# reached by every blade at pace.
-	var open_y: float = ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_OPEN)
-	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_CLOSED), open_y, 0.0001,
-			"closed matches open at pace")
-	assert_almost_eq(ShotMechanics.loft_y(30.0, _VY_HIGH, _TAN_BALANCED), open_y, 0.0001,
-			"balanced matches open at pace")
-	# And the achieved vy is the full level speed.
-	var vy: float = 30.0 * open_y / sqrt(1.0 + open_y * open_y)
-	assert_almost_eq(vy, _VY_HIGH, 0.001, "full apex at pace")
+const _TOE_M88: float = 0.26795   # tan 15°
+const _TOE_M92: float = 0.40403   # tan 22°
+const _TOE_M28: float = 1.0       # tan 45°
 
 
-func test_face_angle_flattens_the_soft_roof() -> void:
-	# The in-tight roof is a SOFT steep shot — exactly where the face gates.
-	# At 6 m/s the uncapped ratio wants ~51°; each face clamps to its own
-	# angle, so the achieved vertical speed (and thus the apex) ranks
-	# open > balanced > closed, and none reaches the full HIGH apex.
-	var soft: float = 6.0
-	var y_open: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_OPEN)
-	var y_bal: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_BALANCED)
-	var y_closed: float = ShotMechanics.loft_y(soft, _VY_HIGH, _TAN_CLOSED)
-	assert_almost_eq(y_open, _TAN_OPEN, 0.0001, "open pins at its face")
-	assert_almost_eq(y_bal, _TAN_BALANCED, 0.0001, "balanced pins at its face")
-	assert_almost_eq(y_closed, _TAN_CLOSED, 0.0001, "closed pins at its face")
-	var vy_open: float = soft * y_open / sqrt(1.0 + y_open * y_open)
-	var vy_closed: float = soft * y_closed / sqrt(1.0 + y_closed * y_closed)
-	assert_gt(vy_open, vy_closed, "open climbs harder from the same soft touch")
-	assert_lt(vy_open, _VY_HIGH, "even open can't full-roof this soft")
+# Closest range whose solved angle for the target height fits under `toe_tan`
+# at launch speed p — the small root of the same projectile quadratic the
+# solve inverts (H = d·T − g·d²·(1+T²)/(2p²) with T at the cap).
+func _min_roof_distance(toe_tan: float, p: float) -> float:
+	var h_target: float = GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M
+	var coef: float = GameRules.GRAVITY_M_S2 * (1.0 + toe_tan * toe_tan) / (2.0 * p * p)
+	return (toe_tan - sqrt(toe_tan * toe_tan - 4.0 * coef * h_target)) / (2.0 * coef)
 
 
-func test_roofing_distance_gradient() -> void:
-	# The emergent per-curve minimum bar-height roofing distance: the softest
-	# pace whose arc still achieves the full HIGH vy is power = vy/sin(face),
-	# and its apex sits at (vy/tan(face))·(vy/g). Ballistics alone produces
-	# the doorstep/slot/high-slot gradient — no positional term anywhere
-	# (trajectory is a pure function of power + level + face).
-	var g: float = 9.8
-	var expected: Array[float] = []
-	for t: float in [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED]:
-		expected.append((_VY_HIGH / t) * (_VY_HIGH / g))
-	assert_almost_eq(expected[0], 2.21, 0.05, "open roofs from the doorstep")
-	assert_almost_eq(expected[1], 3.67, 0.05, "balanced roofs from the slot")
-	assert_almost_eq(expected[2], 5.20, 0.05, "closed needs the high slot")
-	# And verify the model agrees: at each curve's boundary pace the cap is
-	# exactly at the bind point — full vy achieved, no steeper.
-	for i: int in 3:
-		var t: float = [_TAN_OPEN, _TAN_BALANCED, _TAN_CLOSED][i]
-		var boundary_power: float = _VY_HIGH / (t / sqrt(1.0 + t * t))
-		var y: float = ShotMechanics.loft_y(boundary_power, _VY_HIGH, t)
-		var vy: float = boundary_power * y / sqrt(1.0 + y * y)
-		assert_almost_eq(vy, _VY_HIGH, 0.01, "full vy exactly at the bind boundary")
+func test_toe_cap_roofing_gradient_at_pace() -> void:
+	# The identity triangle at a real 18 m/s (~40 mph) release: doorstep /
+	# slot / high slot. (The old fixed-vy model only produced a gradient
+	# below the 10 m/s wrister floor — a 15 mph muffin.)
+	assert_almost_eq(_min_roof_distance(_TOE_M28, 18.0), 1.09, 0.05,
+			"M28 roofs from the doorstep")
+	assert_almost_eq(_min_roof_distance(_TOE_M92, 18.0), 2.99, 0.05,
+			"M92 roofs from the slot")
+	assert_almost_eq(_min_roof_distance(_TOE_M88, 18.0), 6.39, 0.05,
+			"M88 needs the high slot")
+	# And the solve agrees at each boundary: just outside it the angle is
+	# unclamped (arrives at the target), just inside it pins at the cap.
+	for toe: float in [_TOE_M88, _TOE_M92]:
+		var d_min: float = _min_roof_distance(toe, 18.0)
+		var outside: float = ShotMechanics.shot_loft_y(18.0, 2, d_min + 0.2,
+				GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
+				toe, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
+		var inside: float = ShotMechanics.shot_loft_y(18.0, 2, d_min - 0.2,
+				GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
+				toe, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
+		assert_lt(outside, toe, "past the boundary the solve is unclamped")
+		assert_almost_eq(inside, toe, 0.0001, "inside the boundary the toe cap pins")
+
+
+func test_toe_cap_gradient_shrinks_with_pace() -> void:
+	# A harder shot needs a shallower angle, so pace pulls every gear's
+	# minimum roofing distance IN — snap it hard to go upstairs in tight
+	# (inverted from the old model, where only a soft touch roofed close).
+	assert_lt(_min_roof_distance(_TOE_M88, 25.0), _min_roof_distance(_TOE_M88, 18.0),
+			"the closed toe roofs from closer at higher pace")
+	assert_lt(_min_roof_distance(_TOE_M92, 25.0), _min_roof_distance(_TOE_M92, 18.0),
+			"the balanced toe too")
 
 # ── Follow-through whip direction (frozen-wrister) ─────────────────────────────
 # The whip builds the stick outward from the shoulder along whip_local_dir. A

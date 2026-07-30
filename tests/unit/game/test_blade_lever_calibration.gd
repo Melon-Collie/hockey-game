@@ -145,13 +145,13 @@ func test_apply_is_idempotent() -> void:
 
 # ── Flex + curve calibration (the shot gear slots) ───────────────────────────
 
-func test_crossbar_ceiling_pinned_for_every_curve() -> void:
-	# THE hard constraint from the plan doc: the loft LEVELS (fixed vertical
-	# speeds — the crossbar apex ceiling among them) are pinned for every
-	# curve. The curve differentiates via the FACE ANGLE cap in the release
-	# math (loft_tan_max), which only binds on soft shots — no gear may sail
-	# the top-corner snipe over the net, and at pace every blade reaches the
-	# same apex.
+func test_toe_cap_is_the_only_loft_lever_per_curve() -> void:
+	# The contact-point model's gear contract (docs/elevation-rework-plan.md):
+	# the QUICK-PASS loft table (fixed vertical speeds — the saucer and the
+	# flip) is identical for every curve, and the charged-shot TOE CAP is the
+	# one elevation lever, ordered closed < balanced < open with open at the
+	# universal cap. (LOW's no-sail ceiling and HIGH's solved arrival are
+	# pinned in test_shot_mechanics.)
 	var c := _make_controller()
 	c.apply_attributes(PlayerAttributes.all_average())
 	var neutral_high: float = c.loft_vertical_speed_high
@@ -160,11 +160,15 @@ func test_crossbar_ceiling_pinned_for_every_curve() -> void:
 	for curve: int in [PlayerAttributes.CURVE_CLOSED, PlayerAttributes.CURVE_OPEN]:
 		c.apply_attributes(PlayerAttributes.new(73, 201, 1, curve, 1, 1))
 		assert_almost_eq(c.loft_vertical_speed_high, neutral_high, 0.0001,
-				"HIGH loft untouched by curve %d" % curve)
+				"quick-pass HIGH untouched by curve %d" % curve)
 		assert_almost_eq(c.loft_vertical_speed_low, neutral_low, 0.0001,
-				"LOW loft untouched by curve %d" % curve)
-		assert_ne(c.loft_tan_max, neutral_tan,
-				"face-angle cap varies with curve %d" % curve)
+				"quick-pass LOW untouched by curve %d" % curve)
+	c.apply_attributes(PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1))
+	assert_lt(c.loft_tan_max, neutral_tan, "closed toe caps under balanced")
+	c.apply_attributes(PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1))
+	assert_gt(c.loft_tan_max, neutral_tan, "open toe caps over balanced")
+	assert_almost_eq(c.loft_tan_max, ShotMechanics.MAX_LOFT_RATIO, 0.0001,
+			"open = the universal cap")
 
 
 func test_flex_leans_ceiling_and_windup_together() -> void:

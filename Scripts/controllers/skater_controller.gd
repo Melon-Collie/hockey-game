@@ -592,22 +592,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # quick_pass button). Doubles as the pass speed, so it stays flat for everyone.
 @export var quick_pass_power: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 # Loft-level vertical launch speeds (m/s), shared by quick passes, wristers, and
-# slappers in every direction — one elevation mechanic for shots AND passes
-# (see ShotMechanics loft-level doc). Apex above the launch point (ice_height
-# 0.0175 m) is v_y²/2g; the crossbar pipe runs 1.19–1.25 m (centerline 1.22 m):
-#   LOW  2.2  → apex ~0.26 m — the saucer: clears stick blades, lands and slides.
-#   HIGH 4.65 → apex ~1.12 m (puck top ~1.14 m) — the peak sits a clean ~5 cm
-#   UNDER the crossbar's inner edge (1.19 m), so a HIGH shot can snipe the top of
-#   the net but its disc never reaches the bar to tip over it. Apex height is a
-#   FIXED ceiling (v_y is power-independent), so raising shot power can't sail a
-#   shot over — it only moves the apex DISTANCE out. This is deliberately below
-#   #340's apex-at-crossbar (v_y 4.9): once #363 raised shot power (wrister 24→33,
-#   slapper 34→40 m/s) the apex distance moved into common point/slot range, so
-#   the marginal over-the-bar condition started landing on ordinary shots.
-# Where the arc sits at the net is emergent from distance + power — that read
-# is the skill (the old ballistic solve auto-arrived at a target height).
+# Loft — the contact-point model (docs/elevation-rework-plan.md; the full
+# story lives on the ShotMechanics loft-level doc). The fixed vertical speeds
+# below feed the QUICK-PASS table only (LOW = the saucer pass, HIGH = the
+# flip); charged shots ride shot_loft_y — LOW's set angle + ceiling, HIGH's
+# solve to loft_target_height clamped by the curve gear's toe cap
+# (loft_tan_max, set in apply_attributes).
 @export var loft_vertical_speed_low: float = GameRules.DEFAULT_LOFT_VY_LOW_M_S
 @export var loft_vertical_speed_high: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+@export var loft_tan_low: float = GameRules.DEFAULT_LOFT_TAN_LOW
+@export var loft_vy_low_cap: float = GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S
+@export var loft_target_height: float = GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M
 
 # ── Head Tracking Tuning ─────────────────────────────────────────────────────
 @export var head_track_speed: float = 12.0
@@ -1073,8 +1068,8 @@ var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_collision_radius:      float = 0.0
 var _base_skater_collision_height:      float = 0.0
 var _base_backhand_power_coefficient:   float = 0.0
-# Blade face-angle cap (tan) for the release math — set per-build from the
-# curve gear in apply_attributes; defaults to the universal 45° cap.
+# Blade TOE cap (tan) for the charged-shot release math — set per-build from
+# the curve gear in apply_attributes; defaults to the universal 45° cap.
 var loft_tan_max: float = ShotMechanics.MAX_LOFT_RATIO
 var _base_sprint_drain_per_sec:         float = 0.0
 var _base_stamina_regen_per_sec:        float = 0.0
@@ -1186,13 +1181,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# gear slot (closed relaxes toward, never past, forehand parity; open
 	# deepens the penalty).
 	backhand_power_coefficient  = _base_backhand_power_coefficient * attrs.curve_backhand_mult()
-	# Curve elevation is the blade FACE ANGLE: a launch-angle cap in the
-	# release math (ShotMechanics.loft_y), never a lean on the loft speeds —
-	# so at pace every curve reaches the same per-level apex (the crossbar
-	# ceiling holds for all blades) while the soft in-tight roof is
-	# face-gated. The M28's 45° equals the universal MAX_LOFT_RATIO cap, i.e.
-	# the pre-curve shipped behavior bit-exact.
-	loft_tan_max = attrs.curve_loft_tan()
+	# Curve elevation is the blade's TOE CAP: the clamp on the HIGH loft's
+	# solved launch angle (ShotMechanics.shot_loft_y) — the roofing gradient
+	# at pace lives entirely in this number. The M28's 45° equals the
+	# universal MAX_LOFT_RATIO cap.
+	loft_tan_max = attrs.curve_toe_tan()
 	# Reception ceiling rides the skater body — the reception decision sites
 	# (PuckController contact scan + the lag-comp pickup resolver) scale the
 	# puck's league deflect thresholds by the RECEIVER's blade shape.
@@ -2743,6 +2736,9 @@ func _wrister_config() -> ShotMechanics.WristerConfig:
 		_cached_wrister_cfg.loft_vy_low = loft_vertical_speed_low
 		_cached_wrister_cfg.loft_vy_high = loft_vertical_speed_high
 		_cached_wrister_cfg.loft_tan_max = loft_tan_max
+		_cached_wrister_cfg.loft_tan_low = loft_tan_low
+		_cached_wrister_cfg.loft_vy_low_cap = loft_vy_low_cap
+		_cached_wrister_cfg.loft_target_height = loft_target_height
 		_cached_wrister_cfg.power_curve = wrister_power_curve
 		# Pure mouse-speed model: power is a curve over the cursor speed (fed as
 		# sweep_speed by _wrister_sweep_speed). full_sweep_speed is the cursor
@@ -2808,7 +2804,8 @@ func _slapper_config() -> ShotMechanics.SlapperConfig:
 		_cached_slapper_cfg.min_slapper_power = min_slapper_power
 		_cached_slapper_cfg.max_slapper_power = max_slapper_power
 		_cached_slapper_cfg.max_slapper_charge_time = max_slapper_charge_time
-		_cached_slapper_cfg.loft_vy_low = loft_vertical_speed_low
-		_cached_slapper_cfg.loft_vy_high = loft_vertical_speed_high
 		_cached_slapper_cfg.loft_tan_max = loft_tan_max
+		_cached_slapper_cfg.loft_tan_low = loft_tan_low
+		_cached_slapper_cfg.loft_vy_low_cap = loft_vy_low_cap
+		_cached_slapper_cfg.loft_target_height = loft_target_height
 	return _cached_slapper_cfg

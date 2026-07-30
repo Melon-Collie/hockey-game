@@ -468,15 +468,28 @@ const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_PASS_POWER_M_S: float = 14.0
 
-# ── Loft vertical launch speeds (ShotMechanics loft levels) ───────────────────
-# Each loft level is a FIXED vertical launch speed independent of shot power
-# (see ShotMechanics.loft_y — charge buys pace, loft buys height). Shared
-# defaults between the SkaterController exports (loft_vertical_speed_low/high)
-# and the bot AI's shot model, which needs the real arc to know what height a
-# lofted shot physically ARRIVES at over a given range/power (a HIGH-loft
-# full-power wrister from 5 m tops out at belly height, not the top corner).
-#   LOW  2.2  → ~0.26 m apex (saucer: clears stick blades, lands and slides)
-#   HIGH 4.65 → ~1.10 m apex (puck top ~5 cm under the crossbar's inner edge)
+# ── Loft (ShotMechanics loft levels — contact-point elevation) ────────────────
+# Design: docs/elevation-rework-plan.md. Charged shots use the contact-point
+# model (ShotMechanics.shot_loft_y): LOW is a set launch angle with a
+# vertical-speed ceiling, HIGH solves the launch angle to arrive at
+# DEFAULT_LOFT_TARGET_HEIGHT_M on the faced goal plane, clamped by the blade
+# curve's toe cap (PlayerAttributes.curve_toe_tan).
+#
+# LOW's set angle, as tan(8.5°). At pass pace this is the saucer (~0.24 m
+# apex); at shot pace a mid-net rising shot.
+const DEFAULT_LOFT_TAN_LOW: float = 0.1494
+# LOW's vertical-speed ceiling (m/s). Binds only above ~33 m/s (the top of
+# the slapper band), pinning LOW's apex at crossbar-ping height (~1.22 m
+# center — the pipe band 1.19–1.25) so a max bomb rings iron, never sails.
+const DEFAULT_LOFT_VY_LOW_CAP_M_S: float = 4.85
+# HIGH's solved arrival height (m) at the goal plane — top shelf, under the
+# scoring cavity's top (NET_HEIGHT − post − puck half ≈ 1.18).
+const DEFAULT_LOFT_TARGET_HEIGHT_M: float = 1.05
+#
+# QUICK PASSES keep the fixed vertical-speed table (ShotMechanics.loft_y —
+# pass mechanics must not solve toward a net that isn't their target):
+#   LOW  2.2  → ~0.26 m apex (saucer pass: clears stick blades, lands, slides)
+#   HIGH 4.65 → ~1.10 m apex (the flip pass / chip)
 const DEFAULT_LOFT_VY_LOW_M_S: float = 2.2
 const DEFAULT_LOFT_VY_HIGH_M_S: float = 4.65
 
