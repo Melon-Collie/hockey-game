@@ -164,9 +164,11 @@ var gear_style: GearStyleConfig = GearStyleConfig.new()
 # Well proud of arm_mesh_thickness * 0.5 so the joint reads as the elbow
 # PAD bulging under the sleeve, the arm's answer to the deltoid caps.
 @export var elbow_sphere_radius: float = 0.082
+# 0.064 puts the fist mesh (±1.05 unit-width) at ~13.4 cm across the
+# knuckles — real glove proportion; the old 0.07 read a touch oversized.
 # Radius of the hand spheres positioned per-tick at the IK hand — gloved
 # fists, so slightly thicker than the sleeve they hang from.
-@export var hand_sphere_radius: float = 0.07
+@export var hand_sphere_radius: float = 0.064
 # Gap (along the bone direction, toward the elbow) between the hand-sphere
 # center and the forward face of the glove cuff cylinder. Without this the
 # cuff sits flush against the hand sphere and visually swallows it; a small

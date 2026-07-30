@@ -170,7 +170,7 @@ func _build_dummy(meshes: Dictionary, mats: Dictionary) -> Node3D:
 
 # Static two-segment arm from the skater's shared meshes: tapered bone prisms
 # shoulder→elbow→hand, an elbow-pad ball, and a gloved fist gripping toward
-# the stick. Radii mirror the live rig (arm 0.065, elbow 0.082, glove 0.07).
+# the stick. Radii mirror the live rig (arm 0.065, elbow 0.082, glove 0.064).
 func _add_dummy_arm(d: Node3D, mats: Dictionary,
 		shoulder: Vector3, elbow: Vector3, hand: Vector3) -> void:
 	_add_bone(d, mats.arms, shoulder, elbow)
@@ -179,7 +179,7 @@ func _add_dummy_arm(d: Node3D, mats: Dictionary,
 			Basis.from_scale(Vector3.ONE * 0.082))
 	# Glove fist: local +Y points back toward the elbow, same convention the
 	# live rig orients it with.
-	var grip: Basis = _basis_along((elbow - hand).normalized()).scaled(Vector3.ONE * 0.07)
+	var grip: Basis = _basis_along((elbow - hand).normalized()).scaled(Vector3.ONE * 0.064)
 	_add_part(d, SkaterMeshBuilder.shared_glove_fist(), mats.gloves, hand, grip)
 
 
