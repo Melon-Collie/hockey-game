@@ -151,12 +151,9 @@ func _capture_baselines() -> void:
 	for path: String in _FOOT_PATHS:
 		_capture_position(path)
 	# All four arm bones are created in Skater._ready() from the same
-	# arm_mesh_thickness, so reading one captures the shared baseline.
-	var up_cyl: MeshInstance3D = _skater.bone_visual(_skater.upper_arm_mesh)
-	if up_cyl != null:
-		var cyl: CylinderMesh = up_cyl.mesh as CylinderMesh
-		if cyl != null:
-			_base_arm_radius = cyl.top_radius
+	# arm_mesh_thickness; joint balls carry their radius as node scale on the
+	# shared unit-radius mesh (see _resolve_or_create_joint_sphere).
+	_base_arm_radius = _skater.arm_mesh_thickness * 0.5
 	_base_elbow_sphere_radius = _sphere_radius(_skater.top_elbow_sphere)
 	_base_hand_sphere_radius  = _sphere_radius(_skater.top_hand_sphere)
 	_captured = true
@@ -223,43 +220,32 @@ func _apply_arm_thickness(forearm_mult: float, upper_mult: float) -> void:
 	_set_cuff_radius(_skater.bot_cuff_mesh, cuff_radius)
 
 
+# Arm-rig meshes are shared unit-radius builds (SkaterMeshBuilder.shared_*),
+# so all resizing below is node scale — never mesh mutation, which would leak
+# one skater's build into every other skater on the ice.
 func _set_bone_radius(bone: Node3D, radius: float) -> void:
-	if bone == null:
-		return
 	var mi: MeshInstance3D = _skater.bone_visual(bone)
 	if mi == null:
 		return
-	var cyl: CylinderMesh = mi.mesh as CylinderMesh
-	if cyl == null:
-		return
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
+	# Cross-section only: the visual's local Y is the bone's length axis,
+	# owned by the wrapper's per-frame Z scale (see _resolve_or_create_bone_mesh).
+	mi.scale = Vector3(radius, 1.0, radius)
 
 
 func _set_cuff_radius(mi: MeshInstance3D, radius: float) -> void:
 	if mi == null or not is_instance_valid(mi):
 		return
-	var cyl: CylinderMesh = mi.mesh as CylinderMesh
-	if cyl == null:
-		return
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
+	# Height stays baked (CUFF_HEIGHT_M — the wrist placement offsets by it).
+	mi.scale = Vector3(radius, 1.0, radius)
 
 
 func _set_sphere_radius(mi: MeshInstance3D, radius: float) -> void:
 	if mi == null:
 		return
-	var s: SphereMesh = mi.mesh as SphereMesh
-	if s == null:
-		return
-	s.radius = radius
-	s.height = radius * 2.0
+	mi.scale = Vector3.ONE * radius
 
 
 static func _sphere_radius(mi: MeshInstance3D) -> float:
 	if mi == null:
 		return 0.0
-	var s: SphereMesh = mi.mesh as SphereMesh
-	if s == null:
-		return 0.0
-	return s.radius
+	return mi.scale.x
