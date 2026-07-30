@@ -60,6 +60,13 @@ var _toast: Label
 var _toast_timer: float = 0.0
 const TOAST_SECONDS: float = 2.0
 
+# Result of the last F7 dump, rendered IN THE PANEL rather than only as a
+# toast. A toast is gone in two seconds and never reaches a screenshot, so a
+# dump that silently no-ops is indistinguishable from a keypress that never
+# arrived. In the panel the distinction is visible: text here means the handler
+# ran and this is what happened; no text means the key never got through.
+var _dump_status: String = ""
+
 
 func _ready() -> void:
 	layer = 99   # just under NetworkDebugOverlay so the two never fight
@@ -132,16 +139,23 @@ func _unhandled_input(event: InputEvent) -> void:
 # user:// whose absolute path the toast reports so it can be opened directly.
 func _dump() -> void:
 	var json: String = JSON.stringify(GameManager.shape_tally.to_dict(), "\t")
+	# Each sink is reported on its own, so a partial failure names itself.
 	DisplayServer.clipboard_set(json)
+	var clip_ok: bool = DisplayServer.clipboard_get() == json
 	print("[shape tally] ", json)
 	var path: String = "user://shape_tally.json"
+	var file_ok: bool = false
 	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
-	if f == null:
-		_flash("✓ Copied to clipboard + console (file write failed)")
-		return
-	f.store_string(json)
-	f.close()
-	_flash("✓ Saved to %s" % ProjectSettings.globalize_path(path))
+	if f != null:
+		f.store_string(json)
+		f.close()
+		file_ok = true
+	_dump_status = "%d chars · clipboard %s · console yes · file %s" % [
+			json.length(),
+			"yes" if clip_ok else "NO",
+			ProjectSettings.globalize_path(path) if file_ok else "FAILED"]
+	_flash("✓ Dump: " + _dump_status)
+	_refresh()
 
 
 func _flash(msg: String) -> void:
@@ -199,6 +213,24 @@ func _refresh() -> void:
 		"[color=#%s]· DZONE suppressed, backcheck not home — HOME %.1f%% · AWAY %.1f%%[/color]"
 				% [dcol, d0 * 100.0, d1 * 100.0],
 	]
+	# Top transitions: which shape pairs the churn is actually between. Spell
+	# counts say a shape is churning; only this says what against, and the two
+	# have opposite implications (a pair whose slot sets are identical costs
+	# nothing; a pair that swaps every role is the expensive kind).
+	for team_id: int in AIPossessionShapeTally.TEAM_COUNT:
+		var parts: PackedStringArray = []
+		for t: Vector3i in tally.top_transitions(team_id, 4):
+			parts.append("%s→%s %d" % [
+					AIPossessionShapeTally.state_name(t.x),
+					AIPossessionShapeTally.state_name(t.y), t.z])
+		if not parts.is_empty():
+			summary.append("[color=#%s]· %s churn — %s[/color]" % [
+					COL_HOME if team_id == 0 else COL_AWAY,
+					"HOME" if team_id == 0 else "AWAY",
+					" · ".join(parts)])
+	if _dump_status != "":
+		summary.append("[color=#%s]· last dump — %s[/color]" % [
+				COL_DIM, _dump_status])
 	var legend: String = (
 			"[color=#%s]  share = %% of live play · n = spells · mean = s per spell · a [/color]"
 			+ "[color=#%s]red mean[/color][color=#%s] re-slots faster than a bot can act (< %.2f s)[/color]"

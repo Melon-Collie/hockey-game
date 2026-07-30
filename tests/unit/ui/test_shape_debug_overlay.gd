@@ -73,6 +73,22 @@ func test_renders_a_populated_table() -> void:
 			+ "under-measures a [table], so anything after one can be clipped")
 
 
+func test_churn_lines_render_above_the_table() -> void:
+	_with_brains()
+	var t: AIPossessionShapeTally = GameManager.shape_tally
+	for _i: int in 3:
+		t.accumulate(0, AIPossessionState.State.DZONE, 0.9)
+		t.accumulate(0, AIPossessionState.State.RETRIEVAL, 0.5)
+	_overlay._refresh()
+	var txt: String = _text()
+	assert_string_contains(txt, "HOME churn",
+			"the transition read-out is rendered")
+	assert_string_contains(txt, "DZONE\u2192RETRIEVAL 3",
+			"the oscillating pair is named with its count")
+	assert_lt(txt.find("HOME churn"), txt.find("[table=7]"),
+			"churn sits above the table so it cannot be clipped")
+
+
 func test_shapes_sort_by_the_busier_teams_share() -> void:
 	_with_brains()
 	var t: AIPossessionShapeTally = GameManager.shape_tally
@@ -80,8 +96,12 @@ func test_shapes_sort_by_the_busier_teams_share() -> void:
 	t.accumulate(0, AIPossessionState.State.OZONE, 50.0)
 	_overlay._refresh()
 	var txt: String = _text()
-	assert_lt(txt.find("OZONE"), txt.find("NEUTRAL"),
-			"the dominant shape sorts above the marginal one")
+	# Anchored at the table: shape names also appear in the churn lines above
+	# it, so a whole-string search measures those instead of the row order.
+	var tbl: int = txt.find("[table=7]")
+	assert_gt(tbl, -1, "the table is present to search within")
+	assert_lt(txt.find("OZONE", tbl), txt.find("NEUTRAL", tbl),
+			"the dominant shape's ROW sorts above the marginal one")
 
 
 func test_a_shape_only_one_team_visited_renders_dashes_for_the_other() -> void:

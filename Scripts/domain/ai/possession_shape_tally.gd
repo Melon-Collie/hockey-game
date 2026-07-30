@@ -38,6 +38,14 @@ var _seconds: PackedFloat64Array = PackedFloat64Array()
 var _entries: PackedInt32Array = PackedInt32Array()
 # Last sampled state per team (-1 = nothing sampled yet), for entry detection.
 var _last_state: PackedInt32Array = PackedInt32Array()
+# Transition counts, team-major then from-major
+# (team * STATE_COUNT^2 + from * STATE_COUNT + to). Which shape a team leaves
+# FOR WHICH other shape is the question spell counts raise but cannot answer: a
+# shape entered 60 times in four minutes is churning, and the fix depends
+# entirely on what it is churning against. A shape pair that swaps role sets
+# wholesale is a real problem; one whose slots are deliberately identical is
+# free.
+var _transitions: PackedInt32Array = PackedInt32Array()
 # Seconds per team spent with the D-zone coverage read suppressed.
 var _downgrade_seconds: PackedFloat64Array = PackedFloat64Array()
 # Live-play seconds sampled per team — the denominator. Tracked per team rather
@@ -57,6 +65,8 @@ func reset() -> void:
 	_entries.fill(0)
 	_last_state.resize(TEAM_COUNT)
 	_last_state.fill(-1)
+	_transitions.resize(TEAM_COUNT * STATE_COUNT * STATE_COUNT)
+	_transitions.fill(0)
 	_downgrade_seconds.resize(TEAM_COUNT)
 	_downgrade_seconds.fill(0.0)
 	_total_seconds.resize(TEAM_COUNT)
@@ -79,8 +89,14 @@ func accumulate(team_id: int, state: int, dt: float,
 	_seconds[idx] += dt
 	_total_seconds[team_id] += dt
 	if _last_state[team_id] != state:
+		var from_state: int = _last_state[team_id]
 		_last_state[team_id] = state
 		_entries[idx] += 1
+		# -1 is the first sample of a fresh tally: an entry, but not a
+		# transition FROM anything.
+		if from_state != -1:
+			_transitions[team_id * STATE_COUNT * STATE_COUNT
+					+ from_state * STATE_COUNT + state] += 1
 	if coverage_downgraded:
 		_downgrade_seconds[team_id] += dt
 
@@ -118,6 +134,33 @@ func mean_spell_s(team_id: int, state: int) -> float:
 	if n <= 0:
 		return 0.0
 	return seconds_in(team_id, state) / float(n)
+
+
+func transitions(team_id: int, from_state: int, to_state: int) -> int:
+	if team_id < 0 or team_id >= TEAM_COUNT:
+		return 0
+	if from_state < 0 or from_state >= STATE_COUNT:
+		return 0
+	if to_state < 0 or to_state >= STATE_COUNT:
+		return 0
+	return _transitions[team_id * STATE_COUNT * STATE_COUNT
+			+ from_state * STATE_COUNT + to_state]
+
+
+# The most frequent shape transitions for `team_id`, most frequent first, as
+# Vector3i(from_state, to_state, count). Allocates — this is a read-out for the
+# debug overlay (4 Hz) and the JSON dump, never the 120 Hz accumulate path.
+func top_transitions(team_id: int, limit: int = 4) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	if team_id < 0 or team_id >= TEAM_COUNT:
+		return out
+	for from_state: int in STATE_COUNT:
+		for to_state: int in STATE_COUNT:
+			var n: int = transitions(team_id, from_state, to_state)
+			if n > 0:
+				out.append(Vector3i(from_state, to_state, n))
+	out.sort_custom(func(a: Vector3i, b: Vector3i) -> bool: return a.z > b.z)
+	return out.slice(0, limit) if out.size() > limit else out
 
 
 func downgrade_seconds(team_id: int) -> float:
@@ -173,8 +216,16 @@ func to_dict() -> Dictionary:
 				"entries": entries(team_id, state),
 				"mean_spell_s": mean_spell_s(team_id, state),
 			}
+		var churn: Array = []
+		for t: Vector3i in top_transitions(team_id, STATE_COUNT * STATE_COUNT):
+			churn.append({
+				"from": state_name(t.x),
+				"to": state_name(t.y),
+				"count": t.z,
+			})
 		out["team_%d" % team_id] = {
 			"live_seconds": total_seconds(team_id),
+			"transitions": churn,
 			"coverage_downgrade_seconds": downgrade_seconds(team_id),
 			"coverage_downgrade_share": downgrade_share(team_id),
 			"shapes": shapes,
