@@ -104,12 +104,17 @@ const HIP_CONNECTOR_RADIUS: float = 0.08
 # and drop of the chest), hanging below the chest protector so the leg pads
 # stop sprouting straight out of the torso — the hip connectors now emerge
 # from under it. Stations are (y, half_w, half_d) in body-local space (box
-# bottom −0.36); kept short so a butterfly body drop doesn't push it through
-# the ice. Painted the kit's pants base color by the uniform coordinator.
+# bottom −0.36). The block is NOT rigid across stances: at this length a
+# butterfly body drop (body y 0.40) would bury it 16 cm into the ice, so
+# Goalie._update_connectors compresses its Y scale toward the chest as the
+# body drops (reads as hip flexion) — PANTS_BOTTOM_M is that math's input
+# and must stay the depth of the last station here. Painted the kit's pants
+# base color by the uniform coordinator.
+const PANTS_BOTTOM_M: float = 0.56
 const _PANTS_STATIONS: Array[Vector3] = [
 	Vector3(-0.33, 0.215, 0.125),   # tucked up inside the chest bottom
 	Vector3(-0.44, 0.225, 0.135),   # hip bulge
-	Vector3(-0.56, 0.195, 0.115),   # taper toward the thighs
+	Vector3(-PANTS_BOTTOM_M, 0.195, 0.115),  # taper toward the thighs
 ]
 
 

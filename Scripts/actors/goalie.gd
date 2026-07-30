@@ -432,6 +432,15 @@ func _update_connectors() -> void:
 		return
 	if not _connectors_pose_changed():
 		return
+	# Pants hip-flexion: compress the block toward the chest as the body
+	# drops so its bottom clears the ice in every stance — rigid, the
+	# butterfly (body y 0.40) buries it 16 cm deep. Scaling about the body
+	# origin also pulls the block's top up INSIDE the chest, never detached.
+	# The small pitch error from body_rot is within the 0.06 clearance.
+	if pants_mesh != null:
+		pants_mesh.scale.y = clampf(
+				(_body.position.y - 0.06) / GoalieMeshBuilder.PANTS_BOTTOM_M, 0.35, 1.0)
+
 	# Anchor offsets are body-local against the 0.52 × 0.72 torso box in
 	# Goalie.tscn (half-height 0.36): hips near the box bottom, shoulders a
 	# hand's width below the box top — keep in sync if the box resizes.
