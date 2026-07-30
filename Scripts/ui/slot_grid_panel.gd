@@ -6,11 +6,11 @@ extends VBoxContainer
 # forwards (above the away row, below the home row). Each card shows:
 #
 #   ┌──────────────────────────────────┐
-#   │ ▶  88  PLAYERNAME            ←L │   ← action icon (X / +) top-left;
+#   │ ▶  88  PLAYERNAME            <L │   ← action icon (X / +) top-left;
 #   │ │                       ●  32ms  │     position badge top-right with the
-#   └──────────────────────────────────┘     shooter's handedness as an arrow
-#                                            on the matching side ("← L" lefty,
-#                                            "L →" righty); name in middle;
+#   └──────────────────────────────────┘     shooter's handedness as a chevron
+#                                            on the matching side ("< L" lefty,
+#                                            "L >" righty); name in middle;
 #                                            ping or AI label bottom-right;
 #                                            left stripe in the team's UI
 #                                            stripe color.
@@ -163,9 +163,9 @@ func _position_badge(team_id: int, slot: int) -> String:
 	return _POSITION_LABEL_5V5[slot] if is_5v5 else _POSITION_LABEL[slot]
 
 
-# Writes the position badge with the occupant's handedness as an arrow on the
-# matching side ("← L" lefty, "L →" righty). A hand fact about the player,
-# so the away-row L/R mirroring never touches the arrow. State -1 (empty
+# Writes the position badge with the occupant's handedness as a chevron on
+# the matching side ("< L" lefty, "L >" righty). A hand fact about the
+# player, so the away-row L/R mirroring never touches it. State -1 (empty
 # card, identity-less bot) keeps the bare badge.
 func _stamp_position(team_id: int, slot: int) -> void:
 	var lbl: Label = _pos_labels[team_id][slot]
@@ -174,9 +174,9 @@ func _stamp_position(team_id: int, slot: int) -> void:
 	var badge: String = _position_badge(team_id, slot)
 	match int(_hand_state[team_id][slot]):
 		0:
-			lbl.text = "← %s" % badge
+			lbl.text = "< %s" % badge
 		1:
-			lbl.text = "%s →" % badge
+			lbl.text = "%s >" % badge
 		_:
 			lbl.text = badge
 

@@ -277,7 +277,7 @@ func _build_panel() -> void:
 # lobby slot card (SlotGridPanel): the preferred kit's UI palette as the card
 # body, its stripe as the left band, the big display-font number, the
 # uppercase name, and the position badge top-right wearing the handedness
-# arrow ("← C" lefty, "C →" righty). The edit pencil sits where the lobby
+# chevron ("< C" lefty, "C >" righty). The edit pencil sits where the lobby
 # card keeps its status row. Repainted by _refresh_player_card whenever the
 # player screen applies a change.
 func _build_player_card(parent: VBoxContainer) -> void:
@@ -841,8 +841,8 @@ func _refresh_player_card() -> void:
 	_player_card_name.text = PlayerPrefs.player_name.to_upper()
 	_player_card_name.add_theme_color_override("font_color", _player_card_text)
 	var badge: String = PlayerRules.position_name(PlayerPrefs.preferred_position)
-	_player_card_position.text = ("← %s" % badge) if PlayerPrefs.is_left_handed \
-			else ("%s →" % badge)
+	_player_card_position.text = ("< %s" % badge) if PlayerPrefs.is_left_handed \
+			else ("%s >" % badge)
 	_player_card_position.add_theme_color_override("font_color",
 			Color(_player_card_text, 0.7))
 	_player_card_edit_icon.modulate = Color(_player_card_text, 0.6)
