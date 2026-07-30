@@ -496,8 +496,12 @@ func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector
 		# relative velocity the receive decision judges (see should_receive).
 		var relative_vel: Vector3 = puck_vel - skater.velocity
 		var blade_face_normal: Vector3 = skater.get_blade_face_normal(relative_vel)
+		# Deflect ceiling + squared bonus lean with the RECEIVER's blade curve
+		# (Skater.reception_ceiling_mult); the always-catches floor does not.
 		if PuckReceptionRules.should_receive(puck_vel, skater.velocity, blade_face_normal,
-				puck.pickup_max_speed, puck.deflect_min_speed, puck.alignment_receive_bonus):
+				puck.pickup_max_speed,
+				puck.deflect_min_speed * skater.reception_ceiling_mult,
+				puck.alignment_receive_bonus * skater.reception_ceiling_mult):
 			return skater
 	return null
 
@@ -603,8 +607,8 @@ func _check_interactions() -> void:
 						skater.velocity,
 						blade_face_normal,
 						puck.pickup_max_speed,
-						puck.deflect_min_speed,
-						puck.alignment_receive_bonus):
+						puck.deflect_min_speed * skater.reception_ceiling_mult,
+						puck.alignment_receive_bonus * skater.reception_ceiling_mult):
 					# If a second blade would ALSO corral this same tick (a faceoff
 					# draw or a board scramble), it's a contest - nobody gets it, the
 					# puck squirts free biased toward the stronger blade. Otherwise this

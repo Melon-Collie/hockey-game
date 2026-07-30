@@ -34,6 +34,9 @@ var secondary_color: Color     = Color.WHITE
 var text_color: Color          = Color.WHITE
 var text_outline_color: Color  = Color.BLACK
 var is_left_handed: bool = true
+# Packed StickTapeConfig code (cosmetic tape job) — carried on the record so
+# the host's roster payload for late joiners can replay it.
+var tape_code: int = StickTapeConfig.DEFAULT_CODE
 # Per-player gameplay attribute levels (Speed/Agility/Size/Shot). Default to
 # all-medium so a record built without attribute data behaves like the
 # pre-attributes baseline.

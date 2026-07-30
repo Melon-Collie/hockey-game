@@ -214,6 +214,11 @@ var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
 var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
+# Packed StickTapeConfig code (blade tape color + coverage + knob color +
+# handle style). Rides the build presets — each preset carries its own tape
+# job, and this flat field mirrors the ACTIVE preset exactly like the flat
+# attr_* fields mirror its build (the wire/join paths read the mirror).
+var stick_tape_code: int = StickTapeConfig.DEFAULT_CODE
 
 # Per-player build (attributes v4, body + gear): a free HEIGHT in inches
 # (5'7"..6'8"), a free WEIGHT in lbs (clamped to the height's BMI band), and
@@ -503,6 +508,7 @@ func save() -> void:
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
+	cfg.set_value("player", "stick_tape", stick_tape_code)
 	cfg.set_value("player", "attr_height",  attr_height)
 	cfg.set_value("player", "attr_weight",  attr_weight)
 	cfg.set_value("player", "attr_profile", attr_profile)
@@ -519,6 +525,7 @@ func save() -> void:
 		var a: PlayerAttributes = p["attrs"]
 		var stored: Dictionary = a.to_dict()
 		stored["name"] = p["name"]
+		stored["tape"] = int(p.get("tape", StickTapeConfig.DEFAULT_CODE))
 		stored_presets.append(stored)
 	cfg.set_value("player", "attr_presets", stored_presets)
 	cfg.set_value("player", "attr_active_preset", attr_active_preset)
@@ -1084,6 +1091,10 @@ func _load() -> void:
 		# key is ignored — hard break, no migration. -1 falls back to the default at
 		# next lobby join.
 		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
+		# Round-trip through the config type so a hand-edited or future-version
+		# code coerces to a legal tape job instead of riding raw into the wire.
+		stick_tape_code = StickTapeConfig.from_code(int(cfg.get_value(
+				"player", "stick_tape", StickTapeConfig.DEFAULT_CODE))).to_code()
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
 		if attr_ver >= 5:
 			# Native v4 body+gear model. Funnel through set_player_attributes so
@@ -1362,7 +1373,8 @@ func add_preset(attrs: PlayerAttributes = null, preset_name: String = "") -> int
 		return -1
 	var a: PlayerAttributes = attrs if attrs != null else get_player_attributes()
 	var nm: String = preset_name if preset_name != "" else _default_preset_name()
-	attr_presets.append(_make_preset(nm, a))
+	# A new preset copies the current tape job too (a copy of the active build).
+	attr_presets.append(_make_preset(nm, a, stick_tape_code))
 	return attr_presets.size() - 1
 
 
@@ -1382,9 +1394,10 @@ func delete_preset(index: int) -> void:
 # Bulk-replace the whole preset list and active index in one shot — the commit
 # path for the picker panel, which edits a working copy and pushes it back on
 # Apply. Each entry is {"name": String, "levels": Array[int]} in the order
-# [height, skating, skill, checking]. Ignores entries that don't carry four
-# levels and never leaves the list empty (a no-op if nothing usable is
-# supplied). Callers persist with save() afterward.
+# [height, weight, profile, curve, flex, length], plus the preset's packed
+# tape code under "tape". Ignores entries that don't carry usable levels and
+# never leaves the list empty (a no-op if nothing usable is supplied).
+# Callers persist with save() afterward.
 func set_all_presets(entries: Array, active: int) -> void:
 	var out: Array[Dictionary] = []
 	for entry: Variant in entries:
@@ -1401,7 +1414,8 @@ func set_all_presets(entries: Array, active: int) -> void:
 				int(lv[3]) if lv.size() > 3 else PlayerAttributes.GEAR_BALANCED,
 				int(lv[4]) if lv.size() > 4 else PlayerAttributes.GEAR_BALANCED,
 				int(lv[5]) if lv.size() > 5 else PlayerAttributes.GEAR_BALANCED)
-		out.append(_make_preset(String((entry as Dictionary).get("name", DEFAULT_PRESET_NAME)), attrs))
+		out.append(_make_preset(String((entry as Dictionary).get("name", DEFAULT_PRESET_NAME)), attrs,
+				int((entry as Dictionary).get("tape", StickTapeConfig.DEFAULT_CODE))))
 		if out.size() >= MAX_PRESETS:
 			break
 	if out.is_empty():
@@ -1421,7 +1435,8 @@ func _clamp_1to5(v: int) -> int:
 # build (a no-op re-sync afterward).
 func _finalize_presets() -> void:
 	if attr_presets.is_empty():
-		attr_presets = [_make_preset(DEFAULT_PRESET_NAME, get_player_attributes())]
+		attr_presets = [_make_preset(DEFAULT_PRESET_NAME, get_player_attributes(),
+				stick_tape_code)]
 		attr_active_preset = 0
 	attr_active_preset = clampi(attr_active_preset, 0, attr_presets.size() - 1)
 	_sync_flat_from_active()
@@ -1437,10 +1452,17 @@ func _sync_flat_from_active() -> void:
 	attr_curve   = a.curve
 	attr_flex    = a.flex
 	attr_length  = a.length
+	stick_tape_code = int(attr_presets[attr_active_preset].get(
+			"tape", StickTapeConfig.DEFAULT_CODE))
 
 
-func _make_preset(preset_name: String, attrs: PlayerAttributes) -> Dictionary:
-	return {"name": _sanitize_preset_name(preset_name), "attrs": _copy_attrs(attrs)}
+func _make_preset(preset_name: String, attrs: PlayerAttributes,
+		tape_code: int = StickTapeConfig.DEFAULT_CODE) -> Dictionary:
+	return {
+		"name": _sanitize_preset_name(preset_name),
+		"attrs": _copy_attrs(attrs),
+		"tape": StickTapeConfig.from_code(tape_code).to_code(),
+	}
 
 
 # Independent copy so a preset never shares a PlayerAttributes instance with a
@@ -1477,7 +1499,10 @@ func _parse_stored_presets(raw: Variant) -> Array[Dictionary]:
 		# from_dict migrates tier-era and six-attribute preset dicts and the
 		# constructor coerces every axis, so no legality pass is needed.
 		var attrs := PlayerAttributes.from_dict(d)
-		out.append(_make_preset(String(d.get("name", DEFAULT_PRESET_NAME)), attrs))
+		# Pre-per-preset saves carry no "tape" key; seed from the flat field
+		# (loaded before presets) so an existing tape job lands on every build.
+		out.append(_make_preset(String(d.get("name", DEFAULT_PRESET_NAME)), attrs,
+				int(d.get("tape", stick_tape_code))))
 		if out.size() >= MAX_PRESETS:
 			break
 	return out

@@ -497,21 +497,40 @@ func test_flex_is_a_power_release_seesaw() -> void:
 
 
 func test_curve_trades_face_angle_and_release_for_backhand() -> void:
-	var closed := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
-	var balanced := PlayerAttributes.all_average()
-	var open := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
-	# The face angle is the elevation lever: open ≥ balanced ≥ closed, and
-	# open's 45° equals the universal launch-angle cap — an open blade is
+	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
+	var m92 := PlayerAttributes.all_average()
+	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
+	# The face angle is the elevation lever: M28 ≥ M92 ≥ M88, and the M28's
+	# 45° equals the universal launch-angle cap — an M28 blade is
 	# bit-identical to the pre-curve shipped behavior.
-	assert_lt(closed.curve_loft_tan(), balanced.curve_loft_tan(), "closed is flattest")
-	assert_lt(balanced.curve_loft_tan(), open.curve_loft_tan())
-	assert_almost_eq(open.curve_loft_tan(), ShotMechanics.MAX_LOFT_RATIO, 0.0001,
-			"open face = the universal 45° cap")
-	assert_lt(open.wrister_runway_mult(), 1.0, "open is the quick release")
-	assert_gt(closed.curve_backhand_mult(), open.curve_backhand_mult())
+	assert_lt(m88.curve_loft_tan(), m92.curve_loft_tan(), "M88 is flattest")
+	assert_lt(m92.curve_loft_tan(), m28.curve_loft_tan())
+	assert_almost_eq(m28.curve_loft_tan(), ShotMechanics.MAX_LOFT_RATIO, 0.0001,
+			"M28 face = the universal 45° cap")
+	assert_lt(m28.wrister_runway_mult(), 1.0, "M28 is the quick release (banked)")
+	assert_gt(m88.curve_backhand_mult(), m28.curve_backhand_mult())
 	# Backhand relief approaches but never reaches forehand parity: the
-	# controller's 0.75 base coefficient stays below 1.0 under CLOSED.
-	assert_lt(0.75 * closed.curve_backhand_mult(), 1.0, "no full-parity backhand")
+	# controller's 0.75 base coefficient stays below 1.0 under the M88.
+	assert_lt(0.75 * m88.curve_backhand_mult(), 1.0, "no full-parity backhand")
+
+
+func test_curve_slap_and_reception_lean_with_the_pattern() -> void:
+	# The other half of the M88↔M28 seesaw: the flatter pattern sweeps a
+	# squarer slapper contact and cradles a harder feed; the toe hook pays
+	# both. M92 is the neutral row on every axis.
+	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
+	var m92 := PlayerAttributes.all_average()
+	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
+	assert_gt(m88.curve_slap_mult(), 1.0, "M88 is the slapper blade")
+	assert_almost_eq(m92.curve_slap_mult(), 1.0, 0.0001, "M92 slap-neutral")
+	assert_lt(m28.curve_slap_mult(), 1.0, "the toe hook pays the point shot")
+	assert_gt(m88.reception_ceiling_mult(), 1.0, "M88 catches the hardest feeds")
+	assert_almost_eq(m92.reception_ceiling_mult(), 1.0, 0.0001, "M92 reception-neutral")
+	assert_lt(m28.reception_ceiling_mult(), 1.0, "hard feeds bounce off the toe hook")
+	# The leans stay leans, not identities: even the M28 receiver still soaks
+	# most of the league ceiling (soft/medium passes are unaffected entirely —
+	# pickup_max_speed never scales with curve).
+	assert_gt(m28.reception_ceiling_mult(), 0.85, "reception lean stays gentle")
 
 
 func test_stacked_runway_floor() -> void:

@@ -22,28 +22,27 @@ extends VBoxContainer
 # height slider preserves the build's FRAME (its frame-t position in the band)
 # and recomputes pounds, so a lean build stays lean as it grows.
 #
-# Gear slots ride through the preset levels; each gains its selector when its
-# gameplay stage lands. Live: STICK LENGTH (levels[5]), BLADE CURVE
-# (levels[3]) and STICK FLEX (levels[4]) — three-way exclusive rows sharing
-# one builder. Skate profile (levels[2]) is stored but not yet editable.
+# Gear slots ride through the preset levels. SKATE PROFILE (levels[2]) is the
+# one gear row built here; the stick gear — CURVE (levels[3]), FLEX
+# (levels[4]), LENGTH (levels[5]) — is edited by StickEditorPopup, which the
+# host popup opens over this panel and funnels back into the working model via
+# get/set_pending_stick_gear, so stick edits share the same snapshot / commit
+# / revert cycle as everything else.
 
 signal changed
 
 # Hover tooltips. Headline effects only.
 const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the speed/agility/shot baselines.\nSmall = shiftier with quicker turns; big = longer reach & harder shot."
 const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = quicker first step, fast stamina recovery, easier to move.\nHeavy = harder hits & harder to move, deep but slow-refilling tank."
-const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
-const _LENGTH_LABELS: Array[String] = ["Short", "Standard", "Long"]
-const _CURVE_TOOLTIP: String = "Blade face.\nClosed = best backhand, hardest to elevate.\nOpen = easy elevation & quick release, weak backhand."
-const _CURVE_LABELS: Array[String] = ["Closed", "Balanced", "Open"]
-const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
-const _FLEX_LABELS: Array[String] = ["Whippy", "Medium", "Stiff"]
 const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
 const _PROFILE_LABELS: Array[String] = ["Agility", "Balanced", "Power"]
 
-# Working copy: Array of {"name": String, "levels": Array[int]} in canonical
-# order [height_in, weight_lbs, profile, curve, flex, length]. The UI edits
-# only height/weight; gear carries through.
+# Working copy: Array of {"name": String, "levels": Array[int], "tape": int}
+# — levels in canonical order [height_in, weight_lbs, profile, curve, flex,
+# length], tape the preset's packed StickTapeConfig code. The tape job rides
+# the build preset (cosmetic, but switching builds swaps the whole loadout —
+# most consistent feel); the stick editor edits it via
+# get/set_pending_tape_code.
 var _working: Array[Dictionary] = []
 var _active: int = 0
 # Deep copy taken on snapshot(); restore() reverts to it and is_dirty()
@@ -59,7 +58,7 @@ var _locked: bool = false
 var _refreshing: bool = false
 
 # Controls.
-var _chip_row: HBoxContainer = null
+var _chip_row: HFlowContainer = null
 var _chip_buttons: Array[Button] = []
 var _new_btn: Button = null
 var _delete_btn: Button = null
@@ -79,20 +78,22 @@ var _height_slider: HSlider = null
 var _height_value_label: Label = null
 var _weight_slider: HSlider = null
 var _weight_value_label: Label = null
-# Gear selector button rows, keyed by the levels index they edit
-# (3 = curve, 4 = flex, 5 = length).
+# Gear selector button rows, keyed by the levels index they edit (2 = skates).
 var _gear_buttons: Dictionary = {}
 
 
 func _ready() -> void:
 	alignment = BoxContainer.ALIGNMENT_CENTER
 	add_theme_constant_override("separation", 10)
+	# Fixed width so hosts don't resize as presets come and go — the chip row
+	# wraps inside this instead of widening the popup.
+	custom_minimum_size = Vector2(520, 0)
 	_build()
 
 
 func _build() -> void:
 	var heading := Label.new()
-	heading.text = "Attributes"
+	heading.text = tr(&"ATTRIBUTES_HEADING")
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	MenuStyle.apply_heading(heading, 22)
 	add_child(heading)
@@ -115,11 +116,9 @@ func _build() -> void:
 
 	_build_height_row()
 	_build_weight_row()
-	# The four gear slots — all live. Each is a three-way exclusive choice
-	# (the loft-level pattern — discrete and chunky, never a slider).
-	_build_gear_row("Stick", _LENGTH_TOOLTIP, _LENGTH_LABELS, 5)
-	_build_gear_row("Curve", _CURVE_TOOLTIP, _CURVE_LABELS, 3)
-	_build_gear_row("Flex", _FLEX_TOOLTIP, _FLEX_LABELS, 4)
+	# Skates is the one gear row here — a three-way exclusive choice (the
+	# loft-level pattern, discrete and chunky, never a slider). The stick
+	# gear rows live in StickEditorPopup (see the header).
 	_build_gear_row("Skates", _PROFILE_TOOLTIP, _PROFILE_LABELS, 2)
 
 
@@ -169,8 +168,12 @@ func _build_preset_row() -> void:
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(label)
 
-	_chip_row = HBoxContainer.new()
-	_chip_row.add_theme_constant_override("separation", 6)
+	# Flow, not HBox: chips WRAP within the panel's fixed width as presets are
+	# added or renamed, so the host popup never changes size.
+	_chip_row = HFlowContainer.new()
+	_chip_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chip_row.add_theme_constant_override("h_separation", 6)
+	_chip_row.add_theme_constant_override("v_separation", 6)
 	row.add_child(_chip_row)
 
 	_new_btn = Button.new()
@@ -370,6 +373,8 @@ func is_dirty() -> bool:
 			return true
 		if not _levels_equal(_working[i]["levels"], _snapshot_working[i]["levels"]):
 			return true
+		if int(_working[i]["tape"]) != int(_snapshot_working[i]["tape"]):
+			return true
 	return false
 
 
@@ -377,6 +382,66 @@ func is_dirty() -> bool:
 # so there is nothing to gate. Kept for the host-API contract.
 func is_valid() -> bool:
 	return true
+
+
+# The active pending build's full attributes — what the stick editor previews
+# (its stick gear rides real height, so the popup needs the body too).
+func get_pending_attributes() -> PlayerAttributes:
+	if _active < 0 or _active >= _working.size():
+		return PlayerPrefs.get_player_attributes()
+	var levels: Array = _working[_active]["levels"]
+	return PlayerAttributes.new(int(levels[0]), int(levels[1]), int(levels[2]),
+			int(levels[3]), int(levels[4]), int(levels[5]))
+
+
+# Writes the stick editor's gear picks back into the active pending build —
+# same working-model edit as a gear button press, so is_dirty()/restore()
+# see it like any other change.
+func set_pending_stick_gear(curve: int, flex: int, length: int) -> void:
+	if _locked or _active < 0 or _active >= _working.size():
+		return
+	var levels: Array = _working[_active]["levels"]
+	if int(levels[3]) == curve and int(levels[4]) == flex and int(levels[5]) == length:
+		return
+	levels[3] = curve
+	levels[4] = flex
+	levels[5] = length
+	_refresh()
+	changed.emit()
+
+
+# The active pending build's tape job (packed code). Part of the preset like
+# the gear, but cosmetic — so unlike set_pending_stick_gear it is NOT gated on
+# the online-match lock.
+func get_pending_tape_code() -> int:
+	if _active < 0 or _active >= _working.size():
+		return PlayerPrefs.stick_tape_code
+	return int(_working[_active]["tape"])
+
+
+func set_pending_tape_code(tape_code: int) -> void:
+	if _active < 0 or _active >= _working.size():
+		return
+	if int(_working[_active]["tape"]) == tape_code:
+		return
+	_working[_active]["tape"] = tape_code
+	changed.emit()
+
+
+# Whether the stick the player would get on Apply (active pending build's
+# gear + tape) differs from the stick they have now (the snapshot-time active
+# preset — what the rink is showing). Lets host popups flag pending stick
+# edits, which are otherwise invisible behind the Edit Stick button.
+func is_stick_dirty() -> bool:
+	if _active < 0 or _active >= _working.size():
+		return false
+	if _snapshot_active < 0 or _snapshot_active >= _snapshot_working.size():
+		return false
+	var lv: Array = _working[_active]["levels"]
+	var sv: Array = _snapshot_working[_snapshot_active]["levels"]
+	return int(lv[3]) != int(sv[3]) or int(lv[4]) != int(sv[4]) \
+			or int(lv[5]) != int(sv[5]) \
+			or int(_working[_active]["tape"]) != int(_snapshot_working[_snapshot_active]["tape"])
 
 
 # ── Interaction ──────────────────────────────────────────────────────────────
@@ -434,7 +499,8 @@ func _on_new_pressed() -> void:
 	if _working.size() >= PlayerPrefs.MAX_PRESETS or _locked:
 		return
 	var copy_levels: Array[int] = _dup_levels(_working[_active]["levels"])
-	_working.append({"name": _default_preset_name(), "levels": copy_levels})
+	_working.append({"name": _default_preset_name(), "levels": copy_levels,
+			"tape": int(_working[_active]["tape"])})
 	_active = _working.size() - 1
 	_rebuild_chips()
 	_load_active_into_name_field()
@@ -538,14 +604,16 @@ func _read_prefs_working() -> Array[Dictionary]:
 	for p: Dictionary in PlayerPrefs.get_presets():
 		var a: PlayerAttributes = p["attrs"]
 		var levels: Array[int] = [a.height, a.weight, a.profile, a.curve, a.flex, a.length]
-		out.append({"name": String(p["name"]), "levels": levels})
+		out.append({"name": String(p["name"]), "levels": levels,
+				"tape": int(p.get("tape", StickTapeConfig.DEFAULT_CODE))})
 	return out
 
 
 func _dup_working(src: Array[Dictionary]) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for e: Dictionary in src:
-		out.append({"name": String(e["name"]), "levels": _dup_levels(e["levels"])})
+		out.append({"name": String(e["name"]), "levels": _dup_levels(e["levels"]),
+				"tape": int(e.get("tape", StickTapeConfig.DEFAULT_CODE))})
 	return out
 
 

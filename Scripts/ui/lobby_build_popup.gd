@@ -2,17 +2,24 @@ class_name LobbyBuildPopup
 extends Control
 
 # Pre-match build editor shown from the lobby. Wraps the shared
-# AttributePickerPanel (sliders + presets) in a modal; unlike the free-play
-# PlayerSettingsPopup it edits attributes ONLY — name/number/handedness are
-# locked at join and the team color has its own lobby vote widget.
+# AttributePickerPanel (sliders + presets) plus the Edit Stick workbench in a
+# modal; unlike the free-play PlayerSettingsPopup it edits the build and stick
+# ONLY — name/number/handedness are locked at join and the team color has its
+# own lobby vote widget.
 #
 # On Apply it commits the working presets to PlayerPrefs and hands the active
-# build to NetworkManager.update_lobby_attributes, which stamps the value the
-# host will spawn from (a client forwards it to the host for re-validation). No
-# skater exists yet in the lobby, so there's no live re-apply.
+# build to NetworkManager.update_lobby_attributes (and the tape job to
+# update_lobby_tape), which stamps the values the host will spawn from (a
+# client forwards them to the host for re-validation). No skater exists yet in
+# the lobby, so there's no live re-apply.
 
 var _panel: AttributePickerPanel = null
 var _apply_btn: Button = null
+# Stick workbench (gear + tape + preview) opened over this popup; its Done
+# lands in the panel's pending working model (tape rides each build preset).
+var _stick_popup: StickEditorPopup = null
+# Gold "unapplied stick changes" note beside the Edit Stick button.
+var _stick_pending_label: Label = null
 # Controller focus scope: the lobby content behind this popup (focus is walled
 # off there while we're open) and the control focus returns to on close. Set by
 # LobbyManager via set_focus_scope; null-safe if it never is.
@@ -69,6 +76,31 @@ func _build() -> void:
 	# it's up, so the D-pad can't step off the keys onto Apply/Cancel.
 	_panel.set_keyboard_background(self)
 
+	var stick_row := HBoxContainer.new()
+	stick_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	stick_row.add_theme_constant_override("separation", 12)
+	vbox.add_child(stick_row)
+	var edit_stick_btn := Button.new()
+	edit_stick_btn.text = tr(&"STICK_EDIT_BUTTON")
+	edit_stick_btn.custom_minimum_size = Vector2(180, 44)
+	edit_stick_btn.add_theme_font_size_override("font_size", 17)
+	MenuStyle.wire_hover_scale(edit_stick_btn)
+	SoundManager.wire_button(edit_stick_btn)
+	edit_stick_btn.pressed.connect(_open_stick_editor)
+	stick_row.add_child(edit_stick_btn)
+	# Pending stick edits hide behind the button — this note surfaces them.
+	_stick_pending_label = Label.new()
+	_stick_pending_label.text = tr(&"STICK_PENDING_NOTE")
+	_stick_pending_label.add_theme_color_override("font_color", MenuStyle.GOLD)
+	_stick_pending_label.add_theme_font_size_override("font_size", 13)
+	_stick_pending_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_stick_pending_label.visible = false
+	stick_row.add_child(_stick_pending_label)
+
+	_stick_popup = StickEditorPopup.new()
+	_stick_popup.stick_edited.connect(_on_stick_edited)
+	add_child(_stick_popup)
+
 	var action_row := HBoxContainer.new()
 	action_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	action_row.add_theme_constant_override("separation", 12)
@@ -110,18 +142,40 @@ func open() -> void:
 	ControllerNav.open_modal(_focus_background, self, _panel.first_focus_target())
 
 
+func _open_stick_editor() -> void:
+	# TEAM tape swatches resolve against the lobby's pending home kit.
+	var accent: Color = TeamColorRegistry.get_colors(
+			maxi(NetworkManager.pending_home_color_slot, 0), 0).primary
+	_stick_popup.set_focus_scope(self, null)
+	_stick_popup.open(_panel.get_pending_attributes(),
+			_panel.get_pending_tape_code(), false, accent)
+
+
+func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> void:
+	_panel.set_pending_stick_gear(curve, flex, length)
+	_panel.set_pending_tape_code(tape_code)
+	_update_apply_state()
+
+
 func _update_apply_state() -> void:
 	if _apply_btn == null:
 		return
 	_apply_btn.disabled = not (_panel.is_dirty() and _panel.is_valid())
+	if _stick_pending_label != null:
+		_stick_pending_label.visible = _panel.is_stick_dirty()
 
 
 func _apply() -> void:
 	if not _panel.is_dirty() or not _panel.is_valid():
 		return
+	var old_tape: int = PlayerPrefs.stick_tape_code
+	# commit() syncs the flat build AND tape mirror from the active preset —
+	# a preset switch alone can change both.
 	var new_attrs: PlayerAttributes = _panel.commit()
 	PlayerPrefs.save()
 	NetworkManager.update_lobby_attributes(new_attrs)
+	if PlayerPrefs.stick_tape_code != old_tape:
+		NetworkManager.update_lobby_tape(PlayerPrefs.stick_tape_code)
 	_close()
 
 
