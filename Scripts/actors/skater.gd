@@ -1163,13 +1163,15 @@ func apply_blade_pattern(curve_gear: int) -> void:
 # Eases the elevation blend toward the loft level each tick and re-tilts the
 # blade only while transitioning (move_toward lands exactly on the target, after
 # which the early-out stops the per-tick basis churn). Called from _physics_process.
+# Runs the full stick pass, not just the tilt — the tilt moves the hosel tip
+# the shaft is aimed at, so the shaft must follow or the joint opens.
 func _update_blade_elevation(delta: float) -> void:
 	var target: float = float(elevation_level) * 0.5
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(
 			_blade_elevation_blend, target, _BLADE_ELEVATION_BLEND_SPEED * delta)
-	_apply_blade_tilt()
+	update_stick_mesh()
 
 
 # Blend units/sec for the blade-lift ease (~0.08 s for a full lift). Snappier
@@ -1642,36 +1644,63 @@ func get_blade_wall_normal() -> Vector3:
 
 
 # ── Stick Mesh ────────────────────────────────────────────────────────────────
+# The rendered shaft runs from the top hand to the HOSEL TIP, not the heel.
+# The hosel is fixed blade-local geometry ascending in the blade's own
+# vertical plane at the lie — but the hand is rarely in that plane (the blade
+# yaws with the cursor while the hand stays by the body), so a heel-aimed
+# shaft crossed the hosel at an angle over their whole overlap and the
+# junction read as a broken elbow. Ending the shaft at the tip makes the
+# connection point-exact in every pose; the residual angular mismatch shows
+# only as a slight bend at a joint where the two cross-sections nearly match.
+# A small overrun keeps the hosel's tip cap buried inside the shaft.
+const _SHAFT_TIP_OVERRUN_M: float = 0.03
+
+
 func update_stick_mesh() -> void:
+	# Tilt before aim — the hosel tip rides the blade's cosmetic pitch.
+	_apply_blade_tilt()
 	var stick_origin: Vector3 = top_hand.position
-	var to_blade: Vector3 = blade.position - stick_origin
-	stick_mesh.position = stick_origin + to_blade / 2.0
-	stick_mesh.scale.z = to_blade.length()
-	stick_mesh.look_at(upper_body.to_global(blade.position), Vector3.UP)
+	var to_tip: Vector3 = _hosel_tip_upper_body() - stick_origin
+	if to_tip.length_squared() < 0.0001:
+		return
+	var shaft_len: float = to_tip.length() + _SHAFT_TIP_OVERRUN_M
+	stick_mesh.position = stick_origin + to_tip.normalized() * (shaft_len * 0.5)
+	stick_mesh.scale.z = shaft_len
+	stick_mesh.look_at(upper_body.to_global(stick_origin + to_tip), Vector3.UP)
 	# The handle-wrap paint (grip/candy-cane) measures real metres down the
 	# shaft, so the shader needs the live rendered length — node scale never
 	# reaches object space. Dirty-guarded like flex_m.
-	if not is_equal_approx(to_blade.length(), _shaft_len_sent):
-		_shaft_len_sent = to_blade.length()
+	if not is_equal_approx(shaft_len, _shaft_len_sent):
+		_shaft_len_sent = shaft_len
 		var shaft_mat: ShaderMaterial = stick_mesh.material_override as ShaderMaterial
 		if shaft_mat != null:
 			shaft_mat.set_shader_parameter(&"shaft_len_m", _shaft_len_sent)
-	_update_stick_knob(stick_origin, to_blade)
-	# The shaft-follow pitch reads the same hand/blade markers that dirtied
-	# this rebuild, so the blade mesh re-orients here at render rate too.
-	_apply_blade_tilt()
+	_update_stick_knob(stick_origin, to_tip)
+
+
+# The hosel throat's tip in upper-body space: the fixed blade-local tip (the
+# lie axis × hosel length off the heel) carried through the blade mesh's
+# cosmetic tilt and the marker's live orientation.
+func _hosel_tip_upper_body() -> Vector3:
+	var lie: float = deg_to_rad(blade_lie_deg)
+	var tip_local: Vector3 = Vector3(0.0, sin(lie), cos(lie)) * blade_hosel_length
+	if _blade_mesh_instance != null and is_instance_valid(_blade_mesh_instance):
+		tip_local = _blade_mesh_instance.transform * tip_local
+	return blade.transform * tip_local
 
 
 # Rides the knob just past the top hand, along the shaft away from the blade,
 # with its CylinderMesh long axis (local Y) aligned to the shaft — same look_at +
-# rotate_object_local(X, 90°) trick as the glove cuffs.
-func _update_stick_knob(stick_origin: Vector3, to_blade: Vector3) -> void:
+# rotate_object_local(X, 90°) trick as the glove cuffs. `to_shaft_end` is the
+# hand→hosel-tip vector the shaft itself was aimed with, so the knob and the
+# shaft always share one axis.
+func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 	if stick_knob_mesh == null or not is_instance_valid(stick_knob_mesh):
 		return
-	if to_blade.length_squared() < 0.0001:
+	if to_shaft_end.length_squared() < 0.0001:
 		return
 	var hand_w: Vector3 = upper_body.to_global(stick_origin)
-	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(blade.position)).normalized()
+	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(stick_origin + to_shaft_end)).normalized()
 	var cyl: CylinderMesh = stick_knob_mesh.mesh as CylinderMesh
 	var knob_h: float = cyl.height if cyl != null else 0.05
 	var knob_center_w: Vector3 = hand_w + up_shaft_w * (knob_h * 0.5)
