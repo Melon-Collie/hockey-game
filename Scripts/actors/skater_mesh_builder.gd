@@ -75,8 +75,13 @@ const _LEG_SIDES: int = 8
 # cut_v(θ) = CUT_BASE + CUT_BACK_BIAS·cos(θ) in equirect latitude fractions
 # (θ = 0 is +Z, the back).
 const _HELMET_RADIUS: float = 0.155
-const _HELMET_CUT_BASE: float = 0.6725   # front rim (base − bias) = 0.545: brow line
-const _HELMET_CUT_BACK_BIAS: float = 0.1275  # back rim (base + bias) = 0.80: nape
+# Rim latitudes anchored to head anatomy (head r 0.135, eye line ≈ the
+# equator): front (base − bias) = 0.40 puts the brow rim at y ≈ +0.048 —
+# ABOVE the eye line, a forehead-covering helmet, not a face-swallowing one;
+# sides (= base) 0.58 reach y ≈ −0.039, ear-top coverage; back (base + bias)
+# = 0.76 drops to y ≈ −0.118 at the nape.
+const _HELMET_CUT_BASE: float = 0.58
+const _HELMET_CUT_BACK_BIAS: float = 0.18
 # The shell closes with a fan to an apex HIGH inside the dome (this fraction
 # of the radius up), not a floor at rim height — a low floor reads as a
 # helmet-colored lid across the face opening from the top-down camera,
