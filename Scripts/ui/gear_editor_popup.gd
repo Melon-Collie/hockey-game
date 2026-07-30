@@ -303,11 +303,13 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_laces.transform = Transform3D(_BOOT_ROT, skate_at)
 	_turntable.add_child(_laces)
 
+	# Collar seat relative to the boot, straight upright — the rink's own
+	# arrangement (Skater.tscn, Shin-local: SkateL y −0.41 vs FootL
+	# (−0.45, −0.1) → 0.04 above and 0.10 heel-ward of the boot origin), so
+	# the preview skate IS the in-game assembly.
 	_collar = MeshInstance3D.new()
 	_collar.mesh = SkaterMeshBuilder.shared_skate_collar()
-	_collar.transform = Transform3D(
-			Basis(Vector3(0, 0, 1), deg_to_rad(-10.0)),
-			skate_at + Vector3(0.075, 0.10, 0.0))
+	_collar.position = skate_at + Vector3(0.10, 0.04, 0.0)
 	_turntable.add_child(_collar)
 
 	# The accent stripe band, seated on the collar exactly as the rink's
