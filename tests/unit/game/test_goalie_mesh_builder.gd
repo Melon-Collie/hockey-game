@@ -11,17 +11,17 @@ const _EPS: float = 0.005  # envelope tolerance, metres
 
 # label → [mesh, max AABB size]. Envelopes come from the primitives in
 # Goalie.tscn: body box 0.52×0.72×0.28, head sphere r 0.17 h 0.26, pad box
-# 0.28×0.84×0.2, glove torus outer r 0.15 (tube ±0.025), glove disc r 0.1
-# h 0.05, detail sphere r 0.025, blocker box 0.2×0.3×0.05, hand sphere
-# r 0.05. The connector tube is unit-sized (its stretch is basis scale).
+# 0.28×0.84×0.2, blocker box 0.2×0.3×0.05, hand sphere r 0.05. The trapper
+# parts (rim / pocket / cuff) are sculpted past their original primitives on
+# purpose but must stay near the glove's 0.25×0.25×0.2 collision box. The connector tube is unit-sized (its stretch is basis scale).
 func _parts() -> Dictionary:
 	return {
 		"body": [GoalieMeshBuilder._build_body(), Vector3(0.52, 0.72, 0.28)],
 		"mask": [GoalieMeshBuilder._build_mask(), Vector3(0.34, 0.26, 0.34)],
 		"pad": [GoalieMeshBuilder._build_pad(), Vector3(0.28, 0.84, 0.20)],
-		"glove_ring": [GoalieMeshBuilder._build_glove_ring(), Vector3(0.30, 0.05, 0.30)],
-		"glove_pocket": [GoalieMeshBuilder._build_glove_pocket(), Vector3(0.20, 0.05, 0.20)],
-		"glove_detail": [GoalieMeshBuilder._build_glove_detail(), Vector3(0.05, 0.05, 0.05)],
+		"glove_ring": [GoalieMeshBuilder._build_glove_ring(), Vector3(0.30, 0.07, 0.28)],
+		"glove_pocket": [GoalieMeshBuilder._build_glove_pocket(), Vector3(0.24, 0.12, 0.22)],
+		"glove_cuff": [GoalieMeshBuilder._build_glove_cuff(), Vector3(0.16, 0.15, 0.09)],
 		"blocker": [GoalieMeshBuilder._build_blocker(), Vector3(0.20, 0.30, 0.05)],
 		"blocker_hand": [GoalieMeshBuilder._build_blocker_hand(), Vector3(0.10, 0.10, 0.10)],
 		"connector": [GoalieMeshBuilder.shared_connector_tube(), Vector3(0.16, 1.0, 0.16)],

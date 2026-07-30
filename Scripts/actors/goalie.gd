@@ -30,6 +30,9 @@ extends Node3D
 @onready var glove_detail_mesh: MeshInstance3D = $Glove/MeshInstance3D2
 @onready var blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
 @onready var blocker_hand_mesh: MeshInstance3D = $BlockArm/BlockerHand
+@onready var stick_shaft_mesh: MeshInstance3D = $BlockArm/Stick/StickShaftMesh
+@onready var stick_paddle_mesh: MeshInstance3D = $BlockArm/Stick/StickPaddleMesh
+@onready var stick_blade_mesh: MeshInstance3D = $BlockArm/Stick/StickBladeMesh
 
 # Arm-to-glove segments. 0.76 per side is ~104% wingspan-equivalent on the
 # ~1.92 m frame (torso box + standing pose in goalie_body_config_builder) —
@@ -89,6 +92,7 @@ func _ready() -> void:
 	# set (colliders untouched). Before the uniform coordinator only by
 	# convention — painting is material_override / ShaderMaterial, mesh-free.
 	GoalieMeshBuilder.apply_goalie(self)
+	_init_stick_knob()
 	_init_connectors()
 	_init_arm_bones()
 	_setup_uniform_coordinator()
@@ -315,6 +319,25 @@ func _init_arm_bones() -> void:
 	add_child(glove_elbow_sphere)
 	blocker_elbow_sphere = _make_sphere_mesh(_ELBOW_SPHERE_RADIUS)
 	add_child(blocker_elbow_sphere)
+
+
+# White tape knob capping the shaft butt — the fixed house look for the
+# goalie stick. Goalies tape heavily and white is the norm; unlike the
+# skater's knob it never tracks a kit color, so it's created once here
+# (geometry side) while GoalieUniformCoordinator paints the shaft, paddle,
+# and blade. Shaft top is at Stick-local y = 0.5 (mesh at 0.25, box 0.5
+# tall); the knob sits proud of it by the same 1 cm as the skater's.
+func _init_stick_knob() -> void:
+	var knob := MeshInstance3D.new()
+	knob.name = "StickKnob"
+	knob.mesh = SkaterMeshBuilder.shared_knob()
+	knob.position = Vector3(0.0, 0.5 - SkaterMeshBuilder.KNOB_HEIGHT_M * 0.5 + 0.01, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.93, 0.93, 0.90)
+	mat.roughness = 0.9
+	BodyRim.apply(mat)
+	knob.material_override = mat
+	_stick.add_child(knob)
 
 
 # Unit-height shared tube (radius baked at HIP_CONNECTOR_RADIUS); the

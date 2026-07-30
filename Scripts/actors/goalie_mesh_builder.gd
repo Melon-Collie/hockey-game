@@ -55,13 +55,30 @@ const _MASK_RADIUS: float = 0.17
 const _MASK_Y_SCALE: float = 0.7647
 const _MASK_CUT_V: float = 0.88
 
-# Catch glove. The rim replaces the TorusMesh (inner 0.1 / outer 0.15): main
-# ring radius 0.125, tube radius 0.025. The pocket replaces the flat disc
-# (r 0.1 × 0.05): a shallow frustum widening toward the mesh's −Y end, which
-# the Glove node's rotated frame points at the shooter.
-const _GLOVE_RING_R: float = 0.125
-const _GLOVE_TUBE_R: float = 0.025
-const _GLOVE_DETAIL_R: float = 0.025
+# Catch glove — a trapper built from the scene's three glove nodes. Frame
+# note: Ring/Main sit in a rotated frame (local −Y faces the shooter, local
+# +Z is down, X lateral); the cuff node is unrotated at the glove origin —
+# which is the wrist, where the drawn forearm terminates.
+#   - Rim (replaces the TorusMesh): an oval hoop, meatier on the up side
+#     where a trapper's finger stalls and T-web live, thinner at the heel.
+#   - Pocket (replaces the flat disc): a rounded pot behind the rim, its
+#     front face the catch surface.
+#   - Cuff (replaces the floating detail ball): a chamfered wrist block.
+const _GLOVE_RING_R: float = 0.108
+const _GLOVE_RING_X_SCALE: float = 1.06   # oval: wider laterally than tall
+const _GLOVE_RING_Z_SCALE: float = 0.94
+const _GLOVE_TUBE_MIN_R: float = 0.022    # heel side
+const _GLOVE_TUBE_MAX_R: float = 0.034    # finger/web side (local −Z = up)
+const _GLOVE_POCKET_PROFILE: Array[Vector2] = [
+	Vector2(0.060, 0.040),    # pocket back (toward the body)
+	Vector2(0.035, 0.082),
+	Vector2(0.000, 0.100),
+	Vector2(-0.040, 0.110),
+	Vector2(-0.055, 0.098),   # front lip, curling in behind the rim
+]
+const _GLOVE_CUFF_HALF_W: float = 0.075
+const _GLOVE_CUFF_HALF_D: float = 0.032
+const _GLOVE_CUFF_HALF_H: float = 0.070
 
 # Blocker board (replaces the 0.2 × 0.3 × 0.05 BoxMesh) and hand ball.
 const _BLOCKER_HALF_W: float = 0.10
@@ -86,7 +103,7 @@ static func apply_goalie(goalie: Goalie) -> void:
 	_swap_instance(goalie.right_pad_mesh, "goalie_pad", _build_pad)
 	_swap_instance(goalie.glove_ring_mesh, "goalie_glove_ring", _build_glove_ring)
 	_swap_instance(goalie.glove_main_mesh, "goalie_glove_pocket", _build_glove_pocket)
-	_swap_instance(goalie.glove_detail_mesh, "goalie_glove_detail", _build_glove_detail)
+	_swap_instance(goalie.glove_detail_mesh, "goalie_glove_cuff", _build_glove_cuff)
 	_swap_instance(goalie.blocker_mesh, "goalie_blocker", _build_blocker)
 	_swap_instance(goalie.blocker_hand_mesh, "goalie_blocker_hand", _build_blocker_hand)
 
@@ -192,8 +209,10 @@ static func _build_mask() -> ArrayMesh:
 	return _build_ball(_MASK_RADIUS, 10, 6, _MASK_CUT_V, _MASK_Y_SCALE)
 
 
-# Faceted torus, axis local +Y like the TorusMesh it replaces (the Glove
-# node's rotated frame points that axis at the shooter). Tube loops play the
+# Faceted oval hoop, axis local +Y like the TorusMesh it replaces (the Glove
+# node's rotated frame points that axis at the shooter). The tube thickens
+# from the heel (local +Z = down) to the finger/web side (−Z = up) so the
+# hoop reads as a trapper's rim rather than a donut. Tube loops play the
 # "stations" role of the sweep contract, advancing around the main ring with
 # the first loop re-appended to close it.
 static func _build_glove_ring() -> ArrayMesh:
@@ -205,32 +224,54 @@ static func _build_glove_ring() -> ArrayMesh:
 	var loops: Array[PackedVector3Array] = []
 	for i in main_segs + 1:
 		var theta: float = TAU * float(i % main_segs) / float(main_segs)
+		# θ = 0 is local +Z (down/heel); cos(θ) = −1 at the up side.
+		var lift: float = 0.5 - 0.5 * cos(theta)
+		var tube_r: float = lerpf(_GLOVE_TUBE_MIN_R, _GLOVE_TUBE_MAX_R, lift)
+		var center := Vector3(
+				_GLOVE_RING_R * _GLOVE_RING_X_SCALE * sin(theta), 0.0,
+				_GLOVE_RING_R * _GLOVE_RING_Z_SCALE * cos(theta))
+		var radial: Vector3 = center.normalized()
 		var pts := PackedVector3Array()
 		pts.resize(tube_segs)
 		for j in tube_segs:
 			var phi: float = TAU * float(j) / float(tube_segs)
-			var arm: float = _GLOVE_RING_R + _GLOVE_TUBE_R * cos(phi)
-			pts[j] = Vector3(arm * sin(theta), _GLOVE_TUBE_R * sin(phi), arm * cos(theta))
+			pts[j] = center + radial * (tube_r * cos(phi)) + Vector3.UP * (tube_r * sin(phi))
 		loops.append(pts)
 	_sweep_loops(st, loops)
 	st.generate_normals()
 	return st.commit()
 
 
-# Shallow frustum widening toward −Y (the shooter side in the Glove frame) —
-# the pocket dish behind the rim.
+# Rounded pot behind the rim, its flat −Y cap the catch face the shooter
+# sees; the profile's front lip curls in so the rim hoop overlaps it.
 static func _build_glove_pocket() -> ArrayMesh:
-	var profile: Array[Vector2] = [
-		Vector2(0.025, 0.062),
-		Vector2(0.002, 0.094),
-		Vector2(-0.025, 0.098),
-	]
-	return _build_lathe(profile, 10, 1.0, 1.0)
-
-
-static func _build_glove_detail() -> ArrayMesh:
-	return _build_ball(_GLOVE_DETAIL_R, 8, 4, 1.0)
+	return _build_lathe(_GLOVE_POCKET_PROFILE, 10,
+			_GLOVE_RING_X_SCALE, _GLOVE_RING_Z_SCALE)
 
 
 static func _build_blocker_hand() -> ArrayMesh:
 	return _build_ball(_BLOCKER_HAND_R, 8, 4, 1.0)
+
+
+# Chamfered wrist block on the unrotated glove-origin node (parent frame:
+# Y up, Z toward the goalie's back). Nudged backward so it reads as the cuff
+# the pocket grows out of, meeting the drawn forearm at the origin.
+static func _build_glove_cuff() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see SkaterMeshBuilder doc block
+	var top: PackedVector3Array = _octagon_loop(
+			_GLOVE_CUFF_HALF_H, _GLOVE_CUFF_HALF_W * 0.94, _GLOVE_CUFF_HALF_D, 0.7, 0.5)
+	var bottom: PackedVector3Array = _octagon_loop(
+			-_GLOVE_CUFF_HALF_H, _GLOVE_CUFF_HALF_W, _GLOVE_CUFF_HALF_D, 0.7, 0.5)
+	# Shifted on the locals before nesting them — chained writes into a packed
+	# array already stored inside an Array hit copy-on-write and vanish.
+	for k in top.size():
+		top[k] += Vector3(0.0, 0.0, 0.01)
+		bottom[k] += Vector3(0.0, 0.0, 0.01)
+	var loops: Array[PackedVector3Array] = [top, bottom]
+	_sweep_loops(st, loops)
+	_loop_cap(st, loops[0], Vector3(0.0, _GLOVE_CUFF_HALF_H, 0.01), true)
+	_loop_cap(st, loops[1], Vector3(0.0, -_GLOVE_CUFF_HALF_H, 0.01), false)
+	st.generate_normals()
+	return st.commit()

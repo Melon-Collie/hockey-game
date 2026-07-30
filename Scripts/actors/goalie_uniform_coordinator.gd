@@ -93,6 +93,14 @@ func apply_uniform(colors: Dictionary) -> void:
 	_paint_mesh_h(_goalie.left_hip_connector, uniform.pants)
 	_paint_mesh_h(_goalie.right_hip_connector, uniform.pants)
 
+	# Stick — the house design's goalie colorway (#586): white composite
+	# shaft, carbon-weave paddle and blade (the carbon shader is position-
+	# keyed, so the box geometry needs no UVs). The white tape knob is
+	# geometry-side (Goalie._init_stick_knob) and never repaints.
+	_goalie.stick_shaft_mesh.material_override = StickStyle.make_goalie_shaft_material()
+	_goalie.stick_paddle_mesh.material_override = StickStyle.make_blade_material()
+	_goalie.stick_blade_mesh.material_override = StickStyle.make_blade_material()
+
 	_rebuild_text_decal()
 
 
