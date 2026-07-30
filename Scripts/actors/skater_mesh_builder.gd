@@ -180,6 +180,20 @@ const _BLADE_ICE_Z: float = 0.080 + SKATE_LIFT_M
 const SKATE_STRIPE_HEIGHT_M: float = 0.04
 const _SKATE_STRIPE_Y: float = 0.045
 const _SKATE_STRIPE_RADIUS: float = 0.092
+# Skate laces, drawn-on as geometry: thin rungs laid across the instep, each
+# (y, z) pair the rung's center on the boot's top line — z interpolated from
+# the _BOOT_STATIONS top_z at that y, so every rung seats on the surface it
+# crosses (ankle → forefoot). Fixed lace-white; not a cosmetic slot.
+const _LACE_RUNGS: Array[Vector2] = [
+	Vector2(0.070, -0.0606),
+	Vector2(0.035, -0.0693),
+	Vector2(0.000, -0.0600),
+	Vector2(-0.035, -0.0507),
+]
+const _LACE_HALF_W: float = 0.030
+const _LACE_HALF_T: float = 0.006   # rung thickness along the instep (local Y)
+const _LACE_PROUD: float = 0.005    # rise above / sink below the top surface
+const _LACE_COLOR := Color(0.88, 0.88, 0.86)
 
 # Neck: skin tube from chin to collar, a child of the Helmet node like the
 # head so it rides the same head-bulk scaling and skeleton offsets. Stations
@@ -213,6 +227,7 @@ static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
 		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side], "boot", _build_boot)
 		_ensure_blade(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
 		_ensure_skate_stripe(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side])
+		_ensure_laces(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
 
 
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
@@ -356,6 +371,21 @@ static func shared_skate_stripe() -> ArrayMesh:
 		var h: float = SKATE_STRIPE_HEIGHT_M * 0.5
 		var profile: Array[Vector2] = [Vector2(h, 1.0), Vector2(-h, 1.0)]
 		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
+
+
+# Drawn-on skate laces (see _LACE_RUNGS): one mesh of instep rungs in the
+# boot's rotated frame, shared like every other part.
+static func shared_laces() -> ArrayMesh:
+	return _shared("laces", func() -> ArrayMesh:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_smooth_group(-1)  # flat shading — see class doc block
+		for rung: Vector2 in _LACE_RUNGS:
+			_box(st,
+					Vector3(-_LACE_HALF_W, rung.x - _LACE_HALF_T, rung.y - _LACE_PROUD),
+					Vector3(_LACE_HALF_W, rung.x + _LACE_HALF_T, rung.y + _LACE_PROUD))
+		st.generate_normals()
+		return st.commit())
 
 
 static func shared_skate_blade() -> ArrayMesh:
@@ -645,6 +675,23 @@ static func _ensure_skate_stripe(lower_body: Node3D, skate_path: String) -> void
 	BodyRim.apply(mat)
 	stripe.material_override = mat
 	collar.add_child(stripe)
+
+
+# The laces are a CHILD of the boot mesh (same frame, like the blade steel),
+# in fixed lace-white — nothing repaints them.
+static func _ensure_laces(lower_body: Node3D, foot_path: String) -> void:
+	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
+	if foot == null or foot.get_node_or_null("Laces") != null:
+		return
+	var laces := MeshInstance3D.new()
+	laces.name = "Laces"
+	laces.mesh = shared_laces()
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = _LACE_COLOR
+	mat.roughness = 0.9
+	BodyRim.apply(mat)
+	laces.material_override = mat
+	foot.add_child(laces)
 
 
 # The steel is a CHILD of the foot's boot mesh with its own bright material —

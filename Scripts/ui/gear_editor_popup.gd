@@ -291,6 +291,15 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	steel.transform = Transform3D(_BOOT_ROT, skate_at)
 	_turntable.add_child(steel)
 
+	var laces := MeshInstance3D.new()
+	laces.mesh = SkaterMeshBuilder.shared_laces()
+	var laces_mat := StandardMaterial3D.new()
+	laces_mat.albedo_color = Color(0.88, 0.88, 0.86)
+	laces_mat.roughness = 0.9
+	laces.material_override = laces_mat
+	laces.transform = Transform3D(_BOOT_ROT, skate_at)
+	_turntable.add_child(laces)
+
 	_collar = MeshInstance3D.new()
 	_collar.mesh = SkaterMeshBuilder.shared_skate_collar()
 	_collar.transform = Transform3D(

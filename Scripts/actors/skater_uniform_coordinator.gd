@@ -36,6 +36,8 @@ var _head: MeshInstance3D                          # skin parts under the helmet
 var _neck: MeshInstance3D
 var _blade_steel_l: MeshInstance3D                 # steel blade children of the boots
 var _blade_steel_r: MeshInstance3D
+var _laces_l: MeshInstance3D                       # drawn-on lace rungs, boot children
+var _laces_r: MeshInstance3D
 var _shoulder_l: MeshInstance3D
 var _shoulder_r: MeshInstance3D
 var _hip_l: MeshInstance3D
@@ -110,6 +112,10 @@ func setup(skater: Skater) -> void:
 	_foot_r = skater.lower_body.get_node("LegR/ShinR/FootR") as MeshInstance3D
 	_blade_steel_l = _foot_l.get_node_or_null("Blade") as MeshInstance3D
 	_blade_steel_r = _foot_r.get_node_or_null("Blade") as MeshInstance3D
+	# Fixed lace-white from the builder, never repainted — resolved only so
+	# ghost fades reach them, like the head/neck skin.
+	_laces_l = _foot_l.get_node_or_null("Laces") as MeshInstance3D
+	_laces_r = _foot_r.get_node_or_null("Laces") as MeshInstance3D
 	_create_jersey_viewport()
 	_create_shoulder_viewport()
 
@@ -639,6 +645,7 @@ func apply_ghost(ghost: bool) -> void:
 			_skate_l, _skate_r, _foot_l, _foot_r,
 			_skate_stripe_l, _skate_stripe_r,
 			_blade_steel_l, _blade_steel_r,
+			_laces_l, _laces_r,
 			_skater.top_cuff_mesh, _skater.bot_cuff_mesh,
 		]
 	for mesh: MeshInstance3D in meshes:
