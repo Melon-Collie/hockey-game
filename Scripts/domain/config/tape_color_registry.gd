@@ -1,14 +1,16 @@
 class_name TapeColorRegistry
 extends RefCounted
 
-# Palette of stick-tape colors a player can pick from (blade wrap and butt-end
-# knob each index into it independently). Index 0 is the TEAM sentinel — it
-# resolves to the team's accent at paint time, which is also the default, so an
-# untouched player looks exactly like the pre-customization team-taped stick.
+# The shared cosmetic color palette: stick tape (blade wrap and butt-end knob),
+# skate boots, and gloves each index into it independently. Index 0 is the TEAM
+# sentinel — it resolves to a team color at paint time (the accent for tape and
+# skates, the kit's glove color for gloves), which keeps every untouched slot
+# looking exactly like the pre-customization kit.
 #
-# The palette is wire data: indices travel in the packed tape code
-# (StickTapeConfig), so entries must only ever be APPENDED — reordering or
-# removing one silently repaints every player who had picked it.
+# The palette is wire data: indices travel in the packed tape and gear-style
+# codes (StickTapeConfig, GearStyleConfig), so entries must only ever be
+# APPENDED — reordering or removing one silently repaints every player who had
+# picked it.
 
 const TEAM_INDEX: int = 0
 

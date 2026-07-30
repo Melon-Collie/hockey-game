@@ -74,4 +74,11 @@ STICK_COL_TAPE,TAPE,CINTA
 STICK_PENDING_NOTE,Unapplied stick changes,Cambios del palo sin aplicar
 PLAYER_IDENTITY_HEADING,Identity,Identidad
 PLAYER_SKIN_LABEL,Skin:,Piel:
-ATTRIBUTES_HEADING,Attributes,Atributos
+PLAYER_EQUIPMENT_HEADING,Equipment,Equipamiento
+EQUIP_STICK_LABEL,Stick:,Palo:
+GEAR_PROFILE_LABEL,Profile:,Perfil:
+GEAR_SKATES_LABEL,Skates:,Patines:
+GEAR_GLOVES_LABEL,Gloves:,Guantes:
+GEAR_PROFILE_AGILITY,Agility,Agilidad
+GEAR_PROFILE_BALANCED,Balanced,Equilibrado
+GEAR_PROFILE_POWER,Power,Potencia

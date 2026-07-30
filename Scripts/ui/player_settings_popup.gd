@@ -1,14 +1,34 @@
 class_name PlayerSettingsPopup
 extends Control
 
+# The player screen — who you are, in two columns:
+#
+#   IDENTITY  — name, number, handedness, skin tone, height, weight, team
+#   EQUIPMENT — the stick (Edit Stick workbench: gear + tape + live preview)
+#               and the gear (blade profile, skate color, glove color)
+#
+# One build per player, no presets — edits land directly on PlayerPrefs' flat
+# fields. Opened from the main menu only (the lobby has no build editor).
+#
 # Snapshot-and-commit pattern: edits buffer in _pending_* until Apply is
 # pressed. Cancel / ESC / overlay-click revert. Mirrors OptionsPanel.
+#
+# During an active online match the BUILD half (height, weight, profile, stick
+# gear) is locked — attributes replicate at join time — while cosmetics (skin,
+# tape, skate/glove color) stay live.
 
 signal name_changed(new_name: String)
 signal jersey_number_changed(new_number: int)
 signal handedness_changed(is_left: bool)
 signal preferred_color_changed(color_slot: int)
 signal attributes_changed(attrs: PlayerAttributes)
+
+# Hover tooltips. Headline effects only.
+const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the speed/agility/shot baselines.\nSmall = shiftier with quicker turns; big = longer reach & harder shot."
+const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = quicker first step, fast stamina recovery, easier to move.\nHeavy = harder hits & harder to move, deep but slow-refilling tank."
+const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
+const _PROFILE_KEYS: Array[StringName] = [
+	&"GEAR_PROFILE_AGILITY", &"GEAR_PROFILE_BALANCED", &"GEAR_PROFILE_POWER"]
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
@@ -19,15 +39,18 @@ var _left_btn: Button = null
 var _right_btn: Button = null
 var _color_dropdown: PaletteDropdown = null
 var _skin_buttons: Array[Button] = []
+var _height_slider: HSlider = null
+var _height_value_label: Label = null
+var _weight_slider: HSlider = null
+var _weight_value_label: Label = null
+var _profile_buttons: Array[Button] = []
+var _skate_color_dd: SwatchDropdown = null
+var _glove_color_dd: SwatchDropdown = null
+var _lock_label: Label = null
 var _apply_btn: Button = null
-# Attribute editing + presets live in a reusable child panel that self-manages
-# its own snapshot/restore/commit; the popup just wires its `changed` signal
-# into _update_apply_state and gates Apply on its is_dirty()/is_valid().
-var _attr_panel: AttributePickerPanel = null
 # The stick workbench (gear + tape + live preview), opened over this popup by
-# the Edit Stick button. Its Done lands in the attribute panel's pending
-# working model (the tape job is part of each build preset); this popup's
-# Apply/Cancel commit or discard it with everything else.
+# the Edit Stick button. Its Done lands in this popup's pending stick fields;
+# Apply/Cancel here commit or discard it with everything else.
 var _stick_popup: StickEditorPopup = null
 # Gold "unapplied stick changes" note beside the Edit Stick button — pending
 # stick edits are otherwise invisible until Apply.
@@ -39,8 +62,27 @@ var _pending_number: int = 0
 var _pending_is_left: bool = false
 var _pending_color_slot: int = -1
 var _pending_skin: int = SkinToneRegistry.DEFAULT_INDEX
+# The pending build in canonical order (height in, weight lbs, gear 0/2).
+var _pending_height: int = PlayerAttributes.HEIGHT_MEDIUM
+var _pending_weight: int = int(PlayerAttributes.NEUTRAL_WEIGHT_LBS)
+var _pending_profile: int = PlayerAttributes.GEAR_BALANCED
+var _pending_curve: int = PlayerAttributes.GEAR_BALANCED
+var _pending_flex: int = PlayerAttributes.GEAR_BALANCED
+var _pending_length: int = PlayerAttributes.GEAR_BALANCED
+var _pending_tape: int = StickTapeConfig.DEFAULT_CODE
+var _pending_skate_color: int = GearStyleConfig.SKATE_DEFAULT_INDEX
+var _pending_glove_color: int = TapeColorRegistry.TEAM_INDEX
 var _name_valid: bool = true
 var _number_valid: bool = true
+# Online matches lock the build (attributes replicate at join); cosmetics stay
+# editable. Latched on open().
+var _build_locked: bool = false
+# Reentrancy guard for _refresh_build(): assigning the weight slider's min/max
+# there can re-clamp its value and emit value_changed (Godot's Range
+# set_min/set_max route through set_value, which is NOT silenced by
+# set_value_no_signal). Left unguarded, that reentrant _on_weight_changed
+# clobbers the pending weight with a band-clamped value.
+var _refreshing: bool = false
 # The in-game on-screen keyboard for controller name entry (works on every
 # platform, unlike Steam's Big-Picture-only OSK). Created in _ready.
 var _keyboard: ControllerKeyboard = null
@@ -125,27 +167,24 @@ func _build() -> void:
 	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
-	# Two columns: identity (name / number / hands / team) on the left,
-	# the build (attributes + stick) on the right.
+	# Two columns: who you are on the left, what you carry on the right.
+	# Fixed column widths keep the popup from breathing as content changes.
+	# Both columns top-align so the two headings sit on the same line.
 	var columns := HBoxContainer.new()
 	columns.alignment = BoxContainer.ALIGNMENT_CENTER
 	columns.add_theme_constant_override("separation", 48)
 	vbox.add_child(columns)
 
-	# Fixed column widths keep the popup from breathing as content changes
-	# (the preset chips wrap inside the picker instead of widening it).
-	# Both columns top-align so the two headings sit on the same line.
 	var identity_col := VBoxContainer.new()
 	identity_col.add_theme_constant_override("separation", 16)
-	identity_col.custom_minimum_size = Vector2(300, 0)
+	identity_col.custom_minimum_size = Vector2(380, 0)
 	columns.add_child(identity_col)
 
-	var build_col := VBoxContainer.new()
-	build_col.add_theme_constant_override("separation", 16)
-	columns.add_child(build_col)
+	var equipment_col := VBoxContainer.new()
+	equipment_col.add_theme_constant_override("separation", 16)
+	equipment_col.custom_minimum_size = Vector2(320, 0)
+	columns.add_child(equipment_col)
 
-	# Column heading mirroring the attribute panel's own "Attributes" one, so
-	# the two sides read as siblings.
 	var identity_heading := Label.new()
 	identity_heading.text = tr(&"PLAYER_IDENTITY_HEADING")
 	identity_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -156,14 +195,29 @@ func _build() -> void:
 	_build_number_section(identity_col)
 	_build_handedness_section(identity_col)
 	_build_skin_section(identity_col)
+	_build_height_section(identity_col)
+	_build_weight_section(identity_col)
 	_build_team_section(identity_col)
-	_attr_panel = AttributePickerPanel.new()
-	_attr_panel.changed.connect(_update_apply_state)
-	build_col.add_child(_attr_panel)
-	# The panel brings its own on-screen keyboard for the preset name (this
-	# popup's is for the player name); hand it this form as the wall target.
-	_attr_panel.set_keyboard_background(self)
-	_build_stick_row(build_col)
+
+	var equipment_heading := Label.new()
+	equipment_heading.text = tr(&"PLAYER_EQUIPMENT_HEADING")
+	equipment_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	MenuStyle.apply_heading(equipment_heading, 22)
+	equipment_col.add_child(equipment_heading)
+
+	_build_stick_row(equipment_col)
+	_build_profile_section(equipment_col)
+	_build_skate_color_section(equipment_col)
+	_build_glove_color_section(equipment_col)
+
+	_lock_label = Label.new()
+	_lock_label.text = "Build locked during online play."
+	_lock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lock_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
+	_lock_label.add_theme_font_size_override("font_size", 13)
+	_lock_label.visible = false
+	equipment_col.add_child(_lock_label)
+
 	_build_action_row(vbox)
 
 	_stick_popup = StickEditorPopup.new()
@@ -173,9 +227,12 @@ func _build() -> void:
 
 func _build_stick_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
 	vbox.add_child(row)
+
+	row.add_child(_make_identity_label(tr(&"EQUIP_STICK_LABEL")))
+
 	var edit_btn := Button.new()
 	edit_btn.text = tr(&"STICK_EDIT_BUTTON")
 	edit_btn.custom_minimum_size = Vector2(180, 44)
@@ -198,17 +255,17 @@ func _build_stick_row(vbox: VBoxContainer) -> void:
 func _open_stick_editor() -> void:
 	# TEAM tape swatches resolve against the pending team pick, so the swatch
 	# previews the kit the player is about to wear.
-	var accent: Color = TeamColorRegistry.get_colors(
-			maxi(_pending_color_slot, 0), 0).primary
+	var accent: Color = _pending_team_colors().primary
 	_stick_popup.set_focus_scope(self, null)
-	_stick_popup.open(_attr_panel.get_pending_attributes(),
-			_attr_panel.get_pending_tape_code(),
-			NetworkManager.is_in_online_match(), accent)
+	_stick_popup.open(_pending_attributes(), _pending_tape, _build_locked, accent)
 
 
 func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> void:
-	_attr_panel.set_pending_stick_gear(curve, flex, length)
-	_attr_panel.set_pending_tape_code(tape_code)
+	if not _build_locked:
+		_pending_curve = curve
+		_pending_flex = flex
+		_pending_length = length
+	_pending_tape = tape_code
 	_update_apply_state()
 
 
@@ -224,13 +281,12 @@ func _add_close_row(vbox: VBoxContainer) -> void:
 	vbox.add_child(row)
 
 
-# Identity rows share a fixed right-aligned label gutter so the fields line
-# up down the column (centered rows made each field start wherever its label
-# ended).
+# Rows share a fixed right-aligned label gutter so the fields line up down
+# each column (centered rows made each field start wherever its label ended).
 const _IDENTITY_LABEL_W: float = 92.0
 
 
-func _make_identity_label(text: String) -> Label:
+func _make_identity_label(text: String, tooltip: String = "") -> Label:
 	var label := Label.new()
 	label.text = text
 	label.custom_minimum_size = Vector2(_IDENTITY_LABEL_W, 0)
@@ -238,6 +294,9 @@ func _make_identity_label(text: String) -> Label:
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	if not tooltip.is_empty():
+		label.mouse_filter = Control.MOUSE_FILTER_STOP
+		label.tooltip_text = tooltip
 	return label
 
 
@@ -424,6 +483,144 @@ func _select_skin(index: int) -> void:
 	_update_apply_state()
 
 
+func _build_height_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	row.add_child(_make_identity_label("Height:", _HEIGHT_TOOLTIP))
+
+	_height_slider = HSlider.new()
+	_height_slider.min_value = PlayerAttributes.HEIGHT_MIN
+	_height_slider.max_value = PlayerAttributes.HEIGHT_MAX
+	_height_slider.step = 1
+	_height_slider.custom_minimum_size = Vector2(200, 36)
+	_height_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_height_slider.set_value_no_signal(PlayerAttributes.HEIGHT_MEDIUM)
+	_height_slider.tooltip_text = _HEIGHT_TOOLTIP
+	_height_slider.value_changed.connect(_on_height_changed)
+	row.add_child(_height_slider)
+
+	_height_value_label = Label.new()
+	_height_value_label.custom_minimum_size = Vector2(60, 0)
+	_height_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_height_value_label.add_theme_font_size_override("font_size", 18)
+	_height_value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	_height_value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_height_value_label)
+
+
+func _build_weight_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	row.add_child(_make_identity_label("Weight:", _WEIGHT_TOOLTIP))
+
+	_weight_slider = HSlider.new()
+	_weight_slider.step = 1
+	_weight_slider.custom_minimum_size = Vector2(200, 36)
+	_weight_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_weight_slider.tooltip_text = _WEIGHT_TOOLTIP
+	_weight_slider.value_changed.connect(_on_weight_changed)
+	row.add_child(_weight_slider)
+
+	_weight_value_label = Label.new()
+	_weight_value_label.custom_minimum_size = Vector2(60, 0)
+	_weight_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_weight_value_label.add_theme_font_size_override("font_size", 18)
+	_weight_value_label.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
+	_weight_value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_weight_value_label)
+
+
+func _on_height_changed(value: float) -> void:
+	if _refreshing or _build_locked:
+		return
+	# Preserve the FRAME across the height change: ride frame-t, not raw BMI —
+	# the band's lean half is truncated by the absolute playable-mass floor at
+	# the short heights, so carrying the frame position is what keeps a lean
+	# build lean (and pins a neutral build to neutral) across the whole range.
+	var frame: float = PlayerAttributes.frame_t_for(_pending_height, _pending_weight)
+	_pending_height = int(value)
+	_pending_weight = PlayerAttributes.weight_for_frame_t(_pending_height, frame)
+	_refresh_build()
+	_update_apply_state()
+
+
+func _on_weight_changed(value: float) -> void:
+	if _refreshing or _build_locked:
+		return
+	_pending_weight = PlayerAttributes.coerce_weight(_pending_height, int(value))
+	_refresh_build()
+	_update_apply_state()
+
+
+func _build_profile_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	row.add_child(_make_identity_label(tr(&"GEAR_PROFILE_LABEL"), _PROFILE_TOOLTIP))
+
+	_profile_buttons.clear()
+	for i: int in _PROFILE_KEYS.size():
+		var btn := Button.new()
+		btn.text = tr(_PROFILE_KEYS[i])
+		btn.custom_minimum_size = Vector2(92, 40)
+		btn.add_theme_font_size_override("font_size", 15)
+		btn.tooltip_text = _PROFILE_TOOLTIP
+		SoundManager.wire_button(btn)
+		var option: int = i
+		btn.pressed.connect(func() -> void: _on_profile_pressed(option))
+		row.add_child(btn)
+		_profile_buttons.append(btn)
+	# Controller: keep D-pad left/right cycling WITHIN the segmented row (wrap at
+	# the ends) instead of escaping sideways. Up/down still move between rows.
+	if ControllerNav.active() and _profile_buttons.size() > 1:
+		var n: int = _profile_buttons.size()
+		for i: int in n:
+			_profile_buttons[i].focus_neighbor_left = _profile_buttons[(i - 1 + n) % n].get_path()
+			_profile_buttons[i].focus_neighbor_right = _profile_buttons[(i + 1) % n].get_path()
+
+
+func _on_profile_pressed(option: int) -> void:
+	if _build_locked or _pending_profile == option:
+		return
+	_pending_profile = option
+	_refresh_build()
+	_update_apply_state()
+
+
+func _build_skate_color_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+	row.add_child(_make_identity_label(tr(&"GEAR_SKATES_LABEL")))
+	_skate_color_dd = SwatchDropdown.new(Vector2(180, 40))
+	_skate_color_dd.selected.connect(func(index: int) -> void:
+		_pending_skate_color = index
+		_update_apply_state())
+	row.add_child(_skate_color_dd)
+
+
+func _build_glove_color_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+	row.add_child(_make_identity_label(tr(&"GEAR_GLOVES_LABEL")))
+	_glove_color_dd = SwatchDropdown.new(Vector2(180, 40))
+	_glove_color_dd.selected.connect(func(index: int) -> void:
+		_pending_glove_color = index
+		_update_apply_state())
+	row.add_child(_glove_color_dd)
+
+
 func _build_team_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -440,6 +637,8 @@ func _build_team_section(vbox: VBoxContainer) -> void:
 
 	_color_dropdown.selected.connect(func(slot: int) -> void:
 		_pending_color_slot = slot
+		# TEAM chips in the gear palettes track the pending kit.
+		_refresh_gear_palettes()
 		_update_apply_state())
 
 
@@ -466,23 +665,54 @@ func _build_action_row(vbox: VBoxContainer) -> void:
 	row.add_child(cancel_btn)
 
 
+# The pending build as a coerced PlayerAttributes (what the stick editor
+# previews — its stick gear rides real height, so it needs the body too).
+func _pending_attributes() -> PlayerAttributes:
+	return PlayerAttributes.new(_pending_height, _pending_weight, _pending_profile,
+			_pending_curve, _pending_flex, _pending_length)
+
+
+func _pending_team_colors() -> Dictionary:
+	return TeamColorRegistry.get_colors(maxi(_pending_color_slot, 0), 0)
+
+
+func _pending_gear_code() -> int:
+	return GearStyleConfig.new(_pending_skate_color, _pending_glove_color).to_code()
+
+
+# Whether the stick the player would get on Apply differs from the one the rink
+# is showing — pending stick edits are otherwise invisible behind the button.
+func _is_stick_dirty() -> bool:
+	return _pending_curve != int(_snapshot.get("curve", 0)) \
+			or _pending_flex != int(_snapshot.get("flex", 0)) \
+			or _pending_length != int(_snapshot.get("length", 0)) \
+			or _pending_tape != int(_snapshot.get("tape", 0))
+
+
+func _is_build_dirty() -> bool:
+	return _pending_height != int(_snapshot.get("height", 0)) \
+			or _pending_weight != int(_snapshot.get("weight", 0)) \
+			or _pending_profile != int(_snapshot.get("profile", 0)) \
+			or _pending_curve != int(_snapshot.get("curve", 0)) \
+			or _pending_flex != int(_snapshot.get("flex", 0)) \
+			or _pending_length != int(_snapshot.get("length", 0))
+
+
 # Apply is disabled when (a) nothing changed, or (b) any field is invalid.
 func _update_apply_state() -> void:
 	if _apply_btn == null:
 		return
-	var attrs_dirty: bool = _attr_panel != null and _attr_panel.is_dirty()
 	var changed: bool = (_pending_name != _snapshot.get("name", "")
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
 		or _pending_color_slot != _snapshot.get("color_slot", -1)
 		or _pending_skin != int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX))
-		or attrs_dirty)
-	# The picker panel owns attribute validity (full budget on any touched build);
-	# name/number/etc. can apply on their own.
-	var attrs_ok: bool = _attr_panel == null or _attr_panel.is_valid()
-	_apply_btn.disabled = not changed or not _name_valid or not _number_valid or not attrs_ok
-	if _stick_pending_label != null and _attr_panel != null:
-		_stick_pending_label.visible = _attr_panel.is_stick_dirty()
+		or _pending_tape != int(_snapshot.get("tape", StickTapeConfig.DEFAULT_CODE))
+		or _pending_gear_code() != int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE))
+		or _is_build_dirty())
+	_apply_btn.disabled = not changed or not _name_valid or not _number_valid
+	if _stick_pending_label != null:
+		_stick_pending_label.visible = _is_stick_dirty()
 
 
 func _apply() -> void:
@@ -517,22 +747,23 @@ func _apply() -> void:
 		# the home team's actors and re-roll away if the new home collides.
 		NetworkManager.apply_preferred_color(_pending_color_slot)
 		preferred_color_changed.emit(_pending_color_slot)
-	if _attr_panel != null and _attr_panel.is_dirty():
-		var old_tape: int = PlayerPrefs.stick_tape_code
-		# commit() writes the working presets + active index back into PlayerPrefs
-		# (which syncs the flat build AND the flat tape mirror — the tape job
-		# rides each preset) and returns the active PlayerAttributes.
-		var new_attrs: PlayerAttributes = _attr_panel.commit()
+	if _is_build_dirty() and not _build_locked:
+		var new_attrs: PlayerAttributes = _pending_attributes()
+		PlayerPrefs.set_player_attributes(new_attrs)
 		# Update NetworkManager._peer_attributes[1] so the next spawn picks
 		# the new values up. The emitted signal also re-applies the multipliers
 		# to the live local skater when allowed (offline / free-play only —
 		# GameManager's handler is the gate).
 		NetworkManager.apply_local_attributes(new_attrs)
 		attributes_changed.emit(new_attrs)
-		# Tape can change through a stick edit OR just by switching presets;
-		# the committed flat mirror is the single truth for both.
-		if PlayerPrefs.stick_tape_code != old_tape:
-			NetworkManager.apply_local_tape(PlayerPrefs.stick_tape_code)
+	if _pending_tape != int(_snapshot.get("tape", StickTapeConfig.DEFAULT_CODE)):
+		PlayerPrefs.stick_tape_code = _pending_tape
+		NetworkManager.apply_local_tape(_pending_tape)
+	var gear_code: int = _pending_gear_code()
+	if gear_code != int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE)):
+		PlayerPrefs.gear_style_code = gear_code
+		# Same live-cosmetic path as tape and skin.
+		NetworkManager.apply_local_gear_style(gear_code)
 	PlayerPrefs.save()
 	visible = false
 
@@ -540,8 +771,6 @@ func _apply() -> void:
 # Cancel restores form controls to snapshot values so re-opening shows the
 # saved state, not the abandoned edits.
 func _cancel() -> void:
-	if _attr_panel != null:
-		_attr_panel.restore()
 	_restore_from_snapshot()
 	visible = false
 
@@ -552,6 +781,17 @@ func _restore_from_snapshot() -> void:
 	_pending_is_left = _snapshot.get("is_left", false)
 	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
 	_select_skin(int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX)))
+	_pending_height = int(_snapshot.get("height", PlayerAttributes.HEIGHT_MEDIUM))
+	_pending_weight = int(_snapshot.get("weight", int(PlayerAttributes.NEUTRAL_WEIGHT_LBS)))
+	_pending_profile = int(_snapshot.get("profile", PlayerAttributes.GEAR_BALANCED))
+	_pending_curve = int(_snapshot.get("curve", PlayerAttributes.GEAR_BALANCED))
+	_pending_flex = int(_snapshot.get("flex", PlayerAttributes.GEAR_BALANCED))
+	_pending_length = int(_snapshot.get("length", PlayerAttributes.GEAR_BALANCED))
+	_pending_tape = int(_snapshot.get("tape", StickTapeConfig.DEFAULT_CODE))
+	var gear := GearStyleConfig.from_code(
+			int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE)))
+	_pending_skate_color = gear.skate_color
+	_pending_glove_color = gear.glove_color
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
@@ -562,7 +802,58 @@ func _restore_from_snapshot() -> void:
 	_number_warning.visible = false
 	_name_valid = true
 	_number_valid = true
+	_refresh_gear_palettes()
+	_refresh_build()
 	_update_apply_state()
+
+
+# Refresh the build controls (sliders, value labels, profile row) from the
+# pending build, and apply the online-match lock.
+func _refresh_build() -> void:
+	if _height_slider == null:
+		return
+	# Guard the whole pass: assigning the weight slider's bounds below can emit
+	# a reentrant value_changed that would clobber the pending weight.
+	_refreshing = true
+	_height_slider.set_value_no_signal(_pending_height)
+	_height_slider.editable = not _build_locked
+	_height_value_label.text = PlayerAttributes.inches_label(_pending_height)
+	# Bounds first, then the value — setting a value outside the slider's
+	# current range would clamp it before the new bounds land.
+	_weight_slider.min_value = PlayerAttributes.weight_min(_pending_height)
+	_weight_slider.max_value = PlayerAttributes.weight_max(_pending_height)
+	_weight_slider.set_value_no_signal(_pending_weight)
+	_weight_slider.editable = not _build_locked
+	_weight_value_label.text = "%d lbs" % _pending_weight
+	for i: int in _profile_buttons.size():
+		MenuStyle.apply_tab_button(_profile_buttons[i], i == _pending_profile)
+		_profile_buttons[i].disabled = _build_locked and i != _pending_profile
+	if _lock_label != null:
+		_lock_label.visible = _build_locked
+	_refreshing = false
+
+
+# (Re)supply the gear color palettes so the TEAM chips resolve against the
+# pending team pick: skates' TEAM entry shows the accent, gloves' the kit's
+# glove color — matching what the rink would paint after Apply.
+func _refresh_gear_palettes() -> void:
+	if _skate_color_dd == null:
+		return
+	var team_colors: Dictionary = _pending_team_colors()
+	var skate_colors: Array[Color] = []
+	var glove_colors: Array[Color] = []
+	var names: Array[String] = []
+	var chip_labels: Array[String] = []
+	for i: int in TapeColorRegistry.count():
+		skate_colors.append(TapeColorRegistry.resolve(i, team_colors.primary))
+		glove_colors.append(TapeColorRegistry.resolve(i, team_colors.gloves))
+		names.append(tr(TapeColorRegistry.NAME_KEYS[i]))
+		chip_labels.append(tr(&"TAPE_COLOR_TEAM_SHORT")
+				if i == TapeColorRegistry.TEAM_INDEX else "")
+	_skate_color_dd.set_palette(skate_colors, names, chip_labels)
+	_skate_color_dd.set_selected(_pending_skate_color)
+	_glove_color_dd.set_palette(glove_colors, names, chip_labels)
+	_glove_color_dd.set_selected(_pending_glove_color)
 
 
 func _on_overlay_clicked(event: InputEvent) -> void:
@@ -574,16 +865,22 @@ func open() -> void:
 	var saved_slot: int = PlayerPrefs.preferred_color_slot
 	if saved_slot < 0:
 		saved_slot = TeamColorRegistry.DEFAULT_HOME_SLOT
+	_build_locked = NetworkManager.is_in_online_match()
 	_snapshot = {
 		"name": PlayerPrefs.player_name,
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
 		"color_slot": saved_slot,
 		"skin": SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone),
+		"height": PlayerPrefs.attr_height,
+		"weight": PlayerPrefs.attr_weight,
+		"profile": PlayerPrefs.attr_profile,
+		"curve": PlayerPrefs.attr_curve,
+		"flex": PlayerPrefs.attr_flex,
+		"length": PlayerPrefs.attr_length,
+		"tape": PlayerPrefs.stick_tape_code,
+		"gear": GearStyleConfig.from_code(PlayerPrefs.gear_style_code).to_code(),
 	}
-	if _attr_panel != null:
-		_attr_panel.set_locked(NetworkManager.is_in_online_match())
-		_attr_panel.snapshot()
 	_restore_from_snapshot()
 	visible = true
 	ControllerNav.focus_first(self)  # controller: take focus off the Side Menu behind

@@ -68,6 +68,9 @@ var _text_outline_color: Color = Color.BLACK
 # Team accent (colors.primary) from the last apply_uniform — what TEAM-palette
 # tape picks resolve to, cached so a live tape change repaints without one.
 var _team_accent: Color = Color.WHITE
+# Kit glove color (uniform.gloves) from the last apply_uniform — what a TEAM
+# glove pick resolves to, cached for the same live-repaint reason.
+var _kit_gloves: Color = Color.BLACK
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
 var _shoulder_viewport: SubViewport
@@ -221,13 +224,16 @@ func apply_uniform(colors: Dictionary) -> void:
 	# Butt-end knob — recreated here so the tape color tracks the kit.
 	_rebuild_stick_knob()
 
-	# Gloves (hand spheres + cuffs, single solid color).
-	var gloves_mat: StandardMaterial3D = _make_solid_mat(uniform.gloves)
+	# Gloves (hand spheres + cuffs, single solid color). The player's gear
+	# style picks the color; TEAM resolves to the kit's glove color.
+	_kit_gloves = uniform.gloves
+	var gloves_color: Color = _resolve_glove_color()
+	var gloves_mat: StandardMaterial3D = _make_solid_mat(gloves_color)
 	if _skater.top_hand_sphere != null:
 		_skater.top_hand_sphere.material_override = gloves_mat.duplicate()
 	if _skater.bottom_hand_sphere != null:
 		_skater.bottom_hand_sphere.material_override = gloves_mat.duplicate()
-	_rebuild_glove_cuffs(uniform.gloves)
+	_rebuild_glove_cuffs(gloves_color)
 
 	# Arms — upper + lower bone cylinders, each painted with horizontal
 	# stripes (or solid if the stripes array is empty).
@@ -262,9 +268,10 @@ func apply_uniform(colors: Dictionary) -> void:
 	_sock_l.material_override = sock_mat
 	_sock_r.material_override = sock_mat.duplicate()
 
-	# Skates — fixed dark, set explicitly so ghost mode never leaves a blank
-	# gray override behind.
-	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08), _ROUGH_SKATE)
+	# Skates — the gear style's boot color (BLACK by default, TEAM resolves
+	# to the accent). Set explicitly so ghost mode never leaves a blank gray
+	# override behind.
+	var skate_mat: StandardMaterial3D = _make_solid_mat(_resolve_skate_color(), _ROUGH_SKATE)
 	_skate_l.material_override = skate_mat.duplicate()
 	_skate_r.material_override = skate_mat.duplicate()
 	_foot_l.material_override = skate_mat.duplicate()
@@ -498,6 +505,35 @@ func _rebuild_blade() -> void:
 			TapeColorRegistry.resolve(_skater.tape_config.blade_color, _team_accent),
 			_ROUGH_CLOTH)
 	_blade_mesh.add_child(_blade_tape)
+
+
+func _resolve_glove_color() -> Color:
+	if _skater.gear_style.glove_color == TapeColorRegistry.TEAM_INDEX:
+		return _kit_gloves
+	return TapeColorRegistry.resolve(_skater.gear_style.glove_color, _kit_gloves)
+
+
+func _resolve_skate_color() -> Color:
+	return TapeColorRegistry.resolve(_skater.gear_style.skate_color, _team_accent)
+
+
+# Repaints the gear-style parts (hand spheres, glove cuffs, skate cuffs +
+# boots — the steel stays steel) for a live gear-color change without touching
+# the rest of the uniform. Same live-cosmetic contract as refresh_tape below.
+func refresh_gear_style() -> void:
+	var gloves_color: Color = _resolve_glove_color()
+	var gloves_mat: StandardMaterial3D = _make_solid_mat(gloves_color)
+	if _skater.top_hand_sphere != null:
+		_skater.top_hand_sphere.material_override = gloves_mat.duplicate()
+	if _skater.bottom_hand_sphere != null:
+		_skater.bottom_hand_sphere.material_override = gloves_mat.duplicate()
+	_rebuild_glove_cuffs(gloves_color)
+	var skate_mat: StandardMaterial3D = _make_solid_mat(_resolve_skate_color(), _ROUGH_SKATE)
+	if _skate_l != null:
+		_skate_l.material_override = skate_mat.duplicate()
+		_skate_r.material_override = skate_mat.duplicate()
+		_foot_l.material_override = skate_mat.duplicate()
+		_foot_r.material_override = skate_mat.duplicate()
 
 
 # Re-renders the tape-colored pieces (blade wrap, knob, handle-wrap paint) for

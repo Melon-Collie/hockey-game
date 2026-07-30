@@ -101,6 +101,10 @@ var reception_ceiling_mult: float = 1.0
 # uniform is applied; SkaterUniformCoordinator resolves the palette picks
 # against the team accent when it paints. Never null after _init.
 var tape_config: StickTapeConfig = StickTapeConfig.new()
+# The player's gear cosmetics (skate + glove color) — same contract as
+# tape_config: set from the replicated per-peer code before the uniform is
+# applied, resolved against the kit by the uniform coordinator. Never null.
+var gear_style: GearStyleConfig = GearStyleConfig.new()
 @export var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
@@ -1146,6 +1150,16 @@ func set_tape_config(config: StickTapeConfig) -> void:
 	tape_config = config
 	if _uniform != null:
 		_uniform.refresh_tape()
+
+
+# Installs a new gear look (skate + glove color) and repaints the affected
+# parts. Same live-cosmetic contract as set_tape_config.
+func set_gear_style(config: GearStyleConfig) -> void:
+	if config == null:
+		return
+	gear_style = config
+	if _uniform != null:
+		_uniform.refresh_gear_style()
 
 
 # The uniform pass installs a fresh shaft ShaderMaterial (uniform apply,

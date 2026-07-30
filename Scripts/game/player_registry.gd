@@ -160,10 +160,12 @@ func spawn(
 	spawned.skater.set_skater_collision_provider(skaters)
 	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(player_name)
-	# Tape before uniform: the uniform paint resolves the tape job's palette
-	# picks, so it must find the replicated config already installed.
+	# Tape and gear style before uniform: the uniform paint resolves their
+	# palette picks, so it must find the replicated configs already installed.
 	record.tape_code = NetworkManager.get_peer_tape_code(peer_id)
 	spawned.skater.set_tape_config(StickTapeConfig.from_code(record.tape_code))
+	record.gear_style_code = NetworkManager.get_peer_gear_style(peer_id)
+	spawned.skater.set_gear_style(GearStyleConfig.from_code(record.gear_style_code))
 	record.skin_tone = NetworkManager.get_peer_skin_tone(peer_id)
 	spawned.skater.set_skin_tone(record.skin_tone)
 	spawned.skater.set_uniform(colors)

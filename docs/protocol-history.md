@@ -203,3 +203,10 @@ here whenever you bump, in the same format.
 #      receive_shot_events ships host->client at game-over. A v46 client size-
 #      checks each record in from_array and would silently drop every one,
 #      rendering an empty post-game shot map. Mixed builds must be refused.
+# v48: player-owned tape jobs — request_join / spawn_remote_skater and the
+#      sync_existing_players entries carry a packed StickTapeConfig code
+#      (blade tape color + coverage, knob color, handle style).
+# v49: skin tone as identity — the same three payloads grow a SkinToneRegistry
+#      index next to the tape code.
+# v50: gear cosmetics — the same three payloads grow a packed GearStyleConfig
+#      code (skate boot color + glove color, TapeColorRegistry indices).
