@@ -127,6 +127,18 @@ const _SHOULDER_PROFILE: Array[Vector3] = [
 const _HIP_RADIUS: float = 0.13
 const _KNEE_RADIUS: float = 0.095
 
+# Gloved fist: a beveled cube, slightly wider than deep and chamfered all
+# around, swept along local Y — Skater._update_hand_glove aligns that axis
+# with the forearm so the block's faces track the arm instead of sitting
+# world-aligned. UNIT-scale like the other arm-rig meshes: node scale =
+# hand_sphere_radius sizes it (stations are y, half_w, half_d multiples).
+const _GLOVE_FIST_STATIONS: Array[Vector3] = [
+	Vector3(0.95, 0.80, 0.74),    # wrist-side bevel (tucks under the cuff)
+	Vector3(0.55, 1.05, 0.95),
+	Vector3(-0.55, 1.05, 0.95),
+	Vector3(-0.95, 0.80, 0.74),   # finger-side bevel
+]
+
 # Arm-rig fixed dimensions. The cuff/knob heights are placement inputs on the
 # skater side (_update_cuff_transform / _update_stick_knob offset along the
 # bone by half the height), so they live here with the geometry they measure.
@@ -237,10 +249,29 @@ static func shared_arm_bone() -> ArrayMesh:
 		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
 
 
-# Elbow/hand ball, unit radius.
+# Elbow ball, unit radius.
 static func shared_joint_ball() -> ArrayMesh:
 	return _shared("joint_ball", func() -> ArrayMesh:
 		return _build_ball(1.0, 8, 4, 1.0))
+
+
+# Gloved fist (see _GLOVE_FIST_STATIONS).
+static func shared_glove_fist() -> ArrayMesh:
+	return _shared("glove_fist", func() -> ArrayMesh:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_smooth_group(-1)  # flat shading — see class doc block
+		var loops: Array[PackedVector3Array] = []
+		for s: Vector3 in _GLOVE_FIST_STATIONS:
+			loops.append(_octagon_loop(s.x, s.y, s.z, 0.6, 0.55))
+		_sweep_loops(st, loops)
+		_loop_cap(st, loops[0],
+				Vector3(0.0, _GLOVE_FIST_STATIONS[0].x, 0.0), true)
+		_loop_cap(st, loops[loops.size() - 1],
+				Vector3(0.0, _GLOVE_FIST_STATIONS[_GLOVE_FIST_STATIONS.size() - 1].x, 0.0),
+				false)
+		st.generate_normals()
+		return st.commit())
 
 
 # Glove cuff ring: unit radius, CUFF_HEIGHT_M tall (real height baked — the
@@ -586,6 +617,27 @@ static func _sweep_loops(st: SurfaceTool, loops: Array[PackedVector3Array]) -> v
 					loops[i][k1], Vector2(0.1, 0.0),
 					loops[i + 1][k1], Vector2(0.1, 0.1),
 					loops[i + 1][k], Vector2(0.0, 0.1))
+
+
+# Chamfered-rectangle cross-section, CCW seen from +Y (the sweep-loop
+# contract). face_frac is the flat front/back segment's half-width as a
+# fraction of hw; side_frac the flat side segment's half-depth as a fraction
+# of hd.
+static func _octagon_loop(y: float, hw: float, hd: float,
+		face_frac: float, side_frac: float) -> PackedVector3Array:
+	var fx: float = hw * face_frac
+	var sz: float = hd * side_frac
+	var pts := PackedVector3Array()
+	pts.resize(8)
+	pts[0] = Vector3(-fx, y, -hd)
+	pts[1] = Vector3(-hw, y, -sz)
+	pts[2] = Vector3(-hw, y, sz)
+	pts[3] = Vector3(-fx, y, hd)
+	pts[4] = Vector3(fx, y, hd)
+	pts[5] = Vector3(hw, y, sz)
+	pts[6] = Vector3(hw, y, -sz)
+	pts[7] = Vector3(fx, y, -hd)
+	return pts
 
 
 # Fan cap over a closed loop. facing_start caps the sweep's start side

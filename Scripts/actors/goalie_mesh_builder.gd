@@ -195,26 +195,6 @@ static func _build_blocker() -> ArrayMesh:
 	return st.commit()
 
 
-# Chamfered-rectangle cross-section, CCW seen from +Y. face_frac is the flat
-# front/back segment's half-width as a fraction of hw; side_frac the flat
-# side segment's half-depth as a fraction of hd.
-static func _octagon_loop(y: float, hw: float, hd: float,
-		face_frac: float, side_frac: float) -> PackedVector3Array:
-	var fx: float = hw * face_frac
-	var sz: float = hd * side_frac
-	var pts := PackedVector3Array()
-	pts.resize(8)
-	pts[0] = Vector3(-fx, y, -hd)
-	pts[1] = Vector3(-hw, y, -sz)
-	pts[2] = Vector3(-hw, y, sz)
-	pts[3] = Vector3(-fx, y, hd)
-	pts[4] = Vector3(fx, y, hd)
-	pts[5] = Vector3(hw, y, sz)
-	pts[6] = Vector3(hw, y, -sz)
-	pts[7] = Vector3(fx, y, -hd)
-	return pts
-
-
 static func _build_mask() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)

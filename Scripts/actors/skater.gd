@@ -267,7 +267,8 @@ var forearm_mesh: Node3D = null
 var bottom_upper_arm_mesh: Node3D = null
 var bottom_forearm_mesh: Node3D = null
 
-# Joint spheres positioned per-tick at the IK elbow / hand points.
+# Joint meshes positioned per-tick at the IK elbow / hand points — elbow-pad
+# balls, and beveled-cube gloved fists aligned to the forearm.
 var top_elbow_sphere: MeshInstance3D = null
 var top_hand_sphere: MeshInstance3D = null
 var bottom_elbow_sphere: MeshInstance3D = null
@@ -660,9 +661,9 @@ func _ready() -> void:
 	bottom_forearm_mesh = _resolve_or_create_bone_mesh("BottomForearmMesh")
 
 	top_elbow_sphere = _resolve_or_create_joint_sphere("TopElbowSphere", elbow_sphere_radius)
-	top_hand_sphere = _resolve_or_create_joint_sphere("TopHandSphere", hand_sphere_radius)
+	top_hand_sphere = _resolve_or_create_hand_glove("TopHandSphere", hand_sphere_radius)
 	bottom_elbow_sphere = _resolve_or_create_joint_sphere("BottomElbowSphere", elbow_sphere_radius)
-	bottom_hand_sphere = _resolve_or_create_joint_sphere("BottomHandSphere", hand_sphere_radius)
+	bottom_hand_sphere = _resolve_or_create_hand_glove("BottomHandSphere", hand_sphere_radius)
 
 	_uniform = SkaterUniformCoordinator.new()
 	_uniform.setup(self)
@@ -1833,7 +1834,7 @@ func update_arm_mesh() -> void:
 	_update_bone_mesh(forearm_mesh, elbow_w, hand_w)
 	_update_cuff_transform(top_cuff_mesh, elbow_w, hand_w)
 	_update_joint_sphere(top_elbow_sphere, elbow_w)
-	_update_joint_sphere(top_hand_sphere, hand_w)
+	_update_hand_glove(top_hand_sphere, elbow_w, hand_w)
 	_orient_shoulder_cap(shoulder.position, elbow_w)
 
 
@@ -1850,7 +1851,7 @@ func update_bottom_arm_mesh() -> void:
 	_update_bone_mesh(bottom_forearm_mesh, elbow_w, hand_w)
 	_update_cuff_transform(bot_cuff_mesh, elbow_w, hand_w)
 	_update_joint_sphere(bottom_elbow_sphere, elbow_w)
-	_update_joint_sphere(bottom_hand_sphere, hand_w)
+	_update_hand_glove(bottom_hand_sphere, elbow_w, hand_w)
 	_orient_shoulder_cap(bottom_shoulder.position, elbow_w)
 
 
@@ -1870,6 +1871,22 @@ func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
 	if sphere == null:
 		return
 	sphere.position = upper_body.to_local(world_pos)
+
+
+# Positions the gloved fist at the hand and aligns its long (local Y) axis
+# with the forearm so the beveled cube's faces track the arm — same
+# quaternion composition as the cuff (quaternion writes preserve the node
+# scale the sizing seams own).
+func _update_hand_glove(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vector3) -> void:
+	if mesh == null:
+		return
+	mesh.position = upper_body.to_local(hand_w)
+	var dir: Vector3 = hand_w - elbow_w
+	if dir.length_squared() < 0.0001:
+		return
+	var dir_l: Vector3 = (upper_body.global_transform.basis.inverse() * dir).normalized()
+	mesh.quaternion = (Basis.looking_at(dir_l, _up_for_look_at(dir_l))
+			* Basis(Vector3.RIGHT, PI * 0.5)).get_rotation_quaternion()
 
 
 # Fraction of the way the cap's pole leans from its rest hang toward the live
@@ -1995,6 +2012,21 @@ func _resolve_or_create_joint_sphere(node_name: String, radius: float) -> MeshIn
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = node_name
 	mesh_instance.mesh = SkaterMeshBuilder.shared_joint_ball()
+	mesh_instance.scale = Vector3.ONE * radius
+	upper_body.add_child(mesh_instance)
+	return mesh_instance
+
+
+# Gloved fists: the shared beveled-cube glove mesh under the same uniform
+# node-scale contract as the joint balls (node names kept — the painter and
+# appearance seams resolve these by name).
+func _resolve_or_create_hand_glove(node_name: String, radius: float) -> MeshInstance3D:
+	var existing: MeshInstance3D = upper_body.get_node_or_null(node_name) as MeshInstance3D
+	if existing != null:
+		return existing
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = node_name
+	mesh_instance.mesh = SkaterMeshBuilder.shared_glove_fist()
 	mesh_instance.scale = Vector3.ONE * radius
 	upper_body.add_child(mesh_instance)
 	return mesh_instance
