@@ -2745,6 +2745,14 @@ func test_behind_net_clear_is_a_real_play_under_a_committed_forecheck() -> void:
 	# boards route out of the corner but FIRED at the chord, which threads the
 	# middle of our own zone. Searching releases removes the split — the priced
 	# path is the flown path — so what is left to assert is the verdict.
+	#
+	# At PUCK_BOARD_FRICTION 0.25 the corner bank bleeds a wall-hugging rim
+	# dead, so the near-free same-wall clear to the posted winger (value ~0 at
+	# the old 0.15) no longer exists from back here — the search rims the far
+	# wall instead and pays a real recovery-race concession. The bound below
+	# keeps the doctrine's teeth at the new price: the clear must stay a BOUNDED
+	# concession that leaves our end alive, never a surrender in front of our
+	# own net.
 	var self_pos := Vector3(2.0, 0, 28.2)
 	var ctx := _make_ctx(self_pos, [
 			[1, TEAM_ID, self_pos],
@@ -2758,10 +2766,10 @@ func test_behind_net_clear_is_a_real_play_under_a_committed_forecheck() -> void:
 	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
 	gut.p("  behind-net clear settles at %s, value %.4f" % [r[4], r[0]])
 	# A clear is priced as a concession, so its value is <= 0 by construction;
-	# what doctrine demands here is that it is a CHEAP one — the puck leaves our
-	# end alive rather than being surrendered in front of our own net.
-	assert_gt(r[0], -0.1,
-			"the clear is a cheap concession under a committed forecheck")
+	# what doctrine demands here is that it stays affordable — the puck leaves
+	# our end alive rather than being surrendered in front of our own net.
+	assert_gt(r[0], -0.45,
+			"the clear is an affordable concession under a committed forecheck")
 	assert_false(
 			AIActionScoring.in_offensive_zone(r[4], ctx.defending_goal_pos),
 			"and it actually leaves our zone")

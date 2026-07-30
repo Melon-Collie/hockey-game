@@ -346,8 +346,8 @@ const PUCK_BOARD_BOUNCE: float = 0.4
 # rim-around from circling the rink forever (ice friction alone is far too weak to kill it).
 # Under the analytic puck sim this is applied in AITrajectory; Jolt applied it as contact
 # friction. Godot's friction combine is min(a, b) and the puck's side is 1.0, so the effective
-# value is min(1.0, 0.15) = 0.15 — matching this const.
-const PUCK_BOARD_FRICTION: float = 0.15
+# value is min(1.0, 0.25) = 0.25 — matching this const.
+const PUCK_BOARD_FRICTION: float = 0.25
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
 # the stoppage feels responsive, long enough that a transient penetration spike
 # (a slapshot buried into the boards for a tick or two before Jolt's recovery
