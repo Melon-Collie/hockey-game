@@ -1905,15 +1905,20 @@ func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vect
 	var bone_dir_n: Vector3 = bone_dir / bone_len
 	# Glove cuff ring: its forward end sits at the hand and it extends back
 	# toward the elbow by its mesh height (no overlap past the hand). The
-	# ring's long axis is local Y; look_at sets -Z = -bone_dir_n (toward
-	# elbow), and rotate_object_local(X, +90°) then maps the new local Y to
-	# that elbow direction — so the ring stretches along the bone from hand
-	# to hand - bone_dir_n * cuff_height.
+	# ring's long axis is local Y: looking_at puts -Z on the bone, and the
+	# post-multiplied X(+90°) twist maps local Y onto it. The rotation is
+	# written via `quaternion` — NOT look_at + rotate_object_local — because
+	# the cuff's radius rides non-uniform node scale on the unit mesh, and
+	# rotate_object_local composes the twist AFTER the stored basis's scale,
+	# landing the radius on the wrong mesh axes (metre-wide flickering fins
+	# at the wrist). The quaternion property recomposes basis = R·S with the
+	# scale safely in the mesh frame.
 	var cuff_height: float = SkaterMeshBuilder.CUFF_HEIGHT_M
 	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5 + cuff_wrist_offset)
 	mesh.position = upper_body.to_local(cuff_center_w)
-	mesh.look_at(cuff_center_w + bone_dir_n, _up_for_look_at(bone_dir_n))
-	mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	var dir_l: Vector3 = (upper_body.global_transform.basis.inverse() * bone_dir_n).normalized()
+	mesh.quaternion = (Basis.looking_at(dir_l, _up_for_look_at(dir_l))
+			* Basis(Vector3.RIGHT, PI * 0.5)).get_rotation_quaternion()
 
 
 # Returns an up vector that's safely non-colinear with `direction`. Falls back
