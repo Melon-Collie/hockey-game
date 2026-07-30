@@ -334,7 +334,7 @@ func _rebuild_shoulder_texture() -> void:
 # the thinner arm — the "arm stripes are too big" mismatch. Shrink the arm
 # pattern about its center by the length ratio so an authored width renders at
 # the same physical band height on arms as on socks.
-const _FOREARM_DESIGN_LEN: float = 0.35   # Skater.forearm_length / upper_arm_length default
+const _FOREARM_DESIGN_LEN: float = 0.33   # Skater.forearm_length / upper_arm_length default
 const _SOCK_DESIGN_LEN: float = 0.30      # SockL/R CylinderMesh height (Skater.tscn)
 const _ARM_STRIPE_SCALE: float = _SOCK_DESIGN_LEN / _FOREARM_DESIGN_LEN
 

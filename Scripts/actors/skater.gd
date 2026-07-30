@@ -144,8 +144,12 @@ var gear_style: GearStyleConfig = GearStyleConfig.new()
 # 100–104% real athletes run; the segments
 # split evenly because the distal bone ends at the gloved-fist center, and
 # elbow→fist really is about humerus-length).
-@export var upper_arm_length: float = 0.35
-@export var forearm_length: float = 0.35
+# 0.33 per segment ≈ real shoulder→elbow and elbow→fist-center at the mesh's
+# native 5'10" (the lower bone ends at the FIST, so it carries the hand's
+# length too). The old 0.35s read long on screen — with hands close on the
+# stick, the surplus folded into wide-flared elbows.
+@export var upper_arm_length: float = 0.33
+@export var forearm_length: float = 0.33
 # Pole direction for the elbow (upper-body local). Mostly down with a real
 # outward flare (+X is away from the body; the sign flips per side in
 # update_arm_mesh) and a touch backward — a hockey top-hand elbow rides out
