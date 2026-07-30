@@ -74,8 +74,11 @@ STICK_COL_TAPE,TAPE,CINTA
 STICK_PENDING_NOTE,Unapplied stick changes,Cambios del palo sin aplicar
 PLAYER_SKIN_LABEL,Skin:,Piel:
 PLAYER_POSITION_LABEL,Position:,Posición:
-EQUIP_STICK_LABEL,Stick:,Palo:
-EQUIP_GEAR_LABEL,Gear:,Equipamiento:
+POSITION_LW,LW — Left Wing,LW — Ala izquierda
+POSITION_C,C — Center,C — Centro
+POSITION_RW,RW — Right Wing,RW — Ala derecha
+POSITION_LD,LD — Left Defense,LD — Defensa izquierda
+POSITION_RD,RD — Right Defense,RD — Defensa derecha
 GEAR_EDIT_BUTTON,Edit Gear,Editar equipamiento
 GEAR_PENDING_NOTE,Unapplied gear changes,Cambios del equipamiento sin aplicar
 GEAR_EDITOR_TITLE,Gear,Equipamiento

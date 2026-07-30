@@ -2,10 +2,10 @@ class_name PlayerSettingsPopup
 extends Control
 
 # The player screen — who you are, one column: name, number, handedness,
-# preferred position, skin tone, team, height, weight, and the two equipment
-# workbenches — the stick (StickEditorPopup: gear + tape + live preview) and
-# the gear (GearEditorPopup: blade profile + skate/glove color + live
-# preview).
+# preferred position, skin tone, height, weight, the two equipment workbench
+# launchers side by side — the stick (StickEditorPopup: gear + tape + live
+# preview) and the gear (GearEditorPopup: blade profile + skate/glove color +
+# live preview) — and the team pick last.
 #
 # One build per player, no presets — edits land directly on PlayerPrefs' flat
 # fields. Opened from the main menu only (the lobby has no build editor).
@@ -29,9 +29,11 @@ signal attributes_changed(attrs: PlayerAttributes)
 const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the speed/agility/shot baselines.\nSmall = shiftier with quicker turns; big = longer reach & harder shot."
 const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = quicker first step, fast stamina recovery, easier to move.\nHeavy = harder hits & harder to move, deep but slow-refilling tank."
 const _POSITION_TOOLTIP: String = "Preferred position — where a lobby seats you when you join.\nIn 3v3 the wings and D pair up on their side: LW/LD take the left,\nRW/RD the right. A taken seat falls back to the first open one."
-# Display order (hockey-natural, wings around the C) → position index
-# (PlayerRules.POSITION_NAMES order).
+# Dropdown display order (hockey-natural, wings around the C) → position
+# index (PlayerRules.POSITION_NAMES order), with the display keys in lockstep.
 const _POSITION_ORDER: Array[int] = [1, 0, 2, 3, 4]
+const _POSITION_KEYS: Array[StringName] = [
+	&"POSITION_LW", &"POSITION_C", &"POSITION_RW", &"POSITION_LD", &"POSITION_RD"]
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
@@ -42,8 +44,7 @@ var _left_btn: Button = null
 var _right_btn: Button = null
 var _color_dropdown: PaletteDropdown = null
 var _skin_buttons: Array[Button] = []
-# Position toggles keyed by POSITION index (not display order).
-var _position_buttons: Dictionary = {}
+var _position_btn: OptionButton = null
 var _height_slider: HSlider = null
 var _height_value_label: Label = null
 var _weight_slider: HSlider = null
@@ -182,11 +183,10 @@ func _build() -> void:
 	_build_handedness_section(col)
 	_build_position_section(col)
 	_build_skin_section(col)
-	_build_team_section(col)
 	_build_height_section(col)
 	_build_weight_section(col)
-	_build_stick_row(col)
-	_build_gear_row(col)
+	_build_workbench_row(col)
+	_build_team_section(col)
 
 	_lock_label = Label.new()
 	_lock_label.text = "Build locked during online play."
@@ -207,31 +207,46 @@ func _build() -> void:
 	add_child(_gear_popup)
 
 
-func _build_stick_row(vbox: VBoxContainer) -> void:
+# The two workbench launchers side by side — the buttons name themselves, so
+# the row carries no gutter label. Each button's gold "unapplied changes"
+# note sits beneath it (pending workbench edits are otherwise invisible
+# until Apply); the notes reserve their line so the column doesn't jump.
+func _build_workbench_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	row.add_theme_constant_override("separation", 12)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 16)
 	vbox.add_child(row)
+	_stick_pending_label = _add_workbench_launcher(
+			row, tr(&"STICK_EDIT_BUTTON"), tr(&"STICK_PENDING_NOTE"), _open_stick_editor)
+	_gear_pending_label = _add_workbench_launcher(
+			row, tr(&"GEAR_EDIT_BUTTON"), tr(&"GEAR_PENDING_NOTE"), _open_gear_editor)
 
-	row.add_child(_make_identity_label(tr(&"EQUIP_STICK_LABEL")))
 
+# One launcher: the Edit button with its pending note reserved beneath.
+# Returns the note label so the caller can toggle it.
+func _add_workbench_launcher(row: HBoxContainer, button_text: String,
+		note_text: String, on_pressed: Callable) -> Label:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	row.add_child(box)
 	var edit_btn := Button.new()
-	edit_btn.text = tr(&"STICK_EDIT_BUTTON")
+	edit_btn.text = button_text
 	edit_btn.custom_minimum_size = Vector2(180, 44)
 	edit_btn.add_theme_font_size_override("font_size", 17)
 	MenuStyle.wire_hover_scale(edit_btn)
 	SoundManager.wire_button(edit_btn)
-	edit_btn.pressed.connect(_open_stick_editor)
-	row.add_child(edit_btn)
-	# Pending stick edits hide behind the button — this note is what makes
-	# them visible before Apply.
-	_stick_pending_label = Label.new()
-	_stick_pending_label.text = tr(&"STICK_PENDING_NOTE")
-	_stick_pending_label.add_theme_color_override("font_color", MenuStyle.GOLD)
-	_stick_pending_label.add_theme_font_size_override("font_size", 13)
-	_stick_pending_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_stick_pending_label.visible = false
-	row.add_child(_stick_pending_label)
+	edit_btn.pressed.connect(on_pressed)
+	box.add_child(edit_btn)
+	var note := Label.new()
+	note.text = note_text
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_color_override("font_color", MenuStyle.GOLD)
+	note.add_theme_font_size_override("font_size", 12)
+	# Invisible-but-space-reserving so a note appearing doesn't reflow the rows
+	# below (Label has no reserve mode; modulate keeps layout, unlike visible).
+	note.modulate = Color(1, 1, 1, 0)
+	box.add_child(note)
+	return note
 
 
 func _open_stick_editor() -> void:
@@ -249,31 +264,6 @@ func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> voi
 		_pending_length = length
 	_pending_tape = tape_code
 	_update_apply_state()
-
-
-func _build_gear_row(vbox: VBoxContainer) -> void:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	row.add_theme_constant_override("separation", 12)
-	vbox.add_child(row)
-
-	row.add_child(_make_identity_label(tr(&"EQUIP_GEAR_LABEL")))
-
-	var edit_btn := Button.new()
-	edit_btn.text = tr(&"GEAR_EDIT_BUTTON")
-	edit_btn.custom_minimum_size = Vector2(180, 44)
-	edit_btn.add_theme_font_size_override("font_size", 17)
-	MenuStyle.wire_hover_scale(edit_btn)
-	SoundManager.wire_button(edit_btn)
-	edit_btn.pressed.connect(_open_gear_editor)
-	row.add_child(edit_btn)
-	_gear_pending_label = Label.new()
-	_gear_pending_label.text = tr(&"GEAR_PENDING_NOTE")
-	_gear_pending_label.add_theme_color_override("font_color", MenuStyle.GOLD)
-	_gear_pending_label.add_theme_font_size_override("font_size", 13)
-	_gear_pending_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_gear_pending_label.visible = false
-	row.add_child(_gear_pending_label)
 
 
 func _open_gear_editor() -> void:
@@ -464,8 +454,8 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 		_update_apply_state())
 
 
-# Five-way exclusive position toggle (LW C RW LD RD in rink order); the pick
-# is only read at lobby seat time, so it never locks.
+# Position dropdown (LW C RW LD RD in rink order); the pick is only read at
+# lobby seat time, so it never locks.
 func _build_position_section(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -474,35 +464,23 @@ func _build_position_section(vbox: VBoxContainer) -> void:
 
 	row.add_child(_make_identity_label(tr(&"PLAYER_POSITION_LABEL"), _POSITION_TOOLTIP))
 
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 6)
-	row.add_child(buttons)
-	_position_buttons.clear()
-	var made: Array[Button] = []
-	for position: int in _POSITION_ORDER:
-		var btn := Button.new()
-		btn.text = PlayerRules.position_name(position)
-		btn.custom_minimum_size = Vector2(50, 44)
-		btn.add_theme_font_size_override("font_size", 15)
-		btn.tooltip_text = _POSITION_TOOLTIP
-		SoundManager.wire_button(btn)
-		var picked: int = position
-		btn.pressed.connect(func() -> void: _select_position(picked))
-		buttons.add_child(btn)
-		_position_buttons[position] = btn
-		made.append(btn)
-	# Controller: D-pad left/right cycles WITHIN the row (wrap at the ends)
-	# instead of escaping sideways. Up/down still move between rows.
-	if ControllerNav.active() and made.size() > 1:
-		for i: int in made.size():
-			made[i].focus_neighbor_left = made[(i - 1 + made.size()) % made.size()].get_path()
-			made[i].focus_neighbor_right = made[(i + 1) % made.size()].get_path()
+	_position_btn = OptionButton.new()
+	_position_btn.custom_minimum_size = Vector2(200, 44)
+	_position_btn.add_theme_font_size_override("font_size", 16)
+	_position_btn.tooltip_text = _POSITION_TOOLTIP
+	for i: int in _POSITION_KEYS.size():
+		_position_btn.add_item(tr(_POSITION_KEYS[i]), i)
+	SoundManager.wire_button(_position_btn)
+	_position_btn.item_selected.connect(func(index: int) -> void:
+		_pending_position = _POSITION_ORDER[index]
+		_update_apply_state())
+	row.add_child(_position_btn)
 
 
 func _select_position(position: int) -> void:
 	_pending_position = clampi(position, 0, PlayerRules.POSITION_NAMES.size() - 1)
-	for p: int in _position_buttons:
-		MenuStyle.apply_tab_button(_position_buttons[p] as Button, p == _pending_position)
+	if _position_btn != null:
+		_position_btn.select(maxi(_POSITION_ORDER.find(_pending_position), 0))
 	_update_apply_state()
 
 
@@ -719,10 +697,12 @@ func _update_apply_state() -> void:
 		or _pending_gear_code() != int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE))
 		or _is_build_dirty())
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid
+	# The notes fade via modulate, not `visible` — they reserve their line so
+	# the rows below never reflow.
 	if _stick_pending_label != null:
-		_stick_pending_label.visible = _is_stick_dirty()
+		_stick_pending_label.modulate.a = 1.0 if _is_stick_dirty() else 0.0
 	if _gear_pending_label != null:
-		_gear_pending_label.visible = _is_gear_dirty()
+		_gear_pending_label.modulate.a = 1.0 if _is_gear_dirty() else 0.0
 
 
 func _apply() -> void:
