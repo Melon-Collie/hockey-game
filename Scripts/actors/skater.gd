@@ -1656,9 +1656,10 @@ func get_blade_wall_normal() -> Vector3:
 const _SHAFT_TIP_OVERRUN_M: float = 0.03
 # The butt end extends past the TOP HAND so the knob rides visibly above the
 # fist — a real grip holds the shaft just below the knob, not on top of it.
-# Sized to clear the glove sphere (hand_sphere_radius 0.06) with most of the
-# knob showing. Public: the workbench preview extends its shaft to match.
-const SHAFT_BUTT_EXTEND_M: float = 0.09
+# Sized so the whole knob clears the glove sphere (hand_sphere_radius 0.06)
+# with a finger's width of wrapped shaft showing between fist and knob.
+# Public: the workbench preview extends its shaft to match.
+const SHAFT_BUTT_EXTEND_M: float = 0.13
 # The knob's cap sits slightly proud of the shaft's butt end (wrapped tape).
 const _KNOB_PROUD_M: float = 0.01
 
