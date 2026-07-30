@@ -113,17 +113,35 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _showing:
 		return
-	# R / C are claimed only while the panel is open, so neither key is
-	# swallowed during ordinary play.
-	if event.keycode == KEY_R:
+	# Both actions are claimed only while the panel is open, and both sit on
+	# FUNCTION keys: every letter key is a candidate gameplay binding (C is the
+	# default `block`), so a letter shortcut on a spectate overlay fires a real
+	# input at the same time.
+	if event.keycode == KEY_F7:
+		_dump()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_F8:
 		GameManager.shape_tally.reset()
 		_flash("✓ Shape tally reset")
 		get_viewport().set_input_as_handled()
-	elif event.keycode == KEY_C:
-		DisplayServer.clipboard_set(
-				JSON.stringify(GameManager.shape_tally.to_dict(), "\t"))
-		_flash("✓ Shape tally copied to clipboard")
-		get_viewport().set_input_as_handled()
+
+
+# Writes the tally to THREE sinks, because a debug dump that fails silently is
+# worse than no dump: the clipboard (fastest to paste, but can no-op depending
+# on platform/session), stdout (survives in the console log), and a file under
+# user:// whose absolute path the toast reports so it can be opened directly.
+func _dump() -> void:
+	var json: String = JSON.stringify(GameManager.shape_tally.to_dict(), "\t")
+	DisplayServer.clipboard_set(json)
+	print("[shape tally] ", json)
+	var path: String = "user://shape_tally.json"
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		_flash("✓ Copied to clipboard + console (file write failed)")
+		return
+	f.store_string(json)
+	f.close()
+	_flash("✓ Saved to %s" % ProjectSettings.globalize_path(path))
 
 
 func _flash(msg: String) -> void:
@@ -146,7 +164,7 @@ func _process(delta: float) -> void:
 
 
 func _refresh() -> void:
-	var header := "[b]Bot Shapes[/b]   [color=#%s](F6 close · R reset · C copy)[/color]" % COL_DIM
+	var header := "[b]Bot Shapes[/b]   [color=#%s](F6 close · F7 dump · F8 reset)[/color]" % COL_DIM
 	var tally: AIPossessionShapeTally = GameManager.shape_tally
 	if tally == null or GameManager.team_brains.is_empty():
 		_rt.text = header + "\n[color=#%s]No team brains on this peer — the tally samples the host's bot AI.[/color]" % COL_DIM
@@ -170,18 +188,23 @@ func _refresh() -> void:
 	var d0: float = tally.downgrade_share(0)
 	var d1: float = tally.downgrade_share(1)
 	var dcol: String = COL_FLAG if maxf(d0, d1) > DOWNGRADE_FLAG_SHARE else COL_DIM
-	var footer: PackedStringArray = [
+	# The two SUMMARY lines sit ABOVE the table, not below it: RichTextLabel's
+	# fit_content under-measures a [table], so anything after one can be clipped
+	# off the bottom of the panel — and these are the numbers most worth reading.
+	# Only the legend is allowed to live down there, where losing it costs
+	# nothing.
+	var summary: PackedStringArray = [
 		"[color=#%s]· live play sampled — HOME %.0f s · AWAY %.0f s[/color]"
 				% [COL_DIM, tally.total_seconds(0), tally.total_seconds(1)],
 		"[color=#%s]· DZONE suppressed, backcheck not home — HOME %.1f%% · AWAY %.1f%%[/color]"
 				% [dcol, d0 * 100.0, d1 * 100.0],
-		"[color=#%s]  share = %% of live play · n = spells · mean = seconds per spell[/color]"
-				% COL_DIM,
-		"[color=#%s]  a [/color][color=#%s]red mean[/color][color=#%s] is a shape re-slotting faster than a bot can act on it (< %.2f s)[/color]"
-				% [COL_DIM, COL_FLAG, COL_DIM, CHURN_MEAN_SPELL_S],
 	]
-	_rt.text = "%s\n[table=7]%s[/table]\n%s" % [
-			header, "".join(rows), "\n".join(footer)]
+	var legend: String = (
+			"[color=#%s]  share = %% of live play · n = spells · mean = s per spell · a [/color]"
+			+ "[color=#%s]red mean[/color][color=#%s] re-slots faster than a bot can act (< %.2f s)[/color]"
+	) % [COL_DIM, COL_FLAG, COL_DIM, CHURN_MEAN_SPELL_S]
+	_rt.text = "%s\n%s\n[table=7]%s[/table]\n%s" % [
+			header, "\n".join(summary), "".join(rows), legend]
 
 
 # Shape enum values ordered by the busier team's share, descending — so what

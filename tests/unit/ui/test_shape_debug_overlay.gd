@@ -68,6 +68,9 @@ func test_renders_a_populated_table() -> void:
 			"an unvisited shape is not rendered as an empty row")
 	assert_string_contains(txt, "DZONE suppressed",
 			"the coverage-downgrade line is always carried")
+	assert_lt(txt.find("DZONE suppressed"), txt.find("[table=7]"),
+			"the summary numbers render ABOVE the table — fit_content "
+			+ "under-measures a [table], so anything after one can be clipped")
 
 
 func test_shapes_sort_by_the_busier_teams_share() -> void:
