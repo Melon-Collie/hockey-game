@@ -42,7 +42,7 @@ const _CREASE_COLOR: Color = Color(0.392, 0.765, 0.922, 0.45)
 const _CREASE_ARC_STEPS: int = 10
 
 const _PLAYER_DOT_RADIUS: float = 3.5
-const _GOALIE_DOT_RADIUS: float = 3.0
+const _GOALIE_HALF_SIZE: float = 2.75  # goalies draw as squares; shape marks the role
 const _PUCK_DOT_RADIUS: float = 2.5
 const _FACEOFF_DOT_RADIUS: float = 1.3
 
@@ -166,7 +166,7 @@ func _draw() -> void:
 		if not is_instance_valid(goalie):
 			continue
 		var gpos: Vector2 = _map_point(goalie.global_position.x, goalie.global_position.z, flip)
-		_draw_dot(gpos, _GOALIE_DOT_RADIUS, _goalie_team_color(goalie.global_position.z), false)
+		_draw_square(gpos, _GOALIE_HALF_SIZE, _goalie_team_color(goalie.global_position.z))
 
 	var players: Dictionary[int, PlayerRecord] = GameManager.get_players()
 	for peer_id: int in players:
@@ -241,6 +241,13 @@ func _draw_dot(pos: Vector2, radius: float, fill: Color, is_local: bool) -> void
 	draw_circle(pos, radius, fill)
 	if is_local:
 		draw_arc(pos, radius + 2.5, 0.0, TAU, 20, _LOCAL_RING, 1.5, true)
+
+# Goalie marker: same outline treatment as the dots, but square — the shape
+# alone says "goalie", since goalies and skaters share the team jersey tint.
+func _draw_square(pos: Vector2, half: float, fill: Color) -> void:
+	var o: float = half + 1.0
+	draw_rect(Rect2(pos - Vector2(o, o), Vector2(o * 2.0, o * 2.0)), _DOT_OUTLINE, true)
+	draw_rect(Rect2(pos - Vector2(half, half), Vector2(half * 2.0, half * 2.0)), fill, true)
 
 # True when the camera is (or would be) yaw-flipped for the local player: the
 # "Always Attack Up" pref on and the local player on team 1. Mirrors the exact
