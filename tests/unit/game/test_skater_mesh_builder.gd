@@ -50,7 +50,7 @@ func _parts() -> Array[PartSpec]:
 				SkaterMeshBuilder.HEAD_RADIUS, 10, 5, 1.0),
 				Vector3(0.27, 0.27, 0.27), false),
 		PartSpec.new("neck", SkaterMeshBuilder._build_neck(),
-				Vector3(0.16, 0.10, 0.16), true),
+				Vector3(0.19, 0.10, 0.19), true),
 		PartSpec.new("skate_blade", SkaterMeshBuilder._build_skate_blade(),
 				Vector3(0.02, 0.19, 0.08), false),
 		PartSpec.new("shoulder", SkaterMeshBuilder._build_shoulder(),

@@ -172,9 +172,9 @@ const _BLADE_ICE_Z: float = 0.080 + SKATE_LIFT_M
 # inside the head ball, the bottom flares into the traps where it sinks
 # into the torso.
 const _NECK_PROFILE: Array[Vector2] = [
-	Vector2(-0.095, 0.052),
-	Vector2(-0.155, 0.056),
-	Vector2(-0.190, 0.078),  # trapezius flare into the collar
+	Vector2(-0.095, 0.064),
+	Vector2(-0.155, 0.070),
+	Vector2(-0.190, 0.092),  # trapezius flare into the collar
 ]
 
 static var _cache: Dictionary = {}
