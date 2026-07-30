@@ -104,6 +104,12 @@ var _coverage_unready_ticks: int = 0
 # backcheck wasn't home. Nothing reads it back into a decision — without it,
 # a suppressed D-zone coverage is indistinguishable from an ordinary rush.
 var coverage_downgraded: bool = false
+# Debug A/B switch for the RETRIEVAL upgrade below (F9 in ShapeDebugOverlay).
+# The breakout harness measures disabling it as nearly DOUBLING clean exits,
+# which is a large enough claim to want live confirmation before acting on — so
+# the gate is a runtime flag rather than a code edit, and it lives here in the
+# application layer so the domain read stays pure and replay-safe.
+var retrieval_enabled: bool = true
 # Cadence phase offset (seconds): team 1's natural ticks run half a period
 # out of phase with team 0's, so the two brains' per-tick computes never land
 # on the same physics frame (host FPS is set by the worst tick, and the two
@@ -226,7 +232,8 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	# enter/hold hysteresis in AIPossessionState.retrieval_read. A dead
 	# puck (goalie smother / phase lock) publishes a −1 chase election and
 	# stays DZONE; contested races stay DZONE (a slot scramble is defense).
-	if team_size >= 5 and state == AIPossessionState.State.DZONE \
+	if retrieval_enabled and team_size >= 5 \
+			and state == AIPossessionState.State.DZONE \
 			and snapshot != null and snapshot.puck_state != null \
 			and snapshot.puck_state.carrier_peer_id == -1 \
 			and snapshot.closest_to_puck_by_team.get(team_id, -1) != -1:

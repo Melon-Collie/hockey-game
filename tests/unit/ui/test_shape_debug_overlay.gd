@@ -118,3 +118,63 @@ func test_refresh_survives_a_null_tally() -> void:
 	_overlay._refresh()
 	assert_string_contains(_text(), "No team brains",
 			"a null tally falls through to the notice instead of crashing")
+
+
+# ── Breakout episodes + the RETRIEVAL A/B ────────────────────────────────────
+
+func _saved_episodes() -> AIBreakoutEpisodeTracker:
+	return GameManager.breakout_episodes
+
+
+func test_renders_the_breakout_outcome_block() -> void:
+	_with_brains()
+	GameManager.shape_tally.accumulate(0, AIPossessionState.State.DZONE, 5.0)
+	var eps := AIBreakoutEpisodeTracker.new()
+	var prev: AIBreakoutEpisodeTracker = GameManager.breakout_episodes
+	GameManager.breakout_episodes = eps
+	var deep: float = GameRules.BLUE_LINE_Z + 6.0
+	for _i: int in 20:
+		eps.tick(0, GameRules.GOAL_LINE_Z, Vector3(0, 0, deep), 0, 1.0 / 120.0, false)
+	eps.tick(0, GameRules.GOAL_LINE_Z,
+			Vector3(0, 0, GameRules.BLUE_LINE_Z - 2.0), 0, 1.0 / 120.0, false)
+	_overlay._refresh()
+	var txt: String = _text()
+	GameManager.breakout_episodes = prev
+	assert_string_contains(txt, "HOME breakouts",
+			"the live breakout block is rendered")
+	assert_string_contains(txt, "clean-exit 1",
+			"and carries the harness's own outcome labels")
+	assert_lt(txt.find("HOME breakouts"), txt.find("[table=7]"),
+			"above the table, so it cannot be clipped")
+
+
+func test_mode_line_reports_the_live_retrieval_setting() -> void:
+	_with_brains()
+	GameManager.shape_tally.accumulate(0, AIPossessionState.State.DZONE, 5.0)
+	_overlay._refresh()
+	assert_string_contains(_text(), "retrieval_on",
+			"the arm being collected is named in the panel")
+
+
+func test_ab_swap_flips_the_mode_and_zeroes_both_tallies() -> void:
+	_with_brains()
+	var prev: AIBreakoutEpisodeTracker = GameManager.breakout_episodes
+	GameManager.breakout_episodes = AIBreakoutEpisodeTracker.new()
+	GameManager.shape_tally.accumulate(0, AIPossessionState.State.DZONE, 5.0)
+	assert_true(GameManager.team_brains[0].retrieval_enabled, "arm A is retrieval ON")
+
+	_overlay._ab_swap()
+
+	assert_false(GameManager.team_brains[0].retrieval_enabled,
+			"arm B has RETRIEVAL disabled")
+	assert_false(GameManager.team_brains[1].retrieval_enabled,
+			"BOTH teams flip — the two arms must differ in exactly one thing")
+	assert_eq(GameManager.shape_tally.total_seconds(0), 0.0,
+			"the shape tally is zeroed so arm B starts clean")
+	assert_eq(GameManager.breakout_episodes.total(0), 0,
+			"and so is the episode tally")
+
+	_overlay._ab_swap()
+	assert_true(GameManager.team_brains[0].retrieval_enabled,
+			"a second press returns to arm A")
+	GameManager.breakout_episodes = prev

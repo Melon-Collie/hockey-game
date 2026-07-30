@@ -66,6 +66,8 @@ const TOAST_SECONDS: float = 2.0
 # arrived. In the panel the distinction is visible: text here means the handler
 # ran and this is what happened; no text means the key never got through.
 var _dump_status: String = ""
+# A/B run counter, so consecutive F9 dumps don't overwrite each other.
+var _ab_index: int = 0
 
 
 func _ready() -> void:
@@ -129,7 +131,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_F8:
 		GameManager.shape_tally.reset()
-		_flash("✓ Shape tally reset")
+		GameManager.breakout_episodes.reset()
+		_flash("✓ Tallies reset")
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_F9:
+		_ab_swap()
 		get_viewport().set_input_as_handled()
 
 
@@ -158,6 +164,52 @@ func _dump() -> void:
 	_refresh()
 
 
+# One step of the RETRIEVAL A/B: dump everything collected under the CURRENT
+# mode, zero the tallies, then flip the mode. Press it once to close out arm A
+# and open arm B, again to close out B — each dump is self-labelled with the mode
+# that produced it, because two unlabelled dumps are worthless for a comparison.
+func _ab_swap() -> void:
+	var mode: String = _mode_label()
+	_ab_index += 1
+	var payload: Dictionary = {
+		"mode": mode,
+		"run": _ab_index,
+		"breakout_episodes": GameManager.breakout_episodes.to_dict(mode),
+		"shapes": GameManager.shape_tally.to_dict(),
+	}
+	var path: String = "user://breakout_ab_%02d_%s.json" % [_ab_index, mode]
+	var json: String = JSON.stringify(payload, "\t")
+	print("[breakout A/B] ", json)
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	var ok: bool = f != null
+	if ok:
+		f.store_string(json)
+		f.close()
+	GameManager.shape_tally.reset()
+	GameManager.breakout_episodes.reset()
+	# Flip every brain, so both teams run the same configuration and the two arms
+	# differ in exactly one thing.
+	var now_on: bool = not _retrieval_on()
+	for brain: TeamBrain in GameManager.team_brains:
+		brain.retrieval_enabled = now_on
+	_dump_status = "run %d (%s) %s → now collecting %s" % [
+			_ab_index, mode,
+			ProjectSettings.globalize_path(path) if ok else "FILE FAILED",
+			_mode_label()]
+	_flash("✓ " + _dump_status)
+	_refresh()
+
+
+func _retrieval_on() -> bool:
+	for brain: TeamBrain in GameManager.team_brains:
+		return brain.retrieval_enabled
+	return true
+
+
+func _mode_label() -> String:
+	return "retrieval_on" if _retrieval_on() else "retrieval_off"
+
+
 func _flash(msg: String) -> void:
 	_toast.text = msg
 	_toast.show()
@@ -178,7 +230,7 @@ func _process(delta: float) -> void:
 
 
 func _refresh() -> void:
-	var header := "[b]Bot Shapes[/b]   [color=#%s](F6 close · F7 dump · F8 reset)[/color]" % COL_DIM
+	var header := "[b]Bot Shapes[/b]   [color=#%s](F6 close · F7 dump · F8 reset · F9 A/B swap)[/color]" % COL_DIM
 	var tally: AIPossessionShapeTally = GameManager.shape_tally
 	if tally == null or GameManager.team_brains.is_empty():
 		_rt.text = header + "\n[color=#%s]No team brains on this peer — the tally samples the host's bot AI.[/color]" % COL_DIM
@@ -228,6 +280,28 @@ func _refresh() -> void:
 					COL_HOME if team_id == 0 else COL_AWAY,
 					"HOME" if team_id == 0 else "AWAY",
 					" · ".join(parts)])
+	# The breakout-outcome block: the live counterpart of the harness's
+	# clean/clear/cough/timeout columns, so the two can be compared directly.
+	var eps: AIBreakoutEpisodeTracker = GameManager.breakout_episodes
+	if eps != null:
+		summary.append("[color=#%s]· mode — %s[/color]" % [
+				COL_HEAD, _mode_label()])
+		for team_id: int in AIBreakoutEpisodeTracker.TEAM_COUNT:
+			var n: int = eps.total(team_id)
+			if n == 0:
+				continue
+			var parts: PackedStringArray = []
+			for outcome: int in AIBreakoutEpisodeTracker.OUTCOME_COUNT:
+				var c: int = eps.count(team_id, outcome)
+				if c == 0:
+					continue
+				parts.append("%s %d (%.0f%%)" % [
+						AIBreakoutEpisodeTracker.outcome_name(outcome), c,
+						eps.share(team_id, outcome) * 100.0])
+			summary.append("[color=#%s]· %s breakouts (n=%d, retr %d) — %s[/color]" % [
+					COL_HOME if team_id == 0 else COL_AWAY,
+					"HOME" if team_id == 0 else "AWAY",
+					n, eps.retrieval_episodes(team_id), " · ".join(parts)])
 	if _dump_status != "":
 		summary.append("[color=#%s]· last dump — %s[/color]" % [
 				COL_DIM, _dump_status])
