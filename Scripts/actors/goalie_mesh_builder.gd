@@ -70,6 +70,23 @@ const _MASK_STATIONS: Array[Vector4] = [
 ]
 const _MASK_SEGS: int = 10
 
+# The mask's two fixed-color children (created once by apply_goalie, parented
+# to the head mesh so they ride every stance's head placement; the uniform
+# coordinator paints the mask shell only, never these):
+#   - NECK guard tube. The head-to-body offset is ~0.57 in every stance
+#     (STANDING 1.79/1.22, READY 1.62/1.06, BUTTERFLY 0.97/0.40), so one
+#     fixed tube under the chin bridges the gap the mask otherwise floats
+#     over — the goalie has no skater-style neck mesh.
+#   - CAGE plate, proud of the face station's front reach so the mask reads
+#     as a mask instead of a painted ball (the sculpted cage plane alone
+#     vanishes under same-color flat shading).
+const _NECK_TOP_Y: float = -0.10
+const _NECK_BOT_Y: float = -0.32
+const _NECK_RADIUS_TOP: float = 0.080
+const _NECK_RADIUS_BOT: float = 0.070
+const _NECK_COLOR := Color(0.10, 0.10, 0.11)
+const _CAGE_COLOR := Color(0.16, 0.17, 0.18)
+
 # Catch glove — a trapper built from the scene's three glove nodes. Frame
 # note: Ring/Main sit in a rotated frame (local −Y faces the shooter, local
 # +Z is down, X lateral); the cuff node is unrotated at the glove origin —
@@ -114,6 +131,7 @@ const HIP_CONNECTOR_RADIUS: float = 0.08
 static func apply_goalie(goalie: Goalie) -> void:
 	_swap_instance(goalie.body_mesh, "goalie_body", _build_body)
 	_swap_instance(goalie.head_mesh, "goalie_mask", _build_mask)
+	_ensure_mask_extras(goalie.head_mesh)
 	_swap_instance(goalie.left_pad_mesh, "goalie_pad", _build_pad)
 	_swap_instance(goalie.right_pad_mesh, "goalie_pad", _build_pad)
 	_swap_instance(goalie.glove_ring_mesh, "goalie_glove_ring", _build_glove_ring)
@@ -198,6 +216,42 @@ static func _build_blocker() -> ArrayMesh:
 	_loop_cap(st, loops[1], Vector3(0.0, -_BLOCKER_HALF_H, 0.0), false)
 	st.generate_normals()
 	return st.commit()
+
+
+static func _ensure_mask_extras(head: MeshInstance3D) -> void:
+	if head == null or head.get_node_or_null("Neck") != null:
+		return
+	var neck := MeshInstance3D.new()
+	neck.name = "Neck"
+	neck.mesh = _shared("goalie_neck", func() -> ArrayMesh:
+		var profile: Array[Vector2] = [
+			Vector2(_NECK_TOP_Y, _NECK_RADIUS_TOP),
+			Vector2(_NECK_BOT_Y, _NECK_RADIUS_BOT)]
+		return _build_lathe(profile, 8, 1.0, 1.0))
+	var neck_mat := StandardMaterial3D.new()
+	neck_mat.albedo_color = _NECK_COLOR
+	neck_mat.roughness = 0.9
+	BodyRim.apply(neck_mat)
+	neck.material_override = neck_mat
+	head.add_child(neck)
+
+	var cage := MeshInstance3D.new()
+	cage.name = "Cage"
+	cage.mesh = _shared("goalie_cage", func() -> ArrayMesh:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_smooth_group(-1)  # flat shading — see SkaterMeshBuilder doc block
+		# Straddles the face station's front surface (−Z reach 0.160) so the
+		# plate sits ~8 mm proud with its back buried in the shell.
+		_box(st, Vector3(-0.075, -0.095, -0.168), Vector3(0.075, 0.015, -0.150))
+		st.generate_normals()
+		return st.commit())
+	var cage_mat := StandardMaterial3D.new()
+	cage_mat.albedo_color = _CAGE_COLOR
+	cage_mat.roughness = 0.35
+	BodyRim.apply(cage_mat)
+	cage.material_override = cage_mat
+	head.add_child(cage)
 
 
 static func _build_mask() -> ArrayMesh:
