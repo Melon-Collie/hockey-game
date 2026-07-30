@@ -49,6 +49,10 @@ func _parts() -> Array[PartSpec]:
 		PartSpec.new("head", SkaterMeshBuilder._build_ball(
 				SkaterMeshBuilder.HEAD_RADIUS, 10, 5, 1.0),
 				Vector3(0.27, 0.27, 0.27), false),
+		PartSpec.new("neck", SkaterMeshBuilder._build_neck(),
+				Vector3(0.16, 0.10, 0.16), true),
+		PartSpec.new("skate_blade", SkaterMeshBuilder._build_skate_blade(),
+				Vector3(0.02, 0.19, 0.08), false),
 		PartSpec.new("shoulder", SkaterMeshBuilder._build_shoulder(),
 				Vector3(0.21, 0.28, 0.21), false),
 		PartSpec.new("arm_bone", SkaterMeshBuilder.shared_arm_bone(),
@@ -158,13 +162,19 @@ func test_helmet_opens_at_the_face() -> void:
 			"the helmet rim should sit meaningfully higher at the face than the back")
 
 
-func test_boot_blade_reaches_the_replaced_spheres_ice_depth() -> void:
-	# The foot node's local +Z is down; the prolate foot sphere it replaces
-	# bottomed out at z = +0.08 ≈ the ice. The blade runner must reach that
-	# depth (or the skate floats) without passing it (or it sinks).
-	var aabb: AABB = SkaterMeshBuilder._build_boot().get_aabb()
-	assert_almost_eq(aabb.position.z + aabb.size.z, 0.08, 0.002,
-			"blade runner should bottom out at the old sphere's contact depth")
+func test_skate_blade_reaches_the_lifted_ice_depth() -> void:
+	# The foot node's local +Z is down; the replaced foot sphere bottomed out
+	# at z = +0.08 ≈ the ice, and the on-skates stance lifts the body roots by
+	# SKATE_LIFT_M with the steel reaching correspondingly deeper. The runner
+	# must land exactly there (shallower floats the skate, deeper sinks it).
+	var aabb: AABB = SkaterMeshBuilder._build_skate_blade().get_aabb()
+	assert_almost_eq(aabb.position.z + aabb.size.z,
+			0.08 + SkaterMeshBuilder.SKATE_LIFT_M, 0.002,
+			"the steel runner should bottom out at the lifted ice-contact depth")
+	# The boot itself must stay well above the ice — the blade carries it.
+	var boot: AABB = SkaterMeshBuilder._build_boot().get_aabb()
+	assert_lt(boot.position.z + boot.size.z, 0.05,
+			"the boot sole should ride on the blade, clear of the ice")
 
 
 func test_apply_swaps_scene_primitives_and_keeps_default_materials() -> void:

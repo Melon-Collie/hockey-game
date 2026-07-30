@@ -586,6 +586,15 @@ func _ready() -> void:
 	_shoulder_cap_l = upper_body.get_node_or_null("ShoulderL") as MeshInstance3D
 	_shoulder_cap_r = upper_body.get_node_or_null("ShoulderR") as MeshInstance3D
 
+	# On-skates stance: the scene layout is standing height, so the skate
+	# stack lifts both body roots (see SkaterMeshBuilder.SKATE_LIFT_M — the
+	# blade meshes reach correspondingly deeper to keep the steel on the
+	# ice). Before the _default_*_y captures below, so the height attribute's
+	# root scaling composes on the lifted stance. Gameplay is unaffected: the
+	# blade IK targets the world ice plane, and the hitbox never moves.
+	upper_body.position.y += SkaterMeshBuilder.SKATE_LIFT_M
+	lower_body.position.y += SkaterMeshBuilder.SKATE_LIFT_M
+
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
 		top_hand = Marker3D.new()

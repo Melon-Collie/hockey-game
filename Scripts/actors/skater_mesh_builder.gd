@@ -148,14 +148,34 @@ const _BOOT_STATIONS: Array[Vector4] = [
 	Vector4(-0.045, 0.058, -0.048, 0.046),  # forefoot
 	Vector4(-0.115, 0.040, -0.012, 0.040),  # toe
 ]
-# Blade runner under the sole: a thin fin from just under the boot down to the
-# replaced sphere's bottom extent (local z 0.08 ≈ the ice), inset from both
-# boot ends the way real runners are.
-const _BLADE_HALF_W: float = 0.006
-const _BLADE_Y_MIN: float = -0.088
-const _BLADE_Y_MAX: float = 0.098
-const _BLADE_Z_TOP: float = 0.044
-const _BLADE_Z_BOT: float = 0.080
+# Skate blade — its own steel-colored child mesh under each Foot node (the
+# boot paints dark, so a fused same-color fin never read as a blade). Same
+# rotated frame as _BOOT_STATIONS: toe −Y, +Z down. Two holder posts drop
+# from the sole with daylight between them at the arch; the thin runner
+# spans the length and bottoms out at the replaced sphere's ice-contact
+# depth (z = 0.080).
+const _BLADE_STEEL_COLOR := Color(0.82, 0.85, 0.88)
+# On-skates stance lift: the scene's part layout is tuned as STANDING height,
+# so the skate stack raises both body roots (applied in Skater._ready before
+# the default-height captures — the same root-raise mechanism the height
+# attribute uses) and the blade assembly reaches this much deeper than the
+# old foot-sphere ice contact (z 0.080), keeping the steel on y = 0. The
+# height attribute's root scaling still uses FACEOFF_SPAWN_HEIGHT as its ice
+# height, so the lift's unscaled share leaves <3 mm of contact error at the
+# extreme builds — visually nil.
+const SKATE_LIFT_M: float = 0.04
+const _BLADE_ICE_Z: float = 0.080 + SKATE_LIFT_M
+
+# Neck: skin tube from chin to collar, a child of the Helmet node like the
+# head so it rides the same head-bulk scaling and skeleton offsets. Stations
+# are helmet-local (helmet origin y 0.65, torso top 0.47): the top hides
+# inside the head ball, the bottom flares into the traps where it sinks
+# into the torso.
+const _NECK_PROFILE: Array[Vector2] = [
+	Vector2(-0.095, 0.052),
+	Vector2(-0.155, 0.056),
+	Vector2(-0.190, 0.078),  # trapezius flare into the collar
+]
 
 static var _cache: Dictionary = {}
 
@@ -176,6 +196,7 @@ static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
 		_swap(lower_body, "Leg%s/Shin%s/Sock%s" % [side, side, side], "sock", _build_sock)
 		_swap(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side], "skate", _build_skate)
 		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side], "boot", _build_boot)
+		_ensure_blade(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
 
 
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
@@ -287,11 +308,11 @@ static func _build_helmet() -> ArrayMesh:
 	return st.commit()
 
 
-# The pink head ball under the helmet shell. Created (not swapped — no scene
-# node exists for it) as a child of the Helmet MeshInstance3D so it rides the
-# same appearance-rig scaling and skeleton offsets. SkaterUniformCoordinator
-# resolves it by name for ghost fades; the placeholder material lives here
-# because no kit color paints skin.
+# The pink head ball and neck under the helmet shell. Created (not swapped —
+# no scene nodes exist for them) as children of the Helmet MeshInstance3D so
+# they ride the same appearance-rig scaling and skeleton offsets.
+# SkaterUniformCoordinator resolves both by name for ghost fades; the
+# placeholder material lives here because no kit color paints skin.
 static func _ensure_head(upper_body: Node3D) -> void:
 	var helmet: MeshInstance3D = upper_body.get_node_or_null("Helmet") as MeshInstance3D
 	if helmet == null or helmet.get_node_or_null("Head") != null:
@@ -301,12 +322,25 @@ static func _ensure_head(upper_body: Node3D) -> void:
 	head.position = Vector3(0.0, 0.0, -_HEAD_FORWARD_M)
 	head.mesh = _shared("head", func() -> ArrayMesh:
 		return _build_ball(HEAD_RADIUS, 10, 5, 1.0))
+	head.material_override = _make_skin_mat()
+	helmet.add_child(head)
+	var neck := MeshInstance3D.new()
+	neck.name = "Neck"
+	neck.mesh = _shared("neck", _build_neck)
+	neck.material_override = _make_skin_mat()
+	helmet.add_child(neck)
+
+
+static func _build_neck() -> ArrayMesh:
+	return _build_lathe(_NECK_PROFILE, 8, 1.0, 1.0)
+
+
+static func _make_skin_mat() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = HEAD_COLOR
 	mat.roughness = 0.85
 	BodyRim.apply(mat)
-	head.material_override = mat
-	helmet.add_child(head)
+	return mat
 
 
 static func _build_shoulder() -> ArrayMesh:
@@ -484,10 +518,39 @@ static func _build_boot() -> ArrayMesh:
 			(loops[n - 1][0].z + loops[n - 1][2].z) * 0.5)
 	_loop_cap(st, loops[0], heel, true)      # heel (+Y)
 	_loop_cap(st, loops[n - 1], toe, false)  # toe (−Y)
-	_box(st, Vector3(-_BLADE_HALF_W, _BLADE_Y_MIN, _BLADE_Z_TOP),
-			Vector3(_BLADE_HALF_W, _BLADE_Y_MAX, _BLADE_Z_BOT))
 	st.generate_normals()
 	return st.commit()
+
+
+# Holder posts + steel runner (see the _BLADE_* constants' doc). The posts
+# tuck up into the sole (z 0.042 < the boot's 0.045 sole line).
+static func _build_skate_blade() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see class doc block
+	_box(st, Vector3(-0.008, 0.036, 0.042), Vector3(0.008, 0.094, 0.098))    # heel post
+	_box(st, Vector3(-0.008, -0.080, 0.042), Vector3(0.008, -0.026, 0.098))  # toe post
+	_box(st, Vector3(-0.0035, -0.088, 0.090),
+			Vector3(0.0035, 0.098, _BLADE_ICE_Z))                            # steel runner
+	st.generate_normals()
+	return st.commit()
+
+
+# The steel is a CHILD of the foot's boot mesh with its own bright material —
+# the whole point of splitting it out of the boot solid.
+static func _ensure_blade(lower_body: Node3D, foot_path: String) -> void:
+	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
+	if foot == null or foot.get_node_or_null("Blade") != null:
+		return
+	var blade := MeshInstance3D.new()
+	blade.name = "Blade"
+	blade.mesh = _shared("skate_blade", _build_skate_blade)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = _BLADE_STEEL_COLOR
+	mat.roughness = 0.25
+	BodyRim.apply(mat)
+	blade.material_override = mat
+	foot.add_child(blade)
 
 
 # Boot cross-section at one station: narrowed top, full-width sidewall, tucked
