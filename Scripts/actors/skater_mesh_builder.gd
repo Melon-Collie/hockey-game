@@ -85,6 +85,12 @@ const _HELMET_RADIUS: float = 0.155
 const _HELMET_FRONT_CUT: float = 0.40
 const _HELMET_BACK_CUT: float = 0.76
 const _HELMET_DROP_START_C: float = 0.34
+# Ear loops: a localized rim dip centered on each side (|sin θ| = 1),
+# narrowed by the exponent so it reads as an ear cover, not a lower brim.
+# At the nearest sampled azimuths the dip reaches ear-top depth (y ≈ −0.03);
+# it fades to nothing at the face and inside the nape drop.
+const _HELMET_EAR_DIP: float = 0.22
+const _HELMET_EAR_DIP_POWER: float = 6.0
 # The shell closes with a fan to an apex HIGH inside the dome (this fraction
 # of the radius up), not a floor at rim height — a low floor reads as a
 # helmet-colored lid across the face opening from the top-down camera,
@@ -252,7 +258,8 @@ static func _build_helmet() -> ArrayMesh:
 			var t: float = clampf((cos(theta) - _HELMET_DROP_START_C)
 					/ (1.0 - _HELMET_DROP_START_C), 0.0, 1.0)
 			var cut_v: float = lerpf(_HELMET_FRONT_CUT, _HELMET_BACK_CUT,
-					t * t * (3.0 - 2.0 * t))
+					t * t * (3.0 - 2.0 * t)) \
+					+ _HELMET_EAR_DIP * pow(absf(sin(theta)), _HELMET_EAR_DIP_POWER)
 			var v: float = cut_v * float(j) / float(lat)
 			var y: float = _HELMET_RADIUS * cos(PI * v)
 			var ring_r: float = _HELMET_RADIUS * sin(PI * v)
