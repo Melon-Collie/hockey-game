@@ -75,8 +75,13 @@ func _parts() -> Array[PartSpec]:
 				Vector3(0.19, 0.30, 0.19), true),
 		PartSpec.new("skate", SkaterMeshBuilder._build_skate(),
 				Vector3(0.18, 0.20, 0.18), true),
+		# Boot length re-pinned +0.02 over the replaced prolate sphere: the
+		# heel counter deliberately runs the quarter back under the skate
+		# collar's footprint. Heel-ward only — toward the shin column, with
+		# the extension's sole tucked above the tread line — so the tuned
+		# ice/board contact silhouette is unchanged.
 		PartSpec.new("boot", SkaterMeshBuilder._build_boot(),
-				Vector3(0.16, 0.25, 0.16), false),
+				Vector3(0.16, 0.27, 0.16), false),
 	]
 
 
