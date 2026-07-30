@@ -103,7 +103,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		if base < 0.0:
 			base = AIActionScoring.threat_surface_shoot(
 					opp_positions[i], our_net, our_goalie_pos,
-					GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+					GameRules.NET_HALF_WIDTH, our_team_excluding_self,
+					ctx.scratch_teammate_caps)
 		bases.append(base)
 
 	# Far from the recovery region, skate at the CALCULATED cover directly:
@@ -136,7 +137,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 		var mark_score: float = -_max_shot_threat(
 				c, opp_positions, our_net, our_goalie_pos,
-				our_team_excluding_self, bases) + AIRoleHelpers.incumbent_bonus(ctx, c)
+				our_team_excluding_self, bases, ctx.scratch_teammate_caps,
+				ctx.caps_by_peer.get(ctx.peer_id)) \
+				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if mark_score > best_score:
 			best_score = mark_score
 			best_pos = c
@@ -161,12 +164,18 @@ static func _max_shot_threat(
 		our_net: Vector3,
 		our_goalie_pos: Vector3,
 		our_team_excluding_self: Array[Vector3],
-		bases: Array[float]) -> float:
+		bases: Array[float],
+		our_team_caps: Array = [],
+		self_caps: AISkaterCaps = null) -> float:
 	# Opp's view of defenders = our team + me at c. Append-and-restore the
 	# caller's array in place instead of duplicating it per candidate (10×/decide
 	# in the unassigned-marker fallback); the array is left exactly as passed and
 	# keeps its capacity across the push/pop, so steady-state calls don't alloc.
+	# The hypothetical body carries our real caps (matched caps array only).
+	var caps_matched: bool = our_team_caps.size() == our_team_excluding_self.size()
 	our_team_excluding_self.push_back(candidate)
+	if caps_matched:
+		our_team_caps.push_back(self_caps)
 
 	var max_threat: float = 0.0
 	var used: int = 0
@@ -182,8 +191,10 @@ static func _max_shot_threat(
 		used |= 1 << bi
 		var threat: float = AIActionScoring.threat_surface_shoot(
 				opp_positions[bi], our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, our_team_excluding_self)
+				GameRules.NET_HALF_WIDTH, our_team_excluding_self, our_team_caps)
 		if threat > max_threat:
 			max_threat = threat
 	our_team_excluding_self.pop_back()
+	if caps_matched:
+		our_team_caps.pop_back()
 	return max_threat

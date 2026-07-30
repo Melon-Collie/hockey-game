@@ -160,9 +160,10 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# pass lane math matters most.
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		var lane: float = AIActionScoring.lane_clear(
-				carrier_pos, c, opp_positions, pass_speed)
+				carrier_pos, c, opp_positions, pass_speed,
+				AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)
 		var potential: float = AIActionScoring.position_potential(
-				c, ctx.attacking_goal_pos, opp_positions)
+				c, ctx.attacking_goal_pos, opp_positions, ctx.scratch_opp_caps)
 		var score: float = maxf(lane, BLOCKED_LANE_FLOOR) * potential \
 				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if score > best_score:
