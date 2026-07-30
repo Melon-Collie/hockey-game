@@ -42,10 +42,11 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
 # (blade on −X) has the top hand on the right shoulder (+X), and vice versa.
-# Matches the ShoulderL/R ball origins in Scenes/Skater.tscn (keep in sync) —
-# just clear of the torso cylinder (radius ~0.20-0.22 at shoulder height) so
-# the arm bone roots at the deltoid ball instead of half-buried in the chest.
-@export var shoulder_offset: float = 0.24
+# Matches the ShoulderL/R cap origins in Scenes/Skater.tscn (keep in sync)
+# so the drawn arm roots at the deltoid cap. Sits so the cap's blunt base
+# seats into the trap slope (torso upper-chest x extent ~0.21) with its
+# equator just proud of the jersey.
+@export var shoulder_offset: float = 0.22
 # Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
 # in the scene (keep in sync) so the drawn arm hangs from the visible
 # shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
@@ -134,9 +135,9 @@ var tape_config: StickTapeConfig = StickTapeConfig.new()
 # (cross-body reach, arm × 0.5625) and the backhand cap is chain-derived
 # (sqrt(arm_eff² − shoulder-to-hand drop²)), so no reachable hand target ever
 # exceeds the arm's length — the forearm never draws stretched.
-# Baseline lengths give one-arm = 0.70m; with the shoulder balls at ±0.24
-# that's a wingspan ≈ 1.88m on a 1.78m body (~106% of height — a touch rangy
-# vs the 100–104% real athletes run, which reads fine in-game; the segments
+# Baseline lengths give one-arm = 0.70m; with the shoulder caps at ±0.22
+# that's a wingspan ≈ 1.84m on a 1.78m body (~103% of height, inside the
+# 100–104% real athletes run; the segments
 # split evenly because the distal bone ends at the gloved-fist center, and
 # elbow→fist really is about humerus-length).
 @export var upper_arm_length: float = 0.35
