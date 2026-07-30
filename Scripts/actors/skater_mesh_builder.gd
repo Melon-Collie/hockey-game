@@ -158,7 +158,12 @@ const _KNOB_BOTTOM_RADIUS: float = 0.03
 const _BOOT_STATIONS: Array[Vector4] = [
 	# Heel top rises toward the collar like a real boot's quarter (was -0.040,
 	# which left the cuff floating over a low heel), meeting the collar's
-	# bottom so ankle and boot read as one piece from the side.
+	# bottom so ankle and boot read as one piece from the side. The rearmost
+	# station runs the quarter back UNDER the collar's footprint (the cuff
+	# seats 0.10 heel-ward of this frame's origin, so its underside otherwise
+	# hangs bare behind the heel) — sole tucked well up so the stride's
+	# heel-kick arc can't drag it through the ice.
+	Vector4(0.155, 0.042, -0.062, 0.030),   # heel counter, under the cuff
 	Vector4(0.115, 0.052, -0.070, 0.045),   # heel
 	Vector4(0.045, 0.060, -0.072, 0.046),   # instep rise
 	Vector4(-0.045, 0.058, -0.048, 0.046),  # forefoot
