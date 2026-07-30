@@ -193,7 +193,13 @@ const _LACE_RUNGS: Array[Vector2] = [
 ]
 const _LACE_HALF_W: float = 0.030
 const _LACE_HALF_T: float = 0.006   # rung thickness along the instep (local Y)
-const _LACE_PROUD: float = 0.005    # rise above / sink below the top surface
+# Rung depth is biased PROUD of the surface rather than centered on it: the
+# top line slopes ~0.46 across the heel→instep segment, so a surface-centered
+# box left barely 2 mm showing there — fine at rink distance, visible
+# clipping at the workbench close-up. Sink keeps the underside buried so no
+# gap opens as the slope crosses the rung.
+const _LACE_PROUD: float = 0.008    # rise above the top surface
+const _LACE_SINK: float = 0.003     # burial below it
 const _LACE_COLOR := Color(0.88, 0.88, 0.86)
 
 # Neck: skin tube from chin to collar, a child of the Helmet node like the
@@ -384,7 +390,7 @@ static func shared_laces() -> ArrayMesh:
 		for rung: Vector2 in _LACE_RUNGS:
 			_box(st,
 					Vector3(-_LACE_HALF_W, rung.x - _LACE_HALF_T, rung.y - _LACE_PROUD),
-					Vector3(_LACE_HALF_W, rung.x + _LACE_HALF_T, rung.y + _LACE_PROUD))
+					Vector3(_LACE_HALF_W, rung.x + _LACE_HALF_T, rung.y + _LACE_SINK))
 		st.generate_normals()
 		return st.commit())
 
