@@ -69,24 +69,41 @@ const _MASK_STATIONS: Array[Vector4] = [
 	Vector4(-0.130, 0.070, 0.060, 0.115),  # chin rim
 ]
 const _MASK_SEGS: int = 10
+# Lateral/depth-only inflation over the authored stations, so the mask
+# overhangs the neck guard the way a real mask does. Height is NOT scaled —
+# the head sphere's 0.26 vertical envelope is the pinned save silhouette.
+const _MASK_BULK: float = 1.05
 
-# Two fixed-color children (created once by apply_goalie; the uniform
-# coordinator repaints only the meshes it owns, never these):
-#   - NECK guard tube, a child of the BODY mesh so it tilts with the trunk's
-#     per-stance pitch/lean instead of hanging plumb under a head that never
-#     pitches. The body's local +Y axis passes within a few centimetres of
-#     the head center in every stance (STANDING 1.79/1.22 @ −4°, READY
-#     1.62/1.06 @ −14°, BUTTERFLY 0.97/0.40 @ −10°), so one fixed body-local
-#     tube runs shoulders → mask chin everywhere.
-#   - CAGE plate, a child of the head mesh, proud of the face station's
-#     front reach so the mask reads as a mask instead of a painted ball
-#     (the sculpted cage plane alone vanishes under same-color flat shading).
+# The cage is COLOR, not geometry: front facets between brow and chin bake a
+# dark vertex tint, multiplied under the kit's helmet paint (the coordinator
+# enables vertex_color_use_as_albedo on the mask material only). Whole facets
+# tint at once — centroid tests, so the cage's edge lands on facet edges and
+# stays crisp under flat shading. A proud plate read badly from the game's
+# top-down camera.
+const _CAGE_TINT := Color(0.32, 0.32, 0.34)
+# Cage column = facets whose centroid lies within this half-angle of the −Z
+# front axis (the θ grid is station-independent, so the same facet columns
+# tint at every height — 36° keeps the middle two of the five front columns,
+# with the flanks staying shell). Vertical span: brow to chin rim.
+const _CAGE_HALF_ANGLE_DEG: float = 36.0
+const _CAGE_TOP_Y: float = 0.035     # brow line — cranium stays kit color
+const _CAGE_BOT_Y: float = -0.128    # excludes the chin-cap fan
+
+# NECK guard tube — a fixed-color child of the BODY mesh (created once by
+# apply_goalie; the uniform coordinator repaints only the meshes it owns),
+# so it tilts with the trunk's per-stance pitch/lean instead of hanging
+# plumb under a head that never pitches. The body's local +Y axis passes
+# within a few centimetres of the head center in every stance (STANDING
+# 1.79/1.22 @ −4°, READY 1.62/1.06 @ −14°, BUTTERFLY 0.97/0.40 @ −10°), so
+# one fixed body-local tube runs shoulders → mask chin everywhere. Set back
+# of the spine line so the mask front overhangs it — the neck sits BEHIND a
+# real mask, never flush with its face.
 const _NECK_TOP_Y: float = 0.50    # body-local; buries into the mask chin
 const _NECK_BOT_Y: float = 0.30    # below the body top (0.36) — no visible seam
 const _NECK_RADIUS_TOP: float = 0.070
 const _NECK_RADIUS_BOT: float = 0.080  # flares toward the shoulders
+const _NECK_BACK_OFFSET: float = 0.025  # body-local +Z (rearward)
 const _NECK_COLOR := Color(0.10, 0.10, 0.11)
-const _CAGE_COLOR := Color(0.16, 0.17, 0.18)
 
 # Catch glove — a trapper built from the scene's three glove nodes. Frame
 # note: Ring/Main sit in a rotated frame (local −Y faces the shooter, local
@@ -221,8 +238,7 @@ static func _build_blocker() -> ArrayMesh:
 
 static func _ensure_extras(goalie: Goalie) -> void:
 	var body: MeshInstance3D = goalie.body_mesh
-	var head: MeshInstance3D = goalie.head_mesh
-	if body == null or head == null or body.get_node_or_null("Neck") != null:
+	if body == null or body.get_node_or_null("Neck") != null:
 		return
 	var neck := MeshInstance3D.new()
 	neck.name = "Neck"
@@ -231,30 +247,13 @@ static func _ensure_extras(goalie: Goalie) -> void:
 			Vector2(_NECK_TOP_Y, _NECK_RADIUS_TOP),
 			Vector2(_NECK_BOT_Y, _NECK_RADIUS_BOT)]
 		return _build_lathe(profile, 8, 1.0, 1.0))
+	neck.position = Vector3(0.0, 0.0, _NECK_BACK_OFFSET)
 	var neck_mat := StandardMaterial3D.new()
 	neck_mat.albedo_color = _NECK_COLOR
 	neck_mat.roughness = 0.9
 	BodyRim.apply(neck_mat)
 	neck.material_override = neck_mat
 	body.add_child(neck)
-
-	var cage := MeshInstance3D.new()
-	cage.name = "Cage"
-	cage.mesh = _shared("goalie_cage", func() -> ArrayMesh:
-		var st := SurfaceTool.new()
-		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		st.set_smooth_group(-1)  # flat shading — see SkaterMeshBuilder doc block
-		# Straddles the face station's front surface (−Z reach 0.160) so the
-		# plate sits ~8 mm proud with its back buried in the shell.
-		_box(st, Vector3(-0.075, -0.095, -0.168), Vector3(0.075, 0.015, -0.150))
-		st.generate_normals()
-		return st.commit())
-	var cage_mat := StandardMaterial3D.new()
-	cage_mat.albedo_color = _CAGE_COLOR
-	cage_mat.roughness = 0.35
-	BodyRim.apply(cage_mat)
-	cage.material_override = cage_mat
-	head.add_child(cage)
 
 
 static func _build_mask() -> ArrayMesh:
@@ -263,13 +262,38 @@ static func _build_mask() -> ArrayMesh:
 	st.set_smooth_group(-1)  # flat shading — see SkaterMeshBuilder doc block
 	var loops: Array[PackedVector3Array] = []
 	for s: Vector4 in _MASK_STATIONS:
-		loops.append(_mask_loop(s.x, s.y, s.z, s.w))
+		loops.append(_mask_loop(
+				s.x, s.y * _MASK_BULK, s.z * _MASK_BULK, s.w * _MASK_BULK))
 	_sweep_loops(st, loops)
 	_loop_cap(st, loops[0], Vector3(0.0, _MASK_STATIONS[0].x, 0.0), true)
 	_loop_cap(st, loops[loops.size() - 1],
 			Vector3(0.0, _MASK_STATIONS[_MASK_STATIONS.size() - 1].x, 0.0), false)
 	st.generate_normals()
-	return st.commit()
+	return _bake_cage_tint(st.commit())
+
+
+# Rebuilds the committed surface with per-facet vertex colors: dark on the
+# cage facets, white (= pure kit paint) everywhere else. Flat shading keeps
+# vertices un-shared across facets, so a whole-triangle color never bleeds.
+static func _bake_cage_tint(mesh: ArrayMesh) -> ArrayMesh:
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var colors := PackedColorArray()
+	colors.resize(verts.size())
+	var cos_limit: float = cos(deg_to_rad(_CAGE_HALF_ANGLE_DEG))
+	for i in range(0, verts.size(), 3):
+		var c: Vector3 = (verts[i] + verts[i + 1] + verts[i + 2]) / 3.0
+		var flat: float = Vector2(c.x, c.z).length()
+		var in_cage: bool = c.y < _CAGE_TOP_Y and c.y > _CAGE_BOT_Y \
+				and flat > 0.001 and -c.z / flat > cos_limit
+		var col: Color = _CAGE_TINT if in_cage else Color.WHITE
+		colors[i] = col
+		colors[i + 1] = col
+		colors[i + 2] = col
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
 
 
 # Egg-shaped cross-section: _ring's trig (θ = 0 at +Z, CCW from +Y — same
