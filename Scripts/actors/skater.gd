@@ -1870,12 +1870,17 @@ const _SHOULDER_CAP_REST_POLE := Vector3(0.32, -0.93, -0.17)
 
 
 # Leans the deltoid cap on the anchor's side toward that arm's shoulder→elbow
-# direction. The basis keeps local +X pointed as outboard as the pole allows,
-# so the shoulder-number decal (painted facing ±X — see ShoulderDecal's
-# uv1_offset in SkaterUniformCoordinator) tilts with the shoulder without ever
-# rolling away from the camera. Writes rotation only — the caps' scale is
-# SkaterAppearanceCoordinator's (quaternion assignment preserves it) and their
-# position is the scene's.
+# direction. Two texture constraints shape the basis (the shoulder-number
+# decal was authored against the caps' identity orientation):
+#   - The +Y pole points AWAY from the arm. The prolate mesh is end-symmetric
+#     so the −Y end still hugs the arm root, while the equirect texture stays
+#     upright — an along-the-arm (downward) pole renders the number flipped
+#     and mirrored.
+#   - Local +X stays near world +X for BOTH caps; each side's decal picks its
+#     outboard face via uv1_offset (±0.25), exactly as at identity. Flipping
+#     +X outboard per side turns the left cap's number to the inside.
+# Writes rotation only — the caps' scale is SkaterAppearanceCoordinator's
+# (quaternion assignment preserves it) and their position is the scene's.
 func _orient_shoulder_cap(anchor_local: Vector3, elbow_w: Vector3) -> void:
 	var side: float = signf(anchor_local.x)
 	var cap: MeshInstance3D = _shoulder_cap_l if side < 0.0 else _shoulder_cap_r
@@ -1886,10 +1891,10 @@ func _orient_shoulder_cap(anchor_local: Vector3, elbow_w: Vector3) -> void:
 		return
 	var rest: Vector3 = _SHOULDER_CAP_REST_POLE.normalized()
 	rest.x *= side
-	var pole: Vector3 = rest.slerp(arm_dir.normalized(), _SHOULDER_CAP_FOLLOW)
-	var x_axis: Vector3 = Vector3(side, 0.0, 0.0) - pole * (pole.x * side)
+	var pole: Vector3 = -rest.slerp(arm_dir.normalized(), _SHOULDER_CAP_FOLLOW)
+	var x_axis: Vector3 = Vector3.RIGHT - pole * pole.x
 	if x_axis.length_squared() < 0.01:
-		return  # pole nearly straight outboard — keep the last stable roll
+		return  # pole nearly along +X — keep the last stable roll
 	x_axis = x_axis.normalized()
 	cap.quaternion = Basis(x_axis, pole, x_axis.cross(pole)).get_rotation_quaternion()
 

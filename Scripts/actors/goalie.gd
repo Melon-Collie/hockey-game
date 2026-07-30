@@ -85,6 +85,10 @@ func _ready() -> void:
 	_head.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_glove.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_blocker.collision_layer = Constants.LAYER_GOALIE_BODIES
+	# Swap the scene's primitive part meshes for the shared low-poly faceted
+	# set (colliders untouched). Before the uniform coordinator only by
+	# convention — painting is material_override / ShaderMaterial, mesh-free.
+	GoalieMeshBuilder.apply_goalie(self)
 	_init_connectors()
 	_init_arm_bones()
 	_setup_uniform_coordinator()
@@ -288,9 +292,9 @@ func _setup_uniform_coordinator() -> void:
 
 
 func _init_connectors() -> void:
-	left_hip_connector = _make_connector_mesh(0.08)
+	left_hip_connector = _make_connector_mesh()
 	add_child(left_hip_connector)
-	right_hip_connector = _make_connector_mesh(0.08)
+	right_hip_connector = _make_connector_mesh()
 	add_child(right_hip_connector)
 
 
@@ -313,13 +317,11 @@ func _init_arm_bones() -> void:
 	add_child(blocker_elbow_sphere)
 
 
-func _make_connector_mesh(radius: float) -> MeshInstance3D:
+# Unit-height shared tube (radius baked at HIP_CONNECTOR_RADIUS); the
+# per-frame stretch lives in _point_connector's basis, not the mesh.
+func _make_connector_mesh() -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
-	cyl.height = 0.1
-	mi.mesh = cyl
+	mi.mesh = GoalieMeshBuilder.shared_connector_tube()
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mi
 
@@ -362,19 +364,19 @@ static func _up_for_look_at(direction: Vector3) -> Vector3:
 	return Vector3.UP
 
 
-# Node3D wrapper with a unit CylinderMesh child rotated 90° around X so the
-# cylinder's local Y maps to the wrapper's look_at forward axis (Z). scale.z
-# is set per tick to the bone's actual length by _update_arm_bone().
+# Node3D wrapper with the shared unit bone prism as a "Cylinder" child (name
+# kept for the painter seam), rotated 90° around X so the prism's local Y
+# maps to the wrapper's look_at forward axis (Z). scale.z on the wrapper is
+# set per tick to the bone's length by _update_arm_bone(); the child's own
+# X/Z scale is the arm thickness (unit-radius mesh) — same rig contract as
+# Skater._resolve_or_create_bone_mesh.
 func _make_arm_bone() -> Node3D:
 	var wrapper := Node3D.new()
 	var mi := MeshInstance3D.new()
 	mi.name = "Cylinder"
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = _ARM_RADIUS * 0.5
-	cyl.bottom_radius = _ARM_RADIUS * 0.5
-	cyl.height = 1.0
-	cyl.radial_segments = 12
-	mi.mesh = cyl
+	mi.mesh = SkaterMeshBuilder.shared_arm_bone()
+	var radius: float = _ARM_RADIUS * 0.5
+	mi.scale = Vector3(radius, 1.0, radius)
 	mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	wrapper.add_child(mi)
@@ -383,12 +385,8 @@ func _make_arm_bone() -> Node3D:
 
 func _make_sphere_mesh(radius: float) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = radius
-	sphere.height = radius * 2.0
-	sphere.radial_segments = 12
-	sphere.rings = 6
-	mi.mesh = sphere
+	mi.mesh = SkaterMeshBuilder.shared_joint_ball()
+	mi.scale = Vector3.ONE * radius
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mi
 
@@ -462,10 +460,11 @@ func _point_connector(mesh: MeshInstance3D, from_pos: Vector3, to_pos: Vector3) 
 		return
 	mesh.visible = true
 	mesh.position = (from_pos + to_pos) * 0.5
-	# Orient CylinderMesh (Y-axis aligned) to point from from_pos to to_pos.
+	# Orient the unit tube (Y-axis aligned) to point from from_pos to to_pos.
+	# The stretch to the span's length rides the basis Y column — mesh
+	# mutation would leak through the shared connector mesh to every goalie.
 	var y_axis: Vector3 = diff / length
 	var ref: Vector3 = Vector3.FORWARD if abs(y_axis.dot(Vector3.UP)) < 0.99 else Vector3.RIGHT
 	var x_axis: Vector3 = ref.cross(y_axis).normalized()
 	var z_axis: Vector3 = x_axis.cross(y_axis).normalized()
-	mesh.basis = Basis(x_axis, y_axis, z_axis)
-	(mesh.mesh as CylinderMesh).height = length
+	mesh.basis = Basis(x_axis, y_axis * length, z_axis)

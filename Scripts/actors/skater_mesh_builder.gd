@@ -134,7 +134,10 @@ static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
 
 
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
-	var mi: MeshInstance3D = root.get_node_or_null(path) as MeshInstance3D
+	_swap_instance(root.get_node_or_null(path) as MeshInstance3D, key, builder)
+
+
+static func _swap_instance(mi: MeshInstance3D, key: String, builder: Callable) -> void:
 	if mi == null:
 		return
 	var built: ArrayMesh = _shared(key, builder)
@@ -349,17 +352,12 @@ static func _build_boot() -> ArrayMesh:
 	var loops: Array[PackedVector3Array] = []
 	for s: Vector4 in _BOOT_STATIONS:
 		loops.append(_boot_loop(s.x, s.y, s.z, s.w))
-	var points: int = loops[0].size()
-	for i in n - 1:
-		for k in points:
-			var k1: int = (k + 1) % points
-			_uv_quad(st,
-					loops[i][k], Vector2.ZERO,
-					loops[i][k1], Vector2(0.1, 0.0),
-					loops[i + 1][k1], Vector2(0.1, 0.1),
-					loops[i + 1][k], Vector2(0.0, 0.1))
-	_loop_cap(st, loops[0], _BOOT_STATIONS[0].x, true)          # heel (+Y)
-	_loop_cap(st, loops[n - 1], _BOOT_STATIONS[n - 1].x, false) # toe (−Y)
+	_sweep_loops(st, loops)
+	var heel := Vector3(0.0, _BOOT_STATIONS[0].x, (loops[0][0].z + loops[0][2].z) * 0.5)
+	var toe := Vector3(0.0, _BOOT_STATIONS[n - 1].x,
+			(loops[n - 1][0].z + loops[n - 1][2].z) * 0.5)
+	_loop_cap(st, loops[0], heel, true)      # heel (+Y)
+	_loop_cap(st, loops[n - 1], toe, false)  # toe (−Y)
 	_box(st, Vector3(-_BLADE_HALF_W, _BLADE_Y_MIN, _BLADE_Z_TOP),
 			Vector3(_BLADE_HALF_W, _BLADE_Y_MAX, _BLADE_Z_BOT))
 	st.generate_normals()
@@ -383,14 +381,31 @@ static func _boot_loop(y: float, half_w: float, top_z: float, sole_z: float) -> 
 	return pts
 
 
-# Fan cap over a boot cross-section loop (closed — no duplicated seam point,
-# unlike _ring), facing +Y (heel) or −Y (toe) along the boot's length axis.
-static func _loop_cap(st: SurfaceTool, loop: PackedVector3Array, y: float,
-		facing_heel: bool) -> void:
-	var center := Vector3(0.0, y, (loop[0].z + loop[2].z) * 0.5)
+# Band quads between consecutive CLOSED loops (equal point counts, no
+# duplicated seam point — unlike _ring). Contract: loops are wound counter-
+# clockwise as seen from the sweep's START side (the side loops[0] faces) and
+# advance away from it, matching _ring/_boot_loop — the shared quad ordering
+# then keeps every face outward. UVs are nominal; sweep parts paint solid.
+# A closed sweep (torus) just appends its first loop again as the last.
+static func _sweep_loops(st: SurfaceTool, loops: Array[PackedVector3Array]) -> void:
+	var points: int = loops[0].size()
+	for i in loops.size() - 1:
+		for k in points:
+			var k1: int = (k + 1) % points
+			_uv_quad(st,
+					loops[i][k], Vector2.ZERO,
+					loops[i][k1], Vector2(0.1, 0.0),
+					loops[i + 1][k1], Vector2(0.1, 0.1),
+					loops[i + 1][k], Vector2(0.0, 0.1))
+
+
+# Fan cap over a closed loop. facing_start caps the sweep's start side
+# (facing against the advance direction), the winding mirror of the end cap.
+static func _loop_cap(st: SurfaceTool, loop: PackedVector3Array, center: Vector3,
+		facing_start: bool) -> void:
 	for k in loop.size():
 		var k1: int = (k + 1) % loop.size()
-		if facing_heel:
+		if facing_start:
 			_tri(st, center, Vector2.ZERO, loop[k1], Vector2.ZERO, loop[k], Vector2.ZERO)
 		else:
 			_tri(st, center, Vector2.ZERO, loop[k], Vector2.ZERO, loop[k1], Vector2.ZERO)
