@@ -41,6 +41,10 @@ const _TORSO_PROFILE: Array[Vector2] = [
 	Vector2(-0.230, 0.214),
 	Vector2(-0.275, 0.222),  # jersey hem flare
 ]
+# Rear (+Z is the back) shift per _TORSO_PROFILE ring — the hockey-butt sway:
+# the seat builds through the lower back and peaks at the hem that drapes
+# over it, while the chest rings stay centered so the belly keeps its line.
+const _TORSO_REAR_SWAY: Array[float] = [0.0, 0.0, 0.0, 0.006, 0.018, 0.028, 0.032]
 const _THIGH_PROFILE: Array[Vector2] = [
 	Vector2(0.150, 0.142),
 	Vector2(0.050, 0.139),
@@ -334,7 +338,8 @@ static func shared_knob() -> ArrayMesh:
 
 
 static func _build_torso() -> ArrayMesh:
-	return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE)
+	return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
+			_TORSO_REAR_SWAY)
 
 
 # Helmet shell: lat/long bands whose bottom latitude follows the per-azimuth
@@ -537,7 +542,8 @@ static func _build_skate() -> ArrayMesh:
 # convention from the class doc block. Both end caps are emitted — the engine
 # cylinders had them, and the torso's top cap is where the yoke paints.
 static func _build_lathe(profile: Array[Vector2], sides: int,
-		x_scale: float, z_scale: float) -> ArrayMesh:
+		x_scale: float, z_scale: float,
+		z_offsets: Array[float] = []) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_smooth_group(-1)  # flat shading — see class doc block
@@ -546,8 +552,18 @@ static func _build_lathe(profile: Array[Vector2], sides: int,
 	var span: float = maxf(y_top - y_bot, 0.001)
 	var rings: Array[PackedVector3Array] = []
 	var vs := PackedFloat32Array()
-	for s: Vector2 in profile:
-		rings.append(_ring(s.x, s.y, x_scale, z_scale, sides))
+	for i in profile.size():
+		var s: Vector2 = profile[i]
+		var ring: PackedVector3Array = _ring(s.x, s.y, x_scale, z_scale, sides)
+		# Optional per-ring Z shift (index-aligned with the profile; short or
+		# empty array = centered). Rings stay circular — the shift moves the
+		# whole ring, giving the lathe an asymmetric sway (the torso's seat)
+		# while the angular UV convention is untouched.
+		var z_off: float = z_offsets[i] if i < z_offsets.size() else 0.0
+		if z_off != 0.0:
+			for k in ring.size():
+				ring[k].z += z_off
+		rings.append(ring)
 		vs.append(0.5 * (y_top - s.x) / span)
 	for i in profile.size() - 1:
 		for k in sides:
@@ -558,8 +574,11 @@ static func _build_lathe(profile: Array[Vector2], sides: int,
 					rings[i][k + 1], Vector2(u1, vs[i]),
 					rings[i + 1][k + 1], Vector2(u1, vs[i + 1]),
 					rings[i + 1][k], Vector2(u0, vs[i + 1]))
-	_cap(st, rings[0], Vector3(0.0, y_top, 0.0), Vector2(0.25, 0.75), true)
-	_cap(st, rings[rings.size() - 1], Vector3(0.0, y_bot, 0.0), Vector2(0.75, 0.75), false)
+	var top_off: float = z_offsets[0] if z_offsets.size() > 0 else 0.0
+	var bot_off: float = z_offsets[profile.size() - 1] \
+			if z_offsets.size() >= profile.size() else 0.0
+	_cap(st, rings[0], Vector3(0.0, y_top, top_off), Vector2(0.25, 0.75), true)
+	_cap(st, rings[rings.size() - 1], Vector3(0.0, y_bot, bot_off), Vector2(0.75, 0.75), false)
 	st.generate_normals()
 	return st.commit()
 
