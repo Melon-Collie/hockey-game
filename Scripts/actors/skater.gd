@@ -1872,10 +1872,10 @@ const _SHOULDER_CAP_REST_POLE := Vector3(0.32, -0.93, -0.17)
 # Leans the deltoid cap on the anchor's side toward that arm's shoulder→elbow
 # direction. Two texture constraints shape the basis (the shoulder-number
 # decal was authored against the caps' identity orientation):
-#   - The +Y pole points AWAY from the arm. The prolate mesh is end-symmetric
-#     so the −Y end still hugs the arm root, while the equirect texture stays
-#     upright — an along-the-arm (downward) pole renders the number flipped
-#     and mirrored.
+#   - The +Y pole points AWAY from the arm: the cap's blunt torso-side base
+#     leans into the trap while the tapered −Y tail runs down the arm, and
+#     the equirect texture stays upright — an along-the-arm (downward) pole
+#     renders the number flipped and mirrored.
 #   - Local +X stays near world +X for BOTH caps; each side's decal picks its
 #     outboard face via uv1_offset (±0.25), exactly as at identity. Flipping
 #     +X outboard per side turns the left cap's number to the inside.

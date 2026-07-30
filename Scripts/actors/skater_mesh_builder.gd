@@ -107,13 +107,22 @@ const _HEAD_FORWARD_M: float = 0.015
 # unmistakable in playtests until real skin tones arrive.
 const HEAD_COLOR := Color(1.0, 0.2, 0.75)
 
-# Shoulder cap: a prolate deltoid pad, elongated along its local +Y pole. The
-# pole is NOT static — Skater._orient_shoulder_cap leans it toward the arm's
-# live upper-arm direction each rig update, so the elongation must read as
-# "along the arm", not "tall". Slightly narrower than the ball it replaced;
-# the length makes up the presence.
-const _SHOULDER_RADIUS: float = 0.105
-const _SHOULDER_Y_SCALE: float = 1.3
+# Shoulder cap: an asymmetric deltoid pad. The +Y end — which
+# Skater._orient_shoulder_cap points INTO the trap/chest (away from the arm)
+# — is a blunt, flat-capped base, so the cap merges into the torso
+# silhouette instead of pinching to a pole right where it meets the chest;
+# the −Y end keeps the prolate taper that runs down the arm. Stations are
+# (y, radius, equirect v): the v column preserves the sphere-convention
+# mapping the shoulder-number decal is painted against, with the number band
+# on the full-width equator.
+const _SHOULDER_PROFILE: Array[Vector3] = [
+	Vector3(0.075, 0.068, 0.12),   # blunt torso-side base (flat-capped)
+	Vector3(0.045, 0.096, 0.30),
+	Vector3(0.000, 0.105, 0.50),   # equator — the number band
+	Vector3(-0.055, 0.096, 0.68),
+	Vector3(-0.105, 0.070, 0.85),
+	Vector3(-0.137, 0.030, 1.0),   # arm-side taper
+]
 
 const _HIP_RADIUS: float = 0.13
 const _KNEE_RADIUS: float = 0.095
@@ -301,7 +310,30 @@ static func _ensure_head(upper_body: Node3D) -> void:
 
 
 static func _build_shoulder() -> ArrayMesh:
-	return _build_ball(_SHOULDER_RADIUS, 10, 5, 1.0, _SHOULDER_Y_SCALE)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see class doc block
+	var lon: int = 10
+	var n: int = _SHOULDER_PROFILE.size()
+	var rings: Array[PackedVector3Array] = []
+	for s: Vector3 in _SHOULDER_PROFILE:
+		rings.append(_ring(s.x, s.y, 1.0, 1.0, lon))
+	for i in n - 1:
+		for k in lon:
+			var u0: float = float(k) / float(lon)
+			var u1: float = float(k + 1) / float(lon)
+			_uv_quad(st,
+					rings[i][k], Vector2(u0, _SHOULDER_PROFILE[i].z),
+					rings[i][k + 1], Vector2(u1, _SHOULDER_PROFILE[i].z),
+					rings[i + 1][k + 1], Vector2(u1, _SHOULDER_PROFILE[i + 1].z),
+					rings[i + 1][k], Vector2(u0, _SHOULDER_PROFILE[i + 1].z))
+	# Caps sample the decal's pole regions (plain shoulder color).
+	_cap(st, rings[0], Vector3(0.0, _SHOULDER_PROFILE[0].x, 0.0),
+			Vector2(0.5, 0.06), true, 0.05)
+	_cap(st, rings[n - 1], Vector3(0.0, _SHOULDER_PROFILE[n - 1].x, 0.0),
+			Vector2(0.5, 0.97), false, 0.02)
+	st.generate_normals()
+	return st.commit()
 
 
 static func _build_hip() -> ArrayMesh:
