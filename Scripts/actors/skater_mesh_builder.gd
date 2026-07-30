@@ -75,9 +75,20 @@ const _LEG_SIDES: int = 8
 # cut_v(θ) = CUT_BASE + CUT_BACK_BIAS·cos(θ) in equirect latitude fractions
 # (θ = 0 is +Z, the back).
 const _HELMET_RADIUS: float = 0.155
-const _HELMET_CUT_BASE: float = 0.69
-const _HELMET_CUT_BACK_BIAS: float = 0.11
+const _HELMET_CUT_BASE: float = 0.6725   # front rim (base − bias) = 0.545: brow line
+const _HELMET_CUT_BACK_BIAS: float = 0.1275  # back rim (base + bias) = 0.80: nape
+# The shell closes with a fan to an apex HIGH inside the dome (this fraction
+# of the radius up), not a floor at rim height — a low floor reads as a
+# helmet-colored lid across the face opening from the top-down camera,
+# hiding the head entirely. High, the closure is an interior liner you only
+# glimpse near the rim.
+const _HELMET_LINER_APEX_FRAC: float = 0.5
 const HEAD_RADIUS: float = 0.135
+# The head sits this far forward of the helmet center (real faces do) so the
+# face shows near-flush in the brow opening instead of recessed 2 cm behind
+# the rim. Capped by clearance: forward offset + HEAD_RADIUS must stay under
+# _HELMET_RADIUS or the face pokes through the shell at the front equator.
+const _HEAD_FORWARD_M: float = 0.015
 # Placeholder skin — deliberately shocking pink so the head/helmet split is
 # unmistakable in playtests until real skin tones arrive.
 const HEAD_COLOR := Color(1.0, 0.2, 0.75)
@@ -243,14 +254,8 @@ static func _build_helmet() -> ArrayMesh:
 					rings[j][k + 1], Vector2(0.1, 0.0),
 					rings[j + 1][k + 1], Vector2(0.1, 0.1),
 					rings[j + 1][k], Vector2(0.0, 0.1))
-	var rim: PackedVector3Array = rings[lat]
-	var center := Vector3.ZERO
-	for k in lon:
-		center += rim[k]
-	center /= float(lon)
-	center.x = 0.0
-	center.z = 0.0
-	_cap(st, rim, center, Vector2(0.5, 0.9), false, 0.05)
+	var apex := Vector3(0.0, _HELMET_RADIUS * _HELMET_LINER_APEX_FRAC, 0.0)
+	_cap(st, rings[lat], apex, Vector2(0.5, 0.9), false, 0.05)
 	st.generate_normals()
 	return st.commit()
 
@@ -266,6 +271,7 @@ static func _ensure_head(upper_body: Node3D) -> void:
 		return
 	var head := MeshInstance3D.new()
 	head.name = "Head"
+	head.position = Vector3(0.0, 0.0, -_HEAD_FORWARD_M)
 	head.mesh = _shared("head", func() -> ArrayMesh:
 		return _build_ball(HEAD_RADIUS, 10, 5, 1.0))
 	var mat := StandardMaterial3D.new()
