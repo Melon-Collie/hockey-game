@@ -65,8 +65,11 @@ func _parts() -> Array[PartSpec]:
 				Vector3(2.0, SkaterMeshBuilder.CUFF_HEIGHT_M, 2.0), true),
 		PartSpec.new("knob", SkaterMeshBuilder.shared_knob(),
 				Vector3(0.07, SkaterMeshBuilder.KNOB_HEIGHT_M, 0.07), true),
+		# Hip re-pinned +0.02 over the replaced r-0.13 ball: deliberately
+		# inflated to fill the seat under the torso's rear sway (the seat's
+		# rearward bias itself is scene node placement, not mesh).
 		PartSpec.new("hip", SkaterMeshBuilder._build_hip(),
-				Vector3(0.26, 0.26, 0.26), false),
+				Vector3(0.28, 0.28, 0.28), false),
 		PartSpec.new("knee", SkaterMeshBuilder._build_knee(),
 				Vector3(0.19, 0.19, 0.19), false),
 		PartSpec.new("thigh", SkaterMeshBuilder._build_thigh(),

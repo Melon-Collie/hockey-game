@@ -129,7 +129,10 @@ const _SHOULDER_PROFILE: Array[Vector3] = [
 	Vector3(-0.137, 0.030, 1.0),   # arm-side taper
 ]
 
-const _HIP_RADIUS: float = 0.13
+# Hips fill the seat under the torso's rear sway: a touch bigger than the
+# 0.13 they shipped at, with the rearward seat bias carried by the HipL/R
+# nodes' scene position (z 0.035).
+const _HIP_RADIUS: float = 0.138
 const _KNEE_RADIUS: float = 0.095
 
 # Gloved fist: a beveled cube, slightly wider than deep and chamfered all

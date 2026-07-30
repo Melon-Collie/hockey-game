@@ -156,7 +156,7 @@ transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, -
 mesh = SubResource("SphereMesh_ubeil")
 
 [node name="HipL" type="MeshInstance3D" parent="MeshRoot/LowerBody/LegL" unique_id=2034017323]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.02)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.035)
 mesh = SubResource("SphereMesh_07vrx")
 
 [node name="ThighL" type="MeshInstance3D" parent="MeshRoot/LowerBody/LegL" unique_id=1496610064]
@@ -186,7 +186,7 @@ transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, -
 mesh = SubResource("SphereMesh_ubeil")
 
 [node name="HipR" type="MeshInstance3D" parent="MeshRoot/LowerBody/LegR" unique_id=380576510]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.02)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.035)
 mesh = SubResource("SphereMesh_07vrx")
 
 [node name="ThighR" type="MeshInstance3D" parent="MeshRoot/LowerBody/LegR" unique_id=1092789908]
