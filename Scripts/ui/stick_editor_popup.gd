@@ -216,7 +216,7 @@ func _build() -> void:
 	vbox.add_child(action_row)
 
 	var done_btn := Button.new()
-	done_btn.text = tr(&"STICK_EDITOR_DONE")
+	done_btn.text = tr(&"EDITOR_DONE")
 	MenuStyle.apply_primary_cta(done_btn, 18)
 	done_btn.custom_minimum_size = Vector2(140, 44)
 	done_btn.pressed.connect(_done)
@@ -224,7 +224,7 @@ func _build() -> void:
 	action_row.add_child(done_btn)
 
 	var cancel_btn := Button.new()
-	cancel_btn.text = tr(&"STICK_EDITOR_CANCEL")
+	cancel_btn.text = tr(&"EDITOR_CANCEL")
 	cancel_btn.custom_minimum_size = Vector2(140, 44)
 	cancel_btn.add_theme_font_size_override("font_size", 18)
 	cancel_btn.pressed.connect(_cancel)

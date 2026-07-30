@@ -336,6 +336,10 @@ static func shared_boot() -> ArrayMesh:
 	return _shared("boot", _build_boot)
 
 
+static func shared_skate_collar() -> ArrayMesh:
+	return _shared("skate", _build_skate)
+
+
 static func shared_skate_blade() -> ArrayMesh:
 	return _shared("skate_blade", _build_skate_blade)
 

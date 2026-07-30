@@ -29,8 +29,8 @@ DRILL_SHOT_ACCURACY,Shot Accuracy,Precisión de Tiro
 DRILL_PASSING,Passing,Pases
 STICK_EDIT_BUTTON,Edit Stick,Editar palo
 STICK_EDITOR_TITLE,Stick,Palo
-STICK_EDITOR_DONE,Done,Hecho
-STICK_EDITOR_CANCEL,Cancel,Cancelar
+EDITOR_DONE,Done,Hecho
+EDITOR_CANCEL,Cancel,Cancelar
 STICK_GEAR_LOCKED,Gear is locked during online play — tape can still change.,El equipo está bloqueado en partidas en línea — la cinta aún puede cambiar.
 STICK_GEAR_LENGTH,Length,Largo
 STICK_GEAR_CURVE,Curve,Curva
@@ -76,6 +76,11 @@ PLAYER_IDENTITY_HEADING,Identity,Identidad
 PLAYER_SKIN_LABEL,Skin:,Piel:
 PLAYER_EQUIPMENT_HEADING,Equipment,Equipamiento
 EQUIP_STICK_LABEL,Stick:,Palo:
+EQUIP_GEAR_LABEL,Gear:,Equipamiento:
+GEAR_EDIT_BUTTON,Edit Gear,Editar equipamiento
+GEAR_PENDING_NOTE,Unapplied gear changes,Cambios del equipamiento sin aplicar
+GEAR_EDITOR_TITLE,Gear,Equipamiento
+GEAR_LOCKED_NOTE,Profile is locked during online play — colors can still change.,El perfil está bloqueado en partidas en línea — los colores aún pueden cambiar.
 GEAR_PROFILE_LABEL,Profile:,Perfil:
 GEAR_SKATES_LABEL,Skates:,Patines:
 GEAR_GLOVES_LABEL,Gloves:,Guantes:

@@ -22,6 +22,7 @@ const _SCRIPTS: Array[String] = [
 	"res://Scripts/ui/options/controls_tab.gd",
 	"res://Scripts/ui/lobby_manager.gd",
 	"res://Scripts/ui/stick_editor_popup.gd",
+	"res://Scripts/ui/gear_editor_popup.gd",
 	"res://Scripts/ui/swatch_dropdown.gd",
 	"res://Scripts/ui/pause_menu.gd",
 	"res://Scripts/ui/confirm_dialog.gd",
