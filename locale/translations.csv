@@ -72,9 +72,8 @@ TAPE_COLOR_TEAM_SHORT,Team,Equipo
 STICK_COL_GEAR,GEAR,EQUIPAMIENTO
 STICK_COL_TAPE,TAPE,CINTA
 STICK_PENDING_NOTE,Unapplied stick changes,Cambios del palo sin aplicar
-PLAYER_IDENTITY_HEADING,Identity,Identidad
 PLAYER_SKIN_LABEL,Skin:,Piel:
-PLAYER_EQUIPMENT_HEADING,Equipment,Equipamiento
+PLAYER_POSITION_LABEL,Position:,Posición:
 EQUIP_STICK_LABEL,Stick:,Palo:
 EQUIP_GEAR_LABEL,Gear:,Equipamiento:
 GEAR_EDIT_BUTTON,Edit Gear,Editar equipamiento

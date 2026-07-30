@@ -1,12 +1,11 @@
 class_name PlayerSettingsPopup
 extends Control
 
-# The player screen — who you are, in two columns:
-#
-#   IDENTITY  — name, number, handedness, skin tone, height, weight, team
-#   EQUIPMENT — two workbenches: the stick (StickEditorPopup: gear + tape +
-#               live preview) and the gear (GearEditorPopup: blade profile +
-#               skate/glove color + live preview)
+# The player screen — who you are, one column: name, number, handedness,
+# preferred position, skin tone, team, height, weight, and the two equipment
+# workbenches — the stick (StickEditorPopup: gear + tape + live preview) and
+# the gear (GearEditorPopup: blade profile + skate/glove color + live
+# preview).
 #
 # One build per player, no presets — edits land directly on PlayerPrefs' flat
 # fields. Opened from the main menu only (the lobby has no build editor).
@@ -29,6 +28,10 @@ signal attributes_changed(attrs: PlayerAttributes)
 # Hover tooltips. Headline effects only.
 const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the speed/agility/shot baselines.\nSmall = shiftier with quicker turns; big = longer reach & harder shot."
 const _WEIGHT_TOOLTIP: String = "Frame mass, bounded by your height.\nLean = quicker first step, fast stamina recovery, easier to move.\nHeavy = harder hits & harder to move, deep but slow-refilling tank."
+const _POSITION_TOOLTIP: String = "Preferred position — where a lobby seats you when you join.\nIn 3v3 the wings and D pair up on their side: LW/LD take the left,\nRW/RD the right. A taken seat falls back to the first open one."
+# Display order (hockey-natural, wings around the C) → position index
+# (PlayerRules.POSITION_NAMES order).
+const _POSITION_ORDER: Array[int] = [1, 0, 2, 3, 4]
 
 # Controls — kept as refs so Cancel can restore them from the snapshot.
 var _name_field: LineEdit = null
@@ -39,6 +42,8 @@ var _left_btn: Button = null
 var _right_btn: Button = null
 var _color_dropdown: PaletteDropdown = null
 var _skin_buttons: Array[Button] = []
+# Position toggles keyed by POSITION index (not display order).
+var _position_buttons: Dictionary = {}
 var _height_slider: HSlider = null
 var _height_value_label: Label = null
 var _weight_slider: HSlider = null
@@ -57,6 +62,7 @@ var _gear_pending_label: Label = null
 var _pending_name: String = ""
 var _pending_number: int = 0
 var _pending_is_left: bool = false
+var _pending_position: int = 0
 var _pending_color_slot: int = -1
 var _pending_skin: int = SkinToneRegistry.DEFAULT_INDEX
 # The pending build in canonical order (height in, weight lbs, gear 0/2).
@@ -164,46 +170,23 @@ func _build() -> void:
 	MenuStyle.apply_heading(title)
 	vbox.add_child(title)
 
-	# Two columns: who you are on the left, what you carry on the right.
-	# Fixed column widths keep the popup from breathing as content changes.
-	# Both columns top-align so the two headings sit on the same line.
-	var columns := HBoxContainer.new()
-	columns.alignment = BoxContainer.ALIGNMENT_CENTER
-	columns.add_theme_constant_override("separation", 48)
-	vbox.add_child(columns)
+	# One column, every row on the shared label gutter. Fixed width so the
+	# panel doesn't breathe as warnings and pending notes come and go.
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 12)
+	col.custom_minimum_size = Vector2(420, 0)
+	vbox.add_child(col)
 
-	var identity_col := VBoxContainer.new()
-	identity_col.add_theme_constant_override("separation", 16)
-	identity_col.custom_minimum_size = Vector2(380, 0)
-	columns.add_child(identity_col)
-
-	var equipment_col := VBoxContainer.new()
-	equipment_col.add_theme_constant_override("separation", 16)
-	equipment_col.custom_minimum_size = Vector2(320, 0)
-	columns.add_child(equipment_col)
-
-	var identity_heading := Label.new()
-	identity_heading.text = tr(&"PLAYER_IDENTITY_HEADING")
-	identity_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	MenuStyle.apply_heading(identity_heading, 22)
-	identity_col.add_child(identity_heading)
-
-	_build_name_section(identity_col)
-	_build_number_section(identity_col)
-	_build_handedness_section(identity_col)
-	_build_skin_section(identity_col)
-	_build_height_section(identity_col)
-	_build_weight_section(identity_col)
-	_build_team_section(identity_col)
-
-	var equipment_heading := Label.new()
-	equipment_heading.text = tr(&"PLAYER_EQUIPMENT_HEADING")
-	equipment_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	MenuStyle.apply_heading(equipment_heading, 22)
-	equipment_col.add_child(equipment_heading)
-
-	_build_stick_row(equipment_col)
-	_build_gear_row(equipment_col)
+	_build_name_section(col)
+	_build_number_section(col)
+	_build_handedness_section(col)
+	_build_position_section(col)
+	_build_skin_section(col)
+	_build_team_section(col)
+	_build_height_section(col)
+	_build_weight_section(col)
+	_build_stick_row(col)
+	_build_gear_row(col)
 
 	_lock_label = Label.new()
 	_lock_label.text = "Build locked during online play."
@@ -211,7 +194,7 @@ func _build() -> void:
 	_lock_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	_lock_label.add_theme_font_size_override("font_size", 13)
 	_lock_label.visible = false
-	equipment_col.add_child(_lock_label)
+	col.add_child(_lock_label)
 
 	_build_action_row(vbox)
 
@@ -481,6 +464,48 @@ func _build_handedness_section(vbox: VBoxContainer) -> void:
 		_update_apply_state())
 
 
+# Five-way exclusive position toggle (LW C RW LD RD in rink order); the pick
+# is only read at lobby seat time, so it never locks.
+func _build_position_section(vbox: VBoxContainer) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.add_theme_constant_override("separation", 12)
+	vbox.add_child(row)
+
+	row.add_child(_make_identity_label(tr(&"PLAYER_POSITION_LABEL"), _POSITION_TOOLTIP))
+
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 6)
+	row.add_child(buttons)
+	_position_buttons.clear()
+	var made: Array[Button] = []
+	for position: int in _POSITION_ORDER:
+		var btn := Button.new()
+		btn.text = PlayerRules.position_name(position)
+		btn.custom_minimum_size = Vector2(50, 44)
+		btn.add_theme_font_size_override("font_size", 15)
+		btn.tooltip_text = _POSITION_TOOLTIP
+		SoundManager.wire_button(btn)
+		var picked: int = position
+		btn.pressed.connect(func() -> void: _select_position(picked))
+		buttons.add_child(btn)
+		_position_buttons[position] = btn
+		made.append(btn)
+	# Controller: D-pad left/right cycles WITHIN the row (wrap at the ends)
+	# instead of escaping sideways. Up/down still move between rows.
+	if ControllerNav.active() and made.size() > 1:
+		for i: int in made.size():
+			made[i].focus_neighbor_left = made[(i - 1 + made.size()) % made.size()].get_path()
+			made[i].focus_neighbor_right = made[(i + 1) % made.size()].get_path()
+
+
+func _select_position(position: int) -> void:
+	_pending_position = clampi(position, 0, PlayerRules.POSITION_NAMES.size() - 1)
+	for p: int in _position_buttons:
+		MenuStyle.apply_tab_button(_position_buttons[p] as Button, p == _pending_position)
+	_update_apply_state()
+
+
 # One toggle swatch per palette tone; the picked one wears a white ring.
 # Selection is exclusive-managed by _select_skin (set_pressed_no_signal on
 # the rest) so a swatch can never be un-picked into "no skin".
@@ -687,6 +712,7 @@ func _update_apply_state() -> void:
 	var changed: bool = (_pending_name != _snapshot.get("name", "")
 		or _pending_number != _snapshot.get("number", 0)
 		or _pending_is_left != _snapshot.get("is_left", false)
+		or _pending_position != int(_snapshot.get("position", 0))
 		or _pending_color_slot != _snapshot.get("color_slot", -1)
 		or _pending_skin != int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX))
 		or _pending_tape != int(_snapshot.get("tape", StickTapeConfig.DEFAULT_CODE))
@@ -720,6 +746,11 @@ func _apply() -> void:
 		# local_identity_changed signal that GameManager listens to so the
 		# live skater updates without a respawn.
 		NetworkManager.apply_local_identity(_pending_name, _pending_number, _pending_is_left)
+	if _pending_position != int(_snapshot.get("position", 0)):
+		PlayerPrefs.preferred_position = _pending_position
+		# Peer-map mirror only — the preference is read at the next lobby
+		# seat, never live.
+		NetworkManager.apply_local_position(_pending_position)
 	if _pending_skin != int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX)):
 		PlayerPrefs.skin_tone = _pending_skin
 		# Writes the peer map and emits local_skin_changed so GameManager
@@ -764,6 +795,7 @@ func _restore_from_snapshot() -> void:
 	_pending_number = _snapshot.get("number", 0)
 	_pending_is_left = _snapshot.get("is_left", false)
 	_pending_color_slot = _snapshot.get("color_slot", TeamColorRegistry.DEFAULT_HOME_SLOT)
+	_select_position(int(_snapshot.get("position", 0)))
 	_select_skin(int(_snapshot.get("skin", SkinToneRegistry.DEFAULT_INDEX)))
 	_pending_height = int(_snapshot.get("height", PlayerAttributes.HEIGHT_MEDIUM))
 	_pending_weight = int(_snapshot.get("weight", int(PlayerAttributes.NEUTRAL_WEIGHT_LBS)))
@@ -828,6 +860,8 @@ func open() -> void:
 		"name": PlayerPrefs.player_name,
 		"number": PlayerPrefs.jersey_number,
 		"is_left": PlayerPrefs.is_left_handed,
+		"position": clampi(PlayerPrefs.preferred_position, 0,
+				PlayerRules.POSITION_NAMES.size() - 1),
 		"color_slot": saved_slot,
 		"skin": SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone),
 		"height": PlayerPrefs.attr_height,

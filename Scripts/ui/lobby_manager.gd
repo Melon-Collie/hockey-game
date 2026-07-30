@@ -147,8 +147,13 @@ func _ready() -> void:
 		_on_lobby_roster_synced(NetworkManager.pending_lobby_roster)
 		NetworkManager.pending_lobby_roster = []
 	elif NetworkManager.is_host:
-		_assign_slot(1, 0, 0, NetworkManager.local_player_name, NetworkManager.local_is_left_handed, NetworkManager.local_jersey_number)
-		_broadcast_confirm(1, 0, 0)
+		# The host seats itself at its preferred position (an empty lobby, so
+		# the seat is always free).
+		var host_slot: int = PlayerRules.preferred_slot(
+				NetworkManager.get_peer_position(1), _team_size)
+		_assign_slot(1, 0, host_slot, NetworkManager.local_player_name,
+				NetworkManager.local_is_left_handed, NetworkManager.local_jersey_number)
+		_broadcast_confirm(1, 0, host_slot)
 	# Initial Start-button state. The button is constructed disabled; nothing
 	# else fires _update_start_btn until a peer joins/readies, so without this
 	# the host-alone case stays disabled forever.
@@ -739,7 +744,10 @@ func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is
 		if NetworkManager.pending_bot_slots.get(bot_key, false):
 			NetworkManager.send_bot_slot(bot_key, false)
 
-func _find_balanced_slot(_peer_id: int) -> Array:
+# Seat a peer: team by balance first (fairness beats position), then their
+# preferred position's slot for the current mode (PlayerRules.preferred_slot —
+# 3v3 merges the wing/defense pairs onto their side), then any open slot.
+func _find_balanced_slot(peer_id: int) -> Array:
 	var team0: int = 0
 	var team1: int = 0
 	for k: int in _lobby_slots:
@@ -748,7 +756,11 @@ func _find_balanced_slot(_peer_id: int) -> Array:
 		if LobbySlotKey.team_id(k) == 0: team0 += 1
 		else: team1 += 1
 	var preferred_team: int = 0 if team0 <= team1 else 1
+	var want: int = PlayerRules.preferred_slot(
+			NetworkManager.get_peer_position(peer_id), _team_size)
 	for attempt_team: int in [preferred_team, 1 - preferred_team]:
+		if want < _team_size and not _lobby_slots.has(LobbySlotKey.encode(attempt_team, want)):
+			return [attempt_team, want]
 		for s: int in _team_size:
 			if not _lobby_slots.has(LobbySlotKey.encode(attempt_team, s)):
 				return [attempt_team, s]

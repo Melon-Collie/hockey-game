@@ -213,6 +213,10 @@ const PAD_DEFAULT_BUTTONS: Dictionary = {
 var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
+# Preferred position (PlayerRules.POSITION_NAMES index: C/LW/RW/LD/RD) — the
+# lobby seats you here when you join, with the 3v3 wing/defense merge
+# (PlayerRules.preferred_slot). A taken seat falls back to the first open one.
+var preferred_position: int = 0
 # Index into SkinToneRegistry.TONES — identity next to name/number, picked in
 # the edit-player popup and carried through the join handshake like the rest.
 var skin_tone: int = SkinToneRegistry.DEFAULT_INDEX
@@ -498,6 +502,7 @@ func save() -> void:
 	cfg.set_value("player", "name", player_name)
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
+	cfg.set_value("player", "preferred_position", preferred_position)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
 	cfg.set_value("player", "stick_tape", stick_tape_code)
 	cfg.set_value("player", "gear_style", gear_style_code)
@@ -1069,6 +1074,8 @@ func _load() -> void:
 		player_name = cfg.get_value("player", "name", "Player").substr(0, 10)
 		jersey_number = clamp(cfg.get_value("player", "jersey_number", 10), 0, 99)
 		is_left_handed = cfg.get_value("player", "left_handed", true)
+		preferred_position = clampi(int(cfg.get_value("player", "preferred_position", 0)),
+				0, PlayerRules.POSITION_NAMES.size() - 1)
 		# Reads as int; any legacy fruit-name string under the old "preferred_color_id"
 		# key is ignored — hard break, no migration. -1 falls back to the default at
 		# next lobby join.

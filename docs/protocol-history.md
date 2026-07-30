@@ -208,5 +208,9 @@ here whenever you bump, in the same format.
 #      (blade tape color + coverage, knob color, handle style).
 # v49: skin tone as identity — the same three payloads grow a SkinToneRegistry
 #      index next to the tape code.
-# v50: gear cosmetics — the same three payloads grow a packed GearStyleConfig
-#      code (skate boot color + glove color, TapeColorRegistry indices).
+# v50: gear cosmetics + preferred position — the join/spawn/sync payloads grow
+#      a packed GearStyleConfig code (skate boot color + glove color,
+#      TapeColorRegistry indices), and request_join additionally carries the
+#      joiner's preferred position (POSITION_NAMES index) for lobby seating.
+#      The lobby-only update_lobby_attributes/update_lobby_tape RPCs were
+#      removed with the lobby build editor, shifting the RPC ordering.

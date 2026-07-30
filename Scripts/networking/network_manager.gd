@@ -280,6 +280,9 @@ var _peer_shot_sensitivity: Dictionary[int, float] = {}
 var _peer_tape_codes: Dictionary[int, int] = {}
 var _peer_skin_tones: Dictionary[int, int] = {}
 var _peer_gear_styles: Dictionary[int, int] = {}
+# Preferred position (PlayerRules.POSITION_NAMES index) — read by the lobby's
+# host-side seat assignment, never by spawn.
+var _peer_positions: Dictionary[int, int] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
 # Host-only: EMA of the host's OWN round-trip measurement to each peer
 # (host_ping/host_pong). Backs _peer_ping_ms on the host — the trusted RTT that
@@ -424,6 +427,7 @@ func _ready() -> void:
 	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
 	_peer_skin_tones[1] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
 	_peer_gear_styles[1] = GearStyleConfig.from_code(PlayerPrefs.gear_style_code).to_code()
+	_peer_positions[1] = PlayerPrefs.preferred_position
 
 # ── Connection ────────────────────────────────────────────────────────────────
 func start_offline() -> void:
@@ -437,6 +441,7 @@ func start_offline() -> void:
 	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
 	_peer_skin_tones[1] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
 	_peer_gear_styles[1] = GearStyleConfig.from_code(PlayerPrefs.gear_style_code).to_code()
+	_peer_positions[1] = PlayerPrefs.preferred_position
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
 			"rule_set": GameRules.DEFAULT_RULE_SET,
 			"team_size": GameRules.DEFAULT_TEAM_SIZE}
@@ -680,6 +685,7 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_tape_codes.erase(id)
 	_peer_skin_tones.erase(id)
 	_peer_gear_styles.erase(id)
+	_peer_positions.erase(id)
 	pending_color_votes.erase(id)
 	# NOTE: _peer_steam_ids is deliberately NOT erased before the emit below —
 	# GameManager.on_player_disconnected (a synchronous listener) reads
@@ -719,13 +725,14 @@ func _on_connected_to_server() -> void:
 	_peer_skin_tones[local_peer_id()] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
 	_peer_gear_styles[local_peer_id()] = GearStyleConfig.from_code(
 			PlayerPrefs.gear_style_code).to_code()
+	_peer_positions[local_peer_id()] = PlayerPrefs.preferred_position
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.height, local_attrs.weight, local_attrs.profile,
 			local_attrs.curve, local_attrs.flex, local_attrs.length,
 			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
 			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity,
 			PlayerPrefs.stick_tape_code, PlayerPrefs.skin_tone,
-			PlayerPrefs.gear_style_code)
+			PlayerPrefs.gear_style_code, PlayerPrefs.preferred_position)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -833,6 +840,8 @@ func reset() -> void:
 	_peer_skin_tones[1] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
 	_peer_gear_styles.clear()
 	_peer_gear_styles[1] = GearStyleConfig.from_code(PlayerPrefs.gear_style_code).to_code()
+	_peer_positions.clear()
+	_peer_positions[1] = PlayerPrefs.preferred_position
 	pending_game_config = {}
 	pending_lobby_slots = {}
 	pending_lobby_roster = []
@@ -1077,7 +1086,8 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		shot_power_sensitivity: float = 1.0,
 		tape_code: int = StickTapeConfig.DEFAULT_CODE,
 		skin_tone: int = SkinToneRegistry.DEFAULT_INDEX,
-		gear_style_code: int = GearStyleConfig.DEFAULT_CODE) -> void:
+		gear_style_code: int = GearStyleConfig.DEFAULT_CODE,
+		preferred_position: int = 0) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -1125,6 +1135,8 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	_peer_skin_tones[sender_id] = SkinToneRegistry.clamp_index(skin_tone)
 	# Cosmetic gear style — round-trip coerces a forged code to a legal one.
 	_peer_gear_styles[sender_id] = GearStyleConfig.from_code(gear_style_code).to_code()
+	_peer_positions[sender_id] = clampi(preferred_position, 0,
+			PlayerRules.POSITION_NAMES.size() - 1)
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	# Seed the host-measured RTT immediately instead of waiting up to a full
@@ -1245,6 +1257,20 @@ func get_peer_gear_style(peer_id: int) -> int:
 
 func set_peer_gear_style(peer_id: int, gear_style_code: int) -> void:
 	_peer_gear_styles[peer_id] = GearStyleConfig.from_code(gear_style_code).to_code()
+
+
+# A peer's preferred position (PlayerRules.POSITION_NAMES index). Absent
+# peers read as C — the pre-preference seating order.
+func get_peer_position(peer_id: int) -> int:
+	return _peer_positions.get(peer_id, 0)
+
+
+# Local position edit. No signal: the preference is only read at seat time
+# (lobby join / re-seat), never live.
+func apply_local_position(position: int) -> void:
+	var coerced: int = clampi(position, 0, PlayerRules.POSITION_NAMES.size() - 1)
+	_peer_positions[1] = coerced
+	_peer_positions[local_peer_id()] = coerced
 
 # Client-side stash of a roster-synced peer's tape code (the host's own path
 # is request_join). Coerced like every other wire entry point.
