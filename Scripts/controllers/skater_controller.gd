@@ -2221,6 +2221,8 @@ func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
 # Bearing the swing-chirality tracker seeds from at charge start: origin→cursor,
 # the SHOT LINE. MUST mirror _update_wrister_charge's chirality source so the first
 # swing_step is source-to-source and banks no spurious rotation from a bearing jump.
+# (At the pin the swing_anchor translation is zero, so raw origin→cursor IS that
+# source for both anchor frames.)
 # The origin is passed in (rather than read off _aiming) because the state machine
 # captures it on this same edge, a line before reset_wrister stores it.
 func _wrister_chirality_seed(input: InputState, origin_world: Vector3) -> Vector3:
@@ -2387,7 +2389,19 @@ func _update_wrister_charge(input: InputState) -> void:
 	# by the ~1 m blade parallax, and for a gamepad — whose cursor is anchored on
 	# the puck so the stick bearing IS the shot line's bearing — measuring about
 	# the body would re-introduce that parallax as swing the player never made.
-	var swing_bearing: Vector3 = input.mouse_world_pos - _aiming.wrister_origin_world
+	#
+	# For a MOUSE the anchor additionally tracks the skater's translation since the
+	# pin (ChargeTracking.swing_anchor): the mouse's world point rides the skater-
+	# following camera, so about a world-pinned anchor mere skating read as swing —
+	# retreating dragged the cursor toward/past the origin, where the shrinking
+	# bearing radius amplified the drift into forehand→backhand misreads. The pad's
+	# shot cursor is world-anchored on the pin itself and needs no compensation;
+	# commit_wrister_power (its wire-visible marker) picks the frame, so host
+	# replay of a remote shooter classifies identically.
+	var swing_anchor: Vector3 = ChargeTracking.swing_anchor(
+			_aiming.wrister_origin_world, skater.global_position,
+			_aiming.wrister_origin_skater_pos, input.commit_wrister_power)
+	var swing_bearing: Vector3 = input.mouse_world_pos - swing_anchor
 	swing_bearing.y = 0.0
 	# The stroke-travel accumulator's per-tick step is bounded by the on-axis
 	# blade-speed budget × delta: the target is a closed-form ROM clamp (not
