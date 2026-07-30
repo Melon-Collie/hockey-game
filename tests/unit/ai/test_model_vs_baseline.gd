@@ -105,10 +105,7 @@ func _measure(spot: Vector3, keeper: Vector3, caught: bool, spread: float,
 			spot, _goal, keeper, NET_HW, WRIST, env["unsettled"], env["five"],
 			env["down"], env["seal_x"], env["seal_tall"], spread, 0.0,
 			env["hands"], env["pads"])
-	var power_t: float = AIActionScoring.best_shot_power_t(
-			spot, _goal, keeper, NET_HW, WRIST, env["unsettled"], env["five"],
-			env["down"], env["seal_x"], env["seal_tall"], spread, 0.0,
-			env["hands"], env["pads"])
+	var power_t: float = 1.0  # full pace, always (contact-point solve)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	var goals: int = 0

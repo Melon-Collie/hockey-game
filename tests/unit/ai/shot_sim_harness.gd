@@ -10,10 +10,10 @@ extends RefCounted
 #
 # What runs REAL (from the production pure rules, NOT re-derived):
 #   - Shot SELECTION: AIActionScoring.score_shoot decides whether the bot fires
-#     from a spot, and best_shot_aim / best_shot_loft / best_shot_power_t pick
-#     the exact aim point, loft class, and release pace — the same triple the
-#     live bot commits. So the make-probability model + centred aim are exercised
-#     through the real path.
+#     from a spot, and best_shot_aim / best_shot_loft pick the exact aim point
+#     and loft class the live bot commits (power is always full under the
+#     contact-point solve). So the make-probability model + centred aim are
+#     exercised through the real path.
 #   - Execution scatter: one uniform ±shot_aim_error_rad sample per shot (the
 #     production per-release model), seeded for determinism.
 #   - Goalie SET position: GoalieBehaviorRules.compute_threat_position +
@@ -24,8 +24,9 @@ extends RefCounted
 #     push speed / lateral accel and the real leg/arm reaction delays + butterfly
 #     drop, plus the goalie's real pose anatomy (pad span, glove reach, pad-top
 #     seam) — assembled here from the goalie's own constants.
-#   - Puck FLIGHT: launch pace from best_shot_power_t, a real loft parabola
-#     (loft_vy + gravity), projected to the net plane.
+#   - Puck FLIGHT: full-pace launch through the contact-point solve
+#     (ShotMechanics.shot_loft_y), a real loft parabola projected to the net
+#     plane.
 #
 # What is APPROXIMATED (so read RELATIVE deltas — soft-make on/off, bias, scatter
 # — as more trustworthy than absolute rates):
@@ -172,13 +173,21 @@ static func flight(shooter: Vector3, goal: Vector3, aim: Vector3,
 		return Vector3(0.0, 0.0, -1.0)
 	var travel: float = dz / hdir.y                  # horizontal distance to the plane
 	var cross_x: float = shooter.x + hdir.x * travel
-	# Loft parabola: split the launch pace into horizontal + vertical (loft_vy).
+	# Loft parabola under the contact-point model: the launch angle comes from
+	# the same solve the live release runs (ShotMechanics.shot_loft_y at the
+	# distance to the net plane, open-toe instrument), so the sim flies the arc
+	# a real shot flies. cross_y is UNclamped (a flat shot reads slightly
+	# below launch height) so callers can recover the exact launch vy from
+	# (cross_y, flight_t).
 	var speed: float = _launch_speed(power_t)
-	var loft_vy: float = ShotMechanics._loft_vy(loft_level,
-			GameRules.DEFAULT_LOFT_VY_LOW_M_S, GameRules.DEFAULT_LOFT_VY_HIGH_M_S)
-	var v_h: float = sqrt(maxf(speed * speed - loft_vy * loft_vy, 1.0))
+	var y_ratio: float = ShotMechanics.shot_loft_y(speed, loft_level, absf(travel),
+			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
+			1.0, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
+	var inv_norm: float = 1.0 / sqrt(1.0 + y_ratio * y_ratio)
+	var v_h: float = maxf(speed * inv_norm, 1.0)
+	var loft_vy: float = speed * y_ratio * inv_norm
 	var flight_t: float = absf(travel) / v_h
-	var cross_y: float = maxf(0.0, loft_vy * flight_t - 0.5 * GRAVITY * flight_t * flight_t)
+	var cross_y: float = loft_vy * flight_t - 0.5 * GRAVITY * flight_t * flight_t
 	return Vector3(cross_x, cross_y, flight_t)
 
 
@@ -221,8 +230,10 @@ static func classify_shot(shooter: Vector3, goal: Vector3, goalie: Vector3,
 			if absf(dz_total) > 0.0001 else 1.0
 	var t_at_goalie: float = flight_t * frac
 	var x_at_goalie: float = shooter.x + (cross_x - shooter.x) * frac
-	var loft_vy: float = ShotMechanics._loft_vy(loft_level,
-			GameRules.DEFAULT_LOFT_VY_LOW_M_S, GameRules.DEFAULT_LOFT_VY_HIGH_M_S)
+	# Launch vy recovered from the (unclamped) crossing — exact for the
+	# parabola flight() flew, whatever the solve chose.
+	var loft_vy: float = (cross_y + 0.5 * GRAVITY * flight_t * flight_t) \
+			/ maxf(flight_t, 0.0001)
 	var y_at_goalie: float = maxf(0.0,
 			loft_vy * t_at_goalie - 0.5 * GRAVITY * t_at_goalie * t_at_goalie)
 	var lateral_off: float = absf(x_at_goalie - goalie.x)
@@ -266,8 +277,7 @@ static func run_spot(shooter: Vector3, goal: Vector3, profile: BotSkillProfile,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, unsettled, -1.0, false, spread)
 	var loft: int = AIActionScoring.best_shot_loft(shooter, goal, goalie, NET_HW,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, unsettled, -1.0, false, 0.0, false, spread)
-	var power_t: float = AIActionScoring.best_shot_power_t(shooter, goal, goalie, NET_HW,
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, unsettled, -1.0, false, 0.0, false, spread)
+	var power_t: float = 1.0  # every hole fires full pace (contact-point solve)
 	for _i: int in samples:
 		var err: float = rng.randf_range(-spread, spread)
 		var outcome: int = classify_shot(

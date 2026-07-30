@@ -78,9 +78,9 @@ var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # override. Default mirrors the controller's 10.0.
 var blade_speed: float = 10.0
 
-# Blade face-angle cap as tan(angle) (= SkaterController.loft_tan_max, from
-# the curve gear). Caps how steep this build's shots can launch — the HIGH
-# hole solver reads it so a closed-blade bot prices its real minimum roofing
+# Blade TOE cap as tan(angle) (= SkaterController.loft_tan_max, from the
+# curve gear). Clamps the HIGH loft's solved launch angle — the HIGH hole
+# solver reads it so a closed-blade bot prices its real minimum roofing
 # distance instead of the open blade's. Default = the universal 45° cap.
 var loft_tan_max: float = 1.0
 

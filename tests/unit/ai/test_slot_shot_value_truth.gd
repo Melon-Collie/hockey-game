@@ -135,10 +135,7 @@ func _measured(spot: Vector3, keeper: Vector3, spread: float) -> float:
 			spot, _goal, keeper, GameRules.NET_HALF_WIDTH, speed,
 			0.0, env["five"], env["down"], env["seal_x"], env["seal_tall"],
 			spread, 0.0, env["hands"], env["pads"])
-	var power_t: float = AIActionScoring.best_shot_power_t(
-			spot, _goal, keeper, GameRules.NET_HALF_WIDTH, speed,
-			0.0, env["five"], env["down"], env["seal_x"], env["seal_tall"],
-			spread, 0.0, env["hands"], env["pads"])
+	var power_t: float = 1.0  # full pace, always (contact-point solve)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	_last_counts = {Harness.GOAL: 0, Harness.SAVE: 0, Harness.POST: 0, Harness.WIDE: 0}
