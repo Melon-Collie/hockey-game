@@ -434,6 +434,11 @@ func start_offline() -> void:
 	is_host = true
 	game_initiated = true
 	is_offline_mode = true
+	# Seed the hosted lobby's mode from the saved preference (the last mode
+	# picked while hosting). Free play / tutorial / drills also pass through
+	# here but never read pending_team_size — their configs below carry the
+	# team size directly — so the seed only reaches the unified lobby.
+	pending_team_size = PlayerPrefs.preferred_team_size
 	_peer_handedness[1] = local_is_left_handed
 	_peer_names[1] = local_player_name
 	_peer_numbers[1] = local_jersey_number

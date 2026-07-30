@@ -217,6 +217,10 @@ var is_left_handed: bool = true
 # lobby seats you here when you join, with the 3v3 wing/defense merge
 # (PlayerRules.preferred_slot). A taken seat falls back to the first open one.
 var preferred_position: int = 0
+# Preferred lobby mode (team size: 3 or 5) — remembered from the last mode
+# picked while HOSTING (a joined lobby's mode is the host's choice, so the
+# client-side settings sync never writes it) and seeds the next hosted lobby.
+var preferred_team_size: int = GameRules.DEFAULT_TEAM_SIZE
 # Index into SkinToneRegistry.TONES — identity next to name/number, picked in
 # the edit-player popup and carried through the join handshake like the rest.
 var skin_tone: int = SkinToneRegistry.DEFAULT_INDEX
@@ -503,6 +507,7 @@ func save() -> void:
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
 	cfg.set_value("player", "preferred_position", preferred_position)
+	cfg.set_value("player", "preferred_team_size", preferred_team_size)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
 	cfg.set_value("player", "stick_tape", stick_tape_code)
 	cfg.set_value("player", "gear_style", gear_style_code)
@@ -1076,6 +1081,11 @@ func _load() -> void:
 		is_left_handed = cfg.get_value("player", "left_handed", true)
 		preferred_position = clampi(int(cfg.get_value("player", "preferred_position", 0)),
 				0, PlayerRules.POSITION_NAMES.size() - 1)
+		# Only the two shipped modes are representable; anything else falls
+		# back to the default rather than seeding an unfieldable lobby.
+		var stored_size: int = int(cfg.get_value(
+				"player", "preferred_team_size", GameRules.DEFAULT_TEAM_SIZE))
+		preferred_team_size = 5 if stored_size == 5 else GameRules.DEFAULT_TEAM_SIZE
 		# Reads as int; any legacy fruit-name string under the old "preferred_color_id"
 		# key is ignored — hard break, no migration. -1 falls back to the default at
 		# next lobby join.
