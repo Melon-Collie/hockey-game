@@ -1054,17 +1054,54 @@ func test_pass_pressed_dump_clear_chips_high_and_clears() -> void:
 	assert_false(sm._dump_target.is_finite(), "firing clears the dump target")
 
 
-func test_pass_pressed_dump_in_is_a_soft_low_flip() -> void:
-	# A dump-in past centre: soft flip to the corner → LOW loft, still a one-tick
-	# quick release (no wind-up to be stripped through).
+func test_pass_pressed_dump_in_charges_flat_at_the_searched_pace() -> void:
+	# A dump-in past centre is the ONE dump that charges. Its depth IS its pace
+	# (AIActionScoring.solve_dump_in searches it), and the one-tick quick release
+	# only fires at the fixed quick-pass pace — which out-slides the rink twice
+	# over, so a chip at it comes back off the end boards. So the dump-in takes
+	# the charged wrister at _dump_launch_speed, FLAT: a charged release
+	# normalizes (dir.x, tan, dir.z) at its power, so any loft spends pace going
+	# up and the puck's ground speed stops being the number the pace ladder
+	# solved the runout from.
 	sm._state = Agent.State.PASS_PRESSED
 	sm._dump_target = Vector3(-11, 0, -20)
 	sm._dump_is_soft = true
+	sm._dump_launch_speed = 12.0
 	var i := InputState.new()
 	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
-	assert_true(i.quick_pass_pressed, "a dump-in fires the one-tick quick release")
-	assert_eq(i.elevation_level, ShotMechanics.ELEVATION_LOW, "a dump-in flips LOW")
-	assert_false(sm._dump_target.is_finite(), "firing clears the dump target")
+	assert_false(i.quick_pass_pressed, "a dump-in does NOT take the one-tick path")
+	assert_eq(i.elevation_level, ShotMechanics.ELEVATION_FLAT, "a dump-in fires FLAT")
+	assert_true(sm._pass_should_charge, "the dump-in charges")
+	assert_eq(sm._pass_target_speed, 12.0, "…at the pace the search placed it with")
+	assert_eq(sm.get_state(), Agent.State.PASS_PRESSED, "the charge holds the state")
+
+	# …and the wind-up spends the dump target when it finally releases (the
+	# quick-release branch, which normally clears it, never runs for a dump-in).
+	var released: bool = false
+	for _t: int in range(Agent.BOT_WRISTER_CHARGE_TICKS + 4):
+		var t := InputState.new()
+		sm.dispatch(t, _self_snap(Vector3.ZERO, true))
+		if sm.get_state() == Agent.State.CARRY:
+			released = true
+			break
+	assert_true(released, "the charged dump-in releases within the charge budget")
+	assert_false(sm._dump_target.is_finite(), "releasing clears the dump target")
+
+
+func test_pass_pressed_dump_clear_stays_a_one_tick_release() -> void:
+	# The other half of the split: only the dump-IN charges. A DZ clear is a last
+	# resort under pressure — getting the puck gone NOW beats a wind-up that gets
+	# stripped mid-swing — so it keeps the one-tick quick release even though the
+	# carrier hands it a launch speed.
+	sm._state = Agent.State.PASS_PRESSED
+	sm._dump_target = Vector3(12, 0, 0)
+	sm._dump_is_soft = false
+	sm._dump_launch_speed = 11.0
+	var i := InputState.new()
+	sm.dispatch(i, _self_snap(Vector3.ZERO, true))
+	assert_true(i.quick_pass_pressed, "a clear still fires the one-tick release")
+	assert_false(sm._pass_should_charge, "…and never charges")
+	assert_eq(sm.get_state(), Agent.State.CARRY, "the clear is a one-tick press")
 
 
 func test_pass_pressed_dump_lost_puck_clears_target() -> void:

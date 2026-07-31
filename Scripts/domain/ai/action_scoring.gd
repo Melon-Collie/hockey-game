@@ -5484,6 +5484,68 @@ const DUMP_SEARCH_BEARINGS_RAD: Array = [
 	-1.20, -0.90, -0.60, -0.30, 0.0, 0.30, 0.60, 0.90, 1.20,
 ]
 
+# Launch PACES tried per bearing on the dump-IN, as fractions of the release
+# band between the soft-touch floor (DEFAULT_WRISTER_POWER_MIN_M_S) and the pace
+# the dumper can actually produce. Bearing alone cannot place a dump: the puck's
+# runout at any pace the bot can make (100 m at the wrister floor, ~200 m at
+# pass pace) out-slides the rink several times over, so WHERE it stops is set by
+# how much speed the boards take out of it — and the only deliveries that die
+# in the offensive zone at a fixed hot pace are the ones banked steeply enough
+# to shed 40-60% on contact. That is why an unpaced search read a centre chip
+# as a puck returning to the neutral zone (square off the end boards and back
+# out) and had to reach for a wall to kill anything: depth was not on its axis
+# list. With pace searched, a soft chip simply dies where it is aimed, and a
+# rim is chosen because it wins the race rather than because it was the only
+# way to stop the puck.
+#
+# Spaced toward the SOFT end, because that is where the answer changes. Runout
+# goes as v², so the top of the band is a wall of deliveries that all rattle
+# off the end boards and differ only in where they finish bouncing, while the
+# metre-scale placement lives in the first few m/s above the floor. The full
+# pace is kept as the last rung: a hard rim around the boards genuinely beats a
+# defender to the corner, and it should stay on the menu — it just should not
+# spend three of four samples.
+const DUMP_SEARCH_PACE_FRACS: Array = [0.0, 0.18, 0.45, 1.0]
+
+# Keeper puck-play travel build — GoalieController's `puck_play_skate_speed` /
+# `puck_play_skate_accel` export defaults, and `puck_play_capture_radius` (the
+# paddle trap reach at the spot he stops on). Kept UNTIERED, like every other
+# goalie read in here: what a resting puck's ownership turns on is how far a
+# keeper can skate, which no difficulty knob changes.
+const GOALIE_PUCK_PLAY_SPEED_M_S: float = 4.2
+const GOALIE_PUCK_PLAY_ACCEL_M_S2: float = 8.0
+const GOALIE_PUCK_PLAY_REACH_M: float = 1.0
+
+
+# Does the KEEPER get to a puck resting at `spot` before our nearest chaser?
+#
+# The missing body in the dump's race. `chase_recovery` sees skaters only, so a
+# dump dying on the doorstep — the spot `position_potential` rates highest on
+# the whole rink — read as a free recovery, and the delivery search aimed there.
+# It is the keeper's puck, and he is standing on it.
+#
+# A straight race at both sides' real builds, with no margin term: he leaves the
+# paint at a keeper's pace (GOALIE_PUCK_PLAY_*, ramped from rest) and collects
+# from a paddle's length, we run at skater pace. That bounds how far out the
+# ice is his WITHOUT a radius anybody had to pick — the slot is his because he
+# is metres away and we are twenty, the corner is ours because his 4.2 m/s
+# cannot beat a winger's 9 to it. Deliberately blind to the trip conditions the
+# live keeper also weighs (net-front exclusion, cooldown, the tiered GO margin):
+# each of those only makes him STAY, so ignoring them errs toward not feeding
+# him — the safe direction for a dumper — and keeps this untiered.
+static func keeper_collects_first(spot: Vector3, keeper_pos: Vector3,
+		our_chasers: Array[Vector3], chaser_speed: float) -> bool:
+	if our_chasers.is_empty():
+		return true
+	var ours: float = INF
+	for c: Vector3 in our_chasers:
+		ours = minf(ours, c.distance_to(spot))
+	var keeper_dist: float = maxf(
+			keeper_pos.distance_to(spot) - GOALIE_PUCK_PLAY_REACH_M, 0.0)
+	return GoalieBehaviorRules.travel_time_from_rest(
+			keeper_dist, GOALIE_PUCK_PLAY_SPEED_M_S, GOALIE_PUCK_PLAY_ACCEL_M_S2) \
+			<= ours / maxf(chaser_speed, 0.001)
+
 
 # Hang time of a release at `loft_level` and `launch_speed` — the airborne
 # window, 2*vy/g. Airborne carry costs no runout, which is why loft moves WHERE
@@ -5541,40 +5603,60 @@ static func solve_dump_clear(origin: Vector3, up_ice_dir: float,
 	return best_vel
 
 
-# The NZ dump-in: search launches and take the one whose RESTING spot we are
-# most likely to win. `out_landing` receives the chosen spot (caller-owned, so
-# the search allocates nothing on the compete path).
+# The NZ dump-in: search launches — BEARING x PACE — and take the one whose
+# RESTING spot we are most likely to win. `out_landing` receives the chosen spot
+# and `max_launch_speed` bounds the pace ladder (the top of the dumper's own
+# release band); the returned velocity's LENGTH is the pace that won, which the
+# release then has to actually fire at. Caller-owned out-param, so the search
+# allocates nothing on the compete path.
 #
-# Scored as recovery x position value: the race is the play. There is no
-# icing branch — this dump is only offered past the red line, and icing
-# requires a release from our own half, so the two are mutually exclusive.
+# Scored as recovery x realized position value: the race is the play, and what
+# it wins is a spot whose promise still has to be skated in — the same
+# realization discount every other future-value read in the model pays, so the
+# search optimizes exactly what _best_dump prices.
+#
+# There is no icing branch — this dump is only offered past the red line, and
+# icing requires a release from our own half, so the two are mutually exclusive.
 static func solve_dump_in(origin: Vector3, attacking_goal: Vector3,
-		launch_speed: float, loft_level: int,
+		max_launch_speed: float, loft_level: int,
 		our_chasers: Array[Vector3], opp_chasers: Array[Vector3],
-		out_landing: Array[Vector3]) -> Vector3:
+		keeper_pos: Vector3, out_landing: Array[Vector3]) -> Vector3:
 	var hang_s: float = dump_loft_hang_s(loft_level)
 	var goal_dir: float = signf(attacking_goal.z)
 	var axis := Vector3(0.0, 0.0, goal_dir)
 	var best_vel: Vector3 = Vector3.ZERO
 	var best_score: float = -INF
 	var best_spot: Vector3 = origin
+	var floor_speed: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+	var band: float = maxf(max_launch_speed - floor_speed, 0.0)
 	for offset: float in DUMP_SEARCH_BEARINGS_RAD:
-		var vel: Vector3 = axis.rotated(Vector3.UP, offset) * launch_speed
-		var landing: Transform3D = AITrajectory.puck_release_landing(
-				origin, vel, hang_s)
-		var spot: Vector3 = landing.origin
-		# A dump-in that does not get the puck deeper than we already are is not
-		# a dump-in; it is a giveaway in the neutral zone.
-		if goal_dir * (spot.z - origin.z) <= 0.0:
-			continue
-		# The race is run to where the puck STOPS, over the time the puck spends
-		# getting there — chasers are not frozen while it travels, and a longer
-		# flight is exactly what a forecheck converts into position.
-		var recovery: float = chase_recovery(spot, our_chasers, opp_chasers)
-		var score: float = recovery * position_potential(spot, attacking_goal, opp_chasers)
-		if score > best_score:
-			best_score = score
-			best_spot = spot
-			best_vel = vel
+		var dir: Vector3 = axis.rotated(Vector3.UP, offset)
+		for frac: float in DUMP_SEARCH_PACE_FRACS:
+			var vel: Vector3 = dir * (floor_speed + band * frac)
+			var landing: Transform3D = AITrajectory.puck_release_landing(
+					origin, vel, hang_s)
+			var spot: Vector3 = landing.origin
+			# A dump-in that does not get the puck deeper than we already are is
+			# not a dump-in; it is a giveaway in the neutral zone.
+			if goal_dir * (spot.z - origin.z) <= 0.0:
+				continue
+			# The keeper is a body in this race, and on the doorstep he is the
+			# only one in it (see keeper_collects_first): a puck he collects is
+			# not a dump-in at any pace, so the delivery is simply unavailable.
+			if keeper_collects_first(spot, keeper_pos, our_chasers,
+					SKATER_REF_SPEED_M_S):
+				continue
+			# The race is run to where the puck STOPS, over the time the puck
+			# spends getting there — chasers are not frozen while it travels,
+			# and a longer flight is exactly what a forecheck converts into
+			# position.
+			var recovery: float = chase_recovery(spot, our_chasers, opp_chasers)
+			var score: float = recovery \
+					* position_potential(spot, attacking_goal, opp_chasers) \
+					* potential_realization_discount(spot, attacking_goal)
+			if score > best_score:
+				best_score = score
+				best_spot = spot
+				best_vel = vel
 	out_landing[0] = best_spot
 	return best_vel

@@ -358,10 +358,23 @@ func test_evaluator_costs() -> void:
 	_bench("time_to_arrive", func() -> void:
 		AIActionScoring.time_to_arrive(from, net, Vector3(2, 0, -4)))
 
-	# Puck-path integration, at the horizons a settle-point read would need. The
-	# dump prices its concession at an AIM point today; walking to where the puck
-	# actually stops is the honest read, and these say what that walk costs. Step
-	# counts are the whole runout at the two paces that matter: a quick-pass rim
+	# The dump-in delivery search: DUMP_SEARCH_BEARINGS_RAD x DUMP_SEARCH_PACE_FRACS
+	# closed-form landing solves, plus a recovery race per surviving candidate.
+	# The reason it is affordable at that width is directly below — the stepped
+	# walk this would otherwise need is ~263 µs for ONE full runout.
+	var chasers: Array[Vector3] = [from, Vector3(6, 0, -2)]
+	var landing_out: Array[Vector3] = [Vector3.ZERO]
+	_bench("solve_dump_in (9 bearings x 4 paces, 5 def)", func() -> void:
+		AIActionScoring.solve_dump_in(from, net, 28.0, ShotMechanics.ELEVATION_FLAT,
+				chasers, opps, net, landing_out))
+
+	# Puck-path integration, at the horizons a settle-point read needs. These are
+	# the STEPPED walk's cost, which is why the dump's settle-point solve is not
+	# built on it: the dump prices where the puck actually stops, and a full
+	# runout is ~270 of these steps per candidate release — so it uses the closed
+	# form (AITrajectory.puck_release_landing) instead, cross-validated against
+	# this walk in test_puck_release_landing.gd. Step counts are the whole runout
+	# at the two paces that matter: a quick-pass rim
 	# (14 m/s, ~200 m of runout under PUCK_ICE_DECEL_M_S2 — it never stops on this
 	# rink, so it is bounded by board contacts) and an icing-legal pace whose
 	# runout dies inside the rink. dt matches solve_reception_gate's walk.
