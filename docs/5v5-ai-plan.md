@@ -168,9 +168,10 @@ Per-state specs (behavior module in parentheses; **bold = new code**, others reu
   kills the center outlet and the cross-ice reverse; F2_STRONG/F2_WEAK re-sort when the
   puck changes sides (strong_x flip). DP_STRONG / DP_WEAK (`AIRoleDefenseman`): hold the
   offensive blue line **inside the dots** (|x| ≤ 6.7), tight gap, each bounded by the
-  same race-home read F3 uses today (the puck-path intercept read,
-  `AIRoleHelpers.fill_counter_channels` / `race_home_feasible`) so a stretch threat sags them
-  out — the existing F3 pinch-safety logic generalized to a pair. No deliberate
+  same last-man read F3 uses (as landed: `AIRoleHelpers.offensive_station_target` — the
+  counter-channel race this named was deleted, see transition-defense-plan §8) so a
+  stretch threat sags them out — the existing F3 pinch-safety logic generalized to a
+  pair. No deliberate
   down-the-wall pinch in v1 (§ non-goals).
 
 - **DZONE** — the researched hybrid ("man where the battles are, zone where speed
@@ -296,8 +297,8 @@ all the same player-type doing the same philosophy at different game moments:
   shaded central. "Walking the line" is a small lateral argmax (same
   candidate-set idiom every role uses) scoring: shooting-lane openness from the
   candidate (`lane_clear` toward the net) + pass-option value + **keep-in insurance**
-  (never so central/deep that a cleared puck up his wall beats him — the shared
-  puck-path intercept race, `AIRoleHelpers.race_home_feasible`).
+  (never so central/deep that a cleared puck up his wall beats him — as landed, the
+  shared pinch read `AIRoleHelpers.offensive_station_target`).
 - **FORECHECK line-hold** (DP_STRONG / DP_WEAK): hold the offensive blue line inside
   the dots; sag down the NZ when the race home is no longer winnable (F3's existing
   bounded-hold logic, applied per-side).

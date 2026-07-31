@@ -17,7 +17,7 @@ class_name AIRoleDefenseman
 #     the moment their breakout is genuinely under way — exactly like the 3v3
 #     forecheck's F3, which runs the same read.
 #   TRANS_DO safety valve (DVALVE) — trail the rush centrally about a zone
-#     behind the play, capped by the race-home radius: always the reset
+#     behind the play, bounded by the shared pinch read: always the reset
 #     option, never beaten home.
 #   NEUTRAL back shape (DBACK_L / DBACK_R) — the staggered goal-side pair
 #     inside the dots at our blue line, shading with the puck's lateral
@@ -232,9 +232,9 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 	var cap: float = GameRules.GOAL_LINE_Z - DVALVE_GOAL_LINE_PAD_M
 	var trail_z: float = clampf(play_ref.z + own_dir * DVALVE_TRAIL_M, -cap, cap)
 	var target := Vector3(0.0, 0.0, trail_z)
-	# Race-home cap: the valve's whole job is to never be beaten home. A
-	# lurker already behind the trail point pulls the valve down its retreat
-	# line until the counter paths are contained again.
+	# Last-man cap: the valve's whole job is to never be beaten home. A lurker
+	# already behind the trail point, with nobody covering, pulls the valve back
+	# to its post.
 	var valve_stand: Vector3 = target
 	target = AIRoleHelpers.offensive_station_target(
 			ctx, valve_stand, ctx.prev_held_forward_stand)
@@ -246,12 +246,13 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 
 
 # ── NEUTRAL: the goal-side back pair ─────────────────────────────────────────
-# The blue-line stand is race-home bounded like every other station in this
-# file. Without it this was the one D station that would hold its line no
-# matter what was behind it — the puckwatching last man who stands at his own
-# blue line into a guaranteed breakaway. A contained counter leaves the stand
-# exactly where it was, so the NZ back wall is unchanged in ordinary play; a
-# stretch threat already past the pair sags them down the retreat line instead.
+# The blue-line stand is numbers-bounded like every other station in this file
+# (AIRoleHelpers.neutral_station_target). Without it this was the one D station
+# that would hold its line no matter what was behind it — the puckwatching last
+# man who stands at his own blue line into a guaranteed breakaway. Nobody behind
+# the pair leaves the stand exactly where it was, so the NZ back wall is
+# unchanged in ordinary play; a stretch threat already past it sags the pair
+# down the retreat line to the layer that covers him.
 static func _decide_back(ctx: RoleContext, side: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var own_dir: float = ctx.own_goal_dir
@@ -262,12 +263,7 @@ static func _decide_back(ctx: RoleContext, side: float) -> RoleDecision:
 		x += clampf(ctx.snapshot.puck_state.position.x * DBACK_PUCK_SHADE,
 				-DBACK_SHADE_MAX_M, DBACK_SHADE_MAX_M)
 	var stand := Vector3(x, 0.0, own_dir * GameRules.BLUE_LINE_Z)
-	AIRoleHelpers.collect_counter_threats(
-			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
-	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
-			ctx.scratch_counter_caps, ctx.defending_goal_pos,
-			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
-	d.target_position = AIRoleHelpers.most_forward_feasible(
-			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
-			AIRoleHelpers.station_retreat_floor(ctx, stand))
+	d.target_position = AIRoleHelpers.neutral_station_target(
+			ctx, stand, ctx.prev_held_forward_stand)
+	d.held_forward_stand = d.target_position.distance_to(stand) < 0.5
 	return d

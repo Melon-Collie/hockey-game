@@ -752,39 +752,6 @@ static func collect_opponents(ctx: RoleContext,
 			ctx.scratch_opp_ids.append(pid)
 
 
-# Fills `out_states` (+ index-matched `out_caps`) with the opponents genuinely
-# involved in a counter-attack — AIRushRead.attackers — rather than every body
-# on the ice. This is the threat set fill_counter_channels should race against.
-#
-# The unfiltered list is why the race-home bound over-retreated: it priced the
-# opposing team's stay-home defenseman, 40 m away behind his own blue line, as a
-# live counter threat receiving the hardest legal feed on the rink, and since
-# feasibility is a conjunction over every channel, that one phantom collapsed
-# the stand and bisected the defender toward his own crease. A body who cannot
-# be at our net within the late-man window of the puck is furniture; the pinch
-# read should not see him at all.
-#
-# An UNWIRED read (no brain — unit tests, a brainless agent) falls back to every
-# opponent. "No attackers" from a read that was never filled means "nobody told
-# me anything", not "the coast is clear", and treating those the same would
-# silently disable every race-home bound in the game. A LIVE read reporting no
-# attackers is believed.
-static func collect_counter_threats(ctx: RoleContext,
-		out_states: Array[SkaterNetworkState],
-		out_caps: Array[AISkaterCaps]) -> void:
-	out_states.clear()
-	out_caps.clear()
-	var read: AIRushRead = ctx.rush_read
-	var live: bool = read.is_live
-	for pid: int in ctx.snapshot.skater_states:
-		if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
-			continue
-		if live and not read.is_attacker(pid):
-			continue
-		out_states.append(ctx.snapshot.skater_states[pid])
-		out_caps.append(ctx.caps_by_peer.get(pid))
-
-
 # ── Offensive stations: the pinch read (plan §13) ────────────────────────────
 #
 # Replaces the counter-channel race for every station that holds forward ice
@@ -959,6 +926,33 @@ static func offensive_station_target(ctx: RoleContext, stand: Vector3,
 	return station_retreat_floor(ctx, stand, as_back_layer)
 
 
+# The last-man bound for the two NEUTRAL shapes — 3v3's FLANK pair and 5v5's
+# DBACK pair, the only stations that hold ice in front of a puck NOBODY owns.
+#
+# Same three-fact read as offensive_station_target, with one difference that
+# falls out of the possession state rather than a per-caller flag: NEUTRAL has
+# no carrier, so there is no attack to leave and no structure to hurry back to.
+# A slow loose puck is not a rush, and collapsing to a defensive post for one
+# concedes the whole neutral zone to whoever picks it up — so losing the forward
+# stand restores a NUMBERS LAYER (numbers_floor) and stops there. That keeps the
+# concession GRADED, which is what the puck-relative flank shape needs: the bound
+# exists to refuse the guaranteed-breakaway geometry, not to replace the shape.
+#
+# The house gate is the floor, as it is for every field skater — deeper than the
+# top of the circles a station only duplicates the goalie and fights its own
+# crease repel. Both candidates lie on the net → `stand` ray, so the clamp is a
+# distance compare rather than a second projection.
+static func neutral_station_target(ctx: RoleContext, stand: Vector3,
+		was_holding: bool) -> Vector3:
+	if may_hold_forward_stand(ctx, was_holding, stand):
+		return stand
+	var our_net: Vector3 = ctx.defending_goal_pos
+	var sagged: Vector3 = numbers_floor(ctx, stand)
+	if _xz_distance(sagged, our_net) >= AIZoneCoverage.HOUSE_TOP_DEPTH_M:
+		return sagged
+	return house_gate_floor(our_net, stand)
+
+
 # Is any attacker currently deeper (nearer our net) than `stand`?
 static func _attacker_behind(ctx: RoleContext, stand: Vector3,
 		was_holding: bool = false) -> bool:
@@ -978,232 +972,11 @@ static func _attacker_behind(ctx: RoleContext, stand: Vector3,
 	return false
 
 
-# ── The race-home read: puck-path intercept model ───────────────────────────
-#
-# Every "am I recoverable / can I hold this forward stand?" question (the
-# points' keep-in bound, the forecheck line holds, DVALVE, SUPPORT's exposure)
-# races the defender against a hypothetical
-# counter-attack. Two grounded facts the old beat-them-to-our-net radius
-# missed, both of which made it unsatisfiable from any forward stand against
-# an opponent of equal top speed (the pacing-between-the-blue-lines bug):
-#
-#   1. A counter must move the PUCK, not a body. The threat clock for
-#      opponent i starts with a puck-GAIN leg — an outlet pass's flight to
-#      his lead point (at the league pass-flight model's pace), or him
-#      skating to a loose/stripped puck — before his carry home even begins.
-#      A puckless body near our net is only as fast as the pass that finds it.
-#   2. The defender doesn't race the counter to his own cage — he races it to
-#      the first point where he can stand IN ITS PATH. Standing goal-side on
-#      the carry route wins by retreating in front of the rush (gap control);
-#      only a threat that gets to a path point before he can be there, set,
-#      beats him.
-#
-# Race legs, all symmetric kinematics (no shape knobs) — both sides priced by
-# the calibrated time_to_arrive (its capped ramp charges standing starts and
-# credits momentum honestly, so neither side gets top speed for free):
-#   puck side:  t_gain + momentum-aware carry to the station.
-#   defender:   standing-start run to the station minus blade reach
-#     (containment radius is body + stick — "even with him" is a physical
-#     span, not a point). At the net station he additionally pays the brake
-#     margin — the last-resort stand must arrive stopped, not flying past
-#     the cage.
-#
-# Stations sample the carry path STRICTLY AFTER the gain point: contesting
-# the reception itself is an opportunistic play owned by the chase/pressure
-# roles — recoverability asks "once he HAS it, do I contain the rush?", and
-# a station past the catch forces a genuinely goal-side arrival.
-const RACE_PATH_FRACTIONS: Array[float] = [0.2, 0.4, 0.6, 0.8, 1.0]
-
-# Per-fill scratch: one station grid (channel-major, RACE_PATH_FRACTIONS wide)
-# shared by every candidate the caller tests. AI dispatch is single-threaded,
-# same pattern as AIActionScoring._scratch_counter_cover.
-static var _race_station_pts: Array[Vector3] = []
-static var _race_station_ts: Array[float] = []
-# Per-station squared containment radii for the CURRENT caller's build: a
-# stand at `c` contains station j iff dist²(c, station_j) ≤ _race_reach_sq[j].
-# Precomputed once per fill (see _prepare_reach) so the per-candidate
-# feasibility loop is a single multiply-compare per station — the loop runs
-# candidates × channels × stations at role-decide rate, which made the
-# sqrt-and-ramp-per-station version the hottest line of every 5v5 D decide.
-static var _race_reach_sq: Array[float] = []
-static var _race_channel_count: int = 0
-static var _race_net: Vector3 = Vector3.ZERO
-# The deepest useful defensive stand: the net-front spot at the top of the
-# crease repel skirt (crease arc + extension). Deeper than this a skater
-# adds nothing the goalie doesn't already cover, his own steering fights
-# the spot (crease repel), and body overshoot carries him onto/behind the
-# goal line — the retreat bisection floors here, never at the net point.
-static var _race_home_stand: Vector3 = Vector3.ZERO
-# Memo key: every full-opponent-list consumer of the same team on the same
-# snapshot builds IDENTICAL channels (points, high slot, valve, line holds all
-# fill right after collect_opponents) — one fill serves them all. The
-# attacker-filtered counter list is tagged by `variant`, which the key catches
-# even when it happens to be the same SIZE. Speed/accel
-# key the reach radii (different bots re-derive only those, keeping the
-# stations).
-static var _race_key_snapshot_id: int = 0
-static var _race_key_net_z: float = 0.0
-static var _race_key_count: int = -1
-# Which threat list built the current grid (see ThreatSet) — same-size lists
-# from different callers must not alias.
-static var _race_key_variant: int = -1
-# The channel build reads ctx.offsides_enforced (blue-line gain clamps), so
-# the memo must key on it — match-global in play, but tests flip it between
-# calls on one snapshot.
-static var _race_key_offsides: int = -1
-static var _race_key_speed: float = -1.0
-static var _race_key_accel: float = -1.0
-
-
-# Threat-list variants, for the memo key. Two callers can legitimately pass
-# DIFFERENT lists of the SAME size on one snapshot (the full opponent list vs the
-# attacker-filtered counter set), which a size-only key would silently alias into
-# one station grid.
-enum ThreatSet { ALL_OPPONENTS, COUNTER_ATTACKERS }
-
-
-# Build the counter-attack channels for a turnover-now hypothesis and
-# precompute the puck's arrival time at every path station. One call per
-# decide(), before any race_home_feasible / most_forward_feasible queries.
-# `opp_states` is the caller's threat list with `opp_caps` index-aligned to it;
-# `variant` tags which list it is (see ThreatSet). Memoized per (snapshot, net,
-# list size, variant): repeat fills for the same team on the same tick reuse the
-# station grid and only re-derive the caller-build reach radii when the bot
-# differs.
-static func fill_counter_channels(ctx: RoleContext,
-		opp_states: Array[SkaterNetworkState],
-		opp_caps: Array[AISkaterCaps],
-		our_net: Vector3,
-		variant: int = ThreatSet.ALL_OPPONENTS) -> void:
-	var snap_id: int = ctx.snapshot.get_instance_id() if ctx.snapshot != null else 0
-	if snap_id == _race_key_snapshot_id and our_net.z == _race_key_net_z \
-			and opp_states.size() == _race_key_count \
-			and variant == _race_key_variant \
-			and int(ctx.offsides_enforced) == _race_key_offsides and snap_id != 0:
-		return
-	_race_key_snapshot_id = snap_id
-	_race_key_net_z = our_net.z
-	_race_key_count = opp_states.size()
-	_race_key_variant = variant
-	_race_key_offsides = int(ctx.offsides_enforced)
-	_race_station_pts.clear()
-	_race_station_ts.clear()
-	_race_channel_count = 0
-	_race_net = our_net
-	_race_home_stand = Vector3(our_net.x, 0.0,
-			our_net.z - signf(our_net.z) * (
-					CreaseRules.ARC_RADIUS + AISteering.CREASE_REPEL_EXTENSION))
-	var puck_pos: Vector3 = Vector3.INF
-	var opp_has_puck: bool = false
-	if ctx.snapshot != null and ctx.snapshot.puck_state != null:
-		puck_pos = ctx.snapshot.puck_state.position
-		var carrier_pid: int = ctx.snapshot.puck_state.carrier_peer_id
-		opp_has_puck = carrier_pid != -1 \
-				and ctx.team_id_by_peer.get(carrier_pid, -1) != ctx.team_id
-	# Offside-aware outlets: an opponent already IN his attacking zone (our
-	# defensive zone) while the puck is NOT there cannot legally receive an
-	# outlet where he stands — ARCADE ghosts him, NHL whistles the touch;
-	# either way his earliest legal involvement is at the blue line, tagged
-	# up. His channels route through that point below. Only the OFF ruleset
-	# plays a cherry-picker as the live doorstep threat he'd otherwise be.
-	var own_dir: float = signf(our_net.z)
-	var offside_reads: bool = ctx.offsides_enforced and puck_pos.is_finite() \
-			and own_dir * puck_pos.z <= GameRules.BLUE_LINE_Z
-	var has_caps: bool = opp_caps.size() == opp_states.size()
-	for i: int in opp_states.size():
-		var s: SkaterNetworkState = opp_states[i]
-		var speed: float = AIActionScoring.SKATER_REF_SPEED_M_S
-		var accel: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2
-		var sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
-		if has_caps:
-			var caps: AISkaterCaps = opp_caps[i]
-			if caps != null:
-				speed = caps.max_speed
-				accel = caps.max_accel
-				sprint_mult = caps.sprint_speed_mult
-		# The counter racer SPRINTS his rush — the gain race as a loose-puck
-		# race, the carry as the breakaway sprint (carry-penalty bypass) —
-		# so a cruise-priced channel under-clocked every counter this build
-		# could actually run. Race length ≈ his whole trip to our net;
-		# stamina-gated by his replicated pool.
-		speed = BotSprintRules.race_speed(speed, sprint_mult,
-				s.stamina, s.sprint_locked,
-				_xz_distance(s.position, our_net))
-		# A skater's momentum can't exceed his real top speed — an over-cap
-		# state velocity (transient physics, or test inputs) would otherwise
-		# double-credit the carry legs through time_to_arrive's along-speed.
-		var vel: Vector3 = s.velocity
-		var v_len: float = sqrt(vel.x * vel.x + vel.z * vel.z)
-		if v_len > speed:
-			vel = vel * (speed / v_len)
-		if not puck_pos.is_finite():
-			# No puck in the world (degenerate) — the body itself is the
-			# threat clock, gain leg zero.
-			_append_channel(s.position, 0.0, vel, speed, accel)
-			continue
-		# Outlet: the pass flies to the receiver's lead point, then he carries
-		# with his momentum. A safety read races the HARDEST feed the rink
-		# allows — the league launch ceiling — not the friction-solved likely
-		# pass; a stretch outlet is fired near max. For the opponent CARRIER
-		# this collapses to gain ≈ 0, carry from his blade.
-		var v_pass: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-		var pass_dist: float = _xz_distance(puck_pos, s.position)
-		var lead: Vector3 = s.position + vel * (pass_dist / v_pass)
-		var lead_xz: Vector2 = GameRules.clamp_to_rink_inner(
-				Vector2(lead.x, lead.z), 0.5)
-		var gain_pt := Vector3(lead_xz.x, 0.0, lead_xz.y)
-		# Offside-positioned (in his attacking zone before the puck): his
-		# gain clamps to the blue line — timed by BOTH clocks (the feed's
-		# flight there and his own skate back to tag), with the carry
-		# restarting from the tag rather than at his lurking momentum.
-		var offside_positioned: bool = offside_reads \
-				and own_dir * s.position.z > GameRules.BLUE_LINE_Z
-		if offside_positioned:
-			gain_pt = Vector3(lead_xz.x, 0.0, own_dir * GameRules.BLUE_LINE_Z)
-			var t_feed: float = _xz_distance(puck_pos, gain_pt) / v_pass
-			var t_tag: float = AIActionScoring.time_to_arrive(
-					s.position, gain_pt, vel, speed)
-			_append_channel(gain_pt, maxf(t_feed, t_tag),
-					Vector3.ZERO, speed, accel)
-		else:
-			_append_channel(gain_pt, _xz_distance(puck_pos, gain_pt) / v_pass,
-					vel, speed, accel)
-		# Retrieve: only when the puck is loose or on OUR team's blade — the
-		# opponent skates to it, gathers (carry restarts from rest). An
-		# offside-positioned body must tag up before it may touch the puck
-		# (ARCADE can't interact; an NHL touch is a whistle, not a counter),
-		# so its retrieval routes through the blue line.
-		if not opp_has_puck:
-			var t_ret: float
-			if offside_positioned:
-				var tag_pt := Vector3(s.position.x, 0.0,
-						own_dir * GameRules.BLUE_LINE_Z)
-				t_ret = AIActionScoring.time_to_arrive(
-						s.position, tag_pt, vel, speed) \
-						+ AIActionScoring.time_to_arrive(
-								tag_pt, puck_pos, Vector3.ZERO, speed)
-			else:
-				t_ret = AIActionScoring.time_to_arrive(
-						s.position, puck_pos, vel, speed)
-			_append_channel(puck_pos, t_ret, Vector3.ZERO, speed, accel)
-	# Invalidate the radii but do NOT rebuild them here. race_home_feasible is
-	# the sole preparer (it calls _prepare_reach unconditionally, at the caller's
-	# own race speed), and every consumer reaches the radii through it. Rebuilding
-	# a second time here — as the memo-hit path also used to, at the CRUISE speed
-	# rather than the sprint one — meant every station past the first paid two
-	# full rebuilds of the station grid and got the first one's answer thrown
-	# away. Splitting that responsibility is what let the two speeds disagree.
-	_race_key_speed = -1.0
-
-
-# Sprint-aware SELF cap for home/station races — the backchecking body
-# sprints (an explicit BotSprintRules use case), so a cruise-priced
-# containment radius under-reached every long race home and the stands
-# sagged earlier than the legs they model. Race length ≈ the trip home;
-# pool/lockout from our own replicated state. Every race_home_feasible /
-# most_forward_feasible caller passes THIS (not ctx.self_max_speed) so the
-# per-fill reach memo keys one consistent value (see fill_counter_channels:
-# race_home_feasible is the only thing that builds them).
+# Sprint-aware SELF cap for a defensive race — the backchecking body sprints
+# (an explicit BotSprintRules use case), so a cruise-priced reach under-reaches
+# every long recovery and the stand it bounds sags earlier than the legs it
+# models. Race length ≈ the trip home; pool/lockout from our own replicated
+# state. Consumed by the step-up clamp below.
 static func self_race_vmax(ctx: RoleContext) -> float:
 	if ctx.snapshot == null:
 		return ctx.self_max_speed
@@ -1216,50 +989,6 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 	return BotSprintRules.race_speed(
 			ctx.self_max_speed, mult, s.stamina, s.sprint_locked,
 			_xz_distance(ctx.self_pos, ctx.defending_goal_pos))
-
-
-# Precompute, for the calling defender's build, the squared containment
-# radius of every station: reach (blade span) + the run a standing start
-# covers in the time the puck needs to get there (same capped ramp the
-# calibrated time_to_arrive charges), minus the SET margin at every station.
-# An exact inversion of the per-station race, solved for all stations at once.
-#
-# SET ARRIVAL at every station — containment is not presence. A defender who
-# merely GETS to a mid-path station as the rush arrives is screaming through
-# it at full stride — beaten through it exactly like the "holds the blue
-# line, gets beat through the middle" failure. Playing the man at a station
-# means arriving with your closing speed already killed, whether the station
-# is the net mouth or mid-NZ. So the radius solves the SET-ARRIVAL profile
-# (not raw travel):
-#   short budget — triangular: accelerate then brake to zero inside `avail`;
-#     covered ground is ½·k·avail² with k = a·B/(a+B) (the effective accel of
-#     an accelerate-brake round trip; B = the arrival brake decel);
-#   long budget — trapezoidal: full ramp (d_ramp) + brake run (v²/2B — the
-#     braking DISTANCE must be credited, not just the ramp) + cruise for
-#     whatever time remains.
-# A station already under the blade needs no travel and stays contained at
-# any budget — the camped line stand still stuffs the man who skates into
-# it. Charging the set profile at EVERY station (not just the net) collapses
-# feasibility while a breakout is still FORMING — the carrier gathering speed
-# deep in his zone — which is what starts the back-off early enough to gap up
-# instead of after the race is already lost.
-static func _prepare_reach(self_max_speed: float, self_max_accel: float) -> void:
-	if self_max_speed == _race_key_speed and self_max_accel == _race_key_accel:
-		return
-	_race_key_speed = self_max_speed
-	_race_key_accel = self_max_accel
-	var reach: float = SkaterAgentStateMachine.BLADE_REACH_M
-	var n_fracs: int = RACE_PATH_FRACTIONS.size()
-	_race_reach_sq.clear()
-	var total: int = _race_channel_count * n_fracs
-	for idx: int in total:
-		var avail: float = _race_station_ts[idx]
-		if avail < 0.0:
-			_race_reach_sq.append(-1.0)
-			continue
-		var r: float = reach + set_arrival_distance(
-				avail, self_max_speed, self_max_accel)
-		_race_reach_sq.append(r * r)
 
 
 # ── Last-man step-up discipline ──────────────────────────────────────────────
@@ -1354,8 +1083,8 @@ static func _step_arrives_set(s: float, step_needed: float, closing: float,
 
 # How far a skater can travel in `t` seconds from a standing start and still
 # arrive SET — closing speed already killed. The shared home of the set-arrival
-# profile described above (_prepare_reach's containment radii and CONTAIN's
-# step-up clamp both ask "can I be there, stopped, in time?"):
+# profile described above (the step-up clamp asks "can I be there, stopped, in
+# time?"):
 #   short budget — triangular: accelerate then brake to zero inside `t`; the
 #     covered ground is ½·k·t² with k = a·B/(a+B), the effective accel of an
 #     accelerate-brake round trip (B = the arrival brake decel);
@@ -1375,63 +1104,22 @@ static func set_arrival_distance(t: float, v_max: float,
 			+ v * (t - t_tri_max)
 
 
-static func _append_channel(gain_pt: Vector3, t_gain: float,
-		carry_vel: Vector3, speed: float, accel: float) -> void:
-	# The calibrated time_to_arrive prices the whole carry (redirect + ramp +
-	# cruise). Stations along the straight path share its redirect cost and
-	# split the pursuit leg by the fraction of distance — a slight
-	# near-station optimism for the rush (the ramp is front-loaded in time),
-	# which errs conservative for the defender.
-	var t_full: float = AIActionScoring.time_to_arrive(
-			gain_pt, _race_net, carry_vel, speed, accel)
-	for f: float in RACE_PATH_FRACTIONS:
-		_race_station_pts.append(gain_pt.lerp(_race_net, f))
-		_race_station_ts.append(t_gain + f * t_full)
-	_race_channel_count += 1
-
-
-# Can a defender standing at `c` contain every filled counter channel — i.e.
-# for each channel, reach SOME post-gain path station (within blade reach),
-# set, before the puck gets there? Requires a prior fill_counter_channels
-# (which precomputes this build's per-station containment radii — the loop
-# here is one squared-distance compare per station).
-static func race_home_feasible(c: Vector3,
-		self_max_speed: float, self_max_accel: float) -> bool:
-	_prepare_reach(self_max_speed, self_max_accel)
-	var n_fracs: int = RACE_PATH_FRACTIONS.size()
-	for k: int in _race_channel_count:
-		var contained: bool = false
-		for j: int in n_fracs:
-			var idx: int = k * n_fracs + j
-			var p: Vector3 = _race_station_pts[idx]
-			var r_sq: float = _race_reach_sq[idx]
-			if r_sq < 0.0:
-				continue
-			var dx: float = p.x - c.x
-			var dz: float = p.z - c.z
-			if dx * dx + dz * dz <= r_sq:
-				contained = true
-				break
-		if not contained:
-			return false
-	return true
-
-
 # A station's home post has to be meaningfully deeper than the stand it is
 # bounding to be a retreat at all — one stride, so a station already standing on
 # its own post doesn't read as "retreat zero metres" and lose its bound entirely.
 const HOME_FLOOR_BIND_MARGIN_M: float = 1.0
 
 
-# The deepest a station may sag (see most_forward_feasible's `floor_point`).
+# The deepest a station may sag — offensive_station_target's retreat target when
+# the puck is no longer ours.
 #
 # The principle: an OFF-PUCK STATION's retreat is about repositioning for a
 # possible turnover, not about defending an actual rush. Defending an actual
 # rush is transition defense's job — a different possession state with different
-# roles. So when a station's forward stand stops being recoverable, the answer is
-# "get back to your post", not "keep skating to the crease". Bisecting to the
-# net-front stand is how a defenseman ended up parked on his own goal line while
-# the play was still in the offensive zone (docs/transition-defense-plan.md §2.1).
+# roles. So when a station gives up its forward stand, the answer is "get back to
+# your post", not "keep skating to the crease" — retreating toward the net-front
+# stand is how a defenseman ended up parked on his own goal line while the play
+# was still in the offensive zone (docs/transition-defense-plan.md §2.1).
 #
 # Two tiers, and which applies falls out of the geometry rather than a per-caller
 # decision:
@@ -1439,10 +1127,9 @@ const HOME_FLOOR_BIND_MARGIN_M: float = 1.0
 #     F3, the high slot, the trailing valve) floors at its own defensive home
 #     post — the dot lane at its blue line for a D, the high ice just up-ice of
 #     it for a forward (AIZoneCoverage.defensive_anchor);
-#   • a station whose stand already IS its home (the NEUTRAL back pair, the
-#     flanks) can't be bounded by it, so it floors at the HOUSE GATE — the top of
-#     the circles, the depth the research names as where backcheckers stop. Still
-#     never the crease.
+#   • a station whose stand already IS its home can't be bounded by it, so it
+#     floors at the HOUSE GATE — the top of the circles, the depth the research
+#     names as where backcheckers stop. Still never the crease.
 # `as_back_layer` forces the DEFENSEMAN's home post regardless of lobby identity.
 # ctx.self_is_defense is a lobby fact, and 3v3 has no lobby positions — every peer
 # reads "forward" — so a role that IS its team's whole back layer would otherwise
@@ -1459,7 +1146,7 @@ static func station_retreat_floor(ctx: RoleContext, fwd: Vector3,
 
 
 # The point on the net → `fwd` ray at the top of the circles: the deepest a field
-# skater should ever be pushed by a race-home bound. Below it he duplicates the
+# skater should ever be pushed by a last-man bound. Below it he duplicates the
 # goalie, fights his own crease repel, and overshoots behind the goal line.
 static func house_gate_floor(our_net: Vector3, fwd: Vector3) -> Vector3:
 	var dx: float = fwd.x - our_net.x
@@ -1469,46 +1156,6 @@ static func house_gate_floor(our_net: Vector3, fwd: Vector3) -> Vector3:
 		return fwd
 	var k: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M / d
 	return Vector3(our_net.x + dx * k, 0.0, our_net.z + dz * k)
-
-
-# The most forward point on the `fwd` → floor segment that is still
-# race-home feasible: `fwd` itself when the stand holds, else a bisection
-# down the retreat line — the sag-to-even that replaces the old radius
-# clamp.
-#
-# `floor_point` is the deepest the retreat may go. Callers that own a defensive
-# post pass station_retreat_floor(ctx); the default (INF) keeps the legacy
-# NET-FRONT STAND (_race_home_stand), which is still the right floor for a body
-# genuinely defending the doorstep — but is far too deep for an off-puck station,
-# and passing it there is what produced the parked-on-the-goal-line failure.
-# Never the net point itself: a skater on the goal line duplicates the goalie,
-# fights his own crease repel, and overshoots behind the line.
-#
-# A `fwd` already at or deeper than the floor is returned untouched — the station
-# is by definition already home, so there is nothing left to concede.
-static func most_forward_feasible(fwd: Vector3,
-		self_max_speed: float, self_max_accel: float,
-		floor_point: Vector3 = Vector3.INF) -> Vector3:
-	if race_home_feasible(fwd, self_max_speed, self_max_accel):
-		return fwd
-	var floor_pt: Vector3 = _race_home_stand
-	if floor_point.is_finite():
-		# Only binds when it is genuinely a RETREAT (nearer our net than the
-		# stand we're giving up on); otherwise the bisection would push the
-		# station the wrong way, away from its own goal.
-		if _xz_distance(floor_point, _race_net) >= _xz_distance(fwd, _race_net):
-			return fwd
-		floor_pt = floor_point
-	var lo: float = 0.0
-	var hi: float = 1.0
-	for _i: int in 6:
-		var mid: float = (lo + hi) * 0.5
-		if race_home_feasible(floor_pt.lerp(fwd, mid),
-				self_max_speed, self_max_accel):
-			lo = mid
-		else:
-			hi = mid
-	return floor_pt.lerp(fwd, lo)
 
 
 static func _xz_distance(a: Vector3, b: Vector3) -> float:

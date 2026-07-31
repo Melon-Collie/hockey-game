@@ -334,14 +334,14 @@ func test_weak_point_ignores_a_rim_on_the_far_wall() -> void:
 	assert_lt(d.target_position.x, 0.0, "the weak point holds his own side")
 
 
-# ── DBACK: the blue-line stand is race-home bounded like every other station ──
+# ── DBACK: the blue-line stand is numbers-bounded like every other station ───
 # It was the one D station that held its line no matter what was behind it —
 # the puckwatching last man standing at his own blue line into a guaranteed
 # breakaway.
 
-func test_dback_holds_the_line_when_the_counter_is_contained() -> void:
-	# The only opponent is deep in his own end with the whole rink to cover:
-	# the stand is untouched, so ordinary NZ shape is unchanged.
+func test_dback_holds_the_line_when_nobody_is_behind_it() -> void:
+	# The only opponent is deep in his own end, up-ice of the pair: nobody has
+	# beaten them, so the stand is untouched and ordinary NZ shape is unchanged.
 	var ctx: RoleContext = _make_ctx(Vector3(-4.0, 0.0, 6.0),
 			[[2, 1 - TEAM_ID, Vector3(2.0, 0.0, -22.0)]],
 			-1, Vector3(0.0, 0.0, -2.0))
@@ -350,13 +350,31 @@ func test_dback_holds_the_line_when_the_counter_is_contained() -> void:
 			"a contained counter leaves the blue-line stand alone")
 
 
-func test_dback_sags_off_the_line_against_a_threat_already_behind_it() -> void:
-	# A stretch man level with the pair and already flying — legally onside, so
-	# no offside clamp saves us — with the puck up ice behind him. Holding the
-	# line here IS the breakaway; the stand gives ground down the retreat line.
+func test_dback_holds_the_line_against_an_offside_lurker() -> void:
+	# A man parked deep in our zone with the puck up ice. Under the enforced
+	# ruleset he is not a threat at all — he cannot legally receive where he
+	# stands — and the blue line is precisely the bound that says so. This is the
+	# pair's whole reason to stand there, so the stand must not flinch.
 	var ctx: RoleContext = _make_ctx(Vector3(-4.0, 0.0, 6.0),
-			[[2, 1 - TEAM_ID, Vector3(2.0, 0.0, 6.5), Vector3(0.0, 0.0, 8.0)]],
+			[[2, 1 - TEAM_ID, Vector3(2.0, 0.0, 13.0), Vector3(0.0, 0.0, 8.0)]],
 			-1, Vector3(0.0, 0.0, -8.0))
+	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DBACK_L)
+	assert_almost_eq(d.target_position.z, GameRules.BLUE_LINE_Z, 0.1,
+			"an illegal lurker does not pull the back pair off its line")
+
+
+func test_dback_sags_off_the_line_against_a_threat_already_behind_it() -> void:
+	# The same lurker with offsides OFF: now he is a genuine doorstep threat with
+	# nobody covering, holding the line IS the breakaway, and the stand gives
+	# ground down the retreat line until it is back on his covering side.
+	var ctx: RoleContext = _make_ctx(Vector3(-4.0, 0.0, 6.0),
+			[[2, 1 - TEAM_ID, Vector3(2.0, 0.0, 13.0), Vector3(0.0, 0.0, 8.0)]],
+			-1, Vector3(0.0, 0.0, -8.0))
+	ctx.offsides_enforced = false
+	# Refill the read for the OFF ruleset — production rebuilds it every brain
+	# tick from the latched rule set.
+	ctx.rush_read.fill(ctx.snapshot, TEAM_ID, OUR_NET_Z, ctx.team_id_by_peer,
+			{}, {}, false)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DBACK_L)
 	assert_gt(d.target_position.z, GameRules.BLUE_LINE_Z + 0.5,
 			"the back pair sags home rather than stand into a breakaway")

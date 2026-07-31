@@ -4,12 +4,12 @@ class_name AIRushRead
 # place of every defender independently asking "can I contain everything?".
 # Design: docs/transition-defense-plan.md §4.
 #
-# The model this replaces (AIRoleHelpers.fill_counter_channels + race_home_feasible,
-# as a POSITIONING primitive — it survives as a pinch evaluator) asked each bot a
-# conjunctive worst-case question: contain every channel of every opponent, priced at
-# the hardest legal feed, or retreat. Five bots asking it independently all got "no"
-# and all retreated together, which is how a defensive corps ends up standing on its
-# own goal line. Nothing in it could ever say "someone else has that man".
+# The model this replaces (a per-station counter-channel race, since deleted) asked
+# each bot a conjunctive worst-case question: contain every channel of every
+# opponent, priced at the hardest legal feed, or retreat. Five bots asking it
+# independently all got "no" and all retreated together, which is how a defensive
+# corps ends up standing on its own goal line. Nothing in it could ever say
+# "someone else has that man".
 #
 # Real transition defense is ALLOCATED and LAYERED, and the aggression of the whole
 # structure is set by one quantity every player on the ice can see: NUMBERS BACK.
@@ -107,7 +107,7 @@ var recovery_by_peer: Dictionary[int, int] = {}
 # "no attackers, because nobody is a threat" from "no attackers, because nobody
 # has told me anything" — an unwired context (tests, a brainless agent) reads
 # the inert instance, and treating that as "the coast is clear" would silently
-# disable every race-home bound in the game.
+# disable every last-man bound in the game.
 var is_live: bool = false
 var numbers: int = Numbers.EVEN_OR_UP
 # ETA of the nearest peer coming from BEHIND onto the carrier's hip. The repo's
@@ -277,9 +277,8 @@ func _fill_recovery(snapshot: WorldSnapshot, team_id: int,
 	var gate: Vector3 = house_gate(our_net)
 	# Time for the rush itself to reach the house gate — the clock a recovering
 	# defender is racing. Split off the calibrated whole-trip ETA by the fraction
-	# of DISTANCE remaining, the same approximation _append_channel makes for its
-	# path stations: slightly optimistic for the rush (its ramp is front-loaded in
-	# time), which errs conservative for the defender.
+	# of DISTANCE remaining: slightly optimistic for the rush (its ramp is
+	# front-loaded in time), which errs conservative for the defender.
 	var t_rush_gate: float = maxf(
 			rush_eta_s * (1.0 - AIZoneCoverage.HOUSE_TOP_DEPTH_M
 					/ maxf(origin_along, 0.001)), 0.0)
@@ -495,8 +494,8 @@ func _lead(pos: Vector3, vel: Vector3) -> Vector3:
 
 
 # True when `pid` is an opponent genuinely involved in the counter. The single
-# question the offensive stations' race-home bound should be asking about a
-# body: is he actually coming, or is he furniture?
+# question a station's last-man bound should be asking about a body: is he
+# actually coming, or is he furniture?
 func is_attacker(pid: int) -> bool:
 	return pid in attackers
 
