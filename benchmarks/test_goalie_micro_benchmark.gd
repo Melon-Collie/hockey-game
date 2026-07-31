@@ -36,10 +36,13 @@ var _ctrl: GoalieController = null
 
 
 func before_all() -> void:
+	# Plain add_child, freed in after_all. add_child_autofree releases at the end
+	# of each TEST, so a scene built once in before_all would be freed out from
+	# under the second test — which it was, as a use-after-free on the puck.
 	_goalie = load("res://Scenes/Goalie.tscn").instantiate() as Goalie
 	_puck = load("res://Scenes/Puck.tscn").instantiate() as Puck
-	add_child_autofree(_goalie)
-	add_child_autofree(_puck)
+	add_child(_goalie)
+	add_child(_puck)
 
 	# A live threat from the slot — the read the goalie holds for most of a
 	# shift, where tracking, depth and body-part solving all have real work.
@@ -47,13 +50,18 @@ func before_all() -> void:
 	_puck.global_position = Vector3(1.2, 0.0, GameRules.GOAL_LINE_Z - 6.5)
 
 	_ctrl = GoalieController.new()
-	add_child_autofree(_ctrl)
+	add_child(_ctrl)
 	_ctrl.setup(_goalie, _puck, GameRules.GOAL_LINE_Z, true)
 	for _i: int in SETTLE_TICKS:
 		_ctrl._physics_process(1.0 / 120.0)
 
 
 func after_all() -> void:
+	# free(), not queue_free(): GUT checks for leftover children the moment the
+	# script finishes, which is before a deferred free would run.
+	for n: Node in [_ctrl, _goalie, _puck]:
+		if is_instance_valid(n):
+			n.free()
 	if _results.is_empty():
 		return
 	var widest: int = 0
@@ -105,3 +113,46 @@ func test_goalie_tick_costs() -> void:
 		_ctrl._update_state(delta))
 
 	assert_true(_results.size() > 0, "goalie benchmark produced results")
+
+
+# The body-solve LOD, priced. With the play at the far end the pads, glove and
+# blocker cannot be reached, so the solve is suspended and the goalie holds its
+# converged ready stance. Two goalies exist in every configuration and one of
+# them is always at the wrong end, so this is close to a permanent halving of
+# one goalie's tick.
+func test_far_end_body_solve_lod() -> void:
+	var delta: float = 1.0 / 120.0
+
+	# Play moves to the other end. The puck is WALKED there rather than moved in
+	# one step: the goalie derives puck velocity from position deltas, so a
+	# teleport reads as an enormous shot and trips the universal-reaction check,
+	# which then holds the solve awake and hides the very thing being measured.
+	# A puck cannot teleport in game, so the walk is also the honest scenario.
+	var from_z: float = _puck.global_position.z
+	var to_z: float = -GameRules.GOAL_LINE_Z + 8.0
+	for i: int in 240:
+		var t: float = float(i + 1) / 240.0
+		_puck.global_position = Vector3(0.0, 0.0, lerpf(from_z, to_z, t))
+		_ctrl._physics_process(delta)
+	# Settle: the state machine has to fall back to STANDING and the pose lerp
+	# has to converge before the suspension is steady state, not a transient.
+	for _i: int in SETTLE_TICKS:
+		_ctrl._physics_process(delta)
+
+	# The measurement is meaningless unless the LOD is actually engaged — a
+	# silently-inactive gate would just re-measure the near case and look like
+	# a null result.
+	assert_true(_ctrl._body_solve_asleep,
+			"body solve should be suspended with the puck at the far end")
+
+	_bench("FAR END: _physics_process (WHOLE TICK)", func() -> void:
+		_ctrl._physics_process(delta))
+	_bench("FAR END: body parts (suspended)", func() -> void:
+		_ctrl._update_body_parts(delta))
+
+	# And it must come back. A LOD that fails to wake is a bug that only shows
+	# up as a goalie who does not move for the one shot that mattered.
+	_puck.global_position = Vector3(1.2, 0.0, GameRules.GOAL_LINE_Z - 6.5)
+	_ctrl._physics_process(delta)
+	assert_false(_ctrl._body_solve_asleep,
+			"body solve must resume the moment the puck is back in range")
