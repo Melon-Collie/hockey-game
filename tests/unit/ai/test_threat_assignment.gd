@@ -220,6 +220,51 @@ func test_house_marker_is_sticky_across_ticks() -> void:
 	assert_eq(sticky[1], 20, "the other defender takes the remaining man")
 
 
+func test_the_house_pin_breaks_exact_danger_ties_by_peer_id() -> void:
+	# Two net-front men mirrored about the slot at equal depth. score_shoot is
+	# x-symmetric, so this pair scores BIT-IDENTICALLY in live play — the faceoff
+	# net-front. One defender, so only the house man is covered and the loser of
+	# the tie is visibly conceded.
+	#
+	# `men` arrives in the snapshot's insertion order (peer registration), which
+	# is not sorted, so the tie must be broken explicitly or the winner depends on
+	# who joined the match first — and flips if that order ever changes, dragging
+	# the sticky house defender back and forth across the crease.
+	var defenders: Array[int] = [1]
+	var dpos: Dictionary = {1: Vector3(0, 0, 20)}
+	var mpos: Dictionary = {10: Vector3(-2, 0, 25), 20: Vector3(2, 0, 25)}
+	var mval: Dictionary = {10: 0.5, 20: 0.5}
+	var mdanger: Dictionary = {10: 0.9, 20: 0.9}
+
+	var ascending: Array[int] = [10, 20]
+	var descending: Array[int] = [20, 10]
+	var a: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), ascending, mpos, mval,
+			OUR_NET, {}, {}, mdanger)
+	var b: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), descending, mpos, mval,
+			OUR_NET, {}, {}, mdanger)
+	assert_eq(a[1], 10, "the lower peer id wins the tie")
+	assert_eq(b[1], 10,
+			"and wins it from the other list order too — the pin is not "
+			+ "decided by snapshot insertion order")
+
+
+func test_a_more_dangerous_man_still_beats_a_lower_peer_id() -> void:
+	# Guard on the tiebreak above: peer id orders EQUAL danger, it never
+	# outranks danger itself. Man 20 is the lethal one despite the higher id.
+	var defenders: Array[int] = [1]
+	var dpos: Dictionary = {1: Vector3(0, 0, 20)}
+	var mpos: Dictionary = {10: Vector3(-2, 0, 25), 20: Vector3(2, 0, 25)}
+	var mval: Dictionary = {10: 0.5, 20: 0.5}
+	var mdanger: Dictionary = {10: 0.6, 20: 0.95}
+	var men: Array[int] = [10, 20]
+	var out: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval,
+			OUR_NET, {}, {}, mdanger)
+	assert_eq(out[1], 20, "danger decides; the id is only the tiebreak")
+
+
 # ── Cover anchor geometry ──────────────────────────────────────────────────
 
 func test_cover_anchor_is_goal_side_of_man() -> void:
