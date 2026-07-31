@@ -1,5 +1,10 @@
 extends GutTest
 
+# The gait's rotations and the sizing seam's positions live on the leg rig's
+# bones now, not on Node3Ds — see Skater.leg_bone_euler / leg_bone_position.
+const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
+const _SHIN_L: int = SkaterMeshBuilder.LegBone.SHIN_L
+
 # Skeleton height scaling — SkaterAppearanceCoordinator scales the whole mesh
 # rig about the ICE PLANE: the UpperBody/LowerBody roots rise by
 # (height_mult − 1) × FACEOFF_SPAWN_HEIGHT and every leg-chain Y offset
@@ -69,18 +74,16 @@ func test_skeleton_scales_about_ice_plane() -> void:
 	assert_almost_eq(lower.position.y, expected_root, 0.0001, "lower root rises")
 
 	# Leg pivot offsets scale by h (segment lengths lengthen); X untouched.
-	var leg_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
-	var shin_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL/ShinL") as Node3D
-	assert_almost_eq(leg_l.position.y, LEG_PIVOT_Y * h, 0.0001, "hip pivot scales")
-	assert_almost_eq(leg_l.position.x, -0.13, 0.0001, "stance width untouched")
-	assert_almost_eq(shin_l.position.y, SHIN_PIVOT_Y * h, 0.0001, "knee pivot scales")
+	assert_almost_eq(skater.leg_bone_position(_LEG_L).y, LEG_PIVOT_Y * h, 0.0001, "hip pivot scales")
+	assert_almost_eq(skater.leg_bone_position(_LEG_L).x, -0.13, 0.0001, "stance width untouched")
+	assert_almost_eq(skater.leg_bone_position(_SHIN_L).y, SHIN_PIVOT_Y * h, 0.0001, "knee pivot scales")
 
 	# Fixed-point check: the skeleton scales about the TOP of the skate stack
 	# (the lift is a fixed, unscaled spacer under it), so a chain point at
 	# mesh-native world height Y lands at Y × h + SKATE_LIFT_M — the knee
 	# (0.56 above ice natively) at 0.56 × h plus the stack.
 	var knee_above_ice: float = GameRules.FACEOFF_SPAWN_HEIGHT \
-			+ expected_root + leg_l.position.y + shin_l.position.y
+			+ expected_root + skater.leg_bone_position(_LEG_L).y + skater.leg_bone_position(_SHIN_L).y
 	var native_knee: float = GameRules.FACEOFF_SPAWN_HEIGHT + LEG_PIVOT_Y + SHIN_PIVOT_Y
 	assert_almost_eq(knee_above_ice, native_knee * h + SkaterMeshBuilder.SKATE_LIFT_M,
 			0.0001, "knee height proportional")
@@ -106,15 +109,14 @@ func test_reapply_is_idempotent_and_reversible() -> void:
 	var controller: SkaterController = rig["controller"]
 	var big: PlayerAttributes = _size_attrs(PlayerAttributes.HEIGHT_MAX)
 	var upper: Node3D = skater.get_node("MeshRoot/UpperBody") as Node3D
-	var leg_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
 
 	controller.apply_attributes(big)
 	var once_root: float = upper.position.y
-	var once_leg: float = leg_l.position.y
+	var once_leg: float = skater.leg_bone_position(_LEG_L).y
 	var once_hand: float = controller.hand_rest_y
 	controller.apply_attributes(big)
 	assert_almost_eq(upper.position.y, once_root, 0.0001, "re-apply must not compound root")
-	assert_almost_eq(leg_l.position.y, once_leg, 0.0001, "re-apply must not compound pivots")
+	assert_almost_eq(skater.leg_bone_position(_LEG_L).y, once_leg, 0.0001, "re-apply must not compound pivots")
 	assert_almost_eq(controller.hand_rest_y, once_hand, 0.0001, "re-apply must not compound hand")
 
 	# Free-play picker path: big → medium must land exactly where a fresh
@@ -123,10 +125,13 @@ func test_reapply_is_idempotent_and_reversible() -> void:
 	controller.apply_attributes(medium)
 	var fresh: Dictionary = _make_rig()
 	(fresh["controller"] as SkaterController).apply_attributes(medium)
-	var fresh_upper: Node3D = (fresh["skater"] as Skater).get_node("MeshRoot/UpperBody") as Node3D
-	var fresh_leg: Node3D = (fresh["skater"] as Skater).get_node("MeshRoot/LowerBody/LegL") as Node3D
+	var fresh_skater: Skater = fresh["skater"] as Skater
+	var fresh_upper: Node3D = fresh_skater.get_node("MeshRoot/UpperBody") as Node3D
 	assert_almost_eq(upper.position.y, fresh_upper.position.y, 0.0001, "downsize matches fresh")
-	assert_almost_eq(leg_l.position.y, fresh_leg.position.y, 0.0001, "downsize matches fresh pivot")
+	assert_almost_eq(
+			skater.leg_bone_position(_LEG_L).y,
+			fresh_skater.leg_bone_position(_LEG_L).y,
+			0.0001, "downsize matches fresh pivot")
 
 
 func test_root_offset_composes_with_crouch_drop() -> void:

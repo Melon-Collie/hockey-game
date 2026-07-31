@@ -1,5 +1,9 @@
 extends GutTest
 
+# The gait's rotations and the sizing seam's positions live on the leg rig's
+# bones now, not on Node3Ds — see Skater.leg_bone_euler / leg_bone_position.
+const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
+
 # Regression: a client-rendered remote skater's cosmetic leg gait runs at render
 # rate through the Skater.render_pose_update hook (perf #431), which yields while
 # _self_posing is set. A goal/intermission replay drives the same live skater via
@@ -15,7 +19,6 @@ const DT: float = 1.0 / 60.0
 
 var _skater: Skater = null
 var _controller: RemoteController = null
-var _leg_l: Node3D = null
 
 
 class _GameStateStub:
@@ -37,7 +40,6 @@ func before_each() -> void:
 	_controller.setup(_skater, null, gs)
 	_controller.apply_attributes(PlayerAttributes.all_average())
 	_skater.set_facing(Vector2(0.0, -1.0))
-	_leg_l = _skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
 
 
 # Runs the render-rate hook for `count` frames while the skater is skating forward
@@ -51,8 +53,8 @@ func _stride_range(count: int) -> float:
 		_skater.velocity = Vector3(0.0, 0.0, -6.0)
 		_skater.move_intent = Vector2(0.0, -1.0)
 		_skater.render_pose_update.call(DT)
-		lo = minf(lo, _leg_l.rotation.x)
-		hi = maxf(hi, _leg_l.rotation.x)
+		lo = minf(lo, _skater.leg_bone_euler(_LEG_L).x)
+		hi = maxf(hi, _skater.leg_bone_euler(_LEG_L).x)
 	return hi - lo
 
 

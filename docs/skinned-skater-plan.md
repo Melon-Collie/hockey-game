@@ -88,7 +88,9 @@ COUNT scattered across the tile.
    two gloved fists, two wrist cuffs) → one `Skeleton3D` + one skinned mesh.
    Every pose byte-identical to the node rig bar one edge pixel; the build
    matrix identical outside the ghosted column. **The pattern is proven.**
-3. Legs (the gait chain — `LegL/R`, `ShinL/R`, hips/thighs/knees/socks/skates).
+3. ~~Legs (the gait chain).~~ Done. Sixteen nodes → sixteen bones on one
+   skeleton, twelve of them carrying eighteen surfaces. Skater is **45 nodes**
+   (from 67 with cuffs before this work started).
 4. Torso, helmet, shoulders.
 5. Goalie, same pattern.
 
@@ -105,7 +107,25 @@ Each step is its own diffable commit. Do not batch them.
   it was 700-1900 px per pose — invisible to a rest-pose check, obvious here.
   The fix is to give the affected faces normals with no component along the
   scaled axis (`SkaterMeshBuilder._radial_side_normals`); such a normal is
-  invariant under that scale. Legs will hit this on the thigh and shin.
+  invariant under that scale.
+
+  **But that fix is only correct where the anisotropy is LARGE, and the legs
+  proved it.** Flattening trades the part's true normals for radial ones; that
+  is free on the arm bone because at r/length ≈ 0.23 the proper normal matrix
+  had already flattened them to 1.6° off radial. The leg parts scale by roughly
+  1:1 (limb bulk vs height), so their correct normals ARE the true face normals
+  — applying the same fix there nearly doubled the error (800 → 1494 changed
+  pixels) and spread it from two builds to all five. It was reverted. Check the
+  axis ratio before reaching for it.
+- **The pose set cannot see build-dependent bugs; the build matrix can.**
+  `pose_capture.gd` renders one neutral build, where limb-bulk and height
+  multipliers are both 1.0 and every leg bone's scale is uniform — so the leg
+  normal skew was invisible to it (1 px) and plain in `skater_matrix.gd` (800 px
+  across SLIM and TANK, the two builds whose dials disagree most). **Run both on
+  every remaining step.** The residual left on the legs is that 800 px at worst
+  71/255, confined to hip balls and sock/skate seams on the extreme builds, and
+  indistinguishable in a side-by-side crop. It is bounded by how far apart the
+  height and limb dials can get, not by anything that grows with the rig.
 - **Merging transparent parts changes ghost-mode compositing.** Ten alpha
   meshes sorted independently against the body; one mesh sorts once. The build
   matrix's ghosted column moved by up to 36/255 over ~1000 px and reads

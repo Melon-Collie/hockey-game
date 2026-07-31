@@ -34,18 +34,6 @@ var _blade_tape: MeshInstance3D                    # team-colored tape band, chi
 var _helmet: MeshInstance3D
 var _shoulder_l: MeshInstance3D
 var _shoulder_r: MeshInstance3D
-var _hip_l: MeshInstance3D
-var _hip_r: MeshInstance3D
-var _thigh_l: MeshInstance3D
-var _thigh_r: MeshInstance3D
-var _knee_l: MeshInstance3D
-var _knee_r: MeshInstance3D
-var _sock_l: MeshInstance3D
-var _sock_r: MeshInstance3D
-var _skate_l: MeshInstance3D
-var _skate_r: MeshInstance3D
-var _foot_l: MeshInstance3D
-var _foot_r: MeshInstance3D
 
 # Cached jersey + shoulder decal inputs. Both decals are repainted whenever
 # either the uniform (apply_uniform) or the name/number (apply_jersey_info)
@@ -84,18 +72,6 @@ func setup(skater: Skater) -> void:
 	# Leg meshes live under per-leg pivot chains: LowerBody/Leg{L,R} carries the
 	# upper-leg meshes, and its ShinL/R child carries the lower-leg meshes. See
 	# the Skating Stride block in skater.gd for the full hierarchy.
-	_hip_l = skater.lower_body.get_node("LegL/HipL") as MeshInstance3D
-	_hip_r = skater.lower_body.get_node("LegR/HipR") as MeshInstance3D
-	_thigh_l = skater.lower_body.get_node("LegL/ThighL") as MeshInstance3D
-	_thigh_r = skater.lower_body.get_node("LegR/ThighR") as MeshInstance3D
-	_knee_l = skater.lower_body.get_node("LegL/KneeL") as MeshInstance3D
-	_knee_r = skater.lower_body.get_node("LegR/KneeR") as MeshInstance3D
-	_sock_l = skater.lower_body.get_node("LegL/ShinL/SockL") as MeshInstance3D
-	_sock_r = skater.lower_body.get_node("LegR/ShinR/SockR") as MeshInstance3D
-	_skate_l = skater.lower_body.get_node("LegL/ShinL/SkateL") as MeshInstance3D
-	_skate_r = skater.lower_body.get_node("LegR/ShinR/SkateR") as MeshInstance3D
-	_foot_l = skater.lower_body.get_node("LegL/ShinL/FootL") as MeshInstance3D
-	_foot_r = skater.lower_body.get_node("LegR/ShinR/FootR") as MeshInstance3D
 	# MERGED MESHES: the boot carries its shell, the blade steel and the laces as
 	# three surfaces; the skate collar carries its shell and the accent stripe;
 	# the helmet carries its shell and the head/neck skin. Each of those parts
@@ -253,34 +229,31 @@ func apply_uniform(colors: Dictionary) -> void:
 	# Pants — vertical side stripes (pants stripe pos is U, width is column
 	# thickness; see _make_v_stripes_texture). Hips/knees match pants base.
 	var pants_block: Dictionary = uniform.pants
-	_paint_pants_thigh(_thigh_l, pants_block, -0.25)
-	_paint_pants_thigh(_thigh_r, pants_block, 0.25)
+	_paint_pants_thigh(SkaterMeshBuilder.LegSurface.THIGH_L, pants_block, -0.25)
+	_paint_pants_thigh(SkaterMeshBuilder.LegSurface.THIGH_R, pants_block, 0.25)
 	var pants_solid: StandardMaterial3D = _make_solid_mat(pants_block.base)
-	_hip_l.material_override = pants_solid.duplicate()
-	_hip_r.material_override = pants_solid.duplicate()
-	_knee_l.material_override = pants_solid.duplicate()
-	_knee_r.material_override = pants_solid.duplicate()
+	for surface: int in [SkaterMeshBuilder.LegSurface.HIP_L,
+			SkaterMeshBuilder.LegSurface.HIP_R,
+			SkaterMeshBuilder.LegSurface.KNEE_L,
+			SkaterMeshBuilder.LegSurface.KNEE_R]:
+		_skater.set_leg_surface_material(surface, pants_solid.duplicate())
 
 	# Socks — horizontal stripes on the cylinder side.
 	var sock_mat: StandardMaterial3D = _socks_material(uniform.socks)
-	_sock_l.material_override = sock_mat
-	_sock_r.material_override = sock_mat.duplicate()
+	_skater.set_leg_surface_material(SkaterMeshBuilder.LegSurface.SOCK_L, sock_mat)
+	_skater.set_leg_surface_material(
+			SkaterMeshBuilder.LegSurface.SOCK_R, sock_mat.duplicate())
 
 	# Skates — the boot and collar stay fixed dark; the gear style's skate
 	# pick paints only the collar's accent stripe band (BLACK by default ≈
 	# invisible on the dark boot, TEAM resolves to the accent). Set
 	# explicitly so ghost mode never leaves a blank gray override behind.
 	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08), _ROUGH_SKATE)
-	_skate_l.set_surface_override_material(
-			SkaterMeshBuilder.SKATE_SURF_COLLAR, skate_mat.duplicate())
-	_skate_r.set_surface_override_material(
-			SkaterMeshBuilder.SKATE_SURF_COLLAR, skate_mat.duplicate())
-	# Surface 0, never material_override — the boot mesh also carries the steel
-	# and the laces (see the setup comment).
-	_foot_l.set_surface_override_material(
-			SkaterMeshBuilder.BOOT_SURF_SHELL, skate_mat.duplicate())
-	_foot_r.set_surface_override_material(
-			SkaterMeshBuilder.BOOT_SURF_SHELL, skate_mat.duplicate())
+	for surface: int in [SkaterMeshBuilder.LegSurface.SKATE_L_COLLAR,
+			SkaterMeshBuilder.LegSurface.SKATE_R_COLLAR,
+			SkaterMeshBuilder.LegSurface.FOOT_L_SHELL,
+			SkaterMeshBuilder.LegSurface.FOOT_R_SHELL]:
+		_skater.set_leg_surface_material(surface, skate_mat.duplicate())
 	_repaint_skate_stripes()
 	_repaint_laces()
 
@@ -363,15 +336,15 @@ func _scale_stripes_about_center(stripes: Array[Dictionary], scale: float) -> Ar
 # Paints a single thigh cylinder with vertical side-column stripes. Per-side
 # uv1_offset rotates the wrap so the texture's stripe column (centered around
 # U=0.5 by convention) lands on each thigh's outer face.
-func _paint_pants_thigh(thigh: MeshInstance3D, pants_block: Dictionary, u_offset: float) -> void:
+func _paint_pants_thigh(surface: int, pants_block: Dictionary, u_offset: float) -> void:
 	if pants_block.stripes.is_empty():
-		thigh.material_override = _make_solid_mat(pants_block.base)
+		_skater.set_leg_surface_material(surface, _make_solid_mat(pants_block.base))
 		return
 	var tex: ImageTexture = _make_v_stripes_texture(pants_block.base, pants_block.stripes)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
 	mat.uv1_offset = Vector3(u_offset, 0.0, 0.0)
-	thigh.material_override = mat
+	_skater.set_leg_surface_material(surface, mat)
 
 
 # Returns the sock material — textured if stripes are present, solid otherwise.
@@ -527,18 +500,18 @@ func _resolve_lace_color() -> Color:
 
 func _repaint_skate_stripes() -> void:
 	var stripe_mat: StandardMaterial3D = _make_solid_mat(_resolve_skate_color(), _ROUGH_SKATE)
-	_skate_l.set_surface_override_material(
-			SkaterMeshBuilder.SKATE_SURF_STRIPE, stripe_mat.duplicate())
-	_skate_r.set_surface_override_material(
-			SkaterMeshBuilder.SKATE_SURF_STRIPE, stripe_mat.duplicate())
+	_skater.set_leg_surface_material(
+			SkaterMeshBuilder.LegSurface.SKATE_L_STRIPE, stripe_mat.duplicate())
+	_skater.set_leg_surface_material(
+			SkaterMeshBuilder.LegSurface.SKATE_R_STRIPE, stripe_mat.duplicate())
 
 
 func _repaint_laces() -> void:
 	var lace_mat: StandardMaterial3D = _make_solid_mat(_resolve_lace_color())
-	_foot_l.set_surface_override_material(
-			SkaterMeshBuilder.BOOT_SURF_LACES, lace_mat.duplicate())
-	_foot_r.set_surface_override_material(
-			SkaterMeshBuilder.BOOT_SURF_LACES, lace_mat.duplicate())
+	_skater.set_leg_surface_material(
+			SkaterMeshBuilder.LegSurface.FOOT_L_LACES, lace_mat.duplicate())
+	_skater.set_leg_surface_material(
+			SkaterMeshBuilder.LegSurface.FOOT_R_LACES, lace_mat.duplicate())
 
 
 # Repaints the gear-style accents (glove cuff rings, skate collar bands,
@@ -624,8 +597,6 @@ func apply_ghost(ghost: bool) -> void:
 			_upper_body_mesh, _blade_tape,
 			_skater.stick_knob_mesh,
 			_shoulder_l, _shoulder_r,
-			_hip_l, _hip_r, _thigh_l, _thigh_r,
-			_knee_l, _knee_r, _sock_l, _sock_r,
 		]
 	for mesh: MeshInstance3D in meshes:
 		if mesh == null:
@@ -639,11 +610,13 @@ func apply_ghost(ghost: bool) -> void:
 	# one node, so they fade per-surface. They must NOT go through the loop above
 	# — writing material_override on a merged mesh overrides every surface at
 	# once and would erase the steel and the laces for the rest of the match.
-	for merged: MeshInstance3D in [_foot_l, _foot_r, _skate_l, _skate_r, _helmet]:
-		if merged == null:
-			continue
-		for surface: int in merged.mesh.get_surface_count():
-			_fade_material(SkaterMeshBuilder.surface_override(merged, surface), ghost)
+	if _helmet != null:
+		for surface: int in _helmet.mesh.get_surface_count():
+			_fade_material(SkaterMeshBuilder.surface_override(_helmet, surface), ghost)
+	# Both legs are one skinned mesh (pants, socks, skates, boots, steel, laces),
+	# so every part fades through its own surface for the same reason.
+	for surface: int in SkaterMeshBuilder.LEG_SURFACE_COUNT:
+		_fade_material(_skater.leg_surface_material(surface), ghost)
 	# Both arms are one skinned mesh, so every part fades through its own surface
 	# for the same reason — and going through the skater's seam creates the
 	# override from the shared default when a rig ghosts before its first uniform

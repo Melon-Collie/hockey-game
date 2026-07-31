@@ -1,5 +1,9 @@
 extends GutTest
 
+# The gait's rotations and the sizing seam's positions live on the leg rig's
+# bones now, not on Node3Ds — see Skater.leg_bone_euler / leg_bone_position.
+const _SHIN_L: int = SkaterMeshBuilder.LegBone.SHIN_L
+
 # Reactive body language in the gait (SkaterSkatingCoordinator): the
 # check-delivery drive (hitter finishing through a landed hit, armed by the
 # host-authoritative broadcast via start_check_drive), the stick-lift working
@@ -14,7 +18,6 @@ const DT: float = 1.0 / 120.0
 var _skater: Skater = null
 var _controller: SkaterController = null
 var _coord: SkaterSkatingCoordinator = null
-var _shin_l: Node3D = null
 
 
 func before_each() -> void:
@@ -30,7 +33,6 @@ func before_each() -> void:
 	_skater.set_facing(Vector2(0.0, -1.0))
 	_skater.velocity = Vector3.ZERO
 	_skater.move_intent = Vector2.ZERO
-	_shin_l = _skater.get_node("MeshRoot/LowerBody/LegL/ShinL") as Node3D
 
 
 func _tick(count: int) -> void:
@@ -50,7 +52,7 @@ func test_check_drive_leans_into_hit_and_settles() -> void:
 	for _i: int in 54:  # 0.45 s = check_drive_time
 		_coord.apply(DT)
 		min_pitch = minf(min_pitch, _coord.trunk_pitch_add)
-		min_shin = minf(min_shin, _shin_l.rotation.x)
+		min_shin = minf(min_shin, _skater.leg_bone_euler(_SHIN_L).x)
 	assert_lt(min_pitch, -0.1,
 			"the trunk should drive INTO the hit (peak pitch add %.3f rad)" % min_pitch)
 	assert_lt(min_shin, -0.1, "the legs should drive under the finishing shoulder")
@@ -74,7 +76,7 @@ func test_stick_lift_pops_chest_and_releases() -> void:
 	_tick(90)
 	assert_gt(_coord.trunk_pitch_add, 0.03,
 			"the lift should tip the chest up (pitch add %.3f)" % _coord.trunk_pitch_add)
-	assert_lt(_shin_l.rotation.x, -0.05, "the lift should carry a light working coil")
+	assert_lt(_skater.leg_bone_euler(_SHIN_L).x, -0.05, "the lift should carry a light working coil")
 	_skater.blade_up = false
 	_tick(120)
 	assert_almost_eq(_coord.trunk_pitch_add, 0.0, 0.01, "the lift read should release")
@@ -87,9 +89,9 @@ func test_celebration_bounces_knees_and_timer_ages() -> void:
 	for i: int in 180:  # the full 1.5 s window
 		_controller.tick_celebration(DT)  # physics-rate aging (was owned by the gait)
 		_coord.apply(DT)
-		min_shin = minf(min_shin, _shin_l.rotation.x)
+		min_shin = minf(min_shin, _skater.leg_bone_euler(_SHIN_L).x)
 		if i > 36:  # past the ramp — the pump should return near straight between hops
-			max_shin_late = maxf(max_shin_late, _shin_l.rotation.x)
+			max_shin_late = maxf(max_shin_late, _skater.leg_bone_euler(_SHIN_L).x)
 	assert_lt(min_shin, -0.25,
 			"the celebration should pump the knees (deepest %.3f rad)" % min_shin)
 	assert_gt(max_shin_late, -0.1,

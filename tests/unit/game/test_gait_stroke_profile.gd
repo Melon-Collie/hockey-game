@@ -1,5 +1,12 @@
 extends GutTest
 
+# The gait's rotations and the sizing seam's positions live on the leg rig's
+# bones now, not on Node3Ds — see Skater.leg_bone_euler / leg_bone_position.
+const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
+const _LEG_R: int = SkaterMeshBuilder.LegBone.LEG_R
+const _SHIN_L: int = SkaterMeshBuilder.LegBone.SHIN_L
+const _SHIN_R: int = SkaterMeshBuilder.LegBone.SHIN_R
+
 # Gait stroke profile — the FOOT must push back faster than it recovers
 # forward. Real skating is a slow forward recovery and an explosive
 # backward push; the thigh-pitch wave gets this right by construction
@@ -35,10 +42,6 @@ func _run_cruise() -> Array:
 	# intent the gait is the GLIDE, not the stride — stamp it like a held key.
 	skater.move_intent = Vector2(0.0, -1.0)
 
-	var leg_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
-	var leg_r: Node3D = skater.get_node("MeshRoot/LowerBody/LegR") as Node3D
-	var shin_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL/ShinL") as Node3D
-	var shin_r: Node3D = skater.get_node("MeshRoot/LowerBody/LegR/ShinR") as Node3D
 
 	for _i: int in WARMUP_TICKS:
 		coord.apply(DT)
@@ -46,9 +49,9 @@ func _run_cruise() -> Array:
 	for _i: int in MEASURE_TICKS:
 		coord.apply(DT)
 		samples.append([
-			_foot_forward(leg_l.rotation.x, shin_l.rotation.x),
-			_foot_forward(leg_r.rotation.x, shin_r.rotation.x),
-			leg_l.rotation.x, leg_r.rotation.x,
+			_foot_forward(skater.leg_bone_euler(_LEG_L).x, skater.leg_bone_euler(_SHIN_L).x),
+			_foot_forward(skater.leg_bone_euler(_LEG_R).x, skater.leg_bone_euler(_SHIN_R).x),
+			skater.leg_bone_euler(_LEG_L).x, skater.leg_bone_euler(_LEG_R).x,
 		])
 	return samples
 

@@ -245,23 +245,16 @@ static var _cache: Dictionary = {}
 # Swaps every scene-primitive part mesh under the two body roots for its
 # cached low-poly build. Idempotent; safe before or after the coordinators
 # run (they touch material_override and node scale, never mesh identity).
-static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
+static func apply(upper_body: Node3D) -> void:
 	_swap(upper_body, "UpperBodyMesh", "torso", _build_torso)
 	# Helmet shell + the head/neck skin as surfaces (shared_helmet_assembly).
 	_swap(upper_body, "Helmet", "helmet_assembly", _build_helmet_assembly)
 	_swap(upper_body, "ShoulderL", "shoulder", _build_shoulder)
 	_swap(upper_body, "ShoulderR", "shoulder", _build_shoulder)
-	for side: String in ["L", "R"]:
-		_swap(lower_body, "Leg%s/Hip%s" % [side, side], "hip", _build_hip)
-		_swap(lower_body, "Leg%s/Thigh%s" % [side, side], "thigh", _build_thigh)
-		_swap(lower_body, "Leg%s/Knee%s" % [side, side], "knee", _build_knee)
-		_swap(lower_body, "Leg%s/Shin%s/Sock%s" % [side, side, side], "sock", _build_sock)
-		_swap(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side],
-				"skate_assembly", _build_skate_assembly)
-		# Boot, steel and laces are ONE mesh with three surfaces (see
-		# shared_boot_assembly) — the steel and laces used to be child nodes.
-		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side],
-				"boot_assembly", _build_boot_assembly)
+	# The leg parts are not swapped here — they are surfaces of the leg rig's
+	# skinned mesh (shared_leg_skin_mesh), built once and shared. The scene's
+	# LowerBody subtree survives only long enough for Skater._build_leg_rig to
+	# read the segment offsets out of it.
 
 
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
@@ -338,6 +331,90 @@ static func _radial_side_normals(src: ArrayMesh) -> ArrayMesh:
 	var out := ArrayMesh.new()
 	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return out
+
+
+# ── The leg rig: one skinned mesh, sixteen bones ─────────────────────────────
+# Same conversion as the arms (see the ArmPart block), with one structural
+# difference: the legs are a CHAIN, not siblings. LegL/R carry hip pitch and
+# roll, ShinL/R hang off them and carry the knee, and the six meshes per leg ride
+# whichever of the two they belonged to. The bone parents below mirror that
+# exactly, so a pose write composes down the chain the way the node transforms
+# did — flattening it would mean re-deriving the shin's world frame by hand on
+# every gait tick.
+#
+# Bone order is L then R, pivot first. LEG_* and SHIN_* carry no vertices; they
+# exist to be rotated, which is what a bone is for.
+enum LegBone {
+	LEG_L, HIP_L, THIGH_L, KNEE_L, SHIN_L, SOCK_L, SKATE_L, FOOT_L,
+	LEG_R, HIP_R, THIGH_R, KNEE_R, SHIN_R, SOCK_R, SKATE_R, FOOT_R,
+}
+const LEG_BONE_COUNT: int = 16
+# Parent per bone, index-aligned with LegBone. -1 = attached to the skeleton
+# root (LowerBody's frame).
+const LEG_BONE_PARENT: Array[int] = [
+	-1, LegBone.LEG_L, LegBone.LEG_L, LegBone.LEG_L,
+	LegBone.LEG_L, LegBone.SHIN_L, LegBone.SHIN_L, LegBone.SHIN_L,
+	-1, LegBone.LEG_R, LegBone.LEG_R, LegBone.LEG_R,
+	LegBone.LEG_R, LegBone.SHIN_R, LegBone.SHIN_R, LegBone.SHIN_R,
+]
+# Scene node name per bone, index-aligned with LegBone. Skater._build_leg_rig
+# reads each one's local transform before freeing the subtree, so the .tscn stays
+# the place leg proportions are authored.
+const LEG_BONE_NODE: Array[String] = [
+	"LegL", "LegL/HipL", "LegL/ThighL", "LegL/KneeL",
+	"LegL/ShinL", "LegL/ShinL/SockL", "LegL/ShinL/SkateL", "LegL/ShinL/FootL",
+	"LegR", "LegR/HipR", "LegR/ThighR", "LegR/KneeR",
+	"LegR/ShinR", "LegR/ShinR/SockR", "LegR/ShinR/SkateR", "LegR/ShinR/FootR",
+]
+
+# Surfaces of the leg mesh. Not one per bone: the skate collar carries its accent
+# stripe and the boot carries its steel and laces, so those parts contribute
+# several surfaces to one bone (they were already merged meshes as nodes).
+enum LegSurface {
+	HIP_L, THIGH_L, KNEE_L, SOCK_L,
+	SKATE_L_COLLAR, SKATE_L_STRIPE,
+	FOOT_L_SHELL, FOOT_L_BLADE, FOOT_L_LACES,
+	HIP_R, THIGH_R, KNEE_R, SOCK_R,
+	SKATE_R_COLLAR, SKATE_R_STRIPE,
+	FOOT_R_SHELL, FOOT_R_BLADE, FOOT_R_LACES,
+}
+const LEG_SURFACE_COUNT: int = 18
+
+
+static func shared_leg_skin_mesh() -> ArrayMesh:
+	return _shared("leg_skin", func() -> ArrayMesh:
+		var m := ArrayMesh.new()
+		var hip: ArrayMesh = _shared("hip", _build_hip)
+		var thigh: ArrayMesh = _shared("thigh", _build_thigh)
+		var knee: ArrayMesh = _shared("knee", _build_knee)
+		var sock: ArrayMesh = _shared("sock", _build_sock)
+		var skate: ArrayMesh = shared_skate_assembly()
+		var boot: ArrayMesh = shared_boot_assembly()
+		# Appended in LegSurface order — see the enum.
+		for side: int in 2:
+			var leg: int = LegBone.LEG_L if side == 0 else LegBone.LEG_R
+			var shin: int = LegBone.SHIN_L if side == 0 else LegBone.SHIN_R
+			_append_skinned_surface(m, hip, leg + 1)
+			_append_skinned_surface(m, thigh, leg + 2)
+			_append_skinned_surface(m, knee, leg + 3)
+			_append_skinned_surface(m, sock, shin + 1)
+			_append_skinned_surface(m, skate, shin + 2, SKATE_SURF_COLLAR)
+			_append_skinned_surface(m, skate, shin + 2, SKATE_SURF_STRIPE)
+			_append_skinned_surface(m, boot, shin + 3, BOOT_SURF_SHELL)
+			_append_skinned_surface(m, boot, shin + 3, BOOT_SURF_BLADE)
+			_append_skinned_surface(m, boot, shin + 3, BOOT_SURF_LACES)
+		return m)
+
+
+static func shared_leg_skin() -> Skin:
+	if _leg_skin == null:
+		_leg_skin = Skin.new()
+		for i: int in LEG_BONE_COUNT:
+			_leg_skin.add_bind(i, Transform3D.IDENTITY)
+	return _leg_skin
+
+
+static var _leg_skin: Skin = null
 
 
 # ── Merged assemblies ────────────────────────────────────────────────────────
@@ -553,8 +630,9 @@ static var _arm_skin: Skin = null
 # and this mesh has to be vertex-for-vertex what the unskinned one was or the
 # pose diff is comparing two different models. Copying the arrays and adding two
 # more changes nothing else.
-static func _append_skinned_surface(target: ArrayMesh, src: ArrayMesh, bone: int) -> void:
-	var arrays: Array = src.surface_get_arrays(0)
+static func _append_skinned_surface(target: ArrayMesh, src: ArrayMesh, bone: int,
+		src_surface: int = 0) -> void:
+	var arrays: Array = src.surface_get_arrays(src_surface)
 	var vertex_count: int = (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 	var bones := PackedInt32Array()
 	bones.resize(vertex_count * 4)
@@ -567,6 +645,12 @@ static func _append_skinned_surface(target: ArrayMesh, src: ArrayMesh, bone: int
 	arrays[Mesh.ARRAY_BONES] = bones
 	arrays[Mesh.ARRAY_WEIGHTS] = weights
 	target.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	# Carry the source surface's shared default across, so surface_override()
+	# still has something to duplicate for parts that ship with one (the boot's
+	# steel and laces).
+	var shared: Material = src.surface_get_material(src_surface)
+	if shared != null:
+		target.surface_set_material(target.get_surface_count() - 1, shared)
 
 
 # Elbow ball, unit radius.

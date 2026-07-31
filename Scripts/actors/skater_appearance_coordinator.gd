@@ -53,28 +53,30 @@ const _SHOULDER_PATHS: Array[String] = [
 	"UpperBody/ShoulderL", "UpperBody/ShoulderR",
 ]
 const _HELMET_PATH: String = "UpperBody/Helmet"
-const _THIGH_PATHS: Array[String] = [
-	"LowerBody/LegL/HipL",   "LowerBody/LegR/HipR",
-	"LowerBody/LegL/ThighL", "LowerBody/LegR/ThighR",
-	"LowerBody/LegL/KneeL",  "LowerBody/LegR/KneeR",
+# The leg parts are bones of the leg rig, not nodes, so they are addressed by
+# LegBone index (see SkaterMeshBuilder). Same groups as before.
+const _THIGH_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.HIP_L,   SkaterMeshBuilder.LegBone.HIP_R,
+	SkaterMeshBuilder.LegBone.THIGH_L, SkaterMeshBuilder.LegBone.THIGH_R,
+	SkaterMeshBuilder.LegBone.KNEE_L,  SkaterMeshBuilder.LegBone.KNEE_R,
 ]
-const _CALF_PATHS: Array[String] = [
-	"LowerBody/LegL/ShinL/SockL",  "LowerBody/LegR/ShinR/SockR",
-	"LowerBody/LegL/ShinL/SkateL", "LowerBody/LegR/ShinR/SkateR",
+const _CALF_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.SOCK_L,  SkaterMeshBuilder.LegBone.SOCK_R,
+	SkaterMeshBuilder.LegBone.SKATE_L, SkaterMeshBuilder.LegBone.SKATE_R,
 ]
-# Leg pivot chain (Node3D, not leaves) — POSITIONS scale with height so the
-# skeleton's segment lengths ride m_height (hip 0.87 → 0.87·h world, knee
-# 0.31·h below it). The gait rotates these same nodes; positions here,
-# rotations there — never the same property.
-const _LEG_PIVOT_PATHS: Array[String] = [
-	"LowerBody/LegL", "LowerBody/LegR",
-	"LowerBody/LegL/ShinL", "LowerBody/LegR/ShinR",
+# Leg pivot chain (no geometry) — POSITIONS scale with height so the skeleton's
+# segment lengths ride m_height (hip 0.87 → 0.87·h world, knee 0.31·h below it).
+# The gait rotates these same bones; positions here, rotations there — never the
+# same component.
+const _LEG_PIVOT_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.LEG_L,  SkaterMeshBuilder.LegBone.LEG_R,
+	SkaterMeshBuilder.LegBone.SHIN_L, SkaterMeshBuilder.LegBone.SHIN_R,
 ]
 # Feet are excluded from the mesh-scaling rig (rotated local frame — see the
 # FootL/R note above), but their POSITION is in the shin's frame, so the Y
 # offset still scales with the lengthened shin.
-const _FOOT_PATHS: Array[String] = [
-	"LowerBody/LegL/ShinL/FootL", "LowerBody/LegR/ShinR/FootR",
+const _FOOT_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.FOOT_L, SkaterMeshBuilder.LegBone.FOOT_R,
 ]
 
 var _skater: Skater = null
@@ -106,10 +108,10 @@ func apply(attrs: PlayerAttributes) -> void:
 	for path: String in _SHOULDER_PATHS:
 		_apply_scale(path, m_shoulder, m_height, m_shoulder)
 	_apply_scale(_HELMET_PATH, m_head, m_head, m_head)
-	for path: String in _THIGH_PATHS:
-		_apply_scale(path, m_thigh, m_height, m_thigh)
-	for path: String in _CALF_PATHS:
-		_apply_scale(path, m_calf, m_height, m_calf)
+	for bone: int in _THIGH_BONES:
+		_apply_leg_scale(bone, m_thigh, m_height, m_thigh)
+	for bone: int in _CALF_BONES:
+		_apply_leg_scale(bone, m_calf, m_height, m_calf)
 	# Positions: keep the upper-body parts assembled across builds. Y rides
 	# height for everything (the torso cylinder's center rises with its
 	# stretch, the shoulder balls sit at its top, the helmet above them).
@@ -127,14 +129,14 @@ func apply(attrs: PlayerAttributes) -> void:
 	# meshes exactly fill the lengthened segments.
 	_skater.set_skeleton_root_offset(
 			(m_height - 1.0) * GameRules.FACEOFF_SPAWN_HEIGHT)
-	for path: String in _LEG_PIVOT_PATHS:
-		_apply_position(path, 1.0, m_height)
-	for path: String in _THIGH_PATHS:
-		_apply_position(path, 1.0, m_height)
-	for path: String in _CALF_PATHS:
-		_apply_position(path, 1.0, m_height)
-	for path: String in _FOOT_PATHS:
-		_apply_position(path, 1.0, m_height)
+	for bone: int in _LEG_PIVOT_BONES:
+		_apply_leg_position(bone, m_height)
+	for bone: int in _THIGH_BONES:
+		_apply_leg_position(bone, m_height)
+	for bone: int in _CALF_BONES:
+		_apply_leg_position(bone, m_height)
+	for bone: int in _FOOT_BONES:
+		_apply_leg_position(bone, m_height)
 	_apply_arm_thickness(attrs.forearm_bulk_mult(), attrs.upper_arm_bulk_mult())
 
 
@@ -144,15 +146,8 @@ func _capture_baselines() -> void:
 	for path: String in _SHOULDER_PATHS:
 		_capture_scale(path)
 	_capture_scale(_HELMET_PATH)
-	for path: String in _THIGH_PATHS:
-		_capture_scale(path)
-	for path: String in _CALF_PATHS:
-		_capture_scale(path)
-	# Pivots and feet only move — no mesh scale to capture.
-	for path: String in _LEG_PIVOT_PATHS:
-		_capture_position(path)
-	for path: String in _FOOT_PATHS:
-		_capture_position(path)
+	# The leg rig captured its own baselines off the scene subtree before freeing
+	# it (Skater._build_leg_rig), so there is nothing to capture here.
 	# The arm rig is seeded from the @exports in Skater._build_arm_rig, and every
 	# part is a unit-radius shared mesh whose size rides its bone pose scale — so
 	# the baselines come off the rig rather than off a node.
@@ -183,6 +178,19 @@ func _apply_scale(path: String, x_mult: float, y_mult: float, z_mult: float) -> 
 		return
 	var base: Vector3 = _base_scales.get(path, Vector3.ONE)
 	node.scale = Vector3(base.x * x_mult, base.y * y_mult, base.z * z_mult)
+
+
+func _apply_leg_scale(bone: int, x_mult: float, y_mult: float, z_mult: float) -> void:
+	var base: Vector3 = _skater.leg_bone_base_scale(bone)
+	_skater.set_leg_bone_scale(bone,
+			Vector3(base.x * x_mult, base.y * y_mult, base.z * z_mult))
+
+
+# Leg positions only ever ride height on Y — the X multiplier the upper-body
+# parts use has no leg equivalent (nothing moves a knee sideways with build).
+func _apply_leg_position(bone: int, y_mult: float) -> void:
+	var base: Vector3 = _skater.leg_bone_base_position(bone)
+	_skater.set_leg_bone_position(bone, Vector3(base.x, base.y * y_mult, base.z))
 
 
 func _apply_position(path: String, x_mult: float, y_mult: float) -> void:

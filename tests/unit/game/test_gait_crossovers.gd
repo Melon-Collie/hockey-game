@@ -1,5 +1,10 @@
 extends GutTest
 
+# The gait's rotations and the sizing seam's positions live on the leg rig's
+# bones now, not on Node3Ds — see Skater.leg_bone_euler / leg_bone_position.
+const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
+const _LEG_R: int = SkaterMeshBuilder.LegBone.LEG_R
+
 # Crossover gait — three behaviors pinned:
 #  1. Cadence follows the ARC while carving: stride frequency during a real
 #     turn is crossover_phase_per_turn × turn rate, not the straight-line
@@ -92,8 +97,6 @@ func test_crossover_strokes_alternate() -> void:
 	# over a quarter cycle. (The old simultaneous strokes put both at the same
 	# phase.)
 	var rig: Rig = _make_rig(false)
-	var leg_l: Node3D = rig.skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
-	var leg_r: Node3D = rig.skater.get_node("MeshRoot/LowerBody/LegR") as Node3D
 	for _i: int in WARMUP_TICKS:
 		_tick(rig, TURN_RATE)
 	var best_l: float = -INF
@@ -102,11 +105,11 @@ func test_crossover_strokes_alternate() -> void:
 	var worst_r_phase: float = 0.0
 	for _i: int in MEASURE_TICKS:
 		_tick(rig, TURN_RATE)
-		if leg_l.rotation.z > best_l:
-			best_l = leg_l.rotation.z
+		if rig.skater.leg_bone_euler(_LEG_L).z > best_l:
+			best_l = rig.skater.leg_bone_euler(_LEG_L).z
 			best_l_phase = rig.coord.stride_phase
-		if leg_r.rotation.z < worst_r:
-			worst_r = leg_r.rotation.z
+		if rig.skater.leg_bone_euler(_LEG_R).z < worst_r:
+			worst_r = rig.skater.leg_bone_euler(_LEG_R).z
 			worst_r_phase = rig.coord.stride_phase
 	var separation: float = absf(wrapf(best_l_phase - worst_r_phase, -PI, PI))
 	gut.p("over-step peak at phase %.2f, under-push trough at %.2f — separation %.2f rad"

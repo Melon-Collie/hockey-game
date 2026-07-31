@@ -1,5 +1,12 @@
 extends GutTest
 
+# The gait's rotations and the sizing seam's positions live on the leg rig's
+# bones now, not on Node3Ds — see Skater.leg_bone_euler / leg_bone_position.
+const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
+const _LEG_R: int = SkaterMeshBuilder.LegBone.LEG_R
+const _SHIN_L: int = SkaterMeshBuilder.LegBone.SHIN_L
+const _SHIN_R: int = SkaterMeshBuilder.LegBone.SHIN_R
+
 # Shot body animation (SkaterSkatingCoordinator + the pose coordinator's
 # block branch) — the load settles the weight over the stick-side back leg
 # while the charge builds (wrister drag-charge, slapper wind-up), the release
@@ -18,10 +25,6 @@ const DT: float = 1.0 / 120.0
 
 var _skater: Skater = null
 var _coord: SkaterSkatingCoordinator = null
-var _leg_l: Node3D = null
-var _leg_r: Node3D = null
-var _shin_l: Node3D = null
-var _shin_r: Node3D = null
 
 
 func before_each() -> void:
@@ -39,10 +42,6 @@ func before_each() -> void:
 	_skater.set_facing(Vector2(0.0, -1.0))
 	_skater.velocity = Vector3.ZERO
 	_skater.move_intent = Vector2.ZERO
-	_leg_l = _skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
-	_leg_r = _skater.get_node("MeshRoot/LowerBody/LegR") as Node3D
-	_shin_l = _skater.get_node("MeshRoot/LowerBody/LegL/ShinL") as Node3D
-	_shin_r = _skater.get_node("MeshRoot/LowerBody/LegR/ShinR") as Node3D
 
 
 func _tick(count: int) -> void:
@@ -56,12 +55,12 @@ func test_wrister_load_settles_over_back_leg() -> void:
 	_skater.shot_charge = 1.0
 	_tick(180)  # 1.5 s — load blend fully settled
 	# Foot stagger: the stick-side (left) foot drops back behind the front foot.
-	assert_lt(_leg_l.rotation.x, _leg_r.rotation.x - 0.05,
+	assert_lt(_skater.leg_bone_euler(_LEG_L).x, _skater.leg_bone_euler(_LEG_R).x - 0.05,
 			"stick-side foot should stagger back through the load (l %.3f, r %.3f)"
-			% [_leg_l.rotation.x, _leg_r.rotation.x])
+			% [_skater.leg_bone_euler(_LEG_L).x, _skater.leg_bone_euler(_LEG_R).x])
 	# Weight over the stick side: shared roll toward −X (the lefty's stick side).
-	assert_lt(_leg_l.rotation.z, -0.01, "legs should roll toward the stick side")
-	assert_lt(_leg_r.rotation.z, -0.01, "legs should roll toward the stick side")
+	assert_lt(_skater.leg_bone_euler(_LEG_L).z, -0.01, "legs should roll toward the stick side")
+	assert_lt(_skater.leg_bone_euler(_LEG_R).z, -0.01, "legs should roll toward the stick side")
 	# Hips coil with the load — stick-side (−X) hip back reads as positive yaw.
 	assert_gt(_coord.shot_hip_yaw, 0.01, "hips should coil into the load")
 	# The load sits into the shot — the stance crouch drops the body.
@@ -85,13 +84,13 @@ func test_release_kicks_back_leg_and_transfers_weight() -> void:
 	var min_hip_yaw: float = INF
 	for _i: int in 60:  # 0.5 s = wrister_kick_time
 		_coord.apply(DT)
-		var split: float = _leg_r.rotation.x - _leg_l.rotation.x
+		var split: float = _skater.leg_bone_euler(_LEG_R).x - _skater.leg_bone_euler(_LEG_L).x
 		min_hip_yaw = minf(min_hip_yaw, _coord.shot_hip_yaw)
 		if split > max_split:
 			max_split = split
-			split_l_knee = _shin_l.rotation.x
-			split_r_knee = _shin_r.rotation.x
-			split_r_roll = _leg_r.rotation.z
+			split_l_knee = _skater.leg_bone_euler(_SHIN_L).x
+			split_r_knee = _skater.leg_bone_euler(_SHIN_R).x
+			split_r_roll = _skater.leg_bone_euler(_LEG_R).z
 	assert_gt(max_split, 0.25,
 			"back (stick-side) leg should drive into extension behind (split %.3f rad)" % max_split)
 	assert_gt(split_l_knee, split_r_knee + 0.03,
@@ -104,7 +103,7 @@ func test_release_kicks_back_leg_and_transfers_weight() -> void:
 	_skater.current_shot_state = State.SKATING_WITHOUT_PUCK
 	_tick(180)
 	assert_almost_eq(_coord.shot_hip_yaw, 0.0, 0.005, "hip yaw should settle to rest")
-	assert_almost_eq(_leg_l.rotation.x - _leg_r.rotation.x, 0.0, 0.02,
+	assert_almost_eq(_skater.leg_bone_euler(_LEG_L).x - _skater.leg_bone_euler(_LEG_R).x, 0.0, 0.02,
 			"leg split should settle to rest")
 
 
@@ -117,7 +116,7 @@ func test_quick_pass_release_still_flicks() -> void:
 	var max_split: float = 0.0
 	for _i: int in 60:
 		_coord.apply(DT)
-		max_split = maxf(max_split, _leg_r.rotation.x - _leg_l.rotation.x)
+		max_split = maxf(max_split, _skater.leg_bone_euler(_LEG_R).x - _skater.leg_bone_euler(_LEG_L).x)
 	assert_gt(max_split, 0.05,
 			"an uncharged snap should still flick the back leg (split %.3f rad)" % max_split)
 
@@ -130,10 +129,10 @@ func test_slapper_wind_up_loads_back_leg() -> void:
 	_skater.current_shot_state = State.SLAPPER_CHARGE_WITH_PUCK
 	_skater.shot_charge = 1.0
 	_tick(180)
-	assert_lt(_leg_l.rotation.x, _leg_r.rotation.x - 0.08,
+	assert_lt(_skater.leg_bone_euler(_LEG_L).x, _skater.leg_bone_euler(_LEG_R).x - 0.08,
 			"stick-side foot should stagger back through the wind-up (l %.3f, r %.3f)"
-			% [_leg_l.rotation.x, _leg_r.rotation.x])
-	assert_lt(_leg_l.rotation.z, -0.02, "legs should roll the weight to the stick side")
+			% [_skater.leg_bone_euler(_LEG_L).x, _skater.leg_bone_euler(_LEG_R).x])
+	assert_lt(_skater.leg_bone_euler(_LEG_L).z, -0.02, "legs should roll the weight to the stick side")
 	assert_gt(_coord.shot_hip_yaw, 0.05, "hips should coil under the wound-up torso")
 	assert_lt(_skater.upper_body.position.y, rest_body_y - 0.01,
 			"the wind-up should sit deep — the power position")
@@ -151,12 +150,12 @@ func test_slapper_release_kicks_through_contact() -> void:
 	var min_hip_yaw: float = INF
 	for _i: int in 80:  # 0.67 s — spans slapper_kick_time
 		_coord.apply(DT)
-		var split: float = _leg_r.rotation.x - _leg_l.rotation.x
+		var split: float = _skater.leg_bone_euler(_LEG_R).x - _skater.leg_bone_euler(_LEG_L).x
 		min_hip_yaw = minf(min_hip_yaw, _coord.shot_hip_yaw)
 		if split > max_split:
 			max_split = split
-			split_l_knee = _shin_l.rotation.x
-			split_r_knee = _shin_r.rotation.x
+			split_l_knee = _skater.leg_bone_euler(_SHIN_L).x
+			split_r_knee = _skater.leg_bone_euler(_SHIN_R).x
 	assert_gt(max_split, 0.4,
 			"the slap swing should drive the back leg into full extension (split %.3f rad)"
 			% max_split)
@@ -177,7 +176,7 @@ func test_short_wind_up_slap_still_commits() -> void:
 	var max_split: float = 0.0
 	for _i: int in 80:
 		_coord.apply(DT)
-		max_split = maxf(max_split, _leg_r.rotation.x - _leg_l.rotation.x)
+		max_split = maxf(max_split, _skater.leg_bone_euler(_LEG_R).x - _skater.leg_bone_euler(_LEG_L).x)
 	assert_gt(max_split, 0.2,
 			"a short-wind slap should still commit the body (split %.3f rad)" % max_split)
 
@@ -187,19 +186,19 @@ func test_block_plants_wide_and_low() -> void:
 	_skater.current_shot_state = State.SHOT_BLOCKING
 	_tick(120)
 	# Wide braced V: legs splay outward (left toward −X = negative roll).
-	assert_lt(_leg_l.rotation.z, -0.15,
-			"legs should splay into the braced V (l roll %.3f)" % _leg_l.rotation.z)
-	assert_gt(_leg_r.rotation.z, 0.15,
-			"legs should splay into the braced V (r roll %.3f)" % _leg_r.rotation.z)
+	assert_lt(_skater.leg_bone_euler(_LEG_L).z, -0.15,
+			"legs should splay into the braced V (l roll %.3f)" % _skater.leg_bone_euler(_LEG_L).z)
+	assert_gt(_skater.leg_bone_euler(_LEG_R).z, 0.15,
+			"legs should splay into the braced V (r roll %.3f)" % _skater.leg_bone_euler(_LEG_R).z)
 	# Deep sit: knees bent, whole body dropped so the skates stay planted.
-	assert_lt(_shin_l.rotation.x, -0.15, "knees should bend under the block")
+	assert_lt(_skater.leg_bone_euler(_SHIN_L).x, -0.15, "knees should bend under the block")
 	assert_lt(_skater.lower_body.position.y, rest_hips_y - 0.03,
 			"the block should sink the body (hips %.3f, rest %.3f)"
 			% [_skater.lower_body.position.y, rest_hips_y])
 	# Releasing the block eases the wall back out to a neutral stance.
 	_skater.current_shot_state = State.SKATING_WITHOUT_PUCK
 	_tick(240)
-	assert_almost_eq(_leg_l.rotation.z, 0.0, 0.02, "leg splay should release to rest")
+	assert_almost_eq(_skater.leg_bone_euler(_LEG_L).z, 0.0, 0.02, "leg splay should release to rest")
 	assert_almost_eq(_skater.lower_body.position.y, rest_hips_y, 0.01,
 			"body drop should release to rest")
 

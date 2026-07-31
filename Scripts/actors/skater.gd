@@ -593,7 +593,7 @@ func _ready() -> void:
 	# set. Order-free relative to the coordinators below — the uniform painter
 	# overrides materials on these nodes and the appearance rig scales the
 	# nodes, so mesh identity is free to change here.
-	SkaterMeshBuilder.apply(upper_body, lower_body)
+	SkaterMeshBuilder.apply(upper_body)
 	_shoulder_cap_l = upper_body.get_node_or_null("ShoulderL") as MeshInstance3D
 	_shoulder_cap_r = upper_body.get_node_or_null("ShoulderR") as MeshInstance3D
 
@@ -661,6 +661,7 @@ func _ready() -> void:
 	_slapper_zone_area.add_child(zone_shape)
 	add_child(_slapper_zone_area)
 
+	_build_leg_rig()
 	_build_arm_rig()
 
 	_uniform = SkaterUniformCoordinator.new()
@@ -1301,36 +1302,56 @@ func get_facing() -> Vector2:
 # SkaterAppearanceCoordinator), so the gait and attribute scaling never write
 # the same property. Pivots are resolved lazily and null-guarded so the rig
 # degrades to a static pose if the scene hasn't been updated yet.
-var _legs_resolved: bool = false
-var _leg_l: Node3D = null
-var _leg_r: Node3D = null
-var _shin_l: Node3D = null
-var _shin_r: Node3D = null
+# ── Leg rig ───────────────────────────────────────────────────────────────────
+# Both legs are one skinned mesh on one Skeleton3D, sixteen bones in the chain
+# LowerBody → Leg → Shin, mirroring the node tree it replaces (see
+# SkaterMeshBuilder.LegBone). Twelve of the bones carry geometry; the four pivots
+# exist to be rotated by the gait.
+#
+# Pose = basis · scale, at position. The three parts are owned separately, so
+# each is stored rather than read back off the current pose: `_leg_basis` is the
+# authored rest rotation (constant for the twelve parts; the four pivots are
+# rewritten by set_leg_swing), `_leg_scale` and `_leg_pos` are the sizing seam's.
+var _leg_skeleton: Skeleton3D = null
+var _leg_mesh: MeshInstance3D = null
+var _leg_basis: Array[Basis] = []
+var _leg_scale: PackedVector3Array = PackedVector3Array()
+var _leg_pos: PackedVector3Array = PackedVector3Array()
+# The scene's authored shin euler, kept so the knee write can preserve its Y/Z
+# the way a node's `rotation.x = v` did. Index 0 = left, 1 = right.
+var _leg_shin_base_euler: PackedVector3Array = PackedVector3Array()
+# Untouched baselines the sizing seam multiplies against, captured off the scene
+# subtree before it is freed.
+var _leg_base_scale: PackedVector3Array = PackedVector3Array()
+var _leg_base_pos: PackedVector3Array = PackedVector3Array()
 
 
 # pitch = fore/aft swing (local X) and roll = side-to-side splay (local Z) of the
 # whole leg about the hip; knee = flex of the lower leg (local X) about the knee.
 # All radians.
+# Hip pitch/roll and knee bend, straight onto the four pivot bones. The pivots
+# carry no scale and their scene rotation is overwritten here (it always was —
+# the node version assigned `rotation` outright), so the pose is the gait's
+# basis over the sizing seam's position, with nothing to read back.
+#
+# The knee writes only X, which as a node meant "read the current euler, change
+# x, write it back" — the shin's authored Y/Z survived. `_leg_shin_base_euler`
+# holds those so the composed basis says the same thing.
 func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
 		right_pitch: float, right_roll: float, right_knee: float) -> void:
-	if not _legs_resolved:
-		_resolve_leg_pivots()
-	if _leg_l != null:
-		_leg_l.rotation = Vector3(left_pitch, 0.0, left_roll)
-	if _shin_l != null:
-		_shin_l.rotation.x = left_knee
-	if _leg_r != null:
-		_leg_r.rotation = Vector3(right_pitch, 0.0, right_roll)
-	if _shin_r != null:
-		_shin_r.rotation.x = right_knee
+	var base_l: Vector3 = _leg_shin_base_euler[0]
+	var base_r: Vector3 = _leg_shin_base_euler[1]
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_L, Vector3(left_pitch, 0.0, left_roll))
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_L,
+			Vector3(left_knee, base_l.y, base_l.z))
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_R, Vector3(right_pitch, 0.0, right_roll))
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_R,
+			Vector3(right_knee, base_r.y, base_r.z))
 
 
-func _resolve_leg_pivots() -> void:
-	_leg_l = lower_body.get_node_or_null("LegL") as Node3D
-	_leg_r = lower_body.get_node_or_null("LegR") as Node3D
-	_shin_l = lower_body.get_node_or_null("LegL/ShinL") as Node3D
-	_shin_r = lower_body.get_node_or_null("LegR/ShinR") as Node3D
-	_legs_resolved = true
+func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
+	_leg_skeleton.set_bone_pose(bone,
+			Transform3D(Basis.from_euler(euler), _leg_pos[bone]))
 
 
 # Sets the skating-stance body drop (metres). The stance flexes hips/knees,
@@ -2040,6 +2061,107 @@ static func _up_for_look_at(direction: Vector3) -> Vector3:
 	if absf(direction.normalized().y) > 0.99:
 		return Vector3.FORWARD
 	return Vector3.UP
+
+
+# Reads the leg segment offsets out of the scene's LowerBody subtree, builds the
+# skeleton from them, then frees the subtree.
+#
+# Reading the scene rather than hard-coding the offsets keeps Scenes/Skater.tscn
+# the place leg proportions are authored — the nodes are still what you edit to
+# move a knee, they just stop existing at runtime. Hard-coding them here would
+# fork the numbers into two files that no test compares.
+func _build_leg_rig() -> void:
+	var count: int = SkaterMeshBuilder.LEG_BONE_COUNT
+	_leg_basis.resize(count)
+	_leg_scale.resize(count)
+	_leg_pos.resize(count)
+	_leg_base_scale.resize(count)
+	_leg_base_pos.resize(count)
+	_leg_shin_base_euler.resize(2)
+
+	_leg_skeleton = Skeleton3D.new()
+	_leg_skeleton.name = "LegRig"
+	for bone: int in count:
+		var node: Node3D = lower_body.get_node(SkaterMeshBuilder.LEG_BONE_NODE[bone]) as Node3D
+		var xform: Transform3D = node.transform
+		var part_scale: Vector3 = xform.basis.get_scale()
+		_leg_basis[bone] = xform.basis.orthonormalized()
+		_leg_scale[bone] = part_scale
+		_leg_pos[bone] = xform.origin
+		_leg_base_scale[bone] = part_scale
+		_leg_base_pos[bone] = xform.origin
+		_leg_skeleton.add_bone(str(bone))
+		_leg_skeleton.set_bone_parent(bone, SkaterMeshBuilder.LEG_BONE_PARENT[bone])
+		_leg_skeleton.set_bone_rest(bone, Transform3D.IDENTITY)
+	_leg_shin_base_euler[0] = _leg_basis[SkaterMeshBuilder.LegBone.SHIN_L].get_euler()
+	_leg_shin_base_euler[1] = _leg_basis[SkaterMeshBuilder.LegBone.SHIN_R].get_euler()
+
+	for bone: int in count:
+		_repose_leg_bone(bone)
+	# Freed only after every offset is read — the whole point of the subtree.
+	# free() rather than queue_free(): the scene's placeholder primitives are no
+	# longer swapped out (SkaterMeshBuilder.apply skips the legs now), so a
+	# deferred free would render grey cylinders through the real legs for the
+	# frame it waited. Safe here — these are plain children whose own _ready has
+	# already run, and nothing is iterating the subtree.
+	lower_body.get_node("LegL").free()
+	lower_body.get_node("LegR").free()
+
+	lower_body.add_child(_leg_skeleton)
+	_leg_mesh = MeshInstance3D.new()
+	_leg_mesh.name = "LegMesh"
+	_leg_mesh.mesh = SkaterMeshBuilder.shared_leg_skin_mesh()
+	_leg_mesh.skin = SkaterMeshBuilder.shared_leg_skin()
+	_leg_mesh.skeleton = NodePath("..")
+	_leg_skeleton.add_child(_leg_mesh)
+
+
+func _repose_leg_bone(bone: int) -> void:
+	_leg_skeleton.set_bone_pose(bone, Transform3D(
+			_leg_basis[bone].scaled_local(_leg_scale[bone]), _leg_pos[bone]))
+
+
+# ── Leg sizing seam ───────────────────────────────────────────────────────────
+# Scale and position are applied in separate passes by
+# SkaterAppearanceCoordinator (a part can take one, the other, or both), so each
+# setter writes its own component and recomposes. Attribute-apply rate, not per
+# frame.
+func set_leg_bone_scale(bone: int, part_scale: Vector3) -> void:
+	_leg_scale[bone] = part_scale
+	_repose_leg_bone(bone)
+
+
+func set_leg_bone_position(bone: int, pos: Vector3) -> void:
+	_leg_pos[bone] = pos
+	_repose_leg_bone(bone)
+
+
+# Read seams for the gait tests: the rotation the gait wrote and the position the
+# sizing seam wrote, as they now live on the rig's bones rather than on a node's
+# `rotation` / `position`. The euler round-trips exactly for the four pivots,
+# whose basis is built from one (set_leg_swing).
+func leg_bone_euler(bone: int) -> Vector3:
+	return _leg_skeleton.get_bone_pose(bone).basis.get_euler()
+
+
+func leg_bone_position(bone: int) -> Vector3:
+	return _leg_skeleton.get_bone_pose(bone).origin
+
+
+func leg_bone_base_scale(bone: int) -> Vector3:
+	return _leg_base_scale[bone]
+
+
+func leg_bone_base_position(bone: int) -> Vector3:
+	return _leg_base_pos[bone]
+
+
+func leg_surface_material(surface: int) -> StandardMaterial3D:
+	return SkaterMeshBuilder.surface_override(_leg_mesh, surface)
+
+
+func set_leg_surface_material(surface: int, mat: Material) -> void:
+	_leg_mesh.set_surface_override_material(surface, mat)
 
 
 # Ten bones, no parents, all identity rest — the flat sibling layout the parts
