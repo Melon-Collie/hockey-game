@@ -1157,6 +1157,58 @@ static func delay_discount(delay_s: float) -> float:
 	return exp(-maxf(delay_s, 0.0) / READ_VALIDITY_TAU_S)
 
 
+# ── The period clock as a hard wall ──────────────────────────────────────────
+# Every number in this model is the probability a play ends in a goal, and a
+# goal only counts if the puck crosses the line while the clock still runs:
+# GameStateMachine._on_period_clock_expired leaves PLAYING the instant
+# time_remaining hits 0 and on_goal_scored awards only in PLAYING, so a puck
+# still in flight at the buzzer is dead. Each leg of the compete therefore
+# multiplies its value by the odds its OWN payoff lands in time.
+#
+# This is orthogonal to delay_discount above and deliberately separate from it.
+# delay_discount is READ VALIDITY — how long a tactical picture stays true,
+# a smooth exponential that never reaches zero. This is a WALL at a known
+# instant. Folding the clock into the hazard rate would express a hard deadline
+# as a soft decay and get the last two seconds wrong in both directions.
+#
+# It is also the whole of the end-of-period behaviour, with no desperation mode
+# and nothing switching on at a threshold: a second-leg play (carry somewhere
+# better, feed a teammate, dump and re-chase) pays off further out than a shot
+# from here, so the shrinking horizon zeroes it FIRST and firing wins the
+# compete on its own merits.
+#
+# `payoff_delay_s` is time-to-the-GOAL, not time-to-the-action — reaching a
+# great spot is worth nothing if the shot from it lands late (see
+# shot_conversion_time_s).
+#
+# `slop_s` is the bot's own release-timing spread (BotSkillProfile
+# shot_timing_error_s, a uniform [0, max] hold on the commanded release), and it
+# is what makes the wall a ramp rather than a step: with barely enough clock the
+# shot beats the buzzer only if the hand doesn't sit on it. At slop 0 (a raw
+# agent, or a leg with no release variance) this is the exact step the clock is.
+static func horizon_factor(payoff_delay_s: float, horizon_s: float,
+		slop_s: float = 0.0) -> float:
+	if is_inf(horizon_s):
+		return 1.0
+	var margin: float = horizon_s - payoff_delay_s
+	if margin <= 0.0:
+		return 0.0
+	if slop_s <= 0.0:
+		return 1.0
+	return minf(margin / slop_s, 1.0)
+
+
+# Seconds from "the puck is on the tape at `spot`" to "it crosses the line" —
+# the release windup plus the flight. The conversion a horizon read needs to
+# turn a SPOT's shot value into a TIME, so arriving somewhere is priced by
+# whether the shot from there still counts. Straight-line flight at the release
+# pace: the trajectory's real deceleration is small over a shot's range and
+# erring short is the safe direction for a deadline (it never invents clock).
+static func shot_conversion_time_s(spot: Vector3, net: Vector3,
+		shot_speed: float, windup_s: float) -> float:
+	return windup_s + spot.distance_to(net) / maxf(shot_speed, 1.0)
+
+
 # Shot value in [0, 1] — the MAKE PROBABILITY of firing at the best goalie
 # hole, seen from the shooter's eye, with the goalie a body that occludes part
 # of the net. Distance, angle, squareness, and reaction all emerge from the

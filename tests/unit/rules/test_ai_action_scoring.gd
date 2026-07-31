@@ -915,6 +915,60 @@ func test_delay_discount_bounds_patience() -> void:
 			0.0001, "constant-hazard: memoryless, so it compounds geometrically")
 
 
+func test_horizon_factor_is_a_wall_not_a_decay() -> void:
+	# The clock is a hard deadline, unlike delay_discount's smooth hazard: a play
+	# that lands after the buzzer is worth exactly nothing, and one that lands
+	# comfortably before it pays nothing at all for the clock.
+	assert_almost_eq(AIActionScoring.horizon_factor(1.0, 10.0), 1.0, 0.0001,
+			"plenty of clock — the horizon is not a second delay discount")
+	assert_eq(AIActionScoring.horizon_factor(3.0, 2.0), 0.0,
+			"lands after the buzzer — worth nothing, not merely discounted")
+	assert_eq(AIActionScoring.horizon_factor(2.0, 2.0), 0.0,
+			"landing exactly ON the buzzer does not count (phase leaves PLAYING at 0)")
+
+
+func test_horizon_factor_is_inert_without_a_clock() -> void:
+	# The default every unwired context and untimed config gets. Behaviour must be
+	# bit-identical to before the horizon existed, however far out the payoff is.
+	assert_eq(AIActionScoring.horizon_factor(999.0, INF), 1.0,
+			"no clock, no wall — an untimed session plans freely")
+	assert_eq(AIActionScoring.horizon_factor(999.0, INF, 0.25), 1.0,
+			"slop cannot manufacture a wall that isn't there")
+
+
+func test_horizon_factor_ramps_over_the_release_slop() -> void:
+	# The bot's own release-timing spread is what turns the wall into a ramp: with
+	# 0.2 s of margin and a 0.4 s uniform hold, half the releases the hand
+	# actually produces beat the buzzer. At slop 0 it collapses to the exact step.
+	assert_almost_eq(AIActionScoring.horizon_factor(1.8, 2.0, 0.4), 0.5, 0.0001,
+			"margin inside the slop scores the partial chance it is")
+	assert_almost_eq(AIActionScoring.horizon_factor(1.9, 2.0, 0.4), 0.25, 0.0001,
+			"less margin, fewer of the sampled releases land in time")
+	assert_eq(AIActionScoring.horizon_factor(1.8, 2.0, 0.0), 1.0,
+			"a perfect hand makes it the exact step the clock really is")
+	# Monotone in every direction that matters, so the compete can't be gamed by
+	# a leg that gets better as its deadline approaches.
+	assert_lt(AIActionScoring.horizon_factor(1.9, 2.0, 0.4),
+			AIActionScoring.horizon_factor(1.5, 2.0, 0.4),
+			"a later payoff never scores higher against the same clock")
+
+
+func test_shot_conversion_time_prices_windup_plus_flight() -> void:
+	# What turns a SPOT into a TIME for the horizon read: you cannot shoot the
+	# instant you arrive, and the puck does not cross the line the instant you do.
+	var spot := Vector3(0.0, 0.0, GOAL.z - 20.0)
+	assert_almost_eq(
+			AIActionScoring.shot_conversion_time_s(spot, GOAL, 25.0, 0.135),
+			0.135 + 20.0 / 25.0, 0.0001,
+			"windup + flight at the release pace")
+	assert_gt(
+			AIActionScoring.shot_conversion_time_s(
+					Vector3(0.0, 0.0, GOAL.z - 20.0), GOAL, 25.0, 0.135),
+			AIActionScoring.shot_conversion_time_s(
+					Vector3(0.0, 0.0, GOAL.z - 6.0), GOAL, 25.0, 0.135),
+			"from further out the puck needs more clock to get there")
+
+
 func test_realization_discount_matches_delay_discount_currency() -> void:
 	# The discount IS the standard delay discount over the remaining travel time
 	# at reference speed — same currency (delay_discount) as every other future

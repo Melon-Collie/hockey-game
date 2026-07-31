@@ -821,6 +821,19 @@ func _is_ot_period() -> bool:
 func is_overtime() -> bool:
 	return current_period > num_periods
 
+
+# Seconds of live clock in which a goal can still be awarded — the bots' planning
+# horizon (AIActionScoring.horizon_factor). INF under an untimed config (free
+# play, practice drills), where nothing expires.
+#
+# The wall is HARD, not a fade: _on_period_clock_expired leaves PLAYING the
+# instant this reaches 0, and on_goal_scored only awards in PLAYING, so a puck
+# still in flight at the buzzer does not count.
+func scoring_horizon_s() -> float:
+	if infinite_time:
+		return INF
+	return time_remaining
+
 func _advance_period() -> void:
 	current_period += 1
 	time_remaining = ot_duration if _is_ot_period() else period_duration

@@ -36,5 +36,12 @@ var heading_omega_by_peer: Dictionary[int, float] = {}    # peer_id -> smoothed 
 # is on your stick). -1 = loose.
 var real_puck_carrier_peer_id: int = -1
 
+# Seconds of live clock in which a goal can still be awarded
+# (GameStateMachine.scoring_horizon_s) — the bots' planning horizon, so a play
+# that pays off after the buzzer scores as the nothing it is. INF means "no wall
+# in sight": an untimed config, and every snapshot GameManager did not enrich
+# (rewind snapshots, unit fixtures), which reproduces horizon-blind behaviour.
+var scoring_horizon_s: float = INF
+
 func get_skater_state(peer_id: int) -> SkaterNetworkState:
 	return skater_states.get(peer_id)

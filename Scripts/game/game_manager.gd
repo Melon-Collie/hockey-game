@@ -2760,6 +2760,10 @@ func _on_registry_player_added(record: PlayerRecord) -> void:
 func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 	snap.teammate_ids_by_team.clear()
 	snap.closest_to_puck_by_team.clear()
+	# Filled before the roster early-out: the horizon is roster-independent, and a
+	# bot with no registry still must not plan past the buzzer.
+	snap.scoring_horizon_s = _state_machine.scoring_horizon_s() \
+			if _state_machine != null else INF
 	if _registry == null:
 		return
 	var team_map: Dictionary = _registry.team_id_by_peer

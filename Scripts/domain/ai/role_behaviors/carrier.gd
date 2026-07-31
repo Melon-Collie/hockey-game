@@ -1231,6 +1231,16 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 				release, attacking_goal, sample_goalie, shot_disp,
 				GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
 				sample_speed, _scratch_opponent_caps)
+		# The buzzer: this sample's puck crosses the line a windup, its own blade
+		# relocation, and the flight from now. Exact here — every term is already
+		# in hand — and the slop is the same uniform release hold the goalie's
+		# tracking budget above reads, so a release with barely enough clock
+		# scores the partial chance it is. Priced PER SAMPLE, which is what makes
+		# a late-clock look drift to the quickest release rather than the
+		# prettiest one.
+		s *= AIActionScoring.horizon_factor(
+				SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S + shift_s + flight_s,
+				ctx.scoring_horizon_s, ctx.shot_timing_error_s)
 		if s > _phase_shoot_score:
 			_phase_shoot_score = s
 			_shot_sample_release = release
@@ -1256,6 +1266,15 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 					tip_release, tip_man, attacking_goal, goalie_now,
 					GameRules.NET_HALF_WIDTH, _scratch_opponents_release,
 					ctx.self_wrister_shot_speed, _scratch_opponent_caps)
+			# Same buzzer read as the direct samples, over the tip's two-leg
+			# flight (to the tipper's blade, then on to the net). The deflection
+			# itself costs no clock — the puck never stops.
+			tip_s *= AIActionScoring.horizon_factor(
+					SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
+							+ (tip_release.distance_to(tip_man)
+									+ tip_man.distance_to(attacking_goal))
+									/ maxf(ctx.self_wrister_shot_speed, 1.0),
+					ctx.scoring_horizon_s, ctx.shot_timing_error_s)
 			if tip_s > _phase_shoot_score:
 				_phase_shoot_score = tip_s
 				_shot_sample_release = tip_release
@@ -1382,6 +1401,22 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	var best_shot_score: float = shoot_score
 	var best_shot_intent: int = INTENT_SHOOT
 
+	# What KEEPING the puck is still worth, as a fraction: the odds a play made
+	# one planning beat from now — a shot from where we stand — would still land.
+	# Goes to 0 as the buzzer arrives, and the shot's giveaway floor goes with it.
+	# That floor is explicitly the price of the possession a shot forfeits (see
+	# SHOT_MIN_VALUE), so when the clock is about to end the possession there is
+	# nothing left to forfeit and the bar has to fall — this is what legalises the
+	# desperation heave at the net, the one shot the floor exists to ban at every
+	# other moment of the game. PASS_MIN_VALUE is deliberately NOT scaled: it
+	# prices no possession, it only rejects a release into nothing (a numerical
+	# residual on a dead lane), and that stays true at 0:01.
+	var possession_horizon: float = AIActionScoring.horizon_factor(
+			CARRY_PLAN_BEAT_S + AIActionScoring.shot_conversion_time_s(
+					self_pos, attacking_goal, ctx.self_wrister_shot_speed,
+					SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S),
+			ctx.scoring_horizon_s, ctx.shot_timing_error_s)
+
 	# Best fire option — the best of those that clear their OWN giveaway bar
 	# (SHOT_MIN_VALUE / PASS_MIN_VALUE). Qualifying each option before the max
 	# rather than after it is what keeps the two bars independent: taking the
@@ -1391,7 +1426,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# compete below — the puck is never given away for nothing.
 	var fire_score: float = -INF
 	var fire_intent: int = best_shot_intent
-	if best_shot_score > SHOT_MIN_VALUE:
+	if best_shot_score > SHOT_MIN_VALUE * possession_horizon:
 		fire_score = best_shot_score
 	if best_pass_score > PASS_MIN_VALUE and best_pass_score > fire_score:
 		fire_score = best_pass_score
@@ -1463,8 +1498,12 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# keep_prob is our current possession safety, computed once at the top of
 	# _pick_action — the hold only holds its value while we can actually keep it.
 	var keep_prob: float = current_safety
+	# possession_horizon carries the buzzer here too: waiting for a feed that is
+	# still developing is the purest second-leg play there is, so it is worthless
+	# the moment the clock can't fit it.
 	var hold_value: float = (_best_developing_feed(ctx)
-			* keep_prob * AIActionScoring.delay_discount(_hold_elapsed_s))
+			* keep_prob * AIActionScoring.delay_discount(_hold_elapsed_s)
+			* possession_horizon)
 
 	# Last-resort DUMP (zone-gated; -INF where none applies). It competes against the
 	# RAW (honest, strip-point-priced) carry — see _best_dump.
@@ -2091,6 +2130,16 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	receiver_value = maxf(receiver_value, _receiver_drive_in_value(
 			ctx, receiver_spot, receiver_shot_speed, receiver_caps, receiver_vel))
 	var time_decay: float = AIActionScoring.delay_discount(delay_s)
+	# The buzzer, over the FEED'S OWN payoff: the receiver's release instant plus
+	# his flight to the net. A pass is a two-leg play, so this is the leg the
+	# closing horizon zeroes well before it touches the carrier's own shot —
+	# which is the whole reason the bot stops looking for the extra pass with the
+	# clock running out. Slop is the passer's release hold, the same wobble that
+	# delays every other release he commits.
+	time_decay *= AIActionScoring.horizon_factor(
+			receiver_release_t + receiver_spot.distance_to(ctx.attacking_goal_pos)
+					/ maxf(receiver_shot_speed, 1.0),
+			ctx.scoring_horizon_s, ctx.shot_timing_error_s)
 	# Reception pressure — "how pressured is the receiver," from the same
 	# reachable-set model the carrier reads on ITSELF (current_safety). A defender
 	# draped on the receiver's back is invisible to the two existing loss modes:
@@ -2688,6 +2737,18 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 			nearest_our = minf(nearest_our, c.distance_to(settle))
 		var chase_decay: float = AIActionScoring.delay_discount(
 				nearest_our / maxf(ctx.self_max_speed, 0.001))
+		# The buzzer. The dump-in is the longest-dated play the carrier owns —
+		# skate it down, win it back, THEN shoot — so it is the first thing the
+		# closing horizon writes off entirely, which is what stops a bot chipping
+		# it deep with three seconds left. The concession below is left at face
+		# value: this models what the clock makes REACHABLE, not what a team
+		# trailing late should be willing to risk.
+		chase_decay *= AIActionScoring.horizon_factor(
+				nearest_our / maxf(ctx.self_max_speed, 0.001)
+						+ AIActionScoring.shot_conversion_time_s(
+								settle, attacking_goal, ctx.self_wrister_shot_speed,
+								SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S),
+				ctx.scoring_horizon_s, ctx.shot_timing_error_s)
 		gain = recovery * AIActionScoring.position_potential(
 				settle, attacking_goal, _scratch_opponents) * chase_decay
 
@@ -2780,6 +2841,18 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	# killer, and pruning on it before the goalie block is what keeps a
 	# swarmed carrier's compete from paying full price for doomed spots.
 	var decay: float = AIActionScoring.delay_discount(local_time)
+	# The buzzer, folded into `decay` so it rides the ceiling prunes above — it
+	# is another ≤-1 factor, so they stay exact and a candidate the clock has
+	# already killed prunes on the very first (free) check. Priced at the GOAL,
+	# not the arrival: getting to a better spot is worth nothing if the shot from
+	# it lands late, and it is exactly that second leg the closing horizon eats
+	# first. Stand-still is not scored here (its shot branch is the shoot-now
+	# score, already horizon-priced in the fire phase), so nothing double-counts.
+	decay *= AIActionScoring.horizon_factor(
+			local_time + AIActionScoring.shot_conversion_time_s(
+					candidate, ctx.attacking_goal_pos, ctx.self_wrister_shot_speed,
+					SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S),
+			ctx.scoring_horizon_s, ctx.shot_timing_error_s)
 	if decay <= best_so_far:
 		return -INF
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
@@ -3326,7 +3399,16 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	# credited for continuing the rush exactly as the carrier would credit itself.
 	var advanced: float = _score_at(ctx, reached, ctx.self_pos,
 			_scratch_opponents_pass, goalie, receiver_shot_speed, 0.0)
-	return advanced * keep * AIActionScoring.delay_discount(t)
+	# The buzzer, over the drive-in's own payoff (skate to `reached`, then shoot).
+	# Load-bearing: this value FLOORS the carrier's whole carry leg, so leaving it
+	# horizon-blind would hold the carry up at full value with the clock gone and
+	# undo the truncation everywhere else.
+	return advanced * keep * AIActionScoring.delay_discount(t) \
+			* AIActionScoring.horizon_factor(
+					t + AIActionScoring.shot_conversion_time_s(
+							reached, ctx.attacking_goal_pos, receiver_shot_speed,
+							SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S),
+					ctx.scoring_horizon_s, ctx.shot_timing_error_s)
 
 
 # How much room the carrier has to OPERATE toward the attacking objective —

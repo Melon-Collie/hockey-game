@@ -88,6 +88,15 @@ var heading_omega_by_peer: Dictionary = {}
 # which reproduces the prior behaviour exactly.
 var caps_by_peer: Dictionary = {}
 
+# Seconds of live clock in which a goal can still be awarded, from
+# WorldSnapshot.scoring_horizon_s. Every leg of the compete multiplies its value
+# by the odds its OWN payoff lands inside this (AIActionScoring.horizon_factor),
+# which is what makes the closing seconds of a period read right: a play that
+# pays off on a second leg is the first thing the shrinking horizon zeroes.
+# INF (the default, and what an unwired context gets) means no wall — behaviour
+# identical to before the horizon existed.
+var scoring_horizon_s: float = INF
+
 # ── Self capabilities (attribute-scaled, this bot only) ───────────────────────
 # Populated by SkaterAgentStateMachine from its own AISkaterCaps so the carrier
 # scores ITS OWN actions with this bot's real top speed / shot speed instead of

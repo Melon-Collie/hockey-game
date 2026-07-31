@@ -2325,6 +2325,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.acceleration_by_peer = _accel_ref
 	ctx.heading_omega_by_peer = _omega_ref
 	ctx.caps_by_peer = _caps_by_peer
+	ctx.scoring_horizon_s = snapshot.scoring_horizon_s
 	# This bot's own attribute-scaled speeds, so the carrier scores ITS shots /
 	# passes / carry ETAs with real numbers (cross-player evals stay default).
 	ctx.self_max_speed = _self_max_speed

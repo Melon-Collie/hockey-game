@@ -22,6 +22,41 @@ reach, a body width), not shape parameters. *Feel* tunables — staging offsets,
 difficulty knobs, how the game should play — are legitimately hand-picked; the
 line is evaluation vs. feel, not "numbers are bad".
 
+## The period clock is a wall, not a mood
+
+Every number the carrier competes is the probability a play ends in a goal, and
+a goal only counts before the buzzer. So each leg multiplies its value by
+`AIActionScoring.horizon_factor` — the odds its **own** payoff lands inside
+`ctx.scoring_horizon_s` (the live clock, `INF` under an untimed config).
+
+The payoff is time-to-the-GOAL, never time-to-the-action: reaching a better spot
+is worth nothing if the shot from it lands late, which is what
+`shot_conversion_time_s` (windup + flight) exists to price. Legs differ only in
+how far out their payoff sits — shot, tip, pass, carry candidate, drive-in,
+dump, developing-feed hold — and that difference is the entire behavior.
+
+**There is no end-of-period mode, and adding one would be a bug.** A second-leg
+play pays off further out than a shot from here, so the shrinking horizon zeroes
+it first and firing wins the compete on its own merits; the giveaway floor
+(`SHOT_MIN_VALUE`, the price of the possession a shot forfeits) collapses with
+the horizon for the same reason, which is what legalises the buzzer heave
+without legalising it at 12:00. Everything is continuous — nothing switches on
+at a threshold.
+
+Keep this **separate from `delay_discount`**. That one is read validity — how
+long a tactical picture stays true — a smooth hazard that never reaches zero.
+This is a wall at a known instant. Folding the clock into the hazard rate
+expresses a hard deadline as a soft decay and gets the last two seconds wrong in
+both directions.
+
+The soft edge comes from `shot_timing_error_s`, the bot's real release-timing
+spread, so a release with barely enough clock scores the partial chance it is.
+At slop 0 it is the exact step the clock really is.
+
+What this deliberately does **not** model: what a team *should risk* given the
+score. Turnover cost is still priced at face value, and off-puck roles and the
+goalie are horizon-blind. That is appetite, not reachability.
+
 ## Difficulty rides three independent axes
 
 `BotSkillProfile` splits every tier knob onto one of three axes. Keeping them

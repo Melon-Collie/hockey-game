@@ -2901,3 +2901,130 @@ func test_a_carrier_out_front_keeps_the_old_goal_line_clamp() -> void:
 			Vector3(3.0, 0.0, OPP_NET_Z - 1.6), false),
 			"a carrier in front never plans a step past the goal line")
 	assert_true(c._candidate_ice_legal(Vector3(3.0, 0.0, -18.0), false))
+
+
+# ─── the period clock as a horizon (AIActionScoring.horizon_factor) ──────────
+# The fixture's ctx defaults to an INF horizon, so every test above this block
+# is a no-clock case by construction. These set it deliberately.
+
+func _make_ctx_with_horizon(self_pos: Vector3, skaters: Array,
+		horizon_s: float) -> RoleContext:
+	var ctx: RoleContext = _make_ctx(self_pos, skaters)
+	ctx.scoring_horizon_s = horizon_s
+	ctx.snapshot.scoring_horizon_s = horizon_s
+	return ctx
+
+
+func _decide_with_horizon(self_pos: Vector3, skaters: Array,
+		horizon_s: float) -> AIRoleCarrier:
+	var c := AIRoleCarrier.new()
+	c.decide(_make_ctx_with_horizon(self_pos, skaters, horizon_s))
+	return c
+
+
+func test_a_full_clock_is_identical_to_no_clock_at_all() -> void:
+	# The horizon must be inert through the whole body of a period — it is a wall
+	# at the buzzer, not a discount that quietly shades every decision. A mid-
+	# period clock has to reproduce the INF answer exactly, score for score.
+	var self_pos := Vector3(7.0, 0, -16.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-4.0, 0, -21.0)],   # backdoor, better look
+			[3, 1, Vector3(4.0, 0, -18.0)],
+	]
+	var untimed: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, INF)
+	var mid_period: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, 300.0)
+	assert_eq(mid_period.intended_action, untimed.intended_action,
+			"five minutes left decides exactly as an untimed session does")
+	assert_almost_eq(mid_period.debug_pass_score, untimed.debug_pass_score, 0.00001,
+			"and prices it identically — no silent shading")
+	assert_almost_eq(mid_period.debug_shoot_score, untimed.debug_shoot_score, 0.00001)
+	assert_almost_eq(mid_period.debug_carry_score, untimed.debug_carry_score, 0.00001)
+
+
+func test_the_buzzer_kills_the_extra_pass_and_the_bot_fires() -> void:
+	# The behaviour this whole model exists for. Carrier in the O-zone with a
+	# genuinely better backdoor feed available: with clock, the feed is the right
+	# play and wins the compete. With the buzzer inside the feed's own payoff
+	# window — pass flight, then the receiver's release and flight — it cannot
+	# produce a goal at all, so it drops to nothing and the shot from here wins.
+	# Nothing switches on: the pass simply stops being worth anything.
+	var self_pos := Vector3(7.0, 0, -16.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-4.0, 0, -21.0)],
+			[3, 1, Vector3(4.0, 0, -18.0)],
+	]
+	var with_clock: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, INF)
+	assert_eq(with_clock.intended_action, AIRoleCarrier.INTENT_PASS,
+			"with time on the clock the backdoor feed is the play")
+	assert_gt(with_clock.debug_pass_score, with_clock.debug_shoot_score,
+			"and it out-scores firing from here")
+
+	var buzzer: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, 0.6)
+	assert_eq(buzzer.debug_pass_score, 0.0,
+			"a feed that cannot be converted before the horn is worth nothing")
+	assert_eq(buzzer.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"so the carrier fires instead of looking for the extra pass")
+
+
+func test_the_buzzer_legalises_a_shot_the_giveaway_floor_bans() -> void:
+	# SHOT_MIN_VALUE bans a low look because firing forfeits the possession. When
+	# the clock is about to end the possession there is nothing left to forfeit,
+	# so the bar falls with it and the desperation shot becomes legal — while the
+	# shot's own value is untouched. That combination (a shot BELOW the standing
+	# floor, taken) is the thing to pin: it can only happen via the floor.
+	var self_pos := Vector3(7.0, 0, -16.0)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-4.0, 0, -21.0)],
+			[3, 1, Vector3(4.0, 0, -18.0)],
+	]
+	var buzzer: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, 0.6)
+	assert_eq(buzzer.intended_action, AIRoleCarrier.INTENT_SHOOT)
+	assert_lt(buzzer.debug_shoot_score, AIRoleCarrier.SHOT_MIN_VALUE,
+			"this look is below the standing giveaway floor")
+	assert_gt(buzzer.debug_shoot_score, 0.0,
+			"but it is a real chance, and it is the only one left")
+
+
+func test_the_horizon_never_invents_a_shot_that_cannot_arrive() -> void:
+	# The floor collapsing must not become "fire from anywhere at 0:01". A release
+	# from the point needs windup + flight to reach the net; when the clock cannot
+	# cover that, the shot is worth zero on its own geometry and stays unfired.
+	var self_pos := Vector3(2.0, 0, -8.0)      # ~18.6 m out: ~0.9 s of shot
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(-6.0, 0, -14.0)],
+	]
+	var reachable: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, 1.0)
+	assert_eq(reachable.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"a second of clock still fits the rip from the point — get it on net")
+	assert_gt(reachable.debug_shoot_score, 0.0)
+
+	var too_late: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, 0.6)
+	assert_eq(too_late.debug_shoot_score, 0.0,
+			"the puck cannot cover 18 m in 0.6 s — the shot scores nothing")
+	assert_ne(too_late.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"and a shot worth nothing is not thrown away")
+
+
+func test_the_horizon_zeroes_a_breakout_that_cannot_pay_off() -> void:
+	# The same wall, seen from the other end of the rink. A breakout feed out of
+	# our own zone is a fine play with time and a physically impossible route to a
+	# goal with a second and a half left — every leg's payoff sits past the horn.
+	var self_pos := Vector3(3, 0, 20)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[2, TEAM_ID, Vector3(11, 0, 11)],
+			[3, 1, Vector3(1.5, 0, 18.0)],
+			[4, 1, Vector3(3.0, 0, 17.5)],
+	]
+	var with_clock: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, INF)
+	assert_eq(with_clock.intended_action, AIRoleCarrier.INTENT_PASS,
+			"with time, the outlet is the breakout")
+	var buzzer: AIRoleCarrier = _decide_with_horizon(self_pos, skaters, 1.5)
+	assert_eq(buzzer.debug_pass_score, 0.0,
+			"no feed from our own end scores a goal in 1.5 s")
+	assert_eq(buzzer.debug_carry_score, 0.0,
+			"and neither does carrying it out")
