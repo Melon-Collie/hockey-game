@@ -145,7 +145,7 @@ func test_a_set_structure_does_run_zone_coverage() -> void:
 
 func test_a_loose_puck_in_our_zone_is_not_gated() -> void:
 	# The gate is about defending a RUSH. A loose or dead puck in our zone is
-	# DZONE's (or RETRIEVAL's) business — holding the rush shape over it would
+	# DZONE's business — holding the rush shape over it would
 	# stop the team setting up around a puck nobody has.
 	var brain: TeamBrain = _brain()
 	brain.tick(1.0, _snapshot([

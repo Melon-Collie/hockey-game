@@ -24,12 +24,12 @@ extends RefCounted
 # it is counted separately rather than being invisible inside TRANS_OD.
 #
 # Sampled per physics tick against each brain's PUBLISHED state, so the tally
-# measures the shape actually being run (post-downgrade, post-RETRIEVAL
-# upgrade), not the raw table lookup. Fixed-size packed storage indexed by
+# measures the shape actually being run (post-downgrade), not the raw table
+# lookup. Fixed-size packed storage indexed by
 # team × state: no allocation on a 240 calls/second path.
 
 const TEAM_COUNT: int = 2
-const STATE_COUNT: int = 8   # AIPossessionState.State member count
+const STATE_COUNT: int = 7   # AIPossessionState.State member count
 
 # Seconds accumulated, team-major (team * STATE_COUNT + state).
 var _seconds: PackedFloat64Array = PackedFloat64Array()
@@ -195,8 +195,6 @@ static func state_name(state: int) -> String:
 			return "BREAKOUT"
 		AIPossessionState.State.FORECHECK:
 			return "FORECHECK"
-		AIPossessionState.State.RETRIEVAL:
-			return "RETRIEVAL"
 		_:
 			return "?"
 

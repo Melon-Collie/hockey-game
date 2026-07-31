@@ -410,7 +410,7 @@ gets promoted out of `contain.gd` into `AIRushRead` and reused for both purposes
 ### The gate
 
 The brain **upgrades** its raw possession-state result, same seam and same shape as the
-existing `RETRIEVAL` upgrade (`team_brain.gd:186–211`, `retrieval_read`):
+the (since-removed) `RETRIEVAL` upgrade — see docs/breakout-plan.md Phase A:
 
 ```
 if raw_state == DZONE and not coverage_read(rush_read, was_set):

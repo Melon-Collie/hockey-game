@@ -17,9 +17,9 @@ func before_each() -> void:
 
 
 # `carrier` is a team_id, or -1 for loose. Runs `n` samples at `z`.
-func _run(z: float, carrier: int, n: int = 1, retrieval: bool = false) -> void:
+func _run(z: float, carrier: int, n: int = 1) -> void:
 	for _i: int in n:
-		_t.tick(TEAM, OWN_GOAL_Z, Vector3(0.0, 0.0, z), carrier, DT, retrieval)
+		_t.tick(TEAM, OWN_GOAL_Z, Vector3(0.0, 0.0, z), carrier, DT)
 
 
 func _count(outcome: int) -> int:
@@ -47,7 +47,7 @@ func test_a_loose_puck_deep_in_our_zone_arms_the_race() -> void:
 	_run(DEEP, -1, 10)
 	_run(OUT, TEAM, 1)
 	assert_eq(_count(AIBreakoutEpisodeTracker.Outcome.CLEAN_EXIT), 1,
-			"the retrieval race is a breakout attempt")
+			"a loose puck we are racing for is a breakout attempt")
 
 
 # ── Outcomes ─────────────────────────────────────────────────────────────────
@@ -150,16 +150,9 @@ func test_shares_and_totals_agree() -> void:
 
 # ── Bookkeeping ──────────────────────────────────────────────────────────────
 
-func test_retrieval_is_credited_per_episode_not_per_tick() -> void:
-	_run(DEEP, TEAM, 30, true)
-	_run(OUT, TEAM, 1)
-	assert_eq(_t.retrieval_episodes(TEAM), 1,
-			"30 ticks of RETRIEVAL is one episode that saw it")
-
-
 func test_teams_are_independent() -> void:
 	# Team 1 defends -Z, so the same world puck is in the OTHER end for it.
-	_t.tick(1, -GameRules.GOAL_LINE_Z, Vector3(0.0, 0.0, DEEP), -1, DT, false)
+	_t.tick(1, -GameRules.GOAL_LINE_Z, Vector3(0.0, 0.0, DEEP), -1, DT)
 	assert_eq(_t.total(1), 0, "a puck in team 0's end is not team 1's episode")
 
 
@@ -175,8 +168,8 @@ func test_reset_clears_open_and_closed_state() -> void:
 
 
 func test_out_of_range_input_is_ignored() -> void:
-	_t.tick(9, OWN_GOAL_Z, Vector3(0.0, 0.0, DEEP), -1, DT, false)
-	_t.tick(TEAM, OWN_GOAL_Z, Vector3(0.0, 0.0, DEEP), -1, 0.0, false)
+	_t.tick(9, OWN_GOAL_Z, Vector3(0.0, 0.0, DEEP), -1, DT)
+	_t.tick(TEAM, OWN_GOAL_Z, Vector3(0.0, 0.0, DEEP), -1, 0.0)
 	assert_eq(_t.total(TEAM), 0, "bad team and a zero dt both no-op")
 	assert_eq(_t.total(9), 0)
 
@@ -184,8 +177,8 @@ func test_out_of_range_input_is_ignored() -> void:
 func test_dict_export_labels_the_mode() -> void:
 	_run(DEEP, TEAM, 20)
 	_run(OUT, TEAM, 1)
-	var d: Dictionary = _t.to_dict("retrieval_off")
-	assert_eq(d["mode"], "retrieval_off",
+	var d: Dictionary = _t.to_dict("baseline")
+	assert_eq(d["mode"], "baseline",
 			"an unlabelled A/B dump is useless for a comparison")
 	assert_eq(int(d["team_0"]["episodes"]), 1)
 	assert_eq(int(d["team_0"]["outcomes"]["clean-exit"]["count"]), 1)

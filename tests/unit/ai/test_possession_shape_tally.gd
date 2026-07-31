@@ -118,23 +118,23 @@ func test_transitions_are_directional() -> void:
 func test_an_oscillating_pair_counts_both_directions() -> void:
 	for _i: int in 5:
 		_t.accumulate(0, DZONE, 0.5)
-		_t.accumulate(0, AIPossessionState.State.RETRIEVAL, 0.5)
-	assert_eq(_t.transitions(0, DZONE, AIPossessionState.State.RETRIEVAL), 5,
+		_t.accumulate(0, AIPossessionState.State.BREAKOUT, 0.5)
+	assert_eq(_t.transitions(0, DZONE, AIPossessionState.State.BREAKOUT), 5,
 			"five flips out")
-	assert_eq(_t.transitions(0, AIPossessionState.State.RETRIEVAL, DZONE), 4,
+	assert_eq(_t.transitions(0, AIPossessionState.State.BREAKOUT, DZONE), 4,
 			"and four back — the last spell hasn't been left yet")
 
 
 func test_top_transitions_ranks_by_count_and_respects_the_limit() -> void:
 	for _i: int in 4:
 		_t.accumulate(0, DZONE, 0.5)
-		_t.accumulate(0, AIPossessionState.State.RETRIEVAL, 0.5)
+		_t.accumulate(0, AIPossessionState.State.BREAKOUT, 0.5)
 	_t.accumulate(0, OZONE, 1.0)
 	var top: Array[Vector3i] = _t.top_transitions(0, 2)
 	assert_eq(top.size(), 2, "limit honored")
 	assert_eq(top[0].z, 4, "the busiest pair leads")
 	assert_eq(top[0].x, DZONE, "and it is DZONE -> ...")
-	assert_eq(top[0].y, AIPossessionState.State.RETRIEVAL, "... -> RETRIEVAL")
+	assert_eq(top[0].y, AIPossessionState.State.BREAKOUT, "... -> BREAKOUT")
 
 
 func test_transitions_survive_a_reset() -> void:

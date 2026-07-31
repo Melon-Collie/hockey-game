@@ -134,7 +134,46 @@ adds the missing candidates so Up/Over/Wheel/Reverse/Rim all *exist* as
 things the compete can price. The plays then emerge from honest EV exactly
 like the duel behaviors did — and the same harness methodology verifies it.
 
-### Phase A — Retrieval posture (RETRIEVAL state) — landed
+### Phase A — Retrieval posture (RETRIEVAL state) — landed, then REMOVED
+
+**Removed after measurement.** The design below shipped and was later deleted;
+it is kept as the record of what was tried and why it was reversed, so nobody
+rebuilds it without new evidence.
+
+What it was supposed to buy: outlets already standing at their posts by the time
+the retriever touches the puck, so the breakout is choreographed during the
+retrieval rather than after pickup.
+
+What it actually cost, measured four ways (two breakout-harness runs and both
+arms of a live bot-vs-bot A/B, ~2 min per arm):
+
+- **It never gated a breakout.** Roughly 60% of BREAKOUT entries came straight
+  from DZONE without passing through RETRIEVAL at all, and with the shape
+  disabled the same breakouts still happened — team 0 reached BREAKOUT 12 times
+  in each arm, team 1 reached it *more* often without it (8 -> 15 entries).
+- **It was the dominant source of shape churn.** `DZONE <-> RETRIEVAL` alone was
+  ~35 of a team's ~105 shape transitions per two minutes. Disabling it cut total
+  transitions 25-38% and roughly doubled how long a team held its D-zone shape
+  (mean spell 0.74 s -> 1.90 s for one team, 0.99 s -> 1.44 s for the other).
+  Since DZONE and RETRIEVAL have disjoint slot sets, every flip re-slotted all
+  five bots between zone coverage and breakout posts — and D-zone coverage
+  cannot work if the shape it depends on is being rebuilt twice a second.
+- **No outcome benefit, ever.** Clean-exit rate was never worse without it in
+  any of the four measurements, and never significantly better with it. The live
+  arms were 37.5% vs 44.8% clean (n=24 vs 29, p ~ 0.59) — directionally against
+  the shape, not conclusive either way.
+
+Margin tuning was ruled out first: a sweep of `RETRIEVAL_ENTER_MARGIN_S` /
+`RETRIEVAL_HOLD_MARGIN_S` across five settings moved harness cough-ups by at most
+2/30 and never beat the baseline, so the problem was never *when* to posture.
+
+Resurrecting it needs a mechanism that does not re-slot the whole team on a race
+read that flips twice a second — e.g. staging the outlets WITHOUT leaving the
+defensive shape, so there is nothing to flip back from.
+
+---
+
+Original design, for reference:
 
 The structural fix for GAP 1. `AIPossessionState` gains a **RETRIEVAL**
 read carved out of the loose-in-our-DZ override:

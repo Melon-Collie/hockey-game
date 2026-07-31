@@ -574,8 +574,7 @@ func _physics_process(delta: float) -> void:
 						breakout_episodes.tick(brain.team_id,
 								GameRules.GOAL_LINE_Z if brain.team_id == 0
 										else -GameRules.GOAL_LINE_Z,
-								tally_puck.position, carrier_team, delta,
-								brain.state == AIPossessionState.State.RETRIEVAL)
+								tally_puck.position, carrier_team, delta)
 		if _registry != null:
 			# The coordinator freezes each brain's view (build_view) at the point it
 			# hands work to the worker — only while the worker is idle, so the view

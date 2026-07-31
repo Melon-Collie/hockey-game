@@ -37,10 +37,7 @@ extends RefCounted
 # After a COUGH_UP a new episode arms as soon as the opponent loses it again, so
 # one long zone entry can legitimately contain several failed attempts — which is
 # the honest reading, since each is a separate breakout we did not complete.
-#
-# Also records whether RETRIEVAL fired during the episode, mirroring the
-# harness's `retrieval fired X/N` column, so the live correlation is visible
-# without another instrument.
+
 #
 # Hot path: `tick` runs twice per physics tick. Counters are fixed-size packed
 # storage; no allocation.
@@ -71,15 +68,12 @@ const CONTROLLED_RELEASE_S: float = 1.5
 
 # Counts per (team, outcome), team-major.
 var _counts: PackedInt32Array = PackedInt32Array()
-# Episodes per team in which RETRIEVAL was seen at least once.
-var _retrieval_episodes: PackedInt32Array = PackedInt32Array()
 # Summed episode durations per team, for a mean-length read.
 var _durations: PackedFloat64Array = PackedFloat64Array()
 
 # ── Per-team open-episode state ──────────────────────────────────────────────
 var _active: PackedInt32Array = PackedInt32Array()        # 0/1
 var _elapsed: PackedFloat64Array = PackedFloat64Array()
-var _retrieval_seen: PackedInt32Array = PackedInt32Array()  # 0/1
 # Seconds since a player of ours last carried it this episode; INF = never.
 var _since_our_carry: PackedFloat64Array = PackedFloat64Array()
 
@@ -91,16 +85,12 @@ func _init() -> void:
 func reset() -> void:
 	_counts.resize(TEAM_COUNT * OUTCOME_COUNT)
 	_counts.fill(0)
-	_retrieval_episodes.resize(TEAM_COUNT)
-	_retrieval_episodes.fill(0)
 	_durations.resize(TEAM_COUNT)
 	_durations.fill(0.0)
 	_active.resize(TEAM_COUNT)
 	_active.fill(0)
 	_elapsed.resize(TEAM_COUNT)
 	_elapsed.fill(0.0)
-	_retrieval_seen.resize(TEAM_COUNT)
-	_retrieval_seen.fill(0)
 	_since_our_carry.resize(TEAM_COUNT)
 	_since_our_carry.fill(INF)
 
@@ -109,11 +99,10 @@ func reset() -> void:
 #   `own_goal_z`       — the net this team defends (±GOAL_LINE_Z)
 #   `puck_pos`         — world puck position
 #   `carrier_team`     — team_id of the carrier, or -1 when the puck is loose
-#   `retrieval_active` — this team's brain is in the RETRIEVAL shape right now
 # Callers must only sample during live play; stoppages go through
 # `close_on_stoppage` so a whistled play isn't scored as a bottled-in failure.
 func tick(team_id: int, own_goal_z: float, puck_pos: Vector3,
-		carrier_team: int, dt: float, retrieval_active: bool) -> void:
+		carrier_team: int, dt: float) -> void:
 	if team_id < 0 or team_id >= TEAM_COUNT or dt <= 0.0:
 		return
 	var own_dir: float = signf(own_goal_z)
@@ -126,13 +115,10 @@ func tick(team_id: int, own_goal_z: float, puck_pos: Vector3,
 		if depth > GameRules.BLUE_LINE_Z + ESTABLISH_DEPTH_M and not opp_carries:
 			_active[team_id] = 1
 			_elapsed[team_id] = 0.0
-			_retrieval_seen[team_id] = 0
 			_since_our_carry[team_id] = 0.0 if we_carry else INF
 		return
 
 	_elapsed[team_id] += dt
-	if retrieval_active:
-		_retrieval_seen[team_id] = 1
 	if we_carry:
 		_since_our_carry[team_id] = 0.0
 	elif _since_our_carry[team_id] < INF:
@@ -163,11 +149,8 @@ func close_on_stoppage() -> void:
 func _close(team_id: int, outcome: int) -> void:
 	_counts[team_id * OUTCOME_COUNT + outcome] += 1
 	_durations[team_id] += _elapsed[team_id]
-	if _retrieval_seen[team_id] == 1:
-		_retrieval_episodes[team_id] += 1
 	_active[team_id] = 0
 	_elapsed[team_id] = 0.0
-	_retrieval_seen[team_id] = 0
 	_since_our_carry[team_id] = INF
 
 
@@ -194,12 +177,6 @@ func share(team_id: int, outcome: int) -> float:
 	if n <= 0:
 		return 0.0
 	return float(count(team_id, outcome)) / float(n)
-
-
-func retrieval_episodes(team_id: int) -> int:
-	if team_id < 0 or team_id >= TEAM_COUNT:
-		return 0
-	return _retrieval_episodes[team_id]
 
 
 func mean_duration_s(team_id: int) -> float:
@@ -239,7 +216,6 @@ func to_dict(mode_label: String) -> Dictionary:
 		out["team_%d" % team_id] = {
 			"episodes": total(team_id),
 			"mean_episode_s": mean_duration_s(team_id),
-			"retrieval_episodes": retrieval_episodes(team_id),
 			"outcomes": outcomes,
 		}
 	return out

@@ -83,11 +83,6 @@ var rush_read := AIRushRead.new()
 # hysteresis on the recovery race (see AIRushRead.TRACK_ENTER_MARGIN_S).
 var _prev_recovery: Dictionary[int, int] = {}
 
-# True while last tick's state was RETRIEVAL — feeds the enter/hold
-# hysteresis in AIPossessionState.retrieval_read so the DZONE ↔ RETRIEVAL
-# boundary can't flicker at the race margin.
-var _was_retrieval: bool = false
-
 # Internal — sticky possession for loose-puck handling.
 var _last_carrier_team: int = -1
 # Hysteretic strong-side X. Updated per brain tick from puck.x.
@@ -106,12 +101,6 @@ var _coverage_unready_ticks: int = 0
 # backcheck wasn't home. Nothing reads it back into a decision — without it,
 # a suppressed D-zone coverage is indistinguishable from an ordinary rush.
 var coverage_downgraded: bool = false
-# Debug A/B switch for the RETRIEVAL upgrade below (F9 in ShapeDebugOverlay).
-# The breakout harness measures disabling it as nearly DOUBLING clean exits,
-# which is a large enough claim to want live confirmation before acting on — so
-# the gate is a runtime flag rather than a code edit, and it lives here in the
-# application layer so the domain read stays pure and replay-safe.
-var retrieval_enabled: bool = true
 # Cadence phase offset (seconds): team 1's natural ticks run half a period
 # out of phase with team 0's, so the two brains' per-tick computes never land
 # on the same physics frame (host FPS is set by the worst tick, and the two
@@ -225,33 +214,6 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	_last_carrier_team = possession.carrier_team
 	state = possession.state
 
-	# 1.5 RETRIEVAL upgrade (5v5 only — docs/breakout-plan.md Phase A): a
-	# loose puck in our DZ that WE clearly win the race to flips the team
-	# from defensive coverage into the breakout posture — the outlets take
-	# their posts WHILE the retriever skates back, instead of only after
-	# pickup (which left him meeting the forecheck alone). Gated on the
-	# same race model the chase election runs (best_intercept_time), with
-	# enter/hold hysteresis in AIPossessionState.retrieval_read. A dead
-	# puck (goalie smother / phase lock) publishes a −1 chase election and
-	# stays DZONE; contested races stay DZONE (a slot scramble is defense).
-	if retrieval_enabled and team_size >= 5 \
-			and state == AIPossessionState.State.DZONE \
-			and snapshot != null and snapshot.puck_state != null \
-			and snapshot.puck_state.carrier_peer_id == -1 \
-			and snapshot.closest_to_puck_by_team.get(team_id, -1) != -1:
-		var p_pos: Vector3 = snapshot.puck_state.position
-		var p_vel: Vector3 = snapshot.puck_state.velocity
-		var our_t: float = AILoosePuckChase.best_intercept_time(
-				snapshot.skater_states,
-				snapshot.teammate_ids_by_team.get(team_id, []),
-				p_pos, p_vel, _caps_by_peer)
-		var opp_t: float = AILoosePuckChase.best_intercept_time(
-				snapshot.skater_states,
-				snapshot.teammate_ids_by_team.get(1 - team_id, []),
-				p_pos, p_vel, _caps_by_peer)
-		if AIPossessionState.retrieval_read(our_t, opp_t, _was_retrieval):
-			state = AIPossessionState.State.RETRIEVAL
-	_was_retrieval = state == AIPossessionState.State.RETRIEVAL
 
 	# 1.75 The shared transition read. Computed before the slot elections so
 	#      everything downstream — the offensive stations' counter-threat set
@@ -270,7 +232,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#      crosses our blue line, which used to re-slot three still-backchecking
 	#      forwards onto zone posts and dissolve the backcheck at the line. Hold
 	#      the rush/recovery shape until the coverage we'd switch into actually
-	#      makes sense. Same upgrade seam as RETRIEVAL above, opposite direction.
+	#      makes sense. An upgrade seam on the raw table, same shape as this one.
 	#
 	#      BOTH TEAM SIZES. The gate does not create a shape that under-covers:
 	#      it holds the rush shape exactly while somebody is still on the way home,
@@ -284,7 +246,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 	#      monotone in the recovery it is waiting on.
 	#
 	#      Only while an OPPONENT actually carries: a loose or dead puck in our
-	#      zone is not a rush being defended, it's DZONE's (or RETRIEVAL's)
+	#      zone is not a rush being defended, it's DZONE's
 	#      business, and holding the rush shape over it would just stop the team
 	#      setting up around a puck nobody has.
 	if state == AIPossessionState.State.DZONE \

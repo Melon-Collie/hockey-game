@@ -488,7 +488,7 @@ func _build_snapshot() -> WorldSnapshot:
 	# The AI enrichment GameManager publishes in production
 	# (_enrich_snapshot_for_ai): team rosters + the hysteretic loose-puck
 	# chase election. Without these no bot can ever be the elected chaser
-	# (the CHASE_PUCK gate reads the election) and the brain's RETRIEVAL
+	# (the CHASE_PUCK gate reads the election) and the brain's own race
 	# read can't see a playable race — loose-puck scenarios silently played
 	# without the production loose-puck machinery.
 	for s: SimSkater in skaters:

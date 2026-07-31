@@ -1751,8 +1751,6 @@ func _team_state_label(state: int) -> String:
 			return "Breakout"
 		AIPossessionState.State.FORECHECK:
 			return "Forecheck"
-		AIPossessionState.State.RETRIEVAL:
-			return "Retrieval"
 		_:
 			return "?"
 
