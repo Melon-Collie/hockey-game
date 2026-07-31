@@ -129,10 +129,12 @@ func _process(_delta: float) -> void:
 		var skater: Skater = node as Skater
 		if skater == null:
 			continue
-		# Read the interpolated transform so the marks line up with the
-		# rendered skater. With physics interpolation on, global_position
-		# alone would give the post-tick physics pose, which leads the
-		# visual by up to one physics step and visibly offsets the strokes.
+		# Interpolation-correct read, so the marks land on the RENDERED pose.
+		# Physics interpolation is off project-wide (nothing sets
+		# physics/common/physics_interpolation or a per-node mode), so today this
+		# returns exactly what global_transform would. It stays because turning
+		# interpolation on would otherwise offset every stroke by up to one
+		# physics step — the post-tick pose leads the visual by that much.
 		var t: Transform3D = skater.get_global_transform_interpolated()
 		var pos: Vector3 = t.origin
 		var right: Vector3 = t.basis.x

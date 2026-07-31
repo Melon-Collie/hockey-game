@@ -704,7 +704,9 @@ func _process(delta: float) -> void:
 	# Stick flex is time/state-driven — it runs every frame regardless (it has
 	# its own shader-write guard) so a mid-shot whip never freezes on an
 	# otherwise-static pose.
-	if is_visible_in_tree():
+	# PerfProbe.freeze_rig suppresses the whole marker-driven rebuild so its cost
+	# can be measured by difference (see perf_probe.gd). Off in normal play.
+	if is_visible_in_tree() and not PerfProbe.freeze_rig:
 		# Cosmetic pose (leg gait / head / off-hand IK) at render rate, before the
 		# marker-driven mesh rebuild that consumes it. Skipped entirely when hidden
 		# — an off-screen skater needs no animated pose. Gameplay-relevant pose
@@ -787,7 +789,11 @@ func _physics_process(delta: float) -> void:
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
 	_update_commit_lift(delta)
-	_hud.update(delta)
+	# Cosmetic world HUD (ring, name, chevrons, beacon) — note this runs at the
+	# PHYSICS rate, so its world-transform writes happen twice per rendered frame
+	# at 120 Hz. PerfProbe.freeze_hud exists to price that.
+	if not PerfProbe.freeze_hud:
+		_hud.update(delta)
 	# Position + velocity are now fully settled for this tick (move_and_slide,
 	# body-check collision resolution, and the rink clamp above have all run).
 	# The local controller captures its reconcile prediction snapshot here so it

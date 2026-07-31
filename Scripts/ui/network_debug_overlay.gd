@@ -200,6 +200,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Only while the F3 panel is open, so a bare C keypress in gameplay
 		# never gets swallowed here.
 		_copy_session_digest()
+	elif event.keycode == KEY_F6 and _showing:
+		# Panel-open gated like C: freezing the cosmetic rig makes the game look
+		# broken, so it must not be one stray keypress away during normal play.
+		# Available in exported builds too — a debug build inflates GDScript
+		# specifically, so the honest version of this measurement is a release one.
+		_toast.text = "Cosmetic freeze: %s" % PerfProbe.cycle()
+		_toast.show()
+		_toast_timer = TOAST_SECONDS
 
 # A tester pressing F4 flags "this felt laggy right now." We snapshot the most
 # diagnostic LIVE values and append a marker to the session summary so the
@@ -255,6 +263,10 @@ func _copy_session_digest() -> void:
 			# every absolute number below means something different in a debug
 			# build, and a pasted digest has to carry that on its face.
 			"debug_build": OS.is_debug_build(),
+			# Which cosmetic work was suppressed while these numbers were taken.
+			# Anything but "off" means this digest is one half of an A/B, not a
+			# measurement of the real game.
+			"cosmetic_freeze": PerfProbe.mode_name(),
 			"skaters": get_tree().get_nodes_in_group("skaters").size(),
 			"frame_ms": _ema_frame_ms,
 			"gpu_ms": _ema_gpu_ms,
@@ -324,6 +336,10 @@ func _set_measuring(on: bool) -> void:
 
 func _exit_tree() -> void:
 	_set_measuring(false)
+	# The freeze switches are static, so they outlive this scene — a freeze left
+	# latched at match teardown would silently cripple the next session's visuals
+	# and its numbers. The tool that arms it disarms it.
+	PerfProbe.reset()
 
 
 func _sample_frame_cost(delta: float) -> void:
@@ -580,6 +596,13 @@ func _render_frame_cost() -> void:
 		"3v3 is 6, 5v5 is 10. Node count matters on its own: every per-frame transform write crosses the script/engine boundary and dirties the chain, so it drives main-thread cost the same way it drives draw calls")
 	_info("Bound by", _frame_bound_verdict(frame_ms, main_ms),
 		"the cost that is actually capping the frame rate — optimize this one, the others are free wins on paper only")
+	# Loud when engaged: every number above is measuring a deliberately crippled
+	# frame, and a freeze left latched would quietly poison the next reading.
+	if PerfProbe.mode != PerfProbe.Mode.NONE:
+		_lines.append("[color=#%s]%s Cosmetic freeze: %s[/color]  [color=#%s](F6 cycles — numbers above are NOT a shippable frame; read the DIFFERENCE vs off)[/color]" % [
+			COL_BAD, DOT, PerfProbe.mode_name(), COL_DIM])
+	else:
+		_lines.append("[color=#%s]· F6 cycles a cosmetic freeze (rig / HUD / VFX) to price each against this frame[/color]" % COL_DIM)
 	# A debug build does NOT bias the three terms equally, so the split is
 	# readable but the verdict can be wrong. GDScript carries debug
 	# instrumentation (Script reads high), and an editor run shares the machine

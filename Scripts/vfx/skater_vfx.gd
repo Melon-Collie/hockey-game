@@ -109,6 +109,11 @@ func _ready() -> void:
 	_prev_pos = global_position
 
 func _process(_delta: float) -> void:
+	# Measurement freeze (see perf_probe.gd). Emitters keep whatever state they
+	# were left in, so this isolates the per-frame CPU bookkeeping — the GPU cost
+	# of the particles already alive stays on the frame.
+	if PerfProbe.freeze_vfx:
+		return
 	var skater: Skater = get_parent() as Skater
 	if skater == null:
 		return
