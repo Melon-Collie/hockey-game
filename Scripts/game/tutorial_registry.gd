@@ -27,7 +27,7 @@ const STEP_DROP_PUCK:   int = 7   # Q-tap nudge off the blade (the nutmeg)
 # the live finish.
 const STEP_SHOOT_WRIST:    int = 8
 const STEP_SHOOT_BACKHAND: int = 9   # forehand vs backhand — the weaker cross-body release
-const STEP_SHOOT_TARGETS:  int = 10  # pick-your-spot: flat, saucer-over-board, high, toggle off
+const STEP_SHOOT_TARGETS:  int = 10  # pick-your-spot: flat, saucer, MID slot, HIGH doorstep, toggle off
 const STEP_SHOOT_SLAP:     int = 11
 const STEP_ONE_TIMER:      int = 12
 const STEP_SHOOT_FINISH:   int = 13  # free finish on a live Easy goalie
