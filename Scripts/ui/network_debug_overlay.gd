@@ -59,6 +59,14 @@ var _dot: Label
 var _fps_label: Label
 var _dot_timer: float = 0.0
 const DOT_REFRESH_SECONDS: float = 0.5
+# Panel text rebuild rate. Rebuilding ~40 BBCode lines every frame cost ~1.25 ms
+# on a 5v5 frame — the overlay was a measurable slice of the very frame it exists
+# to measure, and it inflated the main-thread residual by its own cost. Nothing
+# on the panel needs frame cadence: telemetry refreshes at 1 Hz, the frame-cost
+# EMAs are smoothed over ~0.3 s, and the peak monitors publish at 1 Hz. Sampling
+# still runs every frame — only the string building is throttled.
+const PANEL_REFRESH_SECONDS: float = 0.15
+var _panel_timer: float = 0.0
 
 # Frame-cost measurement (the "what is capping my FPS?" section). Splitting the
 # frame into GPU / render-thread CPU / script time is the only way to tell a
@@ -281,12 +289,15 @@ func _process(delta: float) -> void:
 		_fps_label.visible = fps_on
 	if fps_on:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
-	# Panel open: rebuild every frame. Panel closed: still evaluate the verdict
-	# (for the always-on dot) but only on a throttle, since the full-text build
-	# isn't needed and telemetry only changes at 1 Hz.
+	# Both paths are throttled, for different reasons: open, so the overlay isn't
+	# a measurable slice of the frame it reports (see PANEL_REFRESH_SECONDS);
+	# closed, because only the dot's verdict is needed and telemetry moves at 1 Hz.
 	if _showing:
 		_sample_frame_cost(delta)
-		_refresh()
+		_panel_timer -= delta
+		if _panel_timer <= 0.0:
+			_panel_timer = PANEL_REFRESH_SECONDS
+			_refresh()
 	else:
 		_dot_timer -= delta
 		if _dot_timer <= 0.0:
