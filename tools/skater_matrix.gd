@@ -13,13 +13,23 @@ extends SceneTree
 # Locally any GPU works: drop the env var and xvfb-run. Output path prints on
 # save (user:// — never the repo tree, so captures can't be committed).
 
-# [height in, weight lbs, jersey name, team color slot] per column.
+# [height in, weight lbs, jersey name, team color slot, lace, skate stripe,
+#  blade tape, skin tone] per column.
+#
+# The gear indices are deliberately loud and all different, because this tool's
+# other job is proving that a mesh change did not cross a paint wire. Merging a
+# part into a parent mesh turns its material from a node's material_override
+# into one surface override among several, and getting that index wrong paints
+# the laces with the stripe's colour — a mistake no unit test sees and that a
+# default-colourway render would hide completely, since half these parts share
+# a near-black default. TapeColorRegistry indices: 1 white, 2 black, 3 red,
+# 4 blue, 5 yellow, 6 green, 7 orange, 8 purple, 9 pink, 10 teal.
 const BUILDS: Array = [
-	[67, 162, "MIN", 7],
-	[67, 185, "STOCK", 8],
-	[73, 201, "NEUT", 1],
-	[80, 209, "SLIM", 4],
-	[80, 264, "TANK", 2],
+	[67, 162, "MIN", 7, 3, 8, 5, 0],
+	[67, 185, "STOCK", 8, 5, 10, 9, 2],
+	[73, 201, "NEUT", 1, 9, 7, 4, 4],
+	[80, 209, "SLIM", 4, 6, 3, 10, 1],
+	[80, 264, "TANK", 2, 4, 5, 6, 3],
 ]
 
 var _frames: int = 0
@@ -85,6 +95,15 @@ func _spawn_builds() -> void:
 		var s: Node3D = scene.instantiate()
 		root.add_child(s)
 		s.position = Vector3(-2.3 + 1.15 * i, GameRules.FACEOFF_SPAWN_HEIGHT, 0.0)
+		# Gear and skin BEFORE set_uniform — that is the call that paints, and
+		# it reads these. A distinct colour on every paintable part is what makes
+		# a crossed surface index visible instead of plausible.
+		var gear: GearStyleConfig = s.get("gear_style")
+		gear.lace_color = int(b[4])
+		gear.skate_color = int(b[5])
+		var tape: StickTapeConfig = s.get("tape_config")
+		tape.blade_color = int(b[6])
+		s.call("set_skin_tone", int(b[7]))
 		s.call("set_uniform", TeamColorRegistry.get_colors(int(b[3]), 0))
 		s.call("set_jersey_info", String(b[2]), int(b[1]) % 100)
 		s.call("apply_appearance", attrs)
@@ -104,3 +123,10 @@ func _spawn_builds() -> void:
 		# pose; judge PROPORTIONS from this view, never arm posing.
 		var blade: Node3D = s.get_node("MeshRoot/UpperBody/Blade") as Node3D
 		blade.position = Vector3(0.3, 0.06 - GameRules.FACEOFF_SPAWN_HEIGHT, -0.75)
+		# Ghost the last column. The offside/icing fade walks every painted part
+		# and rewrites its material's alpha, so it is the one pass that touches
+		# ALL of them at once — including the ones a mesh merge turns into
+		# surfaces. A merge that leaves a part off that walk still looks correct
+		# until someone goes offside, which is exactly the failure this catches.
+		if i == BUILDS.size() - 1:
+			s.call("set_ghost", true)
